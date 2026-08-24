@@ -576,6 +576,8 @@ pub struct DealerRuntimePayloadV1 {
     pub existing_ticket: bool,
     /// Whether QueueExit is externally funded; false otherwise.
     pub external_liveness: bool,
+    /// Whether the facility already owns its Product Series obligation.
+    pub existing_series_admission: bool,
     /// Retire target selector; zero outside Retire.
     pub retire_target: u8,
     /// Whether a terminal page close also closes singleton ClaimWork.
@@ -641,6 +643,7 @@ impl DealerRuntimePayloadV1 {
             entry_index: 0,
             existing_ticket: false,
             external_liveness: false,
+            existing_series_admission: false,
             retire_target: 0,
             terminal_last_page: false,
             share_delta: 0,
@@ -708,7 +711,8 @@ impl DealerRuntimePayloadV1 {
             }
             DealerFacilityAction::SelectLeaseAndBegin => {
                 value.book_page_count = input[16];
-                if input[17..20].iter().any(|byte| *byte != 0) {
+                value.existing_series_admission = decode_bool(input[17])?;
+                if input[18..20].iter().any(|byte| *byte != 0) {
                     return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
                 }
                 value.liveness_call_ordinal = read_u32(input, 20);
@@ -1271,7 +1275,7 @@ const LAPSE_EPOCH: &[DealerMetaSpecV1] = &[
 ];
 
 const SELECT_LEASE_BEGIN_FIXED_COUNT: usize = 58;
-const SELECT_LEASE_BEGIN: &[DealerMetaSpecV1] = &[
+const SELECT_LEASE_BEGIN_FIRST: [DealerMetaSpecV1; 62] = [
     meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
@@ -1335,6 +1339,26 @@ const SELECT_LEASE_BEGIN: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
 ];
+
+const fn select_lease_begin_existing_contract() -> [DealerMetaSpecV1; 62] {
+    let mut contract = SELECT_LEASE_BEGIN_FIRST;
+    contract[54] = meta(
+        DealerMetaRoleV1::SeriesMarketLink,
+        DealerMetaOwnerV1::SelfProgram,
+        false,
+        false,
+    );
+    contract[57] = meta(
+        DealerMetaRoleV1::SeriesObligation,
+        DealerMetaOwnerV1::SelfProgram,
+        false,
+        false,
+    );
+    contract
+}
+
+const SELECT_LEASE_BEGIN_EXISTING: [DealerMetaSpecV1; 62] =
+    select_lease_begin_existing_contract();
 
 const COLLECT_DELIVER_FIXED_COUNT: usize = 43;
 const COLLECT_DELIVER: &[DealerMetaSpecV1] = &[
@@ -1736,10 +1760,14 @@ pub fn meta_contract_v1(
         DealerFacilityAction::RefundCancelledSponsor => Some(REFUND_SPONSOR),
         DealerFacilityAction::BindEpoch => Some(BIND_EPOCH),
         DealerFacilityAction::LapseEpoch => Some(LAPSE_EPOCH),
-        DealerFacilityAction::SelectLeaseAndBegin => Some(
-            &SELECT_LEASE_BEGIN
-                [..SELECT_LEASE_BEGIN_FIXED_COUNT + usize::from(payload.book_page_count)],
-        ),
+        DealerFacilityAction::SelectLeaseAndBegin => {
+            let contract = if payload.existing_series_admission {
+                &SELECT_LEASE_BEGIN_EXISTING
+            } else {
+                &SELECT_LEASE_BEGIN_FIRST
+            };
+            Some(&contract[..SELECT_LEASE_BEGIN_FIXED_COUNT + usize::from(payload.book_page_count)])
+        }
         DealerFacilityAction::Collect | DealerFacilityAction::Deliver => Some(
             &COLLECT_DELIVER
                 [..COLLECT_DELIVER_FIXED_COUNT + usize::from(payload.book_page_count)],

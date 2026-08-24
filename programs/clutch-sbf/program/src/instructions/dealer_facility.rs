@@ -237,6 +237,16 @@ struct AuthenticatedDealerSeriesAdmissionPrewriteV1 {
     rent: DeletableRentOwnerV1,
 }
 
+/// Exact already-live Product obligation retained across later Dealer leases.
+/// This is authenticated from the hostile StateV3 and `0xaf` bodies plus the
+/// current Product root/link/Registry authority; no caller-shaped admission
+/// tuple can select the existing path.
+#[derive(Clone, Copy)]
+struct AuthenticatedExistingDealerSeriesAdmissionV1 {
+    state: DealerStateV3,
+    obligation: DealerSeriesObligationBindingV1,
+}
+
 impl AuthenticatedSeriesDealerAdmissionOwnerV1
     for AuthenticatedDealerSeriesAdmissionPrewriteV1
 {
@@ -380,6 +390,55 @@ fn authenticate_dealer_series_admission_prewrite_v1(
         owner_admission_receipt_id,
         rent,
     })
+}
+
+fn authenticate_existing_dealer_series_admission_v1(
+    authorization: AuthenticatedSeriesDealerAuthorizationV1,
+    state_account: &AccountInfo<'_>,
+    state: DealerStateV3,
+    obligation_account: &AccountInfo<'_>,
+    obligation: DealerSeriesObligationBindingV1,
+) -> Outcome<AuthenticatedExistingDealerSeriesAdmissionV1> {
+    state.validate().map_err(dealer_fault)?;
+    obligation.validate().map_err(dealer_fault)?;
+    let binding_id = obligation.binding_id().map_err(dealer_fault)?;
+    require(
+        !authorization.requires_product_admission()
+            && authorization.dealer_status()
+                == clutch_product_series::SeriesLinkObligationStatusV1::Live
+            && authorization.dealer_admission_receipt_id().bytes()
+                == obligation.admission_owner_receipt_id.bytes()
+            && state.series_obligation_children == 1
+            && state.series_obligation_binding_account_id == id(obligation_account.key)
+            && state.series_obligation_binding_id == binding_id
+            && obligation.phase == DealerSeriesObligationPhaseV1::Live
+            && obligation.key.binding_account_id == id(obligation_account.key)
+            && obligation.key.dealer_state_account_id == id(state_account.key)
+            && obligation.key.policy_id == state.base.policy_id
+            && obligation.key.facility_id == state.base.facility_id
+            && obligation.key.facility_position_binding_id
+                == state.base.facility_position_binding_id
+            && obligation.key.market_instance_v2_id.bytes()
+                == authorization.market_instance_id().bytes()
+            && obligation.key.product_market_root_account_id
+                == id(&authorization.product_market_root_account())
+            && obligation.key.product_market_binding_id.bytes()
+                == authorization.product_market_binding_id().bytes()
+            && obligation.key.series_plan_v5_id.bytes()
+                == authorization.series_plan_id().bytes()
+            && obligation.key.series_market_link_account_id
+                == id(&authorization.link_account())
+            && obligation.key.attachment_plan_v4_id.bytes()
+                == authorization.attachment_plan_id().bytes()
+            && obligation.key.product_generation == authorization.generation()
+            && obligation.key.series_ordinal == authorization.ordinal()
+            && authorization.link_transition_sequence()
+                >= obligation.admission_link_transition_sequence
+            && obligation.rent.neutral_sink.bytes()
+                == authorization.neutral_lamport_sink().bytes(),
+        ClutchError::AuthorizationUnavailable,
+    )?;
+    Ok(AuthenticatedExistingDealerSeriesAdmissionV1 { state, obligation })
 }
 
 #[inline(never)]
@@ -4831,7 +4890,15 @@ fn select_lease_and_begin(
     require_aliases(accounts, (0, 17))?;
 
     let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[1])?;
-    let state = authenticate_state(program_id, &accounts[2])?;
+    let state_v3_before = if payload.existing_series_admission {
+        Some(*authenticate_dealer_state_v3(program_id, &accounts[2], true)?.state())
+    } else {
+        None
+    };
+    let state = match state_v3_before {
+        Some(state_v3) => state_v3.base,
+        None => authenticate_state(program_id, &accounts[2])?,
+    };
     require(
         state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
         ClutchError::MismatchedState,
@@ -4892,14 +4959,24 @@ fn select_lease_and_begin(
     let selection_principal = rent.minimum_balance(DEALER_COVERED_SELECTION_ACCOUNT_BYTES)?;
     let lease_principal = rent.minimum_balance(DEALER_LEASE_V2_ACCOUNT_BYTES)?;
     let pot_principal = rent.minimum_balance(DEALER_SETTLEMENT_POT_V2_ACCOUNT_BYTES)?;
-    let state_v2_principal = rent.minimum_balance(DEALER_STATE_V2_ACCOUNT_BYTES)?;
-    let state_v3_principal = rent.minimum_balance(DEALER_STATE_V3_ACCOUNT_BYTES)?;
-    let state_upgrade_principal = state_v3_principal
-        .checked_sub(state_v2_principal)
-        .ok_or(ClutchError::Arithmetic)?;
-    let series_obligation_principal =
-        rent.minimum_balance(DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES)?;
-    let series_obligation_donation_floor = accounts[57].lamports();
+    let (state_upgrade_principal, series_obligation_principal) =
+        if payload.existing_series_admission {
+            (0, 0)
+        } else {
+            let state_v2_principal = rent.minimum_balance(DEALER_STATE_V2_ACCOUNT_BYTES)?;
+            let state_v3_principal = rent.minimum_balance(DEALER_STATE_V3_ACCOUNT_BYTES)?;
+            (
+                state_v3_principal
+                    .checked_sub(state_v2_principal)
+                    .ok_or(ClutchError::Arithmetic)?,
+                rent.minimum_balance(DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES)?,
+            )
+        };
+    let series_obligation_donation_floor = if payload.existing_series_admission {
+        0
+    } else {
+        accounts[57].lamports()
+    };
     let total_child_principal = select_begin_rent_principal(
         receipt_principal,
         selection_principal,
@@ -5082,7 +5159,7 @@ fn select_lease_and_begin(
         untrusted_product_binding.market_instance_id,
         untrusted_product_binding.generation,
         Pubkey::new_from_array(untrusted_product_binding.market_root_account_id.bytes()),
-        true,
+        !payload.existing_series_admission,
         &mut product_link_pre,
     )?;
     let product_authorization = authenticate_series_dealer_authorization_v1(
@@ -5095,6 +5172,7 @@ fn select_lease_and_begin(
     )?;
     require(
         product_authorization.requires_product_admission()
+            == !payload.existing_series_admission
             && product_authorization.market_instance_id().bytes()
                 == policy.market_instance_v2_id.bytes()
             && product_authorization.realm_id().bytes() == market.realm_id.bytes()
@@ -5120,11 +5198,6 @@ fn select_lease_and_begin(
         (series_obligation_address, series_obligation_bump),
         None,
     )?;
-    require_creatable(&accounts[57])?;
-    let product_next_sequence = product_authorization
-        .link_transition_sequence()
-        .checked_add(1)
-        .ok_or(ClutchError::Arithmetic)?;
     let series_obligation_key = DealerSeriesObligationKeyV1 {
         binding_account_id: id(accounts[57].key),
         policy_id: state.policy_id,
@@ -5142,18 +5215,41 @@ fn select_lease_and_begin(
         product_generation: product_authorization.generation(),
         series_ordinal: product_authorization.ordinal(),
     };
-    let series_admission_prewrite = authenticate_dealer_series_admission_prewrite_v1(
-        program_id,
-        product_authorization,
-        &accounts[2],
-        &state,
-        &accounts[57],
-        series_obligation_key,
-        series_obligation_bump,
-        &accounts[17],
-        series_obligation_principal,
-        series_obligation_donation_floor,
-    )?;
+    let existing_series_admission = if let Some(state_v3) = state_v3_before {
+        let authenticated_obligation =
+            authenticate_dealer_series_obligation_v1(program_id, &accounts[57], false)?;
+        let existing = authenticate_existing_dealer_series_admission_v1(
+            product_authorization,
+            &accounts[2],
+            state_v3,
+            &accounts[57],
+            *authenticated_obligation.binding(),
+        )?;
+        require(
+            existing.obligation.key == series_obligation_key,
+            ClutchError::MismatchedState,
+        )?;
+        Some(existing)
+    } else {
+        None
+    };
+    let series_admission_prewrite = if existing_series_admission.is_none() {
+        require_creatable(&accounts[57])?;
+        Some(authenticate_dealer_series_admission_prewrite_v1(
+            program_id,
+            product_authorization,
+            &accounts[2],
+            &state,
+            &accounts[57],
+            series_obligation_key,
+            series_obligation_bump,
+            &accounts[17],
+            series_obligation_principal,
+            series_obligation_donation_floor,
+        )?)
+    } else {
+        None
+    };
     let facility_endpoint = DealerTransferPositionV3::Facility {
         account_id: id(accounts[3].key),
         position: facility_position.projection,
@@ -5425,70 +5521,88 @@ fn select_lease_and_begin(
                     &[pot_bump],
                 ],
             )?;
-            let (observed_obligation_principal, observed_obligation_donation) =
-                create_full_principal_pda(
-                    program_id,
-                    &accounts[0],
-                    &accounts[57],
-                    &accounts[39],
-                    &rent,
-                    DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES,
-                    &[
-                        seeds::SEED_DEALER_SERIES_OBLIGATION,
-                        &state.facility_id.bytes(),
-                        &[series_obligation_bump],
-                    ],
-                )?;
-            require(
-                observed_obligation_principal == series_obligation_principal
-                    && observed_obligation_donation == series_obligation_donation_floor,
-                ClutchError::DealerPolicyRentMismatch,
-            )?;
-            fund_and_resize_program_account(
-                program_id,
-                &accounts[0],
-                &accounts[2],
-                &accounts[39],
-                state_upgrade_principal,
-                DEALER_STATE_V2_ACCOUNT_BYTES,
-                DEALER_STATE_V3_ACCOUNT_BYTES,
-            )?;
             let mut product_link_rebound =
                 Box::new(SeriesMarketLinkAccountV1::decode_buffer());
-            let product_admission = admit_series_dealer_obligation_v1(
-                program_id,
-                &accounts[54],
-                product_link,
-                product_authorization,
-                &series_admission_prewrite,
-                &mut product_link_rebound,
-            )?;
-            let series_obligation = DealerSeriesObligationBindingV1::new_live(
-                series_obligation_key,
-                series_admission_prewrite.owner_admission_receipt_id,
-                Id::from_bytes(product_admission.product_admission_projection_id().bytes()),
-                Id::from_bytes(product_authorization.link_semantic_id().bytes()),
-                Id::from_bytes(product_admission.link_semantic_after().bytes()),
-                product_next_sequence,
-                DeletableRentOwnerV1 {
-                    payer: id(accounts[17].key),
-                    neutral_sink: policy.neutral_sink,
-                    refundable_principal: series_obligation_principal,
-                    donation_floor: series_obligation_donation_floor,
-                },
-            )
-            .map_err(dealer_fault)?;
-            let state_v3 = DealerStateV3::promote(
-                prepared.dealer.state_after,
-                &series_obligation,
-                DeletableRentOwnerV1 {
-                    payer: id(accounts[17].key),
-                    neutral_sink: policy.neutral_sink,
-                    refundable_principal: state_upgrade_principal,
-                    donation_floor: 0,
-                },
-            )
-            .map_err(dealer_fault)?;
+            let (state_v3, series_obligation, product_admission) =
+                if let Some(series_admission_prewrite) = series_admission_prewrite.as_ref() {
+                    let (observed_obligation_principal, observed_obligation_donation) =
+                        create_full_principal_pda(
+                            program_id,
+                            &accounts[0],
+                            &accounts[57],
+                            &accounts[39],
+                            &rent,
+                            DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES,
+                            &[
+                                seeds::SEED_DEALER_SERIES_OBLIGATION,
+                                &state.facility_id.bytes(),
+                                &[series_obligation_bump],
+                            ],
+                        )?;
+                    require(
+                        observed_obligation_principal == series_obligation_principal
+                            && observed_obligation_donation == series_obligation_donation_floor,
+                        ClutchError::DealerPolicyRentMismatch,
+                    )?;
+                    fund_and_resize_program_account(
+                        program_id,
+                        &accounts[0],
+                        &accounts[2],
+                        &accounts[39],
+                        state_upgrade_principal,
+                        DEALER_STATE_V2_ACCOUNT_BYTES,
+                        DEALER_STATE_V3_ACCOUNT_BYTES,
+                    )?;
+                    let product_admission = admit_series_dealer_obligation_v1(
+                        program_id,
+                        &accounts[54],
+                        product_link,
+                        product_authorization,
+                        series_admission_prewrite,
+                        &mut product_link_rebound,
+                    )?;
+                    let product_next_sequence = product_authorization
+                        .link_transition_sequence()
+                        .checked_add(1)
+                        .ok_or(ClutchError::Arithmetic)?;
+                    let series_obligation = DealerSeriesObligationBindingV1::new_live(
+                        series_obligation_key,
+                        series_admission_prewrite.owner_admission_receipt_id,
+                        Id::from_bytes(
+                            product_admission.product_admission_projection_id().bytes(),
+                        ),
+                        Id::from_bytes(product_authorization.link_semantic_id().bytes()),
+                        Id::from_bytes(product_admission.link_semantic_after().bytes()),
+                        product_next_sequence,
+                        DeletableRentOwnerV1 {
+                            payer: id(accounts[17].key),
+                            neutral_sink: policy.neutral_sink,
+                            refundable_principal: series_obligation_principal,
+                            donation_floor: series_obligation_donation_floor,
+                        },
+                    )
+                    .map_err(dealer_fault)?;
+                    let state_v3 = DealerStateV3::promote(
+                        prepared.dealer.state_after,
+                        &series_obligation,
+                        DeletableRentOwnerV1 {
+                            payer: id(accounts[17].key),
+                            neutral_sink: policy.neutral_sink,
+                            refundable_principal: state_upgrade_principal,
+                            donation_floor: 0,
+                        },
+                    )
+                    .map_err(dealer_fault)?;
+                    (state_v3, series_obligation, Some(product_admission))
+                } else {
+                    let existing = existing_series_admission
+                        .ok_or(ClutchError::AuthorizationUnavailable)?;
+                    let state_v3 = existing
+                        .state
+                        .with_base(prepared.dealer.state_after)
+                        .map_err(dealer_fault)?;
+                    (state_v3, existing.obligation, None)
+                };
             apply_liveness_transition(
                 &accounts[10],
                 &accounts[0],
@@ -5548,24 +5662,54 @@ fn select_lease_and_begin(
                 state_bump,
                 &state_v3,
             )?;
-            write_dealer_body(
-                &accounts[57],
-                DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
-                DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION,
-                series_obligation_bump,
-                &series_obligation,
-            )?;
+            if product_admission.is_some() {
+                write_dealer_body(
+                    &accounts[57],
+                    DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
+                    DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION,
+                    series_obligation_bump,
+                    &series_obligation,
+                )?;
+            }
             let observed_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
-            let observed_obligation =
-                authenticate_dealer_series_obligation_v1(program_id, &accounts[57], true)?;
+            let observed_obligation = authenticate_dealer_series_obligation_v1(
+                program_id,
+                &accounts[57],
+                product_admission.is_some(),
+            )?;
             require(
                 observed_state.state() == &state_v3
-                    && observed_obligation.binding() == &series_obligation
-                    && product_admission.rebound().authentication_id()
-                        == product_admission.link_authentication_after()
-                    && product_admission.authorization().id() == product_authorization.id(),
+                    && observed_obligation.binding() == &series_obligation,
                 ClutchError::MismatchedState,
             )?;
+            if let Some(product_admission) = product_admission.as_ref() {
+                require(
+                    product_admission.rebound().authentication_id()
+                        == product_admission.link_authentication_after()
+                        && product_admission.authorization().id()
+                            == product_authorization.id(),
+                    ClutchError::MismatchedState,
+                )?;
+            } else {
+                let mut product_link_post =
+                    Box::new(SeriesMarketLinkAccountV1::decode_buffer());
+                let rebound = authenticate_series_market_link_v1(
+                    program_id,
+                    &accounts[54],
+                    product_authorization.series_plan_id(),
+                    product_authorization.ordinal(),
+                    product_authorization.market_instance_id(),
+                    product_authorization.generation(),
+                    product_authorization.product_market_root_account(),
+                    false,
+                    &mut product_link_post,
+                )?;
+                require(
+                    rebound.authentication_id()
+                        == product_authorization.link_authentication_id(),
+                    ClutchError::MismatchedState,
+                )?;
+            }
             write_dealer_body(
                 &accounts[6],
                 DEALER_EPOCH_BINDING_V2_ACCOUNT_TAG,
@@ -7986,6 +8130,58 @@ mod select_begin_adversarial_tests {
     }
 
     #[test]
+    fn later_lease_requires_read_only_live_product_admission_and_obligation() {
+        let mut payload = [0u8; 32];
+        payload[0..8].copy_from_slice(&2u64.to_le_bytes());
+        payload[8..16].copy_from_slice(&7u64.to_le_bytes());
+        payload[16] = 1;
+        payload[17] = 1;
+        payload[20..24].copy_from_slice(&8u32.to_le_bytes());
+        payload[24..32].copy_from_slice(&9u64.to_le_bytes());
+        let decoded = DealerRuntimePayloadV1::decode(
+            DealerFacilityAction::SelectLeaseAndBegin,
+            &payload,
+        )
+        .unwrap();
+        assert!(decoded.existing_series_admission);
+        let metas = meta_contract_v1(DealerFacilityAction::SelectLeaseAndBegin, decoded).unwrap();
+        assert_eq!(metas.len(), 59);
+        assert_eq!(metas[54].role, DealerMetaRoleV1::SeriesMarketLink);
+        assert!(!metas[54].writable);
+        assert_eq!(metas[57].role, DealerMetaRoleV1::SeriesObligation);
+        assert_eq!(
+            metas[57].owner,
+            crate::instructions::dealer_runtime::DealerMetaOwnerV1::SelfProgram
+        );
+        assert!(!metas[57].writable);
+    }
+
+    #[test]
+    fn series_admission_selector_is_canonical_and_cannot_escalate_privileges() {
+        let mut payload = [0u8; 32];
+        payload[0..8].copy_from_slice(&2u64.to_le_bytes());
+        payload[8..16].copy_from_slice(&7u64.to_le_bytes());
+        payload[16] = 1;
+        payload[20..24].copy_from_slice(&8u32.to_le_bytes());
+        payload[24..32].copy_from_slice(&9u64.to_le_bytes());
+
+        payload[17] = 2;
+        assert!(DealerRuntimePayloadV1::decode(
+            DealerFacilityAction::SelectLeaseAndBegin,
+            &payload,
+        )
+        .is_err());
+
+        payload[17] = 1;
+        payload[18] = 1;
+        assert!(DealerRuntimePayloadV1::decode(
+            DealerFacilityAction::SelectLeaseAndBegin,
+            &payload,
+        )
+        .is_err());
+    }
+
+    #[test]
     fn product_admission_state_upgrade_and_obligation_write_are_one_outer() {
         let source = include_str!("dealer_facility.rs");
         let handler = source
@@ -8001,6 +8197,7 @@ mod select_begin_adversarial_tests {
             "liquidity_facility_plan_id().bytes() == policy_id",
             "admission_owner_receipt_id",
             "authenticate_dealer_series_admission_prewrite_v1",
+            "authenticate_existing_dealer_series_admission_v1",
             "create_full_principal_pda",
             "fund_and_resize_program_account",
             "admit_series_dealer_obligation_v1",
@@ -8008,8 +8205,41 @@ mod select_begin_adversarial_tests {
             "DealerStateV3::promote",
             "DEALER_STATE_V3_ACCOUNT_VERSION",
             "authenticate_dealer_series_obligation_v1",
+            "existing.state.with_base",
         ] {
             assert!(handler.contains(guard), "missing atomic promotion guard {guard}");
+        }
+    }
+
+    #[test]
+    fn existing_admission_rejoins_every_persisted_product_coordinate() {
+        let source = include_str!("dealer_facility.rs");
+        let authenticator = source
+            .split("fn authenticate_existing_dealer_series_admission_v1")
+            .nth(1)
+            .and_then(|value| {
+                value
+                    .split("fn authenticate_dealer_collateral_value_v2")
+                    .next()
+            })
+            .expect("existing Series admission authenticator");
+        for guard in [
+            "authorization.dealer_status()",
+            "authorization.dealer_admission_receipt_id()",
+            "state.series_obligation_binding_account_id",
+            "state.series_obligation_binding_id",
+            "obligation.key.product_market_root_account_id",
+            "authorization.product_market_root_account()",
+            "obligation.key.product_market_binding_id",
+            "obligation.key.series_plan_v5_id",
+            "obligation.key.series_market_link_account_id",
+            "obligation.key.attachment_plan_v4_id",
+            "obligation.key.product_generation",
+            "obligation.key.series_ordinal",
+            "authorization.link_transition_sequence()",
+            "obligation.rent.neutral_sink",
+        ] {
+            assert!(authenticator.contains(guard), "missing existing admission join {guard}");
         }
     }
 
