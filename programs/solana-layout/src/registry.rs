@@ -2232,7 +2232,29 @@ impl DealerFacilityAction {
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
-        self as u8
+        match self {
+            Self::Initialize => 5,
+            Self::CreateLpPage => 6,
+            Self::Contribute => 7,
+            Self::WithdrawFunding => 8,
+            Self::Activate => 9,
+            Self::CancelFunding => 10,
+            Self::RefundCancelledSponsor => 11,
+            Self::BindEpoch => 12,
+            Self::LapseEpoch => 13,
+            Self::SelectLeaseAndBegin => 14,
+            Self::Collect => 15,
+            Self::Deliver => 16,
+            Self::FinalizeSettlement => 17,
+            Self::AbortBeforeCollection => 18,
+            Self::QueueExit => 19,
+            Self::SponsorHalt => 20,
+            Self::EnterUnwind => 21,
+            Self::TimedClose => 22,
+            Self::Resolve => 23,
+            Self::Claim => 24,
+            Self::Retire => 25,
+        }
     }
 
     /// Decode one allocated facility action.
@@ -2413,7 +2435,16 @@ impl StructuredClaimAction {
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
-        self as u8
+        match self {
+            Self::CreateDescriptor => 1,
+            Self::WrapCanonical => 2,
+            Self::WrapFull => 3,
+            Self::UnwrapCanonical => 4,
+            Self::UnwrapFull => 5,
+            Self::CompactDonation => 6,
+            Self::RedeemTerminal => 7,
+            Self::RetireDescriptor => 8,
+        }
     }
 
     /// Decode one allocated StructuredClaim local action tag.
