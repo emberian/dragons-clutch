@@ -276,6 +276,12 @@ pub const SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTIONS:
     [(u8, u8, u8); SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTION_COUNT] =
     complete_successor_actions();
 
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+const _: () = assert!(
+    crate::instructions::structured_custody::STRUCTURED_BASE_HANDLER_ACTION_MASK_V1
+        == clutch_structured_claim_adapter::STRUCTURED_JOINED_RELEASE_ACTION_MASK_V1
+);
+
 /// Exact extension actions executable by the successor product at this
 /// dependency checkpoint.
 ///

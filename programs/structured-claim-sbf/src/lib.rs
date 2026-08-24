@@ -123,6 +123,10 @@ mod tests {
 
     #[test]
     fn capability_profile_admits_exact_current_actions() {
+        assert_eq!(
+            crate::executor::STRUCTURED_WRAPPER_HANDLER_ACTION_MASK_V1,
+            crate::ENABLED_ACTION_MASK,
+        );
         for action in 1_u8..=8 {
             let input = [75, 1, action];
             let admitted = admit_runtime_envelope_v1(&input).map(|value| value.action.tag());

@@ -486,6 +486,74 @@ impl AuthenticatedSeriesWrapperAdmissionOwnerV2
     }
 }
 
+/// Exact current Structured base-handler set compiled into this ELF.
+///
+/// This physical dispatch mask is independent of central tuple admission. The
+/// compile-time equality prevents a checked release from naming a current
+/// action whose base endpoint is absent.
+pub(crate) const STRUCTURED_BASE_HANDLER_ACTION_MASK_V1: u16 =
+    (1_u16 << StructuredClaimActionV1::CreateDescriptor.tag())
+        | (1_u16 << StructuredClaimActionV1::WrapFull.tag())
+        | (1_u16 << StructuredClaimActionV1::UnwrapFull.tag())
+        | (1_u16 << StructuredClaimActionV1::CompactDonation.tag())
+        | (1_u16 << StructuredClaimActionV1::RedeemTerminal.tag())
+        | (1_u16 << StructuredClaimActionV1::RetireDescriptor.tag());
+
+const _: () = assert!(
+    STRUCTURED_BASE_HANDLER_ACTION_MASK_V1
+        == clutch_structured_claim_adapter::IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1
+);
+
+/// Enter the sole base-owned current Structured handler map.
+///
+/// Allocated historical actions 2/4 are refused here and have no parallel
+/// endpoint. The outer dispatcher performs the central capability gate before
+/// calling this function; every successful branch below names one complete
+/// hostile-account implementation.
+pub(crate) fn process_current_action(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    action: clutch_solana_layout::registry::StructuredClaimAction,
+    payload: &[u8],
+) -> Outcome<()> {
+    use clutch_solana_layout::registry::StructuredClaimAction as Action;
+
+    match action {
+        Action::CreateDescriptor => process_create(program_id, accounts, sequence, payload),
+        Action::WrapFull => process_full_vector(
+            program_id,
+            accounts,
+            sequence,
+            StructuredClaimActionV1::WrapFull,
+            payload,
+        ),
+        Action::UnwrapFull => process_full_vector(
+            program_id,
+            accounts,
+            sequence,
+            StructuredClaimActionV1::UnwrapFull,
+            payload,
+        ),
+        Action::CompactDonation => {
+            process_compact_donation(program_id, accounts, sequence, payload)
+        }
+        Action::RedeemTerminal => process_full_vector(
+            program_id,
+            accounts,
+            sequence,
+            StructuredClaimActionV1::RedeemTerminal,
+            payload,
+        ),
+        Action::RetireDescriptor => {
+            process_retire_descriptor(program_id, accounts, sequence, payload)
+        }
+        Action::WrapCanonical | Action::UnwrapCanonical => {
+            Err(ClutchError::UnsupportedInstruction.into())
+        }
+    }
+}
+
 /// Found one funded, empty Structured PositionV3 and SCV1 Replay pair.
 ///
 /// This is the base-private half of Structured action 1. A direct transaction
@@ -493,7 +561,7 @@ impl AuthenticatedSeriesWrapperAdmissionOwnerV2
 /// deployed wrapper can sign that PDA. The payer is charged both complete
 /// principals atop any hostile prefund; those prefunds are persisted only as
 /// donation floors.
-pub fn process_create(
+fn process_create(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
@@ -1105,13 +1173,13 @@ fn write_and_reauthenticate_structured_root_v1(
 /// Execute current full-vector wrap, unwind, or terminal redemption under the
 /// wrapper-only vault signer.
 ///
-/// This is compiled only into the explicitly selected Structured laboratory
-/// artifact by `instructions::mod`; central capability admission remains a
-/// separate release decision. The call mutates both Position/Replay V3 pairs,
-/// Hoard V2, and ClaimLedger V3 as one SVM transaction. It never moves the
+/// This is compiled into the unified successor artifact; central capability
+/// admission remains a separate release decision. The call mutates both
+/// Position/Replay V3 pairs, Hoard V2, and ClaimLedger V3 as one SVM
+/// transaction. It never moves the
 /// Realm collateral token: immutable mint and Hoard-token observations prove
 /// that the reclassification remains fully covered.
-pub fn process_full_vector(
+fn process_full_vector(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
@@ -1433,7 +1501,7 @@ pub fn process_full_vector(
 /// wrapper backing. Donated cash is atomically transferred from the Hoard to
 /// the Product/Realm-selected neutral account; Egg-only compaction emits no
 /// token CPI. Replay commits the accepted exact collateral disposition.
-pub fn process_compact_donation(
+fn process_compact_donation(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
@@ -1632,7 +1700,7 @@ pub fn process_compact_donation(
 /// the sole current action-8 base route: it consumes current owners plus
 /// Product's private Wrapper terminal writer only for the final live
 /// descriptor in the Structured root.
-pub fn process_retire_descriptor(
+fn process_retire_descriptor(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
@@ -3960,6 +4028,20 @@ fn map_adapter_error(error: StructuredAdapterError) -> Refusal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn physical_base_handler_mask_is_exact_and_withdrawn_routes_are_absent() {
+        assert_eq!(
+            STRUCTURED_BASE_HANDLER_ACTION_MASK_V1,
+            clutch_structured_claim_adapter::STRUCTURED_JOINED_RELEASE_ACTION_MASK_V1,
+        );
+        for withdrawn in [2_u8, 4_u8] {
+            assert_eq!(
+                STRUCTURED_BASE_HANDLER_ACTION_MASK_V1 & (1_u16 << withdrawn),
+                0,
+            );
+        }
+    }
 
     #[test]
     fn staged_profile_refuses_every_structured_action() {

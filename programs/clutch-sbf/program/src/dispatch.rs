@@ -633,55 +633,11 @@ fn process_structured_claim(
     let request =
         ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
     match request.envelope.action {
-        ExtensionAction::StructuredClaim(
-            clutch_solana_layout::registry::StructuredClaimAction::CreateDescriptor,
-        ) => structured_custody::process_create(
+        ExtensionAction::StructuredClaim(action) => structured_custody::process_current_action(
             program_id,
             accounts,
             request.sequence,
-            request.envelope.payload,
-        ),
-        ExtensionAction::StructuredClaim(
-            clutch_solana_layout::registry::StructuredClaimAction::WrapFull,
-        ) => structured_custody::process_full_vector(
-            program_id,
-            accounts,
-            request.sequence,
-            clutch_structured_claim_adapter::runtime_contract::StructuredClaimActionV1::WrapFull,
-            request.envelope.payload,
-        ),
-        ExtensionAction::StructuredClaim(
-            clutch_solana_layout::registry::StructuredClaimAction::UnwrapFull,
-        ) => structured_custody::process_full_vector(
-            program_id,
-            accounts,
-            request.sequence,
-            clutch_structured_claim_adapter::runtime_contract::StructuredClaimActionV1::UnwrapFull,
-            request.envelope.payload,
-        ),
-        ExtensionAction::StructuredClaim(
-            clutch_solana_layout::registry::StructuredClaimAction::CompactDonation,
-        ) => structured_custody::process_compact_donation(
-            program_id,
-            accounts,
-            request.sequence,
-            request.envelope.payload,
-        ),
-        ExtensionAction::StructuredClaim(
-            clutch_solana_layout::registry::StructuredClaimAction::RedeemTerminal,
-        ) => structured_custody::process_full_vector(
-            program_id,
-            accounts,
-            request.sequence,
-            clutch_structured_claim_adapter::runtime_contract::StructuredClaimActionV1::RedeemTerminal,
-            request.envelope.payload,
-        ),
-        ExtensionAction::StructuredClaim(
-            clutch_solana_layout::registry::StructuredClaimAction::RetireDescriptor,
-        ) => structured_custody::process_retire_descriptor(
-            program_id,
-            accounts,
-            request.sequence,
+            action,
             request.envelope.payload,
         ),
         _ => Err(ClutchError::UnsupportedInstruction.into()),
