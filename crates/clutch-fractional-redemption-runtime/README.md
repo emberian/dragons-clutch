@@ -57,6 +57,22 @@ coordinates are `(4,2,1)`, `(4,4,1)`, `(4,6,1)`, and `(4,7,1)` for exact
 redemption, credited redemption, credit-transfer payout, and credit-merge
 payout respectively; every tuple uses transition version `1`.
 
+Dealer terminal resolution does not allocate a detachable Fractional action.
+The versioned private `DealerFacilityVectorTransitionV1` is consumed only
+inside Dealer `76/v1` action 23. It authenticates one facility Position and
+Dealer Replay prestate, folds at most 16 outcome quantities in canonical order,
+divides the aggregate numerator once, advances a5/ClaimLedger/Hoard once, and
+returns a non-Copy SBF receipt whose digest Dealer Replay must commit. Any
+aggregate remainder is retained in one newly initialized facility-owned
+`0xa6/v2` credit and changes `K` by exactly the same numerator. The real credit
+cannot be created at Dealer initialization because Resolution V5 and a4/a5 do
+not yet exist. Dealer therefore owns a pre-Resolution future-credit
+rent-principal vault/receipt; action 23 must close or terminalize that one-shot
+prefund under its immutable refund/neutral-sink partition before Fractional
+accepts the exact derived a6 PDA, version, bytes, bump, and funded zero prewrite.
+The private SBF seam remains capability-refusing until Dealer implements that
+authority and its retirement path closes or terminalizes the facility credit.
+
 Every redemption and credit transfer checks both its prospective prestate and
 poststate against
 

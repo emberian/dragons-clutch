@@ -231,6 +231,15 @@ not mean currently callable: the in-flight central profile keeps all ten
 tuples absent, while its frozen complete identity admits all ten together only
 with the rest of the successor and observed-release closure.
 
+There is deliberately no `79/v1` action 11 allocation for Dealer resolution.
+The canonical Fractional `DealerFacilityVectorTransitionV1` is a private
+bounded composer consumed inseparably by Dealer `76/v1` action 23. Allocating a
+separately routed Fractional coordinate would create a detachable facility
+authority path and is therefore refused. The private transition initializes a
+real facility-owned `0xa6/v2` only after Resolution/a4/a5 authentication from a
+Dealer-owned one-shot future-credit rent-principal receipt; it never persists a
+zero or future Resolution identity.
+
 Action 3 binds the full authenticated outcome-mint vector, accepts the exact
 independent Token-2022 burn before exposing the Realm collateral request, and
 atomically writes Hoard/ClaimLedger/`0xa5`. Action 9 advances only ClaimLedger

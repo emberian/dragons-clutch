@@ -477,6 +477,199 @@ fn canonical_internal_source(
     InternalPositionV1 { position_replay }
 }
 
+fn dealer_vector_prestate(
+    context: BoundFractionalContextV1,
+    native_eggs: [u64; MAX_OUTCOMES],
+    generation: u64,
+    replay_ordinal: u64,
+) -> BoundDealerFacilityVectorPrestateV1 {
+    let facility_id = rid(60);
+    let state_account = rid(61);
+    let position_account = rid(62);
+    let replay_account = rid(63);
+    let binding_id = rid(64);
+    let position = PositionAccountV3::new(PositionV3Fields {
+        purpose: PositionPurposeV3::DealerFacility,
+        lifecycle: PositionLifecycleV3::Open,
+        outcome_count: context.policy().outcome_count,
+        stored_bump: 7,
+        generation,
+        market_instance_id: context.policy().market_instance,
+        realm_id: context.policy().realm,
+        collateral_policy_id: context.policy().collateral_policy,
+        collateral_release_id: context.policy().collateral_release,
+        owner: facility_id,
+        controller: state_account,
+        replay_account,
+        purpose_binding_id: binding_id,
+        cash_atoms: 4,
+        reserved_cash_atoms: 0,
+        native_eggs,
+        outstanding_reservations: 0,
+        rent: split_rent(60),
+    })
+    .unwrap();
+    let position_id = position.semantic_id(&TestSha256).unwrap();
+    bind_dealer_facility_vector_prestate_v1(
+        facility_id,
+        state_account,
+        rid(65),
+        position_account,
+        position,
+        position_id,
+        binding_id,
+        replay_account,
+        rid(66),
+        replay_ordinal,
+        rid(67),
+        rid(68),
+        rid(69),
+        rid(70),
+        rid(71),
+        rid(72),
+        rid(73),
+    )
+    .unwrap()
+}
+
+#[test]
+fn dealer_vector_divides_once_and_retains_the_exact_remainder() {
+    let mut internal_supply = [0; MAX_OUTCOMES];
+    internal_supply[0] = 7;
+    internal_supply[1] = 7;
+    let (full, policy, ledger) =
+        external_context(0, 0, internal_supply, [0; MAX_OUTCOMES], 7);
+    let context = bind_fractional_internal_context_v1(
+        full.policy_account(),
+        policy,
+        full.ledger_account(),
+        ledger,
+        full.claim_ledger_account(),
+        full.claim_ledger(),
+        full.hoard(),
+        full.resolution(),
+        full.collateral(),
+    )
+    .unwrap();
+    let prestate = dealer_vector_prestate(context, internal_supply, 9, 12);
+    let mut quantities = [0u64; MAX_OUTCOMES];
+    quantities[0] = 1;
+    quantities[1] = 1;
+    let plan = prepare_dealer_facility_vector_transition_v1(
+        context,
+        DealerFacilityVectorRequestV1 {
+            expected_ledger_sequence: 1,
+            expected_credit_sequence: 1,
+            expected_position_generation: 9,
+            expected_replay_ordinal: 12,
+            outcome_count: 2,
+            quantities,
+        },
+        prestate,
+        CreditCreationV1::Fresh {
+            claimant: prestate.facility_id(),
+            stored_bump: 11,
+            rent: split_rent(60),
+        },
+    )
+    .unwrap();
+    assert_eq!(plan.payout_atoms(), 1);
+    assert_eq!(plan.residue_numerator(), 0);
+    assert_eq!(plan.credit_after().numerator, 0);
+    assert_eq!(plan.ledger_after().aggregate_credit_numerator, 0);
+    assert_eq!(plan.ledger_after().active_credit_accounts, 1);
+    assert_eq!(plan.facility_position_after().cash_atoms(), 5);
+    assert_eq!(plan.facility_position_after().native_eggs()[0], 6);
+    assert_eq!(plan.facility_position_after().native_eggs()[1], 6);
+
+    let mut remainder_quantities = [0u64; MAX_OUTCOMES];
+    remainder_quantities[0] = 1;
+    let remainder_plan = prepare_dealer_facility_vector_transition_v1(
+        context,
+        DealerFacilityVectorRequestV1 {
+            expected_ledger_sequence: 1,
+            expected_credit_sequence: 1,
+            expected_position_generation: 9,
+            expected_replay_ordinal: 12,
+            outcome_count: 2,
+            quantities: remainder_quantities,
+        },
+        prestate,
+        CreditCreationV1::Fresh {
+            claimant: prestate.facility_id(),
+            stored_bump: 11,
+            rent: split_rent(60),
+        },
+    )
+    .unwrap();
+    assert_eq!(remainder_plan.payout_atoms(), 0);
+    assert_eq!(remainder_plan.residue_numerator(), 1);
+    assert_eq!(remainder_plan.credit_after().numerator, 1);
+    assert_eq!(remainder_plan.ledger_after().aggregate_credit_numerator, 1);
+    assert_ne!(remainder_plan.vector_transition_id().bytes(), [0; 32]);
+}
+
+#[test]
+fn dealer_vector_request_and_binding_refuse_hostile_tail_or_generation() {
+    let mut quantities = [0u64; MAX_OUTCOMES];
+    quantities[0] = 1;
+    let request = DealerFacilityVectorRequestV1 {
+        expected_ledger_sequence: 1,
+        expected_credit_sequence: 1,
+        expected_position_generation: 9,
+        expected_replay_ordinal: 12,
+        outcome_count: 2,
+        quantities,
+    };
+    let encoded = request.encode().unwrap();
+    assert_eq!(DealerFacilityVectorRequestV1::decode(&encoded), Ok(request));
+    let mut hostile_padding = encoded;
+    hostile_padding[33] = 1;
+    assert_eq!(
+        DealerFacilityVectorRequestV1::decode(&hostile_padding),
+        Err(Error::NonCanonicalPadding)
+    );
+    let mut hostile_tail = encoded;
+    hostile_tail[40 + 15 * 8..40 + 16 * 8].copy_from_slice(&1u64.to_le_bytes());
+    assert_eq!(
+        DealerFacilityVectorRequestV1::decode(&hostile_tail),
+        Err(Error::NonCanonicalPadding)
+    );
+
+    let mut internal_supply = [0; MAX_OUTCOMES];
+    internal_supply[0] = 7;
+    let (full, policy, ledger) =
+        external_context(0, 0, internal_supply, [0; MAX_OUTCOMES], 1);
+    let context = bind_fractional_internal_context_v1(
+        full.policy_account(),
+        policy,
+        full.ledger_account(),
+        ledger,
+        full.claim_ledger_account(),
+        full.claim_ledger(),
+        full.hoard(),
+        full.resolution(),
+        full.collateral(),
+    )
+    .unwrap();
+    let prestate = dealer_vector_prestate(context, internal_supply, 9, 12);
+    let mut wrong_generation = request;
+    wrong_generation.expected_position_generation = 10;
+    assert_eq!(
+        prepare_dealer_facility_vector_transition_v1(
+            context,
+            wrong_generation,
+            prestate,
+            CreditCreationV1::Fresh {
+                claimant: prestate.facility_id(),
+                stored_bump: 11,
+                rent: split_rent(60),
+            },
+        ),
+        Err(Error::MismatchedBinding)
+    );
+}
+
 #[test]
 fn payout_lots_and_solvency_use_exact_integer_numerators() {
     let vector = payout();

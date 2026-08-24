@@ -760,6 +760,12 @@ pub enum FractionalClaimSupplyMutationV3 {
     Unchanged,
     /// Burn Position-owned native claims at one outcome.
     BurnInternal { outcome: u8, amount: u64 },
+    /// Burn one canonical fixed-width vector from a single internal owner.
+    ///
+    /// Active entries are applied together under one fractional sequence;
+    /// inactive tail entries must be zero and at least one active entry must
+    /// be nonzero. This is not equivalent to a sequence of scalar burns.
+    BurnInternalVector { amounts: [u64; MAX_OUTCOMES] },
     /// Burn materialized bearer claims after synchronizing the canonical
     /// aggregate to exact Token-2022 mint supplies observed before the burn.
     BurnMaterialized {
@@ -902,6 +908,31 @@ fn prepare_fractional_claim_ledger_successor_inner_v3<B: PositionV3Sha256Backend
             .ok_or(Error::AggregateLiabilityInsufficient)?;
             (1, outcome, amount)
         }
+        FractionalClaimSupplyMutationV3::BurnInternalVector { amounts } => {
+            let mut any = false;
+            let mut index = 0usize;
+            while index < MAX_OUTCOMES {
+                let amount = amounts[index];
+                if index < usize::from(claim_ledger.outcome_count) {
+                    if amount != 0 {
+                        any = true;
+                        aggregate_internal_supply[index] = aggregate_internal_supply[index]
+                            .checked_sub(amount)
+                            .ok_or(Error::AggregateLiabilityInsufficient)?;
+                    }
+                } else if amount != 0 {
+                    return Err(Error::NonCanonicalPadding);
+                }
+                let offset = index * 8;
+                observed_commitment[offset..offset + 8]
+                    .copy_from_slice(&amount.to_le_bytes());
+                index += 1;
+            }
+            if !any {
+                return Err(Error::InvalidParameter);
+            }
+            (3, 0, 0)
+        }
         FractionalClaimSupplyMutationV3::BurnMaterialized {
             outcome,
             amount,
@@ -949,7 +980,7 @@ fn prepare_fractional_claim_ledger_successor_inner_v3<B: PositionV3Sha256Backend
                 &fractional_credit_transition_id.bytes(),
             ],
         )
-    } else if kind == 2 {
+    } else if kind == 2 || kind == 3 {
         digest(
             FRACTIONAL_CLAIM_LEDGER_TRANSITION_DOMAIN_V3,
             &[

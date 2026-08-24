@@ -26,6 +26,7 @@ use clutch_fractional_redemption_runtime::{
     accept_bearer_credit_burn_v1, accept_bearer_exact_burn_v1, bind_fractional_context_v1,
     bind_fractional_internal_context_v1, finish_bearer_credit_v1, finish_bearer_exact_v1,
     finish_external_credit_transfer_v1, merge_credit_v1, prepare_bearer_credit_v1,
+    prepare_dealer_facility_vector_transition_v1,
     prepare_bearer_exact_v1, prepare_external_credit_merge_v1,
     prepare_external_credit_transfer_v1,
     project_fractional_family_terminal_receipt_v1, redeem_internal_exact_v1,
@@ -33,7 +34,8 @@ use clutch_fractional_redemption_runtime::{
     verify_fractional_family_admission_postwrite_v1,
     verify_fractional_family_terminal_postwrite_v1, BearerClaimPrestateV1,
     close_zero_credit_v1, CreditCreationV1, CreditPayoutPoststateV1, CreditPayoutTargetV1,
-    CreditPrestateV1, EmptyLedgerClosePlanV1, Error as FractionalError,
+    CreditPrestateV1, DealerFacilityVectorRequestV1, DealerFacilityVectorTransitionV1,
+    BoundDealerFacilityVectorPrestateV1, EmptyLedgerClosePlanV1, Error as FractionalError,
     FractionalCreditTombstoneV2, FractionalCreditV2, FractionalFamilyAdmissionReceiptV1,
     FractionalFamilyTerminalReceiptV1, FractionalInitializationPlanV1, FractionalLedgerV1,
     FractionalInitializeIntentV1, FractionalPolicyV3, FractionalRedeemIntentV1,
@@ -41,7 +43,8 @@ use clutch_fractional_redemption_runtime::{
     FractionalTerminalIntentV1, FractionalTransferIntentV1, FractionalCloseCreditIntentV1,
     InternalPositionV1, RedemptionSourcePoststateV1,
     VerifiedFractionalFamilyAdmissionPostwriteV1, VerifiedFractionalFamilyTerminalPostwriteV1,
-    FRACTIONAL_CREDIT_ACCOUNT_BYTES, FRACTIONAL_CREDIT_TOMBSTONE_BYTES,
+    FRACTIONAL_CREDIT_ACCOUNT_BYTES, FRACTIONAL_CREDIT_ACCOUNT_VERSION,
+    FRACTIONAL_CREDIT_TOMBSTONE_BYTES,
     FRACTIONAL_LEDGER_ACCOUNT_BYTES, FRACTIONAL_POLICY_ACCOUNT_BYTES,
     FRACTIONAL_REDEMPTION_FAMILY_TAG, FRACTIONAL_REDEMPTION_FAMILY_VERSION,
 };
@@ -50,7 +53,7 @@ use clutch_product_series::{
 };
 use clutch_retirement::{
     admit_initial_rent_split, admit_reopen_rent_split, Identity32V1, RentSplitAdmissionPlanV2,
-    POSITION_V3_BYTES,
+    PositionAccountV3, PositionV3Sha256Backend, POSITION_V3_BYTES,
 };
 use clutch_solana_layout::product_series::MarketLifecycleRootAccountV1;
 use solana_account_info::AccountInfo;
@@ -60,7 +63,7 @@ use solana_pubkey::Pubkey;
 
 use super::collateral_position_v3::{
     authenticate_general_market_liabilities_v2, authenticate_general_market_value_authority_v2,
-    authenticate_general_position_replay_v2, authenticate_resolution_v5,
+    authenticate_general_position_replay_v2, authenticate_resolution_v5, RuntimeSha256,
 };
 use super::external_redemption_v3::{
     accept_zero_claim_collateral_payout, bearer_claim_observation_v3,
@@ -94,6 +97,10 @@ const FRACTIONAL_TERMINAL_POSTWRITE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/fractional/terminal-postwrite-authentication/v1\0";
 const FRACTIONAL_COLLATERAL_EXECUTION_RECEIPT_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/fractional/collateral-execution-receipt/v2\0";
+const DEALER_FACILITY_VECTOR_EXECUTION_RECEIPT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/sbf/fractional/dealer-facility-vector-execution/v1\0";
+const DEALER_FACILITY_CREDIT_FUNDING_CONSUMPTION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/sbf/fractional/dealer-facility-credit-funding-consumption/v1\0";
 
 /// Private same-instruction join between the canonical Fractional transition
 /// and the exact current collateral/claim loader releases that executed it.
@@ -158,6 +165,578 @@ fn collateral_delta_receipt_id(
         AcceptedBearerRedemptionCollateralV3::Zero(value) => value.receipt_id(),
         AcceptedBearerRedemptionCollateralV3::Nonzero(value) => value.receipt_id(),
     }
+}
+
+/// Fractional-owned account subset inside Dealer action 23.
+///
+/// Dealer retains the State, Replay, liveness, Product-obligation, prefund,
+/// refund, and neutral-sink roles. This subset contains only accounts whose
+/// semantic bodies or release authentication the Fractional owner consumes.
+#[derive(Debug)]
+pub(crate) struct DealerFacilityVectorAccountsV1<'a, 'info> {
+    /// Immutable Realm selecting collateral.
+    pub(crate) realm: &'a AccountInfo<'info>,
+    /// Immutable collateral Profile.
+    pub(crate) profile: &'a AccountInfo<'info>,
+    /// Immutable collateral policy.
+    pub(crate) collateral_policy: &'a AccountInfo<'info>,
+    /// Exact selected collateral token Program.
+    pub(crate) collateral_token_program: &'a AccountInfo<'info>,
+    /// Exact loader-linked collateral ProgramData.
+    pub(crate) collateral_token_programdata: &'a AccountInfo<'info>,
+    /// Canonical General MarketBinding.
+    pub(crate) market_binding: &'a AccountInfo<'info>,
+    /// Canonical General MarketRuntime.
+    pub(crate) market_runtime: &'a AccountInfo<'info>,
+    /// Exact Product MarketInstance artifact.
+    pub(crate) market_instance: &'a AccountInfo<'info>,
+    /// Writable Hoard V2.
+    pub(crate) hoard: &'a AccountInfo<'info>,
+    /// Writable ClaimLedger V3.
+    pub(crate) claim_ledger: &'a AccountInfo<'info>,
+    /// Finalized Resolution V5.
+    pub(crate) resolution: &'a AccountInfo<'info>,
+    /// Immutable a4/v3 Fractional policy.
+    pub(crate) fractional_policy: &'a AccountInfo<'info>,
+    /// Writable a5/v1 aggregate ledger.
+    pub(crate) fractional_ledger: &'a AccountInfo<'info>,
+    /// Writable Dealer facility Position V3.
+    pub(crate) facility_position: &'a AccountInfo<'info>,
+    /// Fresh canonical facility-owned a6/v2 account.
+    pub(crate) facility_credit: &'a AccountInfo<'info>,
+    /// System Program used to allocate and assign the canonical a6/v2 PDA.
+    pub(crate) system_program: &'a AccountInfo<'info>,
+}
+
+/// Accepted one-shot conversion of Dealer's pre-Resolution rent principal
+/// into the exact post-Resolution facility-owned a6/v2 account.
+#[derive(Debug)]
+pub(crate) struct AcceptedDealerFacilityCreditFundingV1 {
+    creation: CreditCreationV1,
+    funding_receipt_id: Identity32V1,
+    consumption_receipt_id: Identity32V1,
+}
+
+impl AcceptedDealerFacilityCreditFundingV1 {
+    const fn creation(&self) -> CreditCreationV1 {
+        self.creation
+    }
+
+    const fn funding_receipt_id(&self) -> Identity32V1 {
+        self.funding_receipt_id
+    }
+
+    const fn consumption_receipt_id(&self) -> Identity32V1 {
+        self.consumption_receipt_id
+    }
+}
+
+/// Authenticate an already consumed Dealer future-credit prefund against the
+/// exact newly allocated a6/v2 postfunding account.
+///
+/// Dealer calls this only from its implementation of
+/// [`AuthenticatedDealerFacilityVectorAuthorityV1::consume_future_credit_prefund_v1`]
+/// after closing or terminalizing the one-shot prefund receipt and applying
+/// its immutable refund/donation disposition.
+pub(crate) fn accept_dealer_facility_credit_funding_v1(
+    program_id: &Pubkey,
+    prestate: BoundDealerFacilityVectorPrestateV1,
+    fractional_policy_account: Identity32V1,
+    credit_account: &AccountInfo<'_>,
+    creation: CreditCreationV1,
+    funding_receipt_id: Identity32V1,
+    prefund_terminal_receipt_id: Identity32V1,
+    neutral_sink: Identity32V1,
+) -> Outcome<AcceptedDealerFacilityCreditFundingV1> {
+    let CreditCreationV1::Fresh {
+        claimant,
+        stored_bump,
+        rent,
+    } = creation
+    else {
+        return Err(ClutchError::MismatchedState.into());
+    };
+    let expected = seeds::fractional_credit_v2_pda(
+        program_id,
+        &fractional_policy_account.bytes(),
+        &claimant.bytes(),
+    );
+    let required_lamports = rent
+        .refundable_live_principal
+        .checked_add(rent.permanent_tombstone_principal)
+        .and_then(|value| value.checked_add(rent.donation_floor))
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        prestate.facility_credit_account().bytes() == credit_account.key.to_bytes()
+            && prestate.facility_id() == claimant
+            && funding_receipt_id == prestate.facility_credit_funding_receipt_id()
+            && prefund_terminal_receipt_id != funding_receipt_id
+            && neutral_sink != claimant
+            && neutral_sink != rent.payer
+            && expected.0 == *credit_account.key
+            && expected.1 == stored_bump,
+        ClutchError::MismatchedState,
+    )?;
+    require_program_state(
+        program_id,
+        credit_account,
+        true,
+        FRACTIONAL_CREDIT_ACCOUNT_BYTES,
+    )?;
+    require(
+        credit_account.lamports() == required_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    let data = credit_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    require(
+        data.iter().all(|byte| *byte == 0),
+        ClutchError::MismatchedState,
+    )?;
+    drop(data);
+    let consumption_receipt_id = identity32(
+        solana_sha256_hasher::hashv(&[
+            DEALER_FACILITY_CREDIT_FUNDING_CONSUMPTION_DOMAIN_V1,
+            &funding_receipt_id.bytes(),
+            &prefund_terminal_receipt_id.bytes(),
+            credit_account.key.as_ref(),
+            &claimant.bytes(),
+            &rent.payer.bytes(),
+            &neutral_sink.bytes(),
+            &required_lamports.to_le_bytes(),
+            &(FRACTIONAL_CREDIT_ACCOUNT_BYTES as u64).to_le_bytes(),
+            &[FRACTIONAL_CREDIT_ACCOUNT_VERSION],
+            &[stored_bump],
+        ])
+        .to_bytes(),
+    )?;
+    Ok(AcceptedDealerFacilityCreditFundingV1 {
+        creation,
+        funding_receipt_id,
+        consumption_receipt_id,
+    })
+}
+
+/// Dealer-private authority consumed by the Fractional vector composer.
+///
+/// Implementations must authenticate current Dealer State/Replay/Position,
+/// the live Product 0xaf obligation/root receipt, and the future-credit
+/// prefund. The prefund method executes inside the Fractional call; no Dealer
+/// State or Replay write may precede it.
+pub(crate) trait AuthenticatedDealerFacilityVectorAuthorityV1 {
+    /// Return the exact pure authority projection authenticated by Dealer.
+    fn fractional_vector_prestate_v1(&self) -> BoundDealerFacilityVectorPrestateV1;
+
+    /// Consume the one-shot prefund, allocate/assign the real a6/v2 PDA, and
+    /// return the Fractional-accepted funding postcondition.
+    fn consume_future_credit_prefund_v1(
+        &self,
+        program_id: &Pubkey,
+        fractional_policy_account: Identity32V1,
+        credit_account: &AccountInfo<'_>,
+        system_program: &AccountInfo<'_>,
+    ) -> Outcome<AcceptedDealerFacilityCreditFundingV1>;
+}
+
+/// Non-Copy private receipt returned only after every Fractional-owned write
+/// is reloaded and matched to the vector transition.
+#[derive(Debug)]
+pub(crate) struct AcceptedDealerFacilityVectorTransitionV1 {
+    facility_account: Identity32V1,
+    facility_pre_semantic_id: Identity32V1,
+    facility_post_semantic_id: Identity32V1,
+    ledger_pre_semantic_id: Identity32V1,
+    ledger_post_semantic_id: Identity32V1,
+    hoard_pre_semantic_id: Identity32V1,
+    hoard_post_semantic_id: Identity32V1,
+    claim_ledger_pre_semantic_id: Identity32V1,
+    claim_ledger_post_semantic_id: Identity32V1,
+    credit_account: Identity32V1,
+    credit_post_semantic_id: Identity32V1,
+    resolution_semantic_id: Identity32V1,
+    resolution_data_id: Identity32V1,
+    payout_atoms: u64,
+    residue_numerator: u64,
+    vector_transition_id: Identity32V1,
+    execution_receipt_id: Identity32V1,
+}
+
+impl AcceptedDealerFacilityVectorTransitionV1 {
+    pub(crate) const fn facility_account(&self) -> Identity32V1 {
+        self.facility_account
+    }
+
+    pub(crate) const fn facility_pre_semantic_id(&self) -> Identity32V1 {
+        self.facility_pre_semantic_id
+    }
+
+    pub(crate) const fn facility_post_semantic_id(&self) -> Identity32V1 {
+        self.facility_post_semantic_id
+    }
+
+    pub(crate) const fn ledger_pre_semantic_id(&self) -> Identity32V1 {
+        self.ledger_pre_semantic_id
+    }
+
+    pub(crate) const fn ledger_post_semantic_id(&self) -> Identity32V1 {
+        self.ledger_post_semantic_id
+    }
+
+    pub(crate) const fn hoard_pre_semantic_id(&self) -> Identity32V1 {
+        self.hoard_pre_semantic_id
+    }
+
+    pub(crate) const fn hoard_post_semantic_id(&self) -> Identity32V1 {
+        self.hoard_post_semantic_id
+    }
+
+    pub(crate) const fn claim_ledger_pre_semantic_id(&self) -> Identity32V1 {
+        self.claim_ledger_pre_semantic_id
+    }
+
+    pub(crate) const fn claim_ledger_post_semantic_id(&self) -> Identity32V1 {
+        self.claim_ledger_post_semantic_id
+    }
+
+    pub(crate) const fn credit_account(&self) -> Identity32V1 {
+        self.credit_account
+    }
+
+    pub(crate) const fn credit_post_semantic_id(&self) -> Identity32V1 {
+        self.credit_post_semantic_id
+    }
+
+    pub(crate) const fn resolution_semantic_id(&self) -> Identity32V1 {
+        self.resolution_semantic_id
+    }
+
+    pub(crate) const fn resolution_data_id(&self) -> Identity32V1 {
+        self.resolution_data_id
+    }
+
+    pub(crate) const fn payout_atoms(&self) -> u64 {
+        self.payout_atoms
+    }
+
+    pub(crate) const fn residue_numerator(&self) -> u64 {
+        self.residue_numerator
+    }
+
+    pub(crate) const fn vector_transition_id(&self) -> Identity32V1 {
+        self.vector_transition_id
+    }
+
+    pub(crate) const fn execution_receipt_id(&self) -> Identity32V1 {
+        self.execution_receipt_id
+    }
+}
+
+/// Apply Fractional's complete portion of Dealer action 23 and return the
+/// private receipt Dealer must consume before writing State or Replay.
+#[inline(never)]
+pub(crate) fn apply_dealer_facility_vector_transition_v1<A>(
+    program_id: &Pubkey,
+    accounts: DealerFacilityVectorAccountsV1<'_, '_>,
+    request: DealerFacilityVectorRequestV1,
+    authority: &A,
+) -> Outcome<AcceptedDealerFacilityVectorTransitionV1>
+where
+    A: AuthenticatedDealerFacilityVectorAuthorityV1,
+{
+    require(
+        capabilities::extension_intent_action_enabled(
+            clutch_solana_layout::registry::DEALER_FAMILY_TAG,
+            clutch_solana_layout::registry::DEALER_FAMILY_VERSION,
+            clutch_solana_layout::registry::DealerFacilityAction::Resolve.tag(),
+        ),
+        ClutchError::UnsupportedInstruction,
+    )?;
+    require_system_program(accounts.system_program)?;
+    let all_accounts = [
+        accounts.realm,
+        accounts.profile,
+        accounts.collateral_policy,
+        accounts.collateral_token_program,
+        accounts.collateral_token_programdata,
+        accounts.market_binding,
+        accounts.market_runtime,
+        accounts.market_instance,
+        accounts.hoard,
+        accounts.claim_ledger,
+        accounts.resolution,
+        accounts.fractional_policy,
+        accounts.fractional_ledger,
+        accounts.facility_position,
+        accounts.facility_credit,
+        accounts.system_program,
+    ];
+    let mut left = 0usize;
+    while left < all_accounts.len() {
+        let mut right = left + 1;
+        while right < all_accounts.len() {
+            require(
+                all_accounts[left].key != all_accounts[right].key,
+                ClutchError::AccountAlias,
+            )?;
+            right += 1;
+        }
+        left += 1;
+    }
+
+    let prestate = authority.fractional_vector_prestate_v1();
+    require_program_state(
+        program_id,
+        accounts.facility_position,
+        true,
+        POSITION_V3_BYTES,
+    )?;
+    require_creatable(accounts.facility_credit)?;
+    require(
+        prestate.facility_position_account().bytes()
+            == accounts.facility_position.key.to_bytes()
+            && prestate.facility_credit_account().bytes()
+                == accounts.facility_credit.key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let facility_position_before = PositionAccountV3::decode(
+        &accounts
+            .facility_position
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let facility_position_before_id = facility_position_before
+        .semantic_id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        facility_position_before == prestate.facility_position()
+            && facility_position_before_id == prestate.facility_position_pre_semantic_id(),
+        ClutchError::MismatchedState,
+    )?;
+
+    let value_authority = authenticate_general_market_value_authority_v2(
+        program_id,
+        accounts.realm,
+        accounts.profile,
+        accounts.collateral_policy,
+        accounts.collateral_token_program,
+        accounts.collateral_token_programdata,
+        accounts.market_binding,
+        accounts.market_runtime,
+        accounts.market_instance,
+        accounts.hoard,
+        accounts.claim_ledger,
+        true,
+        true,
+    )?;
+    let liabilities = value_authority.liabilities;
+    let resolution = authenticate_resolution_v5(program_id, accounts.resolution, liabilities)?;
+    let policy_data = accounts
+        .fractional_policy
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let policy = FractionalPolicyV3::decode(&policy_data).map_err(map_fractional)?;
+    drop(policy_data);
+    let ledger_data = accounts
+        .fractional_ledger
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let ledger = FractionalLedgerV1::decode(&ledger_data).map_err(map_fractional)?;
+    drop(ledger_data);
+    let policy_account = identity32(accounts.fractional_policy.key.to_bytes())?;
+    let ledger_account = identity32(accounts.fractional_ledger.key.to_bytes())?;
+    let claim_ledger_account = identity32(accounts.claim_ledger.key.to_bytes())?;
+    let policy_seeds = policy.pda_seeds();
+    expect_pda(
+        accounts.fractional_policy.key,
+        seeds::fractional_policy_v3_pda(
+            program_id,
+            &policy_seeds.market_instance().bytes(),
+            &policy_seeds.resolution_account().bytes(),
+        ),
+        Some(policy_seeds.stored_bump()),
+    )?;
+    let ledger_seeds = ledger.pda_seeds();
+    expect_pda(
+        accounts.fractional_ledger.key,
+        seeds::fractional_ledger_v1_pda(program_id, &ledger_seeds.policy_account().bytes()),
+        Some(ledger_seeds.stored_bump()),
+    )?;
+    require(
+        request.expected_ledger_sequence == ledger.next_sequence
+            && policy.market_instance.bytes()
+                == liabilities.market_binding.base().market_instance_v2_id.bytes()
+            && policy.resolution_account.bytes() == resolution.account_id.bytes()
+            && policy.resolution_data_id.bytes() == resolution.data_id.bytes()
+            && ledger.claim_ledger_account == claim_ledger_account,
+        ClutchError::MismatchedState,
+    )?;
+    let context = bind_fractional_internal_context_v1(
+        policy_account,
+        policy,
+        ledger_account,
+        ledger,
+        claim_ledger_account,
+        liabilities.claim_ledger,
+        liabilities.hoard,
+        resolution.resolution,
+        liabilities.bound,
+    )
+    .map_err(map_fractional)?;
+
+    let accepted_funding = authority.consume_future_credit_prefund_v1(
+        program_id,
+        policy_account,
+        accounts.facility_credit,
+        accounts.system_program,
+    )?;
+    require(
+        accepted_funding.funding_receipt_id()
+            == prestate.facility_credit_funding_receipt_id(),
+        ClutchError::MismatchedState,
+    )?;
+    let plan: DealerFacilityVectorTransitionV1 =
+        prepare_dealer_facility_vector_transition_v1(
+            context,
+            request,
+            prestate,
+            accepted_funding.creation(),
+        )
+        .map_err(map_fractional)?;
+
+    accounts
+        .fractional_ledger
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+        .copy_from_slice(&plan.ledger_after().encode().map_err(map_fractional)?);
+    plan.custody_after()
+        .hoard_after()
+        .encode(
+            &mut accounts
+                .hoard
+                .try_borrow_mut_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    plan.custody_after()
+        .fractional()
+        .claim_ledger_after()
+        .encode(
+            &mut accounts
+                .claim_ledger
+                .try_borrow_mut_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    accounts
+        .facility_position
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+        .copy_from_slice(
+            &plan
+                .facility_position_after()
+                .encode()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        );
+    accounts
+        .facility_credit
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?
+        .copy_from_slice(&plan.credit_after().encode().map_err(map_fractional)?);
+
+    let observed_ledger = FractionalLedgerV1::decode(
+        &accounts
+            .fractional_ledger
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
+    )
+    .map_err(map_fractional)?;
+    let observed_hoard = clutch_collateral_adapter_v2::HoardV2::decode(
+        &accounts
+            .hoard
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let observed_claim_ledger = ClaimLedgerV3::decode(
+        &accounts
+            .claim_ledger
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let observed_position = PositionAccountV3::decode(
+        &accounts
+            .facility_position
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let observed_credit = FractionalCreditV2::decode(
+        &accounts
+            .facility_credit
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
+    )
+    .map_err(map_fractional)?;
+    require(
+        observed_ledger == plan.ledger_after()
+            && observed_hoard == plan.custody_after().hoard_after()
+            && observed_claim_ledger
+                == plan.custody_after().fractional().claim_ledger_after()
+            && observed_position == plan.facility_position_after()
+            && observed_credit == plan.credit_after(),
+        ClutchError::MismatchedState,
+    )?;
+    let ledger_post_semantic_id = identity32(
+        observed_ledger
+            .state_id()
+            .map_err(map_fractional)?
+            .bytes(),
+    )?;
+    let hoard_pre_semantic_id = identity32(plan.custody_after().hoard_before_id().bytes())?;
+    let hoard_post_semantic_id = identity32(plan.custody_after().hoard_after_id().bytes())?;
+    let claim_ledger_pre_semantic_id =
+        identity32(plan.custody_after().fractional().claim_ledger_before_id().bytes())?;
+    let claim_ledger_post_semantic_id =
+        identity32(plan.custody_after().fractional().claim_ledger_after_id().bytes())?;
+    let execution_receipt_id = identity32(
+        solana_sha256_hasher::hashv(&[
+            DEALER_FACILITY_VECTOR_EXECUTION_RECEIPT_DOMAIN_V1,
+            &plan.vector_transition_id().bytes(),
+            &accepted_funding.consumption_receipt_id().bytes(),
+            &value_authority.receipt_id.bytes(),
+            &value_authority.deployment.receipt_id().bytes(),
+            &resolution.semantic_id.bytes(),
+            &resolution.data_id.bytes(),
+            &plan.facility_position_after_id().bytes(),
+            &ledger_post_semantic_id.bytes(),
+            &hoard_post_semantic_id.bytes(),
+            &claim_ledger_post_semantic_id.bytes(),
+            &plan.credit_after_id().bytes(),
+        ])
+        .to_bytes(),
+    )?;
+    Ok(AcceptedDealerFacilityVectorTransitionV1 {
+        facility_account: prestate.facility_position_account(),
+        facility_pre_semantic_id: prestate.facility_position_pre_semantic_id(),
+        facility_post_semantic_id: plan.facility_position_after_id(),
+        ledger_pre_semantic_id: plan.ledger_before_id(),
+        ledger_post_semantic_id,
+        hoard_pre_semantic_id,
+        hoard_post_semantic_id,
+        claim_ledger_pre_semantic_id,
+        claim_ledger_post_semantic_id,
+        credit_account: prestate.facility_credit_account(),
+        credit_post_semantic_id: plan.credit_after_id(),
+        resolution_semantic_id: identity32(resolution.semantic_id.bytes())?,
+        resolution_data_id: identity32(resolution.data_id.bytes())?,
+        payout_atoms: plan.payout_atoms(),
+        residue_numerator: plan.residue_numerator(),
+        vector_transition_id: plan.vector_transition_id(),
+        execution_receipt_id,
+    })
 }
 
 const IX_ACTOR: usize = 0;
