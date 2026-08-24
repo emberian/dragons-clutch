@@ -2232,20 +2232,7 @@ impl DealerFacilityAction {
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
-        match self {
-            Self::RegisterRelease => 1,
-            Self::InitializeHead => 2,
-            Self::OpenRawPage => 3,
-            Self::IngestBoundaryBatch => 4,
-            Self::SealRawPage => 5,
-            Self::InitializeWindowWork => 6,
-            Self::FoldWindowPages => 7,
-            Self::SealWindow => 8,
-            Self::EvaluateStatistic => 9,
-            Self::EmitFailureHandoff => 10,
-            Self::ReopenGeneration => 11,
-            Self::CloseGeneration => 12,
-        }
+        self as u8
     }
 
     /// Decode one allocated facility action.
@@ -2426,14 +2413,7 @@ impl StructuredClaimAction {
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
-        match self {
-            Self::RegisterSeries => 13,
-            Self::ActivateFunding => 14,
-            Self::AdvanceOccurrence => 15,
-            Self::LapseOccurrence => 16,
-            Self::ObserveDonation => 17,
-            Self::CloseFunding => 18,
-        }
+        self as u8
     }
 
     /// Decode one allocated StructuredClaim local action tag.
