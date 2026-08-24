@@ -8,7 +8,8 @@ use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::{read_rent, require_system_program, RentParameters};
 use crate::instructions::product_source_current::{
-    AuthenticatedCompiledProductSeriesBundleV7, AuthenticatedSeriesSourceArtifactsV6,
+    AuthenticatedCompiledProductSeriesBundleV7, AuthenticatedProductSeriesRegistrationV5,
+    AuthenticatedSeriesSourceArtifactsV6,
 };
 use crate::instructions::product_series_current::{
     authenticate_registry_capability_v5, authenticate_series_funding_account_v5,
@@ -26,7 +27,7 @@ use clutch_product_series::{
 };
 use clutch_solana_layout::product_series::{
     SeriesFundingAccountV5, SeriesRegistryAccountV4, SERIES_COLLATERAL_VAULT_COUNT_V2,
-    SERIES_FUNDING_ACCOUNT_BYTES_V5,
+    SERIES_FUNDING_ACCOUNT_BYTES_V5, SERIES_REGISTRY_ACCOUNT_BYTES_V4,
 };
 use solana_account_info::AccountInfo;
 use solana_cpi::invoke;
@@ -47,6 +48,8 @@ const SERIES_COLLATERAL_TRANSFER_POSTSTATE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/series-collateral-transfer-poststate/v5\0";
 const SERIES_PHYSICAL_FOUNDER_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/series-physical-founder/v5\0";
+const SERIES_PHYSICAL_REGISTRATION_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/series-physical-registration/v5\0";
 
 /// Physical-only suffix appended after Product's already-authenticated current
 /// Registry/artifact graph. The roles and order are fixed so callers cannot
@@ -104,6 +107,43 @@ struct SeriesCollateralVaultCapitalizationFactsV5 {
     collateral_donation_atoms: u64,
     collateral_atoms_after: u64,
     transfer_poststate_id: ContentId,
+}
+
+/// Move-only proof that the sole current RegistryV4 account was created from
+/// the pre-Registry BundleV7 authority and hostile-reopened under the exact
+/// ReleaseV2/ProfileV4 ProgramData identity.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedSeriesPhysicalRegistrationV5 {
+    id: ContentId,
+    registration: AuthenticatedProductSeriesRegistrationV5,
+    registry_account: Pubkey,
+    registry_data_id: ContentId,
+    registry_authentication_id: ContentId,
+    registry_rent_principal_lamports: u64,
+    registry_prefund_donation_lamports: u64,
+    payer_lamports_before: u64,
+    payer_lamports_after: u64,
+    neutral_sink_lamports_before: u64,
+    neutral_sink_lamports_after: u64,
+}
+
+impl AuthenticatedSeriesPhysicalRegistrationV5 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn registration_id(&self) -> ContentId { self.registration.id() }
+    pub(crate) const fn registry_account(&self) -> Pubkey { self.registry_account }
+    pub(crate) const fn registry_data_id(&self) -> ContentId { self.registry_data_id }
+    pub(crate) const fn registry_authentication_id(&self) -> ContentId {
+        self.registry_authentication_id
+    }
+    pub(crate) const fn registry_rent_principal_lamports(&self) -> u64 {
+        self.registry_rent_principal_lamports
+    }
+    pub(crate) const fn compiler_bundle_id(&self) -> CompiledProductSeriesBundleV7Id {
+        self.registration.compiler_bundle_id()
+    }
+    pub(crate) const fn series_plan_id(&self) -> SeriesPlanV5Id {
+        self.registration.series_plan_id()
+    }
 }
 
 /// Activation-only pure authority over exact current physical poststates.
@@ -548,9 +588,179 @@ impl AuthenticatedSeriesPhysicalFounderV5 {
     }
 }
 
+/// Create and hostile-reopen the sole current RegistryV4 replay anchor.
+///
+/// The pre-Registry authority is consumed by value. Its FundingTerms payer and
+/// neutral sink own all rent and predictable-address prefund disposition; no
+/// caller-selected identity or amount enters the persisted RegistryV4 body.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub(crate) fn register_current_series_physical_v5<'a>(
+    program_id: &Pubkey,
+    registration: AuthenticatedProductSeriesRegistrationV5,
+    payer: &AccountInfo<'a>,
+    registry_account: &AccountInfo<'a>,
+    neutral_lamport_sink: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    rent_sysvar: &AccountInfo<'a>,
+    program_account: &AccountInfo<'a>,
+    programdata_account: &AccountInfo<'a>,
+    release_artifact: &AccountInfo<'a>,
+    profile_artifact: &AccountInfo<'a>,
+) -> Outcome<(
+    AuthenticatedRegistryCapabilityV5,
+    AuthenticatedSeriesPhysicalRegistrationV5,
+)> {
+    require_system_program(system_program)?;
+    super::require_signer(payer)?;
+    require(
+        payer.is_writable
+            && *payer.key == registration.lamport_principal_refund()
+            && *neutral_lamport_sink.key == registration.neutral_lamport_sink()
+            && payer.key != neutral_lamport_sink.key
+            && payer.key != registry_account.key
+            && neutral_lamport_sink.key != registry_account.key
+            && registry_account.key != program_account.key
+            && registry_account.key != programdata_account.key
+            && registry_account.key != release_artifact.key
+            && registry_account.key != profile_artifact.key
+            && *program_account.key == registration.program_account()
+            && *programdata_account.key == registration.programdata_account()
+            && *release_artifact.key == registration.release_artifact_account()
+            && *profile_artifact.key == registration.profile_artifact_account(),
+        ClutchError::MismatchedState,
+    )?;
+    super::require_system_lamport_destination(
+        neutral_lamport_sink,
+        ContentId::from_bytes(registration.neutral_lamport_sink().to_bytes()),
+    )?;
+    let (expected_registry, stored_bump) = crate::seeds::series_registry_pda(
+        program_id,
+        &registration.series_plan_id().bytes(),
+    );
+    require(*registry_account.key == expected_registry, ClutchError::WrongPda)?;
+    super::require_creatable(registry_account)?;
+    let rent = read_rent(rent_sysvar)?;
+    let rent_principal_lamports = rent.minimum_balance(SERIES_REGISTRY_ACCOUNT_BYTES_V4)?;
+    require(rent_principal_lamports != 0, ClutchError::MismatchedState)?;
+    let payer_lamports_before = payer.lamports();
+    let registry_prefund_donation_lamports = registry_account.lamports();
+    let neutral_sink_lamports_before = neutral_lamport_sink.lamports();
+    let series_seed = registration.series_plan_id().bytes();
+    let bump_seed = [stored_bump];
+    super::create_series_program_account(
+        program_id,
+        payer,
+        registry_account,
+        neutral_lamport_sink,
+        system_program,
+        &rent,
+        SERIES_REGISTRY_ACCOUNT_BYTES_V4,
+        rent_principal_lamports,
+        &[crate::seeds::SEED_SERIES_REGISTRY_V1, &series_seed, &bump_seed],
+    )?;
+    let value = SeriesRegistryAccountV4 {
+        series_plan_id: registration.series_plan_id(),
+        funding_terms_id: registration.funding_terms_id(),
+        registry_release_id: registration.registry_release_id(),
+        capability_profile_id: registration.capability_profile_id(),
+        compiler_bundle_id: registration.compiler_bundle_id(),
+        rent_principal_lamports,
+        stored_bump,
+        activation_consumed: false,
+    };
+    {
+        let mut data = registry_account
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        value.encode(&mut data)?;
+    }
+    let registry = authenticate_series_registry_account_v4(
+        program_id,
+        registry_account,
+        registration.series_plan_id(),
+        true,
+    )?;
+    require(
+        registry.value() == &value
+            && registry.observed_lamports() == rent_principal_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    let registry_data_id = registry.data_id();
+    let registry_authentication_id = registry.authentication_id();
+    let capability = authenticate_registry_capability_v5(
+        program_id,
+        registry,
+        program_account,
+        programdata_account,
+        release_artifact,
+        profile_artifact,
+    )?;
+    let payer_lamports_after = payer.lamports();
+    let neutral_sink_lamports_after = neutral_lamport_sink.lamports();
+    require(
+        !capability.activation_consumed()
+            && capability.series_registry_account() == *registry_account.key
+            && capability.series_plan_id() == registration.series_plan_id()
+            && capability.funding_terms_id() == registration.funding_terms_id()
+            && capability.compiler_bundle_id() == registration.compiler_bundle_id()
+            && capability.registry_release_id() == registration.registry_release_id()
+            && capability.capability_profile_id() == registration.capability_profile_id()
+            && capability.program_account() == registration.program_account()
+            && capability.programdata_account() == registration.programdata_account()
+            && capability.programdata_sha256() == registration.programdata_sha256()
+            && payer_lamports_before
+                .checked_sub(rent_principal_lamports)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?
+                == payer_lamports_after
+            && neutral_sink_lamports_before
+                .checked_add(registry_prefund_donation_lamports)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?
+                == neutral_sink_lamports_after,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SERIES_PHYSICAL_REGISTRATION_DOMAIN_V5,
+            program_id.as_ref(),
+            &registration.id().bytes(),
+            registry_account.key.as_ref(),
+            &registry_data_id.bytes(),
+            &registry_authentication_id.bytes(),
+            &capability.id().bytes(),
+            &rent_principal_lamports.to_le_bytes(),
+            &registry_prefund_donation_lamports.to_le_bytes(),
+            payer.key.as_ref(),
+            &payer_lamports_before.to_le_bytes(),
+            &payer_lamports_after.to_le_bytes(),
+            neutral_lamport_sink.key.as_ref(),
+            &neutral_sink_lamports_before.to_le_bytes(),
+            &neutral_sink_lamports_after.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok((
+        capability,
+        AuthenticatedSeriesPhysicalRegistrationV5 {
+            id,
+            registration,
+            registry_account: *registry_account.key,
+            registry_data_id,
+            registry_authentication_id,
+            registry_rent_principal_lamports: rent_principal_lamports,
+            registry_prefund_donation_lamports,
+            payer_lamports_before,
+            payer_lamports_after,
+            neutral_sink_lamports_before,
+            neutral_sink_lamports_after,
+        },
+    ))
+}
+
 /// Consume the sole current Series activation bit after physical FundingV5
-/// capitalization, then hostile-reauthenticate the complete RegistryV5 loader
-/// authority and live FundingV5 account.
+/// capitalization, then hostile-reauthenticate the complete RegistryV4-bound
+/// CapabilityV5 loader authority and live FundingV5 account.
 ///
 /// This transition is deliberately inseparable from the move-only physical
 /// receipt. It neither accepts a receipt ID nor exposes a generic RegistryV4
@@ -1979,6 +2189,43 @@ pub(super) fn validate_current_physical_authority_v5(
 
 #[cfg(test)]
 mod source_invariants {
+    #[test]
+    fn v5_registration_is_acyclic_move_only_and_hostile_reopened() {
+        let source = include_str!("physical_v5.rs");
+        let receipt = source
+            .split_once("pub(crate) struct AuthenticatedSeriesPhysicalRegistrationV5")
+            .expect("physical registration receipt")
+            .1
+            .split_once("impl AuthenticatedSeriesPhysicalRegistrationV5")
+            .expect("bounded registration receipt")
+            .0;
+        assert!(!receipt.contains("Clone"));
+        assert!(!receipt.contains("Copy"));
+        let writer = source
+            .split_once("pub(crate) fn register_current_series_physical_v5")
+            .expect("current physical registration writer")
+            .1
+            .split_once("/// Consume the sole current Series activation bit")
+            .expect("bounded registration writer")
+            .0;
+        let create = writer
+            .find("super::create_series_program_account(")
+            .expect("RegistryV4 physical create");
+        let encode = writer.find("value.encode(").expect("RegistryV4 encode");
+        let reopen = writer
+            .find("authenticate_series_registry_account_v4(")
+            .expect("RegistryV4 hostile reopen");
+        let release = writer
+            .find("authenticate_registry_capability_v5(")
+            .expect("RegistryCapabilityV5 release join");
+        assert!(create < encode && encode < reopen && reopen < release);
+        assert!(writer.contains("registry_prefund_donation_lamports"));
+        assert!(writer.contains("registration.lamport_principal_refund()"));
+        assert!(writer.contains("registration.neutral_lamport_sink()"));
+        assert!(!writer.contains("SeriesRegistryAccountV3"));
+        assert!(!writer.contains("AuthenticatedRegistryCapabilityV4"));
+    }
+
     #[test]
     fn v5_physical_authority_is_fresh_and_move_only() {
         let source = include_str!("physical_v5.rs");
