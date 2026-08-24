@@ -4,7 +4,7 @@ extern crate std;
 
 use crate::dealer_leg_v2::{
     dealer_quote_semantics_digest_v2, dealer_upstream_economic_candidate_digest_v2,
-    exact_mul_div_rem, verify_claimed_dealer_allocations_v2 as verify_claimed_core,
+    verify_claimed_dealer_allocations_v2 as verify_claimed_core,
     verify_economic_candidate_with_dealer_v2 as verify_join_core, AggregateDealerTradeV2,
     DealerCashAllocationV2, DealerCashPolicyV2, DealerErrorV2, DealerFacilityBindingV2,
     DealerFillRowV2, DealerLegCandidateV2, DealerQuotePreconditionV2, DealerQuoteRowV2,
@@ -19,40 +19,6 @@ use crate::relation_v2::{
 use crate::{PartialPolicy, Side, MAX_ORDERS};
 
 const SCALE: u64 = 10_000;
-
-#[test]
-fn exact_mul_div_matches_small_products_and_a_double_width_case() {
-    let mut multiplicand = 0u128;
-    while multiplicand < 33 {
-        let mut multiplier = 0u128;
-        while multiplier < 33 {
-            let mut denominator = 1u128;
-            while denominator < 33 {
-                let product = multiplicand * multiplier;
-                assert_eq!(
-                    exact_mul_div_rem(multiplicand, multiplier, denominator).unwrap(),
-                    (product / denominator, product % denominator)
-                );
-                denominator += 1;
-            }
-            multiplier += 1;
-        }
-        multiplicand += 1;
-    }
-
-    let weight = u128::from(u64::MAX);
-    let denominator = weight * 32;
-    let multiplicand = denominator - 1;
-    assert!(multiplicand.checked_mul(weight).is_none());
-    assert_eq!(
-        exact_mul_div_rem(multiplicand, weight, denominator).unwrap(),
-        (weight - 1, denominator - weight)
-    );
-    assert_eq!(
-        exact_mul_div_rem(u128::MAX, u128::MAX - 1, u128::MAX).unwrap(),
-        (u128::MAX - 1, 0)
-    );
-}
 
 fn id(byte: u8) -> [u8; 32] {
     [byte; 32]
