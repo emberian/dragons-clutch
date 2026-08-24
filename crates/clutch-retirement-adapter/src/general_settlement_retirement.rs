@@ -197,7 +197,7 @@ pub fn authenticate_general_epoch_terminal_counts_v1(
     })
 }
 
-/// Exact program-owned terminal `0xa9/1` root promoted from the structural
+/// Exact program-owned terminal `0xa9/2` root promoted from the structural
 /// contract projection.
 ///
 /// This is candidate-scoped settlement terminality. It is not by itself

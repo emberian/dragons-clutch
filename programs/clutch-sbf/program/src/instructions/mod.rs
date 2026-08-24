@@ -163,6 +163,9 @@ pub mod general_v2_portfolio_retirement_v5;
     feature = "profile-non-production-general-v2-empty-book-identity-lab"
 ))]
 pub mod general_v2_settlement_traversal_v5;
+/// One exhaustive dispatcher seam for the current General settlement successor.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub(crate) mod general_v2_successor;
 pub mod genesis;
 #[cfg(test)]
 pub mod market_init;
