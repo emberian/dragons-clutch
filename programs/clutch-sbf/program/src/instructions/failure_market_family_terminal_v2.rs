@@ -26,11 +26,6 @@ use crate::instructions::failure_market_runtime::{
     authenticate_failure_market_runtime_root_v1, write_failure_market_runtime_terminal_plan_v2,
     AuthenticatedFailureMarketRuntimeRootV1,
 };
-use crate::instructions::product_market::{
-    authenticate_market_lifecycle_root_v1, record_failure_shared_core_terminal_v1,
-    AuthenticatedFailureSharedCoreTerminalOwnerV1,
-    AuthenticatedFailureSharedCoreTerminalPostwriteV1, AuthenticatedMarketLifecycleRootV1,
-};
 use crate::instructions::product_series_current::{
     authenticate_market_lifecycle_root_v2, AuthenticatedMarketLifecycleRootV2,
 };
@@ -58,13 +53,8 @@ use clutch_failure_policy_runtime::market_runtime_v1::{
     FailureMarketFamilyTerminalDispositionV2, FailureMarketFamilyTerminalFactsV2,
     FailureMarketFamilyTerminalReceiptV2,
 };
-use clutch_product_series::{
-    ContentId, MarketLifecyclePhaseV1, MarketLifecyclePhaseV2, MarketLifecycleRootV1,
-    MarketSharedCoreTerminalProjectionV1, MarketSharedCoreV1,
-};
-use clutch_solana_layout::product_series::{
-    MarketLifecycleRootAccountV1, MarketLifecycleRootAccountV2,
-};
+use clutch_product_series::{ContentId, MarketLifecyclePhaseV2};
+use clutch_solana_layout::product_series::MarketLifecycleRootAccountV2;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
@@ -829,72 +819,6 @@ pub(crate) fn authenticate_failure_market_family_terminal_for_source_retirement_
     )
 }
 
-impl AuthenticatedFailureSharedCoreTerminalOwnerV1
-    for AuthenticatedFailureMarketFamilyTerminalOwnerV2
-{
-    fn postwrite_id(&self) -> ContentId {
-        self.id
-    }
-
-    fn market_instance_id(&self) -> clutch_product_series::MarketInstanceV2Id {
-        self.admission.state().binding().facts().market_instance_id
-    }
-
-    fn generation(&self) -> u64 {
-        self.admission.state().binding().facts().generation
-    }
-
-    fn owner_account_id(&self) -> ContentId {
-        ContentId::from_bytes(self.replay.account().to_bytes())
-    }
-
-    fn owner_release_id(&self) -> ContentId {
-        self.owner_release_id
-    }
-
-    fn family_terminal_receipt_id(&self) -> ContentId {
-        self.family_terminal_receipt_id
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn authenticate_failure_shared_core_terminal_owner_v1(
-        &self,
-        root_account: Pubkey,
-        root_binding_id: ContentId,
-        root_semantic_before_id: ContentId,
-        root_data_before_id: ContentId,
-        root_authentication_before_id: ContentId,
-        projection: MarketSharedCoreTerminalProjectionV1,
-    ) -> Outcome<()> {
-        let policy = self.admission.state().binding().facts();
-        require(
-            root_account != Pubkey::default()
-                && root_account != self.admission.account()
-                && root_account != self.runtime.account()
-                && root_account != self.replay.account()
-                && root_account != self.interval.cell_account()
-                && root_account != self.interval.history_account()
-                && !root_binding_id.is_zero()
-                && !root_semantic_before_id.is_zero()
-                && !root_data_before_id.is_zero()
-                && !root_authentication_before_id.is_zero()
-                && projection.market_binding_id() == root_binding_id
-                && projection.market_instance_id() == policy.market_instance_id
-                && projection.generation() == policy.generation
-                && projection.owner() == MarketSharedCoreV1::Failure
-                && projection.owner_account_id()
-                    == ContentId::from_bytes(self.replay.account().to_bytes())
-                && projection.owner_release_id() == self.owner_release_id
-                && projection.owner_terminal_receipt_id()
-                    == self.family_terminal_receipt_id
-                && projection.root_transition_sequence() != 0
-                && self.owner_release_id == self.derived_owner_release_id()?
-                && self.id == self.derived_authentication_id(),
-            ClutchError::MismatchedState,
-        )
-    }
-}
-
 /// Produce one durable Failure terminal chain without a caller terminal DTO.
 #[allow(clippy::too_many_arguments)]
 fn write_failure_market_family_terminal_v2<'a>(
@@ -1136,8 +1060,8 @@ fn write_failure_market_family_terminal_v2<'a>(
 /// The Product resolution activation in the live root must be the exact one
 /// retained by the Recovery-close receipt. This wrapper cannot latch Product:
 /// convergent Series links retire later. Its durable poststate is reopened by
-/// [`record_persisted_failure_market_family_terminal_v2`] after Product enters
-/// `Retiring`.
+/// the current RootV2 Product terminal owner after Product enters `Retiring`;
+/// no historical RootV1 writer is accepted here.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn persist_resolved_failure_market_family_v2(
     program_id: &Pubkey,
@@ -1196,75 +1120,6 @@ pub(crate) fn persist_resolved_failure_market_family_v2(
         recovery_close,
         replay_before,
     )
-}
-
-/// After all Series links retire, reopen the unique durable Failure terminal
-/// tuple and consume it once into Product's `Retiring` shared-core latch.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn record_persisted_failure_market_family_terminal_v2<'next>(
-    program_id: &Pubkey,
-    market_root_account: &AccountInfo<'_>,
-    admission_root_account: &AccountInfo<'_>,
-    runtime_root_account: &AccountInfo<'_>,
-    interval_cell_account: &AccountInfo<'_>,
-    interval_history_account: &AccountInfo<'_>,
-    replay_account: &AccountInfo<'_>,
-    market_root_before: AuthenticatedMarketLifecycleRootV1<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
-    interval_funding: FailureMarketIntervalFundingReceiptV2,
-    quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
-    replay_funding: FailureMarketReplayFundingReceiptV2,
-    market_root_successor_output: &mut MarketLifecycleRootV1,
-    market_root_rebound_output: &'next mut MarketLifecycleRootAccountV1,
-) -> Outcome<(
-    AuthenticatedFailureMarketFamilyTerminalOwnerV2,
-    AuthenticatedMarketLifecycleRootV1<'next>,
-    AuthenticatedFailureSharedCoreTerminalPostwriteV1,
-)> {
-    require_distinct(&[
-        market_root_account.clone(),
-        admission_root_account.clone(),
-        runtime_root_account.clone(),
-        interval_cell_account.clone(),
-        interval_history_account.clone(),
-        replay_account.clone(),
-    ])?;
-    let terminal = authenticate_failure_market_family_terminal_owner_v2(
-        program_id,
-        admission_root_account,
-        runtime_root_account,
-        interval_cell_account,
-        interval_history_account,
-        replay_account,
-        admission,
-        interval_funding,
-        quote,
-        replay_funding,
-        false,
-        false,
-        false,
-        false,
-    )?;
-    let (market_root_after, product_terminal) = record_failure_shared_core_terminal_v1(
-        program_id,
-        market_root_account,
-        market_root_before,
-        &terminal,
-        market_root_successor_output,
-        market_root_rebound_output,
-    )?;
-    require(
-        product_terminal.failure_postwrite_id() == terminal.id()
-            && product_terminal.projection().owner() == MarketSharedCoreV1::Failure
-            && product_terminal.projection().owner_account_id()
-                == ContentId::from_bytes(terminal.replay().account().to_bytes())
-            && product_terminal.projection().owner_release_id()
-                == terminal.owner_release_id()
-            && product_terminal.projection().owner_terminal_receipt_id()
-                == terminal.family_terminal_receipt_id(),
-        ClutchError::MismatchedState,
-    )?;
-    Ok((terminal, market_root_after, product_terminal))
 }
 
 #[cfg(test)]
@@ -1403,10 +1258,9 @@ mod adversarial_family_terminal_tests {
             .split("fn authenticate_failure_market_family_terminal_owner_v2")
             .nth(1)
             .and_then(|value| {
-                value.split("impl AuthenticatedFailureSharedCoreTerminalOwnerV1")
-                    .next()
+                value.split("/// Produce one durable Failure terminal chain").next()
             })
-            .expect("persisted Product terminal authority");
+            .expect("persisted current terminal authority");
         for predicate in [
             "authenticate_failure_market_root_v2",
             "authenticate_failure_market_runtime_root_v1",
@@ -1499,8 +1353,7 @@ mod adversarial_family_terminal_tests {
             .split("pub(crate) fn authenticate_failure_market_family_terminal_for_close_v2")
             .nth(1)
             .and_then(|value| {
-                value.split("impl AuthenticatedFailureSharedCoreTerminalOwnerV1")
-                    .next()
+                value.split("/// Reopen the durable terminal tuple read-only").next()
             })
             .expect("close-scoped durable owner");
         assert!(close.contains("true,\n        true,\n        true,\n        false,"));
@@ -1530,20 +1383,19 @@ mod adversarial_family_terminal_tests {
         );
         assert!(!persist.contains("AuthenticatedMarketLifecycleRootV1"));
 
-        let latch = source
-            .split("pub(crate) fn record_persisted_failure_market_family_terminal_v2")
-            .nth(1)
-            .and_then(|value| value.split("#[cfg(test)]").next())
-            .expect("Retiring-root Product latch");
-        let reopen = latch
-            .find("authenticate_failure_market_family_terminal_owner_v2")
-            .expect("durable hostile reopen");
-        let product = latch
-            .find("record_failure_shared_core_terminal_v1")
-            .expect("Product latch");
-        assert!(reopen < product);
-        assert!(!latch.contains("write_failure_market_family_terminal_v2"));
-        assert!(!latch.contains("AuthenticatedFailureMarketRecoveryClosePostwriteV2"));
+        let production = source.split("#[cfg(test)]").next().expect("production");
+        assert!(!production.contains(concat!(
+            "record_persisted_failure_market_family_terminal_",
+            "v2"
+        )));
+        assert!(!production.contains(concat!(
+            "record_failure_shared_core_terminal_",
+            "v1"
+        )));
+        assert!(!production.contains(concat!(
+            "AuthenticatedMarketLifecycleRoot",
+            "V1"
+        )));
     }
 
     #[test]
@@ -1557,15 +1409,7 @@ mod adversarial_family_terminal_tests {
         assert!(!production.contains(
             "pub(crate) fn write_failure_market_family_terminal_v2"
         ));
-        let product_impl = production
-            .split("impl AuthenticatedFailureSharedCoreTerminalOwnerV1")
-            .nth(1)
-            .and_then(|value| {
-                value.split("/// Produce one durable Failure terminal")
-                    .next()
-            })
-            .expect("sole Product authority implementation");
-        assert!(product_impl.contains("AuthenticatedFailureMarketFamilyTerminalOwnerV2"));
-        assert!(!product_impl.contains("AuthenticatedFailureMarketFamilyTerminalPostwriteV2"));
+        assert!(!production.contains("AuthenticatedFailureSharedCoreTerminalOwnerV1"));
+        assert!(!production.contains("record_failure_shared_core_terminal_v1"));
     }
 }
