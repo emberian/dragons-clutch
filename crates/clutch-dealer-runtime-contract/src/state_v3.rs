@@ -2,10 +2,11 @@
 
 //! Dealer State successor that counts the facility-lifetime Product obligation.
 //!
-//! Actions before CoveredDealer admission continue to use `DealerStateV2`.
-//! The atomic SelectLeaseAndBegin transition promotes that exact state into V3
-//! while creating one `DealerSeriesObligationBindingV1`.  Per-Lease settlement
-//! mutates only the embedded V2 state; the Product obligation survives until
+//! Every live facility is persisted as `DealerStateV3`. Before the first
+//! CoveredDealer admission the Product-obligation partition is canonically
+//! empty; the atomic SelectLeaseAndBegin transition fills that partition while
+//! creating one `DealerSeriesObligationBindingV3`. Per-Lease settlement mutates
+//! only the embedded economic state; the Product obligation survives until
 //! facility retirement consumes and closes it.
 
 use crate::codec::{Reader, Writer, HEADER_BYTES};
@@ -25,7 +26,7 @@ pub const DEALER_STATE_VERSION_V3: u16 = 3;
 pub const DEALER_STATE_BYTES_V3: usize =
     HEADER_BYTES + DEALER_STATE_BYTES_V2 + (2 * 32) + 8 + DELETABLE_RENT_OWNER_BYTES;
 
-/// Authoritative Dealer root after Product Dealer-obligation admission.
+/// Sole authoritative Dealer root before, during, and after Product admission.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerStateV3 {
     /// Exact V2 economic/child state, retained as its sole semantic owner.
@@ -38,12 +39,90 @@ pub struct DealerStateV3 {
     pub series_obligation_children: u32,
     /// Separately owned principal for the V2-to-V3 State-account rent delta.
     ///
-    /// This cannot be merged into `base.rent`: SelectLeaseAndBegin's prepaid
-    /// Candidate compartment may differ from the original State payer.
+    /// This cannot be merged into `base.rent`: it is an independently measured
+    /// V3-over-V2 principal even when the same founder pays both compartments.
     pub product_upgrade_rent: DeletableRentOwnerV1,
 }
 
 impl DealerStateV3 {
+    /// Create the sole persisted Dealer root before its first Product
+    /// obligation is admitted.
+    ///
+    /// `product_upgrade_rent` owns the exact V3-over-V2 rent delta from the
+    /// founding instruction. Keeping the empty obligation partition inside V3
+    /// removes the old caller-selectable `0xaf/v2` authority without inventing
+    /// a synthetic Product liability before the facility can trade.
+    pub fn founding_unadmitted(
+        base: DealerStateV2,
+        product_upgrade_rent: DeletableRentOwnerV1,
+    ) -> Result<Self> {
+        base.validate()?;
+        product_upgrade_rent.validate()?;
+        if product_upgrade_rent.neutral_sink != base.rent.neutral_sink
+            || !matches!(
+                base.phase,
+                DealerPhaseV2::Funding
+                    | DealerPhaseV2::Cancelled
+                    | DealerPhaseV2::Trading
+                    | DealerPhaseV2::UnwindOnly
+            )
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let value = Self {
+            base,
+            series_obligation_binding_id: Id::ZERO,
+            series_obligation_binding_account_id: Id::ZERO,
+            series_obligation_children: 0,
+            product_upgrade_rent,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Admit the first Product obligation into an already-authoritative V3
+    /// root after the first lease transition has produced its exact poststate.
+    pub fn admit_product_v3(
+        self,
+        base_after: DealerStateV2,
+        binding: &DealerSeriesObligationBindingV3,
+    ) -> Result<Self> {
+        self.validate()?;
+        base_after.validate()?;
+        binding.validate()?;
+        if self.series_obligation_children != 0
+            || !self.series_obligation_binding_id.is_zero()
+            || !self.series_obligation_binding_account_id.is_zero()
+            || self.base.policy_id != base_after.policy_id
+            || self.base.facility_id != base_after.facility_id
+            || self.base.facility_position_binding_id != base_after.facility_position_binding_id
+            || binding.phase != DealerSeriesObligationPhaseV1::Live
+            || binding.key.policy_id != base_after.policy_id
+            || binding.key.facility_id != base_after.facility_id
+            || binding.key.facility_position_binding_id
+                != base_after.facility_position_binding_id
+            || base_after.children.leases != 1
+            || base_after.children.settlement_pots != 1
+            || base_after.active_lease_id.is_zero()
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let next = Self {
+            base: base_after,
+            series_obligation_binding_id: binding.binding_id()?,
+            series_obligation_binding_account_id: binding.key.binding_account_id,
+            series_obligation_children: 1,
+            ..self
+        };
+        next.validate()?;
+        Ok(next)
+    }
+
+    /// Whether the exact one-child Product obligation partition is live.
+    pub const fn product_obligation_is_live(&self) -> bool {
+        self.series_obligation_children == 1
+    }
+
     /// Promote the exact generic Product RootV3/LinkV3 admission post-state.
     pub fn promote_product_v3(
         base: DealerStateV2,
@@ -285,16 +364,19 @@ impl DealerStateV3 {
         if self.product_upgrade_rent.neutral_sink != self.base.rent.neutral_sink {
             return Err(Error::MismatchedBinding);
         }
-        self.series_obligation_binding_id.validate_live()?;
         match self.series_obligation_children {
             0 => {
-                if !self.series_obligation_binding_account_id.is_zero()
-                    || !matches!(self.base.phase, DealerPhaseV2::Retiring | DealerPhaseV2::Closed)
+                if !self.series_obligation_binding_account_id.is_zero() {
+                    return Err(Error::InvalidChildGraph);
+                }
+                if !self.series_obligation_binding_id.is_zero()
+                    && !matches!(self.base.phase, DealerPhaseV2::Retiring | DealerPhaseV2::Closed)
                 {
                     return Err(Error::InvalidChildGraph);
                 }
             }
             1 => {
+                self.series_obligation_binding_id.validate_live()?;
                 self.series_obligation_binding_account_id.validate_live()?;
                 if self.series_obligation_binding_account_id
                     == self.base.facility_position_account_id

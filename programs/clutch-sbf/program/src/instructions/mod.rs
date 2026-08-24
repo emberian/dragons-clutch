@@ -49,12 +49,19 @@ pub(crate) mod collateral_position_v3;
 pub(crate) mod collateral_shared_core_terminal_v3;
 pub mod complete_set_v3;
 pub mod construction;
-/// Non-production executable Dealer facility slice.
-#[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+/// Current executable Dealer facility and Product-obligation slice.
+#[cfg(any(
+    feature = "profile-non-production-dealer-policy-catalog-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub mod dealer_facility;
-/// Non-production immutable Dealer policy/liveness catalog transport.
+/// Immutable Dealer policy/liveness catalog transport.
+#[cfg(any(
+    feature = "profile-non-production-dealer-policy-catalog-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub mod dealer_policy;
-/// Capability-disabled Dealer facility account and instruction contracts.
+/// Dealer facility account and instruction contracts.
 pub mod dealer_runtime;
 // The V1 adapter remains available only as historical source. Current Direct
 // requests enter the exact b1/v3 account/authentication plane below.
