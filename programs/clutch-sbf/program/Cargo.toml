@@ -83,7 +83,6 @@ profile-successor-chain-attached-dev = [
     "dep:clutch-fee-runtime-contract",
     "dep:clutch-evidence-recovery",
     "dep:clutch-failure-policy-adapter",
-    "dep:clutch-failure-policy-runtime",
     "dep:clutch-structured-claim",
     "dep:clutch-structured-claim-adapter",
     "clutch-structured-claim-adapter/profile-successor-chain-attached-dev",
