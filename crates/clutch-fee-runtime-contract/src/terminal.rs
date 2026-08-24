@@ -23,7 +23,10 @@ use crate::projection::{
     AuthenticatedSelectedOwnerFeeV2, AuthenticatedSelectedOwnerFeeV4, SelectedOwnerFeeBookV1,
 };
 use crate::retirement::{CompletedFeeRetirementV1, FeeRetirementHashV1};
-use crate::selected::{OwnerFeeCarryV1, SelectedCompositeFeeV1};
+use crate::selected::{
+    OwnerFeeCarryV1, SelectedCompositeFeeAccess, SelectedCompositeFeeV1,
+    SelectedCompositeFeeV2,
+};
 use crate::treasury::TreasuryLedgerV1;
 use crate::{add, independent, live, Error, Id, Result, MAX_FEE_ROWS_V1};
 
@@ -37,7 +40,7 @@ pub const OWNER_FEE_FINALIZATION_VERSION_V2: u16 = 2;
 pub const FEE_TERMINAL_RECEIPT_V1_BYTES: usize = 544;
 /// Exact canonical closure-manifest receipt width.
 pub const FEE_CLOSURE_MANIFEST_V1_BYTES: usize = 224;
-/// Exact canonical accumulator-authenticated closure-manifest width.
+/// Exact canonical streaming-retirement closure-manifest width.
 pub const FEE_CLOSURE_MANIFEST_V2_BYTES: usize = 528;
 /// Terminal receipt magic.
 pub const FEE_TERMINAL_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCFEEEND";
@@ -318,8 +321,8 @@ impl OwnerFeeFinalizationReceiptV1 {
     /// V5 row poststate data ID, Position semantic ID, Replay successor, pot
     /// data ID, and persisted rent transition carried in `bindings`.
     #[allow(clippy::too_many_arguments)]
-    pub fn settle_delivery_complete_v4(
-        selected: &SelectedCompositeFeeV1,
+    pub fn settle_delivery_complete_v4<S: SelectedCompositeFeeAccess + ?Sized>(
+        selected: &S,
         projection: &AuthenticatedSelectedOwnerFeeV4,
         carry: &OwnerFeeCarryV1,
         bindings: OwnerFeeFinalizationBindingsV2,
@@ -1007,7 +1010,10 @@ impl FeeClosureManifestReceiptV1 {
     }
 }
 
-/// Durable closure manifest for the accumulator-authenticated live path.
+/// Immutable closure manifest for the sole accumulator-authenticated live
+/// retirement path. Unlike V1, this receipt explicitly commits the four
+/// candidate-global temporary accounts, the exact accumulator close, and the
+/// canonical terminal semantic body identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FeeClosureManifestReceiptV2 {
     receipt: Id,
@@ -1035,27 +1041,90 @@ pub struct FeeClosureManifestReceiptV2 {
 }
 
 impl FeeClosureManifestReceiptV2 {
-    pub const fn receipt(&self) -> Id { self.receipt }
-    pub const fn terminal_receipt(&self) -> Id { self.terminal_receipt }
-    pub const fn terminal_data_id(&self) -> Id { self.terminal_data_id }
-    pub const fn runtime_program(&self) -> Id { self.runtime_program }
-    pub const fn runtime_release(&self) -> Id { self.runtime_release }
-    pub const fn fee_record(&self) -> Id { self.fee_record }
-    pub const fn terminal_authority_receipt(&self) -> Id { self.terminal_authority_receipt }
-    pub const fn closure_set_data_id(&self) -> Id { self.closure_set_data_id }
-    pub const fn selected_record(&self) -> Id { self.selected_record }
-    pub const fn recipient_allocation(&self) -> Id { self.recipient_allocation }
-    pub const fn treasury_ledger(&self) -> Id { self.treasury_ledger }
-    pub const fn retirement_accumulator(&self) -> Id { self.retirement_accumulator }
-    pub const fn accumulator_close_receipt(&self) -> Id { self.accumulator_close_receipt }
-    pub const fn accumulator_rent_payer(&self) -> Id { self.accumulator_rent_payer }
-    pub const fn neutral_sink(&self) -> Id { self.neutral_sink }
-    pub const fn outcome(&self) -> FeeTerminalOutcomeV1 { self.outcome }
-    pub const fn owner_count(&self) -> u8 { self.owner_count }
-    pub const fn account_count(&self) -> u16 { self.account_count }
-    pub const fn payer_refund_lamports(&self) -> u64 { self.payer_refund_lamports }
-    pub const fn neutral_credit_lamports(&self) -> u64 { self.neutral_credit_lamports }
-    pub const fn accumulator_refund_lamports(&self) -> u64 { self.accumulator_refund_lamports }
+    pub const fn receipt(&self) -> Id {
+        self.receipt
+    }
+
+    pub const fn terminal_receipt(&self) -> Id {
+        self.terminal_receipt
+    }
+
+    pub const fn terminal_data_id(&self) -> Id {
+        self.terminal_data_id
+    }
+
+    pub const fn runtime_program(&self) -> Id {
+        self.runtime_program
+    }
+
+    pub const fn runtime_release(&self) -> Id {
+        self.runtime_release
+    }
+
+    pub const fn fee_record(&self) -> Id {
+        self.fee_record
+    }
+
+    pub const fn terminal_authority_receipt(&self) -> Id {
+        self.terminal_authority_receipt
+    }
+
+    pub const fn closure_set_data_id(&self) -> Id {
+        self.closure_set_data_id
+    }
+
+    pub const fn selected_record(&self) -> Id {
+        self.selected_record
+    }
+
+    pub const fn recipient_allocation(&self) -> Id {
+        self.recipient_allocation
+    }
+
+    pub const fn treasury_ledger(&self) -> Id {
+        self.treasury_ledger
+    }
+
+    pub const fn retirement_accumulator(&self) -> Id {
+        self.retirement_accumulator
+    }
+
+    pub const fn accumulator_close_receipt(&self) -> Id {
+        self.accumulator_close_receipt
+    }
+
+    pub const fn accumulator_rent_payer(&self) -> Id {
+        self.accumulator_rent_payer
+    }
+
+    pub const fn neutral_sink(&self) -> Id {
+        self.neutral_sink
+    }
+
+    pub const fn outcome(&self) -> FeeTerminalOutcomeV1 {
+        self.outcome
+    }
+
+    pub const fn owner_count(&self) -> u8 {
+        self.owner_count
+    }
+
+    pub const fn account_count(&self) -> u16 {
+        self.account_count
+    }
+
+    pub const fn payer_refund_lamports(&self) -> u64 {
+        self.payer_refund_lamports
+    }
+
+    pub const fn neutral_credit_lamports(&self) -> u64 {
+        self.neutral_credit_lamports
+    }
+
+    pub const fn accumulator_refund_lamports(&self) -> u64 {
+        self.accumulator_refund_lamports
+    }
+
     pub const fn accumulator_neutral_credit_lamports(&self) -> u64 {
         self.accumulator_neutral_credit_lamports
     }
@@ -1065,26 +1134,44 @@ impl FeeClosureManifestReceiptV2 {
         let mut output = [0u8; FEE_CLOSURE_MANIFEST_V2_BYTES];
         let mut at = 0usize;
         put(&mut output, &mut at, &FEE_CLOSURE_MANIFEST_MAGIC_V2)?;
-        put(&mut output, &mut at, &FEE_CLOSURE_MANIFEST_VERSION_V2.to_le_bytes())?;
+        put(
+            &mut output,
+            &mut at,
+            &FEE_CLOSURE_MANIFEST_VERSION_V2.to_le_bytes(),
+        )?;
         put(&mut output, &mut at, &[self.outcome as u8, self.owner_count])?;
         put(&mut output, &mut at, &self.account_count.to_le_bytes())?;
         put(&mut output, &mut at, &[0; 2])?;
         for identity in [
-            self.receipt, self.terminal_receipt, self.terminal_data_id,
-            self.runtime_program, self.runtime_release, self.fee_record,
-            self.terminal_authority_receipt, self.closure_set_data_id,
-            self.selected_record, self.recipient_allocation, self.treasury_ledger,
-            self.retirement_accumulator, self.accumulator_close_receipt,
-            self.accumulator_rent_payer, self.neutral_sink,
+            self.receipt,
+            self.terminal_receipt,
+            self.terminal_data_id,
+            self.runtime_program,
+            self.runtime_release,
+            self.fee_record,
+            self.terminal_authority_receipt,
+            self.closure_set_data_id,
+            self.selected_record,
+            self.recipient_allocation,
+            self.treasury_ledger,
+            self.retirement_accumulator,
+            self.accumulator_close_receipt,
+            self.accumulator_rent_payer,
+            self.neutral_sink,
         ] {
             put(&mut output, &mut at, &identity.0)?;
         }
-        for amount in [self.payer_refund_lamports, self.neutral_credit_lamports,
-            self.accumulator_refund_lamports, self.accumulator_neutral_credit_lamports]
-        {
+        for amount in [
+            self.payer_refund_lamports,
+            self.neutral_credit_lamports,
+            self.accumulator_refund_lamports,
+            self.accumulator_neutral_credit_lamports,
+        ] {
             put(&mut output, &mut at, &amount.to_le_bytes())?;
         }
-        if at != output.len() { return Err(Error::InvalidWidth); }
+        if at != output.len() {
+            return Err(Error::InvalidWidth);
+        }
         Ok(output)
     }
 
@@ -1097,7 +1184,9 @@ impl FeeClosureManifestReceiptV2 {
         if u16::from_le_bytes([input[8], input[9]]) != FEE_CLOSURE_MANIFEST_VERSION_V2 {
             return Err(Error::WrongVersion);
         }
-        if input[14..16] != [0; 2] { return Err(Error::NonCanonicalPadding); }
+        if input[14..16] != [0; 2] {
+            return Err(Error::NonCanonicalPadding);
+        }
         let outcome = FeeTerminalOutcomeV1::decode(input[10])?;
         let owner_count = input[11];
         let account_count = u16::from_le_bytes([input[12], input[13]]);
@@ -1126,18 +1215,27 @@ impl FeeClosureManifestReceiptV2 {
             accumulator_refund_lamports: take_u64(input, &mut at)?,
             accumulator_neutral_credit_lamports: take_u64(input, &mut at)?,
         };
-        if at != input.len() { return Err(Error::InvalidWidth); }
+        if at != input.len() {
+            return Err(Error::InvalidWidth);
+        }
         value.validate()?;
         Ok(value)
     }
 
     fn validate(&self) -> Result<()> {
         independent(&[
-            self.receipt, self.terminal_receipt, self.terminal_data_id,
-            self.runtime_program, self.runtime_release, self.fee_record,
-            self.terminal_authority_receipt, self.closure_set_data_id,
-            self.recipient_allocation, self.treasury_ledger,
-            self.retirement_accumulator, self.accumulator_close_receipt,
+            self.receipt,
+            self.terminal_receipt,
+            self.terminal_data_id,
+            self.runtime_program,
+            self.runtime_release,
+            self.fee_record,
+            self.terminal_authority_receipt,
+            self.closure_set_data_id,
+            self.recipient_allocation,
+            self.treasury_ledger,
+            self.retirement_accumulator,
+            self.accumulator_close_receipt,
             self.neutral_sink,
         ])?;
         live(self.accumulator_rent_payer)?;
@@ -1162,7 +1260,10 @@ impl FeeClosureManifestReceiptV2 {
             self.accumulator_close_receipt,
             self.accumulator_rent_payer,
             self.neutral_sink,
-            add(self.accumulator_refund_lamports, self.accumulator_neutral_credit_lamports)?,
+            add(
+                self.accumulator_refund_lamports,
+                self.accumulator_neutral_credit_lamports,
+            )?,
             self.accumulator_refund_lamports,
             self.accumulator_neutral_credit_lamports,
         )?;
@@ -1378,12 +1479,13 @@ impl FeeRecordTerminalReceiptV1 {
             self.value_disposition_receipt,
             self.terminal_authority_receipt,
         ])?;
-        if self.owner_count == 0 || usize::from(self.owner_count) > MAX_FEE_ROWS_V1 {
+        if usize::from(self.owner_count) > MAX_FEE_ROWS_V1 {
             return Err(Error::InvalidWidth);
         }
         match self.outcome {
             FeeTerminalOutcomeV1::Settled => {
-                if self.released_authorization_atoms != 0
+                if (self.owner_count == 0) != (self.collected_fee_atoms == 0)
+                    || self.released_authorization_atoms != 0
                     || u128::from(add(
                         add(self.maker_rebate_atoms, self.executor_atoms)?,
                         self.treasury_atoms,
@@ -1393,7 +1495,8 @@ impl FeeRecordTerminalReceiptV1 {
                 }
             }
             FeeTerminalOutcomeV1::Aborted => {
-                if self.collected_fee_atoms != 0
+                if self.owner_count == 0
+                    || self.collected_fee_atoms != 0
                     || self.maker_rebate_atoms != 0
                     || self.executor_atoms != 0
                     || self.treasury_atoms != 0
@@ -1463,8 +1566,8 @@ impl FeeTerminalReceiptBundleV1 {
     }
 }
 
-/// Durable live-retirement pair. The terminal semantic identity is rederived
-/// from the exact terminal body on every decode.
+/// Live streaming-retirement pair. The manifest's terminal data identity is
+/// re-derived from the exact terminal semantic body on every decode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FeeTerminalReceiptBundleV2 {
     pub closure_manifest: FeeClosureManifestReceiptV2,
@@ -1499,8 +1602,10 @@ impl FeeTerminalReceiptBundleV2 {
                 != self.terminal.terminal_authority_receipt
             || self.closure_manifest.outcome != self.terminal.outcome
             || self.closure_manifest.owner_count != self.terminal.owner_count
-            || self.closure_manifest.payer_refund_lamports != projection.payer_refund_lamports
-            || self.closure_manifest.neutral_credit_lamports != projection.neutral_credit_lamports
+            || self.closure_manifest.payer_refund_lamports
+                != projection.payer_refund_lamports
+            || self.closure_manifest.neutral_credit_lamports
+                != projection.neutral_credit_lamports
         {
             return Err(Error::InvalidTerminalDisposition);
         }
@@ -1510,17 +1615,10 @@ impl FeeTerminalReceiptBundleV2 {
     pub const fn closure_manifest(&self) -> FeeClosureManifestReceiptV2 {
         self.closure_manifest
     }
-    pub const fn terminal(&self) -> FeeRecordTerminalReceiptV1 { self.terminal }
-}
 
-pub fn terminal_data_id_v2<H: FeeRetirementHashV1>(
-    terminal: &FeeRecordTerminalReceiptV1,
-    hash: &H,
-) -> Result<Id> {
-    let body = terminal.encode()?;
-    let value = Id(hash.sha256(&[FEE_TERMINAL_DATA_ID_DOMAIN_V2, &body]));
-    live(value)?;
-    Ok(value)
+    pub const fn terminal(&self) -> FeeRecordTerminalReceiptV1 {
+        self.terminal
+    }
 }
 
 /// General V2's read-only terminal dependency.
@@ -1775,25 +1873,26 @@ pub fn build_aborted_fee_terminal_receipt_v1(
 /// close, and all three global closes. It is therefore not interchangeable
 /// with a caller-supplied count or aggregate amount.
 #[allow(clippy::too_many_arguments)]
-pub fn build_settled_fee_terminal_from_accumulator_v1<C>(
+pub fn build_settled_fee_terminal_from_accumulator_v2<
+    H: FeeRetirementHashV1,
+    C: crate::codec::CertifiedRecipientAllocationAccessV3 + ?Sized,
+>(
     terminal_receipt: Id,
     closure_manifest_receipt: Id,
-    selected: &SelectedCompositeFeeV1,
+    selected: &SelectedCompositeFeeV2,
     certified: &C,
     settlement: &CandidateFeeSettlementV1,
     recipient_intent: &RecipientAllocationIntentV1,
     treasury: &TreasuryLedgerV1,
     completed: CompletedFeeRetirementV1,
-) -> Result<FeeTerminalReceiptBundleV1>
-where
-    C: crate::projection::CertifiedRecipientAllocationAccessV2,
-{
+    hash: &H,
+) -> Result<FeeTerminalReceiptBundleV2> {
     let accumulator = completed.accumulator();
     if accumulator.fee_record() != selected.fee_record()
         || accumulator.settlement_candidate() != selected.selected_candidate()
-        || accumulator.owner_fee_book_data_id() != certified.owner_fee_book_data_id()
         || accumulator.owner_order_set_digest() != certified.owner_order_set_digest()
-        || u16::from(accumulator.expected_owner_count()) != certified.owner_count()
+        || accumulator.expected_owner_count() != certified.nonzero_weight_row_count()
+        || accumulator.expected_maker_count() != certified.row_count()
         || accumulator.expected_fee_atoms()
             != u128::from(certified.collected_fee_atoms())
         || recipient_intent.fee_record().identity() != selected.fee_record()
@@ -1813,9 +1912,9 @@ where
         || treasury.treasury_position() != selected.treasury_position()
         || treasury.outstanding_epochs() != 0
         || treasury.credited_atoms() != certified.treasury_atoms()
-        || treasury.withdrawn_atoms() != 0
-        || treasury.available_atoms() != certified.treasury_atoms()
-        || treasury.is_closed()
+        || treasury.withdrawn_atoms() != certified.treasury_atoms()
+        || treasury.available_atoms() != 0
+        || !treasury.is_closed()
         || u128::from(add(
             add(certified.maker_rebate_total(), certified.executor_atoms())?,
             certified.treasury_atoms(),
@@ -1823,25 +1922,74 @@ where
     {
         return Err(Error::InvalidTerminalDisposition);
     }
-    finish_terminal(
+    let terminal = FeeRecordTerminalReceiptV1 {
         terminal_receipt,
-        closure_manifest_receipt,
-        completed.closure_set_data_id(),
-        accumulator.runtime_program(),
-        accumulator.runtime_release(),
-        accumulator.value_disposition_receipt(),
-        completed.terminal_authority_receipt(),
-        selected,
-        FeeTerminalOutcomeV1::Settled,
-        accumulator.expected_owner_count(),
-        accumulator.expected_fee_atoms(),
-        0,
-        certified.maker_rebate_total(),
-        certified.executor_atoms(),
-        certified.treasury_atoms(),
-        completed.payer_refund_lamports(),
-        completed.neutral_credit_lamports(),
-    )
+        closure_manifest: closure_manifest_receipt,
+        runtime_program: accumulator.runtime_program(),
+        runtime_release: accumulator.runtime_release(),
+        fee_record: selected.fee_record(),
+        realm: selected.realm(),
+        market: selected.market(),
+        epoch: selected.epoch(),
+        settlement_candidate: selected.selected_candidate(),
+        batch_policy: selected.batch_policy(),
+        revenue_policy: selected.revenue_policy(),
+        treasury_position: selected.treasury_position(),
+        value_disposition_receipt: accumulator.value_disposition_receipt(),
+        terminal_authority_receipt: completed.terminal_authority_receipt(),
+        outcome: FeeTerminalOutcomeV1::Settled,
+        owner_count: accumulator.expected_owner_count(),
+        collected_fee_atoms: accumulator.expected_fee_atoms(),
+        released_authorization_atoms: 0,
+        maker_rebate_atoms: certified.maker_rebate_total(),
+        executor_atoms: certified.executor_atoms(),
+        treasury_atoms: certified.treasury_atoms(),
+        payer_refund_lamports: completed.payer_refund_lamports(),
+        neutral_credit_lamports: completed.neutral_credit_lamports(),
+    };
+    terminal.validate()?;
+    let manifest = FeeClosureManifestReceiptV2 {
+        receipt: closure_manifest_receipt,
+        terminal_receipt,
+        terminal_data_id: terminal_data_id_v2(&terminal, hash)?,
+        runtime_program: accumulator.runtime_program(),
+        runtime_release: accumulator.runtime_release(),
+        fee_record: selected.fee_record(),
+        terminal_authority_receipt: completed.terminal_authority_receipt(),
+        closure_set_data_id: completed.closure_set_data_id(),
+        selected_record: selected.fee_record(),
+        recipient_allocation: accumulator.recipient_allocation(),
+        treasury_ledger: accumulator.treasury_ledger(),
+        retirement_accumulator: completed.accumulator_account(),
+        accumulator_close_receipt: completed.accumulator_close_receipt(),
+        accumulator_rent_payer: completed.accumulator_rent_payer(),
+        neutral_sink: completed.accumulator_neutral_sink(),
+        outcome: FeeTerminalOutcomeV1::Settled,
+        owner_count: accumulator.expected_owner_count(),
+        account_count: u16::from(accumulator.expected_owner_count()) + 4,
+        payer_refund_lamports: completed.payer_refund_lamports(),
+        neutral_credit_lamports: completed.neutral_credit_lamports(),
+        accumulator_refund_lamports: completed.accumulator_refund_lamports(),
+        accumulator_neutral_credit_lamports: completed
+            .accumulator_neutral_credit_lamports(),
+    };
+    manifest.validate()?;
+    let value = FeeTerminalReceiptBundleV2 {
+        closure_manifest: manifest,
+        terminal,
+    };
+    value.validate(hash)?;
+    Ok(value)
+}
+
+pub fn terminal_data_id_v2<H: FeeRetirementHashV1>(
+    terminal: &FeeRecordTerminalReceiptV1,
+    hash: &H,
+) -> Result<Id> {
+    let body = terminal.encode()?;
+    let value = Id(hash.sha256(&[FEE_TERMINAL_DATA_ID_DOMAIN_V2, &body]));
+    live(value)?;
+    Ok(value)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2107,3 +2255,178 @@ const EMPTY_OWNER_FINALIZATION: OwnerFeeFinalizationReceiptV1 =
         released_cash_atoms: 0,
         replay_next_sequence: 0,
     };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone, Copy)]
+    struct TerminalHash;
+
+    impl FeeRetirementHashV1 for TerminalHash {
+        fn sha256(&self, _parts: &[&[u8]]) -> [u8; 32] {
+            [99; 32]
+        }
+    }
+
+    fn id(byte: u8) -> Id {
+        Id([byte; 32])
+    }
+
+    fn terminal() -> FeeRecordTerminalReceiptV1 {
+        FeeRecordTerminalReceiptV1 {
+            terminal_receipt: id(1),
+            closure_manifest: id(2),
+            runtime_program: id(3),
+            runtime_release: id(4),
+            fee_record: id(5),
+            realm: id(6),
+            market: id(7),
+            epoch: id(8),
+            settlement_candidate: id(9),
+            batch_policy: id(10),
+            revenue_policy: id(11),
+            treasury_position: id(12),
+            value_disposition_receipt: id(13),
+            terminal_authority_receipt: id(14),
+            outcome: FeeTerminalOutcomeV1::Settled,
+            owner_count: 2,
+            collected_fee_atoms: 20,
+            released_authorization_atoms: 0,
+            maker_rebate_atoms: 12,
+            executor_atoms: 0,
+            treasury_atoms: 8,
+            payer_refund_lamports: 100,
+            neutral_credit_lamports: 7,
+        }
+    }
+
+    fn manifest(terminal: &FeeRecordTerminalReceiptV1) -> FeeClosureManifestReceiptV2 {
+        FeeClosureManifestReceiptV2 {
+            receipt: id(2),
+            terminal_receipt: id(1),
+            terminal_data_id: terminal_data_id_v2(terminal, &TerminalHash).unwrap(),
+            runtime_program: id(3),
+            runtime_release: id(4),
+            fee_record: id(5),
+            terminal_authority_receipt: id(14),
+            closure_set_data_id: id(15),
+            selected_record: id(5),
+            recipient_allocation: id(16),
+            treasury_ledger: id(17),
+            retirement_accumulator: id(18),
+            accumulator_close_receipt: id(19),
+            accumulator_rent_payer: id(20),
+            neutral_sink: id(21),
+            outcome: FeeTerminalOutcomeV1::Settled,
+            owner_count: 2,
+            account_count: 6,
+            payer_refund_lamports: 100,
+            neutral_credit_lamports: 7,
+            accumulator_refund_lamports: 30,
+            accumulator_neutral_credit_lamports: 2,
+        }
+    }
+
+    #[test]
+    fn streaming_manifest_binds_four_globals_and_terminal_data() {
+        let terminal = terminal();
+        let manifest = manifest(&terminal);
+        let terminal_bytes = terminal.encode().unwrap();
+        let manifest_bytes = manifest.encode().unwrap();
+        let decoded = FeeTerminalReceiptBundleV2::decode(
+            &manifest_bytes,
+            &terminal_bytes,
+            &TerminalHash,
+        )
+        .unwrap();
+        assert_eq!(decoded.closure_manifest().account_count(), 6);
+        assert_eq!(decoded.closure_manifest().retirement_accumulator(), id(18));
+        assert_eq!(decoded.closure_manifest().accumulator_refund_lamports(), 30);
+        assert_eq!(decoded.closure_manifest().terminal_data_id(), id(99));
+    }
+
+    #[test]
+    fn streaming_manifest_admits_canonical_empty_fee_children_with_four_globals() {
+        let mut terminal = terminal();
+        terminal.owner_count = 0;
+        terminal.collected_fee_atoms = 0;
+        terminal.maker_rebate_atoms = 0;
+        terminal.treasury_atoms = 0;
+        let mut manifest = manifest(&terminal);
+        manifest.owner_count = 0;
+        manifest.account_count = 4;
+        manifest.terminal_data_id = terminal_data_id_v2(&terminal, &TerminalHash).unwrap();
+
+        let decoded = FeeTerminalReceiptBundleV2::decode(
+            &manifest.encode().unwrap(),
+            &terminal.encode().unwrap(),
+            &TerminalHash,
+        )
+        .unwrap();
+        assert_eq!(decoded.terminal().owner_count(), 0);
+        assert_eq!(decoded.closure_manifest().account_count(), 4);
+
+        terminal.collected_fee_atoms = 1;
+        assert_eq!(terminal.encode(), Err(Error::ConservationFailure));
+    }
+
+    #[test]
+    fn streaming_manifest_refuses_legacy_count_and_missing_accumulator_refund() {
+        let terminal = terminal();
+        let mut legacy_count = manifest(&terminal).encode().unwrap();
+        legacy_count[12..14].copy_from_slice(&5u16.to_le_bytes());
+        assert_eq!(
+            FeeClosureManifestReceiptV2::decode(&legacy_count),
+            Err(Error::InvalidTerminalDisposition)
+        );
+
+        let mut missing_refund = manifest(&terminal).encode().unwrap();
+        missing_refund[512..520].copy_from_slice(&0u64.to_le_bytes());
+        assert_eq!(
+            FeeClosureManifestReceiptV2::decode(&missing_refund),
+            Err(Error::InvalidTerminalDisposition)
+        );
+    }
+
+    #[test]
+    fn streaming_manifest_refuses_rebound_terminal_and_accumulator() {
+        let terminal = terminal();
+        let terminal_bytes = terminal.encode().unwrap();
+        let mut rebound_terminal = manifest(&terminal).encode().unwrap();
+        rebound_terminal[80..112].copy_from_slice(&[98; 32]);
+        assert_eq!(
+            FeeTerminalReceiptBundleV2::decode(
+                &rebound_terminal,
+                &terminal_bytes,
+                &TerminalHash,
+            ),
+            Err(Error::InvalidTerminalDisposition)
+        );
+
+        let mut aliased_accumulator = manifest(&terminal).encode().unwrap();
+        aliased_accumulator[368..400].copy_from_slice(&[17; 32]);
+        assert_eq!(
+            FeeClosureManifestReceiptV2::decode(&aliased_accumulator),
+            Err(Error::IdentityAlias)
+        );
+    }
+
+    #[test]
+    fn streaming_manifest_refuses_wrong_version_and_noncanonical_padding() {
+        let terminal = terminal();
+        let mut wrong_version = manifest(&terminal).encode().unwrap();
+        wrong_version[8..10].copy_from_slice(&1u16.to_le_bytes());
+        assert_eq!(
+            FeeClosureManifestReceiptV2::decode(&wrong_version),
+            Err(Error::WrongVersion)
+        );
+
+        let mut padding = manifest(&terminal).encode().unwrap();
+        padding[15] = 1;
+        assert_eq!(
+            FeeClosureManifestReceiptV2::decode(&padding),
+            Err(Error::NonCanonicalPadding)
+        );
+    }
+}

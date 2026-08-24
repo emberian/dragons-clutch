@@ -620,6 +620,7 @@ pub const GENERAL_V2_FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_FEE_CLOSURE_MANIFEST_ACCOUNT_VERSION: u8 = 2;
 pub const GENERAL_V2_FEE_TERMINAL_ACCOUNT_VERSION: u8 = 3;
 pub const GENERAL_V2_FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_BYTES: usize = 708;
+/// Exact rent-owned durable closure-manifest bytes.
 pub const GENERAL_V2_FEE_CLOSURE_MANIFEST_ACCOUNT_BYTES: usize = 580;
 /// Exact rent-owned durable fee-terminal bytes.
 pub const GENERAL_V2_FEE_TERMINAL_ACCOUNT_BYTES: usize = 596;
