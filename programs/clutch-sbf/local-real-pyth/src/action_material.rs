@@ -3019,6 +3019,145 @@ pub struct FractionalCloseZeroCreditFrameV1<'account> {
     pub rent_sysvar: &'account ObservedRpcAccount,
 }
 
+/// Holder-selected payout route for an owner-authorized Fractional action.
+/// The address is a choice to be wallet-reviewed, never a claimed semantic
+/// identity; the constructor must still authenticate the corresponding
+/// Position or collateral token account from finalized bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FractionalHolderPayoutV1 {
+    InternalPosition { position: Address },
+    ExternalCollateral { token_account: Address },
+}
+
+/// The irreducible holder choices for actions 3 through 7. Persisted IDs,
+/// account metas, sequences, credit modes, PDAs, and poststates are
+/// intentionally absent and remain chain-derived constructor output.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FractionalHolderIntentV1 {
+    RedeemBearerExact {
+        claimant: Address,
+        bearer_source: Address,
+        outcome: u8,
+        quantity: u64,
+        collateral_destination: Address,
+    },
+    RedeemInternalCredit {
+        claimant: Address,
+        position: Address,
+        outcome: u8,
+        quantity: u64,
+        funding_payer: Option<Address>,
+    },
+    RedeemBearerCredit {
+        claimant: Address,
+        bearer_source: Address,
+        outcome: u8,
+        quantity: u64,
+        collateral_destination: Address,
+        funding_payer: Option<Address>,
+    },
+    TransferCredit {
+        source_claimant: Address,
+        source_credit: Address,
+        destination_claimant: Address,
+        numerator: u64,
+        payout: FractionalHolderPayoutV1,
+        funding_payer: Option<Address>,
+    },
+    MergeCredit {
+        source_claimant: Address,
+        source_credit: Address,
+        destination_claimant: Address,
+        payout: FractionalHolderPayoutV1,
+        funding_payer: Option<Address>,
+    },
+}
+
+impl FractionalHolderIntentV1 {
+    /// Refuse zero/aliased choices before any account acquisition. This does
+    /// not authenticate an address; finalized semantic-owner decoding does.
+    pub fn validate(self) -> Result<()> {
+        let live = |address: Address| address != Address::default();
+        let valid_payer = |payer: Option<Address>| payer.is_none_or(live);
+        let valid_payout = |payout: FractionalHolderPayoutV1| match payout {
+            FractionalHolderPayoutV1::InternalPosition { position } => live(position),
+            FractionalHolderPayoutV1::ExternalCollateral { token_account } => {
+                live(token_account)
+            }
+        };
+        let valid = match self {
+            Self::RedeemBearerExact {
+                claimant,
+                bearer_source,
+                quantity,
+                collateral_destination,
+                ..
+            } => {
+                live(claimant)
+                    && live(bearer_source)
+                    && live(collateral_destination)
+                    && quantity != 0
+            }
+            Self::RedeemInternalCredit {
+                claimant,
+                position,
+                quantity,
+                funding_payer,
+                ..
+            } => live(claimant) && live(position) && quantity != 0 && valid_payer(funding_payer),
+            Self::RedeemBearerCredit {
+                claimant,
+                bearer_source,
+                quantity,
+                collateral_destination,
+                funding_payer,
+                ..
+            } => {
+                live(claimant)
+                    && live(bearer_source)
+                    && live(collateral_destination)
+                    && quantity != 0
+                    && valid_payer(funding_payer)
+            }
+            Self::TransferCredit {
+                source_claimant,
+                source_credit,
+                destination_claimant,
+                numerator,
+                payout,
+                funding_payer,
+            } => {
+                live(source_claimant)
+                    && live(source_credit)
+                    && live(destination_claimant)
+                    && source_claimant != destination_claimant
+                    && numerator != 0
+                    && valid_payout(payout)
+                    && valid_payer(funding_payer)
+            }
+            Self::MergeCredit {
+                source_claimant,
+                source_credit,
+                destination_claimant,
+                payout,
+                funding_payer,
+            } => {
+                live(source_claimant)
+                    && live(source_credit)
+                    && live(destination_claimant)
+                    && source_claimant != destination_claimant
+                    && valid_payout(payout)
+                    && valid_payer(funding_payer)
+            }
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(CanonicalActionMaterialErrorV1::InvalidPlan)
+        }
+    }
+}
+
 /// Derive the first current Fractional operator action entirely from one
 /// finalized chain frame. The lowest outcome containing one exact common lot
 /// is canonical; callers cannot choose an outcome, amount, payload, role
