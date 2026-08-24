@@ -1044,10 +1044,8 @@ where
     A: AuthenticatedDealerFacilityCreditTerminalAuthorityV1,
 {
     require(
-        capabilities::extension_intent_action_enabled(
-            clutch_solana_layout::registry::DEALER_FAMILY_TAG,
-            clutch_solana_layout::registry::DEALER_FAMILY_VERSION,
-            clutch_solana_layout::registry::DealerFacilityAction::Retire.tag(),
+        capabilities::dealer_terminal_retire_target_enabled(
+            crate::instructions::dealer_runtime::DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1,
         ),
         ClutchError::UnsupportedInstruction,
     )?;
@@ -2504,7 +2502,8 @@ mod loader_alias_tests {
             .find("try_borrow_mut_data")
             .expect("Fractional successor write");
         assert!(consume < first_write);
-        assert!(body.contains("DealerFacilityAction::Retire.tag()"));
+        assert!(body.contains("dealer_terminal_retire_target_enabled"));
+        assert!(body.contains("DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1"));
         assert!(body.contains("authenticate_general_market_value_authority_v2"));
         assert!(body.contains("require_program_state(\n        program_id,\n        accounts.fractional_policy"));
         assert!(body.contains("credit.claimant == prestate.facility_id()"));

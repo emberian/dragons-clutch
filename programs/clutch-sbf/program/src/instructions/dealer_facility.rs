@@ -12727,11 +12727,20 @@ mod current_terminal_cut_adversarial_tests {
     }
 
     #[test]
-    fn terminal_cut_is_routed_but_profile_refuses_until_whole_family_closure() {
+    fn terminal_cut_is_payload_admitted_without_opening_the_coarse_action_tuple() {
         assert!(!crate::capabilities::extension_intent_action_enabled(
             DEALER_FAMILY_TAG,
             DEALER_FAMILY_VERSION,
             DealerFacilityAction::Retire.tag(),
+        ));
+        assert!(crate::capabilities::dealer_terminal_retire_target_enabled(
+            DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1,
+        ));
+        assert!(crate::capabilities::dealer_terminal_retire_target_enabled(
+            DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1,
+        ));
+        assert!(!crate::capabilities::dealer_terminal_retire_target_enabled(
+            crate::instructions::dealer_runtime::DEALER_RETIRE_STATE_ROOT_V1,
         ));
         let source = include_str!("dealer_facility.rs");
         let dispatcher = source

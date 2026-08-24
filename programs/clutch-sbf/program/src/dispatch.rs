@@ -39,7 +39,10 @@ use crate::capabilities;
 use crate::error::ClutchError;
 #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
 use crate::error::Refusal;
-#[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+#[cfg(any(
+    feature = "profile-non-production-dealer-policy-catalog-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 use crate::instructions::dealer_facility;
 #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
 use crate::instructions::dealer_policy;
@@ -291,6 +294,15 @@ pub fn process(
         }
         return process_direct_market(program_id, accounts, instruction_data);
     }
+    #[cfg(feature = "profile-successor-chain-attached-dev")]
+    if let Some(action) = enabled_dealer_terminal_retirement_action(instruction_data) {
+        return process_dealer_terminal_retirement(
+            program_id,
+            accounts,
+            instruction_data,
+            action,
+        );
+    }
     if let Some(action) = disabled_dealer_facility_action(instruction_data) {
         return crate::instructions::dealer_runtime::process_reserved_disabled(action);
     }
@@ -349,6 +361,65 @@ pub fn process(
             process_structured_claim(program_id, accounts, instruction_data)
         }
         Route::DecodeOnly => decode_only(instruction_data),
+    }
+}
+
+/// Hostile-decode the exact action-25 payload before any account is observed.
+///
+/// Returning `None` is intentionally fail-closed: the ordinary disabled
+/// Dealer-family path then refuses every historical target under the still
+/// disabled coarse `(76, 1, 25)` tuple.
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+fn enabled_dealer_terminal_retirement_action(
+    instruction_data: &[u8],
+) -> Option<clutch_solana_layout::registry::DealerFacilityAction> {
+    let request = ExtensionRequest::decode(instruction_data).ok()?;
+    let ExtensionAction::DealerFacility(action) = request.envelope.action else {
+        return None;
+    };
+    if action != clutch_solana_layout::registry::DealerFacilityAction::Retire {
+        return None;
+    }
+    let payload = crate::instructions::dealer_runtime::DealerRuntimePayloadV1::decode(
+        action,
+        request.envelope.payload,
+    )
+    .ok()?;
+    capabilities::dealer_terminal_retire_target_enabled(payload.retire_target).then_some(action)
+}
+
+/// Enter the sole current Dealer terminal-cut composer after the payload-only
+/// capability decision. The request is decoded again in this bounded frame so
+/// the routing hint never becomes authority.
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+#[inline(never)]
+fn process_dealer_terminal_retirement(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+    expected_action: clutch_solana_layout::registry::DealerFacilityAction,
+) -> Outcome<()> {
+    let request = ExtensionRequest::decode(instruction_data)
+        .map_err(|_| ClutchError::NonCanonical)?;
+    match request.envelope.action {
+        ExtensionAction::DealerFacility(action) if action == expected_action => {
+            let payload = crate::instructions::dealer_runtime::DealerRuntimePayloadV1::decode(
+                action,
+                request.envelope.payload,
+            )
+            .map_err(|_| ClutchError::NonCanonical)?;
+            if !capabilities::dealer_terminal_retire_target_enabled(payload.retire_target) {
+                return Err(ClutchError::UnsupportedInstruction.into());
+            }
+            dealer_facility::process(
+                program_id,
+                accounts,
+                request.sequence,
+                action,
+                request.envelope.payload,
+            )
+        }
+        _ => unexpected_route(),
     }
 }
 
@@ -2083,5 +2154,63 @@ mod extension_registry_tests {
         bytes.push(0);
         assert!(!disabled_canonical_tag(&bytes));
         assert!(!disabled_canonical_tag(&bytes[..15]));
+    }
+}
+
+#[cfg(all(test, feature = "profile-successor-chain-attached-dev"))]
+mod dealer_terminal_payload_capability_tests {
+    extern crate std;
+
+    use super::enabled_dealer_terminal_retirement_action;
+    use crate::instructions::dealer_runtime::{
+        DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1,
+        DEALER_RETIRE_STATE_ROOT_V1,
+        DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1,
+    };
+    use clutch_solana_layout::registry::{
+        DealerFacilityAction, DEALER_FAMILY_TAG, DEALER_FAMILY_VERSION,
+    };
+    use std::vec;
+    use std::vec::Vec;
+
+    fn request(target: u8) -> Vec<u8> {
+        let mut bytes = vec![0u8; 56];
+        bytes[0] = 0xd1;
+        bytes[1] = 1;
+        bytes[10] = super::ACTION_LAYOUT_HINT;
+        bytes[11..13].copy_from_slice(&43u16.to_le_bytes());
+        bytes[13] = DEALER_FAMILY_TAG;
+        bytes[14] = DEALER_FAMILY_VERSION;
+        bytes[15] = DealerFacilityAction::Retire.tag();
+        let payload = &mut bytes[16..56];
+        payload[0..8].copy_from_slice(&11u64.to_le_bytes());
+        payload[8..16].copy_from_slice(&17u64.to_le_bytes());
+        payload[16] = target;
+        payload[24..28].copy_from_slice(&19u32.to_le_bytes());
+        payload[32..40].copy_from_slice(&23u64.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn only_the_two_complete_terminal_payloads_route() {
+        assert_eq!(
+            enabled_dealer_terminal_retirement_action(&request(
+                DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1,
+            )),
+            Some(DealerFacilityAction::Retire),
+        );
+        assert_eq!(
+            enabled_dealer_terminal_retirement_action(&request(
+                DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1,
+            )),
+            Some(DealerFacilityAction::Retire),
+        );
+        assert_eq!(
+            enabled_dealer_terminal_retirement_action(&request(DEALER_RETIRE_STATE_ROOT_V1)),
+            None,
+        );
+        let mut noncanonical = request(DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1);
+        noncanonical[34] = 1;
+        assert_eq!(enabled_dealer_terminal_retirement_action(&noncanonical), None);
     }
 }

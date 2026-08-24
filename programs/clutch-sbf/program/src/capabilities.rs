@@ -362,6 +362,22 @@ pub fn extension_intent_action_enabled(
     })
 }
 
+/// Return whether one exact current Dealer terminal-cut payload is callable.
+///
+/// Dealer action 25 multiplexes historical retirement steps and the two
+/// current facility-credit terminal cuts under one allocated action byte. The
+/// whole action therefore remains absent from [`ENABLED_EXTENSION_ACTIONS`]:
+/// admitting that tuple would also admit the unrelated target values. The
+/// dispatcher hostile-decodes the payload before account access and calls this
+/// narrower capability for only the complete current targets.
+pub const fn dealer_terminal_retire_target_enabled(retire_target: u8) -> bool {
+    SUCCESSOR_CHAIN_ATTACHED_DEV
+        && (retire_target
+            == crate::instructions::dealer_runtime::DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1
+            || retire_target
+                == crate::instructions::dealer_runtime::DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,6 +460,36 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn dealer_terminal_cut_capability_is_exactly_payload_scoped() {
+        use crate::instructions::dealer_runtime::{
+            DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1,
+            DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1,
+        };
+
+        assert_eq!(
+            dealer_terminal_retire_target_enabled(
+                DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1,
+            ),
+            SUCCESSOR_CHAIN_ATTACHED_DEV,
+        );
+        assert_eq!(
+            dealer_terminal_retire_target_enabled(
+                DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1,
+            ),
+            SUCCESSOR_CHAIN_ATTACHED_DEV,
+        );
+        for target in 0u8..=7 {
+            assert!(!dealer_terminal_retire_target_enabled(target));
+        }
+        assert!(!dealer_terminal_retire_target_enabled(10));
+        assert!(!extension_intent_action_enabled(
+            clutch_solana_layout::registry::DEALER_FAMILY_TAG,
+            clutch_solana_layout::registry::DEALER_FAMILY_VERSION,
+            clutch_solana_layout::registry::DealerFacilityAction::Retire.tag(),
+        ));
     }
 
     #[test]
