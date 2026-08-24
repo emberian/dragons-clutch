@@ -170,35 +170,28 @@ only authority: the program must reopen the loader-authenticated registry
 release, ProfileV4, Source release, every canonical artifact, BundleV5, and any
 exact-market evidence, then recompute every identity, PDA, and binding.
 
-## Unsigned construction boundary
+## Canonical transaction-material boundary
 
-`successor-builder.js` is the browser counterpart to the Rust outer
-`ProtocolTransactionBuilder`. It accepts one to sixteen explicit instructions.
-Each draft names its flow, successor family and action, semantic-owner package,
-schema and release digest, lowercase payload bytes, ordered account roles,
-required signer public keys, and at least one balanced exact `u128` equation.
-Equation units use the Rust categories rather than free text: lamports;
-collateral, fee, or wrapper atoms bound to a mint; price units bound to a
-positive scale; or Egg atoms bound to a Market identity and outcome.
+The browser has no successor transaction builder and accepts no caller-shaped
+payload, account-meta, capability, or accounting DTO. It acquires `/v1/actions`
+inside the same finalized session bracket as the account projection. Every
+verdict must name one exact coordinate enabled by the checked release. A
+control remains unavailable until operatord has rerun the semantic owner's
+constructor from reacquired onchain bytes and supplied a complete ordered role
+projection, explicit signer public identities, balanced exact-integer
+equations, and one deterministic zero-blockhash/zero-signature transaction.
 
-The builder validates those declarations, adds the three-byte successor
-envelope, compiles the canonical legacy Solana message key order, installs an
-all-zero recent blockhash, and serializes one zero signature per required
-message signer. It emits hex and base64 bytes with an explicit packet-size
-limit. It cannot decide semantic payloads, infer account metas, enable a route,
-obtain a recent blockhash, sign, or submit.
-
-Projected keeper cursors remain deliberately non-selectable because the read
-API does not yet expose a release-authenticated successor coordinate. Exact
-family tag/version/action bytes come from the semantic-owner draft and the
-output marks them as construction material, never runtime capability. Every
-workflow node states that authoritative accounts must be reloaded.
+Adding a fresh recent blockhash and choosing an authorized fee payer are a
+separate wallet-launcher boundary. That launcher must reacquire all named
+prestate first. After submission it must discard the draft and reacquire both
+`/v1/session` and `/v1/actions`; neither Glass nor operatord advances from an
+expected poststate.
 
 ## Files
 
 - `chain-client.js`: operatord-only target, canonical `/v1/session`
-  attach/restart contract, and bounded projection transport.
-- `successor-builder.js`: exact outer message and unsigned transaction bytes.
+  attach/restart contract, `/v1/actions` capability/draft contract, and bounded
+  projection transport.
 - `compiler-proposal.js`: bounded pure-compiler transport and exact proposal
   validation; no compiler math.
 - [`COMPILER_TRANSPORT.md`](COMPILER_TRANSPORT.md): exact Rust adapter JSON

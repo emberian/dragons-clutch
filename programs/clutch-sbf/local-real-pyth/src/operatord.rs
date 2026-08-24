@@ -8,9 +8,16 @@
 use crate::account_index::{
     CanonicalAccountIndex, CanonicalAccountKind, DecodeState, IndexedAccountVersion, IndexedBranch,
 };
-use crate::rpc_index::RpcCommitment;
-use crate::rpc_index::public_rpc_endpoint_binding;
+use crate::rpc_index::{
+    public_rpc_endpoint_binding, CanonicalIntentCoordinate, IndexedProgramRelease, RpcCommitment,
+};
 use crate::workflow_graph::{ResumableWorkflowCursor, WorkflowLane, WorkflowPosition};
+use clutch_solana_layout::registry::{
+    GeneralV2Action, RecurringSeriesAction, RecoveryAction, SourceSeriesAction,
+    GENERAL_V2_FAMILY_TAG, GENERAL_V2_FAMILY_VERSION, RECOVERY_FAMILY_TAG,
+    RECOVERY_FAMILY_VERSION, SOURCE_SERIES_FAMILY_TAG, SOURCE_SERIES_FAMILY_VERSION,
+};
+use clutch_solana_layout::source_series::{account_contract_v2, SourceAccountRoleV2};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
@@ -163,6 +170,9 @@ fn dependency_versions<'a>(
             if candidate.account.address == driver.account.address {
                 return true;
             }
+            if source_dependency(accounts, driver, candidate) {
+                return true;
+            }
             match driver.projection.kind {
                 CanonicalAccountKind::GeneralMarketRuntime => false,
                 CanonicalAccountKind::PositionV3 => {
@@ -180,6 +190,58 @@ fn dependency_versions<'a>(
             }
         })
         .collect()
+}
+
+fn source_dependency(
+    accounts: &[&IndexedAccountVersion],
+    driver: &IndexedAccountVersion,
+    candidate: &IndexedAccountVersion,
+) -> bool {
+    if !matches!(
+        driver.projection.kind,
+        CanonicalAccountKind::SourceHead | CanonicalAccountKind::SourceOpenRawPage
+    ) {
+        return false;
+    }
+    if candidate.projection.kind == CanonicalAccountKind::SourceLineage
+        && candidate.projection.secondary_binding == Some(driver.account.address.to_bytes())
+    {
+        return true;
+    }
+    let Some(source_spec_id) = driver.projection.primary_binding else {
+        return false;
+    };
+    let Some(release) = accounts.iter().copied().find(|version| {
+        version.projection.kind == CanonicalAccountKind::SourceRelease
+            && version.projection.primary_binding == Some(source_spec_id)
+    }) else {
+        return false;
+    };
+    let Ok(manifest) = clutch_source_plane_v3_runtime::SourceReleaseManifestV2::decode(
+        &release.account.data,
+    ) else {
+        return false;
+    };
+    match candidate.projection.kind {
+        CanonicalAccountKind::SourceRelease => candidate.account.address == release.account.address,
+        CanonicalAccountKind::SourceWorkSchedule => {
+            candidate.projection.secondary_binding
+                == Some(manifest.base.source_work_schedule_id.bytes())
+        }
+        CanonicalAccountKind::LivenessPolicy => {
+            candidate.projection.primary_binding == Some(manifest.base.liveness_policy_id.bytes())
+        }
+        CanonicalAccountKind::LivenessCompartment => {
+            candidate.account.address.to_bytes()
+                == manifest.base.source_compartment_account.bytes()
+                && candidate.projection.primary_binding
+                    == Some(manifest.base.liveness_policy_id.bytes())
+        }
+        CanonicalAccountKind::SourceLineage => {
+            candidate.projection.primary_binding == Some(source_spec_id)
+        }
+        _ => false,
+    }
 }
 
 fn dependency_digest(
@@ -345,6 +407,7 @@ impl<'index> OperatorJsonApi<'index> {
             ),
             "/v1/releases" => self.releases(),
             "/v1/session" if query.is_empty() => self.session(),
+            "/v1/actions" if query.is_empty() => self.actions(),
             "/v1/accounts" => match commitment_query(query) {
                 Ok(commitment) => self.accounts(commitment),
                 Err(error) => response(400, json!({"error": error})),
@@ -485,6 +548,78 @@ impl<'index> OperatorJsonApi<'index> {
         )
     }
 
+    /// Project release-authenticated action verdicts. An enabled release tuple
+    /// and an onchain-derived scheduling cursor are both necessary, but still
+    /// insufficient, for callability: exact semantic-owner bytes, every
+    /// account-role identity, creation-target prestate, and signer identities
+    /// must also be present in one server-constructed transaction draft.
+    fn actions(&self) -> OperatorJsonResponse {
+        let plan = self.index.acquisition_plan();
+        let [release] = plan.releases.as_slice() else {
+            return response(
+                409,
+                json!({
+                    "schema": "dragons-clutch/operator-action-capability-unavailable/v1",
+                    "status": "unavailable",
+                    "reason": "action projection requires exactly one checked release"
+                }),
+            );
+        };
+        let cursors = match self.selector.select(self.index, RpcCommitment::Finalized) {
+            Ok(cursors) => cursors,
+            Err(error) => {
+                return response(
+                    409,
+                    json!({
+                        "schema": "dragons-clutch/operator-action-capability-unavailable/v1",
+                        "status": "unavailable",
+                        "reason": error.to_string()
+                    }),
+                );
+            }
+        };
+        let accounts = self.index.current_accounts(RpcCommitment::Finalized);
+        let http = public_rpc_endpoint_binding(&plan.cluster.rpc_http_url);
+        let websocket = public_rpc_endpoint_binding(&plan.cluster.rpc_websocket_url);
+        let session_id = read_only_session_id(
+            &plan.cluster.cluster_name,
+            &plan.cluster.genesis_hash,
+            self.selector.workflow_id,
+            http.binding_sha256,
+            websocket.binding_sha256,
+            release,
+            &accounts,
+            &cursors,
+        );
+        let verdicts = release
+            .enabled_intents
+            .iter()
+            .map(|coordinate| action_verdict_json(release, *coordinate, &cursors))
+            .collect::<Vec<_>>();
+        response(
+            200,
+            json!({
+                "schema": "dragons-clutch/operator-action-capability-set/v1",
+                "status": "ready",
+                "sessionId": hex32(session_id),
+                "commitment": "finalized",
+                "releaseKey": release.key(),
+                "capabilityProfileId": hex32(release.capability_profile_id),
+                "projectionAuthority": "untrusted-release-and-canonical-codec-projection",
+                "signing": false,
+                "submission": false,
+                "freshness": {
+                    "recentBlockhash": "absent-by-contract",
+                    "feePayer": "must-be-explicit-in-server-constructed-draft",
+                    "validBeforeSlot": "must-be-derived-from-a-fresh-clock-observation",
+                    "beforeSigning": "reacquire every named account and reject any changed session, cursor, role, balance, owner, executable bit, or data digest",
+                    "afterSubmission": "discard the draft and reacquire /v1/session plus /v1/actions; never advance from an expected poststate"
+                },
+                "actions": verdicts
+            }),
+        )
+    }
+
     fn accounts(&self, commitment: RpcCommitment) -> OperatorJsonResponse {
         let accounts: Vec<Value> = self
             .index
@@ -571,6 +706,230 @@ impl<'index> OperatorJsonApi<'index> {
                 "nodes": nodes
             }),
         )
+    }
+}
+
+fn action_verdict_json(
+    release: &IndexedProgramRelease,
+    coordinate: CanonicalIntentCoordinate,
+    cursors: &[KeeperActionSelection],
+) -> Value {
+    let cursor = cursors
+        .iter()
+        .find(|cursor| action_coordinate(cursor.action) == Some(coordinate));
+    let (family, action, semantic_builder) = coordinate_description(coordinate);
+    let roles = source_action(coordinate)
+        .map(|action| {
+            let contract = account_contract_v2(action);
+            (0..contract.len())
+                .filter_map(|index| contract.meta(index).map(|role| (index, role)))
+                .map(|(index, role)| {
+                    json!({
+                        "index": index.to_string(),
+                        "role": source_role_name(role.role),
+                        "writable": role.writable,
+                        "signer": role.signer,
+                        "address": null,
+                        "identityDisposition": "unresolved-until-semantic-owner-construction"
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let state_reason = if semantic_builder.is_none() {
+        "no reviewed semantic-owner transaction constructor is registered for this release-enabled coordinate"
+    } else if cursor.is_none() {
+        "no finalized canonical account body presently selects this action"
+    } else {
+        "semantic-owner transaction material and complete role reacquisition are not yet present"
+    };
+    json!({
+        "coordinate": {
+            "familyTag": coordinate.family_tag.to_string(),
+            "familyVersion": coordinate.family_version.to_string(),
+            "localAction": coordinate.local_action.to_string(),
+            "family": family,
+            "action": action
+        },
+        "releaseAdmission": {
+            "enabled": true,
+            "releaseKey": release.key(),
+            "capabilityProfileId": hex32(release.capability_profile_id)
+        },
+        "stateSelection": cursor.map(selection_json),
+        "semanticOwnerConstructor": semantic_builder,
+        "accountRoles": roles,
+        "callable": false,
+        "verdict": "unavailable",
+        "reason": state_reason,
+        "transactionDraft": null,
+        "signerRequirements": [],
+        "freshnessDisposition": "no draft; no blockhash, signing, or submission is permitted"
+    })
+}
+
+fn action_coordinate(action: &str) -> Option<CanonicalIntentCoordinate> {
+    let (family_tag, family_version, local_action) = match action {
+        "open-raw-page" => (
+            SOURCE_SERIES_FAMILY_TAG,
+            SOURCE_SERIES_FAMILY_VERSION,
+            SourceSeriesAction::OpenRawPage.tag(),
+        ),
+        "ingest-boundary" => (
+            SOURCE_SERIES_FAMILY_TAG,
+            SOURCE_SERIES_FAMILY_VERSION,
+            SourceSeriesAction::IngestBoundaryBatch.tag(),
+        ),
+        "seal-raw-page" => (
+            SOURCE_SERIES_FAMILY_TAG,
+            SOURCE_SERIES_FAMILY_VERSION,
+            SourceSeriesAction::SealRawPage.tag(),
+        ),
+        "advance-series-occurrence" => (
+            SOURCE_SERIES_FAMILY_TAG,
+            SOURCE_SERIES_FAMILY_VERSION,
+            RecurringSeriesAction::AdvanceOccurrence.tag(),
+        ),
+        "close-series-funding" => (
+            SOURCE_SERIES_FAMILY_TAG,
+            SOURCE_SERIES_FAMILY_VERSION,
+            RecurringSeriesAction::CloseFunding.tag(),
+        ),
+        "close-position" | "close-position-replay" => (
+            GENERAL_V2_FAMILY_TAG,
+            GENERAL_V2_FAMILY_VERSION,
+            GeneralV2Action::ClosePosition.tag(),
+        ),
+        "advance-failure-recovery" => (
+            RECOVERY_FAMILY_TAG,
+            RECOVERY_FAMILY_VERSION,
+            RecoveryAction::AcceptRecoveryWork.tag(),
+        ),
+        "advance-failure-interval-consensus" => (
+            RECOVERY_FAMILY_TAG,
+            RECOVERY_FAMILY_VERSION,
+            RecoveryAction::AdvanceIntervalConsensus.tag(),
+        ),
+        _ => return None,
+    };
+    Some(CanonicalIntentCoordinate {
+        family_tag,
+        family_version,
+        local_action,
+    })
+}
+
+fn source_action(coordinate: CanonicalIntentCoordinate) -> Option<SourceSeriesAction> {
+    if coordinate.family_tag == SOURCE_SERIES_FAMILY_TAG
+        && coordinate.family_version == SOURCE_SERIES_FAMILY_VERSION
+    {
+        SourceSeriesAction::from_tag(coordinate.local_action)
+    } else {
+        None
+    }
+}
+
+fn coordinate_description(
+    coordinate: CanonicalIntentCoordinate,
+) -> (&'static str, &'static str, Option<&'static str>) {
+    if let Some(action) = source_action(coordinate) {
+        let name = match action {
+            SourceSeriesAction::RegisterRelease => "register-source-release",
+            SourceSeriesAction::InitializeHead => "initialize-source-head",
+            SourceSeriesAction::OpenRawPage => "open-raw-page",
+            SourceSeriesAction::IngestBoundaryBatch => "ingest-boundary",
+            SourceSeriesAction::SealRawPage => "seal-raw-page",
+            SourceSeriesAction::InitializeWindowWork => "initialize-window-work",
+            SourceSeriesAction::FoldWindowPages => "fold-window-pages",
+            SourceSeriesAction::SealWindow => "seal-window",
+            SourceSeriesAction::EvaluateStatistic => "evaluate-statistic",
+            SourceSeriesAction::EmitFailureHandoff => "emit-failure-handoff",
+            SourceSeriesAction::ReopenGeneration => "reopen-source-generation",
+            SourceSeriesAction::CloseGeneration => "close-source-generation",
+        };
+        let builder = matches!(
+            action,
+            SourceSeriesAction::InitializeHead
+                | SourceSeriesAction::OpenRawPage
+                | SourceSeriesAction::IngestBoundaryBatch
+        )
+        .then_some("clutch-source-plane-v3-adapter/intent-preimage-v3");
+        return ("source", name, builder);
+    }
+    if coordinate.family_tag == SOURCE_SERIES_FAMILY_TAG
+        && coordinate.family_version == SOURCE_SERIES_FAMILY_VERSION
+    {
+        let action = match RecurringSeriesAction::from_tag(coordinate.local_action) {
+            Some(RecurringSeriesAction::RegisterSeries) => "register-series",
+            Some(RecurringSeriesAction::ActivateFunding) => "activate-series-funding",
+            Some(RecurringSeriesAction::AdvanceOccurrence) => "advance-series-occurrence",
+            Some(RecurringSeriesAction::LapseOccurrence) => "lapse-series-occurrence",
+            Some(RecurringSeriesAction::ObserveDonation) => "observe-series-donation",
+            Some(RecurringSeriesAction::CloseFunding) => "close-series-funding",
+            None => "unknown-source-series-action",
+        };
+        return ("series", action, None);
+    }
+    if coordinate.family_tag == GENERAL_V2_FAMILY_TAG
+        && coordinate.family_version == GENERAL_V2_FAMILY_VERSION
+    {
+        return ("general", "general-v2-action", None);
+    }
+    if coordinate.family_tag == RECOVERY_FAMILY_TAG
+        && coordinate.family_version == RECOVERY_FAMILY_VERSION
+    {
+        return ("recovery", "recovery-action", None);
+    }
+    ("unknown", "unknown-action", None)
+}
+
+const fn source_role_name(role: SourceAccountRoleV2) -> &'static str {
+    match role {
+        SourceAccountRoleV2::SourceReleaseArtifact => "source-release-artifact",
+        SourceAccountRoleV2::SourceRelease => "source-release",
+        SourceAccountRoleV2::AdapterProgram => "adapter-program",
+        SourceAccountRoleV2::AdapterProgramData => "adapter-program-data",
+        SourceAccountRoleV2::ParserProgram => "parser-program",
+        SourceAccountRoleV2::ParserProgramData => "parser-program-data",
+        SourceAccountRoleV2::ParserConfig => "parser-config",
+        SourceAccountRoleV2::SourceSpec => "source-spec",
+        SourceAccountRoleV2::SourceWorkSchedule => "source-work-schedule",
+        SourceAccountRoleV2::GenerationRequest => "generation-request",
+        SourceAccountRoleV2::ClockSysvar => "clock-sysvar",
+        SourceAccountRoleV2::Feed => "feed",
+        SourceAccountRoleV2::ReceiverProgram => "receiver-program",
+        SourceAccountRoleV2::ReceiverProgramData => "receiver-program-data",
+        SourceAccountRoleV2::ReceiverConfig => "receiver-config",
+        SourceAccountRoleV2::SourceHead => "source-head",
+        SourceAccountRoleV2::HeadLineage => "head-lineage",
+        SourceAccountRoleV2::OpenRawPage => "open-raw-page",
+        SourceAccountRoleV2::OpenPageLineage => "open-page-lineage",
+        SourceAccountRoleV2::RawPage => "raw-page",
+        SourceAccountRoleV2::SourceOccurrence => "source-occurrence",
+        SourceAccountRoleV2::WindowSpec => "window-spec",
+        SourceAccountRoleV2::WindowWork => "window-work",
+        SourceAccountRoleV2::WorkLineage => "work-lineage",
+        SourceAccountRoleV2::WindowSeal => "window-seal",
+        SourceAccountRoleV2::StatisticKey => "statistic-key",
+        SourceAccountRoleV2::SummaryProgram => "summary-program",
+        SourceAccountRoleV2::EvaluatorProgram => "evaluator-program",
+        SourceAccountRoleV2::EvaluatorProgramData => "evaluator-program-data",
+        SourceAccountRoleV2::StatisticResult => "statistic-result",
+        SourceAccountRoleV2::ResultLineage => "result-lineage",
+        SourceAccountRoleV2::SourceWorkReceipt => "source-work-receipt",
+        SourceAccountRoleV2::LivenessPolicy => "liveness-policy",
+        SourceAccountRoleV2::SourceCompartment => "source-compartment",
+        SourceAccountRoleV2::Keeper => "keeper",
+        SourceAccountRoleV2::Payer => "payer",
+        SourceAccountRoleV2::PrincipalRefund => "principal-refund",
+        SourceAccountRoleV2::NeutralSink => "neutral-sink",
+        SourceAccountRoleV2::FailurePolicy => "failure-policy",
+        SourceAccountRoleV2::HandoffReceipt => "handoff-receipt",
+        SourceAccountRoleV2::GenerationAuthority => "generation-authority",
+        SourceAccountRoleV2::GenerationTarget => "generation-target",
+        SourceAccountRoleV2::GenerationLineage => "generation-lineage",
+        SourceAccountRoleV2::SystemProgram => "system-program",
+        SourceAccountRoleV2::RentSysvar => "rent-sysvar",
     }
 }
 
@@ -847,5 +1206,38 @@ mod read_only_session_contract_tests {
             output
         };
         assert_ne!(digest(&["ab", "c"]), digest(&["a", "bc"]));
+    }
+
+    #[test]
+    fn scheduling_names_cannot_promote_an_unrelated_release_coordinate() {
+        assert_eq!(
+            action_coordinate("open-raw-page"),
+            Some(CanonicalIntentCoordinate {
+                family_tag: SOURCE_SERIES_FAMILY_TAG,
+                family_version: SOURCE_SERIES_FAMILY_VERSION,
+                local_action: SourceSeriesAction::OpenRawPage.tag(),
+            })
+        );
+        assert_eq!(action_coordinate("caller-says-enabled"), None);
+    }
+
+    #[test]
+    fn source_account_roles_are_projected_from_the_layout_owner() {
+        let contract = account_contract_v2(SourceSeriesAction::OpenRawPage);
+        assert_eq!(contract.len(), 19);
+        assert_eq!(
+            source_role_name(contract.meta(0).unwrap().role),
+            "source-release"
+        );
+        assert_eq!(
+            source_role_name(contract.meta(15).unwrap().role),
+            "keeper"
+        );
+        assert!(contract.meta(15).unwrap().signer);
+        assert!(contract.meta(16).unwrap().signer);
+        assert_eq!(
+            source_role_name(contract.meta(18).unwrap().role),
+            "rent-sysvar"
+        );
     }
 }
