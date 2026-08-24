@@ -524,9 +524,7 @@ impl StructuredClaimTerminalReplayDeltaV1 {
 }
 
 const fn is_pair_action(action: u8) -> bool {
-    action == StructuredClaimActionV1::WrapCanonical.tag()
-        || action == StructuredClaimActionV1::UnwrapCanonical.tag()
-        || action == StructuredClaimActionV1::WrapFull.tag()
+    action == StructuredClaimActionV1::WrapFull.tag()
         || action == StructuredClaimActionV1::UnwrapFull.tag()
         || action == StructuredClaimActionV1::RedeemTerminal.tag()
 }
@@ -564,7 +562,7 @@ mod tests {
                 descriptor_account: [1; 32],
                 wrapper_product_id: [2; 32],
                 vault_authority: [3; 32],
-                action: StructuredClaimActionV1::WrapCanonical,
+                action: StructuredClaimActionV1::WrapFull,
                 transition_id: [5; 32],
                 delta_id: [6; 32],
                 position_pre_semantic_id: [4; 32],
@@ -572,7 +570,69 @@ mod tests {
             })
             .unwrap();
         assert_eq!(advanced.current_position_semantic_id, [7; 32]);
-        assert_eq!(advanced.last_action, 2);
+        assert_eq!(advanced.last_action, 3);
+    }
+
+    #[test]
+    fn withdrawn_pair_actions_cannot_construct_encode_or_decode_current_replay() {
+        let founding =
+            StructuredClaimReplayExtensionV1::founding([1; 32], [2; 32], [3; 32], [4; 32])
+                .unwrap();
+        for action in [
+            StructuredClaimActionV1::WrapCanonical,
+            StructuredClaimActionV1::UnwrapCanonical,
+        ] {
+            assert!(founding
+                .advanced(StructuredClaimReplayTransitionV1 {
+                    descriptor_account: [1; 32],
+                    wrapper_product_id: [2; 32],
+                    vault_authority: [3; 32],
+                    action,
+                    transition_id: [5; 32],
+                    delta_id: [6; 32],
+                    position_pre_semantic_id: [4; 32],
+                    position_post_semantic_id: [7; 32],
+                })
+                .is_err());
+            assert!(StructuredClaimReplayDeltaV1 {
+                action,
+                source_sequence: 0,
+                destination_sequence: 0,
+                transition_id: [5; 32],
+                source_position_account: [6; 32],
+                source_position_pre_semantic_id: [7; 32],
+                source_position_post_semantic_id: [8; 32],
+                destination_position_account: [9; 32],
+                destination_position_pre_semantic_id: [10; 32],
+                destination_position_post_semantic_id: [11; 32],
+            }
+            .encode()
+            .is_err());
+        }
+
+        let advanced = founding
+            .advanced(StructuredClaimReplayTransitionV1 {
+                descriptor_account: [1; 32],
+                wrapper_product_id: [2; 32],
+                vault_authority: [3; 32],
+                action: StructuredClaimActionV1::WrapFull,
+                transition_id: [5; 32],
+                delta_id: [6; 32],
+                position_pre_semantic_id: [4; 32],
+                position_post_semantic_id: [7; 32],
+            })
+            .unwrap();
+        let mut hostile = advanced.encode().unwrap();
+        hostile[11] = StructuredClaimActionV1::WrapCanonical.tag();
+        assert_eq!(
+            StructuredClaimReplayExtensionV1::decode(&hostile),
+            Err(Error::InvalidReplayExtension),
+        );
+        hostile[11] = StructuredClaimActionV1::UnwrapCanonical.tag();
+        assert_eq!(
+            StructuredClaimReplayExtensionV1::decode(&hostile),
+            Err(Error::InvalidReplayExtension),
+        );
     }
 
     #[test]

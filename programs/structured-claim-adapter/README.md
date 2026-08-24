@@ -118,8 +118,9 @@ The deleted canonical action-2/4 route previously manufactured a Structured
 authority transcript for General V2 action 35. That parallel transfer planner,
 its public preparation/reconstruction receipts, its 30-account wrapper
 executor, and its duplicate General payload/CPI codec have been physically
-removed. Historical action-2/4 payload variants remain decode-only so the
-wrapper can refuse their allocated wire tags deterministically.
+removed. Family-envelope parsing may recognize the historical action-2/4 wire
+tags only to refuse them deterministically; current Replay V3 construction,
+encoding, and hostile decode do not admit either action.
 
 Current actions project exact hostile-decoded Position V3 and purpose-Replay
 V3 successors directly from the same Hoard V2, ClaimLedger V3, descriptor,
@@ -163,23 +164,24 @@ donation floor/residue, and freezes Product's neutral lamport sink. Later close
 work may return only the persisted principal to its owner and must route every
 donation to the sink. The wrapper cannot mint this authority from caller fields.
 
-## Remaining external dependencies
+## Activation blockers
 
-The adapter implementation is intentionally honest about work owned elsewhere:
+Every Structured tuple and the separate wrapper action mask remain disabled.
+The single shared current account contract covers actions 1, 3, 5, 6, 7, and
+8 with exact frame sizes 34, 32, 32, 32, 33, and 31 respectively. Actions 2
+and 4 have no current executor, and current Replay V3 construction and hostile
+decode refuse their allocated tags.
 
-- every Structured tuple and the separate wrapper action mask remain disabled;
-  the current compiled frames are create 33, base canonical 26 / wrapper
-  canonical 29, full-vector 31, and terminal redemption 32 accounts;
-- Product supplies the current RegistryV2-to-BundleV5/ReleaseV2/ProfileV4/
-  AttachmentV4 and frame-bounded Series-link authority this lane consumes.
-  The base uses Product's private authenticated wrapper
-  authorization and first-admission mutation rather than a caller DTO;
-  withdrawn Bundle/Attachment V2 and V3 bodies never authorize Structured
-  creation;
-- compaction, Product terminal promotion, and root/Position close remain
-  incomplete; exact terminal redemption is compiled but not admitted; and
-- no successor build, measurement, bank, SVM, local-validator, or rollback
-  campaign has run. `SBF_EVIDENCE.md` records that explicit evidence state.
+The source-staged routes include compaction, terminal redemption, Product
+wrapper terminal promotion, canonical Position V3/Replay V3 retirement,
+descriptor retirement, and Structured-root update or final close. They remain
+`ReservedDisabled`; source presence is not activation evidence.
 
-These are activation dependencies, not reasons to retain the deleted duplicate
-planner or to describe this family as live.
+Activation requires replacement checked wrapper/base/Token-2022 release
+artifacts whose exact manifest admits only the coherent current action set,
+plus linked build, measurement, bank, SVM, local-validator, CPI-depth,
+rollback, and rent evidence. None of that successor evidence has been run.
+`SBF_EVIDENCE.md` records the explicit evidence state.
+
+These are activation dependencies, not reasons to retain a duplicate planner
+or to describe this family as live.

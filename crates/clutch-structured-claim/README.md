@@ -71,8 +71,12 @@ locked surplus, not a fee or caller entitlement. Compaction is owned by the
 current base adapter's exact Hoard-to-neutral disposition, not this algebra
 crate.
 
-The full runtime/account plan remains in
-[`research/structured-claim-wrapper/ADAPTER_PLAN.md`](../../research/structured-claim-wrapper/ADAPTER_PLAN.md).
+Current runtime and account ownership is documented by the
+[runtime contract](../clutch-structured-claim-runtime-contract/README.md),
+[successor adapter](../../programs/structured-claim-adapter/README.md), and
+[SBF wrapper](../../programs/structured-claim-sbf/README.md). The former
+research [`ADAPTER_PLAN.md`](../../research/structured-claim-wrapper/ADAPTER_PLAN.md)
+is explicitly withdrawn design history.
 
 ## Evidence and compatibility
 
