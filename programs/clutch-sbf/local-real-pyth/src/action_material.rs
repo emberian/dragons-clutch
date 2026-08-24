@@ -1127,7 +1127,8 @@ pub fn construct_direct_action_material_v1(
     let action = material.accounts.action();
     if matches!(
         action,
-        DirectMarketAction::SubmitCandidate
+        DirectMarketAction::InitializeMarket
+            | DirectMarketAction::SubmitCandidate
             | DirectMarketAction::BeginVerification
             | DirectMarketAction::VerifyCandidate
             | DirectMarketAction::SettlePair
@@ -1136,11 +1137,11 @@ pub fn construct_direct_action_material_v1(
             | DirectMarketAction::LapseSelected
             | DirectMarketAction::RetireTerminal
     ) {
-        // These actions consume current b1/v3+b2+b3 and exact descendants.
-        // Their deadlines, terminal reason, RevenuePolicyV2 suffix, refund
-        // owners, liveness payer, and postimages are derived only by the
-        // action-specific hostile-chain constructors. This older caller-shaped
-        // account grammar is intentionally withdrawn for those coordinates.
+        // Action 1 consumes the exact ProductRoot snapshot and is v0-only;
+        // later actions consume current b1/v3+b2+b3 and exact descendants.
+        // Their identities, deadlines, policies, refund owners, and postimages
+        // are derived only by action-specific hostile-chain constructors. This
+        // caller-shaped account grammar is withdrawn for those coordinates.
         return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
     }
     let sequence_is_exact = if action == DirectMarketAction::InitializeMarket {
@@ -1397,6 +1398,143 @@ pub(crate) fn finish_chain_derived_direct_material_v2(
         authority_state_sha256,
         freshness,
         fee_payer,
+        account_roles,
+        planned,
+        draft_id,
+    })
+}
+
+/// Finish the sole current Direct action-1 artifact after the dedicated
+/// Product-root snapshot owner has derived and authenticated every role.
+/// Unlike the historical generic constructor, this boundary fixes sequence
+/// and payload to empty action 1 and requires one finalized ALT-backed v0
+/// message for the exact 41-account frame.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn finish_chain_derived_direct_action1_material_v2(
+    release: &IndexedProgramRelease,
+    manifest: &ExplicitOperatorReleaseManifest,
+    builder: &ProtocolTransactionBuilder,
+    workflow_id: [u8; 32],
+    freshness: ActionFreshnessBoundaryV1,
+    product_root: Address,
+    product_root_slot: u64,
+    generation: u64,
+    authority_state_sha256: [u8; 32],
+    accounts: Vec<AccountMeta>,
+    account_roles: Vec<CanonicalAccountRoleV1>,
+    equations: Vec<ExactEquation>,
+    lookup_table: &StructuredAddressLookupTableV1,
+) -> Result<CanonicalActionMaterialV1> {
+    release.validate().map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    manifest.validate().map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    freshness.validate()?;
+    let action = DirectMarketAction::InitializeMarket;
+    let coordinate = CanonicalIntentCoordinate {
+        family_tag: DIRECT_MARKET_FAMILY_TAG,
+        family_version: DIRECT_MARKET_FAMILY_VERSION,
+        local_action: action.tag(),
+    };
+    if workflow_id == [0; 32]
+        || authority_state_sha256 == [0; 32]
+        || product_root == Address::default()
+        || product_root_slot == 0
+        || generation == 0
+        || accounts.len() != 41
+        || account_roles.len() != 41
+        || release.enabled_intents.binary_search(&coordinate).is_err()
+        || release.program_id != manifest.clutch.program_id
+        || release.program_data != manifest.clutch.program_data
+        || release.deployment_slot != manifest.clutch.deployment_slot
+        || release.elf_sha256 != manifest.clutch.elf_sha256
+        || release.release_manifest_sha256 != manifest.manifest_sha256
+        || builder.clutch_program() != release.program_id
+        || builder.clutch_release_sha256() != release.elf_sha256
+        || lookup_table.observed_slot() > freshness.observed_slot
+    {
+        return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
+    }
+    let semantic_owner = manifest
+        .semantic_releases
+        .iter()
+        .find(|owner| {
+            owner.package == "clutch-direct-market-runtime"
+                && owner.schema == "current-v1"
+        })
+        .cloned()
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    manifest
+        .admits_owner(&semantic_owner)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    let equation_count = equations.len();
+    let draft = OwnedInstructionDraft::enabled_direct_initialize_market_request_v2(
+        semantic_owner,
+        release.program_id,
+        accounts,
+        builder.payer(),
+        equations,
+    )
+    .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let unsigned_transaction = builder
+        .build_exact_v0(
+            draft,
+            lookup_table.table(),
+            lookup_table.observed_slot(),
+            lookup_table.state_sha256(),
+        )
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    if unsigned_transaction.message_version != TransactionMessageVersionV1::V0
+        || unsigned_transaction.address_lookup_tables.len() != 1
+        || unsigned_transaction.exact_equations.len() != equation_count
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+    }
+    let cursor = ResumableWorkflowCursor {
+        workflow_id,
+        lane: WorkflowLane::Creation,
+        generation,
+        position: WorkflowPosition {
+            phase: u16::from(action.tag()),
+            item: 0,
+        },
+        observed_state_sha256: authority_state_sha256,
+    };
+    let planned = PlannedWorkflowNode {
+        manifest_sha256: manifest.manifest_sha256,
+        cursor,
+        coordinate: CanonicalActionCoordinate::Direct(action),
+        unsigned_transaction,
+        reload_authoritative_accounts: true,
+    };
+    validate_unsigned_direct_plan(coordinate, builder.payer(), &account_roles, &planned)?;
+    let release_key = release.key();
+    let draft_id = action_material_id(
+        &release_key,
+        &release_key,
+        release.release_manifest_sha256,
+        release.capability_profile_id,
+        coordinate,
+        product_root,
+        product_root_slot,
+        cursor,
+        authority_state_sha256,
+        freshness,
+        builder.payer(),
+        &account_roles,
+        &planned.unsigned_transaction,
+    );
+    Ok(CanonicalActionMaterialV1 {
+        release_key: release_key.clone(),
+        driver_release_key: release_key,
+        release_manifest_sha256: release.release_manifest_sha256,
+        capability_profile_id: release.capability_profile_id,
+        coordinate,
+        variant: None,
+        driver_account: product_root,
+        driver_account_slot: product_root_slot,
+        cursor,
+        authority_state_sha256,
+        freshness,
+        fee_payer: builder.payer(),
         account_roles,
         planned,
         draft_id,
