@@ -337,6 +337,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-terminal-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-product-contract",
+]
+
+[[package]]
 name = "dclutch-token-svm"
 version = "0.1.0"
 
