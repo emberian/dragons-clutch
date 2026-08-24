@@ -6,6 +6,8 @@
 //! them. Mutation remains in event-specific atomic composers; this module does
 //! not expose a generic successor writer.
 
+mod physical_v4;
+
 use crate::accounts::{expect_pda, require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::{
