@@ -71,7 +71,7 @@ pub(crate) trait AuthenticatedCurrentProductGeneralFoundingV4:
     fn product_market_binding_id(&self) -> Id32;
     fn product_generation(&self) -> u64;
     fn series_market_link_account(&self) -> Id32;
-    fn series_market_link_v2_id(&self) -> Id32;
+    fn series_market_link_binding_v2_id(&self) -> Id32;
     fn series_ordinal(&self) -> u32;
     fn compiler_bundle_v6_id(&self) -> Id32;
     fn funding_quote_v5_id(&self) -> Id32;
@@ -225,7 +225,7 @@ where
         product.product_market_binding_id(),
         product.product_generation(),
         product.series_market_link_account(),
-        product.series_market_link_v2_id(),
+        product.series_market_link_binding_v2_id(),
         product.series_ordinal(),
         product.compiler_bundle_v6_id(),
         product.funding_quote_v5_id(),

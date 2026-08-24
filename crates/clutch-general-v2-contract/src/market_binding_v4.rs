@@ -21,8 +21,8 @@ const PRODUCT_ROOT_ACCOUNT_OFFSET: usize = MARKET_BINDING_ACCOUNT_BYTES_V2;
 const PRODUCT_BINDING_ID_OFFSET: usize = PRODUCT_ROOT_ACCOUNT_OFFSET + 32;
 const PRODUCT_GENERATION_OFFSET: usize = PRODUCT_BINDING_ID_OFFSET + 32;
 const SERIES_LINK_ACCOUNT_OFFSET: usize = PRODUCT_GENERATION_OFFSET + 8;
-const SERIES_LINK_ID_OFFSET: usize = SERIES_LINK_ACCOUNT_OFFSET + 32;
-const SERIES_ORDINAL_OFFSET: usize = SERIES_LINK_ID_OFFSET + 32;
+const SERIES_LINK_BINDING_ID_OFFSET: usize = SERIES_LINK_ACCOUNT_OFFSET + 32;
+const SERIES_ORDINAL_OFFSET: usize = SERIES_LINK_BINDING_ID_OFFSET + 32;
 const COMPILER_BUNDLE_V6_ID_OFFSET: usize = SERIES_ORDINAL_OFFSET + 4;
 const FUNDING_QUOTE_V5_ID_OFFSET: usize = COMPILER_BUNDLE_V6_ID_OFFSET + 32;
 const ATTACHMENT_PLAN_V5_ID_OFFSET: usize = FUNDING_QUOTE_V5_ID_OFFSET + 32;
@@ -51,7 +51,7 @@ pub struct CurrentMarketAuthorityV4 {
     product_market_binding_id: Id32,
     product_generation: u64,
     series_market_link_account: Id32,
-    series_market_link_v2_id: Id32,
+    series_market_link_binding_v2_id: Id32,
     series_ordinal: u32,
     compiler_bundle_v6_id: Id32,
     funding_quote_v5_id: Id32,
@@ -80,7 +80,7 @@ impl CurrentMarketAuthorityV4 {
         product_market_binding_id: Id32,
         product_generation: u64,
         series_market_link_account: Id32,
-        series_market_link_v2_id: Id32,
+        series_market_link_binding_v2_id: Id32,
         series_ordinal: u32,
         compiler_bundle_v6_id: Id32,
         funding_quote_v5_id: Id32,
@@ -105,7 +105,7 @@ impl CurrentMarketAuthorityV4 {
             product_market_binding_id,
             product_generation,
             series_market_link_account,
-            series_market_link_v2_id,
+            series_market_link_binding_v2_id,
             series_ordinal,
             compiler_bundle_v6_id,
             funding_quote_v5_id,
@@ -137,8 +137,10 @@ impl CurrentMarketAuthorityV4 {
     pub const fn product_generation(self) -> u64 { self.product_generation }
     /// Exact current SeriesMarketLink V2 account.
     pub const fn series_market_link_account(self) -> Id32 { self.series_market_link_account }
-    /// Exact current SeriesMarketLink V2 semantic identity.
-    pub const fn series_market_link_v2_id(self) -> Id32 { self.series_market_link_v2_id }
+    /// Exact immutable SeriesMarketLink V2 binding identity.
+    pub const fn series_market_link_binding_v2_id(self) -> Id32 {
+        self.series_market_link_binding_v2_id
+    }
     /// Zero-based Series ordinal.
     pub const fn series_ordinal(self) -> u32 { self.series_ordinal }
     /// Current Product compiler BundleV6 identity.
@@ -218,7 +220,7 @@ impl CurrentMarketAuthorityV4 {
             self.product_market_root_account,
             self.product_market_binding_id,
             self.series_market_link_account,
-            self.series_market_link_v2_id,
+            self.series_market_link_binding_v2_id,
             self.compiler_bundle_v6_id,
             self.funding_quote_v5_id,
             self.attachment_plan_v5_id,
@@ -297,7 +299,11 @@ impl MarketBindingV4 {
         output[PRODUCT_GENERATION_OFFSET..PRODUCT_GENERATION_OFFSET + 8]
             .copy_from_slice(&self.authority.product_generation.to_le_bytes());
         put_id(output, SERIES_LINK_ACCOUNT_OFFSET, self.authority.series_market_link_account);
-        put_id(output, SERIES_LINK_ID_OFFSET, self.authority.series_market_link_v2_id);
+        put_id(
+            output,
+            SERIES_LINK_BINDING_ID_OFFSET,
+            self.authority.series_market_link_binding_v2_id,
+        );
         output[SERIES_ORDINAL_OFFSET..SERIES_ORDINAL_OFFSET + 4]
             .copy_from_slice(&self.authority.series_ordinal.to_le_bytes());
         for (offset, id) in [
@@ -355,7 +361,7 @@ impl MarketBindingV4 {
             read_id(input, PRODUCT_BINDING_ID_OFFSET)?,
             read_u64(input, PRODUCT_GENERATION_OFFSET)?,
             read_id(input, SERIES_LINK_ACCOUNT_OFFSET)?,
-            read_id(input, SERIES_LINK_ID_OFFSET)?,
+            read_id(input, SERIES_LINK_BINDING_ID_OFFSET)?,
             read_u32(input, SERIES_ORDINAL_OFFSET)?,
             read_id(input, COMPILER_BUNDLE_V6_ID_OFFSET)?,
             read_id(input, FUNDING_QUOTE_V5_ID_OFFSET)?,
@@ -493,7 +499,8 @@ mod tests {
         assert_eq!(
             CurrentMarketAuthorityV4::new(
                 Id32::ZERO, current.product_market_binding_id(), current.product_generation(),
-                current.series_market_link_account(), current.series_market_link_v2_id(),
+                current.series_market_link_account(),
+                current.series_market_link_binding_v2_id(),
                 current.series_ordinal(), current.compiler_bundle_v6_id(),
                 current.funding_quote_v5_id(), current.attachment_plan_v5_id(),
                 current.foundation_schedule_v3_id(), current.foundation_account_graph_v3_id(),
@@ -509,7 +516,7 @@ mod tests {
         assert!(CurrentMarketAuthorityV4::new(
             current.product_market_root_account(), current.product_market_binding_id(),
             current.product_generation(), current.product_market_root_account(),
-            current.series_market_link_v2_id(), current.series_ordinal(),
+            current.series_market_link_binding_v2_id(), current.series_ordinal(),
             current.compiler_bundle_v6_id(), current.funding_quote_v5_id(),
             current.attachment_plan_v5_id(), current.foundation_schedule_v3_id(),
             current.foundation_account_graph_v3_id(), current.market_liability_founding_id(),

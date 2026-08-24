@@ -1,9 +1,10 @@
 //! Ordered SBF retirement adapters for the compact indexed General root.
 //!
 //! Actions 45, 46, and 47 form one strict terminal chain: close both exact
-//! index children, close the still-authenticated retained Feed, then close the
-//! terminal indexed root while decrementing its parent Epoch. Every pure plan
-//! is completed before the first byte or lamport changes.
+//! index children, close the still-authenticated retained Feed, then consume
+//! Product's same-instruction whole-Series retirement receipt while closing
+//! the terminal indexed root and durable fee pair and decrementing its parent
+//! Epoch. Every pure plan is completed before the first byte or lamport changes.
 
 use core::cell::{Ref, RefMut};
 use std::boxed::Box;
@@ -34,12 +35,12 @@ use super::general_v2_fee_terminal_pair_v1::{
     authenticate_fee_terminal_pair_v1, AuthenticatedFeeTerminalPairV1,
     FeeTerminalPairExpectationV1,
 };
+use super::product_series_current::retirement_v4::AuthenticatedProductSeriesRetirementV4;
 
 pub const RETIRE_INDEX_CHILDREN_ACCOUNT_COUNT_V1: usize = 7;
 pub const RETIRE_RETAINED_FEED_ACCOUNT_COUNT_V1: usize = 6;
-/// Exact non-Product account prefix for action 47. The final Product terminal
-/// authority appends its own frozen account frame.
-pub const CLOSE_INDEXED_ROOT_NON_PRODUCT_PREFIX_ACCOUNTS_V1: usize = 10;
+/// Exact General account frame consumed after Product's move-only terminal.
+pub const CLOSE_INDEXED_ROOT_ACCOUNT_COUNT_V1: usize = 10;
 
 const IX_ROOT: usize = 0;
 const IX_LOCATOR: usize = 1;
@@ -235,20 +236,34 @@ fn preflight_writes(accounts: &[&AccountInfo<'_>]) -> Outcome<()> {
     Ok(())
 }
 
-/// Default-refusing seam for Product's final non-Copy whole-Market authority.
-///
-/// The Product owner will replace this body with its hostile RootV2/LinkV2
-/// terminal authenticator. No caller can manufacture an interim receipt, and
-/// no General state or native lamport moves while this seam refuses.
+/// Consume Product's exact non-Copy whole-Series terminal into the immutable
+/// General V4 authority. Root/Link schema-specific access remains localized
+/// inside Product's receipt owner so a later Product successor cannot be
+/// mistaken for V2 bytes or caller projections.
 fn authenticate_product_whole_market_terminal_v1(
-    product_accounts: &[AccountInfo<'_>],
+    product: AuthenticatedProductSeriesRetirementV4,
+    binding: &MarketBindingV4,
     terminal: &contract::IndexedSettlementRootCloseProjectionV1,
     fee_pair: &AuthenticatedFeeTerminalPairV1,
 ) -> Outcome<()> {
-    let _ = product_accounts;
-    let _ = terminal;
-    let _ = fee_pair;
-    Err(Refusal::Adapter(ClutchError::UnsupportedInstruction))
+    let authority = binding.authority();
+    let product_receipt_id = product.consume_for_general_indexed_close_v1(
+        binding.base().base().market_instance_v2_id,
+        authority,
+    )?;
+    let general_fee = fee_pair.general();
+    let dealer_fee = fee_pair.dealer();
+    require(
+        !product_receipt_id.is_zero()
+            && terminal.terminal().base().market() == binding.base().base().market
+            && general_fee.terminal_receipt.0 == fee_pair.terminal_account().bytes()
+            && general_fee.closure_manifest.0 == fee_pair.manifest_account().bytes()
+            && dealer_fee.terminal_receipt.0 == fee_pair.terminal_account().bytes()
+            && dealer_fee.fee_record.0 == terminal.fee_record().bytes()
+            && dealer_fee.settlement_candidate.0
+                == terminal.terminal().base().settlement_candidate_id().bytes(),
+        ClutchError::MismatchedState,
+    )
 }
 
 #[inline(never)]
@@ -599,15 +614,13 @@ fn retire_retained_feed(
 }
 
 #[inline(never)]
-fn close_indexed_root(
+pub(crate) fn close_indexed_root_after_product_series_retirement_v4(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     selector: contract::CountedSettlementRootSelectorV1,
+    product: AuthenticatedProductSeriesRetirementV4,
 ) -> Outcome<()> {
-    require(
-        accounts.len() >= CLOSE_INDEXED_ROOT_NON_PRODUCT_PREFIX_ACCOUNTS_V1,
-        ClutchError::WrongAccountCount,
-    )?;
+    require_count(accounts, CLOSE_INDEXED_ROOT_ACCOUNT_COUNT_V1)?;
     require_program_account(
         program_id,
         &accounts[IX_CLOSE_ROOT],
@@ -795,7 +808,8 @@ fn close_indexed_root(
     )?;
 
     authenticate_product_whole_market_terminal_v1(
-        &accounts[CLOSE_INDEXED_ROOT_NON_PRODUCT_PREFIX_ACCOUNTS_V1..],
+        product,
+        &binding,
         terminal,
         &fee_pair,
     )?;
@@ -862,7 +876,10 @@ pub fn process(
                 action == GeneralV2Action::CloseIndexedSettlementRoot,
                 ClutchError::UnsupportedInstruction,
             )?;
-            close_indexed_root(program_id, accounts, selector)
+            let _ = program_id;
+            let _ = accounts;
+            let _ = selector;
+            Err(Refusal::Adapter(ClutchError::UnsupportedInstruction))
         }
     }
 }
@@ -875,6 +892,19 @@ mod tests {
     fn indexed_terminal_frames_are_frozen() {
         assert_eq!(RETIRE_INDEX_CHILDREN_ACCOUNT_COUNT_V1, 7);
         assert_eq!(RETIRE_RETAINED_FEED_ACCOUNT_COUNT_V1, 6);
-        assert_eq!(CLOSE_INDEXED_ROOT_NON_PRODUCT_PREFIX_ACCOUNTS_V1, 10);
+        assert_eq!(CLOSE_INDEXED_ROOT_ACCOUNT_COUNT_V1, 10);
+    }
+
+    #[test]
+    fn root_close_requires_the_move_only_product_receipt() {
+        let source = include_str!("general_v2_exact_index_retirement_v1.rs");
+        let close = source
+            .split("pub(crate) fn close_indexed_root_after_product_series_retirement_v4")
+            .nth(1)
+            .and_then(|body| body.split("/// Dispatch-compatible entrypoint").next())
+            .expect("bounded indexed-root close");
+        assert!(close.contains("product: AuthenticatedProductSeriesRetirementV4"));
+        assert!(close.contains("authenticate_product_whole_market_terminal_v1("));
+        assert!(!close.contains("product_accounts"));
     }
 }

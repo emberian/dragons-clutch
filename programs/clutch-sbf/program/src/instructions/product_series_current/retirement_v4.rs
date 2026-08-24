@@ -49,7 +49,7 @@ use clutch_product_series::{
     SeriesLifecycleLinkRetirementProjectionV2, SeriesLifecycleReplayPhaseV2,
     SeriesMarketLinkPhaseV2, SeriesAttachmentPlanV5,
     SeriesMarketLinkRetirementProjectionV2, SeriesMarketLinkV2, SeriesMarketLinkV2Id,
-    SeriesPlanV5, SeriesPlanV5Id, CompiledProductSeriesBundleV6Id,
+    SeriesLinkObligationV2, SeriesPlanV5, SeriesPlanV5Id, CompiledProductSeriesBundleV6Id,
     SeriesFundingTermsV2Id, SERIES_FUNDING_COMPONENT_COUNT_V2,
 };
 use clutch_solana_layout::product_series::{
@@ -88,6 +88,13 @@ fn require_live(id: ContentId) -> Outcome<()> {
 struct ProductCountedSeriesLinkRetirementProjectionV4 {
     id: ContentId,
     link_retirement: SeriesMarketLinkRetirementProjectionV2,
+    root_binding_id: ContentId,
+    foundation_schedule_id: ContentId,
+    foundation_account_graph_id: ContentId,
+    market_liability_founding_id: ContentId,
+    claim_mint_founding_plan_id: ContentId,
+    claim_issuance_binding_id: ContentId,
+    general_founding_capability_id: ContentId,
     root_account: Pubkey,
     root_authentication_before: ContentId,
     root_data_before: ContentId,
@@ -96,6 +103,10 @@ struct ProductCountedSeriesLinkRetirementProjectionV4 {
     root_transition_sequence_before: u64,
     root_transition_sequence_after: u64,
     link_account: Pubkey,
+    link_binding_id: ContentId,
+    funding_quote_id: ContentId,
+    attachment_plan_id: ContentId,
+    dealer_terminal_projection_id: ContentId,
     link_authentication_before: ContentId,
     link_data_before: ContentId,
     link_semantic_before: SeriesMarketLinkV2Id,
@@ -111,6 +122,14 @@ struct AuthenticatedProductSeriesLinkRetirementV4 {
     id: ContentId,
     source: Box<AuthenticatedSourceFundingCustodyRetirementV2>,
     counted_id: ContentId,
+    link_retirement: SeriesMarketLinkRetirementProjectionV2,
+    root_binding_id: ContentId,
+    foundation_schedule_id: ContentId,
+    foundation_account_graph_id: ContentId,
+    market_liability_founding_id: ContentId,
+    claim_mint_founding_plan_id: ContentId,
+    claim_issuance_binding_id: ContentId,
+    general_founding_capability_id: ContentId,
     root_account: Pubkey,
     root_authentication_before: ContentId,
     root_authentication_after: ContentId,
@@ -121,6 +140,10 @@ struct AuthenticatedProductSeriesLinkRetirementV4 {
     root_transition_sequence_before: u64,
     root_transition_sequence_after: u64,
     link_account: Pubkey,
+    link_binding_id: ContentId,
+    funding_quote_id: ContentId,
+    attachment_plan_id: ContentId,
+    dealer_terminal_projection_id: ContentId,
     link_authentication_before: ContentId,
     link_authentication_retired: ContentId,
     link_data_before: ContentId,
@@ -418,6 +441,68 @@ impl AuthenticatedProductSeriesRetirementV4 {
     pub(crate) const fn compiler_bundle_id(&self) -> ContentId {
         self.terminal.link_retirement.compiler_bundle_id
     }
+
+    /// Consume the sole whole-Series postwrite into General's exact indexed
+    /// root close. Every expected Product fact comes from the hostile-decoded
+    /// immutable MarketBindingV4; no caller-supplied terminal projection or
+    /// detached receipt ID can authorize this cut.
+    pub(crate) fn consume_for_general_indexed_close_v1(
+        self,
+        market_instance_id: clutch_general_v2_contract::Id32,
+        authority: clutch_general_v2_contract::CurrentMarketAuthorityV4,
+    ) -> Outcome<ContentId> {
+        let retired = &self.terminal.link_retirement;
+        let projection = retired.link_retirement;
+        let funding = self.terminal.funding.state();
+        require(
+            self.id != ContentId::ZERO
+                && self.physical.id() != ContentId::ZERO
+                && retired.root_account.to_bytes()
+                    == authority.product_market_root_account().bytes()
+                && retired.root_binding_id.bytes()
+                    == authority.product_market_binding_id().bytes()
+                && retired.link_account.to_bytes()
+                    == authority.series_market_link_account().bytes()
+                && retired.link_binding_id.bytes()
+                    == authority.series_market_link_binding_v2_id().bytes()
+                && projection.market_instance_id().bytes() == market_instance_id.bytes()
+                && projection.ordinal() == authority.series_ordinal()
+                && projection.generation() == authority.product_generation()
+                && retired.compiler_bundle_id.bytes()
+                    == authority.compiler_bundle_v6_id().bytes()
+                && retired.funding_quote_id.bytes()
+                    == authority.funding_quote_v5_id().bytes()
+                && retired.attachment_plan_id.bytes()
+                    == authority.attachment_plan_v5_id().bytes()
+                && retired.foundation_schedule_id.bytes()
+                    == authority.foundation_schedule_v3_id().bytes()
+                && retired.foundation_account_graph_id.bytes()
+                    == authority.foundation_account_graph_v3_id().bytes()
+                && retired.market_liability_founding_id.bytes()
+                    == authority.market_liability_founding_id().bytes()
+                && retired.claim_mint_founding_plan_id.bytes()
+                    == authority.claim_mint_founding_plan_id().bytes()
+                && retired.claim_issuance_binding_id.bytes()
+                    == authority.claim_issuance_binding_id().bytes()
+                && retired.general_founding_capability_id.bytes()
+                    == authority.general_founding_capability_id().bytes()
+                && funding.product_founder_preauthorization_id.bytes()
+                    == authority.product_preauthorization_id().bytes()
+                && retired.dealer_terminal_projection_id != ContentId::ZERO
+                && retired.root_transition_sequence_after
+                    == retired
+                        .root_transition_sequence_before
+                        .checked_add(1)
+                        .ok_or(ClutchError::Arithmetic)?
+                && retired.link_transition_sequence_after
+                    == retired
+                        .link_transition_sequence_before
+                        .checked_add(1)
+                        .ok_or(ClutchError::Arithmetic)?,
+            ClutchError::MismatchedState,
+        )?;
+        Ok(self.id)
+    }
 }
 
 /// Close-only pure authority bound to the exact hostile Closed FundingV4
@@ -627,6 +712,8 @@ fn preauthorize_product_series_retirement_v4(
     let link_binding_id = link_binding
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let dealer_terminal_projection_id =
+        link_state.obligation_terminal_receipt_id(SeriesLinkObligationV2::Dealer);
     let link_semantic_before = link_state
         .semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -691,6 +778,7 @@ fn preauthorize_product_series_retirement_v4(
             && funding.state().funding_quote_id == quote_id
             && funding.state().attachment_plan_id == attachment_id
             && funding.state().compiler_bundle_id == replay_binding.compiler_bundle_id
+            && dealer_terminal_projection_id != ContentId::ZERO
             && source_terminal_facts.product_link_account.bytes() == link.account().to_bytes()
             && source_terminal_facts.product_link_authentication_id == link.authentication_id()
             && source_terminal_facts.product_link_semantic_id.bytes()
@@ -750,12 +838,22 @@ fn preauthorize_product_series_retirement_v4(
         &link_successor.transition_sequence().to_le_bytes(),
         &link_retirement.id().bytes(),
         &link_binding_id.bytes(),
+        &link_binding.funding_quote_id.bytes(),
+        &link_binding.attachment_plan_id.bytes(),
+        &dealer_terminal_projection_id.bytes(),
         &replay_binding_id.bytes(),
     ]);
     require_live(counted_id)?;
     let counted = ProductCountedSeriesLinkRetirementProjectionV4 {
         id: counted_id,
         link_retirement,
+        root_binding_id,
+        foundation_schedule_id: root_binding.foundation_schedule_id.content_id(),
+        foundation_account_graph_id: root_binding.foundation_account_graph_id.content_id(),
+        market_liability_founding_id: root_binding.market_liability_founding_id,
+        claim_mint_founding_plan_id: root_binding.claim_mint_founding_plan_id,
+        claim_issuance_binding_id: root_binding.claim_issuance_binding_id,
+        general_founding_capability_id: root_binding.general_founding_capability_id,
         root_account: root.account(),
         root_authentication_before: root.authentication_id(),
         root_data_before: root.data_id(),
@@ -764,6 +862,10 @@ fn preauthorize_product_series_retirement_v4(
         root_transition_sequence_before: root_state.transition_sequence(),
         root_transition_sequence_after: root_successor.transition_sequence(),
         link_account: link.account(),
+        link_binding_id,
+        funding_quote_id: link_binding.funding_quote_id.content_id(),
+        attachment_plan_id: link_binding.attachment_plan_id.content_id(),
+        dealer_terminal_projection_id,
         link_authentication_before: link.authentication_id(),
         link_data_before: link.data_id(),
         link_semantic_before,
@@ -1091,6 +1193,14 @@ fn retire_last_product_series_link_v4<'root, 'link>(
         id,
         source: Box::new(source),
         counted_id: counted.id(),
+        link_retirement: counted.link_retirement,
+        root_binding_id: counted.root_binding_id,
+        foundation_schedule_id: counted.foundation_schedule_id,
+        foundation_account_graph_id: counted.foundation_account_graph_id,
+        market_liability_founding_id: counted.market_liability_founding_id,
+        claim_mint_founding_plan_id: counted.claim_mint_founding_plan_id,
+        claim_issuance_binding_id: counted.claim_issuance_binding_id,
+        general_founding_capability_id: counted.general_founding_capability_id,
         root_account: *root_account.key,
         root_authentication_before: counted.root_authentication_before,
         root_authentication_after: rebound_root.authentication_id(),
@@ -1101,6 +1211,10 @@ fn retire_last_product_series_link_v4<'root, 'link>(
         root_transition_sequence_before: counted.root_transition_sequence_before,
         root_transition_sequence_after: counted.root_transition_sequence_after,
         link_account: *link_account.key,
+        link_binding_id: counted.link_binding_id,
+        funding_quote_id: counted.funding_quote_id,
+        attachment_plan_id: counted.attachment_plan_id,
+        dealer_terminal_projection_id: counted.dealer_terminal_projection_id,
         link_authentication_before: counted.link_authentication_before,
         link_authentication_retired: rebound_link.authentication_id(),
         link_data_before: counted.link_data_before,
@@ -1659,5 +1773,26 @@ mod adversarial_source_tests {
             .expect("physical close");
         assert!(source_close < terminal && terminal < physical);
         assert!(!outer.contains("FundingV3"));
+    }
+
+    #[test]
+    fn general_close_consumes_the_whole_receipt_without_a_projection_bridge() {
+        let source = include_str!("retirement_v4.rs");
+        let receipt = source
+            .split("pub(crate) struct AuthenticatedProductSeriesRetirementV4")
+            .nth(1)
+            .and_then(|body| body.split("impl AuthenticatedProductSeriesRetirementV4").next())
+            .expect("bounded whole-Series receipt");
+        assert!(!receipt.contains("Clone"));
+        assert!(!receipt.contains("Copy"));
+        let consumer = source
+            .split("pub(crate) fn consume_for_general_indexed_close_v1")
+            .nth(1)
+            .and_then(|body| body.split("/// Close-only pure authority").next())
+            .expect("bounded General consumer");
+        assert!(consumer.starts_with("(\n        self,"));
+        assert!(consumer.contains("series_market_link_binding_v2_id"));
+        assert!(consumer.contains("dealer_terminal_projection_id != ContentId::ZERO"));
+        assert!(!consumer.contains("projection_id:"));
     }
 }
