@@ -57,7 +57,7 @@ pub enum Error {
     SlotMismatch,
     /// A receipt's fields were not canonical for its kind.
     NonCanonicalReceipt,
-    /// An instruction tag was not the resolve tag.
+    /// An instruction tag was not a recognized categorical-resolution tag.
     InvalidInstructionTag,
     /// An instruction flags byte was nonzero.
     InvalidInstructionFlags,
