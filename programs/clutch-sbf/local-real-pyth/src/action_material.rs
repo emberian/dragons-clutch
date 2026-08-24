@@ -36,6 +36,7 @@ use clutch_solana_layout::registry::{
     DIRECT_MARKET_FAMILY_TAG, DIRECT_MARKET_FAMILY_VERSION, STRUCTURED_CLAIM_FAMILY_TAG,
     STRUCTURED_CLAIM_FAMILY_VERSION, SOURCE_SERIES_FAMILY_TAG, SOURCE_SERIES_FAMILY_VERSION,
 };
+use clutch_solana_layout::source_series::account_contract_v2;
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::product_series::{
     MarketLifecycleReplayAccountV2, MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV2,
@@ -897,6 +898,105 @@ pub struct CanonicalActionMaterialV1 {
 }
 
 impl CanonicalActionMaterialV1 {
+    /// Promote one fully chain-derived Source registry action into the sole
+    /// operator JSON material type. This seam accepts already-frozen account
+    /// metas and transaction bytes only from typed Source constructors in this
+    /// crate; callers cannot use it outside the crate to mint authority.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_chain_derived_source_v2(
+        release: &IndexedProgramRelease,
+        action: clutch_solana_layout::registry::SourceSeriesAction,
+        driver_account: Address,
+        driver_account_slot: u64,
+        cursor: ResumableWorkflowCursor,
+        freshness: ActionFreshnessBoundaryV1,
+        fee_payer: Address,
+        accounts: &[AccountMeta],
+        unsigned_transaction: UnsignedProtocolTransaction,
+    ) -> Result<Self> {
+        release
+            .validate()
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+        freshness.validate()?;
+        let coordinate = CanonicalIntentCoordinate {
+            family_tag: SOURCE_SERIES_FAMILY_TAG,
+            family_version: SOURCE_SERIES_FAMILY_VERSION,
+            local_action: action.tag(),
+        };
+        if release.enabled_intents.binary_search(&coordinate).is_err()
+            || driver_account == Address::default()
+            || driver_account_slot == 0
+            || cursor.lane != WorkflowLane::SourceCrank
+            || cursor.observed_state_sha256 == [0; 32]
+            || freshness.observed_slot < driver_account_slot
+        {
+            return Err(CanonicalActionMaterialErrorV1::WrongSelection);
+        }
+        let contract = account_contract_v2(action);
+        if accounts.len() != contract.len() {
+            return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+        }
+        let mut account_roles = Vec::with_capacity(accounts.len());
+        for (index, account) in accounts.iter().enumerate() {
+            let expected = contract
+                .meta(index)
+                .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
+            if account.is_writable != expected.writable || account.is_signer != expected.signer {
+                return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+            }
+            account_roles.push(CanonicalAccountRoleV1 {
+                label: source_role_label_v2(expected.role),
+                address: account.pubkey,
+                writable: expected.writable,
+                signer: expected.signer,
+            });
+        }
+        if !account_roles.iter().any(|role| role.address == driver_account) {
+            return Err(CanonicalActionMaterialErrorV1::WrongSelection);
+        }
+        let planned = PlannedWorkflowNode {
+            manifest_sha256: release.release_manifest_sha256,
+            cursor,
+            coordinate: CanonicalActionCoordinate::SourceRegistry(action),
+            unsigned_transaction,
+            reload_authoritative_accounts: true,
+        };
+        validate_unsigned_source_plan(coordinate, fee_payer, &account_roles, &planned)?;
+        let release_key = release.key();
+        let draft_id = action_material_id(
+            &release_key,
+            &release_key,
+            release.release_manifest_sha256,
+            release.capability_profile_id,
+            coordinate,
+            driver_account,
+            driver_account_slot,
+            cursor,
+            cursor.observed_state_sha256,
+            freshness,
+            fee_payer,
+            &account_roles,
+            &planned.unsigned_transaction,
+        );
+        Ok(Self {
+            release_key: release_key.clone(),
+            driver_release_key: release_key,
+            release_manifest_sha256: release.release_manifest_sha256,
+            capability_profile_id: release.capability_profile_id,
+            coordinate,
+            variant: None,
+            driver_account,
+            driver_account_slot,
+            cursor,
+            authority_state_sha256: cursor.observed_state_sha256,
+            freshness,
+            fee_payer,
+            account_roles,
+            planned,
+            draft_id,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_chain_derived_direct_v2(
         release: &IndexedProgramRelease,
@@ -9645,6 +9745,8 @@ fn validate_unsigned_source_plan(
         || transaction.required_signers != expected_signers
         || transaction.exact_equations.is_empty()
         || transaction.serialized_transaction.is_empty()
+        || transaction.message_version != TransactionMessageVersionV1::V0
+        || !transaction.address_lookup_tables.is_empty()
         || transaction.has_recent_blockhash
         || transaction.signed
         || transaction.submitted
