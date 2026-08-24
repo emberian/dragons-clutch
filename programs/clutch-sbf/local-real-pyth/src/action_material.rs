@@ -589,15 +589,18 @@ pub fn construct_direct_action_material_v1(
     let action = material.accounts.action();
     if matches!(
         action,
-        DirectMarketAction::SubmitCandidate
+        DirectMarketAction::AdmitOrder
+            | DirectMarketAction::CancelOrder
+            | DirectMarketAction::FreezeBook
+            | DirectMarketAction::SubmitCandidate
             | DirectMarketAction::BeginVerification
             | DirectMarketAction::VerifyCandidate
     ) {
-        // These actions consume current b1/v2+b2+b3 and, for verification,
-        // the shared Candidate compartment. Their payloads, refund suffix,
-        // liveness payer, and postimages are derived only by the hostile-chain
-        // constructor in `direct_candidate_material`; this older caller-shaped
-        // account grammar is intentionally withdrawn for those coordinates.
+        // These actions consume current b1/v2 children, current Product/General
+        // authority and, where applicable, the shared Candidate compartment.
+        // Payloads, refunds, liveness and postimages come only from the
+        // hostile-chain constructors in `direct_order_material` and
+        // `direct_candidate_material`; this caller-shaped grammar is withdrawn.
         return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
     }
     if material.payload.action() != action
@@ -702,8 +705,7 @@ pub fn construct_direct_action_material_v1(
 /// postimages were already derived from one hostile finalized chain snapshot.
 ///
 /// This boundary is crate-private so no browser/API caller can replace the
-/// dedicated `direct_candidate_material` semantic owner with a generic account
-/// or payload DTO.
+/// dedicated Direct action modules with a generic account or payload DTO.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn finish_chain_derived_direct_material_v2(
     release: &IndexedProgramRelease,
@@ -728,7 +730,10 @@ pub(crate) fn finish_chain_derived_direct_material_v2(
     freshness.validate()?;
     if !matches!(
         action,
-        DirectMarketAction::SubmitCandidate
+        DirectMarketAction::AdmitOrder
+            | DirectMarketAction::CancelOrder
+            | DirectMarketAction::FreezeBook
+            | DirectMarketAction::SubmitCandidate
             | DirectMarketAction::BeginVerification
             | DirectMarketAction::VerifyCandidate
     ) || payload.action() != action
@@ -1485,7 +1490,7 @@ pub(crate) const fn direct_role_label_v1(role: DirectAccountRoleV1) -> &'static 
         Role::CollateralProfile => "collateral-profile",
         Role::CollateralPolicy => "collateral-policy",
         Role::TokenProgram => "token-2022-program",
-        Role::GeneralMarketBinding => "historical-general-market-binding-v3",
+        Role::GeneralMarketBinding => "general-market-binding-v4",
         Role::GeneralMarketRuntime => "general-market-runtime-v3",
         Role::MarketInstance => "market-instance-v2",
         Role::MarketGenesis => "market-genesis-v2",

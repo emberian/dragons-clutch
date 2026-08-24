@@ -414,14 +414,17 @@ impl OwnedInstructionDraft {
 
         if matches!(
             payload.action(),
-            clutch_solana_layout::registry::DirectMarketAction::SubmitCandidate
+            clutch_solana_layout::registry::DirectMarketAction::AdmitOrder
+                | clutch_solana_layout::registry::DirectMarketAction::CancelOrder
+                | clutch_solana_layout::registry::DirectMarketAction::FreezeBook
+                | clutch_solana_layout::registry::DirectMarketAction::SubmitCandidate
                 | clutch_solana_layout::registry::DirectMarketAction::BeginVerification
                 | clutch_solana_layout::registry::DirectMarketAction::VerifyCandidate
         ) {
-            // Current actions 5..7 have a physically routed b1/v2+b2+b3
-            // contract. They may only be constructed from hostile chain state
-            // by `direct_candidate_material`; retaining a generic disabled DTO
-            // here would create a parallel payload/account authority.
+            // Current actions 2..7 have physically routed exact contracts.
+            // They may only be constructed from hostile chain state by the
+            // action-specific Direct material modules; retaining this generic
+            // DTO would create a parallel payload/account authority.
             return Err(ConstructionError::InvalidAccountContract);
         }
 

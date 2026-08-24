@@ -36,6 +36,7 @@ use clutch_general_v2_contract::{
     complete_candidate_feed_v2, AdmissionNodeV4AccountV1,
     CandidateWindowV5AccountV1, ClearWorkV3AccountV1, EconomicDomainV2AccountV1,
     EpochBudgetV2AccountV1, GeneralEpochV6AccountV1, MarketBindingV2, MarketBindingV3,
+    MarketBindingV4,
     MarketRuntimeV3AccountV1,
     OwnerSettlementV5AccountV1, SettlementCashPotV1AccountV1,
     SettlementRootV1AccountV1, ADMISSION_NODE_ACCOUNT_TAG, ADMISSION_NODE_ACCOUNT_VERSION_V2,
@@ -45,7 +46,8 @@ use clutch_general_v2_contract::{
     EPOCH_BUDGET_ACCOUNT_VERSION, FINAL_POT_ACCOUNT_BYTES, FINAL_POT_ACCOUNT_TAG,
     FINAL_POT_ACCOUNT_VERSION, GENERAL_EPOCH_ACCOUNT_TAG, GENERAL_EPOCH_ACCOUNT_VERSION,
     MARKET_BINDING_ACCOUNT_TAG, MARKET_BINDING_ACCOUNT_VERSION_V2,
-    MARKET_BINDING_ACCOUNT_VERSION_V3, MARKET_RUNTIME_ACCOUNT_TAG,
+    MARKET_BINDING_ACCOUNT_VERSION_V3, MARKET_BINDING_ACCOUNT_VERSION_V4,
+    MARKET_RUNTIME_ACCOUNT_TAG,
     MARKET_RUNTIME_ACCOUNT_VERSION, OWNER_FEE_CARRY_ACCOUNT_BYTES, OWNER_FEE_CARRY_ACCOUNT_TAG,
     OWNER_FEE_CARRY_ACCOUNT_VERSION, OWNER_FEE_FINALIZATION_ACCOUNT_BYTES,
     OWNER_FEE_FINALIZATION_ACCOUNT_VERSION, OWNER_SETTLEMENT_ACCOUNT_TAG,
@@ -118,7 +120,7 @@ pub type Result<T> = core::result::Result<T, AccountIndexError>;
 /// Sole decoder contract admitted by live chain serving. Historical Source V1/V2
 /// and withdrawn account versions are deliberately outside this set.
 pub const CANONICAL_ACCOUNT_DECODER_SET: &str =
-    "dragons-clutch/canonical-account-decoders/v9-source-work-schedule-general-v3-historical-no-keeper-no-selected-candidate-direct-b1-v2-product-general-revenue-current";
+    "dragons-clutch/canonical-account-decoders/v10-source-work-schedule-general-v4-current-v3-historical-no-keeper-no-selected-candidate-direct-b1-v2-product-general-revenue-current";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountIndexError {
@@ -714,6 +716,21 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
             CanonicalAccountKind::GeneralEconomicDomain,
         );
         projection.primary_binding = Some(value.epoch.bytes());
+        projection
+    } else if tag_version(
+        data,
+        MARKET_BINDING_ACCOUNT_TAG,
+        MARKET_BINDING_ACCOUNT_VERSION_V4,
+    ) {
+        let value =
+            MarketBindingV4::decode(data).map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::General,
+            CanonicalAccountKind::GeneralMarketBinding,
+        );
+        projection.generation = Some(value.authority().product_generation());
+        projection.primary_binding = Some(value.base().base().market.bytes());
+        projection.secondary_binding = Some(value.base().base().market_instance_v2_id.bytes());
         projection
     } else if tag_version(
         data,
@@ -2610,6 +2627,14 @@ mod current_decoder_tests {
             ]),
             Err(AccountIndexError::CanonicalDecodeRefused),
             "a truncated current MarketBindingV3 cannot fall through to V2",
+        );
+        assert_eq!(
+            decode_general(&[
+                MARKET_BINDING_ACCOUNT_TAG,
+                MARKET_BINDING_ACCOUNT_VERSION_V4,
+            ]),
+            Err(AccountIndexError::CanonicalDecodeRefused),
+            "a truncated current MarketBindingV4 cannot fall through to an older decoder",
         );
         assert_eq!(
             decode_general(&[SETTLEMENT_ROOT_ACCOUNT_TAG, SETTLEMENT_ROOT_ACCOUNT_VERSION]),

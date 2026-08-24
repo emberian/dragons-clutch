@@ -14,7 +14,7 @@ description = "Fail-closed SourceSeries operator construction with an opt-in loc
 [features]
 default = ["operator"]
 builder = ["dep:solana-keypair"]
-operator = ["dep:base64", "dep:serde", "dep:serde_json", "dep:sha2"]
+operator = ["dep:base64", "dep:serde", "dep:serde_json", "dep:sha2", "dep:solana-rent"]
 campaign = [
   "dep:clutch-sbf",
   "dep:clutch-sbf-svm-tests",
@@ -60,6 +60,7 @@ clutch-general-v2-contract = { path = "../../../crates/clutch-general-v2-contrac
 clutch-kernel = { path = "../../../crates/clutch-kernel" }
 clutch-liveness = { path = "../../../crates/clutch-liveness" }
 clutch-owner-settlement = { path = "../../../crates/clutch-owner-settlement" }
+clutch-price-measure = { path = "../../../crates/clutch-price-measure" }
 clutch-product-series = { path = "../../../crates/clutch-product-series" }
 clutch-retirement = { path = "../../../crates/clutch-retirement" }
 clutch-solana-layout = { path = "../../solana-layout" }
@@ -93,7 +94,7 @@ solana-clock = { version = "=3.1.1", features = ["serde"], optional = true }
 solana-hash = { version = "=4.5.0", optional = true }
 solana-instruction = "=3.4.1"
 solana-keypair = { version = "=3.1.2", optional = true }
-solana-rent = { version = "=4.3.0", optional = true }
+solana-rent = { version = "=4.3.0", features = ["serde"], optional = true }
 solana-signer = { version = "=3.0.1", optional = true }
 solana-system-interface = { version = "=3.2.0", features = ["bincode"], optional = true }
 solana-transaction = { version = "=4.1.6", features = ["blake3", "serde"] }

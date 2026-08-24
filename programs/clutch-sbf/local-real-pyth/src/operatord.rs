@@ -39,6 +39,10 @@ use clutch_liveness::{
     RuntimeLivenessPolicyV1, RUNTIME_LIVENESS_ACCOUNT_BYTES_V1,
     RUNTIME_LIVENESS_POLICY_BYTES_V1,
 };
+use clutch_retirement::{
+    PositionAccountV3, PositionLifecycleV3, PositionPurposeV3,
+    POSITION_V3_PDA_PREFIX,
+};
 use clutch_solana_layout::direct_market_v1::{
     DirectActionReplayAccountV1, DirectSelectionAccountV1,
 };
@@ -186,6 +190,245 @@ impl ResumableKeeperSelector {
         selections.truncate(self.maximum_actions);
         Ok(selections)
     }
+
+    /// Originate signer-side Direct reservation work from the configured
+    /// operator's exact current ordinary Position. The public key identifies
+    /// the local transaction payer; it is not an order DTO and no signature is
+    /// read or created here. Order economics remain derived later by the
+    /// hostile material constructor from the same finalized graph.
+    pub fn select_direct_operator_reservations_v2(
+        self,
+        index: &CanonicalAccountIndex,
+        commitment: RpcCommitment,
+        operator: Address,
+    ) -> Result<Vec<KeeperActionSelection>, KeeperSelectionError> {
+        self.validate()?;
+        if commitment != RpcCommitment::Finalized || operator == Address::default() {
+            return Err(KeeperSelectionError::IncompleteCanonicalHint);
+        }
+        let accounts = index.current_accounts(commitment);
+        let mut selections = Vec::new();
+        for driver in accounts.iter().copied().filter(|version| {
+            version.projection.kind == CanonicalAccountKind::DirectMarketRootV2
+        }) {
+            selections.extend(direct_operator_reservation_selections_v2(
+                self.workflow_id,
+                &accounts,
+                driver,
+                operator,
+            )?);
+        }
+        selections.sort_by(|left, right| {
+            (left.account, left.cursor.position.phase, left.dependencies.clone())
+                .cmp(&(right.account, right.cursor.position.phase, right.dependencies.clone()))
+        });
+        selections.truncate(self.maximum_actions);
+        Ok(selections)
+    }
+}
+
+fn direct_operator_reservation_selections_v2(
+    workflow_id: [u8; 32],
+    accounts: &[&IndexedAccountVersion],
+    driver: &IndexedAccountVersion,
+    operator: Address,
+) -> Result<Vec<KeeperActionSelection>, KeeperSelectionError> {
+    if driver.account.provenance.commitment != RpcCommitment::Finalized {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    let frame = DirectMarketRootAccountV2::decode(&driver.account.data)
+        .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let root = authenticate_direct_root_transition_body_v2(
+        frame.semantic_body(),
+        &DirectOperatorIndexSha,
+    )
+    .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let generation = root.generation().to_le_bytes();
+    let (expected_root, root_bump) = Address::find_program_address(
+        &[
+            b"dc:direct-market-root:v2",
+            &root.market_instance_id(),
+            &generation,
+        ],
+        &driver.account.owner,
+    );
+    let root_rent = root.root_rent();
+    let root_floor = root_rent
+        .principal_lamports
+        .checked_add(root_rent.donation_floor_lamports)
+        .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+    if driver.account.address != expected_root
+        || driver.account.executable
+        || frame.bump() != root_bump
+        || root.direct_root_account() != driver.account.address.to_bytes()
+        || driver.account.lamports < root_floor
+    {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    let replay_version = exact_direct_dependency_v2(
+        accounts,
+        driver,
+        Address::new_from_array(root.action_replay_account()),
+    )?;
+    let replay_bytes: &[u8; clutch_solana_layout::registry::DIRECT_ACTION_REPLAY_ACCOUNT_BYTES] =
+        replay_version.account.data.as_slice().try_into()
+            .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let replay_frame = DirectActionReplayAccountV1::decode(replay_bytes)
+        .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let replay = decode_direct_action_replay_body_for_transition_v2(
+        replay_frame.semantic_body(),
+        &root,
+    )
+    .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let (expected_replay, replay_bump) = Address::find_program_address(
+        &[b"dc:direct-action-replay:v1", driver.account.address.as_ref()],
+        &driver.account.owner,
+    );
+    let replay_rent = replay.rent();
+    let replay_floor = replay_rent
+        .principal_lamports
+        .checked_add(replay_rent.donation_floor_lamports)
+        .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+    if replay_version.account.address != expected_replay
+        || replay_frame.bump() != replay_bump
+        || replay_version.account.owner != driver.account.owner
+        || replay_version.account.executable
+        || replay_version.account.provenance.slot != driver.account.provenance.slot
+        || replay_version.account.lamports < replay_floor
+    {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    let state = DirectRootReplayTransitionV2::authenticate(root, replay)
+        .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let schedule = state.root().schedule();
+    let slot = driver.account.provenance.slot;
+    if state.root().phase() != DirectRootPhaseV1::Open
+        || slot < schedule.admission_opens_slot
+        || slot >= schedule.admission_closes_slot
+        || state.root().live_reservations() > 2
+    {
+        return Ok(Vec::new());
+    }
+    authenticate_direct_open_reservations_v2(accounts, driver, &state)?;
+    let purpose = [u8::from(PositionPurposeV3::General)];
+    let runtime = Address::new_from_array(state.root().general_market_runtime_account());
+    let (position_address, _) = Address::find_program_address(
+        &[
+            POSITION_V3_PDA_PREFIX,
+            &state.root().market_instance_id(),
+            operator.as_ref(),
+            &purpose,
+            runtime.as_ref(),
+        ],
+        &driver.account.owner,
+    );
+    let Some(position_version) = optional_direct_dependency_v2(
+        accounts,
+        driver,
+        position_address,
+    )? else {
+        return Ok(Vec::new());
+    };
+    let position = PositionAccountV3::decode(&position_version.account.data)
+        .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let fields = position.fields();
+    if position_version.account.owner != driver.account.owner
+        || position_version.account.executable
+        || position_version.account.provenance.slot != slot
+        || fields.lifecycle != PositionLifecycleV3::Open
+        || fields.purpose != PositionPurposeV3::General
+        || fields.market_instance_id.bytes() != state.root().market_instance_id()
+        || fields.realm_id.bytes() != state.root().realm_id()
+        || fields.collateral_policy_id.bytes() != state.root().collateral_policy_id()
+        || fields.collateral_release_id.bytes() != state.root().collateral_release_id()
+        || fields.owner.bytes() != operator.to_bytes()
+        || fields.controller.bytes() != operator.to_bytes()
+        || fields.purpose_binding_id.bytes() != runtime.to_bytes()
+        || fields.outcome_count != state.root().outcome_count()
+    {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    let replay_position = exact_direct_dependency_v2(
+        accounts,
+        driver,
+        Address::new_from_array(fields.replay_account.bytes()),
+    )?;
+    if replay_position.projection.kind != CanonicalAccountKind::ReplayV3
+        || replay_position.projection.primary_binding != Some(position_address.to_bytes())
+        || replay_position.account.owner != driver.account.owner
+        || replay_position.account.executable
+        || replay_position.account.provenance.slot != slot
+    {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+
+    let mut owner_has_reservation = false;
+    let mut cancellations = Vec::new();
+    let mut peer_dependencies = Vec::new();
+    let mut index = 0u8;
+    while index < state.root().live_reservations() {
+        let address = Address::new_from_array(
+            state.root().reservation_account(index)
+                .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?,
+        );
+        let reservation_version = exact_direct_dependency_v2(accounts, driver, address)?;
+        let bytes: &[u8; clutch_solana_layout::registry::DIRECT_RESERVATION_ACCOUNT_BYTES] =
+            reservation_version.account.data.as_slice().try_into()
+                .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+        let reservation_frame = clutch_solana_layout::direct_market_v1::DirectReservationAccountV1::decode(bytes)
+            .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+        let reservation = clutch_direct_market_runtime::codec_v2::decode_direct_reservation_body_for_transition_v2(
+            reservation_frame.semantic_body(), state.root(),
+        )
+        .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+        peer_dependencies.push(address);
+        if reservation.owner() == operator.to_bytes() {
+            owner_has_reservation = true;
+            cancellations.push((address, reservation_version));
+        }
+        index = index.checked_add(1)
+            .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+    }
+
+    let common = [driver, replay_version, position_version, replay_position];
+    let make = |action: DirectMarketAction,
+                extra: &[&IndexedAccountVersion]|
+     -> KeeperActionSelection {
+        let mut dependencies = common.to_vec();
+        dependencies.extend_from_slice(extra);
+        KeeperActionSelection {
+            account: driver.account.address,
+            release_key: driver.account.provenance.release_key.clone(),
+            action: direct_selection_action(action),
+            cursor: ResumableWorkflowCursor {
+                workflow_id,
+                lane: WorkflowLane::Candidate,
+                generation: state.root().generation(),
+                position: WorkflowPosition {
+                    phase: u16::from(action.tag()),
+                    item: state.replay().next_action_sequence(),
+                },
+                observed_state_sha256: dependency_digest(RpcCommitment::Finalized, &dependencies),
+            },
+            account_slot: slot,
+            observed_commitment: RpcCommitment::Finalized,
+            effective_commitment: RpcCommitment::Finalized,
+            branch: driver.branch.clone(),
+            dependencies: dependencies.iter().map(|item| item.account.address).collect(),
+        }
+    };
+    let mut result = Vec::new();
+    if !owner_has_reservation && state.root().live_reservations() < 2 {
+        let mut peer_versions = Vec::new();
+        for address in &peer_dependencies {
+            peer_versions.push(exact_direct_dependency_v2(accounts, driver, *address)?);
+        }
+        result.push(make(DirectMarketAction::AdmitOrder, &peer_versions));
+    }
+    for (_, reservation) in cancellations {
+        result.push(make(DirectMarketAction::CancelOrder, &[reservation]));
+    }
+    Ok(result)
 }
 
 fn dependency_versions<'a>(
@@ -250,13 +493,17 @@ fn direct_candidate_dependency_v2(
     let address = candidate.account.address.to_bytes();
     address == root.action_replay_account()
         || address == root.selection_account()
+        || (0..root.live_reservations()).any(|index| {
+            root.reservation_account(index)
+                .is_ok_and(|reservation| reservation == address)
+        })
         || address == binding.policy_account
         || address == binding.candidate_account
 }
 
-/// Derive only the currently implemented action-5/6/7 frontier from exact
-/// b1/v2+b2+b3 state. The index never treats its hint as execution authority;
-/// the material constructor hostile-reopens the same bytes and Clock again.
+/// Derive the current permissionless action-4/5/6/7 frontier from exact b1/v2
+/// state and its phase-owned children. The index hint is scheduling only; each
+/// material constructor hostile-reopens the complete snapshot and Clock.
 fn current_direct_candidate_hint_v2(
     accounts: &[&IndexedAccountVersion],
     driver: &IndexedAccountVersion,
@@ -277,9 +524,7 @@ fn current_direct_candidate_hint_v2(
     )
     .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
     let replay_address = Address::new_from_array(root.action_replay_account());
-    let selection_address = Address::new_from_array(root.selection_account());
     let replay_version = exact_direct_dependency_v2(accounts, driver, replay_address)?;
-    let selection_version = exact_direct_dependency_v2(accounts, driver, selection_address)?;
     let replay_bytes: &[u8; clutch_solana_layout::registry::DIRECT_ACTION_REPLAY_ACCOUNT_BYTES] =
         replay_version
             .account
@@ -298,6 +543,43 @@ fn current_direct_candidate_hint_v2(
         &[b"dc:direct-action-replay:v1", driver.account.address.as_ref()],
         &driver.account.owner,
     );
+    if replay_version.account.address != expected_replay
+        || replay_frame.bump() != replay_bump
+        || replay_version.account.owner != driver.account.owner
+        || replay_version.account.executable
+        || replay_version.account.provenance.slot != driver.account.provenance.slot
+    {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    let replay_rent = replay.rent();
+    let replay_floor = replay_rent
+        .principal_lamports
+        .checked_add(replay_rent.donation_floor_lamports)
+        .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+    if replay_version.account.lamports < replay_floor {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    let state = DirectRootReplayTransitionV2::authenticate(root, replay)
+        .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let slot = driver.account.provenance.slot;
+    let schedule = state.root().schedule();
+    if state.root().phase() == DirectRootPhaseV1::Open
+        && slot >= schedule.admission_closes_slot
+        && slot < schedule.submission_closes_slot
+    {
+        authenticate_direct_open_reservations_v2(accounts, driver, &state)?;
+        authenticate_direct_candidate_liveness_v2(accounts, driver, &state)?;
+        return Ok(Some(KeeperHint {
+            lane: Some(WorkflowLane::Candidate),
+            position: WorkflowPosition {
+                phase: u16::from(DirectMarketAction::FreezeBook.tag()),
+                item: state.replay().next_action_sequence(),
+            },
+            action: "freeze-direct-book",
+        }));
+    }
+    let selection_address = Address::new_from_array(state.root().selection_account());
+    let selection_version = exact_direct_dependency_v2(accounts, driver, selection_address)?;
     let selection_bytes: &[u8; clutch_solana_layout::registry::DIRECT_SELECTION_ACCOUNT_BYTES] =
         selection_version
             .account
@@ -309,34 +591,25 @@ fn current_direct_candidate_hint_v2(
         .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
     let selection = decode_direct_selection_body_for_transition_v2(
         selection_frame.semantic_body(),
-        &root,
+        state.root(),
     )
     .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
     let (expected_selection, selection_bump) = Address::find_program_address(
         &[b"dc:direct-selection:v1", driver.account.address.as_ref()],
         &driver.account.owner,
     );
-    if replay_version.account.address != expected_replay
-        || replay_frame.bump() != replay_bump
-        || selection_version.account.address != expected_selection
+    if selection_version.account.address != expected_selection
         || selection_frame.bump() != selection_bump
         || selection.account() != selection_version.account.address.to_bytes()
-        || replay_version.account.owner != driver.account.owner
         || selection_version.account.owner != driver.account.owner
-        || replay_version.account.executable
         || selection_version.account.executable
-        || replay_version.account.provenance.slot != driver.account.provenance.slot
         || selection_version.account.provenance.slot != driver.account.provenance.slot
     {
         return Err(KeeperSelectionError::IncompleteCanonicalHint);
     }
-    let replay_rent = replay.rent();
     let selection_rent = selection.rent();
-    let replay_floor = replay_rent
-        .principal_lamports
-        .checked_add(replay_rent.donation_floor_lamports)
-        .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
-    let selection_bonds = root
+    let selection_bonds = state
+        .root()
         .outstanding_candidate_bond_lamports(selection)
         .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
     let selection_floor = selection_rent
@@ -344,15 +617,9 @@ fn current_direct_candidate_hint_v2(
         .checked_add(selection_rent.donation_floor_lamports)
         .and_then(|value| value.checked_add(selection_bonds))
         .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
-    if replay_version.account.lamports < replay_floor
-        || selection_version.account.lamports < selection_floor
-    {
+    if selection_version.account.lamports < selection_floor {
         return Err(KeeperSelectionError::IncompleteCanonicalHint);
     }
-    let state = DirectRootReplayTransitionV2::authenticate(root, replay)
-        .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
-    let slot = driver.account.provenance.slot;
-    let schedule = state.root().schedule();
     let (action, phase) = match state.root().phase() {
         DirectRootPhaseV1::SubmissionOpen
             if slot < schedule.submission_closes_slot
@@ -390,6 +657,81 @@ fn current_direct_candidate_hint_v2(
         },
         action,
     }))
+}
+
+fn authenticate_direct_open_reservations_v2(
+    accounts: &[&IndexedAccountVersion],
+    driver: &IndexedAccountVersion,
+    state: &DirectRootReplayTransitionV2,
+) -> Result<(), KeeperSelectionError> {
+    let count = state.root().live_reservations();
+    if count > 2 || state.root().selection_account() != [0; 32] {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    let mut seen = [[0u8; 32]; 2];
+    let mut index = 0u8;
+    while index < count {
+        let address = state
+            .root()
+            .reservation_account(index)
+            .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+        let version = exact_direct_dependency_v2(
+            accounts,
+            driver,
+            Address::new_from_array(address),
+        )?;
+        let bytes: &[u8; clutch_solana_layout::registry::DIRECT_RESERVATION_ACCOUNT_BYTES] =
+            version
+                .account
+                .data
+                .as_slice()
+                .try_into()
+                .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+        let frame = clutch_solana_layout::direct_market_v1::DirectReservationAccountV1::decode(bytes)
+            .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+        let reservation = clutch_direct_market_runtime::codec_v2::decode_direct_reservation_body_for_transition_v2(
+            frame.semantic_body(),
+            state.root(),
+        )
+        .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+        let (expected, bump) = Address::find_program_address(
+            &[
+                b"dc:direct-reservation:v1",
+                driver.account.address.as_ref(),
+                &reservation.order_id(),
+            ],
+            &driver.account.owner,
+        );
+        let semantic = state
+            .root()
+            .child_reservation_semantic_id(reservation, &DirectOperatorIndexSha)
+            .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+        let rent = reservation.rent();
+        let floor = rent
+            .principal_lamports
+            .checked_add(rent.donation_floor_lamports)
+            .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+        if version.account.address != expected
+            || frame.bump() != bump
+            || version.account.owner != driver.account.owner
+            || version.account.executable
+            || version.account.provenance.slot != driver.account.provenance.slot
+            || version.account.lamports < floor
+            || semantic
+                != state
+                    .root()
+                    .reservation_semantic_id(index)
+                    .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?
+            || seen[..usize::from(index)].contains(&address)
+        {
+            return Err(KeeperSelectionError::IncompleteCanonicalHint);
+        }
+        seen[usize::from(index)] = address;
+        index = index
+            .checked_add(1)
+            .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+    }
+    Ok(())
 }
 
 fn authenticate_direct_candidate_liveness_v2(
@@ -471,6 +813,25 @@ fn exact_direct_dependency_v2<'a>(
     let found = matches
         .next()
         .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+    if matches.next().is_some() {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    Ok(found)
+}
+
+fn optional_direct_dependency_v2<'a>(
+    accounts: &[&'a IndexedAccountVersion],
+    driver: &IndexedAccountVersion,
+    address: Address,
+) -> Result<Option<&'a IndexedAccountVersion>, KeeperSelectionError> {
+    let mut matches = accounts.iter().copied().filter(|version| {
+        version.account.address == address
+            && version.account.provenance.release_key
+                == driver.account.provenance.release_key
+            && version.account.provenance.commitment
+                == driver.account.provenance.commitment
+    });
+    let found = matches.next();
     if matches.next().is_some() {
         return Err(KeeperSelectionError::IncompleteCanonicalHint);
     }
