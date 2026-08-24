@@ -15,7 +15,7 @@
 use core::convert::TryInto;
 
 /// Exact byte width of one immutable [`RealmV1`] record.
-pub const REALM_BYTES: usize = 144;
+pub const REALM_BYTES: usize = 112;
 /// Fixed Position bytes before its `N` eight-byte outcome balances.
 pub const POSITION_BASE_BYTES: usize = 88;
 /// Exact byte width of a two-outcome Position.
@@ -45,10 +45,9 @@ const REALM_MINT_AUTHORITY_POLICY_OFFSET: usize = 10;
 const REALM_FREEZE_AUTHORITY_POLICY_OFFSET: usize = 11;
 const REALM_RESERVED_OFFSET: usize = 12;
 const REALM_RESERVED_BYTES: usize = 4;
-const REALM_COLLATERAL_SEMANTIC_ID_OFFSET: usize = 16;
-const REALM_TOKEN_PROGRAM_OFFSET: usize = 48;
-const REALM_COLLATERAL_MINT_OFFSET: usize = 80;
-const REALM_ADAPTER_RELEASE_ID_OFFSET: usize = 112;
+const REALM_TOKEN_PROGRAM_OFFSET: usize = 16;
+const REALM_COLLATERAL_MINT_OFFSET: usize = 48;
+const REALM_ADAPTER_RELEASE_ID_OFFSET: usize = 80;
 
 const POSITION_OUTCOME_COUNT_OFFSET: usize = 10;
 const POSITION_RESERVED_OFFSET: usize = 11;
@@ -73,7 +72,7 @@ pub enum Error {
     NonCanonicalReservedBytes,
     /// An authority-policy byte was not a defined canonical value.
     UnknownAuthorityPolicy,
-    /// A required semantic identity, program, mint, Market, or owner was zero.
+    /// A required program, mint, release, Market, or owner was zero.
     ZeroIdentifier,
     /// A categorical outcome width was outside the measured profile.
     InvalidOutcomeCount,
@@ -149,8 +148,6 @@ impl FreezeAuthorityPolicy {
 /// All immutable facts required to construct a reusable collateral Realm.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RealmV1Input {
-    /// Nonzero semantic identity of the collateral atom.
-    pub collateral_semantic_id: [u8; 32],
     /// Nonzero token-program public-key bytes.
     pub token_program: [u8; 32],
     /// Nonzero collateral-mint public-key bytes.
@@ -165,13 +162,13 @@ pub struct RealmV1Input {
 
 /// Immutable, reusable collateral Realm contract.
 ///
-/// The record binds semantic collateral identity, mint, token program, adapter
-/// release, and explicit issuer-authority risk. It deliberately stores no mint
-/// decimals: protocol amounts are raw mint atoms, and the mint remains the
+/// The exact token program and Mint select the raw collateral atom. The record
+/// additionally binds adapter release and explicit issuer-authority risk. It
+/// deliberately stores neither a duplicate collateral-semantic identifier nor
+/// mint decimals: protocol amounts are raw mint atoms, and the Mint remains the
 /// semantic owner of its display precision.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RealmV1 {
-    collateral_semantic_id: [u8; 32],
     token_program: [u8; 32],
     collateral_mint: [u8; 32],
     collateral_adapter_release_id: [u8; 32],
@@ -182,12 +179,10 @@ pub struct RealmV1 {
 impl RealmV1 {
     /// Validate and construct one immutable Realm.
     pub fn new(input: RealmV1Input) -> Result<Self> {
-        require_nonzero(&input.collateral_semantic_id)?;
         require_nonzero(&input.token_program)?;
         require_nonzero(&input.collateral_mint)?;
         require_nonzero(&input.collateral_adapter_release_id)?;
         Ok(Self {
-            collateral_semantic_id: input.collateral_semantic_id,
             token_program: input.token_program,
             collateral_mint: input.collateral_mint,
             collateral_adapter_release_id: input.collateral_adapter_release_id,
@@ -209,7 +204,6 @@ impl RealmV1 {
         }
         require_zero(bytes, REALM_RESERVED_OFFSET, REALM_RESERVED_BYTES)?;
         Self::new(RealmV1Input {
-            collateral_semantic_id: read_array(bytes, REALM_COLLATERAL_SEMANTIC_ID_OFFSET)?,
             token_program: read_array(bytes, REALM_TOKEN_PROGRAM_OFFSET)?,
             collateral_mint: read_array(bytes, REALM_COLLATERAL_MINT_OFFSET)?,
             collateral_adapter_release_id: read_array(bytes, REALM_ADAPTER_RELEASE_ID_OFFSET)?,
@@ -239,11 +233,6 @@ impl RealmV1 {
             REALM_FREEZE_AUTHORITY_POLICY_OFFSET,
             &[self.freeze_authority_policy.byte()],
         );
-        put(
-            &mut output,
-            REALM_COLLATERAL_SEMANTIC_ID_OFFSET,
-            &self.collateral_semantic_id,
-        );
         put(&mut output, REALM_TOKEN_PROGRAM_OFFSET, &self.token_program);
         put(
             &mut output,
@@ -265,11 +254,6 @@ impl RealmV1 {
         }
         output.copy_from_slice(&self.to_bytes());
         Ok(())
-    }
-
-    /// Return the collateral atom's semantic content identity.
-    pub const fn collateral_semantic_id(&self) -> &[u8; 32] {
-        &self.collateral_semantic_id
     }
 
     /// Return the exact token-program public-key bytes.
@@ -559,7 +543,6 @@ mod tests {
 
     fn realm() -> Result<RealmV1> {
         RealmV1::new(RealmV1Input {
-            collateral_semantic_id: id(1),
             token_program: id(2),
             collateral_mint: id(3),
             collateral_adapter_release_id: id(4),
@@ -582,12 +565,10 @@ mod tests {
         assert_eq!(bytes.get(10), Some(&0));
         assert_eq!(bytes.get(11), Some(&1));
         assert_eq!(bytes.get(12..16), Some(&[0; 4][..]));
-        assert_eq!(bytes.get(16..48), Some(&id(1)[..]));
-        assert_eq!(bytes.get(48..80), Some(&id(2)[..]));
-        assert_eq!(bytes.get(80..112), Some(&id(3)[..]));
-        assert_eq!(bytes.get(112..144), Some(&id(4)[..]));
+        assert_eq!(bytes.get(16..48), Some(&id(2)[..]));
+        assert_eq!(bytes.get(48..80), Some(&id(3)[..]));
+        assert_eq!(bytes.get(80..112), Some(&id(4)[..]));
         assert_eq!(RealmV1::decode(&bytes), Ok(value));
-        assert_eq!(value.collateral_semantic_id(), &id(1));
         assert_eq!(value.token_program(), &id(2));
         assert_eq!(value.collateral_mint(), &id(3));
         assert_eq!(value.collateral_adapter_release_id(), &id(4));
@@ -633,7 +614,7 @@ mod tests {
                 Err(Error::UnknownAuthorityPolicy)
             );
         }
-        for offset in [16, 48, 80, 112] {
+        for offset in [16, 48, 80] {
             let mut zero = canonical;
             zero.get_mut(offset..offset + 32)
                 .ok_or(Error::InvalidLength)?

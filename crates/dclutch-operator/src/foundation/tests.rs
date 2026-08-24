@@ -88,12 +88,6 @@ fn mint_data(outcome_authorities: bool) -> Vec<u8> {
 fn expected_realm(program_id: Pubkey, mint: Pubkey, token_program: Pubkey) -> (RealmV1, Pubkey) {
     let release = select_token_release(token_program).expect("production release");
     let realm = RealmV1::new(RealmV1Input {
-        collateral_semantic_id: hashv(&[
-            COLLATERAL_SEMANTIC_DOMAIN,
-            token_program.as_ref(),
-            mint.as_ref(),
-        ])
-        .to_bytes(),
         token_program: token_program.to_bytes(),
         collateral_mint: mint.to_bytes(),
         collateral_adapter_release_id: hash(&release.to_bytes()).to_bytes(),
@@ -260,7 +254,7 @@ impl FoundFixture {
         let manifest_data = resolution_manifest(
             *policy.release_id(),
             policy_id_bytes,
-            capacity_id_bytes,
+            [23; 32],
             funding_quote,
         );
         let identity = MarketIdentity::new(
@@ -362,7 +356,10 @@ fn create_realm_is_derived_and_reports_exact_frame_and_rent() {
     );
     assert_eq!(report.debit.sponsor, state.sponsor.key);
     assert_eq!(report.debit.total_sponsor_debit, report.debit.realm_rent);
-    assert!(report.debit.realm_rent > 0);
+    assert_eq!(
+        report.debit.realm_rent,
+        Rent::default().minimum_balance(REALM_BYTES)
+    );
 }
 
 #[test]
@@ -371,12 +368,6 @@ fn present_mint_authorities_are_reported_not_hidden() {
     state.collateral_mint.data = mint_data(true);
     let release = select_token_release(state.token_program.key).expect("release");
     let realm = RealmV1::new(RealmV1Input {
-        collateral_semantic_id: hashv(&[
-            COLLATERAL_SEMANTIC_DOMAIN,
-            state.token_program.key.as_ref(),
-            state.collateral_mint.key.as_ref(),
-        ])
-        .to_bytes(),
         token_program: state.token_program.key.to_bytes(),
         collateral_mint: state.collateral_mint.key.to_bytes(),
         collateral_adapter_release_id: hash(&release.to_bytes()).to_bytes(),
@@ -452,6 +443,22 @@ fn found_market_rebuilds_identity_pdas_wire_privileges_and_debit() {
             .policy()
             .release_id()
     );
+    assert_eq!(
+        report
+            .resolution_funding
+            .entry()
+            .capacity_profile_id()
+            .to_bytes(),
+        [23; 32]
+    );
+    assert_ne!(
+        report
+            .resolution_funding
+            .entry()
+            .capacity_profile_id()
+            .to_bytes(),
+        hash(&fixture.state.capacity_profile.data).to_bytes()
+    );
     assert_eq!(report.debit.provider_fee_reimbursement, 17);
     assert_eq!(report.debit.resolution_success_bounty, 23);
     assert_eq!(
@@ -472,14 +479,14 @@ fn found_market_rebuilds_identity_pdas_wire_privileges_and_debit() {
 }
 
 #[test]
-fn founding_funding_authority_refuses_wrong_quote_config_release_and_capacity() {
+fn founding_funding_authority_refuses_wrong_quote_config_and_release() {
     let fixture = FoundFixture::new(2, 16);
     let material =
         CategoricalPythResolutionMaterialV1::decode(&fixture.state.resolution_material.data)
             .expect("material");
     let release_id = *material.policy().release_id();
     let config_id = hash(&material.policy().to_bytes()).to_bytes();
-    let capacity_id = hash(&fixture.state.capacity_profile.data).to_bytes();
+    let capability_capacity_id = [23; 32];
     let fund_rent = Rent::default().minimum_balance(FUNDING_BYTES);
 
     let mut wrong_rent = fixture.state.clone();
@@ -493,8 +500,12 @@ fn founding_funding_authority_refuses_wrong_quote_config_release_and_capacity() 
         0,
     )
     .expect("wrong rent quote remains canonical");
-    wrong_rent.capability_manifest.data =
-        resolution_manifest(release_id, config_id, capacity_id, wrong_rent_quote);
+    wrong_rent.capability_manifest.data = resolution_manifest(
+        release_id,
+        config_id,
+        capability_capacity_id,
+        wrong_rent_quote,
+    );
     let before = wrong_rent.clone();
     assert_eq!(
         build_found_market_and_fund_v1(fixture.program_id, &wrong_rent),
@@ -505,7 +516,7 @@ fn founding_funding_authority_refuses_wrong_quote_config_release_and_capacity() 
     let exact_quote = FundingQuoteV1::new(fund_rent, 0, 0, 17, 23, 0, 0).expect("exact quote");
     let mut wrong_config = fixture.state.clone();
     wrong_config.capability_manifest.data =
-        resolution_manifest(release_id, [71; 32], capacity_id, exact_quote);
+        resolution_manifest(release_id, [71; 32], capability_capacity_id, exact_quote);
     assert_eq!(
         build_found_market_and_fund_v1(fixture.program_id, &wrong_config),
         Err(FoundationError::InvalidFundingAuthority)
@@ -513,17 +524,9 @@ fn founding_funding_authority_refuses_wrong_quote_config_release_and_capacity() 
 
     let mut wrong_release = fixture.state.clone();
     wrong_release.capability_manifest.data =
-        resolution_manifest([72; 32], config_id, capacity_id, exact_quote);
+        resolution_manifest([72; 32], config_id, capability_capacity_id, exact_quote);
     assert_eq!(
         build_found_market_and_fund_v1(fixture.program_id, &wrong_release),
-        Err(FoundationError::ContentLinkMismatch)
-    );
-
-    let mut wrong_capacity = fixture.state.clone();
-    wrong_capacity.capability_manifest.data =
-        resolution_manifest(release_id, config_id, [73; 32], exact_quote);
-    assert_eq!(
-        build_found_market_and_fund_v1(fixture.program_id, &wrong_capacity),
         Err(FoundationError::ContentLinkMismatch)
     );
 
@@ -531,7 +534,7 @@ fn founding_funding_authority_refuses_wrong_quote_config_release_and_capacity() 
         .expect("zero-bounty quote remains canonical");
     let mut missing_bounty = fixture.state.clone();
     missing_bounty.capability_manifest.data =
-        resolution_manifest(release_id, config_id, capacity_id, zero_bounty);
+        resolution_manifest(release_id, config_id, capability_capacity_id, zero_bounty);
     assert_eq!(
         build_found_market_and_fund_v1(fixture.program_id, &missing_bounty),
         Err(FoundationError::InvalidFundingAuthority)

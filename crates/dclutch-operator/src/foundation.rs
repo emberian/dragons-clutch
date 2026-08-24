@@ -30,7 +30,7 @@ use dclutch_realm_contract::{
 use dclutch_token_svm::{CollateralAdapterReleaseV1, PRODUCTION_ADAPTER_RELEASES};
 use solana_program::{
     account_info::AccountInfo,
-    hash::{hash, hashv},
+    hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     sysvar::{SysvarSerialize, rent::Rent},
@@ -38,8 +38,6 @@ use solana_program::{
 use solana_sdk_ids::{bpf_loader, bpf_loader_upgradeable, native_loader, system_program, sysvar};
 
 use crate::{FUND_SEED, Finality, MARKET_SEED, Observation, ObservedAccount};
-
-const COLLATERAL_SEMANTIC_DOMAIN: &[u8] = b"dclutch/collateral-semantic/v1";
 
 /// Initial Market generation created by this foundation workflow.
 ///
@@ -251,12 +249,12 @@ pub enum FoundationError {
 
 /// Construct an unsigned `CreateRealmV1` only from one finalized observation.
 ///
-/// The collateral semantic identity is SHA-256 over a fixed domain, token
-/// program, and Mint address. The adapter release identity is selected from the
-/// compiled production catalog and hashed locally. `authority_policy` is the
-/// only caller-selected semantic input. The strict default requires both
-/// authorities absent; a present authority is admitted only by an affirmative
-/// `AdmitIssuerControl` choice and is returned verbatim in the report.
+/// The exact token program and Mint select the raw collateral atom. The adapter
+/// release identity is selected from the compiled production catalog and
+/// hashed locally. `authority_policy` is the only caller-selected semantic
+/// input. The strict default requires both authorities absent; a present
+/// authority is admitted only by an affirmative `AdmitIssuerControl` choice
+/// and is returned verbatim in the report.
 pub fn build_create_realm_v1(
     program_id: Pubkey,
     state: &CreateRealmState,
@@ -303,14 +301,7 @@ pub fn build_create_realm_v1(
     }
     let observed_mint_authority = mint.mint_authority.as_ref().copied();
     let observed_freeze_authority = mint.freeze_authority.as_ref().copied();
-    let collateral_semantic_id = hashv(&[
-        COLLATERAL_SEMANTIC_DOMAIN,
-        state.token_program.key.as_ref(),
-        state.collateral_mint.key.as_ref(),
-    ])
-    .to_bytes();
     let realm = RealmV1::new(RealmV1Input {
-        collateral_semantic_id,
         token_program: state.token_program.key.to_bytes(),
         collateral_mint: state.collateral_mint.key.to_bytes(),
         collateral_adapter_release_id: hash(&release.to_bytes()).to_bytes(),
@@ -474,11 +465,8 @@ pub fn build_found_market_and_fund_v1(
         .required_founding_entry_for_config(policy_capability_id)
         .map_err(|_| FoundationError::InvalidFundingAuthority)?;
     let funding_entry = resolution_funding.entry();
-    let capacity_capability_id = CapabilityContentId::new(capacity_id_bytes)
-        .map_err(|_| FoundationError::ContentLinkMismatch)?;
     if funding_entry.config_id() != policy_capability_id
         || funding_entry.release_id().to_bytes() != *resolution_material.policy().release_id()
-        || funding_entry.capacity_profile_id() != capacity_capability_id
     {
         return Err(FoundationError::ContentLinkMismatch);
     }
