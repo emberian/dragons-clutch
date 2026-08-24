@@ -462,6 +462,128 @@
     return Object.freeze({ cluster: raw.cluster, selected, observedReleaseCount: String(releases.length) });
   };
 
+  const compareAddressBytes = (left, right) => {
+    const leftBytes = BUILDER.decodeBase58(left, "canonical account address");
+    const rightBytes = BUILDER.decodeBase58(right, "canonical account address");
+    for (let index = 0; index < 32; index += 1) {
+      if (leftBytes[index] !== rightBytes[index]) return leftBytes[index] - rightBytes[index];
+    }
+    return 0;
+  };
+
+  const validateSessionAccount = (raw, index, configuration) => {
+    requirePlain(raw, `session.canonicalAccounts[${index}]`);
+    requirePlain(raw.decode, `session.canonicalAccounts[${index}].decode`);
+    if (raw.decode.status !== "canonical" && raw.decode.status !== "requires-context") throw new Error(`session.canonicalAccounts[${index}] has an unknown canonical codec disposition.`);
+    const value = Object.freeze({
+      address: nonzeroAddress(raw.address, `session.canonicalAccounts[${index}].address`),
+      owner: nonzeroAddress(raw.owner, `session.canonicalAccounts[${index}].owner`),
+      releaseKey: text(raw.releaseKey, `session.canonicalAccounts[${index}].releaseKey`, 320),
+      lamports: decimal(raw.lamports, `session.canonicalAccounts[${index}].lamports`).toString(),
+      rentEpoch: decimal(raw.rentEpoch, `session.canonicalAccounts[${index}].rentEpoch`).toString(),
+      dataBytes: positiveDecimal(raw.dataBytes, `session.canonicalAccounts[${index}].dataBytes`).toString(),
+      dataSha256: hash32(raw.dataSha256, `session.canonicalAccounts[${index}].dataSha256`),
+      accountTag: decimal(raw.accountTag, `session.canonicalAccounts[${index}].accountTag`, 255n).toString(),
+      accountVersion: decimal(raw.accountVersion, `session.canonicalAccounts[${index}].accountVersion`, 255n).toString(),
+      family: text(raw.family, `session.canonicalAccounts[${index}].family`, 40),
+      kind: text(raw.kind, `session.canonicalAccounts[${index}].kind`, 80),
+      decode: Object.freeze({
+        status: raw.decode.status,
+        requirement: raw.decode.status === "requires-context" ? text(raw.decode.requirement, `session.canonicalAccounts[${index}].decode.requirement`, 240) : null
+      }),
+      generation: raw.generation === null ? null : decimal(raw.generation, `session.canonicalAccounts[${index}].generation`).toString(),
+      primaryBinding: raw.primaryBinding === null ? null : hash32(raw.primaryBinding, `session.canonicalAccounts[${index}].primaryBinding`),
+      secondaryBinding: raw.secondaryBinding === null ? null : hash32(raw.secondaryBinding, `session.canonicalAccounts[${index}].secondaryBinding`)
+    });
+    if (value.owner !== configuration.release.programId || value.releaseKey !== configuration.release.releaseKey) throw new Error(`session.canonicalAccounts[${index}] is not owned by the checked release.`);
+    return value;
+  };
+
+  const validateRestartCursor = (raw, index) => {
+    requirePlain(raw, `session.restart.cursors[${index}]`);
+    requirePlain(raw.cursor, `session.restart.cursors[${index}].cursor`);
+    if (!Array.isArray(raw.dependencies) || raw.dependencies.length > 128) throw new Error(`session.restart.cursors[${index}].dependencies is invalid.`);
+    return Object.freeze({
+      account: nonzeroAddress(raw.account, `session.restart.cursors[${index}].account`),
+      releaseKey: text(raw.releaseKey, `session.restart.cursors[${index}].releaseKey`, 320),
+      action: text(raw.action, `session.restart.cursors[${index}].action`, 80),
+      dependencies: Object.freeze(raw.dependencies.map((dependency, dependencyIndex) => nonzeroAddress(dependency, `session.restart.cursors[${index}].dependencies[${dependencyIndex}]`))),
+      cursor: Object.freeze({
+        workflowId: hash32(raw.cursor.workflowId, `session.restart.cursors[${index}].cursor.workflowId`),
+        lane: text(raw.cursor.lane, `session.restart.cursors[${index}].cursor.lane`, 48),
+        generation: positiveDecimal(raw.cursor.generation, `session.restart.cursors[${index}].cursor.generation`).toString(),
+        phase: decimal(raw.cursor.phase, `session.restart.cursors[${index}].cursor.phase`, 65535n).toString(),
+        item: decimal(raw.cursor.item, `session.restart.cursors[${index}].cursor.item`).toString(),
+        observedStateSha256: hash32(raw.cursor.observedStateSha256, `session.restart.cursors[${index}].cursor.observedStateSha256`)
+      })
+    });
+  };
+
+  const validateSession = (raw, configuration) => {
+    requirePlain(raw, "read-only session manifest");
+    if (raw.schema !== "dragons-clutch/operator-read-only-session-manifest/v1"
+        || raw.status !== "ready"
+        || raw.projectionAuthority !== "untrusted-canonical-codec-projection"
+        || raw.authorityEligible !== false
+        || raw.signing !== false
+        || raw.submission !== false
+        || raw.commitment !== "finalized") throw new Error("operatord session manifest has an unknown schema or dishonest authority boundary.");
+    requirePlain(raw.transport, "session.transport");
+    requirePlain(raw.transport.rpcHttpEndpoint, "session.transport.rpcHttpEndpoint");
+    requirePlain(raw.transport.rpcWebsocketEndpoint, "session.transport.rpcWebsocketEndpoint");
+    if (text(raw.transport.clusterName, "session.transport.clusterName", 48) !== configuration.clusterName
+        || nonzeroAddress(raw.transport.genesisHash, "session.transport.genesisHash") !== configuration.genesisHash
+        || text(raw.transport.clusterKey, "session.transport.clusterKey", 128) !== configuration.clusterKey
+        || text(raw.transport.rpcHttpEndpoint.redacted, "session.transport.rpcHttpEndpoint.redacted", 512) !== configuration.rpcHttpEndpoint.redacted
+        || hash32(raw.transport.rpcHttpEndpoint.bindingSha256, "session.transport.rpcHttpEndpoint.bindingSha256") !== configuration.rpcHttpEndpoint.bindingSha256
+        || text(raw.transport.rpcWebsocketEndpoint.redacted, "session.transport.rpcWebsocketEndpoint.redacted", 512) !== configuration.rpcWebsocketEndpoint.redacted
+        || hash32(raw.transport.rpcWebsocketEndpoint.bindingSha256, "session.transport.rpcWebsocketEndpoint.bindingSha256") !== configuration.rpcWebsocketEndpoint.bindingSha256) throw new Error("session transport differs from the explicit acquisition binding.");
+    requirePlain(raw.release, "session.release");
+    const release = raw.release;
+    if (text(release.releaseKey, "session.release.releaseKey", 320) !== configuration.release.releaseKey
+        || nonzeroAddress(release.programId, "session.release.programId") !== configuration.release.programId
+        || nonzeroAddress(release.programData, "session.release.programData") !== configuration.release.programData
+        || positiveDecimal(release.deploymentSlot, "session.release.deploymentSlot").toString() !== configuration.release.deploymentSlot
+        || hash32(release.elfSha256, "session.release.elfSha256") !== configuration.release.elfSha256
+        || hash32(release.releaseManifestSha256, "session.release.releaseManifestSha256") !== configuration.release.releaseManifestSha256
+        || hash32(release.capabilityProfileId, "session.release.capabilityProfileId") !== configuration.release.capabilityProfileId
+        || text(release.sourceCommit, "session.release.sourceCommit", 64) !== configuration.release.sourceCommit
+        || text(release.decoderSet, "session.release.decoderSet", 128) !== configuration.decoderSet) throw new Error("session checked release/profile identity differs from acquisition.");
+    if (!Array.isArray(raw.canonicalAccounts) || BigInt(raw.canonicalAccounts.length) > BigInt(configuration.bounds.maximumAccounts)) throw new Error("session canonical account identities exceed the explicit browser bound.");
+    const canonicalAccounts = Object.freeze(raw.canonicalAccounts.map((accountValue, index) => validateSessionAccount(accountValue, index, configuration)));
+    if (new Set(canonicalAccounts.map((accountValue) => accountValue.address)).size !== canonicalAccounts.length) throw new Error("session canonical account identities contain duplicate addresses.");
+    for (let index = 1; index < canonicalAccounts.length; index += 1) {
+      if (compareAddressBytes(canonicalAccounts[index - 1].address, canonicalAccounts[index].address) >= 0) throw new Error("session canonical account identities are not in canonical address-byte order.");
+    }
+    requirePlain(raw.restart, "session.restart");
+    if (raw.restart.semantics !== "reload every named account through its canonical codec and reauthenticate all joins before using a cursor"
+        || raw.restart.identitySource !== "finalized onchain account bodies plus immutable checked release and RPC bindings"
+        || decimal(raw.restart.accountCount, "session.restart.accountCount").toString() !== String(canonicalAccounts.length)
+        || !Array.isArray(raw.restart.cursors)) throw new Error("session restart contract is malformed or not onchain-owned.");
+    const cursors = Object.freeze(raw.restart.cursors.map((cursor, index) => validateRestartCursor(cursor, index)));
+    if (decimal(raw.restart.cursorCount, "session.restart.cursorCount").toString() !== String(cursors.length)) throw new Error("session restart cursor count differs from its exact cursor set.");
+    const addresses = new Set(canonicalAccounts.map((accountValue) => accountValue.address));
+    for (const cursor of cursors) {
+      if (cursor.releaseKey !== configuration.release.releaseKey) throw new Error("session restart cursor names another release.");
+      if (!addresses.has(cursor.account) || cursor.dependencies.some((dependency) => !addresses.has(dependency))) throw new Error("session restart cursor names an identity not owned by a finalized canonical account decode.");
+      if (new Set(cursor.dependencies).size !== cursor.dependencies.length) throw new Error("session restart cursor repeats a dependency identity.");
+    }
+    return Object.freeze({
+      schema: raw.schema,
+      status: raw.status,
+      sessionId: hash32(raw.sessionId, "session.sessionId"),
+      projectionAuthority: raw.projectionAuthority,
+      authorityEligible: false,
+      signing: false,
+      submission: false,
+      commitment: "finalized",
+      transport: Object.freeze({ clusterName: configuration.clusterName, genesisHash: configuration.genesisHash, clusterKey: configuration.clusterKey, rpcHttpEndpoint: configuration.rpcHttpEndpoint, rpcWebsocketEndpoint: configuration.rpcWebsocketEndpoint }),
+      release: Object.freeze({ ...configuration.release, decoderSet: configuration.decoderSet }),
+      canonicalAccounts,
+      restart: Object.freeze({ semantics: raw.restart.semantics, identitySource: raw.restart.identitySource, accountCount: String(canonicalAccounts.length), cursorCount: String(cursors.length), cursors })
+    });
+  };
+
   const validateBranch = (raw, name) => {
     requirePlain(raw, name);
     if (raw.kind === "finalized-scan") return Object.freeze({ kind: raw.kind, blockhash: null });
@@ -481,6 +603,7 @@
       owner: address(raw.owner, `accounts[${index}].owner`),
       releaseKey: text(raw.releaseKey, `accounts[${index}].releaseKey`, 256),
       slot: decimal(raw.slot, `accounts[${index}].slot`).toString(),
+      receiveSequence: decimal(raw.receiveSequence, `accounts[${index}].receiveSequence`).toString(),
       observedCommitment: raw.observedCommitment === "processed" || raw.observedCommitment === "finalized" ? raw.observedCommitment : (() => { throw new Error(`accounts[${index}].observedCommitment is invalid.`); })(),
       effectiveCommitment,
       lamports: decimal(raw.lamports, `accounts[${index}].lamports`).toString(),
@@ -508,6 +631,19 @@
     const selected = all.filter((accountValue) => accountValue.releaseKey === configuration.release.releaseKey);
     if (selected.some((accountValue) => accountValue.owner !== configuration.release.programId)) throw new Error("A selected-release account owner differs from the selected program.");
     return Object.freeze({ selected: Object.freeze(selected), ignoredOtherReleases: String(all.length - selected.length) });
+  };
+
+  const joinSessionAccounts = (session, finalizedResponse) => {
+    if (session.canonicalAccounts.length !== finalizedResponse.selected.length) throw new Error("session account identity count differs from the finalized canonical account endpoint.");
+    const finalized = new Map(finalizedResponse.selected.map((accountValue) => [accountValue.address, accountValue]));
+    for (const identity of session.canonicalAccounts) {
+      const accountValue = finalized.get(identity.address);
+      if (!accountValue || accountValue.branch.kind !== "finalized-scan") throw new Error("session identity is absent from the finalized canonical account endpoint.");
+      for (const field of ["owner", "releaseKey", "lamports", "rentEpoch", "dataBytes", "dataSha256", "accountTag", "accountVersion", "family", "kind", "generation", "primaryBinding", "secondaryBinding"]) {
+        if (accountValue[field] !== identity[field]) throw new Error(`session identity ${identity.address} differs from finalized canonical account field ${field}.`);
+      }
+      if (accountValue.decode.status !== identity.decode.status || accountValue.decode.requirement !== identity.decode.requirement) throw new Error(`session identity ${identity.address} differs from its finalized canonical decode disposition.`);
+    }
   };
 
   const validateForks = (raw) => {
@@ -577,7 +713,7 @@
     return "other";
   };
 
-  const deriveSnapshot = (configuration, health, acquisition, releases, accountResponse, keeperActions, forks, remainingResponseBytes) => {
+  const deriveSnapshot = (configuration, session, health, acquisition, releases, accountResponse, keeperActions, forks, remainingResponseBytes) => {
     const accounts = accountResponse.selected;
     const candidateSlots = forks.nodes.map((node) => BigInt(node.slot)).concat(accounts.map((accountValue) => BigInt(accountValue.slot)));
     if (forks.finalizedRoot) candidateSlots.push(BigInt(forks.finalizedRoot.slot));
@@ -644,6 +780,7 @@
     const snapshot = {
       schema: "dragons-clutch/operatord-chain-projection/v1",
       authority: "untrusted-projection",
+      session,
       configuration: redactedConfiguration(configuration),
       health,
       acquisition,
@@ -684,12 +821,17 @@
     const reader = new BoundedGetReader(target, fetchFunction);
     const acquisition = validateAcquisition(await reader.get("/v1/acquisition"), target);
     const configuration = acquisition.configuration;
+    const session = validateSession(await reader.get("/v1/session"), configuration);
     const healthRaw = await reader.get("/v1/health");
     const health = validateHealth(healthRaw, configuration);
     const releases = validateReleaseResponse(await reader.get("/v1/releases"), configuration);
     const accounts = validateAccountsResponse(await reader.get(`/v1/accounts?commitment=${configuration.commitment}`), configuration);
+    const finalizedConfiguration = configuration.commitment === "finalized" ? configuration : Object.freeze({ ...configuration, commitment: "finalized" });
+    const finalizedAccounts = configuration.commitment === "finalized" ? accounts : validateAccountsResponse(await reader.get("/v1/accounts?commitment=finalized"), finalizedConfiguration);
+    joinSessionAccounts(session, finalizedAccounts);
     const keeper = validateKeeper(await reader.get(`/v1/keeper/next?commitment=${configuration.commitment}`), configuration);
     const forks = validateForks(await reader.get("/v1/forks"));
+    const endSession = validateSession(await reader.get("/v1/session"), configuration);
     const endAcquisition = validateAcquisition(await reader.get("/v1/acquisition"), target);
     if (endAcquisition.configuration.clusterKey !== configuration.clusterKey
         || endAcquisition.configuration.release.releaseKey !== configuration.release.releaseKey
@@ -702,8 +844,9 @@
           || endAcquisition.processedTransport.rollbackEpoch !== acquisition.processedTransport.rollbackEpoch)) {
       throw new Error("Processed transport generation or rollback epoch changed during acquisition; reacquire a coherent non-final projection.");
     }
-    return deriveSnapshot(configuration, health, endAcquisition, releases, accounts, keeper, forks, reader.remaining.toString());
+    if (endSession.sessionId !== session.sessionId) throw new Error("Finalized canonical session identity changed during acquisition; reacquire instead of persisting a mixed restart view.");
+    return deriveSnapshot(configuration, endSession, health, endAcquisition, releases, accounts, keeper, forks, reader.remaining.toString());
   };
 
-  root.GlassChainClient = Object.freeze({ validateConfiguration, redactedConfiguration, acquire, deriveSnapshot, groupOrder: GROUP_ORDER, groupLabels: GROUP_LABELS });
+  root.GlassChainClient = Object.freeze({ validateConfiguration, redactedConfiguration, validateSession, acquire, deriveSnapshot, groupOrder: GROUP_ORDER, groupLabels: GROUP_LABELS });
 })(typeof globalThis === "object" ? globalThis : this);

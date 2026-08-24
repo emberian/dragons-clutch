@@ -9,4 +9,5 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
+clutch-product-series = { path = "../clutch-product-series" }
 clutch-structured-claim = { path = "../clutch-structured-claim" }

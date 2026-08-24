@@ -1,24 +1,38 @@
 # `clutch-structured-claim-runtime-contract`
 
-This crate is the allocation-free runtime contract between the pure
-`clutch-structured-claim` economics and a future small SBF/Token-2022 adapter.
-It freezes the exact 384-byte descriptor, reconstructs native-claim and
-deployment-bound product identity from authenticated basis/deployment facts,
-and stages the one required atomic Position cash/native-Egg transfer without
-touching global supply or Hoard collateral.
+This crate is the allocation-free current lifecycle contract between the pure
+`clutch-structured-claim` product algebra and the small SBF/Token-2022 adapters. It
+keeps the historical 384-byte descriptor v1 decode-only, freezes the sole
+future 449-byte descriptor v2, and owns the exact 656-byte Series-scoped
+Structured root plus fixed-depth wrapper-recipe membership. The descriptor
+reconstructs native-claim and deployment/root/recipe-bound product identity
+from authenticated Product, basis, and deployment facts. Current lifecycle
+plans stage exact HoardV2, ClaimLedgerV3, PositionV3, and purpose-Replay V3
+successors; they do not manufacture a parallel Market or transfer authority.
+
+The first inline recipe-set profile carries at most sixteen ordered leaves so
+its fixed proof fits the existing instruction packet. That is a wire-profile
+capacity, not an economic limit: a future paged set owner can take a fresh
+version while retaining the same recipe identities.
+
+The root's terminal receipt is derived from its complete final body with only
+the recursive receipt field omitted. It therefore commits the exact Product
+immutable Product link binding/configuration, Wrapper admission receipt, most
+recently observed monotone Product sequence, immutable Series/root binding, admission and terminal
+transcripts, exhaustive counts, rent principal, donation residue, and bump;
+an arbitrary caller receipt cannot become Product terminal evidence.
 
 It does not parse Solana accounts, derive PDAs, hash, invoke CPI, or claim that
 structured claims are live. The SBF adapter remains responsible for exact
 owner/PDA/ProgramData/slot/Token-2022 authentication, Replay account binding,
 transaction execution, post-delta checks, and rollback.
 
-The canonical and full-vector wrap/unwind planners join actual mint supply and
-holder balance to the pure economic machine, stage exact Market and
-Position/Replay poststates, and return the precise `MintToChecked` or
-`BurnChecked` quantity. Full routes include the authoritative base complete-set
-Merge/Split poststate rather than simulating it as a transfer. The runtime also
-stages beneficiary-free surplus compaction and exact resolved terminal-lot
-redemption. These routes never spend reserved Position cash.
+The superseded `MarketLedger` transition model has been physically removed.
+Current wrap/unwind, compaction, redemption, and retirement instead consume the
+exact HoardV2, ClaimLedgerV3, PositionV3, ReplayV3, ResolutionV5, Product, and
+collateral authorities owned by their respective contracts. Shared projections
+in this crate are hostile observations or terminal-close facts, never a second
+Market or supply owner.
 
 Retirement now requires zero actual mint supply, empty canonical backing, and
 an authenticated successor base-Position close receipt. The descriptor and
@@ -28,7 +42,9 @@ mint or redirect its locked rent.
 
 The family-local wire allocates eight strict actions: descriptor creation,
 canonical/full wrap, canonical/full unwind, beneficiary-free donation
-compaction, exact terminal redemption, and retirement. Every quantity route
+compaction, exact terminal redemption, and retirement. Canonical actions 2/4
+are historical decode-only refusals; current source/account contracts exist
+only for actions 1/3/5/6/7/8. Every quantity payload
 binds the wrapper product, user/vault generations, and both Replay sequences;
 trailing, truncated, zero-quantity, and unknown-action payloads have no
 interpretation.
@@ -44,9 +60,8 @@ The descriptor contains no mutable supply shadow. Actual wrapper supply must
 always come from the authenticated extension-free Token-2022 mint. Direct
 burns create beneficiary-free surplus backing, never a fee or treasury claim.
 
-The crate currently proposes descriptor coordinate `0x88/1`; the earlier
-`0x7f/1` proposal was withdrawn after the global Dealer/Series/General block
-was allocated through `0x87`. This is not a live
-allocation until the central collision registry adopts the exact coordinate
-alongside the SBF capability that consumes it; allocation alone will not make
-the structured-claim family executable.
+Descriptor coordinate `0x88/1` is permanently historical and decode-only;
+`0x88/2` is the sole future descriptor. The mutable Structured market root is
+`0xb7/1`; `0xad/1` belongs to Product SeriesMarketLink and `0xaf/1` belongs to
+the Dealer facility-lifetime Product Series-obligation binding. Central allocation alone does not make any
+Structured route executable.

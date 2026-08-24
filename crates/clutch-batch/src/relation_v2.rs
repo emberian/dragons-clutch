@@ -259,6 +259,60 @@ impl EconomicBookV2 {
     }
 }
 
+/// Constant-space validator for one canonical owner-blind book stream.
+///
+/// This is the sole streaming form of [`EconomicBookV2::validate`]. Adapters
+/// that retain authenticated page bytes can validate one decoded row at a
+/// time without first materializing the fixed 64-row book on the SBF stack.
+/// The accepted order and error semantics are identical to the owned book.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EconomicBookStreamValidatorV2 {
+    domain: EconomicDomainV2,
+    previous_order_id: [u8; 32],
+    len: u8,
+}
+
+impl EconomicBookStreamValidatorV2 {
+    /// Begin one empty canonical stream under the exact RelationV2 domain.
+    pub fn new(domain: EconomicDomainV2) -> Result<Self, EconomicErrorV2> {
+        domain.validate()?;
+        Ok(Self {
+            domain,
+            previous_order_id: [0; 32],
+            len: 0,
+        })
+    }
+
+    /// Validate and append one live row in canonical identity order.
+    pub fn push(&mut self, order: EconomicOrderV2) -> Result<(), EconomicErrorV2> {
+        if usize::from(self.len) >= MAX_ORDERS {
+            return Err(EconomicErrorV2::TooManyOrders);
+        }
+        validate_live_order_shape_v2(
+            &self.domain,
+            &order,
+            self.len,
+            self.previous_order_id,
+        )?;
+        self.previous_order_id = order.order_id;
+        self.len = self
+            .len
+            .checked_add(1)
+            .ok_or(EconomicErrorV2::ArithmeticOverflow)?;
+        Ok(())
+    }
+
+    /// Number of live rows accepted so far.
+    pub const fn len(self) -> u8 {
+        self.len
+    }
+
+    /// Whether no live row has been accepted.
+    pub const fn is_empty(self) -> bool {
+        self.len == 0
+    }
+}
+
 /// Validate one live order using the exact shape rules shared by the bounded
 /// and resumable RelationV2 paths.
 pub(crate) fn validate_live_order_shape_v2(
@@ -667,30 +721,32 @@ pub(crate) fn validate_live_order_fill_v2(
     }
     let fill = candidate.fills[at];
     let aon_bit = mask_bit(candidate.honored_aon_mask, at);
-    validate_live_order_fill_coordinates_v2(
-        domain,
-        price,
-        order,
-        order_index,
-        fill,
-        aon_bit,
-    )
+    validate_live_order_fill_fields_v2(domain, price, order, order_index, fill, aon_bit)
 }
 
-fn validate_live_order_fill_coordinates_v2(
+/// Validate one streamed live fill under the exact bounded RelationV2 rules.
+///
+/// This is the no-allocation projection used by the bounded candidate
+/// verifier. It owns no alternate arithmetic: the bounded path extracts these
+/// two scalar fields and delegates here. Callers must separately authenticate
+/// the complete ordered fill stream and its inactive tail.
+pub fn validate_live_order_fill_fields_v2(
     domain: &EconomicDomainV2,
     price: &PricePreconditionV2,
     order: &EconomicOrderV2,
     order_index: u8,
     fill: u64,
-    aon_bit: bool,
+    honored_aon: bool,
 ) -> Result<[u64; MAX_OUTCOMES], EconomicErrorV2> {
+    if usize::from(order_index) >= MAX_ORDERS {
+        return Err(EconomicErrorV2::TooManyOrders);
+    }
     if fill > order.quantity {
         return Err(EconomicErrorV2::FillExceedsQuantity { order: order_index });
     }
     match order.partial_policy {
         PartialPolicy::Allow => {
-            if aon_bit {
+            if honored_aon {
                 return Err(EconomicErrorV2::AonMaskNotApplicable { order: order_index });
             }
             if fill != 0 && fill < order.minimum_fill {
@@ -701,7 +757,7 @@ fn validate_live_order_fill_coordinates_v2(
             if fill != 0 && fill != order.quantity {
                 return Err(EconomicErrorV2::AllOrNoneViolation { order: order_index });
             }
-            if aon_bit != (fill != 0) {
+            if honored_aon != (fill != 0) {
                 return Err(EconomicErrorV2::AonMaskMismatch { order: order_index });
             }
         }
@@ -760,7 +816,7 @@ pub(crate) fn verify_two_order_economic_candidate_v2(
     while order_index < 2 {
         let bounded = bounded_index(order_index)?;
         let aon_bit = ((honored_aon_mask >> bounded) & 1) != 0;
-        let legs = validate_live_order_fill_coordinates_v2(
+        let legs = validate_live_order_fill_fields_v2(
             domain,
             price,
             &orders[order_index],

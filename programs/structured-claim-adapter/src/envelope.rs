@@ -2,9 +2,13 @@
 
 use crate::runtime_contract::{
     decode_structured_claim_payload_v1, StructuredClaimActionV1, StructuredClaimPayloadV1,
-    STRUCTURED_CLAIM_FAMILY_TAG, STRUCTURED_CLAIM_FAMILY_VERSION,
+    CREATE_DESCRIPTOR_PAYLOAD_BYTES, STRUCTURED_CLAIM_FAMILY_TAG,
+    STRUCTURED_CLAIM_FAMILY_VERSION,
 };
-use crate::{Error, Result};
+use crate::{
+    Error, Result, IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1,
+    STRUCTURED_CURRENT_RELEASE_CONTRACT_V1,
+};
 
 /// All family-local actions allocated by the canonical runtime contract.
 pub const RESERVED_STRUCTURED_CLAIM_ACTION_MASK: u16 =
@@ -13,10 +17,15 @@ pub const RESERVED_STRUCTURED_CLAIM_ACTION_MASK: u16 =
 
 /// Runtime actions admitted by this adapter artifact.
 ///
-/// This is deliberately empty. Changing it is an activation event and must be
-/// atomic with central capability-profile membership, dispatcher routing,
-/// linked ELF evidence, and release-manifest identity.
+/// The default is empty. The separately deployed wrapper feature is also empty
+/// until every current authority join is present in one executable frame.
+#[cfg(not(feature = "live-current-wrapper"))]
 pub const ENABLED_STRUCTURED_CLAIM_ACTION_MASK: u16 = 0;
+/// Wrapper build seam. No action is admitted until the current Product,
+/// deployment-release, and collateral-route joins are executable together.
+#[cfg(feature = "live-current-wrapper")]
+pub const ENABLED_STRUCTURED_CLAIM_ACTION_MASK: u16 =
+    STRUCTURED_CURRENT_RELEASE_CONTRACT_V1.admitted_action_mask;
 
 const _: () = assert!(StructuredClaimActionV1::LAST_TAG < 16);
 const _: () = assert!(
@@ -26,9 +35,19 @@ const _: () = assert!(
     STRUCTURED_CLAIM_FAMILY_VERSION
         == clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_VERSION
 );
+#[cfg(not(feature = "live-current-wrapper"))]
+const _: () = assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK == 0);
+#[cfg(feature = "live-current-wrapper")]
 const _: () = assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK == 0);
 const _: () =
     assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK & !RESERVED_STRUCTURED_CLAIM_ACTION_MASK == 0);
+const _: () = assert!(
+    ENABLED_STRUCTURED_CLAIM_ACTION_MASK & !IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1 == 0
+);
+const _: () = assert!(
+    CREATE_DESCRIPTOR_PAYLOAD_BYTES
+        <= clutch_solana_layout::registry::MAX_EXTENSION_PAYLOAD_BYTES
+);
 
 /// Borrowed exact structured-claim family envelope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

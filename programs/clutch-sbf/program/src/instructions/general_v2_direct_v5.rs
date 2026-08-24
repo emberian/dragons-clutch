@@ -29,7 +29,7 @@ use clutch_general_v2_runtime::{
     prepare_consume_direct_receipt_eggs_v5, project_owner_settlement_account_v5_readonly,
     ConsumeDirectReceiptEggsInputV5, ConsumeDirectReceiptEggsPlanV5,
     DirectEggDeliveryEndpointInputV5, OwnerSettlementAccountProjectionV5,
-    OwnerSettlementAccountViewV5, PositionAccountInputV3, SettlementTraversalProjectionV4,
+    OwnerSettlementAccountViewV5, PositionAccountInputV3, SettlementTraversalAccessV5,
 };
 use clutch_retirement::{PositionPurposeV3, POSITION_V3_BYTES};
 use clutch_solana_layout::order_page_v5::{verify_page_v5, ORDER_PAGE_V5_BYTES};
@@ -198,7 +198,7 @@ fn endpoint_page_index(frame: DirectEndpointAccountFrameV5<'_, '_>) -> Outcome<u
 fn authenticate_endpoint_v5(
     program_id: &Pubkey,
     root: &AuthenticatedGeneralSettlementRootV1,
-    traversal: &SettlementTraversalProjectionV4,
+    traversal: &dyn SettlementTraversalAccessV5,
     collateral: BoundCollateralProfileV2,
     market_binding: &AccountInfo<'_>,
     market_runtime: &AccountInfo<'_>,
@@ -258,7 +258,7 @@ fn authenticate_endpoint_v5(
             && page.market.0 == root.root().market().bytes()
             && page.epoch.0 == root.root().epoch().bytes()
             && page.order_set.0 == root.root().order_set().bytes()
-            && traversal.order_projection().page_account(page.page_index)
+            && traversal.projection().page_account(page.page_index)
                 == Some(id(selected_page.key)),
         ClutchError::MismatchedState,
     )?;
@@ -517,7 +517,7 @@ fn consume_direct_receipt_eggs_v5(
 fn compose_and_apply_direct_delivery_v5(
     program_id: &Pubkey,
     request: contract::ConsumeDirectReceiptEggsPayloadV1,
-    authenticated: AuthenticatedRootSettlementTraversalV5<'_>,
+    authenticated: AuthenticatedRootSettlementTraversalV5<'_, '_>,
     traversal_frame: SettlementTraversalAccountFrameV5<'_, '_>,
     frame: DirectDeliveryAccountFrameV5<'_, '_>,
     buyer_page: &AccountInfo<'_>,

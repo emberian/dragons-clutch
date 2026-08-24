@@ -76,6 +76,26 @@ create a Market. Those routes remain blocked on SourcePlane V3, authenticated
 registry selectors, full-width Instance identity, and mutable component-owned
 funding state.
 
+The distinct `non-production-structured-custody-lab` feature compiles the staged
+current Structured custody owners, including full-vector wrap/unwind, donated
+surplus compaction, terminal redemption, and descriptor retirement. It does
+not admit a Structured tuple: the central and wrapper action masks are both
+exactly zero, so every Structured request refuses before account loading.
+The wrapper and base consume the same exact account-count contract for current
+actions 1/3/5/6/7/8; the separately authenticated release contract admits none
+of those implemented sources.
+
+The staged handlers hostile-decode the current Realm collateral chain, Product
+lineage, Hoard V2, ClaimLedger V3, Position V3 and Replay V3 owners, descriptor
+root, wrapper/base Token-2022 deployments, FundingTerms-selected neutral sink,
+and exact collateral release receipts. Value-moving compositions preserve the
+named rent-principal and donation boundaries and bind their hostile-reloaded
+poststates. These sources are implementation checkpoints, not an admitted or
+deployable market surface.
+
+No build, measurement, SVM, or validator evidence exists yet for this staged
+feature.
+
 ```sh
 # one-time source/build preparation; subsequent builds are offline
 tools/agave-loopback-validator/fetch-source.sh

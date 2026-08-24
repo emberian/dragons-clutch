@@ -111,6 +111,9 @@
     reset(target);
     const release = snapshot.release.observed;
     target.append(
+      definition("Read-only session", snapshot.session.sessionId),
+      definition("Restart identity source", snapshot.session.restart.identitySource),
+      definition("Finalized restart accounts / cursors", `${snapshot.session.restart.accountCount} / ${snapshot.session.restart.cursorCount}`),
       definition("Cluster identity", snapshot.configuration.clusterKey),
       definition("Canonical decoder set", snapshot.configuration.decoderSet),
       definition("Program", release.programId),
@@ -131,6 +134,7 @@
     const finality = snapshot.finality;
     target.append(
       metric("Commitment", finality.requestedCommitment, finality.requestedCommitment === "finalized" ? "good" : "warn"),
+      metric("Canonical session", short(snapshot.session.sessionId), "good"),
       metric("Authority eligibility", "false — projection only", "warn"),
       metric("Projected tip slot", finality.projectedTipSlot),
       metric("Finalized root", finality.finalizedRootSlot || "not observed", finality.finalizedRootSlot ? "good" : "warn"),
@@ -229,7 +233,7 @@
     const stale = snapshot.finality.staleAccountCount !== "0";
     status.className = `status-panel ${unsafe ? "bad" : stale || !snapshot.acquisition.bootstrapComplete ? "incomplete" : "ready"}`;
     const processedWarning = snapshot.finality.requestedCommitment === "processed" ? " This view is non-final, rollbackable, never authority-eligible, and cannot construct keeper workflows." : "";
-    status.textContent = `Loaded ${snapshot.accountCounts.selectedRelease} selected-release accounts at ${snapshot.finality.requestedCommitment} commitment. This is an untrusted operatord projection, not onchain authority.${processedWarning}${unsafe ? " Dead or unidentified fork rows are present." : ""}${stale ? " The configured staleness policy is exceeded." : ""}`;
+    status.textContent = `Attached read-only session ${short(snapshot.session.sessionId)} with ${snapshot.session.restart.accountCount} finalized canonical restart identities and ${snapshot.session.restart.cursorCount} onchain-derived cursors. Loaded ${snapshot.accountCounts.selectedRelease} selected-release accounts at ${snapshot.finality.requestedCommitment} commitment. This is an untrusted operatord projection, not onchain authority.${processedWarning}${unsafe ? " Dead or unidentified fork rows are present." : ""}${stale ? " The configured staleness policy is exceeded." : ""}`;
     renderRelease(snapshot);
     renderMetrics(snapshot);
     renderCapabilities(snapshot);

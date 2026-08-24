@@ -1,13 +1,17 @@
 //! Strict family-local instruction payload contract.
 
-use crate::{put, take, Amount, Error, Result, MAX_OUTCOMES};
+use crate::{
+    put, take, Amount, Error, Result, WrapperRecipeMembershipV1,
+    WRAPPER_RECIPE_MEMBERSHIP_BYTES_V1, MAX_OUTCOMES,
+};
 
 /// Reserved structured-claim extension family.
 pub const STRUCTURED_CLAIM_FAMILY_TAG: u8 = 75;
 /// Structured-claim extension family version.
 pub const STRUCTURED_CLAIM_FAMILY_VERSION: u8 = 1;
 /// Exact CreateDescriptor payload width.
-pub const CREATE_DESCRIPTOR_PAYLOAD_BYTES: usize = 32 + 32 + (MAX_OUTCOMES * 8);
+pub const CREATE_DESCRIPTOR_PAYLOAD_BYTES: usize =
+    32 + 32 + 32 + 32 + (MAX_OUTCOMES * 8) + WRAPPER_RECIPE_MEMBERSHIP_BYTES_V1;
 /// Exact supply-sensitive wrapper mutation payload width.
 pub const WRAPPER_QUANTITY_PAYLOAD_BYTES: usize = 32 + (5 * 8);
 /// Exact vault-only mutation payload width.
@@ -58,7 +62,16 @@ impl StructuredClaimActionV1 {
 
     /// Return the exact family-local wire byte.
     pub const fn tag(self) -> u8 {
-        self as u8
+        match self {
+            Self::CreateDescriptor => 1,
+            Self::WrapCanonical => 2,
+            Self::WrapFull => 3,
+            Self::UnwrapCanonical => 4,
+            Self::UnwrapFull => 5,
+            Self::CompactDonation => 6,
+            Self::RedeemTerminal => 7,
+            Self::RetireDescriptor => 8,
+        }
     }
 }
 
@@ -70,20 +83,32 @@ pub struct CreateDescriptorPayloadV1 {
     pub native_claim_id: [u8; 32],
     /// SHA-256 of the deployment-bound wrapper-product preimage.
     pub wrapper_product_id: [u8; 32],
+    /// Exact Series-link-scoped Structured root binding identity.
+    pub structured_root_id: [u8; 32],
+    /// Exact recipe identity authenticated within the Product-owned set ID.
+    pub wrapper_recipe_id: [u8; 32],
     /// Primitive GCD-one native-Egg coefficients.
     pub primitive: [Amount; MAX_OUTCOMES],
+    /// Fixed-depth membership witness for the authenticated recipe set.
+    pub recipe_membership: WrapperRecipeMembershipV1,
 }
 
 impl CreateDescriptorPayloadV1 {
     /// Encode the exact payload body.
     pub fn encode(&self) -> Result<[u8; CREATE_DESCRIPTOR_PAYLOAD_BYTES]> {
-        if self.native_claim_id == [0; 32] || self.wrapper_product_id == [0; 32] {
+        if self.native_claim_id == [0; 32]
+            || self.wrapper_product_id == [0; 32]
+            || self.structured_root_id == [0; 32]
+            || self.wrapper_recipe_id == [0; 32]
+        {
             return Err(Error::InvalidIdentity);
         }
         let mut output = [0_u8; CREATE_DESCRIPTOR_PAYLOAD_BYTES];
         let mut cursor = 0_usize;
         put(&mut output, &mut cursor, &self.native_claim_id)?;
         put(&mut output, &mut cursor, &self.wrapper_product_id)?;
+        put(&mut output, &mut cursor, &self.structured_root_id)?;
+        put(&mut output, &mut cursor, &self.wrapper_recipe_id)?;
         let mut index = 0_usize;
         while index < MAX_OUTCOMES {
             put(
@@ -93,6 +118,11 @@ impl CreateDescriptorPayloadV1 {
             )?;
             index += 1;
         }
+        put(
+            &mut output,
+            &mut cursor,
+            &self.recipe_membership.encode()?,
+        )?;
         if cursor != CREATE_DESCRIPTOR_PAYLOAD_BYTES {
             return Err(Error::InvalidLength);
         }
@@ -106,16 +136,26 @@ impl CreateDescriptorPayloadV1 {
         let mut cursor = 0_usize;
         let native_claim_id = read_key(input, &mut cursor)?;
         let wrapper_product_id = read_key(input, &mut cursor)?;
+        let structured_root_id = read_key(input, &mut cursor)?;
+        let wrapper_recipe_id = read_key(input, &mut cursor)?;
         let mut primitive = [0_u64; MAX_OUTCOMES];
         let mut index = 0_usize;
         while index < MAX_OUTCOMES {
             primitive[index] = read_u64(input, &mut cursor)?;
             index += 1;
         }
+        let recipe_membership = WrapperRecipeMembershipV1::decode(take(
+            input,
+            &mut cursor,
+            WRAPPER_RECIPE_MEMBERSHIP_BYTES_V1,
+        )?)?;
         let value = Self {
             native_claim_id,
             wrapper_product_id,
+            structured_root_id,
+            wrapper_recipe_id,
             primitive,
+            recipe_membership,
         };
         let _ = value.encode()?;
         Ok(value)
