@@ -40,7 +40,7 @@ pub const PROFILE_LABEL: &str =
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-dealer-self-hosted-liquidity-refund-bind-lapse-lab/v7";
+    "dragons-clutch/capability-profile/non-production-dealer-current-collateral-family-lab/v8-unreachable";
 /// Non-production General V2 successor laboratory. All action tuples are
 /// fail-closed until the Product admission, counted settlement, and retirement
 /// chain is reachable under one exact current account family.
@@ -86,8 +86,8 @@ pub const PROFILE_ID: [u8; 32] = [
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0x15, 0xbe, 0x8b, 0x99, 0x15, 0x35, 0x10, 0x24, 0x80, 0xa3, 0x41, 0xed, 0xdf, 0x86, 0x35, 0x0d,
-    0xb0, 0xff, 0xcc, 0x67, 0x5a, 0xc8, 0x88, 0x8b, 0x4c, 0xf2, 0x9b, 0xed, 0x21, 0x5b, 0x7e, 0xbb,
+    0x46, 0x2e, 0x03, 0x43, 0x12, 0x86, 0xfd, 0xea, 0xd0, 0xda, 0xc9, 0x16, 0xa9, 0x14, 0xb3, 0xa8,
+    0x24, 0x76, 0x6f, 0xab, 0x1d, 0x9a, 0x16, 0x9b, 0xd4, 0xdd, 0x9b, 0xf7, 0x33, 0x7d, 0xa4, 0x97,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
@@ -239,25 +239,11 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
 ))]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[];
 
-/// The laboratory enables typed Dealer catalog publication plus exact facility
-/// initialization, bounded LP funding, activation/recovery/refund, and bounded
-/// Epoch binding/lapse.
+/// The Dealer laboratory keeps every allocated action unreachable until the
+/// current Realm-selected collateral authority and complete facility lifecycle
+/// are composed in every value-bearing route.
 #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
-pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
-    (76, 1, 1),
-    (76, 1, 2),
-    (76, 1, 3),
-    (76, 1, 4),
-    (76, 1, 5),
-    (76, 1, 6),
-    (76, 1, 7),
-    (76, 1, 8),
-    (76, 1, 9),
-    (76, 1, 10),
-    (76, 1, 11),
-    (76, 1, 12),
-    (76, 1, 13),
-];
+pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[];
 
 /// The General successor laboratory has no executable action tuple until its
 /// full current-state producer and retirement closure is complete.
@@ -397,13 +383,7 @@ mod tests {
                         expected_allocated,
                         "{family_tag}/{family_version}/{local_action}"
                     );
-                    let dealer_enabled = DEALER_POLICY_CATALOG_LAB
-                        && family_tag == clutch_solana_layout::registry::DEALER_FAMILY_TAG
-                        && family_version == clutch_solana_layout::registry::DEALER_FAMILY_VERSION
-                        && ((clutch_solana_layout::registry::DealerPolicyAction::FIRST_TAG
-                            ..=clutch_solana_layout::registry::DealerPolicyAction::LAST_TAG)
-                            .contains(&local_action)
-                            || matches!(local_action, 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12));
+                    let dealer_enabled = false;
                     let general_enabled = false;
                     let source_runtime_enabled = cfg!(feature = "profile-full")
                         && !DEALER_POLICY_CATALOG_LAB
@@ -423,9 +403,24 @@ mod tests {
         }
         assert_eq!(
             ENABLED_EXTENSION_ACTIONS.is_empty(),
-            !(DEALER_POLICY_CATALOG_LAB
-                || (cfg!(feature = "profile-full") && !GENERAL_V2_IDENTITY_LAB))
+            !(cfg!(feature = "profile-full")
+                && !DEALER_POLICY_CATALOG_LAB
+                && !GENERAL_V2_IDENTITY_LAB)
         );
+    }
+
+    #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
+    #[test]
+    fn dealer_lab_keeps_every_allocated_action_unreachable() {
+        for action in clutch_solana_layout::registry::DealerPolicyAction::FIRST_TAG
+            ..=clutch_solana_layout::registry::DealerFacilityAction::LAST_TAG
+        {
+            assert!(!extension_intent_action_enabled(
+                clutch_solana_layout::registry::DEALER_FAMILY_TAG,
+                clutch_solana_layout::registry::DEALER_FAMILY_VERSION,
+                action,
+            ));
+        }
     }
 
     #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
