@@ -16,16 +16,26 @@ use crate::instructions::genesis::{
 };
 use crate::seeds;
 use clutch_direct_market_runtime::lifecycle_v2::DirectFamilyTerminalPlanV2;
+use clutch_direct_market_runtime::liveness_v1::{
+    authenticate_direct_candidate_liveness_v1,
+    direct_global_liveness_bundle_commitment_v1,
+    AuthenticatedDirectCandidateLivenessAuthorityV1,
+    AuthenticatedDirectCandidateLivenessV1, DirectCandidateLivenessBindingV1,
+    DirectCandidateWorkScheduleV1, DirectGlobalLivenessBundleStreamV1,
+    DirectGlobalLivenessCompartmentV1,
+};
 use clutch_liveness::runtime_v1::{
     PresentFundingSourceV1, PresentFundingV1, RuntimeCompartmentAdmissionV1,
-    RuntimeCompartmentIdentityV1, RuntimeCompartmentKindV1, RuntimeCompartmentV1,
-    RuntimeLivenessPolicyV1, RUNTIME_COMPARTMENT_COUNT_V1, RUNTIME_COMPARTMENT_ORDER_V1,
+    RuntimeCompartmentIdentityV1, RuntimeCompartmentKindV1,
+    RuntimeCompartmentPhaseV1, RuntimeCompartmentV1, RuntimeLivenessPolicyV1,
+    RUNTIME_COMPARTMENT_COUNT_V1, RUNTIME_COMPARTMENT_ORDER_V1,
     RUNTIME_LIVENESS_ACCOUNT_BYTES_V1, RUNTIME_LIVENESS_POLICY_BYTES_V1,
 };
 use clutch_liveness::Id as LivenessId;
 use clutch_product_series::{
-    ContentId, DirectGlobalLivenessCapitalizationV2, DirectGlobalLivenessPhaseV2,
-    DirectGlobalLivenessV2, DirectWorkQuoteV1, FixedCodec,
+    ContentId, DirectGlobalLivenessAllocationV2,
+    DirectGlobalLivenessCapitalizationV2, DirectGlobalLivenessPhaseV2,
+    DirectGlobalLivenessV2, DirectWorkQuoteV1, FixedCodec, MarketFamilyV1,
     MarketInstanceV2Id, ProductDirectGlobalLivenessAuthorityV2,
     DIRECT_GLOBAL_LIVENESS_ALLOCATION_CALL_WIDTH_V2,
     DIRECT_GLOBAL_LIVENESS_BINDING_DOMAIN_V2,
@@ -41,10 +51,13 @@ use solana_pubkey::Pubkey;
 
 use super::product_market_foundation_current::
     AuthenticatedProductMarketFounderFoundationPreauthorizationV3;
+use super::product_market_family_admission_v3_current::
+    AuthenticatedProductFamilyAdmissionPlanV3;
 use super::product_series_current::{
     AuthenticatedMarketLifecycleRootV2, AuthenticatedProductSeriesActivationCompletionV4,
 };
 use super::product_series::physical_v4::AuthenticatedSeriesPhysicalFounderV4;
+use super::direct_market_v2::DirectRuntimeSha256V2;
 
 const PRODUCT_DIRECT_GLOBAL_LIFECYCLE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-direct-global-lifecycle/v2";
@@ -56,6 +69,10 @@ const PRODUCT_DIRECT_FOUNDER_ACTIVATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-direct-global-founder-activation/v2";
 const PRODUCT_DIRECT_CANDIDATE_RETIREMENT_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-direct-candidate-retirement/v2\0";
+const PRODUCT_DIRECT_CANDIDATE_ALLOCATION_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/product-direct-candidate-allocation/v3\0";
+const PRODUCT_DIRECT_CANDIDATE_ALLOCATION_POSTWRITE_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/product-direct-candidate-allocation-postwrite/v3\0";
 
 /// One small row result retained while seven accounts are created serially.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -151,6 +168,500 @@ impl AuthenticatedProductDirectGlobalLivenessAccountV2 {
         self.state.work_quote()
     }
     pub(crate) fn into_state(self) -> DirectGlobalLivenessV2 { self.state }
+}
+
+/// Allocation-free hostile stream over the seven Product-owned runtime rows.
+#[derive(Clone, Copy, Debug)]
+struct AuthenticatedDirectGlobalLivenessStreamV3 {
+    rows: [DirectGlobalLivenessCompartmentV1; RUNTIME_COMPARTMENT_COUNT_V1],
+}
+
+impl DirectGlobalLivenessBundleStreamV1 for AuthenticatedDirectGlobalLivenessStreamV3 {
+    fn compartment(
+        &self,
+        kind: RuntimeCompartmentKindV1,
+    ) -> Result<
+        DirectGlobalLivenessCompartmentV1,
+        clutch_direct_market_runtime::DirectMarketErrorV1,
+    > {
+        let row = self.rows[kind.index()];
+        if row.kind != kind {
+            return Err(clutch_direct_market_runtime::DirectMarketErrorV1::MismatchedBinding);
+        }
+        Ok(row)
+    }
+}
+
+struct ExactManifestCandidateAllocationAuthorityV3 {
+    state_before: ContentId,
+    allocation: DirectGlobalLivenessAllocationV2,
+}
+
+impl ProductDirectGlobalLivenessAuthorityV2
+    for ExactManifestCandidateAllocationAuthorityV3
+{
+    fn authenticate_candidate_allocation(
+        &self,
+        state: &DirectGlobalLivenessV2,
+        allocation: DirectGlobalLivenessAllocationV2,
+    ) -> clutch_product_series::Result<()> {
+        if state.semantic_id()? != self.state_before || allocation != self.allocation {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+}
+
+struct ExactDirectCandidateAllocationAuthorityV3 {
+    binding: DirectCandidateLivenessBindingV1,
+    market_instance_id: [u8; 32],
+    generation: u64,
+    direct_root_account: [u8; 32],
+    action_replay_account: [u8; 32],
+    family_admission_sequence: u32,
+    realm_id: [u8; 32],
+    neutral_lamport_sink: [u8; 32],
+    candidate_lifecycle_policy_id: [u8; 32],
+    candidate_liveness_policy_id: [u8; 32],
+}
+
+impl AuthenticatedDirectCandidateLivenessAuthorityV1
+    for ExactDirectCandidateAllocationAuthorityV3
+{
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_candidate_allocation(
+        &self,
+        binding: DirectCandidateLivenessBindingV1,
+        market_instance_id: [u8; 32],
+        generation: u64,
+        direct_root_account: [u8; 32],
+        action_replay_account: [u8; 32],
+        family_admission_sequence: u32,
+        realm_id: [u8; 32],
+        neutral_lamport_sink: [u8; 32],
+        candidate_lifecycle_policy_id: [u8; 32],
+        candidate_liveness_policy_id: [u8; 32],
+    ) -> Result<(), clutch_direct_market_runtime::DirectMarketErrorV1> {
+        if binding != self.binding
+            || market_instance_id != self.market_instance_id
+            || generation != self.generation
+            || direct_root_account != self.direct_root_account
+            || action_replay_account != self.action_replay_account
+            || family_admission_sequence != self.family_admission_sequence
+            || realm_id != self.realm_id
+            || neutral_lamport_sink != self.neutral_lamport_sink
+            || candidate_lifecycle_policy_id != self.candidate_lifecycle_policy_id
+            || candidate_liveness_policy_id != self.candidate_liveness_policy_id
+        {
+            return Err(clutch_direct_market_runtime::DirectMarketErrorV1::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+}
+
+/// Move-only proof that Product allocated the exact next Candidate range,
+/// wrote and hostile-reopened `0xba/v2`, and streamed the unchanged seven-row
+/// physical bundle into Direct's compact candidate authority.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedProductDirectCandidateAllocationV3 {
+    id: ContentId,
+    manifest_account: Pubkey,
+    manifest_state_before_id: ContentId,
+    manifest_state_after_id: ContentId,
+    manifest_data_before_id: ContentId,
+    manifest_data_after_id: ContentId,
+    manifest_authentication_before_id: ContentId,
+    manifest_authentication_after_id: ContentId,
+    allocation_receipt_id: ContentId,
+    candidate: AuthenticatedDirectCandidateLivenessV1,
+}
+
+impl AuthenticatedProductDirectCandidateAllocationV3 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn manifest_account(&self) -> Pubkey { self.manifest_account }
+    pub(crate) const fn manifest_state_after_id(&self) -> ContentId {
+        self.manifest_state_after_id
+    }
+    pub(crate) const fn manifest_data_after_id(&self) -> ContentId {
+        self.manifest_data_after_id
+    }
+    pub(crate) const fn manifest_authentication_after_id(&self) -> ContentId {
+        self.manifest_authentication_after_id
+    }
+    pub(crate) const fn allocation_receipt_id(&self) -> ContentId {
+        self.allocation_receipt_id
+    }
+    pub(crate) const fn candidate_binding(&self) -> DirectCandidateLivenessBindingV1 {
+        self.candidate.binding()
+    }
+}
+
+/// Allocate Product's exact next Candidate range for one prepared Direct
+/// family admission. The manifest is the only write; all seven runtime rows
+/// are hostile-authenticated, read-only inputs in canonical order.
+#[inline(never)]
+pub(crate) fn allocate_product_direct_candidate_v3(
+    program_id: &Pubkey,
+    manifest_account: &AccountInfo<'_>,
+    compartments: &[AccountInfo<'_>],
+    family_plan: &AuthenticatedProductFamilyAdmissionPlanV3,
+) -> Outcome<AuthenticatedProductDirectCandidateAllocationV3> {
+    require(
+        compartments.len() == RUNTIME_COMPARTMENT_COUNT_V1
+            && family_plan.family() == MarketFamilyV1::Direct,
+        ClutchError::AccountCount,
+    )?;
+    require_distinct(compartments)?;
+    let authenticated = authenticate_product_direct_global_liveness_v2(
+        program_id,
+        manifest_account,
+        true,
+    )?;
+    let state = authenticated.state();
+    let market_instance_id = state.market_instance_id();
+    let generation = state.generation();
+    let direct_root_account = family_plan.child_account();
+    let (direct_action_replay_account, _) = seeds::direct_action_replay_v1_pda(
+        program_id,
+        &direct_root_account,
+    );
+    let work_quote = state.work_quote();
+    let work_schedule = DirectCandidateWorkScheduleV1 {
+        freeze_book_lamports: work_quote.freeze_book_lamports,
+        begin_verification_lamports: work_quote.begin_verification_lamports,
+        verify_candidate_lamports: work_quote.verify_candidate_lamports,
+        finalize_selection_lamports: work_quote.finalize_selection_lamports,
+        economic_terminal_lamports: work_quote.economic_terminal_lamports,
+        retire_terminal_lamports: work_quote.retire_terminal_lamports,
+        retained_candidate_bond_lamports: work_quote.retained_candidate_bond_lamports,
+    };
+    let work_schedule_id = ContentId::from_bytes(
+        work_schedule
+            .semantic_id(
+                market_instance_id.bytes(),
+                generation,
+                direct_root_account.to_bytes(),
+                family_plan.family_admission_sequence(),
+                work_quote.candidate_lifecycle_policy_id.bytes(),
+                work_quote.candidate_liveness_policy_id.bytes(),
+                &DirectRuntimeSha256V2,
+            )
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+    );
+    let state_before_id = state
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let first_call_ordinal = state
+        .next_candidate_call_ordinal()
+        .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let reserved_calls = state.allocation_call_width();
+    let reserved_work_lamports = work_schedule
+        .reserved_work_lamports()
+        .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        state.phase() == DirectGlobalLivenessPhaseV2::Active
+            && state.lifecycle_root_account().bytes()
+                == family_plan.root_account().to_bytes()
+            && state.activated_market_binding_id() == family_plan.root_binding_id()
+            && market_instance_id == family_plan.market_instance_id()
+            && generation == family_plan.generation()
+            && state.admitted_allocations() == family_plan.family_admission_sequence()
+            && state.policy_id() == work_quote.candidate_liveness_policy_id
+            && manifest_account.key != &direct_root_account
+            && manifest_account.key != &direct_action_replay_account,
+        ClutchError::MismatchedState,
+    )?;
+    let allocation_receipt_id = ContentId::from_bytes(solana_sha256_hasher::hashv(&[
+        PRODUCT_DIRECT_CANDIDATE_ALLOCATION_DOMAIN_V3,
+        program_id.as_ref(),
+        manifest_account.key.as_ref(),
+        &authenticated.data_id().bytes(),
+        &authenticated.authentication_id().bytes(),
+        &state_before_id.bytes(),
+        &family_plan.id().bytes(),
+        &family_plan.root_binding_id().bytes(),
+        &family_plan.root_semantic_before_id().bytes(),
+        &family_plan.root_semantic_after_id().bytes(),
+        direct_root_account.as_ref(),
+        direct_action_replay_account.as_ref(),
+        &family_plan.family_admission_sequence().to_le_bytes(),
+        &first_call_ordinal.to_le_bytes(),
+        &reserved_calls.to_le_bytes(),
+        &reserved_work_lamports.to_le_bytes(),
+        &work_schedule_id.bytes(),
+    ]).to_bytes());
+    require(!allocation_receipt_id.is_zero(), ClutchError::MismatchedState)?;
+    let allocation = DirectGlobalLivenessAllocationV2 {
+        direct_root_account: ContentId::from_bytes(direct_root_account.to_bytes()),
+        direct_action_replay_account: ContentId::from_bytes(
+            direct_action_replay_account.to_bytes(),
+        ),
+        family_admission_sequence: family_plan.family_admission_sequence(),
+        first_call_ordinal,
+        reserved_calls,
+        reserved_work_lamports,
+        work_schedule_id,
+        allocation_receipt_id,
+    };
+
+    let stream = authenticate_direct_global_liveness_stream_v3(
+        program_id,
+        state,
+        manifest_account,
+        compartments,
+    )?;
+    let candidate = stream.rows[RuntimeCompartmentKindV1::Candidate.index()];
+    require(
+        candidate.quote_schedule_id == work_quote.id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            .bytes()
+            && work_schedule
+                .maximum_lamports_per_call()
+                .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?
+                <= decode_runtime_compartment_v3(
+                    program_id,
+                    state,
+                    manifest_account,
+                    &compartments[RuntimeCompartmentKindV1::Candidate.index()],
+                    RuntimeCompartmentKindV1::Candidate,
+                )?
+                .maximum_lamports_per_call,
+        ClutchError::MismatchedState,
+    )?;
+    let global_bundle_commitment_id = ContentId::from_bytes(
+        direct_global_liveness_bundle_commitment_v1(
+            &stream,
+            state.policy_account().bytes(),
+            state.policy_id().bytes(),
+            state.policy_data_id().bytes(),
+            state.global_lifecycle_id().bytes(),
+            state.global_bundle_binding_id().bytes(),
+            state.global_capitalization_receipt_id().bytes(),
+            &DirectRuntimeSha256V2,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+    );
+    let binding = DirectCandidateLivenessBindingV1 {
+        policy_account: state.policy_account().bytes(),
+        policy_data_id: state.policy_data_id().bytes(),
+        global_lifecycle_id: state.global_lifecycle_id().bytes(),
+        global_bundle_binding_id: state.global_bundle_binding_id().bytes(),
+        global_capitalization_receipt_id: state.global_capitalization_receipt_id().bytes(),
+        global_bundle_commitment_id: global_bundle_commitment_id.bytes(),
+        candidate_account: candidate.account_id,
+        candidate_data_id: candidate.account_data_id,
+        candidate_semantic_owner: candidate.semantic_owner,
+        candidate_quote_schedule_id: candidate.quote_schedule_id,
+        candidate_receipt_program_id: candidate.receipt_program_id,
+        candidate_generation: candidate.generation,
+        first_call_ordinal,
+        reserved_calls,
+        reserved_work_lamports,
+        allocation_receipt_id: allocation_receipt_id.bytes(),
+        work_schedule,
+        work_schedule_id: work_schedule_id.bytes(),
+    };
+    let direct_authority = ExactDirectCandidateAllocationAuthorityV3 {
+        binding,
+        market_instance_id: market_instance_id.bytes(),
+        generation,
+        direct_root_account: direct_root_account.to_bytes(),
+        action_replay_account: direct_action_replay_account.to_bytes(),
+        family_admission_sequence: family_plan.family_admission_sequence(),
+        realm_id: state.realm_id().bytes(),
+        neutral_lamport_sink: state.neutral_lamport_sink().bytes(),
+        candidate_lifecycle_policy_id: work_quote.candidate_lifecycle_policy_id.bytes(),
+        candidate_liveness_policy_id: work_quote.candidate_liveness_policy_id.bytes(),
+    };
+    let candidate_token = authenticate_direct_candidate_liveness_v1(
+        &direct_authority,
+        &stream,
+        binding,
+        market_instance_id.bytes(),
+        generation,
+        direct_root_account.to_bytes(),
+        direct_action_replay_account.to_bytes(),
+        family_plan.family_admission_sequence(),
+        state.realm_id().bytes(),
+        state.neutral_lamport_sink().bytes(),
+        work_quote.candidate_lifecycle_policy_id.bytes(),
+        work_quote.candidate_liveness_policy_id.bytes(),
+        &DirectRuntimeSha256V2,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let manifest_data_before_id = authenticated.data_id();
+    let manifest_authentication_before_id = authenticated.authentication_id();
+    let observed_lamports = authenticated.observed_lamports();
+    let stored_bump = authenticated.stored_bump;
+    let next = authenticated
+        .into_state()
+        .allocate_candidate(
+            &ExactManifestCandidateAllocationAuthorityV3 {
+                state_before: state_before_id,
+                allocation,
+            },
+            allocation,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let state_after_id = next
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    write_manifest_state_v2(
+        manifest_account,
+        &next,
+        next.manifest_rent_principal_lamports(),
+        stored_bump,
+    )?;
+    let reopened = authenticate_expected_product_direct_global_liveness_postwrite_v2(
+        program_id,
+        manifest_account,
+        state_after_id,
+        observed_lamports,
+    )?;
+    let id = ContentId::from_bytes(solana_sha256_hasher::hashv(&[
+        PRODUCT_DIRECT_CANDIDATE_ALLOCATION_POSTWRITE_DOMAIN_V3,
+        program_id.as_ref(),
+        manifest_account.key.as_ref(),
+        &state_before_id.bytes(),
+        &state_after_id.bytes(),
+        &manifest_data_before_id.bytes(),
+        &reopened.data_id.bytes(),
+        &manifest_authentication_before_id.bytes(),
+        &reopened.authentication_id.bytes(),
+        &allocation_receipt_id.bytes(),
+        &global_bundle_commitment_id.bytes(),
+        &work_schedule_id.bytes(),
+    ]).to_bytes());
+    require(
+        !id.is_zero()
+            && state_before_id != state_after_id
+            && manifest_data_before_id != reopened.data_id
+            && manifest_authentication_before_id != reopened.authentication_id,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedProductDirectCandidateAllocationV3 {
+        id,
+        manifest_account: *manifest_account.key,
+        manifest_state_before_id: state_before_id,
+        manifest_state_after_id: state_after_id,
+        manifest_data_before_id,
+        manifest_data_after_id: reopened.data_id,
+        manifest_authentication_before_id,
+        manifest_authentication_after_id: reopened.authentication_id,
+        allocation_receipt_id,
+        candidate: candidate_token,
+    })
+}
+
+#[inline(never)]
+fn authenticate_direct_global_liveness_stream_v3(
+    program_id: &Pubkey,
+    state: &DirectGlobalLivenessV2,
+    manifest_account: &AccountInfo<'_>,
+    compartments: &[AccountInfo<'_>],
+) -> Outcome<AuthenticatedDirectGlobalLivenessStreamV3> {
+    let first = authenticate_direct_global_liveness_row_v3(
+        program_id,
+        state,
+        manifest_account,
+        &compartments[0],
+        RUNTIME_COMPARTMENT_ORDER_V1[0],
+    )?;
+    let mut rows = [first; RUNTIME_COMPARTMENT_COUNT_V1];
+    let mut index = 1usize;
+    while index < RUNTIME_COMPARTMENT_COUNT_V1 {
+        rows[index] = authenticate_direct_global_liveness_row_v3(
+            program_id,
+            state,
+            manifest_account,
+            &compartments[index],
+            RUNTIME_COMPARTMENT_ORDER_V1[index],
+        )?;
+        index += 1;
+    }
+    Ok(AuthenticatedDirectGlobalLivenessStreamV3 { rows })
+}
+
+#[inline(never)]
+fn decode_runtime_compartment_v3(
+    program_id: &Pubkey,
+    state: &DirectGlobalLivenessV2,
+    manifest_account: &AccountInfo<'_>,
+    account: &AccountInfo<'_>,
+    kind: RuntimeCompartmentKindV1,
+) -> Outcome<RuntimeCompartmentV1> {
+    require(
+        account.owner == program_id
+            && !account.is_writable
+            && !account.is_signer
+            && !account.executable
+            && account.data_len() == RUNTIME_LIVENESS_ACCOUNT_BYTES_V1
+            && state
+                .compartment_account(kind.index())
+                .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?
+                .bytes()
+                == account.key.to_bytes()
+            && account.key != manifest_account.key,
+        ClutchError::MismatchedState,
+    )?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let row = RuntimeCompartmentV1::decode(&data)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        row.validate().is_ok()
+            && row.kind == kind
+            && row.phase == RuntimeCompartmentPhaseV1::Active
+            && row.identity.account_id.bytes() == account.key.to_bytes()
+            && row.identity.owner.bytes() == manifest_account.key.to_bytes()
+            && row.identity.policy_id.bytes() == state.policy_id().bytes()
+            && row.identity.lifecycle_id.bytes() == state.global_lifecycle_id().bytes()
+            && row.identity.payer.bytes() == state.principal_refund_owner().bytes()
+            && row.identity.neutral_sink.bytes() == state.neutral_lamport_sink().bytes()
+            && row.identity.generation == state.generation()
+            && row.receipt_program_id.bytes() == program_id.to_bytes()
+            && row.expected_account_balance_lamports()
+                .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?
+                == account.lamports(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(row)
+}
+
+#[inline(never)]
+fn authenticate_direct_global_liveness_row_v3(
+    program_id: &Pubkey,
+    state: &DirectGlobalLivenessV2,
+    manifest_account: &AccountInfo<'_>,
+    account: &AccountInfo<'_>,
+    kind: RuntimeCompartmentKindV1,
+) -> Outcome<DirectGlobalLivenessCompartmentV1> {
+    let row = decode_runtime_compartment_v3(
+        program_id,
+        state,
+        manifest_account,
+        account,
+        kind,
+    )?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let account_data_id = solana_sha256_hasher::hashv(&[&data[..]]).to_bytes();
+    drop(data);
+    Ok(DirectGlobalLivenessCompartmentV1 {
+        kind,
+        account_id: account.key.to_bytes(),
+        account_data_id,
+        capitalization_receipt_id: state
+            .compartment_capitalization_receipt_id(kind.index())
+            .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?
+            .bytes(),
+        semantic_owner: row.identity.owner.bytes(),
+        quote_schedule_id: row.quote_schedule_id.bytes(),
+        receipt_program_id: row.receipt_program_id.bytes(),
+        generation: row.identity.generation,
+    })
 }
 
 /// Move-only proof that the sole live Direct allocation was retired by the
