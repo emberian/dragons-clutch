@@ -6,10 +6,13 @@ Its `profile-successor-chain-attached-dev` identity admits exactly actions
 the exact checked manifest and hostile loader boundary. It is not a production
 or deployment claim.
 
-The create route uses an exact 34-account frame. The base side
+The create route uses an exact 35-account frame. The base side
 authenticates the Product SeriesRegistryV3, SeriesMarketLinkV2, current BundleV6,
-ReleaseV2/ProfileV4, and current AttachmentV5, verifies
-fixed-depth recipe-set membership, atomically records Product's first Wrapper
+ReleaseV2/ProfileV4, current AttachmentV5, and the read-only content-addressed
+WrapperRecipeSetV1 artifact selected by that attachment. It hostile-decodes the
+complete fixed-layout recipe set, recomputes its set identity, and requires the
+payload recipe and fixed-depth witness to be the exact published leaf before it
+atomically records Product's first Wrapper
 admission, funds the
 `0xb7/1` Structured root with explicit refundable principal/donation
 separation, and founds the empty PositionV3/Replay pair. The wrapper snapshots
@@ -26,7 +29,7 @@ The withdrawn action-2/4 current codecs have been deleted. The wrapper rejects
 those reserved registry tags as unknown before payload or account decoding.
 
 The wrapper and base import one exact source/account contract from the adapter:
-action 1 uses 34 accounts, actions 3/5 use 32, action 6 uses 32, action 7 uses
+action 1 uses 35 accounts, actions 3/5 use 32, action 6 uses 32, action 7 uses
 33, and action 8 uses 33. That contract's implemented-source mask is distinct
 from its checked-release admission mask; the named development profile requires
 them to be exactly equal.

@@ -30,7 +30,7 @@ use clutch_structured_claim_adapter::runtime_contract::{
     StructuredClaimPayloadV1, StructuredClaimRuntimeAddressesV1,
     StructuredClaimReplayExtensionStateV1, StructuredClaimReplayExtensionV1,
     StructuredMarketRootV1, WrapperQuantityPayloadV1, VaultMutationPayloadV1,
-    WrapperRecipeHashV1, DESCRIPTOR_ACCOUNT_BYTES, DESCRIPTOR_ACCOUNT_TAG,
+    WrapperRecipeHashV1, WrapperRecipeSetV1, WrapperRecipeV1, DESCRIPTOR_ACCOUNT_BYTES, DESCRIPTOR_ACCOUNT_TAG,
     DESCRIPTOR_ACCOUNT_VERSION, STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES,
     WRAPPER_MINT_ACCOUNT_BYTES, structured_descriptor_admission_receipt_v1,
     structured_owner_release_id_v2,
@@ -103,11 +103,12 @@ const CREATE_STRUCTURED_ROOT: usize = 25;
 const CREATE_SERIES_LINK: usize = 26;
 const CREATE_COMPILER_BUNDLE: usize = 27;
 const CREATE_ATTACHMENT: usize = 28;
-const CREATE_SERIES_REGISTRY_V3: usize = 29;
-const CREATE_REGISTRY_RELEASE_V2: usize = 30;
-const CREATE_CAPABILITY_PROFILE_V4: usize = 31;
-const CREATE_WRAPPER_RELEASE_V2: usize = 32;
-const CREATE_TOKEN_RELEASE_V2: usize = 33;
+const CREATE_RECIPE_SET: usize = 29;
+const CREATE_SERIES_REGISTRY_V3: usize = 30;
+const CREATE_REGISTRY_RELEASE_V2: usize = 31;
+const CREATE_CAPABILITY_PROFILE_V4: usize = 32;
+const CREATE_WRAPPER_RELEASE_V2: usize = 33;
+const CREATE_TOKEN_RELEASE_V2: usize = 34;
 const STRUCTURED_ROOT_SEED_V1: &[u8] = b"dc:structured-root:v1";
 const COMPACTION_TOKEN_IDENTITY_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-claim/compaction-token-identity/v1\0";
@@ -328,6 +329,7 @@ fn create(
     if native_claim_id != payload.native_claim_id || product_id != payload.wrapper_product_id {
         return Err(WrapperError::Identity);
     }
+    authenticate_create_recipe_set(accounts, payload, binding.outcome_count)?;
     let addresses = derive_addresses(program_id, product_id);
     descriptor.descriptor_bump = addresses.descriptor.1;
     descriptor.mint_bump = addresses.mint.1;
@@ -1225,25 +1227,20 @@ fn validate_create_accounts(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -
     if accounts.len() != CREATE_ACCOUNT_COUNT {
         return Err(WrapperError::Accounts);
     }
-    let signer = [
-        false, true, false, false, false, false, false, false, false, false, false, false, false,
-        false, false, false, false, false, false, false, false, false, false, false, false, false,
-        false, false, false, false, false, false, false, false,
-    ];
-    let mut writable = [
-        false, true, false, false, false, false, false, false, false, false, false, true, true,
-        true, true, false, false, false, false, false, false, false, false, false, false, true,
-        false, false, false, false, false, false, false, false,
-    ];
+    let mut signer = [false; CREATE_ACCOUNT_COUNT];
+    signer[PAYER] = true;
+    let mut writable = [false; CREATE_ACCOUNT_COUNT];
+    for index in [PAYER, CREATE_POSITION, CREATE_REPLAY, CREATE_DESCRIPTOR, CREATE_MINT, CREATE_STRUCTURED_ROOT] {
+        writable[index] = true;
+    }
     writable[CREATE_SERIES_LINK] = structured_root_requires_product_write(
         accounts[CREATE_STRUCTURED_ROOT].owner,
         accounts[CREATE_STRUCTURED_ROOT].data_len(),
     );
-    let executable = [
-        false, false, true, false, false, false, false, true, false, false, false, false, false,
-        false, false, true, false, true, false, true, false, false, false, false, false, false,
-        false, false, false, false, false, false, false, false,
-    ];
+    let mut executable = [false; CREATE_ACCOUNT_COUNT];
+    for index in [SYSTEM, CREATE_COLLATERAL_TOKEN, CREATE_WRAPPER_PROGRAM, CREATE_BASE_PROGRAM, CREATE_TOKEN_PROGRAM] {
+        executable[index] = true;
+    }
     validate_privileges(accounts, &signer, &writable, &executable)?;
     if *accounts[CREATE_WRAPPER_PROGRAM].key != *program_id
         || accounts[CREATE_DESCRIPTOR].key == accounts[CREATE_MINT].key
@@ -1269,6 +1266,55 @@ fn validate_create_accounts(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -
             right += 1;
         }
         left += 1;
+    }
+    Ok(())
+}
+
+fn authenticate_create_recipe_set(
+    accounts: &[AccountInfo<'_>],
+    payload: CreateDescriptorPayloadV1,
+    outcome_count: u8,
+) -> Result<()> {
+    if accounts[CREATE_RECIPE_SET].owner != accounts[CREATE_BASE_PROGRAM].key
+        || accounts[CREATE_RECIPE_SET].is_signer
+        || accounts[CREATE_RECIPE_SET].is_writable
+        || accounts[CREATE_RECIPE_SET].executable
+    {
+        return Err(WrapperError::Accounts);
+    }
+    let attachment_data = accounts[CREATE_ATTACHMENT]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let attachment = SeriesAttachmentPlanV5::decode(&attachment_data)
+        .map_err(|_| WrapperError::Identity)?;
+    drop(attachment_data);
+    let recipe_data = accounts[CREATE_RECIPE_SET]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let recipe_set = WrapperRecipeSetV1::decode(&recipe_data, &RuntimeSha)
+        .map_err(|_| WrapperError::Identity)?;
+    drop(recipe_data);
+    let recipe_set_id = recipe_set.id(&RuntimeSha).map_err(|_| WrapperError::Identity)?;
+    let (recipe, recipe_id, membership) = recipe_set
+        .member(payload.recipe_membership.leaf_index, &RuntimeSha)
+        .map_err(|_| WrapperError::Identity)?;
+    let expected_recipe = WrapperRecipeV1 {
+        native_claim_id: payload.native_claim_id,
+        outcome_count,
+        primitive: payload.primitive,
+    };
+    if recipe_set_id != attachment.wrapper_recipe_set_id.bytes()
+        || recipe != expected_recipe
+        || recipe_id != payload.wrapper_recipe_id
+        || membership != payload.recipe_membership
+        || *accounts[CREATE_RECIPE_SET].key
+            != product_artifact_pda(
+                accounts[CREATE_BASE_PROGRAM].key,
+                ArtifactKind::WrapperRecipeSetV1.byte(),
+                recipe_set_id,
+            )
+    {
+        return Err(WrapperError::Identity);
     }
     Ok(())
 }
@@ -3166,6 +3212,7 @@ fn decode_structured_product_artifacts(
 )> {
     if accounts[CREATE_COMPILER_BUNDLE].owner != accounts[CREATE_BASE_PROGRAM].key
         || accounts[CREATE_ATTACHMENT].owner != accounts[CREATE_BASE_PROGRAM].key
+        || accounts[CREATE_RECIPE_SET].owner != accounts[CREATE_BASE_PROGRAM].key
         || accounts[CREATE_SERIES_REGISTRY_V3].owner != accounts[CREATE_BASE_PROGRAM].key
         || accounts[CREATE_CAPABILITY_PROFILE_V4].owner != accounts[CREATE_BASE_PROGRAM].key
         || accounts[CREATE_SERIES_REGISTRY_V3].data_len() != SERIES_REGISTRY_ACCOUNT_BYTES_V3

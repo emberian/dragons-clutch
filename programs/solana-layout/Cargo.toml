@@ -40,6 +40,7 @@ clutch-collateral-adapter-v2 = { path = "../../crates/clutch-collateral-adapter-
 clutch-product-series = { path = "../../crates/clutch-product-series" }
 clutch-source-plane-v3-adapter = { path = "../../crates/clutch-source-plane-v3-adapter" }
 clutch-source-plane-v3-runtime = { path = "../../crates/clutch-source-plane-v3-runtime" }
+clutch-structured-claim-runtime-contract = { path = "../../crates/clutch-structured-claim-runtime-contract" }
 
 [target.'cfg(target_os = "solana")'.dependencies]
 # Safe wrapper around Solana's native SHA-256 syscall.  Order-page verification

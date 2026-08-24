@@ -44,6 +44,10 @@ use clutch_solana_layout::artifact::{
 #[cfg(target_os = "solana")]
 use clutch_solana_layout::{CodecError, TermsAccount, HASH_BYTES};
 use clutch_solana_layout::{Hash32, Intent};
+#[cfg(target_os = "solana")]
+use clutch_structured_claim_runtime_contract::{
+    WrapperRecipeHashV1, WrapperRecipeSetV1,
+};
 use clutch_solana_reference::{Action, Request};
 use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
@@ -463,7 +467,8 @@ fn expected_final_pda(program_id: &Pubkey, binding: ArtifactBinding) -> (Pubkey,
         | ArtifactKind::CompiledProductSeriesBundleV5
         | ArtifactKind::SeriesFundingQuoteV5
         | ArtifactKind::SeriesAttachmentPlanV5
-        | ArtifactKind::CompiledProductSeriesBundleV6) => {
+        | ArtifactKind::CompiledProductSeriesBundleV6
+        | ArtifactKind::WrapperRecipeSetV1) => {
             seeds::product_artifact_pda(program_id, kind.byte(), &digest)
         }
     }
@@ -484,6 +489,33 @@ fn expected_final_pda(program_id: &Pubkey, binding: ArtifactBinding) -> (Pubkey,
 /// the owning core codec has accepted every byte.
 #[inline(never)]
 fn validate_for_runtime(binding: ArtifactBinding, body: &[u8]) -> Outcome<u8> {
+    #[cfg(target_os = "solana")]
+    if binding.kind == ArtifactKind::WrapperRecipeSetV1 {
+        struct RuntimeRecipeSha256V1;
+
+        impl WrapperRecipeHashV1 for RuntimeRecipeSha256V1 {
+            fn hashv(&self, slices: &[&[u8]]) -> [u8; 32] {
+                solana_sha256_hasher::hashv(slices).to_bytes()
+            }
+        }
+
+        binding.validate()?;
+        require(
+            binding.context == Hash32::ZERO && body.len() == usize::from(binding.exact_len),
+            ClutchError::EvidenceBufferMismatch,
+        )?;
+        let value = WrapperRecipeSetV1::decode(body, &RuntimeRecipeSha256V1)
+            .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?;
+        require(
+            value
+                .id(&RuntimeRecipeSha256V1)
+                .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?
+                == binding.digest.bytes(),
+            ClutchError::EvidenceBufferMismatch,
+        )?;
+        return Ok(0);
+    }
+
     #[cfg(target_os = "solana")]
     if matches!(
         binding.kind,
@@ -879,7 +911,8 @@ fn create_final<'a>(
         | ArtifactKind::CompiledProductSeriesBundleV5
         | ArtifactKind::SeriesFundingQuoteV5
         | ArtifactKind::SeriesAttachmentPlanV5
-        | ArtifactKind::CompiledProductSeriesBundleV6) => {
+        | ArtifactKind::CompiledProductSeriesBundleV6
+        | ArtifactKind::WrapperRecipeSetV1) => {
             let kind_byte = [kind.byte()];
             create_artifact_pda(
                 program_id,

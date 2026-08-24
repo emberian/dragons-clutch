@@ -3,13 +3,15 @@
 Status: **successor runtime/SBF implementation under unified all-or-none profile
 composition; not a deployment claim**.
 
-SourceSeries `77/v2` has explicit account contracts over one release-selected
-route. Product privately capitalizes and publishes the founding occurrence and
-request graph; one program-derived custody pre-pays bounded liveness, child and
-receipt rent, terminalization, and deterministic reopen work. Product
-retirement is the sole consumer allowed to refund unused custody principal and
-neutralize every other observed lamport. Central dispatch must not admit a
-partial lifecycle.
+SourceSeries `77/v2` actions 1 through 12 now have explicit account contracts
+and handlers over one release-selected route. Product privately capitalizes and
+publishes the founding occurrence/request graph; one program-derived custody
+pre-pays bounded liveness, every child/receipt rent source, terminalization,
+and deterministic reopen work; Failure's sole ResolutionV5 outer reconstructs
+the persisted successful handoff and performs terminal/result close atomically.
+Product retirement is the sole consumer allowed to refund the custody's unused
+principal and neutralize every other observed lamport. Central dispatch remains
+the all-or-none capability owner and must not admit a partial lifecycle.
 
 This crate replaces the old opaque/default-deny SourcePlane V3 seams with
 fixed-memory contracts that a small Solana adapter can execute. It does not
@@ -128,8 +130,9 @@ The successor profile may expose actions 1 through 12 only together, after
 every persisted action-10 variant has a complete terminal consumer, Product's
 founder consumes the private capitalization/publication receipt, and Product's
 counted retirement consumes the private Source-custody close receipt before
-FundingV2 close. There is no legacy SourceArchive/SourceGeneration fallback or
-public receipt-ID projection.
+current Funding close. The successful Failure action-12 outer must consume the
+persisted Source context and final ResolutionV5 postwrite. There is no legacy
+SourceArchive/SourceGeneration fallback and no public receipt-ID projection.
 
 No test, build, campaign, benchmark, or deployment claim is recorded for this
 implementation slice.

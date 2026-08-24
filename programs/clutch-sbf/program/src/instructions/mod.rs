@@ -84,8 +84,6 @@ pub(crate) mod failure_market_family_terminal_v2;
 pub(crate) mod failure_market_replay_v2;
 /// Capability-disabled atomic shared-Market Recovery close.
 pub(crate) mod failure_market_recovery_terminal_v2;
-/// Reverse-order physical retirement of terminal Market Failure dependents.
-pub(crate) mod failure_market_retirement_v2;
 pub mod failure_market_admission;
 pub mod failure_market_runtime;
 /// Withdrawn occurrence-scoped Recovery78/v1 adapter; no current route imports it.
