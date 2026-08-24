@@ -1997,7 +1997,9 @@ impl OwnedInstructionDraft {
                             .ok_or(ConstructionError::InvalidAccountContract)?;
                         let outcomes = self.accounts.len().checked_sub(fixed)
                             .ok_or(ConstructionError::InvalidAccountContract)?;
-                        if !(2..=16).contains(&outcomes) {
+                        if !(2..=clutch_product_series::MARKET_FOUNDATION_MAX_OUTCOMES_V4)
+                            .contains(&outcomes)
+                        {
                             return Err(ConstructionError::InvalidAccountContract);
                         }
                         if action == FractionalRedemptionActionV1::Initialize {

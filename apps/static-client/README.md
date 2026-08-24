@@ -84,6 +84,12 @@ Policy V3, Ledger V1, Credit V2, and Tombstone V2 layouts. Withdrawn Policy V1,
 unprefundable Policy V2, and credit/tombstone V1 layouts are not fallback DTOs,
 and their presence does not create redemption capability.
 
+Fractional lifecycle actions 1 and 10 use the exact `32 + N` reduced frame:
+15 observed Graph V4 core accounts, `N` observed outcome mints, and 17 lifecycle
+authority accounts. Outcome custody and General treasury Graph coordinates are
+derived from authenticated Root V3 and current MarketBinding state; they are
+not transaction metas or parallel browser-authored authority.
+
 ## Projection semantics
 
 The console groups chain-derived account rows into Market, Product, collateral
