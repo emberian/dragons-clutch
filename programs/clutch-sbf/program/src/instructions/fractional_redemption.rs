@@ -64,7 +64,7 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::collateral_position_v3::{
-    authenticate_general_market_liabilities_v4, authenticate_general_market_value_authority_v4,
+    authenticate_general_market_liabilities_v5, authenticate_general_market_value_authority_v5,
     authenticate_general_position_replay_v2, authenticate_resolution_v5, RuntimeSha256,
 };
 use super::external_redemption_v3::{
@@ -530,7 +530,7 @@ where
         ClutchError::MismatchedState,
     )?;
 
-    let value_authority = authenticate_general_market_value_authority_v4(
+    let value_authority = authenticate_general_market_value_authority_v5(
         program_id,
         accounts.realm,
         accounts.profile,
@@ -1092,7 +1092,7 @@ where
         prestate.facility_credit_account().bytes() == accounts.facility_credit.key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
-    let value_authority = authenticate_general_market_value_authority_v4(
+    let value_authority = authenticate_general_market_value_authority_v5(
         program_id,
         accounts.realm,
         accounts.profile,
@@ -2440,7 +2440,7 @@ fn process_redeem_internal_exact(
         ClutchError::MismatchedState,
     )?;
 
-    let liabilities = authenticate_general_market_liabilities_v4(
+    let liabilities = authenticate_general_market_liabilities_v5(
         program_id,
         &accounts[IX_REALM],
         &accounts[IX_PROFILE],
@@ -2773,7 +2773,7 @@ mod loader_alias_tests {
         assert!(consume < first_write);
         assert!(!body.contains("dealer_terminal_retire_target_enabled"));
         assert!(body.contains("DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1"));
-        assert!(body.contains("authenticate_general_market_value_authority_v4"));
+        assert!(body.contains("authenticate_general_market_value_authority_v5"));
         assert!(body.contains("require_program_state(\n        program_id,\n        accounts.fractional_policy"));
         assert!(body.contains("credit.claimant == prestate.facility_id()"));
         assert!(body.contains("close_zero_credit_v1"));
@@ -3111,7 +3111,7 @@ fn process_redeem_internal_credit(
             && accounts[IX_CREDIT].key.to_bytes() == intent.credit_or_policy.bytes(),
         ClutchError::MismatchedState,
     )?;
-    let liabilities = authenticate_general_market_liabilities_v4(
+    let liabilities = authenticate_general_market_liabilities_v5(
         program_id,
         &accounts[IX_REALM],
         &accounts[IX_PROFILE],
@@ -3294,7 +3294,7 @@ fn process_redeem_bearer_exact(
         ClutchError::MismatchedState,
     )?;
 
-    let value_authority = authenticate_general_market_value_authority_v4(
+    let value_authority = authenticate_general_market_value_authority_v5(
         program_id,
         &accounts[bearer_ix::REALM],
         &accounts[bearer_ix::PROFILE],
@@ -3647,7 +3647,7 @@ fn process_redeem_bearer_credit(
             && accounts[bearer_ix::DESTINATION].key.to_bytes() == intent.payout_target.bytes(),
         ClutchError::MismatchedState,
     )?;
-    let value_authority = authenticate_general_market_value_authority_v4(
+    let value_authority = authenticate_general_market_value_authority_v5(
         program_id,
         &accounts[bearer_ix::REALM],
         &accounts[bearer_ix::PROFILE],
@@ -4070,7 +4070,7 @@ fn process_credit_move(
         ClutchError::MismatchedState,
     )?;
     let (liabilities, collateral_release_receipt) = if intent.payout_kind == 2 {
-        let value_authority = authenticate_general_market_value_authority_v4(
+        let value_authority = authenticate_general_market_value_authority_v5(
             program_id,
             &accounts[move_ix::REALM],
             &accounts[move_ix::PROFILE],
@@ -4088,7 +4088,7 @@ fn process_credit_move(
         (value_authority.liabilities, Some(value_authority.receipt_id))
     } else {
         (
-            authenticate_general_market_liabilities_v4(
+            authenticate_general_market_liabilities_v5(
                 program_id,
                 &accounts[move_ix::REALM],
                 &accounts[move_ix::PROFILE],
@@ -4505,7 +4505,7 @@ fn process_close_zero_credit(
             && !accounts[close_credit_ix::PAYER].executable,
         ClutchError::MismatchedState,
     )?;
-    let liabilities = authenticate_general_market_liabilities_v4(
+    let liabilities = authenticate_general_market_liabilities_v5(
         program_id,
         &accounts[close_credit_ix::REALM],
         &accounts[close_credit_ix::PROFILE],
@@ -4686,7 +4686,7 @@ fn process_seal_claims_exhausted(
         require(!accounts[index].is_signer, ClutchError::MismatchedState)?;
         index += 1;
     }
-    let liabilities = authenticate_general_market_liabilities_v4(
+    let liabilities = authenticate_general_market_liabilities_v5(
         program_id,
         &accounts[seal_ix::REALM],
         &accounts[seal_ix::PROFILE],

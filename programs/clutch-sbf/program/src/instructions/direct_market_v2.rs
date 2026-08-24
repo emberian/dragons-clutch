@@ -118,8 +118,11 @@ use solana_cpi::invoke_signed;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
-use super::collateral_position_v3::authenticate_general_market_v5_with_data_ids;
-use super::general_v2_position_replay::authenticate_current_general_position_replay_v4;
+use super::collateral_position_v3::{
+    authenticate_general_market_v5_with_data_ids, AuthenticatedGeneralMarketV5,
+};
+use super::general_v2_position_replay::
+    authenticate_current_general_position_replay_from_market_v5;
 use super::product_artifact::authenticate_product_artifact_v1;
 use super::product_market_family_admission_v3_current::{
     AuthenticatedProductFamilyAdmissionOwnerV3,
@@ -147,6 +150,14 @@ const DIRECT_CANDIDATE_LIVENESS_ACCOUNT_COUNT_V2: usize = 4;
 const DIRECT_ADMIT_ORDER_FIXED_ACCOUNTS_V2: usize = 19;
 const DIRECT_CANCEL_ORDER_ACCOUNTS_V2: usize = 16;
 const DIRECT_FREEZE_BOOK_FIXED_ACCOUNTS_V2: usize = 12;
+
+/// Direct-private join between its persisted current-General semantic owner
+/// and the exact compact V5 market/collateral authentication.
+#[derive(Debug)]
+struct AuthenticatedDirectGeneralMarketV5 {
+    bound: BoundCollateralProfileV2,
+    market: AuthenticatedGeneralMarketV5,
+}
 
 const DIRECT_PRICE_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/direct/price-authentication/v2\0";
@@ -741,7 +752,7 @@ fn process_direct_admit_order_v2(
         &accounts[18],
         request.limit_price_units_per_egg,
     )?;
-    let bound = authenticate_direct_general_market_v5(
+    let general = authenticate_direct_general_market_v5(
         program_id,
         &root,
         &accounts[6],
@@ -753,8 +764,10 @@ fn process_direct_admit_order_v2(
         &accounts[12],
         &accounts[17],
     )?;
-    let position_replay = authenticate_current_general_position_replay_v4(
+    let bound = general.bound;
+    let position_replay = authenticate_current_general_position_replay_from_market_v5(
         program_id,
+        &general.market,
         bound,
         &accounts[10],
         &accounts[11],
@@ -951,7 +964,7 @@ fn process_direct_cancel_order_v2(
         ClutchError::MismatchedState,
     )?;
     let observed_slot = read_clock_slot(&accounts[15])?;
-    let bound = authenticate_direct_general_market_v5(
+    let general = authenticate_direct_general_market_v5(
         program_id,
         &root,
         &accounts[6],
@@ -963,8 +976,10 @@ fn process_direct_cancel_order_v2(
         &accounts[12],
         &accounts[13],
     )?;
-    let position_replay = authenticate_current_general_position_replay_v4(
+    let bound = general.bound;
+    let position_replay = authenticate_current_general_position_replay_from_market_v5(
         program_id,
+        &general.market,
         bound,
         &accounts[10],
         &accounts[11],
@@ -1534,7 +1549,7 @@ fn process_direct_settle_pair_v2(
     require_direct_endpoint_alias_contract_v2(accounts, FIXED, endpoint_count)?;
     require_direct_fee_suffix_alias_contract_v2(accounts, endpoint_count, endpoint_end)?;
     let observed_slot = read_clock_slot(&accounts[11])?;
-    let bound = authenticate_direct_general_market_v5(
+    let general = authenticate_direct_general_market_v5(
         program_id,
         &root,
         &accounts[3],
@@ -1546,6 +1561,7 @@ fn process_direct_settle_pair_v2(
         &accounts[9],
         &accounts[10],
     )?;
+    let bound = general.bound;
     let mut authenticated_reservations = [None; 2];
     let mut endpoints = [None; 2];
     let mut index = 0usize;
@@ -1571,8 +1587,9 @@ fn process_direct_settle_pair_v2(
                     == reservation.semantic_id(),
             ClutchError::MismatchedState,
         )?;
-        let position_replay = authenticate_current_general_position_replay_v4(
+        let position_replay = authenticate_current_general_position_replay_from_market_v5(
             program_id,
+            &general.market,
             bound,
             &accounts[7],
             &accounts[8],
@@ -1659,8 +1676,9 @@ fn process_direct_settle_pair_v2(
                 == *accounts[endpoint_end + 5].key,
         ClutchError::MismatchedState,
     )?;
-    let treasury_position_replay = authenticate_current_general_position_replay_v4(
+    let treasury_position_replay = authenticate_current_general_position_replay_from_market_v5(
         program_id,
+        &general.market,
         bound,
         &accounts[7],
         &accounts[8],
@@ -2039,7 +2057,7 @@ fn process_direct_missed_freeze_lapse_v2(
         donation_floor_lamports,
     };
     selection_rent.validate().map_err(map_direct_error_v2)?;
-    let bound = authenticate_direct_general_market_v5(
+    let general = authenticate_direct_general_market_v5(
         program_id,
         &root,
         &accounts[12],
@@ -2052,6 +2070,7 @@ fn process_direct_missed_freeze_lapse_v2(
         &accounts[10],
     )?;
 
+    let bound = general.bound;
     let mut authenticated: [Option<AuthenticatedDirectReservationV2>; 2] = [None; 2];
     let mut endpoints = [None; 2];
     let mut reservations = [None; 2];
@@ -2073,8 +2092,9 @@ fn process_direct_missed_freeze_lapse_v2(
                 ClutchError::MismatchedState,
             )?;
         }
-        let position_replay = authenticate_current_general_position_replay_v4(
+        let position_replay = authenticate_current_general_position_replay_from_market_v5(
             program_id,
+            &general.market,
             bound,
             &accounts[16],
             &accounts[17],
@@ -2375,7 +2395,7 @@ fn process_direct_fee_free_selection_terminal_v2(
     )?;
     require_direct_endpoint_alias_contract_v2(accounts, 12, endpoint_count)?;
     let observed_slot = read_clock_slot(&accounts[11])?;
-    let bound = authenticate_direct_general_market_v5(
+    let general = authenticate_direct_general_market_v5(
         program_id,
         &root,
         &accounts[3],
@@ -2388,6 +2408,7 @@ fn process_direct_fee_free_selection_terminal_v2(
         &accounts[10],
     )?;
 
+    let bound = general.bound;
     let mut authenticated_reservations = [None; 2];
     let mut endpoints = [None; 2];
     let mut index = 0usize;
@@ -2413,8 +2434,9 @@ fn process_direct_fee_free_selection_terminal_v2(
                     == reservation.semantic_id(),
             ClutchError::MismatchedState,
         )?;
-        let position_replay = authenticate_current_general_position_replay_v4(
+        let position_replay = authenticate_current_general_position_replay_from_market_v5(
             program_id,
+            &general.market,
             bound,
             &accounts[7],
             &accounts[8],
@@ -2882,7 +2904,7 @@ fn authenticate_direct_general_market_v5(
     market_runtime_account: &AccountInfo<'_>,
     market_instance_account: &AccountInfo<'_>,
     genesis_account: &AccountInfo<'_>,
-) -> Outcome<BoundCollateralProfileV2> {
+) -> Outcome<AuthenticatedDirectGeneralMarketV5> {
     let realm = crate::collateral_release::authenticate_realm_collateral_v2(
         program_id,
         realm_account,
@@ -2996,7 +3018,7 @@ fn authenticate_direct_general_market_v5(
         ClutchError::MismatchedState,
     )?;
     let market_bytes = root.transition().market_instance_id();
-    refine_market_collateral_v2(
+    let bound = refine_market_collateral_v2(
         realm,
         MarketCollateralBindingV2 {
             market: CollateralId::from_bytes(market_bytes),
@@ -3011,7 +3033,11 @@ fn authenticate_direct_general_market_v5(
             ),
         },
     )
-    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    Ok(AuthenticatedDirectGeneralMarketV5 {
+        bound,
+        market: authenticated_market,
+    })
 }
 
 fn require_direct_endpoint_alias_contract_v2(

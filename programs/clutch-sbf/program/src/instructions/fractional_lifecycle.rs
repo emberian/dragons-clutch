@@ -16,7 +16,7 @@ use clutch_fractional_redemption_runtime::{
     FractionalTerminalIntentV1, PayoutVectorV1, TerminalRemainderPolicyV1,
     FRACTIONAL_LEDGER_ACCOUNT_BYTES, FRACTIONAL_POLICY_ACCOUNT_BYTES,
 };
-use clutch_general_v2_contract::MarketBindingV4;
+use clutch_general_v2_contract::MarketBindingV5;
 use clutch_product_series::{
     ContentId, MarketFoundationAccountGraphV4, MarketFoundationScheduleV4,
     MarketFoundationSlotV4, MarketLifecycleRootV3, SeriesFundingQuoteV6,
@@ -33,7 +33,7 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::collateral_position_v3::{
-    authenticate_general_market_value_authority_v4, authenticate_resolution_v5,
+    authenticate_general_market_value_authority_v5, authenticate_resolution_v5,
 };
 use super::fractional_redemption::{
     authenticate_fractional_family_admission_postwrite_v1,
@@ -249,7 +249,7 @@ fn build_graph(
     market: clutch_product_series::MarketInstanceV2Id,
     generation: u64,
     outcome_count: u8,
-    revenue_binding: &MarketBindingV4,
+    revenue_binding: &MarketBindingV5,
     family_policy_in_role_14: bool,
 ) -> Outcome<MarketFoundationAccountGraphV4> {
     let outcomes = usize::from(outcome_count);
@@ -496,7 +496,7 @@ pub(super) fn process_initialize(
     require_system_program(&accounts[aux + init_aux::SYSTEM_PROGRAM])?;
     let rent = read_rent(&accounts[aux + init_aux::RENT])?;
 
-    let value = authenticate_general_market_value_authority_v4(
+    let value = authenticate_general_market_value_authority_v5(
         program_id,
         &accounts[aux + init_aux::REALM],
         &accounts[aux + init_aux::PROFILE],
@@ -803,7 +803,7 @@ pub(super) fn process_close_empty_ledger(
     let graph_count = graph_account_count(outcome_count)?;
     require_outer_contract(accounts, graph_count, TERMINAL_AUX_ACCOUNTS, false)?;
     let aux = graph_count;
-    let value = authenticate_general_market_value_authority_v4(
+    let value = authenticate_general_market_value_authority_v5(
         program_id,
         &accounts[aux + terminal_aux::REALM],
         &accounts[aux + terminal_aux::PROFILE],
