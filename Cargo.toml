@@ -1,5 +1,9 @@
 [workspace]
-members = ["crates/dclutch-core-contract", "crates/dclutch-kernel"]
+members = [
+    "crates/dclutch-core-contract",
+    "crates/dclutch-kernel",
+    "crates/dclutch-pyth-svm",
+]
 resolver = "2"
 
 [workspace.package]
