@@ -1276,6 +1276,58 @@ fn empty_action8_and_missed_verification_deadline_are_total_no_trade_paths() {
 }
 
 #[test]
+fn unselected_lapse_refunds_complete_retained_bond_principal_once() {
+    let (frozen, endpoints) = submission_open_pair_with_endpoints();
+    let submitted = submit_direct_candidate_v1(
+        frozen.state,
+        frozen.selection,
+        4,
+        21,
+        candidate(10),
+        id(81),
+        &Sha,
+    )
+    .unwrap();
+    assert_eq!(
+        submitted
+            .selection
+            .outstanding_candidate_bond_lamports(submitted.state.root),
+        Ok(5),
+    );
+    let terminal = prepare_direct_economic_terminal_v1(
+        &AllowEconomicTerminal,
+        submitted.state,
+        submitted.selection,
+        endpoints,
+        None,
+        None,
+        DirectTerminalReasonV1::UnselectedLapse,
+        5,
+        40,
+        &Sha,
+    )
+    .unwrap();
+    let refunds = terminal.candidate_bond_refunds.unwrap();
+    assert_eq!(refunds.refund_count, 1);
+    assert_eq!(refunds.total_lamports, 5);
+    assert_eq!(refunds.refunds[0].unwrap().recipient, id(81));
+    assert_eq!(refunds.refunds[0].unwrap().lamports, 5);
+    assert_eq!(refunds.receipt_id, terminal.transition_id);
+    assert_eq!(
+        terminal
+            .selection
+            .candidate_bond_refund_receipt_id(),
+        terminal.transition_id,
+    );
+    assert_eq!(
+        terminal
+            .selection
+            .outstanding_candidate_bond_lamports(terminal.state.root),
+        Ok(0),
+    );
+}
+
+#[test]
 fn complete_selection_reverifies_and_ranks_exact_zero_price_pair() {
     let initial = state();
     let buyer = prepare_direct_reservation_admission_v1(
@@ -1343,19 +1395,71 @@ fn complete_selection_reverifies_and_ranks_exact_zero_price_pair() {
     assert_eq!(frozen.selection.phase(), DirectSelectionPhaseV1::SubmissionOpen);
     assert_eq!(frozen.selection.reservation_account(0).unwrap(), id(50));
 
-    let first = submit_direct_candidate_v1(frozen.state, frozen.selection, 4, 21, candidate(5), &Sha).unwrap();
-    let second = submit_direct_candidate_v1(first.state, first.selection, 5, 22, candidate(10), &Sha).unwrap();
-    let third = submit_direct_candidate_v1(second.state, second.selection, 6, 23, candidate(8), &Sha).unwrap();
-    let fourth = submit_direct_candidate_v1(third.state, third.selection, 7, 24, candidate(6), &Sha).unwrap();
+    let first = submit_direct_candidate_v1(
+        frozen.state, frozen.selection, 4, 21, candidate(5), id(81), &Sha,
+    ).unwrap();
+    let second = submit_direct_candidate_v1(
+        first.state, first.selection, 5, 22, candidate(10), id(82), &Sha,
+    ).unwrap();
+    let third = submit_direct_candidate_v1(
+        second.state, second.selection, 6, 23, candidate(8), id(82), &Sha,
+    ).unwrap();
+    let fourth = submit_direct_candidate_v1(
+        third.state, third.selection, 7, 24, candidate(6), id(84), &Sha,
+    ).unwrap();
     assert_eq!(fourth.selection.candidate_count(), 3);
     assert_eq!(fourth.selection.candidate(0).unwrap(), candidate(10));
     assert_eq!(fourth.selection.candidate(1).unwrap(), candidate(8));
     assert_eq!(fourth.selection.candidate(2).unwrap(), candidate(6));
-    let begun = begin_direct_candidate_verification_v1(fourth.state, fourth.selection, 8, 30, &Sha).unwrap();
-    let verified_first = verify_next_direct_candidate_v1(begun.state, begun.selection, 9, 31, &Sha).unwrap();
-    let verified_second = verify_next_direct_candidate_v1(verified_first.state, verified_first.selection, 10, 32, &Sha).unwrap();
-    let verified_third = verify_next_direct_candidate_v1(verified_second.state, verified_second.selection, 11, 33, &Sha).unwrap();
-    let selected = finalize_direct_selection_v1(verified_third.state, verified_third.selection, 12, 34, &Sha).unwrap();
+    let replacement = fourth.candidate_bond_movement.unwrap();
+    assert_eq!(replacement.incoming_payer, id(84));
+    assert_eq!(replacement.incoming_lamports, 5);
+    assert_eq!(replacement.evicted_refund_recipient, id(81));
+    assert_eq!(replacement.evicted_refund_lamports, 5);
+    assert_eq!(replacement.principal_before_lamports, 15);
+    assert_eq!(replacement.principal_after_lamports, 15);
+    let nonretained = submit_direct_candidate_v1(
+        fourth.state, fourth.selection, 8, 25, candidate(1), id(85), &Sha,
+    ).unwrap();
+    let alternate_nonretained = submit_direct_candidate_v1(
+        fourth.state, fourth.selection, 8, 25, candidate(2), id(85), &Sha,
+    ).unwrap();
+    assert_eq!(nonretained.candidate_bond_movement, None);
+    assert_eq!(nonretained.selection, fourth.selection);
+    assert_eq!(alternate_nonretained.selection, fourth.selection);
+    assert_ne!(
+        nonretained.state.replay.action_transcript_id(),
+        alternate_nonretained.state.replay.action_transcript_id(),
+    );
+    let begun = begin_direct_candidate_verification_v1(
+        nonretained.state, nonretained.selection, 9, 30, &Sha,
+    ).unwrap();
+    let verified_first = verify_next_direct_candidate_v1(
+        begun.state, begun.selection, 10, 31, &Sha,
+    ).unwrap();
+    let verified_second = verify_next_direct_candidate_v1(
+        verified_first.state, verified_first.selection, 11, 32, &Sha,
+    ).unwrap();
+    let verified_third = verify_next_direct_candidate_v1(
+        verified_second.state, verified_second.selection, 12, 33, &Sha,
+    ).unwrap();
+    let selected = finalize_direct_selection_v1(
+        verified_third.state, verified_third.selection, 13, 34, &Sha,
+    ).unwrap();
+    let bond_refunds = selected.candidate_bond_refunds.unwrap();
+    assert_eq!(bond_refunds.refund_count, 2);
+    assert_eq!(bond_refunds.total_lamports, 15);
+    assert_eq!(bond_refunds.refunds[0].unwrap().recipient, id(82));
+    assert_eq!(bond_refunds.refunds[0].unwrap().lamports, 10);
+    assert_eq!(bond_refunds.refunds[1].unwrap().recipient, id(84));
+    assert_eq!(bond_refunds.refunds[1].unwrap().lamports, 5);
+    assert_eq!(bond_refunds.refunds[2], None);
+    assert_eq!(
+        selected
+            .selection
+            .outstanding_candidate_bond_lamports(selected.state.root),
+        Ok(0),
+    );
     let pair = selected.selection.selected_pair().unwrap();
     assert_eq!(pair.quantity(), 10);
     assert_eq!(pair.consideration_cash_atoms(), 0);
@@ -1363,6 +1467,18 @@ fn complete_selection_reverifies_and_ranks_exact_zero_price_pair() {
     assert_eq!(
         decode_direct_selection_body_v1(&body, selected.state.root),
         Ok(selected.selection)
+    );
+    let mut missing_submitter = selected.selection;
+    missing_submitter.candidate_submitters[0] = [0; 32];
+    assert_eq!(
+        encode_direct_selection_body_v1(missing_submitter, selected.state.root),
+        Err(DirectMarketErrorV1::ZeroIdentity),
+    );
+    let mut missing_refund_receipt = selected.selection;
+    missing_refund_receipt.candidate_bond_refund_receipt_id = [0; 32];
+    assert_eq!(
+        encode_direct_selection_body_v1(missing_refund_receipt, selected.state.root),
+        Err(DirectMarketErrorV1::WrongPhase),
     );
 }
 
@@ -1421,11 +1537,11 @@ fn selection_refuses_missing_extra_duplicate_and_partial_traversal() {
         [Some(buyer.reservation), Some(seller.reservation)], domain, price, &Sha,
     ).unwrap();
     let submitted = submit_direct_candidate_v1(
-        frozen.state, frozen.selection, 4, 21, candidate(10), &Sha,
+        frozen.state, frozen.selection, 4, 21, candidate(10), id(81), &Sha,
     ).unwrap();
     assert_eq!(
         submit_direct_candidate_v1(
-            submitted.state, submitted.selection, 5, 22, candidate(10), &Sha,
+            submitted.state, submitted.selection, 5, 22, candidate(10), id(82), &Sha,
         ),
         Err(DirectMarketErrorV1::IdentityAlias)
     );
@@ -1780,6 +1896,7 @@ fn selected_pair_moves_exact_cash_and_eggs_and_releases_full_reserves() {
             4,
             21,
             candidate(5),
+            id(81),
             &Sha,
         ),
         Err(DirectMarketErrorV1::DirectPair(
@@ -1792,6 +1909,7 @@ fn selected_pair_moves_exact_cash_and_eggs_and_releases_full_reserves() {
         4,
         21,
         candidate(10),
+        id(81),
         &Sha,
     )
     .unwrap();

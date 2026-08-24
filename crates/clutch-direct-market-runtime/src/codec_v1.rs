@@ -30,7 +30,7 @@ use crate::{
 /// Exact semantic bytes inside the `0xb1/1` frame.
 pub const DIRECT_MARKET_ROOT_BODY_BYTES_V1: usize = 1_722;
 /// Exact semantic bytes inside the `0xb2/1` frame.
-pub const DIRECT_SELECTION_BODY_BYTES_V1: usize = 1_497;
+pub const DIRECT_SELECTION_BODY_BYTES_V1: usize = 1_625;
 /// Exact semantic bytes inside the `0xb3/1` frame.
 pub const DIRECT_ACTION_REPLAY_BODY_BYTES_V1: usize = 321;
 /// Exact semantic bytes inside the `0xb4/1` frame.
@@ -243,6 +243,11 @@ pub fn encode_direct_selection_body_v1(
         writer.id(value.candidate_digests[index])?;
         index += 1;
     }
+    index = 0;
+    while index < 3 {
+        writer.id(value.candidate_submitters[index])?;
+        index += 1;
+    }
     writer.u8(value.candidate_count)?;
     writer.u8(value.verification_cursor)?;
     writer.u8(value.verified_mask)?;
@@ -261,6 +266,7 @@ pub fn encode_direct_selection_body_v1(
         _ => return Err(DirectMarketErrorV1::InvalidCount),
     }
     writer.id(value.terminal_receipt_id)?;
+    writer.id(value.candidate_bond_refund_receipt_id)?;
     write_rent(&mut writer, value.rent)?;
     writer.u8(selection_phase_byte(value.phase))?;
     writer.finish()?;
@@ -292,6 +298,7 @@ pub fn decode_direct_selection_body_v1(
         read_candidate(&mut reader)?,
     ];
     let candidate_digests = [reader.id()?, reader.id()?, reader.id()?];
+    let candidate_submitters = [reader.id()?, reader.id()?, reader.id()?];
     let candidate_count = reader.u8()?;
     let verification_cursor = reader.u8()?;
     let verified_mask = reader.u8()?;
@@ -340,6 +347,7 @@ pub fn decode_direct_selection_body_v1(
         price,
         candidates,
         candidate_digests,
+        candidate_submitters,
         candidate_count,
         verification_cursor,
         verified_mask,
@@ -347,6 +355,7 @@ pub fn decode_direct_selection_body_v1(
         selected_candidate_index,
         selected_pair,
         terminal_receipt_id: reader.id()?,
+        candidate_bond_refund_receipt_id: reader.id()?,
         rent: read_rent(&mut reader)?,
         phase: decode_selection_phase(reader.u8()?)?,
     };
@@ -858,7 +867,7 @@ impl<'a> BodyReader<'a> {
 }
 
 const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == 1_722);
-const _: () = assert!(DIRECT_SELECTION_BODY_BYTES_V1 == 1_497);
+const _: () = assert!(DIRECT_SELECTION_BODY_BYTES_V1 == 1_625);
 const _: () = assert!(DIRECT_ACTION_REPLAY_BODY_BYTES_V1 == 321);
 const _: () = assert!(DIRECT_RESERVATION_BODY_BYTES_V1 == 469);
 const _: () = assert!(core::mem::size_of::<[u8; 253]>() == 253);

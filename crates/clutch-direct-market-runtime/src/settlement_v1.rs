@@ -21,7 +21,8 @@ use crate::reservation_v1::{
 };
 use crate::fee_v1::DirectFeeTerminalV1;
 use crate::selection_v1::{
-    build_direct_selection_v1, AuthenticatedDirectSelectionFreezeV1,
+    build_direct_selection_v1, candidate_bond_refunds_v1,
+    AuthenticatedDirectSelectionFreezeV1, DirectCandidateBondRefundPlanV1,
     DirectSelectionPhaseV1, DirectSelectionV1,
 };
 use crate::{
@@ -400,6 +401,8 @@ pub struct DirectEconomicTerminalPlanV1 {
     pub transition_id: [u8; 32],
     /// Sole permanent economic terminal receipt.
     pub economic_terminal_receipt_id: [u8; 32],
+    /// Complete retained-candidate principal refunds, if not already released by action 8.
+    pub candidate_bond_refunds: Option<DirectCandidateBondRefundPlanV1>,
 }
 
 /// Settle or lapse the complete Selection-owned Reservation prefix.
@@ -550,6 +553,13 @@ fn prepare_direct_economic_terminal_from_projection_v1<
     let selected_transcript = selection
         .selected_pair()
         .map_or([0u8; 253], |pair| pair.canonical_transcript());
+    let provisional_candidate_bond_refunds = candidate_bond_refunds_v1(
+        selection,
+        selection_validation_root,
+        selection.traversal_transcript_id,
+    )?;
+    let candidate_bond_refund_transcript = provisional_candidate_bond_refunds
+        .map_or([0u8; 121], DirectCandidateBondRefundPlanV1::canonical_transcript);
     let transition_id = DirectHashBackendV1::sha256_parts(backend, &[
         ECONOMIC_TRANSITION_DOMAIN_V1,
         &state.root.binding().market_instance_id,
@@ -568,11 +578,26 @@ fn prepare_direct_economic_terminal_from_projection_v1<
         &treasury_replay_pre_id,
         &fee_transcript,
         &selected_transcript,
+        &candidate_bond_refund_transcript,
         &consumed_sequence.to_le_bytes(),
         &observed_slot.to_le_bytes(),
     ]);
     require_live(transition_id)?;
 
+    let candidate_bond_refunds = if provisional_candidate_bond_refunds.is_some() {
+        candidate_bond_refunds_v1(
+            selection,
+            selection_validation_root,
+            transition_id,
+        )?
+    } else {
+        None
+    };
+    let selection = if candidate_bond_refunds.is_some() {
+        selection.mark_candidate_bonds_refunded(transition_id)?
+    } else {
+        selection
+    };
     let root_post_projection = terminal_root_projection(state.root, selection.account(), reason);
     let selection_post = selection.terminalize(root_post_projection, transition_id)?;
     let selection_post_id = selection_post.semantic_id(root_post_projection, backend)?;
@@ -676,6 +701,7 @@ fn prepare_direct_economic_terminal_from_projection_v1<
         endpoint_count,
         transition_id,
         economic_terminal_receipt_id,
+        candidate_bond_refunds,
     })
 }
 
