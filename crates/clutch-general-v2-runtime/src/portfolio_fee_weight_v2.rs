@@ -23,9 +23,41 @@ use clutch_fee_runtime_contract::{Error as FeeError, Id as FeeId};
 use clutch_general_v2_contract::Id32;
 
 use crate::{
-    AuthenticatedSettlementPositionBookV3, SettlementAdapterErrorV1,
-    SettlementTraversalAccessV5,
+    AdapterPositionMarketBindingV3, AuthenticatedSettlementPositionBookV3,
+    AuthenticatedSettlementPositionV3, SettlementAdapterErrorV1, SettlementTraversalAccessV5,
 };
+
+/// Narrow Position identity source for exact fee-weight rows.
+///
+/// The existing complete Position-book authenticator implements this trait.
+/// A live adapter may instead derive the canonical Position V3 PDA from the
+/// already-authenticated owner/Market binding when an action neither reads nor
+/// mutates Position state. No caller-supplied Position ID may implement the
+/// private SBF capability used by recipient creation.
+pub trait PortfolioFeeWeightPositionAccessV2 {
+    /// Exact full-width Position market binding.
+    fn market_binding(&self) -> AdapterPositionMarketBindingV3;
+    /// Canonical ordinary Position account for one traversal-owned owner.
+    fn position_account(
+        &self,
+        owner: Id32,
+    ) -> Result<Id32, SettlementAdapterErrorV1>;
+}
+
+impl PortfolioFeeWeightPositionAccessV2 for AuthenticatedSettlementPositionBookV3 {
+    fn market_binding(&self) -> AdapterPositionMarketBindingV3 {
+        AuthenticatedSettlementPositionBookV3::market_binding(self)
+    }
+
+    fn position_account(
+        &self,
+        owner: Id32,
+    ) -> Result<Id32, SettlementAdapterErrorV1> {
+        self.position_for_owner(owner)
+            .map(AuthenticatedSettlementPositionV3::account)
+            .ok_or(SettlementAdapterErrorV1::PositionSetMismatch)
+    }
+}
 
 /// Compact borrowed V5 fee-weight stream awaiting the SBF adapter's exact
 /// MarketBinding batch-policy authentication.
@@ -36,7 +68,7 @@ use crate::{
 #[derive(Clone, Copy, Debug)]
 pub struct DerivedPortfolioFeeWeightStreamV2<'a> {
     traversal: &'a dyn SettlementTraversalAccessV5,
-    positions: &'a AuthenticatedSettlementPositionBookV3,
+    positions: &'a dyn PortfolioFeeWeightPositionAccessV2,
     selected: &'a SelectedCompositeFeeV1,
     market: Id32,
     epoch: Id32,
@@ -52,6 +84,8 @@ const _: () = assert!(
 );
 
 impl DerivedPortfolioFeeWeightStreamV2<'_> {
+    /// Exact selected fee semantic used for every row quote.
+    pub const fn selected(&self) -> &SelectedCompositeFeeV1 { self.selected }
     /// Canonical Market identity from the retained Feed.
     pub const fn market(&self) -> Id32 { self.market }
     /// Canonical Epoch identity from the retained Feed.
@@ -173,7 +207,7 @@ impl DerivedPortfolioFeeWeightStreamV2<'_> {
 /// than inventing a different selected-fill self-cross rule.
 pub fn derive_portfolio_fee_weight_stream_v2<'a>(
     traversal: &'a dyn SettlementTraversalAccessV5,
-    positions: &'a AuthenticatedSettlementPositionBookV3,
+    positions: &'a dyn PortfolioFeeWeightPositionAccessV2,
     selected: &'a SelectedCompositeFeeV1,
     batch_policy: &FrozenPolicyV1,
 ) -> Result<DerivedPortfolioFeeWeightStreamV2<'a>, SettlementAdapterErrorV1> {
@@ -324,7 +358,7 @@ fn count_executed_owners(
 
 fn owner_weight_row(
     traversal: &dyn SettlementTraversalAccessV5,
-    positions: &AuthenticatedSettlementPositionBookV3,
+    positions: &dyn PortfolioFeeWeightPositionAccessV2,
     selected: &SelectedCompositeFeeV1,
     prices: &[u64; MAX_OUTCOMES],
     common_denominator: u128,
@@ -344,18 +378,16 @@ fn owner_weight_row(
     if !has_buy {
         return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
     }
-    let position = positions
-        .position_for_owner(owner)
-        .ok_or(SettlementAdapterErrorV1::PositionSetMismatch)?;
+    let position = positions.position_account(owner)?;
     Ok(Some(CompositeFeeWeightRowV2::structural(
-        FeeId(position.account().bytes()),
+        FeeId(position.bytes()),
         quote.base_numerator,
     )?))
 }
 
 fn next_position_weight_row(
     traversal: &dyn SettlementTraversalAccessV5,
-    positions: &AuthenticatedSettlementPositionBookV3,
+    positions: &dyn PortfolioFeeWeightPositionAccessV2,
     selected: &SelectedCompositeFeeV1,
     prices: &[u64; MAX_OUTCOMES],
     common_denominator: u128,
@@ -390,7 +422,7 @@ fn next_position_weight_row(
 
 fn require_unique_weight_positions(
     traversal: &dyn SettlementTraversalAccessV5,
-    positions: &AuthenticatedSettlementPositionBookV3,
+    positions: &dyn PortfolioFeeWeightPositionAccessV2,
     selected: &SelectedCompositeFeeV1,
     prices: &[u64; MAX_OUTCOMES],
     common_denominator: u128,

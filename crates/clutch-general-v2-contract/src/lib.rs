@@ -907,16 +907,20 @@ pub const PAYER_ALLOCATION_ACCOUNT_BYTES: usize = 2_684;
 pub const PAYER_ALLOCATION_ACCOUNT_VERSION_V2: u8 = 2;
 /// Exact rent-owned payer-allocation outer bytes.
 pub const PAYER_ALLOCATION_ACCOUNT_BYTES_V2: usize = 2_732;
-/// Fresh disabled candidate-wide recipient-allocation envelope tag.
+/// Candidate-wide recipient-allocation envelope tag.
 pub const RECIPIENT_ALLOCATION_ACCOUNT_TAG: u8 = 0x85;
 /// First candidate-wide recipient-allocation envelope version.
 pub const RECIPIENT_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
 /// Exact candidate-wide recipient-allocation outer bytes.
 pub const RECIPIENT_ALLOCATION_ACCOUNT_BYTES: usize = 2_644;
-/// Sole future rent-owned complete-book-certified recipient version.
+/// Historical complete-book-certified recipient version; decode-only.
 pub const RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2: u8 = 2;
 /// Exact rent-owned certified recipient-allocation outer bytes.
 pub const RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2: usize = 2_764;
+/// Current rent-owned V2 weight-stream-certified recipient version.
+pub const RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V3: u8 = 3;
+/// Exact 52-byte-outer plus 2,744-byte semantic account width.
+pub const RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V3: usize = 2_796;
 /// Fresh disabled selected-record treasury-ledger envelope tag.
 pub const TREASURY_LEDGER_ACCOUNT_TAG: u8 = 0x86;
 /// First selected-record treasury-ledger envelope version.
@@ -1116,6 +1120,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 42] = [
         tag: RECIPIENT_ALLOCATION_ACCOUNT_TAG,
         version: RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2,
         owner: "clutch-general-v2-contract/RecipientAllocationV2AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+        version: RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V3,
+        owner: "clutch-fee-runtime-contract/CertifiedRecipientAllocationV3",
     },
     AccountAllocationV1 {
         tag: TREASURY_LEDGER_ACCOUNT_TAG,

@@ -6,17 +6,13 @@
 
 use clutch_batch::relation_v1::FrozenPolicyV1;
 use clutch_batch_policy_identity::revenue_policy_v1::RevenuePolicyV1;
-use clutch_batch_policy_identity::revenue_policy_v2::RevenuePolicyV2;
 
 use crate::allocation::{
-    allocate_payer_debit, allocate_recipients, CertifiedRecipientAllocationHeaderV2,
-    FeeEnvelopeV1, PayerAllocationV1, RecipientAllocationV1, StandingMakerRowV1,
+    allocate_payer_debit, allocate_recipients, FeeEnvelopeV1, PayerAllocationV1,
+    RecipientAllocationV1, StandingMakerRowV1,
 };
-use crate::selected::{
-    OwnerFeeAssessmentV1, OwnerFeeCarryV1, SelectedCompositeFeeAccess,
-    SelectedCompositeFeeV1, SelectedCompositeFeeV2,
-};
-use crate::projection::{CertifiedRecipientAllocationAccessV2, CertifiedRecipientAllocationV2};
+use crate::selected::{OwnerFeeAssessmentV1, OwnerFeeCarryV1, SelectedCompositeFeeV1};
+use crate::projection::{CertifiedRecipientAllocationV2, CertifiedRecipientAllocationV3};
 use crate::treasury::TreasuryLedgerV1;
 use crate::{add, live, Error, Id, Result, MAX_FEE_ROWS_V1};
 
@@ -26,17 +22,241 @@ pub const PAYER_ALLOCATION_ACCOUNT_V1_BYTES: usize = 2_680;
 pub const RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES: usize = 2_640;
 pub const CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES: usize =
     RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES + 32 + 32 + 2 + 6;
+/// Exact current recipient body: V1 allocation plus V2 weight-stream
+/// provenance, traversal digest, explicit cardinalities, and zero padding.
+pub const CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES: usize =
+    RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES + 32 + 32 + 32 + 2 + 1 + 5;
 pub const TREASURY_LEDGER_ACCOUNT_V1_BYTES: usize = 144;
 
+const RECIPIENT_ALLOCATION_V1_ROWS_OFFSET: usize = 80;
+const RECIPIENT_ALLOCATION_V1_ROW_BYTES: usize = 32 + 8;
+
+/// One borrowed canonical recipient row from persisted allocation bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BorrowedRecipientAllocationRowV1 {
+    position: Id,
+    rebate_atoms: u64,
+}
+
+impl BorrowedRecipientAllocationRowV1 {
+    /// Canonical ordinary Position account identity.
+    pub const fn position(self) -> Id { self.position }
+    /// Hamilton-assigned final collateral atoms for this Position.
+    pub const fn rebate_atoms(self) -> u64 { self.rebate_atoms }
+}
+
+/// Borrowed, structurally authenticated V1 allocation body.
+///
+/// This view never copies the two maximum-width Position/rebate arrays. It is
+/// created only by the strict V3 decoder, which has already checked active-row
+/// order, zero padding, and full conservation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BorrowedRecipientAllocationV1<'a> {
+    bytes: &'a [u8],
+    fee_record: Id,
+    maker_len: u8,
+    maker_rebate_total: u64,
+    executor_atoms: u64,
+    treasury_atoms: u64,
+    collected_fee_atoms: u64,
+}
+
+impl BorrowedRecipientAllocationV1<'_> {
+    /// Selected fee-record identity.
+    pub const fn fee_record(&self) -> Id { self.fee_record }
+    /// Number of active Position rows.
+    pub const fn maker_len(&self) -> u8 { self.maker_len }
+    /// Conserved maker-rebate pool.
+    pub const fn maker_rebate_total(&self) -> u64 { self.maker_rebate_total }
+    /// Executor allocation.
+    pub const fn executor_atoms(&self) -> u64 { self.executor_atoms }
+    /// Treasury allocation.
+    pub const fn treasury_atoms(&self) -> u64 { self.treasury_atoms }
+    /// Exact collected terminal fee atoms.
+    pub const fn collected_fee_atoms(&self) -> u64 { self.collected_fee_atoms }
+
+    /// Read one active row without exposing or copying the backing byte array.
+    pub fn row(&self, index: u8) -> Result<Option<BorrowedRecipientAllocationRowV1>> {
+        if index >= self.maker_len {
+            return Ok(None);
+        }
+        let at = RECIPIENT_ALLOCATION_V1_ROWS_OFFSET
+            .checked_add(
+                usize::from(index)
+                    .checked_mul(RECIPIENT_ALLOCATION_V1_ROW_BYTES)
+                    .ok_or(Error::ArithmeticOverflow)?,
+            )
+            .ok_or(Error::ArithmeticOverflow)?;
+        let mut cursor = at;
+        let position = read_id(self.bytes, &mut cursor)?;
+        let rebate_atoms = read_u64(self.bytes, &mut cursor)?;
+        Ok(Some(BorrowedRecipientAllocationRowV1 {
+            position,
+            rebate_atoms,
+        }))
+    }
+}
+
+/// Borrowed current V3 semantic projection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BorrowedCertifiedRecipientAllocationV3<'a> {
+    allocation: BorrowedRecipientAllocationV1<'a>,
+    weight_policy_id: Id,
+    weight_transcript_id: Id,
+    owner_order_set_digest: Id,
+    traversed_owner_count: u16,
+    nonzero_weight_row_count: u8,
+}
+
+/// Compact immutable projection of a strictly decoded current V3 body.
+///
+/// This is derived only from the borrowed decoder; it owns no rows and cannot
+/// be used to create an allocation. Consumers that need Hamilton rows must
+/// retain the borrowed access view.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CertifiedRecipientAllocationSummaryV3 {
+    fee_record: Id,
+    row_count: u8,
+    collected_fee_atoms: u64,
+    weight_policy_id: Id,
+    weight_transcript_id: Id,
+    owner_order_set_digest: Id,
+    traversed_owner_count: u16,
+    nonzero_weight_row_count: u8,
+}
+
+impl CertifiedRecipientAllocationSummaryV3 {
+    /// Selected fee-record identity.
+    pub const fn fee_record(&self) -> Id { self.fee_record }
+    /// Exact Position allocation row count.
+    pub const fn row_count(&self) -> u8 { self.row_count }
+    /// Exact collected terminal fee atoms.
+    pub const fn collected_fee_atoms(&self) -> u64 { self.collected_fee_atoms }
+    /// Immutable exact-weight policy identity.
+    pub const fn weight_policy_id(&self) -> Id { self.weight_policy_id }
+    /// Complete exact-weight transcript identity.
+    pub const fn weight_transcript_id(&self) -> Id { self.weight_transcript_id }
+    /// Traversal-owned owner/order-set digest.
+    pub const fn owner_order_set_digest(&self) -> Id { self.owner_order_set_digest }
+    /// Distinct traversed owners before zero omission.
+    pub const fn traversed_owner_count(&self) -> u16 { self.traversed_owner_count }
+    /// Exact number of nonzero-weight Position rows.
+    pub const fn nonzero_weight_row_count(&self) -> u8 { self.nonzero_weight_row_count }
+}
+
+/// Read-only current recipient-allocation projection.
+///
+/// Implementations expose only the canonical header and Position-sorted row
+/// stream. The streaming encoder revalidates every invariant; implementing
+/// this trait is not creation authority. A live adapter must obtain these
+/// facts from the authenticated V2 weight stream and its exact Hamilton
+/// allocation, never from a packet or caller-built row list.
+pub trait CertifiedRecipientAllocationAccessV3 {
+    /// Selected fee-record identity carried by the allocation.
+    fn fee_record(&self) -> Id;
+    /// Number of Position rows in the exact Hamilton allocation.
+    fn row_count(&self) -> u8;
+    /// Exact maker-rebate pool.
+    fn maker_rebate_total(&self) -> u64;
+    /// Exact executor allocation.
+    fn executor_atoms(&self) -> u64;
+    /// Exact treasury allocation.
+    fn treasury_atoms(&self) -> u64;
+    /// Exact collected terminal fees.
+    fn collected_fee_atoms(&self) -> u64;
+    /// Canonical Position-sorted row, or `None` at and after the zero tail.
+    fn row(&self, index: u8) -> Result<Option<BorrowedRecipientAllocationRowV1>>;
+    /// Immutable exact-weight policy identity.
+    fn weight_policy_id(&self) -> Id;
+    /// Complete exact-weight transcript identity.
+    fn weight_transcript_id(&self) -> Id;
+    /// Traversal-owned owner/order-set digest.
+    fn owner_order_set_digest(&self) -> Id;
+    /// Distinct traversed owner count before zero-weight omission.
+    fn traversed_owner_count(&self) -> u16;
+    /// Nonzero-weight Position row count.
+    fn nonzero_weight_row_count(&self) -> u8;
+}
+
+impl<'a> BorrowedCertifiedRecipientAllocationV3<'a> {
+    /// Borrowed exact allocation rows and totals.
+    pub const fn allocation(&self) -> BorrowedRecipientAllocationV1<'a> { self.allocation }
+    /// Immutable exact-weight policy identity.
+    pub const fn weight_policy_id(&self) -> Id { self.weight_policy_id }
+    /// Complete V2 exact-weight transcript commitment.
+    pub const fn weight_transcript_id(&self) -> Id { self.weight_transcript_id }
+    /// Traversal-owned owner/order-set digest.
+    pub const fn owner_order_set_digest(&self) -> Id { self.owner_order_set_digest }
+    /// Distinct traversed owners before zero omission.
+    pub const fn traversed_owner_count(&self) -> u16 { self.traversed_owner_count }
+    /// Exact nonzero-weight Position row count.
+    pub const fn nonzero_weight_row_count(&self) -> u8 {
+        self.nonzero_weight_row_count
+    }
+
+    /// Detach the compact, already-validated header for O(1) consumers.
+    pub const fn summary(&self) -> CertifiedRecipientAllocationSummaryV3 {
+        CertifiedRecipientAllocationSummaryV3 {
+            fee_record: self.allocation.fee_record,
+            row_count: self.allocation.maker_len,
+            collected_fee_atoms: self.allocation.collected_fee_atoms,
+            weight_policy_id: self.weight_policy_id,
+            weight_transcript_id: self.weight_transcript_id,
+            owner_order_set_digest: self.owner_order_set_digest,
+            traversed_owner_count: self.traversed_owner_count,
+            nonzero_weight_row_count: self.nonzero_weight_row_count,
+        }
+    }
+}
+
+impl CertifiedRecipientAllocationAccessV3 for BorrowedCertifiedRecipientAllocationV3<'_> {
+    fn fee_record(&self) -> Id { self.allocation.fee_record() }
+    fn row_count(&self) -> u8 { self.allocation.maker_len() }
+    fn maker_rebate_total(&self) -> u64 { self.allocation.maker_rebate_total() }
+    fn executor_atoms(&self) -> u64 { self.allocation.executor_atoms() }
+    fn treasury_atoms(&self) -> u64 { self.allocation.treasury_atoms() }
+    fn collected_fee_atoms(&self) -> u64 { self.allocation.collected_fee_atoms() }
+    fn row(&self, index: u8) -> Result<Option<BorrowedRecipientAllocationRowV1>> {
+        self.allocation.row(index)
+    }
+    fn weight_policy_id(&self) -> Id { self.weight_policy_id }
+    fn weight_transcript_id(&self) -> Id { self.weight_transcript_id }
+    fn owner_order_set_digest(&self) -> Id { self.owner_order_set_digest }
+    fn traversed_owner_count(&self) -> u16 { self.traversed_owner_count }
+    fn nonzero_weight_row_count(&self) -> u8 { self.nonzero_weight_row_count }
+}
+
+impl CertifiedRecipientAllocationAccessV3 for CertifiedRecipientAllocationV3 {
+    fn fee_record(&self) -> Id { self.allocation_ref().fee_record() }
+    fn row_count(&self) -> u8 { self.allocation_ref().maker_len() }
+    fn maker_rebate_total(&self) -> u64 { self.allocation_ref().maker_rebate_total() }
+    fn executor_atoms(&self) -> u64 { self.allocation_ref().executor_atoms() }
+    fn treasury_atoms(&self) -> u64 { self.allocation_ref().treasury_atoms() }
+    fn collected_fee_atoms(&self) -> u64 { self.allocation_ref().collected_fee_atoms() }
+    fn row(&self, index: u8) -> Result<Option<BorrowedRecipientAllocationRowV1>> {
+        if index >= self.allocation_ref().maker_len() {
+            return Ok(None);
+        }
+        let at = usize::from(index);
+        Ok(Some(BorrowedRecipientAllocationRowV1 {
+            position: self.allocation_ref().maker_positions()[at],
+            rebate_atoms: self.allocation_ref().maker_rebate_atoms()[at],
+        }))
+    }
+    fn weight_policy_id(&self) -> Id { self.weight_policy_id() }
+    fn weight_transcript_id(&self) -> Id { self.weight_transcript_id() }
+    fn owner_order_set_digest(&self) -> Id { self.owner_order_set_digest() }
+    fn traversed_owner_count(&self) -> u16 { self.traversed_owner_count() }
+    fn nonzero_weight_row_count(&self) -> u8 { self.nonzero_weight_row_count() }
+}
+
 pub const FEE_RECORD_MAGIC_V1: [u8; 8] = *b"DCFEESEL";
-pub const FEE_RECORD_MAGIC_V2: [u8; 8] = *b"DCFEESE2";
 pub const OWNER_FEE_CARRY_MAGIC_V1: [u8; 8] = *b"DCFEECRY";
 pub const PAYER_ALLOCATION_MAGIC_V1: [u8; 8] = *b"DCFEEPAY";
 pub const RECIPIENT_ALLOCATION_MAGIC_V1: [u8; 8] = *b"DCFEEREC";
 pub const TREASURY_LEDGER_MAGIC_V1: [u8; 8] = *b"DCFEETRY";
 
 const CODEC_VERSION_V1: u16 = 1;
-const CODEC_VERSION_V2: u16 = 2;
 const CODEC_FLAGS_V1: u16 = 0;
 
 pub fn encode_fee_record_v1(
@@ -126,105 +346,6 @@ pub fn decode_fee_record_v1(
     Ok(selected)
 }
 
-/// Encode the fresh RevenuePolicyV2-selected semantic body. The width is
-/// intentionally unchanged, but both magic and schema version are distinct.
-pub fn encode_fee_record_v2(
-    selected: &SelectedCompositeFeeV2,
-) -> Result<[u8; FEE_RECORD_ACCOUNT_V1_BYTES]> {
-    let mut output = [0u8; FEE_RECORD_ACCOUNT_V1_BYTES];
-    let mut cursor = 0usize;
-    put_header_version(
-        &mut output,
-        &mut cursor,
-        FEE_RECORD_MAGIC_V2,
-        CODEC_VERSION_V2,
-    )?;
-    for identity in [
-        selected.fee_record(),
-        selected.realm(),
-        selected.market(),
-        selected.epoch(),
-        selected.selected_candidate(),
-        selected.batch_policy(),
-        selected.revenue_policy(),
-        selected.treasury_owner(),
-        selected.treasury_position(),
-    ] {
-        put(&mut output, &mut cursor, &identity.0)?;
-    }
-    put(
-        &mut output,
-        &mut cursor,
-        &selected.price_scale().to_le_bytes(),
-    )?;
-    put(&mut output, &mut cursor, &[selected.outcome_count()])?;
-    put(&mut output, &mut cursor, &[0; 3])?;
-    put(
-        &mut output,
-        &mut cursor,
-        &selected.dispersion_bps().to_le_bytes(),
-    )?;
-    put(
-        &mut output,
-        &mut cursor,
-        &selected.floor_range_bps().to_le_bytes(),
-    )?;
-    put(
-        &mut output,
-        &mut cursor,
-        &selected.carry_denominator().to_le_bytes(),
-    )?;
-    finish(cursor, output.len())?;
-    Ok(output)
-}
-
-pub fn decode_fee_record_v2(
-    input: &[u8],
-    batch: &FrozenPolicyV1,
-    revenue: &RevenuePolicyV2,
-) -> Result<SelectedCompositeFeeV2> {
-    exact_len(input, FEE_RECORD_ACCOUNT_V1_BYTES)?;
-    let mut cursor = 0usize;
-    take_header_version(
-        input,
-        &mut cursor,
-        FEE_RECORD_MAGIC_V2,
-        CODEC_VERSION_V2,
-    )?;
-    let fee_record = read_id(input, &mut cursor)?;
-    let realm = read_id(input, &mut cursor)?;
-    let market = read_id(input, &mut cursor)?;
-    let epoch = read_id(input, &mut cursor)?;
-    let candidate = read_id(input, &mut cursor)?;
-    let _batch_policy = read_id(input, &mut cursor)?;
-    let _revenue_policy = read_id(input, &mut cursor)?;
-    let _treasury_owner = read_id(input, &mut cursor)?;
-    let treasury_position = read_id(input, &mut cursor)?;
-    let price_scale = read_u64(input, &mut cursor)?;
-    let outcome_count = read_u8(input, &mut cursor)?;
-    require_zero(take(input, &mut cursor, 3)?)?;
-    let _dispersion_bps = read_u32(input, &mut cursor)?;
-    let _floor_range_bps = read_u32(input, &mut cursor)?;
-    let _denominator = read_u128(input, &mut cursor)?;
-    finish(cursor, input.len())?;
-    let selected = SelectedCompositeFeeV2::select(
-        fee_record,
-        realm,
-        market,
-        epoch,
-        candidate,
-        treasury_position,
-        price_scale,
-        outcome_count,
-        batch,
-        revenue,
-    )?;
-    if encode_fee_record_v2(&selected)?.as_slice() != input {
-        return Err(Error::MismatchedBinding);
-    }
-    Ok(selected)
-}
-
 pub fn encode_owner_fee_carry_v1(
     carry: &OwnerFeeCarryV1,
 ) -> Result<[u8; OWNER_FEE_CARRY_ACCOUNT_V1_BYTES]> {
@@ -242,9 +363,9 @@ pub fn encode_owner_fee_carry_v1(
     Ok(output)
 }
 
-pub fn decode_owner_fee_carry_v1<S: SelectedCompositeFeeAccess + ?Sized>(
+pub fn decode_owner_fee_carry_v1(
     input: &[u8],
-    selected: &S,
+    selected: &SelectedCompositeFeeV1,
 ) -> Result<OwnerFeeCarryV1> {
     exact_len(input, OWNER_FEE_CARRY_ACCOUNT_V1_BYTES)?;
     let mut cursor = 0usize;
@@ -386,47 +507,61 @@ pub fn encode_recipient_allocation_v1(
     allocation: &RecipientAllocationV1,
 ) -> Result<[u8; RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES]> {
     let mut output = [0u8; RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES];
+    encode_recipient_allocation_v1_into(allocation, &mut output)?;
+    Ok(output)
+}
+
+/// Encode the exact V1 semantic body directly into caller-owned storage.
+///
+/// The current V3 SBF writer uses this form so the 2,640-byte body is never a
+/// second local array beside the 2,744-byte certified body.
+#[inline(never)]
+pub fn encode_recipient_allocation_v1_into(
+    allocation: &RecipientAllocationV1,
+    output: &mut [u8],
+) -> Result<()> {
+    exact_len(output, RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES)?;
     let mut cursor = 0usize;
-    put_header(&mut output, &mut cursor, RECIPIENT_ALLOCATION_MAGIC_V1)?;
-    put(&mut output, &mut cursor, &allocation.fee_record().0)?;
-    put(&mut output, &mut cursor, &[allocation.maker_len()])?;
-    put(&mut output, &mut cursor, &[0; 3])?;
+    put_header(output, &mut cursor, RECIPIENT_ALLOCATION_MAGIC_V1)?;
+    put(output, &mut cursor, &allocation.fee_record().0)?;
+    put(output, &mut cursor, &[allocation.maker_len()])?;
+    put(output, &mut cursor, &[0; 3])?;
     put(
-        &mut output,
+        output,
         &mut cursor,
         &allocation.maker_rebate_total().to_le_bytes(),
     )?;
     put(
-        &mut output,
+        output,
         &mut cursor,
         &allocation.executor_atoms().to_le_bytes(),
     )?;
     put(
-        &mut output,
+        output,
         &mut cursor,
         &allocation.treasury_atoms().to_le_bytes(),
     )?;
     put(
-        &mut output,
+        output,
         &mut cursor,
         &allocation.collected_fee_atoms().to_le_bytes(),
     )?;
     let mut index = 0usize;
     while index < MAX_FEE_ROWS_V1 {
         put(
-            &mut output,
+            output,
             &mut cursor,
             &allocation.maker_positions()[index].0,
         )?;
         put(
-            &mut output,
+            output,
             &mut cursor,
             &allocation.maker_rebate_atoms()[index].to_le_bytes(),
         )?;
         index += 1;
     }
     finish(cursor, output.len())?;
-    Ok(output)
+    Ok(())
 }
 
 pub fn decode_recipient_allocation_v1(
@@ -559,228 +694,212 @@ pub fn decode_persisted_certified_recipient_allocation_v2(
     Ok(value)
 }
 
-/// Borrowed, allocation-free view of the exact certified recipient body.
-/// Construction performs the same canonical row, padding, and conservation
-/// checks as the owning decoder without placing the 64-row value on the stack.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CertifiedRecipientAllocationViewV2<'a> {
-    input: &'a [u8],
-    fee_record: Id,
-    maker_len: u8,
-    maker_rebate_total: u64,
-    executor_atoms: u64,
-    treasury_atoms: u64,
-    collected_fee_atoms: u64,
-    owner_fee_book_data_id: Id,
-    owner_order_set_digest: Id,
-    owner_count: u16,
+/// Encode V3 semantics directly into exact caller-owned body storage.
+#[inline(never)]
+pub fn encode_certified_recipient_allocation_v3_into(
+    certified: &CertifiedRecipientAllocationV3,
+    output: &mut [u8],
+) -> Result<()> {
+    encode_certified_recipient_allocation_v3_from_access_into(certified, output)
 }
 
-impl<'a> CertifiedRecipientAllocationViewV2<'a> {
-    pub fn decode(input: &'a [u8]) -> Result<Self> {
-        exact_len(input, CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES)?;
-        let mut cursor = 0usize;
-        take_header(input, &mut cursor, RECIPIENT_ALLOCATION_MAGIC_V1)?;
-        let fee_record = read_id(input, &mut cursor)?;
-        live(fee_record)?;
-        let maker_len = read_u8(input, &mut cursor)?;
-        require_zero(take(input, &mut cursor, 3)?)?;
-        if usize::from(maker_len) > MAX_FEE_ROWS_V1 {
-            return Err(Error::InvalidWidth);
-        }
-        let maker_rebate_total = read_u64(input, &mut cursor)?;
-        let executor_atoms = read_u64(input, &mut cursor)?;
-        let treasury_atoms = read_u64(input, &mut cursor)?;
-        let collected_fee_atoms = read_u64(input, &mut cursor)?;
-        let mut maker_sum = 0u64;
-        let mut prior = Id([0; 32]);
-        let mut index = 0u8;
-        while usize::from(index) < MAX_FEE_ROWS_V1 {
-            let position = read_id(input, &mut cursor)?;
-            let atoms = read_u64(input, &mut cursor)?;
-            if index < maker_len {
-                live(position)?;
-                if !prior.is_zero() && position <= prior {
-                    return Err(if position == prior {
-                        Error::DuplicateIdentity
-                    } else {
-                        Error::NonCanonicalOrder
-                    });
-                }
-                maker_sum = add(maker_sum, atoms)?;
-                prior = position;
-            } else if !position.is_zero() || atoms != 0 {
+/// Stream the exact current V3 body from an already-authorized projection.
+///
+/// This function rechecks the current policy, live provenance, canonical
+/// Position order, zero tail, cardinalities, and conservation while writing
+/// directly into caller-owned account storage. It does not authenticate the
+/// source of the projection; the live writer must keep its implementation
+/// private to the traversal-backed fee-weight/Hamilton capability.
+#[inline(never)]
+pub fn encode_certified_recipient_allocation_v3_from_access_into<A>(
+    certified: &A,
+    output: &mut [u8],
+) -> Result<()>
+where
+    A: CertifiedRecipientAllocationAccessV3 + ?Sized,
+{
+    exact_len(output, CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES)?;
+    let fee_record = certified.fee_record();
+    let row_count = certified.row_count();
+    let weight_policy_id = certified.weight_policy_id();
+    let weight_transcript_id = certified.weight_transcript_id();
+    let owner_order_set_digest = certified.owner_order_set_digest();
+    let traversed_owner_count = certified.traversed_owner_count();
+    let nonzero_weight_row_count = certified.nonzero_weight_row_count();
+    live(fee_record)?;
+    live(weight_policy_id)?;
+    live(weight_transcript_id)?;
+    live(owner_order_set_digest)?;
+    if weight_policy_id != crate::weight_v2::COMPOSITE_FEE_WEIGHT_POLICY_V2.id()?
+        || row_count == 0
+        || usize::from(row_count) > MAX_FEE_ROWS_V1
+        || traversed_owner_count == 0
+        || usize::from(traversed_owner_count) > MAX_FEE_ROWS_V1
+        || nonzero_weight_row_count != row_count
+        || u16::from(nonzero_weight_row_count) > traversed_owner_count
+        || certified.collected_fee_atoms() == 0
+    {
+        return Err(Error::InvalidAccountData);
+    }
+
+    let mut cursor = 0usize;
+    put_header(output, &mut cursor, RECIPIENT_ALLOCATION_MAGIC_V1)?;
+    put(output, &mut cursor, &fee_record.0)?;
+    put(output, &mut cursor, &[row_count])?;
+    put(output, &mut cursor, &[0; 3])?;
+    put(output, &mut cursor, &certified.maker_rebate_total().to_le_bytes())?;
+    put(output, &mut cursor, &certified.executor_atoms().to_le_bytes())?;
+    put(output, &mut cursor, &certified.treasury_atoms().to_le_bytes())?;
+    put(output, &mut cursor, &certified.collected_fee_atoms().to_le_bytes())?;
+    let mut maker_sum = 0u64;
+    let mut prior = None;
+    let mut index = 0usize;
+    while index < MAX_FEE_ROWS_V1 {
+        let row_index = u8::try_from(index).map_err(|_| Error::InvalidWidth)?;
+        if index < usize::from(row_count) {
+            let row = certified.row(row_index)?.ok_or(Error::MissingParticipant)?;
+            live(row.position())?;
+            if prior.is_some_and(|value| row.position() <= value) {
+                return Err(Error::NonCanonicalOrder);
+            }
+            maker_sum = add(maker_sum, row.rebate_atoms())?;
+            prior = Some(row.position());
+            put(output, &mut cursor, &row.position().0)?;
+            put(output, &mut cursor, &row.rebate_atoms().to_le_bytes())?;
+        } else {
+            if certified.row(row_index)?.is_some() {
                 return Err(Error::NonCanonicalPadding);
             }
-            index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+            put(output, &mut cursor, &[0; RECIPIENT_ALLOCATION_V1_ROW_BYTES])?;
         }
-        let owner_fee_book_data_id = read_id(input, &mut cursor)?;
-        let owner_order_set_digest = read_id(input, &mut cursor)?;
-        let owner_count = read_u16(input, &mut cursor)?;
-        require_zero(take(input, &mut cursor, 6)?)?;
-        finish(cursor, input.len())?;
-        live(owner_fee_book_data_id)?;
-        live(owner_order_set_digest)?;
-        if owner_count == 0
-            || usize::from(owner_count) > MAX_FEE_ROWS_V1
-            || collected_fee_atoms == 0
-            || maker_sum != maker_rebate_total
-            || add(add(maker_sum, executor_atoms)?, treasury_atoms)? != collected_fee_atoms
-        {
-            return Err(Error::ConservationFailure);
+        index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+    }
+    finish(cursor, RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES)?;
+    if maker_sum != certified.maker_rebate_total()
+        || add(
+            add(maker_sum, certified.executor_atoms())?,
+            certified.treasury_atoms(),
+        )? != certified.collected_fee_atoms()
+    {
+        return Err(Error::ConservationFailure);
+    }
+
+    let mut cursor = RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES;
+    put(output, &mut cursor, &weight_policy_id.0)?;
+    put(output, &mut cursor, &weight_transcript_id.0)?;
+    put(output, &mut cursor, &owner_order_set_digest.0)?;
+    put(
+        output,
+        &mut cursor,
+        &traversed_owner_count.to_le_bytes(),
+    )?;
+    put(output, &mut cursor, &[nonzero_weight_row_count])?;
+    put(output, &mut cursor, &[0; 5])?;
+    finish(cursor, output.len())?;
+    Ok(())
+}
+
+/// Strictly authenticate current V3 semantics without copying either
+/// maximum-width allocation array.
+///
+/// This is the canonical live adapter decoder. It parses every byte, requires
+/// strict Position ordering and zero padding, checks all allocation totals,
+/// fixes the current V2 weight-policy identity, and returns only a borrowed row
+/// accessor plus compact provenance.
+#[inline(never)]
+pub fn decode_borrowed_certified_recipient_allocation_v3(
+    input: &[u8],
+) -> Result<BorrowedCertifiedRecipientAllocationV3<'_>> {
+    exact_len(input, CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES)?;
+    let allocation_bytes = &input[..RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES];
+    let mut cursor = 0usize;
+    take_header(
+        allocation_bytes,
+        &mut cursor,
+        RECIPIENT_ALLOCATION_MAGIC_V1,
+    )?;
+    let fee_record = read_id(allocation_bytes, &mut cursor)?;
+    live(fee_record)?;
+    let maker_len = read_u8(allocation_bytes, &mut cursor)?;
+    if usize::from(maker_len) > MAX_FEE_ROWS_V1 {
+        return Err(Error::InvalidWidth);
+    }
+    require_zero(take(allocation_bytes, &mut cursor, 3)?)?;
+    let maker_rebate_total = read_u64(allocation_bytes, &mut cursor)?;
+    let executor_atoms = read_u64(allocation_bytes, &mut cursor)?;
+    let treasury_atoms = read_u64(allocation_bytes, &mut cursor)?;
+    let collected_fee_atoms = read_u64(allocation_bytes, &mut cursor)?;
+    let mut maker_sum = 0u64;
+    let mut prior = None;
+    let mut row_index = 0usize;
+    while row_index < MAX_FEE_ROWS_V1 {
+        let position = read_id(allocation_bytes, &mut cursor)?;
+        let rebate_atoms = read_u64(allocation_bytes, &mut cursor)?;
+        if row_index < usize::from(maker_len) {
+            live(position)?;
+            if prior.is_some_and(|value| position <= value) {
+                return Err(Error::NonCanonicalOrder);
+            }
+            maker_sum = add(maker_sum, rebate_atoms)?;
+            prior = Some(position);
+        } else if !position.is_zero() || rebate_atoms != 0 {
+            return Err(Error::NonCanonicalPadding);
         }
-        Ok(Self {
-            input,
+        row_index += 1;
+    }
+    finish(cursor, allocation_bytes.len())?;
+    if maker_sum != maker_rebate_total
+        || add(add(maker_sum, executor_atoms)?, treasury_atoms)? != collected_fee_atoms
+    {
+        return Err(Error::ConservationFailure);
+    }
+
+    cursor = RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES;
+    let weight_policy_id = read_id(input, &mut cursor)?;
+    let weight_transcript_id = read_id(input, &mut cursor)?;
+    let owner_order_set_digest = read_id(input, &mut cursor)?;
+    let traversed_owner_count = read_u16(input, &mut cursor)?;
+    let nonzero_weight_row_count = read_u8(input, &mut cursor)?;
+    require_zero(take(input, &mut cursor, 5)?)?;
+    finish(cursor, input.len())?;
+    live(weight_policy_id)?;
+    live(weight_transcript_id)?;
+    live(owner_order_set_digest)?;
+    if weight_policy_id != crate::weight_v2::COMPOSITE_FEE_WEIGHT_POLICY_V2.id()?
+        || traversed_owner_count == 0
+        || usize::from(traversed_owner_count) > MAX_FEE_ROWS_V1
+        || nonzero_weight_row_count == 0
+        || nonzero_weight_row_count != maker_len
+        || u16::from(nonzero_weight_row_count) > traversed_owner_count
+        || collected_fee_atoms == 0
+    {
+        return Err(Error::InvalidAccountData);
+    }
+    Ok(BorrowedCertifiedRecipientAllocationV3 {
+        allocation: BorrowedRecipientAllocationV1 {
+            bytes: allocation_bytes,
             fee_record,
             maker_len,
             maker_rebate_total,
             executor_atoms,
             treasury_atoms,
             collected_fee_atoms,
-            owner_fee_book_data_id,
-            owner_order_set_digest,
-            owner_count,
-        })
-    }
-
-    fn row_offset(index: u8) -> Result<usize> {
-        if usize::from(index) >= MAX_FEE_ROWS_V1 {
-            return Err(Error::InvalidWidth);
-        }
-        80usize
-            .checked_add(usize::from(index).checked_mul(40).ok_or(Error::ArithmeticOverflow)?)
-            .ok_or(Error::ArithmeticOverflow)
-    }
+        },
+        weight_policy_id,
+        weight_transcript_id,
+        owner_order_set_digest,
+        traversed_owner_count,
+        nonzero_weight_row_count,
+    })
 }
 
-impl CertifiedRecipientAllocationAccessV2 for CertifiedRecipientAllocationViewV2<'_> {
-    fn fee_record(&self) -> Id {
-        self.fee_record
-    }
-
-    fn maker_len(&self) -> u8 {
-        self.maker_len
-    }
-
-    fn maker_position(&self, index: u8) -> Result<Id> {
-        if index >= self.maker_len {
-            return Err(Error::InvalidWidth);
-        }
-        let mut at = Self::row_offset(index)?;
-        read_id(self.input, &mut at)
-    }
-
-    fn maker_rebate_atoms(&self, index: u8) -> Result<u64> {
-        if index >= self.maker_len {
-            return Err(Error::InvalidWidth);
-        }
-        let mut at = Self::row_offset(index)?
-            .checked_add(32)
-            .ok_or(Error::ArithmeticOverflow)?;
-        read_u64(self.input, &mut at)
-    }
-
-    fn maker_rebate_total(&self) -> u64 {
-        self.maker_rebate_total
-    }
-
-    fn executor_atoms(&self) -> u64 {
-        self.executor_atoms
-    }
-
-    fn treasury_atoms(&self) -> u64 {
-        self.treasury_atoms
-    }
-
-    fn collected_fee_atoms(&self) -> u64 {
-        self.collected_fee_atoms
-    }
-
-    fn owner_fee_book_data_id(&self) -> Id {
-        self.owner_fee_book_data_id
-    }
-
-    fn owner_order_set_digest(&self) -> Id {
-        self.owner_order_set_digest
-    }
-
-    fn owner_count(&self) -> u16 {
-        self.owner_count
-    }
-}
-
-/// Incremental canonical encoder for the certified recipient body. The
-/// adapter can stream rows directly from its borrow-bound traversal without a
-/// 64-row temporary value on the SBF stack.
-pub struct CertifiedRecipientAllocationEncoderV2<'a> {
-    output: &'a mut [u8],
-    header: CertifiedRecipientAllocationHeaderV2,
-    next_maker: u8,
-    maker_sum: u64,
-    prior_position: Id,
-}
-
-impl<'a> CertifiedRecipientAllocationEncoderV2<'a> {
-    pub fn begin(
-        output: &'a mut [u8],
-        header: CertifiedRecipientAllocationHeaderV2,
-    ) -> Result<Self> {
-        exact_len(output, CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES)?;
-        output.fill(0);
-        output[..8].copy_from_slice(&RECIPIENT_ALLOCATION_MAGIC_V1);
-        output[8..10].copy_from_slice(&CODEC_VERSION_V1.to_le_bytes());
-        output[10..12].copy_from_slice(&CODEC_FLAGS_V1.to_le_bytes());
-        output[12..44].copy_from_slice(&header.fee_record().0);
-        output[44] = header.maker_len();
-        output[48..56].copy_from_slice(&header.maker_rebate_total().to_le_bytes());
-        output[56..64].copy_from_slice(&header.executor_atoms().to_le_bytes());
-        output[64..72].copy_from_slice(&header.treasury_atoms().to_le_bytes());
-        output[72..80].copy_from_slice(&header.collected_fee_atoms().to_le_bytes());
-        Ok(Self {
-            output,
-            header,
-            next_maker: 0,
-            maker_sum: 0,
-            prior_position: Id([0; 32]),
-        })
-    }
-
-    pub fn push_maker(&mut self, position: Id, rebate_atoms: u64) -> Result<()> {
-        live(position)?;
-        if self.next_maker >= self.header.maker_len()
-            || (!self.prior_position.is_zero() && position <= self.prior_position)
-        {
-            return Err(Error::NonCanonicalOrder);
-        }
-        let offset = CertifiedRecipientAllocationViewV2::row_offset(self.next_maker)?;
-        self.output[offset..offset + 32].copy_from_slice(&position.0);
-        self.output[offset + 32..offset + 40].copy_from_slice(&rebate_atoms.to_le_bytes());
-        self.maker_sum = add(self.maker_sum, rebate_atoms)?;
-        self.prior_position = position;
-        self.next_maker = self
-            .next_maker
-            .checked_add(1)
-            .ok_or(Error::ArithmeticOverflow)?;
-        Ok(())
-    }
-
-    pub fn complete(self) -> Result<CertifiedRecipientAllocationViewV2<'a>> {
-        if self.next_maker != self.header.maker_len()
-            || self.maker_sum != self.header.maker_rebate_total()
-        {
-            return Err(Error::ConservationFailure);
-        }
-        let mut at = RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES;
-        self.output[at..at + 32]
-            .copy_from_slice(&self.header.owner_fee_book_data_id().0);
-        at += 32;
-        self.output[at..at + 32]
-            .copy_from_slice(&self.header.owner_order_set_digest().0);
-        at += 32;
-        self.output[at..at + 2].copy_from_slice(&self.header.owner_count().to_le_bytes());
-        CertifiedRecipientAllocationViewV2::decode(self.output)
-    }
-}
+const _: () = assert!(CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES == 2_744);
+const _: () = assert!(RECIPIENT_ALLOCATION_V1_ROWS_OFFSET == 80);
+const _: () = assert!(
+    RECIPIENT_ALLOCATION_V1_ROWS_OFFSET
+        + MAX_FEE_ROWS_V1 * RECIPIENT_ALLOCATION_V1_ROW_BYTES
+        == RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES
+);
 
 pub fn encode_treasury_ledger_v1(
     ledger: &TreasuryLedgerV1,
@@ -817,9 +936,9 @@ pub fn encode_treasury_ledger_v1(
     Ok(output)
 }
 
-pub fn decode_treasury_ledger_v1<S: SelectedCompositeFeeAccess + ?Sized>(
+pub fn decode_treasury_ledger_v1(
     input: &[u8],
-    selected: &S,
+    selected: &SelectedCompositeFeeV1,
 ) -> Result<TreasuryLedgerV1> {
     exact_len(input, TREASURY_LEDGER_ACCOUNT_V1_BYTES)?;
     let mut cursor = 0usize;
@@ -856,39 +975,21 @@ fn exact_len(input: &[u8], expected: usize) -> Result<()> {
     }
 }
 
-fn put_header<const N: usize>(
-    output: &mut [u8; N],
+fn put_header(
+    output: &mut [u8],
     cursor: &mut usize,
     magic: [u8; 8],
-) -> Result<()> {
-    put_header_version(output, cursor, magic, CODEC_VERSION_V1)
-}
-
-fn put_header_version<const N: usize>(
-    output: &mut [u8; N],
-    cursor: &mut usize,
-    magic: [u8; 8],
-    version: u16,
 ) -> Result<()> {
     put(output, cursor, &magic)?;
-    put(output, cursor, &version.to_le_bytes())?;
+    put(output, cursor, &CODEC_VERSION_V1.to_le_bytes())?;
     put(output, cursor, &CODEC_FLAGS_V1.to_le_bytes())
 }
 
 fn take_header(input: &[u8], cursor: &mut usize, magic: [u8; 8]) -> Result<()> {
-    take_header_version(input, cursor, magic, CODEC_VERSION_V1)
-}
-
-fn take_header_version(
-    input: &[u8],
-    cursor: &mut usize,
-    magic: [u8; 8],
-    version: u16,
-) -> Result<()> {
     if take(input, cursor, 8)? != magic.as_slice() {
         return Err(Error::WrongAccountKind);
     }
-    if read_u16(input, cursor)? != version {
+    if read_u16(input, cursor)? != CODEC_VERSION_V1 {
         return Err(Error::WrongVersion);
     }
     if read_u16(input, cursor)? != CODEC_FLAGS_V1 {
@@ -916,7 +1017,7 @@ fn finish(cursor: usize, len: usize) -> Result<()> {
     }
 }
 
-fn put<const N: usize>(output: &mut [u8; N], cursor: &mut usize, bytes: &[u8]) -> Result<()> {
+fn put(output: &mut [u8], cursor: &mut usize, bytes: &[u8]) -> Result<()> {
     let end = cursor
         .checked_add(bytes.len())
         .ok_or(Error::ArithmeticOverflow)?;
@@ -975,189 +1076,4 @@ fn read_u128(input: &[u8], cursor: &mut usize) -> Result<u128> {
     let mut value = [0u8; 16];
     value.copy_from_slice(take(input, cursor, 16)?);
     Ok(u128::from_le_bytes(value))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use clutch_batch::relation_v1::{
-        AllocationPolicyV1, AonPolicyV1, FeeBaseV1, PairingWitnessPolicyV1,
-        PortfolioLotPolicyV1, ResidualSettlementV1, RoundingBoundaryV1,
-        ScorePolicyV1, SelfCrossPolicyV1, TransferPhaseV1,
-    };
-    use clutch_batch::DustPolicy;
-
-    fn id(byte: u8) -> Id {
-        Id([byte; 32])
-    }
-
-    fn certified_bytes() -> [u8; CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES] {
-        let mut positions = [Id([0; 32]); MAX_FEE_ROWS_V1];
-        let mut rebates = [0u64; MAX_FEE_ROWS_V1];
-        positions[0] = id(2);
-        positions[1] = id(3);
-        rebates[0] = 5;
-        rebates[1] = 7;
-        let allocation = RecipientAllocationV1::restore_persisted(
-            id(1), 2, positions, rebates, 12, 0, 8, 20,
-        );
-        let allocation = match allocation {
-            Ok(value) => value,
-            Err(error) => panic!("fixture allocation failed: {error:?}"),
-        };
-        let certified = CertifiedRecipientAllocationV2::restore_persisted(
-            allocation,
-            id(4),
-            id(5),
-            2,
-        );
-        match certified {
-            Ok(value) => match encode_certified_recipient_allocation_v2(&value) {
-                Ok(bytes) => bytes,
-                Err(error) => panic!("fixture encode failed: {error:?}"),
-            },
-            Err(error) => panic!("fixture certificate failed: {error:?}"),
-        }
-    }
-
-    fn batch() -> FrozenPolicyV1 {
-        FrozenPolicyV1 {
-            allocation: AllocationPolicyV1::PricePriorityMarginalProRata,
-            self_cross: SelfCrossPolicyV1::RefuseOverlap,
-            aon: AonPolicyV1::RefuseAdmission,
-            rounding: RoundingBoundaryV1::TerminalOwnerFloor,
-            residual_settlement: ResidualSettlementV1::UniqueSliceReceipts,
-            transfer_phase: TransferPhaseV1::ActiveOrResolved,
-            portfolio_lots: PortfolioLotPolicyV1::StrictWholeOrder,
-            pairing_witness: PairingWitnessPolicyV1::ExplicitSlices,
-            dust: DustPolicy::AssignCanonical,
-            score: ScorePolicyV1::LexicographicDispersionV1,
-            fee_base: FeeBaseV1::CompositeDispersionFloor {
-                dispersion_bps: 40,
-                floor_range_bps: 10,
-            },
-        }
-    }
-
-    fn streaming_header() -> CertifiedRecipientAllocationHeaderV2 {
-        let revenue = RevenuePolicyV2::successor_development([9; 32]);
-        let selected = SelectedCompositeFeeV2::select(
-            id(1),
-            id(10),
-            id(11),
-            id(12),
-            id(13),
-            id(14),
-            10_000,
-            2,
-            &batch(),
-            &revenue,
-        )
-        .unwrap();
-        CertifiedRecipientAllocationHeaderV2::admit(
-            &selected,
-            &revenue,
-            20,
-            2,
-            id(4),
-            id(5),
-            2,
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn borrowed_certified_recipient_view_matches_owning_decode() {
-        let bytes = certified_bytes();
-        let view = CertifiedRecipientAllocationViewV2::decode(&bytes).unwrap();
-        let owning = decode_persisted_certified_recipient_allocation_v2(&bytes).unwrap();
-        assert_eq!(view.fee_record(), owning.fee_record());
-        assert_eq!(view.maker_len(), owning.maker_len());
-        assert_eq!(view.maker_position(0).unwrap(), id(2));
-        assert_eq!(view.maker_position(1).unwrap(), id(3));
-        assert_eq!(view.maker_rebate_atoms(0).unwrap(), 5);
-        assert_eq!(view.maker_rebate_atoms(1).unwrap(), 7);
-        assert_eq!(view.maker_rebate_total(), owning.maker_rebate_total());
-        assert_eq!(view.treasury_atoms(), owning.treasury_atoms());
-        assert_eq!(view.collected_fee_atoms(), owning.collected_fee_atoms());
-        assert_eq!(view.owner_fee_book_data_id(), owning.owner_fee_book_data_id());
-        assert_eq!(view.owner_order_set_digest(), owning.owner_order_set_digest());
-        assert_eq!(view.owner_count(), owning.owner_count());
-        assert_eq!(view.maker_position(2), Err(Error::InvalidWidth));
-    }
-
-    #[test]
-    fn streaming_encoder_matches_canonical_owning_codec() {
-        let mut bytes = [0u8; CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES];
-        let mut encoder =
-            CertifiedRecipientAllocationEncoderV2::begin(&mut bytes, streaming_header())
-                .unwrap();
-        encoder.push_maker(id(2), 5).unwrap();
-        encoder.push_maker(id(3), 7).unwrap();
-        let view = encoder.complete().unwrap();
-        assert_eq!(view.maker_rebate_total(), 12);
-        assert_eq!(bytes, certified_bytes());
-    }
-
-    #[test]
-    fn streaming_encoder_refuses_wrong_order_and_incomplete_sum() {
-        let mut bytes = [0u8; CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES];
-        let mut encoder =
-            CertifiedRecipientAllocationEncoderV2::begin(&mut bytes, streaming_header())
-                .unwrap();
-        encoder.push_maker(id(3), 5).unwrap();
-        assert_eq!(encoder.push_maker(id(2), 7), Err(Error::NonCanonicalOrder));
-
-        let mut incomplete = [0u8; CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES];
-        let mut encoder =
-            CertifiedRecipientAllocationEncoderV2::begin(&mut incomplete, streaming_header())
-                .unwrap();
-        encoder.push_maker(id(2), 5).unwrap();
-        assert_eq!(encoder.complete(), Err(Error::ConservationFailure));
-    }
-
-    #[test]
-    fn borrowed_certified_recipient_view_refuses_noncanonical_rows_and_totals() {
-        let mut duplicate = certified_bytes();
-        duplicate[120..152].copy_from_slice(&[2; 32]);
-        assert_eq!(
-            CertifiedRecipientAllocationViewV2::decode(&duplicate),
-            Err(Error::DuplicateIdentity)
-        );
-
-        let mut padded = certified_bytes();
-        padded[192] = 1;
-        assert_eq!(
-            CertifiedRecipientAllocationViewV2::decode(&padded),
-            Err(Error::NonCanonicalPadding)
-        );
-
-        let mut unconserved = certified_bytes();
-        unconserved[48..56].copy_from_slice(&13u64.to_le_bytes());
-        assert_eq!(
-            CertifiedRecipientAllocationViewV2::decode(&unconserved),
-            Err(Error::ConservationFailure)
-        );
-    }
-
-    #[test]
-    fn borrowed_certified_recipient_view_refuses_missing_certificate() {
-        let mut missing_book = certified_bytes();
-        missing_book[RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES
-            ..RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES + 32]
-            .fill(0);
-        assert_eq!(
-            CertifiedRecipientAllocationViewV2::decode(&missing_book),
-            Err(Error::ZeroIdentity)
-        );
-
-        let mut missing_owner = certified_bytes();
-        let owner_count_at = RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES + 64;
-        missing_owner[owner_count_at..owner_count_at + 2]
-            .copy_from_slice(&0u16.to_le_bytes());
-        assert_eq!(
-            CertifiedRecipientAllocationViewV2::decode(&missing_owner),
-            Err(Error::ConservationFailure)
-        );
-    }
 }
