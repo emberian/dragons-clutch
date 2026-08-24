@@ -18,6 +18,8 @@ const SCHEMA_V1: u16 = 1;
 /// Exact canonical number of Source/Candidate/Clearing/Settlement/Resolution/
 /// Retirement/Recovery rows.
 pub const DIRECT_GLOBAL_LIVENESS_COUNT_V1: usize = RUNTIME_COMPARTMENT_COUNT_V1;
+/// Exact consecutive Candidate call range reserved for one Direct V5 occurrence.
+pub const DIRECT_GLOBAL_LIVENESS_ALLOCATION_CALL_WIDTH_V1: u32 = 8;
 /// Exact hostile-codec width of [`DirectGlobalLivenessV1`].
 pub const DIRECT_GLOBAL_LIVENESS_BYTES_V1: usize = 1_008;
 /// Stable semantic identity of the complete current state.
@@ -408,7 +410,7 @@ impl DirectGlobalLivenessV1 {
             || self.manifest_rent_principal_lamports == 0
             || self.candidate_maximum_calls == 0
             || self.candidate_work_principal_lamports == 0
-            || self.allocation_call_width == 0
+            || self.allocation_call_width != DIRECT_GLOBAL_LIVENESS_ALLOCATION_CALL_WIDTH_V1
             || self.allocation_call_width > self.candidate_maximum_calls
             || self.candidate_reserved_calls != expected_reserved_calls
             || self.candidate_reserved_calls > self.candidate_maximum_calls
