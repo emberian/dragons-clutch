@@ -19,7 +19,8 @@ fn recipe() -> SeriesRecipeV1 {
         terms_id: id(2),
         claim_basis_id: id(3),
         capacity_profile_id: id(4),
-        compiler_release_id: id(5),
+        compiler_release_id: IdentityV1::new(PRODUCT_COMPILER_RELEASE_ID_V1)
+            .expect("release identity"),
         occurrence_schedule_id: id(6),
         source_schedule_id: id(7),
         capability_template_id: id(8),
@@ -274,6 +275,12 @@ fn recipe_bounds_are_explicit_and_checked() {
 #[test]
 fn release_set_is_closed_and_pinned_to_its_exact_preimages() {
     assert_eq!(
+        content_identity(PRODUCT_COMPILER_RELEASE_PREIMAGE_V1)
+            .expect("release identity")
+            .to_bytes(),
+        PRODUCT_COMPILER_RELEASE_ID_V1
+    );
+    assert_eq!(
         content_identity(OCCURRENCE_DERIVATION_RELEASE_PREIMAGE_V1)
             .expect("release identity")
             .to_bytes(),
@@ -306,6 +313,12 @@ fn release_set_is_closed_and_pinned_to_its_exact_preimages() {
     );
     assert_eq!(
         SeriesRecipeV1::decode(&substituted.to_bytes()),
+        Err(Error::DerivationReleaseUnavailable)
+    );
+    substituted = recipe();
+    substituted.compiler_release_id = id(249);
+    assert_eq!(
+        substituted.validate(),
         Err(Error::DerivationReleaseUnavailable)
     );
 }

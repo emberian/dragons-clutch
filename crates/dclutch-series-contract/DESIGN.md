@@ -24,12 +24,13 @@ The recipe commits:
 - first occurrence time, positive cadence, finite occurrence count, first
   Market generation, and exact categorical width.
 
-Every content identity is nonzero. V1 admits exactly four pinned release IDs:
-a fixed occurrence-artifact/Product derivation, a shared immutable source
-policy, a shared immutable capability manifest, and canonical Market-identity
-derivation. Any mixed or unknown release set refuses. The contract recomputes
-the complete `DerivedOccurrenceV1` and its content identity; caller-authored
-derived fields are never authority.
+Every content identity is nonzero. V1 admits exactly one pinned Product compiler
+and four pinned derivation release IDs: a fixed occurrence-artifact/Product
+derivation, a shared immutable source policy, a shared immutable capability
+manifest, and canonical Market-identity derivation. Any mixed or unknown
+release set refuses. The contract recomputes the complete
+`DerivedOccurrenceV1` and its content identity; caller-authored derived fields
+are never authority.
 
 The occurrence release hashes a fixed 104-byte artifact containing recipe,
 occurrence-schedule, index, time, and generation. It then hashes canonical
@@ -41,6 +42,12 @@ uses one immutable `source_schedule_id` as the shared source specification,
 window, statistic, and resolution-policy identity; capability similarly uses
 the immutable `capability_template_id` directly. A future per-occurrence source
 compiler is a new pinned release rather than caller discretion.
+
+Before instantiation, the SBF release authenticates the recipe-selected
+CapacityProfile and proves that the fixed 104-byte, one-page occurrence
+artifact and categorical outcome width fit it. The fixed Product compiler
+release ID is checked by the pure recipe decoder rather than carried as an
+unused advisory field.
 
 The root persists the immutable refund authority as the one semantic owner of
 the beneficiary choice. The Rent contract's one-credit-per-authority PDA rule

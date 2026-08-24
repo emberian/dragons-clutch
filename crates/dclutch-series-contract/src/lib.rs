@@ -62,6 +62,14 @@ pub const SERIES_INSTRUCTION_MAGIC_V1: [u8; 8] = *b"DCLTSRI1";
 /// Implemented persistent and instruction schema version.
 pub const SERIES_SCHEMA_VERSION_V1: u16 = 1;
 
+/// Exact release label for V1's fixed canonical Product construction.
+pub const PRODUCT_COMPILER_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/series-product-compiler/fixed-occurrence-v1";
+/// SHA-256 identity of [`PRODUCT_COMPILER_RELEASE_PREIMAGE_V1`].
+pub const PRODUCT_COMPILER_RELEASE_ID_V1: [u8; 32] = [
+    0xf2, 0x47, 0x12, 0x79, 0x8a, 0x0e, 0x6c, 0xf9, 0x73, 0xd0, 0x08, 0x58, 0xbc, 0xa1, 0xc6, 0xd9,
+    0x80, 0xd3, 0x14, 0x9f, 0xd3, 0x7a, 0x90, 0x83, 0xa3, 0x78, 0x73, 0xe5, 0x36, 0x02, 0x43, 0x44,
+];
 /// Exact release label for V1's fixed occurrence-artifact/Product derivation.
 pub const OCCURRENCE_DERIVATION_RELEASE_PREIMAGE_V1: &[u8] =
     b"dclutch/series-occurrence-derivation/fixed-v1";
@@ -410,7 +418,9 @@ impl SeriesRecipeV1 {
 
     /// Require the one closed derivation release set implemented by V1.
     pub fn validate_derivation_releases(&self) -> Result<()> {
-        if self.occurrence_derivation_release_id.to_bytes() != OCCURRENCE_DERIVATION_RELEASE_ID_V1
+        if self.compiler_release_id.to_bytes() != PRODUCT_COMPILER_RELEASE_ID_V1
+            || self.occurrence_derivation_release_id.to_bytes()
+                != OCCURRENCE_DERIVATION_RELEASE_ID_V1
             || self.source_derivation_release_id.to_bytes() != SOURCE_DERIVATION_RELEASE_ID_V1
             || self.capability_derivation_release_id.to_bytes()
                 != CAPABILITY_DERIVATION_RELEASE_ID_V1
