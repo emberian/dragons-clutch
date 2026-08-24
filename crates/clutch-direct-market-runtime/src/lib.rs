@@ -1095,6 +1095,10 @@ pub struct DirectActionReplayV1 {
 }
 
 impl DirectActionReplayV1 {
+    /// Immutable Direct root account.
+    pub const fn direct_root_account(self) -> [u8; 32] { self.direct_root_account }
+    /// Permanent replay account.
+    pub const fn replay_account(self) -> [u8; 32] { self.replay_account }
     /// Permanent account rent ownership.
     pub const fn rent(self) -> DirectRentOwnerV1 { self.rent }
     /// Active or immutable terminal replay phase.

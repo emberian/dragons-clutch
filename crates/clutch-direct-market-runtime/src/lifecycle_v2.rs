@@ -1182,8 +1182,9 @@ fn convert_economic_plan_v2<B: DirectHashBackendV1>(
 /// Default-deny current action-13 Product/archive authority.
 pub trait AuthenticatedDirectTerminalV2 {
     /// Authenticate the complete current Product RootV2/LinkV2/family
-    /// prestate, finalized Resolution, b1/v2/b2/b3/b4 deletion set, transfer
-    /// vector, and exact Product family successor identities.
+    /// prestate, finalized Resolution, b1/v2/b2/b3/b4 deletion set, and
+    /// transfer vector. Product derives the successor only after this receipt
+    /// is sealed, avoiding a receipt/poststate hash cycle.
     #[allow(clippy::too_many_arguments)]
     fn authenticate_terminal_v2(
         &self,
@@ -1196,7 +1197,6 @@ pub trait AuthenticatedDirectTerminalV2 {
         _retirement: &DirectRetirementTransferV1,
         _retirement_transfer_id: [u8; 32],
         _product_family_prestate_id: [u8; 32],
-        _product_family_poststate_id: [u8; 32],
         _consumed_sequence: u64,
         _observed_slot: u64,
         _family_terminal_sequence: u32,
@@ -1222,7 +1222,6 @@ pub struct DirectFamilyTerminalPreparationV2 {
     replay_post: DirectActionReplayV1,
     provisional_terminal_receipt_id: [u8; 32],
     product_family_prestate_id: [u8; 32],
-    product_family_poststate_id: [u8; 32],
     family_terminal_sequence: u32,
 }
 
@@ -1252,10 +1251,34 @@ pub struct DirectFamilyTerminalPlanV2 {
     pub terminal_receipt_id: [u8; 32],
     /// Authenticated Product family prestate identity.
     pub product_family_prestate_id: [u8; 32],
-    /// Exact Product family successor identity.
-    pub product_family_poststate_id: [u8; 32],
     /// Zero-based terminal occurrence coordinate.
     pub family_terminal_sequence: u32,
+}
+
+/// Bind the authenticated provisional action-13 replay into the compact
+/// transition token before the eighth Candidate work batch. The preparation's
+/// fields are private and originate only from `prepare_direct_family_terminal_v2`.
+pub fn bind_direct_family_terminal_preparation_v2<B: DirectHashBackendV1>(
+    state: &mut DirectRootReplayTransitionV2,
+    preparation: &DirectFamilyTerminalPreparationV2,
+    backend: &B,
+) -> Result<(), DirectMarketErrorV1> {
+    state.validate()?;
+    let replay_pre = state
+        .replay
+        .semantic_id(state.root.projected_root(), backend)?;
+    if state.root.root_semantic_id() != preparation.root_semantic_id
+        || replay_pre != preparation.replay_pre_semantic_id
+        || !preparation.replay_post.candidate_liveness_pending()
+        || preparation.replay_post.candidate_liveness_completed_calls() != 7
+    {
+        return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+    }
+    preparation
+        .replay_post
+        .validate_against(state.root.projected_root())?;
+    state.replay = preparation.replay_post;
+    Ok(())
 }
 
 /// Prepare current action 13 before its final Candidate work batch.
@@ -1271,7 +1294,6 @@ pub fn prepare_direct_family_terminal_v2<
     final_resolution: crate::DirectFinalResolutionV1,
     retirement: &DirectRetirementTransferV1,
     product_family_prestate_id: [u8; 32],
-    product_family_poststate_id: [u8; 32],
     consumed_sequence: u64,
     observed_slot: u64,
     family_terminal_sequence: u32,
@@ -1287,13 +1309,11 @@ pub fn prepare_direct_family_terminal_v2<
         final_resolution.semantic_id,
         final_resolution.data_id,
         product_family_prestate_id,
-        product_family_poststate_id,
     ] {
         crate::require_live(id)?;
     }
     if state.root().phase() != crate::DirectRootPhaseV1::Terminal
         || final_resolution.account != state.root().resolution_account()
-        || product_family_prestate_id == product_family_poststate_id
     {
         return Err(DirectMarketErrorV1::MismatchedBinding);
     }
@@ -1353,7 +1373,6 @@ pub fn prepare_direct_family_terminal_v2<
         retirement,
         retirement_transfer_id,
         product_family_prestate_id,
-        product_family_poststate_id,
         consumed_sequence,
         observed_slot,
         family_terminal_sequence,
@@ -1369,7 +1388,6 @@ pub fn prepare_direct_family_terminal_v2<
     let provisional_terminal_receipt_id = backend.sha256_parts(&[
         TERMINAL_RECEIPT_DOMAIN_V2,
         &product_family_prestate_id,
-        &product_family_poststate_id,
         &state.root().market_instance_id(),
         &state.root().generation().to_le_bytes(),
         &state.root().direct_root_account(),
@@ -1409,7 +1427,6 @@ pub fn prepare_direct_family_terminal_v2<
         replay_post,
         provisional_terminal_receipt_id,
         product_family_prestate_id,
-        product_family_poststate_id,
         family_terminal_sequence,
     })
 }
@@ -1470,7 +1487,6 @@ pub fn seal_direct_family_terminal_liveness_v2<B: DirectHashBackendV1>(
         TERMINAL_LIVENESS_SEAL_DOMAIN_V2,
         &preparation.provisional_terminal_receipt_id,
         &preparation.product_family_prestate_id,
-        &preparation.product_family_poststate_id,
         &bound_replay.action_transcript_id(),
         &bound_replay.candidate_liveness_completed_calls().to_le_bytes(),
         &bound_replay.candidate_liveness_last_receipt_id(),
@@ -1489,7 +1505,6 @@ pub fn seal_direct_family_terminal_liveness_v2<B: DirectHashBackendV1>(
         replay_post,
         terminal_receipt_id,
         product_family_prestate_id: preparation.product_family_prestate_id,
-        product_family_poststate_id: preparation.product_family_poststate_id,
         family_terminal_sequence: preparation.family_terminal_sequence,
     })
 }

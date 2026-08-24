@@ -2434,7 +2434,6 @@ pub(crate) fn consume_direct_family_terminal_postwrite_v2<'next>(
         manifest_state_after,
         family_prestate_id,
         ContentId::from_bytes(sealed.product_family_prestate_id),
-        ContentId::from_bytes(sealed.product_family_poststate_id),
     ] {
         require_live(id)?;
     }
@@ -2483,9 +2482,12 @@ pub(crate) fn consume_direct_family_terminal_postwrite_v2<'next>(
         .semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
         .content_id();
+    let expected_terminal_count = sealed
+        .family_terminal_sequence
+        .checked_add(1)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
     require(
-        family_poststate_id.bytes() == sealed.product_family_poststate_id
-            && successor_output
+        successor_output
                 .product_families()
                 .family(MarketFamilyV1::Direct)
                 .status()
@@ -2501,7 +2503,7 @@ pub(crate) fn consume_direct_family_terminal_postwrite_v2<'next>(
                 .family(MarketFamilyV1::Direct)
                 .counts()
                 .terminal
-                == sealed.family_terminal_sequence.saturating_add(1),
+                == expected_terminal_count,
         ClutchError::MismatchedState,
     )?;
     let authentication_before = authenticated.authentication_id();

@@ -21,6 +21,11 @@ use super::{
 use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
+use crate::instructions::direct_market_v2::{
+    complete_direct_action13_after_product_retirement_v2,
+    AuthenticatedDirectAction13ArchiveCloseV2,
+    AuthenticatedDirectAction13ProductPredecessorV2,
+};
 use crate::instructions::product_source_current::{
     AuthenticatedCompiledProductSeriesBundleV6, AuthenticatedSeriesSourceArtifactsV5,
 };
@@ -1542,6 +1547,75 @@ pub(crate) fn retire_current_product_series_v4<'a, 'root, 'link>(
         terminal,
         physical,
     })
+}
+
+/// Sole action-13 whole-Series outer. The Direct predecessor has already
+/// sealed b3, retired `0xba/v2`, and terminalized the Direct family in RootV2.
+/// This call consumes the Source/Product retirement graph and immediately
+/// consumes its move-only receipt while closing the exact Direct archives.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub(crate) fn retire_current_product_series_for_direct_v4<'a, 'root, 'link>(
+    program_id: &Pubkey,
+    registry: &AuthenticatedRegistryCapabilityV4,
+    artifacts: &AuthenticatedSeriesSourceArtifactsV5,
+    bundle: AuthenticatedCompiledProductSeriesBundleV6,
+    registry_account: &AccountInfo<'a>,
+    funding_account: &AccountInfo<'a>,
+    funding: AuthenticatedSeriesFundingAccountV4,
+    root_account: &AccountInfo<'a>,
+    root: AuthenticatedMarketLifecycleRootV2<'_>,
+    link_account: &AccountInfo<'a>,
+    link: AuthenticatedSeriesMarketLinkV2<'_>,
+    replay_account: &AccountInfo<'a>,
+    replay: AuthenticatedSeriesLifecycleReplayV2,
+    route: AuthenticatedSourceRouteV1,
+    schedule: SourceWorkScheduleBindingV1,
+    source_terminal: AuthenticatedSourceFundingCustodyLifecycleTerminalV1,
+    source_custody: &AccountInfo<'a>,
+    physical_accounts: &[AccountInfo<'a>],
+    root_rebound_output: &'root mut MarketLifecycleRootAccountV2,
+    link_rebound_output: &'link mut SeriesMarketLinkAccountV2,
+    direct_predecessor: AuthenticatedDirectAction13ProductPredecessorV2,
+    direct_root_account: &AccountInfo<'a>,
+    direct_replay_account: &AccountInfo<'a>,
+    direct_selection_account: &AccountInfo<'a>,
+    direct_reservation_accounts: &[AccountInfo<'a>],
+    direct_refund_accounts: &[AccountInfo<'a>],
+    direct_neutral_sink: &AccountInfo<'a>,
+) -> Outcome<AuthenticatedDirectAction13ArchiveCloseV2> {
+    let retirement = retire_current_product_series_v4(
+        program_id,
+        registry,
+        artifacts,
+        bundle,
+        registry_account,
+        funding_account,
+        root_account,
+        root,
+        link_account,
+        link,
+        replay_account,
+        replay,
+        route,
+        schedule,
+        source_terminal,
+        source_custody,
+        physical_accounts,
+        root_rebound_output,
+        link_rebound_output,
+    )?;
+    complete_direct_action13_after_product_retirement_v2(
+        program_id,
+        direct_predecessor,
+        retirement,
+        direct_root_account,
+        direct_replay_account,
+        direct_selection_account,
+        direct_reservation_accounts,
+        direct_refund_accounts,
+        direct_neutral_sink,
+    )
 }
 
 #[cfg(test)]

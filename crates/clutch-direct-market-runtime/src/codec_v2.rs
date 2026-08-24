@@ -92,6 +92,10 @@ impl AuthenticatedDirectRootTransitionV2 {
     pub const fn compiler_bundle_v6_id(&self) -> [u8; 32] {
         self.terminal_product_ids[2]
     }
+    /// Product RootV2 immutable MarketLifecycleBindingV2 identity.
+    pub const fn product_market_binding_id(&self) -> [u8; 32] {
+        self.terminal_product_ids[0]
+    }
     /// Complete current General V4/Revenue authority identity retained by b1/v2.
     pub const fn current_general_authority_id(&self) -> [u8; 32] {
         self.projected_root.binding.founder_series_plan_id

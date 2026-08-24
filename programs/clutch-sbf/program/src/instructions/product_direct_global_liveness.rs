@@ -205,6 +205,25 @@ struct ExactDirectCandidateRetirementAuthorityV2 {
     family_terminal_sequence: u32,
 }
 
+/// Default-refusing physical action-13 postwrite boundary. Direct implements
+/// this only after it has written and hostile-reopened final b3 and Candidate;
+/// Product therefore cannot retire `0xba/v2` from the pure sealed plan alone.
+pub(crate) trait AuthenticatedDirectCandidateTerminalPostwriteV2 {
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_direct_candidate_terminal_postwrite_v2(
+        &self,
+        _direct_root_account: ContentId,
+        _replay_account: ContentId,
+        _candidate_account: ContentId,
+        _terminal_receipt_id: ContentId,
+        _completed_calls: u32,
+        _last_work_receipt_id: ContentId,
+        _batch_receipt_id: ContentId,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+}
+
 impl ProductDirectGlobalLivenessAuthorityV2
     for ExactDirectCandidateRetirementAuthorityV2
 {
@@ -228,10 +247,13 @@ impl ProductDirectGlobalLivenessAuthorityV2
 /// final b3 transcript. Raw terminal IDs and caller-shaped Product states are
 /// not accepted at this boundary.
 #[inline(never)]
-pub(crate) fn retire_product_direct_candidate_allocation_v2(
+pub(crate) fn retire_product_direct_candidate_allocation_v2<
+    A: AuthenticatedDirectCandidateTerminalPostwriteV2 + ?Sized,
+>(
     program_id: &Pubkey,
     manifest_account: &AccountInfo<'_>,
     sealed: &DirectFamilyTerminalPlanV2,
+    postwrite: &A,
 ) -> Outcome<AuthenticatedProductDirectCandidateRetirementV2> {
     let authenticated = authenticate_product_direct_global_liveness_v2(
         program_id,
@@ -256,6 +278,17 @@ pub(crate) fn retire_product_direct_candidate_allocation_v2(
             && sealed.replay_post.family_terminal_receipt_id()
                 == sealed.terminal_receipt_id,
         ClutchError::MismatchedState,
+    )?;
+    postwrite.authenticate_direct_candidate_terminal_postwrite_v2(
+        ContentId::from_bytes(sealed.replay_post.direct_root_account()),
+        ContentId::from_bytes(sealed.replay_post.replay_account()),
+        authenticated.state().compartment_account(
+            RuntimeCompartmentKindV1::Candidate.index(),
+        ).ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?,
+        terminal_receipt_id,
+        sealed.replay_post.candidate_liveness_completed_calls(),
+        ContentId::from_bytes(sealed.replay_post.candidate_liveness_last_receipt_id()),
+        ContentId::from_bytes(sealed.replay_post.candidate_liveness_batch_receipt_id()),
     )?;
     let data_before = authenticated.data_id();
     let authentication_before = authenticated.authentication_id();
