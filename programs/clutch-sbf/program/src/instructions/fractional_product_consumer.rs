@@ -14,11 +14,11 @@ use clutch_fractional_redemption_runtime::{
     FractionalRedemptionActionV1,
 };
 use clutch_product_series::{
-    ContentId, MarketFoundationAccountGraphV3, MarketFoundationScheduleV3,
-    MarketInstanceV2Id, MarketLifecycleRootV2,
+    ContentId, MarketFoundationAccountGraphV4, MarketFoundationScheduleV4,
+    MarketInstanceV2Id, MarketLifecycleRootV3,
 };
 use clutch_retirement::Identity32V1;
-use clutch_solana_layout::product_series::MarketLifecycleRootAccountV2;
+use clutch_solana_layout::product_series::MarketLifecycleRootAccountV3;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
@@ -26,8 +26,8 @@ use super::fractional_redemption::{
     AuthenticatedFractionalFamilyAdmissionPostwriteV1,
     AuthenticatedFractionalFamilyTerminalPostwriteV1,
 };
+use super::product_market_lifecycle_v3_current::authenticate_market_lifecycle_root_v3;
 use super::product_series_current::{
-    authenticate_market_lifecycle_root_v2,
     consume_fractional_family_admission_postwrite_v2,
     consume_fractional_family_terminal_postwrite_v2,
     AuthenticatedProductFractionalFamilyAdmissionOwnerV2,
@@ -270,14 +270,14 @@ pub(crate) fn consume_fractional_admission_v2(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
     postwrite: AuthenticatedFractionalFamilyAdmissionPostwriteV1,
-    schedule: &MarketFoundationScheduleV3,
-    graph: &MarketFoundationAccountGraphV3,
-    root_before_output: &mut MarketLifecycleRootAccountV2,
-    root_successor_output: &mut MarketLifecycleRootV2,
-    root_after_output: &mut MarketLifecycleRootAccountV2,
+    schedule: &MarketFoundationScheduleV4,
+    graph: &MarketFoundationAccountGraphV4,
+    root_before_output: &mut MarketLifecycleRootAccountV3,
+    root_successor_output: &mut MarketLifecycleRootV3,
+    root_after_output: &mut MarketLifecycleRootAccountV3,
 ) -> Outcome<AuthenticatedProductFractionalFamilyAdmissionV2> {
     let admission = postwrite.family_admission();
-    let root = authenticate_market_lifecycle_root_v2(
+    let root = authenticate_market_lifecycle_root_v3(
         program_id,
         root_account,
         MarketInstanceV2Id::from_bytes(admission.market_instance().bytes()),
@@ -342,14 +342,14 @@ pub(crate) fn consume_fractional_terminal_v2(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
     postwrite: AuthenticatedFractionalFamilyTerminalPostwriteV1,
-    schedule: &MarketFoundationScheduleV3,
-    graph: &MarketFoundationAccountGraphV3,
-    root_before_output: &mut MarketLifecycleRootAccountV2,
-    root_successor_output: &mut MarketLifecycleRootV2,
-    root_after_output: &mut MarketLifecycleRootAccountV2,
+    schedule: &MarketFoundationScheduleV4,
+    graph: &MarketFoundationAccountGraphV4,
+    root_before_output: &mut MarketLifecycleRootAccountV3,
+    root_successor_output: &mut MarketLifecycleRootV3,
+    root_after_output: &mut MarketLifecycleRootAccountV3,
 ) -> Outcome<AuthenticatedProductFractionalFamilyTerminalV2> {
     let terminal = postwrite.family_terminal();
-    let root = authenticate_market_lifecycle_root_v2(
+    let root = authenticate_market_lifecycle_root_v3(
         program_id,
         root_account,
         MarketInstanceV2Id::from_bytes(terminal.market_instance_id().bytes()),

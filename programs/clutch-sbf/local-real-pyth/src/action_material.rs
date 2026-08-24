@@ -28,7 +28,8 @@ use clutch_solana_layout::registry::{
 };
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::product_series::{
-    SeriesMarketLinkAccountV2, SeriesRegistryAccountV3, SERIES_REGISTRY_PDA_PREFIX_V1,
+    MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV2, SeriesMarketLinkAccountV3,
+    SeriesRegistryAccountV3, SeriesRegistryAccountV4, SERIES_REGISTRY_PDA_PREFIX_V1,
 };
 use clutch_solana_layout::product_series::MarketLifecycleRootAccountV2;
 use clutch_solana_layout::{ProfileAccount, RealmAccount};
@@ -60,18 +61,19 @@ use clutch_fractional_redemption_runtime::{
     FRACTIONAL_POLICY_PDA_PREFIX,
 };
 use clutch_general_v2_contract::{
-    MarketBindingV2, MarketRuntimeV3AccountV1, MARKET_BINDING_SEED_DOMAIN_V1,
+    MarketBindingV2, MarketBindingV4, MarketRuntimeV3AccountV1, MARKET_BINDING_SEED_DOMAIN_V1,
     MARKET_RUNTIME_SEED_DOMAIN_V1,
 };
 use clutch_product_series::{
     CompiledProductSeriesBundleV6, ContentId, FixedCodec, MarketInstancePreimageV2,
-    MarketFoundationAccountGraphV3, MarketFoundationSlotV3, SeriesFundingQuoteV5,
+    MarketFoundationAccountGraphV4, MarketFoundationSlotV4, SeriesFundingQuoteV6,
     NativeClaimBasisV1, RegistryCapabilityProfileV4, RegistryProgramReleaseV2,
     RegistryReleaseLocusV2,
-    MarketLifecyclePhaseV2, SeriesAttachmentPlanV5, SeriesFundingTermsV2,
+    MarketLifecyclePhaseV2, MarketLifecyclePhaseV3, SeriesAttachmentPlanV5,
+    SeriesFundingTermsV2,
     SeriesLinkObligationStatusV2, SeriesLinkObligationV2, SeriesMarketLinkPhaseV2,
-    MARKET_FOUNDATION_CORE_SLOT_COUNT_V3, MARKET_FOUNDATION_MAX_OUTCOMES_V3,
-    MARKET_FOUNDATION_SLOT_COUNT_V3,
+    MARKET_FOUNDATION_CORE_SLOT_COUNT_V4, MARKET_FOUNDATION_MAX_OUTCOMES_V4,
+    MARKET_FOUNDATION_SLOT_COUNT_V4,
 };
 use clutch_liveness::{
     RuntimeCompartmentKindV1, RuntimeCompartmentPhaseV1, RuntimeCompartmentV1,
@@ -3442,21 +3444,21 @@ pub fn construct_fractional_lifecycle_material_v1(
     if workflow_id == [0; 32]
         || builder.clutch_program() != releases.base.program_id
         || builder.clutch_release_sha256() != releases.base.elf_sha256
-        || frame.accounts.len() < 34
+        || frame.accounts.len() < 39
     {
         return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
     }
     let program = releases.base.program_id;
-    let root = MarketLifecycleRootAccountV2::decode(&frame.accounts[0].data)
+    let root = MarketLifecycleRootAccountV3::decode(&frame.accounts[0].data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let binding = root.state.binding();
     let outcomes = usize::from(binding.outcome_count);
-    if !(2..=MARKET_FOUNDATION_MAX_OUTCOMES_V3).contains(&outcomes)
-        || frame.accounts.len() != 32 + 2 * outcomes
+    if !(2..=MARKET_FOUNDATION_MAX_OUTCOMES_V4).contains(&outcomes)
+        || frame.accounts.len() != 35 + 2 * outcomes
     {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
-    let aux = MARKET_FOUNDATION_CORE_SLOT_COUNT_V3 + 2 * outcomes;
+    let aux = MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + 2 * outcomes + 3;
     let cluster = &frame.accounts[0].provenance.cluster_key;
     let release_key = releases.base.key();
     let mut addresses = BTreeSet::new();
@@ -3494,29 +3496,39 @@ pub fn construct_fractional_lifecycle_material_v1(
     {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
-    let link = SeriesMarketLinkAccountV2::decode(&frame.accounts[aux + 8].data)
+    let link = SeriesMarketLinkAccountV3::decode(&frame.accounts[aux + 8].data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let link_binding = link.state.binding();
-    let quote = SeriesFundingQuoteV5::decode(&frame.accounts[aux + 9].data)
+    let quote = SeriesFundingQuoteV6::decode(&frame.accounts[aux + 9].data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let quote_id = quote.id().map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     verify_product_artifact(
         program,
         StructuredChainAccountV1::present(frame.accounts[aux + 9])?,
-        ArtifactKind::SeriesFundingQuoteV5,
+        ArtifactKind::SeriesFundingQuoteV6,
         quote_id.content_id().bytes(),
     )?;
-    let mut graph_ids = [ContentId::ZERO; MARKET_FOUNDATION_SLOT_COUNT_V3];
-    for index in 0..MARKET_FOUNDATION_CORE_SLOT_COUNT_V3 {
+    let mut graph_ids = [ContentId::ZERO; MARKET_FOUNDATION_SLOT_COUNT_V4];
+    for index in 0..MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 {
         graph_ids[index] = ContentId::from_bytes(frame.accounts[index].address.to_bytes());
     }
     for index in 0..outcomes {
-        graph_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V3 + index] =
-            ContentId::from_bytes(frame.accounts[MARKET_FOUNDATION_CORE_SLOT_COUNT_V3 + index].address.to_bytes());
-        graph_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V3 + MARKET_FOUNDATION_MAX_OUTCOMES_V3 + index] =
-            ContentId::from_bytes(frame.accounts[MARKET_FOUNDATION_CORE_SLOT_COUNT_V3 + outcomes + index].address.to_bytes());
+        graph_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + index] =
+            ContentId::from_bytes(frame.accounts[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + index].address.to_bytes());
+        graph_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + MARKET_FOUNDATION_MAX_OUTCOMES_V4 + index] =
+            ContentId::from_bytes(frame.accounts[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + outcomes + index].address.to_bytes());
     }
-    let graph = MarketFoundationAccountGraphV3 {
+    let treasury = MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + 2 * outcomes;
+    graph_ids[MarketFoundationSlotV4::GeneralTreasuryPosition.index()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?] =
+        ContentId::from_bytes(frame.accounts[treasury].address.to_bytes());
+    graph_ids[MarketFoundationSlotV4::GeneralTreasuryReplay.index()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?] =
+        ContentId::from_bytes(frame.accounts[treasury + 1].address.to_bytes());
+    graph_ids[MarketFoundationSlotV4::TreasuryServiceLedger.index()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?] =
+        ContentId::from_bytes(frame.accounts[treasury + 2].address.to_bytes());
+    let graph = MarketFoundationAccountGraphV4 {
         market_instance_id: binding.market_instance_id,
         generation: binding.generation,
         foundation_schedule_id: quote.foundation.id()
@@ -3538,7 +3550,7 @@ pub fn construct_fractional_lifecycle_material_v1(
     {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
-    let registry = SeriesRegistryAccountV3::decode(&frame.accounts[aux + 10].data)
+    let registry = SeriesRegistryAccountV4::decode(&frame.accounts[aux + 10].data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let registry_pda = Address::find_program_address(
         &[SERIES_REGISTRY_PDA_PREFIX_V1, &registry.series_plan_id.bytes()], &program,
@@ -3598,7 +3610,7 @@ pub fn construct_fractional_lifecycle_material_v1(
     let market_instance = MarketInstancePreimageV2::decode(&frame.accounts[aux + 7].data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let market_id = market_instance.id().map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
-    let market_binding = MarketBindingV2::decode(&frame.accounts[1].data)
+    let market_binding = MarketBindingV4::decode(&frame.accounts[1].data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let market_runtime = MarketRuntimeV3AccountV1::decode(&frame.accounts[2].data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
@@ -3665,7 +3677,7 @@ pub fn construct_fractional_lifecycle_material_v1(
         || binding.collateral_policy_id.bytes() != collateral_id.bytes()
         || binding.collateral_release_id.bytes() != collateral_release_id.bytes()
         || binding.claim_issuance_binding_id.bytes() != claim_binding_id.bytes()
-        || market_binding.base().market_instance_v2_id.bytes() != market_id.bytes()
+        || market_binding.base().base().market_instance_v2_id.bytes() != market_id.bytes()
         || market_runtime.market_binding.bytes() != frame.accounts[1].address.to_bytes()
         || hoard.market_instance_id.bytes() != market_id.bytes()
         || claim.market_instance_id.bytes() != market_id.bytes()
@@ -3684,6 +3696,11 @@ pub fn construct_fractional_lifecycle_material_v1(
             return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
         }
     }
+    for index in treasury..treasury + 3 {
+        if frame.accounts[index].owner != program || frame.accounts[index].executable {
+            return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+        }
+    }
     for index in [aux, aux + 1, aux + 2, aux + 7, aux + 8, aux + 9, aux + 10, aux + 13, aux + 14] {
         if frame.accounts[index].owner != program || frame.accounts[index].executable {
             return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
@@ -3695,8 +3712,8 @@ pub fn construct_fractional_lifecycle_material_v1(
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
     for index in 0..outcomes {
-        let mint = frame.accounts[MARKET_FOUNDATION_CORE_SLOT_COUNT_V3 + index];
-        let custody = frame.accounts[MARKET_FOUNDATION_CORE_SLOT_COUNT_V3 + outcomes + index];
+        let mint = frame.accounts[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + index];
+        let custody = frame.accounts[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + outcomes + index];
         if mint.owner != frame.accounts[aux + 5].address
             || custody.owner != frame.accounts[aux + 5].address
             || mint.executable
@@ -3816,7 +3833,15 @@ pub fn construct_fractional_lifecycle_material_v1(
         metas.push(if writable { AccountMeta::new(account.address, false) }
             else { AccountMeta::new_readonly(account.address, false) });
         roles.push(CanonicalAccountRoleV1 {
-            label: if index < 15 { "foundation-core" } else if index < aux { "foundation-outcome" } else { "lifecycle-authority" },
+            label: if index < 15 {
+                "foundation-core"
+            } else if index < 15 + 2 * outcomes {
+                "foundation-outcome"
+            } else if index < aux {
+                "foundation-treasury"
+            } else {
+                "lifecycle-authority"
+            },
             address: account.address,
             writable,
             signer: false,
@@ -3937,7 +3962,7 @@ fn authenticate_fractional_holder_core_v1(
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let collateral_policy = CollateralPolicyV2::decode(&frame.collateral_policy.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
-    let market_binding = MarketBindingV2::decode(&frame.market_binding.data)
+    let market_binding = MarketBindingV4::decode(&frame.market_binding.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let market_runtime = MarketRuntimeV3AccountV1::decode(&frame.market_runtime.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
@@ -4039,9 +4064,9 @@ fn authenticate_fractional_holder_core_v1(
         || frame.market_binding.address != market_binding_pda.0
         || frame.market_runtime.address != market_runtime_pda.0
         || frame.market_instance.address != market_instance_pda.0
-        || market_binding.base().market.bytes() != frame.market_runtime.address.to_bytes()
-        || market_binding.base().market_instance_v2_id.bytes() != market_instance_id.bytes()
-        || market_binding.base().market_genesis_profile_v2_id.bytes()
+        || market_binding.base().base().market.bytes() != frame.market_runtime.address.to_bytes()
+        || market_binding.base().base().market_instance_v2_id.bytes() != market_instance_id.bytes()
+        || market_binding.base().base().market_genesis_profile_v2_id.bytes()
             != market_instance.market_genesis_profile_id.bytes()
         || market_runtime.market_binding.bytes() != frame.market_binding.address.to_bytes()
         || market_runtime.market_instance_v2_id.bytes() != market_instance_id.bytes()
@@ -4286,7 +4311,7 @@ fn derive_fractional_credit_admission_v1(
         &[b"dc:market-lifecycle-root:v1", &core.market_instance_id.bytes()],
         &release.program_id,
     );
-    let root = MarketLifecycleRootAccountV2::decode(&frame.market_root.data)
+    let root = MarketLifecycleRootAccountV3::decode(&frame.market_root.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     if frame.credit.address != credit_pda.0
         || frame.market_root.address != root_pda.0
@@ -4297,6 +4322,7 @@ fn derive_fractional_credit_admission_v1(
         || root.state.binding_ref().generation != core.policy.domain_generation
         || root.state.binding_ref().claim_issuance_binding_id.bytes()
             != core.policy.claim_issuance_binding.bytes()
+        || root.state.phase() != MarketLifecyclePhaseV3::Active
         || frame.neutral_sink.address.to_bytes()
             != root.state.capital().neutral_lamport_sink.bytes()
         || frame.neutral_sink.owner != solana_sdk_ids::system_program::ID
@@ -5695,7 +5721,7 @@ pub fn construct_fractional_redeem_internal_exact_material_v1(
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let collateral_policy = CollateralPolicyV2::decode(&frame.collateral_policy.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
-    let market_binding = MarketBindingV2::decode(&frame.market_binding.data)
+    let market_binding = MarketBindingV4::decode(&frame.market_binding.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let market_runtime = MarketRuntimeV3AccountV1::decode(&frame.market_runtime.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
@@ -5799,9 +5825,9 @@ pub fn construct_fractional_redeem_internal_exact_material_v1(
         || frame.market_binding.address != market_binding_pda.0
         || frame.market_runtime.address != market_runtime_pda.0
         || frame.market_instance.address != market_instance_pda.0
-        || market_binding.base().market.bytes() != frame.market_runtime.address.to_bytes()
-        || market_binding.base().market_instance_v2_id.bytes() != market_instance_id.bytes()
-        || market_binding.base().market_genesis_profile_v2_id.bytes()
+        || market_binding.base().base().market.bytes() != frame.market_runtime.address.to_bytes()
+        || market_binding.base().base().market_instance_v2_id.bytes() != market_instance_id.bytes()
+        || market_binding.base().base().market_genesis_profile_v2_id.bytes()
             != market_instance.market_genesis_profile_id.bytes()
         || market_runtime.market_binding.bytes() != frame.market_binding.address.to_bytes()
         || market_runtime.market_instance_v2_id.bytes() != market_instance_id.bytes()
@@ -6299,7 +6325,7 @@ pub fn construct_fractional_close_zero_credit_material_v1(
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let collateral_policy = CollateralPolicyV2::decode(&frame.base.collateral_policy.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
-    let market_binding = MarketBindingV2::decode(&frame.base.market_binding.data)
+    let market_binding = MarketBindingV4::decode(&frame.base.market_binding.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let market_runtime = MarketRuntimeV3AccountV1::decode(&frame.base.market_runtime.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
@@ -6320,7 +6346,7 @@ pub fn construct_fractional_close_zero_credit_material_v1(
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let credit = FractionalCreditV2::decode(&frame.credit.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
-    let root = MarketLifecycleRootAccountV2::decode(&frame.market_root.data)
+    let root = MarketLifecycleRootAccountV3::decode(&frame.market_root.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let collateral_release_id = collateral_release
         .id()
@@ -6355,8 +6381,8 @@ pub fn construct_fractional_close_zero_credit_material_v1(
         || collateral_release.token_program.bytes() != collateral_policy.token_program.bytes()
         || frame.base.collateral_token_program.address.to_bytes()
             != collateral_policy.token_program.bytes()
-        || market_binding.base().market.bytes() != frame.base.market_runtime.address.to_bytes()
-        || market_binding.base().market_instance_v2_id.bytes() != market_instance_id.bytes()
+        || market_binding.base().base().market.bytes() != frame.base.market_runtime.address.to_bytes()
+        || market_binding.base().base().market_instance_v2_id.bytes() != market_instance_id.bytes()
         || market_runtime.market_binding.bytes() != frame.base.market_binding.address.to_bytes()
         || market_runtime.market_instance_v2_id.bytes() != market_instance_id.bytes()
         || hoard.market_instance_id.bytes() != market_instance_id.bytes()
@@ -6385,6 +6411,7 @@ pub fn construct_fractional_close_zero_credit_material_v1(
         || root.stored_bump != root_pda.1
         || root_binding.market_instance_id.bytes() != market_instance_id.bytes()
         || root_binding.generation != policy.domain_generation
+        || root.state.phase() != MarketLifecyclePhaseV3::Active
         || frame.neutral_sink.address.to_bytes()
             != root.state.capital().neutral_lamport_sink.bytes()
     {

@@ -949,6 +949,7 @@ impl OwnedInstructionDraft {
         let contract = fractional_account_contract_v1(action);
         let fixed = usize::from(contract.foundation_core_accounts)
             .checked_add(usize::from(contract.foundation_aux_accounts))
+            .and_then(|count| count.checked_add(usize::from(contract.post_mint_accounts)))
             .ok_or(ConstructionError::InvalidAccountContract)?;
         let outcome_count = accounts
             .len()
@@ -977,7 +978,9 @@ impl OwnedInstructionDraft {
             }
             _ => return Err(ConstructionError::InvalidAccountContract),
         }
-        let aux = usize::from(contract.foundation_core_accounts) + 2 * outcome_count;
+        let aux = usize::from(contract.foundation_core_accounts)
+            + 2 * outcome_count
+            + usize::from(contract.post_mint_accounts);
         let mut identities = BTreeSet::new();
         for (index, account) in accounts.iter().enumerate() {
             let expected_writable = if index < usize::from(contract.foundation_core_accounts) {
@@ -1969,6 +1972,7 @@ impl OwnedInstructionDraft {
                     | FractionalRedemptionActionV1::CloseEmptyLedger => {
                         let fixed = usize::from(contract.foundation_core_accounts)
                             .checked_add(usize::from(contract.foundation_aux_accounts))
+                            .and_then(|count| count.checked_add(usize::from(contract.post_mint_accounts)))
                             .ok_or(ConstructionError::InvalidAccountContract)?;
                         let outcomes = self.accounts.len().checked_sub(fixed)
                             .and_then(|extra| (extra % 2 == 0).then_some(extra / 2))
@@ -1993,7 +1997,9 @@ impl OwnedInstructionDraft {
                                 return Err(ConstructionError::InvalidAccountContract);
                             }
                         }
-                        let aux = usize::from(contract.foundation_core_accounts) + 2 * outcomes;
+                        let aux = usize::from(contract.foundation_core_accounts)
+                            + 2 * outcomes
+                            + usize::from(contract.post_mint_accounts);
                         if self.accounts[aux + 11].pubkey != self.program_id {
                             return Err(ConstructionError::InvalidAccountContract);
                         }
@@ -2291,8 +2297,8 @@ impl OwnedInstructionDraft {
                             FractionalRedemptionActionV1::Initialize
                                 | FractionalRedemptionActionV1::CloseEmptyLedger
                         ) {
-                            let outcomes = (self.accounts.len() - 32) / 2;
-                            let aux = 15 + 2 * outcomes;
+                            let outcomes = (self.accounts.len() - 35) / 2;
+                            let aux = 18 + 2 * outcomes;
                             matches!((index, other), (i, j) if i == aux + 3 && j == aux + 5)
                                 || matches!((index, other), (i, j) if i == aux + 4 && j == aux + 6)
                         } else {

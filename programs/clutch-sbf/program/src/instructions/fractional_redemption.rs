@@ -50,30 +50,29 @@ use clutch_fractional_redemption_runtime::{
     FRACTIONAL_REDEMPTION_FAMILY_TAG, FRACTIONAL_REDEMPTION_FAMILY_VERSION,
 };
 use clutch_product_series::{
-    ContentId, MarketFoundationAccountGraphV3, MarketFoundationScheduleV3,
-    MarketLifecycleRootV2,
+    ContentId, MarketFoundationAccountGraphV4, MarketFoundationScheduleV4,
+    MarketLifecycleRootV3,
 };
 use clutch_retirement::{
     admit_initial_rent_split, admit_reopen_rent_split, Identity32V1, RentSplitAdmissionPlanV2,
     PositionAccountV3, PositionV3Sha256Backend, POSITION_V3_BYTES,
 };
-use clutch_solana_layout::product_series::MarketLifecycleRootAccountV2;
+use clutch_solana_layout::product_series::MarketLifecycleRootAccountV3;
 use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::collateral_position_v3::{
-    authenticate_general_market_liabilities_v2, authenticate_general_market_value_authority_v2,
+    authenticate_general_market_liabilities_v4, authenticate_general_market_value_authority_v4,
     authenticate_general_position_replay_v2, authenticate_resolution_v5, RuntimeSha256,
 };
 use super::external_redemption_v3::{
     accept_zero_claim_collateral_payout, bearer_claim_observation_v3,
     invoke_claim_collateral_payout, observe_outcome_mints_for_bearer_v3, runtime_account_view,
 };
-use super::product_series_current::{
-    authenticate_market_lifecycle_root_v2, AuthenticatedRegistryCapabilityV4,
-};
+use super::product_market_lifecycle_v3_current::authenticate_market_lifecycle_root_v3;
+use super::product_series_current::AuthenticatedRegistryCapabilityV5;
 use super::genesis::{
     allocate_data, assign_data, read_rent, require_creatable, require_system_program,
     transfer_data, SYSTEM_PROGRAM_ID,
@@ -527,7 +526,7 @@ where
         ClutchError::MismatchedState,
     )?;
 
-    let value_authority = authenticate_general_market_value_authority_v2(
+    let value_authority = authenticate_general_market_value_authority_v4(
         program_id,
         accounts.realm,
         accounts.profile,
@@ -578,7 +577,7 @@ where
     require(
         request.expected_ledger_sequence == ledger.next_sequence
             && policy.market_instance.bytes()
-                == liabilities.market_binding.base().market_instance_v2_id.bytes()
+                == liabilities.market_binding.base().base().market_instance_v2_id.bytes()
             && policy.resolution_account.bytes() == resolution.account_id.bytes()
             && policy.resolution_data_id.bytes() == resolution.data_id.bytes()
             && ledger.claim_ledger_account == claim_ledger_account,
@@ -1112,7 +1111,7 @@ where
         prestate.facility_credit_account().bytes() == accounts.facility_credit.key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
-    let value_authority = authenticate_general_market_value_authority_v2(
+    let value_authority = authenticate_general_market_value_authority_v4(
         program_id,
         accounts.realm,
         accounts.profile,
@@ -1165,17 +1164,17 @@ where
             && policy.market_instance == prestate.market_instance()
             && policy.domain_generation == prestate.domain_generation()
             && policy.market_instance.bytes()
-                == liabilities.market_binding.base().market_instance_v2_id.bytes()
+                == liabilities.market_binding.base().base().market_instance_v2_id.bytes()
             && policy.resolution_account.bytes() == resolution.account_id.bytes()
             && policy.resolution_data_id.bytes() == resolution.data_id.bytes()
             && ledger.claim_ledger_account == claim_ledger_account,
         ClutchError::MismatchedState,
     )?;
-    let mut root_body = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
-    let root = authenticate_market_lifecycle_root_v2(
+    let mut root_body = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let root = authenticate_market_lifecycle_root_v3(
         program_id,
         accounts.market_lifecycle_root,
-        liabilities.market_binding.base().market_instance_v2_id,
+        liabilities.market_binding.base().base().market_instance_v2_id,
         policy.domain_generation,
         false,
         &mut root_body,
@@ -1566,7 +1565,7 @@ impl AuthenticatedFractionalRuntimeReleaseV1 {
 /// runtime release.
 pub(crate) fn authenticate_fractional_runtime_release_v1(
     program_id: &Pubkey,
-    capability: &AuthenticatedRegistryCapabilityV4,
+    capability: &AuthenticatedRegistryCapabilityV5,
     action: FractionalRedemptionActionV1,
 ) -> Outcome<AuthenticatedFractionalRuntimeReleaseV1> {
     require(
@@ -1807,11 +1806,11 @@ pub(crate) fn consume_fractional_family_admission_postwrite_v2(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
     postwrite: AuthenticatedFractionalFamilyAdmissionPostwriteV1,
-    schedule: &MarketFoundationScheduleV3,
-    graph: &MarketFoundationAccountGraphV3,
-    root_before_output: &mut MarketLifecycleRootAccountV2,
-    root_successor_output: &mut MarketLifecycleRootV2,
-    root_after_output: &mut MarketLifecycleRootAccountV2,
+    schedule: &MarketFoundationScheduleV4,
+    graph: &MarketFoundationAccountGraphV4,
+    root_before_output: &mut MarketLifecycleRootAccountV3,
+    root_successor_output: &mut MarketLifecycleRootV3,
+    root_after_output: &mut MarketLifecycleRootAccountV3,
 ) -> Outcome<super::product_series_current::AuthenticatedProductFractionalFamilyAdmissionV2> {
     super::fractional_product_consumer::consume_fractional_admission_v2(
         program_id,
@@ -2009,11 +2008,11 @@ pub(crate) fn consume_fractional_family_terminal_postwrite_v2(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
     postwrite: AuthenticatedFractionalFamilyTerminalPostwriteV1,
-    schedule: &MarketFoundationScheduleV3,
-    graph: &MarketFoundationAccountGraphV3,
-    root_before_output: &mut MarketLifecycleRootAccountV2,
-    root_successor_output: &mut MarketLifecycleRootV2,
-    root_after_output: &mut MarketLifecycleRootAccountV2,
+    schedule: &MarketFoundationScheduleV4,
+    graph: &MarketFoundationAccountGraphV4,
+    root_before_output: &mut MarketLifecycleRootAccountV3,
+    root_successor_output: &mut MarketLifecycleRootV3,
+    root_after_output: &mut MarketLifecycleRootAccountV3,
 ) -> Outcome<super::product_series_current::AuthenticatedProductFractionalFamilyTerminalV2> {
     super::fractional_product_consumer::consume_fractional_terminal_v2(
         program_id,
@@ -2170,7 +2169,7 @@ fn process_redeem_internal_exact(
         ClutchError::MismatchedState,
     )?;
 
-    let liabilities = authenticate_general_market_liabilities_v2(
+    let liabilities = authenticate_general_market_liabilities_v4(
         program_id,
         &accounts[IX_REALM],
         &accounts[IX_PROFILE],
@@ -2185,7 +2184,7 @@ fn process_redeem_internal_exact(
         true,
     )?;
     require(
-        intent.outcome < liabilities.market_binding.base().outcome_count,
+        intent.outcome < liabilities.market_binding.base().base().outcome_count,
         ClutchError::MismatchedState,
     )?;
     let resolution = authenticate_resolution_v5(program_id, &accounts[IX_RESOLUTION], liabilities)?;
@@ -2197,7 +2196,7 @@ fn process_redeem_internal_exact(
         IX_RESOLUTION,
     )?;
     require(
-        policy.market_instance.bytes() == liabilities.market_binding.base().market_instance_v2_id.bytes()
+        policy.market_instance.bytes() == liabilities.market_binding.base().base().market_instance_v2_id.bytes()
             && policy.resolution_account.bytes() == resolution.account_id.bytes()
             && policy.resolution_data_id.bytes() == resolution.data_id.bytes()
             && ledger.claim_ledger_account.bytes() == accounts[IX_CLAIM_LEDGER].key.to_bytes(),
@@ -2504,7 +2503,7 @@ mod loader_alias_tests {
         assert!(consume < first_write);
         assert!(body.contains("dealer_terminal_retire_target_enabled"));
         assert!(body.contains("DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1"));
-        assert!(body.contains("authenticate_general_market_value_authority_v2"));
+        assert!(body.contains("authenticate_general_market_value_authority_v4"));
         assert!(body.contains("require_program_state(\n        program_id,\n        accounts.fractional_policy"));
         assert!(body.contains("credit.claimant == prestate.facility_id()"));
         assert!(body.contains("close_zero_credit_v1"));
@@ -2808,7 +2807,7 @@ fn process_redeem_internal_credit(
             && accounts[IX_CREDIT].key.to_bytes() == intent.credit_or_policy.bytes(),
         ClutchError::MismatchedState,
     )?;
-    let liabilities = authenticate_general_market_liabilities_v2(
+    let liabilities = authenticate_general_market_liabilities_v4(
         program_id,
         &accounts[IX_REALM],
         &accounts[IX_PROFILE],
@@ -2823,7 +2822,7 @@ fn process_redeem_internal_credit(
         true,
     )?;
     require(
-        intent.outcome < liabilities.market_binding.base().outcome_count,
+        intent.outcome < liabilities.market_binding.base().base().outcome_count,
         ClutchError::MismatchedState,
     )?;
     let resolution = authenticate_resolution_v5(program_id, &accounts[IX_RESOLUTION], liabilities)?;
@@ -2835,17 +2834,17 @@ fn process_redeem_internal_credit(
         IX_RESOLUTION,
     )?;
     require(
-        policy.market_instance.bytes() == liabilities.market_binding.base().market_instance_v2_id.bytes()
+        policy.market_instance.bytes() == liabilities.market_binding.base().base().market_instance_v2_id.bytes()
             && policy.resolution_account.bytes() == resolution.account_id.bytes()
             && policy.resolution_data_id.bytes() == resolution.data_id.bytes()
             && ledger.claim_ledger_account.bytes() == accounts[IX_CLAIM_LEDGER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
-    let mut root_body = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
-    let root = authenticate_market_lifecycle_root_v2(
+    let mut root_body = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let root = authenticate_market_lifecycle_root_v3(
         program_id,
         &accounts[IX_MARKET_LIFECYCLE_ROOT],
-        liabilities.market_binding.base().market_instance_v2_id,
+        liabilities.market_binding.base().base().market_instance_v2_id,
         policy.domain_generation,
         false,
         &mut root_body,
@@ -2991,7 +2990,7 @@ fn process_redeem_bearer_exact(
         ClutchError::MismatchedState,
     )?;
 
-    let value_authority = authenticate_general_market_value_authority_v2(
+    let value_authority = authenticate_general_market_value_authority_v4(
         program_id,
         &accounts[bearer_ix::REALM],
         &accounts[bearer_ix::PROFILE],
@@ -3008,12 +3007,12 @@ fn process_redeem_bearer_exact(
     )?;
     let liabilities = value_authority.liabilities;
     require(
-        intent.outcome < liabilities.market_binding.base().outcome_count,
+        intent.outcome < liabilities.market_binding.base().base().outcome_count,
         ClutchError::MismatchedState,
     )?;
     require_bearer_account_contract(
         accounts,
-        liabilities.market_binding.base().outcome_count,
+        liabilities.market_binding.base().base().outcome_count,
         intent.outcome,
     )?;
     require(
@@ -3027,7 +3026,7 @@ fn process_redeem_bearer_exact(
             && accounts[bearer_ix::HOARD_AUTHORITY].data_is_empty(),
         ClutchError::MismatchedState,
     )?;
-    let market_bytes = liabilities.market_binding.base().market_instance_v2_id.bytes();
+    let market_bytes = liabilities.market_binding.base().base().market_instance_v2_id.bytes();
     expect_pda(
         accounts[bearer_ix::HOARD_AUTHORITY].key,
         seeds::hoard_authority_v2_pda(program_id, &market_bytes),
@@ -3066,7 +3065,7 @@ fn process_redeem_bearer_exact(
         bearer_ix::OUTCOME_MINTS,
         &accounts[bearer_ix::MARKET_RUNTIME],
         market_bytes,
-        liabilities.market_binding.base().outcome_count,
+        liabilities.market_binding.base().base().outcome_count,
         intent.outcome,
     )?;
     let selected_mint = &accounts[bearer_ix::OUTCOME_MINTS + usize::from(intent.outcome)];
@@ -3143,7 +3142,7 @@ fn process_redeem_bearer_exact(
         bearer_ix::OUTCOME_MINTS,
         &accounts[bearer_ix::MARKET_RUNTIME],
         market_bytes,
-        liabilities.market_binding.base().outcome_count,
+        liabilities.market_binding.base().base().outcome_count,
         intent.outcome,
     )?;
     let token_after = bearer_claim_observation_v3(
@@ -3344,7 +3343,7 @@ fn process_redeem_bearer_credit(
             && accounts[bearer_ix::DESTINATION].key.to_bytes() == intent.payout_target.bytes(),
         ClutchError::MismatchedState,
     )?;
-    let value_authority = authenticate_general_market_value_authority_v2(
+    let value_authority = authenticate_general_market_value_authority_v4(
         program_id,
         &accounts[bearer_ix::REALM],
         &accounts[bearer_ix::PROFILE],
@@ -3361,13 +3360,13 @@ fn process_redeem_bearer_credit(
     )?;
     let liabilities = value_authority.liabilities;
     require(
-        intent.outcome < liabilities.market_binding.base().outcome_count,
+        intent.outcome < liabilities.market_binding.base().base().outcome_count,
         ClutchError::MismatchedState,
     )?;
     let (credit_index, root_index, neutral_index, rent_index, funding_index) =
         require_bearer_credit_account_contract(
             accounts,
-            liabilities.market_binding.base().outcome_count,
+            liabilities.market_binding.base().base().outcome_count,
             intent.outcome,
             intent.credit_mode,
         )?;
@@ -3383,7 +3382,7 @@ fn process_redeem_bearer_credit(
             && accounts[bearer_ix::HOARD_AUTHORITY].data_is_empty(),
         ClutchError::MismatchedState,
     )?;
-    let market_bytes = liabilities.market_binding.base().market_instance_v2_id.bytes();
+    let market_bytes = liabilities.market_binding.base().base().market_instance_v2_id.bytes();
     expect_pda(
         accounts[bearer_ix::HOARD_AUTHORITY].key,
         seeds::hoard_authority_v2_pda(program_id, &market_bytes),
@@ -3416,11 +3415,11 @@ fn process_redeem_bearer_credit(
                 == accounts[bearer_ix::CLAIM_LEDGER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
-    let mut root_body = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
-    let root = authenticate_market_lifecycle_root_v2(
+    let mut root_body = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let root = authenticate_market_lifecycle_root_v3(
         program_id,
         &accounts[root_index],
-        liabilities.market_binding.base().market_instance_v2_id,
+        liabilities.market_binding.base().base().market_instance_v2_id,
         policy.domain_generation,
         false,
         &mut root_body,
@@ -3451,7 +3450,7 @@ fn process_redeem_bearer_credit(
         bearer_ix::OUTCOME_MINTS,
         &accounts[bearer_ix::MARKET_RUNTIME],
         market_bytes,
-        liabilities.market_binding.base().outcome_count,
+        liabilities.market_binding.base().base().outcome_count,
         intent.outcome,
     )?;
     let selected_mint = &accounts[bearer_ix::OUTCOME_MINTS + usize::from(intent.outcome)];
@@ -3526,7 +3525,7 @@ fn process_redeem_bearer_credit(
         bearer_ix::OUTCOME_MINTS,
         &accounts[bearer_ix::MARKET_RUNTIME],
         market_bytes,
-        liabilities.market_binding.base().outcome_count,
+        liabilities.market_binding.base().base().outcome_count,
         intent.outcome,
     )?;
     let token_after = bearer_claim_observation_v3(
@@ -3767,7 +3766,7 @@ fn process_credit_move(
         ClutchError::MismatchedState,
     )?;
     let (liabilities, collateral_release_receipt) = if intent.payout_kind == 2 {
-        let value_authority = authenticate_general_market_value_authority_v2(
+        let value_authority = authenticate_general_market_value_authority_v4(
             program_id,
             &accounts[move_ix::REALM],
             &accounts[move_ix::PROFILE],
@@ -3785,7 +3784,7 @@ fn process_credit_move(
         (value_authority.liabilities, Some(value_authority.receipt_id))
     } else {
         (
-            authenticate_general_market_liabilities_v2(
+            authenticate_general_market_liabilities_v4(
                 program_id,
                 &accounts[move_ix::REALM],
                 &accounts[move_ix::PROFILE],
@@ -3812,18 +3811,18 @@ fn process_credit_move(
         move_ix::RESOLUTION,
     )?;
     require(
-        policy.market_instance.bytes() == liabilities.market_binding.base().market_instance_v2_id.bytes()
+        policy.market_instance.bytes() == liabilities.market_binding.base().base().market_instance_v2_id.bytes()
             && policy.resolution_account.bytes() == resolution.account_id.bytes()
             && policy.resolution_data_id.bytes() == resolution.data_id.bytes()
             && ledger.claim_ledger_account.bytes()
                 == accounts[move_ix::CLAIM_LEDGER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
-    let mut root_body = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
-    let root = authenticate_market_lifecycle_root_v2(
+    let mut root_body = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let root = authenticate_market_lifecycle_root_v3(
         program_id,
         &accounts[geometry.root],
-        liabilities.market_binding.base().market_instance_v2_id,
+        liabilities.market_binding.base().base().market_instance_v2_id,
         policy.domain_generation,
         false,
         &mut root_body,
@@ -3944,7 +3943,7 @@ fn process_credit_move(
                 && accounts[move_ix::PAYOUT + 2].data_is_empty(),
             ClutchError::MismatchedState,
         )?;
-        let market_bytes = liabilities.market_binding.base().market_instance_v2_id.bytes();
+        let market_bytes = liabilities.market_binding.base().base().market_instance_v2_id.bytes();
         expect_pda(
             accounts[move_ix::PAYOUT + 2].key,
             seeds::hoard_authority_v2_pda(program_id, &market_bytes),
@@ -4202,7 +4201,7 @@ fn process_close_zero_credit(
             && !accounts[close_credit_ix::PAYER].executable,
         ClutchError::MismatchedState,
     )?;
-    let liabilities = authenticate_general_market_liabilities_v2(
+    let liabilities = authenticate_general_market_liabilities_v4(
         program_id,
         &accounts[close_credit_ix::REALM],
         &accounts[close_credit_ix::PROFILE],
@@ -4229,18 +4228,18 @@ fn process_close_zero_credit(
         close_credit_ix::RESOLUTION,
     )?;
     require(
-        policy.market_instance.bytes() == liabilities.market_binding.base().market_instance_v2_id.bytes()
+        policy.market_instance.bytes() == liabilities.market_binding.base().base().market_instance_v2_id.bytes()
             && policy.resolution_account.bytes() == resolution.account_id.bytes()
             && policy.resolution_data_id.bytes() == resolution.data_id.bytes()
             && ledger.claim_ledger_account.bytes()
                 == accounts[close_credit_ix::CLAIM_LEDGER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
-    let mut root_body = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
-    let root = authenticate_market_lifecycle_root_v2(
+    let mut root_body = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let root = authenticate_market_lifecycle_root_v3(
         program_id,
         &accounts[close_credit_ix::MARKET_ROOT],
-        liabilities.market_binding.base().market_instance_v2_id,
+        liabilities.market_binding.base().base().market_instance_v2_id,
         policy.domain_generation,
         false,
         &mut root_body,
@@ -4383,7 +4382,7 @@ fn process_seal_claims_exhausted(
         require(!accounts[index].is_signer, ClutchError::MismatchedState)?;
         index += 1;
     }
-    let liabilities = authenticate_general_market_liabilities_v2(
+    let liabilities = authenticate_general_market_liabilities_v4(
         program_id,
         &accounts[seal_ix::REALM],
         &accounts[seal_ix::PROFILE],
@@ -4407,7 +4406,7 @@ fn process_seal_claims_exhausted(
         seal_ix::RESOLUTION,
     )?;
     require(
-        policy.market_instance.bytes() == liabilities.market_binding.base().market_instance_v2_id.bytes()
+        policy.market_instance.bytes() == liabilities.market_binding.base().base().market_instance_v2_id.bytes()
             && policy.resolution_account.bytes() == resolution.account_id.bytes()
             && policy.resolution_data_id.bytes() == resolution.data_id.bytes()
             && ledger.claim_ledger_account.bytes()
