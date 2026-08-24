@@ -291,6 +291,13 @@ name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-direct-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-realm-contract",
+]
+
+[[package]]
 name = "dclutch-kernel"
 version = "0.1.0"
 

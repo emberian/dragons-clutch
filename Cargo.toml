@@ -3,6 +3,7 @@ members = [
     "crates/dclutch-capability-contract",
     "crates/dclutch-collateral-contract",
     "crates/dclutch-core-contract",
+    "crates/dclutch-direct-contract",
     "crates/dclutch-kernel",
     "crates/dclutch-operator",
     "crates/dclutch-pyth-svm",
