@@ -166,14 +166,9 @@ pub fn derive_settlement_root_expectation_from_certified_fee_v3(
     {
         return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
     }
-    let cash_fee_record = if selected_fee_atoms == 0 {
-        [0; 32]
-    } else {
-        selected.fee_record().0
-    };
     derive_settlement_root_expectation_from_fee_total_v1(
         traversal,
-        cash_fee_record,
+        selected.fee_record().0,
         selected_fee_atoms,
     )
 }

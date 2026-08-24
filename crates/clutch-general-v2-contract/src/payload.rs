@@ -2,6 +2,10 @@
 
 //! Strict, allocation-free payload decoders for the non-production General V2 lab.
 
+use clutch_batch_policy_identity::revenue_policy_v2::{
+    decode_revenue_policy_v2, RevenuePolicyV2, REVENUE_POLICY_V2_BYTES,
+};
+
 use crate::{
     CodecError, Id32, Reader, SettlementCandidateKindV1, ID_BYTES, MAX_ORDERS_U8, MAX_OUTCOMES_U8,
     MAX_QUANTIZED_ATOMS_U8, MAX_SLICES_U16, QUANTIZED_ATOM_BYTES, SETTLEMENT_SLICE_BYTES,
@@ -41,6 +45,9 @@ pub const CONSUME_VIRTUAL_MERGE_RECEIPT_EGGS_PAYLOAD_BYTES: usize = 64;
 pub const FINALIZE_OWNER_SETTLEMENT_PAYLOAD_BYTES: usize = 160;
 /// Exact action-39 counted-root initialization selector bytes.
 pub const INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES: usize = 64;
+/// Exact current action-39 selector plus untrusted RevenuePolicyV2 preimage.
+pub const INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES_V2: usize =
+    INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES + REVENUE_POLICY_V2_BYTES;
 /// Exact action-40 merge-payment selector bytes.
 pub const FINALIZE_MERGE_RECEIPT_PAYMENT_PAYLOAD_BYTES: usize = 96;
 /// Exact action-41 zero-fill Reservation-release selector bytes.
@@ -756,6 +763,38 @@ impl InitializeSettlementRootPayloadV1 {
     }
 }
 
+/// Current action-39 selector with the exact immutable RevenuePolicyV2
+/// preimage carried in instruction data rather than consuming an AccountInfo.
+/// The preimage is untrusted until action39 joins its digest and copied fields
+/// to the physical RecordV2 and retained MarketBindingV4 authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InitializeSettlementRootPayloadV2 {
+    /// Counted parent Epoch PDA.
+    pub epoch: Id32,
+    /// Winning cost-certificate-bearing AdmissionNode V4 PDA.
+    pub selected_node: Id32,
+    /// Strictly decoded current revenue policy preimage.
+    pub revenue_policy: RevenuePolicyV2,
+}
+
+impl InitializeSettlementRootPayloadV2 {
+    /// Decode exactly 144 hostile bytes. The historical 64-byte V1 body is
+    /// intentionally not accepted by the current action39 dispatcher.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut reader = Reader::exact(input, INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES_V2)?;
+        let epoch = live_id(&mut reader)?;
+        let selected_node = live_id(&mut reader)?;
+        let policy_bytes: [u8; REVENUE_POLICY_V2_BYTES] = reader.array()?;
+        reader.finish()?;
+        if epoch == selected_node {
+            return Err(CodecError::MismatchedBinding);
+        }
+        let revenue_policy = decode_revenue_policy_v2(&policy_bytes)
+            .map_err(|_| CodecError::MismatchedBinding)?;
+        Ok(Self { epoch, selected_node, revenue_policy })
+    }
+}
+
 /// Action-40 `FinalizeMergeReceiptPayment` immutable selector.
 ///
 /// The payment transition identity is derived from the authenticated Receipt
@@ -1175,8 +1214,8 @@ pub enum VirtualSettlementPayloadV1 {
 /// Strict payload facts for the counted settlement-root lifecycle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SettlementRootPayloadV1 {
-    /// Action 39 selector only; all account creation remains disabled.
-    InitializeSettlementRoot(InitializeSettlementRootPayloadV1),
+    /// Current action39 selector plus strict RevenuePolicyV2 preimage.
+    InitializeSettlementRoot(InitializeSettlementRootPayloadV2),
     /// Action 40 selector only; all merge-payment mutation remains disabled.
     FinalizeMergeReceiptPayment(FinalizeMergeReceiptPaymentPayloadV1),
     /// Action 41 selector only; all zero-fill release mutation remains disabled.
@@ -1256,7 +1295,7 @@ pub fn decode_settlement_root_payload_v1(
 ) -> Result<SettlementRootPayloadV1, CodecError> {
     match local_action {
         39 => Ok(SettlementRootPayloadV1::InitializeSettlementRoot(
-            InitializeSettlementRootPayloadV1::decode(payload)?,
+            InitializeSettlementRootPayloadV2::decode(payload)?,
         )),
         40 => Ok(SettlementRootPayloadV1::FinalizeMergeReceiptPayment(
             FinalizeMergeReceiptPaymentPayloadV1::decode(payload)?,
@@ -1451,6 +1490,37 @@ mod tests {
 
     fn live(byte: u8) -> [u8; 32] {
         [byte; 32]
+    }
+
+    #[test]
+    fn current_action39_requires_strict_revenue_v2_preimage() {
+        let policy = RevenuePolicyV2::successor_development([3; 32]);
+        let mut payload = [0u8; INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES_V2];
+        payload[..ID_BYTES].copy_from_slice(&live(1));
+        payload[ID_BYTES..2 * ID_BYTES].copy_from_slice(&live(2));
+        clutch_batch_policy_identity::revenue_policy_v2::encode_revenue_policy_v2(
+            &policy,
+            &mut payload[2 * ID_BYTES..],
+        )
+        .unwrap();
+        let decoded = decode_settlement_root_payload_v1(39, &payload).unwrap();
+        assert!(matches!(
+            decoded,
+            SettlementRootPayloadV1::InitializeSettlementRoot(value)
+                if value.revenue_policy == policy
+        ));
+        assert_eq!(
+            decode_settlement_root_payload_v1(
+                39,
+                &payload[..INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES]
+            ),
+            Err(CodecError::WrongLength)
+        );
+        payload[INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES_V2 - 1] = 1;
+        assert_eq!(
+            decode_settlement_root_payload_v1(39, &payload),
+            Err(CodecError::MismatchedBinding)
+        );
     }
 
     #[test]
