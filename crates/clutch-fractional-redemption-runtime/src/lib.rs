@@ -12,8 +12,8 @@
 //! Position balances, Replay ordinals, the immutable Resolution vector, and
 //! Realm collateral remain owned by their canonical components.
 //!
-//! The concrete Solana account adapter exists, but every action remains
-//! capability-disabled. Its handlers establish program ownership, canonical
+//! The concrete Solana account adapter exposes the sole current action1-10
+//! lifecycle. Its handlers establish program ownership, canonical
 //! PDAs, signers, the immutable Resolution and full-width ClaimLedger V3/Hoard
 //! V2 owners, exact Token-2022 burn deltas, exact Realm-selected collateral
 //! deltas, rent exemption, and rollback before committing one of this crate's
@@ -83,7 +83,7 @@ pub enum Error {
     AlreadyInitialized,
     /// A permanent tombstone was required but absent or malformed.
     TombstoneRequired,
-    /// The disabled SBF capability boundary refused before account inspection.
+    /// Retained wire-stable historical refusal code; no current adapter emits it.
     CapabilityDisabled,
     /// The canonical Position V3 contract refused the proposed transition.
     PositionRefused,

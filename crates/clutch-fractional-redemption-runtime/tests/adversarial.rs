@@ -1752,20 +1752,6 @@ fn canonical_gen1_parser_refuses_unallocated_fractional_coordinates() {
 }
 
 #[test]
-fn disabled_adapter_refuses_before_payload_or_account_inspection() {
-    let malformed = [79, 1, 255, 0xff];
-    let hostile_accounts = [SolanaAccountMetaProjectionV1 {
-        key: [0; 32],
-        writable: true,
-        signer: true,
-    }];
-    assert_eq!(
-        refuse_disabled_fractional_redemption_v1(&malformed, &hostile_accounts),
-        Err(Error::CapabilityDisabled)
-    );
-}
-
-#[test]
 fn live_successor_account_contracts_name_dynamic_bearer_mints_and_terminal_writes() {
     let initialize = fractional_account_contract_v1(FractionalRedemptionActionV1::Initialize);
     assert_eq!(initialize.account_count, 32);

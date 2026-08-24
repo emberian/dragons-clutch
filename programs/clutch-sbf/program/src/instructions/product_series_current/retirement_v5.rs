@@ -18,7 +18,6 @@ use super::super::failure_market_family_terminal_v2::{
     AuthenticatedFailureMarketFamilyTerminalOwnerV2, FailureMarketFamilyTerminalConsumerFactsV3,
     FailureMarketPhysicalTerminalConsumerFactsV3,
 };
-use super::super::fractional_product_consumer::consume_fractional_terminal_v2;
 use super::super::fractional_redemption::AuthenticatedFractionalFamilyPhysicalTerminalV2;
 use super::super::general_treasury_position_terminal_v5::
     AuthenticatedProductPositionPhysicalTerminalV5;
@@ -42,12 +41,12 @@ use super::super::product_series::replay_v3::{
     AuthenticatedSeriesLifecycleLinkRetirementV3,
 };
 use super::super::structured_custody::AuthenticatedStructuredWrapperFamilyTerminalV3;
-use super::super::product_series_current::AuthenticatedProductFractionalFamilyTerminalV2;
 use super::super::collateral_shared_core_terminal_v3::{
     AuthenticatedClaimLedgerPhysicalTerminalV3,
     AuthenticatedHoardPhysicalTerminalV3,
     AuthenticatedMarketLiabilityPhysicalTerminalsV3,
 };
+use super::write_market_lifecycle_root_v3 as write_and_reopen_market_lifecycle_root_v3;
 use super::super::source_funding_custody_retirement_v1::{
     authenticate_source_family_terminal_authority_v3,
     consume_source_family_terminal_into_product_v3, retire_source_funding_custody_v3,
@@ -60,7 +59,8 @@ use crate::error::{ClutchError, Refusal};
 use clutch_product_series::{
     AuthenticatedMarketFamilyAuthorityV1, AuthenticatedSeriesFundingAuthorityV5,
     ComponentDebitV1, ContentId, MarketFamilyAggregatorV1,
-    MarketFamilyV1, MarketInstanceV2Id, MarketLifecyclePhaseV3,
+    MarketFamilyStatusV1, MarketFamilyV1, MarketFoundationSlotV4,
+    MarketInstanceV2Id, MarketLifecyclePhaseV3,
     MarketSharedCoreTerminalProjectionV3, MarketSharedCoreV3,
     SeriesLinkObligationDispositionV3, SeriesLinkObligationTerminalProjectionV3,
     SeriesLinkObligationStatusV3, SeriesLinkObligationV3, SeriesMarketLinkPhaseV3,
@@ -564,15 +564,50 @@ pub(crate) fn consume_direct_family_terminal_v5(
     })
 }
 
+struct ExactFractionalFamilyTerminalAuthorityV5 {
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    family_namespace_anchor_id: ContentId,
+    sequence: u32,
+    terminal_receipt_id: ContentId,
+}
+
+impl AuthenticatedMarketFamilyAuthorityV1 for ExactFractionalFamilyTerminalAuthorityV5 {
+    fn authenticate_terminal(
+        &self,
+        current: &MarketFamilyAggregatorV1,
+        family: MarketFamilyV1,
+        family_root_id: ContentId,
+        family_terminal_sequence: u32,
+        terminal_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        if family != MarketFamilyV1::Fractional
+            || current.binding().market_instance_id != self.market_instance_id
+            || current.binding().generation != self.generation
+            || family_root_id != self.family_namespace_anchor_id
+            || family_terminal_sequence != self.sequence
+            || terminal_receipt_id != self.terminal_receipt_id
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+}
+
 /// Move-only Product postwrite proving that Fractional's exact a4/a5 physical
-/// close was consumed into the current RootV3.  The retained V2 value is the
-/// current Fractional-to-Product receipt version; it is not a Product RootV2
-/// bridge and cannot be reconstructed from its public IDs.
+/// close was consumed directly into the sole current RootV3 terminal path.
 #[derive(Debug)]
 pub(crate) struct AuthenticatedProductFractionalFamilyTerminalV5 {
     id: ContentId,
-    terminal: AuthenticatedProductFractionalFamilyTerminalV2,
     physical_terminal_id: ContentId,
+    root_account: Pubkey,
+    root_authentication_before_id: ContentId,
+    root_authentication_after_id: ContentId,
+    root_semantic_before_id: ContentId,
+    root_semantic_after_id: ContentId,
+    terminal_receipt_id: ContentId,
+    policy_terminal_state_id: ContentId,
+    ledger_terminal_state_id: ContentId,
     policy_account: Pubkey,
     ledger_account: Pubkey,
     refund_owner: Pubkey,
@@ -592,29 +627,28 @@ impl AuthenticatedProductFractionalFamilyTerminalV5 {
     pub(crate) const fn physical_terminal_id(&self) -> ContentId {
         self.physical_terminal_id
     }
-    pub(crate) const fn root_account(&self) -> Pubkey { self.terminal.root_account() }
+    pub(crate) const fn root_account(&self) -> Pubkey { self.root_account }
     pub(crate) const fn root_authentication_after_id(&self) -> ContentId {
-        self.terminal.root_authentication_after()
+        self.root_authentication_after_id
     }
     pub(crate) const fn root_semantic_after_id(&self) -> ContentId {
-        self.terminal.root_semantic_after()
+        self.root_semantic_after_id
     }
     pub(crate) const fn terminal_receipt_id(&self) -> ContentId {
-        self.terminal.terminal_receipt_id()
+        self.terminal_receipt_id
     }
     pub(crate) const fn policy_terminal_state_id(&self) -> ContentId {
-        self.terminal.policy_terminal_state_id()
+        self.policy_terminal_state_id
     }
     pub(crate) const fn ledger_terminal_state_id(&self) -> ContentId {
-        self.terminal.ledger_terminal_state_id()
+        self.ledger_terminal_state_id
     }
     pub(crate) const fn link_account(&self) -> Pubkey { self.link_account }
 }
 
 /// Consume Fractional's sole physical terminal by value and immediately latch
-/// its two terminal states into RootV3.  LinkV3 is hostile-authenticated as the
-/// exact writable founder link needed by the later same-instruction Series
-/// retirement; no Fractional obligation is invented on LinkV3.
+/// its two terminal states into RootV3. LinkV3 is hostile-authenticated as
+/// read-only current-Series evidence; no Fractional obligation is invented.
 #[inline(never)]
 pub(crate) fn consume_fractional_family_physical_terminal_v5(
     program_id: &Pubkey,
@@ -627,6 +661,29 @@ pub(crate) fn consume_fractional_family_physical_terminal_v5(
     require(root_account.key != link_account.key, ClutchError::AccountAlias)?;
     let family = terminal.family_terminal();
     let physical_terminal_id = terminal.id();
+    let verification_id = ContentId::from_bytes(terminal.verification_id().bytes());
+    let postwrite_authentication_id =
+        ContentId::from_bytes(terminal.postwrite_authentication_id().bytes());
+    let runtime_release = terminal.runtime_release();
+    let claim_release_receipt_id =
+        ContentId::from_bytes(terminal.claim_release_receipt_id().bytes());
+    let resolution_account = ContentId::from_bytes(terminal.resolution_account().bytes());
+    let resolution_semantic_id =
+        ContentId::from_bytes(terminal.resolution_semantic_id().bytes());
+    let resolution_data_id = ContentId::from_bytes(terminal.resolution_data_id().bytes());
+    let native_claim_basis_id =
+        ContentId::from_bytes(terminal.native_claim_basis_id().bytes());
+    let terminal_receipt_id = physical_terminal_id;
+    let policy_terminal_state_id =
+        ContentId::from_bytes(family.policy_terminal_state_id().bytes());
+    let ledger_terminal_state_id =
+        ContentId::from_bytes(family.ledger_terminal_state_id().bytes());
+    let claim_ledger_post_state_id =
+        ContentId::from_bytes(family.claim_ledger_post_state_id().bytes());
+    let claim_ledger_transition_id =
+        ContentId::from_bytes(family.claim_ledger_transition_id().bytes());
+    let fractional_release_id = ContentId::from_bytes(family.fractional_release_id().bytes());
+    let rent_disposition_id = ContentId::from_bytes(family.rent_disposition_id().bytes());
     let policy_account = terminal.policy_account();
     let ledger_account = terminal.ledger_account();
     let refund_owner = terminal.refund_owner();
@@ -648,39 +705,186 @@ pub(crate) fn consume_fractional_family_physical_terminal_v5(
         MarketInstanceV2Id::from_bytes(family.market_instance_id().bytes()),
         family.domain_generation(),
         *root_account.key,
-        true,
+        false,
         &mut link_value,
     )?;
     let link_authentication_id = link.authentication_id();
+    let link_binding = link.binding();
     let mut root_before = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
     let mut root_successor = Box::new(clutch_product_series::MarketLifecycleRootV3::decode_buffer());
     let mut root_after = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
-    let accepted = consume_fractional_terminal_v2(
+    let root = authenticate_market_lifecycle_root_v3(
         program_id,
         root_account,
-        terminal,
-        &link,
-        schedule,
-        graph,
+        MarketInstanceV2Id::from_bytes(family.market_instance_id().bytes()),
+        family.domain_generation(),
+        true,
         &mut root_before,
-        &mut root_successor,
+    )?;
+    let current = root.state();
+    let binding = current.binding();
+    let schedule_id = schedule
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let graph_id = graph
+        .id(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let graph_policy_account = graph
+        .account(MarketFoundationSlotV4::FractionalPolicy)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let graph_ledger_account = graph
+        .account(MarketFoundationSlotV4::FractionalLedger)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let graph_claim_ledger_account = graph
+        .account(MarketFoundationSlotV4::ClaimLedger)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let graph_resolution_account = graph
+        .account(MarketFoundationSlotV4::ResolutionV5)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let family_slot = current.product_families().family(MarketFamilyV1::Fractional);
+    let family_namespace_anchor_id = current
+        .product_families()
+        .binding()
+        .family_root_id(MarketFamilyV1::Fractional);
+    let expected_namespace_anchor_id = ContentId::from_bytes(
+        crate::seeds::product_market_family_root_v1_pda(
+            program_id,
+            &binding.market_instance_id.bytes(),
+            binding.generation,
+            MarketFamilyV1::Fractional.byte(),
+        )
+        .0
+        .to_bytes(),
+    );
+    for id in [
+        physical_terminal_id,
+        verification_id,
+        postwrite_authentication_id,
+        policy_terminal_state_id,
+        ledger_terminal_state_id,
+        claim_ledger_post_state_id,
+        claim_ledger_transition_id,
+        fractional_release_id,
+        claim_release_receipt_id,
+        rent_disposition_id,
+        resolution_semantic_id,
+        resolution_data_id,
+        native_claim_basis_id,
+        current.resolution_activation_receipt_id(),
+    ] {
+        require_live(id)?;
+    }
+    require(
+        root.is_writable()
+            && link.owner_program() == *program_id
+            && link.semantic_id() == current.capital().founder_link_id
+            && matches!(
+                link.state().phase(),
+                SeriesMarketLinkPhaseV3::Active | SeriesMarketLinkPhaseV3::Retiring
+            )
+            && link_binding.market_root_account_id.bytes() == root_account.key.to_bytes()
+            && link_binding.market_instance_id == binding.market_instance_id
+            && link_binding.generation == binding.generation
+            && link_binding.rent_refund_owner == current.capital().rent_refund_owner
+            && link_binding.neutral_lamport_sink == current.capital().neutral_lamport_sink
+            && matches!(
+                current.phase(),
+                MarketLifecyclePhaseV3::Active | MarketLifecyclePhaseV3::Retiring
+            )
+            && binding.foundation_schedule_id == schedule_id
+            && binding.foundation_account_graph_id == graph_id
+            && graph.market_instance_id == binding.market_instance_id
+            && graph.generation == binding.generation
+            && family_namespace_anchor_id == expected_namespace_anchor_id
+            && graph_policy_account.bytes() == policy_account.to_bytes()
+            && graph_ledger_account.bytes() == ledger_account.to_bytes()
+            && graph_claim_ledger_account.bytes() == family.claim_ledger_account().bytes()
+            && graph_resolution_account == resolution_account
+            && binding.resolution_account_id == graph_resolution_account
+            && current.resolution_semantic_id() == resolution_semantic_id
+            && current.resolution_data_id() == resolution_data_id
+            && binding.native_claim_basis_id == native_claim_basis_id
+            && fractional_release_id == binding.registry_release_id
+            && ContentId::from_bytes(runtime_release.release_id().bytes())
+                == fractional_release_id
+            && runtime_release.capability_profile_id() == binding.capability_profile_id
+            && runtime_release.action()
+                == clutch_fractional_redemption_runtime::FractionalRedemptionActionV1::CloseEmptyLedger
+            && family_slot.status() == MarketFamilyStatusV1::Live
+            && family_slot.counts().admitted == 1
+            && family_slot.counts().live == 1
+            && family_slot.counts().terminal == 0
+            && policy_account != ledger_account
+            && policy_terminal_state_id != ledger_terminal_state_id
+            && physical_terminal_id != verification_id
+            && physical_terminal_id != postwrite_authentication_id
+            && physical_terminal_id != claim_release_receipt_id
+            && verification_id != postwrite_authentication_id
+            && verification_id != claim_release_receipt_id
+            && postwrite_authentication_id != claim_release_receipt_id,
+        ClutchError::MismatchedState,
+    )?;
+    let root_authentication_before_id = root.authentication_id();
+    let root_semantic_before_id = root.semantic_id();
+    let sequence = family_slot.counts().terminal;
+    let authority = ExactFractionalFamilyTerminalAuthorityV5 {
+        market_instance_id: binding.market_instance_id,
+        generation: binding.generation,
+        family_namespace_anchor_id,
+        sequence,
+        terminal_receipt_id,
+    };
+    current
+        .terminalize_fractional_family_into(
+            &authority,
+            sequence,
+            terminal_receipt_id,
+            policy_terminal_state_id,
+            ledger_terminal_state_id,
+            &mut root_successor,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    let reopened = write_and_reopen_market_lifecycle_root_v3(
+        program_id,
+        root_account,
+        &root,
+        &root_successor,
         &mut root_after,
     )?;
+    let post_family = reopened
+        .state()
+        .product_families()
+        .family(MarketFamilyV1::Fractional);
     require(
-        accepted.terminal_receipt_id() == physical_terminal_id
-            && accepted.root_account() == *root_account.key,
+        post_family.status() == MarketFamilyStatusV1::Live
+            || post_family.status() == MarketFamilyStatusV1::Terminal,
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        post_family.counts().admitted == 1
+            && post_family.counts().live == 0
+            && post_family.counts().terminal == 1,
         ClutchError::MismatchedState,
     )?;
     let id = hashv(&[
         PRODUCT_FRACTIONAL_FAMILY_TERMINAL_POSTWRITE_DOMAIN_V5,
         program_id.as_ref(),
         &physical_terminal_id.bytes(),
-        &accepted.id().bytes(),
         root_account.key.as_ref(),
-        &accepted.root_authentication_before().bytes(),
-        &accepted.root_authentication_after().bytes(),
-        &accepted.root_semantic_before().bytes(),
-        &accepted.root_semantic_after().bytes(),
+        &root_authentication_before_id.bytes(),
+        &reopened.authentication_id().bytes(),
+        &root_semantic_before_id.bytes(),
+        &reopened.semantic_id().bytes(),
+        &terminal_receipt_id.bytes(),
+        &verification_id.bytes(),
+        &postwrite_authentication_id.bytes(),
+        &policy_terminal_state_id.bytes(),
+        &ledger_terminal_state_id.bytes(),
+        &claim_ledger_post_state_id.bytes(),
+        &claim_ledger_transition_id.bytes(),
+        &fractional_release_id.bytes(),
+        &claim_release_receipt_id.bytes(),
+        &rent_disposition_id.bytes(),
         link_account.key.as_ref(),
         &link_authentication_id.bytes(),
         policy_account.as_ref(),
@@ -697,8 +901,15 @@ pub(crate) fn consume_fractional_family_physical_terminal_v5(
     require_live(id)?;
     Ok(AuthenticatedProductFractionalFamilyTerminalV5 {
         id,
-        terminal: accepted,
         physical_terminal_id,
+        root_account: *root_account.key,
+        root_authentication_before_id,
+        root_authentication_after_id: reopened.authentication_id(),
+        root_semantic_before_id,
+        root_semantic_after_id: reopened.semantic_id(),
+        terminal_receipt_id,
+        policy_terminal_state_id,
+        ledger_terminal_state_id,
         policy_account,
         ledger_account,
         refund_owner,
@@ -3804,6 +4015,29 @@ fn retire_current_product_series_v5<'a, 'failure>(
 
 #[cfg(test)]
 mod source_shared_core_adversarial_tests {
+    #[test]
+    fn fractional_terminal_uses_only_the_current_namespace_and_root_v3_owner() {
+        let source = include_str!("retirement_v5.rs");
+        let terminal = source
+            .split("pub(crate) fn consume_fractional_family_physical_terminal_v5")
+            .nth(1)
+            .and_then(|value| {
+                value
+                    .split("pub(crate) struct AuthenticatedProductFailureCoreTerminalV5")
+                    .next()
+            })
+            .expect("current Fractional terminal consumer");
+        for exact in [
+            "product_market_family_root_v1_pda",
+            "MarketFamilyV1::Fractional.byte()",
+            "graph_policy_account.bytes() == policy_account.to_bytes()",
+            "graph_ledger_account.bytes() == ledger_account.to_bytes()",
+            "write_market_lifecycle_root_v3(",
+        ] {
+            assert!(terminal.contains(exact), "missing current terminal join {exact}");
+        }
+    }
+
     #[test]
     fn product_consumes_source_market_owner_before_funding_terminal() {
         let source = include_str!("retirement_v5.rs");

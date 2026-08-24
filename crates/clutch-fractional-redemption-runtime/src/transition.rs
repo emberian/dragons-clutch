@@ -3184,7 +3184,7 @@ impl FractionalDomainTerminalRequirementV1 {
 
 /// Prepared terminal fractional-family close after all economic state is zero.
 ///
-/// This pure value is not Product authorization. The disabled SBF adapter must
+/// This pure value is not Product authorization. The current SBF adapter must
 /// consume the matching private Product five-family close authorization
 /// before applying either deletion.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

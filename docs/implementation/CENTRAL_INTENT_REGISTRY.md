@@ -5,10 +5,10 @@ product is being assembled. Runtime capability tuples advance only when their
 exact callable dependencies land; the offline release checker still requires
 the complete all-family and observed-release closure before release.
 
-The current Product schema is the 47-slot Foundation graph with an explicit
-`HoardCollateralVault`. Historical
-`MarketFoundationAccountGraphV2`/`SeriesFundingQuoteV4` 46-slot geometry is not
-an acceptance contract and no family tuple may be enabled from it.
+The current Product schema is the 50-slot Foundation graph with an explicit
+`HoardCollateralVault` and three General treasury owners. Historical
+46-slot and 47-slot Foundation graphs are not acceptance contracts and no
+family tuple may be enabled from them.
 
 ## Frozen legacy space
 
@@ -43,7 +43,7 @@ family version creates a new namespace; it does not inherit capability.
 | Covered dealer | 76 | `0x4c` | 1 | policy catalog plus Initialize/BindEpoch in the named non-production lab |
 | Source plane / Series | 77 | `0x4d` | 2 | actions allocated, runtime disabled |
 | Evidence-only recovery | 78 | `0x4e` | 1 | disabled |
-| Exact fractional redemption | 79 | `0x4f` | 1 | actions 1–10 implemented; in-flight profile refuses, complete profile admits all-or-none |
+| Exact fractional redemption | 79 | `0x4f` | 1 | unified successor development profile admits exact actions 1–10 all-or-none |
 
 Source/Series starts at family version 2 deliberately. Numeric-fallback V3
 Template/Payout proposals are not promoted into this registry.
@@ -373,11 +373,12 @@ price artifacts, and present-funded liveness before capability admission.
 ## Coordinated successor account block
 
 The central collision ledger is the sole allocation owner for the following
-coordinated successor block. Dealer policy transport rows are
-`NonProductionLab`; current unactivated rows are `ReservedDisabled`; and
-historical General Reservation/receipt/owner-row coordinates and withdrawn
-Fractional V1 coordinates remain occupied as `Withdrawn`. An account codec or
-pure runtime elsewhere does not make a route executable.
+coordinated successor block. Dealer policy transport and the current callable
+Fractional rows are `NonProductionLab`; current unactivated rows are
+`ReservedDisabled`; and historical General Reservation/receipt/owner-row
+coordinates and withdrawn Fractional V1 coordinates remain occupied as
+`Withdrawn`. An account codec or pure runtime elsewhere does not make a route
+executable.
 
 | tag/version | owner | account |
 |---:|---|---|
