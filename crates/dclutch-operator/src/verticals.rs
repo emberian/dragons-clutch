@@ -13,6 +13,14 @@ use dclutch_dealer_contract::{
     },
     instruction::{DealerActionV1, DealerInstructionV1},
 };
+use dclutch_direct_contract::{
+    MAKER_REPLAY_ROOT_PDA_DOMAIN_V2, MakerReplayRootV2,
+    adapter::{
+        AdapterAccountMetaV2, AdapterActionV2, MarketPhaseV2,
+        encode_close_replay_root_instruction_v2, validate_account_frame_v2,
+    },
+    prepare_replay_root_close_v2,
+};
 use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome_count};
 use dclutch_product_contract::capacity::CapacityProfileV1;
 use dclutch_series_contract::{
@@ -29,7 +37,7 @@ use solana_program::{
 use solana_sdk_ids::{native_loader, system_program};
 
 use crate::{
-    Finality, Observation, ObservedAccount,
+    Finality, Observation, ObservedAccount, authenticate_rent_credit,
     foundation::{self, FinalizedRecordProof},
 };
 
@@ -346,6 +354,175 @@ pub struct DealerResetReport {
     pub config_id: [u8; 32],
 }
 
+/// Finalized state required to close one retired, zero-live Direct replay root.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectCloseReplayRootState {
+    /// Retiring canonical Market root.
+    pub market: ObservedAccount,
+    /// Direct's mutable maker replay root.
+    pub replay_root: ObservedAccount,
+    /// Permanent credit selected by the replay root's immutable rent payer.
+    pub rent_credit: ObservedAccount,
+    /// Canonical executable System Program.
+    pub system_program: ObservedAccount,
+    /// Canonical Rent sysvar.
+    pub rent_sysvar: ObservedAccount,
+}
+
+/// Chain-derived Direct replay-root-close instruction and final rent destination.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectCloseReplayRootReport {
+    /// Exact unsigned five-account Direct V2 instruction.
+    pub instruction: Instruction,
+    /// Finalized observation selecting every close fact.
+    pub observation: Observation,
+    /// Immutable rent-credit beneficiary selected from the replay root.
+    pub rent_beneficiary: Pubkey,
+}
+
+/// Construct the exact Direct V2 replay-root-close frame.
+///
+/// This route is permissionless: the builder has no maker, key, price, or
+/// limit input. It refuses a root whose registration is still open, whose live
+/// intent count is nonzero, or whose Market has not reached retirement.
+pub fn build_direct_close_replay_root_v2(
+    program_id: Pubkey,
+    state: &DirectCloseReplayRootState,
+) -> Result<DirectCloseReplayRootReport, VerticalError> {
+    let observation = observation(&[
+        &state.market,
+        &state.replay_root,
+        &state.rent_credit,
+        &state.system_program,
+        &state.rent_sysvar,
+    ])?;
+    authenticate_system_program(&state.system_program)?;
+    let _rent =
+        foundation::decode_rent(&state.rent_sysvar).map_err(|_| VerticalError::InvalidState)?;
+    let root = decode_owned(&state.replay_root, program_id, MakerReplayRootV2::decode)?;
+    let mut canonical_root = [0; dclutch_direct_contract::MAKER_REPLAY_ROOT_BYTES_V2];
+    root.encode(&mut canonical_root)
+        .map_err(|_| VerticalError::InvalidState)?;
+    if canonical_root.as_slice() != state.replay_root.data.as_slice() {
+        return Err(VerticalError::InvalidState);
+    }
+    let market = direct_market(program_id, &state.market)?;
+    if market.phase != Phase::Retiring
+        || root.market() != state.market.key.as_ref()
+        || root.generation() != market.generation
+    {
+        return Err(VerticalError::InvalidPhase);
+    }
+    let (expected_root, bump) = Pubkey::find_program_address(
+        &[
+            MAKER_REPLAY_ROOT_PDA_DOMAIN_V2,
+            state.market.key.as_ref(),
+            &root.generation().to_le_bytes(),
+            root.maker(),
+        ],
+        &program_id,
+    );
+    if state.replay_root.key != expected_root || root.bump() != bump {
+        return Err(VerticalError::PdaMismatch);
+    }
+    let close = prepare_replay_root_close_v2(root, MarketPhaseV2::Retiring)
+        .map_err(|_| VerticalError::InvalidPhase)?;
+    let beneficiary = Pubkey::new_from_array(close.rent_refund_payer);
+    authenticate_rent_credit(program_id, &state.rent_credit, beneficiary)
+        .map_err(|_| VerticalError::ContentMismatch)?;
+    let frame = [
+        AdapterAccountMetaV2 {
+            key: state.market.key.to_bytes(),
+            is_signer: false,
+            is_writable: true,
+        },
+        AdapterAccountMetaV2 {
+            key: state.replay_root.key.to_bytes(),
+            is_signer: false,
+            is_writable: true,
+        },
+        AdapterAccountMetaV2 {
+            key: state.rent_credit.key.to_bytes(),
+            is_signer: false,
+            is_writable: true,
+        },
+        AdapterAccountMetaV2 {
+            key: state.system_program.key.to_bytes(),
+            is_signer: false,
+            is_writable: false,
+        },
+        AdapterAccountMetaV2 {
+            key: state.rent_sysvar.key.to_bytes(),
+            is_signer: false,
+            is_writable: false,
+        },
+    ];
+    validate_account_frame_v2(AdapterActionV2::CloseReplayRoot, 1, &frame)
+        .map_err(|_| VerticalError::InvalidState)?;
+    Ok(DirectCloseReplayRootReport {
+        instruction: Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(state.market.key, false),
+                AccountMeta::new(state.replay_root.key, false),
+                AccountMeta::new(state.rent_credit.key, false),
+                AccountMeta::new_readonly(state.system_program.key, false),
+                AccountMeta::new_readonly(state.rent_sysvar.key, false),
+            ],
+            data: encode_close_replay_root_instruction_v2().to_vec(),
+        },
+        observation,
+        rent_beneficiary: beneficiary,
+    })
+}
+
+#[derive(Clone, Copy)]
+struct DirectMarketFacts {
+    generation: u64,
+    phase: Phase,
+}
+
+fn direct_market(
+    program_id: Pubkey,
+    account: &ObservedAccount,
+) -> Result<DirectMarketFacts, VerticalError> {
+    match decode_market_outcome_count(&account.data).map_err(|_| VerticalError::InvalidState)? {
+        2 => direct_market_width::<2>(program_id, account),
+        3 => direct_market_width::<3>(program_id, account),
+        4 => direct_market_width::<4>(program_id, account),
+        5 => direct_market_width::<5>(program_id, account),
+        6 => direct_market_width::<6>(program_id, account),
+        7 => direct_market_width::<7>(program_id, account),
+        8 => direct_market_width::<8>(program_id, account),
+        9 => direct_market_width::<9>(program_id, account),
+        10 => direct_market_width::<10>(program_id, account),
+        11 => direct_market_width::<11>(program_id, account),
+        12 => direct_market_width::<12>(program_id, account),
+        13 => direct_market_width::<13>(program_id, account),
+        14 => direct_market_width::<14>(program_id, account),
+        15 => direct_market_width::<15>(program_id, account),
+        16 => direct_market_width::<16>(program_id, account),
+        _ => Err(VerticalError::InvalidState),
+    }
+}
+
+fn direct_market_width<const N: usize>(
+    program_id: Pubkey,
+    account: &ObservedAccount,
+) -> Result<DirectMarketFacts, VerticalError> {
+    let market: CategoricalMarketV1<N> =
+        decode_owned(account, program_id, CategoricalMarketV1::decode)?;
+    let identity = hash(&market.root().identity().to_bytes()).to_bytes();
+    let (expected, _) = Pubkey::find_program_address(&[crate::MARKET_SEED, &identity], &program_id);
+    if account.key != expected {
+        return Err(VerticalError::PdaMismatch);
+    }
+    Ok(DirectMarketFacts {
+        generation: market.root().identity().generation(),
+        phase: market.root().phase(),
+    })
+}
+
 /// Construct the canonical four-account Dealer reset-ladder frame.
 pub fn build_dealer_reset_ladder_v1(
     program_id: Pubkey,
@@ -638,5 +815,12 @@ mod tests {
             observation(&[&finalized, &later]),
             Err(VerticalError::ObservationMismatch)
         );
+    }
+
+    #[test]
+    fn direct_close_refuses_a_root_with_open_registration() {
+        let root =
+            MakerReplayRootV2::new([1; 32], 0, [2; 32], [3; 32], 7).expect("canonical replay root");
+        assert!(prepare_replay_root_close_v2(root, MarketPhaseV2::Retiring).is_err());
     }
 }
