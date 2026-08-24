@@ -1,11 +1,11 @@
 //! Compile-time identity and wire admission for one deployable product.
 //!
-//! Capability profiles are protocol identities, not build-size aliases.  A
-//! profile fixes which canonical instruction families this ELF can decode and
-//! execute.  Disabled canonical tags refuse before any account is read.  The
-//! label and SHA-256 identity below are copied into the artifact manifest by
-//! `scripts/measure_capability_profiles.py`; changing either the membership or
-//! the label therefore creates a different release identity.
+//! Capability profiles are protocol identities, not build-size aliases.
+//! Disabled canonical tags refuse before any account is read. The successor
+//! profile has one frozen identity; its exact callable tuple set is compiled
+//! below, while release readiness and observed external-program manifests stay
+//! outside runtime dispatch. The label and SHA-256 identity are copied into the
+//! artifact manifest by `scripts/measure_capability_profiles.py`.
 
 /// Full research/runtime surface retained by the historical default build.
 #[cfg(all(
@@ -60,26 +60,9 @@ pub const SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ID: [u8; 32] = [
     0xdc, 0x0d, 0x11, 0x09, 0xbd, 0xf2, 0x13, 0x16, 0xe2, 0x95, 0x3a, 0xa3, 0x34, 0xaf, 0xd4, 0xca,
 ];
 
-const SUCCESSOR_CHAIN_ATTACHED_DEV_INFLIGHT_LABEL: &str =
-    "dragons-clutch/capability-profile/successor-chain-attached-dev/inflight-family-and-release-closure/v1";
-const SUCCESSOR_CHAIN_ATTACHED_DEV_INFLIGHT_ID: [u8; 32] = [
-    0xee, 0x2a, 0x5e, 0x1e, 0xde, 0xca, 0xf3, 0x5e, 0x7f, 0xc6, 0x26, 0x7b, 0x33, 0x4d, 0x43, 0xfb,
-    0x9d, 0xa6, 0x75, 0x74, 0x0a, 0x84, 0xf9, 0xfa, 0x05, 0x73, 0xbc, 0x3f, 0x2e, 0x65, 0xc0, 0xe6,
-];
-
-// This is the only acceptance switch. It may become true only in the commit
-// that joins every target handler and checked release row. Both identity and
-// admission derive from it, so no partial family can be exposed under either
-// the in-flight or the complete identity.
-const SUCCESSOR_CHAIN_ATTACHED_DEV_CLOSURE_COMPLETE: bool = false;
-
 /// Identity selected for the single successor development product.
 #[cfg(feature = "profile-successor-chain-attached-dev")]
-pub const PROFILE_LABEL: &str = if SUCCESSOR_CHAIN_ATTACHED_DEV_CLOSURE_COMPLETE {
-    SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_LABEL
-} else {
-    SUCCESSOR_CHAIN_ATTACHED_DEV_INFLIGHT_LABEL
-};
+pub const PROFILE_LABEL: &str = SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_LABEL;
 
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(all(
@@ -131,13 +114,9 @@ pub const PROFILE_ID: [u8; 32] = [
     0xac, 0x9a, 0xf5, 0xc6, 0xd0, 0x40, 0x1c, 0x17, 0x74, 0x1b, 0x1a, 0x5d, 0x74, 0x82, 0x6b, 0xfc,
 ];
 
-/// Identity selected atomically with the successor action closure.
+/// Frozen identity of the successor development product.
 #[cfg(feature = "profile-successor-chain-attached-dev")]
-pub const PROFILE_ID: [u8; 32] = if SUCCESSOR_CHAIN_ATTACHED_DEV_CLOSURE_COMPLETE {
-    SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ID
-} else {
-    SUCCESSOR_CHAIN_ATTACHED_DEV_INFLIGHT_ID
-};
+pub const PROFILE_ID: [u8; 32] = SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ID;
 
 /// Whether this artifact is the explicitly non-production identity lab.
 pub const GENERAL_V2_IDENTITY_LAB: bool =
@@ -158,14 +137,6 @@ pub const SOURCE_V1: bool =
 pub const SOURCE_V2: bool = !DEALER_POLICY_CATALOG_LAB
     && !GENERAL_V2_IDENTITY_LAB
     && !SUCCESSOR_CHAIN_ATTACHED_DEV;
-/// Legacy Direct V2 is decode-only in every current artifact.
-pub const DIRECT_V2: bool = false;
-/// Legacy Direct V3 is decode-only in every current artifact.
-pub const DIRECT_V3: bool = false;
-/// Whether the profile contains the withdrawn legacy General clearing family.
-/// No checked release does; current General successors remain allocated but
-/// unreachable until their complete Product-to-retirement chain is admitted.
-pub const GENERAL_CLEARING: bool = false;
 /// Whether the profile contains occupation and resumable resolution.
 pub const OCCUPATION_RESOLUTION: bool =
     cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB && !SUCCESSOR_CHAIN_ATTACHED_DEV;
@@ -195,10 +166,10 @@ pub const fn legacy_intent_tag_enabled(tag: u8) -> bool {
         1 | 8..=9 | 12..=13 | 47..=67 | 69 => false,
         // Shared PlaceOrder was retained only for retired DirectEpochV4; the
         // account-width-selected General fallback is also withdrawn.
-        7 => DIRECT_V3 && !GENERAL_V2_IDENTITY_LAB,
+        7 => false,
         // This shared wire coordinate belonged to the retired Direct V4
         // page-zero constructor; the General Epoch fallback is also gone.
-        14 => DIRECT_V3 && !GENERAL_V2_IDENTITY_LAB,
+        14 => false,
         _ => false,
     }
 }
@@ -305,7 +276,23 @@ pub const SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTIONS:
     [(u8, u8, u8); SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTION_COUNT] =
     complete_successor_actions();
 
-/// Exact extension actions executable by this product.
+/// Exact extension actions executable by the successor product at this
+/// dependency checkpoint.
+///
+/// Failure actions 10 through 13 have complete current session creation,
+/// advance, resolution, and archive handlers. Other target tuples remain
+/// absent until their current authority tranche is integrated. In particular,
+/// Source actions 1 through 12 stay gated until Product consumes the private
+/// whole-lifecycle funding-custody retirement transition.
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
+    (78, 1, 10),
+    (78, 1, 11),
+    (78, 1, 12),
+    (78, 1, 13),
+];
+
+/// Exact extension actions executable by other products.
 ///
 /// Full profiles execute artifact-authenticated Source release registration
 /// plus release-bound atomic SourceHead/OpenRawPage creation and receiver-
@@ -321,16 +308,6 @@ pub const SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTIONS:
 ))]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
     &[(77, 2, 1), (77, 2, 2), (77, 2, 3), (77, 2, 4)];
-
-/// In-flight successor checkpoint. The final identity is not compiled and no
-/// tuple is reachable until the complete cross-family/release closure lands.
-#[cfg(feature = "profile-successor-chain-attached-dev")]
-pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
-    if SUCCESSOR_CHAIN_ATTACHED_DEV_CLOSURE_COMPLETE {
-        &SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTIONS
-    } else {
-        &[]
-    };
 
 /// Narrow non-laboratory profiles have not yet admitted Source execution.
 #[cfg(all(
@@ -400,7 +377,7 @@ mod tests {
         assert!(!legacy_intent_tag_enabled(0));
         assert!(!legacy_intent_tag_enabled(74));
         assert!(!direct_v3_tag_enabled(36));
-        assert_eq!(legacy_intent_tag_enabled(47), GENERAL_CLEARING);
+        assert!(!legacy_intent_tag_enabled(47));
         for tag in [1, 8, 9, 12, 13, 69] {
             assert!(!legacy_intent_tag_enabled(tag), "withdrawn General tag {tag}");
         }
@@ -416,8 +393,8 @@ mod tests {
         for tag in 47..=67 {
             assert!(!legacy_intent_tag_enabled(tag), "withdrawn General tag {tag}");
         }
-        assert_eq!(legacy_intent_tag_enabled(14), DIRECT_V3 && !GENERAL_V2_IDENTITY_LAB);
-        assert_eq!(legacy_intent_tag_enabled(7), DIRECT_V3 && !GENERAL_V2_IDENTITY_LAB);
+        assert!(!legacy_intent_tag_enabled(14));
+        assert!(!legacy_intent_tag_enabled(7));
         assert_eq!(legacy_intent_tag_enabled(23), SOURCE_V1);
         assert!(!legacy_intent_tag_enabled(22));
         assert!(!legacy_intent_tag_enabled(27));
@@ -548,9 +525,14 @@ mod tests {
                         && family_tag == 77
                         && family_version == 2
                         && matches!(local_action, 1 | 2 | 3 | 4);
+                    let successor_enabled = SUCCESSOR_CHAIN_ATTACHED_DEV
+                        && family_tag == 78
+                        && family_version == 1
+                        && matches!(local_action, 10..=13);
                     let expected_enabled = dealer_enabled
                         || general_enabled
-                        || source_runtime_enabled;
+                        || source_runtime_enabled
+                        || successor_enabled;
                     assert_eq!(
                         extension_intent_action_enabled(family_tag, family_version, local_action,),
                         expected_enabled,
@@ -560,7 +542,8 @@ mod tests {
         }
         assert_eq!(
             ENABLED_EXTENSION_ACTIONS.is_empty(),
-            !(DEALER_POLICY_CATALOG_LAB
+            !(SUCCESSOR_CHAIN_ATTACHED_DEV
+                || DEALER_POLICY_CATALOG_LAB
                 || (cfg!(feature = "profile-full")
                     && !GENERAL_V2_IDENTITY_LAB
                     && !SUCCESSOR_CHAIN_ATTACHED_DEV))

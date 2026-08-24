@@ -92,6 +92,15 @@ poststates. The unified profile remains an implementation checkpoint until
 every required family tuple and observed-positive collateral/claim release row
 is present.
 
+SourceSeries `77/v2` actions 1 through 12 remain compiled but not callable at
+this checkpoint. Their action handlers and per-generation close are concrete,
+but Product has not yet called the private
+`retire_source_funding_custody_v1` whole-lifecycle drain. Enabling Source before
+that exact Product retirement join would allow prepaid custody to be founded
+without a callable final refund/donation disposition. Failure `78/v1` actions
+10 through 13 are independently callable because their current session
+resolve/archive and Product slot-10 transition are already joined.
+
 No build, measurement, SVM, or validator evidence exists yet for the unified
 profile.
 
