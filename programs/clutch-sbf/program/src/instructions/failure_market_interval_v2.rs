@@ -1133,6 +1133,8 @@ impl AuthenticatedSourceFailureProductReleaseAuthorityV1
         require(
             expected.source_terminal_postwrite_id == source.id()
                 && expected.source_terminal_authority_facts == source.authority_facts()
+                && expected.source_terminal_policy_authentication_id
+                    == source.persisted_policy_authentication_id()
                 && expected.source_terminal_receipt_id == source.terminal_receipt_id()
                 && expected.source_terminal_receipt_authentication_id
                     == source.terminal_receipt_authentication_id()
