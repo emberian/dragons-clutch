@@ -1,7 +1,7 @@
 //! Single SBF authentication owner for General V5 settlement traversal.
 //!
 //! The returned value exists only after the adapter has authenticated the
-//! exact retained Feed, complete canonical V5 page set, MarketBinding V2,
+//! exact retained Feed, complete canonical V5 page set, current MarketBinding V4,
 //! MarketRuntime, EconomicDomain, PriceGrid, Product/Genesis artifacts, and
 //! Realm-selected collateral profile. It remains structural: a mutable root,
 //! receipt, reservation, Position, or Replay must be authenticated separately
@@ -31,7 +31,7 @@ use clutch_collateral_adapter_v2::{
 };
 use clutch_general_v2_contract as contract;
 use clutch_general_v2_contract::{
-    CandidateFeedHeaderV2, Id32, MarketBindingV2, Sha256BackendV1,
+    CandidateFeedHeaderV2, Id32, MarketBindingV4, Sha256BackendV1,
 };
 use clutch_general_v2_runtime::{
     authenticate_settlement_feed_view_v5, authenticate_settlement_order_book_view_v5,
@@ -60,7 +60,7 @@ use crate::capabilities;
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 
-use super::collateral_position_v3::authenticate_general_market_v2;
+use super::collateral_position_v3::authenticate_general_market_v4;
 use super::general_v2_settlement_root::{
     authenticate_readonly_general_settlement_root_v1,
     authenticate_writable_general_settlement_root_v1, AuthenticatedGeneralSettlementRootV1,
@@ -73,7 +73,7 @@ use super::product_artifact::authenticate_product_artifact_v1;
 pub struct SettlementTraversalAccountFrameV5<'a, 'info> {
     /// Counted retained CandidateFeed V2 account.
     pub retained_feed: &'a AccountInfo<'info>,
-    /// Immutable MarketBinding V2 PDA.
+    /// Immutable current MarketBinding V4 PDA.
     pub market_binding: &'a AccountInfo<'info>,
     /// Stable MarketRuntime V3 PDA.
     pub market_runtime: &'a AccountInfo<'info>,
@@ -100,7 +100,7 @@ pub struct SettlementTraversalAccountFrameV5<'a, 'info> {
 /// Program-authenticated immutable traversal facts.
 #[derive(Debug)]
 pub struct AuthenticatedSettlementTraversalV5<'info> {
-    market: MarketBindingV2,
+    market: MarketBindingV4,
     collateral: BoundCollateralProfileV2,
     retained_feed: AccountInfo<'info>,
     pages: [Option<AccountInfo<'info>>; MAX_ORDER_PAGES],
@@ -112,8 +112,8 @@ pub struct AuthenticatedSettlementTraversalV5<'info> {
 }
 
 impl AuthenticatedSettlementTraversalV5<'_> {
-    /// Exact MarketBinding V2 body.
-    pub const fn market(&self) -> &MarketBindingV2 {
+    /// Exact current MarketBinding V4 body.
+    pub const fn market(&self) -> &MarketBindingV4 {
         &self.market
     }
 
@@ -410,8 +410,8 @@ pub fn authenticate_settlement_traversal_v5<'a, 'info>(
         frame.token_program,
     )?;
     let (market, runtime) =
-        authenticate_general_market_v2(program_id, frame.market_binding, frame.market_runtime)?;
-    let base = market.base();
+        authenticate_general_market_v4(program_id, frame.market_binding, frame.market_runtime)?;
+    let base = market.base().base();
     let instance = *authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
         program_id,
         frame.market_instance,
@@ -516,7 +516,7 @@ pub fn authenticate_settlement_traversal_v5<'a, 'info>(
         &page_inputs[..frame.pages.len()],
         feed.order_set,
         &domain,
-        &market,
+        market.base(),
         &grid,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
