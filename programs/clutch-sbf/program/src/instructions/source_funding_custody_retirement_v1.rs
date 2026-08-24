@@ -23,6 +23,177 @@ const SOURCE_FUNDING_CUSTODY_POSTTERMINAL_AUTH_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/source-funding-custody-postterminal-auth/v2";
 const SOURCE_FUNDING_CUSTODY_RETIREMENT_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/source-funding-custody-retirement/v2";
+const SOURCE_FUNDING_CUSTODY_LIFECYCLE_TERMINAL_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/sbf/source-funding-custody-lifecycle-terminal/v1";
+
+/// Exhaustive terminal reason accepted by current Source custody retirement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SourceFundingCustodyTerminalDispositionV1 {
+    Successful,
+    SourceAbsent,
+    SourceRefused,
+}
+
+impl SourceFundingCustodyTerminalDispositionV1 {
+    const fn wire_byte(self) -> u8 {
+        match self {
+            Self::Successful => 1,
+            Self::SourceAbsent => 2,
+            Self::SourceRefused => 3,
+        }
+    }
+}
+
+/// One canonical Source/Failure/Product terminal tuple. Amounts are excluded;
+/// the hostile custody ledger remains their sole owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SourceFundingCustodyLifecycleTerminalFactsV1 {
+    pub(crate) disposition: SourceFundingCustodyTerminalDispositionV1,
+    pub(crate) capitalization_receipt_id: ContentId,
+    pub(crate) pre_root_source_occurrence_id: ContentId,
+    pub(crate) source_terminal_postwrite_id: ContentId,
+    pub(crate) source_result_or_absence_close_receipt_id: ContentId,
+    pub(crate) source_product_release_binding_id: ContentId,
+    pub(crate) failure_family_terminal_receipt_id: ContentId,
+    pub(crate) market_instance_id: ContentId,
+    pub(crate) series_plan_id: ContentId,
+    pub(crate) ordinal: u32,
+    pub(crate) source_generation: u64,
+    pub(crate) source_release_manifest_id: ContentId,
+    pub(crate) source_release_authentication_id: ContentId,
+    pub(crate) source_route_id: ContentId,
+    pub(crate) source_work_schedule_id: ContentId,
+    pub(crate) source_lifecycle_id: ContentId,
+    pub(crate) source_occurrence_id: ContentId,
+    pub(crate) source_occurrence_account: RuntimeKey,
+    pub(crate) source_occurrence_authentication_id: ContentId,
+    pub(crate) source_repair_generation: u64,
+    pub(crate) source_funding_custody: RuntimeKey,
+    pub(crate) lamport_principal_refund: RuntimeKey,
+    pub(crate) neutral_lamport_sink: RuntimeKey,
+}
+
+impl SourceFundingCustodyLifecycleTerminalFactsV1 {
+    fn id(self) -> ContentId {
+        ContentId::from_bytes(
+            solana_sha256_hasher::hashv(&[
+                SOURCE_FUNDING_CUSTODY_LIFECYCLE_TERMINAL_DOMAIN_V1,
+                &[self.disposition.wire_byte()],
+                &self.capitalization_receipt_id.bytes(),
+                &self.pre_root_source_occurrence_id.bytes(),
+                &self.source_terminal_postwrite_id.bytes(),
+                &self.source_result_or_absence_close_receipt_id.bytes(),
+                &self.source_product_release_binding_id.bytes(),
+                &self.failure_family_terminal_receipt_id.bytes(),
+                &self.market_instance_id.bytes(),
+                &self.series_plan_id.bytes(),
+                &self.ordinal.to_le_bytes(),
+                &self.source_generation.to_le_bytes(),
+                &self.source_release_manifest_id.bytes(),
+                &self.source_release_authentication_id.bytes(),
+                &self.source_route_id.bytes(),
+                &self.source_work_schedule_id.bytes(),
+                &self.source_lifecycle_id.bytes(),
+                &self.source_occurrence_id.bytes(),
+                &self.source_occurrence_account.bytes(),
+                &self.source_occurrence_authentication_id.bytes(),
+                &self.source_repair_generation.to_le_bytes(),
+                &self.source_funding_custody.bytes(),
+                &self.lamport_principal_refund.bytes(),
+                &self.neutral_lamport_sink.bytes(),
+            ])
+            .to_bytes(),
+        )
+    }
+}
+
+/// Default-refusing boundary implemented only by Failure's exact final
+/// successful or SourceAbsent/SourceRefused postwrite.
+pub(crate) trait AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1 {
+    /// Return the exact terminal tuple retained by the final Failure/Product
+    /// postwrite. No instruction payload or caller projection supplies these
+    /// identities.
+    fn source_funding_custody_lifecycle_terminal_facts_v1(
+        &self,
+    ) -> Outcome<SourceFundingCustodyLifecycleTerminalFactsV1> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+}
+
+/// Private non-Copy terminal capability consumed by Product retirement.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSourceFundingCustodyLifecycleTerminalV1 {
+    id: ContentId,
+    facts: SourceFundingCustodyLifecycleTerminalFactsV1,
+}
+
+impl AuthenticatedSourceFundingCustodyLifecycleTerminalV1 {
+    pub(crate) const fn id(&self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn facts(&self) -> SourceFundingCustodyLifecycleTerminalFactsV1 {
+        self.facts
+    }
+}
+
+/// Authenticate one exhaustive final lifecycle tuple against the hostile live
+/// custody and Failure's private terminal postwrite.
+pub(crate) fn authenticate_source_funding_custody_lifecycle_terminal_v1<
+    A: AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1 + ?Sized,
+>(
+    authority: &A,
+    route: AuthenticatedSourceRouteV1,
+    schedule: SourceWorkScheduleBindingV1,
+    custody: AuthenticatedSourceFundingCustodyV1,
+) -> Outcome<AuthenticatedSourceFundingCustodyLifecycleTerminalV1> {
+    let expected = authority.source_funding_custody_lifecycle_terminal_facts_v1()?;
+    let ids = [
+        expected.capitalization_receipt_id,
+        expected.pre_root_source_occurrence_id,
+        expected.source_terminal_postwrite_id,
+        expected.source_result_or_absence_close_receipt_id,
+        expected.source_product_release_binding_id,
+        expected.failure_family_terminal_receipt_id,
+        expected.market_instance_id,
+        expected.series_plan_id,
+        expected.source_release_manifest_id,
+        expected.source_release_authentication_id,
+        expected.source_route_id,
+        expected.source_work_schedule_id,
+        expected.source_lifecycle_id,
+        expected.source_occurrence_id,
+        expected.source_occurrence_authentication_id,
+    ];
+    require(
+        ids.iter().all(|id| !id.is_zero())
+            && all_distinct_ids(&ids)
+            && custody.ledger().is_live()
+            && expected.capitalization_receipt_id
+                == custody.ledger().capitalization_receipt_id
+            && expected.source_release_manifest_id == route.release_manifest_id()
+            && expected.source_release_manifest_id == custody.ledger().release_manifest_id
+            && expected.source_release_authentication_id == route.release_authentication_id()
+            && expected.source_route_id == route.route_id()
+            && expected.source_work_schedule_id == schedule.source_work_schedule_id()
+            && expected.source_lifecycle_id == schedule.lifecycle_id()
+            && expected.source_generation == schedule.generation()
+            && expected.source_funding_custody == custody.account()
+            && expected.lamport_principal_refund == custody.ledger().principal_refund
+            && expected.neutral_lamport_sink == custody.ledger().neutral_sink
+            && expected.neutral_lamport_sink == route.neutral_sink()
+            && expected.source_funding_custody != expected.lamport_principal_refund
+            && expected.source_funding_custody != expected.neutral_lamport_sink
+            && expected.source_funding_custody != expected.source_occurrence_account
+            && expected.source_occurrence_account != expected.lamport_principal_refund
+            && expected.source_occurrence_account != expected.neutral_lamport_sink
+            && expected.lamport_principal_refund != expected.neutral_lamport_sink,
+        ClutchError::MismatchedState,
+    )?;
+    let id = expected.id();
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(AuthenticatedSourceFundingCustodyLifecycleTerminalV1 { id, facts: expected })
+}
 
 /// Product-owned terminal identities and immutable destinations. No amount is
 /// supplied: all lamport accounting comes from the hostile-decoded ledger.
@@ -341,6 +512,26 @@ mod adversarial_tests {
     #[test]
     fn default_retirement_authority_refuses() {
         let _ = RefusingRetirement;
+    }
+
+    #[test]
+    fn lifecycle_terminal_facts_come_only_from_final_failure_authority() {
+        let source = include_str!("source_funding_custody_retirement_v1.rs");
+        let authenticate = source
+            .split("pub(crate) fn authenticate_source_funding_custody_lifecycle_terminal_v1")
+            .nth(1)
+            .and_then(|value| {
+                value
+                    .split("/// Product-owned terminal identities")
+                    .next()
+            })
+            .expect("bounded lifecycle terminal authentication");
+        assert!(authenticate.contains(
+            "authority.source_funding_custody_lifecycle_terminal_facts_v1()?"
+        ));
+        assert!(!authenticate.contains(
+            "expected: SourceFundingCustodyLifecycleTerminalFactsV1"
+        ));
     }
 
     #[test]
