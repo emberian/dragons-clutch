@@ -2280,6 +2280,13 @@ fn coordinate_description(
         let Some(action) = GeneralV2Action::from_tag(coordinate.local_action) else {
             return ("general", "unknown-general-v2-action", None);
         };
+        if action == GeneralV2Action::CloseIndexedSettlementRoot {
+            return (
+                "general",
+                "close-current-general-product-market-v1",
+                Some("dragons-clutch/operator/general-action47-material/v1"),
+            );
+        }
         let name = crate::transaction_builder::general_terminal_action_name_v5(action)
             .unwrap_or("non-current-general-v2-action");
         let builder = crate::transaction_builder::general_terminal_action_name_v5(action)

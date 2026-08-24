@@ -269,6 +269,13 @@ pub enum OwnedWireContract {
     MainGeneralAction39RequestV1 {
         binding: SuccessorRegistryBinding,
     },
+    /// Exact current General action-47 request. The 64-byte selector and the
+    /// 81/82-role success/failure ABI are derived from finalized chain state;
+    /// sequence is permanently zero and there is no instruction signer.
+    MainGeneralAction47RequestV1 {
+        binding: SuccessorRegistryBinding,
+        failed_source: bool,
+    },
     /// Exact enabled outer replay request for one current Fractional
     /// redemption action. The semantic owner fixes both payload width and the
     /// complete account privilege bitmap.
@@ -636,6 +643,72 @@ pub(crate) const fn general_terminal_alias_allowed_v5(
     }
 }
 
+pub(crate) const GENERAL_ACTION47_SUCCESSFUL_ACCOUNT_COUNT_V1: usize = 81;
+pub(crate) const GENERAL_ACTION47_FAILED_ACCOUNT_COUNT_V1: usize = 82;
+
+pub(crate) const fn general_action47_role_writable_v1(
+    index: usize,
+    failed_source: bool,
+) -> Option<bool> {
+    let count = if failed_source {
+        GENERAL_ACTION47_FAILED_ACCOUNT_COUNT_V1
+    } else {
+        GENERAL_ACTION47_SUCCESSFUL_ACCOUNT_COUNT_V1
+    };
+    if index >= count {
+        return None;
+    }
+    Some(matches!(
+        index,
+        2..=4
+            | 24..=27
+            | 37..=47
+            | 48..=50
+            | 52..=53
+            | 61..=65
+            | 68..=69
+            | 71..=75
+            | 77..=80
+    ))
+}
+
+fn validate_general_action47_metas_v1(
+    accounts: &[AccountMeta],
+    failed_source: bool,
+) -> Result<()> {
+    let expected = if failed_source {
+        GENERAL_ACTION47_FAILED_ACCOUNT_COUNT_V1
+    } else {
+        GENERAL_ACTION47_SUCCESSFUL_ACCOUNT_COUNT_V1
+    };
+    if accounts.len() != expected {
+        return Err(ConstructionError::InvalidAccountContract);
+    }
+    for (index, account) in accounts.iter().enumerate() {
+        if account.pubkey == Address::default()
+            || account.is_signer
+            || Some(account.is_writable)
+                != general_action47_role_writable_v1(index, failed_source)
+        {
+            return Err(ConstructionError::InvalidAccountContract);
+        }
+    }
+    let mut left = 0usize;
+    while left < accounts.len() {
+        let mut right = left + 1;
+        while right < accounts.len() {
+            if accounts[left].pubkey == accounts[right].pubkey
+                && accounts[left].is_writable != accounts[right].is_writable
+            {
+                return Err(ConstructionError::InvalidAccountContract);
+            }
+            right += 1;
+        }
+        left += 1;
+    }
+    Ok(())
+}
+
 /// One exact role in the payload-scoped Dealer terminal frame.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct DealerTerminalAccountSpecV1 {
@@ -828,6 +901,75 @@ impl OwnedInstructionDraft {
             registry_binding: Some(binding),
             runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
             wire: OwnedWireContract::MainGeneralAction39RequestV1 { binding },
+            data,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Assemble the sole current General action-47 request from a checked
+    /// release, exact chain-derived selector, and frozen success/failure ABI.
+    /// No account signer, sequence, terminal ID, or caller payload is accepted.
+    #[cfg(feature = "operator")]
+    pub(crate) fn checked_release_general_action47_v1(
+        release: &crate::rpc_index::IndexedProgramRelease,
+        semantic_owner: SemanticOwner,
+        accounts: Vec<AccountMeta>,
+        equations: Vec<ExactEquation>,
+        failed_source: bool,
+        selector: [u8; clutch_general_v2_contract::COUNTED_SETTLEMENT_ROOT_SELECTOR_BYTES],
+    ) -> Result<Self> {
+        use crate::rpc_index::{CanonicalFamily, CanonicalIntentCoordinate};
+        use clutch_solana_layout::registry::GeneralV2Action;
+
+        const ACTION: GeneralV2Action = GeneralV2Action::CloseIndexedSettlementRoot;
+        let central_action = ExtensionAction::GeneralV2(ACTION);
+        let family = central_action.family();
+        let coordinate = CanonicalIntentCoordinate {
+            family_tag: family.tag(),
+            family_version: family.version(),
+            local_action: central_action.local_tag(),
+        };
+        release
+            .validate()
+            .map_err(|_| ConstructionError::UnallocatedRegistryCoordinate)?;
+        if semantic_owner.release_sha256 != release.release_manifest_sha256
+            || !release.families.contains(&CanonicalFamily::General)
+            || release.enabled_intents.binary_search(&coordinate).is_err()
+        {
+            return Err(ConstructionError::UnallocatedRegistryCoordinate);
+        }
+        clutch_general_v2_contract::CountedSettlementRootSelectorV1::decode(&selector)
+            .map_err(|_| ConstructionError::InvalidAccountContract)?;
+        validate_general_action47_metas_v1(&accounts, failed_source)?;
+        let binding = registry_binding(family, central_action.local_tag(), Some(central_action))?;
+        let request = ExtensionRequest {
+            sequence: 0,
+            envelope: ExtensionEnvelope {
+                family,
+                action: central_action,
+                payload: &selector,
+            },
+        };
+        let mut data = vec![0; 13 + EXTENSION_ENVELOPE_BYTES + selector.len()];
+        let exact = request
+            .encode(&mut data)
+            .map_err(|_| ConstructionError::WrongWireLength)?;
+        data.truncate(exact);
+        let value = Self {
+            flow: ProtocolFlow::RecoveryRetirement,
+            action_name: "close-current-general-product-market-v1".into(),
+            semantic_owner,
+            program_id: release.program_id,
+            accounts,
+            required_signers: Vec::new(),
+            equations,
+            registry_binding: Some(binding),
+            runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
+            wire: OwnedWireContract::MainGeneralAction47RequestV1 {
+                binding,
+                failed_source,
+            },
             data,
         };
         value.validate()?;
@@ -2740,6 +2882,10 @@ impl OwnedInstructionDraft {
             OwnedWireContract::MainFailureRequestV1 { .. }
                 | OwnedWireContract::MainFailureArchiveRequestV1 { .. }
         );
+        let general_action47 = matches!(
+            self.wire,
+            OwnedWireContract::MainGeneralAction47RequestV1 { .. }
+        );
         let collateral_request = matches!(
             self.wire,
             OwnedWireContract::CollateralReplayRequestV3 { .. }
@@ -2763,6 +2909,7 @@ impl OwnedInstructionDraft {
         );
         if !source_request
             && !failure_request
+            && !general_action47
             && !collateral_request
             && !direct_request
             && !fractional_request
@@ -2998,6 +3145,37 @@ impl OwnedInstructionDraft {
                 if self.required_signers.as_slice() != [self.accounts[45].pubkey] {
                     return Err(ConstructionError::InvalidAccountContract);
                 }
+            }
+            OwnedWireContract::MainGeneralAction47RequestV1 {
+                binding,
+                failed_source,
+            } => {
+                use clutch_solana_layout::registry::GeneralV2Action;
+
+                let request = ExtensionRequest::decode(&self.data)
+                    .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                let expected = ExtensionAction::GeneralV2(
+                    GeneralV2Action::CloseIndexedSettlementRoot,
+                );
+                if request.sequence != 0
+                    || request.envelope.family != ExtensionFamily::GeneralV2
+                    || request.envelope.family != binding.family
+                    || request.envelope.action != expected
+                    || binding.local_action != expected.local_tag()
+                    || binding.central_action != Some(expected)
+                    || self.registry_binding != Some(binding)
+                    || self.flow != ProtocolFlow::RecoveryRetirement
+                    || self.runtime_admission != RuntimeAdmission::ReleaseBoundEnabled
+                    || request.envelope.payload.len()
+                        != clutch_general_v2_contract::COUNTED_SETTLEMENT_ROOT_SELECTOR_BYTES
+                {
+                    return Err(ConstructionError::UnallocatedRegistryCoordinate);
+                }
+                clutch_general_v2_contract::CountedSettlementRootSelectorV1::decode(
+                    request.envelope.payload,
+                )
+                .map_err(|_| ConstructionError::InvalidAccountContract)?;
+                validate_general_action47_metas_v1(&self.accounts, failed_source)?;
             }
             OwnedWireContract::FractionalRedemptionRequestV1 {
                 binding,
@@ -4045,6 +4223,7 @@ impl ProtocolTransactionBuilder {
                     | OwnedWireContract::DealerTerminalRetireV1 { .. }
                     | OwnedWireContract::MainFailureRequestV1 { .. }
                     | OwnedWireContract::MainFailureArchiveRequestV1 { .. }
+                    | OwnedWireContract::MainGeneralAction47RequestV1 { .. }
                     | OwnedWireContract::GeneralTerminalRequestV5 { .. }
                     | OwnedWireContract::MainGeneralAction39RequestV1 { .. }
             )
@@ -4069,6 +4248,7 @@ impl ProtocolTransactionBuilder {
                     | OwnedWireContract::MainFailureRequestV1 { .. }
                     | OwnedWireContract::MainFailureArchiveRequestV1 { .. }
                     | OwnedWireContract::MainGeneralAction39RequestV1 { .. }
+                    | OwnedWireContract::MainGeneralAction47RequestV1 { .. }
                     | OwnedWireContract::FractionalRedemptionRequestV1 { .. }
                     | OwnedWireContract::DisabledDirectMarketRequestV1 { .. }
                     | OwnedWireContract::EnabledDirectMarketRequestV1 { .. }
@@ -4120,6 +4300,7 @@ impl ProtocolTransactionBuilder {
                 draft.wire,
                 OwnedWireContract::MainFailureRequestV1 { .. }
                     | OwnedWireContract::MainFailureArchiveRequestV1 { .. }
+                    | OwnedWireContract::MainGeneralAction47RequestV1 { .. }
             )
                 && draft
                     .accounts
@@ -4284,6 +4465,7 @@ impl ProtocolTransactionBuilder {
                 | OwnedWireContract::DealerTerminalRetireV1 { .. }
                 | OwnedWireContract::MainFailureRequestV1 { .. }
                 | OwnedWireContract::MainFailureArchiveRequestV1 { .. }
+                | OwnedWireContract::MainGeneralAction47RequestV1 { .. }
                 | OwnedWireContract::GeneralTerminalRequestV5 { .. }
                 | OwnedWireContract::MainGeneralAction39RequestV1 { .. }
         );
@@ -4294,6 +4476,7 @@ impl ProtocolTransactionBuilder {
                     | ProtocolFlow::DealerFacility
                     | ProtocolFlow::DealerFacilityTerminal
                     | ProtocolFlow::FailureRecovery
+                    | ProtocolFlow::RecoveryRetirement
                     | ProtocolFlow::GeneralV2Candidate
                     | ProtocolFlow::GeneralV2Settlement
                     | ProtocolFlow::GeneralV2Fees
