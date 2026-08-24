@@ -111,6 +111,11 @@ pub mod general_v2_fee_v5;
     feature = "profile-successor-chain-attached-dev"
 ))]
 pub(crate) mod general_v2_fee_creation_v6;
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
+pub(crate) mod general_v2_fee_terminal_pair_v1;
 /// Action-38 owner cash, Replay, root, and fee-terminal executor.
 #[cfg(any(
     feature = "profile-non-production-general-v2-empty-book-identity-lab",
