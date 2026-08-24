@@ -69,6 +69,19 @@ const SPLIT_BASE: usize = 12;
 const INLINE_ORDINARY_BASE: usize = 13;
 const INLINE_COMPLEMENT_BASE: usize = 15;
 
+fn copied<T: Copy>(values: &[T], index: usize) -> Result<T, ProgramError> {
+    values
+        .get(index)
+        .copied()
+        .ok_or_else(|| AdapterError::Arithmetic.into())
+}
+
+fn replace<T>(values: &mut [T], index: usize, value: T) -> Result<(), ProgramError> {
+    let destination = values.get_mut(index).ok_or(AdapterError::Arithmetic)?;
+    *destination = value;
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 struct RealmFacts {
     realm: RealmV1,
@@ -2839,21 +2852,23 @@ fn process_split<'info, const N: usize>(
             .ok_or(AdapterError::Arithmetic)?;
         let record = authenticate_record(program_id, account(accounts, base + 1)?)?;
         let intent = record.intent();
-        records[index] = record;
-        roots[index] = existing_root(
+        replace(&mut records, index, record)?;
+        let root = existing_root(
             program_id,
             account(accounts, base)?,
             market_account.key,
             intent.generation(),
             intent.maker(),
         )?;
-        positions[index] = authenticate_position::<N>(
+        replace(&mut roots, index, root)?;
+        let position = authenticate_position::<N>(
             program_id,
             account(accounts, base + 3)?,
             market_account,
             intent.maker(),
             intent.generation(),
         )?;
+        replace(&mut positions, index, position)?;
         let (expected_escrow, _) = escrow_pda(program_id, account(accounts, base + 1)?.key);
         if account(accounts, base + 2)?.key != &expected_escrow
             || account(accounts, base + 4)?.key.to_bytes() != *intent.collateral_account()
@@ -2866,25 +2881,28 @@ fn process_split<'info, const N: usize>(
             account(accounts, base + 5)?,
             record.rent_payer(),
         )?;
-        participant_accounts_array[index] = participant_accounts(
+        let participant = participant_accounts(
             account(accounts, base)?,
             Some(account(accounts, base + 1)?),
             Some(account(accounts, base + 2)?),
             account(accounts, base + 3)?,
             account(accounts, base + 4)?,
         );
-        escrows[index] = escrow_authority(
+        replace(&mut participant_accounts_array, index, participant)?;
+        let escrow = escrow_authority(
             account(accounts, base + 2)?,
             account(accounts, 9)?,
             realm,
             record.reserved_collateral(),
         )?;
-        escrow_donations[index] = escrow_donation(
+        replace(&mut escrows, index, escrow)?;
+        let donation = escrow_donation(
             account(accounts, base + 2)?,
             account(accounts, 9)?,
             realm,
             record.reserved_collateral(),
         )?;
+        replace(&mut escrow_donations, index, donation)?;
     }
     let settlement = settle_split_in_place_v2(ComplementaryBuyMatchInPlaceV2 {
         phase: map_phase(market.root().phase()),
@@ -2924,7 +2942,7 @@ fn process_split<'info, const N: usize>(
     for index in 0..N {
         let base = SPLIT_BASE + index * 6;
         let record_account = account(accounts, base + 1)?;
-        let record = records[index];
+        let record = copied(&records, index)?;
         let seeds = OwnedRecordSeeds::new(record.intent(), record.bump());
         execute_transfer_signed(
             account(accounts, base + 2)?,
@@ -2933,7 +2951,7 @@ fn process_split<'info, const N: usize>(
             account(accounts, 9)?,
             record_account,
             realm,
-            settlement.buyer_gross_collateral_debits[index],
+            copied(&settlement.buyer_gross_collateral_debits, index)?,
             &seeds.refs(),
         )?;
         execute_transfer_signed(
@@ -2943,18 +2961,19 @@ fn process_split<'info, const N: usize>(
             account(accounts, 9)?,
             record_account,
             realm,
-            settlement.buyer_fee_debits[index],
+            copied(&settlement.buyer_fee_debits, index)?,
             &seeds.refs(),
         )?;
-        persist_root(account(accounts, base)?, roots[index])?;
-        persist_position(account(accounts, base + 3)?, positions[index])?;
+        persist_root(account(accounts, base)?, copied(&roots, index)?)?;
+        persist_position(account(accounts, base + 3)?, copied(&positions, index)?)?;
+        let close = copied(&record_closes, index)?;
         let record_after = RecordAfterFillV2 {
-            live_record: if record_closes[index].is_none() {
-                Some(records[index])
+            live_record: if close.is_none() {
+                Some(copied(&records, index)?)
             } else {
                 None
             },
-            close: record_closes[index],
+            close,
         };
         finish_record(
             program_id,
@@ -2968,7 +2987,7 @@ fn process_split<'info, const N: usize>(
                 mint: account(accounts, 8)?,
                 token_program: account(accounts, 9)?,
                 realm,
-                expected_donation: escrow_donations[index],
+                expected_donation: copied(&escrow_donations, index)?,
             }),
         )?;
     }
@@ -3032,21 +3051,23 @@ fn process_merge<'info, const N: usize>(
             .ok_or(AdapterError::Arithmetic)?;
         let record = authenticate_record(program_id, account(accounts, base + 1)?)?;
         let intent = record.intent();
-        records[index] = record;
-        roots[index] = existing_root(
+        replace(&mut records, index, record)?;
+        let root = existing_root(
             program_id,
             account(accounts, base)?,
             market_account.key,
             intent.generation(),
             intent.maker(),
         )?;
-        positions[index] = authenticate_position::<N>(
+        replace(&mut roots, index, root)?;
+        let position = authenticate_position::<N>(
             program_id,
             account(accounts, base + 2)?,
             market_account,
             intent.maker(),
             intent.generation(),
         )?;
+        replace(&mut positions, index, position)?;
         if account(accounts, base + 3)?.key.to_bytes() != *intent.collateral_account() {
             return Err(AdapterError::DirectAuthentication.into());
         }
@@ -3056,13 +3077,14 @@ fn process_merge<'info, const N: usize>(
             account(accounts, base + 4)?,
             record.rent_payer(),
         )?;
-        participant_accounts_array[index] = participant_accounts(
+        let participant = participant_accounts(
             account(accounts, base)?,
             Some(account(accounts, base + 1)?),
             None,
             account(accounts, base + 2)?,
             account(accounts, base + 3)?,
         );
+        replace(&mut participant_accounts_array, index, participant)?;
     }
     let settlement = settle_merge_in_place_v2(ComplementarySellMatchInPlaceV2 {
         phase: map_phase(market.root().phase()),
@@ -3111,7 +3133,7 @@ fn process_merge<'info, const N: usize>(
             account(accounts, 9)?,
             market_account,
             realm,
-            settlement.seller_net_collateral_credits[index],
+            copied(&settlement.seller_net_collateral_credits, index)?,
             &signer_seeds,
         )?;
     }
@@ -3127,14 +3149,15 @@ fn process_merge<'info, const N: usize>(
     )?;
     for index in 0..N {
         let base = SPLIT_BASE + index * 5;
-        persist_root(account(accounts, base)?, roots[index])?;
+        persist_root(account(accounts, base)?, copied(&roots, index)?)?;
+        let close = copied(&record_closes, index)?;
         let record_after = RecordAfterFillV2 {
-            live_record: if record_closes[index].is_none() {
-                Some(records[index])
+            live_record: if close.is_none() {
+                Some(copied(&records, index)?)
             } else {
                 None
             },
-            close: record_closes[index],
+            close,
         };
         finish_record(
             program_id,
@@ -3464,14 +3487,14 @@ fn process_inline_complementary(
     let mut debits = [None; 2];
     for index in 0..2 {
         let base = INLINE_COMPLEMENT_BASE + index * 3;
-        let intent = intents[index];
+        let intent = copied(&intents, index)?;
         if market_account.key.to_bytes() != *intent.market()
             || market.root().identity().generation() != intent.generation()
             || account(accounts, base + 2)?.key.to_bytes() != *intent.collateral_account()
         {
             return Err(AdapterError::DirectAuthentication.into());
         }
-        root_facts[index] = authenticate_root_state(
+        let facts = authenticate_root_state(
             program_id,
             account(accounts, base)?,
             market_account.key,
@@ -3479,26 +3502,30 @@ fn process_inline_complementary(
             intent.maker(),
             true,
         )?;
-        roots[index] = root_facts[index].state;
-        positions[index] = authenticate_position::<2>(
+        replace(&mut root_facts, index, facts)?;
+        replace(&mut roots, index, facts.state)?;
+        let position = authenticate_position::<2>(
             program_id,
             account(accounts, base + 1)?,
             market_account,
             intent.maker(),
             intent.generation(),
         )?;
-        participant_accounts_array[index] = inline_accounts(
+        replace(&mut positions, index, position)?;
+        let participant = inline_accounts(
             account(accounts, base)?,
             account(accounts, base + 1)?,
             account(accounts, base + 2)?,
         );
+        replace(&mut participant_accounts_array, index, participant)?;
         match action {
             adapter::AdapterActionV2::InlineSplit => {
-                debits[index] = Some(buy_debit_authority(
+                let debit = buy_debit_authority(
                     account(accounts, base + 2)?,
                     account(accounts, 11)?,
                     realm,
-                )?);
+                )?;
+                replace(&mut debits, index, Some(debit))?;
             }
             adapter::AdapterActionV2::InlineMerge => {
                 authenticate_token_account(
@@ -3565,8 +3592,8 @@ fn process_inline_complementary(
     .map_err(|_| AdapterError::DirectTransition)?;
     let root_rent = rent.minimum_balance(MAKER_REPLAY_ROOT_BYTES_V2);
     let mut total_top_up = 0_u64;
-    for index in 0..2 {
-        if root_facts[index].created {
+    for (index, facts) in root_facts.iter().enumerate() {
+        if facts.created {
             total_top_up = total_top_up
                 .checked_add(creation_top_up(
                     account(accounts, INLINE_COMPLEMENT_BASE + index * 3)?,
@@ -3590,13 +3617,14 @@ fn process_inline_complementary(
         ]);
     }
     preflight_mutable(&mutable)?;
-    for index in 0..2 {
-        if root_facts[index].created {
+    for (index, facts) in root_facts.iter().enumerate() {
+        if facts.created {
+            let intent = copied(&intents, index)?;
             let seeds = root_seed_parts(
                 market_account.key,
-                intents[index].generation(),
-                intents[index].maker(),
-                root_facts[index].bump,
+                intent.generation(),
+                intent.maker(),
+                facts.bump,
             );
             create_pda(
                 payer,
@@ -3611,13 +3639,14 @@ fn process_inline_complementary(
     }
     match side {
         Side::Buy => {
-            for index in 0..2 {
+            for (index, facts) in root_facts.iter().enumerate() {
                 let base = INLINE_COMPLEMENT_BASE + index * 3;
+                let intent = copied(&intents, index)?;
                 let seeds = root_seed_parts(
                     market_account.key,
-                    intents[index].generation(),
-                    intents[index].maker(),
-                    root_facts[index].bump,
+                    intent.generation(),
+                    intent.maker(),
+                    facts.bump,
                 );
                 execute_transfer_signed(
                     account(accounts, base + 2)?,
@@ -3626,7 +3655,7 @@ fn process_inline_complementary(
                     account(accounts, 11)?,
                     account(accounts, base)?,
                     realm,
-                    settlement.gross_collateral[index],
+                    copied(&settlement.gross_collateral, index)?,
                     &seeds.refs(),
                 )?;
                 execute_transfer_signed(
@@ -3636,7 +3665,7 @@ fn process_inline_complementary(
                     account(accounts, 11)?,
                     account(accounts, base)?,
                     realm,
-                    settlement.fees[index],
+                    copied(&settlement.fees, index)?,
                     &seeds.refs(),
                 )?;
             }
@@ -3645,7 +3674,7 @@ fn process_inline_complementary(
             let signer = market_signer(program_id, market_account, market.root())?;
             let bump = [signer.bump];
             let seeds = [MARKET_SEED, signer.digest.as_slice(), bump.as_slice()];
-            for index in 0..2 {
+            for (index, net_credit) in settlement.net_seller_credits.iter().copied().enumerate() {
                 execute_transfer_signed(
                     vault,
                     account(accounts, INLINE_COMPLEMENT_BASE + index * 3 + 2)?,
@@ -3653,7 +3682,7 @@ fn process_inline_complementary(
                     account(accounts, 11)?,
                     market_account,
                     realm,
-                    settlement.net_seller_credits[index],
+                    net_credit,
                     &seeds,
                 )?;
             }
@@ -3669,10 +3698,16 @@ fn process_inline_complementary(
             )?;
         }
     }
-    for index in 0..2 {
+    for (index, (root, position)) in settlement
+        .replay_roots
+        .iter()
+        .copied()
+        .zip(settlement.positions.iter().copied())
+        .enumerate()
+    {
         let base = INLINE_COMPLEMENT_BASE + index * 3;
-        persist_root(account(accounts, base)?, settlement.replay_roots[index])?;
-        persist_position(account(accounts, base + 1)?, settlement.positions[index])?;
+        persist_root(account(accounts, base)?, root)?;
+        persist_position(account(accounts, base + 1)?, position)?;
     }
     persist_market(market_account, market_after)?;
     if payer.lamports() != payer_after || credit.lamports() != credit_lamports {
@@ -3684,9 +3719,24 @@ fn process_inline_complementary(
 #[cfg(test)]
 mod tests {
     use alloc::boxed::Box;
+    use core::ops::Range;
     use std::{vec, vec::Vec};
 
     use super::*;
+
+    fn overwrite(data: &mut [u8], range: Range<usize>, source: &[u8]) {
+        assert_eq!(data.get(range.clone()).map(<[u8]>::len), Some(source.len()));
+        if let Some(destination) = data.get_mut(range) {
+            destination.copy_from_slice(source);
+        }
+    }
+
+    fn fill(data: &mut [u8], range: Range<usize>, value: u8) {
+        assert!(data.get(range.clone()).is_some());
+        if let Some(destination) = data.get_mut(range) {
+            destination.fill(value);
+        }
+    }
 
     fn test_account(
         key: Pubkey,
@@ -3969,7 +4019,7 @@ mod tests {
         let signer = [9_u8; 32];
         let message = [3_u8; 32];
         let mut data = vec![0_u8; 16 + message.len()];
-        data[16..].copy_from_slice(&message);
+        overwrite(&mut data, 16..48, &message);
         let current = Instruction {
             program_id,
             accounts: Vec::new(),
@@ -3983,7 +4033,7 @@ mod tests {
         );
 
         let mut wrong_offset = exact.clone();
-        wrong_offset.data[10..12].copy_from_slice(&17_u16.to_le_bytes());
+        overwrite(&mut wrong_offset.data, 10..12, &17_u16.to_le_bytes());
         let wrong_offset_sysvar = instructions_sysvar(wrong_offset, current.clone());
         assert_eq!(
             message_authorization(
@@ -3999,7 +4049,7 @@ mod tests {
         );
 
         let mut wrong_index = exact.clone();
-        wrong_index.data[14..16].copy_from_slice(&0_u16.to_le_bytes());
+        overwrite(&mut wrong_index.data, 14..16, &0_u16.to_le_bytes());
         let wrong_index_sysvar = instructions_sysvar(wrong_index, current.clone());
         assert_eq!(
             message_authorization(
@@ -4015,7 +4065,7 @@ mod tests {
         );
 
         let mut forged = exact.clone();
-        forged.data[48..112].fill(0);
+        fill(&mut forged.data, 48..112, 0);
         let forged_sysvar = instructions_sysvar(forged, current.clone());
         assert_eq!(
             message_authorization(&program_id, &[], &data, &forged_sysvar, signer, &message,).err(),
