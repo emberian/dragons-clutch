@@ -22,14 +22,8 @@ native claim per cell in an exhaustive ordered state partition; threshold,
 ramp, tent, and other payoff shapes belong in portfolio templates.
 
 No oracle policy, feed profile, provider identity, resolution funding, token
-program, venue, or Solana account type is persisted here.
-
-## Migration seam
-
-`dclutch-pyth-contract::market::MarketStateV1` remains temporarily present but
-is not the semantic owner of new Markets. Its Pyth policy, feed profile, and
-receipt must move behind a Pyth resolution child and SBF authentication seam.
-Migration must content-identify accepted provider evidence, map the accepted
-route to `ResolutionKind`, and supply a positive terminal sequence before the
-old composed Market module can be deleted. No bytewise reinterpretation of the
-old layout is valid.
+program, venue, or Solana account type is persisted here. Provider adapters
+authenticate their immutable material independently and commit only a compact,
+provider-neutral settlement summary to the Market. The former Pyth-composed
+Market authority has been deleted; there is no compatibility decoder or
+parallel mutable Market truth.
