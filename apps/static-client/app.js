@@ -303,6 +303,8 @@
   };
 
   const prepareCompilerRequest = async () => {
+    throw new Error("Canonical Product compiler material is unavailable until operatord exposes GET /v1/product/compiler-inputs; pasted artifact bodies, semantic IDs, and compiler release identities are refused.");
+    /* Re-enabled only when the canonical endpoint supplies the tuple below. */
     const configuration = state.configuration;
     const revision = compilerRevision;
     if (!configuration || !configuration.release) throw new Error("Acquire the daemon-projected checked release before binding compiler output.");
@@ -312,7 +314,7 @@
       compilerReleaseSha256,
       configuration.release.programId,
       definitionValue,
-      parseJsonField("compiler-bundle-inputs", "Canonical Product/Series bundle inputs"),
+      state.snapshot.productCompilerInputs.bundleInputs,
       $("compiler-exact-market-search").value.trim() === "" ? null : parseJsonField("compiler-exact-market-search", "Exact market search")
     );
     const inputCanonicalSha256 = await digest(new TextEncoder().encode(definitionValue.canonicalJson));
@@ -434,21 +436,14 @@
     });
     $("export-configuration").addEventListener("click", () => { if (state.configuration) copy(JSON.stringify(CHAIN.redactedConfiguration(state.configuration), null, 2), $("export-configuration")); });
     $("copy-snapshot").addEventListener("click", () => { if (state.snapshot) copy($("snapshot-json").textContent, $("copy-snapshot")); });
-    for (const id of ["compiler-release-sha256", "compiler-definition", "compiler-bundle-inputs", "compiler-exact-market-search"]) {
+    for (const id of ["compiler-definition", "compiler-exact-market-search"]) {
       $(id).addEventListener("input", () => { compilerRevision += 1; });
     }
-    $("compiler-form").addEventListener("submit", async (event) => {
+    $("compiler-form").addEventListener("submit", (event) => {
       event.preventDefault();
       clearError("compiler-error");
-      const button = $("compile-product-exact-market");
-      button.disabled = true;
-      button.textContent = "Compiling through bounded endpoint…";
-      try { await compilePayoff(); } catch (error) { resetCompiler("proposal refused"); setError("compiler-error", error.message); }
-      finally { button.disabled = false; button.textContent = "Compile through selected operatord"; }
-    });
-    $("bind-compiler-proposal").addEventListener("click", async () => {
-      clearError("compiler-error");
-      try { await bindCompilerProposal(); } catch (error) { resetCompiler("proposal refused"); setError("compiler-error", error.message); }
+      resetCompiler("canonical Product compiler inputs unavailable");
+      setError("compiler-error", "operatord does not yet expose GET /v1/product/compiler-inputs; manual compiler bodies and CLI proposal binding are refused.");
     });
     $("copy-compiler-output").addEventListener("click", () => { if (state.compilerProposal) copy($("compiler-output").textContent, $("copy-compiler-output")); });
     $("workflow-form").addEventListener("submit", async (event) => {
