@@ -18,6 +18,9 @@ use crate::direct_action8_material::{
     DirectAction8SymbolicPostconditionV2,
 };
 use crate::dealer_terminal_material::DealerTerminalOperatorBatchV1;
+use crate::failure_action11_material::{
+    FAILURE_ACTION11_ROLE_LABELS_V1, FAILURE_ACTION11_ROLE_WRITABLE_V1,
+};
 use crate::rpc_index::{
     public_rpc_endpoint_binding, CanonicalIntentCoordinate, CanonicalIntentVariantV1,
     IndexedProgramRelease, RpcCommitment,
@@ -25,6 +28,10 @@ use crate::rpc_index::{
 use crate::workflow_graph::{ResumableWorkflowCursor, WorkflowLane, WorkflowPosition};
 use crate::transaction_builder::{
     IntegerUnit, ProtocolFlow, RuntimeAdmission, TransactionMessageVersionV1,
+};
+use clutch_failure_policy_runtime::market_policy_v1::FailureMarketAdmissionStateV1;
+use clutch_solana_layout::failure_recovery::{
+    FailureMarketRootAccountV3, FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3,
 };
 use clutch_solana_layout::registry::{
     DirectMarketAction, GeneralV2Action, RecurringSeriesAction, RecoveryAction,
@@ -186,11 +193,16 @@ fn merge_chain_material_cursors(
     release: &IndexedProgramRelease,
     maximum_actions: usize,
 ) -> Result<Vec<KeeperActionSelection>, KeeperSelectionError> {
-    let fractional_materials = action_materials
+    let chain_materials = action_materials
         .iter()
-        .filter(|material| material.cursor().lane == WorkflowLane::FractionalRedemption)
+        .filter(|material| {
+            matches!(
+                material.cursor().lane,
+                WorkflowLane::FractionalRedemption | WorkflowLane::FailureRecovery
+            )
+        })
         .collect::<Vec<_>>();
-    if direct_batch.is_none() && dealer_batch.is_none() && fractional_materials.is_empty() {
+    if direct_batch.is_none() && dealer_batch.is_none() && chain_materials.is_empty() {
         return Ok(cursors);
     }
     let current_finalized_slot = index
@@ -199,11 +211,23 @@ fn merge_chain_material_cursors(
         .map(|(slot, _)| slot)
         .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
     let finalized = index.current_accounts(RpcCommitment::Finalized);
-    for material in fractional_materials {
+    for material in chain_materials {
         let coordinate = material.coordinate();
         let freshness = material.freshness();
-        if coordinate.family_tag != FRACTIONAL_REDEMPTION_FAMILY_TAG
-            || coordinate.family_version != FRACTIONAL_REDEMPTION_FAMILY_VERSION
+        let lane_coordinate_matches = match material.cursor().lane {
+            WorkflowLane::FractionalRedemption => {
+                coordinate.family_tag == FRACTIONAL_REDEMPTION_FAMILY_TAG
+                    && coordinate.family_version == FRACTIONAL_REDEMPTION_FAMILY_VERSION
+            }
+            WorkflowLane::FailureRecovery => {
+                coordinate.family_tag == RECOVERY_FAMILY_TAG
+                    && coordinate.family_version == RECOVERY_FAMILY_VERSION
+                    && coordinate.local_action
+                        == RecoveryAction::AdvanceIntervalConsensus.tag()
+            }
+            _ => false,
+        };
+        if !lane_coordinate_matches
             || release.enabled_intents.binary_search(&coordinate).is_err()
             || material.variant().is_some()
             || material.release_key() != release.key()
@@ -234,9 +258,18 @@ fn merge_chain_material_cursors(
                         && version.account.provenance.slot > freshness.observed_slot
                 })
             })
-            || cursors.iter().any(|cursor| cursor.cursor == material.cursor())
         {
             return Err(KeeperSelectionError::IncompleteCanonicalHint);
+        }
+        if let Some(existing) = cursors.iter().find(|cursor| cursor.cursor == material.cursor()) {
+            if material.cursor().lane != WorkflowLane::FailureRecovery
+                || existing.account != material.driver_account()
+                || existing.account_slot != material.driver_account_slot()
+                || existing.action != "advance-failure-interval-consensus"
+            {
+                return Err(KeeperSelectionError::IncompleteCanonicalHint);
+            }
+            continue;
         }
         let (_, action, _) = coordinate_description(coordinate);
         cursors.push(KeeperActionSelection {
@@ -496,6 +529,9 @@ fn dependency_versions<'a>(
             if source_dependency(accounts, driver, candidate) {
                 return true;
             }
+            if failure_action11_dependency(accounts, driver, candidate) {
+                return true;
+            }
             match driver.projection.kind {
                 CanonicalAccountKind::GeneralMarketRuntime => false,
                 CanonicalAccountKind::PositionV3 => {
@@ -513,6 +549,60 @@ fn dependency_versions<'a>(
             }
         })
         .collect()
+}
+
+fn failure_action11_dependency(
+    accounts: &[&IndexedAccountVersion],
+    driver: &IndexedAccountVersion,
+    candidate: &IndexedAccountVersion,
+) -> bool {
+    if driver.projection.kind != CanonicalAccountKind::FailureIntervalConsensusWork {
+        return false;
+    }
+    let Some(market_instance_id) = driver.projection.primary_binding else {
+        return false;
+    };
+    let Some(failure_policy_binding_id) = driver.projection.secondary_binding else {
+        return false;
+    };
+    let Some(root) = accounts.iter().copied().find(|version| {
+        version.projection.kind == CanonicalAccountKind::FailureMarketRootV3
+            && version.projection.primary_binding == Some(market_instance_id)
+            && version.projection.secondary_binding == Some(failure_policy_binding_id)
+    }) else {
+        return false;
+    };
+    let Ok(bytes) = <&[u8; FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3]>::try_from(
+        root.account.data.as_slice(),
+    ) else {
+        return false;
+    };
+    let Ok(record) = FailureMarketRootAccountV3::decode(bytes) else {
+        return false;
+    };
+    let Ok(state) = FailureMarketAdmissionStateV1::decode(&record.admission_body) else {
+        return false;
+    };
+    let facts = state.binding().facts();
+    match candidate.projection.kind {
+        CanonicalAccountKind::FailureMarketRootV3 => candidate.account.address == root.account.address,
+        CanonicalAccountKind::FailureMarketRuntimeV1 => {
+            candidate.projection.primary_binding == Some(failure_policy_binding_id)
+        }
+        CanonicalAccountKind::FailureIntervalConsensusWork
+        | CanonicalAccountKind::FailureIntervalConsensusReplay => {
+            candidate.projection.primary_binding == Some(market_instance_id)
+                && candidate.projection.secondary_binding == Some(failure_policy_binding_id)
+        }
+        CanonicalAccountKind::FailureLivenessPolicy => {
+            candidate.projection.primary_binding == Some(facts.liveness_policy_id.bytes())
+        }
+        CanonicalAccountKind::FailureRecoveryCompartment => {
+            candidate.projection.primary_binding == Some(facts.liveness_lifecycle_id.bytes())
+                && candidate.projection.secondary_binding == Some(facts.liveness_policy_id.bytes())
+        }
+        _ => false,
+    }
 }
 
 fn source_dependency(
@@ -1218,7 +1308,27 @@ fn action_verdict_json(
         .iter()
         .find(|cursor| action_coordinate(cursor.action) == Some(coordinate));
     let (family, action, semantic_builder) = coordinate_description(coordinate);
-    let unresolved_roles = source_action(coordinate)
+    let unresolved_roles = if coordinate.family_tag == RECOVERY_FAMILY_TAG
+        && coordinate.family_version == RECOVERY_FAMILY_VERSION
+        && coordinate.local_action == RecoveryAction::AdvanceIntervalConsensus.tag()
+    {
+        FAILURE_ACTION11_ROLE_LABELS_V1
+            .iter()
+            .zip(FAILURE_ACTION11_ROLE_WRITABLE_V1)
+            .enumerate()
+            .map(|(index, (role, writable))| {
+                json!({
+                    "index": index.to_string(),
+                    "role": role,
+                    "writable": writable,
+                    "signer": false,
+                    "address": null,
+                    "identityDisposition": "unresolved-until-semantic-owner-construction"
+                })
+            })
+            .collect::<Vec<_>>()
+    } else {
+        source_action(coordinate)
         .map(|action| {
             let contract = account_contract_v2(action);
             (0..contract.len())
@@ -1235,7 +1345,8 @@ fn action_verdict_json(
                 })
                 .collect::<Vec<_>>()
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+    };
     let action8 = CanonicalIntentCoordinate {
         family_tag: DIRECT_MARKET_FAMILY_TAG,
         family_version: DIRECT_MARKET_FAMILY_VERSION,
@@ -1768,6 +1879,20 @@ fn coordinate_description(
     if coordinate.family_tag == RECOVERY_FAMILY_TAG
         && coordinate.family_version == RECOVERY_FAMILY_VERSION
     {
+        if coordinate.local_action == RecoveryAction::AdvanceIntervalConsensus.tag() {
+            return (
+                "recovery",
+                "advance-failure-interval-consensus",
+                Some("clutch-failure-policy-runtime/current-action11-chain-state-v1"),
+            );
+        }
+        if coordinate.local_action == RecoveryAction::CloseIntervalConsensusWork.tag() {
+            return (
+                "recovery",
+                "close-failure-interval-consensus-work",
+                Some("missing-product-terminal-preauthorization"),
+            );
+        }
         return ("recovery", "recovery-action", None);
     }
     ("unknown", "unknown-action", None)
@@ -1778,6 +1903,7 @@ const fn protocol_flow_name(flow: ProtocolFlow) -> &'static str {
         ProtocolFlow::CollateralCustodyV3 => "collateral-custody-v3",
         ProtocolFlow::MarketEpochCreation => "market-epoch-creation",
         ProtocolFlow::SourcePlaneV3 => "source-plane-v3",
+        ProtocolFlow::FailureRecovery => "failure-recovery",
         ProtocolFlow::GeneralV2Candidate => "general-v2-candidate",
         ProtocolFlow::GeneralV2Settlement => "general-v2-settlement",
         ProtocolFlow::GeneralV2Fees => "general-v2-fees",
@@ -2095,6 +2221,7 @@ const fn lane_name(lane: WorkflowLane) -> &'static str {
     match lane {
         WorkflowLane::Creation => "creation",
         WorkflowLane::SourceCrank => "source-crank",
+        WorkflowLane::FailureRecovery => "failure-recovery",
         WorkflowLane::Candidate => "candidate",
         WorkflowLane::KeeperReceipts => "keeper-receipts",
         WorkflowLane::RecoveryRetirement => "recovery-retirement",
