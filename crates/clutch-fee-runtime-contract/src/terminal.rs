@@ -23,7 +23,7 @@ use crate::projection::{
     AuthenticatedSelectedOwnerFeeV2, AuthenticatedSelectedOwnerFeeV4, SelectedOwnerFeeBookV1,
 };
 use crate::retirement::{CompletedFeeRetirementV1, FeeRetirementHashV1};
-use crate::selected::{OwnerFeeCarryV1, SelectedCompositeFeeV1};
+use crate::selected::{OwnerFeeCarryV1, SelectedCompositeFeeV1, SelectedCompositeFeeV2};
 use crate::treasury::TreasuryLedgerV1;
 use crate::{add, independent, live, Error, Id, Result, MAX_FEE_ROWS_V1};
 
@@ -1875,7 +1875,7 @@ pub fn build_settled_fee_terminal_from_accumulator_v2<
 >(
     terminal_receipt: Id,
     closure_manifest_receipt: Id,
-    selected: &SelectedCompositeFeeV1,
+    selected: &SelectedCompositeFeeV2,
     certified: &C,
     settlement: &CandidateFeeSettlementV1,
     recipient_intent: &RecipientAllocationIntentV1,

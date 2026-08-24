@@ -5,7 +5,7 @@ use crate::integration::CandidateFeeSettlementV1;
 use crate::intent::TreasuryCreditIntentV1;
 use crate::projection::SelectedOwnerFeeBookV1;
 use crate::retirement::TreasuryDistributionAuthorizationV1;
-use crate::selected::SelectedCompositeFeeV1;
+use crate::selected::SelectedCompositeFeeAccess;
 use crate::{add, live, Error, Id, Result};
 
 /// Economic origin of atoms presented to the revenue ledger.
@@ -32,13 +32,13 @@ pub struct TreasuryLedgerV1 {
 }
 
 impl TreasuryLedgerV1 {
-    pub fn admit(selected: &SelectedCompositeFeeV1) -> Result<Self> {
+    pub fn admit<S: SelectedCompositeFeeAccess + ?Sized>(selected: &S) -> Result<Self> {
         Self::restore(selected, 0, 0, 0, 0, false)
     }
 
     /// Validate and restore the future account adapter's ledger words.
-    pub fn restore(
-        selected: &SelectedCompositeFeeV1,
+    pub fn restore<S: SelectedCompositeFeeAccess + ?Sized>(
+        selected: &S,
         credited_atoms: u64,
         withdrawn_atoms: u64,
         available_atoms: u64,

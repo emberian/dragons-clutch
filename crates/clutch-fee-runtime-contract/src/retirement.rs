@@ -10,7 +10,7 @@ use crate::projection::{
     CertifiedRecipientAllocationAccessV2, CertifiedRecipientAllocationV2,
     SelectedOwnerFeeBookHashV1, SelectedOwnerFeeBookV1,
 };
-use crate::selected::SelectedCompositeFeeV1;
+use crate::selected::SelectedCompositeFeeV2;
 use crate::intent::RecipientAllocationIntentV1;
 use crate::terminal::{
     AuthenticatedOwnerFeeFinalizationV1, CandidateFeeAccountClosuresV1,
@@ -176,7 +176,7 @@ impl FeeRetirementAccumulatorV1 {
         recipient_allocation_data_id: Id,
         treasury_ledger: Id,
         settlement_cash_pot: Id,
-        selected: &SelectedCompositeFeeV1,
+        selected: &SelectedCompositeFeeV2,
         book: &SelectedOwnerFeeBookV1,
         owner_fee_book_data_id: Id,
         certified: &CertifiedRecipientAllocationV2,
@@ -435,7 +435,7 @@ impl FeeRetirementAccumulatorV1 {
         certified: &C,
         transition: FeePositionCreditTransitionV1,
         hash: &H,
-        selected: &SelectedCompositeFeeV1,
+        selected: &SelectedCompositeFeeV2,
         recipient_intent: &RecipientAllocationIntentV1,
     ) -> Result<(Self, TreasuryDistributionAuthorizationV1)> {
         self.validate_open()?;
