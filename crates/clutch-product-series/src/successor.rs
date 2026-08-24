@@ -12,7 +12,7 @@ use crate::{
     ProductTemplateId, ProductTemplateV4, QuantizedBasisSpecV1, QuantizedEdgePolicyV1,
     RealmCollateralProjectionV1, Result, SeriesAttachmentPlanId, SeriesAttachmentPlanV1,
     SeriesAttachmentPlanV2, SeriesAttachmentPlanV3, SeriesAttachmentPlanV4,
-    SeriesAttachmentPlanV5, SeriesFundingQuoteId,
+    SeriesAttachmentPlanV5, SeriesAttachmentPlanV6, SeriesFundingQuoteId,
     SeriesFundingQuoteV1, SeriesFundingTermsV2Id, SeriesPlanV5Id, MAX_BASIS_DEGREE, MAX_OUTCOMES,
     MAX_PAYOUTS, MAX_RECOVERY_ATTEMPTS,
 };
@@ -829,6 +829,44 @@ impl SeriesPlanV5 {
         price_policy: &PriceMeasurePolicyV1,
         genesis: &MarketGenesisProfileV2,
         attachment: &SeriesAttachmentPlanV5,
+        registry: &RegistryCapabilityProjectionV2,
+    ) -> Result<()> {
+        self.validate_shape()?;
+        template.validate_bindings(basis, recovery)?;
+        registry.validate_complete_join(self, template, basis, recovery, price_policy, genesis)?;
+        attachment.validate()?;
+        if self.product_template_id != template.id()?
+            || self.market_genesis_profile_id != genesis.id()?
+            || self.attachment_plan_id.content_id() != attachment.id()?.content_id()
+            || self.market_collateral_cap < genesis.native_bearer_lot
+            || !self
+                .market_collateral_cap
+                .is_multiple_of(genesis.native_bearer_lot)
+        {
+            return Err(Error::MismatchedArtifact);
+        }
+        let final_start = self.start_bucket(self.instance_count - 1)?;
+        let primary_maturity = final_start
+            .checked_add(template.window_span_buckets)
+            .and_then(|value| value.checked_add(template.primary_maturity_grace_buckets))
+            .ok_or(Error::ArithmeticOverflow)?;
+        let last = recovery.attempts[usize::from(recovery.attempt_count) - 1];
+        primary_maturity
+            .checked_add(last.closes_after_primary_maturity_buckets)
+            .ok_or(Error::ArithmeticOverflow)?;
+        Ok(())
+    }
+
+    /// Validate the same economic Series against the current 50-slot V6 attachment.
+    #[allow(clippy::too_many_arguments)]
+    pub fn validate_bindings_v6(
+        &self,
+        template: &ProductTemplateV4,
+        basis: &NativeClaimBasisV1,
+        recovery: &EvidenceOnlyRecoveryPolicyV1,
+        price_policy: &PriceMeasurePolicyV1,
+        genesis: &MarketGenesisProfileV2,
+        attachment: &SeriesAttachmentPlanV6,
         registry: &RegistryCapabilityProjectionV2,
     ) -> Result<()> {
         self.validate_shape()?;
