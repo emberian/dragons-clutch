@@ -28,6 +28,10 @@ use clutch_solana_layout::registry::{
     STRUCTURED_CLAIM_FAMILY_TAG, STRUCTURED_CLAIM_FAMILY_VERSION,
 };
 use clutch_solana_layout::source_series::account_contract_v2;
+use clutch_fractional_redemption_runtime::{
+    FractionalRedemptionActionV1, FRACTIONAL_REDEMPTION_FAMILY_TAG,
+    FRACTIONAL_REDEMPTION_FAMILY_VERSION,
+};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
@@ -1217,6 +1221,49 @@ fn coordinate_description(
                 .unwrap_or("unknown-structured-action"),
             action.map(|_| "clutch-structured-claim-adapter/current-account-contract-v1"),
         );
+    }
+    if coordinate.family_tag == FRACTIONAL_REDEMPTION_FAMILY_TAG
+        && coordinate.family_version == FRACTIONAL_REDEMPTION_FAMILY_VERSION
+    {
+        let (action, builder) = match FractionalRedemptionActionV1::from_tag(
+            coordinate.local_action,
+        ) {
+            Some(FractionalRedemptionActionV1::Initialize) => ("initialize-fractional", None),
+            Some(FractionalRedemptionActionV1::RedeemInternalExact) => (
+                "redeem-fractional-internal-exact",
+                Some("clutch-fractional-redemption-runtime/fractional-redemption/79/1/2/redeem-internal-exact"),
+            ),
+            Some(FractionalRedemptionActionV1::RedeemBearerExact) => (
+                "redeem-fractional-bearer-exact",
+                Some("clutch-fractional-redemption-runtime/fractional-redemption/79/1/3/redeem-bearer-exact"),
+            ),
+            Some(FractionalRedemptionActionV1::RedeemInternalCredit) => {
+                ("redeem-fractional-internal-credit", None)
+            }
+            Some(FractionalRedemptionActionV1::RedeemBearerCredit) => (
+                "redeem-fractional-bearer-credit",
+                Some("clutch-fractional-redemption-runtime/fractional-redemption/79/1/5/redeem-bearer-credit"),
+            ),
+            Some(FractionalRedemptionActionV1::TransferCredit) => {
+                ("transfer-fractional-credit", None)
+            }
+            Some(FractionalRedemptionActionV1::MergeCredit) => {
+                ("merge-fractional-credit", None)
+            }
+            Some(FractionalRedemptionActionV1::CloseZeroCredit) => (
+                "close-fractional-zero-credit",
+                Some("clutch-fractional-redemption-runtime/fractional-redemption/79/1/8/close-zero-credit"),
+            ),
+            Some(FractionalRedemptionActionV1::SealClaimsExhausted) => (
+                "seal-fractional-claims-exhausted",
+                Some("clutch-fractional-redemption-runtime/fractional-redemption/79/1/9/seal-claims-exhausted"),
+            ),
+            Some(FractionalRedemptionActionV1::CloseEmptyLedger) => {
+                ("close-empty-fractional-ledger", None)
+            }
+            None => ("unknown-fractional-action", None),
+        };
+        return ("fractional", action, builder);
     }
     if coordinate.family_tag == RECOVERY_FAMILY_TAG
         && coordinate.family_version == RECOVERY_FAMILY_VERSION
