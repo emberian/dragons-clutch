@@ -14,10 +14,11 @@ use dclutch_dealer_contract::{
     instruction::{DealerActionV1, DealerInstructionV1},
 };
 use dclutch_direct_contract::{
-    MAKER_REPLAY_ROOT_PDA_DOMAIN_V2, MakerReplayRootV2,
+    CancelThroughV1, MAKER_REPLAY_ROOT_PDA_DOMAIN_V2, MakerReplayRootV2,
     adapter::{
-        AdapterAccountMetaV2, AdapterActionV2, MarketPhaseV2,
-        encode_close_replay_root_instruction_v2, validate_account_frame_v2,
+        AdapterAccountMetaV2, AdapterActionV2, MarketPhaseV2, decode_cancel_through_instruction_v1,
+        encode_cancel_through_instruction_v1, encode_close_replay_root_instruction_v2,
+        validate_account_frame_v2,
     },
     prepare_replay_root_close_v2,
 };
@@ -392,6 +393,115 @@ pub struct DirectCloseReplayRootReport {
     pub observation: Observation,
     /// Immutable rent-credit beneficiary selected from the replay root.
     pub rent_beneficiary: Pubkey,
+}
+
+/// Finalized state plus exact signed payload for a Direct O(1) cancel-through.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectCancelThroughState {
+    /// Canonical Market holding the immutable generation and lifecycle phase.
+    pub market: ObservedAccount,
+    /// Canonical maker replay root.
+    pub replay_root: ObservedAccount,
+    /// Instructions sysvar, authenticated by runtime when the transaction executes.
+    pub instructions_sysvar: ObservedAccount,
+    /// Exact untrusted signed Direct instruction bytes, strictly decoded and re-encoded here.
+    pub signed_instruction: Vec<u8>,
+}
+
+/// Constructed cancellation instruction whose maker identity is only from root and signed bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectCancelThroughReport {
+    /// Exact unsigned Direct V2 instruction.
+    pub instruction: Instruction,
+    /// Finalized account observation used for all persisted facts.
+    pub observation: Observation,
+}
+
+/// Build Direct's three-account cancel-through frame from the decoded root and
+/// canonical signed message. The native signature itself remains checked by
+/// the runtime against the immediately preceding instruction.
+pub fn build_direct_cancel_through_v1(
+    program_id: Pubkey,
+    state: &DirectCancelThroughState,
+) -> Result<DirectCancelThroughReport, VerticalError> {
+    let observation = observation(&[
+        &state.market,
+        &state.replay_root,
+        &state.instructions_sysvar,
+    ])?;
+    let root = decode_owned(&state.replay_root, program_id, MakerReplayRootV2::decode)?;
+    let mut root_bytes = [0; dclutch_direct_contract::MAKER_REPLAY_ROOT_BYTES_V2];
+    root.encode(&mut root_bytes)
+        .map_err(|_| VerticalError::InvalidState)?;
+    if root_bytes.as_slice() != state.replay_root.data.as_slice() {
+        return Err(VerticalError::InvalidState);
+    }
+    let (expected, bump) = Pubkey::find_program_address(
+        &[
+            MAKER_REPLAY_ROOT_PDA_DOMAIN_V2,
+            root.market(),
+            &root.generation().to_le_bytes(),
+            root.maker(),
+        ],
+        &program_id,
+    );
+    if state.replay_root.key != expected || root.bump() != bump {
+        return Err(VerticalError::PdaMismatch);
+    }
+    let market = source_market(program_id, &state.market)?;
+    if root.market() != state.market.key.as_ref()
+        || root.generation() != market.generation
+        || !matches!(
+            market.phase,
+            Phase::Open | Phase::Resolved | Phase::Retiring
+        )
+    {
+        return Err(VerticalError::InvalidPhase);
+    }
+    if state.instructions_sysvar.key != sysvar::instructions::ID
+        || state.instructions_sysvar.owner != sysvar::ID
+        || state.instructions_sysvar.executable
+    {
+        return Err(VerticalError::InvalidState);
+    }
+    let message = decode_cancel_through_instruction_v1(&state.signed_instruction)
+        .map_err(|_| VerticalError::InvalidState)?;
+    let expected_message = CancelThroughV1::new(root, message.minimum_live_nonce())
+        .map_err(|_| VerticalError::InvalidPhase)?;
+    if message.signed_preimage() != expected_message.signed_preimage() {
+        return Err(VerticalError::ContentMismatch);
+    }
+    let frame = [
+        AdapterAccountMetaV2 {
+            key: state.market.key.to_bytes(),
+            is_signer: false,
+            is_writable: false,
+        },
+        AdapterAccountMetaV2 {
+            key: state.replay_root.key.to_bytes(),
+            is_signer: false,
+            is_writable: true,
+        },
+        AdapterAccountMetaV2 {
+            key: state.instructions_sysvar.key.to_bytes(),
+            is_signer: false,
+            is_writable: false,
+        },
+    ];
+    validate_account_frame_v2(AdapterActionV2::CancelThrough, 1, &frame)
+        .map_err(|_| VerticalError::InvalidState)?;
+    Ok(DirectCancelThroughReport {
+        instruction: Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new_readonly(state.market.key, false),
+                AccountMeta::new(state.replay_root.key, false),
+                AccountMeta::new_readonly(state.instructions_sysvar.key, false),
+            ],
+            data: encode_cancel_through_instruction_v1(message).to_vec(),
+        },
+        observation,
+    })
 }
 
 /// Finalized state required to retire one terminal Source-resolution child.
