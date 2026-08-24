@@ -21,8 +21,8 @@ const PRODUCT_AUTHORITY_DOMAIN_V2: &[u8] =
     b"dragons-clutch/direct/current-product-authority/v2\0";
 const GENERAL_AUTHORITY_DOMAIN_V2: &[u8] =
     b"dragons-clutch/direct/current-general-authority/v2\0";
-const BINDING_DOMAIN_V2: &[u8] = b"dragons-clutch/direct/market-binding/v2\0";
-const ROOT_STATE_DOMAIN_V2: &[u8] = b"dragons-clutch/direct/root-state/v2\0";
+pub(crate) const BINDING_DOMAIN_V2: &[u8] = b"dragons-clutch/direct/market-binding/v2\0";
+pub(crate) const ROOT_STATE_DOMAIN_V2: &[u8] = b"dragons-clutch/direct/root-state/v2\0";
 const DIRECT_EPOCH_SEMANTICS_DOMAIN_V2: &[u8] =
     b"dragons-clutch/direct/epoch-semantics/v2\0";
 
@@ -806,7 +806,7 @@ impl DirectRootReplayPostV2 {
     }
 }
 
-fn candidate_liveness_id_v2<B: DirectHashBackendV1>(
+pub(crate) fn candidate_liveness_id_v2<B: DirectHashBackendV1>(
     value: DirectCandidateLivenessBindingV1,
     backend: &B,
 ) -> Result<[u8; 32], DirectMarketErrorV1> {

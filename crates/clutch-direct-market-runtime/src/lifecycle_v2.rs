@@ -18,9 +18,9 @@ use clutch_general_v2_contract::GeneralPositionReplayPrestateV1;
 use clutch_owner_settlement::{AuthenticatedPositionV3, PositionSettlementPoststateV3};
 
 use crate::current_v2::{
-    direct_foundation_root_semantic_id_v2, DirectMarketBindingV2, DirectMarketRootV2,
-    DirectRootReplayPostV2,
+    direct_foundation_root_semantic_id_v2, DirectMarketBindingV2,
 };
+use crate::codec_v2::AuthenticatedDirectRootTransitionV2;
 use crate::fee_v1::DirectFeeTerminalV1;
 use crate::fee_v2::DirectFeePolicyV2;
 use crate::liveness_v1::{
@@ -101,6 +101,62 @@ pub struct DirectFoundationReceiptV2 {
     pub product_family_admission_receipt_id: [u8; 32],
     /// Exact 0xba/v2 Candidate allocation receipt.
     pub candidate_liveness_allocation_receipt_id: [u8; 32],
+}
+
+/// Compact current b1/v2+b3 transition authority for actions 2..13.
+///
+/// The root token retains only the private injective arithmetic projection and
+/// current V2 semantic IDs; no 2.5KiB current root is copied into this state.
+#[derive(Debug, Eq, PartialEq)]
+pub struct DirectRootReplayTransitionV2 {
+    root: AuthenticatedDirectRootTransitionV2,
+    replay: DirectActionReplayV1,
+}
+
+impl DirectRootReplayTransitionV2 {
+    pub fn authenticate(
+        root: AuthenticatedDirectRootTransitionV2,
+        replay: DirectActionReplayV1,
+    ) -> Result<Self, DirectMarketErrorV1> {
+        replay.validate_against(root.projected_root())?;
+        Ok(Self { root, replay })
+    }
+
+    pub const fn root(&self) -> &AuthenticatedDirectRootTransitionV2 { &self.root }
+    pub const fn replay(&self) -> DirectActionReplayV1 { self.replay }
+
+    pub fn validate(&self) -> Result<(), DirectMarketErrorV1> {
+        self.replay.validate_against(self.root.projected_root())
+    }
+
+    fn transition_projection(
+        &self,
+    ) -> Result<DirectRootReplayPostV1, DirectMarketErrorV1> {
+        self.replay.validate_against(self.root.projected_root())?;
+        Ok(DirectRootReplayPostV1 {
+            root: self.root.projected_root(),
+            replay: self.replay,
+        })
+    }
+
+    fn accept_transition_projection_in_place<B: DirectHashBackendV1>(
+        &mut self,
+        before: DirectRootReplayPostV1,
+        after: DirectRootReplayPostV1,
+        backend: &B,
+    ) -> Result<(), DirectMarketErrorV1> {
+        if before != self.transition_projection()? {
+            return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+        }
+        self.root.accept_projected_transition_in_place(
+            before.root,
+            after.root,
+            backend,
+        )?;
+        after.replay.validate_against(self.root.projected_root())?;
+        self.replay = after.replay;
+        Ok(())
+    }
 }
 
 /// Prepare fresh current action 1 directly into caller-owned semantic bodies.
@@ -246,7 +302,7 @@ pub fn prepare_direct_foundation_into_v2<
 /// Derive one exact Candidate work batch from current b1/v2 state.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_direct_candidate_work_batch_v2<B: DirectHashBackendV1>(
-    state: &DirectRootReplayPostV2,
+    state: &DirectRootReplayTransitionV2,
     selection: Option<&DirectSelectionV1>,
     action: DirectMarketActionV1,
     candidate_completed_calls: u32,
@@ -256,7 +312,7 @@ pub fn prepare_direct_candidate_work_batch_v2<B: DirectHashBackendV1>(
     backend: &B,
 ) -> Result<DirectCandidateWorkBatchV1, DirectMarketErrorV1> {
     prepare_direct_candidate_work_batch_v1(
-        state.transition_projection(backend)?,
+        state.transition_projection()?,
         selection,
         action,
         candidate_completed_calls,
@@ -269,15 +325,15 @@ pub fn prepare_direct_candidate_work_batch_v2<B: DirectHashBackendV1>(
 
 /// Bind one hostile-reopened Candidate batch and return only current state.
 pub fn bind_direct_candidate_work_batch_v2<B: DirectHashBackendV1>(
-    state: &mut DirectRootReplayPostV2,
+    state: &mut DirectRootReplayTransitionV2,
     batch: DirectCandidateWorkBatchV1,
     backend: &B,
 ) -> Result<(), DirectMarketErrorV1> {
-    let projection = state.transition_projection(backend)?;
+    let projection = state.transition_projection()?;
     let replay = bind_direct_candidate_work_batch_v1(&projection, batch, backend)?;
     replay.validate_against(projection.root)?;
     state.replay = replay;
-    state.validate(backend)
+    state.validate()
 }
 
 /// Default-deny current action-2 account authority.
@@ -286,7 +342,7 @@ pub trait AuthenticatedDirectReservationAdmissionV2 {
     /// fresh Reservation account, funding, action sequence, and clock slot.
     fn authenticate_admission_v2(
         &self,
-        _state: &DirectRootReplayPostV2,
+        _state: &DirectRootReplayTransitionV2,
         _position_replay: GeneralPositionReplayPrestateV1,
         _existing_peer: Option<DirectReservationV1>,
         _consumed_sequence: u64,
@@ -325,7 +381,7 @@ pub fn prepare_direct_reservation_admission_v2<
     B: DirectSettlementHashBackendV1,
 >(
     authority: &A,
-    state: &mut DirectRootReplayPostV2,
+    state: &mut DirectRootReplayTransitionV2,
     position_replay: GeneralPositionReplayPrestateV1,
     existing_peer: Option<DirectReservationV1>,
     consumed_sequence: u64,
@@ -341,7 +397,7 @@ pub fn prepare_direct_reservation_admission_v2<
         observed_slot,
         order,
     )?;
-    let projection = state.transition_projection(backend)?;
+    let projection = state.transition_projection()?;
     let projection_authority = ProjectedAdmissionAuthorityV2 {
         root: projection.root,
         position: position_replay.position(),
@@ -420,7 +476,7 @@ pub trait AuthenticatedDirectReservationCancelV2 {
     /// Authenticate current root/replay and the exact atomic close plane.
     fn authenticate_cancel_v2(
         &self,
-        _state: &DirectRootReplayPostV2,
+        _state: &DirectRootReplayTransitionV2,
         _reservation: DirectReservationV1,
         _position_replay: GeneralPositionReplayPrestateV1,
         _observed_reservation_lamports: u64,
@@ -457,7 +513,7 @@ pub fn prepare_direct_reservation_cancel_v2<
     B: DirectSettlementHashBackendV1,
 >(
     authority: &A,
-    state: &mut DirectRootReplayPostV2,
+    state: &mut DirectRootReplayTransitionV2,
     reservation: DirectReservationV1,
     position_replay: GeneralPositionReplayPrestateV1,
     observed_reservation_lamports: u64,
@@ -473,7 +529,7 @@ pub fn prepare_direct_reservation_cancel_v2<
         consumed_sequence,
         observed_slot,
     )?;
-    let projection = state.transition_projection(backend)?;
+    let projection = state.transition_projection()?;
     let projection_authority = ProjectedCancelAuthorityV2 {
         state: projection,
         reservation,
@@ -542,7 +598,7 @@ pub trait AuthenticatedDirectSelectionFreezeV2 {
     #[allow(clippy::too_many_arguments)]
     fn authenticate_freeze_v2(
         &self,
-        _state: &DirectRootReplayPostV2,
+        _state: &DirectRootReplayTransitionV2,
         _selection_account: [u8; 32],
         _rent: DirectRentOwnerV1,
         _reservations: &[Option<DirectReservationV1>; 2],
@@ -579,7 +635,7 @@ pub fn prepare_direct_selection_freeze_v2<
     B: DirectHashBackendV1,
 >(
     authority: &A,
-    state: &mut DirectRootReplayPostV2,
+    state: &mut DirectRootReplayTransitionV2,
     consumed_sequence: u64,
     observed_slot: u64,
     selection_account: [u8; 32],
@@ -599,7 +655,7 @@ pub fn prepare_direct_selection_freeze_v2<
         consumed_sequence,
         observed_slot,
     )?;
-    let projection = state.transition_projection(backend)?;
+    let projection = state.transition_projection()?;
     let mut reservation_semantic_ids = [[0; 32]; 2];
     let mut index = 0usize;
     while index < usize::from(projection.root.live_reservations()) {
@@ -671,7 +727,7 @@ impl AuthenticatedDirectSelectionFreezeV1 for ProjectedFreezeAuthorityV2 {
 
 /// Prepare current action 5 and retain only the canonical best-three prefix.
 pub fn submit_direct_candidate_v2<B: DirectHashBackendV1>(
-    state: &mut DirectRootReplayPostV2,
+    state: &mut DirectRootReplayTransitionV2,
     selection: DirectSelectionV1,
     consumed_sequence: u64,
     observed_slot: u64,
@@ -679,7 +735,7 @@ pub fn submit_direct_candidate_v2<B: DirectHashBackendV1>(
     submitter: [u8; 32],
     backend: &B,
 ) -> Result<DirectSelectionPlanV2, DirectMarketErrorV1> {
-    let projection = state.transition_projection(backend)?;
+    let projection = state.transition_projection()?;
     let plan = submit_direct_candidate_v1(
         projection,
         selection,
@@ -694,13 +750,13 @@ pub fn submit_direct_candidate_v2<B: DirectHashBackendV1>(
 
 /// Prepare current action 6's exhaustive verification traversal.
 pub fn begin_direct_candidate_verification_v2<B: DirectHashBackendV1>(
-    state: &mut DirectRootReplayPostV2,
+    state: &mut DirectRootReplayTransitionV2,
     selection: DirectSelectionV1,
     consumed_sequence: u64,
     observed_slot: u64,
     backend: &B,
 ) -> Result<DirectSelectionPlanV2, DirectMarketErrorV1> {
-    let projection = state.transition_projection(backend)?;
+    let projection = state.transition_projection()?;
     let plan = begin_direct_candidate_verification_v1(
         projection,
         selection,
@@ -713,13 +769,13 @@ pub fn begin_direct_candidate_verification_v2<B: DirectHashBackendV1>(
 
 /// Prepare current action 7 for exactly the next retained candidate.
 pub fn verify_next_direct_candidate_v2<B: DirectHashBackendV1>(
-    state: &mut DirectRootReplayPostV2,
+    state: &mut DirectRootReplayTransitionV2,
     selection: DirectSelectionV1,
     consumed_sequence: u64,
     observed_slot: u64,
     backend: &B,
 ) -> Result<DirectSelectionPlanV2, DirectMarketErrorV1> {
-    let projection = state.transition_projection(backend)?;
+    let projection = state.transition_projection()?;
     let plan = verify_next_direct_candidate_v1(
         projection,
         selection,
@@ -732,13 +788,13 @@ pub fn verify_next_direct_candidate_v2<B: DirectHashBackendV1>(
 
 /// Prepare current action 8 and select the best valid submitted candidate.
 pub fn finalize_direct_selection_v2<B: DirectHashBackendV1>(
-    state: &mut DirectRootReplayPostV2,
+    state: &mut DirectRootReplayTransitionV2,
     selection: DirectSelectionV1,
     consumed_sequence: u64,
     observed_slot: u64,
     backend: &B,
 ) -> Result<DirectSelectionPlanV2, DirectMarketErrorV1> {
-    let projection = state.transition_projection(backend)?;
+    let projection = state.transition_projection()?;
     let plan = finalize_direct_selection_v1(
         projection,
         selection,
@@ -750,7 +806,7 @@ pub fn finalize_direct_selection_v2<B: DirectHashBackendV1>(
 }
 
 fn convert_selection_plan_v2<B: DirectHashBackendV1>(
-    state: &mut DirectRootReplayPostV2,
+    state: &mut DirectRootReplayTransitionV2,
     projection: DirectRootReplayPostV1,
     plan: crate::selection_v1::DirectSelectionFreezePlanV1,
     backend: &B,
@@ -771,7 +827,7 @@ pub trait AuthenticatedDirectEconomicTerminalV2 {
     #[allow(clippy::too_many_arguments)]
     fn authenticate_terminal_v2(
         &self,
-        _state: &DirectRootReplayPostV2,
+        _state: &DirectRootReplayTransitionV2,
         _selection: DirectSelectionV1,
         _ordered_endpoints: &[Option<DirectEndpointPrestateV1>; 2],
         _fee_policy: DirectFeePolicyV2,
@@ -825,7 +881,7 @@ pub fn prepare_direct_economic_terminal_v2<
     B: DirectSettlementHashBackendV1,
 >(
     authority: &A,
-    state: &mut DirectRootReplayPostV2,
+    state: &mut DirectRootReplayTransitionV2,
     selection: DirectSelectionV1,
     endpoints: [Option<DirectEndpointPrestateV1>; 2],
     realm: [u8; 32],
@@ -837,8 +893,8 @@ pub fn prepare_direct_economic_terminal_v2<
     observed_slot: u64,
     backend: &B,
 ) -> Result<DirectEconomicTerminalPlanV2, DirectMarketErrorV1> {
-    let fee_policy = state.root.binding().fee_policy();
-    let projection = state.transition_projection(backend)?;
+    let fee_policy = state.root().fee_policy();
+    let projection = state.transition_projection()?;
     let projection_authority = ProjectedEconomicAuthorityV2 {
         authority,
         current_state: state,
@@ -880,7 +936,7 @@ pub fn prepare_direct_missed_freeze_terminal_v2<
 >(
     freeze_authority: &F,
     terminal_authority: &A,
-    state: &mut DirectRootReplayPostV2,
+    state: &mut DirectRootReplayTransitionV2,
     selection_account: [u8; 32],
     selection_rent: DirectRentOwnerV1,
     reservations: [Option<DirectReservationV1>; 2],
@@ -901,8 +957,8 @@ pub fn prepare_direct_missed_freeze_terminal_v2<
         consumed_sequence,
         observed_slot,
     )?;
-    let fee_policy = state.root.binding().fee_policy();
-    let projection = state.transition_projection(backend)?;
+    let fee_policy = state.root().fee_policy();
+    let projection = state.transition_projection()?;
     let mut reservation_semantic_ids = [[0; 32]; 2];
     let mut index = 0usize;
     while index < usize::from(projection.root.live_reservations()) {
@@ -920,7 +976,7 @@ pub fn prepare_direct_missed_freeze_terminal_v2<
         domain,
         price,
     };
-    let realm = state.root.binding().realm_id;
+    let realm = state.root().realm_id();
     let projected_terminal = ProjectedEconomicAuthorityV2 {
         authority: terminal_authority,
         current_state: state,
@@ -957,7 +1013,7 @@ pub fn prepare_direct_missed_freeze_terminal_v2<
 #[derive(Debug)]
 struct ProjectedEconomicAuthorityV2<'a, A: ?Sized> {
     authority: &'a A,
-    current_state: &'a DirectRootReplayPostV2,
+    current_state: &'a DirectRootReplayTransitionV2,
     projected_state: DirectRootReplayPostV1,
     fee_policy: DirectFeePolicyV2,
     realm: [u8; 32],
@@ -1009,7 +1065,7 @@ impl<A: AuthenticatedDirectEconomicTerminalV2 + ?Sized>
 }
 
 fn convert_economic_plan_v2<B: DirectHashBackendV1>(
-    state: &mut DirectRootReplayPostV2,
+    state: &mut DirectRootReplayTransitionV2,
     projection: DirectRootReplayPostV1,
     plan: crate::settlement_v1::DirectEconomicTerminalPlanV1,
     backend: &B,
@@ -1035,7 +1091,7 @@ pub trait AuthenticatedDirectTerminalV2 {
     #[allow(clippy::too_many_arguments)]
     fn authenticate_terminal_v2(
         &self,
-        _state: &DirectRootReplayPostV2,
+        _state: &DirectRootReplayTransitionV2,
         _root_semantic_id: [u8; 32],
         _replay_semantic_id: [u8; 32],
         _selection: &DirectSelectionV1,
@@ -1075,14 +1131,6 @@ pub struct DirectFamilyTerminalPreparationV2 {
 }
 
 impl DirectFamilyTerminalPreparationV2 {
-    /// Current provisional state used only by the exact Candidate work binder.
-    pub fn prepared_state(&self, root: DirectMarketRootV2) -> DirectRootReplayPostV2 {
-        DirectRootReplayPostV2 {
-            root,
-            replay: self.replay_post,
-        }
-    }
-
     /// Provisional replay used only as input to the final Candidate batch.
     pub const fn prepared_replay(&self) -> &DirectActionReplayV1 {
         &self.replay_post
@@ -1121,7 +1169,7 @@ pub fn prepare_direct_family_terminal_v2<
     B: DirectHashBackendV1,
 >(
     authority: &A,
-    state: &DirectRootReplayPostV2,
+    state: &DirectRootReplayTransitionV2,
     selection: &DirectSelectionV1,
     reservations: &[Option<DirectReservationV1>; 2],
     final_resolution: crate::DirectFinalResolutionV1,
@@ -1133,8 +1181,8 @@ pub fn prepare_direct_family_terminal_v2<
     family_terminal_sequence: u32,
     backend: &B,
 ) -> Result<DirectFamilyTerminalPreparationV2, DirectMarketErrorV1> {
-    state.validate(backend)?;
-    let projection = state.transition_projection(backend)?;
+    state.validate()?;
+    let projection = state.transition_projection()?;
     state.replay.require_action(projection.root, consumed_sequence)?;
     selection.validate_against(projection.root)?;
     retirement.validate()?;
@@ -1147,13 +1195,13 @@ pub fn prepare_direct_family_terminal_v2<
     ] {
         crate::require_live(id)?;
     }
-    if state.root.phase() != crate::DirectRootPhaseV1::Terminal
-        || final_resolution.account != state.root.binding().resolution_account
+    if state.root().phase() != crate::DirectRootPhaseV1::Terminal
+        || final_resolution.account != state.root().resolution_account()
         || product_family_prestate_id == product_family_poststate_id
     {
         return Err(DirectMarketErrorV1::MismatchedBinding);
     }
-    let expected_sources = usize::from(state.root.live_reservations())
+    let expected_sources = usize::from(state.root().live_reservations())
         .checked_add(3)
         .ok_or(DirectMarketErrorV1::Arithmetic)?;
     let ordered_reservations = crate::canonical_terminal_reservation_archives(
@@ -1162,29 +1210,29 @@ pub fn prepare_direct_family_terminal_v2<
         reservations,
         backend,
     )?;
-    if retirement.neutral_lamport_sink != state.root.binding().neutral_lamport_sink
+    if retirement.neutral_lamport_sink != state.root().neutral_lamport_sink()
         || usize::from(retirement.source_count) != expected_sources
     {
         return Err(DirectMarketErrorV1::MismatchedBinding);
     }
     crate::require_terminal_retirement_source_v1(
         retirement,
-        state.root.binding().direct_root_account,
-        state.root.root_rent(),
+        state.root().direct_root_account(),
+        state.root().root_rent(),
     )?;
     crate::require_terminal_retirement_source_v1(
         retirement,
-        state.root.binding().action_replay_account,
+        state.root().action_replay_account(),
         state.replay.rent(),
     )?;
     crate::require_terminal_retirement_source_v1(
         retirement,
-        state.root.selection_account(),
+        state.root().selection_account(),
         selection.rent(),
     )?;
     let mut reservation_ids = [[0; 32]; 2];
     let mut index = 0usize;
-    while index < usize::from(state.root.live_reservations()) {
+    while index < usize::from(state.root().live_reservations()) {
         let reservation = ordered_reservations[index]
             .ok_or(DirectMarketErrorV1::InvalidCount)?;
         crate::require_terminal_retirement_source_v1(
@@ -1195,7 +1243,7 @@ pub fn prepare_direct_family_terminal_v2<
         reservation_ids[index] = reservation.semantic_id(backend)?;
         index += 1;
     }
-    let root_semantic_id = state.root.semantic_id(backend)?;
+    let root_semantic_id = state.root().root_semantic_id();
     let replay_pre_semantic_id = state.replay.semantic_id(projection.root, backend)?;
     let selection_semantic_id = selection.semantic_id(projection.root, backend)?;
     let retirement_transfer_id = retirement.semantic_id(backend)?;
@@ -1226,18 +1274,18 @@ pub fn prepare_direct_family_terminal_v2<
         TERMINAL_RECEIPT_DOMAIN_V2,
         &product_family_prestate_id,
         &product_family_poststate_id,
-        &state.root.binding().market_instance_id,
-        &state.root.binding().generation.to_le_bytes(),
-        &state.root.binding().direct_root_account,
-        &state.root.binding().action_replay_account,
+        &state.root().market_instance_id(),
+        &state.root().generation().to_le_bytes(),
+        &state.root().direct_root_account(),
+        &state.root().action_replay_account(),
         &root_semantic_id,
-        &state.root.binding().product.product_market_binding_id,
-        &state.root.binding().product.series_link_v2_id,
-        &state.root.binding().product.compiler_bundle_v6_id,
-        &state.root.binding().product.attachment_plan_v5_id,
-        &state.root.binding().product.product_direct_global_liveness_binding_id,
-        &state.root.binding().product.product_direct_global_liveness_activation_id,
-        &state.root.binding().product.direct_work_quote_id,
+        &state.root().terminal_product_id(0),
+        &state.root().terminal_product_id(1),
+        &state.root().terminal_product_id(2),
+        &state.root().terminal_product_id(3),
+        &state.root().terminal_product_id(4),
+        &state.root().terminal_product_id(5),
+        &state.root().terminal_product_id(6),
         &final_resolution.account,
         &final_resolution.semantic_id,
         &final_resolution.data_id,
@@ -1273,15 +1321,15 @@ pub fn prepare_direct_family_terminal_v2<
 /// Seal action 13 only after the exact eighth Candidate work receipt is bound.
 pub fn seal_direct_family_terminal_liveness_v2<B: DirectHashBackendV1>(
     preparation: DirectFamilyTerminalPreparationV2,
-    root: &DirectMarketRootV2,
+    root: &AuthenticatedDirectRootTransitionV2,
     retirement: &DirectRetirementTransferV1,
     final_resolution: crate::DirectFinalResolutionV1,
     bound_replay: DirectActionReplayV1,
     backend: &B,
 ) -> Result<DirectFamilyTerminalPlanV2, DirectMarketErrorV1> {
-    let projected_root = root.transition_projection(backend)?;
+    let projected_root = root.projected_root();
     let provisional = preparation.replay_post;
-    if root.semantic_id(backend)? != preparation.root_semantic_id
+    if root.root_semantic_id() != preparation.root_semantic_id
         || retirement.semantic_id(backend)? != preparation.retirement_transfer_id
         || final_resolution != preparation.final_resolution
         || !provisional.candidate_liveness_pending()
@@ -1351,5 +1399,6 @@ pub fn seal_direct_family_terminal_liveness_v2<B: DirectHashBackendV1>(
 }
 
 const _: () = assert!(core::mem::size_of::<DirectFoundationReceiptV2>() <= 224);
+const _: () = assert!(core::mem::size_of::<DirectRootReplayTransitionV2>() <= 2_816);
 const _: () = assert!(core::mem::size_of::<DirectFamilyTerminalPreparationV2>() <= 768);
 const _: () = assert!(core::mem::size_of::<DirectFamilyTerminalPlanV2>() <= 1_024);
