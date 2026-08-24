@@ -189,19 +189,34 @@ test("Pyth presentation keeps retained history and refuses transitional joined-v
   }), false);
 });
 
-test("the document and generated controls expose the accessibility contract", async () => {
+test("the canonical attach document exposes its accessibility contract", async () => {
   const [html, app, trade] = await Promise.all([
     source("index.html"),
     source("app.js"),
     source("trade.js"),
   ]);
-  assert.match(html, /<h1 class="brand-name">Operator Bench<\/h1>/);
+  assert.match(html, /<h1 class="brand-name">Operator Attach<\/h1>/);
   assert.match(html, /id="status"[^>]*aria-live="polite"/);
-  assert.match(app, /setAttribute\("aria-current"/);
+  assert.match(html, /<label for="operator-url">/);
+  assert.match(html, /<button type="submit">Attach read-only<\/button>/);
+  assert.match(app, /\/v1\/session/);
   assert.match(trade, /cell\.scope = "col"/);
   assert.match(trade, /setAttribute\("aria-label", `Belief weight at/);
   assert.match(trade, /setAttribute\("aria-label", "Automaton belief/);
   assert.match(trade, /setAttribute\("role", ticket\.notice\.ok \? "status" : "alert"/);
+});
+
+test("the operator entrypoint has one canonical chain session and no mock fallback", async () => {
+  const [html, app] = await Promise.all([source("index.html"), source("app.js")]);
+  assert.match(app, /dragons-clutch\/operator-read-only-session-manifest\/v1/);
+  assert.match(app, /finalized onchain account bodies plus immutable checked release and RPC bindings/);
+  assert.match(app, /restart cursor refers to a noncanonical account identity/);
+  assert.match(app, /credentials: "omit"/);
+  assert.match(app, /method: "GET"/);
+  assert.doesNotMatch(app, /localStorage|sessionStorage|EventSource|WebSocket|signTransaction|sendTransaction/);
+  assert.doesNotMatch(app, /non-production-mock|fixture|retained transcript/i);
+  assert.match(html, /No fixture or default source is available/);
+  assert.match(app, /Execution unavailable/);
 });
 
 test("belief dragging updates in place and freeze is phase-disabled", async () => {
@@ -262,8 +277,8 @@ test("the retained Pyth surface is truth-labelled and has no campaign action", a
     source("pyth.js"),
     source("stream.js"),
   ]);
-  assert.match(app, /identity\.mode === "non-production-retained-source-v2"/);
-  assert.match(app, /READ-ONLY RETAINED TRANSCRIPT/);
+  assert.doesNotMatch(app, /non-production-retained-source-v2|READ-ONLY RETAINED TRANSCRIPT|EventSource/);
+  assert.match(app, /No fallback and no persistence/);
   assert.match(stream, /case "pyth-campaign"/);
   for (const phrase of [
     "NON-PRODUCTION",
@@ -480,8 +495,8 @@ test("the live Pyth page is read-only and the launcher disables transcript reten
     readFile(new URL("../../scripts/run_operator_real_pyth_live.sh", here), "utf8"),
     readFile(new URL("../../programs/clutch-sbf/operatord/src/pyth_live.rs", here), "utf8"),
   ]);
-  assert.match(app, /LIVE CHILD \/ NOT RETAINED \/ BROWSER READ-ONLY/);
-  assert.match(app, /identity\.mode === "non-production-synthetic-source-v2-live"/);
+  assert.doesNotMatch(app, /non-production-synthetic-source-v2-live|LIVE CHILD \/ NOT RETAINED/);
+  assert.match(app, /operator-read-only-session-manifest\/v1/);
   for (const phrase of [
     "LIVE, NOT RETAINED",
     "real captured router/receiver laboratory",
