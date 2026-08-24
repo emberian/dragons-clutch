@@ -40,6 +40,8 @@ const DEALER_SERIES_ADMISSION_RECEIPT_DOMAIN_V2: &[u8] =
     b"dragons-clutch/dealer-runtime/series-obligation-admission-receipt/v2\0";
 const DEALER_SERIES_TERMINAL_RECEIPT_DOMAIN_V2: &[u8] =
     b"dragons-clutch/dealer-runtime/series-obligation-terminal-receipt/v2\0";
+const DEALER_SERIES_VALUE_CLOSE_RECEIPT_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/dealer-runtime/series-obligation-value-close-receipt/v3\0";
 
 /// Immutable Dealer-owned join to current Product RootV2/LinkV2 artifacts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -482,6 +484,30 @@ pub struct DealerSeriesObligationClosePlanV1 {
     pub neutral_sink_credit_lamports: u64,
 }
 
+/// Exact close plan for a live current obligation after Dealer value custody
+/// has already reached its terminal postimage in the same instruction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerSeriesObligationValueClosePlanV3 {
+    /// Authoritative State postimage with the Dealer obligation child removed.
+    pub state_after: DealerStateV3,
+    /// Deleted physical binding account.
+    pub binding_account_id: Id,
+    /// Semantic identity of the live binding that was physically removed.
+    pub live_binding_id: Id,
+    /// Exact Dealer value-terminal receipt authorizing this local close.
+    pub dealer_value_terminal_receipt_id: Id,
+    /// Canonical receipt for the value-authorized obligation deletion.
+    pub close_receipt_id: Id,
+    /// Sole refundable-principal recipient.
+    pub rent_payer: Id,
+    /// Exact refundable principal.
+    pub rent_payer_credit_lamports: u64,
+    /// Immutable hostile-prefund/surplus sink.
+    pub neutral_sink: Id,
+    /// Donation floor plus any later surplus.
+    pub neutral_sink_credit_lamports: u64,
+}
+
 /// Close the counted terminal binding without losing Product admission or
 /// terminal evidence.  The adapter must apply the State write, both coalesced
 /// credits, and binding-account deletion in one rollback domain.
@@ -540,6 +566,59 @@ pub fn prepare_dealer_series_obligation_close_v2(
         state_after,
         binding_account_id: binding.key.binding_account_id,
         terminal_binding_id: binding.binding_id()?,
+        rent_payer: binding.rent.payer,
+        rent_payer_credit_lamports: binding.rent.refundable_principal,
+        neutral_sink: binding.rent.neutral_sink,
+        neutral_sink_credit_lamports: binding_lamports_before
+            .checked_sub(binding.rent.refundable_principal)
+            .ok_or(Error::ArithmeticOverflow)?,
+    })
+}
+
+/// Close Dealer's live current obligation after physical value terminalization.
+///
+/// This plan deliberately accepts no Product receipt, Root, Link, or caller
+/// authority. The exact value receipt is derived by Dealer's SBF adapter from
+/// either Fractional custody execution or unused-funding deletion, and Product
+/// must consume the resulting move-only family receipt in the same outer.
+pub fn prepare_dealer_series_obligation_value_close_v3(
+    state: DealerStateV3,
+    binding: &DealerSeriesObligationBindingV2,
+    dealer_value_terminal_receipt_id: Id,
+    binding_lamports_before: u64,
+) -> Result<DealerSeriesObligationValueClosePlanV3> {
+    binding.validate()?;
+    dealer_value_terminal_receipt_id.validate_live()?;
+    let floor = add(
+        binding.rent.refundable_principal,
+        binding.rent.donation_floor,
+    )?;
+    if binding.phase != DealerSeriesObligationPhaseV1::Live
+        || binding_lamports_before < floor
+    {
+        return Err(Error::InvalidPhase);
+    }
+    let live_binding_id = binding.binding_id()?;
+    let state_after = state.close_current_live_binding_after_value(
+        binding,
+        dealer_value_terminal_receipt_id,
+    )?;
+    let state_after_id = state_after.state_id()?;
+    let mut hasher = Sha256::new();
+    hasher.update(DEALER_SERIES_VALUE_CLOSE_RECEIPT_DOMAIN_V3);
+    hasher.update(binding.key.binding_account_id.bytes());
+    hasher.update(live_binding_id.bytes());
+    hasher.update(dealer_value_terminal_receipt_id.bytes());
+    hasher.update(state_after_id.bytes());
+    hasher.update(binding_lamports_before.to_le_bytes());
+    let close_receipt_id = Id::from_bytes(hasher.finalize().into());
+    close_receipt_id.validate_live()?;
+    Ok(DealerSeriesObligationValueClosePlanV3 {
+        state_after,
+        binding_account_id: binding.key.binding_account_id,
+        live_binding_id,
+        dealer_value_terminal_receipt_id,
+        close_receipt_id,
         rent_payer: binding.rent.payer,
         rent_payer_credit_lamports: binding.rent.refundable_principal,
         neutral_sink: binding.rent.neutral_sink,

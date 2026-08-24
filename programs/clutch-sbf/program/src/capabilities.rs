@@ -362,20 +362,14 @@ pub fn extension_intent_action_enabled(
     })
 }
 
-/// Return whether one exact current Dealer terminal-cut payload is callable.
+/// Return whether one direct Dealer action-25 terminal payload is callable.
 ///
-/// Dealer action 25 multiplexes historical retirement steps and the two
-/// current facility-credit terminal cuts under one allocated action byte. The
-/// whole action therefore remains absent from [`ENABLED_EXTENSION_ACTIONS`]:
-/// admitting that tuple would also admit the unrelated target values. The
-/// dispatcher hostile-decodes the payload before account access and calls this
-/// narrower capability for only the complete current targets.
+/// Both local terminal variants now return a move-only receipt that must be
+/// consumed by Product RootV3 in the same instruction. They therefore cannot
+/// be dispatched as standalone Dealer actions even in the successor profile.
 pub const fn dealer_terminal_retire_target_enabled(retire_target: u8) -> bool {
-    SUCCESSOR_CHAIN_ATTACHED_DEV
-        && (retire_target
-            == crate::instructions::dealer_runtime::DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1
-            || retire_target
-                == crate::instructions::dealer_runtime::DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1)
+    let _ = retire_target;
+    false
 }
 
 #[cfg(test)]
@@ -463,24 +457,18 @@ mod tests {
     }
 
     #[test]
-    fn dealer_terminal_cut_capability_is_exactly_payload_scoped() {
+    fn dealer_terminal_cut_requires_the_product_v3_outer() {
         use crate::instructions::dealer_runtime::{
             DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1,
             DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1,
         };
 
-        assert_eq!(
-            dealer_terminal_retire_target_enabled(
-                DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1,
-            ),
-            SUCCESSOR_CHAIN_ATTACHED_DEV,
-        );
-        assert_eq!(
-            dealer_terminal_retire_target_enabled(
-                DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1,
-            ),
-            SUCCESSOR_CHAIN_ATTACHED_DEV,
-        );
+        assert!(!dealer_terminal_retire_target_enabled(
+            DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1,
+        ));
+        assert!(!dealer_terminal_retire_target_enabled(
+            DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1,
+        ));
         for target in 0u8..=7 {
             assert!(!dealer_terminal_retire_target_enabled(target));
         }
