@@ -10,10 +10,12 @@ use crate::rpc_index::{
     CanonicalFamily, CanonicalIntentCoordinate, IndexedProgramRelease, ObservedRpcAccount,
     ObservedRpcAccountRemoval, RpcAccountRemovalKind, RpcCommitment,
 };
+use crate::action_material::{ActionFreshnessBoundaryV1, CanonicalActionMaterialV1};
 use crate::transaction_builder::{
     ConstructionError, ExactEquation, IntegerUnit, OwnedInstructionDraft,
     ProtocolTransactionBuilder, SemanticOwner, TransactionTransport, UnsignedProtocolTransaction,
 };
+use crate::workflow_graph::{ResumableWorkflowCursor, WorkflowLane, WorkflowPosition};
 use clutch_failure_policy_runtime::market_policy_v1::FailureMarketAdmissionStateV1;
 use clutch_liveness::runtime_adapter_v1::{
     plan_runtime_transition_v1, RuntimePersistedAccountViewV1, RuntimeReceiptKindV1,
@@ -59,6 +61,7 @@ use clutch_source_plane_v3_runtime::{
 use solana_address::Address;
 use solana_instruction::AccountMeta;
 use solana_rent::Rent;
+use sha2::{Digest, Sha256};
 
 /// Exact operator-side validity horizon. It is a replay-safety bound, not a
 /// protocol timing promise and not a browser-selected expiry.
@@ -257,6 +260,9 @@ pub struct ChainDerivedFailureSourceAction10MaterialV1 {
     custody_rent_debit_lamports: u64,
     ordered_accounts: Vec<AccountMeta>,
     keeper: Address,
+    driver_account: Address,
+    observed_slot: u64,
+    authority_state_sha256: [u8; 32],
 }
 
 impl ChainDerivedFailureSourceAction10MaterialV1 {
@@ -370,6 +376,41 @@ impl ChainDerivedFailureSourceAction10MaterialV1 {
         .and_then(|builder| builder.build_source_v0(draft))
         .map_err(map_construction)
     }
+
+    /// Promote the complete finalized handoff join into the read-only
+    /// operator material registry.
+    pub fn canonical_material(
+        &self,
+        release: &IndexedProgramRelease,
+        workflow_id: [u8; 32],
+        transport: TransactionTransport,
+    ) -> Result<CanonicalActionMaterialV1> {
+        CanonicalActionMaterialV1::from_chain_derived_source_v2(
+            release,
+            SourceSeriesAction::EmitFailureHandoff,
+            self.driver_account,
+            self.observed_slot,
+            ResumableWorkflowCursor {
+                workflow_id,
+                lane: WorkflowLane::SourceCrank,
+                generation: u64::from(self.call_ordinal),
+                position: WorkflowPosition {
+                    phase: FAILURE_SOURCE_ACTION10_LOCAL_ACTION_V1,
+                    item: u64::from(self.call_ordinal),
+                },
+                observed_state_sha256: self.authority_state_sha256,
+            },
+            ActionFreshnessBoundaryV1 {
+                observed_slot: self.observed_slot,
+                valid_before_slot: self.valid_before_slot,
+                maximum_validity_slots: FAILURE_SOURCE_ACTION10_VALIDITY_SLOTS_V1,
+            },
+            self.keeper,
+            &self.ordered_accounts,
+            self.unsigned_transaction(release, transport)?,
+        )
+        .map_err(|_| FailureSourceAction10MaterialError::Construction)
+    }
 }
 
 /// Reconstruct exact action-10 bytes and metas from one finalized snapshot.
@@ -382,6 +423,7 @@ pub fn derive_failure_source_action10_material_v1(
 ) -> Result<ChainDerivedFailureSourceAction10MaterialV1> {
     authenticate_release_shape(release, keeper)?;
     authenticate_snapshot_provenance(release, snapshot)?;
+    let authority_state_sha256 = snapshot_digest(snapshot, keeper);
     let program_id = release.program_id;
     let program_key = runtime_key(program_id);
 
@@ -693,6 +735,9 @@ pub fn derive_failure_source_action10_material_v1(
         custody_rent_debit_lamports,
         ordered_accounts,
         keeper,
+        driver_account: snapshot.source_occurrence.address,
+        observed_slot: snapshot.source_release.provenance.slot,
+        authority_state_sha256,
     })
 }
 
@@ -1379,6 +1424,52 @@ fn map_construction(_error: ConstructionError) -> FailureSourceAction10MaterialE
     FailureSourceAction10MaterialError::Construction
 }
 
+fn snapshot_digest(
+    snapshot: FailureSourceAction10ChainSnapshotV1<'_>,
+    keeper: Address,
+) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"dragons-clutch/operator/source-action10-finalized-snapshot/v1\0");
+    hash.update(snapshot.source_release.provenance.slot.to_le_bytes());
+    hash.update(keeper.to_bytes());
+    for account in [
+        snapshot.source_release, snapshot.adapter_program, snapshot.adapter_program_data,
+        snapshot.parser_program, snapshot.parser_program_data, snapshot.parser_config,
+        snapshot.source_spec, snapshot.source_work_schedule, snapshot.clock_sysvar,
+        snapshot.source_occurrence, snapshot.window_spec, snapshot.statistic_key,
+        snapshot.result_lineage, snapshot.failure_market_root, snapshot.liveness_policy,
+        snapshot.source_compartment, snapshot.source_funding_custody, snapshot.rent_sysvar,
+    ] {
+        hash.update(account.address.to_bytes());
+        hash.update(account.owner.to_bytes());
+        hash.update(account.lamports.to_le_bytes());
+        hash.update([u8::from(account.executable)]);
+        hash.update(&account.data);
+    }
+    for slot in [
+        snapshot.window_seal, snapshot.statistic_result, snapshot.source_work_receipt,
+        snapshot.source_handoff_receipt,
+    ] {
+        match slot {
+            ObservedSourceSlotV1::Present(account) => {
+                hash.update([1]);
+                hash.update(account.address.to_bytes());
+                hash.update(account.owner.to_bytes());
+                hash.update(account.lamports.to_le_bytes());
+                hash.update(&account.data);
+            }
+            ObservedSourceSlotV1::Removed(account) => {
+                hash.update([2]);
+                hash.update(account.address.to_bytes());
+                hash.update(account.observed_owner.to_bytes());
+                hash.update(account.observed_lamports.to_le_bytes());
+                hash.update((account.observed_data_bytes as u64).to_le_bytes());
+            }
+        }
+    }
+    hash.finalize().into()
+}
+
 #[cfg(test)]
 mod adversarial_tests {
     use super::*;
@@ -1510,6 +1601,9 @@ mod adversarial_tests {
             custody_rent_debit_lamports: 20,
             ordered_accounts: ordered_action10_accounts(addresses).unwrap(),
             keeper: addresses[20],
+            driver_account: addresses[9],
+            observed_slot: 58,
+            authority_state_sha256: [0x54; 32],
         }
     }
 

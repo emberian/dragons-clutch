@@ -10,10 +10,12 @@ use crate::rpc_index::{
     CanonicalFamily, CanonicalIntentCoordinate, IndexedProgramRelease, ObservedRpcAccount,
     ObservedRpcAccountRemoval, RpcAccountRemovalKind, RpcCommitment,
 };
+use crate::action_material::{ActionFreshnessBoundaryV1, CanonicalActionMaterialV1};
 use crate::transaction_builder::{
     ExactEquation, IntegerUnit, OwnedInstructionDraft, ProtocolTransactionBuilder, SemanticOwner,
     TransactionTransport, UnsignedProtocolTransaction,
 };
+use crate::workflow_graph::{ResumableWorkflowCursor, WorkflowLane, WorkflowPosition};
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::registry::{ExtensionFamily, SourceSeriesAction};
 use clutch_solana_layout::source_series::{
@@ -25,6 +27,9 @@ use clutch_source_plane_v3_adapter::PdaRecipeV3;
 use clutch_source_plane_v3_runtime::{SourceReleaseManifestV2, SOURCE_RELEASE_MANIFEST_BYTES};
 use solana_address::Address;
 use solana_instruction::AccountMeta;
+use sha2::{Digest, Sha256};
+
+pub const SOURCE_ACTION1_VALIDITY_SLOTS_V1: u64 = 32;
 
 pub const SOURCE_ACTION1_FAMILY_V1: ExtensionFamily = ExtensionFamily::SourceSeries;
 pub const SOURCE_ACTION1_LOCAL_ACTION_V1: u8 = 1;
@@ -103,6 +108,10 @@ pub struct ChainDerivedSourceAction1MaterialV1 {
     program_data: Address,
     source_release_manifest_id: [u8; 32],
     release_payer: Address,
+    driver_account: Address,
+    observed_slot: u64,
+    valid_before_slot: u64,
+    authority_state_sha256: [u8; 32],
     ordered_accounts: Vec<AccountMeta>,
 }
 
@@ -183,6 +192,41 @@ impl ChainDerivedSourceAction1MaterialV1 {
         .and_then(|builder| builder.build_source_v0(draft))
         .map_err(|_| SourceAction1MaterialError::Construction)
     }
+
+    /// Promote the finalized registration snapshot into the read-only
+    /// operator material registry.
+    pub fn canonical_material(
+        &self,
+        release: &IndexedProgramRelease,
+        workflow_id: [u8; 32],
+        transport: TransactionTransport,
+    ) -> Result<CanonicalActionMaterialV1> {
+        CanonicalActionMaterialV1::from_chain_derived_source_v2(
+            release,
+            SourceSeriesAction::RegisterRelease,
+            self.driver_account,
+            self.observed_slot,
+            ResumableWorkflowCursor {
+                workflow_id,
+                lane: WorkflowLane::SourceCrank,
+                generation: 1,
+                position: WorkflowPosition {
+                    phase: SOURCE_ACTION1_LOCAL_ACTION_V1,
+                    item: 0,
+                },
+                observed_state_sha256: self.authority_state_sha256,
+            },
+            ActionFreshnessBoundaryV1 {
+                observed_slot: self.observed_slot,
+                valid_before_slot: self.valid_before_slot,
+                maximum_validity_slots: SOURCE_ACTION1_VALIDITY_SLOTS_V1,
+            },
+            self.release_payer,
+            &self.ordered_accounts,
+            self.unsigned_transaction(release, transport)?,
+        )
+        .map_err(|_| SourceAction1MaterialError::Construction)
+    }
 }
 
 pub fn derive_source_action1_material_v1(
@@ -192,6 +236,7 @@ pub fn derive_source_action1_material_v1(
 ) -> Result<ChainDerivedSourceAction1MaterialV1> {
     authenticate_checked_release(release)?;
     authenticate_snapshot(release, snapshot)?;
+    let authority_state_sha256 = snapshot_digest(snapshot, release_payer);
     if release_payer == Address::default()
         || release_payer == snapshot.source_release_artifact.address
         || release_payer == snapshot.source_release.address()
@@ -269,6 +314,9 @@ pub fn derive_source_action1_material_v1(
     }
     validate_account_metas_v2(SourceSeriesAction::RegisterRelease, &observed)
         .map_err(|_| SourceAction1MaterialError::Construction)?;
+    let valid_before_slot = snapshot.source_release_artifact.provenance.slot
+        .checked_add(SOURCE_ACTION1_VALIDITY_SLOTS_V1)
+        .ok_or(SourceAction1MaterialError::Construction)?;
     Ok(ChainDerivedSourceAction1MaterialV1 {
         checked_release_key: release.key(),
         release_manifest_sha256: release.release_manifest_sha256,
@@ -277,8 +325,43 @@ pub fn derive_source_action1_material_v1(
         program_data: release.program_data,
         source_release_manifest_id: manifest_id.bytes(),
         release_payer,
+        driver_account: artifact.address,
+        observed_slot: artifact.provenance.slot,
+        valid_before_slot,
+        authority_state_sha256,
         ordered_accounts,
     })
+}
+
+fn snapshot_digest(snapshot: SourceAction1ChainSnapshotV1<'_>, release_payer: Address) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"dragons-clutch/operator/source-action1-finalized-snapshot/v1\0");
+    hash.update(snapshot.source_release_artifact.provenance.slot.to_le_bytes());
+    hash.update(release_payer.to_bytes());
+    for account in [snapshot.source_release_artifact, snapshot.system_program, snapshot.rent_sysvar] {
+        hash.update(account.address.to_bytes());
+        hash.update(account.owner.to_bytes());
+        hash.update(account.lamports.to_le_bytes());
+        hash.update([u8::from(account.executable)]);
+        hash.update(&account.data);
+    }
+    match snapshot.source_release {
+        ObservedSourceReleaseSlotV1::Present(account) => {
+            hash.update([1]);
+            hash.update(account.address.to_bytes());
+            hash.update(account.owner.to_bytes());
+            hash.update(account.lamports.to_le_bytes());
+            hash.update(&account.data);
+        }
+        ObservedSourceReleaseSlotV1::Removed(account) => {
+            hash.update([2]);
+            hash.update(account.address.to_bytes());
+            hash.update(account.observed_owner.to_bytes());
+            hash.update(account.observed_lamports.to_le_bytes());
+            hash.update((account.observed_data_bytes as u64).to_le_bytes());
+        }
+    }
+    hash.finalize().into()
 }
 
 fn authenticate_checked_release(release: &IndexedProgramRelease) -> Result<()> {
