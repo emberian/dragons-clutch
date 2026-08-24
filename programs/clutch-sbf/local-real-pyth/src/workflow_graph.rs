@@ -9,6 +9,7 @@ use crate::transaction_builder::{
     ExactEquation, IntegerUnit, OwnedInstructionDraft, ProtocolFlow, ProtocolTransactionBuilder,
     SemanticOwner, UnsignedProtocolTransaction,
 };
+use clutch_fractional_redemption_runtime::FractionalRedemptionActionV1;
 use clutch_general_v2_contract::{
     claim_solver_poststate_v1, cleanup_candidate_poststate_v1, close_clear_work_poststate_v1,
     decode_direct_settlement_payload_v1, decode_identity_lab_payload_v1,
@@ -46,8 +47,7 @@ use clutch_solana_layout::product_series::{
     REGISTER_SERIES_PAYLOAD_BYTES_V1,
 };
 use clutch_solana_layout::registry::{
-    DirectMarketAction, ExtensionAction, GeneralV2Action, RecurringSeriesAction,
-    SourceSeriesAction,
+    DirectMarketAction, ExtensionAction, GeneralV2Action, RecurringSeriesAction, SourceSeriesAction,
 };
 use clutch_solana_layout::source_series::{
     account_contract_v2, validate_account_metas_v2, ObservedSourceAccountMetaV2,
@@ -62,10 +62,9 @@ use clutch_source_plane_v3_runtime::{
     SourceWorkScheduleBindingV1,
 };
 use clutch_structured_claim_runtime_contract::StructuredClaimActionV1;
-use clutch_fractional_redemption_runtime::FractionalRedemptionActionV1;
+use sha2::{Digest, Sha256};
 use solana_address::Address;
 use solana_instruction::AccountMeta;
-use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
 pub type Result<T> = core::result::Result<T, WorkflowGraphError>;
@@ -468,6 +467,8 @@ pub enum WorkflowLane {
     /// Current General settlement-root creation from one finalized V5
     /// Epoch/Window/AdmissionNode/Feed traversal and exact absence set.
     GeneralSettlement,
+    /// Current Dealer custody, resolution, claim, and retirement lifecycle.
+    DealerLiquidity,
 }
 
 /// Deterministic cursor position derived from canonical account progress.
@@ -883,9 +884,9 @@ impl EnabledSourceActionAccountsV2 {
             Self::FoldWindowPages(_) => SourceWorkKindV1::FoldWindowPages,
             Self::SealWindow(_) => SourceWorkKindV1::SealWindow,
             Self::EvaluateStatistic(_) => SourceWorkKindV1::EvaluateStatistic,
-            Self::InitializeHead(_)
-            | Self::OpenRawPage(_)
-            | Self::InitializeWindowWork(_) => SourceWorkKindV1::TerminalLifecycle,
+            Self::InitializeHead(_) | Self::OpenRawPage(_) | Self::InitializeWindowWork(_) => {
+                SourceWorkKindV1::TerminalLifecycle
+            }
         }
     }
 
@@ -1682,36 +1683,35 @@ impl SourceCrankObservation<'_> {
                 != manifest.clutch.program_account_data_id
             || self.release.base.adapter.programdata.bytes()
                 != manifest.clutch.program_data.to_bytes()
-            || self.release.base.adapter.programdata_account_data_id.bytes()
+            || self
+                .release
+                .base
+                .adapter
+                .programdata_account_data_id
+                .bytes()
                 != manifest.clutch.programdata_account_data_id
             || self.release.base.adapter.deployment_slot != manifest.clutch.deployment_slot
-            || self.release.base.parser.program.bytes()
-                != route.parser.program_id.to_bytes()
+            || self.release.base.parser.program.bytes() != route.parser.program_id.to_bytes()
             || self.release.base.parser.program_account_data_id.bytes()
                 != route.parser.program_account_data_id
-            || self.release.base.parser.programdata.bytes()
-                != route.parser.program_data.to_bytes()
+            || self.release.base.parser.programdata.bytes() != route.parser.program_data.to_bytes()
             || self.release.base.parser.programdata_account_data_id.bytes()
                 != route.parser.programdata_account_data_id
             || self.release.base.parser.deployment_slot != route.parser.deployment_slot
             || self.release.base.parser_config.bytes() != route.parser_config.account.to_bytes()
-            || self.release.base.parser_config_owner.bytes()
-                != route.parser_config.owner.to_bytes()
+            || self.release.base.parser_config_owner.bytes() != route.parser_config.owner.to_bytes()
             || self.release.base.parser_config_data_id.bytes()
                 != route.parser_config.account_data_id
             || self.release.receiver.program.bytes() != route.receiver.program_id.to_bytes()
             || self.release.receiver.program_account_data_id.bytes()
                 != route.receiver.program_account_data_id
-            || self.release.receiver.programdata.bytes()
-                != route.receiver.program_data.to_bytes()
+            || self.release.receiver.programdata.bytes() != route.receiver.program_data.to_bytes()
             || self.release.receiver.programdata_account_data_id.bytes()
                 != route.receiver.programdata_account_data_id
             || self.release.receiver.deployment_slot != route.receiver.deployment_slot
             || self.release.receiver_config.bytes() != route.receiver_config.account.to_bytes()
-            || self.release.receiver_config_owner.bytes()
-                != route.receiver_config.owner.to_bytes()
-            || self.release.receiver_config_data_id.bytes()
-                != route.receiver_config.account_data_id
+            || self.release.receiver_config_owner.bytes() != route.receiver_config.owner.to_bytes()
+            || self.release.receiver_config_data_id.bytes() != route.receiver_config.account_data_id
             || self.release.base.feed.bytes() != route.feed_account.to_bytes()
             || release_id.bytes() != route.source_policy.source_release_manifest_id
             || source_plane_id.bytes() != route.source_policy.source_plane_contract_id
@@ -2973,8 +2973,9 @@ mod operator_release_manifest_tests {
             summary_program_id: product_id(51),
             product_compiler_release_id: product_id(52),
             native_claim_basis_id: product::NativeClaimBasisId::from_bytes([53; 32]),
-            evidence_only_recovery_policy_id:
-                product::EvidenceOnlyRecoveryPolicyId::from_bytes([54; 32]),
+            evidence_only_recovery_policy_id: product::EvidenceOnlyRecoveryPolicyId::from_bytes(
+                [54; 32],
+            ),
             product_template_id: product::ProductTemplateId::from_bytes([55; 32]),
             price_measure_policy_id: product::PriceMeasurePolicyV1Id::from_bytes([44; 32]),
             market_genesis_profile_id: genesis.id().unwrap(),
@@ -3174,7 +3175,10 @@ mod source_account_projection_tests {
         assert_eq!(projection.len(), 18);
         assert_eq!(projection[0].role, SourceAccountRoleV2::SourceRelease);
         assert_eq!(projection[14].role, SourceAccountRoleV2::Keeper);
-        assert_eq!(projection[15].role, SourceAccountRoleV2::SourceFundingCustody);
+        assert_eq!(
+            projection[15].role,
+            SourceAccountRoleV2::SourceFundingCustody
+        );
         assert_ne!(projection[14].address, projection[15].address);
         assert!(projection[14].signer && !projection[15].signer);
         assert_eq!(projection[17].role, SourceAccountRoleV2::RentSysvar);
@@ -3239,7 +3243,10 @@ mod source_account_projection_tests {
         );
         assert_eq!(projection[12].role, SourceAccountRoleV2::ReceiverConfig);
         assert_eq!(projection[20].role, SourceAccountRoleV2::Keeper);
-        assert_eq!(projection[21].role, SourceAccountRoleV2::SourceFundingCustody);
+        assert_eq!(
+            projection[21].role,
+            SourceAccountRoleV2::SourceFundingCustody
+        );
         assert_ne!(projection[20].address, projection[21].address);
     }
 

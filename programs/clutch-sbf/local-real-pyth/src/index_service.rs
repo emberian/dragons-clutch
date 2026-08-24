@@ -9,24 +9,28 @@ use crate::account_index::{
     AccountIndexError, CanonicalAccountIndex, CanonicalDecoderContext, IndexCapacity,
 };
 use crate::action_material::CanonicalActionMaterialErrorV1;
-use crate::direct_action8_material::{
-    enumerate_direct_action8_material_v2, join_direct_action8_finalized_snapshots_v2,
-    plan_direct_action8_context_snapshot_v2, DirectAction8OperatorBatchV2,
-};
-use crate::collateral_release_catalog::CurrentCollateralReleaseCatalogV1;
 use crate::collateral_release_catalog::AuthenticatedCurrentCollateralReleaseV1;
+use crate::collateral_release_catalog::CurrentCollateralReleaseCatalogV1;
+use crate::dealer_resolve_material::{
+    enumerate_dealer_resolve_material_v1, join_dealer_resolve_snapshots_v1,
+    plan_dealer_resolve_snapshot_v1, DealerResolveOperatorBatchV1,
+};
 use crate::dealer_terminal_material::{
     enumerate_dealer_terminal_material_v1, join_dealer_terminal_snapshots_v1,
     plan_dealer_terminal_snapshot_v1, DealerTerminalOperatorBatchV1,
 };
+use crate::direct_action8_material::{
+    enumerate_direct_action8_material_v2, join_direct_action8_finalized_snapshots_v2,
+    plan_direct_action8_context_snapshot_v2, DirectAction8OperatorBatchV2,
+};
 use crate::rpc_index::{
     decode_block_notification, decode_finalized_exact_account_snapshot_v1,
     decode_program_notification, decode_program_scan_snapshot_v1, decode_response_result,
-    decode_root_notification, decode_slot_update_notification,
-    decode_subscription_registration, notification_subscription_id, program_scan_context_slot,
-    FinalizedAccountSnapshotV1, FinalizedExactAccountSnapshotRequestV1, ObservedRpcAccount,
-    ObservedRpcProgramUpdate, ObservedSlotUpdateKind, PlannedRpcRequest,
-    RpcAccountRemovalKind, RpcIndexError, RpcIndexPlan, RpcRequestPurpose,
+    decode_root_notification, decode_slot_update_notification, decode_subscription_registration,
+    notification_subscription_id, program_scan_context_slot, FinalizedAccountSnapshotV1,
+    FinalizedExactAccountSnapshotRequestV1, ObservedRpcAccount, ObservedRpcProgramUpdate,
+    ObservedSlotUpdateKind, PlannedRpcRequest, RpcAccountRemovalKind, RpcIndexError, RpcIndexPlan,
+    RpcRequestPurpose,
 };
 use crate::transaction_builder::ProtocolTransactionBuilder;
 use crate::workflow_graph::ExplicitOperatorReleaseManifest;
@@ -300,7 +304,9 @@ impl RpcIndexEngine {
             snapshot,
             request_id,
         )?;
-        let Some(request) = request else { return Ok(None); };
+        let Some(request) = request else {
+            return Ok(None);
+        };
         let registered_id = request.request().request_id;
         self.register_exact_snapshot_request(request)?;
         Ok(Some(registered_id))
@@ -349,6 +355,79 @@ impl RpcIndexEngine {
         .map_err(Into::into)
     }
 
+    /// Start one exhaustive Dealer action-23 acquisition cycle. The owner scan
+    /// selects every potentially mature live facility; the exact same-slot
+    /// reread supplies Clock and cross-owner Product/collateral state.
+    pub fn plan_dealer_resolve_cycle(
+        &mut self,
+        collateral: &AuthenticatedCurrentCollateralReleaseV1<'_>,
+        builder: &ProtocolTransactionBuilder,
+        lookup_table: Address,
+        request_id: u64,
+    ) -> Result<Option<u64>> {
+        let release = self
+            .index
+            .acquisition_plan()
+            .releases
+            .iter()
+            .find(|release| {
+                release.program_id == builder.clutch_program()
+                    && release.elf_sha256 == builder.clutch_release_sha256()
+            })
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let scan = self
+            .finalized_scan_snapshots
+            .get(&release.key())
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let request = plan_dealer_resolve_snapshot_v1(
+            self.index.acquisition_plan(),
+            release,
+            collateral,
+            builder,
+            scan,
+            lookup_table,
+            request_id,
+        )?;
+        let Some(request) = request else {
+            return Ok(None);
+        };
+        let registered_id = request.request().request_id;
+        self.register_exact_snapshot_request(request)?;
+        Ok(Some(registered_id))
+    }
+
+    /// Materialize the complete action-23 batch from the retained exhaustive
+    /// scan and its exact same-slot reread.
+    pub fn materialize_dealer_resolve_batch(
+        &self,
+        collateral: AuthenticatedCurrentCollateralReleaseV1<'_>,
+        builder: &ProtocolTransactionBuilder,
+        lookup_table: Address,
+        exact_request_id: u64,
+    ) -> Result<DealerResolveOperatorBatchV1> {
+        let release = self
+            .index
+            .acquisition_plan()
+            .releases
+            .iter()
+            .find(|release| {
+                release.program_id == builder.clutch_program()
+                    && release.elf_sha256 == builder.clutch_release_sha256()
+            })
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let scan = self
+            .finalized_scan_snapshots
+            .get(&release.key())
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let exact = self
+            .exact_snapshots
+            .get(&exact_request_id)
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let snapshot = join_dealer_resolve_snapshots_v1(scan, exact)?;
+        enumerate_dealer_resolve_material_v1(release, collateral, builder, &snapshot, lookup_table)
+            .map_err(Into::into)
+    }
+
     /// Start one exhaustive Dealer action-25 target-8/9 acquisition cycle.
     /// The retained owner scan selects every Retiring facility; callers cannot
     /// supply a facility, target discriminator, or semantic identifier.
@@ -382,7 +461,9 @@ impl RpcIndexEngine {
             lookup_table,
             request_id,
         )?;
-        let Some(request) = request else { return Ok(None); };
+        let Some(request) = request else {
+            return Ok(None);
+        };
         let registered_id = request.request().request_id;
         self.register_exact_snapshot_request(request)?;
         Ok(Some(registered_id))
@@ -416,14 +497,8 @@ impl RpcIndexEngine {
             .get(&exact_request_id)
             .ok_or(RpcIndexEngineError::UnknownRequest)?;
         let snapshot = join_dealer_terminal_snapshots_v1(discovery, exact)?;
-        enumerate_dealer_terminal_material_v1(
-            release,
-            collateral,
-            builder,
-            &snapshot,
-            lookup_table,
-        )
-        .map_err(Into::into)
+        enumerate_dealer_terminal_material_v1(release, collateral, builder, &snapshot, lookup_table)
+            .map_err(Into::into)
     }
 
     #[must_use]
@@ -579,11 +654,8 @@ impl RpcIndexEngine {
             .exact_snapshot_requests
             .get(&request_id)
             .ok_or(RpcIndexEngineError::UnknownRequest)?;
-        let result = decode_response_result(
-            self.index.acquisition_plan(),
-            request.request(),
-            response,
-        )?;
+        let result =
+            decode_response_result(self.index.acquisition_plan(), request.request(), response)?;
         let snapshot = decode_finalized_exact_account_snapshot_v1(
             self.index.acquisition_plan(),
             request,

@@ -14,6 +14,7 @@ use crate::action_material::{
     structured_action_from_selection, structured_selection_action, CanonicalAccountAbsenceV1,
     CanonicalActionMaterialV1,
 };
+use crate::dealer_resolve_material::DealerResolveOperatorBatchV1;
 use crate::dealer_terminal_material::DealerTerminalOperatorBatchV1;
 use crate::direct_action8_material::{
     DirectAction8CanonicalMaterialV2, DirectAction8OperatorBatchV2,
@@ -62,7 +63,8 @@ use clutch_solana_layout::failure_recovery::{
     FailureMarketRootAccountV3, FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3,
 };
 use clutch_solana_layout::registry::{
-    DirectMarketAction, GeneralV2Action, RecoveryAction, RecurringSeriesAction, SourceSeriesAction,
+    DealerFacilityAction, DirectMarketAction, GeneralV2Action, RecoveryAction,
+    RecurringSeriesAction, SourceSeriesAction, DEALER_FAMILY_TAG, DEALER_FAMILY_VERSION,
     DIRECT_MARKET_FAMILY_TAG, DIRECT_MARKET_FAMILY_VERSION, GENERAL_V2_FAMILY_TAG,
     GENERAL_V2_FAMILY_VERSION, RECOVERY_FAMILY_TAG, RECOVERY_FAMILY_VERSION,
     SOURCE_SERIES_FAMILY_TAG, SOURCE_SERIES_FAMILY_VERSION, STRUCTURED_CLAIM_FAMILY_TAG,
@@ -220,12 +222,18 @@ fn merge_chain_material_cursors(
     index: &CanonicalAccountIndex,
     action_materials: &[CanonicalActionMaterialV1],
     direct_batch: Option<&DirectAction8OperatorBatchV2>,
+    dealer_resolve_batch: Option<&DealerResolveOperatorBatchV1>,
     dealer_batch: Option<&DealerTerminalOperatorBatchV1>,
     release: &IndexedProgramRelease,
     maximum_actions: usize,
 ) -> Result<Vec<KeeperActionSelection>, KeeperSelectionError> {
     let chain_materials = action_materials
         .iter()
+        .chain(
+            dealer_resolve_batch
+                .into_iter()
+                .flat_map(DealerResolveOperatorBatchV1::materials),
+        )
         .filter(|material| {
             matches!(
                 material.cursor().lane,
@@ -234,6 +242,7 @@ fn merge_chain_material_cursors(
                     | WorkflowLane::FractionalRedemption
                     | WorkflowLane::FailureRecovery
                     | WorkflowLane::GeneralSettlement
+                    | WorkflowLane::DealerLiquidity
             ) || (material.coordinate().family_tag == GENERAL_V2_FAMILY_TAG
                 && material.coordinate().family_version == GENERAL_V2_FAMILY_VERSION
                 && matches!(
@@ -242,7 +251,11 @@ fn merge_chain_material_cursors(
                 ))
         })
         .collect::<Vec<_>>();
-    if direct_batch.is_none() && dealer_batch.is_none() && chain_materials.is_empty() {
+    if direct_batch.is_none()
+        && dealer_resolve_batch.is_none()
+        && dealer_batch.is_none()
+        && chain_materials.is_empty()
+    {
         return Ok(cursors);
     }
     let current_finalized_slot = index
@@ -301,6 +314,11 @@ fn merge_chain_material_cursors(
                 coordinate.family_tag == GENERAL_V2_FAMILY_TAG
                     && coordinate.family_version == GENERAL_V2_FAMILY_VERSION
                     && coordinate.local_action == GeneralV2Action::InitializeSettlementRoot.tag()
+            }
+            WorkflowLane::DealerLiquidity => {
+                coordinate.family_tag == DEALER_FAMILY_TAG
+                    && coordinate.family_version == DEALER_FAMILY_VERSION
+                    && coordinate.local_action == DealerFacilityAction::Resolve.tag()
             }
             _ => false,
         };
@@ -378,6 +396,7 @@ fn merge_chain_material_cursors(
                     | WorkflowLane::Candidate
                     | WorkflowLane::RecoveryRetirement
                     | WorkflowLane::GeneralSettlement => existing.action != expected_action,
+                    WorkflowLane::DealerLiquidity => existing.action != expected_action,
                     _ => true,
                 }
             {
@@ -614,6 +633,7 @@ fn select_operator_release<'a>(
     releases: &'a [IndexedProgramRelease],
     materials: &[CanonicalActionMaterialV1],
     direct_action8_batch: Option<&DirectAction8OperatorBatchV2>,
+    dealer_resolve_batch: Option<&DealerResolveOperatorBatchV1>,
     dealer_terminal_batch: Option<&DealerTerminalOperatorBatchV1>,
 ) -> Result<&'a IndexedProgramRelease, KeeperSelectionError> {
     if materials.iter().any(|material| {
@@ -632,6 +652,12 @@ fn select_operator_release<'a>(
         .map(|material| material.release_key().to_string())
         .collect::<BTreeSet<_>>();
     if let Some(batch) = direct_action8_batch {
+        keys.insert(batch.release_key().to_string());
+    }
+    if let Some(batch) = dealer_resolve_batch {
+        if batch.snapshot_receipt_id() == [0; 32] {
+            return Err(KeeperSelectionError::IncompleteCanonicalHint);
+        }
         keys.insert(batch.release_key().to_string());
     }
     if let Some(batch) = dealer_terminal_batch {
@@ -1283,6 +1309,7 @@ pub struct OperatorJsonApi<'index> {
     selector: ResumableKeeperSelector,
     action_materials: &'index [CanonicalActionMaterialV1],
     direct_action8_batch: Option<&'index DirectAction8OperatorBatchV2>,
+    dealer_resolve_batch: Option<&'index DealerResolveOperatorBatchV1>,
     dealer_terminal_batch: Option<&'index DealerTerminalOperatorBatchV1>,
 }
 
@@ -1297,6 +1324,7 @@ impl<'index> OperatorJsonApi<'index> {
             selector,
             action_materials: &[],
             direct_action8_batch: None,
+            dealer_resolve_batch: None,
             dealer_terminal_batch: None,
         }
     }
@@ -1314,6 +1342,7 @@ impl<'index> OperatorJsonApi<'index> {
             selector,
             action_materials,
             direct_action8_batch: None,
+            dealer_resolve_batch: None,
             dealer_terminal_batch: None,
         }
     }
@@ -1332,6 +1361,7 @@ impl<'index> OperatorJsonApi<'index> {
             selector,
             action_materials,
             direct_action8_batch: Some(direct_action8_batch),
+            dealer_resolve_batch: None,
             dealer_terminal_batch: None,
         }
     }
@@ -1351,6 +1381,29 @@ impl<'index> OperatorJsonApi<'index> {
             selector,
             action_materials,
             direct_action8_batch,
+            dealer_resolve_batch: None,
+            dealer_terminal_batch: Some(dealer_terminal_batch),
+        }
+    }
+
+    /// Bind both exhaustive Dealer action-23 and action-25 batches. This is
+    /// the current complete terminal-liquidity projection; neither batch can
+    /// be replaced by a caller-selected subset.
+    #[must_use]
+    pub const fn with_current_dealer_batches(
+        index: &'index CanonicalAccountIndex,
+        selector: ResumableKeeperSelector,
+        action_materials: &'index [CanonicalActionMaterialV1],
+        direct_action8_batch: Option<&'index DirectAction8OperatorBatchV2>,
+        dealer_resolve_batch: &'index DealerResolveOperatorBatchV1,
+        dealer_terminal_batch: &'index DealerTerminalOperatorBatchV1,
+    ) -> Self {
+        Self {
+            index,
+            selector,
+            action_materials,
+            direct_action8_batch,
+            dealer_resolve_batch: Some(dealer_resolve_batch),
             dealer_terminal_batch: Some(dealer_terminal_batch),
         }
     }
@@ -1445,6 +1498,7 @@ impl<'index> OperatorJsonApi<'index> {
             &plan.releases,
             self.action_materials,
             self.direct_action8_batch,
+            self.dealer_resolve_batch,
             self.dealer_terminal_batch,
         ) {
             Ok(release) => release,
@@ -1466,6 +1520,7 @@ impl<'index> OperatorJsonApi<'index> {
                 self.index,
                 self.action_materials,
                 self.direct_action8_batch,
+                self.dealer_resolve_batch,
                 self.dealer_terminal_batch,
                 release,
                 self.selector.maximum_actions,
@@ -1575,6 +1630,7 @@ impl<'index> OperatorJsonApi<'index> {
             &plan.releases,
             self.action_materials,
             self.direct_action8_batch,
+            self.dealer_resolve_batch,
             self.dealer_terminal_batch,
         ) {
             Ok(release) => release,
@@ -1595,6 +1651,7 @@ impl<'index> OperatorJsonApi<'index> {
                 self.index,
                 self.action_materials,
                 self.direct_action8_batch,
+                self.dealer_resolve_batch,
                 self.dealer_terminal_batch,
                 release,
                 self.selector.maximum_actions,
@@ -1645,6 +1702,7 @@ impl<'index> OperatorJsonApi<'index> {
                     &cursors,
                     self.action_materials,
                     self.direct_action8_batch,
+                    self.dealer_resolve_batch,
                 )
             })
             .collect::<Vec<_>>();
@@ -1724,6 +1782,7 @@ impl<'index> OperatorJsonApi<'index> {
                         &plan.releases,
                         self.action_materials,
                         self.direct_action8_batch,
+                        self.dealer_resolve_batch,
                         self.dealer_terminal_batch,
                     ) {
                         Ok(release) => release,
@@ -1736,6 +1795,7 @@ impl<'index> OperatorJsonApi<'index> {
                         self.index,
                         self.action_materials,
                         self.direct_action8_batch,
+                        self.dealer_resolve_batch,
                         self.dealer_terminal_batch,
                         release,
                         self.selector.maximum_actions,
@@ -1802,6 +1862,7 @@ fn action_verdict_json(
     cursors: &[KeeperActionSelection],
     action_materials: &[CanonicalActionMaterialV1],
     direct_action8_batch: Option<&DirectAction8OperatorBatchV2>,
+    dealer_resolve_batch: Option<&DealerResolveOperatorBatchV1>,
 ) -> Value {
     let cursor = cursors
         .iter()
@@ -1901,6 +1962,11 @@ fn action_verdict_json(
         } else {
             action_materials
                 .iter()
+                .chain(
+                    dealer_resolve_batch
+                        .into_iter()
+                        .flat_map(DealerResolveOperatorBatchV1::materials),
+                )
                 .filter(|material| material.matches(release, coordinate, selection))
                 .collect::<Vec<_>>()
         }
@@ -2252,6 +2318,11 @@ fn action_coordinate(action: &str) -> Option<CanonicalIntentCoordinate> {
         });
     }
     let (family_tag, family_version, local_action) = match action {
+        "resolve-dealer-facility-current-v1" => (
+            DEALER_FAMILY_TAG,
+            DEALER_FAMILY_VERSION,
+            DealerFacilityAction::Resolve.tag(),
+        ),
         "initialize-general-settlement-root-v5" => (
             GENERAL_V2_FAMILY_TAG,
             GENERAL_V2_FAMILY_VERSION,
@@ -2511,6 +2582,21 @@ fn coordinate_description(
             None => ("unknown-fractional-action", None),
         };
         return ("fractional", action, builder);
+    }
+    if coordinate.family_tag == DEALER_FAMILY_TAG
+        && coordinate.family_version == DEALER_FAMILY_VERSION
+    {
+        let Some(action) = DealerFacilityAction::from_tag(coordinate.local_action) else {
+            return ("dealer", "unknown-dealer-action", None);
+        };
+        if action == DealerFacilityAction::Resolve {
+            return (
+                "dealer",
+                "resolve-dealer-facility-current-v1",
+                Some("dragons-clutch/dealer-resolve/action23/atomic-fractional-vector/v1"),
+            );
+        }
+        return ("dealer", "non-current-dealer-action", None);
     }
     if coordinate.family_tag == RECOVERY_FAMILY_TAG
         && coordinate.family_version == RECOVERY_FAMILY_VERSION
@@ -2924,6 +3010,7 @@ const fn lane_name(lane: WorkflowLane) -> &'static str {
         WorkflowLane::StructuredLifecycle => "structured-lifecycle",
         WorkflowLane::FractionalRedemption => "fractional-redemption",
         WorkflowLane::GeneralSettlement => "general-settlement",
+        WorkflowLane::DealerLiquidity => "dealer-liquidity",
     }
 }
 
