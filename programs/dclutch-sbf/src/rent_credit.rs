@@ -112,7 +112,6 @@ impl<'a, 'info> WithdrawFrame<'a, 'info> {
 #[derive(Clone, Copy)]
 struct CreatePlan {
     credit: RentCreditV1,
-    bump: u8,
     rent_lamports: u64,
     balances: CreateBalancePlanV1,
 }
@@ -134,13 +133,15 @@ pub(crate) fn process_create(
         space,
         program_id,
     );
-    let authority = plan.credit.refund_authority().to_bytes();
-    let bump = [plan.bump];
-    let signer = [
-        RENT_CREDIT_PDA_DOMAIN_V1,
-        authority.as_slice(),
-        bump.as_slice(),
-    ];
+    let pda_seeds = plan.credit.pda_seeds();
+    let authority = pda_seeds.refund_authority().to_bytes();
+    let bump = [pda_seeds.bump()];
+    let signer = [pda_seeds.domain(), authority.as_slice(), bump.as_slice()];
+    let recreated = Pubkey::create_program_address(&signer, program_id)
+        .map_err(|_| AdapterError::RentCreditAuthentication)?;
+    if recreated != *frame.credit.key {
+        return Err(AdapterError::RentCreditAuthentication.into());
+    }
     invoke_signed(
         &create,
         &[
@@ -222,7 +223,6 @@ fn authenticate_create(
 
     Ok(CreatePlan {
         credit: instruction.credit(),
-        bump,
         rent_lamports,
         balances,
     })
@@ -538,6 +538,30 @@ mod tests {
             )
             .err(),
             Some(ProgramError::from(AdapterError::RentCreditAuthentication))
+        );
+    }
+
+    #[test]
+    fn create_cpi_signer_seeds_rederive_the_authenticated_credit_pda() {
+        let program_id = Pubkey::new_unique();
+        let authority = RefundAuthority::new(Pubkey::new_unique().to_bytes()).expect("authority");
+        let authority_bytes = authority.to_bytes();
+        let (expected, bump) = Pubkey::find_program_address(
+            &[RENT_CREDIT_PDA_DOMAIN_V1, authority_bytes.as_slice()],
+            &program_id,
+        );
+        let credit = CreateRentCreditV1::new(authority, bump).credit();
+        let seeds = credit.pda_seeds();
+        let authority_seed = seeds.refund_authority().to_bytes();
+        let bump_seed = [seeds.bump()];
+        let signer = [
+            seeds.domain(),
+            authority_seed.as_slice(),
+            bump_seed.as_slice(),
+        ];
+        assert_eq!(
+            Pubkey::create_program_address(&signer, &program_id),
+            Ok(expected)
         );
     }
 
