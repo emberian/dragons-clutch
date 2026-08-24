@@ -1524,6 +1524,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
+name = "dclutch-capability-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+]
+
+[[package]]
 name = "dclutch-collateral-contract"
 version = "0.1.0"
 dependencies = [
@@ -1537,6 +1544,10 @@ version = "0.1.0"
 
 [[package]]
 name = "dclutch-kernel"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-contract"
 version = "0.1.0"
 
 [[package]]
@@ -1555,9 +1566,11 @@ version = "0.1.0"
 name = "dclutch-svm-harness"
 version = "0.1.0"
 dependencies = [
+ "dclutch-capability-contract",
  "dclutch-collateral-contract",
  "dclutch-core-contract",
  "dclutch-kernel",
+ "dclutch-product-contract",
  "dclutch-pyth-contract",
  "dclutch-realm-contract",
  "dclutch-token-svm",

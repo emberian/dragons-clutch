@@ -1,0 +1,499 @@
+use std::{env, path::PathBuf};
+
+use dclutch_capability_contract::{
+    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
+    FundingAmountsV1,
+};
+use dclutch_collateral_contract::{FOUND_MARKET_AND_FUND_BYTES, FoundMarketAndFundV1};
+use dclutch_core_contract::{ContentId as CoreContentId, MarketIdentity, Phase};
+use dclutch_kernel::resolution::categorical_pyth_v1::{
+    CategoricalPythV1PolicyInput, MAX_PRICE_CELLS,
+};
+use dclutch_product_contract::{
+    ContentId as ProductContentId,
+    capacity::{
+        CapacityEnvelope, CapacityProfileId, CapacityProfileV1, CapacityProfileV1Input,
+        ExactWordWidth,
+    },
+    claim::{
+        CATEGORICAL_UNIT_DENOMINATOR, CategoricalUnitV1, CategoricalUnitV1Input, RedemptionRounding,
+    },
+    product::{InstanceV1, InstanceV1Input},
+};
+use dclutch_pyth_contract::{
+    feed_profile::PythFeedProfileV1,
+    funding::{FUNDING_BYTES, ResolutionFundV1},
+    market::MarketStateV1,
+    policy::CategoricalPythPolicyRecordV1,
+    resolution_material::CategoricalPythResolutionMaterialV1,
+};
+use dclutch_realm_contract::{
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_PDA_DOMAIN, RealmV1, RealmV1Input,
+};
+use solana_account::Account;
+use solana_program::{
+    hash::hash,
+    instruction::{AccountMeta, Instruction},
+    pubkey::Pubkey,
+    rent::Rent,
+};
+use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
+use solana_sdk::signature::{Keypair, Signer};
+use solana_sdk_ids::{system_program, sysvar};
+use solana_transaction::Transaction;
+
+const PROGRAM_ID: Pubkey = Pubkey::new_from_array([71; 32]);
+const GENERATION: u64 = 41;
+const PROVIDER_FEE: u64 = 71;
+const SUCCESS_BOUNTY: u64 = 73;
+const SPONSOR_CUSHION: u64 = 1_000_000;
+const MARKET_SEED: &[u8] = b"dclutch/market-root/v1";
+const FUND_SEED: &[u8] = b"dclutch/resolution-fund/v1";
+
+#[derive(Clone, Copy)]
+enum Fault {
+    None,
+    WrongProductClaimLink,
+    WrongClaimCapacityLink,
+    WrongInstanceCapacityLink,
+    WrongMarketPda,
+    UnderfundedSponsor,
+    PreexistingMarket,
+    AliasedDestinations,
+    MissingResolutionManifest,
+    AmbiguousResolutionManifest,
+    WrongResolutionQuote,
+}
+
+struct Fixture {
+    test: ProgramTest,
+    sponsor: Keypair,
+    sponsor_before: u64,
+    instruction: FoundMarketAndFundV1,
+    realm: Pubkey,
+    instance: Pubkey,
+    claim: Pubkey,
+    capacity: Pubkey,
+    material: Pubkey,
+    manifest: Pubkey,
+    submitted_market: Pubkey,
+    submitted_fund: Pubkey,
+    canonical_market: Pubkey,
+    canonical_fund: Pubkey,
+    preexisting_market: Option<Account>,
+}
+
+fn require_sbf_out_dir() {
+    let directory = env::var("SBF_OUT_DIR").expect(
+        "SBF_OUT_DIR is required; build target/deploy/dclutch_sbf.so first, then run `SBF_OUT_DIR=../../target/deploy cargo test --test found_market_and_fund`",
+    );
+    let artifact = PathBuf::from(directory).join("dclutch_sbf.so");
+    assert!(
+        artifact.is_file(),
+        "SBF_OUT_DIR must contain the exact compiled dclutch_sbf.so artifact: {}",
+        artifact.display()
+    );
+}
+
+fn product_id(bytes: [u8; 32]) -> ProductContentId {
+    ProductContentId::new(bytes).expect("nonzero deterministic product identity")
+}
+
+fn core_id(bytes: [u8; 32]) -> CoreContentId {
+    CoreContentId::new(bytes).expect("nonzero deterministic core identity")
+}
+
+fn account(data: Vec<u8>) -> Account {
+    Account {
+        lamports: Rent::default().minimum_balance(data.len()),
+        data,
+        owner: PROGRAM_ID,
+        executable: false,
+        rent_epoch: 0,
+    }
+}
+
+fn resolution_entry(kind: u8, policy_id: CoreContentId, quoted_rent: u64) -> CapabilityEntryV1 {
+    CapabilityEntryV1::new(
+        core_id([kind; 32]),
+        core_id([14; 32]),
+        policy_id,
+        core_id([15; 32]),
+        core_id([16; 32]),
+        core_id([17; 32]),
+        ActivationPolicy::RequiredAtFounding,
+        0,
+        0,
+        [0; 16],
+        FundingAmountsV1::new(quoted_rent, 0, 0, PROVIDER_FEE, SUCCESS_BOUNTY, 0, 0)
+            .expect("exact resolution Fund quote"),
+    )
+    .expect("canonical required resolution capability")
+}
+
+fn manifest_bytes(entries: &[CapabilityEntryV1]) -> Vec<u8> {
+    let length = 16usize
+        .checked_add(
+            entries
+                .len()
+                .checked_mul(CAPABILITY_ENTRY_BYTES)
+                .expect("bounded manifest entry width"),
+        )
+        .expect("bounded manifest length");
+    let mut bytes = vec![0; length];
+    CapabilityManifestV1::encode_into(entries, &mut bytes).expect("canonical manifest encoding");
+    bytes
+}
+
+fn fixture(fault: Fault) -> Fixture {
+    require_sbf_out_dir();
+    let realm_value = RealmV1::new(RealmV1Input {
+        collateral_semantic_id: [1; 32],
+        token_program: [2; 32],
+        collateral_mint: [3; 32],
+        collateral_adapter_release_id: [4; 32],
+        mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
+        freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
+    })
+    .expect("canonical Realm");
+    let realm_bytes = realm_value.to_bytes();
+    let realm_digest = hash(&realm_bytes).to_bytes();
+    let (realm, _) = Pubkey::find_program_address(&[REALM_PDA_DOMAIN, &realm_digest], &PROGRAM_ID);
+
+    let capacity_value = CapacityProfileV1::new(CapacityProfileV1Input {
+        envelope: CapacityEnvelope::Measured,
+        word_width: ExactWordWidth::Eight,
+        verifier_release_id: product_id([5; 32]),
+        envelope_basis_id: product_id([6; 32]),
+        max_artifact_bytes: 16,
+        page_payload_bytes: 16,
+        max_pages: 1,
+        max_partition_cells: 2,
+        max_coefficient_entries: 2,
+    })
+    .expect("canonical capacity profile");
+    let capacity_bytes = capacity_value.to_bytes();
+    let capacity_digest = hash(&capacity_bytes).to_bytes();
+    let capacity_id = CapacityProfileId::new(product_id(capacity_digest));
+
+    let alternate_capacity_id = CapacityProfileId::new(product_id([7; 32]));
+    let claim_capacity_id = if matches!(fault, Fault::WrongClaimCapacityLink) {
+        alternate_capacity_id
+    } else {
+        capacity_id
+    };
+    let claim_value = CategoricalUnitV1::new(
+        CategoricalUnitV1Input {
+            capacity_profile_id: claim_capacity_id,
+            outcome_count: 2,
+            payout_denominator: CATEGORICAL_UNIT_DENOMINATOR,
+            rounding: RedemptionRounding::ExactOnly,
+        },
+        capacity_value,
+    )
+    .expect("canonical categorical claim basis");
+    let claim_bytes = claim_value.to_bytes();
+    let claim_digest = hash(&claim_bytes).to_bytes();
+
+    let instance_claim_id = if matches!(fault, Fault::WrongProductClaimLink) {
+        product_id([8; 32])
+    } else {
+        product_id(claim_digest)
+    };
+    let instance_capacity_id = if matches!(fault, Fault::WrongInstanceCapacityLink) {
+        alternate_capacity_id
+    } else {
+        claim_capacity_id
+    };
+    let instance_value = InstanceV1::new(InstanceV1Input {
+        terms_id: product_id([9; 32]),
+        occurrence_id: product_id([10; 32]),
+        claim_basis_id: instance_claim_id,
+        capacity_profile_id: instance_capacity_id,
+        partition_cell_count: 2,
+    })
+    .expect("canonical Product instance");
+    let instance_bytes = instance_value.to_bytes();
+    let instance_digest = hash(&instance_bytes).to_bytes();
+
+    let feed_profile =
+        PythFeedProfileV1::new([11; 32], [12; 32], [13; 32]).expect("canonical Pyth feed profile");
+    let upper_edges = [0u128; MAX_PRICE_CELLS];
+    let policy = CategoricalPythPolicyRecordV1::new(CategoricalPythV1PolicyInput {
+        pyth_release_id: [14; 32],
+        feed_profile_id: hash(&feed_profile.to_bytes()).to_bytes(),
+        target_time: 1,
+        grace: 0,
+        window: 1,
+        max_crossing_lag: 1,
+        max_age: 1,
+        max_future_skew: 1,
+        confidence_multiplier: 1,
+        max_confidence_bps: 1,
+        max_normalized_confidence_atoms: 1,
+        normalized_decimals: 0,
+        price_cell_count: 1,
+        upper_edges,
+        failure_outcome_index: 1,
+    })
+    .expect("canonical categorical policy");
+    let material_value = CategoricalPythResolutionMaterialV1::new(policy, feed_profile)
+        .expect("canonical resolution material");
+    let material_bytes = material_value.to_bytes();
+    let policy_digest = hash(&policy.to_bytes()).to_bytes();
+
+    let fund_rent = Rent::default().minimum_balance(FUNDING_BYTES);
+    let policy_id = core_id(policy_digest);
+    let manifest_bytes = match fault {
+        Fault::MissingResolutionManifest => manifest_bytes(&[]),
+        Fault::AmbiguousResolutionManifest => manifest_bytes(&[
+            resolution_entry(61, policy_id, fund_rent),
+            resolution_entry(62, policy_id, fund_rent),
+        ]),
+        Fault::WrongResolutionQuote => manifest_bytes(&[resolution_entry(
+            61,
+            policy_id,
+            fund_rent.checked_add(1).expect("wrong quote rent"),
+        )]),
+        _ => manifest_bytes(&[resolution_entry(61, policy_id, fund_rent)]),
+    };
+    let manifest_digest = hash(&manifest_bytes).to_bytes();
+
+    let identity = MarketIdentity::new(
+        core_id(realm_digest),
+        core_id(instance_digest),
+        core_id(claim_digest),
+        policy_id,
+        core_id(manifest_digest),
+        GENERATION,
+    );
+    let instruction =
+        FoundMarketAndFundV1::new(identity, 2).expect("canonical founding instruction");
+    let identity_digest = hash(&identity.to_bytes()).to_bytes();
+    let (canonical_market, _) =
+        Pubkey::find_program_address(&[MARKET_SEED, &identity_digest], &PROGRAM_ID);
+    let (canonical_fund, _) =
+        Pubkey::find_program_address(&[FUND_SEED, canonical_market.as_ref()], &PROGRAM_ID);
+
+    let submitted_market = if matches!(fault, Fault::WrongMarketPda) {
+        Pubkey::new_from_array([91; 32])
+    } else {
+        canonical_market
+    };
+    let submitted_fund = if matches!(fault, Fault::AliasedDestinations) {
+        submitted_market
+    } else {
+        canonical_fund
+    };
+
+    let rent = Rent::default();
+    let market_rent =
+        rent.minimum_balance(MarketStateV1::<2>::encoded_len().expect("two-outcome Market width"));
+    let fund_rent = rent.minimum_balance(FUNDING_BYTES);
+    let required = market_rent
+        .checked_add(fund_rent)
+        .and_then(|value| value.checked_add(PROVIDER_FEE))
+        .and_then(|value| value.checked_add(SUCCESS_BOUNTY))
+        .expect("deterministic founding debit");
+    let sponsor_before = if matches!(fault, Fault::UnderfundedSponsor) {
+        required.checked_sub(1).expect("positive required debit")
+    } else {
+        required
+            .checked_add(SPONSOR_CUSHION)
+            .expect("sponsor opening")
+    };
+    let sponsor = Keypair::new();
+    let instance = Pubkey::new_from_array([31; 32]);
+    let claim = Pubkey::new_from_array([32; 32]);
+    let capacity = Pubkey::new_from_array([33; 32]);
+    let material = Pubkey::new_from_array([34; 32]);
+    let manifest = Pubkey::new_from_array([35; 32]);
+    let preexisting_market = if matches!(fault, Fault::PreexistingMarket) {
+        Some(Account::new(1, 0, &system_program::ID))
+    } else {
+        None
+    };
+
+    let mut test = ProgramTest::new("dclutch_sbf", PROGRAM_ID, None);
+    test.prefer_bpf(true);
+    test.add_account(
+        sponsor.pubkey(),
+        Account::new(sponsor_before, 0, &system_program::ID),
+    );
+    test.add_account(realm, account(realm_bytes.to_vec()));
+    test.add_account(instance, account(instance_bytes.to_vec()));
+    test.add_account(claim, account(claim_bytes.to_vec()));
+    test.add_account(capacity, account(capacity_bytes.to_vec()));
+    test.add_account(material, account(material_bytes.to_vec()));
+    test.add_account(manifest, account(manifest_bytes));
+    if let Some(existing) = preexisting_market.clone() {
+        test.add_account(canonical_market, existing);
+    }
+
+    Fixture {
+        test,
+        sponsor,
+        sponsor_before,
+        instruction,
+        realm,
+        instance,
+        claim,
+        capacity,
+        material,
+        manifest,
+        submitted_market,
+        submitted_fund,
+        canonical_market,
+        canonical_fund,
+        preexisting_market,
+    }
+}
+
+fn founding_instruction(fixture: &Fixture) -> Instruction {
+    let mut data = [0; FOUND_MARKET_AND_FUND_BYTES];
+    fixture
+        .instruction
+        .encode(&mut data)
+        .expect("exact founding instruction encoding");
+    Instruction {
+        program_id: PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(fixture.sponsor.pubkey(), true),
+            AccountMeta::new(fixture.submitted_market, false),
+            AccountMeta::new(fixture.submitted_fund, false),
+            AccountMeta::new_readonly(fixture.realm, false),
+            AccountMeta::new_readonly(fixture.instance, false),
+            AccountMeta::new_readonly(fixture.claim, false),
+            AccountMeta::new_readonly(fixture.capacity, false),
+            AccountMeta::new_readonly(fixture.material, false),
+            AccountMeta::new_readonly(fixture.manifest, false),
+            AccountMeta::new_readonly(system_program::ID, false),
+            AccountMeta::new_readonly(sysvar::rent::ID, false),
+        ],
+        data: data.to_vec(),
+    }
+}
+
+async fn submit(
+    context: &mut ProgramTestContext,
+    sponsor: &Keypair,
+    instruction: Instruction,
+) -> Result<(), BanksClientError> {
+    let blockhash = context.banks_client.get_latest_blockhash().await?;
+    let transaction = Transaction::new_signed_with_payer(
+        &[instruction],
+        Some(&context.payer.pubkey()),
+        &[&context.payer, sponsor],
+        blockhash,
+    );
+    context.banks_client.process_transaction(transaction).await
+}
+
+async fn observed_account(context: &mut ProgramTestContext, address: Pubkey) -> Option<Account> {
+    context
+        .banks_client
+        .get_account(address)
+        .await
+        .expect("bank account query")
+}
+
+#[tokio::test]
+async fn found_market_and_fund_uses_real_elf_system_cpis_and_persists_exact_state() {
+    let fixture = fixture(Fault::None);
+    let expected_fund = ResolutionFundV1::new(
+        fixture.canonical_market.to_bytes(),
+        GENERATION,
+        fixture.sponsor.pubkey().to_bytes(),
+        PROVIDER_FEE,
+        SUCCESS_BOUNTY,
+    )
+    .expect("expected fund");
+    let instruction = founding_instruction(&fixture);
+    let mut context = fixture.test.start_with_context().await;
+    submit(&mut context, &fixture.sponsor, instruction)
+        .await
+        .expect("canonical founding succeeds through the loaded ELF");
+
+    let market = observed_account(&mut context, fixture.canonical_market)
+        .await
+        .expect("Market exists");
+    let fund = observed_account(&mut context, fixture.canonical_fund)
+        .await
+        .expect("Fund exists");
+    let sponsor = observed_account(&mut context, fixture.sponsor.pubkey())
+        .await
+        .expect("sponsor exists");
+    let market_state = MarketStateV1::<2>::decode(&market.data).expect("exact MarketStateV1<2>");
+    let rent = Rent::default();
+    let market_rent =
+        rent.minimum_balance(MarketStateV1::<2>::encoded_len().expect("Market width"));
+    let fund_rent = rent.minimum_balance(FUNDING_BYTES);
+    let fund_lamports = fund_rent + PROVIDER_FEE + SUCCESS_BOUNTY;
+
+    assert_eq!(market.owner, PROGRAM_ID);
+    assert_eq!(market.lamports, market_rent);
+    assert_eq!(
+        market.data.len(),
+        MarketStateV1::<2>::encoded_len().expect("Market width")
+    );
+    assert_eq!(market_state.root().phase(), Phase::Founding);
+    assert_eq!(market_state.root().outstanding_children(), 1);
+    assert_eq!(market_state.hoard_atoms(), 0);
+    assert_eq!(market_state.supply(), &[0, 0]);
+    assert_eq!(fund.owner, PROGRAM_ID);
+    assert_eq!(fund.lamports, fund_lamports);
+    assert_eq!(fund.data, expected_fund.to_bytes());
+    assert_eq!(ResolutionFundV1::decode(&fund.data), Ok(expected_fund));
+    assert_eq!(expected_fund.provider_fee_reimbursement(), PROVIDER_FEE);
+    assert_eq!(expected_fund.success_bounty(), SUCCESS_BOUNTY);
+    assert_eq!(
+        sponsor.lamports,
+        fixture.sponsor_before - market_rent - fund_lamports
+    );
+}
+
+#[tokio::test]
+async fn hostile_founding_inputs_roll_back_sponsor_and_never_create_canonical_children() {
+    for fault in [
+        Fault::WrongProductClaimLink,
+        Fault::WrongClaimCapacityLink,
+        Fault::WrongInstanceCapacityLink,
+        Fault::WrongMarketPda,
+        Fault::UnderfundedSponsor,
+        Fault::PreexistingMarket,
+        Fault::AliasedDestinations,
+        Fault::MissingResolutionManifest,
+        Fault::AmbiguousResolutionManifest,
+        Fault::WrongResolutionQuote,
+    ] {
+        let fixture = fixture(fault);
+        let instruction = founding_instruction(&fixture);
+        let mut context = fixture.test.start_with_context().await;
+        assert!(
+            submit(&mut context, &fixture.sponsor, instruction)
+                .await
+                .is_err(),
+            "hostile founding must refuse atomically"
+        );
+        let sponsor = observed_account(&mut context, fixture.sponsor.pubkey())
+            .await
+            .expect("sponsor remains");
+        assert_eq!(sponsor.lamports, fixture.sponsor_before);
+
+        let market = observed_account(&mut context, fixture.canonical_market).await;
+        let fund = observed_account(&mut context, fixture.canonical_fund).await;
+        if let Some(expected) = fixture.preexisting_market {
+            assert_eq!(
+                market,
+                Some(expected),
+                "preexisting input remains untouched"
+            );
+        } else {
+            assert!(
+                market.is_none(),
+                "no canonical Market remains after refusal"
+            );
+        }
+        assert!(fund.is_none(), "no canonical Fund remains after refusal");
+    }
+}
