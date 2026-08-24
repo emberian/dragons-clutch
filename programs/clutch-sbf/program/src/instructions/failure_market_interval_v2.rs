@@ -45,9 +45,12 @@ use crate::instructions::product_series_current::{
 };
 use crate::instructions::product_market_lifecycle_v3_current::{
     AuthenticatedMarketLifecycleRootV3, AuthenticatedProductMarketFoundationDebitV4,
+    AuthenticatedSeriesMarketLinkV3,
 };
 use crate::instructions::product_failure_link_v3_current::{
-    AuthenticatedSeriesFailureArchivePostwriteV4, FailureSessionReleaseDispositionV4,
+    release_series_market_link_failure_v4, AuthenticatedSeriesFailureArchivePostwriteV4,
+    AuthenticatedSeriesFailureSessionReleaseV4,
+    AuthenticatedWritableFailureSessionReleaseLinkV4, FailureSessionReleaseDispositionV4,
 };
 use crate::instructions::product_failure_begin_current::AuthenticatedProductFailureBeginQuoteV2;
 use crate::instructions::source_failure_product_release_v1::{
@@ -116,6 +119,7 @@ use clutch_solana_layout::failure_market_interval_v2::{
     FailureMarketIntervalCellAccountV2, FailureMarketIntervalHistoryAccountV2,
     FAILURE_MARKET_INTERVAL_CELL_BODY_BYTES_V2, FAILURE_MARKET_INTERVAL_HISTORY_BODY_BYTES_V2,
 };
+use clutch_solana_layout::product_series::SeriesMarketLinkAccountV3;
 use clutch_solana_layout::failure_recovery::{
     decode_failure_account_body_v1, FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1,
     FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1, FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1,
@@ -3790,6 +3794,77 @@ pub(super) fn archive_resolved_failure_market_interval_link_v3<'a, 'link, 'next>
             && release.append_receipt_id().bytes() == archive.append().id().bytes()
             && release.reset_receipt_id().bytes() == archive.reset().id().bytes()
             && release.release_link_preauthorization_id() == release_link.id()
+            && release.session_terminal_receipt_id()
+                == archive.append().session_terminal_receipt_id(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok((archive, released, release))
+}
+
+/// Persist one resolved current interval append/reset and release the exact
+/// RootV3-bound LinkV3 pin. The shared Failure runtime is advanced only after
+/// Source has consumed the returned release in the same outer instruction.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn archive_resolved_failure_market_interval_link_v4<'a, 'next>(
+    program_id: &Pubkey,
+    cell_account: &AccountInfo<'a>,
+    history_account: &AccountInfo<'a>,
+    series_link_account: &AccountInfo<'a>,
+    interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
+    link_before: AuthenticatedSeriesMarketLinkV3<'_>,
+    release_link: AuthenticatedWritableFailureSessionReleaseLinkV4,
+    history_plan: FailureMarketIntervalHistoryPlanV2,
+    append: FailureMarketIntervalHistoryAppendReceiptV2,
+    cell_plan: FailureMarketIntervalCellPlanV2,
+    reset: FailureMarketIntervalCellResetReceiptV2,
+    link_rebound_output: &'next mut SeriesMarketLinkAccountV3,
+) -> Outcome<(
+    FailureMarketIntervalArchivePostwriteV3,
+    AuthenticatedSeriesMarketLinkV3<'next>,
+    AuthenticatedSeriesFailureSessionReleaseV4,
+)> {
+    require_distinct(&[
+        cell_account.clone(),
+        history_account.clone(),
+        series_link_account.clone(),
+    ])?;
+    require(
+        release_link.disposition() == FailureSessionReleaseDispositionV4::Resolved
+            && release_link.link_account() == link_before.account()
+            && release_link.link_authentication_id() == link_before.authentication_id()
+            && release_link.link_semantic_id() == link_before.semantic_id(),
+        ClutchError::MismatchedState,
+    )?;
+    let archive = write_failure_market_interval_archive_v3(
+        program_id,
+        cell_account,
+        history_account,
+        interval_before,
+        history_plan,
+        append,
+        cell_plan,
+        reset,
+        link_before.binding().source_occurrence_id,
+        None,
+        None,
+        release_link.id(),
+        FailureSessionReleaseDispositionV3::Resolved,
+    )?;
+    let (released, release) = release_series_market_link_failure_v4(
+        program_id,
+        series_link_account,
+        link_before,
+        release_link,
+        archive,
+        link_rebound_output,
+    )?;
+    require(
+        release.disposition() == FailureSessionReleaseDispositionV4::Resolved
+            && release.archive_postwrite_id() == archive.id()
+            && release.append_receipt_id().bytes() == archive.append().id().bytes()
+            && release.reset_receipt_id().bytes() == archive.reset().id().bytes()
+            && release.release_link_preauthorization_id()
+                == archive.release_link_preauthorization_id()
             && release.session_terminal_receipt_id()
                 == archive.append().session_terminal_receipt_id(),
         ClutchError::MismatchedState,

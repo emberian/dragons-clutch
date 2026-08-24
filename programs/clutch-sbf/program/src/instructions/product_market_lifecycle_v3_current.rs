@@ -197,6 +197,9 @@ impl<'state> AuthenticatedCurrentMarketResolutionActivationPostwriteV3<'state> {
 /// graph, quote, funding, or semantic IDs. The exact LinkV3 and FundingV5
 /// bodies are retained inputs, and a private physical writer must authenticate
 /// the inactive-to-finalized Resolution transition before RootV3 changes.
+/// The link carries the action-level writable privilege because the resolved
+/// session is released later in the same outer instruction; this writer does
+/// not mutate it.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 pub(crate) fn record_current_market_resolution_activation_v3<'state, A>(
@@ -233,7 +236,7 @@ where
             && activation.generation() == binding.generation
             && activation.resolution_account_id() == binding.resolution_account_id
             && link.owner_program() == *program_id
-            && !link.is_writable()
+            && link.is_writable()
             && link.state().phase() == SeriesMarketLinkPhaseV3::Active
             && link.state().active_failure_sessions() == 1
             && link_binding.market_root_account_id.bytes() == root_account.key.to_bytes()

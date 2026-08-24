@@ -301,7 +301,7 @@ pub(crate) fn process_archive_failure_market_session_v3(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
-    payload: FailureMarketActionPayloadV2<'_>,
+    payload: FailureMarketActionPayloadV2,
 ) -> Outcome<()> {
     let FailureMarketActionPayloadV2::Archive = payload
     else {
