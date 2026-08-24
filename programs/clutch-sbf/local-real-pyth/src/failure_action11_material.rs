@@ -50,15 +50,21 @@ use clutch_solana_layout::product_series::{
 };
 use clutch_solana_layout::registry::{self, ExtensionFamily, RecoveryAction};
 use clutch_source_plane_v3::{
-    FixedCodec as SourceFixedCodec, StatisticKeyV3, StatisticResultV3, SummaryProgramV3,
-    WindowSealV3, WindowSpecV3,
+    ContentId, FixedCodec as SourceFixedCodec, StatisticKeyV3, SummaryProgramV3, WindowSpecV3,
 };
 use clutch_source_plane_v3_adapter::PdaRecipeV3;
 use clutch_source_plane_v3_runtime::{
-    authenticate_source_release_account, authenticate_source_route, source_occurrence_record_id,
-    ReopenLineageV1, RuntimeAccountViewV1, RuntimeDerivedPdaV1, RuntimeKey,
-    SourcePolicyHandoffAccountV1, SourceReleaseManifestV2, SourceWorkReceiptAccountV1,
-    SourceWorkScheduleBindingV1,
+    authenticate_persisted_source_policy_handoff,
+    authenticate_persisted_statistic_result_account, authenticate_persisted_window_evidence,
+    authenticate_reopen_lineage_account, authenticate_source_policy_handoff_record,
+    authenticate_source_release_account, authenticate_source_route,
+    authenticate_source_work_receipt_account, authenticate_window_seal_account,
+    join_source_occurrence, source_occurrence_record_id, AuthenticatedClockBucketV1,
+    LineageAccessV1, OccurrenceDispositionV1, ReopenLineageV1, RuntimeAccountViewV1,
+    RuntimeDerivedPdaV1, RuntimeKey, SourcePolicyHandoffAccessV1,
+    SourcePolicyHandoffAccountV1, SourcePolicyHandoffJoinV1, SourceReleaseManifestV2,
+    SourceWorkReceiptAccessV1, SourceWorkReceiptAccountV1, SourceWorkScheduleBindingV1,
+    SuccessfulEvaluationHandoffV1,
 };
 use sha2::{Digest, Sha256};
 use solana_address::Address;
@@ -81,6 +87,7 @@ const SEED_FAILURE_HISTORY: &[u8] = b"dc:fail-int-history:v2";
 const SEED_FAILURE_POLICY: &[u8] = b"dc:failure-live-policy:v1";
 const SEED_FAILURE_RECOVERY: &[u8] = b"dc:failure-recovery:v1";
 const SEED_SOURCE_WORK_SCHEDULE: &[u8] = b"dc:product-artifact:v1";
+const SEED_SOURCE_OCCURRENCE: &[u8] = b"dc:source-occurrence:v1";
 
 pub type FailureAction11MaterialResult<T> =
     core::result::Result<T, FailureAction11MaterialError>;
@@ -805,26 +812,28 @@ fn authenticate_source(
         &release.program_id,
     );
     if snapshot.source_work_schedule.address != schedule_address
+        || snapshot.source_work_schedule.owner != release.program_id
+        || snapshot.source_work_schedule.executable
         || schedule_id.bytes() != cell.session_schedule_id().bytes()
         || schedule_id != route.source_work_schedule_id()
+        || schedule.validate_against(route).is_err()
     {
         return Err(FailureAction11MaterialError::ChainAuthority);
     }
 
     let occurrence_id = source_occurrence_record_id(&snapshot.source_occurrence.data)
         .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
-    let window = WindowSpecV3::decode(&snapshot.source_window.data)
+    let window = authenticate_window_input(release.program_id, route, snapshot.source_window)?;
+    let summary = authenticate_summary_input(release.program_id, snapshot.source_summary)?;
+    let summary_id = summary
+        .id()
         .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
-    let key = StatisticKeyV3::decode(&snapshot.source_statistic_key.data)
-        .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
-    let summary = SummaryProgramV3::decode(&snapshot.source_summary.data)
-        .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
-    let _seal = WindowSealV3::decode(&snapshot.source_window_seal.data)
-        .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
-    let _result = StatisticResultV3::decode(&snapshot.source_statistic_result.data)
-        .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
-    let _lineage = ReopenLineageV1::decode(&snapshot.source_result_lineage.data)
-        .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
+    let key = authenticate_statistic_key_input(
+        release.program_id,
+        snapshot.source_statistic_key,
+        &window,
+        summary_id,
+    )?;
     if occurrence_id.bytes() != link.source_occurrence_id.bytes()
         || snapshot.source_occurrence.address.to_bytes()
             != link.source_occurrence_account_id.bytes()
@@ -837,31 +846,245 @@ fn authenticate_source(
     {
         return Err(FailureAction11MaterialError::ChainAuthority);
     }
-    let handoff = SourcePolicyHandoffAccountV1::decode(&snapshot.source_handoff_receipt.data)
+    let handoff_body = SourcePolicyHandoffAccountV1::decode(&snapshot.source_handoff_receipt.data)
         .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
-    let work_receipt = SourceWorkReceiptAccountV1::decode(&snapshot.source_work_receipt.data)
-        .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
-    if handoff.handoff_id().bytes() != cell.source_handoff_id().bytes()
-        || handoff.release_authentication_id() != route.release_authentication_id()
-        || handoff.route_id() != route.route_id()
-        || handoff.occurrence_account().bytes() != snapshot.source_occurrence.address.to_bytes()
-        || handoff.result_account().bytes() != snapshot.source_statistic_result.address.to_bytes()
-        || handoff.work_receipt_account().bytes() != snapshot.source_work_receipt.address.to_bytes()
-        || handoff.failure_policy_binding_id().bytes() != admission_binding_bytes(policy, cell)
-        || handoff.source_spec_id() != route.source_spec_id()
-        || handoff.window_id().bytes() != policy.primary_window_id.bytes()
-        || handoff.statistic_key_id().bytes() != policy.statistic_key_id.bytes()
-        || handoff.generation() != link.source_repair_generation
-        || work_receipt.receipt_account_id().bytes() != snapshot.source_work_receipt.address.to_bytes()
-        || work_receipt.receipt_account_owner_program_id().bytes()
-            != snapshot.source_work_receipt.owner.to_bytes()
-        || work_receipt.route_id() != route.route_id()
-        || work_receipt.source_work_schedule_id() != schedule_id
-        || work_receipt.generation() != link.source_repair_generation
+    let handoff_pda = derive_recipe(
+        release.program_id,
+        PdaRecipeV3::source_policy_handoff(handoff_body.source_policy_handoff_join_id())
+            .map_err(|_| FailureAction11MaterialError::ChainAuthority)?,
+    )?;
+    let handoff_record = authenticate_source_policy_handoff_record(
+        route,
+        account_view(snapshot.source_handoff_receipt),
+        handoff_pda,
+    )
+    .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
+
+    let (occurrence_address, occurrence_bump) = Address::find_program_address(
+        &[SEED_SOURCE_OCCURRENCE, &occurrence_id.bytes()],
+        &release.program_id,
+    );
+    let occurrence = join_source_occurrence(
+        route,
+        account_view(snapshot.source_occurrence),
+        RuntimeDerivedPdaV1 {
+            program_id: runtime_key(release.program_id),
+            recipe_id: occurrence_id,
+            address: runtime_key(occurrence_address),
+            bump: occurrence_bump,
+        },
+        OccurrenceDispositionV1::ExactExisting,
+        &window,
+        &key,
+    )
+    .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
+    if occurrence.market_instance_id().bytes() != root.market_instance_id.content_id().bytes()
+        || occurrence.repair_generation() != link.source_repair_generation
     {
         return Err(FailureAction11MaterialError::ChainAuthority);
     }
+
+    let clock = AuthenticatedClockBucketV1::from_snapshot(
+        &route.clock_policy(),
+        handoff_record.clock(),
+    )
+    .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
+    let seal_pda = derive_recipe(
+        release.program_id,
+        PdaRecipeV3::window_seal(
+            window
+                .id()
+                .map_err(|_| FailureAction11MaterialError::ChainAuthority)?,
+        )
+        .map_err(|_| FailureAction11MaterialError::ChainAuthority)?,
+    )?;
+    let seal = authenticate_window_seal_account(
+        route,
+        account_view(snapshot.source_window_seal),
+        seal_pda,
+        &window,
+    )
+    .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
+    let evidence = authenticate_persisted_window_evidence(
+        route,
+        &route.source_plane(),
+        &route.clock_policy(),
+        clock.snapshot(),
+        &window,
+        seal,
+    )
+    .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
+
+    let lineage_body = ReopenLineageV1::decode(&snapshot.source_result_lineage.data)
+        .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
+    let lineage = authenticate_reopen_lineage_account(
+        route,
+        account_view(snapshot.source_result_lineage),
+        derive_recipe(
+            release.program_id,
+            PdaRecipeV3::reopen_lineage(
+                lineage_body
+                    .recipe_id()
+                    .map_err(|_| FailureAction11MaterialError::ChainAuthority)?,
+            )
+            .map_err(|_| FailureAction11MaterialError::ChainAuthority)?,
+        )?,
+        LineageAccessV1::ReadOnly,
+    )
+    .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
+    let result = authenticate_persisted_statistic_result_account(
+        route,
+        account_view(snapshot.source_statistic_result),
+        derive_recipe(
+            release.program_id,
+            PdaRecipeV3::statistic_result(
+                key.id()
+                    .map_err(|_| FailureAction11MaterialError::ChainAuthority)?,
+            )
+            .map_err(|_| FailureAction11MaterialError::ChainAuthority)?,
+        )?,
+        &window,
+        &key,
+        summary_id,
+        evidence,
+        lineage,
+    )
+    .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
+    let successful = SuccessfulEvaluationHandoffV1::at_maturity(
+        ContentId::from_bytes(admission_binding_bytes(policy, cell)),
+        occurrence,
+        &route.clock_policy(),
+        clock.snapshot(),
+        &window,
+        evidence,
+        result,
+    )
+    .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
+
+    let work_receipt_body = SourceWorkReceiptAccountV1::decode(&snapshot.source_work_receipt.data)
+        .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
+    let work_receipt = authenticate_source_work_receipt_account(
+        route,
+        schedule,
+        account_view(snapshot.source_work_receipt),
+        derive_recipe(
+            release.program_id,
+            PdaRecipeV3::source_work_receipt(
+                work_receipt_body
+                    .receipt_slot_id(route, schedule)
+                    .map_err(|_| FailureAction11MaterialError::ChainAuthority)?,
+            )
+            .map_err(|_| FailureAction11MaterialError::ChainAuthority)?,
+        )?,
+        SourceWorkReceiptAccessV1::ExistingReadOnly,
+    )
+    .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
+    let join = SourcePolicyHandoffJoinV1::successful_evaluation(
+        route,
+        successful,
+        result,
+        work_receipt,
+    )
+    .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
+    if successful.id().bytes() != cell.source_handoff_id().bytes()
+        || successful.id() != handoff_record.handoff_id()
+        || join.id() != handoff_record.source_policy_handoff_join_id()
+        || join.generation() != handoff_record.generation()
+        || join.generation() != link.source_repair_generation
+    {
+        return Err(FailureAction11MaterialError::ChainAuthority);
+    }
+    authenticate_persisted_source_policy_handoff(
+        route,
+        join,
+        account_view(snapshot.source_handoff_receipt),
+        handoff_pda,
+        SourcePolicyHandoffAccessV1::ExistingReadOnly,
+    )
+    .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
     Ok(())
+}
+
+fn authenticate_window_input(
+    program_id: Address,
+    route: clutch_source_plane_v3_runtime::AuthenticatedSourceRouteV1,
+    account: &ObservedRpcAccount,
+) -> Result<WindowSpecV3> {
+    if account.owner != program_id || account.executable {
+        return Err(FailureAction11MaterialError::ChainAuthority);
+    }
+    let window = WindowSpecV3::decode(&account.data)
+        .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
+    let id = window
+        .id()
+        .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
+    let derived = derive_recipe(
+        program_id,
+        PdaRecipeV3::window_spec(id)
+            .map_err(|_| FailureAction11MaterialError::ChainAuthority)?,
+    )?;
+    if account.address.to_bytes() != derived.address.bytes()
+        || window.source_spec_id != route.source_spec_id()
+        || window.source_plane_program_id != route.source_plane_contract_id()
+    {
+        return Err(FailureAction11MaterialError::ChainAuthority);
+    }
+    Ok(window)
+}
+
+fn authenticate_summary_input(
+    program_id: Address,
+    account: &ObservedRpcAccount,
+) -> Result<SummaryProgramV3> {
+    if account.owner != program_id || account.executable {
+        return Err(FailureAction11MaterialError::ChainAuthority);
+    }
+    let summary = SummaryProgramV3::decode(&account.data)
+        .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
+    let derived = derive_recipe(
+        program_id,
+        PdaRecipeV3::summary_program(
+            summary
+                .id()
+                .map_err(|_| FailureAction11MaterialError::ChainAuthority)?,
+        )
+        .map_err(|_| FailureAction11MaterialError::ChainAuthority)?,
+    )?;
+    if account.address.to_bytes() != derived.address.bytes() {
+        return Err(FailureAction11MaterialError::ChainAuthority);
+    }
+    Ok(summary)
+}
+
+fn authenticate_statistic_key_input(
+    program_id: Address,
+    account: &ObservedRpcAccount,
+    window: &WindowSpecV3,
+    summary_program_id: ContentId,
+) -> Result<StatisticKeyV3> {
+    if account.owner != program_id || account.executable || summary_program_id.is_zero() {
+        return Err(FailureAction11MaterialError::ChainAuthority);
+    }
+    let key = StatisticKeyV3::decode(&account.data)
+        .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
+    let derived = derive_recipe(
+        program_id,
+        PdaRecipeV3::statistic_key(
+            key.id()
+                .map_err(|_| FailureAction11MaterialError::ChainAuthority)?,
+        )
+        .map_err(|_| FailureAction11MaterialError::ChainAuthority)?,
+    )?;
+    if account.address.to_bytes() != derived.address.bytes()
+        || key.window_id
+            != window
+                .id()
+                .map_err(|_| FailureAction11MaterialError::ChainAuthority)?
+        || key.summary_program_id != summary_program_id
+    {
+        return Err(FailureAction11MaterialError::ChainAuthority);
+    }
+    Ok(key)
 }
 
 fn admission_binding_bytes(
