@@ -1,10 +1,10 @@
 //! Atomic descriptor, Structured-root, and Product-obligation terminal plan.
 //!
-//! Product's link account and the base Position/Replay accounts remain owned by
-//! their respective adapters. This module consumes only their exact projections
-//! and produces one indivisible plan. A live SBF adapter must mint the Product
-//! projection from private account authentication and must execute every write
-//! in one instruction; caller-authored values are not runtime authority.
+//! Product's root/link accounts and the base Position/Replay accounts remain
+//! owned by their respective adapters. This module derives only the complete
+//! Structured-owned terminal postimage and physical root deletion. Product may
+//! consume the resulting move-only SBF receipt later in the same outer typestate
+//! chain; no Product poststate is authority for a Structured close.
 
 use clutch_product_series::ContentId;
 
@@ -22,36 +22,6 @@ pub const STRUCTURED_DESCRIPTOR_RETIRED_BODY_DOMAIN_V1: &[u8] =
 /// Domain for one descriptor's complete mint/vault terminal receipt.
 pub const STRUCTURED_DESCRIPTOR_CLOSE_RECEIPT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-claim/descriptor-close/v1\0";
-
-/// Product-owned Wrapper-obligation transition projected through its private
-/// authenticated link-account writer.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StructuredProductWrapperTerminalProjectionV1 {
-    /// Exact Product-owned Series link account.
-    pub link_account: [u8; 32],
-    /// Full-width Market shared with the Structured root.
-    pub market_instance_id: [u8; 32],
-    /// Product/Source generation shared with the Structured root.
-    pub generation: u64,
-    /// Full account authentication identity before Product's write.
-    pub previous_link_authentication_id: ContentId,
-    /// Exact Product link semantic identity before Product's write.
-    pub previous_link_semantic_id: ContentId,
-    /// Product link sequence before consuming Wrapper.
-    pub previous_link_transition_sequence: u64,
-    /// Immutable receipt that originally admitted the Wrapper obligation.
-    pub product_admission_receipt_id: ContentId,
-    /// Structured aggregate receipt passed as Product's owner receipt.
-    pub owner_terminal_receipt_id: ContentId,
-    /// Product's typed Wrapper-obligation terminal transition receipt.
-    pub obligation_terminal_receipt_id: ContentId,
-    /// Full account authentication identity after Product's write.
-    pub successor_link_authentication_id: ContentId,
-    /// Exact Product link semantic identity after Product's write.
-    pub successor_link_semantic_id: ContentId,
-    /// Product link sequence after consuming Wrapper, exactly previous plus one.
-    pub successor_link_transition_sequence: u64,
-}
 
 /// Exact physical deletion disposition for a terminal Structured root.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,9 +42,9 @@ pub struct StructuredRootCloseDispositionV1 {
     pub balance_after_lamports: u64,
 }
 
-/// One complete terminalization plan. Non-final descriptor retirement writes
-/// `root_after` and leaves the optional Product/root-close projections absent.
-/// Final retirement consumes Product's Wrapper obligation and deletes the root.
+/// One complete Structured-owned terminalization plan. Non-final descriptor
+/// retirement writes `root_after`; final retirement deletes the root before
+/// Product may consume the move-only family terminal receipt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StructuredDescriptorTerminalPlanV1 {
     /// Exact descriptor/mint/base-vault retirement plan.
@@ -83,9 +53,7 @@ pub struct StructuredDescriptorTerminalPlanV1 {
     pub descriptor_terminal_receipt_id: ContentId,
     /// Exact successor root, used as Product evidence before optional deletion.
     pub root_after: StructuredMarketRootV1,
-    /// Private Product terminal projection, present exactly for the last descriptor.
-    pub product_terminal: Option<StructuredProductWrapperTerminalProjectionV1>,
-    /// Exact root deletion disposition, present exactly with Product terminality.
+    /// Exact root deletion disposition, present exactly at family terminality.
     pub root_close: Option<StructuredRootCloseDispositionV1>,
 }
 
@@ -191,7 +159,7 @@ pub fn prepare_structured_descriptor_terminal_owner_v1<
 }
 
 /// Prepare one atomic descriptor retirement and, for the last live descriptor,
-/// the matching Product Wrapper-obligation transition plus root deletion.
+/// its Structured-owned root deletion. Product state is not an input.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_structured_descriptor_terminal_v1<H: WrapperRecipeHashV1 + ?Sized>(
     root_before: StructuredMarketRootV1,
@@ -202,10 +170,8 @@ pub fn prepare_structured_descriptor_terminal_v1<H: WrapperRecipeHashV1 + ?Sized
     descriptor_account: [u8; 32],
     descriptor_before: StructuredClaimDescriptorV2,
     descriptor_retirement: DescriptorRetirementPlanV1,
-    product_terminal: Option<StructuredProductWrapperTerminalProjectionV1>,
     hasher: &H,
 ) -> Result<StructuredDescriptorTerminalPlanV1> {
-    let synchronized_root = root_before.observe_lamport_balance(observed_root_lamports)?;
     let owner = prepare_structured_descriptor_terminal_owner_v1(
         root_before,
         observed_root_lamports,
@@ -219,23 +185,18 @@ pub fn prepare_structured_descriptor_terminal_v1<H: WrapperRecipeHashV1 + ?Sized
     )?;
     let root_after = owner.root_after;
     let family_terminal = root_after.live_descriptor_count == 0;
-    if family_terminal != product_terminal.is_some() {
-        return Err(Error::AuthorityUnavailable);
-    }
-    let root_close = match product_terminal {
-        None => None,
-        Some(product) => {
-            validate_product_terminal(synchronized_root, root_after, product)?;
-            Some(StructuredRootCloseDispositionV1 {
-                root_account,
-                rent_refund_owner: root_after.binding.rent_refund_owner.bytes(),
-                neutral_lamport_sink: root_after.binding.neutral_lamport_sink.bytes(),
-                balance_before_lamports: observed_root_lamports,
-                refund_lamports: root_after.rent_principal_lamports,
-                donation_lamports: root_after.current_donation_lamports,
-                balance_after_lamports: 0,
-            })
-        }
+    let root_close = if family_terminal {
+        Some(StructuredRootCloseDispositionV1 {
+            root_account,
+            rent_refund_owner: root_after.binding.rent_refund_owner.bytes(),
+            neutral_lamport_sink: root_after.binding.neutral_lamport_sink.bytes(),
+            balance_before_lamports: observed_root_lamports,
+            refund_lamports: root_after.rent_principal_lamports,
+            donation_lamports: root_after.current_donation_lamports,
+            balance_after_lamports: 0,
+        })
+    } else {
+        None
     };
     if let Some(close) = root_close {
         if close
@@ -251,7 +212,6 @@ pub fn prepare_structured_descriptor_terminal_v1<H: WrapperRecipeHashV1 + ?Sized
         descriptor_retirement: owner.descriptor_retirement,
         descriptor_terminal_receipt_id: owner.descriptor_terminal_receipt_id,
         root_after,
-        product_terminal,
         root_close,
     })
 }
@@ -296,53 +256,6 @@ fn descriptor_terminal_receipt<H: WrapperRecipeHashV1 + ?Sized>(
         return Err(Error::InvalidIdentity);
     }
     Ok(receipt)
-}
-
-fn validate_product_terminal(
-    root_before: StructuredMarketRootV1,
-    root_after: StructuredMarketRootV1,
-    product: StructuredProductWrapperTerminalProjectionV1,
-) -> Result<()> {
-    let previous = root_before.product_lineage;
-    let identities = [
-        product.previous_link_authentication_id,
-        product.previous_link_semantic_id,
-        product.product_admission_receipt_id,
-        product.owner_terminal_receipt_id,
-        product.obligation_terminal_receipt_id,
-        product.successor_link_authentication_id,
-        product.successor_link_semantic_id,
-    ];
-    let mut left = 0_usize;
-    while left < identities.len() {
-        if identities[left].is_zero() {
-            return Err(Error::InvalidIdentity);
-        }
-        let mut right = left + 1;
-        while right < identities.len() {
-            if identities[left] == identities[right] {
-                return Err(Error::InvalidIdentity);
-            }
-            right += 1;
-        }
-        left += 1;
-    }
-    if product.link_account != root_before.binding.link_account
-        || product.market_instance_id != root_before.binding.market_instance_id.bytes()
-        || product.generation != root_before.binding.generation
-        || product.product_admission_receipt_id != previous.product_admission_receipt_id
-        || product.previous_link_transition_sequence
-            < previous.last_observed_link_transition_sequence
-        || product.owner_terminal_receipt_id != root_after.aggregate_terminal_receipt_id
-        || product.successor_link_transition_sequence
-            != product
-                .previous_link_transition_sequence
-                .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow)?
-    {
-        return Err(Error::AuthorityUnavailable);
-    }
-    Ok(())
 }
 
 fn require_distinct_nonzero(identities: &[[u8; 32]]) -> Result<()> {
@@ -511,33 +424,8 @@ mod tests {
         (root, descriptor, active_id)
     }
 
-    fn product_projection(
-        root: StructuredMarketRootV1,
-        owner_terminal_receipt_id: ContentId,
-    ) -> StructuredProductWrapperTerminalProjectionV1 {
-        StructuredProductWrapperTerminalProjectionV1 {
-            link_account: root.binding.link_account,
-            market_instance_id: root.binding.market_instance_id.bytes(),
-            generation: root.binding.generation,
-            previous_link_authentication_id: id(50),
-            previous_link_semantic_id: id(51),
-            previous_link_transition_sequence: root
-                .product_lineage
-                .last_observed_link_transition_sequence,
-            product_admission_receipt_id: root.product_lineage.product_admission_receipt_id,
-            owner_terminal_receipt_id,
-            obligation_terminal_receipt_id: id(44),
-            successor_link_authentication_id: id(45),
-            successor_link_semantic_id: id(46),
-            successor_link_transition_sequence: root
-                .product_lineage
-                .last_observed_link_transition_sequence
-                + 1,
-        }
-    }
-
     #[test]
-    fn last_descriptor_requires_exact_product_terminal_and_root_disposition() {
+    fn last_descriptor_derives_root_disposition_without_product_poststate() {
         let hash = DeterministicHash;
         let (root, descriptor, active_id) = root_and_descriptor(&hash);
         let retirement = retirement(descriptor);
@@ -572,22 +460,6 @@ mod tests {
                 &hash,
             )
             .unwrap();
-        assert_eq!(
-            prepare_structured_descriptor_terminal_v1(
-                root,
-                107,
-                [54; 32],
-                [51; 32],
-                [52; 32],
-                [53; 32],
-                descriptor,
-                retirement,
-                None,
-                &hash,
-            ),
-            Err(Error::AuthorityUnavailable)
-        );
-        let projection = product_projection(root, candidate.aggregate_terminal_receipt_id);
         let plan = prepare_structured_descriptor_terminal_v1(
             root,
             107,
@@ -597,53 +469,12 @@ mod tests {
             [53; 32],
             descriptor,
             retirement,
-            Some(projection),
             &hash,
         )
         .unwrap();
         assert_eq!(plan.root_after, candidate);
         assert_eq!(plan.root_close.unwrap().refund_lamports, 100);
         assert_eq!(plan.root_close.unwrap().donation_lamports, 7);
-
-        let mut after_sibling_churn = projection;
-        after_sibling_churn.previous_link_authentication_id = id(60);
-        after_sibling_churn.previous_link_semantic_id = id(61);
-        after_sibling_churn.previous_link_transition_sequence += 4;
-        after_sibling_churn.successor_link_authentication_id = id(62);
-        after_sibling_churn.successor_link_semantic_id = id(63);
-        after_sibling_churn.successor_link_transition_sequence =
-            after_sibling_churn.previous_link_transition_sequence + 1;
-        assert!(prepare_structured_descriptor_terminal_v1(
-            root,
-            107,
-            [54; 32],
-            [51; 32],
-            [52; 32],
-            [53; 32],
-            descriptor,
-            retirement,
-            Some(after_sibling_churn),
-            &hash,
-        )
-        .is_ok());
-
-        let mut substituted = projection;
-        substituted.owner_terminal_receipt_id = id(47);
-        assert_eq!(
-            prepare_structured_descriptor_terminal_v1(
-                root,
-                107,
-                [54; 32],
-                [51; 32],
-                [52; 32],
-                [53; 32],
-                descriptor,
-                retirement,
-                Some(substituted),
-                &hash,
-            ),
-            Err(Error::AuthorityUnavailable)
-        );
     }
 
     #[test]
@@ -661,7 +492,6 @@ mod tests {
                 [53; 32],
                 descriptor,
                 retirement,
-                None,
                 &hash,
             ),
             Err(Error::InvariantViolation)
@@ -678,7 +508,6 @@ mod tests {
                 [53; 32],
                 descriptor,
                 substituted,
-                None,
                 &hash,
             ),
             Err(Error::InvalidIdentity)

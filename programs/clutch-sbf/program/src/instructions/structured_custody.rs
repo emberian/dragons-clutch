@@ -46,8 +46,7 @@ use clutch_structured_claim_adapter::runtime_contract::{
     StructuredProductLineageV1, WrapperQuantityPayloadV1, WrapperRecipeHashV1,
     WrapperRecipeSetV1, WrapperRecipeV1,
     AuthenticatedVaultRetirementV1, StructuredClaimReplayTransitionV1,
-    StructuredClaimTerminalReplayDeltaV1, StructuredProductWrapperTerminalProjectionV1,
-    StructuredRootCloseDispositionV1,
+    StructuredClaimTerminalReplayDeltaV1, StructuredRootCloseDispositionV1,
     prepare_structured_descriptor_terminal_owner_v1, prepare_structured_descriptor_terminal_v1,
     STRUCTURED_CLAIM_REPLAY_EXTENSION_BYTES_V1,
     STRUCTURED_CLAIM_REPLAY_EXTENSION_SCHEMA_V1, STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES,
@@ -92,9 +91,7 @@ use super::product_artifact::authenticate_registry_capability_for_registration_v
 use super::product_series_current::{
     admit_series_wrapper_obligation_v2, authenticate_series_market_link_v2,
     authenticate_series_registry_account_v3, authenticate_series_wrapper_authorization_v2,
-    terminalize_series_wrapper_obligation_v2, AuthenticatedSeriesWrapperAdmissionOwnerV2,
-    AuthenticatedSeriesWrapperAuthorizationV2, AuthenticatedSeriesWrapperTerminalOwnerV2,
-    AuthenticatedSeriesWrapperTerminalV2,
+    AuthenticatedSeriesWrapperAdmissionOwnerV2, AuthenticatedSeriesWrapperAuthorizationV2,
 };
 use super::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, transfer_data,
@@ -241,6 +238,10 @@ const STRUCTURED_TERMINAL_ROOT_SEMANTIC_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-claim/terminal-root-semantic/v1\0";
 const STRUCTURED_TERMINAL_ROOT_DATA_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-claim/terminal-root-data/v1\0";
+const STRUCTURED_ROOT_PHYSICAL_CLOSE_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/structured-claim/root-physical-close/v3\0";
+const STRUCTURED_WRAPPER_FAMILY_TERMINAL_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/structured-claim/wrapper-family-terminal/v3\0";
 
 const ACCOUNT_ROLES: [AccountRoleV1; STRUCTURED_CUSTODY_ACCOUNT_COUNT] = [
     AccountRoleV1::VaultAuthority,
@@ -343,87 +344,110 @@ struct AuthenticatedStructuredCompactionV1 {
     collateral_value_receipt_id: CollateralId,
 }
 
-/// Private postwrite authority proving the exact terminal Structured root and
-/// every immutable Product join consumed by the Product-owned Wrapper latch.
-/// This type is constructible only after hostile reauthentication of the
-/// descriptor, mint, Position tombstone, deleted Replay, and root postimage.
+/// Hostile terminal root postimage authenticated before its physical deletion.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct AuthenticatedStructuredDescriptorTerminalV2 {
-    id: ContentId,
+struct AuthenticatedStructuredTerminalPrecloseV3 {
     root_account: Pubkey,
+    root_id: ContentId,
     root_semantic_id: ContentId,
     root_data_id: ContentId,
-    authorization: AuthenticatedSeriesWrapperAuthorizationV2,
+    aggregate_terminal_receipt_id: ContentId,
+    descriptor_terminal_receipt_id: ContentId,
 }
 
-impl AuthenticatedSeriesWrapperTerminalOwnerV2
-    for AuthenticatedStructuredDescriptorTerminalV2
-{
-    fn owner_terminal_receipt_id(&self) -> Outcome<ContentId> {
-        Ok(self.id)
-    }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedStructuredProductPreterminalV3 {
+    authorization: AuthenticatedSeriesWrapperAuthorizationV2,
+    product_root_account: Pubkey,
+    product_market_binding_id: ContentId,
+    link_data_id: ContentId,
+    link_semantic_id: ContentId,
+}
 
-    fn structured_root_account(&self) -> Outcome<Pubkey> {
-        Ok(self.root_account)
-    }
+/// Sole move-only Structured+Wrapper family terminal. The Structured root and
+/// Replay are already deleted and the descriptor mint/vault are hostile-
+/// reauthenticated terminal postimages. Product RootV3/LinkV3 must consume
+/// this value in the same outer typestate chain; it is never serialized.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedStructuredWrapperFamilyTerminalV3 {
+    id: ContentId,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    series_plan_id: SeriesPlanV5Id,
+    ordinal: u32,
+    product_root_account: Pubkey,
+    product_market_binding_id: ContentId,
+    product_link_account: Pubkey,
+    product_link_binding_id: ContentId,
+    product_link_authentication_id: ContentId,
+    product_link_data_id: ContentId,
+    product_link_semantic_id: ContentId,
+    product_link_transition_sequence: u64,
+    wrapper_obligation_configuration_id: ContentId,
+    wrapper_admission_receipt_id: ContentId,
+    structured_root_account: Pubkey,
+    structured_root_id: ContentId,
+    structured_root_terminal_semantic_id: ContentId,
+    structured_root_terminal_data_id: ContentId,
+    aggregate_terminal_receipt_id: ContentId,
+    descriptor_terminal_receipt_id: ContentId,
+    root_close_id: ContentId,
+    root_refund_lamports: u64,
+    root_donation_lamports: u64,
+}
 
-    fn structured_root_semantic_id(&self) -> Outcome<ContentId> {
-        Ok(self.root_semantic_id)
+impl AuthenticatedStructuredWrapperFamilyTerminalV3 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn market_instance_id(&self) -> MarketInstanceV2Id {
+        self.market_instance_id
     }
-
-    fn structured_root_data_id(&self) -> Outcome<ContentId> {
-        Ok(self.root_data_id)
+    pub(crate) const fn generation(&self) -> u64 { self.generation }
+    pub(crate) const fn series_plan_id(&self) -> SeriesPlanV5Id { self.series_plan_id }
+    pub(crate) const fn ordinal(&self) -> u32 { self.ordinal }
+    pub(crate) const fn product_root_account(&self) -> Pubkey { self.product_root_account }
+    pub(crate) const fn product_market_binding_id(&self) -> ContentId {
+        self.product_market_binding_id
     }
-
-    fn authenticate_series_wrapper_terminal_owner_v2(
-        &self,
-        authorization_id: ContentId,
-        link_account: Pubkey,
-        link_binding_id: ContentId,
-        series_plan_id: SeriesPlanV5Id,
-        ordinal: u32,
-        market_instance_id: MarketInstanceV2Id,
-        generation: u64,
-        attachment_plan_id: SeriesAttachmentPlanV5Id,
-        compiler_bundle_id: CompiledProductSeriesBundleV6Id,
-        funding_quote_id: clutch_product_series::SeriesFundingQuoteV5Id,
-        capability_profile_id: ContentId,
-        wrapper_obligation_configuration_id: ContentId,
-        wrapper_recipe_set_id: ContentId,
-        rent_refund_owner: ContentId,
-        neutral_lamport_sink: ContentId,
-        wrapper_admission_receipt_id: ContentId,
-        owner_terminal_receipt_id: ContentId,
-        structured_root_account: Pubkey,
-        structured_root_semantic_id: ContentId,
-        structured_root_data_id: ContentId,
-    ) -> Outcome<()> {
-        let authorization = self.authorization;
-        require(
-            authorization_id == authorization.id()
-                && link_account == authorization.link_account()
-                && link_binding_id == authorization.link_binding_id()
-                && series_plan_id == authorization.series_plan_id()
-                && ordinal == authorization.ordinal()
-                && market_instance_id == authorization.market_instance_id()
-                && generation == authorization.generation()
-                && attachment_plan_id == authorization.attachment_plan_id()
-                && compiler_bundle_id == authorization.compiler_bundle_id()
-                && funding_quote_id == authorization.funding_quote_id()
-                && capability_profile_id == authorization.capability_profile_id()
-                && wrapper_obligation_configuration_id
-                    == authorization.wrapper_obligation_configuration_id()
-                && wrapper_recipe_set_id == authorization.wrapper_recipe_set_id()
-                && rent_refund_owner == authorization.rent_refund_owner()
-                && neutral_lamport_sink == authorization.neutral_lamport_sink()
-                && wrapper_admission_receipt_id
-                    == authorization.wrapper_admission_receipt_id()
-                && owner_terminal_receipt_id == self.id
-                && structured_root_account == self.root_account
-                && structured_root_semantic_id == self.root_semantic_id
-                && structured_root_data_id == self.root_data_id,
-            ClutchError::MismatchedState,
-        )
+    pub(crate) const fn product_link_account(&self) -> Pubkey { self.product_link_account }
+    pub(crate) const fn product_link_binding_id(&self) -> ContentId {
+        self.product_link_binding_id
+    }
+    pub(crate) const fn product_link_authentication_id(&self) -> ContentId {
+        self.product_link_authentication_id
+    }
+    pub(crate) const fn product_link_data_id(&self) -> ContentId { self.product_link_data_id }
+    pub(crate) const fn product_link_semantic_id(&self) -> ContentId {
+        self.product_link_semantic_id
+    }
+    pub(crate) const fn product_link_transition_sequence(&self) -> u64 {
+        self.product_link_transition_sequence
+    }
+    pub(crate) const fn wrapper_obligation_configuration_id(&self) -> ContentId {
+        self.wrapper_obligation_configuration_id
+    }
+    pub(crate) const fn wrapper_admission_receipt_id(&self) -> ContentId {
+        self.wrapper_admission_receipt_id
+    }
+    pub(crate) const fn structured_root_account(&self) -> Pubkey {
+        self.structured_root_account
+    }
+    pub(crate) const fn structured_root_id(&self) -> ContentId { self.structured_root_id }
+    pub(crate) const fn structured_root_terminal_semantic_id(&self) -> ContentId {
+        self.structured_root_terminal_semantic_id
+    }
+    pub(crate) const fn structured_root_terminal_data_id(&self) -> ContentId {
+        self.structured_root_terminal_data_id
+    }
+    pub(crate) const fn aggregate_terminal_receipt_id(&self) -> ContentId {
+        self.aggregate_terminal_receipt_id
+    }
+    pub(crate) const fn descriptor_terminal_receipt_id(&self) -> ContentId {
+        self.descriptor_terminal_receipt_id
+    }
+    pub(crate) const fn root_close_id(&self) -> ContentId { self.root_close_id }
+    pub(crate) const fn root_refund_lamports(&self) -> u64 { self.root_refund_lamports }
+    pub(crate) const fn root_donation_lamports(&self) -> u64 {
+        self.root_donation_lamports
     }
 }
 
@@ -1695,17 +1719,34 @@ fn process_compact_donation(
     write_compaction_poststate(accounts, poststate, plan)
 }
 
-/// Retire one exact descriptor after the wrapper has atomically revoked its
-/// zero-supply mint authority and persisted the descriptor tombstone. This is
-/// the sole current action-8 base route: it consumes current owners plus
-/// Product's private Wrapper terminal writer only for the final live
-/// descriptor in the Structured root.
+/// Public action-8 base route. Non-final descriptor retirements complete here.
+/// The final family close remains fail-closed until Product RootV3/LinkV3 can
+/// consume the move-only receipt returned by the inner composer.
 fn process_retire_descriptor(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
     payload: &[u8],
 ) -> Outcome<()> {
+    let terminal = retire_structured_descriptor_owner_v3(
+        program_id,
+        accounts,
+        sequence,
+        payload,
+    )?;
+    require(terminal.is_none(), ClutchError::AuthorizationUnavailable)
+}
+
+/// Retire one exact descriptor after the wrapper has atomically revoked its
+/// zero-supply mint authority and persisted the descriptor tombstone. The last
+/// descriptor additionally closes the Structured root and returns its sole
+/// move-only Structured+Wrapper terminal for immediate Product consumption.
+fn retire_structured_descriptor_owner_v3(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload: &[u8],
+) -> Outcome<Option<AuthenticatedStructuredWrapperFamilyTerminalV3>> {
     require_count(accounts, STRUCTURED_DESCRIPTOR_RETIREMENT_ACCOUNT_COUNT)?;
     require(sequence == 0, ClutchError::Replay)?;
     let request = match clutch_structured_claim_adapter::runtime_contract::decode_structured_claim_payload_v1(
@@ -1726,12 +1767,12 @@ fn process_retire_descriptor(
     drop(root_data);
     let family_terminal = root_before.live_descriptor_count == 1;
     validate_retirement_privileges(program_id, accounts, family_terminal)?;
-    let (current_product_lineage, product_authorization) =
+    let (current_product_lineage, product_preterminal) =
         authenticate_current_structured_product_lineage(
         program_id,
         accounts,
         root_before,
-        family_terminal,
+        false,
     )?;
     let root_before = root_before
         .observe_current_product_lineage(current_product_lineage)
@@ -2161,52 +2202,6 @@ fn process_retire_descriptor(
         retirement,
     )?;
 
-    let product_terminal = if family_terminal {
-        let structured_terminal = authenticate_structured_terminal_postwrite(
-            accounts,
-            owner_plan.root_after,
-            root_id,
-            retirement,
-            retired_descriptor,
-            retired_mint,
-            product_authorization,
-        )?;
-        Some(terminalize_product_wrapper(
-            program_id,
-            accounts,
-            root_before,
-            product_authorization,
-            structured_terminal,
-        )?)
-    } else {
-        None
-    };
-    let product_projection = match product_terminal {
-        Some(terminal) => {
-            let projection = terminal.product_terminal_projection();
-            let obligation_terminal_receipt_id = projection
-                .id()
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-            Some(StructuredProductWrapperTerminalProjectionV1 {
-                link_account: terminal.link_account().to_bytes(),
-                market_instance_id: root_before.binding.market_instance_id.bytes(),
-                generation: root_before.binding.generation,
-                previous_link_authentication_id: terminal.link_authentication_before(),
-                previous_link_semantic_id: terminal.link_semantic_before(),
-                previous_link_transition_sequence: projection
-                    .link_transition_sequence
-                    .checked_sub(1)
-                    .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
-                product_admission_receipt_id: terminal.wrapper_admission_receipt_id(),
-                owner_terminal_receipt_id: terminal.owner_terminal_receipt_id(),
-                obligation_terminal_receipt_id,
-                successor_link_authentication_id: terminal.link_authentication_after(),
-                successor_link_semantic_id: terminal.link_semantic_after(),
-                successor_link_transition_sequence: projection.link_transition_sequence,
-            })
-        }
-        None => None,
-    };
     let complete = prepare_structured_descriptor_terminal_v1(
         root_before,
         accounts[RT_STRUCTURED_ROOT].lamports(),
@@ -2216,7 +2211,6 @@ fn process_retire_descriptor(
         accounts[RT_DESCRIPTOR].key.to_bytes(),
         active_descriptor,
         descriptor_retirement,
-        product_projection,
         &RuntimeSha256,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -2226,10 +2220,30 @@ fn process_retire_descriptor(
                 == owner_plan.descriptor_terminal_receipt_id,
         ClutchError::MismatchedState,
     )?;
-    if let Some(close) = complete.root_close {
-        close_structured_root(accounts, close)?;
-    }
-    Ok(())
+    let terminal = match complete.root_close {
+        Some(close) => {
+            let preclose = authenticate_structured_terminal_postwrite(
+                accounts,
+                complete.root_after,
+                root_id,
+                complete.descriptor_terminal_receipt_id,
+                retirement,
+                retired_descriptor,
+                retired_mint,
+                product_preterminal.authorization,
+            )?;
+            close_structured_root(accounts, close)?;
+            Some(authenticate_structured_wrapper_family_terminal_v3(
+                program_id,
+                accounts,
+                product_preterminal,
+                preclose,
+                close,
+            )?)
+        }
+        None => None,
+    };
+    Ok(terminal)
 }
 
 fn validate_retirement_privileges(
@@ -2310,7 +2324,7 @@ fn validate_retirement_privileges(
 
 const fn structured_retirement_account_writable(
     index: usize,
-    family_terminal: bool,
+    _family_terminal: bool,
 ) -> bool {
     matches!(
         index,
@@ -2321,7 +2335,7 @@ const fn structured_retirement_account_writable(
             | RT_STRUCTURED_ROOT
             | RT_RENT_REFUND_OWNER
             | RT_NEUTRAL_SINK
-    ) || (index == RT_SERIES_LINK && family_terminal)
+    )
 }
 
 fn authenticate_terminal_deployments(
@@ -2473,11 +2487,12 @@ fn authenticate_structured_terminal_postwrite(
     accounts: &[AccountInfo<'_>],
     root: StructuredMarketRootV1,
     root_id: ContentId,
+    descriptor_terminal_receipt_id: ContentId,
     retirement: PositionV3ReplayV3RetirementPlanV1,
     descriptor: StructuredClaimDescriptorV2,
     mint: clutch_structured_claim_adapter::runtime_contract::WrapperMintProjectionV1,
     authorization: AuthenticatedSeriesWrapperAuthorizationV2,
-) -> Outcome<AuthenticatedStructuredDescriptorTerminalV2> {
+) -> Outcome<AuthenticatedStructuredTerminalPrecloseV3> {
     let root_body = root
         .encode()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -2522,6 +2537,8 @@ fn authenticate_structured_terminal_postwrite(
         root.live_descriptor_count == 0
             && root.terminal_descriptor_count == root.admitted_descriptor_count
             && !root.aggregate_terminal_receipt_id.is_zero()
+            && !descriptor_terminal_receipt_id.is_zero()
+            && descriptor_terminal_receipt_id != root.aggregate_terminal_receipt_id
             && !data_id.is_zero()
             && !semantic_id.is_zero()
             && data_id != semantic_id
@@ -2543,71 +2560,14 @@ fn authenticate_structured_terminal_postwrite(
                 == root.product_lineage.product_admission_receipt_id,
         ClutchError::MismatchedState,
     )?;
-    Ok(AuthenticatedStructuredDescriptorTerminalV2 {
-        id: root.aggregate_terminal_receipt_id,
+    Ok(AuthenticatedStructuredTerminalPrecloseV3 {
         root_account: *accounts[RT_STRUCTURED_ROOT].key,
+        root_id,
         root_semantic_id: semantic_id,
         root_data_id: data_id,
-        authorization,
+        aggregate_terminal_receipt_id: root.aggregate_terminal_receipt_id,
+        descriptor_terminal_receipt_id,
     })
-}
-
-fn terminalize_product_wrapper(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-    root_before: StructuredMarketRootV1,
-    authorization: AuthenticatedSeriesWrapperAuthorizationV2,
-    owner: AuthenticatedStructuredDescriptorTerminalV2,
-) -> Outcome<AuthenticatedSeriesWrapperTerminalV2> {
-    let mut link_output = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
-    let link_data = accounts[RT_SERIES_LINK]
-        .try_borrow_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    SeriesMarketLinkAccountV2::decode_into(&link_data, &mut link_output)
-        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
-    drop(link_data);
-    let link_binding = link_output.state.binding();
-    let link = authenticate_series_market_link_v2(
-        program_id,
-        &accounts[RT_SERIES_LINK],
-        root_before.binding.series_plan_id,
-        root_before.binding.ordinal,
-        root_before.binding.market_instance_id,
-        root_before.binding.generation,
-        Pubkey::new_from_array(link_binding.market_root_account_id.bytes()),
-        true,
-        &mut link_output,
-    )?;
-    let current_binding = link.state().binding();
-    require(
-        link.account() == *accounts[RT_SERIES_LINK].key
-            && current_binding
-                .id()
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-                == root_before.product_lineage.link_binding_id
-            && current_binding.obligation_configuration_id.content_id()
-                == root_before
-                    .product_lineage
-                    .wrapper_obligation_configuration_id
-            && link.state().transition_sequence()
-                >= root_before
-                    .product_lineage
-                    .last_observed_link_transition_sequence
-            && link.state().obligation_admission_receipt_id(
-                SeriesLinkObligationV2::Wrapper,
-            ) == root_before.product_lineage.product_admission_receipt_id,
-        ClutchError::MismatchedState,
-    )?;
-    let mut rebound = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
-    let (_, terminal) = terminalize_series_wrapper_obligation_v2(
-        program_id,
-        &accounts[RT_SERIES_LINK],
-        link,
-        authorization,
-        &owner,
-        &mut rebound,
-    )?;
-    Ok(terminal)
 }
 
 fn authenticate_current_structured_product_lineage(
@@ -2617,7 +2577,7 @@ fn authenticate_current_structured_product_lineage(
     require_writable: bool,
 ) -> Outcome<(
     StructuredProductLineageV1,
-    AuthenticatedSeriesWrapperAuthorizationV2,
+    AuthenticatedStructuredProductPreterminalV3,
 )> {
     let mut link_output = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
     let link_data = accounts[RT_SERIES_LINK]
@@ -2638,6 +2598,17 @@ fn authenticate_current_structured_product_lineage(
         require_writable,
         &mut link_output,
     )?;
+    let current_binding = link.state().binding();
+    let product_root_account = Pubkey::new_from_array(
+        current_binding.market_root_account_id.bytes(),
+    );
+    let product_market_binding_id = current_binding.market_binding_id;
+    let link_data_id = link.data_id();
+    let link_semantic_id = link
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
     let authorization = authenticate_series_wrapper_authorization_v2(
         program_id,
         link,
@@ -2666,7 +2637,16 @@ fn authenticate_current_structured_product_lineage(
             && authorization.neutral_lamport_sink() == root.binding.neutral_lamport_sink,
         ClutchError::MismatchedState,
     )?;
-    Ok((structured_product_lineage_v1(authorization), authorization))
+    Ok((
+        structured_product_lineage_v1(authorization),
+        AuthenticatedStructuredProductPreterminalV3 {
+            authorization,
+            product_root_account,
+            product_market_binding_id,
+            link_data_id,
+            link_semantic_id,
+        },
+    ))
 }
 
 fn close_structured_root(
@@ -2706,6 +2686,147 @@ fn close_structured_root(
             && accounts[RT_NEUTRAL_SINK].lamports() == sink_after,
         ClutchError::MismatchedState,
     )
+}
+
+fn authenticate_structured_wrapper_family_terminal_v3(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    product: AuthenticatedStructuredProductPreterminalV3,
+    preclose: AuthenticatedStructuredTerminalPrecloseV3,
+    close: StructuredRootCloseDispositionV1,
+) -> Outcome<AuthenticatedStructuredWrapperFamilyTerminalV3> {
+    let authorization = product.authorization;
+    require(
+        accounts[RT_STRUCTURED_ROOT].owner == &SYSTEM_PROGRAM_ID
+            && accounts[RT_STRUCTURED_ROOT].data_len() == 0
+            && accounts[RT_STRUCTURED_ROOT].lamports() == 0
+            && preclose.root_account == *accounts[RT_STRUCTURED_ROOT].key
+            && close.root_account == preclose.root_account.to_bytes()
+            && close.balance_after_lamports == 0
+            && close.refund_lamports
+                .checked_add(close.donation_lamports)
+                == Some(close.balance_before_lamports)
+            && authorization.link_account() == *accounts[RT_SERIES_LINK].key
+            && authorization.market_instance_id().bytes() != [0; 32]
+            && authorization.generation() != 0
+            && authorization.wrapper_status() == SeriesLinkObligationStatusV2::Live
+            && !authorization.wrapper_admission_receipt_id().is_zero()
+            && !preclose.root_id.is_zero()
+            && !preclose.root_semantic_id.is_zero()
+            && !preclose.root_data_id.is_zero()
+            && !preclose.aggregate_terminal_receipt_id.is_zero()
+            && !preclose.descriptor_terminal_receipt_id.is_zero(),
+        ClutchError::MismatchedState,
+    )?;
+
+    // The Product account remains read-only throughout the Structured close.
+    // Reopen it after physical deletion and demand byte-for-byte authority
+    // equality so the terminal receipt cannot hide a sibling Product write.
+    let mut link_output = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
+    let link = authenticate_series_market_link_v2(
+        program_id,
+        &accounts[RT_SERIES_LINK],
+        authorization.series_plan_id(),
+        authorization.ordinal(),
+        authorization.market_instance_id(),
+        authorization.generation(),
+        product.product_root_account,
+        false,
+        &mut link_output,
+    )?;
+    let observed_authorization = authenticate_series_wrapper_authorization_v2(
+        program_id,
+        link,
+        &accounts[RT_COMPILER_BUNDLE],
+        &accounts[RT_ATTACHMENT],
+    )?;
+    let observed_semantic_id = link
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    require(
+        observed_authorization == authorization
+            && link.data_id() == product.link_data_id
+            && observed_semantic_id == product.link_semantic_id,
+        ClutchError::MismatchedState,
+    )?;
+
+    let root_close_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            STRUCTURED_ROOT_PHYSICAL_CLOSE_DOMAIN_V3,
+            program_id.as_ref(),
+            preclose.root_account.as_ref(),
+            &preclose.root_id.bytes(),
+            &preclose.root_semantic_id.bytes(),
+            &preclose.root_data_id.bytes(),
+            &preclose.aggregate_terminal_receipt_id.bytes(),
+            &preclose.descriptor_terminal_receipt_id.bytes(),
+            &close.rent_refund_owner,
+            &close.neutral_lamport_sink,
+            &close.balance_before_lamports.to_le_bytes(),
+            &close.refund_lamports.to_le_bytes(),
+            &close.donation_lamports.to_le_bytes(),
+            &close.balance_after_lamports.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            STRUCTURED_WRAPPER_FAMILY_TERMINAL_DOMAIN_V3,
+            &root_close_id.bytes(),
+            &authorization.market_instance_id().bytes(),
+            &authorization.generation().to_le_bytes(),
+            &authorization.series_plan_id().bytes(),
+            &authorization.ordinal().to_le_bytes(),
+            product.product_root_account.as_ref(),
+            &product.product_market_binding_id.bytes(),
+            authorization.link_account().as_ref(),
+            &authorization.link_binding_id().bytes(),
+            &authorization.link_authentication_id().bytes(),
+            &product.link_data_id.bytes(),
+            &product.link_semantic_id.bytes(),
+            &authorization.link_transition_sequence().to_le_bytes(),
+            &authorization.wrapper_obligation_configuration_id().bytes(),
+            &authorization.wrapper_admission_receipt_id().bytes(),
+            &preclose.aggregate_terminal_receipt_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(
+        !root_close_id.is_zero()
+            && !id.is_zero()
+            && id != root_close_id
+            && id != preclose.aggregate_terminal_receipt_id,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedStructuredWrapperFamilyTerminalV3 {
+        id,
+        market_instance_id: authorization.market_instance_id(),
+        generation: authorization.generation(),
+        series_plan_id: authorization.series_plan_id(),
+        ordinal: authorization.ordinal(),
+        product_root_account: product.product_root_account,
+        product_market_binding_id: product.product_market_binding_id,
+        product_link_account: authorization.link_account(),
+        product_link_binding_id: authorization.link_binding_id(),
+        product_link_authentication_id: authorization.link_authentication_id(),
+        product_link_data_id: product.link_data_id,
+        product_link_semantic_id: product.link_semantic_id,
+        product_link_transition_sequence: authorization.link_transition_sequence(),
+        wrapper_obligation_configuration_id: authorization
+            .wrapper_obligation_configuration_id(),
+        wrapper_admission_receipt_id: authorization.wrapper_admission_receipt_id(),
+        structured_root_account: preclose.root_account,
+        structured_root_id: preclose.root_id,
+        structured_root_terminal_semantic_id: preclose.root_semantic_id,
+        structured_root_terminal_data_id: preclose.root_data_id,
+        aggregate_terminal_receipt_id: preclose.aggregate_terminal_receipt_id,
+        descriptor_terminal_receipt_id: preclose.descriptor_terminal_receipt_id,
+        root_close_id,
+        root_refund_lamports: close.refund_lamports,
+        root_donation_lamports: close.donation_lamports,
+    })
 }
 
 fn set_structured_lamports(account: &AccountInfo<'_>, value: u64) -> Outcome<()> {
@@ -4067,13 +4188,13 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_retirement_frame_keeps_product_link_read_only_until_final() {
+    fn descriptor_retirement_owner_never_borrows_product_link_write_privilege() {
         assert_eq!(STRUCTURED_DESCRIPTOR_RETIREMENT_ACCOUNT_COUNT, 33);
         assert!(!structured_retirement_account_writable(
             RT_SERIES_LINK,
             false,
         ));
-        assert!(structured_retirement_account_writable(
+        assert!(!structured_retirement_account_writable(
             RT_SERIES_LINK,
             true,
         ));
@@ -4088,19 +4209,31 @@ mod tests {
     }
 
     #[test]
-    fn structured_current_product_authority_is_v2_only() {
+    fn structured_terminal_owner_does_not_mutate_product_v2() {
         let source = include_str!("structured_custody.rs");
         for required in [
             "authenticate_series_registry_account_v3(",
             "authenticate_series_market_link_v2(",
             "authenticate_series_wrapper_authorization_v2(",
             "admit_series_wrapper_obligation_v2(",
-            "terminalize_series_wrapper_obligation_v2(",
             "AuthenticatedSeriesWrapperAdmissionOwnerV2",
-            "AuthenticatedSeriesWrapperTerminalOwnerV2",
+            "AuthenticatedStructuredWrapperFamilyTerminalV3",
+            "authenticate_structured_wrapper_family_terminal_v3(",
         ] {
             assert!(source.contains(required));
         }
+        assert!(!source.contains("terminalize_series_wrapper_obligation_v2("));
+        assert!(!source.contains("AuthenticatedSeriesWrapperTerminalOwnerV2"));
+        let receipt_start = source
+            .find("pub(crate) struct AuthenticatedStructuredWrapperFamilyTerminalV3")
+            .unwrap();
+        let receipt_end = source[receipt_start..]
+            .find("impl AuthenticatedStructuredWrapperFamilyTerminalV3")
+            .unwrap()
+            + receipt_start;
+        let receipt_declaration = &source[receipt_start..receipt_end];
+        assert!(!receipt_declaration.contains("derive(Clone"));
+        assert!(!receipt_declaration.contains("derive(Copy"));
         assert!(!source.contains(concat!("SeriesMarketLinkAccount", "V1")));
         assert!(!source.contains(concat!("authenticate_series_market_link_", "v1(")));
         assert!(!source.contains(concat!(
