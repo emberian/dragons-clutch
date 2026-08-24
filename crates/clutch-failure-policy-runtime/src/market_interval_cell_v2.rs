@@ -251,6 +251,26 @@ impl FailureMarketIntervalCellV2 {
         self.completed_session_count
     }
 
+    /// Number of bounded keeper calls in the active finite session.
+    pub const fn completed_work_calls(self) -> u64 {
+        self.completed_work_calls
+    }
+
+    /// Exact keeper rewards already paid by the active finite session.
+    pub const fn exact_reward_lamports(self) -> u64 {
+        self.exact_reward_lamports
+    }
+
+    /// Accepted progress in the active immutable attempt row.
+    pub const fn accepted_progress_units(self) -> u64 {
+        self.accepted_progress_units
+    }
+
+    /// Replay nonce which selects the next current session transition.
+    pub const fn transition_nonce(self) -> u64 {
+        self.transition_nonce
+    }
+
     /// Current active attempt row, or zero while Idle.
     pub const fn attempt_index(self) -> u8 {
         self.attempt_index
