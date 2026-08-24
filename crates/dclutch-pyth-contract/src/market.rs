@@ -11,7 +11,7 @@
 //! either required identity comparison has occurred.
 
 use dclutch_core_contract::{MARKET_ROOT_BYTES, MarketRoot, Phase as RootPhase};
-use dclutch_kernel::{CategoricalLedger, Phase as LedgerPhase};
+use dclutch_kernel::{CategoricalLedger, MAX_OUTCOMES, MIN_OUTCOMES, Phase as LedgerPhase};
 
 use crate::{
     Error, Result, array,
@@ -26,17 +26,17 @@ pub const MARKET_MAGIC: [u8; 8] = *b"DCLTMKT1";
 /// Implemented composed Market schema.
 pub const MARKET_SCHEMA_VERSION: u16 = 1;
 /// Fixed Market bytes excluding the `N` eight-byte supply entries.
-pub const MARKET_BASE_BYTES: usize = 810;
+pub const MARKET_BASE_BYTES: usize = SUPPLY_OFFSET + RECEIPT_BYTES;
 /// Exact width of a two-outcome Market account.
-pub const BINARY_MARKET_BYTES: usize = 826;
+pub const BINARY_MARKET_BYTES: usize = MARKET_BASE_BYTES + MIN_OUTCOMES * 8;
 /// Exact width of a sixteen-outcome Market account.
-pub const MAX_MARKET_BYTES: usize = 938;
+pub const MAX_MARKET_BYTES: usize = MARKET_BASE_BYTES + MAX_OUTCOMES * 8;
 
 const ROOT_OFFSET: usize = 16;
-const POLICY_OFFSET: usize = 184;
-const FEED_PROFILE_OFFSET: usize = 568;
-const HOARD_OFFSET: usize = 674;
-const SUPPLY_OFFSET: usize = 682;
+const POLICY_OFFSET: usize = ROOT_OFFSET + MARKET_ROOT_BYTES;
+const FEED_PROFILE_OFFSET: usize = POLICY_OFFSET + POLICY_BYTES;
+const HOARD_OFFSET: usize = FEED_PROFILE_OFFSET + FEED_PROFILE_BYTES;
+const SUPPLY_OFFSET: usize = HOARD_OFFSET + 8;
 
 /// Private-field V1 composition of root, policy, liabilities, and receipt.
 ///
@@ -459,7 +459,7 @@ fn put(output: &mut [u8], offset: usize, input: &[u8]) {
 
 #[cfg(test)]
 mod tests {
-    use dclutch_core_contract::{CapabilitySet, ContentId, Error as RootError, MarketIdentity};
+    use dclutch_core_contract::{ContentId, Error as RootError, MarketIdentity};
     use dclutch_kernel::{Error as LedgerError, MAX_OUTCOMES};
 
     use crate::{
@@ -483,8 +483,8 @@ mod tests {
             content(2)?,
             content(3)?,
             content(4)?,
+            content(5)?,
             7,
-            CapabilitySet::NONE,
         );
         let mut root = MarketRoot::founding(identity);
         match phase {
@@ -626,12 +626,31 @@ mod tests {
         assert_eq!(binary_bytes.get(10), Some(&2));
         assert_eq!(binary_bytes.get(11..16), Some(&[0; 5][..]));
         assert_eq!(binary_bytes.get(16..24), Some(&b"DCLTROOT"[..]));
-        assert_eq!(binary_bytes.get(184..192), Some(&POLICY_MAGIC[..]));
-        assert_eq!(binary_bytes.get(568..576), Some(&FEED_PROFILE_MAGIC[..]));
-        assert_eq!(binary_bytes.get(674..682), Some(&9u64.to_le_bytes()[..]));
-        assert_eq!(binary_bytes.get(682..690), Some(&9u64.to_le_bytes()[..]));
-        assert_eq!(binary_bytes.get(690..698), Some(&8u64.to_le_bytes()[..]));
-        assert_eq!(binary_bytes.get(698..706), Some(&b"DCLTRCP1"[..]));
+        assert_eq!(
+            binary_bytes.get(POLICY_OFFSET..POLICY_OFFSET + 8),
+            Some(&POLICY_MAGIC[..])
+        );
+        assert_eq!(
+            binary_bytes.get(FEED_PROFILE_OFFSET..FEED_PROFILE_OFFSET + 8),
+            Some(&FEED_PROFILE_MAGIC[..])
+        );
+        assert_eq!(
+            binary_bytes.get(HOARD_OFFSET..HOARD_OFFSET + 8),
+            Some(&9u64.to_le_bytes()[..])
+        );
+        assert_eq!(
+            binary_bytes.get(SUPPLY_OFFSET..SUPPLY_OFFSET + 8),
+            Some(&9u64.to_le_bytes()[..])
+        );
+        assert_eq!(
+            binary_bytes.get(SUPPLY_OFFSET + 8..SUPPLY_OFFSET + 16),
+            Some(&8u64.to_le_bytes()[..])
+        );
+        let binary_receipt_offset = receipt_offset::<2>()?;
+        assert_eq!(
+            binary_bytes.get(binary_receipt_offset..binary_receipt_offset + 8),
+            Some(&b"DCLTRCP1"[..])
+        );
         round_trip(binary)?;
 
         let maximum = MarketStateV1::new(
@@ -644,9 +663,20 @@ mod tests {
         )?;
         let mut maximum_bytes = [0u8; MAX_MARKET_BYTES];
         maximum.encode(&mut maximum_bytes)?;
-        assert_eq!(maximum_bytes.get(682..690), Some(&16u64.to_le_bytes()[..]));
-        assert_eq!(maximum_bytes.get(802..810), Some(&16u64.to_le_bytes()[..]));
-        assert_eq!(maximum_bytes.get(810..818), Some(&b"DCLTRCP1"[..]));
+        assert_eq!(
+            maximum_bytes.get(SUPPLY_OFFSET..SUPPLY_OFFSET + 8),
+            Some(&16u64.to_le_bytes()[..])
+        );
+        let final_supply_offset = supply_entry_offset(MAX_OUTCOMES - 1)?;
+        assert_eq!(
+            maximum_bytes.get(final_supply_offset..final_supply_offset + 8),
+            Some(&16u64.to_le_bytes()[..])
+        );
+        let maximum_receipt_offset = receipt_offset::<MAX_OUTCOMES>()?;
+        assert_eq!(
+            maximum_bytes.get(maximum_receipt_offset..maximum_receipt_offset + 8),
+            Some(&b"DCLTRCP1"[..])
+        );
         round_trip(maximum)?;
         Ok(())
     }

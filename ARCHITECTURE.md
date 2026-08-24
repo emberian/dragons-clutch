@@ -19,8 +19,11 @@ collateral profile; it is not protocol ontology.
 
 Every implementation layer joins through four immutable identities:
 
-1. `MarketIdentity`: Realm, terms, claim basis, resolution policy, generation.
-2. `CapabilitySet`: the exact optional facilities admitted for this Market.
+1. `MarketIdentity`: Realm, terms, claim basis, resolution policy, capability
+   manifest, and generation.
+2. `CapabilityManifest`: the exact selected facility releases, immutable
+   configurations, dependencies, activation deadlines, and prepaid deferred
+   creation obligations.
 3. `ExecutionReceipt`: an exact, replay-protected liability/cash transition
    produced under one admitted venue policy.
 4. `ResolutionReceipt`: an exact terminal state produced under the Market's
@@ -60,10 +63,13 @@ Optional children include:
 - source-specific resolution adapters; and
 - deeper recovery profiles.
 
-The capability graph is immutable, canonical, acyclic, and part of Market
-identity. Each selected child has a semantic owner, dependencies, exact present
-principal, and activation deadline. A child may be physically lazy only when
-its creation principal is already segregated. Disabled children cannot appear.
+The capability graph is immutable, canonical, acyclic, content-addressed, and
+part of Market identity. A compact bitset may be a canonically validated cache
+but is never a second authority or a ceiling on future capability kinds. Each
+selected child has a semantic owner, release,
+configuration, dependencies, exact present principal, and activation deadline.
+A child may be physically lazy only when its creation principal is already
+segregated. Disabled children cannot appear.
 
 ## Claims and collateral
 

@@ -1,6 +1,6 @@
 use std::{env, path::PathBuf};
 
-use dclutch_core_contract::{CapabilitySet, ContentId, MarketIdentity, MarketRoot, Phase};
+use dclutch_core_contract::{ContentId, MarketIdentity, MarketRoot, Phase};
 use dclutch_kernel::resolution::categorical_pyth_v1::{
     CategoricalPythV1PolicyInput, MAX_PRICE_CELLS,
 };
@@ -88,8 +88,8 @@ fn fixture(target_time: i64, window: u32) -> Fixture {
         ContentId::new([12; 32]).expect("terms"),
         ContentId::new([13; 32]).expect("basis"),
         ContentId::new(hash(&policy.to_bytes()).to_bytes()).expect("policy id"),
+        ContentId::new([14; 32]).expect("capability manifest"),
         GENERATION,
-        CapabilitySet::NONE,
     );
     let (market, _) = Pubkey::find_program_address(
         &[

@@ -4,8 +4,8 @@
 
 //! Hostile-decodable persistent contract for the compact dClutch Market root.
 //!
-//! This crate owns only immutable Market identity, optional capability
-//! admission, root lifecycle, direct-child accounting, and their canonical
+//! This crate owns only immutable Market identity and its capability-manifest
+//! commitment, root lifecycle, direct-child accounting, and their canonical
 //! byte encodings. It contains no Solana types, account derivation, hashing
 //! policy, venue semantics, source adapter, mint, collateral, or funding
 //! layout.
@@ -16,10 +16,10 @@ use core::convert::TryInto;
 pub const CONTENT_ID_BYTES: usize = 32;
 
 /// Canonical byte width of [`MarketIdentity`].
-pub const MARKET_IDENTITY_BYTES: usize = 137;
+pub const MARKET_IDENTITY_BYTES: usize = 168;
 
 /// Canonical byte width of [`MarketRoot`].
-pub const MARKET_ROOT_BYTES: usize = 168;
+pub const MARKET_ROOT_BYTES: usize = 200;
 
 /// Byte width of the versioned Market root header.
 pub const MARKET_ROOT_HEADER_BYTES: usize = 16;
@@ -34,20 +34,18 @@ const REALM_OFFSET: usize = 0;
 const TERMS_OFFSET: usize = 32;
 const CLAIM_BASIS_OFFSET: usize = 64;
 const RESOLUTION_POLICY_OFFSET: usize = 96;
-const GENERATION_OFFSET: usize = 128;
-const CAPABILITIES_OFFSET: usize = 136;
+const CAPABILITY_MANIFEST_OFFSET: usize = 128;
+const GENERATION_OFFSET: usize = 160;
 
 const ROOT_MAGIC_OFFSET: usize = 0;
 const ROOT_SCHEMA_OFFSET: usize = 8;
 const ROOT_HEADER_RESERVED_OFFSET: usize = 10;
 const ROOT_HEADER_RESERVED_BYTES: usize = 6;
 const ROOT_IDENTITY_OFFSET: usize = MARKET_ROOT_HEADER_BYTES;
-const ROOT_PHASE_OFFSET: usize = 153;
-const ROOT_BODY_RESERVED_OFFSET: usize = 154;
-const ROOT_BODY_RESERVED_BYTES: usize = 6;
-const ROOT_CHILD_COUNT_OFFSET: usize = 160;
-
-const KNOWN_CAPABILITY_BITS: u8 = 0b0011_1111;
+const ROOT_PHASE_OFFSET: usize = 184;
+const ROOT_BODY_RESERVED_OFFSET: usize = 185;
+const ROOT_BODY_RESERVED_BYTES: usize = 7;
+const ROOT_CHILD_COUNT_OFFSET: usize = 192;
 
 /// Refusal returned while decoding or changing the persistent root contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,8 +54,6 @@ pub enum Error {
     InvalidLength,
     /// A content identity was the reserved all-zero value.
     ZeroContentId,
-    /// A capability bit outside the defined optional set was present.
-    UnknownCapabilityBits,
     /// Root magic did not identify this account contract.
     InvalidMagic,
     /// The root schema version is not implemented by this crate.
@@ -121,86 +117,23 @@ impl ContentId {
     }
 }
 
-/// One optional facility admitted immutably by a Market.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Capability {
-    /// Direct signed-intent execution.
-    Direct,
-    /// General frequent-batch portfolio execution.
-    General,
-    /// Covered Dealer liquidity.
-    Dealer,
-    /// Bearer/native claim materialization.
-    BearerMaterialization,
-    /// Fractional wrappers.
-    Fractional,
-    /// Structured wrappers.
-    Structured,
-}
-
-impl Capability {
-    const fn bit(self) -> u8 {
-        match self {
-            Self::Direct => 1 << 0,
-            Self::General => 1 << 1,
-            Self::Dealer => 1 << 2,
-            Self::BearerMaterialization => 1 << 3,
-            Self::Fractional => 1 << 4,
-            Self::Structured => 1 << 5,
-        }
-    }
-}
-
-/// Canonical immutable admission set for optional Market facilities.
-///
-/// Resolution is universal Market semantics named by
-/// [`MarketIdentity::resolution_policy_id`], so it is intentionally not an
-/// optional capability bit.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(transparent)]
-pub struct CapabilitySet(u8);
-
-impl CapabilitySet {
-    /// No optional facilities admitted.
-    pub const NONE: Self = Self(0);
-
-    /// Decode the one-byte canonical bitset, refusing unknown bits 6 and 7.
-    pub const fn from_bits(bits: u8) -> Result<Self> {
-        if bits & !KNOWN_CAPABILITY_BITS != 0 {
-            return Err(Error::UnknownCapabilityBits);
-        }
-        Ok(Self(bits))
-    }
-
-    /// Return the canonical one-byte representation.
-    pub const fn bits(self) -> u8 {
-        self.0
-    }
-
-    /// Return whether one optional facility is admitted.
-    pub const fn contains(self, capability: Capability) -> bool {
-        self.0 & capability.bit() != 0
-    }
-
-    /// Return a new immutable set with one optional facility admitted.
-    pub const fn with(self, capability: Capability) -> Self {
-        Self(self.0 | capability.bit())
-    }
-}
-
 /// Immutable canonical identity preimage for one Market generation.
 ///
-/// The four content IDs are opaque at this layer. The generation and
-/// capability set are part of the identity itself; there is no separate
-/// caller-provided derived Market ID.
+/// The five content IDs are opaque at this layer. The capability-manifest ID
+/// commits the selected facility releases, immutable configuration,
+/// dependencies, activation deadlines, and prepaid lazy-creation obligations.
+/// It is the sole capability authority: any compact capability summary is a
+/// derived cache which a composing layer must validate from the authenticated
+/// manifest. The generation is part of the identity itself; there is no
+/// separate caller-provided derived Market ID.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MarketIdentity {
     realm_id: ContentId,
     terms_id: ContentId,
     claim_basis_id: ContentId,
     resolution_policy_id: ContentId,
+    capability_manifest_id: ContentId,
     generation: u64,
-    capabilities: CapabilitySet,
 }
 
 impl MarketIdentity {
@@ -210,16 +143,16 @@ impl MarketIdentity {
         terms_id: ContentId,
         claim_basis_id: ContentId,
         resolution_policy_id: ContentId,
+        capability_manifest_id: ContentId,
         generation: u64,
-        capabilities: CapabilitySet,
     ) -> Self {
         Self {
             realm_id,
             terms_id,
             claim_basis_id,
             resolution_policy_id,
+            capability_manifest_id,
             generation,
-            capabilities,
         }
     }
 
@@ -233,8 +166,8 @@ impl MarketIdentity {
             terms_id: read_content_id(bytes, TERMS_OFFSET)?,
             claim_basis_id: read_content_id(bytes, CLAIM_BASIS_OFFSET)?,
             resolution_policy_id: read_content_id(bytes, RESOLUTION_POLICY_OFFSET)?,
+            capability_manifest_id: read_content_id(bytes, CAPABILITY_MANIFEST_OFFSET)?,
             generation: u64::from_le_bytes(read_array::<8>(bytes, GENERATION_OFFSET)?),
-            capabilities: CapabilitySet::from_bits(read_byte(bytes, CAPABILITIES_OFFSET)?)?,
         })
     }
 
@@ -255,13 +188,13 @@ impl MarketIdentity {
         );
         copy_at(
             &mut output,
-            GENERATION_OFFSET,
-            &self.generation.to_le_bytes(),
+            CAPABILITY_MANIFEST_OFFSET,
+            self.capability_manifest_id.as_bytes(),
         );
         copy_at(
             &mut output,
-            CAPABILITIES_OFFSET,
-            &[self.capabilities.bits()],
+            GENERATION_OFFSET,
+            &self.generation.to_le_bytes(),
         );
         output
     }
@@ -286,14 +219,14 @@ impl MarketIdentity {
         self.resolution_policy_id
     }
 
+    /// Return the immutable capability-manifest content identity.
+    pub const fn capability_manifest_id(self) -> ContentId {
+        self.capability_manifest_id
+    }
+
     /// Return the immutable Market generation.
     pub const fn generation(self) -> u64 {
         self.generation
-    }
-
-    /// Return the immutable optional capability admission set.
-    pub const fn capabilities(self) -> CapabilitySet {
-        self.capabilities
     }
 }
 
@@ -563,24 +496,20 @@ mod tests {
     }
 
     fn identity(generation: u64) -> Result<MarketIdentity> {
-        let capabilities = CapabilitySet::NONE
-            .with(Capability::Direct)
-            .with(Capability::BearerMaterialization)
-            .with(Capability::Structured);
         Ok(MarketIdentity::new(
             content(1)?,
             content(2)?,
             content(3)?,
             content(4)?,
+            content(5)?,
             generation,
-            capabilities,
         ))
     }
 
     #[test]
     fn exact_width_round_trip_preserves_identity_and_root() -> Result<()> {
-        assert_eq!(MARKET_IDENTITY_BYTES, 137);
-        assert_eq!(MARKET_ROOT_BYTES, 168);
+        assert_eq!(MARKET_IDENTITY_BYTES, 168);
+        assert_eq!(MARKET_ROOT_BYTES, 200);
         let identity = identity(0x0102_0304_0506_0708)?;
         assert_eq!(MarketIdentity::decode(&identity.to_bytes()), Ok(identity));
 
@@ -610,6 +539,7 @@ mod tests {
             TERMS_OFFSET,
             CLAIM_BASIS_OFFSET,
             RESOLUTION_POLICY_OFFSET,
+            CAPABILITY_MANIFEST_OFFSET,
         ] {
             let mut hostile = canonical;
             for byte in hostile.iter_mut().skip(offset).take(CONTENT_ID_BYTES) {
@@ -617,48 +547,6 @@ mod tests {
             }
             assert_eq!(MarketIdentity::decode(&hostile), Err(Error::ZeroContentId));
         }
-        Ok(())
-    }
-
-    #[test]
-    fn capability_bits_are_distinct_and_unknown_bits_refuse() -> Result<()> {
-        let capabilities = [
-            Capability::Direct,
-            Capability::General,
-            Capability::Dealer,
-            Capability::BearerMaterialization,
-            Capability::Fractional,
-            Capability::Structured,
-        ];
-        let mut set = CapabilitySet::NONE;
-        for capability in capabilities {
-            assert!(!set.contains(capability));
-            set = set.with(capability);
-            assert!(set.contains(capability));
-        }
-        assert_eq!(set.bits(), KNOWN_CAPABILITY_BITS);
-        assert_eq!(
-            CapabilitySet::from_bits(1 << 6),
-            Err(Error::UnknownCapabilityBits)
-        );
-        assert_eq!(
-            CapabilitySet::from_bits(1 << 7),
-            Err(Error::UnknownCapabilityBits)
-        );
-        assert_eq!(
-            CapabilitySet::from_bits(u8::MAX),
-            Err(Error::UnknownCapabilityBits)
-        );
-
-        let mut hostile = identity(1)?.to_bytes();
-        let capability_byte = hostile
-            .get_mut(CAPABILITIES_OFFSET)
-            .ok_or(Error::InvalidLength)?;
-        *capability_byte |= 1 << 6;
-        assert_eq!(
-            MarketIdentity::decode(&hostile),
-            Err(Error::UnknownCapabilityBits)
-        );
         Ok(())
     }
 

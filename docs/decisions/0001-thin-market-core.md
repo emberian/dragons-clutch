@@ -20,6 +20,13 @@ A compact Market root persists through terminal state as replay authority.
 Physical lazy creation is allowed only for an already selected, canonically
 addressed, fully prepaid child.
 
+Market identity commits the content ID of the canonical capability manifest as
+its sole capability authority. A compact bitset may be retained only as a
+derived cache validated from that manifest; it cannot become a second truth or
+a six-family ceiling. The manifest owns selected releases, immutable
+configuration, dependencies, activation deadlines, and prepaid
+deferred-creation obligations.
+
 Public APIs are organized by present semantic transitions. Pre-release action
 numbers and account layouts have no compatibility privilege.
 

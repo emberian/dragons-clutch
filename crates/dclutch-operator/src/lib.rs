@@ -394,7 +394,7 @@ fn select_release(release_id: [u8; 32], observed_time: i64) -> Result<PythReleas
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dclutch_core_contract::{CapabilitySet, ContentId, MarketIdentity, MarketRoot};
+    use dclutch_core_contract::{ContentId, MarketIdentity, MarketRoot};
     use dclutch_kernel::resolution::categorical_pyth_v1::{
         CategoricalPythV1PolicyInput, MAX_PRICE_CELLS,
     };
@@ -429,8 +429,8 @@ mod tests {
             ContentId::new([5; 32]).expect("terms"),
             ContentId::new([6; 32]).expect("basis"),
             ContentId::new(hash(&policy.to_bytes()).to_bytes()).expect("policy identity"),
+            ContentId::new([7; 32]).expect("capability manifest"),
             7,
-            CapabilitySet::NONE,
         );
         let mut root = MarketRoot::founding(identity);
         root.transition_phase(7, Phase::Open).expect("open");
