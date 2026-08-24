@@ -66,6 +66,7 @@ pub(crate) mod failure_market_action10_current;
 pub(crate) mod failure_market_action11_current;
 /// Sole current action-12 RootV2/Product/Source/Failure owner.
 pub(crate) mod failure_market_action12_current;
+pub(crate) mod failure_market_action13_current;
 /// Concrete checked owners for current Market Failure actions 10-13.
 pub(crate) mod failure_market_actions_v2;
 /// Capability-disabled atomic paid Failure interval advance.

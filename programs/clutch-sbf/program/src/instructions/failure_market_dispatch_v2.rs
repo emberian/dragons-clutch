@@ -11,7 +11,7 @@
 use crate::accounts::{require, Outcome};
 use crate::capabilities;
 use crate::error::ClutchError;
-use crate::instructions::failure_market_actions_v2::process_archive_failure_market_session_v2;
+use crate::instructions::failure_market_action13_current::process_archive_failure_market_session_v3;
 use crate::instructions::failure_market_action10_current::process_begin_failure_market_session_v2;
 use crate::instructions::failure_market_action11_current::process_advance_failure_market_session_v2;
 use crate::instructions::failure_market_action12_current::process_resolve_failure_market_session_v2;
@@ -550,7 +550,7 @@ pub fn process(
             process_advance_failure_market_session_v2(program_id, accounts, sequence, payload)
         }
         RecoveryAction::CloseIntervalConsensusWork => {
-            process_archive_failure_market_session_v2(program_id, accounts, sequence, payload)
+            process_archive_failure_market_session_v3(program_id, accounts, sequence, payload)
         }
         RecoveryAction::ResolveIntervalConsensus => {
             process_resolve_failure_market_session_v2(program_id, accounts, sequence, payload)

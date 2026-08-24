@@ -33,7 +33,8 @@ use crate::instructions::product_market::{
     AuthenticatedWritableFailureSessionReleaseLinkV2, FailureSessionReleaseDispositionV2,
 };
 use crate::instructions::product_series_current::{
-    release_series_market_link_failure_v3, AuthenticatedMarketFoundationPreallocationV3,
+    authenticate_writable_failure_exhausted_link_v3, release_series_market_link_failure_v3,
+    AuthenticatedMarketFoundationPreallocationV3,
     AuthenticatedMarketLifecycleRootV2, AuthenticatedRegistryCapabilityV4,
     AuthenticatedSeriesFailureArchivePostwriteV3, AuthenticatedSeriesFailureSessionReleaseV3,
     AuthenticatedSeriesMarketLinkV2, AuthenticatedWritableFailureSessionReleaseLinkV3,
@@ -3089,6 +3090,93 @@ pub(crate) fn archive_failure_market_interval_session_v3<'a, 'link>(
         ClutchError::MismatchedState,
     )?;
     Ok((archive, release, runtime_postwrite))
+}
+
+/// Derive and persist one exact current RootV2/LinkV2 exhaustion.
+///
+/// The Product root and Recovery custody remain read-only. The same typed
+/// Product preauthorization is consumed by the append/reset owner and the
+/// LinkV2 release, while the shared Failure runtime is written last. Any
+/// later refusal therefore rolls the whole Solana instruction back.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn exhaust_and_archive_failure_market_interval_session_v3<'a, 'root, 'link>(
+    program_id: &Pubkey,
+    market_root_account: &AccountInfo<'a>,
+    series_link_account: &AccountInfo<'a>,
+    admission_root_account: &AccountInfo<'a>,
+    runtime_root_account: &AccountInfo<'a>,
+    cell_account: &AccountInfo<'a>,
+    history_account: &AccountInfo<'a>,
+    liveness_policy_account: &AccountInfo<'a>,
+    recovery_account: &AccountInfo<'a>,
+    root_before: AuthenticatedMarketLifecycleRootV2<'root>,
+    link_before: AuthenticatedSeriesMarketLinkV2<'link>,
+    admission: AuthenticatedFailureMarketRootV2,
+    runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
+    interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
+    root_reopen_output: &mut clutch_solana_layout::product_series::MarketLifecycleRootAccountV2,
+    link_preauthorization_output: &mut clutch_solana_layout::product_series::SeriesMarketLinkAccountV2,
+    link_rebound_output: &mut clutch_solana_layout::product_series::SeriesMarketLinkAccountV2,
+) -> Outcome<(
+    FailureMarketIntervalArchivePostwriteV3,
+    AuthenticatedSeriesFailureSessionReleaseV3,
+    AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
+)> {
+    let release_link = authenticate_writable_failure_exhausted_link_v3(
+        program_id,
+        market_root_account,
+        root_before,
+        series_link_account,
+        root_reopen_output,
+        link_preauthorization_output,
+    )?;
+    require(
+        release_link.disposition() == FailureSessionReleaseDispositionV3::Exhausted
+            && release_link.link_account() == *series_link_account.key
+            && release_link.root_account() == *market_root_account.key
+            && release_link.session_binding_id()
+                == link_before.state().failure_session_transcript_id(),
+        ClutchError::MismatchedState,
+    )?;
+    let exhaustion = plan_failure_market_interval_exhaustion_v2(
+        program_id,
+        liveness_policy_account,
+        recovery_account,
+        admission,
+        interval_before,
+    )?;
+    let exhaustion_receipt = exhaustion.receipt();
+    let interval_exhausted = write_failure_market_interval_exhaustion_plan_v2(
+        program_id,
+        cell_account,
+        history_account,
+        interval_before,
+        exhaustion,
+    )?;
+    let archive = plan_failure_market_exhausted_archive_v2(
+        admission,
+        interval_exhausted,
+        exhaustion_receipt,
+    )?;
+    archive_failure_market_interval_session_v3(
+        program_id,
+        admission_root_account,
+        runtime_root_account,
+        cell_account,
+        history_account,
+        series_link_account,
+        interval_exhausted,
+        link_before,
+        &release_link,
+        admission,
+        runtime_before,
+        archive.history_plan(),
+        archive.append(),
+        archive.cell_plan(),
+        archive.reset(),
+        FailureSessionReleaseDispositionV3::Exhausted,
+        link_rebound_output,
+    )
 }
 
 /// Atomically derive deterministic exhaustion, persist the terminal cell,
