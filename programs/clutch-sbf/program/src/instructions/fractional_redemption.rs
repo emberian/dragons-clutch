@@ -347,6 +347,7 @@ pub(crate) struct AcceptedDealerFacilityVectorTransitionV1 {
     facility_account: Identity32V1,
     facility_pre_semantic_id: Identity32V1,
     facility_post_semantic_id: Identity32V1,
+    facility_post_generation: u64,
     ledger_pre_semantic_id: Identity32V1,
     ledger_post_semantic_id: Identity32V1,
     hoard_pre_semantic_id: Identity32V1,
@@ -374,6 +375,10 @@ impl AcceptedDealerFacilityVectorTransitionV1 {
 
     pub(crate) const fn facility_post_semantic_id(&self) -> Identity32V1 {
         self.facility_post_semantic_id
+    }
+
+    pub(crate) const fn facility_post_generation(&self) -> u64 {
+        self.facility_post_generation
     }
 
     pub(crate) const fn ledger_pre_semantic_id(&self) -> Identity32V1 {
@@ -723,6 +728,7 @@ where
         facility_account: prestate.facility_position_account(),
         facility_pre_semantic_id: prestate.facility_position_pre_semantic_id(),
         facility_post_semantic_id: plan.facility_position_after_id(),
+        facility_post_generation: plan.facility_position_after().generation(),
         ledger_pre_semantic_id: plan.ledger_before_id(),
         ledger_post_semantic_id,
         hoard_pre_semantic_id,

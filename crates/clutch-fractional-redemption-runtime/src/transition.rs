@@ -1639,6 +1639,10 @@ pub fn prepare_dealer_facility_vector_transition_v1(
     )?;
     let old = prestate.facility_position.fields();
     let mut position_after_fields = old;
+    position_after_fields.generation = old
+        .generation
+        .checked_add(1)
+        .ok_or(Error::Arithmetic)?;
     position_after_fields.cash_atoms = old
         .cash_atoms
         .checked_add(payout_atoms)
