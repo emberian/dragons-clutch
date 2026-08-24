@@ -336,7 +336,7 @@ pub(crate) trait AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1 {
 }
 
 /// Private non-Copy terminal capability consumed by Product retirement.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedSourceFundingCustodyLifecycleTerminalV1 {
     id: ContentId,
     facts: SourceFundingCustodyLifecycleTerminalFactsV1,
@@ -688,7 +688,7 @@ fn authenticate_product_release_evidence_v3(
 
 /// Product-owned terminal identities and immutable destinations. No amount is
 /// supplied: all lamport accounting comes from the hostile-decoded ledger.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct SourceFundingCustodyRetirementAccountingV2 {
     pub(crate) funding_terms_id: ContentId,
     pub(crate) product_retirement_authority_id: ContentId,
@@ -760,19 +760,19 @@ pub(crate) struct AuthenticatedSourceFundingCustodyRetirementV2 {
 }
 
 impl AuthenticatedSourceFundingCustodyRetirementV2 {
-    pub(crate) const fn id(self) -> ContentId {
+    pub(crate) const fn id(&self) -> ContentId {
         self.id
     }
 
-    pub(crate) const fn product_retirement_authority_id(self) -> ContentId {
+    pub(crate) const fn product_retirement_authority_id(&self) -> ContentId {
         self.product_retirement_authority_id
     }
 
-    pub(crate) const fn facts(self) -> SourceFundingCustodyRetirementFactsV2 {
+    pub(crate) const fn facts(&self) -> SourceFundingCustodyRetirementFactsV2 {
         self.facts
     }
 
-    pub(crate) const fn custody_account_data_after_id(self) -> ContentId {
+    pub(crate) const fn custody_account_data_after_id(&self) -> ContentId {
         self.custody_account_data_after_id
     }
 }
