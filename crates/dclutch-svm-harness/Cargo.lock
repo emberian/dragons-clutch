@@ -1524,6 +1524,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
+name = "dclutch-collateral-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-realm-contract",
+]
+
+[[package]]
 name = "dclutch-core-contract"
 version = "0.1.0"
 
@@ -1540,12 +1548,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-realm-contract"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-svm-harness"
 version = "0.1.0"
 dependencies = [
+ "dclutch-collateral-contract",
  "dclutch-core-contract",
  "dclutch-kernel",
  "dclutch-pyth-contract",
+ "dclutch-realm-contract",
+ "dclutch-token-svm",
  "solana-account 4.3.2",
  "solana-program",
  "solana-program-test",
@@ -1554,6 +1569,10 @@ dependencies = [
  "solana-transaction 4.1.6",
  "tokio",
 ]
+
+[[package]]
+name = "dclutch-token-svm"
+version = "0.1.0"
 
 [[package]]
 name = "defmt"

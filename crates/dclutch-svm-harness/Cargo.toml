@@ -9,9 +9,12 @@ publish = false
 [workspace]
 
 [dev-dependencies]
+dclutch-collateral-contract = { path = "../dclutch-collateral-contract" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-kernel = { path = "../dclutch-kernel" }
 dclutch-pyth-contract = { path = "../dclutch-pyth-contract" }
+dclutch-realm-contract = { path = "../dclutch-realm-contract" }
+dclutch-token-svm = { path = "../dclutch-token-svm" }
 solana-program = "=3.0.0"
 solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
 solana-account = "=4.3.2"
