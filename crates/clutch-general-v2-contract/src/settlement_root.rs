@@ -1878,7 +1878,7 @@ const _: () = assert!(IDENTITY_COUNT == 19);
 const _: () = assert!(SETTLEMENT_ROOT_ACCOUNT_BYTES == 980);
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn id(byte: u8) -> Id32 {
@@ -1912,7 +1912,7 @@ mod tests {
         }
     }
 
-    fn portfolio_settling_root() -> SettlementRootV1AccountV1 {
+    pub(crate) fn portfolio_settling_root() -> SettlementRootV1AccountV1 {
         let candidate = id(9);
         let ordinal = 1u64;
         let mut rank_key = [0u8; SCORE_V2_Q_RANK_CAPACITY];
@@ -2001,7 +2001,26 @@ mod tests {
         }
     }
 
-    fn materializing_root() -> SettlementRootV1AccountV1 {
+    pub(crate) fn pre_feed_terminal_frontier_root() -> SettlementRootV1AccountV1 {
+        let mut root = portfolio_settling_root();
+        root.counts.live_receipts = 0;
+        root.counts.live_owner_rows = 0;
+        root.counts.live_reservations = 0;
+        root.cash_pot_state = SettlementRootChildStateV1::Retired;
+        root.phase = SettlementRootPhaseV1::Retiring;
+        root.validate().unwrap();
+        root
+    }
+
+    pub(crate) fn terminal_root() -> SettlementRootV1AccountV1 {
+        let mut root = pre_feed_terminal_frontier_root();
+        root.retained_feed_state = SettlementRootChildStateV1::Retired;
+        root.phase = SettlementRootPhaseV1::Terminal;
+        root.validate().unwrap();
+        root
+    }
+
+    pub(crate) fn materializing_root() -> SettlementRootV1AccountV1 {
         let mut root = portfolio_settling_root();
         root.counts.admitted_receipts = 0;
         root.counts.live_receipts = 0;
