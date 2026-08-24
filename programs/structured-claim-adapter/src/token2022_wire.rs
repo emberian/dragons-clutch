@@ -1,9 +1,18 @@
 //! Concrete Token-2022 parser policies and exact instruction encodings.
 
 use crate::runtime_contract::{WrapperMintProjectionV1, WrapperTokenProjectionV1};
-use crate::{
-    is_zero, BoundDescriptorV1, CpiAccountMetaV1, Error, Key, Result, Token2022DecoderV1,
-};
+use crate::{is_zero, BoundDescriptorV1, Error, Key, Result, Token2022DecoderV1};
+
+/// One exact Token-2022 CPI account meta without importing the Solana SDK.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CpiAccountMetaV1 {
+    /// Runtime account address.
+    pub address: Key,
+    /// Whether the callee observes a signer.
+    pub signer: bool,
+    /// Whether the callee may mutate the account.
+    pub writable: bool,
+}
 
 /// Exact Token-2022 CPI operation emitted by the current wrapper boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

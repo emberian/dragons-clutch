@@ -4,9 +4,10 @@
 //! Separately deployed executable wrapper for StructuredClaim descriptor v2.
 //!
 //! The non-production build seam currently admits no runtime action.
-//! Canonical and full wrap execute base custody before Token-2022 mint;
-//! canonical and full unwind burn before base custody. SVM rollback makes each
-//! sequence atomic, and this program re-reads exact integer deltas before success.
+//! Full-vector wrap executes base custody before Token-2022 mint; full-vector
+//! unwind and terminal redemption burn before base custody. SVM rollback makes
+//! each sequence atomic, and this program re-reads exact integer deltas before
+//! success. Historical canonical actions 2/4 are decode-only refusals.
 
 #[cfg(not(feature = "non-production-live-current"))]
 compile_error!("select the explicit non-production-live-current wrapper profile");
@@ -22,10 +23,24 @@ use solana_pubkey::Pubkey;
 
 /// Exact deployable capability-profile label.
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/structured-claim-wrapper/non-production-authority-join-disabled/v1";
+    clutch_structured_claim_adapter::STRUCTURED_WRAPPER_CAPABILITY_MANIFEST_LABEL_V1;
 /// SHA-256 of [`PROFILE_LABEL`], frozen into the wrapper artifact identity.
 pub const PROFILE_ID: [u8; 32] =
-    clutch_structured_claim_adapter::STRUCTURED_WRAPPER_CAPABILITY_MANIFEST_ID_V1;
+    clutch_structured_claim_adapter::STRUCTURED_CURRENT_RELEASE_CONTRACT_V1
+        .wrapper_capability_manifest_id;
+/// Actions with one exact current source/account contract.
+pub const IMPLEMENTED_ACTION_MASK: u16 =
+    clutch_structured_claim_adapter::STRUCTURED_CURRENT_RELEASE_CONTRACT_V1
+        .implemented_action_mask;
+/// Actions admitted by the checked wrapper/base/Token-2022 releases.
+pub const ENABLED_ACTION_MASK: u16 =
+    clutch_structured_claim_adapter::STRUCTURED_CURRENT_RELEASE_CONTRACT_V1.admitted_action_mask;
+/// Exact source/account/token-effect contract compiled by this wrapper.
+pub const ACCOUNT_CONTRACT_ID: [u8; 32] =
+    clutch_structured_claim_adapter::STRUCTURED_CURRENT_RELEASE_CONTRACT_V1.account_contract_id;
+
+const _: () = assert!(ENABLED_ACTION_MASK == 0);
+const _: () = assert!(ENABLED_ACTION_MASK & !IMPLEMENTED_ACTION_MASK == 0);
 
 /// Program entrypoint implementation, also callable by host harnesses.
 pub fn process_instruction(

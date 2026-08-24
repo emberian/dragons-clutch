@@ -5,6 +5,31 @@
 
 use crate::{Amount, Error, Result, StructuredClaimDescriptorV2};
 
+/// Authenticated semantic projection of one current base Position and Replay.
+///
+/// This is not persisted and carries no transition authority. The SBF adapter
+/// reconstructs it from the authoritative Position V3 and purpose Replay V3.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct PositionProjectionV1 {
+    /// Canonical Market account.
+    pub market: [u8; 32],
+    /// Semantic Position owner.
+    pub owner: [u8; 32],
+    /// Current Position generation.
+    pub generation: u64,
+    /// Current purpose-Replay mutation sequence.
+    pub replay_sequence: u64,
+    /// Total free plus reserved Realm-collateral cash.
+    pub cash_atoms: Amount,
+    /// Encumbered cash excluded from Structured transitions.
+    pub reserved_cash_atoms: Amount,
+    /// Free native Eggs, canonically padded to the Market width.
+    pub internal: [Amount; crate::MAX_OUTCOMES],
+    /// Closed Positions cannot participate.
+    pub closed: bool,
+}
+
 /// Canonical addresses derived by the SBF adapter from wrapper product identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]

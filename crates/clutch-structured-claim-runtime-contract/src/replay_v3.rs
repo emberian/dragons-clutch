@@ -34,7 +34,7 @@ const _: () = assert!(STRUCTURED_CLAIM_TERMINAL_REPLAY_DELTA_BYTES_V1 == 1 + 8 +
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum StructuredClaimReplayExtensionStateV1 {
-    /// No structured-custody transition has yet been accepted.
+    /// No current Structured transition has yet been accepted.
     Founding = 0,
     /// At least one exact transition has advanced the common Replay envelope.
     Advanced = 1,
@@ -64,7 +64,7 @@ impl StructuredClaimReplayExtensionStateV1 {
 /// Canonical fixed-width extension for one structured-claim vault Replay V3.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StructuredClaimReplayExtensionV1 {
-    /// Immutable canonical `0x88/1` descriptor account.
+    /// Immutable canonical `0x88/2` descriptor account.
     pub descriptor_account: [u8; 32],
     /// Immutable deployment-bound wrapper-product identity.
     pub wrapper_product_id: [u8; 32],
@@ -72,7 +72,7 @@ pub struct StructuredClaimReplayExtensionV1 {
     pub vault_authority: [u8; 32],
     /// Semantic identity of the Position V3 body paired with this Replay state.
     pub current_position_semantic_id: [u8; 32],
-    /// Last complete authenticated custody-call digest, or zero at founding.
+    /// Last complete current transition receipt, or zero at founding.
     pub last_transition_id: [u8; 32],
     /// Last exact action/delta digest, or zero at founding.
     pub last_delta_id: [u8; 32],
@@ -207,7 +207,7 @@ impl StructuredClaimReplayExtensionV1 {
         Ok(value)
     }
 
-    /// Advance the purpose extension after one completely staged custody call.
+    /// Advance the purpose extension after one completely staged transition.
     pub fn advanced(self, transition: StructuredClaimReplayTransitionV1) -> Result<Self> {
         self.validate()?;
         transition.validate()?;
@@ -266,9 +266,9 @@ pub struct StructuredClaimReplayTransitionV1 {
     pub wrapper_product_id: [u8; 32],
     /// Vault authority retained by the extension.
     pub vault_authority: [u8; 32],
-    /// Exact local wrap or unwind action.
+    /// Exact current full-vector or terminal action.
     pub action: StructuredClaimActionV1,
-    /// Complete authenticated custody-call digest.
+    /// Complete authenticated current transition receipt.
     pub transition_id: [u8; 32],
     /// Digest of the exact action, ordinals, accounts, and Position prestates/poststates.
     pub delta_id: [u8; 32],
@@ -329,13 +329,13 @@ impl StructuredClaimReplayTransitionV1 {
 /// Exact action/delta body shared by both purpose-owned Replay advances.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StructuredClaimReplayDeltaV1 {
-    /// Exact local wrap or unwind action.
+    /// Exact current full-vector or terminal action.
     pub action: StructuredClaimActionV1,
     /// Source Replay V3 ordinal consumed by this mutation.
     pub source_sequence: u64,
     /// Destination Replay V3 ordinal consumed by this mutation.
     pub destination_sequence: u64,
-    /// Complete authenticated custody-call digest.
+    /// Complete authenticated current transition receipt.
     pub transition_id: [u8; 32],
     /// Exact source Position V3 account.
     pub source_position_account: [u8; 32],

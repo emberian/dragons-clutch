@@ -81,6 +81,9 @@ current Structured custody owners, including full-vector wrap/unwind, donated
 surplus compaction, terminal redemption, and descriptor retirement. It does
 not admit a Structured tuple: the central and wrapper action masks are both
 exactly zero, so every Structured request refuses before account loading.
+The wrapper and base consume the same exact account-count contract for current
+actions 1/3/5/6/7/8; the separately authenticated release contract admits none
+of those implemented sources.
 
 The staged handlers hostile-decode the current Realm collateral chain, Product
 lineage, Hoard V2, ClaimLedger V3, Position V3 and Replay V3 owners, descriptor

@@ -6,9 +6,9 @@ keeps the historical 384-byte descriptor v1 decode-only, freezes the sole
 future 449-byte descriptor v2, and owns the exact 656-byte Series-scoped
 Structured root plus fixed-depth wrapper-recipe membership. The descriptor
 reconstructs native-claim and deployment/root/recipe-bound product identity
-from authenticated Product, basis, and deployment facts. Custody stages the
-required atomic Position cash/native-Egg transfer without touching global
-supply or Hoard collateral.
+from authenticated Product, basis, and deployment facts. Current lifecycle
+plans stage exact HoardV2, ClaimLedgerV3, PositionV3, and purpose-Replay V3
+successors; they do not manufacture a parallel Market or transfer authority.
 
 The first inline recipe-set profile carries at most sixteen ordered leaves so
 its fixed proof fits the existing instruction packet. That is a wire-profile
@@ -42,7 +42,9 @@ mint or redirect its locked rent.
 
 The family-local wire allocates eight strict actions: descriptor creation,
 canonical/full wrap, canonical/full unwind, beneficiary-free donation
-compaction, exact terminal redemption, and retirement. Every quantity route
+compaction, exact terminal redemption, and retirement. Canonical actions 2/4
+are historical decode-only refusals; current source/account contracts exist
+only for actions 1/3/5/6/7/8. Every quantity payload
 binds the wrapper product, user/vault generations, and both Replay sequences;
 trailing, truncated, zero-quantity, and unknown-action payloads have no
 interpretation.

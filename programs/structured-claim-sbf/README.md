@@ -24,9 +24,14 @@ that private value-route receipt into every transition receipt before mutation.
 The withdrawn canonical action 2/4 execution route is not dispatched, and the
 wrapper explicitly refuses those historical wire variants.
 
+The wrapper and base import one exact source/account contract from the adapter:
+action 1 uses 34 accounts, actions 3/5 use 32, action 6 uses 32, action 7 uses
+33, and action 8 uses 31. That contract's implemented-source mask is distinct
+from its checked-release admission mask, which remains exactly zero.
+
 Full-vector wrap/unwind, beneficiary-free surplus compaction, and exact
 terminal redemption are implemented behind the zero mask. Compaction uses a
-exact 32-account compaction frame, performs an exact Hoard-to-neutral Token-2022 CPI
+32-account compaction frame, performs an exact Hoard-to-neutral Token-2022 CPI
 only when donated cash is nonzero, and reconciles the unchanged wrapper mint,
 exact Hoard/neutral raw-token deltas, and exact
 PositionV3/ReplayV3/HoardV2/ClaimLedgerV3 successors. The five appended roles
