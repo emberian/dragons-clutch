@@ -302,7 +302,12 @@ pub(crate) struct AuthenticatedProductMarketFounderFoundationPreauthorizationV1 
     compiler_bundle_id: ContentId,
     registry_release_id: ContentId,
     capability_profile_id: ContentId,
+    attachment_plan_id: ContentId,
+    product_template_id: ContentId,
     native_claim_basis_id: ContentId,
+    recovery_policy_id: ContentId,
+    price_measure_policy_id: ContentId,
+    market_genesis_profile_id: ContentId,
     liveness_realm_id: ContentId,
     foundation_schedule_id: MarketFoundationScheduleV2Id,
     foundation_account_graph_id: MarketFoundationAccountGraphV2Id,
@@ -334,7 +339,16 @@ impl AuthenticatedProductMarketFounderFoundationPreauthorizationV1 {
     pub(crate) const fn compiler_bundle_id(&self) -> ContentId { self.compiler_bundle_id }
     pub(crate) const fn registry_release_id(&self) -> ContentId { self.registry_release_id }
     pub(crate) const fn capability_profile_id(&self) -> ContentId { self.capability_profile_id }
+    pub(crate) const fn attachment_plan_id(&self) -> ContentId { self.attachment_plan_id }
+    pub(crate) const fn product_template_id(&self) -> ContentId { self.product_template_id }
     pub(crate) const fn native_claim_basis_id(&self) -> ContentId { self.native_claim_basis_id }
+    pub(crate) const fn recovery_policy_id(&self) -> ContentId { self.recovery_policy_id }
+    pub(crate) const fn price_measure_policy_id(&self) -> ContentId {
+        self.price_measure_policy_id
+    }
+    pub(crate) const fn market_genesis_profile_id(&self) -> ContentId {
+        self.market_genesis_profile_id
+    }
     pub(crate) const fn liveness_realm_id(&self) -> ContentId { self.liveness_realm_id }
     pub(crate) const fn foundation_schedule_id(&self) -> MarketFoundationScheduleV2Id {
         self.foundation_schedule_id
@@ -2105,7 +2119,12 @@ pub(crate) fn authenticate_product_market_founder_foundation_preauthorization_v1
         compiler_bundle_id: init.compiler_bundle_id,
         registry_release_id: init.registry_release_id,
         capability_profile_id: init.capability_profile_id,
+        attachment_plan_id: bundle.attachment_plan_id.content_id(),
+        product_template_id: bundle.product_template_id.content_id(),
         native_claim_basis_id: bundle.native_claim_basis_id.content_id(),
+        recovery_policy_id: bundle.evidence_only_recovery_policy_id.content_id(),
+        price_measure_policy_id: bundle.price_measure_policy_id.content_id(),
+        market_genesis_profile_id: bundle.market_genesis_profile_id.content_id(),
         liveness_realm_id: recovery_facts.liveness_realm_id,
         foundation_schedule_id: schedule_id,
         foundation_account_graph_id: graph_id,
@@ -3094,7 +3113,12 @@ mod tests {
             compiler_bundle_id: ContentId::from_bytes([13; 32]),
             registry_release_id: ContentId::from_bytes([14; 32]),
             capability_profile_id: ContentId::from_bytes([15; 32]),
+            attachment_plan_id: ContentId::from_bytes([16; 32]),
+            product_template_id: ContentId::from_bytes([17; 32]),
             native_claim_basis_id: ContentId::from_bytes([20; 32]),
+            recovery_policy_id: ContentId::from_bytes([21; 32]),
+            price_measure_policy_id: ContentId::from_bytes([22; 32]),
+            market_genesis_profile_id: ContentId::from_bytes([23; 32]),
             liveness_realm_id: ContentId::from_bytes([27; 32]),
             foundation_schedule_id: MarketFoundationScheduleV2Id::from_bytes([33; 32]),
             foundation_account_graph_id: MarketFoundationAccountGraphV2Id::from_bytes([34; 32]),
@@ -3126,6 +3150,13 @@ mod tests {
         stale_funding.compiler_bundle_id = ContentId::from_bytes([43; 32]);
         assert!(require_product_market_founder_foundation_preauthorization_v1(
             &stale_funding, &retained,
+        )
+        .is_err());
+
+        let mut wrong_template = retained.clone();
+        wrong_template.product_template_id = ContentId::from_bytes([45; 32]);
+        assert!(require_product_market_founder_foundation_preauthorization_v1(
+            &wrong_template, &retained,
         )
         .is_err());
 
