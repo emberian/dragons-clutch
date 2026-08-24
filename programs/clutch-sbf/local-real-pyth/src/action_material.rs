@@ -9725,12 +9725,12 @@ fn validate_unsigned_source_plan(
     let binding_matches = matches!(
         transaction.registry_bindings.as_slice(),
         [Some(binding)]
-            if binding.family.tag() == coordinate.family_tag
+            if binding.family == ExtensionFamily::SourceSeries
+                && binding.family.tag() == coordinate.family_tag
                 && binding.family.version() == coordinate.family_version
                 && binding.local_action == coordinate.local_action
                 && Some(binding.family_status)
-                    == clutch_solana_layout::registry::ExtensionFamily::StructuredClaim
-                        .allocation_status()
+                    == ExtensionFamily::SourceSeries.allocation_status()
                 && matches!(
                     binding.central_action,
                     Some(ExtensionAction::SourceV3(action))
