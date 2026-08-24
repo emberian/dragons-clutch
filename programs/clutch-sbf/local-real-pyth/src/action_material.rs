@@ -635,9 +635,32 @@ impl CanonicalAccountRoleV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirectAccountRoleV1 {
     ProductRoot,
+    ProductReplay,
     ProductDirectGlobalLiveness,
     FounderSeriesLink,
+    WritableFounderSeriesLink,
+    SeriesFunding,
+    SeriesRegistry,
+    RegistryProgram,
+    RegistryProgramData,
+    RegistryReleaseArtifact,
+    CapabilityProfileArtifact,
+    SourceRelease,
     CompilerBundle,
+    SeriesPlan,
+    FundingTerms,
+    SourceTemplate,
+    RecoveryPolicy,
+    FundingQuote,
+    AttachmentPlan,
+    FamilyCapabilityPolicy,
+    LivenessSource,
+    LivenessCandidate,
+    LivenessClearing,
+    LivenessSettlement,
+    LivenessResolution,
+    LivenessRetirement,
+    LivenessRecovery,
     DirectRoot,
     DirectReplay,
     FreshReservation,
@@ -680,7 +703,9 @@ impl DirectAccountRoleV1 {
         matches!(
             self,
             Self::ProductRoot
+                | Self::ProductReplay
                 | Self::ProductDirectGlobalLiveness
+                | Self::WritableFounderSeriesLink
                 | Self::DirectRoot
                 | Self::DirectReplay
                 | Self::FreshReservation
@@ -731,12 +756,9 @@ impl DirectNamedAccountV1 {
     }
 }
 
-/// Exact action-specific Direct account projection for actions 2 through 13.
-///
-/// Action 1 deliberately refuses until Product publishes the final callable
-/// `0xba` allocation account frame and quote-owned work schedule. Adding it
-/// requires extending this closed grammar rather than accepting a generic
-/// `Vec<AccountMeta>`.
+/// Exact action-specific Direct account projection for actions 1 through 13.
+/// Action 1 is the closed Product-owned 41-role V3 foundation frame; no
+/// generic account-meta escape hatch can substitute for its ordered graph.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectActionAccountsV1 {
     action: DirectMarketAction,
@@ -760,9 +782,14 @@ impl DirectActionAccountsV1 {
     }
 
     fn driver_account(&self) -> Result<Address> {
+        let driver_role = if self.action == DirectMarketAction::InitializeMarket {
+            DirectAccountRoleV1::ProductRoot
+        } else {
+            DirectAccountRoleV1::DirectRoot
+        };
         self.accounts
             .iter()
-            .find(|account| account.role == DirectAccountRoleV1::DirectRoot)
+            .find(|account| account.role == driver_role)
             .map(|account| account.address)
             .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)
     }
@@ -1071,8 +1098,8 @@ impl CanonicalActionMaterialV1 {
 /// payload codec and exact action-specific account grammar.
 ///
 /// The result remains unsigned and cannot exist for a coordinate absent from
-/// the checked release. Action 1 additionally remains structurally unavailable
-/// until Product owns the exact `0xba` allocation and quote work schedule.
+/// the checked release. Action 1 uses sequence zero; every later action uses a
+/// nonzero replay sequence.
 #[allow(clippy::too_many_arguments)]
 pub fn construct_direct_action_material_v1(
     release: &IndexedProgramRelease,
@@ -1116,9 +1143,14 @@ pub fn construct_direct_action_material_v1(
         // account grammar is intentionally withdrawn for those coordinates.
         return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
     }
+    let sequence_is_exact = if action == DirectMarketAction::InitializeMarket {
+        material.sequence == 0
+    } else {
+        material.sequence != 0
+    };
     if material.payload.action() != action
         || material.valid_before_slot != freshness.valid_before_slot
-        || material.sequence == 0
+        || !sequence_is_exact
         || material.action_name != direct_selection_action(action)
     {
         return Err(CanonicalActionMaterialErrorV1::WrongSelection);
@@ -1390,11 +1422,56 @@ fn validate_direct_account_roles_v1(
     accounts: &[DirectNamedAccountV1],
 ) -> Result<()> {
     use DirectAccountRoleV1 as Role;
-    if accounts.len() > 30 {
+    if accounts.len() > 41 {
         return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
     }
     match action {
-        DirectMarketAction::InitializeMarket => Err(CanonicalActionMaterialErrorV1::InvalidPlan),
+        DirectMarketAction::InitializeMarket => require_direct_exact_roles_v1(
+            accounts,
+            &[
+                Role::GeneralMarketBinding,
+                Role::GeneralMarketRuntime,
+                Role::ProductRoot,
+                Role::WritableFounderSeriesLink,
+                Role::SeriesFunding,
+                Role::SeriesRegistry,
+                Role::RegistryProgram,
+                Role::RegistryProgramData,
+                Role::RegistryReleaseArtifact,
+                Role::CapabilityProfileArtifact,
+                Role::SourceRelease,
+                Role::CompilerBundle,
+                Role::MarketInstance,
+                Role::Realm,
+                Role::RevenuePolicyRecord,
+                Role::RevenuePolicy,
+                Role::SeriesPlan,
+                Role::FundingTerms,
+                Role::SourceTemplate,
+                Role::NativeClaimBasis,
+                Role::RecoveryPolicy,
+                Role::PriceMeasurePolicy,
+                Role::MarketGenesis,
+                Role::FundingQuote,
+                Role::AttachmentPlan,
+                Role::ProductReplay,
+                Role::FamilyCapabilityPolicy,
+                Role::ProductDirectGlobalLiveness,
+                Role::LivenessSource,
+                Role::LivenessCandidate,
+                Role::LivenessClearing,
+                Role::LivenessSettlement,
+                Role::LivenessResolution,
+                Role::LivenessRetirement,
+                Role::LivenessRecovery,
+                Role::DirectRoot,
+                Role::DirectReplay,
+                Role::ActorPayer,
+                Role::SystemProgram,
+                Role::RentSysvar,
+                Role::ClockSysvar,
+            ],
+        ),
         DirectMarketAction::AdmitOrder => {
             let end = require_direct_roles_v1(
                 accounts,
@@ -9728,9 +9805,32 @@ pub(crate) const fn direct_role_label_v1(role: DirectAccountRoleV1) -> &'static 
     use DirectAccountRoleV1 as Role;
     match role {
         Role::ProductRoot => "product-root-v3",
+        Role::ProductReplay => "product-market-replay-v2",
         Role::ProductDirectGlobalLiveness => "product-direct-global-liveness-v2",
         Role::FounderSeriesLink => "series-market-link-v3",
+        Role::WritableFounderSeriesLink => "writable-series-market-link-v3",
+        Role::SeriesFunding => "series-funding-v5",
+        Role::SeriesRegistry => "series-registry-v4",
+        Role::RegistryProgram => "registry-program",
+        Role::RegistryProgramData => "registry-programdata",
+        Role::RegistryReleaseArtifact => "registry-release-artifact",
+        Role::CapabilityProfileArtifact => "capability-profile-artifact",
+        Role::SourceRelease => "source-release-v3",
         Role::CompilerBundle => "compiler-bundle-v7",
+        Role::SeriesPlan => "series-plan-v5",
+        Role::FundingTerms => "funding-terms-v2",
+        Role::SourceTemplate => "source-template-v4",
+        Role::RecoveryPolicy => "recovery-policy-v1",
+        Role::FundingQuote => "funding-quote-v6",
+        Role::AttachmentPlan => "attachment-plan-v6",
+        Role::FamilyCapabilityPolicy => "market-family-capability-policy-v1",
+        Role::LivenessSource => "direct-liveness-source",
+        Role::LivenessCandidate => "direct-liveness-candidate",
+        Role::LivenessClearing => "direct-liveness-clearing",
+        Role::LivenessSettlement => "direct-liveness-settlement",
+        Role::LivenessResolution => "direct-liveness-resolution",
+        Role::LivenessRetirement => "direct-liveness-retirement",
+        Role::LivenessRecovery => "direct-liveness-recovery",
         Role::DirectRoot => "direct-root",
         Role::DirectReplay => "direct-replay",
         Role::FreshReservation => "fresh-direct-reservation",
@@ -9746,7 +9846,7 @@ pub(crate) const fn direct_role_label_v1(role: DirectAccountRoleV1) -> &'static 
         Role::CollateralProfile => "collateral-profile",
         Role::CollateralPolicy => "collateral-policy",
         Role::TokenProgram => "token-2022-program",
-        Role::GeneralMarketBinding => "general-market-binding-v4",
+        Role::GeneralMarketBinding => "general-market-binding-v5",
         Role::GeneralMarketRuntime => "general-market-runtime-v3",
         Role::MarketInstance => "market-instance-v2",
         Role::MarketGenesis => "market-genesis-v2",
@@ -9956,9 +10056,63 @@ mod tests {
     }
 
     #[test]
-    fn direct_product_foundation_refuses_until_final_allocation_frame_lands() {
+    fn direct_product_foundation_requires_exact_current_frame() {
+        use DirectAccountRoleV1 as Role;
+        let roles = [
+            Role::GeneralMarketBinding,
+            Role::GeneralMarketRuntime,
+            Role::ProductRoot,
+            Role::WritableFounderSeriesLink,
+            Role::SeriesFunding,
+            Role::SeriesRegistry,
+            Role::RegistryProgram,
+            Role::RegistryProgramData,
+            Role::RegistryReleaseArtifact,
+            Role::CapabilityProfileArtifact,
+            Role::SourceRelease,
+            Role::CompilerBundle,
+            Role::MarketInstance,
+            Role::Realm,
+            Role::RevenuePolicyRecord,
+            Role::RevenuePolicy,
+            Role::SeriesPlan,
+            Role::FundingTerms,
+            Role::SourceTemplate,
+            Role::NativeClaimBasis,
+            Role::RecoveryPolicy,
+            Role::PriceMeasurePolicy,
+            Role::MarketGenesis,
+            Role::FundingQuote,
+            Role::AttachmentPlan,
+            Role::ProductReplay,
+            Role::FamilyCapabilityPolicy,
+            Role::ProductDirectGlobalLiveness,
+            Role::LivenessSource,
+            Role::LivenessCandidate,
+            Role::LivenessClearing,
+            Role::LivenessSettlement,
+            Role::LivenessResolution,
+            Role::LivenessRetirement,
+            Role::LivenessRecovery,
+            Role::DirectRoot,
+            Role::DirectReplay,
+            Role::ActorPayer,
+            Role::SystemProgram,
+            Role::RentSysvar,
+            Role::ClockSysvar,
+        ];
+        assert!(DirectActionAccountsV1::new(
+            DirectMarketAction::InitializeMarket,
+            direct_accounts(&roles),
+        )
+        .is_ok());
+        let mut reordered = roles;
+        reordered.swap(28, 29);
         assert_eq!(
-            DirectActionAccountsV1::new(DirectMarketAction::InitializeMarket, vec![]),
+            DirectActionAccountsV1::new(
+                DirectMarketAction::InitializeMarket,
+                direct_accounts(&reordered),
+            ),
             Err(CanonicalActionMaterialErrorV1::InvalidPlan),
         );
     }
