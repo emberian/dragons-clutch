@@ -58,7 +58,9 @@ action plan from authenticated prestates before atomically writing both bodies.
 | disabled selected fee-record envelope | `0x82/1` | 340 |
 | disabled owner fee-carry envelope | `0x83/1` | 132 |
 | disabled temporary payer-allocation envelope | `0x84/1` | 2,684 |
-| disabled temporary recipient-allocation envelope | `0x85/1` | 2,644 |
+| historical recipient-allocation envelope | `0x85/1` | 2,644 |
+| historical complete-fee-book recipient certificate | `0x85/2` | 2,764 |
+| current V2-stream/Hamilton recipient allocation | `0x85/3` | 2,796 |
 | disabled treasury-ledger envelope | `0x86/1` | 148 |
 | disabled buyer-first settlement cash-pot envelope | `0x87/1` | 260 |
 | disabled combined FinalPot/virtual-budget envelope | `0x89/1` | 332 |
@@ -118,7 +120,7 @@ The first-spine tuples are exact ordered seeds:
 | selected fee record | `selected-fee-record:v1`, SelectedCandidate PDA |
 | owner fee carry | `owner-fee-carry:v1`, selected fee-record PDA, semantic owner |
 | temporary payer allocation | `owner-payer-allocation:v1`, selected fee-record PDA, semantic owner; immutable envelope-derived allocation snapshot until atomic action-38 close, never cash evidence |
-| temporary recipient allocation | `candidate-recipient-allocation:v1`, selected fee-record PDA |
+| current recipient allocation | `candidate-recipient-allocation:v1`, selected fee-record PDA; `0x85/3` is the sole current writer target, while its SBF creation route remains separately gated |
 | treasury ledger | `fee-treasury-ledger:v1`, selected fee-record PDA |
 | settlement cash pot | `settlement-cash-pot:v1`, Epoch PDA, final `SettlementCandidateId` |
 
