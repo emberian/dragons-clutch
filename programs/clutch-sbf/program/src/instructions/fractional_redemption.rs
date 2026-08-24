@@ -1,12 +1,13 @@
 //! Exact fractional-redemption successor over canonical full-width accounts.
 //!
-//! Executable actions 2 through 9 mutate only the sole owners of affected
-//! facts: owner credit/tombstone, Position V3 and GEN1
+//! Concrete handler bodies for actions 2 through 9 mutate only the sole owners
+//! of affected facts: owner credit/tombstone, Position V3 and GEN1
 //! Replay for claimant state, ClaimLedger V3 for native supply, Hoard V2 for
 //! locked-principal/cash classification, and `0xa5/v1` for the global
 //! fractional sequence and aggregate numerator credit. The immutable
 //! `0xa4/v3` policy commits the exact Resolution V5 data identity while its
-//! Foundation-computable PDA remains stable before the outcome is known.
+//! Foundation-computable PDA remains stable before the outcome is known. All
+//! ten action tuples remain capability-disabled in every checked profile.
 
 use crate::accounts::{
     expect_pda, require, require_count, require_distinct, require_signer, Outcome,

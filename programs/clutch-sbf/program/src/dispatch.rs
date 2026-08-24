@@ -469,9 +469,9 @@ fn process_source_v3(
 }
 
 /// Decode the strict FractionalRedemption envelope after the central exact
-/// capability check. Until Product Foundation admits actions 1 and 2 together,
-/// `disabled_canonical_tag` refuses every tuple before this function is
-/// reachable or any account is inspected.
+/// capability check. All ten actions have concrete handlers, but the current
+/// profiles admit none of their tuples: `disabled_canonical_tag` refuses every
+/// one before this function is reachable or any account is inspected.
 #[inline(never)]
 fn process_fractional_redemption(
     program_id: &Pubkey,
