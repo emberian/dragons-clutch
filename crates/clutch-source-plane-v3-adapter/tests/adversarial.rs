@@ -210,7 +210,7 @@ fn fixed_account_wrapper_has_one_core_owner_and_hostile_decode_is_exact() {
         Err(AdapterError::BadVersion)
     );
     hostile = bytes.clone();
-    hostile[10..12].copy_from_slice(&(AccountFamilyV3::WindowWork as u16).to_le_bytes());
+    hostile[10..12].copy_from_slice(&5_u16.to_le_bytes());
     assert_eq!(
         decode_account::<SourceHeadV3>(&hostile, sink),
         Err(AdapterError::WrongAccountFamily)
@@ -307,6 +307,43 @@ fn pda_registry_preserves_v2_seed_and_binds_v3_pages_to_exact_release() {
         PdaRecipeV3::statistic_result(id(31)).unwrap().id().unwrap(),
         PdaRecipeV3::statistic_result(id(32)).unwrap().id().unwrap()
     );
+    assert_ne!(
+        PdaRecipeV3::window_spec(id(31)).unwrap().id().unwrap(),
+        PdaRecipeV3::statistic_key(id(31)).unwrap().id().unwrap()
+    );
+    assert_ne!(
+        PdaRecipeV3::summary_program(id(31)).unwrap().id().unwrap(),
+        PdaRecipeV3::statistic_key(id(31)).unwrap().id().unwrap()
+    );
+    assert_ne!(
+        PdaRecipeV3::source_policy_handoff(id(31))
+            .unwrap()
+            .id()
+            .unwrap(),
+        PdaRecipeV3::statistic_key(id(31)).unwrap().id().unwrap()
+    );
+    assert_ne!(
+        PdaRecipeV3::source_no_reopen_terminal(id(31))
+            .unwrap()
+            .id()
+            .unwrap(),
+        PdaRecipeV3::source_policy_handoff(id(31))
+            .unwrap()
+            .id()
+            .unwrap()
+    );
+    assert_eq!(
+        PdaRecipeV3::window_spec(ContentId::ZERO),
+        Err(AdapterError::ZeroIdentity)
+    );
+    assert_eq!(
+        PdaRecipeV3::source_policy_handoff(ContentId::ZERO),
+        Err(AdapterError::ZeroIdentity)
+    );
+    assert_eq!(
+        PdaRecipeV3::source_no_reopen_terminal(ContentId::ZERO),
+        Err(AdapterError::ZeroIdentity)
+    );
 }
 
 #[test]
@@ -365,7 +402,7 @@ fn v2_is_transcoded_not_reinterpreted_and_stricter_v3_slot_rule_refuses() {
     let mut page_bytes = vec![0; RAW_PAGE_BYTES];
     page.encode_into(&mut page_bytes).unwrap();
     assert_ne!(&v2_bytes[..8], &page_bytes[104..112]);
-    assert_eq!(page_bytes[104], RawRecordKindV3::Observation as u8);
+    assert_eq!(page_bytes[104], 1);
     assert!(page_bytes[105..112].iter().all(|byte| *byte == 0));
 }
 
@@ -403,6 +440,363 @@ fn page_and_window() -> (WindowSpecV3, RawPageV3) {
         coverage_policy_parameter: 0,
     };
     (window, page)
+}
+
+#[test]
+fn promoted_seal_projection_binds_exact_images_and_prefund_close() {
+    let plane = source_plane();
+    let head_before = SourceHeadV3::new(id(2), 100, 0).unwrap();
+    let open_before = head_before
+        .open_page()
+        .unwrap()
+        .append_observation(RawRecordV3::observation(100, 101, 7, 8, 9))
+        .unwrap();
+    let sealed_page = open_before.seal().unwrap();
+    let head_after = head_before.commit_page(&sealed_page).unwrap();
+    let head_runtime = RuntimeMutationProjectionV1 {
+        account_data_before_id: id(20),
+        account_data_after_id: id(21),
+        generation: 3,
+    };
+    let open_runtime = RuntimeCloseProjectionV1 {
+        account_data_id: id(22),
+        generation: 4,
+        principal_recipient: ContentId::ZERO,
+        payer_principal_lamports: 0,
+        neutral_sink: id(23),
+        neutral_surplus_lamports: 800,
+    };
+    let page_runtime = RuntimeCreationProjectionV1 {
+        account_data_id: id(24),
+        generation: 1,
+        payer: ContentId::ZERO,
+        rent_principal_lamports: 0,
+    };
+    let plan = project_runtime_seal_raw_page(
+        &plane,
+        &head_before,
+        &open_before,
+        &head_after,
+        &sealed_page,
+        head_runtime,
+        open_runtime,
+        page_runtime,
+        id(25),
+    )
+    .unwrap();
+    assert_eq!(plan.action(), TransitionActionV3::SealRawPage);
+    assert_eq!((plan.mutation_count(), plan.creation_count(), plan.close_count()), (1, 1, 1));
+    assert_eq!(plan.close(0).unwrap().principal_recipient, ContentId::ZERO);
+    assert_eq!(plan.close(0).unwrap().payer_principal_lamports, 0);
+    assert_eq!(plan.creation(0).unwrap().payer, ContentId::ZERO);
+    assert_eq!(plan.creation(0).unwrap().rent_principal_lamports, 0);
+
+    let rebound = project_runtime_seal_raw_page(
+        &plane,
+        &head_before,
+        &open_before,
+        &head_after,
+        &sealed_page,
+        RuntimeMutationProjectionV1 {
+            account_data_after_id: id(26),
+            ..head_runtime
+        },
+        open_runtime,
+        page_runtime,
+        id(25),
+    )
+    .unwrap();
+    assert_ne!(plan.id().unwrap(), rebound.id().unwrap());
+    let different_receipt = project_runtime_seal_raw_page(
+        &plane,
+        &head_before,
+        &open_before,
+        &head_after,
+        &sealed_page,
+        head_runtime,
+        open_runtime,
+        page_runtime,
+        id(27),
+    )
+    .unwrap();
+    assert_ne!(plan.id().unwrap(), different_receipt.id().unwrap());
+
+    assert_eq!(
+        project_runtime_seal_raw_page(
+            &plane,
+            &head_before,
+            &open_before,
+            &head_before,
+            &sealed_page,
+            head_runtime,
+            open_runtime,
+            page_runtime,
+            id(25),
+        ),
+        Err(AdapterError::InvalidParameter)
+    );
+    assert_eq!(
+        project_runtime_seal_raw_page(
+            &plane,
+            &head_before,
+            &open_before,
+            &head_after,
+            &sealed_page,
+            head_runtime,
+            RuntimeCloseProjectionV1 {
+                principal_recipient: id(28),
+                ..open_runtime
+            },
+            page_runtime,
+            id(25),
+        ),
+        Err(AdapterError::InvalidParameter)
+    );
+    assert_eq!(
+        project_runtime_seal_raw_page(
+            &plane,
+            &head_before,
+            &open_before,
+            &head_after,
+            &sealed_page,
+            head_runtime,
+            open_runtime,
+            page_runtime,
+            ContentId::ZERO,
+        ),
+        Err(AdapterError::InvalidParameter)
+    );
+}
+
+#[test]
+fn promoted_window_work_projection_requires_product_window_authentication() {
+    let plane = source_plane();
+    let (window, _) = page_and_window();
+    let work = WindowWorkV3::new(&window).unwrap();
+    let runtime = RuntimeCreationProjectionV1 {
+        account_data_id: id(31),
+        generation: 2,
+        payer: id(32),
+        rent_principal_lamports: 700,
+    };
+    let plan = project_runtime_initialize_window_work(&plane, &window, &work, runtime, id(33))
+        .unwrap();
+    assert_eq!(plan.action(), TransitionActionV3::CreateWindowWork);
+    assert_eq!((plan.mutation_count(), plan.creation_count(), plan.close_count()), (0, 1, 0));
+    assert_eq!(
+        plan.creation(0).unwrap().state.binding_id(),
+        PdaRecipeV3::window_work(window.id().unwrap())
+            .unwrap()
+            .id()
+            .unwrap()
+    );
+    assert_eq!(
+        project_runtime_initialize_window_work(
+            &plane,
+            &window,
+            &work,
+            runtime,
+            ContentId::ZERO,
+        ),
+        Err(AdapterError::InvalidParameter)
+    );
+    assert_eq!(
+        project_runtime_initialize_window_work(
+            &plane,
+            &window,
+            &work,
+            RuntimeCreationProjectionV1 {
+                payer: ContentId::ZERO,
+                ..runtime
+            },
+            id(33),
+        ),
+        Err(AdapterError::InvalidParameter)
+    );
+}
+
+#[test]
+fn promoted_window_fold_projection_binds_exact_page_and_work_cas() {
+    let plane = source_plane();
+    let (window, page) = page_and_window();
+    let before = WindowWorkV3::new(&window).unwrap();
+    let after = before.push_page(&window, &page).unwrap();
+    let runtime = RuntimeMutationProjectionV1 {
+        account_data_before_id: id(34),
+        account_data_after_id: id(35),
+        generation: 2,
+    };
+    let plan = project_runtime_fold_window_page(
+        &plane,
+        &window,
+        &before,
+        &page,
+        &after,
+        runtime,
+        id(36),
+    )
+    .unwrap();
+    assert_eq!(plan.action(), TransitionActionV3::FoldWindowPage);
+    assert_eq!((plan.mutation_count(), plan.creation_count(), plan.close_count()), (1, 0, 0));
+
+    let rebound = project_runtime_fold_window_page(
+        &plane,
+        &window,
+        &before,
+        &page,
+        &after,
+        RuntimeMutationProjectionV1 {
+            generation: 3,
+            ..runtime
+        },
+        id(36),
+    )
+    .unwrap();
+    assert_ne!(plan.id().unwrap(), rebound.id().unwrap());
+    assert_eq!(
+        project_runtime_fold_window_page(
+            &plane,
+            &window,
+            &before,
+            &page,
+            &before,
+            runtime,
+            id(36),
+        ),
+        Err(AdapterError::InvalidParameter)
+    );
+}
+
+#[test]
+fn promoted_window_seal_projection_binds_evidence_and_close_split() {
+    let plane = source_plane();
+    let (window, page) = page_and_window();
+    let work = WindowWorkV3::new(&window)
+        .unwrap()
+        .push_page(&window, &page)
+        .unwrap();
+    let closure = WindowClosureReceiptV3::from_page(&plane, &window, &page).unwrap();
+    let seal = work.finish(&window, &closure).unwrap();
+    let close = RuntimeCloseProjectionV1 {
+        account_data_id: id(37),
+        generation: 2,
+        principal_recipient: ContentId::ZERO,
+        payer_principal_lamports: 0,
+        neutral_sink: id(38),
+        neutral_surplus_lamports: 900,
+    };
+    let creation = RuntimeCreationProjectionV1 {
+        account_data_id: id(39),
+        generation: 1,
+        payer: id(40),
+        rent_principal_lamports: 800,
+    };
+    let plan = project_runtime_seal_window(
+        &plane,
+        &window,
+        &work,
+        &page,
+        &closure,
+        &seal,
+        close,
+        creation,
+        id(41),
+    )
+    .unwrap();
+    assert_eq!(plan.action(), TransitionActionV3::SealWindow);
+    assert_eq!((plan.mutation_count(), plan.creation_count(), plan.close_count()), (0, 1, 1));
+    assert_eq!(plan.close(0).unwrap().principal_recipient, ContentId::ZERO);
+    assert_eq!(
+        project_runtime_seal_window(
+            &plane,
+            &window,
+            &work,
+            &page,
+            &closure,
+            &seal,
+            RuntimeCloseProjectionV1 {
+                neutral_sink: ContentId::ZERO,
+                ..close
+            },
+            creation,
+            id(41),
+        ),
+        Err(AdapterError::InvalidParameter)
+    );
+}
+
+#[test]
+fn promoted_evaluation_projection_binds_result_semantics_and_exact_postimage() {
+    let plane = source_plane();
+    let summary = summary();
+    let (window, page) = page_and_window();
+    let work = WindowWorkV3::new(&window)
+        .unwrap()
+        .push_page(&window, &page)
+        .unwrap();
+    let closure = WindowClosureReceiptV3::from_page(&plane, &window, &page).unwrap();
+    let seal = work.finish(&window, &closure).unwrap();
+    let key = StatisticKeyV3 {
+        window_id: window.id().unwrap(),
+        summary_program_id: summary.id().unwrap(),
+        statistic: StatisticKindV3::TerminalInterval,
+    };
+    let result = StatisticResultV3::terminal(&key, &summary, &seal, &window, 70, 120).unwrap();
+    let runtime = RuntimeCreationProjectionV1 {
+        account_data_id: id(42),
+        generation: 1,
+        payer: id(43),
+        rent_principal_lamports: 900,
+    };
+    let plan = project_runtime_evaluate_statistic(
+        &plane,
+        &window,
+        &key,
+        &summary,
+        &seal,
+        &result,
+        runtime,
+        id(44),
+    )
+    .unwrap();
+    assert_eq!(plan.action(), TransitionActionV3::WriteTerminalResult);
+    assert_eq!((plan.mutation_count(), plan.creation_count(), plan.close_count()), (0, 1, 0));
+    assert_eq!(
+        plan.creation(0).unwrap().state.binding_id(),
+        PdaRecipeV3::statistic_result(key.id().unwrap())
+            .unwrap()
+            .id()
+            .unwrap()
+    );
+    assert_eq!(
+        project_runtime_evaluate_statistic(
+            &plane,
+            &window,
+            &key,
+            &summary,
+            &seal,
+            &result,
+            runtime,
+            ContentId::ZERO,
+        ),
+        Err(AdapterError::InvalidParameter)
+    );
+    assert_eq!(
+        project_runtime_evaluate_statistic(
+            &plane,
+            &window,
+            &key,
+            &summary,
+            &seal,
+            &result,
+            RuntimeCreationProjectionV1 {
+                payer: ContentId::ZERO,
+                ..runtime
+            },
+            id(44),
+        ),
+        Err(AdapterError::InvalidParameter)
+    );
 }
 
 #[test]
@@ -608,8 +1002,7 @@ fn recurring_lapse_projection_is_permissionless_and_preserves_compartments() {
         .validate_for_program(id(69), lapsed.plan)
         .unwrap();
     let mut hostile = encoded;
-    hostile[10..12]
-        .copy_from_slice(&(TransitionActionV3::CreateSeriesInstance as u16).to_le_bytes());
+    hostile[10..12].copy_from_slice(&10_u16.to_le_bytes());
     assert_eq!(
         IntentPreimageV3::decode(&hostile)
             .unwrap()

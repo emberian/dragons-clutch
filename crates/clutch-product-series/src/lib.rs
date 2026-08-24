@@ -24,18 +24,25 @@ mod compiler_output_v2;
 mod compiler_output_v3;
 mod compiler_output_v4;
 mod compiler_output_v5;
+mod compiler_output_v6;
 mod foundation_funding;
+mod foundation_funding_v3;
 mod funding;
 mod funding_state;
 mod funding_state_v2;
+mod failure_begin_schedule;
+mod funding_state_v3;
 mod interval_consensus;
 mod market_family_aggregator;
 mod market_lifecycle;
+mod market_lifecycle_v2;
+mod market_foundation_v3;
 mod market_replay;
 mod product_registry;
 mod registry;
 mod source_series;
 mod series_lifecycle_replay;
+mod series_lifecycle_replay_v2;
 mod successor;
 
 pub use artifacts::{
@@ -78,6 +85,11 @@ pub use compiler_output_v5::{
     ProductSeriesBundleInputsV5, COMPILED_PRODUCT_SERIES_BUNDLE_V5_BYTES,
     COMPILED_PRODUCT_SERIES_BUNDLE_V5_DOMAIN,
 };
+pub use compiler_output_v6::{
+    assemble_compiled_product_series_bundle_v6, CompiledProductSeriesBundleV6,
+    ProductSeriesBundleInputsV6, COMPILED_PRODUCT_SERIES_BUNDLE_V6_BYTES,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V6_DOMAIN,
+};
 pub use foundation_funding::{
     MarketFoundationScheduleV1, MarketFoundationScheduleV2, SeriesAttachmentPlanV2,
     SeriesAttachmentPlanV3, SeriesAttachmentPlanV4, SeriesFundingComponentV2, SeriesFundingQuoteV2,
@@ -92,6 +104,13 @@ pub use foundation_funding::{
     SERIES_FUNDING_COMPONENT_COUNT_V2,
     SERIES_FUNDING_QUOTE_BYTES_V2, SERIES_FUNDING_QUOTE_BYTES_V3, SERIES_FUNDING_QUOTE_BYTES_V4,
     SERIES_FUNDING_QUOTE_V2_DOMAIN, SERIES_FUNDING_QUOTE_V3_DOMAIN, SERIES_FUNDING_QUOTE_V4_DOMAIN,
+};
+pub use foundation_funding_v3::{
+    MarketFoundationScheduleV3, SeriesAttachmentPlanV5, SeriesFundingQuoteV5,
+    MARKET_FOUNDATION_CORE_SLOT_COUNT_V3, MARKET_FOUNDATION_MAX_OUTCOMES_V3,
+    MARKET_FOUNDATION_SCHEDULE_V3_DOMAIN, MARKET_FOUNDATION_SLOT_COUNT_V3,
+    SERIES_ATTACHMENT_PLAN_BYTES_V5, SERIES_ATTACHMENT_PLAN_V5_DOMAIN,
+    SERIES_FUNDING_QUOTE_BYTES_V5, SERIES_FUNDING_QUOTE_V5_DOMAIN,
 };
 pub use funding::{
     project_component_debits, AdapterAuthenticatedComponentStatusV1,
@@ -109,6 +128,18 @@ pub use funding_state_v2::{
     AuthenticatedSeriesFundingAuthorityV2, SeriesComponentCapitalV2, SeriesFundingPhaseV2,
     SeriesFundingStateV2, SeriesFundingTerminalProjectionV2, SERIES_COMPONENT_CAPITAL_BYTES_V2,
     SERIES_FUNDING_STATE_BYTES_V2, SERIES_FUNDING_STATE_V2_DOMAIN,
+};
+pub use failure_begin_schedule::{
+    derive_product_failure_begin_schedule_projection_v1,
+    ProductFailureBeginCompilerProvenanceV1,
+    PRODUCT_FAILURE_BEGIN_SCHEDULE_BODY_BYTES_V1,
+    PRODUCT_FAILURE_BEGIN_SCHEDULE_PROJECTION_DOMAIN_V1,
+};
+pub use funding_state_v3::{
+    AuthenticatedSeriesFundingAuthorityV3, SeriesComponentCapitalV3, SeriesFundingPhaseV3,
+    SeriesFundingStateV3, SeriesFundingTerminalProjectionV3, SERIES_COMPONENT_CAPITAL_BYTES_V3,
+    SERIES_FUNDING_STATE_BYTES_V3, SERIES_FUNDING_STATE_V3_DOMAIN,
+    SERIES_FUNDING_TERMINAL_PROJECTION_V3_DOMAIN,
 };
 pub use interval_consensus::{
     advance_quantized_interval_consensus_work_v1, begin_quantized_interval_consensus_v1,
@@ -139,8 +170,11 @@ pub use market_family_aggregator::{
     MARKET_FAMILY_TERMINAL_PROJECTION_DOMAIN_V1,
 };
 pub use market_lifecycle::{
-    MarketFoundationAccountGraphV2, MarketFoundationCapitalV1, MarketFoundationProgressV1,
-    MarketFoundationSlotV2, MarketFoundationStepProjectionV2, MarketFoundingAbortProjectionV1,
+    authenticate_market_foundation_account_graph_bytes_v2,
+    authenticate_market_foundation_account_graph_slot_v2,
+    AuthenticatedMarketFoundationAccountGraphBytesV2, MarketFoundationAccountGraphV2,
+    MarketFoundationCapitalV1, MarketFoundationProgressV1, MarketFoundationSlotV2,
+    MarketFoundationStepProjectionV2, MarketFoundingAbortProjectionV1,
     MarketInstanceTerminalProjectionV1, MarketLifecycleBindingV1, MarketLifecyclePhaseV1,
     MarketLifecycleRootV1, MarketResolutionActivationV1, MarketSharedCoreTerminalProjectionV1,
     MarketSharedCoreV1, SeriesLinkObligationAdmissionProjectionV1,
@@ -150,9 +184,31 @@ pub use market_lifecycle::{
     SeriesMarketAdmissionProjectionV1, SeriesMarketLinkBindingV1, SeriesMarketLinkPhaseV1,
     SeriesMarketLinkRetirementProjectionV1, SeriesMarketLinkV1,
     MARKET_INSTANCE_TERMINAL_PROJECTION_DOMAIN_V1, MARKET_LIFECYCLE_BINDING_DOMAIN_V1,
-    MARKET_LIFECYCLE_ROOT_BYTES_V1, MARKET_LIFECYCLE_ROOT_DOMAIN_V1,
+    MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V2, MARKET_LIFECYCLE_ROOT_BYTES_V1,
+    MARKET_LIFECYCLE_ROOT_DOMAIN_V1,
     MARKET_RESOLUTION_ACTIVATION_DOMAIN_V1, MARKET_SHARED_CORE_COUNT_V1,
     SERIES_LINK_OBLIGATION_COUNT_V1, SERIES_MARKET_LINK_BYTES_V1, SERIES_MARKET_LINK_DOMAIN_V1,
+};
+pub use market_lifecycle_v2::{
+    MarketFoundationCapitalV2, MarketFoundationProgressV2, MarketFoundationStepProjectionV3,
+    MarketFoundingAbortProjectionV2, MarketInstanceTerminalProjectionV2,
+    MarketLifecycleBindingV2, MarketLifecyclePhaseV2, MarketLifecycleRootV2,
+    MarketResolutionActivationV2, MarketSharedCoreTerminalProjectionV2, MarketSharedCoreV2,
+    SeriesLinkObligationAdmissionProjectionV2, SeriesLinkObligationConfigurationV2,
+    SeriesLinkObligationConfigurationV2Id, SeriesLinkObligationDispositionV2,
+    SeriesLinkObligationStatusV2, SeriesLinkObligationTerminalProjectionV2,
+    SeriesLinkObligationV2, SeriesMarketAdmissionProjectionV2, SeriesMarketLinkBindingV2,
+    SeriesMarketLinkPhaseV2, SeriesMarketLinkRetirementProjectionV2, SeriesMarketLinkV2,
+    MARKET_INSTANCE_TERMINAL_PROJECTION_DOMAIN_V2, MARKET_LIFECYCLE_BINDING_DOMAIN_V2,
+    MARKET_LIFECYCLE_ROOT_BYTES_V2, MARKET_LIFECYCLE_ROOT_DOMAIN_V2,
+    MARKET_RESOLUTION_ACTIVATION_DOMAIN_V2, MARKET_SHARED_CORE_COUNT_V2,
+    SERIES_LINK_OBLIGATION_COUNT_V2, SERIES_MARKET_LINK_BYTES_V2, SERIES_MARKET_LINK_DOMAIN_V2,
+};
+pub use market_foundation_v3::{
+    authenticate_market_foundation_account_graph_bytes_v3,
+    AuthenticatedMarketFoundationAccountGraphBytesV3, MarketFoundationAccountGraphV3,
+    MarketFoundationSlotV3, MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V3,
+    MARKET_FOUNDATION_ACCOUNT_GRAPH_V3_DOMAIN,
 };
 pub use market_replay::{
     MarketLifecycleReplayReceiptV1, MARKET_LIFECYCLE_REPLAY_RECEIPT_BYTES_V1,
@@ -172,8 +228,9 @@ pub use registry::{
 };
 pub use source_series::{
     compile_source_occurrence_v3, compile_source_occurrence_v4,
-    AuthenticatedSourceSeriesAuthorityV3, CompiledSourceOccurrenceV3,
-    SOURCE_OCCURRENCE_RECORD_BYTES, SOURCE_OCCURRENCE_RECORD_DOMAIN,
+    compile_source_semantic_inputs_v1, AuthenticatedSourceSeriesAuthorityV3,
+    CompiledSourceOccurrenceV3, CompiledSourceSemanticInputsV1, SOURCE_OCCURRENCE_RECORD_BYTES,
+    SOURCE_OCCURRENCE_RECORD_DOMAIN,
 };
 pub use series_lifecycle_replay::{
     SeriesLifecycleAdmissionProjectionV1, SeriesLifecycleLapseProjectionV1,
@@ -184,8 +241,18 @@ pub use series_lifecycle_replay::{
     SERIES_LIFECYCLE_REPLAY_BYTES_V1, SERIES_LIFECYCLE_REPLAY_DOMAIN_V1,
     SERIES_LIFECYCLE_TERMINAL_PROJECTION_DOMAIN_V1,
 };
+pub use series_lifecycle_replay_v2::{
+    SeriesLifecycleAdmissionProjectionV2, SeriesLifecycleLapseProjectionV2,
+    SeriesLifecycleLinkRetirementProjectionV2, SeriesLifecycleReplayBindingV2,
+    SeriesLifecycleReplayPhaseV2, SeriesLifecycleReplayV2,
+    SeriesLifecycleTerminalEvidenceV2, SeriesLifecycleTerminalProjectionV2,
+    SERIES_LIFECYCLE_REPLAY_BINDING_BYTES_V2, SERIES_LIFECYCLE_REPLAY_BINDING_DOMAIN_V2,
+    SERIES_LIFECYCLE_REPLAY_BYTES_V2, SERIES_LIFECYCLE_REPLAY_DOMAIN_V2,
+    SERIES_LIFECYCLE_TERMINAL_PROJECTION_DOMAIN_V2,
+};
 pub use successor::{
     compile_ordinal_v2, compile_ordinal_v3, compile_ordinal_v4, compile_ordinal_v5,
+    compile_ordinal_v6,
     project_component_debits_v2, AdapterFulfillmentProjectionV2, CapabilitySemanticOwnersV2,
     CompiledOrdinalV2, MarketGenesisProfileV2, MarketInstancePreimageV2, PriceMeasurePolicyV1,
     ProjectedComponentPresenceV2, RegistryCapabilityProjectionV2, SeriesFundingTermsV2,
@@ -307,6 +374,10 @@ typed_id!(
     "Typed identity of one current `CompiledProductSeriesBundleV5` compiler output."
 );
 typed_id!(
+    CompiledProductSeriesBundleV6Id,
+    "Typed identity of one current 47-slot `CompiledProductSeriesBundleV6` compiler output."
+);
+typed_id!(
     SeriesFundingQuoteId,
     "Typed identity of one `SeriesFundingQuoteV1`."
 );
@@ -327,12 +398,24 @@ typed_id!(
     "Typed identity of one current 46-slot `SeriesFundingQuoteV4`."
 );
 typed_id!(
+    SeriesFundingQuoteV5Id,
+    "Typed identity of one current 47-slot `SeriesFundingQuoteV5`."
+);
+typed_id!(
     SeriesFundingStateV2Id,
-    "Typed semantic identity of one current `SeriesFundingStateV2`."
+    "Typed semantic identity of one historical `SeriesFundingStateV2`."
+);
+typed_id!(
+    SeriesFundingStateV3Id,
+    "Typed semantic identity of one current `SeriesFundingStateV3`."
 );
 typed_id!(
     SeriesAttachmentPlanV4Id,
     "Typed identity of one current `SeriesAttachmentPlanV4`."
+);
+typed_id!(
+    SeriesAttachmentPlanV5Id,
+    "Typed identity of one current `SeriesAttachmentPlanV5`."
 );
 typed_id!(
     MarketFoundationScheduleV1Id,
@@ -343,6 +426,10 @@ typed_id!(
     "Typed identity of one exhaustive 46-slot shared-Market foundation schedule."
 );
 typed_id!(
+    MarketFoundationScheduleV3Id,
+    "Typed identity of one exhaustive 47-slot shared-Market foundation schedule."
+);
+typed_id!(
     MarketFoundationAccountGraphV1Id,
     "Typed identity of one canonical shared-Market foundation account graph."
 );
@@ -351,8 +438,16 @@ typed_id!(
     "Typed identity of one canonical 46-slot shared-Market foundation account graph."
 );
 typed_id!(
+    MarketFoundationAccountGraphV3Id,
+    "Typed identity of one canonical 47-slot shared-Market foundation account graph."
+);
+typed_id!(
     MarketLifecycleRootV1Id,
-    "Typed semantic-state identity of one shared Market lifecycle root."
+    "Typed semantic-state identity of one historical shared Market lifecycle root."
+);
+typed_id!(
+    MarketLifecycleRootV2Id,
+    "Typed semantic-state identity of the current shared Market lifecycle root."
 );
 typed_id!(
     MarketLifecycleReplayReceiptV1Id,
@@ -360,7 +455,11 @@ typed_id!(
 );
 typed_id!(
     SeriesMarketLinkV1Id,
-    "Typed semantic-state identity of one Series ordinal's Market admission link."
+    "Typed semantic-state identity of one historical Series Market admission link."
+);
+typed_id!(
+    SeriesMarketLinkV2Id,
+    "Typed semantic-state identity of the current Series Market admission link."
 );
 typed_id!(
     SeriesLifecycleReplayBindingV1Id,
@@ -372,7 +471,19 @@ typed_id!(
 );
 typed_id!(
     SeriesLifecycleTerminalProjectionV1Id,
-    "Typed identity of one exhaustive per-Series lifecycle terminal projection."
+    "Typed identity of one historical per-Series lifecycle terminal projection."
+);
+typed_id!(
+    SeriesLifecycleReplayBindingV2Id,
+    "Typed identity of the current per-Series lifecycle replay binding."
+);
+typed_id!(
+    SeriesLifecycleReplayV2Id,
+    "Typed semantic identity of the current counted per-Series lifecycle replay."
+);
+typed_id!(
+    SeriesLifecycleTerminalProjectionV2Id,
+    "Typed identity of the current exhaustive per-Series lifecycle terminal projection."
 );
 typed_id!(
     SeriesFundingTermsId,
@@ -430,6 +541,10 @@ typed_id!(
 typed_id!(
     QuantizedIntervalConsensusWorkV1Id,
     "Typed identity of one complete structural interval-consensus work preimage."
+);
+typed_id!(
+    ProductFailureBeginScheduleProjectionV1Id,
+    "Typed identity of one exact current Product-compiled Failure Begin schedule and provenance."
 );
 
 /// A deterministic refusal from a fixed codec or pure projection.

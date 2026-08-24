@@ -10,6 +10,7 @@
 //! defining client DTO copies that could become a second semantic truth.
 
 pub mod evidence;
+pub mod direct_market;
 pub mod intent;
 pub mod owner_settlement;
 pub mod settlement;

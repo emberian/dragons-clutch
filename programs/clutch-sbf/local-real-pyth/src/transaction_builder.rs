@@ -93,6 +93,8 @@ pub enum ProtocolFlow {
     GeneralV2Candidate,
     GeneralV2Settlement,
     GeneralV2Fees,
+    /// Current Direct `80/1` successor family; every action remains disabled.
+    DirectMarketV1,
     DirectEggSettlement,
     Liveness,
     ProductSeries,
@@ -226,6 +228,13 @@ pub enum OwnedWireContract {
     /// SourceSeries successor envelope. The sequence is the Source work-call
     /// ordinal and therefore cannot be silently supplied by a launcher.
     MainSuccessorRequest {
+        binding: SuccessorRegistryBinding,
+        sequence: u64,
+    },
+    /// Exact replay request for the allocated-but-disabled Direct `80/1`
+    /// family. This remains distinct from an enabled Source request so a
+    /// construction artifact cannot silently promote runtime admission.
+    DisabledDirectMarketRequestV1 {
         binding: SuccessorRegistryBinding,
         sequence: u64,
     },
@@ -372,6 +381,55 @@ impl OwnedInstructionDraft {
             equations,
             OwnedWireContract::MainSuccessor { binding },
             data,
+            Some(binding),
+        )
+    }
+
+    /// Assemble the exact outer replay request for one allocated Direct
+    /// `80/1` action while retaining disabled runtime admission.
+    ///
+    /// The Direct client contract owns the action/payload join and the
+    /// reference adapter owns the outer request. Account metas remain an
+    /// untrusted construction projection; the disabled SBF family will later
+    /// authenticate its complete action-specific account list on chain.
+    #[allow(clippy::too_many_arguments)]
+    pub fn allocated_direct_market_request_v1(
+        action_name: impl Into<String>,
+        semantic_owner: SemanticOwner,
+        program_id: Address,
+        accounts: Vec<AccountMeta>,
+        required_signers: Vec<Address>,
+        equations: Vec<ExactEquation>,
+        sequence: u64,
+        payload: &clutch_client_contract::direct_market::DirectMarketClientPayloadV1,
+    ) -> Result<Self> {
+        use clutch_client_contract::direct_market::DirectMarketClientRequestV1;
+
+        let action = ExtensionAction::DirectMarket(payload.action());
+        if (matches!(
+            payload.action(),
+            clutch_solana_layout::registry::DirectMarketAction::InitializeMarket
+        ) && sequence != 0)
+            || (!matches!(
+                payload.action(),
+                clutch_solana_layout::registry::DirectMarketAction::InitializeMarket
+            ) && sequence == 0)
+        {
+            return Err(ConstructionError::WrongWirePrefix);
+        }
+        let binding = registry_binding(action.family(), action.local_tag(), Some(action))?;
+        let request = DirectMarketClientRequestV1::encode(sequence, payload)
+            .map_err(|_| ConstructionError::WrongWirePrefix)?;
+        Self::owned_bytes(
+            ProtocolFlow::DirectMarketV1,
+            action_name,
+            semantic_owner,
+            program_id,
+            accounts,
+            required_signers,
+            equations,
+            OwnedWireContract::DisabledDirectMarketRequestV1 { binding, sequence },
+            request.bytes().to_vec(),
             Some(binding),
         )
     }
@@ -541,7 +599,11 @@ impl OwnedInstructionDraft {
             self.wire,
             OwnedWireContract::CollateralReplayRequestV3 { .. }
         );
-        if !source_request && !collateral_request {
+        let direct_request = matches!(
+            self.wire,
+            OwnedWireContract::DisabledDirectMarketRequestV1 { .. }
+        );
+        if !source_request && !collateral_request && !direct_request {
             let mut accounts = BTreeSet::new();
             for account in &self.accounts {
                 if !accounts.insert(account.pubkey) {
@@ -611,7 +673,9 @@ impl OwnedInstructionDraft {
                         family == ExtensionFamily::SourceSeries
                     }
                     ProtocolFlow::StructuredClaim => family == ExtensionFamily::StructuredClaim,
-                    ProtocolFlow::CollateralCustodyV3 | ProtocolFlow::Liveness => false,
+                    ProtocolFlow::CollateralCustodyV3
+                    | ProtocolFlow::DirectMarketV1
+                    | ProtocolFlow::Liveness => false,
                 };
                 if !family_matches {
                     return Err(ConstructionError::WrongFlow);
@@ -658,6 +722,40 @@ impl OwnedInstructionDraft {
                     .collect::<Vec<_>>();
                 validate_account_metas_v2(action, &observed)
                     .map_err(|_| ConstructionError::InvalidAccountContract)?;
+            }
+            OwnedWireContract::DisabledDirectMarketRequestV1 { binding, sequence } => {
+                let request = ExtensionRequest::decode(&self.data)
+                    .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                if request.sequence != sequence
+                    || request.envelope.family != ExtensionFamily::DirectMarket
+                    || request.envelope.family != binding.family
+                    || request.envelope.action.local_tag() != binding.local_action
+                    || self.registry_binding != Some(binding)
+                    || binding.family.allocation_status() != Some(binding.family_status)
+                    || self.flow != ProtocolFlow::DirectMarketV1
+                    || self.runtime_admission != RuntimeAdmission::ReservedDisabled
+                    || !matches!(
+                        binding.central_action,
+                        Some(ExtensionAction::DirectMarket(action))
+                            if request.envelope.action == ExtensionAction::DirectMarket(action)
+                    )
+                {
+                    return Err(ConstructionError::UnallocatedRegistryCoordinate);
+                }
+                let ExtensionAction::DirectMarket(action) = request.envelope.action else {
+                    return Err(ConstructionError::WrongFlow);
+                };
+                if (matches!(
+                    action,
+                    clutch_solana_layout::registry::DirectMarketAction::InitializeMarket
+                ) && sequence != 0)
+                    || (!matches!(
+                        action,
+                        clutch_solana_layout::registry::DirectMarketAction::InitializeMarket
+                    ) && sequence == 0)
+                {
+                    return Err(ConstructionError::WrongWirePrefix);
+                }
             }
             OwnedWireContract::CollateralReplayRequestV3 {
                 action,
@@ -835,6 +933,7 @@ impl ProtocolTransactionBuilder {
                 draft.wire,
                 OwnedWireContract::MainSuccessor { .. }
                     | OwnedWireContract::MainSuccessorRequest { .. }
+                    | OwnedWireContract::DisabledDirectMarketRequestV1 { .. }
                     | OwnedWireContract::CollateralReplayRequestV3 { .. }
             ) && draft.program_id != self.clutch_program
             {
@@ -1356,6 +1455,66 @@ mod tests {
         assert!(!plan.has_recent_blockhash);
         assert!(!plan.signed);
         assert!(!plan.submitted);
+    }
+
+    #[test]
+    fn direct_successor_request_stays_exact_and_runtime_disabled() {
+        use clutch_client_contract::direct_market::DirectMarketClientPayloadV1;
+        use clutch_solana_layout::registry::DirectMarketAction;
+
+        let program = Address::new_from_array([2; 32]);
+        let accounts = vec![
+            AccountMeta::new(Address::new_from_array([3; 32]), false),
+            AccountMeta::new(Address::new_from_array([4; 32]), false),
+            AccountMeta::new(Address::new_from_array([5; 32]), false),
+            AccountMeta::new_readonly(Address::new_from_array([6; 32]), false),
+        ];
+        let payload = DirectMarketClientPayloadV1::empty(
+            DirectMarketAction::BeginVerification,
+        )
+        .unwrap();
+        let draft = OwnedInstructionDraft::allocated_direct_market_request_v1(
+            "direct-begin-verification",
+            owner(),
+            program,
+            accounts.clone(),
+            vec![],
+            vec![ExactEquation {
+                name: "no collateral movement".into(),
+                unit: IntegerUnit::Lamports,
+                left: 0,
+                right: 0,
+            }],
+            9,
+            &payload,
+        )
+        .unwrap();
+        assert_eq!(draft.flow, ProtocolFlow::DirectMarketV1);
+        assert_eq!(draft.runtime_admission, RuntimeAdmission::ReservedDisabled);
+        let request = ExtensionRequest::decode(draft.data()).unwrap();
+        assert_eq!(request.sequence, 9);
+        assert_eq!(
+            request.envelope.action,
+            ExtensionAction::DirectMarket(DirectMarketAction::BeginVerification)
+        );
+        assert_eq!(
+            OwnedInstructionDraft::allocated_direct_market_request_v1(
+                "direct-begin-verification",
+                owner(),
+                program,
+                accounts,
+                vec![],
+                vec![ExactEquation {
+                    name: "no collateral movement".into(),
+                    unit: IntegerUnit::Lamports,
+                    left: 0,
+                    right: 0,
+                }],
+                0,
+                &payload,
+            ),
+            Err(ConstructionError::WrongWirePrefix)
+        );
     }
 
     #[test]

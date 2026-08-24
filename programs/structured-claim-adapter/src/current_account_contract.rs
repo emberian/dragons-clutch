@@ -2,7 +2,8 @@
 //!
 //! Implementation is not release admission. The six entries below let the
 //! wrapper, base program, capability manifest, and client tooling share one
-//! closed description while the executable masks remain zero.
+//! closed description. The default adapter remains disabled; the named
+//! successor development profile admits exactly this set.
 
 use crate::runtime_contract::StructuredClaimActionV1;
 

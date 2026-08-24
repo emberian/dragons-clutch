@@ -1,4 +1,7 @@
 use clutch_source_plane_v3::ContentId;
+use clutch_liveness::runtime_v1::{
+    RuntimeLivenessPolicyV1, RUNTIME_LIVENESS_POLICY_BYTES_V1,
+};
 
 use crate::account::RuntimeAccountHeaderV1;
 use crate::auth::{
@@ -20,6 +23,27 @@ const SOURCE_WORK_RECEIPT_AUTH_DOMAIN: &[u8] =
     b"dragons-clutch/authenticated-source-work-receipt-account/v1";
 const SOURCE_RECEIPT_SLOT_DOMAIN: &[u8] = b"dragons-clutch/source-receipt-slot/v1";
 const SOURCE_WORK_RECEIPT_MAGIC: [u8; 8] = [0x92, 1, b'D', b'C', b'S', b'W', b'R', b'1'];
+const SOURCE_LIVENESS_POLICY_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/source-runtime-liveness-policy/v1";
+const RUNTIME_LIVENESS_POLICY_ID_OFFSET_V1: usize = 12;
+
+/// Derive and self-authenticate the exact Source-selected runtime-liveness
+/// policy body. The embedded policy ID is zeroed in the content preimage so
+/// the identity cannot be an unreviewed self-reference.
+pub fn source_runtime_liveness_policy_id_v1(
+    policy: RuntimeLivenessPolicyV1,
+) -> Result<ContentId> {
+    let mut bytes = [0_u8; RUNTIME_LIVENESS_POLICY_BYTES_V1];
+    policy.encode(&mut bytes).map_err(|_| Error::InvalidCodec)?;
+    bytes[RUNTIME_LIVENESS_POLICY_ID_OFFSET_V1
+        ..RUNTIME_LIVENESS_POLICY_ID_OFFSET_V1 + 32]
+        .fill(0);
+    let id = domain_id(SOURCE_LIVENESS_POLICY_DOMAIN_V1, &bytes);
+    if id.is_zero() || policy.policy_id.bytes() != id.bytes() {
+        return Err(Error::MismatchedBinding);
+    }
+    Ok(id)
+}
 
 /// Exact canonical bytes in one persisted Source work or terminal receipt.
 pub const SOURCE_WORK_RECEIPT_ACCOUNT_BYTES: usize = 328;
@@ -328,6 +352,19 @@ pub enum SourceWorkKindV1 {
 }
 
 impl SourceWorkKindV1 {
+    const fn byte(self) -> u8 {
+        match self {
+            Self::AuthenticateBoundary => 1,
+            Self::AppendBoundaryBatch => 2,
+            Self::SealRawPage => 3,
+            Self::FoldWindowPages => 4,
+            Self::SealWindow => 5,
+            Self::EvaluateStatistic => 6,
+            Self::FailureHandoff => 7,
+            Self::TerminalLifecycle => 8,
+        }
+    }
+
     fn decode(value: u8) -> Result<Self> {
         match value {
             1 => Ok(Self::AuthenticateBoundary),
@@ -795,7 +832,7 @@ impl SourceWorkAuthorizationV1 {
             return Err(Error::MismatchedBinding);
         }
         let mut bytes = [0; 248];
-        bytes[0] = kind as u8;
+        bytes[0] = kind.byte();
         bytes[8..40].copy_from_slice(&schedule.source_work_schedule_id.bytes());
         bytes[40..72].copy_from_slice(&schedule.source_compartment_account.bytes());
         bytes[72..104].copy_from_slice(&schedule.source_compartment_owner.bytes());
@@ -893,6 +930,15 @@ pub enum SourceTerminalOutcomeV1 {
     Failure = 2,
 }
 
+impl SourceTerminalOutcomeV1 {
+    const fn byte(self) -> u8 {
+        match self {
+            Self::Success => 1,
+            Self::Failure => 2,
+        }
+    }
+}
+
 /// Family-authenticated terminal receipt projected to the liveness Source compartment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SourceTerminalAuthorizationV1 {
@@ -946,7 +992,7 @@ impl SourceTerminalAuthorizationV1 {
             return Err(Error::IdentityAlias);
         }
         let mut bytes = [0; 232];
-        bytes[0] = outcome as u8;
+        bytes[0] = outcome.byte();
         bytes[8..40].copy_from_slice(&receipt_account_id.bytes());
         bytes[40..72].copy_from_slice(&schedule.receipt_account_owner_program.bytes());
         bytes[72..104].copy_from_slice(&schedule.source_compartment_owner.bytes());
@@ -1037,6 +1083,14 @@ pub enum SourceReceiptDispositionV1 {
 }
 
 impl SourceReceiptDispositionV1 {
+    const fn byte(self) -> u8 {
+        match self {
+            Self::Work => 1,
+            Self::TerminalSuccess => 2,
+            Self::TerminalFailure => 3,
+        }
+    }
+
     fn decode(value: u8) -> Result<Self> {
         match value {
             1 => Ok(Self::Work),
@@ -1185,8 +1239,8 @@ impl SourceWorkReceiptAccountV1 {
         let mut output = [0_u8; SOURCE_WORK_RECEIPT_ACCOUNT_BYTES];
         output[..8].copy_from_slice(&SOURCE_WORK_RECEIPT_MAGIC);
         output[1] = SOURCE_WORK_RECEIPT_ACCOUNT_VERSION;
-        output[2] = self.disposition as u8;
-        output[3] = self.work_kind.map_or(0, |kind| kind as u8);
+        output[2] = self.disposition.byte();
+        output[3] = self.work_kind.map_or(0, SourceWorkKindV1::byte);
         output[16..48].copy_from_slice(&self.route_id.bytes());
         output[48..80].copy_from_slice(&self.source_work_schedule_id.bytes());
         output[80..112].copy_from_slice(&self.source_compartment_account.bytes());
@@ -1505,7 +1559,7 @@ fn source_receipt_slot_id(
     schedule.validate_against(route)?;
     live_id(semantic_receipt_id)?;
     let kind = match disposition {
-        SourceReceiptDispositionV1::Work => work_kind.ok_or(Error::InvalidCodec)? as u8,
+        SourceReceiptDispositionV1::Work => work_kind.ok_or(Error::InvalidCodec)?.byte(),
         SourceReceiptDispositionV1::TerminalSuccess
         | SourceReceiptDispositionV1::TerminalFailure => {
             if work_kind.is_some() || call_ordinal != 0 {
@@ -1515,7 +1569,7 @@ fn source_receipt_slot_id(
         }
     };
     let mut bytes = [0_u8; 152];
-    bytes[0] = disposition as u8;
+    bytes[0] = disposition.byte();
     bytes[1] = kind;
     bytes[8..40].copy_from_slice(&route.route_id().bytes());
     bytes[40..72].copy_from_slice(&schedule.source_work_schedule_id.bytes());

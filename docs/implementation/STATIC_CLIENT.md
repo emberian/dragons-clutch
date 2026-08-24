@@ -71,9 +71,11 @@ Recognizing an outer tag or reserved allocation is not enough to display either
 as chain state.
 
 The optional `fractional` release family is likewise account-owned: it decodes
-only the current Resolution-data-bound Policy V2, Ledger V1, Credit V2, and
-Tombstone V2 codecs. Withdrawn V1 reinterpretations are never projected, and
-the browser does not infer redemption capability from the decoded accounts.
+only the current physical-Resolution-account/Resolution-data-bound Policy V3,
+Ledger V1, Credit V2, and Tombstone V2 codecs. Withdrawn Policy V1,
+unprefundable Policy V2, and credit/tombstone V1 reinterpretations are never
+projected, and the browser does not infer redemption capability from the
+decoded accounts.
 
 ## Product compiler proposal
 

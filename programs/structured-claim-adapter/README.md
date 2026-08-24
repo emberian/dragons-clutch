@@ -1,8 +1,8 @@
 # Structured-claim SBF successor adapter
 
-Status: **current action owners are staged behind exact zero capability masks;
-neither the wrapper nor the base program admits a Structured action, and no
-artifact has been built, measured, deployed, or validated** (2026-08-24).
+Status: **actions 1/3/5/6/7/8 are admitted only by the unified
+`profile-successor-chain-attached-dev` source profile; no successor artifact
+has been built, measured, deployed, or validated** (2026-08-24).
 
 This crate consumes `clutch-structured-claim-runtime-contract` as the owner of
 structured-claim descriptor bytes, family-local payload codecs, roots, replay
@@ -43,31 +43,33 @@ The structured family is `75/v1`, with eight runtime-contract actions:
 7. exact terminal redemption; and
 8. permanent descriptor retirement.
 
-The adapter default remains fail-closed. The historical name
-`live-current-wrapper` stages current source but its release-admitted action
-mask is exactly zero, as is the base program's Structured mask. All eight
-actions therefore refuse at capability admission before account loading.
+The adapter default remains fail-closed. The explicit
+`profile-successor-chain-attached-dev` wrapper feature admits exactly actions
+1, 3, 5, 6, 7, and 8 (`0x01ea`). The central program independently selects
+the identically named unified profile and admits the same six tuples. Actions
+2 and 4 refuse before payload or account loading on both sides.
 
 Actions 1, 3, 5, 6, 7, and 8 have one shared source/account contract used by
 both wrapper and base: founding uses 34 accounts, full-vector wrap/unwind use
 32, compaction uses 32, terminal redemption uses 33, and retirement uses 31.
 Their exact token effects are permanent-mint initialization, mint, burn,
 optional Hoard-surplus disposition, burn, and mint-authority revocation. The
-withdrawn canonical actions 2 and 4 have no current execution contract. All
-eight actions remain ReservedDisabled because the distinct release-admitted
-mask is zero. The exact table is content-addressed by
+withdrawn canonical actions 2 and 4 have no current execution contract. The
+exact table is content-addressed by
 `STRUCTURED_CURRENT_ACCOUNT_CONTRACT_ID_V1`; current wrapper/base/Token-2022
 release authentication consumes the single aggregate release contract.
 
-Activation must be atomic with all of the following:
+Runtime admission remains conditional on all of the following:
 
-- central capability activation for only the implemented family-local actions,
-  descriptor account `0x88/2`, and root account `0xb7/1`;
-- an exact capability-profile tuple and new profile/release identity;
-- main-dispatcher routing for only the admitted current actions;
-- linked ELF, stack, heap, compute, CPI-depth, account-count, rollback, rent,
-  SVM, and local-validator evidence; and
-- a checked release manifest.
+- the exact six-action wrapper/base capability intersection;
+- three content-addressed `RegistryProgramReleaseV2` artifacts naming the
+  checked wrapper, unified-base, and Token-2022 manifest identities;
+- exact executable Program-to-ProgramData linkage, `ObservedPositive` locus,
+  positive loader slot, and SHA-256 of each complete ProgramData body,
+  including its ELF;
+- descriptor/root continuity over the derived three-release owner identity;
+  and
+- main dispatch only for the same six actions.
 
 ## Trust-boundary responsibilities
 
@@ -164,24 +166,15 @@ donation floor/residue, and freezes Product's neutral lamport sink. Later close
 work may return only the persisted principal to its owner and must route every
 donation to the sink. The wrapper cannot mint this authority from caller fields.
 
-## Activation blockers
+## Evidence and deployment blockers
 
-Every Structured tuple and the separate wrapper action mask remain disabled.
-The single shared current account contract covers actions 1, 3, 5, 6, 7, and
-8 with exact frame sizes 34, 32, 32, 32, 33, and 31 respectively. Actions 2
-and 4 have no current executor, and current Replay V3 construction and hostile
-decode refuse their allocated tags.
+The named development profile makes the six coherent source routes callable
+when their exact Product, Realm, collateral, and observed-positive release
+accounts exist. It does not make an ELF, deployment, or validation claim.
 
-The source-staged routes include compaction, terminal redemption, Product
-wrapper terminal promotion, canonical Position V3/Replay V3 retirement,
-descriptor retirement, and Structured-root update or final close. They remain
-`ReservedDisabled`; source presence is not activation evidence.
-
-Activation requires replacement checked wrapper/base/Token-2022 release
-artifacts whose exact manifest admits only the coherent current action set,
-plus linked build, measurement, bank, SVM, local-validator, CPI-depth,
-rollback, and rent evidence. None of that successor evidence has been run.
-`SBF_EVIDENCE.md` records the explicit evidence state.
-
-These are activation dependencies, not reasons to retain a duplicate planner
-or to describe this family as live.
+Linked build, measurement, bank, SVM, local-validator, CPI-depth, rollback,
+and rent evidence has not run for this successor. No concrete deployment is a
+checked release merely because it supplies a syntactically valid
+`RegistryProgramReleaseV2`; the complete ProgramData digest and external
+release evidence must correspond to the built artifact. `SBF_EVIDENCE.md`
+records the explicit evidence state.

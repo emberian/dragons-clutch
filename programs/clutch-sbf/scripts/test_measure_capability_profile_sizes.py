@@ -45,6 +45,12 @@ class SizeDiagnosticTests(unittest.TestCase):
             sizes.explicit_profile_features("profile-direct-v3-source-v2-point"),
             ["custom-heap", "profile-direct-v3-source-v2-point"],
         )
+        self.assertEqual(
+            sizes.explicit_profile_features(
+                sizes.checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE
+            ),
+            ["custom-heap", sizes.checker.SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE],
+        )
 
     def test_profile_selectors_are_explicit_unique_and_known(self) -> None:
         self.assertEqual(

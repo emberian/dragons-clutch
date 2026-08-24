@@ -15,7 +15,10 @@ pub const FRACTIONAL_POLICY_ACCOUNT_TAG: u8 =
 /// Fractional-redemption immutable policy schema.
 ///
 /// V1 is withdrawn: its offset 80 was allocated as a payout-vector digest.
-/// V2 assigns that offset to the exact Resolution V5 data identity.
+/// V2 assigned that offset correctly but made the account PDA depend on the
+/// not-yet-known final Resolution data identity, so it could not be prefunded
+/// during Product Foundation. V3 preserves the body semantics and moves only
+/// the address to a Foundation-computable Market/Resolution-account domain.
 pub const FRACTIONAL_POLICY_ACCOUNT_VERSION: u8 =
     clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_VERSION;
 /// Exact immutable policy body width.
@@ -42,6 +45,11 @@ pub const FRACTIONAL_CREDIT_ACCOUNT_VERSION: u8 =
 /// Exact owner-scoped live credit body width.
 pub const FRACTIONAL_CREDIT_ACCOUNT_BYTES: usize =
     clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_BYTES;
+/// Frozen wire-width projection used in semantic transcripts.
+///
+/// This is deliberately typed directly as `u64`; hashing code must not use an
+/// unchecked cast from the host-sized codec width.
+pub const FRACTIONAL_CREDIT_ACCOUNT_BYTES_U64: u64 = 296;
 /// Permanent zero-credit tombstone discriminator.
 pub const FRACTIONAL_CREDIT_TOMBSTONE_TAG: u8 =
     clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_TAG;
@@ -56,7 +64,7 @@ pub const FRACTIONAL_CREDIT_TOMBSTONE_BYTES: usize =
     clutch_solana_layout::registry::FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_BYTES;
 
 /// Canonical policy PDA seed prefix.
-pub const FRACTIONAL_POLICY_PDA_PREFIX: &[u8] = b"fractional-redemption-policy:v2";
+pub const FRACTIONAL_POLICY_PDA_PREFIX: &[u8] = b"fractional-redemption-policy:v3";
 /// Canonical aggregate-ledger PDA seed prefix.
 pub const FRACTIONAL_LEDGER_PDA_PREFIX: &[u8] = b"fractional-redemption-ledger:v1";
 /// Canonical owner-credit/tombstone PDA seed prefix.
@@ -64,9 +72,9 @@ pub const FRACTIONAL_CREDIT_PDA_PREFIX: &[u8] = b"fractional-redemption-credit:v
 /// Domain for the complete canonical `0xa5/v1` state identity.
 pub const FRACTIONAL_LEDGER_STATE_ID_DOMAIN_V1: &[u8] =
     b"dragons-clutch/fractional-redemption/ledger-state/v1\0";
-/// Domain for the complete canonical immutable `0xa4/v2` state identity.
-pub const FRACTIONAL_POLICY_STATE_ID_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/fractional-redemption/policy-state/v2\0";
+/// Domain for the complete canonical immutable `0xa4/v3` state identity.
+pub const FRACTIONAL_POLICY_STATE_ID_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/fractional-redemption/policy-state/v3\0";
 
 /// Honest no-subsidy terminal rule.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -119,13 +127,13 @@ impl FractionalLedgerPhaseV1 {
     }
 }
 
-/// V2 immutable policy binding Resolution to Realm-selected collateral and claims.
+/// V3 immutable policy binding Resolution to Realm-selected collateral and claims.
 ///
 /// The vector itself is not stored here. `resolution_data_id` commits the exact
 /// canonical Resolution V5 account and body; the body-only semantic ID and
 /// vector are recomputed on every transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FractionalPolicyV2 {
+pub struct FractionalPolicyV3 {
     /// Full successor MarketInstance identity.
     pub market_instance: Identity32V1,
     /// Canonical immutable Resolution account identity.
@@ -154,7 +162,7 @@ pub struct FractionalPolicyV2 {
     pub rent: DeletableRentOwnerV1,
 }
 
-impl FractionalPolicyV2 {
+impl FractionalPolicyV3 {
     /// Validate intrinsic account fields without duplicating the vector owner.
     pub fn validate(self) -> Result<()> {
         if self.domain_generation == 0
@@ -278,17 +286,16 @@ impl FractionalPolicyV2 {
     pub fn state_id(self) -> Result<Identity32V1> {
         let encoded = self.encode()?;
         let mut hasher = Sha256::new();
-        hasher.update(FRACTIONAL_POLICY_STATE_ID_DOMAIN_V2);
+        hasher.update(FRACTIONAL_POLICY_STATE_ID_DOMAIN_V3);
         hasher.update(encoded);
         Identity32V1::new(hasher.finalize().into()).map_err(|_| Error::ZeroIdentity)
     }
 
     /// Canonical PDA seed facts.
-    pub const fn pda_seeds(self) -> FractionalPolicySeedsV2 {
-        FractionalPolicySeedsV2 {
+    pub const fn pda_seeds(self) -> FractionalPolicySeedsV3 {
+        FractionalPolicySeedsV3 {
             market_instance: self.market_instance,
             resolution_account: self.resolution_account,
-            resolution_data_id: self.resolution_data_id,
             stored_bump: self.stored_bump,
         }
     }
@@ -333,7 +340,7 @@ impl FractionalLedgerV1 {
     pub fn validate_with_policy(
         self,
         policy_account: Identity32V1,
-        policy: FractionalPolicyV2,
+        policy: FractionalPolicyV3,
     ) -> Result<()> {
         self.validate()?;
         policy.validate()?;
@@ -454,7 +461,7 @@ impl FractionalCreditV2 {
     pub fn validate_with(
         self,
         policy_account: Identity32V1,
-        policy: FractionalPolicyV2,
+        policy: FractionalPolicyV3,
         ledger_account: Identity32V1,
         ledger: FractionalLedgerV1,
         payout: PayoutVectorV1,
@@ -668,16 +675,15 @@ impl FractionalCreditTombstoneV2 {
     }
 }
 
-/// Canonical V2 immutable policy PDA seed tuple.
+/// Canonical V3 immutable policy PDA seed tuple.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FractionalPolicySeedsV2 {
+pub struct FractionalPolicySeedsV3 {
     market_instance: Identity32V1,
     resolution_account: Identity32V1,
-    resolution_data_id: Identity32V1,
     stored_bump: u8,
 }
 
-impl FractionalPolicySeedsV2 {
+impl FractionalPolicySeedsV3 {
     /// Static seed prefix.
     pub const fn prefix(self) -> &'static [u8] {
         FRACTIONAL_POLICY_PDA_PREFIX
@@ -689,10 +695,6 @@ impl FractionalPolicySeedsV2 {
     /// Canonical Resolution-account seed.
     pub const fn resolution_account(self) -> Identity32V1 {
         self.resolution_account
-    }
-    /// Exact PDA-bound Resolution V5 data seed.
-    pub const fn resolution_data_id(self) -> Identity32V1 {
-        self.resolution_data_id
     }
     /// Stored bump.
     pub const fn stored_bump(self) -> u8 {
@@ -752,4 +754,5 @@ impl FractionalCreditSeedsV2 {
 const _: () = assert!(FRACTIONAL_POLICY_ACCOUNT_BYTES == 248 + 48);
 const _: () = assert!(FRACTIONAL_LEDGER_ACCOUNT_BYTES == 176 + 48);
 const _: () = assert!(FRACTIONAL_CREDIT_ACCOUNT_BYTES == 240 + 56);
+const _: () = assert!(FRACTIONAL_CREDIT_ACCOUNT_BYTES_U64 == 296);
 const _: () = assert!(FRACTIONAL_CREDIT_TOMBSTONE_BYTES == 224 + 8);

@@ -1,8 +1,14 @@
 # Central intent registry
 
-Status: General V2 remains profile-gated. Dealer immutable-catalog actions and
-the exact Initialize/BindEpoch slice are executable only in one explicitly
-non-production laboratory profile.
+Status: one `profile-successor-chain-attached-dev` product is being assembled.
+Its in-flight identity is deliberately capability-empty. A separately frozen
+complete identity admits only the exact all-family and observed-release closure;
+no partially callable successor set may reuse either identity.
+
+The complete identity also depends on Product's fresh 47-slot Foundation graph
+with an explicit `HoardCollateralVault`. Historical
+`MarketFoundationAccountGraphV2`/`SeriesFundingQuoteV4` 46-slot geometry is not
+an acceptance contract and no family tuple may be enabled from it.
 
 ## Frozen legacy space
 
@@ -37,7 +43,7 @@ family version creates a new namespace; it does not inherit capability.
 | Covered dealer | 76 | `0x4c` | 1 | policy catalog plus Initialize/BindEpoch in the named non-production lab |
 | Source plane / Series | 77 | `0x4d` | 2 | actions allocated, runtime disabled |
 | Evidence-only recovery | 78 | `0x4e` | 1 | disabled |
-| Exact fractional redemption | 79 | `0x4f` | 1 | disabled |
+| Exact fractional redemption | 79 | `0x4f` | 1 | actions 1–10 implemented; in-flight profile refuses, complete profile admits all-or-none |
 
 Source/Series starts at family version 2 deliberately. Numeric-fallback V3
 Template/Payout proposals are not promoted into this registry.
@@ -201,7 +207,7 @@ Recovery 78/v1 reserves these local actions, all disabled:
 8. `CloseRecoveryFunding`
 9. `CloseFailureRoot`
 
-FractionalRedemption 79/v1 reserves these local actions, all disabled:
+FractionalRedemption 79/v1 owns these local actions:
 
 1. `Initialize`
 2. `RedeemInternalExact`
@@ -214,16 +220,36 @@ FractionalRedemption 79/v1 reserves these local actions, all disabled:
 9. `SealClaimsExhausted`
 10. `CloseEmptyLedger`
 
-Actions 2, 3, and 9 have complete staged SBF handlers, but this does not alter
-their central status: all ten tuples remain `ReservedDisabled`. Action 3 binds
-the full authenticated outcome-mint vector, accepts the exact independent
-Token-2022 burn before exposing the Realm collateral request, and atomically
-writes Hoard/ClaimLedger/`0xa5`. Action 9 advances only ClaimLedger and `0xa5`
-after canonical supply is exactly zero. Product's exact action-1 family
-admission producer and an explicit deployable release profile remain required
-before any tuple can be enabled.
+Actions 1 through 10 all have concrete current handlers. Action 1 atomically
+allocates Product-prefunded slot-11/12 `0xa4/v3` and `0xa5/v1`, writes the
+ClaimLedger latch, binds the exact authenticated Resolution semantic ID, and
+consumes Product's private family admission. Actions 2/3 are the exact internal
+and bearer routes; actions 4/5 are their credited routes; actions 6/7 transfer
+and merge exact credits; action 8 closes a zero credit; action 9 seals exhausted
+claims; and action 10 performs the terminal join and close. Implemented does
+not mean currently callable: the in-flight central profile keeps all ten
+tuples absent, while its frozen complete identity admits all ten together only
+with the rest of the successor and observed-release closure.
 
-The current account coordinates are `0xa4/2` for the immutable
+There is deliberately no `79/v1` action 11 allocation for Dealer resolution.
+The canonical Fractional `DealerFacilityVectorTransitionV1` is a private
+bounded composer consumed inseparably by Dealer `76/v1` action 23. Allocating a
+separately routed Fractional coordinate would create a detachable facility
+authority path and is therefore refused. The private transition initializes a
+real facility-owned `0xa6/v2` only after Resolution/a4/a5 authentication from a
+Dealer-owned one-shot future-credit rent-principal receipt; it never persists a
+zero or future Resolution identity.
+
+Action 3 binds the full authenticated outcome-mint vector, accepts the exact
+independent Token-2022 burn before exposing the Realm collateral request, and
+atomically writes Hoard/ClaimLedger/`0xa5`. Action 9 advances only ClaimLedger
+and `0xa5` after canonical supply is exactly zero and performs no mint read or
+claim CPI. Action 10 has independent exact Token-2022 Program and ProgramData
+roles, authenticates the checked current claim issuance release and ELF before
+mint observation or terminal writes, and binds that receipt into Product's
+private terminal authority.
+
+The current account coordinates are `0xa4/3` for the immutable
 Market/Resolution/Realm/claim policy, `0xa5/1` for the sole aggregate numerator
 credit and live-credit count, `0xa6/2` for one owner-scoped canonical numerator,
 and `0xa7/2` for the permanent zero-credit replay tombstone. Their exact body
@@ -235,11 +261,14 @@ accounts copy none of those mutable facts; ClaimLedger and `0xa5` advance one
 sequence and exact cross-account semantic-ID receipt atomically.
 
 The earlier `0xa4/1`, `0xa6/1`, and `0xa7/1` allocations are withdrawn, not
-aliases. Their identity slots meant payout-vector digests; the current V2
-schemas instead commit the PDA-bound Resolution V5 data identity. No current
-decoder accepts V1, no migration is defined, and the policy/credit PDA and
-policy-state identity domains advance to V2. `0xa5/1` is unchanged because it
-never owned either identity and remains the sole aggregate-credit owner.
+aliases. Their identity slots meant payout-vector digests. `0xa4/2` is also
+withdrawn before activation because its PDA depended on the future final
+Resolution data identity and could not be Product-prefunded. Current
+`0xa4/v3` keeps that exact data identity in its immutable body while deriving
+its PDA from Market and Resolution account; `0xa6/v2` remains the current
+credit schema. No current decoder accepts either policy predecessor and no
+migration or fallback is defined. `0xa5/1` is unchanged because it never owned
+either identity and remains the sole aggregate-credit owner.
 
 The only admitted terminal policy in the runtime contract is
 `RetainUntilExactAggregation`: a sub-atom remainder keeps its credits and claim
@@ -249,8 +278,8 @@ Initialize can atomically latch both exact accounts, sequence zero-to-one, and
 the Product five-family admission receipt. `CloseEmptyLedger` requires claims,
 aggregate credit, live credit accounts, and claim backing all to be zero. It
 then closes both `0xa4` and `0xa5` under one private Product five-family
-terminal authorization, refunds
-each account's stored rent payer independently, and routes only hostile or
+terminal authorization, refunds both stored principals to the exact shared
+Product rent-refund owner, and routes only hostile or
 unsolicited lamports to the neutral sink. It therefore cannot sweep Hoard
 principal, reinterpret donation surplus as revenue, strand policy rent, permit
 reinitialization, or silently forfeit claimant value.
@@ -415,7 +444,8 @@ pure runtime elsewhere does not make a route executable.
 | `0xa2/1` | Liveness | Recovery compartment; sole work/rent custody |
 | `0xa3/1` | Terminal/replay | failure-generation tombstone |
 | `0xa4/1` | FractionalRedemption | withdrawn payout-vector-bound policy; never a V2 alias |
-| `0xa4/2` | FractionalRedemption | immutable Resolution-V5-data-bound policy (296 bytes) |
+| `0xa4/2` | FractionalRedemption | withdrawn unprefundable Resolution-data-addressed policy |
+| `0xa4/3` | FractionalRedemption | current immutable Resolution-V5-data-bound policy with Foundation-computable PDA (296 bytes) |
 | `0xa5/1` | FractionalRedemption | sole aggregate numerator-credit ledger (224 bytes) |
 | `0xa6/1` | FractionalRedemption | withdrawn payout-vector-bound credit; never a V2 alias |
 | `0xa6/2` | FractionalRedemption | Resolution-V5-data-bound exact numerator credit (296 bytes) |

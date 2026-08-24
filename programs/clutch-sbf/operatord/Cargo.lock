@@ -153,6 +153,7 @@ dependencies = [
  "clutch-batch",
  "clutch-owner-settlement",
  "clutch-solana-layout",
+ "clutch-solana-reference",
 ]
 
 [[package]]

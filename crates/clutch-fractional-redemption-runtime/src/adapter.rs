@@ -24,6 +24,8 @@ pub const FRACTIONAL_TRANSFER_INTENT_BYTES: usize = 208;
 pub const FRACTIONAL_CLOSE_CREDIT_INTENT_BYTES: usize = 80;
 /// Exact terminal seal/ledger close payload width.
 pub const FRACTIONAL_TERMINAL_INTENT_BYTES: usize = 8;
+/// Exact private Dealer-facility vector request width.
+pub const DEALER_FACILITY_VECTOR_REQUEST_BYTES_V1: usize = 168;
 
 /// Immutable policy/ledger initialization selector.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -138,6 +140,104 @@ impl FractionalRedeemIntentV1 {
         }
         output[160] = self.outcome;
         output[161] = self.credit_mode;
+        Ok(output)
+    }
+}
+
+/// Private fixed-width request consumed only inside Dealer action 23.
+///
+/// This is not a separately dispatched Fractional intent. Dealer owns the
+/// public outer and supplies the authenticated facility State, Position,
+/// Replay, Product-obligation, liveness, and future-credit-prefund receipts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DealerFacilityVectorRequestV1 {
+    /// Aggregate a5 sequence consumed by the one vector transition.
+    pub expected_ledger_sequence: u64,
+    /// Facility-owned a6 sequence; one selects same-instruction creation.
+    pub expected_credit_sequence: u64,
+    /// Exact facility Position generation authenticated by Dealer.
+    pub expected_position_generation: u64,
+    /// Exact post-initialization Dealer Replay ordinal authenticated by Dealer.
+    /// Zero is the founding prestate and cannot enter Resolve.
+    pub expected_replay_ordinal: u64,
+    /// Active Market outcome width.
+    pub outcome_count: u8,
+    /// Outcome-ordered internal quantities; inactive tail entries are zero.
+    pub quantities: [u64; crate::MAX_OUTCOMES],
+}
+
+impl DealerFacilityVectorRequestV1 {
+    /// Decode the exact canonical private request.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        exact(input, DEALER_FACILITY_VECTOR_REQUEST_BYTES_V1)?;
+        require_zeroes(input, 33, 40)?;
+        let mut quantities = [0u64; crate::MAX_OUTCOMES];
+        let mut index = 0usize;
+        let mut any = false;
+        while index < crate::MAX_OUTCOMES {
+            quantities[index] = u64_at(input, 40 + index * 8)?;
+            any |= quantities[index] != 0;
+            index += 1;
+        }
+        let value = Self {
+            expected_ledger_sequence: u64_at(input, 0)?,
+            expected_credit_sequence: u64_at(input, 8)?,
+            expected_position_generation: u64_at(input, 16)?,
+            expected_replay_ordinal: u64_at(input, 24)?,
+            outcome_count: input[32],
+            quantities,
+        };
+        if value.expected_ledger_sequence == 0
+            || value.expected_credit_sequence == 0
+            || value.expected_position_generation == 0
+            || value.expected_replay_ordinal == 0
+            || value.outcome_count == 0
+            || usize::from(value.outcome_count) > crate::MAX_OUTCOMES
+            || !any
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let mut tail = usize::from(value.outcome_count);
+        while tail < crate::MAX_OUTCOMES {
+            if value.quantities[tail] != 0 {
+                return Err(Error::NonCanonicalPadding);
+            }
+            tail += 1;
+        }
+        Ok(value)
+    }
+
+    /// Encode the exact canonical private request.
+    pub fn encode(self) -> Result<[u8; DEALER_FACILITY_VECTOR_REQUEST_BYTES_V1]> {
+        if self.expected_ledger_sequence == 0
+            || self.expected_credit_sequence == 0
+            || self.expected_position_generation == 0
+            || self.expected_replay_ordinal == 0
+            || self.outcome_count == 0
+            || usize::from(self.outcome_count) > crate::MAX_OUTCOMES
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let mut output = [0u8; DEALER_FACILITY_VECTOR_REQUEST_BYTES_V1];
+        put_u64(&mut output, 0, self.expected_ledger_sequence)?;
+        put_u64(&mut output, 8, self.expected_credit_sequence)?;
+        put_u64(&mut output, 16, self.expected_position_generation)?;
+        put_u64(&mut output, 24, self.expected_replay_ordinal)?;
+        output[32] = self.outcome_count;
+        let mut index = 0usize;
+        let mut any = false;
+        while index < crate::MAX_OUTCOMES {
+            let quantity = self.quantities[index];
+            if index >= usize::from(self.outcome_count) && quantity != 0 {
+                return Err(Error::NonCanonicalPadding);
+            }
+            any |= quantity != 0;
+            put_u64(&mut output, 40 + index * 8, quantity)?;
+            index += 1;
+        }
+        if !any {
+            return Err(Error::ZeroQuantity);
+        }
         Ok(output)
     }
 }
@@ -308,11 +408,19 @@ impl FractionalTerminalIntentV1 {
     }
 }
 
-/// Exact Solana meta geometry frozen for a future capability review.
+/// Exact Solana meta geometry frozen for the disabled capability review.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FractionalAccountContractV1 {
-    /// Exact live-state account count, or fixed prefix width when suffixes are set.
+    /// Exact live-state account count, or fixed count excluding suffixes.
     pub account_count: u8,
+    /// Fixed Product Foundation core width for actions 1/10, otherwise zero.
+    pub foundation_core_accounts: u8,
+    /// Fixed auxiliary width after the active outcome pairs, otherwise zero.
+    pub foundation_aux_accounts: u8,
+    /// Whether one mint and one custody account per active outcome are inserted.
+    pub foundation_outcome_pair_suffix: bool,
+    /// Writable auxiliary roles after the variable outcome-pair suffix.
+    pub foundation_aux_writable_mask: u32,
     /// Bit `i` requires account `i` to be writable.
     pub writable_mask: u32,
     /// Bit `i` requires account `i` to sign.
@@ -331,25 +439,33 @@ pub struct FractionalAccountContractV1 {
 
 /// Return the frozen account-count and mutability contract for one action.
 ///
-/// Account-role names and order are documented in the crate README. Action 2's
-/// complete adapter uses this geometry, but the central capability tuple stays
-/// disabled until action 1 can create its canonical inputs.
+/// Account-role names and order are documented in the crate README. Concrete
+/// handlers exist for every action, but all ten central capability tuples stay
+/// disabled pending one whole-family release review.
 pub const fn fractional_account_contract_v1(
     action: FractionalRedemptionActionV1,
 ) -> FractionalAccountContractV1 {
     match action {
         FractionalRedemptionActionV1::Initialize => FractionalAccountContractV1 {
-            account_count: 13,
-            writable_mask: 0b0_0001_1100_0001,
-            signer_mask: 0b0_0000_0000_0001,
+            account_count: 31,
+            foundation_core_accounts: 14,
+            foundation_aux_accounts: 17,
+            foundation_outcome_pair_suffix: true,
+            foundation_aux_writable_mask: 0,
+            writable_mask: (1 << 0) | (1 << 4) | (1 << 11) | (1 << 12),
+            signer_mask: 0,
             outcome_mint_suffix: false,
             post_mint_accounts: 0,
             credit_creation_suffix: false,
             external_payout_extra_accounts: 0,
-            external_writable_mask: 0b0_0001_1100_0001,
+            external_writable_mask: (1 << 0) | (1 << 4) | (1 << 11) | (1 << 12),
         },
         FractionalRedemptionActionV1::RedeemInternalExact => FractionalAccountContractV1 {
             account_count: 15,
+            foundation_core_accounts: 0,
+            foundation_aux_accounts: 0,
+            foundation_outcome_pair_suffix: false,
+            foundation_aux_writable_mask: 0,
             writable_mask: 0b111_0011_0000_0000,
             signer_mask: 0b000_0000_0000_0001,
             outcome_mint_suffix: false,
@@ -360,6 +476,10 @@ pub const fn fractional_account_contract_v1(
         },
         FractionalRedemptionActionV1::RedeemBearerExact => FractionalAccountContractV1 {
             account_count: 21,
+            foundation_core_accounts: 0,
+            foundation_aux_accounts: 0,
+            foundation_outcome_pair_suffix: false,
+            foundation_aux_writable_mask: 0,
             writable_mask: (1 << 8)
                 | (1 << 9)
                 | (1 << 12)
@@ -375,6 +495,10 @@ pub const fn fractional_account_contract_v1(
         },
         FractionalRedemptionActionV1::RedeemInternalCredit => FractionalAccountContractV1 {
             account_count: 19,
+            foundation_core_accounts: 0,
+            foundation_aux_accounts: 0,
+            foundation_outcome_pair_suffix: false,
+            foundation_aux_writable_mask: 0,
             writable_mask: (1 << 8) | (1 << 9) | (1 << 12) | (1 << 13) | (1 << 14) | (1 << 15),
             signer_mask: 1,
             outcome_mint_suffix: false,
@@ -390,6 +514,10 @@ pub const fn fractional_account_contract_v1(
         },
         FractionalRedemptionActionV1::RedeemBearerCredit => FractionalAccountContractV1 {
             account_count: 21,
+            foundation_core_accounts: 0,
+            foundation_aux_accounts: 0,
+            foundation_outcome_pair_suffix: false,
+            foundation_aux_writable_mask: 0,
             writable_mask: (1 << 8)
                 | (1 << 9)
                 | (1 << 12)
@@ -411,6 +539,10 @@ pub const fn fractional_account_contract_v1(
         FractionalRedemptionActionV1::TransferCredit
         | FractionalRedemptionActionV1::MergeCredit => FractionalAccountContractV1 {
             account_count: 21,
+            foundation_core_accounts: 0,
+            foundation_aux_accounts: 0,
+            foundation_outcome_pair_suffix: false,
+            foundation_aux_writable_mask: 0,
             writable_mask: (1 << 9)
                 | (1 << 10)
                 | (1 << 13)
@@ -433,6 +565,10 @@ pub const fn fractional_account_contract_v1(
         },
         FractionalRedemptionActionV1::CloseZeroCredit => FractionalAccountContractV1 {
             account_count: 18,
+            foundation_core_accounts: 0,
+            foundation_aux_accounts: 0,
+            foundation_outcome_pair_suffix: false,
+            foundation_aux_writable_mask: 0,
             writable_mask: (1 << 9) | (1 << 12) | (1 << 13) | (1 << 14) | (1 << 16),
             signer_mask: 1,
             outcome_mint_suffix: false,
@@ -447,6 +583,10 @@ pub const fn fractional_account_contract_v1(
         },
         FractionalRedemptionActionV1::SealClaimsExhausted => FractionalAccountContractV1 {
             account_count: 12,
+            foundation_core_accounts: 0,
+            foundation_aux_accounts: 0,
+            foundation_outcome_pair_suffix: false,
+            foundation_aux_writable_mask: 0,
             writable_mask: 0b1001_0000_0000,
             signer_mask: 0,
             outcome_mint_suffix: false,
@@ -456,14 +596,18 @@ pub const fn fractional_account_contract_v1(
             external_writable_mask: 0b1001_0000_0000,
         },
         FractionalRedemptionActionV1::CloseEmptyLedger => FractionalAccountContractV1 {
-            account_count: 10,
-            writable_mask: 0b11_1010_1011,
+            account_count: 31,
+            foundation_core_accounts: 14,
+            foundation_aux_accounts: 17,
+            foundation_outcome_pair_suffix: true,
+            foundation_aux_writable_mask: (1 << 15) | (1 << 16),
+            writable_mask: (1 << 0) | (1 << 4) | (1 << 11) | (1 << 12),
             signer_mask: 0,
             outcome_mint_suffix: false,
             post_mint_accounts: 0,
             credit_creation_suffix: false,
             external_payout_extra_accounts: 0,
-            external_writable_mask: 0b11_1010_1011,
+            external_writable_mask: (1 << 0) | (1 << 4) | (1 << 11) | (1 << 12),
         },
     }
 }
@@ -481,9 +625,10 @@ pub struct SolanaAccountMetaProjectionV1 {
 
 /// Fail closed before parsing payload bytes or inspecting any account meta.
 ///
-/// A future activation must replace this function atomically with program
-/// ownership/PDA/Resolution/ClaimLedger/Hoard/Position/Replay/token/rent adapters
-/// and add the exact tuple to the release's capability manifest.
+/// This pure refusal projection does not own SBF dispatch. The concrete SBF
+/// handlers already perform the program-ownership, PDA, Resolution,
+/// ClaimLedger, Hoard, Position/Replay, token, and rent checks; checked dispatch
+/// independently refuses all ten tuples through its central capability table.
 pub fn refuse_disabled_fractional_redemption_v1(
     _instruction_data: &[u8],
     _accounts: &[SolanaAccountMetaProjectionV1],
