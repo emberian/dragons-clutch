@@ -15,5 +15,7 @@ fi
 grep -q 'start requires --ledger' "$stderr_file"
 
 grep -q 'release_bound_provider_loader_evidence' "$TOOL"
+grep -q 'provider_state_initialized' "$TOOL"
 grep -q -- '--bpf-program' "$ROOT/tools/local-validator/README.md"
+grep -q 'same ProgramData addresses' "$ROOT/tools/local-validator/README.md"
 printf 'local-validator shell tests passed\n'

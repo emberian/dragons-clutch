@@ -134,7 +134,10 @@ write_profile() {
     printf '  "launcher_version": "%s",\n' "$LAUNCHER_VERSION"
     printf '  "profile_class": "local-elf-tail-execution",\n'
     printf '  "release_bound_provider_loader_evidence": false,\n'
-    printf '  "release_bound_provider_loader_evidence_reason": "solana-test-validator 4.0.2 --upgradeable-program accepts only program id, ELF, and authority. It generates Program and ProgramData headers at genesis; it cannot install the captured complete provider account bodies, canonical captured ProgramData addresses, or captured deployment slots. --bpf-program has no ProgramData account. This profile therefore proves only local execution of hash-pinned ELF tails, never the captured release-bound provider-loader evidence.",\n'
+    printf '  "release_bound_provider_loader_evidence_reason": "solana-test-validator 4.0.2 --upgradeable-program uses the supplied program ID, so it derives the same canonical ProgramData PDA. However, it generates new Program and ProgramData headers at genesis and cannot install the captured complete provider account bodies, historical deployment slots, captured upgrade-authority option, or complete-body hashes. --bpf-program has no ProgramData account. This profile therefore proves only local execution of hash-pinned ELF tails, never the captured release-bound provider-loader evidence.",\n'
+    printf '  "canonical_provider_programdata_pdas": true,\n'
+    printf '  "provider_state_initialized": false,\n'
+    printf '  "provider_state_initialized_reason": "This launcher loads the real router and receiver ELFs only. It does not initialize Wormhole, router, receiver, receiver config, or price-update state, and it does not execute the captured signed VAA. It is not an end-to-end provider campaign.",\n'
     printf '  "validator": {"path": '; json_string "$VALIDATOR"; printf ', "version": '; json_string "$VALIDATOR_VERSION"; printf '},\n'
     printf '  "tool_versions": {"launcher": "%s", "solana_test_validator": ' "$LAUNCHER_VERSION"; json_string "$VALIDATOR_VERSION"; printf ', "provider_fixture_capture_solana_test_validator": "solana-test-validator 4.0.2 (src:549805f3; feat:6ff76655, client:Agave)"},\n'
     printf '  "config_path": "/dev/null",\n'

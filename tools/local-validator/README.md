@@ -50,10 +50,12 @@ with upgrades disabled, so it has no ProgramData account at all. That cannot
 satisfy dClutch's Program-to-ProgramData linkage or deployment-slot checks.
 `--upgradeable-program ADDRESS ELF none` is the strongest runnable choice: it
 creates upgradeable program accounts at the required program IDs and disables
-upgrades, but the validator constructs new Program/ProgramData headers at
-genesis. The CLI accepts no complete-account-body or deployment-slot input.
-Therefore it cannot reproduce the captured ProgramData addresses, historical
-slots (`460336311` receiver and `460336290` router), or complete-body hashes.
+upgrades. Because ProgramData is a canonical PDA of the program ID, it derives
+the same ProgramData addresses as the captured release. But the validator
+constructs new Program/ProgramData headers at genesis, and the CLI accepts no
+complete-account-body or deployment-slot input. Therefore it cannot reproduce
+the captured historical slots (`460336311` receiver and `460336290` router),
+captured upgrade-authority option, or complete-body hashes.
 
 The launcher uses `--upgradeable-program … none` for dClutch, the Pyth receiver,
 and the Pyth router, then emits a machine-readable profile naming this boundary,
@@ -62,6 +64,12 @@ detected validator version. A release-bound profile is intentionally refused by
 omission: there is no mode that calls this runnable profile release-bound.
 Local execution here remains local-validator evidence, not provider-release or
 mainnet evidence.
+
+The launcher loads the real router and receiver ELFs, but it deliberately does
+not initialize Wormhole, router, receiver, receiver-config, or price-update
+state and does not execute the captured signed VAA. Accordingly, every emitted
+profile records `provider_state_initialized: false`; this is not yet an
+end-to-end provider campaign.
 
 ## Tests
 
