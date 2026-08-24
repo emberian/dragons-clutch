@@ -415,11 +415,14 @@ pub struct FractionalAccountContractV1 {
     pub account_count: u8,
     /// Fixed Product Foundation core width for actions 1/10, otherwise zero.
     pub foundation_core_accounts: u8,
-    /// Fixed auxiliary width after the active outcome pairs, otherwise zero.
+    /// Fixed auxiliary width after the active outcome-mint prefix, otherwise zero.
     pub foundation_aux_accounts: u8,
-    /// Whether one mint and one custody account per active outcome are inserted.
-    pub foundation_outcome_pair_suffix: bool,
-    /// Writable auxiliary roles after the variable outcome-pair suffix.
+    /// Whether one mint account per active outcome is inserted.
+    ///
+    /// Current lifecycle actions derive custody and General treasury accounts
+    /// from authenticated Product/Revenue state; those accounts are not metas.
+    pub foundation_outcome_mint_suffix: bool,
+    /// Writable auxiliary roles after the variable outcome-mint suffix.
     pub foundation_aux_writable_mask: u32,
     /// Bit `i` requires account `i` to be writable.
     pub writable_mask: u32,
@@ -447,15 +450,15 @@ pub const fn fractional_account_contract_v1(
 ) -> FractionalAccountContractV1 {
     match action {
         FractionalRedemptionActionV1::Initialize => FractionalAccountContractV1 {
-            account_count: 35,
+            account_count: 32,
             foundation_core_accounts: 15,
             foundation_aux_accounts: 17,
-            foundation_outcome_pair_suffix: true,
+            foundation_outcome_mint_suffix: true,
             foundation_aux_writable_mask: 0,
             writable_mask: (1 << 0) | (1 << 4) | (1 << 11) | (1 << 12),
             signer_mask: 0,
             outcome_mint_suffix: false,
-            post_mint_accounts: 3,
+            post_mint_accounts: 0,
             credit_creation_suffix: false,
             external_payout_extra_accounts: 0,
             external_writable_mask: (1 << 0) | (1 << 4) | (1 << 11) | (1 << 12),
@@ -464,7 +467,7 @@ pub const fn fractional_account_contract_v1(
             account_count: 15,
             foundation_core_accounts: 0,
             foundation_aux_accounts: 0,
-            foundation_outcome_pair_suffix: false,
+            foundation_outcome_mint_suffix: false,
             foundation_aux_writable_mask: 0,
             writable_mask: 0b111_0011_0000_0000,
             signer_mask: 0b000_0000_0000_0001,
@@ -478,7 +481,7 @@ pub const fn fractional_account_contract_v1(
             account_count: 21,
             foundation_core_accounts: 0,
             foundation_aux_accounts: 0,
-            foundation_outcome_pair_suffix: false,
+            foundation_outcome_mint_suffix: false,
             foundation_aux_writable_mask: 0,
             writable_mask: (1 << 8)
                 | (1 << 9)
@@ -497,7 +500,7 @@ pub const fn fractional_account_contract_v1(
             account_count: 19,
             foundation_core_accounts: 0,
             foundation_aux_accounts: 0,
-            foundation_outcome_pair_suffix: false,
+            foundation_outcome_mint_suffix: false,
             foundation_aux_writable_mask: 0,
             writable_mask: (1 << 8) | (1 << 9) | (1 << 12) | (1 << 13) | (1 << 14) | (1 << 15),
             signer_mask: 1,
@@ -516,7 +519,7 @@ pub const fn fractional_account_contract_v1(
             account_count: 21,
             foundation_core_accounts: 0,
             foundation_aux_accounts: 0,
-            foundation_outcome_pair_suffix: false,
+            foundation_outcome_mint_suffix: false,
             foundation_aux_writable_mask: 0,
             writable_mask: (1 << 8)
                 | (1 << 9)
@@ -541,7 +544,7 @@ pub const fn fractional_account_contract_v1(
             account_count: 21,
             foundation_core_accounts: 0,
             foundation_aux_accounts: 0,
-            foundation_outcome_pair_suffix: false,
+            foundation_outcome_mint_suffix: false,
             foundation_aux_writable_mask: 0,
             writable_mask: (1 << 9)
                 | (1 << 10)
@@ -567,7 +570,7 @@ pub const fn fractional_account_contract_v1(
             account_count: 18,
             foundation_core_accounts: 0,
             foundation_aux_accounts: 0,
-            foundation_outcome_pair_suffix: false,
+            foundation_outcome_mint_suffix: false,
             foundation_aux_writable_mask: 0,
             writable_mask: (1 << 9) | (1 << 12) | (1 << 13) | (1 << 14) | (1 << 16),
             signer_mask: 1,
@@ -585,7 +588,7 @@ pub const fn fractional_account_contract_v1(
             account_count: 12,
             foundation_core_accounts: 0,
             foundation_aux_accounts: 0,
-            foundation_outcome_pair_suffix: false,
+            foundation_outcome_mint_suffix: false,
             foundation_aux_writable_mask: 0,
             writable_mask: 0b1001_0000_0000,
             signer_mask: 0,
@@ -596,15 +599,15 @@ pub const fn fractional_account_contract_v1(
             external_writable_mask: 0b1001_0000_0000,
         },
         FractionalRedemptionActionV1::CloseEmptyLedger => FractionalAccountContractV1 {
-            account_count: 35,
+            account_count: 32,
             foundation_core_accounts: 15,
             foundation_aux_accounts: 17,
-            foundation_outcome_pair_suffix: true,
+            foundation_outcome_mint_suffix: true,
             foundation_aux_writable_mask: (1 << 15) | (1 << 16),
             writable_mask: (1 << 0) | (1 << 4) | (1 << 11) | (1 << 12),
             signer_mask: 0,
             outcome_mint_suffix: false,
-            post_mint_accounts: 3,
+            post_mint_accounts: 0,
             credit_creation_suffix: false,
             external_payout_extra_accounts: 0,
             external_writable_mask: (1 << 0) | (1 << 4) | (1 << 11) | (1 << 12),
