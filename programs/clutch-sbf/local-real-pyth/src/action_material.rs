@@ -117,6 +117,7 @@ impl CanonicalAccountRoleV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirectAccountRoleV1 {
     ProductRoot,
+    ProductDirectGlobalLiveness,
     FounderSeriesLink,
     CompilerBundle,
     DirectRoot,
@@ -126,6 +127,7 @@ pub enum DirectAccountRoleV1 {
     ReadonlyReservation,
     FreshSelection,
     Selection,
+    DirectResolution,
     ActorPayer,
     Position,
     PositionReplay,
@@ -160,6 +162,7 @@ impl DirectAccountRoleV1 {
         matches!(
             self,
             Self::ProductRoot
+                | Self::ProductDirectGlobalLiveness
                 | Self::DirectRoot
                 | Self::DirectReplay
                 | Self::FreshReservation
@@ -206,10 +209,10 @@ impl DirectNamedAccountV1 {
     pub const fn address(self) -> Address { self.address }
 }
 
-/// Exact action-specific Direct account projection for actions 2 through 12.
+/// Exact action-specific Direct account projection for actions 2 through 13.
 ///
-/// Actions 1 and 13 deliberately refuse until Product publishes the final
-/// callable `0xba` allocation/retirement account frames. Adding those frames
+/// Action 1 deliberately refuses until Product publishes the final callable
+/// `0xba` allocation account frame and quote-owned work schedule. Adding it
 /// requires extending this closed grammar rather than accepting a generic
 /// `Vec<AccountMeta>`.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -557,8 +560,8 @@ pub fn construct_source_action_material_v1(
 /// payload codec and exact action-specific account grammar.
 ///
 /// The result remains unsigned and cannot exist for a coordinate absent from
-/// the checked release. Actions 1 and 13 additionally remain structurally
-/// unavailable until Product's final `0xba` SBF frames are frozen.
+/// the checked release. Action 1 additionally remains structurally unavailable
+/// until Product owns the exact `0xba` allocation and quote work schedule.
 #[allow(clippy::too_many_arguments)]
 pub fn construct_direct_action_material_v1(
     release: &IndexedProgramRelease,
@@ -691,9 +694,7 @@ fn validate_direct_account_roles_v1(
         return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
     }
     match action {
-        DirectMarketAction::InitializeMarket | DirectMarketAction::RetireTerminal => {
-            Err(CanonicalActionMaterialErrorV1::InvalidPlan)
-        }
+        DirectMarketAction::InitializeMarket => Err(CanonicalActionMaterialErrorV1::InvalidPlan),
         DirectMarketAction::AdmitOrder => {
             let end = require_direct_roles_v1(accounts, 0, &[
                 Role::DirectRoot, Role::DirectReplay, Role::FreshReservation,
@@ -768,6 +769,33 @@ fn validate_direct_account_roles_v1(
         }
         DirectMarketAction::LapseUnselected | DirectMarketAction::LapseSelected => {
             validate_direct_economic_roles_v1(accounts, false, 0, 2)
+        }
+        DirectMarketAction::RetireTerminal => {
+            let mut index = require_direct_roles_v1(accounts, 0, &[
+                Role::ProductRoot, Role::FounderSeriesLink, Role::CompilerBundle,
+                Role::DirectRoot, Role::DirectReplay, Role::Selection,
+                Role::DirectResolution, Role::ClockSysvar, Role::NeutralSink,
+            ])?;
+            index = consume_direct_roles_v1(
+                accounts,
+                index,
+                Role::WritableReservation,
+                0,
+                2,
+            )?;
+            index = consume_direct_roles_v1(
+                accounts,
+                index,
+                Role::RentRefundOwner,
+                1,
+                5,
+            )?;
+            index = require_direct_roles_v1(
+                accounts,
+                index,
+                &[Role::ProductDirectGlobalLiveness],
+            )?;
+            require_direct_suffix_v1(accounts, index)
         }
     }
 }
@@ -1272,6 +1300,7 @@ pub(crate) const fn direct_role_label_v1(role: DirectAccountRoleV1) -> &'static 
     use DirectAccountRoleV1 as Role;
     match role {
         Role::ProductRoot => "product-root",
+        Role::ProductDirectGlobalLiveness => "product-direct-global-liveness-v1",
         Role::FounderSeriesLink => "founder-series-link",
         Role::CompilerBundle => "compiler-bundle",
         Role::DirectRoot => "direct-root",
@@ -1281,6 +1310,7 @@ pub(crate) const fn direct_role_label_v1(role: DirectAccountRoleV1) -> &'static 
         Role::ReadonlyReservation => "readonly-direct-reservation",
         Role::FreshSelection => "fresh-direct-selection",
         Role::Selection => "direct-selection",
+        Role::DirectResolution => "direct-resolution-v5",
         Role::ActorPayer => "actor-payer",
         Role::Position => "position-v3",
         Role::PositionReplay => "position-replay-v3",
@@ -1472,13 +1502,56 @@ mod tests {
     }
 
     #[test]
-    fn direct_product_boundary_actions_refuse_until_final_frames_land() {
+    fn direct_product_foundation_refuses_until_final_allocation_frame_lands() {
         assert_eq!(
             DirectActionAccountsV1::new(DirectMarketAction::InitializeMarket, vec![]),
             Err(CanonicalActionMaterialErrorV1::InvalidPlan),
         );
+    }
+
+    #[test]
+    fn direct_retirement_requires_global_liveness_before_candidate_suffix() {
+        use DirectAccountRoleV1 as Role;
+        let roles = [
+            Role::ProductRoot,
+            Role::FounderSeriesLink,
+            Role::CompilerBundle,
+            Role::DirectRoot,
+            Role::DirectReplay,
+            Role::Selection,
+            Role::DirectResolution,
+            Role::ClockSysvar,
+            Role::NeutralSink,
+            Role::WritableReservation,
+            Role::WritableReservation,
+            Role::RentRefundOwner,
+            Role::ProductDirectGlobalLiveness,
+            Role::LivenessPolicy,
+            Role::Candidate,
+            Role::Keeper,
+            Role::CandidatePayer,
+        ];
+        assert!(DirectActionAccountsV1::new(
+            DirectMarketAction::RetireTerminal,
+            direct_accounts(&roles),
+        )
+        .is_ok());
+        let mut missing_global = roles.to_vec();
+        missing_global.remove(12);
         assert_eq!(
-            DirectActionAccountsV1::new(DirectMarketAction::RetireTerminal, vec![]),
+            DirectActionAccountsV1::new(
+                DirectMarketAction::RetireTerminal,
+                direct_accounts(&missing_global),
+            ),
+            Err(CanonicalActionMaterialErrorV1::InvalidPlan),
+        );
+        let mut substituted = roles;
+        substituted[12] = Role::ProductRoot;
+        assert_eq!(
+            DirectActionAccountsV1::new(
+                DirectMarketAction::RetireTerminal,
+                direct_accounts(&substituted),
+            ),
             Err(CanonicalActionMaterialErrorV1::InvalidPlan),
         );
     }

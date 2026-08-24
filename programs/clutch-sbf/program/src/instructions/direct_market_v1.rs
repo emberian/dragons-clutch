@@ -128,6 +128,7 @@ use super::product_market::{
     authenticate_market_lifecycle_root_v1, authenticate_series_market_link_v1,
     AuthenticatedMarketLifecycleRootV1,
 };
+use super::product_direct_global_liveness::retire_product_direct_candidate_liveness_v1;
 
 const DIRECT_ACCOUNT_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/account-authentication/v1\0";
@@ -135,7 +136,7 @@ const DIRECT_PRICE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/price-authentication/v1\0";
 const DIRECT_MARKET_V1_MAX_ACCOUNTS: usize = 30;
 const DIRECT_MARKET_V1_MAX_PAYLOAD_BYTES: usize = 80;
-const DIRECT_RETIRE_TERMINAL_MAX_ACCOUNTS: usize = 20;
+const DIRECT_RETIRE_TERMINAL_MAX_ACCOUNTS: usize = 21;
 const DIRECT_CANDIDATE_LIVENESS_ACCOUNT_COUNT_V1: usize = 4;
 
 const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == RUNTIME_ROOT_BODY_BYTES);
@@ -2742,9 +2743,9 @@ impl AuthenticatedDirectTerminalV1 for DirectFamilyTerminalAuthoritySbfV1<'_> {
 /// Fixed accounts 0..=8 are Product root, founder link, BundleV5, b1, b3,
 /// b2, ResolutionV5, Clock, and the Realm neutral sink. The exact b2-order
 /// live b4 prefix follows, then the sorted unique persisted payer accounts,
-/// immutable liveness policy, writable Candidate, writable keeper signer, and
-/// the Candidate's immutable writable payer. Every suffix length and work
-/// amount is derived from authenticated state.
+/// writable Product `0xba`, immutable liveness policy, writable Candidate,
+/// writable keeper signer, and the Candidate's immutable writable payer.
+/// Every suffix length and work amount is derived from authenticated state.
 #[inline(never)]
 pub(crate) fn process_direct_retire_terminal_v1(
     program_id: &Pubkey,
@@ -2889,7 +2890,10 @@ pub(crate) fn process_direct_retire_terminal_v1(
         .checked_add(usize::from(retirement.refund_count))
         .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
     let expected_count = refund_end
-        .checked_add(DIRECT_CANDIDATE_LIVENESS_ACCOUNT_COUNT_V1)
+        .checked_add(1)
+        .and_then(|value| {
+            value.checked_add(DIRECT_CANDIDATE_LIVENESS_ACCOUNT_COUNT_V1)
+        })
         .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
     require_count(accounts, expected_count)?;
     index = reservation_end;
@@ -2897,7 +2901,7 @@ pub(crate) fn process_direct_retire_terminal_v1(
         require(
             accounts[index].is_writable
                 && (!accounts[index].is_signer
-                    || accounts[index].key == accounts[refund_end + 2].key)
+                    || accounts[index].key == accounts[refund_end + 3].key)
                 && !accounts[index].executable,
             ClutchError::NotWritable,
         )?;
@@ -2923,10 +2927,26 @@ pub(crate) fn process_direct_retire_terminal_v1(
         )?;
         index += 1;
     }
-    require_direct_candidate_liveness_aliases_v1(
-        accounts,
-        refund_end,
-        reservation_end,
+    let manifest_index = refund_end;
+    let liveness_start = manifest_index
+        .checked_add(1)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require_direct_candidate_liveness_aliases_v1(accounts, liveness_start, reservation_end)?;
+    index = 0;
+    while index < manifest_index {
+        require(
+            accounts[manifest_index].key != accounts[index].key,
+            ClutchError::AccountAlias,
+        )?;
+        index += 1;
+    }
+    require(
+        accounts[manifest_index].is_writable
+            && !accounts[manifest_index].is_signer
+            && !accounts[manifest_index].executable
+            && accounts[manifest_index].key != accounts[liveness_start + 2].key
+            && accounts[manifest_index].key != accounts[liveness_start + 3].key,
+        ClutchError::AccountAlias,
     )?;
     let retirement_transfer_id = retirement
         .semantic_id(&DirectRuntimeSha256V1)
@@ -2977,7 +2997,7 @@ pub(crate) fn process_direct_retire_terminal_v1(
     let prepared_state = preparation.prepared_state(root.value());
     let bound_replay = apply_direct_candidate_work_v1(
         program_id,
-        &accounts[refund_end..],
+        &accounts[liveness_start..],
         &accounts[4],
         &prepared_state,
         selection.value_ref(),
@@ -3001,6 +3021,25 @@ pub(crate) fn process_direct_retire_terminal_v1(
             plan.terminal_receipt_id,
         )
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let product_retirement = retire_product_direct_candidate_liveness_v1(
+        program_id,
+        product_root,
+        &plan,
+        family_sequence,
+        &accounts[manifest_index],
+    )?;
+    let product_family_poststate_id = product_post
+        .product_families()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    require(
+        product_retirement.direct_terminal_receipt_id() == plan.terminal_receipt_id
+            && product_retirement.family_terminal_sequence() == family_sequence
+            && product_retirement.product_family_poststate_id()
+                == product_family_poststate_id,
+        ClutchError::MismatchedState,
+    )?;
 
     index = 0;
     while index < usize::from(plan.retirement.refund_count) {
@@ -4362,7 +4401,7 @@ mod tests {
         assert_eq!(18 + 3, 21);
         assert!(21 <= DIRECT_MARKET_V1_MAX_ACCOUNTS);
         assert_eq!(
-            9 + 2 + 5 + DIRECT_CANDIDATE_LIVENESS_ACCOUNT_COUNT_V1,
+            9 + 2 + 5 + 1 + DIRECT_CANDIDATE_LIVENESS_ACCOUNT_COUNT_V1,
             DIRECT_RETIRE_TERMINAL_MAX_ACCOUNTS,
         );
         assert_eq!(
