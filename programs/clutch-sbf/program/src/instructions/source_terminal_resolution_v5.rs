@@ -8,15 +8,18 @@
 use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::product_series::AuthenticatedSourceResolutionInputV3;
-use crate::source_plane_v3::runtime_key;
+use crate::source_plane_v3::{authenticate_lineage, runtime_key};
 use crate::source_plane_v3_actions::{
     apply_source_terminal_liveness, bind_terminal_execution,
-    persist_source_no_reopen_terminal, persist_source_reopen_generation_request,
-    AuthenticatedSourceTerminalSemanticV1, PersistedSourceNoReopenTerminalV1,
+    close_statistic_result_generation, persist_source_no_reopen_terminal,
+    persist_source_reopen_generation_request, AuthenticatedSourceTerminalSemanticV1,
+    CloseRuntimeAccountResultV1, PersistedSourceNoReopenTerminalV1,
     PersistedSourceReopenGenerationRequestV1, SourceTerminalExecutionV1,
 };
 use clutch_failure_policy_runtime::market_interval_cell_v2::FailureMarketIntervalCellResolutionReceiptV2;
-use clutch_liveness::runtime_adapter_v1::RuntimeAtomicTransitionV1;
+use clutch_liveness::runtime_adapter_v1::{
+    RuntimeAtomicTransitionV1, RuntimeTransitionActionV1,
+};
 use clutch_source_plane_v3::ContentId;
 use clutch_source_plane_v3_adapter::PdaRecipeV3;
 use clutch_source_plane_v3_runtime::{
@@ -32,6 +35,8 @@ const SOURCE_RESOLUTION_TERMINAL_COMPOSITION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/source-resolution-terminal-composition/v1";
 const SOURCE_RESOLUTION_TERMINAL_POLICY_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/source-resolution-terminal-policy/v1";
+const SOURCE_RESOLUTION_STATISTIC_RESULT_CLOSE_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/sbf/source-resolution-statistic-result-close/v1";
 
 /// Exhaustive persisted outcome selected by the final Product/Failure
 /// postwrite. No instruction payload constructs this enum.
@@ -273,6 +278,7 @@ pub(crate) struct AuthenticatedSourceResolutionTerminalV1 {
     policy: PersistedSourceResolutionTerminalPolicyV1,
     terminal: SourceTerminalExecutionV1,
     liveness: RuntimeAtomicTransitionV1,
+    payer: clutch_source_plane_v3_runtime::RuntimeKey,
 }
 
 impl AuthenticatedSourceResolutionTerminalV1 {
@@ -294,6 +300,80 @@ impl AuthenticatedSourceResolutionTerminalV1 {
     /// Atomic close of the exact Source liveness compartment.
     pub(crate) const fn liveness(self) -> RuntimeAtomicTransitionV1 {
         self.liveness
+    }
+
+    /// Exact release-selected Source payer sponsoring terminal persistence and
+    /// receiving the retired StatisticResult principal.
+    pub(crate) const fn payer(self) -> clutch_source_plane_v3_runtime::RuntimeKey {
+        self.payer
+    }
+}
+
+/// Exact physical StatisticResult/lineage tombstone written only after the
+/// private successful-resolution terminal policy and receipt already exist.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSourceResolutionStatisticResultCloseV1 {
+    id: ContentId,
+    source_resolution_input_id: ContentId,
+    source_terminal_id: ContentId,
+    result_account: clutch_source_plane_v3_runtime::RuntimeKey,
+    result_account_data_before_id: ContentId,
+    lineage_account: clutch_source_plane_v3_runtime::RuntimeKey,
+    lineage_authentication_before_id: ContentId,
+    lineage_state_before_id: ContentId,
+    lineage_state_after_id: ContentId,
+    close: CloseRuntimeAccountResultV1,
+}
+
+impl AuthenticatedSourceResolutionStatisticResultCloseV1 {
+    /// Complete Source terminal/physical-close postwrite identity.
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
+
+    /// Exact private successful Source input consumed by the close.
+    pub(crate) const fn source_resolution_input_id(self) -> ContentId {
+        self.source_resolution_input_id
+    }
+
+    /// Exact policy/receipt/liveness terminal postwrite consumed first.
+    pub(crate) const fn source_terminal_id(self) -> ContentId {
+        self.source_terminal_id
+    }
+
+    /// Exact closed StatisticResult account.
+    pub(crate) const fn result_account(self) -> clutch_source_plane_v3_runtime::RuntimeKey {
+        self.result_account
+    }
+
+    /// Exact hostile-reopened StatisticResult preimage consumed by close.
+    pub(crate) const fn result_account_data_before_id(self) -> ContentId {
+        self.result_account_data_before_id
+    }
+
+    /// Exact durable lineage tombstone account.
+    pub(crate) const fn lineage_account(self) -> clutch_source_plane_v3_runtime::RuntimeKey {
+        self.lineage_account
+    }
+
+    /// Exact mutable-lineage authentication consumed by close.
+    pub(crate) const fn lineage_authentication_before_id(self) -> ContentId {
+        self.lineage_authentication_before_id
+    }
+
+    /// Exact open-lineage preimage identity consumed by close.
+    pub(crate) const fn lineage_state_before_id(self) -> ContentId {
+        self.lineage_state_before_id
+    }
+
+    /// Exact closed-lineage postimage identity.
+    pub(crate) const fn lineage_state_after_id(self) -> ContentId {
+        self.lineage_state_after_id
+    }
+
+    /// Exact principal/surplus close partition and closed lineage value.
+    pub(crate) const fn close(self) -> CloseRuntimeAccountResultV1 {
+        self.close
     }
 }
 
@@ -466,6 +546,7 @@ pub(crate) fn compose_source_resolution_terminal_v1<
             &terminal.receipt.receipt_id().bytes(),
             &lineage.id().bytes(),
             &lineage.account_data_id().bytes(),
+            &runtime_key(account_payer.key).bytes(),
             &[family.wire_byte()],
         ])
         .to_bytes(),
@@ -476,6 +557,173 @@ pub(crate) fn compose_source_resolution_terminal_v1<
         policy: persisted_policy,
         terminal,
         liveness,
+        payer: runtime_key(account_payer.key),
+    })
+}
+
+/// Close the exact successful StatisticResult generation in the same SVM
+/// instruction, after terminal policy/receipt persistence and Source liveness
+/// close, without accepting action-12 payload authority.
+///
+/// The terminal policy and receipt were created writable earlier in this
+/// instruction. This adapter therefore consumes their retained CreatedMutable
+/// authentication receipts directly; it never attempts an impossible
+/// same-call `ExistingReadOnly` reauthentication under SVM privilege union.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn close_successful_source_statistic_result_v1(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    source: AuthenticatedSourceResolutionInputV3,
+    terminal: AuthenticatedSourceResolutionTerminalV1,
+    result_account: &AccountInfo<'_>,
+    lineage_account: &AccountInfo<'_>,
+    principal_refund: &AccountInfo<'_>,
+    neutral_sink: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedSourceResolutionStatisticResultCloseV1> {
+    let no_reopen = match terminal.policy() {
+        PersistedSourceResolutionTerminalPolicyV1::NoReopen(value) => value.authenticated(),
+        PersistedSourceResolutionTerminalPolicyV1::ReopenRequest(_) => {
+            return Err(Refusal::Adapter(ClutchError::MismatchedState));
+        }
+    };
+    let product_route = source.route();
+    let lineage = authenticate_lineage(
+        program_id,
+        route,
+        lineage_account,
+        LineageAccessV1::Mutable,
+    )
+    .map_err(Refusal::from)?;
+    let lineage_before = lineage.lineage();
+    let statistic_result_recipe = PdaRecipeV3::statistic_result(source.statistic_key_id())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let statistic_result_recipe_id = statistic_result_recipe
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let terminal_receipt = terminal.terminal().authenticated_receipt();
+    let terminal_semantic_id = terminal_receipt.receipt().semantic_receipt_id();
+    require(
+        product_route.source_release_manifest_id() == route.release_manifest_id()
+            && product_route.source_release_authentication_id()
+                == route.release_authentication_id()
+            && product_route.source_route_id() == route.route_id()
+            && product_route.source_plane_contract_id() == route.source_plane_contract_id()
+            && product_route.source_spec_id() == route.source_spec_id()
+            && no_reopen.source_resolution_input_id() == source.id()
+            && no_reopen.family() == SourceReopenFamilyV1::StatisticResult
+            && no_reopen.expected_lineage_state_id() == lineage.account_data_id()
+            && no_reopen.lineage_authentication_id() == lineage.id()
+            && no_reopen.lineage_account() == runtime_key(lineage_account.key)
+            && no_reopen.target_account() == source.result_account()
+            && no_reopen.target_account() == runtime_key(result_account.key)
+            && no_reopen
+                .terminal_id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                == terminal_semantic_id
+            && terminal_receipt.receipt() == terminal.terminal().receipt
+            && terminal_receipt.account() == terminal.terminal().receipt_funding.account
+            && terminal_receipt.schedule().payer() == terminal.payer()
+            && terminal.liveness().action == RuntimeTransitionActionV1::CloseSuccess
+            && terminal.liveness().close_account
+            && terminal.liveness().account_balance_after == 0
+            && lineage_before.family == LineageFamilyV1::StatisticResult
+            && lineage_before.semantic_binding_id == statistic_result_recipe_id
+            && lineage_before.active_account == runtime_key(result_account.key)
+            && lineage_before.last_opened_state_id == source.result_account_data_id()
+            && principal_refund.is_writable
+            && principal_refund.is_signer
+            && !principal_refund.executable
+            && runtime_key(principal_refund.key) == terminal.payer()
+            && neutral_sink.is_writable
+            && !neutral_sink.is_signer
+            && !neutral_sink.executable
+            && runtime_key(neutral_sink.key) == route.neutral_sink(),
+        ClutchError::MismatchedState,
+    )?;
+    let result_data = result_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let result_account_data_before_id =
+        account_data_id(runtime_key(result_account.key), &result_data)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(result_data);
+    require(
+        result_account_data_before_id == source.result_account_data_id(),
+        ClutchError::MismatchedState,
+    )?;
+    let projected_lineage_after = close_lineage_generation(
+        lineage_before,
+        runtime_key(result_account.key),
+        lineage_before.latest_generation,
+        result_account_data_before_id,
+        terminal_semantic_id,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let projected_lineage_bytes = projected_lineage_after
+        .encode()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let projected_lineage_state_after_id =
+        account_data_id(runtime_key(lineage_account.key), &projected_lineage_bytes)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let close = close_statistic_result_generation(
+        program_id,
+        route,
+        lineage,
+        result_account,
+        lineage_account,
+        principal_refund,
+        neutral_sink,
+        terminal_receipt,
+    )?;
+    let lineage_after_bytes = close
+        .lineage_after
+        .encode()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let lineage_state_after_id =
+        account_data_id(runtime_key(lineage_account.key), &lineage_after_bytes)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        close.lineage_after == projected_lineage_after
+            && lineage_state_after_id == projected_lineage_state_after_id
+            && !close.lineage_after.is_open
+            && close.funding.account == source.result_account()
+            && close.funding.principal_recipient == runtime_key(principal_refund.key)
+            && close.funding.neutral_sink == runtime_key(neutral_sink.key)
+            && close.funding.terminal_receipt_id == terminal_semantic_id
+            && result_account.lamports() == 0,
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SOURCE_RESOLUTION_STATISTIC_RESULT_CLOSE_DOMAIN_V1,
+            &source.id().bytes(),
+            &terminal.id().bytes(),
+            &no_reopen.id().bytes(),
+            &terminal_receipt.id().bytes(),
+            result_account.key.as_ref(),
+            &result_account_data_before_id.bytes(),
+            lineage_account.key.as_ref(),
+            &lineage.id().bytes(),
+            &lineage.account_data_id().bytes(),
+            &lineage_state_after_id.bytes(),
+            &close.funding.close_receipt_id.bytes(),
+            principal_refund.key.as_ref(),
+            neutral_sink.key.as_ref(),
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(AuthenticatedSourceResolutionStatisticResultCloseV1 {
+        id,
+        source_resolution_input_id: source.id(),
+        source_terminal_id: terminal.id(),
+        result_account: runtime_key(result_account.key),
+        result_account_data_before_id,
+        lineage_account: runtime_key(lineage_account.key),
+        lineage_authentication_before_id: lineage.id(),
+        lineage_state_before_id: lineage.account_data_id(),
+        lineage_state_after_id,
+        close,
     })
 }
 
@@ -551,5 +799,43 @@ mod tests {
             result_account,
             recipe_id,
         ));
+    }
+
+    #[test]
+    fn same_call_close_consumes_postwrites_and_refuses_caller_coordinates() {
+        let source = include_str!("source_terminal_resolution_v5.rs");
+        let close = source
+            .split("pub(crate) fn close_successful_source_statistic_result_v1")
+            .nth(1)
+            .and_then(|value| value.split("fn lineage_family").next())
+            .expect("private successful close");
+        for predicate in [
+            "PersistedSourceResolutionTerminalPolicyV1::NoReopen",
+            "value.authenticated()",
+            "terminal.terminal().authenticated_receipt()",
+            "source.result_account_data_id()",
+            "no_reopen.lineage_authentication_id() == lineage.id()",
+            "lineage_before.semantic_binding_id == statistic_result_recipe_id",
+            "close_statistic_result_generation",
+            "close.lineage_after == projected_lineage_after",
+            "result_account.lamports() == 0",
+        ] {
+            assert!(close.contains(predicate), "missing close guard {predicate}");
+        }
+        assert!(!close.contains("CloseGenerationIntentV2"));
+        assert!(!close.contains("authenticate_source_terminal_policy_for_close"));
+        assert!(!close.contains("ExistingReadOnly"));
+    }
+
+    #[test]
+    fn source_input_identity_retains_exact_result_preimage() {
+        let source = include_str!("product_series.rs");
+        let input = source
+            .split("pub fn authenticate_source_resolution_input_v3")
+            .nth(1)
+            .and_then(|value| value.split("#[cfg(test)]").next())
+            .expect("Source input constructor");
+        assert!(input.contains("&handoff.result_account_data_id().bytes()"));
+        assert!(input.contains("result_account_data_id: handoff.result_account_data_id()"));
     }
 }

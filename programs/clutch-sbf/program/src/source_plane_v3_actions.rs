@@ -344,6 +344,17 @@ pub struct SourceTerminalExecutionV1 {
     pub observation: RuntimeReceiptObservationV1,
     /// Sole Source-compartment terminal intent.
     pub intent: RuntimeTransitionIntentV1,
+    /// Same-instruction authentication of the newly persisted receipt. The
+    /// private terminal close consumes this CreatedMutable capability rather
+    /// than reopening a writable creation account as read-only.
+    authenticated_receipt: AuthenticatedSourceWorkReceiptV1,
+}
+
+impl SourceTerminalExecutionV1 {
+    /// Exact CreatedMutable receipt retained for the same-call close.
+    pub(crate) const fn authenticated_receipt(self) -> AuthenticatedSourceWorkReceiptV1 {
+        self.authenticated_receipt
+    }
 }
 
 /// Apply the Source work receipt's sole liveness debit in the same SBF
@@ -1121,6 +1132,7 @@ pub(crate) fn bind_terminal_execution(
         receipt_funding,
         observation: project_liveness_receipt(authenticated),
         intent: project_liveness_terminal_intent(authenticated).map_err(Refusal::from)?,
+        authenticated_receipt: authenticated,
     })
 }
 
