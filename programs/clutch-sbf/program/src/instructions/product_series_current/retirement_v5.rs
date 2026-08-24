@@ -2358,7 +2358,7 @@ where
         program_id,
         funding_account,
         series_plan_id,
-        false,
+        true,
     )?;
     let source = retire_source_funding_custody_v3(
         program_id,
