@@ -284,6 +284,17 @@ pub fn process(
         }
         return process_source_v3(program_id, accounts, instruction_data);
     }
+    #[cfg(feature = "profile-successor-chain-attached-dev")]
+    if let Some(action) = general_v2_action(instruction_data) {
+        if !capabilities::extension_intent_action_enabled(
+            clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG,
+            clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION,
+            action.tag(),
+        ) {
+            return Err(ClutchError::UnsupportedInstruction.into());
+        }
+        return process_general_v2(program_id, accounts, instruction_data);
+    }
     #[cfg(feature = "profile-full")]
     if let Some(action) = direct_market_action(instruction_data) {
         if !capabilities::extension_intent_action_enabled(
@@ -420,6 +431,40 @@ fn process_dealer_terminal_retirement(
                 request.envelope.payload,
             )
         }
+        _ => unexpected_route(),
+    }
+}
+
+/// Identify one exact current General successor request before account access.
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+fn general_v2_action(
+    instruction_data: &[u8],
+) -> Option<clutch_solana_layout::registry::GeneralV2Action> {
+    let request = ExtensionRequest::decode(instruction_data).ok()?;
+    match request.envelope.action {
+        ExtensionAction::GeneralV2(action) => Some(action),
+        _ => None,
+    }
+}
+
+/// Enter the sole current General V5 router after exact capability admission.
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+#[inline(never)]
+fn process_general_v2(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request =
+        ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
+    match request.envelope.action {
+        ExtensionAction::GeneralV2(action) => crate::instructions::general_v2_current::process(
+            program_id,
+            accounts,
+            request.sequence,
+            action,
+            request.envelope.payload,
+        ),
         _ => unexpected_route(),
     }
 }
@@ -2174,7 +2219,7 @@ mod extension_registry_tests {
         for (family_tag, family_version, local_action) in [
             (74, 2, 1),
             (74, 1, 0),
-            (74, 1, 39),
+            (74, 1, 52),
             (75, 1, 0),
             (75, 1, 9),
             (77, 2, 0),
