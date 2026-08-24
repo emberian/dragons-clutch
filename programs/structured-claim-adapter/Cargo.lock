@@ -58,6 +58,7 @@ dependencies = [
  "clutch-batch",
  "clutch-batch-policy-identity",
  "clutch-owner-settlement",
+ "sha2",
 ]
 
 [[package]]
