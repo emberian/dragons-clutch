@@ -256,6 +256,9 @@ impl AuthenticatedProductMarketFounderFoundationPreauthorizationV3 {
     pub(crate) const fn failure_liveness_policy_account(&self) -> Pubkey {
         self.failure_liveness_policy_account
     }
+    pub(crate) const fn foundation_vault_account(&self) -> Pubkey {
+        self.foundation_vault_account
+    }
     pub(crate) const fn principal_refund_owner(&self) -> Pubkey { self.principal_refund_owner }
     pub(crate) const fn neutral_lamport_sink(&self) -> Pubkey { self.neutral_lamport_sink }
     pub(crate) const fn candidate_lifecycle_policy_id(&self) -> ContentId {
@@ -532,7 +535,7 @@ impl AuthenticatedProductMarketFounderCurrentCreationV3 {
         let graph_id = graph.id(schedule)
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
         let state = root.state();
-        let binding_id = state.binding().id()
+        let binding_id = state.binding_ref().id()
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
         let capital = state.capital();
         let initial_capital = *self.foundation_capital;
@@ -541,7 +544,7 @@ impl AuthenticatedProductMarketFounderCurrentCreationV3 {
             root.is_writable()
                 && root.account() == self.preauthorization.lifecycle_root_account
                 && state.phase() == MarketLifecyclePhaseV2::Founding
-                && state.binding() == *self.market_binding
+                && state.binding_ref() == self.market_binding.as_ref()
                 && binding_id == self.foundation_steps.market_binding_id
                 && schedule_id.content_id() == self.foundation_steps.foundation_schedule_id
                 && graph_id.content_id() == self.foundation_steps.foundation_graph_id
@@ -710,7 +713,7 @@ impl AuthenticatedProductMarketFounderCurrentCreationV3 {
         let graph_id = graph.id(schedule)
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
         let state = root.state();
-        let binding_id = state.binding().id()
+        let binding_id = state.binding_ref().id()
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
         let capital = state.capital();
         let initial_capital = *self.foundation_capital;
@@ -719,7 +722,7 @@ impl AuthenticatedProductMarketFounderCurrentCreationV3 {
             root.is_writable()
                 && root.account() == self.preauthorization.lifecycle_root_account
                 && state.phase() == MarketLifecyclePhaseV2::Founding
-                && state.binding() == *self.market_binding
+                && state.binding_ref() == self.market_binding.as_ref()
                 && binding_id == self.foundation_steps.market_binding_id
                 && schedule_id.content_id() == self.foundation_steps.foundation_schedule_id
                 && graph_id.content_id() == self.foundation_steps.foundation_graph_id
