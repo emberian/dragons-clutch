@@ -24,7 +24,7 @@ use clutch_general_v2_contract::{
 use clutch_general_v2_runtime::{
     prepare_release_unfilled_reservation_v1, PositionAccountInputV3,
     ReleaseUnfilledReservationInputV1, ReleaseUnfilledReservationPlanV1,
-    SettlementTraversalProjectionV4, UnfilledReservationRentBalancesV1,
+    SettlementTraversalAccessV5, UnfilledReservationRentBalancesV1,
 };
 use clutch_retirement::{PositionPurposeV3, POSITION_V3_BYTES};
 use clutch_solana_layout::order_page_v5::{verify_page_v5, ORDER_PAGE_V5_BYTES};
@@ -203,7 +203,7 @@ fn action41_page_count_from_account_len(total: usize) -> Result<usize, ClutchErr
 fn authenticate_release_endpoint_v1(
     program_id: &Pubkey,
     root: &AuthenticatedGeneralSettlementRootV1,
-    traversal: &SettlementTraversalProjectionV4,
+    traversal: &dyn SettlementTraversalAccessV5,
     collateral: BoundCollateralProfileV2,
     selected_page: &AccountInfo<'_>,
     market_binding: &AccountInfo<'_>,
@@ -231,7 +231,7 @@ fn authenticate_release_endpoint_v1(
             && page.market.0 == root.root().market().bytes()
             && page.epoch.0 == root.root().epoch().bytes()
             && page.order_set.0 == root.root().order_set().bytes()
-            && traversal.order_projection().page_account(page.page_index)
+            && traversal.projection().page_account(page.page_index)
                 == Some(id(selected_page.key)),
         ClutchError::MismatchedState,
     )?;
@@ -485,7 +485,7 @@ fn release_unfilled_reservation(
 fn compose_and_apply_release_unfilled_reservation_v1(
     program_id: &Pubkey,
     payload: ReleaseUnfilledReservationPayloadV1,
-    authenticated: AuthenticatedRootSettlementTraversalV5<'_>,
+    authenticated: AuthenticatedRootSettlementTraversalV5<'_, '_>,
     settlement_root: &AccountInfo<'_>,
     traversal_frame: SettlementTraversalAccountFrameV5<'_, '_>,
     selected_page: &AccountInfo<'_>,
@@ -512,7 +512,7 @@ fn compose_and_apply_release_unfilled_reservation_v1(
     )?;
     require_readonly_program_state(program_id, traversal_frame.retained_feed)?;
     require(
-        id(traversal_frame.retained_feed.key) == traversal.selected_feed_account()
+        id(traversal_frame.retained_feed.key) == traversal.projection().selected_feed_account()
             && id(traversal_frame.market_binding.key) == authenticated_root.root().market_binding()
             && id(traversal_frame.market_runtime.key) == authenticated_root.root().market(),
         ClutchError::MismatchedState,
@@ -555,12 +555,7 @@ fn compose_and_apply_release_unfilled_reservation_v1(
     let rent = endpoint.reservation.rent();
     require(
         rent.payer.bytes() == frame.rent_payer.key.to_bytes()
-            && traversal
-                .order_projection()
-                .base()
-                .market_binding()
-                .neutral_sink
-                == id(frame.neutral_sink.key),
+            && traversal.projection().neutral_sink() == id(frame.neutral_sink.key),
         ClutchError::MismatchedState,
     )?;
     let plan = prepare_plan_boxed(ReleaseUnfilledReservationInputV1 {

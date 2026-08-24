@@ -259,6 +259,60 @@ impl EconomicBookV2 {
     }
 }
 
+/// Constant-space validator for one canonical owner-blind book stream.
+///
+/// This is the sole streaming form of [`EconomicBookV2::validate`]. Adapters
+/// that retain authenticated page bytes can validate one decoded row at a
+/// time without first materializing the fixed 64-row book on the SBF stack.
+/// The accepted order and error semantics are identical to the owned book.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EconomicBookStreamValidatorV2 {
+    domain: EconomicDomainV2,
+    previous_order_id: [u8; 32],
+    len: u8,
+}
+
+impl EconomicBookStreamValidatorV2 {
+    /// Begin one empty canonical stream under the exact RelationV2 domain.
+    pub fn new(domain: EconomicDomainV2) -> Result<Self, EconomicErrorV2> {
+        domain.validate()?;
+        Ok(Self {
+            domain,
+            previous_order_id: [0; 32],
+            len: 0,
+        })
+    }
+
+    /// Validate and append one live row in canonical identity order.
+    pub fn push(&mut self, order: EconomicOrderV2) -> Result<(), EconomicErrorV2> {
+        if usize::from(self.len) >= MAX_ORDERS {
+            return Err(EconomicErrorV2::TooManyOrders);
+        }
+        validate_live_order_shape_v2(
+            &self.domain,
+            &order,
+            self.len,
+            self.previous_order_id,
+        )?;
+        self.previous_order_id = order.order_id;
+        self.len = self
+            .len
+            .checked_add(1)
+            .ok_or(EconomicErrorV2::ArithmeticOverflow)?;
+        Ok(())
+    }
+
+    /// Number of live rows accepted so far.
+    pub const fn len(self) -> u8 {
+        self.len
+    }
+
+    /// Whether no live row has been accepted.
+    pub const fn is_empty(self) -> bool {
+        self.len == 0
+    }
+}
+
 /// Validate one live order using the exact shape rules shared by the bounded
 /// and resumable RelationV2 paths.
 pub(crate) fn validate_live_order_shape_v2(

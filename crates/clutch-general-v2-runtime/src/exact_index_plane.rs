@@ -32,8 +32,8 @@ use clutch_solana_layout::MAX_ORDERS_PER_PAGE;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    bind_settlement_root_traversal_v4, CanonicalSha256, SettlementLegV1, SettlementRouteV1,
-    SettlementTraversalProjectionV4,
+    authenticate_settlement_feed_view_v5, bind_settlement_root_traversal_v5, CanonicalSha256,
+    SettlementLegV1, SettlementRouteV1, SettlementTraversalAccessV5,
 };
 
 pub const EXACT_INDEX_PLANE_VERSION_V1: u8 = 1;
@@ -220,12 +220,11 @@ impl ExactIndexCreateAccountInputV1 {
 
 #[derive(Clone, Copy, Debug)]
 pub struct ConstructExactIndexStreamingInputV1<'a> {
-    pub traversal: &'a SettlementTraversalProjectionV4,
+    pub traversal: &'a dyn SettlementTraversalAccessV5,
     pub feed_full_data: AuthenticatedFeedFullDataIdV1,
     pub settlement_root_account: Id32,
     pub settlement_root: &'a SettlementRootV1AccountV1,
     pub capability_profile_id: Id32,
-    pub page_physical_slot_counts: [u8; 4],
     pub locator_create: ExactIndexCreateAccountInputV1,
     pub adjacency_create: ExactIndexCreateAccountInputV1,
 }
@@ -244,14 +243,18 @@ pub struct AuthenticatedFeedFullDataIdV1 {
 }
 
 pub fn authenticate_feed_full_data_id_v1(
-    traversal: &SettlementTraversalProjectionV4,
+    traversal: &dyn SettlementTraversalAccessV5,
     feed_account: Id32,
     feed_body: &[u8],
 ) -> Result<AuthenticatedFeedFullDataIdV1, ExactIndexPlaneErrorV1> {
     let candidate_bundle_digest = candidate_bundle_digest_v1(&CanonicalSha256, feed_body, true)
         .map_err(|_| ExactIndexPlaneErrorV1::CandidateTraversal)?;
-    if feed_account != traversal.selected_feed_account()
-        || candidate_bundle_digest != traversal.candidate_bundle_digest()
+    let projection = traversal.projection();
+    let feed_view = authenticate_settlement_feed_view_v5(feed_account, feed_body)
+        .map_err(|_| ExactIndexPlaneErrorV1::CandidateTraversal)?;
+    if feed_account != projection.selected_feed_account()
+        || candidate_bundle_digest != projection.candidate_bundle_digest()
+        || feed_view.data_id() != projection.feed_data_id()
     {
         return Err(ExactIndexPlaneErrorV1::CandidateTraversal);
     }
@@ -273,14 +276,15 @@ impl CountedExactIndexRootStreamResultV1 {
     pub const fn plane_id(&self) -> Id32 { self.plane_id }
 }
 
-pub fn exact_index_slice_reference_count_v1(traversal: &SettlementTraversalProjectionV4)
+pub fn exact_index_slice_reference_count_v1(traversal: &dyn SettlementTraversalAccessV5)
     -> Result<u16, ExactIndexPlaneErrorV1>
 {
     let feed = traversal.feed();
     let mut count = 0u16;
     let mut slice = 0u16;
     while slice < feed.slice_count {
-        let value = traversal.settlement_slice(slice).ok_or(ExactIndexPlaneErrorV1::CandidateTraversal)?;
+        let value = traversal.settlement_slice(slice)
+            .map_err(|_| ExactIndexPlaneErrorV1::CandidateTraversal)?;
         let increment = match (value.buy(), value.sell(), value.route()) {
             (SettlementLegV1::Order(_), SettlementLegV1::Order(_), SettlementRouteV1::Direct) => 2,
             (SettlementLegV1::Order(_), SettlementLegV1::Split, SettlementRouteV1::SplitToBuy)
@@ -313,23 +317,24 @@ pub fn stream_counted_exact_index_root_v1(
     root_output: &mut [u8], locator_output: &mut [u8], adjacency_output: &mut [u8],
 ) -> Result<CountedExactIndexRootStreamResultV1, ExactIndexPlaneErrorV1> {
     input.settlement_root.validate().map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
-    bind_settlement_root_traversal_v4(input.settlement_root_account, input.settlement_root, input.traversal)
+    let projection = input.traversal.projection();
+    bind_settlement_root_traversal_v5(input.settlement_root_account, input.settlement_root, projection)
         .map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
     if root_rent.root_account() != input.settlement_root_account
         || root_rent.base_before() != input.settlement_root || input.capability_profile_id.is_zero()
-        || input.traversal.selected_feed_account() != input.settlement_root.retained_feed()
-        || input.traversal.candidate_bundle_digest() != input.settlement_root.candidate_bundle_digest()
-        || input.feed_full_data.account != input.traversal.selected_feed_account()
+        || projection.selected_feed_account() != input.settlement_root.retained_feed()
+        || projection.candidate_bundle_digest() != input.settlement_root.candidate_bundle_digest()
+        || input.feed_full_data.account != projection.selected_feed_account()
         || input.feed_full_data.candidate_bundle_digest
-            != input.traversal.candidate_bundle_digest()
+            != projection.candidate_bundle_digest()
     { return Err(ExactIndexPlaneErrorV1::RootBinding); }
-    let feed = input.traversal.feed();
+    let feed = projection.feed();
     let references = exact_index_slice_reference_count_v1(input.traversal)?;
     let locator_len = locator_data_len_v1(feed.order_count)?;
     let adjacency_len = adjacency_data_len_v1(feed.order_count, references)?;
     if root_output.len() != INDEXED_SETTLEMENT_ROOT_BYTES_V1 || locator_output.len() != locator_len
         || adjacency_output.len() != adjacency_len { return Err(ExactIndexPlaneErrorV1::WrongLength); }
-    let forbidden = [input.settlement_root_account, input.traversal.selected_feed_account(),
+    let forbidden = [input.settlement_root_account, projection.selected_feed_account(),
         input.settlement_root.market(), input.settlement_root.market_binding()];
     let locator_rent = input.locator_create.validate(locator_len, &forbidden)?;
     let adjacency_rent = input.adjacency_create.validate(adjacency_len, &forbidden)?;
@@ -352,20 +357,21 @@ pub fn stream_counted_exact_index_root_v1(
     if combined > root_rent.payer_balance_before_lamports() { return Err(ExactIndexPlaneErrorV1::InvalidRent); }
 
     locator_output.fill(0); adjacency_output.fill(0);
-    let projection = input.traversal.order_projection();
+    let physical_slot_counts = projection.page_physical_slot_counts();
     let mut totals = [0u64; MAX_ORDERS];
     let mut order = 0usize;
     while order < usize::from(feed.order_count) {
         let index = u8::try_from(order).map_err(|_| ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+        let order_row = input.traversal.order(index)
+            .map_err(|_| ExactIndexPlaneErrorV1::CandidateTraversal)?
+            .ok_or(ExactIndexPlaneErrorV1::InvalidLocator)?;
         let location = FrozenOrderLocatorRowV1 {
-            page_index: projection.order_page_index(index)
-                .ok_or(ExactIndexPlaneErrorV1::InvalidLocator)?,
-            page_slot: projection.order_page_slot(index)
-                .ok_or(ExactIndexPlaneErrorV1::InvalidLocator)?,
+            page_index: order_row.page_index(),
+            page_slot: order_row.page_slot(),
         };
         if usize::from(location.page_index) >= usize::from(projection.page_count())
             || location.page_slot
-                >= input.page_physical_slot_counts[usize::from(location.page_index)]
+                >= physical_slot_counts[usize::from(location.page_index)]
         {
             return Err(ExactIndexPlaneErrorV1::InvalidLocator);
         }
@@ -377,7 +383,7 @@ pub fn stream_counted_exact_index_root_v1(
             prior += 1;
         }
         write_locator(locator_output, order, location)?;
-        let side = match projection.base().book().orders[order].side {
+        let side = match order_row.economic_order().side {
             Side::Buy => ExactIndexOrderSideV1::Buy, Side::Sell => ExactIndexOrderSideV1::Sell,
         };
         write_directory(adjacency_output, order, CandidateOrderDirectoryRowV1 {
@@ -387,7 +393,8 @@ pub fn stream_counted_exact_index_root_v1(
     }
     let mut slice = 0u16;
     while slice < feed.slice_count {
-        let value = input.traversal.settlement_slice(slice).ok_or(ExactIndexPlaneErrorV1::CandidateTraversal)?;
+        let value = input.traversal.settlement_slice(slice)
+            .map_err(|_| ExactIndexPlaneErrorV1::CandidateTraversal)?;
         match (value.buy(), value.sell(), value.route()) {
             (SettlementLegV1::Order(buy), SettlementLegV1::Order(sell), SettlementRouteV1::Direct) => {
                 add_count(adjacency_output, &mut totals, feed.order_count, buy,
@@ -411,7 +418,9 @@ pub fn stream_counted_exact_index_root_v1(
     while order < usize::from(feed.order_count) {
         let mut row = read_directory(adjacency_output, order)?;
         let index = u8::try_from(order).map_err(|_| ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
-        let entitled = input.traversal.settlement_membership(index).map_or(0, |m| m.entitled_units);
+        let entitled = input.traversal.settlement_membership(index)
+            .map_err(|_| ExactIndexPlaneErrorV1::CandidateTraversal)?
+            .map_or(0, |m| m.entitled_units);
         if totals[order] != entitled { return Err(ExactIndexPlaneErrorV1::AggregateMismatch); }
         row.first_slice_ref = next;
         next = next.checked_add(row.slice_ref_count).ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
@@ -422,7 +431,8 @@ pub fn stream_counted_exact_index_root_v1(
     if next != references { return Err(ExactIndexPlaneErrorV1::InvalidAdjacency); }
     slice = 0;
     while slice < feed.slice_count {
-        let value = input.traversal.settlement_slice(slice).ok_or(ExactIndexPlaneErrorV1::CandidateTraversal)?;
+        let value = input.traversal.settlement_slice(slice)
+            .map_err(|_| ExactIndexPlaneErrorV1::CandidateTraversal)?;
         match (value.buy(), value.sell(), value.route()) {
             (SettlementLegV1::Order(buy), SettlementLegV1::Order(sell), SettlementRouteV1::Direct) => {
                 write_reference(adjacency_output, feed.order_count, &mut cursors, buy, slice)?;
@@ -445,20 +455,20 @@ pub fn stream_counted_exact_index_root_v1(
         order += 1;
     }
     let plane_id = derive_plane_id(input.settlement_root, input.settlement_root_account,
-        input.traversal.selected_feed_account(), input.feed_full_data.full_data_id,
-        input.traversal.owner_order_set_digest(), input.locator_create.account,
+        projection.selected_feed_account(), input.feed_full_data.full_data_id,
+        projection.owner_order_set_digest(), input.locator_create.account,
         input.adjacency_create.account, locator_rent, adjacency_rent, feed.order_count,
         references, &locator_output[EXACT_INDEX_COMMON_HEADER_BYTES_V1..],
         &adjacency_output[EXACT_INDEX_COMMON_HEADER_BYTES_V1..])?;
     let common = ExactIndexCommonV1 {
         settlement_root_account: input.settlement_root_account,
         sibling_account: input.adjacency_create.account, plane_id,
-        selected_feed_account: input.traversal.selected_feed_account(),
+        selected_feed_account: projection.selected_feed_account(),
         selected_feed_data_id: input.feed_full_data.full_data_id,
-        traversal_binding_id: input.traversal.owner_order_set_digest(), order_count: feed.order_count,
+        traversal_binding_id: projection.owner_order_set_digest(), order_count: feed.order_count,
         outcome_count: feed.outcome_count, slice_count: feed.slice_count,
         slice_reference_count: references, page_count: projection.page_count(),
-        page_physical_slot_counts: input.page_physical_slot_counts, rent: locator_rent,
+        page_physical_slot_counts: physical_slot_counts, rent: locator_rent,
         stored_bump: input.locator_create.stored_bump,
     };
     encode_common(locator_output, FROZEN_ORDER_LOCATOR_MAGIC_V1, common)?;
