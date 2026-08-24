@@ -33,9 +33,9 @@ use crate::instructions::product_market::{
 use clutch_failure_policy_runtime::market_quote_v1::FailureMarketRecoveryQuoteAdmissionReceiptV1;
 use clutch_product_series::{
     CompiledProductSeriesBundleV5, ContentId, MarketGenesisProfileV2, MarketInstancePreimageV2,
-    NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4,
+    MarketFoundationAccountGraphV2, NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4,
     QuantizedIntervalConsensusContextV1, QuantizedIntervalConsensusProfileV1,
-    SeriesFundingQuoteV4,
+    SeriesFundingQuoteV4, MARKET_FOUNDATION_SLOT_COUNT_V2,
 };
 use clutch_source_plane_v3::{
     CompiledSourceOccurrenceV3, StatisticKeyV3, StatisticResultV3, SummaryProgramV3, WindowSealV3,
@@ -54,6 +54,7 @@ pub(crate) struct AuthenticatedFailureMarketExecutionV2<'root, 'link> {
     link: AuthenticatedSeriesMarketLinkV1<'link>,
     registry: AuthenticatedRegistryCapabilityV3,
     bundle: AuthenticatedProductArtifactV1<CompiledProductSeriesBundleV5>,
+    funding_quote: AuthenticatedProductArtifactV1<SeriesFundingQuoteV4>,
     admission: AuthenticatedFailureMarketRootV2,
     runtime: AuthenticatedFailureMarketRuntimeRootV1,
     interval: AuthenticatedFailureMarketIntervalAccountsV2,
@@ -74,6 +75,11 @@ impl<'root, 'link> AuthenticatedFailureMarketExecutionV2<'root, 'link> {
         &self,
     ) -> &AuthenticatedProductArtifactV1<CompiledProductSeriesBundleV5> {
         &self.bundle
+    }
+    pub(crate) const fn funding_quote(
+        &self,
+    ) -> &AuthenticatedProductArtifactV1<SeriesFundingQuoteV4> {
+        &self.funding_quote
     }
     pub(crate) const fn admission(&self) -> AuthenticatedFailureMarketRootV2 {
         self.admission
@@ -217,6 +223,63 @@ pub(crate) fn authenticate_failure_market_product_context_v2(
     })
 }
 
+/// Hostile-decode the canonical 1,544-byte Product foundation graph into
+/// request-heap storage and join it to the current QuoteV4 schedule and live
+/// root. The bytes are not authority; Product retained-slot authentication
+/// must still consume this value.
+pub(crate) fn decode_failure_market_foundation_graph_v2(
+    execution: &AuthenticatedFailureMarketExecutionV2<'_, '_>,
+    input: &[u8],
+) -> Outcome<std::boxed::Box<MarketFoundationAccountGraphV2>> {
+    require(input.len() == 1_544, ClutchError::WrongDataLength)?;
+    let mut account_ids = [ContentId::ZERO; MARKET_FOUNDATION_SLOT_COUNT_V2];
+    let mut at = 72usize;
+    for account in &mut account_ids {
+        let end = at.checked_add(32).ok_or(ClutchError::Arithmetic)?;
+        *account = ContentId::from_bytes(
+            input[at..end]
+                .try_into()
+                .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?,
+        );
+        at = end;
+    }
+    require(at == input.len(), ClutchError::NonCanonical)?;
+    let graph = std::boxed::Box::new(MarketFoundationAccountGraphV2 {
+        market_instance_id: clutch_product_series::MarketInstanceV2Id::from_bytes(
+            input[..32]
+                .try_into()
+                .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?,
+        ),
+        generation: u64::from_le_bytes(
+            input[32..40]
+                .try_into()
+                .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?,
+        ),
+        foundation_schedule_id:
+            clutch_product_series::MarketFoundationScheduleV2Id::from_bytes(
+                input[40..72]
+                    .try_into()
+                    .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?,
+            ),
+        account_ids,
+    });
+    let schedule = &execution.funding_quote().value().foundation;
+    graph
+        .validate(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let root_binding = execution.root().state().binding();
+    let graph_id = graph
+        .id(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    require(
+        graph.market_instance_id == root_binding.market_instance_id
+            && graph.generation == root_binding.generation
+            && graph_id == root_binding.foundation_account_graph_id,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(graph)
+}
+
 /// Reopen the full shared authority prefix for one action.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn authenticate_failure_market_execution_v2<'root, 'link>(
@@ -323,6 +386,11 @@ pub(crate) fn authenticate_failure_market_execution_v2<'root, 'link>(
                 == root_binding.capability_profile_id.bytes(),
         ClutchError::MismatchedState,
     )?;
+    let funding_quote = authenticate_product_artifact_v1::<SeriesFundingQuoteV4>(
+        program_id,
+        funding_quote_artifact,
+        bundle_value.funding_quote_id.content_id(),
+    )?;
     let product_quote = authenticate_market_recovery_schedule_v1(
         program_id,
         root,
@@ -333,6 +401,7 @@ pub(crate) fn authenticate_failure_market_execution_v2<'root, 'link>(
     )?;
     require(
         product_quote.funding_quote_id() == bundle_value.funding_quote_id.content_id()
+            && funding_quote.semantic_id() == product_quote.funding_quote_id()
             && product_quote.market_root_authentication_id() == root.authentication_id()
             && product_quote.series_link_authentication_id() == link.authentication_id(),
         ClutchError::MismatchedState,
@@ -372,6 +441,7 @@ pub(crate) fn authenticate_failure_market_execution_v2<'root, 'link>(
         link,
         registry,
         bundle,
+        funding_quote,
         admission,
         runtime,
         interval,
@@ -405,5 +475,18 @@ mod adversarial_join_tests {
         assert!(source.contains("FailureMarketIntervalFundingPreimageV2::decode"));
         assert!(!source.contains("FailureMarketRecoveryQuoteAdmissionReceiptV1 {"));
         assert!(!source.contains("FailureMarketIntervalFundingReceiptV2 {"));
+    }
+
+    #[test]
+    fn foundation_graph_is_heap_decoded_and_live_root_joined() {
+        let source = include_str!("failure_market_execution_v2.rs");
+        let graph = source
+            .split("fn decode_failure_market_foundation_graph_v2")
+            .nth(1)
+            .expect("foundation graph owner");
+        assert!(graph.contains("std::boxed::Box::new(MarketFoundationAccountGraphV2"));
+        assert!(graph.contains("graph.validate(schedule)"));
+        assert!(graph.contains("graph_id == root_binding.foundation_account_graph_id"));
+        assert!(graph.contains("require(input.len() == 1_544"));
     }
 }
