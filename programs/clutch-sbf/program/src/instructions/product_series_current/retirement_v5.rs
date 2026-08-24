@@ -16,6 +16,9 @@ use super::super::failure_market_family_terminal_v2::{
     AuthenticatedFailureMarketFamilyTerminalOwnerV2, FailureMarketFamilyTerminalConsumerFactsV3,
 };
 use super::super::dealer_facility::AuthenticatedDealerFamilyTerminalReceiptV1;
+use super::super::direct_market_v2::{
+    AuthenticatedDirectFamilyTerminalV3, AuthenticatedProductDirectFamilyPreterminalV3,
+};
 use super::super::product_market_lifecycle_v3_current::{
     authenticate_market_lifecycle_root_v3, authenticate_series_market_link_v3,
 };
@@ -57,6 +60,10 @@ use solana_pubkey::Pubkey;
 
 const PRODUCT_FAILURE_CORE_TERMINAL_POSTWRITE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-failure-core-terminal-postwrite/v5\0";
+const PRODUCT_DIRECT_FAMILY_PRETERMINAL_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/product-direct-family-preterminal/v5\0";
+const PRODUCT_DIRECT_FAMILY_TERMINAL_POSTWRITE_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/sbf/product-direct-family-terminal-postwrite/v5\0";
 const PRODUCT_STRUCTURED_FAMILY_TERMINAL_POSTWRITE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/product-structured-family-terminal-postwrite/v5\0";
 const PRODUCT_LIQUIDITY_OBLIGATION_ABSENCE_DOMAIN_V5: &[u8] =
@@ -175,6 +182,275 @@ fn write_series_market_link_v3(
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     SeriesMarketLinkAccountV3::encode_parts(after, before.stored_bump, &mut data)?;
     Ok(())
+}
+
+/// Product's move-only preterminal consumed inside Direct's physical action13
+/// close.  Direct remains the semantic owner of its full current authority
+/// ID; Product proves the exact RootV3 family prestate and canonical Direct
+/// root coordinate without duplicating the Direct binding body.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedProductDirectFamilyPreterminalV5 {
+    id: ContentId,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    root_account: Pubkey,
+    root_binding_id: ContentId,
+    root_authentication_id: ContentId,
+    root_semantic_id: ContentId,
+    direct_root_account_id: ContentId,
+    family_prestate_id: ContentId,
+    family_terminal_sequence: u32,
+}
+
+impl AuthenticatedProductDirectFamilyPreterminalV3
+    for AuthenticatedProductDirectFamilyPreterminalV5
+{
+    fn product_family_prestate_id(&self) -> Outcome<ContentId> {
+        Ok(self.family_prestate_id)
+    }
+
+    fn family_terminal_sequence(&self) -> Outcome<u32> {
+        Ok(self.family_terminal_sequence)
+    }
+
+    fn authenticate_direct_family_preterminal_v3(
+        &self,
+        market_instance_id: ContentId,
+        generation: u64,
+        product_root_account: ContentId,
+        product_market_binding_id: ContentId,
+        current_product_authority_id: ContentId,
+        direct_root_account: ContentId,
+        product_family_prestate_id: ContentId,
+        family_terminal_sequence: u32,
+    ) -> Outcome<()> {
+        require(
+            !self.id.is_zero()
+                && market_instance_id == self.market_instance_id.content_id()
+                && generation == self.generation
+                && product_root_account == account_id(self.root_account)
+                && product_market_binding_id == self.root_binding_id
+                && !current_product_authority_id.is_zero()
+                && current_product_authority_id != product_root_account
+                && current_product_authority_id != product_market_binding_id
+                && current_product_authority_id != direct_root_account
+                && current_product_authority_id != product_family_prestate_id
+                && direct_root_account == self.direct_root_account_id
+                && product_family_prestate_id == self.family_prestate_id
+                && family_terminal_sequence == self.family_terminal_sequence,
+            ClutchError::MismatchedState,
+        )
+    }
+}
+
+/// Hostile-reopen the current Product RootV3 before Direct closes any local
+/// archive.  The resulting value can only be consumed by Direct's typed
+/// action13 primitive; it exposes no generic Product writer.
+#[inline(never)]
+pub(crate) fn authenticate_product_direct_family_preterminal_v5(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedProductDirectFamilyPreterminalV5> {
+    let mut observed = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    {
+        let data = root_account
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        MarketLifecycleRootAccountV3::decode_into(&data, &mut observed)?;
+    }
+    let market_instance_id = observed.state.binding_ref().market_instance_id;
+    let generation = observed.state.binding_ref().generation;
+    let mut value = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let root = authenticate_market_lifecycle_root_v3(
+        program_id,
+        root_account,
+        market_instance_id,
+        generation,
+        true,
+        &mut value,
+    )?;
+    let family = root.state().product_families().family(MarketFamilyV1::Direct);
+    let family_prestate_id = root
+        .state()
+        .product_families()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let direct_root_account_id = root
+        .state()
+        .product_families()
+        .binding()
+        .family_root_id(MarketFamilyV1::Direct);
+    let root_binding_id = root.binding_id();
+    require(
+        root.state().phase() == MarketLifecyclePhaseV3::Active
+            && family.counts().live != 0
+            && family.counts().terminal < family.counts().admitted
+            && !direct_root_account_id.is_zero(),
+        ClutchError::MismatchedState,
+    )?;
+    let id = hashv(&[
+        PRODUCT_DIRECT_FAMILY_PRETERMINAL_DOMAIN_V5,
+        program_id.as_ref(),
+        root_account.key.as_ref(),
+        &root_binding_id.bytes(),
+        &root.data_id().bytes(),
+        &root.authentication_id().bytes(),
+        &root.semantic_id().bytes(),
+        &family_prestate_id.bytes(),
+        &direct_root_account_id.bytes(),
+        &family.counts().terminal.to_le_bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedProductDirectFamilyPreterminalV5 {
+        id,
+        market_instance_id,
+        generation,
+        root_account: *root_account.key,
+        root_binding_id,
+        root_authentication_id: root.authentication_id(),
+        root_semantic_id: root.semantic_id(),
+        direct_root_account_id,
+        family_prestate_id,
+        family_terminal_sequence: family.counts().terminal,
+    })
+}
+
+/// Product postwrite which owns Direct's unique physical terminal by value.
+/// It is the only current path from action13 into the RootV3 Direct counter.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedProductDirectFamilyTerminalV5 {
+    id: ContentId,
+    terminal: AuthenticatedDirectFamilyTerminalV3,
+    root_account: Pubkey,
+    root_data_before_id: ContentId,
+    root_data_after_id: ContentId,
+    root_authentication_before_id: ContentId,
+    root_authentication_after_id: ContentId,
+    root_semantic_before_id: ContentId,
+    root_semantic_after_id: ContentId,
+    root_transition_sequence_before: u64,
+    root_transition_sequence_after: u64,
+}
+
+impl AuthenticatedProductDirectFamilyTerminalV5 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn terminal_id(&self) -> ContentId { self.terminal.id() }
+    pub(crate) const fn root_account(&self) -> Pubkey { self.root_account }
+    pub(crate) const fn root_authentication_after_id(&self) -> ContentId {
+        self.root_authentication_after_id
+    }
+    pub(crate) const fn root_semantic_after_id(&self) -> ContentId {
+        self.root_semantic_after_id
+    }
+    pub(crate) const fn root_transition_sequence_after(&self) -> u64 {
+        self.root_transition_sequence_after
+    }
+}
+
+/// Consume Direct's already-physical terminal exactly once into RootV3.
+#[inline(never)]
+pub(crate) fn consume_direct_family_terminal_v5(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    terminal: AuthenticatedDirectFamilyTerminalV3,
+) -> Outcome<AuthenticatedProductDirectFamilyTerminalV5> {
+    let market_instance_id = MarketInstanceV2Id::from_bytes(terminal.market_instance_id().bytes());
+    require(
+        terminal.product_root_account() == account_id(*root_account.key),
+        ClutchError::MismatchedState,
+    )?;
+    let mut value = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let root = authenticate_market_lifecycle_root_v3(
+        program_id,
+        root_account,
+        market_instance_id,
+        terminal.generation(),
+        true,
+        &mut value,
+    )?;
+    let family_prestate_id = root
+        .state()
+        .product_families()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let family = root.state().product_families().family(MarketFamilyV1::Direct);
+    require(
+        root.state().phase() == MarketLifecyclePhaseV3::Active
+            && root.binding_id() == terminal.product_market_binding_id()
+            && family_prestate_id == terminal.product_family_prestate_id()
+            && family.counts().terminal == terminal.family_terminal_sequence()
+            && root
+                .state()
+                .product_families()
+                .binding()
+                .family_root_id(MarketFamilyV1::Direct)
+                == terminal.direct_root_account()
+            && !terminal.current_product_authority_id().is_zero(),
+        ClutchError::MismatchedState,
+    )?;
+    let authority = ExactFamilyTerminalAuthorityV5 {
+        market_instance_id,
+        generation: terminal.generation(),
+        family: MarketFamilyV1::Direct,
+        family_root_id: terminal.direct_root_account(),
+        terminal_sequence: terminal.family_terminal_sequence(),
+        terminal_receipt_id: terminal.id(),
+    };
+    let next = (*root.state())
+        .terminalize_product_family_child(
+            &authority,
+            MarketFamilyV1::Direct,
+            terminal.family_terminal_sequence(),
+            terminal.id(),
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_data_before_id = root.data_id();
+    let root_authentication_before_id = root.authentication_id();
+    let root_semantic_before_id = root.semantic_id();
+    let root_transition_sequence_before = root.state().transition_sequence();
+    drop(root);
+    write_market_lifecycle_root_v3(root_account, &value, &next)?;
+    let mut reopened_value = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let reopened = authenticate_market_lifecycle_root_v3(
+        program_id,
+        root_account,
+        market_instance_id,
+        terminal.generation(),
+        true,
+        &mut reopened_value,
+    )?;
+    require(reopened.state() == &next, ClutchError::MismatchedState)?;
+    let id = hashv(&[
+        PRODUCT_DIRECT_FAMILY_TERMINAL_POSTWRITE_DOMAIN_V5,
+        program_id.as_ref(),
+        &terminal.id().bytes(),
+        &terminal.current_product_authority_id().bytes(),
+        root_account.key.as_ref(),
+        &root_data_before_id.bytes(),
+        &reopened.data_id().bytes(),
+        &root_authentication_before_id.bytes(),
+        &reopened.authentication_id().bytes(),
+        &root_semantic_before_id.bytes(),
+        &reopened.semantic_id().bytes(),
+        &root_transition_sequence_before.to_le_bytes(),
+        &reopened.state().transition_sequence().to_le_bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedProductDirectFamilyTerminalV5 {
+        id,
+        terminal,
+        root_account: *root_account.key,
+        root_data_before_id,
+        root_data_after_id: reopened.data_id(),
+        root_authentication_before_id,
+        root_authentication_after_id: reopened.authentication_id(),
+        root_semantic_before_id,
+        root_semantic_after_id: reopened.semantic_id(),
+        root_transition_sequence_before,
+        root_transition_sequence_after: reopened.state().transition_sequence(),
+    })
 }
 
 /// Move-only Product postwrite proving that the exact hostile Failure owner
