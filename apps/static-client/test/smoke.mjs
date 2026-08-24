@@ -300,6 +300,41 @@ test("fractional_terminal_material_keeps_authority_chain_derived", () => {
   assert.equal(result.weakenedRefused, true);
 });
 
+test("fractional_bearer_material_exposes_choices_without_account_meta_authority", () => {
+  const context = browserRealm("chain-client.js");
+  const result = vm.runInContext(`(() => {
+    const address = (value) => GlassChainClient.encodeBase58(new Uint8Array(32).fill(value));
+    const labels = ["claimant", "realm", "profile", "collateral-policy", "collateral-token-program", "market-binding-v2", "market-runtime-v3", "market-instance-preimage-v2", "hoard-v2", "claim-ledger-v3", "resolution-v5", "fractional-policy-v3", "fractional-ledger-v1", "collateral-mint", "collateral-destination", "hoard-authority", "hoard-token", "outcome-token-program", "outcome-token-programdata", "bearer-source", "collateral-token-programdata", "outcome-mint", "outcome-mint"];
+    const writable = new Set([8, 9, 12, 14, 16, 19, 22]);
+    const addresses = labels.map((_, index) => address(index + 1));
+    const manifest = "41".repeat(32), profile = "42".repeat(32), elf = "43".repeat(32), state = "44".repeat(32);
+    const releaseKey = address(50) + ":1:" + elf + ":" + manifest;
+    const coordinate = { familyTag: "79", familyVersion: "1", localAction: "3", family: "fractional", action: "redeem-fractional-bearer-exact" };
+    const cursor = { workflowId: "45".repeat(32), lane: "fractional-redemption", generation: "1", phase: "3", item: "1", observedStateSha256: state };
+    const selection = { account: addresses[12], releaseKey, action: coordinate.action, accountSlot: "100", observedCommitment: "finalized", effectiveCommitment: "finalized", branch: { kind: "finalized-scan" }, dependencies: [], cursor };
+    const configuration = { release: { releaseKey, releaseManifestSha256: manifest, capabilityProfileId: profile, elfSha256: elf, enabledIntents: [{ familyTag: "79", familyVersion: "1", localAction: "3" }], enabledIntentVariants: [] } };
+    const session = { sessionId: "46".repeat(32), release: { releaseKey }, restart: { cursors: [selection] } };
+    const row = {
+      coordinate, releaseAdmission: { enabled: true, scope: "single-release-execution-and-driver-v1", releaseKey, executionReleaseKey: releaseKey, driverReleaseKey: releaseKey, executionReleaseManifestSha256: manifest, capabilityProfileId: profile }, stateSelection: selection,
+      semanticOwnerConstructor: "clutch-fractional-redemption-runtime/fractional-redemption/79/1/3/redeem-bearer-exact",
+      accountRoles: labels.map((role, index) => ({ index: String(index), role, signer: index === 0, writable: writable.has(index), address: addresses[index], identityDisposition: "semantic-owner-derived-and-bound-to-draft" })),
+      callable: true, verdict: "callable-unsigned-draft", reason: "holder intent joined to exact frame", symbolicPostcondition: null,
+      transactionDraft: { schema: "dragons-clutch/operator-canonical-action-material/v1", draftId: "47".repeat(32), constructionSchema: "dragons-clutch/operator/unsigned-protocol-transaction/v3", driverAccount: addresses[12], driverAccountSlot: "100", driverReleaseKey: releaseKey, executionReleaseKey: releaseKey, authorityStateSha256: state, releaseManifestSha256: manifest, capabilityProfileId: profile, feePayer: addresses[0], messageVersion: "legacy", addressLookupTables: [], recentBlockhash: null, hasRecentBlockhash: false, signed: false, submitted: false, serializedTransactionHex: "00", serializedBytes: "1", actions: [coordinate.action], flows: ["fractional-redemption"], semanticOwners: [{ package: "clutch-fractional-redemption-runtime", schema: "fractional-redemption/79/1/3/redeem-bearer-exact", releaseSha256: elf }], registryBindings: [{ familyTag: "79", familyVersion: "1", localAction: "3", allocationStatus: "frozen", centralAction: "3" }], runtimeAdmissions: ["release-bound-enabled"], exactEquations: [{ name: "holder-approved bearer Eggs burned", unit: { kind: "egg-atoms", market: "48".repeat(32), outcome: "1" }, left: "7", right: "7" }, { name: "chain-derived whole collateral payout", unit: { kind: "collateral-atoms", mint: addresses[13] }, left: "5", right: "5" }, { name: "chain-derived retained payout numerator", unit: { kind: "price-units", scale: "10" }, left: "0", right: "0" }], reloadAuthoritativeAccounts: true },
+      signerRequirements: [{ address: addresses[0], semanticRoles: ["claimant", "transaction-fee-payer"], signaturePresent: false, keyAccess: false }], freshnessDisposition: { observedSlot: "100", validBeforeSlot: "110", maximumValiditySlots: "10", recentBlockhash: "absent; a launcher must reacquire state before adding one", beforeSigning: "reload", afterSubmission: "discard" }
+    };
+    const raw = { schema: "dragons-clutch/operator-action-capability-set/v1", status: "ready", commitment: "finalized", projectionAuthority: "untrusted-release-and-canonical-codec-projection", signing: false, submission: false, sessionId: session.sessionId, releaseKey, capabilityProfileId: profile, freshness: { recentBlockhash: "absent-by-contract", feePayer: "must-be-explicit-in-server-constructed-draft", validBeforeSlot: "must-be-derived-from-a-fresh-clock-observation", beforeSigning: "reload", afterSubmission: "discard" }, actions: [row] };
+    const accepted = GlassChainClient.validateActionCapabilities(raw, configuration, session);
+    row.accountRoles[21].writable = true;
+    let metaRefused = false;
+    try { GlassChainClient.validateActionCapabilities(raw, configuration, session); } catch (_) { metaRefused = true; }
+    return { choice: accepted.actions[0].fractionalContract.holderChoice, geometry: accepted.actions[0].fractionalContract.geometry, metaRefused };
+  })()`, context);
+  assert.equal(result.choice.outcome, "1");
+  assert.equal(result.choice.quantity, "7");
+  assert.equal(result.geometry, "bearer-exact-21+2");
+  assert.equal(result.metaRefused, true);
+});
+
 test("compiler_boundary_names_rust_owner_and_does_not_reimplement_payoff_math", () => {
   assert.match(html, /compile_production_payoff_v1/);
   assert.match(html, /current BundleV6 assembler/);
