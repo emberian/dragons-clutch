@@ -24,7 +24,7 @@ use clutch_failure_policy_runtime::market_runtime_v1::{
     FailureMarketRuntimePhaseV1, FailureMarketRuntimeV1,
 };
 use clutch_failure_policy_runtime::market_quote_v1::FailureMarketRecoveryQuoteScheduleV1;
-use clutch_liveness::{
+use clutch_liveness::runtime_v1::{
     RuntimeCompartmentKindV1, RuntimeCompartmentPhaseV1, RuntimeCompartmentV1,
     RuntimeLivenessPolicyV1,
 };
@@ -600,7 +600,7 @@ pub fn derive_failure_action11_material_v1(
     )?;
 
     authenticate_registry_and_product(release, snapshot, root_binding, link_binding)?;
-    authenticate_source(release, snapshot, policy, root_binding, link_binding, cell)?;
+    let _ = authenticate_source(release, snapshot, policy, root_binding, link_binding, cell)?;
     let recovery = authenticate_recovery(release, snapshot, policy, quote)?;
 
     let work = cell
@@ -935,7 +935,10 @@ pub(crate) fn authenticate_source(
     root: clutch_product_series::MarketLifecycleBindingV3,
     link: clutch_product_series::SeriesMarketLinkBindingV3,
     cell: FailureMarketIntervalCellV2,
-) -> Result<()> {
+) -> Result<(
+    clutch_source_plane_v3_runtime::AuthenticatedSourceRouteV1,
+    SourceWorkScheduleBindingV1,
+)> {
     let manifest = SourceReleaseManifestV2::decode(&snapshot.source_release.data)
         .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
     let recipe = PdaRecipeV3::source_release(
@@ -1173,7 +1176,7 @@ pub(crate) fn authenticate_source(
         SourcePolicyHandoffAccessV1::ExistingReadOnly,
     )
     .map_err(|_| FailureAction11MaterialError::ChainAuthority)?;
-    Ok(())
+    Ok((route, schedule))
 }
 
 fn authenticate_window_input(

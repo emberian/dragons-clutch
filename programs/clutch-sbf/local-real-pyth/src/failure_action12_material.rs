@@ -6,6 +6,7 @@
 //! from one finalized snapshot.
 
 use crate::action_material::StructuredAddressLookupTableV1;
+use crate::collateral_release_catalog::CurrentCollateralReleaseCatalogV1;
 use crate::failure_action11_material::{
     authenticate_recovery, authenticate_registry_and_product, authenticate_source,
     FailureAction11ChainSnapshotV1,
@@ -19,7 +20,13 @@ use crate::transaction_builder::{
     ProtocolTransactionBuilder, SemanticOwner, TransactionTransport,
     UnsignedProtocolTransaction,
 };
-use clutch_collateral_adapter_v2::{ResolutionStateV5, ResolutionV5};
+use clutch_collateral_adapter_v2::{
+    ClaimLedgerV3, CollateralPolicyV2, HoardV2, MarketLiabilityLifecycleV1,
+    ResolutionStateV5, ResolutionV5, CLAIM_LEDGER_V3_PDA_SEED_V1,
+    COLLATERAL_POLICY_PDA_SEED_V1, HOARD_AUTHORITY_V2_PDA_SEED_V1,
+    HOARD_TOKEN_V2_PDA_SEED_V1, HOARD_V2_PDA_SEED_V1, PROFILE_PDA_SEED_V1,
+    REALM_PDA_SEED_V1,
+};
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
     FailureMarketIntervalCellPhaseV2, FailureMarketIntervalCellV2,
 };
@@ -32,21 +39,40 @@ use clutch_failure_policy_runtime::market_replay_v2::{
 use clutch_failure_policy_runtime::market_runtime_v1::{
     FailureMarketRuntimePhaseV1, FailureMarketRuntimeV1,
 };
+use clutch_general_v2_contract::{
+    MarketBindingV5, MarketRuntimeV3AccountV1, MARKET_BINDING_SEED_DOMAIN_V1,
+    MARKET_RUNTIME_SEED_DOMAIN_V1,
+};
+use clutch_liveness::runtime_v1::{
+    RuntimeCompartmentKindV1, RuntimeCompartmentPhaseV1, RuntimeCompartmentV1,
+    RuntimeLivenessPolicyV1, RUNTIME_LIVENESS_ACCOUNT_BYTES_V1,
+    RUNTIME_LIVENESS_POLICY_BYTES_V1,
+};
 use clutch_product_series::{
-    ContentId, MarketLifecyclePhaseV3, SeriesFundingPhaseV5, SeriesMarketLinkPhaseV3,
+    ContentId, FixedCodec, MarketInstancePreimageV2, MarketLifecyclePhaseV3,
+    RegistryCapabilityProfileV4, SeriesFundingPhaseV5, SeriesMarketLinkPhaseV3,
 };
 use clutch_solana_layout::failure_market_interval_v2::{
     FailureMarketIntervalCellAccountV2, FailureMarketIntervalHistoryAccountV2,
 };
 use clutch_solana_layout::failure_market_replay_v2::FailureMarketReplayAccountV2;
 use clutch_solana_layout::failure_recovery::{
-    FailureMarketRootAccountV3, FailureMarketRuntimeRootAccountV1,
-    FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3, FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_BYTES_V1,
+    decode_failure_account_body_v1, FailureMarketRootAccountV3,
+    FailureMarketRuntimeRootAccountV1, FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1,
+    FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1, FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1,
+    FAILURE_LIVENESS_POLICY_BODY_BYTES_V1, FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3,
+    FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_BYTES_V1,
 };
 use clutch_solana_layout::product_series::{
     MarketLifecycleRootAccountV3, SeriesFundingAccountV5, SeriesMarketLinkAccountV3,
 };
 use clutch_solana_layout::registry::{self, ExtensionFamily, RecoveryAction};
+use clutch_solana_layout::{ProfileAccount, RealmAccount};
+use clutch_source_plane_v3_runtime::{
+    source_runtime_liveness_policy_id_v1, AuthenticatedSourceRouteV1,
+    SourceFundingCustodyLedgerV1, SourceWorkScheduleBindingV1,
+    SOURCE_FUNDING_CUSTODY_ACCOUNT_BYTES,
+};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
 use solana_instruction::AccountMeta;
@@ -97,6 +123,11 @@ const SEED_FAILURE_CELL: &[u8] = b"dc:fail-int-cell:v2";
 const SEED_FAILURE_HISTORY: &[u8] = b"dc:fail-int-history:v2";
 const SEED_FAILURE_REPLAY: &[u8] = b"dc:failure-market-replay:v2";
 const SEED_RESOLUTION: &[u8] = b"dc:resolution:v5";
+const SEED_SOURCE_LIVENESS_POLICY: &[u8] = b"dc:source-live-policy:v1";
+const SEED_SOURCE_COMPARTMENT: &[u8] = b"dc:source-compartment:v1";
+const SEED_SOURCE_FUNDING_CUSTODY: &[u8] = b"dc:source-funding:v1";
+const SEED_FAILURE_LIVENESS_POLICY: &[u8] = b"dc:failure-live-policy:v1";
+const SEED_FAILURE_RECOVERY: &[u8] = b"dc:failure-recovery:v1";
 
 pub type FailureAction12MaterialResult<T> =
     core::result::Result<T, FailureAction12MaterialError>;
@@ -357,6 +388,7 @@ impl ChainDerivedFailureAction12MaterialV1 {
 
 pub fn derive_failure_action12_material_v1(
     release: &IndexedProgramRelease,
+    collateral_catalog: &CurrentCollateralReleaseCatalogV1<'_>,
     snapshot: FailureAction12ChainSnapshotV1<'_>,
 ) -> Result<ChainDerivedFailureAction12MaterialV1> {
     authenticate_release(release)?;
@@ -525,10 +557,38 @@ pub fn derive_failure_action12_material_v1(
     let projection = snapshot.action11_projection();
     authenticate_registry_and_product(release, projection, root_binding, link_binding)
         .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
-    authenticate_source(release, projection, policy, root_binding, link_binding, cell)
+    authenticate_current_liability_prestate(
+        release,
+        collateral_catalog,
+        snapshot,
+        root_binding,
+        link_binding,
+    )?;
+    let (source_route, source_schedule) = authenticate_source(
+        release,
+        projection,
+        policy,
+        root_binding,
+        link_binding,
+        cell,
+    )
+    .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    authenticate_source_terminal_prestate(
+        release,
+        snapshot,
+        source_route,
+        source_schedule,
+        root_binding,
+    )?;
+    let recovery = authenticate_recovery(release, projection, policy, quote)
         .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
-    authenticate_recovery(release, projection, policy, quote)
-        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    authenticate_failure_terminal_prestate(
+        release,
+        snapshot,
+        policy,
+        root_binding,
+        recovery,
+    )?;
     authenticate_receiver(snapshot)?;
 
     let sequence = runtime.transition_sequence().checked_add(1)
@@ -616,10 +676,8 @@ fn authenticate_role_shapes(release: &IndexedProgramRelease, accounts: &[&Observ
         if account.address == Address::default() || account.executable != EXECUTABLE.contains(&index) {
             return Err(FailureAction12MaterialError::ChainAuthority);
         }
-        for (other_index, other) in accounts[index + 1..].iter().enumerate() {
-            let absolute = index + 1 + other_index;
-            let allowed = (index == 57 && absolute == 61) || (index == 61 && absolute == 57);
-            if account.address == other.address && !allowed {
+        for other in &accounts[index + 1..] {
+            if account.address == other.address {
                 return Err(FailureAction12MaterialError::ChainAuthority);
             }
         }
@@ -654,6 +712,444 @@ fn authenticate_receiver(snapshot: FailureAction12ChainSnapshotV1<'_>) -> Result
         return Err(FailureAction12MaterialError::ChainAuthority);
     }
     Ok(())
+}
+
+/// Reconstruct the current General V5 and Realm-selected liability authority
+/// from hostile bytes.  In particular, the executable at role 47 is selected
+/// by the decoded policy through an independently authenticated finalized
+/// catalog row; its address or executable bit is not collateral authority.
+fn authenticate_current_liability_prestate(
+    release: &IndexedProgramRelease,
+    collateral_catalog: &CurrentCollateralReleaseCatalogV1<'_>,
+    snapshot: FailureAction12ChainSnapshotV1<'_>,
+    root: clutch_product_series::MarketLifecycleBindingV3,
+    link: clutch_product_series::SeriesMarketLinkBindingV3,
+) -> Result<()> {
+    for account in [
+        snapshot.realm,
+        snapshot.collateral_profile,
+        snapshot.collateral_policy_release,
+        snapshot.general_market_binding,
+        snapshot.general_market_runtime,
+        snapshot.market_instance_artifact,
+        snapshot.hoard,
+        snapshot.claim_ledger,
+    ] {
+        if account.owner != release.program_id || account.executable {
+            return Err(FailureAction12MaterialError::ChainAuthority);
+        }
+    }
+
+    let realm = RealmAccount::decode(&snapshot.realm.data)
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let profile = ProfileAccount::decode(&snapshot.collateral_profile.data)
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let collateral_policy = CollateralPolicyV2::decode(&snapshot.collateral_policy_release.data)
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let collateral_policy_id = collateral_policy
+        .id()
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let selected = collateral_catalog
+        .select(release, collateral_policy)
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let selected_entry = selected.entry();
+    if selected_entry.observed_slot() != snapshot.realm.provenance.slot
+        || selected_entry.program().program_id != snapshot.collateral_token_program.address
+        || !snapshot.collateral_token_program.executable
+        || snapshot.collateral_token_program.owner != solana_sdk_ids::bpf_loader_upgradeable::ID
+        || profile.realm != realm.realm
+        || profile.profile != realm.profile
+        || profile.collateral_policy_id.bytes() != collateral_policy_id.bytes()
+        || profile.collateral_policy_id.bytes() != selected.policy_id()
+        || profile.adapter_release_id.bytes() != selected_entry.adapter_id()
+        || collateral_policy.adapter_release.bytes() != selected_entry.adapter_id()
+        || collateral_policy.token_program.bytes()
+            != snapshot.collateral_token_program.address.to_bytes()
+    {
+        return Err(FailureAction12MaterialError::ChainAuthority);
+    }
+    let realm_pda = Address::find_program_address(
+        &[REALM_PDA_SEED_V1, &realm.realm.bytes()],
+        &release.program_id,
+    );
+    let profile_pda = Address::find_program_address(
+        &[
+            PROFILE_PDA_SEED_V1,
+            &realm.realm.bytes(),
+            &profile.profile.bytes(),
+        ],
+        &release.program_id,
+    );
+    let policy_pda = Address::find_program_address(
+        &[
+            COLLATERAL_POLICY_PDA_SEED_V1,
+            &profile.profile.bytes(),
+            &collateral_policy_id.bytes(),
+        ],
+        &release.program_id,
+    );
+    if snapshot.realm.address != realm_pda.0
+        || realm.stored_bump != realm_pda.1
+        || snapshot.collateral_profile.address != profile_pda.0
+        || snapshot.collateral_policy_release.address != policy_pda.0
+    {
+        return Err(FailureAction12MaterialError::ChainAuthority);
+    }
+
+    let binding = MarketBindingV5::decode(&snapshot.general_market_binding.data)
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let market_runtime = MarketRuntimeV3AccountV1::decode(&snapshot.general_market_runtime.data)
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let relation = binding.base().base();
+    let current = binding.authority();
+    let binding_pda = Address::find_program_address(
+        &[
+            MARKET_BINDING_SEED_DOMAIN_V1,
+            &relation.market_instance_v2_id.bytes(),
+        ],
+        &release.program_id,
+    );
+    let runtime_pda = Address::find_program_address(
+        &[
+            MARKET_RUNTIME_SEED_DOMAIN_V1,
+            &snapshot.general_market_binding.address.to_bytes(),
+        ],
+        &release.program_id,
+    );
+    let root_id = root
+        .id()
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let link_id = link
+        .id()
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    if snapshot.general_market_binding.address != binding_pda.0
+        || relation.stored_bump != binding_pda.1
+        || snapshot.general_market_runtime.address != runtime_pda.0
+        || market_runtime.stored_bump != runtime_pda.1
+        || relation.market.bytes() != snapshot.general_market_runtime.address.to_bytes()
+        || market_runtime.market_binding.bytes()
+            != snapshot.general_market_binding.address.to_bytes()
+        || market_runtime.market_instance_v2_id != relation.market_instance_v2_id
+        || relation.market_instance_v2_id.bytes() != root.market_instance_id.bytes()
+        || relation.market_genesis_profile_v2_id.bytes() != root.market_genesis_profile_id.bytes()
+        || relation.native_claim_basis_id.bytes() != root.native_claim_basis_id.bytes()
+        || relation.price_measure_policy_v1_id.bytes() != root.price_measure_policy_id.bytes()
+        || relation.series_plan_v5_id.bytes() != link.series_plan_id.bytes()
+        || relation.series_funding_terms_v2_id.bytes() != link.funding_terms_id.bytes()
+        || relation.outcome_count != root.outcome_count
+        || current.product_market_root_account().bytes()
+            != snapshot.market_lifecycle_root.address.to_bytes()
+        || current.product_market_binding_v3_id().bytes() != root_id.bytes()
+        || current.product_generation() != root.generation
+        || current.series_market_link_account().bytes()
+            != snapshot.series_market_link.address.to_bytes()
+        || current.series_market_link_v3_id().bytes() != link_id.bytes()
+        || current.series_ordinal() != link.ordinal
+        || current.compiler_bundle_v7_id().bytes() != link.compiler_bundle_id.bytes()
+        || current.funding_quote_v6_id().bytes() != link.funding_quote_id.bytes()
+        || current.attachment_plan_v6_id().bytes() != link.attachment_plan_id.bytes()
+        || current.series_funding_v5_account().bytes() != snapshot.series_funding.address.to_bytes()
+    {
+        return Err(FailureAction12MaterialError::ChainAuthority);
+    }
+
+    let market = MarketInstancePreimageV2::decode(&snapshot.market_instance_artifact.data)
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let market_id = market
+        .id()
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let hoard = HoardV2::decode(&snapshot.hoard.data)
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let claim = ClaimLedgerV3::decode(&snapshot.claim_ledger.data)
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let market_bytes = market_id.bytes();
+    let hoard_pda =
+        Address::find_program_address(&[HOARD_V2_PDA_SEED_V1, &market_bytes], &release.program_id);
+    let claim_pda = Address::find_program_address(
+        &[CLAIM_LEDGER_V3_PDA_SEED_V1, &market_bytes],
+        &release.program_id,
+    );
+    let hoard_authority = Address::find_program_address(
+        &[HOARD_AUTHORITY_V2_PDA_SEED_V1, &market_bytes],
+        &release.program_id,
+    );
+    let hoard_token = Address::find_program_address(
+        &[HOARD_TOKEN_V2_PDA_SEED_V1, &market_bytes],
+        &release.program_id,
+    );
+    let capability_profile =
+        RegistryCapabilityProfileV4::decode(&snapshot.capability_profile_artifact.data)
+            .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let registry = capability_profile
+        .projection()
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    if market_id.bytes() != root.market_instance_id.bytes()
+        || market.market_genesis_profile_id.bytes() != root.market_genesis_profile_id.bytes()
+        || snapshot.hoard.address != hoard_pda.0
+        || hoard.stored_bump != hoard_pda.1
+        || snapshot.claim_ledger.address != claim_pda.0
+        || claim.stored_bump != claim_pda.1
+        || hoard.lifecycle != MarketLiabilityLifecycleV1::Open
+        || claim.lifecycle != MarketLiabilityLifecycleV1::Open
+        || !claim.resolution_account.is_zero()
+        || hoard.market_instance_id.bytes() != market_bytes
+        || hoard.realm_id.bytes() != realm.realm.bytes()
+        || hoard.profile_id.bytes() != profile.profile.bytes()
+        || hoard.collateral_policy_id.bytes() != collateral_policy_id.bytes()
+        || hoard.collateral_release_id.bytes() != selected_entry.adapter_id()
+        || hoard.authority.bytes() != hoard_authority.0.to_bytes()
+        || hoard.token_account.bytes() != hoard_token.0.to_bytes()
+        || hoard.collateral_cap_atoms != market.collateral_cap
+        || claim.market_instance_id != hoard.market_instance_id
+        || claim.realm_id != hoard.realm_id
+        || claim.native_claim_basis_id.bytes() != root.native_claim_basis_id.bytes()
+        || claim.outcome_count != hoard.outcome_count
+        || claim.outcome_count != root.outcome_count
+        || claim.lifecycle != hoard.lifecycle
+        || realm.realm.bytes() != root.realm_id.bytes()
+        || profile.profile.bytes() != root.collateral_profile_id.bytes()
+        || collateral_policy_id.bytes() != root.collateral_policy_id.bytes()
+        || selected_entry.adapter_id() != root.collateral_release_id.bytes()
+        || registry.realm_collateral.realm_id != root.realm_id
+        || registry.realm_collateral.profile_id != root.collateral_profile_id
+        || market.collateral_cap > registry.realm_collateral.market_collateral_cap_ceiling
+        || !rent_is_covered(hoard.rent, snapshot.hoard)
+        || !rent_is_covered(claim.rent, snapshot.claim_ledger)
+    {
+        return Err(FailureAction12MaterialError::ChainAuthority);
+    }
+    Ok(())
+}
+
+/// Authenticate the Source terminal funding boundary that action 12 will
+/// consume.  Every identity comes from the already-authenticated route and
+/// schedule; the four transaction accounts contribute hostile bytes only.
+fn authenticate_source_terminal_prestate(
+    release: &IndexedProgramRelease,
+    snapshot: FailureAction12ChainSnapshotV1<'_>,
+    route: AuthenticatedSourceRouteV1,
+    schedule: SourceWorkScheduleBindingV1,
+    root: clutch_product_series::MarketLifecycleBindingV3,
+) -> Result<()> {
+    let expected_policy = Address::find_program_address(
+        &[
+            SEED_SOURCE_LIVENESS_POLICY,
+            &schedule.liveness_policy_id().bytes(),
+        ],
+        &release.program_id,
+    );
+    let expected_compartment = Address::find_program_address(
+        &[SEED_SOURCE_COMPARTMENT, &schedule.lifecycle_id().bytes()],
+        &release.program_id,
+    );
+    let expected_custody = Address::find_program_address(
+        &[
+            SEED_SOURCE_FUNDING_CUSTODY,
+            &schedule.lifecycle_id().bytes(),
+        ],
+        &release.program_id,
+    );
+    if snapshot.source_liveness_policy.address != expected_policy.0
+        || snapshot.source_liveness_compartment.address != expected_compartment.0
+        || snapshot.source_funding_custody.address != expected_custody.0
+        || snapshot.source_liveness_policy.owner != release.program_id
+        || snapshot.source_liveness_compartment.owner != release.program_id
+        || snapshot.source_funding_custody.owner != release.program_id
+        || snapshot.source_liveness_policy.executable
+        || snapshot.source_liveness_compartment.executable
+        || snapshot.source_funding_custody.executable
+        || snapshot.source_liveness_policy.data.len() != RUNTIME_LIVENESS_POLICY_BYTES_V1
+        || snapshot.source_liveness_compartment.data.len() != RUNTIME_LIVENESS_ACCOUNT_BYTES_V1
+        || snapshot.source_funding_custody.data.len() != SOURCE_FUNDING_CUSTODY_ACCOUNT_BYTES
+    {
+        return Err(FailureAction12MaterialError::ChainAuthority);
+    }
+    let liveness_policy = RuntimeLivenessPolicyV1::decode(&snapshot.source_liveness_policy.data)
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let compartment = RuntimeCompartmentV1::decode(&snapshot.source_liveness_compartment.data)
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let liveness_policy_id = source_runtime_liveness_policy_id_v1(liveness_policy)
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    compartment
+        .validate_against_policy(liveness_policy)
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let source_policy = liveness_policy.compartment(RuntimeCompartmentKindV1::Source);
+    let terminal_calls = schedule.terminal_path_calls();
+    let terminal_work = schedule.terminal_path_work_lamports();
+    if liveness_policy_id != route.liveness_policy_id()
+        || liveness_policy.policy_id.bytes() != route.liveness_policy_id().bytes()
+        || liveness_policy.realm_id.bytes() != root.realm_id.bytes()
+        || liveness_policy.neutral_sink.bytes() != route.neutral_sink().bytes()
+        || source_policy.quote_schedule_id.bytes() != schedule.source_work_schedule_id().bytes()
+        || source_policy.receipt_program_id.bytes() != release.program_id.to_bytes()
+        || source_policy.maximum_calls != schedule.maximum_calls()
+        || source_policy.maximum_lamports_per_call != schedule.maximum_lamports_per_call()
+        || source_policy.work_capital_lamports != schedule.work_capital_lamports()
+        || source_policy.account_rent_principal_lamports != schedule.rent_principal_lamports()
+        || liveness_policy
+            .terminal_paths
+            .iter()
+            .enumerate()
+            .any(|(index, path)| {
+                path.calls_for(RuntimeCompartmentKindV1::Source) != terminal_calls[index]
+                    || path.work_lamports_for(RuntimeCompartmentKindV1::Source)
+                        != terminal_work[index]
+            })
+        || route.source_compartment_owner().bytes() != release.program_id.to_bytes()
+        || route.source_compartment_account().bytes()
+            != snapshot.source_liveness_compartment.address.to_bytes()
+        || route.neutral_sink().bytes() != snapshot.source_neutral_sink.address.to_bytes()
+        || schedule.payer().bytes() != snapshot.source_funding_custody.address.to_bytes()
+        || compartment.kind != RuntimeCompartmentKindV1::Source
+        || compartment.phase != RuntimeCompartmentPhaseV1::Active
+        || compartment.identity.policy_id.bytes() != liveness_policy.policy_id.bytes()
+        || compartment.identity.lifecycle_id.bytes() != schedule.lifecycle_id().bytes()
+        || compartment.identity.account_id.bytes()
+            != snapshot.source_liveness_compartment.address.to_bytes()
+        || compartment.identity.owner.bytes() != route.source_compartment_owner().bytes()
+        || compartment.identity.payer.bytes() != snapshot.source_funding_custody.address.to_bytes()
+        || compartment.identity.neutral_sink.bytes() != route.neutral_sink().bytes()
+        || compartment.identity.generation != schedule.generation()
+        || compartment.quote_schedule_id.bytes() != schedule.source_work_schedule_id().bytes()
+        || compartment.receipt_program_id.bytes() != release.program_id.to_bytes()
+        || compartment.maximum_calls != schedule.maximum_calls()
+        || compartment.maximum_lamports_per_call != schedule.maximum_lamports_per_call()
+        || compartment.capitalized_work_lamports != schedule.work_capital_lamports()
+        || compartment.rent_principal_lamports != schedule.rent_principal_lamports()
+        || snapshot.source_liveness_compartment.lamports
+            < compartment
+                .expected_account_balance_lamports()
+                .map_err(|_| FailureAction12MaterialError::ChainAuthority)?
+    {
+        return Err(FailureAction12MaterialError::ChainAuthority);
+    }
+
+    let custody = SourceFundingCustodyLedgerV1::decode(&snapshot.source_funding_custody.data)
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let custody_explained = custody
+        .remaining_principal_lamports
+        .checked_add(custody.donation_lamports)
+        .ok_or(FailureAction12MaterialError::Arithmetic)?;
+    if !custody.is_live()
+        || custody.adapter_program.bytes() != release.program_id.to_bytes()
+        || custody.release_manifest_id != route.release_manifest_id()
+        || custody.route_id != route.route_id()
+        || custody.source_work_schedule_id != schedule.source_work_schedule_id()
+        || custody.lifecycle_id != schedule.lifecycle_id()
+        || custody.custody_account.bytes() != snapshot.source_funding_custody.address.to_bytes()
+        || custody.neutral_sink != route.neutral_sink()
+        || snapshot.source_funding_custody.lamports < custody_explained
+        || snapshot.source_neutral_sink.owner != solana_sdk_ids::system_program::ID
+        || snapshot.source_neutral_sink.executable
+        || !snapshot.source_neutral_sink.data.is_empty()
+    {
+        return Err(FailureAction12MaterialError::ChainAuthority);
+    }
+    Ok(())
+}
+
+/// Reopen the framed Failure liveness bodies and join every terminal recipient
+/// and PDA to the immutable Failure/Product facts.  This mirrors the private
+/// terminal authenticator rather than treating program ownership as authority.
+fn authenticate_failure_terminal_prestate(
+    release: &IndexedProgramRelease,
+    snapshot: FailureAction12ChainSnapshotV1<'_>,
+    facts: clutch_failure_policy_runtime::market_policy_v1::FailureMarketPolicyFactsV1,
+    root: clutch_product_series::MarketLifecycleBindingV3,
+    recovery: RuntimeCompartmentV1,
+) -> Result<()> {
+    if snapshot.failure_liveness_policy.owner != release.program_id
+        || snapshot.failure_recovery_compartment.owner != release.program_id
+        || snapshot.failure_liveness_policy.executable
+        || snapshot.failure_recovery_compartment.executable
+        || snapshot.failure_liveness_policy.data.len() != FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1
+        || snapshot.failure_recovery_compartment.data.len()
+            != FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1
+        || snapshot.recovery_refund_owner.owner != solana_sdk_ids::system_program::ID
+        || snapshot.recovery_refund_owner.executable
+        || !snapshot.recovery_refund_owner.data.is_empty()
+    {
+        return Err(FailureAction12MaterialError::ChainAuthority);
+    }
+    let policy_frame = decode_failure_account_body_v1(
+        &snapshot.failure_liveness_policy.data,
+        registry::FAILURE_LIVENESS_POLICY_ACCOUNT_TAG,
+        registry::FAILURE_LIVENESS_POLICY_ACCOUNT_VERSION,
+        FAILURE_LIVENESS_POLICY_BODY_BYTES_V1,
+    )
+    .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let recovery_frame = decode_failure_account_body_v1(
+        &snapshot.failure_recovery_compartment.data,
+        registry::FAILURE_EXTERNAL_RECOVERY_ACCOUNT_TAG,
+        registry::FAILURE_EXTERNAL_RECOVERY_ACCOUNT_VERSION,
+        FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1,
+    )
+    .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let liveness_policy = RuntimeLivenessPolicyV1::decode(policy_frame.body)
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let reopened_recovery = RuntimeCompartmentV1::decode(recovery_frame.body)
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    if reopened_recovery != recovery {
+        return Err(FailureAction12MaterialError::ChainAuthority);
+    }
+    recovery
+        .validate_against_policy(liveness_policy)
+        .map_err(|_| FailureAction12MaterialError::ChainAuthority)?;
+    let expected_policy = Address::find_program_address(
+        &[
+            SEED_FAILURE_LIVENESS_POLICY,
+            &facts.liveness_policy_id.bytes(),
+        ],
+        &release.program_id,
+    );
+    let expected_recovery = Address::find_program_address(
+        &[
+            SEED_FAILURE_RECOVERY,
+            &facts.liveness_lifecycle_id.bytes(),
+            &facts.generation.to_le_bytes(),
+        ],
+        &release.program_id,
+    );
+    if snapshot.failure_liveness_policy.address != expected_policy.0
+        || policy_frame.stored_bump != expected_policy.1
+        || snapshot.failure_recovery_compartment.address != expected_recovery.0
+        || recovery_frame.stored_bump != expected_recovery.1
+        || liveness_policy.policy_id.bytes() != facts.liveness_policy_id.bytes()
+        || liveness_policy.realm_id.bytes() != root.realm_id.bytes()
+        || liveness_policy.neutral_sink.bytes() != facts.neutral_sink.bytes()
+        || liveness_policy.neutral_sink.bytes() != snapshot.source_neutral_sink.address.to_bytes()
+        || recovery.kind != RuntimeCompartmentKindV1::Recovery
+        || recovery.phase != RuntimeCompartmentPhaseV1::Active
+        || recovery.identity.owner.bytes() != release.program_id.to_bytes()
+        || recovery.identity.owner.bytes() != facts.recovery_receipt_program_id.bytes()
+        || recovery.identity.account_id.bytes()
+            != snapshot.failure_recovery_compartment.address.to_bytes()
+        || recovery.identity.account_id.bytes() != facts.recovery_compartment_account_id.bytes()
+        || recovery.identity.policy_id.bytes() != facts.liveness_policy_id.bytes()
+        || recovery.identity.lifecycle_id.bytes() != facts.liveness_lifecycle_id.bytes()
+        || recovery.identity.generation != facts.generation
+        || recovery.identity.payer.bytes() != facts.recovery_refund_owner.bytes()
+        || recovery.identity.payer.bytes() != snapshot.recovery_refund_owner.address.to_bytes()
+        || recovery.identity.neutral_sink.bytes() != facts.neutral_sink.bytes()
+        || recovery.quote_schedule_id.bytes() != facts.recovery_quote_schedule_id.bytes()
+        || recovery.receipt_program_id.bytes() != facts.recovery_receipt_program_id.bytes()
+        || snapshot.failure_recovery_compartment.lamports
+            < recovery
+                .expected_account_balance_lamports()
+                .map_err(|_| FailureAction12MaterialError::ChainAuthority)?
+    {
+        return Err(FailureAction12MaterialError::ChainAuthority);
+    }
+    Ok(())
+}
+
+fn rent_is_covered(
+    rent: clutch_retirement::DeletableRentOwnerV1,
+    account: &ObservedRpcAccount,
+) -> bool {
+    rent.refundable_principal()
+        .checked_add(rent.donation_floor())
+        .is_some_and(|required| account.lamports >= required)
 }
 
 fn require_pda(program_id: Address, observed: Address, bump: u8, seeds: &[&[u8]]) -> Result<()> {
