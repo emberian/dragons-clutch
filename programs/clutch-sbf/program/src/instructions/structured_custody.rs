@@ -3658,13 +3658,10 @@ fn authenticate_structured_program_release_v2(
                 == solana_sha256_hasher::hashv(&[&program_data_body]).to_bytes()
             && release.capability_manifest_id == expected_manifest_id
             && release.deployment_slot == deployment_slot
-            && (matches!(
-                (release.locus, deployment_slot),
-                (RegistryReleaseLocusV2::SynthesizedGenesisZero, 0)
-            ) || matches!(
+            && matches!(
                 (release.locus, deployment_slot),
                 (RegistryReleaseLocusV2::ObservedPositive, slot) if slot != 0
-            )),
+            ),
         ClutchError::AuthorizationUnavailable,
     )?;
     Ok((release_id, release))
