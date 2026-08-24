@@ -41,8 +41,9 @@
 
 use crate::error::{ClutchError, Refusal};
 use clutch_kernel::BasisMode;
+#[cfg(test)]
+use clutch_solana_layout::direct_selection::{DirectEpochV3Account, DIRECT_EPOCH_BYTES};
 use clutch_solana_layout::{
-    direct_selection::{DirectEpochV3Account, DIRECT_EPOCH_BYTES},
     stream, CandidateRecord, EpochAccount, FeedAccount, FinalPotAccount, Hash32, MarketAccount,
     PriceGridAccount, ProfileAccount, RealmAccount, ResolutionAccount, SettlementReceiptAccount,
     SupplyLedgerAccount, TermsAccount, MAX_OUTCOMES,
@@ -815,19 +816,7 @@ pub fn read_epoch(data: &[u8]) -> Outcome<EpochFacts> {
         let _ = data;
         return Err(ClutchError::UnsupportedInstruction.into());
     }
-    #[cfg(feature = "profile-full")]
-    if data.len() == DIRECT_EPOCH_BYTES {
-        let value = DirectEpochV3Account::decode(data)?;
-        return Ok(epoch_facts(&value.common));
-    }
-    #[cfg(feature = "profile-direct-v3-source-v2-point")]
-    {
-        let value = DirectEpochV3Account::decode(data)?;
-        return Ok(epoch_facts(&value.common));
-    }
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     let value = EpochAccount::decode(data)?;
-    #[cfg(any(feature = "profile-full", feature = "profile-general-source-v2-point"))]
     Ok(epoch_facts(&value))
 }
 
@@ -851,6 +840,7 @@ fn epoch_facts(value: &EpochAccount) -> EpochFacts {
 }
 
 /// Decode exactly a version-three direct Epoch.
+#[cfg(test)]
 #[inline(never)]
 pub fn read_direct_epoch(data: &[u8]) -> Outcome<DirectEpochV3Account> {
     Ok(DirectEpochV3Account::decode(data)?)
@@ -859,6 +849,7 @@ pub fn read_direct_epoch(data: &[u8]) -> Outcome<DirectEpochV3Account> {
 /// Boxed [`read_direct_epoch`]: the decoded Epoch lives in this helper's
 /// frame and only a heap pointer crosses back into the caller's bounded SBF
 /// frame (the `direct_selection_v3::common` discipline).
+#[cfg(test)]
 #[inline(never)]
 pub fn read_direct_epoch_boxed(data: &[u8]) -> Outcome<Box<DirectEpochV3Account>> {
     Ok(Box::new(read_direct_epoch(data)?))

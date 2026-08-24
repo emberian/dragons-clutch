@@ -46,6 +46,7 @@ pub mod collateral;
 pub mod collateral_v3_accounts;
 pub mod direct_selection;
 pub mod direct_selection_v3;
+pub mod direct_market_v1;
 pub mod failure_recovery;
 pub mod failure_interval_consensus;
 pub mod failure_market_interval_v2;

@@ -12,7 +12,7 @@
 //! | [`Intent::InitProfileV2`] | [`ProfileAccount`], policy/release frozen | 8 |
 //! | [`Intent::InitPriceGrid`] | obsolete: use typed `SealArtifact` | -- |
 //! | [`Intent::InitTerms`] | obsolete: use typed `SealArtifact` | -- |
-//! | [`Intent::InitOrderPage`] | exact DirectEpochV4 page-zero constructor only | 6 |
+//! | [`Intent::InitOrderPage`] | withdrawn; decode-only | -- |
 //! | [`Intent::Endow`] | registered source + absent generation-zero Position/Replay, then collateral deposit and cash credit | 15 |
 //!
 //! ## `Endow` is the inbound value boundary
@@ -35,9 +35,9 @@
 //! `Split`; it is not silently reused as a custody ceiling.  A position may
 //! deposit more unused cash than the market can lock.
 //!
-//! `InitOrderPage` is current only for the exact DirectEpochV4 page-zero
-//! constructor. The historical General account-width fallback is a host-test
-//! fixture and cannot compile into the Solana program.
+//! `InitOrderPage` is withdrawn. Historical General and Direct page bytes
+//! remain hostile codec fixtures, but no page constructor compiles into the
+//! Solana program.
 //!
 //! `Endow` is permissionless self-service, not a third-party credit interface:
 //! the signer must equal the requested Position owner and may deposit only
@@ -79,10 +79,9 @@
 //!
 //! ## What is *not* here, and who owns it
 //!
-//! * **No General `InitEpoch` or page constructor.**  The shared
-//!   [`Intent::InitOrderPage`] tag is admitted only for an exact DirectEpochV4
-//!   account.  Historical General epoch/page constructors are host-test
-//!   fixtures, not a deployable lifecycle.
+//! * **No General or legacy Direct page constructor.** The shared
+//!   [`Intent::InitOrderPage`] tag is decode-only. Historical epoch/page
+//!   constructors are host-test fixtures, not a deployable lifecycle.
 //! * **No `InitClearWork` and no `InitCandidateFeed`.**  The two clearing
 //!   accounts landed as codecs this wave
 //!   ([`clutch_solana_layout::clearing`]) and are consumed by nothing.  The
@@ -114,11 +113,11 @@
 //!
 //! ## Frame discipline
 //!
-//! No function here holds a terms artifact, a price grid, or an order page by
-//! value: artifacts are read through [`crate::accounts`]'s facts
-//! readers and copied as bytes, and the page is written by the layout crate's
-//! streaming writer [`stream::init_page`].  The largest value on any frame in
-//! this module is a [`RealmAccount`] and its 70-byte encode buffer.  As
+//! No executable function here holds a terms artifact, a price grid, or an
+//! order page by value: artifacts are read through [`crate::accounts`]'s facts
+//! readers and copied as bytes, while historical page streaming is test-only.
+//! The largest executable value on any frame in this module is a
+//! [`RealmAccount`] and its 70-byte encode buffer. As
 //! everywhere else in this crate that is **measured**: `cargo-build-sbf` emits
 //! no frame diagnostic for any `clutch_sbf` function.
 
@@ -137,15 +136,18 @@ use clutch_batch_policy_identity::revenue_policy_v1::{
 };
 use clutch_collateral_adapter_v2::{CollateralPolicyV2, COLLATERAL_POLICY_V2_BYTES};
 use clutch_solana_layout::clearing::FUNDING_COVERS_REVENUE_RECORD;
+#[cfg(any())]
 use clutch_solana_layout::direct_selection_v3::{
     DirectEpochV4Account, DirectFundingLedgerV3, DIRECT_EPOCH_V4_BYTES,
 };
 use clutch_solana_layout::revenue::{RevenuePolicyRecordV1, REVENUE_POLICY_RECORD_BYTES};
 use clutch_solana_layout::{
-    account_len, canonical_profile_v2_id, canonical_realm_id, collateral, stream, Hash32,
-    HoardAccount, Intent, MarketAccount, PositionAccount, ProfileAccount, RealmAccount,
-    EPOCH_PHASE_OPEN, PROFILE_FLAG_POLICY_FROZEN, PROFILE_SCHEMA_V2,
+    account_len, canonical_profile_v2_id, canonical_realm_id, collateral, Hash32, HoardAccount,
+    Intent, MarketAccount, PositionAccount, ProfileAccount, RealmAccount,
+    PROFILE_FLAG_POLICY_FROZEN, PROFILE_SCHEMA_V2,
 };
+#[cfg(test)]
+use clutch_solana_layout::stream;
 use clutch_solana_reference::{Action, ReplayAccount, Request, REPLAY_ACCOUNT_LEN};
 use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
@@ -153,10 +155,14 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::construction::{self, OwnerStateBumps, OwnerStateTargets};
-use super::direct_selection_v3::{
-    create_pda_account_full_principal, direct_creation_funding, observe_direct_funding,
-    DIRECT_NEUTRAL_SINK_V3, DIRECT_VERIFIER_RELEASE_ID_V3,
+use super::full_principal_funding_v1::{
+    create_pda_account_full_principal, full_principal_creation_funding,
+    FULL_PRINCIPAL_NEUTRAL_SINK_V1,
 };
+#[cfg(any())]
+use super::full_principal_funding_v1::observe_full_principal_funding;
+#[cfg(any())]
+use super::direct_selection_v3::DIRECT_VERIFIER_RELEASE_ID_V3;
 
 /// Borrow one account's data mutably, or refuse.
 ///
@@ -477,22 +483,6 @@ pub const IX_PROFILE_TOKEN_PROGRAM: usize = 6;
 /// Immutable Upgradeable Loader ProgramData linked by that token program.
 pub const IX_PROFILE_TOKEN_PROGRAMDATA: usize = 7;
 
-/// Accounts in the current DirectEpochV4 `InitOrderPage` instruction.
-pub const INIT_PAGE_ACCOUNT_COUNT: usize = 6;
-/// Historical General host-fixture account count with a funding-ledger tail.
-/// This account plane cannot compile into the Solana program.
-pub const INIT_PAGE_LEDGERED_ACCOUNT_COUNT: usize = INIT_PAGE_ACCOUNT_COUNT + 1;
-/// Historical host-fixture funding-ledger role; never admitted on Solana.
-pub const IX_PAGE_LEDGER: usize = 6;
-/// The market the epoch belongs to (read-only, program-owned).
-pub const IX_PAGE_MARKET: usize = 2;
-/// The epoch whose page set this page joins (read-only, program-owned).
-pub const IX_PAGE_EPOCH: usize = 3;
-/// The system program.  `InitOrderPage`.
-pub const IX_PAGE_SYSTEM: usize = 4;
-/// The rent sysvar.  `InitOrderPage`.
-pub const IX_PAGE_RENT: usize = 5;
-
 /// Accounts in an `Endow` instruction, exactly.
 ///
 /// The five program-owned state roles are followed by the Realm's
@@ -538,8 +528,6 @@ pub const IX_ENDOW_SOURCE_SPEC: usize = 14;
 const PROFILE_STATE_ROLES: [StateRole; 1] =
     [StateRole::read_only(IX_PROFILE_REALM, account_len::REALM)];
 /// Program-owned roles of `InitOrderPage`.
-const PAGE_STATE_ROLES: [StateRole; 1] =
-    [StateRole::read_only(IX_PAGE_MARKET, account_len::MARKET)];
 /// Existing market-global roles of `Endow`.
 ///
 /// The canonical SourceSpec is deliberately **not** in this table. Its length
@@ -700,22 +688,12 @@ pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], request: &Request)
         Action::Layout(Intent::InitPriceGrid { .. } | Intent::InitTerms { .. }) => {
             Err(ClutchError::UnsupportedInstruction.into())
         }
-        Action::Layout(Intent::InitOrderPage {
-            market,
-            epoch,
-            page_index,
-            page_count,
-        }) => init_order_page(
-            program_id,
-            accounts,
-            request.sequence,
-            &PageInit {
-                market,
-                epoch,
-                page_index,
-                page_count,
-            },
-        ),
+        // The shared page constructor belonged only to withdrawn General and
+        // Direct V2/V3 families. Current families own fresh account schemas and
+        // never recover this route by changing one capability bit.
+        Action::Layout(Intent::InitOrderPage { .. }) => {
+            Err(ClutchError::UnsupportedInstruction.into())
+        }
         Action::Layout(Intent::Endow {
             market,
             owner,
@@ -843,12 +821,12 @@ fn init_revenue_policy_record(
 
     let digest = revenue_policy_digest(&REVENUE_POLICY_V1)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let funding = direct_creation_funding(
+    let funding = full_principal_creation_funding(
         &accounts[IX_PAYER],
         record_account,
         rent,
         REVENUE_POLICY_RECORD_BYTES,
-        DIRECT_NEUTRAL_SINK_V3,
+        FULL_PRINCIPAL_NEUTRAL_SINK_V1,
     )?;
     let record = RevenuePolicyRecordV1 {
         realm,
@@ -1075,7 +1053,9 @@ fn init_profile(
 /* InitOrderPage                                                             */
 /* ------------------------------------------------------------------------ */
 
-/// One already-matched `InitOrderPage` intent.
+/// Historical page fixture input. It is test-only because no current family
+/// admits the shared page constructor.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PageInit {
     /// Market identity.
@@ -1088,264 +1068,6 @@ pub struct PageInit {
     pub page_count: u16,
 }
 
-fn init_order_page(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    sequence: u64,
-    intent: &PageInit,
-) -> Outcome<()> {
-    #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
-    {
-        let _ = (program_id, accounts, sequence, intent);
-        return Err(ClutchError::UnsupportedInstruction.into());
-    }
-    #[cfg(feature = "profile-direct-v3-source-v2-point")]
-    {
-        require(
-            accounts
-                .get(IX_PAGE_EPOCH)
-                .map(|account| account.data_len())
-                == Some(DIRECT_EPOCH_V4_BYTES),
-            ClutchError::UnsupportedInstruction,
-        )?;
-        return init_direct_v4_order_page(program_id, accounts, sequence, intent);
-    }
-    #[cfg(feature = "profile-full")]
-    if accounts
-        .get(IX_PAGE_EPOCH)
-        .map(|account| account.data_len())
-        == Some(DIRECT_EPOCH_V4_BYTES)
-    {
-        return init_direct_v4_order_page(program_id, accounts, sequence, intent);
-    }
-    #[cfg(test)]
-    return init_legacy_order_page(program_id, accounts, sequence, intent);
-    #[cfg(not(test))]
-    {
-        let _ = (program_id, accounts, sequence, intent);
-        Err(ClutchError::UnsupportedInstruction.into())
-    }
-}
-
-#[cfg(test)]
-#[inline(never)]
-fn init_legacy_order_page(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    sequence: u64,
-    intent: &PageInit,
-) -> Outcome<()> {
-    require(
-        accounts.len() == INIT_PAGE_ACCOUNT_COUNT
-            || accounts.len() == INIT_PAGE_LEDGERED_ACCOUNT_COUNT,
-        ClutchError::AccountCount,
-    )?;
-    require_signer(&accounts[IX_PAYER])?;
-    require_distinct(accounts)?;
-    accounts::validate_state_roles(program_id, accounts, &PAGE_STATE_ROLES)?;
-    #[cfg(feature = "profile-full")]
-    let admitted_epoch_lengths = [
-        account_len::EPOCH,
-        clutch_solana_layout::direct_selection::DIRECT_EPOCH_BYTES,
-    ];
-    #[cfg(feature = "profile-general-source-v2-point")]
-    let admitted_epoch_lengths = [account_len::EPOCH];
-    accounts::validate_state_role_lengths(
-        program_id,
-        &accounts[IX_PAGE_EPOCH],
-        false,
-        &admitted_epoch_lengths,
-    )?;
-    require_creation_sequence(sequence)?;
-    require_system_program(&accounts[IX_PAGE_SYSTEM])?;
-    let rent = read_rent(&accounts[IX_PAGE_RENT])?;
-
-    let market = accounts::read_market(&accounts[IX_PAGE_MARKET].data.borrow())?;
-    let epoch = accounts::read_epoch(&accounts[IX_PAGE_EPOCH].data.borrow())?;
-    expect_pda(
-        accounts[IX_PAGE_MARKET].key,
-        seeds::market_pda(program_id, &market.realm.bytes(), &market.market.bytes()),
-        Some(market.stored_bump),
-    )?;
-    expect_pda(
-        accounts[IX_PAGE_EPOCH].key,
-        seeds::epoch_pda(program_id, &epoch.market.bytes(), epoch.epoch_index),
-        Some(epoch.stored_bump),
-    )?;
-    require(
-        market.market == intent.market
-            && epoch.epoch == intent.epoch
-            && epoch.market == market.market,
-        ClutchError::MismatchedState,
-    )?;
-    /* A page is created into an *open* epoch and an *active* market.  A frozen
-     * epoch's page set is closed by `verify_page_set`, and adding a page to it
-     * would mean the frozen `order_set` no longer folds the set it names. */
-    require(
-        epoch.phase == EPOCH_PHASE_OPEN && market.lifecycle == 0,
-        ClutchError::NotActive,
-    )?;
-    /* The set's geometry is a decision made once.  Before the freeze the epoch
-     * carries no page count (`page_count` is zero until frozen), so the intent
-     * declares it and every page of one set must declare the same number —
-     * which `verify_page_set` then checks across the whole set. */
-    require(epoch.page_count == 0, ClutchError::MismatchedState)?;
-
-    let epoch_bytes = epoch.epoch.bytes();
-    let (address, bump) = seeds::page_pda(program_id, &epoch_bytes, intent.page_index);
-    expect_pda(accounts[IX_TARGET].key, (address, bump), None)?;
-
-    let page_prior = accounts[IX_TARGET].lamports();
-    create_pda_account(
-        program_id,
-        &accounts[IX_PAYER],
-        &accounts[IX_TARGET],
-        &accounts[IX_PAGE_SYSTEM],
-        &rent,
-        account_len::ORDER_PAGE,
-        &[
-            seeds::SEED_PAGE,
-            &epoch_bytes,
-            &intent.page_index.to_le_bytes(),
-            &[bump],
-        ],
-    )?;
-
-    {
-        let mut data = borrow_mut!(accounts[IX_TARGET])?;
-        write_empty_page(&mut data, intent, bump)?;
-    }
-    if accounts.len() == INIT_PAGE_LEDGERED_ACCOUNT_COUNT {
-        use crate::instructions::orders_batch::terminal_closure;
-        terminal_closure::create_funding_ledger(
-            program_id,
-            &accounts[IX_PAYER],
-            &accounts[IX_PAGE_LEDGER],
-            &accounts[IX_PAGE_SYSTEM],
-            &rent,
-            accounts[IX_TARGET].key,
-            clutch_solana_layout::clearing::FUNDING_COVERS_PAGE,
-            terminal_closure::creation_shortfall(
-                rent.minimum_balance(account_len::ORDER_PAGE)?,
-                page_prior,
-            ),
-            page_prior,
-        )?;
-    }
-    Ok(())
-}
-
-/// Create the sole page-zero account of a routed Direct V4 Epoch.
-///
-/// This branch is selected only by the 672-byte V4 Epoch schema, which can
-/// exist only through the routed `InitDirectEpochV4`; the legacy page path
-/// below it is byte- and behavior-stable.
-#[inline(never)]
-fn init_direct_v4_order_page(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    sequence: u64,
-    intent: &PageInit,
-) -> Outcome<()> {
-    require_count(accounts, INIT_PAGE_ACCOUNT_COUNT)?;
-    require_signer(&accounts[IX_PAYER])?;
-    require(accounts[IX_PAYER].is_writable, ClutchError::NotWritable)?;
-    require_distinct(accounts)?;
-    accounts::validate_state_roles(program_id, accounts, &PAGE_STATE_ROLES)?;
-    accounts::validate_state_role_lengths(
-        program_id,
-        &accounts[IX_PAGE_EPOCH],
-        true,
-        &[DIRECT_EPOCH_V4_BYTES],
-    )?;
-    require_creation_sequence(sequence)?;
-    require_system_program(&accounts[IX_PAGE_SYSTEM])?;
-    require_creatable(&accounts[IX_TARGET])?;
-    let rent = read_rent(&accounts[IX_PAGE_RENT])?;
-    let market = accounts::read_market(&accounts[IX_PAGE_MARKET].data.borrow())?;
-    /* `decode` already ran the complete hostile-shape validation; only the
-     * release binding and the sole pre-freeze creation phase re-state here. */
-    let mut epoch = DirectEpochV4Account::decode(&accounts[IX_PAGE_EPOCH].data.borrow())?;
-    require(
-        epoch.verifier_release_id == DIRECT_VERIFIER_RELEASE_ID_V3
-            && epoch.lifecycle_phase
-                == clutch_solana_layout::direct_selection_v3::DIRECT_LIFECYCLE_PHASE_PREFREEZE_OPEN
-            && epoch.terminal
-                == clutch_solana_layout::direct_selection_v3::DirectTerminalReceiptV3::EMPTY,
-        ClutchError::NotActive,
-    )?;
-    require(
-        epoch.neutral_lamport_sink == Hash32::from_bytes(DIRECT_NEUTRAL_SINK_V3.to_bytes())
-            && market.market == intent.market
-            && epoch.direct.common.epoch == intent.epoch
-            && epoch.direct.common.market == market.market
-            && market.lifecycle == 0
-            && intent.page_index == 0
-            && intent.page_count == 1
-            && epoch.direct.common.page_count == 0
-            && epoch.page_funding == DirectFundingLedgerV3::ZERO,
-        ClutchError::MismatchedState,
-    )?;
-    expect_pda(
-        accounts[IX_PAGE_MARKET].key,
-        seeds::market_pda(program_id, &market.realm.bytes(), &market.market.bytes()),
-        Some(market.stored_bump),
-    )?;
-    expect_pda(
-        accounts[IX_PAGE_EPOCH].key,
-        seeds::epoch_pda(
-            program_id,
-            &epoch.direct.common.market.bytes(),
-            epoch.direct.common.epoch_index,
-        ),
-        Some(epoch.direct.common.stored_bump),
-    )?;
-    let epoch_bytes = epoch.direct.common.epoch.bytes();
-    let page_index_bytes = 0u16.to_le_bytes();
-    let (page_address, page_bump) = seeds::page_pda(program_id, &epoch_bytes, 0);
-    expect_pda(accounts[IX_TARGET].key, (page_address, page_bump), None)?;
-    let funding = direct_creation_funding(
-        &accounts[IX_PAYER],
-        &accounts[IX_TARGET],
-        &rent,
-        account_len::ORDER_PAGE,
-        DIRECT_NEUTRAL_SINK_V3,
-    )?;
-    epoch.epoch_funding = observe_direct_funding(
-        epoch.epoch_funding,
-        accounts[IX_PAGE_EPOCH].lamports(),
-        DIRECT_NEUTRAL_SINK_V3,
-    )?;
-    epoch.direct.common.page_count = 1;
-    epoch.page_funding = funding;
-    // `encode` revalidates the complete poststate below.
-    let mut epoch_post = [0u8; DIRECT_EPOCH_V4_BYTES];
-    epoch.encode(&mut epoch_post)?;
-
-    create_pda_account_full_principal(
-        program_id,
-        &accounts[IX_PAYER],
-        &accounts[IX_TARGET],
-        &accounts[IX_PAGE_SYSTEM],
-        &rent,
-        account_len::ORDER_PAGE,
-        funding,
-        0,
-        &[
-            seeds::SEED_PAGE,
-            &epoch_bytes,
-            &page_index_bytes,
-            &[page_bump],
-        ],
-    )?;
-    {
-        let mut page = borrow_mut!(accounts[IX_TARGET])?;
-        write_empty_page(&mut page, intent, page_bump)?;
-    }
-    borrow_mut!(accounts[IX_PAGE_EPOCH])?.copy_from_slice(&epoch_post);
-    Ok(())
-}
-
 /// Write one empty open page, and verify it the way a reader will.
 ///
 /// Every byte comes from the layout crate's streaming writer: an empty page is
@@ -1353,6 +1075,7 @@ fn init_direct_v4_order_page(
 /// canonically padded slots, and that digest is not zero.  The verify
 /// afterwards is the same streaming path `PlaceOrder` uses, so a page created
 /// here is a page that instruction can already append to.
+#[cfg(test)]
 #[inline(never)]
 fn write_empty_page(target: &mut [u8], intent: &PageInit, bump: u8) -> Outcome<()> {
     stream::init_page(

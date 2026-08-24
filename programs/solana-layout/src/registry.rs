@@ -161,6 +161,8 @@ pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG: u8 = 0x79;
 pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION: u8 = 1;
 /// General V2 immutable candidate-cost Market-binding successor version.
 pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V2: u8 = 2;
+/// Product-family-authorized, rent-owned General Market-binding version.
+pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V3: u8 = 3;
 /// Counted-retirement Replay-successor account discriminator.
 pub const REPLAY_SUCCESSOR_ACCOUNT_TAG: u8 = 0x7a;
 /// Counted-retirement Replay-successor account version.
@@ -505,18 +507,26 @@ pub const DEALER_COVERED_SELECTION_ACCOUNT_TAG: u8 = 0xae;
 pub const DIRECT_MARKET_ROOT_ACCOUNT_TAG: u8 = 0xb1;
 /// Current Direct root account version.
 pub const DIRECT_MARKET_ROOT_ACCOUNT_VERSION: u8 = 1;
+/// Exact current Direct root frame bytes.
+pub const DIRECT_MARKET_ROOT_ACCOUNT_BYTES: usize = 1_230;
 /// Current Direct exact-selection owner discriminator.
 pub const DIRECT_SELECTION_ACCOUNT_TAG: u8 = 0xb2;
 /// Current Direct exact-selection account version.
 pub const DIRECT_SELECTION_ACCOUNT_VERSION: u8 = 1;
+/// Exact current Direct Selection frame bytes.
+pub const DIRECT_SELECTION_ACCOUNT_BYTES: usize = 1_501;
 /// Current Direct permanent action replay/terminal receipt discriminator.
 pub const DIRECT_ACTION_REPLAY_ACCOUNT_TAG: u8 = 0xb3;
 /// Current Direct permanent action replay/terminal receipt version.
 pub const DIRECT_ACTION_REPLAY_ACCOUNT_VERSION: u8 = 1;
+/// Exact permanent Direct action replay frame bytes.
+pub const DIRECT_ACTION_REPLAY_ACCOUNT_BYTES: usize = 325;
 /// Current Direct funded Reservation owner discriminator.
 pub const DIRECT_RESERVATION_ACCOUNT_TAG: u8 = 0xb4;
 /// Current Direct funded Reservation account version.
 pub const DIRECT_RESERVATION_ACCOUNT_VERSION: u8 = 1;
+/// Exact current Direct Reservation frame bytes.
+pub const DIRECT_RESERVATION_ACCOUNT_BYTES: usize = 473;
 /// Immutable General V2 frozen-order locator discriminator.
 pub const GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_TAG: u8 = 0xb5;
 /// First frozen-order locator account version.
@@ -1101,6 +1111,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-market-binding-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
+            version: GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V3,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-market-binding-v3-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -2562,7 +2581,7 @@ pub enum DirectMarketAction {
     FinalizeSelection = 8,
     /// Atomically settle the selected Egg/cash pair and both GEN1 replays.
     SettlePair = 9,
-    /// Terminalize a frozen epoch with no submitted candidate.
+    /// Terminalize a no-trade prefix, creating Selection if freeze was missed.
     LapseEmpty = 10,
     /// Terminalize a nonempty epoch whose verification never selected.
     LapseUnselected = 11,
@@ -2946,6 +2965,10 @@ mod tests {
             (
                 GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
                 GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V2,
+            ),
+            (
+                GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
+                GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V3,
             ),
             (
                 REPLAY_SUCCESSOR_ACCOUNT_TAG,

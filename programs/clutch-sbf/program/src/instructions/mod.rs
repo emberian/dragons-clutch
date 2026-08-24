@@ -17,7 +17,7 @@
 //! | [`collateral_cash_v3`] | current full-width `Intent::Endow` / `Intent::WithdrawCash` over MarketBindingV2 and Profile-selected collateral code |
 //! | [`claim_representation_v3`] | current full-width `Intent::Materialize` / `Intent::Dematerialize` over MarketBindingV2 and GeneralMarketValueAuthorityV2 |
 //! | [`external_redemption_v3`] | current full-width `Intent::RedeemExternal` over MarketBindingV2 and Profile-selected collateral code |
-//! | [`genesis`] | current `InitRealm`, `InitProfileV2`, direct-only `InitOrderPage`, and exact revenue-record close |
+//! | [`genesis`] | current `InitRealm`, `InitProfileV2`, and exact revenue-record close; page constructors are historical fixtures |
 //! | [`complete_set_v3`] | current full-width `Intent::Split` / `Intent::Merge` over MarketBindingV2 and GeneralMarketValueAuthorityV2 |
 //! | [`split`] | historical lowered-ledger Split implementation; no checked dispatch |
 //! | [`merge_materialize`] | historical lowered-ledger Merge/representation implementation; no checked dispatch |
@@ -25,7 +25,7 @@
 //! | [`observe_resolve`] | `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal` |
 //! | [`source_ingest`] | `Intent::InitSourceSpec`, `Intent::InitSourceArchive`, `Intent::AppendSourceArchive`, `Intent::SealSourceArchive` |
 //! | [`source_ingest_v2`] | `Intent::InitSourceSpecV2`, `Intent::InitSourceArchiveV2`, `Intent::AppendSourceArchiveV2`, `Intent::SealSourceArchiveV2` |
-//! | [`orders_batch`] | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SubmitDirectPage`, `Intent::SettlePage`, `Intent::InitClearWork`, `Intent::GrowClearWork`, `Intent::InitEpoch`, `Intent::FreezeEpoch`, `Intent::AdvanceClearWork`, `Intent::AdvanceClearSlices`, `Intent::CompleteClearWork`, `Intent::SubmitCandidate`, `Intent::WriteCandidateFeed`, `Intent::SealCandidate`, `Intent::FinalizeSelection`, `Intent::FreezeEntitlement`, `Intent::EntitleSlice` |
+//! | [`orders_batch`] | historical General and Direct V2/V3 host fixtures; no checked dispatch |
 //! | `general_v2_fee_v5` | current counted-root/rent-owned V5 owner fee authentication and action-38 composition; account order remains General-owned |
 //! | `general_v2_receipt_v5` | exact SettlementRoot/retained-Feed/PDA authentication for rent-owned General Receipt V5 |
 //! | `general_v2_settlement_root` | capability-disabled exact `0xa9/1` PDA/owner/full-body authentication; no dispatch route |
@@ -54,8 +54,12 @@ pub mod dealer_facility;
 pub mod dealer_policy;
 /// Capability-disabled Dealer facility account and instruction contracts.
 pub mod dealer_runtime;
-pub mod direct_selection;
-pub mod direct_selection_v3;
+// Legacy Direct V2/V3 source remains in-tree for historical review, but is
+// deliberately absent from this executable module graph. Their allocated
+// wire coordinates are decode-only and refuse at the capability boundary.
+/// Capability-disabled current Direct `80/1` account/authentication plane.
+#[cfg(feature = "profile-full")]
+pub(crate) mod direct_market_v1;
 pub mod external_exit;
 pub mod external_redemption_v3;
 /// Capability-disabled reusable Market interval account seam.
@@ -71,6 +75,7 @@ pub mod failure_market_runtime;
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_recovery;
 pub mod fractional_redemption;
+pub(crate) mod full_principal_funding_v1;
 /// Deployable current direct-only rent-owned V5 Egg delivery.
 #[cfg(any(
     all(
