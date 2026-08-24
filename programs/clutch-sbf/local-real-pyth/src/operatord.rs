@@ -1234,10 +1234,12 @@ const fn protocol_flow_name(flow: ProtocolFlow) -> &'static str {
         ProtocolFlow::GeneralV2Candidate => "general-v2-candidate",
         ProtocolFlow::GeneralV2Settlement => "general-v2-settlement",
         ProtocolFlow::GeneralV2Fees => "general-v2-fees",
+        ProtocolFlow::DirectMarketV1 => "direct-market-v1",
         ProtocolFlow::DirectEggSettlement => "direct-egg-settlement",
         ProtocolFlow::Liveness => "liveness",
         ProtocolFlow::ProductSeries => "product-series",
         ProtocolFlow::StructuredClaim => "structured-claim",
+        ProtocolFlow::DealerFacilityTerminal => "dealer-facility-terminal",
         ProtocolFlow::KeeperSettlement => "keeper-settlement",
         ProtocolFlow::RecoveryRetirement => "recovery-retirement",
     }
@@ -1247,6 +1249,9 @@ const fn runtime_admission_name(admission: RuntimeAdmission) -> &'static str {
     match admission {
         RuntimeAdmission::ReservedDisabled => "reserved-disabled",
         RuntimeAdmission::ReleaseBoundEnabled => "release-bound-enabled",
+        RuntimeAdmission::PayloadVariantReleaseBoundEnabled => {
+            "payload-variant-release-bound-enabled"
+        }
     }
 }
 

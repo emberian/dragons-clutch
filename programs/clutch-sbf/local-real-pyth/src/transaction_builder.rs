@@ -77,10 +77,10 @@ impl core::fmt::Display for ConstructionError {
             Self::UnbalancedExactEquation => "exact-integer accounting equation is unbalanced",
             Self::EmptyBundle => "atomic transaction bundle is empty",
             Self::MissingLookupTable => {
-                "current Structured transactions require an authenticated address lookup table"
+                "current wide transactions require an authenticated address lookup table"
             }
             Self::InvalidLookupTable => {
-                "address lookup table does not cover the exact Structured transaction"
+                "address lookup table does not cover the exact wide transaction"
             }
             Self::PacketTooLarge => {
                 "serialized unsigned transaction exceeds its explicit packet limit"
@@ -108,6 +108,8 @@ pub enum ProtocolFlow {
     Liveness,
     ProductSeries,
     StructuredClaim,
+    /// Payload-scoped current Dealer facility retirement targets 8 and 9.
+    DealerFacilityTerminal,
     KeeperSettlement,
     RecoveryRetirement,
 }
@@ -125,6 +127,9 @@ pub enum RuntimeAdmission {
     /// Clutch dispatcher and encoded in its strict replay request. This says
     /// nothing about signing, submission, or successful onchain execution.
     ReleaseBoundEnabled,
+    /// Only one checked payload discriminator beneath a disabled coarse tuple
+    /// is admitted by the release manifest.
+    PayloadVariantReleaseBoundEnabled,
 }
 
 /// Central-registry provenance for a main-program successor envelope.
@@ -260,6 +265,117 @@ pub enum OwnedWireContract {
         action: clutch_structured_claim_runtime_contract::StructuredClaimActionV1,
         product_link_writable: bool,
     },
+    /// Exact central Dealer request for one closed terminal discriminator.
+    DealerTerminalRetireV1 {
+        variant: crate::rpc_index::CanonicalIntentVariantV1,
+        sequence: u64,
+    },
+}
+
+/// One exact role in the payload-scoped Dealer terminal frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DealerTerminalAccountSpecV1 {
+    pub label: &'static str,
+    pub signer: bool,
+    pub writable: bool,
+}
+
+const fn dealer_terminal_spec(
+    label: &'static str,
+    signer: bool,
+    writable: bool,
+) -> DealerTerminalAccountSpecV1 {
+    DealerTerminalAccountSpecV1 {
+        label,
+        signer,
+        writable,
+    }
+}
+
+const DEALER_TERMINAL_COMMON_V1: [DealerTerminalAccountSpecV1; 43] = [
+    dealer_terminal_spec("actor", true, true),
+    dealer_terminal_spec("policy", false, false),
+    dealer_terminal_spec("state-v3", false, true),
+    dealer_terminal_spec("facility-position-v3", false, true),
+    dealer_terminal_spec("facility-replay-v3", false, true),
+    dealer_terminal_spec("funded-dependencies-v2", false, false),
+    dealer_terminal_spec("dealer-liveness-schedule-v1", false, false),
+    dealer_terminal_spec("liveness-policy", false, false),
+    dealer_terminal_spec("liveness-source", false, false),
+    dealer_terminal_spec("liveness-candidate", false, false),
+    dealer_terminal_spec("liveness-clearing", false, false),
+    dealer_terminal_spec("liveness-settlement", false, false),
+    dealer_terminal_spec("liveness-resolution", false, false),
+    dealer_terminal_spec("liveness-retirement", false, true),
+    dealer_terminal_spec("liveness-recovery", false, false),
+    dealer_terminal_spec("liveness-receipt", false, true),
+    dealer_terminal_spec("liveness-payer", false, true),
+    dealer_terminal_spec("position-rent-payer", false, true),
+    dealer_terminal_spec("replay-rent-payer", false, true),
+    dealer_terminal_spec("obligation-rent-payer", false, true),
+    dealer_terminal_spec("neutral-lamport-sink", false, true),
+    dealer_terminal_spec("clock-sysvar", false, false),
+    dealer_terminal_spec("rent-sysvar", false, false),
+    dealer_terminal_spec("system-program", false, false),
+    dealer_terminal_spec("dealer-series-obligation-v2", false, true),
+    dealer_terminal_spec("product-market-root-v2", false, false),
+    dealer_terminal_spec("series-registry-v3", false, false),
+    dealer_terminal_spec("current-program", false, false),
+    dealer_terminal_spec("current-programdata", false, false),
+    dealer_terminal_spec("registry-release-v2", false, false),
+    dealer_terminal_spec("capability-profile-v4", false, false),
+    dealer_terminal_spec("series-market-link-v2", false, true),
+    dealer_terminal_spec("compiler-bundle-v6", false, false),
+    dealer_terminal_spec("attachment-v5", false, false),
+    dealer_terminal_spec("realm", false, false),
+    dealer_terminal_spec("collateral-profile-v2", false, false),
+    dealer_terminal_spec("collateral-policy-v2", false, false),
+    dealer_terminal_spec("collateral-token-program", false, false),
+    dealer_terminal_spec("collateral-token-programdata", false, false),
+    dealer_terminal_spec("market-binding-v2", false, false),
+    dealer_terminal_spec("market-runtime-v3", false, false),
+    dealer_terminal_spec("market-instance-v2", false, false),
+    dealer_terminal_spec("hoard-v2", false, false),
+];
+
+const DEALER_TERMINAL_ACTIVE_TAIL_V1: [DealerTerminalAccountSpecV1; 5] = [
+    dealer_terminal_spec("claim-ledger-v3", false, true),
+    dealer_terminal_spec("resolution-v5", false, false),
+    dealer_terminal_spec("fractional-policy-v3", false, false),
+    dealer_terminal_spec("fractional-ledger-v1", false, true),
+    dealer_terminal_spec("facility-credit-v2", false, true),
+];
+
+const DEALER_TERMINAL_UNUSED_TAIL_V1: [DealerTerminalAccountSpecV1; 2] = [
+    dealer_terminal_spec("claim-ledger-v3", false, false),
+    dealer_terminal_spec("dealer-future-credit-funding-v1", false, true),
+];
+
+pub(crate) fn dealer_terminal_account_spec_v1(
+    variant: crate::rpc_index::CanonicalIntentVariantV1,
+    index: usize,
+) -> Option<DealerTerminalAccountSpecV1> {
+    if index < DEALER_TERMINAL_COMMON_V1.len() {
+        return Some(DEALER_TERMINAL_COMMON_V1[index]);
+    }
+    let tail = index.checked_sub(DEALER_TERMINAL_COMMON_V1.len())?;
+    match variant {
+        crate::rpc_index::CanonicalIntentVariantV1::DealerRetireActiveFacilityCredit => {
+            DEALER_TERMINAL_ACTIVE_TAIL_V1.get(tail).copied()
+        }
+        crate::rpc_index::CanonicalIntentVariantV1::DealerRetireUnusedFutureCredit => {
+            DEALER_TERMINAL_UNUSED_TAIL_V1.get(tail).copied()
+        }
+    }
+}
+
+pub(crate) const fn dealer_terminal_account_count_v1(
+    variant: crate::rpc_index::CanonicalIntentVariantV1,
+) -> usize {
+    match variant {
+        crate::rpc_index::CanonicalIntentVariantV1::DealerRetireActiveFacilityCredit => 48,
+        crate::rpc_index::CanonicalIntentVariantV1::DealerRetireUnusedFutureCredit => 45,
+    }
 }
 
 /// One semantic-owner-produced instruction ready for outer construction.
@@ -604,6 +720,120 @@ impl OwnedInstructionDraft {
         Ok(value)
     }
 
+    /// Construct the exact central request for Dealer action 25 target 8 or
+    /// 9. The payload was derived from finalized account bytes by the action
+    /// material owner; this boundary rechecks its canonical fixed layout and
+    /// exact role privileges before admitting the discriminator.
+    pub(crate) fn enabled_dealer_terminal_retire_v1(
+        semantic_owner: SemanticOwner,
+        program_id: Address,
+        accounts: Vec<AccountMeta>,
+        equations: Vec<ExactEquation>,
+        variant: crate::rpc_index::CanonicalIntentVariantV1,
+        sequence: u64,
+        payload: &[u8; 40],
+    ) -> Result<Self> {
+        let expected_count = dealer_terminal_account_count_v1(variant);
+        if u64::from_le_bytes(
+            payload[0..8]
+                .try_into()
+                .map_err(|_| ConstructionError::WrongWireLength)?,
+        ) == 0
+            || sequence == 0
+            || accounts.len() != expected_count
+            || payload[8..16] != sequence.to_le_bytes()
+            || payload[16] != variant.payload_discriminator()
+            || payload[17..24].iter().any(|byte| *byte != 0)
+            || payload[28..32].iter().any(|byte| *byte != 0)
+            || u32::from_le_bytes(
+                payload[24..28]
+                    .try_into()
+                    .map_err(|_| ConstructionError::WrongWireLength)?,
+            ) == 0
+            || u64::from_le_bytes(
+                payload[32..40]
+                    .try_into()
+                    .map_err(|_| ConstructionError::WrongWireLength)?,
+            ) == 0
+        {
+            return Err(ConstructionError::WrongWireLength);
+        }
+        let mut required_signers = Vec::new();
+        let mut index = 0_usize;
+        while index < accounts.len() {
+            let spec = dealer_terminal_account_spec_v1(variant, index)
+                .ok_or(ConstructionError::InvalidAccountContract)?;
+            if accounts[index].is_signer != spec.signer
+                || accounts[index].is_writable != spec.writable
+            {
+                return Err(ConstructionError::InvalidAccountContract);
+            }
+            if spec.signer {
+                required_signers.push(accounts[index].pubkey);
+            }
+            let mut peer = index + 1;
+            while peer < accounts.len() {
+                if accounts[index].pubkey == accounts[peer].pubkey {
+                    let peer_spec = dealer_terminal_account_spec_v1(variant, peer)
+                        .ok_or(ConstructionError::InvalidAccountContract)?;
+                    let allowed = matches!(
+                        (spec.label, peer_spec.label),
+                        ("position-rent-payer", "replay-rent-payer")
+                            | ("position-rent-payer", "obligation-rent-payer")
+                            | ("replay-rent-payer", "obligation-rent-payer")
+                            | ("actor", "position-rent-payer")
+                            | ("actor", "replay-rent-payer")
+                            | ("actor", "obligation-rent-payer")
+                            | ("actor", "liveness-payer")
+                            | ("liveness-payer", "position-rent-payer")
+                            | ("liveness-payer", "replay-rent-payer")
+                            | ("liveness-payer", "obligation-rent-payer")
+                    );
+                    if !allowed {
+                        return Err(ConstructionError::DuplicateAccount);
+                    }
+                }
+                peer += 1;
+            }
+            index += 1;
+        }
+        let family = ExtensionFamily::Dealer;
+        let action = clutch_solana_layout::registry::DealerFacilityAction::Retire;
+        let binding = registry_binding(
+            family,
+            action.tag(),
+            Some(ExtensionAction::DealerFacility(action)),
+        )?;
+        let request = ExtensionRequest {
+            sequence,
+            envelope: ExtensionEnvelope {
+                family,
+                action: ExtensionAction::DealerFacility(action),
+                payload: payload.to_vec(),
+            },
+        };
+        let mut data = vec![0; 13 + EXTENSION_ENVELOPE_BYTES + payload.len()];
+        let exact = request
+            .encode(&mut data)
+            .map_err(|_| ConstructionError::WrongWireLength)?;
+        data.truncate(exact);
+        let value = Self {
+            flow: ProtocolFlow::DealerFacilityTerminal,
+            action_name: variant.name().into(),
+            semantic_owner,
+            program_id,
+            accounts,
+            required_signers,
+            equations,
+            registry_binding: Some(binding),
+            runtime_admission: RuntimeAdmission::PayloadVariantReleaseBoundEnabled,
+            wire: OwnedWireContract::DealerTerminalRetireV1 { variant, sequence },
+            data,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn owned_bytes(
         flow: ProtocolFlow,
@@ -665,7 +895,13 @@ impl OwnedInstructionDraft {
             OwnedWireContract::DisabledDirectMarketRequestV1 { .. }
         );
         let structured_wrapper = matches!(self.wire, OwnedWireContract::StructuredWrapperV1 { .. });
-        if !source_request && !collateral_request && !direct_request && !structured_wrapper {
+        let dealer_terminal = matches!(self.wire, OwnedWireContract::DealerTerminalRetireV1 { .. });
+        if !source_request
+            && !collateral_request
+            && !direct_request
+            && !structured_wrapper
+            && !dealer_terminal
+        {
             let mut accounts = BTreeSet::new();
             for account in &self.accounts {
                 if !accounts.insert(account.pubkey) {
@@ -735,6 +971,7 @@ impl OwnedInstructionDraft {
                         family == ExtensionFamily::SourceSeries
                     }
                     ProtocolFlow::StructuredClaim => family == ExtensionFamily::StructuredClaim,
+                    ProtocolFlow::DealerFacilityTerminal => family == ExtensionFamily::Dealer,
                     ProtocolFlow::CollateralCustodyV3
                     | ProtocolFlow::DirectMarketV1
                     | ProtocolFlow::Liveness => false,
@@ -916,6 +1153,64 @@ impl OwnedInstructionDraft {
                     left += 1;
                 }
             }
+            OwnedWireContract::DealerTerminalRetireV1 { variant, sequence } => {
+                let request = ExtensionRequest::decode(&self.data)
+                    .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                let binding = self
+                    .registry_binding
+                    .ok_or(ConstructionError::UnallocatedRegistryCoordinate)?;
+                let payload: &[u8; 40] = request
+                    .envelope
+                    .payload
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| ConstructionError::WrongWireLength)?;
+                if u64::from_le_bytes(
+                    payload[0..8]
+                        .try_into()
+                        .map_err(|_| ConstructionError::WrongWireLength)?,
+                ) == 0
+                    || sequence == 0
+                    || request.sequence != sequence
+                    || request.envelope.family != ExtensionFamily::Dealer
+                    || !matches!(
+                        request.envelope.action,
+                        ExtensionAction::DealerFacility(
+                            clutch_solana_layout::registry::DealerFacilityAction::Retire
+                        )
+                    )
+                    || binding.family != ExtensionFamily::Dealer
+                    || binding.local_action
+                        != clutch_solana_layout::registry::DealerFacilityAction::Retire.tag()
+                    || self.flow != ProtocolFlow::DealerFacilityTerminal
+                    || self.runtime_admission
+                        != RuntimeAdmission::PayloadVariantReleaseBoundEnabled
+                    || payload[8..16] != sequence.to_le_bytes()
+                    || payload[16] != variant.payload_discriminator()
+                    || payload[17..24].iter().any(|byte| *byte != 0)
+                    || payload[28..32].iter().any(|byte| *byte != 0)
+                    || u32::from_le_bytes(
+                        payload[24..28]
+                            .try_into()
+                            .map_err(|_| ConstructionError::WrongWireLength)?,
+                    ) == 0
+                    || u64::from_le_bytes(
+                        payload[32..40]
+                            .try_into()
+                            .map_err(|_| ConstructionError::WrongWireLength)?,
+                    ) == 0
+                    || self.accounts.len() != dealer_terminal_account_count_v1(variant)
+                {
+                    return Err(ConstructionError::UnallocatedRegistryCoordinate);
+                }
+                for (index, account) in self.accounts.iter().enumerate() {
+                    let spec = dealer_terminal_account_spec_v1(variant, index)
+                        .ok_or(ConstructionError::InvalidAccountContract)?;
+                    if account.is_signer != spec.signer || account.is_writable != spec.writable {
+                        return Err(ConstructionError::InvalidAccountContract);
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -1070,7 +1365,11 @@ impl ProtocolTransactionBuilder {
             return Err(ConstructionError::EmptyBundle);
         }
         if drafts.iter().any(|draft| {
-            matches!(draft.wire, OwnedWireContract::StructuredWrapperV1 { .. })
+            matches!(
+                draft.wire,
+                OwnedWireContract::StructuredWrapperV1 { .. }
+                    | OwnedWireContract::DealerTerminalRetireV1 { .. }
+            )
         }) {
             return Err(ConstructionError::MissingLookupTable);
         }
@@ -1091,6 +1390,7 @@ impl ProtocolTransactionBuilder {
                     | OwnedWireContract::MainSuccessorRequest { .. }
                     | OwnedWireContract::DisabledDirectMarketRequestV1 { .. }
                     | OwnedWireContract::CollateralReplayRequestV3 { .. }
+                    | OwnedWireContract::DealerTerminalRetireV1 { .. }
             ) && draft.program_id != self.clutch_program
             {
                 return Err(ConstructionError::ForeignProgram);
@@ -1156,19 +1456,27 @@ impl ProtocolTransactionBuilder {
         })
     }
 
-    /// Compile exactly one current Structured wrapper instruction as a v0
-    /// message. This crate-private seam is reachable only after the operator
-    /// material constructor has hostile-decoded the finalized lookup-table
-    /// account and proved complete role coverage.
-    pub(crate) fn build_structured_v0(
+    /// Compile exactly one current wide Structured or Dealer instruction as a
+    /// v0 message. This crate-private seam is reachable only after the
+    /// operator material constructor has hostile-decoded the finalized
+    /// lookup-table account and proved complete role coverage.
+    pub(crate) fn build_exact_v0(
         &self,
         draft: OwnedInstructionDraft,
         lookup_table: AddressLookupTableAccount,
         lookup_observed_slot: u64,
         lookup_state_sha256: [u8; 32],
     ) -> Result<UnsignedProtocolTransaction> {
-        if !matches!(draft.wire, OwnedWireContract::StructuredWrapperV1 { .. })
-            || draft.flow != ProtocolFlow::StructuredClaim
+        let supported = matches!(
+            draft.wire,
+            OwnedWireContract::StructuredWrapperV1 { .. }
+                | OwnedWireContract::DealerTerminalRetireV1 { .. }
+        );
+        if !supported
+            || !matches!(
+                draft.flow,
+                ProtocolFlow::StructuredClaim | ProtocolFlow::DealerFacilityTerminal
+            )
             || lookup_table.key == Address::default()
             || lookup_table.addresses.is_empty()
             || lookup_table.addresses.len() > 256
@@ -1767,7 +2075,7 @@ mod tests {
             .map(|account| account.pubkey)
             .collect();
         let plan = builder
-            .build_structured_v0(
+            .build_exact_v0(
                 draft,
                 AddressLookupTableAccount {
                     key: Address::new_from_array([99; 32]),
@@ -1782,6 +2090,167 @@ mod tests {
         assert!(!plan.has_recent_blockhash);
         assert!(!plan.signed);
         assert!(!plan.submitted);
+    }
+
+    fn dealer_terminal_accounts(
+        variant: crate::rpc_index::CanonicalIntentVariantV1,
+    ) -> Vec<AccountMeta> {
+        (0..dealer_terminal_account_count_v1(variant))
+            .map(|index| {
+                let spec = dealer_terminal_account_spec_v1(variant, index).unwrap();
+                let byte = u8::try_from(index + 1).unwrap();
+                let address = Address::new_from_array([byte; 32]);
+                if spec.writable {
+                    AccountMeta::new(address, spec.signer)
+                } else {
+                    AccountMeta::new_readonly(address, spec.signer)
+                }
+            })
+            .collect()
+    }
+
+    fn dealer_terminal_payload(
+        variant: crate::rpc_index::CanonicalIntentVariantV1,
+    ) -> [u8; 40] {
+        let mut payload = [0u8; 40];
+        payload[0..8].copy_from_slice(&3u64.to_le_bytes());
+        payload[8..16].copy_from_slice(&7u64.to_le_bytes());
+        payload[16] = variant.payload_discriminator();
+        payload[24..28].copy_from_slice(&1u32.to_le_bytes());
+        payload[32..40].copy_from_slice(&9u64.to_le_bytes());
+        payload
+    }
+
+    #[test]
+    fn dealer_terminal_variants_have_disjoint_exact_tails_and_payloads() {
+        use crate::rpc_index::CanonicalIntentVariantV1 as Variant;
+
+        for variant in [
+            Variant::DealerRetireActiveFacilityCredit,
+            Variant::DealerRetireUnusedFutureCredit,
+        ] {
+            let draft = OwnedInstructionDraft::enabled_dealer_terminal_retire_v1(
+                owner(),
+                Address::new_from_array([90; 32]),
+                dealer_terminal_accounts(variant),
+                vec![ExactEquation {
+                    name: "exact terminal keeper payment".into(),
+                    unit: IntegerUnit::Lamports,
+                    left: 9,
+                    right: 9,
+                }],
+                variant,
+                7,
+                &dealer_terminal_payload(variant),
+            )
+            .unwrap();
+            assert_eq!(draft.flow, ProtocolFlow::DealerFacilityTerminal);
+            assert_eq!(
+                draft.runtime_admission,
+                RuntimeAdmission::PayloadVariantReleaseBoundEnabled
+            );
+        }
+
+        let active = Variant::DealerRetireActiveFacilityCredit;
+        let mut wrong_target = dealer_terminal_payload(active);
+        wrong_target[16] = Variant::DealerRetireUnusedFutureCredit.payload_discriminator();
+        assert_eq!(
+            OwnedInstructionDraft::enabled_dealer_terminal_retire_v1(
+                owner(),
+                Address::new_from_array([90; 32]),
+                dealer_terminal_accounts(active),
+                vec![ExactEquation {
+                    name: "exact terminal keeper payment".into(),
+                    unit: IntegerUnit::Lamports,
+                    left: 9,
+                    right: 9,
+                }],
+                active,
+                7,
+                &wrong_target,
+            ),
+            Err(ConstructionError::WrongWireLength)
+        );
+
+        let mut reserved = dealer_terminal_payload(active);
+        reserved[17] = 1;
+        assert_eq!(
+            OwnedInstructionDraft::enabled_dealer_terminal_retire_v1(
+                owner(),
+                Address::new_from_array([90; 32]),
+                dealer_terminal_accounts(active),
+                vec![ExactEquation {
+                    name: "exact terminal keeper payment".into(),
+                    unit: IntegerUnit::Lamports,
+                    left: 9,
+                    right: 9,
+                }],
+                active,
+                7,
+                &reserved,
+            ),
+            Err(ConstructionError::WrongWireLength)
+        );
+
+        let mut wrong_tail = dealer_terminal_accounts(active);
+        wrong_tail.pop();
+        assert_eq!(
+            OwnedInstructionDraft::enabled_dealer_terminal_retire_v1(
+                owner(),
+                Address::new_from_array([90; 32]),
+                wrong_tail,
+                vec![ExactEquation {
+                    name: "exact terminal keeper payment".into(),
+                    unit: IntegerUnit::Lamports,
+                    left: 9,
+                    right: 9,
+                }],
+                active,
+                7,
+                &dealer_terminal_payload(active),
+            ),
+            Err(ConstructionError::WrongWireLength)
+        );
+
+        let mut zero_generation = dealer_terminal_payload(active);
+        zero_generation[0..8].fill(0);
+        assert_eq!(
+            OwnedInstructionDraft::enabled_dealer_terminal_retire_v1(
+                owner(),
+                Address::new_from_array([90; 32]),
+                dealer_terminal_accounts(active),
+                vec![ExactEquation {
+                    name: "exact terminal keeper payment".into(),
+                    unit: IntegerUnit::Lamports,
+                    left: 9,
+                    right: 9,
+                }],
+                active,
+                7,
+                &zero_generation,
+            ),
+            Err(ConstructionError::WrongWireLength)
+        );
+
+        let mut sink_alias = dealer_terminal_accounts(active);
+        sink_alias[20].pubkey = sink_alias[19].pubkey;
+        assert_eq!(
+            OwnedInstructionDraft::enabled_dealer_terminal_retire_v1(
+                owner(),
+                Address::new_from_array([90; 32]),
+                sink_alias,
+                vec![ExactEquation {
+                    name: "exact terminal keeper payment".into(),
+                    unit: IntegerUnit::Lamports,
+                    left: 9,
+                    right: 9,
+                }],
+                active,
+                7,
+                &dealer_terminal_payload(active),
+            ),
+            Err(ConstructionError::DuplicateAccount)
+        );
     }
 
     #[test]
