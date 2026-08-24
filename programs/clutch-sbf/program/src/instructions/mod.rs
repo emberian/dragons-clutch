@@ -64,6 +64,8 @@ pub(crate) mod failure_market_interval_v2;
 pub(crate) mod failure_market_interval_advance_v2;
 /// Always-compiled checked-disabled current Failure action contract.
 pub mod failure_market_dispatch_v2;
+/// Shared hostile Product/Failure authentication for callable actions 10-13.
+pub(crate) mod failure_market_execution_v2;
 /// Capability-disabled atomic Failure/Product/Collateral Resolution V5 composer.
 pub(crate) mod failure_market_resolution_v5;
 /// Capability-disabled aggregate/replay/family-terminal composer.
