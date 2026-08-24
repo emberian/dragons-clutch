@@ -27,6 +27,10 @@ shared with the current Realm and Market contracts. Its lifting path is a new
 adapter release using paged or dynamically selected fixed-layout kernels; it
 is not a mathematical limit on dClutch products.
 
+`CreateRealmV1` embeds the current 112-byte Realm record. Realm binds token
+program, collateral mint, adapter release, and authority policies; it does not
+carry a duplicate caller-supplied collateral-semantic identifier.
+
 The program-owned collateral-custody root persists the Vault-opening sponsor as
 the one rent-refund recipient. Empty Vault retirement returns both Vault and
 custody-root lamports exactly there; it never strands them in Market state or

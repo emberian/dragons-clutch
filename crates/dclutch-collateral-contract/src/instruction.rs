@@ -877,10 +877,9 @@ mod tests {
 
     fn realm() -> RealmV1 {
         RealmV1::new(RealmV1Input {
-            collateral_semantic_id: [1; 32],
-            token_program: [2; 32],
-            collateral_mint: [3; 32],
-            collateral_adapter_release_id: [4; 32],
+            token_program: [1; 32],
+            collateral_mint: [2; 32],
+            collateral_adapter_release_id: [3; 32],
             mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
             freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
         })
