@@ -164,12 +164,8 @@ use clutch_solana_layout::registry::{
     DEALER_LEASE_V2_ACCOUNT_BYTES, DEALER_LEASE_V2_ACCOUNT_TAG,
     DEALER_LEASE_V2_ACCOUNT_VERSION, DEALER_SETTLEMENT_POT_V2_ACCOUNT_BYTES,
     DEALER_SETTLEMENT_POT_V2_ACCOUNT_TAG, DEALER_SETTLEMENT_POT_V2_ACCOUNT_VERSION,
-    DEALER_STATE_V2_ACCOUNT_BYTES,
-    DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES, DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
-    DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION, DEALER_STATE_V3_ACCOUNT_BYTES,
-    DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V2,
-    DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V2,
-    DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V3,
+    DEALER_STATE_V2_ACCOUNT_BYTES, DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
+    DEALER_STATE_V3_ACCOUNT_BYTES, DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V3,
     DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V3,
     DEALER_STATE_V3_ACCOUNT_TAG, DEALER_STATE_V3_ACCOUNT_VERSION,
     FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_BYTES,
@@ -212,8 +208,7 @@ use clutch_solana_layout::product_series::{
 };
 use crate::instructions_sysvar::{InstructionsSysvarV1, SYSVAR_OWNER_ID};
 use super::dealer_runtime::{
-    authenticate_dealer_meta_contract_v1, authenticate_dealer_series_obligation_v1,
-    authenticate_dealer_series_obligation_v3,
+    authenticate_dealer_meta_contract_v1, authenticate_dealer_series_obligation_v3,
     authenticate_dealer_state_v3,
     decode_dealer_account_body_v1, encode_dealer_account_body_v1, DealerRuntimePayloadV1,
 };
