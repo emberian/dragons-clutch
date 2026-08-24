@@ -208,20 +208,29 @@ FractionalRedemption 79/v1 reserves these local actions, all disabled:
 9. `SealClaimsExhausted`
 10. `CloseEmptyLedger`
 
-Actions 2, 3, and 9 have complete staged SBF handlers, but this does not alter
-their central status: all ten tuples remain `ReservedDisabled`. Action 3 binds
-the full authenticated outcome-mint vector, accepts the exact independent
-Token-2022 burn before exposing the Realm collateral request, and atomically
-writes Hoard/ClaimLedger/`0xa5`. Action 9 advances only ClaimLedger and `0xa5`
-after canonical supply is exactly zero. Product's exact action-1 family
-admission producer and an explicit deployable release profile remain required
+All ten actions have concrete staged SBF handlers, but this does not alter their
+central status: the compiled capability table keeps every tuple false, so all
+ten remain `ReservedDisabled` and refuse before account inspection. Action 1
+consumes Product Foundation's exact slot-11/12 preallocations, authenticates the
+physical `0xa4/v3`, `0xa5/v1`, and ClaimLedger V3 postimages, and atomically
+admits the Fractional child into Product's family root. Actions 2 through 9 are
+real current handlers rather than gaps; action 3 binds the full authenticated
+outcome-mint vector, accepts the exact independent Token-2022 burn before
+exposing the Realm collateral request, and atomically writes
+Hoard/ClaimLedger/`0xa5`, while action 9 advances only ClaimLedger and `0xa5`
+after canonical supply is exactly zero. Action 10 consumes Product's exact
+terminal child transition before deleting `0xa4/v3` and `0xa5/v1` and applying
+their rent-only dispositions. A whole-family release review, a new exact
+capability-profile identity, and linked artifact evidence remain required
 before any tuple can be enabled.
 
-The current account coordinates are `0xa4/2` for the immutable
-Market/Resolution/Realm/claim policy, `0xa5/1` for the sole aggregate numerator
-credit and live-credit count, `0xa6/2` for one owner-scoped canonical numerator,
-and `0xa7/2` for the permanent zero-credit replay tombstone. Their exact body
-widths are 296, 224, 296, and 232 bytes. Resolution owns the vector,
+The current account coordinates are `0xa4/3` for the immutable
+Market/physical-Resolution-account/Resolution-data/Realm/claim policy, `0xa5/1`
+for the sole aggregate numerator credit and live-credit count, `0xa6/2` for one
+owner-scoped canonical numerator, and `0xa7/2` for the permanent zero-credit
+replay tombstone. Their exact body widths are 296, 224, 296, and 232 bytes.
+Policy `0xa4/2` is explicitly `Withdrawn`: its PDA depended on future Resolution
+data and could not be prefunded. Resolution owns the vector,
 ClaimLedger V3 owns native claim supply, Hoard V2 owns locked claim principal
 and cash classification, Position V3 and Replay V3 own internal
 custody/replay, and the Realm collateral adapter owns transfers. The fractional
@@ -406,8 +415,9 @@ pure runtime elsewhere does not make a route executable.
 | `0xa1/1` | Liveness | immutable runtime policy |
 | `0xa2/1` | Liveness | Recovery compartment; sole work/rent custody |
 | `0xa3/1` | Terminal/replay | failure-generation tombstone |
-| `0xa4/1` | FractionalRedemption | withdrawn payout-vector-bound policy; never a V2 alias |
-| `0xa4/2` | FractionalRedemption | immutable Resolution-V5-data-bound policy (296 bytes) |
+| `0xa4/1` | FractionalRedemption | withdrawn payout-vector-bound policy; never a V2 or V3 alias |
+| `0xa4/2` | FractionalRedemption | `Withdrawn` pre-activation policy whose PDA depended on future Resolution V5 data; never a V3 alias |
+| `0xa4/3` | FractionalRedemption | current immutable Market/physical-Resolution-account/Resolution-V5-data-bound policy (296 bytes); `ReservedDisabled` |
 | `0xa5/1` | FractionalRedemption | sole aggregate numerator-credit ledger (224 bytes) |
 | `0xa6/1` | FractionalRedemption | withdrawn payout-vector-bound credit; never a V2 alias |
 | `0xa6/2` | FractionalRedemption | Resolution-V5-data-bound exact numerator credit (296 bytes) |
