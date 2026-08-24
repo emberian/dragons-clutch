@@ -1318,7 +1318,7 @@ pub(crate) const fn direct_role_label_v1(role: DirectAccountRoleV1) -> &'static 
         Role::CollateralProfile => "collateral-profile",
         Role::CollateralPolicy => "collateral-policy",
         Role::TokenProgram => "token-2022-program",
-        Role::GeneralMarketBinding => "general-market-binding-v3",
+        Role::GeneralMarketBinding => "historical-general-market-binding-v3",
         Role::GeneralMarketRuntime => "general-market-runtime-v3",
         Role::MarketInstance => "market-instance-v2",
         Role::MarketGenesis => "market-genesis-v2",

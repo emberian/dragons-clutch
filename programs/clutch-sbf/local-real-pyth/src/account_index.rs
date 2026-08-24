@@ -116,7 +116,7 @@ pub type Result<T> = core::result::Result<T, AccountIndexError>;
 /// Sole decoder contract admitted by live chain serving. Historical Source V1/V2
 /// and withdrawn account versions are deliberately outside this set.
 pub const CANONICAL_ACCOUNT_DECODER_SET: &str =
-    "dragons-clutch/canonical-account-decoders/v7-source-work-schedule-general-v3-no-keeper-no-selected-candidate-direct-80-product-global-current";
+    "dragons-clutch/canonical-account-decoders/v8-source-work-schedule-general-v3-historical-no-keeper-no-selected-candidate-direct-80-product-global-current";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountIndexError {
@@ -170,7 +170,7 @@ pub enum CanonicalAccountKind {
     GeneralEpoch,
     GeneralEconomicDomain,
     GeneralMarketBinding,
-    GeneralMarketBindingV3,
+    GeneralMarketBindingV3Historical,
     GeneralOrderPage,
     GeneralReservation,
     GeneralCandidateWindow,
@@ -250,7 +250,7 @@ impl CanonicalAccountKind {
             Self::GeneralEpoch => "general-epoch",
             Self::GeneralEconomicDomain => "general-economic-domain",
             Self::GeneralMarketBinding => "general-market-binding",
-            Self::GeneralMarketBindingV3 => "general-market-binding-v3",
+            Self::GeneralMarketBindingV3Historical => "general-market-binding-v3-historical",
             Self::GeneralOrderPage => "general-order-page-v5",
             Self::GeneralReservation => "general-reservation-v9",
             Self::GeneralCandidateWindow => "general-candidate-window",
@@ -701,9 +701,10 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     ) {
         let value =
             MarketBindingV3::decode(data).map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        let mut projection = CanonicalAccountProjection::canonical(
+        let mut projection = CanonicalAccountProjection::contextual(
             CanonicalFamily::General,
-            CanonicalAccountKind::GeneralMarketBindingV3,
+            CanonicalAccountKind::GeneralMarketBindingV3Historical,
+            "historical Product/General binding; current Direct founding requires MarketBindingV4",
         );
         projection.generation = Some(value.product_generation());
         projection.primary_binding = Some(value.base().base().market_instance_v2_id.bytes());
