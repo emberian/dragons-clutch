@@ -35,10 +35,10 @@ use clutch_fee_runtime_contract::retirement::{
     FeeRetirementAccumulatorV1, FEE_RETIREMENT_ACCUMULATOR_BODY_V1_BYTES,
 };
 pub use clutch_fee_runtime_contract::terminal::{
-    AuthenticatedOwnerFeeFinalizationV1, FeeClosureManifestReceiptV1, FeeRecordTerminalReceiptV1,
+    AuthenticatedOwnerFeeFinalizationV1, FeeClosureManifestReceiptV2, FeeRecordTerminalReceiptV1,
     FeeTerminalOutcomeV1, FeeTerminalReceiptBundleV1, GeneralFeeTerminalProjectionV1,
     GeneralOwnerFeeFinalizationProjectionV2, OwnerFeeFinalizationOutcomeV2,
-    OwnerFeeFinalizationReceiptV1, FEE_CLOSURE_MANIFEST_V1_BYTES,
+    OwnerFeeFinalizationReceiptV1, FEE_CLOSURE_MANIFEST_V2_BYTES,
     FEE_TERMINAL_RECEIPT_V1_BYTES, OWNER_FEE_FINALIZATION_BODY_V2_BYTES,
 };
 use clutch_fee_runtime_contract::treasury::TreasuryLedgerV1;
@@ -839,7 +839,7 @@ impl FeeRetirementAccumulatorV1AccountV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FeeClosureManifestV2AccountV1 {
     /// Canonical fee-runtime manifest body.
-    pub semantic: FeeClosureManifestReceiptV1,
+    pub semantic: FeeClosureManifestReceiptV2,
     /// Exact refundable principal and immutable creation donation floor.
     pub rent: DeletableRentOwnerV1,
     /// Stored canonical PDA bump.
@@ -863,13 +863,13 @@ impl FeeClosureManifestV2AccountV1 {
     /// Decode hostile bytes through the semantic manifest decoder.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
         let (body, rent, stored_bump) =
-            decode_rent_owned_outer::<FEE_CLOSURE_MANIFEST_V1_BYTES>(
+            decode_rent_owned_outer::<FEE_CLOSURE_MANIFEST_V2_BYTES>(
                 FEE_RETIREMENT_ACCOUNT_TAG,
                 FEE_RETIREMENT_CLOSURE_MANIFEST_ACCOUNT_VERSION,
                 input,
             )?;
         Ok(Self {
-            semantic: map_fee_error(FeeClosureManifestReceiptV1::decode(&body))?,
+            semantic: map_fee_error(FeeClosureManifestReceiptV2::decode(&body))?,
             rent,
             stored_bump,
         })
@@ -977,7 +977,7 @@ const _: () = assert!(
 );
 const _: () = assert!(
     FEE_RETIREMENT_ACCOUNT_BYTES_V2
-        == FEE_CLOSURE_MANIFEST_V1_BYTES
+        == FEE_CLOSURE_MANIFEST_V2_BYTES
             + DELETABLE_RENT_OWNER_BYTES
             + OUTER_FEE_ACCOUNT_BYTES
 );
