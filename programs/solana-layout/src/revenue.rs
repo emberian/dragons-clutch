@@ -5,7 +5,8 @@
 //!
 //! | account | tag | bytes | what it holds |
 //! | --- | ---: | ---: | --- |
-//! | [`RevenuePolicyRecordV1`] | 27 | 156 | one Realm's frozen revenue-policy pin: policy digest, copied-out treasury, and the TerminalIdentityV1 header |
+//! | [`RevenuePolicyRecordV1`] | 27/v1 | 156 | historical deferred-treasury pin; decode-only for successor admission |
+//! | [`RevenuePolicyRecordV2`] | 27/v2 | 160 | one successor Realm's immutable fee rates, beneficiary, Market-scoped Position lifecycle, and exact deletable-rent owner |
 //!
 //! **The record's absence IS the zero-take state (D4).**  Existing Realms are
 //! zero-take forever by construction: no retrofit instruction exists, because
@@ -43,6 +44,27 @@ pub const REVENUE_POLICY_RECORD_VERSION: u8 = 1;
 /// header 56 (payer 32 + principal 8 + donation floor 8 + generation 8),
 /// stored bump 1, flags 1.
 pub const REVENUE_POLICY_RECORD_BYTES: usize = 2 + 32 + 32 + 32 + 56 + 1 + 1;
+
+/// Fresh fee-bearing revenue-policy-record schema.  V1 bytes are never
+/// interpreted through this version.
+pub const REVENUE_POLICY_RECORD_VERSION_V2: u8 = 2;
+/// Exact V2 record length: header 2, three identities 96, lifecycle selector
+/// plus reserved bytes 4, payer/principal/donation/generation 56, bump 1,
+/// flags 1.
+pub const REVENUE_POLICY_RECORD_BYTES_V2: usize = 2 + 32 + 32 + 32 + 4 + 56 + 1 + 1;
+const _: () = assert!(REVENUE_POLICY_RECORD_BYTES_V2 == 160);
+const _: () = assert!(
+    REVENUE_POLICY_RECORD_TAG
+        == crate::registry::REVENUE_POLICY_RECORD_V2_ACCOUNT_TAG
+);
+const _: () = assert!(
+    REVENUE_POLICY_RECORD_VERSION_V2
+        == crate::registry::REVENUE_POLICY_RECORD_V2_ACCOUNT_VERSION
+);
+const _: () = assert!(
+    REVENUE_POLICY_RECORD_BYTES_V2
+        == crate::registry::REVENUE_POLICY_RECORD_V2_ACCOUNT_BYTES
+);
 
 /// Byte offset of the embedded 56-byte TerminalIdentityV1 header.
 pub const REVENUE_POLICY_RECORD_TERMINAL_AT: usize = 2 + 32 + 32 + 32;
@@ -166,6 +188,150 @@ impl RevenuePolicyRecordV1 {
     }
 }
 
+/// One successor Realm's immutable fee-bearing authority.
+///
+/// The record is created atomically with the Realm and never updated.  The
+/// policy digest binds rates and split; copied-out owner and lifecycle facts
+/// make downstream account-list checks local while the adapter must still
+/// reauthenticate their equality to the policy preimage.  The lifecycle is
+/// Market-scoped: this account never pretends that a Position address can be
+/// known before a MarketInstance exists.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RevenuePolicyRecordV2 {
+    /// Realm created atomically with this record.
+    pub realm: RealmHash,
+    /// Immutable [`clutch_batch_policy_identity::revenue_policy_v2::RevenuePolicyV2`]
+    /// digest.
+    pub policy_digest: Hash32,
+    /// Immutable owner of every derived Market treasury Position.
+    pub treasury_owner: Hash32,
+    /// Exact per-Market ordinary-Position and counted-service-ledger policy.
+    pub treasury_position_derivation:
+        clutch_batch_policy_identity::revenue_policy_v2::TreasuryPositionDerivationPolicyV2,
+    /// Exact creator payer and sole refundable-principal recipient.
+    pub terminal_payer: Hash32,
+    /// Lamports actually debited from `terminal_payer` after hostile prefund
+    /// normalization.
+    pub terminal_payer_principal: u64,
+    /// Initial hostile prefund, never refundable to the creator.
+    pub terminal_donation_floor: u64,
+    /// Close/reopen generation.  Immutable Realm founding admits exactly 1;
+    /// no reopen route exists.
+    pub terminal_generation: u64,
+    /// Stored record PDA bump.
+    pub stored_bump: u8,
+    /// Reserved flags; zero in V2.
+    pub flags: u8,
+}
+
+impl RevenuePolicyRecordV2 {
+    /// Validate every local layout invariant.
+    pub fn validate(&self) -> Result<()> {
+        check_hash(self.realm)?;
+        check_hash(self.policy_digest)?;
+        check_hash(self.treasury_owner)?;
+        check_hash(self.terminal_payer)?;
+        if self.terminal_payer_principal == 0 || self.terminal_generation != 1 {
+            return Err(CodecError::InvalidCount);
+        }
+        if self.flags != 0 {
+            return Err(CodecError::InvalidEnum);
+        }
+        Ok(())
+    }
+
+    /// Authenticate copied-out owner, lifecycle, and digest against the exact
+    /// policy preimage.  This is required in addition to decoding the record.
+    pub fn binds_policy(
+        &self,
+        policy: &clutch_batch_policy_identity::revenue_policy_v2::RevenuePolicyV2,
+    ) -> Result<()> {
+        self.validate()?;
+        let digest =
+            clutch_batch_policy_identity::revenue_policy_v2::revenue_policy_v2_digest(policy)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+        if self.policy_digest != Hash32::from_bytes(digest.0)
+            || self.treasury_owner != Hash32::from_bytes(policy.treasury_owner)
+            || self.treasury_position_derivation != policy.treasury_position_derivation
+        {
+            return Err(CodecError::MismatchedBinding);
+        }
+        Ok(())
+    }
+
+    /// Whether this record names `owner` as its immutable treasury owner.
+    pub fn names_treasury(&self, owner: Hash32) -> bool {
+        self.treasury_owner == owner
+    }
+
+    /// Encode exactly [`REVENUE_POLICY_RECORD_BYTES_V2`] bytes.
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
+        self.validate()?;
+        if out.len() < REVENUE_POLICY_RECORD_BYTES_V2 {
+            return Err(CodecError::OutputTooSmall);
+        }
+        let mut w = Writer::new(out);
+        put_header(
+            &mut w,
+            REVENUE_POLICY_RECORD_TAG,
+            REVENUE_POLICY_RECORD_VERSION_V2,
+        )?;
+        w.hash(self.realm)?;
+        w.hash(self.policy_digest)?;
+        w.hash(self.treasury_owner)?;
+        w.u8(self.treasury_position_derivation.byte())?;
+        w.u8(0)?;
+        w.u8(0)?;
+        w.u8(0)?;
+        w.hash(self.terminal_payer)?;
+        w.u64(self.terminal_payer_principal)?;
+        w.u64(self.terminal_donation_floor)?;
+        w.u64(self.terminal_generation)?;
+        w.u8(self.stored_bump)?;
+        w.u8(self.flags)?;
+        if w.at != REVENUE_POLICY_RECORD_BYTES_V2 {
+            return Err(CodecError::OutputTooSmall);
+        }
+        Ok(w.at)
+    }
+
+    /// Decode exactly one hostile V2 record image.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        check_header(
+            input,
+            REVENUE_POLICY_RECORD_TAG,
+            REVENUE_POLICY_RECORD_VERSION_V2,
+            REVENUE_POLICY_RECORD_BYTES_V2,
+        )?;
+        let mut r = Reader::at(input, 2);
+        let realm = r.hash()?;
+        let policy_digest = r.hash()?;
+        let treasury_owner = r.hash()?;
+        let treasury_position_derivation =
+            clutch_batch_policy_identity::revenue_policy_v2::TreasuryPositionDerivationPolicyV2::decode(
+                r.u8()?,
+            )
+            .map_err(|_| CodecError::InvalidEnum)?;
+        if r.u8()? != 0 || r.u8()? != 0 || r.u8()? != 0 {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        let value = Self {
+            realm,
+            policy_digest,
+            treasury_owner,
+            treasury_position_derivation,
+            terminal_payer: r.hash()?,
+            terminal_payer_principal: r.u64()?,
+            terminal_donation_floor: r.u64()?,
+            terminal_generation: r.u64()?,
+            stored_bump: r.u8()?,
+            flags: r.u8()?,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,6 +349,73 @@ mod tests {
             terminal_generation: 1,
             stored_bump: 254,
             flags: 0,
+        }
+    }
+
+    fn record_v2() -> (
+        RevenuePolicyRecordV2,
+        clutch_batch_policy_identity::revenue_policy_v2::RevenuePolicyV2,
+    ) {
+        use clutch_batch_policy_identity::revenue_policy_v2::{
+            revenue_policy_v2_digest, RevenuePolicyV2,
+        };
+        let policy = RevenuePolicyV2::successor_development([3; 32]);
+        let digest = revenue_policy_v2_digest(&policy).unwrap();
+        (
+            RevenuePolicyRecordV2 {
+                realm: Hash32::from_bytes([1; 32]),
+                policy_digest: Hash32::from_bytes(digest.0),
+                treasury_owner: Hash32::from_bytes(policy.treasury_owner),
+                treasury_position_derivation: policy.treasury_position_derivation,
+                terminal_payer: Hash32::from_bytes([4; 32]),
+                terminal_payer_principal: 2_000_000,
+                terminal_donation_floor: 17,
+                terminal_generation: 1,
+                stored_bump: 253,
+                flags: 0,
+            },
+            policy,
+        )
+    }
+
+    #[test]
+    fn v2_roundtrips_and_binds_the_exact_policy() {
+        let (record, policy) = record_v2();
+        let mut bytes = [0u8; REVENUE_POLICY_RECORD_BYTES_V2];
+        assert_eq!(record.encode(&mut bytes), Ok(REVENUE_POLICY_RECORD_BYTES_V2));
+        assert_eq!(RevenuePolicyRecordV2::decode(&bytes), Ok(record));
+        assert_eq!(record.binds_policy(&policy), Ok(()));
+
+        let different =
+            clutch_batch_policy_identity::revenue_policy_v2::RevenuePolicyV2::successor_development(
+                [9; 32],
+            );
+        assert_eq!(record.binds_policy(&different), Err(CodecError::MismatchedBinding));
+    }
+
+    #[test]
+    fn v2_refuses_width_alias_padding_and_rent_owner_mutations() {
+        let (record, _) = record_v2();
+        let mut bytes = [0u8; REVENUE_POLICY_RECORD_BYTES_V2];
+        record.encode(&mut bytes).unwrap();
+        assert!(RevenuePolicyRecordV1::decode(&bytes).is_err());
+        assert!(RevenuePolicyRecordV2::decode(&bytes[..159]).is_err());
+        let mut long = [0u8; REVENUE_POLICY_RECORD_BYTES_V2 + 1];
+        long[..REVENUE_POLICY_RECORD_BYTES_V2].copy_from_slice(&bytes);
+        assert!(RevenuePolicyRecordV2::decode(&long).is_err());
+        for index in [98usize, 99, 100, 101] {
+            let mut hostile = bytes;
+            hostile[index] = 0xff;
+            assert!(RevenuePolicyRecordV2::decode(&hostile).is_err());
+        }
+        for hostile in [
+            RevenuePolicyRecordV2 { treasury_owner: Hash32::ZERO, ..record },
+            RevenuePolicyRecordV2 { terminal_payer: Hash32::ZERO, ..record },
+            RevenuePolicyRecordV2 { terminal_payer_principal: 0, ..record },
+            RevenuePolicyRecordV2 { terminal_generation: 2, ..record },
+            RevenuePolicyRecordV2 { flags: 1, ..record },
+        ] {
+            assert!(hostile.validate().is_err());
         }
     }
 
