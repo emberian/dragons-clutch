@@ -27,7 +27,7 @@ those reserved registry tags as unknown before payload or account decoding.
 
 The wrapper and base import one exact source/account contract from the adapter:
 action 1 uses 34 accounts, actions 3/5 use 32, action 6 uses 32, action 7 uses
-33, and action 8 uses 31. That contract's implemented-source mask is distinct
+33, and action 8 uses 33. That contract's implemented-source mask is distinct
 from its checked-release admission mask; the named development profile requires
 them to be exactly equal.
 
@@ -40,7 +40,9 @@ PositionV3/ReplayV3/HoardV2/ClaimLedgerV3 successors. The five appended roles
 are the distinct Hoard authority, neutral token, Structured root, Product
 `0xad` link, and immutable FundingTermsV2 artifact; the three loader releases
 follow them at indices 29 through 31.
-Descriptor retirement uses a 31-account frame. The wrapper first revokes the
+Descriptor retirement uses a 33-account frame. Its two additional read-only
+roles reopen the exact current BundleV6 and AttachmentV5 consumed by Product's
+private LinkV2 terminal writer. The wrapper first revokes the
 zero-supply mint through its private mint-authority PDA, persists the descriptor
 tombstone, and calls the base with only the distinct vault-owner PDA signed.
 The base seals the purpose Replay, writes the permanent Position tombstone,

@@ -54,7 +54,10 @@ the identically named unified profile and admits the same six tuples. Actions
 
 Actions 1, 3, 5, 6, 7, and 8 have one shared source/account contract used by
 both wrapper and base: founding uses 34 accounts, full-vector wrap/unwind use
-32, compaction uses 32, terminal redemption uses 33, and retirement uses 31.
+32, compaction uses 32, terminal redemption uses 33, and retirement uses 33.
+Retirement's current Product terminal authority includes read-only BundleV6
+and AttachmentV5 artifacts in addition to the writable LinkV2 used only for
+the last live descriptor.
 Their exact token effects are permanent-mint initialization, mint, burn,
 optional Hoard-surplus disposition, burn, and mint-authority revocation. The
 withdrawn canonical actions 2 and 4 have no current execution contract. The

@@ -196,12 +196,15 @@ const R_MINT: usize = 21;
 const R_MINT_AUTHORITY: usize = 22;
 const R_ROOT: usize = 23;
 const R_LINK: usize = 24;
-const R_REFUND_OWNER: usize = 25;
-const R_NEUTRAL_SINK: usize = 26;
-const R_WRAPPER_RELEASE: usize = 27;
-const R_BASE_RELEASE: usize = 28;
-const R_TOKEN_RELEASE: usize = 29;
-const R_SYSTEM: usize = 30;
+const R_COMPILER_BUNDLE: usize = 25;
+const R_ATTACHMENT: usize = 26;
+const R_REFUND_OWNER: usize = 27;
+const R_NEUTRAL_SINK: usize = 28;
+const R_WRAPPER_RELEASE: usize = 29;
+const R_BASE_RELEASE: usize = 30;
+const R_TOKEN_RELEASE: usize = 31;
+const R_SYSTEM: usize = 32;
+const _: () = assert!(R_SYSTEM + 1 == RETIREMENT_ACCOUNT_COUNT);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct AuthenticatedStructuredDeploymentsV2 {
@@ -1455,6 +1458,8 @@ fn validate_retirement_accounts(
         || accounts[R_REPLAY].owner != accounts[R_BASE_PROGRAM].key
         || accounts[R_ROOT].owner != accounts[R_BASE_PROGRAM].key
         || accounts[R_LINK].owner != accounts[R_BASE_PROGRAM].key
+        || accounts[R_COMPILER_BUNDLE].owner != accounts[R_BASE_PROGRAM].key
+        || accounts[R_ATTACHMENT].owner != accounts[R_BASE_PROGRAM].key
         || accounts[R_DESCRIPTOR].owner != program_id
         || accounts[R_MINT].owner != accounts[R_TOKEN_PROGRAM].key
         || accounts[VAULT_AUTHORITY].owner != &system_program::ID
@@ -3009,7 +3014,7 @@ fn reconcile_structured_root(
                 || root.rent_principal_lamports != minimum
                 || root.donation_floor_lamports != hostile_prefund_lamports
                 || root.current_donation_lamports != hostile_prefund_lamports
-                || root.product_lineage.product_admission_receipt_id != expected_receipt
+                || root.product_lineage.product_admission_receipt_id.is_zero()
             {
                 return Err(WrapperError::BaseCustody);
             }
@@ -3278,7 +3283,7 @@ mod tests {
 
     #[test]
     fn retirement_link_is_writable_only_for_the_last_descriptor() {
-        assert_eq!(RETIREMENT_ACCOUNT_COUNT, 31);
+        assert_eq!(RETIREMENT_ACCOUNT_COUNT, 33);
         assert!(!retirement_account_writable(R_LINK, false));
         assert!(retirement_account_writable(R_LINK, true));
         for index in [R_DESCRIPTOR, R_MINT, R_POSITION, R_REPLAY, R_ROOT] {
@@ -3287,5 +3292,9 @@ mod tests {
         }
         assert!(!retirement_account_writable(R_MINT_AUTHORITY, false));
         assert!(!retirement_account_writable(R_MINT_AUTHORITY, true));
+        for artifact in [R_COMPILER_BUNDLE, R_ATTACHMENT] {
+            assert!(!retirement_account_writable(artifact, false));
+            assert!(!retirement_account_writable(artifact, true));
+        }
     }
 }
