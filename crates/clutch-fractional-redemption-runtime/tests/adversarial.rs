@@ -623,6 +623,15 @@ fn dealer_vector_request_and_binding_refuse_hostile_tail_or_generation() {
     };
     let encoded = request.encode().unwrap();
     assert_eq!(DealerFacilityVectorRequestV1::decode(&encoded), Ok(request));
+    let zero_inventory = DealerFacilityVectorRequestV1 {
+        quantities: [0; MAX_OUTCOMES],
+        ..request
+    };
+    let zero_encoded = zero_inventory.encode().unwrap();
+    assert_eq!(
+        DealerFacilityVectorRequestV1::decode(&zero_encoded),
+        Ok(zero_inventory)
+    );
     let mut hostile_padding = encoded;
     hostile_padding[33] = 1;
     assert_eq!(

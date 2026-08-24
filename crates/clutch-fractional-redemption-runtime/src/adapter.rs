@@ -163,6 +163,8 @@ pub struct DealerFacilityVectorRequestV1 {
     /// Active Market outcome width.
     pub outcome_count: u8,
     /// Outcome-ordered internal quantities; inactive tail entries are zero.
+    /// The active vector may be all zero: a fully unwound facility still has
+    /// to cross the same authenticated terminal-generation boundary.
     pub quantities: [u64; crate::MAX_OUTCOMES],
 }
 
@@ -173,10 +175,8 @@ impl DealerFacilityVectorRequestV1 {
         require_zeroes(input, 33, 40)?;
         let mut quantities = [0u64; crate::MAX_OUTCOMES];
         let mut index = 0usize;
-        let mut any = false;
         while index < crate::MAX_OUTCOMES {
             quantities[index] = u64_at(input, 40 + index * 8)?;
-            any |= quantities[index] != 0;
             index += 1;
         }
         let value = Self {
@@ -193,7 +193,6 @@ impl DealerFacilityVectorRequestV1 {
             || value.expected_replay_ordinal == 0
             || value.outcome_count == 0
             || usize::from(value.outcome_count) > crate::MAX_OUTCOMES
-            || !any
         {
             return Err(Error::MismatchedBinding);
         }
@@ -225,18 +224,13 @@ impl DealerFacilityVectorRequestV1 {
         put_u64(&mut output, 24, self.expected_replay_ordinal)?;
         output[32] = self.outcome_count;
         let mut index = 0usize;
-        let mut any = false;
         while index < crate::MAX_OUTCOMES {
             let quantity = self.quantities[index];
             if index >= usize::from(self.outcome_count) && quantity != 0 {
                 return Err(Error::NonCanonicalPadding);
             }
-            any |= quantity != 0;
             put_u64(&mut output, 40 + index * 8, quantity)?;
             index += 1;
-        }
-        if !any {
-            return Err(Error::ZeroQuantity);
         }
         Ok(output)
     }

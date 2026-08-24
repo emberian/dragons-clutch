@@ -13299,6 +13299,15 @@ mod resolve_vector_adversarial_tests {
         assert_eq!(decoded.resolution_quantities[0], 13);
         assert_eq!(decoded.resolution_quantities[1], 17);
 
+        let mut zero_inventory = exact;
+        zero_inventory[40..168].fill(0);
+        let zero = DealerRuntimePayloadV1::decode(
+            DealerFacilityAction::Resolve,
+            &zero_inventory,
+        )
+        .unwrap();
+        assert_eq!(zero.resolution_quantities, [0; 16]);
+
         let mut stale_credit = exact;
         stale_credit[24..32].copy_from_slice(&2u64.to_le_bytes());
         assert!(DealerRuntimePayloadV1::decode(

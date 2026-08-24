@@ -347,10 +347,8 @@ impl DealerRuntimePayloadV1 {
                     return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
                 }
                 let mut index = 0usize;
-                let mut any = false;
                 while index < MAX_OUTCOMES {
                     value.resolution_quantities[index] = read_u64(input, 40 + index * 8);
-                    any |= value.resolution_quantities[index] != 0;
                     index += 1;
                 }
                 value.liveness_call_ordinal = read_u32(input, 168);
@@ -363,7 +361,6 @@ impl DealerRuntimePayloadV1 {
                     || value.expected_fractional_credit_sequence != 1
                     || value.resolution_outcome_count == 0
                     || usize::from(value.resolution_outcome_count) > MAX_OUTCOMES
-                    || !any
                     || value.liveness_call_ordinal == 0
                 {
                     return Err(DealerRuntimeContractErrorV1::InvalidField);
