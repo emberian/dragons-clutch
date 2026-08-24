@@ -12,7 +12,7 @@ use crate::capabilities;
 use crate::error::ClutchError;
 use crate::instructions::failure_market_actions_v2::{
     process_advance_failure_market_session_v2, process_archive_failure_market_session_v2,
-    process_begin_failure_market_session_v2,
+    process_begin_failure_market_session_v2, process_resolve_failure_market_session_v2,
 };
 use crate::instructions::failure_market_interval_v2::FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2;
 use crate::instructions::failure_market_replay_v2::FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2;
@@ -86,7 +86,6 @@ pub enum FailureMarketAccountRoleV2 {
     FailureRecoveryCompartment,
     Keeper,
     RecoveryRefundOwner,
-    NeutralSink,
     Realm,
     CollateralProfile,
     CollateralPolicyRelease,
@@ -279,7 +278,6 @@ pub const RESOLVE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2]
     meta(Role::FailureLivenessPolicy, false, false, false),
     meta(Role::FailureRecoveryCompartment, true, false, false),
     meta(Role::RecoveryRefundOwner, true, false, false),
-    meta(Role::NeutralSink, true, false, false),
     meta(Role::RentSysvar, false, false, false),
     meta(Role::SystemProgram, false, false, true),
 ];
@@ -523,7 +521,7 @@ pub fn process(
             process_archive_failure_market_session_v2(program_id, accounts, sequence, payload)
         }
         RecoveryAction::ResolveIntervalConsensus => {
-            Err(ClutchError::UnsupportedInstruction.into())
+            process_resolve_failure_market_session_v2(program_id, accounts, sequence, payload)
         }
         RecoveryAction::InitializeFailureRoot
         | RecoveryAction::TriggerSourceFailure
@@ -645,13 +643,16 @@ mod adversarial_contract_tests {
     }
 
     #[test]
-    fn admitted_action13_reaches_only_its_concrete_owner() {
+    fn admitted_current_actions_reach_only_their_concrete_owners() {
         let source = include_str!("failure_market_dispatch_v2.rs");
         let process = source
             .split("pub fn process(")
             .nth(1)
             .and_then(|value| value.split("pub fn process_reserved_disabled").next())
             .expect("single dispatcher");
+        assert!(process.contains("process_begin_failure_market_session_v2"));
+        assert!(process.contains("process_advance_failure_market_session_v2"));
+        assert!(process.contains("process_resolve_failure_market_session_v2"));
         assert!(process.contains("RecoveryAction::CloseIntervalConsensusWork =>"));
         assert!(process.contains("process_archive_failure_market_session_v2"));
         assert!(!process.contains("failure_recovery::"));
@@ -728,7 +729,7 @@ mod adversarial_contract_tests {
             Role::SourceLivenessCompartment,
             Role::FailureRecoveryCompartment,
             Role::RecoveryRefundOwner,
-            Role::NeutralSink,
+            Role::SourceNeutralSink,
         ] {
             assert!(RESOLVE_FAILURE_MARKET_SESSION_METAS_V2
                 .iter()

@@ -87,6 +87,11 @@ impl<'root, 'link> AuthenticatedFailureMarketExecutionV2<'root, 'link> {
     ) -> &AuthenticatedProductArtifactV1<CompiledProductSeriesBundleV5> {
         &self.bundle
     }
+    pub(crate) fn into_bundle(
+        self,
+    ) -> AuthenticatedProductArtifactV1<CompiledProductSeriesBundleV5> {
+        self.bundle
+    }
     pub(crate) const fn funding_quote(
         &self,
     ) -> &AuthenticatedProductArtifactV1<SeriesFundingQuoteV4> {
