@@ -52,7 +52,7 @@ use clutch_retirement::{
 };
 use clutch_fractional_redemption_runtime::{
     FractionalLedgerPhaseV1, FractionalLedgerV1, FractionalPolicyV3,
-    FractionalRedeemIntentV1, FractionalRedemptionActionV1,
+    FractionalRedeemIntentV1, FractionalRedemptionActionV1, FractionalTerminalIntentV1,
     FRACTIONAL_LEDGER_PDA_PREFIX, FRACTIONAL_POLICY_PDA_PREFIX,
     FRACTIONAL_REDEMPTION_FAMILY_TAG, FRACTIONAL_REDEMPTION_FAMILY_VERSION,
 };
@@ -3042,9 +3042,6 @@ pub fn construct_fractional_redeem_internal_exact_material_v1(
             return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
         }
     }
-    if release.enabled_intents.binary_search(&coordinate).is_err() {
-        return Err(CanonicalActionMaterialErrorV1::CoordinateDisabled);
-    }
     if workflow_id == [0; 32]
         || builder.clutch_program() != release.program_id
         || builder.clutch_release_sha256() != release.elf_sha256
@@ -3251,6 +3248,34 @@ pub fn construct_fractional_redeem_internal_exact_material_v1(
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
 
+    let no_native_claims = claim_ledger
+        .aggregate_internal_supply
+        .iter()
+        .chain(claim_ledger.aggregate_materialized_supply.iter())
+        .all(|amount| *amount == 0);
+    if no_native_claims {
+        let backing_numerator = u128::from(hoard.locked_claim_principal_atoms)
+            .checked_mul(u128::from(resolution.facts.payout_denominator))
+            .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+        if backing_numerator < ledger.aggregate_credit_numerator {
+            return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+        }
+        return construct_fractional_seal_claims_exhausted_material_v1(
+            release,
+            builder,
+            workflow_id,
+            freshness,
+            frame,
+            &ordered,
+            policy,
+            ledger,
+            market_instance_id.bytes(),
+        );
+    }
+    if release.enabled_intents.binary_search(&coordinate).is_err() {
+        return Err(CanonicalActionMaterialErrorV1::CoordinateDisabled);
+    }
+
     let outcome = (0..usize::from(policy.outcome_count))
         .find(|index| {
             fields.native_eggs[*index] >= policy.common_lot
@@ -3411,6 +3436,150 @@ pub fn construct_fractional_redeem_internal_exact_material_v1(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn construct_fractional_seal_claims_exhausted_material_v1(
+    release: &IndexedProgramRelease,
+    builder: &ProtocolTransactionBuilder,
+    workflow_id: [u8; 32],
+    freshness: ActionFreshnessBoundaryV1,
+    frame: FractionalRedeemInternalExactFrameV1<'_>,
+    ordered: &[&ObservedRpcAccount; 14],
+    policy: FractionalPolicyV3,
+    ledger: FractionalLedgerV1,
+    market_instance: [u8; 32],
+) -> Result<CanonicalActionMaterialV1> {
+    let action = FractionalRedemptionActionV1::SealClaimsExhausted;
+    let coordinate = CanonicalIntentCoordinate {
+        family_tag: FRACTIONAL_REDEMPTION_FAMILY_TAG,
+        family_version: FRACTIONAL_REDEMPTION_FAMILY_VERSION,
+        local_action: action.tag(),
+    };
+    if release.enabled_intents.binary_search(&coordinate).is_err() {
+        return Err(CanonicalActionMaterialErrorV1::CoordinateDisabled);
+    }
+    let payload = FractionalTerminalIntentV1 {
+        expected_ledger_sequence: ledger.next_sequence,
+    }
+    .encode()
+    .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let addresses = [
+        frame.realm.address,
+        frame.profile.address,
+        frame.collateral_policy.address,
+        frame.collateral_token_program.address,
+        frame.market_binding.address,
+        frame.market_runtime.address,
+        frame.market_instance.address,
+        frame.hoard.address,
+        frame.claim_ledger.address,
+        frame.resolution.address,
+        frame.fractional_policy.address,
+        frame.fractional_ledger.address,
+    ];
+    let labels = [
+        "realm", "profile", "collateral-policy", "collateral-token-program",
+        "market-binding-v2", "market-runtime-v3", "market-instance-preimage-v2", "hoard-v2",
+        "claim-ledger-v3", "resolution-v5", "fractional-policy-v3", "fractional-ledger-v1",
+    ];
+    let contract = clutch_fractional_redemption_runtime::fractional_account_contract_v1(action);
+    let mut metas = Vec::with_capacity(addresses.len());
+    let mut account_roles = Vec::with_capacity(addresses.len());
+    for (index, address) in addresses.iter().copied().enumerate() {
+        let mask = 1_u32 << index;
+        let writable = contract.writable_mask & mask != 0;
+        let signer = contract.signer_mask & mask != 0;
+        metas.push(if writable {
+            AccountMeta::new(address, signer)
+        } else {
+            AccountMeta::new_readonly(address, signer)
+        });
+        account_roles.push(CanonicalAccountRoleV1 {
+            label: labels[index],
+            address,
+            writable,
+            signer,
+        });
+    }
+    let equations = vec![ExactEquation {
+        name: "chain-derived zero native claim supply".into(),
+        unit: IntegerUnit::EggAtoms {
+            market: market_instance,
+            outcome: 0,
+        },
+        left: 0,
+        right: 0,
+    }];
+    let draft = crate::transaction_builder::OwnedInstructionDraft::enabled_fractional_seal_claims_exhausted_v1(
+        crate::transaction_builder::SemanticOwner {
+            package: "clutch-fractional-redemption-runtime".into(),
+            schema: "fractional-redemption/79/1/9/seal-claims-exhausted".into(),
+            release_sha256: release.elf_sha256,
+        },
+        release.program_id,
+        metas,
+        equations,
+        ledger.next_sequence,
+        &payload,
+    )
+    .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let unsigned_transaction = builder
+        .build_atomic(&[draft])
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let authority_state_sha256 = fractional_authority_state_id_v1(&ordered[..12], release);
+    let cursor = ResumableWorkflowCursor {
+        workflow_id,
+        lane: WorkflowLane::FractionalRedemption,
+        generation: policy.domain_generation,
+        position: WorkflowPosition {
+            phase: u16::from(action.tag()),
+            item: ledger.next_sequence,
+        },
+        observed_state_sha256: authority_state_sha256,
+    };
+    let planned = PlannedWorkflowNode {
+        manifest_sha256: release.release_manifest_sha256,
+        cursor,
+        coordinate: CanonicalActionCoordinate::FractionalRedemption(action),
+        unsigned_transaction,
+        reload_authoritative_accounts: true,
+    };
+    validate_unsigned_fractional_plan(coordinate, builder.payer(), &account_roles, &planned)?;
+    let release_key = release.key();
+    let driver_account_slot = frame.fractional_ledger.provenance.slot;
+    let draft_id = action_material_id(
+        &release_key,
+        &release_key,
+        release.release_manifest_sha256,
+        release.capability_profile_id,
+        coordinate,
+        frame.fractional_ledger.address,
+        driver_account_slot,
+        cursor,
+        authority_state_sha256,
+        freshness,
+        builder.payer(),
+        &account_roles,
+        &planned.unsigned_transaction,
+    );
+    Ok(CanonicalActionMaterialV1 {
+        release_key: release_key.clone(),
+        driver_release_key: release_key,
+        release_manifest_sha256: release.release_manifest_sha256,
+        capability_profile_id: release.capability_profile_id,
+        coordinate,
+        variant: None,
+        driver_account: frame.fractional_ledger.address,
+        driver_account_slot,
+        cursor,
+        authority_state_sha256,
+        freshness,
+        fee_payer: builder.payer(),
+        account_roles,
+        planned,
+        draft_id,
+    })
+}
+
 fn fractional_authority_state_id_v1(
     accounts: &[&ObservedRpcAccount],
     release: &IndexedProgramRelease,
@@ -3452,18 +3621,19 @@ fn validate_unsigned_fractional_plan(
         [Some(binding)]
             if binding.family == ExtensionFamily::FractionalRedemption
                 && binding.local_action == coordinate.local_action
-                && binding.central_action
-                    == Some(ExtensionAction::FractionalRedemption(
-                        FractionalRedemptionActionV1::RedeemInternalExact,
-                    ))
+                && matches!(
+                    binding.central_action,
+                    Some(ExtensionAction::FractionalRedemption(action))
+                        if action.tag() == coordinate.local_action
+                )
     );
     if transaction.flows != [ProtocolFlow::FractionalRedemption]
-        || transaction.actions != ["redeem-fractional-internal-exact"]
+        || transaction.actions.len() != 1
         || transaction.required_signers != expected_signers
         || transaction.runtime_admissions != [RuntimeAdmission::ReleaseBoundEnabled]
         || !binding_matches
         || transaction.message_version != TransactionMessageVersionV1::Legacy
-        || transaction.exact_equations.len() != 2
+        || transaction.exact_equations.is_empty()
         || transaction.serialized_transaction.is_empty()
         || transaction.has_recent_blockhash
         || transaction.signed
