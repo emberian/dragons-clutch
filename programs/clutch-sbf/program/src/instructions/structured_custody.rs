@@ -4074,13 +4074,12 @@ mod tests {
     }
 
     #[test]
-    fn coherent_profile_admits_only_structured_creation_and_base_custody() {
-        assert!(crate::capabilities::extension_intent_action_enabled(74, 1, 35));
+    fn staged_profile_refuses_every_structured_action() {
+        assert!(!crate::capabilities::extension_intent_action_enabled(74, 1, 35));
         for action in 1..=8 {
-            assert_eq!(
-                crate::capabilities::extension_intent_action_enabled(75, 1, action),
-                action == 1,
-            );
+            assert!(!crate::capabilities::extension_intent_action_enabled(
+                75, 1, action
+            ));
         }
     }
 

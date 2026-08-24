@@ -76,25 +76,22 @@ create a Market. Those routes remain blocked on SourcePlane V3, authenticated
 registry selectors, full-width Instance identity, and mutable component-owned
 funding state.
 
-The distinct `non-production-structured-custody-lab` profile admits General V2
-action 35 and Structured actions 1, 3, and 5 in addition to the full profile's
-four Source V3 actions.
-Action 35 hostile-decodes the current Realm collateral chain, MarketBinding and
-MarketRuntime, MarketInstanceV2 and NativeClaimBasis artifacts, Hoard V2,
-ClaimLedger V3, two Position V3 owners and their purpose-owned Replay V3
-envelopes, and the descriptor-pinned wrapper/base/Token-2022 deployments. It
-then atomically transfers exact free cash/native-Egg atoms between the ordinary
-and Structured vault Positions and advances both Replays. Actions 3 and 5 also
-write current Hoard V2 and ClaimLedger V3 complete-set reclassification
-successors while authenticating the Realm-selected collateral mint and Hoard
-token coverage. Persisted rent owner,
-refundable principal, and donation floor remain byte-exact, and no lamports
-move. The base endpoints do not mint or burn wrapper supply; only the separately
-deployed wrapper can satisfy the vault signer and it performs and reconciles the
-Token-2022 side in the same transaction. Structured actions 2 and 4 use the
-General action-35 base endpoint; actions 6 through 8 remain disabled.
+The distinct `non-production-structured-custody-lab` feature compiles the staged
+current Structured custody owners, including full-vector wrap/unwind, donated
+surplus compaction, terminal redemption, and descriptor retirement. It does
+not admit a Structured tuple: the central and wrapper action masks are both
+exactly zero, so every Structured request refuses before account loading.
 
-No build, measurement, SVM, or validator evidence exists yet for this profile.
+The staged handlers hostile-decode the current Realm collateral chain, Product
+lineage, Hoard V2, ClaimLedger V3, Position V3 and Replay V3 owners, descriptor
+root, wrapper/base Token-2022 deployments, FundingTerms-selected neutral sink,
+and exact collateral release receipts. Value-moving compositions preserve the
+named rent-principal and donation boundaries and bind their hostile-reloaded
+poststates. These sources are implementation checkpoints, not an admitted or
+deployable market surface.
+
+No build, measurement, SVM, or validator evidence exists yet for this staged
+feature.
 
 ```sh
 # one-time source/build preparation; subsequent builds are offline

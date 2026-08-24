@@ -1,9 +1,8 @@
 # Structured-claim SBF successor adapter
 
-Status: **a separately deployable non-production wrapper profile admits actions
-1 through 5; the matching laboratory base profile admits creation, canonical
-custody, and atomic full-vector wrap/unwind over current liability owners; no
-artifact has been built, measured, deployed, or validated** (2026-08-23).
+Status: **current action owners are staged behind exact zero capability masks;
+neither the wrapper nor the base program admits a Structured action, and no
+artifact has been built, measured, deployed, or validated** (2026-08-24).
 
 This crate consumes `clutch-structured-claim-runtime-contract` as the only
 owner of structured-claim descriptor bytes, family-local payload codecs, and
@@ -41,11 +40,12 @@ The structured family is `75/v1`, with eight runtime-contract actions:
 7. exact terminal redemption; and
 8. permanent descriptor retirement.
 
-The adapter default remains fail-closed. Its explicit
-`live-current-wrapper` profile admits exactly actions 1 through 5; the
-standalone wrapper artifact selects that profile. Actions 6, 7, and 8 still
-refuse before account loading. The base program enables only the matching
-non-production central capability/dispatch tuples.
+The adapter default remains fail-closed. The historical name
+`live-current-wrapper` currently stages the current wrapper code but its action
+mask is exactly zero, as is the base program's Structured mask. All eight
+actions therefore refuse at capability admission before account loading. A
+future checked release must rotate the profile/release identity and admit only
+the actions whose complete base/wrapper compositions and evidence have landed.
 
 Activation must be atomic with all of the following:
 
