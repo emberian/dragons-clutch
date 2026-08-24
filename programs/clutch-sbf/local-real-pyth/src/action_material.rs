@@ -539,6 +539,11 @@ impl StructuredAddressLookupTableV1 {
         self.state_sha256
     }
 
+    /// Finalized RPC cluster which supplied the complete table body.
+    pub(crate) fn cluster_key(&self) -> &str {
+        &self.cluster_key
+    }
+
     /// Exact decoded table for a sibling semantic-owner constructor which has
     /// independently bound the same finalized observation.
     pub(crate) fn table(&self) -> AddressLookupTableAccount {
@@ -3960,7 +3965,7 @@ fn decode_current_position_pair_v1(
     Ok((position, header))
 }
 
-fn decode_release_artifact(
+pub(crate) fn decode_release_artifact(
     release: &IndexedProgramRelease,
     artifact_owner: Address,
     program: StructuredChainAccountV1<'_>,

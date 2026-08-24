@@ -13,6 +13,8 @@ pub mod collateral_release_catalog;
 #[cfg(feature = "operator")]
 pub mod direct_candidate_material;
 #[cfg(feature = "operator")]
+pub mod direct_action1_material;
+#[cfg(feature = "operator")]
 pub mod direct_action8_material;
 #[cfg(feature = "operator")]
 pub mod direct_terminal_material;

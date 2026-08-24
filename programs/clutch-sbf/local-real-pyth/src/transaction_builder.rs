@@ -761,6 +761,7 @@ impl OwnedInstructionDraft {
 
         const ACCOUNT_COUNT: usize = 41;
         const PAYER: usize = 37;
+        const SYSTEM_PROGRAM: usize = 38;
         const WRITABLE: [usize; 7] = [2, 3, 25, 27, 35, 36, 37];
         if accounts.len() != ACCOUNT_COUNT
             || payer == Address::default()
@@ -772,7 +773,7 @@ impl OwnedInstructionDraft {
         for (index, account) in accounts.iter().enumerate() {
             let writable = WRITABLE.contains(&index);
             let signer = index == PAYER;
-            if account.pubkey == Address::default()
+            if (account.pubkey == Address::default() && index != SYSTEM_PROGRAM)
                 || account.is_writable != writable
                 || account.is_signer != signer
                 || !identities.insert(account.pubkey)
@@ -3205,6 +3206,7 @@ impl ProtocolTransactionBuilder {
                 return Err(ConstructionError::InvalidAccountContract);
             }
             if !account.is_signer
+                && account.pubkey != Address::default()
                 && account.pubkey != draft.program_id
                 && !table_addresses.contains(&account.pubkey)
             {
