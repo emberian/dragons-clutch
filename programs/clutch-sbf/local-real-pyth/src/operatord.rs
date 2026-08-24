@@ -25,6 +25,10 @@ use crate::failure_action11_material::{
 use crate::failure_action13_material::{
     FAILURE_ACTION13_ROLE_LABELS_V1, FAILURE_ACTION13_ROLE_WRITABLE_V1,
 };
+use crate::general_action39_material::{
+    GENERAL_ACTION39_FIXED_ROLE_LABELS_V1, GENERAL_ACTION39_FIXED_ROLE_SIGNER_V1,
+    GENERAL_ACTION39_FIXED_ROLE_WRITABLE_V1, GENERAL_ACTION39_OWNER_SCHEMA_V1,
+};
 use crate::rpc_index::{
     public_rpc_endpoint_binding, CanonicalIntentCoordinate, CanonicalIntentVariantV1,
     IndexedProgramRelease, RpcCommitment,
@@ -227,6 +231,7 @@ fn merge_chain_material_cursors(
                 WorkflowLane::SourceCrank
                     | WorkflowLane::FractionalRedemption
                     | WorkflowLane::FailureRecovery
+                    | WorkflowLane::GeneralSettlement
             ) || (material.coordinate().family_tag == GENERAL_V2_FAMILY_TAG
                 && material.coordinate().family_version == GENERAL_V2_FAMILY_VERSION
                 && matches!(
@@ -285,6 +290,12 @@ fn merge_chain_material_cursors(
                         )
                     )
             }
+            WorkflowLane::GeneralSettlement => {
+                coordinate.family_tag == GENERAL_V2_FAMILY_TAG
+                    && coordinate.family_version == GENERAL_V2_FAMILY_VERSION
+                    && coordinate.local_action
+                        == GeneralV2Action::InitializeSettlementRoot.tag()
+            }
             _ => false,
         };
         if !lane_coordinate_matches
@@ -314,7 +325,8 @@ fn merge_chain_material_cursors(
             || material.account_roles().iter().any(|role| {
                 finalized.iter().any(|version| {
                     version.account.address == role.address()
-                        && version.account.owner == release.program_id
+                        && (version.account.owner == release.program_id
+                            || general_action39_fresh_role(role.label()))
                         && version.account.provenance.slot > freshness.observed_slot
                 })
             })
@@ -328,7 +340,8 @@ fn merge_chain_material_cursors(
                 || match material.cursor().lane {
                     WorkflowLane::FailureRecovery
                     | WorkflowLane::Candidate
-                    | WorkflowLane::RecoveryRetirement => existing.action != expected_action,
+                    | WorkflowLane::RecoveryRetirement
+                    | WorkflowLane::GeneralSettlement => existing.action != expected_action,
                     _ => true,
                 }
             {
@@ -505,6 +518,21 @@ fn merge_chain_material_cursors(
         return Err(KeeperSelectionError::InvalidCapacity);
     }
     Ok(cursors)
+}
+
+fn general_action39_fresh_role(label: &str) -> bool {
+    matches!(
+        label,
+        "selected-fee-record-v2"
+            | "recipient-allocation-v3"
+            | "treasury-ledger-v2"
+            | "fee-retirement-accumulator-v1"
+            | "indexed-settlement-root-v1"
+            | "settlement-cash-pot-v1"
+            | "final-pot-v1"
+            | "frozen-order-locator-v1"
+            | "candidate-slice-index-v1"
+    )
 }
 
 fn selection_dependencies_without_driver(
@@ -1696,7 +1724,35 @@ fn action_verdict_json(
         .iter()
         .find(|cursor| action_coordinate(cursor.action) == Some(coordinate));
     let (family, action, semantic_builder) = coordinate_description(coordinate);
-    let unresolved_roles = if coordinate.family_tag == RECOVERY_FAMILY_TAG
+    let unresolved_roles = if coordinate.family_tag == GENERAL_V2_FAMILY_TAG
+        && coordinate.family_version == GENERAL_V2_FAMILY_VERSION
+        && coordinate.local_action == GeneralV2Action::InitializeSettlementRoot.tag()
+    {
+        let mut roles = GENERAL_ACTION39_FIXED_ROLE_LABELS_V1
+            .iter()
+            .zip(GENERAL_ACTION39_FIXED_ROLE_WRITABLE_V1)
+            .zip(GENERAL_ACTION39_FIXED_ROLE_SIGNER_V1)
+            .enumerate()
+            .map(|(index, ((role, writable), signer))| json!({
+                "index": index.to_string(),
+                "role": role,
+                "writable": writable,
+                "signer": signer,
+                "address": null,
+                "identityDisposition": "unresolved-until-semantic-owner-construction"
+            }))
+            .collect::<Vec<_>>();
+        roles.push(json!({
+            "index": "49..52",
+            "role": "order-page-v5",
+            "cardinality": "exactly-1-to-4-derived-from-retained-feed",
+            "writable": false,
+            "signer": false,
+            "address": null,
+            "identityDisposition": "unresolved-until-semantic-owner-construction"
+        }));
+        roles
+    } else if coordinate.family_tag == RECOVERY_FAMILY_TAG
         && coordinate.family_version == RECOVERY_FAMILY_VERSION
         && coordinate.local_action == RecoveryAction::AdvanceIntervalConsensus.tag()
     {
@@ -2118,6 +2174,11 @@ fn action_coordinate(action: &str) -> Option<CanonicalIntentCoordinate> {
         });
     }
     let (family_tag, family_version, local_action) = match action {
+        "initialize-general-settlement-root-v5" => (
+            GENERAL_V2_FAMILY_TAG,
+            GENERAL_V2_FAMILY_VERSION,
+            GeneralV2Action::InitializeSettlementRoot.tag(),
+        ),
         "advance-series-occurrence" => (
             SOURCE_SERIES_FAMILY_TAG,
             SOURCE_SERIES_FAMILY_VERSION,
@@ -2280,6 +2341,13 @@ fn coordinate_description(
         let Some(action) = GeneralV2Action::from_tag(coordinate.local_action) else {
             return ("general", "unknown-general-v2-action", None);
         };
+        if action == GeneralV2Action::InitializeSettlementRoot {
+            return (
+                "general",
+                "initialize-general-settlement-root-v5",
+                Some(GENERAL_ACTION39_OWNER_SCHEMA_V1),
+            );
+        }
         let name = crate::transaction_builder::general_terminal_action_name_v5(action)
             .unwrap_or("non-current-general-v2-action");
         let builder = crate::transaction_builder::general_terminal_action_name_v5(action)
@@ -2729,6 +2797,7 @@ const fn lane_name(lane: WorkflowLane) -> &'static str {
         WorkflowLane::RecoveryRetirement => "recovery-retirement",
         WorkflowLane::StructuredLifecycle => "structured-lifecycle",
         WorkflowLane::FractionalRedemption => "fractional-redemption",
+        WorkflowLane::GeneralSettlement => "general-settlement",
     }
 }
 
