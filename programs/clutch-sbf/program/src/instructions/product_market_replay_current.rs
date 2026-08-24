@@ -14,8 +14,8 @@ use crate::instructions::genesis::{
 };
 use crate::instructions::product_market_family_capability_current::
     AuthenticatedMarketFamilyCapabilityPolicyArtifactV1;
-use crate::instructions::product_series::physical_v4::AuthenticatedSeriesPhysicalFounderV4;
-use crate::instructions::product_series_current::AuthenticatedRegistryCapabilityV4;
+use crate::instructions::product_series::physical_v5::AuthenticatedSeriesPhysicalFounderV5;
+use crate::instructions::product_series_current::AuthenticatedRegistryCapabilityV5;
 use crate::seeds;
 use clutch_product_series::{
     derive_initial_market_generation_v2, AuthenticatedMarketLifecycleGenerationAuthorityV2,
@@ -295,8 +295,8 @@ pub(crate) fn authenticate_market_lifecycle_replay_v2(
 #[inline(never)]
 pub(crate) fn bootstrap_current_product_market_generation_v2<'a>(
     program_id: &Pubkey,
-    physical: &AuthenticatedSeriesPhysicalFounderV4,
-    registry: &AuthenticatedRegistryCapabilityV4,
+    physical: &AuthenticatedSeriesPhysicalFounderV5,
+    registry: &AuthenticatedRegistryCapabilityV5,
     family_policy: &AuthenticatedMarketFamilyCapabilityPolicyArtifactV1,
     market_instance_id: MarketInstanceV2Id,
     schedule: &MarketFoundationScheduleV4,
