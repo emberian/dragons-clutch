@@ -9563,4 +9563,80 @@ mod series_lifecycle_terminal_postwrite_v1_adversarial_tests {
         )
         .is_err());
     }
+
+    #[test]
+    fn canonical_retirement_consumes_one_live_physical_link_before_counting() {
+        let series_source = include_str!("product_series.rs");
+        let series_production = series_source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production Product/Series owner");
+        assert_eq!(
+            series_production
+                .matches("impl AuthenticatedSeriesLinkRetirementAggregatePostwriteV1")
+                .count(),
+            1,
+        );
+        let aggregate = series_production
+            .split("impl AuthenticatedSeriesLinkRetirementAggregatePostwriteV1")
+            .nth(1)
+            .expect("sole aggregate implementation");
+        for guard in [
+            "product_series_market_link_pda",
+            "owner.to_bytes() == SYSTEM_PROGRAM_ID",
+            "data_len() == 0",
+            "lamports() == 0",
+            "record_link_retirement(event)",
+            "write_series_lifecycle_replay_v1",
+        ] {
+            assert!(aggregate.contains(guard), "missing retirement guard {guard}");
+        }
+
+        let market_source = include_str!("product_market.rs");
+        let close = market_source
+            .split("pub(crate) fn retire_and_close_series_market_link_v1")
+            .nth(1)
+            .expect("single Product link close");
+        let physical_close = close.find("link_account.resize(0)").expect("physical close");
+        let aggregate_accept = close
+            .find("authenticate_series_link_retirement_aggregate_postwrite_v1")
+            .expect("aggregate acceptance");
+        assert!(physical_close < aggregate_accept);
+    }
+
+    #[test]
+    fn terminal_receipt_follows_all_hostile_reauth_and_the_terminal_write() {
+        let source = include_str!("product_series.rs");
+        let outer = source
+            .split("pub(crate) fn terminalize_series_lifecycle_replay_v1")
+            .nth(1)
+            .expect("single terminal outer");
+        let registry = outer
+            .find("read_series_registry_account_v2_with_role")
+            .expect("RegistryV2 reauth");
+        let funding = outer
+            .find("authenticate_live_series_funding_value_v2")
+            .expect("FundingV2 reauth");
+        let replay = outer
+            .find("authenticate_series_lifecycle_replay_v1")
+            .expect("Open replay reauth");
+        let projection = outer
+            .find("close_series_funding_v2")
+            .expect("private Funding projection");
+        let terminalize = outer
+            .find(".terminalize(evidence)")
+            .expect("count terminalization");
+        let write = outer
+            .find("write_series_lifecycle_replay_v1")
+            .expect("Terminal replay write");
+        let receipt = outer
+            .find("AuthenticatedSeriesLifecycleTerminalPostwriteV1 {")
+            .expect("physical terminal receipt");
+        assert!(registry < funding && funding < replay);
+        assert!(replay < projection && projection < terminalize);
+        assert!(terminalize < write && write < receipt);
+        let signature = outer.split(") -> Outcome").next().expect("signature");
+        assert!(!signature.contains("SeriesLifecycleTerminalProjectionV1"));
+        assert!(!signature.contains("SeriesFundingTerminalProjectionV2"));
+    }
 }
