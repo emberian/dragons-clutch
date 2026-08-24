@@ -783,7 +783,7 @@ fn authenticate_role_shapes(
     Ok(())
 }
 
-fn authenticate_registry_and_product(
+pub(crate) fn authenticate_registry_and_product(
     release: &IndexedProgramRelease,
     snapshot: FailureAction11ChainSnapshotV1<'_>,
     root: clutch_product_series::MarketLifecycleBindingV3,
@@ -928,7 +928,7 @@ fn authenticate_loader_pair(
     Ok(())
 }
 
-fn authenticate_source(
+pub(crate) fn authenticate_source(
     release: &IndexedProgramRelease,
     snapshot: FailureAction11ChainSnapshotV1<'_>,
     policy: clutch_failure_policy_runtime::market_policy_v1::FailureMarketPolicyFactsV1,
@@ -1265,7 +1265,7 @@ fn admission_binding_bytes(
     cell.failure_policy_binding_id().bytes()
 }
 
-fn authenticate_recovery(
+pub(crate) fn authenticate_recovery(
     release: &IndexedProgramRelease,
     snapshot: FailureAction11ChainSnapshotV1<'_>,
     policy: clutch_failure_policy_runtime::market_policy_v1::FailureMarketPolicyFactsV1,
