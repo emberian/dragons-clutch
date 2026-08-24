@@ -11,7 +11,8 @@ use crate::{
     content_id, CompiledProductSeriesBundleV6Id, ComponentDebitV1, ContentId, Error, FixedCodec,
     MarketInstanceV2Id, Result, SeriesAttachmentPlanV5, SeriesAttachmentPlanV5Id,
     SeriesFundingComponentV2, SeriesFundingQuoteV5, SeriesFundingQuoteV5Id,
-    SeriesFundingAbortBindingV4Id, SeriesFundingCompletionBindingV4Id,
+    SeriesFundingAbortBindingV4Id, SeriesFundingCompletionAuthorizationV4Id,
+    SeriesFundingCompletionBindingV4Id,
     SeriesFundingReservationBindingV4Id,
     SeriesFundingStateV4Id, SeriesFundingTermsV2Id, SeriesMarketDispositionV1, SeriesPlanV5,
     SeriesPlanV5Id, SourceOccurrenceV1Id, SERIES_FUNDING_COMPONENT_COUNT_V2,
@@ -29,6 +30,9 @@ pub const SERIES_FUNDING_TERMINAL_PROJECTION_V4_DOMAIN: &[u8] =
 /// Acyclic Active-prestate reservation identity.
 pub const SERIES_FUNDING_RESERVATION_BINDING_V4_DOMAIN: &[u8] =
     b"dragons-clutch/series-funding-reservation-binding/v4";
+/// Acyclic pre-Replay completion authorization identity.
+pub const SERIES_FUNDING_COMPLETION_AUTHORIZATION_V4_DOMAIN: &[u8] =
+    b"dragons-clutch/series-funding-completion-authorization/v4";
 /// Final Source/Root/Link/replay completion identity.
 pub const SERIES_FUNDING_COMPLETION_BINDING_V4_DOMAIN: &[u8] =
     b"dragons-clutch/series-funding-completion-binding/v4";
@@ -224,9 +228,10 @@ impl SeriesFundingReservationBindingV4 {
     }
 }
 
-/// Final atomic Source/Root/Link/replay evidence consumed before Pending clears.
+/// Exact pre-Replay completion authority derived after Source, Root, and Link
+/// postwrites and from the deterministic Funding poststate preview.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SeriesFundingCompletionBindingV4 {
+pub struct SeriesFundingCompletionAuthorizationV4 {
     /// Exact reservation persisted in Pending.
     pub reservation_binding_id: SeriesFundingReservationBindingV4Id,
     /// Exact writable FundingV4 account coordinate.
@@ -257,27 +262,18 @@ pub struct SeriesFundingCompletionBindingV4 {
     pub market_admission_receipt_id: ContentId,
     /// Exact Product link-activation receipt.
     pub link_activation_receipt_id: ContentId,
-    /// Canonical permanent SeriesLifecycleReplayV2 account.
-    pub lifecycle_replay_account_id: ContentId,
-    /// Replay semantic before admission.
-    pub lifecycle_replay_state_before_id: ContentId,
-    /// Replay semantic after admission.
-    pub lifecycle_replay_state_after_id: ContentId,
-    /// Hostile replay authentication before admission.
-    pub lifecycle_replay_authentication_before_id: ContentId,
-    /// Hostile replay authentication after admission.
-    pub lifecycle_replay_authentication_after_id: ContentId,
-    /// Exact replay admission projection consumed by its writer.
-    pub lifecycle_replay_admission_projection_id: ContentId,
     /// Exact accepted MarketCore/Source/Root/Link composite receipt.
     pub accepted_market_core_receipt_id: ContentId,
+    /// Deterministic semantic identity Funding must have after completion.
+    pub funding_projected_state_after_id: SeriesFundingStateV4Id,
 }
 
-impl SeriesFundingCompletionBindingV4 {
-    /// Hash the whole final Source/Root/Link/replay join.
-    pub fn id(&self) -> Result<SeriesFundingCompletionBindingV4Id> {
+impl SeriesFundingCompletionAuthorizationV4 {
+    /// Validate and hash the acyclic pre-Replay authority.
+    pub fn id(&self) -> Result<SeriesFundingCompletionAuthorizationV4Id> {
         self.reservation_binding_id.validate()?;
         self.funding_pending_state_id.validate()?;
+        self.funding_projected_state_after_id.validate()?;
         let ids = [
             self.funding_account_id,
             self.funding_account_authentication_pending_id,
@@ -292,24 +288,69 @@ impl SeriesFundingCompletionBindingV4 {
             self.link_semantic_after_id,
             self.market_admission_receipt_id,
             self.link_activation_receipt_id,
+            self.accepted_market_core_receipt_id,
+        ];
+        for id in ids { id.validate()?; }
+        if self.funding_pending_state_id == self.funding_projected_state_after_id
+            || self.root_semantic_before_id == self.root_semantic_after_id
+            || self.link_semantic_before_id == self.link_semantic_after_id
+        {
+            return Err(Error::WorkStateMismatch);
+        }
+        let mut body = [0u8; 544];
+        let mut writer = Writer::new(&mut body, 544)?;
+        writer.id(self.reservation_binding_id.content_id());
+        writer.id(self.funding_pending_state_id.content_id());
+        writer.id(self.funding_projected_state_after_id.content_id());
+        for id in ids { writer.id(id); }
+        writer.finish()?;
+        Ok(SeriesFundingCompletionAuthorizationV4Id::from_bytes(
+            content_id(SERIES_FUNDING_COMPLETION_AUTHORIZATION_V4_DOMAIN, &body).bytes(),
+        ))
+    }
+}
+
+/// Final exact Replay evidence consumed before Pending clears.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SeriesFundingCompletionBindingV4 {
+    /// Non-detachable acyclic pre-Replay completion authority.
+    pub completion_authorization_id: SeriesFundingCompletionAuthorizationV4Id,
+    /// Canonical permanent SeriesLifecycleReplayV2 account.
+    pub lifecycle_replay_account_id: ContentId,
+    /// Replay semantic before admission.
+    pub lifecycle_replay_state_before_id: ContentId,
+    /// Replay semantic after admission.
+    pub lifecycle_replay_state_after_id: ContentId,
+    /// Hostile replay authentication before admission.
+    pub lifecycle_replay_authentication_before_id: ContentId,
+    /// Hostile replay authentication after admission.
+    pub lifecycle_replay_authentication_after_id: ContentId,
+    /// Exact replay admission projection consumed by its writer.
+    pub lifecycle_replay_admission_projection_id: ContentId,
+}
+
+impl SeriesFundingCompletionBindingV4 {
+    /// Hash the final authorization/Replay join.
+    pub fn id(&self) -> Result<SeriesFundingCompletionBindingV4Id> {
+        self.completion_authorization_id.validate()?;
+        let ids = [
             self.lifecycle_replay_account_id,
             self.lifecycle_replay_state_before_id,
             self.lifecycle_replay_state_after_id,
             self.lifecycle_replay_authentication_before_id,
             self.lifecycle_replay_authentication_after_id,
             self.lifecycle_replay_admission_projection_id,
-            self.accepted_market_core_receipt_id,
         ];
         for id in ids { id.validate()?; }
-        if self.root_semantic_before_id == self.root_semantic_after_id
-            || self.link_semantic_before_id == self.link_semantic_after_id
+        if self.lifecycle_replay_state_before_id == self.lifecycle_replay_state_after_id
+            || self.lifecycle_replay_authentication_before_id
+                == self.lifecycle_replay_authentication_after_id
         {
             return Err(Error::WorkStateMismatch);
         }
-        let mut body = [0u8; 704];
-        let mut writer = Writer::new(&mut body, 704)?;
-        writer.id(self.reservation_binding_id.content_id());
-        writer.id(self.funding_pending_state_id.content_id());
+        let mut body = [0u8; 224];
+        let mut writer = Writer::new(&mut body, 224)?;
+        writer.id(self.completion_authorization_id.content_id());
         for id in ids { writer.id(id); }
         writer.finish()?;
         Ok(SeriesFundingCompletionBindingV4Id::from_bytes(
@@ -656,14 +697,6 @@ impl SeriesFundingStateV4 {
             return Err(Error::WorkStateMismatch);
         }
         completion_receipt_id.validate()?;
-        if binding.reservation_binding_id.content_id()
-            != self.pending_pre_source_reservation_binding_id
-            || binding.funding_pending_state_id != self.id()?
-            || binding.market_root_account_id.is_zero()
-            || binding.series_market_link_account_id.is_zero()
-        {
-            return Err(Error::MismatchedArtifact);
-        }
         binding.id()?;
         authority.authenticate_pending_completion(self, binding, completion_receipt_id)?;
         let ordinal = self.pending_ordinal;
@@ -682,6 +715,40 @@ impl SeriesFundingStateV4 {
         next.validate_against(series, quote, attachment)?;
         *self = next;
         Ok(ordinal)
+    }
+
+    /// Deterministically project the semantic poststate of a successful
+    /// Pending completion without minting authority or mutating live state.
+    ///
+    /// The adapter uses this projection to break the physical Replay/Funding
+    /// ordering cycle: Replay commits the exact predicted Funding poststate,
+    /// then the full replay-bound completion authority persists that same
+    /// poststate last.  This method does not accept a completion binding or a
+    /// receipt and therefore cannot authorize the live transition.
+    pub fn project_pending_completion_poststate(
+        &self,
+        series: &SeriesPlanV5,
+        quote: &SeriesFundingQuoteV5,
+        attachment: &SeriesAttachmentPlanV5,
+    ) -> Result<Self> {
+        self.validate_against(series, quote, attachment)?;
+        if self.phase != SeriesFundingPhaseV4::Pending {
+            return Err(Error::WorkStateMismatch);
+        }
+        let mut next = *self;
+        next.next_ordinal = next
+            .next_ordinal
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        next.clear_pending();
+        next.phase = if next.next_ordinal == next.instance_count {
+            SeriesFundingPhaseV4::Closed
+        } else {
+            SeriesFundingPhaseV4::Active
+        };
+        next.transition_sequence = increment(next.transition_sequence)?;
+        next.validate_against(series, quote, attachment)?;
+        Ok(next)
     }
 
     /// Abort inert founding after an authenticated reverse-close and restore
@@ -1518,6 +1585,57 @@ mod tests {
         changed = reservation_binding(&state);
         changed.source_publication_id = ContentId::from_bytes([54; 32]);
         assert_ne!(changed.id().unwrap(), expected);
+    }
+
+    #[test]
+    fn completion_preview_is_deterministic_but_does_not_mutate_pending() {
+        let (state, series, quote, attachment) = pending_state();
+        let projected = state
+            .project_pending_completion_poststate(&series, &quote, &attachment)
+            .unwrap();
+        assert_eq!(state.phase, SeriesFundingPhaseV4::Pending);
+        assert_eq!(projected.phase, SeriesFundingPhaseV4::Active);
+        assert_eq!(projected.next_ordinal, 1);
+        assert_eq!(projected.transition_sequence, 2);
+        assert!(projected.pending_pre_source_reservation_binding_id.is_zero());
+        assert!(projected.pending_reservation_receipt_id.is_zero());
+        assert!(projected.pending_clock_receipt_id.is_zero());
+        assert_eq!(projected.pending_clock_bucket, 0);
+    }
+
+    #[test]
+    fn completion_authorization_binds_preview_and_pre_replay_postwrites() {
+        let (state, series, quote, attachment) = pending_state();
+        let projected = state
+            .project_pending_completion_poststate(&series, &quote, &attachment)
+            .unwrap();
+        let base = SeriesFundingCompletionAuthorizationV4 {
+            reservation_binding_id: reservation_binding(&state).id().unwrap(),
+            funding_account_id: ContentId::from_bytes([60; 32]),
+            funding_account_authentication_pending_id: ContentId::from_bytes([61; 32]),
+            funding_pending_state_id: state.id().unwrap(),
+            source_capitalization_receipt_id: ContentId::from_bytes([62; 32]),
+            pre_root_source_occurrence_id: ContentId::from_bytes([63; 32]),
+            market_root_account_id: ContentId::from_bytes([64; 32]),
+            market_binding_id: ContentId::from_bytes([65; 32]),
+            root_semantic_before_id: ContentId::from_bytes([66; 32]),
+            root_semantic_after_id: ContentId::from_bytes([67; 32]),
+            series_market_link_account_id: ContentId::from_bytes([68; 32]),
+            link_semantic_before_id: ContentId::from_bytes([69; 32]),
+            link_semantic_after_id: ContentId::from_bytes([70; 32]),
+            market_admission_receipt_id: ContentId::from_bytes([71; 32]),
+            link_activation_receipt_id: ContentId::from_bytes([72; 32]),
+            accepted_market_core_receipt_id: ContentId::from_bytes([73; 32]),
+            funding_projected_state_after_id: projected.id().unwrap(),
+        };
+        let expected = base.id().unwrap();
+        let mut hostile = base.clone();
+        hostile.funding_projected_state_after_id =
+            SeriesFundingStateV4Id::from_bytes([74; 32]);
+        assert_ne!(hostile.id().unwrap(), expected);
+        hostile = base;
+        hostile.link_activation_receipt_id = ContentId::from_bytes([75; 32]);
+        assert_ne!(hostile.id().unwrap(), expected);
     }
 
     #[test]
