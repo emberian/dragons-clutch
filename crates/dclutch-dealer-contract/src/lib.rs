@@ -10,6 +10,10 @@
 //! only reopen the identical ladder. Hoard principal and future revenue are not
 //! representable.
 
+pub mod activation;
+pub mod frame;
+pub mod instruction;
+
 use core::convert::TryFrom;
 
 use dclutch_core_contract::{ContentId, MARKET_IDENTITY_BYTES, MarketIdentity};
@@ -660,7 +664,7 @@ impl<const N: usize, const B: usize> PoolState<N, B> {
 
     /// Open a Pool with complete exact-N inventory and its first LP position.
     #[allow(clippy::too_many_arguments)]
-    pub fn open(
+    pub(crate) fn open(
         attachment: LiquidityAttachment,
         pool_address: [u8; 32],
         config: &LiquidityConfigV1<N, B>,
@@ -1215,7 +1219,7 @@ impl<const N: usize, const B: usize> PoolState<N, B> {
     }
 
     /// Retire a quiescent Pool and route service and all close lamports exactly.
-    pub fn retire(
+    pub(crate) fn retire(
         &mut self,
         pool_address: [u8; 32],
         config: &LiquidityConfigV1<N, B>,
@@ -1617,6 +1621,8 @@ fn put_matrix<const N: usize, const B: usize>(
 }
 
 #[cfg(test)]
+mod authority_tests;
+#[cfg(test)]
 mod tests;
 
 /// Lifecycle of one compact physical LP-position account.
@@ -1950,6 +1956,26 @@ impl<const N: usize> AddLiquidityRequest<N> {
             maximum_deposit,
         })
     }
+
+    /// Return Pool replay guard.
+    pub const fn expected_pool_sequence(self) -> u64 {
+        self.expected_pool_sequence
+    }
+
+    /// Return position-local replay guard.
+    pub const fn expected_position_sequence(self) -> u64 {
+        self.expected_position_sequence
+    }
+
+    /// Return exact shares requested for minting.
+    pub const fn shares_to_mint(self) -> u64 {
+        self.shares_to_mint
+    }
+
+    /// Return caller's exact per-compartment maximum deposit vector.
+    pub const fn maximum_deposit(self) -> LiquidityAmounts<N> {
+        self.maximum_deposit
+    }
 }
 
 /// Exact minimum-withdrawal request for burned shares.
@@ -1978,6 +2004,26 @@ impl<const N: usize> RemoveLiquidityRequest<N> {
             shares_to_burn,
             minimum_withdrawal,
         })
+    }
+
+    /// Return Pool replay guard.
+    pub const fn expected_pool_sequence(self) -> u64 {
+        self.expected_pool_sequence
+    }
+
+    /// Return position-local replay guard.
+    pub const fn expected_position_sequence(self) -> u64 {
+        self.expected_position_sequence
+    }
+
+    /// Return exact shares requested for burning.
+    pub const fn shares_to_burn(self) -> u64 {
+        self.shares_to_burn
+    }
+
+    /// Return caller's exact per-compartment minimum withdrawal vector.
+    pub const fn minimum_withdrawal(self) -> LiquidityAmounts<N> {
+        self.minimum_withdrawal
     }
 }
 

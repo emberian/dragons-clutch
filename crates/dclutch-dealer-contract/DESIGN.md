@@ -1,8 +1,8 @@
 # Covered multi-LP Dealer V1
 
-Status: implemented SDK-free semantic contract. It is not yet a Solana
-instruction adapter, token-custody implementation, deployed program, or
-performance claim.
+Status: implemented SDK-free semantic, instruction, exact-frame, derivation,
+and Market/capability activation contract. It is not yet a Solana account-memory
+or CPI adapter, deployed program, or performance claim.
 
 ## Mechanism and authority
 
@@ -33,6 +33,75 @@ every Pool transition compares that identity with the Pool attachment. The SBF
 adapter must verify the exact encoded bytes against that content identity before
 calling the kernel. There is no configuration authority or successor-price
 transition in V1.
+
+The config is an immutable content-addressed physical record assembled before
+Dealer activation and authenticated against the Market-selected capability
+entry. Prices and capacities never travel in an activation instruction. V1
+uses the config account's immutable RentCredit beneficiary as both the bootstrap
+LP owner and the unused-service refund authority. The activation plan requires
+the Pool attachment, Pool rent, initial LP rent, and signer account to name that
+same authority. This prevents a permissionless activator from taking ownership
+of prepaid liquidity without adding a second owner record.
+
+## Canonical lifecycle authority
+
+Dealer has one hostile-decodable instruction family with eight actions:
+Activate/Open, create LP position, add, remove, trade, timed reset, close LP
+position, and retire Pool/config. Wires contain only generation/replay guards,
+compact LP IDs, requested shares/claim quantity, and maximum/minimum collateral
+or reserve limits. They never contain an account key, observed balance,
+FundingState compartment amount, price, capacity, fee rate, reset interval,
+owner, rent amount, or Clock slot. Unknown actions, nonzero flags/reserved bytes,
+wrong exact widths, zero compact IDs, and out-of-profile claim indices refuse.
+
+The activation plan joins all of the following before returning any state:
+
+1. authenticated Market identity, generation, and phase;
+2. the manifest content ID committed by that Market;
+3. the selected manifest entry from the FundingState's own entry index;
+4. that entry's immutable Dealer release/config IDs;
+5. the reusable capability-owned `CapabilityFundingDerivationV1` seed root;
+6. the immutable bootstrap owner/refund/RentCredit authority;
+7. exact observed FundingState capitalization; and
+8. Market direct-child replay.
+
+Rent and creation debit comes only from `FundingStateV1::activate`. LP principal
+and service capitalization are the entire then-present Liquidity and Service
+compartments released by `FundingStateV1`; neither amount can be supplied in the
+instruction. The initial complete-set claim quantity and share quantity are
+wire quantities, but the adapter must prove the Position owns and atomically
+transfers every native claim. Pool/LP funded rent is obtained from authenticated
+Rent observations, and their checked sum must equal the activation rent debit.
+The returned plan must be applied atomically or discarded.
+
+Retirement similarly joins the quiescent Pool transition to the Market's exact
+direct-child decrement. `ExecutionReceipt`, liquidity-change, reset, position,
+and retirement receipts are transient return-data/application plans; V1 defines
+no receipt PDA and persists no duplicate receipt account. Replay authority lives
+only in Pool, LP position, and Market state.
+
+The exact domain-separated PDA seed preimages are:
+
+```text
+Pool   = ["dclutch/dealer-pool/v1",   Market key, generation_le, config_id]
+Config = ["dclutch/dealer-config/v1", Market key, generation_le, config_id]
+LP     = ["dclutch/dealer-lp/v1",     Market key, generation_le, config_id, lp_id]
+```
+
+FundingState deliberately does not get a Dealer derivation. Activation uses the
+capability crate's shared six-component funding derivation after the adapter
+authenticates the exact manifest content hash. Pool/config domain separation
+prevents identical remaining seed components from aliasing.
+
+Every action has one exact ordered frame. It names Market, Realm, native
+Position, collateral Vault, Pool/config/LP roots, the applicable Pool custody
+vaults and permanent RentCredits, collateral mint, Realm-selected token program,
+System Program, and Rent where required. Account privilege is exact, not a
+minimum. Ordinary aliases refuse except (a) activator/system-payer with LP owner
+on creation and (b) multiple semantic rent destinations that resolve to the same
+permanent RentCredit. Pool/config/LP/custody/Position aliases always refuse.
+Reset has exactly Market, Pool, and config accounts: Clock is trusted adapter
+input and is never an instruction meta or caller field.
 
 The Pool has four disjoint value compartments:
 
@@ -230,20 +299,49 @@ profile**. Wider native atoms require a later release with proved conversion and
 accumulator bounds. The 10,000 basis-point denominator is a mathematical fee
 unit.
 
+Instruction and exact-frame widths are:
+
+| Action | Wire bytes | N=2 accounts | N=16 accounts |
+| --- | ---: | ---: | ---: |
+| Activate/Open | 80 | 23 | 37 |
+| Create LP position | 56 | 9 | 9 |
+| Add liquidity | `88 + 8N` | 14 | 28 |
+| Remove liquidity | `88 + 8N` | 14 | 28 |
+| Trade | 56 | 12 | 12 |
+| Timed reset | 24 | 3 | 3 |
+| Close LP position | 64 | 7 | 7 |
+| Retire Pool/config | 32 | 15 | 29 |
+
+These counts exclude the executing Dealer program ID from the instruction's
+account-index vector. All remain below the pinned 128 account-lock ceiling. The
+N=16 Activate frame is the packet-risk maximum at 37 accounts; a one-signature,
+one-instruction legacy message with 37 static frame keys, the program key, and
+the 80-byte wire is 1,438 bytes under the canonical short-vector serialization
+model, so it cannot fit the 1,232-byte packet. N=16 Add/Remove is 1,278 bytes and
+also cannot fit without address lookup. The same exact model places N=16 Retire
+at 1,158 bytes even with a separate fee payer, but leaves little composition
+headroom. A v0 transaction with an authenticated lookup table is therefore a
+release requirement for N=16 Activate/Add/Remove and strongly preferred for
+Retire. Actual transaction compilation, LUT contents, compute, CPI depth, and
+rollback remain SBF/local-validator measurements; these byte calculations are
+not throughput claims.
+
 ## Required SBF and operator seams
 
-This crate contains no Solana SDK, account memory, CPI, Token-2022, signature,
-PDA, Clock parser, or hashing code. A callable adapter must still:
+This crate contains no Solana SDK, account memory, CPI, token-account parser,
+signature parser, PDA hash function, Clock parser, or content hashing code. A
+callable adapter must still:
 
-1. authenticate the Market root/capability manifest and derive the Pool, config,
+1. authenticate the Market root/capability manifest, apply the exact Dealer and
+   shared FundingState seed preimages, and derive/authenticate Pool, config,
    LP-position, custody, and permanent RentCredit addresses;
 2. hash/authenticate the exact config content record, pass its content ID to
    `decode`, and select exact `N`/`B` only from the native `ClaimBasis` and
    authenticated config;
 3. supply the actual Pool address and Market generation for every compact-child
    join, and authenticate LP owners for withdrawals/closure;
-4. read `Clock::slot` from the authenticated sysvar for opening and reset, never
-   from operator or client material;
+4. read `Clock::slot` through the trusted adapter Clock boundary for opening and
+   reset, never from an instruction meta, operator, or client field;
 5. maintain physically and semantically distinct collateral custody for LP
    principal, realized fees, and service funding, plus exact native-claim
    custody;
