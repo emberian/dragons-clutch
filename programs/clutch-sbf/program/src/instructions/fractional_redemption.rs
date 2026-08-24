@@ -624,9 +624,9 @@ pub(crate) fn authenticate_fractional_family_admission_postwrite_v1(
 /// postwrite into Product's sole family aggregator owner.
 ///
 /// This helper has no public dispatch route while the full ten-action family
-/// remains capability-disabled. The eventual Initialize handler must call it
-/// after writing a4/a5/ClaimLedger and before returning success; transaction
-/// rollback then keeps all four accounts atomic on any Product refusal.
+/// remains capability-disabled. The concrete Initialize handler calls it after
+/// writing a4/a5/ClaimLedger and before returning success; transaction rollback
+/// then keeps all four accounts atomic on any Product refusal.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn consume_fractional_family_admission_postwrite_v1(
     program_id: &Pubkey,

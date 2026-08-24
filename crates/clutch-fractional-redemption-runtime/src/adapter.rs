@@ -308,7 +308,7 @@ impl FractionalTerminalIntentV1 {
     }
 }
 
-/// Exact Solana meta geometry frozen for a future capability review.
+/// Exact Solana meta geometry frozen for the disabled capability review.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FractionalAccountContractV1 {
     /// Exact live-state account count, or fixed count excluding suffixes.
@@ -339,9 +339,9 @@ pub struct FractionalAccountContractV1 {
 
 /// Return the frozen account-count and mutability contract for one action.
 ///
-/// Account-role names and order are documented in the crate README. Action 2's
-/// complete adapter uses this geometry, but the central capability tuple stays
-/// disabled until action 1 can create its canonical inputs.
+/// Account-role names and order are documented in the crate README. Concrete
+/// handlers exist for every action, but all ten central capability tuples stay
+/// disabled pending one whole-family release review.
 pub const fn fractional_account_contract_v1(
     action: FractionalRedemptionActionV1,
 ) -> FractionalAccountContractV1 {
@@ -525,9 +525,10 @@ pub struct SolanaAccountMetaProjectionV1 {
 
 /// Fail closed before parsing payload bytes or inspecting any account meta.
 ///
-/// A future activation must replace this function atomically with program
-/// ownership/PDA/Resolution/ClaimLedger/Hoard/Position/Replay/token/rent adapters
-/// and add the exact tuple to the release's capability manifest.
+/// This pure refusal projection does not own SBF dispatch. The concrete SBF
+/// handlers already perform the program-ownership, PDA, Resolution,
+/// ClaimLedger, Hoard, Position/Replay, token, and rent checks; checked dispatch
+/// independently refuses all ten tuples through its central capability table.
 pub fn refuse_disabled_fractional_redemption_v1(
     _instruction_data: &[u8],
     _accounts: &[SolanaAccountMetaProjectionV1],
