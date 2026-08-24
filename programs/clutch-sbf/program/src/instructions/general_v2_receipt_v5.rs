@@ -1,6 +1,6 @@
 //! Exact SBF authentication seam for rent-owned General SettlementReceipt V5.
 //!
-//! The counted `0xa9/1` SettlementRoot, not legacy SelectedCandidate, is the
+//! The indexed counted `0xa9/2` SettlementRoot, not legacy SelectedCandidate, is the
 //! settlement authority. This module authenticates the complete program-owned
 //! root, retained sealed Feed, and exact writable V5 receipt; rederives all
 //! three PDAs; checks the full candidate/feed/price joins; and admits only the
