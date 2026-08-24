@@ -6,6 +6,8 @@
 //! control inspectable, but it cannot sign, submit, or predict poststate.
 
 use crate::account_index::{FinalizedAccountAbsence, IndexedBranch};
+use crate::collateral_release_catalog::CurrentCollateralExecutableAccountViewV1;
+pub use crate::collateral_release_catalog::AuthenticatedCurrentCollateralReleaseV1 as StructuredCollateralCatalogEntryV1;
 use crate::rpc_index::{
     CanonicalIntentCoordinate, CanonicalIntentVariantV1, IndexedProgramRelease,
     ObservedRpcAccount, RpcCommitment,
@@ -28,7 +30,7 @@ use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::product_series::{SeriesMarketLinkAccountV2, SeriesRegistryAccountV3};
 use clutch_solana_layout::{ProfileAccount, RealmAccount};
 use clutch_collateral_adapter_v2::{
-    AdapterReleaseV2, ClaimLedgerV3, CollateralPolicyV2, HoardV2,
+    ClaimLedgerV3, CollateralPolicyV2, HoardV2,
     MarketLiabilityLifecycleV1, ResolutionStateV5, ResolutionV5,
     CLAIM_LEDGER_V3_PDA_SEED_V1, COLLATERAL_POLICY_PDA_SEED_V1,
     HOARD_AUTHORITY_V2_PDA_SEED_V1, HOARD_TOKEN_V2_PDA_SEED_V1,
@@ -120,93 +122,6 @@ impl core::fmt::Display for CanonicalActionMaterialErrorV1 {
     }
 }
 
-/// Opaque checked collateral-catalog row selected by Profile V2.
-///
-/// The semantic adapter release owns parser/CPI behavior. The indexed program
-/// release and content-addressed RegistryProgramReleaseV2 own the exact loader
-/// deployment. Live role construction later reauthenticates the Program and
-/// ProgramData bodies from the same finalized account frame.
-#[derive(Clone, Copy, Debug)]
-pub struct StructuredCollateralCatalogEntryV1<'release> {
-    adapter: AdapterReleaseV2,
-    program: &'release IndexedProgramRelease,
-    artifact: RegistryProgramReleaseV2,
-    artifact_owner: Address,
-    receipt_id: [u8; 32],
-}
-
-impl<'release> StructuredCollateralCatalogEntryV1<'release> {
-    /// Authenticate one finalized, base-owned catalog artifact against the
-    /// checked operator release. No instruction account or browser field can
-    /// replace this chain artifact.
-    pub fn authenticate(
-        adapter: AdapterReleaseV2,
-        program: &'release IndexedProgramRelease,
-        artifact_owner: Address,
-        artifact_account: &ObservedRpcAccount,
-    ) -> Result<Self> {
-        adapter
-            .validate()
-            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
-        program
-            .validate()
-            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
-        if artifact_owner == Address::default()
-            || artifact_account.owner != artifact_owner
-            || artifact_account.executable
-            || artifact_account.provenance.commitment != RpcCommitment::Finalized
-            || artifact_account.provenance.slot == 0
-            || adapter.token_program.bytes() != program.program_id.to_bytes()
-            || adapter.token_program_deployment.bytes() != program.elf_sha256
-            || program
-                .families
-                .binary_search(&crate::rpc_index::CanonicalFamily::Collateral)
-                .is_err()
-        {
-            return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
-        }
-        let artifact = RegistryProgramReleaseV2::decode(&artifact_account.data)
-            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
-        let artifact_id = artifact
-            .id()
-            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?
-            .content_id();
-        let kind = [ArtifactKind::RegistryProgramReleaseV2.byte()];
-        let expected_artifact = Address::find_program_address(
-            &[b"dc:product-artifact:v1", &kind, &artifact_id.bytes()],
-            &artifact_owner,
-        );
-        if artifact_account.address != expected_artifact.0
-            || artifact.program.bytes() != program.program_id.to_bytes()
-            || artifact.programdata.bytes() != program.program_data.to_bytes()
-            || artifact.deployment_slot != program.deployment_slot
-            || artifact.locus != RegistryReleaseLocusV2::ObservedPositive
-            || artifact.capability_manifest_id.bytes() != program.release_manifest_sha256
-        {
-            return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
-        }
-        let adapter_id = adapter
-            .id()
-            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
-        let mut receipt = Sha256::new();
-        receipt.update(b"dragons-clutch/operator/structured-collateral-catalog/v1\0");
-        receipt.update(adapter_id.bytes());
-        receipt.update(artifact_id.bytes());
-        receipt.update(artifact_account.address.to_bytes());
-        receipt.update(artifact_account.lamports.to_le_bytes());
-        receipt.update(artifact_account.provenance.slot.to_le_bytes());
-        receipt.update(Sha256::digest(&artifact_account.data));
-        let receipt_id = receipt.finalize().into();
-        Ok(Self {
-            adapter,
-            program,
-            artifact,
-            artifact_owner,
-            receipt_id,
-        })
-    }
-}
-
 /// Opaque exact wrapper/base/Token/collateral release join for Structured construction.
 #[derive(Clone, Copy, Debug)]
 pub struct StructuredOperatorReleaseSetV1<'release> {
@@ -244,8 +159,8 @@ impl<'release> StructuredOperatorReleaseSetV1<'release> {
                 != STRUCTURED_TOKEN_2022_CAPABILITY_MANIFEST_ID_V1
             || wrapper.capability_profile_id != base.capability_profile_id
             || token_2022.capability_profile_id != base.capability_profile_id
-            || collateral.program.capability_profile_id != base.capability_profile_id
-            || collateral.artifact_owner != base.program_id
+            || collateral.program().capability_profile_id != base.capability_profile_id
+            || collateral.artifact_owner() != base.program_id
             || wrapper
                 .families
                 .binary_search(&crate::rpc_index::CanonicalFamily::StructuredClaim)
@@ -717,7 +632,7 @@ pub fn construct_structured_action_material_v1(
     let observed_state_sha256 = structured_authority_state_id(
         accounts,
         lookup_table.state_sha256,
-        releases.collateral.receipt_id,
+        releases.collateral.receipt_id(),
     );
     let dependencies = accounts
         .iter()
@@ -787,7 +702,7 @@ fn construct_detected_structured_action_material_v1(
             != structured_authority_state_id(
                 accounts,
                 lookup_table.state_sha256,
-                releases.collateral.receipt_id,
+                releases.collateral.receipt_id(),
             )
     {
         return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
@@ -891,7 +806,7 @@ fn construct_detected_structured_action_material_v1(
         structured_authority_state_id(
             accounts,
             lookup_table.state_sha256,
-            releases.collateral.receipt_id,
+            releases.collateral.receipt_id(),
         );
     let draft_id = action_material_id(
         &release_key,
@@ -1559,7 +1474,7 @@ fn derive_structured_current_mutation_v1(
             if action == StructuredClaimActionV1::CompactDonation {
                 validate_compaction_trigger_v1(
                     accounts,
-                    releases.collateral.program.program_id,
+                    releases.collateral.program().program_id,
                     mint.supply,
                     vault,
                     backing,
@@ -2082,17 +1997,27 @@ fn validate_common_structured_market_chain_v1(
             return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
         }
     }
-    if accounts[collateral_program_index].address != releases.collateral.program.program_id
-        || accounts[collateral_data_index].address != releases.collateral.program.program_data
+    if accounts[collateral_program_index].address != releases.collateral.program().program_id
+        || accounts[collateral_data_index].address != releases.collateral.program().program_data
     {
         return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
     }
-    authenticate_indexed_loader_release(
-        releases.collateral.program,
-        releases.collateral.artifact,
-        accounts[collateral_program_index],
-        accounts[collateral_data_index],
-    )?;
+    let collateral_program = CurrentCollateralExecutableAccountViewV1::from_parts(
+        accounts[collateral_program_index].address,
+        accounts[collateral_program_index].owner()?,
+        accounts[collateral_program_index].executable(),
+        accounts[collateral_program_index].data()?,
+    );
+    let collateral_programdata = CurrentCollateralExecutableAccountViewV1::from_parts(
+        accounts[collateral_data_index].address,
+        accounts[collateral_data_index].owner()?,
+        accounts[collateral_data_index].executable(),
+        accounts[collateral_data_index].data()?,
+    );
+    releases
+        .collateral
+        .reauthenticate_executable(collateral_program, collateral_programdata)
+        .map_err(|_| CanonicalActionMaterialErrorV1::ReleaseMismatch)?;
 
     let realm = RealmAccount::decode(accounts[realm_index].data()?)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
@@ -2103,18 +2028,16 @@ fn validate_common_structured_market_chain_v1(
     let policy_id = policy
         .id()
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
-    let collateral_release_id = releases
+    let selected_collateral = releases
         .collateral
-        .adapter
-        .id()
-        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
-    policy
-        .validate_for_release(&releases.collateral.adapter)
+        .select_for(releases.base, policy)
         .map_err(|_| CanonicalActionMaterialErrorV1::ReleaseMismatch)?;
+    let collateral_release_id = selected_collateral.entry().adapter_id();
     if profile.realm != realm.realm
         || profile.profile != realm.profile
-        || profile.collateral_policy_id.bytes() != policy_id.bytes()
-        || profile.adapter_release_id.bytes() != collateral_release_id.bytes()
+        || profile.collateral_policy_id.bytes() != selected_collateral.policy_id()
+        || policy_id.bytes() != selected_collateral.policy_id()
+        || profile.adapter_release_id.bytes() != collateral_release_id
         || policy.token_program.bytes() != accounts[collateral_program_index].address.to_bytes()
     {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
