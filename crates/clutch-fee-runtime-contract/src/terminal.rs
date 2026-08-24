@@ -457,6 +457,16 @@ impl OwnerFeeFinalizationReceiptV1 {
     pub const fn fee_record(&self) -> Id {
         self.fee_record
     }
+    pub const fn realm(&self) -> Id { self.realm }
+    pub const fn market(&self) -> Id { self.market }
+    pub const fn epoch(&self) -> Id { self.epoch }
+    pub const fn settlement_candidate(&self) -> Id { self.settlement_candidate }
+    pub const fn batch_policy(&self) -> Id { self.batch_policy }
+    pub const fn revenue_policy(&self) -> Id { self.revenue_policy }
+    pub const fn treasury_position(&self) -> Id { self.treasury_position }
+    pub const fn value_disposition_receipt(&self) -> Id {
+        self.value_disposition_receipt
+    }
     pub const fn settlement_candidate(&self) -> Id {
         self.settlement_candidate
     }

@@ -131,8 +131,13 @@ pub mod general_v2_unfilled_release_v1;
 pub mod general_v2_fee_v5;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub(crate) mod general_v2_fee_creation_v6;
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+/// Hostile reader for the durable b9/v2+b9/v3 terminal evidence. This owner
+/// is reusable by current retirement composition even when action50 routing
+/// itself is not enabled.
 pub(crate) mod general_v2_fee_terminal_pair_v1;
+/// Mandatory physical owner for the zeroed General treasury Position/Replay
+/// pair and its same-instruction Product RootV3 shared-core latch.
+pub(crate) mod general_treasury_position_terminal_v5;
 /// Sole current General action-50 fee-retirement composer.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub(crate) mod general_v2_fee_retirement_v2;

@@ -102,6 +102,12 @@ pub(crate) struct AuthenticatedGeneralMarketCurrentV5 {
     market_instance: MarketInstancePreimageV2,
     product_root_account: Pubkey,
     product_root_binding_id: ContentId,
+    product_root_generation: u64,
+    product_root_outcome_count: u8,
+    product_root_realm_id: ContentId,
+    product_root_collateral_policy_id: ContentId,
+    product_root_collateral_release_id: ContentId,
+    product_root_registry_release_id: ContentId,
     product_root_data_id: ContentId,
     product_root_semantic_id: ContentId,
     product_root_authentication_id: ContentId,
@@ -143,6 +149,24 @@ impl AuthenticatedGeneralMarketCurrentV5 {
     pub(crate) const fn product_root_account(&self) -> Pubkey { self.product_root_account }
     pub(crate) const fn product_root_binding_id(&self) -> ContentId {
         self.product_root_binding_id
+    }
+    pub(crate) const fn product_root_generation(&self) -> u64 {
+        self.product_root_generation
+    }
+    pub(crate) const fn product_root_outcome_count(&self) -> u8 {
+        self.product_root_outcome_count
+    }
+    pub(crate) const fn product_root_realm_id(&self) -> ContentId {
+        self.product_root_realm_id
+    }
+    pub(crate) const fn product_root_collateral_policy_id(&self) -> ContentId {
+        self.product_root_collateral_policy_id
+    }
+    pub(crate) const fn product_root_collateral_release_id(&self) -> ContentId {
+        self.product_root_collateral_release_id
+    }
+    pub(crate) const fn product_root_registry_release_id(&self) -> ContentId {
+        self.product_root_registry_release_id
     }
     pub(crate) const fn product_root_data_id(&self) -> ContentId {
         self.product_root_data_id
@@ -294,6 +318,27 @@ pub(crate) fn authenticate_general_market_current_v5(
     root_output: &mut MarketLifecycleRootAccountV3,
     link_output: &mut SeriesMarketLinkAccountV3,
 ) -> Outcome<AuthenticatedGeneralMarketCurrentV5> {
+    authenticate_general_market_current_v5_with_root_access(
+        program_id,
+        frame,
+        false,
+        root_output,
+        link_output,
+    )
+}
+
+/// Authenticate the same complete current graph while requiring the Product
+/// Root meta to carry the exact access needed by a same-instruction RootV3
+/// retirement postwrite. All other graph roles remain read-only.
+#[allow(clippy::too_many_lines)]
+#[inline(never)]
+pub(crate) fn authenticate_general_market_current_v5_with_root_access(
+    program_id: &Pubkey,
+    frame: &GeneralMarketCurrentAccountFrameV5<'_, '_>,
+    product_root_writable: bool,
+    root_output: &mut MarketLifecycleRootAccountV3,
+    link_output: &mut SeriesMarketLinkAccountV3,
+) -> Outcome<AuthenticatedGeneralMarketCurrentV5> {
     require_distinct_frame(frame)?;
     require_exact_readonly_account(
         program_id,
@@ -371,7 +416,7 @@ pub(crate) fn authenticate_general_market_current_v5(
         frame.product_root,
         market_instance_id,
         authority.product_generation(),
-        false,
+        product_root_writable,
         root_output,
     )?;
     let link = authenticate_series_market_link_v3(
@@ -732,6 +777,12 @@ pub(crate) fn authenticate_general_market_current_v5(
         market_instance,
         product_root_account: *frame.product_root.key,
         product_root_binding_id: root_binding_id,
+        product_root_generation: root_binding.generation,
+        product_root_outcome_count: root_binding.outcome_count,
+        product_root_realm_id: root_binding.realm_id,
+        product_root_collateral_policy_id: root_binding.collateral_policy_id,
+        product_root_collateral_release_id: root_binding.collateral_release_id,
+        product_root_registry_release_id: root_binding.registry_release_id,
         product_root_data_id: root_data_id,
         product_root_semantic_id: root_semantic_id,
         product_root_authentication_id: root_authentication_id,

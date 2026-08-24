@@ -72,6 +72,8 @@ pub(crate) struct AuthenticatedFeeTerminalPairV1 {
     terminal_observed_balance_lamports: u64,
     general: GeneralFeeTerminalProjectionV1,
     dealer: DealerFeeTerminalProjectionV1,
+    revenue_policy: Id32,
+    treasury_position: Id32,
 }
 
 impl AuthenticatedFeeTerminalPairV1 {
@@ -122,6 +124,10 @@ impl AuthenticatedFeeTerminalPairV1 {
     pub(crate) const fn dealer(&self) -> DealerFeeTerminalProjectionV1 {
         self.dealer
     }
+
+    pub(crate) const fn revenue_policy(&self) -> Id32 { self.revenue_policy }
+
+    pub(crate) const fn treasury_position(&self) -> Id32 { self.treasury_position }
 }
 
 fn borrow_data<'a, 'info>(account: &'a AccountInfo<'info>) -> Outcome<Ref<'a, [u8]>> {
@@ -229,6 +235,8 @@ pub(crate) fn authenticate_fee_terminal_pair_v1(
 
     let general = terminal.semantic.project_general();
     let dealer = terminal.semantic.project_dealer();
+    let revenue_policy = Id32::from_bytes(terminal.semantic.revenue_policy().0);
+    let treasury_position = Id32::from_bytes(terminal.semantic.treasury_position().0);
     let runtime_release = contract::fee_runtime_semantic_release_id_v2(&RuntimeSha256)?;
     let selected_pda = seeds::general_v2_selected_fee_record_pda(
         program_id,
@@ -295,6 +303,8 @@ pub(crate) fn authenticate_fee_terminal_pair_v1(
         terminal_observed_balance_lamports,
         general,
         dealer,
+        revenue_policy,
+        treasury_position,
     })
 }
 
