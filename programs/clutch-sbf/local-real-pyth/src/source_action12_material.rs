@@ -11,10 +11,12 @@ use crate::rpc_index::{
     CanonicalFamily, CanonicalIntentCoordinate, IndexedProgramRelease, ObservedRpcAccount,
     RpcCommitment,
 };
+use crate::action_material::{ActionFreshnessBoundaryV1, CanonicalActionMaterialV1};
 use crate::transaction_builder::{
     ConstructionError, ExactEquation, IntegerUnit, OwnedInstructionDraft,
     ProtocolTransactionBuilder, SemanticOwner, TransactionTransport, UnsignedProtocolTransaction,
 };
+use crate::workflow_graph::{ResumableWorkflowCursor, WorkflowLane, WorkflowPosition};
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::registry::{ExtensionFamily, SourceSeriesAction};
 use clutch_solana_layout::source_series::{
@@ -42,6 +44,7 @@ use clutch_source_plane_v3_runtime::{
 };
 use solana_address::Address;
 use solana_instruction::AccountMeta;
+use sha2::{Digest, Sha256};
 
 /// Exact bounded operator-side validity horizon. It is not protocol time and
 /// cannot substitute for the onchain Clock check.
@@ -157,6 +160,10 @@ pub struct ChainDerivedSourceAction12MaterialV1 {
     neutral_balance_before_lamports: u64,
     neutral_balance_after_lamports: u64,
     valid_before_slot: u64,
+    generation: u64,
+    driver_account: Address,
+    observed_slot: u64,
+    authority_state_sha256: [u8; 32],
     ordered_accounts: Vec<AccountMeta>,
 }
 
@@ -301,6 +308,43 @@ impl ChainDerivedSourceAction12MaterialV1 {
         .and_then(|builder| builder.build_source_v0(draft))
         .map_err(map_construction)
     }
+
+    /// Promote the exact close/refund/sink snapshot into the read-only
+    /// operator material registry. The disjoint transport payer remains a
+    /// launcher identity only and is never a Source instruction role.
+    pub fn canonical_material(
+        &self,
+        release: &IndexedProgramRelease,
+        workflow_id: [u8; 32],
+        transaction_payer: Address,
+        transport: TransactionTransport,
+    ) -> Result<CanonicalActionMaterialV1> {
+        CanonicalActionMaterialV1::from_chain_derived_source_v2(
+            release,
+            SourceSeriesAction::CloseGeneration,
+            self.driver_account,
+            self.observed_slot,
+            ResumableWorkflowCursor {
+                workflow_id,
+                lane: WorkflowLane::SourceCrank,
+                generation: self.generation,
+                position: WorkflowPosition {
+                    phase: SOURCE_ACTION12_LOCAL_ACTION_V1,
+                    item: self.generation,
+                },
+                observed_state_sha256: self.authority_state_sha256,
+            },
+            ActionFreshnessBoundaryV1 {
+                observed_slot: self.observed_slot,
+                valid_before_slot: self.valid_before_slot,
+                maximum_validity_slots: SOURCE_ACTION12_VALIDITY_SLOTS_V1,
+            },
+            transaction_payer,
+            &self.ordered_accounts,
+            self.unsigned_transaction(release, transaction_payer, transport)?,
+        )
+        .map_err(|_| SourceAction12MaterialError::Construction)
+    }
 }
 
 /// Reconstruct exact action-12 bytes, postimages, and metas from one finalized
@@ -311,6 +355,7 @@ pub fn derive_source_action12_material_v1(
 ) -> Result<ChainDerivedSourceAction12MaterialV1> {
     authenticate_release_shape(release)?;
     authenticate_snapshot_provenance(release, snapshot)?;
+    let authority_state_sha256 = snapshot_digest(snapshot);
     let program_id = release.program_id;
     let program_key = runtime_key(program_id);
 
@@ -529,6 +574,10 @@ pub fn derive_source_action12_material_v1(
         neutral_balance_before_lamports: snapshot.neutral_sink.lamports,
         neutral_balance_after_lamports,
         valid_before_slot,
+        generation: state.latest_generation,
+        driver_account: snapshot.generation_lineage.address,
+        observed_slot: snapshot.source_release.provenance.slot,
+        authority_state_sha256,
         ordered_accounts,
     })
 }
@@ -956,6 +1005,26 @@ fn map_construction(_error: ConstructionError) -> SourceAction12MaterialError {
     SourceAction12MaterialError::Construction
 }
 
+fn snapshot_digest(snapshot: SourceAction12ChainSnapshotV1<'_>) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"dragons-clutch/operator/source-action12-finalized-snapshot/v1\0");
+    hash.update(snapshot.source_release.provenance.slot.to_le_bytes());
+    for account in [
+        snapshot.source_release, snapshot.adapter_program, snapshot.adapter_program_data,
+        snapshot.parser_program, snapshot.parser_program_data, snapshot.parser_config,
+        snapshot.source_spec, snapshot.source_work_schedule, snapshot.terminal_policy,
+        snapshot.generation_target, snapshot.generation_lineage, snapshot.terminal_work_receipt,
+        snapshot.source_funding_custody, snapshot.neutral_sink,
+    ] {
+        hash.update(account.address.to_bytes());
+        hash.update(account.owner.to_bytes());
+        hash.update(account.lamports.to_le_bytes());
+        hash.update([u8::from(account.executable)]);
+        hash.update(&account.data);
+    }
+    hash.finalize().into()
+}
+
 #[cfg(test)]
 mod adversarial_tests {
     use super::*;
@@ -991,6 +1060,10 @@ mod adversarial_tests {
             neutral_balance_before_lamports: 40,
             neutral_balance_after_lamports: 46,
             valid_before_slot: 50,
+            generation: 1,
+            driver_account: address(30),
+            observed_slot: 18,
+            authority_state_sha256: [14; 32],
             ordered_accounts: (20_u8..34_u8)
                 .map(|byte| AccountMeta::new_readonly(address(byte), false))
                 .collect(),
