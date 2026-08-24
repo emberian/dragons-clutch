@@ -279,24 +279,13 @@ pub const SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTIONS:
 /// Exact extension actions executable by the successor product at this
 /// dependency checkpoint.
 ///
-/// Source actions 1 through 12 have one complete funded lifecycle through
-/// Product retirement. Failure actions 10 through 13 have complete current
-/// session creation, advance, resolution, and archive handlers. Other target
-/// tuples remain absent until their current authority tranche is integrated.
+/// Failure actions 10 through 13 have complete current session creation,
+/// advance, resolution, and archive handlers. Other target tuples remain
+/// absent until their current authority tranche is integrated. In particular,
+/// Source actions 1 through 12 stay gated until Product consumes the private
+/// whole-lifecycle funding-custody retirement transition.
 #[cfg(feature = "profile-successor-chain-attached-dev")]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
-    (77, 2, 1),
-    (77, 2, 2),
-    (77, 2, 3),
-    (77, 2, 4),
-    (77, 2, 5),
-    (77, 2, 6),
-    (77, 2, 7),
-    (77, 2, 8),
-    (77, 2, 9),
-    (77, 2, 10),
-    (77, 2, 11),
-    (77, 2, 12),
     (78, 1, 10),
     (78, 1, 11),
     (78, 1, 12),
@@ -537,12 +526,9 @@ mod tests {
                         && family_version == 2
                         && matches!(local_action, 1 | 2 | 3 | 4);
                     let successor_enabled = SUCCESSOR_CHAIN_ATTACHED_DEV
-                        && ((family_tag == 77
-                            && family_version == 2
-                            && matches!(local_action, 1..=12))
-                            || (family_tag == 78
-                                && family_version == 1
-                                && matches!(local_action, 10..=13)));
+                        && family_tag == 78
+                        && family_version == 1
+                        && matches!(local_action, 10..=13);
                     let expected_enabled = dealer_enabled
                         || general_enabled
                         || source_runtime_enabled
