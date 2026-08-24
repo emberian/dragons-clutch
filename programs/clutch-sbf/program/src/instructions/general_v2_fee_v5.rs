@@ -55,10 +55,10 @@ use clutch_general_v2_contract::{
 use clutch_general_v2_runtime::{
     derive_root_owner_basis_v4, derive_settlement_root_expectation_from_certified_fee_v2,
     derive_zero_fee_owner_finalization_evidence_v5, prepare_realize_owner_cash_v5,
-    project_owner_settlement_account_v5, CandidateEntitlementProjectionV4,
+    project_owner_settlement_account_v5, CandidateEntitlementProjectionV5,
     OwnerCashRealizationPlanV5, OwnerRowFeeEvidenceV5, OwnerSettlementAccountProjectionV5,
     OwnerSettlementAccountViewV5, SettlementRootExpectationProjectionV1,
-    SettlementTraversalProjectionV4,
+    SettlementTraversalAccessV5, SettlementTraversalProjectionV5,
 };
 use clutch_owner_settlement::{
     OwnerSettlementExpectationBasisV4, OwnerSettlementExpectationV4, OwnerSettlementStateV4,
@@ -972,7 +972,7 @@ pub fn compose_candidate_fee_collection_action39_v5(
     expected: CandidateFeeCollectionExpectationV5,
     frame: CandidateFeeCollectionAccountFrameV5<'_, '_>,
     revenue_policy: &RevenuePolicyV1,
-    traversal: &SettlementTraversalProjectionV4,
+    traversal: &SettlementTraversalProjectionV5,
 ) -> Outcome<PreparedCandidateFeeCollectionAction39V5> {
     let collection = prepare_candidate_fee_collection_action39_v5(
         program_id,
@@ -1471,7 +1471,7 @@ fn prepare_root_owner_fee_evidence_v5(
 pub fn prepare_owner_fee_action24_v5(
     program_id: &Pubkey,
     authenticated_root: &AuthenticatedGeneralSettlementRootV1,
-    entitlement: &CandidateEntitlementProjectionV4,
+    entitlement: &CandidateEntitlementProjectionV5<'_>,
     owner: Id32,
     owner_row: &AccountInfo<'_>,
     fee_accounts: OwnerFeeAccountInputV5<'_, '_>,
@@ -1537,7 +1537,7 @@ pub fn prepare_owner_fee_action24_v5(
 pub fn prepare_owner_fee_action38_v5(
     program_id: &Pubkey,
     authenticated_root: &AuthenticatedGeneralSettlementRootV1,
-    traversal: &SettlementTraversalProjectionV4,
+    traversal: &dyn SettlementTraversalAccessV5,
     owner_row: &AccountInfo<'_>,
     owner_row_rent_minimum: u64,
     fee_accounts: OwnerFeeAccountInputV5<'_, '_>,
@@ -1617,7 +1617,7 @@ pub fn prepare_owner_fee_action38_v5(
     let context = RootDerivedOwnerFeeContextV5::new(
         authenticated_root.account(),
         authenticated_root.root(),
-        Id32::from_bytes(traversal.position_market_binding().realm_id.bytes()),
+        Id32::from_bytes(traversal.projection().position_market_binding().realm_id.bytes()),
         id(owner_row.key),
         basis,
     )?;
@@ -1776,7 +1776,7 @@ fn prepare_owner_fee_finalization_v5(
 pub fn compose_owner_settlement_action38_v5(
     program_id: &Pubkey,
     authenticated_root: &AuthenticatedGeneralSettlementRootV1,
-    traversal: &SettlementTraversalProjectionV4,
+    traversal: &dyn SettlementTraversalAccessV5,
     owner_row: &AccountInfo<'_>,
     owner_row_rent_minimum: u64,
     fee_accounts: OwnerFeeAccountInputV5<'_, '_>,

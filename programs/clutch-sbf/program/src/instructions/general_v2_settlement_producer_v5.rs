@@ -339,8 +339,7 @@ fn initialize_settlement_root(
         },
     )?;
     let feed = authenticated.feed();
-    let market = *authenticated.market();
-    let genesis = *authenticated.genesis();
+    let market = authenticated.market();
     let traversal = authenticated.traversal();
     let base = market.base();
 
@@ -383,14 +382,14 @@ fn initialize_settlement_root(
         let revenue: RevenuePolicyV1 = decode_revenue_policy(&borrow_data(revenue_preimage)?)
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
         let expected = CandidateFeeCollectionExpectationV5::new(
-            Id32::from_bytes(genesis.realm_id.bytes()),
+            traversal.projection().realm(),
             base.market,
             request.epoch,
             node.base().settlement_candidate_id,
             id(accounts[IX_SELECTED_FEE_RECORD].key),
             market.batch_policy_id(),
-            traversal.owner_order_set_digest(),
-            traversal.owner_basis().owner_count(),
+            traversal.projection().owner_order_set_digest(),
+            traversal.projection().expected_owner_count(),
             base.price_scale,
             base.outcome_count,
         )?;
@@ -404,14 +403,15 @@ fn initialize_settlement_root(
                 revenue_policy_record: &accounts[ACTION39_COMMON_PREFIX_ACCOUNTS + 3],
             },
             &revenue,
-            traversal,
+            traversal.projection(),
         )?
         .root_expectation()
     } else {
         derive_settlement_root_expectation_v1(
-            traversal,
+            traversal.projection(),
             CandidateFeeAggregateProjectionV1::NoFeeRecord,
-        )?
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
     };
 
     let root_pda = seeds::general_v2_settlement_root_pda(
@@ -476,12 +476,12 @@ fn initialize_settlement_root(
         epoch_generation: epoch.generation,
         market_instance_v2_id: base.market_instance_v2_id,
         epoch: &epoch,
-        market: &market,
+        market,
         window: &window,
         node: &node,
         feed: &feed,
         current_slot,
-        owner_order_set_digest: traversal.owner_order_set_digest(),
+        owner_order_set_digest: traversal.projection().owner_order_set_digest(),
         cash_expectation: expectation.cash(),
         expected_reservations: expectation.expected_reservations(),
         expected_filled_reservations: expectation.expected_filled_reservations(),

@@ -47,7 +47,7 @@ use clutch_general_v2_contract::{
     MAX_OUTCOMES, MAX_SLICES, SETTLEMENT_SLICE_BYTES,
 };
 use clutch_owner_settlement::{
-    build_owner_settlement_book_v2, build_owner_settlement_expectation_basis_book_v4,
+    build_owner_settlement_book_v2, derive_owner_settlement_expectation_stream_v4,
     derive_settlement_receipt_data_id_v2, prepare_realize_owner_cash_semantic_v4,
     recover_owner_cash_position_prestate_v4,
     AuthenticatedOrderMembershipV2, AuthenticatedPositionV3,
@@ -55,14 +55,15 @@ use clutch_owner_settlement::{
     AuthenticatedSettlementReceiptV2, CandidateSettlementTotalsV2,
     Error as OwnerSettlementError, OrderKindV1, OwnerSettlementBookV2,
     PresentConsiderationV2, PresentPriceV2,
-    OwnerSettlementExpectationBasisBookV4, OwnerSettlementExpectationBasisV4,
+    OwnerSettlementExpectationBasisV4,
     OwnerCashRealizationSemanticPlanV4, OwnerSettlementAccumulatorV4,
     OwnerSettlementDispositionV4, OwnerSettlementExpectationV4,
     OwnerSettlementStateV4, PositionSettlementPoststateV3,
     SelectedOwnerFeeV1,
     SettlementCashPotExpectationV1, SettlementCashPotV1,
     SettlementReceiptDataHashV2, SettlementReceiptRouteV2, SettlementSideV1,
-    VerifiedSettlementOrderV2, VerifiedSettlementOrderV4, VirtualCashDirectionV1,
+    VerifiedSettlementOrderStreamV4, VerifiedSettlementOrderV2, VerifiedSettlementOrderV4,
+    VirtualCashDirectionV1,
 };
 use clutch_retirement::{
     project_general_position_v3, AdapterPositionMarketBindingV3, AdapterPositionPurposeBindingV3,
@@ -94,13 +95,21 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     BuiltDirectCandidateV1, CandidateBuilderErrorV1, CandidateSearchReportV1, CanonicalSha256,
-    FrozenOrderKindV1, OwnerBlindBookProjectionV1, OwnerBlindBookProjectionV2, SettlementTailV1,
+    FrozenOrderKindV1, GeneralOrderPageInputV5,
+    OwnerBlindBookProjectionV1, OwnerBlindBookProjectionV2, OwnerBlindBookStreamV5,
+    SettlementTailV1, StreamedOwnerBlindOrderV5, read_owner_blind_page_order_v5,
 };
 
 /// SHA-256 domain for the exact owner/order membership projection.
 pub const OWNER_ORDER_SET_DIGEST_DOMAIN_V1: &[u8] = b"dragons-clutch/owner-order-set/v1\0";
 /// Immutable V5 owner/order membership digest with no mutable account IDs.
 pub const OWNER_ORDER_SET_DIGEST_DOMAIN_V2: &[u8] = b"dragons-clutch/owner-order-set/v2\0";
+/// Full retained Feed byte identity used by the compact traversal reader.
+pub const SETTLEMENT_FEED_DATA_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/general-v2/settlement-feed-data/v5\0";
+/// Full immutable V5 OrderPage byte identity used by one-page bounded reads.
+pub const SETTLEMENT_ORDER_PAGE_DATA_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/general-v2/settlement-order-page-data/v5\0";
 /// Maximum encoded settlement-tail width.
 pub const MAX_SETTLEMENT_TAIL_BYTES_V1: usize = MAX_SLICES * SETTLEMENT_SLICE_BYTES;
 /// Maximum real receipt ends: two for every direct slice.
@@ -560,6 +569,24 @@ fn settlement_position_market_binding_v3(
         market_instance_id: retirement_identity(projection.market_binding().market_instance_v2_id)?,
         outcome_count: projection.domain().outcome_count,
         realm_id: retirement_identity(projection.realm())?,
+        collateral_policy_id: retirement_identity(Id32::new(collateral.policy_id().bytes())?)?,
+        collateral_release_id: retirement_identity(Id32::new(collateral.release().id()?.bytes())?)?,
+    })
+}
+
+fn settlement_position_market_binding_stream_v5<B: SettlementOrderBookAccessV5 + ?Sized>(
+    book: &B,
+    collateral: BoundCollateralProfileV2,
+) -> Result<AdapterPositionMarketBindingV3, SettlementAdapterErrorV1> {
+    if collateral.market().market.bytes() != book.market_binding().market_instance_v2_id.bytes()
+        || collateral.realm_bound().realm().realm.bytes() != book.realm().bytes()
+    {
+        return Err(SettlementAdapterErrorV1::PositionSetMismatch);
+    }
+    Ok(AdapterPositionMarketBindingV3 {
+        market_instance_id: retirement_identity(book.market_binding().market_instance_v2_id)?,
+        outcome_count: book.domain().outcome_count,
+        realm_id: retirement_identity(book.realm())?,
         collateral_policy_id: retirement_identity(Id32::new(collateral.policy_id().bytes())?)?,
         collateral_release_id: retirement_identity(Id32::new(collateral.release().id()?.bytes())?)?,
     })
@@ -1394,16 +1421,383 @@ fn settlement_coordinates_v4(
     })
 }
 
+/// Constant-space access to the exact authenticated frozen V5 book.
+pub trait SettlementOrderBookAccessV5 {
+    /// Exact authenticated MarketBinding projection.
+    fn market_binding(&self) -> &MarketBindingV1;
+    /// Canonical Market identity.
+    fn market(&self) -> Id32;
+    /// Canonical Epoch identity.
+    fn epoch(&self) -> Id32;
+    /// Canonical frozen order-set identity.
+    fn order_set(&self) -> Id32;
+    /// Exact RelationV2 economic domain.
+    fn domain(&self) -> &clutch_batch::relation_v2::EconomicDomainV2;
+    /// Exact economic-domain content identity.
+    fn economic_domain_digest(&self) -> Id32;
+    /// Canonical PriceGrid identity.
+    fn price_grid_id(&self) -> Id32;
+    /// Immutable Realm identity.
+    fn realm(&self) -> Id32;
+    /// Dense live-order count across all pages.
+    fn order_count(&self) -> u8;
+    /// Number of pages in the complete canonical page set.
+    fn page_count(&self) -> u8;
+    /// Canonical page account at one active page index.
+    fn page_account(&self, page_index: u16) -> Option<Id32>;
+    /// Physical populated widths, including tombstones, by page.
+    fn page_physical_slot_counts(&self) -> [u8; clutch_solana_layout::MAX_ORDER_PAGES];
+    /// Dense live-order widths by page.
+    fn page_live_order_counts(&self) -> [u8; clutch_solana_layout::MAX_ORDER_PAGES];
+    /// Full exact page-data identity at one active page index.
+    fn page_data_id(&self, page_index: u16) -> Option<Id32>;
+    /// Read one dense live order from its authenticated containing page.
+    fn order(
+        &self,
+        order_index: u8,
+    ) -> Result<Option<StreamedOwnerBlindOrderV5>, SettlementAdapterErrorV1>;
+}
+
+/// Compact page-set authority retained after complete streaming verification.
+///
+/// Exact page bytes remain owned by the adapter. A later dense-order read must
+/// present the one canonical containing page and reproduce its full data ID.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SettlementOrderBookBindingV5 {
+    page_count: u8,
+    order_count: u8,
+    page_accounts: [Id32; clutch_solana_layout::MAX_ORDER_PAGES],
+    page_physical_slot_counts: [u8; clutch_solana_layout::MAX_ORDER_PAGES],
+    page_live_order_counts: [u8; clutch_solana_layout::MAX_ORDER_PAGES],
+    page_data_ids: [Id32; clutch_solana_layout::MAX_ORDER_PAGES],
+}
+
+impl SettlementOrderBookBindingV5 {
+    /// Number of pages in the complete canonical page set.
+    pub const fn page_count(&self) -> u8 { self.page_count }
+    /// Canonical page accounts followed by zero padding.
+    pub const fn page_accounts(&self) -> [Id32; clutch_solana_layout::MAX_ORDER_PAGES] {
+        self.page_accounts
+    }
+    /// Physical populated widths, including tombstones, by page.
+    pub const fn page_physical_slot_counts(
+        &self,
+    ) -> [u8; clutch_solana_layout::MAX_ORDER_PAGES] {
+        self.page_physical_slot_counts
+    }
+    /// Dense live-order widths by page.
+    pub const fn page_live_order_counts(
+        &self,
+    ) -> [u8; clutch_solana_layout::MAX_ORDER_PAGES] {
+        self.page_live_order_counts
+    }
+    /// Full exact page-data identities followed by zero padding.
+    pub const fn page_data_ids(&self) -> [Id32; clutch_solana_layout::MAX_ORDER_PAGES] {
+        self.page_data_ids
+    }
+    /// Dense live-order count across all pages.
+    pub const fn order_count(&self) -> u8 { self.order_count }
+
+    /// Resolve one dense order index to its canonical containing page.
+    pub fn order_page_index(
+        &self,
+        order_index: u8,
+    ) -> Result<u16, SettlementAdapterErrorV1> {
+        let (page, _) = settlement_order_page_and_local_index_v5(
+            self.order_count,
+            self.page_count,
+            self.page_live_order_counts,
+            order_index,
+        )?;
+        u16::try_from(page).map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)
+    }
+
+    /// Read one dense order after reproducing the exact containing-page ID.
+    pub fn read_order(
+        &self,
+        domain: &clutch_batch::relation_v2::EconomicDomainV2,
+        page: GeneralOrderPageInputV5<'_>,
+        order_index: u8,
+    ) -> Result<Option<StreamedOwnerBlindOrderV5>, SettlementAdapterErrorV1> {
+        let (page_index, local_index) = settlement_order_page_and_local_index_v5(
+            self.order_count,
+            self.page_count,
+            self.page_live_order_counts,
+            order_index,
+        )?;
+        if page.account != self.page_accounts[page_index]
+            || settlement_page_data_id_v5(page.body)? != self.page_data_ids[page_index]
+        {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        read_owner_blind_page_order_v5(domain, page, local_index).map_err(Into::into)
+    }
+}
+
+fn settlement_order_page_and_local_index_v5(
+    order_count: u8,
+    page_count: u8,
+    page_live_order_counts: [u8; clutch_solana_layout::MAX_ORDER_PAGES],
+    order_index: u8,
+) -> Result<(usize, u8), SettlementAdapterErrorV1> {
+    if order_index >= order_count {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let mut preceding = 0u8;
+    let mut page = 0usize;
+    while page < usize::from(page_count) {
+        let after = preceding
+            .checked_add(page_live_order_counts[page])
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        if order_index < after {
+            return Ok((page, order_index - preceding));
+        }
+        preceding = after;
+        page += 1;
+    }
+    Err(SettlementAdapterErrorV1::BindingMismatch)
+}
+
+/// Borrowed exact page-set reader used only while the complete page bytes are
+/// retained by the caller.
 #[derive(Clone, Copy, Debug)]
-struct FeedSettlementFactsV3 {
-    prices: [u64; MAX_OUTCOMES],
-    slices: [CanonicalSettlementSliceV1; MAX_SLICES],
-    entitled_units: [u64; MAX_ORDERS],
-    consideration_price_units: [u128; MAX_ORDERS],
-    end_count: [u16; MAX_ORDERS],
-    merge_delivery_count: [u16; MAX_ORDERS],
-    first_slice: [u16; MAX_ORDERS],
-    receipt_end_count: u16,
+pub struct SettlementOrderBookViewV5<'stream, 'page> {
+    binding: SettlementOrderBookBindingV5,
+    stream: &'stream OwnerBlindBookStreamV5<'page>,
+}
+
+impl SettlementOrderBookViewV5<'_, '_> {
+    /// Compact exact binding retained after complete page verification.
+    pub const fn binding(&self) -> SettlementOrderBookBindingV5 { self.binding }
+}
+
+/// Add full byte identities to one completely authenticated streaming book.
+pub fn authenticate_settlement_order_book_view_v5<'stream, 'page>(
+    stream: &'stream OwnerBlindBookStreamV5<'page>,
+    pages: &[GeneralOrderPageInputV5<'page>],
+) -> Result<SettlementOrderBookViewV5<'stream, 'page>, SettlementAdapterErrorV1> {
+    if pages.len() != usize::from(stream.page_count()) {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let mut page_data_ids = [Id32::ZERO; clutch_solana_layout::MAX_ORDER_PAGES];
+    let mut page = 0usize;
+    while page < pages.len() {
+        let index = u16::try_from(page)
+            .map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        if stream.page_account(index) != Some(pages[page].account) {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        page_data_ids[page] = settlement_page_data_id_v5(pages[page].body)?;
+        page += 1;
+    }
+    Ok(SettlementOrderBookViewV5 {
+        binding: SettlementOrderBookBindingV5 {
+            page_count: stream.page_count(),
+            order_count: stream.order_count(),
+            page_accounts: stream.binding().page_accounts(),
+            page_physical_slot_counts: stream.page_physical_slot_counts(),
+            page_live_order_counts: stream.page_live_order_counts(),
+            page_data_ids,
+        },
+        stream,
+    })
+}
+
+fn settlement_page_data_id_v5(body: &[u8]) -> Result<Id32, SettlementAdapterErrorV1> {
+    let _ = verify_page_v5(body)?;
+    let mut hash = Sha256::new();
+    hash.update(SETTLEMENT_ORDER_PAGE_DATA_DOMAIN_V5);
+    hash.update(
+        u64::try_from(body.len())
+            .map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?
+            .to_le_bytes(),
+    );
+    hash.update(body);
+    Id32::new(hash.finalize().into()).map_err(SettlementAdapterErrorV1::Contract)
+}
+
+impl SettlementOrderBookAccessV5 for SettlementOrderBookViewV5<'_, '_> {
+    fn market_binding(&self) -> &MarketBindingV1 { self.stream.market_binding() }
+    fn market(&self) -> Id32 { self.stream.market() }
+    fn epoch(&self) -> Id32 { self.stream.epoch() }
+    fn order_set(&self) -> Id32 { self.stream.order_set() }
+    fn domain(&self) -> &clutch_batch::relation_v2::EconomicDomainV2 {
+        self.stream.domain()
+    }
+    fn economic_domain_digest(&self) -> Id32 { self.stream.economic_domain_digest() }
+    fn price_grid_id(&self) -> Id32 { self.stream.price_grid_id() }
+    fn realm(&self) -> Id32 { self.stream.realm() }
+    fn order_count(&self) -> u8 { self.binding.order_count }
+    fn page_count(&self) -> u8 { self.binding.page_count }
+    fn page_account(&self, page_index: u16) -> Option<Id32> {
+        self.binding.page_accounts.get(usize::from(page_index)).copied()
+            .filter(|_| usize::from(page_index) < usize::from(self.binding.page_count))
+    }
+    fn page_physical_slot_counts(&self) -> [u8; clutch_solana_layout::MAX_ORDER_PAGES] {
+        self.binding.page_physical_slot_counts
+    }
+    fn page_live_order_counts(&self) -> [u8; clutch_solana_layout::MAX_ORDER_PAGES] {
+        self.binding.page_live_order_counts
+    }
+    fn page_data_id(&self, page_index: u16) -> Option<Id32> {
+        self.binding.page_data_ids.get(usize::from(page_index)).copied()
+            .filter(|id| !id.is_zero() && usize::from(page_index) < usize::from(self.page_count()))
+    }
+    fn order(
+        &self,
+        order_index: u8,
+    ) -> Result<Option<StreamedOwnerBlindOrderV5>, SettlementAdapterErrorV1> {
+        if order_index >= self.order_count() {
+            return Ok(None);
+        }
+        self.stream.order(order_index).map_err(Into::into)
+    }
+}
+
+/// Borrowed exact retained-Feed reader.
+#[derive(Clone, Copy, Debug)]
+pub struct SettlementFeedViewV5<'a> {
+    account: Id32,
+    body: &'a [u8],
+    header: CandidateFeedHeaderV2,
+    candidate_bundle_digest: Id32,
+    data_id: Id32,
+    prices_le: &'a [u8],
+    fills_le: &'a [u8],
+    slices_le: &'a [u8],
+}
+
+impl SettlementFeedViewV5<'_> {
+    /// Canonical retained Feed account.
+    pub const fn account(&self) -> Id32 { self.account }
+    /// Exact authenticated Feed bytes retained by this borrow.
+    pub const fn body(&self) -> &[u8] { self.body }
+    /// Exact decoded sealed Feed header.
+    pub const fn header(&self) -> CandidateFeedHeaderV2 { self.header }
+    /// Canonical semantic digest of the full Feed body.
+    pub const fn candidate_bundle_digest(&self) -> Id32 { self.candidate_bundle_digest }
+    /// Domain-separated full byte identity of the Feed body.
+    pub const fn data_id(&self) -> Id32 { self.data_id }
+
+    /// Read one active canonical outcome price.
+    pub fn price(&self, outcome: u8) -> Result<u64, SettlementAdapterErrorV1> {
+        if outcome >= self.header.outcome_count {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        read_feed_u64(self.prices_le, usize::from(outcome))
+    }
+
+    /// Read one dense selected fill.
+    pub fn fill(&self, order_index: u8) -> Result<u64, SettlementAdapterErrorV1> {
+        if order_index >= self.header.order_count {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        read_feed_u64(self.fills_le, usize::from(order_index))
+    }
+
+    /// Read one canonical settlement slice.
+    pub fn settlement_slice(
+        &self,
+        slice_index: u16,
+    ) -> Result<CanonicalSettlementSliceV1, SettlementAdapterErrorV1> {
+        if slice_index >= self.header.slice_count {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        canonical_feed_slice_v5(self.slices_le, slice_index)
+    }
+}
+
+/// Authenticate exact sealed Feed bytes without retaining a 416-row slice array.
+pub fn authenticate_settlement_feed_view_v5<'a>(
+    account: Id32,
+    body: &'a [u8],
+) -> Result<SettlementFeedViewV5<'a>, SettlementAdapterErrorV1> {
+    let (header, tail) = complete_candidate_feed_v2(body, true)?;
+    let candidate_bundle_digest = derive_candidate_bundle_digest_v1(body)?;
+    if account.is_zero() || candidate_bundle_digest.is_zero() || header.slice_count == 0 {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let mut hash = Sha256::new();
+    hash.update(SETTLEMENT_FEED_DATA_DOMAIN_V5);
+    hash.update(
+        u64::try_from(body.len())
+            .map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?
+            .to_le_bytes(),
+    );
+    hash.update(body);
+    let data_id = Id32::new(hash.finalize().into())?;
+    Ok(SettlementFeedViewV5 {
+        account,
+        body,
+        header,
+        candidate_bundle_digest,
+        data_id,
+        prices_le: tail.prices_le(),
+        fills_le: tail.fills_le(),
+        slices_le: tail.slices_le(),
+    })
+}
+
+fn canonical_feed_slice_v5(
+    slices_le: &[u8],
+    slice_index: u16,
+) -> Result<CanonicalSettlementSliceV1, SettlementAdapterErrorV1> {
+    let record = read_feed_slice_v3(slices_le, slice_index)?;
+    let route = record.route()?;
+    let (buy, sell, route) = match route {
+        SettlementReceiptRouteV2::Direct => (
+            SettlementLegV1::Order(record.buy_index),
+            SettlementLegV1::Order(record.sell_index),
+            SettlementRouteV1::Direct,
+        ),
+        SettlementReceiptRouteV2::SplitToBuy => (
+            SettlementLegV1::Order(record.buy_index),
+            SettlementLegV1::Split,
+            SettlementRouteV1::SplitToBuy,
+        ),
+        SettlementReceiptRouteV2::SellToMerge => (
+            SettlementLegV1::Merge,
+            SettlementLegV1::Order(record.sell_index),
+            SettlementRouteV1::SellToMerge,
+        ),
+    };
+    Ok(CanonicalSettlementSliceV1 {
+        buy,
+        sell,
+        route,
+        outcome: record.outcome,
+        quantity: record.quantity,
+    })
+}
+
+/// Parse one bounded selected fill from an already-authenticated immutable
+/// Feed borrow. This parser is not account or provenance authority; the SBF
+/// traversal capability owns the read-only account binding and exact full
+/// Feed data ID.
+pub fn read_authenticated_feed_fill_v5(
+    body: &[u8],
+    expected: CandidateFeedHeaderV2,
+    order_index: u8,
+) -> Result<u64, SettlementAdapterErrorV1> {
+    let (header, tail) = complete_candidate_feed_v2(body, true)?;
+    if header != expected || order_index >= header.order_count {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    read_feed_u64(tail.fills_le(), usize::from(order_index))
+}
+
+/// Parse one bounded canonical settlement slice from the immutable Feed borrow
+/// retained by the private SBF traversal capability.
+pub fn read_authenticated_feed_slice_v5(
+    body: &[u8],
+    expected: CandidateFeedHeaderV2,
+    slice_index: u16,
+) -> Result<CanonicalSettlementSliceV1, SettlementAdapterErrorV1> {
+    let (header, tail) = complete_candidate_feed_v2(body, true)?;
+    if header != expected || slice_index >= header.slice_count {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    canonical_feed_slice_v5(tail.slices_le(), slice_index)
 }
 
 
@@ -1414,28 +1808,38 @@ struct FeedSettlementFactsV3 {
 /// it may create a SettlementRoot. It deliberately contains no mutable
 /// Reservation or Position body and no legacy SelectedCandidate projection.
 #[derive(Clone, Copy, Debug)]
-pub struct SettlementTraversalProjectionV4 {
+pub struct SettlementTraversalProjectionV5 {
     selected_feed_account: Id32,
     candidate_bundle_digest: Id32,
+    feed_data_id: Id32,
     feed: CandidateFeedHeaderV2,
-    order_projection: OwnerBlindBookProjectionV2,
+    domain: clutch_batch::relation_v2::EconomicDomainV2,
+    economic_domain_digest: Id32,
+    price_grid_id: Id32,
+    realm: Id32,
+    neutral_sink: Id32,
+    page_count: u8,
+    page_accounts: [Id32; clutch_solana_layout::MAX_ORDER_PAGES],
+    page_physical_slot_counts: [u8; clutch_solana_layout::MAX_ORDER_PAGES],
+    page_live_order_counts: [u8; clutch_solana_layout::MAX_ORDER_PAGES],
+    page_data_ids: [Id32; clutch_solana_layout::MAX_ORDER_PAGES],
     owner_order_set_digest: Id32,
     terms: Id32,
     reservation_policy: Id32,
     position_market_binding: AdapterPositionMarketBindingV3,
-    settlement_memberships: [Option<AuthenticatedOrderMembershipV2>; MAX_ORDERS],
-    owner_basis: OwnerSettlementExpectationBasisBookV4,
+    expected_owner_count: u16,
     expected_reservation_count: u16,
     expected_filled_reservation_count: u16,
     expected_merge_payment_count: u16,
+    consideration_debit_atoms: u64,
+    seller_credit_atoms: u64,
+    rounding_pot_price_units: u128,
     virtual_cash_direction: VirtualCashDirectionV1,
     virtual_cash_atoms: u64,
-    first_slice: [u16; MAX_ORDERS],
-    slices: [CanonicalSettlementSliceV1; MAX_SLICES],
     prices: [u64; MAX_OUTCOMES],
 }
 
-impl SettlementTraversalProjectionV4 {
+impl SettlementTraversalProjectionV5 {
     /// Exact retained sealed Feed account presented to the traversal.
     pub const fn selected_feed_account(&self) -> Id32 {
         self.selected_feed_account
@@ -1446,14 +1850,53 @@ impl SettlementTraversalProjectionV4 {
         self.candidate_bundle_digest
     }
 
+    /// Full exact retained-Feed byte identity, distinct from its semantic digest.
+    pub const fn feed_data_id(&self) -> Id32 { self.feed_data_id }
+
     /// Exact checked retained Feed header.
     pub const fn feed(&self) -> CandidateFeedHeaderV2 {
         self.feed
     }
 
-    /// Complete generation-bearing V5 order projection.
-    pub const fn order_projection(&self) -> &OwnerBlindBookProjectionV2 {
-        &self.order_projection
+    /// Exact RelationV2 economic domain.
+    pub const fn domain(&self) -> &clutch_batch::relation_v2::EconomicDomainV2 { &self.domain }
+    /// Exact economic-domain content identity.
+    pub const fn economic_domain_digest(&self) -> Id32 { self.economic_domain_digest }
+    /// Canonical authenticated PriceGrid identity.
+    pub const fn price_grid_id(&self) -> Id32 { self.price_grid_id }
+    /// Immutable Realm identity.
+    pub const fn realm(&self) -> Id32 { self.realm }
+    /// MarketBinding-selected neutral donation sink.
+    pub const fn neutral_sink(&self) -> Id32 { self.neutral_sink }
+    /// Number of pages in the complete authenticated page set.
+    pub const fn page_count(&self) -> u8 { self.page_count }
+    /// Canonical page account at one active page index.
+    pub fn page_account(&self, page_index: u16) -> Option<Id32> {
+        if usize::from(page_index) < usize::from(self.page_count) {
+            Some(self.page_accounts[usize::from(page_index)])
+        } else {
+            None
+        }
+    }
+    /// Physical populated widths, including tombstones, by page.
+    pub const fn page_physical_slot_counts(
+        &self,
+    ) -> [u8; clutch_solana_layout::MAX_ORDER_PAGES] {
+        self.page_physical_slot_counts
+    }
+    /// Dense live-order widths by page.
+    pub const fn page_live_order_counts(
+        &self,
+    ) -> [u8; clutch_solana_layout::MAX_ORDER_PAGES] {
+        self.page_live_order_counts
+    }
+    /// Full exact page-data identity at one active page index.
+    pub fn page_data_id(&self, page_index: u16) -> Option<Id32> {
+        if usize::from(page_index) < usize::from(self.page_count) {
+            Some(self.page_data_ids[usize::from(page_index)])
+        } else {
+            None
+        }
     }
 
     /// Immutable candidate-wide membership digest excluding mutable bodies.
@@ -1476,22 +1919,8 @@ impl SettlementTraversalProjectionV4 {
         self.position_market_binding
     }
 
-    /// Canonical filled-order membership at one dense V5 order index.
-    pub fn settlement_membership(
-        &self,
-        order_index: u8,
-    ) -> Option<AuthenticatedOrderMembershipV2> {
-        if order_index < self.feed.order_count {
-            self.settlement_memberships[usize::from(order_index)]
-        } else {
-            None
-        }
-    }
-
-    /// Exact owner-sorted, no-cash-summary pre-fee expectation basis.
-    pub const fn owner_basis(&self) -> &OwnerSettlementExpectationBasisBookV4 {
-        &self.owner_basis
-    }
+    /// Number of distinct owners with nonzero selected fills.
+    pub const fn expected_owner_count(&self) -> u16 { self.expected_owner_count }
 
     /// Every frozen live order Reservation, including zero-fill orders.
     pub const fn expected_reservation_count(&self) -> u16 {
@@ -1508,6 +1937,13 @@ impl SettlementTraversalProjectionV4 {
         self.expected_merge_payment_count
     }
 
+    /// Exact aggregate debit atoms after the sole division boundary.
+    pub const fn consideration_debit_atoms(&self) -> u64 { self.consideration_debit_atoms }
+    /// Exact aggregate seller-credit atoms after the sole division boundary.
+    pub const fn seller_credit_atoms(&self) -> u64 { self.seller_credit_atoms }
+    /// Exact pre-division rounding-pot price units.
+    pub const fn rounding_pot_price_units(&self) -> u128 { self.rounding_pot_price_units }
+
     /// Canonical direct/split/merge direction derived from the sealed Feed.
     pub const fn virtual_cash_direction(&self) -> VirtualCashDirectionV1 {
         self.virtual_cash_direction
@@ -1516,25 +1952,6 @@ impl SettlementTraversalProjectionV4 {
     /// Exact selected complete-set principal derived from the sealed Feed.
     pub const fn virtual_cash_atoms(&self) -> u64 {
         self.virtual_cash_atoms
-    }
-
-    /// First canonical selected slice containing one filled real order.
-    pub fn first_slice(&self, order_index: u8) -> Option<u16> {
-        if order_index < self.feed.order_count {
-            let value = self.first_slice[usize::from(order_index)];
-            if value == u16::MAX { None } else { Some(value) }
-        } else {
-            None
-        }
-    }
-
-    /// Canonical retained-Feed settlement slice at one authenticated index.
-    pub fn settlement_slice(&self, slice_index: u16) -> Option<CanonicalSettlementSliceV1> {
-        if slice_index < self.feed.slice_count {
-            Some(self.slices[usize::from(slice_index)])
-        } else {
-            None
-        }
     }
 
     /// Canonical selected price at one active outcome.
@@ -1547,19 +1964,439 @@ impl SettlementTraversalProjectionV4 {
     }
 }
 
-/// Root-bound next-slice projection used only after action 39.
+/// Borrowed authenticated access to one compact traversal summary.
+///
+/// Implementations retain the exact sealed Feed and complete V5 page bytes;
+/// a summary alone cannot mint a slice, order membership, or owner basis.
+pub trait SettlementTraversalAccessV5: core::fmt::Debug {
+    /// Compact exhaustive summary bound to the retained byte sources.
+    fn projection(&self) -> &SettlementTraversalProjectionV5;
+    /// Read one dense live order from its exact containing page.
+    fn order(
+        &self,
+        order_index: u8,
+    ) -> Result<Option<StreamedOwnerBlindOrderV5>, SettlementAdapterErrorV1>;
+    /// Read one canonical settlement slice from the retained Feed.
+    fn settlement_slice(
+        &self,
+        slice_index: u16,
+    ) -> Result<CanonicalSettlementSliceV1, SettlementAdapterErrorV1>;
+    /// Read one selected fill from the retained Feed.
+    fn selected_fill(&self, order_index: u8) -> Result<u64, SettlementAdapterErrorV1>;
+
+    /// Exact selected price at one active outcome.
+    fn outcome_price(&self, outcome: u8) -> Result<u64, SettlementAdapterErrorV1> {
+        self.projection()
+            .outcome_price(outcome)
+            .ok_or(SettlementAdapterErrorV1::BindingMismatch)
+    }
+
+    /// First canonical slice containing one dense order, if it was filled.
+    fn first_slice(&self, order_index: u8) -> Result<Option<u16>, SettlementAdapterErrorV1> {
+        if order_index >= self.projection().feed.order_count {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        let mut slice_index = 0u16;
+        while slice_index < self.projection().feed.slice_count {
+            let slice = self.settlement_slice(slice_index)?;
+            if slice.buy == SettlementLegV1::Order(order_index)
+                || slice.sell == SettlementLegV1::Order(order_index)
+            {
+                return Ok(Some(slice_index));
+            }
+            slice_index = slice_index
+                .checked_add(1)
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        }
+        Ok(None)
+    }
+
+    /// Reconstruct exact filled-order settlement membership.
+    fn settlement_membership(
+        &self,
+        order_index: u8,
+    ) -> Result<Option<AuthenticatedOrderMembershipV2>, SettlementAdapterErrorV1> {
+        derive_streamed_settlement_membership_v5(self, order_index)
+    }
+
+    /// Reconstruct the exact aggregate expectation for one participating owner.
+    fn owner_basis(
+        &self,
+        owner: Id32,
+    ) -> Result<OwnerSettlementExpectationBasisV4, SettlementAdapterErrorV1> {
+        derive_streamed_owner_basis_v5(self, owner)
+    }
+}
+
+/// Pure borrowed implementation used by host callers and by the SBF adapter
+/// after it has retained the exact account-data borrows.
 #[derive(Clone, Copy, Debug)]
-pub struct CandidateEntitlementProjectionV4 {
+pub struct BorrowedSettlementTraversalV5<'a, B: SettlementOrderBookAccessV5 + ?Sized> {
+    projection: &'a SettlementTraversalProjectionV5,
+    feed: SettlementFeedViewV5<'a>,
+    book: &'a B,
+}
+
+impl<B: SettlementOrderBookAccessV5 + ?Sized> SettlementTraversalAccessV5
+    for BorrowedSettlementTraversalV5<'_, B>
+{
+    fn projection(&self) -> &SettlementTraversalProjectionV5 { self.projection }
+
+    fn order(
+        &self,
+        order_index: u8,
+    ) -> Result<Option<StreamedOwnerBlindOrderV5>, SettlementAdapterErrorV1> {
+        self.book.order(order_index)
+    }
+
+    fn settlement_slice(
+        &self,
+        slice_index: u16,
+    ) -> Result<CanonicalSettlementSliceV1, SettlementAdapterErrorV1> {
+        self.feed.settlement_slice(slice_index)
+    }
+
+    fn selected_fill(&self, order_index: u8) -> Result<u64, SettlementAdapterErrorV1> {
+        self.feed.fill(order_index)
+    }
+}
+
+/// Rebind exact borrowed Feed/page sources to one compact authenticated summary.
+pub fn bind_borrowed_settlement_traversal_v5<'a, B: SettlementOrderBookAccessV5 + ?Sized>(
+    projection: &'a SettlementTraversalProjectionV5,
+    feed: SettlementFeedViewV5<'a>,
+    book: &'a B,
+) -> Result<BorrowedSettlementTraversalV5<'a, B>, SettlementAdapterErrorV1> {
+    if feed.account != projection.selected_feed_account
+        || feed.candidate_bundle_digest != projection.candidate_bundle_digest
+        || feed.data_id != projection.feed_data_id
+        || feed.header != projection.feed
+        || book.market() != projection.feed.market
+        || book.epoch() != projection.feed.epoch
+        || book.order_set() != projection.feed.order_set
+        || book.order_count() != projection.feed.order_count
+        || book.domain() != &projection.domain
+        || book.economic_domain_digest() != projection.economic_domain_digest
+        || book.price_grid_id() != projection.price_grid_id
+        || book.realm() != projection.realm
+        || book.market_binding().neutral_sink != projection.neutral_sink
+        || book.page_count() != projection.page_count
+        || book.page_physical_slot_counts() != projection.page_physical_slot_counts
+        || book.page_live_order_counts() != projection.page_live_order_counts
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let mut page = 0u16;
+    while usize::from(page) < usize::from(projection.page_count) {
+        if book.page_account(page) != projection.page_account(page) {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        if book.page_data_id(page) != projection.page_data_id(page) {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        page = page
+            .checked_add(1)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    }
+    Ok(BorrowedSettlementTraversalV5 { projection, feed, book })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct StreamedFeedOrderFactsV5 {
+    entitled_units: u64,
+    consideration_price_units: u128,
+    end_count: u16,
+    merge_delivery_count: u16,
+    first_slice: Option<u16>,
+}
+
+fn streamed_feed_order_facts_v5<T: SettlementTraversalAccessV5 + ?Sized>(
+    traversal: &T,
+    order_index: u8,
+) -> Result<StreamedFeedOrderFactsV5, SettlementAdapterErrorV1> {
+    let projection = traversal.projection();
+    let row = traversal
+        .order(order_index)?
+        .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+    let economic = row.economic_order();
+    let mut entitled_units = 0u64;
+    let mut consideration_price_units = 0u128;
+    let mut end_count = 0u16;
+    let mut merge_delivery_count = 0u16;
+    let mut first_slice = None;
+    let mut observed_outcome_units = [0u64; MAX_OUTCOMES];
+    let mut slice_index = 0u16;
+    while slice_index < projection.feed.slice_count {
+        let slice = traversal.settlement_slice(slice_index)?;
+        let mut occurrences = 0u8;
+        if slice.buy == SettlementLegV1::Order(order_index) {
+            if economic.side != Side::Buy {
+                return Err(SettlementAdapterErrorV1::BindingMismatch);
+            }
+            occurrences = occurrences
+                .checked_add(1)
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        }
+        if slice.sell == SettlementLegV1::Order(order_index) {
+            if economic.side != Side::Sell {
+                return Err(SettlementAdapterErrorV1::BindingMismatch);
+            }
+            occurrences = occurrences
+                .checked_add(1)
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+            if slice.route == SettlementRouteV1::SellToMerge {
+                merge_delivery_count = merge_delivery_count
+                    .checked_add(1)
+                    .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+            }
+        }
+        if occurrences != 0 {
+            if slice.outcome >= projection.feed.outcome_count {
+                return Err(SettlementAdapterErrorV1::BindingMismatch);
+            }
+            if first_slice.is_none() {
+                first_slice = Some(slice_index);
+            }
+            end_count = end_count
+                .checked_add(u16::from(occurrences))
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+            let quantity = slice
+                .quantity
+                .checked_mul(u64::from(occurrences))
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+            observed_outcome_units[usize::from(slice.outcome)] =
+                observed_outcome_units[usize::from(slice.outcome)]
+                    .checked_add(quantity)
+                    .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+            entitled_units = entitled_units
+                .checked_add(quantity)
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+            consideration_price_units = consideration_price_units
+                .checked_add(
+                    u128::from(quantity)
+                        .checked_mul(u128::from(traversal.outcome_price(slice.outcome)?))
+                        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?,
+                )
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        }
+        slice_index = slice_index
+            .checked_add(1)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    }
+    let fill = projection_feed_fill_v5(traversal, order_index)?;
+    let order_bit = 1u64
+        .checked_shl(u32::from(order_index))
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    let honored_aon = projection.feed.honored_aon_mask & order_bit != 0;
+    let partial_valid = match economic.partial_policy {
+        clutch_batch::PartialPolicy::Allow => {
+            !honored_aon && (fill == 0 || fill >= economic.minimum_fill)
+        }
+        clutch_batch::PartialPolicy::AllOrNone => {
+            (fill == 0 || fill == economic.quantity) && honored_aon == (fill != 0)
+        }
+    };
+    let mut unit_price = 0u128;
+    let mut price_outcome = 0u8;
+    while price_outcome < projection.feed.outcome_count {
+        unit_price = unit_price
+            .checked_add(
+                u128::from(economic.coefficients[usize::from(price_outcome)])
+                    .checked_mul(u128::from(traversal.outcome_price(price_outcome)?))
+                    .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?,
+            )
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        price_outcome = price_outcome
+            .checked_add(1)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    }
+    let price_valid = fill == 0
+        || match economic.side {
+            Side::Buy => unit_price <= economic.limit_value_price_units_per_unit,
+            Side::Sell => unit_price >= economic.limit_value_price_units_per_unit,
+        };
+    if fill > economic.quantity || !partial_valid || !price_valid {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let mut outcome = 0usize;
+    while outcome < usize::from(projection.feed.outcome_count) {
+        let expected = economic.coefficients[outcome]
+            .checked_mul(fill)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        if observed_outcome_units[outcome] != expected {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        outcome += 1;
+    }
+    while outcome < MAX_OUTCOMES {
+        if economic.coefficients[outcome] != 0 || observed_outcome_units[outcome] != 0 {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        outcome += 1;
+    }
+    if (fill == 0) != (end_count == 0)
+        || (fill == 0) != first_slice.is_none()
+        || (economic.side == Side::Buy && merge_delivery_count != 0)
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    Ok(StreamedFeedOrderFactsV5 {
+        entitled_units,
+        consideration_price_units,
+        end_count,
+        merge_delivery_count,
+        first_slice,
+    })
+}
+
+fn projection_feed_fill_v5<T: SettlementTraversalAccessV5 + ?Sized>(
+    traversal: &T,
+    order_index: u8,
+) -> Result<u64, SettlementAdapterErrorV1> {
+    let projection = traversal.projection();
+    if order_index >= projection.feed.order_count {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    traversal.selected_fill(order_index)
+}
+
+fn derive_streamed_settlement_membership_v5<T: SettlementTraversalAccessV5 + ?Sized>(
+    traversal: &T,
+    order_index: u8,
+) -> Result<Option<AuthenticatedOrderMembershipV2>, SettlementAdapterErrorV1> {
+    let projection = traversal.projection();
+    let facts = streamed_feed_order_facts_v5(traversal, order_index)?;
+    if facts.end_count == 0 {
+        return Ok(None);
+    }
+    let row = traversal
+        .order(order_index)?
+        .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+    let membership = row.membership();
+    let reservation = canonical_reservation_id_v9(
+        LayoutHash32(projection.feed.market.bytes()),
+        LayoutHash32(projection.feed.epoch.bytes()),
+        LayoutHash32(membership.owner().bytes()),
+        row.position_generation(),
+        LayoutHash32(membership.order_id().bytes()),
+    );
+    let (order_kind, single_outcome) = match membership.slot() {
+        OrderSlot::Single(record) => (OrderKindV1::Single, record.outcome),
+        OrderSlot::Portfolio(_) => (OrderKindV1::Portfolio, u8::MAX),
+        OrderSlot::Empty | OrderSlot::Tombstone(_) => {
+            return Err(SettlementAdapterErrorV1::BindingMismatch)
+        }
+    };
+    let value = AuthenticatedOrderMembershipV2 {
+        market: projection.feed.market.bytes(),
+        epoch: projection.feed.epoch.bytes(),
+        candidate: projection.feed.settlement_candidate_id.bytes(),
+        owner_order_set_digest: projection.owner_order_set_digest.bytes(),
+        order_id: membership.order_id().bytes(),
+        reservation: reservation.bytes(),
+        owner: membership.owner().bytes(),
+        order_index,
+        order_generation: membership.generation(),
+        position_generation: row.position_generation(),
+        side: match row.economic_order().side {
+            Side::Buy => SettlementSideV1::Buy,
+            Side::Sell => SettlementSideV1::Sell,
+        },
+        order_kind,
+        outcome_count: projection.feed.outcome_count,
+        single_outcome,
+        entitled_units: facts.entitled_units,
+        entitled_consideration_price_units: PresentConsiderationV2::new(
+            facts.consideration_price_units,
+        ),
+    };
+    value.validate()?;
+    Ok(Some(value))
+}
+
+struct TraversalVerifiedOrderStreamV5<'a, T: SettlementTraversalAccessV5 + ?Sized> {
+    traversal: &'a T,
+}
+
+impl<T: SettlementTraversalAccessV5 + ?Sized> VerifiedSettlementOrderStreamV4
+    for TraversalVerifiedOrderStreamV5<'_, T>
+{
+    fn order_count(&self) -> u8 { self.traversal.projection().feed.order_count }
+
+    fn order(
+        &self,
+        index: u8,
+    ) -> clutch_owner_settlement::Result<Option<VerifiedSettlementOrderV4>> {
+        let facts = streamed_feed_order_facts_v5(self.traversal, index)
+            .map_err(|_| OwnerSettlementError::InvalidOrder)?;
+        if facts.end_count == 0 {
+            return Ok(None);
+        }
+        let row = self
+            .traversal
+            .order(index)
+            .map_err(|_| OwnerSettlementError::InvalidOrder)?
+            .ok_or(OwnerSettlementError::InvalidOrder)?;
+        Ok(Some(VerifiedSettlementOrderV4 {
+            owner: row.membership().owner().bytes(),
+            order_index: index,
+            side: match row.economic_order().side {
+                Side::Buy => SettlementSideV1::Buy,
+                Side::Sell => SettlementSideV1::Sell,
+            },
+            consideration_price_units: PresentConsiderationV2::new(
+                facts.consideration_price_units,
+            ),
+            slice_count: facts.end_count,
+            merge_delivery_count: facts.merge_delivery_count,
+        }))
+    }
+}
+
+fn derive_streamed_owner_basis_v5<T: SettlementTraversalAccessV5 + ?Sized>(
+    traversal: &T,
+    owner: Id32,
+) -> Result<OwnerSettlementExpectationBasisV4, SettlementAdapterErrorV1> {
+    if owner.is_zero() {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let projection = traversal.projection();
+    let summary = derive_owner_settlement_expectation_stream_v4(
+        projection.feed.market.bytes(),
+        projection.feed.epoch.bytes(),
+        projection.feed.settlement_candidate_id.bytes(),
+        projection.owner_order_set_digest.bytes(),
+        projection.feed.price_scale,
+        Some(owner.bytes()),
+        &TraversalVerifiedOrderStreamV5 { traversal },
+    )?;
+    if summary.owner_count() != projection.expected_owner_count
+        || summary.filled_order_count() != projection.expected_filled_reservation_count
+        || summary.expected_merge_delivery_count() != projection.expected_merge_payment_count
+        || summary.consideration_debit_atoms() != projection.consideration_debit_atoms
+        || summary.seller_credit_atoms() != projection.seller_credit_atoms
+        || summary.rounding_pot_price_units() != projection.rounding_pot_price_units
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    summary
+        .requested_owner_basis()
+        .ok_or(SettlementAdapterErrorV1::BindingMismatch)
+}
+
+/// Root-bound next-slice projection used only after action 39.
+#[derive(Debug)]
+pub struct CandidateEntitlementProjectionV5<'a> {
     settlement_root_account: Id32,
     settlement_root: SettlementRootV1AccountV1,
-    traversal: SettlementTraversalProjectionV4,
+    traversal: &'a dyn SettlementTraversalAccessV5,
     current_slice: CanonicalSettlementSliceV1,
     current_price: u64,
     current_buy_first_owner: bool,
     current_sell_first_owner: bool,
 }
 
-impl CandidateEntitlementProjectionV4 {
+impl CandidateEntitlementProjectionV5<'_> {
     /// Counted SettlementRoot account advanced atomically by action 24.
     pub const fn settlement_root_account(&self) -> Id32 {
         self.settlement_root_account
@@ -1571,75 +2408,76 @@ impl CandidateEntitlementProjectionV4 {
     }
 
     /// Exhaustive immutable traversal joined to this root.
-    pub const fn traversal(&self) -> &SettlementTraversalProjectionV4 {
-        &self.traversal
+    pub const fn traversal(&self) -> &dyn SettlementTraversalAccessV5 {
+        self.traversal
     }
 
     /// Counted retained sealed Feed account.
     pub const fn selected_feed_account(&self) -> Id32 {
-        self.traversal.selected_feed_account
+        self.traversal.projection().selected_feed_account
     }
 
     /// Exact checked retained Feed header.
     pub const fn feed(&self) -> CandidateFeedHeaderV2 {
-        self.traversal.feed
-    }
-
-    /// Complete generation-bearing V5 order projection.
-    pub const fn order_projection(&self) -> &OwnerBlindBookProjectionV2 {
-        &self.traversal.order_projection
+        self.traversal.projection().feed
     }
 
     /// Immutable candidate-wide membership digest excluding mutable bodies.
     pub const fn owner_order_set_digest(&self) -> Id32 {
-        self.traversal.owner_order_set_digest
+        self.traversal.projection().owner_order_set_digest
     }
 
     /// Exact immutable Reservation terms identity.
     pub const fn terms(&self) -> Id32 {
-        self.traversal.terms
+        self.traversal.projection().terms
     }
 
     /// Exact immutable Reservation policy identity.
     pub const fn reservation_policy(&self) -> Id32 {
-        self.traversal.reservation_policy
+        self.traversal.projection().reservation_policy
     }
 
     /// Full immutable MarketInstance/Realm/policy/release Position binding.
     pub const fn position_market_binding(&self) -> AdapterPositionMarketBindingV3 {
-        self.traversal.position_market_binding
+        self.traversal.projection().position_market_binding
     }
 
     /// Canonical filled-order membership at one dense V5 order index.
     pub fn settlement_membership(
         &self,
         order_index: u8,
-    ) -> Option<AuthenticatedOrderMembershipV2> {
+    ) -> Result<Option<AuthenticatedOrderMembershipV2>, SettlementAdapterErrorV1> {
         self.traversal.settlement_membership(order_index)
     }
 
-    /// Exact owner-sorted, no-cash-summary pre-fee expectation basis.
-    pub const fn owner_basis(&self) -> &OwnerSettlementExpectationBasisBookV4 {
-        &self.traversal.owner_basis
+    /// Exact no-cash-summary basis for one authenticated participating owner.
+    pub fn owner_basis(
+        &self,
+        owner: Id32,
+    ) -> Result<OwnerSettlementExpectationBasisV4, SettlementAdapterErrorV1> {
+        self.traversal.owner_basis(owner)
     }
 
     /// Every frozen live order Reservation, including zero-fill orders.
     pub const fn expected_reservation_count(&self) -> u16 {
-        self.traversal.expected_reservation_count
+        self.traversal.projection().expected_reservation_count
     }
 
     /// Distinct filled Reservations admitted by action 24.
     pub const fn expected_filled_reservation_count(&self) -> u16 {
-        self.traversal.expected_filled_reservation_count
+        self.traversal.projection().expected_filled_reservation_count
     }
 
     /// Merge receipts requiring the later action-40 payment latch.
     pub const fn expected_merge_payment_count(&self) -> u16 {
-        self.traversal.expected_merge_payment_count
+        self.traversal.projection().expected_merge_payment_count
     }
 
     /// First canonical selected slice containing one filled real order.
-    pub fn first_slice(&self, order_index: u8) -> Option<u16> {
+    pub fn first_slice(
+        &self,
+        order_index: u8,
+    ) -> Result<Option<u16>, SettlementAdapterErrorV1> {
         self.traversal.first_slice(order_index)
     }
 
@@ -1654,163 +2492,160 @@ impl CandidateEntitlementProjectionV4 {
     }
 }
 
-/// Reconstruct the complete immutable pre-root basis without reading any
-/// current Reservation or Position body.
+fn derive_owner_order_set_digest_stream_v5<B: SettlementOrderBookAccessV5 + ?Sized>(
+    book: &B,
+    terms: Id32,
+    reservation_policy: Id32,
+    position_market: AdapterPositionMarketBindingV3,
+) -> Result<Id32, SettlementAdapterErrorV1> {
+    if terms.is_zero()
+        || reservation_policy.is_zero()
+        || position_market.market_instance_id.bytes()
+            != book.market_binding().market_instance_v2_id.bytes()
+        || position_market.realm_id.bytes() != book.realm().bytes()
+        || position_market.outcome_count != book.domain().outcome_count
+    {
+        return Err(SettlementAdapterErrorV1::PositionSetMismatch);
+    }
+    let mut hash = Sha256::new();
+    hash.update(OWNER_ORDER_SET_DIGEST_DOMAIN_V2);
+    hash.update(book.market().bytes());
+    hash.update(book.epoch().bytes());
+    hash.update(book.order_set().bytes());
+    hash.update(book.economic_domain_digest().bytes());
+    hash.update(book.price_grid_id().bytes());
+    hash.update(terms.bytes());
+    hash.update(reservation_policy.bytes());
+    hash.update(book.market_binding().settlement_policy_id.bytes());
+    hash.update(position_market.market_instance_id.bytes());
+    hash.update(position_market.realm_id.bytes());
+    hash.update(position_market.collateral_policy_id.bytes());
+    hash.update(position_market.collateral_release_id.bytes());
+    hash.update([position_market.outcome_count]);
+    hash.update(POSITION_V3_PDA_PREFIX);
+    hash.update([u8::from(PositionPurposeV3::General)]);
+    hash.update(book.market().bytes());
+    hash.update([book.order_count()]);
+    let mut order = 0u8;
+    while order < book.order_count() {
+        let row = book
+            .order(order)?
+            .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+        let membership = row.membership();
+        let mut prior = 0u8;
+        while prior < order {
+            let previous = book
+                .order(prior)?
+                .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+            if previous.membership().owner() == membership.owner()
+                && previous.position_generation() != row.position_generation()
+            {
+                return Err(SettlementAdapterErrorV1::PositionSetMismatch);
+            }
+            prior = prior
+                .checked_add(1)
+                .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+        }
+        let page_seed = GeneralOrderPageSeedTupleV5::new(book.epoch(), row.page_index())?;
+        let reservation = canonical_reservation_id_v9(
+            LayoutHash32(book.market().bytes()),
+            LayoutHash32(book.epoch().bytes()),
+            LayoutHash32(membership.owner().bytes()),
+            row.position_generation(),
+            LayoutHash32(membership.order_id().bytes()),
+        );
+        hash.update([order]);
+        hash.update(membership.order_id().bytes());
+        hash.update(membership.owner().bytes());
+        hash.update(membership.generation().to_le_bytes());
+        hash.update(row.position_generation().to_le_bytes());
+        hash.update(reservation.bytes());
+        hash.update(page_seed.domain());
+        hash.update(page_seed.epoch());
+        hash.update(page_seed.page_index_le());
+        hash.update([membership.kind().code()]);
+        hash.update([match row.economic_order().side {
+            Side::Buy => 0,
+            Side::Sell => 1,
+        }]);
+        hash.update(POSITION_V3_PDA_PREFIX);
+        hash.update(position_market.market_instance_id.bytes());
+        hash.update(membership.owner().bytes());
+        hash.update([u8::from(PositionPurposeV3::General)]);
+        hash.update(book.market().bytes());
+        order = order
+            .checked_add(1)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    }
+    Id32::new(hash.finalize().into()).map_err(SettlementAdapterErrorV1::Contract)
+}
+
+/// Reconstruct the compact immutable traversal without reading any current
+/// Reservation or Position body.
 #[allow(clippy::too_many_arguments)]
-pub fn derive_settlement_traversal_projection_v4(
-    selected_feed_account: Id32,
-    selected_feed_body: &[u8],
-    order_projection: &OwnerBlindBookProjectionV2,
+pub fn derive_settlement_traversal_projection_v5<B: SettlementOrderBookAccessV5 + ?Sized>(
+    selected_feed: SettlementFeedViewV5<'_>,
+    book: &B,
     expected_terms: Id32,
     expected_reservation_policy: Id32,
     collateral: BoundCollateralProfileV2,
-) -> Result<SettlementTraversalProjectionV4, SettlementAdapterErrorV1> {
-    let projection = order_projection.base();
-    let (feed, tail) = complete_candidate_feed_v2(selected_feed_body, true)?;
-    let feed_bundle_id = derive_candidate_bundle_digest_v1(selected_feed_body)?;
-    if selected_feed_account.is_zero()
-        || feed_bundle_id.is_zero()
-        || feed.slice_count == 0
-        || projection.market() != feed.market
-        || projection.epoch() != feed.epoch
-        || projection.order_set() != feed.order_set
-        || projection.economic_domain_digest() != feed.economic_domain_digest
-        || projection.market_binding().relation_policy_id != feed.relation_policy_id
-        || projection.market_binding().price_measure_policy_v1_id
+) -> Result<SettlementTraversalProjectionV5, SettlementAdapterErrorV1> {
+    let feed = selected_feed.header;
+    if book.market() != feed.market
+        || book.epoch() != feed.epoch
+        || book.order_set() != feed.order_set
+        || book.economic_domain_digest() != feed.economic_domain_digest
+        || book.market_binding().relation_policy_id != feed.relation_policy_id
+        || book.market_binding().price_measure_policy_v1_id
             != feed.price_measure_policy_v1_id
-        || projection.market_binding().native_claim_basis_id != feed.native_claim_basis_id
-        || projection.domain().price_scale != feed.price_scale
-        || projection.domain().outcome_count != feed.outcome_count
-        || projection.book().len != feed.order_count
+        || book.market_binding().native_claim_basis_id != feed.native_claim_basis_id
+        || book.domain().price_scale != feed.price_scale
+        || book.domain().outcome_count != feed.outcome_count
+        || book.order_count() != feed.order_count
         || expected_terms.is_zero()
         || expected_reservation_policy.is_zero()
     {
         return Err(SettlementAdapterErrorV1::BindingMismatch);
     }
-    let position_market_binding = settlement_position_market_binding_v3(projection, collateral)?;
-    let facts = derive_feed_settlement_facts_v3(
-        feed,
-        tail.prices_le(),
-        tail.fills_le(),
-        tail.slices_le(),
-        projection,
-    )?;
-    let owner_order_set_digest = derive_owner_order_set_digest_v2(
-        order_projection,
+    let position_market_binding = settlement_position_market_binding_stream_v5(book, collateral)?;
+    let owner_order_set_digest = derive_owner_order_set_digest_stream_v5(
+        book,
         expected_terms,
         expected_reservation_policy,
         position_market_binding,
     )?;
-    let mut settlement_memberships = [None; MAX_ORDERS];
-    let mut orders = [VerifiedSettlementOrderV4 {
-        owner: [0; 32],
-        order_index: 0,
-        side: SettlementSideV1::Buy,
-        consideration_price_units: PresentConsiderationV2::ABSENT,
-        slice_count: 0,
-        merge_delivery_count: 0,
-    }; MAX_ORDERS];
-    let mut order_len = 0usize;
-    let mut order = 0usize;
-    while order < usize::from(feed.order_count) {
-        if facts.end_count[order] != 0 {
-            let order_index =
-                u8::try_from(order).map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?;
-            let frozen = projection
-                .order_membership(order_index)
-                .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
-            let position_generation = order_projection
-                .position_generation(order_index)
-                .ok_or(SettlementAdapterErrorV1::PositionSetMismatch)?;
-            let reservation = canonical_reservation_id_v9(
-                LayoutHash32(frozen_identity(projection.market())),
-                LayoutHash32(frozen_identity(projection.epoch())),
-                LayoutHash32(frozen_identity(frozen.owner())),
-                position_generation,
-                LayoutHash32(frozen_identity(frozen.order_id())),
-            );
-            let side = match projection.book().orders[order].side {
-                Side::Buy => SettlementSideV1::Buy,
-                Side::Sell => SettlementSideV1::Sell,
-            };
-            let (order_kind, single_outcome) = match frozen.slot() {
-                OrderSlot::Single(record) => (OrderKindV1::Single, record.outcome),
-                OrderSlot::Portfolio(_) => (OrderKindV1::Portfolio, u8::MAX),
-                OrderSlot::Empty | OrderSlot::Tombstone(_) => {
-                    return Err(SettlementAdapterErrorV1::BindingMismatch)
-                }
-            };
-            let membership = AuthenticatedOrderMembershipV2 {
-                market: projection.market().bytes(),
-                epoch: projection.epoch().bytes(),
-                candidate: feed.settlement_candidate_id.bytes(),
-                owner_order_set_digest: owner_order_set_digest.bytes(),
-                order_id: frozen.order_id().bytes(),
-                reservation: reservation.bytes(),
-                owner: frozen.owner().bytes(),
-                order_index,
-                order_generation: frozen.generation(),
-                position_generation,
-                side,
-                order_kind,
-                outcome_count: feed.outcome_count,
-                single_outcome,
-                entitled_units: facts.entitled_units[order],
-                entitled_consideration_price_units: PresentConsiderationV2::new(
-                    facts.consideration_price_units[order],
-                ),
-            };
-            membership.validate()?;
-            settlement_memberships[order] = Some(membership);
-            orders[order_len] = VerifiedSettlementOrderV4 {
-                owner: frozen.owner().bytes(),
-                order_index,
-                side,
-                consideration_price_units: PresentConsiderationV2::new(
-                    facts.consideration_price_units[order],
-                ),
-                slice_count: facts.end_count[order],
-                merge_delivery_count: facts.merge_delivery_count[order],
-            };
-            order_len += 1;
+    let mut prices = [0u64; MAX_OUTCOMES];
+    let mut price_sum = 0u64;
+    let mut outcome = 0u8;
+    while outcome < feed.outcome_count {
+        let price = selected_feed.price(outcome)?;
+        if price > feed.price_scale {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
         }
-        order += 1;
-    }
-    if order_len == 0 {
-        return Err(SettlementAdapterErrorV1::BindingMismatch);
-    }
-    let owner_basis = build_owner_settlement_expectation_basis_book_v4(
-        projection.market().bytes(),
-        projection.epoch().bytes(),
-        feed.settlement_candidate_id.bytes(),
-        owner_order_set_digest.bytes(),
-        feed.price_scale,
-        &orders,
-        u8::try_from(order_len).map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?,
-    )?;
-    let mut expected_merge_payment_count = 0u16;
-    let mut owner_ordinal = 0u16;
-    while owner_ordinal < owner_basis.owner_count() {
-        let basis = owner_basis
-            .row(owner_ordinal)
-            .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
-        expected_merge_payment_count = expected_merge_payment_count
-            .checked_add(basis.expected_merge_delivery_count())
+        prices[usize::from(outcome)] = price;
+        price_sum = price_sum
+            .checked_add(price)
             .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
-        owner_ordinal = owner_ordinal
+        outcome = outcome
             .checked_add(1)
             .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
     }
-    let mut feed_merge_payment_count = 0u16;
-    order = 0;
-    while order < usize::from(feed.order_count) {
-        feed_merge_payment_count = feed_merge_payment_count
-            .checked_add(facts.merge_delivery_count[order])
-            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
-        order += 1;
-    }
-    if expected_merge_payment_count != feed_merge_payment_count {
+    if price_sum != feed.price_scale {
         return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let mut page_accounts = [Id32::ZERO; clutch_solana_layout::MAX_ORDER_PAGES];
+    let mut page_data_ids = [Id32::ZERO; clutch_solana_layout::MAX_ORDER_PAGES];
+    let mut page = 0u16;
+    while usize::from(page) < usize::from(book.page_count()) {
+        page_accounts[usize::from(page)] = book
+            .page_account(page)
+            .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+        page_data_ids[usize::from(page)] = book
+            .page_data_id(page)
+            .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+        page = page
+            .checked_add(1)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
     }
     let (virtual_cash_direction, virtual_cash_atoms) = match (feed.virtual_split, feed.virtual_merge)
     {
@@ -1819,42 +2654,145 @@ pub fn derive_settlement_traversal_projection_v4(
         (0, merge) => (VirtualCashDirectionV1::Merge, merge),
         _ => return Err(SettlementAdapterErrorV1::BindingMismatch),
     };
-    if (virtual_cash_direction == VirtualCashDirectionV1::Merge)
-        != (expected_merge_payment_count != 0)
-    {
-        return Err(SettlementAdapterErrorV1::BindingMismatch);
-    }
-    Ok(SettlementTraversalProjectionV4 {
-        selected_feed_account,
-        candidate_bundle_digest: feed_bundle_id,
+    let mut projection = SettlementTraversalProjectionV5 {
+        selected_feed_account: selected_feed.account,
+        candidate_bundle_digest: selected_feed.candidate_bundle_digest,
+        feed_data_id: selected_feed.data_id,
         feed,
-        order_projection: *order_projection,
+        domain: *book.domain(),
+        economic_domain_digest: book.economic_domain_digest(),
+        price_grid_id: book.price_grid_id(),
+        realm: book.realm(),
+        neutral_sink: book.market_binding().neutral_sink,
+        page_count: book.page_count(),
+        page_accounts,
+        page_physical_slot_counts: book.page_physical_slot_counts(),
+        page_live_order_counts: book.page_live_order_counts(),
+        page_data_ids,
         owner_order_set_digest,
         terms: expected_terms,
         reservation_policy: expected_reservation_policy,
         position_market_binding,
-        settlement_memberships,
-        owner_basis,
+        expected_owner_count: 0,
         expected_reservation_count: u16::from(feed.order_count),
-        expected_filled_reservation_count: u16::try_from(order_len)
-            .map_err(|_| SettlementAdapterErrorV1::ArithmeticOverflow)?,
-        expected_merge_payment_count,
+        expected_filled_reservation_count: 0,
+        expected_merge_payment_count: 0,
+        consideration_debit_atoms: 0,
+        seller_credit_atoms: 0,
+        rounding_pot_price_units: 0,
         virtual_cash_direction,
         virtual_cash_atoms,
-        first_slice: facts.first_slice,
-        slices: facts.slices,
-        prices: facts.prices,
-    })
+        prices,
+    };
+    let access = BorrowedSettlementTraversalV5 {
+        projection: &projection,
+        feed: selected_feed,
+        book,
+    };
+    let mut split_by_outcome = [0u64; MAX_OUTCOMES];
+    let mut merge_by_outcome = [0u64; MAX_OUTCOMES];
+    let mut slice_index = 0u16;
+    while slice_index < feed.slice_count {
+        let slice = access.settlement_slice(slice_index)?;
+        if slice.outcome >= feed.outcome_count {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        match slice.buy {
+            SettlementLegV1::Order(index) => {
+                let row = access
+                    .order(index)?
+                    .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+                if row.economic_order().side != Side::Buy {
+                    return Err(SettlementAdapterErrorV1::BindingMismatch);
+                }
+            }
+            SettlementLegV1::Split => {
+                return Err(SettlementAdapterErrorV1::BindingMismatch)
+            }
+            SettlementLegV1::Merge => {
+                merge_by_outcome[usize::from(slice.outcome)] =
+                    merge_by_outcome[usize::from(slice.outcome)]
+                        .checked_add(slice.quantity)
+                        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+            }
+        }
+        match slice.sell {
+            SettlementLegV1::Order(index) => {
+                let row = access
+                    .order(index)?
+                    .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+                if row.economic_order().side != Side::Sell {
+                    return Err(SettlementAdapterErrorV1::BindingMismatch);
+                }
+                if let SettlementLegV1::Order(buy_index) = slice.buy {
+                    let buyer = access
+                        .order(buy_index)?
+                        .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+                    if buyer.membership().owner() == row.membership().owner() {
+                        return Err(SettlementAdapterErrorV1::OwnerPairingInfeasible);
+                    }
+                }
+            }
+            SettlementLegV1::Split => {
+                split_by_outcome[usize::from(slice.outcome)] =
+                    split_by_outcome[usize::from(slice.outcome)]
+                        .checked_add(slice.quantity)
+                        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+            }
+            SettlementLegV1::Merge => {
+                return Err(SettlementAdapterErrorV1::BindingMismatch)
+            }
+        }
+        slice_index = slice_index
+            .checked_add(1)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    }
+    outcome = 0;
+    while outcome < feed.outcome_count {
+        if split_by_outcome[usize::from(outcome)] != feed.virtual_split
+            || merge_by_outcome[usize::from(outcome)] != feed.virtual_merge
+        {
+            return Err(SettlementAdapterErrorV1::BindingMismatch);
+        }
+        outcome = outcome
+            .checked_add(1)
+            .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    }
+    let owner_summary = derive_owner_settlement_expectation_stream_v4(
+        feed.market.bytes(),
+        feed.epoch.bytes(),
+        feed.settlement_candidate_id.bytes(),
+        owner_order_set_digest.bytes(),
+        feed.price_scale,
+        None,
+        &TraversalVerifiedOrderStreamV5 { traversal: &access },
+    )?;
+    if (virtual_cash_direction == VirtualCashDirectionV1::Merge)
+        != (owner_summary.expected_merge_delivery_count() != 0)
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    projection.expected_owner_count = owner_summary.owner_count();
+    projection.expected_filled_reservation_count = owner_summary.filled_order_count();
+    projection.expected_merge_payment_count = owner_summary.expected_merge_delivery_count();
+    projection.consideration_debit_atoms = owner_summary.consideration_debit_atoms();
+    projection.seller_credit_atoms = owner_summary.seller_credit_atoms();
+    projection.rounding_pot_price_units = owner_summary.rounding_pot_price_units();
+    Ok(projection)
 }
 
 /// Bind the exhaustive traversal to the counted post-action-39 root and derive
 /// the sole next action-24 slice. No legacy SelectedCandidate is accepted.
-pub fn derive_candidate_entitlement_projection_v4(
+pub fn derive_candidate_entitlement_projection_v5<'a>(
     settlement_root_account: Id32,
     settlement_root: &SettlementRootV1AccountV1,
-    traversal: &SettlementTraversalProjectionV4,
-) -> Result<CandidateEntitlementProjectionV4, SettlementAdapterErrorV1> {
-    require_root_traversal_binding_v4(settlement_root_account, settlement_root, traversal)?;
+    traversal: &'a dyn SettlementTraversalAccessV5,
+) -> Result<CandidateEntitlementProjectionV5<'a>, SettlementAdapterErrorV1> {
+    require_root_traversal_binding_v5(
+        settlement_root_account,
+        settlement_root,
+        traversal.projection(),
+    )?;
     let counts = settlement_root.counts();
     if settlement_root.phase() != SettlementRootPhaseV1::Materializing
         || counts.admitted_receipts >= counts.expected_receipts
@@ -1862,37 +2800,36 @@ pub fn derive_candidate_entitlement_projection_v4(
         return Err(SettlementAdapterErrorV1::BindingMismatch);
     }
     let cursor = counts.admitted_receipts;
-    let current_slice = traversal.slices[usize::from(cursor)];
-    let current_price = traversal.prices[usize::from(current_slice.outcome)];
-    let projection = traversal.order_projection.base();
+    let current_slice = traversal.settlement_slice(cursor)?;
+    let current_price = traversal.outcome_price(current_slice.outcome)?;
     let current_buy_first_owner = match current_slice.buy {
         SettlementLegV1::Order(order_index) => !owner_appeared_before_slice_v4(
-            projection,
-            &traversal.slices,
+            traversal,
             cursor,
-            projection
-                .order_membership(order_index)
+            traversal
+                .order(order_index)?
                 .ok_or(SettlementAdapterErrorV1::BindingMismatch)?
+                .membership()
                 .owner(),
         )?,
         SettlementLegV1::Split | SettlementLegV1::Merge => false,
     };
     let current_sell_first_owner = match current_slice.sell {
         SettlementLegV1::Order(order_index) => !owner_appeared_before_slice_v4(
-            projection,
-            &traversal.slices,
+            traversal,
             cursor,
-            projection
-                .order_membership(order_index)
+            traversal
+                .order(order_index)?
                 .ok_or(SettlementAdapterErrorV1::BindingMismatch)?
+                .membership()
                 .owner(),
         )?,
         SettlementLegV1::Split | SettlementLegV1::Merge => false,
     };
-    Ok(CandidateEntitlementProjectionV4 {
+    Ok(CandidateEntitlementProjectionV5 {
         settlement_root_account,
         settlement_root: *settlement_root,
-        traversal: *traversal,
+        traversal,
         current_slice,
         current_price,
         current_buy_first_owner,
@@ -1906,20 +2843,21 @@ pub fn derive_candidate_entitlement_projection_v4(
 pub fn derive_root_owner_basis_v4(
     settlement_root_account: Id32,
     settlement_root: &SettlementRootV1AccountV1,
-    traversal: &SettlementTraversalProjectionV4,
+    traversal: &dyn SettlementTraversalAccessV5,
     owner: Id32,
 ) -> Result<OwnerSettlementExpectationBasisV4, SettlementAdapterErrorV1> {
-    require_root_traversal_binding_v4(settlement_root_account, settlement_root, traversal)?;
+    require_root_traversal_binding_v5(
+        settlement_root_account,
+        settlement_root,
+        traversal.projection(),
+    )?;
     if !matches!(
         settlement_root.phase(),
         SettlementRootPhaseV1::Materializing | SettlementRootPhaseV1::Settling
     ) {
         return Err(SettlementAdapterErrorV1::BindingMismatch);
     }
-    traversal
-        .owner_basis
-        .row_for_owner(owner.bytes())
-        .ok_or(SettlementAdapterErrorV1::BindingMismatch)
+    traversal.owner_basis(owner)
 }
 
 /// Exact local facts required to allocate one future rent-owned settlement child.
@@ -2423,13 +3361,17 @@ fn derive_zero_fee_owner_finalization_evidence_fields_v5(
 pub fn prepare_realize_owner_cash_v5(
     settlement_root_account: Id32,
     settlement_root: &SettlementRootV1AccountV1,
-    traversal: &SettlementTraversalProjectionV4,
+    traversal: &dyn SettlementTraversalAccessV5,
     owner_settlement: &OwnerSettlementAccountProjectionV5,
     settlement_cash_pot_account: Id32,
     position_replay: GeneralPositionReplayPrestateV1,
     pot_before: SettlementCashPotV1,
 ) -> Result<OwnerCashRealizationPlanV5, SettlementAdapterErrorV1> {
-    require_root_traversal_binding_v4(settlement_root_account, settlement_root, traversal)?;
+    require_root_traversal_binding_v5(
+        settlement_root_account,
+        settlement_root,
+        traversal.projection(),
+    )?;
     if settlement_root.phase() != SettlementRootPhaseV1::Settling
         || settlement_root.cash_pot_state() != SettlementRootChildStateV1::Live
         || settlement_cash_pot_account != settlement_root.settlement_cash_pot()
@@ -2498,24 +3440,24 @@ pub fn prepare_realize_owner_cash_v5(
     })
 }
 
-/// Structurally compare one counted SettlementRoot to an exhaustive V4
-/// settlement traversal.
+/// Structurally compare one counted SettlementRoot to the compact exhaustive
+/// V5 settlement traversal summary.
 ///
 /// This authenticates no program owner, PDA, account body, meta privilege, or
 /// traversal provenance. A live adapter must establish all of those facts
 /// before promoting a successful equality bind into an execution seam.
-pub fn bind_settlement_root_traversal_v4(
+pub fn bind_settlement_root_traversal_v5(
     settlement_root_account: Id32,
     settlement_root: &SettlementRootV1AccountV1,
-    traversal: &SettlementTraversalProjectionV4,
+    traversal: &SettlementTraversalProjectionV5,
 ) -> Result<(), SettlementAdapterErrorV1> {
-    require_root_traversal_binding_v4(settlement_root_account, settlement_root, traversal)
+    require_root_traversal_binding_v5(settlement_root_account, settlement_root, traversal)
 }
 
-fn require_root_traversal_binding_v4(
+fn require_root_traversal_binding_v5(
     settlement_root_account: Id32,
     settlement_root: &SettlementRootV1AccountV1,
-    traversal: &SettlementTraversalProjectionV4,
+    traversal: &SettlementTraversalProjectionV5,
 ) -> Result<(), SettlementAdapterErrorV1> {
     settlement_root.validate()?;
     let feed = traversal.feed;
@@ -2538,7 +3480,7 @@ fn require_root_traversal_binding_v4(
         || settlement_root.virtual_cash_direction() != traversal.virtual_cash_direction
         || settlement_root.virtual_cash_atoms() != traversal.virtual_cash_atoms
         || counts.expected_receipts != feed.slice_count
-        || counts.expected_owner_rows != traversal.owner_basis.owner_count()
+        || counts.expected_owner_rows != traversal.expected_owner_count
         || counts.expected_reservations != traversal.expected_reservation_count
         || counts.expected_filled_reservations != traversal.expected_filled_reservation_count
         || counts.expected_merge_payments != traversal.expected_merge_payment_count
@@ -2553,22 +3495,19 @@ const fn frozen_identity(value: Id32) -> [u8; 32] {
 }
 
 fn owner_appeared_before_slice_v4(
-    projection: &OwnerBlindBookProjectionV1,
-    slices: &[CanonicalSettlementSliceV1; MAX_SLICES],
+    traversal: &dyn SettlementTraversalAccessV5,
     before: u16,
     owner: Id32,
 ) -> Result<bool, SettlementAdapterErrorV1> {
     let mut slice = 0u16;
     while slice < before {
-        for leg in [
-            slices[usize::from(slice)].buy,
-            slices[usize::from(slice)].sell,
-        ] {
+        let row = traversal.settlement_slice(slice)?;
+        for leg in [row.buy, row.sell] {
             if let SettlementLegV1::Order(order_index) = leg {
-                let membership = projection
-                    .order_membership(order_index)
+                let row = traversal
+                    .order(order_index)?
                     .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
-                if membership.owner() == owner {
+                if row.membership().owner() == owner {
                     return Ok(true);
                 }
             }
@@ -2622,7 +3561,7 @@ pub struct EntitlementEndpointInputV5<'a> {
 /// Complete account-local input for one V5 action-24 slice.
 #[derive(Clone, Copy, Debug)]
 pub struct MaterializeEntitlementSliceInputV5<'a> {
-    pub entitlement: &'a CandidateEntitlementProjectionV4,
+    pub entitlement: &'a CandidateEntitlementProjectionV5<'a>,
     pub receipt_account: Id32,
     pub receipt_bump: u8,
     pub receipt_funding: RentOwnedSettlementCreateFundingV5,
@@ -2795,7 +3734,7 @@ pub struct PortfolioPairReceiptCreateInputV5 {
 /// owns how many receipt creation rows are consumed.
 #[derive(Clone, Copy, Debug)]
 pub struct MaterializePortfolioPairInputV5<'a> {
-    pub entitlement: &'a CandidateEntitlementProjectionV4,
+    pub entitlement: &'a CandidateEntitlementProjectionV5<'a>,
     pub sibling_set: AuthenticatedPortfolioReceiptSiblingSetV2,
     pub receipts: [Option<PortfolioPairReceiptCreateInputV5>;
         PORTFOLIO_PAIR_MAX_RECEIPTS_V2],
@@ -2910,6 +3849,7 @@ pub fn prepare_materialize_entitlement_slice_v5(
     while ordinal < usize::from(endpoint_count) {
         let membership = entitlement
             .settlement_membership(expected_orders[ordinal])
+            ?
             .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
         if membership.order_kind != OrderKindV1::Single {
             return Err(SettlementAdapterErrorV1::BindingMismatch);
@@ -2930,6 +3870,7 @@ pub fn prepare_materialize_entitlement_slice_v5(
             SettlementLegV1::Order(order_index) => LayoutHash32(
                 entitlement
                     .settlement_membership(order_index)
+                    ?
                     .ok_or(SettlementAdapterErrorV1::BindingMismatch)?
                     .order_id,
             ),
@@ -2940,6 +3881,7 @@ pub fn prepare_materialize_entitlement_slice_v5(
             SettlementLegV1::Order(order_index) => LayoutHash32(
                 entitlement
                     .settlement_membership(order_index)
+                    ?
                     .ok_or(SettlementAdapterErrorV1::BindingMismatch)?
                     .order_id,
             ),
@@ -3263,7 +4205,7 @@ pub fn prepare_materialize_portfolio_pair_v5(
 }
 
 fn bind_portfolio_pair_record_v5(
-    entitlement: &CandidateEntitlementProjectionV4,
+    entitlement: &CandidateEntitlementProjectionV5<'_>,
     record: clutch_batch::SelectedPortfolioOrderRecordV2,
     order_index: u8,
     side: SettlementSideV1,
@@ -3272,15 +4214,14 @@ fn bind_portfolio_pair_record_v5(
     let root = entitlement.settlement_root;
     let membership = entitlement
         .settlement_membership(order_index)
+        ?
         .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
-    let expected_page_account = entitlement
-        .order_projection()
-        .order_page_account(order_index)
+    let order = entitlement
+        .traversal
+        .order(order_index)?
         .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
-    let expected_page_index = entitlement
-        .order_projection()
-        .order_page_index(order_index)
-        .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+    let expected_page_account = order.page_account();
+    let expected_page_index = order.page_index();
     if record.order_index != order_index
         || record.side
             != match side {
@@ -3299,7 +4240,7 @@ fn bind_portfolio_pair_record_v5(
         || record.settlement_candidate_id != root.settlement_candidate_id().bytes()
         || record.retained_feed_account_id != entitlement.selected_feed_account().bytes()
         || record.retained_feed_semantic_id
-            != entitlement.traversal.candidate_bundle_digest().bytes()
+            != entitlement.traversal.projection().candidate_bundle_digest().bytes()
         || record.settlement_witness_id != root.settlement_witness_digest().bytes()
         || record.order_page_account_id != expected_page_account.bytes()
         || record.order_id != membership.order_id
@@ -3313,7 +4254,7 @@ fn bind_portfolio_pair_record_v5(
 }
 
 fn validate_portfolio_pair_materialization_bundle_v5(
-    entitlement: &CandidateEntitlementProjectionV4,
+    entitlement: &CandidateEntitlementProjectionV5<'_>,
     receipts: &[Option<SettlementReceiptCreatePlanV5>; PORTFOLIO_PAIR_MAX_RECEIPTS_V2],
     receipt_count: u8,
     endpoints: &[EntitlementEndpointPlanV5; 2],
@@ -3332,12 +4273,13 @@ fn validate_portfolio_pair_materialization_bundle_v5(
         insert_materialization_account_v5(&mut accounts, &mut account_count, account)?;
     }
     let mut page = 0u16;
-    while usize::from(page) < usize::from(entitlement.order_projection().page_count()) {
+    while usize::from(page) < usize::from(entitlement.traversal.projection().page_count()) {
         insert_materialization_account_v5(
             &mut accounts,
             &mut account_count,
             entitlement
-                .order_projection()
+                .traversal
+                .projection()
                 .page_account(page)
                 .ok_or(SettlementAdapterErrorV1::BindingMismatch)?,
         )?;
@@ -3410,41 +4352,36 @@ fn validate_portfolio_pair_materialization_bundle_v5(
 }
 
 fn prepare_entitlement_endpoint_v5(
-    entitlement: &CandidateEntitlementProjectionV4,
+    entitlement: &CandidateEntitlementProjectionV5<'_>,
     input: EntitlementEndpointInputV5<'_>,
     first_owner: bool,
     expected_program_id: Id32,
 ) -> Result<PreparedEntitlementEndpointV5, SettlementAdapterErrorV1> {
     let selected = settlement_coordinates_v4(&entitlement.settlement_root)?;
-    let base = entitlement.order_projection().base();
+    let traversal_projection = entitlement.traversal.projection();
     let feed = entitlement.feed();
     let cursor = entitlement.settlement_root.counts().admitted_receipts;
     let membership = entitlement
         .settlement_membership(input.order_index)
+        ?
         .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
-    let frozen = base
-        .order_membership(input.order_index)
+    let frozen = entitlement
+        .traversal
+        .order(input.order_index)?
         .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
-    let first_order = entitlement.first_slice(input.order_index) == Some(cursor);
-    let expected_page_index = entitlement
-        .order_projection
-        .order_page_index(input.order_index)
-        .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
-    if membership.owner != frozen.owner().bytes()
-        || membership.order_id != frozen.order_id().bytes()
-        || membership.order_generation != frozen.generation()
-        || membership.position_generation
-            != entitlement
-                .order_projection
-                .position_generation(input.order_index)
-                .ok_or(SettlementAdapterErrorV1::PositionSetMismatch)?
+    let first_order = entitlement.first_slice(input.order_index)? == Some(cursor);
+    let expected_page_index = frozen.page_index();
+    if membership.owner != frozen.membership().owner().bytes()
+        || membership.order_id != frozen.membership().order_id().bytes()
+        || membership.order_generation != frozen.membership().generation()
+        || membership.position_generation != frozen.position_generation()
     {
         return Err(SettlementAdapterErrorV1::BindingMismatch);
     }
     let reservation_v9 = ReservationAccountV9::decode(input.reservation.encoded_body)?;
     let reservation = reservation_v9.body();
     let reservation_plan = ReservationPlan::for_order(
-        frozen.slot(),
+        frozen.membership().slot(),
         feed.outcome_count,
         feed.price_scale,
         reservation.max_fee_atoms,
@@ -3466,7 +4403,7 @@ fn prepare_entitlement_endpoint_v5(
         || reservation.position_generation != membership.position_generation
         || reservation.order_generation != membership.order_generation
         || reservation.page_index != expected_page_index
-        || reservation.price_grid.bytes() != base.price_grid_id().bytes()
+        || reservation.price_grid.bytes() != traversal_projection.price_grid_id().bytes()
         || reservation.terms.bytes() != entitlement.terms().bytes()
         || reservation.policy.bytes() != entitlement.reservation_policy().bytes()
         || reservation.outcome_count != feed.outcome_count
@@ -3538,9 +4475,7 @@ fn prepare_entitlement_endpoint_v5(
         position,
     };
     let basis = entitlement
-        .owner_basis
-        .row_for_owner(membership.owner)
-        .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+        .owner_basis(Id32::new(membership.owner)?)?;
     let (owner_row, rent) = prepare_owner_row_materialization_v5(
         entitlement,
         basis,
@@ -3560,7 +4495,7 @@ fn prepare_entitlement_endpoint_v5(
 }
 
 fn prepare_owner_row_materialization_v5(
-    entitlement: &CandidateEntitlementProjectionV4,
+    entitlement: &CandidateEntitlementProjectionV5<'_>,
     basis: OwnerSettlementExpectationBasisV4,
     input: OwnerRowMaterializationInputV5<'_>,
     first_owner: bool,
@@ -3663,7 +4598,7 @@ fn prepare_owner_row_materialization_v5(
 }
 
 fn validate_materialization_bundle_v5(
-    entitlement: &CandidateEntitlementProjectionV4,
+    entitlement: &CandidateEntitlementProjectionV5<'_>,
     receipt: &SettlementReceiptCreatePlanV5,
     endpoints: &[Option<EntitlementEndpointPlanV5>; 2],
     endpoint_count: u8,
@@ -3686,12 +4621,13 @@ fn validate_materialization_bundle_v5(
         insert_materialization_account_v5(&mut accounts, &mut account_count, account)?;
     }
     let mut page = 0u16;
-    while usize::from(page) < usize::from(entitlement.order_projection().page_count()) {
+    while usize::from(page) < usize::from(entitlement.traversal.projection().page_count()) {
         insert_materialization_account_v5(
             &mut accounts,
             &mut account_count,
             entitlement
-                .order_projection()
+                .traversal
+                .projection()
                 .page_account(page)
                 .ok_or(SettlementAdapterErrorV1::BindingMismatch)?,
         )?;
@@ -5416,7 +6352,7 @@ pub struct ReleaseUnfilledReservationInputV1<'a> {
     /// Structurally decoded writable SettlementRoot prestate.
     pub settlement_root: &'a SettlementRootV1AccountV1,
     /// Private exhaustive selected Feed/V5-page traversal.
-    pub traversal: &'a SettlementTraversalProjectionV4,
+    pub traversal: &'a dyn SettlementTraversalAccessV5,
     /// Exact frozen V5 page account containing the selected zero-fill order.
     pub order_page_account: Id32,
     /// Exact hostile frozen V5 page body.
@@ -5582,10 +6518,10 @@ impl ReleaseUnfilledReservationPlanV1 {
 pub fn prepare_release_unfilled_reservation_v1(
     input: ReleaseUnfilledReservationInputV1<'_>,
 ) -> Result<ReleaseUnfilledReservationPlanV1, SettlementAdapterErrorV1> {
-    require_root_traversal_binding_v4(
+    require_root_traversal_binding_v5(
         input.settlement_root_account,
         input.settlement_root,
-        input.traversal,
+        input.traversal.projection(),
     )?;
     if input.payload.epoch != input.settlement_root.epoch()
         || input.payload.settlement_root != input.settlement_root_account
@@ -5595,9 +6531,9 @@ pub fn prepare_release_unfilled_reservation_v1(
         || input.position.account.is_zero()
         || input.replay_account.is_zero()
         || input.order_page_account == input.settlement_root_account
-        || input.order_page_account == input.traversal.selected_feed_account
+        || input.order_page_account == input.traversal.projection().selected_feed_account
         || input.reservation_account == input.settlement_root_account
-        || input.reservation_account == input.traversal.selected_feed_account
+        || input.reservation_account == input.traversal.projection().selected_feed_account
         || input.reservation_account == input.order_page_account
         || input.reservation_account == input.position.account
         || input.reservation_account == input.replay_account
@@ -5607,8 +6543,8 @@ pub fn prepare_release_unfilled_reservation_v1(
     }
 
     let page = verify_page_v5(input.order_page_body)?;
-    let base = input.traversal.order_projection.base();
-    let feed = input.traversal.feed;
+    let traversal_projection = input.traversal.projection();
+    let feed = traversal_projection.feed;
     if page.market.bytes() != feed.market.bytes()
         || page.epoch.bytes() != feed.epoch.bytes()
         || page.order_set.bytes() != feed.order_set.bytes()
@@ -5623,20 +6559,17 @@ pub fn prepare_release_unfilled_reservation_v1(
     let mut order_index = None;
     let mut dense = 0u8;
     while dense < feed.order_count {
-        let frozen = base
-            .order_membership(dense)
-            .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
-        let position_generation = input
+        let frozen = input
             .traversal
-            .order_projection
-            .position_generation(dense)
-            .ok_or(SettlementAdapterErrorV1::PositionSetMismatch)?;
+            .order(dense)?
+            .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+        let position_generation = frozen.position_generation();
         let expected_reservation = canonical_reservation_id_v9(
             LayoutHash32(feed.market.bytes()),
             LayoutHash32(feed.epoch.bytes()),
-            LayoutHash32(frozen.owner().bytes()),
+            LayoutHash32(frozen.membership().owner().bytes()),
             position_generation,
-            LayoutHash32(frozen.order_id().bytes()),
+            LayoutHash32(frozen.membership().order_id().bytes()),
         );
         if expected_reservation.bytes() == reservation.reservation.bytes() {
             if order_index.is_some() {
@@ -5649,29 +6582,18 @@ pub fn prepare_release_unfilled_reservation_v1(
             .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
     }
     let order_index = order_index.ok_or(SettlementAdapterErrorV1::ReservationSetMismatch)?;
-    if input.traversal.settlement_membership(order_index).is_some()
-        || input.traversal.first_slice(order_index).is_some()
+    if input.traversal.settlement_membership(order_index)?.is_some()
+        || input.traversal.first_slice(order_index)?.is_some()
     {
         return Err(SettlementAdapterErrorV1::ReservationSetMismatch);
     }
-    let frozen = base
-        .order_membership(order_index)
-        .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
-    let expected_page_account = input
+    let frozen = input
         .traversal
-        .order_projection
-        .order_page_account(order_index)
+        .order(order_index)?
         .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
-    let expected_page_index = input
-        .traversal
-        .order_projection
-        .order_page_index(order_index)
-        .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
-    let expected_position_generation = input
-        .traversal
-        .order_projection
-        .position_generation(order_index)
-        .ok_or(SettlementAdapterErrorV1::PositionSetMismatch)?;
+    let expected_page_account = frozen.page_account();
+    let expected_page_index = frozen.page_index();
+    let expected_position_generation = frozen.position_generation();
     if input.order_page_account != expected_page_account || page.page_index != expected_page_index {
         return Err(SettlementAdapterErrorV1::BindingMismatch);
     }
@@ -5680,7 +6602,7 @@ pub fn prepare_release_unfilled_reservation_v1(
     let mut cursor = OrderSlotCursorV5::new(input.order_page_body)?;
     while let Some(step) = cursor.next_slot() {
         let candidate = step?;
-        if candidate.slot.order_id().bytes() == frozen.order_id().bytes() {
+        if candidate.slot.order_id().bytes() == frozen.membership().order_id().bytes() {
             if verified_slot.is_some() {
                 return Err(SettlementAdapterErrorV1::BindingMismatch);
             }
@@ -5688,13 +6610,13 @@ pub fn prepare_release_unfilled_reservation_v1(
         }
     }
     let verified_slot = verified_slot.ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
-    if verified_slot.slot != *frozen.slot()
+    if verified_slot.slot != *frozen.membership().slot()
         || verified_slot.position_generation != expected_position_generation
     {
         return Err(SettlementAdapterErrorV1::BindingMismatch);
     }
 
-    let expected_side = match base.book().orders[usize::from(order_index)].side {
+    let expected_side = match frozen.economic_order().side {
         Side::Buy => 0,
         Side::Sell => 1,
     };
@@ -5713,14 +6635,14 @@ pub fn prepare_release_unfilled_reservation_v1(
     )?;
     if reservation.market.bytes() != feed.market.bytes()
         || reservation.epoch.bytes() != feed.epoch.bytes()
-        || reservation.owner.bytes() != frozen.owner().bytes()
-        || reservation.order_id.bytes() != frozen.order_id().bytes()
+        || reservation.owner.bytes() != frozen.membership().owner().bytes()
+        || reservation.order_id.bytes() != frozen.membership().order_id().bytes()
         || reservation.position_generation != expected_position_generation
-        || reservation.order_generation != frozen.generation()
+        || reservation.order_generation != frozen.membership().generation()
         || reservation.page_index != expected_page_index
-        || reservation.price_grid.bytes() != base.price_grid_id().bytes()
-        || reservation.terms.bytes() != input.traversal.terms.bytes()
-        || reservation.policy.bytes() != input.traversal.reservation_policy.bytes()
+        || reservation.price_grid.bytes() != traversal_projection.price_grid_id().bytes()
+        || reservation.terms.bytes() != traversal_projection.terms.bytes()
+        || reservation.policy.bytes() != traversal_projection.reservation_policy.bytes()
         || reservation.outcome_count != feed.outcome_count
         || reservation.side != expected_side
         || reservation.order_kind != expected_kind
@@ -5740,7 +6662,7 @@ pub fn prepare_release_unfilled_reservation_v1(
         return Err(SettlementAdapterErrorV1::ReservationSetMismatch);
     }
 
-    let neutral_sink = base.market_binding().neutral_sink;
+    let neutral_sink = traversal_projection.neutral_sink();
     let rent = reservation_v9.rent();
     let payer = Id32::new(rent.payer.bytes())?;
     let required_balance = rent
@@ -5749,7 +6671,7 @@ pub fn prepare_release_unfilled_reservation_v1(
         .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
     let protected_accounts = [
         input.settlement_root_account,
-        input.traversal.selected_feed_account,
+        traversal_projection.selected_feed_account(),
         input.order_page_account,
         input.reservation_account,
         input.position.account,
@@ -5781,10 +6703,10 @@ pub fn prepare_release_unfilled_reservation_v1(
     let position_body = PositionAccountV3::decode(input.position.encoded_body)?;
     project_canonical_general_settlement_position_v3(
         position_body,
-        frozen.owner(),
+        frozen.membership().owner(),
         expected_position_generation,
         input.settlement_root.market(),
-        input.traversal.position_market_binding,
+        traversal_projection.position_market_binding(),
     )?;
     let position_prestate_semantic_id =
         Id32::new(position_body.semantic_id(&PositionBodySha256V3)?.bytes())?;
@@ -5828,7 +6750,7 @@ pub fn prepare_release_unfilled_reservation_v1(
         input.settlement_root.settlement_candidate_id(),
         input.reservation_account,
         reservation_semantic_id,
-        frozen.owner(),
+        frozen.membership().owner(),
         frozen.order_id(),
         order_index,
         expected_page_index,
@@ -5850,7 +6772,7 @@ pub fn prepare_release_unfilled_reservation_v1(
         input.settlement_root_account,
         root_prestate_data_id,
         root_poststate_data_id,
-        input.traversal.selected_feed_account,
+        traversal_projection.selected_feed_account(),
         input.order_page_account,
         input.reservation_account,
         reservation_prestate_data_id,
@@ -5899,7 +6821,7 @@ pub fn prepare_release_unfilled_reservation_v1(
     Ok(ReleaseUnfilledReservationPlanV1 {
         settlement_root_account: input.settlement_root_account,
         settlement_root_poststate,
-        retained_feed_account: input.traversal.selected_feed_account,
+        retained_feed_account: traversal_projection.selected_feed_account(),
         order_page_account: input.order_page_account,
         order_page_index: expected_page_index,
         order_slot_index: verified_slot.slot_index,
