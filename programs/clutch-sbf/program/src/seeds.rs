@@ -331,8 +331,9 @@ pub const SEED_FAILURE_MARKET_INTERVAL_HISTORY_V2: &[u8] = b"dc:fail-int-history
 pub const SEED_PRODUCT_MARKET_LIFECYCLE_ROOT: &[u8] = b"dc:market-lifecycle-root:v1";
 /// Zero-data Product foundation principal/donation vault.
 pub const SEED_PRODUCT_MARKET_FOUNDATION_VAULT: &[u8] = b"dc:market-foundation-vault:v1";
-/// Permanent compact Product Market-lifecycle replay anchor.
-pub const SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY: &[u8] = b"dc:market-lifecycle-replay:v1";
+/// Permanent market-only Product Market-lifecycle replay anchor.
+pub const SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY_V2: &[u8] =
+    b"dc:market-lifecycle-replay:v2";
 /// Non-persisted Market-family namespace anchor.
 pub const SEED_PRODUCT_MARKET_FAMILY_ROOT_V1: &[u8] = b"dc:product-family-root:v1";
 /// Per-Series/ordinal Product Market-admission link.
@@ -569,18 +570,16 @@ pub fn product_market_foundation_vault_pda(
     )
 }
 
-/// Derive the permanent Product Market-lifecycle replay anchor.
-pub fn product_market_lifecycle_replay_pda(
+/// Derive the sole permanent market-only Product lifecycle replay anchor.
+pub fn product_market_lifecycle_replay_v2_pda(
     program_id: &Pubkey,
     market_instance_v2_id: &[u8; 32],
-    generation: u64,
 ) -> (Pubkey, u8) {
     find(
         program_id,
         &[
-            SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY,
+            SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY_V2,
             market_instance_v2_id,
-            &generation.to_le_bytes(),
         ],
     )
 }
@@ -2243,7 +2242,7 @@ mod tests {
         let prefixes = [
             SEED_PRODUCT_MARKET_LIFECYCLE_ROOT,
             SEED_PRODUCT_MARKET_FOUNDATION_VAULT,
-            SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY,
+            SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY_V2,
             SEED_PRODUCT_SERIES_MARKET_LINK,
             SEED_PRODUCT_SERIES_LIFECYCLE_REPLAY,
             SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS,

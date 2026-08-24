@@ -945,7 +945,7 @@ pub(crate) fn fund_product_foundation_vault_v1<
         observed_funding.state.pending_ordinal,
     );
     let (expected_lifecycle_replay, _) =
-        seeds::product_market_lifecycle_replay_pda(program_id, &market, coordinates.generation);
+        seeds::product_market_lifecycle_replay_v2_pda(program_id, &market);
     require(
         coordinates.generation != 0
             && coordinates.lifecycle_root_account == expected_root
