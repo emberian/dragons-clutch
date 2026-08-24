@@ -261,6 +261,12 @@ impl AuthenticatedProductMarketFounderFoundationPreauthorizationV3 {
     }
     pub(crate) const fn principal_refund_owner(&self) -> Pubkey { self.principal_refund_owner }
     pub(crate) const fn neutral_lamport_sink(&self) -> Pubkey { self.neutral_lamport_sink }
+    pub(crate) const fn foundation_schedule_id(&self) -> ContentId {
+        self.foundation_schedule_id
+    }
+    pub(crate) const fn foundation_graph_id(&self) -> ContentId {
+        self.foundation_graph_id
+    }
     pub(crate) const fn candidate_lifecycle_policy_id(&self) -> ContentId {
         self.candidate_lifecycle_policy_id
     }
@@ -491,6 +497,14 @@ impl AuthenticatedProductMarketFounderCurrentCreationV3 {
     }
     pub(crate) const fn foundation_steps_id(&self) -> ContentId {
         self.foundation_steps.id
+    }
+    pub(super) fn next_foundation_slot_v3(&self) -> Outcome<MarketFoundationSlotV3> {
+        let index = usize::from(self.foundation_steps.next_index);
+        require(
+            index < MARKET_FOUNDATION_SLOT_COUNT_V3,
+            ClutchError::MismatchedState,
+        )?;
+        foundation_slot_v3(index)
     }
     pub(crate) const fn direct_global_liveness_binding_id(&self) -> ContentId {
         self.direct_capitalization.global_bundle_binding_id()
