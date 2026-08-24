@@ -22,7 +22,9 @@ use core::convert::TryInto;
 /// Exact width of an opaque nonzero content identity.
 pub const CONTENT_ID_BYTES: usize = 32;
 /// Exact width of a provider-release preimage.
-pub const PROVIDER_RELEASE_BYTES: usize = 144;
+pub const PROVIDER_RELEASE_BYTES: usize = 176;
+/// Exact width of the first Pyth provider adapter configuration.
+pub const PYTH_ADAPTER_CONFIG_BYTES: usize = 64;
 /// Exact width of a source-capacity profile preimage.
 pub const SOURCE_CAPACITY_PROFILE_BYTES: usize = 112;
 /// Exact width of a source-specification preimage.
@@ -44,7 +46,7 @@ pub const RECOVERY_POLICY_BYTES: usize = 528;
 /// Exact width of one normalized provider-evidence record.
 pub const NORMALIZED_EVIDENCE_BYTES: usize = 208;
 /// Exact width of the single canonical immutable Source material preimage.
-pub const SOURCE_MATERIAL_BYTES: usize = 4_032;
+pub const SOURCE_MATERIAL_BYTES: usize = 4_512;
 /// Provisional fixed bound on finite result regions.
 ///
 /// This is an artifact-profile bound. It is lifted by a new mapping release,
@@ -86,6 +88,8 @@ pub const SVM_MAX_PDA_SEED_BYTES: usize = 32;
 
 /// Canonical provider-release magic.
 pub const PROVIDER_RELEASE_MAGIC: [u8; 8] = *b"DCLTPRV1";
+/// Canonical Pyth adapter-configuration magic.
+pub const PYTH_ADAPTER_CONFIG_MAGIC: [u8; 8] = *b"DCLTPAC1";
 /// Canonical capacity-profile magic.
 pub const SOURCE_CAPACITY_PROFILE_MAGIC: [u8; 8] = *b"DCLTSCP1";
 /// Canonical source-specification magic.
@@ -192,6 +196,16 @@ pub const PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1: [u8; 32] = [
     0xc7, 0xec, 0xdf, 0xf1, 0x34, 0xc8, 0x92, 0x16, 0x20, 0xdd, 0x8a, 0xeb, 0xae, 0x69, 0x70, 0x6a,
     0x2b, 0x3b, 0x15, 0xd3, 0x21, 0x81, 0xb0, 0xdc, 0xb5, 0xb3, 0x15, 0x72, 0x27, 0x41, 0xf7, 0xc9,
 ];
+/// Closed preimage release for the canonical shared-evidence-set digest.
+pub const SHARED_EVIDENCE_SET_RELEASE_PREIMAGE_V1: &[u8] = b"dclutch/source-shared-evidence-set/v1";
+/// SHA-256 identity of [`SHARED_EVIDENCE_SET_RELEASE_PREIMAGE_V1`].
+pub const SHARED_EVIDENCE_SET_RELEASE_ID_V1: [u8; 32] = [
+    0x29, 0xb6, 0xf6, 0x6f, 0xa5, 0xa2, 0x43, 0x47, 0xdc, 0xcd, 0x8e, 0x9c, 0xd2, 0x4f, 0x04, 0x95,
+    0x75, 0x47, 0x7c, 0x5a, 0x3a, 0x70, 0x99, 0xc3, 0xce, 0xea, 0x8f, 0x06, 0x48, 0x05, 0xa7, 0xe8,
+];
+/// Exact fixed header before canonical normalized observations in a shared
+/// evidence-set digest preimage.
+pub const SHARED_EVIDENCE_SET_HEADER_BYTES_V1: usize = 176;
 
 const _: () = assert!(SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V1.len() <= SVM_MAX_PDA_SEED_BYTES);
 const _: () = assert!(SHARED_OBSERVATION_PDA_DOMAIN_V1.len() <= SVM_MAX_PDA_SEED_BYTES);
@@ -289,6 +303,8 @@ pub enum Error {
     InvalidProviderPayload,
     /// A Market child-count replay guard did not match the authenticated Market.
     MarketChildCountMismatch,
+    /// A Pyth feed, exponent, or confidence bound did not match committed configuration.
+    InvalidPythObservation,
 }
 
 /// Result alias for source-contract operations.
@@ -332,21 +348,24 @@ impl ContentId {
 pub struct ProviderReleaseV1 {
     provider_family_id: ContentId,
     adapter_release_id: ContentId,
+    provider_deployment_release_id: ContentId,
     decoding_rules_id: ContentId,
     transport_profile_id: ContentId,
 }
 
 impl ProviderReleaseV1 {
-    /// Construct one provider release from four immutable identities.
+    /// Construct one provider release from five immutable identities.
     pub const fn new(
         provider_family_id: ContentId,
         adapter_release_id: ContentId,
+        provider_deployment_release_id: ContentId,
         decoding_rules_id: ContentId,
         transport_profile_id: ContentId,
     ) -> Self {
         Self {
             provider_family_id,
             adapter_release_id,
+            provider_deployment_release_id,
             decoding_rules_id,
             transport_profile_id,
         }
@@ -361,6 +380,7 @@ impl ProviderReleaseV1 {
             content(bytes, 48)?,
             content(bytes, 80)?,
             content(bytes, 112)?,
+            content(bytes, 144)?,
         ))
     }
 
@@ -369,8 +389,9 @@ impl ProviderReleaseV1 {
         let mut out = base::<PROVIDER_RELEASE_BYTES>(PROVIDER_RELEASE_MAGIC);
         put(&mut out, 16, self.provider_family_id.as_bytes());
         put(&mut out, 48, self.adapter_release_id.as_bytes());
-        put(&mut out, 80, self.decoding_rules_id.as_bytes());
-        put(&mut out, 112, self.transport_profile_id.as_bytes());
+        put(&mut out, 80, self.provider_deployment_release_id.as_bytes());
+        put(&mut out, 112, self.decoding_rules_id.as_bytes());
+        put(&mut out, 144, self.transport_profile_id.as_bytes());
         out
     }
 
@@ -384,6 +405,11 @@ impl ProviderReleaseV1 {
         self.provider_family_id
     }
 
+    /// Return the exact pinned provider deployment-release content identity.
+    pub const fn provider_deployment_release_id(self) -> ContentId {
+        self.provider_deployment_release_id
+    }
+
     /// Return the immutable decoding-rules identity.
     pub const fn decoding_rules_id(self) -> ContentId {
         self.decoding_rules_id
@@ -392,6 +418,96 @@ impl ProviderReleaseV1 {
     /// Return the immutable transport-profile identity.
     pub const fn transport_profile_id(self) -> ContentId {
         self.transport_profile_id
+    }
+}
+
+/// Immutable first-release Pyth feed and integer-normalization configuration.
+///
+/// The provider feed is interpreted directly as signed price atoms only when
+/// its exponent exactly matches `expected_exponent`. Confidence is accepted
+/// only within the committed inclusive basis-point bound. Source domain and
+/// unit semantics remain owned by [`SourceSpecV1`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PythAdapterConfigV1 {
+    provider_feed_id: [u8; 32],
+    expected_exponent: i32,
+    max_confidence_bps: u16,
+}
+
+impl PythAdapterConfigV1 {
+    /// Construct one exact Pyth adapter configuration.
+    pub fn new(
+        provider_feed_id: [u8; 32],
+        expected_exponent: i32,
+        max_confidence_bps: u16,
+    ) -> Result<Self> {
+        nonzero_identifier(&provider_feed_id)?;
+        if max_confidence_bps == 0 || max_confidence_bps > 10_000 {
+            return Err(Error::InvalidPythObservation);
+        }
+        Ok(Self {
+            provider_feed_id,
+            expected_exponent,
+            max_confidence_bps,
+        })
+    }
+
+    /// Decode one exact hostile Pyth configuration.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        header(bytes, PYTH_ADAPTER_CONFIG_BYTES, PYTH_ADAPTER_CONFIG_MAGIC)?;
+        zero(bytes, 48, 16)?;
+        Self::new(
+            read_array(bytes, 16)?,
+            i32::from_le_bytes(read_array(bytes, 12)?),
+            u16::from_le_bytes(read_array(bytes, 10)?),
+        )
+    }
+
+    /// Encode the exact canonical Pyth configuration bytes.
+    pub fn to_bytes(self) -> [u8; PYTH_ADAPTER_CONFIG_BYTES] {
+        let mut out = base::<PYTH_ADAPTER_CONFIG_BYTES>(PYTH_ADAPTER_CONFIG_MAGIC);
+        put(&mut out, 10, &self.max_confidence_bps.to_le_bytes());
+        put(&mut out, 12, &self.expected_exponent.to_le_bytes());
+        put(&mut out, 16, &self.provider_feed_id);
+        out
+    }
+
+    /// Return the exact provider feed identifier.
+    pub const fn provider_feed_id(self) -> [u8; 32] {
+        self.provider_feed_id
+    }
+
+    /// Return the required raw Pyth base-ten exponent.
+    pub const fn expected_exponent(self) -> i32 {
+        self.expected_exponent
+    }
+
+    /// Return the inclusive maximum confidence ratio in basis points.
+    pub const fn max_confidence_bps(self) -> u16 {
+        self.max_confidence_bps
+    }
+
+    fn validate_update(
+        self,
+        provider_feed_id: [u8; 32],
+        price: i64,
+        confidence: u64,
+        exponent: i32,
+    ) -> Result<i128> {
+        let absolute_price = price.unsigned_abs();
+        let confidence_scaled = u128::from(confidence)
+            .checked_mul(10_000)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let admitted_confidence = u128::from(absolute_price)
+            .checked_mul(u128::from(self.max_confidence_bps))
+            .ok_or(Error::ArithmeticOverflow)?;
+        if provider_feed_id != self.provider_feed_id
+            || exponent != self.expected_exponent
+            || confidence_scaled > admitted_confidence
+        {
+            return Err(Error::InvalidPythObservation);
+        }
+        Ok(i128::from(price))
     }
 }
 
@@ -2101,12 +2217,14 @@ pub struct PythProviderAdapterObligationV1 {
     source: SourceSpecV1,
     provider_release_id: ContentId,
     provider_release: ProviderReleaseV1,
+    adapter_config: PythAdapterConfigV1,
 }
 
 impl PythProviderAdapterObligationV1 {
     /// Select the closed Pyth extension from one embedded material source.
     pub fn from_material(material: SourceMaterialV1, source_spec_id: ContentId) -> Result<Self> {
         let (source, provider_release_id, provider_release) = material.source(source_spec_id)?;
+        let adapter_config = material.adapter_config(source_spec_id)?;
         if provider_release.adapter_release_id().to_bytes() != PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1
         {
             return Err(Error::UnsupportedProviderExtension);
@@ -2116,6 +2234,7 @@ impl PythProviderAdapterObligationV1 {
             source,
             provider_release_id,
             provider_release,
+            adapter_config,
         })
     }
 
@@ -2127,26 +2246,37 @@ impl PythProviderAdapterObligationV1 {
         provider_evidence_id: ContentId,
         schedule_id: ContentId,
         schedule_index: u16,
-        observation_unix_seconds: i64,
+        provider_feed_id: [u8; 32],
+        price: i64,
+        confidence: u64,
+        exponent: i32,
         publication_unix_seconds: i64,
-        atoms: i128,
-    ) -> NormalizedProviderEvidenceV1 {
-        NormalizedProviderEvidenceV1::new(
+    ) -> Result<NormalizedProviderEvidenceV1> {
+        let atoms =
+            self.adapter_config
+                .validate_update(provider_feed_id, price, confidence, exponent)?;
+        Ok(NormalizedProviderEvidenceV1::new(
             self.source_spec_id,
             self.provider_release_id,
             provider_evidence_id,
             self.provider_release.adapter_release_id(),
             schedule_id,
             schedule_index,
-            observation_unix_seconds,
+            publication_unix_seconds,
             publication_unix_seconds,
             atoms,
-        )
+        ))
     }
 
     /// Return the exact adapter configuration selected by the Source.
     pub const fn adapter_config_id(self) -> ContentId {
         self.source.adapter_config_id()
+    }
+
+    /// Return the embedded configuration whose content digest is selected by
+    /// [`Self::adapter_config_id`].
+    pub const fn adapter_config(self) -> PythAdapterConfigV1 {
+        self.adapter_config
     }
 
     /// Return the exact embedded provider release.
@@ -2370,6 +2500,7 @@ pub struct RecoveryMaterialSlotV1 {
     source: SourceSpecV1,
     provider_release_id: ContentId,
     provider_release: ProviderReleaseV1,
+    adapter_config: PythAdapterConfigV1,
 }
 
 impl RecoveryMaterialSlotV1 {
@@ -2379,6 +2510,7 @@ impl RecoveryMaterialSlotV1 {
         source: SourceSpecV1,
         provider_release_id: ContentId,
         provider_release: ProviderReleaseV1,
+        adapter_config: PythAdapterConfigV1,
     ) -> Result<Self> {
         if source.provider_release_id() != provider_release_id
             || provider_release.adapter_release_id().to_bytes()
@@ -2391,6 +2523,7 @@ impl RecoveryMaterialSlotV1 {
             source,
             provider_release_id,
             provider_release,
+            adapter_config,
         })
     }
 
@@ -2413,6 +2546,11 @@ impl RecoveryMaterialSlotV1 {
     pub const fn provider_release(self) -> ProviderReleaseV1 {
         self.provider_release
     }
+
+    /// Return the embedded Pyth adapter configuration.
+    pub const fn adapter_config(self) -> PythAdapterConfigV1 {
+        self.adapter_config
+    }
 }
 
 /// The single canonical immutable Source authority preimage.
@@ -2430,6 +2568,7 @@ pub struct SourceMaterialV1 {
     primary_source: SourceSpecV1,
     primary_provider_release_id: ContentId,
     primary_provider_release: ProviderReleaseV1,
+    primary_adapter_config: PythAdapterConfigV1,
     window_id: ContentId,
     window: WindowSpecV1,
     statistic_id: ContentId,
@@ -2453,6 +2592,7 @@ impl SourceMaterialV1 {
         primary_source: SourceSpecV1,
         primary_provider_release_id: ContentId,
         primary_provider_release: ProviderReleaseV1,
+        primary_adapter_config: PythAdapterConfigV1,
         window_id: ContentId,
         window: WindowSpecV1,
         statistic_id: ContentId,
@@ -2535,6 +2675,7 @@ impl SourceMaterialV1 {
             primary_source,
             primary_provider_release_id,
             primary_provider_release,
+            primary_adapter_config,
             window_id,
             window,
             statistic_id,
@@ -2576,14 +2717,16 @@ impl SourceMaterialV1 {
         let primary_provider_release_id = content(bytes, 1696)?;
         let primary_provider_release =
             ProviderReleaseV1::decode(slice(bytes, 1728, PROVIDER_RELEASE_BYTES)?)?;
-        let recovery_id = read_optional_content(bytes, 1872)?;
+        let primary_adapter_config =
+            PythAdapterConfigV1::decode(slice(bytes, 1904, PYTH_ADAPTER_CONFIG_BYTES)?)?;
+        let recovery_id = read_optional_content(bytes, 1968)?;
         let recovery = match recovery_id {
             Some(id) => Some((
                 id,
-                RecoveryPolicyV1::decode(slice(bytes, 1904, RECOVERY_POLICY_BYTES)?)?,
+                RecoveryPolicyV1::decode(slice(bytes, 2000, RECOVERY_POLICY_BYTES)?)?,
             )),
             None => {
-                zero(bytes, 1904, RECOVERY_POLICY_BYTES)?;
+                zero(bytes, 2000, RECOVERY_POLICY_BYTES)?;
                 None
             }
         };
@@ -2591,11 +2734,18 @@ impl SourceMaterialV1 {
         let active = recovery.map_or(0, |(_, value)| usize::from(value.attempt_count()));
         let mut index = 0usize;
         while index < MAX_RECOVERY_ATTEMPTS {
-            let source_offset = 2432usize
+            let source_offset = 2528usize
                 .checked_add(index.checked_mul(224).ok_or(Error::ArithmeticOverflow)?)
                 .ok_or(Error::ArithmeticOverflow)?;
-            let provider_offset = 3328usize
-                .checked_add(index.checked_mul(176).ok_or(Error::ArithmeticOverflow)?)
+            let provider_offset = 3424usize
+                .checked_add(index.checked_mul(208).ok_or(Error::ArithmeticOverflow)?)
+                .ok_or(Error::ArithmeticOverflow)?;
+            let config_offset = 4256usize
+                .checked_add(
+                    index
+                        .checked_mul(PYTH_ADAPTER_CONFIG_BYTES)
+                        .ok_or(Error::ArithmeticOverflow)?,
+                )
                 .ok_or(Error::ArithmeticOverflow)?;
             if index < active {
                 let slot = recovery_slots
@@ -2610,10 +2760,16 @@ impl SourceMaterialV1 {
                         provider_offset + 32,
                         PROVIDER_RELEASE_BYTES,
                     )?)?,
+                    PythAdapterConfigV1::decode(slice(
+                        bytes,
+                        config_offset,
+                        PYTH_ADAPTER_CONFIG_BYTES,
+                    )?)?,
                 )?);
             } else {
                 zero(bytes, source_offset, 224)?;
-                zero(bytes, provider_offset, 176)?;
+                zero(bytes, provider_offset, 208)?;
+                zero(bytes, config_offset, PYTH_ADAPTER_CONFIG_BYTES)?;
             }
             index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
         }
@@ -2625,6 +2781,7 @@ impl SourceMaterialV1 {
             primary_source,
             primary_provider_release_id,
             primary_provider_release,
+            primary_adapter_config,
             window_id,
             window,
             statistic_id,
@@ -2656,15 +2813,17 @@ impl SourceMaterialV1 {
         put(&mut out, 1184, &self.mapping_artifact.to_bytes());
         put(&mut out, 1696, self.primary_provider_release_id.as_bytes());
         put(&mut out, 1728, &self.primary_provider_release.to_bytes());
+        put(&mut out, 1904, &self.primary_adapter_config.to_bytes());
         if let Some((id, recovery)) = self.recovery {
-            put(&mut out, 1872, id.as_bytes());
-            put(&mut out, 1904, &recovery.to_bytes());
+            put(&mut out, 1968, id.as_bytes());
+            put(&mut out, 2000, &recovery.to_bytes());
         }
         let mut index = 0usize;
         while index < MAX_RECOVERY_ATTEMPTS {
             if let Some(slot) = self.recovery_slots.get(index).copied().flatten() {
-                let source_offset = 2432 + index * 224;
-                let provider_offset = 3328 + index * 176;
+                let source_offset = 2528 + index * 224;
+                let provider_offset = 3424 + index * 208;
+                let config_offset = 4256 + index * PYTH_ADAPTER_CONFIG_BYTES;
                 put(&mut out, source_offset, slot.source_spec_id.as_bytes());
                 put(&mut out, source_offset + 32, &slot.source.to_bytes());
                 put(
@@ -2677,6 +2836,7 @@ impl SourceMaterialV1 {
                     provider_offset + 32,
                     &slot.provider_release.to_bytes(),
                 );
+                put(&mut out, config_offset, &slot.adapter_config.to_bytes());
             }
             index += 1;
         }
@@ -2704,6 +2864,11 @@ impl SourceMaterialV1 {
             self.primary_provider_release_id,
             self.primary_provider_release,
         )
+    }
+
+    /// Return the embedded primary Pyth adapter configuration.
+    pub const fn primary_adapter_config(self) -> PythAdapterConfigV1 {
+        self.primary_adapter_config
     }
 
     /// Return the source-capacity identity and profile.
@@ -2770,6 +2935,82 @@ impl SourceMaterialV1 {
         }
         Err(Error::LinkageMismatch)
     }
+
+    /// Select the embedded Pyth adapter configuration for one exact source.
+    pub fn adapter_config(self, source_spec_id: ContentId) -> Result<PythAdapterConfigV1> {
+        if source_spec_id == self.primary_source_id {
+            return Ok(self.primary_adapter_config);
+        }
+        let mut index = 0usize;
+        while index < MAX_RECOVERY_ATTEMPTS {
+            if let Some(slot) = self.recovery_slots.get(index).copied().flatten()
+                && slot.source_spec_id == source_spec_id
+            {
+                return Ok(slot.adapter_config);
+            }
+            index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        }
+        Err(Error::LinkageMismatch)
+    }
+}
+
+/// Return the exact canonical preimage width for a shared evidence set.
+pub fn shared_evidence_set_preimage_len_v1(observation_count: u16) -> Result<usize> {
+    if observation_count == 0 || usize::from(observation_count) > MAX_SHARED_OBSERVATIONS {
+        return Err(Error::InvalidSharedObservation);
+    }
+    SHARED_EVIDENCE_SET_HEADER_BYTES_V1
+        .checked_add(
+            usize::from(observation_count)
+                .checked_mul(NORMALIZED_EVIDENCE_BYTES)
+                .ok_or(Error::ArithmeticOverflow)?,
+        )
+        .ok_or(Error::ArithmeticOverflow)
+}
+
+/// Encode the one canonical digest preimage for an accepted shared evidence
+/// set. The caller hashes exactly the returned bytes; no caller-selected
+/// aggregate identity is semantic authority.
+pub fn encode_shared_evidence_set_preimage_v1(
+    material_id: ContentId,
+    source_spec_id: ContentId,
+    provider_release_id: ContentId,
+    window_spec_id: ContentId,
+    observations: &[NormalizedProviderEvidenceV1],
+    output: &mut [u8],
+) -> Result<()> {
+    let count = u16::try_from(observations.len()).map_err(|_| Error::ArithmeticOverflow)?;
+    let expected = shared_evidence_set_preimage_len_v1(count)?;
+    if output.len() != expected {
+        return Err(Error::InvalidLength);
+    }
+    output.fill(0);
+    put(output, 0, SHARED_EVIDENCE_SET_RELEASE_PREIMAGE_V1);
+    put(output, 40, &SCHEMA_VERSION.to_le_bytes());
+    put(output, 42, &count.to_le_bytes());
+    put(output, 48, material_id.as_bytes());
+    put(output, 80, source_spec_id.as_bytes());
+    put(output, 112, provider_release_id.as_bytes());
+    put(output, 144, window_spec_id.as_bytes());
+    let mut index = 0usize;
+    while index < observations.len() {
+        let observation = *observations.get(index).ok_or(Error::ArithmeticOverflow)?;
+        if observation.source_spec_id() != source_spec_id
+            || observation.provider_release_id() != provider_release_id
+        {
+            return Err(Error::StateBindingMismatch);
+        }
+        let offset = SHARED_EVIDENCE_SET_HEADER_BYTES_V1
+            .checked_add(
+                index
+                    .checked_mul(NORMALIZED_EVIDENCE_BYTES)
+                    .ok_or(Error::ArithmeticOverflow)?,
+            )
+            .ok_or(Error::ArithmeticOverflow)?;
+        put(output, offset, &observation.to_bytes());
+        index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+    }
+    Ok(())
 }
 
 /// Canonical persisted source-resolution lifecycle phase.
@@ -4069,6 +4310,11 @@ impl SharedObservationStateV1 {
     /// Return the immutable rent beneficiary authority.
     pub const fn rent_beneficiary(self) -> [u8; 32] {
         self.rent_beneficiary
+    }
+
+    /// Return the immutable Source-material identity selected at creation.
+    pub const fn material_id(self) -> ContentId {
+        self.material_id
     }
 
     /// Return the accepted evidence identity, when present.
@@ -5740,9 +5986,12 @@ mod tests {
         let provider = ProviderReleaseV1::new(
             id(16),
             ContentId::new(PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1).expect("Pyth extension"),
+            id(17),
             id(18),
             id(19),
         );
+        let adapter_config =
+            PythAdapterConfigV1::new([42; 32], -8, 100).expect("Pyth adapter configuration");
         let window = WindowSpecV1::new(id(3), WindowKind::Terminal, 100, 100, 10, 2, id(13))
             .expect("window");
         let statistic = StatisticSpecV1::new(
@@ -5779,7 +6028,7 @@ mod tests {
                 *recovery_slots
                     .get_mut(usize::from(index))
                     .expect("bounded recovery slot") = Some(
-                    RecoveryMaterialSlotV1::new(id(3), source, id(9), provider)
+                    RecoveryMaterialSlotV1::new(id(3), source, id(9), provider, adapter_config)
                         .expect("recovery material"),
                 );
                 index = index.checked_add(1).expect("bounded attempts");
@@ -5793,6 +6042,7 @@ mod tests {
             source,
             id(9),
             provider,
+            adapter_config,
             id(4),
             window,
             id(5),
@@ -5844,9 +6094,12 @@ mod tests {
         let provider = ProviderReleaseV1::new(
             id(16),
             ContentId::new(PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1).expect("Pyth extension"),
+            id(17),
             id(18),
             id(19),
         );
+        let adapter_config =
+            PythAdapterConfigV1::new([42; 32], -8, 100).expect("Pyth adapter configuration");
         let window = WindowSpecV1::new(
             id(3),
             WindowKind::ScheduledInterval,
@@ -5877,6 +6130,7 @@ mod tests {
             source,
             id(9),
             provider,
+            adapter_config,
             id(4),
             window,
             id(5),
@@ -5983,7 +6237,7 @@ mod tests {
             );
         }
         let mut dirty_material = material.to_bytes();
-        dirty_material[2432 + 2 * 224] = 1;
+        dirty_material[2528 + 2 * 224] = 1;
         assert_eq!(
             SourceMaterialV1::decode(&dirty_material),
             Err(Error::NonCanonicalReservedBytes)
@@ -6123,6 +6377,80 @@ mod tests {
                 4,
             ),
             Err(Error::InvalidRecoveryTransition)
+        );
+    }
+
+    #[test]
+    fn pyth_normalization_uses_authenticated_update_and_shared_digest_is_canonical() {
+        let (material, _, _) =
+            runtime_material(None, SourceAccessProfile::PythTerminalOneTransaction);
+        let obligation = PythProviderAdapterObligationV1::from_material(material, id(3))
+            .expect("Pyth obligation");
+        let accepted = obligation
+            .normalize_authenticated_update(id(23), id(13), 0, [42; 32], -1_000_000, 5_000, -8, 100)
+            .expect("configured update");
+        assert_eq!(accepted.atoms(), -1_000_000);
+        assert_eq!(accepted.observation_unix_seconds(), 100);
+        assert_eq!(accepted.publication_unix_seconds(), 100);
+        assert_eq!(
+            obligation.normalize_authenticated_update(
+                id(23),
+                id(13),
+                0,
+                [41; 32],
+                -1_000_000,
+                5_000,
+                -8,
+                100,
+            ),
+            Err(Error::InvalidPythObservation)
+        );
+        assert_eq!(
+            obligation.normalize_authenticated_update(
+                id(23),
+                id(13),
+                0,
+                [42; 32],
+                -1_000_000,
+                5_000,
+                -9,
+                100,
+            ),
+            Err(Error::InvalidPythObservation)
+        );
+        assert_eq!(
+            obligation.normalize_authenticated_update(id(23), id(13), 0, [42; 32], 1, 2, -8, 100,),
+            Err(Error::InvalidPythObservation)
+        );
+
+        let observation = normalized(5, 100);
+        let length = shared_evidence_set_preimage_len_v1(1).expect("one observation");
+        let mut bytes = [0u8; SHARED_EVIDENCE_SET_HEADER_BYTES_V1 + NORMALIZED_EVIDENCE_BYTES];
+        assert_eq!(bytes.len(), length);
+        encode_shared_evidence_set_preimage_v1(
+            id(22),
+            id(3),
+            id(9),
+            id(13),
+            &[observation],
+            &mut bytes,
+        )
+        .expect("canonical set");
+        assert_eq!(bytes.get(176..), Some(observation.to_bytes().as_slice()));
+        assert_eq!(
+            encode_shared_evidence_set_preimage_v1(
+                id(22),
+                id(4),
+                id(9),
+                id(13),
+                &[observation],
+                &mut bytes,
+            ),
+            Err(Error::StateBindingMismatch)
+        );
+        assert_eq!(
+            shared_evidence_set_preimage_len_v1(0),
+            Err(Error::InvalidSharedObservation)
         );
     }
 
@@ -6555,6 +6883,10 @@ mod tests {
             (
                 PYTH_PROVIDER_EXTENSION_RELEASE_PREIMAGE_V1,
                 PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
+            ),
+            (
+                SHARED_EVIDENCE_SET_RELEASE_PREIMAGE_V1,
+                SHARED_EVIDENCE_SET_RELEASE_ID_V1,
             ),
             (
                 SOURCE_STATE_SCHEMA_RELEASE_PREIMAGE_V1,

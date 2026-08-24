@@ -10,8 +10,13 @@
 use dclutch_capability_contract::{
     CAPABILITY_ENTRY_BYTES, CapabilityManifestV1, MANIFEST_HEADER_BYTES, MAX_MANIFEST_BYTES,
 };
+use dclutch_core_contract::ContentId as CoreContentId;
+use dclutch_dealer_contract::{LiquidityConfigV1, frame::DEALER_CONFIG_SCHEMA_RELEASE_ID_V1};
 use dclutch_direct_contract::{
     VENUE_FEE_POLICY_BYTES_V2, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2, VenueFeePolicyV2,
+};
+use dclutch_general_contract::{
+    GENERAL_CONFIG_BYTES, GENERAL_CONFIG_SCHEMA_ID_V1, GeneralConfigV1,
 };
 use dclutch_product_contract::{
     capacity::{CAPACITY_PROFILE_BYTES, CapacityProfileV1},
@@ -35,12 +40,26 @@ use dclutch_rent_contract::{
     RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1,
     SourceCloseCreditPlanV1,
 };
+use dclutch_series_contract::{
+    CAPITALIZATION_AGGREGATE_BYTES_V1, CapitalizationAggregateV1, DERIVED_OCCURRENCE_BYTES_V1,
+    DerivedOccurrenceV1, OCCURRENCE_CAPITALIZATION_BYTES_V1, OccurrenceCapitalizationV1,
+    SERIES_RECIPE_BYTES_V1, SeriesRecipeV1,
+};
+use dclutch_source_contract::{
+    SOURCE_MATERIAL_BYTES, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SourceMaterialV1,
+};
 use solana_program::{
-    account_info::AccountInfo, clock::Clock, hash::hash, program::invoke_signed,
-    program_error::ProgramError, pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize,
+    account_info::AccountInfo,
+    clock::Clock,
+    hash::hash,
+    program::{invoke, invoke_signed},
+    program_error::ProgramError,
+    pubkey::Pubkey,
+    rent::Rent,
+    sysvar::SysvarSerialize,
 };
 use solana_sdk_ids::{native_loader, system_program, sysvar};
-use solana_system_interface::instruction::create_account;
+use solana_system_interface::instruction::{allocate, assign, create_account, transfer};
 
 use crate::AdapterError;
 
@@ -89,9 +108,25 @@ pub(crate) const CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
     0x6b, 0xce, 0xf7, 0xb2, 0x83, 0x67, 0xcb, 0x8d, 0x08, 0x97, 0x10, 0xba, 0x58, 0xe6, 0x84, 0x31,
     0x2f, 0x43, 0x4c, 0x4b, 0xc4, 0x20, 0xee, 0xfd, 0x0f, 0x7a, 0x15, 0x0a, 0x90, 0x82, 0x88, 0xdf,
 ];
+pub(crate) const SERIES_RECIPE_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
+    0x25, 0xd2, 0x2f, 0x56, 0x52, 0x55, 0x02, 0x03, 0x77, 0x15, 0xb0, 0x74, 0xfe, 0xd8, 0xcf, 0x37,
+    0x31, 0x8c, 0xdc, 0x40, 0x75, 0xfa, 0xb0, 0x86, 0x8a, 0x1e, 0x2f, 0x11, 0x85, 0x91, 0x97, 0xf6,
+];
+pub(crate) const SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
+    0x36, 0xdc, 0xc9, 0xd8, 0x3c, 0x7a, 0x89, 0xeb, 0xb2, 0x4f, 0xd2, 0x44, 0x79, 0x23, 0xca, 0x68,
+    0x4c, 0x3c, 0x2c, 0x28, 0x20, 0x54, 0xc7, 0x58, 0x9c, 0x4a, 0xb3, 0x9d, 0xad, 0xec, 0x9a, 0xd5,
+];
+pub(crate) const SERIES_DERIVED_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
+    0x44, 0x14, 0xd1, 0xe5, 0x40, 0x3a, 0x59, 0x42, 0xfb, 0xf2, 0x88, 0x8f, 0x4a, 0x54, 0x84, 0x75,
+    0x85, 0x62, 0xcc, 0xc7, 0xd4, 0xb0, 0x53, 0xd8, 0x96, 0x42, 0xc7, 0xee, 0x02, 0xd3, 0x5c, 0xc9,
+];
+pub(crate) const SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
+    0x55, 0x8b, 0xc4, 0xd4, 0x83, 0xae, 0xc0, 0x5c, 0x81, 0x85, 0x33, 0x65, 0x6c, 0x58, 0xf7, 0x7c,
+    0x7f, 0x16, 0xe0, 0xb3, 0x42, 0x8f, 0x05, 0xe5, 0xa5, 0xfc, 0x97, 0x69, 0x3a, 0x1d, 0x9f, 0xdf,
+];
 
 #[cfg(test)]
-const RELEASE_LABELS_AND_IDS_V1: [(&[u8], [u8; 32]); 9] = [
+const RELEASE_LABELS_AND_IDS_V1: [(&[u8], [u8; 32]); 16] = [
     (
         b"dclutch/sbf-record-page-envelope/provisional-v1",
         PAGE_ENVELOPE_RELEASE_ID_V1,
@@ -124,6 +159,34 @@ const RELEASE_LABELS_AND_IDS_V1: [(&[u8], [u8; 32]); 9] = [
     (
         b"dclutch/schema/direct-venue-fee-policy-v2",
         VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2,
+    ),
+    (
+        b"dclutch/source-material-schema/v1",
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
+    ),
+    (
+        b"dclutch/schema/series-recipe-v1",
+        SERIES_RECIPE_SCHEMA_RELEASE_ID_V1,
+    ),
+    (
+        b"dclutch/schema/series-capitalization-aggregate-v1",
+        SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1,
+    ),
+    (
+        b"dclutch/schema/series-derived-occurrence-v1",
+        SERIES_DERIVED_SCHEMA_RELEASE_ID_V1,
+    ),
+    (
+        b"dclutch/schema/series-occurrence-capitalization-v1",
+        SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1,
+    ),
+    (
+        b"dclutch/dealer-liquidity-config/schema/v1",
+        DEALER_CONFIG_SCHEMA_RELEASE_ID_V1,
+    ),
+    (
+        b"dclutch/schema/general-config-v1",
+        GENERAL_CONFIG_SCHEMA_ID_V1.to_bytes(),
     ),
 ];
 
@@ -275,6 +338,10 @@ struct BeginPlan {
     cursor_bump: u8,
     raw_rent: u64,
     cursor_balance: u64,
+    raw_before: u64,
+    cursor_before: u64,
+    raw_top_up: u64,
+    cursor_top_up: u64,
     sponsor_before: u64,
 }
 
@@ -298,28 +365,26 @@ fn process_begin(
         digest.as_slice(),
         raw_bump.as_slice(),
     ];
-    let create_raw = create_account(
-        frame.sponsor.key,
-        frame.raw_record.key,
+    create_or_allocate_prefunded_pda(
+        frame.sponsor,
+        frame.raw_record,
+        frame.system_program,
         plan.raw_rent,
         raw_space,
         program_id,
-    );
-    invoke_signed(
-        &create_raw,
-        &[
-            frame.sponsor.clone(),
-            frame.raw_record.clone(),
-            frame.system_program.clone(),
-        ],
-        &[&raw_signer],
+        &raw_signer,
     )?;
     let sponsor_after_raw = plan
         .sponsor_before
-        .checked_sub(plan.raw_rent)
+        .checked_sub(plan.raw_top_up)
         .ok_or(AdapterError::Arithmetic)?;
     if frame.sponsor.lamports() != sponsor_after_raw
-        || frame.raw_record.lamports() != plan.raw_rent
+        || frame.raw_record.lamports()
+            != plan
+                .raw_before
+                .checked_add(plan.raw_top_up)
+                .ok_or(AdapterError::Arithmetic)?
+        || frame.raw_record.lamports() < plan.raw_rent
         || frame.raw_record.owner != program_id
         || u64::try_from(frame.raw_record.data_len()).map_err(|_| AdapterError::Arithmetic)?
             != raw_space
@@ -336,28 +401,26 @@ fn process_begin(
         digest.as_slice(),
         cursor_bump.as_slice(),
     ];
-    let create_cursor = create_account(
-        frame.sponsor.key,
-        frame.cursor.key,
+    create_or_allocate_prefunded_pda(
+        frame.sponsor,
+        frame.cursor,
+        frame.system_program,
         plan.cursor_balance,
         cursor_space,
         program_id,
-    );
-    invoke_signed(
-        &create_cursor,
-        &[
-            frame.sponsor.clone(),
-            frame.cursor.clone(),
-            frame.system_program.clone(),
-        ],
-        &[&cursor_signer],
+        &cursor_signer,
     )?;
 
     let expected_sponsor = sponsor_after_raw
-        .checked_sub(plan.cursor_balance)
+        .checked_sub(plan.cursor_top_up)
         .ok_or(AdapterError::Arithmetic)?;
     if frame.sponsor.lamports() != expected_sponsor
-        || frame.cursor.lamports() != plan.cursor_balance
+        || frame.cursor.lamports()
+            != plan
+                .cursor_before
+                .checked_add(plan.cursor_top_up)
+                .ok_or(AdapterError::Arithmetic)?
+        || frame.cursor.lamports() < plan.cursor_balance
         || frame.cursor.owner != program_id
         || frame.cursor.data_len() != STAGING_CURSOR_BYTES_V1
     {
@@ -390,8 +453,8 @@ fn authenticate_begin(
     require_rent_identity(frame.rent_sysvar)?;
     require_clock_identity(frame.clock_sysvar)?;
     require_system_wallet(frame.sponsor, true)?;
-    require_vacant(frame.raw_record)?;
-    require_vacant(frame.cursor)?;
+    require_prefunded_vacant(frame.raw_record)?;
+    require_prefunded_vacant(frame.cursor)?;
 
     let rent = Rent::from_account_info(frame.rent_sysvar).map_err(|_| AdapterError::AccountData)?;
     authenticate_rent_credit(
@@ -409,8 +472,10 @@ fn authenticate_begin(
     let cursor_balance = cursor_rent
         .checked_add(instruction.cleanup_bounty_lamports())
         .ok_or(AdapterError::Arithmetic)?;
-    let total_debit = raw_rent
-        .checked_add(cursor_balance)
+    let raw_top_up = raw_rent.saturating_sub(frame.raw_record.lamports());
+    let cursor_top_up = cursor_balance.saturating_sub(frame.cursor.lamports());
+    let total_debit = raw_top_up
+        .checked_add(cursor_top_up)
         .ok_or(AdapterError::Arithmetic)?;
     if frame.sponsor.lamports() < total_debit {
         return Err(AdapterError::FundUnderfunded.into());
@@ -471,6 +536,10 @@ fn authenticate_begin(
         cursor_bump,
         raw_rent,
         cursor_balance,
+        raw_before: frame.raw_record.lamports(),
+        cursor_before: frame.cursor.lamports(),
+        raw_top_up,
+        cursor_top_up,
         sponsor_before: frame.sponsor.lamports(),
     })
 }
@@ -700,8 +769,10 @@ fn process_abort(
 /// then expose its move-only authority to one same-instruction consumer.
 ///
 /// `staging_vacancy` must be the actual derived PDA observed as a read-only,
-/// system-owned, zero-lamport, empty account. A caller boolean or static index
-/// is never accepted as finality evidence.
+/// system-owned, nonexecuting, empty-data account. Its lamport balance is not
+/// semantic: arbitrary dust cannot resurrect a finalized cursor or disable a
+/// consumer. A caller boolean or static index is never accepted as finality
+/// evidence.
 #[allow(dead_code)] // Found consumers are wired by the separately owned routing seam.
 pub(crate) fn with_authenticated_finalized_record_v1<'info, T, F>(
     program_id: &Pubkey,
@@ -720,7 +791,7 @@ where
     require_privilege(rent_sysvar, false, false, false)?;
     require_distinct_refs(&[raw_record, staging_vacancy, rent_sysvar])?;
     require_rent_identity(rent_sysvar)?;
-    if raw_record.owner != program_id || !is_vacant(staging_vacancy) {
+    if raw_record.owner != program_id || !is_finalized_staging_vacancy(staging_vacancy) {
         return Err(AdapterError::AccountIdentity.into());
     }
     let rent = Rent::from_account_info(rent_sysvar).map_err(|_| AdapterError::AccountData)?;
@@ -869,7 +940,11 @@ impl RecordAdapterV1 for SbfRecordAdapter<'_, '_> {
             (
                 AdapterLifecycle::ConsumerAuthentication,
                 RawRecordValidationModeV1::ConsumerAuthentication,
-            ) => !self.cursor.is_writable && !self.cursor.is_signer && is_vacant(self.cursor),
+            ) => {
+                !self.cursor.is_writable
+                    && !self.cursor.is_signer
+                    && is_finalized_staging_vacancy(self.cursor)
+            }
             _ => false,
         }
     }
@@ -919,10 +994,151 @@ fn validate_found_schema(schema_release_id: SchemaReleaseId, content: &[u8]) -> 
             })
             .unwrap_or(false);
     }
+    if schema == SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1 {
+        return SourceMaterialV1::decode(content)
+            .map(|value| {
+                value.to_bytes().as_slice() == content
+                    && validate_source_material_links(content, value)
+            })
+            .unwrap_or(false);
+    }
+    if schema == SERIES_RECIPE_SCHEMA_RELEASE_ID_V1 {
+        return SeriesRecipeV1::decode(content)
+            .map(|value| value.to_bytes().as_slice() == content)
+            .unwrap_or(false);
+    }
+    if schema == SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1 {
+        return CapitalizationAggregateV1::decode(content)
+            .map(|value| value.to_bytes().as_slice() == content)
+            .unwrap_or(false);
+    }
+    if schema == SERIES_DERIVED_SCHEMA_RELEASE_ID_V1 {
+        return DerivedOccurrenceV1::decode(content)
+            .map(|value| value.to_bytes().as_slice() == content)
+            .unwrap_or(false);
+    }
+    if schema == SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1 {
+        return OccurrenceCapitalizationV1::decode(content)
+            .map(|value| value.to_bytes().as_slice() == content)
+            .unwrap_or(false);
+    }
+    if schema == DEALER_CONFIG_SCHEMA_RELEASE_ID_V1 {
+        return validate_dealer_config(content);
+    }
+    if schema == GENERAL_CONFIG_SCHEMA_ID_V1.to_bytes() {
+        return GeneralConfigV1::decode(content)
+            .map(|value| value.to_bytes().as_slice() == content)
+            .unwrap_or(false);
+    }
     false
 }
 
+fn validate_dealer_config(content: &[u8]) -> bool {
+    let Ok(content_id) = CoreContentId::new(hash(content).to_bytes()) else {
+        return false;
+    };
+    let mut canonical = [0u8; 4_176];
+    let Some(output) = canonical.get_mut(..content.len()) else {
+        return false;
+    };
+    macro_rules! admit {
+        ($n:literal, $b:literal) => {
+            if LiquidityConfigV1::<$n, $b>::encoded_len() == Ok(content.len())
+                && LiquidityConfigV1::<$n, $b>::decode(content_id, content)
+                    .and_then(|value| value.encode_into(output))
+                    .is_ok()
+                && output == content
+            {
+                return true;
+            }
+        };
+    }
+    macro_rules! admit_n {
+        ($n:literal) => {
+            admit!($n, 2);
+            admit!($n, 3);
+            admit!($n, 4);
+            admit!($n, 5);
+            admit!($n, 6);
+            admit!($n, 7);
+            admit!($n, 8);
+        };
+    }
+    admit_n!(2);
+    admit_n!(3);
+    admit_n!(4);
+    admit_n!(5);
+    admit_n!(6);
+    admit_n!(7);
+    admit_n!(8);
+    admit_n!(9);
+    admit_n!(10);
+    admit_n!(11);
+    admit_n!(12);
+    admit_n!(13);
+    admit_n!(14);
+    admit_n!(15);
+    admit_n!(16);
+    false
+}
+
+fn validate_source_material_links(content: &[u8], material: SourceMaterialV1) -> bool {
+    let fixed = [
+        (256usize, 288usize, 112usize),
+        (400, 432, 192),
+        (624, 656, 112),
+        (768, 800, 176),
+        (976, 1008, 144),
+        (1152, 1184, 512),
+        (1696, 1728, 176),
+    ];
+    if fixed.iter().any(|(id_offset, value_offset, length)| {
+        !content_link_matches(content, *id_offset, *value_offset, *length)
+    }) || !content_link_matches(content, 544, 1904, 64)
+    {
+        return false;
+    }
+    let active = material
+        .recovery_policy()
+        .map_or(0usize, |(_, policy)| usize::from(policy.attempt_count()));
+    if active != 0 && !content_link_matches(content, 1968, 2000, 528) {
+        return false;
+    }
+    let mut index = 0usize;
+    while index < active {
+        let source = 2528 + index * 224;
+        let provider = 3424 + index * 208;
+        let config = 4256 + index * 64;
+        if !content_link_matches(content, source, source + 32, 192)
+            || !content_link_matches(content, provider, provider + 32, 176)
+            || !content_link_matches(content, source + 144, config, 64)
+        {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+fn content_link_matches(
+    content: &[u8],
+    id_offset: usize,
+    value_offset: usize,
+    length: usize,
+) -> bool {
+    let Some(id) = content.get(id_offset..id_offset.saturating_add(32)) else {
+        return false;
+    };
+    let Some(value) = content.get(value_offset..value_offset.saturating_add(length)) else {
+        return false;
+    };
+    hash(value).to_bytes().as_slice() == id
+}
+
 fn is_supported_found_schema_release(schema_release_id: SchemaReleaseId) -> bool {
+    if schema_release_id.to_bytes() == GENERAL_CONFIG_SCHEMA_ID_V1.to_bytes() {
+        return true;
+    }
     matches!(
         schema_release_id.to_bytes(),
         REALM_SCHEMA_RELEASE_ID_V1
@@ -932,6 +1148,12 @@ fn is_supported_found_schema_release(schema_release_id: SchemaReleaseId) -> bool
             | PYTH_RESOLUTION_MATERIAL_SCHEMA_RELEASE_ID_V1
             | CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1
             | VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2
+            | SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1
+            | SERIES_RECIPE_SCHEMA_RELEASE_ID_V1
+            | SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1
+            | SERIES_DERIVED_SCHEMA_RELEASE_ID_V1
+            | SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1
+            | DEALER_CONFIG_SCHEMA_RELEASE_ID_V1
     )
 }
 
@@ -953,8 +1175,37 @@ fn is_admissible_found_schema_length(
                 && length.saturating_sub(MANIFEST_HEADER_BYTES) % CAPABILITY_ENTRY_BYTES == 0
         }
         VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2 => length == VENUE_FEE_POLICY_BYTES_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1 => length == SOURCE_MATERIAL_BYTES,
+        SERIES_RECIPE_SCHEMA_RELEASE_ID_V1 => length == SERIES_RECIPE_BYTES_V1,
+        SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1 => length == CAPITALIZATION_AGGREGATE_BYTES_V1,
+        SERIES_DERIVED_SCHEMA_RELEASE_ID_V1 => length == DERIVED_OCCURRENCE_BYTES_V1,
+        SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1 => length == OCCURRENCE_CAPITALIZATION_BYTES_V1,
+        DEALER_CONFIG_SCHEMA_RELEASE_ID_V1 => dealer_config_length_is_admissible(length),
+        value if value == GENERAL_CONFIG_SCHEMA_ID_V1.to_bytes() => length == GENERAL_CONFIG_BYTES,
         _ => false,
     }
+}
+
+fn dealer_config_length_is_admissible(length: usize) -> bool {
+    let Some(payload) = length.checked_sub(80) else {
+        return false;
+    };
+    if payload % 32 != 0 {
+        return false;
+    }
+    let cells = payload / 32;
+    let mut outcomes = 2usize;
+    while outcomes <= 16 {
+        let mut bins = 2usize;
+        while bins <= 8 {
+            if outcomes.checked_mul(bins) == Some(cells) {
+                return true;
+            }
+            bins += 1;
+        }
+        outcomes += 1;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -1211,6 +1462,56 @@ fn close_empty_system_account(account: &AccountInfo<'_>) -> Result<(), ProgramEr
     Ok(())
 }
 
+fn create_or_allocate_prefunded_pda<'info>(
+    payer: &AccountInfo<'info>,
+    created: &AccountInfo<'info>,
+    system: &AccountInfo<'info>,
+    minimum_balance: u64,
+    space: u64,
+    owner: &Pubkey,
+    signer_seeds: &[&[u8]],
+) -> Result<(), ProgramError> {
+    let before = created.lamports();
+    if !is_prefunded_vacant(created) {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let top_up = minimum_balance.saturating_sub(before);
+    if before == 0 {
+        invoke_signed(
+            &create_account(payer.key, created.key, minimum_balance, space, owner),
+            &[payer.clone(), created.clone(), system.clone()],
+            &[signer_seeds],
+        )?;
+    } else {
+        if top_up != 0 {
+            invoke(
+                &transfer(payer.key, created.key, top_up),
+                &[payer.clone(), created.clone(), system.clone()],
+            )?;
+        }
+        invoke_signed(
+            &allocate(created.key, space),
+            &[created.clone(), system.clone()],
+            &[signer_seeds],
+        )?;
+        invoke_signed(
+            &assign(created.key, owner),
+            &[created.clone(), system.clone()],
+            &[signer_seeds],
+        )?;
+    }
+    let expected = before.checked_add(top_up).ok_or(AdapterError::Arithmetic)?;
+    if created.owner != owner
+        || created.executable
+        || created.data_len() != usize::try_from(space).map_err(|_| AdapterError::Arithmetic)?
+        || created.lamports() != expected
+        || created.lamports() < minimum_balance
+    {
+        return Err(AdapterError::AccountData.into());
+    }
+    Ok(())
+}
+
 fn expected_abort_balances(
     actor_before: u64,
     credit_before: u64,
@@ -1293,8 +1594,8 @@ fn require_system_wallet(account: &AccountInfo<'_>, signer: bool) -> Result<(), 
     Ok(())
 }
 
-fn require_vacant(account: &AccountInfo<'_>) -> Result<(), ProgramError> {
-    if !is_vacant(account) {
+fn require_prefunded_vacant(account: &AccountInfo<'_>) -> Result<(), ProgramError> {
+    if !is_prefunded_vacant(account) {
         return Err(AdapterError::AccountIdentity.into());
     }
     Ok(())
@@ -1305,6 +1606,16 @@ fn is_vacant(account: &AccountInfo<'_>) -> bool {
         && !account.executable
         && account.lamports() == 0
         && account.try_data_is_empty().unwrap_or(false)
+}
+
+fn is_prefunded_vacant(account: &AccountInfo<'_>) -> bool {
+    account.owner == &system_program::ID
+        && !account.executable
+        && account.try_data_is_empty().unwrap_or(false)
+}
+
+fn is_finalized_staging_vacancy(account: &AccountInfo<'_>) -> bool {
+    is_prefunded_vacant(account)
 }
 
 fn preflight_lamports(account: &AccountInfo<'_>) -> Result<(), ProgramError> {
@@ -1435,6 +1746,9 @@ pub(crate) fn map_rent_error(error: dclutch_rent_contract::Error) -> ProgramErro
 mod tests {
     use alloc::{boxed::Box, vec, vec::Vec};
     use dclutch_capability_contract::CapabilityManifestV1;
+    use dclutch_general_contract::{
+        ContentId as GeneralContentId, GENERAL_CAPABILITY_RELEASE_ID_V1, GeneralConfigV1Input,
+    };
     use dclutch_kernel::resolution::categorical_pyth_v1::{
         CategoricalPythV1PolicyInput, MAX_PRICE_CELLS,
     };
@@ -1521,6 +1835,22 @@ mod tests {
                 VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2,
                 VENUE_FEE_POLICY_BYTES_V2,
             ),
+            (SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SOURCE_MATERIAL_BYTES),
+            (SERIES_RECIPE_SCHEMA_RELEASE_ID_V1, SERIES_RECIPE_BYTES_V1),
+            (
+                SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1,
+                CAPITALIZATION_AGGREGATE_BYTES_V1,
+            ),
+            (
+                SERIES_DERIVED_SCHEMA_RELEASE_ID_V1,
+                DERIVED_OCCURRENCE_BYTES_V1,
+            ),
+            (
+                SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1,
+                OCCURRENCE_CAPITALIZATION_BYTES_V1,
+            ),
+            (DEALER_CONFIG_SCHEMA_RELEASE_ID_V1, 208),
+            (GENERAL_CONFIG_SCHEMA_ID_V1.to_bytes(), GENERAL_CONFIG_BYTES),
         ] {
             let schema = SchemaReleaseId::new(schema_id).expect("known schema");
             assert!(is_supported_found_schema_release(schema));
@@ -1544,6 +1874,15 @@ mod tests {
         assert!(!is_admissible_found_schema_length(
             unsupported,
             u64::try_from(REALM_BYTES).expect("bounded length"),
+        ));
+        let dealer =
+            SchemaReleaseId::new(DEALER_CONFIG_SCHEMA_RELEASE_ID_V1).expect("Dealer config schema");
+        assert!(is_admissible_found_schema_length(dealer, 4_176));
+        assert!(!is_admissible_found_schema_length(dealer, 144));
+        assert!(!is_admissible_found_schema_length(dealer, 4_177));
+        assert!(!validate_found_schema(
+            SchemaReleaseId::new(GENERAL_CONFIG_SCHEMA_ID_V1.to_bytes()).expect("General schema"),
+            &[0; GENERAL_CONFIG_BYTES],
         ));
     }
 
@@ -1640,6 +1979,198 @@ mod tests {
                 &poison,
             ));
         }
+    }
+
+    #[test]
+    fn series_and_dealer_records_require_exact_canonical_decode() {
+        use dclutch_series_contract::{
+            CAPABILITY_DERIVATION_RELEASE_ID_V1, IdentityV1, MARKET_DERIVATION_RELEASE_ID_V1,
+            OCCURRENCE_DERIVATION_RELEASE_ID_V1, PRODUCT_COMPILER_RELEASE_ID_V1,
+            SOURCE_DERIVATION_RELEASE_ID_V1,
+        };
+        let identity = |value: u8| IdentityV1::new([value; 32]).expect("identity");
+        let recipe = SeriesRecipeV1 {
+            realm_id: identity(1),
+            terms_id: identity(2),
+            claim_basis_id: identity(3),
+            capacity_profile_id: identity(4),
+            compiler_release_id: IdentityV1::new(PRODUCT_COMPILER_RELEASE_ID_V1).expect("compiler"),
+            occurrence_schedule_id: identity(6),
+            source_schedule_id: identity(7),
+            capability_template_id: identity(8),
+            occurrence_derivation_release_id: IdentityV1::new(OCCURRENCE_DERIVATION_RELEASE_ID_V1)
+                .expect("occurrence release"),
+            source_derivation_release_id: IdentityV1::new(SOURCE_DERIVATION_RELEASE_ID_V1)
+                .expect("source release"),
+            capability_derivation_release_id: IdentityV1::new(CAPABILITY_DERIVATION_RELEASE_ID_V1)
+                .expect("capability release"),
+            market_derivation_release_id: IdentityV1::new(MARKET_DERIVATION_RELEASE_ID_V1)
+                .expect("Market release"),
+            capitalization_schedule_id: identity(13),
+            first_occurrence_time: 100,
+            cadence_seconds: 10,
+            occurrence_count: 1,
+            first_generation: 7,
+            outcome_count: 2,
+        };
+        let aggregate = CapitalizationAggregateV1 {
+            recipe_id: identity(20),
+            capitalization_schedule_id: identity(13),
+            occurrence_count: 1,
+            total_principal: 30,
+            first_capitalization_id: identity(21),
+        };
+        let derived = DerivedOccurrenceV1 {
+            recipe_id: identity(20),
+            occurrence_index: 0,
+            occurrence_time: 100,
+            generation: 7,
+            occurrence_artifact_id: identity(22),
+            occurrence_id: identity(23),
+            product_instance_id: identity(24),
+            source_spec_id: identity(25),
+            source_window_id: identity(26),
+            statistic_id: identity(27),
+            resolution_policy_id: identity(28),
+            capability_manifest_id: identity(29),
+            market_identity_id: identity(30),
+            capitalization_id: identity(21),
+        };
+        let capitalization = OccurrenceCapitalizationV1 {
+            recipe_id: identity(20),
+            capitalization_schedule_id: identity(13),
+            occurrence_index: 0,
+            market_principal: 20,
+            ticket_rent: 10,
+            total_principal: 30,
+            next_capitalization_id: None,
+        };
+        for (schema, bytes) in [
+            (
+                SERIES_RECIPE_SCHEMA_RELEASE_ID_V1,
+                recipe.to_bytes().to_vec(),
+            ),
+            (
+                SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1,
+                aggregate.to_bytes().to_vec(),
+            ),
+            (
+                SERIES_DERIVED_SCHEMA_RELEASE_ID_V1,
+                derived.to_bytes().to_vec(),
+            ),
+            (
+                SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1,
+                capitalization.to_bytes().to_vec(),
+            ),
+        ] {
+            let release = SchemaReleaseId::new(schema).expect("schema");
+            assert!(validate_found_schema(release, &bytes));
+            assert!(!validate_found_schema(
+                release,
+                bytes.get(..bytes.len() - 1).expect("short record"),
+            ));
+            let mut hostile = bytes;
+            *hostile.get_mut(0).expect("magic") ^= 1;
+            assert!(!validate_found_schema(release, &hostile));
+        }
+
+        let mut bids = [[0u64; 2]; 2];
+        let mut asks = [[0u64; 2]; 2];
+        for (bid, ask) in bids.iter_mut().zip(asks.iter_mut()) {
+            *bid = [4_000, 3_900];
+            *ask = [6_000, 6_100];
+        }
+        let config = LiquidityConfigV1::<2, 2>::new(
+            CoreContentId::new([31; 32]).expect("content"),
+            [32; 32],
+            10_000,
+            25,
+            100,
+            10,
+            bids,
+            asks,
+            [[100; 2]; 2],
+            [[100; 2]; 2],
+        )
+        .expect("Dealer config");
+        let mut bytes = vec![0; LiquidityConfigV1::<2, 2>::encoded_len().expect("width")];
+        config.encode_into(&mut bytes).expect("encode config");
+        let release = SchemaReleaseId::new(DEALER_CONFIG_SCHEMA_RELEASE_ID_V1).expect("schema");
+        assert!(validate_found_schema(release, &bytes));
+        *bytes.get_mut(11).expect("reserved byte") = 1;
+        assert!(!validate_found_schema(release, &bytes));
+    }
+
+    #[test]
+    fn general_record_requires_exact_canonical_decode() {
+        let identity = |value: u8| GeneralContentId::new([value; 32]).expect("identity");
+        let config = GeneralConfigV1::new(GeneralConfigV1Input {
+            capacity_profile_id: identity(1),
+            market_identity_id: identity(2),
+            claim_basis_id: identity(3),
+            capability_release_id: GENERAL_CAPABILITY_RELEASE_ID_V1,
+            generation: 7,
+            price_scale: 100,
+            collection_slots: 10,
+            selection_slots: 10,
+            settlement_slots: 10,
+            max_orders_per_candidate: 4,
+            max_pages_per_candidate: 1,
+            outcome_count: 2,
+        })
+        .expect("General config");
+        let bytes = config.to_bytes();
+        let release = SchemaReleaseId::new(GENERAL_CONFIG_SCHEMA_ID_V1.to_bytes()).expect("schema");
+        assert!(validate_found_schema(release, &bytes));
+        assert!(!validate_found_schema(
+            release,
+            bytes.get(..bytes.len() - 1).expect("short record"),
+        ));
+
+        let mut hostile = bytes;
+        *hostile.get_mut(0).expect("magic byte") ^= 1;
+        assert!(!validate_found_schema(release, &hostile));
+
+        let mut hostile = bytes;
+        *hostile.get_mut(11).expect("reserved byte") = 1;
+        assert!(!validate_found_schema(release, &hostile));
+    }
+
+    #[test]
+    fn dusted_empty_system_pdas_remain_absent_but_not_close_vacant() {
+        let dusted = test_account(
+            Pubkey::new_unique(),
+            false,
+            false,
+            41,
+            Vec::new(),
+            system_program::ID,
+            false,
+        );
+        assert!(is_prefunded_vacant(&dusted));
+        assert!(is_finalized_staging_vacancy(&dusted));
+        assert!(!is_vacant(&dusted));
+
+        let data_poison = test_account(
+            Pubkey::new_unique(),
+            false,
+            false,
+            41,
+            vec![0],
+            system_program::ID,
+            false,
+        );
+        let owner_poison = test_account(
+            Pubkey::new_unique(),
+            false,
+            false,
+            41,
+            Vec::new(),
+            Pubkey::new_unique(),
+            false,
+        );
+        assert!(!is_finalized_staging_vacancy(&data_poison));
+        assert!(!is_finalized_staging_vacancy(&owner_poison));
     }
 
     #[test]
@@ -1741,6 +2272,22 @@ mod tests {
         )
         .expect("actual vacancy authenticates");
         assert_eq!(authenticated_length, content.len());
+
+        **vacancy
+            .try_borrow_mut_lamports()
+            .expect("dust vacancy lamports") = 41;
+        assert_eq!(
+            with_authenticated_finalized_record_v1(
+                &program_id,
+                &raw,
+                &vacancy,
+                &rent_account,
+                schema,
+                digest,
+                |receipt| Ok(receipt.exact_content().len()),
+            ),
+            Ok(content.len())
+        );
 
         let live_staging_cursor = test_account(
             cursor_key,

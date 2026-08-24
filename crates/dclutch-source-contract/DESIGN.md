@@ -10,15 +10,15 @@ settle a Market, or close an account. Those are SBF adapter obligations.
 ## One immutable Source authority
 
 `SourceMaterialV1` is the only persisted immutable authority for a resolution.
-Its exact 4,032-byte preimage embeds, by value and closed content ID:
+Its exact 4,512-byte preimage embeds, by value and closed content ID:
 
 - the Product occurrence resolution policy;
 - capacity profile;
-- primary source and provider release;
+- primary source, provider release, and Pyth adapter configuration;
 - window and statistic;
 - result mapping and its finite mapping artifact; and
 - optional ordered recovery policy plus each active recovery source and
-  provider release.
+  provider release and Pyth adapter configuration.
 
 The reusable pure subtypes remain public because they define and evaluate the
 semantics, but no route accepts separately authenticated policy, source,
@@ -26,7 +26,8 @@ window, statistic, mapping, recovery, or provider records. Every route that
 uses immutable Source semantics has one finalized-record authentication triple,
 in this order: raw `SourceMaterialV1`, its derived vacant staging PDA, and the
 Rent sysvar. The adapter must verify the raw record owner and exact length,
-decode it, hash all 4,032 bytes to the instruction/state material ID, and derive
+decode it, hash all 4,512 bytes to the instruction/state material ID, verify
+every embedded configuration/content-ID link, and derive
 the vacant staging address under the authenticated record release. Static
 clients and indexes are untrusted projections.
 
@@ -73,12 +74,23 @@ Only after all those checks may it call
 `PythProviderAdapterObligationV1::normalize_authenticated_update`. The closed
 extension ABI does not by itself authorize an arbitrary deployed Pyth release;
 the production release catalog must recognize the material-selected release.
+`ProviderReleaseV1` therefore commits a distinct provider-family identity,
+Source extension identity, exact provider deployment-release content identity,
+decoding-rules identity, and transport-profile identity.
 
 The normalized 208-byte output binds source ID, provider-release ID,
 provider-evidence content ID, adapter-release ID, schedule ID and index,
 observation/publication Unix times, and one signed `i128` value. These bytes are
 provider-neutral transition input after the named adapter boundary, not a
 provider attestation or separately persisted caller record.
+
+The embedded 64-byte Pyth adapter configuration commits the exact feed ID,
+raw exponent, and inclusive confidence-ratio bound. Normalization consumes the
+authenticated posted update's feed, price, confidence, exponent, and publish
+time directly; none is caller-selected. A completed shared child is named by
+the hash of the closed shared-evidence-set preimage containing the material,
+source/provider/window bindings and every exact normalized observation in
+order.
 
 Inline primary/recovery acceptance uses the Pyth extension atomically. A
 resolution using the shared profile instead consumes an already accepted,
@@ -190,10 +202,11 @@ retirement delta. There is no archive and no shared child for inline profiles.
 
 ## Exact wires and account frames
 
-Immutable preimage widths are: provider release 144, capacity profile 112,
+Immutable preimage widths are: provider release 176, Pyth adapter configuration
+64, capacity profile 112,
 source 192, window 112, statistic 176, result mapping 144, resolution policy
 240, recovery policy 528, normalized evidence 208, finite result map 512, Source
-material 4,032, source-resolution state 224, shared observation state 3,616,
+material 4,512, source-resolution state 224, shared observation state 3,616,
 and reopen link 128 bytes.
 
 The closed instruction header is 16 bytes. Exact fixed widths are:
