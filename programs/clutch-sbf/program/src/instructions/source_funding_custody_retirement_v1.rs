@@ -710,6 +710,10 @@ pub(crate) struct SourceFamilyTerminalAccountingV3 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SourceFamilyTerminalFactsV3 {
     pub(crate) accounting: SourceFamilyTerminalAccountingV3,
+    pub(crate) funding_account: RuntimeKey,
+    pub(crate) funding_state_id: ContentId,
+    pub(crate) funding_account_data_id: ContentId,
+    pub(crate) funding_account_authentication_id: ContentId,
     pub(crate) lifecycle_terminal_authentication_id: ContentId,
     pub(crate) lifecycle_terminal: SourceFundingCustodyLifecycleTerminalFactsV1,
     pub(crate) product_release: SourceFundingCustodyProductReleaseFactsV3,
@@ -991,8 +995,19 @@ pub(crate) fn retire_source_funding_custody_v3(
     let neutral_sink_balance_after = neutral_sink_balance_before
         .checked_add(ledger_before.donation_lamports)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let funding_state_id = ContentId::from_bytes(
+        funding
+            .state()
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            .bytes(),
+    );
     let facts = SourceFamilyTerminalFactsV3 {
         accounting,
+        funding_account: RuntimeKey::from_bytes(funding.account().to_bytes()),
+        funding_state_id,
+        funding_account_data_id: funding.data_id(),
+        funding_account_authentication_id: funding.authentication_id(),
         lifecycle_terminal_authentication_id: lifecycle_terminal.id(),
         lifecycle_terminal: lifecycle_terminal_facts,
         product_release: product_release_facts,
@@ -1070,6 +1085,7 @@ pub(crate) fn retire_source_funding_custody_v3(
         solana_sha256_hasher::hashv(&[
             SOURCE_FAMILY_TERMINAL_DOMAIN_V3,
             &funding.account().to_bytes(),
+            &funding_state_id.bytes(),
             &funding.data_id().bytes(),
             &funding.authentication_id().bytes(),
             &accounting.funding_terms_id.bytes(),
@@ -1167,9 +1183,15 @@ pub(crate) fn consume_source_family_terminal_into_product_v3<'root, 'link, 'post
             && link_state.phase() == SeriesMarketLinkPhaseV3::Retiring
             && root_binding.market_instance_id == link_binding.market_instance_id
             && root_binding.generation == link_binding.generation
+            && root_before.binding_id() == link_binding.market_binding_id
             && link_binding.market_root_account_id.bytes() == root_account.key.to_bytes()
             && terminal.accounting.funding_terms_id.bytes()
                 == link_binding.funding_terms_id.bytes()
+            && terminal.funding_account.bytes()
+                == link_binding.funding_state_account_id.bytes()
+            && !terminal.funding_state_id.is_zero()
+            && !terminal.funding_account_data_id.is_zero()
+            && !terminal.funding_account_authentication_id.is_zero()
             && lifecycle.product_link_account.bytes() == link_account.key.to_bytes()
             && lifecycle.product_link_account_data_id.bytes()
                 == link_before.data_id().bytes()
