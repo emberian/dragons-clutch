@@ -19,6 +19,38 @@ use crate::{
 /// Exact current b1/v2 semantic-body width.
 pub const DIRECT_MARKET_ROOT_BODY_BYTES_V2: usize = 2_498;
 
+/// Stream the canonical fresh action-1 root directly into caller-owned
+/// storage. This is the live-SBF construction boundary: no `DirectMarketRootV2`
+/// or second 2.5KiB body is returned by value.
+pub fn encode_direct_market_foundation_body_v2(
+    binding: &DirectMarketBindingV2,
+    schedule: DirectScheduleV1,
+    root_rent: DirectRentOwnerV1,
+    output: &mut [u8],
+) -> Result<(), DirectMarketErrorV1> {
+    binding.validate()?;
+    schedule.validate()?;
+    root_rent.validate()?;
+    if output.len() != DIRECT_MARKET_ROOT_BODY_BYTES_V2 {
+        return Err(DirectMarketErrorV1::InvalidCount);
+    }
+    let mut writer = BodyWriter::new(output);
+    write_binding(&mut writer, binding)?;
+    write_schedule(&mut writer, schedule)?;
+    write_rent(&mut writer, root_rent)?;
+    writer.u8(root_phase_byte(DirectRootPhaseV1::Open))?;
+    writer.u8(0)?;
+    writer.u8(0)?;
+    writer.u8(0)?;
+    writer.u8(0)?;
+    writer.id([0; 32])?;
+    writer.id([0; 32])?;
+    writer.id([0; 32])?;
+    writer.id([0; 32])?;
+    writer.id([0; 32])?;
+    writer.finish()
+}
+
 /// Encode the current root directly into exact caller-provided storage.
 pub fn encode_direct_market_root_body_v2(
     value: &DirectMarketRootV2,

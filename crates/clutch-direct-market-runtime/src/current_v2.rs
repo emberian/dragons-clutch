@@ -685,6 +685,45 @@ impl DirectMarketRootV2 {
     }
 }
 
+/// Derive the exact semantic identity of the fresh action-1 root without
+/// materializing the 2.5KiB current root by value. The caller must stream the
+/// same binding, schedule, and rent into the canonical V2 codec.
+pub fn direct_foundation_root_semantic_id_v2<B: DirectHashBackendV1>(
+    binding: &DirectMarketBindingV2,
+    schedule: DirectScheduleV1,
+    root_rent: DirectRentOwnerV1,
+    backend: &B,
+) -> Result<[u8; 32], DirectMarketErrorV1> {
+    binding.validate()?;
+    schedule.validate()?;
+    root_rent.validate()?;
+    let binding_id = binding.semantic_id(backend)?;
+    let id = backend.sha256_parts(&[
+        ROOT_STATE_DOMAIN_V2,
+        &binding_id,
+        &schedule.admission_opens_slot.to_le_bytes(),
+        &schedule.admission_closes_slot.to_le_bytes(),
+        &schedule.submission_closes_slot.to_le_bytes(),
+        &schedule.selection_deadline_slot.to_le_bytes(),
+        &schedule.settlement_deadline_slot.to_le_bytes(),
+        &root_rent.payer,
+        &root_rent.principal_lamports.to_le_bytes(),
+        &root_rent.donation_floor_lamports.to_le_bytes(),
+        &[DirectRootPhaseV1::Open.byte()],
+        &[0],
+        &[0],
+        &[0],
+        &[0],
+        &[0; 32],
+        &[0; 32],
+        &[0; 32],
+        &[0; 32],
+        &[0; 32],
+    ]);
+    require_live_v2(id)?;
+    Ok(id)
+}
+
 /// Current root plus unchanged permanent b3/v1 replay owner.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectRootReplayPostV2 {

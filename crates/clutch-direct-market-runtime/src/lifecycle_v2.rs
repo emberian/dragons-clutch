@@ -18,7 +18,8 @@ use clutch_general_v2_contract::GeneralPositionReplayPrestateV1;
 use clutch_owner_settlement::{AuthenticatedPositionV3, PositionSettlementPoststateV3};
 
 use crate::current_v2::{
-    DirectMarketBindingV2, DirectMarketRootV2, DirectRootReplayPostV2,
+    direct_foundation_root_semantic_id_v2, DirectMarketBindingV2, DirectMarketRootV2,
+    DirectRootReplayPostV2,
 };
 use crate::fee_v1::DirectFeeTerminalV1;
 use crate::fee_v2::DirectFeePolicyV2;
@@ -84,14 +85,16 @@ pub struct NoDirectFoundationAuthorityV2;
 
 impl AuthenticatedDirectFoundationV2 for NoDirectFoundationAuthorityV2 {}
 
-/// Current action-1 result. Product admission and 0xba/v2 allocation facts
-/// remain committed by the private binding rather than a downgraded Product DTO.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DirectFoundationPlanV2 {
-    /// Fresh b1/v2 root and permanent b3 replay.
-    pub state: DirectRootReplayPostV2,
+/// Compact current action-1 receipt. The 2.5KiB root and permanent replay are
+/// streamed into caller-provided bodies and never returned by value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectFoundationReceiptV2 {
     /// Sole current Direct foundation receipt.
     pub admission_receipt_id: [u8; 32],
+    /// Exact semantic identity of the streamed fresh b1/v2 root.
+    pub root_semantic_id: [u8; 32],
+    /// Exact semantic identity of the streamed permanent b3 replay.
+    pub replay_semantic_id: [u8; 32],
     /// Product family successor authenticated during the same outer call.
     pub product_family_poststate_id: [u8; 32],
     /// Product family admission receipt authenticated during the same outer call.
@@ -100,20 +103,26 @@ pub struct DirectFoundationPlanV2 {
     pub candidate_liveness_allocation_receipt_id: [u8; 32],
 }
 
-/// Prepare fresh current action 1.
+/// Prepare fresh current action 1 directly into caller-owned semantic bodies.
+///
+/// The buffers exclude their Solana tag/version/bump headers. They must be
+/// committed atomically with the Product family and `0xba/v2` successors
+/// authenticated by `authority`.
 #[allow(clippy::too_many_arguments)]
-pub fn prepare_direct_foundation_v2<
+pub fn prepare_direct_foundation_into_v2<
     A: AuthenticatedDirectFoundationV2 + ?Sized,
     B: DirectHashBackendV1,
 >(
     authority: &A,
-    binding: DirectMarketBindingV2,
+    binding: &DirectMarketBindingV2,
     schedule: DirectScheduleV1,
     root_rent: DirectRentOwnerV1,
     action_replay_rent: DirectRentOwnerV1,
     observed_slot: u64,
+    root_body_out: &mut [u8],
+    replay_body_out: &mut [u8; crate::codec_v1::DIRECT_ACTION_REPLAY_BODY_BYTES_V1],
     backend: &B,
-) -> Result<DirectFoundationPlanV2, DirectMarketErrorV1> {
+) -> Result<DirectFoundationReceiptV2, DirectMarketErrorV1> {
     binding.validate()?;
     schedule.validate()?;
     root_rent.validate()?;
@@ -125,15 +134,19 @@ pub fn prepare_direct_foundation_v2<
         return Err(DirectMarketErrorV1::MismatchedBinding);
     }
     authority.authenticate_foundation_v2(
-        &binding,
+        binding,
         schedule,
         root_rent,
         action_replay_rent,
         observed_slot,
     )?;
-    let root = DirectMarketRootV2::new_open(binding.clone(), schedule, root_rent)?;
     let binding_id = binding.semantic_id(backend)?;
-    let root_id = root.semantic_id(backend)?;
+    let root_id = direct_foundation_root_semantic_id_v2(
+        binding,
+        schedule,
+        root_rent,
+        backend,
+    )?;
     let admission_receipt_id = backend.sha256_parts(&[
         FOUNDATION_RECEIPT_DOMAIN_V2,
         &binding_id,
@@ -192,11 +205,36 @@ pub fn prepare_direct_foundation_v2<
         candidate_liveness_batch_receipt_id: [0; 32],
         candidate_liveness_pending: false,
     };
-    let state = DirectRootReplayPostV2 { root, replay };
-    state.validate(backend)?;
-    Ok(DirectFoundationPlanV2 {
-        state,
+    let projected_root = crate::DirectMarketRootV1 {
+        binding: binding.transition_projection(backend)?,
+        schedule,
+        root_rent,
+        phase: crate::DirectRootPhaseV1::Open,
+        terminal_reason: None,
+        admitted_reservations: 0,
+        live_reservations: 0,
+        retired_reservations: 0,
+        reservation_accounts: [[0; 32]; 2],
+        reservation_semantic_ids: [[0; 32]; 2],
+        selection_account: [0; 32],
+    };
+    projected_root.validate()?;
+    replay.validate_against(projected_root)?;
+    let replay_semantic_id = replay.semantic_id(projected_root, backend)?;
+    crate::codec_v2::encode_direct_market_foundation_body_v2(
+        binding,
+        schedule,
+        root_rent,
+        root_body_out,
+    )?;
+    *replay_body_out = crate::codec_v1::encode_direct_action_replay_body_v1(
+        replay,
+        projected_root,
+    )?;
+    Ok(DirectFoundationReceiptV2 {
         admission_receipt_id,
+        root_semantic_id: root_id,
+        replay_semantic_id,
         product_family_poststate_id: binding.product.product_family_poststate_id,
         product_family_admission_receipt_id:
             binding.product.product_family_admission_receipt_id,
@@ -1311,3 +1349,7 @@ pub fn seal_direct_family_terminal_liveness_v2<B: DirectHashBackendV1>(
         family_terminal_sequence: preparation.family_terminal_sequence,
     })
 }
+
+const _: () = assert!(core::mem::size_of::<DirectFoundationReceiptV2>() <= 224);
+const _: () = assert!(core::mem::size_of::<DirectFamilyTerminalPreparationV2>() <= 768);
+const _: () = assert!(core::mem::size_of::<DirectFamilyTerminalPlanV2>() <= 1_024);
