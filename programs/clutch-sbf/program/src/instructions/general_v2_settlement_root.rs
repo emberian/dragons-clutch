@@ -1,18 +1,17 @@
-//! Capability-disabled authentication seam for the counted General settlement root.
+//! Exact authentication seam for the indexed counted General settlement root.
 //!
-//! The `0xa9/1` and disabled `0xa9/2` roots are the candidate-scoped owners of
-//! every live settlement child count. This module authenticates either exact
-//! version from the General program owner, canonical epoch/candidate seed
-//! tuple, stored bump, exact width, and full semantic decoder. Version-aware
-//! writers expose only named action transitions, so an indexed suffix cannot
-//! be dropped by a legacy 980-byte rewrite. There is no dispatcher route.
+//! The `0xa9/2` root is the candidate-scoped owner of every live settlement
+//! child count. This module authenticates only its exact indexed body from the
+//! General program owner, canonical epoch/candidate seed tuple, stored bump,
+//! exact width, and full semantic decoder. Named writers cannot drop the
+//! indexed suffix through a legacy 980-byte rewrite.
 
 use core::cell::Ref;
 use std::boxed::Box;
 
 use clutch_general_v2_contract::{
     Id32, IndexedSettlementRootV1AccountV1, SettlementRootV1AccountV1, Sha256BackendV1,
-    INDEXED_SETTLEMENT_ROOT_BYTES_V1, SETTLEMENT_ROOT_ACCOUNT_BYTES,
+    INDEXED_SETTLEMENT_ROOT_BYTES_V1,
 };
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -31,13 +30,7 @@ pub const IX_SETTLEMENT_ROOT: usize = 0;
 #[derive(Debug, Eq, PartialEq)]
 pub struct AuthenticatedGeneralSettlementRootV1 {
     account: Id32,
-    body: AuthenticatedGeneralSettlementRootBodyV1,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-enum AuthenticatedGeneralSettlementRootBodyV1 {
-    Legacy(Box<SettlementRootV1AccountV1>),
-    Indexed(Box<IndexedSettlementRootV1AccountV1>),
+    body: Box<IndexedSettlementRootV1AccountV1>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,51 +64,28 @@ enum RootAccessV1 {
 }
 
 impl AuthenticatedGeneralSettlementRootV1 {
-    /// Canonical writable `0xa9/1` account.
+    /// Canonical writable `0xa9/2` account.
     pub const fn account(&self) -> Id32 {
         self.account
     }
 
     /// Exact hostile-byte-decoded semantic root.
     pub fn root(&self) -> &SettlementRootV1AccountV1 {
-        match &self.body {
-            AuthenticatedGeneralSettlementRootBodyV1::Legacy(root) => root,
-            AuthenticatedGeneralSettlementRootBodyV1::Indexed(root) => root.base(),
-        }
+        self.body.base()
     }
 
-    /// Exact authenticated account width for this root version.
-    pub fn account_bytes(&self) -> usize {
-        match &self.body {
-            AuthenticatedGeneralSettlementRootBodyV1::Legacy(_) => {
-                SETTLEMENT_ROOT_ACCOUNT_BYTES
-            }
-            AuthenticatedGeneralSettlementRootBodyV1::Indexed(_) => {
-                INDEXED_SETTLEMENT_ROOT_BYTES_V1
-            }
-        }
+    /// Exact authenticated indexed-root account width.
+    pub const fn account_bytes(&self) -> usize {
+        INDEXED_SETTLEMENT_ROOT_BYTES_V1
     }
 
-    /// Whether this is the disabled counted exact-index successor.
-    pub fn is_indexed(&self) -> bool {
-        matches!(&self.body, AuthenticatedGeneralSettlementRootBodyV1::Indexed(_))
-    }
-
-    /// Version-specific full root body ID. Indexed roots never collapse to
-    /// the legacy base transcript.
+    /// Full indexed-root body ID; it never collapses to the nested base transcript.
     pub fn data_id<B: Sha256BackendV1>(&self, backend: &B) -> Outcome<Id32> {
-        match &self.body {
-            AuthenticatedGeneralSettlementRootBodyV1::Legacy(root) => {
-                root.data_id(backend, self.account).map_err(Into::into)
-            }
-            AuthenticatedGeneralSettlementRootBodyV1::Indexed(root) => {
-                root.data_id(backend, self.account).map_err(Into::into)
-            }
-        }
+        self.body.data_id(backend, self.account).map_err(Into::into)
     }
 
     /// Encode exactly one action-24 materialization successor while preserving
-    /// an authenticated indexed suffix when present.
+    /// the authenticated indexed suffix.
     pub fn encode_materialization_successor(
         &self,
         expected: &SettlementRootV1AccountV1,
@@ -287,18 +257,9 @@ impl AuthenticatedGeneralSettlementRootV1 {
         output: &mut [u8],
     ) -> Outcome<()> {
         require(output.len() == self.account_bytes(), ClutchError::WrongDataLength)?;
-        match &self.body {
-            AuthenticatedGeneralSettlementRootBodyV1::Legacy(root) => {
-                let successor = apply_legacy_transition(root, transition)?;
-                require(&successor == expected, ClutchError::MismatchedState)?;
-                successor.encode(output)?;
-            }
-            AuthenticatedGeneralSettlementRootBodyV1::Indexed(root) => {
-                let successor = apply_indexed_transition(root, transition)?;
-                require(successor.base() == expected, ClutchError::MismatchedState)?;
-                successor.encode(output)?;
-            }
-        }
+        let successor = apply_indexed_transition(&self.body, transition)?;
+        require(successor.base() == expected, ClutchError::MismatchedState)?;
+        successor.encode(output)?;
         Ok(())
     }
 
@@ -308,55 +269,8 @@ impl AuthenticatedGeneralSettlementRootV1 {
         output: &mut [u8],
     ) -> Outcome<()> {
         require(output.len() == self.account_bytes(), ClutchError::WrongDataLength)?;
-        match &self.body {
-            AuthenticatedGeneralSettlementRootBodyV1::Legacy(root) => {
-                apply_legacy_transition(root, transition)?.encode(output)?;
-            }
-            AuthenticatedGeneralSettlementRootBodyV1::Indexed(root) => {
-                apply_indexed_transition(root, transition)?.encode(output)?;
-            }
-        }
+        apply_indexed_transition(&self.body, transition)?.encode(output)?;
         Ok(())
-    }
-}
-
-fn apply_legacy_transition(
-    root: &SettlementRootV1AccountV1,
-    transition: NamedRootTransitionV1,
-) -> Result<SettlementRootV1AccountV1, clutch_general_v2_contract::CodecError> {
-    match transition {
-        NamedRootTransitionV1::AdmitMaterialization {
-            owner_rows_created,
-            reservations_admitted,
-            merge_receipt,
-        } => root.admit_materialization_delta(
-            owner_rows_created,
-            reservations_admitted,
-            merge_receipt,
-        ),
-        NamedRootTransitionV1::ReleaseUnfilledReservation => {
-            root.release_unfilled_reservation()
-        }
-        NamedRootTransitionV1::ActivateMergeCashPot => {
-            Ok(*clutch_general_v2_contract::prepare_activate_merge_cash_pot_v1(root)?.root())
-        }
-        NamedRootTransitionV1::CompleteOwnerFinalization {
-            fee_receipt_created,
-        } => root.complete_owner_finalization(fee_receipt_created),
-        NamedRootTransitionV1::CompleteMergePayment => root.complete_merge_payment(),
-        NamedRootTransitionV1::RetireOneReceipt => root.retire_one_receipt(),
-        NamedRootTransitionV1::RetireOneOwnerRow => root.retire_one_owner_row(),
-        NamedRootTransitionV1::RetireOneReservation => root.retire_one_reservation(),
-        NamedRootTransitionV1::RetireOneFeeFinalization => root.retire_one_fee_finalization(),
-        NamedRootTransitionV1::BeginRetiring => root.begin_retiring(),
-        NamedRootTransitionV1::RetireCashPot => root.retire_cash_pot(),
-        NamedRootTransitionV1::RetireFinalPot => root.retire_final_pot(),
-        NamedRootTransitionV1::RetireFeeRecord => root.retire_fee_record(),
-        NamedRootTransitionV1::RetirePortfolioPairArchives { receipt_count } => {
-            root.retire_portfolio_pair_archives(receipt_count)
-        }
-        NamedRootTransitionV1::AdmitDealerChild => root.admit_dealer_child(),
-        NamedRootTransitionV1::RetireDealerChild => root.retire_dealer_child(),
     }
 }
 
@@ -505,21 +419,12 @@ fn authenticate_general_settlement_root_v1(
     }
     let root_account = id(account.key);
     let body = borrow_data(account)?;
-    let decoded = match body.len() {
-        SETTLEMENT_ROOT_ACCOUNT_BYTES => AuthenticatedGeneralSettlementRootBodyV1::Legacy(
-            Box::new(SettlementRootV1AccountV1::decode(&body)?),
-        ),
-        INDEXED_SETTLEMENT_ROOT_BYTES_V1 => {
-            AuthenticatedGeneralSettlementRootBodyV1::Indexed(Box::new(
-                IndexedSettlementRootV1AccountV1::decode(&body)?,
-            ))
-        }
-        _ => return Err(Refusal::Adapter(ClutchError::WrongDataLength)),
-    };
-    let root = match &decoded {
-        AuthenticatedGeneralSettlementRootBodyV1::Legacy(root) => &**root,
-        AuthenticatedGeneralSettlementRootBodyV1::Indexed(root) => root.base(),
-    };
+    require(
+        body.len() == INDEXED_SETTLEMENT_ROOT_BYTES_V1,
+        ClutchError::WrongDataLength,
+    )?;
+    let decoded = Box::new(IndexedSettlementRootV1AccountV1::decode(&body)?);
+    let root = decoded.base();
     let canonical = seeds::general_v2_settlement_root_pda(
         program_id,
         &expected_epoch.bytes(),

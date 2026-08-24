@@ -1,14 +1,13 @@
-//! Staged-disabled action-41 SBF composition and atomic Reservation close.
+//! Action-41 SBF composition and atomic Reservation close.
 //!
-//! The positional ABI is frozen but staged-disabled. Action 41 consumes the
-//! single shared action-39/24/41 traversal authenticator, then authenticates
+//! Action 41 consumes the single shared action-39/24/41 traversal authenticator,
+//! then authenticates
 //! every mutable endpoint and close destination itself and owns the final
 //! root/Position/Replay write plus ReservationV9 close.
 //!
 //! The selected 4,140-byte page is always borrowed. The returned pure bundle
 //! is boxed, and all four data destinations plus all three lamport destinations
-//! are borrowed before the first mutation. No dispatch arm or capability is
-//! exposed while action 41 remains `ReservedDisabled`.
+//! are borrowed before the first mutation.
 
 use core::cell::{Ref, RefMut};
 use std::boxed::Box;
@@ -20,7 +19,6 @@ use clutch_general_v2_contract::{
     SettlementRootPayloadV1,
     GENERAL_REPLAY_ACCOUNT_V1_BYTES, MARKET_BINDING_ACCOUNT_BYTES_V2,
     MARKET_RUNTIME_ACCOUNT_BYTES, INDEXED_SETTLEMENT_ROOT_BYTES_V1,
-    SETTLEMENT_ROOT_ACCOUNT_BYTES,
 };
 use clutch_general_v2_runtime::{
     prepare_release_unfilled_reservation_v1, PositionAccountInputV3,
@@ -380,7 +378,7 @@ fn apply_release_bundle_v1(
     )
 }
 
-/// Strict staged-disabled action-41 positional entrypoint.
+/// Strict action-41 positional entrypoint.
 pub fn process(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -419,10 +417,7 @@ fn release_unfilled_reservation(
     )?;
     require_all_distinct(accounts)?;
     let root_bytes = accounts[IX_ROOT].data_len();
-    require(
-        matches!(root_bytes, SETTLEMENT_ROOT_ACCOUNT_BYTES | INDEXED_SETTLEMENT_ROOT_BYTES_V1),
-        ClutchError::WrongDataLength,
-    )?;
+    require(root_bytes == INDEXED_SETTLEMENT_ROOT_BYTES_V1, ClutchError::WrongDataLength)?;
     require_program_state(
         program_id,
         &accounts[IX_ROOT],
@@ -613,7 +608,7 @@ mod tests {
     #[test]
     fn action41_widths_are_current_successors_only() {
         assert_eq!(RESERVATION_ACCOUNT_BYTES_V9, 666);
-        assert_eq!(SETTLEMENT_ROOT_ACCOUNT_BYTES, 980);
+        assert_eq!(INDEXED_SETTLEMENT_ROOT_BYTES_V1, 1_228);
         assert_eq!(POSITION_V3_BYTES, 480);
         assert_eq!(GENERAL_REPLAY_ACCOUNT_V1_BYTES, 344);
         assert_eq!(ACTION41_TRAVERSAL_PREFIX_ACCOUNTS, 12);
