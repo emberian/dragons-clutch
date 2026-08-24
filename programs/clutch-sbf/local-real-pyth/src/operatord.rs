@@ -12,6 +12,10 @@ use crate::action_material::{
     direct_action_from_selection, direct_selection_action, source_action_from_selection,
     source_role_label_v2, source_selection_action, CanonicalActionMaterialV1,
 };
+use crate::direct_action8_material::{
+    DirectAction8CanonicalMaterialV2, DirectAction8OperatorBatchV2,
+    DirectAction8SymbolicPostconditionV2,
+};
 use crate::rpc_index::{
     public_rpc_endpoint_binding, CanonicalIntentCoordinate, IndexedProgramRelease, RpcCommitment,
 };
@@ -161,6 +165,169 @@ impl ResumableKeeperSelector {
         selections.truncate(self.maximum_actions);
         Ok(selections)
     }
+}
+
+fn merge_chain_material_cursors(
+    mut cursors: Vec<KeeperActionSelection>,
+    index: &CanonicalAccountIndex,
+    batch: Option<&DirectAction8OperatorBatchV2>,
+    release: &IndexedProgramRelease,
+    maximum_actions: usize,
+) -> Result<Vec<KeeperActionSelection>, KeeperSelectionError> {
+    let action8 = CanonicalIntentCoordinate {
+        family_tag: DIRECT_MARKET_FAMILY_TAG,
+        family_version: DIRECT_MARKET_FAMILY_VERSION,
+        local_action: DirectMarketAction::FinalizeSelection.tag(),
+    };
+    let Some(batch) = batch else { return Ok(cursors); };
+    if batch.release_key() != release.key() || batch.snapshot_receipt_id() == [0; 32] {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    let current_finalized_slot = index
+        .forks()
+        .finalized_root()
+        .map(|(slot, _)| slot)
+        .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+    if current_finalized_slot < batch.observed_slot()
+        || current_finalized_slot >= batch.valid_before_slot()
+    {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    let finalized = index.current_accounts(RpcCommitment::Finalized);
+    for typed in batch.materials() {
+        let material = typed.canonical();
+        if material.release_key() != release.key()
+            || material.release_manifest_sha256() != release.release_manifest_sha256
+            || material.capability_profile_id() != release.capability_profile_id
+            || material.cursor().lane != WorkflowLane::Candidate
+            || material.driver_account() == Address::default()
+            || material.driver_account_slot() == 0
+        {
+            return Err(KeeperSelectionError::IncompleteCanonicalHint);
+        }
+        let mut current_driver = finalized
+            .iter()
+            .filter(|version| version.account.address == material.driver_account());
+        let driver = current_driver
+            .next()
+            .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+        let freshness = material.freshness();
+        if current_driver.next().is_some()
+            || driver.account.provenance.release_key != release.key()
+            || driver.account.provenance.commitment != RpcCommitment::Finalized
+            || driver.account.provenance.slot < material.driver_account_slot()
+            || current_finalized_slot < freshness.observed_slot
+            || current_finalized_slot >= freshness.valid_before_slot
+            || driver.account.lamports != typed.driver_lamports()
+            || driver.data_sha256 != typed.driver_data_sha256()
+        {
+            return Err(KeeperSelectionError::IncompleteCanonicalHint);
+        }
+        for fact in typed
+            .dependency_facts()
+            .iter()
+            .filter(|fact| fact.owner == release.program_id.to_bytes())
+        {
+            let address = Address::new_from_array(fact.address);
+            let mut versions = finalized
+                .iter()
+                .filter(|version| version.account.address == address);
+            let version = versions
+                .next()
+                .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+            if versions.next().is_some()
+                || version.account.owner.to_bytes() != fact.owner
+                || version.account.provenance.slot < fact.slot
+                || version.account.lamports != fact.lamports
+                || version.data_sha256 != fact.data_sha256
+            {
+                return Err(KeeperSelectionError::IncompleteCanonicalHint);
+            }
+        }
+        if cursors.iter().any(|cursor| {
+            cursor.account == material.driver_account()
+                || cursor.cursor == material.cursor()
+        }) {
+            return Err(KeeperSelectionError::IncompleteCanonicalHint);
+        }
+        let mut dependencies = material
+            .account_roles()
+            .iter()
+            .map(|role| role.address())
+            .collect::<Vec<_>>();
+        dependencies.sort();
+        dependencies.dedup();
+        cursors.push(KeeperActionSelection {
+            account: material.driver_account(),
+            release_key: material.release_key().to_string(),
+            action: "finalize-direct-selection-current-v2",
+            cursor: material.cursor(),
+            account_slot: material.driver_account_slot(),
+            observed_commitment: RpcCommitment::Finalized,
+            effective_commitment: RpcCommitment::Finalized,
+            branch: IndexedBranch::FinalizedScan,
+            dependencies,
+        });
+    }
+    cursors.sort_by(|left, right| {
+        (left.action, left.account.to_bytes(), left.cursor.position.phase, left.cursor.position.item)
+            .cmp(&(
+                right.action,
+                right.account.to_bytes(),
+                right.cursor.position.phase,
+                right.cursor.position.item,
+            ))
+    });
+    if cursors.len() > maximum_actions {
+        return Err(KeeperSelectionError::InvalidCapacity);
+    }
+    Ok(cursors)
+}
+
+fn select_operator_release<'a>(
+    releases: &'a [IndexedProgramRelease],
+    materials: &[CanonicalActionMaterialV1],
+    direct_action8_batch: Option<&DirectAction8OperatorBatchV2>,
+) -> Result<&'a IndexedProgramRelease, KeeperSelectionError> {
+    if materials.iter().any(|material| {
+        material.coordinate()
+            == (CanonicalIntentCoordinate {
+                family_tag: DIRECT_MARKET_FAMILY_TAG,
+                family_version: DIRECT_MARKET_FAMILY_VERSION,
+                local_action: DirectMarketAction::FinalizeSelection.tag(),
+            })
+    }) {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    let mut keys = materials
+        .iter()
+        .map(|material| material.release_key().to_string())
+        .collect::<BTreeSet<_>>();
+    if let Some(batch) = direct_action8_batch {
+        keys.insert(batch.release_key().to_string());
+    }
+    if keys.is_empty() {
+        keys.extend(
+            releases
+                .iter()
+                .filter(|release| !release.enabled_intents.is_empty())
+                .map(IndexedProgramRelease::key),
+        );
+    }
+    let keys = keys.into_iter().collect::<Vec<_>>();
+    let [key] = keys.as_slice() else {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    };
+    let mut matching = releases
+        .iter()
+        .filter(|release| release.key() == key.as_str());
+    let release = matching
+        .next()
+        .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+    if matching.next().is_some() {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    Ok(release)
 }
 
 fn dependency_versions<'a>(
@@ -382,6 +549,7 @@ pub struct OperatorJsonApi<'index> {
     index: &'index CanonicalAccountIndex,
     selector: ResumableKeeperSelector,
     action_materials: &'index [CanonicalActionMaterialV1],
+    direct_action8_batch: Option<&'index DirectAction8OperatorBatchV2>,
 }
 
 impl<'index> OperatorJsonApi<'index> {
@@ -394,6 +562,7 @@ impl<'index> OperatorJsonApi<'index> {
             index,
             selector,
             action_materials: &[],
+            direct_action8_batch: None,
         }
     }
 
@@ -409,6 +578,24 @@ impl<'index> OperatorJsonApi<'index> {
             index,
             selector,
             action_materials,
+            direct_action8_batch: None,
+        }
+    }
+
+    /// Bind the exhaustive receipt-backed current Direct action-8 batch. The
+    /// generic material slice cannot stand in for this typed registry.
+    #[must_use]
+    pub const fn with_action_materials_and_direct_action8(
+        index: &'index CanonicalAccountIndex,
+        selector: ResumableKeeperSelector,
+        action_materials: &'index [CanonicalActionMaterialV1],
+        direct_action8_batch: &'index DirectAction8OperatorBatchV2,
+    ) -> Self {
+        Self {
+            index,
+            selector,
+            action_materials,
+            direct_action8_batch: Some(direct_action8_batch),
         }
     }
 
@@ -491,19 +678,41 @@ impl<'index> OperatorJsonApi<'index> {
     /// codec or by the immutable checked release/transport binding.
     fn session(&self) -> OperatorJsonResponse {
         let plan = self.index.acquisition_plan();
-        let [release] = plan.releases.as_slice() else {
-            return response(
-                409,
-                json!({
+        let release = match select_operator_release(
+            &plan.releases,
+            self.action_materials,
+            self.direct_action8_batch,
+        ) {
+            Ok(release) => release,
+            Err(error) => {
+                return response(409, json!({
                     "schema": "dragons-clutch/operator-read-only-session-unavailable/v1",
                     "status": "unavailable",
-                    "reason": "a canonical browser session requires exactly one checked release"
-                }),
-            );
+                    "reason": error.to_string()
+                }));
+            }
         };
         let accounts = self.index.current_accounts(RpcCommitment::Finalized);
         let cursors = match self.selector.select(self.index, RpcCommitment::Finalized) {
-            Ok(cursors) => cursors,
+            Ok(cursors) => match merge_chain_material_cursors(
+                cursors,
+                self.index,
+                self.direct_action8_batch,
+                release,
+                self.selector.maximum_actions,
+            ) {
+                Ok(cursors) => cursors,
+                Err(error) => {
+                    return response(
+                        409,
+                        json!({
+                            "schema": "dragons-clutch/operator-session-unavailable/v1",
+                            "status": "unavailable",
+                            "reason": error.to_string()
+                        }),
+                    );
+                }
+            },
             Err(error) => {
                 return response(
                     409,
@@ -586,18 +795,40 @@ impl<'index> OperatorJsonApi<'index> {
     /// must also be present in one server-constructed transaction draft.
     fn actions(&self) -> OperatorJsonResponse {
         let plan = self.index.acquisition_plan();
-        let [release] = plan.releases.as_slice() else {
-            return response(
-                409,
-                json!({
+        let release = match select_operator_release(
+            &plan.releases,
+            self.action_materials,
+            self.direct_action8_batch,
+        ) {
+            Ok(release) => release,
+            Err(error) => {
+                return response(409, json!({
                     "schema": "dragons-clutch/operator-action-capability-unavailable/v1",
                     "status": "unavailable",
-                    "reason": "action projection requires exactly one checked release"
-                }),
-            );
+                    "reason": error.to_string()
+                }));
+            }
         };
         let cursors = match self.selector.select(self.index, RpcCommitment::Finalized) {
-            Ok(cursors) => cursors,
+            Ok(cursors) => match merge_chain_material_cursors(
+                cursors,
+                self.index,
+                self.direct_action8_batch,
+                release,
+                self.selector.maximum_actions,
+            ) {
+                Ok(cursors) => cursors,
+                Err(error) => {
+                    return response(
+                        409,
+                        json!({
+                            "schema": "dragons-clutch/operator-action-capability-unavailable/v1",
+                            "status": "unavailable",
+                            "reason": error.to_string()
+                        }),
+                    );
+                }
+            },
             Err(error) => {
                 return response(
                     409,
@@ -626,7 +857,13 @@ impl<'index> OperatorJsonApi<'index> {
             .enabled_intents
             .iter()
             .map(|coordinate| {
-                action_verdict_json(release, *coordinate, &cursors, self.action_materials)
+                action_verdict_json(
+                    release,
+                    *coordinate,
+                    &cursors,
+                    self.action_materials,
+                    self.direct_action8_batch,
+                )
             })
             .collect::<Vec<_>>();
         response(
@@ -747,6 +984,7 @@ fn action_verdict_json(
     coordinate: CanonicalIntentCoordinate,
     cursors: &[KeeperActionSelection],
     action_materials: &[CanonicalActionMaterialV1],
+    direct_action8_batch: Option<&DirectAction8OperatorBatchV2>,
 ) -> Value {
     let cursor = cursors
         .iter()
@@ -770,19 +1008,36 @@ fn action_verdict_json(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let matching_materials = cursor
-        .map(|selection| {
+    let action8 = CanonicalIntentCoordinate {
+        family_tag: DIRECT_MARKET_FAMILY_TAG,
+        family_version: DIRECT_MARKET_FAMILY_VERSION,
+        local_action: DirectMarketAction::FinalizeSelection.tag(),
+    };
+    let matching_materials = cursor.map_or_else(Vec::new, |selection| {
+        if coordinate == action8 {
+            direct_action8_batch
+                .into_iter()
+                .flat_map(DirectAction8OperatorBatchV2::materials)
+                .map(DirectAction8CanonicalMaterialV2::canonical)
+                .filter(|material| material.matches(release, coordinate, selection))
+                .collect::<Vec<_>>()
+        } else {
             action_materials
                 .iter()
                 .filter(|material| material.matches(release, coordinate, selection))
                 .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+        }
+    });
     let material = match matching_materials.as_slice() {
         [material] => Some(*material),
         _ => None,
     };
     if let (Some(selection), Some(material)) = (cursor, material) {
+        let symbolic_postcondition = direct_action8_batch
+            .into_iter()
+            .flat_map(DirectAction8OperatorBatchV2::materials)
+            .find(|typed| typed.canonical() == material)
+            .map(DirectAction8CanonicalMaterialV2::postcondition);
         return callable_action_verdict_json(
             release,
             coordinate,
@@ -791,6 +1046,7 @@ fn action_verdict_json(
             family,
             action,
             semantic_builder,
+            symbolic_postcondition,
         );
     }
     let state_reason = if matching_materials.len() > 1 {
@@ -836,6 +1092,7 @@ fn callable_action_verdict_json(
     family: &'static str,
     action: &'static str,
     semantic_builder: Option<&'static str>,
+    symbolic_postcondition: Option<&DirectAction8SymbolicPostconditionV2>,
 ) -> Value {
     let transaction = material.unsigned_transaction();
     let roles = material
@@ -932,6 +1189,13 @@ fn callable_action_verdict_json(
             })).collect::<Vec<_>>(),
             "reloadAuthoritativeAccounts": material.reload_authoritative_accounts()
         },
+        "symbolicPostcondition": symbolic_postcondition.map(|postcondition| json!({
+            "contractId": hex32(postcondition.contract_id()),
+            "executionClock": "hostile SBF Clock slot; absent from the unsigned payload",
+            "lamports": "exact signed deltas from actual execution prebalances",
+            "writableAccounts": postcondition.writable_accounts().iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "confirmation": "realize exact semantic successors from the confirmed execution slot; compare deltas to the actual execution pre/post witness"
+        })),
         "signerRequirements": signer_requirements,
         "freshnessDisposition": {
             "observedSlot": freshness.observed_slot.to_string(),
@@ -946,6 +1210,13 @@ fn callable_action_verdict_json(
 }
 
 fn action_coordinate(action: &str) -> Option<CanonicalIntentCoordinate> {
+    if action == "finalize-direct-selection-current-v2" {
+        return Some(CanonicalIntentCoordinate {
+            family_tag: DIRECT_MARKET_FAMILY_TAG,
+            family_version: DIRECT_MARKET_FAMILY_VERSION,
+            local_action: DirectMarketAction::FinalizeSelection.tag(),
+        });
+    }
     if let Some(action) = direct_action_from_selection(action) {
         return Some(CanonicalIntentCoordinate {
             family_tag: DIRECT_MARKET_FAMILY_TAG,
@@ -1014,6 +1285,13 @@ fn coordinate_description(
         let Some(action) = DirectMarketAction::from_tag(coordinate.local_action) else {
             return ("direct", "unknown-direct-action", None);
         };
+        if action == DirectMarketAction::FinalizeSelection {
+            return (
+                "direct",
+                "finalize-direct-selection-current-v2",
+                Some(crate::direct_action8_material::DIRECT_ACTION8_OWNER_SCHEMA_V2),
+            );
+        }
         return (
             "direct",
             direct_selection_action(action),

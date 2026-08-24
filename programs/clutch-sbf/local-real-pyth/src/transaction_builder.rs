@@ -245,6 +245,12 @@ pub enum OwnedWireContract {
         binding: SuccessorRegistryBinding,
         sequence: u64,
     },
+    /// Sole chain-derived current Direct action-8 request. The hostile state
+    /// chooses the branch through the exact account geometry; payload is empty.
+    EnabledDirectFinalizeSelectionRequestV2 {
+        binding: SuccessorRegistryBinding,
+        sequence: u64,
+    },
     /// Enabled legacy outer request whose instruction account ABI is the
     /// full-width V3 collateral contract. This does not authorize a lowered
     /// Market/Hoard/Kernel interpretation of the request body.
@@ -458,6 +464,11 @@ impl OwnedInstructionDraft {
     ) -> Result<Self> {
         use clutch_client_contract::direct_market::DirectMarketClientRequestV1;
 
+        if payload.action()
+            == clutch_solana_layout::registry::DirectMarketAction::FinalizeSelection
+        {
+            return Err(ConstructionError::UnallocatedRegistryCoordinate);
+        }
         let action = ExtensionAction::DirectMarket(payload.action());
         if (matches!(
             payload.action(),
@@ -484,6 +495,54 @@ impl OwnedInstructionDraft {
             registry_binding: Some(binding),
             runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
             wire: OwnedWireContract::EnabledDirectMarketRequestV1 { binding, sequence },
+            data: request.bytes().to_vec(),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Assemble the exact current Direct action-8 request after hostile chain
+    /// reconstruction of either physical handler frame. The caller cannot
+    /// supply payload bytes or select another Direct coordinate.
+    pub(crate) fn enabled_direct_finalize_selection_request_v2(
+        semantic_owner: SemanticOwner,
+        program_id: Address,
+        accounts: Vec<AccountMeta>,
+        keeper: Address,
+        equations: Vec<ExactEquation>,
+        sequence: u64,
+    ) -> Result<Self> {
+        use clutch_client_contract::direct_market::{
+            DirectMarketClientPayloadV1, DirectMarketClientRequestV1,
+        };
+        use clutch_solana_layout::registry::DirectMarketAction;
+
+        if sequence == 0
+            || !matches!(accounts.len(), 9..=11 | 22)
+            || keeper == Address::default()
+        {
+            return Err(ConstructionError::InvalidAccountContract);
+        }
+        let payload = DirectMarketClientPayloadV1::empty(DirectMarketAction::FinalizeSelection)
+            .map_err(|_| ConstructionError::WrongWirePrefix)?;
+        let action = ExtensionAction::DirectMarket(DirectMarketAction::FinalizeSelection);
+        let binding = registry_binding(action.family(), action.local_tag(), Some(action))?;
+        let request = DirectMarketClientRequestV1::encode(sequence, &payload)
+            .map_err(|_| ConstructionError::WrongWirePrefix)?;
+        let value = Self {
+            flow: ProtocolFlow::DirectMarketV1,
+            action_name: "finalize-direct-selection-current-v2".to_string(),
+            semantic_owner,
+            program_id,
+            accounts,
+            required_signers: vec![keeper],
+            equations,
+            registry_binding: Some(binding),
+            runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
+            wire: OwnedWireContract::EnabledDirectFinalizeSelectionRequestV2 {
+                binding,
+                sequence,
+            },
             data: request.bytes().to_vec(),
         };
         value.validate()?;
@@ -659,6 +718,7 @@ impl OwnedInstructionDraft {
             self.wire,
             OwnedWireContract::DisabledDirectMarketRequestV1 { .. }
                 | OwnedWireContract::EnabledDirectMarketRequestV1 { .. }
+                | OwnedWireContract::EnabledDirectFinalizeSelectionRequestV2 { .. }
         );
         if !source_request && !collateral_request && !direct_request {
             let mut accounts = BTreeSet::new();
@@ -849,6 +909,32 @@ impl OwnedInstructionDraft {
                     return Err(ConstructionError::WrongWirePrefix);
                 }
             }
+            OwnedWireContract::EnabledDirectFinalizeSelectionRequestV2 {
+                binding,
+                sequence,
+            } => {
+                let request = ExtensionRequest::decode(&self.data)
+                    .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                if request.sequence != sequence
+                    || request.envelope.family != ExtensionFamily::DirectMarket
+                    || request.envelope.family != binding.family
+                    || request.envelope.action.local_tag() != binding.local_action
+                    || self.registry_binding != Some(binding)
+                    || binding.family.allocation_status() != Some(binding.family_status)
+                    || self.flow != ProtocolFlow::DirectMarketV1
+                    || self.runtime_admission != RuntimeAdmission::ReleaseBoundEnabled
+                    || !matches!(
+                        request.envelope.action,
+                        ExtensionAction::DirectMarket(
+                            clutch_solana_layout::registry::DirectMarketAction::FinalizeSelection
+                        )
+                    )
+                    || sequence == 0
+                    || !matches!(self.accounts.len(), 9..=11 | 22)
+                {
+                    return Err(ConstructionError::UnallocatedRegistryCoordinate);
+                }
+            }
             OwnedWireContract::CollateralReplayRequestV3 {
                 action,
                 outcome_count,
@@ -1027,6 +1113,7 @@ impl ProtocolTransactionBuilder {
                     | OwnedWireContract::MainSuccessorRequest { .. }
                     | OwnedWireContract::DisabledDirectMarketRequestV1 { .. }
                     | OwnedWireContract::EnabledDirectMarketRequestV1 { .. }
+                    | OwnedWireContract::EnabledDirectFinalizeSelectionRequestV2 { .. }
                     | OwnedWireContract::CollateralReplayRequestV3 { .. }
             ) && draft.program_id != self.clutch_program
             {

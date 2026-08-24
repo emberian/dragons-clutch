@@ -88,6 +88,20 @@ pub struct CanonicalAccountRoleV1 {
 }
 
 impl CanonicalAccountRoleV1 {
+    pub(crate) const fn new(
+        label: &'static str,
+        address: Address,
+        writable: bool,
+        signer: bool,
+    ) -> Self {
+        Self {
+            label,
+            address,
+            writable,
+            signer,
+        }
+    }
+
     #[must_use]
     pub const fn label(self) -> &'static str {
         self.label
@@ -209,7 +223,9 @@ impl DirectNamedAccountV1 {
     pub const fn address(self) -> Address { self.address }
 }
 
-/// Exact action-specific Direct account projection for actions 2 through 13.
+/// Exact action-specific Direct account projection for actions 2..=7 and
+/// 9..=13. Current action 8 is deliberately owned only by the hostile-derived
+/// V2 planner in `direct_action8_material`.
 ///
 /// Action 1 deliberately refuses until Product publishes the final callable
 /// `0xba` allocation account frame and quote-owned work schedule. Adding it
@@ -226,6 +242,9 @@ impl DirectActionAccountsV1 {
         action: DirectMarketAction,
         accounts: Vec<DirectNamedAccountV1>,
     ) -> Result<Self> {
+        if action == DirectMarketAction::FinalizeSelection {
+            return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+        }
         validate_direct_account_roles_v1(action, &accounts)?;
         Ok(Self { action, accounts })
     }
@@ -340,6 +359,69 @@ pub struct CanonicalActionMaterialV1 {
 }
 
 impl CanonicalActionMaterialV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_chain_derived_direct_v2(
+        release: &IndexedProgramRelease,
+        coordinate: CanonicalIntentCoordinate,
+        driver_account: Address,
+        driver_account_slot: u64,
+        cursor: ResumableWorkflowCursor,
+        freshness: ActionFreshnessBoundaryV1,
+        fee_payer: Address,
+        account_roles: Vec<CanonicalAccountRoleV1>,
+        planned: PlannedWorkflowNode,
+        symbolic_postcondition_contract_id: [u8; 32],
+    ) -> Result<Self> {
+        freshness.validate()?;
+        if symbolic_postcondition_contract_id == [0; 32]
+            || planned.manifest_sha256 != release.release_manifest_sha256
+            || planned.cursor != cursor
+            || planned.coordinate
+                != CanonicalActionCoordinate::Direct(DirectMarketAction::FinalizeSelection)
+            || !planned.reload_authoritative_accounts
+            || planned.unsigned_transaction.has_recent_blockhash
+            || planned.unsigned_transaction.signed
+            || planned.unsigned_transaction.submitted
+        {
+            return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+        }
+        validate_unsigned_direct_plan(coordinate, fee_payer, &account_roles, &planned)?;
+        let release_key = release.key();
+        let base_id = action_material_id(
+            &release_key,
+            release.release_manifest_sha256,
+            release.capability_profile_id,
+            coordinate,
+            driver_account,
+            driver_account_slot,
+            cursor,
+            freshness,
+            fee_payer,
+            &account_roles,
+            &planned.unsigned_transaction,
+        );
+        let draft_id = Sha256::new()
+            .chain_update(b"dragons-clutch/operator/direct-action8-material/v2\0")
+            .chain_update(base_id)
+            .chain_update(symbolic_postcondition_contract_id)
+            .finalize()
+            .into();
+        Ok(Self {
+            release_key,
+            release_manifest_sha256: release.release_manifest_sha256,
+            capability_profile_id: release.capability_profile_id,
+            coordinate,
+            driver_account,
+            driver_account_slot,
+            cursor,
+            freshness,
+            fee_payer,
+            account_roles,
+            planned,
+            draft_id,
+        })
+    }
+
     #[must_use]
     pub fn release_key(&self) -> &str {
         &self.release_key
@@ -587,7 +669,8 @@ pub fn construct_direct_action_material_v1(
         return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
     }
     let action = material.accounts.action();
-    if material.payload.action() != action
+    if action == DirectMarketAction::FinalizeSelection
+        || material.payload.action() != action
         || material.valid_before_slot != freshness.valid_before_slot
         || material.sequence == 0
         || material.action_name != direct_selection_action(action)
@@ -753,7 +836,9 @@ fn validate_direct_account_roles_v1(
             ])?;
             require_direct_suffix_v1(accounts, index)
         }
-        DirectMarketAction::FinalizeSelection => validate_direct_finalize_roles_v1(accounts),
+        DirectMarketAction::FinalizeSelection => {
+            Err(CanonicalActionMaterialErrorV1::InvalidPlan)
+        }
         DirectMarketAction::SettlePair => validate_direct_economic_roles_v1(
             accounts,
             true,
@@ -798,18 +883,6 @@ fn validate_direct_account_roles_v1(
             require_direct_suffix_v1(accounts, index)
         }
     }
-}
-
-fn validate_direct_finalize_roles_v1(accounts: &[DirectNamedAccountV1]) -> Result<()> {
-    use DirectAccountRoleV1 as Role;
-    if accounts.get(3).map(|account| account.role) == Some(Role::Realm) {
-        return validate_direct_economic_roles_v1(accounts, false, 0, 2);
-    }
-    let mut index = require_direct_roles_v1(accounts, 0, &[
-        Role::DirectRoot, Role::DirectReplay, Role::Selection, Role::ClockSysvar,
-    ])?;
-    index = consume_direct_roles_v1(accounts, index, Role::BondRefundOwner, 0, 3)?;
-    require_direct_suffix_v1(accounts, index)
 }
 
 fn validate_direct_economic_roles_v1(
@@ -1018,7 +1091,8 @@ pub(crate) fn direct_action_from_selection(selection: &str) -> Option<DirectMark
         "submit-direct-candidate" => Some(DirectMarketAction::SubmitCandidate),
         "begin-direct-verification" => Some(DirectMarketAction::BeginVerification),
         "verify-direct-candidate" => Some(DirectMarketAction::VerifyCandidate),
-        "finalize-direct-selection" => Some(DirectMarketAction::FinalizeSelection),
+        // Current action 8 is intentionally absent: it is scheduled only by
+        // the hostile-derived V2 planner, never by this generic name parser.
         "settle-direct-pair" => Some(DirectMarketAction::SettlePair),
         "lapse-empty-direct-market" => Some(DirectMarketAction::LapseEmpty),
         "lapse-unselected-direct-market" => Some(DirectMarketAction::LapseUnselected),
@@ -1628,5 +1702,13 @@ mod tests {
             &transaction(),
         );
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn caller_shaped_v1_direct_accounts_cannot_name_current_action8() {
+        assert_eq!(
+            DirectActionAccountsV1::new(DirectMarketAction::FinalizeSelection, Vec::new()),
+            Err(CanonicalActionMaterialErrorV1::InvalidPlan),
+        );
     }
 }

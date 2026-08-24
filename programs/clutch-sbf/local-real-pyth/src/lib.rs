@@ -8,6 +8,8 @@
 pub mod account_index;
 #[cfg(feature = "operator")]
 pub mod action_material;
+#[cfg(feature = "operator")]
+pub mod direct_action8_material;
 #[cfg(feature = "campaign")]
 mod capture;
 #[cfg(feature = "operator")]
