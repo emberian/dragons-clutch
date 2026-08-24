@@ -70,6 +70,18 @@
   const GENERAL_ACTION39_WRITABLE_INDEXES = Object.freeze(new Set([0, 1, 14, 15, 17, 19, 20, 40, 41, 42, 43, 44, 45]));
   const GENERAL_ACTION39_FIXED_ROLES = Object.freeze(GENERAL_ACTION39_FIXED_ROLE_NAMES.map((role, index) => directRole(role, index === 45, GENERAL_ACTION39_WRITABLE_INDEXES.has(index))));
   const GENERAL_ACTION39_FRESH_INDEXES = Object.freeze([14, 15, 19, 20, 40, 41, 42, 43, 44]);
+  const GENERAL_CURRENT_PREFIX_V5_ROLES = Object.freeze([
+    "market-binding-v5", "market-runtime-v3", "product-market-root-v3", "product-series-link-v3", "series-funding-v5",
+    "series-registry-v4", "registry-program", "registry-programdata", "registry-release-artifact", "capability-profile-artifact",
+    "source-release", "compiler-bundle-v7", "market-instance-v2", "realm", "revenue-policy-record-v2",
+    "revenue-policy-v2-preimage", "series-plan-v5", "series-funding-terms-v2", "market-template-v4", "native-basis-v1",
+    "recovery-policy-v1", "price-policy-v1", "market-genesis-v2", "series-quote-v6", "series-attachment-v6"
+  ].map((role) => directRole(role, false, false)));
+  const GENERAL_CURRENT_SETTLEMENT_ACTIONS = Object.freeze(new Set(["40", "41", "42"]));
+  const generalCurrentSettlementAction = (coordinate) => coordinate.familyTag === GENERAL_ACTION39_COORDINATE.familyTag
+    && coordinate.familyVersion === GENERAL_ACTION39_COORDINATE.familyVersion
+    && coordinate.family === GENERAL_ACTION39_COORDINATE.family
+    && GENERAL_CURRENT_SETTLEMENT_ACTIONS.has(coordinate.localAction);
   const DIRECT_ACTION_CONTRACTS = Object.freeze({
     "2": Object.freeze({ action: "admit-direct-order", ownerSchema: "current-v1" }),
     "3": Object.freeze({ action: "cancel-direct-order", ownerSchema: "current-v1" }),
@@ -816,14 +828,15 @@
     const direct = coordinate.familyTag === DIRECT_COORDINATE.familyTag && coordinate.familyVersion === DIRECT_COORDINATE.familyVersion && coordinate.family === DIRECT_COORDINATE.family && DIRECT_ACTION_CONTRACTS[coordinate.localAction] !== undefined;
     const fractional = coordinate.familyTag === FRACTIONAL_COORDINATE.familyTag && coordinate.familyVersion === FRACTIONAL_COORDINATE.familyVersion && coordinate.family === FRACTIONAL_COORDINATE.family && FRACTIONAL_ACTION_CONTRACTS[coordinate.localAction] !== undefined;
     const generalAction39 = coordinate.familyTag === GENERAL_ACTION39_COORDINATE.familyTag && coordinate.familyVersion === GENERAL_ACTION39_COORDINATE.familyVersion && coordinate.family === GENERAL_ACTION39_COORDINATE.family && coordinate.localAction === "39";
-    if (!structured && !source && !direct && !fractional && !generalAction39) throw new Error("callable action lacks a current browser release-composition contract.");
+    const generalCurrentSettlement = generalCurrentSettlementAction(coordinate);
+    if (!structured && !source && !direct && !fractional && !generalAction39 && !generalCurrentSettlement) throw new Error("callable action lacks a current browser release-composition contract.");
     const expectedScope = structured ? "structured-composite-wrapper-execution-base-driver-v1" : "single-release-execution-and-driver-v1";
     const manifestSha256 = hash32(raw.executionReleaseManifestSha256, `actions[${index}].releaseAdmission.executionReleaseManifestSha256`);
     const execution = executionReleaseKey(raw.executionReleaseKey, manifestSha256, `actions[${index}].releaseAdmission.executionReleaseKey`);
     const driverReleaseKey = text(raw.driverReleaseKey, `actions[${index}].releaseAdmission.driverReleaseKey`, 320);
     if (raw.scope !== expectedScope || driverReleaseKey !== configuration.release.releaseKey) throw new Error("action release admission has the wrong execution/driver scope.");
     if (structured && execution.releaseKey === driverReleaseKey) throw new Error("Structured action aliases its disjoint wrapper execution and base driver releases.");
-    if ((source || direct || fractional || generalAction39) && (execution.releaseKey !== configuration.release.releaseKey || manifestSha256 !== configuration.release.releaseManifestSha256)) throw new Error("single-release action does not use its one checked execution/driver release.");
+    if ((source || direct || fractional || generalAction39 || generalCurrentSettlement) && (execution.releaseKey !== configuration.release.releaseKey || manifestSha256 !== configuration.release.releaseManifestSha256)) throw new Error("single-release action does not use its one checked execution/driver release.");
     return Object.freeze({ scope: expectedScope, executionReleaseKey: execution.releaseKey, driverReleaseKey, executionReleaseManifestSha256: manifestSha256 });
   };
 
@@ -1350,6 +1363,106 @@
     });
   };
 
+  const validateGeneralCurrentSettlementMaterialContract = (row, coordinate, accountRoles, stateSelection, transactionDraft, signerRequirements, configuration) => {
+    const actionNames = Object.freeze({
+      "40": "general-finalize-merge-receipt-payment-v5",
+      "41": "general-release-unfilled-reservation-v5",
+      "42": "general-consume-portfolio-pair-v5"
+    });
+    if (!generalCurrentSettlementAction(coordinate)
+        || coordinate.action !== actionNames[coordinate.localAction]
+        || row.semanticOwnerConstructor !== "clutch-general-v2-contract/current-v5-terminal-account-contract-v1") {
+      throw new Error("General settlement verdict is not the current V5 chain-derived action 40-42 constructor.");
+    }
+    let suffix;
+    let geometry;
+    if (coordinate.localAction === "40") {
+      if (accountRoles.length !== 38 && accountRoles.length !== 39) throw new Error("General action 40 has an invalid fee-branch account width.");
+      suffix = [
+        directRole("settlement-root", false, true), directRole("retained-candidate-feed", false, false), directRole("settlement-receipt-v5", false, true),
+        directRole("collateral-profile", false, false), directRole("collateral-policy", false, false), directRole("collateral-token-program", false, false),
+        directRole("rent-sysvar", false, false), directRole("settlement-cash-pot", false, false), directRole("owner-settlement-v5", false, false),
+        directRole("order-page-v5", false, false), directRole("reservation-v9", false, true), directRole("position-v3", false, false), directRole("replay-v3", false, true)
+      ];
+      if (accountRoles.length === 39) suffix.push(directRole("owner-fee-finalization-v4", false, false));
+      geometry = accountRoles.length === 39 ? "25-current-plus-14-fee-bearing-settlement-roles" : "25-current-plus-13-zero-fee-settlement-roles";
+    } else if (coordinate.localAction === "41") {
+      const pageCount = accountRoles.length - 37;
+      if (pageCount < 1 || pageCount > 4) throw new Error("General action 41 has an invalid complete-page traversal width.");
+      suffix = [
+        directRole("settlement-root", false, true), directRole("retained-candidate-feed", false, false), directRole("economic-domain-v2", false, false),
+        directRole("price-grid", false, false), directRole("collateral-profile", false, false), directRole("collateral-policy", false, false),
+        directRole("collateral-token-program", false, false),
+        ...Array.from({ length: pageCount }, () => directRole("order-page-v5", false, false)),
+        directRole("reservation-v9", false, true), directRole("position-v3", false, true), directRole("replay-v3", false, true),
+        directRole("reservation-rent-payer", false, true), directRole("neutral-sink", false, true)
+      ];
+      geometry = `25-current-plus-7-traversal-plus-${pageCount}-pages-plus-5-release-roles`;
+    } else {
+      const firstReceipt = accountRoles.findIndex((role, index) => index >= 35 && role.role === "settlement-receipt-v5");
+      const pageCount = firstReceipt - 35;
+      const receiptCount = accountRoles.length - firstReceipt;
+      if (firstReceipt < 36 || pageCount < 1 || pageCount > 4 || receiptCount < 1 || receiptCount > 16) throw new Error("General action 42 has an invalid page/receipt traversal width.");
+      suffix = [
+        directRole("settlement-root", false, false), directRole("retained-candidate-feed", false, false), directRole("economic-domain-v2", false, false), directRole("price-grid", false, false),
+        directRole("buyer-reservation-v9", false, true), directRole("seller-reservation-v9", false, true),
+        directRole("buyer-position-v3", false, true), directRole("seller-position-v3", false, true),
+        directRole("buyer-replay-v3", false, true), directRole("seller-replay-v3", false, true),
+        ...Array.from({ length: pageCount }, () => directRole("order-page-v5", false, false)),
+        ...Array.from({ length: receiptCount }, () => directRole("settlement-receipt-v5", false, true))
+      ];
+      geometry = `25-current-plus-10-portfolio-plus-${pageCount}-pages-plus-${receiptCount}-receipts`;
+    }
+    if (!directRolesMatch(accountRoles, [...GENERAL_CURRENT_PREFIX_V5_ROLES, ...suffix])
+        || new Set(accountRoles.map((role) => role.address)).size !== accountRoles.length) {
+      throw new Error("General action 40-42 differs from its exact distinct current authority frame.");
+    }
+    if (stateSelection.action !== coordinate.action
+        || stateSelection.account !== accountRoles[25].address
+        || transactionDraft.driverAccount !== accountRoles[25].address
+        || stateSelection.cursor.lane !== "general-settlement"
+        || stateSelection.cursor.phase !== coordinate.localAction) {
+      throw new Error("General action 40-42 does not retain its settlement-root driver and exact action cursor.");
+    }
+    const expectedDependencies = accountRoles.filter((_, roleIndex) => roleIndex !== 25).map((role) => role.address).sort(compareAddressBytes);
+    if (stateSelection.dependencies.length !== expectedDependencies.length
+        || stateSelection.dependencies.some((addressValue, dependencyIndex) => addressValue !== expectedDependencies[dependencyIndex])) {
+      throw new Error("General action 40-42 selection differs from its complete semantic-owner role tuple.");
+    }
+    if (transactionDraft.messageVersion !== "v0"
+        || transactionDraft.addressLookupTables.length !== 1
+        || transactionDraft.flows[0] !== GENERAL_ACTION39_COORDINATE.flow
+        || transactionDraft.actions[0] !== coordinate.action) {
+      throw new Error("General action 40-42 is not one current v0 transaction with one finalized lookup table.");
+    }
+    const owner = transactionDraft.semanticOwners[0];
+    if (owner.package !== "clutch-general-v2-contract"
+        || owner.schema !== "dragons-clutch/general-v5-current/actions40-46-48-51/v2"
+        || owner.releaseSha256 !== configuration.release.elfSha256) {
+      throw new Error("General action 40-42 differs from its exact current semantic owner.");
+    }
+    if (transactionDraft.exactEquations.length !== 1
+        || transactionDraft.exactEquations[0].name !== "hostile-decoded General V5 terminal prestate balance"
+        || transactionDraft.exactEquations[0].unit.kind !== "lamports") {
+      throw new Error("General action 40-42 differs from its exact chain-prestate equation.");
+    }
+    if (signerRequirements.length !== 1
+        || signerRequirements[0].address !== transactionDraft.feePayer
+        || signerRequirements[0].semanticRoles.length !== 1
+        || signerRequirements[0].semanticRoles[0] !== "transaction-fee-payer"
+        || accountRoles.some((role) => role.signer || role.address === transactionDraft.feePayer)) {
+      throw new Error("General action 40-42 does not bind one disjoint transaction fee payer.");
+    }
+    if (row.symbolicPostcondition !== null) throw new Error("General action 40-42 unexpectedly carries a Direct execution-Clock postcondition.");
+    return Object.freeze({
+      schema: "dragons-clutch/browser/general-v5-current-settlement-chain-material/v1",
+      geometry,
+      provenance: "exact-account-metas-payload-identities-counts-and-cursor-derived-from-one-finalized-chain-snapshot",
+      holderChoice: null,
+      clearingDisposition: "best-valid-submitted-candidate"
+    });
+  };
+
   const validateFailureAction11MaterialContract = (row, coordinate, accountRoles, stateSelection, transactionDraft, signerRequirements, configuration) => {
     if (coordinate.familyTag !== FAILURE_COORDINATE.familyTag
         || coordinate.familyVersion !== FAILURE_COORDINATE.familyVersion
@@ -1552,14 +1665,19 @@
       const failureAction11 = coordinate.familyTag === FAILURE_COORDINATE.familyTag && coordinate.familyVersion === FAILURE_COORDINATE.familyVersion && coordinate.family === FAILURE_COORDINATE.family && coordinate.localAction === "11";
       const failureAction13 = coordinate.familyTag === FAILURE_COORDINATE.familyTag && coordinate.familyVersion === FAILURE_COORDINATE.familyVersion && coordinate.family === FAILURE_COORDINATE.family && coordinate.localAction === "13";
       const generalAction39 = coordinate.familyTag === GENERAL_ACTION39_COORDINATE.familyTag && coordinate.familyVersion === GENERAL_ACTION39_COORDINATE.familyVersion && coordinate.family === GENERAL_ACTION39_COORDINATE.family && coordinate.localAction === "39";
+      const generalCurrentSettlement = generalCurrentSettlementAction(coordinate);
       const projectedFeePayer = nonzeroAddress(row.transactionDraft.feePayer, "projected draft fee payer");
-      if (signerRequirements.some((requirement) => !roleSigners.has(requirement.address) && !((fractional || failureAction11 || failureAction13) && requirement.address === projectedFeePayer)) || [...roleSigners].some((signer) => !signerRequirements.some((requirement) => requirement.address === signer))) throw new Error("callable signer requirements differ from exact signer roles and any explicitly separate family-owned fee payer.");
+      if (signerRequirements.some((requirement) => !roleSigners.has(requirement.address) && !((fractional || failureAction11 || failureAction13 || generalCurrentSettlement) && requirement.address === projectedFeePayer)) || [...roleSigners].some((signer) => !signerRequirements.some((requirement) => requirement.address === signer))) throw new Error("callable signer requirements differ from exact signer roles and any explicitly separate family-owned fee payer.");
       const transactionDraft = validateCanonicalTransactionDraft(row.transactionDraft, configuration, releaseAdmission, coordinate, stateSelection, accountRoles, signerRequirements, index);
       const directContract = coordinate.familyTag === DIRECT_COORDINATE.familyTag && coordinate.familyVersion === DIRECT_COORDINATE.familyVersion && coordinate.family === DIRECT_COORDINATE.family
         ? validateDirectMaterialContract(row, coordinate, accountRoles, stateSelection, transactionDraft, configuration, index)
         : null;
       const fractionalContract = fractional ? validateFractionalMaterialContract(row, coordinate, accountRoles, stateSelection, transactionDraft, signerRequirements, configuration) : null;
-      const generalContract = generalAction39 ? validateGeneralAction39MaterialContract(row, coordinate, accountRoles, stateSelection, transactionDraft, signerRequirements, configuration) : null;
+      const generalContract = generalAction39
+        ? validateGeneralAction39MaterialContract(row, coordinate, accountRoles, stateSelection, transactionDraft, signerRequirements, configuration)
+        : generalCurrentSettlement
+          ? validateGeneralCurrentSettlementMaterialContract(row, coordinate, accountRoles, stateSelection, transactionDraft, signerRequirements, configuration)
+          : null;
       const failureContract = failureAction11
         ? validateFailureAction11MaterialContract(row, coordinate, accountRoles, stateSelection, transactionDraft, signerRequirements, configuration)
         : failureAction13
@@ -1612,7 +1730,8 @@
     const fractional = coordinate.familyTag === FRACTIONAL_COORDINATE.familyTag && coordinate.familyVersion === FRACTIONAL_COORDINATE.familyVersion && coordinate.family === FRACTIONAL_COORDINATE.family && FRACTIONAL_ACTION_CONTRACTS[coordinate.localAction] !== undefined;
     const failureAction11 = coordinate.familyTag === FAILURE_COORDINATE.familyTag && coordinate.familyVersion === FAILURE_COORDINATE.familyVersion && coordinate.family === FAILURE_COORDINATE.family && coordinate.localAction === "11";
     const failureAction13 = coordinate.familyTag === FAILURE_COORDINATE.familyTag && coordinate.familyVersion === FAILURE_COORDINATE.familyVersion && coordinate.family === FAILURE_COORDINATE.family && coordinate.localAction === "13";
-    if (!signers.some((requirement) => requirement.address === feePayer && requirement.semanticRoles.includes("transaction-fee-payer")) || (!fractional && !failureAction11 && !failureAction13 && !roles.some((role) => role.address === feePayer && role.signer))) throw new Error("draft fee payer is not the exact signer role or an explicitly separate family-owned transaction payer.");
+    const generalCurrentSettlement = generalCurrentSettlementAction(coordinate);
+    if (!signers.some((requirement) => requirement.address === feePayer && requirement.semanticRoles.includes("transaction-fee-payer")) || (!fractional && !failureAction11 && !failureAction13 && !generalCurrentSettlement && !roles.some((role) => role.address === feePayer && role.signer))) throw new Error("draft fee payer is not the exact signer role or an explicitly separate family-owned transaction payer.");
     const transactionHex = text(raw.serializedTransactionHex, "serialized transaction", 2464);
     if (!HEX_BYTES.test(transactionHex) || decimal(raw.serializedBytes, "serialized transaction bytes", 1232n).toString() !== String(transactionHex.length / 2)) throw new Error("serialized transaction encoding or byte count is invalid.");
     const expectedAction = failureAction11
@@ -1680,7 +1799,7 @@
     }
     const selection = action.stateSelection;
     const namedAddresses = [selection.account, ...selection.dependencies];
-    if (action.generalContract) {
+    if (action.generalContract && action.coordinate.localAction === "39") {
       const freshPresent = action.generalContract.freshRoleAddresses.filter((identity) => accountByAddress.has(identity));
       if (freshPresent.length !== 0) {
         return Object.freeze({
@@ -1767,6 +1886,18 @@
         eligible: true,
         kind: "finalized-exact-fractional-chain-material-inspectable",
         reason: `Fractional action ${action.coordinate.localAction} has exact finalized identities, metas, amount equations, replay cursor, release, and unsigned bytes; ${holderDisposition}.`,
+        observedAccounts: String(observations.length),
+        staleAccounts: "0",
+        validBeforeSlot: action.freshnessDisposition.validBeforeSlot
+      });
+    }
+    if (action.generalContract) {
+      return Object.freeze({
+        eligible: true,
+        kind: action.coordinate.localAction === "39" ? "finalized-exact-general-action39-inspectable" : "finalized-exact-general-current-settlement-inspectable",
+        reason: action.coordinate.localAction === "39"
+          ? "General action 39 binds the selected best valid submitted Candidate to the exact current Product/Source/Funding prefix and a finalized fresh-account absence set."
+          : `General action ${action.coordinate.localAction} binds one exact current Product/Source/Funding authority prefix, settlement-root cursor, dynamic sibling frame, checked release, and blockhash-free unsigned transaction; the browser supplies no market or account authority.`,
         observedAccounts: String(observations.length),
         staleAccounts: "0",
         validBeforeSlot: action.freshnessDisposition.validBeforeSlot
