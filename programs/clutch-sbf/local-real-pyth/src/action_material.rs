@@ -2146,6 +2146,7 @@ fn require_direct_roles_v1(
     } else {
         Err(CanonicalActionMaterialErrorV1::InvalidPlan)
     }
+}
 /// Join the current Failure semantic-owner material to the exact finalized
 /// cell cursor selected by the daemon. This boundary adds only the fee payer
 /// and opaque API envelope; all roles and wire bytes remain chain-derived.
