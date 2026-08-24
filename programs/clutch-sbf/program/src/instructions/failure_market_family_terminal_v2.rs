@@ -29,6 +29,10 @@ use crate::instructions::failure_market_runtime::{
 use crate::instructions::product_series_current::{
     authenticate_market_lifecycle_root_v2, AuthenticatedMarketLifecycleRootV2,
 };
+use crate::instructions::source_failure_product_release_v1::{
+    authenticate_persisted_source_failure_product_release_v3,
+    AuthenticatedPersistedSourceFailureProductReleaseV3,
+};
 use crate::instructions::source_funding_custody_retirement_v1::{
     AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1,
     SourceFundingCustodyLifecycleTerminalFactsV1, SourceFundingCustodyLiveFounderFactsV1,
@@ -54,6 +58,10 @@ use clutch_failure_policy_runtime::market_runtime_v1::{
     FailureMarketFamilyTerminalReceiptV2,
 };
 use clutch_product_series::{ContentId, MarketLifecyclePhaseV2};
+use clutch_source_plane_v3::ContentId as SourceContentId;
+use clutch_source_plane_v3_runtime::{
+    AuthenticatedSourceRouteV1, SourceFailureProductReleaseDispositionV3,
+};
 use clutch_solana_layout::product_series::MarketLifecycleRootAccountV2;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -497,6 +505,156 @@ impl AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1
     }
 }
 
+/// Hostile durable join for a SourceAbsent or SourceRefused occurrence whose
+/// exact per-Link terminal preceded the later Market-wide Failure family
+/// terminal. The move-only V3 Source projection owns the two physical Source
+/// lifecycle identities; the Failure family owner supplies only the exact
+/// final Market-family receipt.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedFailureMarketSourceFailureLifecycleTerminalV3 {
+    source: AuthenticatedPersistedSourceFailureProductReleaseV3,
+    family: AuthenticatedFailureMarketFamilyTerminalOwnerV2,
+}
+
+impl AuthenticatedFailureMarketSourceFailureLifecycleTerminalV3 {
+    pub(crate) const fn source(
+        &self,
+    ) -> &AuthenticatedPersistedSourceFailureProductReleaseV3 {
+        &self.source
+    }
+
+    pub(crate) const fn family(&self) -> AuthenticatedFailureMarketFamilyTerminalOwnerV2 {
+        self.family
+    }
+}
+
+/// Reopen the one-way bound Source failure account and join it to the unique
+/// hostile Failure family owner. No terminal ID, branch, or Product-Link fact
+/// is supplied by the instruction payload.
+pub(crate) fn authenticate_failure_market_source_failure_lifecycle_terminal_v3(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    source_terminal_account: &AccountInfo<'_>,
+    family: AuthenticatedFailureMarketFamilyTerminalOwnerV2,
+) -> Outcome<AuthenticatedFailureMarketSourceFailureLifecycleTerminalV3> {
+    let source = authenticate_persisted_source_failure_product_release_v3(
+        program_id,
+        route,
+        source_terminal_account,
+    )?;
+    let terminal = source.terminal();
+    let policy_binding = family.admission.state().binding();
+    let policy = policy_binding.facts();
+    let policy_binding_id = policy_binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        terminal.source_release_manifest_id() == route.release_manifest_id()
+            && terminal.source_release_authentication_id() == route.release_authentication_id()
+            && terminal.route_id() == route.route_id()
+            && terminal.source_plane_contract_id() == route.source_plane_contract_id()
+            && terminal.source_spec_id() == route.source_spec_id()
+            && terminal.source_work_schedule_id() == route.source_work_schedule_id()
+            && terminal.market_instance_id().bytes() == policy.market_instance_id.bytes()
+            && terminal.failure_policy_binding_id().bytes() == policy_binding_id.bytes()
+            && terminal.failure_generation() == policy.generation
+            && source.product_link_account().bytes() != [0; 32]
+            && source.product_link_account().bytes()
+                != family.admission.account().to_bytes()
+            && source.product_link_account().bytes() != family.runtime.account().to_bytes()
+            && source.product_link_account().bytes() != family.replay.account().to_bytes()
+            && source.product_link_account().bytes()
+                != family.interval.cell_account().to_bytes()
+            && source.product_link_account().bytes()
+                != family.interval.history_account().to_bytes()
+            && !source.source_terminal_postwrite_id().is_zero()
+            && !source.source_physical_disposition_id().is_zero()
+            && !source.id().is_zero()
+            && !family.family_terminal_receipt_id.is_zero(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedFailureMarketSourceFailureLifecycleTerminalV3 { source, family })
+}
+
+impl AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1
+    for AuthenticatedFailureMarketSourceFailureLifecycleTerminalV3
+{
+    fn source_funding_custody_lifecycle_terminal_facts_v1(
+        &self,
+        founder: SourceFundingCustodyLiveFounderFactsV1,
+    ) -> Outcome<SourceFundingCustodyLifecycleTerminalFactsV1> {
+        let terminal = self.source.terminal();
+        let disposition = match self.source.disposition() {
+            Some(SourceFailureProductReleaseDispositionV3::SourceAbsent) => {
+                SourceFundingCustodyTerminalDispositionV1::SourceAbsent
+            }
+            Some(SourceFailureProductReleaseDispositionV3::SourceRefused) => {
+                SourceFundingCustodyTerminalDispositionV1::SourceRefused
+            }
+            None => return Err(Refusal::Adapter(ClutchError::MismatchedState)),
+        };
+        let policy_binding = self.family.admission.state().binding();
+        let policy = policy_binding.facts();
+        let policy_binding_id = policy_binding
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        require(
+            founder.product_link_account == self.source.product_link_account()
+                && founder.market_instance_id == terminal.market_instance_id()
+                && founder.market_instance_id.bytes() == policy.market_instance_id.bytes()
+                && terminal.failure_policy_binding_id().bytes() == policy_binding_id.bytes()
+                && founder.source_release_manifest_id == terminal.source_release_manifest_id()
+                && founder.source_release_authentication_id
+                    == terminal.source_release_authentication_id()
+                && founder.source_route_id == terminal.route_id()
+                && founder.source_work_schedule_id == terminal.source_work_schedule_id()
+                && founder.source_generation == terminal.failure_generation()
+                && founder.source_repair_generation == terminal.source_repair_generation()
+                && founder.neutral_lamport_sink.bytes() == policy.neutral_sink.bytes()
+                && self.source.source_terminal_postwrite_id()
+                    != self.source.source_physical_disposition_id()
+                && self.source.id() != self.source.source_terminal_postwrite_id()
+                && self.source.id() != self.source.source_physical_disposition_id()
+                && ContentId::from_bytes(self.source.id().bytes())
+                    != self.family.family_terminal_receipt_id,
+            ClutchError::MismatchedState,
+        )?;
+        Ok(SourceFundingCustodyLifecycleTerminalFactsV1 {
+            disposition,
+            capitalization_authority_id: founder.capitalization_authority_id,
+            capitalization_receipt_id: founder.capitalization_receipt_id,
+            pre_root_source_occurrence_id: founder.pre_root_source_occurrence_id,
+            product_link_account: founder.product_link_account,
+            product_link_authentication_id: founder.product_link_authentication_id,
+            product_link_semantic_id: founder.product_link_semantic_id,
+            source_terminal_postwrite_id: self.source.source_terminal_postwrite_id(),
+            source_result_or_absence_close_receipt_id: self
+                .source
+                .source_physical_disposition_id(),
+            source_product_release_binding_id: self.source.id(),
+            failure_family_terminal_receipt_id: SourceContentId::from_bytes(
+                self.family.family_terminal_receipt_id.bytes(),
+            ),
+            market_instance_id: founder.market_instance_id,
+            series_plan_id: founder.series_plan_id,
+            ordinal: founder.ordinal,
+            source_generation: founder.source_generation,
+            source_release_manifest_id: founder.source_release_manifest_id,
+            source_release_authentication_id: founder.source_release_authentication_id,
+            source_route_id: founder.source_route_id,
+            source_work_schedule_id: founder.source_work_schedule_id,
+            source_lifecycle_id: founder.source_lifecycle_id,
+            source_occurrence_id: founder.source_occurrence_id,
+            source_occurrence_account: founder.source_occurrence_account,
+            source_occurrence_authentication_id: founder.source_occurrence_authentication_id,
+            source_repair_generation: founder.source_repair_generation,
+            source_funding_custody: founder.source_funding_custody,
+            lamport_principal_refund: founder.lamport_principal_refund,
+            neutral_lamport_sink: founder.neutral_lamport_sink,
+        })
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn successful_source_custody_terminal_facts_v1(
     policy: clutch_failure_policy_runtime::market_policy_v1::FailureMarketPolicyFactsV1,
@@ -541,10 +699,16 @@ fn successful_source_custody_terminal_facts_v1(
         product_link_account: founder.product_link_account,
         product_link_authentication_id: founder.product_link_authentication_id,
         product_link_semantic_id: founder.product_link_semantic_id,
-        source_terminal_postwrite_id: source_terminal,
-        source_result_or_absence_close_receipt_id: source_result_close,
-        source_product_release_binding_id: source_product_release,
-        failure_family_terminal_receipt_id: family_terminal_receipt_id,
+        source_terminal_postwrite_id: SourceContentId::from_bytes(source_terminal.bytes()),
+        source_result_or_absence_close_receipt_id: SourceContentId::from_bytes(
+            source_result_close.bytes(),
+        ),
+        source_product_release_binding_id: SourceContentId::from_bytes(
+            source_product_release.bytes(),
+        ),
+        failure_family_terminal_receipt_id: SourceContentId::from_bytes(
+            family_terminal_receipt_id.bytes(),
+        ),
         market_instance_id: founder.market_instance_id,
         series_plan_id: founder.series_plan_id,
         ordinal: founder.ordinal,
@@ -1332,6 +1496,37 @@ mod adversarial_family_terminal_tests {
             assert!(owner.contains(predicate), "missing Source terminal fact {predicate}");
         }
         assert!(!owner.contains("SourceFundingCustodyLifecycleTerminalFactsV1::decode"));
+    }
+
+    #[test]
+    fn failed_source_custody_terminal_uses_only_hostile_v3_and_live_link_founder() {
+        let source = include_str!("failure_market_family_terminal_v2.rs");
+        let owner = source
+            .split("pub(crate) fn authenticate_failure_market_source_failure_lifecycle_terminal_v3")
+            .nth(1)
+            .and_then(|value| {
+                value
+                    .split("fn successful_source_custody_terminal_facts_v1")
+                    .next()
+            })
+            .expect("failed Source lifecycle terminal owner");
+        for predicate in [
+            "authenticate_persisted_source_failure_product_release_v3(",
+            "terminal.market_instance_id().bytes() == policy.market_instance_id.bytes()",
+            "terminal.failure_policy_binding_id().bytes() == policy_binding_id.bytes()",
+            "founder.product_link_account == self.source.product_link_account()",
+            "founder.source_repair_generation == terminal.source_repair_generation()",
+            "source_terminal_postwrite_id: self.source.source_terminal_postwrite_id()",
+            ".source_physical_disposition_id()",
+            "source_product_release_binding_id: self.source.id()",
+            "failure_family_terminal_receipt_id: SourceContentId::from_bytes(",
+        ] {
+            assert!(owner.contains(predicate), "missing hostile terminal join {predicate}");
+        }
+        assert!(!owner.contains("product_link_authentication_after() =="));
+        assert!(!owner.contains("SourceFailureTerminalAccountV2"));
+        assert!(!owner.contains("expected_terminal_id"));
+        assert!(!owner.contains("expected_physical_id"));
     }
 
     #[test]
