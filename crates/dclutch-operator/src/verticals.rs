@@ -21,6 +21,13 @@ use dclutch_direct_contract::{
     },
     prepare_replay_root_close_v2,
 };
+use dclutch_general_contract::{
+    BATCH_ROOT_BYTES, GENERAL_CONFIG_SCHEMA_ID_V1, GENERAL_FUNDING_BYTES, GENERAL_ROOT_BYTES,
+    GeneralAccountFrameV1, GeneralAccountMetaV1, GeneralBatchPdaSeedsV1, GeneralBatchReplayV1,
+    GeneralConfigV1, GeneralFundingCustodyObservationV1, GeneralFundingPdaSeedsV1,
+    GeneralFundingV1, GeneralInstructionTagV1, GeneralInstructionV1, GeneralRootPdaSeedsV1,
+    GeneralRootV1, open_general_batch_v1,
+};
 use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome_count};
 use dclutch_product_contract::capacity::CapacityProfileV1;
 use dclutch_series_contract::{
@@ -411,6 +418,311 @@ pub struct SourceRetireResolutionReport {
     pub expected_market_child_count: u64,
 }
 
+/// Finalized state required to permissionlessly open the next General batch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GeneralOpenBatchState {
+    /// Permissionless System actor reimbursed only from typed liveness funding.
+    pub actor: ObservedAccount,
+    /// Canonical Market bound to the General root and config.
+    pub market: ObservedAccount,
+    /// Finalized immutable General configuration.
+    pub config: ObservedAccount,
+    /// Mutable canonical General root.
+    pub root: ObservedAccount,
+    /// Mutable segregated General native funding ledger.
+    pub funding: ObservedAccount,
+    /// Prefunded vacant PDA destination for the derived batch.
+    pub batch: ObservedAccount,
+    /// Permanent RentCredit selected by the persisted General root.
+    pub rent_credit: ObservedAccount,
+    /// Finalization proof for the immutable configuration.
+    pub config_finalization: FinalizedRecordProof,
+    /// Canonical executable System Program.
+    pub system_program: ObservedAccount,
+    /// Canonical Rent sysvar used for exact batch capitalization.
+    pub rent_sysvar: ObservedAccount,
+    /// Canonical Clock sysvar used for collection timing.
+    pub clock_sysvar: ObservedAccount,
+}
+
+/// Exact next-batch General instruction derived from finalized chain state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GeneralOpenBatchReport {
+    /// Exact unsigned eleven-account General instruction.
+    pub instruction: Instruction,
+    /// Finalized observation which selected every replay field.
+    pub observation: Observation,
+    /// Derived batch PDA selected from the persisted root sequence.
+    pub batch: Pubkey,
+    /// Persisted next batch sequence, never caller supplied.
+    pub sequence: u64,
+}
+
+/// Construct the exact General V1 `OpenBatch` frame without caller-selected
+/// generation, sequence, config, funding compartment, or rent destination.
+pub fn build_general_open_batch_v1(
+    program_id: Pubkey,
+    state: &GeneralOpenBatchState,
+) -> Result<GeneralOpenBatchReport, VerticalError> {
+    let observation = observation(&[
+        &state.actor,
+        &state.market,
+        &state.config,
+        &state.root,
+        &state.funding,
+        &state.batch,
+        &state.rent_credit,
+        &state.config_finalization.staging_cursor,
+        &state.system_program,
+        &state.rent_sysvar,
+        &state.clock_sysvar,
+    ])?;
+    authenticate_system_actor(&state.actor)?;
+    authenticate_system_program(&state.system_program)?;
+    let rent =
+        foundation::decode_rent(&state.rent_sysvar).map_err(|_| VerticalError::InvalidState)?;
+    let clock = decode_clock(&state.clock_sysvar)?;
+    let config = finalized(
+        program_id,
+        &rent,
+        &state.config,
+        &state.config_finalization,
+        GENERAL_CONFIG_SCHEMA_ID_V1.to_bytes(),
+        GeneralConfigV1::decode,
+    )?;
+    if state.config.data != config.to_bytes() {
+        return Err(VerticalError::InvalidState);
+    }
+    let config_id = dclutch_general_contract::ContentId::new(hash(&state.config.data).to_bytes())
+        .map_err(|_| VerticalError::ContentMismatch)?;
+    let root = decode_owned(&state.root, program_id, GeneralRootV1::decode)?;
+    let mut root_bytes = [0; GENERAL_ROOT_BYTES];
+    root.encode(&mut root_bytes)
+        .map_err(|_| VerticalError::InvalidState)?;
+    if state.root.data != root_bytes {
+        return Err(VerticalError::InvalidState);
+    }
+    let root_seeds = GeneralRootPdaSeedsV1::new(root.market(), root.generation(), config_id)
+        .map_err(|_| VerticalError::PdaMismatch)?;
+    let (expected_root, _) =
+        Pubkey::find_program_address(&root_seeds.seed_components(), &program_id);
+    if state.root.key != expected_root
+        || root.config_id() != config_id
+        || root.generation() != config.generation()
+    {
+        return Err(VerticalError::PdaMismatch);
+    }
+    let market = source_market(program_id, &state.market)?;
+    if root.market() != state.market.key.to_bytes()
+        || market.generation != config.generation()
+        || market.identity_id != config.market_identity_id().to_bytes()
+        || market.claim_basis_id != config.claim_basis_id().to_bytes()
+    {
+        return Err(VerticalError::ContentMismatch);
+    }
+    let funding = decode_owned(&state.funding, program_id, GeneralFundingV1::decode)?;
+    let mut funding_bytes = [0; GENERAL_FUNDING_BYTES];
+    funding
+        .encode(&mut funding_bytes)
+        .map_err(|_| VerticalError::InvalidState)?;
+    if state.funding.data != funding_bytes {
+        return Err(VerticalError::InvalidState);
+    }
+    let funding_seeds = GeneralFundingPdaSeedsV1::new(
+        root.market(),
+        root.generation(),
+        config_id,
+        funding.capability_release_id(),
+    )
+    .map_err(|_| VerticalError::PdaMismatch)?;
+    let (expected_funding, _) =
+        Pubkey::find_program_address(&funding_seeds.seed_components(), &program_id);
+    if state.funding.key != expected_funding
+        || funding.capability_release_id() != config.capability_release_id()
+    {
+        return Err(VerticalError::PdaMismatch);
+    }
+    let custody = GeneralFundingCustodyObservationV1::new(
+        state.funding.lamports,
+        rent.minimum_balance(GENERAL_FUNDING_BYTES),
+    )
+    .map_err(|_| VerticalError::InvalidState)?;
+    let sequence = root.next_batch_sequence();
+    let batch_seeds = GeneralBatchPdaSeedsV1::new(state.root.key.to_bytes(), sequence)
+        .map_err(|_| VerticalError::PdaMismatch)?;
+    let (batch, _) = Pubkey::find_program_address(&batch_seeds.seed_components(), &program_id);
+    if state.batch.key != batch
+        || state.batch.owner != system_program::ID
+        || state.batch.executable
+        || !state.batch.data.is_empty()
+    {
+        return Err(VerticalError::PdaMismatch);
+    }
+    authenticate_rent_credit(
+        program_id,
+        &state.rent_credit,
+        Pubkey::new_from_array(root.rent_beneficiary()),
+    )
+    .map_err(|_| VerticalError::ContentMismatch)?;
+    let args = (
+        program_id,
+        state,
+        config_id,
+        config,
+        root,
+        funding,
+        custody,
+        rent.minimum_balance(BATCH_ROOT_BYTES),
+        clock.slot,
+        sequence,
+        observation,
+        batch,
+    );
+    match config.outcome_count() {
+        2 => general_open_batch_instruction::<2>(
+            args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
+            args.10, args.11,
+        ),
+        3 => general_open_batch_instruction::<3>(
+            args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
+            args.10, args.11,
+        ),
+        4 => general_open_batch_instruction::<4>(
+            args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
+            args.10, args.11,
+        ),
+        5 => general_open_batch_instruction::<5>(
+            args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
+            args.10, args.11,
+        ),
+        6 => general_open_batch_instruction::<6>(
+            args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
+            args.10, args.11,
+        ),
+        7 => general_open_batch_instruction::<7>(
+            args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
+            args.10, args.11,
+        ),
+        8 => general_open_batch_instruction::<8>(
+            args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
+            args.10, args.11,
+        ),
+        9 => general_open_batch_instruction::<9>(
+            args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
+            args.10, args.11,
+        ),
+        10 => general_open_batch_instruction::<10>(
+            args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
+            args.10, args.11,
+        ),
+        11 => general_open_batch_instruction::<11>(
+            args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
+            args.10, args.11,
+        ),
+        12 => general_open_batch_instruction::<12>(
+            args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
+            args.10, args.11,
+        ),
+        13 => general_open_batch_instruction::<13>(
+            args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
+            args.10, args.11,
+        ),
+        14 => general_open_batch_instruction::<14>(
+            args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
+            args.10, args.11,
+        ),
+        15 => general_open_batch_instruction::<15>(
+            args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
+            args.10, args.11,
+        ),
+        16 => general_open_batch_instruction::<16>(
+            args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
+            args.10, args.11,
+        ),
+        _ => Err(VerticalError::InvalidState),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn general_open_batch_instruction<const N: usize>(
+    program_id: Pubkey,
+    state: &GeneralOpenBatchState,
+    config_id: dclutch_general_contract::ContentId,
+    config: GeneralConfigV1,
+    root: GeneralRootV1,
+    funding: GeneralFundingV1,
+    custody: GeneralFundingCustodyObservationV1,
+    batch_rent: u64,
+    slot: u64,
+    sequence: u64,
+    observation: Observation,
+    batch: Pubkey,
+) -> Result<GeneralOpenBatchReport, VerticalError> {
+    let replay = GeneralBatchReplayV1 {
+        generation: root.generation(),
+        batch_sequence: sequence,
+    };
+    let metas = [
+        general_meta(&state.actor, true, true),
+        general_meta(&state.market, false, true),
+        general_meta(&state.config, false, false),
+        general_meta(&state.root, false, true),
+        general_meta(&state.funding, false, true),
+        general_meta(&state.batch, false, true),
+        general_meta(&state.rent_credit, false, true),
+        general_meta(&state.config_finalization.staging_cursor, false, false),
+        general_meta(&state.system_program, false, false),
+        general_meta(&state.rent_sysvar, false, false),
+        general_meta(&state.clock_sysvar, false, false),
+    ];
+    let frame = GeneralAccountFrameV1::new(GeneralInstructionTagV1::OpenBatch, 0, &metas)
+        .map_err(|_| VerticalError::InvalidState)?;
+    open_general_batch_v1(
+        frame, replay, config_id, config, root, funding, custody, batch_rent, slot,
+    )
+    .map_err(|_| VerticalError::InvalidPhase)?;
+    let wire = GeneralInstructionV1::<N>::OpenBatch(replay);
+    let mut data = vec![
+        0;
+        wire.encoded_len()
+            .map_err(|_| VerticalError::InvalidState)?
+    ];
+    wire.encode(&mut data)
+        .map_err(|_| VerticalError::InvalidState)?;
+    Ok(GeneralOpenBatchReport {
+        instruction: Instruction {
+            program_id,
+            accounts: metas
+                .iter()
+                .map(|m| {
+                    if m.is_writable {
+                        AccountMeta::new(Pubkey::new_from_array(m.key), m.is_signer)
+                    } else {
+                        AccountMeta::new_readonly(Pubkey::new_from_array(m.key), m.is_signer)
+                    }
+                })
+                .collect(),
+            data,
+        },
+        observation,
+        batch,
+        sequence,
+    })
+}
+
+fn general_meta(
+    account: &ObservedAccount,
+    is_signer: bool,
+    is_writable: bool,
+) -> GeneralAccountMetaV1 {
+    GeneralAccountMetaV1 {
+        key: account.key.to_bytes(),
+        is_signer,
+        is_writable,
+        is_executable: account.executable,
+    }
+}
+
 /// Construct the exact Source V1 terminal-resolution retirement frame.
 ///
 /// The expected generation and child count are copied only from decoded state
@@ -519,6 +831,8 @@ struct SourceMarketFacts {
     phase: Phase,
     child_count: u64,
     resolution_policy_id: [u8; 32],
+    identity_id: [u8; 32],
+    claim_basis_id: [u8; 32],
 }
 
 fn source_market(
@@ -570,6 +884,8 @@ fn source_market_width<const N: usize>(
         phase: market.root().phase(),
         child_count: market.root().outstanding_children(),
         resolution_policy_id: market.root().identity().resolution_policy_id().to_bytes(),
+        identity_id: hash(&market.root().identity().to_bytes()).to_bytes(),
+        claim_basis_id: market.root().identity().claim_basis_id().to_bytes(),
     })
 }
 
