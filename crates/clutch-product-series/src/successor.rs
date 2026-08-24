@@ -1389,6 +1389,41 @@ pub fn compile_ordinal_v6(
     })
 }
 
+/// Compile one V5 ordinal against the current 50-slot QuoteV6 attachment.
+#[allow(clippy::too_many_arguments)]
+pub fn compile_ordinal_v7(
+    series: &SeriesPlanV5,
+    template: &ProductTemplateV4,
+    basis: &NativeClaimBasisV1,
+    recovery: &EvidenceOnlyRecoveryPolicyV1,
+    price_policy: &PriceMeasurePolicyV1,
+    genesis: &MarketGenesisProfileV2,
+    attachment: &SeriesAttachmentPlanV6,
+    registry: &RegistryCapabilityProjectionV2,
+    ordinal: u32,
+) -> Result<CompiledOrdinalV2> {
+    series.validate_bindings_v6(
+        template, basis, recovery, price_policy, genesis, attachment, registry,
+    )?;
+    let start_bucket = series.start_bucket(ordinal)?;
+    let schedule = compile_schedule_v2(template, recovery, start_bucket)?;
+    let market = MarketInstancePreimageV2 {
+        product_template_id: template.id()?,
+        market_genesis_profile_id: genesis.id()?,
+        start_bucket,
+        collateral_cap: series.market_collateral_cap,
+    };
+    market.validate_bindings(template, basis, price_policy, genesis)?;
+    Ok(CompiledOrdinalV2 {
+        series_plan_id: series.id()?,
+        ordinal,
+        market_instance_id: market.id()?,
+        market,
+        attachment_plan_id: SeriesAttachmentPlanId::from_bytes(attachment.id()?.bytes()),
+        schedule,
+    })
+}
+
 /// Immutable funding ownership and refund identities for one V5 Series
 /// activation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
