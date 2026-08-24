@@ -11,8 +11,16 @@ pub(crate) mod retirement_v4;
 use crate::accounts::{expect_pda, require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::{
-    allocate_data, assign_data, read_rent, transfer_data, SYSTEM_PROGRAM_ID,
+    allocate_data, assign_data, read_rent, require_system_program, transfer_data,
+    SYSTEM_PROGRAM_ID,
 };
+use crate::claim_release::AuthenticatedClaimIssuanceReleaseV1;
+use crate::instructions::collateral_position_v3::{
+    accept_general_market_liability_founding_postwrite_v3,
+    AuthenticatedMarketLiabilityFoundingPostwriteV3, GeneralMarketValueAuthorityV2,
+    RuntimeSha256,
+};
+use crate::collateral_release::AuthenticatedCollateralReleaseDeploymentV2;
 use crate::instructions::product_market_foundation_current::{
     AuthenticatedProductMarketFoundationStepPostwriteV3,
     AuthenticatedProductMarketFounderCurrentCreationV3,
@@ -32,12 +40,28 @@ use crate::instructions::product_direct_global_liveness::{
 use crate::instructions::source_occurrence_foundation_v1::
     AuthenticatedPreRootSourceOccurrencePostwriteV3;
 use crate::seeds;
+use crate::token;
+use clutch_collateral_adapter_v2::{
+    accept_claim_mint_founding_step_v2, accept_outcome_custody_founding_step_v1,
+    accept_market_core_founding_v4, admit_collateral_mint_v2,
+    compose_market_core_founding_v4, prepare_claim_mint_founding_v2,
+    prepare_outcome_custody_founding_v1, AcceptedClaimMintFoundingStepV2,
+    AcceptedMarketLiabilityFoundingV3, AcceptedOutcomeCustodyFoundingStepV1,
+    BoundCollateralProfileV2, ClaimLedgerV3, ClaimMintFoundingPlanV2,
+    ClaimMintFoundingPostwriteV2, ClaimMintFoundingRequestV2, CustodyCreationPlanV2,
+    CustodyInitializationStepV2,
+    HoardV2, Id as CollateralId, MarketLiabilityFoundingPlanV3,
+    MarketLiabilityFoundingRequestV3,
+    OutcomeCustodyFoundingPlanV1,
+    OutcomeCustodyFoundingRequestV1, RuntimeAccountViewV2, CLAIM_LEDGER_V3_BYTES,
+    HOARD_V2_BYTES, prepare_hoard_creation_v2, prepare_market_liability_founding_v3,
+};
 use clutch_product_series::{
     authenticate_market_foundation_account_graph_bytes_v3,
     AuthenticatedMarketFoundationAccountGraphBytesV3, CompiledProductSeriesBundleV6, ContentId,
     FixedCodec,
     MarketFoundationAccountGraphV3, MarketFoundationScheduleV3, MarketFoundationSlotV3,
-    MarketInstanceV2Id,
+    MarketInstancePreimageV2, MarketInstanceV2Id,
     AuthenticatedMarketFamilyAuthorityV1, MarketFamilyAggregatorV1, MarketFamilyStatusV1,
     MarketFamilyV1,
     MarketLifecyclePhaseV2, MarketLifecycleRootV2, MarketResolutionActivationV2,
@@ -45,7 +69,7 @@ use clutch_product_series::{
     SeriesFundingCompletionAuthorizationV4Id, SeriesFundingCompletionBindingV4,
     SeriesFundingCompletionBindingV4Id, SeriesFundingReservationBindingV4,
     SeriesFundingReservationBindingV4Id, SeriesFundingStateV4,
-    SeriesFundingStateV4Id,
+    SeriesFundingStateV4Id, SeriesFundingStateV5,
     SeriesFundingComponentV2, SeriesFundingQuoteV5, SeriesFundingTermsV2Id,
     RegistryCapabilityProjectionV2,
     SeriesAttachmentPlanV5, SeriesAttachmentPlanV5Id, SeriesLifecycleReplayBindingV2Id,
@@ -59,17 +83,19 @@ use clutch_product_series::{
 };
 use clutch_solana_layout::product_series::{
     series_market_link_authentication_id_v2, MarketLifecycleRootAccountV2,
-    SeriesFundingAccountV4, SeriesLifecycleReplayAccountV2,
+    SeriesFundingAccountV4, SeriesFundingAccountV5, SeriesLifecycleReplayAccountV2,
     SeriesMarketLinkAccountV2,
-    SeriesRegistryAccountV3, MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V2,
-    SERIES_FUNDING_ACCOUNT_BYTES_V4,
+    SeriesRegistryAccountV3, SeriesRegistryAccountV4, MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V2,
+    SERIES_FUNDING_ACCOUNT_BYTES_V4, SERIES_FUNDING_ACCOUNT_BYTES_V5,
     SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2,
     SERIES_MARKET_LINK_ACCOUNT_BYTES_V2, SERIES_REGISTRY_ACCOUNT_BYTES_V3,
+    SERIES_REGISTRY_ACCOUNT_BYTES_V4,
 };
 use solana_account_info::AccountInfo;
-use solana_cpi::invoke_signed;
+use solana_cpi::{invoke, invoke_signed};
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
+use clutch_retirement::{DeletableRentOwnerV1, Identity32V1};
 
 const SERIES_REGISTRY_AUTHENTICATION_DOMAIN_V3: &[u8] =
     b"dragons-clutch/series-registry-account-authentication/v3\0";
@@ -77,8 +103,16 @@ const SERIES_REGISTRY_CAPABILITY_REFS_DOMAIN_V3: &[u8] =
     b"dragons-clutch/series-registry-capability-refs/v3\0";
 const REGISTRY_CAPABILITY_AUTHENTICATION_DOMAIN_V4: &[u8] =
     b"dragons-clutch/registry-capability-authentication/v4\0";
+const SERIES_REGISTRY_AUTHENTICATION_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/series-registry-account-authentication/v4\0";
+const SERIES_REGISTRY_CAPABILITY_REFS_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/series-registry-capability-refs/v4\0";
+const REGISTRY_CAPABILITY_AUTHENTICATION_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/registry-capability-authentication/v5\0";
 const SERIES_FUNDING_AUTHENTICATION_DOMAIN_V4: &[u8] =
     b"dragons-clutch/series-funding-account-authentication/v4\0";
+const SERIES_FUNDING_AUTHENTICATION_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/series-funding-account-authentication/v5\0";
 const SERIES_FUNDING_RESERVATION_POSTWRITE_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/series-funding-reservation-postwrite/v4\0";
 const SERIES_FUNDING_COMPLETION_POSTWRITE_DOMAIN_V4: &[u8] =
@@ -89,6 +123,20 @@ const PRODUCT_CURRENT_ACTIVATION_COMPLETION_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/product-current-activation-completion/v4\0";
 const PRODUCT_CURRENT_ROOT_SLOT_POSTWRITE_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/product-current-root-slot-postwrite/v4\0";
+const PRODUCT_CURRENT_RETAINED_PREALLOCATION_POSTWRITE_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/product-current-retained-preallocation-postwrite/v3\0";
+const PRODUCT_CURRENT_MARKET_LIABILITY_PLAN_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/product-current-market-liability-plan/v3\0";
+const PRODUCT_CURRENT_MARKET_LIABILITY_SLOT_POSTWRITE_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/product-current-market-liability-slot-postwrite/v3\0";
+const PRODUCT_CURRENT_CLAIM_MINT_PLAN_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/product-current-claim-mint-plan/v2\0";
+const PRODUCT_CURRENT_CLAIM_MINT_POSTWRITE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/product-current-claim-mint-postwrite/v2\0";
+const PRODUCT_CURRENT_OUTCOME_CUSTODY_PLAN_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/sbf/product-current-outcome-custody-plan/v1\0";
+const PRODUCT_CURRENT_OUTCOME_CUSTODY_POSTWRITE_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/sbf/product-current-outcome-custody-postwrite/v1\0";
 const PRODUCT_CURRENT_FOUNDER_ACTIVATED_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/product-current-founder-activated/v4\0";
 const SERIES_LIFECYCLE_REPLAY_AUTHENTICATION_DOMAIN_V2: &[u8] =
@@ -284,7 +332,186 @@ impl AuthenticatedRegistryCapabilityV4 {
     }
 }
 
-/// Exact current 0x80/version4 acyclic funding authentication.
+/// Exact current 0x7f/version4 registry authentication.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSeriesRegistryAccountV4 {
+    account: Pubkey,
+    value: SeriesRegistryAccountV4,
+    observed_lamports: u64,
+    writable: bool,
+    data_id: ContentId,
+    authentication_id: ContentId,
+}
+
+impl AuthenticatedSeriesRegistryAccountV4 {
+    pub(crate) const fn account(&self) -> Pubkey { self.account }
+    pub(crate) const fn value(&self) -> &SeriesRegistryAccountV4 { &self.value }
+    pub(crate) const fn observed_lamports(&self) -> u64 { self.observed_lamports }
+    pub(crate) const fn is_writable(&self) -> bool { self.writable }
+    pub(crate) const fn data_id(&self) -> ContentId { self.data_id }
+    pub(crate) const fn authentication_id(&self) -> ContentId { self.authentication_id }
+}
+
+/// Move-only exact capability references projected from hostile RegistryV4.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSeriesRegistryCapabilityRefsV4 {
+    id: ContentId,
+    series_registry_account: Pubkey,
+    series_registry_authentication_id: ContentId,
+    series_plan_id: SeriesPlanV5Id,
+    funding_terms_id: clutch_product_series::SeriesFundingTermsV2Id,
+    registry_release_id: ContentId,
+    capability_profile_id: ContentId,
+    compiler_bundle_id: clutch_product_series::CompiledProductSeriesBundleV7Id,
+    activation_consumed: bool,
+}
+
+impl AuthenticatedSeriesRegistryCapabilityRefsV4 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn series_registry_account(&self) -> Pubkey {
+        self.series_registry_account
+    }
+    pub(crate) const fn series_registry_authentication_id(&self) -> ContentId {
+        self.series_registry_authentication_id
+    }
+    pub(crate) const fn series_plan_id(&self) -> SeriesPlanV5Id { self.series_plan_id }
+    pub(crate) const fn funding_terms_id(
+        &self,
+    ) -> clutch_product_series::SeriesFundingTermsV2Id {
+        self.funding_terms_id
+    }
+    pub(crate) const fn registry_release_id(&self) -> ContentId { self.registry_release_id }
+    pub(crate) const fn capability_profile_id(&self) -> ContentId {
+        self.capability_profile_id
+    }
+    pub(crate) const fn compiler_bundle_id(
+        &self,
+    ) -> clutch_product_series::CompiledProductSeriesBundleV7Id {
+        self.compiler_bundle_id
+    }
+    pub(crate) const fn activation_consumed(&self) -> bool { self.activation_consumed }
+}
+
+/// Move-only RegistryV4-bound ReleaseV2/ProfileV4 loader authority.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedRegistryCapabilityV5 {
+    id: ContentId,
+    series_registry_account: Pubkey,
+    series_registry_authentication_id: ContentId,
+    series_plan_id: SeriesPlanV5Id,
+    funding_terms_id: clutch_product_series::SeriesFundingTermsV2Id,
+    compiler_bundle_id: clutch_product_series::CompiledProductSeriesBundleV7Id,
+    activation_consumed: bool,
+    program_account: Pubkey,
+    programdata_account: Pubkey,
+    release_artifact_account: Pubkey,
+    profile_artifact_account: Pubkey,
+    release: clutch_product_series::RegistryProgramReleaseV2,
+    profile: clutch_product_series::RegistryCapabilityProfileV4,
+    projection: RegistryCapabilityProjectionV2,
+    programdata_sha256: ContentId,
+}
+
+impl AuthenticatedRegistryCapabilityV5 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn series_registry_account(&self) -> Pubkey {
+        self.series_registry_account
+    }
+    pub(crate) const fn series_registry_authentication_id(&self) -> ContentId {
+        self.series_registry_authentication_id
+    }
+    pub(crate) const fn series_plan_id(&self) -> SeriesPlanV5Id { self.series_plan_id }
+    pub(crate) const fn funding_terms_id(
+        &self,
+    ) -> clutch_product_series::SeriesFundingTermsV2Id {
+        self.funding_terms_id
+    }
+    pub(crate) const fn compiler_bundle_id(
+        &self,
+    ) -> clutch_product_series::CompiledProductSeriesBundleV7Id {
+        self.compiler_bundle_id
+    }
+    pub(crate) const fn activation_consumed(&self) -> bool { self.activation_consumed }
+    pub(crate) const fn program_account(&self) -> Pubkey { self.program_account }
+    pub(crate) const fn programdata_account(&self) -> Pubkey { self.programdata_account }
+    pub(crate) const fn release_artifact_account(&self) -> Pubkey {
+        self.release_artifact_account
+    }
+    pub(crate) const fn profile_artifact_account(&self) -> Pubkey {
+        self.profile_artifact_account
+    }
+    pub(crate) const fn release(&self) -> clutch_product_series::RegistryProgramReleaseV2 {
+        self.release
+    }
+    pub(crate) const fn profile(&self) -> clutch_product_series::RegistryCapabilityProfileV4 {
+        self.profile
+    }
+    pub(crate) const fn registry_release_id(&self) -> ContentId {
+        self.projection.registry_release_id
+    }
+    pub(crate) const fn capability_profile_id(&self) -> ContentId {
+        self.projection.capability_profile_id
+    }
+    pub(crate) const fn projection(&self) -> RegistryCapabilityProjectionV2 {
+        self.projection
+    }
+    pub(crate) const fn programdata_sha256(&self) -> ContentId { self.programdata_sha256 }
+    pub(crate) const fn semantic_owners(
+        &self,
+    ) -> clutch_product_series::CapabilitySemanticOwnersV2 {
+        self.profile.rules.semantic_owners
+    }
+    pub(crate) const fn realm_collateral(
+        &self,
+    ) -> clutch_product_series::RealmCollateralProjectionV1 {
+        self.profile.rules.realm_collateral
+    }
+    pub(crate) const fn statistic_registry_value(&self) -> u16 {
+        self.profile.rules.statistic_registry_value
+    }
+    pub(crate) const fn resolved_statistic(
+        &self,
+    ) -> clutch_source_plane_v3::StatisticKindV3 {
+        self.profile.rules.resolved_statistic
+    }
+    pub(crate) const fn coverage_policy_registry_value(&self) -> u16 {
+        self.profile.rules.coverage_policy_registry_value
+    }
+    pub(crate) const fn ambiguity_policy_registry_value(&self) -> u8 {
+        self.profile.rules.ambiguity_policy_registry_value
+    }
+    pub(crate) const fn edge_policy_registry_value(&self) -> u8 {
+        self.profile.rules.edge_policy_registry_value
+    }
+    pub(crate) const fn resolved_edge_policy(
+        &self,
+    ) -> clutch_product_series::QuantizedEdgePolicyV1 {
+        self.profile.rules.resolved_edge_policy
+    }
+}
+
+/// Exact current 0x80/version5 acyclic funding authentication.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSeriesFundingAccountV5 {
+    account: Pubkey,
+    value: SeriesFundingAccountV5,
+    observed_lamports: u64,
+    writable: bool,
+    data_id: ContentId,
+    authentication_id: ContentId,
+}
+
+impl AuthenticatedSeriesFundingAccountV5 {
+    pub(crate) const fn account(&self) -> Pubkey { self.account }
+    pub(crate) const fn value(&self) -> &SeriesFundingAccountV5 { &self.value }
+    pub(crate) const fn state(&self) -> &SeriesFundingStateV5 { &self.value.state }
+    pub(crate) const fn observed_lamports(&self) -> u64 { self.observed_lamports }
+    pub(crate) const fn is_writable(&self) -> bool { self.writable }
+    pub(crate) const fn data_id(&self) -> ContentId { self.data_id }
+    pub(crate) const fn authentication_id(&self) -> ContentId { self.authentication_id }
+}
+
+/// Historical 0x80/version4 acyclic funding authentication.
 ///
 /// The receipt is non-Copy; downstream code borrows the decoded body so the
 /// 756-byte account is moved exactly once across each transition boundary.
@@ -2714,7 +2941,252 @@ pub(crate) fn authenticate_registry_capability_from_refs_v4(
     })
 }
 
-/// Hostile-authenticate only the exact acyclic FundingV4 account coordinate.
+/// Hostile-authenticate the exact BundleV7-bound RegistryV4 account.
+pub(crate) fn authenticate_series_registry_account_v4(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected_series_plan_id: SeriesPlanV5Id,
+    require_writable: bool,
+) -> Outcome<AuthenticatedSeriesRegistryAccountV4> {
+    require(
+        !account.is_signer
+            && !account.executable
+            && account.is_writable == require_writable
+            && account.owner == program_id
+            && account.data_len() == SERIES_REGISTRY_ACCOUNT_BYTES_V4,
+        ClutchError::MismatchedState,
+    )?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let value = SeriesRegistryAccountV4::decode(&data)?;
+    require(
+        value.series_plan_id == expected_series_plan_id,
+        ClutchError::MismatchedState,
+    )?;
+    let (expected, bump) = seeds::series_registry_pda(program_id, &expected_series_plan_id.bytes());
+    expect_pda(account.key, (expected, bump), Some(value.stored_bump))?;
+    let data_id = hash_data(&data);
+    drop(data);
+    let observed_lamports = account.lamports();
+    require(
+        observed_lamports >= value.rent_principal_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    let authentication_id = hashv(&[
+        SERIES_REGISTRY_AUTHENTICATION_DOMAIN_V4,
+        account.key.as_ref(),
+        program_id.as_ref(),
+        &data_id.bytes(),
+        &value.series_plan_id.bytes(),
+        &value.funding_terms_id.bytes(),
+        &value.registry_release_id.bytes(),
+        &value.capability_profile_id.bytes(),
+        &value.compiler_bundle_id.bytes(),
+        &value.rent_principal_lamports.to_le_bytes(),
+        &observed_lamports.to_le_bytes(),
+        &[value.stored_bump],
+        &[u8::from(value.activation_consumed)],
+    ]);
+    require_live(authentication_id)?;
+    Ok(AuthenticatedSeriesRegistryAccountV4 {
+        account: *account.key,
+        value,
+        observed_lamports,
+        writable: account.is_writable,
+        data_id,
+        authentication_id,
+    })
+}
+
+/// Consume hostile RegistryV4 bytes into the sole exact capability references.
+pub(crate) fn authenticate_series_registry_capability_refs_v4(
+    registry: AuthenticatedSeriesRegistryAccountV4,
+) -> Outcome<AuthenticatedSeriesRegistryCapabilityRefsV4> {
+    require(!registry.is_writable(), ClutchError::UnexpectedWritable)?;
+    let value = registry.value();
+    let id = hashv(&[
+        SERIES_REGISTRY_CAPABILITY_REFS_DOMAIN_V4,
+        registry.account().as_ref(),
+        &registry.authentication_id().bytes(),
+        &value.series_plan_id.bytes(),
+        &value.funding_terms_id.bytes(),
+        &value.registry_release_id.bytes(),
+        &value.capability_profile_id.bytes(),
+        &value.compiler_bundle_id.bytes(),
+        &[u8::from(value.activation_consumed)],
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedSeriesRegistryCapabilityRefsV4 {
+        id,
+        series_registry_account: registry.account(),
+        series_registry_authentication_id: registry.authentication_id(),
+        series_plan_id: value.series_plan_id,
+        funding_terms_id: value.funding_terms_id,
+        registry_release_id: value.registry_release_id,
+        capability_profile_id: value.capability_profile_id,
+        compiler_bundle_id: value.compiler_bundle_id,
+        activation_consumed: value.activation_consumed,
+    })
+}
+
+/// Consume exact RegistryV4 references into the current loader/release authority.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_registry_capability_v5(
+    program_id: &Pubkey,
+    registry: AuthenticatedSeriesRegistryAccountV4,
+    program_account: &AccountInfo<'_>,
+    programdata_account: &AccountInfo<'_>,
+    release_artifact: &AccountInfo<'_>,
+    profile_artifact: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedRegistryCapabilityV5> {
+    let refs = authenticate_series_registry_capability_refs_v4(registry)?;
+    authenticate_registry_capability_from_refs_v5(
+        program_id,
+        refs,
+        program_account,
+        programdata_account,
+        release_artifact,
+        profile_artifact,
+    )
+}
+
+/// Join move-only RegistryV4 refs to exact ReleaseV2/ProfileV4 ProgramData.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_registry_capability_from_refs_v5(
+    program_id: &Pubkey,
+    refs: AuthenticatedSeriesRegistryCapabilityRefsV4,
+    program_account: &AccountInfo<'_>,
+    programdata_account: &AccountInfo<'_>,
+    release_artifact: &AccountInfo<'_>,
+    profile_artifact: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedRegistryCapabilityV5> {
+    let release = authenticate_registry_capability_for_registration_v3(
+        program_id,
+        release_artifact,
+        profile_artifact,
+        refs.registry_release_id(),
+        refs.capability_profile_id(),
+        program_account,
+        programdata_account,
+    )?;
+    let projection = release.projection();
+    require(
+        projection.registry_release_id == refs.registry_release_id()
+            && projection.capability_profile_id == refs.capability_profile_id()
+            && refs.compiler_bundle_id().content_id() != refs.funding_terms_id().content_id()
+            && refs.series_registry_account() != release.program_account()
+            && refs.series_registry_account() != release.programdata_account()
+            && refs.series_registry_account() != release.release_artifact_account()
+            && refs.series_registry_account() != release.profile_artifact_account(),
+        ClutchError::MismatchedState,
+    )?;
+    let id = hashv(&[
+        REGISTRY_CAPABILITY_AUTHENTICATION_DOMAIN_V5,
+        program_id.as_ref(),
+        refs.series_registry_account().as_ref(),
+        &refs.series_registry_authentication_id().bytes(),
+        &refs.id().bytes(),
+        &refs.series_plan_id().bytes(),
+        &refs.funding_terms_id().bytes(),
+        &refs.compiler_bundle_id().bytes(),
+        &refs.registry_release_id().bytes(),
+        &refs.capability_profile_id().bytes(),
+        &[u8::from(refs.activation_consumed())],
+        release.program_account().as_ref(),
+        release.programdata_account().as_ref(),
+        release.release_artifact_account().as_ref(),
+        release.profile_artifact_account().as_ref(),
+        &release.programdata_sha256().bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedRegistryCapabilityV5 {
+        id,
+        series_registry_account: refs.series_registry_account(),
+        series_registry_authentication_id: refs.series_registry_authentication_id(),
+        series_plan_id: refs.series_plan_id(),
+        funding_terms_id: refs.funding_terms_id(),
+        compiler_bundle_id: refs.compiler_bundle_id(),
+        activation_consumed: refs.activation_consumed(),
+        program_account: release.program_account(),
+        programdata_account: release.programdata_account(),
+        release_artifact_account: release.release_artifact_account(),
+        profile_artifact_account: release.profile_artifact_account(),
+        release: release.release(),
+        profile: release.profile(),
+        projection,
+        programdata_sha256: release.programdata_sha256(),
+    })
+}
+
+/// Hostile-authenticate only the exact acyclic FundingV5 account coordinate.
+pub(crate) fn authenticate_series_funding_account_v5(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected_series_plan_id: SeriesPlanV5Id,
+    require_writable: bool,
+) -> Outcome<AuthenticatedSeriesFundingAccountV5> {
+    require(
+        !account.is_signer
+            && !account.executable
+            && account.is_writable == require_writable
+            && account.owner == program_id
+            && account.data_len() == SERIES_FUNDING_ACCOUNT_BYTES_V5,
+        ClutchError::MismatchedState,
+    )?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let value = SeriesFundingAccountV5::decode(&data)?;
+    require(
+        value.state.series_plan_id == expected_series_plan_id,
+        ClutchError::MismatchedState,
+    )?;
+    let (expected, bump) = seeds::series_funding_pda(program_id, &expected_series_plan_id.bytes());
+    expect_pda(account.key, (expected, bump), Some(value.stored_bump))?;
+    let data_id = hash_data(&data);
+    drop(data);
+    let state_id = value
+        .state
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let observed_lamports = account.lamports();
+    require(
+        observed_lamports >= value.rent_principal_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    let mut vault_rent = [0u8; 40];
+    for (index, principal) in value
+        .collateral_vault_rent_principal_lamports
+        .iter()
+        .enumerate()
+    {
+        let at = index.checked_mul(8).ok_or(ClutchError::Arithmetic)?;
+        vault_rent[at..at + 8].copy_from_slice(&principal.to_le_bytes());
+    }
+    let authentication_id = hashv(&[
+        SERIES_FUNDING_AUTHENTICATION_DOMAIN_V5,
+        account.key.as_ref(),
+        program_id.as_ref(),
+        &data_id.bytes(),
+        &state_id.bytes(),
+        &value.rent_principal_lamports.to_le_bytes(),
+        &vault_rent,
+        &observed_lamports.to_le_bytes(),
+        &[value.stored_bump],
+    ]);
+    require_live(authentication_id)?;
+    Ok(AuthenticatedSeriesFundingAccountV5 {
+        account: *account.key,
+        value,
+        observed_lamports,
+        writable: account.is_writable,
+        data_id,
+        authentication_id,
+    })
+}
+
+/// Hostile-authenticate only the historical acyclic FundingV4 account coordinate.
 /// Historical FundingV1-V3 bytes are refused by exact length/version decode.
 pub(crate) fn authenticate_series_funding_account_v4(
     program_id: &Pubkey,
@@ -4449,6 +4921,1120 @@ fn write_series_market_link_v2<'next>(
 
 const SERIES_ADMISSION_COMPONENT_SEED_V4: u8 = 1;
 
+fn is_retained_current_foundation_slot_v3(slot: MarketFoundationSlotV3) -> bool {
+    matches!(
+        slot,
+        MarketFoundationSlotV3::FailureReplay
+            | MarketFoundationSlotV3::FailureIntervalWork
+            | MarketFoundationSlotV3::FailureIntervalHistory
+            | MarketFoundationSlotV3::ResolutionV5
+            | MarketFoundationSlotV3::FractionalPolicy
+            | MarketFoundationSlotV3::FractionalLedger
+            | MarketFoundationSlotV3::ProductReplayAnchor
+    )
+}
+
+/// Move-only proof that Product physically moved one current Foundation debit
+/// into the exact retained zero-data account and then reobserved both sides.
+///
+/// These slots are intentionally not allocated during founding. Their sole
+/// later family writers consume the RootV2 transcript-bound preallocation,
+/// allocate the exact current layout, and preserve its principal/donation
+/// ownership. Holding only an account key or a balance cannot construct this
+/// postwrite.
+struct AuthenticatedProductMarketRetainedPreallocationPostwriteV3<'info> {
+    id: ContentId,
+    founder_creation_receipt_id: ContentId,
+    founder_preauthorization_id: ContentId,
+    foundation_steps_id: ContentId,
+    market_binding_id: ContentId,
+    foundation_schedule_id: ContentId,
+    foundation_graph_id: ContentId,
+    slot: MarketFoundationSlotV3,
+    account_id: ContentId,
+    principal_lamports: u64,
+    principal_before_lamports: u64,
+    principal_after_lamports: u64,
+    minimum_donation_lamports: u64,
+    destination_donation_lamports: u64,
+    destination_observed_balance_lamports: u64,
+    vault_observed_balance_lamports: u64,
+    foundation_vault_account: Pubkey,
+    rent_refund_owner: Pubkey,
+    neutral_lamport_sink: Pubkey,
+    foundation_vault: AccountInfo<'info>,
+    destination: AccountInfo<'info>,
+}
+
+impl AuthenticatedProductMarketFoundationStepPostwriteV3
+    for AuthenticatedProductMarketRetainedPreallocationPostwriteV3<'_>
+{
+    #[allow(clippy::too_many_arguments)]
+    fn consume_product_market_foundation_step_postwrite_v3(
+        self,
+        founder_creation_receipt_id: ContentId,
+        founder_preauthorization_id: ContentId,
+        foundation_steps_id: ContentId,
+        market_binding_id: ContentId,
+        foundation_schedule_id: ContentId,
+        foundation_graph_id: ContentId,
+        slot: MarketFoundationSlotV3,
+        account_id: ContentId,
+        principal_lamports: u64,
+        principal_before_lamports: u64,
+        principal_after_lamports: u64,
+        minimum_donation_lamports: u64,
+        foundation_vault_account: Pubkey,
+        rent_refund_owner: Pubkey,
+        neutral_lamport_sink: Pubkey,
+    ) -> Outcome<(ContentId, u64)> {
+        require(
+            self.id != ContentId::ZERO
+                && is_retained_current_foundation_slot_v3(self.slot)
+                && founder_creation_receipt_id == self.founder_creation_receipt_id
+                && founder_preauthorization_id == self.founder_preauthorization_id
+                && foundation_steps_id == self.foundation_steps_id
+                && market_binding_id == self.market_binding_id
+                && foundation_schedule_id == self.foundation_schedule_id
+                && foundation_graph_id == self.foundation_graph_id
+                && slot == self.slot
+                && account_id == self.account_id
+                && principal_lamports == self.principal_lamports
+                && principal_before_lamports == self.principal_before_lamports
+                && principal_after_lamports == self.principal_after_lamports
+                && minimum_donation_lamports == self.minimum_donation_lamports
+                && foundation_vault_account == self.foundation_vault_account
+                && rent_refund_owner == self.rent_refund_owner
+                && neutral_lamport_sink == self.neutral_lamport_sink
+                && *self.foundation_vault.key == self.foundation_vault_account
+                && *self.destination.key == Pubkey::new_from_array(self.account_id.bytes())
+                && self.foundation_vault.is_writable
+                && self.destination.is_writable
+                && !self.foundation_vault.is_signer
+                && !self.destination.is_signer
+                && !self.foundation_vault.executable
+                && !self.destination.executable
+                && *self.foundation_vault.owner == SYSTEM_PROGRAM_ID
+                && *self.destination.owner == SYSTEM_PROGRAM_ID
+                && self.foundation_vault.data_len() == 0
+                && self.destination.data_len() == 0
+                && self.foundation_vault.lamports()
+                    == self.vault_observed_balance_lamports
+                && self.destination.lamports()
+                    == self.destination_observed_balance_lamports
+                && self.destination_observed_balance_lamports
+                    == self
+                        .destination_donation_lamports
+                        .checked_add(self.principal_lamports)
+                        .ok_or(ClutchError::Arithmetic)?,
+            ClutchError::MismatchedState,
+        )?;
+        let observed_vault_donation_lamports = self
+            .vault_observed_balance_lamports
+            .checked_sub(self.principal_after_lamports)
+            .ok_or(ClutchError::MismatchedState)?;
+        require(
+            observed_vault_donation_lamports >= self.minimum_donation_lamports,
+            ClutchError::MismatchedState,
+        )?;
+        Ok((self.id, observed_vault_donation_lamports))
+    }
+}
+
+/// Current shared liability plan for slots 3, 4, and 14. The exact collateral
+/// deployment is retained before any value-bearing token CPI; the plan cannot
+/// be reconstructed from caller-provided semantic IDs.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedCurrentMarketLiabilityFoundationPlanV3 {
+    id: ContentId,
+    bound: BoundCollateralProfileV2,
+    deployment: AuthenticatedCollateralReleaseDeploymentV2,
+    plan: MarketLiabilityFoundingPlanV3,
+    hoard_custody: CustodyCreationPlanV2,
+    graph_id: ContentId,
+    market_instance_id: MarketInstanceV2Id,
+    market_runtime_account: Pubkey,
+    rent_refund_owner: Pubkey,
+    neutral_lamport_sink: Pubkey,
+    hoard_token_prefund_donation_lamports: u64,
+}
+
+impl AuthenticatedCurrentMarketLiabilityFoundationPlanV3 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+}
+
+/// Freeze the liability accounts, their exact persisted rent owners, and the
+/// Hoard collateral-token creation contract from current artifacts and PDAs.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub(crate) fn authenticate_current_market_liability_foundation_plan_v3(
+    program_id: &Pubkey,
+    bound: BoundCollateralProfileV2,
+    deployment: AuthenticatedCollateralReleaseDeploymentV2,
+    market_instance: MarketInstancePreimageV2,
+    native_claim_basis_id: ContentId,
+    market_runtime_account: Pubkey,
+    schedule: &MarketFoundationScheduleV3,
+    graph: &MarketFoundationAccountGraphV3,
+    hoard_account: &AccountInfo<'_>,
+    claim_ledger_account: &AccountInfo<'_>,
+    hoard_token_account: &AccountInfo<'_>,
+    rent_refund_owner: Pubkey,
+    neutral_lamport_sink: Pubkey,
+    rent_sysvar: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedCurrentMarketLiabilityFoundationPlanV3> {
+    schedule
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    graph
+        .validate(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    market_instance
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let market_instance_id = market_instance
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let market = market_instance_id.bytes();
+    let (expected_hoard, hoard_bump) = seeds::hoard_v2_pda(program_id, &market);
+    let (expected_ledger, ledger_bump) = seeds::claim_ledger_v3_pda(program_id, &market);
+    let expected_hoard_authority = seeds::hoard_authority_v2_pda(program_id, &market).0;
+    let expected_hoard_token = seeds::hoard_token_v2_pda(program_id, &market).0;
+    let expected_binding = seeds::general_v2_market_binding_pda(program_id, &market).0;
+    let expected_runtime =
+        seeds::general_v2_market_runtime_pda(program_id, &expected_binding.to_bytes()).0;
+    let hoard_slot = MarketFoundationSlotV3::Hoard
+        .index()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let ledger_slot = MarketFoundationSlotV3::ClaimLedger
+        .index()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let token_slot = MarketFoundationSlotV3::HoardCollateralVault
+        .index()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let rent = read_rent(rent_sysvar)?;
+    let hoard_principal = schedule.slot_principal_lamports[hoard_slot];
+    let ledger_principal = schedule.slot_principal_lamports[ledger_slot];
+    require(
+        bound.market().market.bytes() == market
+            && bound.market().collateral_cap_atoms == market_instance.collateral_cap
+            && bound.market().hoard_authority.bytes() == expected_hoard_authority.to_bytes()
+            && bound.market().hoard_token_account.bytes() == expected_hoard_token.to_bytes()
+            && deployment.release() == bound.release()
+            && deployment.release_id()
+                == bound
+                    .release()
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?
+            && deployment.programdata_account() != CollateralId::ZERO
+            && deployment.receipt_id() != CollateralId::ZERO
+            && deployment.deployment_slot() != 0
+            && graph.market_instance_id == market_instance_id
+            && graph.generation != 0
+            && graph.account_ids[hoard_slot].bytes() == expected_hoard.to_bytes()
+            && graph.account_ids[ledger_slot].bytes() == expected_ledger.to_bytes()
+            && graph.account_ids[token_slot].bytes() == expected_hoard_token.to_bytes()
+            && *hoard_account.key == expected_hoard
+            && *claim_ledger_account.key == expected_ledger
+            && *hoard_token_account.key == expected_hoard_token
+            && market_runtime_account == expected_runtime
+            && rent_refund_owner != Pubkey::default()
+            && neutral_lamport_sink != Pubkey::default()
+            && rent_refund_owner != neutral_lamport_sink
+            && hoard_principal == rent.minimum_balance(HOARD_V2_BYTES)?
+            && ledger_principal == rent.minimum_balance(CLAIM_LEDGER_V3_BYTES)?,
+        ClutchError::MismatchedState,
+    )?;
+    for account in [hoard_account, claim_ledger_account, hoard_token_account] {
+        require_unallocated_system_account(account)?;
+        require(
+            account.key != &rent_refund_owner
+                && account.key != &neutral_lamport_sink
+                && account.key != &market_runtime_account,
+            ClutchError::AccountAlias,
+        )?;
+    }
+    let payer = Identity32V1::new(rent_refund_owner.to_bytes())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let hoard_rent = DeletableRentOwnerV1::from_persisted(
+        payer,
+        hoard_principal,
+        hoard_account.lamports(),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let claim_ledger_rent = DeletableRentOwnerV1::from_persisted(
+        payer,
+        ledger_principal,
+        claim_ledger_account.lamports(),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let plan = prepare_market_liability_founding_v3(
+        bound,
+        MarketLiabilityFoundingRequestV3 {
+            hoard_account: CollateralId::from_bytes(expected_hoard.to_bytes()),
+            claim_ledger_account: CollateralId::from_bytes(expected_ledger.to_bytes()),
+            market_instance_id: CollateralId::from_bytes(market),
+            native_claim_basis_id: CollateralId::from_bytes(native_claim_basis_id.bytes()),
+            claim_mint_authority: CollateralId::from_bytes(expected_runtime.to_bytes()),
+            outcome_count: schedule.outcome_count,
+            hoard_bump,
+            claim_ledger_bump: ledger_bump,
+            hoard_rent,
+            claim_ledger_rent,
+        },
+        &RuntimeSha256,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let hoard_custody = prepare_hoard_creation_v2(bound)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let token_principal = schedule.slot_principal_lamports[token_slot];
+    require(
+        hoard_custody.account.bytes() == expected_hoard_token.to_bytes()
+            && hoard_custody.owner_authority.bytes() == expected_hoard_authority.to_bytes()
+            && token_principal
+                == rent.minimum_balance(usize::from(hoard_custody.account_bytes))?,
+        ClutchError::MismatchedState,
+    )?;
+    let graph_id = graph
+        .id(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let id = hashv(&[
+        PRODUCT_CURRENT_MARKET_LIABILITY_PLAN_DOMAIN_V3,
+        program_id.as_ref(),
+        &market,
+        &graph.generation.to_le_bytes(),
+        &graph_id.bytes(),
+        &plan.founding_id().bytes(),
+        &plan.hoard_id().bytes(),
+        &plan.claim_ledger_id().bytes(),
+        &deployment.release_id().bytes(),
+        &deployment.programdata_account().bytes(),
+        &deployment.deployment_slot().to_le_bytes(),
+        &deployment.receipt_id().bytes(),
+        &hoard_principal.to_le_bytes(),
+        &ledger_principal.to_le_bytes(),
+        &token_principal.to_le_bytes(),
+        &hoard_account.lamports().to_le_bytes(),
+        &claim_ledger_account.lamports().to_le_bytes(),
+        &hoard_token_account.lamports().to_le_bytes(),
+        rent_refund_owner.as_ref(),
+        neutral_lamport_sink.as_ref(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedCurrentMarketLiabilityFoundationPlanV3 {
+        id,
+        bound,
+        deployment,
+        plan,
+        hoard_custody,
+        graph_id,
+        market_instance_id,
+        market_runtime_account,
+        rent_refund_owner,
+        neutral_lamport_sink,
+        hoard_token_prefund_donation_lamports: hoard_token_account.lamports(),
+    })
+}
+
+struct AuthenticatedProductMarketLiabilityStatePostwriteV3<'info> {
+    id: ContentId,
+    plan_authentication_id: ContentId,
+    semantic_id: CollateralId,
+    data_id: ContentId,
+    founder_creation_receipt_id: ContentId,
+    founder_preauthorization_id: ContentId,
+    foundation_steps_id: ContentId,
+    market_binding_id: ContentId,
+    foundation_schedule_id: ContentId,
+    foundation_graph_id: ContentId,
+    slot: MarketFoundationSlotV3,
+    account_id: ContentId,
+    principal_lamports: u64,
+    principal_before_lamports: u64,
+    principal_after_lamports: u64,
+    minimum_donation_lamports: u64,
+    vault_observed_balance_lamports: u64,
+    state_observed_balance_lamports: u64,
+    foundation_vault_account: Pubkey,
+    rent_refund_owner: Pubkey,
+    neutral_lamport_sink: Pubkey,
+    program_id: Pubkey,
+    foundation_vault: AccountInfo<'info>,
+    state_account: AccountInfo<'info>,
+}
+
+impl AuthenticatedProductMarketFoundationStepPostwriteV3
+    for AuthenticatedProductMarketLiabilityStatePostwriteV3<'_>
+{
+    #[allow(clippy::too_many_arguments)]
+    fn consume_product_market_foundation_step_postwrite_v3(
+        self,
+        founder_creation_receipt_id: ContentId,
+        founder_preauthorization_id: ContentId,
+        foundation_steps_id: ContentId,
+        market_binding_id: ContentId,
+        foundation_schedule_id: ContentId,
+        foundation_graph_id: ContentId,
+        slot: MarketFoundationSlotV3,
+        account_id: ContentId,
+        principal_lamports: u64,
+        principal_before_lamports: u64,
+        principal_after_lamports: u64,
+        minimum_donation_lamports: u64,
+        foundation_vault_account: Pubkey,
+        rent_refund_owner: Pubkey,
+        neutral_lamport_sink: Pubkey,
+    ) -> Outcome<(ContentId, u64)> {
+        let state_data = self
+            .state_account
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let observed_data_id = hashv(&[
+            PRODUCT_CURRENT_MARKET_LIABILITY_SLOT_POSTWRITE_DOMAIN_V3,
+            self.state_account.key.as_ref(),
+            &state_data,
+        ]);
+        drop(state_data);
+        require(
+            self.id != ContentId::ZERO
+                && self.plan_authentication_id != ContentId::ZERO
+                && self.semantic_id != CollateralId::ZERO
+                && observed_data_id == self.data_id
+                && matches!(self.slot, MarketFoundationSlotV3::Hoard
+                    | MarketFoundationSlotV3::ClaimLedger)
+                && founder_creation_receipt_id == self.founder_creation_receipt_id
+                && founder_preauthorization_id == self.founder_preauthorization_id
+                && foundation_steps_id == self.foundation_steps_id
+                && market_binding_id == self.market_binding_id
+                && foundation_schedule_id == self.foundation_schedule_id
+                && foundation_graph_id == self.foundation_graph_id
+                && slot == self.slot
+                && account_id == self.account_id
+                && principal_lamports == self.principal_lamports
+                && principal_before_lamports == self.principal_before_lamports
+                && principal_after_lamports == self.principal_after_lamports
+                && minimum_donation_lamports == self.minimum_donation_lamports
+                && foundation_vault_account == self.foundation_vault_account
+                && rent_refund_owner == self.rent_refund_owner
+                && neutral_lamport_sink == self.neutral_lamport_sink
+                && *self.foundation_vault.key == self.foundation_vault_account
+                && *self.foundation_vault.owner == SYSTEM_PROGRAM_ID
+                && self.foundation_vault.data_len() == 0
+                && self.foundation_vault.lamports() == self.vault_observed_balance_lamports
+                && self.state_account.key.to_bytes() == self.account_id.bytes()
+                && *self.state_account.owner == self.program_id
+                && self.state_account.is_writable
+                && !self.state_account.is_signer
+                && !self.state_account.executable,
+            ClutchError::MismatchedState,
+        )?;
+        require(
+            self.state_account.lamports() == self.state_observed_balance_lamports,
+            ClutchError::MismatchedState,
+        )?;
+        let observed_vault_donation = self
+            .vault_observed_balance_lamports
+            .checked_sub(self.principal_after_lamports)
+            .ok_or(ClutchError::MismatchedState)?;
+        require(
+            observed_vault_donation >= self.minimum_donation_lamports,
+            ClutchError::MismatchedState,
+        )?;
+        Ok((self.id, observed_vault_donation))
+    }
+}
+
+struct AuthenticatedProductMarketHoardCustodyPostwriteV3<'info> {
+    id: ContentId,
+    accepted: AuthenticatedMarketLiabilityFoundingPostwriteV3,
+    plan_authentication_id: ContentId,
+    hoard_data_id: ContentId,
+    claim_ledger_data_id: ContentId,
+    hoard_token_data_id: ContentId,
+    founder_creation_receipt_id: ContentId,
+    founder_preauthorization_id: ContentId,
+    foundation_steps_id: ContentId,
+    market_binding_id: ContentId,
+    foundation_schedule_id: ContentId,
+    foundation_graph_id: ContentId,
+    account_id: ContentId,
+    principal_lamports: u64,
+    principal_before_lamports: u64,
+    principal_after_lamports: u64,
+    minimum_donation_lamports: u64,
+    vault_observed_balance_lamports: u64,
+    token_observed_balance_lamports: u64,
+    foundation_vault_account: Pubkey,
+    rent_refund_owner: Pubkey,
+    neutral_lamport_sink: Pubkey,
+    program_id: Pubkey,
+    collateral_token_program: Pubkey,
+    foundation_vault: AccountInfo<'info>,
+    hoard_account: AccountInfo<'info>,
+    claim_ledger_account: AccountInfo<'info>,
+    hoard_token_account: AccountInfo<'info>,
+}
+
+impl AuthenticatedProductMarketFoundationStepPostwriteV3
+    for AuthenticatedProductMarketHoardCustodyPostwriteV3<'_>
+{
+    #[allow(clippy::too_many_arguments)]
+    fn consume_product_market_foundation_step_postwrite_v3(
+        self,
+        founder_creation_receipt_id: ContentId,
+        founder_preauthorization_id: ContentId,
+        foundation_steps_id: ContentId,
+        market_binding_id: ContentId,
+        foundation_schedule_id: ContentId,
+        foundation_graph_id: ContentId,
+        slot: MarketFoundationSlotV3,
+        account_id: ContentId,
+        principal_lamports: u64,
+        principal_before_lamports: u64,
+        principal_after_lamports: u64,
+        minimum_donation_lamports: u64,
+        foundation_vault_account: Pubkey,
+        rent_refund_owner: Pubkey,
+        neutral_lamport_sink: Pubkey,
+    ) -> Outcome<(ContentId, u64)> {
+        let hoard_data = self.hoard_account.try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let observed_hoard_data_id = hashv(&[
+            PRODUCT_CURRENT_MARKET_LIABILITY_SLOT_POSTWRITE_DOMAIN_V3,
+            self.hoard_account.key.as_ref(),
+            &hoard_data,
+        ]);
+        drop(hoard_data);
+        let ledger_data = self.claim_ledger_account.try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let observed_ledger_data_id = hashv(&[
+            PRODUCT_CURRENT_MARKET_LIABILITY_SLOT_POSTWRITE_DOMAIN_V3,
+            self.claim_ledger_account.key.as_ref(),
+            &ledger_data,
+        ]);
+        drop(ledger_data);
+        let token_data = self.hoard_token_account.try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let observed_token_data_id = hashv(&[
+            PRODUCT_CURRENT_MARKET_LIABILITY_SLOT_POSTWRITE_DOMAIN_V3,
+            self.hoard_token_account.key.as_ref(),
+            &token_data,
+        ]);
+        drop(token_data);
+        require(
+            self.id != ContentId::ZERO
+                && self.plan_authentication_id != ContentId::ZERO
+                && self.accepted.receipt_id() != CollateralId::ZERO
+                && self.accepted.accepted().receipt_id() != CollateralId::ZERO
+                && self.accepted.deployment().receipt_id() != CollateralId::ZERO
+                && observed_hoard_data_id == self.hoard_data_id
+                && observed_ledger_data_id == self.claim_ledger_data_id
+                && observed_token_data_id == self.hoard_token_data_id
+                && founder_creation_receipt_id == self.founder_creation_receipt_id
+                && founder_preauthorization_id == self.founder_preauthorization_id
+                && foundation_steps_id == self.foundation_steps_id
+                && market_binding_id == self.market_binding_id
+                && foundation_schedule_id == self.foundation_schedule_id
+                && foundation_graph_id == self.foundation_graph_id
+                && slot == MarketFoundationSlotV3::HoardCollateralVault
+                && account_id == self.account_id
+                && principal_lamports == self.principal_lamports
+                && principal_before_lamports == self.principal_before_lamports
+                && principal_after_lamports == self.principal_after_lamports
+                && minimum_donation_lamports == self.minimum_donation_lamports
+                && foundation_vault_account == self.foundation_vault_account
+                && rent_refund_owner == self.rent_refund_owner
+                && neutral_lamport_sink == self.neutral_lamport_sink
+                && *self.foundation_vault.key == self.foundation_vault_account
+                && *self.foundation_vault.owner == SYSTEM_PROGRAM_ID
+                && self.foundation_vault.data_len() == 0
+                && self.foundation_vault.lamports() == self.vault_observed_balance_lamports
+                && self.hoard_token_account.key.to_bytes() == self.account_id.bytes()
+                && *self.hoard_account.owner == self.program_id
+                && *self.claim_ledger_account.owner == self.program_id
+                && *self.hoard_token_account.owner == self.collateral_token_program
+                && self.hoard_account.is_writable
+                && self.claim_ledger_account.is_writable
+                && self.hoard_token_account.is_writable
+                && !self.hoard_account.is_signer
+                && !self.claim_ledger_account.is_signer
+                && !self.hoard_token_account.is_signer
+                && !self.hoard_account.executable
+                && !self.claim_ledger_account.executable
+                && !self.hoard_token_account.executable
+                && self.hoard_token_account.lamports() == self.token_observed_balance_lamports,
+            ClutchError::MismatchedState,
+        )?;
+        let observed_vault_donation = self.vault_observed_balance_lamports
+            .checked_sub(self.principal_after_lamports)
+            .ok_or(ClutchError::MismatchedState)?;
+        require(
+            observed_vault_donation >= self.minimum_donation_lamports,
+            ClutchError::MismatchedState,
+        )?;
+        Ok((self.id, observed_vault_donation))
+    }
+}
+
+/// Current claim-mint plan reconstructed from the complete GraphV3 and the
+/// independently authenticated Token-2022 claim release.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedCurrentClaimMintFoundationPlanV2 {
+    id: ContentId,
+    plan: ClaimMintFoundingPlanV2,
+    claim_release: AuthenticatedClaimIssuanceReleaseV1,
+    general_value: GeneralMarketValueAuthorityV2,
+    graph_id: ContentId,
+    market_runtime_account: Pubkey,
+}
+
+impl AuthenticatedCurrentClaimMintFoundationPlanV2 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+}
+
+/// Reconstruct the exact active OutcomeMintV2 prefix from current PDAs. The
+/// inactive tail remains graph-level canonical absence and is never accepted
+/// as an account list supplied by a caller.
+#[inline(never)]
+pub(crate) fn authenticate_current_claim_mint_foundation_plan_v2(
+    program_id: &Pubkey,
+    general_value: GeneralMarketValueAuthorityV2,
+    claim_release: AuthenticatedClaimIssuanceReleaseV1,
+    market_runtime_account: &AccountInfo<'_>,
+    schedule: &MarketFoundationScheduleV3,
+    graph: &MarketFoundationAccountGraphV3,
+) -> Outcome<AuthenticatedCurrentClaimMintFoundationPlanV2> {
+    schedule
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    graph
+        .validate(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let market = general_value
+        .liabilities
+        .market_binding
+        .base()
+        .market_instance_v2_id
+        .bytes();
+    let market_id = MarketInstanceV2Id::from_bytes(market);
+    let expected_binding = seeds::general_v2_market_binding_pda(program_id, &market).0;
+    let expected_runtime =
+        seeds::general_v2_market_runtime_pda(program_id, &expected_binding.to_bytes()).0;
+    let claim = claim_release.bound();
+    require(
+        graph.market_instance_id == market_id
+            && graph.generation != 0
+            && *market_runtime_account.key == expected_runtime
+            && market_runtime_account.owner == program_id
+            && !market_runtime_account.is_signer
+            && !market_runtime_account.executable
+            && general_value.liabilities.market_runtime.market_instance_v2_id.bytes() == market
+            && general_value.liabilities.market_runtime.market_binding.bytes()
+                == expected_binding.to_bytes()
+            && claim.binding_id().bytes()
+                == general_value
+                    .liabilities
+                    .market_binding
+                    .base()
+                    .claim_issuance_binding_id
+                    .bytes()
+            && claim_release.receipt_id() != CollateralId::ZERO
+            && claim_release.token_programdata() != CollateralId::ZERO
+            && claim_release.loader_receipt_id() != CollateralId::ZERO
+            && claim_release.deployment_slot() != 0,
+        ClutchError::MismatchedState,
+    )?;
+    let mut outcome_mints = [CollateralId::ZERO; MARKET_FOUNDATION_MAX_OUTCOMES_V3];
+    let mut index = 0usize;
+    while index < MARKET_FOUNDATION_MAX_OUTCOMES_V3 {
+        let outcome = u8::try_from(index).map_err(|_| ClutchError::Arithmetic)?;
+        let slot = MarketFoundationSlotV3::OutcomeMint(outcome)
+            .index()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let mint_id = graph.account_ids[slot];
+        if index < usize::from(schedule.outcome_count) {
+            let expected_mint = seeds::outcome_mint_v2_pda(program_id, &market, outcome).0;
+            require(mint_id.bytes() == expected_mint.to_bytes(), ClutchError::WrongPda)?;
+            outcome_mints[index] = CollateralId::from_bytes(mint_id.bytes());
+        } else {
+            require(mint_id == ContentId::ZERO, ClutchError::MismatchedState)?;
+        }
+        index = index.checked_add(1).ok_or(ClutchError::Arithmetic)?;
+    }
+    let plan = prepare_claim_mint_founding_v2(
+        claim,
+        ClaimMintFoundingRequestV2 {
+            market_instance_id: CollateralId::from_bytes(market),
+            mint_authority: CollateralId::from_bytes(expected_runtime.to_bytes()),
+            outcome_count: schedule.outcome_count,
+            outcome_mints,
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let graph_id = graph
+        .id(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let id = hashv(&[
+        PRODUCT_CURRENT_CLAIM_MINT_PLAN_DOMAIN_V2,
+        program_id.as_ref(),
+        &plan.founding_id().bytes(),
+        &claim_release.receipt_id().bytes(),
+        &claim_release.token_programdata().bytes(),
+        &claim_release.deployment_slot().to_le_bytes(),
+        &claim_release.loader_receipt_id().bytes(),
+        &general_value.receipt_id.bytes(),
+        &graph_id.bytes(),
+        market_runtime_account.key.as_ref(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedCurrentClaimMintFoundationPlanV2 {
+        id,
+        plan,
+        claim_release,
+        general_value,
+        graph_id,
+        market_runtime_account: *market_runtime_account.key,
+    })
+}
+
+struct AuthenticatedProductMarketClaimMintPostwriteV2<'info> {
+    id: ContentId,
+    accepted_receipt_id: CollateralId,
+    claim_plan_authentication_id: ContentId,
+    claim_release_receipt_id: CollateralId,
+    claim_programdata_id: CollateralId,
+    claim_loader_receipt_id: CollateralId,
+    general_value_authentication_id: CollateralId,
+    mint_data_id: ContentId,
+    founder_creation_receipt_id: ContentId,
+    founder_preauthorization_id: ContentId,
+    foundation_steps_id: ContentId,
+    market_binding_id: ContentId,
+    foundation_schedule_id: ContentId,
+    foundation_graph_id: ContentId,
+    slot: MarketFoundationSlotV3,
+    account_id: ContentId,
+    principal_lamports: u64,
+    principal_before_lamports: u64,
+    principal_after_lamports: u64,
+    minimum_donation_lamports: u64,
+    vault_observed_balance_lamports: u64,
+    mint_observed_balance_lamports: u64,
+    foundation_vault_account: Pubkey,
+    rent_refund_owner: Pubkey,
+    neutral_lamport_sink: Pubkey,
+    claim_token_program: Pubkey,
+    foundation_vault: AccountInfo<'info>,
+    mint: AccountInfo<'info>,
+}
+
+impl AuthenticatedProductMarketFoundationStepPostwriteV3
+    for AuthenticatedProductMarketClaimMintPostwriteV2<'_>
+{
+    #[allow(clippy::too_many_arguments)]
+    fn consume_product_market_foundation_step_postwrite_v3(
+        self,
+        founder_creation_receipt_id: ContentId,
+        founder_preauthorization_id: ContentId,
+        foundation_steps_id: ContentId,
+        market_binding_id: ContentId,
+        foundation_schedule_id: ContentId,
+        foundation_graph_id: ContentId,
+        slot: MarketFoundationSlotV3,
+        account_id: ContentId,
+        principal_lamports: u64,
+        principal_before_lamports: u64,
+        principal_after_lamports: u64,
+        minimum_donation_lamports: u64,
+        foundation_vault_account: Pubkey,
+        rent_refund_owner: Pubkey,
+        neutral_lamport_sink: Pubkey,
+    ) -> Outcome<(ContentId, u64)> {
+        let mint_data = self
+            .mint
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let observed_mint_data_id = hashv(&[
+            PRODUCT_CURRENT_CLAIM_MINT_POSTWRITE_DOMAIN_V2,
+            self.mint.key.as_ref(),
+            &mint_data,
+        ]);
+        drop(mint_data);
+        require(
+            self.id != ContentId::ZERO
+                && self.accepted_receipt_id != CollateralId::ZERO
+                && self.claim_plan_authentication_id != ContentId::ZERO
+                && self.claim_release_receipt_id != CollateralId::ZERO
+                && self.claim_programdata_id != CollateralId::ZERO
+                && self.claim_loader_receipt_id != CollateralId::ZERO
+                && self.general_value_authentication_id != CollateralId::ZERO
+                && observed_mint_data_id == self.mint_data_id
+                && matches!(self.slot, MarketFoundationSlotV3::OutcomeMint(_))
+                && founder_creation_receipt_id == self.founder_creation_receipt_id
+                && founder_preauthorization_id == self.founder_preauthorization_id
+                && foundation_steps_id == self.foundation_steps_id
+                && market_binding_id == self.market_binding_id
+                && foundation_schedule_id == self.foundation_schedule_id
+                && foundation_graph_id == self.foundation_graph_id
+                && slot == self.slot
+                && account_id == self.account_id
+                && principal_lamports == self.principal_lamports
+                && principal_before_lamports == self.principal_before_lamports
+                && principal_after_lamports == self.principal_after_lamports
+                && minimum_donation_lamports == self.minimum_donation_lamports
+                && foundation_vault_account == self.foundation_vault_account
+                && rent_refund_owner == self.rent_refund_owner
+                && neutral_lamport_sink == self.neutral_lamport_sink
+                && *self.foundation_vault.key == self.foundation_vault_account
+                && *self.foundation_vault.owner == SYSTEM_PROGRAM_ID
+                && self.foundation_vault.data_len() == 0
+                && self.foundation_vault.lamports() == self.vault_observed_balance_lamports
+                && self.mint.key.to_bytes() == self.account_id.bytes()
+                && *self.mint.owner == self.claim_token_program
+                && self.mint.is_writable
+                && !self.mint.is_signer
+                && !self.mint.executable
+                && self.mint.lamports() == self.mint_observed_balance_lamports,
+            ClutchError::MismatchedState,
+        )?;
+        let observed_vault_donation = self
+            .vault_observed_balance_lamports
+            .checked_sub(self.principal_after_lamports)
+            .ok_or(ClutchError::MismatchedState)?;
+        require(
+            observed_vault_donation >= self.minimum_donation_lamports,
+            ClutchError::MismatchedState,
+        )?;
+        Ok((self.id, observed_vault_donation))
+    }
+}
+
+/// Current release-bound custody plan reconstructed from the complete GraphV3.
+///
+/// Private fields prevent a caller from pairing arbitrary token accounts with
+/// Product slots. The retained collateral value authority includes the exact
+/// Realm/Profile policy, ProgramData release, Hoard, ClaimLedger, and General
+/// MarketBinding/Runtime poststates.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedCurrentOutcomeCustodyFoundationPlanV1 {
+    id: ContentId,
+    plan: OutcomeCustodyFoundingPlanV1,
+    value: GeneralMarketValueAuthorityV2,
+    graph_id: ContentId,
+    market_runtime_account: Pubkey,
+}
+
+impl AuthenticatedCurrentOutcomeCustodyFoundationPlanV1 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+}
+
+/// Reconstruct the exact active custody suffix from canonical current PDAs.
+/// Inactive mint/custody tails must remain zero in GraphV3 and never appear as
+/// physical accounts.
+#[inline(never)]
+pub(crate) fn authenticate_current_outcome_custody_foundation_plan_v1(
+    program_id: &Pubkey,
+    value: GeneralMarketValueAuthorityV2,
+    market_runtime_account: &AccountInfo<'_>,
+    schedule: &MarketFoundationScheduleV3,
+    graph: &MarketFoundationAccountGraphV3,
+) -> Outcome<AuthenticatedCurrentOutcomeCustodyFoundationPlanV1> {
+    schedule
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    graph
+        .validate(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let market = value
+        .liabilities
+        .market_binding
+        .base()
+        .market_instance_v2_id
+        .bytes();
+    let market_id = MarketInstanceV2Id::from_bytes(market);
+    let expected_binding = seeds::general_v2_market_binding_pda(program_id, &market).0;
+    let expected_runtime =
+        seeds::general_v2_market_runtime_pda(program_id, &expected_binding.to_bytes()).0;
+    require(
+        graph.market_instance_id == market_id
+            && graph.generation != 0
+            && *market_runtime_account.key == expected_runtime
+            && market_runtime_account.owner == program_id
+            && !market_runtime_account.is_signer
+            && !market_runtime_account.executable
+            && value.liabilities.market_runtime.market_instance_v2_id.bytes() == market
+            && value.liabilities.market_runtime.market_binding.bytes()
+                == expected_binding.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let mut outcome_mints = [CollateralId::ZERO; MARKET_FOUNDATION_MAX_OUTCOMES_V3];
+    let mut outcome_custodies = [CollateralId::ZERO; MARKET_FOUNDATION_MAX_OUTCOMES_V3];
+    let mut index = 0usize;
+    while index < MARKET_FOUNDATION_MAX_OUTCOMES_V3 {
+        let outcome = u8::try_from(index).map_err(|_| ClutchError::Arithmetic)?;
+        let mint_slot = MarketFoundationSlotV3::OutcomeMint(outcome)
+            .index()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let custody_slot = MarketFoundationSlotV3::OutcomeCustody(outcome)
+            .index()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let mint_id = graph.account_ids[mint_slot];
+        let custody_id = graph.account_ids[custody_slot];
+        if index < usize::from(schedule.outcome_count) {
+            let expected_mint = seeds::outcome_mint_v2_pda(program_id, &market, outcome).0;
+            let expected_custody =
+                seeds::outcome_custody_v1_pda(program_id, &market, graph.generation, outcome).0;
+            require(
+                mint_id.bytes() == expected_mint.to_bytes()
+                    && custody_id.bytes() == expected_custody.to_bytes(),
+                ClutchError::WrongPda,
+            )?;
+            outcome_mints[index] = CollateralId::from_bytes(mint_id.bytes());
+            outcome_custodies[index] = CollateralId::from_bytes(custody_id.bytes());
+        } else {
+            require(
+                mint_id == ContentId::ZERO && custody_id == ContentId::ZERO,
+                ClutchError::MismatchedState,
+            )?;
+        }
+        index = index.checked_add(1).ok_or(ClutchError::Arithmetic)?;
+    }
+    let plan = prepare_outcome_custody_founding_v1(
+        value.liabilities.bound,
+        OutcomeCustodyFoundingRequestV1 {
+            market_instance_id: CollateralId::from_bytes(market),
+            generation: graph.generation,
+            owner_authority: CollateralId::from_bytes(expected_runtime.to_bytes()),
+            outcome_count: schedule.outcome_count,
+            outcome_mints,
+            outcome_custodies,
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let graph_id = graph
+        .id(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let id = hashv(&[
+        PRODUCT_CURRENT_OUTCOME_CUSTODY_PLAN_DOMAIN_V1,
+        program_id.as_ref(),
+        &plan.founding_id().bytes(),
+        &value.receipt_id.bytes(),
+        &value.deployment.receipt_id().bytes(),
+        &value.deployment.programdata_account().bytes(),
+        &value.deployment.deployment_slot().to_le_bytes(),
+        &graph_id.bytes(),
+        market_runtime_account.key.as_ref(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedCurrentOutcomeCustodyFoundationPlanV1 {
+        id,
+        plan,
+        value,
+        graph_id,
+        market_runtime_account: *market_runtime_account.key,
+    })
+}
+
+struct AuthenticatedProductMarketOutcomeCustodyPostwriteV1<'info> {
+    id: ContentId,
+    accepted_receipt_id: CollateralId,
+    custody_plan_authentication_id: ContentId,
+    collateral_value_authentication_id: CollateralId,
+    collateral_deployment_receipt_id: CollateralId,
+    claim_release_receipt_id: CollateralId,
+    custody_data_id: ContentId,
+    founder_creation_receipt_id: ContentId,
+    founder_preauthorization_id: ContentId,
+    foundation_steps_id: ContentId,
+    market_binding_id: ContentId,
+    foundation_schedule_id: ContentId,
+    foundation_graph_id: ContentId,
+    slot: MarketFoundationSlotV3,
+    account_id: ContentId,
+    principal_lamports: u64,
+    principal_before_lamports: u64,
+    principal_after_lamports: u64,
+    minimum_donation_lamports: u64,
+    vault_observed_balance_lamports: u64,
+    custody_observed_balance_lamports: u64,
+    foundation_vault_account: Pubkey,
+    rent_refund_owner: Pubkey,
+    neutral_lamport_sink: Pubkey,
+    collateral_token_program: Pubkey,
+    foundation_vault: AccountInfo<'info>,
+    custody: AccountInfo<'info>,
+}
+
+impl AuthenticatedProductMarketFoundationStepPostwriteV3
+    for AuthenticatedProductMarketOutcomeCustodyPostwriteV1<'_>
+{
+    #[allow(clippy::too_many_arguments)]
+    fn consume_product_market_foundation_step_postwrite_v3(
+        self,
+        founder_creation_receipt_id: ContentId,
+        founder_preauthorization_id: ContentId,
+        foundation_steps_id: ContentId,
+        market_binding_id: ContentId,
+        foundation_schedule_id: ContentId,
+        foundation_graph_id: ContentId,
+        slot: MarketFoundationSlotV3,
+        account_id: ContentId,
+        principal_lamports: u64,
+        principal_before_lamports: u64,
+        principal_after_lamports: u64,
+        minimum_donation_lamports: u64,
+        foundation_vault_account: Pubkey,
+        rent_refund_owner: Pubkey,
+        neutral_lamport_sink: Pubkey,
+    ) -> Outcome<(ContentId, u64)> {
+        let custody_data = self
+            .custody
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let observed_custody_data_id = hashv(&[
+            PRODUCT_CURRENT_OUTCOME_CUSTODY_POSTWRITE_DOMAIN_V1,
+            self.custody.key.as_ref(),
+            &custody_data,
+        ]);
+        drop(custody_data);
+        require(
+            self.id != ContentId::ZERO
+                && self.accepted_receipt_id != CollateralId::ZERO
+                && self.custody_plan_authentication_id != ContentId::ZERO
+                && self.collateral_value_authentication_id != CollateralId::ZERO
+                && self.collateral_deployment_receipt_id != CollateralId::ZERO
+                && self.claim_release_receipt_id != CollateralId::ZERO
+                && observed_custody_data_id == self.custody_data_id
+                && matches!(self.slot, MarketFoundationSlotV3::OutcomeCustody(_))
+                && founder_creation_receipt_id == self.founder_creation_receipt_id
+                && founder_preauthorization_id == self.founder_preauthorization_id
+                && foundation_steps_id == self.foundation_steps_id
+                && market_binding_id == self.market_binding_id
+                && foundation_schedule_id == self.foundation_schedule_id
+                && foundation_graph_id == self.foundation_graph_id
+                && slot == self.slot
+                && account_id == self.account_id
+                && principal_lamports == self.principal_lamports
+                && principal_before_lamports == self.principal_before_lamports
+                && principal_after_lamports == self.principal_after_lamports
+                && minimum_donation_lamports == self.minimum_donation_lamports
+                && foundation_vault_account == self.foundation_vault_account
+                && rent_refund_owner == self.rent_refund_owner
+                && neutral_lamport_sink == self.neutral_lamport_sink
+                && *self.foundation_vault.key == self.foundation_vault_account
+                && *self.foundation_vault.owner == SYSTEM_PROGRAM_ID
+                && self.foundation_vault.data_len() == 0
+                && self.foundation_vault.lamports()
+                    == self.vault_observed_balance_lamports
+                && self.custody.key.to_bytes() == self.account_id.bytes()
+                && *self.custody.owner == self.collateral_token_program
+                && self.custody.is_writable
+                && !self.custody.is_signer
+                && !self.custody.executable
+                && self.custody.lamports() == self.custody_observed_balance_lamports,
+            ClutchError::MismatchedState,
+        )?;
+        let observed_vault_donation = self
+            .vault_observed_balance_lamports
+            .checked_sub(self.principal_after_lamports)
+            .ok_or(ClutchError::MismatchedState)?;
+        require(
+            observed_vault_donation >= self.minimum_donation_lamports,
+            ClutchError::MismatchedState,
+        )?;
+        Ok((self.id, observed_vault_donation))
+    }
+}
+
+fn current_collateral_runtime_view<'a>(
+    account: &AccountInfo<'_>,
+    data: &'a [u8],
+) -> RuntimeAccountViewV2<'a> {
+    RuntimeAccountViewV2 {
+        key: CollateralId::from_bytes(account.key.to_bytes()),
+        owner_program: CollateralId::from_bytes(account.owner.to_bytes()),
+        data,
+        is_signer: account.is_signer,
+        is_writable: account.is_writable,
+        executable: account.executable,
+    }
+}
+
+fn invoke_current_outcome_custody_initialization_v1<'info>(
+    creation: clutch_collateral_adapter_v2::CustodyCreationPlanV2,
+    custody: &AccountInfo<'info>,
+    collateral_mint: &AccountInfo<'info>,
+    collateral_token_program: &AccountInfo<'info>,
+) -> Outcome<()> {
+    require(
+        creation.account.bytes() == custody.key.to_bytes()
+            && creation.mint.bytes() == collateral_mint.key.to_bytes()
+            && creation.token_program.bytes() == collateral_token_program.key.to_bytes()
+            && creation.step_count != 0
+            && usize::from(creation.step_count) <= creation.steps.len(),
+        ClutchError::MismatchedState,
+    )?;
+    let mut index = 0usize;
+    while index < usize::from(creation.step_count) {
+        match creation.steps[index] {
+            CustodyInitializationStepV2::None => {
+                return Err(Refusal::Adapter(ClutchError::MismatchedState));
+            }
+            CustodyInitializationStepV2::InitializeImmutableOwner { account, data } => {
+                require(
+                    account.bytes() == custody.key.to_bytes(),
+                    ClutchError::MismatchedState,
+                )?;
+                let instruction = Instruction::new_with_bytes(
+                    *collateral_token_program.key,
+                    &data,
+                    vec![AccountMeta::new(*custody.key, false)],
+                );
+                invoke(
+                    &instruction,
+                    &[custody.clone(), collateral_token_program.clone()],
+                )
+                .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+            }
+            CustodyInitializationStepV2::InitializeAccount3 {
+                account,
+                mint,
+                owner_authority,
+                data,
+            } => {
+                require(
+                    account.bytes() == custody.key.to_bytes()
+                        && mint.bytes() == collateral_mint.key.to_bytes()
+                        && owner_authority == creation.owner_authority,
+                    ClutchError::MismatchedState,
+                )?;
+                let instruction = Instruction::new_with_bytes(
+                    *collateral_token_program.key,
+                    &data,
+                    vec![
+                        AccountMeta::new(*custody.key, false),
+                        AccountMeta::new_readonly(*collateral_mint.key, false),
+                    ],
+                );
+                invoke(
+                    &instruction,
+                    &[
+                        custody.clone(),
+                        collateral_mint.clone(),
+                        collateral_token_program.clone(),
+                    ],
+                )
+                .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+            }
+        }
+        index = index.checked_add(1).ok_or(ClutchError::Arithmetic)?;
+    }
+    Ok(())
+}
+
 /// Cursor which keeps the unique founder creation authority inside one SBF
 /// call while concrete family composers consume heterogeneous typed slot
 /// postwrites. A failed or incomplete closure cannot return the private final
@@ -4459,12 +6045,1363 @@ pub(crate) struct CurrentProductMarketFoundationCursorV4<'outer, 'info> {
     schedule: &'outer MarketFoundationScheduleV3,
     graph: &'outer MarketFoundationAccountGraphV3,
     root_account: &'outer AccountInfo<'info>,
+    market_liability_plan_id: ContentId,
+    market_core_liability_plan: Option<(
+        BoundCollateralProfileV2,
+        CustodyCreationPlanV2,
+        MarketLiabilityFoundingPlanV3,
+    )>,
+    claim_mint_plan: Option<ClaimMintFoundingPlanV2>,
+    outcome_custody_plan: Option<OutcomeCustodyFoundingPlanV1>,
+    hoard_slot_receipt_id: ContentId,
+    claim_ledger_slot_receipt_id: ContentId,
+    accepted_market_liability: Option<AcceptedMarketLiabilityFoundingV3>,
+    accepted_claim_mints: [Option<AcceptedClaimMintFoundingStepV2>;
+        MARKET_FOUNDATION_MAX_OUTCOMES_V3],
+    accepted_outcome_custodies: [Option<AcceptedOutcomeCustodyFoundingStepV1>;
+        MARKET_FOUNDATION_MAX_OUTCOMES_V3],
 }
 
 impl<'outer, 'info> CurrentProductMarketFoundationCursorV4<'outer, 'info> {
+    /// Fund and consume the next canonical retained zero-data slot.
+    ///
+    /// The transfer and RootV2 transcript write are deliberately inseparable:
+    /// this method does not expose the physical postwrite or a reusable debit
+    /// authority to a family caller.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_next_retained_preallocation<'next>(
+        &mut self,
+        root: AuthenticatedMarketLifecycleRootV2<'_>,
+        foundation_vault: &AccountInfo<'info>,
+        destination: &AccountInfo<'info>,
+        system_program: &AccountInfo<'info>,
+        successor_output: &mut MarketLifecycleRootV2,
+        rebound_output: &'next mut MarketLifecycleRootAccountV2,
+    ) -> Outcome<AuthenticatedMarketLifecycleRootV2<'next>> {
+        require_system_program(system_program)?;
+        self.schedule
+            .validate()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        self.graph
+            .validate(self.schedule)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let slot = self.creation.next_foundation_slot_v3()?;
+        require(
+            is_retained_current_foundation_slot_v3(slot),
+            ClutchError::MismatchedState,
+        )?;
+        let preauthorization = self.creation.preauthorization();
+        let state = root.state();
+        let capital = state.capital();
+        let binding_id = state
+            .binding_ref()
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let schedule_id = self
+            .schedule
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let graph_id = self
+            .graph
+            .id(self.schedule)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let index = slot
+            .index()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let account_id = self
+            .graph
+            .account(slot)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let principal_lamports = self.schedule.slot_principal_lamports[index];
+        let principal_before_lamports = capital.principal_remaining_lamports;
+        let principal_after_lamports = principal_before_lamports
+            .checked_sub(principal_lamports)
+            .ok_or(ClutchError::Arithmetic)?;
+        let minimum_donation_lamports = capital.vault_current_donation_lamports;
+        let rent_refund_owner = Pubkey::new_from_array(capital.rent_refund_owner.bytes());
+        let neutral_lamport_sink =
+            Pubkey::new_from_array(capital.neutral_lamport_sink.bytes());
+        let market = preauthorization.market_instance_id().bytes();
+        let generation = preauthorization.generation();
+        let (expected_vault, vault_bump) =
+            seeds::product_market_foundation_vault_pda(self.program_id, &market, generation);
+        require(
+            root.is_writable()
+                && root.account() == *self.root_account.key
+                && root.owner_program() == *self.program_id
+                && state.phase() == MarketLifecyclePhaseV2::Founding
+                && state.binding_ref() == self.creation.market_binding()
+                && binding_id
+                    == self
+                        .creation
+                        .market_binding()
+                        .id()
+                        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                && schedule_id.content_id() == preauthorization.foundation_schedule_id()
+                && graph_id.content_id() == preauthorization.foundation_graph_id()
+                && principal_lamports != 0
+                && account_id.bytes() == destination.key.to_bytes()
+                && *foundation_vault.key == expected_vault
+                && *foundation_vault.key == preauthorization.foundation_vault_account()
+                && foundation_vault.key != destination.key
+                && destination.key != self.root_account.key
+                && destination.key != &rent_refund_owner
+                && destination.key != &neutral_lamport_sink
+                && foundation_vault.key != &rent_refund_owner
+                && foundation_vault.key != &neutral_lamport_sink,
+            ClutchError::MismatchedState,
+        )?;
+        require_system_vault(foundation_vault)?;
+        require_unallocated_system_account(destination)?;
+
+        let vault_before = foundation_vault.lamports();
+        let observed_vault_donation = vault_before
+            .checked_sub(principal_before_lamports)
+            .ok_or(ClutchError::MismatchedState)?;
+        let vault_after = principal_after_lamports
+            .checked_add(observed_vault_donation)
+            .ok_or(ClutchError::Arithmetic)?;
+        let destination_donation = destination.lamports();
+        let destination_after = destination_donation
+            .checked_add(principal_lamports)
+            .ok_or(ClutchError::Arithmetic)?;
+        require(
+            observed_vault_donation >= minimum_donation_lamports,
+            ClutchError::MismatchedState,
+        )?;
+        let generation_bytes = generation.to_le_bytes();
+        let bump_seed = [vault_bump];
+        invoke_current_founder_transfer(
+            foundation_vault,
+            destination,
+            system_program,
+            principal_lamports,
+            &[
+                seeds::SEED_PRODUCT_MARKET_FOUNDATION_VAULT,
+                &market,
+                &generation_bytes,
+                &bump_seed,
+            ],
+        )?;
+        require(
+            foundation_vault.lamports() == vault_after
+                && destination.lamports() == destination_after,
+            ClutchError::SeriesCustodyDeltaMismatch,
+        )?;
+        let slot_index = u64::try_from(index).map_err(|_| ClutchError::Arithmetic)?;
+        let id = hashv(&[
+            PRODUCT_CURRENT_RETAINED_PREALLOCATION_POSTWRITE_DOMAIN_V3,
+            self.program_id.as_ref(),
+            &self.creation.id().bytes(),
+            &preauthorization.id().bytes(),
+            &self.creation.foundation_steps_id().bytes(),
+            &binding_id.bytes(),
+            &schedule_id.bytes(),
+            &graph_id.bytes(),
+            &slot_index.to_le_bytes(),
+            destination.key.as_ref(),
+            &principal_lamports.to_le_bytes(),
+            &principal_before_lamports.to_le_bytes(),
+            &principal_after_lamports.to_le_bytes(),
+            &minimum_donation_lamports.to_le_bytes(),
+            &destination_donation.to_le_bytes(),
+            &destination_after.to_le_bytes(),
+            foundation_vault.key.as_ref(),
+            &vault_before.to_le_bytes(),
+            &vault_after.to_le_bytes(),
+            rent_refund_owner.as_ref(),
+            neutral_lamport_sink.as_ref(),
+        ]);
+        require_live(id)?;
+        let postwrite = AuthenticatedProductMarketRetainedPreallocationPostwriteV3 {
+            id,
+            founder_creation_receipt_id: self.creation.id(),
+            founder_preauthorization_id: preauthorization.id(),
+            foundation_steps_id: self.creation.foundation_steps_id(),
+            market_binding_id: binding_id,
+            foundation_schedule_id: schedule_id.content_id(),
+            foundation_graph_id: graph_id.content_id(),
+            slot,
+            account_id,
+            principal_lamports,
+            principal_before_lamports,
+            principal_after_lamports,
+            minimum_donation_lamports,
+            destination_donation_lamports: destination_donation,
+            destination_observed_balance_lamports: destination_after,
+            vault_observed_balance_lamports: vault_after,
+            foundation_vault_account: *foundation_vault.key,
+            rent_refund_owner,
+            neutral_lamport_sink,
+            foundation_vault: foundation_vault.clone(),
+            destination: destination.clone(),
+        };
+        self.record_foundation_step(root, postwrite, successor_output, rebound_output)
+    }
+
+    /// Create either canonical program-owned shared-liability state account.
+    /// HoardV2 must be slot 3 and ClaimLedgerV3 slot 4; the cursor retains both
+    /// receipts until slot 14 supplies the exact external Hoard custody.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_next_market_liability_state_v3<'next>(
+        &mut self,
+        root: AuthenticatedMarketLifecycleRootV2<'_>,
+        liability_plan: &AuthenticatedCurrentMarketLiabilityFoundationPlanV3,
+        foundation_vault: &AccountInfo<'info>,
+        state_account: &AccountInfo<'info>,
+        system_program: &AccountInfo<'info>,
+        successor_output: &mut MarketLifecycleRootV2,
+        rebound_output: &'next mut MarketLifecycleRootAccountV2,
+    ) -> Outcome<AuthenticatedMarketLifecycleRootV2<'next>> {
+        require_system_program(system_program)?;
+        let slot = self.creation.next_foundation_slot_v3()?;
+        let (
+            expected_account,
+            account_bytes,
+            stored_bump,
+            semantic_id,
+            expected_principal,
+            expected_donation,
+        ) =
+            match slot {
+                MarketFoundationSlotV3::Hoard => {
+                    let value = liability_plan.plan.hoard();
+                    (
+                        Pubkey::new_from_array(liability_plan.plan.hoard_account().bytes()),
+                        HOARD_V2_BYTES,
+                        value.stored_bump,
+                        liability_plan.plan.hoard_id(),
+                        value.rent.refundable_principal(),
+                        value.rent.donation_floor(),
+                    )
+                }
+                MarketFoundationSlotV3::ClaimLedger => {
+                    let value = liability_plan.plan.claim_ledger();
+                    (
+                        Pubkey::new_from_array(
+                            liability_plan.plan.claim_ledger_account().bytes(),
+                        ),
+                        CLAIM_LEDGER_V3_BYTES,
+                        value.stored_bump,
+                        liability_plan.plan.claim_ledger_id(),
+                        value.rent.refundable_principal(),
+                        value.rent.donation_floor(),
+                    )
+                }
+                _ => return Err(Refusal::Adapter(ClutchError::MismatchedState)),
+            };
+        let preauthorization = self.creation.preauthorization();
+        let state = root.state();
+        let capital = state.capital();
+        let binding_id = state
+            .binding_ref()
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let schedule_id = self.schedule.id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let graph_id = self.graph.id(self.schedule)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let index = slot.index()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let principal_lamports = self.schedule.slot_principal_lamports[index];
+        let principal_before_lamports = capital.principal_remaining_lamports;
+        let principal_after_lamports = principal_before_lamports
+            .checked_sub(principal_lamports).ok_or(ClutchError::Arithmetic)?;
+        let minimum_donation_lamports = capital.vault_current_donation_lamports;
+        let market = preauthorization.market_instance_id().bytes();
+        let (expected_vault, vault_bump) = seeds::product_market_foundation_vault_pda(
+            self.program_id, &market, preauthorization.generation());
+        require(
+            root.is_writable()
+                && root.account() == *self.root_account.key
+                && root.owner_program() == *self.program_id
+                && state.phase() == MarketLifecyclePhaseV2::Founding
+                && state.binding_ref() == self.creation.market_binding()
+                && graph_id.content_id() == liability_plan.graph_id
+                && liability_plan.market_instance_id == preauthorization.market_instance_id()
+                && liability_plan.market_runtime_account
+                    == seeds::general_v2_market_runtime_pda(
+                        self.program_id,
+                        &seeds::general_v2_market_binding_pda(self.program_id, &market)
+                            .0
+                            .to_bytes(),
+                    )
+                    .0
+                && liability_plan.rent_refund_owner
+                    == Pubkey::new_from_array(capital.rent_refund_owner.bytes())
+                && liability_plan.neutral_lamport_sink
+                    == Pubkey::new_from_array(capital.neutral_lamport_sink.bytes())
+                && self.graph.account_ids[index].bytes() == expected_account.to_bytes()
+                && *state_account.key == expected_account
+                && principal_lamports == expected_principal
+                && *foundation_vault.key == expected_vault
+                && *foundation_vault.key == preauthorization.foundation_vault_account()
+                && foundation_vault.key != state_account.key
+                && state_account.key != &liability_plan.rent_refund_owner
+                && state_account.key != &liability_plan.neutral_lamport_sink
+                && (self.market_liability_plan_id == ContentId::ZERO
+                    || self.market_liability_plan_id == liability_plan.id)
+                && self.market_core_liability_plan.as_ref().map_or(
+                    true,
+                    |current| {
+                        current
+                            == &(
+                                liability_plan.bound,
+                                liability_plan.hoard_custody,
+                                liability_plan.plan,
+                            )
+                    },
+                ),
+            ClutchError::MismatchedState,
+        )?;
+        require_system_vault(foundation_vault)?;
+        require_unallocated_system_account(state_account)?;
+        let vault_before = foundation_vault.lamports();
+        let observed_vault_donation = vault_before
+            .checked_sub(principal_before_lamports)
+            .ok_or(ClutchError::MismatchedState)?;
+        let vault_after = principal_after_lamports
+            .checked_add(observed_vault_donation).ok_or(ClutchError::Arithmetic)?;
+        let state_donation = state_account.lamports();
+        require(state_donation == expected_donation, ClutchError::MismatchedState)?;
+        let state_after = state_donation
+            .checked_add(principal_lamports).ok_or(ClutchError::Arithmetic)?;
+        require(
+            observed_vault_donation >= minimum_donation_lamports,
+            ClutchError::MismatchedState,
+        )?;
+        let generation_bytes = preauthorization.generation().to_le_bytes();
+        let vault_bump_seed = [vault_bump];
+        invoke_current_founder_transfer(
+            foundation_vault,
+            state_account,
+            system_program,
+            principal_lamports,
+            &[
+                seeds::SEED_PRODUCT_MARKET_FOUNDATION_VAULT,
+                &market,
+                &generation_bytes,
+                &vault_bump_seed,
+            ],
+        )?;
+        let seed = match slot {
+            MarketFoundationSlotV3::Hoard => seeds::SEED_HOARD_V2,
+            MarketFoundationSlotV3::ClaimLedger => seeds::SEED_CLAIM_LEDGER_V3,
+            _ => return Err(Refusal::Adapter(ClutchError::MismatchedState)),
+        };
+        let state_bump_seed = [stored_bump];
+        allocate_assign_current_founder_account(
+            self.program_id,
+            state_account,
+            system_program,
+            account_bytes,
+            &[seed, &market, &state_bump_seed],
+        )?;
+        {
+            let mut output = state_account
+                .try_borrow_mut_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+            match slot {
+                MarketFoundationSlotV3::Hoard => liability_plan
+                    .plan
+                    .hoard()
+                    .encode(&mut output[..])
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+                MarketFoundationSlotV3::ClaimLedger => liability_plan
+                    .plan
+                    .claim_ledger()
+                    .encode(&mut output[..])
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+                _ => return Err(Refusal::Adapter(ClutchError::MismatchedState)),
+            }
+        }
+        let state_data = state_account
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let data_id = hashv(&[
+            PRODUCT_CURRENT_MARKET_LIABILITY_SLOT_POSTWRITE_DOMAIN_V3,
+            state_account.key.as_ref(),
+            &state_data,
+        ]);
+        match slot {
+            MarketFoundationSlotV3::Hoard => require(
+                HoardV2::decode(&state_data)
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                    == liability_plan.plan.hoard(),
+                ClutchError::MismatchedState,
+            )?,
+            MarketFoundationSlotV3::ClaimLedger => require(
+                ClaimLedgerV3::decode(&state_data)
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                    == liability_plan.plan.claim_ledger(),
+                ClutchError::MismatchedState,
+            )?,
+            _ => return Err(Refusal::Adapter(ClutchError::MismatchedState)),
+        }
+        drop(state_data);
+        require(
+            foundation_vault.lamports() == vault_after
+                && state_account.lamports() == state_after
+                && *state_account.owner == *self.program_id,
+            ClutchError::SeriesCustodyDeltaMismatch,
+        )?;
+        let slot_index = u64::try_from(index).map_err(|_| ClutchError::Arithmetic)?;
+        let id = hashv(&[
+            PRODUCT_CURRENT_MARKET_LIABILITY_SLOT_POSTWRITE_DOMAIN_V3,
+            self.program_id.as_ref(),
+            &self.creation.id().bytes(),
+            &preauthorization.id().bytes(),
+            &liability_plan.id.bytes(),
+            &semantic_id.bytes(),
+            &binding_id.bytes(),
+            &schedule_id.bytes(),
+            &graph_id.bytes(),
+            &slot_index.to_le_bytes(),
+            state_account.key.as_ref(),
+            &data_id.bytes(),
+            &principal_lamports.to_le_bytes(),
+            &principal_before_lamports.to_le_bytes(),
+            &principal_after_lamports.to_le_bytes(),
+            &state_donation.to_le_bytes(),
+            &state_after.to_le_bytes(),
+            &vault_before.to_le_bytes(),
+            &vault_after.to_le_bytes(),
+        ]);
+        require_live(id)?;
+        let postwrite = AuthenticatedProductMarketLiabilityStatePostwriteV3 {
+            id,
+            plan_authentication_id: liability_plan.id,
+            semantic_id,
+            data_id,
+            founder_creation_receipt_id: self.creation.id(),
+            founder_preauthorization_id: preauthorization.id(),
+            foundation_steps_id: self.creation.foundation_steps_id(),
+            market_binding_id: binding_id,
+            foundation_schedule_id: schedule_id.content_id(),
+            foundation_graph_id: graph_id.content_id(),
+            slot,
+            account_id: self.graph.account_ids[index],
+            principal_lamports,
+            principal_before_lamports,
+            principal_after_lamports,
+            minimum_donation_lamports,
+            vault_observed_balance_lamports: vault_after,
+            state_observed_balance_lamports: state_after,
+            foundation_vault_account: *foundation_vault.key,
+            rent_refund_owner: liability_plan.rent_refund_owner,
+            neutral_lamport_sink: liability_plan.neutral_lamport_sink,
+            program_id: *self.program_id,
+            foundation_vault: foundation_vault.clone(),
+            state_account: state_account.clone(),
+        };
+        let next_root =
+            self.record_foundation_step(root, postwrite, successor_output, rebound_output)?;
+        self.market_liability_plan_id = liability_plan.id;
+        if self.market_core_liability_plan.is_none() {
+            self.market_core_liability_plan = Some((
+                liability_plan.bound,
+                liability_plan.hoard_custody,
+                liability_plan.plan,
+            ));
+        }
+        match slot {
+            MarketFoundationSlotV3::Hoard => self.hoard_slot_receipt_id = id,
+            MarketFoundationSlotV3::ClaimLedger => self.claim_ledger_slot_receipt_id = id,
+            _ => return Err(Refusal::Adapter(ClutchError::MismatchedState)),
+        }
+        Ok(next_root)
+    }
+
+    /// Create the release-selected Hoard collateral vault at slot 14 and only
+    /// then accept the complete HoardV2/ClaimLedgerV3/custody founding plane.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_current_hoard_collateral_vault_v3<'next>(
+        &mut self,
+        root: AuthenticatedMarketLifecycleRootV2<'_>,
+        liability_plan: &AuthenticatedCurrentMarketLiabilityFoundationPlanV3,
+        foundation_vault: &AccountInfo<'info>,
+        hoard_account: &AccountInfo<'info>,
+        claim_ledger_account: &AccountInfo<'info>,
+        hoard_token_account: &AccountInfo<'info>,
+        collateral_mint: &AccountInfo<'info>,
+        collateral_token_program: &AccountInfo<'info>,
+        system_program: &AccountInfo<'info>,
+        rent_sysvar: &AccountInfo<'info>,
+        successor_output: &mut MarketLifecycleRootV2,
+        rebound_output: &'next mut MarketLifecycleRootAccountV2,
+    ) -> Outcome<AuthenticatedMarketLifecycleRootV2<'next>> {
+        require_system_program(system_program)?;
+        let slot = self.creation.next_foundation_slot_v3()?;
+        require(
+            slot == MarketFoundationSlotV3::HoardCollateralVault
+                && self.market_liability_plan_id == liability_plan.id
+                && self.hoard_slot_receipt_id != ContentId::ZERO
+                && self.claim_ledger_slot_receipt_id != ContentId::ZERO
+                && self.accepted_market_liability.is_none(),
+            ClutchError::MismatchedState,
+        )?;
+        let state = root.state();
+        let capital = state.capital();
+        let preauthorization = self.creation.preauthorization();
+        let binding_id = state.binding_ref().id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let schedule_id = self.schedule.id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let graph_id = self.graph.id(self.schedule)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let index = slot.index()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let account_id = self.graph.account_ids[index];
+        let principal_lamports = self.schedule.slot_principal_lamports[index];
+        let principal_before_lamports = capital.principal_remaining_lamports;
+        let principal_after_lamports = principal_before_lamports
+            .checked_sub(principal_lamports).ok_or(ClutchError::Arithmetic)?;
+        let minimum_donation_lamports = capital.vault_current_donation_lamports;
+        let market = preauthorization.market_instance_id().bytes();
+        let (expected_token, token_bump) = seeds::hoard_token_v2_pda(self.program_id, &market);
+        let (expected_vault, vault_bump) = seeds::product_market_foundation_vault_pda(
+            self.program_id, &market, preauthorization.generation());
+        let creation = liability_plan.hoard_custody;
+        require(
+            root.is_writable()
+                && root.account() == *self.root_account.key
+                && root.owner_program() == *self.program_id
+                && state.phase() == MarketLifecyclePhaseV2::Founding
+                && state.binding_ref() == self.creation.market_binding()
+                && graph_id.content_id() == liability_plan.graph_id
+                && liability_plan.market_instance_id == preauthorization.market_instance_id()
+                && account_id.bytes() == expected_token.to_bytes()
+                && *hoard_token_account.key == expected_token
+                && hoard_account.key.to_bytes()
+                    == liability_plan.plan.hoard_account().bytes()
+                && claim_ledger_account.key.to_bytes()
+                    == liability_plan.plan.claim_ledger_account().bytes()
+                && collateral_token_program.key.to_bytes() == creation.token_program.bytes()
+                && collateral_mint.key.to_bytes() == creation.mint.bytes()
+                && creation.account.bytes() == expected_token.to_bytes()
+                && creation.owner_authority
+                    == liability_plan.bound.market().hoard_authority
+                && liability_plan.deployment.release() == liability_plan.bound.release()
+                && liability_plan.deployment.release_id()
+                    == liability_plan.bound.release().id()
+                        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?
+                && liability_plan.deployment.programdata_account() != CollateralId::ZERO
+                && liability_plan.deployment.receipt_id() != CollateralId::ZERO
+                && hoard_token_account.lamports()
+                    == liability_plan.hoard_token_prefund_donation_lamports
+                && *foundation_vault.key == expected_vault
+                && *foundation_vault.key == preauthorization.foundation_vault_account()
+                && foundation_vault.key != hoard_token_account.key
+                && hoard_token_account.key != collateral_mint.key
+                && hoard_token_account.key != collateral_token_program.key
+                && hoard_token_account.key != &liability_plan.rent_refund_owner
+                && hoard_token_account.key != &liability_plan.neutral_lamport_sink,
+            ClutchError::MismatchedState,
+        )?;
+        require_system_vault(foundation_vault)?;
+        require_unallocated_system_account(hoard_token_account)?;
+        require(
+            !collateral_token_program.is_signer
+                && !collateral_token_program.is_writable
+                && collateral_token_program.executable
+                && !collateral_mint.is_signer
+                && !collateral_mint.is_writable
+                && !collateral_mint.executable,
+            ClutchError::MismatchedState,
+        )?;
+        let collateral_mint_data = collateral_mint.try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let collateral_observation = admit_collateral_mint_v2(
+            liability_plan.bound,
+            current_collateral_runtime_view(collateral_mint, &collateral_mint_data),
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MintNotAdmitted))?;
+        drop(collateral_mint_data);
+        require(
+            collateral_observation.address.bytes() == collateral_mint.key.to_bytes(),
+            ClutchError::MismatchedState,
+        )?;
+        let rent = read_rent(rent_sysvar)?;
+        require(
+            principal_lamports
+                == rent.minimum_balance(usize::from(creation.account_bytes))?,
+            ClutchError::MismatchedState,
+        )?;
+        let vault_before = foundation_vault.lamports();
+        let observed_vault_donation = vault_before
+            .checked_sub(principal_before_lamports)
+            .ok_or(ClutchError::MismatchedState)?;
+        let vault_after = principal_after_lamports
+            .checked_add(observed_vault_donation).ok_or(ClutchError::Arithmetic)?;
+        let token_donation = hoard_token_account.lamports();
+        let token_after = token_donation
+            .checked_add(principal_lamports).ok_or(ClutchError::Arithmetic)?;
+        require(
+            observed_vault_donation >= minimum_donation_lamports,
+            ClutchError::MismatchedState,
+        )?;
+        let generation_bytes = preauthorization.generation().to_le_bytes();
+        let vault_bump_seed = [vault_bump];
+        invoke_current_founder_transfer(
+            foundation_vault,
+            hoard_token_account,
+            system_program,
+            principal_lamports,
+            &[
+                seeds::SEED_PRODUCT_MARKET_FOUNDATION_VAULT,
+                &market,
+                &generation_bytes,
+                &vault_bump_seed,
+            ],
+        )?;
+        let token_bump_seed = [token_bump];
+        allocate_assign_current_founder_account(
+            collateral_token_program.key,
+            hoard_token_account,
+            system_program,
+            usize::from(creation.account_bytes),
+            &[seeds::SEED_HOARD_TOKEN_V2, &market, &token_bump_seed],
+        )?;
+        invoke_current_outcome_custody_initialization_v1(
+            creation,
+            hoard_token_account,
+            collateral_mint,
+            collateral_token_program,
+        )?;
+        let accepted = accept_general_market_liability_founding_postwrite_v3(
+            self.program_id,
+            liability_plan.bound,
+            liability_plan.deployment,
+            liability_plan.plan,
+            hoard_account,
+            claim_ledger_account,
+            hoard_token_account,
+        )?;
+        let accepted_pure = accepted.accepted();
+        let hoard_data = hoard_account.try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let hoard_data_id = hashv(&[
+            PRODUCT_CURRENT_MARKET_LIABILITY_SLOT_POSTWRITE_DOMAIN_V3,
+            hoard_account.key.as_ref(), &hoard_data]);
+        drop(hoard_data);
+        let ledger_data = claim_ledger_account.try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let claim_ledger_data_id = hashv(&[
+            PRODUCT_CURRENT_MARKET_LIABILITY_SLOT_POSTWRITE_DOMAIN_V3,
+            claim_ledger_account.key.as_ref(), &ledger_data]);
+        drop(ledger_data);
+        let token_data = hoard_token_account.try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let hoard_token_data_id = hashv(&[
+            PRODUCT_CURRENT_MARKET_LIABILITY_SLOT_POSTWRITE_DOMAIN_V3,
+            hoard_token_account.key.as_ref(), &token_data]);
+        drop(token_data);
+        require(
+            foundation_vault.lamports() == vault_after
+                && hoard_token_account.lamports() == token_after
+                && accepted_pure.plan() == liability_plan.plan
+                && accepted_pure.visible_hoard_atoms() == 0,
+            ClutchError::SeriesCustodyDeltaMismatch,
+        )?;
+        let slot_index = u64::try_from(index).map_err(|_| ClutchError::Arithmetic)?;
+        let id = hashv(&[
+            PRODUCT_CURRENT_MARKET_LIABILITY_SLOT_POSTWRITE_DOMAIN_V3,
+            self.program_id.as_ref(),
+            &self.creation.id().bytes(),
+            &preauthorization.id().bytes(),
+            &liability_plan.id.bytes(),
+            &self.hoard_slot_receipt_id.bytes(),
+            &self.claim_ledger_slot_receipt_id.bytes(),
+            &accepted.receipt_id().bytes(),
+            &accepted_pure.receipt_id().bytes(),
+            &liability_plan.deployment.receipt_id().bytes(),
+            &binding_id.bytes(),
+            &schedule_id.bytes(),
+            &graph_id.bytes(),
+            &slot_index.to_le_bytes(),
+            hoard_token_account.key.as_ref(),
+            collateral_mint.key.as_ref(),
+            collateral_token_program.key.as_ref(),
+            &hoard_data_id.bytes(),
+            &claim_ledger_data_id.bytes(),
+            &hoard_token_data_id.bytes(),
+            &principal_lamports.to_le_bytes(),
+            &principal_before_lamports.to_le_bytes(),
+            &principal_after_lamports.to_le_bytes(),
+            &token_donation.to_le_bytes(),
+            &token_after.to_le_bytes(),
+            &vault_before.to_le_bytes(),
+            &vault_after.to_le_bytes(),
+        ]);
+        require_live(id)?;
+        let postwrite = AuthenticatedProductMarketHoardCustodyPostwriteV3 {
+            id,
+            accepted,
+            plan_authentication_id: liability_plan.id,
+            hoard_data_id,
+            claim_ledger_data_id,
+            hoard_token_data_id,
+            founder_creation_receipt_id: self.creation.id(),
+            founder_preauthorization_id: preauthorization.id(),
+            foundation_steps_id: self.creation.foundation_steps_id(),
+            market_binding_id: binding_id,
+            foundation_schedule_id: schedule_id.content_id(),
+            foundation_graph_id: graph_id.content_id(),
+            account_id,
+            principal_lamports,
+            principal_before_lamports,
+            principal_after_lamports,
+            minimum_donation_lamports,
+            vault_observed_balance_lamports: vault_after,
+            token_observed_balance_lamports: token_after,
+            foundation_vault_account: *foundation_vault.key,
+            rent_refund_owner: liability_plan.rent_refund_owner,
+            neutral_lamport_sink: liability_plan.neutral_lamport_sink,
+            program_id: *self.program_id,
+            collateral_token_program: *collateral_token_program.key,
+            foundation_vault: foundation_vault.clone(),
+            hoard_account: hoard_account.clone(),
+            claim_ledger_account: claim_ledger_account.clone(),
+            hoard_token_account: hoard_token_account.clone(),
+        };
+        let next_root =
+            self.record_foundation_step(root, postwrite, successor_output, rebound_output)?;
+        self.accepted_market_liability = Some(accepted_pure);
+        Ok(next_root)
+    }
+
+    /// Create one active exact Token-2022 OutcomeMintV2 and consume its
+    /// hostile postwrite into the next canonical Product slot.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_next_claim_mint_v2<'next>(
+        &mut self,
+        root: AuthenticatedMarketLifecycleRootV2<'_>,
+        claim_plan: &AuthenticatedCurrentClaimMintFoundationPlanV2,
+        foundation_vault: &AccountInfo<'info>,
+        outcome_mint: &AccountInfo<'info>,
+        claim_token_program: &AccountInfo<'info>,
+        system_program: &AccountInfo<'info>,
+        rent_sysvar: &AccountInfo<'info>,
+        successor_output: &mut MarketLifecycleRootV2,
+        rebound_output: &'next mut MarketLifecycleRootAccountV2,
+    ) -> Outcome<AuthenticatedMarketLifecycleRootV2<'next>> {
+        require_system_program(system_program)?;
+        self.schedule
+            .validate()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        self.graph
+            .validate(self.schedule)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let slot = self.creation.next_foundation_slot_v3()?;
+        let outcome = match slot {
+            MarketFoundationSlotV3::OutcomeMint(outcome) => outcome,
+            _ => return Err(Refusal::Adapter(ClutchError::MismatchedState)),
+        };
+        require(outcome < self.schedule.outcome_count, ClutchError::MismatchedState)?;
+        let step = claim_plan
+            .plan
+            .step(outcome)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        require(
+            self.accepted_claim_mints[usize::from(outcome)].is_none()
+                && self
+                    .claim_mint_plan
+                    .as_ref()
+                    .map_or(true, |current| current == &claim_plan.plan),
+            ClutchError::MismatchedState,
+        )?;
+        let state = root.state();
+        let capital = state.capital();
+        let preauthorization = self.creation.preauthorization();
+        let binding_id = state
+            .binding_ref()
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let schedule_id = self
+            .schedule
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let graph_id = self
+            .graph
+            .id(self.schedule)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let index = slot
+            .index()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let account_id = self.graph.account_ids[index];
+        let principal_lamports = self.schedule.slot_principal_lamports[index];
+        let principal_before_lamports = capital.principal_remaining_lamports;
+        let principal_after_lamports = principal_before_lamports
+            .checked_sub(principal_lamports)
+            .ok_or(ClutchError::Arithmetic)?;
+        let minimum_donation_lamports = capital.vault_current_donation_lamports;
+        let rent_refund_owner = Pubkey::new_from_array(capital.rent_refund_owner.bytes());
+        let neutral_lamport_sink = Pubkey::new_from_array(capital.neutral_lamport_sink.bytes());
+        let market = preauthorization.market_instance_id().bytes();
+        let expected_runtime = claim_plan.market_runtime_account;
+        let (expected_mint, mint_bump) =
+            seeds::outcome_mint_v2_pda(self.program_id, &market, outcome);
+        let (expected_vault, vault_bump) = seeds::product_market_foundation_vault_pda(
+            self.program_id,
+            &market,
+            preauthorization.generation(),
+        );
+        let claim_release = claim_plan.claim_release;
+        let claim_binding = claim_release.bound();
+        require(
+            root.is_writable()
+                && root.account() == *self.root_account.key
+                && root.owner_program() == *self.program_id
+                && state.phase() == MarketLifecyclePhaseV2::Founding
+                && state.binding_ref() == self.creation.market_binding()
+                && binding_id
+                    == self
+                        .creation
+                        .market_binding()
+                        .id()
+                        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                && schedule_id.content_id() == preauthorization.foundation_schedule_id()
+                && graph_id.content_id() == preauthorization.foundation_graph_id()
+                && graph_id.content_id() == claim_plan.graph_id
+                && claim_plan.plan.market_instance_id().bytes() == market
+                && claim_plan.plan.outcome_count() == self.schedule.outcome_count
+                && claim_plan.plan.mint_authority().bytes() == expected_runtime.to_bytes()
+                && claim_plan.plan.binding_id() == claim_binding.binding_id()
+                && step.mint().bytes() == expected_mint.to_bytes()
+                && account_id.bytes() == expected_mint.to_bytes()
+                && outcome_mint.key == &expected_mint
+                && claim_token_program.key.to_bytes()
+                    == claim_binding.binding().token_program.bytes()
+                && *claim_token_program.key == token::TOKEN_2022_PROGRAM_ID
+                && claim_release.receipt_id() != CollateralId::ZERO
+                && claim_release.token_programdata() != CollateralId::ZERO
+                && claim_release.loader_receipt_id() != CollateralId::ZERO
+                && claim_plan.general_value.receipt_id != CollateralId::ZERO
+                && claim_binding.binding_id().bytes()
+                    == state.binding_ref().claim_issuance_binding_id.bytes()
+                && principal_lamports != 0
+                && *foundation_vault.key == expected_vault
+                && *foundation_vault.key == preauthorization.foundation_vault_account()
+                && foundation_vault.key != outcome_mint.key
+                && outcome_mint.key != claim_token_program.key
+                && outcome_mint.key != &expected_runtime
+                && outcome_mint.key != &rent_refund_owner
+                && outcome_mint.key != &neutral_lamport_sink,
+            ClutchError::MismatchedState,
+        )?;
+        require_system_vault(foundation_vault)?;
+        require_unallocated_system_account(outcome_mint)?;
+        require(
+            !claim_token_program.is_signer
+                && !claim_token_program.is_writable
+                && claim_token_program.executable,
+            ClutchError::MismatchedState,
+        )?;
+        let mint_account_bytes = claim_plan.plan.mint_account_bytes();
+        let rent = read_rent(rent_sysvar)?;
+        require(
+            principal_lamports == rent.minimum_balance(mint_account_bytes)?,
+            ClutchError::MismatchedState,
+        )?;
+        let vault_before = foundation_vault.lamports();
+        let observed_vault_donation = vault_before
+            .checked_sub(principal_before_lamports)
+            .ok_or(ClutchError::MismatchedState)?;
+        let vault_after = principal_after_lamports
+            .checked_add(observed_vault_donation)
+            .ok_or(ClutchError::Arithmetic)?;
+        let mint_donation = outcome_mint.lamports();
+        let mint_after = mint_donation
+            .checked_add(principal_lamports)
+            .ok_or(ClutchError::Arithmetic)?;
+        require(
+            observed_vault_donation >= minimum_donation_lamports,
+            ClutchError::MismatchedState,
+        )?;
+        let generation_bytes = preauthorization.generation().to_le_bytes();
+        let vault_bump_seed = [vault_bump];
+        invoke_current_founder_transfer(
+            foundation_vault,
+            outcome_mint,
+            system_program,
+            principal_lamports,
+            &[
+                seeds::SEED_PRODUCT_MARKET_FOUNDATION_VAULT,
+                &market,
+                &generation_bytes,
+                &vault_bump_seed,
+            ],
+        )?;
+        require(
+            foundation_vault.lamports() == vault_after && outcome_mint.lamports() == mint_after,
+            ClutchError::SeriesCustodyDeltaMismatch,
+        )?;
+        let outcome_seed = [outcome];
+        let mint_bump_seed = [mint_bump];
+        allocate_assign_current_founder_account(
+            claim_token_program.key,
+            outcome_mint,
+            system_program,
+            mint_account_bytes,
+            &[
+                seeds::SEED_OUTCOME_MINT_V2,
+                &market,
+                &outcome_seed,
+                &mint_bump_seed,
+            ],
+        )?;
+        token::initialize_outcome_mint(claim_token_program, outcome_mint, &expected_runtime)?;
+        let observation = token::admit_mint(
+            outcome_mint,
+            &token::MintPolicy::outcome(*outcome_mint.key, expected_runtime),
+        )?;
+        let account_bytes = u16::try_from(mint_account_bytes)
+            .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+        let accepted = accept_claim_mint_founding_step_v2(
+            claim_binding,
+            step,
+            ClaimMintFoundingPostwriteV2 {
+                mint: CollateralId::from_bytes(outcome_mint.key.to_bytes()),
+                owner_program: CollateralId::from_bytes(outcome_mint.owner.to_bytes()),
+                writable: outcome_mint.is_writable,
+                signer: outcome_mint.is_signer,
+                executable: outcome_mint.executable,
+                account_bytes,
+                initialized: true,
+                decimals: observation.decimals,
+                supply_atoms: observation.supply,
+                mint_authority: observation.mint_authority.map(CollateralId::from_bytes),
+                freeze_authority: observation.freeze_authority.map(CollateralId::from_bytes),
+                extensions: observation.extensions,
+            },
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MintNotAdmitted))?;
+        let mint_data = outcome_mint
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let mint_data_id = hashv(&[
+            PRODUCT_CURRENT_CLAIM_MINT_POSTWRITE_DOMAIN_V2,
+            outcome_mint.key.as_ref(),
+            &mint_data,
+        ]);
+        drop(mint_data);
+        require(
+            accepted.step() == step
+                && outcome_mint.lamports() == mint_after
+                && *outcome_mint.owner == *claim_token_program.key,
+            ClutchError::MismatchedState,
+        )?;
+        let slot_index = u64::try_from(index).map_err(|_| ClutchError::Arithmetic)?;
+        let id = hashv(&[
+            PRODUCT_CURRENT_CLAIM_MINT_POSTWRITE_DOMAIN_V2,
+            self.program_id.as_ref(),
+            &self.creation.id().bytes(),
+            &preauthorization.id().bytes(),
+            &self.creation.foundation_steps_id().bytes(),
+            &binding_id.bytes(),
+            &schedule_id.bytes(),
+            &graph_id.bytes(),
+            &slot_index.to_le_bytes(),
+            &[outcome],
+            outcome_mint.key.as_ref(),
+            claim_token_program.key.as_ref(),
+            &accepted.receipt_id().bytes(),
+            &claim_plan.id.bytes(),
+            &claim_release.receipt_id().bytes(),
+            &claim_release.token_programdata().bytes(),
+            &claim_release.loader_receipt_id().bytes(),
+            &claim_plan.general_value.receipt_id.bytes(),
+            &mint_data_id.bytes(),
+            &principal_lamports.to_le_bytes(),
+            &principal_before_lamports.to_le_bytes(),
+            &principal_after_lamports.to_le_bytes(),
+            &mint_donation.to_le_bytes(),
+            &mint_after.to_le_bytes(),
+            &vault_before.to_le_bytes(),
+            &vault_after.to_le_bytes(),
+            rent_refund_owner.as_ref(),
+            neutral_lamport_sink.as_ref(),
+        ]);
+        require_live(id)?;
+        let postwrite = AuthenticatedProductMarketClaimMintPostwriteV2 {
+            id,
+            accepted_receipt_id: accepted.receipt_id(),
+            claim_plan_authentication_id: claim_plan.id,
+            claim_release_receipt_id: claim_release.receipt_id(),
+            claim_programdata_id: claim_release.token_programdata(),
+            claim_loader_receipt_id: claim_release.loader_receipt_id(),
+            general_value_authentication_id: claim_plan.general_value.receipt_id,
+            mint_data_id,
+            founder_creation_receipt_id: self.creation.id(),
+            founder_preauthorization_id: preauthorization.id(),
+            foundation_steps_id: self.creation.foundation_steps_id(),
+            market_binding_id: binding_id,
+            foundation_schedule_id: schedule_id.content_id(),
+            foundation_graph_id: graph_id.content_id(),
+            slot,
+            account_id,
+            principal_lamports,
+            principal_before_lamports,
+            principal_after_lamports,
+            minimum_donation_lamports,
+            vault_observed_balance_lamports: vault_after,
+            mint_observed_balance_lamports: mint_after,
+            foundation_vault_account: *foundation_vault.key,
+            rent_refund_owner,
+            neutral_lamport_sink,
+            claim_token_program: *claim_token_program.key,
+            foundation_vault: foundation_vault.clone(),
+            mint: outcome_mint.clone(),
+        };
+        let next_root =
+            self.record_foundation_step(root, postwrite, successor_output, rebound_output)?;
+        self.accepted_claim_mints[usize::from(outcome)] = Some(accepted);
+        if self.claim_mint_plan.is_none() {
+            self.claim_mint_plan = Some(claim_plan.plan);
+        }
+        Ok(next_root)
+    }
+
+    /// Create one active release-selected outcome custody and consume its
+    /// hostile postwrite into the next canonical Product slot.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_next_outcome_custody_v1<'next>(
+        &mut self,
+        root: AuthenticatedMarketLifecycleRootV2<'_>,
+        custody_plan: &AuthenticatedCurrentOutcomeCustodyFoundationPlanV1,
+        claim_release: AuthenticatedClaimIssuanceReleaseV1,
+        foundation_vault: &AccountInfo<'info>,
+        custody: &AccountInfo<'info>,
+        collateral_mint: &AccountInfo<'info>,
+        outcome_mint: &AccountInfo<'info>,
+        collateral_token_program: &AccountInfo<'info>,
+        system_program: &AccountInfo<'info>,
+        rent_sysvar: &AccountInfo<'info>,
+        successor_output: &mut MarketLifecycleRootV2,
+        rebound_output: &'next mut MarketLifecycleRootAccountV2,
+    ) -> Outcome<AuthenticatedMarketLifecycleRootV2<'next>> {
+        require_system_program(system_program)?;
+        self.schedule
+            .validate()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        self.graph
+            .validate(self.schedule)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let slot = self.creation.next_foundation_slot_v3()?;
+        let outcome = match slot {
+            MarketFoundationSlotV3::OutcomeCustody(outcome) => outcome,
+            _ => return Err(Refusal::Adapter(ClutchError::MismatchedState)),
+        };
+        require(
+            outcome < self.schedule.outcome_count,
+            ClutchError::MismatchedState,
+        )?;
+        let step = custody_plan
+            .plan
+            .step(outcome)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let accepted_mint = self.accepted_claim_mints[usize::from(outcome)]
+            .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+        require(
+            self.accepted_outcome_custodies[usize::from(outcome)].is_none()
+                && accepted_mint.step().outcome() == outcome
+                && accepted_mint.step().market_instance_id() == step.market_instance_id()
+                && accepted_mint.step().mint() == step.outcome_mint()
+                && accepted_mint.step().mint_authority() == step.owner_authority()
+                && self
+                    .outcome_custody_plan
+                    .as_ref()
+                    .map_or(true, |current| current == &custody_plan.plan)
+                && accepted_mint.step().binding_id() == claim_release.bound().binding_id(),
+            ClutchError::MismatchedState,
+        )?;
+        let creation = step.creation();
+        let state = root.state();
+        let capital = state.capital();
+        let preauthorization = self.creation.preauthorization();
+        let binding_id = state
+            .binding_ref()
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let schedule_id = self
+            .schedule
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let graph_id = self
+            .graph
+            .id(self.schedule)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let index = slot
+            .index()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let account_id = self.graph.account_ids[index];
+        let principal_lamports = self.schedule.slot_principal_lamports[index];
+        let principal_before_lamports = capital.principal_remaining_lamports;
+        let principal_after_lamports = principal_before_lamports
+            .checked_sub(principal_lamports)
+            .ok_or(ClutchError::Arithmetic)?;
+        let minimum_donation_lamports = capital.vault_current_donation_lamports;
+        let rent_refund_owner = Pubkey::new_from_array(capital.rent_refund_owner.bytes());
+        let neutral_lamport_sink =
+            Pubkey::new_from_array(capital.neutral_lamport_sink.bytes());
+        let market = preauthorization.market_instance_id().bytes();
+        let generation = preauthorization.generation();
+        let expected_runtime = custody_plan.market_runtime_account;
+        let expected_mint = seeds::outcome_mint_v2_pda(self.program_id, &market, outcome).0;
+        let (expected_custody, custody_bump) =
+            seeds::outcome_custody_v1_pda(self.program_id, &market, generation, outcome);
+        let (expected_vault, vault_bump) =
+            seeds::product_market_foundation_vault_pda(self.program_id, &market, generation);
+        let claim_binding = claim_release.bound();
+        let claim_token_program = claim_binding.binding().token_program;
+        require(
+            root.is_writable()
+                && root.account() == *self.root_account.key
+                && root.owner_program() == *self.program_id
+                && state.phase() == MarketLifecyclePhaseV2::Founding
+                && state.binding_ref() == self.creation.market_binding()
+                && binding_id
+                    == self
+                        .creation
+                        .market_binding()
+                        .id()
+                        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                && schedule_id.content_id() == preauthorization.foundation_schedule_id()
+                && graph_id.content_id() == preauthorization.foundation_graph_id()
+                && graph_id.content_id() == custody_plan.graph_id
+                && custody_plan.plan.market_instance_id().bytes() == market
+                && custody_plan.plan.generation() == generation
+                && custody_plan.plan.outcome_count() == self.schedule.outcome_count
+                && custody_plan.plan.owner_authority().bytes() == expected_runtime.to_bytes()
+                && step.outcome_mint().bytes() == expected_mint.to_bytes()
+                && step.outcome_custody().bytes() == expected_custody.to_bytes()
+                && account_id.bytes() == expected_custody.to_bytes()
+                && custody.key == &expected_custody
+                && outcome_mint.key == &expected_mint
+                && collateral_token_program.key.to_bytes() == creation.token_program.bytes()
+                && collateral_mint.key.to_bytes() == creation.mint.bytes()
+                && creation.owner_authority.bytes() == expected_runtime.to_bytes()
+                && claim_binding.binding_id().bytes()
+                    == state.binding_ref().claim_issuance_binding_id.bytes()
+                && outcome_mint.owner.to_bytes() == claim_token_program.bytes()
+                && claim_release.receipt_id() != CollateralId::ZERO
+                && custody_plan.value.receipt_id != CollateralId::ZERO
+                && custody_plan.value.deployment.release() == custody_plan.value.liabilities.bound.release()
+                && custody_plan.value.deployment.release_id()
+                    == custody_plan
+                        .value
+                        .liabilities
+                        .bound
+                        .release()
+                        .id()
+                        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?
+                && collateral_token_program.key.to_bytes()
+                    == custody_plan.value.deployment.release().token_program.bytes()
+                && principal_lamports != 0
+                && *foundation_vault.key == expected_vault
+                && *foundation_vault.key == preauthorization.foundation_vault_account()
+                && foundation_vault.key != custody.key
+                && custody.key != collateral_mint.key
+                && custody.key != outcome_mint.key
+                && custody.key != collateral_token_program.key
+                && custody.key != &expected_runtime
+                && custody.key != &rent_refund_owner
+                && custody.key != &neutral_lamport_sink,
+            ClutchError::MismatchedState,
+        )?;
+        require_system_vault(foundation_vault)?;
+        require_unallocated_system_account(custody)?;
+        require(
+            !collateral_token_program.is_signer
+                && !collateral_token_program.is_writable
+                && collateral_token_program.executable
+                && !collateral_mint.is_signer
+                && !collateral_mint.is_writable
+                && !collateral_mint.executable
+                && !outcome_mint.is_signer
+                && !outcome_mint.is_writable
+                && !outcome_mint.executable,
+            ClutchError::MismatchedState,
+        )?;
+        let collateral_mint_data = collateral_mint
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let collateral_mint_observation = admit_collateral_mint_v2(
+            custody_plan.value.liabilities.bound,
+            current_collateral_runtime_view(collateral_mint, &collateral_mint_data),
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MintNotAdmitted))?;
+        drop(collateral_mint_data);
+        require(
+            collateral_mint_observation.address.bytes() == collateral_mint.key.to_bytes(),
+            ClutchError::MismatchedState,
+        )?;
+        let outcome_mint_observation = token::admit_mint(
+            outcome_mint,
+            &token::MintPolicy::outcome(*outcome_mint.key, expected_runtime),
+        )
+        .map_err(Refusal::from)?;
+        require(
+            outcome_mint_observation.supply == 0
+                && outcome_mint_observation.decimals == 0
+                && outcome_mint_observation.mint_authority == Some(expected_runtime.to_bytes())
+                && outcome_mint_observation.freeze_authority.is_none(),
+            ClutchError::MintNotAdmitted,
+        )?;
+
+        let rent = read_rent(rent_sysvar)?;
+        require(
+            principal_lamports == rent.minimum_balance(usize::from(creation.account_bytes))?,
+            ClutchError::MismatchedState,
+        )?;
+        let vault_before = foundation_vault.lamports();
+        let observed_vault_donation = vault_before
+            .checked_sub(principal_before_lamports)
+            .ok_or(ClutchError::MismatchedState)?;
+        let vault_after = principal_after_lamports
+            .checked_add(observed_vault_donation)
+            .ok_or(ClutchError::Arithmetic)?;
+        let custody_donation = custody.lamports();
+        let custody_after = custody_donation
+            .checked_add(principal_lamports)
+            .ok_or(ClutchError::Arithmetic)?;
+        require(
+            observed_vault_donation >= minimum_donation_lamports,
+            ClutchError::MismatchedState,
+        )?;
+        let generation_bytes = generation.to_le_bytes();
+        let vault_bump_seed = [vault_bump];
+        invoke_current_founder_transfer(
+            foundation_vault,
+            custody,
+            system_program,
+            principal_lamports,
+            &[
+                seeds::SEED_PRODUCT_MARKET_FOUNDATION_VAULT,
+                &market,
+                &generation_bytes,
+                &vault_bump_seed,
+            ],
+        )?;
+        require(
+            foundation_vault.lamports() == vault_after && custody.lamports() == custody_after,
+            ClutchError::SeriesCustodyDeltaMismatch,
+        )?;
+        let outcome_seed = [outcome];
+        let custody_bump_seed = [custody_bump];
+        allocate_assign_current_founder_account(
+            collateral_token_program.key,
+            custody,
+            system_program,
+            usize::from(creation.account_bytes),
+            &[
+                seeds::SEED_OUTCOME_CUSTODY_V1,
+                &market,
+                &generation_bytes,
+                &outcome_seed,
+                &custody_bump_seed,
+            ],
+        )?;
+        invoke_current_outcome_custody_initialization_v1(
+            creation,
+            custody,
+            collateral_mint,
+            collateral_token_program,
+        )?;
+        let custody_data = custody
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let accepted = accept_outcome_custody_founding_step_v1(
+            step,
+            current_collateral_runtime_view(custody, &custody_data),
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let custody_data_id = hashv(&[
+            PRODUCT_CURRENT_OUTCOME_CUSTODY_POSTWRITE_DOMAIN_V1,
+            custody.key.as_ref(),
+            &custody_data,
+        ]);
+        drop(custody_data);
+        require(
+            accepted.step() == step
+                && custody.lamports() == custody_after
+                && *custody.owner == *collateral_token_program.key,
+            ClutchError::MismatchedState,
+        )?;
+        let slot_index = u64::try_from(index).map_err(|_| ClutchError::Arithmetic)?;
+        let id = hashv(&[
+            PRODUCT_CURRENT_OUTCOME_CUSTODY_POSTWRITE_DOMAIN_V1,
+            self.program_id.as_ref(),
+            &self.creation.id().bytes(),
+            &preauthorization.id().bytes(),
+            &self.creation.foundation_steps_id().bytes(),
+            &binding_id.bytes(),
+            &schedule_id.bytes(),
+            &graph_id.bytes(),
+            &slot_index.to_le_bytes(),
+            &[outcome],
+            custody.key.as_ref(),
+            outcome_mint.key.as_ref(),
+            collateral_mint.key.as_ref(),
+            collateral_token_program.key.as_ref(),
+            &accepted.receipt_id().bytes(),
+            &custody_plan.id.bytes(),
+            &custody_plan.value.receipt_id.bytes(),
+            &custody_plan.value.deployment.receipt_id().bytes(),
+            &claim_release.receipt_id().bytes(),
+            &custody_data_id.bytes(),
+            &principal_lamports.to_le_bytes(),
+            &principal_before_lamports.to_le_bytes(),
+            &principal_after_lamports.to_le_bytes(),
+            &custody_donation.to_le_bytes(),
+            &custody_after.to_le_bytes(),
+            &vault_before.to_le_bytes(),
+            &vault_after.to_le_bytes(),
+            rent_refund_owner.as_ref(),
+            neutral_lamport_sink.as_ref(),
+        ]);
+        require_live(id)?;
+        let postwrite = AuthenticatedProductMarketOutcomeCustodyPostwriteV1 {
+            id,
+            accepted_receipt_id: accepted.receipt_id(),
+            custody_plan_authentication_id: custody_plan.id,
+            collateral_value_authentication_id: custody_plan.value.receipt_id,
+            collateral_deployment_receipt_id: custody_plan.value.deployment.receipt_id(),
+            claim_release_receipt_id: claim_release.receipt_id(),
+            custody_data_id,
+            founder_creation_receipt_id: self.creation.id(),
+            founder_preauthorization_id: preauthorization.id(),
+            foundation_steps_id: self.creation.foundation_steps_id(),
+            market_binding_id: binding_id,
+            foundation_schedule_id: schedule_id.content_id(),
+            foundation_graph_id: graph_id.content_id(),
+            slot,
+            account_id,
+            principal_lamports,
+            principal_before_lamports,
+            principal_after_lamports,
+            minimum_donation_lamports,
+            vault_observed_balance_lamports: vault_after,
+            custody_observed_balance_lamports: custody_after,
+            foundation_vault_account: *foundation_vault.key,
+            rent_refund_owner,
+            neutral_lamport_sink,
+            collateral_token_program: *collateral_token_program.key,
+            foundation_vault: foundation_vault.clone(),
+            custody: custody.clone(),
+        };
+        let next_root =
+            self.record_foundation_step(root, postwrite, successor_output, rebound_output)?;
+        self.accepted_outcome_custodies[usize::from(outcome)] = Some(accepted);
+        if self.outcome_custody_plan.is_none() {
+            self.outcome_custody_plan = Some(custody_plan.plan);
+        }
+        Ok(next_root)
+    }
+
     /// Consume one exact family-private physical postwrite, advance RootV2,
     /// persist it, and hostile-reopen it before another slot can be consumed.
-    pub(crate) fn record_foundation_step<'next, P>(
+    fn record_foundation_step<'next, P>(
         &mut self,
         root: AuthenticatedMarketLifecycleRootV2<'_>,
         postwrite: P,
@@ -4521,6 +7458,58 @@ impl<'outer, 'info> CurrentProductMarketFoundationCursorV4<'outer, 'info> {
         link_activation_output: &mut SeriesMarketLinkV2,
         link_activation_rebound: &mut SeriesMarketLinkAccountV2,
     ) -> Outcome<AuthenticatedProductSeriesActivationCompletionV4> {
+        require(
+            self.market_liability_plan_id != ContentId::ZERO
+                && self.hoard_slot_receipt_id != ContentId::ZERO
+                && self.claim_ledger_slot_receipt_id != ContentId::ZERO
+                && self.accepted_market_liability.is_some(),
+            ClutchError::MismatchedState,
+        )?;
+        let active_outcomes = usize::from(self.schedule.outcome_count);
+        let mut outcome_index = 0usize;
+        while outcome_index < MARKET_FOUNDATION_MAX_OUTCOMES_V3 {
+            let active = outcome_index < active_outcomes;
+            require(
+                active == self.accepted_claim_mints[outcome_index].is_some()
+                    && active == self.accepted_outcome_custodies[outcome_index].is_some(),
+                ClutchError::MismatchedState,
+            )?;
+            outcome_index = outcome_index
+                .checked_add(1)
+                .ok_or(ClutchError::Arithmetic)?;
+        }
+        let (bound, hoard_custody, liability_plan) = self
+            .market_core_liability_plan
+            .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+        let claim_mint_plan = self
+            .claim_mint_plan
+            .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+        let outcome_custody_plan = self
+            .outcome_custody_plan
+            .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+        let accepted_liability = self
+            .accepted_market_liability
+            .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+        let market_core = compose_market_core_founding_v4(
+            bound,
+            liability_plan,
+            hoard_custody,
+            claim_mint_plan,
+            outcome_custody_plan,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let accepted_market_core = accept_market_core_founding_v4(
+            market_core,
+            accepted_liability,
+            self.accepted_claim_mints,
+            self.accepted_outcome_custodies,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        require(
+            accepted_market_core.receipt_id().bytes()
+                == self.creation.accepted_market_core_receipt_id().bytes(),
+            ClutchError::MismatchedState,
+        )?;
         let preauthorization = self.creation.preauthorization();
         let series = preauthorization.series_plan_id();
         let ordinal = preauthorization.ordinal();
@@ -4924,6 +7913,15 @@ where
         root_account,
         schedule,
         graph,
+        market_liability_plan_id: ContentId::ZERO,
+        market_core_liability_plan: None,
+        claim_mint_plan: None,
+        outcome_custody_plan: None,
+        hoard_slot_receipt_id: ContentId::ZERO,
+        claim_ledger_slot_receipt_id: ContentId::ZERO,
+        accepted_market_liability: None,
+        accepted_claim_mints: [None; MARKET_FOUNDATION_MAX_OUTCOMES_V3],
+        accepted_outcome_custodies: [None; MARKET_FOUNDATION_MAX_OUTCOMES_V3],
     };
     let completion = compose_foundation(cursor, initial_root)?;
     require(
@@ -6633,5 +9631,106 @@ mod source_contract_tests {
         assert!(RefusingOwner
             .consume_series_dealer_terminal_owner_v2(dealer_terminal_observation())
             .is_err());
+    }
+
+    #[test]
+    fn current_retained_preallocation_partition_is_exact() {
+        for slot in [
+            MarketFoundationSlotV3::FailureReplay,
+            MarketFoundationSlotV3::FailureIntervalWork,
+            MarketFoundationSlotV3::FailureIntervalHistory,
+            MarketFoundationSlotV3::ResolutionV5,
+            MarketFoundationSlotV3::FractionalPolicy,
+            MarketFoundationSlotV3::FractionalLedger,
+            MarketFoundationSlotV3::ProductReplayAnchor,
+        ] {
+            assert!(is_retained_current_foundation_slot_v3(slot));
+        }
+        for slot in [
+            MarketFoundationSlotV3::LifecycleRoot,
+            MarketFoundationSlotV3::MarketBinding,
+            MarketFoundationSlotV3::MarketRuntime,
+            MarketFoundationSlotV3::Hoard,
+            MarketFoundationSlotV3::ClaimLedger,
+            MarketFoundationSlotV3::FailureAdmissionRoot,
+            MarketFoundationSlotV3::FailureRuntimeRoot,
+            MarketFoundationSlotV3::HoardCollateralVault,
+            MarketFoundationSlotV3::OutcomeMint(0),
+            MarketFoundationSlotV3::OutcomeCustody(0),
+        ] {
+            assert!(!is_retained_current_foundation_slot_v3(slot));
+        }
+    }
+
+    #[test]
+    fn current_outcome_custody_orders_debit_before_external_postwrite() {
+        let source = include_str!("product_series_current.rs");
+        let body = source
+            .split_once("pub(crate) fn record_next_outcome_custody_v1<'next>(")
+            .expect("current outcome custody writer")
+            .1
+            .split_once("/// Consume one exact family-private physical postwrite")
+            .expect("bounded current outcome custody writer")
+            .0;
+        let transfer = body
+            .find("invoke_current_founder_transfer(")
+            .expect("FoundationVault debit");
+        let allocation = body
+            .find("allocate_assign_current_founder_account(")
+            .expect("release-selected allocation");
+        let initialization = body
+            .find("invoke_current_outcome_custody_initialization_v1(")
+            .expect("release-selected initialization");
+        let acceptance = body
+            .find("accept_outcome_custody_founding_step_v1(")
+            .expect("hostile custody acceptance");
+        let product = body
+            .find("self.record_foundation_step(root, postwrite")
+            .expect("Product cursor consumption");
+        assert!(transfer < allocation);
+        assert!(allocation < initialization);
+        assert!(initialization < acceptance);
+        assert!(acceptance < product);
+        assert!(body.contains("claim_binding.binding_id().bytes()"));
+        assert!(body.contains("custody_plan.value.deployment.receipt_id()"));
+        assert!(body.contains("principal_lamports == rent.minimum_balance"));
+    }
+
+    #[test]
+    fn current_claim_mint_orders_debit_before_token_postwrite() {
+        let source = include_str!("product_series_current.rs");
+        let body = source
+            .split_once("pub(crate) fn record_next_claim_mint_v2<'next>(")
+            .expect("current claim mint writer")
+            .1
+            .split_once("/// Create one active release-selected outcome custody")
+            .expect("bounded current claim mint writer")
+            .0;
+        let transfer = body
+            .find("invoke_current_founder_transfer(")
+            .expect("FoundationVault debit");
+        let allocation = body
+            .find("allocate_assign_current_founder_account(")
+            .expect("Token-2022 allocation");
+        let initialization = body
+            .find("token::initialize_outcome_mint(")
+            .expect("Token-2022 mint initialization");
+        let admission = body
+            .find("token::admit_mint(")
+            .expect("hostile Token-2022 admission");
+        let acceptance = body
+            .find("accept_claim_mint_founding_step_v2(")
+            .expect("claim-release acceptance");
+        let product = body
+            .find("self.record_foundation_step(root, postwrite")
+            .expect("Product cursor consumption");
+        assert!(transfer < allocation);
+        assert!(allocation < initialization);
+        assert!(initialization < admission);
+        assert!(admission < acceptance);
+        assert!(acceptance < product);
+        assert!(body.contains("claim_release.token_programdata()"));
+        assert!(body.contains("claim_release.loader_receipt_id()"));
+        assert!(body.contains("principal_lamports == rent.minimum_balance"));
     }
 }
