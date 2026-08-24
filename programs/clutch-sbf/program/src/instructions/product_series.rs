@@ -1102,6 +1102,7 @@ pub struct AuthenticatedSourceResolutionInputV3 {
     successful_evaluation_handoff_id: ContentId,
     occurrence_account: clutch_source_plane_v3_runtime::RuntimeKey,
     result_account: clutch_source_plane_v3_runtime::RuntimeKey,
+    result_account_data_id: ContentId,
     result_account_authentication_id: ContentId,
     work_receipt_authentication_id: ContentId,
     failure_policy_binding_id: ContentId,
@@ -1160,6 +1161,12 @@ impl AuthenticatedSourceResolutionInputV3 {
         self.result_account_authentication_id
     }
 
+    /// Digest of the exact StatisticResult account bytes authenticated by the
+    /// successful Source handoff.
+    pub const fn result_account_data_id(self) -> ContentId {
+        self.result_account_data_id
+    }
+
     /// Exact immutable Source work-receipt authentication.
     pub const fn work_receipt_authentication_id(self) -> ContentId {
         self.work_receipt_authentication_id
@@ -1216,6 +1223,7 @@ pub fn authenticate_source_resolution_input_v3(
             && source.statistic_key_id() == occurrence.statistic_key_id()
             && source.clock_policy_id() == handoff.clock_policy_id()
             && source.clock() == handoff.clock()
+            && handoff.result_account_data_id() != ContentId::ZERO
             && persisted.source_policy_handoff_join_id() == source.id(),
         ClutchError::MismatchedState,
     )?;
@@ -1230,6 +1238,7 @@ pub fn authenticate_source_resolution_input_v3(
             &occurrence.id().bytes(),
             &source.occurrence_account().bytes(),
             &source.result_or_absence_account().bytes(),
+            &handoff.result_account_data_id().bytes(),
             &handoff.result_account_authentication_id().bytes(),
             &source.work_receipt_authentication_id().bytes(),
             &handoff.failure_policy_binding_id().bytes(),
@@ -1250,6 +1259,7 @@ pub fn authenticate_source_resolution_input_v3(
         successful_evaluation_handoff_id: handoff.id(),
         occurrence_account: source.occurrence_account(),
         result_account: source.result_or_absence_account(),
+        result_account_data_id: handoff.result_account_data_id(),
         result_account_authentication_id: handoff.result_account_authentication_id(),
         work_receipt_authentication_id: source.work_receipt_authentication_id(),
         failure_policy_binding_id: handoff.failure_policy_binding_id(),

@@ -324,6 +324,36 @@ impl AuthenticatedSourceNoReopenTerminalV1 {
         self.body.resolution_v5_terminal_postwrite_id()
     }
 
+    /// Exact private Source resolution input selected by this terminal.
+    pub const fn source_resolution_input_id(self) -> ContentId {
+        self.body.source_resolution_input_id
+    }
+
+    /// Mutable family selected for permanent close.
+    pub const fn family(self) -> SourceReopenFamilyV1 {
+        self.body.family()
+    }
+
+    /// Exact open-lineage account preimage authenticated before terminal mint.
+    pub const fn expected_lineage_state_id(self) -> ContentId {
+        self.body.expected_lineage_state_id()
+    }
+
+    /// Exact lineage authentication retained before terminal mint.
+    pub const fn lineage_authentication_id(self) -> ContentId {
+        self.body.lineage_authentication_id()
+    }
+
+    /// Durable lineage account selected for close.
+    pub const fn lineage_account(self) -> RuntimeKey {
+        self.body.lineage_account()
+    }
+
+    /// Exact active generation account selected for close.
+    pub const fn target_account(self) -> RuntimeKey {
+        self.body.target_account()
+    }
+
     /// Complete owner/PDA/body authentication identity.
     pub const fn id(self) -> ContentId {
         self.authentication_id

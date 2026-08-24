@@ -1309,6 +1309,7 @@ pub struct SuccessfulEvaluationHandoffV1 {
     failure_policy_binding_id: ContentId,
     occurrence: OccurrenceSourceReceiptV1,
     window_evidence_id: ContentId,
+    result_account_data_id: ContentId,
     result_account_authentication_id: ContentId,
     result: StatisticResultV3,
     clock_policy_id: ContentId,
@@ -1370,6 +1371,7 @@ impl SuccessfulEvaluationHandoffV1 {
             failure_policy_binding_id,
             occurrence,
             window_evidence_id: evidence.id(),
+            result_account_data_id: result_account.account_data_id(),
             result_account_authentication_id: result_account.id(),
             result,
             clock_policy_id,
@@ -1396,6 +1398,12 @@ impl SuccessfulEvaluationHandoffV1 {
     /// Exact persisted result-account owner/PDA/body/Summary/lineage receipt.
     pub const fn result_account_authentication_id(self) -> ContentId {
         self.result_account_authentication_id
+    }
+
+    /// Digest of the exact globally tagged StatisticResult account bytes
+    /// authenticated when this successful handoff was minted.
+    pub const fn result_account_data_id(self) -> ContentId {
+        self.result_account_data_id
     }
 
     /// Canonical successful StatisticResult; its constructor provenance is this receipt.
