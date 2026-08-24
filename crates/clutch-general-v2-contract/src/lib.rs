@@ -935,10 +935,14 @@ pub const TREASURY_LEDGER_ACCOUNT_VERSION_V2: u8 = 2;
 pub const TREASURY_LEDGER_ACCOUNT_BYTES_V2: usize = 196;
 /// Compact fee retirement/terminal account family tag.
 pub const FEE_RETIREMENT_ACCOUNT_TAG: u8 = 0xb9;
+/// Streaming owner-finalization accumulator version.
+pub const FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_VERSION: u8 = 1;
 /// Durable candidate-wide closure-manifest version.
 pub const FEE_RETIREMENT_CLOSURE_MANIFEST_ACCOUNT_VERSION: u8 = 2;
 /// Durable candidate-wide fee-terminal version.
 pub const FEE_RETIREMENT_TERMINAL_ACCOUNT_VERSION: u8 = 3;
+/// Exact rent-owned streaming accumulator width.
+pub const FEE_RETIREMENT_ACCOUNT_BYTES_V1: usize = 596;
 /// Exact rent-owned closure-manifest width.
 pub const FEE_RETIREMENT_ACCOUNT_BYTES_V2: usize = 580;
 /// Exact rent-owned terminal-receipt width.
@@ -1032,7 +1036,7 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this standalone pure crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 40] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 45] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -1242,6 +1246,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 40] = [
         tag: INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG,
         version: INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/IndexedSettlementRootV1AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: FEE_RETIREMENT_ACCOUNT_TAG,
+        version: FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/FeeRetirementAccumulatorV1AccountV1",
     },
     AccountAllocationV1 {
         tag: FEE_RETIREMENT_ACCOUNT_TAG,

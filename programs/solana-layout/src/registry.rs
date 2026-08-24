@@ -619,7 +619,7 @@ pub const GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG: u8 = 0xb9;
 pub const GENERAL_V2_FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_FEE_CLOSURE_MANIFEST_ACCOUNT_VERSION: u8 = 2;
 pub const GENERAL_V2_FEE_TERMINAL_ACCOUNT_VERSION: u8 = 3;
-pub const GENERAL_V2_FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_BYTES: usize = 708;
+pub const GENERAL_V2_FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_BYTES: usize = 596;
 pub const GENERAL_V2_FEE_CLOSURE_MANIFEST_ACCOUNT_BYTES: usize = 580;
 pub const GENERAL_V2_FEE_TERMINAL_ACCOUNT_BYTES: usize = 596;
 /// First Dealer CoveredDealer selection attachment version.
@@ -1985,6 +1985,33 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-indexed-settlement-root-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-fee-retirement-accumulator-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_FEE_CLOSURE_MANIFEST_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-fee-closure-manifest-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG,
+            version: GENERAL_V2_FEE_TERMINAL_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-fee-terminal-v3-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
