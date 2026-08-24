@@ -226,6 +226,10 @@ pub struct OwnerSettlementExpectationV1 {
     pub expected_buy_price_units: u128,
     /// Aggregate consideration this owner earns.
     pub expected_sell_price_units: u128,
+    /// Explicit presence of the buy aggregate, including zero.
+    pub expected_buy_price_units_present: bool,
+    /// Explicit presence of the sell aggregate, including zero.
+    pub expected_sell_price_units_present: bool,
     /// Already-selected, owner-scoped fee in whole collateral atoms.
     pub selected_fee_atoms: Amount,
     /// Exact cash atoms encumbered across this owner's buy reservations.
@@ -246,6 +250,8 @@ impl OwnerSettlementExpectationV1 {
         expected_slice_count: 0,
         expected_buy_price_units: 0,
         expected_sell_price_units: 0,
+        expected_buy_price_units_present: false,
+        expected_sell_price_units_present: false,
         selected_fee_atoms: 0,
         reserved_cash_atoms: 0,
     };
@@ -277,8 +283,8 @@ impl OwnerSettlementExpectationV1 {
             || self.expected_slice_count == 0
             || (self.expected_buy_order_mask & self.expected_sell_order_mask) != 0
             || (self.expected_buy_order_mask == 0 && self.expected_sell_order_mask == 0)
-            || (self.expected_buy_order_mask != 0 && self.expected_buy_price_units == 0)
-            || (self.expected_sell_order_mask != 0 && self.expected_sell_price_units == 0)
+            || ((self.expected_buy_order_mask != 0) != self.expected_buy_price_units_present)
+            || ((self.expected_sell_order_mask != 0) != self.expected_sell_price_units_present)
         {
             return Err(Error::InvalidExpectation);
         }
@@ -650,20 +656,35 @@ impl OwnerSettlementAccumulatorV1 {
             return Err(Error::InvalidExpectation);
         }
         let mut cursor = 0_usize;
+        let market = read_key(input, &mut cursor)?;
+        let epoch = read_key(input, &mut cursor)?;
+        let candidate = read_key(input, &mut cursor)?;
+        let owner = read_key(input, &mut cursor)?;
+        let owner_order_set_digest = read_key(input, &mut cursor)?;
+        let price_scale = read_u64(input, &mut cursor)?;
+        let expected_buy_order_mask = read_u64(input, &mut cursor)?;
+        let expected_sell_order_mask = read_u64(input, &mut cursor)?;
+        let expected_slice_count = read_u16(input, &mut cursor)?;
+        let expected_buy_price_units = read_u128(input, &mut cursor)?;
+        let expected_sell_price_units = read_u128(input, &mut cursor)?;
+        let selected_fee_atoms = read_u64(input, &mut cursor)?;
+        let reserved_cash_atoms = read_u64(input, &mut cursor)?;
         let expectation = OwnerSettlementExpectationV1 {
-            market: read_key(input, &mut cursor)?,
-            epoch: read_key(input, &mut cursor)?,
-            candidate: read_key(input, &mut cursor)?,
-            owner: read_key(input, &mut cursor)?,
-            owner_order_set_digest: read_key(input, &mut cursor)?,
-            price_scale: read_u64(input, &mut cursor)?,
-            expected_buy_order_mask: read_u64(input, &mut cursor)?,
-            expected_sell_order_mask: read_u64(input, &mut cursor)?,
-            expected_slice_count: read_u16(input, &mut cursor)?,
-            expected_buy_price_units: read_u128(input, &mut cursor)?,
-            expected_sell_price_units: read_u128(input, &mut cursor)?,
-            selected_fee_atoms: read_u64(input, &mut cursor)?,
-            reserved_cash_atoms: read_u64(input, &mut cursor)?,
+            market,
+            epoch,
+            candidate,
+            owner,
+            owner_order_set_digest,
+            price_scale,
+            expected_buy_order_mask,
+            expected_sell_order_mask,
+            expected_slice_count,
+            expected_buy_price_units,
+            expected_sell_price_units,
+            expected_buy_price_units_present: expected_buy_order_mask != 0,
+            expected_sell_price_units_present: expected_sell_order_mask != 0,
+            selected_fee_atoms,
+            reserved_cash_atoms,
         };
         let value = Self {
             expectation,

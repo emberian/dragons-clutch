@@ -1009,6 +1009,8 @@ mod tests {
             expected_slice_count: 1,
             expected_buy_price_units: buy_units,
             expected_sell_price_units: sell_units,
+            expected_buy_price_units_present: buy_mask != 0,
+            expected_sell_price_units_present: sell_mask != 0,
             selected_fee_atoms: 0,
             reserved_cash_atoms: reserved,
         };

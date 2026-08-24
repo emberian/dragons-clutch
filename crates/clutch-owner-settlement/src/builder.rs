@@ -111,7 +111,6 @@ pub fn build_owner_settlement_book_v1(
     while order_at < usize::from(order_len) {
         let order = orders[order_at];
         if order.owner == [0; 32]
-            || order.consideration_price_units == 0
             || order.slice_count == 0
             || usize::from(order.order_index) >= MAX_ORDERS
             || (order.side == SettlementSideV1::Sell && order.reserved_cash_atoms != 0)
@@ -145,6 +144,8 @@ pub fn build_owner_settlement_book_v1(
                 expected_slice_count: 0,
                 expected_buy_price_units: 0,
                 expected_sell_price_units: 0,
+                expected_buy_price_units_present: false,
+                expected_sell_price_units_present: false,
                 selected_fee_atoms: 0,
                 reserved_cash_atoms: 0,
             };
@@ -157,6 +158,7 @@ pub fn build_owner_settlement_book_v1(
         match order.side {
             SettlementSideV1::Buy => {
                 rows[slot].expected_buy_order_mask |= bit;
+                rows[slot].expected_buy_price_units_present = true;
                 rows[slot].expected_buy_price_units = rows[slot]
                     .expected_buy_price_units
                     .checked_add(order.consideration_price_units)
@@ -168,6 +170,7 @@ pub fn build_owner_settlement_book_v1(
             }
             SettlementSideV1::Sell => {
                 rows[slot].expected_sell_order_mask |= bit;
+                rows[slot].expected_sell_price_units_present = true;
                 rows[slot].expected_sell_price_units = rows[slot]
                     .expected_sell_price_units
                     .checked_add(order.consideration_price_units)

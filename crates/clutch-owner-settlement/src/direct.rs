@@ -74,6 +74,9 @@ pub struct AuthenticatedOrderMembershipV1 {
     pub entitled_units: Amount,
     /// Exact entitled consideration across every selected slice.
     pub entitled_consideration_price_units: u128,
+    /// True only when the selected consideration was explicitly authenticated,
+    /// including a legitimate zero-price selection.
+    pub entitled_consideration_present: bool,
 }
 
 impl AuthenticatedOrderMembershipV1 {
@@ -97,7 +100,7 @@ impl AuthenticatedOrderMembershipV1 {
             || self.outcome_count < 2
             || usize::from(self.outcome_count) > MAX_OUTCOMES
             || self.entitled_units == 0
-            || self.entitled_consideration_price_units == 0
+            || !self.entitled_consideration_present
         {
             return Err(Error::InvalidOrder);
         }
@@ -162,6 +165,11 @@ pub struct AuthenticatedReservationV1 {
     pub entitled_consideration_price_units: u128,
     /// Exact consideration already recorded by the owner row.
     pub accounted_consideration_price_units: u128,
+    /// True only when entitlement consideration was explicitly authenticated.
+    pub entitled_consideration_present: bool,
+    /// True exactly after the accounting cursor owns an explicit value,
+    /// including zero.
+    pub accounted_consideration_present: bool,
     /// Whether the account meta is writable.
     pub writable: bool,
 }
@@ -192,7 +200,7 @@ impl AuthenticatedReservationV1 {
             || self.outcome_count < 2
             || usize::from(self.outcome_count) > MAX_OUTCOMES
             || self.entitled_units == 0
-            || self.entitled_consideration_price_units == 0
+            || !self.entitled_consideration_present
             || self.consumed_units > self.entitled_units
             || self.accounted_units > self.entitled_units
             || self.accounted_consideration_price_units
@@ -207,7 +215,9 @@ impl AuthenticatedReservationV1 {
         let accounting_complete = self.accounted_units == self.entitled_units;
         let accounting_value_complete = self.accounted_consideration_price_units
             == self.entitled_consideration_price_units;
-        if accounting_complete != accounting_value_complete {
+        if accounting_complete != self.accounted_consideration_present
+            || (accounting_complete && !accounting_value_complete)
+        {
             return Err(Error::InvariantViolation);
         }
         let terminal = delivery_complete && accounting_complete;
@@ -220,8 +230,7 @@ impl AuthenticatedReservationV1 {
         }
         match self.side {
             SettlementSideV1::Buy => {
-                if self.initial_cash_atoms == 0
-                    || self.initial_internal != [0; MAX_OUTCOMES]
+                if self.initial_internal != [0; MAX_OUTCOMES]
                     || self.remaining_internal != [0; MAX_OUTCOMES]
                     || (!accounting_complete
                         && self.remaining_cash_atoms != self.initial_cash_atoms)
@@ -827,9 +836,10 @@ pub(crate) fn advance_reservation_accounting(
     let units_complete = next.accounted_units == next.entitled_units;
     let value_complete = next.accounted_consideration_price_units
         == next.entitled_consideration_price_units;
-    if units_complete != value_complete {
+    if units_complete && !value_complete {
         return Err(Error::InvariantViolation);
     }
+    next.accounted_consideration_present = units_complete;
     if units_complete && next.consumed_units == next.entitled_units {
         next.state = ReservationStateV1::Consumed;
     }

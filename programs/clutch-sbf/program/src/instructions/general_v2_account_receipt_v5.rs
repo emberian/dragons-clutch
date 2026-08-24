@@ -132,7 +132,7 @@ fn page_count_from_account_len(total: usize) -> Result<usize, ClutchError> {
     }
 }
 
-fn route_and_order(
+pub(crate) fn route_and_order(
     traversal: &dyn SettlementTraversalAccessV5,
     receipt: &SettlementReceiptAccountV5,
     owner: Id32,
@@ -227,7 +227,7 @@ fn select_unaccounted_end(
     Err(Refusal::Adapter(ClutchError::MismatchedState))
 }
 
-fn locate_order_slot(
+pub(crate) fn locate_order_slot(
     pages: &[AccountInfo<'_>],
     order_id: [u8; 32],
 ) -> Outcome<(OrderSlot, u16, u64)> {

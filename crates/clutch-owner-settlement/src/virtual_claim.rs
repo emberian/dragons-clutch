@@ -630,6 +630,8 @@ pub struct AuthenticatedVirtualReceiptAuthorityV1 {
     pub quantity: Amount,
     /// Exact consideration in scaled price units.
     pub consideration_price_units: u128,
+    /// True only after authenticating an explicitly present selected value.
+    pub consideration_present: bool,
     /// Exact selected-slice index.
     pub slice_index: u16,
     /// True only after central verifier authentication.
@@ -657,7 +659,7 @@ impl AuthenticatedVirtualReceiptAuthorityV1 {
         if self.kind == VirtualReceiptKindV1::None
             || self.receipt_accounting_id == self.delivery_transition_id
             || self.quantity == 0
-            || self.consideration_price_units == 0
+            || !self.consideration_present
             || !self.verifier_authorized
         {
             return Err(Error::AuthorityUnavailable);
@@ -692,8 +694,12 @@ pub struct AuthenticatedVirtualSplitReceiptV1 {
     pub quantity: Amount,
     /// Frozen scaled outcome price.
     pub price: Amount,
+    /// True only after authenticating the selected price, including zero.
+    pub price_present: bool,
     /// Must equal `quantity * price`.
     pub consideration_price_units: u128,
+    /// True only after authenticating the exact multiplication result.
+    pub consideration_present: bool,
     /// Canonical selected-slice index.
     pub slice_index: u16,
     /// Must equal `slice_index + 1`.
@@ -734,8 +740,12 @@ pub struct AuthenticatedVirtualMergeReceiptV1 {
     pub quantity: Amount,
     /// Frozen scaled outcome price.
     pub price: Amount,
+    /// True only after authenticating the selected price, including zero.
+    pub price_present: bool,
     /// Must equal `quantity * price`.
     pub consideration_price_units: u128,
+    /// True only after authenticating the exact multiplication result.
+    pub consideration_present: bool,
     /// Canonical selected-slice index.
     pub slice_index: u16,
     /// Must equal `slice_index + 1`.
@@ -1700,7 +1710,9 @@ fn validate_split_receipt(
         receipt.outcome,
         receipt.quantity,
         receipt.price,
+        receipt.price_present,
         receipt.consideration_price_units,
+        receipt.consideration_present,
         receipt.slice_index,
         receipt.sequence,
         receipt.settled_quantity,
@@ -1730,7 +1742,9 @@ fn validate_merge_receipt(
         receipt.outcome,
         receipt.quantity,
         receipt.price,
+        receipt.price_present,
         receipt.consideration_price_units,
+        receipt.consideration_present,
         receipt.slice_index,
         receipt.sequence,
         receipt.settled_quantity,
@@ -1756,7 +1770,9 @@ fn validate_receipt_common(
     outcome: u8,
     quantity: Amount,
     price: Amount,
+    price_present: bool,
     consideration: u128,
+    consideration_present: bool,
     slice_index: u16,
     sequence: u64,
     settled_quantity: Amount,
@@ -1784,7 +1800,8 @@ fn validate_receipt_common(
     if receipt_accounting_id == delivery_transition_id
         || outcome >= outcome_count
         || quantity == 0
-        || price == 0
+        || !price_present
+        || !consideration_present
         || consideration != u128::from(quantity) * u128::from(price)
         || sequence != u64::from(slice_index) + 1
         || settled_quantity != 0
