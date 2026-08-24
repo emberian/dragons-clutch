@@ -1445,6 +1445,55 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
+
+    struct Sha;
+
+    impl PositionV3Sha256Backend for Sha {
+        fn sha256(&self, domain: &[u8], body: &[u8]) -> [u8; 32] {
+            let mut hash = Sha256::new();
+            hash.update(domain);
+            hash.update(body);
+            hash.finalize().into()
+        }
+    }
+
+    impl ReplayV3HashBackend for Sha {
+        fn sha256_parts(&self, parts: &[&[u8]]) -> [u8; 32] {
+            let mut hash = Sha256::new();
+            for part in parts { hash.update(part); }
+            hash.finalize().into()
+        }
+    }
+
+    fn identity(byte: u8) -> Identity32V1 {
+        Identity32V1::new([byte; 32]).unwrap()
+    }
+
+    #[test]
+    fn split_schedule_v4_founders_equal_the_atomic_pair_exactly() {
+        let position_rent = RentSplitV2 {
+            payer: identity(9), refundable_live_principal: 101,
+            permanent_tombstone_principal: 41, donation_floor: 7,
+        };
+        let replay_rent = DeletableRentOwnerV1::from_persisted(identity(9), 83, 11).unwrap();
+        let combined = found_general_position_replay_v1(
+            identity(1), identity(2), identity(3), identity(4), identity(5), identity(6),
+            identity(7), identity(8), 3, 10, 11, position_rent, replay_rent, &Sha,
+        ).unwrap();
+        let position = found_general_position_v1(
+            identity(1), identity(2), identity(3), identity(4), identity(5), identity(6),
+            identity(7), identity(8), 3, 10, position_rent, &Sha,
+        ).unwrap();
+        let replay = found_general_replay_v1(
+            identity(1), identity(2), identity(7), identity(8), 11, replay_rent,
+            position.position_semantic_id(), &Sha,
+        ).unwrap();
+        assert_eq!(combined.position_body(), position.position_body());
+        assert_eq!(combined.position_semantic_id(), position.position_semantic_id());
+        assert_eq!(combined.replay_body(), replay.replay_body());
+        assert_eq!(combined.replay_semantic_id(), replay.replay_semantic_id());
+    }
 
     fn advanced_extension(action: u8, role: u8) -> [u8; GENERAL_REPLAY_EXTENSION_V1_BYTES] {
         let mut body = [0u8; GENERAL_REPLAY_EXTENSION_V1_BYTES];

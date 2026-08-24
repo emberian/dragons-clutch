@@ -446,65 +446,6 @@ impl AuthenticatedProductSeriesRetirementV4 {
     /// root close. Every expected Product fact comes from the hostile-decoded
     /// immutable MarketBindingV4; no caller-supplied terminal projection or
     /// detached receipt ID can authorize this cut.
-    #[cfg(any())]
-    pub(crate) fn consume_for_general_indexed_close_v1(
-        self,
-        market_instance_id: clutch_general_v2_contract::Id32,
-        authority: clutch_general_v2_contract::CurrentMarketAuthorityV4,
-    ) -> Outcome<ContentId> {
-        let retired = &self.terminal.link_retirement;
-        let projection = retired.link_retirement;
-        let funding = self.terminal.funding.state();
-        require(
-            self.id != ContentId::ZERO
-                && self.physical.id() != ContentId::ZERO
-                && retired.root_account.to_bytes()
-                    == authority.product_market_root_account().bytes()
-                && retired.root_binding_id.bytes()
-                    == authority.product_market_binding_id().bytes()
-                && retired.link_account.to_bytes()
-                    == authority.series_market_link_account().bytes()
-                && retired.link_binding_id.bytes()
-                    == authority.series_market_link_binding_v2_id().bytes()
-                && projection.market_instance_id().bytes() == market_instance_id.bytes()
-                && projection.ordinal() == authority.series_ordinal()
-                && projection.generation() == authority.product_generation()
-                && retired.compiler_bundle_id.bytes()
-                    == authority.compiler_bundle_v6_id().bytes()
-                && retired.funding_quote_id.bytes()
-                    == authority.funding_quote_v5_id().bytes()
-                && retired.attachment_plan_id.bytes()
-                    == authority.attachment_plan_v5_id().bytes()
-                && retired.foundation_schedule_id.bytes()
-                    == authority.foundation_schedule_v3_id().bytes()
-                && retired.foundation_account_graph_id.bytes()
-                    == authority.foundation_account_graph_v3_id().bytes()
-                && retired.market_liability_founding_id.bytes()
-                    == authority.market_liability_founding_id().bytes()
-                && retired.claim_mint_founding_plan_id.bytes()
-                    == authority.claim_mint_founding_plan_id().bytes()
-                && retired.claim_issuance_binding_id.bytes()
-                    == authority.claim_issuance_binding_id().bytes()
-                && retired.general_founding_capability_id.bytes()
-                    == authority.general_founding_capability_id().bytes()
-                && funding.product_founder_preauthorization_id.bytes()
-                    == authority.product_preauthorization_id().bytes()
-                && retired.dealer_terminal_projection_id != ContentId::ZERO
-                && retired.root_transition_sequence_after
-                    == retired
-                        .root_transition_sequence_before
-                        .checked_add(1)
-                        .ok_or(ClutchError::Arithmetic)?
-                && retired.link_transition_sequence_after
-                    == retired
-                        .link_transition_sequence_before
-                        .checked_add(1)
-                        .ok_or(ClutchError::Arithmetic)?,
-            ClutchError::MismatchedState,
-        )?;
-        Ok(self.id)
-    }
-
     /// Historical RootV2/LinkV2 retirement cannot authorize the current
     /// BundleV7/QuoteV6/ScheduleV4 General binding. The fresh Product
     /// RootV3/LinkV3 outer replaces this method without a projection bridge.
