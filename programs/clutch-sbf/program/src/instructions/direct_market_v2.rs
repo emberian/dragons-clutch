@@ -32,6 +32,7 @@ use clutch_direct_market_runtime::codec_v3::{
     DIRECT_MARKET_ROOT_BODY_BYTES_V3 as RUNTIME_ROOT_BODY_BYTES_V2,
 };
 use clutch_direct_market_runtime::lifecycle_v2::{
+    prepare_direct_foundation_into_v3,
     prepare_direct_reservation_admission_v2, prepare_direct_reservation_cancel_v2,
     begin_direct_candidate_verification_v2, bind_direct_candidate_work_batch_v2,
     bind_direct_family_terminal_preparation_v2,
@@ -43,10 +44,13 @@ use clutch_direct_market_runtime::lifecycle_v2::{
     verify_next_direct_candidate_v2, AuthenticatedDirectEconomicTerminalV2,
     AuthenticatedDirectReservationAdmissionV2, AuthenticatedDirectReservationCancelV2,
     bind_direct_treasury_service_settlement_v2, AuthenticatedDirectSelectionFreezeV2,
-    AuthenticatedDirectTerminalV2, DirectFamilyTerminalPlanV2,
+    AuthenticatedDirectFoundationV3, AuthenticatedDirectTerminalV2,
+    DirectFamilyTerminalPlanV2, DirectFoundationReceiptV3,
     DirectRootReplayTransitionV2,
 };
-use clutch_direct_market_runtime::current_v3::DirectCurrentGeneralAuthorityV2;
+use clutch_direct_market_runtime::current_v3::{
+    DirectCurrentGeneralAuthorityV2, DirectMarketBindingV3,
+};
 use clutch_direct_market_runtime::fee_v2::DirectFeePolicyV2;
 use clutch_direct_market_runtime::liveness_v1::DirectCandidateWorkBatchV1;
 use clutch_direct_market_runtime::reservation_v1::DirectReservationV1;
@@ -57,7 +61,7 @@ use clutch_direct_market_runtime::settlement_v1::{
 };
 use clutch_direct_market_runtime::{
     build_direct_retirement_transfer_v1, DirectActionReplayV1, DirectHashBackendV1,
-    DirectMarketErrorV1, DirectRentOwnerV1, DirectRootPhaseV1,
+    DirectMarketErrorV1, DirectRentOwnerV1, DirectRootPhaseV1, DirectScheduleV1,
     DirectRetirementSourceV1, DirectTerminalReasonV1,
 };
 use clutch_batch::direct_pair_v1::DirectEconomicBookV1;
@@ -142,6 +146,8 @@ const DIRECT_FAMILY_TERMINAL_DOMAIN_V3: &[u8] =
     b"dragons-clutch/sbf/direct/family-terminal/v3\0";
 const DIRECT_ACTION13_CANDIDATE_POSTWRITE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/direct/action13-candidate-postwrite/v2\0";
+const DIRECT_ACTION1_PHYSICAL_POSTWRITE_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/direct/action1-physical-postwrite/v3\0";
 
 const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V3 == RUNTIME_ROOT_BODY_BYTES_V2);
 const _: () = assert!(DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3 == 2_534);
@@ -172,6 +178,279 @@ impl ReplayV3HashBackend for DirectRuntimeSha256V2 {
     fn sha256_parts(&self, parts: &[&[u8]]) -> [u8; 32] {
         DirectHashBackendV1::sha256_parts(self, parts)
     }
+}
+
+/// Product's move-only action-1 preauthorization. Product owns the complete
+/// RootV3/LinkV3 family successor and supplies the already joined current
+/// Product, General, Revenue, FundingV5, and liveness allocation authority as
+/// one exact Direct binding. Direct owns only the physical b1/v3+b3 write.
+pub(crate) trait AuthenticatedProductDirectFoundationV3:
+    AuthenticatedDirectFoundationV3
+{
+    /// Exact current binding which will be persisted in fresh b1/v3.
+    fn direct_market_binding_v3(&self) -> Outcome<&DirectMarketBindingV3> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+
+    /// Consume the hostile-reopened Direct physical postwrite and persist the
+    /// prepared Product RootV3 family successor last. No raw receipt-ID path
+    /// is accepted by this seam.
+    fn consume_direct_foundation_postwrite_v3(
+        self,
+        _postwrite: AuthenticatedDirectFoundationPostwriteV3,
+    ) -> Outcome<()>
+    where
+        Self: Sized,
+    {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+}
+
+/// Non-Copy proof that action 1 physically created and hostile-reopened the
+/// exact b1/v3 root and its permanent b3 replay. Product consumes this by
+/// value before writing the prepared RootV3 family admission successor.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedDirectFoundationPostwriteV3 {
+    id: ContentId,
+    receipt: DirectFoundationReceiptV3,
+    root_account: Pubkey,
+    root_data_id: ContentId,
+    root_binding_semantic_id: ContentId,
+    root_semantic_id: ContentId,
+    root_observed_lamports: u64,
+    replay_account: Pubkey,
+    replay_data_id: ContentId,
+    replay_semantic_id: ContentId,
+    replay_observed_lamports: u64,
+}
+
+impl AuthenticatedDirectFoundationPostwriteV3 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn receipt(&self) -> DirectFoundationReceiptV3 { self.receipt }
+    pub(crate) const fn root_account(&self) -> Pubkey { self.root_account }
+    pub(crate) const fn root_data_id(&self) -> ContentId { self.root_data_id }
+    pub(crate) const fn root_binding_semantic_id(&self) -> ContentId {
+        self.root_binding_semantic_id
+    }
+    pub(crate) const fn root_semantic_id(&self) -> ContentId { self.root_semantic_id }
+    pub(crate) const fn root_observed_lamports(&self) -> u64 {
+        self.root_observed_lamports
+    }
+    pub(crate) const fn replay_account(&self) -> Pubkey { self.replay_account }
+    pub(crate) const fn replay_data_id(&self) -> ContentId { self.replay_data_id }
+    pub(crate) const fn replay_semantic_id(&self) -> ContentId { self.replay_semantic_id }
+    pub(crate) const fn replay_observed_lamports(&self) -> u64 {
+        self.replay_observed_lamports
+    }
+}
+
+/// Create the physical Direct action-1 suffix and immediately return its
+/// move-only postwrite to Product's prepared RootV3 consumer.
+///
+/// The exact six-account suffix is: fresh b1/v3, fresh b3, founding payer,
+/// System program, Rent sysvar, Clock sysvar. Product's outer owns every
+/// preceding Product/General/FundingV5/liveness account and must derive the
+/// complete binding before entering this function.
+#[inline(never)]
+pub(crate) fn create_direct_foundation_physical_v3<P>(
+    program_id: &Pubkey,
+    product: P,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload: &[u8],
+) -> Outcome<()>
+where
+    P: AuthenticatedProductDirectFoundationV3,
+{
+    const ACCOUNT_COUNT: usize = 6;
+    const ROOT: usize = 0;
+    const REPLAY: usize = 1;
+    const PAYER: usize = 2;
+    const SYSTEM: usize = 3;
+    const RENT: usize = 4;
+    const CLOCK: usize = 5;
+
+    require_count(accounts, ACCOUNT_COUNT)?;
+    require_distinct(accounts)?;
+    require(sequence == 0, ClutchError::Replay)?;
+    require(payload.is_empty(), ClutchError::WrongDataLength)?;
+    require_signer(&accounts[PAYER])?;
+    require(accounts[PAYER].is_writable, ClutchError::NotWritable)?;
+    require_system_program(&accounts[SYSTEM])?;
+    let rent = read_rent(&accounts[RENT])?;
+    let observed_slot = read_clock_slot(&accounts[CLOCK])?;
+    let schedule = DirectScheduleV1::canonical_from_foundation_slot(observed_slot)
+        .map_err(map_direct_error_v2)?;
+    let binding = product.direct_market_binding_v3()?;
+    require(
+        accounts[PAYER].key.to_bytes() != binding.neutral_lamport_sink
+            && accounts[ROOT].key.to_bytes() == binding.direct_root_account
+            && accounts[REPLAY].key.to_bytes() == binding.action_replay_account,
+        ClutchError::MismatchedState,
+    )?;
+
+    let (root_pda, root_bump) = seeds::direct_market_root_v3_pda(
+        program_id,
+        &binding.market_instance_id,
+        binding.generation,
+    );
+    let (replay_pda, replay_bump) =
+        seeds::direct_action_replay_v1_pda(program_id, &root_pda);
+    let root_donation = authenticate_fresh_direct_pda_v2(
+        &accounts[ROOT],
+        (root_pda, root_bump),
+    )?;
+    let replay_donation = authenticate_fresh_direct_pda_v2(
+        &accounts[REPLAY],
+        (replay_pda, replay_bump),
+    )?;
+    let root_rent = DirectRentOwnerV1 {
+        payer: accounts[PAYER].key.to_bytes(),
+        principal_lamports: rent.minimum_balance(DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3)?,
+        donation_floor_lamports: root_donation,
+    };
+    let replay_rent = DirectRentOwnerV1 {
+        payer: accounts[PAYER].key.to_bytes(),
+        principal_lamports: rent.minimum_balance(DIRECT_ACTION_REPLAY_ACCOUNT_BYTES)?,
+        donation_floor_lamports: replay_donation,
+    };
+
+    let market = binding.market_instance_id;
+    let generation = binding.generation.to_le_bytes();
+    let root_bump_seed = [root_bump];
+    create_current_direct_account_v2(
+        program_id,
+        &accounts[PAYER],
+        &accounts[ROOT],
+        &accounts[SYSTEM],
+        &rent,
+        DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3,
+        root_rent.principal_lamports,
+        root_donation,
+        &[
+            seeds::SEED_DIRECT_MARKET_ROOT_V3,
+            &market,
+            &generation,
+            &root_bump_seed,
+        ],
+    )?;
+    let root_account = accounts[ROOT].key.to_bytes();
+    let replay_bump_seed = [replay_bump];
+    create_current_direct_account_v2(
+        program_id,
+        &accounts[PAYER],
+        &accounts[REPLAY],
+        &accounts[SYSTEM],
+        &rent,
+        DIRECT_ACTION_REPLAY_ACCOUNT_BYTES,
+        replay_rent.principal_lamports,
+        replay_donation,
+        &[
+            seeds::SEED_DIRECT_ACTION_REPLAY_V1,
+            &root_account,
+            &replay_bump_seed,
+        ],
+    )?;
+
+    let receipt = {
+        let mut root_data = accounts[ROOT]
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let mut replay_data = accounts[REPLAY]
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        require(
+            root_data.len() == DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3
+                && replay_data.len() == DIRECT_ACTION_REPLAY_ACCOUNT_BYTES,
+            ClutchError::WrongDataLength,
+        )?;
+        root_data[0] = clutch_solana_layout::registry::DIRECT_MARKET_ROOT_ACCOUNT_TAG;
+        root_data[1] = clutch_solana_layout::registry::DIRECT_MARKET_ROOT_ACCOUNT_VERSION_V3;
+        root_data[2] = root_bump;
+        root_data[3] = 0;
+        replay_data[0] = DIRECT_ACTION_REPLAY_ACCOUNT_TAG;
+        replay_data[1] = DIRECT_ACTION_REPLAY_ACCOUNT_VERSION;
+        replay_data[2] = replay_bump;
+        replay_data[3] = 0;
+        let replay_body: &mut [u8; DIRECT_ACTION_REPLAY_BODY_BYTES_V1] = replay_data[4..]
+            .try_into()
+            .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+        prepare_direct_foundation_into_v3(
+            &product,
+            binding,
+            schedule,
+            root_rent,
+            replay_rent,
+            observed_slot,
+            &mut root_data[4..],
+            replay_body,
+            &DirectRuntimeSha256V2,
+        )
+        .map_err(map_direct_error_v2)?
+    };
+
+    let root = authenticate_direct_market_root_writable_v2(program_id, &accounts[ROOT])?;
+    let replay = authenticate_direct_action_replay_writable_v2(
+        program_id,
+        &accounts[REPLAY],
+        &root,
+    )?;
+    require(
+        root.transition().root_semantic_id() == receipt.root_semantic_id
+            && replay.semantic_id == receipt.replay_semantic_id
+            && replay.value().foundation_receipt_id() == receipt.admission_receipt_id
+            && root.transition().candidate_liveness().allocation_receipt_id
+                == receipt.candidate_liveness_allocation_receipt_id
+            && root.observed_lamports()
+                == root_rent
+                    .principal_lamports
+                    .checked_add(root_rent.donation_floor_lamports)
+                    .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?
+            && replay.observed_lamports
+                == replay_rent
+                    .principal_lamports
+                    .checked_add(replay_rent.donation_floor_lamports)
+                    .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?,
+        ClutchError::MismatchedState,
+    )?;
+    let root_data_id = ContentId::from_bytes(root.data_id());
+    let root_binding_semantic_id = ContentId::from_bytes(root.transition().binding_semantic_id());
+    let root_semantic_id = ContentId::from_bytes(root.transition().root_semantic_id());
+    let replay_data_id = ContentId::from_bytes(replay.data_id);
+    let replay_semantic_id = ContentId::from_bytes(replay.semantic_id);
+    let id = ContentId::from_bytes(solana_sha256_hasher::hashv(&[
+        DIRECT_ACTION1_PHYSICAL_POSTWRITE_DOMAIN_V3,
+        program_id.as_ref(),
+        accounts[ROOT].key.as_ref(),
+        &root_data_id.bytes(),
+        &root_binding_semantic_id.bytes(),
+        &root_semantic_id.bytes(),
+        &root.observed_lamports().to_le_bytes(),
+        accounts[REPLAY].key.as_ref(),
+        &replay_data_id.bytes(),
+        &replay_semantic_id.bytes(),
+        &replay.observed_lamports.to_le_bytes(),
+        &receipt.admission_receipt_id,
+        &receipt.product_family_poststate_id,
+        &receipt.product_family_admission_receipt_id,
+        &receipt.candidate_liveness_allocation_receipt_id,
+    ]).to_bytes());
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    product.consume_direct_foundation_postwrite_v3(
+        AuthenticatedDirectFoundationPostwriteV3 {
+            id,
+            receipt,
+            root_account: *accounts[ROOT].key,
+            root_data_id,
+            root_binding_semantic_id,
+            root_semantic_id,
+            root_observed_lamports: root.observed_lamports(),
+            replay_account: *accounts[REPLAY].key,
+            replay_data_id,
+            replay_semantic_id,
+            replay_observed_lamports: replay.observed_lamports,
+        },
+    )
 }
 
 /// Current family dispatcher. Unsupported actions refuse before reading any
