@@ -690,6 +690,85 @@ impl OwnedInstructionDraft {
         Ok(value)
     }
 
+    /// Assemble a zero-credit close from the decoded live credit and its
+    /// persisted rent owner. The only permitted alias is claimant == payer,
+    /// matching the SBF privilege-union contract.
+    pub(crate) fn enabled_fractional_close_zero_credit_v1(
+        semantic_owner: SemanticOwner,
+        program_id: Address,
+        accounts: Vec<AccountMeta>,
+        equations: Vec<ExactEquation>,
+        sequence: u64,
+        payload: &[u8],
+    ) -> Result<Self> {
+        use clutch_fractional_redemption_runtime::{
+            FractionalCloseCreditIntentV1, FractionalRedemptionActionV1,
+        };
+        let action = FractionalRedemptionActionV1::CloseZeroCredit;
+        let intent = FractionalCloseCreditIntentV1::decode(payload)
+            .map_err(|_| ConstructionError::WrongWirePrefix)?;
+        if sequence == 0
+            || intent.expected_ledger_sequence != sequence
+            || accounts.len() != 18
+            || accounts[0].pubkey.to_bytes() != intent.claimant.bytes()
+            || accounts[13].pubkey.to_bytes() != intent.credit_account.bytes()
+        {
+            return Err(ConstructionError::InvalidAccountContract);
+        }
+        let payer_alias = accounts[0].pubkey == accounts[14].pubkey;
+        for (index, account) in accounts.iter().enumerate() {
+            let expected_writable = matches!(index, 9 | 12 | 13 | 14 | 16)
+                || (index == 0 && payer_alias);
+            let expected_signer = index == 0 || (index == 14 && payer_alias);
+            if account.is_writable != expected_writable || account.is_signer != expected_signer {
+                return Err(ConstructionError::InvalidAccountContract);
+            }
+            for other in index + 1..accounts.len() {
+                if account.pubkey == accounts[other].pubkey && !(index == 0 && other == 14) {
+                    return Err(ConstructionError::DuplicateAccount);
+                }
+            }
+        }
+        let central_action = ExtensionAction::FractionalRedemption(action);
+        let binding = registry_binding(
+            ExtensionFamily::FractionalRedemption,
+            action.tag(),
+            Some(central_action),
+        )?;
+        let request = ExtensionRequest {
+            sequence,
+            envelope: ExtensionEnvelope {
+                family: ExtensionFamily::FractionalRedemption,
+                action: central_action,
+                payload,
+            },
+        };
+        let mut data = vec![0; 13 + EXTENSION_ENVELOPE_BYTES + payload.len()];
+        let exact = request
+            .encode(&mut data)
+            .map_err(|_| ConstructionError::WrongWireLength)?;
+        data.truncate(exact);
+        let value = Self {
+            flow: ProtocolFlow::FractionalRedemption,
+            action_name: "close-fractional-zero-credit".into(),
+            semantic_owner,
+            program_id,
+            accounts,
+            required_signers: vec![Address::new_from_array(intent.claimant.bytes())],
+            equations,
+            registry_binding: Some(binding),
+            runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
+            wire: OwnedWireContract::FractionalRedemptionRequestV1 {
+                binding,
+                action,
+                sequence,
+            },
+            data,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Assemble one current Structured wrapper call through the semantic
     /// owner's exact action/count/privilege contract. The wrapper program, not
     /// the central base, is the instruction target. Payload bytes must already
@@ -843,8 +922,17 @@ impl OwnedInstructionDraft {
             self.wire,
             OwnedWireContract::DisabledDirectMarketRequestV1 { .. }
         );
+        let fractional_request = matches!(
+            self.wire,
+            OwnedWireContract::FractionalRedemptionRequestV1 { .. }
+        );
         let structured_wrapper = matches!(self.wire, OwnedWireContract::StructuredWrapperV1 { .. });
-        if !source_request && !collateral_request && !direct_request && !structured_wrapper {
+        if !source_request
+            && !collateral_request
+            && !direct_request
+            && !fractional_request
+            && !structured_wrapper
+        {
             let mut accounts = BTreeSet::new();
             for account in &self.accounts {
                 if !accounts.insert(account.pubkey) {
@@ -983,6 +1071,7 @@ impl OwnedInstructionDraft {
                 if !matches!(
                     action,
                     FractionalRedemptionActionV1::RedeemInternalExact
+                        | FractionalRedemptionActionV1::CloseZeroCredit
                         | FractionalRedemptionActionV1::SealClaimsExhausted
                 )
                     || sequence == 0
@@ -1029,6 +1118,29 @@ impl OwnedInstructionDraft {
                             return Err(ConstructionError::InvalidAccountContract);
                         }
                     }
+                    FractionalRedemptionActionV1::CloseZeroCredit => {
+                        let intent = clutch_fractional_redemption_runtime::FractionalCloseCreditIntentV1::decode(
+                            request.envelope.payload,
+                        )
+                        .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                        if intent.expected_ledger_sequence != sequence
+                            || self.accounts[0].pubkey.to_bytes() != intent.claimant.bytes()
+                            || self.accounts[13].pubkey.to_bytes() != intent.credit_account.bytes()
+                        {
+                            return Err(ConstructionError::InvalidAccountContract);
+                        }
+                        let payer_alias = self.accounts[0].pubkey == self.accounts[14].pubkey;
+                        for (index, account) in self.accounts.iter().enumerate() {
+                            let expected_writable = matches!(index, 9 | 12 | 13 | 14 | 16)
+                                || (index == 0 && payer_alias);
+                            let expected_signer = index == 0 || (index == 14 && payer_alias);
+                            if account.is_writable != expected_writable
+                                || account.is_signer != expected_signer
+                            {
+                                return Err(ConstructionError::InvalidAccountContract);
+                            }
+                        }
+                    }
                     _ => return Err(ConstructionError::UnallocatedRegistryCoordinate),
                 }
                 for (index, account) in self.accounts.iter().enumerate() {
@@ -1039,6 +1151,17 @@ impl OwnedInstructionDraft {
                         || account.is_writable != (contract.writable_mask & mask != 0)
                     {
                         return Err(ConstructionError::InvalidAccountContract);
+                    }
+                    for other in index + 1..self.accounts.len() {
+                        let allowed_close_payer_alias = action
+                            == FractionalRedemptionActionV1::CloseZeroCredit
+                            && index == 0
+                            && other == 14;
+                        if account.pubkey == self.accounts[other].pubkey
+                            && !allowed_close_payer_alias
+                        {
+                            return Err(ConstructionError::DuplicateAccount);
+                        }
                     }
                 }
             }
