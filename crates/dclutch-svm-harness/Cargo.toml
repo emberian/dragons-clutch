@@ -1,0 +1,21 @@
+[package]
+name = "dclutch-svm-harness"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# This crate is deliberately its own workspace: adding it to the protocol
+# workspace is a separate integration decision.
+[workspace]
+
+[dev-dependencies]
+dclutch-core-contract = { path = "../dclutch-core-contract" }
+dclutch-kernel = { path = "../dclutch-kernel" }
+dclutch-pyth-contract = { path = "../dclutch-pyth-contract" }
+solana-program = "=3.0.0"
+solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
+solana-account = "=4.3.2"
+solana-sdk = "=3.0.0"
+solana-sdk-ids = "=3.1.0"
+solana-transaction = "=4.1.6"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
