@@ -5,36 +5,27 @@
 
 //! Allocation-free runtime contracts for transferable structured claims.
 //!
-//! The economic machine lives in `clutch-structured-claim`. This crate owns
-//! the adapter-side facts that do not belong there: the exact persisted
-//! descriptor image, deployment/basis reconstruction, and an atomic transfer
-//! plan over two authenticated base Position projections. It deliberately has
+//! Product algebra lives in `clutch-structured-claim`. This crate owns
+//! current adapter-side facts: the exact persisted
+//! descriptor image, deployment/basis reconstruction, and exact current
+//! liability/Position successor projections. It deliberately has
 //! no Solana SDK, CPI, hashing implementation, PDA implementation, account
 //! memory, or Token-2022 parser. A small SBF adapter must authenticate those
 //! boundaries and execute the returned plans exactly.
 
 mod construction;
-mod custody_wire;
 mod descriptor;
 mod market_root;
 mod market_projection;
-mod position_transfer;
+mod projection;
 mod recipe;
 mod replay_v3;
-mod runtime;
 mod terminal;
 mod wire;
 
 pub use construction::{
     prepare_permanent_identity_funding_v1, PermanentIdentityFundingPlanV1,
     PermanentTargetProjectionV1, WRAPPER_MINT_ACCOUNT_BYTES,
-};
-pub use custody_wire::{
-    decode_position_asset_transfer_payload_v1, PositionAssetTransferAuthorityKindV1,
-    PositionAssetTransferPayloadV1, StructuredCustodyCallProjectionV1, GENERAL_V2_FAMILY_TAG,
-    GENERAL_V2_FAMILY_VERSION, GENERAL_V2_TRANSFER_POSITION_ASSETS_ACTION,
-    POSITION_ASSET_TRANSFER_PAYLOAD_BYTES, STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES,
-    STRUCTURED_CUSTODY_CALL_V1_DOMAIN,
 };
 pub use descriptor::{
     decode_historical_descriptor_v1, reconstruct_descriptor_identity_v1, DescriptorBasisV1,
@@ -57,11 +48,6 @@ pub use market_projection::{
     StructuredMarketProjectionV1, STRUCTURED_MARKET_PROJECTION_PREIMAGE_BYTES_V1,
     STRUCTURED_MARKET_PROJECTION_V1_DOMAIN,
 };
-pub use position_transfer::{
-    prepare_atomic_position_asset_transfer_v1, AssetTransferPhasePolicyV1,
-    AtomicPositionAssetTransferRequestV1, AtomicPositionAssetTransferResultV1,
-    PositionProjectionV1,
-};
 pub use recipe::{
     authenticate_wrapper_recipe_membership_v1, build_wrapper_recipe_membership_v1, WrapperRecipeHashV1,
     WrapperRecipeMembershipV1, WrapperRecipeV1, MAX_WRAPPER_RECIPES_V1,
@@ -82,14 +68,10 @@ pub use replay_v3::{
     STRUCTURED_CLAIM_VAULT_REPLAY_DELTA_BYTES_V1,
     STRUCTURED_CLAIM_VAULT_REPLAY_DELTA_DOMAIN_V1,
 };
-pub use runtime::{
-    prepare_compact_donation_v1, prepare_redeem_terminal_v1, prepare_retire_descriptor_v1,
-    prepare_unwrap_canonical_v1, prepare_unwrap_full_v1, prepare_wrap_canonical_v1,
-    prepare_wrap_full_v1, AuthenticatedVaultRetirementV1, CanonicalUnwrapRequestV1,
-    CanonicalWrapRequestV1, DescriptorRetirementPlanV1, DonationCompactionPlanV1,
-    MarketChangingWrapperTransitionPlanV1, StructuredClaimRuntimeAddressesV1,
-    TerminalRedemptionPlanV1, VaultMutationRequestV1, WrapperMintProjectionV1,
-    WrapperTokenProjectionV1, WrapperTransitionPlanV1,
+pub use projection::{
+    AuthenticatedVaultRetirementV1, DescriptorRetirementPlanV1,
+    PositionProjectionV1, StructuredClaimRuntimeAddressesV1, WrapperMintProjectionV1,
+    WrapperTokenProjectionV1,
 };
 pub use terminal::{
     prepare_structured_descriptor_terminal_owner_v1, prepare_structured_descriptor_terminal_v1,
@@ -144,8 +126,8 @@ pub enum Error {
     ReplayExhausted,
     /// A prospective result violates exact conservation.
     InvariantViolation,
-    /// The authoritative structured-claim economic machine refused the route.
-    EconomicTransitionRefused,
+    /// Terminal payout arithmetic is not integral in collateral atoms.
+    InexactTerminalPayout,
     /// The family-local action is unallocated.
     UnknownAction,
     /// A construction target has hostile data, owner, executable, or address state.

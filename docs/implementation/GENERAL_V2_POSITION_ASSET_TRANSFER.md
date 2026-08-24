@@ -1,66 +1,31 @@
-# General V2 Position asset transfer
+# Withdrawn General V2 Position asset transfer
 
-Status: canonical pure payload and central `ReservedDisabled` action allocation;
-no SBF capability or success handler.
+Status: **WITHDRAWN DESIGN HISTORY; NOT A CURRENT CODEC OR EXECUTION
+AUTHORITY** (2026-08-24).
 
-General V2 family `74/1`, local action 35 `TransferPositionAssets`, is the base
-supply-neutral and Hoard-neutral movement primitive required by structured
-claim custody. Allocation is not activation. It must remain disabled until the
-PositionV2/Replay adapter and typed custody authorization below are live in the
-same source profile.
+General V2 family `74/1`, local action 35 `TransferPositionAssets`, remains a
+centrally allocated `ReservedDisabled` coordinate. Allocation is not a payload
+contract, account contract, capability, or execution route.
 
-## Canonical 298-byte payload
+An earlier Structured-claim design proposed a public 298-byte payload and a
+six-account Position V2 transfer at this coordinate. That design has been
+removed. The payload codec, preparation function, caller-selectable custody
+authority, duplicate CPI encoder, and action-2/4 wrapper executor no longer
+exist. No current caller may construct action 35 as Structured custody
+authority, and no checked release admits it.
 
-The codec owner is `clutch-structured-claim-runtime-contract`, adjacent to
-`prepare_atomic_position_asset_transfer_v1`; no `repr(C)` width is used as wire
-authority.
+The current Structured successor owns its lifecycle directly. Actions 3, 5,
+6, 7, and 8 compose hostile-authenticated Hoard V2, ClaimLedger V3, Position
+V3, purpose-owned Replay V3, Product, collateral, and Token-2022 state in one
+family-owned atomic route. Canonical actions 2 and 4 are withdrawn and refused;
+they are not aliases for action 35.
 
-```text
-market[32]
-|| source_owner[32]
-|| destination_owner[32]
-|| source_generation u64_le
-|| destination_generation u64_le
-|| source_replay_sequence u64_le
-|| destination_replay_sequence u64_le
-|| cash_atoms u64_le
-|| internal[16] u64_le
-|| phase_policy u8
-|| authority_kind u8
-|| authority_id[32]
-```
+Current implementation boundaries are documented in:
 
-`phase_policy` is exactly `0=ActiveOnly`, `1=ActiveOrResolved`.
-`authority_kind` is exactly `0=OwnerSigner`, `1=TypedCustodyCapability`.
-The owner route requires `authority_id == source_owner`. Both authority IDs and
-all three Market/owner identities are nonzero, the two owners are distinct,
-and at least one cash/native-Egg quantity is nonzero. The authenticated Market
-later owns the active outcome width and therefore the required zero padding in
-the remainder of the sixteen-entry vector.
+- [`programs/structured-claim-adapter/README.md`](../../programs/structured-claim-adapter/README.md)
+- [`crates/clutch-structured-claim-runtime-contract/README.md`](../../crates/clutch-structured-claim-runtime-contract/README.md)
+- [`programs/structured-claim-sbf/README.md`](../../programs/structured-claim-sbf/README.md)
+- [`CENTRAL_INTENT_REGISTRY.md`](CENTRAL_INTENT_REGISTRY.md)
 
-## Frozen ordered account contract
-
-0. authority, signer and read-only
-1. canonical Market, read-only and program-owned
-2. source PositionV2, writable and program-owned
-3. source current-generation Replay successor, writable and program-owned
-4. destination PositionV2, writable and program-owned
-5. destination current-generation Replay successor, writable and program-owned
-
-For `OwnerSigner`, account 0 is the exact semantic source owner. For
-`TypedCustodyCapability`, account 0 is the exact `authority_id`, must be a CPI
-signer, and must decode/authenticate as the wrapper-product/descriptor PDA
-selected by the future custody owner. A caller-provided signer bit or opaque
-PDA is not that capability. This second route remains unimplemented and is the
-reason action 35 stays disabled.
-
-The eventual handler must authenticate exact PositionV2 and 132-byte Replay
-successor codecs, owners, PDAs, stored bumps, Market, generation, sequence,
-distinct source/destination accounts, Market phase, and every alias before
-calling `prepare_atomic_position_asset_transfer_v1`. It must write both
-Position and Replay poststates atomically and independently observe that global
-claim supply, token supply, and Hoard collateral did not move.
-
-This primitive performs no wrapper mint/burn, pricing, fee assessment,
-treasury credit, settlement, or descriptor lifecycle transition. Those remain
-owned by their typed callers and cannot be inferred from action 35.
+This tombstone is retained so historical links fail closed rather than making
+the deleted payload or authority appear current.

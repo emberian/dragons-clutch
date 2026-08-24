@@ -12,11 +12,12 @@ Before any structured-claim action leaves `ReservedDisabled`, new evidence must
 bind all of the following to one exact source digest and linked ELF identity:
 
 - `clutch-structured-claim-runtime-contract` and this adapter revision;
-- the eight exact `75/v1` family-local actions;
-- descriptor account coordinate `0x88/1`;
+- the implemented current `75/v1` actions 1/3/5/6/7/8 and explicit refusal of
+  the withdrawn action-2/4 execution routes;
+- descriptor account coordinate `0x88/2` and Structured root `0xb7/1`;
 - the exact capability profile and central collision ledger;
-- the exact 23-account canonical-custody contract, canonical
-  `ExtensionRequest` bytes, and a routed owner-side action-35 handler;
+- the exact shared 34/32/32/32/33/31 wrapper/base account contracts and the
+  checked wrapper/base/Token-2022 release-manifest identities;
 - the concrete hostile Token-2022 parser and emitted instruction bytes;
 - maximum adapter and dependency frame sizes plus requested heap;
 - compute, CPI depth, exact account counts, and current-bank rent;

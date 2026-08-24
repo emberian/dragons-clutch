@@ -130,6 +130,12 @@ StructuredClaim `75/1` reserves actions 1 through 8:
 7. `RedeemTerminal`
 8. `RetireDescriptor`
 
+Current source/account contracts exist only for actions 1/3/5/6/7/8, with
+exact outer/base counts 34/32/32/32/33/31 respectively. Actions 2 and 4 are
+withdrawn execution routes. The checked Structured wrapper/base/Token-2022
+release contract admits an exact zero action mask, so allocation and compiled
+source do not activate any Structured tuple.
+
 SourceSeries `77/2` reserves disjoint owner ranges. SourcePlane V3 owns actions
 1 through 12:
 
@@ -264,10 +270,11 @@ reinitialization, or silently forfeit claimant value.
 Dealer facility actions `5..=25` are allocated in runtime order
 `Initialize..=Retire`, while only policy transport `1..=4` is executable in the
 existing non-production catalog profile. Every facility action remains
-capability-disabled. StructuredClaim payload codecs are owned by its separately
-integrated runtime and adapter, while Recovery payload/account contracts are
-owned by its dedicated modules; this central allocation duplicates neither
-contract and activates none of those actions.
+capability-disabled. StructuredClaim payload codecs and current account/release
+contracts are owned by its separately integrated runtime and adapter, while
+Recovery payload/account contracts are owned by its dedicated modules; this
+central allocation duplicates neither contract and activates none of those
+actions.
 
 ## General SettlementReceipt successor allocation
 
