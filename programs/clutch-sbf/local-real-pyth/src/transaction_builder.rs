@@ -93,7 +93,7 @@ pub enum ProtocolFlow {
     GeneralV2Candidate,
     GeneralV2Settlement,
     GeneralV2Fees,
-    /// Current Direct `80/1` successor family; every action remains disabled.
+    /// Current Direct `80/1` successor family.
     DirectMarketV1,
     DirectEggSettlement,
     Liveness,
@@ -235,6 +235,13 @@ pub enum OwnedWireContract {
     /// family. This remains distinct from an enabled Source request so a
     /// construction artifact cannot silently promote runtime admission.
     DisabledDirectMarketRequestV1 {
+        binding: SuccessorRegistryBinding,
+        sequence: u64,
+    },
+    /// Exact outer request for a Direct `80/1` coordinate already admitted by
+    /// the checked release used by the caller. Only the release-bound action
+    /// material constructor can select this admission state.
+    EnabledDirectMarketRequestV1 {
         binding: SuccessorRegistryBinding,
         sequence: u64,
     },
@@ -434,6 +441,55 @@ impl OwnedInstructionDraft {
         )
     }
 
+    /// Assemble one release-admitted Direct `80/1` request from its exact
+    /// typed account projection. This constructor does not choose accounts or
+    /// promote a disabled coordinate; its caller must first prove membership
+    /// in the checked release manifest.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn enabled_direct_market_request_v1(
+        action_name: impl Into<String>,
+        semantic_owner: SemanticOwner,
+        program_id: Address,
+        accounts: Vec<AccountMeta>,
+        required_signers: Vec<Address>,
+        equations: Vec<ExactEquation>,
+        sequence: u64,
+        payload: &clutch_client_contract::direct_market::DirectMarketClientPayloadV1,
+    ) -> Result<Self> {
+        use clutch_client_contract::direct_market::DirectMarketClientRequestV1;
+
+        let action = ExtensionAction::DirectMarket(payload.action());
+        if (matches!(
+            payload.action(),
+            clutch_solana_layout::registry::DirectMarketAction::InitializeMarket
+        ) && sequence != 0)
+            || (!matches!(
+                payload.action(),
+                clutch_solana_layout::registry::DirectMarketAction::InitializeMarket
+            ) && sequence == 0)
+        {
+            return Err(ConstructionError::WrongWirePrefix);
+        }
+        let binding = registry_binding(action.family(), action.local_tag(), Some(action))?;
+        let request = DirectMarketClientRequestV1::encode(sequence, payload)
+            .map_err(|_| ConstructionError::WrongWirePrefix)?;
+        let value = Self {
+            flow: ProtocolFlow::DirectMarketV1,
+            action_name: action_name.into(),
+            semantic_owner,
+            program_id,
+            accounts,
+            required_signers,
+            equations,
+            registry_binding: Some(binding),
+            runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
+            wire: OwnedWireContract::EnabledDirectMarketRequestV1 { binding, sequence },
+            data: request.bytes().to_vec(),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Assemble an enabled SourceSeries request through the exact outer
     /// Clutch replay codec. Only coordinates whose dispatcher implementation
     /// is complete may be admitted here.
@@ -602,6 +658,7 @@ impl OwnedInstructionDraft {
         let direct_request = matches!(
             self.wire,
             OwnedWireContract::DisabledDirectMarketRequestV1 { .. }
+                | OwnedWireContract::EnabledDirectMarketRequestV1 { .. }
         );
         if !source_request && !collateral_request && !direct_request {
             let mut accounts = BTreeSet::new();
@@ -735,6 +792,40 @@ impl OwnedInstructionDraft {
                     || binding.family.allocation_status() != Some(binding.family_status)
                     || self.flow != ProtocolFlow::DirectMarketV1
                     || self.runtime_admission != RuntimeAdmission::ReservedDisabled
+                    || !matches!(
+                        binding.central_action,
+                        Some(ExtensionAction::DirectMarket(action))
+                            if request.envelope.action == ExtensionAction::DirectMarket(action)
+                    )
+                {
+                    return Err(ConstructionError::UnallocatedRegistryCoordinate);
+                }
+                let ExtensionAction::DirectMarket(action) = request.envelope.action else {
+                    return Err(ConstructionError::WrongFlow);
+                };
+                if (matches!(
+                    action,
+                    clutch_solana_layout::registry::DirectMarketAction::InitializeMarket
+                ) && sequence != 0)
+                    || (!matches!(
+                        action,
+                        clutch_solana_layout::registry::DirectMarketAction::InitializeMarket
+                    ) && sequence == 0)
+                {
+                    return Err(ConstructionError::WrongWirePrefix);
+                }
+            }
+            OwnedWireContract::EnabledDirectMarketRequestV1 { binding, sequence } => {
+                let request = ExtensionRequest::decode(&self.data)
+                    .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                if request.sequence != sequence
+                    || request.envelope.family != ExtensionFamily::DirectMarket
+                    || request.envelope.family != binding.family
+                    || request.envelope.action.local_tag() != binding.local_action
+                    || self.registry_binding != Some(binding)
+                    || binding.family.allocation_status() != Some(binding.family_status)
+                    || self.flow != ProtocolFlow::DirectMarketV1
+                    || self.runtime_admission != RuntimeAdmission::ReleaseBoundEnabled
                     || !matches!(
                         binding.central_action,
                         Some(ExtensionAction::DirectMarket(action))
@@ -935,6 +1026,7 @@ impl ProtocolTransactionBuilder {
                 OwnedWireContract::MainSuccessor { .. }
                     | OwnedWireContract::MainSuccessorRequest { .. }
                     | OwnedWireContract::DisabledDirectMarketRequestV1 { .. }
+                    | OwnedWireContract::EnabledDirectMarketRequestV1 { .. }
                     | OwnedWireContract::CollateralReplayRequestV3 { .. }
             ) && draft.program_id != self.clutch_program
             {

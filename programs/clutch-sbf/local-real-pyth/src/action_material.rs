@@ -8,8 +8,8 @@
 use crate::rpc_index::{CanonicalIntentCoordinate, IndexedProgramRelease};
 use crate::operatord::KeeperActionSelection;
 use crate::transaction_builder::{
-    IntegerUnit, ProtocolFlow, ProtocolTransactionBuilder, RuntimeAdmission,
-    UnsignedProtocolTransaction,
+    ExactEquation, IntegerUnit, OwnedInstructionDraft, ProtocolFlow,
+    ProtocolTransactionBuilder, RuntimeAdmission, SemanticOwner, UnsignedProtocolTransaction,
 };
 use crate::workflow_graph::{
     plan_source_crank, CanonicalActionCoordinate, ExplicitOperatorReleaseManifest,
@@ -17,10 +17,12 @@ use crate::workflow_graph::{
     SourceCrankObservation, SourceWorkflowActionMaterial, WorkflowGraphError,
 };
 use clutch_solana_layout::registry::{
-    AllocationStatus, ExtensionAction, SOURCE_SERIES_FAMILY_TAG, SOURCE_SERIES_FAMILY_VERSION,
+    AllocationStatus, DirectMarketAction, ExtensionAction, DIRECT_MARKET_FAMILY_TAG,
+    DIRECT_MARKET_FAMILY_VERSION, SOURCE_SERIES_FAMILY_TAG, SOURCE_SERIES_FAMILY_VERSION,
 };
 use sha2::{Digest, Sha256};
 use solana_address::Address;
+use solana_instruction::AccountMeta;
 use std::collections::BTreeSet;
 
 pub const CANONICAL_ACTION_MATERIAL_SCHEMA_V1: &str =
@@ -105,6 +107,197 @@ impl CanonicalAccountRoleV1 {
     pub const fn signer(self) -> bool {
         self.signer
     }
+}
+
+/// Closed operator vocabulary for current Direct account roles.
+///
+/// This is an untrusted projection of onchain state, not an authorization
+/// token. It exists to prevent a launcher from inventing positional metas or
+/// privileges outside the exact action-specific frame checked again by SBF.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectAccountRoleV1 {
+    ProductRoot,
+    FounderSeriesLink,
+    CompilerBundle,
+    DirectRoot,
+    DirectReplay,
+    FreshReservation,
+    WritableReservation,
+    ReadonlyReservation,
+    FreshSelection,
+    Selection,
+    ActorPayer,
+    Position,
+    PositionReplay,
+    Realm,
+    CollateralProfile,
+    CollateralPolicy,
+    TokenProgram,
+    GeneralMarketBinding,
+    GeneralMarketRuntime,
+    MarketInstance,
+    MarketGenesis,
+    SystemProgram,
+    RentSysvar,
+    ClockSysvar,
+    PriceGrid,
+    NativeClaimBasis,
+    PriceMeasurePolicy,
+    BatchPolicy,
+    RevenuePolicyRecord,
+    RevenuePolicy,
+    NeutralSink,
+    BondRefundOwner,
+    RentRefundOwner,
+    LivenessPolicy,
+    Candidate,
+    Keeper,
+    CandidatePayer,
+}
+
+impl DirectAccountRoleV1 {
+    const fn writable(self) -> bool {
+        matches!(
+            self,
+            Self::ProductRoot
+                | Self::DirectRoot
+                | Self::DirectReplay
+                | Self::FreshReservation
+                | Self::WritableReservation
+                | Self::FreshSelection
+                | Self::Selection
+                | Self::ActorPayer
+                | Self::Position
+                | Self::PositionReplay
+                | Self::NeutralSink
+                | Self::BondRefundOwner
+                | Self::RentRefundOwner
+                | Self::Candidate
+                | Self::Keeper
+                | Self::CandidatePayer
+        )
+    }
+
+    const fn signer(self) -> bool {
+        matches!(self, Self::ActorPayer | Self::Keeper)
+    }
+}
+
+/// One named Direct address. Writable/signer bits are derived from the role;
+/// callers cannot independently set them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectNamedAccountV1 {
+    role: DirectAccountRoleV1,
+    address: Address,
+}
+
+impl DirectNamedAccountV1 {
+    pub fn new(role: DirectAccountRoleV1, address: Address) -> Result<Self> {
+        if address == Address::default() {
+            return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+        }
+        Ok(Self { role, address })
+    }
+
+    #[must_use]
+    pub const fn role(self) -> DirectAccountRoleV1 { self.role }
+
+    #[must_use]
+    pub const fn address(self) -> Address { self.address }
+}
+
+/// Exact action-specific Direct account projection for actions 2 through 12.
+///
+/// Actions 1 and 13 deliberately refuse until Product publishes the final
+/// callable `0xba` allocation/retirement account frames. Adding those frames
+/// requires extending this closed grammar rather than accepting a generic
+/// `Vec<AccountMeta>`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectActionAccountsV1 {
+    action: DirectMarketAction,
+    accounts: Vec<DirectNamedAccountV1>,
+}
+
+impl DirectActionAccountsV1 {
+    pub fn new(
+        action: DirectMarketAction,
+        accounts: Vec<DirectNamedAccountV1>,
+    ) -> Result<Self> {
+        validate_direct_account_roles_v1(action, &accounts)?;
+        Ok(Self { action, accounts })
+    }
+
+    #[must_use]
+    pub const fn action(&self) -> DirectMarketAction { self.action }
+
+    #[must_use]
+    pub fn accounts(&self) -> &[DirectNamedAccountV1] { &self.accounts }
+
+    fn driver_account(&self) -> Result<Address> {
+        self.accounts
+            .iter()
+            .find(|account| account.role == DirectAccountRoleV1::DirectRoot)
+            .map(|account| account.address)
+            .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)
+    }
+
+    fn fee_payer(&self) -> Result<Address> {
+        let preferred = if matches!(
+            self.action,
+            DirectMarketAction::FreezeBook
+                | DirectMarketAction::BeginVerification
+                | DirectMarketAction::VerifyCandidate
+                | DirectMarketAction::FinalizeSelection
+                | DirectMarketAction::SettlePair
+                | DirectMarketAction::LapseEmpty
+                | DirectMarketAction::LapseUnselected
+                | DirectMarketAction::LapseSelected
+                | DirectMarketAction::RetireTerminal
+        ) {
+            DirectAccountRoleV1::Keeper
+        } else {
+            DirectAccountRoleV1::ActorPayer
+        };
+        self.accounts
+            .iter()
+            .find(|account| account.role == preferred)
+            .map(|account| account.address)
+            .ok_or(CanonicalActionMaterialErrorV1::FeePayerMismatch)
+    }
+
+    fn instruction_parts(&self) -> (Vec<AccountMeta>, Vec<Address>) {
+        let metas = self
+            .accounts
+            .iter()
+            .map(|account| AccountMeta {
+                pubkey: account.address,
+                is_signer: account.role.signer(),
+                is_writable: account.role.writable(),
+            })
+            .collect::<Vec<_>>();
+        let signers = self
+            .accounts
+            .iter()
+            .filter(|account| account.role.signer())
+            .map(|account| account.address)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        (metas, signers)
+    }
+}
+
+/// Direct material whose wire payload is owned by the current client codec and
+/// whose positional metas are owned by [`DirectActionAccountsV1`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectWorkflowActionMaterialV1 {
+    pub action_name: String,
+    pub semantic_owner: SemanticOwner,
+    pub sequence: u64,
+    pub accounts: DirectActionAccountsV1,
+    pub payload: clutch_client_contract::direct_market::DirectMarketClientPayloadV1,
+    pub exact_equations: Vec<ExactEquation>,
+    pub valid_before_slot: u64,
 }
 
 impl ActionFreshnessBoundaryV1 {
@@ -358,6 +551,434 @@ pub fn construct_source_action_material_v1(
         planned,
         draft_id,
     })
+}
+
+/// Construct one release-admitted Direct action from the closed `80/1`
+/// payload codec and exact action-specific account grammar.
+///
+/// The result remains unsigned and cannot exist for a coordinate absent from
+/// the checked release. Actions 1 and 13 additionally remain structurally
+/// unavailable until Product's final `0xba` SBF frames are frozen.
+#[allow(clippy::too_many_arguments)]
+pub fn construct_direct_action_material_v1(
+    release: &IndexedProgramRelease,
+    manifest: &ExplicitOperatorReleaseManifest,
+    builder: &ProtocolTransactionBuilder,
+    selection: &KeeperActionSelection,
+    freshness: ActionFreshnessBoundaryV1,
+    material: DirectWorkflowActionMaterialV1,
+) -> Result<CanonicalActionMaterialV1> {
+    release
+        .validate()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    manifest
+        .validate()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    freshness.validate()?;
+    if release.program_id != manifest.clutch.program_id
+        || release.program_data != manifest.clutch.program_data
+        || release.deployment_slot != manifest.clutch.deployment_slot
+        || release.elf_sha256 != manifest.clutch.elf_sha256
+        || release.release_manifest_sha256 != manifest.manifest_sha256
+    {
+        return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
+    }
+    let action = material.accounts.action();
+    if material.payload.action() != action
+        || material.valid_before_slot != freshness.valid_before_slot
+        || material.sequence == 0
+        || material.action_name != direct_selection_action(action)
+    {
+        return Err(CanonicalActionMaterialErrorV1::WrongSelection);
+    }
+    let coordinate = CanonicalIntentCoordinate {
+        family_tag: DIRECT_MARKET_FAMILY_TAG,
+        family_version: DIRECT_MARKET_FAMILY_VERSION,
+        local_action: action.tag(),
+    };
+    if release.enabled_intents.binary_search(&coordinate).is_err() {
+        return Err(CanonicalActionMaterialErrorV1::CoordinateDisabled);
+    }
+    let driver_account = material.accounts.driver_account()?;
+    if selection.release_key != release.key()
+        || selection.effective_commitment != crate::rpc_index::RpcCommitment::Finalized
+        || selection.action != material.action_name
+        || selection.account != driver_account
+        || freshness.observed_slot < selection.account_slot
+    {
+        return Err(CanonicalActionMaterialErrorV1::WrongSelection);
+    }
+    manifest
+        .admits_owner(&material.semantic_owner)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let fee_payer = material.accounts.fee_payer()?;
+    if builder.clutch_program() != release.program_id
+        || builder.clutch_release_sha256() != release.elf_sha256
+        || builder.payer() != fee_payer
+    {
+        return Err(CanonicalActionMaterialErrorV1::FeePayerMismatch);
+    }
+    let account_roles = material
+        .accounts
+        .accounts()
+        .iter()
+        .map(|account| CanonicalAccountRoleV1 {
+            label: direct_role_label_v1(account.role),
+            address: account.address,
+            writable: account.role.writable(),
+            signer: account.role.signer(),
+        })
+        .collect::<Vec<_>>();
+    let (accounts, required_signers) = material.accounts.instruction_parts();
+    let draft = OwnedInstructionDraft::enabled_direct_market_request_v1(
+        material.action_name,
+        material.semantic_owner,
+        manifest.clutch.program_id,
+        accounts,
+        required_signers,
+        material.exact_equations,
+        material.sequence,
+        &material.payload,
+    )
+    .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let unsigned_transaction = builder
+        .build_atomic(&[draft])
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let planned = PlannedWorkflowNode {
+        manifest_sha256: manifest.manifest_sha256,
+        cursor: selection.cursor,
+        coordinate: CanonicalActionCoordinate::Direct(action),
+        unsigned_transaction,
+        reload_authoritative_accounts: true,
+    };
+    validate_unsigned_direct_plan(coordinate, fee_payer, &account_roles, &planned)?;
+    let release_key = release.key();
+    let draft_id = action_material_id(
+        &release_key,
+        release.release_manifest_sha256,
+        release.capability_profile_id,
+        coordinate,
+        selection.account,
+        selection.account_slot,
+        selection.cursor,
+        freshness,
+        fee_payer,
+        &account_roles,
+        &planned.unsigned_transaction,
+    );
+    Ok(CanonicalActionMaterialV1 {
+        release_key,
+        release_manifest_sha256: release.release_manifest_sha256,
+        capability_profile_id: release.capability_profile_id,
+        coordinate,
+        driver_account: selection.account,
+        driver_account_slot: selection.account_slot,
+        cursor: selection.cursor,
+        freshness,
+        fee_payer,
+        account_roles,
+        planned,
+        draft_id,
+    })
+}
+
+fn validate_direct_account_roles_v1(
+    action: DirectMarketAction,
+    accounts: &[DirectNamedAccountV1],
+) -> Result<()> {
+    use DirectAccountRoleV1 as Role;
+    if accounts.len() > 30 {
+        return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+    }
+    match action {
+        DirectMarketAction::InitializeMarket | DirectMarketAction::RetireTerminal => {
+            Err(CanonicalActionMaterialErrorV1::InvalidPlan)
+        }
+        DirectMarketAction::AdmitOrder => {
+            let end = require_direct_roles_v1(accounts, 0, &[
+                Role::DirectRoot, Role::DirectReplay, Role::FreshReservation,
+                Role::ActorPayer, Role::Position, Role::PositionReplay, Role::Realm,
+                Role::CollateralProfile, Role::CollateralPolicy, Role::TokenProgram,
+                Role::GeneralMarketBinding, Role::GeneralMarketRuntime,
+                Role::MarketInstance, Role::SystemProgram, Role::RentSysvar,
+                Role::ClockSysvar, Role::CompilerBundle, Role::MarketGenesis,
+                Role::PriceGrid,
+            ])?;
+            if accounts.len() == end {
+                Ok(())
+            } else if accounts.len() == end + 1
+                && accounts[end].role == Role::ReadonlyReservation
+            {
+                Ok(())
+            } else {
+                Err(CanonicalActionMaterialErrorV1::InvalidPlan)
+            }
+        }
+        DirectMarketAction::CancelOrder => require_direct_exact_roles_v1(accounts, &[
+            Role::DirectRoot, Role::DirectReplay, Role::WritableReservation,
+            Role::ActorPayer, Role::Position, Role::PositionReplay, Role::Realm,
+            Role::CollateralProfile, Role::CollateralPolicy, Role::TokenProgram,
+            Role::GeneralMarketBinding, Role::GeneralMarketRuntime,
+            Role::MarketInstance, Role::MarketGenesis, Role::NeutralSink,
+            Role::ClockSysvar,
+        ]),
+        DirectMarketAction::FreezeBook => {
+            let mut index = require_direct_roles_v1(accounts, 0, &[
+                Role::DirectRoot, Role::DirectReplay, Role::FreshSelection,
+                Role::ActorPayer, Role::SystemProgram, Role::RentSysvar,
+                Role::ClockSysvar, Role::CompilerBundle, Role::NativeClaimBasis,
+                Role::PriceMeasurePolicy, Role::MarketGenesis, Role::PriceGrid,
+            ])?;
+            index = consume_direct_roles_v1(accounts, index, Role::ReadonlyReservation, 0, 2)?;
+            require_direct_suffix_v1(accounts, index)
+        }
+        DirectMarketAction::SubmitCandidate => {
+            let end = require_direct_roles_v1(accounts, 0, &[
+                Role::DirectRoot, Role::DirectReplay, Role::Selection,
+                Role::ClockSysvar, Role::ActorPayer, Role::SystemProgram,
+            ])?;
+            if accounts.len() == end
+                || accounts.len() == end + 1
+                    && accounts[end].role == Role::BondRefundOwner
+            {
+                Ok(())
+            } else {
+                Err(CanonicalActionMaterialErrorV1::InvalidPlan)
+            }
+        }
+        DirectMarketAction::BeginVerification | DirectMarketAction::VerifyCandidate => {
+            let index = require_direct_roles_v1(accounts, 0, &[
+                Role::DirectRoot, Role::DirectReplay, Role::Selection, Role::ClockSysvar,
+            ])?;
+            require_direct_suffix_v1(accounts, index)
+        }
+        DirectMarketAction::FinalizeSelection => validate_direct_finalize_roles_v1(accounts),
+        DirectMarketAction::SettlePair => validate_direct_economic_roles_v1(
+            accounts,
+            true,
+            2,
+            2,
+        ),
+        DirectMarketAction::LapseEmpty => {
+            if accounts.get(4).map(|account| account.role) == Some(Role::SystemProgram) {
+                validate_direct_missed_freeze_roles_v1(accounts)
+            } else {
+                validate_direct_economic_roles_v1(accounts, false, 0, 2)
+            }
+        }
+        DirectMarketAction::LapseUnselected | DirectMarketAction::LapseSelected => {
+            validate_direct_economic_roles_v1(accounts, false, 0, 2)
+        }
+    }
+}
+
+fn validate_direct_finalize_roles_v1(accounts: &[DirectNamedAccountV1]) -> Result<()> {
+    use DirectAccountRoleV1 as Role;
+    if accounts.get(3).map(|account| account.role) == Some(Role::Realm) {
+        return validate_direct_economic_roles_v1(accounts, false, 0, 2);
+    }
+    let mut index = require_direct_roles_v1(accounts, 0, &[
+        Role::DirectRoot, Role::DirectReplay, Role::Selection, Role::ClockSysvar,
+    ])?;
+    index = consume_direct_roles_v1(accounts, index, Role::BondRefundOwner, 0, 3)?;
+    require_direct_suffix_v1(accounts, index)
+}
+
+fn validate_direct_economic_roles_v1(
+    accounts: &[DirectNamedAccountV1],
+    fee_bearing: bool,
+    minimum_endpoints: usize,
+    maximum_endpoints: usize,
+) -> Result<()> {
+    use DirectAccountRoleV1 as Role;
+    let mut index = require_direct_roles_v1(accounts, 0, &[
+        Role::DirectRoot, Role::DirectReplay, Role::Selection, Role::Realm,
+        Role::CollateralProfile, Role::CollateralPolicy, Role::TokenProgram,
+        Role::GeneralMarketBinding, Role::GeneralMarketRuntime, Role::MarketInstance,
+        Role::MarketGenesis, Role::ClockSysvar,
+    ])?;
+    let mut endpoints = 0usize;
+    while accounts.get(index).map(|account| account.role) == Some(Role::WritableReservation) {
+        index = require_direct_roles_v1(accounts, index, &[
+            Role::WritableReservation, Role::Position, Role::PositionReplay,
+        ])?;
+        endpoints += 1;
+        if endpoints > maximum_endpoints {
+            return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+        }
+    }
+    if endpoints < minimum_endpoints {
+        return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+    }
+    if fee_bearing {
+        index = require_direct_roles_v1(accounts, index, &[
+            Role::BatchPolicy, Role::RevenuePolicyRecord, Role::RevenuePolicy,
+        ])?;
+        if accounts.get(index).map(|account| account.role) == Some(Role::Position) {
+            index = require_direct_roles_v1(accounts, index, &[
+                Role::Position, Role::PositionReplay,
+            ])?;
+        }
+    }
+    index = consume_direct_roles_v1(accounts, index, Role::BondRefundOwner, 0, 3)?;
+    require_direct_suffix_v1(accounts, index)
+}
+
+fn validate_direct_missed_freeze_roles_v1(accounts: &[DirectNamedAccountV1]) -> Result<()> {
+    use DirectAccountRoleV1 as Role;
+    let mut index = require_direct_roles_v1(accounts, 0, &[
+        Role::DirectRoot, Role::DirectReplay, Role::FreshSelection, Role::ActorPayer,
+        Role::SystemProgram, Role::RentSysvar, Role::ClockSysvar, Role::CompilerBundle,
+        Role::NativeClaimBasis, Role::PriceMeasurePolicy, Role::MarketGenesis,
+        Role::PriceGrid, Role::Realm, Role::CollateralProfile, Role::CollateralPolicy,
+        Role::TokenProgram, Role::GeneralMarketBinding, Role::GeneralMarketRuntime,
+        Role::MarketInstance,
+    ])?;
+    let mut endpoints = 0usize;
+    while accounts.get(index).map(|account| account.role) == Some(Role::WritableReservation) {
+        index = require_direct_roles_v1(accounts, index, &[
+            Role::WritableReservation, Role::Position, Role::PositionReplay,
+        ])?;
+        endpoints += 1;
+        if endpoints > 2 {
+            return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+        }
+    }
+    require_direct_suffix_v1(accounts, index)
+}
+
+fn require_direct_suffix_v1(accounts: &[DirectNamedAccountV1], index: usize) -> Result<()> {
+    use DirectAccountRoleV1 as Role;
+    let end = require_direct_roles_v1(accounts, index, &[
+        Role::LivenessPolicy, Role::Candidate, Role::Keeper, Role::CandidatePayer,
+    ])?;
+    if end == accounts.len() {
+        Ok(())
+    } else {
+        Err(CanonicalActionMaterialErrorV1::InvalidPlan)
+    }
+}
+
+fn consume_direct_roles_v1(
+    accounts: &[DirectNamedAccountV1],
+    mut index: usize,
+    role: DirectAccountRoleV1,
+    minimum: usize,
+    maximum: usize,
+) -> Result<usize> {
+    let start = index;
+    while accounts.get(index).map(|account| account.role) == Some(role) {
+        index += 1;
+        if index - start > maximum {
+            return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+        }
+    }
+    if index - start < minimum {
+        Err(CanonicalActionMaterialErrorV1::InvalidPlan)
+    } else {
+        Ok(index)
+    }
+}
+
+fn require_direct_exact_roles_v1(
+    accounts: &[DirectNamedAccountV1],
+    expected: &[DirectAccountRoleV1],
+) -> Result<()> {
+    let end = require_direct_roles_v1(accounts, 0, expected)?;
+    if end == accounts.len() {
+        Ok(())
+    } else {
+        Err(CanonicalActionMaterialErrorV1::InvalidPlan)
+    }
+}
+
+fn require_direct_roles_v1(
+    accounts: &[DirectNamedAccountV1],
+    start: usize,
+    expected: &[DirectAccountRoleV1],
+) -> Result<usize> {
+    let end = start
+        .checked_add(expected.len())
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    if accounts.get(start..end).map(|values| {
+        values
+            .iter()
+            .zip(expected.iter())
+            .all(|(account, role)| account.role == *role)
+    }) == Some(true)
+    {
+        Ok(end)
+    } else {
+        Err(CanonicalActionMaterialErrorV1::InvalidPlan)
+    }
+}
+
+fn validate_unsigned_direct_plan(
+    coordinate: CanonicalIntentCoordinate,
+    fee_payer: Address,
+    roles: &[CanonicalAccountRoleV1],
+    planned: &PlannedWorkflowNode,
+) -> Result<()> {
+    let transaction = &planned.unsigned_transaction;
+    let expected_signers = roles
+        .iter()
+        .filter(|role| role.signer)
+        .map(|role| role.address)
+        .chain(core::iter::once(fee_payer))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let binding_matches = matches!(
+        transaction.registry_bindings.as_slice(),
+        [Some(binding)]
+            if binding.family.tag() == coordinate.family_tag
+                && binding.family.version() == coordinate.family_version
+                && binding.local_action == coordinate.local_action
+                && binding.family_status == AllocationStatus::Frozen
+                && matches!(
+                    binding.central_action,
+                    Some(ExtensionAction::DirectMarket(action))
+                        if action.tag() == coordinate.local_action
+                )
+    );
+    if !matches!(
+        planned.coordinate,
+        CanonicalActionCoordinate::Direct(action)
+            if action.tag() == coordinate.local_action
+    )
+        || transaction.flows != [ProtocolFlow::DirectMarketV1]
+        || transaction.actions.len() != 1
+        || transaction.semantic_owners.len() != 1
+        || !binding_matches
+        || transaction.runtime_admissions != [RuntimeAdmission::ReleaseBoundEnabled]
+        || transaction.required_signers != expected_signers
+        || transaction.exact_equations.is_empty()
+        || transaction.serialized_transaction.is_empty()
+        || transaction.has_recent_blockhash
+        || transaction.signed
+        || transaction.submitted
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+    }
+    Ok(())
+}
+
+pub(crate) const fn direct_selection_action(action: DirectMarketAction) -> &'static str {
+    match action {
+        DirectMarketAction::InitializeMarket => "initialize-direct-market",
+        DirectMarketAction::AdmitOrder => "admit-direct-order",
+        DirectMarketAction::CancelOrder => "cancel-direct-order",
+        DirectMarketAction::FreezeBook => "freeze-direct-book",
+        DirectMarketAction::SubmitCandidate => "submit-direct-candidate",
+        DirectMarketAction::BeginVerification => "begin-direct-verification",
+        DirectMarketAction::VerifyCandidate => "verify-direct-candidate",
+        DirectMarketAction::FinalizeSelection => "finalize-direct-selection",
+        DirectMarketAction::SettlePair => "settle-direct-pair",
+        DirectMarketAction::LapseEmpty => "lapse-empty-direct-market",
+        DirectMarketAction::LapseUnselected => "lapse-unselected-direct-market",
+        DirectMarketAction::LapseSelected => "lapse-selected-direct-market",
+        DirectMarketAction::RetireTerminal => "retire-direct-terminal",
+    }
 }
 
 pub(crate) const fn source_selection_action(
@@ -628,6 +1249,49 @@ pub(crate) const fn source_role_label_v2(
     }
 }
 
+pub(crate) const fn direct_role_label_v1(role: DirectAccountRoleV1) -> &'static str {
+    use DirectAccountRoleV1 as Role;
+    match role {
+        Role::ProductRoot => "product-root",
+        Role::FounderSeriesLink => "founder-series-link",
+        Role::CompilerBundle => "compiler-bundle",
+        Role::DirectRoot => "direct-root",
+        Role::DirectReplay => "direct-replay",
+        Role::FreshReservation => "fresh-direct-reservation",
+        Role::WritableReservation => "writable-direct-reservation",
+        Role::ReadonlyReservation => "readonly-direct-reservation",
+        Role::FreshSelection => "fresh-direct-selection",
+        Role::Selection => "direct-selection",
+        Role::ActorPayer => "actor-payer",
+        Role::Position => "position-v3",
+        Role::PositionReplay => "position-replay-v3",
+        Role::Realm => "realm",
+        Role::CollateralProfile => "collateral-profile",
+        Role::CollateralPolicy => "collateral-policy",
+        Role::TokenProgram => "token-2022-program",
+        Role::GeneralMarketBinding => "general-market-binding-v3",
+        Role::GeneralMarketRuntime => "general-market-runtime-v3",
+        Role::MarketInstance => "market-instance-v2",
+        Role::MarketGenesis => "market-genesis-v2",
+        Role::SystemProgram => "system-program",
+        Role::RentSysvar => "rent-sysvar",
+        Role::ClockSysvar => "clock-sysvar",
+        Role::PriceGrid => "price-grid",
+        Role::NativeClaimBasis => "native-claim-basis",
+        Role::PriceMeasurePolicy => "price-measure-policy",
+        Role::BatchPolicy => "batch-policy",
+        Role::RevenuePolicyRecord => "revenue-policy-record",
+        Role::RevenuePolicy => "revenue-policy",
+        Role::NeutralSink => "neutral-sink",
+        Role::BondRefundOwner => "candidate-bond-refund-owner",
+        Role::RentRefundOwner => "rent-refund-owner",
+        Role::LivenessPolicy => "candidate-liveness-policy",
+        Role::Candidate => "candidate-liveness-compartment",
+        Role::Keeper => "keeper",
+        Role::CandidatePayer => "candidate-liveness-payer",
+    }
+}
+
 const fn workflow_lane_byte(lane: crate::workflow_graph::WorkflowLane) -> u8 {
     match lane {
         crate::workflow_graph::WorkflowLane::Creation => 0,
@@ -689,6 +1353,115 @@ mod tests {
             signed: false,
             submitted: false,
         }
+    }
+
+    fn direct_accounts(
+        roles: &[DirectAccountRoleV1],
+    ) -> Vec<DirectNamedAccountV1> {
+        roles
+            .iter()
+            .enumerate()
+            .map(|(index, role)| {
+                DirectNamedAccountV1::new(
+                    *role,
+                    address(u8::try_from(index + 1).unwrap()),
+                )
+                .unwrap()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn direct_verification_frame_is_exact_and_reordered_suffix_refuses() {
+        use DirectAccountRoleV1 as Role;
+        let roles = [
+            Role::DirectRoot,
+            Role::DirectReplay,
+            Role::Selection,
+            Role::ClockSysvar,
+            Role::LivenessPolicy,
+            Role::Candidate,
+            Role::Keeper,
+            Role::CandidatePayer,
+        ];
+        assert!(DirectActionAccountsV1::new(
+            DirectMarketAction::BeginVerification,
+            direct_accounts(&roles),
+        )
+        .is_ok());
+        let mut reordered = roles;
+        reordered.swap(4, 5);
+        assert_eq!(
+            DirectActionAccountsV1::new(
+                DirectMarketAction::BeginVerification,
+                direct_accounts(&reordered),
+            ),
+            Err(CanonicalActionMaterialErrorV1::InvalidPlan),
+        );
+    }
+
+    #[test]
+    fn direct_settlement_frame_requires_two_endpoints_and_fee_owner_tuple() {
+        use DirectAccountRoleV1 as Role;
+        let mut roles = vec![
+            Role::DirectRoot,
+            Role::DirectReplay,
+            Role::Selection,
+            Role::Realm,
+            Role::CollateralProfile,
+            Role::CollateralPolicy,
+            Role::TokenProgram,
+            Role::GeneralMarketBinding,
+            Role::GeneralMarketRuntime,
+            Role::MarketInstance,
+            Role::MarketGenesis,
+            Role::ClockSysvar,
+        ];
+        roles.extend([
+            Role::WritableReservation,
+            Role::Position,
+            Role::PositionReplay,
+            Role::WritableReservation,
+            Role::Position,
+            Role::PositionReplay,
+            Role::BatchPolicy,
+            Role::RevenuePolicyRecord,
+            Role::RevenuePolicy,
+            Role::Position,
+            Role::PositionReplay,
+            Role::BondRefundOwner,
+            Role::LivenessPolicy,
+            Role::Candidate,
+            Role::Keeper,
+            Role::CandidatePayer,
+        ]);
+        assert!(DirectActionAccountsV1::new(
+            DirectMarketAction::SettlePair,
+            direct_accounts(&roles),
+        )
+        .is_ok());
+        roles.remove(15);
+        roles.remove(14);
+        roles.remove(13);
+        assert_eq!(
+            DirectActionAccountsV1::new(
+                DirectMarketAction::SettlePair,
+                direct_accounts(&roles),
+            ),
+            Err(CanonicalActionMaterialErrorV1::InvalidPlan),
+        );
+    }
+
+    #[test]
+    fn direct_product_boundary_actions_refuse_until_final_frames_land() {
+        assert_eq!(
+            DirectActionAccountsV1::new(DirectMarketAction::InitializeMarket, vec![]),
+            Err(CanonicalActionMaterialErrorV1::InvalidPlan),
+        );
+        assert_eq!(
+            DirectActionAccountsV1::new(DirectMarketAction::RetireTerminal, vec![]),
+            Err(CanonicalActionMaterialErrorV1::InvalidPlan),
+        );
     }
 
     #[test]

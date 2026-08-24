@@ -43,7 +43,8 @@ use clutch_solana_layout::product_series::{
     REGISTER_SERIES_PAYLOAD_BYTES_V1,
 };
 use clutch_solana_layout::registry::{
-    ExtensionAction, GeneralV2Action, RecurringSeriesAction, SourceSeriesAction,
+    DirectMarketAction, ExtensionAction, GeneralV2Action, RecurringSeriesAction,
+    SourceSeriesAction,
 };
 use clutch_solana_layout::source_series::{
     account_contract_v2, validate_account_metas_v2, ObservedSourceAccountMetaV2,
@@ -180,7 +181,7 @@ impl ExplicitOperatorReleaseManifest {
         Ok(())
     }
 
-    fn admits_owner(&self, owner: &SemanticOwner) -> Result<()> {
+    pub(crate) fn admits_owner(&self, owner: &SemanticOwner) -> Result<()> {
         self.validate()?;
         if self
             .semantic_releases
@@ -678,6 +679,7 @@ pub struct PlannedWorkflowNode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CanonicalActionCoordinate {
     General(GeneralV2Action),
+    Direct(DirectMarketAction),
     SourceRegistry(SourceSeriesAction),
     SourceTransition {
         registry: SourceSeriesAction,
@@ -2105,6 +2107,11 @@ fn construct(
             // No checked release currently admits a General successor. Keep
             // historical observation/parser types for hostile read-only
             // inspection, but do not turn any of them into transaction bytes.
+            return Err(WorkflowGraphError::NotReady);
+        }
+        CanonicalActionCoordinate::Direct(_) => {
+            // Direct uses the release-bound action-material constructor, which
+            // owns its variable exact account grammar and outer replay codec.
             return Err(WorkflowGraphError::NotReady);
         }
         CanonicalActionCoordinate::Series(action) => {
