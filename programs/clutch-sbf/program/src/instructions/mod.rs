@@ -198,6 +198,8 @@ pub mod general_v2_settlement_producer_v5;
     feature = "profile-successor-chain-attached-dev"
 ))]
 pub mod general_v2_exact_index_retirement_v1;
+/// Atomic current General action-47 Product/Source/Position/index retirement.
+pub(crate) mod general_v2_action47_current;
 /// Typed counted settlement-child retirement and phase gate.
 #[cfg(any(
     feature = "profile-non-production-general-v2-empty-book-identity-lab",

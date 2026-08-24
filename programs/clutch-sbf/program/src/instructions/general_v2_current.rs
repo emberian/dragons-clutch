@@ -14,7 +14,8 @@ use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 use super::{
-    general_v2_exact_index_retirement_v1, general_v2_fee_retirement_v2,
+    general_v2_action47_current, general_v2_exact_index_retirement_v1,
+    general_v2_fee_retirement_v2,
     general_v2_freeze_v5, general_v2_portfolio_retirement_v5,
     general_v2_settlement_producer_v5, general_v2_settlement_retirement_v1,
 };
@@ -45,6 +46,11 @@ pub(crate) fn process(
         GeneralV2Action::RetireExactIndexChildren
         | GeneralV2Action::RetireRetainedFeed => {
             general_v2_exact_index_retirement_v1::process(
+                program_id, accounts, sequence, action, payload,
+            )
+        }
+        GeneralV2Action::CloseIndexedSettlementRoot => {
+            general_v2_action47_current::process(
                 program_id, accounts, sequence, action, payload,
             )
         }
