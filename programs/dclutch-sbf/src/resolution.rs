@@ -61,7 +61,7 @@ fn process_price(
         frame.manifest,
         frame.material_staging_cursor,
         frame.manifest_staging_cursor,
-        frame.sponsor,
+        frame.rent_credit,
         frame.rent_sysvar,
         market,
     )?;
@@ -109,7 +109,7 @@ fn process_failure(
         frame.manifest,
         frame.material_staging_cursor,
         frame.manifest_staging_cursor,
-        frame.sponsor,
+        frame.rent_credit,
         frame.rent_sysvar,
         market,
     )?;

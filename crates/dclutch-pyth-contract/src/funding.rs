@@ -90,7 +90,7 @@ pub fn validate_required_resolution_funding(
         .map_err(capability_error)?;
     require_native_quote(quote)?;
     funding
-        .validate_against(manifest_content_id, manifest, custody)
+        .validate_close_custody(manifest_content_id, manifest, custody)
         .map_err(capability_error)?;
     let remaining = funding.remaining();
     let released = funding.released();
@@ -276,6 +276,28 @@ mod tests {
                 FundingCustodyObservationV1::native_only(117, 100).expect("short"),
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn native_donation_is_admitted_for_exhaustive_canonical_close() {
+        let mut storage = [0; MANIFEST_BYTES];
+        let manifest = manifest(&mut storage, quote(100, 7, 11));
+        let selected = manifest
+            .required_founding_entry_for_config(id(31))
+            .expect("selected");
+        let funding = construct_required_resolution_funding(id(99), manifest, selected, 100, 44)
+            .expect("funding");
+        assert_eq!(
+            validate_required_resolution_funding(
+                funding,
+                id(99),
+                manifest,
+                selected,
+                100,
+                FundingCustodyObservationV1::native_only(126, 100).expect("donation custody"),
+            ),
+            Ok(())
         );
     }
 

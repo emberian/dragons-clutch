@@ -919,8 +919,9 @@ fn account<'a, 'info>(
 #[cfg(test)]
 mod tests {
     use dclutch_capability_contract::{
-        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, FundingQuoteV1,
-        MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
+        FundingAmountsV1, FundingCustodyObservationV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
+        MAX_DEPENDENCIES_PER_CAPABILITY,
     };
     use dclutch_core_contract::{MarketIdentity, MarketRoot};
     use dclutch_market_contract::market::{CategoricalMarketV1, CategoricalSettlementSummaryV1};
@@ -978,7 +979,20 @@ mod tests {
                 0,
                 0,
                 [0; MAX_DEPENDENCIES_PER_CAPABILITY],
-                FundingQuoteV1::new(fund_rent, 0, 0, 3, 5, 0, 0).expect("quote"),
+                FundingQuoteV1::new(
+                    FundingAmountsV1::new(
+                        CompartmentFundingV1::native_lamports(fund_rent).expect("rent"),
+                        CompartmentFundingV1::not_applicable(),
+                        CompartmentFundingV1::not_applicable(),
+                        CompartmentFundingV1::native_lamports(3).expect("provider"),
+                        CompartmentFundingV1::native_lamports(5).expect("bounty"),
+                        CompartmentFundingV1::not_applicable(),
+                        CompartmentFundingV1::not_applicable(),
+                    )
+                    .expect("typed quote"),
+                    None,
+                )
+                .expect("quote"),
             )
             .expect("entry");
             let mut manifest_bytes = vec![0; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
@@ -1025,7 +1039,13 @@ mod tests {
                         manifest,
                         0,
                         funding,
-                        funding.remaining().total_principal(),
+                        FundingCustodyObservationV1::native_only(
+                            fund_rent
+                                .checked_add(funding.remaining().native_lamports_total())
+                                .expect("bounded funding custody"),
+                            fund_rent,
+                        )
+                        .expect("typed funding custody"),
                         44,
                     )
                     .expect("ready");

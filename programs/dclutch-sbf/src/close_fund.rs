@@ -24,7 +24,7 @@ pub(crate) fn close_price(
         frame.fund,
         frame.resolver,
         amounts.first,
-        frame.sponsor,
+        frame.rent_credit,
         amounts.second,
         facts.rent_credit,
     )
@@ -39,7 +39,7 @@ pub(crate) fn close_failure(
         frame.fund,
         frame.bounty_recipient,
         amounts.first,
-        frame.sponsor,
+        frame.rent_credit,
         amounts.second,
         facts.rent_credit,
     )
@@ -48,31 +48,32 @@ pub(crate) fn close_failure(
 fn price_distribution(facts: FundFacts) -> Result<Distribution, ProgramError> {
     let remaining = facts.funding.remaining();
     let resolver = remaining
-        .provider_principal()
-        .checked_add(remaining.bounty_principal())
+        .provider()
+        .amount()
+        .checked_add(remaining.bounty().amount())
         .ok_or(AdapterError::Arithmetic)?;
-    let sponsor = facts
+    let rent_credit = facts
         .required_rent
         .checked_add(facts.credit_excess)
         .ok_or(AdapterError::Arithmetic)?;
     validate_minimum(facts)?;
     Ok(Distribution {
         first: resolver,
-        second: sponsor,
+        second: rent_credit,
     })
 }
 
 fn failure_distribution(facts: FundFacts) -> Result<Distribution, ProgramError> {
     let remaining = facts.funding.remaining();
-    let sponsor = facts
+    let rent_credit = facts
         .required_rent
-        .checked_add(remaining.provider_principal())
+        .checked_add(remaining.provider().amount())
         .and_then(|value| value.checked_add(facts.credit_excess))
         .ok_or(AdapterError::Arithmetic)?;
     validate_minimum(facts)?;
     Ok(Distribution {
-        first: remaining.bounty_principal(),
-        second: sponsor,
+        first: remaining.bounty().amount(),
+        second: rent_credit,
     })
 }
 
@@ -81,7 +82,7 @@ fn validate_minimum(facts: FundFacts) -> Result<(), ProgramError> {
         required_resolution_minimum_balance(facts.funding).map_err(|_| AdapterError::FundClose)?;
     let reconstructed = facts
         .required_rent
-        .checked_add(facts.funding.remaining().total_principal())
+        .checked_add(facts.funding.remaining().native_lamports_total())
         .ok_or(AdapterError::Arithmetic)?;
     if expected != reconstructed {
         return Err(AdapterError::FundClose.into());
@@ -169,7 +170,8 @@ fn distribute_and_close(
 mod tests {
     use dclutch_capability_contract::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
-        ContentId, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+        CompartmentFundingV1, ContentId, FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
+        MAX_DEPENDENCIES_PER_CAPABILITY,
     };
     use dclutch_pyth_contract::funding::construct_required_resolution_funding;
     use dclutch_rent_contract::{RefundAuthority, RentCreditV1};
@@ -180,7 +182,20 @@ mod tests {
 
     fn facts(actual: u64) -> FundFacts {
         let required_rent = 11;
-        let quote = FundingQuoteV1::new(required_rent, 0, 0, 3, 5, 0, 0).expect("quote");
+        let quote = FundingQuoteV1::new(
+            FundingAmountsV1::new(
+                CompartmentFundingV1::native_lamports(required_rent).expect("rent"),
+                CompartmentFundingV1::not_applicable(),
+                CompartmentFundingV1::not_applicable(),
+                CompartmentFundingV1::native_lamports(3).expect("provider"),
+                CompartmentFundingV1::native_lamports(5).expect("bounty"),
+                CompartmentFundingV1::not_applicable(),
+                CompartmentFundingV1::not_applicable(),
+            )
+            .expect("typed quote amounts"),
+            None,
+        )
+        .expect("quote");
         let entry = CapabilityEntryV1::new(
             content_id(10),
             content_id(11),

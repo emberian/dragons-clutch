@@ -7,13 +7,15 @@
 //! System creation, and atomic persistence.
 
 use dclutch_capability_contract::{
-    CapabilityFundingDerivationV1, CapabilityManifestV1, FUNDING_STATE_BYTES, FundingStateV1,
-    MARKET_OPENING_READINESS_BYTES, MARKET_OPENING_READINESS_PDA_DOMAIN, MarketOpeningReadinessV1,
+    CapabilityFundingAuthorityDerivationV1, CapabilityFundingDerivationV1,
+    CapabilityFundingVaultDerivationV1, CapabilityManifestV1, FUNDING_STATE_BYTES,
+    FundingCustodyObservationV1, FundingStateV1, MARKET_OPENING_READINESS_BYTES,
+    MARKET_OPENING_READINESS_PDA_DOMAIN, MarketOpeningReadinessV1, RealmCollateralCustodyV1,
+    RealmCollateralVaultObservationV1,
     readiness_frame::{
         AdvanceMarketOpeningReadinessFrameV1, AdvanceMarketOpeningReadinessObservationV1,
         AuthenticatedRentCreditBeneficiaryV1, BeginMarketOpeningReadinessFrameV1,
-        FundingAccountCapitalizationV1, ReadinessAccountMetaV1, advance_market_opening_readiness,
-        begin_market_opening_readiness,
+        ReadinessAccountMetaV1, advance_market_opening_readiness, begin_market_opening_readiness,
     },
     readiness_instruction::{
         AdvanceMarketOpeningReadinessV1, BeginMarketOpeningReadinessV1, ReadinessInstructionV1,
@@ -24,6 +26,7 @@ use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome
 use dclutch_rent_contract::{
     RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1,
 };
+use dclutch_token_svm::{AccountState, Mint, TokenAccount, TokenProgram};
 use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
@@ -40,7 +43,8 @@ use solana_system_interface::instruction::create_account;
 use crate::AdapterError;
 
 const BEGIN_ACCOUNTS: usize = 7;
-const ADVANCE_ACCOUNTS: usize = 4;
+const ADVANCE_NATIVE_ACCOUNTS: usize = 5;
+const ADVANCE_REALM_ACCOUNTS: usize = 9;
 
 /// Decode one exact readiness wire and execute the selected canonical route.
 pub(crate) fn dispatch(
@@ -116,36 +120,74 @@ struct AdvanceFrame<'a, 'info> {
     readiness: &'a AccountInfo<'info>,
     manifest: &'a AccountInfo<'info>,
     funding: &'a AccountInfo<'info>,
+    rent_sysvar: &'a AccountInfo<'info>,
+    realm_custody: Option<RealmCustodyFrame<'a, 'info>>,
+}
+
+struct RealmCustodyFrame<'a, 'info> {
+    authority: &'a AccountInfo<'info>,
+    vault: &'a AccountInfo<'info>,
+    mint: &'a AccountInfo<'info>,
+    token_program: &'a AccountInfo<'info>,
 }
 
 impl<'a, 'info> AdvanceFrame<'a, 'info> {
     fn parse(accounts: &'a [AccountInfo<'info>]) -> Result<Self, ProgramError> {
-        if accounts.len() != ADVANCE_ACCOUNTS {
-            return Err(AdapterError::AccountFrameLength.into());
+        match accounts.len() {
+            ADVANCE_NATIVE_ACCOUNTS => {
+                let frame = Self {
+                    market: account(accounts, 0)?,
+                    readiness: account(accounts, 1)?,
+                    manifest: account(accounts, 2)?,
+                    funding: account(accounts, 3)?,
+                    rent_sysvar: account(accounts, 4)?,
+                    realm_custody: None,
+                };
+                frame.contract_frame()?;
+                Ok(frame)
+            }
+            ADVANCE_REALM_ACCOUNTS => {
+                let frame = Self {
+                    market: account(accounts, 0)?,
+                    readiness: account(accounts, 1)?,
+                    manifest: account(accounts, 2)?,
+                    funding: account(accounts, 3)?,
+                    rent_sysvar: account(accounts, 4)?,
+                    realm_custody: Some(RealmCustodyFrame {
+                        authority: account(accounts, 5)?,
+                        vault: account(accounts, 6)?,
+                        mint: account(accounts, 7)?,
+                        token_program: account(accounts, 8)?,
+                    }),
+                };
+                frame.contract_frame()?;
+                Ok(frame)
+            }
+            _ => Err(AdapterError::AccountFrameLength.into()),
         }
-        let frame = Self {
-            market: account(accounts, 0)?,
-            readiness: account(accounts, 1)?,
-            manifest: account(accounts, 2)?,
-            funding: account(accounts, 3)?,
-        };
-        AdvanceMarketOpeningReadinessFrameV1::new([
-            meta(frame.market),
-            meta(frame.readiness),
-            meta(frame.manifest),
-            meta(frame.funding),
-        ])
-        .map_err(map_frame_error)?;
-        Ok(frame)
     }
 
     fn contract_frame(&self) -> Result<AdvanceMarketOpeningReadinessFrameV1, ProgramError> {
-        AdvanceMarketOpeningReadinessFrameV1::new([
-            meta(self.market),
-            meta(self.readiness),
-            meta(self.manifest),
-            meta(self.funding),
-        ])
+        match self.realm_custody.as_ref() {
+            None => AdvanceMarketOpeningReadinessFrameV1::native([
+                meta(self.market),
+                meta(self.readiness),
+                meta(self.manifest),
+                meta(self.funding),
+                meta(self.rent_sysvar),
+            ]),
+            Some(custody) => AdvanceMarketOpeningReadinessFrameV1::realm([
+                meta(self.market),
+                meta(self.readiness),
+                meta(self.manifest),
+                meta(self.funding),
+                meta(self.rent_sysvar),
+                meta(custody.authority),
+                meta(custody.vault),
+                meta(custody.mint),
+                meta(custody.token_program),
+            ]),
+        }
         .map_err(map_frame_error)
     }
 }
@@ -329,9 +371,16 @@ fn authenticate_advance(
         || frame.funding.owner != program_id
         || frame.funding.executable
         || frame.funding.data_len() != FUNDING_STATE_BYTES
+        || frame.rent_sysvar.key != &sysvar::rent::ID
+        || frame.rent_sysvar.owner != &sysvar::ID
+        || frame.rent_sysvar.is_signer
+        || frame.rent_sysvar.is_writable
+        || frame.rent_sysvar.executable
     {
         return Err(AdapterError::AccountIdentity.into());
     }
+    let rent = Rent::from_account_info(frame.rent_sysvar)
+        .map_err(|_| AdapterError::ReadinessAuthentication)?;
     let (outcome_count, root) = authenticate_market(frame.market)?;
     let generation = instruction.generation().to_le_bytes();
     let (expected_readiness, _) = Pubkey::find_program_address(
@@ -386,6 +435,8 @@ fn authenticate_advance(
         if frame.funding.key != &expected_funding {
             return Err(AdapterError::AccountIdentity.into());
         }
+        let custody =
+            authenticate_funding_custody(program_id, frame, root, manifest, funding, &rent)?;
         let contract_plan = advance_market_opening_readiness(
             instruction,
             frame.contract_frame()?,
@@ -394,7 +445,7 @@ fn authenticate_advance(
                 readiness,
                 manifest,
                 funding,
-                FundingAccountCapitalizationV1::new(frame.funding.lamports()),
+                custody,
                 current_slot,
             ),
         )
@@ -422,6 +473,110 @@ fn authenticate_advance(
         market_lamports: frame.market.lamports(),
         funding_lamports: frame.funding.lamports(),
     })
+}
+
+/// Authenticate the independent native and optional Realm-token custody facts
+/// named by the selected immutable capability quote.
+fn authenticate_funding_custody(
+    program_id: &Pubkey,
+    frame: &AdvanceFrame<'_, '_>,
+    root: MarketRoot,
+    manifest: CapabilityManifestV1<'_>,
+    funding: FundingStateV1,
+    rent: &Rent,
+) -> Result<FundingCustodyObservationV1, ProgramError> {
+    let state_rent = rent.minimum_balance(FUNDING_STATE_BYTES);
+    let entry = manifest
+        .entry(funding.entry_index())
+        .map_err(|_| AdapterError::ReadinessAuthentication)?;
+    let quote = entry.funding_quote();
+    match (quote.realm_collateral(), frame.realm_custody.as_ref()) {
+        (None, None) => {
+            FundingCustodyObservationV1::native_only(frame.funding.lamports(), state_rent)
+                .map_err(|_| AdapterError::FundUnderfunded.into())
+        }
+        (None, Some(_)) | (Some(_), None) => Err(AdapterError::ReadinessAuthentication.into()),
+        (Some(binding), Some(custody_frame)) => {
+            if binding.realm_id() != root.identity().realm_id() {
+                return Err(AdapterError::ContentIdentity.into());
+            }
+            let authority_derivation =
+                CapabilityFundingAuthorityDerivationV1::new(frame.funding.key.to_bytes())
+                    .map_err(|_| AdapterError::ReadinessAuthentication)?;
+            let (expected_authority, _) =
+                Pubkey::find_program_address(&authority_derivation.seed_components(), program_id);
+            if custody_frame.authority.key != &expected_authority {
+                return Err(AdapterError::AccountIdentity.into());
+            }
+            let vault_derivation =
+                CapabilityFundingVaultDerivationV1::new(expected_authority.to_bytes(), binding)
+                    .map_err(|_| AdapterError::ReadinessAuthentication)?;
+            let (expected_vault, _) =
+                Pubkey::find_program_address(&vault_derivation.seed_components(), program_id);
+            if custody_frame.vault.key != &expected_vault
+                || custody_frame.mint.key.to_bytes() != binding.mint()
+                || custody_frame.token_program.key.to_bytes() != binding.token_program()
+                || custody_frame.vault.owner != custody_frame.token_program.key
+                || custody_frame.mint.owner != custody_frame.token_program.key
+            {
+                return Err(AdapterError::AccountIdentity.into());
+            }
+            TokenProgram::parse(custody_frame.token_program.key.to_bytes())
+                .map_err(|_| AdapterError::ReadinessAuthentication)?;
+            let mint_data = custody_frame
+                .mint
+                .try_borrow_data()
+                .map_err(|_| AdapterError::ReadinessAuthentication)?;
+            let mint =
+                Mint::parse(&mint_data).map_err(|_| AdapterError::ReadinessAuthentication)?;
+            if !mint.is_initialized {
+                return Err(AdapterError::ReadinessAuthentication.into());
+            }
+            drop(mint_data);
+            let vault_data = custody_frame
+                .vault
+                .try_borrow_data()
+                .map_err(|_| AdapterError::ReadinessAuthentication)?;
+            let vault = TokenAccount::parse(&vault_data)
+                .map_err(|_| AdapterError::ReadinessAuthentication)?;
+            if vault.mint != binding.mint()
+                || vault.owner != expected_authority.to_bytes()
+                || vault.state != AccountState::Initialized
+                || !vault.delegate.is_none()
+                || vault.delegated_amount != 0
+                || !vault.native_reserve.is_none()
+                || !vault.close_authority.is_none()
+            {
+                return Err(AdapterError::ReadinessAuthentication.into());
+            }
+            let vault_rent = rent.minimum_balance(vault_data.len());
+            drop(vault_data);
+            let observation = RealmCollateralVaultObservationV1::new(
+                expected_vault.to_bytes(),
+                expected_authority.to_bytes(),
+                binding.token_program(),
+                binding.mint(),
+                vault.amount,
+                custody_frame.vault.lamports(),
+                vault_rent,
+            )
+            .map_err(|_| AdapterError::ReadinessAuthentication)?;
+            let realm = RealmCollateralCustodyV1::new(
+                root.identity().realm_id(),
+                binding.collateral_release_id(),
+                expected_authority.to_bytes(),
+                expected_vault.to_bytes(),
+                observation,
+            )
+            .map_err(|_| AdapterError::ReadinessAuthentication)?;
+            FundingCustodyObservationV1::with_realm_collateral(
+                frame.funding.lamports(),
+                state_rent,
+                realm,
+            )
+            .map_err(|_| AdapterError::FundUnderfunded.into())
+        }
+    }
 }
 
 fn authenticate_begin_identities(
@@ -742,8 +897,9 @@ fn account<'a, 'info>(
 #[allow(clippy::indexing_slicing)]
 mod tests {
     use dclutch_capability_contract::{
-        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, FundingAmountsV1,
-        MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
+        FundingAmountsV1, FundingCustodyObservationV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
+        MAX_DEPENDENCIES_PER_CAPABILITY,
     };
     use dclutch_core_contract::{ContentId, MarketIdentity};
     use dclutch_market_contract::market::CategoricalSettlementSummaryV1;
@@ -777,7 +933,20 @@ mod tests {
     }
 
     fn manifest_bytes() -> Vec<u8> {
-        let quote = FundingAmountsV1::new(0, 0, 5, 0, 0, 0, 0).expect("quote");
+        let quote = FundingQuoteV1::new(
+            FundingAmountsV1::new(
+                CompartmentFundingV1::not_applicable(),
+                CompartmentFundingV1::not_applicable(),
+                CompartmentFundingV1::native_lamports(5).expect("work"),
+                CompartmentFundingV1::not_applicable(),
+                CompartmentFundingV1::not_applicable(),
+                CompartmentFundingV1::not_applicable(),
+                CompartmentFundingV1::not_applicable(),
+            )
+            .expect("typed quote"),
+            None,
+        )
+        .expect("quote");
         let entry = CapabilityEntryV1::new(
             id(20),
             id(21),
@@ -935,9 +1104,10 @@ mod tests {
             sponsor.to_bytes(),
         )
         .expect("readiness");
-        let mut funding = FundingStateV1::new(manifest_id, manifest, 0, 5).expect("funding");
+        let custody = FundingCustodyObservationV1::native_only(5, 0).expect("custody");
+        let mut funding = FundingStateV1::new(manifest_id, manifest, 0, custody).expect("funding");
         funding
-            .activate(manifest_id, manifest, 5, 0)
+            .activate(manifest_id, manifest, custody, 0)
             .expect("active funding");
         let funding_derivation = CapabilityFundingDerivationV1::new(
             market.key.to_bytes(),
@@ -990,6 +1160,7 @@ mod tests {
                 program_id,
                 false,
             ),
+            rent_account(),
         ];
         (
             accounts,

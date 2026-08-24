@@ -17,8 +17,10 @@ use crate::{
 pub const READINESS_PUBKEY_BYTES: usize = 32;
 /// Exact Begin account count.
 pub const BEGIN_MARKET_OPENING_READINESS_ACCOUNTS: usize = 7;
-/// Exact Advance account count.
-pub const ADVANCE_MARKET_OPENING_READINESS_ACCOUNTS: usize = 4;
+/// Exact native-only Advance account count.
+pub const ADVANCE_MARKET_OPENING_READINESS_NATIVE_ACCOUNTS: usize = 5;
+/// Exact Realm-collateral Advance account count.
+pub const ADVANCE_MARKET_OPENING_READINESS_REALM_ACCOUNTS: usize = 9;
 /// Canonical System Program key bytes.
 pub const READINESS_SYSTEM_PROGRAM_ID: [u8; READINESS_PUBKEY_BYTES] = [0; READINESS_PUBKEY_BYTES];
 /// Canonical Rent sysvar key bytes.
@@ -50,6 +52,8 @@ pub enum ReadinessFrameError {
     MarketRoot(dclutch_core_contract::Error),
     /// A canonical capability, funding, or readiness transition refused.
     Capability(crate::Error),
+    /// The frame did not provide exactly the physical custody shape named by funding.
+    FundingCustodyFrameMismatch,
 }
 
 /// Result alias for readiness frames and pure transitions.
@@ -169,19 +173,23 @@ impl BeginMarketOpeningReadinessFrameV1 {
 
 /// Validated exact physical Advance frame.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AdvanceMarketOpeningReadinessFrameV1 {
-    accounts: [ReadinessAccountMetaV1; ADVANCE_MARKET_OPENING_READINESS_ACCOUNTS],
+pub enum AdvanceMarketOpeningReadinessFrameV1 {
+    /// Native-only custody: Market, readiness, manifest, funding state, Rent.
+    Native([ReadinessAccountMetaV1; ADVANCE_MARKET_OPENING_READINESS_NATIVE_ACCOUNTS]),
+    /// Realm custody additionally supplies authority, vault, Mint, and token Program.
+    Realm([ReadinessAccountMetaV1; ADVANCE_MARKET_OPENING_READINESS_REALM_ACCOUNTS]),
 }
 
 impl AdvanceMarketOpeningReadinessFrameV1 {
-    /// Validate Advance ordering, privileges, and aliases.
-    pub fn new(
-        accounts: [ReadinessAccountMetaV1; ADVANCE_MARKET_OPENING_READINESS_ACCOUNTS],
+    /// Validate a native-only Advance frame's ordering, privileges, and aliases.
+    pub fn native(
+        accounts: [ReadinessAccountMetaV1; ADVANCE_MARKET_OPENING_READINESS_NATIVE_ACCOUNTS],
     ) -> Result<Self> {
         let market = accounts[0];
         let readiness = accounts[1];
         let manifest = accounts[2];
         let funding = accounts[3];
+        let rent = accounts[4];
         require_ordinary(market)?;
         require_ordinary(readiness)?;
         require_ordinary(manifest)?;
@@ -190,35 +198,75 @@ impl AdvanceMarketOpeningReadinessFrameV1 {
         require_role(readiness, false, true, false)?;
         require_role(manifest, false, false, false)?;
         require_role(funding, false, false, false)?;
+        require_rent_sysvar(rent)?;
         require_distinct(&accounts)?;
-        Ok(Self { accounts })
+        Ok(Self::Native(accounts))
     }
 
-    /// Return exact validated ordered account projections.
-    pub const fn accounts(
-        self,
-    ) -> [ReadinessAccountMetaV1; ADVANCE_MARKET_OPENING_READINESS_ACCOUNTS] {
-        self.accounts
+    /// Validate a Realm-collateral Advance frame's ordering, privileges, and aliases.
+    pub fn realm(
+        accounts: [ReadinessAccountMetaV1; ADVANCE_MARKET_OPENING_READINESS_REALM_ACCOUNTS],
+    ) -> Result<Self> {
+        let market = accounts[0];
+        let readiness = accounts[1];
+        let manifest = accounts[2];
+        let funding = accounts[3];
+        let rent = accounts[4];
+        let authority = accounts[5];
+        let vault = accounts[6];
+        let mint = accounts[7];
+        let token_program = accounts[8];
+        for account in [market, readiness, manifest, funding, authority, vault, mint] {
+            require_ordinary(account)?;
+        }
+        require_role(market, false, false, false)?;
+        require_role(readiness, false, true, false)?;
+        require_role(manifest, false, false, false)?;
+        require_role(funding, false, false, false)?;
+        require_rent_sysvar(rent)?;
+        require_role(authority, false, false, false)?;
+        require_role(vault, false, false, false)?;
+        require_role(mint, false, false, false)?;
+        require_role(token_program, false, false, true)?;
+        require_distinct(&accounts)?;
+        Ok(Self::Realm(accounts))
+    }
+
+    /// Return whether this frame carries Realm-collateral custody roles.
+    pub const fn has_realm_collateral(self) -> bool {
+        matches!(self, Self::Realm(_))
     }
 
     /// Return the authenticated Market projection.
     pub const fn market(self) -> ReadinessAccountMetaV1 {
-        self.accounts[0]
+        match self {
+            Self::Native(accounts) => accounts[0],
+            Self::Realm(accounts) => accounts[0],
+        }
     }
 
     /// Return the readiness child projection.
     pub const fn readiness(self) -> ReadinessAccountMetaV1 {
-        self.accounts[1]
+        match self {
+            Self::Native(accounts) => accounts[1],
+            Self::Realm(accounts) => accounts[1],
+        }
     }
 
     /// Return the immutable manifest projection.
     pub const fn manifest(self) -> ReadinessAccountMetaV1 {
-        self.accounts[2]
+        match self {
+            Self::Native(accounts) => accounts[2],
+            Self::Realm(accounts) => accounts[2],
+        }
     }
 
     /// Return the selected funding-state projection.
     pub const fn funding_state(self) -> ReadinessAccountMetaV1 {
-        self.accounts[3]
+        match self {
+            Self::Native(accounts) => accounts[3],
+            Self::Realm(accounts) => accounts[3],
+        }
     }
 }
 
@@ -464,6 +512,9 @@ pub fn advance_market_opening_readiness<'a>(
     observation: AdvanceMarketOpeningReadinessObservationV1<'a>,
 ) -> Result<AdvanceMarketOpeningReadinessPlanV1<'a>> {
     require_founding(observation.root)?;
+    if frame.has_realm_collateral() != observation.custody.realm_collateral().is_some() {
+        return Err(ReadinessFrameError::FundingCustodyFrameMismatch);
+    }
     let manifest_commitment =
         ManifestContentCommitmentV1::from_market(observation.root, observation.manifest);
     let mut next_readiness = observation.readiness;
@@ -557,6 +608,7 @@ mod tests {
     use crate::{
         ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
         FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+        RealmCollateralCustodyV1, RealmCollateralVaultObservationV1,
     };
 
     fn id(value: u8) -> ContentId {
@@ -596,13 +648,39 @@ mod tests {
     }
 
     fn advance_frame() -> AdvanceMarketOpeningReadinessFrameV1 {
-        AdvanceMarketOpeningReadinessFrameV1::new([
+        AdvanceMarketOpeningReadinessFrameV1::native([
             account(10, false, false, false),
             account(11, false, true, false),
             account(12, false, false, false),
             account(14, false, false, false),
+            ReadinessAccountMetaV1 {
+                key: READINESS_RENT_SYSVAR_ID,
+                is_signer: false,
+                is_writable: false,
+                is_executable: false,
+            },
         ])
         .expect("valid Advance frame")
+    }
+
+    fn realm_advance_frame() -> AdvanceMarketOpeningReadinessFrameV1 {
+        AdvanceMarketOpeningReadinessFrameV1::realm([
+            account(10, false, false, false),
+            account(11, false, true, false),
+            account(12, false, false, false),
+            account(14, false, false, false),
+            ReadinessAccountMetaV1 {
+                key: READINESS_RENT_SYSVAR_ID,
+                is_signer: false,
+                is_writable: false,
+                is_executable: false,
+            },
+            account(15, false, false, false),
+            account(16, false, false, false),
+            account(17, false, false, false),
+            account(18, false, false, true),
+        ])
+        .expect("valid Realm Advance frame")
     }
 
     fn root() -> MarketRoot {
@@ -654,11 +732,100 @@ mod tests {
             Err(ReadinessFrameError::AccountAlias)
         );
 
-        let mut writable_funding = advance_frame().accounts();
-        writable_funding[3].is_writable = true;
+        let writable_funding = [
+            account(10, false, false, false),
+            account(11, false, true, false),
+            account(12, false, false, false),
+            account(14, false, true, false),
+            ReadinessAccountMetaV1 {
+                key: READINESS_RENT_SYSVAR_ID,
+                is_signer: false,
+                is_writable: false,
+                is_executable: false,
+            },
+        ];
         assert_eq!(
-            AdvanceMarketOpeningReadinessFrameV1::new(writable_funding),
+            AdvanceMarketOpeningReadinessFrameV1::native(writable_funding),
             Err(ReadinessFrameError::InvalidAccountPrivilege)
+        );
+        assert!(realm_advance_frame().has_realm_collateral());
+        let mut nonexecutable_token_program = [
+            account(10, false, false, false),
+            account(11, false, true, false),
+            account(12, false, false, false),
+            account(14, false, false, false),
+            ReadinessAccountMetaV1 {
+                key: READINESS_RENT_SYSVAR_ID,
+                is_signer: false,
+                is_writable: false,
+                is_executable: false,
+            },
+            account(15, false, false, false),
+            account(16, false, false, false),
+            account(17, false, false, false),
+            account(18, false, false, true),
+        ];
+        nonexecutable_token_program[8].is_executable = false;
+        assert_eq!(
+            AdvanceMarketOpeningReadinessFrameV1::realm(nonexecutable_token_program),
+            Err(ReadinessFrameError::InvalidAccountPrivilege)
+        );
+    }
+
+    #[test]
+    fn native_frame_refuses_realm_custody_before_readiness_mutation() {
+        let mut storage = [0u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+        let manifest = manifest(&mut storage);
+        let begin = begin_market_opening_readiness(
+            root(),
+            BeginMarketOpeningReadinessV1::new(7, 0),
+            begin_frame(),
+            manifest,
+            AuthenticatedRentCreditBeneficiaryV1::new([9; READINESS_PUBKEY_BYTES])
+                .expect("credit beneficiary"),
+        )
+        .expect("begin");
+        let funding = FundingStateV1::new(
+            id(5),
+            manifest,
+            0,
+            FundingCustodyObservationV1::native_only(5, 0).expect("native custody"),
+        )
+        .expect("funding");
+        let vault = RealmCollateralVaultObservationV1::new(
+            [16; READINESS_PUBKEY_BYTES],
+            [15; READINESS_PUBKEY_BYTES],
+            [18; READINESS_PUBKEY_BYTES],
+            [17; READINESS_PUBKEY_BYTES],
+            1,
+            1,
+            0,
+        )
+        .expect("vault observation");
+        let realm = RealmCollateralCustodyV1::new(
+            id(1),
+            id(2),
+            [15; READINESS_PUBKEY_BYTES],
+            [16; READINESS_PUBKEY_BYTES],
+            vault,
+        )
+        .expect("realm custody");
+        let custody =
+            FundingCustodyObservationV1::with_realm_collateral(5, 0, realm).expect("typed custody");
+        assert_eq!(
+            advance_market_opening_readiness(
+                AdvanceMarketOpeningReadinessV1::new(7, 0),
+                advance_frame(),
+                AdvanceMarketOpeningReadinessObservationV1::new(
+                    begin.root(),
+                    begin.readiness(),
+                    manifest,
+                    funding,
+                    custody,
+                    10,
+                ),
+            ),
+            Err(ReadinessFrameError::FundingCustodyFrameMismatch)
         );
     }
 

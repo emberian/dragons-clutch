@@ -716,8 +716,8 @@ const _: () = assert!(MARKET_ROOT_BYTES == 232);
 #[cfg(test)]
 mod tests {
     use dclutch_capability_contract::{
-        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, FundingQuoteV1,
-        MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
+        FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
     };
     use dclutch_core_contract::ContentId as CoreContentId;
     use dclutch_kernel::resolution::categorical_pyth_v1::{
@@ -1154,6 +1154,13 @@ mod tests {
         bounty: u64,
         creation: u64,
     ) -> CapabilityEntryV1 {
+        let native_or_not_applicable = |amount| {
+            if amount == 0 {
+                CompartmentFundingV1::not_applicable()
+            } else {
+                CompartmentFundingV1::native_lamports(amount).expect("bounded native amount")
+            }
+        };
         CapabilityEntryV1::new(
             core_id([kind; 32]),
             core_id(release_id),
@@ -1165,8 +1172,20 @@ mod tests {
             0,
             0,
             [0; MAX_DEPENDENCIES_PER_CAPABILITY],
-            FundingQuoteV1::new(rent, creation, 0, provider, bounty, 0, 0)
-                .expect("representable quote"),
+            FundingQuoteV1::new(
+                FundingAmountsV1::new(
+                    native_or_not_applicable(rent),
+                    native_or_not_applicable(creation),
+                    CompartmentFundingV1::not_applicable(),
+                    native_or_not_applicable(provider),
+                    native_or_not_applicable(bounty),
+                    CompartmentFundingV1::not_applicable(),
+                    CompartmentFundingV1::not_applicable(),
+                )
+                .expect("representable typed quote"),
+                None,
+            )
+            .expect("representable quote"),
         )
         .expect("canonical capability entry")
     }
@@ -1388,8 +1407,8 @@ mod tests {
         let valid = Fixture::new(2);
         let plan = valid.authenticate().expect("manifest-authorized funding");
         let fund_rent = Rent::default().minimum_balance(FUNDING_BYTES);
-        assert_eq!(plan.fund.remaining().provider_principal(), 3);
-        assert_eq!(plan.fund.remaining().bounty_principal(), 5);
+        assert_eq!(plan.fund.remaining().provider().amount(), 3);
+        assert_eq!(plan.fund.remaining().bounty().amount(), 5);
         assert_eq!(plan.fund_balance, fund_rent + 3 + 5);
     }
 
@@ -1457,8 +1476,8 @@ mod tests {
                 plan.identity.capability_manifest_id()
             );
             assert_eq!(fund.activation_slot(), 44);
-            assert_eq!(fund.remaining().provider_principal(), 3);
-            assert_eq!(fund.remaining().bounty_principal(), 5);
+            assert_eq!(fund.remaining().provider().amount(), 3);
+            assert_eq!(fund.remaining().bounty().amount(), 5);
             assert_eq!(
                 frame.resolution_material.data_len(),
                 RESOLUTION_MATERIAL_BYTES

@@ -1044,6 +1044,37 @@ impl FundingStateV1 {
         Ok(())
     }
 
+    /// Validate terminal physical custody, admitting only explicit donations.
+    ///
+    /// Unlike [`Self::validate_against`], this accepts native lamports and
+    /// Realm tokens above semantic remaining principal.  Callers must consume
+    /// the resulting surplus only through [`Self::close`], which classifies
+    /// every such excess for the immutable refund beneficiary.
+    pub fn validate_close_custody(
+        self,
+        manifest_content_id: ContentId,
+        manifest: CapabilityManifestV1<'_>,
+        custody: FundingCustodyObservationV1,
+    ) -> Result<()> {
+        let quote = self.validate_semantics(manifest_content_id, manifest)?;
+        validate_custody_binding(quote, custody)?;
+        if custody.present_native_lamports()? < self.remaining.native_lamports_total() {
+            return Err(Error::UnderfundedPhysicalCustody);
+        }
+        match (quote.realm_collateral(), custody.realm_collateral()) {
+            (None, None) => Ok(()),
+            (Some(_), Some(observed))
+                if observed.observation().token_amount()
+                    >= self.remaining.realm_collateral_total() =>
+            {
+                Ok(())
+            }
+            (Some(_), Some(_)) => Err(Error::UnderfundedPhysicalCustody),
+            (Some(_), None) => Err(Error::MissingRealmCollateralVault),
+            (None, Some(_)) => Err(Error::UnexpectedRealmCollateralVault),
+        }
+    }
+
     /// Determine whether this exact typed custody permits Market opening.
     pub fn validate_market_open(
         self,
@@ -1155,8 +1186,8 @@ impl FundingStateV1 {
         native_rent_credit: [u8; 32],
     ) -> Result<FundingClosePlanV1> {
         require_nonzero_identifier(&native_rent_credit)?;
+        self.validate_close_custody(manifest_content_id, manifest, custody)?;
         let quote = self.validate_semantics(manifest_content_id, manifest)?;
-        validate_custody_binding(quote, custody)?;
         let observed_native = custody.present_native_lamports()?;
         let required_native = self.remaining.native_lamports_total();
         let state_lamport_donation = observed_native

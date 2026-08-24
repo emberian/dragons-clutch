@@ -813,7 +813,7 @@ mod tests {
         let credit_before = credit.lamports();
         let credit_data_before = credit.try_borrow_data().expect("credit bytes").to_vec();
 
-        assert_eq!(
+        assert!(matches!(
             authenticate_terminal_compaction(
                 &program_id,
                 &market,
@@ -821,8 +821,8 @@ mod tests {
                 &rent_sysvar,
                 GENERATION,
             ),
-            Err(AdapterError::ReplayMismatch.into())
-        );
+            Err(error) if error == AdapterError::ReplayMismatch.into()
+        ));
         assert_eq!(market.lamports(), market_before);
         assert_eq!(
             market.try_borrow_data().expect("terminal bytes").as_ref(),

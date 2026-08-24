@@ -1,6 +1,8 @@
 //! Exact account-frame, replay, funding, and provider authentication.
 
-use dclutch_capability_contract::{CapabilityFundingDerivationV1, CapabilityManifestV1};
+use dclutch_capability_contract::{
+    CapabilityFundingDerivationV1, CapabilityManifestV1, FundingCustodyObservationV1,
+};
 use dclutch_core_contract::ContentId;
 use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome_count};
 use dclutch_pyth_contract::{
@@ -51,7 +53,7 @@ pub(crate) struct PriceFrame<'a, 'info> {
     pub(crate) fund: &'a AccountInfo<'info>,
     pub(crate) material: &'a AccountInfo<'info>,
     pub(crate) manifest: &'a AccountInfo<'info>,
-    pub(crate) sponsor: &'a AccountInfo<'info>,
+    pub(crate) rent_credit: &'a AccountInfo<'info>,
     pub(crate) receiver: &'a AccountInfo<'info>,
     pub(crate) receiver_programdata: &'a AccountInfo<'info>,
     pub(crate) config: &'a AccountInfo<'info>,
@@ -77,7 +79,7 @@ impl<'a, 'info> PriceFrame<'a, 'info> {
             fund: account(accounts, 3)?,
             material: account(accounts, 4)?,
             manifest: account(accounts, 5)?,
-            sponsor: account(accounts, 6)?,
+            rent_credit: account(accounts, 6)?,
             receiver: account(accounts, 7)?,
             receiver_programdata: account(accounts, 8)?,
             config: account(accounts, 9)?,
@@ -102,7 +104,7 @@ impl<'a, 'info> PriceFrame<'a, 'info> {
             resolution_privilege(self.fund),
             resolution_privilege(self.material),
             resolution_privilege(self.manifest),
-            resolution_privilege(self.sponsor),
+            resolution_privilege(self.rent_credit),
             resolution_privilege(self.receiver),
             resolution_privilege(self.receiver_programdata),
             resolution_privilege(self.config),
@@ -126,7 +128,7 @@ pub(crate) struct FailureFrame<'a, 'info> {
     pub(crate) fund: &'a AccountInfo<'info>,
     pub(crate) material: &'a AccountInfo<'info>,
     pub(crate) manifest: &'a AccountInfo<'info>,
-    pub(crate) sponsor: &'a AccountInfo<'info>,
+    pub(crate) rent_credit: &'a AccountInfo<'info>,
     pub(crate) material_staging_cursor: &'a AccountInfo<'info>,
     pub(crate) manifest_staging_cursor: &'a AccountInfo<'info>,
     pub(crate) rent_sysvar: &'a AccountInfo<'info>,
@@ -143,7 +145,7 @@ impl<'a, 'info> FailureFrame<'a, 'info> {
             fund: account(accounts, 2)?,
             material: account(accounts, 3)?,
             manifest: account(accounts, 4)?,
-            sponsor: account(accounts, 5)?,
+            rent_credit: account(accounts, 5)?,
             material_staging_cursor: account(accounts, 6)?,
             manifest_staging_cursor: account(accounts, 7)?,
             rent_sysvar: account(accounts, 8)?,
@@ -154,7 +156,7 @@ impl<'a, 'info> FailureFrame<'a, 'info> {
             resolution_privilege(frame.fund),
             resolution_privilege(frame.material),
             resolution_privilege(frame.manifest),
-            resolution_privilege(frame.sponsor),
+            resolution_privilege(frame.rent_credit),
             resolution_privilege(frame.material_staging_cursor),
             resolution_privilege(frame.manifest_staging_cursor),
             resolution_privilege(frame.rent_sysvar),
@@ -329,6 +331,13 @@ pub(crate) fn authenticate_fund<'info>(
             let rent =
                 Rent::from_account_info(rent_sysvar).map_err(|_| AdapterError::AccountData)?;
             let required_rent = rent.minimum_balance(data.len());
+            let custody = FundingCustodyObservationV1::native_only(
+                fund_account
+                    .try_lamports()
+                    .map_err(|_| AdapterError::AccountData)?,
+                required_rent,
+            )
+            .map_err(|_| AdapterError::FundUnderfunded)?;
             let minimum = required_resolution_minimum_balance(funding)
                 .map_err(|_| AdapterError::FundUnderfunded)?;
             let credit_excess = fund_account
@@ -341,7 +350,7 @@ pub(crate) fn authenticate_fund<'info>(
                 manifest,
                 selected,
                 required_rent,
-                funding.remaining().total_principal(),
+                custody,
             )
             .map_err(|_| AdapterError::FundUnderfunded)?;
             Ok((required_rent, credit_excess))
@@ -424,7 +433,7 @@ pub(crate) fn authenticate_provider(
     if frame.treasury.key != &expected_treasury {
         return Err(AdapterError::ProviderAuthentication.into());
     }
-    if funding.funding.remaining().provider_principal() != config.fee() {
+    if funding.funding.remaining().provider().amount() != config.fee() {
         return Err(AdapterError::FundUnderfunded.into());
     }
     let rent = Rent::from_account_info(frame.rent_sysvar).map_err(|_| AdapterError::AccountData)?;
