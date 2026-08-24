@@ -35,6 +35,7 @@ use crate::instructions::source_failure_product_release_v1::{
 };
 use crate::instructions::source_funding_custody_retirement_v1::{
     AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1,
+    SourceFundingCustodyLifecycleTerminalEvidenceV1,
     SourceFundingCustodyLifecycleTerminalFactsV1, SourceFundingCustodyLiveFounderFactsV1,
     SourceFundingCustodyTerminalDispositionV1,
 };
@@ -489,11 +490,11 @@ impl AuthenticatedFailureMarketFamilyTerminalOwnerV2 {
 impl AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1
     for AuthenticatedFailureMarketFamilyTerminalOwnerV2
 {
-    fn source_funding_custody_lifecycle_terminal_facts_v1(
-        &self,
+    fn into_source_funding_custody_lifecycle_terminal_evidence_v1(
+        self,
         founder: SourceFundingCustodyLiveFounderFactsV1,
-    ) -> Outcome<SourceFundingCustodyLifecycleTerminalFactsV1> {
-        successful_source_custody_terminal_facts_v1(
+    ) -> Outcome<SourceFundingCustodyLifecycleTerminalEvidenceV1> {
+        let facts = successful_source_custody_terminal_facts_v1(
             self.admission.state().binding().facts(),
             self.runtime.state().source_resolution_terminal_postwrite_id(),
             self.runtime.state().source_result_close_receipt_id(),
@@ -501,7 +502,8 @@ impl AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1
             self.runtime.state().source_product_link_account_id(),
             self.family_terminal_receipt_id,
             founder,
-        )
+        )?;
+        Ok(SourceFundingCustodyLifecycleTerminalEvidenceV1::successful(facts))
     }
 }
 
@@ -579,10 +581,10 @@ pub(crate) fn authenticate_failure_market_source_failure_lifecycle_terminal_v3(
 impl AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1
     for AuthenticatedFailureMarketSourceFailureLifecycleTerminalV3
 {
-    fn source_funding_custody_lifecycle_terminal_facts_v1(
-        &self,
+    fn into_source_funding_custody_lifecycle_terminal_evidence_v1(
+        self,
         founder: SourceFundingCustodyLiveFounderFactsV1,
-    ) -> Outcome<SourceFundingCustodyLifecycleTerminalFactsV1> {
+    ) -> Outcome<SourceFundingCustodyLifecycleTerminalEvidenceV1> {
         let terminal = self.source.terminal();
         let disposition = match self.source.disposition() {
             Some(SourceFailureProductReleaseDispositionV3::SourceAbsent) => {
@@ -619,19 +621,21 @@ impl AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1
                     != self.family.family_terminal_receipt_id,
             ClutchError::MismatchedState,
         )?;
-        Ok(SourceFundingCustodyLifecycleTerminalFactsV1 {
+        let facts = SourceFundingCustodyLifecycleTerminalFactsV1 {
             disposition,
             capitalization_authority_id: founder.capitalization_authority_id,
             capitalization_receipt_id: founder.capitalization_receipt_id,
             pre_root_source_occurrence_id: founder.pre_root_source_occurrence_id,
             product_link_account: founder.product_link_account,
+            product_link_account_data_id: founder.product_link_account_data_id,
             product_link_authentication_id: founder.product_link_authentication_id,
             product_link_semantic_id: founder.product_link_semantic_id,
+            product_link_transition_sequence: founder.product_link_transition_sequence,
             source_terminal_postwrite_id: self.source.source_terminal_postwrite_id(),
             source_result_or_absence_close_receipt_id: self
                 .source
                 .source_physical_disposition_id(),
-            source_product_release_binding_id: self.source.id(),
+            source_product_release_binding_id: self.source.product_release_binding_id(),
             failure_family_terminal_receipt_id: SourceContentId::from_bytes(
                 self.family.family_terminal_receipt_id.bytes(),
             ),
@@ -651,7 +655,11 @@ impl AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1
             source_funding_custody: founder.source_funding_custody,
             lamport_principal_refund: founder.lamport_principal_refund,
             neutral_lamport_sink: founder.neutral_lamport_sink,
-        })
+        };
+        Ok(SourceFundingCustodyLifecycleTerminalEvidenceV1::failed(
+            facts,
+            self.source,
+        ))
     }
 }
 
@@ -697,8 +705,10 @@ fn successful_source_custody_terminal_facts_v1(
         capitalization_receipt_id: founder.capitalization_receipt_id,
         pre_root_source_occurrence_id: founder.pre_root_source_occurrence_id,
         product_link_account: founder.product_link_account,
+        product_link_account_data_id: founder.product_link_account_data_id,
         product_link_authentication_id: founder.product_link_authentication_id,
         product_link_semantic_id: founder.product_link_semantic_id,
+        product_link_transition_sequence: founder.product_link_transition_sequence,
         source_terminal_postwrite_id: SourceContentId::from_bytes(source_terminal.bytes()),
         source_result_or_absence_close_receipt_id: SourceContentId::from_bytes(
             source_result_close.bytes(),
@@ -1482,8 +1492,10 @@ mod adversarial_family_terminal_tests {
             "founder.source_generation == policy.generation",
             "founder.neutral_lamport_sink.bytes() == policy.neutral_sink.bytes()",
             "founder.product_link_account.bytes() == source_product_link_account.bytes()",
+            "product_link_account_data_id: founder.product_link_account_data_id",
             "product_link_authentication_id: founder.product_link_authentication_id",
             "product_link_semantic_id: founder.product_link_semantic_id",
+            "product_link_transition_sequence: founder.product_link_transition_sequence",
             "source_terminal_postwrite_id: source_terminal",
             "source_result_or_absence_close_receipt_id: source_result_close",
             "source_product_release_binding_id: source_product_release",
@@ -1518,8 +1530,9 @@ mod adversarial_family_terminal_tests {
             "founder.source_repair_generation == terminal.source_repair_generation()",
             "source_terminal_postwrite_id: self.source.source_terminal_postwrite_id()",
             ".source_physical_disposition_id()",
-            "source_product_release_binding_id: self.source.id()",
+            "source_product_release_binding_id: self.source.product_release_binding_id()",
             "failure_family_terminal_receipt_id: SourceContentId::from_bytes(",
+            "SourceFundingCustodyLifecycleTerminalEvidenceV1::failed(",
         ] {
             assert!(owner.contains(predicate), "missing hostile terminal join {predicate}");
         }
