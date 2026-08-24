@@ -49,9 +49,9 @@ observed-positive-collateral-release-manifest = []
 non-production-product-series-lab = [
     "clutch-solana-layout/non-production-product-series-lab",
 ]
-# Compiles the strict Recovery78/v1 account/mutation adapter while leaving all
-# nine execution-capability tuples disabled. This is an implementation seam,
-# not a deployable product profile.
+# Compiles only the withdrawn occurrence-scoped Recovery78/v1 archaeology
+# adapter. Current Market-scoped Failure owners and their checked-disabled V2
+# contract are always compiled and never depend on this feature.
 non-production-failure-recovery-lab = [
     "dep:clutch-evidence-recovery",
     "dep:clutch-failure-policy-adapter",

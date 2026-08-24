@@ -59,31 +59,25 @@ pub mod direct_selection_v3;
 pub mod external_exit;
 pub mod external_redemption_v3;
 /// Capability-disabled reusable Market interval account seam.
-#[cfg(feature = "non-production-failure-recovery-lab")]
 pub(crate) mod failure_market_interval_v2;
 /// Capability-disabled atomic paid Failure interval advance.
-#[cfg(feature = "non-production-failure-recovery-lab")]
 pub(crate) mod failure_market_interval_advance_v2;
+/// Always-compiled checked-disabled current Failure action contract.
+pub mod failure_market_dispatch_v2;
 /// Capability-disabled atomic Failure/Product/Collateral Resolution V5 composer.
-#[cfg(feature = "non-production-failure-recovery-lab")]
 pub(crate) mod failure_market_resolution_v5;
 /// Capability-disabled aggregate/replay/family-terminal composer.
-#[cfg(feature = "non-production-failure-recovery-lab")]
 pub(crate) mod failure_market_family_terminal_v2;
 /// Capability-disabled permanent shared-Market Failure replay seam.
-#[cfg(feature = "non-production-failure-recovery-lab")]
 pub(crate) mod failure_market_replay_v2;
 /// Capability-disabled atomic shared-Market Recovery close.
-#[cfg(feature = "non-production-failure-recovery-lab")]
 pub(crate) mod failure_market_recovery_terminal_v2;
-#[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_market_admission;
-#[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_market_runtime;
+/// Withdrawn occurrence-scoped Recovery78/v1 adapter; no current route imports it.
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_recovery;
 /// Capability-disabled current Product compiler authority for Failure Begin.
-#[cfg(feature = "non-production-failure-recovery-lab")]
 pub(crate) mod product_failure_begin;
 pub mod fractional_redemption;
 /// Deployable current direct-only rent-owned V5 Egg delivery.

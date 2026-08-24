@@ -784,7 +784,6 @@ impl AuthenticatedMarketFoundationVaultDispositionV1 {
     }
 }
 
-#[cfg(feature = "non-production-failure-recovery-lab")]
 impl clutch_failure_policy_runtime::market_runtime_v1::AuthenticatedFailureMarketRuntimeAdmissionV1
     for AuthenticatedMarketFoundationDebitV1
 {
@@ -3250,7 +3249,6 @@ where
 /// Consume the exact private Failure-runtime postimage as slot 6 and advance
 /// Product only after the 2,172-byte account has been allocated, assigned,
 /// persisted, and reauthenticated by the Failure owner.
-#[cfg(feature = "non-production-failure-recovery-lab")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn accept_failure_market_runtime_foundation_v1<'next>(
     program_id: &Pubkey,
