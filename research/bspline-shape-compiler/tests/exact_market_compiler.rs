@@ -1,10 +1,10 @@
 use clutch_bspline::EdgePolicy;
 use clutch_bspline_shape_compiler::exact_market::{
-    bind_exact_market_bundle_v6, compile_exact_market_v1, ExactMarketBundleSidecarV2,
+    bind_exact_market_bundle_v7, compile_exact_market_v1, ExactMarketBundleSidecarV3,
     ExactMarketCompilerErrorV1, ExactMarketCompilerRequestV1,
     ExactMarketCoordinateCoverageV1, ExactMarketManifestErrorV1, ExactMarketSearchOutcomeV1,
-    ExactMarketWorkManifestV1, COMPILED_PRODUCT_SERIES_BUNDLE_V6_ARTIFACT_KIND,
-    EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V2, EXACT_MARKET_WORK_MANIFEST_BYTES_V1,
+    ExactMarketWorkManifestV1, COMPILED_PRODUCT_SERIES_BUNDLE_V7_ARTIFACT_KIND,
+    EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V3, EXACT_MARKET_WORK_MANIFEST_BYTES_V1,
 };
 use clutch_bspline_shape_compiler::production::{
     compile_production_payoff_v1, ExactCategoricalPayoffDefinitionV1,
@@ -12,9 +12,9 @@ use clutch_bspline_shape_compiler::production::{
     SmoothNativeBasisDefinitionV1,
 };
 use clutch_product_series::{
-    CompiledProductSeriesBundleV6, ContentId, EvidenceOnlyRecoveryPolicyId,
+    CompiledProductSeriesBundleV7, ContentId, EvidenceOnlyRecoveryPolicyId,
     MarketGenesisProfileV2Id, PriceMeasurePolicyV1Id, ProductTemplateId,
-    RegistryCapabilityProfileV4Id, SeriesAttachmentPlanV5Id, SeriesFundingQuoteV5Id,
+    RegistryCapabilityProfileV4Id, SeriesAttachmentPlanV6Id, SeriesFundingQuoteV6Id,
     SeriesFundingTermsV2Id, SeriesPlanV5Id, PAYOUT_MAP_UNUSED,
 };
 use num_bigint::BigInt;
@@ -71,10 +71,10 @@ fn compiled_degree_three(
     .unwrap()
 }
 
-fn bundle_v6(
+fn bundle_v7(
     compiled: &clutch_bspline_shape_compiler::production::CompiledProductionPayoffV1,
-) -> CompiledProductSeriesBundleV6 {
-    CompiledProductSeriesBundleV6 {
+) -> CompiledProductSeriesBundleV7 {
+    CompiledProductSeriesBundleV7 {
         registry_release_id: id(10),
         capability_profile_id: RegistryCapabilityProfileV4Id::from_bytes([11; 32]),
         source_release_manifest_id: id(12),
@@ -87,8 +87,8 @@ fn bundle_v6(
         product_template_id: ProductTemplateId::from_bytes([18; 32]),
         price_measure_policy_id: PriceMeasurePolicyV1Id::from_bytes([19; 32]),
         market_genesis_profile_id: MarketGenesisProfileV2Id::from_bytes(id(2).bytes()),
-        funding_quote_id: SeriesFundingQuoteV5Id::from_bytes([21; 32]),
-        attachment_plan_id: SeriesAttachmentPlanV5Id::from_bytes([22; 32]),
+        funding_quote_id: SeriesFundingQuoteV6Id::from_bytes([21; 32]),
+        attachment_plan_id: SeriesAttachmentPlanV6Id::from_bytes([22; 32]),
         series_plan_id: SeriesPlanV5Id::from_bytes([23; 32]),
         funding_terms_id: SeriesFundingTermsV2Id::from_bytes([24; 32]),
     }
@@ -305,39 +305,39 @@ fn certificate_and_terms_tampering_fail_closed() {
 #[test]
 fn current_bundle_sidecar_is_fixed_canonical_and_reopens_every_join() {
     let compiled = compiled_degree_three();
-    let bundle = bundle_v6(&compiled);
+    let bundle = bundle_v7(&compiled);
     let exact_market = compile_exact_market_v1(
         &compiled,
         request(&[7, 6, 6, 6, 7], &[0, 2, 4, 6, 8], 10),
     )
     .unwrap();
-    let sidecar = bind_exact_market_bundle_v6(&compiled, &bundle, &exact_market).unwrap();
+    let sidecar = bind_exact_market_bundle_v7(&compiled, &bundle, &exact_market).unwrap();
     assert_eq!(
         sidecar.bundle_artifact_kind(),
-        COMPILED_PRODUCT_SERIES_BUNDLE_V6_ARTIFACT_KIND
+        COMPILED_PRODUCT_SERIES_BUNDLE_V7_ARTIFACT_KIND
     );
     assert!(sidecar.bundle_artifact_context().is_zero());
-    assert_eq!(sidecar.bundle_v6_id(), bundle.id().unwrap());
+    assert_eq!(sidecar.bundle_v7_id(), bundle.id().unwrap());
     assert_eq!(sidecar.work_manifest_id(), exact_market.manifest_id);
     assert_eq!(
         sidecar.certificate_output_id(),
         exact_market.manifest.certificate_output_id()
     );
-    let mut bytes = [0_u8; EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V2];
+    let mut bytes = [0_u8; EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V3];
     sidecar.encode_into(&mut bytes).unwrap();
-    assert_eq!(ExactMarketBundleSidecarV2::decode(&bytes), Ok(sidecar));
+    assert_eq!(ExactMarketBundleSidecarV3::decode(&bytes), Ok(sidecar));
     sidecar.verify(&compiled, &bundle, &exact_market).unwrap();
 
     let mut wrong_kind = bytes;
     wrong_kind[12] = 56;
     assert_eq!(
-        ExactMarketBundleSidecarV2::decode(&wrong_kind),
+        ExactMarketBundleSidecarV3::decode(&wrong_kind),
         Err(ExactMarketManifestErrorV1::InvalidDiscriminant)
     );
     let mut nonzero_context = bytes;
     nonzero_context[16] = 1;
     assert_eq!(
-        ExactMarketBundleSidecarV2::decode(&nonzero_context),
+        ExactMarketBundleSidecarV3::decode(&nonzero_context),
         Err(ExactMarketManifestErrorV1::NonCanonicalPadding)
     );
 }
@@ -345,7 +345,7 @@ fn current_bundle_sidecar_is_fixed_canonical_and_reopens_every_join() {
 #[test]
 fn bundle_sidecar_refuses_a_parallel_basis_truth() {
     let compiled = compiled_degree_three();
-    let mut bundle = bundle_v6(&compiled);
+    let mut bundle = bundle_v7(&compiled);
     bundle.native_claim_basis_id =
         clutch_product_series::NativeClaimBasisId::from_bytes([99; 32]);
     let exact_market = compile_exact_market_v1(
@@ -354,7 +354,7 @@ fn bundle_sidecar_refuses_a_parallel_basis_truth() {
     )
     .unwrap();
     assert_eq!(
-        bind_exact_market_bundle_v6(&compiled, &bundle, &exact_market),
+        bind_exact_market_bundle_v7(&compiled, &bundle, &exact_market),
         Err(ExactMarketCompilerErrorV1::OutputMismatch)
     );
 }
