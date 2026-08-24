@@ -1,11 +1,13 @@
 //! Exact fractional-redemption successor over canonical full-width accounts.
 //!
-//! Executable actions 2 through 9 mutate only the sole owners of affected
-//! facts: owner credit/tombstone, Position V3 and GEN1
+//! Concrete handler bodies for actions 2 through 9 mutate only the sole owners
+//! of affected facts: owner credit/tombstone, Position V3 and GEN1
 //! Replay for claimant state, ClaimLedger V3 for native supply, Hoard V2 for
 //! locked-principal/cash classification, and `0xa5/v1` for the global
 //! fractional sequence and aggregate numerator credit. The immutable
-//! `0xa4/v2` policy commits the exact PDA-bound Resolution V5 data identity.
+//! `0xa4/v3` policy commits the exact Resolution V5 data identity while its
+//! Foundation-computable PDA remains stable before the outcome is known. All
+//! ten action tuples remain capability-disabled in every checked profile.
 
 use crate::accounts::{
     expect_pda, require, require_count, require_distinct, require_signer, Outcome,
@@ -33,7 +35,8 @@ use clutch_fractional_redemption_runtime::{
     CreditPrestateV1, EmptyLedgerClosePlanV1, Error as FractionalError,
     FractionalCreditTombstoneV2, FractionalCreditV2, FractionalFamilyAdmissionReceiptV1,
     FractionalFamilyTerminalReceiptV1, FractionalInitializationPlanV1, FractionalLedgerV1,
-    FractionalPolicyV2, FractionalRedeemIntentV1, FractionalRedemptionActionV1,
+    FractionalInitializeIntentV1, FractionalPolicyV3, FractionalRedeemIntentV1,
+    FractionalRedemptionActionV1,
     FractionalTerminalIntentV1, FractionalTransferIntentV1, FractionalCloseCreditIntentV1,
     InternalPositionV1, RedemptionSourcePoststateV1,
     VerifiedFractionalFamilyAdmissionPostwriteV1, VerifiedFractionalFamilyTerminalPostwriteV1,
@@ -41,11 +44,14 @@ use clutch_fractional_redemption_runtime::{
     FRACTIONAL_LEDGER_ACCOUNT_BYTES, FRACTIONAL_POLICY_ACCOUNT_BYTES,
     FRACTIONAL_REDEMPTION_FAMILY_TAG, FRACTIONAL_REDEMPTION_FAMILY_VERSION,
 };
-use clutch_product_series::ContentId;
+use clutch_product_series::{
+    ContentId, MarketFoundationAccountGraphV2, MarketFoundationScheduleV2,
+};
 use clutch_retirement::{
     admit_initial_rent_split, admit_reopen_rent_split, Identity32V1, RentSplitAdmissionPlanV2,
     POSITION_V3_BYTES,
 };
+use clutch_solana_layout::product_series::MarketLifecycleRootAccountV1;
 use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
 use solana_instruction::{AccountMeta, Instruction};
@@ -377,6 +383,10 @@ pub(crate) fn authenticate_fractional_runtime_release_v1(
 pub(crate) struct AuthenticatedFractionalFamilyAdmissionPostwriteV1 {
     verified: VerifiedFractionalFamilyAdmissionPostwriteV1,
     runtime_release: AuthenticatedFractionalRuntimeReleaseV1,
+    resolution_account: Identity32V1,
+    resolution_semantic_id: Identity32V1,
+    resolution_data_id: Identity32V1,
+    native_claim_basis_id: Identity32V1,
     authentication_id: Identity32V1,
 }
 
@@ -398,6 +408,99 @@ impl AuthenticatedFractionalFamilyAdmissionPostwriteV1 {
     }
 }
 
+fn product_content_id(identity: Identity32V1) -> ContentId {
+    ContentId::from_bytes(identity.bytes())
+}
+
+fn require_product_admission_identity_tuple(
+    expected: [ContentId; 8],
+    presented: [ContentId; 8],
+) -> Outcome<()> {
+    require(expected == presented, ClutchError::MismatchedState)
+}
+
+impl super::product_fractional_family::AuthenticatedProductFractionalFamilyAdmissionOwnerV1
+    for AuthenticatedFractionalFamilyAdmissionPostwriteV1
+{
+    fn family_admission(&self) -> Outcome<FractionalFamilyAdmissionReceiptV1> {
+        Ok(self.verified.family_admission())
+    }
+
+    fn verification_id(&self) -> Outcome<ContentId> {
+        Ok(product_content_id(self.verified.verification_id()))
+    }
+
+    fn postwrite_authentication_id(&self) -> Outcome<ContentId> {
+        Ok(product_content_id(self.authentication_id))
+    }
+
+    fn runtime_release_id(&self) -> Outcome<ContentId> {
+        Ok(product_content_id(self.runtime_release.release_id()))
+    }
+
+    fn capability_profile_id(&self) -> Outcome<ContentId> {
+        Ok(self.runtime_release.capability_profile_id())
+    }
+
+    fn resolution_account(&self) -> Outcome<ContentId> {
+        Ok(product_content_id(self.resolution_account))
+    }
+
+    fn resolution_semantic_id(&self) -> Outcome<ContentId> {
+        Ok(product_content_id(self.resolution_semantic_id))
+    }
+
+    fn resolution_data_id(&self) -> Outcome<ContentId> {
+        Ok(product_content_id(self.resolution_data_id))
+    }
+
+    fn native_claim_basis_id(&self) -> Outcome<ContentId> {
+        Ok(product_content_id(self.native_claim_basis_id))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_product_fractional_family_admission_owner_v1(
+        &self,
+        family_admission: FractionalFamilyAdmissionReceiptV1,
+        verification_id: ContentId,
+        postwrite_authentication_id: ContentId,
+        runtime_release_id: ContentId,
+        capability_profile_id: ContentId,
+        resolution_account: ContentId,
+        resolution_semantic_id: ContentId,
+        resolution_data_id: ContentId,
+        native_claim_basis_id: ContentId,
+    ) -> Outcome<()> {
+        require_product_admission_identity_tuple(
+            [
+                product_content_id(self.verified.verification_id()),
+                product_content_id(self.authentication_id),
+                product_content_id(self.runtime_release.release_id()),
+                self.runtime_release.capability_profile_id(),
+                product_content_id(self.resolution_account),
+                product_content_id(self.resolution_semantic_id),
+                product_content_id(self.resolution_data_id),
+                product_content_id(self.native_claim_basis_id),
+            ],
+            [
+                verification_id,
+                postwrite_authentication_id,
+                runtime_release_id,
+                capability_profile_id,
+                resolution_account,
+                resolution_semantic_id,
+                resolution_data_id,
+                native_claim_basis_id,
+            ],
+        )?;
+        require(
+            family_admission == self.verified.family_admission()
+                && self.runtime_release.action() == FractionalRedemptionActionV1::Initialize,
+            ClutchError::MismatchedState,
+        )
+    }
+}
+
 /// Authenticate exact founding postimages after Fractional has allocated and
 /// written Product-prefunded System-owned a4/a5 prestates.
 ///
@@ -407,6 +510,7 @@ impl AuthenticatedFractionalFamilyAdmissionPostwriteV1 {
 pub(crate) fn authenticate_fractional_family_admission_postwrite_v1(
     program_id: &Pubkey,
     runtime_release: AuthenticatedFractionalRuntimeReleaseV1,
+    resolution_semantic_id: Identity32V1,
     plan: FractionalInitializationPlanV1,
     policy_account: &AccountInfo<'_>,
     ledger_account: &AccountInfo<'_>,
@@ -414,6 +518,7 @@ pub(crate) fn authenticate_fractional_family_admission_postwrite_v1(
 ) -> Outcome<AuthenticatedFractionalFamilyAdmissionPostwriteV1> {
     require(
         runtime_release.action == FractionalRedemptionActionV1::Initialize
+            && resolution_semantic_id.bytes() != [0; 32]
             && policy_account.key != ledger_account.key
             && policy_account.key != claim_ledger_account.key
             && ledger_account.key != claim_ledger_account.key,
@@ -446,9 +551,13 @@ pub(crate) fn authenticate_fractional_family_admission_postwrite_v1(
     let claim_ledger_data = claim_ledger_account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let policy = FractionalPolicyV2::decode(&policy_data).map_err(map_fractional)?;
+    let policy = FractionalPolicyV3::decode(&policy_data).map_err(map_fractional)?;
     let ledger = FractionalLedgerV1::decode(&ledger_data).map_err(map_fractional)?;
     let claim_ledger = ClaimLedgerV3::decode(&claim_ledger_data)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let resolution_account = policy.resolution_account;
+    let resolution_data_id = policy.resolution_data_id;
+    let native_claim_basis_id = Identity32V1::new(claim_ledger.native_claim_basis_id.bytes())
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let receipt = plan.family_admission;
     require(
@@ -460,11 +569,10 @@ pub(crate) fn authenticate_fractional_family_admission_postwrite_v1(
     let policy_seeds = policy.pda_seeds();
     expect_pda(
         policy_account.key,
-        seeds::fractional_policy_v2_pda(
+        seeds::fractional_policy_v3_pda(
             program_id,
             &policy_seeds.market_instance().bytes(),
             &policy_seeds.resolution_account().bytes(),
-            &policy_seeds.resolution_data_id().bytes(),
         ),
         Some(policy_seeds.stored_bump()),
     )?;
@@ -501,6 +609,7 @@ pub(crate) fn authenticate_fractional_family_admission_postwrite_v1(
             FRACTIONAL_ADMISSION_POSTWRITE_AUTHENTICATION_DOMAIN_V1,
             program_id.as_ref(),
             &runtime_release.authentication_id.bytes(),
+            &resolution_semantic_id.bytes(),
             &verified.verification_id().bytes(),
             policy_account.key.as_ref(),
             &policy_data_id,
@@ -515,8 +624,42 @@ pub(crate) fn authenticate_fractional_family_admission_postwrite_v1(
     Ok(AuthenticatedFractionalFamilyAdmissionPostwriteV1 {
         verified,
         runtime_release,
+        resolution_account,
+        resolution_semantic_id,
+        resolution_data_id,
+        native_claim_basis_id,
         authentication_id,
     })
+}
+
+/// Atomically consume an exact hostile-authenticated Fractional founding
+/// postwrite into Product's sole family aggregator owner.
+///
+/// This helper has no public dispatch route while the full ten-action family
+/// remains capability-disabled. The concrete Initialize handler calls it after
+/// writing a4/a5/ClaimLedger and before returning success; transaction rollback
+/// then keeps all four accounts atomic on any Product refusal.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn consume_fractional_family_admission_postwrite_v1(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    postwrite: AuthenticatedFractionalFamilyAdmissionPostwriteV1,
+    schedule: &MarketFoundationScheduleV2,
+    graph: &MarketFoundationAccountGraphV2,
+    root_before_output: &mut MarketLifecycleRootAccountV1,
+    root_after_output: &mut MarketLifecycleRootAccountV1,
+) -> Outcome<
+    super::product_fractional_family::AuthenticatedProductFractionalFamilyAdmissionV1,
+> {
+    super::product_fractional_family::consume_fractional_family_admission_postwrite_v1(
+        program_id,
+        root_account,
+        &postwrite,
+        schedule,
+        graph,
+        root_before_output,
+        root_after_output,
+    )
 }
 
 /// Adapter-authenticated terminal postwrite before a4/a5 deletion.
@@ -524,6 +667,7 @@ pub(crate) fn authenticate_fractional_family_admission_postwrite_v1(
 pub(crate) struct AuthenticatedFractionalFamilyTerminalPostwriteV1 {
     verified: VerifiedFractionalFamilyTerminalPostwriteV1,
     runtime_release: AuthenticatedFractionalRuntimeReleaseV1,
+    claim_release_receipt_id: Identity32V1,
     authentication_id: Identity32V1,
 }
 
@@ -560,6 +704,10 @@ impl AuthenticatedFractionalFamilyTerminalPostwriteV1 {
         self.runtime_release
     }
 
+    pub(crate) const fn claim_release_receipt_id(self) -> Identity32V1 {
+        self.claim_release_receipt_id
+    }
+
     pub(crate) const fn authentication_id(self) -> Identity32V1 {
         self.authentication_id
     }
@@ -571,6 +719,7 @@ impl AuthenticatedFractionalFamilyTerminalPostwriteV1 {
 pub(crate) fn authenticate_fractional_family_terminal_postwrite_v1(
     program_id: &Pubkey,
     runtime_release: AuthenticatedFractionalRuntimeReleaseV1,
+    claim_release_receipt_id: Identity32V1,
     close: EmptyLedgerClosePlanV1,
     policy_account: &AccountInfo<'_>,
     ledger_account: &AccountInfo<'_>,
@@ -610,7 +759,7 @@ pub(crate) fn authenticate_fractional_family_terminal_postwrite_v1(
     let claim_ledger_data = claim_ledger_account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let policy = FractionalPolicyV2::decode(&policy_data).map_err(map_fractional)?;
+    let policy = FractionalPolicyV3::decode(&policy_data).map_err(map_fractional)?;
     let ledger = FractionalLedgerV1::decode(&ledger_data).map_err(map_fractional)?;
     let claim_ledger = ClaimLedgerV3::decode(&claim_ledger_data)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -625,11 +774,10 @@ pub(crate) fn authenticate_fractional_family_terminal_postwrite_v1(
     let policy_seeds = policy.pda_seeds();
     expect_pda(
         policy_account.key,
-        seeds::fractional_policy_v2_pda(
+        seeds::fractional_policy_v3_pda(
             program_id,
             &policy_seeds.market_instance().bytes(),
             &policy_seeds.resolution_account().bytes(),
-            &policy_seeds.resolution_data_id().bytes(),
         ),
         Some(policy_seeds.stored_bump()),
     )?;
@@ -669,6 +817,7 @@ pub(crate) fn authenticate_fractional_family_terminal_postwrite_v1(
             FRACTIONAL_TERMINAL_POSTWRITE_AUTHENTICATION_DOMAIN_V1,
             program_id.as_ref(),
             &runtime_release.authentication_id.bytes(),
+            &claim_release_receipt_id.bytes(),
             &verified.verification_id().bytes(),
             policy_account.key.as_ref(),
             &policy_data_id,
@@ -685,8 +834,32 @@ pub(crate) fn authenticate_fractional_family_terminal_postwrite_v1(
     Ok(AuthenticatedFractionalFamilyTerminalPostwriteV1 {
         verified,
         runtime_release,
+        claim_release_receipt_id,
         authentication_id,
     })
+}
+
+/// Atomically consume an exact hostile-authenticated Fractional terminal
+/// postwrite into Product before action 10 deletes a4/a5 or applies rent.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn consume_fractional_family_terminal_postwrite_v1(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    postwrite: AuthenticatedFractionalFamilyTerminalPostwriteV1,
+    schedule: &MarketFoundationScheduleV2,
+    graph: &MarketFoundationAccountGraphV2,
+    root_before_output: &mut MarketLifecycleRootAccountV1,
+    root_after_output: &mut MarketLifecycleRootAccountV1,
+) -> Outcome<super::product_fractional_family::AuthenticatedProductFractionalFamilyTerminalV1> {
+    super::product_fractional_family::consume_fractional_family_terminal_postwrite_v1(
+        program_id,
+        root_account,
+        postwrite,
+        schedule,
+        graph,
+        root_before_output,
+        root_after_output,
+    )
 }
 
 fn decode_fractional_accounts(
@@ -695,7 +868,7 @@ fn decode_fractional_accounts(
     policy_index: usize,
     ledger_index: usize,
     resolution_index: usize,
-) -> Outcome<(FractionalPolicyV2, FractionalLedgerV1)> {
+) -> Outcome<(FractionalPolicyV3, FractionalLedgerV1)> {
     require_program_state(
         program_id,
         &accounts[policy_index],
@@ -711,7 +884,7 @@ fn decode_fractional_accounts(
     let policy_data = accounts[policy_index]
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let policy = FractionalPolicyV2::decode(&policy_data).map_err(map_fractional)?;
+    let policy = FractionalPolicyV3::decode(&policy_data).map_err(map_fractional)?;
     drop(policy_data);
     let ledger_data = accounts[ledger_index]
         .try_borrow_data()
@@ -721,11 +894,10 @@ fn decode_fractional_accounts(
     let policy_seeds = policy.pda_seeds();
     expect_pda(
         accounts[policy_index].key,
-        seeds::fractional_policy_v2_pda(
+        seeds::fractional_policy_v3_pda(
             program_id,
             &policy_seeds.market_instance().bytes(),
             &policy_seeds.resolution_account().bytes(),
-            &policy_seeds.resolution_data_id().bytes(),
         ),
         Some(policy_seeds.stored_bump()),
     )?;
@@ -752,6 +924,15 @@ pub fn process(
     payload: &[u8],
 ) -> Outcome<()> {
     match action {
+        FractionalRedemptionActionV1::Initialize => {
+            let intent = FractionalInitializeIntentV1::decode(payload).map_err(map_fractional)?;
+            super::fractional_lifecycle::process_initialize(
+                program_id,
+                accounts,
+                envelope_sequence,
+                intent,
+            )
+        }
         FractionalRedemptionActionV1::RedeemInternalExact => {
             let intent = FractionalRedeemIntentV1::decode(payload).map_err(map_fractional)?;
             process_redeem_internal_exact(program_id, accounts, envelope_sequence, intent)
@@ -781,7 +962,15 @@ pub fn process(
             let intent = FractionalTerminalIntentV1::decode(payload).map_err(map_fractional)?;
             process_seal_claims_exhausted(program_id, accounts, envelope_sequence, intent)
         }
-        _ => Err(ClutchError::UnsupportedInstruction.into()),
+        FractionalRedemptionActionV1::CloseEmptyLedger => {
+            let intent = FractionalTerminalIntentV1::decode(payload).map_err(map_fractional)?;
+            super::fractional_lifecycle::process_close_empty_ledger(
+                program_id,
+                accounts,
+                envelope_sequence,
+                intent,
+            )
+        }
     }
 }
 
@@ -1072,6 +1261,29 @@ mod loader_alias_tests {
             bearer_ix::COLLATERAL_TOKEN_PROGRAM,
             bearer_ix::OUTCOME_TOKEN_PROGRAMDATA,
         ));
+    }
+
+    #[test]
+    fn fractional_product_admission_tuple_refuses_every_identity_substitution() {
+        let expected = [
+            ContentId::from_bytes([1; 32]),
+            ContentId::from_bytes([2; 32]),
+            ContentId::from_bytes([3; 32]),
+            ContentId::from_bytes([4; 32]),
+            ContentId::from_bytes([5; 32]),
+            ContentId::from_bytes([6; 32]),
+            ContentId::from_bytes([7; 32]),
+            ContentId::from_bytes([8; 32]),
+        ];
+        assert!(require_product_admission_identity_tuple(expected, expected).is_ok());
+        for index in 0..expected.len() {
+            let mut substituted = expected;
+            substituted[index] = ContentId::from_bytes([0x80 + index as u8; 32]);
+            assert!(
+                require_product_admission_identity_tuple(expected, substituted).is_err(),
+                "identity index {index}",
+            );
+        }
     }
 }
 
@@ -1402,12 +1614,14 @@ fn process_redeem_internal_credit(
             && ledger.claim_ledger_account.bytes() == accounts[IX_CLAIM_LEDGER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
+    let mut root_body = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
     let root = authenticate_market_lifecycle_root_v1(
         program_id,
         &accounts[IX_MARKET_LIFECYCLE_ROOT],
         liabilities.market_binding.base().market_instance_v2_id,
         policy.domain_generation,
         false,
+        &mut root_body,
     )?;
     let neutral = root.state().capital().neutral_lamport_sink;
     require(
@@ -1975,12 +2189,14 @@ fn process_redeem_bearer_credit(
                 == accounts[bearer_ix::CLAIM_LEDGER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
+    let mut root_body = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
     let root = authenticate_market_lifecycle_root_v1(
         program_id,
         &accounts[root_index],
         liabilities.market_binding.base().market_instance_v2_id,
         policy.domain_generation,
         false,
+        &mut root_body,
     )?;
     let neutral = root.state().capital().neutral_lamport_sink;
     require(
@@ -2376,12 +2592,14 @@ fn process_credit_move(
                 == accounts[move_ix::CLAIM_LEDGER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
+    let mut root_body = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
     let root = authenticate_market_lifecycle_root_v1(
         program_id,
         &accounts[geometry.root],
         liabilities.market_binding.base().market_instance_v2_id,
         policy.domain_generation,
         false,
+        &mut root_body,
     )?;
     let neutral = root.state().capital().neutral_lamport_sink;
     require(
@@ -2791,12 +3009,14 @@ fn process_close_zero_credit(
                 == accounts[close_credit_ix::CLAIM_LEDGER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
+    let mut root_body = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
     let root = authenticate_market_lifecycle_root_v1(
         program_id,
         &accounts[close_credit_ix::MARKET_ROOT],
         liabilities.market_binding.base().market_instance_v2_id,
         policy.domain_generation,
         false,
+        &mut root_body,
     )?;
     let neutral = root.state().capital().neutral_lamport_sink;
     require(

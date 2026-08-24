@@ -71,6 +71,8 @@ pub mod failure_market_runtime;
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_recovery;
 pub mod fractional_redemption;
+/// Capability-disabled executable admission/retirement boundary for Fractional.
+mod fractional_lifecycle;
 /// Deployable current direct-only rent-owned V5 Egg delivery.
 #[cfg(any(
     all(
@@ -151,6 +153,8 @@ pub mod orders_batch;
 pub mod product_artifact;
 /// Disabled narrow Product authority for founding the current General Market owner.
 pub(crate) mod product_general_family;
+/// Capability-disabled atomic Fractional family postwrite promotion into Product.
+pub(crate) mod product_fractional_family;
 /// Always-compiled Product Market/link account authentication; routes remain capability-gated.
 pub mod product_market;
 /// Always-compiled current Product/Series authority. Dispatcher tuples remain
