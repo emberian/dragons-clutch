@@ -973,10 +973,14 @@ pub const MARKET_BINDING_ACCOUNT_BYTES_V2: usize = 572;
 pub const MARKET_BINDING_ACCOUNT_VERSION_V3: u8 = 3;
 /// Exact historical Product-family-authorized, rent-owned Market-binding bytes.
 pub const MARKET_BINDING_ACCOUNT_BYTES_V3: usize = 952;
-/// Current Product/Revenue-authorized Market-binding version.
+/// Historical RootV2/LinkV2 Product/Revenue-authorized Market-binding version.
 pub const MARKET_BINDING_ACCOUNT_VERSION_V4: u8 = 4;
-/// Exact current Product/Revenue-authorized, rent-owned Market-binding bytes.
+/// Exact historical Product/Revenue-authorized, rent-owned Market-binding bytes.
 pub const MARKET_BINDING_ACCOUNT_BYTES_V4: usize = 1_304;
+/// Current RootV3/LinkV3/FundingV5 Product/Revenue-authorized version.
+pub const MARKET_BINDING_ACCOUNT_VERSION_V5: u8 = 5;
+/// Exact current Product/Revenue-authorized, rent-owned Market-binding bytes.
+pub const MARKET_BINDING_ACCOUNT_BYTES_V5: usize = 1_368;
 /// Codec projection of the centrally owned Replay-successor account tag.
 pub const REPLAY_SUCCESSOR_ACCOUNT_TAG: u8 = 0x7a;
 /// First Replay-successor account version.
@@ -1008,7 +1012,7 @@ pub struct AccountAllocationV1 {
 /// `clutch-solana-layout::registry` remains the sole global allocation owner.
 /// The eventual adapter must compile-time/test-check parity before activation;
 /// this standalone pure crate does not claim registry authority.
-pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 39] = [
+pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 40] = [
     AccountAllocationV1 {
         tag: MARKET_RUNTIME_ACCOUNT_TAG,
         version: MARKET_RUNTIME_ACCOUNT_VERSION,
@@ -1183,6 +1187,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 39] = [
         tag: MARKET_BINDING_ACCOUNT_TAG,
         version: MARKET_BINDING_ACCOUNT_VERSION_V4,
         owner: "clutch-general-v2-contract/MarketBindingV4",
+    },
+    AccountAllocationV1 {
+        tag: MARKET_BINDING_ACCOUNT_TAG,
+        version: MARKET_BINDING_ACCOUNT_VERSION_V5,
+        owner: "clutch-general-v2-contract/MarketBindingV5",
     },
     AccountAllocationV1 {
         tag: REPLAY_SUCCESSOR_ACCOUNT_TAG,
