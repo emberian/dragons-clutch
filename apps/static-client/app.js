@@ -172,8 +172,9 @@
       definition("Data bytes", account.dataBytes),
       definition("Codec tag / version", `${account.accountTag} / ${account.accountVersion}`),
       definition("Generation", account.generation),
-      definition("Primary binding", account.primaryBinding),
-      definition("Secondary binding", account.secondaryBinding),
+      definition(account.bindingProjection.primary.label, account.bindingProjection.primary.value),
+      definition(account.bindingProjection.secondary.label, account.bindingProjection.secondary.value),
+      definition("Projection authority", account.bindingProjection.authority),
       definition("Body SHA-256", account.dataSha256),
       definition("Decode", account.decode.status === "requires-context" ? `requires context: ${account.decode.requirement}` : "canonical")
     );
@@ -291,7 +292,7 @@
       context.definitionValue,
       context.request
     );
-    const profileId = proposal.compiledProductSeriesBundleV6.identities.capabilityProfileId;
+    const profileId = proposal.compiledProductSeriesBundleV7.identities.capabilityProfileId;
     if (profileId !== context.configuration.release.capabilityProfileId) {
       throw new Error("Compiler output capabilityProfileId differs from the daemon-projected checked release profile.");
     }
@@ -314,8 +315,8 @@
       definition("Native basis ID / bytes", `${proposal.nativeClaimBasis.id} / ${proposal.nativeClaimBasis.byteLength}`),
       definition("Certificate ID / bytes", proposal.certificate ? `${proposal.certificate.id} / ${proposal.certificate.byteLength}` : "none — categorical basis is semantic owner"),
       definition("Certification subdivision depth", proposal.subdivisionDepth),
-      definition("BundleV6 ID / bytes", `${proposal.compiledProductSeriesBundleV6.id} / ${proposal.compiledProductSeriesBundleV6.byteLength}`),
-      definition("BundleV6 artifact kind / PDA", `${proposal.compiledProductSeriesBundleV6.artifact.kind} / ${proposal.compiledProductSeriesBundleV6.artifact.pda}`),
+      definition("BundleV7 ID / bytes", `${proposal.compiledProductSeriesBundleV7.id} / ${proposal.compiledProductSeriesBundleV7.byteLength}`),
+      definition("BundleV7 artifact kind / PDA", `${proposal.compiledProductSeriesBundleV7.artifact.kind} / ${proposal.compiledProductSeriesBundleV7.artifact.pda}`),
       definition("Exact market outcome / coverage", proposal.exactMarket ? `${proposal.exactMarket.outcome} / ${proposal.exactMarket.coverage}` : "not requested"),
       definition("Exact certificate / work manifest", proposal.exactMarket ? `${proposal.exactMarket.certificate ? proposal.exactMarket.certificate.outputId : "none"} / ${proposal.exactMarket.workManifest.id}` : "not requested"),
       definition("Capability profile join", profileId),

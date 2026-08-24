@@ -37,8 +37,8 @@
     productTemplateV4BytesHex: 256,
     priceMeasurePolicyV1BytesHex: 96,
     marketGenesisProfileV2BytesHex: 416,
-    seriesFundingQuoteV5BytesHex: 600,
-    seriesAttachmentPlanV5BytesHex: 112,
+    seriesFundingQuoteV6BytesHex: 624,
+    seriesAttachmentPlanV6BytesHex: 112,
     seriesPlanV5BytesHex: 152,
     seriesFundingTermsV2BytesHex: 240
   });
@@ -204,7 +204,7 @@
   };
 
   const validateBundleInputs = (raw) => {
-    const names = ["registryProgramReleaseV2BytesHex", "registryCapabilityProfileV4BytesHex", "sourceReleaseManifestId", "evidenceOnlyRecoveryPolicyV1BytesHex", "productTemplateV4BytesHex", "priceMeasurePolicyV1BytesHex", "marketGenesisProfileV2BytesHex", "seriesFundingQuoteV5BytesHex", "seriesAttachmentPlanV5BytesHex", "seriesPlanV5BytesHex", "seriesFundingTermsV2BytesHex"];
+    const names = ["registryProgramReleaseV2BytesHex", "registryCapabilityProfileV4BytesHex", "sourceReleaseManifestId", "evidenceOnlyRecoveryPolicyV1BytesHex", "productTemplateV4BytesHex", "priceMeasurePolicyV1BytesHex", "marketGenesisProfileV2BytesHex", "seriesFundingQuoteV6BytesHex", "seriesAttachmentPlanV6BytesHex", "seriesPlanV5BytesHex", "seriesFundingTermsV2BytesHex"];
     exactKeys(raw, names, "bundle inputs");
     const output = { sourceReleaseManifestId: hash(raw.sourceReleaseManifestId, "bundleInputs.sourceReleaseManifestId") };
     for (const [name, length] of Object.entries(BUNDLE_INPUT_BYTES)) output[name] = bytes(raw[name], `bundleInputs.${name}`, length, null);
@@ -305,16 +305,16 @@
       return null;
     }
     if (expectedSearch === undefined) throw new Error("Compiler invented an exact-market search not present in the request.");
-    exactKeys(raw, ["authority", "registrationAuthority", "outcome", "coverage", "completeFullDomainNegative", "claims", "bindings", "target", "search", "workManifest", "certificate", "bundleV6Sidecar"], "exactMarket");
+    exactKeys(raw, ["authority", "registrationAuthority", "outcome", "coverage", "completeFullDomainNegative", "claims", "bindings", "target", "search", "workManifest", "certificate", "bundleV7Sidecar"], "exactMarket");
     if (raw.authority !== "untrusted-compiler-sidecar" || raw.registrationAuthority !== false) throw new Error("exactMarket claimed authority it does not possess.");
     if (!["solved", "unsupported", "out-of-profile", "work-truncated"].includes(raw.outcome)) throw new Error("exactMarket.outcome is unknown.");
     if (!["full-integer-domain", "declared-coordinate-subset"].includes(raw.coverage)) throw new Error("exactMarket.coverage is unknown.");
     if (typeof raw.completeFullDomainNegative !== "boolean") throw new Error("exactMarket.completeFullDomainNegative must be boolean.");
     exactKeys(raw.claims, ["uniquePrice", "fairValue", "optimalClearing"], "exactMarket.claims");
     if (Object.values(raw.claims).some((claim) => claim !== false)) throw new Error("Exact atom search must not claim unique price, fair value, or optimal clearing.");
-    exactKeys(raw.bindings, ["marketId", "productTermsId", "nativeClaimBasisId", "priceId", "bundleV6Id"], "exactMarket.bindings");
+    exactKeys(raw.bindings, ["marketId", "productTermsId", "nativeClaimBasisId", "priceId", "bundleV7Id"], "exactMarket.bindings");
     const bindings = Object.freeze(Object.fromEntries(Object.entries(raw.bindings).map(([name, value]) => [name, hash(value, `exactMarket.bindings.${name}`)])));
-    if (bindings.marketId !== expectedSearch.marketId || bindings.priceId !== expectedSearch.priceId || bindings.productTermsId !== productTermsId || bindings.nativeClaimBasisId !== nativeBasisId || bindings.bundleV6Id !== bundleId) throw new Error("Exact-market bindings differ from the request, Product output, or BundleV6.");
+    if (bindings.marketId !== expectedSearch.marketId || bindings.priceId !== expectedSearch.priceId || bindings.productTermsId !== productTermsId || bindings.nativeClaimBasisId !== nativeBasisId || bindings.bundleV7Id !== bundleId) throw new Error("Exact-market bindings differ from the request, Product output, or BundleV7.");
     exactKeys(raw.target, ["outcomeCount", "payoutDenominator", "prices"], "exactMarket.target");
     const outcomeCount = Number(decimal(raw.target.outcomeCount, "exactMarket.target.outcomeCount", 16n));
     if (outcomeCount < 1 || !Array.isArray(raw.target.prices) || raw.target.prices.length !== outcomeCount) throw new Error("exactMarket.target.prices does not match outcomeCount.");
@@ -344,16 +344,16 @@
       return Object.freeze({ outputId: hash(raw.certificate.outputId, "exactMarket.certificate.outputId"), bytesHex: bytes(raw.certificate.bytesHex, "exactMarket.certificate.bytesHex", 544, null) });
     })();
     if ((raw.outcome === "solved") !== (certificate !== null)) throw new Error("Only a solved exact-market search may emit a certificate.");
-    exactKeys(raw.bundleV6Sidecar, ["id", "bytesHex", "bundleArtifactKind", "bundleArtifactContext"], "exactMarket.bundleV6Sidecar");
-    if (raw.bundleV6Sidecar.bundleArtifactKind !== "63" || raw.bundleV6Sidecar.bundleArtifactContext !== "0".repeat(64)) throw new Error("Exact-market sidecar is not bound to the kind-63 global BundleV6 coordinate.");
-    const bundleV6Sidecar = Object.freeze({ id: hash(raw.bundleV6Sidecar.id, "exactMarket.bundleV6Sidecar.id"), bytesHex: bytes(raw.bundleV6Sidecar.bytesHex, "exactMarket.bundleV6Sidecar.bytesHex", 176, null), bundleArtifactKind: "63", bundleArtifactContext: raw.bundleV6Sidecar.bundleArtifactContext });
-    return Object.freeze({ authority: raw.authority, registrationAuthority: false, outcome: raw.outcome, coverage: raw.coverage, completeFullDomainNegative: raw.completeFullDomainNegative, claims: Object.freeze(raw.claims), bindings, target: Object.freeze({ outcomeCount: String(outcomeCount), payoutDenominator, prices: Object.freeze(prices) }), search: Object.freeze({ coordinateDomainMin: decimal(raw.search.coordinateDomainMin, "exactMarket.search.coordinateDomainMin", U128_MAX), coordinateDomainMax: decimal(raw.search.coordinateDomainMax, "exactMarket.search.coordinateDomainMax", U128_MAX), coordinates: Object.freeze(coordinates), maximumSubsetEvaluationsPerSupport: workBudget, exhaustedThroughSupport: exhausted, truncatedSupport: truncated, workBySupport: Object.freeze(workBySupport) }), workManifest, certificate, bundleV6Sidecar });
+    exactKeys(raw.bundleV7Sidecar, ["id", "bytesHex", "bundleArtifactKind", "bundleArtifactContext"], "exactMarket.bundleV7Sidecar");
+    if (raw.bundleV7Sidecar.bundleArtifactKind !== "68" || raw.bundleV7Sidecar.bundleArtifactContext !== "0".repeat(64)) throw new Error("Exact-market sidecar is not bound to the kind-68 global BundleV7 coordinate.");
+    const bundleV7Sidecar = Object.freeze({ id: hash(raw.bundleV7Sidecar.id, "exactMarket.bundleV7Sidecar.id"), bytesHex: bytes(raw.bundleV7Sidecar.bytesHex, "exactMarket.bundleV7Sidecar.bytesHex", 176, null), bundleArtifactKind: "68", bundleArtifactContext: raw.bundleV7Sidecar.bundleArtifactContext });
+    return Object.freeze({ authority: raw.authority, registrationAuthority: false, outcome: raw.outcome, coverage: raw.coverage, completeFullDomainNegative: raw.completeFullDomainNegative, claims: Object.freeze(raw.claims), bindings, target: Object.freeze({ outcomeCount: String(outcomeCount), payoutDenominator, prices: Object.freeze(prices) }), search: Object.freeze({ coordinateDomainMin: decimal(raw.search.coordinateDomainMin, "exactMarket.search.coordinateDomainMin", U128_MAX), coordinateDomainMax: decimal(raw.search.coordinateDomainMax, "exactMarket.search.coordinateDomainMax", U128_MAX), coordinates: Object.freeze(coordinates), maximumSubsetEvaluationsPerSupport: workBudget, exhaustedThroughSupport: exhausted, truncatedSupport: truncated, workBySupport: Object.freeze(workBySupport) }), workManifest, certificate, bundleV7Sidecar });
   };
 
   const validateProposal = (raw, expectedRequestSha256, expectedInputSha256, expectedCompilerReleaseSha256, expectedDefinition, expectedRequest) => {
-    exactKeys(raw, ["schema", "authority", "registrationAuthority", "compilerReleaseSha256", "programId", "requestCanonicalSha256", "inputCanonicalSha256", "productTermsId", "classification", "spanStatus", "nativeClaimBasis", "certificate", "bounds", "subdivisionDepth", "compiledProductSeriesBundleV6", "exactMarket"], "compiler proposal");
-    if (!plain(raw) || raw.schema !== "dragons-clutch/compiler/product-exact-market-proposal/v2" || raw.authority !== "untrusted-compiler-proposal" || raw.registrationAuthority !== false) {
-      throw new Error("Compiler result is not an untrusted Product exact-market proposal v2.");
+    exactKeys(raw, ["schema", "authority", "registrationAuthority", "compilerReleaseSha256", "programId", "requestCanonicalSha256", "inputCanonicalSha256", "productTermsId", "classification", "spanStatus", "nativeClaimBasis", "certificate", "bounds", "subdivisionDepth", "compiledProductSeriesBundleV7", "exactMarket"], "compiler proposal");
+    if (!plain(raw) || raw.schema !== "dragons-clutch/compiler/product-exact-market-proposal/v3" || raw.authority !== "untrusted-compiler-proposal" || raw.registrationAuthority !== false) {
+      throw new Error("Compiler result is not an untrusted Product exact-market proposal v3.");
     }
     const programId = address(raw.programId, "programId");
     if (!expectedRequest || programId !== expectedRequest.programId) throw new Error("Compiler result names a different Product program ID.");
@@ -396,26 +396,26 @@
       ? decimal(raw.subdivisionDepth, "subdivisionDepth", 255n)
       : null;
     if (raw.classification !== "analytic-smooth" && raw.subdivisionDepth !== null) throw new Error("Only analytic smooth output carries a subdivisionDepth.");
-    exactKeys(raw.compiledProductSeriesBundleV6, ["id", "bytesHex", "artifact", "identities"], "compiledProductSeriesBundleV6");
-    const bundleBytes = bytes(raw.compiledProductSeriesBundleV6.bytesHex, "compiledProductSeriesBundleV6.bytesHex", 528, null);
-    exactKeys(raw.compiledProductSeriesBundleV6.artifact, ["kind", "context", "exactBodyBytes", "programId", "pda", "bump"], "compiledProductSeriesBundleV6.artifact");
-    if (raw.compiledProductSeriesBundleV6.artifact.kind !== "63" || raw.compiledProductSeriesBundleV6.artifact.context !== "0".repeat(64) || raw.compiledProductSeriesBundleV6.artifact.exactBodyBytes !== "528" || raw.compiledProductSeriesBundleV6.artifact.programId !== programId) throw new Error("BundleV6 artifact coordinate is not exact kind 63 / global context / 528-byte body.");
-    address(raw.compiledProductSeriesBundleV6.artifact.pda, "compiledProductSeriesBundleV6.artifact.pda");
-    decimal(raw.compiledProductSeriesBundleV6.artifact.bump, "compiledProductSeriesBundleV6.artifact.bump", 255n);
-    if (!plain(raw.compiledProductSeriesBundleV6.identities)) throw new Error("compiledProductSeriesBundleV6.identities is required.");
+    exactKeys(raw.compiledProductSeriesBundleV7, ["id", "bytesHex", "artifact", "identities"], "compiledProductSeriesBundleV7");
+    const bundleBytes = bytes(raw.compiledProductSeriesBundleV7.bytesHex, "compiledProductSeriesBundleV7.bytesHex", 528, null);
+    exactKeys(raw.compiledProductSeriesBundleV7.artifact, ["kind", "context", "exactBodyBytes", "programId", "pda", "bump"], "compiledProductSeriesBundleV7.artifact");
+    if (raw.compiledProductSeriesBundleV7.artifact.kind !== "68" || raw.compiledProductSeriesBundleV7.artifact.context !== "0".repeat(64) || raw.compiledProductSeriesBundleV7.artifact.exactBodyBytes !== "528" || raw.compiledProductSeriesBundleV7.artifact.programId !== programId) throw new Error("BundleV7 artifact coordinate is not exact kind 68 / global context / 528-byte body.");
+    address(raw.compiledProductSeriesBundleV7.artifact.pda, "compiledProductSeriesBundleV7.artifact.pda");
+    decimal(raw.compiledProductSeriesBundleV7.artifact.bump, "compiledProductSeriesBundleV7.artifact.bump", 255n);
+    if (!plain(raw.compiledProductSeriesBundleV7.identities)) throw new Error("compiledProductSeriesBundleV7.identities is required.");
     const identities = {};
-    const namesInProposal = Object.keys(raw.compiledProductSeriesBundleV6.identities);
+    const namesInProposal = Object.keys(raw.compiledProductSeriesBundleV7.identities);
     if (namesInProposal.length !== BUNDLE_IDENTITY_NAMES.length || BUNDLE_IDENTITY_NAMES.some((name) => !namesInProposal.includes(name))) {
-      throw new Error("Compiled Product/Series bundle must expose the exact sixteen typed identities owned by CompiledProductSeriesBundleV6.");
+      throw new Error("Compiled Product/Series bundle must expose the exact sixteen typed identities owned by CompiledProductSeriesBundleV7.");
     }
     for (const name of BUNDLE_IDENTITY_NAMES) {
-      identities[name] = hash(raw.compiledProductSeriesBundleV6.identities[name], `compiledProductSeriesBundleV6.identities.${name}`);
+      identities[name] = hash(raw.compiledProductSeriesBundleV7.identities[name], `compiledProductSeriesBundleV7.identities.${name}`);
     }
     if (identities.nativeClaimBasisId !== nativeClaimBasis.id) throw new Error("Compiled Product/Series bundle names a different nativeClaimBasisId than the compiler output.");
     const productTermsId = hash(raw.productTermsId, "productTermsId");
     if (productTermsId !== expectedDefinition.productTermsId) throw new Error("Compiler result names a different Product Terms identity than the exact definition.");
-    if (identities.marketGenesisProfileId !== productTermsId) throw new Error("BundleV6 names a different MarketGenesisProfileV2 than the payoff/exact-market Terms identity.");
-    const bundleId = hash(raw.compiledProductSeriesBundleV6.id, "compiledProductSeriesBundleV6.id");
+    if (identities.marketGenesisProfileId !== productTermsId) throw new Error("BundleV7 names a different MarketGenesisProfileV2 than the payoff/exact-market Terms identity.");
+    const bundleId = hash(raw.compiledProductSeriesBundleV7.id, "compiledProductSeriesBundleV7.id");
     const exactMarket = validateExactMarketProposal(raw.exactMarket, expectedRequest.exactMarketSearch, bundleId, nativeClaimBasis.id, productTermsId);
     return Object.freeze({
       schema: raw.schema,
@@ -432,11 +432,11 @@
       certificate,
       bounds: Object.freeze(bounds),
       subdivisionDepth,
-      compiledProductSeriesBundleV6: Object.freeze({
+      compiledProductSeriesBundleV7: Object.freeze({
         id: bundleId,
         bytesHex: bundleBytes,
         byteLength: "528",
-        artifact: Object.freeze(raw.compiledProductSeriesBundleV6.artifact),
+        artifact: Object.freeze(raw.compiledProductSeriesBundleV7.artifact),
         identities: Object.freeze(identities)
       }),
       exactMarket,

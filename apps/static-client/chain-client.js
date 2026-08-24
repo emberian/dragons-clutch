@@ -16,7 +16,7 @@
   const U64_MAX = (1n << 64n) - 1n;
   const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
   const BASE58_INDEX = Object.freeze(Object.fromEntries(Array.from(BASE58_ALPHABET, (character, index) => [character, index])));
-  const DECODER_SET = "dragons-clutch/canonical-account-decoders/v4-source-work-schedule";
+  const DECODER_SET = "dragons-clutch/canonical-account-decoders/v7-product-v5-authority";
   const GROUP_ORDER = Object.freeze(["market", "product", "collateral", "source", "series", "candidate", "settlement", "liquidity", "recovery", "other"]);
   const GROUP_LABELS = Object.freeze({
     market: "Market",
@@ -41,11 +41,18 @@
     "general-market-runtime": "market",
     "general-epoch": "market",
     "general-economic-domain": "market",
-    "general-market-binding": "market",
+    "general-current-market-authority-v5": "market",
     "general-order-page-v5": "market",
     "general-reservation-v9": "settlement",
     "general-candidate-window": "market",
-    "series-registry": "product",
+    "series-registry-v4": "product",
+    "series-funding-v5": "series",
+    "product-funding-quote-v6-schedule-v4": "product",
+    "product-attachment-v6": "product",
+    "compiled-product-series-bundle-v7": "product",
+    "product-market-replay-v2-graph-v4": "product",
+    "product-market-root-v3-graph-v4": "product",
+    "series-market-link-v3": "series",
     "structured-claim-descriptor": "product",
     "product-capability-registry": "product",
     "product-capability-registry-v2": "product",
@@ -106,6 +113,17 @@
     "failure-replay-tombstone": "recovery",
     "failure-interval-consensus-work-v1": "recovery",
     "failure-interval-consensus-replay-v1": "recovery"
+  });
+  const CURRENT_BINDING_PROJECTIONS = Object.freeze({
+    "general-current-market-authority-v5": Object.freeze(["market-instance-v2", "product-market-root-v3-account"]),
+    "series-registry-v4": Object.freeze(["series-plan-v5", "compiled-product-series-bundle-v7"]),
+    "series-funding-v5": Object.freeze(["series-plan-v5", "compiled-product-series-bundle-v7"]),
+    "product-funding-quote-v6-schedule-v4": Object.freeze(["series-funding-quote-v6", "market-foundation-schedule-v4"]),
+    "product-attachment-v6": Object.freeze(["series-attachment-plan-v6", "series-funding-quote-v6"]),
+    "compiled-product-series-bundle-v7": Object.freeze(["compiled-product-series-bundle-v7", "series-plan-v5"]),
+    "product-market-replay-v2-graph-v4": Object.freeze(["market-instance-v2", "market-foundation-account-graph-v4"]),
+    "product-market-root-v3-graph-v4": Object.freeze(["market-instance-v2", "market-foundation-account-graph-v4"]),
+    "series-market-link-v3": Object.freeze(["series-plan-v5", "market-instance-v2"])
   });
 
   const plain = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
@@ -168,6 +186,14 @@
   const bool = (value, name) => {
     if (typeof value !== "boolean") throw new Error(`${name} must be boolean.`);
     return value;
+  };
+  const bindingProjection = (kind, primaryBinding, secondaryBinding) => {
+    const labels = CURRENT_BINDING_PROJECTIONS[kind] || ["primary-semantic-binding", "secondary-semantic-binding"];
+    return Object.freeze({
+      primary: Object.freeze({ label: labels[0], value: primaryBinding }),
+      secondary: Object.freeze({ label: labels[1], value: secondaryBinding }),
+      authority: CURRENT_BINDING_PROJECTIONS[kind] ? "hostile-decoded-current-semantic-owner" : "hostile-decoded-account-codec"
+    });
   };
 
   const boundedUrl = (value, name, schemes, allowQuery = false, preserveExact = false) => {
@@ -628,7 +654,7 @@
     requirePlain(raw.decode, `accounts[${index}].decode`);
     if (raw.decode.status !== "canonical" && raw.decode.status !== "requires-context") throw new Error(`accounts[${index}] has an unknown decode status.`);
     const requirement = raw.decode.status === "requires-context" ? text(raw.decode.requirement, `accounts[${index}].decode.requirement`, 240) : null;
-    return Object.freeze({
+    const value = {
       address: address(raw.address, `accounts[${index}].address`),
       owner: address(raw.owner, `accounts[${index}].owner`),
       releaseKey: text(raw.releaseKey, `accounts[${index}].releaseKey`, 256),
@@ -649,7 +675,8 @@
       primaryBinding: raw.primaryBinding === null ? null : hash32(raw.primaryBinding, `accounts[${index}].primaryBinding`),
       secondaryBinding: raw.secondaryBinding === null ? null : hash32(raw.secondaryBinding, `accounts[${index}].secondaryBinding`),
       branch: validateBranch(raw.branch, `accounts[${index}].branch`)
-    });
+    };
+    return Object.freeze({ ...value, bindingProjection: bindingProjection(value.kind, value.primaryBinding, value.secondaryBinding) });
   };
 
   const validateAccountsResponse = (raw, configuration) => {
