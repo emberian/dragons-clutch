@@ -11,9 +11,8 @@ use clutch_collateral_adapter_v2::{
     refine_market_collateral_v2, BoundCollateralProfileV2, Id as CollateralId,
     MarketCollateralBindingV2,
 };
-use clutch_fee_runtime_contract::projection::{
-    CertifiedRecipientAllocationAccessV2, SelectedOwnerFeeBookHashV1,
-};
+use clutch_fee_runtime_contract::projection::SelectedOwnerFeeBookHashV1;
+use clutch_fee_runtime_contract::codec::CertifiedRecipientAllocationAccessV3;
 use clutch_fee_runtime_contract::retirement::FeeRetirementHashV1;
 use clutch_fee_runtime_contract::terminal::{
     CandidateFeeAccountRoleV1, ExternalFeeAccountClosureV1, FeeTerminalOutcomeV1,
@@ -23,9 +22,10 @@ use clutch_general_v2_contract as contract;
 use clutch_general_v2_contract::{
     decode_fee_retirement_payload_v1, decode_settlement_retirement_payload_v1,
     CountedSettlementRootSelectorV1, FeeMakerDistributionPayloadV1,
-    FeeRetirementPayloadV1, fee_runtime_semantic_release_id_v1, DeletableRentOwnerV1,
+    FeeRetirementPayloadV1,
+    fee_runtime_semantic_release_id_v2, DeletableRentOwnerV1,
     FeeRetirementAccumulatorV1AccountV1, Id32, MarketBindingV4,
-    RecipientAllocationV2ViewAccountV1, SettlementCashPotV1AccountV1,
+    SettlementCashPotV1AccountV1,
     SettlementChildRetirementPayloadV1,
     SettlementRetirementPayloadKindV1,
 };
@@ -173,14 +173,14 @@ fn require_destination(account: &AccountInfo<'_>) -> Outcome<()> {
     require(!account.executable, ClutchError::ExecutableAccount)
 }
 
-fn decode_binding(program_id: &Pubkey, account: &AccountInfo<'_>) -> Outcome<MarketBindingV4> {
+fn decode_binding(program_id: &Pubkey, account: &AccountInfo<'_>) -> Outcome<Box<MarketBindingV4>> {
     require_program_state(
         program_id,
         account,
         false,
         Some(contract::MARKET_BINDING_ACCOUNT_BYTES_V4),
     )?;
-    let binding = MarketBindingV4::decode(&borrow_data(account)?)?;
+    let binding = Box::new(MarketBindingV4::decode(&borrow_data(account)?)?);
     let canonical = seeds::general_v2_market_binding_pda(
         program_id,
         &binding.base().base().market_instance_v2_id.bytes(),
@@ -327,23 +327,36 @@ fn checked_close_balances(
         .lamports()
         .checked_sub(rent.refundable_principal)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    if payer.key == sink.key {
-        let combined = payer
-            .lamports()
-            .checked_add(rent.refundable_principal)
-            .and_then(|value| value.checked_add(donation))
-            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-        return Ok((combined, combined));
-    }
-    let payer_after = payer
-        .lamports()
-        .checked_add(rent.refundable_principal)
-        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    let sink_after = sink
-        .lamports()
-        .checked_add(donation)
-        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let (payer_after, sink_after) = close_destination_balances(
+        payer.lamports(),
+        sink.lamports(),
+        rent.refundable_principal,
+        donation,
+        payer.key == sink.key,
+    )
+    .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
     Ok((payer_after, sink_after))
+}
+
+fn close_destination_balances(
+    payer_before: u64,
+    sink_before: u64,
+    principal: u64,
+    donation: u64,
+    coalesced: bool,
+) -> Option<(u64, u64)> {
+    if coalesced {
+        if payer_before != sink_before {
+            return None;
+        }
+        let after = payer_before.checked_add(principal)?.checked_add(donation)?;
+        Some((after, after))
+    } else {
+        Some((
+            payer_before.checked_add(principal)?,
+            sink_before.checked_add(donation)?,
+        ))
+    }
 }
 
 fn contract_rent(rent: LayoutRentV1) -> Outcome<DeletableRentOwnerV1> {
@@ -412,7 +425,7 @@ fn prepare_child_frame(
     accounts: &[AccountInfo<'_>],
     selector: SettlementChildRetirementPayloadV1,
     exact_child_len: usize,
-) -> Outcome<(AuthenticatedGeneralSettlementRootV1, MarketBindingV4)> {
+) -> Outcome<(AuthenticatedGeneralSettlementRootV1, Box<MarketBindingV4>)> {
     require_count(accounts, SETTLEMENT_CHILD_CLOSE_ACCOUNT_COUNT_V1)?;
     require(selector.child == id(accounts[IX_CHILD].key), ClutchError::MismatchedState)?;
     require_program_state(program_id, &accounts[IX_CHILD], true, Some(exact_child_len))?;
@@ -433,7 +446,7 @@ fn prepare_child_frame(
         },
     )?;
     let binding = decode_binding(program_id, &accounts[IX_BINDING])?;
-    require_root_binding(&root, &accounts[IX_BINDING], &binding)?;
+    require_root_binding(&root, &accounts[IX_BINDING], binding.as_ref())?;
     require(
         binding.base().base().neutral_sink == id(accounts[IX_SINK].key),
         ClutchError::MismatchedState,
@@ -770,7 +783,7 @@ fn close_fee_finalization(
         program_id,
         &root.root().fee_record().bytes(),
     );
-    let runtime_release = fee_runtime_semantic_release_id_v1(&RuntimeSha256)?;
+    let runtime_release = fee_runtime_semantic_release_id_v2(&RuntimeSha256)?;
     require(
         *accounts[IX_FEE_ACCUMULATOR].key == accumulator_pda.0
             && accumulator.stored_bump == accumulator_pda.1
@@ -918,7 +931,7 @@ fn distribute_maker_fee(
         program_id,
         &accounts[FEE_IX_RECIPIENT],
         false,
-        Some(contract::RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2),
+        Some(contract::RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V3),
     )?;
     require_program_state(
         program_id,
@@ -933,7 +946,7 @@ fn distribute_maker_fee(
         program_id,
         &root.root().fee_record().bytes(),
     );
-    let runtime_release = fee_runtime_semantic_release_id_v1(&RuntimeSha256)?;
+    let runtime_release = fee_runtime_semantic_release_id_v2(&RuntimeSha256)?;
     require(
         *accounts[FEE_IX_ACCUMULATOR].key == accumulator_pda.0
             && accumulator.stored_bump == accumulator_pda.1
@@ -953,9 +966,11 @@ fn distribute_maker_fee(
         ClutchError::MismatchedState,
     )?;
     let recipient_data = borrow_data(&accounts[FEE_IX_RECIPIENT])?;
-    let recipient = RecipientAllocationV2ViewAccountV1::decode(&recipient_data)?;
-    recipient.rent.validate()?;
-    let recipient_data_id = contract::recipient_allocation_account_data_id_v2(
+    let recipient = contract::decode_borrowed_recipient_allocation_v3_account(
+        &recipient_data,
+    )?;
+    recipient.rent().validate()?;
+    let recipient_data_id = contract::recipient_allocation_account_data_id_v3(
         &recipient_data,
         &RuntimeSha256,
     )?;
@@ -966,22 +981,24 @@ fn distribute_maker_fee(
     let maker_index = usize::from(selector.maker_ordinal);
     require(
         *accounts[FEE_IX_RECIPIENT].key == recipient_pda.0
-            && recipient.stored_bump == recipient_pda.1
-            && recipient.semantic.owner_fee_book_data_id()
-                == accumulator.semantic.owner_fee_book_data_id()
-            && recipient.semantic.owner_order_set_digest()
+            && recipient.stored_bump() == recipient_pda.1
+            && recipient.semantic().owner_order_set_digest()
                 == accumulator.semantic.owner_order_set_digest()
-            && recipient.semantic.fee_record().0 == selector.fee_record.bytes()
-            && maker_index < usize::from(recipient.semantic.maker_len())
-            && recipient.semantic.maker_position(selector.maker_ordinal)?.0
-                == selector.maker_position.bytes()
+            && recipient.semantic().fee_record().0 == selector.fee_record.bytes()
+            && maker_index < usize::from(recipient.semantic().row_count())
+            && recipient
+                .semantic()
+                .row(selector.maker_ordinal)?
+                .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?
+                .position()
+                .0 == selector.maker_position.bytes()
             && recipient_data_id.bytes()
                 == accumulator.semantic.recipient_allocation_data_id().0
             && accounts[FEE_IX_RECIPIENT].lamports()
                 >= recipient
-                    .rent
+                    .rent()
                     .refundable_principal
-                    .checked_add(recipient.rent.donation_floor)
+                    .checked_add(recipient.rent().donation_floor)
                     .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
         ClutchError::MismatchedState,
     )?;
@@ -1013,7 +1030,11 @@ fn distribute_maker_fee(
         &accounts[FEE_IX_REPLAY],
         position_owner,
     )?;
-    let credited_atoms = recipient.semantic.maker_rebate_atoms(selector.maker_ordinal)?;
+    let credited_atoms = recipient
+        .semantic()
+        .row(selector.maker_ordinal)?
+        .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?
+        .rebate_atoms();
     let plan = contract::prepare_fee_position_credit_v1(
         selector.fee_record,
         recipient_data_id,
@@ -1027,7 +1048,7 @@ fn distribute_maker_fee(
     )?;
     let accumulator_successor = accumulator
         .semantic
-        .fold_maker_distribution(&recipient.semantic, plan.semantic(), &RuntimeSha256)
+        .fold_maker_distribution(&recipient.semantic(), plan.semantic(), &RuntimeSha256)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let mut accumulator_output = [0u8; contract::FEE_RETIREMENT_ACCOUNT_BYTES_V1];
     FeeRetirementAccumulatorV1AccountV1 {
@@ -1189,5 +1210,22 @@ mod tests {
         assert_eq!(FEE_FINALIZATION_CLOSE_ACCOUNT_COUNT_V1, 6);
         assert_eq!(FEE_RECORD_RETIREMENT_ACCOUNT_COUNT_V1, 3);
         assert_eq!(BEGIN_RETIRING_ACCOUNT_COUNT_V1, 2);
+    }
+
+    #[test]
+    fn close_credits_coalesce_without_overwrite_or_double_count() {
+        assert_eq!(
+            close_destination_balances(11, 11, 5, 7, true),
+            Some((23, 23)),
+        );
+        assert_eq!(
+            close_destination_balances(11, 13, 5, 7, false),
+            Some((16, 20)),
+        );
+        assert_eq!(close_destination_balances(11, 13, 5, 7, true), None);
+        assert_eq!(
+            close_destination_balances(u64::MAX, u64::MAX, 1, 0, true),
+            None,
+        );
     }
 }
