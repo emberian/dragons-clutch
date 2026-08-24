@@ -4,12 +4,14 @@ use std::{vec, vec::Vec};
 
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
-    FundingQuoteV1, FundingStateV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+    CompartmentFundingV1, FundingAmountsV1, FundingCustodyObservationV1, FundingQuoteV1,
+    FundingStateV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+    RealmCollateralBindingV1, RealmCollateralCustodyV1, RealmCollateralVaultObservationV1,
 };
 use dclutch_core_contract::{ContentId, MarketIdentity, MarketRoot, Phase};
 
 use crate::{
-    LiquidityAttachment, LiquidityConfigV1, ParentPool, RentCreditTerms,
+    LiquidityAttachment, LiquidityConfigV1, RentCreditTerms,
     activation::{ActivationError, activate_pool},
     frame::{
         ConfigPdaSeedsV1, DEALER_CONFIG_PDA_DOMAIN_V1, DEALER_LP_PDA_DOMAIN_V1,
@@ -52,7 +54,6 @@ fn config<const N: usize, const B: usize>() -> LiquidityConfigV1<N, B> {
     }
     LiquidityConfigV1::new(
         id(7),
-        ParentPool::new(POOL_ADDRESS, 9).expect("parent"),
         rent(55),
         10_000,
         25,
@@ -178,11 +179,11 @@ fn exact_frames_enforce_counts_privileges_and_explicit_aliases() {
     }
     assert_eq!(
         dealer_account_count::<2>(DealerActionV1::ActivatePool),
-        Ok(23)
+        Ok(24)
     );
     assert_eq!(
         dealer_account_count::<16>(DealerActionV1::ActivatePool),
-        Ok(23)
+        Ok(24)
     );
     assert_eq!(
         dealer_account_count::<16>(DealerActionV1::AddLiquidity),
@@ -211,9 +212,9 @@ fn exact_frames_enforce_counts_privileges_and_explicit_aliases() {
     let activator_key = safe.first().expect("activator role").key;
     safe.get_mut(1).expect("LP owner role").key = activator_key;
     // Pool/config/LP RentCredits may be the same permanent beneficiary credit.
-    let rent_credit_key = safe.get(16).expect("Pool RentCredit role").key;
-    safe.get_mut(17).expect("config RentCredit role").key = rent_credit_key;
-    safe.get_mut(18).expect("LP RentCredit role").key = rent_credit_key;
+    let rent_credit_key = safe.get(17).expect("Pool RentCredit role").key;
+    safe.get_mut(18).expect("config RentCredit role").key = rent_credit_key;
+    safe.get_mut(19).expect("LP RentCredit role").key = rent_credit_key;
     assert!(DealerFrameV1::<2>::new(DealerActionV1::ActivatePool, &safe).is_ok());
 }
 
@@ -282,7 +283,7 @@ fn exact_n16_account_and_legacy_packet_risk_is_locked() {
     let activate_bytes = legacy_single_instruction_bytes(activate_accounts, 80, true);
     let add_bytes = legacy_single_instruction_bytes(add_accounts, 216, true);
     let retire_bytes = legacy_single_instruction_bytes(retire_accounts, 32, false);
-    assert_eq!(activate_bytes, 976);
+    assert_eq!(activate_bytes, 1_009);
     assert_eq!(add_bytes, 783);
     assert_eq!(retire_bytes, 729);
     assert!(activate_bytes < crate::frame::SOLANA_PACKET_DATA_SIZE_V1);
@@ -335,7 +336,19 @@ fn pda_preimages_are_domain_separated_and_substitution_sensitive() {
 
 #[test]
 fn activation_uses_shared_funding_authority_and_chain_derived_amounts() {
-    let quote = FundingQuoteV1::new(300, 10, 0, 0, 0, 100_000, 5_000).expect("quote");
+    let amounts = FundingAmountsV1::new(
+        CompartmentFundingV1::native_lamports(300).expect("rent"),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::realm_collateral(100_000).expect("liquidity"),
+        CompartmentFundingV1::realm_collateral(5_000).expect("service"),
+    )
+    .expect("amounts");
+    let collateral_binding =
+        RealmCollateralBindingV1::new(id(1), id(31), [32; 32], [33; 32], OWNER).expect("binding");
+    let quote = FundingQuoteV1::new(amounts, Some(collateral_binding)).expect("quote");
     let entry = CapabilityEntryV1::new(
         id(6),
         id(21),
@@ -355,8 +368,31 @@ fn activation_uses_shared_funding_authority_and_chain_derived_amounts() {
         CapabilityManifestV1::encode_into(&[entry], &mut manifest_storage).expect("manifest");
     let market_identity = MarketIdentity::new(id(1), id(2), id(3), id(4), id(5), 9);
     let market = MarketRoot::founding(market_identity, OWNER).expect("market");
-    let funding =
-        FundingStateV1::new(id(5), manifest, 0, quote.total_principal()).expect("funding");
+    let funding_authority = [34; 32];
+    let funding_vault = [35; 32];
+    let collateral_observation = RealmCollateralVaultObservationV1::new(
+        funding_vault,
+        funding_authority,
+        [32; 32],
+        [33; 32],
+        105_000,
+        2_100_000,
+        2_039_280,
+    )
+    .expect("vault observation");
+    let collateral_custody = RealmCollateralCustodyV1::new(
+        id(1),
+        id(31),
+        funding_authority,
+        funding_vault,
+        collateral_observation,
+    )
+    .expect("collateral custody");
+    let funding_custody =
+        FundingCustodyObservationV1::with_realm_collateral(800, 500, collateral_custody)
+            .expect("funding custody");
+    let funding = FundingStateV1::new(id(5), manifest, 0, funding_custody).expect("funding");
+    let funding_state = [36; 32];
     let attachment =
         LiquidityAttachment::new(market_identity, id(21), id(7), OWNER).expect("attachment");
     let request = ActivatePoolV1::new(9, 0, [44; 32], 1_000, 1_000).expect("open wire");
@@ -366,7 +402,9 @@ fn activation_uses_shared_funding_authority_and_chain_derived_amounts() {
         MARKET_ADDRESS,
         manifest,
         funding,
-        quote.total_principal(),
+        funding_state,
+        funding_authority,
+        funding_custody,
         attachment,
         &config,
         POOL_ADDRESS,
@@ -380,11 +418,26 @@ fn activation_uses_shared_funding_authority_and_chain_derived_amounts() {
     )
     .expect("activation plan");
     assert_eq!(plan.market().outstanding_children(), 1);
-    assert_eq!(plan.funding().remaining().total_principal(), 0);
-    assert_eq!(plan.funding_debit().liquidity_principal(), 100_000);
-    assert_eq!(plan.funding_debit().service_principal(), 5_000);
+    assert_eq!(plan.funding().remaining().native_lamports_total(), 0);
+    assert_eq!(plan.funding().remaining().realm_collateral_total(), 0);
+    assert_eq!(plan.funding_debit().liquidity().amount(), 100_000);
+    assert_eq!(
+        plan.funding_debit()
+            .service()
+            .expect("service release")
+            .amount(),
+        5_000
+    );
     assert_eq!(plan.pool().liquidity().claim_reserves(), [1_000; 2]);
     assert_eq!(plan.capability_funding_seeds().config_id(), [7; 32]);
+    assert_eq!(
+        plan.capability_funding_authority_seeds().seed_components()[1],
+        funding_state.as_slice()
+    );
+    assert_eq!(
+        plan.capability_funding_vault_seeds().seed_components()[1],
+        funding_authority.as_slice()
+    );
     assert_eq!(plan.lp_seeds().lp_id(), [44; 32]);
     assert_eq!(
         plan.pool_position_seeds().seed_components()[2],
@@ -397,7 +450,9 @@ fn activation_uses_shared_funding_authority_and_chain_derived_amounts() {
             MARKET_ADDRESS,
             manifest,
             funding,
-            quote.total_principal(),
+            funding_state,
+            funding_authority,
+            funding_custody,
             attachment,
             &config,
             POOL_ADDRESS,

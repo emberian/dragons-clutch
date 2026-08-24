@@ -90,6 +90,10 @@ pub enum DealerAccountRoleV1 {
     CapabilityManifest,
     /// Selected capability funding ledger under shared capability derivation.
     FundingState,
+    /// Shared PDA signing Realm-collateral movement from capability funding.
+    CapabilityFundingAuthority,
+    /// Shared capability funding Vault holding exact Realm collateral.
+    FundingCollateralVault,
     /// Immutable Dealer ladder configuration.
     LiquidityConfig,
     /// Mutable Dealer Pool root.
@@ -193,7 +197,7 @@ impl<'a, const N: usize> DealerFrameV1<'a, N> {
 pub fn dealer_account_count<const N: usize>(action: DealerActionV1) -> Result<usize> {
     validate_profile::<N>()?;
     let base: usize = match action {
-        DealerActionV1::ActivatePool => 23,
+        DealerActionV1::ActivatePool => 24,
         DealerActionV1::CreateLpPosition => 9,
         DealerActionV1::AddLiquidity | DealerActionV1::RemoveLiquidity => 13,
         DealerActionV1::Trade => 12,
@@ -222,12 +226,13 @@ pub fn dealer_account_role<const N: usize>(
                 DealerAccountRoleV1::Market,
                 DealerAccountRoleV1::CapabilityManifest,
                 DealerAccountRoleV1::FundingState,
+                DealerAccountRoleV1::CapabilityFundingAuthority,
+                DealerAccountRoleV1::FundingCollateralVault,
                 DealerAccountRoleV1::LiquidityConfig,
                 DealerAccountRoleV1::Pool,
                 DealerAccountRoleV1::LpPosition,
                 DealerAccountRoleV1::ParticipantPosition,
                 DealerAccountRoleV1::PoolPosition,
-                DealerAccountRoleV1::CollateralVault,
                 DealerAccountRoleV1::PoolPrincipalVault,
                 DealerAccountRoleV1::PoolFeeVault,
                 DealerAccountRoleV1::PoolServiceVault,
@@ -592,6 +597,7 @@ pub const fn dealer_account_privileges(
         | DealerAccountRoleV1::SystemPayer
         | DealerAccountRoleV1::Trader
         | DealerAccountRoleV1::FundingState
+        | DealerAccountRoleV1::FundingCollateralVault
         | DealerAccountRoleV1::Pool
         | DealerAccountRoleV1::LpPosition
         | DealerAccountRoleV1::ParticipantPosition
@@ -623,6 +629,7 @@ pub const fn dealer_account_privileges(
         ),
         DealerAccountRoleV1::Realm
         | DealerAccountRoleV1::CapabilityManifest
+        | DealerAccountRoleV1::CapabilityFundingAuthority
         | DealerAccountRoleV1::CollateralMint
         | DealerAccountRoleV1::TokenProgram
         | DealerAccountRoleV1::SystemProgram

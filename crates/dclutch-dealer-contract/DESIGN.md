@@ -20,10 +20,12 @@ The Pool is the sole full attachment owner. Its 264-byte
 - the immutable `LiquidityConfigV1` content identity; and
 - the sole beneficiary of unused service collateral.
 
-The Pool does not persist its own address. Configuration, LP-position, and
-execution children carry only a 40-byte `ParentPool`: the physical Pool address
-and Market generation. The adapter supplies the authenticated Pool address to
-every transition. No physical child persists its own account address.
+The Pool does not persist its own address. LP-position and execution children
+carry only a 40-byte `ParentPool`: the physical Pool address and Market
+generation. The immutable config deliberately carries no Pool address: its
+canonical bytes must be finalized and hashed before the Pool PDA can be derived
+from that hash. The adapter supplies and authenticates the Pool address for
+every transition. No physical account persists its own address.
 
 `LiquidityConfigV1<N, B>` is the one capability-bound V1 price record. Its
 prices, fee, capacities, maximum trade quantity, and positive reset interval are
@@ -301,14 +303,14 @@ kernel `no_alloc`.
 
 | Contract | Formula | N=2, B=1 | N=2, B=8 | N=16, B=1 | N=16, B=8 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Immutable config | `128 + 32NB` | 192 | 640 | 640 | 4,224 |
+| Immutable config | `88 + 32NB` | 152 | 600 | 600 | 4,184 |
 | Mutable Pool | `392 + 8N + 16NB` | 440 | 664 | 776 | 2,568 |
 | Execution receipt | `184 + 16B` | 200 | 312 | 200 | 312 |
 | LP position | `152` | 152 | 152 | 152 | 152 |
 
-The full Pool-only attachment is 264 bytes, compact parent references and rent
-terms are each 40 bytes, and children never duplicate the attachment. Tests also
-round-trip concrete N=2/B=2 widths (config 256, Pool 472, execution 216) and the
+The full Pool-only attachment is 264 bytes, compact mutable-parent references and
+rent terms are each 40 bytes, and children never duplicate the attachment. Tests also
+round-trip concrete N=2/B=2 widths (config 216, Pool 472, execution 216) and the
 maximum N=16/B=8 profile. These are schema facts; rent and compute effects still
 require SBF/local-validator measurement.
 
@@ -321,7 +323,7 @@ Instruction and exact-frame widths are:
 
 | Action | Wire bytes | N=2 accounts | N=16 accounts |
 | --- | ---: | ---: | ---: |
-| Activate/Open | 80 | 23 | 23 |
+| Activate/Open | 80 | 24 | 24 |
 | Create LP position | 56 | 9 | 9 |
 | Add liquidity | `88 + 8N` | 13 | 13 |
 | Remove liquidity | `88 + 8N` | 13 | 13 |
@@ -333,7 +335,7 @@ Instruction and exact-frame widths are:
 These counts exclude the executing Dealer program ID from the instruction's
 account-index vector. All remain below the pinned 128 account-lock ceiling. A
 one-signature, one-instruction legacy message under the canonical short-vector
-serialization model is 976 bytes for N=16 Activate, 783 bytes for N=16
+serialization model is 1,009 bytes for N=16 Activate, 783 bytes for N=16
 Add/Remove (including their 216-byte limit wires), and 729 bytes for Retire with
 a separate fee payer. They fit the 1,232-byte packet individually without a
 lookup table. Multi-instruction composition may still require v0/LUT transport.

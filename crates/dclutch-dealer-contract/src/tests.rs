@@ -21,21 +21,16 @@ fn attachment() -> LiquidityAttachment {
     .expect("fixture attachment")
 }
 
-fn parent() -> ParentPool {
-    ParentPool::new(POOL_ADDRESS, 7).expect("fixture parent")
-}
-
 fn rent(seed: u8) -> RentCreditTerms {
     RentCreditTerms::new([seed; 32], 1_000_000).expect("fixture rent credit")
 }
 
 fn config<const N: usize, const B: usize>() -> LiquidityConfigV1<N, B> {
-    config_with_identity(id(7), parent())
+    config_with_identity(id(7))
 }
 
 fn config_with_identity<const N: usize, const B: usize>(
     content_id: ContentId,
-    config_parent: ParentPool,
 ) -> LiquidityConfigV1<N, B> {
     let mut bids = [[0u64; B]; N];
     let mut asks = [[0u64; B]; N];
@@ -53,7 +48,6 @@ fn config_with_identity<const N: usize, const B: usize>(
     }
     LiquidityConfigV1::new(
         content_id,
-        config_parent,
         rent(20),
         10_000,
         25,
@@ -102,10 +96,10 @@ fn n2_n16_widths_are_exact_and_compact_codecs_round_trip() {
     assert_eq!(LIQUIDITY_ATTACHMENT_BYTES, 264);
     assert_eq!(RENT_CREDIT_TERMS_BYTES, 40);
     assert_eq!(LP_POSITION_BYTES, 152);
-    assert_eq!(LiquidityConfigV1::<2, 2>::encoded_len(), Ok(256));
+    assert_eq!(LiquidityConfigV1::<2, 2>::encoded_len(), Ok(216));
     assert_eq!(PoolState::<2, 2>::encoded_len(), Ok(472));
     assert_eq!(ExecutionReceipt::<2>::encoded_len(), Ok(216));
-    assert_eq!(LiquidityConfigV1::<16, 8>::encoded_len(), Ok(4_224));
+    assert_eq!(LiquidityConfigV1::<16, 8>::encoded_len(), Ok(4_184));
     assert_eq!(PoolState::<16, 8>::encoded_len(), Ok(2_568));
     assert_eq!(ExecutionReceipt::<8>::encoded_len(), Ok(312));
 
@@ -126,7 +120,7 @@ fn n2_n16_widths_are_exact_and_compact_codecs_round_trip() {
 
     assert!(!pool_bytes.windows(32).any(|window| window == POOL_ADDRESS));
     assert!(
-        config_bytes
+        !config_bytes
             .windows(32)
             .any(|window| window == POOL_ADDRESS)
     );
@@ -223,7 +217,6 @@ fn quote_refuses_inventory_cash_depth_limits_and_zero_rounding() {
 
     let tiny_config = LiquidityConfigV1::new(
         id(7),
-        parent(),
         rent(20),
         10_000,
         1,
@@ -257,7 +250,7 @@ fn quote_refuses_inventory_cash_depth_limits_and_zero_rounding() {
 }
 
 #[test]
-fn replay_config_parent_and_overflow_refusals_are_atomic() {
+fn replay_config_identity_and_overflow_refusals_are_atomic() {
     let (config, mut pool, _) = opened::<2, 2>();
     let before = pool;
     let stale = TradeRequest::new(0, 0, TradeSide::BuyClaimFromPool, 0, 1, 10).expect("request");
@@ -267,19 +260,12 @@ fn replay_config_parent_and_overflow_refusals_are_atomic() {
     );
     assert_eq!(pool, before);
 
-    let wrong_id = config_with_identity::<2, 2>(id(70), parent());
+    let wrong_id = config_with_identity::<2, 2>(id(70));
     let request = TradeRequest::new(0, 1, TradeSide::BuyClaimFromPool, 0, 1, 10).expect("request");
     assert_eq!(
         pool.quote(POOL_ADDRESS, &wrong_id, request),
         Err(Error::ConfigurationMismatch)
     );
-    let wrong_parent =
-        config_with_identity::<2, 2>(id(7), ParentPool::new([70; 32], 7).expect("wrong parent"));
-    assert_eq!(
-        pool.quote(POOL_ADDRESS, &wrong_parent, request),
-        Err(Error::ParentMismatch)
-    );
-
     pool.principal_collateral = u64::MAX;
     let before_overflow = pool;
     assert_eq!(
@@ -324,7 +310,6 @@ fn timed_reset_preserves_depth_and_only_reopens_identical_config() {
 
     let overflowing_interval = LiquidityConfigV1::new(
         id(7),
-        parent(),
         rent(20),
         10_000,
         25,
@@ -481,7 +466,6 @@ fn malformed_ladder_alias_profile_and_reserved_bytes_refuse() {
     assert_eq!(
         LiquidityConfigV1::new(
             id(7),
-            parent(),
             rent(20),
             100,
             1,
@@ -510,7 +494,6 @@ fn complete_set_top_of_book_no_arbitrage_is_exact_checked_and_extremal() {
     let capacities = [[10u64]; 2];
     let equality = LiquidityConfigV1::new(
         id(7),
-        parent(),
         rent(20),
         10_000,
         1,
@@ -525,7 +508,6 @@ fn complete_set_top_of_book_no_arbitrage_is_exact_checked_and_extremal() {
 
     let bid_cross_by_one = LiquidityConfigV1::new(
         id(7),
-        parent(),
         rent(20),
         10_000,
         10_000,
@@ -540,7 +522,6 @@ fn complete_set_top_of_book_no_arbitrage_is_exact_checked_and_extremal() {
 
     let ask_cross_by_one = LiquidityConfigV1::new(
         id(7),
-        parent(),
         rent(20),
         10_000,
         1,
@@ -555,7 +536,6 @@ fn complete_set_top_of_book_no_arbitrage_is_exact_checked_and_extremal() {
 
     let overflow = LiquidityConfigV1::new(
         id(7),
-        parent(),
         rent(20),
         u64::MAX,
         1,
@@ -570,7 +550,6 @@ fn complete_set_top_of_book_no_arbitrage_is_exact_checked_and_extremal() {
 
     let n16 = LiquidityConfigV1::new(
         id(7),
-        parent(),
         rent(20),
         16_000,
         1,

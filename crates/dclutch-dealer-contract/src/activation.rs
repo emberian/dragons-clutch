@@ -7,8 +7,10 @@
 //! transfers/account writes; it is not a caller attestation.
 
 use dclutch_capability_contract::{
-    ActivationDebitV1, CapabilityFundingDerivationV1, CapabilityManifestV1, FundingCompartment,
-    FundingStateV1,
+    ActivationDebitV1, CapabilityFundingAuthorityDerivationV1, CapabilityFundingDerivationV1,
+    CapabilityFundingVaultDerivationV1, CapabilityManifestV1, FundingAssetClassV1,
+    FundingCompartment, FundingCustodyObservationV1, FundingReleasePlanV1, FundingStateV1,
+    RealmCollateralCustodyV1, RealmCollateralVaultObservationV1,
 };
 use dclutch_core_contract::{MarketRoot, Phase};
 
@@ -49,8 +51,8 @@ pub type Result<T> = core::result::Result<T, ActivationError>;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerFundingDebitV1 {
     activation: ActivationDebitV1,
-    liquidity_principal: u64,
-    service_principal: u64,
+    liquidity: FundingReleasePlanV1,
+    service: Option<FundingReleasePlanV1>,
 }
 
 impl DealerFundingDebitV1 {
@@ -59,12 +61,12 @@ impl DealerFundingDebitV1 {
         self.activation
     }
     /// Return exact present collateral moved into LP principal custody.
-    pub const fn liquidity_principal(self) -> u64 {
-        self.liquidity_principal
+    pub const fn liquidity(self) -> FundingReleasePlanV1 {
+        self.liquidity
     }
-    /// Return exact present collateral moved into segregated service custody.
-    pub const fn service_principal(self) -> u64 {
-        self.service_principal
+    /// Return optional exact typed release into segregated service custody.
+    pub const fn service(self) -> Option<FundingReleasePlanV1> {
+        self.service
     }
 }
 
@@ -78,6 +80,8 @@ pub struct ActivatePoolPlanV1<const N: usize, const B: usize> {
     funding_debit: DealerFundingDebitV1,
     liquidity_receipt: LiquidityChangeReceipt<N>,
     capability_funding_seeds: CapabilityFundingDerivationV1,
+    capability_funding_authority_seeds: CapabilityFundingAuthorityDerivationV1,
+    capability_funding_vault_seeds: CapabilityFundingVaultDerivationV1,
     pool_seeds: PoolPdaSeedsV1,
     config_seeds: ConfigPdaSeedsV1,
     lp_seeds: LpPositionPdaSeedsV1,
@@ -112,6 +116,16 @@ impl<const N: usize, const B: usize> ActivatePoolPlanV1<N, B> {
     /// Return reusable shared capability FundingState derivation authority.
     pub const fn capability_funding_seeds(self) -> CapabilityFundingDerivationV1 {
         self.capability_funding_seeds
+    }
+    /// Return the shared capability funding token-authority PDA preimage.
+    pub const fn capability_funding_authority_seeds(
+        self,
+    ) -> CapabilityFundingAuthorityDerivationV1 {
+        self.capability_funding_authority_seeds
+    }
+    /// Return the shared capability Realm-collateral Vault PDA preimage.
+    pub const fn capability_funding_vault_seeds(self) -> CapabilityFundingVaultDerivationV1 {
+        self.capability_funding_vault_seeds
     }
     /// Return Pool PDA seed preimage.
     pub const fn pool_seeds(self) -> PoolPdaSeedsV1 {
@@ -156,9 +170,10 @@ impl<const N: usize, const B: usize> RetirePoolPlanV1<N, B> {
 
 /// Activate selected funding and open a fully covered Pool atomically.
 ///
-/// `observed_present_principal` is derived from the physical FundingState
-/// holding, and `authenticated_now_slot` is read from the adapter's trusted
-/// Clock syscall/sysvar access; neither is instruction data. `pool_rent` and
+/// `funding_custody` separately authenticates the FundingState lamports and its
+/// optional Realm-collateral token vault; no cross-asset sum exists.
+/// `authenticated_now_slot` is read from the adapter's trusted Clock
+/// syscall/sysvar access; neither is instruction data. `pool_rent` and
 /// `initial_position_rent` are constructed from observed Rent minima and the
 /// immutable config RentCredit beneficiary. `pool_position_rent` is the Rent
 /// minimum of the shared native Position owned by the Pool PDA.
@@ -168,7 +183,9 @@ pub fn activate_pool<const N: usize, const B: usize>(
     market_address: [u8; 32],
     manifest: CapabilityManifestV1<'_>,
     funding: FundingStateV1,
-    observed_present_principal: u64,
+    funding_state_address: [u8; 32],
+    funding_authority_address: [u8; 32],
+    funding_custody: FundingCustodyObservationV1,
     attachment: LiquidityAttachment,
     config: &LiquidityConfigV1<N, B>,
     pool_address: [u8; 32],
@@ -200,6 +217,29 @@ pub fn activate_pool<const N: usize, const B: usize>(
     {
         return Err(ActivationError::AuthorityMismatch);
     }
+    let funding_amounts = selected.funding_quote().amounts();
+    if funding_amounts.creation().amount() != 0
+        || funding_amounts.work().amount() != 0
+        || funding_amounts.provider().amount() != 0
+        || funding_amounts.bounty().amount() != 0
+        || funding_amounts.liquidity().asset_class() != FundingAssetClassV1::RealmCollateral
+        || !matches!(
+            funding_amounts.service().asset_class(),
+            FundingAssetClassV1::NotApplicable | FundingAssetClassV1::RealmCollateral
+        )
+    {
+        return Err(ActivationError::AuthorityMismatch);
+    }
+    let collateral_binding = selected
+        .funding_quote()
+        .realm_collateral()
+        .ok_or(ActivationError::AuthorityMismatch)?;
+    let observed_collateral = funding_custody
+        .realm_collateral()
+        .ok_or(ActivationError::AuthorityMismatch)?;
+    if observed_collateral.canonical_funding_authority() != funding_authority_address {
+        return Err(ActivationError::AuthorityMismatch);
+    }
 
     // V1 uses the content-bound config RentCredit beneficiary as the immutable
     // bootstrap LP and service-refund authority. This avoids any caller-chosen
@@ -221,6 +261,12 @@ pub fn activate_pool<const N: usize, const B: usize>(
         funding,
     )
     .map_err(ActivationError::Capability)?;
+    let capability_funding_authority_seeds =
+        CapabilityFundingAuthorityDerivationV1::new(funding_state_address)
+            .map_err(ActivationError::Capability)?;
+    let capability_funding_vault_seeds =
+        CapabilityFundingVaultDerivationV1::new(funding_authority_address, collateral_binding)
+            .map_err(ActivationError::Capability)?;
     let pool_seeds = PoolPdaSeedsV1::new(market_address, request.generation(), config.content_id())
         .map_err(ActivationError::Frame)?;
     let config_seeds =
@@ -241,7 +287,7 @@ pub fn activate_pool<const N: usize, const B: usize>(
         .activate(
             manifest_id,
             manifest,
-            observed_present_principal,
+            funding_custody,
             authenticated_now_slot,
         )
         .map_err(ActivationError::Capability)?;
@@ -253,20 +299,24 @@ pub fn activate_pool<const N: usize, const B: usize>(
         .checked_add(initial_position_rent.funded_rent_principal())
         .and_then(|value| value.checked_add(pool_position_rent.funded_rent_principal()))
         .ok_or(ActivationError::FundingArithmetic)?;
-    if activation.rent_principal() != expected_rent {
+    if activation.rent_lamports() != expected_rent || activation.creation_lamports() != 0 {
         return Err(ActivationError::RentFundingMismatch);
     }
-    let after_activation = observed_present_principal
-        .checked_sub(activation.rent_principal())
-        .and_then(|value| value.checked_sub(activation.creation_principal()))
-        .ok_or(ActivationError::FundingArithmetic)?;
-    let liquidity_principal = next_funding.remaining().liquidity_principal();
+    let after_activation = custody_after(
+        funding_custody,
+        activation
+            .rent_lamports()
+            .checked_add(activation.creation_lamports())
+            .ok_or(ActivationError::FundingArithmetic)?,
+        0,
+    )?;
+    let liquidity_principal = next_funding.remaining().liquidity().amount();
     if liquidity_principal == 0 {
         return Err(ActivationError::Dealer(
             DealerError::IncompleteInitialLiquidity,
         ));
     }
-    next_funding
+    let liquidity = next_funding
         .release(
             manifest_id,
             manifest,
@@ -275,12 +325,15 @@ pub fn activate_pool<const N: usize, const B: usize>(
             liquidity_principal,
         )
         .map_err(ActivationError::Capability)?;
-    let after_liquidity = after_activation
-        .checked_sub(liquidity_principal)
-        .ok_or(ActivationError::FundingArithmetic)?;
-    let service_principal = next_funding.remaining().service_principal();
-    if service_principal > 0 {
-        next_funding
+    if liquidity.asset_class() != FundingAssetClassV1::RealmCollateral
+        || liquidity.amount() != liquidity_principal
+    {
+        return Err(ActivationError::AuthorityMismatch);
+    }
+    let after_liquidity = custody_after(after_activation, 0, liquidity_principal)?;
+    let service_principal = next_funding.remaining().service().amount();
+    let service = if service_principal > 0 {
+        let release = next_funding
             .release(
                 manifest_id,
                 manifest,
@@ -289,7 +342,15 @@ pub fn activate_pool<const N: usize, const B: usize>(
                 service_principal,
             )
             .map_err(ActivationError::Capability)?;
-    }
+        if release.asset_class() != FundingAssetClassV1::RealmCollateral
+            || release.amount() != service_principal
+        {
+            return Err(ActivationError::AuthorityMismatch);
+        }
+        Some(release)
+    } else {
+        None
+    };
 
     let initial_liquidity = LiquidityAmounts::new(
         liquidity_principal,
@@ -322,16 +383,68 @@ pub fn activate_pool<const N: usize, const B: usize>(
         initial_position,
         funding_debit: DealerFundingDebitV1 {
             activation,
-            liquidity_principal,
-            service_principal,
+            liquidity,
+            service,
         },
         liquidity_receipt,
         capability_funding_seeds,
+        capability_funding_authority_seeds,
+        capability_funding_vault_seeds,
         pool_seeds,
         config_seeds,
         lp_seeds,
         pool_position_seeds,
     })
+}
+
+fn custody_after(
+    before: FundingCustodyObservationV1,
+    native_lamports_debit: u64,
+    realm_collateral_debit: u64,
+) -> Result<FundingCustodyObservationV1> {
+    let state_account_lamports = before
+        .state_account_lamports()
+        .checked_sub(native_lamports_debit)
+        .ok_or(ActivationError::FundingArithmetic)?;
+    let state_rent = before.exact_state_rent_lamports();
+    match before.realm_collateral() {
+        None if realm_collateral_debit == 0 => {
+            FundingCustodyObservationV1::native_only(state_account_lamports, state_rent)
+                .map_err(ActivationError::Capability)
+        }
+        Some(custody) => {
+            let observed = custody.observation();
+            let token_amount = observed
+                .token_amount()
+                .checked_sub(realm_collateral_debit)
+                .ok_or(ActivationError::FundingArithmetic)?;
+            let observation = RealmCollateralVaultObservationV1::new(
+                observed.vault(),
+                observed.authority(),
+                observed.token_program(),
+                observed.mint(),
+                token_amount,
+                observed.account_lamports(),
+                observed.exact_rent_lamports(),
+            )
+            .map_err(ActivationError::Capability)?;
+            let custody = RealmCollateralCustodyV1::new(
+                custody.realm_id(),
+                custody.collateral_release_id(),
+                custody.canonical_funding_authority(),
+                custody.canonical_vault(),
+                observation,
+            )
+            .map_err(ActivationError::Capability)?;
+            FundingCustodyObservationV1::with_realm_collateral(
+                state_account_lamports,
+                state_rent,
+                custody,
+            )
+            .map_err(ActivationError::Capability)
+        }
+        None => Err(ActivationError::AuthorityMismatch),
+    }
 }
 
 /// Retire a quiescent Pool/config and decrement Market direct-child replay.

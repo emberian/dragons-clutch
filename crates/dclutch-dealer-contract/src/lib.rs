@@ -4,11 +4,12 @@
 
 //! Exact, SDK-free contract for a fully covered multi-LP quote-bin venue.
 //!
-//! The Pool is the sole full Market attachment owner. Compact configuration,
-//! LP-position, and receipt children carry only their parent Pool address and
-//! Market generation. Prices are immutable for this release; time-gated resets
-//! only reopen the identical ladder. Hoard principal and future revenue are not
-//! representable.
+//! The Pool is the sole full Market attachment owner. The immutable config is
+//! finalized before Pool derivation and therefore contains no Pool address;
+//! compact mutable children and receipts carry only their parent Pool address
+//! and Market generation. Prices are immutable for this release; time-gated
+//! resets only reopen the identical ladder. Hoard principal and future revenue
+//! are not representable.
 
 pub mod activation;
 pub mod frame;
@@ -57,8 +58,7 @@ const PARENT_GENERATION_OFFSET: usize = 32;
 const RENT_BENEFICIARY_OFFSET: usize = 0;
 const RENT_PRINCIPAL_OFFSET: usize = 32;
 
-const CONFIG_PARENT_OFFSET: usize = HEADER_BYTES;
-const CONFIG_RENT_OFFSET: usize = CONFIG_PARENT_OFFSET + PARENT_POOL_BYTES;
+const CONFIG_RENT_OFFSET: usize = HEADER_BYTES;
 const CONFIG_PRICE_SCALE_OFFSET: usize = CONFIG_RENT_OFFSET + RENT_CREDIT_TERMS_BYTES;
 const CONFIG_FEE_BPS_OFFSET: usize = CONFIG_PRICE_SCALE_OFFSET + 8;
 const CONFIG_RESERVED_OFFSET: usize = CONFIG_FEE_BPS_OFFSET + 2;
@@ -381,7 +381,6 @@ impl RentCreditTerms {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LiquidityConfigV1<const N: usize, const B: usize> {
     content_id: ContentId,
-    parent: ParentPool,
     rent_credit: RentCreditTerms,
     price_scale: u64,
     fee_bps: u16,
@@ -398,7 +397,6 @@ impl<const N: usize, const B: usize> LiquidityConfigV1<N, B> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         content_id: ContentId,
-        parent: ParentPool,
         rent_credit: RentCreditTerms,
         price_scale: u64,
         fee_bps: u16,
@@ -428,7 +426,6 @@ impl<const N: usize, const B: usize> LiquidityConfigV1<N, B> {
         )?;
         Ok(Self {
             content_id,
-            parent,
             rent_credit,
             price_scale,
             fee_bps,
@@ -461,7 +458,6 @@ impl<const N: usize, const B: usize> LiquidityConfigV1<N, B> {
         let ask_capacity_offset = checked_offset(bid_capacity_offset, 8, cells)?;
         Self::new(
             content_id,
-            ParentPool::decode(subslice(bytes, CONFIG_PARENT_OFFSET, PARENT_POOL_BYTES)?)?,
             RentCreditTerms::decode(subslice(
                 bytes,
                 CONFIG_RENT_OFFSET,
@@ -485,7 +481,6 @@ impl<const N: usize, const B: usize> LiquidityConfigV1<N, B> {
         }
         out.fill(0);
         encode_header(out, CONFIG_MAGIC);
-        put(out, CONFIG_PARENT_OFFSET, &self.parent.to_bytes());
         put(out, CONFIG_RENT_OFFSET, &self.rent_credit.to_bytes());
         put_u64(out, CONFIG_PRICE_SCALE_OFFSET, self.price_scale);
         put_u16(out, CONFIG_FEE_BPS_OFFSET, self.fee_bps);
@@ -506,10 +501,6 @@ impl<const N: usize, const B: usize> LiquidityConfigV1<N, B> {
     /// Return adapter-authenticated content identity; it is not self-persisted.
     pub const fn content_id(&self) -> ContentId {
         self.content_id
-    }
-    /// Return compact parent Pool reference.
-    pub const fn parent(&self) -> ParentPool {
-        self.parent
     }
     /// Return configuration-account rent attribution.
     pub const fn rent_credit(&self) -> RentCreditTerms {
@@ -678,7 +669,7 @@ impl<const N: usize, const B: usize> PoolState<N, B> {
         initial_shares: u64,
     ) -> Result<(Self, LpPosition, LiquidityChangeReceipt<N>)> {
         let parent = parent_for(attachment, pool_address)?;
-        require_config_parent(attachment, parent, config)?;
+        require_selected_config(attachment, config)?;
         if !initial_liquidity.is_initially_complete() {
             return Err(Error::IncompleteInitialLiquidity);
         }
@@ -895,11 +886,8 @@ impl<const N: usize, const B: usize> PoolState<N, B> {
         config: &LiquidityConfigV1<N, B>,
     ) -> Result<()> {
         self.validate()?;
-        require_config_parent(
-            self.attachment,
-            parent_for(self.attachment, pool_address)?,
-            config,
-        )?;
+        parent_for(self.attachment, pool_address)?;
+        require_selected_config(self.attachment, config)?;
         for (((bid_fill_row, ask_fill_row), bid_capacity_row), ask_capacity_row) in self
             .bid_filled
             .iter()
@@ -1124,7 +1112,7 @@ impl<const N: usize, const B: usize> PoolState<N, B> {
             .ok_or(Error::ArithmeticOverflow)?;
         next.next_reset_slot = next_reset_slot;
         let receipt = LadderResetReceipt {
-            parent: config.parent,
+            parent: parent_for(self.attachment, pool_address)?,
             pool_sequence: next.next_sequence,
             old_reset_number,
             new_reset_number: next.reset_number,
@@ -1240,7 +1228,7 @@ impl<const N: usize, const B: usize> PoolState<N, B> {
         next.status = PoolStatus::Retired;
         let sequence = next.bump_sequence()?;
         let receipt = PoolRetirementReceipt {
-            parent: config.parent,
+            parent: parent_for(self.attachment, pool_address)?,
             pool_sequence: sequence,
             service_refund_beneficiary: next.attachment.service_refund_beneficiary,
             service_refund_collateral: service_refund,
@@ -1257,16 +1245,12 @@ fn parent_for(attachment: LiquidityAttachment, pool_address: [u8; 32]) -> Result
     ParentPool::new(pool_address, attachment.market.generation())
 }
 
-fn require_config_parent<const N: usize, const B: usize>(
+fn require_selected_config<const N: usize, const B: usize>(
     attachment: LiquidityAttachment,
-    parent: ParentPool,
     config: &LiquidityConfigV1<N, B>,
 ) -> Result<()> {
     if config.content_id != attachment.liquidity_config_id {
         return Err(Error::ConfigurationMismatch);
-    }
-    if config.parent != parent {
-        return Err(Error::ParentMismatch);
     }
     Ok(())
 }
@@ -2905,7 +2889,7 @@ impl<const N: usize, const B: usize> PoolState<N, B> {
             }
         };
         Ok(TradeQuote {
-            parent: config.parent,
+            parent: parent_for(self.attachment, pool_address)?,
             reset_number: self.reset_number,
             sequence: self.next_sequence,
             side: request.side,
