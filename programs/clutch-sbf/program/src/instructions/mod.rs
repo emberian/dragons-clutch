@@ -236,6 +236,8 @@ pub mod product_series;
 pub(crate) mod product_series_current;
 /// Current Product V3/V5/V6 to Source occurrence publication authority.
 pub(crate) mod product_source_current;
+/// Callable Product-bound current Source capitalization/publication stage.
+pub(crate) mod product_source_foundation_outer_v5;
 /// Callable Product-bound Source custody/LinkV3 retirement first stage.
 pub(crate) mod product_source_retirement_outer_v5;
 #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
