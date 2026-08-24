@@ -8,6 +8,7 @@
 use crate::accounts::{require, require_count, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::product_artifact::authenticate_product_artifact_v1;
+use crate::instructions::product_artifact::AuthenticatedRegistryCapabilityReleaseV3;
 use crate::instructions::product_series_current::{
     AuthenticatedRegistryCapabilityV4, AuthenticatedRegistryCapabilityV5,
 };
@@ -48,6 +49,8 @@ const SOURCE_PRODUCT_ROUTE_AUTHENTICATION_DOMAIN_V4: &[u8] =
     b"dragons-clutch/source-product-route-authentication/v4";
 const SOURCE_SEMANTIC_PUBLICATION_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/source-semantic-publication-authentication/v2";
+const PRODUCT_SERIES_REGISTRATION_AUTHENTICATION_DOMAIN_V5: &[u8] =
+    b"dragons-clutch/product-series-registration-authentication/v5";
 
 /// Current Product/Source compiler authority over one exact RegistryV4 and
 /// Source ReleaseV2 join.
@@ -393,6 +396,60 @@ impl AuthenticatedCompiledProductSeriesBundleV7 {
     pub(crate) const fn artifact_account(&self) -> Pubkey { self.artifact_account }
     pub(crate) const fn bundle(&self) -> &CompiledProductSeriesBundleV7 { &self.bundle }
     pub(crate) const fn bundle_id(&self) -> CompiledProductSeriesBundleV7Id { self.bundle_id }
+}
+
+/// Move-only pre-Registry authority for the exact BundleV7 registration.
+///
+/// This is the acyclic side of registration: ReleaseV2/ProfileV4 and the full
+/// loader ProgramData are authenticated before RegistryV4 exists. The physical
+/// owner must consume this value while creating RegistryV4 and then reopen the
+/// resulting account as `AuthenticatedRegistryCapabilityV5`.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedProductSeriesRegistrationV5 {
+    id: ContentId,
+    release: AuthenticatedRegistryCapabilityReleaseV3,
+    bundle: AuthenticatedCompiledProductSeriesBundleV7,
+    series_plan_id: SeriesPlanV5Id,
+    funding_terms_id: SeriesFundingTermsV2Id,
+    lamport_principal_refund: Pubkey,
+    neutral_lamport_sink: Pubkey,
+}
+
+impl AuthenticatedProductSeriesRegistrationV5 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn series_plan_id(&self) -> SeriesPlanV5Id { self.series_plan_id }
+    pub(crate) const fn funding_terms_id(&self) -> SeriesFundingTermsV2Id {
+        self.funding_terms_id
+    }
+    pub(crate) const fn compiler_bundle_id(&self) -> CompiledProductSeriesBundleV7Id {
+        self.bundle.bundle_id
+    }
+    pub(crate) const fn bundle_artifact_account(&self) -> Pubkey {
+        self.bundle.artifact_account
+    }
+    pub(crate) const fn registry_release_id(&self) -> ContentId {
+        self.release.projection().registry_release_id
+    }
+    pub(crate) const fn capability_profile_id(&self) -> ContentId {
+        self.release.projection().capability_profile_id
+    }
+    pub(crate) const fn program_account(&self) -> Pubkey { self.release.program_account() }
+    pub(crate) const fn programdata_account(&self) -> Pubkey {
+        self.release.programdata_account()
+    }
+    pub(crate) const fn programdata_sha256(&self) -> ContentId {
+        self.release.programdata_sha256()
+    }
+    pub(crate) const fn release_artifact_account(&self) -> Pubkey {
+        self.release.release_artifact_account()
+    }
+    pub(crate) const fn profile_artifact_account(&self) -> Pubkey {
+        self.release.profile_artifact_account()
+    }
+    pub(crate) const fn lamport_principal_refund(&self) -> Pubkey {
+        self.lamport_principal_refund
+    }
+    pub(crate) const fn neutral_lamport_sink(&self) -> Pubkey { self.neutral_lamport_sink }
 }
 
 /// Private Source/ProfileV4/BundleV6 route selected by current Product state.
@@ -871,6 +928,110 @@ pub(crate) fn authenticate_compiled_product_series_bundle_v7(
     })
 }
 
+/// Build the acyclic pre-RegistryV4 registration authority from exact current
+/// semantic owners and the loader-authenticated ReleaseV2/ProfileV4 pair.
+pub(crate) fn authenticate_product_series_registration_v5(
+    program_id: &Pubkey,
+    bundle_account: &AccountInfo<'_>,
+    release: AuthenticatedRegistryCapabilityReleaseV3,
+    source_release: AuthenticatedSourceReleaseV1,
+    artifacts: &AuthenticatedSeriesSourceArtifactsV6,
+) -> Outcome<AuthenticatedProductSeriesRegistrationV5> {
+    let projection = release.projection();
+    artifacts.validate_registry_projection(&projection)?;
+    let expected = assemble_compiled_product_series_bundle_v7(ProductSeriesBundleInputsV7 {
+        registry: &projection,
+        source_release_manifest_id: ContentId::from_bytes(source_release.manifest_id().bytes()),
+        basis: &artifacts.basis,
+        recovery: &artifacts.recovery,
+        template: &artifacts.template,
+        price_policy: &artifacts.price_policy,
+        genesis: &artifacts.genesis,
+        funding_quote: &artifacts.quote,
+        attachment: &artifacts.attachment,
+        series: &artifacts.series,
+        funding_terms: &artifacts.funding_terms,
+    })
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let bundle_id = expected
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let series_plan_id = artifacts
+        .series
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding_terms_id = artifacts
+        .funding_terms
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        expected.registry_release_id == projection.registry_release_id
+            && expected.capability_profile_id.content_id()
+                == projection.capability_profile_id
+            && expected.series_plan_id == series_plan_id
+            && expected.funding_terms_id == funding_terms_id,
+        ClutchError::MismatchedState,
+    )?;
+    let decoded = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV7>(
+        program_id,
+        bundle_account,
+        bundle_id.content_id(),
+    )?;
+    require(*decoded.value() == expected, ClutchError::MismatchedState)?;
+    let lamport_principal_refund = Pubkey::new_from_array(
+        artifacts.funding_terms.lamport_principal_refund.bytes(),
+    );
+    let neutral_lamport_sink = Pubkey::new_from_array(
+        artifacts.funding_terms.neutral_lamport_sink.bytes(),
+    );
+    require(
+        lamport_principal_refund != Pubkey::default()
+            && neutral_lamport_sink != Pubkey::default()
+            && lamport_principal_refund != neutral_lamport_sink
+            && *bundle_account.key != lamport_principal_refund
+            && *bundle_account.key != neutral_lamport_sink
+            && bundle_account.key != &release.program_account()
+            && bundle_account.key != &release.programdata_account()
+            && bundle_account.key != &release.release_artifact_account()
+            && bundle_account.key != &release.profile_artifact_account(),
+        ClutchError::AccountAlias,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            PRODUCT_SERIES_REGISTRATION_AUTHENTICATION_DOMAIN_V5,
+            program_id.as_ref(),
+            bundle_account.key.as_ref(),
+            &bundle_id.bytes(),
+            &series_plan_id.bytes(),
+            &funding_terms_id.bytes(),
+            &projection.registry_release_id.bytes(),
+            &projection.capability_profile_id.bytes(),
+            release.program_account().as_ref(),
+            release.programdata_account().as_ref(),
+            &release.programdata_sha256().bytes(),
+            release.release_artifact_account().as_ref(),
+            release.profile_artifact_account().as_ref(),
+            lamport_principal_refund.as_ref(),
+            neutral_lamport_sink.as_ref(),
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(AuthenticatedProductSeriesRegistrationV5 {
+        id,
+        release,
+        bundle: AuthenticatedCompiledProductSeriesBundleV7 {
+            artifact_account: *bundle_account.key,
+            bundle: expected,
+            bundle_id,
+        },
+        series_plan_id,
+        funding_terms_id,
+        lamport_principal_refund,
+        neutral_lamport_sink,
+    })
+}
+
 /// Join exact Source deployment/receiver authority to current Product V6.
 pub(crate) fn authenticate_source_product_route_v4(
     route: AuthenticatedSourceRouteV1,
@@ -1242,6 +1403,34 @@ pub(crate) fn authenticate_source_resolution_input_v4(
 #[cfg(test)]
 mod adversarial_tests {
     use super::*;
+
+    #[test]
+    fn v5_registration_preauthority_is_acyclic_and_exact() {
+        let source = include_str!("product_source_current.rs");
+        let receipt = source
+            .split_once("pub(crate) struct AuthenticatedProductSeriesRegistrationV5")
+            .expect("V5 registration authority")
+            .1
+            .split_once("impl AuthenticatedProductSeriesRegistrationV5")
+            .expect("bounded registration authority")
+            .0;
+        assert!(!receipt.contains("Clone"));
+        assert!(!receipt.contains("Copy"));
+        let constructor = source
+            .split_once("pub(crate) fn authenticate_product_series_registration_v5")
+            .expect("V5 registration constructor")
+            .1
+            .split_once("/// Join exact Source deployment")
+            .expect("bounded registration constructor")
+            .0;
+        assert!(constructor.contains("AuthenticatedRegistryCapabilityReleaseV3"));
+        assert!(constructor.contains("assemble_compiled_product_series_bundle_v7"));
+        assert!(constructor.contains("CompiledProductSeriesBundleV7"));
+        assert!(constructor.contains("funding_quote: &artifacts.quote"));
+        assert!(constructor.contains("attachment: &artifacts.attachment"));
+        assert!(!constructor.contains("AuthenticatedSeriesRegistryAccount"));
+        assert!(!constructor.contains("AuthenticatedRegistryCapabilityV4"));
+    }
 
     #[test]
     fn v7_artifact_graph_is_fresh_move_only_and_release_bound() {

@@ -195,6 +195,10 @@ pub mod product_market;
 pub(crate) mod product_market_foundation_init;
 /// Immutable current five-family mask and namespace-anchor authority.
 pub(crate) mod product_market_family_capability_current;
+/// Hostile-only current RootV3/LinkV3 account authentication.
+pub(crate) mod product_market_lifecycle_v3_current;
+/// Persistent current ProductReplayAnchor generation and stage owner.
+pub(crate) mod product_market_replay_current;
 /// Sole current FundingV4/SourceV3 Product founder authority; no capability route is admitted.
 pub(crate) mod product_market_foundation_current;
 /// Always-compiled Product/Series semantic owner; executable routes remain

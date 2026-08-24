@@ -688,9 +688,9 @@ impl AuthenticatedResolvedFailureMarketLifecycleV5 {
     }
 
     pub(crate) const fn family_terminal(
-        self,
-    ) -> AuthenticatedFailureMarketFamilyTerminalPostwriteV2 {
-        self.family_terminal
+        &self,
+    ) -> &AuthenticatedFailureMarketFamilyTerminalPostwriteV2 {
+        &self.family_terminal
     }
 }
 
