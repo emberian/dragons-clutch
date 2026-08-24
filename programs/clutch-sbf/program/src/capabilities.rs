@@ -381,12 +381,12 @@ pub fn extension_intent_action_enabled(
 
 /// Return whether one direct Dealer action-25 terminal payload is callable.
 ///
-/// Both local terminal variants now return a move-only receipt that must be
-/// consumed by Product RootV3 in the same instruction. They therefore cannot
-/// be dispatched as standalone Dealer actions even in the successor profile.
+/// Both local terminal variants return a move-only receipt consumed by Product
+/// RootV3/LinkV3 in the same composite instruction. No standalone Dealer-only
+/// route is enabled.
 pub const fn dealer_terminal_retire_target_enabled(retire_target: u8) -> bool {
-    let _ = retire_target;
-    false
+    cfg!(feature = "profile-successor-chain-attached-dev")
+        && matches!(retire_target, 8 | 9)
 }
 
 #[cfg(test)]
@@ -480,12 +480,13 @@ mod tests {
             DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1,
         };
 
-        assert!(!dealer_terminal_retire_target_enabled(
+        let composite_enabled = cfg!(feature = "profile-successor-chain-attached-dev");
+        assert_eq!(dealer_terminal_retire_target_enabled(
             DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1,
-        ));
-        assert!(!dealer_terminal_retire_target_enabled(
+        ), composite_enabled);
+        assert_eq!(dealer_terminal_retire_target_enabled(
             DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1,
-        ));
+        ), composite_enabled);
         for target in 0u8..=7 {
             assert!(!dealer_terminal_retire_target_enabled(target));
         }
