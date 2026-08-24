@@ -23,10 +23,14 @@ fn recipe() -> SeriesRecipeV1 {
         occurrence_schedule_id: id(6),
         source_schedule_id: id(7),
         capability_template_id: id(8),
-        occurrence_derivation_release_id: id(9),
-        source_derivation_release_id: id(10),
-        capability_derivation_release_id: id(11),
-        market_derivation_release_id: id(12),
+        occurrence_derivation_release_id: IdentityV1::new(OCCURRENCE_DERIVATION_RELEASE_ID_V1)
+            .expect("release identity"),
+        source_derivation_release_id: IdentityV1::new(SOURCE_DERIVATION_RELEASE_ID_V1)
+            .expect("release identity"),
+        capability_derivation_release_id: IdentityV1::new(CAPABILITY_DERIVATION_RELEASE_ID_V1)
+            .expect("release identity"),
+        market_derivation_release_id: IdentityV1::new(MARKET_DERIVATION_RELEASE_ID_V1)
+            .expect("release identity"),
         capitalization_schedule_id: id(13),
         first_occurrence_time: 1_800_000_000,
         cadence_seconds: 3_600,
@@ -57,24 +61,17 @@ fn capitalization(recipe_id: IdentityV1, index: u64) -> OccurrenceCapitalization
 }
 
 fn derived(recipe_id: IdentityV1, index: u64) -> DerivedOccurrenceV1 {
-    let recipe = recipe();
-    let index_byte = u8::try_from(index).expect("small fixture index");
-    DerivedOccurrenceV1 {
+    derive_occurrence_v1(
         recipe_id,
-        occurrence_index: index,
-        occurrence_time: recipe.time_at(index).expect("fixture time"),
-        generation: recipe.generation_at(index).expect("fixture generation"),
-        occurrence_artifact_id: id(20 + index_byte),
-        occurrence_id: id(30 + index_byte),
-        product_instance_id: id(40 + index_byte),
-        source_spec_id: id(50 + index_byte),
-        source_window_id: id(60 + index_byte),
-        statistic_id: id(70 + index_byte),
-        resolution_policy_id: id(80 + index_byte),
-        capability_manifest_id: id(90 + index_byte),
-        market_identity_id: id(100 + index_byte),
-        capitalization_id: id(110 + index_byte),
-    }
+        &recipe(),
+        index,
+        &capitalization(recipe_id, index),
+    )
+    .expect("fixture derivation")
+}
+
+fn derived_id(value: &DerivedOccurrenceV1) -> IdentityV1 {
+    content_identity(&value.to_bytes()).expect("derived content identity")
 }
 
 fn created() -> (
@@ -142,7 +139,7 @@ fn instantiate(
         &recipe(),
         aggregate_id,
         &aggregate(recipe_id),
-        id(150 + u8::try_from(index).expect("small fixture index")),
+        derived_id(&occurrence),
         &occurrence,
         occurrence.capitalization_id,
         &cap,
@@ -155,7 +152,7 @@ fn instantiate(
         20,
         5,
         escrow_balance,
-        0,
+        vacant(0),
     )
     .expect("valid exact-next instantiation")
 }
@@ -275,6 +272,149 @@ fn recipe_bounds_are_explicit_and_checked() {
 }
 
 #[test]
+fn release_set_is_closed_and_pinned_to_its_exact_preimages() {
+    assert_eq!(
+        content_identity(OCCURRENCE_DERIVATION_RELEASE_PREIMAGE_V1)
+            .expect("release identity")
+            .to_bytes(),
+        OCCURRENCE_DERIVATION_RELEASE_ID_V1
+    );
+    assert_eq!(
+        content_identity(SOURCE_DERIVATION_RELEASE_PREIMAGE_V1)
+            .expect("release identity")
+            .to_bytes(),
+        SOURCE_DERIVATION_RELEASE_ID_V1
+    );
+    assert_eq!(
+        content_identity(CAPABILITY_DERIVATION_RELEASE_PREIMAGE_V1)
+            .expect("release identity")
+            .to_bytes(),
+        CAPABILITY_DERIVATION_RELEASE_ID_V1
+    );
+    assert_eq!(
+        content_identity(MARKET_DERIVATION_RELEASE_PREIMAGE_V1)
+            .expect("release identity")
+            .to_bytes(),
+        MARKET_DERIVATION_RELEASE_ID_V1
+    );
+
+    let mut substituted = recipe();
+    substituted.source_derivation_release_id = id(250);
+    assert_eq!(
+        substituted.validate(),
+        Err(Error::DerivationReleaseUnavailable)
+    );
+    assert_eq!(
+        SeriesRecipeV1::decode(&substituted.to_bytes()),
+        Err(Error::DerivationReleaseUnavailable)
+    );
+}
+
+#[test]
+fn derivation_recomputes_product_market_and_funding_identities() {
+    let recipe_id = id(201);
+    let cap = capitalization(recipe_id, 0);
+    let exact = derive_occurrence_v1(recipe_id, &recipe(), 0, &cap).expect("exact derivation");
+    assert_eq!(exact.occurrence_time, recipe().first_occurrence_time);
+    assert_eq!(exact.generation, recipe().first_generation);
+    assert_eq!(
+        exact.capitalization_id,
+        content_identity(&cap.to_bytes()).expect("capitalization identity")
+    );
+    assert_eq!(exact.source_spec_id, recipe().source_schedule_id);
+    assert_eq!(exact.resolution_policy_id, recipe().source_schedule_id);
+    assert_eq!(
+        exact.capability_manifest_id,
+        recipe().capability_template_id
+    );
+
+    let next = derive_occurrence_v1(recipe_id, &recipe(), 1, &capitalization(recipe_id, 1))
+        .expect("next derivation");
+    assert_ne!(exact.occurrence_artifact_id, next.occurrence_artifact_id);
+    assert_ne!(exact.occurrence_id, next.occurrence_id);
+    assert_ne!(exact.product_instance_id, next.product_instance_id);
+    assert_ne!(exact.market_identity_id, next.market_identity_id);
+    assert_ne!(exact.capitalization_id, next.capitalization_id);
+
+    let mut wrong_funding = cap;
+    wrong_funding.market_principal = 14;
+    wrong_funding.total_principal = 19;
+    let changed = derive_occurrence_v1(recipe_id, &recipe(), 0, &wrong_funding)
+        .expect("alternative valid funding preimage");
+    assert_eq!(changed.product_instance_id, exact.product_instance_id);
+    assert_eq!(changed.market_identity_id, exact.market_identity_id);
+    assert_ne!(changed.capitalization_id, exact.capitalization_id);
+}
+
+#[test]
+fn ticket_dust_is_a_top_up_not_a_public_liveness_veto() {
+    let (root_address, recipe_id, aggregate_id, root, escrow, _guard) = created();
+    let occurrence = derived(recipe_id, 0);
+    let cap = capitalization(recipe_id, 0);
+    let plan = plan_instantiate_next_v1(
+        root,
+        root_address,
+        escrow,
+        recipe_id,
+        &recipe(),
+        aggregate_id,
+        &aggregate(recipe_id),
+        derived_id(&occurrence),
+        &occurrence,
+        occurrence.capitalization_id,
+        &cap,
+        InstantiateNextV1 {
+            expected_index: 0,
+            expected_time: occurrence.occurrence_time,
+            ticket_bump: 9,
+        },
+        occurrence.occurrence_time,
+        20,
+        5,
+        80,
+        vacant(3),
+    )
+    .expect("dust cannot block deterministic ticket");
+    assert_eq!(plan.ticket_lamports_before, 3);
+    assert_eq!(plan.ticket_top_up, 17);
+    assert_eq!(plan.ticket_lamports_after, 20);
+    assert_eq!(plan.escrow_lamports_after, 63);
+
+    let occupied = VacantAccountFactsV1 {
+        lamports: 3,
+        owner: [99; 32],
+        data_len: 1,
+        is_executable: false,
+    };
+    assert_eq!(
+        plan_instantiate_next_v1(
+            root,
+            root_address,
+            escrow,
+            recipe_id,
+            &recipe(),
+            aggregate_id,
+            &aggregate(recipe_id),
+            derived_id(&occurrence),
+            &occurrence,
+            occurrence.capitalization_id,
+            &cap,
+            InstantiateNextV1 {
+                expected_index: 0,
+                expected_time: occurrence.occurrence_time,
+                ticket_bump: 9,
+            },
+            occurrence.occurrence_time,
+            20,
+            5,
+            80,
+            occupied,
+        ),
+        Err(Error::AccountNotVacant)
+    );
+}
+
+#[test]
 fn instantiation_is_gap_free_conservative_and_exhaustive() {
     let (root_address, recipe_id, aggregate_id, mut root, escrow, _guard) = created();
     let mut escrow_balance = 85;
@@ -318,7 +458,7 @@ fn instantiation_is_gap_free_conservative_and_exhaustive() {
             &recipe(),
             aggregate_id,
             &aggregate(recipe_id),
-            id(152),
+            derived_id(&occurrence),
             &occurrence,
             occurrence.capitalization_id,
             &capitalization(recipe_id, 2),
@@ -331,7 +471,7 @@ fn instantiation_is_gap_free_conservative_and_exhaustive() {
             20,
             5,
             20,
-            0,
+            vacant(0),
         ),
         Err(Error::InvalidPhase)
     );
@@ -351,7 +491,7 @@ fn stale_gap_time_derivation_and_funding_substitutions_refuse_without_mutation()
             &recipe(),
             aggregate_id,
             &aggregate(recipe_id),
-            id(150),
+            derived_id(derived_value),
             derived_value,
             occurrence.capitalization_id,
             &cap_value,
@@ -360,7 +500,7 @@ fn stale_gap_time_derivation_and_funding_substitutions_refuse_without_mutation()
             20,
             5,
             observed,
-            0,
+            vacant(0),
         )
     };
     assert_eq!(
@@ -469,7 +609,7 @@ fn successful_release_cannot_be_replayed_after_root_advances() {
             20,
             5,
             first.escrow_lamports_after,
-            first.ticket_lamports_after,
+            vacant(first.ticket_lamports_after),
         ),
         Err(Error::IndexMismatch)
     );
@@ -862,7 +1002,7 @@ fn future_release_and_insufficient_current_ticket_rent_refuse() {
             &recipe(),
             aggregate_id,
             &aggregate(recipe_id),
-            id(150),
+            derived_id(&occurrence),
             &occurrence,
             occurrence.capitalization_id,
             &cap,
@@ -871,7 +1011,7 @@ fn future_release_and_insufficient_current_ticket_rent_refuse() {
             20,
             5,
             80,
-            0,
+            vacant(0),
         ),
         Err(Error::OccurrenceNotDue)
     );
@@ -884,7 +1024,7 @@ fn future_release_and_insufficient_current_ticket_rent_refuse() {
             &recipe(),
             aggregate_id,
             &aggregate(recipe_id),
-            id(150),
+            derived_id(&occurrence),
             &occurrence,
             occurrence.capitalization_id,
             &cap,
@@ -893,7 +1033,7 @@ fn future_release_and_insufficient_current_ticket_rent_refuse() {
             20,
             6,
             80,
-            0,
+            vacant(0),
         ),
         Err(Error::Underfunded)
     );

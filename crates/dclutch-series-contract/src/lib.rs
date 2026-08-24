@@ -9,6 +9,7 @@
 //! releases; one mutable root owns only gap-free progress and conservation.
 
 use core::convert::{TryFrom, TryInto};
+use sha2::{Digest, Sha256};
 
 /// Width of a content identity or Solana-compatible account key.
 pub const IDENTITY_BYTES: usize = 32;
@@ -60,6 +61,47 @@ pub const OCCURRENCE_TICKET_MAGIC_V1: [u8; 8] = *b"DCLTSTK1";
 pub const SERIES_INSTRUCTION_MAGIC_V1: [u8; 8] = *b"DCLTSRI1";
 /// Implemented persistent and instruction schema version.
 pub const SERIES_SCHEMA_VERSION_V1: u16 = 1;
+
+/// Exact release label for V1's fixed occurrence-artifact/Product derivation.
+pub const OCCURRENCE_DERIVATION_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/series-occurrence-derivation/fixed-v1";
+/// SHA-256 identity of [`OCCURRENCE_DERIVATION_RELEASE_PREIMAGE_V1`].
+pub const OCCURRENCE_DERIVATION_RELEASE_ID_V1: [u8; 32] = [
+    0xa2, 0x4a, 0x68, 0xe4, 0x1b, 0x4f, 0x00, 0x3a, 0xf2, 0xa5, 0x06, 0xca, 0xa0, 0xa6, 0x31, 0x61,
+    0x7f, 0x9e, 0x78, 0x60, 0x35, 0xf7, 0xdc, 0xf9, 0x7b, 0xd5, 0x67, 0x2f, 0x5f, 0x2e, 0x3c, 0x4b,
+];
+/// Exact release label for V1's immutable shared source-policy selection.
+pub const SOURCE_DERIVATION_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/series-source-derivation/static-policy-v1";
+/// SHA-256 identity of [`SOURCE_DERIVATION_RELEASE_PREIMAGE_V1`].
+pub const SOURCE_DERIVATION_RELEASE_ID_V1: [u8; 32] = [
+    0x93, 0x95, 0xcc, 0xf5, 0xf0, 0x49, 0xf9, 0xc3, 0xbb, 0xcb, 0xfa, 0xcb, 0x41, 0x85, 0x44, 0x0f,
+    0x45, 0x9e, 0x24, 0x0b, 0xa5, 0x99, 0xaa, 0x25, 0x4b, 0x0b, 0x33, 0x12, 0xda, 0x2e, 0xdf, 0x43,
+];
+/// Exact release label for V1's immutable shared capability-manifest selection.
+pub const CAPABILITY_DERIVATION_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/series-capability-derivation/static-manifest-v1";
+/// SHA-256 identity of [`CAPABILITY_DERIVATION_RELEASE_PREIMAGE_V1`].
+pub const CAPABILITY_DERIVATION_RELEASE_ID_V1: [u8; 32] = [
+    0x0b, 0x93, 0x01, 0x4b, 0xd4, 0xb4, 0x85, 0x44, 0xed, 0x77, 0x83, 0x43, 0x09, 0x38, 0xf6, 0xa2,
+    0x1d, 0x3c, 0x5f, 0x88, 0xac, 0x45, 0xaf, 0x10, 0x30, 0x1c, 0x72, 0xdf, 0xaf, 0x9d, 0xa1, 0x89,
+];
+/// Exact release label for V1's canonical Market-identity derivation.
+pub const MARKET_DERIVATION_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/series-market-derivation/canonical-v1";
+/// SHA-256 identity of [`MARKET_DERIVATION_RELEASE_PREIMAGE_V1`].
+pub const MARKET_DERIVATION_RELEASE_ID_V1: [u8; 32] = [
+    0xcf, 0x7f, 0x9e, 0xfc, 0xc5, 0x68, 0x36, 0x83, 0x84, 0x54, 0xd6, 0x0c, 0x52, 0x36, 0x97, 0xe5,
+    0x2f, 0x36, 0x63, 0xe7, 0x57, 0xcc, 0x67, 0x07, 0x73, 0xcd, 0x46, 0x1a, 0xe5, 0x28, 0x33, 0x21,
+];
+
+/// Fixed V1 occurrence artifact width: header, recipe/schedule, index, time, generation.
+pub const SERIES_OCCURRENCE_ARTIFACT_BYTES_V1: usize = 104;
+
+const SERIES_OCCURRENCE_ARTIFACT_MAGIC_V1: [u8; 8] = *b"DCLTSAO1";
+const PRODUCT_OCCURRENCE_BYTES_V1: usize = 128;
+const PRODUCT_INSTANCE_BYTES_V1: usize = 160;
+const MARKET_IDENTITY_BYTES_V1: usize = 168;
 
 /// Root PDA domain. Its 22 bytes are below the chain-derived 32-byte seed limit.
 pub const SERIES_ROOT_PDA_DOMAIN_V1: &[u8] = b"dclutch/series-root/v1";
@@ -126,6 +168,8 @@ pub enum Error {
     CapitalizationMismatch,
     /// A derived occurrence did not match the selected recipe/index.
     DerivationMismatch,
+    /// The recipe selected a derivation release combination absent from V1.
+    DerivationReleaseUnavailable,
     /// Root conservation or phase invariants were false.
     RootInvariant,
     /// The action is not legal in the current root phase.
@@ -354,12 +398,26 @@ impl SeriesRecipeV1 {
         if self.occurrence_count == 0 {
             return Err(Error::EmptySeries);
         }
+        self.validate_derivation_releases()?;
         let last = self
             .occurrence_count
             .checked_sub(1)
             .ok_or(Error::EmptySeries)?;
         self.time_at(last)?;
         self.generation_at(last)?;
+        Ok(())
+    }
+
+    /// Require the one closed derivation release set implemented by V1.
+    pub fn validate_derivation_releases(&self) -> Result<()> {
+        if self.occurrence_derivation_release_id.to_bytes() != OCCURRENCE_DERIVATION_RELEASE_ID_V1
+            || self.source_derivation_release_id.to_bytes() != SOURCE_DERIVATION_RELEASE_ID_V1
+            || self.capability_derivation_release_id.to_bytes()
+                != CAPABILITY_DERIVATION_RELEASE_ID_V1
+            || self.market_derivation_release_id.to_bytes() != MARKET_DERIVATION_RELEASE_ID_V1
+        {
+            return Err(Error::DerivationReleaseUnavailable);
+        }
         Ok(())
     }
 
@@ -556,6 +614,109 @@ impl DerivedOccurrenceV1 {
         }
         output
     }
+}
+
+/// Recompute the only V1 derivation output from authenticated immutable inputs.
+///
+/// The fixed occurrence artifact is content-addressed. Its canonical Product
+/// occurrence and Product instance preimages are then content-addressed in
+/// order. V1 deliberately shares one immutable source-policy record and one
+/// immutable capability manifest across the finite Series. The canonical
+/// Market identity commits those results and the occurrence generation. The
+/// capitalization identity is the SHA-256 identity of the exact item bytes.
+pub fn derive_occurrence_v1(
+    recipe_id: IdentityV1,
+    recipe: &SeriesRecipeV1,
+    occurrence_index: u64,
+    capitalization: &OccurrenceCapitalizationV1,
+) -> Result<DerivedOccurrenceV1> {
+    recipe.validate()?;
+    capitalization.validate()?;
+    if capitalization.recipe_id != recipe_id
+        || capitalization.capitalization_schedule_id != recipe.capitalization_schedule_id
+        || capitalization.occurrence_index != occurrence_index
+    {
+        return Err(Error::CapitalizationMismatch);
+    }
+    let occurrence_time = recipe.time_at(occurrence_index)?;
+    let generation = recipe.generation_at(occurrence_index)?;
+
+    let mut artifact = [0u8; SERIES_OCCURRENCE_ARTIFACT_BYTES_V1];
+    put(&mut artifact, 0, &SERIES_OCCURRENCE_ARTIFACT_MAGIC_V1);
+    put(&mut artifact, 8, &SERIES_SCHEMA_VERSION_V1.to_le_bytes());
+    put(&mut artifact, 16, &recipe_id.to_bytes());
+    put(&mut artifact, 48, &recipe.occurrence_schedule_id.to_bytes());
+    put(&mut artifact, 80, &occurrence_index.to_le_bytes());
+    put(&mut artifact, 88, &occurrence_time.to_le_bytes());
+    put(&mut artifact, 96, &generation.to_le_bytes());
+    let occurrence_artifact_id = content_identity(&artifact)?;
+
+    // Canonical dclutch-product-contract OccurrenceV1 bytes. The fixed
+    // artifact is one nonempty canonical page in this selected release.
+    let mut occurrence = [0u8; PRODUCT_OCCURRENCE_BYTES_V1];
+    put(&mut occurrence, 0, b"DCLTOCC1");
+    put(&mut occurrence, 8, &1u16.to_le_bytes());
+    put(&mut occurrence, 16, &recipe.terms_id.to_bytes());
+    put(&mut occurrence, 48, &recipe.capacity_profile_id.to_bytes());
+    put(&mut occurrence, 80, &occurrence_artifact_id.to_bytes());
+    let artifact_bytes = u32::try_from(SERIES_OCCURRENCE_ARTIFACT_BYTES_V1)
+        .map_err(|_| Error::ArithmeticOverflow)?;
+    put(&mut occurrence, 112, &artifact_bytes.to_le_bytes());
+    put(&mut occurrence, 116, &1u32.to_le_bytes());
+    let occurrence_id = content_identity(&occurrence)?;
+
+    // Canonical dclutch-product-contract InstanceV1 bytes.
+    let mut product = [0u8; PRODUCT_INSTANCE_BYTES_V1];
+    put(&mut product, 0, b"DCLTINS1");
+    put(&mut product, 8, &1u16.to_le_bytes());
+    put(&mut product, 16, &recipe.terms_id.to_bytes());
+    put(&mut product, 48, &occurrence_id.to_bytes());
+    put(&mut product, 80, &recipe.claim_basis_id.to_bytes());
+    put(&mut product, 112, &recipe.capacity_profile_id.to_bytes());
+    put(
+        &mut product,
+        144,
+        &u32::from(recipe.outcome_count).to_le_bytes(),
+    );
+    let product_instance_id = content_identity(&product)?;
+
+    let source_spec_id = recipe.source_schedule_id;
+    let source_window_id = recipe.source_schedule_id;
+    let statistic_id = recipe.source_schedule_id;
+    let resolution_policy_id = recipe.source_schedule_id;
+    let capability_manifest_id = recipe.capability_template_id;
+
+    // Canonical dclutch-core-contract MarketIdentity bytes.
+    let mut market = [0u8; MARKET_IDENTITY_BYTES_V1];
+    put(&mut market, 0, &recipe.realm_id.to_bytes());
+    put(&mut market, 32, &product_instance_id.to_bytes());
+    put(&mut market, 64, &recipe.claim_basis_id.to_bytes());
+    put(&mut market, 96, &resolution_policy_id.to_bytes());
+    put(&mut market, 128, &capability_manifest_id.to_bytes());
+    put(&mut market, 160, &generation.to_le_bytes());
+
+    Ok(DerivedOccurrenceV1 {
+        recipe_id,
+        occurrence_index,
+        occurrence_time,
+        generation,
+        occurrence_artifact_id,
+        occurrence_id,
+        product_instance_id,
+        source_spec_id,
+        source_window_id,
+        statistic_id,
+        resolution_policy_id,
+        capability_manifest_id,
+        market_identity_id: content_identity(&market)?,
+        capitalization_id: content_identity(&capitalization.to_bytes())?,
+    })
+}
+
+/// Return the SHA-256 content identity of one exact canonical preimage.
+pub fn content_identity(bytes: &[u8]) -> Result<IdentityV1> {
+    let digest: [u8; 32] = Sha256::digest(bytes).into();
+    IdentityV1::new(digest)
 }
 
 /// Immutable aggregate proving how much finite Series principal exists now.
@@ -1610,6 +1771,10 @@ pub struct InstantiationPlanV1 {
     pub escrow_lamports_before: u64,
     /// Complete escrow balance after the exact ticket transfer.
     pub escrow_lamports_after: u64,
+    /// Complete prefunded ticket balance before allocation and assignment.
+    pub ticket_lamports_before: u64,
+    /// Exact escrow top-up transferred after accounting for harmless dust.
+    pub ticket_top_up: u64,
     /// Authenticated immutable derivation-record identity.
     pub derived_occurrence_id: IdentityV1,
     /// Exact occurrence/Product/source/manifest/Market obligations.
@@ -1639,7 +1804,7 @@ pub fn plan_instantiate_next_v1(
     authenticated_escrow_rent_minimum: u64,
     authenticated_ticket_rent_minimum: u64,
     observed_escrow_lamports: u64,
-    observed_ticket_lamports: u64,
+    ticket_before: VacantAccountFactsV1,
 ) -> Result<InstantiationPlanV1> {
     root.validate_for(recipe_id, aggregate_id, recipe, aggregate)?;
     validate_escrow(&escrow, root_address, &root)?;
@@ -1655,9 +1820,7 @@ pub fn plan_instantiate_next_v1(
     if authenticated_clock_time < root.next_occurrence_time {
         return Err(Error::OccurrenceNotDue);
     }
-    if observed_ticket_lamports != 0 {
-        return Err(Error::AccountNotVacant);
-    }
+    ticket_before.validate()?;
     let required_escrow_balance = authenticated_escrow_rent_minimum
         .checked_add(root.remaining_principal)
         .ok_or(Error::ArithmeticOverflow)?;
@@ -1669,7 +1832,18 @@ pub fn plan_instantiate_next_v1(
     if capitalization.ticket_rent < authenticated_ticket_rent_minimum {
         return Err(Error::Underfunded);
     }
-    if capitalization_id != derived.capitalization_id
+    let expected_derived = derive_occurrence_v1(
+        recipe_id,
+        recipe,
+        root.next_occurrence_index,
+        capitalization,
+    )?;
+    let expected_derived_id = content_identity(&expected_derived.to_bytes())?;
+    if *derived != expected_derived || derived_occurrence_id != expected_derived_id {
+        return Err(Error::DerivationMismatch);
+    }
+    if capitalization_id != expected_derived.capitalization_id
+        || capitalization_id != derived.capitalization_id
         || capitalization.recipe_id != recipe_id
         || capitalization.capitalization_schedule_id != recipe.capitalization_schedule_id
         || capitalization.occurrence_index != root.next_occurrence_index
@@ -1689,8 +1863,9 @@ pub fn plan_instantiate_next_v1(
         .remaining_principal
         .checked_sub(capitalization.total_principal)
         .ok_or(Error::Underfunded)?;
+    let ticket_top_up = required_top_up(ticket_before.lamports, capitalization.total_principal)?;
     let escrow_lamports_after = observed_escrow_lamports
-        .checked_sub(capitalization.total_principal)
+        .checked_sub(ticket_top_up)
         .ok_or(Error::Underfunded)?;
     let released_principal = root
         .released_principal
@@ -1737,10 +1912,15 @@ pub fn plan_instantiate_next_v1(
         root_after,
         escrow_lamports_before: observed_escrow_lamports,
         escrow_lamports_after,
+        ticket_lamports_before: ticket_before.lamports,
+        ticket_top_up,
         derived_occurrence_id,
         derived_occurrence: *derived,
         ticket,
-        ticket_lamports_after: capitalization.total_principal,
+        ticket_lamports_after: ticket_before
+            .lamports
+            .checked_add(ticket_top_up)
+            .ok_or(Error::ArithmeticOverflow)?,
     })
 }
 

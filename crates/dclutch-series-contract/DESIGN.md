@@ -1,7 +1,9 @@
 # Series V1 contract
 
-Status: SDK-free semantic contract. This crate does not claim an SBF account
-frame, Market deployment, hashing implementation, keeper, or operator.
+Status: SDK-free semantic contract. This crate does not claim Market
+deployment, a keeper, or an operator. It owns one safe `no_std` SHA-256
+derivation release set; the SBF adapter owns account authentication and
+execution.
 
 ## Purpose and authority
 
@@ -22,9 +24,23 @@ The recipe commits:
 - first occurrence time, positive cadence, finite occurrence count, first
   Market generation, and exact categorical width.
 
-Every content identity is nonzero. The composing adapter authenticates content
-hashes and executes the selected derivation releases. This crate deliberately
-does not hash or accept caller-authored derived identities as authority.
+Every content identity is nonzero. V1 admits exactly four pinned release IDs:
+a fixed occurrence-artifact/Product derivation, a shared immutable source
+policy, a shared immutable capability manifest, and canonical Market-identity
+derivation. Any mixed or unknown release set refuses. The contract recomputes
+the complete `DerivedOccurrenceV1` and its content identity; caller-authored
+derived fields are never authority.
+
+The occurrence release hashes a fixed 104-byte artifact containing recipe,
+occurrence-schedule, index, time, and generation. It then hashes canonical
+Product `OccurrenceV1` and `InstanceV1` preimages. The Market release hashes
+the canonical 168-byte Market identity. The exact occurrence-capitalization
+record is separately hashed, so changing funding changes only the bound
+capitalization identity, not Product or Market identity. This V1 source release
+uses one immutable `source_schedule_id` as the shared source specification,
+window, statistic, and resolution-policy identity; capability similarly uses
+the immutable `capability_template_id` directly. A future per-occurrence source
+compiler is a new pinned release rather than caller discretion.
 
 The root persists the immutable refund authority as the one semantic owner of
 the beneficiary choice. The Rent contract's one-credit-per-authority PDA rule
@@ -73,7 +89,13 @@ Success atomically:
 1. subtracts one exact capitalization item from escrow/root remaining state;
 2. advances index, time, and generation without a gap;
 3. increments the exact outstanding-ticket count; and
-4. creates one `OccurrenceTicketV1` at the canonical Series/index PDA.
+4. allocates one `OccurrenceTicketV1` at the canonical Series/index PDA.
+
+Like Series creation, ticket vacancy is System ownership, empty data, and a
+nonexecutable flag rather than a zero balance. Harmless prefunding reduces the
+exact escrow top-up and is preserved in the ticket, so dusting a deterministic
+ticket PDA cannot veto liveness. Any surplus eventually follows the ticket's
+normal RentCredit close path.
 
 The last item moves the root to `Exhausted`. A stale request, skipped index,
 wrong time, wrong derivation, wrong capitalization, underfunded escrow, or
