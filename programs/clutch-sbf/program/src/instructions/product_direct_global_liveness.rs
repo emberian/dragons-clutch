@@ -14,7 +14,9 @@ use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_creatable, require_system_program,
     transfer_data, RentParameters, SYSTEM_PROGRAM_ID,
 };
-use crate::instructions::product_market::authenticate_market_lifecycle_root_v1;
+use crate::instructions::product_market::{
+    authenticate_market_lifecycle_root_v1, AuthenticatedMarketLifecycleRootV1,
+};
 use crate::instructions::product_market_foundation_init::{
     AuthenticatedProductMarketFounderCreationV1,
     AuthenticatedProductMarketFounderFoundationPreauthorizationV1,
@@ -27,10 +29,11 @@ use clutch_liveness::runtime_v1::{
     RUNTIME_LIVENESS_ACCOUNT_BYTES_V1, RUNTIME_LIVENESS_POLICY_BYTES_V1,
 };
 use clutch_liveness::Id as LivenessId;
+use clutch_direct_market_runtime::{DirectFamilyTerminalPlanV1, DirectReplayPhaseV1};
 use clutch_product_series::{
     ContentId, DirectGlobalLivenessCapitalizationV1, DirectGlobalLivenessPhaseV1,
-    DirectGlobalLivenessV1, FixedCodec, MarketInstanceV2Id, MarketLifecyclePhaseV1,
-    ProductDirectGlobalLivenessAuthorityV1,
+    DirectGlobalLivenessV1, FixedCodec, MarketFamilyV1, MarketInstanceV2Id,
+    MarketLifecyclePhaseV1, ProductDirectGlobalLivenessAuthorityV1,
     DIRECT_GLOBAL_LIVENESS_ALLOCATION_CALL_WIDTH_V1,
     DIRECT_GLOBAL_LIVENESS_BINDING_DOMAIN_V1,
     DIRECT_GLOBAL_LIVENESS_CAPITALIZATION_DOMAIN_V1,
@@ -52,6 +55,8 @@ const PRODUCT_DIRECT_ACCOUNT_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/product-direct-global-account-authentication/v1";
 const PRODUCT_DIRECT_FOUNDER_ACTIVATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/product-direct-global-founder-activation/v1";
+const PRODUCT_DIRECT_CANDIDATE_RETIREMENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/sbf/product-direct-global-candidate-retirement/v1";
 
 /// One small row result retained while seven accounts are created serially.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -150,6 +155,37 @@ impl AuthenticatedProductDirectGlobalLivenessActivationV1 {
     }
 }
 
+/// Private Product postwrite proving one final sealed Direct plan retired the
+/// matching live allocation and no provisional action-13 preparation did.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedProductDirectCandidateRetirementV1 {
+    id: ContentId,
+    state: DirectGlobalLivenessV1,
+    account_data_id: ContentId,
+    account_authentication_id: ContentId,
+    direct_terminal_receipt_id: ContentId,
+    family_terminal_sequence: u32,
+    product_family_poststate_id: ContentId,
+}
+
+impl AuthenticatedProductDirectCandidateRetirementV1 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn state(&self) -> &DirectGlobalLivenessV1 { &self.state }
+    pub(crate) const fn account_data_id(&self) -> ContentId { self.account_data_id }
+    pub(crate) const fn account_authentication_id(&self) -> ContentId {
+        self.account_authentication_id
+    }
+    pub(crate) const fn direct_terminal_receipt_id(&self) -> ContentId {
+        self.direct_terminal_receipt_id
+    }
+    pub(crate) const fn family_terminal_sequence(&self) -> u32 {
+        self.family_terminal_sequence
+    }
+    pub(crate) const fn product_family_poststate_id(&self) -> ContentId {
+        self.product_family_poststate_id
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct ExactCapitalizationAuthorityV1;
 
@@ -177,6 +213,32 @@ impl ProductDirectGlobalLivenessAuthorityV1 for ExactFounderActivationAuthorityV
     ) -> clutch_product_series::Result<()> {
         if state == self.expected_state
             && founder_receipt_id == self.expected_founder_receipt_id
+        {
+            Ok(())
+        } else {
+            Err(clutch_product_series::Error::UnauthenticatedAuthority)
+        }
+    }
+}
+
+struct ExactDirectCandidateRetirementAuthorityV1<'state> {
+    expected_state: &'state DirectGlobalLivenessV1,
+    expected_terminal_receipt_id: ContentId,
+    expected_family_terminal_sequence: u32,
+}
+
+impl ProductDirectGlobalLivenessAuthorityV1
+    for ExactDirectCandidateRetirementAuthorityV1<'_>
+{
+    fn authenticate_candidate_retirement(
+        &self,
+        state: &DirectGlobalLivenessV1,
+        direct_terminal_receipt_id: ContentId,
+        family_terminal_sequence: u32,
+    ) -> clutch_product_series::Result<()> {
+        if state == self.expected_state
+            && direct_terminal_receipt_id == self.expected_terminal_receipt_id
+            && family_terminal_sequence == self.expected_family_terminal_sequence
         {
             Ok(())
         } else {
@@ -612,6 +674,142 @@ pub(crate) fn activate_product_direct_global_liveness_from_founder_v1<'state>(
         founder_creation_receipt_id,
         root_semantic_id,
         root_authentication_id: root.authentication_id(),
+    })
+}
+
+/// Retire exactly one Product allocation from Direct's final sealed action-13
+/// plan. The private plan's Product authority must independently accept the
+/// same live Product-family prestate; a provisional plan or a replay before
+/// the eighth Candidate call cannot reach the `0xba` writer.
+#[inline(never)]
+pub(crate) fn retire_product_direct_candidate_liveness_v1(
+    program_id: &Pubkey,
+    product_root: AuthenticatedMarketLifecycleRootV1<'_>,
+    plan: &DirectFamilyTerminalPlanV1,
+    family_terminal_sequence: u32,
+    manifest_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedProductDirectCandidateRetirementV1> {
+    require(
+        product_root.is_writable()
+            && product_root.account() != *manifest_account.key
+            && matches!(
+                product_root.state().phase(),
+                MarketLifecyclePhaseV1::Active | MarketLifecyclePhaseV1::Retiring
+            )
+            && plan.replay_post.phase() == DirectReplayPhaseV1::Terminal
+            && !plan.replay_post.candidate_liveness_pending()
+            && plan.replay_post.candidate_liveness_completed_calls()
+                == DIRECT_GLOBAL_LIVENESS_ALLOCATION_CALL_WIDTH_V1
+            && plan.replay_post.candidate_liveness_last_receipt_id() != [0; 32]
+            && plan.replay_post.candidate_liveness_batch_receipt_id() != [0; 32]
+            && plan.replay_post.family_terminal_receipt_id()
+                == plan.terminal_receipt_id.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let current = authenticate_product_direct_global_liveness_v1(
+        program_id,
+        manifest_account,
+        true,
+    )?;
+    let binding = product_root.state().binding();
+    let binding_id = binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let direct_family = product_root
+        .state()
+        .product_families()
+        .family(MarketFamilyV1::Direct);
+    let counts = direct_family.counts();
+    require(
+        current.state().phase() == DirectGlobalLivenessPhaseV1::Active
+            && current.state().market_instance_id() == binding.market_instance_id
+            && current.state().generation() == binding.generation
+            && current.state().lifecycle_root_account().bytes()
+                == product_root.account().to_bytes()
+            && current.state().market_binding_id() == binding_id
+            && current.state().realm_id() == binding.realm_id
+            && current.state().neutral_lamport_sink()
+                == product_root.state().capital().neutral_lamport_sink
+            && current.state().admitted_allocations() == counts.admitted
+            && current.state().live_allocations() == counts.live
+            && current.state().retired_allocations() == counts.terminal
+            && family_terminal_sequence == counts.terminal,
+        ClutchError::MismatchedState,
+    )?;
+
+    let product_post = product_root
+        .state()
+        .terminalize_product_family_child(
+            &plan.product_authority,
+            MarketFamilyV1::Direct,
+            family_terminal_sequence,
+            plan.terminal_receipt_id,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let product_family_poststate_id = product_post
+        .product_families()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let next = current
+        .state()
+        .retire_candidate(
+            &ExactDirectCandidateRetirementAuthorityV1 {
+                expected_state: current.state(),
+                expected_terminal_receipt_id: plan.terminal_receipt_id,
+                expected_family_terminal_sequence: family_terminal_sequence,
+            },
+            plan.terminal_receipt_id,
+            family_terminal_sequence,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let observed_lamports = current.observed_lamports();
+    let stored_bump = current.stored_bump;
+    drop(current);
+    write_manifest_state_v1(
+        manifest_account,
+        &next,
+        next.manifest_rent_principal_lamports(),
+        stored_bump,
+    )?;
+    require(
+        manifest_account.lamports() == observed_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    let reopened = authenticate_product_direct_global_liveness_v1(
+        program_id,
+        manifest_account,
+        true,
+    )?;
+    require(
+        reopened.state() == &next && reopened.observed_lamports() == observed_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            PRODUCT_DIRECT_CANDIDATE_RETIREMENT_DOMAIN_V1,
+            program_id.as_ref(),
+            manifest_account.key.as_ref(),
+            product_root.account().as_ref(),
+            &product_root.authentication_id().bytes(),
+            &plan.terminal_receipt_id.bytes(),
+            &family_terminal_sequence.to_le_bytes(),
+            &product_family_poststate_id.bytes(),
+            &reopened.data_id().bytes(),
+            &reopened.authentication_id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    id.validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(AuthenticatedProductDirectCandidateRetirementV1 {
+        id,
+        state: next,
+        account_data_id: reopened.data_id(),
+        account_authentication_id: reopened.authentication_id(),
+        direct_terminal_receipt_id: plan.terminal_receipt_id,
+        family_terminal_sequence,
+        product_family_poststate_id,
     })
 }
 
