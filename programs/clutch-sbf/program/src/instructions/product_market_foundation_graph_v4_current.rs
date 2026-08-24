@@ -21,6 +21,7 @@ use solana_pubkey::Pubkey;
 
 use super::product_market_family_capability_current::
     AuthenticatedMarketFamilyCapabilityPolicyArtifactV1;
+use super::product_market_replay_current::AuthenticatedMarketLifecycleReplayV2;
 use super::product_series::physical_v5::AuthenticatedSeriesPhysicalFounderV5;
 use super::revenue_policy_v2::{
     derive_revenue_market_treasury_v1, AuthenticatedRevenuePolicyRecordV2,
@@ -29,6 +30,11 @@ use super::source_occurrence_foundation_v1::AuthenticatedPreRootSourceOccurrence
 
 const CURRENT_MARKET_FOUNDATION_GRAPH_AUTHENTICATION_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/current-market-foundation-graph-authentication/v4\0";
+const PERSISTED_MARKET_FOUNDATION_GRAPH_AUTHENTICATION_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/sbf/persisted-market-foundation-graph-authentication/v4\0";
+
+/// Fixed non-outcome accounts in the compact persisted GraphV4 frame.
+pub(crate) const PERSISTED_FOUNDATION_GRAPH_FIXED_ACCOUNT_COUNT_V4: usize = 18;
 
 /// Move-only authority over the exact current 50-slot physical graph.
 ///
@@ -98,6 +104,60 @@ impl AuthenticatedCurrentMarketFoundationGraphV4 {
     }
 }
 
+/// Narrow interface shared by the instruction-local action-14 graph and the
+/// hostile-reconstructed action-15 graph.
+///
+/// The latter can never be downgraded into the former: bootstrap-only physical
+/// getters are deliberately absent.
+pub(crate) trait AuthenticatedCurrentMarketFoundationGraphAuthorityV4 {
+    fn authentication_id(&self) -> ContentId;
+    fn graph(&self) -> &MarketFoundationAccountGraphV4;
+    fn graph_id(&self) -> MarketFoundationAccountGraphV4Id;
+    fn schedule_id(&self) -> MarketFoundationScheduleV4Id;
+    fn market_instance_id(&self) -> MarketInstanceV2Id;
+    fn generation(&self) -> u64;
+}
+
+impl AuthenticatedCurrentMarketFoundationGraphAuthorityV4
+    for AuthenticatedCurrentMarketFoundationGraphV4
+{
+    fn authentication_id(&self) -> ContentId { self.id }
+    fn graph(&self) -> &MarketFoundationAccountGraphV4 { &self.graph }
+    fn graph_id(&self) -> MarketFoundationAccountGraphV4Id { self.graph_id }
+    fn schedule_id(&self) -> MarketFoundationScheduleV4Id { self.schedule_id }
+    fn market_instance_id(&self) -> MarketInstanceV2Id { self.graph.market_instance_id }
+    fn generation(&self) -> u64 { self.graph.generation }
+}
+
+/// Move-only reconstruction of the exact GraphV4 persisted by MarketReplayV2.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedPersistedMarketFoundationGraphV4 {
+    id: ContentId,
+    graph: MarketFoundationAccountGraphV4,
+    graph_id: MarketFoundationAccountGraphV4Id,
+    schedule_id: MarketFoundationScheduleV4Id,
+    replay_account: Pubkey,
+    replay_authentication_id: ContentId,
+}
+
+impl AuthenticatedPersistedMarketFoundationGraphV4 {
+    pub(crate) const fn replay_account(&self) -> Pubkey { self.replay_account }
+    pub(crate) const fn replay_authentication_id(&self) -> ContentId {
+        self.replay_authentication_id
+    }
+}
+
+impl AuthenticatedCurrentMarketFoundationGraphAuthorityV4
+    for AuthenticatedPersistedMarketFoundationGraphV4
+{
+    fn authentication_id(&self) -> ContentId { self.id }
+    fn graph(&self) -> &MarketFoundationAccountGraphV4 { &self.graph }
+    fn graph_id(&self) -> MarketFoundationAccountGraphV4Id { self.graph_id }
+    fn schedule_id(&self) -> MarketFoundationScheduleV4Id { self.schedule_id }
+    fn market_instance_id(&self) -> MarketInstanceV2Id { self.graph.market_instance_id }
+    fn generation(&self) -> u64 { self.graph.generation }
+}
+
 fn account_id(account: Pubkey) -> ContentId {
     ContentId::from_bytes(account.to_bytes())
 }
@@ -116,6 +176,116 @@ fn set_slot(
     )?;
     account_ids[index] = account_id(account);
     Ok(())
+}
+
+/// Rebuild the compact physical GraphV4 frame selected by the permanent
+/// MarketReplayV2 binding.
+///
+/// Account order is slots 0..=14, active outcome mints, active outcome
+/// custodies, then slots 47..=49. Inactive outcome coordinates remain zero in
+/// the canonical graph. No graph bytes, generation, or account key is accepted
+/// from instruction data.
+#[inline(never)]
+pub(crate) fn authenticate_persisted_market_foundation_graph_v4(
+    replay: &AuthenticatedMarketLifecycleReplayV2,
+    schedule: &MarketFoundationScheduleV4,
+    accounts: &[solana_account_info::AccountInfo<'_>],
+) -> Outcome<AuthenticatedPersistedMarketFoundationGraphV4> {
+    schedule
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let schedule_id = schedule
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let outcome_count = usize::from(schedule.outcome_count);
+    let expected_count = PERSISTED_FOUNDATION_GRAPH_FIXED_ACCOUNT_COUNT_V4
+        .checked_add(outcome_count.checked_mul(2).ok_or(ClutchError::Arithmetic)?)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(accounts.len() == expected_count, ClutchError::AccountCount)?;
+    let replay_binding = replay.state().binding();
+    require(
+        replay_binding.foundation_schedule_id == schedule_id
+            && replay_binding.generation == replay.generation()
+            && replay_binding.generation != 0,
+        ClutchError::MismatchedState,
+    )?;
+    let mut left = 0usize;
+    while left < accounts.len() {
+        require(
+            !accounts[left].is_signer && !accounts[left].executable,
+            ClutchError::MismatchedState,
+        )?;
+        let mut right = left.checked_add(1).ok_or(ClutchError::Arithmetic)?;
+        while right < accounts.len() {
+            require(accounts[left].key != accounts[right].key, ClutchError::AccountAlias)?;
+            right = right.checked_add(1).ok_or(ClutchError::Arithmetic)?;
+        }
+        left = left.checked_add(1).ok_or(ClutchError::Arithmetic)?;
+    }
+    let mut account_ids = [ContentId::ZERO; MARKET_FOUNDATION_SLOT_COUNT_V4];
+    let mut index = 0usize;
+    while index <= 14 {
+        account_ids[index] = account_id(*accounts[index].key);
+        index = index.checked_add(1).ok_or(ClutchError::Arithmetic)?;
+    }
+    let mint_start = 15usize;
+    let custody_start = mint_start.checked_add(outcome_count).ok_or(ClutchError::Arithmetic)?;
+    let treasury_start = custody_start.checked_add(outcome_count).ok_or(ClutchError::Arithmetic)?;
+    index = 0;
+    while index < outcome_count {
+        account_ids[15 + index] = account_id(*accounts[mint_start + index].key);
+        account_ids[31 + index] = account_id(*accounts[custody_start + index].key);
+        index = index.checked_add(1).ok_or(ClutchError::Arithmetic)?;
+    }
+    account_ids[47] = account_id(*accounts[treasury_start].key);
+    account_ids[48] = account_id(*accounts[treasury_start + 1].key);
+    account_ids[49] = account_id(*accounts[treasury_start + 2].key);
+    let graph = MarketFoundationAccountGraphV4 {
+        market_instance_id: replay_binding.market_instance_id,
+        generation: replay_binding.generation,
+        foundation_schedule_id: schedule_id,
+        account_ids,
+    };
+    graph
+        .validate(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let graph_id = graph
+        .id(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        graph_id == replay_binding.foundation_account_graph_id
+            && graph.account(MarketFoundationSlotV4::ProductReplayAnchor)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .bytes()
+                == replay.account().to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            PERSISTED_MARKET_FOUNDATION_GRAPH_AUTHENTICATION_DOMAIN_V4,
+            replay.account().as_ref(),
+            &replay.authentication_id().bytes(),
+            &replay_binding
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .bytes(),
+            &schedule_id.bytes(),
+            &graph_id.bytes(),
+            &replay_binding.market_instance_id.bytes(),
+            &replay_binding.generation.to_le_bytes(),
+            &[schedule.outcome_count],
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(AuthenticatedPersistedMarketFoundationGraphV4 {
+        id,
+        graph,
+        graph_id,
+        schedule_id,
+        replay_account: replay.account(),
+        replay_authentication_id: replay.authentication_id(),
+    })
 }
 
 /// Derive the complete current physical graph without accepting caller graph
