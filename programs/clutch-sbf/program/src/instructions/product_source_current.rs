@@ -959,17 +959,18 @@ mod adversarial_tests {
     #[test]
     fn current_publication_has_no_bundle_v5_or_quote_v4_authority() {
         let source = include_str!("product_source_current.rs");
-        assert!(source.contains("CompiledProductSeriesBundleV6"));
-        assert!(source.contains("SeriesFundingQuoteV5"));
-        assert!(source.contains("SeriesAttachmentPlanV5"));
-        assert!(source.contains("compile_source_semantic_inputs_v2"));
-        assert!(source.contains("AuthenticatedRegistryCapabilityV4"));
-        assert!(source.contains("AuthenticatedProductSourceAuthorityV2"));
-        assert!(source.contains("authority.require_route(route)?"));
-        assert!(!source.contains("CompiledProductSeriesBundleV5"));
-        assert!(!source.contains("SeriesFundingQuoteV4"));
-        assert!(!source.contains("SeriesAttachmentPlanV4"));
-        assert!(!source.contains("AuthenticatedRegistryCapabilityV3"));
-        assert!(!source.contains("AuthenticatedProductSourceAuthorityV1"));
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        assert!(production.contains("CompiledProductSeriesBundleV6"));
+        assert!(production.contains("SeriesFundingQuoteV5"));
+        assert!(production.contains("SeriesAttachmentPlanV5"));
+        assert!(production.contains("compile_source_semantic_inputs_v2"));
+        assert!(production.contains("AuthenticatedRegistryCapabilityV4"));
+        assert!(production.contains("AuthenticatedProductSourceAuthorityV2"));
+        assert!(production.contains("authority.require_route(route)?"));
+        assert!(!production.contains("CompiledProductSeriesBundleV5"));
+        assert!(!production.contains("SeriesFundingQuoteV4"));
+        assert!(!production.contains("SeriesAttachmentPlanV4"));
+        assert!(!production.contains("AuthenticatedRegistryCapabilityV3"));
+        assert!(!production.contains("AuthenticatedProductSourceAuthorityV1"));
     }
 }
