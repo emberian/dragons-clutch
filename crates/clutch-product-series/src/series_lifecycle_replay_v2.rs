@@ -1,6 +1,6 @@
 //! Bounded permanent replay owner for one finite Series lifecycle.
 //!
-//! FundingV3 proves that every ordinal was either completed or lapsed. The
+//! FundingV4 proves that every ordinal was either completed or lapsed. The
 //! historical replay V1 is decode-only and never accepted as this authority.
 //! Each Market root proves terminality only for links admitted to that one
 //! Market. This owner defines the bounded cross-Market count equations and
@@ -68,7 +68,7 @@ pub struct SeriesLifecycleReplayBindingV2 {
     pub capability_profile_id: RegistryCapabilityProfileV4Id,
     /// Permanent Series registry/replay account.
     pub registry_account_id: ContentId,
-    /// Current FundingV3 account.
+    /// Current FundingV4 account.
     pub funding_account_id: ContentId,
     /// Permanent counted lifecycle replay account.
     pub lifecycle_replay_account_id: ContentId,
@@ -210,13 +210,13 @@ pub struct SeriesLifecycleAdmissionProjectionV2 {
     pub series_plan_id: SeriesPlanV5Id,
     /// Sequential ordinal.
     pub ordinal: u32,
-    /// Exact FundingV3 account.
+    /// Exact current FundingV4 account.
     pub funding_account_id: ContentId,
-    /// FundingV3 semantic prestate.
+    /// FundingV4 Pending semantic prestate.
     pub funding_state_before_id: ContentId,
-    /// FundingV3 semantic poststate.
+    /// Deterministically previewed FundingV4 completion poststate.
     pub funding_state_after_id: ContentId,
-    /// Private Product completion receipt.
+    /// Private acyclic Product completion authorization consumed after Replay.
     pub occurrence_completion_receipt_id: ContentId,
     /// Physical activated `0xad` link.
     pub link_account_id: ContentId,
@@ -292,11 +292,11 @@ pub struct SeriesLifecycleLapseProjectionV2 {
     pub series_plan_id: SeriesPlanV5Id,
     /// Sequential ordinal.
     pub ordinal: u32,
-    /// Exact FundingV3 account.
+    /// Exact FundingV4 account.
     pub funding_account_id: ContentId,
-    /// FundingV3 semantic prestate.
+    /// FundingV4 semantic prestate.
     pub funding_state_before_id: ContentId,
-    /// FundingV3 semantic poststate.
+    /// FundingV4 semantic poststate.
     pub funding_state_after_id: ContentId,
     /// Exact Clock policy.
     pub clock_policy_id: ContentId,
@@ -415,11 +415,11 @@ impl SeriesLifecycleLinkRetirementProjectionV2 {
 pub struct SeriesLifecycleTerminalEvidenceV2 {
     /// Immutable aggregate binding.
     pub binding_id: SeriesLifecycleReplayBindingV2Id,
-    /// Exact FundingV3 account.
+    /// Exact FundingV4 account.
     pub funding_account_id: ContentId,
-    /// Exact hostile-authenticated Closed FundingV3 semantic state.
+    /// Exact hostile-authenticated Closed FundingV4 semantic state.
     pub funding_state_id: ContentId,
-    /// Exact FundingV3 terminal principal/donation projection.
+    /// Exact FundingV4 terminal principal/donation projection.
     pub funding_terminal_projection_id: ContentId,
     /// Permanent RegistryV2 account.
     pub registry_account_id: ContentId,
@@ -468,7 +468,7 @@ pub struct SeriesLifecycleReplayV2 {
 }
 
 impl SeriesLifecycleReplayV2 {
-    /// Initialize the sole empty replay owner at FundingV3 activation.
+    /// Initialize the sole empty replay owner at FundingV4 activation.
     pub fn initialize(binding: SeriesLifecycleReplayBindingV2) -> Result<Self> {
         binding.validate()?;
         let value = Self {
@@ -588,7 +588,7 @@ impl SeriesLifecycleReplayV2 {
         Ok(next)
     }
 
-    /// Seal exhaustive Series terminality from the current Closed FundingV3.
+    /// Seal exhaustive Series terminality from the current Closed FundingV4.
     pub fn terminalize(
         self,
         evidence: SeriesLifecycleTerminalEvidenceV2,
@@ -792,7 +792,7 @@ impl FixedCodec for SeriesLifecycleReplayV2 {
 
 /// Pure exhaustive terminal evidence.
 ///
-/// Physical FundingV3 close must consume a private adapter receipt minted only
+/// Physical FundingV4 close must consume a private adapter receipt minted only
 /// after this projection and the exact Terminal replay successor are written
 /// and hostile-reopened. This value alone authorizes no account mutation or
 /// value disposition.
@@ -898,11 +898,11 @@ impl SeriesLifecycleTerminalProjectionV2 {
     pub const fn lifecycle_replay_account_id(self) -> ContentId {
         self.lifecycle_replay_account_id
     }
-    /// FundingV3 account.
+    /// FundingV4 account.
     pub const fn funding_account_id(self) -> ContentId {
         self.funding_account_id
     }
-    /// Closed FundingV3 state.
+    /// Closed FundingV4 state.
     pub const fn funding_state_id(self) -> ContentId {
         self.funding_state_id
     }

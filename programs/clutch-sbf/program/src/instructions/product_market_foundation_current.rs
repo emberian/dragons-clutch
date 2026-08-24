@@ -369,21 +369,6 @@ impl AuthenticatedProductMarketFounderCurrentCreationV3 {
         &self.source
     }
 
-    pub(super) fn into_direct_activation_parts(
-        self,
-    ) -> (
-        ContentId,
-        Pubkey,
-        ContentId,
-        AuthenticatedProductDirectGlobalLivenessCapitalizationV2,
-    ) {
-        (
-            self.id,
-            self.preauthorization.lifecycle_root_account,
-            self.preauthorization.id,
-            self.direct_capitalization,
-        )
-    }
 }
 
 fn require_live(id: ContentId) -> Outcome<()> {
