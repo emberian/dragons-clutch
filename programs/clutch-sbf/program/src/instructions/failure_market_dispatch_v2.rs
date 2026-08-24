@@ -11,10 +11,10 @@
 use crate::accounts::{require, Outcome};
 use crate::capabilities;
 use crate::error::ClutchError;
-use crate::instructions::failure_market_actions_v2::process_archive_failure_market_session_v2;
 use crate::instructions::failure_market_action10_current::process_begin_failure_market_session_v2;
 use crate::instructions::failure_market_action11_current::process_advance_failure_market_session_v2;
 use crate::instructions::failure_market_action12_current::process_resolve_failure_market_session_v2;
+use crate::instructions::failure_market_action13_current::process_archive_failure_market_session_v3;
 use crate::instructions::failure_market_interval_v2::FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2;
 use crate::instructions::failure_market_replay_v2::FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2;
 use clutch_failure_policy_runtime::market_quote_v1::FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1;
@@ -557,7 +557,7 @@ pub fn process(
             process_advance_failure_market_session_v2(program_id, accounts, sequence, payload)
         }
         RecoveryAction::CloseIntervalConsensusWork => {
-            process_archive_failure_market_session_v2(program_id, accounts, sequence, payload)
+            process_archive_failure_market_session_v3(program_id, accounts, sequence, payload)
         }
         RecoveryAction::ResolveIntervalConsensus => {
             process_resolve_failure_market_session_v2(program_id, accounts, sequence, payload)
@@ -693,7 +693,7 @@ mod adversarial_contract_tests {
         assert!(process.contains("process_advance_failure_market_session_v2"));
         assert!(process.contains("process_resolve_failure_market_session_v2"));
         assert!(process.contains("RecoveryAction::CloseIntervalConsensusWork =>"));
-        assert!(process.contains("process_archive_failure_market_session_v2"));
+        assert!(process.contains("process_archive_failure_market_session_v3"));
         assert!(!process.contains("failure_recovery::"));
     }
 
