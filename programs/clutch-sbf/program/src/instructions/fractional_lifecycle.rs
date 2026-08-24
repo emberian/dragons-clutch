@@ -17,14 +17,14 @@ use clutch_fractional_redemption_runtime::{
     FRACTIONAL_LEDGER_ACCOUNT_BYTES, FRACTIONAL_POLICY_ACCOUNT_BYTES,
 };
 use clutch_product_series::{
-    ContentId, MarketFoundationAccountGraphV3, MarketFoundationScheduleV3,
-    MarketFoundationSlotV3, MarketLifecycleRootV2, SeriesFundingQuoteV5,
-    MARKET_FOUNDATION_CORE_SLOT_COUNT_V3, MARKET_FOUNDATION_MAX_OUTCOMES_V3,
-    MARKET_FOUNDATION_SLOT_COUNT_V3,
+    ContentId, MarketFoundationAccountGraphV4, MarketFoundationScheduleV4,
+    MarketFoundationSlotV4, MarketLifecycleRootV3, SeriesFundingQuoteV6,
+    MARKET_FOUNDATION_CORE_SLOT_COUNT_V4, MARKET_FOUNDATION_MAX_OUTCOMES_V4,
+    MARKET_FOUNDATION_SLOT_COUNT_V4,
 };
 use clutch_retirement::{DeletableRentOwnerV1, Identity32V1};
 use clutch_solana_layout::product_series::{
-    MarketLifecycleRootAccountV2, SeriesMarketLinkAccountV2,
+    MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV3,
 };
 use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
@@ -32,7 +32,7 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use super::collateral_position_v3::{
-    authenticate_general_market_value_authority_v2, authenticate_resolution_v5,
+    authenticate_general_market_value_authority_v4, authenticate_resolution_v5,
 };
 use super::fractional_redemption::{
     authenticate_fractional_family_admission_postwrite_v1,
@@ -40,16 +40,20 @@ use super::fractional_redemption::{
     authenticate_fractional_runtime_release_v1,
     consume_fractional_family_admission_postwrite_v2,
     consume_fractional_family_terminal_postwrite_v2,
+    execute_fractional_family_physical_terminal_v2,
+    prepare_fractional_family_physical_terminal_v2,
 };
 use super::genesis::{
     allocate_data, assign_data, read_rent, require_creatable, require_system_program,
     SYSTEM_PROGRAM_ID,
 };
 use super::product_artifact::authenticate_product_artifact_v1;
+use super::product_market_lifecycle_v3_current::{
+    authenticate_market_lifecycle_root_v3, authenticate_series_market_link_v3,
+    AuthenticatedMarketLifecycleRootV3, AuthenticatedSeriesMarketLinkV3,
+};
 use super::product_series_current::{
-    authenticate_market_foundation_preallocation_v3, authenticate_market_lifecycle_root_v2,
-    authenticate_registry_capability_v4, authenticate_series_market_link_v2,
-    authenticate_series_registry_account_v3, AuthenticatedMarketLifecycleRootV2,
+    authenticate_registry_capability_v5, authenticate_series_registry_account_v4,
 };
 
 const ROOT: usize = 0;
@@ -60,7 +64,7 @@ const CLAIM_LEDGER: usize = 4;
 const RESOLUTION: usize = 10;
 const POLICY: usize = 11;
 const LEDGER: usize = 12;
-const FIRST_OUTCOME_MINT: usize = MARKET_FOUNDATION_CORE_SLOT_COUNT_V3;
+const FIRST_OUTCOME_MINT: usize = MARKET_FOUNDATION_CORE_SLOT_COUNT_V4;
 
 const INITIALIZE_AUX_ACCOUNTS: usize = 17;
 const TERMINAL_AUX_ACCOUNTS: usize = 17;
@@ -127,17 +131,18 @@ fn identity(bytes: [u8; 32]) -> Outcome<Identity32V1> {
 fn graph_account_count(outcome_count: u8) -> Outcome<usize> {
     let outcomes = usize::from(outcome_count);
     require(
-        outcomes != 0 && outcomes <= MARKET_FOUNDATION_MAX_OUTCOMES_V3,
+        outcomes != 0 && outcomes <= MARKET_FOUNDATION_MAX_OUTCOMES_V4,
         ClutchError::NonCanonical,
     )?;
-    MARKET_FOUNDATION_CORE_SLOT_COUNT_V3
+    MARKET_FOUNDATION_CORE_SLOT_COUNT_V4
         .checked_add(outcomes.checked_mul(2).ok_or(ClutchError::Arithmetic)?)
+        .and_then(|count| count.checked_add(3))
         .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))
 }
 
-fn decode_root_probe(accounts: &[AccountInfo<'_>]) -> Outcome<Box<MarketLifecycleRootAccountV2>> {
+fn decode_root_probe(accounts: &[AccountInfo<'_>]) -> Outcome<Box<MarketLifecycleRootAccountV3>> {
     require(
-        accounts.len() >= MARKET_FOUNDATION_CORE_SLOT_COUNT_V3,
+        accounts.len() >= MARKET_FOUNDATION_CORE_SLOT_COUNT_V4,
         ClutchError::AccountCount,
     )?;
     let account = &accounts[ROOT];
@@ -146,14 +151,14 @@ fn decode_root_probe(accounts: &[AccountInfo<'_>]) -> Outcome<Box<MarketLifecycl
             && !account.is_signer
             && !account.executable
             && account.data_len()
-                == clutch_solana_layout::product_series::MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V2,
+                == clutch_solana_layout::product_series::MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V3,
         ClutchError::MismatchedState,
     )?;
-    let mut output = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
+    let mut output = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
     let data = account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    MarketLifecycleRootAccountV2::decode_into(&data, &mut output)?;
+    MarketLifecycleRootAccountV3::decode_into(&data, &mut output)?;
     drop(data);
     Ok(output)
 }
@@ -225,24 +230,24 @@ fn require_outer_contract(
 
 fn build_graph(
     accounts: &[AccountInfo<'_>],
-    schedule: &MarketFoundationScheduleV3,
+    schedule: &MarketFoundationScheduleV4,
     market: clutch_product_series::MarketInstanceV2Id,
     generation: u64,
     outcome_count: u8,
-) -> Outcome<MarketFoundationAccountGraphV3> {
+) -> Outcome<MarketFoundationAccountGraphV4> {
     let outcomes = usize::from(outcome_count);
-    let mut account_ids = [ContentId::ZERO; MARKET_FOUNDATION_SLOT_COUNT_V3];
+    let mut account_ids = [ContentId::ZERO; MARKET_FOUNDATION_SLOT_COUNT_V4];
     let mut core = 0usize;
-    while core < MARKET_FOUNDATION_CORE_SLOT_COUNT_V3 {
+    while core < MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 {
         account_ids[core] = ContentId::from_bytes(accounts[core].key.to_bytes());
         core += 1;
     }
     let mut outcome = 0usize;
     while outcome < outcomes {
-        account_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V3 + outcome] =
+        account_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + outcome] =
             ContentId::from_bytes(accounts[FIRST_OUTCOME_MINT + outcome].key.to_bytes());
-        account_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V3
-            + MARKET_FOUNDATION_MAX_OUTCOMES_V3
+        account_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4
+            + MARKET_FOUNDATION_MAX_OUTCOMES_V4
             + outcome] = ContentId::from_bytes(
             accounts[FIRST_OUTCOME_MINT + outcomes + outcome]
                 .key
@@ -250,7 +255,17 @@ fn build_graph(
         );
         outcome += 1;
     }
-    let graph = MarketFoundationAccountGraphV3 {
+    let treasury = FIRST_OUTCOME_MINT + outcomes * 2;
+    account_ids[MarketFoundationSlotV4::GeneralTreasuryPosition.index()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?] =
+        ContentId::from_bytes(accounts[treasury].key.to_bytes());
+    account_ids[MarketFoundationSlotV4::GeneralTreasuryReplay.index()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?] =
+        ContentId::from_bytes(accounts[treasury + 1].key.to_bytes());
+    account_ids[MarketFoundationSlotV4::TreasuryServiceLedger.index()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?] =
+        ContentId::from_bytes(accounts[treasury + 2].key.to_bytes());
+    let graph = MarketFoundationAccountGraphV4 {
         market_instance_id: market,
         generation,
         foundation_schedule_id: schedule
@@ -265,25 +280,26 @@ fn build_graph(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn authenticate_schedule_and_series(
+fn authenticate_schedule_and_series<'link>(
     program_id: &Pubkey,
-    root: AuthenticatedMarketLifecycleRootV2<'_>,
+    root: &AuthenticatedMarketLifecycleRootV3<'_>,
     founder_link_account: &AccountInfo<'_>,
     funding_quote_account: &AccountInfo<'_>,
+    link_output: &'link mut SeriesMarketLinkAccountV3,
 ) -> Outcome<(
-    MarketFoundationScheduleV3,
+    MarketFoundationScheduleV4,
     clutch_product_series::SeriesPlanV5Id,
     clutch_product_series::SeriesFundingTermsV2Id,
-    clutch_product_series::CompiledProductSeriesBundleV6Id,
+    clutch_product_series::CompiledProductSeriesBundleV7Id,
+    AuthenticatedSeriesMarketLinkV3<'link>,
 )> {
-    let mut link_body = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
     let data = founder_link_account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    SeriesMarketLinkAccountV2::decode_into(&data, &mut link_body)?;
+    SeriesMarketLinkAccountV3::decode_into(&data, link_output)?;
     drop(data);
-    let link_binding = link_body.state.binding();
-    let authenticated = authenticate_series_market_link_v2(
+    let link_binding = link_output.state.binding();
+    let authenticated = authenticate_series_market_link_v3(
         program_id,
         founder_link_account,
         link_binding.series_plan_id,
@@ -292,7 +308,7 @@ fn authenticate_schedule_and_series(
         root.state().binding().generation,
         root.account(),
         false,
-        &mut link_body,
+        link_output,
     )?;
     let semantic_id = authenticated
         .state()
@@ -306,7 +322,7 @@ fn authenticate_schedule_and_series(
             && link_binding.neutral_lamport_sink == root.state().capital().neutral_lamport_sink,
         ClutchError::MismatchedState,
     )?;
-    let quote = authenticate_product_artifact_v1::<SeriesFundingQuoteV5>(
+    let quote = authenticate_product_artifact_v1::<SeriesFundingQuoteV6>(
         program_id,
         funding_quote_account,
         link_binding.funding_quote_id.content_id(),
@@ -316,6 +332,7 @@ fn authenticate_schedule_and_series(
         link_binding.series_plan_id,
         link_binding.funding_terms_id,
         link_binding.compiler_bundle_id,
+        authenticated,
     ))
 }
 
@@ -351,6 +368,66 @@ fn allocate_prefunded_pda<'a>(
     )
 }
 
+#[derive(Clone, Copy)]
+struct FractionalFoundationPrefundingV4 {
+    payer: Pubkey,
+    neutral: Pubkey,
+    principal: u64,
+    donation: u64,
+}
+
+impl FractionalFoundationPrefundingV4 {
+    const fn rent_refund_owner(self) -> Pubkey { self.payer }
+    const fn neutral_lamport_sink(self) -> Pubkey { self.neutral }
+    const fn principal_lamports(self) -> u64 { self.principal }
+    const fn donation_lamports(self) -> u64 { self.donation }
+}
+
+fn authenticate_fractional_foundation_preallocation_v4(
+    root: &AuthenticatedMarketLifecycleRootV3<'_>,
+    account: &AccountInfo<'_>,
+    schedule: &MarketFoundationScheduleV4,
+    graph: &MarketFoundationAccountGraphV4,
+    slot: MarketFoundationSlotV4,
+) -> Outcome<FractionalFoundationPrefundingV4> {
+    schedule.validate().map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    graph.validate(schedule).map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let binding = root.state().binding();
+    let index = slot.index().map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let bit = 1_u64.checked_shl(u32::try_from(index).map_err(|_| ClutchError::Arithmetic)?)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        matches!(slot, MarketFoundationSlotV4::FractionalPolicy | MarketFoundationSlotV4::FractionalLedger)
+            && root.is_writable()
+            && root.state().phase() == clutch_product_series::MarketLifecyclePhaseV3::Active
+            && binding.foundation_schedule_id == schedule.id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            && binding.foundation_account_graph_id == graph.id(schedule)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            && graph.market_instance_id == binding.market_instance_id
+            && graph.generation == binding.generation
+            && graph.account(slot).map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?.bytes()
+                == account.key.to_bytes()
+            && root.state().foundation().initialized_bitmap & bit != 0
+            && account.is_writable
+            && !account.is_signer
+            && !account.executable
+            && account.owner.to_bytes() == SYSTEM_PROGRAM_ID
+            && account.data_len() == 0,
+        ClutchError::MismatchedState,
+    )?;
+    let principal = schedule.slot_principal_lamports[index];
+    let donation = account.lamports().checked_sub(principal)
+        .ok_or(ClutchError::MismatchedState)?;
+    let capital = root.state().capital();
+    Ok(FractionalFoundationPrefundingV4 {
+        payer: Pubkey::new_from_array(capital.rent_refund_owner.bytes()),
+        neutral: Pubkey::new_from_array(capital.neutral_lamport_sink.bytes()),
+        principal,
+        donation,
+    })
+}
+
 /// Execute action 1 over Product-prefunded a4/a5 prestates.
 #[inline(never)]
 pub(super) fn process_initialize(
@@ -369,7 +446,7 @@ pub(super) fn process_initialize(
     require_system_program(&accounts[aux + init_aux::SYSTEM_PROGRAM])?;
     let rent = read_rent(&accounts[aux + init_aux::RENT])?;
 
-    let value = authenticate_general_market_value_authority_v2(
+    let value = authenticate_general_market_value_authority_v4(
         program_id,
         &accounts[aux + init_aux::REALM],
         &accounts[aux + init_aux::PROFILE],
@@ -387,7 +464,7 @@ pub(super) fn process_initialize(
     let liabilities = value.liabilities;
     let resolution = authenticate_resolution_v5(program_id, &accounts[RESOLUTION], liabilities)?;
     require(
-        binding.market_instance_id == liabilities.market_binding.base().market_instance_v2_id
+        binding.market_instance_id == liabilities.market_binding.base().base().market_instance_v2_id
             && binding.generation == intent.domain_generation
             && binding.generation == resolution.resolution.facts.generation
             && binding.resolution_account_id.bytes() == accounts[RESOLUTION].key.to_bytes()
@@ -397,7 +474,7 @@ pub(super) fn process_initialize(
             && binding.outcome_count == liabilities.claim_ledger.outcome_count,
         ClutchError::MismatchedState,
     )?;
-    let root = authenticate_market_lifecycle_root_v2(
+    let root = authenticate_market_lifecycle_root_v3(
         program_id,
         &accounts[ROOT],
         binding.market_instance_id,
@@ -405,12 +482,14 @@ pub(super) fn process_initialize(
         true,
         &mut root_before,
     )?;
-    let (schedule, series_plan_id, funding_terms_id, compiler_bundle_id) =
+    let mut link_body = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    let (schedule, series_plan_id, funding_terms_id, compiler_bundle_id, link) =
         authenticate_schedule_and_series(
             program_id,
-            root,
+            &root,
             &accounts[aux + init_aux::FOUNDER_LINK],
             &accounts[aux + init_aux::FUNDING_QUOTE],
+            &mut link_body,
         )?;
     let graph = build_graph(
         accounts,
@@ -425,19 +504,19 @@ pub(super) fn process_initialize(
             == binding.foundation_account_graph_id,
         ClutchError::MismatchedState,
     )?;
-    let policy_funding = authenticate_market_foundation_preallocation_v3(
-        root,
+    let policy_funding = authenticate_fractional_foundation_preallocation_v4(
+        &root,
         &accounts[POLICY],
         &schedule,
         &graph,
-        MarketFoundationSlotV3::FractionalPolicy,
+        MarketFoundationSlotV4::FractionalPolicy,
     )?;
-    let ledger_funding = authenticate_market_foundation_preallocation_v3(
-        root,
+    let ledger_funding = authenticate_fractional_foundation_preallocation_v4(
+        &root,
         &accounts[LEDGER],
         &schedule,
         &graph,
-        MarketFoundationSlotV3::FractionalLedger,
+        MarketFoundationSlotV4::FractionalLedger,
     )?;
     require(
         policy_funding.rent_refund_owner() == ledger_funding.rent_refund_owner()
@@ -449,13 +528,13 @@ pub(super) fn process_initialize(
         ClutchError::MismatchedState,
     )?;
 
-    let registry_account = authenticate_series_registry_account_v3(
+    let registry_account = authenticate_series_registry_account_v4(
         program_id,
         &accounts[aux + init_aux::SERIES_REGISTRY],
         series_plan_id,
         false,
     )?;
-    let registry = authenticate_registry_capability_v4(
+    let registry = authenticate_registry_capability_v5(
         program_id,
         registry_account,
         &accounts[aux + init_aux::PROGRAM],
@@ -612,13 +691,14 @@ pub(super) fn process_initialize(
         &accounts[LEDGER],
         &accounts[CLAIM_LEDGER],
     )?;
-    let mut product_before = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
-    let mut product_successor = Box::new(MarketLifecycleRootV2::decode_buffer());
-    let mut product_after = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
+    let mut product_before = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let mut product_successor = Box::new(MarketLifecycleRootV3::decode_buffer());
+    let mut product_after = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
     let accepted = consume_fractional_family_admission_postwrite_v2(
         program_id,
         &accounts[ROOT],
         postwrite,
+        &link,
         &schedule,
         &graph,
         &mut product_before,
@@ -628,15 +708,8 @@ pub(super) fn process_initialize(
     require(accepted.id() != ContentId::ZERO, ClutchError::MismatchedState)
 }
 
-fn set_lamports(account: &AccountInfo<'_>, amount: u64) -> Outcome<()> {
-    let mut value = account
-        .try_borrow_mut_lamports()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    **value = amount;
-    Ok(())
-}
-
-/// Execute action 10, consuming Product terminality before either deletion.
+/// Execute action 10, physically closing Fractional before Product consumes
+/// the sole move-only terminal receipt.
 #[inline(never)]
 pub(super) fn process_close_empty_ledger(
     program_id: &Pubkey,
@@ -651,7 +724,7 @@ pub(super) fn process_close_empty_ledger(
     let graph_count = graph_account_count(outcome_count)?;
     require_outer_contract(accounts, graph_count, TERMINAL_AUX_ACCOUNTS, false)?;
     let aux = graph_count;
-    let value = authenticate_general_market_value_authority_v2(
+    let value = authenticate_general_market_value_authority_v4(
         program_id,
         &accounts[aux + terminal_aux::REALM],
         &accounts[aux + terminal_aux::PROFILE],
@@ -677,7 +750,7 @@ pub(super) fn process_close_empty_ledger(
         ClutchError::AuthorizationUnavailable,
     )?;
     let resolution = authenticate_resolution_v5(program_id, &accounts[RESOLUTION], liabilities)?;
-    let root = authenticate_market_lifecycle_root_v2(
+    let root = authenticate_market_lifecycle_root_v3(
         program_id,
         &accounts[ROOT],
         binding.market_instance_id,
@@ -685,12 +758,14 @@ pub(super) fn process_close_empty_ledger(
         true,
         &mut root_before,
     )?;
-    let (schedule, series_plan_id, funding_terms_id, compiler_bundle_id) =
+    let mut link_body = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    let (schedule, series_plan_id, funding_terms_id, compiler_bundle_id, link) =
         authenticate_schedule_and_series(
             program_id,
-            root,
+            &root,
             &accounts[aux + terminal_aux::FOUNDER_LINK],
             &accounts[aux + terminal_aux::FUNDING_QUOTE],
+            &mut link_body,
         )?;
     let graph = build_graph(
         accounts,
@@ -705,13 +780,13 @@ pub(super) fn process_close_empty_ledger(
             == binding.foundation_account_graph_id,
         ClutchError::MismatchedState,
     )?;
-    let registry_account = authenticate_series_registry_account_v3(
+    let registry_account = authenticate_series_registry_account_v4(
         program_id,
         &accounts[aux + terminal_aux::SERIES_REGISTRY],
         series_plan_id,
         false,
     )?;
-    let registry = authenticate_registry_capability_v4(
+    let registry = authenticate_registry_capability_v5(
         program_id,
         registry_account,
         &accounts[aux + terminal_aux::PROGRAM],
@@ -803,23 +878,8 @@ pub(super) fn process_close_empty_ledger(
         neutral,
     )
     .map_err(map_fractional)?;
-    let policy_funding = close.policy_funding();
-    let ledger_funding = close.ledger_funding();
     let refund = &accounts[aux + terminal_aux::REFUND_OWNER];
     let sink = &accounts[aux + terminal_aux::NEUTRAL_SINK];
-    require(
-        refund.key.to_bytes() == policy_funding.payer().bytes()
-            && refund.key.to_bytes() == ledger_funding.payer().bytes()
-            && sink.key.to_bytes() == policy_funding.neutral_sink().bytes()
-            && sink.key.to_bytes() == ledger_funding.neutral_sink().bytes()
-            && refund.owner == &SYSTEM_PROGRAM_ID
-            && sink.owner == &SYSTEM_PROGRAM_ID
-            && refund.data_is_empty()
-            && sink.data_is_empty()
-            && !refund.executable
-            && !sink.executable,
-        ClutchError::MismatchedState,
-    )?;
     close
         .claim_ledger_after()
         .claim_ledger_after()
@@ -838,70 +898,35 @@ pub(super) fn process_close_empty_ledger(
         &accounts[LEDGER],
         &accounts[CLAIM_LEDGER],
     )?;
-    let mut product_before = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
-    let mut product_successor = Box::new(MarketLifecycleRootV2::decode_buffer());
-    let mut product_after = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
+    let prepared = prepare_fractional_family_physical_terminal_v2(
+        postwrite,
+        &accounts[POLICY],
+        &accounts[LEDGER],
+        refund,
+        sink,
+    )?;
+    let physical = execute_fractional_family_physical_terminal_v2(
+        prepared,
+        &accounts[POLICY],
+        &accounts[LEDGER],
+        refund,
+        sink,
+    )?;
+    let mut product_before = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let mut product_successor = Box::new(MarketLifecycleRootV3::decode_buffer());
+    let mut product_after = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
     let accepted = consume_fractional_family_terminal_postwrite_v2(
         program_id,
         &accounts[ROOT],
-        postwrite,
+        physical,
+        &link,
         &schedule,
         &graph,
         &mut product_before,
         &mut product_successor,
         &mut product_after,
     )?;
-    require(accepted.id() != ContentId::ZERO, ClutchError::MismatchedState)?;
-
-    let refund_amount = policy_funding
-        .payer_refund_lamports()
-        .checked_add(ledger_funding.payer_refund_lamports())
-        .ok_or(ClutchError::Arithmetic)?;
-    let neutral_amount = policy_funding
-        .neutral_lamports()
-        .checked_add(ledger_funding.neutral_lamports())
-        .ok_or(ClutchError::Arithmetic)?;
-    let refund_after = refund
-        .lamports()
-        .checked_add(refund_amount)
-        .ok_or(ClutchError::Arithmetic)?;
-    let sink_after = sink
-        .lamports()
-        .checked_add(neutral_amount)
-        .ok_or(ClutchError::Arithmetic)?;
-    require(
-        refund_amount
-            .checked_add(neutral_amount)
-            .ok_or(ClutchError::Arithmetic)?
-            == accounts[POLICY]
-                .lamports()
-                .checked_add(accounts[LEDGER].lamports())
-                .ok_or(ClutchError::Arithmetic)?,
-        ClutchError::MismatchedState,
-    )?;
-    set_lamports(&accounts[POLICY], 0)?;
-    set_lamports(&accounts[LEDGER], 0)?;
-    set_lamports(refund, refund_after)?;
-    set_lamports(sink, sink_after)?;
-    accounts[POLICY]
-        .resize(0)
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
-    accounts[POLICY].assign(&SYSTEM_PROGRAM_ID);
-    accounts[LEDGER]
-        .resize(0)
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
-    accounts[LEDGER].assign(&SYSTEM_PROGRAM_ID);
-    require(
-        accounts[POLICY].lamports() == 0
-            && accounts[LEDGER].lamports() == 0
-            && accounts[POLICY].data_is_empty()
-            && accounts[LEDGER].data_is_empty()
-            && accounts[POLICY].owner == &SYSTEM_PROGRAM_ID
-            && accounts[LEDGER].owner == &SYSTEM_PROGRAM_ID
-            && refund.lamports() == refund_after
-            && sink.lamports() == sink_after,
-        ClutchError::MismatchedState,
-    )
+    require(accepted.id() != ContentId::ZERO, ClutchError::MismatchedState)
 }
 
 #[cfg(test)]
@@ -955,5 +980,23 @@ mod adversarial_tests {
             graph + terminal_aux::COLLATERAL_TOKEN_PROGRAMDATA,
             graph + terminal_aux::CLAIM_TOKEN_PROGRAM,
         ));
+    }
+
+    #[test]
+    fn action_ten_closes_fractional_accounts_before_product_consumption() {
+        let source = include_str!("fractional_lifecycle.rs");
+        let start = source
+            .find("pub(super) fn process_close_empty_ledger")
+            .expect("action-10 handler");
+        let body = &source[start..];
+        let physical_close = body
+            .find("execute_fractional_family_physical_terminal_v2(")
+            .expect("physical terminal execution");
+        let product_consume = body
+            .find("consume_fractional_family_terminal_postwrite_v2(")
+            .expect("Product terminal consumption");
+        assert!(physical_close < product_consume);
+        assert!(body.contains("prepare_fractional_family_physical_terminal_v2("));
+        assert!(!body[..product_consume].contains("accepted.id()"));
     }
 }

@@ -23,6 +23,10 @@ use crate::instructions::product_market_foundation_current::{
     AuthenticatedProductMarketFoundationStepPostwriteV3,
     AuthenticatedProductMarketFounderCurrentCreationV3,
 };
+use crate::instructions::product_market_lifecycle_v3_current::{
+    authenticate_market_lifecycle_root_v3, AuthenticatedMarketLifecycleRootV3,
+    AuthenticatedSeriesMarketLinkV3,
+};
 use crate::instructions::product_series::physical_v4::AuthenticatedSeriesPhysicalFounderV4;
 use crate::instructions::product_artifact::{
     authenticate_product_artifact_v1, authenticate_registry_capability_for_registration_v3,
@@ -59,10 +63,12 @@ use clutch_product_series::{
     AuthenticatedMarketFoundationAccountGraphBytesV3, CompiledProductSeriesBundleV6, ContentId,
     FixedCodec,
     MarketFoundationAccountGraphV3, MarketFoundationScheduleV3, MarketFoundationSlotV3,
+    MarketFoundationAccountGraphV4, MarketFoundationScheduleV4, MarketFoundationSlotV4,
     MarketInstancePreimageV2, MarketInstanceV2Id,
     AuthenticatedMarketFamilyAuthorityV1, MarketFamilyAggregatorV1, MarketFamilyStatusV1,
     MarketFamilyV1,
     MarketLifecyclePhaseV2, MarketLifecycleRootV2, MarketResolutionActivationV2,
+    MarketLifecyclePhaseV3, MarketLifecycleRootV3,
     AuthenticatedSeriesFundingAuthorityV4, SeriesFundingCompletionAuthorizationV4,
     SeriesFundingCompletionAuthorizationV4Id, SeriesFundingCompletionBindingV4,
     SeriesFundingCompletionBindingV4Id, SeriesFundingReservationBindingV4,
@@ -75,18 +81,20 @@ use clutch_product_series::{
     SeriesLinkObligationDispositionV2, SeriesLinkObligationStatusV2,
     SeriesLinkObligationTerminalProjectionV2, SeriesLinkObligationV2,
     SeriesMarketAdmissionProjectionV2, SeriesMarketDispositionV1,
-    SeriesMarketLinkPhaseV2, SeriesMarketLinkV2,
+    SeriesMarketLinkPhaseV2, SeriesMarketLinkPhaseV3, SeriesMarketLinkV2,
     SeriesMarketLinkV2Id, SeriesPlanV5, SeriesPlanV5Id, SourceOccurrenceV1Id,
     SERIES_FUNDING_COMPONENT_COUNT_V2,
 };
 use clutch_solana_layout::product_series::{
     series_market_link_authentication_id_v2, MarketLifecycleRootAccountV2,
+    MarketLifecycleRootAccountV3,
     SeriesFundingAccountV4, SeriesFundingAccountV5, SeriesLifecycleReplayAccountV2,
     SeriesMarketLinkAccountV2,
     SeriesRegistryAccountV3, SeriesRegistryAccountV4, MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V2,
     SERIES_FUNDING_ACCOUNT_BYTES_V4, SERIES_FUNDING_ACCOUNT_BYTES_V5,
     SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2,
-    SERIES_MARKET_LINK_ACCOUNT_BYTES_V2, SERIES_REGISTRY_ACCOUNT_BYTES_V3,
+    SERIES_MARKET_LINK_ACCOUNT_BYTES_V2, SERIES_MARKET_LINK_ACCOUNT_BYTES_V3,
+    SERIES_REGISTRY_ACCOUNT_BYTES_V3,
     SERIES_REGISTRY_ACCOUNT_BYTES_V4,
 };
 use solana_account_info::AccountInfo;
@@ -795,6 +803,7 @@ impl<'state> AuthenticatedMarketLifecycleRootV2<'state> {
     pub(crate) const fn data_id(self) -> ContentId { self.data_id }
     pub(crate) const fn authentication_id(self) -> ContentId { self.authentication_id }
 }
+
 
 /// Exact current per-Series 0xad/version2 link authentication.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2274,19 +2283,20 @@ impl AuthenticatedMarketFamilyAuthorityV1 for ExactFractionalFamilyAuthorityV2 {
 }
 
 /// Consume the exact current a4/a5/ClaimLedger postwrite and admit Fractional
-/// in RootV2. No raw root successor or caller-shaped family receipt is exposed.
+/// in RootV3. No raw root successor or caller-shaped family receipt is exposed.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn consume_fractional_family_admission_postwrite_v2<'next, A>(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
-    authenticated: AuthenticatedMarketLifecycleRootV2<'_>,
+    authenticated: AuthenticatedMarketLifecycleRootV3<'_>,
+    link: &AuthenticatedSeriesMarketLinkV3<'_>,
     owner: &A,
-    schedule: &MarketFoundationScheduleV3,
-    graph: &MarketFoundationAccountGraphV3,
-    successor_output: &mut MarketLifecycleRootV2,
-    rebound_output: &'next mut MarketLifecycleRootAccountV2,
+    schedule: &MarketFoundationScheduleV4,
+    graph: &MarketFoundationAccountGraphV4,
+    successor_output: &mut MarketLifecycleRootV3,
+    rebound_output: &'next mut MarketLifecycleRootAccountV3,
 ) -> Outcome<(
-    AuthenticatedMarketLifecycleRootV2<'next>,
+    AuthenticatedMarketLifecycleRootV3<'next>,
     AuthenticatedProductFractionalFamilyAdmissionV2,
 )>
 where
@@ -2301,13 +2311,13 @@ where
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let graph_id = graph.id(schedule)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let policy_account = graph.account(MarketFoundationSlotV3::FractionalPolicy)
+    let policy_account = graph.account(MarketFoundationSlotV4::FractionalPolicy)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let ledger_account = graph.account(MarketFoundationSlotV3::FractionalLedger)
+    let ledger_account = graph.account(MarketFoundationSlotV4::FractionalLedger)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let claim_ledger_account = graph.account(MarketFoundationSlotV3::ClaimLedger)
+    let claim_ledger_account = graph.account(MarketFoundationSlotV4::ClaimLedger)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let resolution_account = graph.account(MarketFoundationSlotV3::ResolutionV5)
+    let resolution_account = graph.account(MarketFoundationSlotV4::ResolutionV5)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let admission_receipt_id = owner.admission_receipt_id()?;
     let verification_id = owner.verification_id()?;
@@ -2323,8 +2333,17 @@ where
         current.resolution_data_id(), current.resolution_activation_receipt_id()] {
         require_live(id)?;
     }
+    let link_binding = link.binding();
     require(authenticated.is_writable() && root_account.is_writable
-        && current.phase() == MarketLifecyclePhaseV2::Active
+        && link.owner_program() == *program_id
+        && link.semantic_id() == current.capital().founder_link_id
+        && link.state().phase() == SeriesMarketLinkPhaseV3::Active
+        && link_binding.market_root_account_id.bytes() == root_account.key.to_bytes()
+        && link_binding.market_instance_id == binding.market_instance_id
+        && link_binding.generation == binding.generation
+        && link_binding.rent_refund_owner == current.capital().rent_refund_owner
+        && link_binding.neutral_lamport_sink == current.capital().neutral_lamport_sink
+        && current.phase() == MarketLifecyclePhaseV3::Active
         && binding.foundation_schedule_id == schedule_id
         && binding.foundation_account_graph_id == graph_id
         && graph.market_instance_id == binding.market_instance_id
@@ -2365,8 +2384,8 @@ where
         &authority, MarketFamilyV1::Fractional, sequence, admission_receipt_id,
         successor_output)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let rebound = write_market_lifecycle_root_v2(
-        program_id, root_account, authenticated, successor_output, rebound_output)?;
+    let rebound = write_market_lifecycle_root_v3(
+        program_id, root_account, &authenticated, successor_output, rebound_output)?;
     let semantic_after = rebound.state().semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let after = rebound.state().product_families().family(MarketFamilyV1::Fractional);
@@ -2383,7 +2402,8 @@ where
         &ledger_state_id.bytes(), &claim_ledger_before_id.bytes(),
         &claim_ledger_after_id.bytes(), &claim_ledger_latch_transition_id.bytes(),
         &binding.market_instance_id.bytes(), &binding.generation.to_le_bytes(),
-        &schedule_id.bytes(), &graph_id.bytes(),
+        &schedule_id.bytes(), &graph_id.bytes(), link.account().as_ref(),
+        &link.authentication_id().bytes(),
     ]);
     require_live(id)?;
     Ok((rebound, AuthenticatedProductFractionalFamilyAdmissionV2 {
@@ -2395,20 +2415,21 @@ where
     }))
 }
 
-/// Consume the exact current a4/a5/ClaimLedger terminal postwrite and latch the
-/// Fractional terminal states in RootV2 before any family rent is disposed.
+/// Consume the exact move-only physical a4/a5 terminal receipt and latch its
+/// terminal states in RootV3 only after the family rent has been disposed.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn consume_fractional_family_terminal_postwrite_v2<'next, A>(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
-    authenticated: AuthenticatedMarketLifecycleRootV2<'_>,
+    authenticated: AuthenticatedMarketLifecycleRootV3<'_>,
+    link: &AuthenticatedSeriesMarketLinkV3<'_>,
     owner: &A,
-    schedule: &MarketFoundationScheduleV3,
-    graph: &MarketFoundationAccountGraphV3,
-    successor_output: &mut MarketLifecycleRootV2,
-    rebound_output: &'next mut MarketLifecycleRootAccountV2,
+    schedule: &MarketFoundationScheduleV4,
+    graph: &MarketFoundationAccountGraphV4,
+    successor_output: &mut MarketLifecycleRootV3,
+    rebound_output: &'next mut MarketLifecycleRootAccountV3,
 ) -> Outcome<(
-    AuthenticatedMarketLifecycleRootV2<'next>,
+    AuthenticatedMarketLifecycleRootV3<'next>,
     AuthenticatedProductFractionalFamilyTerminalV2,
 )>
 where
@@ -2423,13 +2444,13 @@ where
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let graph_id = graph.id(schedule)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let policy_account = graph.account(MarketFoundationSlotV3::FractionalPolicy)
+    let policy_account = graph.account(MarketFoundationSlotV4::FractionalPolicy)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let ledger_account = graph.account(MarketFoundationSlotV3::FractionalLedger)
+    let ledger_account = graph.account(MarketFoundationSlotV4::FractionalLedger)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let claim_ledger_account = graph.account(MarketFoundationSlotV3::ClaimLedger)
+    let claim_ledger_account = graph.account(MarketFoundationSlotV4::ClaimLedger)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let resolution_account = graph.account(MarketFoundationSlotV3::ResolutionV5)
+    let resolution_account = graph.account(MarketFoundationSlotV4::ResolutionV5)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let terminal_receipt_id = owner.terminal_receipt_id()?;
     let verification_id = owner.verification_id()?;
@@ -2448,8 +2469,20 @@ where
         current.resolution_activation_receipt_id()] {
         require_live(id)?;
     }
+    let link_binding = link.binding();
     require(authenticated.is_writable() && root_account.is_writable
-        && matches!(current.phase(), MarketLifecyclePhaseV2::Active | MarketLifecyclePhaseV2::Retiring)
+        && link.owner_program() == *program_id
+        && link.semantic_id() == current.capital().founder_link_id
+        && matches!(
+            link.state().phase(),
+            SeriesMarketLinkPhaseV3::Active | SeriesMarketLinkPhaseV3::Retiring
+        )
+        && link_binding.market_root_account_id.bytes() == root_account.key.to_bytes()
+        && link_binding.market_instance_id == binding.market_instance_id
+        && link_binding.generation == binding.generation
+        && link_binding.rent_refund_owner == current.capital().rent_refund_owner
+        && link_binding.neutral_lamport_sink == current.capital().neutral_lamport_sink
+        && matches!(current.phase(), MarketLifecyclePhaseV3::Active | MarketLifecyclePhaseV3::Retiring)
         && binding.foundation_schedule_id == schedule_id
         && binding.foundation_account_graph_id == graph_id
         && graph.market_instance_id == binding.market_instance_id
@@ -2493,8 +2526,8 @@ where
         &authority, sequence, terminal_receipt_id,
         policy_terminal_state_id, ledger_terminal_state_id, successor_output)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let rebound = write_market_lifecycle_root_v2(
-        program_id, root_account, authenticated, successor_output, rebound_output)?;
+    let rebound = write_market_lifecycle_root_v3(
+        program_id, root_account, &authenticated, successor_output, rebound_output)?;
     let semantic_after = rebound.state().semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let after = rebound.state().product_families().family(MarketFamilyV1::Fractional);
@@ -2511,7 +2544,8 @@ where
         &claim_ledger_transition_id.bytes(), &fractional_release_id.bytes(),
         &claim_release_receipt_id.bytes(), &rent_disposition_id.bytes(),
         &binding.market_instance_id.bytes(), &binding.generation.to_le_bytes(),
-        &schedule_id.bytes(), &graph_id.bytes(),
+        &schedule_id.bytes(), &graph_id.bytes(), link.account().as_ref(),
+        &link.authentication_id().bytes(),
     ]);
     require_live(id)?;
     Ok((rebound, AuthenticatedProductFractionalFamilyTerminalV2 {
@@ -3850,6 +3884,45 @@ pub(crate) fn authenticate_market_lifecycle_root_v2<'state>(
     Ok(AuthenticatedMarketLifecycleRootV2 { account: *account.key, owner_program: *program_id,
         value: output, observed_lamports, writable: account.is_writable, data_id,
         authentication_id })
+}
+
+
+fn write_market_lifecycle_root_v3<'next>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    authenticated: &AuthenticatedMarketLifecycleRootV3<'_>,
+    successor: &MarketLifecycleRootV3,
+    rebound_output: &'next mut MarketLifecycleRootAccountV3,
+) -> Outcome<AuthenticatedMarketLifecycleRootV3<'next>> {
+    let binding = authenticated.state().binding_ref();
+    require(account.is_writable && *account.key == authenticated.account()
+        && account.owner == program_id && successor.binding_ref() == binding,
+        ClutchError::MismatchedState)?;
+    let live = authenticate_market_lifecycle_root_v3(
+        program_id, account, binding.market_instance_id, binding.generation, true,
+        rebound_output)?;
+    require(live.account() == authenticated.account()
+        && live.owner_program() == authenticated.owner_program()
+        && live.value() == authenticated.value()
+        && live.observed_lamports() == authenticated.observed_lamports()
+        && live.data_id() == authenticated.data_id()
+        && live.authentication_id() == authenticated.authentication_id(),
+        ClutchError::MismatchedState)?;
+    let rent_principal_lamports = authenticated.value().rent_principal_lamports;
+    let stored_bump = authenticated.value().stored_bump;
+    let mut data = account.try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    MarketLifecycleRootAccountV3::encode_parts(
+        successor, rent_principal_lamports, stored_bump, &mut data)?;
+    drop(data);
+    let rebound = authenticate_market_lifecycle_root_v3(
+        program_id, account, binding.market_instance_id, binding.generation, true,
+        rebound_output)?;
+    require(rebound.state() == successor
+        && rebound.value().rent_principal_lamports == rent_principal_lamports
+        && rebound.value().stored_bump == stored_bump,
+        ClutchError::MismatchedState)?;
+    Ok(rebound)
 }
 
 #[allow(clippy::too_many_arguments)]

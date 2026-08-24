@@ -440,14 +440,14 @@ pub struct FractionalAccountContractV1 {
 /// Return the frozen account-count and mutability contract for one action.
 ///
 /// Account-role names and order are documented in the crate README. Concrete
-/// handlers exist for every action, but all ten central capability tuples stay
-/// disabled pending one whole-family release review.
+/// handlers and the checked current release expose all ten actions through one
+/// exact account/privilege contract.
 pub const fn fractional_account_contract_v1(
     action: FractionalRedemptionActionV1,
 ) -> FractionalAccountContractV1 {
     match action {
         FractionalRedemptionActionV1::Initialize => FractionalAccountContractV1 {
-            account_count: 32,
+            account_count: 35,
             foundation_core_accounts: 15,
             foundation_aux_accounts: 17,
             foundation_outcome_pair_suffix: true,
@@ -455,7 +455,7 @@ pub const fn fractional_account_contract_v1(
             writable_mask: (1 << 0) | (1 << 4) | (1 << 11) | (1 << 12),
             signer_mask: 0,
             outcome_mint_suffix: false,
-            post_mint_accounts: 0,
+            post_mint_accounts: 3,
             credit_creation_suffix: false,
             external_payout_extra_accounts: 0,
             external_writable_mask: (1 << 0) | (1 << 4) | (1 << 11) | (1 << 12),
@@ -596,7 +596,7 @@ pub const fn fractional_account_contract_v1(
             external_writable_mask: 0b1001_0000_0000,
         },
         FractionalRedemptionActionV1::CloseEmptyLedger => FractionalAccountContractV1 {
-            account_count: 32,
+            account_count: 35,
             foundation_core_accounts: 15,
             foundation_aux_accounts: 17,
             foundation_outcome_pair_suffix: true,
@@ -604,7 +604,7 @@ pub const fn fractional_account_contract_v1(
             writable_mask: (1 << 0) | (1 << 4) | (1 << 11) | (1 << 12),
             signer_mask: 0,
             outcome_mint_suffix: false,
-            post_mint_accounts: 0,
+            post_mint_accounts: 3,
             credit_creation_suffix: false,
             external_payout_extra_accounts: 0,
             external_writable_mask: (1 << 0) | (1 << 4) | (1 << 11) | (1 << 12),

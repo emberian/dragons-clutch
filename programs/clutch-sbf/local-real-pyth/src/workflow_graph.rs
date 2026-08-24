@@ -62,6 +62,7 @@ use clutch_source_plane_v3_runtime::{
     SourceWorkScheduleBindingV1,
 };
 use clutch_structured_claim_runtime_contract::StructuredClaimActionV1;
+use clutch_fractional_redemption_runtime::FractionalRedemptionActionV1;
 use solana_address::Address;
 use solana_instruction::AccountMeta;
 use sha2::{Digest, Sha256};
@@ -460,6 +461,8 @@ pub enum WorkflowLane {
     /// Exact current Structured lifecycle actions derived from one finalized
     /// semantic-owner account frame rather than a generic keeper hint.
     StructuredLifecycle,
+    /// Exact chain-derived Fractional redemption lifecycle.
+    FractionalRedemption,
 }
 
 /// Deterministic cursor position derived from canonical account progress.
@@ -944,6 +947,7 @@ pub enum CanonicalActionCoordinate {
     },
     Series(RecurringSeriesAction),
     StructuredClaim(StructuredClaimActionV1),
+    FractionalRedemption(FractionalRedemptionActionV1),
     DealerFacility {
         action: clutch_solana_layout::registry::DealerFacilityAction,
         payload_discriminator: u8,
@@ -2390,6 +2394,10 @@ fn construct(
             )
         }
         CanonicalActionCoordinate::StructuredClaim(action) => {
+            let _ = action;
+            return Err(WorkflowGraphError::InvalidCanonicalPayload);
+        }
+        CanonicalActionCoordinate::FractionalRedemption(action) => {
             let _ = action;
             return Err(WorkflowGraphError::InvalidCanonicalPayload);
         }

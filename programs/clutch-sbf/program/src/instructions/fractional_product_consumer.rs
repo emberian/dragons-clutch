@@ -14,20 +14,22 @@ use clutch_fractional_redemption_runtime::{
     FractionalRedemptionActionV1,
 };
 use clutch_product_series::{
-    ContentId, MarketFoundationAccountGraphV3, MarketFoundationScheduleV3,
-    MarketInstanceV2Id, MarketLifecycleRootV2,
+    ContentId, MarketFoundationAccountGraphV4, MarketFoundationScheduleV4,
+    MarketInstanceV2Id, MarketLifecycleRootV3,
 };
 use clutch_retirement::Identity32V1;
-use clutch_solana_layout::product_series::MarketLifecycleRootAccountV2;
+use clutch_solana_layout::product_series::MarketLifecycleRootAccountV3;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 use super::fractional_redemption::{
     AuthenticatedFractionalFamilyAdmissionPostwriteV1,
-    AuthenticatedFractionalFamilyTerminalPostwriteV1,
+    AuthenticatedFractionalFamilyPhysicalTerminalV2,
+};
+use super::product_market_lifecycle_v3_current::{
+    authenticate_market_lifecycle_root_v3, AuthenticatedSeriesMarketLinkV3,
 };
 use super::product_series_current::{
-    authenticate_market_lifecycle_root_v2,
     consume_fractional_family_admission_postwrite_v2,
     consume_fractional_family_terminal_postwrite_v2,
     AuthenticatedProductFractionalFamilyAdmissionOwnerV2,
@@ -156,26 +158,26 @@ impl AuthenticatedProductFractionalFamilyAdmissionOwnerV2 for FractionalAdmissio
 }
 
 struct FractionalTerminalOwnerV2 {
-    postwrite: AuthenticatedFractionalFamilyTerminalPostwriteV1,
+    terminal: AuthenticatedFractionalFamilyPhysicalTerminalV2,
 }
 
 impl FractionalTerminalOwnerV2 {
     const fn terminal(&self) -> FractionalFamilyTerminalReceiptV1 {
-        self.postwrite.family_terminal()
+        self.terminal.family_terminal()
     }
 }
 
 impl AuthenticatedProductFractionalFamilyTerminalOwnerV2 for FractionalTerminalOwnerV2 {
     fn terminal_receipt_id(&self) -> Outcome<ContentId> {
-        Ok(content(self.terminal().receipt_id()))
+        Ok(self.terminal.id())
     }
 
     fn verification_id(&self) -> Outcome<ContentId> {
-        Ok(content(self.postwrite.verification_id()))
+        Ok(content(self.terminal.verification_id()))
     }
 
     fn postwrite_authentication_id(&self) -> Outcome<ContentId> {
-        Ok(content(self.postwrite.authentication_id()))
+        Ok(content(self.terminal.postwrite_authentication_id()))
     }
 
     fn policy_terminal_state_id(&self) -> Outcome<ContentId> {
@@ -199,7 +201,7 @@ impl AuthenticatedProductFractionalFamilyTerminalOwnerV2 for FractionalTerminalO
     }
 
     fn claim_release_receipt_id(&self) -> Outcome<ContentId> {
-        Ok(content(self.postwrite.claim_release_receipt_id()))
+        Ok(content(self.terminal.claim_release_receipt_id()))
     }
 
     fn rent_disposition_id(&self) -> Outcome<ContentId> {
@@ -231,7 +233,7 @@ impl AuthenticatedProductFractionalFamilyTerminalOwnerV2 for FractionalTerminalO
         postwrite_authentication_id: ContentId,
     ) -> Outcome<()> {
         let terminal = self.terminal();
-        let release = self.postwrite.runtime_release();
+        let release = self.terminal.runtime_release();
         require_terminal_registry_identity(
             release.action(),
             content(release.release_id()),
@@ -250,15 +252,16 @@ impl AuthenticatedProductFractionalFamilyTerminalOwnerV2 for FractionalTerminalO
                 && claim_ledger_post_state_id == content(terminal.claim_ledger_post_state_id())
                 && claim_ledger_transition_id == content(terminal.claim_ledger_transition_id())
                 && fractional_release_id == content(terminal.fractional_release_id())
-                && claim_release_receipt_id == content(self.postwrite.claim_release_receipt_id())
+                && claim_release_receipt_id == content(self.terminal.claim_release_receipt_id())
                 && rent_disposition_id == content(terminal.rent_disposition_id())
-                && resolution_account == pubkey(self.postwrite.resolution_account())
-                && resolution_semantic_id == content(self.postwrite.resolution_semantic_id())
-                && resolution_data_id == content(self.postwrite.resolution_data_id())
-                && native_claim_basis_id == content(self.postwrite.native_claim_basis_id())
-                && terminal_receipt_id == content(terminal.receipt_id())
-                && verification_id == content(self.postwrite.verification_id())
-                && postwrite_authentication_id == content(self.postwrite.authentication_id()),
+                && resolution_account == pubkey(self.terminal.resolution_account())
+                && resolution_semantic_id == content(self.terminal.resolution_semantic_id())
+                && resolution_data_id == content(self.terminal.resolution_data_id())
+                && native_claim_basis_id == content(self.terminal.native_claim_basis_id())
+                && terminal_receipt_id == self.terminal.id()
+                && verification_id == content(self.terminal.verification_id())
+                && postwrite_authentication_id
+                    == content(self.terminal.postwrite_authentication_id()),
             ClutchError::MismatchedState,
         )
     }
@@ -270,14 +273,15 @@ pub(crate) fn consume_fractional_admission_v2(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
     postwrite: AuthenticatedFractionalFamilyAdmissionPostwriteV1,
-    schedule: &MarketFoundationScheduleV3,
-    graph: &MarketFoundationAccountGraphV3,
-    root_before_output: &mut MarketLifecycleRootAccountV2,
-    root_successor_output: &mut MarketLifecycleRootV2,
-    root_after_output: &mut MarketLifecycleRootAccountV2,
+    link: &AuthenticatedSeriesMarketLinkV3<'_>,
+    schedule: &MarketFoundationScheduleV4,
+    graph: &MarketFoundationAccountGraphV4,
+    root_before_output: &mut MarketLifecycleRootAccountV3,
+    root_successor_output: &mut MarketLifecycleRootV3,
+    root_after_output: &mut MarketLifecycleRootAccountV3,
 ) -> Outcome<AuthenticatedProductFractionalFamilyAdmissionV2> {
     let admission = postwrite.family_admission();
-    let root = authenticate_market_lifecycle_root_v2(
+    let root = authenticate_market_lifecycle_root_v3(
         program_id,
         root_account,
         MarketInstanceV2Id::from_bytes(admission.market_instance().bytes()),
@@ -290,6 +294,7 @@ pub(crate) fn consume_fractional_admission_v2(
         program_id,
         root_account,
         root,
+        link,
         &owner,
         schedule,
         graph,
@@ -334,34 +339,46 @@ mod hostile_contract_tests {
         )
         .is_err());
     }
+
+    #[test]
+    fn product_terminal_authority_uses_the_physical_close_receipt() {
+        let source = include_str!("fractional_product_consumer.rs");
+        assert!(source.contains("fn terminal_receipt_id(&self) -> Outcome<ContentId> {\n        Ok(self.terminal.id())"));
+        assert!(source.contains("terminal_receipt_id == self.terminal.id()"));
+        assert!(!source.contains(
+            "fn terminal_receipt_id(&self) -> Outcome<ContentId> {\n        Ok(content(self.terminal().receipt_id()))"
+        ));
+    }
 }
 
-/// Consume one exact action-10 postwrite before a4/v3 and a5/v1 deletion.
+/// Consume the move-only action-10 receipt after physical a4/v3 and a5/v1 close.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn consume_fractional_terminal_v2(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
-    postwrite: AuthenticatedFractionalFamilyTerminalPostwriteV1,
-    schedule: &MarketFoundationScheduleV3,
-    graph: &MarketFoundationAccountGraphV3,
-    root_before_output: &mut MarketLifecycleRootAccountV2,
-    root_successor_output: &mut MarketLifecycleRootV2,
-    root_after_output: &mut MarketLifecycleRootAccountV2,
+    terminal: AuthenticatedFractionalFamilyPhysicalTerminalV2,
+    link: &AuthenticatedSeriesMarketLinkV3<'_>,
+    schedule: &MarketFoundationScheduleV4,
+    graph: &MarketFoundationAccountGraphV4,
+    root_before_output: &mut MarketLifecycleRootAccountV3,
+    root_successor_output: &mut MarketLifecycleRootV3,
+    root_after_output: &mut MarketLifecycleRootAccountV3,
 ) -> Outcome<AuthenticatedProductFractionalFamilyTerminalV2> {
-    let terminal = postwrite.family_terminal();
-    let root = authenticate_market_lifecycle_root_v2(
+    let family_terminal = terminal.family_terminal();
+    let root = authenticate_market_lifecycle_root_v3(
         program_id,
         root_account,
-        MarketInstanceV2Id::from_bytes(terminal.market_instance_id().bytes()),
-        terminal.domain_generation(),
+        MarketInstanceV2Id::from_bytes(family_terminal.market_instance_id().bytes()),
+        family_terminal.domain_generation(),
         true,
         root_before_output,
     )?;
-    let owner = FractionalTerminalOwnerV2 { postwrite };
+    let owner = FractionalTerminalOwnerV2 { terminal };
     let (_, accepted) = consume_fractional_family_terminal_postwrite_v2(
         program_id,
         root_account,
         root,
+        link,
         &owner,
         schedule,
         graph,
