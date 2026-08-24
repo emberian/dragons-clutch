@@ -21,7 +21,7 @@ use solana_pubkey::Pubkey;
 
 use super::revenue_policy_v2::{
     derive_revenue_market_treasury_v1, AuthenticatedRevenuePolicyRecordV2,
-    RevenueMarketTreasuryDerivationV1,
+    AuthenticatedTreasuryMarketFactsV1, RevenueMarketTreasuryDerivationV1,
 };
 
 const GENERAL_CURRENT_FOUNDING_JOIN_DOMAIN_V4: &[u8] =
@@ -42,7 +42,9 @@ impl Sha256BackendV1 for RuntimeSha256 {
 /// LinkV2, BundleV6, QuoteV5, AttachmentV5, ScheduleV3, GraphV3, collateral
 /// founding, and General-policy evidence.  The default authentication method
 /// refuses, so getters alone never confer authority.
-pub(crate) trait AuthenticatedCurrentProductGeneralFoundingV4 {
+pub(crate) trait AuthenticatedCurrentProductGeneralFoundingV4:
+    AuthenticatedTreasuryMarketFactsV1
+{
     fn authenticate_current_product_general_founding_v4(
         &self,
         _program_id: &Pubkey,
