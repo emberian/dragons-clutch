@@ -1147,10 +1147,12 @@ impl OwnedInstructionDraft {
                     let mask = 1_u32
                         .checked_shl(u32::try_from(index).map_err(|_| ConstructionError::InvalidAccountContract)?)
                         .ok_or(ConstructionError::InvalidAccountContract)?;
-                    if account.is_signer != (contract.signer_mask & mask != 0)
-                        || account.is_writable != (contract.writable_mask & mask != 0)
-                    {
-                        return Err(ConstructionError::InvalidAccountContract);
+                    if action != FractionalRedemptionActionV1::CloseZeroCredit {
+                        if account.is_signer != (contract.signer_mask & mask != 0)
+                            || account.is_writable != (contract.writable_mask & mask != 0)
+                        {
+                            return Err(ConstructionError::InvalidAccountContract);
+                        }
                     }
                     for other in index + 1..self.accounts.len() {
                         let allowed_close_payer_alias = action

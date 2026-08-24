@@ -51,11 +51,13 @@ use clutch_retirement::{
     POSITION_V3_PDA_PREFIX, PURPOSE_REPLAY_V3_PDA_PREFIX,
 };
 use clutch_fractional_redemption_runtime::{
-    FractionalLedgerPhaseV1, FractionalLedgerV1, FractionalPolicyV3,
-    FractionalRedeemIntentV1, FractionalRedemptionActionV1, FractionalTerminalIntentV1,
-    FRACTIONAL_LEDGER_PDA_PREFIX, FRACTIONAL_POLICY_PDA_PREFIX,
+    FractionalCloseCreditIntentV1, FractionalCreditV2, FractionalLedgerPhaseV1,
+    FractionalLedgerV1, FractionalPolicyV3, FractionalRedeemIntentV1,
+    FractionalRedemptionActionV1, FractionalTerminalIntentV1,
+    FRACTIONAL_CREDIT_PDA_PREFIX, FRACTIONAL_LEDGER_PDA_PREFIX, FRACTIONAL_POLICY_PDA_PREFIX,
     FRACTIONAL_REDEMPTION_FAMILY_TAG, FRACTIONAL_REDEMPTION_FAMILY_VERSION,
 };
+use clutch_solana_layout::product_series::MarketLifecycleRootAccountV2;
 use clutch_structured_claim::{ClaimVector, DeploymentBinding};
 use clutch_structured_claim_adapter::{
     canonical_native_claim_id_v1, canonical_series_scoped_wrapper_product_id_v2,
@@ -3004,6 +3006,19 @@ impl<'account> FractionalRedeemInternalExactFrameV1<'account> {
     }
 }
 
+/// Additional finalized accounts needed to close one zero-numerator owner
+/// credit. The claimant, sequences, payer, and neutral sink are decoded from
+/// these owners rather than supplied independently.
+#[derive(Clone, Copy, Debug)]
+pub struct FractionalCloseZeroCreditFrameV1<'account> {
+    pub base: FractionalRedeemInternalExactFrameV1<'account>,
+    pub credit: &'account ObservedRpcAccount,
+    pub payer: &'account ObservedRpcAccount,
+    pub market_root: &'account ObservedRpcAccount,
+    pub neutral_sink: &'account ObservedRpcAccount,
+    pub rent_sysvar: &'account ObservedRpcAccount,
+}
+
 /// Derive the first current Fractional operator action entirely from one
 /// finalized chain frame. The lowest outcome containing one exact common lot
 /// is canonical; callers cannot choose an outcome, amount, payload, role
@@ -3569,6 +3584,339 @@ fn construct_fractional_seal_claims_exhausted_material_v1(
         coordinate,
         variant: None,
         driver_account: frame.fractional_ledger.address,
+        driver_account_slot,
+        cursor,
+        authority_state_sha256,
+        freshness,
+        fee_payer: builder.payer(),
+        account_roles,
+        planned,
+        draft_id,
+    })
+}
+
+/// Derive action `79/1/8` from one live zero credit and its persisted close
+/// funding identities. This constructor requires the transaction payer to be
+/// the stored rent payer so Solana's global payer writability cannot weaken a
+/// read-only role.
+pub fn construct_fractional_close_zero_credit_material_v1(
+    release: &IndexedProgramRelease,
+    collateral_release: AdapterReleaseV2,
+    builder: &ProtocolTransactionBuilder,
+    workflow_id: [u8; 32],
+    freshness: ActionFreshnessBoundaryV1,
+    frame: FractionalCloseZeroCreditFrameV1<'_>,
+) -> Result<CanonicalActionMaterialV1> {
+    use clutch_retirement::Identity32V1;
+
+    release
+        .validate()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    collateral_release
+        .validate()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    freshness.validate()?;
+    let action = FractionalRedemptionActionV1::CloseZeroCredit;
+    let coordinate = CanonicalIntentCoordinate {
+        family_tag: FRACTIONAL_REDEMPTION_FAMILY_TAG,
+        family_version: FRACTIONAL_REDEMPTION_FAMILY_VERSION,
+        local_action: action.tag(),
+    };
+    if workflow_id == [0; 32]
+        || release.enabled_intents.binary_search(&coordinate).is_err()
+        || builder.clutch_program() != release.program_id
+        || builder.clutch_release_sha256() != release.elf_sha256
+        || builder.payer() != frame.payer.address
+    {
+        return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
+    }
+    let base = frame.base.ordered();
+    let cluster = &frame.base.realm.provenance.cluster_key;
+    let extras = [
+        frame.credit,
+        frame.payer,
+        frame.market_root,
+        frame.neutral_sink,
+        frame.rent_sysvar,
+    ];
+    for (index, account) in base.iter().take(12).enumerate() {
+        if account.address == Address::default()
+            || account.provenance.commitment != RpcCommitment::Finalized
+            || account.provenance.slot == 0
+            || account.provenance.slot > freshness.observed_slot
+            || account.provenance.cluster_key != *cluster
+            || account.executable != (index == 3)
+        {
+            return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+        }
+    }
+    for account in extras {
+        if account.address == Address::default()
+            || account.provenance.commitment != RpcCommitment::Finalized
+            || account.provenance.slot == 0
+            || account.provenance.slot > freshness.observed_slot
+            || account.provenance.cluster_key != *cluster
+            || account.executable
+        {
+            return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+        }
+    }
+    for account in [
+        frame.base.realm,
+        frame.base.profile,
+        frame.base.collateral_policy,
+        frame.base.market_binding,
+        frame.base.market_runtime,
+        frame.base.market_instance,
+        frame.base.hoard,
+        frame.base.claim_ledger,
+        frame.base.resolution,
+        frame.base.fractional_policy,
+        frame.base.fractional_ledger,
+        frame.credit,
+        frame.market_root,
+    ] {
+        if account.owner != release.program_id || account.provenance.release_key != release.key() {
+            return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+        }
+    }
+    if !frame.base.collateral_token_program.executable
+        || frame.payer.owner != solana_sdk_ids::system_program::ID
+        || frame.neutral_sink.owner != solana_sdk_ids::system_program::ID
+        || !frame.neutral_sink.data.is_empty()
+        || frame.rent_sysvar.address != solana_sdk_ids::sysvar::rent::ID
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+
+    let realm = RealmAccount::decode(&frame.base.realm.data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let profile = ProfileAccount::decode(&frame.base.profile.data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let collateral_policy = CollateralPolicyV2::decode(&frame.base.collateral_policy.data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let market_binding = MarketBindingV2::decode(&frame.base.market_binding.data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let market_runtime = MarketRuntimeV3AccountV1::decode(&frame.base.market_runtime.data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let market_instance = MarketInstancePreimageV2::decode(&frame.base.market_instance.data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let market_instance_id = market_instance
+        .id()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let hoard = HoardV2::decode(&frame.base.hoard.data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let claim_ledger = ClaimLedgerV3::decode(&frame.base.claim_ledger.data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let resolution = ResolutionV5::decode(&frame.base.resolution.data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let policy = FractionalPolicyV3::decode(&frame.base.fractional_policy.data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let ledger = FractionalLedgerV1::decode(&frame.base.fractional_ledger.data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let credit = FractionalCreditV2::decode(&frame.credit.data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let root = MarketLifecycleRootAccountV2::decode(&frame.market_root.data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let collateral_release_id = collateral_release
+        .id()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    let credit_pda = Address::find_program_address(
+        &[
+            FRACTIONAL_CREDIT_PDA_PREFIX,
+            &frame.base.fractional_policy.address.to_bytes(),
+            &credit.claimant.bytes(),
+        ],
+        &release.program_id,
+    );
+    let root_pda = Address::find_program_address(
+        &[b"dc:market-lifecycle-root:v1", &market_instance_id.bytes()],
+        &release.program_id,
+    );
+    let required_credit_lamports = credit
+        .rent
+        .refundable_live_principal
+        .checked_add(credit.rent.permanent_tombstone_principal)
+        .and_then(|value| value.checked_add(credit.rent.donation_floor))
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let root_binding = root.state.binding_ref();
+    if realm.profile != profile.profile
+        || realm.realm != profile.realm
+        || profile.collateral_policy_id.bytes()
+            != collateral_policy
+                .id()
+                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?
+                .bytes()
+        || collateral_release_id.bytes() != collateral_policy.adapter_release.bytes()
+        || collateral_release.token_program.bytes() != collateral_policy.token_program.bytes()
+        || frame.base.collateral_token_program.address.to_bytes()
+            != collateral_policy.token_program.bytes()
+        || market_binding.base().market.bytes() != frame.base.market_runtime.address.to_bytes()
+        || market_binding.base().market_instance_v2_id.bytes() != market_instance_id.bytes()
+        || market_runtime.market_binding.bytes() != frame.base.market_binding.address.to_bytes()
+        || market_runtime.market_instance_v2_id.bytes() != market_instance_id.bytes()
+        || hoard.market_instance_id.bytes() != market_instance_id.bytes()
+        || claim_ledger.market_instance_id.bytes() != market_instance_id.bytes()
+        || resolution.facts.market_instance_id.bytes() != market_instance_id.bytes()
+        || policy.market_instance.bytes() != market_instance_id.bytes()
+        || ledger.policy_account.bytes() != frame.base.fractional_policy.address.to_bytes()
+        || ledger.claim_ledger_account.bytes() != frame.base.claim_ledger.address.to_bytes()
+        || claim_ledger.fractional_policy_id.bytes()
+            != frame.base.fractional_policy.address.to_bytes()
+        || claim_ledger.fractional_ledger_account.bytes()
+            != frame.base.fractional_ledger.address.to_bytes()
+        || claim_ledger.next_fractional_sequence != ledger.next_sequence
+        || credit.policy_account.bytes() != frame.base.fractional_policy.address.to_bytes()
+        || credit.ledger_account.bytes() != frame.base.fractional_ledger.address.to_bytes()
+        || credit.market_instance.bytes() != market_instance_id.bytes()
+        || credit.resolution_account != policy.resolution_account
+        || credit.resolution_data_id != policy.resolution_data_id
+        || credit.domain_generation != policy.domain_generation
+        || credit.numerator != 0
+        || frame.credit.address != credit_pda.0
+        || credit.stored_bump != credit_pda.1
+        || frame.credit.lamports < required_credit_lamports
+        || frame.payer.address.to_bytes() != credit.rent.payer.bytes()
+        || frame.market_root.address != root_pda.0
+        || root.stored_bump != root_pda.1
+        || root_binding.market_instance_id.bytes() != market_instance_id.bytes()
+        || root_binding.generation != policy.domain_generation
+        || frame.neutral_sink.address.to_bytes()
+            != root.state.capital().neutral_lamport_sink.bytes()
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    let claimant = Address::new_from_array(credit.claimant.bytes());
+    let payload = FractionalCloseCreditIntentV1 {
+        expected_ledger_sequence: ledger.next_sequence,
+        expected_credit_sequence: credit.next_sequence,
+        claimant: Identity32V1::new(claimant.to_bytes())
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?,
+        credit_account: Identity32V1::new(frame.credit.address.to_bytes())
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?,
+    }
+    .encode()
+    .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let addresses = [
+        claimant,
+        frame.base.realm.address,
+        frame.base.profile.address,
+        frame.base.collateral_policy.address,
+        frame.base.collateral_token_program.address,
+        frame.base.market_binding.address,
+        frame.base.market_runtime.address,
+        frame.base.market_instance.address,
+        frame.base.hoard.address,
+        frame.base.claim_ledger.address,
+        frame.base.resolution.address,
+        frame.base.fractional_policy.address,
+        frame.base.fractional_ledger.address,
+        frame.credit.address,
+        frame.payer.address,
+        frame.market_root.address,
+        frame.neutral_sink.address,
+        frame.rent_sysvar.address,
+    ];
+    let labels = [
+        "claimant", "realm", "profile", "collateral-policy", "collateral-token-program",
+        "market-binding-v2", "market-runtime-v3", "market-instance-preimage-v2", "hoard-v2",
+        "claim-ledger-v3", "resolution-v5", "fractional-policy-v3", "fractional-ledger-v1",
+        "fractional-credit-v2", "credit-rent-payer", "market-lifecycle-root-v2", "neutral-sink",
+        "rent-sysvar",
+    ];
+    let payer_alias = claimant == frame.payer.address;
+    let mut metas = Vec::with_capacity(addresses.len());
+    let mut account_roles = Vec::with_capacity(addresses.len());
+    for (index, address) in addresses.iter().copied().enumerate() {
+        let writable = matches!(index, 9 | 12 | 13 | 14 | 16) || (index == 0 && payer_alias);
+        let signer = index == 0 || (index == 14 && payer_alias);
+        metas.push(if writable {
+            AccountMeta::new(address, signer)
+        } else {
+            AccountMeta::new_readonly(address, signer)
+        });
+        account_roles.push(CanonicalAccountRoleV1 {
+            label: labels[index],
+            address,
+            writable,
+            signer,
+        });
+    }
+    let principal = credit
+        .rent
+        .refundable_live_principal
+        .checked_add(credit.rent.permanent_tombstone_principal)
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let equation = ExactEquation {
+        name: "chain-derived zero-credit rent split".into(),
+        unit: IntegerUnit::Lamports,
+        left: u128::from(frame.credit.lamports),
+        right: u128::from(principal)
+            .checked_add(u128::from(frame.credit.lamports - principal))
+            .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?,
+    };
+    let draft = crate::transaction_builder::OwnedInstructionDraft::enabled_fractional_close_zero_credit_v1(
+        crate::transaction_builder::SemanticOwner {
+            package: "clutch-fractional-redemption-runtime".into(),
+            schema: "fractional-redemption/79/1/8/close-zero-credit".into(),
+            release_sha256: release.elf_sha256,
+        },
+        release.program_id,
+        metas,
+        vec![equation],
+        ledger.next_sequence,
+        &payload,
+    )
+    .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let unsigned_transaction = builder
+        .build_atomic(&[draft])
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let mut authority_accounts = base[..12].to_vec();
+    authority_accounts.extend(extras);
+    let authority_state_sha256 = fractional_authority_state_id_v1(&authority_accounts, release);
+    let cursor = ResumableWorkflowCursor {
+        workflow_id,
+        lane: WorkflowLane::FractionalRedemption,
+        generation: policy.domain_generation,
+        position: WorkflowPosition {
+            phase: u16::from(action.tag()),
+            item: ledger.next_sequence,
+        },
+        observed_state_sha256: authority_state_sha256,
+    };
+    let planned = PlannedWorkflowNode {
+        manifest_sha256: release.release_manifest_sha256,
+        cursor,
+        coordinate: CanonicalActionCoordinate::FractionalRedemption(action),
+        unsigned_transaction,
+        reload_authoritative_accounts: true,
+    };
+    validate_unsigned_fractional_plan(coordinate, builder.payer(), &account_roles, &planned)?;
+    let release_key = release.key();
+    let driver_account_slot = frame.credit.provenance.slot;
+    let draft_id = action_material_id(
+        &release_key,
+        &release_key,
+        release.release_manifest_sha256,
+        release.capability_profile_id,
+        coordinate,
+        frame.credit.address,
+        driver_account_slot,
+        cursor,
+        authority_state_sha256,
+        freshness,
+        builder.payer(),
+        &account_roles,
+        &planned.unsigned_transaction,
+    );
+    Ok(CanonicalActionMaterialV1 {
+        release_key: release_key.clone(),
+        driver_release_key: release_key,
+        release_manifest_sha256: release.release_manifest_sha256,
+        capability_profile_id: release.capability_profile_id,
+        coordinate,
+        variant: None,
+        driver_account: frame.credit.address,
         driver_account_slot,
         cursor,
         authority_state_sha256,
