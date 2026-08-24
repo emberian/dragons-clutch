@@ -455,6 +455,8 @@ fn hash_manifest_string(hasher: &mut Sha256, value: &str) {
 pub enum WorkflowLane {
     Creation,
     SourceCrank,
+    /// Current reusable Failure interval cell selected from finalized state.
+    FailureRecovery,
     Candidate,
     KeeperReceipts,
     RecoveryRetirement,
@@ -940,6 +942,7 @@ pub struct PlannedWorkflowNode {
 pub enum CanonicalActionCoordinate {
     General(GeneralV2Action),
     Direct(DirectMarketAction),
+    Recovery(clutch_solana_layout::registry::RecoveryAction),
     SourceRegistry(SourceSeriesAction),
     SourceTransition {
         registry: SourceSeriesAction,
@@ -2364,6 +2367,11 @@ fn construct(
         CanonicalActionCoordinate::Direct(_) => {
             // Direct uses the release-bound action-material constructor, which
             // owns its variable exact account grammar and outer replay codec.
+            return Err(WorkflowGraphError::NotReady);
+        }
+        CanonicalActionCoordinate::Recovery(_) => {
+            // Failure Recovery owns its release-bound replay request and
+            // complete current account geometry in action material.
             return Err(WorkflowGraphError::NotReady);
         }
         CanonicalActionCoordinate::Series(action) => {
