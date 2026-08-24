@@ -170,3 +170,6 @@ pub mod source_series_successor;
 /// no checked capability tuple enters it until the complete chain is admitted.
 pub(crate) mod source_terminal_resolution_v5;
 pub mod split;
+/// Wrapper-signed Structured custody and current full-vector lifecycle.
+#[cfg(feature = "non-production-structured-custody-lab")]
+pub mod structured_custody;

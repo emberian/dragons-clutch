@@ -1,7 +1,6 @@
 //! Hostile Solana account metadata and canonical base/Token projections.
 
 use clutch_general_v2_contract::{GeneralReplayExtensionV1, GENERAL_REPLAY_EXTENSION_SCHEMA_V1};
-use clutch_kernel::{BasisMode, MarketState, Phase};
 use clutch_retirement::{
     project_general_position_v3, project_structured_claim_position_v3,
     AdapterPositionMarketBindingV3, AdapterPositionPurposeBindingV3, Identity32V1,
@@ -13,11 +12,10 @@ use clutch_retirement_adapter::{
     AccountAccessV2 as RetirementAccountAccessV2, AccountViewV2 as RetirementAccountViewV2,
     CanonicalPdaV1,
 };
-use clutch_solana_layout::{HoardAccount, MarketAccount, SupplyLedgerAccount, TermsAccount};
-use clutch_structured_claim::MarketLedger;
+use clutch_solana_layout::SupplyLedgerAccount;
 
 use crate::runtime_contract::{
-    DescriptorBasisV1, PositionProjectionV1, StructuredClaimActionV1, StructuredClaimDescriptorV1,
+    PositionProjectionV1, StructuredClaimActionV1, StructuredClaimDescriptorV2,
     StructuredClaimReplayExtensionV1, WrapperMintProjectionV1, WrapperTokenProjectionV1,
     STRUCTURED_CLAIM_REPLAY_EXTENSION_SCHEMA_V1,
 };
@@ -310,145 +308,12 @@ impl AccountFrameV1<'_> {
     }
 }
 
-/// Fully checked base Market projection.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedBaseMarketV1 {
-    market: MarketAccount,
-    terms: TermsAccount,
-    hoard: HoardAccount,
-    supply: SupplyLedgerAccount,
-    kernel: MarketState,
-    basis: DescriptorBasisV1,
-}
-
-impl AuthenticatedBaseMarketV1 {
-    /// Authenticated basis used to reconstruct a descriptor identity.
-    pub const fn descriptor_basis(&self) -> DescriptorBasisV1 {
-        self.basis
-    }
-
-    /// Authoritative Market account.
-    pub const fn market_account(&self) -> &MarketAccount {
-        &self.market
-    }
-
-    /// Authoritative aggregate supply account.
-    pub const fn supply_account(&self) -> &SupplyLedgerAccount {
-        &self.supply
-    }
-
-    /// Reconstruct the canonical runtime Market ledger for a bound descriptor.
-    pub fn ledger(&self, descriptor: &BoundDescriptorV1) -> Result<MarketLedger> {
-        if descriptor.identity().claim.basis.market != self.market.market.bytes()
-            || descriptor.identity().claim.basis.terms != self.terms.terms.bytes()
-            || descriptor.identity().claim.basis.basis_degree != self.basis.basis_degree
-            || descriptor.identity().claim.basis.denominator != self.basis.denominator
-            || descriptor.identity().claim.basis.outcome_count != self.basis.outcome_count
-        {
-            return Err(Error::BaseClosureMismatch);
-        }
-        let ledger = MarketLedger {
-            basis: descriptor.identity().claim.basis,
-            base: self.kernel,
-        };
-        ledger.validate().map_err(|_| Error::BaseClosureMismatch)?;
-        Ok(ledger)
-    }
-}
-
-/// Decode and join hostile Market, Terms, Hoard, SupplyLedger, and kernel truth.
-pub fn authenticate_base_market_v1(
-    market_data: &[u8],
-    terms_data: &[u8],
-    hoard_data: &[u8],
-    supply_data: &[u8],
-    kernel: MarketState,
-) -> Result<AuthenticatedBaseMarketV1> {
-    let market = MarketAccount::decode(market_data).map_err(|_| Error::InvalidAccountData)?;
-    let terms = TermsAccount::decode(terms_data).map_err(|_| Error::InvalidAccountData)?;
-    let hoard = HoardAccount::decode(hoard_data).map_err(|_| Error::InvalidAccountData)?;
-    let supply = SupplyLedgerAccount::decode(supply_data).map_err(|_| Error::InvalidAccountData)?;
-    terms
-        .binds_market(&market)
-        .map_err(|_| Error::BaseClosureMismatch)?;
-    hoard.validate().map_err(|_| Error::BaseClosureMismatch)?;
-    supply
-        .binds_market(&market)
-        .map_err(|_| Error::BaseClosureMismatch)?;
-    kernel
-        .check_invariants()
-        .map_err(|_| Error::BaseClosureMismatch)?;
-    if market.lifecycle > 1
-        || market.market != hoard.market
-        || market.realm != hoard.realm
-        || market.collateral_cap != terms.collateral_cap
-        || hoard.collateral_atoms != kernel.collateral
-        || market.outcome_count != kernel.outcomes
-        || supply.outcome_count != kernel.outcomes
-        || kernel.collateral > market.collateral_cap
-        || kernel.phase
-            != if market.lifecycle == 0 {
-                Phase::Active
-            } else {
-                Phase::Resolved
-            }
-        || kernel.payouts.outcomes != terms.outcome_count
-        || kernel.payouts.count != terms.payout_count
-    {
-        return Err(Error::BaseClosureMismatch);
-    }
-    if (terms.basis_degree == 0 && kernel.basis_mode != BasisMode::FinitePreset)
-        || (terms.basis_degree != 0 && kernel.basis_mode != BasisMode::DerivedBasis)
-    {
-        return Err(Error::BaseClosureMismatch);
-    }
-    let mut payout = 0_usize;
-    while payout < usize::from(terms.payout_count) {
-        if kernel.payouts.vectors[payout].denominator != terms.payouts[payout].denominator
-            || kernel.payouts.vectors[payout].weights != terms.payouts[payout].weights
-        {
-            return Err(Error::BaseClosureMismatch);
-        }
-        payout += 1;
-    }
-    let mut outcome = 0_usize;
-    while outcome < crate::runtime_contract::MAX_OUTCOMES {
-        if outcome < usize::from(market.outcome_count) {
-            if supply.internal_supply[outcome]
-                .checked_add(supply.external_supply[outcome])
-                .ok_or(Error::Arithmetic)?
-                != kernel.total_supply[outcome]
-            {
-                return Err(Error::BaseClosureMismatch);
-            }
-        } else if kernel.total_supply[outcome] != 0 {
-            return Err(Error::BaseClosureMismatch);
-        }
-        outcome += 1;
-    }
-    let denominator = terms.payouts[0].denominator;
-    Ok(AuthenticatedBaseMarketV1 {
-        market,
-        terms,
-        hoard,
-        supply,
-        kernel,
-        basis: DescriptorBasisV1 {
-            market: market.market.bytes(),
-            terms_digest: terms.terms.bytes(),
-            basis_degree: terms.basis_degree,
-            denominator,
-            outcome_count: terms.outcome_count,
-        },
-    })
-}
-
-/// Decode the canonical 0x88/1 descriptor from a wrapper-owned account.
+/// Decode the canonical live descriptor-v2 body from a wrapper-owned account.
 pub fn decode_owned_descriptor_v1(
     wrapper_program: Key,
     expected_address: Key,
     account: &RawAccountV1<'_>,
-) -> Result<StructuredClaimDescriptorV1> {
+) -> Result<StructuredClaimDescriptorV2> {
     if account.role != AccountRoleV1::Descriptor
         || account.key != expected_address
         || account.owner != wrapper_program
@@ -457,7 +322,7 @@ pub fn decode_owned_descriptor_v1(
     {
         return Err(Error::InvalidAccounts);
     }
-    StructuredClaimDescriptorV1::decode(account.data).map_err(|_| Error::InvalidAccountData)
+    StructuredClaimDescriptorV2::decode(account.data).map_err(|_| Error::InvalidAccountData)
 }
 
 /// Base-owned Position/Replay PDA verifier.

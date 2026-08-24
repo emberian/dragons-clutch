@@ -36,17 +36,19 @@ use crate::runtime_contract::{
     AtomicPositionAssetTransferRequestV1, DescriptorStateV1, PositionAssetTransferAuthorityKindV1,
     PositionAssetTransferPayloadV1, PositionProjectionV1, StructuredClaimActionV1,
     StructuredClaimReplayDeltaV1, StructuredClaimReplayExtensionV1,
-    StructuredClaimReplayTransitionV1, StructuredCustodyCallProjectionV1,
+    StructuredClaimReplayTransitionV1, StructuredClaimVaultReplayDeltaV1,
+    StructuredCustodyCallProjectionV1,
     POSITION_ASSET_TRANSFER_PAYLOAD_BYTES, STRUCTURED_CLAIM_REPLAY_DELTA_DOMAIN_V1,
     STRUCTURED_CLAIM_REPLAY_EXTENSION_SCHEMA_V1, STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES,
-    STRUCTURED_CUSTODY_CALL_V1_DOMAIN,
+    STRUCTURED_CUSTODY_CALL_V1_DOMAIN, STRUCTURED_CLAIM_VAULT_REPLAY_DELTA_DOMAIN_V1,
 };
 use crate::{
     decode_owned_descriptor_v1, is_zero, AccountRoleV1, BasePositionPdaVerifierV1,
-    BoundDescriptorV1, Error, Key, RawAccountV1, Result, RuntimeDeploymentsV1,
+    BoundDescriptorV1, CurrentStructuredTransitionPlanV1, Error, Key, RawAccountV1, Result,
+    RuntimeDeploymentsV1,
 };
 
-/// Digest domain for an exact canonical 0x88/1 descriptor body.
+/// Digest domain for an exact canonical live descriptor body.
 pub const STRUCTURED_CUSTODY_DESCRIPTOR_BODY_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-custody/descriptor-body/v1\0";
 /// Digest domain for an exact full-width Hoard V2 prestate.
@@ -186,6 +188,17 @@ pub struct StructuredCustodyPoststateV1 {
     pub structured_delta_id: Key,
     /// General-purpose digest of its exact Position delta and ordinal.
     pub general_delta_id: Key,
+}
+
+/// Atomic single-vault Position V3 and Replay V3 compaction successors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StructuredVaultPoststateV1 {
+    /// Structured-purpose vault Position successor.
+    pub vault_position: PositionV3WriteV1,
+    /// Structured-purpose vault Replay successor.
+    pub vault_replay: ReplayV3WriteV1,
+    /// Exact single-vault compaction delta identity.
+    pub structured_delta_id: Key,
 }
 
 /// Target-specific PDA checks that cannot live in a pure codec.
@@ -431,6 +444,354 @@ pub fn prepare_structured_custody_call_v1<P: StructuredCustodyPdaVerifierV1>(
         verifier,
         false,
     )
+}
+
+/// Build exact Position/Replay V3 postimages for a current full-width route.
+///
+/// The caller must have produced `plan` directly from the same authenticated
+/// Hoard V2, ClaimLedger V3, Position, mint, and holder prestates. This helper
+/// independently re-decodes both purpose-owned Position/Replay pairs, checks
+/// the plan's owner semantic IDs against the presented bytes, and advances the
+/// General and Structured replay owners exactly once around the plan receipt.
+/// It performs no write and grants no CPI authority by itself.
+pub fn prepare_current_structured_position_poststate_v1<
+    P: StructuredCustodyPdaVerifierV1,
+>(
+    accounts: &[RawAccountV1<'_>],
+    descriptor: &BoundDescriptorV1,
+    plan: CurrentStructuredTransitionPlanV1,
+    verifier: &P,
+) -> Result<StructuredCustodyPoststateV1> {
+    if accounts.len() < STRUCTURED_CUSTODY_ACCOUNT_COUNT
+        || !matches!(
+            plan.action,
+            StructuredClaimActionV1::WrapFull
+                | StructuredClaimActionV1::UnwrapFull
+                | StructuredClaimActionV1::RedeemTerminal
+        )
+        || is_zero(&plan.transition_id)
+    {
+        return Err(Error::CustodyAuthorityMismatch);
+    }
+    let base_program = descriptor.identity().deployment.base_program;
+    if accounts[IX_BASE_PROGRAM].key != base_program {
+        return Err(Error::CustodyAuthorityMismatch);
+    }
+    let sha = AdapterSha256V1;
+    let hoard = HoardV2::decode(accounts[IX_HOARD_V2].data)
+        .map_err(|_| Error::BaseClosureMismatch)?;
+    let claim_ledger = ClaimLedgerV3::decode(accounts[IX_CLAIM_LEDGER_V3].data)
+        .map_err(|_| Error::BaseClosureMismatch)?;
+    if hoard
+        .semantic_id(&sha)
+        .map_err(|_| Error::BaseClosureMismatch)?
+        .bytes()
+        != plan.hoard_before_id
+        || claim_ledger
+            .semantic_id(&sha)
+            .map_err(|_| Error::BaseClosureMismatch)?
+            .bytes()
+            != plan.claim_ledger_before_id
+        || plan
+            .hoard_after
+            .semantic_id(&sha)
+            .map_err(|_| Error::BaseClosureMismatch)?
+            .bytes()
+            != plan.hoard_after_id
+        || plan
+            .claim_ledger_after
+            .semantic_id(&sha)
+            .map_err(|_| Error::BaseClosureMismatch)?
+            .bytes()
+            != plan.claim_ledger_after_id
+    {
+        return Err(Error::BaseClosureMismatch);
+    }
+
+    let source = authenticate_position_v3(
+        &accounts[IX_SOURCE_POSITION],
+        base_program,
+        verifier,
+    )?;
+    let source_replay = authenticate_replay_v3(
+        &accounts[IX_SOURCE_REPLAY],
+        accounts[IX_SOURCE_POSITION].key,
+        source,
+        base_program,
+        verifier,
+        sha,
+    )?;
+    let destination = authenticate_position_v3(
+        &accounts[IX_DESTINATION_POSITION],
+        base_program,
+        verifier,
+    )?;
+    let destination_replay = authenticate_replay_v3(
+        &accounts[IX_DESTINATION_REPLAY],
+        accounts[IX_DESTINATION_POSITION].key,
+        destination,
+        base_program,
+        verifier,
+        sha,
+    )?;
+    for (position, replay, position_account, replay_account) in [
+        (
+            source,
+            &source_replay,
+            &accounts[IX_SOURCE_POSITION],
+            &accounts[IX_SOURCE_REPLAY],
+        ),
+        (
+            destination,
+            &destination_replay,
+            &accounts[IX_DESTINATION_POSITION],
+            &accounts[IX_DESTINATION_REPLAY],
+        ),
+    ] {
+        validate_position_pair(
+            position,
+            replay,
+            position_account,
+            replay_account,
+            descriptor.identity().claim.basis.market,
+            hoard.realm_id.bytes(),
+            hoard.collateral_policy_id.bytes(),
+            hoard.collateral_release_id.bytes(),
+            claim_ledger.outcome_count,
+            claim_ledger,
+        )?;
+    }
+    let user_after = plan.user_after.ok_or(Error::PostStateMismatch)?;
+    let (source_projection, destination_projection) = match plan.action {
+        StructuredClaimActionV1::WrapFull => {
+            if source.purpose() != PositionPurposeV3::General
+                || destination.purpose() != PositionPurposeV3::StructuredClaim
+            {
+                return Err(Error::CustodyAuthorityMismatch);
+            }
+            (user_after, plan.vault_after)
+        }
+        StructuredClaimActionV1::UnwrapFull | StructuredClaimActionV1::RedeemTerminal => {
+            if source.purpose() != PositionPurposeV3::StructuredClaim
+                || destination.purpose() != PositionPurposeV3::General
+            {
+                return Err(Error::CustodyAuthorityMismatch);
+            }
+            (plan.vault_after, user_after)
+        }
+        _ => return Err(Error::CustodyAuthorityMismatch),
+    };
+    let source_post = position_successor(source, source_projection)?;
+    let destination_post = position_successor(destination, destination_projection)?;
+    let source_position_pre_id = source
+        .semantic_id(&sha)
+        .map_err(|_| Error::PostStateMismatch)?
+        .bytes();
+    let destination_position_pre_id = destination
+        .semantic_id(&sha)
+        .map_err(|_| Error::PostStateMismatch)?
+        .bytes();
+    let source_replay_pre_id = source_replay
+        .semantic_id(&sha)
+        .map_err(|_| Error::PostStateMismatch)?
+        .bytes();
+    let destination_replay_pre_id = destination_replay
+        .semantic_id(&sha)
+        .map_err(|_| Error::PostStateMismatch)?
+        .bytes();
+    prepare_custody_poststate(
+        accounts,
+        descriptor,
+        plan.action,
+        source,
+        source_post,
+        source_replay,
+        source_position_pre_id,
+        source_replay_pre_id,
+        destination,
+        destination_post,
+        destination_replay,
+        destination_position_pre_id,
+        destination_replay_pre_id,
+        plan.transition_id,
+        sha,
+    )
+}
+
+/// Build exact single-vault Position/Replay V3 postimages for compaction.
+///
+/// The caller presents the exact authenticated Hoard and ClaimLedger bodies
+/// used by the current compaction planner. This helper independently hostile-
+/// decodes the Structured pair, checks every immutable owner/rent coordinate,
+/// and advances only its purpose Replay around the transition receipt.
+pub fn prepare_current_structured_vault_poststate_v1<P: StructuredCustodyPdaVerifierV1>(
+    vault_position_account: &RawAccountV1<'_>,
+    vault_replay_account: &RawAccountV1<'_>,
+    hoard_account: &RawAccountV1<'_>,
+    claim_ledger_account: &RawAccountV1<'_>,
+    descriptor: &BoundDescriptorV1,
+    plan: CurrentStructuredTransitionPlanV1,
+    verifier: &P,
+) -> Result<StructuredVaultPoststateV1> {
+    if plan.action != StructuredClaimActionV1::CompactDonation
+        || plan.user_after.is_some()
+        || is_zero(&plan.transition_id)
+        || vault_position_account.role != AccountRoleV1::SourcePositionV3
+        || vault_replay_account.role != AccountRoleV1::SourceReplayV3
+        || hoard_account.role != AccountRoleV1::HoardV2
+        || claim_ledger_account.role != AccountRoleV1::ClaimLedgerV3
+        || !vault_position_account.writable
+        || !vault_replay_account.writable
+        || !hoard_account.writable
+        || !claim_ledger_account.writable
+    {
+        return Err(Error::CustodyAuthorityMismatch);
+    }
+    let base_program = descriptor.identity().deployment.base_program;
+    for account in [
+        vault_position_account,
+        vault_replay_account,
+        hoard_account,
+        claim_ledger_account,
+    ] {
+        if account.owner != base_program || account.executable || is_zero(&account.key) {
+            return Err(Error::InvalidAccounts);
+        }
+    }
+    let keys = [
+        vault_position_account.key,
+        vault_replay_account.key,
+        hoard_account.key,
+        claim_ledger_account.key,
+    ];
+    let mut left = 0usize;
+    while left < keys.len() {
+        let mut right = left + 1;
+        while right < keys.len() {
+            if keys[left] == keys[right] {
+                return Err(Error::InvalidAccounts);
+            }
+            right += 1;
+        }
+        left += 1;
+    }
+
+    let sha = AdapterSha256V1;
+    let hoard = HoardV2::decode(hoard_account.data).map_err(|_| Error::BaseClosureMismatch)?;
+    let claim_ledger = ClaimLedgerV3::decode(claim_ledger_account.data)
+        .map_err(|_| Error::BaseClosureMismatch)?;
+    if hoard
+        .semantic_id(&sha)
+        .map_err(|_| Error::BaseClosureMismatch)?
+        .bytes()
+        != plan.hoard_before_id
+        || claim_ledger
+            .semantic_id(&sha)
+            .map_err(|_| Error::BaseClosureMismatch)?
+            .bytes()
+            != plan.claim_ledger_before_id
+        || plan
+            .hoard_after
+            .semantic_id(&sha)
+            .map_err(|_| Error::BaseClosureMismatch)?
+            .bytes()
+            != plan.hoard_after_id
+        || plan
+            .claim_ledger_after
+            .semantic_id(&sha)
+            .map_err(|_| Error::BaseClosureMismatch)?
+            .bytes()
+            != plan.claim_ledger_after_id
+    {
+        return Err(Error::BaseClosureMismatch);
+    }
+    let vault = authenticate_position_v3(vault_position_account, base_program, verifier)?;
+    let replay = authenticate_replay_v3(
+        vault_replay_account,
+        vault_position_account.key,
+        vault,
+        base_program,
+        verifier,
+        sha,
+    )?;
+    validate_position_pair(
+        vault,
+        &replay,
+        vault_position_account,
+        vault_replay_account,
+        descriptor.identity().claim.basis.market,
+        hoard.realm_id.bytes(),
+        hoard.collateral_policy_id.bytes(),
+        hoard.collateral_release_id.bytes(),
+        claim_ledger.outcome_count,
+        claim_ledger,
+    )?;
+    let header = replay.header();
+    if vault.purpose() != PositionPurposeV3::StructuredClaim
+        || vault.owner().bytes() != descriptor.addresses().vault_owner
+        || vault.purpose_binding_id().bytes() != descriptor.wrapper_product_id()
+        || plan.vault_after.market != vault.market_instance_id().bytes()
+        || plan.vault_after.owner != vault.owner().bytes()
+        || plan.vault_after.generation != vault.generation()
+        || plan.vault_after.replay_sequence
+            != header
+                .next_sequence()
+                .checked_add(1)
+                .ok_or(Error::Arithmetic)?
+        || plan.vault_after.reserved_cash_atoms != vault.reserved_cash_atoms()
+        || plan.vault_after.closed
+    {
+        return Err(Error::PostStateMismatch);
+    }
+    let vault_post = position_successor(vault, plan.vault_after)?;
+    let vault_pre_id = vault
+        .semantic_id(&sha)
+        .map_err(|_| Error::PostStateMismatch)?
+        .bytes();
+    let replay_pre_id = replay
+        .semantic_id(&sha)
+        .map_err(|_| Error::PostStateMismatch)?
+        .bytes();
+    let vault_position = position_write(
+        vault_position_account.key,
+        vault_pre_id,
+        vault_post,
+        sha,
+    )?;
+    let delta = StructuredClaimVaultReplayDeltaV1 {
+        action: StructuredClaimActionV1::CompactDonation,
+        sequence: header.next_sequence(),
+        transition_id: plan.transition_id,
+        position_account: vault_position_account.key,
+        position_pre_semantic_id: vault_position.prestate_semantic_id,
+        position_post_semantic_id: vault_position.poststate_semantic_id,
+    };
+    let structured_delta_id = sha.hash(
+        STRUCTURED_CLAIM_VAULT_REPLAY_DELTA_DOMAIN_V1,
+        &delta.encode()?,
+    );
+    if is_zero(&structured_delta_id) || structured_delta_id == plan.transition_id {
+        return Err(Error::CustodyAuthorityMismatch);
+    }
+    let vault_replay = prepare_structured_replay_write(
+        vault_position_account,
+        vault_replay_account,
+        vault,
+        vault_post,
+        replay,
+        vault_position,
+        replay_pre_id,
+        descriptor,
+        StructuredClaimActionV1::CompactDonation,
+        plan.transition_id,
+        structured_delta_id,
+        sha,
+    )?;
+    Ok(StructuredVaultPoststateV1 {
+        vault_position,
+        vault_replay,
+        structured_delta_id,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -995,12 +1356,14 @@ fn prepare_general_replay_write(
     }
     let mut body = [0_u8; MAX_CUSTODY_REPLAY_V3_WRITE_BYTES];
     body[..GENERAL_REPLAY_ACCOUNT_V1_BYTES].copy_from_slice(plan.replay_poststate_body());
+    let body_len = u16::try_from(GENERAL_REPLAY_ACCOUNT_V1_BYTES)
+        .map_err(|_| Error::CustodyAuthorityMismatch)?;
     Ok((
         ReplayV3WriteV1 {
             address: plan.replay_account().bytes(),
             prestate_semantic_id: plan.replay_prestate_semantic_id().bytes(),
             poststate_semantic_id: plan.replay_poststate_semantic_id().bytes(),
-            body_len: GENERAL_REPLAY_ACCOUNT_V1_BYTES as u16,
+            body_len,
             body,
         },
         plan.delta_id().bytes(),
@@ -1057,11 +1420,13 @@ fn prepare_structured_replay_write(
         .semantic_id(&sha)
         .map_err(|_| Error::CustodyAuthorityMismatch)?
         .bytes();
+    let body_len = u16::try_from(MAX_CUSTODY_REPLAY_V3_WRITE_BYTES)
+        .map_err(|_| Error::CustodyAuthorityMismatch)?;
     Ok(ReplayV3WriteV1 {
         address: replay_account.key,
         prestate_semantic_id: replay_prestate_semantic_id,
         poststate_semantic_id,
-        body_len: MAX_CUSTODY_REPLAY_V3_WRITE_BYTES as u16,
+        body_len,
         body,
     })
 }
@@ -1165,7 +1530,9 @@ fn validate_account_frame(
         }
         let mut later = index + 1;
         while later < accounts.len() {
-            if accounts[index].key == accounts[later].key {
+            if accounts[index].key == accounts[later].key
+                && !is_admitted_readonly_program_alias(index, later)
+            {
                 return Err(Error::InvalidAccounts);
             }
             later += 1;
@@ -1210,6 +1577,14 @@ fn validate_account_frame(
         }
     }
     Ok(())
+}
+
+/// A Realm may select Token-2022 as its collateral program. In that case the
+/// collateral executable and the wrapper-token executable are the same
+/// read-only account. No data-bearing, signer, writable, ProgramData, or
+/// semantically distinct role is permitted to alias.
+const fn is_admitted_readonly_program_alias(left: usize, right: usize) -> bool {
+    left == IX_COLLATERAL_TOKEN_PROGRAM && right == IX_WRAPPER_TOKEN_2022_PROGRAM
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1494,7 +1869,7 @@ mod tests {
         let mut index = 0_usize;
         while index < accounts.len() {
             accounts[index].role = roles[index];
-            accounts[index].key = [(index + 1) as u8; 32];
+            accounts[index].key = [u8::try_from(index + 1).expect("bounded account index"); 32];
             accounts[index].signer = index == IX_VAULT_AUTHORITY || index == IX_ACTOR;
             accounts[index].writable =
                 (IX_SOURCE_POSITION..=IX_DESTINATION_REPLAY).contains(&index);
@@ -1535,5 +1910,18 @@ mod tests {
             build_cpi([200; 32], &[], transfer()),
             Err(Error::InvalidAccounts)
         );
+    }
+
+    #[test]
+    fn account_frame_allows_only_the_token_2022_collateral_executable_alias() {
+        let mut accounts = raw_accounts();
+        accounts[IX_COLLATERAL_TOKEN_PROGRAM].key =
+            accounts[IX_WRAPPER_TOKEN_2022_PROGRAM].key;
+        assert!(is_admitted_readonly_program_alias(
+            IX_COLLATERAL_TOKEN_PROGRAM,
+            IX_WRAPPER_TOKEN_2022_PROGRAM
+        ));
+        accounts[IX_REALM].key = accounts[IX_PROFILE].key;
+        assert!(!is_admitted_readonly_program_alias(IX_REALM, IX_PROFILE));
     }
 }

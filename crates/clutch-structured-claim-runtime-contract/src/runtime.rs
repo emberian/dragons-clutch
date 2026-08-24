@@ -7,7 +7,7 @@ use clutch_structured_claim::{
 use crate::{
     prepare_atomic_position_asset_transfer_v1, Amount, AssetTransferPhasePolicyV1,
     AtomicPositionAssetTransferRequestV1, DescriptorIdentityV1, DescriptorStateV1, Error,
-    PositionProjectionV1, Result, StructuredClaimDescriptorV1,
+    PositionProjectionV1, Result, StructuredClaimDescriptorV2,
 };
 
 /// Canonical addresses derived by the SBF adapter from wrapper product identity.
@@ -256,12 +256,34 @@ pub struct AuthenticatedVaultRetirementV1 {
     pub market: [u8; 32],
     /// Wrapper vault's semantic Position owner.
     pub vault_owner: [u8; 32],
+    /// Exact canonical Position V3 account being shrunk to its tombstone.
+    pub position_account: [u8; 32],
+    /// Exact purpose-owned Replay V3 account being deleted.
+    pub replay_account: [u8; 32],
     /// Exact Position generation being closed.
     pub generation: u64,
     /// Exact Replay sequence consumed by close.
     pub replay_sequence: u64,
     /// Permanent base tombstone produced by close.
     pub tombstone: [u8; 32],
+    /// Semantic identity of the terminal Replay V3 prefix and extension.
+    pub terminal_replay_semantic_id: [u8; 32],
+    /// Exact rent transition admitted when this Position/Replay pair was founded.
+    pub rent_transition_id: [u8; 32],
+    /// Persisted payer receiving only refundable live principal.
+    pub rent_refund_owner: [u8; 32],
+    /// Realm-selected sink receiving every lamport that is not principal.
+    pub neutral_lamport_sink: [u8; 32],
+    /// Principal retained permanently in the Position V3 tombstone.
+    pub position_tombstone_principal_lamports: u64,
+    /// Refundable Position live principal returned to the persisted payer.
+    pub position_refund_lamports: u64,
+    /// Refundable Replay principal returned to the persisted payer.
+    pub replay_refund_lamports: u64,
+    /// Position surplus sent only to the neutral sink.
+    pub position_donation_lamports: u64,
+    /// Replay surplus sent only to the neutral sink.
+    pub replay_donation_lamports: u64,
 }
 
 /// Permanent structured-claim retirement plan.
@@ -273,7 +295,7 @@ pub struct AuthenticatedVaultRetirementV1 {
 #[repr(C)]
 pub struct DescriptorRetirementPlanV1 {
     /// Prospective permanent descriptor image.
-    pub descriptor: StructuredClaimDescriptorV1,
+    pub descriptor: StructuredClaimDescriptorV2,
     /// Actual mint supply, necessarily zero.
     pub mint_supply: Amount,
     /// Mint authority before Token-2022 SetAuthority.
@@ -284,6 +306,24 @@ pub struct DescriptorRetirementPlanV1 {
     pub vault_close_receipt: [u8; 32],
     /// Permanent base Position tombstone.
     pub vault_tombstone: [u8; 32],
+    /// Exact Position account rewritten to the permanent tombstone.
+    pub vault_position_account: [u8; 32],
+    /// Exact Replay account deleted atomically with the Position rewrite.
+    pub vault_replay_account: [u8; 32],
+    /// Immutable semantic owner of the Structured backing Position.
+    pub vault_owner: [u8; 32],
+    /// Semantic identity of the terminal purpose-owned Replay.
+    pub terminal_replay_semantic_id: [u8; 32],
+    /// Principal retained in the permanent Position tombstone.
+    pub vault_tombstone_principal_lamports: u64,
+    /// Total payer-owned principal refunded by the base close.
+    pub vault_refund_lamports: u64,
+    /// Total non-principal lamports sent to the neutral sink.
+    pub vault_donation_lamports: u64,
+    /// Persisted payer receiving the exact refund.
+    pub rent_refund_owner: [u8; 32],
+    /// Realm-selected beneficiary-free sink.
+    pub neutral_lamport_sink: [u8; 32],
 }
 
 /// Prepare canonical backing transfer followed by wrapper minting.
@@ -760,7 +800,7 @@ pub fn prepare_redeem_terminal_v1(
 
 /// Prepare permanent zero-supply retirement and mint-authority revocation.
 pub fn prepare_retire_descriptor_v1(
-    mut descriptor: StructuredClaimDescriptorV1,
+    mut descriptor: StructuredClaimDescriptorV2,
     identity: &DescriptorIdentityV1,
     market: &MarketLedger,
     addresses: StructuredClaimRuntimeAddressesV1,
@@ -795,8 +835,26 @@ pub fn prepare_retire_descriptor_v1(
         || vault_position.cash_atoms != 0
         || vault_position.internal != [0; crate::MAX_OUTCOMES]
         || vault_retirement.close_receipt == [0; 32]
+        || vault_retirement.position_account == [0; 32]
+        || vault_retirement.replay_account == [0; 32]
         || vault_retirement.tombstone == [0; 32]
+        || vault_retirement.terminal_replay_semantic_id == [0; 32]
+        || vault_retirement.rent_transition_id == [0; 32]
+        || vault_retirement.rent_refund_owner == [0; 32]
+        || vault_retirement.neutral_lamport_sink == [0; 32]
+        || vault_retirement.position_tombstone_principal_lamports == 0
         || vault_retirement.close_receipt == vault_retirement.tombstone
+        || vault_retirement.position_account == vault_retirement.replay_account
+        || vault_retirement.rent_refund_owner == vault_retirement.neutral_lamport_sink
+        || vault_retirement
+            .position_tombstone_principal_lamports
+            .checked_add(vault_retirement.position_refund_lamports)
+            .and_then(|value| value.checked_add(vault_retirement.position_donation_lamports))
+            .is_none()
+        || vault_retirement
+            .replay_refund_lamports
+            .checked_add(vault_retirement.replay_donation_lamports)
+            .is_none()
         || vault_retirement.market != identity.claim.basis.market
         || vault_retirement.vault_owner != addresses.vault_owner
         || vault_retirement.generation != request.vault_generation
@@ -824,6 +882,22 @@ pub fn prepare_retire_descriptor_v1(
         mint_authority_after: [0; 32],
         vault_close_receipt: vault_retirement.close_receipt,
         vault_tombstone: vault_retirement.tombstone,
+        vault_position_account: vault_retirement.position_account,
+        vault_replay_account: vault_retirement.replay_account,
+        vault_owner: vault_retirement.vault_owner,
+        terminal_replay_semantic_id: vault_retirement.terminal_replay_semantic_id,
+        vault_tombstone_principal_lamports: vault_retirement
+            .position_tombstone_principal_lamports,
+        vault_refund_lamports: vault_retirement
+            .position_refund_lamports
+            .checked_add(vault_retirement.replay_refund_lamports)
+            .ok_or(Error::ArithmeticOverflow)?,
+        vault_donation_lamports: vault_retirement
+            .position_donation_lamports
+            .checked_add(vault_retirement.replay_donation_lamports)
+            .ok_or(Error::ArithmeticOverflow)?,
+        rent_refund_owner: vault_retirement.rent_refund_owner,
+        neutral_lamport_sink: vault_retirement.neutral_lamport_sink,
     })
 }
 
