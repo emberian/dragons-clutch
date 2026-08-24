@@ -41,6 +41,7 @@ mod market_family_capability;
 mod market_lifecycle;
 mod market_lifecycle_v2;
 mod market_foundation_v3;
+mod market_foundation_v4;
 mod market_replay;
 mod product_registry;
 mod registry;
@@ -249,6 +250,15 @@ pub use market_foundation_v3::{
     AuthenticatedMarketFoundationAccountGraphBytesV3, MarketFoundationAccountGraphV3,
     MarketFoundationSlotV3, MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V3,
     MARKET_FOUNDATION_ACCOUNT_GRAPH_V3_DOMAIN,
+};
+pub use market_foundation_v4::{
+    authenticate_market_foundation_account_graph_bytes_v4,
+    AuthenticatedMarketFoundationAccountGraphBytesV4, MarketFoundationAccountGraphV4,
+    MarketFoundationScheduleV4, MarketFoundationSlotV4,
+    MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V4, MARKET_FOUNDATION_ACCOUNT_GRAPH_V4_DOMAIN,
+    MARKET_FOUNDATION_CORE_SLOT_COUNT_V4, MARKET_FOUNDATION_GENERAL_TREASURY_SLOT_COUNT_V4,
+    MARKET_FOUNDATION_MAX_OUTCOMES_V4, MARKET_FOUNDATION_SCHEDULE_BYTES_V4,
+    MARKET_FOUNDATION_SCHEDULE_V4_DOMAIN, MARKET_FOUNDATION_SLOT_COUNT_V4,
 };
 pub use market_replay::{
     MarketLifecycleReplayReceiptV1, MARKET_LIFECYCLE_REPLAY_RECEIPT_BYTES_V1,
@@ -491,6 +501,10 @@ typed_id!(
     "Typed identity of one exhaustive 47-slot shared-Market foundation schedule."
 );
 typed_id!(
+    MarketFoundationScheduleV4Id,
+    "Typed identity of the current exhaustive 50-slot shared-Market foundation schedule."
+);
+typed_id!(
     MarketFoundationAccountGraphV1Id,
     "Typed identity of one canonical shared-Market foundation account graph."
 );
@@ -501,6 +515,10 @@ typed_id!(
 typed_id!(
     MarketFoundationAccountGraphV3Id,
     "Typed identity of one canonical 47-slot shared-Market foundation account graph."
+);
+typed_id!(
+    MarketFoundationAccountGraphV4Id,
+    "Typed identity of the current canonical 50-slot shared-Market foundation account graph."
 );
 typed_id!(
     MarketLifecycleRootV1Id,
