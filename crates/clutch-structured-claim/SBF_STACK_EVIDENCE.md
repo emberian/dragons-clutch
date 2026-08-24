@@ -1,4 +1,9 @@
-# Isolated SBF stack evidence
+# Withdrawn model-only SBF stack evidence
+
+The `MarketLedger`/`StructuredClaimMachine` transition model measured below was
+deleted when current HoardV2/ClaimLedgerV3/PositionV3/ReplayV3 execution became
+the sole implementation boundary. These numbers are retained only as historical
+provenance and are not evidence for any current Structured route or release.
 
 Measured 2026-08-22 with `cargo-build-sbf 4.0.0`, Solana platform-tools
 `v1.53` (`rustc 1.89.0`, LLVM 20.1.7-rust-dev), using the release profile.
@@ -14,7 +19,6 @@ read with:
 
 ```sh
 llvm-readelf --stack-sizes clutch_structured_claim-*.o
-llvm-readelf --stack-sizes clutch_kernel-*.o
 ```
 
 Selected frame sizes:
@@ -36,9 +40,7 @@ Selected frame sizes:
 | base `donate_internal_vector` | 576 |
 | base `redeem_internal_vector_exact` | 512 |
 
-Every isolated core frame is below the current 4,096-byte SBF frame ceiling.
-The largest, `redeem_terminal`, leaves 1,088 bytes of per-frame margin. This is
-not evidence for an eventual adapter instruction's full call path, account
-decoding, CPI depth, compute units, heap use, or bank behavior. The adapter must
-repeat stack measurement after monomorphization and linking, and bank tests
-must measure the complete instruction before promotion.
+These deleted-model measurements are not evidence for the current adapter's
+full call path, account decoding, CPI depth, compute units, heap use, or bank
+behavior. A checked current release still requires new measurements over the
+exact linked wrapper and base ELFs.

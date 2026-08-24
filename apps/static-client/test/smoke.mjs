@@ -35,12 +35,23 @@ test("operatord_transport_is_bounded_get_only_and_rpc_urls_are_daemon_projection
   assert.match(chain, /remainingResponseBytes/);
   assert.match(chain, /operatord-only; browser does not call validator RPC/);
   assert.doesNotMatch(chain, /method:\s*"(?:POST|PUT|PATCH|DELETE)"/);
-  for (const endpoint of ["/v1/health", "/v1/acquisition", "/v1/releases", "/v1/accounts?commitment=", "/v1/keeper/next?commitment=", "/v1/forks"]) assert.match(chain, new RegExp(endpoint.replace(/[?]/g, "\\?")));
+  for (const endpoint of ["/v1/health", "/v1/acquisition", "/v1/session", "/v1/releases", "/v1/accounts?commitment=", "/v1/keeper/next?commitment=", "/v1/forks"]) assert.match(chain, new RegExp(endpoint.replace(/[?]/g, "\\?")));
   assert.doesNotMatch(chain, /configuration\.(?:rpcHttpUrl|rpcWebsocketUrl)/);
   assert.match(chain, /transportBinding must expose exactly one composed release/);
   assert.match(chain, /release key does not bind its exact coordinates and manifest/);
   assert.match(chain, /canonical-account-decoders\/v3-general-no-keeper-no-selected-candidate/);
   assert.doesNotMatch(chain, /general-selected-candidate/);
+});
+
+test("canonical session brackets acquisition and admits only onchain-owned restart identities", () => {
+  assert.match(chain, /operator-read-only-session-manifest\/v1/);
+  assert.match(chain, /Finalized canonical session identity changed during acquisition/);
+  assert.match(chain, /restart cursor names an identity not owned by a finalized canonical account decode/);
+  assert.match(chain, /session checked release\/profile identity differs from acquisition/);
+  assert.match(chain, /session canonical account identities contain duplicate addresses/);
+  assert.match(chain, /differs from finalized canonical account field/);
+  assert.match(chain, /accounts\?commitment=finalized/);
+  assert.doesNotMatch(chain, /localStorage|sessionStorage|fixture|mock-source/i);
 });
 
 test("browser_target_contains_only_operatord_commitment_and_local_bounds", () => {

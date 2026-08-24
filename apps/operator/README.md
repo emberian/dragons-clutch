@@ -1,4 +1,17 @@
-# Non-production Operator Bench
+# Read-only Operator Attach
+
+The shipped `index.html` entrypoint now attaches only to an explicit operatord
+`/v1/session` endpoint. It has no RPC default, mock-source selection, fixture
+fallback, retained transcript fallback, wallet, signer, transaction builder,
+or browser persistence. Until a complete finalized manifest binds the RPC
+endpoint digests, genesis, checked release/profile/program coordinates,
+canonical onchain account identities, and onchain-derived restart cursors, the
+page remains visibly unavailable. Cursor actions are always disabled.
+
+The older laboratory renderers remain in this directory as historical review
+material, but the entrypoint does not import or select them.
+
+## Historical laboratory notes
 
 The historical laboratory frontend, in four explicit modes. It is not the
 chain-attached client and no laboratory mode is a default: every selectable

@@ -11,8 +11,9 @@
 use core::cmp::min;
 
 use clutch_batch::relation_v2::{
-    price_semantics_digest_v2, EconomicBookV2, EconomicCandidateV2, EconomicDomainV2,
-    EconomicErrorV2, EconomicOrderV2, PricePreconditionV2, VerifiedEconomicsV2,
+    price_semantics_digest_v2, EconomicBookStreamValidatorV2, EconomicBookV2,
+    EconomicCandidateV2, EconomicDomainV2, EconomicErrorV2, EconomicOrderV2,
+    PricePreconditionV2, VerifiedEconomicsV2,
 };
 use clutch_batch::{PartialPolicy, Side};
 use clutch_general_v2_contract::{
@@ -717,6 +718,239 @@ pub struct GeneralOrderPageInputV5<'a> {
     pub body: &'a [u8],
 }
 
+/// One bounded live-order row read from the authenticated V5 page stream.
+///
+/// This is a borrowed-book projection, not an independently constructible
+/// order DTO. The containing [`OwnerBlindBookStreamV5`] has already verified
+/// the complete page set, RelationV2 ordering, grid admission, and immutable
+/// Market/Domain bindings before this row can be returned.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StreamedOwnerBlindOrderV5 {
+    economic_order: EconomicOrderV2,
+    membership: FrozenOrderMembershipV1,
+    position_generation: u64,
+    page_account: Id32,
+    page_index: u16,
+    page_slot: u8,
+}
+
+impl StreamedOwnerBlindOrderV5 {
+    /// Exact owner-blind RelationV2 row.
+    pub const fn economic_order(&self) -> &EconomicOrderV2 {
+        &self.economic_order
+    }
+
+    /// Exact owner/order/generation membership from the same frozen slot.
+    pub const fn membership(&self) -> &FrozenOrderMembershipV1 {
+        &self.membership
+    }
+
+    /// Immutable Position generation frozen beside the order.
+    pub const fn position_generation(&self) -> u64 {
+        self.position_generation
+    }
+
+    /// Canonical V5 page account containing the order.
+    pub const fn page_account(&self) -> Id32 {
+        self.page_account
+    }
+
+    /// Canonical V5 page index.
+    pub const fn page_index(&self) -> u16 {
+        self.page_index
+    }
+
+    /// Physical slot within the V5 page, including preceding tombstones.
+    pub const fn page_slot(&self) -> u8 {
+        self.page_slot
+    }
+}
+
+/// Compact authenticated view over immutable V5 page bytes.
+///
+/// The view owns no order array. `order` rescans at most four bounded pages
+/// and returns one row, keeping the no-alloc core and SBF call frames bounded.
+#[derive(Clone, Copy, Debug)]
+pub struct OwnerBlindBookStreamV5<'a> {
+    pages: [GeneralOrderPageInputV5<'a>; MAX_ORDER_PAGES],
+    binding: OwnerBlindBookBindingV5,
+}
+
+/// Compact immutable binding for one completely authenticated V5 page set.
+///
+/// This value deliberately retains no page body. Its private fields can only
+/// be populated by the exhaustive page-set verifier below. The settlement SBF
+/// adapter retains the read-only page accounts separately and uses the dense
+/// per-page widths to read exactly one containing page for one order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OwnerBlindBookBindingV5 {
+    page_count: u8,
+    page_physical_slot_counts: [u8; MAX_ORDER_PAGES],
+    page_live_order_counts: [u8; MAX_ORDER_PAGES],
+    page_accounts: [Id32; MAX_ORDER_PAGES],
+    market_binding: MarketBindingV1,
+    market: Id32,
+    epoch: Id32,
+    order_set: Id32,
+    domain: EconomicDomainV2,
+    economic_domain_digest: Id32,
+    price_grid_id: Id32,
+    realm: Id32,
+    order_count: u8,
+}
+
+impl OwnerBlindBookStreamV5<'_> {
+    /// Exact authenticated MarketBinding projection.
+    pub const fn market_binding(&self) -> &MarketBindingV1 { &self.binding.market_binding }
+    /// Canonical Market identity.
+    pub const fn market(&self) -> Id32 { self.binding.market }
+    /// Canonical Epoch identity.
+    pub const fn epoch(&self) -> Id32 { self.binding.epoch }
+    /// Canonical frozen order-set identity.
+    pub const fn order_set(&self) -> Id32 { self.binding.order_set }
+    /// Exact RelationV2 economic domain.
+    pub const fn domain(&self) -> &EconomicDomainV2 { &self.binding.domain }
+    /// Exact economic-domain content identity.
+    pub const fn economic_domain_digest(&self) -> Id32 { self.binding.economic_domain_digest }
+    /// Canonical authenticated PriceGrid identity.
+    pub const fn price_grid_id(&self) -> Id32 { self.binding.price_grid_id }
+    /// Immutable Realm identity selected by the MarketBinding.
+    pub const fn realm(&self) -> Id32 { self.binding.realm }
+    /// Dense live-order count across all pages.
+    pub const fn order_count(&self) -> u8 { self.binding.order_count }
+    /// Number of canonical pages in the complete set.
+    pub const fn page_count(&self) -> u8 { self.binding.page_count }
+    /// Physical populated widths, including tombstones, by page.
+    pub const fn page_physical_slot_counts(&self) -> [u8; MAX_ORDER_PAGES] {
+        self.binding.page_physical_slot_counts
+    }
+    /// Dense live-order widths by page.
+    pub const fn page_live_order_counts(&self) -> [u8; MAX_ORDER_PAGES] {
+        self.binding.page_live_order_counts
+    }
+
+    /// Canonical page account at one active page index.
+    pub fn page_account(&self, page_index: u16) -> Option<Id32> {
+        if usize::from(page_index) < usize::from(self.binding.page_count) {
+            Some(self.binding.page_accounts[usize::from(page_index)])
+        } else {
+            None
+        }
+    }
+
+    pub(crate) const fn binding(&self) -> OwnerBlindBookBindingV5 {
+        self.binding
+    }
+
+    /// Read one dense live order without retaining the complete economic book.
+    pub fn order(
+        &self,
+        order_index: u8,
+    ) -> Result<Option<StreamedOwnerBlindOrderV5>, CandidateBuilderErrorV1> {
+        if order_index >= self.binding.order_count {
+            return Ok(None);
+        }
+        let (page, local_index) = self.binding.order_page_and_local_index(order_index)?;
+        self.binding.read_page_order(self.pages[page], local_index)
+    }
+}
+
+impl OwnerBlindBookBindingV5 {
+    pub(crate) const fn market_binding(&self) -> &MarketBindingV1 { &self.market_binding }
+    pub(crate) const fn market(&self) -> Id32 { self.market }
+    pub(crate) const fn epoch(&self) -> Id32 { self.epoch }
+    pub(crate) const fn order_set(&self) -> Id32 { self.order_set }
+    pub(crate) const fn domain(&self) -> &EconomicDomainV2 { &self.domain }
+    pub(crate) const fn economic_domain_digest(&self) -> Id32 { self.economic_domain_digest }
+    pub(crate) const fn price_grid_id(&self) -> Id32 { self.price_grid_id }
+    pub(crate) const fn realm(&self) -> Id32 { self.realm }
+    pub(crate) const fn page_count(&self) -> u8 { self.page_count }
+    pub(crate) const fn page_physical_slot_counts(&self) -> [u8; MAX_ORDER_PAGES] {
+        self.page_physical_slot_counts
+    }
+    pub(crate) const fn page_live_order_counts(&self) -> [u8; MAX_ORDER_PAGES] {
+        self.page_live_order_counts
+    }
+    pub(crate) const fn page_accounts(&self) -> [Id32; MAX_ORDER_PAGES] {
+        self.page_accounts
+    }
+    pub(crate) const fn order_count(&self) -> u8 { self.order_count }
+
+    pub(crate) fn order_page_and_local_index(
+        &self,
+        order_index: u8,
+    ) -> Result<(usize, u8), CandidateBuilderErrorV1> {
+        if order_index >= self.order_count {
+            return Err(CandidateBuilderErrorV1::BindingMismatch);
+        }
+        let mut preceding = 0u8;
+        let mut page = 0usize;
+        while page < usize::from(self.page_count) {
+            let after = preceding
+                .checked_add(self.page_live_order_counts[page])
+                .ok_or(CandidateBuilderErrorV1::ArithmeticOverflow)?;
+            if order_index < after {
+                return Ok((page, order_index - preceding));
+            }
+            preceding = after;
+            page += 1;
+        }
+        Err(CandidateBuilderErrorV1::BindingMismatch)
+    }
+
+    pub(crate) fn read_page_order(
+        &self,
+        page: GeneralOrderPageInputV5<'_>,
+        local_index: u8,
+    ) -> Result<Option<StreamedOwnerBlindOrderV5>, CandidateBuilderErrorV1> {
+        let header = verify_page_v5(page.body)?;
+        let page_index = usize::from(header.page_index);
+        if page_index >= usize::from(self.page_count)
+            || page.account != self.page_accounts[page_index]
+            || header.order_count != self.page_physical_slot_counts[page_index]
+            || local_index >= self.page_live_order_counts[page_index]
+        {
+            return Err(CandidateBuilderErrorV1::BindingMismatch);
+        }
+        read_owner_blind_page_order_v5(&self.domain, page, local_index)
+    }
+}
+
+pub(crate) fn read_owner_blind_page_order_v5(
+    domain: &EconomicDomainV2,
+    page: GeneralOrderPageInputV5<'_>,
+    local_index: u8,
+) -> Result<Option<StreamedOwnerBlindOrderV5>, CandidateBuilderErrorV1> {
+        let header = verify_page_v5(page.body)?;
+        let mut cursor = OrderSlotCursorV5::new(page.body)?;
+        let mut dense = 0u8;
+        let mut physical = 0usize;
+        while physical < usize::from(header.order_count) {
+            let verified = cursor
+                .next_slot()
+                .ok_or(CandidateBuilderErrorV1::Layout(LayoutError::Truncated))??;
+            if let Some((economic_order, membership)) =
+                project_owner_blind_slot(verified.slot, domain)?
+            {
+                if dense == local_index {
+                    return Ok(Some(StreamedOwnerBlindOrderV5 {
+                        economic_order,
+                        membership,
+                        position_generation: verified.position_generation,
+                        page_account: page.account,
+                        page_index: header.page_index,
+                        page_slot: verified.slot_index,
+                    }));
+                }
+                dense = dense
+                    .checked_add(1)
+                    .ok_or(CandidateBuilderErrorV1::ArithmeticOverflow)?;
+            }
+            physical += 1;
+        }
+        Err(CandidateBuilderErrorV1::BindingMismatch)
+}
+
 /// Frozen General book successor carrying immutable placement generations.
 ///
 /// The inner owner-blind book remains the sole RelationV2 projection. This
@@ -1064,6 +1298,27 @@ pub fn project_owner_blind_book_costed_v1(
     )
 }
 
+/// Authenticate the same cost-aware V5 book without materializing its 64-row
+/// owned projection.
+pub fn project_owner_blind_book_stream_costed_v1<'a>(
+    pages: &[GeneralOrderPageInputV5<'a>],
+    expected_order_set: Id32,
+    economic_domain_account: &EconomicDomainV2AccountV1,
+    market_binding: &clutch_general_v2_contract::MarketBindingV2,
+    price_grid: &PriceGridAccount,
+) -> Result<OwnerBlindBookStreamV5<'a>, CandidateBuilderErrorV1> {
+    market_binding.validate()?;
+    let projection = market_binding.relation_projection();
+    project_owner_blind_book_stream_with_score_v1(
+        pages,
+        expected_order_set,
+        economic_domain_account,
+        &projection,
+        price_grid,
+        score_v2_q_cost_policy_id_v1()?,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn project_owner_blind_book_with_score_v1(
     pages: &[GeneralOrderPageInputV5<'_>],
@@ -1073,6 +1328,78 @@ fn project_owner_blind_book_with_score_v1(
     price_grid: &PriceGridAccount,
     expected_score_policy_id: Id32,
 ) -> Result<OwnerBlindBookProjectionV2, CandidateBuilderErrorV1> {
+    let stream = project_owner_blind_book_stream_with_score_v1(
+        pages,
+        expected_order_set,
+        economic_domain_account,
+        market_binding,
+        price_grid,
+        expected_score_policy_id,
+    )?;
+    let mut book = EconomicBookV2::empty();
+    let mut order_membership = [FrozenOrderMembershipV1::EMPTY; MAX_ORDERS];
+    let mut position_generations = [0u64; MAX_ORDERS];
+    let mut order_page_accounts = [Id32::ZERO; MAX_ORDERS];
+    let mut order_page_indices = [0u16; MAX_ORDERS];
+    let mut order_page_slots = [0u8; MAX_ORDERS];
+    let mut order = 0u8;
+    while order < stream.order_count() {
+        let row = stream
+            .order(order)?
+            .ok_or(CandidateBuilderErrorV1::BindingMismatch)?;
+        let at = usize::from(order);
+        book.orders[at] = *row.economic_order();
+        order_membership[at] = *row.membership();
+        position_generations[at] = row.position_generation();
+        order_page_accounts[at] = row.page_account();
+        order_page_indices[at] = row.page_index();
+        order_page_slots[at] = row.page_slot();
+        order = order
+            .checked_add(1)
+            .ok_or(CandidateBuilderErrorV1::ArithmeticOverflow)?;
+    }
+    book.len = stream.order_count();
+    let mut page_accounts = [Id32::ZERO; MAX_ORDER_PAGES];
+    let mut page = 0u16;
+    while usize::from(page) < usize::from(stream.page_count()) {
+        page_accounts[usize::from(page)] = stream
+            .page_account(page)
+            .ok_or(CandidateBuilderErrorV1::BindingMismatch)?;
+        page = page
+            .checked_add(1)
+            .ok_or(CandidateBuilderErrorV1::ArithmeticOverflow)?;
+    }
+    Ok(OwnerBlindBookProjectionV2 {
+        base: OwnerBlindBookProjectionV1 {
+            market_binding: *stream.market_binding(),
+            market: stream.market(),
+            epoch: stream.epoch(),
+            order_set: stream.order_set(),
+            domain: *stream.domain(),
+            economic_domain_digest: stream.economic_domain_digest(),
+            price_grid_id: stream.price_grid_id(),
+            realm: stream.realm(),
+            book,
+            order_membership,
+        },
+        page_accounts,
+        page_count: stream.page_count(),
+        position_generations,
+        order_page_accounts,
+        order_page_indices,
+        order_page_slots,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_owner_blind_book_stream_with_score_v1<'a>(
+    pages: &[GeneralOrderPageInputV5<'a>],
+    expected_order_set: Id32,
+    economic_domain_account: &EconomicDomainV2AccountV1,
+    market_binding: &MarketBindingV1,
+    price_grid: &PriceGridAccount,
+    expected_score_policy_id: Id32,
+) -> Result<OwnerBlindBookStreamV5<'a>, CandidateBuilderErrorV1> {
     economic_domain_account.validate()?;
     market_binding.validate()?;
     price_grid.validate()?;
@@ -1125,12 +1452,13 @@ fn project_owner_blind_book_with_score_v1(
         return Err(CandidateBuilderErrorV1::BindingMismatch);
     }
 
-    let mut book = EconomicBookV2::empty();
-    let mut order_membership = [FrozenOrderMembershipV1::EMPTY; MAX_ORDERS];
-    let mut position_generations = [0u64; MAX_ORDERS];
-    let mut order_page_accounts = [Id32::ZERO; MAX_ORDERS];
-    let mut order_page_indices = [0u16; MAX_ORDERS];
-    let mut order_page_slots = [0u8; MAX_ORDERS];
+    let mut retained_pages = [GeneralOrderPageInputV5 {
+        account: Id32::ZERO,
+        body: &[],
+    }; MAX_ORDER_PAGES];
+    let mut page_physical_slot_counts = [0u8; MAX_ORDER_PAGES];
+    let mut page_live_order_counts = [0u8; MAX_ORDER_PAGES];
+    let mut validator = EconomicBookStreamValidatorV2::new(domain)?;
     page = 0;
     while page < pages.len() {
         let header = verify_page_v5(pages[page].body)?;
@@ -1146,6 +1474,8 @@ fn project_owner_blind_book_with_score_v1(
         {
             return Err(CandidateBuilderErrorV1::BindingMismatch);
         }
+        retained_pages[page] = pages[page];
+        page_physical_slot_counts[page] = header.order_count;
         let mut cursor = OrderSlotCursorV5::new(pages[page].body)?;
         let mut slot_index = 0usize;
         while slot_index < usize::from(header.order_count) {
@@ -1165,23 +1495,12 @@ fn project_owner_blind_book_with_score_v1(
                 }
             }
             if let Some((order, membership)) = project_owner_blind_slot(verified.slot, &domain)? {
-                let at = usize::from(book.len);
                 if verified.position_generation == 0 {
                     return Err(CandidateBuilderErrorV1::BindingMismatch);
                 }
-                if at >= MAX_ORDERS {
-                    return Err(CandidateBuilderErrorV1::Relation(
-                        EconomicErrorV2::TooManyOrders,
-                    ));
-                }
-                book.orders[at] = order;
-                order_membership[at] = membership;
-                position_generations[at] = verified.position_generation;
-                order_page_accounts[at] = pages[page].account;
-                order_page_indices[at] = header.page_index;
-                order_page_slots[at] = verified.slot_index;
-                book.len = book
-                    .len
+                let _ = membership;
+                validator.push(order)?;
+                page_live_order_counts[page] = page_live_order_counts[page]
                     .checked_add(1)
                     .ok_or(CandidateBuilderErrorV1::ArithmeticOverflow)?;
             }
@@ -1189,28 +1508,24 @@ fn project_owner_blind_book_with_score_v1(
         }
         page += 1;
     }
-    book.validate(&domain)?;
-    let base = OwnerBlindBookProjectionV1 {
-        market_binding: *market_binding,
-        market: market_binding.market,
-        epoch: economic_domain_account.epoch,
-        order_set: expected_order_set,
-        domain,
-        economic_domain_digest: domain_digest,
-        price_grid_id: Id32::new(price_grid.grid.bytes())?,
-        realm: Id32::new(price_grid.realm.bytes())?,
-        book,
-        order_membership,
-    };
-    Ok(OwnerBlindBookProjectionV2 {
-        base,
-        page_accounts,
-        page_count: u8::try_from(pages.len())
-            .map_err(|_| CandidateBuilderErrorV1::ArithmeticOverflow)?,
-        position_generations,
-        order_page_accounts,
-        order_page_indices,
-        order_page_slots,
+    Ok(OwnerBlindBookStreamV5 {
+        pages: retained_pages,
+        binding: OwnerBlindBookBindingV5 {
+            page_count: u8::try_from(pages.len())
+                .map_err(|_| CandidateBuilderErrorV1::ArithmeticOverflow)?,
+            page_physical_slot_counts,
+            page_live_order_counts,
+            page_accounts,
+            market_binding: *market_binding,
+            market: market_binding.market,
+            epoch: economic_domain_account.epoch,
+            order_set: expected_order_set,
+            domain,
+            economic_domain_digest: domain_digest,
+            price_grid_id: Id32::new(price_grid.grid.bytes())?,
+            realm: Id32::new(price_grid.realm.bytes())?,
+            order_count: validator.len(),
+        },
     })
 }
 

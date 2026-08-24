@@ -5,6 +5,18 @@ fork-aware untrusted index API, and the pure payoff compiler. It has no wallet,
 signer, blockhash, transaction submission, faucet, deployment, account
 creation, or persistence path.
 
+After the finalized release-bracketed bootstrap completes, `/v1/session`
+exposes the sole read-only attach/restart manifest. Its session ID is derived
+from the exact RPC endpoint bindings, genesis, checked release/profile/program
+coordinates, canonical decoder set, finalized account identities/body digests,
+and onchain-derived workflow cursors. The endpoint is unavailable during an
+incomplete bootstrap or when more than one release would make the singular
+browser identity ambiguous. It persists no daemon-local phases, caller roles,
+fixture rows, signer facts, future work guesses, scan-context slots, or
+daemon-assigned receive sequences. Finalized restart identity therefore stays
+stable across a daemon restart when the release, transport binding, and exact
+onchain account envelopes/bodies have not changed.
+
 ```text
 operatord compose-chain-config \
   --local-release-manifest /absolute/session/public-session.txt \
@@ -131,6 +143,9 @@ it has no caller-shaped RPC or release fields to compare or override. Its
 displayed/copied configuration is redacted too. For
 processed reads it brackets its bounded GET sequence with acquisition-state
 reads and rejects a changed connection generation or rollback epoch. The
+client also brackets the sequence with `/v1/session` and rejects a changed
+finalized session ID, so it cannot combine account/restart identities from two
+finalized projections. The
 echoed verification disposition means only that the read gate follows the last
 complete untrusted HTTP release bracket; it is explicitly not authority
 eligibility or cryptographic chain authentication.

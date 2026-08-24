@@ -32,10 +32,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "clutch-kernel"
-version = "0.1.0"
-
-[[package]]
 name = "clutch-liveness"
 version = "0.1.0"
 
@@ -52,7 +48,6 @@ dependencies = [
 name = "clutch-structured-claim"
 version = "0.1.0"
 dependencies = [
- "clutch-kernel",
  "clutch-solana-layout",
  "sha2",
 ]

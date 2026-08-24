@@ -409,6 +409,242 @@ impl OwnerSettlementExpectationBasisBookV4 {
     }
 }
 
+/// Constant-space source of verifier-derived filled settlement orders.
+///
+/// Implementations must project each row from an authenticated immutable
+/// source. Returning `None` represents one canonical unfilled order; it is not
+/// permission to omit or reorder the source's dense order range.
+pub trait VerifiedSettlementOrderStreamV4 {
+    /// Dense source order count, including unfilled orders.
+    fn order_count(&self) -> u8;
+
+    /// Filled-order projection at one dense source index.
+    fn order(&self, index: u8) -> Result<Option<VerifiedSettlementOrderV4>>;
+}
+
+/// Compact exhaustive result of streaming the V4 owner expectation book.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerSettlementExpectationStreamSummaryV4 {
+    owner_count: u16,
+    filled_order_count: u16,
+    expected_merge_delivery_count: u16,
+    consideration_debit_atoms: u64,
+    seller_credit_atoms: u64,
+    rounding_pot_price_units: u128,
+    requested_owner_basis: Option<OwnerSettlementExpectationBasisV4>,
+}
+
+impl OwnerSettlementExpectationStreamSummaryV4 {
+    /// Number of distinct owners with at least one filled order.
+    pub const fn owner_count(self) -> u16 { self.owner_count }
+    /// Number of filled orders in the exhaustive dense source range.
+    pub const fn filled_order_count(self) -> u16 { self.filled_order_count }
+    /// Total merge deliveries requiring later payment latches.
+    pub const fn expected_merge_delivery_count(self) -> u16 {
+        self.expected_merge_delivery_count
+    }
+    /// Aggregate exact buyer debit atoms after the sole division boundary.
+    pub const fn consideration_debit_atoms(self) -> u64 { self.consideration_debit_atoms }
+    /// Aggregate exact seller credit atoms after the sole division boundary.
+    pub const fn seller_credit_atoms(self) -> u64 { self.seller_credit_atoms }
+    /// Aggregate exact pre-division rounding-pot price units.
+    pub const fn rounding_pot_price_units(self) -> u128 { self.rounding_pot_price_units }
+    /// Requested owner basis, or `None` when no owner was requested.
+    pub const fn requested_owner_basis(self) -> Option<OwnerSettlementExpectationBasisV4> {
+        self.requested_owner_basis
+    }
+}
+
+fn validate_stream_order_v4(order: VerifiedSettlementOrderV4) -> Result<()> {
+    order.consideration_price_units.validate()?;
+    if order.owner == [0; 32]
+        || !order.consideration_price_units.present
+        || order.slice_count == 0
+        || order.merge_delivery_count > order.slice_count
+        || (order.side == SettlementSideV1::Buy && order.merge_delivery_count != 0)
+        || usize::from(order.order_index) >= MAX_ORDERS
+    {
+        return Err(Error::InvalidOrder);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn stream_basis_for_owner_v4<S: VerifiedSettlementOrderStreamV4 + ?Sized>(
+    market: [u8; 32],
+    epoch: [u8; 32],
+    candidate: [u8; 32],
+    owner_order_set_digest: [u8; 32],
+    price_scale: Amount,
+    owner: [u8; 32],
+    source: &S,
+) -> Result<OwnerSettlementExpectationBasisV4> {
+    let mut basis = OwnerSettlementExpectationBasisV4 {
+        market,
+        epoch,
+        candidate,
+        owner,
+        owner_order_set_digest,
+        price_scale,
+        expected_buy_order_mask: 0,
+        expected_sell_order_mask: 0,
+        expected_slice_count: 0,
+        expected_merge_delivery_count: 0,
+        expected_buy_price_units: PresentConsiderationV2::ABSENT,
+        expected_sell_price_units: PresentConsiderationV2::ABSENT,
+    };
+    let mut index = 0u8;
+    while index < source.order_count() {
+        if let Some(order) = source.order(index)? {
+            validate_stream_order_v4(order)?;
+            if order.order_index != index {
+                return Err(Error::InvalidOrder);
+            }
+            if order.owner == owner {
+                let bit = order_bit(order.order_index)?;
+                basis.expected_slice_count = basis
+                    .expected_slice_count
+                    .checked_add(order.slice_count)
+                    .ok_or(Error::ArithmeticOverflow)?;
+                basis.expected_merge_delivery_count = basis
+                    .expected_merge_delivery_count
+                    .checked_add(order.merge_delivery_count)
+                    .ok_or(Error::ArithmeticOverflow)?;
+                match order.side {
+                    SettlementSideV1::Buy => {
+                        basis.expected_buy_order_mask |= bit;
+                        basis.expected_buy_price_units.present = true;
+                        basis.expected_buy_price_units.value = basis
+                            .expected_buy_price_units
+                            .value
+                            .checked_add(order.consideration_price_units.value)
+                            .ok_or(Error::ArithmeticOverflow)?;
+                    }
+                    SettlementSideV1::Sell => {
+                        basis.expected_sell_order_mask |= bit;
+                        basis.expected_sell_price_units.present = true;
+                        basis.expected_sell_price_units.value = basis
+                            .expected_sell_price_units
+                            .value
+                            .checked_add(order.consideration_price_units.value)
+                            .ok_or(Error::ArithmeticOverflow)?;
+                    }
+                }
+            }
+        }
+        index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+    }
+    basis
+        .with_selected_fee(SelectedOwnerFeeV1 { owner, fee_atoms: 0 })?
+        .validate()?;
+    Ok(basis)
+}
+
+/// Derive owner count, filled count, merge count, and optionally one exact
+/// owner basis without materializing the 64-row basis book.
+#[allow(clippy::too_many_arguments)]
+pub fn derive_owner_settlement_expectation_stream_v4<
+    S: VerifiedSettlementOrderStreamV4 + ?Sized,
+>(
+    market: [u8; 32],
+    epoch: [u8; 32],
+    candidate: [u8; 32],
+    owner_order_set_digest: [u8; 32],
+    price_scale: Amount,
+    requested_owner: Option<[u8; 32]>,
+    source: &S,
+) -> Result<OwnerSettlementExpectationStreamSummaryV4> {
+    if market == [0; 32]
+        || epoch == [0; 32]
+        || candidate == [0; 32]
+        || owner_order_set_digest == [0; 32]
+        || price_scale == 0
+        || source.order_count() == 0
+        || usize::from(source.order_count()) > MAX_ORDERS
+        || requested_owner == Some([0; 32])
+    {
+        return Err(Error::InvalidExpectation);
+    }
+    let mut owner_count = 0u16;
+    let mut filled_order_count = 0u16;
+    let mut expected_merge_delivery_count = 0u16;
+    let mut consideration_debit_atoms = 0u64;
+    let mut seller_credit_atoms = 0u64;
+    let mut rounding_pot_price_units = 0u128;
+    let mut requested_owner_basis = None;
+    let mut index = 0u8;
+    while index < source.order_count() {
+        if let Some(order) = source.order(index)? {
+            validate_stream_order_v4(order)?;
+            if order.order_index != index {
+                return Err(Error::InvalidOrder);
+            }
+            let mut prior = 0u8;
+            let mut first_owner = true;
+            while prior < index {
+                if let Some(previous) = source.order(prior)? {
+                    if previous.order_index == order.order_index {
+                        return Err(Error::InvalidOrder);
+                    }
+                    if previous.owner == order.owner {
+                        first_owner = false;
+                    }
+                }
+                prior = prior.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+            }
+            filled_order_count = filled_order_count
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow)?;
+            expected_merge_delivery_count = expected_merge_delivery_count
+                .checked_add(order.merge_delivery_count)
+                .ok_or(Error::ArithmeticOverflow)?;
+            if first_owner {
+                owner_count = owner_count.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+                let basis = stream_basis_for_owner_v4(
+                    market,
+                    epoch,
+                    candidate,
+                    owner_order_set_digest,
+                    price_scale,
+                    order.owner,
+                    source,
+                )?;
+                let buy = basis.expected_buy_price_units();
+                let sell = basis.expected_sell_price_units();
+                consideration_debit_atoms = consideration_debit_atoms
+                    .checked_add(owner_debit_atoms(buy.value, basis.price_scale(), 0)?)
+                    .ok_or(Error::ArithmeticOverflow)?;
+                seller_credit_atoms = seller_credit_atoms
+                    .checked_add(owner_credit_atoms(sell.value, basis.price_scale())?)
+                    .ok_or(Error::ArithmeticOverflow)?;
+                rounding_pot_price_units = rounding_pot_price_units
+                    .checked_add(owner_rounding_residue_price_units(
+                        buy.value,
+                        sell.value,
+                        basis.price_scale(),
+                    )?)
+                    .ok_or(Error::ArithmeticOverflow)?;
+                if requested_owner == Some(order.owner) {
+                    requested_owner_basis = Some(basis);
+                }
+            }
+        }
+        index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+    }
+    if filled_order_count == 0 || owner_count == 0 {
+        return Err(Error::InvalidExpectation);
+    }
+    Ok(OwnerSettlementExpectationStreamSummaryV4 {
+        owner_count,
+        filled_order_count,
+        expected_merge_delivery_count,
+        consideration_debit_atoms,
+        seller_credit_atoms,
+        rounding_pot_price_units,
+        requested_owner_basis,
+    })
+}
+
 /// Derive the exhaustive owner-sorted V4 pre-fee basis.
 #[allow(clippy::too_many_arguments)]
 pub fn build_owner_settlement_expectation_basis_book_v4(
@@ -2200,6 +2436,116 @@ mod tests {
         assert_eq!(
             OwnerSettlementAccumulatorV4::decode_body(0x81, 4, &body),
             Err(Error::InvalidExpectation)
+        );
+    }
+
+    #[derive(Clone, Copy)]
+    struct TestOrderStreamV4 {
+        rows: [Option<VerifiedSettlementOrderV4>; 3],
+        count: u8,
+    }
+
+    impl VerifiedSettlementOrderStreamV4 for TestOrderStreamV4 {
+        fn order_count(&self) -> u8 { self.count }
+
+        fn order(&self, index: u8) -> Result<Option<VerifiedSettlementOrderV4>> {
+            self.rows
+                .get(usize::from(index))
+                .copied()
+                .ok_or(Error::InvalidOrder)
+        }
+    }
+
+    #[test]
+    fn streaming_summary_preserves_owner_rounding_and_merge_counts() {
+        let stream = TestOrderStreamV4 {
+            rows: [
+                Some(VerifiedSettlementOrderV4 {
+                    owner: [5; 32],
+                    order_index: 0,
+                    side: SettlementSideV1::Buy,
+                    consideration_price_units: PresentConsiderationV2::new(150),
+                    slice_count: 1,
+                    merge_delivery_count: 0,
+                }),
+                Some(VerifiedSettlementOrderV4 {
+                    owner: [6; 32],
+                    order_index: 1,
+                    side: SettlementSideV1::Sell,
+                    consideration_price_units: PresentConsiderationV2::new(150),
+                    slice_count: 1,
+                    merge_delivery_count: 1,
+                }),
+                None,
+            ],
+            count: 3,
+        };
+        let summary = derive_owner_settlement_expectation_stream_v4(
+            [1; 32],
+            [2; 32],
+            [3; 32],
+            [4; 32],
+            100,
+            Some([6; 32]),
+            &stream,
+        )
+        .unwrap();
+        assert_eq!(summary.owner_count(), 2);
+        assert_eq!(summary.filled_order_count(), 2);
+        assert_eq!(summary.expected_merge_delivery_count(), 1);
+        assert_eq!(summary.consideration_debit_atoms(), 2);
+        assert_eq!(summary.seller_credit_atoms(), 1);
+        assert_eq!(summary.rounding_pot_price_units(), 100);
+        assert_eq!(
+            summary.requested_owner_basis().unwrap().expected_sell_order_mask(),
+            1 << 1
+        );
+    }
+
+    #[test]
+    fn streaming_summary_refuses_duplicate_order_indices() {
+        let row = VerifiedSettlementOrderV4 {
+            owner: [5; 32],
+            order_index: 0,
+            side: SettlementSideV1::Buy,
+            consideration_price_units: PresentConsiderationV2::new(100),
+            slice_count: 1,
+            merge_delivery_count: 0,
+        };
+        let stream = TestOrderStreamV4 {
+            rows: [Some(row), Some(VerifiedSettlementOrderV4 { owner: [6; 32], ..row }), None],
+            count: 2,
+        };
+        assert_eq!(
+            derive_owner_settlement_expectation_stream_v4(
+                [1; 32], [2; 32], [3; 32], [4; 32], 100, None, &stream,
+            ),
+            Err(Error::InvalidOrder)
+        );
+    }
+
+    #[test]
+    fn streaming_summary_refuses_reordered_dense_source() {
+        let stream = TestOrderStreamV4 {
+            rows: [
+                Some(VerifiedSettlementOrderV4 {
+                    owner: [5; 32],
+                    order_index: 1,
+                    side: SettlementSideV1::Buy,
+                    consideration_price_units: PresentConsiderationV2::new(100),
+                    slice_count: 1,
+                    merge_delivery_count: 0,
+                }),
+                None,
+                None,
+            ],
+            count: 1,
+        };
+        assert_eq!(
+            derive_owner_settlement_expectation_stream_v4(
+                [1; 32], [2; 32], [3; 32], [4; 32], 100, None, &stream,
+            ),
+            Err(Error::InvalidOrder)
         );
     }
 }

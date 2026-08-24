@@ -5,7 +5,10 @@ use crate::runtime_contract::{
     CREATE_DESCRIPTOR_PAYLOAD_BYTES, STRUCTURED_CLAIM_FAMILY_TAG,
     STRUCTURED_CLAIM_FAMILY_VERSION,
 };
-use crate::{Error, Result};
+use crate::{
+    Error, Result, IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1,
+    STRUCTURED_CURRENT_RELEASE_CONTRACT_V1,
+};
 
 /// All family-local actions allocated by the canonical runtime contract.
 pub const RESERVED_STRUCTURED_CLAIM_ACTION_MASK: u16 =
@@ -21,7 +24,8 @@ pub const ENABLED_STRUCTURED_CLAIM_ACTION_MASK: u16 = 0;
 /// Wrapper build seam. No action is admitted until the current Product,
 /// deployment-release, and collateral-route joins are executable together.
 #[cfg(feature = "live-current-wrapper")]
-pub const ENABLED_STRUCTURED_CLAIM_ACTION_MASK: u16 = 0;
+pub const ENABLED_STRUCTURED_CLAIM_ACTION_MASK: u16 =
+    STRUCTURED_CURRENT_RELEASE_CONTRACT_V1.admitted_action_mask;
 
 const _: () = assert!(StructuredClaimActionV1::LAST_TAG < 16);
 const _: () = assert!(
@@ -37,6 +41,9 @@ const _: () = assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK == 0);
 const _: () = assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK == 0);
 const _: () =
     assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK & !RESERVED_STRUCTURED_CLAIM_ACTION_MASK == 0);
+const _: () = assert!(
+    ENABLED_STRUCTURED_CLAIM_ACTION_MASK & !IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1 == 0
+);
 const _: () = assert!(
     CREATE_DESCRIPTOR_PAYLOAD_BYTES
         <= clutch_solana_layout::registry::MAX_EXTENSION_PAYLOAD_BYTES

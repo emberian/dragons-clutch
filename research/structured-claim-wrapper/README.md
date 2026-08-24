@@ -4,11 +4,13 @@ Status: **RESEARCH MODEL / V1 DECISION NOTE** (2026-08-19). This directory
 changes no consensus bytes, production program, account layout, market terms,
 deployment artifact, or release claim. It imports no code from another project.
 
-Integration update (2026-08-22): [ADAPTER_PLAN.md](ADAPTER_PLAN.md) audits this
-model against the live Terms, Position, reservation, portfolio-settlement,
-Split/Merge, redemption, and Token-2022 seams. It supersedes the earlier
-identity, custody, descriptor-layout, and CPI recommendations below where they
-conflict. In particular:
+Implementation boundary update (2026-08-24): the former
+[adapter plan](ADAPTER_PLAN.md) is withdrawn design history. This file remains
+a comparative research model; it does not define current account layouts,
+actions, authorities, or release status. The current successor is documented
+by the [runtime contract](../../crates/clutch-structured-claim-runtime-contract/README.md),
+[adapter](../../programs/structured-claim-adapter/README.md), and
+[SBF wrapper](../../programs/structured-claim-sbf/README.md). In particular:
 
 - the Python model now mirrors the existing live `NativePortfolioClaimV1`,
   wrapped in a separately deployment-bound product id;
@@ -217,8 +219,8 @@ wrapper claim digest
 One cash atom is exactly one merged complete set, so this has the identical
 payout under every admitted simplex weight vector. It removes every redundant
 complete set from base supply and Hoard collateral while keeping both semantic
-facts in the existing Position account. See `ADAPTER_PLAN.md` for the exact
-transition, phase, direct-burn, fusion, and deployment rules.
+facts in the existing Position account. Current transition and deployment
+rules belong to the successor runtime and adapter documents linked above.
 
 Both internal-Position designs require one small, separately reviewed base
 transition before implementation. The audited form also moves free cash:
@@ -246,9 +248,8 @@ backing with a digest, price oracle, insurance pool, or discretionary keeper.
 ## Exact transitions in the baseline full-Egg model
 
 The transitions in this section describe the deliberately simpler full-Egg
-vault retained in `WrapperMachine`. The promotion design uses the
-cash-plus-residual transitions in `ADAPTER_PLAN.md` and
-`CompressedWrapperMachine`.
+vault retained in `WrapperMachine`. `CompressedWrapperMachine` models the
+cash-plus-residual alternative. Neither model is current execution authority.
 
 Every transition validates all arithmetic, identities, balances, and account
 profiles before the first CPI. Solana transaction rollback is still relied upon
@@ -428,7 +429,9 @@ reduce precisely the composability the wrapper is meant to buy.
 
 The 272-byte layout below predates deployment-slot binding and the decision to
 derive, rather than persist, redundant claim/product ids. Do not implement it.
-`ADAPTER_PLAN.md` specifies the current 384-byte candidate.
+Historical descriptor v1 was 384 bytes and is decode-only. The current
+source-staged descriptor v2 layout and coordinate are owned by the runtime
+contract and central registry; this research note does not restate them.
 
 The resource model uses this 272-byte proposal:
 
