@@ -8,24 +8,21 @@ use dclutch_capability_contract::{
     CapabilityManifestV1, ContentId as CapabilityContentId, RequiredFoundingEntryV1,
 };
 use dclutch_collateral_contract::{
-    CREATE_REALM_BYTES, CreateRealmV1, FOUND_MARKET_AND_FUND_BYTES, FoundMarketAndFundV1,
-    frame::{AccountRole, CREATE_REALM_FRAME, FOUND_MARKET_AND_FUND_FRAME, Role},
+    frame::{AccountRole, Role, CREATE_REALM_FRAME, FOUND_MARKET_AND_FUND_FRAME},
+    CreateRealmV1, FoundMarketAndFundV1, CREATE_REALM_BYTES, FOUND_MARKET_AND_FUND_BYTES,
 };
 use dclutch_core_contract::{ContentId as CoreContentId, MarketIdentity, MarketRoot};
+use dclutch_market_contract::market::{CategoricalMarketV1, CategoricalSettlementSummaryV1};
 use dclutch_product_contract::{
+    capacity::CapacityProfileV1, claim::CategoricalUnitV1, product::InstanceV1,
     ContentId as ProductContentId,
-    capacity::CapacityProfileV1,
-    claim::{CategoricalUnitV1, ClaimBasisProfileV1},
-    product::InstanceV1,
 };
 use dclutch_pyth_contract::{
-    feed_profile::PythFeedProfileV1, funding::FUNDING_BYTES, market::MarketStateV1,
-    policy::CategoricalPythPolicyRecordV1, receipt::ResolutionReceiptV1,
-    resolution_material::CategoricalPythResolutionMaterialV1,
+    funding::FUNDING_BYTES, resolution_material::CategoricalPythResolutionMaterialV1,
 };
 use dclutch_realm_contract::{
-    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_PDA_DOMAIN, RealmV1,
-    RealmV1Input,
+    FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1, RealmV1Input, REALM_BYTES,
+    REALM_PDA_DOMAIN,
 };
 use dclutch_token_svm::{CollateralAdapterReleaseV1, PRODUCTION_ADAPTER_RELEASES};
 use solana_program::{
@@ -33,11 +30,11 @@ use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
-    sysvar::{SysvarSerialize, rent::Rent},
+    sysvar::{rent::Rent, SysvarSerialize},
 };
 use solana_sdk_ids::{bpf_loader, bpf_loader_upgradeable, native_loader, system_program, sysvar};
 
-use crate::{FUND_SEED, Finality, MARKET_SEED, Observation, ObservedAccount};
+use crate::{Finality, Observation, ObservedAccount, FUND_SEED, MARKET_SEED};
 
 /// Initial Market generation created by this foundation workflow.
 ///
@@ -434,7 +431,7 @@ pub fn build_found_market_and_fund_v1(
         .map_err(|_| FoundationError::InvalidRecord)?;
     require_canonical(&state.product_instance.data, &instance.to_bytes())?;
     instance
-        .validate_claim_basis(claim_id, ClaimBasisProfileV1::CategoricalUnit(claim))
+        .validate_claim_basis(claim_id, claim)
         .map_err(|_| FoundationError::ContentLinkMismatch)?;
     if instance.partition_cell_count() != u32::from(outcome_count) {
         return Err(FoundationError::InvalidOutcomeCount);
@@ -494,12 +491,7 @@ pub fn build_found_market_and_fund_v1(
         .map_err(|_| FoundationError::InvalidRecord)?;
     root.register_child(FOUNDATION_GENERATION, 0)
         .map_err(|_| FoundationError::InvalidRecord)?;
-    let market_space = validate_market_space(
-        outcome_count,
-        root,
-        *resolution_material.policy(),
-        *resolution_material.feed_profile(),
-    )?;
+    let market_space = validate_market_space(outcome_count, root)?;
     let market_rent = rent.minimum_balance(market_space);
     let total_sponsor_debit = market_rent
         .checked_add(funding_quote.total_principal())
@@ -729,43 +721,31 @@ fn core_id(bytes: [u8; 32]) -> Result<CoreContentId, FoundationError> {
     CoreContentId::new(bytes).map_err(|_| FoundationError::ContentLinkMismatch)
 }
 
-fn validate_market_space(
-    outcome_count: u8,
-    root: MarketRoot,
-    policy: CategoricalPythPolicyRecordV1,
-    feed_profile: PythFeedProfileV1,
-) -> Result<usize, FoundationError> {
+fn validate_market_space(outcome_count: u8, root: MarketRoot) -> Result<usize, FoundationError> {
     match outcome_count {
-        2 => typed_market_space::<2>(root, policy, feed_profile),
-        3 => typed_market_space::<3>(root, policy, feed_profile),
-        4 => typed_market_space::<4>(root, policy, feed_profile),
-        5 => typed_market_space::<5>(root, policy, feed_profile),
-        6 => typed_market_space::<6>(root, policy, feed_profile),
-        7 => typed_market_space::<7>(root, policy, feed_profile),
-        8 => typed_market_space::<8>(root, policy, feed_profile),
-        9 => typed_market_space::<9>(root, policy, feed_profile),
-        10 => typed_market_space::<10>(root, policy, feed_profile),
-        11 => typed_market_space::<11>(root, policy, feed_profile),
-        12 => typed_market_space::<12>(root, policy, feed_profile),
-        13 => typed_market_space::<13>(root, policy, feed_profile),
-        14 => typed_market_space::<14>(root, policy, feed_profile),
-        15 => typed_market_space::<15>(root, policy, feed_profile),
-        16 => typed_market_space::<16>(root, policy, feed_profile),
+        2 => typed_market_space::<2>(root),
+        3 => typed_market_space::<3>(root),
+        4 => typed_market_space::<4>(root),
+        5 => typed_market_space::<5>(root),
+        6 => typed_market_space::<6>(root),
+        7 => typed_market_space::<7>(root),
+        8 => typed_market_space::<8>(root),
+        9 => typed_market_space::<9>(root),
+        10 => typed_market_space::<10>(root),
+        11 => typed_market_space::<11>(root),
+        12 => typed_market_space::<12>(root),
+        13 => typed_market_space::<13>(root),
+        14 => typed_market_space::<14>(root),
+        15 => typed_market_space::<15>(root),
+        16 => typed_market_space::<16>(root),
         _ => Err(FoundationError::InvalidOutcomeCount),
     }
 }
 
-fn typed_market_space<const N: usize>(
-    root: MarketRoot,
-    policy: CategoricalPythPolicyRecordV1,
-    feed_profile: PythFeedProfileV1,
-) -> Result<usize, FoundationError> {
-    let outcome_count = u8::try_from(N).map_err(|_| FoundationError::InvalidOutcomeCount)?;
-    let receipt =
-        ResolutionReceiptV1::empty(outcome_count).map_err(|_| FoundationError::InvalidRecord)?;
-    MarketStateV1::<N>::new(root, policy, feed_profile, 0, [0; N], receipt)
+fn typed_market_space<const N: usize>(root: MarketRoot) -> Result<usize, FoundationError> {
+    CategoricalMarketV1::<N>::new(root, 0, [0; N], CategoricalSettlementSummaryV1::empty())
         .map_err(|_| FoundationError::ContentLinkMismatch)?;
-    MarketStateV1::<N>::encoded_len().map_err(|_| FoundationError::ArithmeticOverflow)
+    CategoricalMarketV1::<N>::encoded_len().map_err(|_| FoundationError::ArithmeticOverflow)
 }
 
 #[cfg(test)]

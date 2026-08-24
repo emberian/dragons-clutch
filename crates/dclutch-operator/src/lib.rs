@@ -1,179 +1,201 @@
 //! Host-only construction of unsigned dClutch categorical-resolution instructions.
 //!
-//! This crate is deliberately an untrusted projection builder.  It accepts
-//! observed account bytes together with a slot, timestamp, and finality label,
-//! re-decodes the persistent contracts, and derives every protocol-selected
-//! account.  It neither signs, sends, nor reads accounts from RPC.
+//! This untrusted projection builder accepts one finalized snapshot of
+//! canonical accounts, re-decodes their immutable bindings, and constructs an
+//! unsigned instruction. It never performs RPC, signing, or submission.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+use dclutch_capability_contract::{CapabilityManifestV1, ContentId as CapabilityContentId};
 use dclutch_core_contract::Phase;
+use dclutch_market_contract::market::{decode_market_outcome_count, CategoricalMarketV1};
 use dclutch_pyth_contract::{
-    funding::ResolutionFundV1,
-    instruction::{ResolveCategoricalFailureV1, ResolveCategoricalPythV1},
-    market::MarketStateV1,
+    funding::{
+        required_resolution_minimum_balance, validate_required_resolution_funding, FundingStateV1,
+    },
+    instruction::{
+        ResolveCategoricalFailureV1, ResolveCategoricalPythV1, RESOLVE_FAILURE_BYTES,
+        RESOLVE_HEADER_BYTES,
+    },
+    resolution_material::CategoricalPythResolutionMaterialV1,
 };
-use dclutch_pyth_svm::{PRODUCTION_RELEASES, PostUpdateParamsView, PythReleaseV1};
+use dclutch_pyth_svm::{PostUpdateParamsView, PythReleaseV1, PRODUCTION_RELEASES};
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
+use solana_sdk_ids::system_program;
 
 /// Chain-derived unsigned Realm and Market foundation workflows.
 pub mod foundation;
 
-const FUND_SEED: &[u8] = b"dclutch/resolution-fund/v1";
-const MARKET_SEED: &[u8] = b"dclutch/market-root/v1";
+pub(crate) const FUND_SEED: &[u8] = b"dclutch/resolution-fund/v1";
+pub(crate) const MARKET_SEED: &[u8] = b"dclutch/market-root/v1";
 const RECEIVER_TREASURY_SEED: &[u8] = b"treasury";
 const RECEIVER_CONFIG_SEED: &[u8] = b"config";
 
 /// The exact number of accounts in a price-resolution frame.
-pub const PRICE_FRAME_ACCOUNTS: usize = 13;
+pub const PRICE_FRAME_ACCOUNTS: usize = 15;
 /// The exact number of accounts in a permissionless failure-resolution frame.
-pub const FAILURE_FRAME_ACCOUNTS: usize = 4;
+pub const FAILURE_FRAME_ACCOUNTS: usize = 6;
 
 /// An immutable finality label supplied with an observation report.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Finality {
-    /// The observation was obtained at processed commitment.
+    /// Observed at processed commitment.
     Processed,
-    /// The observation was obtained at confirmed commitment.
+    /// Observed at confirmed commitment.
     Confirmed,
-    /// The observation was obtained at finalized commitment.
+    /// Observed at finalized commitment.
     Finalized,
 }
 
-/// Slot, wall-clock time, and finality attached to a bounded account observation.
+/// Slot, wall-clock time, and finality attached to an account observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Observation {
-    /// Slot at which the account bytes were observed.
+    /// Observed slot.
     pub slot: u64,
-    /// Observed Unix timestamp used to select an eligible immutable release.
+    /// Observed Unix time.
     pub unix_timestamp: i64,
-    /// Commitment/finality label of this observation.
+    /// Commitment/finality label.
     pub finality: Finality,
 }
 
-/// Host-observed account metadata and bytes.
+/// Host-observed account metadata and exact bytes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ObservedAccount {
-    /// Exact observation provenance for this account record.
+    /// Observation provenance.
     pub observation: Observation,
-    /// Account address at the recorded observation.
+    /// Account address.
     pub key: Pubkey,
-    /// Account owner at the recorded observation.
+    /// Program owner.
     pub owner: Pubkey,
-    /// Lamports observed at the same slot and finality as `data`.
+    /// Observed lamports.
     pub lamports: u64,
-    /// Executable bit observed at the same slot and finality as `data`.
+    /// Observed executable bit.
     pub executable: bool,
-    /// Exact account data at the recorded observation.
+    /// Exact account bytes.
     pub data: Vec<u8>,
 }
 
-/// The two hostile account observations from which a resolution is constructed.
+/// Same-finalized account observations required by resolution.
+///
+/// Material and manifest are mandatory immutable inputs. Callers cannot supply
+/// alternate policy, feed, capability, provider, or funding DTO authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolutionState {
-    /// The hostile-decoded categorical Market account.
+    /// Provider-neutral categorical Market.
     pub market: ObservedAccount,
-    /// The hostile-decoded prepaid resolution Fund account.
+    /// Raw 192-byte capability funding state.
     pub fund: ObservedAccount,
-    /// Rent-exempt minimum for the observed Fund length, obtained in the same report.
+    /// Immutable Pyth policy plus feed-semantics material.
+    pub resolution_material: ObservedAccount,
+    /// Immutable manifest selecting the funding entry.
+    pub capability_manifest: ObservedAccount,
+    /// Market-root authenticated rent-refund destination.
+    pub sponsor: ObservedAccount,
+    /// Same-snapshot rent-exempt minimum for the 192-byte funding account.
     pub fund_rent_minimum: u64,
 }
 
 /// Caller-selected transaction plumbing for a price path, never semantic authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PricePlumbing {
-    /// Writable signing resolver/payer account.
+    /// Writable signing resolver.
     pub resolver: Pubkey,
-    /// Writable signing temporary Pyth update account.
+    /// Writable signing temporary update account.
     pub update: Pubkey,
-    /// Read-only encoded VAA account selected for the post-update call.
+    /// Provider message account.
     pub encoded_vaa: Pubkey,
-    /// Exact post-update body, excluding the Pyth receiver discriminator.
+    /// Exact Pyth receiver post-update body.
     pub post_update_body: Vec<u8>,
 }
 
-/// Caller-selected permissionless bounty destination for a failure path.
+/// Caller-selected permissionless bounty destination.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FailurePlumbing {
-    /// Writable recipient of the immutable failure bounty.
+    /// Writable payout recipient.
     pub bounty_recipient: Pubkey,
 }
 
-/// A constructed instruction plus the observation facts that selected it.
+/// Constructed unsigned instruction and the observations that selected it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolutionReport {
-    /// Unsigned, exact Solana instruction material.
+    /// Exact instruction material, never signed or sent.
     pub instruction: Instruction,
-    /// Required observation provenance.
+    /// Shared finalized observation.
     pub observation: Observation,
-    /// Deterministic Fund debits and refunds implied by the observed Fund facts.
+    /// Exact pre-submission funding classification.
     pub funding: FundingReport,
 }
 
-/// Exact non-principal Fund movements identified before instruction submission.
+/// Exact non-Hoard resolution-fund movements.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FundingReport {
-    /// Fund-account rent returned on successful closure; never provider funding.
+    /// Fund account rent refunded at closure.
     pub fund_rent_refund: u64,
-    /// Provider reimbursement reserved by the immutable Fund.
+    /// Immutable manifest-selected provider reimbursement.
     pub provider_fee_reimbursement: u64,
-    /// Resolver or permissionless failure-recipient bounty reserved by the Fund.
+    /// Immutable manifest-selected bounty.
     pub bounty: u64,
-    /// Excess refundable only to the immutable sponsor address.
+    /// Excess refunded to the Market root's rent-refund identity.
     pub sponsor_refund_excess: u64,
 }
 
-/// Refusal from hostile state, catalog selection, or frame construction.
+/// Refusal from hostile state, immutable bindings, or frame construction.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Error {
-    /// The Market bytes did not decode as an implemented outcome width.
+    /// Market bytes were not one implemented categorical Market width.
     InvalidMarket,
-    /// The Fund bytes did not decode as the exact fund contract.
+    /// Funding bytes were not the raw canonical funding state.
     InvalidFund,
-    /// An observed state account was not owned by the adapter program.
+    /// Immutable resolution material was malformed.
+    InvalidMaterial,
+    /// Immutable capability manifest was malformed.
+    InvalidManifest,
+    /// A program-owned role had an invalid owner or executable bit.
     InvalidOwner,
-    /// Account observations not labeled finalized cannot construct an eligible instruction.
+    /// The root-selected sponsor was not an empty system account.
+    InvalidSponsor,
+    /// An observation was not finalized.
     ObservationNotFinalized,
-    /// Account records did not come from one exact observation.
+    /// Inputs did not share exactly one observation.
     ObservationMismatch,
-    /// The Market key was not its canonical PDA.
+    /// Market address was not its identity PDA.
     MarketPdaMismatch,
-    /// The Fund key was not its canonical PDA.
+    /// Funding address was not the Market-derived PDA.
     FundPdaMismatch,
-    /// Fund facts did not bind the observed Market, generation, and sponsor.
-    FundMismatch,
-    /// Observed Fund lamports could not cover rent, provider reimbursement, and bounty.
-    FundUnderfunded,
-    /// The Market was not in the open phase required by either path.
-    MarketNotOpen,
-    /// Canonical policy or feed-profile content identities did not bind.
+    /// An immutable content binding differed.
     ContentIdentityMismatch,
-    /// No catalog entry selected the immutable policy release at observation time.
+    /// Manifest did not uniquely select the policy configuration.
+    FundingSelectionMismatch,
+    /// Funding state or balance was insufficient or incompatible.
+    FundUnderfunded,
+    /// Market was not open.
+    MarketNotOpen,
+    /// No catalog release selected the committed material release.
     ReleaseUnavailable,
-    /// The observed clock was outside the inclusive price-resolution window.
+    /// Observation was outside the inclusive price window.
     PriceWindowClosed,
-    /// Permissionless failure resolution was attempted before the price window elapsed.
+    /// Failure was attempted before the price window elapsed.
     FailureTooEarly,
-    /// The catalog's receiver configuration was not its canonical PDA.
+    /// Release receiver configuration was not its canonical PDA.
     ConfigPdaMismatch,
-    /// The post-update body was not one exact Pyth receiver body.
+    /// Post-update body was not exact Pyth receiver material.
     InvalidPostUpdateBody,
-    /// Encoding an already validated dClutch instruction unexpectedly failed.
+    /// Encoding an already validated instruction failed.
     InstructionEncoding,
 }
 
-/// Build the fixed 13-role price frame from hostile-decoded state and the shared catalog.
+/// Build the canonical 15-account Pyth price-resolution frame.
 pub fn build_price_resolution(
     program_id: Pubkey,
     state: &ResolutionState,
     plumbing: &PricePlumbing,
 ) -> Result<ResolutionReport, Error> {
-    let observation = same_observation(&[&state.market, &state.fund])?;
+    let observation = state_observation(state)?;
     let facts = decode_state(program_id, state)?;
     if observation.unix_timestamp < facts.price_window_start
         || observation.unix_timestamp > facts.price_window_end
@@ -188,9 +210,8 @@ pub fn build_price_resolution(
     if Pubkey::new_from_array(release.receiver_config()) != expected_config {
         return Err(Error::ConfigPdaMismatch);
     }
-    let treasury_id = [post.treasury_id()];
     let (treasury, _) =
-        Pubkey::find_program_address(&[RECEIVER_TREASURY_SEED, &treasury_id], &receiver);
+        Pubkey::find_program_address(&[RECEIVER_TREASURY_SEED, &[post.treasury_id()]], &receiver);
     let data = encode_price(
         facts.generation,
         facts.child_count,
@@ -201,7 +222,9 @@ pub fn build_price_resolution(
         AccountMeta::new(plumbing.update, true),
         AccountMeta::new(state.market.key, false),
         AccountMeta::new(state.fund.key, false),
-        AccountMeta::new(facts.sponsor, false),
+        AccountMeta::new_readonly(state.resolution_material.key, false),
+        AccountMeta::new_readonly(state.capability_manifest.key, false),
+        AccountMeta::new(state.sponsor.key, false),
         AccountMeta::new_readonly(receiver, false),
         AccountMeta::new_readonly(
             Pubkey::new_from_array(release.receiver_programdata()),
@@ -212,7 +235,7 @@ pub fn build_price_resolution(
         AccountMeta::new_readonly(Pubkey::new_from_array(release.router_program()), false),
         AccountMeta::new_readonly(Pubkey::new_from_array(release.router_programdata()), false),
         AccountMeta::new(treasury, false),
-        AccountMeta::new_readonly(Pubkey::new_from_array([0; 32]), false),
+        AccountMeta::new_readonly(system_program::ID, false),
     ];
     Ok(ResolutionReport {
         instruction: Instruction {
@@ -225,18 +248,18 @@ pub fn build_price_resolution(
     })
 }
 
-/// Build the fixed four-role permissionless failure frame from hostile-decoded state.
+/// Build the canonical six-account permissionless failure-resolution frame.
 pub fn build_failure_resolution(
     program_id: Pubkey,
     state: &ResolutionState,
     plumbing: FailurePlumbing,
 ) -> Result<ResolutionReport, Error> {
-    let observation = same_observation(&[&state.market, &state.fund])?;
+    let observation = state_observation(state)?;
     let facts = decode_state(program_id, state)?;
     if observation.unix_timestamp <= facts.price_window_end {
         return Err(Error::FailureTooEarly);
     }
-    let mut data = vec![0; dclutch_pyth_contract::instruction::RESOLVE_FAILURE_BYTES];
+    let mut data = vec![0; RESOLVE_FAILURE_BYTES];
     ResolveCategoricalFailureV1::new(facts.generation, facts.child_count)
         .encode(&mut data)
         .map_err(|_| Error::InstructionEncoding)?;
@@ -244,7 +267,9 @@ pub fn build_failure_resolution(
         AccountMeta::new(plumbing.bounty_recipient, false),
         AccountMeta::new(state.market.key, false),
         AccountMeta::new(state.fund.key, false),
-        AccountMeta::new(facts.sponsor, false),
+        AccountMeta::new_readonly(state.resolution_material.key, false),
+        AccountMeta::new_readonly(state.capability_manifest.key, false),
+        AccountMeta::new(state.sponsor.key, false),
     ];
     Ok(ResolutionReport {
         instruction: Instruction {
@@ -261,7 +286,9 @@ pub fn build_failure_resolution(
 struct Facts {
     generation: u64,
     child_count: u64,
-    sponsor: Pubkey,
+    policy_id: [u8; 32],
+    manifest_id: [u8; 32],
+    rent_refund: [u8; 32],
     release_id: [u8; 32],
     price_window_start: i64,
     price_window_end: i64,
@@ -271,40 +298,113 @@ struct Facts {
 fn encode_price(generation: u64, child_count: u64, body: &[u8]) -> Result<Vec<u8>, Error> {
     let wire = ResolveCategoricalPythV1::new(generation, child_count, body)
         .map_err(|_| Error::InstructionEncoding)?;
-    let mut data = vec![0; dclutch_pyth_contract::instruction::RESOLVE_HEADER_BYTES + body.len()];
+    let mut data = vec![0; RESOLVE_HEADER_BYTES + body.len()];
     wire.encode(&mut data)
         .map_err(|_| Error::InstructionEncoding)?;
     Ok(data)
 }
 
+fn state_observation(state: &ResolutionState) -> Result<Observation, Error> {
+    same_observation(&[
+        &state.market,
+        &state.fund,
+        &state.resolution_material,
+        &state.capability_manifest,
+        &state.sponsor,
+    ])
+}
+
 fn decode_state(program_id: Pubkey, state: &ResolutionState) -> Result<Facts, Error> {
-    same_observation(&[&state.market, &state.fund])?;
-    if state.market.owner != program_id || state.fund.owner != program_id {
+    state_observation(state)?;
+    if state.market.owner != program_id
+        || state.fund.owner != program_id
+        || state.resolution_material.owner != program_id
+        || state.capability_manifest.owner != program_id
+        || state.market.executable
+        || state.fund.executable
+        || state.resolution_material.executable
+        || state.capability_manifest.executable
+    {
         return Err(Error::InvalidOwner);
     }
-    let facts = market_facts(program_id, state.market.key, &state.market.data)?;
+    if state.sponsor.owner != system_program::ID
+        || state.sponsor.executable
+        || !state.sponsor.data.is_empty()
+    {
+        return Err(Error::InvalidSponsor);
+    }
+    let mut facts = market_facts(program_id, state.market.key, &state.market.data)?;
     let (expected_fund, _) =
         Pubkey::find_program_address(&[FUND_SEED, state.market.key.as_ref()], &program_id);
     if state.fund.key != expected_fund {
         return Err(Error::FundPdaMismatch);
     }
-    let fund = ResolutionFundV1::decode(&state.fund.data).map_err(|_| Error::InvalidFund)?;
-    if fund.market() != state.market.key.as_ref() || fund.generation() != facts.generation {
-        return Err(Error::FundMismatch);
+    let material = CategoricalPythResolutionMaterialV1::decode(&state.resolution_material.data)
+        .map_err(|_| Error::InvalidMaterial)?;
+    if material.to_bytes().as_slice() != state.resolution_material.data.as_slice()
+        || hash(&material.policy().to_bytes()).to_bytes() != facts.policy_id
+        || hash(&material.feed_profile().to_bytes()).to_bytes()
+            != *material.policy().feed_profile_id()
+    {
+        return Err(Error::ContentIdentityMismatch);
     }
-    let classified = fund
-        .classify_balance(state.fund.lamports, state.fund_rent_minimum)
-        .map_err(|_| Error::FundUnderfunded)?;
-    Ok(Facts {
-        sponsor: Pubkey::new_from_array(*fund.sponsor_refund()),
-        funding: FundingReport {
-            fund_rent_refund: state.fund_rent_minimum,
-            provider_fee_reimbursement: fund.provider_fee_reimbursement(),
-            bounty: fund.success_bounty(),
-            sponsor_refund_excess: classified.sponsor_refund_excess(),
-        },
-        ..facts
-    })
+    let manifest = CapabilityManifestV1::decode(&state.capability_manifest.data)
+        .map_err(|_| Error::InvalidManifest)?;
+    if manifest.as_bytes() != state.capability_manifest.data.as_slice()
+        || hash(manifest.as_bytes()).to_bytes() != facts.manifest_id
+    {
+        return Err(Error::ContentIdentityMismatch);
+    }
+    let policy_id =
+        CapabilityContentId::new(facts.policy_id).map_err(|_| Error::ContentIdentityMismatch)?;
+    let selected = manifest
+        .required_founding_entry_for_config(policy_id)
+        .map_err(|_| Error::FundingSelectionMismatch)?;
+    if selected.entry().release_id().to_bytes() != *material.policy().release_id() {
+        return Err(Error::ContentIdentityMismatch);
+    }
+    let funding = FundingStateV1::decode(&state.fund.data).map_err(|_| Error::InvalidFund)?;
+    if funding.to_bytes().as_slice() != state.fund.data.as_slice() {
+        return Err(Error::InvalidFund);
+    }
+    let manifest_id =
+        CapabilityContentId::new(facts.manifest_id).map_err(|_| Error::ContentIdentityMismatch)?;
+    validate_required_resolution_funding(
+        funding,
+        manifest_id,
+        manifest,
+        selected,
+        state.fund_rent_minimum,
+        funding.remaining().total_principal(),
+    )
+    .map_err(|_| Error::FundUnderfunded)?;
+    let minimum =
+        required_resolution_minimum_balance(funding).map_err(|_| Error::FundUnderfunded)?;
+    let sponsor_refund_excess = state
+        .fund
+        .lamports
+        .checked_sub(minimum)
+        .ok_or(Error::FundUnderfunded)?;
+    if state.sponsor.key.to_bytes() != facts.rent_refund {
+        return Err(Error::ContentIdentityMismatch);
+    }
+    let policy = material
+        .policy()
+        .to_kernel_policy()
+        .map_err(|_| Error::InvalidMaterial)?;
+    let (price_window_start, price_window_end) = policy
+        .resolution_window()
+        .map_err(|_| Error::InvalidMaterial)?;
+    facts.release_id = *material.policy().release_id();
+    facts.price_window_start = price_window_start;
+    facts.price_window_end = price_window_end;
+    facts.funding = FundingReport {
+        fund_rent_refund: state.fund_rent_minimum,
+        provider_fee_reimbursement: funding.remaining().provider_principal(),
+        bounty: funding.remaining().bounty_principal(),
+        sponsor_refund_excess,
+    };
+    Ok(facts)
 }
 
 fn same_observation(accounts: &[&ObservedAccount]) -> Result<Observation, Error> {
@@ -325,8 +425,7 @@ fn same_observation(accounts: &[&ObservedAccount]) -> Result<Observation, Error>
 }
 
 fn market_facts(program_id: Pubkey, market_key: Pubkey, bytes: &[u8]) -> Result<Facts, Error> {
-    let outcomes = bytes.get(10).copied().ok_or(Error::InvalidMarket)?;
-    match outcomes {
+    match decode_market_outcome_count(bytes).map_err(|_| Error::InvalidMarket)? {
         2 => typed_market_facts::<2>(program_id, market_key, bytes),
         3 => typed_market_facts::<3>(program_id, market_key, bytes),
         4 => typed_market_facts::<4>(program_id, market_key, bytes),
@@ -351,16 +450,10 @@ fn typed_market_facts<const N: usize>(
     market_key: Pubkey,
     bytes: &[u8],
 ) -> Result<Facts, Error> {
-    let market = MarketStateV1::<N>::decode(bytes).map_err(|_| Error::InvalidMarket)?;
+    let market = CategoricalMarketV1::<N>::decode(bytes).map_err(|_| Error::InvalidMarket)?;
     let root = market.root();
     if root.phase() != Phase::Open {
         return Err(Error::MarketNotOpen);
-    }
-    if hash(&market.policy().to_bytes()).to_bytes()
-        != root.identity().resolution_policy_id().to_bytes()
-        || hash(&market.feed_profile().to_bytes()).to_bytes() != *market.policy().feed_profile_id()
-    {
-        return Err(Error::ContentIdentityMismatch);
     }
     let identity_digest = hash(&root.identity().to_bytes()).to_bytes();
     let (expected_market, _) =
@@ -368,20 +461,15 @@ fn typed_market_facts<const N: usize>(
     if market_key != expected_market {
         return Err(Error::MarketPdaMismatch);
     }
-    let policy = market
-        .policy()
-        .to_kernel_policy()
-        .map_err(|_| Error::InvalidMarket)?;
-    let (price_window_start, price_window_end) = policy
-        .resolution_window()
-        .map_err(|_| Error::InvalidMarket)?;
     Ok(Facts {
         generation: root.identity().generation(),
         child_count: root.outstanding_children(),
-        sponsor: Pubkey::default(),
-        release_id: *market.policy().release_id(),
-        price_window_start,
-        price_window_end,
+        policy_id: root.identity().resolution_policy_id().to_bytes(),
+        manifest_id: root.identity().capability_manifest_id().to_bytes(),
+        rent_refund: root.rent_refund(),
+        release_id: [0; 32],
+        price_window_start: 0,
+        price_window_end: 0,
         funding: FundingReport {
             fund_rent_refund: 0,
             provider_fee_reimbursement: 0,
@@ -416,321 +504,220 @@ fn select_release(release_id: [u8; 32], observed_time: i64) -> Result<PythReleas
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_capability_contract::{
+        ActivationPolicy, CapabilityEntryV1, FundingQuoteV1, CAPABILITY_ENTRY_BYTES,
+        MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+    };
     use dclutch_core_contract::{ContentId, MarketIdentity, MarketRoot};
     use dclutch_kernel::resolution::categorical_pyth_v1::{
         CategoricalPythV1PolicyInput, MAX_PRICE_CELLS,
     };
+    use dclutch_market_contract::market::CategoricalSettlementSummaryV1;
     use dclutch_pyth_contract::{
-        feed_profile::PythFeedProfileV1, policy::CategoricalPythPolicyRecordV1,
-        receipt::ResolutionReceiptV1,
+        feed_profile::PythFeedProfileV1,
+        funding::{construct_required_resolution_funding, FUNDING_BYTES},
+        instruction::ResolveCategoricalFailureV1,
+        policy::CategoricalPythPolicyRecordV1,
+        resolution_material::CategoricalPythResolutionMaterialV1,
     };
 
-    fn observed_state(release_id: [u8; 32]) -> ResolutionState {
-        let profile = PythFeedProfileV1::new([1; 32], [2; 32], [3; 32]).expect("profile");
-        let edges = [0; MAX_PRICE_CELLS];
+    fn observation() -> Observation {
+        Observation {
+            slot: 7,
+            unix_timestamp: 12,
+            finality: Finality::Finalized,
+        }
+    }
+
+    fn account(key: Pubkey, owner: Pubkey, lamports: u64, data: Vec<u8>) -> ObservedAccount {
+        ObservedAccount {
+            observation: observation(),
+            key,
+            owner,
+            lamports,
+            executable: false,
+            data,
+        }
+    }
+
+    fn id(byte: u8) -> ContentId {
+        ContentId::new([byte; 32]).expect("nonzero ID")
+    }
+
+    fn fixture() -> (Pubkey, ResolutionState) {
+        let program = Pubkey::new_from_array([40; 32]);
+        let sponsor = Pubkey::new_from_array([41; 32]);
+        let feed = PythFeedProfileV1::new([1; 32], [2; 32], [3; 32]).expect("feed");
         let policy = CategoricalPythPolicyRecordV1::new(CategoricalPythV1PolicyInput {
-            pyth_release_id: release_id,
-            feed_profile_id: hash(&profile.to_bytes()).to_bytes(),
+            pyth_release_id: [9; 32],
+            feed_profile_id: hash(&feed.to_bytes()).to_bytes(),
             target_time: 10,
             grace: 0,
-            window: 10,
-            max_crossing_lag: 10,
-            max_age: 10,
-            max_future_skew: 10,
+            window: 1,
+            max_crossing_lag: 1,
+            max_age: 1,
+            max_future_skew: 1,
             confidence_multiplier: 1,
-            max_confidence_bps: 100,
-            max_normalized_confidence_atoms: 100,
+            max_confidence_bps: 1,
+            max_normalized_confidence_atoms: 1,
             normalized_decimals: 0,
             price_cell_count: 1,
-            upper_edges: edges,
+            upper_edges: [0; MAX_PRICE_CELLS],
             failure_outcome_index: 1,
         })
         .expect("policy");
-        let identity = MarketIdentity::new(
-            ContentId::new([4; 32]).expect("realm"),
-            ContentId::new([5; 32]).expect("terms"),
-            ContentId::new([6; 32]).expect("basis"),
-            ContentId::new(hash(&policy.to_bytes()).to_bytes()).expect("policy identity"),
-            ContentId::new([7; 32]).expect("capability manifest"),
-            7,
-        );
-        let mut root = MarketRoot::founding(identity, [8; 32]).expect("founding root");
-        root.transition_phase(7, Phase::Open).expect("open");
-        root.register_child(7, 0).expect("child");
-        let market = MarketStateV1::<2>::new(
-            root,
-            policy,
-            profile,
+        let material = CategoricalPythResolutionMaterialV1::new(policy, feed).expect("material");
+        let policy_id = hash(&policy.to_bytes()).to_bytes();
+        let quote = FundingQuoteV1::new(100, 0, 0, 7, 11, 0, 0).expect("quote");
+        let entry = CapabilityEntryV1::new(
+            CapabilityContentId::new([11; 32]).expect("kind"),
+            CapabilityContentId::new([9; 32]).expect("release"),
+            CapabilityContentId::new(policy_id).expect("policy ID"),
+            CapabilityContentId::new([12; 32]).expect("capacity"),
+            CapabilityContentId::new([13; 32]).expect("schema"),
+            CapabilityContentId::new([14; 32]).expect("derivation"),
+            ActivationPolicy::RequiredAtFounding,
             0,
-            [0, 0],
-            ResolutionReceiptV1::empty(2).expect("receipt"),
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            quote,
         )
-        .expect("market");
-        let program = Pubkey::new_from_array([9; 32]);
+        .expect("entry");
+        let mut manifest_data = vec![0; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+        let manifest =
+            CapabilityManifestV1::encode_into(&[entry], &mut manifest_data).expect("manifest");
+        let manifest_id = hash(manifest.as_bytes()).to_bytes();
+        let identity = MarketIdentity::new(
+            id(21),
+            id(22),
+            id(23),
+            ContentId::new(policy_id).expect("policy"),
+            ContentId::new(manifest_id).expect("manifest"),
+            0,
+        );
+        let mut root = MarketRoot::founding(identity, sponsor.to_bytes()).expect("root");
+        root.transition_phase(0, Phase::Open).expect("open");
+        root.register_child(0, 0).expect("child");
+        let market =
+            CategoricalMarketV1::<2>::new(root, 0, [0; 2], CategoricalSettlementSummaryV1::empty())
+                .expect("market");
+        let mut market_data = vec![0; CategoricalMarketV1::<2>::encoded_len().expect("length")];
+        market.encode(&mut market_data).expect("encode");
         let (market_key, _) = Pubkey::find_program_address(
             &[MARKET_SEED, &hash(&identity.to_bytes()).to_bytes()],
             &program,
         );
-        let sponsor = Pubkey::new_from_array([8; 32]);
+        let selected = manifest
+            .required_founding_entry_for_config(
+                CapabilityContentId::new(policy_id).expect("policy"),
+            )
+            .expect("selected");
+        let funding = construct_required_resolution_funding(
+            CapabilityContentId::new(manifest_id).expect("manifest"),
+            manifest,
+            selected,
+            100,
+            7,
+        )
+        .expect("funding");
+        assert_eq!(FUNDING_BYTES, 192);
+        let fund_data = funding.to_bytes().to_vec();
         let (fund_key, _) =
             Pubkey::find_program_address(&[FUND_SEED, market_key.as_ref()], &program);
-        let observation = Observation {
-            slot: 123,
-            unix_timestamp: 21,
-            finality: Finality::Finalized,
-        };
-        ResolutionState {
-            market: ObservedAccount {
-                observation,
-                key: market_key,
-                owner: program,
-                lamports: 0,
-                executable: false,
-                data: {
-                    let mut bytes =
-                        vec![0; MarketStateV1::<2>::encoded_len().expect("market width")];
-                    market.encode(&mut bytes).expect("market encoding");
-                    bytes
-                },
+        (
+            program,
+            ResolutionState {
+                market: account(market_key, program, 1, market_data),
+                fund: account(fund_key, program, 118, fund_data),
+                resolution_material: account(
+                    Pubkey::new_from_array([42; 32]),
+                    program,
+                    1,
+                    material.to_bytes().to_vec(),
+                ),
+                capability_manifest: account(
+                    Pubkey::new_from_array([43; 32]),
+                    program,
+                    1,
+                    manifest_data,
+                ),
+                sponsor: account(sponsor, system_program::ID, 1, Vec::new()),
+                fund_rent_minimum: 100,
             },
-            fund: ObservedAccount {
-                observation,
-                key: fund_key,
-                owner: program,
-                lamports: 1,
-                executable: false,
-                data: ResolutionFundV1::new(market_key.to_bytes(), 7, sponsor.to_bytes(), 0, 1)
-                    .expect("fund")
-                    .to_bytes()
-                    .to_vec(),
-            },
-            fund_rent_minimum: 0,
-        }
+        )
     }
 
     #[test]
-    fn production_catalog_is_an_explicit_refusal() {
-        assert_eq!(select_release([7; 32], 0), Err(Error::ReleaseUnavailable));
-    }
-
-    #[test]
-    fn failure_wire_is_exact_and_has_no_provider_roles() {
-        let instruction = ResolveCategoricalFailureV1::new(9, 11);
-        let mut data = vec![0; 32];
-        instruction.encode(&mut data).expect("fixed failure wire");
-        assert_eq!(data.len(), 32);
+    fn failure_frame_is_current_six_role_frame_and_raw_funding_is_classified() {
+        let (program, state) = fixture();
         assert_eq!(
-            data.get(10),
-            Some(&dclutch_pyth_contract::instruction::RESOLVE_FAILURE_TAG)
+            PRICE_FRAME_ACCOUNTS,
+            dclutch_pyth_contract::frame::PRICE_RESOLUTION_FRAME_V1.len()
         );
-    }
-
-    #[test]
-    fn failure_frame_derives_replay_facts_sponsor_and_exact_privileges() {
-        let program = Pubkey::new_from_array([9; 32]);
-        let state = observed_state([7; 32]);
+        assert_eq!(
+            FAILURE_FRAME_ACCOUNTS,
+            dclutch_pyth_contract::frame::FAILURE_RESOLUTION_FRAME_V1.len()
+        );
         let report = build_failure_resolution(
             program,
             &state,
             FailurePlumbing {
-                bounty_recipient: Pubkey::new_from_array([42; 32]),
+                bounty_recipient: Pubkey::new_from_array([44; 32]),
             },
         )
-        .expect("valid hostile-decoded state");
-        assert_eq!(report.observation, state.market.observation);
+        .expect("failure frame");
+        assert_eq!(report.instruction.accounts.len(), FAILURE_FRAME_ACCOUNTS);
         assert_eq!(
             report.funding,
             FundingReport {
-                fund_rent_refund: 0,
-                provider_fee_reimbursement: 0,
-                bounty: 1,
+                fund_rent_refund: 100,
+                provider_fee_reimbursement: 7,
+                bounty: 11,
                 sponsor_refund_excess: 0
             }
-        );
-        assert_eq!(report.instruction.accounts.len(), FAILURE_FRAME_ACCOUNTS);
-        assert_eq!(
-            report.instruction.accounts.first(),
-            Some(&AccountMeta::new(Pubkey::new_from_array([42; 32]), false))
-        );
-        assert_eq!(
-            report.instruction.accounts.get(1),
-            Some(&AccountMeta::new(state.market.key, false))
-        );
-        assert_eq!(
-            report.instruction.accounts.get(2),
-            Some(&AccountMeta::new(state.fund.key, false))
-        );
-        assert_eq!(
-            report.instruction.accounts.get(3),
-            Some(&AccountMeta::new(Pubkey::new_from_array([8; 32]), false))
         );
         assert_eq!(
             ResolveCategoricalFailureV1::decode(&report.instruction.data)
                 .expect("wire")
-                .generation(),
-            7
+                .child_count(),
+            1
+        );
+        assert_eq!(
+            report.instruction.accounts.get(3).map(|meta| meta.pubkey),
+            Some(state.resolution_material.key)
+        );
+        assert_eq!(
+            report.instruction.accounts.get(4).map(|meta| meta.pubkey),
+            Some(state.capability_manifest.key)
         );
     }
 
     #[test]
-    fn stale_market_or_fund_keys_refuse() {
-        let program = Pubkey::new_from_array([9; 32]);
-        let mut state = observed_state([7; 32]);
-        state.market.key = Pubkey::new_from_array([4; 32]);
+    fn hostile_snapshot_and_vacancy_of_funding_principal_refuse() {
+        let (program, state) = fixture();
+        let mut mismatched = state.clone();
+        mismatched.capability_manifest.observation.slot += 1;
         assert_eq!(
             build_failure_resolution(
                 program,
-                &state,
+                &mismatched,
                 FailurePlumbing {
                     bounty_recipient: Pubkey::new_unique()
                 }
             ),
-            Err(Error::MarketPdaMismatch)
+            Err(Error::ObservationMismatch)
         );
-        let mut state = observed_state([7; 32]);
-        state.fund.key = Pubkey::new_from_array([4; 32]);
+        let mut underfunded = state;
+        underfunded.fund.lamports = 117;
         assert_eq!(
             build_failure_resolution(
                 program,
-                &state,
-                FailurePlumbing {
-                    bounty_recipient: Pubkey::new_unique()
-                }
-            ),
-            Err(Error::FundPdaMismatch)
-        );
-    }
-
-    #[test]
-    fn stale_fund_state_and_hostile_body_refuse() {
-        let program = Pubkey::new_from_array([9; 32]);
-        let mut state = observed_state([7; 32]);
-        let byte = state.fund.data.get_mut(48).expect("fund generation byte");
-        *byte ^= 1;
-        assert_eq!(
-            build_failure_resolution(
-                program,
-                &state,
-                FailurePlumbing {
-                    bounty_recipient: Pubkey::new_unique()
-                }
-            ),
-            Err(Error::FundMismatch)
-        );
-        let mut price_state = observed_state([7; 32]);
-        price_state.market.observation.unix_timestamp = 20;
-        price_state.fund.observation.unix_timestamp = 20;
-        assert_eq!(
-            build_price_resolution(
-                program,
-                &price_state,
-                &PricePlumbing {
-                    resolver: Pubkey::new_unique(),
-                    update: Pubkey::new_unique(),
-                    encoded_vaa: Pubkey::new_unique(),
-                    post_update_body: vec![0; 10],
-                }
-            ),
-            Err(Error::ReleaseUnavailable)
-        );
-    }
-
-    #[test]
-    fn nonfinalized_or_underfunded_observations_refuse() {
-        let program = Pubkey::new_from_array([9; 32]);
-        let mut state = observed_state([7; 32]);
-        state.market.observation.finality = Finality::Confirmed;
-        state.fund.observation.finality = Finality::Confirmed;
-        assert_eq!(
-            build_failure_resolution(
-                program,
-                &state,
-                FailurePlumbing {
-                    bounty_recipient: Pubkey::new_unique()
-                }
-            ),
-            Err(Error::ObservationNotFinalized)
-        );
-        let mut state = observed_state([7; 32]);
-        state.fund.lamports = 0;
-        assert_eq!(
-            build_failure_resolution(
-                program,
-                &state,
+                &underfunded,
                 FailurePlumbing {
                     bounty_recipient: Pubkey::new_unique()
                 }
             ),
             Err(Error::FundUnderfunded)
         );
-    }
-
-    #[test]
-    fn failure_before_the_strict_deadline_refuses() {
-        let program = Pubkey::new_from_array([9; 32]);
-        let mut state = observed_state([7; 32]);
-        state.market.observation.unix_timestamp = 20;
-        state.fund.observation.unix_timestamp = 20;
-        assert_eq!(
-            build_failure_resolution(
-                program,
-                &state,
-                FailurePlumbing {
-                    bounty_recipient: Pubkey::new_unique(),
-                },
-            ),
-            Err(Error::FailureTooEarly)
-        );
-    }
-
-    #[test]
-    fn post_update_body_refuses_trailing_provider_bytes() {
-        assert!(PostUpdateParamsView::parse(&[0; 10]).is_err());
-    }
-
-    #[cfg(feature = "non-production-real-pyth-lab")]
-    #[test]
-    fn lab_price_frame_uses_only_the_shared_release_row() {
-        let program = Pubkey::new_from_array([9; 32]);
-        let release = dclutch_pyth_svm::synthetic_local_release_v1().expect("pinned local release");
-        let release_id = hash(&release.release().to_bytes()).to_bytes();
-        let mut state = observed_state(release_id);
-        state.market.observation.unix_timestamp = 20;
-        state.fund.observation.unix_timestamp = 20;
-        let sponsor = Pubkey::new_from_array([8; 32]);
-        state.fund.data =
-            ResolutionFundV1::new(state.market.key.to_bytes(), 7, sponsor.to_bytes(), 1, 1)
-                .expect("fund")
-                .to_bytes()
-                .to_vec();
-        state.fund.lamports = 2;
-        let full_post = include_bytes!(
-            "../../../fixtures/pyth/local-upgraded-2026-08-22/receiver-post-update.data"
-        );
-        let body = full_post.get(8..).expect("captured discriminator").to_vec();
-        let plumbing = PricePlumbing {
-            resolver: Pubkey::new_from_array([41; 32]),
-            update: Pubkey::new_from_array([42; 32]),
-            encoded_vaa: Pubkey::new_from_array([43; 32]),
-            post_update_body: body,
-        };
-        let report = build_price_resolution(program, &state, &plumbing).expect("lab frame");
-        assert_eq!(report.instruction.accounts.len(), PRICE_FRAME_ACCOUNTS);
-        assert_eq!(
-            report.instruction.accounts.first(),
-            Some(&AccountMeta::new(plumbing.resolver, true))
-        );
-        assert_eq!(
-            report.instruction.accounts.get(1),
-            Some(&AccountMeta::new(plumbing.update, true))
-        );
-        assert_eq!(report.funding.provider_fee_reimbursement, 1);
-        let decoded = dclutch_pyth_contract::instruction::ResolveCategoricalPythV1::decode(
-            &report.instruction.data,
-        )
-        .expect("price wire");
-        assert_eq!(decoded.generation(), 7);
-        assert_eq!(decoded.child_count(), 1);
-        assert_eq!(decoded.body(), plumbing.post_update_body);
     }
 }

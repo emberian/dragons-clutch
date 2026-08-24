@@ -1,18 +1,20 @@
 use dclutch_capability_contract::{
-    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
-    ContentId as CapabilityContentId, FundingQuoteV1, MANIFEST_HEADER_BYTES,
+    ActivationPolicy, CapabilityEntryV1, CapabilityManifestV1, ContentId as CapabilityContentId,
+    FundingQuoteV1, CAPABILITY_ENTRY_BYTES, MANIFEST_HEADER_BYTES,
 };
 use dclutch_collateral_contract::{CreateRealmV1, FoundMarketAndFundV1};
 use dclutch_kernel::resolution::categorical_pyth_v1::{
     CategoricalPythV1PolicyInput, MAX_PRICE_CELLS,
 };
 use dclutch_product_contract::{
-    ContentId as ProductContentId,
-    capacity::{CapacityEnvelope, CapacityProfileId, CapacityProfileV1Input, ExactWordWidth},
-    claim::{CATEGORICAL_UNIT_DENOMINATOR, CategoricalUnitV1Input, RedemptionRounding},
+    capacity::{CapacityEnvelope, CapacityProfileId, CapacityProfileV1Input},
+    claim::CategoricalUnitV1Input,
     product::InstanceV1Input,
+    ContentId as ProductContentId,
 };
-use dclutch_pyth_contract::policy::CategoricalPythPolicyRecordV1;
+use dclutch_pyth_contract::{
+    feed_profile::PythFeedProfileV1, policy::CategoricalPythPolicyRecordV1,
+};
 use solana_program::sysvar::SysvarSerialize;
 
 use super::*;
@@ -135,14 +137,12 @@ fn product_id(bytes: [u8; 32]) -> ProductContentId {
 fn capacity(max_partition_cells: u32) -> CapacityProfileV1 {
     CapacityProfileV1::new(CapacityProfileV1Input {
         envelope: CapacityEnvelope::Measured,
-        word_width: ExactWordWidth::Eight,
         verifier_release_id: product_id([1; 32]),
         envelope_basis_id: product_id([2; 32]),
         max_artifact_bytes: 256,
         page_payload_bytes: 64,
         max_pages: 4,
         max_partition_cells,
-        max_coefficient_entries: max_partition_cells,
     })
     .expect("capacity")
 }
@@ -224,8 +224,6 @@ impl FoundFixture {
             CategoricalUnitV1Input {
                 capacity_profile_id: capacity_id,
                 outcome_count: u32::from(outcome_count),
-                payout_denominator: CATEGORICAL_UNIT_DENOMINATOR,
-                rounding: RedemptionRounding::ExactOnly,
             },
             capacity,
         )
@@ -594,8 +592,6 @@ fn unsupported_outcome_width_refuses_before_instruction_construction() {
         CategoricalUnitV1Input {
             capacity_profile_id: capacity_id,
             outcome_count: 17,
-            payout_denominator: CATEGORICAL_UNIT_DENOMINATOR,
-            rounding: RedemptionRounding::ExactOnly,
         },
         capacity,
     )
