@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Atomic Product progress, Recovery payment, and Failure cell advance.
 //!
-//! This capability-disabled module is the only Active-to-Active writer. The
+//! This current module is the only Active-to-Active writer. The
 //! existing liveness Recovery compartment is the sole work custodian: Failure
 //! neither holds nor debits a second reserve. Runtime payment is applied and
 //! hostile-reauthenticated before the exact cell postimage is written last;
@@ -15,19 +15,18 @@ use crate::instructions::failure_market_interval_v2::{
     AuthenticatedFailureMarketIntervalPaidAdvanceV2,
 };
 use crate::instructions::failure_market_runtime::{
-    write_failure_market_runtime_session_plan_v1, AuthenticatedFailureMarketRuntimeRootV1,
+    write_failure_market_runtime_session_plan_v2, AuthenticatedFailureMarketRuntimeRootV1,
     AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
     AuthenticatedFailureMarketRuntimeSessionWriteV1, FailureMarketRuntimeSessionWriteFactsV1,
 };
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
-use crate::instructions::product_artifact::AuthenticatedRegistryCapabilityV3;
-use crate::instructions::product_failure_begin::{
-    require_cached_root_and_link, require_exact_resolved_edge_policy_v1,
-    require_exact_successful_source_join_v2,
-};
-use crate::instructions::product_market::{
-    authenticate_market_lifecycle_root_v1, authenticate_series_market_link_v1,
-    AuthenticatedMarketLifecycleRootV1, AuthenticatedSeriesMarketLinkV1,
+use crate::instructions::failure_market_action10_current::require_exact_successful_source_join_current_v2;
+use crate::instructions::product_failure_begin::require_exact_resolved_edge_policy_v1;
+use crate::instructions::product_failure_begin_current::AuthenticatedProductFailureBeginScheduleV2;
+use crate::instructions::product_series_current::{
+    authenticate_market_lifecycle_root_v2, authenticate_series_market_link_v2,
+    AuthenticatedMarketLifecycleRootV2, AuthenticatedRegistryCapabilityV4,
+    AuthenticatedSeriesMarketLinkV2,
 };
 use crate::seeds;
 use crate::source_plane_v3_actions::SourcePolicyHandoffJoinV1;
@@ -36,8 +35,8 @@ use clutch_failure_policy_runtime::market_interval_cell_v2::{
     FailureMarketIntervalCellAdvanceFactsV2, FailureMarketIntervalCellAdvanceReceiptV2,
 };
 use clutch_failure_policy_runtime::market_runtime_v1::{
-    plan_advance_failure_market_session_v1, AuthenticatedFailureMarketSessionV1,
-    FailureMarketSessionAdvanceFactsV1,
+    plan_advance_failure_market_session_v2, AuthenticatedFailureMarketSessionV2,
+    FailureMarketSessionAdvanceFactsV2,
 };
 use clutch_liveness::runtime_adapter_v1::{
     decode_runtime_policy_account_v1, plan_runtime_transition_v1, RuntimeAtomicTransitionV1,
@@ -49,7 +48,8 @@ use clutch_liveness::runtime_v1::{
 };
 use clutch_liveness::Id as LivenessId;
 use clutch_product_series::{
-    ContentId, MarketLifecyclePhaseV1, QuantizedIntervalConsensusContextV1, SeriesMarketLinkPhaseV1,
+    ContentId, MarketLifecyclePhaseV2, QuantizedIntervalConsensusContextV1,
+    SeriesMarketLinkPhaseV2,
 };
 use clutch_solana_layout::failure_recovery::{
     decode_failure_account_body_v1, FAILURE_ACCOUNT_HEADER_BYTES_V1,
@@ -57,7 +57,7 @@ use clutch_solana_layout::failure_recovery::{
     FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1, FAILURE_LIVENESS_POLICY_BODY_BYTES_V1,
 };
 use clutch_solana_layout::product_series::{
-    MarketLifecycleRootAccountV1, SeriesMarketLinkAccountV1,
+    MarketLifecycleRootAccountV2, SeriesMarketLinkAccountV2,
 };
 use clutch_solana_layout::registry;
 use clutch_source_plane_v3_runtime::SuccessfulEvaluationHandoffV1;
@@ -156,19 +156,19 @@ struct FailureMarketPaidAdvanceCellWriteV2 {
 
 /// Exact pure shared-runtime authority for one paid subordinate advance.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct FailureMarketRuntimePaidAdvanceAuthorityV1 {
+struct FailureMarketRuntimePaidAdvanceAuthorityV2 {
     runtime_before:
         clutch_failure_policy_runtime::market_runtime_v1::FailureMarketRuntimeStateCommitmentV1,
-    series_link_state_id: clutch_product_series::SeriesMarketLinkV1Id,
+    series_link_state_id: clutch_product_series::SeriesMarketLinkV2Id,
     session_before: ContentId,
     session_after: ContentId,
     liveness_work_receipt_id: ContentId,
 }
 
-impl AuthenticatedFailureMarketSessionV1 for FailureMarketRuntimePaidAdvanceAuthorityV1 {
-    fn authenticate_failure_market_session_advance(
+impl AuthenticatedFailureMarketSessionV2 for FailureMarketRuntimePaidAdvanceAuthorityV2 {
+    fn authenticate_failure_market_session_advance_v2(
         &self,
-        expected: FailureMarketSessionAdvanceFactsV1,
+        expected: FailureMarketSessionAdvanceFactsV2,
     ) -> clutch_failure_policy_runtime::Result<()> {
         if expected.runtime_before != self.runtime_before
             || expected.series_link_state_id != self.series_link_state_id
@@ -185,17 +185,17 @@ impl AuthenticatedFailureMarketSessionV1 for FailureMarketRuntimePaidAdvanceAuth
 
 /// Physical runtime write admitted only after Recovery and cell postwrites.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct FailureMarketRuntimePaidAdvanceWriteV1 {
+struct FailureMarketRuntimePaidAdvanceWriteV2 {
     expected: FailureMarketRuntimeSessionWriteFactsV1,
     cell_state_after: ContentId,
     runtime_session_state_after: ContentId,
-    live_link_state_id: clutch_product_series::SeriesMarketLinkV1Id,
-    planned_link_state_id: clutch_product_series::SeriesMarketLinkV1Id,
+    live_link_state_id: clutch_product_series::SeriesMarketLinkV2Id,
+    planned_link_state_id: clutch_product_series::SeriesMarketLinkV2Id,
     liveness_receipt_id: ContentId,
     advance_liveness_receipt_id: ContentId,
 }
 
-impl AuthenticatedFailureMarketRuntimeSessionWriteV1 for FailureMarketRuntimePaidAdvanceWriteV1 {
+impl AuthenticatedFailureMarketRuntimeSessionWriteV1 for FailureMarketRuntimePaidAdvanceWriteV2 {
     fn authenticate_failure_market_runtime_session_write_v1(
         &self,
         expected: FailureMarketRuntimeSessionWriteFactsV1,
@@ -294,9 +294,10 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
     recovery_account: &AccountInfo<'_>,
     keeper: &AccountInfo<'_>,
     payer_refund: &AccountInfo<'_>,
-    registry: AuthenticatedRegistryCapabilityV3,
-    root_before: AuthenticatedMarketLifecycleRootV1<'_>,
-    link_before: AuthenticatedSeriesMarketLinkV1<'_>,
+    registry: &AuthenticatedRegistryCapabilityV4,
+    product_schedule: &AuthenticatedProductFailureBeginScheduleV2,
+    root_before: AuthenticatedMarketLifecycleRootV2<'_>,
+    link_before: AuthenticatedSeriesMarketLinkV2<'_>,
     admission: AuthenticatedFailureMarketRootV2,
     runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
     interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
@@ -304,8 +305,8 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
     source_success: SuccessfulEvaluationHandoffV1,
     context: QuantizedIntervalConsensusContextV1<'_>,
     requested_coordinates: u16,
-    root_decode: &'root mut MarketLifecycleRootAccountV1,
-    link_decode: &'link mut SeriesMarketLinkAccountV1,
+    root_decode: &'root mut MarketLifecycleRootAccountV2,
+    link_decode: &'link mut SeriesMarketLinkAccountV2,
 ) -> Outcome<(
     AuthenticatedFailureMarketPaidAdvancePostwriteV2,
     AuthenticatedFailureMarketIntervalAccountsV2,
@@ -327,7 +328,7 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
     )?;
     let root_binding = root_before.state().binding();
     let link_binding = link_before.state().binding();
-    let live_root = authenticate_market_lifecycle_root_v1(
+    let live_root = authenticate_market_lifecycle_root_v2(
         program_id,
         root_account,
         root_binding.market_instance_id,
@@ -335,7 +336,7 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
         false,
         root_decode,
     )?;
-    let live_link = authenticate_series_market_link_v1(
+    let live_link = authenticate_series_market_link_v2(
         program_id,
         link_account,
         link_binding.series_plan_id,
@@ -346,8 +347,25 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
         false,
         link_decode,
     )?;
-    require_cached_root_and_link(root_before, live_root, link_before, live_link)?;
+    require(
+        root_before.account() == live_root.account()
+            && root_before.owner_program() == live_root.owner_program()
+            && root_before.value() == live_root.value()
+            && root_before.observed_lamports() == live_root.observed_lamports()
+            && root_before.data_id() == live_root.data_id()
+            && root_before.authentication_id() == live_root.authentication_id()
+            && link_before.account() == live_link.account()
+            && link_before.owner_program() == live_link.owner_program()
+            && link_before.value() == live_link.value()
+            && link_before.observed_lamports() == live_link.observed_lamports()
+            && link_before.data_id() == live_link.data_id()
+            && link_before.authentication_id() == live_link.authentication_id(),
+        ClutchError::MismatchedState,
+    )?;
     let policy = admission.state().binding().facts();
+    let root_binding_id = root_binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
         !root_account.is_writable
             && !link_account.is_writable
@@ -356,14 +374,18 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
             && *cell_account.key == interval_before.cell_account()
             && *history_account.key == interval_before.history_account()
             && interval_before.admission_root_account() == admission.account()
-            && live_root.state().phase() == MarketLifecyclePhaseV1::Active
+            && live_root.state().phase() == MarketLifecyclePhaseV2::Active
             && live_root.state().resolution_semantic_id() == ContentId::ZERO
             && live_root.state().resolution_data_id() == ContentId::ZERO
             && live_root.state().resolution_activation_receipt_id() == ContentId::ZERO
-            && live_link.state().phase() == SeriesMarketLinkPhaseV1::Active
+            && live_link.state().phase() == SeriesMarketLinkPhaseV2::Active
             && live_link.state().active_failure_sessions() == 1
             && live_link.state().failure_session_transcript_id().bytes()
                 == interval_before.cell().session_binding_id().bytes()
+            && link_binding.market_binding_id == root_binding_id
+            && link_binding.market_root_account_id.bytes() == root_account.key.to_bytes()
+            && link_binding.market_instance_id == root_binding.market_instance_id
+            && link_binding.generation == root_binding.generation
             && interval_before.cell().market_instance_id() == root_binding.market_instance_id
             && interval_before.cell().generation() == root_binding.generation
             && interval_before.cell().failure_policy_binding_id().bytes()
@@ -372,7 +394,7 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
                 == root_binding.market_failure_policy_binding_id.bytes(),
         ClutchError::MismatchedState,
     )?;
-    require_exact_successful_source_join_v2(
+    require_exact_successful_source_join_current_v2(
         source_join,
         source_success,
         link_binding,
@@ -383,12 +405,29 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
         registry.series_plan_id() == link_binding.series_plan_id
             && registry.registry_release_id() == root_binding.registry_release_id
             && registry.capability_profile_id() == root_binding.capability_profile_id
-            && registry.compiler_bundle_id() == link_binding.compiler_output_id,
+            && registry.compiler_bundle_id() == link_binding.compiler_bundle_id,
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        product_schedule.root_account() == live_root.account()
+            && product_schedule.root_authentication_id() == live_root.authentication_id()
+            && product_schedule.link_account() == live_link.account()
+            && product_schedule.link_authentication_id() == live_link.authentication_id()
+            && product_schedule.series_plan_id() == link_binding.series_plan_id
+            && product_schedule.ordinal() == link_binding.ordinal
+            && product_schedule.market_instance_id() == link_binding.market_instance_id
+            && product_schedule.generation() == link_binding.generation
+            && product_schedule.source_occurrence_id() == link_binding.source_occurrence_id
+            && product_schedule.attempt_index() == interval_before.cell().attempt_index()
+            && product_schedule.source_repair_generation()
+                == source_success.occurrence().repair_generation()
+            && product_schedule.schedule_projection_id().bytes()
+                == interval_before.cell().session_schedule_id().bytes(),
         ClutchError::MismatchedState,
     )?;
     require_exact_resolved_edge_policy_v1(
         context.resolved_edge_policy,
-        registry.resolved_edge_policy(),
+        registry.projection().resolved_edge_policy,
     )?;
     let liveness = authenticate_failure_recovery_liveness_prestate_v2(
         program_id,
@@ -421,11 +460,13 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
             registry.programdata_account().as_ref(),
             registry.release_artifact_account().as_ref(),
             registry.profile_artifact_account().as_ref(),
-            &[registry.edge_policy_registry_value()],
+            &[registry.profile().rules.edge_policy_registry_value],
             keeper.key.as_ref(),
             &requested_coordinates.to_le_bytes(),
             &source_join.id().bytes(),
             &source_success.id().bytes(),
+            &product_schedule.id().bytes(),
+            &product_schedule.schedule_projection_id().bytes(),
         ])
         .to_bytes(),
     );
@@ -466,7 +507,7 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
         .state()
         .semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let runtime_advance_authority = FailureMarketRuntimePaidAdvanceAuthorityV1 {
+    let runtime_advance_authority = FailureMarketRuntimePaidAdvanceAuthorityV2 {
         runtime_before: runtime_before.state_commitment(),
         series_link_state_id: link_state_id,
         session_before: runtime_before.state().session_state_commitment(),
@@ -475,7 +516,7 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
             advance_facts.runtime_work_receipt_id.bytes(),
         ),
     };
-    let runtime_plan = plan_advance_failure_market_session_v1(
+    let runtime_plan = plan_advance_failure_market_session_v2(
         &runtime_advance_authority,
         runtime_before.state(),
         admission.state(),
@@ -519,14 +560,14 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
         .resulting_runtime()
         .commitment()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let runtime_postwrite = write_failure_market_runtime_session_plan_v1(
+    let runtime_postwrite = write_failure_market_runtime_session_plan_v2(
         program_id,
         admission_root_account,
         runtime_root_account,
         admission,
         runtime_before,
         runtime_plan,
-        &FailureMarketRuntimePaidAdvanceWriteV1 {
+        &FailureMarketRuntimePaidAdvanceWriteV2 {
             expected: FailureMarketRuntimeSessionWriteFactsV1 {
                 runtime_before: runtime_before.state_commitment(),
                 runtime_after: runtime_after_commitment,
@@ -1159,7 +1200,7 @@ mod tests {
             .find("let interval_after = write_failure_market_interval_paid_advance_v2")
             .unwrap();
         let market_runtime_write = source[outer..]
-            .find("let runtime_postwrite = write_failure_market_runtime_session_plan_v1")
+            .find("let runtime_postwrite = write_failure_market_runtime_session_plan_v2")
             .unwrap();
         assert!(runtime_write < cell_write && cell_write < market_runtime_write);
         assert_eq!(
@@ -1304,8 +1345,8 @@ mod tests {
     fn stale_prestates_and_final_refusal_are_structurally_atomic() {
         let source = include_str!("failure_market_interval_advance_v2.rs");
         let cell_source = include_str!("failure_market_interval_v2.rs");
-        assert!(source.contains("authenticate_market_lifecycle_root_v1"));
-        assert!(source.contains("authenticate_series_market_link_v1"));
+        assert!(source.contains("authenticate_market_lifecycle_root_v2"));
+        assert!(source.contains("authenticate_series_market_link_v2"));
         assert!(source.contains("== authenticated.recovery_data_id"));
         assert!(cell_source.contains("authenticate_unchanged_account_prestate"));
         assert!(cell_source.contains("authenticate_write_prestate"));
@@ -1325,6 +1366,6 @@ mod tests {
         )
         .is_err());
         let source = include_str!("failure_market_interval_advance_v2.rs");
-        assert!(source.contains("registry.resolved_edge_policy()"));
+        assert!(source.contains("registry.projection().resolved_edge_policy"));
     }
 }

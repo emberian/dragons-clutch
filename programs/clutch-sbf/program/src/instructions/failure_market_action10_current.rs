@@ -868,7 +868,7 @@ fn reconstruct_exact_action10_source(
     }
 }
 
-fn require_exact_successful_source_join_current_v2(
+pub(crate) fn require_exact_successful_source_join_current_v2(
     source_join: clutch_source_plane_v3_runtime::SourcePolicyHandoffJoinV1,
     source_success: clutch_source_plane_v3_runtime::SuccessfulEvaluationHandoffV1,
     link: clutch_product_series::SeriesMarketLinkBindingV2,

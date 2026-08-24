@@ -11,10 +11,9 @@
 use crate::accounts::{require, Outcome};
 use crate::capabilities;
 use crate::error::ClutchError;
-use crate::instructions::failure_market_actions_v2::{
-    process_advance_failure_market_session_v2, process_archive_failure_market_session_v2,
-};
+use crate::instructions::failure_market_actions_v2::process_archive_failure_market_session_v2;
 use crate::instructions::failure_market_action10_current::process_begin_failure_market_session_v2;
+use crate::instructions::failure_market_action11_current::process_advance_failure_market_session_v2;
 use crate::instructions::failure_market_action12_current::process_resolve_failure_market_session_v2;
 use crate::instructions::failure_market_interval_v2::FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2;
 use crate::instructions::failure_market_replay_v2::FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2;
@@ -204,10 +203,13 @@ pub const ADVANCE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2]
     meta(Role::CapabilityProfileArtifact, false, false, false),
     meta(Role::CompilerBundleArtifact, false, false, false),
     meta(Role::FundingQuoteArtifact, false, false, false),
+    meta(Role::SeriesPlanArtifact, false, false, false),
     meta(Role::ProductTemplateArtifact, false, false, false),
     meta(Role::NativeClaimBasisArtifact, false, false, false),
+    meta(Role::RecoveryPolicyArtifact, false, false, false),
     meta(Role::PriceMeasurePolicyArtifact, false, false, false),
     meta(Role::MarketGenesisArtifact, false, false, false),
+    meta(Role::AttachmentPlanArtifact, false, false, false),
     meta(Role::MarketInstanceArtifact, false, false, false),
     meta(Role::SourceRelease, false, false, false),
     meta(Role::SourceAdapterProgram, false, false, true),
