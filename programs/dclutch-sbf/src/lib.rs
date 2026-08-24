@@ -21,6 +21,7 @@ use dclutch_collateral_contract::{
     INSTRUCTION_MAGIC as COLLATERAL_INSTRUCTION_MAGIC, InstructionV1 as CollateralInstructionV1,
 };
 use dclutch_pyth_contract::instruction::ResolveCategoricalInstructionV1;
+use dclutch_rent_contract::RENT_CREDIT_INSTRUCTION_MAGIC_V1;
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, program_error::ProgramError,
     pubkey::Pubkey,
@@ -33,6 +34,7 @@ mod found_market;
 mod open_vault;
 mod provider;
 mod realm;
+mod rent_credit;
 mod resolution;
 #[cfg(feature = "non-production-real-pyth-lab")]
 mod synthetic_release;
@@ -49,6 +51,11 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if instruction_data.get(..RENT_CREDIT_INSTRUCTION_MAGIC_V1.len())
+        == Some(&RENT_CREDIT_INSTRUCTION_MAGIC_V1)
+    {
+        return rent_credit::dispatch(program_id, accounts, instruction_data);
+    }
     match decode_instruction(instruction_data)? {
         RoutedInstruction::Resolve(instruction) => {
             resolution::dispatch(program_id, accounts, instruction)
@@ -107,6 +114,7 @@ mod tests {
     use dclutch_realm_contract::{
         FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1, RealmV1Input,
     };
+    use dclutch_rent_contract::{CreateRentCreditV1, RefundAuthority, RentCreditInstructionV1};
 
     use super::*;
 
@@ -168,6 +176,24 @@ mod tests {
         assert!(matches!(
             decode_instruction(&open),
             Ok(RoutedInstruction::OpenCollateralVault(_))
+        ));
+    }
+
+    #[test]
+    fn rent_credit_family_has_a_distinct_top_level_domain() {
+        let authority = RefundAuthority::new([9; 32]).expect("nonzero authority");
+        let create = CreateRentCreditV1::new(authority, 7).to_bytes();
+        assert_eq!(
+            create.get(..RENT_CREDIT_INSTRUCTION_MAGIC_V1.len()),
+            Some(RENT_CREDIT_INSTRUCTION_MAGIC_V1.as_slice())
+        );
+        assert_ne!(
+            RENT_CREDIT_INSTRUCTION_MAGIC_V1.as_slice(),
+            COLLATERAL_INSTRUCTION_MAGIC
+        );
+        assert!(matches!(
+            RentCreditInstructionV1::decode(&create),
+            Ok(RentCreditInstructionV1::Create(_))
         ));
     }
 }

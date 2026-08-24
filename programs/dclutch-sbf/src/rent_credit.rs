@@ -6,9 +6,9 @@
 
 use dclutch_rent_contract::{
     AccountMetaV1, CreateBalancePlanV1, CreateRentCreditFrameV1, CreateRentCreditV1,
-    Error as RentError, RefundAuthority, RentCreditInstructionV1, RentCreditV1,
-    SystemWalletFactsV1, WithdrawBalancePlanV1, WithdrawRentCreditFrameV1, WithdrawRentCreditV1,
-    RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1,
+    Error as RentError, RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority,
+    RentCreditInstructionV1, RentCreditV1, SystemWalletFactsV1, WithdrawBalancePlanV1,
+    WithdrawRentCreditFrameV1, WithdrawRentCreditV1,
 };
 use solana_program::{
     account_info::AccountInfo, program::invoke_signed, program_error::ProgramError, pubkey::Pubkey,
@@ -323,7 +323,9 @@ fn authenticate_rent(rent: &AccountInfo<'_>) -> Result<(), ProgramError> {
     if rent.key != &sysvar::rent::ID || rent.owner != &sysvar::ID {
         return Err(AdapterError::RentCreditAuthentication.into());
     }
-    Rent::from_account_info(rent).map_err(|_| AdapterError::RentCreditAuthentication.into())
+    Rent::from_account_info(rent)
+        .map(|_| ())
+        .map_err(|_| AdapterError::RentCreditAuthentication.into())
 }
 
 fn current_rent_minimum(rent: &AccountInfo<'_>) -> Result<u64, ProgramError> {
@@ -546,12 +548,14 @@ mod tests {
         let floor = Rent::default().minimum_balance(RENT_CREDIT_BYTES_V1);
         let accounts = withdraw_accounts(program_id, authority, floor + 9, true);
         let frame = WithdrawFrame::parse(&accounts).expect("executable readonly signer is valid");
-        assert!(authenticate_withdraw(
-            &program_id,
-            &frame,
-            WithdrawRentCreditV1::new(9).expect("nonzero request")
-        )
-        .is_ok());
+        assert!(
+            authenticate_withdraw(
+                &program_id,
+                &frame,
+                WithdrawRentCreditV1::new(9).expect("nonzero request")
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -576,12 +580,14 @@ mod tests {
             rent_account(),
         ];
         let frame = WithdrawFrame::parse(&accounts).expect("alias privilege union");
-        assert!(authenticate_withdraw(
-            &program_id,
-            &frame,
-            WithdrawRentCreditV1::new(3).expect("nonzero request")
-        )
-        .is_ok());
+        assert!(
+            authenticate_withdraw(
+                &program_id,
+                &frame,
+                WithdrawRentCreditV1::new(3).expect("nonzero request")
+            )
+            .is_ok()
+        );
     }
 
     #[test]

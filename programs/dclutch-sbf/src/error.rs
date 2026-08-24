@@ -67,6 +67,12 @@ pub enum AdapterError {
     VaultInitializeCpi = 28,
     /// Opening did not persist exact Market, custody, Vault, rent, and debit postconditions.
     VaultPostcondition = 29,
+    /// A RentCredit frame, PDA, owner, authority, wallet, or current-Rent fact failed.
+    RentCreditAuthentication = 30,
+    /// The System Program refused exact permanent RentCredit PDA creation.
+    RentCreditCreateCpi = 31,
+    /// RentCredit creation or withdrawal did not produce its exact account and balance state.
+    RentCreditPostcondition = 32,
 }
 
 impl From<AdapterError> for ProgramError {
