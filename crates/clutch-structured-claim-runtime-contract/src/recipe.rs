@@ -34,6 +34,17 @@ pub const WRAPPER_RECIPE_SET_ID_DOMAIN_V1: &[u8] =
 pub const WRAPPER_RECIPE_PREIMAGE_BYTES_V1: usize = 40 + (MAX_OUTCOMES * 8);
 /// Exact set-commitment preimage width, excluding its hash domain.
 pub const WRAPPER_RECIPE_SET_PREIMAGE_BYTES_V1: usize = 48;
+/// Exact fixed header of a chain-published wrapper-recipe set body.
+pub const WRAPPER_RECIPE_SET_HEADER_BYTES_V1: usize = 16;
+/// Exact fixed width of one chain-published recipe body.
+pub const WRAPPER_RECIPE_BODY_BYTES_V1: usize = WRAPPER_RECIPE_PREIMAGE_BYTES_V1;
+/// Exact fixed width of the complete chain-published recipe set.
+pub const WRAPPER_RECIPE_SET_BYTES_V1: usize = WRAPPER_RECIPE_SET_HEADER_BYTES_V1
+    + (MAX_WRAPPER_RECIPE_SLOTS_V1 * WRAPPER_RECIPE_BODY_BYTES_V1);
+/// Canonical fixed-layout recipe-set body magic.
+pub const WRAPPER_RECIPE_SET_BODY_MAGIC_V1: [u8; 8] = *b"DCRSETB1";
+/// Canonical fixed-layout recipe-set body version.
+pub const WRAPPER_RECIPE_SET_BODY_VERSION_V1: u16 = 1;
 /// Exact create-payload membership witness width.
 pub const WRAPPER_RECIPE_MEMBERSHIP_BYTES_V1: usize =
     4 + (WRAPPER_RECIPE_MERKLE_DEPTH_V1 * 32);
@@ -56,6 +67,13 @@ pub struct WrapperRecipeV1 {
 }
 
 impl WrapperRecipeV1 {
+    /// Canonical inactive tail sentinel for [`WrapperRecipeSetV1`].
+    pub const ZERO: Self = Self {
+        native_claim_id: [0; 32],
+        outcome_count: 0,
+        primitive: [0; MAX_OUTCOMES],
+    };
+
     /// Encode the canonical recipe identity preimage.
     pub fn encode_preimage(self) -> Result<[u8; WRAPPER_RECIPE_PREIMAGE_BYTES_V1]> {
         if self.native_claim_id == [0; 32] {
@@ -97,6 +115,165 @@ impl WrapperRecipeV1 {
         Ok(id)
     }
 }
+
+/// Exact no-allocation body published through the generic Product artifact
+/// transport for one Product-owned wrapper-recipe set identity.
+///
+/// Product continues to own only the set ID carried by AttachmentV5.
+/// Structured owns these recipe bodies and their fixed-depth membership
+/// semantics. Active recipes are ordered and pairwise distinct; every unused
+/// body is the exact all-zero sentinel.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WrapperRecipeSetV1 {
+    /// Number of active ordered recipes.
+    pub leaf_count: u16,
+    /// Fixed-capacity ordered bodies followed by canonical zero sentinels.
+    pub recipes: [WrapperRecipeV1; MAX_WRAPPER_RECIPE_SLOTS_V1],
+}
+
+impl WrapperRecipeSetV1 {
+    /// Encode the exact chain artifact body after recomputing its complete
+    /// recipe-ID and Merkle-set semantics.
+    pub fn encode<H: WrapperRecipeHashV1>(
+        self,
+        hasher: &H,
+    ) -> Result<[u8; WRAPPER_RECIPE_SET_BYTES_V1]> {
+        let _ = self.id(hasher)?;
+        let mut output = [0_u8; WRAPPER_RECIPE_SET_BYTES_V1];
+        output[..8].copy_from_slice(&WRAPPER_RECIPE_SET_BODY_MAGIC_V1);
+        output[8..10].copy_from_slice(&WRAPPER_RECIPE_SET_BODY_VERSION_V1.to_le_bytes());
+        output[10..12].copy_from_slice(&self.leaf_count.to_le_bytes());
+        let mut index = 0_usize;
+        while index < MAX_WRAPPER_RECIPE_SLOTS_V1 {
+            let start = WRAPPER_RECIPE_SET_HEADER_BYTES_V1
+                + (index * WRAPPER_RECIPE_BODY_BYTES_V1);
+            if index < usize::from(self.leaf_count) {
+                output[start..start + WRAPPER_RECIPE_BODY_BYTES_V1]
+                    .copy_from_slice(&self.recipes[index].encode_preimage()?);
+            }
+            index += 1;
+        }
+        Ok(output)
+    }
+
+    /// Hostile-decode an exact artifact body, requiring canonical headers,
+    /// active recipe bodies, a zero tail, distinct recipe identities, and a
+    /// nonzero recomputed Merkle-set identity.
+    pub fn decode<H: WrapperRecipeHashV1>(input: &[u8], hasher: &H) -> Result<Self> {
+        if input.len() != WRAPPER_RECIPE_SET_BYTES_V1
+            || input[..8] != WRAPPER_RECIPE_SET_BODY_MAGIC_V1
+            || u16::from_le_bytes([input[8], input[9]])
+                != WRAPPER_RECIPE_SET_BODY_VERSION_V1
+            || input[12..WRAPPER_RECIPE_SET_HEADER_BYTES_V1]
+                .iter()
+                .any(|byte| *byte != 0)
+        {
+            return Err(Error::InvalidLength);
+        }
+        let leaf_count = u16::from_le_bytes([input[10], input[11]]);
+        if leaf_count == 0 || leaf_count > MAX_WRAPPER_RECIPES_V1 {
+            return Err(Error::InvalidIdentity);
+        }
+        let mut recipes = [WrapperRecipeV1::ZERO; MAX_WRAPPER_RECIPE_SLOTS_V1];
+        let mut index = 0_usize;
+        while index < MAX_WRAPPER_RECIPE_SLOTS_V1 {
+            let start = WRAPPER_RECIPE_SET_HEADER_BYTES_V1
+                + (index * WRAPPER_RECIPE_BODY_BYTES_V1);
+            let body = &input[start..start + WRAPPER_RECIPE_BODY_BYTES_V1];
+            if index < usize::from(leaf_count) {
+                if body[33..40].iter().any(|byte| *byte != 0) {
+                    return Err(Error::InvalidIdentity);
+                }
+                let mut native_claim_id = [0_u8; 32];
+                native_claim_id.copy_from_slice(&body[..32]);
+                let mut primitive = [0_u64; MAX_OUTCOMES];
+                let mut outcome = 0_usize;
+                while outcome < MAX_OUTCOMES {
+                    let at = 40 + (outcome * 8);
+                    let mut amount = [0_u8; 8];
+                    amount.copy_from_slice(&body[at..at + 8]);
+                    primitive[outcome] = u64::from_le_bytes(amount);
+                    outcome += 1;
+                }
+                let recipe = WrapperRecipeV1 {
+                    native_claim_id,
+                    outcome_count: body[32],
+                    primitive,
+                };
+                if recipe.encode_preimage()?.as_slice() != body {
+                    return Err(Error::InvalidIdentity);
+                }
+                recipes[index] = recipe;
+            } else if body.iter().any(|byte| *byte != 0) {
+                return Err(Error::InvalidIdentity);
+            }
+            index += 1;
+        }
+        let value = Self {
+            leaf_count,
+            recipes,
+        };
+        let _ = value.id(hasher)?;
+        Ok(value)
+    }
+
+    /// Recompute the exact Product-owned set identity from all active bodies.
+    pub fn id<H: WrapperRecipeHashV1>(self, hasher: &H) -> Result<[u8; 32]> {
+        if self.leaf_count == 0 || self.leaf_count > MAX_WRAPPER_RECIPES_V1 {
+            return Err(Error::InvalidIdentity);
+        }
+        let mut recipe_ids = [[0_u8; 32]; MAX_WRAPPER_RECIPE_SLOTS_V1];
+        let active = usize::from(self.leaf_count);
+        let mut index = 0_usize;
+        while index < MAX_WRAPPER_RECIPE_SLOTS_V1 {
+            if index < active {
+                recipe_ids[index] = self.recipes[index].id(hasher)?;
+            } else if self.recipes[index] != WrapperRecipeV1::ZERO {
+                return Err(Error::InvalidIdentity);
+            }
+            index += 1;
+        }
+        let (set_id, _) = build_wrapper_recipe_membership_v1(
+            recipe_ids,
+            self.leaf_count,
+            0,
+            hasher,
+        )?;
+        Ok(set_id)
+    }
+
+    /// Return one exact body, recipe identity, and canonical membership proof
+    /// derived from this complete hostile-decoded set.
+    pub fn member<H: WrapperRecipeHashV1>(
+        self,
+        leaf_index: u16,
+        hasher: &H,
+    ) -> Result<(WrapperRecipeV1, [u8; 32], WrapperRecipeMembershipV1)> {
+        if leaf_index >= self.leaf_count {
+            return Err(Error::InvalidIdentity);
+        }
+        let mut recipe_ids = [[0_u8; 32]; MAX_WRAPPER_RECIPE_SLOTS_V1];
+        let mut index = 0_usize;
+        while index < usize::from(self.leaf_count) {
+            recipe_ids[index] = self.recipes[index].id(hasher)?;
+            index += 1;
+        }
+        let (set_id, membership) = build_wrapper_recipe_membership_v1(
+            recipe_ids,
+            self.leaf_count,
+            leaf_index,
+            hasher,
+        )?;
+        if set_id != self.id(hasher)? {
+            return Err(Error::InvalidIdentity);
+        }
+        let recipe = self.recipes[usize::from(leaf_index)];
+        Ok((recipe, recipe.id(hasher)?, membership))
+    }
+}
+
+const _: () = assert!(WRAPPER_RECIPE_BODY_BYTES_V1 == 168);
+const _: () = assert!(WRAPPER_RECIPE_SET_BYTES_V1 == 2_704);
 
 /// Fixed-depth membership witness carried by Structured create.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -326,6 +503,68 @@ mod tests {
             output[0] |= 1;
             output
         }
+    }
+
+    fn recipe_for_set(byte: u8) -> WrapperRecipeV1 {
+        let mut primitive = [0_u64; MAX_OUTCOMES];
+        primitive[0] = 1;
+        primitive[1] = u64::from(byte);
+        WrapperRecipeV1 {
+            native_claim_id: [byte; 32],
+            outcome_count: 2,
+            primitive,
+        }
+    }
+
+    #[test]
+    fn fixed_recipe_set_round_trips_and_derives_exact_membership() {
+        let mut recipes = [WrapperRecipeV1::ZERO; MAX_WRAPPER_RECIPE_SLOTS_V1];
+        recipes[0] = recipe_for_set(1);
+        recipes[1] = recipe_for_set(2);
+        let set = WrapperRecipeSetV1 {
+            leaf_count: 2,
+            recipes,
+        };
+        let bytes = set.encode(&DeterministicHash).unwrap();
+        assert_eq!(bytes.len(), 2_704);
+        let decoded = WrapperRecipeSetV1::decode(&bytes, &DeterministicHash).unwrap();
+        let (member, recipe_id, proof) = decoded.member(1, &DeterministicHash).unwrap();
+        assert_eq!(member, recipe_for_set(2));
+        authenticate_wrapper_recipe_membership_v1(
+            member,
+            recipe_id,
+            proof,
+            decoded.id(&DeterministicHash).unwrap(),
+            &DeterministicHash,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn fixed_recipe_set_refuses_nonzero_tail_and_duplicate_active_bodies() {
+        let mut recipes = [WrapperRecipeV1::ZERO; MAX_WRAPPER_RECIPE_SLOTS_V1];
+        recipes[0] = recipe_for_set(1);
+        recipes[1] = recipe_for_set(1);
+        assert_eq!(
+            WrapperRecipeSetV1 {
+                leaf_count: 2,
+                recipes,
+            }
+            .id(&DeterministicHash),
+            Err(Error::InvalidIdentity)
+        );
+
+        recipes[1] = WrapperRecipeV1::ZERO;
+        let set = WrapperRecipeSetV1 {
+            leaf_count: 1,
+            recipes,
+        };
+        let mut bytes = set.encode(&DeterministicHash).unwrap();
+        bytes[WRAPPER_RECIPE_SET_HEADER_BYTES_V1 + WRAPPER_RECIPE_BODY_BYTES_V1] = 1;
+        assert_eq!(
+            WrapperRecipeSetV1::decode(&bytes, &DeterministicHash),
+            Err(Error::InvalidIdentity)
+        );
     }
 
     fn recipe() -> WrapperRecipeV1 {

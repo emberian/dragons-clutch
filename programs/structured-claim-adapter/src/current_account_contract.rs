@@ -9,15 +9,15 @@ use crate::runtime_contract::StructuredClaimActionV1;
 
 /// Canonical label committing the exact current action/count/token-effect set.
 pub const STRUCTURED_CURRENT_ACCOUNT_CONTRACT_LABEL_V1: &str =
-    "dragons-clutch/structured-claim/current-account-contract/v1/a1=34:init-mint;a3=32:mint;a5=32:burn;a6=32:dispose-hoard-surplus;a7=33:burn;a8=33:revoke-mint-authority";
+    "dragons-clutch/structured-claim/current-account-contract/v1/a1=35:init-mint+recipe-set;a3=32:mint;a5=32:burn;a6=32:dispose-hoard-surplus;a7=33:burn;a8=33:revoke-mint-authority";
 /// SHA-256 identity of [`STRUCTURED_CURRENT_ACCOUNT_CONTRACT_LABEL_V1`].
 pub const STRUCTURED_CURRENT_ACCOUNT_CONTRACT_ID_V1: [u8; 32] = [
-    0x34, 0x78, 0xc3, 0xac, 0x60, 0x65, 0xc2, 0x29, 0x16, 0xf4, 0x57, 0xb3, 0x6f, 0xf3, 0x6d, 0xbb,
-    0x95, 0xac, 0xd5, 0x34, 0x46, 0xf8, 0x62, 0x4e, 0x37, 0x04, 0xaf, 0x45, 0x74, 0xac, 0x76, 0x9a,
+    0x89, 0x86, 0x01, 0xc5, 0xf5, 0xe5, 0x0f, 0x58, 0x46, 0x6a, 0x7b, 0x9f, 0x4c, 0xdb, 0x6f, 0xe4,
+    0xb6, 0x5e, 0x18, 0xc8, 0x6d, 0xd1, 0x2d, 0xc4, 0x63, 0xb0, 0x72, 0x4a, 0x21, 0x96, 0x97, 0xd5,
 ];
 
 /// Exact account count for action 1.
-pub const STRUCTURED_CREATE_ACCOUNT_COUNT_V1: usize = 34;
+pub const STRUCTURED_CREATE_ACCOUNT_COUNT_V1: usize = 35;
 /// Exact account count for actions 3 and 5.
 pub const STRUCTURED_FULL_VECTOR_ACCOUNT_COUNT_V1: usize = 32;
 /// Exact account count for action 6.
