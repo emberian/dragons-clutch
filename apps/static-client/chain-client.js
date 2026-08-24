@@ -177,18 +177,6 @@
     "failure-interval-consensus-work-v1": "recovery",
     "failure-interval-consensus-replay-v1": "recovery"
   });
-  const CURRENT_BINDING_PROJECTIONS = Object.freeze({
-    "general-current-market-authority-v5": Object.freeze(["market-instance-v2", "product-market-root-v3-account"]),
-    "series-registry-v4": Object.freeze(["series-plan-v5", "compiled-product-series-bundle-v7"]),
-    "series-funding-v5": Object.freeze(["series-plan-v5", "compiled-product-series-bundle-v7"]),
-    "product-funding-quote-v6-schedule-v4": Object.freeze(["series-funding-quote-v6", "market-foundation-schedule-v4"]),
-    "product-attachment-v6": Object.freeze(["series-attachment-plan-v6", "series-funding-quote-v6"]),
-    "compiled-product-series-bundle-v7": Object.freeze(["compiled-product-series-bundle-v7", "series-plan-v5"]),
-    "product-market-replay-v2-graph-v4": Object.freeze(["market-instance-v2", "market-foundation-account-graph-v4"]),
-    "product-market-root-v3-graph-v4": Object.freeze(["market-instance-v2", "market-foundation-account-graph-v4"]),
-    "series-market-link-v3": Object.freeze(["series-plan-v5", "market-instance-v2"])
-  });
-
   const plain = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
   const requirePlain = (value, name) => {
     if (!plain(value)) throw new Error(`${name} must be an object.`);
@@ -250,12 +238,12 @@
     if (typeof value !== "boolean") throw new Error(`${name} must be boolean.`);
     return value;
   };
-  const bindingProjection = (kind, primaryBinding, secondaryBinding) => {
-    const labels = CURRENT_BINDING_PROJECTIONS[kind] || ["primary-semantic-binding", "secondary-semantic-binding"];
+  const bindingProjection = (primaryBinding, secondaryBinding, primaryRole, secondaryRole, authority) => {
+    if (authority !== "hostile-decoded-current-semantic-owner" && authority !== "hostile-decoded-account-codec") throw new Error("account binding authority is not owned by the canonical decoder projection.");
     return Object.freeze({
-      primary: Object.freeze({ label: labels[0], value: primaryBinding }),
-      secondary: Object.freeze({ label: labels[1], value: secondaryBinding }),
-      authority: CURRENT_BINDING_PROJECTIONS[kind] ? "hostile-decoded-current-semantic-owner" : "hostile-decoded-account-codec"
+      primary: Object.freeze({ label: primaryRole, value: primaryBinding }),
+      secondary: Object.freeze({ label: secondaryRole, value: secondaryBinding }),
+      authority
     });
   };
 
@@ -638,8 +626,12 @@
       }),
       generation: raw.generation === null ? null : decimal(raw.generation, `session.canonicalAccounts[${index}].generation`).toString(),
       primaryBinding: raw.primaryBinding === null ? null : hash32(raw.primaryBinding, `session.canonicalAccounts[${index}].primaryBinding`),
-      secondaryBinding: raw.secondaryBinding === null ? null : hash32(raw.secondaryBinding, `session.canonicalAccounts[${index}].secondaryBinding`)
+      secondaryBinding: raw.secondaryBinding === null ? null : hash32(raw.secondaryBinding, `session.canonicalAccounts[${index}].secondaryBinding`),
+      primaryBindingRole: text(raw.primaryBindingRole, `session.canonicalAccounts[${index}].primaryBindingRole`, 96),
+      secondaryBindingRole: text(raw.secondaryBindingRole, `session.canonicalAccounts[${index}].secondaryBindingRole`, 96),
+      bindingAuthority: text(raw.bindingAuthority, `session.canonicalAccounts[${index}].bindingAuthority`, 96)
     });
+    bindingProjection(value.primaryBinding, value.secondaryBinding, value.primaryBindingRole, value.secondaryBindingRole, value.bindingAuthority);
     if (value.owner !== configuration.release.programId || value.releaseKey !== configuration.release.releaseKey) throw new Error(`session.canonicalAccounts[${index}] is not owned by the checked release.`);
     return value;
   };
@@ -771,9 +763,12 @@
       generation: raw.generation === null ? null : decimal(raw.generation, `accounts[${index}].generation`).toString(),
       primaryBinding: raw.primaryBinding === null ? null : hash32(raw.primaryBinding, `accounts[${index}].primaryBinding`),
       secondaryBinding: raw.secondaryBinding === null ? null : hash32(raw.secondaryBinding, `accounts[${index}].secondaryBinding`),
+      primaryBindingRole: text(raw.primaryBindingRole, `accounts[${index}].primaryBindingRole`, 96),
+      secondaryBindingRole: text(raw.secondaryBindingRole, `accounts[${index}].secondaryBindingRole`, 96),
+      bindingAuthority: text(raw.bindingAuthority, `accounts[${index}].bindingAuthority`, 96),
       branch: validateBranch(raw.branch, `accounts[${index}].branch`)
     };
-    return Object.freeze({ ...value, bindingProjection: bindingProjection(value.kind, value.primaryBinding, value.secondaryBinding) });
+    return Object.freeze({ ...value, bindingProjection: bindingProjection(value.primaryBinding, value.secondaryBinding, value.primaryBindingRole, value.secondaryBindingRole, value.bindingAuthority) });
   };
 
   const validateAccountsResponse = (raw, configuration) => {
@@ -793,7 +788,7 @@
     for (const identity of session.canonicalAccounts) {
       const accountValue = finalized.get(identity.address);
       if (!accountValue || accountValue.branch.kind !== "finalized-scan") throw new Error("session identity is absent from the finalized canonical account endpoint.");
-      for (const field of ["owner", "releaseKey", "lamports", "rentEpoch", "dataBytes", "dataSha256", "accountTag", "accountVersion", "family", "kind", "generation", "primaryBinding", "secondaryBinding"]) {
+      for (const field of ["owner", "releaseKey", "lamports", "rentEpoch", "dataBytes", "dataSha256", "accountTag", "accountVersion", "family", "kind", "generation", "primaryBinding", "secondaryBinding", "primaryBindingRole", "secondaryBindingRole", "bindingAuthority"]) {
         if (accountValue[field] !== identity[field]) throw new Error(`session identity ${identity.address} differs from finalized canonical account field ${field}.`);
       }
       if (accountValue.decode.status !== identity.decode.status || accountValue.decode.requirement !== identity.decode.requirement) throw new Error(`session identity ${identity.address} differs from its finalized canonical decode disposition.`);

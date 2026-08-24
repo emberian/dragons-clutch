@@ -2494,6 +2494,8 @@ fn session_account_json(version: &IndexedAccountVersion) -> Value {
             json!({"status": "requires-context", "requirement": requirement})
         }
     };
+    let (primary_binding_role, secondary_binding_role) =
+        version.projection.kind.binding_role_names();
     json!({
         "address": version.account.address.to_string(),
         "owner": version.account.owner.to_string(),
@@ -2509,7 +2511,14 @@ fn session_account_json(version: &IndexedAccountVersion) -> Value {
         "decode": decode,
         "generation": version.projection.generation.map(|value| value.to_string()),
         "primaryBinding": version.projection.primary_binding.map(hex32),
-        "secondaryBinding": version.projection.secondary_binding.map(hex32)
+        "secondaryBinding": version.projection.secondary_binding.map(hex32),
+        "primaryBindingRole": primary_binding_role,
+        "secondaryBindingRole": secondary_binding_role,
+        "bindingAuthority": if version.projection.kind.has_named_current_binding_owner() {
+            "hostile-decoded-current-semantic-owner"
+        } else {
+            "hostile-decoded-account-codec"
+        }
     })
 }
 
@@ -2530,6 +2539,8 @@ fn account_json(version: &IndexedAccountVersion, effective: RpcCommitment) -> Va
             json!({"status": "requires-context", "requirement": requirement})
         }
     };
+    let (primary_binding_role, secondary_binding_role) =
+        version.projection.kind.binding_role_names();
     json!({
         "address": version.account.address.to_string(),
         "owner": version.account.owner.to_string(),
@@ -2552,6 +2563,13 @@ fn account_json(version: &IndexedAccountVersion, effective: RpcCommitment) -> Va
         "generation": version.projection.generation.map(|value| value.to_string()),
         "primaryBinding": version.projection.primary_binding.map(hex32),
         "secondaryBinding": version.projection.secondary_binding.map(hex32),
+        "primaryBindingRole": primary_binding_role,
+        "secondaryBindingRole": secondary_binding_role,
+        "bindingAuthority": if version.projection.kind.has_named_current_binding_owner() {
+            "hostile-decoded-current-semantic-owner"
+        } else {
+            "hostile-decoded-account-codec"
+        },
         "branch": branch_json(&version.branch)
     })
 }

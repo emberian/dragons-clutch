@@ -351,6 +351,60 @@ impl CanonicalAccountKind {
             Self::DirectReservationV1 => "direct-reservation-v1",
         }
     }
+
+    /// Canonical semantic names for the two bounded digest projections. These
+    /// labels live with the hostile decoder instead of a browser-side kind
+    /// mirror, so a codec/version rotation cannot silently retain stale UI
+    /// meaning for the same two 32-byte fields.
+    #[must_use]
+    pub const fn binding_role_names(self) -> (&'static str, &'static str) {
+        match self {
+            Self::GeneralMarketBindingV5 => (
+                "market-instance-v2",
+                "product-market-root-v3-account",
+            ),
+            Self::SeriesRegistryV4 | Self::SeriesFundingV5 => (
+                "series-plan-v5",
+                "compiled-product-series-bundle-v7",
+            ),
+            Self::ProductFundingQuoteV6 => (
+                "series-funding-quote-v6",
+                "market-foundation-schedule-v4",
+            ),
+            Self::ProductAttachmentV6 => (
+                "series-attachment-plan-v6",
+                "series-funding-quote-v6",
+            ),
+            Self::CompiledProductSeriesBundleV7 => (
+                "compiled-product-series-bundle-v7",
+                "series-plan-v5",
+            ),
+            Self::ProductMarketReplayV2 | Self::ProductMarketRootV3 => (
+                "market-instance-v2",
+                "market-foundation-account-graph-v4",
+            ),
+            Self::SeriesMarketLinkV3 => ("series-plan-v5", "market-instance-v2"),
+            _ => ("primary-semantic-binding", "secondary-semantic-binding"),
+        }
+    }
+
+    /// Whether this codec owns named current Product/General join semantics,
+    /// rather than merely projecting two family-local digest slots.
+    #[must_use]
+    pub const fn has_named_current_binding_owner(self) -> bool {
+        matches!(
+            self,
+            Self::GeneralMarketBindingV5
+                | Self::SeriesRegistryV4
+                | Self::SeriesFundingV5
+                | Self::ProductFundingQuoteV6
+                | Self::ProductAttachmentV6
+                | Self::CompiledProductSeriesBundleV7
+                | Self::ProductMarketReplayV2
+                | Self::ProductMarketRootV3
+                | Self::SeriesMarketLinkV3
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
