@@ -15,9 +15,11 @@ use clutch_collateral_adapter_v2::{
 };
 use clutch_general_v2_contract::{
     project_general_position_replay_prestate_v1, GeneralPositionReplayPrestateV1, Id32,
-    MarketBindingV1, MarketBindingV2, MarketBindingV3, MarketRuntimeV3AccountV1,
+    MarketBindingV1, MarketBindingV2, MarketBindingV3, MarketBindingV4,
+    MarketRuntimeV3AccountV1,
     MARKET_BINDING_ACCOUNT_BYTES, MARKET_BINDING_ACCOUNT_BYTES_V2,
-    MARKET_BINDING_ACCOUNT_BYTES_V3, MARKET_RUNTIME_ACCOUNT_BYTES,
+    MARKET_BINDING_ACCOUNT_BYTES_V3, MARKET_BINDING_ACCOUNT_BYTES_V4,
+    MARKET_RUNTIME_ACCOUNT_BYTES,
 };
 use clutch_owner_settlement::AuthenticatedPositionV3;
 use clutch_product_series::MarketInstancePreimageV2;
@@ -45,6 +47,8 @@ const GENERAL_MARKET_LIABILITY_AUTHORITY_DOMAIN_V2: &[u8] =
     b"dragons-clutch/general-market/liability-authority/v2\0";
 const GENERAL_MARKET_BINDING_DATA_DOMAIN_V2: &[u8] =
     b"dragons-clutch/general-market/binding-data/v2\0";
+const GENERAL_MARKET_BINDING_DATA_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/general-market/binding-data/v4\0";
 const GENERAL_MARKET_RUNTIME_DATA_DOMAIN_V3: &[u8] =
     b"dragons-clutch/general-market/runtime-data/v3\0";
 const GENERAL_MARKET_LIABILITY_FOUNDING_POSTWRITE_DOMAIN_V3: &[u8] =
@@ -124,6 +128,31 @@ pub(crate) struct GeneralPositionReplayAuthorityV3 {
     pub(crate) market_runtime: MarketRuntimeV3AccountV1,
 }
 
+/// Current General market bodies plus General-owned full account-data IDs.
+/// Downstream families consume this projection rather than defining parallel
+/// binding/runtime hash transcripts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedGeneralMarketV4 {
+    binding: MarketBindingV4,
+    runtime: MarketRuntimeV3AccountV1,
+    binding_data_id: CollateralId,
+    runtime_data_id: CollateralId,
+}
+
+impl AuthenticatedGeneralMarketV4 {
+    pub(crate) const fn binding(self) -> MarketBindingV4 {
+        self.binding
+    }
+    pub(crate) const fn runtime(self) -> MarketRuntimeV3AccountV1 {
+        self.runtime
+    }
+    pub(crate) const fn binding_data_id(self) -> CollateralId {
+        self.binding_data_id
+    }
+    pub(crate) const fn runtime_data_id(self) -> CollateralId {
+        self.runtime_data_id
+    }
+}
 /// Authenticated full-width collateral and native-claim Market owners.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GeneralMarketLiabilityAuthorityV2 {
@@ -602,6 +631,83 @@ pub(crate) fn authenticate_general_market_v3(
         ClutchError::MismatchedState,
     )?;
     Ok((binding, runtime))
+}
+
+/// Authenticate only the current Product/Revenue-authorized General
+/// MarketBinding V4 and its stable runtime. V1/V2/V3 accounts cannot enter
+/// this successor authority.
+pub(crate) fn authenticate_general_market_v4(
+    program_id: &Pubkey,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+) -> Outcome<(MarketBindingV4, MarketRuntimeV3AccountV1)> {
+    require_program_account(
+        program_id,
+        market_binding_account,
+        false,
+        MARKET_BINDING_ACCOUNT_BYTES_V4,
+    )?;
+    require_program_account(
+        program_id,
+        market_runtime_account,
+        false,
+        MARKET_RUNTIME_ACCOUNT_BYTES,
+    )?;
+    let binding = MarketBindingV4::decode(&market_binding_account.data.borrow())?;
+    let runtime = MarketRuntimeV3AccountV1::decode(&market_runtime_account.data.borrow())?;
+    let base = binding.base().base();
+    expect_pda(
+        market_binding_account.key,
+        seeds::general_v2_market_binding_pda(program_id, &base.market_instance_v2_id.bytes()),
+        Some(base.stored_bump),
+    )?;
+    expect_pda(
+        market_runtime_account.key,
+        seeds::general_v2_market_runtime_pda(program_id, &market_binding_account.key.to_bytes()),
+        Some(runtime.stored_bump),
+    )?;
+    require(
+        base.market.bytes() == market_runtime_account.key.to_bytes()
+            && runtime.market_binding.bytes() == market_binding_account.key.to_bytes()
+            && runtime.market_instance_v2_id == base.market_instance_v2_id,
+        ClutchError::MismatchedState,
+    )?;
+    Ok((binding, runtime))
+}
+
+/// Authenticate current V4/Runtime bodies and derive their sole canonical
+/// account-key-plus-full-body identities for downstream family founders.
+pub(crate) fn authenticate_general_market_v4_with_data_ids(
+    program_id: &Pubkey,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedGeneralMarketV4> {
+    let (binding, runtime) =
+        authenticate_general_market_v4(program_id, market_binding_account, market_runtime_account)?;
+    let binding_data = market_binding_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let binding_data_id = authenticated_account_data_id_v1(
+        GENERAL_MARKET_BINDING_DATA_DOMAIN_V4,
+        market_binding_account.key,
+        &binding_data,
+    )?;
+    drop(binding_data);
+    let runtime_data = market_runtime_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let runtime_data_id = authenticated_account_data_id_v1(
+        GENERAL_MARKET_RUNTIME_DATA_DOMAIN_V3,
+        market_runtime_account.key,
+        &runtime_data,
+    )?;
+    drop(runtime_data);
+    Ok(AuthenticatedGeneralMarketV4 {
+        binding,
+        runtime,
+        binding_data_id,
+        runtime_data_id,
+    })
 }
 
 /// Authenticate ProfileV2 collateral, the full Product MarketInstance, and
