@@ -254,6 +254,12 @@ pub enum OwnedWireContract {
         binding: SuccessorRegistryBinding,
         sequence: u64,
     },
+    /// Sole chain-derived current General action-39 request. The semantic
+    /// owner fixes the 49-role prefix, one-to-four page suffix, zero replay
+    /// sequence, and exact RevenuePolicyV2 preimage.
+    MainGeneralAction39RequestV1 {
+        binding: SuccessorRegistryBinding,
+    },
     /// Exact enabled outer replay request for one current Fractional
     /// redemption action. The semantic owner fixes both payload width and the
     /// complete account privilege bitmap.
@@ -420,6 +426,86 @@ pub struct OwnedInstructionDraft {
 }
 
 impl OwnedInstructionDraft {
+    /// Assemble current General action 39 only from a checked release and the
+    /// chain-derived exact account contract. Payload identity is derived from
+    /// the selected Epoch/AdmissionNode and immutable RevenuePolicyV2.
+    #[cfg(feature = "operator")]
+    pub(crate) fn checked_release_general_action39_v1(
+        release: &crate::rpc_index::IndexedProgramRelease,
+        semantic_owner: SemanticOwner,
+        accounts: Vec<AccountMeta>,
+        equations: Vec<ExactEquation>,
+        epoch: [u8; 32],
+        selected_node: [u8; 32],
+        revenue_policy: clutch_batch_policy_identity::revenue_policy_v2::RevenuePolicyV2,
+    ) -> Result<Self> {
+        use crate::rpc_index::{CanonicalFamily, CanonicalIntentCoordinate};
+        use clutch_general_v2_contract::INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES_V2;
+        use clutch_solana_layout::registry::GeneralV2Action;
+
+        const ACTION: GeneralV2Action = GeneralV2Action::InitializeSettlementRoot;
+        let central_action = ExtensionAction::GeneralV2(ACTION);
+        let family = central_action.family();
+        let coordinate = CanonicalIntentCoordinate {
+            family_tag: family.tag(),
+            family_version: family.version(),
+            local_action: central_action.local_tag(),
+        };
+        release
+            .validate()
+            .map_err(|_| ConstructionError::UnallocatedRegistryCoordinate)?;
+        if epoch == [0; 32]
+            || selected_node == [0; 32]
+            || epoch == selected_node
+            || semantic_owner.release_sha256 != release.release_manifest_sha256
+            || !release.families.contains(&CanonicalFamily::General)
+            || release.enabled_intents.binary_search(&coordinate).is_err()
+        {
+            return Err(ConstructionError::UnallocatedRegistryCoordinate);
+        }
+        validate_general_action39_metas_v1(&accounts)?;
+        let mut payload = vec![0u8; INITIALIZE_SETTLEMENT_ROOT_PAYLOAD_BYTES_V2];
+        payload[..32].copy_from_slice(&epoch);
+        payload[32..64].copy_from_slice(&selected_node);
+        clutch_batch_policy_identity::revenue_policy_v2::encode_revenue_policy_v2(
+            &revenue_policy,
+            &mut payload[64..],
+        )
+        .map_err(|_| ConstructionError::InvalidAccountContract)?;
+        clutch_general_v2_contract::InitializeSettlementRootPayloadV2::decode(&payload)
+            .map_err(|_| ConstructionError::InvalidAccountContract)?;
+        let binding = registry_binding(family, central_action.local_tag(), Some(central_action))?;
+        let request = ExtensionRequest {
+            sequence: 0,
+            envelope: ExtensionEnvelope {
+                family,
+                action: central_action,
+                payload: &payload,
+            },
+        };
+        let mut data = vec![0; 13 + EXTENSION_ENVELOPE_BYTES + payload.len()];
+        let exact = request
+            .encode(&mut data)
+            .map_err(|_| ConstructionError::WrongWireLength)?;
+        data.truncate(exact);
+        let payer = accounts[45].pubkey;
+        let value = Self {
+            flow: ProtocolFlow::GeneralV2Settlement,
+            action_name: "initialize-general-settlement-root-v5".into(),
+            semantic_owner,
+            program_id: release.program_id,
+            accounts,
+            required_signers: vec![payer],
+            equations,
+            registry_binding: Some(binding),
+            runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
+            wire: OwnedWireContract::MainGeneralAction39RequestV1 { binding },
+            data,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Assemble current Failure action 11 only from a checked release and the
     /// complete hostile-decoded `0xa0/v4` preimages. The constructor owns the
     /// exact 44-role ABI and does not accept caller-shaped payload bytes.
@@ -2057,6 +2143,36 @@ impl OwnedInstructionDraft {
                 validate_failure_interval_funding_preimage_v1(preimage)?;
                 validate_failure_action11_metas_v1(&self.accounts)?;
             }
+            OwnedWireContract::MainGeneralAction39RequestV1 { binding } => {
+                use clutch_solana_layout::registry::GeneralV2Action;
+
+                let request = ExtensionRequest::decode(&self.data)
+                    .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                let expected = ExtensionAction::GeneralV2(
+                    GeneralV2Action::InitializeSettlementRoot,
+                );
+                if request.sequence != 0
+                    || request.envelope.family != ExtensionFamily::GeneralV2
+                    || request.envelope.family != binding.family
+                    || request.envelope.action != expected
+                    || binding.local_action != expected.local_tag()
+                    || binding.central_action != Some(expected)
+                    || binding.family_status != AllocationStatus::Frozen
+                    || self.registry_binding != Some(binding)
+                    || self.flow != ProtocolFlow::GeneralV2Settlement
+                    || self.runtime_admission != RuntimeAdmission::ReleaseBoundEnabled
+                    || clutch_general_v2_contract::InitializeSettlementRootPayloadV2::decode(
+                        request.envelope.payload,
+                    )
+                    .is_err()
+                {
+                    return Err(ConstructionError::UnallocatedRegistryCoordinate);
+                }
+                validate_general_action39_metas_v1(&self.accounts)?;
+                if self.required_signers.as_slice() != [self.accounts[45].pubkey] {
+                    return Err(ConstructionError::InvalidAccountContract);
+                }
+            }
             OwnedWireContract::FractionalRedemptionRequestV1 {
                 binding,
                 action,
@@ -2738,6 +2854,34 @@ impl OwnedInstructionDraft {
     }
 }
 
+/// Mirror the exact current General action-39 ABI. The first 49 roles are
+/// fixed and the tail contains one through four exact V5 order pages.
+fn validate_general_action39_metas_v1(accounts: &[AccountMeta]) -> Result<()> {
+    const FIXED_ACCOUNTS: usize = 49;
+    const MAX_ACCOUNTS: usize = 53;
+    const PAYER_INDEX: usize = 45;
+    const FIXED_WRITABLE: [bool; FIXED_ACCOUNTS] = [
+        true, true, false, false, false, false, false, false, false, false, false, false,
+        false, false, true, true, false, true, false, true, true, false, false, false,
+        false, false, false, false, false, false, false, false, false, false, false, false,
+        false, false, false, false, true, true, true, true, true, true, false, false, false,
+    ];
+    if !(FIXED_ACCOUNTS + 1..=MAX_ACCOUNTS).contains(&accounts.len()) {
+        return Err(ConstructionError::InvalidAccountContract);
+    }
+    for (index, account) in accounts.iter().enumerate() {
+        let signer = index == PAYER_INDEX;
+        let writable = FIXED_WRITABLE.get(index).copied().unwrap_or(false);
+        if account.pubkey == Address::default()
+            || account.is_signer != signer
+            || account.is_writable != writable
+        {
+            return Err(ConstructionError::InvalidAccountContract);
+        }
+    }
+    Ok(())
+}
+
 /// Mirror the exact current Failure action-11 account ABI at the release-bound
 /// host construction boundary. The only admitted alias is Keeper/refund owner;
 /// its Solana writable privilege is the union of both roles.
@@ -2938,6 +3082,7 @@ impl ProtocolTransactionBuilder {
                 OwnedWireContract::StructuredWrapperV1 { .. }
                     | OwnedWireContract::DealerTerminalRetireV1 { .. }
                     | OwnedWireContract::MainFailureRequestV1 { .. }
+                    | OwnedWireContract::MainGeneralAction39RequestV1 { .. }
             )
         }) {
             return Err(ConstructionError::MissingLookupTable);
@@ -2958,6 +3103,7 @@ impl ProtocolTransactionBuilder {
                 OwnedWireContract::MainSuccessor { .. }
                     | OwnedWireContract::MainSuccessorRequest { .. }
                     | OwnedWireContract::MainFailureRequestV1 { .. }
+                    | OwnedWireContract::MainGeneralAction39RequestV1 { .. }
                     | OwnedWireContract::FractionalRedemptionRequestV1 { .. }
                     | OwnedWireContract::DisabledDirectMarketRequestV1 { .. }
                     | OwnedWireContract::EnabledDirectMarketRequestV1 { .. }
@@ -3079,6 +3225,7 @@ impl ProtocolTransactionBuilder {
             OwnedWireContract::StructuredWrapperV1 { .. }
                 | OwnedWireContract::DealerTerminalRetireV1 { .. }
                 | OwnedWireContract::MainFailureRequestV1 { .. }
+                | OwnedWireContract::MainGeneralAction39RequestV1 { .. }
         );
         if !supported
             || !matches!(
@@ -3086,6 +3233,7 @@ impl ProtocolTransactionBuilder {
                 ProtocolFlow::StructuredClaim
                     | ProtocolFlow::DealerFacilityTerminal
                     | ProtocolFlow::FailureRecovery
+                    | ProtocolFlow::GeneralV2Settlement
             )
             || lookup_table.key == Address::default()
             || lookup_table.addresses.is_empty()
