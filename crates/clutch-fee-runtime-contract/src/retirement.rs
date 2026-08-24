@@ -90,6 +90,12 @@ pub struct CompletedFeeRetirementV1 {
     terminal_authority_receipt: Id,
     payer_refund_lamports: u64,
     neutral_credit_lamports: u64,
+    accumulator_account: Id,
+    accumulator_close_receipt: Id,
+    accumulator_rent_payer: Id,
+    accumulator_neutral_sink: Id,
+    accumulator_refund_lamports: u64,
+    accumulator_neutral_credit_lamports: u64,
 }
 
 /// Adapter-authenticated value transition for one ordinary Position credit.
@@ -558,6 +564,13 @@ impl FeeRetirementAccumulatorV1 {
             terminal_authority_receipt,
             payer_refund_lamports: total_refund,
             neutral_credit_lamports: total_neutral,
+            accumulator_account,
+            accumulator_close_receipt: accumulator_closure.close_receipt(),
+            accumulator_rent_payer: accumulator_closure.rent_payer(),
+            accumulator_neutral_sink: accumulator_closure.neutral_sink(),
+            accumulator_refund_lamports: accumulator_closure.rent_refund_lamports(),
+            accumulator_neutral_credit_lamports: accumulator_closure
+                .neutral_credit_lamports(),
         })
     }
 
@@ -768,11 +781,49 @@ impl FeeRetirementAccumulatorV1 {
 }
 
 impl CompletedFeeRetirementV1 {
-    pub const fn accumulator(&self) -> &FeeRetirementAccumulatorV1 { &self.accumulator }
-    pub const fn closure_set_data_id(&self) -> Id { self.closure_set_data_id }
-    pub const fn terminal_authority_receipt(&self) -> Id { self.terminal_authority_receipt }
-    pub const fn payer_refund_lamports(&self) -> u64 { self.payer_refund_lamports }
-    pub const fn neutral_credit_lamports(&self) -> u64 { self.neutral_credit_lamports }
+    pub const fn accumulator(&self) -> &FeeRetirementAccumulatorV1 {
+        &self.accumulator
+    }
+
+    pub const fn closure_set_data_id(&self) -> Id {
+        self.closure_set_data_id
+    }
+
+    pub const fn terminal_authority_receipt(&self) -> Id {
+        self.terminal_authority_receipt
+    }
+
+    pub const fn payer_refund_lamports(&self) -> u64 {
+        self.payer_refund_lamports
+    }
+
+    pub const fn neutral_credit_lamports(&self) -> u64 {
+        self.neutral_credit_lamports
+    }
+
+    pub const fn accumulator_account(&self) -> Id {
+        self.accumulator_account
+    }
+
+    pub const fn accumulator_close_receipt(&self) -> Id {
+        self.accumulator_close_receipt
+    }
+
+    pub const fn accumulator_rent_payer(&self) -> Id {
+        self.accumulator_rent_payer
+    }
+
+    pub const fn accumulator_neutral_sink(&self) -> Id {
+        self.accumulator_neutral_sink
+    }
+
+    pub const fn accumulator_refund_lamports(&self) -> u64 {
+        self.accumulator_refund_lamports
+    }
+
+    pub const fn accumulator_neutral_credit_lamports(&self) -> u64 {
+        self.accumulator_neutral_credit_lamports
+    }
 }
 
 fn fold_start<H: FeeRetirementHashV1>(book_data_id: Id, hash: &H) -> Result<Id> {

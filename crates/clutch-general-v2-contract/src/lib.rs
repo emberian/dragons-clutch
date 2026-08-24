@@ -946,6 +946,9 @@ pub const FEE_RETIREMENT_ACCOUNT_BYTES_V1: usize = 708;
 /// Exact rent-owned closure-manifest width.
 pub const FEE_RETIREMENT_ACCOUNT_BYTES_V2: usize = 580;
 /// Exact rent-owned terminal-receipt width.
+/// Exact rent-owned closure manifest width.
+pub const FEE_RETIREMENT_ACCOUNT_BYTES_V2: usize = 580;
+/// Exact rent-owned fee terminal width.
 pub const FEE_RETIREMENT_ACCOUNT_BYTES_V3: usize = 596;
 /// Fresh disabled buyer-first settlement cash-pot envelope tag.
 pub const SETTLEMENT_CASH_POT_ACCOUNT_TAG: u8 = 0x87;
