@@ -1,8 +1,8 @@
-# Product exact-market compiler transport v1
+# Product exact-market compiler transport v2
 
 This is the sole current JSON seam between Glass and operatord's pure Rust
 Product compiler. It transports an exact payoff definition, the complete
-ProfileV4/BundleV5 input graph, and an optional bounded exact-market search. It
+ProfileV4/BundleV6 input graph, and an optional bounded exact-market search. It
 does not define compiler math and it does not create registration authority.
 
 Start the same-origin static client and loopback compiler endpoint with an
@@ -31,7 +31,7 @@ widths, zero semantic identities, and malformed addresses are refused.
 
 ```json
 {
-  "schema": "dragons-clutch/compiler/product-exact-market-request/v1",
+  "schema": "dragons-clutch/compiler/product-exact-market-request/v2",
   "expectedCompilerReleaseSha256": "<configured 32-byte lowercase hex>",
   "programId": "<canonical nonzero Product program address>",
   "definition": {},
@@ -43,8 +43,8 @@ widths, zero semantic identities, and malformed addresses are refused.
     "productTemplateV4BytesHex": "<256 canonical bytes>",
     "priceMeasurePolicyV1BytesHex": "<96 canonical bytes>",
     "marketGenesisProfileV2BytesHex": "<416 canonical bytes>",
-    "seriesFundingQuoteV4BytesHex": "<592 canonical bytes>",
-    "seriesAttachmentPlanV4BytesHex": "<112 canonical bytes>",
+    "seriesFundingQuoteV5BytesHex": "<600 canonical bytes>",
+    "seriesAttachmentPlanV5BytesHex": "<112 canonical bytes>",
     "seriesPlanV5BytesHex": "<152 canonical bytes>",
     "seriesFundingTermsV2BytesHex": "<240 canonical bytes>"
   },
@@ -69,7 +69,7 @@ The browser obtains `programId` from the acquired checked-release projection;
 it is not a free-form compiler field. Operatord decodes it as an exact canonical
 Solana address, refuses the all-zero/default address, and requires its 32 bytes
 to equal `RegistryProgramReleaseV2.program`. This join happens before any
-BundleV5 artifact PDA is derived.
+BundleV6 artifact PDA is derived.
 
 Every fixed body is hostile-decoded by its owning Rust codec. Operatord:
 
@@ -80,9 +80,11 @@ Every fixed body is hostile-decoded by its owning Rust codec. Operatord:
   basis body;
 - requires the definition's Product Terms identity to equal the supplied
   MarketGenesisProfileV2 identity;
-- reopens the SeriesPlanV5, FundingTermsV2, QuoteV4, and AttachmentV4 joins;
+- reopens the SeriesPlanV5, FundingTermsV2, QuoteV5, and AttachmentV5 joins;
   and
-- assembles the sole current `CompiledProductSeriesBundleV5` graph.
+- assembles the sole current `CompiledProductSeriesBundleV6` graph. The graph
+  owns exactly 47 foundation slots: core 0..13, HoardCollateralVault 14,
+  OutcomeMint 15..30, and OutcomeCustody 31..46.
 
 The proposed Source release is represented here only by its nonzero manifest
 identity. The offline compiler cannot authenticate chain accounts or loader
@@ -156,7 +158,7 @@ The response has this closed top-level shape:
 
 ```json
 {
-  "schema": "dragons-clutch/compiler/product-exact-market-proposal/v1",
+  "schema": "dragons-clutch/compiler/product-exact-market-proposal/v2",
   "authority": "untrusted-compiler-proposal",
   "registrationAuthority": false,
   "compilerReleaseSha256": "<configured 32-byte lowercase hex>",
@@ -173,11 +175,11 @@ The response has this closed top-level shape:
   "certificate": null,
   "bounds": [],
   "subdivisionDepth": null,
-  "compiledProductSeriesBundleV5": {
-    "id": "<typed BundleV5 identity>",
+  "compiledProductSeriesBundleV6": {
+    "id": "<typed BundleV6 identity>",
     "bytesHex": "<528 canonical bytes>",
     "artifact": {
-      "kind": "60",
+      "kind": "63",
       "context": "<64 zeroes>",
       "exactBodyBytes": "528",
       "programId": "<same Product program>",
@@ -206,7 +208,7 @@ consensus-l1-upper
 coefficient-sample-sup-upper
 ```
 
-`compiledProductSeriesBundleV5.identities` contains exactly:
+`compiledProductSeriesBundleV6.identities` contains exactly:
 
 ```text
 registryReleaseId
@@ -227,8 +229,8 @@ seriesPlanId
 fundingTermsId
 ```
 
-The artifact coordinate is exactly the Product artifact seed, kind `60`, and
-the recomputed BundleV5 identity under the ReleaseV2-owned Product program.
+The artifact coordinate is exactly the Product artifact seed, kind `63`, and
+the recomputed BundleV6 identity under the ReleaseV2-owned Product program.
 Global Product artifacts use the all-zero context. The browser requires the
 bundle capability-profile identity to equal the acquired checked-release
 profile and requires the bundle's Genesis identity to equal `productTermsId`.
@@ -245,13 +247,13 @@ When requested, `exactMarket` contains:
   exhausts every support over every integer in the complete Terms domain;
 - `claims` with `uniquePrice`, `fairValue`, and `optimalClearing` all exactly
   false;
-- exact Market, Product Terms, native basis, price, and BundleV5 bindings;
+- exact Market, Product Terms, native basis, price, and BundleV6 bindings;
 - exact target prices and payout denominator;
 - the coordinate declaration, per-support work counts, exhaustion boundary,
   truncation boundary, and work budget;
 - a 1,640-byte canonical work manifest;
 - a 544-byte hostile-verifier certificate only for `solved`; and
-- a 176-byte sidecar bound to the kind-60, global-context BundleV5 identity.
+- a 176-byte sidecar bound to the kind-63, global-context BundleV6 identity.
 
 This search returns an exact certificate found by its deterministic finite
 traversal. It does not claim a unique market price, fair value, or optimal
@@ -262,11 +264,11 @@ negative, and a work-truncated result is not exhaustion evidence.
 
 Every response is a proposal. The browser checks closed transport shapes,
 fixed widths, exact request hashes, the configured compiler hash, the selected
-program address, the sixteen exposed identities, the native-basis/BundleV5
+program address, the sixteen exposed identities, the native-basis/BundleV6
 join, the Genesis/Terms join, and the exact-market request/output bindings. It
 does not reinterpret Rust fixed codecs or mint registration capability.
 
-Neither a compiler response, a BundleV5 PDA string, nor an operatord index row
+Neither a compiler response, a BundleV6 PDA string, nor an operatord index row
 is onchain truth. Registration must reload and authenticate:
 
 - the executing Program and ProgramData loader pair, deployment locus, slot,
@@ -274,7 +276,7 @@ is onchain truth. Registration must reload and authenticate:
 - RegistryProgramReleaseV2 and RegistryCapabilityProfileV4;
 - the exact Source release;
 - every content-addressed Product and Series artifact;
-- the recomputed BundleV5 body, typed identity, kind-60 PDA, and bump; and
+- the recomputed BundleV6 body, typed identity, kind-63 PDA, and bump; and
 - every exact-market manifest, certificate, and sidecar consumed by an enabled
   onchain route.
 
@@ -287,7 +289,7 @@ execution is not registration authority or mainnet evidence.
 The HTTP route is exactly:
 
 ```text
-POST /v1/compiler/product-exact-market
+POST /v2/compiler/product-exact-market
 ```
 
 The pure compiler server binds IPv4 loopback, requires an exact loopback

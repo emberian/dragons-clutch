@@ -130,17 +130,17 @@ math. The compiler form accepts:
 - an exact rational definition JSON object in which all integers and rational
   components are strings;
 - exact current RegistryProgramReleaseV2, RegistryCapabilityProfileV4,
-  QuoteV4, AttachmentV4, and remaining BundleV5 input bodies;
+  QuoteV5, AttachmentV5, and remaining BundleV6 input bodies;
 - an optional bounded exact-market search over explicit integer coordinates;
   and
 - an explicit expected compiler-release SHA-256 pinned by operatord.
 
 The form calls the pure bounded
-`POST /v1/compiler/product-exact-market` endpoint. The same implementation is
+`POST /v2/compiler/product-exact-market` endpoint. The same implementation is
 available through
 `operatord compile-product-exact-market --compiler-release-sha256 HASH` for
 stdin/stdout proposal import. Both call Rust `compile_production_payoff_v1`,
-the current `assemble_compiled_product_series_bundle_v5`, and, when requested,
+the current `assemble_compiled_product_series_bundle_v6`, and, when requested,
 the bounded all-support exact atom solver.
 
 The page computes SHA-256 over both canonical sorted-key UTF-8 definition JSON
@@ -149,15 +149,15 @@ the configured expected compiler-release SHA-256. That release hash is a
 configuration join, not a measurement of the running binary. The Product
 program address comes from the acquired checked-release projection; operatord
 requires it to be canonical, nonzero, and equal to the Program coordinate in
-RegistryProgramReleaseV2 before deriving the kind-60 BundleV5 artifact PDA.
+RegistryProgramReleaseV2 before deriving the kind-63 BundleV6 artifact PDA.
 
 Glass then displays exact-in-span versus certified-approximation status, all
 exact rational error bounds, the canonical 2,352-byte native-basis proposal,
-its certificate, and the 528-byte BundleV5 plus all sixteen typed identities.
+its certificate, and the 528-byte BundleV6 plus all sixteen typed identities.
 The bundle capability-profile ID must match the daemon-projected checked
 release. An analytic result also carries its exact certification subdivision
 depth. An exact-market request additionally returns a canonical work manifest,
-an optional verifier certificate, and a BundleV5-bound sidecar. It never claims
+an optional verifier certificate, and a BundleV6-bound sidecar. It never claims
 a unique price, fair value, or optimal clearing.
 
 The compiler endpoint is loopback-only and has no RPC, wallet, signing,
@@ -166,7 +166,7 @@ submission, registration, or persistence path. Its output is always marked
 transport shape and exact request joins but deliberately does not become a
 second semantic owner by reimplementing Rust codecs. Registration remains the
 only authority: the program must reopen the loader-authenticated registry
-release, ProfileV4, Source release, every canonical artifact, BundleV5, and any
+release, ProfileV4, Source release, every canonical artifact, BundleV6, and any
 exact-market evidence, then recompute every identity, PDA, and binding.
 
 ## Unsigned construction boundary

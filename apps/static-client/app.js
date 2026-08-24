@@ -294,7 +294,7 @@
       context.definitionValue,
       context.request
     );
-    const profileId = proposal.compiledProductSeriesBundleV5.identities.capabilityProfileId;
+    const profileId = proposal.compiledProductSeriesBundleV6.identities.capabilityProfileId;
     if (profileId !== context.configuration.release.capabilityProfileId) {
       throw new Error("Compiler output capabilityProfileId differs from the daemon-projected checked release profile.");
     }
@@ -317,8 +317,8 @@
       definition("Native basis ID / bytes", `${proposal.nativeClaimBasis.id} / ${proposal.nativeClaimBasis.byteLength}`),
       definition("Certificate ID / bytes", proposal.certificate ? `${proposal.certificate.id} / ${proposal.certificate.byteLength}` : "none — categorical basis is semantic owner"),
       definition("Certification subdivision depth", proposal.subdivisionDepth),
-      definition("BundleV5 ID / bytes", `${proposal.compiledProductSeriesBundleV5.id} / ${proposal.compiledProductSeriesBundleV5.byteLength}`),
-      definition("BundleV5 artifact kind / PDA", `${proposal.compiledProductSeriesBundleV5.artifact.kind} / ${proposal.compiledProductSeriesBundleV5.artifact.pda}`),
+      definition("BundleV6 ID / bytes", `${proposal.compiledProductSeriesBundleV6.id} / ${proposal.compiledProductSeriesBundleV6.byteLength}`),
+      definition("BundleV6 artifact kind / PDA", `${proposal.compiledProductSeriesBundleV6.artifact.kind} / ${proposal.compiledProductSeriesBundleV6.artifact.pda}`),
       definition("Exact market outcome / coverage", proposal.exactMarket ? `${proposal.exactMarket.outcome} / ${proposal.exactMarket.coverage}` : "not requested"),
       definition("Exact certificate / work manifest", proposal.exactMarket ? `${proposal.exactMarket.certificate ? proposal.exactMarket.certificate.outputId : "none"} / ${proposal.exactMarket.workManifest.id}` : "not requested"),
       definition("Capability profile join", profileId),
