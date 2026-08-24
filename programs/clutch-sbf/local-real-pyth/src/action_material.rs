@@ -8380,10 +8380,16 @@ pub fn construct_general_terminal_action_material_v5(
         || accounts.iter().any(|account| {
             account.address == Address::default()
                 || account.observed_slot == 0
-                || account.observed_slot > freshness.observed_slot
+                || account.observed_slot != freshness.observed_slot
                 || account.present.is_some_and(|present| {
                     present.provenance.commitment != RpcCommitment::Finalized
                         || present.provenance.cluster_key != lookup_table.cluster_key
+                        || !matches!(
+                            present.provenance.source,
+                            crate::rpc_index::RpcObservationSource::FinalizedExactAccountSnapshot {
+                                ..
+                            }
+                        )
                 })
         })
     {
