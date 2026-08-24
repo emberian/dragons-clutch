@@ -280,6 +280,17 @@ name = "dclutch-kernel"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-kernel",
+ "dclutch-pyth-contract",
+ "dclutch-pyth-svm",
+ "solana-program",
+]
+
+[[package]]
 name = "dclutch-pyth-contract"
 version = "0.1.0"
 dependencies = [

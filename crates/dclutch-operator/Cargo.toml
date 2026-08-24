@@ -1,0 +1,23 @@
+[package]
+name = "dclutch-operator"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+non-production-real-pyth-lab = ["dclutch-pyth-svm/synthetic-local-fixture"]
+
+[dependencies]
+dclutch-core-contract = { path = "../dclutch-core-contract" }
+dclutch-kernel = { path = "../dclutch-kernel" }
+dclutch-pyth-contract = { path = "../dclutch-pyth-contract" }
+dclutch-pyth-svm = { path = "../dclutch-pyth-svm" }
+solana-program = { version = "=3.0.0", default-features = false }
+
+[lints]
+workspace = true
