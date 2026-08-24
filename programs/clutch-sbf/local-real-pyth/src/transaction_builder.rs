@@ -1031,6 +1031,115 @@ impl OwnedInstructionDraft {
         Ok(value)
     }
 
+    /// Assemble a two-holder same-domain credit transfer or full-source merge.
+    pub(crate) fn enabled_fractional_credit_move_v1(
+        semantic_owner: SemanticOwner,
+        program_id: Address,
+        accounts: Vec<AccountMeta>,
+        equations: Vec<ExactEquation>,
+        action: clutch_fractional_redemption_runtime::FractionalRedemptionActionV1,
+        sequence: u64,
+        payload: &[u8],
+    ) -> Result<Self> {
+        use clutch_fractional_redemption_runtime::{
+            FractionalRedemptionActionV1, FractionalTransferIntentV1,
+        };
+        if !matches!(
+            action,
+            FractionalRedemptionActionV1::TransferCredit
+                | FractionalRedemptionActionV1::MergeCredit
+        ) {
+            return Err(ConstructionError::WrongFlow);
+        }
+        let intent = FractionalTransferIntentV1::decode(payload)
+            .map_err(|_| ConstructionError::WrongWirePrefix)?;
+        let creation = matches!(intent.destination_mode, 2 | 3);
+        let (root, neutral, rent) = match intent.payout_kind {
+            1 => (18, 19, 20),
+            2 => (21, 22, 23),
+            _ => return Err(ConstructionError::InvalidAccountContract),
+        };
+        let funding = rent + 1;
+        let expected_count = funding + if creation { 2 } else { 0 };
+        if sequence == 0
+            || intent.expected_ledger_sequence != sequence
+            || (action == FractionalRedemptionActionV1::TransferCredit && intent.numerator == 0)
+            || (action == FractionalRedemptionActionV1::MergeCredit && intent.numerator != 0)
+            || (intent.payout_kind == 1 && intent.expected_payout_replay_sequence == 0)
+            || (intent.payout_kind == 2 && intent.expected_payout_replay_sequence != 0)
+            || accounts.len() != expected_count
+            || accounts[0].pubkey.to_bytes() != intent.source_claimant.bytes()
+            || accounts[1].pubkey.to_bytes() != intent.destination_claimant.bytes()
+            || accounts[14].pubkey.to_bytes() != intent.source_credit.bytes()
+            || accounts[15].pubkey.to_bytes() != intent.destination_credit.bytes()
+            || accounts[16 + usize::from(intent.payout_kind == 2)].pubkey.to_bytes()
+                != intent.payout_target.bytes()
+        {
+            return Err(ConstructionError::InvalidAccountContract);
+        }
+        let payer_alias_source = creation && accounts[0].pubkey == accounts[funding].pubkey;
+        let payer_alias_destination = creation && accounts[1].pubkey == accounts[funding].pubkey;
+        let mut required_signers = BTreeSet::new();
+        for (index, account) in accounts.iter().enumerate() {
+            let payout_writable = if intent.payout_kind == 1 {
+                matches!(index, 16 | 17)
+            } else {
+                matches!(index, 17 | 19)
+            };
+            let expected_writable = matches!(index, 9 | 10 | 13 | 14 | 15)
+                || payout_writable
+                || (creation && index == funding)
+                || (index == 0 && payer_alias_source)
+                || (index == 1 && payer_alias_destination);
+            let expected_signer = matches!(index, 0 | 1) || (creation && index == funding);
+            if account.is_writable != expected_writable || account.is_signer != expected_signer {
+                return Err(ConstructionError::InvalidAccountContract);
+            }
+            if expected_signer {
+                required_signers.insert(account.pubkey);
+            }
+            for other in index + 1..accounts.len() {
+                let payer_alias = creation && other == funding && matches!(index, 0 | 1);
+                if account.pubkey == accounts[other].pubkey && !payer_alias {
+                    return Err(ConstructionError::DuplicateAccount);
+                }
+            }
+        }
+        let central_action = ExtensionAction::FractionalRedemption(action);
+        let binding = registry_binding(ExtensionFamily::FractionalRedemption, action.tag(), Some(central_action))?;
+        let request = ExtensionRequest {
+            sequence,
+            envelope: ExtensionEnvelope {
+                family: ExtensionFamily::FractionalRedemption,
+                action: central_action,
+                payload,
+            },
+        };
+        let mut data = vec![0; 13 + EXTENSION_ENVELOPE_BYTES + payload.len()];
+        let exact = request.encode(&mut data).map_err(|_| ConstructionError::WrongWireLength)?;
+        data.truncate(exact);
+        let value = Self {
+            flow: ProtocolFlow::FractionalRedemption,
+            action_name: if action == FractionalRedemptionActionV1::TransferCredit {
+                "transfer-fractional-credit".into()
+            } else {
+                "merge-fractional-credit".into()
+            },
+            semantic_owner,
+            program_id,
+            accounts,
+            required_signers: required_signers.into_iter().collect(),
+            equations,
+            registry_binding: Some(binding),
+            runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
+            wire: OwnedWireContract::FractionalRedemptionRequestV1 { binding, action, sequence },
+            data,
+        };
+        value.validate()?;
+        let _ = (root, neutral);
+        Ok(value)
+    }
+
     /// Assemble one current Structured wrapper call through the semantic
     /// owner's exact action/count/privilege contract. The wrapper program, not
     /// the central base, is the instruction target. Payload bytes must already
@@ -1336,6 +1445,8 @@ impl OwnedInstructionDraft {
                         | FractionalRedemptionActionV1::RedeemBearerExact
                         | FractionalRedemptionActionV1::RedeemBearerCredit
                         | FractionalRedemptionActionV1::RedeemInternalCredit
+                        | FractionalRedemptionActionV1::TransferCredit
+                        | FractionalRedemptionActionV1::MergeCredit
                         | FractionalRedemptionActionV1::CloseZeroCredit
                         | FractionalRedemptionActionV1::SealClaimsExhausted
                 )
@@ -1359,6 +1470,8 @@ impl OwnedInstructionDraft {
                     FractionalRedemptionActionV1::RedeemInternalCredit
                         | FractionalRedemptionActionV1::RedeemBearerExact
                         | FractionalRedemptionActionV1::RedeemBearerCredit
+                        | FractionalRedemptionActionV1::TransferCredit
+                        | FractionalRedemptionActionV1::MergeCredit
                 )
                     && self.accounts.len() != usize::from(contract.account_count)
                 {
@@ -1519,6 +1632,64 @@ impl OwnedInstructionDraft {
                             }
                         }
                     }
+                    FractionalRedemptionActionV1::TransferCredit
+                    | FractionalRedemptionActionV1::MergeCredit => {
+                        let intent = clutch_fractional_redemption_runtime::FractionalTransferIntentV1::decode(
+                            request.envelope.payload,
+                        )
+                        .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                        let creation = matches!(intent.destination_mode, 2 | 3);
+                        let rent = if intent.payout_kind == 1 { 20 } else { 23 };
+                        let funding = rent + 1;
+                        let expected_count = funding + if creation { 2 } else { 0 };
+                        if intent.expected_ledger_sequence != sequence
+                            || (action == FractionalRedemptionActionV1::TransferCredit
+                                && intent.numerator == 0)
+                            || (action == FractionalRedemptionActionV1::MergeCredit
+                                && intent.numerator != 0)
+                            || (intent.payout_kind == 1
+                                && intent.expected_payout_replay_sequence == 0)
+                            || (intent.payout_kind == 2
+                                && intent.expected_payout_replay_sequence != 0)
+                            || self.accounts.len() != expected_count
+                            || self.accounts[0].pubkey.to_bytes()
+                                != intent.source_claimant.bytes()
+                            || self.accounts[1].pubkey.to_bytes()
+                                != intent.destination_claimant.bytes()
+                            || self.accounts[14].pubkey.to_bytes() != intent.source_credit.bytes()
+                            || self.accounts[15].pubkey.to_bytes()
+                                != intent.destination_credit.bytes()
+                            || self.accounts[16 + usize::from(intent.payout_kind == 2)]
+                                .pubkey
+                                .to_bytes()
+                                != intent.payout_target.bytes()
+                        {
+                            return Err(ConstructionError::InvalidAccountContract);
+                        }
+                        let payer_alias_source = creation
+                            && self.accounts[0].pubkey == self.accounts[funding].pubkey;
+                        let payer_alias_destination = creation
+                            && self.accounts[1].pubkey == self.accounts[funding].pubkey;
+                        for (index, account) in self.accounts.iter().enumerate() {
+                            let payout_writable = if intent.payout_kind == 1 {
+                                matches!(index, 16 | 17)
+                            } else {
+                                matches!(index, 17 | 19)
+                            };
+                            let expected_writable = matches!(index, 9 | 10 | 13 | 14 | 15)
+                                || payout_writable
+                                || (creation && index == funding)
+                                || (index == 0 && payer_alias_source)
+                                || (index == 1 && payer_alias_destination);
+                            let expected_signer = matches!(index, 0 | 1)
+                                || (creation && index == funding);
+                            if account.is_writable != expected_writable
+                                || account.is_signer != expected_signer
+                            {
+                                return Err(ConstructionError::InvalidAccountContract);
+                            }
+                        }
+                    }
                     _ => return Err(ConstructionError::UnallocatedRegistryCoordinate),
                 }
                 for (index, account) in self.accounts.iter().enumerate() {
@@ -1531,6 +1702,8 @@ impl OwnedInstructionDraft {
                             | FractionalRedemptionActionV1::RedeemInternalCredit
                             | FractionalRedemptionActionV1::RedeemBearerExact
                             | FractionalRedemptionActionV1::RedeemBearerCredit
+                            | FractionalRedemptionActionV1::TransferCredit
+                            | FractionalRedemptionActionV1::MergeCredit
                     ) {
                         if account.is_signer != (contract.signer_mask & mask != 0)
                             || account.is_writable != (contract.writable_mask & mask != 0)
@@ -1564,11 +1737,27 @@ impl OwnedInstructionDraft {
                         } else {
                             false
                         };
+                        let allowed_move_payer_alias = if matches!(
+                            action,
+                            FractionalRedemptionActionV1::TransferCredit
+                                | FractionalRedemptionActionV1::MergeCredit
+                        ) {
+                            let intent = clutch_fractional_redemption_runtime::FractionalTransferIntentV1::decode(
+                                request.envelope.payload,
+                            )
+                            .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                            let creation = matches!(intent.destination_mode, 2 | 3);
+                            let funding = if intent.payout_kind == 1 { 21 } else { 24 };
+                            creation && other == funding && matches!(index, 0 | 1)
+                        } else {
+                            false
+                        };
                         if account.pubkey == self.accounts[other].pubkey
                             && !allowed_close_payer_alias
                             && !allowed_credit_payer_alias
                             && !allowed_bearer_loader_alias
                             && !allowed_bearer_credit_payer_alias
+                            && !allowed_move_payer_alias
                         {
                             return Err(ConstructionError::DuplicateAccount);
                         }
