@@ -66,6 +66,9 @@ pub enum FailureMarketAccountRoleV2 {
     SourceParserConfig,
     SourceSpec,
     SourceWorkSchedule,
+    SourceReceiverProgram,
+    SourceReceiverProgramData,
+    SourceReceiverConfig,
     SourceOccurrence,
     SourceWindowArtifact,
     SourceStatisticKeyArtifact,
@@ -242,6 +245,9 @@ pub const RESOLVE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2]
     meta(Role::SourceParserConfig, false, false, false),
     meta(Role::SourceSpec, false, false, false),
     meta(Role::SourceWorkSchedule, false, false, false),
+    meta(Role::SourceReceiverProgram, false, false, true),
+    meta(Role::SourceReceiverProgramData, false, false, false),
+    meta(Role::SourceReceiverConfig, false, false, false),
     meta(Role::SourceOccurrence, false, false, false),
     meta(Role::SourceWindowArtifact, false, false, false),
     meta(Role::SourceStatisticKeyArtifact, false, false, false),
@@ -705,6 +711,21 @@ mod adversarial_contract_tests {
                 route[index],
             );
             index += 1;
+        }
+        let receiver = [
+            Role::SourceReceiverProgram,
+            Role::SourceReceiverProgramData,
+            Role::SourceReceiverConfig,
+        ];
+        let mut receiver_index = 0usize;
+        while receiver_index < receiver.len() {
+            assert_eq!(
+                RESOLVE_FAILURE_MARKET_SESSION_METAS_V2
+                    [source_release + route.len() + receiver_index]
+                    .role,
+                receiver[receiver_index],
+            );
+            receiver_index += 1;
         }
         let result = RESOLVE_FAILURE_MARKET_SESSION_METAS_V2
             .iter()
