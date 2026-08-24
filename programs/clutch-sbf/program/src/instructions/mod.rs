@@ -162,6 +162,8 @@ pub mod general_v2_settlement_root;
 pub mod general_v2_settlement_producer_v5;
 #[cfg(feature = "profile-successor-chain-attached-dev")]
 pub(crate) mod general_market_foundation_v4;
+/// Reusable hostile current General V5/Product V3/Revenue V2 read authority.
+pub(crate) mod general_market_current_v5;
 /// V5-only compact index child and retained-Feed retirement composers.
 #[cfg(feature = "profile-successor-chain-attached-dev")]
 pub(crate) mod general_v2_exact_index_retirement_v1;
