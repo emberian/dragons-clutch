@@ -90,7 +90,6 @@ use clutch_solana_layout::failure_recovery::{
     FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1, FAILURE_LIVENESS_POLICY_BODY_BYTES_V1,
     FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3, FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_BYTES_V1,
 };
-};
 use clutch_solana_layout::failure_market_interval_v2::{
     FailureMarketIntervalCellAccountV2, FailureMarketIntervalHistoryAccountV2,
 };
