@@ -4,10 +4,10 @@ use clutch_collateral_adapter_v2::{
     ClaimLedgerV3, HoardV2, MarketLiabilityLifecycleV1, ResolutionStateV5, ResolutionV5,
 };
 use clutch_product_series::{
-    CompiledProductSeriesBundleV6, ContentId, FixedCodec, MarketInstancePreimageV2,
+    CompiledProductSeriesBundleV7, ContentId, FixedCodec, MarketInstancePreimageV2,
     NativeClaimBasisV1, RegistryCapabilityProfileV4,
-    SeriesAttachmentPlanV5, SeriesLinkObligationStatusV2, SeriesLinkObligationV2,
-    SeriesMarketLinkPhaseV2,
+    SeriesAttachmentPlanV6, SeriesLinkObligationStatusV3, SeriesLinkObligationV3,
+    SeriesMarketLinkPhaseV3,
 };
 use clutch_retirement::{
     PositionAccountV3, PositionPurposeV3, PositionV3Sha256Backend, ReplayV3Envelope,
@@ -15,9 +15,9 @@ use clutch_retirement::{
 };
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::product_series::{
-    series_market_link_authentication_id_v2, SeriesMarketLinkAccountV2,
-    SeriesRegistryAccountV3, SERIES_MARKET_LINK_ACCOUNT_BYTES_V2,
-    SERIES_REGISTRY_ACCOUNT_BYTES_V3,
+    series_market_link_authentication_id_v3, SeriesMarketLinkAccountV3,
+    SeriesRegistryAccountV4, SERIES_MARKET_LINK_ACCOUNT_BYTES_V3,
+    SERIES_REGISTRY_ACCOUNT_BYTES_V4,
 };
 use clutch_solana_layout::registry::{
     ExtensionAction, ExtensionFamily, StructuredClaimAction,
@@ -104,7 +104,7 @@ const CREATE_SERIES_LINK: usize = 26;
 const CREATE_COMPILER_BUNDLE: usize = 27;
 const CREATE_ATTACHMENT: usize = 28;
 const CREATE_RECIPE_SET: usize = 29;
-const CREATE_SERIES_REGISTRY_V3: usize = 30;
+const CREATE_SERIES_REGISTRY_V4: usize = 30;
 const CREATE_REGISTRY_RELEASE_V2: usize = 31;
 const CREATE_CAPABILITY_PROFILE_V4: usize = 32;
 const CREATE_WRAPPER_RELEASE_V2: usize = 33;
@@ -612,8 +612,8 @@ fn retire_descriptor(
     let link_data_before = accounts[R_LINK]
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
-    let mut link_before = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
-    SeriesMarketLinkAccountV2::decode_into(&link_data_before, &mut link_before)
+    let mut link_before = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    SeriesMarketLinkAccountV3::decode_into(&link_data_before, &mut link_before)
         .map_err(|_| WrapperError::Identity)?;
     drop(link_data_before);
 
@@ -1299,7 +1299,7 @@ fn authenticate_create_recipe_set(
     let attachment_data = accounts[CREATE_ATTACHMENT]
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
-    let attachment = SeriesAttachmentPlanV5::decode(&attachment_data)
+    let attachment = SeriesAttachmentPlanV6::decode(&attachment_data)
         .map_err(|_| WrapperError::Identity)?;
     drop(attachment_data);
     let recipe_data = accounts[CREATE_RECIPE_SET]
@@ -2219,7 +2219,7 @@ fn reconcile_retirement(
     refund_balance_before: u64,
     sink_balance_before: u64,
     link_balance_before: u64,
-    link_before: &SeriesMarketLinkAccountV2,
+    link_before: &SeriesMarketLinkAccountV3,
     family_terminal: bool,
     bound: &clutch_structured_claim_adapter::BoundDescriptorV1,
 ) -> Result<()> {
@@ -2324,7 +2324,7 @@ fn reconcile_retirement(
             .content_id(),
         product_admission_receipt_id: link_before
             .state
-            .obligation_admission_receipt_id(SeriesLinkObligationV2::Wrapper),
+            .obligation_admission_receipt_id(SeriesLinkObligationV3::Wrapper),
         last_observed_link_transition_sequence: link_before.state.transition_sequence(),
     };
     if family_terminal {
@@ -2405,11 +2405,11 @@ fn reconcile_retirement(
                 .last_observed_link_transition_sequence
         || link_before
             .state
-            .obligation_status(SeriesLinkObligationV2::Wrapper)
-            != SeriesLinkObligationStatusV2::Live
+            .obligation_status(SeriesLinkObligationV3::Wrapper)
+            != SeriesLinkObligationStatusV3::Live
         || link_before
             .state
-            .obligation_admission_receipt_id(SeriesLinkObligationV2::Wrapper)
+            .obligation_admission_receipt_id(SeriesLinkObligationV3::Wrapper)
             != root_before.product_lineage.product_admission_receipt_id
     {
         return Err(WrapperError::BaseCustody);
@@ -2417,8 +2417,8 @@ fn reconcile_retirement(
     let link_data_after = accounts[R_LINK]
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
-    let mut link_after = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
-    SeriesMarketLinkAccountV2::decode_into(&link_data_after, &mut link_after)
+    let mut link_after = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    SeriesMarketLinkAccountV3::decode_into(&link_data_after, &mut link_after)
         .map_err(|_| WrapperError::Identity)?;
     if *link_after != *link_before {
         return Err(WrapperError::BaseCustody);
@@ -3069,7 +3069,7 @@ fn reconcile_product_series_link(
 ) -> Result<()> {
     let account = &accounts[CREATE_SERIES_LINK];
     if account.owner != accounts[CREATE_BASE_PROGRAM].key
-        || account.data_len() != SERIES_MARKET_LINK_ACCOUNT_BYTES_V2
+        || account.data_len() != SERIES_MARKET_LINK_ACCOUNT_BYTES_V3
         || account.is_signer
         || account.is_writable != expected_writable
         || account.executable
@@ -3081,8 +3081,8 @@ fn reconcile_product_series_link(
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
     let framed_data_id = hashv(&[&data[..]]).to_bytes();
-    let mut link = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
-    SeriesMarketLinkAccountV2::decode_into(&data, &mut link)
+    let mut link = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    SeriesMarketLinkAccountV3::decode_into(&data, &mut link)
         .map_err(|_| WrapperError::Identity)?;
     drop(data);
     let binding = link.state.binding();
@@ -3106,7 +3106,7 @@ fn reconcile_product_series_link(
         .checked_add(link.state.current_donation_lamports())
         .ok_or(WrapperError::Arithmetic)?;
     let authentication_id = ContentId::from_bytes(
-        series_market_link_authentication_id_v2(
+        series_market_link_authentication_id_v3(
             account.key.to_bytes(),
             accounts[CREATE_BASE_PROGRAM].key.to_bytes(),
             framed_data_id,
@@ -3128,14 +3128,14 @@ fn reconcile_product_series_link(
         || binding.capability_profile_id != root.binding.capability_profile_id
         || binding.rent_refund_owner != root.binding.rent_refund_owner
         || binding.neutral_lamport_sink != root.binding.neutral_lamport_sink
-        || link.state.phase() != SeriesMarketLinkPhaseV2::Active
+        || link.state.phase() != SeriesMarketLinkPhaseV3::Active
         || link
             .state
-            .obligation_status(SeriesLinkObligationV2::Wrapper)
-            != SeriesLinkObligationStatusV2::Live
+            .obligation_status(SeriesLinkObligationV3::Wrapper)
+            != SeriesLinkObligationStatusV3::Live
         || link
             .state
-            .obligation_admission_receipt_id(SeriesLinkObligationV2::Wrapper)
+            .obligation_admission_receipt_id(SeriesLinkObligationV3::Wrapper)
             != root.product_lineage.product_admission_receipt_id
         || binding.id().map_err(|_| WrapperError::Identity)?
             != root.product_lineage.link_binding_id
@@ -3156,17 +3156,17 @@ fn decode_structured_product_artifacts(
     accounts: &[AccountInfo<'_>],
     deployments: AuthenticatedStructuredDeploymentsV2,
 ) -> Result<(
-    Box<CompiledProductSeriesBundleV6>,
-    Box<SeriesAttachmentPlanV5>,
-    SeriesRegistryAccountV3,
+    Box<CompiledProductSeriesBundleV7>,
+    Box<SeriesAttachmentPlanV6>,
+    SeriesRegistryAccountV4,
     Box<RegistryCapabilityProfileV4>,
 )> {
     if accounts[CREATE_COMPILER_BUNDLE].owner != accounts[CREATE_BASE_PROGRAM].key
         || accounts[CREATE_ATTACHMENT].owner != accounts[CREATE_BASE_PROGRAM].key
         || accounts[CREATE_RECIPE_SET].owner != accounts[CREATE_BASE_PROGRAM].key
-        || accounts[CREATE_SERIES_REGISTRY_V3].owner != accounts[CREATE_BASE_PROGRAM].key
+        || accounts[CREATE_SERIES_REGISTRY_V4].owner != accounts[CREATE_BASE_PROGRAM].key
         || accounts[CREATE_CAPABILITY_PROFILE_V4].owner != accounts[CREATE_BASE_PROGRAM].key
-        || accounts[CREATE_SERIES_REGISTRY_V3].data_len() != SERIES_REGISTRY_ACCOUNT_BYTES_V3
+        || accounts[CREATE_SERIES_REGISTRY_V4].data_len() != SERIES_REGISTRY_ACCOUNT_BYTES_V4
     {
         return Err(WrapperError::Identity);
     }
@@ -3174,7 +3174,7 @@ fn decode_structured_product_artifacts(
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
     let bundle = Box::new(
-        CompiledProductSeriesBundleV6::decode(&bundle_data)
+        CompiledProductSeriesBundleV7::decode(&bundle_data)
             .map_err(|_| WrapperError::Identity)?,
     );
     drop(bundle_data);
@@ -3182,14 +3182,14 @@ fn decode_structured_product_artifacts(
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
     let attachment = Box::new(
-        SeriesAttachmentPlanV5::decode(&attachment_data)
+        SeriesAttachmentPlanV6::decode(&attachment_data)
             .map_err(|_| WrapperError::Identity)?,
     );
     drop(attachment_data);
-    let registry_data = accounts[CREATE_SERIES_REGISTRY_V3]
+    let registry_data = accounts[CREATE_SERIES_REGISTRY_V4]
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
-    let registry = SeriesRegistryAccountV3::decode(&registry_data)
+    let registry = SeriesRegistryAccountV4::decode(&registry_data)
         .map_err(|_| WrapperError::Identity)?;
     drop(registry_data);
     let profile_data = accounts[CREATE_CAPABILITY_PROFILE_V4]
@@ -3208,13 +3208,13 @@ fn decode_structured_product_artifacts(
     if *accounts[CREATE_COMPILER_BUNDLE].key
         != product_artifact_pda(
             accounts[CREATE_BASE_PROGRAM].key,
-            ArtifactKind::CompiledProductSeriesBundleV6.byte(),
+            ArtifactKind::CompiledProductSeriesBundleV7.byte(),
             bundle_id,
         )
         || *accounts[CREATE_ATTACHMENT].key
             != product_artifact_pda(
                 accounts[CREATE_BASE_PROGRAM].key,
-                ArtifactKind::SeriesAttachmentPlanV5.byte(),
+                ArtifactKind::SeriesAttachmentPlanV6.byte(),
                 attachment_id,
             )
         || *accounts[CREATE_CAPABILITY_PROFILE_V4].key
@@ -3231,10 +3231,10 @@ fn decode_structured_product_artifacts(
                 &[b"dc:series-registry:v1", &registry.series_plan_id.bytes()],
                 accounts[CREATE_BASE_PROGRAM].key,
             );
-            *accounts[CREATE_SERIES_REGISTRY_V3].key != expected_registry.0
+            *accounts[CREATE_SERIES_REGISTRY_V4].key != expected_registry.0
                 || registry.stored_bump != expected_registry.1
         }
-        || accounts[CREATE_SERIES_REGISTRY_V3].lamports() < registry.rent_principal_lamports
+        || accounts[CREATE_SERIES_REGISTRY_V4].lamports() < registry.rent_principal_lamports
         || registry.registry_release_id != deployments.base_release_id
         || registry.capability_profile_id
             != profile.id().map_err(|_| WrapperError::Identity)?.content_id()
@@ -3268,6 +3268,30 @@ fn structured_root_requires_product_write(owner: &Pubkey, data_len: usize) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wrapper_decodes_only_current_product_structured_artifacts() {
+        let source = include_str!("executor.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        for required in [
+            "SeriesMarketLinkAccountV3",
+            "series_market_link_authentication_id_v3(",
+            "SeriesRegistryAccountV4",
+            "CompiledProductSeriesBundleV7",
+            "SeriesAttachmentPlanV6",
+        ] {
+            assert!(production.contains(required));
+        }
+        for withdrawn in [
+            "SeriesMarketLinkAccountV2",
+            "series_market_link_authentication_id_v2(",
+            "SeriesRegistryAccountV3",
+            "CompiledProductSeriesBundleV6",
+            "SeriesAttachmentPlanV5",
+        ] {
+            assert!(!production.contains(withdrawn));
+        }
+    }
 
     #[test]
     fn later_root_refuses_product_link_write_privilege() {

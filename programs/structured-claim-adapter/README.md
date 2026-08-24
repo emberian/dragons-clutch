@@ -55,8 +55,8 @@ the identically named unified profile and admits the same six tuples. Actions
 Actions 1, 3, 5, 6, 7, and 8 have one shared source/account contract used by
 both wrapper and base: founding uses 34 accounts, full-vector wrap/unwind use
 32, compaction uses 32, terminal redemption uses 33, and retirement uses 33.
-Retirement reopens read-only BundleV6 and AttachmentV5 artifacts and never
-borrows Product LinkV2 write authority. The final Structured root close creates
+Retirement reopens read-only BundleV7 and AttachmentV6 artifacts and never
+borrows Product LinkV3 write authority. The final Structured root close creates
 one non-Copy family receipt inside the base invocation; the public final route
 fails closed until the current Product RootV3/LinkV3 consumer is composed in
 that same invocation.

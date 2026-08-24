@@ -7,8 +7,8 @@ the exact checked manifest and hostile loader boundary. It is not a production
 or deployment claim.
 
 The create route uses an exact 35-account frame. The base side
-authenticates the Product SeriesRegistryV3, SeriesMarketLinkV2, current BundleV6,
-ReleaseV2/ProfileV4, current AttachmentV5, and the read-only content-addressed
+authenticates the Product SeriesRegistryV4, SeriesMarketLinkV3, current BundleV7,
+ReleaseV2/ProfileV4, current AttachmentV6, and the read-only content-addressed
 WrapperRecipeSetV1 artifact selected by that attachment. It hostile-decodes the
 complete fixed-layout recipe set, recomputes its set identity, and requires the
 payload recipe and fixed-depth witness to be the exact published leaf before it
@@ -44,7 +44,7 @@ are the distinct Hoard authority, neutral token, Structured root, Product
 `0xad` link, and immutable FundingTermsV2 artifact; the three loader releases
 follow them at indices 29 through 31.
 Descriptor retirement uses a 33-account frame. Its two additional read-only
-roles reopen the exact current BundleV6 and AttachmentV5 used to reauthenticate
+roles reopen the exact current BundleV7 and AttachmentV6 used to reauthenticate
 the Product lineage without borrowing Product write authority. The wrapper first revokes the
 zero-supply mint through its private mint-authority PDA, persists the descriptor
 tombstone, and calls the base with only the distinct vault-owner PDA signed.

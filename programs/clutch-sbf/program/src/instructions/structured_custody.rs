@@ -12,10 +12,11 @@
 //! canonical actions 2/4 have no endpoint in this module.
 
 use clutch_product_series::{
-    CompiledProductSeriesBundleV6, CompiledProductSeriesBundleV6Id, ContentId, FixedCodec,
+    CompiledProductSeriesBundleV6Id, CompiledProductSeriesBundleV7, ContentId, FixedCodec,
     MarketInstanceV2Id, NativeClaimBasisV1, RegistryProgramReleaseV2, RegistryReleaseLocusV2,
     SeriesAttachmentPlanV5Id, SeriesFundingTermsV2, SeriesLinkObligationStatusV2,
-    SeriesLinkObligationV2, SeriesMarketLinkPhaseV2, SeriesPlanV5Id,
+    SeriesLinkObligationStatusV3, SeriesLinkObligationV2, SeriesLinkObligationV3,
+    SeriesMarketLinkPhaseV2, SeriesMarketLinkPhaseV3, SeriesPlanV5Id,
 };
 use clutch_collateral_adapter_v2::{
     accept_hoard_surplus_disposition_v1, admit_collateral_account_v2,
@@ -36,7 +37,7 @@ use clutch_retirement::{
     POSITION_TOMBSTONE_V3_BYTES, POSITION_V3_BYTES, PURPOSE_REPLAY_V3_PREFIX_BYTES,
 };
 use clutch_solana_layout::artifact::ArtifactKind;
-use clutch_solana_layout::product_series::SeriesMarketLinkAccountV2;
+use clutch_solana_layout::product_series::{SeriesMarketLinkAccountV2, SeriesMarketLinkAccountV3};
 use clutch_structured_claim::DeploymentBinding;
 use clutch_structured_claim_adapter::runtime_contract::{
     authenticate_wrapper_recipe_membership_v1, structured_descriptor_admission_receipt_v1,
@@ -88,9 +89,10 @@ use super::collateral_position_v3::{
 };
 use super::product_artifact::authenticate_product_artifact_v1;
 use super::product_artifact::authenticate_registry_capability_for_registration_v3;
+use super::product_market_lifecycle_v3_current::authenticate_series_market_link_v3;
 use super::product_series_current::{
     admit_series_wrapper_obligation_v2, authenticate_series_market_link_v2,
-    authenticate_series_registry_account_v3, authenticate_series_wrapper_authorization_v2,
+    authenticate_series_registry_account_v4, authenticate_series_wrapper_authorization_v2,
     AuthenticatedSeriesWrapperAdmissionOwnerV2, AuthenticatedSeriesWrapperAuthorizationV2,
 };
 use super::genesis::{
@@ -310,7 +312,7 @@ const CV_SERIES_LINK: usize = 26;
 const CV_COMPILER_BUNDLE: usize = 27;
 const CV_ATTACHMENT: usize = 28;
 const CV_RECIPE_SET: usize = 29;
-const CV_SERIES_REGISTRY_V3: usize = 30;
+const CV_SERIES_REGISTRY_V4: usize = 30;
 const CV_REGISTRY_RELEASE_V2: usize = 31;
 const CV_CAPABILITY_PROFILE_V4: usize = 32;
 const CV_WRAPPER_RELEASE_V2: usize = 33;
@@ -785,11 +787,11 @@ fn admit_structured_descriptor_root_v1(
     // fixed output buffers are adapter scratch, not persisted authority and not
     // kernel evidence. Keeping both receipts in this lexical scope avoids a
     // self-referential owner/borrowed-receipt DTO.
-    let mut link_output = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
+    let mut link_output = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
     let link_data = accounts[CV_SERIES_LINK]
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    SeriesMarketLinkAccountV2::decode_into(&link_data, &mut link_output)
+    SeriesMarketLinkAccountV3::decode_into(&link_data, &mut link_output)
         .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
     drop(link_data);
     let untrusted_binding = link_output.state.binding();
@@ -802,7 +804,7 @@ fn admit_structured_descriptor_root_v1(
         accounts[CV_STRUCTURED_ROOT].owner,
         accounts[CV_STRUCTURED_ROOT].data_len(),
     );
-    let link = authenticate_series_market_link_v2(
+    let link = authenticate_series_market_link_v3(
         program_id,
         &accounts[CV_SERIES_LINK],
         untrusted_binding.series_plan_id,
@@ -853,9 +855,9 @@ fn admit_structured_descriptor_root_v1(
         recipe_set_id == authorization.wrapper_recipe_set_id().bytes(),
         ClutchError::MismatchedState,
     )?;
-    let registry = authenticate_series_registry_account_v3(
+    let registry = authenticate_series_registry_account_v4(
         program_id,
-        &accounts[CV_SERIES_REGISTRY_V3],
+        &accounts[CV_SERIES_REGISTRY_V4],
         authorization.series_plan_id(),
         false,
     )?;
@@ -886,7 +888,7 @@ fn admit_structured_descriptor_root_v1(
             && authorization.rent_refund_owner().bytes() == accounts[CV_PAYER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
-    let compiler_bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV6>(
+    let compiler_bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV7>(
         program_id,
         &accounts[CV_COMPILER_BUNDLE],
         authorization.compiler_bundle_id().content_id(),
@@ -2579,15 +2581,15 @@ fn authenticate_current_structured_product_lineage(
     StructuredProductLineageV1,
     AuthenticatedStructuredProductPreterminalV3,
 )> {
-    let mut link_output = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
+    let mut link_output = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
     let link_data = accounts[RT_SERIES_LINK]
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    SeriesMarketLinkAccountV2::decode_into(&link_data, &mut link_output)
+    SeriesMarketLinkAccountV3::decode_into(&link_data, &mut link_output)
         .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
     drop(link_data);
     let untrusted = link_output.state.binding();
-    let link = authenticate_series_market_link_v2(
+    let link = authenticate_series_market_link_v3(
         program_id,
         &accounts[RT_SERIES_LINK],
         root.binding.series_plan_id,
@@ -2722,8 +2724,8 @@ fn authenticate_structured_wrapper_family_terminal_v3(
     // The Product account remains read-only throughout the Structured close.
     // Reopen it after physical deletion and demand byte-for-byte authority
     // equality so the terminal receipt cannot hide a sibling Product write.
-    let mut link_output = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
-    let link = authenticate_series_market_link_v2(
+    let mut link_output = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    let link = authenticate_series_market_link_v3(
         program_id,
         &accounts[RT_SERIES_LINK],
         authorization.series_plan_id(),
@@ -3109,15 +3111,15 @@ fn authenticate_structured_compaction_v1(
         ClutchError::MismatchedState,
     )?;
 
-    let mut link_output = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
+    let mut link_output = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
     let link_data = accounts[CX_SERIES_LINK]
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    SeriesMarketLinkAccountV2::decode_into(&link_data, &mut link_output)
+    SeriesMarketLinkAccountV3::decode_into(&link_data, &mut link_output)
         .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
     drop(link_data);
     let untrusted_link_binding = link_output.state.binding();
-    let link = authenticate_series_market_link_v2(
+    let link = authenticate_series_market_link_v3(
         program_id,
         &accounts[CX_SERIES_LINK],
         root.binding.series_plan_id,
@@ -3137,15 +3139,15 @@ fn authenticate_structured_compaction_v1(
         .semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
-        link.state().phase() == SeriesMarketLinkPhaseV2::Active
-            && link.state().obligation_status(SeriesLinkObligationV2::Wrapper)
-                == SeriesLinkObligationStatusV2::Live
+        link.state().phase() == SeriesMarketLinkPhaseV3::Active
+            && link.state().obligation_status(SeriesLinkObligationV3::Wrapper)
+                == SeriesLinkObligationStatusV3::Live
             && link_binding_id == root.product_lineage.link_binding_id
             && link_binding.obligation_configuration_id.content_id()
                 == root.product_lineage.wrapper_obligation_configuration_id
             && link.state().transition_sequence()
                 >= root.product_lineage.last_observed_link_transition_sequence
-            && link.state().obligation_admission_receipt_id(SeriesLinkObligationV2::Wrapper)
+            && link.state().obligation_admission_receipt_id(SeriesLinkObligationV3::Wrapper)
                 == root.product_lineage.product_admission_receipt_id
             && link_binding.capability_profile_id == root.binding.capability_profile_id
             && link_binding.attachment_plan_id == root.binding.attachment_plan_id
@@ -4209,39 +4211,41 @@ mod tests {
     }
 
     #[test]
-    fn structured_terminal_owner_does_not_mutate_product_v2() {
+    fn structured_read_authority_is_current_and_terminal_owner_does_not_mutate_product_v2() {
         let source = include_str!("structured_custody.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap();
         for required in [
-            "authenticate_series_registry_account_v3(",
-            "authenticate_series_market_link_v2(",
+            "authenticate_series_registry_account_v4(",
+            "authenticate_series_market_link_v3(",
+            "CompiledProductSeriesBundleV7",
             "authenticate_series_wrapper_authorization_v2(",
             "admit_series_wrapper_obligation_v2(",
             "AuthenticatedSeriesWrapperAdmissionOwnerV2",
             "AuthenticatedStructuredWrapperFamilyTerminalV3",
             "authenticate_structured_wrapper_family_terminal_v3(",
         ] {
-            assert!(source.contains(required));
+            assert!(production.contains(required));
         }
-        assert!(!source.contains("terminalize_series_wrapper_obligation_v2("));
-        assert!(!source.contains("AuthenticatedSeriesWrapperTerminalOwnerV2"));
-        let receipt_start = source
+        assert!(!production.contains("terminalize_series_wrapper_obligation_v2("));
+        assert!(!production.contains("AuthenticatedSeriesWrapperTerminalOwnerV2"));
+        let receipt_start = production
             .find("pub(crate) struct AuthenticatedStructuredWrapperFamilyTerminalV3")
             .unwrap();
-        let receipt_end = source[receipt_start..]
+        let receipt_end = production[receipt_start..]
             .find("impl AuthenticatedStructuredWrapperFamilyTerminalV3")
             .unwrap()
             + receipt_start;
-        let receipt_declaration = &source[receipt_start..receipt_end];
+        let receipt_declaration = &production[receipt_start..receipt_end];
         assert!(!receipt_declaration.contains("derive(Clone"));
         assert!(!receipt_declaration.contains("derive(Copy"));
-        assert!(!source.contains(concat!("SeriesMarketLinkAccount", "V1")));
-        assert!(!source.contains(concat!("authenticate_series_market_link_", "v1(")));
-        assert!(!source.contains(concat!(
+        assert!(!production.contains(concat!("SeriesMarketLinkAccount", "V1")));
+        assert!(!production.contains(concat!("authenticate_series_market_link_", "v1(")));
+        assert!(!production.contains(concat!(
             "authenticate_series_wrapper_authorization_",
             "v1("
         )));
-        assert!(!source.contains(concat!("admit_series_wrapper_obligation_", "v1(")));
-        assert!(!source.contains(concat!(
+        assert!(!production.contains(concat!("admit_series_wrapper_obligation_", "v1(")));
+        assert!(!production.contains(concat!(
             "terminalize_series_wrapper_obligation_",
             "v1("
         )));

@@ -28,7 +28,8 @@ use clutch_solana_layout::registry::{
 };
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::product_series::{
-    SeriesMarketLinkAccountV2, SeriesRegistryAccountV3, SERIES_REGISTRY_PDA_PREFIX_V1,
+    SeriesMarketLinkAccountV2, SeriesMarketLinkAccountV3, SeriesRegistryAccountV3,
+    SeriesRegistryAccountV4, SERIES_REGISTRY_PDA_PREFIX_V1,
 };
 use clutch_solana_layout::product_series::MarketLifecycleRootAccountV2;
 use clutch_solana_layout::{ProfileAccount, RealmAccount};
@@ -62,11 +63,13 @@ use clutch_general_v2_contract::{
     MARKET_RUNTIME_SEED_DOMAIN_V1,
 };
 use clutch_product_series::{
-    CompiledProductSeriesBundleV6, ContentId, FixedCodec, MarketInstancePreimageV2,
+    CompiledProductSeriesBundleV6, CompiledProductSeriesBundleV7, ContentId, FixedCodec,
+    MarketInstancePreimageV2,
     NativeClaimBasisV1, RegistryCapabilityProfileV4, RegistryProgramReleaseV2,
     RegistryReleaseLocusV2,
-    MarketLifecyclePhaseV2, SeriesAttachmentPlanV5, SeriesFundingTermsV2,
+    MarketLifecyclePhaseV2, SeriesAttachmentPlanV5, SeriesAttachmentPlanV6, SeriesFundingTermsV2,
     SeriesLinkObligationStatusV2, SeriesLinkObligationV2, SeriesMarketLinkPhaseV2,
+    SeriesLinkObligationStatusV3, SeriesLinkObligationV3, SeriesMarketLinkPhaseV3,
 };
 use clutch_liveness::{
     RuntimeCompartmentKindV1, RuntimeCompartmentPhaseV1, RuntimeCompartmentV1,
@@ -1030,7 +1033,7 @@ fn detect_structured_schedule_v1(
     let (driver_index, generation, item) = if action
         == StructuredClaimActionV1::CreateDescriptor
     {
-        let link = SeriesMarketLinkAccountV2::decode(accounts[26].data()?)
+        let link = SeriesMarketLinkAccountV3::decode(accounts[26].data()?)
             .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
         let leaf = detect_unique_create_leaf_v1(
             releases,
@@ -1653,11 +1656,11 @@ fn derive_structured_create_v1(
     selection: &KeeperActionSelection,
     accounts: &[StructuredChainAccountV1<'_>],
 ) -> Result<DerivedStructuredActionV1> {
-    let link = SeriesMarketLinkAccountV2::decode(accounts[26].data()?)
+    let link = SeriesMarketLinkAccountV3::decode(accounts[26].data()?)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let link_binding = link.state.binding();
     if accounts[26].owner()? != releases.base.program_id
-        || link.state.phase() != SeriesMarketLinkPhaseV2::Active
+        || link.state.phase() != SeriesMarketLinkPhaseV3::Active
         || selection.cursor.generation != link_binding.generation
     {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
@@ -1673,12 +1676,12 @@ fn derive_structured_create_v1(
     if accounts[26].address != link_pda.0 || link.stored_bump != link_pda.1 {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
-    let bundle = CompiledProductSeriesBundleV6::decode(accounts[27].data()?)
+    let bundle = CompiledProductSeriesBundleV7::decode(accounts[27].data()?)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let bundle_id = bundle
         .id()
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
-    let attachment = SeriesAttachmentPlanV5::decode(accounts[28].data()?)
+    let attachment = SeriesAttachmentPlanV6::decode(accounts[28].data()?)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let attachment_id = attachment
         .id()
@@ -1697,13 +1700,13 @@ fn derive_structured_create_v1(
     verify_product_artifact(
         releases.base.program_id,
         accounts[27],
-        ArtifactKind::CompiledProductSeriesBundleV6,
+        ArtifactKind::CompiledProductSeriesBundleV7,
         bundle_id.bytes(),
     )?;
     verify_product_artifact(
         releases.base.program_id,
         accounts[28],
-        ArtifactKind::SeriesAttachmentPlanV5,
+        ArtifactKind::SeriesAttachmentPlanV6,
         attachment_id.bytes(),
     )?;
     let recipe_set = WrapperRecipeSetV1::decode(accounts[29].data()?, &OperatorSha256V1)
@@ -1726,7 +1729,7 @@ fn derive_structured_create_v1(
         .member(leaf_index, &OperatorSha256V1)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
 
-    let registry = SeriesRegistryAccountV3::decode(accounts[30].data()?)
+    let registry = SeriesRegistryAccountV4::decode(accounts[30].data()?)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let base_release_id = decode_release_artifact(
         releases.base,
@@ -1926,10 +1929,10 @@ fn derive_structured_create_v1(
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
     let product_link_writable = accounts[25].present.is_none();
-    let wrapper_status = link.state.obligation_status(SeriesLinkObligationV2::Wrapper);
+    let wrapper_status = link.state.obligation_status(SeriesLinkObligationV3::Wrapper);
     if (product_link_writable
-        && wrapper_status != SeriesLinkObligationStatusV2::EnabledNeverFounded)
-        || (!product_link_writable && wrapper_status != SeriesLinkObligationStatusV2::Live)
+        && wrapper_status != SeriesLinkObligationStatusV3::EnabledNeverFounded)
+        || (!product_link_writable && wrapper_status != SeriesLinkObligationStatusV3::Live)
     {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
@@ -1950,7 +1953,7 @@ fn derive_structured_create_v1(
             || root.product_lineage.product_admission_receipt_id
                 != link
                     .state
-                    .obligation_admission_receipt_id(SeriesLinkObligationV2::Wrapper)
+                    .obligation_admission_receipt_id(SeriesLinkObligationV3::Wrapper)
             || link.state.transition_sequence()
                 < root.product_lineage.last_observed_link_transition_sequence
             || root
@@ -2919,7 +2922,7 @@ fn validate_current_product_join(
         StructuredClaimActionV1::RetireDescriptor => (24, Some(25), Some(26)),
         _ => return Err(CanonicalActionMaterialErrorV1::InvalidPlan),
     };
-    let link = SeriesMarketLinkAccountV2::decode(accounts[link_index].data()?)
+    let link = SeriesMarketLinkAccountV3::decode(accounts[link_index].data()?)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let binding = link.state.binding();
     let link_pda = Address::find_program_address(
@@ -2934,9 +2937,9 @@ fn validate_current_product_join(
         || accounts[link_index].executable()
         || accounts[link_index].address != link_pda.0
         || link.stored_bump != link_pda.1
-        || link.state.phase() != SeriesMarketLinkPhaseV2::Active
-        || link.state.obligation_status(SeriesLinkObligationV2::Wrapper)
-            != SeriesLinkObligationStatusV2::Live
+        || link.state.phase() != SeriesMarketLinkPhaseV3::Active
+        || link.state.obligation_status(SeriesLinkObligationV3::Wrapper)
+            != SeriesLinkObligationStatusV3::Live
         || binding.series_plan_id != root.binding.series_plan_id
         || binding.ordinal != root.binding.ordinal
         || binding.market_instance_id != root.binding.market_instance_id
@@ -2948,9 +2951,9 @@ fn validate_current_product_join(
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
     if let (Some(bundle_index), Some(attachment_index)) = (bundle_index, attachment_index) {
-        let bundle = CompiledProductSeriesBundleV6::decode(accounts[bundle_index].data()?)
+        let bundle = CompiledProductSeriesBundleV7::decode(accounts[bundle_index].data()?)
             .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
-        let attachment = SeriesAttachmentPlanV5::decode(accounts[attachment_index].data()?)
+        let attachment = SeriesAttachmentPlanV6::decode(accounts[attachment_index].data()?)
             .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
         let bundle_id = bundle
             .id()
@@ -2961,13 +2964,13 @@ fn validate_current_product_join(
         verify_product_artifact(
             accounts[13].address,
             accounts[bundle_index],
-            ArtifactKind::CompiledProductSeriesBundleV6,
+            ArtifactKind::CompiledProductSeriesBundleV7,
             bundle_id.bytes(),
         )?;
         verify_product_artifact(
             accounts[13].address,
             accounts[attachment_index],
-            ArtifactKind::SeriesAttachmentPlanV5,
+            ArtifactKind::SeriesAttachmentPlanV6,
             attachment_id.bytes(),
         )?;
         if bundle_id != binding.compiler_bundle_id
@@ -4972,6 +4975,47 @@ mod tests {
     use crate::transaction_builder::{ExactEquation, SemanticOwner, CONSTRUCTION_PLAN_SCHEMA};
     use crate::workflow_graph::{WorkflowLane, WorkflowPosition};
     use clutch_solana_layout::source_series::SourceAccountRoleV2;
+
+    #[test]
+    fn structured_operator_material_uses_only_current_product_lineage() {
+        let source = include_str!("action_material.rs");
+        let create_start = source.find("fn derive_structured_create_v1(").unwrap();
+        let create_end = source[create_start..]
+            .find("fn structured_runtime_addresses(")
+            .unwrap()
+            + create_start;
+        let create = &source[create_start..create_end];
+        let current_join_start = source.find("fn validate_current_product_join(").unwrap();
+        let current_join_end = source[current_join_start..]
+            .find("fn decode_current_dealer_material_body_v1")
+            .unwrap()
+            + current_join_start;
+        let current_join = &source[current_join_start..current_join_end];
+        for body in [create, current_join] {
+            assert!(body.contains("SeriesMarketLinkAccountV3"));
+            assert!(body.contains("SeriesMarketLinkPhaseV3"));
+            assert!(!body.contains("SeriesMarketLinkAccountV2"));
+            assert!(!body.contains("SeriesMarketLinkPhaseV2"));
+        }
+        for required in [
+            "CompiledProductSeriesBundleV7",
+            "SeriesAttachmentPlanV6",
+            "ArtifactKind::CompiledProductSeriesBundleV7",
+            "ArtifactKind::SeriesAttachmentPlanV6",
+        ] {
+            assert!(create.contains(required));
+            assert!(current_join.contains(required));
+        }
+        for withdrawn in [
+            "CompiledProductSeriesBundleV6",
+            "SeriesAttachmentPlanV5",
+            "ArtifactKind::CompiledProductSeriesBundleV6",
+            "ArtifactKind::SeriesAttachmentPlanV5",
+        ] {
+            assert!(!create.contains(withdrawn));
+            assert!(!current_join.contains(withdrawn));
+        }
+    }
 
     fn address(byte: u8) -> Address {
         Address::new_from_array([byte; 32])
