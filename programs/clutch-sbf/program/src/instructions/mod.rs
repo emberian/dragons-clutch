@@ -68,6 +68,7 @@ pub mod external_exit;
 pub mod external_redemption_v3;
 /// Capability-disabled reusable Market interval account seam.
 pub(crate) mod failure_market_interval_v2;
+pub(crate) mod failure_market_foundation_v4;
 /// Sole current Product/Source/Failure zero-payout attempt composer.
 pub(crate) mod failure_market_source_failure_current;
 /// Sole current action-10 Product/Source/Failure branch owner.
