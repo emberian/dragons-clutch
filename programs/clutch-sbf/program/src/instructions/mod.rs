@@ -217,6 +217,9 @@ pub mod product_market;
 #[cfg(feature = "non-production-product-series-lab")]
 pub mod product_series;
 pub mod resolution_work;
+/// Realm-owned immutable fee-bearing RevenuePolicyV2 founding and private
+/// Product/General authentication receipt.
+pub mod revenue_policy_v2;
 pub mod series_failure_funding;
 pub mod source_ingest;
 pub mod source_ingest_v2;

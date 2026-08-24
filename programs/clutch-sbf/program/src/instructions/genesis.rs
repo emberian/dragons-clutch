@@ -132,9 +132,6 @@ use crate::collateral_release::{
 use crate::error::{ClutchError, Refusal};
 use crate::source_archive::SOURCE_SPEC_ACCOUNT_V1_BYTES;
 use crate::{seeds, token};
-use clutch_batch_policy_identity::revenue_policy_v1::{
-    revenue_policy_digest, REVENUE_POLICY_V1, REVENUE_TREASURY_UNSET_V1,
-};
 use clutch_collateral_adapter_v2::{CollateralPolicyV2, COLLATERAL_POLICY_V2_BYTES};
 use clutch_solana_layout::clearing::FUNDING_COVERS_REVENUE_RECORD;
 use clutch_solana_layout::direct_selection_v3::{
@@ -442,19 +439,13 @@ pub const IX_REALM_POLICY: usize = 2;
 pub const IX_REALM_SYSTEM: usize = 3;
 /// The rent sysvar (read-only).  `InitRealm`.
 pub const IX_REALM_RENT: usize = 4;
-/// Accounts in an `InitRealm` that also elects the frozen revenue policy:
-/// the per-Realm `RevenuePolicyRecordV1` PDA and its **mandatory**
-/// `GeneralFundingLedgerV1` sibling ride the same transition that creates
-/// the Realm.  Presenting the pair IS the election — the intent carries no
-/// new field, because the closed set has exactly one member
-/// (`REVENUE_POLICY_V1`, treasury deferred).  D4 is the shape of this list:
-/// a Realm created without the pair is zero-take forever, since no other
-/// instruction can ever create the record.
+/// Historical seven-account V1 shape.  Retained only for offline fixtures and
+/// client withdrawal diagnostics; current `InitRealm` refuses it and no V1
+/// record constructor remains.
 pub const INIT_REALM_REVENUE_ACCOUNT_COUNT: usize = INIT_REALM_ACCOUNT_COUNT + 2;
-/// The not-yet-created revenue-policy record PDA (writable).
+/// Historical V1 record role; no current constructor consumes it.
 pub const IX_REALM_REVENUE_RECORD: usize = 5;
-/// The not-yet-created funding-ledger sibling PDA (writable).  Mandatory for
-/// this family — the record must never carry the unowned-refund residual.
+/// Historical V1 funding-ledger role; no current constructor consumes it.
 pub const IX_REALM_REVENUE_LEDGER: usize = 6;
 
 /// Accounts in a `CloseRevenuePolicyRecord` instruction, exactly: the Realm
@@ -573,7 +564,7 @@ const ENDOW_OWNER_STATE_ROLES: [StateRole; 2] = [
 /// program ownership plus the content-derived PDA proves these are the bytes
 /// admitted by typed `SealArtifact`, not a caller-owned copy.
 #[inline(never)]
-fn read_canonical_policy(
+pub(in crate::instructions) fn read_canonical_policy(
     program_id: &Pubkey,
     account: &AccountInfo,
 ) -> Outcome<(Hash32, Hash32, Hash32)> {
@@ -763,11 +754,7 @@ fn init_realm(
     sequence: u64,
     intent: &RealmInit,
 ) -> Outcome<()> {
-    require(
-        accounts.len() == INIT_REALM_ACCOUNT_COUNT
-            || accounts.len() == INIT_REALM_REVENUE_ACCOUNT_COUNT,
-        ClutchError::AccountCount,
-    )?;
+    require_count(accounts, INIT_REALM_ACCOUNT_COUNT)?;
     require_signer(&accounts[IX_PAYER])?;
     require_distinct(accounts)?;
     require_creation_sequence(sequence)?;
@@ -812,84 +799,7 @@ fn init_realm(
         let mut data = borrow_mut!(accounts[IX_TARGET])?;
         write_realm(&mut data, &value)?;
     }
-    if accounts.len() == INIT_REALM_REVENUE_ACCOUNT_COUNT {
-        init_revenue_policy_record(program_id, accounts, &rent, realm)?;
-    }
     Ok(())
-}
-
-/// Create and pin one Realm's `RevenuePolicyRecordV1` inside the Realm's own
-/// creation transition — the only place it can ever be created (D4).
-///
-/// The record pins the digest of the one frozen const, copies out its
-/// treasury (the structural UNSET sentinel while B4a's key stays deferred),
-/// and embeds the TerminalIdentityV1 header.  Creation is full-principal
-/// (the V3 anti-windfall shape): the payer is debited the whole rent
-/// minimum, so a hostile prefund of the predictable PDA can never zero the
-/// recorded principal — it stays in the donation floor and burns at close.
-/// The mandatory `GeneralFundingLedgerV1` sibling is written in the same
-/// transition, so the close route is the standard ledgered-group split.
-#[inline(never)]
-fn init_revenue_policy_record(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    rent: &RentParameters,
-    realm: Hash32,
-) -> Outcome<()> {
-    let record_account = &accounts[IX_REALM_REVENUE_RECORD];
-    let realm_bytes = realm.bytes();
-    let (record_address, record_bump) = seeds::revenue_policy_pda(program_id, &realm_bytes);
-    expect_pda(record_account.key, (record_address, record_bump), None)?;
-
-    let digest = revenue_policy_digest(&REVENUE_POLICY_V1)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let funding = direct_creation_funding(
-        &accounts[IX_PAYER],
-        record_account,
-        rent,
-        REVENUE_POLICY_RECORD_BYTES,
-        DIRECT_NEUTRAL_SINK_V3,
-    )?;
-    let record = RevenuePolicyRecordV1 {
-        realm,
-        policy_digest: Hash32::from_bytes(digest.0),
-        treasury: Hash32::from_bytes(REVENUE_TREASURY_UNSET_V1),
-        terminal_payer: funding.payer,
-        terminal_payer_principal: funding.payer_principal_lamports,
-        terminal_donation_floor: funding.prior_donation_lamports,
-        terminal_generation: 1,
-        stored_bump: record_bump,
-        flags: 0,
-    };
-    record.validate()?;
-    create_pda_account_full_principal(
-        program_id,
-        &accounts[IX_PAYER],
-        record_account,
-        &accounts[IX_REALM_SYSTEM],
-        rent,
-        REVENUE_POLICY_RECORD_BYTES,
-        funding,
-        0,
-        &[seeds::SEED_REVENUE_POLICY, &realm_bytes, &[record_bump]],
-    )?;
-    {
-        let mut data = borrow_mut!(record_account)?;
-        record.encode(&mut data)?;
-        let written = RevenuePolicyRecordV1::decode(&data)?;
-        require(written == record, ClutchError::MismatchedState)?;
-    }
-    super::orders_batch::terminal_closure::create_funding_ledger(
-        program_id,
-        &accounts[IX_PAYER],
-        &accounts[IX_REALM_REVENUE_LEDGER],
-        &accounts[IX_REALM_SYSTEM],
-        rent,
-        record_account.key,
-        FUNDING_COVERS_REVENUE_RECORD,
-        funding.payer_principal_lamports,
-        funding.prior_donation_lamports,
-    )
 }
 
 /// Close one Realm's revenue-policy record: the TerminalClosure conventions
