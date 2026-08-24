@@ -35,10 +35,12 @@ use super::product_market_lifecycle_v3_current::{
 };
 use super::product_series_current::{
     authenticate_registry_capability_v5, authenticate_series_funding_account_v5,
-    authenticate_series_registry_account_v4,
+    authenticate_series_registry_account_v4, AuthenticatedRegistryCapabilityV5,
+    AuthenticatedSeriesFundingAccountV5,
 };
 use super::product_source_current::{
     authenticate_compiled_product_series_bundle_v7, authenticate_series_source_artifacts_v6,
+    AuthenticatedCompiledProductSeriesBundleV7, AuthenticatedSeriesSourceArtifactsV6,
 };
 use super::revenue_policy_v2::{
     authenticate_revenue_policy_record_v2, derive_revenue_market_treasury_v1,
@@ -165,6 +167,46 @@ pub(crate) struct AuthenticatedGeneralMarketCurrentV5 {
     realm_account: Pubkey,
     revenue: AuthenticatedRevenuePolicyRecordV2,
     treasury: RevenueMarketTreasuryDerivationV1,
+}
+
+/// Exact Product inputs already reconstructed by the General current-market
+/// join.  Action 47 moves this bundle into Product's sole retirement owner;
+/// callers cannot replace any member with an ID or decoded projection.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedGeneralProductRetirementPreflightV5 {
+    current: AuthenticatedGeneralMarketCurrentV5,
+    registry: AuthenticatedRegistryCapabilityV5,
+    funding: AuthenticatedSeriesFundingAccountV5,
+    bundle: AuthenticatedCompiledProductSeriesBundleV7,
+    artifacts: AuthenticatedSeriesSourceArtifactsV6,
+}
+
+impl AuthenticatedGeneralProductRetirementPreflightV5 {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        AuthenticatedGeneralMarketCurrentV5,
+        AuthenticatedRegistryCapabilityV5,
+        AuthenticatedSeriesFundingAccountV5,
+        AuthenticatedCompiledProductSeriesBundleV7,
+        AuthenticatedSeriesSourceArtifactsV6,
+    ) {
+        (
+            self.current,
+            self.registry,
+            self.funding,
+            self.bundle,
+            self.artifacts,
+        )
+    }
+}
+
+struct AuthenticatedGeneralMarketCurrentJoinV5 {
+    current: AuthenticatedGeneralMarketCurrentV5,
+    registry: AuthenticatedRegistryCapabilityV5,
+    funding: AuthenticatedSeriesFundingAccountV5,
+    bundle: AuthenticatedCompiledProductSeriesBundleV7,
+    artifacts: AuthenticatedSeriesSourceArtifactsV6,
 }
 
 impl AuthenticatedGeneralMarketCurrentV5 {
@@ -413,6 +455,7 @@ pub(crate) fn authenticate_general_market_current_v5(
         false,
         false,
     )
+    .map(|joined| joined.current)
 }
 
 /// Same hostile current-market join for a terminal outer which will mutate
@@ -434,6 +477,34 @@ pub(crate) fn authenticate_general_market_current_v5_for_terminal(
         true,
         true,
     )
+    .map(|joined| joined.current)
+}
+
+/// Authenticate the same exact terminal frame while retaining the Product
+/// receipts the join already reconstructed.  This is the prewrite entry for
+/// General action 47 and the sole bridge into Product's retirement stage.
+pub(crate) fn authenticate_general_product_retirement_preflight_v5(
+    program_id: &Pubkey,
+    frame: &GeneralMarketCurrentAccountFrameV5<'_, '_>,
+    root_output: &mut MarketLifecycleRootAccountV3,
+    link_output: &mut SeriesMarketLinkAccountV3,
+) -> Outcome<AuthenticatedGeneralProductRetirementPreflightV5> {
+    let joined = authenticate_general_market_current_v5_with_product_access(
+        program_id,
+        frame,
+        root_output,
+        link_output,
+        true,
+        true,
+        true,
+    )?;
+    Ok(AuthenticatedGeneralProductRetirementPreflightV5 {
+        current: joined.current,
+        registry: joined.registry,
+        funding: joined.funding,
+        bundle: joined.bundle,
+        artifacts: joined.artifacts,
+    })
 }
 
 /// Same exact writable Product-state join for Direct's atomic family and
@@ -454,6 +525,7 @@ pub(crate) fn authenticate_general_market_current_for_product_activation_v5(
         true,
         false,
     )
+    .map(|joined| joined.current)
 }
 
 /// Authenticate the complete current graph while admitting only the Product
@@ -475,6 +547,7 @@ pub(crate) fn authenticate_general_market_current_v5_with_root_access(
         false,
         false,
     )
+    .map(|joined| joined.current)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -487,7 +560,7 @@ fn authenticate_general_market_current_v5_with_product_access(
     product_root_writable: bool,
     series_link_writable: bool,
     series_funding_writable: bool,
-) -> Outcome<AuthenticatedGeneralMarketCurrentV5> {
+) -> Outcome<AuthenticatedGeneralMarketCurrentJoinV5> {
     require_distinct_frame(frame)?;
     require_exact_readonly_account(
         program_id,
@@ -903,7 +976,7 @@ fn authenticate_general_market_current_v5_with_product_access(
     );
     require_live(id)?;
 
-    Ok(AuthenticatedGeneralMarketCurrentV5 {
+    let current = AuthenticatedGeneralMarketCurrentV5 {
         id,
         binding_account: *frame.market_binding.key,
         binding,
@@ -951,6 +1024,13 @@ fn authenticate_general_market_current_v5_with_product_access(
         realm_account: *frame.realm.key,
         revenue,
         treasury,
+    };
+    Ok(AuthenticatedGeneralMarketCurrentJoinV5 {
+        current,
+        registry,
+        funding,
+        bundle,
+        artifacts,
     })
 }
 
