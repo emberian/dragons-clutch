@@ -106,42 +106,44 @@ pub const OBSERVE_SERIES_DONATION_PAYLOAD_BYTES_V1: usize = HASH_BYTES + 1 + 1 +
 pub const CLOSE_SERIES_FUNDING_PAYLOAD_BYTES_V1: usize = HASH_BYTES;
 
 /// Exact current physical FundingV2 activation account count.
-pub const ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2: usize = 43;
+pub const ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2: usize = 44;
 /// First of six ordered System-owned lamport vaults.
-pub const ACTIVATE_SERIES_LAMPORT_VAULT_START_V2: usize = 3;
+pub const ACTIVATE_SERIES_LAMPORT_VAULT_START_V2: usize = 4;
 /// Exclusive end of the six ordered System-owned lamport vaults.
-pub const ACTIVATE_SERIES_LAMPORT_VAULT_END_V2: usize = 9;
+pub const ACTIVATE_SERIES_LAMPORT_VAULT_END_V2: usize = 10;
 /// First of five ordered Realm-selected collateral vaults.
-pub const ACTIVATE_SERIES_COLLATERAL_VAULT_START_V2: usize = 21;
+pub const ACTIVATE_SERIES_COLLATERAL_VAULT_START_V2: usize = 22;
 /// Exclusive end of the five ordered Realm-selected collateral vaults.
-pub const ACTIVATE_SERIES_COLLATERAL_VAULT_END_V2: usize = 26;
+pub const ACTIVATE_SERIES_COLLATERAL_VAULT_END_V2: usize = 27;
 /// First of nine ordered immutable Series artifacts.
-pub const ACTIVATE_SERIES_ARTIFACT_START_V2: usize = 34;
+pub const ACTIVATE_SERIES_ARTIFACT_START_V2: usize = 35;
 /// Exclusive end of the nine ordered immutable Series artifacts.
-pub const ACTIVATE_SERIES_ARTIFACT_END_V2: usize = 43;
+pub const ACTIVATE_SERIES_ARTIFACT_END_V2: usize = 44;
 
 /// Exact current physical FundingV2 retirement account count.
-pub const CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2: usize = 41;
+pub const CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2: usize = 42;
 /// First of five ordered Realm-selected collateral vaults at retirement.
-pub const CLOSE_SERIES_COLLATERAL_VAULT_START_V2: usize = 13;
+pub const CLOSE_SERIES_COLLATERAL_VAULT_START_V2: usize = 14;
 /// Exclusive end of five ordered collateral vaults at retirement.
-pub const CLOSE_SERIES_COLLATERAL_VAULT_END_V2: usize = 18;
+pub const CLOSE_SERIES_COLLATERAL_VAULT_END_V2: usize = 19;
 /// First of six ordered System-owned lamport vaults at retirement.
-pub const CLOSE_SERIES_LAMPORT_VAULT_START_V2: usize = 18;
+pub const CLOSE_SERIES_LAMPORT_VAULT_START_V2: usize = 19;
 /// Exclusive end of six ordered lamport vaults at retirement.
-pub const CLOSE_SERIES_LAMPORT_VAULT_END_V2: usize = 24;
+pub const CLOSE_SERIES_LAMPORT_VAULT_END_V2: usize = 25;
 /// First of nine immutable Series artifacts at retirement.
-pub const CLOSE_SERIES_ARTIFACT_START_V2: usize = 32;
+pub const CLOSE_SERIES_ARTIFACT_START_V2: usize = 33;
 /// Exclusive end of nine immutable Series artifacts at retirement.
-pub const CLOSE_SERIES_ARTIFACT_END_V2: usize = 41;
+pub const CLOSE_SERIES_ARTIFACT_END_V2: usize = 42;
 
 /// Semantic role of one ordered current FundingV2 activation account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActivateSeriesFundingAccountRoleV2 {
-    /// Read-only persistent Series registry/replay owner.
+    /// Writable persistent Series registry owner.
     Registry,
     /// Writable absent FundingV2 PDA.
     Funding,
+    /// Writable absent permanent `0xb8/v1` lifecycle replay PDA.
+    SeriesLifecycleReplay,
     /// FundingTerms-bound lamport payer and refund identity.
     Payer,
     /// MarketCore lamport custody PDA.
@@ -229,10 +231,12 @@ pub enum ActivateSeriesFundingAccountRoleV2 {
 /// Semantic role of one ordered current FundingV2 retirement account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CloseSeriesFundingAccountRoleV2 {
-    /// Writable persistent Series registry/replay owner.
+    /// Read-only persistent Series registry owner.
     Registry,
     /// Writable current FundingV2 PDA retired by this action.
     Funding,
+    /// Writable permanent `0xb8/v1` Series lifecycle replay.
+    SeriesLifecycleReplay,
     /// Terms-bound payer lamport-principal and account-rent refund destination.
     LamportPrincipalRefund,
     /// Terms-bound neutral lamport donation/surplus sink.
@@ -319,45 +323,46 @@ impl CloseSeriesFundingAccountRoleV2 {
         match self {
             Self::Registry => 0,
             Self::Funding => 1,
-            Self::LamportPrincipalRefund => 2,
-            Self::NeutralLamportSink => 3,
-            Self::CollateralPrincipalRefund => 4,
-            Self::NeutralCollateralDisposition => 5,
-            Self::CollateralAuthority => 6,
-            Self::Realm => 7,
-            Self::Profile => 8,
-            Self::CollateralPolicy => 9,
-            Self::CollateralMint => 10,
-            Self::CollateralTokenProgram => 11,
-            Self::CollateralTokenProgramData => 12,
-            Self::CollateralVaultMarketCore => 13,
-            Self::CollateralVaultRecoveryReserve => 14,
-            Self::CollateralVaultSourceWork => 15,
-            Self::CollateralVaultLiquidityFacility => 16,
-            Self::CollateralVaultWrapperSet => 17,
-            Self::LamportVaultMarketCore => 18,
-            Self::LamportVaultSeriesAdmission => 19,
-            Self::LamportVaultRecoveryReserve => 20,
-            Self::LamportVaultSourceWork => 21,
-            Self::LamportVaultLiquidityFacility => 22,
-            Self::LamportVaultWrapperSet => 23,
-            Self::SystemProgram => 24,
-            Self::RentSysvar => 25,
-            Self::ExecutingProgram => 26,
-            Self::ExecutingProgramData => 27,
-            Self::RegistryRelease => 28,
-            Self::CapabilityProfile => 29,
-            Self::SourceRelease => 30,
-            Self::CompilerBundle => 31,
-            Self::SeriesPlan => 32,
-            Self::FundingTerms => 33,
-            Self::ProductTemplate => 34,
-            Self::NativeClaimBasis => 35,
-            Self::RecoveryPolicy => 36,
-            Self::PricePolicy => 37,
-            Self::MarketGenesis => 38,
-            Self::FundingQuote => 39,
-            Self::AttachmentPlan => 40,
+            Self::SeriesLifecycleReplay => 2,
+            Self::LamportPrincipalRefund => 3,
+            Self::NeutralLamportSink => 4,
+            Self::CollateralPrincipalRefund => 5,
+            Self::NeutralCollateralDisposition => 6,
+            Self::CollateralAuthority => 7,
+            Self::Realm => 8,
+            Self::Profile => 9,
+            Self::CollateralPolicy => 10,
+            Self::CollateralMint => 11,
+            Self::CollateralTokenProgram => 12,
+            Self::CollateralTokenProgramData => 13,
+            Self::CollateralVaultMarketCore => 14,
+            Self::CollateralVaultRecoveryReserve => 15,
+            Self::CollateralVaultSourceWork => 16,
+            Self::CollateralVaultLiquidityFacility => 17,
+            Self::CollateralVaultWrapperSet => 18,
+            Self::LamportVaultMarketCore => 19,
+            Self::LamportVaultSeriesAdmission => 20,
+            Self::LamportVaultRecoveryReserve => 21,
+            Self::LamportVaultSourceWork => 22,
+            Self::LamportVaultLiquidityFacility => 23,
+            Self::LamportVaultWrapperSet => 24,
+            Self::SystemProgram => 25,
+            Self::RentSysvar => 26,
+            Self::ExecutingProgram => 27,
+            Self::ExecutingProgramData => 28,
+            Self::RegistryRelease => 29,
+            Self::CapabilityProfile => 30,
+            Self::SourceRelease => 31,
+            Self::CompilerBundle => 32,
+            Self::SeriesPlan => 33,
+            Self::FundingTerms => 34,
+            Self::ProductTemplate => 35,
+            Self::NativeClaimBasis => 36,
+            Self::RecoveryPolicy => 37,
+            Self::PricePolicy => 38,
+            Self::MarketGenesis => 39,
+            Self::FundingQuote => 40,
+            Self::AttachmentPlan => 41,
         }
     }
 }
@@ -368,47 +373,48 @@ impl ActivateSeriesFundingAccountRoleV2 {
         match self {
             Self::Registry => 0,
             Self::Funding => 1,
-            Self::Payer => 2,
-            Self::LamportVaultMarketCore => 3,
-            Self::LamportVaultSeriesAdmission => 4,
-            Self::LamportVaultRecoveryReserve => 5,
-            Self::LamportVaultSourceWork => 6,
-            Self::LamportVaultLiquidityFacility => 7,
-            Self::LamportVaultWrapperSet => 8,
-            Self::PayerCollateralSource => 9,
-            Self::PayerTokenAuthority => 10,
-            Self::CollateralPrincipalRefund => 11,
-            Self::NeutralCollateralDisposition => 12,
-            Self::NeutralLamportSink => 13,
-            Self::CollateralAuthority => 14,
-            Self::Realm => 15,
-            Self::Profile => 16,
-            Self::CollateralPolicy => 17,
-            Self::CollateralMint => 18,
-            Self::CollateralTokenProgram => 19,
-            Self::CollateralTokenProgramData => 20,
-            Self::CollateralVaultMarketCore => 21,
-            Self::CollateralVaultRecoveryReserve => 22,
-            Self::CollateralVaultSourceWork => 23,
-            Self::CollateralVaultLiquidityFacility => 24,
-            Self::CollateralVaultWrapperSet => 25,
-            Self::SystemProgram => 26,
-            Self::RentSysvar => 27,
-            Self::ExecutingProgram => 28,
-            Self::ExecutingProgramData => 29,
-            Self::RegistryRelease => 30,
-            Self::CapabilityProfile => 31,
-            Self::SourceRelease => 32,
-            Self::CompilerBundle => 33,
-            Self::SeriesPlan => 34,
-            Self::FundingTerms => 35,
-            Self::ProductTemplate => 36,
-            Self::NativeClaimBasis => 37,
-            Self::RecoveryPolicy => 38,
-            Self::PricePolicy => 39,
-            Self::MarketGenesis => 40,
-            Self::FundingQuote => 41,
-            Self::AttachmentPlan => 42,
+            Self::SeriesLifecycleReplay => 2,
+            Self::Payer => 3,
+            Self::LamportVaultMarketCore => 4,
+            Self::LamportVaultSeriesAdmission => 5,
+            Self::LamportVaultRecoveryReserve => 6,
+            Self::LamportVaultSourceWork => 7,
+            Self::LamportVaultLiquidityFacility => 8,
+            Self::LamportVaultWrapperSet => 9,
+            Self::PayerCollateralSource => 10,
+            Self::PayerTokenAuthority => 11,
+            Self::CollateralPrincipalRefund => 12,
+            Self::NeutralCollateralDisposition => 13,
+            Self::NeutralLamportSink => 14,
+            Self::CollateralAuthority => 15,
+            Self::Realm => 16,
+            Self::Profile => 17,
+            Self::CollateralPolicy => 18,
+            Self::CollateralMint => 19,
+            Self::CollateralTokenProgram => 20,
+            Self::CollateralTokenProgramData => 21,
+            Self::CollateralVaultMarketCore => 22,
+            Self::CollateralVaultRecoveryReserve => 23,
+            Self::CollateralVaultSourceWork => 24,
+            Self::CollateralVaultLiquidityFacility => 25,
+            Self::CollateralVaultWrapperSet => 26,
+            Self::SystemProgram => 27,
+            Self::RentSysvar => 28,
+            Self::ExecutingProgram => 29,
+            Self::ExecutingProgramData => 30,
+            Self::RegistryRelease => 31,
+            Self::CapabilityProfile => 32,
+            Self::SourceRelease => 33,
+            Self::CompilerBundle => 34,
+            Self::SeriesPlan => 35,
+            Self::FundingTerms => 36,
+            Self::ProductTemplate => 37,
+            Self::NativeClaimBasis => 38,
+            Self::RecoveryPolicy => 39,
+            Self::PricePolicy => 40,
+            Self::MarketGenesis => 41,
+            Self::FundingQuote => 42,
+            Self::AttachmentPlan => 43,
         }
     }
 }
@@ -459,6 +465,12 @@ pub const ACTIVATE_SERIES_FUNDING_ACCOUNT_METAS_V2:
     [ActivateSeriesFundingAccountMetaV2; ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2] = [
     activation_meta(ActivateSeriesFundingAccountRoleV2::Registry, false, true, false),
     activation_meta(ActivateSeriesFundingAccountRoleV2::Funding, false, true, false),
+    activation_meta(
+        ActivateSeriesFundingAccountRoleV2::SeriesLifecycleReplay,
+        false,
+        true,
+        false,
+    ),
     activation_meta(ActivateSeriesFundingAccountRoleV2::Payer, true, true, false),
     activation_meta(ActivateSeriesFundingAccountRoleV2::LamportVaultMarketCore, false, true, false),
     activation_meta(ActivateSeriesFundingAccountRoleV2::LamportVaultSeriesAdmission, false, true, false),
@@ -617,6 +629,12 @@ pub const CLOSE_SERIES_FUNDING_ACCOUNT_METAS_V2:
     [CloseSeriesFundingAccountMetaV2; CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2] = [
     close_meta(CloseSeriesFundingAccountRoleV2::Registry, false, false, false),
     close_meta(CloseSeriesFundingAccountRoleV2::Funding, false, true, false),
+    close_meta(
+        CloseSeriesFundingAccountRoleV2::SeriesLifecycleReplay,
+        false,
+        true,
+        false,
+    ),
     close_meta(CloseSeriesFundingAccountRoleV2::LamportPrincipalRefund, false, true, false),
     close_meta(CloseSeriesFundingAccountRoleV2::NeutralLamportSink, false, true, false),
     close_meta(CloseSeriesFundingAccountRoleV2::CollateralPrincipalRefund, false, true, false),
@@ -1988,6 +2006,16 @@ mod tests {
         );
         assert_eq!(
             ACTIVATE_SERIES_FUNDING_ACCOUNT_METAS_V2
+                [ActivateSeriesFundingAccountRoleV2::SeriesLifecycleReplay.index()],
+            activation_meta(
+                ActivateSeriesFundingAccountRoleV2::SeriesLifecycleReplay,
+                false,
+                true,
+                false,
+            )
+        );
+        assert_eq!(
+            ACTIVATE_SERIES_FUNDING_ACCOUNT_METAS_V2
                 [ActivateSeriesFundingAccountRoleV2::CollateralPrincipalRefund.index()]
                 .writable,
             false
@@ -2106,6 +2134,20 @@ mod tests {
             ),
             Err(CodecError::MismatchedBinding)
         );
+        let replay = ActivateSeriesFundingAccountRoleV2::SeriesLifecycleReplay.index();
+        assert_eq!(
+            validate_activate_series_funding_account_metas_v2(
+                ACTIVATE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| {
+                    let mut observed = observed_activation_meta(index, false);
+                    if index == replay {
+                        observed.writable = false;
+                    }
+                    Some(observed)
+                },
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
     }
 
     #[test]
@@ -2183,6 +2225,11 @@ mod tests {
                 [CloseSeriesFundingAccountRoleV2::Registry.index()]
             .writable
         );
+        assert!(
+            CLOSE_SERIES_FUNDING_ACCOUNT_METAS_V2
+                [CloseSeriesFundingAccountRoleV2::SeriesLifecycleReplay.index()]
+            .writable
+        );
         let refund = CloseSeriesFundingAccountRoleV2::LamportPrincipalRefund.index();
         let sink = CloseSeriesFundingAccountRoleV2::NeutralLamportSink.index();
         let refund_key = observed_close_meta(refund).key;
@@ -2225,6 +2272,20 @@ mod tests {
                     let mut observed = observed_close_meta(index);
                     if index == registry {
                         observed.writable = true;
+                    }
+                    Some(observed)
+                },
+            ),
+            Err(CodecError::MismatchedBinding)
+        );
+        let replay = CloseSeriesFundingAccountRoleV2::SeriesLifecycleReplay.index();
+        assert_eq!(
+            validate_close_series_funding_account_metas_v2(
+                CLOSE_SERIES_FUNDING_ACCOUNT_COUNT_V2,
+                |index| {
+                    let mut observed = observed_close_meta(index);
+                    if index == replay {
+                        observed.writable = false;
                     }
                     Some(observed)
                 },
