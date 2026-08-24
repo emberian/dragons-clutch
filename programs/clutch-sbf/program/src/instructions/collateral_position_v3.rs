@@ -128,6 +128,24 @@ pub(crate) struct GeneralPositionReplayAuthorityV3 {
     pub(crate) market_runtime: MarketRuntimeV3AccountV1,
 }
 
+/// Complete authenticated ordinary-Position and GEN1 Replay prestate under
+/// the sole current Product/Revenue-authorized MarketBinding V4 account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GeneralPositionReplayAuthorityV4 {
+    pub(crate) position: AuthenticatedPositionV3,
+    pub(crate) projection: GeneralPositionProjectionV3,
+    pub(crate) replay: GeneralPositionReplayPrestateV1,
+    pub(crate) market_binding: MarketBindingV4,
+    pub(crate) market_runtime: MarketRuntimeV3AccountV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GeneralPositionReplayBodyV2 {
+    position: AuthenticatedPositionV3,
+    projection: GeneralPositionProjectionV3,
+    replay: GeneralPositionReplayPrestateV1,
+}
+
 /// Current General market bodies plus General-owned full account-data IDs.
 /// Downstream families consume this projection rather than defining parallel
 /// binding/runtime hash transcripts.
@@ -1249,25 +1267,21 @@ pub(crate) fn authenticate_general_position_replay_v1(
     })
 }
 
-/// Authenticate one existing canonical ordinary Position and exact GEN1
-/// Replay against the live MarketBinding V2 account. The pure settlement
-/// runtime receives only `relation_projection()` after this adapter has
-/// authenticated the full V2 body and immutable batch-policy identity.
+/// Authenticate the common ordinary Position/Replay body only after a caller
+/// has authenticated one exact MarketBinding schema and projected its
+/// RelationV2 body.
 #[allow(clippy::too_many_arguments)]
-fn authenticate_general_position_replay_with_access_v2(
+fn authenticate_general_position_replay_body_v2(
     program_id: &Pubkey,
     bound: BoundCollateralProfileV2,
-    market_binding_account: &AccountInfo<'_>,
+    relation_market: MarketBindingV1,
     market_runtime_account: &AccountInfo<'_>,
     position_account: &AccountInfo<'_>,
     replay_account: &AccountInfo<'_>,
     expected_owner: [u8; 32],
     expected_sequence: u64,
     position_writable: bool,
-) -> Outcome<GeneralPositionReplayAuthorityV2> {
-    let (market_binding, market_runtime) =
-        authenticate_general_market_v2(program_id, market_binding_account, market_runtime_account)?;
-    let relation_market = market_binding.relation_projection();
+) -> Outcome<GeneralPositionReplayBodyV2> {
     require_program_account(
         program_id,
         position_account,
@@ -1375,12 +1389,10 @@ fn authenticate_general_position_replay_with_access_v2(
         &RuntimeSha256,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::Replay))?;
-    Ok(GeneralPositionReplayAuthorityV2 {
+    Ok(GeneralPositionReplayBodyV2 {
         position: authenticated,
         projection,
         replay,
-        market_binding,
-        market_runtime,
     })
 }
 
@@ -1396,17 +1408,26 @@ pub(crate) fn authenticate_general_position_replay_v2(
     expected_owner: [u8; 32],
     expected_sequence: u64,
 ) -> Outcome<GeneralPositionReplayAuthorityV2> {
-    authenticate_general_position_replay_with_access_v2(
+    let (market_binding, market_runtime) =
+        authenticate_general_market_v2(program_id, market_binding_account, market_runtime_account)?;
+    let body = authenticate_general_position_replay_body_v2(
         program_id,
         bound,
-        market_binding_account,
+        market_binding.relation_projection(),
         market_runtime_account,
         position_account,
         replay_account,
         expected_owner,
         expected_sequence,
         true,
-    )
+    )?;
+    Ok(GeneralPositionReplayAuthorityV2 {
+        position: body.position,
+        projection: body.projection,
+        replay: body.replay,
+        market_binding,
+        market_runtime,
+    })
 }
 
 /// Authenticate one read-only ordinary Position and writable GEN1 Replay.
@@ -1425,7 +1446,68 @@ pub(crate) fn authenticate_general_position_replay_readonly_v2(
     expected_owner: [u8; 32],
     expected_sequence: u64,
 ) -> Outcome<GeneralPositionReplayAuthorityV2> {
-    authenticate_general_position_replay_with_access_v2(
+    let (market_binding, market_runtime) =
+        authenticate_general_market_v2(program_id, market_binding_account, market_runtime_account)?;
+    let body = authenticate_general_position_replay_body_v2(
+        program_id,
+        bound,
+        market_binding.relation_projection(),
+        market_runtime_account,
+        position_account,
+        replay_account,
+        expected_owner,
+        expected_sequence,
+        false,
+    )?;
+    Ok(GeneralPositionReplayAuthorityV2 {
+        position: body.position,
+        projection: body.projection,
+        replay: body.replay,
+        market_binding,
+        market_runtime,
+    })
+}
+
+/// Authenticate one writable ordinary Position and Replay under the sole
+/// current MarketBinding V4 authority.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_general_position_replay_v4(
+    program_id: &Pubkey,
+    bound: BoundCollateralProfileV2,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    expected_owner: [u8; 32],
+    expected_sequence: u64,
+) -> Outcome<GeneralPositionReplayAuthorityV4> {
+    authenticate_general_position_replay_with_access_v4(
+        program_id,
+        bound,
+        market_binding_account,
+        market_runtime_account,
+        position_account,
+        replay_account,
+        expected_owner,
+        expected_sequence,
+        true,
+    )
+}
+
+/// Authenticate one read-only ordinary Position and writable Replay under
+/// the sole current MarketBinding V4 authority.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_general_position_replay_readonly_v4(
+    program_id: &Pubkey,
+    bound: BoundCollateralProfileV2,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    expected_owner: [u8; 32],
+    expected_sequence: u64,
+) -> Outcome<GeneralPositionReplayAuthorityV4> {
+    authenticate_general_position_replay_with_access_v4(
         program_id,
         bound,
         market_binding_account,
@@ -1436,6 +1518,40 @@ pub(crate) fn authenticate_general_position_replay_readonly_v2(
         expected_sequence,
         false,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_general_position_replay_with_access_v4(
+    program_id: &Pubkey,
+    bound: BoundCollateralProfileV2,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    expected_owner: [u8; 32],
+    expected_sequence: u64,
+    position_writable: bool,
+) -> Outcome<GeneralPositionReplayAuthorityV4> {
+    let (market_binding, market_runtime) =
+        authenticate_general_market_v4(program_id, market_binding_account, market_runtime_account)?;
+    let body = authenticate_general_position_replay_body_v2(
+        program_id,
+        bound,
+        market_binding.relation_projection(),
+        market_runtime_account,
+        position_account,
+        replay_account,
+        expected_owner,
+        expected_sequence,
+        position_writable,
+    )?;
+    Ok(GeneralPositionReplayAuthorityV4 {
+        position: body.position,
+        projection: body.projection,
+        replay: body.replay,
+        market_binding,
+        market_runtime,
+    })
 }
 
 /// Authenticate one existing canonical ordinary Position and exact GEN1
