@@ -12,10 +12,6 @@ path = "src/lib.rs"
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-realm-contract = { path = "../dclutch-realm-contract" }
 
-# This bounded lane is deliberately its own workspace until canonical
-# integration adds it to the repository workspace in one coordinated edit.
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"
