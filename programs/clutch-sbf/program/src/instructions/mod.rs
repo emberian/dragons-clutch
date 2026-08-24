@@ -174,6 +174,7 @@ pub mod source_ingest;
 pub mod source_ingest_v2;
 pub mod source_series;
 pub mod source_series_successor;
+pub(crate) mod source_occurrence_foundation_v1;
 /// Unrouted private Source terminal composer. It is always compiled so the
 /// current final Failure postwrite can implement its default-refusing bridge;
 /// no checked capability tuple enters it until the complete chain is admitted.
