@@ -2232,7 +2232,20 @@ impl DealerFacilityAction {
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
-        self as u8
+        match self {
+            Self::RegisterRelease => 1,
+            Self::InitializeHead => 2,
+            Self::OpenRawPage => 3,
+            Self::IngestBoundaryBatch => 4,
+            Self::SealRawPage => 5,
+            Self::InitializeWindowWork => 6,
+            Self::FoldWindowPages => 7,
+            Self::SealWindow => 8,
+            Self::EvaluateStatistic => 9,
+            Self::EmitFailureHandoff => 10,
+            Self::ReopenGeneration => 11,
+            Self::CloseGeneration => 12,
+        }
     }
 
     /// Decode one allocated facility action.
@@ -2413,7 +2426,14 @@ impl StructuredClaimAction {
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
-        self as u8
+        match self {
+            Self::RegisterSeries => 13,
+            Self::ActivateFunding => 14,
+            Self::AdvanceOccurrence => 15,
+            Self::LapseOccurrence => 16,
+            Self::ObserveDonation => 17,
+            Self::CloseFunding => 18,
+        }
     }
 
     /// Decode one allocated StructuredClaim local action tag.
@@ -3659,6 +3679,38 @@ mod tests {
                     .contains(&local_action),
                 "direct-market action {local_action}"
             );
+        }
+    }
+
+    #[test]
+    fn source_series_action_tags_round_trip_exhaustively() {
+        let source_actions = [
+            SourceSeriesAction::RegisterRelease,
+            SourceSeriesAction::InitializeHead,
+            SourceSeriesAction::OpenRawPage,
+            SourceSeriesAction::IngestBoundaryBatch,
+            SourceSeriesAction::SealRawPage,
+            SourceSeriesAction::InitializeWindowWork,
+            SourceSeriesAction::FoldWindowPages,
+            SourceSeriesAction::SealWindow,
+            SourceSeriesAction::EvaluateStatistic,
+            SourceSeriesAction::EmitFailureHandoff,
+            SourceSeriesAction::ReopenGeneration,
+            SourceSeriesAction::CloseGeneration,
+        ];
+        for action in source_actions {
+            assert_eq!(SourceSeriesAction::from_tag(action.tag()), Some(action));
+        }
+        let series_actions = [
+            RecurringSeriesAction::RegisterSeries,
+            RecurringSeriesAction::ActivateFunding,
+            RecurringSeriesAction::AdvanceOccurrence,
+            RecurringSeriesAction::LapseOccurrence,
+            RecurringSeriesAction::ObserveDonation,
+            RecurringSeriesAction::CloseFunding,
+        ];
+        for action in series_actions {
+            assert_eq!(RecurringSeriesAction::from_tag(action.tag()), Some(action));
         }
     }
 
