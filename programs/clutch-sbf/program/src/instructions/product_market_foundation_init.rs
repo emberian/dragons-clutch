@@ -1782,6 +1782,27 @@ pub(crate) fn create_product_market_founder_v1<
                         || (*account.key == *root_account.key && account.is_writable)),
                 ClutchError::MismatchedState,
             )?;
+            if slot_index
+                != MarketFoundationSlotV2::LifecycleRoot
+                    .index()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            {
+                for forbidden in [
+                    registry_account.key,
+                    funding_account.key,
+                    funding_quote_account.key,
+                    foundation_vault.key,
+                    series_admission_vault.key,
+                    founder_link_account.key,
+                    recovery_account.key,
+                    principal_refund_owner.key,
+                    neutral_lamport_sink.key,
+                    system_program.key,
+                    rent_sysvar.key,
+                ] {
+                    require(account.key != forbidden, ClutchError::AccountAlias)?;
+                }
+            }
             active_index = active_index
                 .checked_add(1)
                 .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
