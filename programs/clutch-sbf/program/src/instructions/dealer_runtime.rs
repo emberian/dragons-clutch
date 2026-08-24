@@ -3,22 +3,20 @@
 //! Dealer facility wire and account contract.
 //!
 //! This module freezes strict payload parsing, the global eight-byte Dealer
-//! account envelope, and ordered semantic account roles for the PositionV3
-//! funding/activation/unwind/retirement slice. The admitted non-production
-//! adapter consumes only actions with complete account contracts; every other
-//! action remains refused before reading accounts.
+//! account envelope, and ordered semantic account roles for the complete
+//! PositionV3 funding, custody, execution, unwind, and retirement lifecycle.
+//! Successor dispatch consumes actions 1 through 24 through these contracts;
+//! action 25 is additionally scoped by its terminal target.
 
 use clutch_dealer_runtime_contract::{
-    CoveredDealerTerminalV2, DealerSeriesObligationBindingV1,
-    DealerSeriesObligationBindingV3, DealerStateV3, FixedCodec, Id,
+    CoveredDealerTerminalV2, DealerSeriesObligationBindingV3, DealerStateV3, FixedCodec, Id,
 };
 use clutch_fractional_redemption_runtime::MAX_OUTCOMES as FRACTIONAL_MAX_OUTCOMES;
 use clutch_solana_layout::registry::{
     DealerFacilityAction, DEALER_COVERED_SELECTION_ACCOUNT_BYTES,
     DEALER_COVERED_SELECTION_ACCOUNT_TAG, DEALER_COVERED_TERMINAL_ACCOUNT_VERSION,
-    DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES, DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
-    DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION,
-    DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V3, DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V3,
+    DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V3, DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
+    DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V3,
     DEALER_STATE_V3_ACCOUNT_BYTES, DEALER_STATE_V3_ACCOUNT_TAG, DEALER_STATE_V3_ACCOUNT_VERSION,
 };
 use solana_account_info::AccountInfo;
@@ -140,14 +138,6 @@ pub(crate) struct AuthenticatedCoveredDealerTerminalPostwriteV2 {
     terminal: CoveredDealerTerminalV2,
 }
 
-/// Private exact account capability for the facility-lifetime Product
-/// Series-obligation binding.
-pub(crate) struct AuthenticatedDealerSeriesObligationV1 {
-    account_id: Id,
-    bump: u8,
-    binding: DealerSeriesObligationBindingV1,
-}
-
 /// Private exact account capability for the Product RootV3/LinkV3 obligation.
 pub(crate) struct AuthenticatedDealerSeriesObligationV3 {
     account_id: Id,
@@ -242,24 +232,6 @@ pub(crate) fn authenticate_dealer_state_v3(
     })
 }
 
-impl AuthenticatedDealerSeriesObligationV1 {
-    /// Exact authenticated physical account.
-    pub(crate) const fn account_id(&self) -> Id {
-        self.account_id
-    }
-
-    /// Exact canonical PDA bump.
-    pub(crate) const fn bump(&self) -> u8 {
-        self.bump
-    }
-
-    /// Borrow the complete exact body; detached Product-coordinate DTOs are
-    /// never minted from this authority.
-    pub(crate) const fn binding(&self) -> &DealerSeriesObligationBindingV1 {
-        &self.binding
-    }
-}
-
 impl AuthenticatedDealerSeriesObligationV3 {
     /// Exact authenticated physical account.
     pub(crate) const fn account_id(&self) -> Id { self.account_id }
@@ -271,60 +243,6 @@ impl AuthenticatedDealerSeriesObligationV3 {
     pub(crate) const fn binding(&self) -> &DealerSeriesObligationBindingV3 {
         &self.binding
     }
-}
-
-/// Authenticate one exact `0xaf/1` Dealer facility obligation account.
-pub(crate) fn authenticate_dealer_series_obligation_v1(
-    program_id: &Pubkey,
-    account: &AccountInfo<'_>,
-    writable: bool,
-) -> Outcome<AuthenticatedDealerSeriesObligationV1> {
-    require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
-    require(!account.executable, ClutchError::ExecutableAccount)?;
-    require(!account.is_signer, ClutchError::MismatchedState)?;
-    require(
-        account.is_writable == writable,
-        if writable {
-            ClutchError::NotWritable
-        } else {
-            ClutchError::UnexpectedWritable
-        },
-    )?;
-    require(
-        account.data_len() == DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES,
-        ClutchError::WrongDataLength,
-    )?;
-    let data = account
-        .try_borrow_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let (envelope, binding) =
-        decode_dealer_account_body_v1::<DealerSeriesObligationBindingV1>(
-            &data,
-            DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
-            DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION,
-        )
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    drop(data);
-    expect_pda(
-        account.key,
-        seeds::dealer_series_obligation_pda(program_id, &binding.key.facility_id.bytes()),
-        Some(envelope.bump),
-    )?;
-    let floor = binding
-        .rent
-        .refundable_principal
-        .checked_add(binding.rent.donation_floor)
-        .ok_or(ClutchError::Arithmetic)?;
-    require(
-        binding.key.binding_account_id.bytes() == account.key.to_bytes()
-            && account.lamports() >= floor,
-        ClutchError::MismatchedState,
-    )?;
-    Ok(AuthenticatedDealerSeriesObligationV1 {
-        account_id: Id::from_bytes(account.key.to_bytes()),
-        bump: envelope.bump,
-        binding,
-    })
 }
 
 /// Authenticate one exact current `0xaf/v3` Dealer facility obligation.
@@ -620,24 +538,17 @@ pub const fn persisted_account_contract_v1(
                 lifetime: DealerAccountLifetimeV1::CountedChild,
             });
         }
-        registry::DEALER_SERIES_OBLIGATION_ACCOUNT_TAG => (
-            match version {
-                registry::DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION => {
-                    registry::DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION
-                }
-                registry::DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V3 => {
-                    return Some(DealerPersistedAccountContractV1 {
-                        tag,
-                        version,
-                        account_bytes: registry::DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V3,
-                        lifetime: DealerAccountLifetimeV1::CountedChild,
-                    });
-                }
-                _ => return None,
-            },
-            registry::DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES,
-            DealerAccountLifetimeV1::CountedChild,
-        ),
+        registry::DEALER_SERIES_OBLIGATION_ACCOUNT_TAG => {
+            if version != registry::DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V3 {
+                return None;
+            }
+            return Some(DealerPersistedAccountContractV1 {
+                tag,
+                version,
+                account_bytes: registry::DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V3,
+                lifetime: DealerAccountLifetimeV1::CountedChild,
+            });
+        }
         registry::DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_TAG => (
             registry::DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_VERSION,
             registry::DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_BYTES,
