@@ -135,7 +135,7 @@ pub struct DirectGlobalLivenessAllocationV1 {
     pub direct_root_account: ContentId,
     /// Exact Direct action-replay owner paired with that root.
     pub direct_action_replay_account: ContentId,
-    /// One-based Product family admission sequence.
+    /// Exact zero-based Product family admission prestate sequence.
     pub family_admission_sequence: u32,
     /// First one-based Candidate call ordinal in this disjoint range.
     pub first_call_ordinal: u32,
@@ -481,7 +481,7 @@ impl DirectGlobalLivenessV1 {
             .checked_add(1)
             .ok_or(Error::ArithmeticOverflow)?;
         if self.phase != DirectGlobalLivenessPhaseV1::Active
-            || allocation.family_admission_sequence == 0
+            || allocation.family_admission_sequence != self.admitted_allocations
             || allocation.first_call_ordinal != expected_first
             || allocation.reserved_calls != self.allocation_call_width
             || allocation.reserved_work_lamports == 0
@@ -532,7 +532,7 @@ impl DirectGlobalLivenessV1 {
         direct_terminal_receipt_id.validate()?;
         if self.phase != DirectGlobalLivenessPhaseV1::Active
             || self.live_allocations == 0
-            || family_terminal_sequence == 0
+            || family_terminal_sequence != self.retired_allocations
         {
             return Err(Error::WorkStateMismatch);
         }
@@ -744,6 +744,14 @@ impl DirectGlobalLivenessV1 {
     }
     /// Exact frozen calls per Direct allocation.
     pub const fn allocation_call_width(&self) -> u32 { self.allocation_call_width }
+    /// Historical Product-authenticated Direct allocations.
+    pub const fn admitted_allocations(&self) -> u32 { self.admitted_allocations }
+    /// Direct allocations which have not supplied a final sealed terminal.
+    pub const fn live_allocations(&self) -> u32 { self.live_allocations }
+    /// Direct allocations retired through final sealed terminal plans.
+    pub const fn retired_allocations(&self) -> u32 { self.retired_allocations }
+    /// Exact mutable-state successor sequence.
+    pub const fn transition_sequence(&self) -> u64 { self.transition_sequence }
     /// Exact remaining unallocated Candidate work principal.
     pub fn unallocated_candidate_work_lamports(&self) -> Result<u64> {
         self.candidate_work_principal_lamports
