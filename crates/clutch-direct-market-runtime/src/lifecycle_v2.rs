@@ -846,7 +846,7 @@ fn convert_selection_plan_v2<B: DirectHashBackendV1>(
     })
 }
 
-/// Default-deny current action-9..12 account authority.
+/// Default-deny current action-8 no-candidate and action-9..12 account authority.
 pub trait AuthenticatedDirectEconomicTerminalV2 {
     /// Authenticate the exact current root/replay, Selection, canonical
     /// Reservation/Position/Replay prefix, optional RevenuePolicyV2 treasury
@@ -871,13 +871,13 @@ pub trait AuthenticatedDirectEconomicTerminalV2 {
     }
 }
 
-/// Explicit refusing current action-9..12 authority.
+/// Explicit refusing current action-8 no-candidate and action-9..12 authority.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoDirectEconomicTerminalAuthorityV2;
 
 impl AuthenticatedDirectEconomicTerminalV2 for NoDirectEconomicTerminalAuthorityV2 {}
 
-/// Atomic current action-9..12 poststate.
+/// Atomic current action-8 no-candidate or action-9..12 poststate.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectEconomicTerminalPlanV2 {
     /// Terminal Selection archive.
@@ -898,7 +898,8 @@ pub struct DirectEconomicTerminalPlanV2 {
     pub candidate_bond_refunds: Option<DirectCandidateBondRefundPlanV1>,
 }
 
-/// Prepare current action 9..12 under RevenuePolicyV2-native authority.
+/// Prepare current action 8's no-candidate branch or action 9..12 under
+/// RevenuePolicyV2-native authority.
 ///
 /// Action 9 supplies both immutable policy preimages and the canonical
 /// treasury Position/Replay prestate. Lapse actions must supply none of them.
