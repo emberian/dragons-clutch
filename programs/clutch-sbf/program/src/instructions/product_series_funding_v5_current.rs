@@ -189,7 +189,7 @@ impl AuthenticatedSeriesFundingAuthorityV5 for ExactFundingReservationAuthorityV
 #[inline(never)]
 pub(crate) fn reserve_current_product_series_funding_v5<O>(
     program_id: &Pubkey,
-    owner: O,
+    owner: &O,
     funding_before: AuthenticatedSeriesFundingAccountV5,
     funding_account: &AccountInfo<'_>,
     series: &SeriesPlanV5,
@@ -198,7 +198,7 @@ pub(crate) fn reserve_current_product_series_funding_v5<O>(
     binding: Box<SeriesFundingReservationBindingV5>,
 ) -> Outcome<AuthenticatedProductSeriesFundingReservationV5>
 where
-    O: AuthenticatedProductSeriesFundingReservationOwnerV5,
+    O: AuthenticatedProductSeriesFundingReservationOwnerV5 + ?Sized,
 {
     let state_before = funding_before.state();
     let state_before_id = state_before

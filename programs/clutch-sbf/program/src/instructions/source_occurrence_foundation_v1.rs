@@ -659,6 +659,40 @@ impl AuthenticatedPreRootSourceOccurrencePostwriteV3 {
         self.product_publication
     }
 
+    pub(crate) const fn source_release_account(
+        &self,
+    ) -> clutch_source_plane_v3_runtime::RuntimeKey {
+        self.source_route.release_account()
+    }
+
+    pub(crate) const fn source_release_manifest_id(&self) -> ContentId {
+        ContentId::from_bytes(self.source_route.release_manifest_id().bytes())
+    }
+
+    pub(crate) const fn source_release_authentication_id(&self) -> ContentId {
+        ContentId::from_bytes(self.source_route.release_authentication_id().bytes())
+    }
+
+    pub(crate) const fn source_clock_policy_id(&self) -> ContentId {
+        ContentId::from_bytes(self.occurrence.clock_policy_id().bytes())
+    }
+
+    pub(crate) const fn source_plane_contract_id(&self) -> ContentId {
+        ContentId::from_bytes(self.occurrence.source_plane_contract_id().bytes())
+    }
+
+    pub(crate) const fn source_spec_id(&self) -> ContentId {
+        ContentId::from_bytes(self.occurrence.source_spec_id().bytes())
+    }
+
+    pub(crate) const fn source_window_id(&self) -> ContentId {
+        ContentId::from_bytes(self.occurrence.window_id().bytes())
+    }
+
+    pub(crate) const fn source_statistic_key_id(&self) -> ContentId {
+        ContentId::from_bytes(self.occurrence.statistic_key_id().bytes())
+    }
+
     pub(crate) const fn liveness_policy_account(
         &self,
     ) -> clutch_source_plane_v3_runtime::RuntimeKey {

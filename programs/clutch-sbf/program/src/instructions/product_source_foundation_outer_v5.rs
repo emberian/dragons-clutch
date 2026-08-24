@@ -193,6 +193,39 @@ impl AuthenticatedSourceRuntimeLivenessPolicyArtifactV1 {
     fn into_policy(self) -> RuntimeLivenessPolicyV1 { self.policy }
 }
 
+/// Move-only pre-reservation Source graph selected entirely from hostile
+/// accounts. Product uses these deterministic semantics to bind the FundingV5
+/// reservation, then returns the same value here for the physical writes.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedProductSourceFoundationPreflightV5 {
+    id: ContentId,
+    route: AuthenticatedSourceRouteV1,
+    product_route: AuthenticatedSourceProductRouteV4,
+    publication: crate::instructions::product_source_current::
+        AuthenticatedSourceSemanticPublicationV2,
+    schedule: SourceWorkScheduleBindingV1,
+    policy: AuthenticatedSourceRuntimeLivenessPolicyArtifactV1,
+}
+
+impl AuthenticatedProductSourceFoundationPreflightV5 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn route(&self) -> AuthenticatedSourceRouteV1 { self.route }
+    pub(crate) const fn product_route(&self) -> AuthenticatedSourceProductRouteV4 {
+        self.product_route
+    }
+    pub(crate) const fn publication(
+        &self,
+    ) -> crate::instructions::product_source_current::AuthenticatedSourceSemanticPublicationV2 {
+        self.publication
+    }
+    pub(crate) const fn schedule(&self) -> SourceWorkScheduleBindingV1 { self.schedule }
+    pub(crate) const fn policy_artifact_account(&self) -> Pubkey { self.policy.account() }
+    pub(crate) const fn policy_artifact_data_id(&self) -> ContentId {
+        self.policy.data_id()
+    }
+    pub(crate) const fn policy_id(&self) -> ContentId { self.policy.policy_id() }
+}
+
 fn authenticate_source_runtime_liveness_policy_artifact_v1(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
@@ -266,23 +299,18 @@ fn authenticate_source_runtime_liveness_policy_artifact_v1(
     })
 }
 
-/// Perform the sole current Product-bound Source publication cut. Every
-/// semantic body is hostile-derived from accounts; the instruction payload
-/// contributes only the Series ordinal already constrained by Product's
-/// reservation and compiler graph.
+/// Authenticate the complete deterministic Source graph before FundingV5 is
+/// reserved. This performs no writes and gives Product the exact Market and
+/// occurrence identities needed by its acyclic reservation authority.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-pub(crate) fn compose_product_source_occurrence_foundation_v5<
-    A: AuthenticatedSourceOccurrenceFoundationAuthorityV3 + ?Sized,
->(
+pub(crate) fn authenticate_product_source_foundation_preflight_v5(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     registry: &AuthenticatedRegistryCapabilityV5,
     artifacts: &AuthenticatedSeriesSourceArtifactsV6,
-    funding_reservation: AuthenticatedProductSeriesFundingReservationV5,
-    authority: &A,
     ordinal: u32,
-) -> Outcome<AuthenticatedPreRootSourceOccurrenceV3> {
+) -> Outcome<AuthenticatedProductSourceFoundationPreflightV5> {
     require_product_source_foundation_account_contract_v5(accounts)?;
     let source_release = authenticate_release(
         program_id,
@@ -347,6 +375,70 @@ pub(crate) fn compose_product_source_occurrence_foundation_v5<
         route,
         product_route,
         schedule,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            b"dragons-clutch/sbf/product-source-foundation-preflight/v5\0",
+            program_id.as_ref(),
+            &product_route.id().bytes(),
+            &publication.id().bytes(),
+            &route.route_id().bytes(),
+            &schedule.source_work_schedule_id().bytes(),
+            &policy.policy_id().bytes(),
+            policy.account().as_ref(),
+            &policy.data_id().bytes(),
+            &ordinal.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(AuthenticatedProductSourceFoundationPreflightV5 {
+        id,
+        route,
+        product_route,
+        publication,
+        schedule,
+        policy,
+    })
+}
+
+/// Perform the sole current Product-bound Source publication cut from the
+/// exact pre-reservation graph Product already consumed into FundingV5.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub(crate) fn compose_product_source_occurrence_foundation_v5<
+    A: AuthenticatedSourceOccurrenceFoundationAuthorityV3 + ?Sized,
+>(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    artifacts: &AuthenticatedSeriesSourceArtifactsV6,
+    funding_reservation: AuthenticatedProductSeriesFundingReservationV5,
+    authority: &A,
+    preflight: AuthenticatedProductSourceFoundationPreflightV5,
+) -> Outcome<AuthenticatedPreRootSourceOccurrenceV3> {
+    require_product_source_foundation_account_contract_v5(accounts)?;
+    let AuthenticatedProductSourceFoundationPreflightV5 {
+        id: preflight_id,
+        route,
+        product_route: _product_route,
+        publication,
+        schedule,
+        policy,
+    } = preflight;
+    require(
+        !preflight_id.is_zero()
+            && funding_reservation.binding().source_publication_id == publication.id()
+            && funding_reservation.binding().source_occurrence_id.content_id()
+                == publication
+                    .occurrence()
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                    .content_id()
+            && funding_reservation.binding().clock_policy_id
+                == ContentId::from_bytes(route.clock_policy_id().bytes())
+            && funding_reservation.binding().market_instance_id
+                == publication.occurrence().market_instance_id,
+        ClutchError::MismatchedState,
     )?;
     let source_principal_refund = RuntimeKey::from_bytes(
         artifacts.funding_terms().lamport_principal_refund.bytes(),
