@@ -9,14 +9,19 @@
 use crate::accounts::{expect_pda, require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
+use crate::instructions::product_artifact::authenticate_product_artifact_v1;
 use crate::seeds;
 use clutch_product_series::{
     authenticate_market_foundation_account_graph_bytes_v3,
-    AuthenticatedMarketFoundationAccountGraphBytesV3, ContentId, FixedCodec,
+    AuthenticatedMarketFoundationAccountGraphBytesV3, CompiledProductSeriesBundleV6, ContentId,
+    FixedCodec,
     MarketFoundationScheduleV3, MarketFoundationSlotV3, MarketInstanceV2Id,
     MarketLifecyclePhaseV2, MarketLifecycleRootV2, SeriesFundingStateV3,
-    SeriesLifecycleReplayBindingV2Id, SeriesLifecycleReplayV2, SeriesMarketLinkPhaseV2,
-    SeriesMarketLinkV2, SeriesPlanV5Id,
+    SeriesAttachmentPlanV5, SeriesAttachmentPlanV5Id, SeriesLifecycleReplayBindingV2Id,
+    SeriesLifecycleReplayV2, SeriesLinkObligationAdmissionProjectionV2,
+    SeriesLinkObligationDispositionV2, SeriesLinkObligationStatusV2,
+    SeriesLinkObligationTerminalProjectionV2, SeriesLinkObligationV2,
+    SeriesMarketLinkPhaseV2, SeriesMarketLinkV2, SeriesMarketLinkV2Id, SeriesPlanV5Id,
 };
 use clutch_solana_layout::product_series::{
     series_market_link_authentication_id_v2, MarketLifecycleRootAccountV2,
@@ -38,6 +43,12 @@ const MARKET_LIFECYCLE_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/market-lifecycle-account-authentication/v2\0";
 const MARKET_FOUNDATION_PREALLOCATION_AUTHENTICATION_DOMAIN_V3: &[u8] =
     b"dragons-clutch/market-foundation-preallocation-authentication/v3\0";
+const SERIES_WRAPPER_AUTHENTICATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-wrapper-authentication/v2\0";
+const SERIES_WRAPPER_ADMISSION_AUTHENTICATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-wrapper-admission-authentication/v2\0";
+const SERIES_WRAPPER_TERMINAL_AUTHENTICATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-wrapper-terminal-authentication/v2\0";
 
 /// Exact current 0x7f/version3 registry authentication.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -145,6 +156,226 @@ impl<'state> AuthenticatedSeriesMarketLinkV2<'state> {
     pub(crate) const fn is_writable(self) -> bool { self.writable }
     pub(crate) const fn data_id(self) -> ContentId { self.data_id }
     pub(crate) const fn authentication_id(self) -> ContentId { self.authentication_id }
+}
+
+/// Product-private current Wrapper authorization derived from exact live
+/// LinkV2 + BundleV6 + AttachmentV5 accounts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSeriesWrapperAuthorizationV2 {
+    id: ContentId,
+    link_account: Pubkey,
+    link_authentication_id: ContentId,
+    link_semantic_id: SeriesMarketLinkV2Id,
+    link_binding_id: ContentId,
+    wrapper_obligation_configuration_id: ContentId,
+    series_plan_id: SeriesPlanV5Id,
+    ordinal: u32,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    attachment_plan_id: SeriesAttachmentPlanV5Id,
+    compiler_bundle_id: clutch_product_series::CompiledProductSeriesBundleV6Id,
+    funding_quote_id: clutch_product_series::SeriesFundingQuoteV5Id,
+    capability_profile_id: ContentId,
+    wrapper_recipe_set_id: ContentId,
+    rent_refund_owner: ContentId,
+    neutral_lamport_sink: ContentId,
+    wrapper_status: SeriesLinkObligationStatusV2,
+    wrapper_admission_receipt_id: ContentId,
+    link_transition_sequence: u64,
+}
+
+impl AuthenticatedSeriesWrapperAuthorizationV2 {
+    pub(crate) const fn id(self) -> ContentId { self.id }
+    pub(crate) const fn link_account(self) -> Pubkey { self.link_account }
+    pub(crate) const fn link_authentication_id(self) -> ContentId { self.link_authentication_id }
+    pub(crate) const fn link_semantic_id(self) -> SeriesMarketLinkV2Id { self.link_semantic_id }
+    pub(crate) const fn link_binding_id(self) -> ContentId { self.link_binding_id }
+    pub(crate) const fn wrapper_obligation_configuration_id(self) -> ContentId {
+        self.wrapper_obligation_configuration_id
+    }
+    pub(crate) const fn series_plan_id(self) -> SeriesPlanV5Id { self.series_plan_id }
+    pub(crate) const fn ordinal(self) -> u32 { self.ordinal }
+    pub(crate) const fn market_instance_id(self) -> MarketInstanceV2Id { self.market_instance_id }
+    pub(crate) const fn generation(self) -> u64 { self.generation }
+    pub(crate) const fn attachment_plan_id(self) -> SeriesAttachmentPlanV5Id {
+        self.attachment_plan_id
+    }
+    pub(crate) const fn compiler_bundle_id(self) -> clutch_product_series::CompiledProductSeriesBundleV6Id {
+        self.compiler_bundle_id
+    }
+    pub(crate) const fn funding_quote_id(self) -> clutch_product_series::SeriesFundingQuoteV5Id {
+        self.funding_quote_id
+    }
+    pub(crate) const fn capability_profile_id(self) -> ContentId { self.capability_profile_id }
+    pub(crate) const fn wrapper_recipe_set_id(self) -> ContentId { self.wrapper_recipe_set_id }
+    pub(crate) const fn rent_refund_owner(self) -> ContentId { self.rent_refund_owner }
+    pub(crate) const fn neutral_lamport_sink(self) -> ContentId { self.neutral_lamport_sink }
+    pub(crate) const fn wrapper_status(self) -> SeriesLinkObligationStatusV2 { self.wrapper_status }
+    pub(crate) const fn wrapper_admission_receipt_id(self) -> ContentId {
+        self.wrapper_admission_receipt_id
+    }
+    pub(crate) const fn link_transition_sequence(self) -> u64 { self.link_transition_sequence }
+    pub(crate) const fn requires_product_admission(self) -> bool {
+        matches!(self.wrapper_status, SeriesLinkObligationStatusV2::EnabledNeverFounded)
+    }
+}
+
+/// Default-refusing exact Structured admission owner. Implementations must be
+/// private same-instruction Structured postwrites, never decoded DTOs.
+pub(crate) trait AuthenticatedSeriesWrapperAdmissionOwnerV2 {
+    fn owner_admission_receipt_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_series_wrapper_admission_owner_v2(
+        &self,
+        _authorization_id: ContentId,
+        _link_account: Pubkey,
+        _link_binding_id: ContentId,
+        _series_plan_id: SeriesPlanV5Id,
+        _ordinal: u32,
+        _market_instance_id: MarketInstanceV2Id,
+        _generation: u64,
+        _attachment_plan_id: SeriesAttachmentPlanV5Id,
+        _compiler_bundle_id: clutch_product_series::CompiledProductSeriesBundleV6Id,
+        _funding_quote_id: clutch_product_series::SeriesFundingQuoteV5Id,
+        _capability_profile_id: ContentId,
+        _wrapper_obligation_configuration_id: ContentId,
+        _wrapper_recipe_set_id: ContentId,
+        _rent_refund_owner: ContentId,
+        _neutral_lamport_sink: ContentId,
+        _owner_admission_receipt_id: ContentId,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+}
+
+/// Default-refusing exact Structured terminal postwrite owner.
+pub(crate) trait AuthenticatedSeriesWrapperTerminalOwnerV2 {
+    fn owner_terminal_receipt_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    fn structured_root_account(&self) -> Outcome<Pubkey> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    fn structured_root_semantic_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    fn structured_root_data_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_series_wrapper_terminal_owner_v2(
+        &self,
+        _authorization_id: ContentId,
+        _link_account: Pubkey,
+        _link_binding_id: ContentId,
+        _series_plan_id: SeriesPlanV5Id,
+        _ordinal: u32,
+        _market_instance_id: MarketInstanceV2Id,
+        _generation: u64,
+        _attachment_plan_id: SeriesAttachmentPlanV5Id,
+        _compiler_bundle_id: clutch_product_series::CompiledProductSeriesBundleV6Id,
+        _funding_quote_id: clutch_product_series::SeriesFundingQuoteV5Id,
+        _capability_profile_id: ContentId,
+        _wrapper_obligation_configuration_id: ContentId,
+        _wrapper_recipe_set_id: ContentId,
+        _rent_refund_owner: ContentId,
+        _neutral_lamport_sink: ContentId,
+        _wrapper_admission_receipt_id: ContentId,
+        _owner_terminal_receipt_id: ContentId,
+        _structured_root_account: Pubkey,
+        _structured_root_semantic_id: ContentId,
+        _structured_root_data_id: ContentId,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+}
+
+/// Hostile postwrite receipt for one exact current Wrapper admission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSeriesWrapperAdmissionV2 {
+    id: ContentId,
+    link_account: Pubkey,
+    link_authentication_before: ContentId,
+    link_authentication_after: ContentId,
+    link_semantic_before: SeriesMarketLinkV2Id,
+    link_semantic_after: SeriesMarketLinkV2Id,
+    owner_admission_receipt_id: ContentId,
+    product_admission_projection_id: ContentId,
+}
+
+impl AuthenticatedSeriesWrapperAdmissionV2 {
+    pub(crate) const fn id(self) -> ContentId { self.id }
+    pub(crate) const fn link_account(self) -> Pubkey { self.link_account }
+    pub(crate) const fn link_authentication_before(self) -> ContentId {
+        self.link_authentication_before
+    }
+    pub(crate) const fn link_authentication_after(self) -> ContentId {
+        self.link_authentication_after
+    }
+    pub(crate) const fn link_semantic_before(self) -> SeriesMarketLinkV2Id {
+        self.link_semantic_before
+    }
+    pub(crate) const fn link_semantic_after(self) -> SeriesMarketLinkV2Id {
+        self.link_semantic_after
+    }
+    pub(crate) const fn owner_admission_receipt_id(self) -> ContentId {
+        self.owner_admission_receipt_id
+    }
+    pub(crate) const fn product_admission_projection_id(self) -> ContentId {
+        self.product_admission_projection_id
+    }
+}
+
+/// Hostile postwrite receipt for one exact current Wrapper terminal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSeriesWrapperTerminalV2 {
+    id: ContentId,
+    link_account: Pubkey,
+    link_authentication_before: ContentId,
+    link_authentication_after: ContentId,
+    link_semantic_before: ContentId,
+    link_semantic_after: ContentId,
+    wrapper_admission_receipt_id: ContentId,
+    owner_terminal_receipt_id: ContentId,
+    product_terminal_projection: SeriesLinkObligationTerminalProjectionV2,
+    structured_root_account: Pubkey,
+    structured_root_semantic_id: ContentId,
+    structured_root_data_id: ContentId,
+}
+
+impl AuthenticatedSeriesWrapperTerminalV2 {
+    pub(crate) const fn id(self) -> ContentId { self.id }
+    pub(crate) const fn link_account(self) -> Pubkey { self.link_account }
+    pub(crate) const fn link_authentication_before(self) -> ContentId {
+        self.link_authentication_before
+    }
+    pub(crate) const fn link_authentication_after(self) -> ContentId {
+        self.link_authentication_after
+    }
+    pub(crate) const fn link_semantic_before(self) -> ContentId { self.link_semantic_before }
+    pub(crate) const fn link_semantic_after(self) -> ContentId { self.link_semantic_after }
+    pub(crate) const fn wrapper_admission_receipt_id(self) -> ContentId {
+        self.wrapper_admission_receipt_id
+    }
+    pub(crate) const fn owner_terminal_receipt_id(self) -> ContentId {
+        self.owner_terminal_receipt_id
+    }
+    pub(crate) const fn product_terminal_projection(
+        self,
+    ) -> SeriesLinkObligationTerminalProjectionV2 {
+        self.product_terminal_projection
+    }
+    pub(crate) const fn structured_root_account(self) -> Pubkey {
+        self.structured_root_account
+    }
+    pub(crate) const fn structured_root_semantic_id(self) -> ContentId {
+        self.structured_root_semantic_id
+    }
+    pub(crate) const fn structured_root_data_id(self) -> ContentId {
+        self.structured_root_data_id
+    }
 }
 
 /// Exact retained zero-data preallocation under the 47-slot owner.
@@ -383,6 +614,275 @@ pub(crate) fn authenticate_series_market_link_v2<'state>(
         authentication_id })
 }
 
+/// Join an exact active LinkV2 to its content-addressed BundleV6 and
+/// AttachmentV5 accounts. The returned receipt retains the observed link
+/// privilege; only the narrow admission and terminal writers can consume a
+/// writable receipt.
+pub(crate) fn authenticate_series_wrapper_authorization_v2(
+    program_id: &Pubkey,
+    link: AuthenticatedSeriesMarketLinkV2<'_>,
+    compiler_bundle_account: &AccountInfo<'_>,
+    attachment_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedSeriesWrapperAuthorizationV2> {
+    let binding = link.state().binding();
+    let wrapper_status = link.state().obligation_status(SeriesLinkObligationV2::Wrapper);
+    require(link.state().phase() == SeriesMarketLinkPhaseV2::Active
+        && matches!(wrapper_status,
+            SeriesLinkObligationStatusV2::EnabledNeverFounded | SeriesLinkObligationStatusV2::Live)
+        && (wrapper_status == SeriesLinkObligationStatusV2::Live || link.is_writable()),
+        ClutchError::MismatchedState)?;
+    let bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV6>(
+        program_id, compiler_bundle_account, binding.compiler_bundle_id.content_id())?;
+    let attachment = authenticate_product_artifact_v1::<SeriesAttachmentPlanV5>(
+        program_id, attachment_account, binding.attachment_plan_id.content_id())?;
+    let bundle_id = bundle.value().id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let attachment_id = attachment.value().id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(bundle_id == binding.compiler_bundle_id
+        && bundle.value().series_plan_id == binding.series_plan_id
+        && bundle.value().funding_terms_id == binding.funding_terms_id
+        && bundle.value().funding_quote_id == binding.funding_quote_id
+        && bundle.value().attachment_plan_id == binding.attachment_plan_id
+        && bundle.value().capability_profile_id.content_id() == binding.capability_profile_id
+        && attachment_id == binding.attachment_plan_id
+        && attachment.value().funding_quote_id == bundle.value().funding_quote_id
+        && attachment.value().funding_quote_id == binding.funding_quote_id,
+        ClutchError::MismatchedState)?;
+    let link_semantic_id = link.state().semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let link_binding_id = binding.id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let wrapper_admission_receipt_id = link.state()
+        .obligation_admission_receipt_id(SeriesLinkObligationV2::Wrapper);
+    let link_transition_sequence = link.state().transition_sequence();
+    let id = hashv(&[
+        SERIES_WRAPPER_AUTHENTICATION_DOMAIN_V2, link.account().as_ref(),
+        &link.authentication_id().bytes(), &link_semantic_id.bytes(),
+        compiler_bundle_account.key.as_ref(), &bundle.semantic_id().bytes(),
+        attachment_account.key.as_ref(), &attachment.semantic_id().bytes(),
+        &attachment.value().wrapper_recipe_set_id.bytes(),
+        &[wrapper_status.wire_byte()], &wrapper_admission_receipt_id.bytes(),
+        &link_transition_sequence.to_le_bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedSeriesWrapperAuthorizationV2 {
+        id, link_account: link.account(), link_authentication_id: link.authentication_id(),
+        link_semantic_id, link_binding_id,
+        wrapper_obligation_configuration_id: binding.obligation_configuration_id.content_id(),
+        series_plan_id: binding.series_plan_id, ordinal: binding.ordinal,
+        market_instance_id: binding.market_instance_id, generation: binding.generation,
+        attachment_plan_id: binding.attachment_plan_id,
+        compiler_bundle_id: binding.compiler_bundle_id, funding_quote_id: binding.funding_quote_id,
+        capability_profile_id: binding.capability_profile_id,
+        wrapper_recipe_set_id: attachment.value().wrapper_recipe_set_id,
+        rent_refund_owner: binding.rent_refund_owner,
+        neutral_lamport_sink: binding.neutral_lamport_sink, wrapper_status,
+        wrapper_admission_receipt_id, link_transition_sequence,
+    })
+}
+
+/// Persist the first Wrapper admission only after the Structured owner accepts
+/// the exact same immutable Product authorization.
+pub(crate) fn admit_series_wrapper_obligation_v2<'next, A>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    authenticated: AuthenticatedSeriesMarketLinkV2<'_>,
+    authorization: AuthenticatedSeriesWrapperAuthorizationV2,
+    owner: &A,
+    rebound_output: &'next mut SeriesMarketLinkAccountV2,
+) -> Outcome<(AuthenticatedSeriesMarketLinkV2<'next>, AuthenticatedSeriesWrapperAdmissionV2)>
+where
+    A: AuthenticatedSeriesWrapperAdmissionOwnerV2 + ?Sized,
+{
+    let owner_admission_receipt_id = owner.owner_admission_receipt_id()?;
+    require_live(owner_admission_receipt_id)?;
+    let semantic_before = authenticated.state().semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(authenticated.is_writable() && authorization.requires_product_admission()
+        && authorization.link_account == authenticated.account()
+        && authorization.link_authentication_id == authenticated.authentication_id()
+        && authorization.link_semantic_id == semantic_before
+        && authorization.wrapper_admission_receipt_id == ContentId::ZERO
+        && authorization.link_transition_sequence == authenticated.state().transition_sequence(),
+        ClutchError::MismatchedState)?;
+    owner.authenticate_series_wrapper_admission_owner_v2(
+        authorization.id, authorization.link_account, authorization.link_binding_id,
+        authorization.series_plan_id, authorization.ordinal, authorization.market_instance_id,
+        authorization.generation, authorization.attachment_plan_id,
+        authorization.compiler_bundle_id, authorization.funding_quote_id,
+        authorization.capability_profile_id, authorization.wrapper_obligation_configuration_id,
+        authorization.wrapper_recipe_set_id, authorization.rent_refund_owner,
+        authorization.neutral_lamport_sink, owner_admission_receipt_id)?;
+    let next_sequence = authorization.link_transition_sequence.checked_add(1)
+        .ok_or(ClutchError::Arithmetic)?;
+    let projection = SeriesLinkObligationAdmissionProjectionV2 {
+        link_semantic_id: semantic_before,
+        obligation: SeriesLinkObligationV2::Wrapper,
+        link_transition_sequence: next_sequence,
+        owner_admission_receipt_id,
+    };
+    let projection_id = projection.id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let successor = authenticated.state().admit_obligation(projection)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let authentication_before = authenticated.authentication_id();
+    let rebound = write_series_market_link_v2(
+        program_id, account, authenticated, &successor, rebound_output)?;
+    let semantic_after = rebound.state().semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(rebound.state().obligation_status(SeriesLinkObligationV2::Wrapper)
+            == SeriesLinkObligationStatusV2::Live
+        && rebound.state().obligation_admission_receipt_id(SeriesLinkObligationV2::Wrapper)
+            == projection_id,
+        ClutchError::MismatchedState)?;
+    let id = hashv(&[
+        SERIES_WRAPPER_ADMISSION_AUTHENTICATION_DOMAIN_V2, account.key.as_ref(),
+        &authorization.id.bytes(), &authentication_before.bytes(),
+        &rebound.authentication_id().bytes(), &semantic_before.bytes(),
+        &semantic_after.bytes(), &owner_admission_receipt_id.bytes(), &projection_id.bytes(),
+    ]);
+    require_live(id)?;
+    Ok((rebound, AuthenticatedSeriesWrapperAdmissionV2 {
+        id, link_account: *account.key, link_authentication_before: authentication_before,
+        link_authentication_after: rebound.authentication_id(), link_semantic_before: semantic_before,
+        link_semantic_after: semantic_after, owner_admission_receipt_id,
+        product_admission_projection_id: projection_id,
+    }))
+}
+
+/// Consume an exact Structured terminal postwrite into the live Wrapper latch.
+pub(crate) fn terminalize_series_wrapper_obligation_v2<'next, A>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    authenticated: AuthenticatedSeriesMarketLinkV2<'_>,
+    authorization: AuthenticatedSeriesWrapperAuthorizationV2,
+    owner: &A,
+    rebound_output: &'next mut SeriesMarketLinkAccountV2,
+) -> Outcome<(AuthenticatedSeriesMarketLinkV2<'next>, AuthenticatedSeriesWrapperTerminalV2)>
+where
+    A: AuthenticatedSeriesWrapperTerminalOwnerV2 + ?Sized,
+{
+    let binding = authenticated.state().binding();
+    let binding_id = binding.id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let semantic_before = authenticated.state().semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let semantic_before_content = semantic_before.content_id();
+    let admission_receipt = authenticated.state()
+        .obligation_admission_receipt_id(SeriesLinkObligationV2::Wrapper);
+    let owner_terminal_receipt_id = owner.owner_terminal_receipt_id()?;
+    let structured_root_account = owner.structured_root_account()?;
+    let structured_root_semantic_id = owner.structured_root_semantic_id()?;
+    let structured_root_data_id = owner.structured_root_data_id()?;
+    for id in [admission_receipt, owner_terminal_receipt_id,
+        structured_root_semantic_id, structured_root_data_id] { require_live(id)?; }
+    require(authenticated.is_writable()
+        && authenticated.state().phase() == SeriesMarketLinkPhaseV2::Active
+        && authenticated.state().obligation_status(SeriesLinkObligationV2::Wrapper)
+            == SeriesLinkObligationStatusV2::Live
+        && authorization.link_account == authenticated.account()
+        && authorization.link_authentication_id == authenticated.authentication_id()
+        && authorization.link_semantic_id == semantic_before
+        && authorization.link_binding_id == binding_id
+        && authorization.wrapper_status == SeriesLinkObligationStatusV2::Live
+        && authorization.wrapper_admission_receipt_id == admission_receipt
+        && authorization.link_transition_sequence == authenticated.state().transition_sequence()
+        && owner_terminal_receipt_id != admission_receipt
+        && structured_root_account != Pubkey::default()
+        && structured_root_account != authenticated.account(),
+        ClutchError::MismatchedState)?;
+    owner.authenticate_series_wrapper_terminal_owner_v2(
+        authorization.id, authenticated.account(), binding_id, binding.series_plan_id,
+        binding.ordinal, binding.market_instance_id, binding.generation,
+        authorization.attachment_plan_id, authorization.compiler_bundle_id,
+        authorization.funding_quote_id, authorization.capability_profile_id,
+        authorization.wrapper_obligation_configuration_id, authorization.wrapper_recipe_set_id,
+        authorization.rent_refund_owner, authorization.neutral_lamport_sink, admission_receipt,
+        owner_terminal_receipt_id, structured_root_account,
+        structured_root_semantic_id, structured_root_data_id)?;
+    let next_sequence = authenticated.state().transition_sequence().checked_add(1)
+        .ok_or(ClutchError::Arithmetic)?;
+    let projection = SeriesLinkObligationTerminalProjectionV2 {
+        link_semantic_id: semantic_before,
+        obligation: SeriesLinkObligationV2::Wrapper,
+        disposition: SeriesLinkObligationDispositionV2::Terminal,
+        link_transition_sequence: next_sequence,
+        owner_terminal_receipt_id,
+    };
+    let projection_id = projection.id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let successor = authenticated.state().consume_obligation(projection)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let authentication_before = authenticated.authentication_id();
+    let rebound = write_series_market_link_v2(
+        program_id, account, authenticated, &successor, rebound_output)?;
+    let semantic_after = rebound.state().semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let semantic_after_content = semantic_after.content_id();
+    require(rebound.state().obligation_status(SeriesLinkObligationV2::Wrapper)
+            == SeriesLinkObligationStatusV2::Terminal
+        && rebound.state().obligation_terminal_receipt_id(SeriesLinkObligationV2::Wrapper)
+            == projection_id,
+        ClutchError::MismatchedState)?;
+    let id = hashv(&[
+        SERIES_WRAPPER_TERMINAL_AUTHENTICATION_DOMAIN_V2, account.key.as_ref(),
+        &authorization.id.bytes(),
+        &authentication_before.bytes(), &rebound.authentication_id().bytes(),
+        &semantic_before_content.bytes(), &semantic_after_content.bytes(),
+        &admission_receipt.bytes(), &owner_terminal_receipt_id.bytes(), &projection_id.bytes(),
+        structured_root_account.as_ref(), &structured_root_semantic_id.bytes(),
+        &structured_root_data_id.bytes(), &binding_id.bytes(),
+    ]);
+    require_live(id)?;
+    Ok((rebound, AuthenticatedSeriesWrapperTerminalV2 {
+        id, link_account: *account.key, link_authentication_before: authentication_before,
+        link_authentication_after: rebound.authentication_id(),
+        link_semantic_before: semantic_before_content, link_semantic_after: semantic_after_content,
+        wrapper_admission_receipt_id: admission_receipt, owner_terminal_receipt_id,
+        product_terminal_projection: projection, structured_root_account,
+        structured_root_semantic_id, structured_root_data_id,
+    }))
+}
+
+/// Private raw LinkV2 writer. Every crate-visible mutation above rederives one
+/// exact legal successor and hostile-reauthenticates both sides.
+fn write_series_market_link_v2<'next>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    authenticated: AuthenticatedSeriesMarketLinkV2<'_>,
+    successor: &SeriesMarketLinkV2,
+    rebound_output: &'next mut SeriesMarketLinkAccountV2,
+) -> Outcome<AuthenticatedSeriesMarketLinkV2<'next>> {
+    let binding = authenticated.state().binding();
+    require(account.is_writable && *account.key == authenticated.account()
+        && account.owner == program_id && successor.binding() == binding,
+        ClutchError::MismatchedState)?;
+    let live = authenticate_series_market_link_v2(
+        program_id, account, binding.series_plan_id, binding.ordinal,
+        binding.market_instance_id, binding.generation,
+        Pubkey::new_from_array(binding.market_root_account_id.bytes()), true, rebound_output)?;
+    require(live.account() == authenticated.account()
+        && live.owner_program() == authenticated.owner_program()
+        && live.value() == authenticated.value()
+        && live.observed_lamports() == authenticated.observed_lamports()
+        && live.data_id() == authenticated.data_id()
+        && live.authentication_id() == authenticated.authentication_id(),
+        ClutchError::MismatchedState)?;
+    let mut data = account.try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    SeriesMarketLinkAccountV2::encode_parts(successor, authenticated.value().stored_bump, &mut data)?;
+    drop(data);
+    let rebound = authenticate_series_market_link_v2(
+        program_id, account, binding.series_plan_id, binding.ordinal,
+        binding.market_instance_id, binding.generation,
+        Pubkey::new_from_array(binding.market_root_account_id.bytes()), true, rebound_output)?;
+    require(rebound.state() == successor
+        && rebound.value().stored_bump == authenticated.value().stored_bump,
+        ClutchError::MismatchedState)?;
+    Ok(rebound)
+}
+
 /// Stack-bounded retained-slot authentication from one hostile 1,576-byte
 /// GraphV3 preimage. No graph ID or principal supplied by the caller is trusted.
 pub(crate) fn authenticate_market_foundation_preallocation_from_bytes_v3(
@@ -509,4 +1009,33 @@ fn hashv(parts: &[&[u8]]) -> ContentId {
 
 fn require_live(id: ContentId) -> Outcome<()> {
     require(id != ContentId::ZERO, ClutchError::MismatchedState)
+}
+
+#[cfg(test)]
+mod source_contract_tests {
+    #[test]
+    fn wrapper_mutation_is_narrow_and_current_artifact_bound() {
+        let source = include_str!("product_series_current.rs");
+        assert!(source.contains("fn write_series_market_link_v2<'next>("));
+        assert!(!source.contains("pub(crate) fn write_series_market_link_v2<'next>("));
+        assert!(source.contains("bundle.value().funding_terms_id == binding.funding_terms_id"));
+        assert!(source.contains("bundle.value().funding_quote_id == binding.funding_quote_id"));
+        assert!(source.contains("bundle.value().attachment_plan_id == binding.attachment_plan_id"));
+        assert!(source.contains("attachment.value().funding_quote_id == binding.funding_quote_id"));
+        assert!(source.contains(
+            "authorization.link_authentication_id == authenticated.authentication_id()"
+        ));
+    }
+
+    #[test]
+    fn wrapper_terminal_consumes_current_authorization_and_private_owner() {
+        let source = include_str!("product_series_current.rs");
+        assert!(source.contains(
+            "authorization: AuthenticatedSeriesWrapperAuthorizationV2"
+        ));
+        assert!(source.contains("A: AuthenticatedSeriesWrapperTerminalOwnerV2 + ?Sized"));
+        assert!(source.contains("authorization.wrapper_admission_receipt_id == admission_receipt"));
+        assert!(source.contains("owner.authenticate_series_wrapper_terminal_owner_v2("));
+        assert!(source.contains("rebound.state().obligation_status(SeriesLinkObligationV2::Wrapper)"));
+    }
 }
