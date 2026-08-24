@@ -282,7 +282,7 @@ Token-2022/collateral-token program pair when the Realm itself uses Token-2022.
 | Split/Merge bearer | `10 + 2N` | Market/state plus collateral base and ordered `(Mint, claim Account)` pairs |
 | Redeem native | 9 | native value frame |
 | Redeem bearer | 12 | Market/state plus collateral payout and bearer burn accounts |
-| Retire | `8 + N` | Market/state, manifest/config/refund, Token-2022/System/Rent, all Mints |
+| Retire | `8 + N` | writable Market/state/refund and Mints; manifest/config, Token-2022/System/Rent |
 
 Program owner, account-data codec, PDA key, Realm content hash, manifest content
 hash, collateral vault/custody relationship, and native sysvar identity checks

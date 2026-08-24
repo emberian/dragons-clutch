@@ -246,9 +246,9 @@ fn exact_privileges(action: ActionV1, role: AccountRoleV1) -> (bool, bool, bool)
         | AccountRoleV1::CollateralAccount
         | AccountRoleV1::ClaimTokenAccount => true,
         AccountRoleV1::ClaimMint => !matches!(action, ActionV1::Audit | ActionV1::Transfer),
+        AccountRoleV1::RentRefund => matches!(action, ActionV1::Retire),
         AccountRoleV1::CapabilityManifest
         | AccountRoleV1::BearerConfig
-        | AccountRoleV1::RentRefund
         | AccountRoleV1::Token2022Program
         | AccountRoleV1::SystemProgram
         | AccountRoleV1::RentSysvar

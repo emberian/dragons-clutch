@@ -804,3 +804,29 @@ fn frame_enforces_exact_privileges_and_aliases() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn retirement_refund_is_writable_for_token_close_and_root_refund() -> Result<()> {
+    let mut accounts = [AccountMetaV1 {
+        key: [0; 32],
+        is_signer: false,
+        is_writable: false,
+        is_executable: false,
+    }; 10];
+    for (index, account) in accounts.iter_mut().enumerate() {
+        let byte = u8::try_from(index).map_err(|_| Error::ArithmeticOverflow)?;
+        account.key = [byte.saturating_add(1); 32];
+    }
+    for index in [0usize, 1, 4, 8, 9] {
+        accounts[index].is_writable = true;
+    }
+    accounts[5].is_executable = true;
+    accounts[6].is_executable = true;
+    assert_eq!(validate_account_frame::<2>(ActionV1::Retire, &accounts), Ok(()));
+    accounts[4].is_writable = false;
+    assert_eq!(
+        validate_account_frame::<2>(ActionV1::Retire, &accounts),
+        Err(Error::InvalidAccountFrame)
+    );
+    Ok(())
+}
