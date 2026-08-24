@@ -35,8 +35,6 @@ use super::general_v2_fee_terminal_pair_v1::{
     authenticate_fee_terminal_pair_v1, AuthenticatedFeeTerminalPairV1,
     FeeTerminalPairExpectationV1,
 };
-use super::product_series_current::retirement_v4::AuthenticatedProductSeriesRetirementV4;
-
 pub const RETIRE_INDEX_CHILDREN_ACCOUNT_COUNT_V1: usize = 7;
 pub const RETIRE_RETAINED_FEED_ACCOUNT_COUNT_V1: usize = 6;
 /// Exact General account frame consumed after Product's move-only terminal.
@@ -236,18 +234,35 @@ fn preflight_writes(accounts: &[&AccountInfo<'_>]) -> Outcome<()> {
     Ok(())
 }
 
+/// Default-refusing Product V3/V5 whole-Series terminal consumed only by the
+/// same instruction which closes the final General indexed root. Product owns
+/// all RootV3/LinkV3/RegistryV5/FundingV5 authentication and implements this
+/// trait directly on its move-only terminal receipt; General never accepts a
+/// detached projection or reinterprets historical RootV2/LinkV2 bytes.
+pub(crate) trait AuthenticatedProductSeriesRetirementForGeneralV5: Sized {
+    fn consume_for_general_indexed_close_v5(
+        self,
+        _market_instance_id: contract::Id32,
+        _authority: contract::CurrentMarketAuthorityV4,
+    ) -> Outcome<clutch_product_series::ContentId> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+}
+
 /// Consume Product's exact non-Copy whole-Series terminal into the immutable
 /// General V4 authority. Root/Link schema-specific access remains localized
-/// inside Product's receipt owner so a later Product successor cannot be
-/// mistaken for V2 bytes or caller projections.
-fn authenticate_product_whole_market_terminal_v1(
-    product: AuthenticatedProductSeriesRetirementV4,
+/// inside Product's receipt owner.
+fn authenticate_product_whole_market_terminal_v1<P>(
+    product: P,
     binding: &MarketBindingV4,
     terminal: &contract::IndexedSettlementRootCloseProjectionV1,
     fee_pair: &AuthenticatedFeeTerminalPairV1,
-) -> Outcome<()> {
+) -> Outcome<()>
+where
+    P: AuthenticatedProductSeriesRetirementForGeneralV5,
+{
     let authority = binding.authority();
-    let product_receipt_id = product.consume_for_general_indexed_close_v1(
+    let product_receipt_id = product.consume_for_general_indexed_close_v5(
         binding.base().base().market_instance_v2_id,
         authority,
     )?;
@@ -614,12 +629,15 @@ fn retire_retained_feed(
 }
 
 #[inline(never)]
-pub(crate) fn close_indexed_root_after_product_series_retirement_v4(
+pub(crate) fn close_indexed_root_after_product_series_retirement_v5<P>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     selector: contract::CountedSettlementRootSelectorV1,
-    product: AuthenticatedProductSeriesRetirementV4,
-) -> Outcome<()> {
+    product: P,
+) -> Outcome<()>
+where
+    P: AuthenticatedProductSeriesRetirementForGeneralV5,
+{
     require_count(accounts, CLOSE_INDEXED_ROOT_ACCOUNT_COUNT_V1)?;
     require_program_account(
         program_id,
@@ -899,12 +917,13 @@ mod tests {
     fn root_close_requires_the_move_only_product_receipt() {
         let source = include_str!("general_v2_exact_index_retirement_v1.rs");
         let close = source
-            .split("pub(crate) fn close_indexed_root_after_product_series_retirement_v4")
+            .split("pub(crate) fn close_indexed_root_after_product_series_retirement_v5")
             .nth(1)
             .and_then(|body| body.split("/// Dispatch-compatible entrypoint").next())
             .expect("bounded indexed-root close");
-        assert!(close.contains("product: AuthenticatedProductSeriesRetirementV4"));
+        assert!(close.contains("P: AuthenticatedProductSeriesRetirementForGeneralV5"));
         assert!(close.contains("authenticate_product_whole_market_terminal_v1("));
         assert!(!close.contains("product_accounts"));
+        assert!(!close.contains("AuthenticatedProductSeriesRetirementV4"));
     }
 }
