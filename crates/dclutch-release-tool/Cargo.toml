@@ -1,0 +1,34 @@
+[package]
+name = "dclutch-release-tool"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.89"
+description = "Offline checked SBF artifact and semantic-release identity tool for dClutch"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "dclutch-release-tool"
+path = "src/main.rs"
+
+[dependencies]
+dclutch-core-contract = { path = "../dclutch-core-contract" }
+dclutch-pyth-svm = { path = "../dclutch-pyth-svm" }
+sha2 = "=0.10.9"
+
+[workspace]
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"
