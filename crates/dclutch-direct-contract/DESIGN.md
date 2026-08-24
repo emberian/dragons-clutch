@@ -74,6 +74,13 @@ not need a slot and remains available throughout every permitted unwind phase.
 Its close effect retains the final nonce high-water for retirement evidence; a
 caller-authored retirement boolean is never accepted.
 
+Each physical replay root is one Market direct child. First-use registration or
+inline execution atomically calls `Market::register_child` before persisting the
+new root; the final root close atomically calls `Market::retire_child`. Those
+routes therefore carry writable Market even when the economic ledger itself is
+unchanged. The Market cannot reach Retired while any replay root remains, so a
+root cannot be stranded behind the Retiring-only closure gate.
+
 ## Token and native-claim custody
 
 Off-chain Ed25519 authorization cannot itself debit an SPL token account. The
@@ -102,10 +109,25 @@ unused collateral to the signed maker account.
 Ordinary matching transfers from one Buy escrow to the signed seller and fee
 recipient; it does not touch the Market vault. Complete-set split and merge are
 the only vault routes. They carry the canonical Market vault and its `Custody`
-PDA. Split/merge mark Market writable because complete-set issuance/retirement
-changes the Market ledger. Realm and collateral mint occur only on routes with
-token semantics. Templates remain offchain bundles of native outcome claims,
-not a second Direct liability basis.
+metadata PDA. The token Vault authority is the Market PDA, not Custody; merge
+uses the Market's canonical seeds. Split/merge mark Market writable because
+complete-set issuance/retirement changes the Market ledger. Realm and
+collateral mint occur only on routes with token semantics. Templates remain
+offchain bundles of native outcome claims, not a second Direct liability basis.
+
+## Manifest-selected venue policy
+
+The signed `fee_config` is the SHA-256 digest of one exact 88-byte
+`VenueFeePolicyV2`, not an address supplied by a matcher. The policy is a
+canonical immutable raw record under schema/release ID
+`VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2`; its address is derived from
+`[b"dclutch-raw-record-v1", schema_release_id, fee_config]`. Every register and
+settlement frame carries both that record and the Market's immutable capability
+manifest. The adapter hashes and hostile-decodes both, checks the manifest hash
+against Market identity, requires the unique founding entry selected by
+`fee_config`, and verifies policy Market, generation, fee rate, and recipient.
+This makes policy selection a Market-founding fact rather than a caller-shaped
+program-owned account assertion.
 
 ## Rent and RentCredit
 
@@ -117,11 +139,13 @@ beneficiary.
 
 Every full fill, cancellation, expiry, invalidated-record unwind, and root close
 classifies each closed program or token account independently.
-`terminal_rent_transition_v2` names the authenticated rent principal and every
-excess lamport as an `unclassified_donation`; their sum goes to the persisted
+`terminal_rent_transition_v2` names the portion up to the current Rent minimum
+as rent reserve and every excess lamport as an `unclassified_donation`; their
+sum goes to the persisted
 refund authority's canonical RentCredit. Nothing goes to the closer or an
 arbitrary sink, and donated lamports are not called fees, rent, revenue, or
-reserve capital.
+reserve capital. A Rent increase cannot strand an older underfunded source: in
+that case its entire observed balance is rent reserve and still closes.
 
 `dclutch-rent-contract` is the sole owner of that permanent credit. Direct
 hostile-decodes its exact 48-byte `RentCreditV1`, validates the immutable
@@ -143,7 +167,7 @@ payout addresses.
 | Maker replay root | 144 | header 16 + Market 32 + generation 8 + maker 32 + next nonce 8 + live count 8 + minimum-live nonce 8 + payer 32 |
 | Live intent | 304 | header 16 + intent 232 + filled 8 + reserved claims 8 + reserved collateral 8 + payer 32 |
 | Cancel message | 96 | header 16 + Market 32 + generation 8 + maker 32 + nonce 8 |
-| Venue fee policy | 120 | header 16 + Market 32 + generation 8 + config 32 + recipient 32 |
+| Venue fee policy | 88 | header/fee rate 16 + Market 32 + generation 8 + recipient 32 |
 
 The common adapter header is 16 bytes. Registration is `16 + 232 = 248`;
 cancellation is `16 + 96 = 112`; expiry and replay closes are 16; registered
@@ -159,22 +183,22 @@ have separate public codecs.
 
 | Action | Instruction accounts | Required shape summary |
 |---|---:|---|
-| Register Buy | 15 | System payer, RentCredit, Market, Realm, policy, root, record, escrow, Position, source, mint, token, System, Rent, Instructions |
-| Register Sell | 10 | System payer, RentCredit, Market, policy, root, record, Position, System, Rent, Instructions |
+| Register Buy | 16 | System payer, RentCredit, writable Market, Realm, policy, manifest, root, record, escrow, Position, source, mint, token, System, Rent, Instructions |
+| Register Sell | 11 | System payer, RentCredit, writable Market, policy, manifest, root, record, Position, System, Rent, Instructions |
 | Cancel Buy | 13 | Market, Realm, root, record, escrow, Position, refund source, RentCredit, mint, token, System, Rent, Instructions |
 | Cancel Sell | 8 | Market, root, record, Position, RentCredit, System, Rent, Instructions |
 | Expire Buy | 12 | Cancel Buy without Instructions |
 | Expire Sell | 7 | Cancel Sell without Instructions |
-| Ordinary | 19 | token base 8 + persisted Sell 5 + persisted Buy 6 |
-| Split N | `10 + 6N` | writable Market/vault, Realm/mint/token/Custody base + N Buy custody groups |
-| Merge N | `10 + 5N` | writable Market/vault, Realm/mint/token/Custody base + N Sell custody groups |
+| Ordinary | 20 | token/policy/manifest base 9 + persisted Sell 5 + persisted Buy 6 |
+| Split N | `11 + 6N` | writable Market/vault, policy/manifest and Realm/mint/token/Custody base + N Buy custody groups |
+| Merge N | `11 + 5N` | writable Market/vault, policy/manifest and Realm/mint/token/Custody base + N Sell custody groups |
 | Close registration | 2 | writable Market and replay root |
-| Close root | 5 | Market, root, RentCredit, System, Rent |
+| Close root | 5 | writable Market, root, RentCredit, System, Rent |
 | Cancel through | 3 | Market, replay root, Instructions |
 | Close invalidated Buy | 12 | Expire Buy frame; no Clock meta exists |
 | Close invalidated Sell | 7 | Expire Sell frame; no Clock meta exists |
-| Inline ordinary | 17 | creation/signature/token base 11 + two root/Position/collateral groups |
-| Inline split/merge N=2 | `13 + 3N = 19` | inline base adds writable vault and Custody |
+| Inline ordinary | 18 | creation/signature/token/policy base 12 + two root/Position/collateral groups |
+| Inline split/merge N=2 | `14 + 3N = 20` | inline base adds manifest, writable vault, and Custody metadata |
 
 Every inline route carries InstructionsSysvar. No route carries Clock. RentCredit
 aliases are permitted only with other RentCredit roles; unsafe cross-role and
@@ -193,72 +217,78 @@ and 128 loaded-account locks.
 
 | Action | Ix accounts | Direct data | Ed25519 data | Serialized bytes | Locks |
 |---|---:|---:|---:|---:|---:|
-| Register Buy | 15 | 248 | 112 | 630 | 17 |
-| Register Sell | 10 | 248 | 112 | 620 | 12 |
+| Register Buy | 16 | 248 | 112 | 632 | 18 |
+| Register Sell | 11 | 248 | 112 | 622 | 13 |
 | Cancel Buy | 13 | 112 | 112 | 521 | 16 |
 | Cancel Sell | 8 | 112 | 112 | 511 | 11 |
 | Expire Buy | 12 | 16 | — | 276 | 14 |
 | Expire Sell | 7 | 16 | — | 266 | 9 |
-| Ordinary | 19 | 34 | — | 308 | 21 |
+| Ordinary | 20 | 34 | — | 310 | 22 |
 | Close registration | 2 | 16 | — | 256 | 4 |
 | Close root | 5 | 16 | — | 262 | 7 |
 | Cancel through | 3 | 112 | 112 | 501 | 6 |
 | Close invalidated Buy | 12 | 16 | — | 276 | 14 |
 | Close invalidated Sell | 7 | 16 | — | 266 | 9 |
-| Inline ordinary | 17 | 498 | 222 | 995 | 19 |
-| Inline complement N=2 | 19 | 506 | 222 | 1,007 | 21 |
+| Inline ordinary | 18 | 498 | 222 | 997 | 20 |
+| Inline complement N=2 | 20 | 506 | 222 | 1,009 | 22 |
 
 Registered complete-set geometry remains within both physical limits:
 
 | N | Split accounts | Split bytes | Split locks | Merge accounts | Merge bytes | Merge locks |
 |---:|---:|---:|---:|---:|---:|---:|
-| 2 | 22 | 322 | 24 | 20 | 318 | 22 |
-| 3 | 28 | 343 | 30 | 25 | 337 | 27 |
-| 4 | 34 | 364 | 36 | 30 | 356 | 32 |
-| 5 | 40 | 385 | 42 | 35 | 375 | 37 |
-| 6 | 46 | 406 | 48 | 40 | 394 | 42 |
-| 7 | 52 | 427 | 54 | 45 | 413 | 47 |
-| 8 | 58 | 448 | 60 | 50 | 432 | 52 |
-| 9 | 64 | 469 | 66 | 55 | 451 | 57 |
-| 10 | 70 | 490 | 72 | 60 | 470 | 62 |
-| 11 | 76 | 511 | 78 | 65 | 489 | 67 |
-| 12 | 82 | 533 | 84 | 70 | 509 | 72 |
-| 13 | 88 | 554 | 90 | 75 | 528 | 77 |
-| 14 | 94 | 575 | 96 | 80 | 547 | 82 |
-| 15 | 100 | 596 | 102 | 85 | 566 | 87 |
-| 16 | 106 | 617 | 108 | 90 | 585 | 92 |
+| 2 | 23 | 324 | 25 | 21 | 320 | 23 |
+| 3 | 29 | 345 | 31 | 26 | 339 | 28 |
+| 4 | 35 | 366 | 37 | 31 | 358 | 33 |
+| 5 | 41 | 387 | 43 | 36 | 377 | 38 |
+| 6 | 47 | 408 | 49 | 41 | 396 | 43 |
+| 7 | 53 | 429 | 55 | 46 | 415 | 48 |
+| 8 | 59 | 450 | 61 | 51 | 434 | 53 |
+| 9 | 65 | 471 | 67 | 56 | 453 | 58 |
+| 10 | 71 | 492 | 73 | 61 | 472 | 63 |
+| 11 | 77 | 513 | 79 | 66 | 491 | 68 |
+| 12 | 83 | 535 | 85 | 71 | 511 | 73 |
+| 13 | 89 | 556 | 91 | 76 | 530 | 78 |
+| 14 | 95 | 577 | 97 | 81 | 549 | 83 |
+| 15 | 101 | 598 | 103 | 86 | 568 | 88 |
+| 16 | 107 | 619 | 109 | 91 | 587 | 93 |
 
-Inline complementary N=2 fits at 1,007 bytes. N=3 is 1,364 bytes and refuses.
-The exact N=2..16 reference sequence is `1007, 1364, 1721, 2078, 2435, 2792,
-3149, 3506, 3863, 4220, 4577, 4934, 5291, 5648, 6005`. Independently, even a
+Inline complementary N=2 fits at 1,009 bytes. N=3 is 1,366 bytes and refuses.
+The exact N=2..16 reference sequence is `1009, 1366, 1723, 2080, 2437, 2794,
+3151, 3508, 3865, 4222, 4579, 4936, 5293, 5650, 6007`. Independently, even a
 perfectly shared message leaves N=16 native Ed25519 scaffolding at
 `2 + 16*(14+32+64) = 1,762` bytes before message or transaction framing.
 Registered custody is therefore required for complementary N>=3. Ordinary and
 N=2 retain intentional rent-free inline execution.
 
-The adapter must still inspect the live serialized transaction and refuse above
-1,232 bytes or 128 locks. Adding compute-budget instructions or changing ALT
-placement changes bytes; these values define the pinned reference profile, not
-permission to skip live physical admission.
+The SVM transaction loader, not an invoked program, owns the live 1,232-byte
+packet and 128-lock admission. InstructionsSysvar does not reveal static versus
+ALT placement or the serialized transaction, so the Direct program cannot
+reconstruct those facts. It enforces exact action frames and admits inline
+complement only at N=2; operators must construct and measure the pinned v0
+profile. Adding compute-budget instructions or changing ALT placement changes
+bytes and must be remeasured before submission.
 
 ## Remaining SBF seam
 
 The kernel now describes sufficient action routing, account roles, phase/slot
-policy, source delegation, escrow authority, custody, RentCredit beneficiary,
-and close effects, but it does not execute them. The SBF adapter must still:
+policy, manifest-selected venue policy, replay-root Market-child accounting,
+source delegation, escrow authority, custody, RentCredit beneficiary, and close
+effects, but it does not execute them. The SBF adapter must still:
 
-- decode canonical Market/Realm/Position/policy/root/record state and PDA bumps;
+- decode canonical Market/Realm/Position/policy/manifest/root/record state,
+  content hashes, raw-record identities, and PDA bumps;
 - use trusted `Clock::get()`, decode the 48-byte `RentCreditV1`, verify its
   `dclutch-rent-contract` owner, and derive its key from the projected domain,
   refund authority, and persisted bump;
 - inspect InstructionsSysvar and require successful adjacent native Ed25519;
-- decode Token/Token-2022 owner, mint, delegate, allowance, escrow, vault, and
-  Custody authority fields;
+- decode Token/Token-2022 owner, mint, delegate, allowance, and escrow fields;
+  authenticate Custody metadata and the Market PDA as actual Vault authority;
 - create/close accounts, invoke token transfers with exact PDA seeds, classify
   account and token-account rent independently, then apply the exact
   `SourceCloseCreditPlanV1` source-zero/credit-delta postconditions; and
-- apply Market/Position/root/record/token effects with rollback on any refusal
-  or failed CPI.
+- atomically register/retire replay roots as Market children, apply
+  split/merge to the Market ledger, and apply Position/root/record/token effects
+  with rollback on any refusal or failed CPI.
 
 Until that adapter exists and is exercised, Direct is not deployed or an
 end-to-end trading implementation.

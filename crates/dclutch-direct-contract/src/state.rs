@@ -41,7 +41,16 @@ pub const VENUE_FEE_POLICY_MAGIC_V2: [u8; 8] = *b"DCLTFEE2";
 /// Venue-fee-policy schema version.
 pub const VENUE_FEE_POLICY_SCHEMA_VERSION_V2: u16 = 2;
 /// Exact venue-fee-policy width.
-pub const VENUE_FEE_POLICY_BYTES_V2: usize = 120;
+pub const VENUE_FEE_POLICY_BYTES_V2: usize = 88;
+/// Immutable-record schema/release identity for one Direct V2 venue policy.
+///
+/// This is SHA-256 of `dclutch/schema/direct-venue-fee-policy-v2`. The SBF
+/// adapter derives the raw-record PDA from this identity and the SHA-256 digest
+/// of the exact 88 policy bytes.
+pub const VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2: [u8; 32] = [
+    0xd0, 0xcb, 0x14, 0x80, 0xe1, 0xb3, 0xf5, 0xf6, 0x56, 0x23, 0xa9, 0xb7, 0x3d, 0x0b, 0xc4, 0x83,
+    0x27, 0xca, 0x96, 0xa4, 0x10, 0xdb, 0x5f, 0x32, 0xae, 0x30, 0x8d, 0xc1, 0xbf, 0xe7, 0x3d, 0xd6,
+];
 /// Domain preceding Market, generation, and maker in replay-root PDA seeds.
 pub const MAKER_REPLAY_ROOT_PDA_DOMAIN_V2: &[u8] = b"dclutch/direct-replay/v2";
 /// Domain preceding Market, generation, maker, and nonce in live-record PDA seeds.
@@ -88,8 +97,7 @@ const FEE_BPS_OFFSET: usize = 10;
 const FEE_RESERVED_OFFSET: usize = 12;
 const FEE_MARKET_OFFSET: usize = 16;
 const FEE_GENERATION_OFFSET: usize = 48;
-const FEE_CONFIG_RECORD_OFFSET: usize = 56;
-const FEE_RECIPIENT_OFFSET: usize = 88;
+const FEE_RECIPIENT_OFFSET: usize = 56;
 
 /// Signed direction of a Direct intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1065,6 +1073,10 @@ pub struct RegistrationInputV2<const N: usize> {
     pub buy_debit_authority: Option<adapter::BuyDebitAuthorityV2>,
     /// Canonical live-record PDA bump.
     pub record_bump: u8,
+    /// Hostile-decoded immutable venue policy.
+    pub fee_policy: VenueFeePolicyV2,
+    /// SHA-256 digest of the exact policy bytes, authenticated through the Market manifest.
+    pub fee_config_digest: [u8; 32],
     /// Current native Position.
     pub position: PositionV1<N>,
 }
@@ -1085,6 +1097,8 @@ pub fn register_intent_v2<const N: usize>(
         collateral_mint,
         buy_debit_authority,
         record_bump,
+        fee_policy,
+        fee_config_digest,
         mut position,
     } = input;
     width(N)?;
@@ -1098,6 +1112,7 @@ pub fn register_intent_v2<const N: usize>(
         return Err(Error::IntentExpired);
     }
     accounts.validate(intent)?;
+    validate_venue_policy_selection_v2(intent, fee_policy, fee_config_digest)?;
     nonzero(&system_payer)?;
     position_matches(position, intent)?;
     let outcome = usize::from(intent.outcome);
@@ -1583,7 +1598,6 @@ pub fn close_invalidated_intent_v1<const N: usize>(
 pub struct VenueFeePolicyV2 {
     market: [u8; 32],
     generation: u64,
-    config: [u8; 32],
     recipient: [u8; 32],
     bps: u16,
 }
@@ -1593,12 +1607,10 @@ impl VenueFeePolicyV2 {
     pub fn new(
         market: [u8; 32],
         generation: u64,
-        config: [u8; 32],
         recipient: [u8; 32],
         fee_basis_points: u16,
     ) -> Result<Self> {
         nonzero(&market)?;
-        nonzero(&config)?;
         nonzero(&recipient)?;
         if u64::from(fee_basis_points) > FEE_BASIS_POINTS_DENOMINATOR {
             return Err(Error::InvalidFeeRate);
@@ -1606,7 +1618,6 @@ impl VenueFeePolicyV2 {
         Ok(Self {
             market,
             generation,
-            config,
             recipient,
             bps: fee_basis_points,
         })
@@ -1626,7 +1637,6 @@ impl VenueFeePolicyV2 {
         Self::new(
             array(bytes, FEE_MARKET_OFFSET)?,
             u64::from_le_bytes(array(bytes, FEE_GENERATION_OFFSET)?),
-            array(bytes, FEE_CONFIG_RECORD_OFFSET)?,
             array(bytes, FEE_RECIPIENT_OFFSET)?,
             u16::from_le_bytes(array(bytes, FEE_BPS_OFFSET)?),
         )
@@ -1646,7 +1656,6 @@ impl VenueFeePolicyV2 {
             FEE_GENERATION_OFFSET,
             &self.generation.to_le_bytes(),
         );
-        put(output, FEE_CONFIG_RECORD_OFFSET, &self.config);
         put(output, FEE_RECIPIENT_OFFSET, &self.recipient);
         Ok(())
     }
@@ -1660,17 +1669,30 @@ impl VenueFeePolicyV2 {
     }
 }
 
-pub(crate) fn venue_authorized(
+/// Require one exact content-addressed policy selected by the signed intent.
+pub fn validate_venue_policy_selection_v2(
     intent: DirectIntentV2,
     policy: VenueFeePolicyV2,
-    recipient_account: [u8; 32],
+    fee_config_digest: [u8; 32],
 ) -> Result<()> {
     if policy.market != intent.market
         || policy.generation != intent.generation
-        || policy.config != intent.fee_config
+        || fee_config_digest != intent.fee_config
         || policy.bps != intent.fee_bps
-        || policy.recipient != recipient_account
     {
+        return Err(Error::VenueUnauthorized);
+    }
+    Ok(())
+}
+
+pub(crate) fn venue_authorized(
+    intent: DirectIntentV2,
+    policy: VenueFeePolicyV2,
+    fee_config_digest: [u8; 32],
+    recipient_account: [u8; 32],
+) -> Result<()> {
+    validate_venue_policy_selection_v2(intent, policy, fee_config_digest)?;
+    if policy.recipient != recipient_account {
         return Err(Error::VenueUnauthorized);
     }
     Ok(())
@@ -1707,7 +1729,7 @@ fn maximum_buy_reserve_for(intent: DirectIntentV2, quantity: u64) -> Result<u64>
 /// Exact rent consequences of fully closing one live account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TerminalRentTransitionV2 {
-    /// Authenticated account/token-account rent principal.
+    /// Observed source lamports up to the current account rent minimum.
     pub rent_principal: u64,
     /// Lamports above principal, explicitly unclassified as economic revenue.
     pub unclassified_donation: u64,
@@ -1745,20 +1767,22 @@ impl DirectRentCreditClosePlanV1 {
     }
 }
 
-/// Classify a close balance without reclassifying donated lamports as rent;
-/// the full returned total is for the persisted payer's canonical RentCredit.
+/// Classify a close balance without reclassifying donated lamports as rent.
+///
+/// An older source may hold less than today's rent minimum after the schedule
+/// changes. Its full balance remains returnable principal rather than becoming
+/// an uncloseable account. The full returned total is always for the persisted
+/// payer's canonical RentCredit.
 pub fn terminal_rent_transition_v2(
     current_lamports: u64,
-    authenticated_rent_principal: u64,
+    current_rent_minimum: u64,
 ) -> Result<TerminalRentTransitionV2> {
-    if authenticated_rent_principal == 0 || current_lamports < authenticated_rent_principal {
-        return Err(Error::InvalidRentTransition);
-    }
+    let rent_principal = core::cmp::min(current_lamports, current_rent_minimum);
     Ok(TerminalRentTransitionV2 {
-        rent_principal: authenticated_rent_principal,
+        rent_principal,
         unclassified_donation: current_lamports
-            .checked_sub(authenticated_rent_principal)
-            .ok_or(Error::InvalidRentTransition)?,
+            .checked_sub(rent_principal)
+            .ok_or(Error::ArithmeticOverflow)?,
         rent_credit_total: current_lamports,
     })
 }
@@ -1775,13 +1799,13 @@ pub fn terminal_rent_credit_close_plan_v1(
     rent_credit_account_data: &[u8],
     derived_pda_bump: u8,
     source_before: u64,
-    authenticated_rent_principal: u64,
+    current_rent_minimum: u64,
     rent_credit_before: u64,
 ) -> Result<DirectRentCreditClosePlanV1> {
     let authority = RefundAuthority::new(persisted_refund_authority)?;
     let rent_credit = RentCreditV1::decode(rent_credit_account_data)?;
     rent_credit.validate_binding(authority, derived_pda_bump)?;
-    let classification = terminal_rent_transition_v2(source_before, authenticated_rent_principal)?;
+    let classification = terminal_rent_transition_v2(source_before, current_rent_minimum)?;
     let source_close = SourceCloseCreditPlanV1::new(
         source_before,
         rent_credit_before,

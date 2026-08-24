@@ -92,7 +92,7 @@ fn position(owner: u8, balances: [u64; 2]) -> Result<PositionV1<2>> {
 }
 
 fn policy(bps: u16) -> Result<VenueFeePolicyV2> {
-    VenueFeePolicyV2::new(key(7), 3, key(8), key(99), bps)
+    VenueFeePolicyV2::new(key(7), 3, key(99), bps)
 }
 
 fn buy_reserve(value: DirectIntentV2) -> u64 {
@@ -206,6 +206,8 @@ fn register(
         },
         buy_debit_authority: buy_debit,
         record_bump: 9,
+        fee_policy: policy(value.fee_basis_points())?,
+        fee_config_digest: key(8),
         position: position(value.maker()[0], balances)?,
     })
 }
@@ -231,6 +233,20 @@ fn fixed_layout_round_trips_one_semantic_intent_root_and_record() -> Result<()> 
     assert_eq!(
         DirectIntentRecordV2::decode(&record_bytes)?,
         registration.record
+    );
+    let venue_policy = policy(100)?;
+    let mut policy_bytes = [0; VENUE_FEE_POLICY_BYTES_V2];
+    venue_policy.encode(&mut policy_bytes)?;
+    assert_eq!(VenueFeePolicyV2::decode(&policy_bytes)?, venue_policy);
+    assert_eq!(VENUE_FEE_POLICY_BYTES_V2, 88);
+    assert_eq!(
+        VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2[0..4],
+        [0xd0, 0xcb, 0x14, 0x80]
+    );
+    validate_venue_policy_selection_v2(value, policy(100)?, key(8))?;
+    assert_eq!(
+        validate_venue_policy_selection_v2(value, policy(100)?, key(9)),
+        Err(Error::VenueUnauthorized)
     );
     assert_eq!(registration.reserved_collateral_debit, 6);
     Ok(())
@@ -454,6 +470,7 @@ fn ordinary_partial_fills_use_only_persisted_custody_and_close_cleanly() -> Resu
         fill: 5,
         execution_price: 600_000,
         fee_policy: policy(0)?,
+        fee_config_digest: key(8),
         fee_recipient_account: key(99),
     })?;
     assert_eq!(first.buyer_position.balances(), &[5, 0]);
@@ -490,6 +507,7 @@ fn ordinary_partial_fills_use_only_persisted_custody_and_close_cleanly() -> Resu
             fill: 5,
             execution_price: 600_000,
             fee_policy: policy(0)?,
+            fee_config_digest: key(8),
             fee_recipient_account: key(99),
         }
     })?;
@@ -683,6 +701,7 @@ fn complementary_paths_are_custodied_conservative_and_atomic_on_refusal() -> Res
         fill: 10,
         execution_prices: [500_000, 500_000],
         fee_policy: policy(0)?,
+        fee_config_digest: key(8),
         fee_recipient_account: key(99),
     };
     let split = settle_split_v2(split_input)?;
@@ -712,6 +731,7 @@ fn complementary_paths_are_custodied_conservative_and_atomic_on_refusal() -> Res
         fill: 10,
         execution_prices: [500_000, 500_000],
         fee_policy: policy(0)?,
+        fee_config_digest: key(8),
         fee_recipient_account: key(99),
     })?;
     assert_eq!(merge.seller_gross_collateral_credits, [5, 5]);
@@ -785,6 +805,7 @@ fn inline_fok_ioc_consumes_same_nonce_without_live_rent_and_cross_mode_replay_re
         fill: 5,
         execution_price: 600_000,
         fee_policy: policy(0)?,
+        fee_config_digest: key(8),
         fee_recipient_account: key(99),
     })?;
     assert_eq!(settled.seller_position.balances(), &[0, 0]);
@@ -823,6 +844,7 @@ fn inline_fok_ioc_consumes_same_nonce_without_live_rent_and_cross_mode_replay_re
                 fill: 5,
                 execution_price: 600_000,
                 fee_policy: policy(0)?,
+                fee_config_digest: key(8),
                 fee_recipient_account: key(99),
             }
         }),
@@ -893,6 +915,7 @@ fn inline_complementary_n2_fits_and_n3_is_physically_refused() -> Result<()> {
         fill: 10,
         execution_prices: [500_000, 500_000],
         fee_policy: policy(0)?,
+        fee_config_digest: key(8),
         fee_recipient_account: key(99),
     })?;
     assert_eq!(settled.gross_collateral, [5, 5]);
@@ -906,9 +929,9 @@ fn inline_complementary_n2_fits_and_n3_is_physically_refused() -> Result<()> {
         measured_settlement_envelope_v2(AdapterActionV2::InlineSplit, 3),
         Err(Error::InvalidInlineWidth)
     );
-    assert_eq!(measured_inline_complementary_reference_v2(2)?, 1_007);
-    assert_eq!(measured_inline_complementary_reference_v2(3)?, 1_364);
-    assert_eq!(measured_inline_complementary_reference_v2(16)?, 6_005);
+    assert_eq!(measured_inline_complementary_reference_v2(2)?, 1_009);
+    assert_eq!(measured_inline_complementary_reference_v2(3)?, 1_366);
+    assert_eq!(measured_inline_complementary_reference_v2(16)?, 6_007);
     Ok(())
 }
 
@@ -940,6 +963,7 @@ fn aliases_mixed_modes_and_packet_overflow_refuse() -> Result<()> {
             fill: 1,
             execution_price: PRICE_SCALE,
             fee_policy: policy(0)?,
+            fee_config_digest: key(8),
             fee_recipient_account: key(99),
         }),
         Err(Error::Alias)
@@ -958,9 +982,9 @@ fn aliases_mixed_modes_and_packet_overflow_refuse() -> Result<()> {
     );
 
     let split16 = measured_settlement_envelope_v2(AdapterActionV2::Split, 16)?;
-    assert_eq!(split16.instruction_accounts, 106);
-    assert_eq!(split16.total_account_locks, 108);
-    assert_eq!(split16.serialized_transaction_bytes, 617);
+    assert_eq!(split16.instruction_accounts, 107);
+    assert_eq!(split16.total_account_locks, 109);
+    assert_eq!(split16.serialized_transaction_bytes, 619);
     assert!(split16.serialized_transaction_bytes < SOLANA_PACKET_DATA_SIZE_3_0);
     let packet = PacketAdmissionV2 {
         serialized_transaction_bytes: split16.serialized_transaction_bytes,
@@ -1013,8 +1037,12 @@ fn rent_principal_and_donation_bind_to_exact_permanent_credit() -> Result<()> {
         .validate_post(0, 112)
         .expect("exact source close");
     assert_eq!(
-        terminal_rent_transition_v2(8, 9),
-        Err(Error::InvalidRentTransition)
+        terminal_rent_transition_v2(8, 9)?,
+        TerminalRentTransitionV2 {
+            rent_principal: 8,
+            unclassified_donation: 0,
+            rent_credit_total: 8,
+        }
     );
     assert_eq!(
         terminal_rent_credit_close_plan_v1(key(230), &rent_credit.to_bytes(), 17, 12, 9, 100,),
@@ -1095,6 +1123,8 @@ fn hostile_action_routing_phase_and_slot_matrix_refuse() -> Result<()> {
             collateral_mint: Some(key(6)),
             buy_debit_authority: Some(buy_authority(value, 1)),
             record_bump: 9,
+            fee_policy: policy(value.fee_basis_points())?,
+            fee_config_digest: key(8),
             position: position(1, [0, 0])?,
         }),
         Err(Error::IntentExpired)
@@ -1168,18 +1198,18 @@ fn token_delegate_and_live_record_escrow_authority_are_exact() -> Result<()> {
 fn corrected_account_frames_are_action_specific_and_rent_credit_alias_safe() -> Result<()> {
     assert_eq!(
         adapter::account_count_v2(AdapterActionV2::RegisterBuy, 1)?,
-        15
+        16
     );
     assert_eq!(
         adapter::account_count_v2(AdapterActionV2::RegisterSell, 1)?,
-        10
+        11
     );
-    assert_eq!(adapter::account_count_v2(AdapterActionV2::Ordinary, 2)?, 19);
-    assert_eq!(adapter::account_count_v2(AdapterActionV2::Split, 16)?, 106);
-    assert_eq!(adapter::account_count_v2(AdapterActionV2::Merge, 16)?, 90);
+    assert_eq!(adapter::account_count_v2(AdapterActionV2::Ordinary, 2)?, 20);
+    assert_eq!(adapter::account_count_v2(AdapterActionV2::Split, 16)?, 107);
+    assert_eq!(adapter::account_count_v2(AdapterActionV2::Merge, 16)?, 91);
     assert_eq!(
         adapter::account_count_v2(AdapterActionV2::InlineOrdinary, 2)?,
-        17
+        18
     );
     assert_eq!(
         adapter::account_count_v2(AdapterActionV2::CancelThrough, 1)?,
@@ -1190,11 +1220,11 @@ fn corrected_account_frames_are_action_specific_and_rent_credit_alias_safe() -> 
         12
     );
     assert_eq!(
-        adapter::account_role_v2(AdapterActionV2::InlineOrdinary, 2, 10)?,
+        adapter::account_role_v2(AdapterActionV2::InlineOrdinary, 2, 11)?,
         adapter::AccountRoleV2::InstructionsSysvar
     );
     assert_eq!(
-        adapter::account_role_v2(AdapterActionV2::InlineSplit, 2, 6)?,
+        adapter::account_role_v2(AdapterActionV2::InlineSplit, 2, 7)?,
         adapter::AccountRoleV2::Custody
     );
 
@@ -1202,14 +1232,14 @@ fn corrected_account_frames_are_action_specific_and_rent_credit_alias_safe() -> 
         key: [0; 32],
         is_signer: false,
         is_writable: false,
-    }; 22];
+    }; 23];
     for (index, meta) in split.iter_mut().enumerate() {
         meta.key = key(u8::try_from(index + 1).map_err(|_| Error::ArithmeticOverflow)?);
-        meta.is_writable = matches!(index, 0 | 3 | 5 | 10..=21);
+        meta.is_writable = matches!(index, 0 | 4 | 6 | 11..=22);
     }
-    split[8].key = [0; 32];
+    split[9].key = [0; 32];
     adapter::validate_account_frame_v2(AdapterActionV2::Split, 2, &split)?;
-    split[21].key = split[15].key;
+    split[22].key = split[16].key;
     adapter::validate_account_frame_v2(AdapterActionV2::Split, 2, &split)?;
     split[0].is_writable = false;
     assert_eq!(
@@ -1217,13 +1247,66 @@ fn corrected_account_frames_are_action_specific_and_rent_credit_alias_safe() -> 
         Err(Error::InvalidAccountFrame)
     );
 
-    let inline = adapter::measured_action_envelope_v2(AdapterActionV2::InlineOrdinary, 2)?;
-    assert_eq!(inline.instruction_accounts, 17);
-    assert_eq!(inline.total_account_locks, 19);
-    assert_eq!(inline.serialized_transaction_bytes, 995);
+    let mut register = [adapter::AdapterAccountMetaV2 {
+        key: [0; 32],
+        is_signer: false,
+        is_writable: false,
+    }; 16];
+    for (index, meta) in register.iter_mut().enumerate() {
+        meta.key = key(u8::try_from(index + 40).map_err(|_| Error::ArithmeticOverflow)?);
+        meta.is_signer = index == 0;
+        meta.is_writable = matches!(index, 0 | 2 | 6..=8 | 10);
+    }
+    register[13].key = [0; 32];
+    adapter::validate_account_frame_v2(AdapterActionV2::RegisterBuy, 1, &register)?;
+    register[2].is_writable = false;
+    assert_eq!(
+        adapter::validate_account_frame_v2(AdapterActionV2::RegisterBuy, 1, &register),
+        Err(Error::InvalidAccountFrame)
+    );
+
+    let mut inline = [adapter::AdapterAccountMetaV2 {
+        key: [0; 32],
+        is_signer: false,
+        is_writable: false,
+    }; 18];
+    for (index, meta) in inline.iter_mut().enumerate() {
+        meta.key = key(u8::try_from(index + 70).map_err(|_| Error::ArithmeticOverflow)?);
+        meta.is_signer = index == 0;
+        meta.is_writable = matches!(index, 0 | 2 | 6 | 12..=17);
+    }
+    inline[9].key = [0; 32];
+    adapter::validate_account_frame_v2(AdapterActionV2::InlineOrdinary, 2, &inline)?;
+    inline[2].is_writable = false;
+    assert_eq!(
+        adapter::validate_account_frame_v2(AdapterActionV2::InlineOrdinary, 2, &inline),
+        Err(Error::InvalidAccountFrame)
+    );
+
+    let mut close_root = [adapter::AdapterAccountMetaV2 {
+        key: [0; 32],
+        is_signer: false,
+        is_writable: false,
+    }; 5];
+    for (index, meta) in close_root.iter_mut().enumerate() {
+        meta.key = key(u8::try_from(index + 100).map_err(|_| Error::ArithmeticOverflow)?);
+        meta.is_writable = matches!(index, 0..=2);
+    }
+    close_root[3].key = [0; 32];
+    adapter::validate_account_frame_v2(AdapterActionV2::CloseReplayRoot, 1, &close_root)?;
+    close_root[0].is_writable = false;
+    assert_eq!(
+        adapter::validate_account_frame_v2(AdapterActionV2::CloseReplayRoot, 1, &close_root),
+        Err(Error::InvalidAccountFrame)
+    );
+
+    let inline_envelope = adapter::measured_action_envelope_v2(AdapterActionV2::InlineOrdinary, 2)?;
+    assert_eq!(inline_envelope.instruction_accounts, 18);
+    assert_eq!(inline_envelope.total_account_locks, 20);
+    assert_eq!(inline_envelope.serialized_transaction_bytes, 997);
     let split16 = adapter::measured_action_envelope_v2(AdapterActionV2::Split, 16)?;
-    assert_eq!(split16.total_account_locks, 108);
-    assert_eq!(split16.serialized_transaction_bytes, 617);
+    assert_eq!(split16.total_account_locks, 109);
+    assert_eq!(split16.serialized_transaction_bytes, 619);
     let cancel_through = adapter::measured_action_envelope_v2(AdapterActionV2::CancelThrough, 1)?;
     assert_eq!(cancel_through.serialized_transaction_bytes, 501);
     assert_eq!(cancel_through.total_account_locks, 6);
@@ -1308,6 +1391,7 @@ fn maker_cancel_through_is_o1_and_permissionless_unwind_preserves_assets() -> Re
             fill: 5,
             execution_price: PRICE_SCALE,
             fee_policy: policy(0)?,
+            fee_config_digest: key(8),
             fee_recipient_account: key(99),
         }),
         Err(Error::IntentInvalidated)

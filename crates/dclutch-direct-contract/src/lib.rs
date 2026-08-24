@@ -46,10 +46,11 @@ pub use state::{
     MAKER_REPLAY_ROOT_SCHEMA_VERSION_V2, MakerReplayRootV2, ParticipantAccountsV2,
     RecordAfterFillV2, RegistrationInputV2, RegistrationV2, ReplayRegistrationStatusV2,
     ReplayRootStateV2, RootClosureV2, Side, TerminalRentTransitionV2, VENUE_FEE_POLICY_BYTES_V2,
-    VENUE_FEE_POLICY_MAGIC_V2, VENUE_FEE_POLICY_SCHEMA_VERSION_V2, VenueFeePolicyV2,
-    cancel_intent_v2, cancel_through_v1, close_invalidated_intent_v1, close_replay_registration_v2,
-    expire_intent_v2, prepare_replay_root_close_v2, register_intent_v2,
-    terminal_rent_credit_close_plan_v1, terminal_rent_transition_v2,
+    VENUE_FEE_POLICY_MAGIC_V2, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2,
+    VENUE_FEE_POLICY_SCHEMA_VERSION_V2, VenueFeePolicyV2, cancel_intent_v2, cancel_through_v1,
+    close_invalidated_intent_v1, close_replay_registration_v2, expire_intent_v2,
+    prepare_replay_root_close_v2, register_intent_v2, terminal_rent_credit_close_plan_v1,
+    terminal_rent_transition_v2, validate_venue_policy_selection_v2,
 };
 
 /// Exact scaled integer price denominator.
@@ -178,8 +179,6 @@ pub enum Error {
     PacketEnvelopeExceeded,
     /// Signature, LUT, instruction data, or account profile was noncanonical.
     PacketProfileMismatch,
-    /// Live-account rent inputs were not monotone or solvent.
-    InvalidRentTransition,
     /// The canonical RentCredit record, binding, or exact close-credit plan refused.
     RentCreditContract(dclutch_rent_contract::Error),
 }

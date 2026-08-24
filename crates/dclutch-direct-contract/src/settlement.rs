@@ -48,6 +48,8 @@ pub struct InlineOrdinaryMatchV2<const N: usize> {
     pub execution_price: u64,
     /// Canonical fee policy.
     pub fee_policy: VenueFeePolicyV2,
+    /// Manifest-authenticated SHA-256 digest of the exact policy bytes.
+    pub fee_config_digest: [u8; 32],
     /// Actual fee recipient token account.
     pub fee_recipient_account: [u8; 32],
 }
@@ -107,8 +109,18 @@ pub fn settle_inline_ordinary_v2<const N: usize>(
     if ask.maker() == bid.maker() || inline_alias(input.seller_accounts, input.buyer_accounts) {
         return Err(Error::Alias);
     }
-    venue_authorized(ask, input.fee_policy, input.fee_recipient_account)?;
-    venue_authorized(bid, input.fee_policy, input.fee_recipient_account)?;
+    venue_authorized(
+        ask,
+        input.fee_policy,
+        input.fee_config_digest,
+        input.fee_recipient_account,
+    )?;
+    venue_authorized(
+        bid,
+        input.fee_policy,
+        input.fee_config_digest,
+        input.fee_recipient_account,
+    )?;
     if input.execution_price < ask.limit_price() || input.execution_price > bid.limit_price() {
         return Err(Error::PriceIncompatible);
     }
@@ -186,6 +198,8 @@ pub struct InlineComplementaryMatchV2<const N: usize> {
     pub execution_prices: [u64; N],
     /// Canonical fee policy.
     pub fee_policy: VenueFeePolicyV2,
+    /// Manifest-authenticated SHA-256 digest of the exact policy bytes.
+    pub fee_config_digest: [u8; 32],
     /// Actual fee recipient account.
     pub fee_recipient_account: [u8; 32],
 }
@@ -265,7 +279,12 @@ pub fn settle_inline_complementary_v2<const N: usize>(
                 return Err(Error::Alias);
             }
         }
-        venue_authorized(intent, input.fee_policy, input.fee_recipient_account)?;
+        venue_authorized(
+            intent,
+            input.fee_policy,
+            input.fee_config_digest,
+            input.fee_recipient_account,
+        )?;
         let price = input.execution_prices[index];
         match input.side {
             Side::Buy if price > intent.limit_price() => return Err(Error::PriceIncompatible),
@@ -386,6 +405,8 @@ pub struct OrdinaryMatchV2<const N: usize> {
     pub execution_price: u64,
     /// Canonical program-owned fee policy.
     pub fee_policy: VenueFeePolicyV2,
+    /// Manifest-authenticated SHA-256 digest of the exact policy bytes.
+    pub fee_config_digest: [u8; 32],
     /// Actual fee-recipient token account at canonical role.
     pub fee_recipient_account: [u8; 32],
 }
@@ -449,8 +470,18 @@ pub fn settle_ordinary_v2<const N: usize>(
     distinct_participants(&[input.seller_accounts, input.buyer_accounts])?;
     position_matches(input.seller_position, ask)?;
     position_matches(input.buyer_position, bid)?;
-    venue_authorized(ask, input.fee_policy, input.fee_recipient_account)?;
-    venue_authorized(bid, input.fee_policy, input.fee_recipient_account)?;
+    venue_authorized(
+        ask,
+        input.fee_policy,
+        input.fee_config_digest,
+        input.fee_recipient_account,
+    )?;
+    venue_authorized(
+        bid,
+        input.fee_policy,
+        input.fee_config_digest,
+        input.fee_recipient_account,
+    )?;
     if input.execution_price < ask.limit_price() || input.execution_price > bid.limit_price() {
         return Err(Error::PriceIncompatible);
     }
@@ -514,6 +545,8 @@ pub struct ComplementaryBuyMatchV2<const N: usize> {
     pub execution_prices: [u64; N],
     /// Canonical program-owned fee policy.
     pub fee_policy: VenueFeePolicyV2,
+    /// Manifest-authenticated SHA-256 digest of the exact policy bytes.
+    pub fee_config_digest: [u8; 32],
     /// Actual fee-recipient account.
     pub fee_recipient_account: [u8; 32],
 }
@@ -589,7 +622,12 @@ pub fn settle_split_v2<const N: usize>(
             input.collateral_mint,
         )?;
         position_matches(positions[index], intent)?;
-        venue_authorized(intent, input.fee_policy, input.fee_recipient_account)?;
+        venue_authorized(
+            intent,
+            input.fee_policy,
+            input.fee_config_digest,
+            input.fee_recipient_account,
+        )?;
         let price = input.execution_prices[index];
         if price > intent.limit_price() {
             return Err(Error::PriceIncompatible);
@@ -650,6 +688,8 @@ pub struct ComplementarySellMatchV2<const N: usize> {
     pub execution_prices: [u64; N],
     /// Canonical program-owned fee policy.
     pub fee_policy: VenueFeePolicyV2,
+    /// Manifest-authenticated SHA-256 digest of the exact policy bytes.
+    pub fee_config_digest: [u8; 32],
     /// Actual fee-recipient account.
     pub fee_recipient_account: [u8; 32],
 }
@@ -720,7 +760,12 @@ pub fn settle_merge_v2<const N: usize>(
         makers[index] = *intent.maker();
         input.seller_accounts[index].validate(intent)?;
         position_matches(input.seller_positions[index], intent)?;
-        venue_authorized(intent, input.fee_policy, input.fee_recipient_account)?;
+        venue_authorized(
+            intent,
+            input.fee_policy,
+            input.fee_config_digest,
+            input.fee_recipient_account,
+        )?;
         let price = input.execution_prices[index];
         if price < intent.limit_price() {
             return Err(Error::PriceIncompatible);
