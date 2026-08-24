@@ -705,4 +705,24 @@ mod tests {
             Err(Error::MismatchedBinding)
         );
     }
+
+    #[test]
+    fn current_obligation_close_decrements_only_the_exact_terminal_child() {
+        let (state, terminal) = terminal_graph();
+        let close = crate::prepare_dealer_series_obligation_close_v2(state, &terminal, 13)
+            .unwrap();
+        assert_eq!(close.state_after.series_obligation_children, 0);
+        assert_eq!(close.rent_payer_credit_lamports, 9);
+        assert_eq!(close.neutral_sink_credit_lamports, 4);
+        assert_eq!(
+            crate::prepare_dealer_series_obligation_close_v2(state, &terminal, 10),
+            Err(Error::InvalidPhase)
+        );
+        let mut substituted = terminal;
+        substituted.key.binding_account_id = id(56);
+        assert_eq!(
+            crate::prepare_dealer_series_obligation_close_v2(state, &substituted, 13),
+            Err(Error::MismatchedBinding)
+        );
+    }
 }

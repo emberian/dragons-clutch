@@ -453,6 +453,41 @@ pub fn prepare_dealer_series_obligation_close_v1(
     })
 }
 
+/// Close the counted current Product RootV2/LinkV2 terminal binding.
+///
+/// Product owns the LinkV2 terminal mutation. This pure plan may be applied
+/// only after the adapter hostile-reopens that exact postwrite and must be
+/// committed atomically with the StateV3 child decrement, refundable-principal
+/// credit, donation/surplus disposition, and physical `0xaf/v2` deletion.
+pub fn prepare_dealer_series_obligation_close_v2(
+    state: DealerStateV3,
+    binding: &DealerSeriesObligationBindingV2,
+    binding_lamports_before: u64,
+) -> Result<DealerSeriesObligationClosePlanV1> {
+    binding.validate()?;
+    let floor = add(
+        binding.rent.refundable_principal,
+        binding.rent.donation_floor,
+    )?;
+    if binding.phase != DealerSeriesObligationPhaseV1::Terminal
+        || binding_lamports_before < floor
+    {
+        return Err(Error::InvalidPhase);
+    }
+    let state_after = state.close_current_terminal_binding(binding)?;
+    Ok(DealerSeriesObligationClosePlanV1 {
+        state_after,
+        binding_account_id: binding.key.binding_account_id,
+        terminal_binding_id: binding.binding_id()?,
+        rent_payer: binding.rent.payer,
+        rent_payer_credit_lamports: binding.rent.refundable_principal,
+        neutral_sink: binding.rent.neutral_sink,
+        neutral_sink_credit_lamports: binding_lamports_before
+            .checked_sub(binding.rent.refundable_principal)
+            .ok_or(Error::ArithmeticOverflow)?,
+    })
+}
+
 impl DealerSeriesObligationKeyV1 {
     /// Validate live, pairwise-distinct physical/semantic owners and a
     /// nonzero Product generation.
