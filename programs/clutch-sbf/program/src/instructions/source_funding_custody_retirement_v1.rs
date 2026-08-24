@@ -34,6 +34,7 @@ pub(crate) struct SourceFundingCustodyRetirementAccountingV2 {
     pub(crate) pre_root_source_occurrence_id: ContentId,
     pub(crate) source_terminal_receipt_id: ContentId,
     pub(crate) source_result_or_absence_close_receipt_id: ContentId,
+    pub(crate) source_product_release_binding_id: ContentId,
     pub(crate) failure_family_terminal_receipt_id: ContentId,
     pub(crate) counted_retirement_receipt_id: ContentId,
     pub(crate) source_funding_custody: RuntimeKey,
@@ -144,11 +145,13 @@ pub(crate) fn retire_source_funding_custody_v2<
         accounting.pre_root_source_occurrence_id,
         accounting.source_terminal_receipt_id,
         accounting.source_result_or_absence_close_receipt_id,
+        accounting.source_product_release_binding_id,
         accounting.failure_family_terminal_receipt_id,
         accounting.counted_retirement_receipt_id,
     ];
     require(
         terminal_ids.iter().all(|id| !id.is_zero())
+            && all_distinct_ids(&terminal_ids)
             && accounting.source_funding_custody == custody.account()
             && accounting.lamport_principal_refund == custody.ledger().principal_refund
             && accounting.neutral_lamport_sink == custody.ledger().neutral_sink
@@ -280,6 +283,7 @@ pub(crate) fn retire_source_funding_custody_v2<
             &accounting.pre_root_source_occurrence_id.bytes(),
             &accounting.source_terminal_receipt_id.bytes(),
             &accounting.source_result_or_absence_close_receipt_id.bytes(),
+            &accounting.source_product_release_binding_id.bytes(),
             &accounting.failure_family_terminal_receipt_id.bytes(),
             &accounting.counted_retirement_receipt_id.bytes(),
             &custody_authentication_id.bytes(),
@@ -300,6 +304,21 @@ pub(crate) fn retire_source_funding_custody_v2<
         facts,
         custody_account_data_after_id,
     })
+}
+
+fn all_distinct_ids(values: &[ContentId]) -> bool {
+    let mut index = 0usize;
+    while index < values.len() {
+        let mut prior = 0usize;
+        while prior < index {
+            if values[prior] == values[index] {
+                return false;
+            }
+            prior += 1;
+        }
+        index += 1;
+    }
+    true
 }
 
 #[cfg(test)]
@@ -332,5 +351,6 @@ mod adversarial_tests {
         assert!(retire.contains("ledger_before.remaining_principal_lamports"));
         assert!(retire.contains("ledger_before.donation_lamports"));
         assert!(source.contains("!account.is_signer"));
+        assert!(source.contains("all_distinct_ids(&terminal_ids)"));
     }
 }

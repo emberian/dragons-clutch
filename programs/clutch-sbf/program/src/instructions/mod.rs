@@ -188,6 +188,9 @@ pub(crate) mod source_funding_custody_retirement_v1;
 /// Private post-Product-pin Source terminal owner for exact absence/refusal.
 /// Failure consumes its postwrite; no caller-facing dispatcher enters here.
 pub(crate) mod source_failure_terminal_v1;
+/// Post-release bridge from Source absence/refusal to Product's exact current
+/// LinkV2 release receipt. Failure owns the default-refusing join.
+pub(crate) mod source_failure_product_release_v1;
 /// Unrouted private Source terminal composer. It is always compiled so the
 /// current final Failure postwrite can implement its default-refusing bridge;
 /// no checked capability tuple enters it until the complete chain is admitted.
