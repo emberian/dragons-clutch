@@ -1150,6 +1150,20 @@ impl MarketLifecycleRootV2 {
         self,
         activation: MarketResolutionActivationV2,
     ) -> Result<Self> {
+        let mut output = Self::decode_buffer();
+        self.record_resolution_activation_into(activation, &mut output)?;
+        Ok(output)
+    }
+
+    /// Frame-bounded once-only Resolution activation into caller-owned storage.
+    ///
+    /// The SBF adapter uses this form so it does not retain a second 2,480-byte
+    /// root successor on its instruction stack.
+    pub fn record_resolution_activation_into(
+        &self,
+        activation: MarketResolutionActivationV2,
+        output: &mut Self,
+    ) -> Result<()> {
         self.validate()?;
         if self.phase != MarketLifecyclePhaseV2::Active
             || self.resolution_activation_receipt_id != ContentId::ZERO
@@ -1160,18 +1174,15 @@ impl MarketLifecycleRootV2 {
         {
             return Err(Error::UnauthenticatedAuthority);
         }
-        let next = Self {
-            transition_sequence: self
-                .transition_sequence
-                .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow)?,
-            resolution_semantic_id: activation.resolution_semantic_id,
-            resolution_data_id: activation.resolution_data_id,
-            resolution_activation_receipt_id: activation.id,
-            ..self
-        };
-        next.validate()?;
-        Ok(next)
+        *output = *self;
+        output.transition_sequence = self
+            .transition_sequence
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        output.resolution_semantic_id = activation.resolution_semantic_id;
+        output.resolution_data_id = activation.resolution_data_id;
+        output.resolution_activation_receipt_id = activation.id;
+        output.validate()
     }
 
     /// Consume one retiring Series link and decrement only the dynamic link count.
