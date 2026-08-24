@@ -178,6 +178,124 @@ fn set_slot(
     Ok(())
 }
 
+/// Sole semantic constructor for the canonical 50-slot GraphV4 body. Slots
+/// 0..=46 are program-derived from the authenticated Market/generation and
+/// ScheduleV4; only General's three chain-authenticated treasury coordinates
+/// are supplied for slots 47..=49.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn derive_current_market_foundation_graph_body_v4(
+    program_id: &Pubkey,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    schedule: &MarketFoundationScheduleV4,
+    treasury_position: Pubkey,
+    treasury_replay: Pubkey,
+    treasury_service_ledger: Pubkey,
+) -> Outcome<MarketFoundationAccountGraphV4> {
+    schedule
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let schedule_id = schedule
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        generation != 0
+            && treasury_position != Pubkey::default()
+            && treasury_replay != Pubkey::default()
+            && treasury_service_ledger != Pubkey::default()
+            && treasury_position != treasury_replay
+            && treasury_position != treasury_service_ledger
+            && treasury_replay != treasury_service_ledger,
+        ClutchError::MismatchedState,
+    )?;
+    let market = market_instance_id.bytes();
+    let market_binding = seeds::general_v2_market_binding_pda(program_id, &market).0;
+    let market_runtime =
+        seeds::general_v2_market_runtime_pda(program_id, &market_binding.to_bytes()).0;
+    let resolution = seeds::resolution_v5_pda(program_id, &market).0;
+    let fractional_policy =
+        seeds::fractional_policy_v3_pda(program_id, &market, &resolution.to_bytes()).0;
+    let fractional_ledger =
+        seeds::fractional_ledger_v1_pda(program_id, &fractional_policy.to_bytes()).0;
+    let mut account_ids = [ContentId::ZERO; MARKET_FOUNDATION_SLOT_COUNT_V4];
+    for (slot, account) in [
+        (
+            MarketFoundationSlotV4::LifecycleRoot,
+            seeds::product_market_lifecycle_root_pda(program_id, &market, generation).0,
+        ),
+        (MarketFoundationSlotV4::MarketBinding, market_binding),
+        (MarketFoundationSlotV4::MarketRuntime, market_runtime),
+        (MarketFoundationSlotV4::Hoard, seeds::hoard_v2_pda(program_id, &market).0),
+        (
+            MarketFoundationSlotV4::ClaimLedger,
+            seeds::claim_ledger_v3_pda(program_id, &market).0,
+        ),
+        (
+            MarketFoundationSlotV4::FailureAdmissionRoot,
+            seeds::failure_market_root_v2_pda(program_id, &market, generation).0,
+        ),
+        (
+            MarketFoundationSlotV4::FailureRuntimeRoot,
+            seeds::failure_external_root_pda(program_id, &market, generation).0,
+        ),
+        (
+            MarketFoundationSlotV4::FailureReplay,
+            seeds::failure_market_replay_v2_pda(program_id, &market, generation).0,
+        ),
+        (
+            MarketFoundationSlotV4::FailureIntervalWork,
+            seeds::failure_market_interval_cell_v2_pda(program_id, &market, generation).0,
+        ),
+        (
+            MarketFoundationSlotV4::FailureIntervalHistory,
+            seeds::failure_market_interval_history_v2_pda(program_id, &market, generation).0,
+        ),
+        (MarketFoundationSlotV4::ResolutionV5, resolution),
+        (MarketFoundationSlotV4::FractionalPolicy, fractional_policy),
+        (MarketFoundationSlotV4::FractionalLedger, fractional_ledger),
+        (
+            MarketFoundationSlotV4::ProductReplayAnchor,
+            seeds::product_market_lifecycle_replay_v2_pda(program_id, &market).0,
+        ),
+        (
+            MarketFoundationSlotV4::HoardCollateralVault,
+            seeds::hoard_token_v2_pda(program_id, &market).0,
+        ),
+        (MarketFoundationSlotV4::GeneralTreasuryPosition, treasury_position),
+        (MarketFoundationSlotV4::GeneralTreasuryReplay, treasury_replay),
+        (
+            MarketFoundationSlotV4::TreasuryServiceLedger,
+            treasury_service_ledger,
+        ),
+    ] {
+        set_slot(&mut account_ids, slot, account)?;
+    }
+    let mut outcome = 0u8;
+    while outcome < schedule.outcome_count {
+        set_slot(
+            &mut account_ids,
+            MarketFoundationSlotV4::OutcomeMint(outcome),
+            seeds::outcome_mint_v2_pda(program_id, &market, outcome).0,
+        )?;
+        set_slot(
+            &mut account_ids,
+            MarketFoundationSlotV4::OutcomeCustody(outcome),
+            seeds::outcome_custody_v1_pda(program_id, &market, generation, outcome).0,
+        )?;
+        outcome = outcome.checked_add(1).ok_or(ClutchError::Arithmetic)?;
+    }
+    let graph = MarketFoundationAccountGraphV4 {
+        market_instance_id,
+        generation,
+        foundation_schedule_id: schedule_id,
+        account_ids,
+    };
+    graph
+        .validate(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(graph)
+}
+
 /// Rebuild the compact physical GraphV4 frame selected by the permanent
 /// MarketReplayV2 binding.
 ///
@@ -187,6 +305,7 @@ fn set_slot(
 /// from instruction data.
 #[inline(never)]
 pub(crate) fn authenticate_persisted_market_foundation_graph_v4(
+    program_id: &Pubkey,
     replay: &AuthenticatedMarketLifecycleReplayV2,
     schedule: &MarketFoundationScheduleV4,
     accounts: &[solana_account_info::AccountInfo<'_>],
@@ -222,33 +341,36 @@ pub(crate) fn authenticate_persisted_market_foundation_graph_v4(
         }
         left = left.checked_add(1).ok_or(ClutchError::Arithmetic)?;
     }
-    let mut account_ids = [ContentId::ZERO; MARKET_FOUNDATION_SLOT_COUNT_V4];
-    let mut index = 0usize;
-    while index <= 14 {
-        account_ids[index] = account_id(*accounts[index].key);
-        index = index.checked_add(1).ok_or(ClutchError::Arithmetic)?;
-    }
     let mint_start = 15usize;
     let custody_start = mint_start.checked_add(outcome_count).ok_or(ClutchError::Arithmetic)?;
     let treasury_start = custody_start.checked_add(outcome_count).ok_or(ClutchError::Arithmetic)?;
-    index = 0;
-    while index < outcome_count {
-        account_ids[15 + index] = account_id(*accounts[mint_start + index].key);
-        account_ids[31 + index] = account_id(*accounts[custody_start + index].key);
+    let graph = derive_current_market_foundation_graph_body_v4(
+        program_id,
+        replay_binding.market_instance_id,
+        replay_binding.generation,
+        schedule,
+        *accounts[treasury_start].key,
+        *accounts[treasury_start + 1].key,
+        *accounts[treasury_start + 2].key,
+    )?;
+    let mut index = 0usize;
+    while index <= 14 {
+        require(
+            graph.account_ids[index] == account_id(*accounts[index].key),
+            ClutchError::MismatchedState,
+        )?;
         index = index.checked_add(1).ok_or(ClutchError::Arithmetic)?;
     }
-    account_ids[47] = account_id(*accounts[treasury_start].key);
-    account_ids[48] = account_id(*accounts[treasury_start + 1].key);
-    account_ids[49] = account_id(*accounts[treasury_start + 2].key);
-    let graph = MarketFoundationAccountGraphV4 {
-        market_instance_id: replay_binding.market_instance_id,
-        generation: replay_binding.generation,
-        foundation_schedule_id: schedule_id,
-        account_ids,
-    };
-    graph
-        .validate(schedule)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    index = 0;
+    while index < outcome_count {
+        require(
+            graph.account_ids[15 + index] == account_id(*accounts[mint_start + index].key)
+                && graph.account_ids[31 + index]
+                    == account_id(*accounts[custody_start + index].key),
+            ClutchError::MismatchedState,
+        )?;
+        index = index.checked_add(1).ok_or(ClutchError::Arithmetic)?;
+    }
     let graph_id = graph
         .id(schedule)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -346,11 +468,6 @@ pub(crate) fn authenticate_current_market_foundation_graph_v4(
     let market_binding = seeds::general_v2_market_binding_pda(program_id, &market).0;
     let market_runtime =
         seeds::general_v2_market_runtime_pda(program_id, &market_binding.to_bytes()).0;
-    let resolution = seeds::resolution_v5_pda(program_id, &market).0;
-    let fractional_policy =
-        seeds::fractional_policy_v3_pda(program_id, &market, &resolution.to_bytes()).0;
-    let fractional_ledger =
-        seeds::fractional_ledger_v1_pda(program_id, &fractional_policy.to_bytes()).0;
     let treasury = derive_revenue_market_treasury_v1(
         program_id,
         revenue,
@@ -358,91 +475,15 @@ pub(crate) fn authenticate_current_market_foundation_graph_v4(
         market_runtime,
     )?;
 
-    let mut account_ids = [ContentId::ZERO; MARKET_FOUNDATION_SLOT_COUNT_V4];
-    for (slot, account) in [
-        (
-            MarketFoundationSlotV4::LifecycleRoot,
-            seeds::product_market_lifecycle_root_pda(program_id, &market, generation).0,
-        ),
-        (MarketFoundationSlotV4::MarketBinding, market_binding),
-        (MarketFoundationSlotV4::MarketRuntime, market_runtime),
-        (
-            MarketFoundationSlotV4::Hoard,
-            seeds::hoard_v2_pda(program_id, &market).0,
-        ),
-        (
-            MarketFoundationSlotV4::ClaimLedger,
-            seeds::claim_ledger_v3_pda(program_id, &market).0,
-        ),
-        (
-            MarketFoundationSlotV4::FailureAdmissionRoot,
-            seeds::failure_market_root_v2_pda(program_id, &market, generation).0,
-        ),
-        (
-            MarketFoundationSlotV4::FailureRuntimeRoot,
-            seeds::failure_external_root_pda(program_id, &market, generation).0,
-        ),
-        (
-            MarketFoundationSlotV4::FailureReplay,
-            seeds::failure_market_replay_v2_pda(program_id, &market, generation).0,
-        ),
-        (
-            MarketFoundationSlotV4::FailureIntervalWork,
-            seeds::failure_market_interval_cell_v2_pda(program_id, &market, generation).0,
-        ),
-        (
-            MarketFoundationSlotV4::FailureIntervalHistory,
-            seeds::failure_market_interval_history_v2_pda(program_id, &market, generation).0,
-        ),
-        (MarketFoundationSlotV4::ResolutionV5, resolution),
-        (MarketFoundationSlotV4::FractionalPolicy, fractional_policy),
-        (MarketFoundationSlotV4::FractionalLedger, fractional_ledger),
-        (
-            MarketFoundationSlotV4::ProductReplayAnchor,
-            seeds::product_market_lifecycle_replay_v2_pda(program_id, &market).0,
-        ),
-        (
-            MarketFoundationSlotV4::HoardCollateralVault,
-            seeds::hoard_token_v2_pda(program_id, &market).0,
-        ),
-        (
-            MarketFoundationSlotV4::GeneralTreasuryPosition,
-            treasury.treasury_position_account(),
-        ),
-        (
-            MarketFoundationSlotV4::GeneralTreasuryReplay,
-            treasury.treasury_replay_account(),
-        ),
-        (
-            MarketFoundationSlotV4::TreasuryServiceLedger,
-            treasury.treasury_service_ledger_account(),
-        ),
-    ] {
-        set_slot(&mut account_ids, slot, account)?;
-    }
-    let mut outcome = 0u8;
-    while outcome < schedule.outcome_count {
-        set_slot(
-            &mut account_ids,
-            MarketFoundationSlotV4::OutcomeMint(outcome),
-            seeds::outcome_mint_v2_pda(program_id, &market, outcome).0,
-        )?;
-        set_slot(
-            &mut account_ids,
-            MarketFoundationSlotV4::OutcomeCustody(outcome),
-            seeds::outcome_custody_v1_pda(program_id, &market, generation, outcome).0,
-        )?;
-        outcome = outcome.checked_add(1).ok_or(ClutchError::Arithmetic)?;
-    }
-    let graph = MarketFoundationAccountGraphV4 {
+    let graph = derive_current_market_foundation_graph_body_v4(
+        program_id,
         market_instance_id,
         generation,
-        foundation_schedule_id: schedule_id,
-        account_ids,
-    };
-    graph
-        .validate(schedule)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        schedule,
+        treasury.treasury_position_account(),
+        treasury.treasury_replay_account(),
+        treasury.treasury_service_ledger_account(),
+    )?;
     let graph_id = graph
         .id(schedule)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
