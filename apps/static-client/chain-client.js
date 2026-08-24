@@ -16,11 +16,21 @@
   const U64_MAX = (1n << 64n) - 1n;
   const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
   const BASE58_INDEX = Object.freeze(Object.fromEntries(Array.from(BASE58_ALPHABET, (character, index) => [character, index])));
-  const DECODER_SET = "dragons-clutch/canonical-account-decoders/v7-product-v5-authority";
+  const DECODER_SET = "dragons-clutch/canonical-account-decoders/v8-dealer-v3-terminal";
   const SOURCE_COORDINATE = Object.freeze({ familyTag: "77", familyVersion: "2", family: "source", flow: "source-plane-v3", messageVersion: "legacy", lookupTables: 0 });
   const STRUCTURED_COORDINATE = Object.freeze({ familyTag: "75", familyVersion: "1", family: "structured-claim", flow: "structured-claim", messageVersion: "v0", lookupTables: 1 });
   const DIRECT_COORDINATE = Object.freeze({ familyTag: "80", familyVersion: "1", family: "direct", flow: "direct-market-v1", messageVersion: "legacy", lookupTables: 0 });
   const FRACTIONAL_COORDINATE = Object.freeze({ familyTag: "79", familyVersion: "1", family: "fractional", flow: "fractional-redemption", messageVersion: "legacy", lookupTables: 0 });
+  const FAILURE_COORDINATE = Object.freeze({ familyTag: "78", familyVersion: "1", family: "recovery", flow: "failure-recovery", messageVersion: "v0", lookupTables: 1 });
+  const FAILURE_ACTION11_ROLES = Object.freeze([
+    "market-lifecycle-root", "series-market-link", "series-funding-v5", "failure-admission-root", "failure-runtime-root", "failure-interval-cell", "failure-interval-history", "series-registry-v4",
+    "registry-program", "registry-program-data", "registry-release-v2", "capability-profile-v4", "compiler-bundle-v7", "funding-quote-v6", "series-plan-v5", "series-funding-terms-v2",
+    "product-template-v4", "native-claim-basis-v1", "recovery-policy-v1", "price-measure-policy-v1", "market-genesis-v2", "attachment-plan-v6", "market-instance-v2", "source-release-v2",
+    "source-adapter-program", "source-adapter-program-data", "source-parser-program", "source-parser-program-data", "source-parser-config", "source-spec", "source-work-schedule", "source-occurrence",
+    "source-window", "source-statistic-key", "source-summary", "source-window-seal", "source-statistic-result", "source-result-lineage", "source-handoff-receipt", "source-work-receipt",
+    "failure-liveness-policy", "failure-recovery-compartment", "keeper", "recovery-refund-owner"
+  ]);
+  const FAILURE_ACTION11_WRITABLE_ROLES = Object.freeze(new Set(["failure-runtime-root", "failure-interval-cell", "failure-recovery-compartment", "keeper"]));
   const FRACTIONAL_ACTION_CONTRACTS = Object.freeze({
     "1": Object.freeze({ action: "initialize-fractional", ownerSchema: "fractional-redemption/79/1/1/initialize", driverRole: 0, equationNames: Object.freeze(["chain-derived Product foundation outcome width"]) }),
     "2": Object.freeze({ action: "redeem-fractional-internal-exact", ownerSchema: "fractional-redemption/79/1/2/redeem-internal-exact", driverRole: 12, equationNames: Object.freeze(["chain-derived internal Eggs burned", "chain-derived exact collateral payout"]) }),
@@ -242,28 +252,6 @@
       secondary: Object.freeze({ label: labels[1], value: secondaryBinding }),
       authority: CURRENT_BINDING_PROJECTIONS[kind] ? "hostile-decoded-current-semantic-owner" : "hostile-decoded-account-codec"
     });
-  };
-
-  const validateIntentVariants = (raw, name, enabledIntents) => {
-    if (!Array.isArray(raw) || raw.length > DEALER_VARIANT_CONTRACTS.length) throw new Error(`${name} is not a bounded current payload-variant set.`);
-    const coarse = new Set(enabledIntents.map((intent) => `${intent.familyTag}:${intent.familyVersion}:${intent.localAction}`));
-    const variants = raw.map((variant, index) => {
-      requirePlain(variant, `${name}[${index}]`);
-      const value = Object.freeze({
-        familyTag: positiveDecimal(variant.familyTag, `${name}[${index}].familyTag`, 255n).toString(),
-        familyVersion: positiveDecimal(variant.familyVersion, `${name}[${index}].familyVersion`, 255n).toString(),
-        localAction: positiveDecimal(variant.localAction, `${name}[${index}].localAction`, 255n).toString(),
-        payloadDiscriminator: positiveDecimal(variant.payloadDiscriminator, `${name}[${index}].payloadDiscriminator`, 255n).toString(),
-        name: text(variant.name, `${name}[${index}].name`, 96)
-      });
-      const contract = DEALER_VARIANT_CONTRACTS.find((candidate) => candidate.familyTag === value.familyTag && candidate.familyVersion === value.familyVersion && candidate.localAction === value.localAction && candidate.payloadDiscriminator === value.payloadDiscriminator && candidate.name === value.name);
-      if (!contract) throw new Error(`${name}[${index}] is not a closed current Dealer payload variant.`);
-      if (coarse.has(`${value.familyTag}:${value.familyVersion}:${value.localAction}`)) throw new Error(`${name}[${index}] illegally promotes its disabled coarse Dealer coordinate.`);
-      return value;
-    });
-    const keys = variants.map((variant) => `${variant.familyTag.padStart(3, "0")}:${variant.familyVersion.padStart(3, "0")}:${variant.localAction.padStart(3, "0")}:${variant.payloadDiscriminator.padStart(3, "0")}`);
-    if (new Set(keys).size !== keys.length || keys.some((key, index) => index > 0 && keys[index - 1] >= key)) throw new Error(`${name} is duplicated or not in canonical coordinate/discriminator order.`);
-    return Object.freeze(variants);
   };
 
   const validateIntentVariants = (raw, name, enabledIntents) => {
@@ -1351,6 +1339,61 @@
     });
   };
 
+  const validateFailureAction11MaterialContract = (row, coordinate, accountRoles, stateSelection, transactionDraft, signerRequirements, configuration) => {
+    if (coordinate.familyTag !== FAILURE_COORDINATE.familyTag
+        || coordinate.familyVersion !== FAILURE_COORDINATE.familyVersion
+        || coordinate.family !== FAILURE_COORDINATE.family
+        || coordinate.localAction !== "11"
+        || coordinate.action !== "advance-failure-interval-consensus"
+        || row.semanticOwnerConstructor !== "clutch-failure-policy-runtime/current-action11-chain-state-v1") {
+      throw new Error("Failure verdict is not the current chain-derived action-11 constructor.");
+    }
+    const exactRoles = FAILURE_ACTION11_ROLES.map((role) => directRole(role, false, FAILURE_ACTION11_WRITABLE_ROLES.has(role)));
+    if (!directRolesMatch(accountRoles, exactRoles)) throw new Error("Failure action 11 differs from its exact 44-role Product/Source/Failure account contract.");
+    if (new Set(accountRoles.map((role) => role.address)).size !== accountRoles.length) throw new Error("Failure action 11 contains an unowned account-role alias.");
+    if (stateSelection.action !== coordinate.action
+        || stateSelection.cursor.lane !== "failure-recovery"
+        || stateSelection.cursor.phase !== "1"
+        || stateSelection.account !== accountRoles[5].address
+        || transactionDraft.driverAccount !== accountRoles[5].address
+        || stateSelection.dependencies.some((dependency) => !accountRoles.some((role) => role.address === dependency))) {
+      throw new Error("Failure action-11 finalized cell cursor and exact dependency tuple do not agree.");
+    }
+    if (transactionDraft.messageVersion !== FAILURE_COORDINATE.messageVersion
+        || transactionDraft.addressLookupTables.length !== FAILURE_COORDINATE.lookupTables
+        || transactionDraft.flows[0] !== FAILURE_COORDINATE.flow
+        || transactionDraft.actions[0] !== "advance-failure-interval-consensus-v1") {
+      throw new Error("Failure action 11 is not one current v0 lookup-table transaction.");
+    }
+    const owner = transactionDraft.semanticOwners[0];
+    if (owner.package !== "clutch-failure-policy-runtime+clutch-product-series+clutch-source-plane-v3-runtime"
+        || owner.schema !== "dragons-clutch/operator/failure-action11-material/v1"
+        || owner.releaseSha256 !== configuration.release.elfSha256) {
+      throw new Error("Failure action 11 differs from its checked cross-owner semantic material.");
+    }
+    const binding = transactionDraft.registryBindings[0];
+    if (decimal(binding.centralAction, "Failure action-11 central action", 255n).toString() !== "11") throw new Error("Failure action 11 does not retain its exact allocated central action.");
+    if (transactionDraft.exactEquations.length !== 1
+        || transactionDraft.exactEquations[0].name !== "Recovery work principal funds the exact action-11 keeper reward"
+        || transactionDraft.exactEquations[0].unit.kind !== "lamports") {
+      throw new Error("Failure action 11 differs from its exact funded-reward conservation equation.");
+    }
+    if (signerRequirements.length !== 1
+        || signerRequirements[0].address !== transactionDraft.feePayer
+        || signerRequirements[0].semanticRoles.length !== 1
+        || signerRequirements[0].semanticRoles[0] !== "transaction-fee-payer"
+        || accountRoles.some((role) => role.signer || role.address === transactionDraft.feePayer)) {
+      throw new Error("Failure action-11 fee payer is not the sole disjoint transaction signer.");
+    }
+    if (row.symbolicPostcondition !== null) throw new Error("Failure action 11 unexpectedly carries a Direct execution-Clock postcondition.");
+    return Object.freeze({
+      schema: "dragons-clutch/browser/failure-action11-chain-material-contract/v1",
+      geometry: "44-chain-derived-roles-plus-disjoint-fee-payer-and-one-finalized-lookup-table",
+      provenance: "all-payload-progress-reward-account-and-privilege-facts-derived-from-finalized-product-source-and-failure-state",
+      holderChoice: null
+    });
+  };
+
   const validateActionCapabilities = (raw, configuration, session) => {
     requirePlain(raw, "action capabilities");
     if (raw.schema !== "dragons-clutch/operator-action-capability-set/v1"
@@ -1440,20 +1483,22 @@
       if (new Set(signerRequirements.map((requirement) => requirement.address)).size !== signerRequirements.length) throw new Error("callable signer requirements repeat an identity.");
       const roleSigners = new Set(accountRoles.filter((role) => role.signer).map((role) => role.address));
       const fractional = coordinate.familyTag === FRACTIONAL_COORDINATE.familyTag && coordinate.familyVersion === FRACTIONAL_COORDINATE.familyVersion && coordinate.family === FRACTIONAL_COORDINATE.family && FRACTIONAL_ACTION_CONTRACTS[coordinate.localAction] !== undefined;
+      const failureAction11 = coordinate.familyTag === FAILURE_COORDINATE.familyTag && coordinate.familyVersion === FAILURE_COORDINATE.familyVersion && coordinate.family === FAILURE_COORDINATE.family && coordinate.localAction === "11";
       const projectedFeePayer = nonzeroAddress(row.transactionDraft.feePayer, "projected draft fee payer");
-      if (signerRequirements.some((requirement) => !roleSigners.has(requirement.address) && !(fractional && requirement.address === projectedFeePayer)) || [...roleSigners].some((signer) => !signerRequirements.some((requirement) => requirement.address === signer))) throw new Error("callable signer requirements differ from exact signer roles and any explicitly separate Fractional fee payer.");
+      if (signerRequirements.some((requirement) => !roleSigners.has(requirement.address) && !((fractional || failureAction11) && requirement.address === projectedFeePayer)) || [...roleSigners].some((signer) => !signerRequirements.some((requirement) => requirement.address === signer))) throw new Error("callable signer requirements differ from exact signer roles and any explicitly separate family-owned fee payer.");
       const transactionDraft = validateCanonicalTransactionDraft(row.transactionDraft, configuration, releaseAdmission, coordinate, stateSelection, accountRoles, signerRequirements, index);
       const directContract = coordinate.familyTag === DIRECT_COORDINATE.familyTag && coordinate.familyVersion === DIRECT_COORDINATE.familyVersion && coordinate.family === DIRECT_COORDINATE.family
         ? validateDirectMaterialContract(row, coordinate, accountRoles, stateSelection, transactionDraft, configuration, index)
         : null;
       const fractionalContract = fractional ? validateFractionalMaterialContract(row, coordinate, accountRoles, stateSelection, transactionDraft, signerRequirements, configuration) : null;
+      const failureContract = failureAction11 ? validateFailureAction11MaterialContract(row, coordinate, accountRoles, stateSelection, transactionDraft, signerRequirements, configuration) : null;
       requirePlain(row.freshnessDisposition, `actions[${index}].freshnessDisposition`);
       const observedSlot = positiveDecimal(row.freshnessDisposition.observedSlot, `actions[${index}].freshnessDisposition.observedSlot`);
       const validBeforeSlot = positiveDecimal(row.freshnessDisposition.validBeforeSlot, `actions[${index}].freshnessDisposition.validBeforeSlot`);
       const maximumValiditySlots = positiveDecimal(row.freshnessDisposition.maximumValiditySlots, `actions[${index}].freshnessDisposition.maximumValiditySlots`);
       if (validBeforeSlot <= observedSlot || validBeforeSlot - observedSlot > maximumValiditySlots || observedSlot < BigInt(stateSelection.accountSlot) || row.freshnessDisposition.recentBlockhash !== "absent; a launcher must reacquire state before adding one" || typeof row.freshnessDisposition.beforeSigning !== "string" || typeof row.freshnessDisposition.afterSubmission !== "string") throw new Error("callable action freshness boundary is invalid.");
       if (transactionDraft.addressLookupTables.some((lookup) => BigInt(lookup.observedSlot) > observedSlot)) throw new Error("callable action uses a lookup-table observation newer than its freshness observation.");
-      return Object.freeze({ coordinate, releaseAdmission, accountRoles, callable: true, verdict: row.verdict, reason: text(row.reason, `actions[${index}].reason`, 512), stateSelection, transactionDraft, signerRequirements, freshnessDisposition: Object.freeze({ observedSlot: observedSlot.toString(), validBeforeSlot: validBeforeSlot.toString(), maximumValiditySlots: maximumValiditySlots.toString() }), directContract, fractionalContract });
+      return Object.freeze({ coordinate, releaseAdmission, accountRoles, callable: true, verdict: row.verdict, reason: text(row.reason, `actions[${index}].reason`, 512), stateSelection, transactionDraft, signerRequirements, freshnessDisposition: Object.freeze({ observedSlot: observedSlot.toString(), validBeforeSlot: validBeforeSlot.toString(), maximumValiditySlots: maximumValiditySlots.toString() }), directContract, fractionalContract, failureContract });
     });
     if (seen.size !== enabled.size || seenVariants.size !== enabledVariants.size) throw new Error("operatord omitted a checked release-enabled coordinate or payload variant from its action verdict set.");
     return Object.freeze({ schema: raw.schema, sessionId: session.sessionId, actions: Object.freeze(actions), freshness: Object.freeze({ ...raw.freshness }) });
@@ -1492,11 +1537,13 @@
     if (raw.schema !== "dragons-clutch/operator-canonical-action-material/v1" || raw.constructionSchema !== "dragons-clutch/operator/unsigned-protocol-transaction/v3" || hash32(raw.releaseManifestSha256, "draft release manifest") !== releaseAdmission.executionReleaseManifestSha256 || text(raw.executionReleaseKey, "draft execution release key", 320) !== releaseAdmission.executionReleaseKey || hash32(raw.capabilityProfileId, "draft capability profile") !== configuration.release.capabilityProfileId || nonzeroAddress(raw.driverAccount, "draft driver account") !== selection.account || decimal(raw.driverAccountSlot, "draft driver account slot").toString() !== selection.accountSlot || text(raw.driverReleaseKey, "draft driver release key", 320) !== releaseAdmission.driverReleaseKey || releaseAdmission.driverReleaseKey !== selection.releaseKey || hash32(raw.authorityStateSha256, "draft authority state") !== selection.cursor.observedStateSha256 || raw.recentBlockhash !== null || raw.hasRecentBlockhash !== false || raw.signed !== false || raw.submitted !== false || raw.reloadAuthoritativeAccounts !== true) throw new Error("callable transaction draft violates its composite release/construction boundary.");
     const feePayer = nonzeroAddress(raw.feePayer, "draft fee payer");
     const fractional = coordinate.familyTag === FRACTIONAL_COORDINATE.familyTag && coordinate.familyVersion === FRACTIONAL_COORDINATE.familyVersion && coordinate.family === FRACTIONAL_COORDINATE.family && FRACTIONAL_ACTION_CONTRACTS[coordinate.localAction] !== undefined;
-    if (!signers.some((requirement) => requirement.address === feePayer && requirement.semanticRoles.includes("transaction-fee-payer")) || (!fractional && !roles.some((role) => role.address === feePayer && role.signer))) throw new Error("draft fee payer is not the exact signer role or explicitly separate Fractional transaction payer.");
+    const failureAction11 = coordinate.familyTag === FAILURE_COORDINATE.familyTag && coordinate.familyVersion === FAILURE_COORDINATE.familyVersion && coordinate.family === FAILURE_COORDINATE.family && coordinate.localAction === "11";
+    if (!signers.some((requirement) => requirement.address === feePayer && requirement.semanticRoles.includes("transaction-fee-payer")) || (!fractional && !failureAction11 && !roles.some((role) => role.address === feePayer && role.signer))) throw new Error("draft fee payer is not the exact signer role or an explicitly separate family-owned transaction payer.");
     const transactionHex = text(raw.serializedTransactionHex, "serialized transaction", 2464);
     if (!HEX_BYTES.test(transactionHex) || decimal(raw.serializedBytes, "serialized transaction bytes", 1232n).toString() !== String(transactionHex.length / 2)) throw new Error("serialized transaction encoding or byte count is invalid.");
-    if (!Array.isArray(raw.actions) || raw.actions.length !== 1 || raw.actions[0] !== coordinate.action || !Array.isArray(raw.flows) || raw.flows.length !== 1 || !Array.isArray(raw.semanticOwners) || raw.semanticOwners.length !== 1 || !Array.isArray(raw.registryBindings) || raw.registryBindings.length !== 1 || !Array.isArray(raw.runtimeAdmissions) || raw.runtimeAdmissions.length !== 1 || raw.runtimeAdmissions[0] !== "release-bound-enabled" || !Array.isArray(raw.exactEquations) || raw.exactEquations.length === 0 || !Array.isArray(raw.addressLookupTables)) throw new Error("callable draft is not one exact release-admitted semantic-owner action.");
-    const flowContract = [SOURCE_COORDINATE, STRUCTURED_COORDINATE, DIRECT_COORDINATE, FRACTIONAL_COORDINATE].find((contract) => contract.familyTag === coordinate.familyTag && contract.familyVersion === coordinate.familyVersion && contract.family === coordinate.family) || null;
+    const expectedAction = failureAction11 ? "advance-failure-interval-consensus-v1" : coordinate.action;
+    if (!Array.isArray(raw.actions) || raw.actions.length !== 1 || raw.actions[0] !== expectedAction || !Array.isArray(raw.flows) || raw.flows.length !== 1 || !Array.isArray(raw.semanticOwners) || raw.semanticOwners.length !== 1 || !Array.isArray(raw.registryBindings) || raw.registryBindings.length !== 1 || !Array.isArray(raw.runtimeAdmissions) || raw.runtimeAdmissions.length !== 1 || raw.runtimeAdmissions[0] !== "release-bound-enabled" || !Array.isArray(raw.exactEquations) || raw.exactEquations.length === 0 || !Array.isArray(raw.addressLookupTables)) throw new Error("callable draft is not one exact release-admitted semantic-owner action.");
+    const flowContract = [SOURCE_COORDINATE, STRUCTURED_COORDINATE, DIRECT_COORDINATE, FRACTIONAL_COORDINATE, FAILURE_COORDINATE].find((contract) => contract.familyTag === coordinate.familyTag && contract.familyVersion === coordinate.familyVersion && contract.family === coordinate.family) || null;
     if (flowContract === null) throw new Error("callable draft belongs to a family without a current browser semantic-owner contract.");
     if (raw.flows[0] !== flowContract.flow || raw.messageVersion !== flowContract.messageVersion || raw.addressLookupTables.length !== flowContract.lookupTables) throw new Error("callable draft differs from its current family transport contract.");
     const addressLookupTables = Object.freeze(raw.addressLookupTables.map((lookup, lookupIndex) => {
@@ -1515,7 +1562,7 @@
     const binding = raw.registryBindings[0];
     requirePlain(binding, "draft registry binding");
     if (positiveDecimal(binding.familyTag, "draft binding family tag", 255n).toString() !== coordinate.familyTag || positiveDecimal(binding.familyVersion, "draft binding family version", 255n).toString() !== coordinate.familyVersion || positiveDecimal(binding.localAction, "draft binding local action", 255n).toString() !== coordinate.localAction || binding.allocationStatus !== "frozen") throw new Error("draft registry binding differs from the checked coordinate.");
-    if ((coordinate.family === "structured-claim" && binding.centralAction !== null) || ((coordinate.family === "source" || coordinate.family === "direct" || coordinate.family === "fractional") && decimal(binding.centralAction, "draft central action", 255n).toString() !== coordinate.localAction)) throw new Error("draft central action binding differs from its family-owned current contract.");
+    if ((coordinate.family === "structured-claim" && binding.centralAction !== null) || ((coordinate.family === "source" || coordinate.family === "direct" || coordinate.family === "fractional" || coordinate.family === "recovery") && decimal(binding.centralAction, "draft central action", 255n).toString() !== coordinate.localAction)) throw new Error("draft central action binding differs from its family-owned current contract.");
     raw.semanticOwners.forEach((owner, ownerIndex) => { requirePlain(owner, `draft.semanticOwners[${ownerIndex}]`); text(owner.package, "semantic owner package", 160); text(owner.schema, "semantic owner schema", 160); hash32(owner.releaseSha256, "semantic owner release"); });
     raw.exactEquations.forEach((equation, equationIndex) => { requirePlain(equation, `draft.exactEquations[${equationIndex}]`); requirePlain(equation.unit, `draft.exactEquations[${equationIndex}].unit`); text(equation.name, "exact equation name", 200); const left = decimal(equation.left, "exact equation left"); const right = decimal(equation.right, "exact equation right"); if (left !== right) throw new Error("draft exact-integer equation is unbalanced."); });
     return Object.freeze({ ...raw, draftId: hash32(raw.draftId, "draft ID"), feePayer, addressLookupTables, serializedTransactionHex: transactionHex });
@@ -1625,6 +1672,16 @@
         eligible: true,
         kind: "finalized-exact-fractional-chain-material-inspectable",
         reason: `Fractional action ${action.coordinate.localAction} has exact finalized identities, metas, amount equations, replay cursor, release, and unsigned bytes; ${holderDisposition}.`,
+        observedAccounts: String(observations.length),
+        staleAccounts: "0",
+        validBeforeSlot: action.freshnessDisposition.validBeforeSlot
+      });
+    }
+    if (action.failureContract) {
+      return Object.freeze({
+        eligible: true,
+        kind: "finalized-exact-failure-action11-inspectable",
+        reason: "Failure action 11 binds the exact 44-role Product/Source/Failure tuple, finite interval-cell cursor, funded keeper-reward equation, disjoint fee payer, finalized lookup table, checked release, and blockhash-free unsigned bytes; the browser contributes no progress or account authority.",
         observedAccounts: String(observations.length),
         staleAccounts: "0",
         validBeforeSlot: action.freshnessDisposition.validBeforeSlot
