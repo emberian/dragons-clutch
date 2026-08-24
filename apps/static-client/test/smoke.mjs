@@ -83,6 +83,9 @@ test("browser_refuses_caller_shaped_transaction_truth", () => {
   assert.match(chain, /discard this draft regardless of outcome|freshnessDisposition/);
   assert.match(app, /Browser-authored protocol material is forbidden/);
   assert.match(app, /canonical unsigned draft joined to a fresh finalized exact tuple/);
+  assert.match(chain, /Fractional internal-credit material is not one exact live\/fresh\/reopen role shape/);
+  assert.match(chain, /Fractional exact tuple contains an unowned account alias/);
+  assert.match(app, /raw account IDs and metas are forbidden/);
 });
 
 test("source_and_structured_action_material_use_disjoint_current_transport_contracts", () => {

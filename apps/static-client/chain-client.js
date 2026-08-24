@@ -24,6 +24,7 @@
   const FRACTIONAL_ACTION_CONTRACTS = Object.freeze({
     "2": Object.freeze({ action: "redeem-fractional-internal-exact", ownerSchema: "fractional-redemption/79/1/2/redeem-internal-exact", driverRole: 12, equationNames: Object.freeze(["chain-derived internal Eggs burned", "chain-derived exact collateral payout"]) }),
     "3": Object.freeze({ action: "redeem-fractional-bearer-exact", ownerSchema: "fractional-redemption/79/1/3/redeem-bearer-exact", driverRole: 12, equationNames: Object.freeze(["holder-approved bearer Eggs burned", "chain-derived whole collateral payout", "chain-derived retained payout numerator"]) }),
+    "4": Object.freeze({ action: "redeem-fractional-internal-credit", ownerSchema: "fractional-redemption/79/1/4/redeem-internal-credit", driverRole: 12, equationNames: Object.freeze(["holder-approved internal Eggs retired", "chain-derived whole collateral payout", "chain-derived retained payout numerator"]) }),
     "5": Object.freeze({ action: "redeem-fractional-bearer-credit", ownerSchema: "fractional-redemption/79/1/5/redeem-bearer-credit", driverRole: 12, equationNames: Object.freeze(["holder-approved bearer Eggs burned", "chain-derived whole collateral payout", "chain-derived retained payout numerator"]) }),
     "6": Object.freeze({ action: "transfer-fractional-credit", ownerSchema: "fractional-redemption/79/1/6/transfer-credit", driverRole: 13, equationNames: Object.freeze(["holder-approved credit numerator moved", "chain-derived whole credit payout"]) }),
     "7": Object.freeze({ action: "merge-fractional-credit", ownerSchema: "fractional-redemption/79/1/7/merge-credit", driverRole: 13, equationNames: Object.freeze(["holder-approved credit numerator moved", "chain-derived whole credit payout"]) }),
@@ -1148,6 +1149,7 @@
     let expected;
     let geometry = "fixed";
     let holderChoice = null;
+    let derivedFacts = null;
     let payerIndex = null;
     if (coordinate.localAction === "2") {
       expected = [["claimant", true, false], ...common, ["position-v3", false, true], ["general-replay-v3", false, true]];
@@ -1184,7 +1186,7 @@
       expected = [...prefix, ...outcomes, ...suffix];
       geometry = coordinate.localAction === "3" ? `bearer-exact-21+${outcomeCount}` : creation ? `bearer-credit-27+${outcomeCount}` : `bearer-credit-25+${outcomeCount}`;
       requirePlain(transactionDraft.exactEquations[0].unit, "Fractional holder Eggs unit");
-      const equationOutcome = positiveDecimal(transactionDraft.exactEquations[0].unit.outcome, "Fractional holder outcome", 15n).toString();
+      const equationOutcome = decimal(transactionDraft.exactEquations[0].unit.outcome, "Fractional holder outcome", 15n).toString();
       const quantity = positiveDecimal(transactionDraft.exactEquations[0].left, "Fractional holder quantity").toString();
       if (transactionDraft.exactEquations[0].unit.kind !== "egg-atoms" || equationOutcome !== String(selectedOutcome)) throw new Error("Fractional holder outcome differs from its selected chain-derived mint and exact burn equation.");
       holderChoice = Object.freeze({
@@ -1233,6 +1235,42 @@
         fundingPayer: payerIndex === null ? null : accountRoles[payerIndex].address,
         disposition: "holder-approved-choices-reauthenticated-against-finalized-chain-derived-material"
       });
+    } else if (coordinate.localAction === "4") {
+      const creation = accountRoles.length === 21;
+      if (!creation && accountRoles.length !== 19) throw new Error("Fractional internal-credit material is not one exact live/fresh/reopen role shape.");
+      payerIndex = creation ? 19 : null;
+      const payerAlias = payerIndex !== null && accountRoles[0].address === accountRoles[payerIndex].address;
+      expected = [
+        ["claimant", true, payerAlias], ["realm", false, false], ["profile", false, false], ["collateral-policy", false, false],
+        ["collateral-token-program", false, false], ["market-binding-v2", false, false], ["market-runtime-v3", false, false], ["market-instance-preimage-v2", false, false],
+        ["hoard-v2", false, true], ["claim-ledger-v3", false, true], ["resolution-v5", false, false], ["fractional-policy-v3", false, false],
+        ["fractional-ledger-v1", false, true], ["position-v3", false, true], ["general-replay-v3", false, true], ["fractional-credit-v2", false, true],
+        ["market-lifecycle-root-v2", false, false], ["neutral-lamport-sink", false, false], ["rent-sysvar", false, false],
+        ...(creation ? [["credit-funding-payer", true, true], ["system-program", false, false]] : [])
+      ];
+      geometry = creation ? "internal-credit-fresh-or-reopen-21-roles" : "internal-credit-live-19-roles";
+      requirePlain(transactionDraft.exactEquations[0].unit, "Fractional internal Eggs unit");
+      const outcome = decimal(transactionDraft.exactEquations[0].unit.outcome, "Fractional internal outcome", 15n).toString();
+      const quantity = positiveDecimal(transactionDraft.exactEquations[0].left, "Fractional internal quantity").toString();
+      requirePlain(transactionDraft.exactEquations[1].unit, "Fractional internal payout unit");
+      requirePlain(transactionDraft.exactEquations[2].unit, "Fractional internal retained-numerator unit");
+      if (transactionDraft.exactEquations[0].unit.kind !== "egg-atoms" || transactionDraft.exactEquations[1].unit.kind !== "collateral-atoms" || transactionDraft.exactEquations[2].unit.kind !== "price-units") throw new Error("Fractional internal holder choice and derived payout facts use the wrong exact integer units.");
+      holderChoice = Object.freeze({
+        schema: "dragons-clutch/browser/fractional-holder-intent/v1",
+        kind: "redeem-internal-credit",
+        claimant: accountRoles[0].address,
+        position: accountRoles[13].address,
+        outcome,
+        quantity,
+        fundingPayer: payerIndex === null ? null : accountRoles[payerIndex].address,
+        disposition: "holder-approved-choices-reauthenticated-against-finalized-chain-derived-material"
+      });
+      derivedFacts = Object.freeze({
+        credit: accountRoles[15].address,
+        creditAdmission: creation ? "fresh-or-reopened-chain-state" : "live-chain-state",
+        wholeCollateralPayout: decimal(transactionDraft.exactEquations[1].left, "Fractional internal collateral payout").toString(),
+        retainedPayoutNumerator: decimal(transactionDraft.exactEquations[2].left, "Fractional internal retained numerator").toString()
+      });
     } else {
       throw new Error("Fractional action lacks a landed exact browser material contract.");
     }
@@ -1245,7 +1283,8 @@
         const permitted = (coordinate.localAction === "8" && left === 0 && right === 14)
           || ((coordinate.localAction === "3" || coordinate.localAction === "5") && loaderAlias(left, right))
           || (coordinate.localAction === "5" && payerIndex !== null && left === 0 && right === payerIndex)
-          || ((coordinate.localAction === "6" || coordinate.localAction === "7") && payerIndex !== null && (left === 0 || left === 1) && right === payerIndex);
+          || ((coordinate.localAction === "6" || coordinate.localAction === "7") && payerIndex !== null && (left === 0 || left === 1) && right === payerIndex)
+          || (coordinate.localAction === "4" && payerIndex !== null && left === 0 && right === payerIndex);
         if (accountRoles[left].address === accountRoles[right].address && !permitted) throw new Error("Fractional exact tuple contains an unowned account alias.");
       }
     }
@@ -1277,6 +1316,7 @@
       provenance: "all-account-identities-metas-payload-and-amounts-derived-from-finalized-chain-state",
       geometry,
       holderChoice,
+      derivedFacts,
       holderChoiceDisposition: holderChoice === null ? "none-for-current-actions-2-8-9" : "irreducible-holder-choices-only-no-account-meta-authority"
     });
   };
