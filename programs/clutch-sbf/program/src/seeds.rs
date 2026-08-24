@@ -279,6 +279,19 @@ pub const SEED_GENERAL_V2_SETTLEMENT_CASH_POT: &[u8] =
 /// Counted candidate-scoped General V2 SettlementRoot seed prefix.
 pub const SEED_GENERAL_V2_SETTLEMENT_ROOT: &[u8] =
     clutch_general_v2_contract::SETTLEMENT_ROOT_SEED_DOMAIN_V1;
+/// Disabled one-per-Root compact frozen-order locator prefix.
+pub const SEED_GENERAL_V2_FROZEN_ORDER_LOCATOR: &[u8] =
+    clutch_general_v2_contract::FROZEN_ORDER_LOCATOR_SEED_DOMAIN_V1;
+/// Disabled one-per-Root compact candidate slice-index prefix.
+pub const SEED_GENERAL_V2_CANDIDATE_SLICE_INDEX: &[u8] =
+    clutch_general_v2_contract::CANDIDATE_ORDER_SLICE_INDEX_SEED_DOMAIN_V1;
+
+const _: () = assert!(SEED_GENERAL_V2_FROZEN_ORDER_LOCATOR.len() <= 32);
+const _: () = assert!(SEED_GENERAL_V2_CANDIDATE_SLICE_INDEX.len() <= 32);
+const _: () = assert!(
+    SEED_GENERAL_V2_FROZEN_ORDER_LOCATOR.len()
+        != SEED_GENERAL_V2_CANDIDATE_SLICE_INDEX.len()
+);
 
 /// Single-custody failure semantic root, keyed by V2 market and generation.
 pub const SEED_FAILURE_EXTERNAL_ROOT: &[u8] = b"dc:failure-root:v2";
@@ -996,6 +1009,28 @@ pub fn general_v2_settlement_root_pda(
     find(
         program_id,
         &[SEED_GENERAL_V2_SETTLEMENT_ROOT, epoch, settlement_candidate],
+    )
+}
+
+/// Canonical disabled compact locator PDA for one counted SettlementRoot.
+pub fn general_v2_frozen_order_locator_pda(
+    program_id: &Pubkey,
+    settlement_root: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_FROZEN_ORDER_LOCATOR, settlement_root],
+    )
+}
+
+/// Canonical disabled compact slice-index PDA for one counted SettlementRoot.
+pub fn general_v2_candidate_slice_index_pda(
+    program_id: &Pubkey,
+    settlement_root: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_GENERAL_V2_CANDIDATE_SLICE_INDEX, settlement_root],
     )
 }
 
