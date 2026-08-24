@@ -156,7 +156,7 @@ pub struct FailureMarketReplayV2 {
     phase: FailureMarketReplayPhaseV2,
     failure_policy_binding_id: FailurePolicyBindingId,
     market_instance_id: MarketInstanceV2Id,
-    admission_state_id: crate::market_policy_v1::FailureMarketAdmissionStateIdV1,
+    prepaid_funding_receipt_id: ProductContentId,
     funding_receipt_id: FailureMarketReplayFundingReceiptIdV2,
     family_aggregate_receipt_id: FailureMarketFamilyAggregateReceiptIdV2,
     runtime_terminal_state_commitment: FailureMarketRuntimeStateCommitmentV1,
@@ -189,6 +189,12 @@ impl FailureMarketReplayV2 {
     /// Exact Product foundation capitalization receipt.
     pub const fn funding_receipt_id(self) -> FailureMarketReplayFundingReceiptIdV2 {
         self.funding_receipt_id
+    }
+
+    /// Exact Product slot-7 debit committed at physical creation. Retaining
+    /// this preimage component makes later reopening entirely chain-derived.
+    pub const fn prepaid_funding_receipt_id(self) -> ProductContentId {
+        self.prepaid_funding_receipt_id
     }
 
     /// Exact terminal family aggregate, or zero while Pending.
@@ -234,7 +240,7 @@ impl FailureMarketReplayV2 {
         for id in [
             self.failure_policy_binding_id.bytes(),
             self.market_instance_id.bytes(),
-            self.admission_state_id.bytes(),
+            self.prepaid_funding_receipt_id.bytes(),
             self.funding_receipt_id.bytes(),
             self.family_aggregate_receipt_id.bytes(),
             self.runtime_terminal_state_commitment.bytes(),
@@ -285,11 +291,7 @@ impl FailureMarketReplayV2 {
                 &mut cursor,
             )?),
             market_instance_id: MarketInstanceV2Id::from_bytes(take_id(input, &mut cursor)?),
-            admission_state_id:
-                crate::market_policy_v1::FailureMarketAdmissionStateIdV1::from_bytes(take_id(
-                    input,
-                    &mut cursor,
-                )?),
+            prepaid_funding_receipt_id: ProductContentId::from_bytes(take_id(input, &mut cursor)?),
             funding_receipt_id: FailureMarketReplayFundingReceiptIdV2::from_bytes(take_id(
                 input,
                 &mut cursor,
@@ -315,7 +317,7 @@ impl FailureMarketReplayV2 {
         for id in [
             self.failure_policy_binding_id.bytes(),
             self.market_instance_id.bytes(),
-            self.admission_state_id.bytes(),
+            self.prepaid_funding_receipt_id.bytes(),
             self.funding_receipt_id.bytes(),
         ] {
             require_live(id)?;
@@ -344,7 +346,7 @@ impl FailureMarketReplayV2 {
         let funded = funding.facts();
         if self.failure_policy_binding_id != admission.binding().id()
             || self.market_instance_id != policy.market_instance_id
-            || self.admission_state_id != admission.id()?
+            || self.prepaid_funding_receipt_id != funded.prepaid_funding_receipt_id
             || self.generation != policy.generation
             || self.funding_receipt_id != funding.id()
             || funded.failure_policy_binding_id != self.failure_policy_binding_id
@@ -381,7 +383,7 @@ pub fn admit_failure_market_replay_v2<A: AuthenticatedFailureMarketReplayFunding
         phase: FailureMarketReplayPhaseV2::Pending,
         failure_policy_binding_id: admission.binding().id(),
         market_instance_id: admission.binding().facts().market_instance_id,
-        admission_state_id: admission.id()?,
+        prepaid_funding_receipt_id: facts.prepaid_funding_receipt_id,
         funding_receipt_id,
         family_aggregate_receipt_id: FailureMarketFamilyAggregateReceiptIdV2::from_bytes([0; 32]),
         runtime_terminal_state_commitment: FailureMarketRuntimeStateCommitmentV1::from_bytes(
@@ -435,6 +437,37 @@ pub fn decode_and_reopen_failure_market_replay_v2(
     facts: FailureMarketReplayFundingFactsV2,
 ) -> Result<(FailureMarketReplayV2, FailureMarketReplayFundingReceiptV2)> {
     let replay = FailureMarketReplayV2::decode_canonical(input)?;
+    let funding = reopen_failure_market_replay_funding_v2(admission, replay, facts)?;
+    Ok((replay, funding))
+}
+
+/// Hostile-decode permanent replay and reconstruct its Product funding
+/// receipt entirely from persisted replay/admission state and the physical
+/// replay coordinate. No caller-supplied funding preimage participates.
+pub fn decode_and_reopen_failure_market_replay_from_chain_v2(
+    input: &[u8; FAILURE_MARKET_REPLAY_BYTES_V2],
+    admission: FailureMarketAdmissionStateV1,
+    replay_account: FailureMarketAccountIdV1,
+) -> Result<(FailureMarketReplayV2, FailureMarketReplayFundingReceiptV2)> {
+    let replay = FailureMarketReplayV2::decode_canonical(input)?;
+    let root_funding = admission.root_funding().facts();
+    let policy = admission.binding().facts();
+    let observed_balance_lamports = replay
+        .permanent_rent_principal_lamports
+        .checked_add(replay.donation_floor_lamports)
+        .ok_or(Error::BindingMismatch)?;
+    let facts = FailureMarketReplayFundingFactsV2 {
+        failure_policy_binding_id: admission.binding().id(),
+        market_instance_id: policy.market_instance_id,
+        generation: policy.generation,
+        prepaid_funding_receipt_id: replay.prepaid_funding_receipt_id,
+        replay_account,
+        permanent_rent_funder: root_funding.rent_payer,
+        neutral_sink: FailureMarketAccountIdV1::from_bytes(policy.neutral_sink.bytes()),
+        permanent_rent_principal_lamports: replay.permanent_rent_principal_lamports,
+        donation_floor_lamports: replay.donation_floor_lamports,
+        observed_balance_lamports,
+    };
     let funding = reopen_failure_market_replay_funding_v2(admission, replay, facts)?;
     Ok((replay, funding))
 }
@@ -535,7 +568,7 @@ pub fn plan_terminalize_failure_market_replay_v2<
     if aggregate_facts.failure_policy_binding_id != replay.failure_policy_binding_id
         || aggregate_facts.market_instance_id != replay.market_instance_id
         || aggregate_facts.generation != replay.generation
-        || aggregate_facts.admission_state_id != replay.admission_state_id
+        || aggregate_facts.admission_state_id != admission.id()?
         || funded.replay_account == aggregate_facts.admission_root_account_id
         || funded.replay_account == aggregate_facts.runtime_root_account_id
         || funded.replay_account == aggregate_facts.interval_work_account_id
@@ -679,14 +712,13 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::market_policy_v1::FailureMarketAdmissionStateIdV1;
 
     fn pending() -> FailureMarketReplayV2 {
         FailureMarketReplayV2 {
             phase: FailureMarketReplayPhaseV2::Pending,
             failure_policy_binding_id: FailurePolicyBindingId::from_bytes([1; 32]),
             market_instance_id: MarketInstanceV2Id::from_bytes([2; 32]),
-            admission_state_id: FailureMarketAdmissionStateIdV1::from_bytes([3; 32]),
+            prepaid_funding_receipt_id: ProductContentId::from_bytes([3; 32]),
             funding_receipt_id: FailureMarketReplayFundingReceiptIdV2::from_bytes([4; 32]),
             family_aggregate_receipt_id: FailureMarketFamilyAggregateReceiptIdV2::from_bytes(
                 [0; 32],

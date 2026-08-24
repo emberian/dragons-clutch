@@ -14,16 +14,25 @@ use crate::instructions::failure_market_admission::{
 use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, SYSTEM_PROGRAM_ID,
 };
+use crate::instructions::failure_market_foundation_v4::{
+    authenticate_prefunded_failure_destination_v4, finish_failure_foundation_postwrite_v4,
+    AuthenticatedFailureFoundationPostwriteV4,
+};
+use crate::instructions::product_market_lifecycle_v3_current::
+    AuthenticatedProductMarketFoundationDebitV4;
 use crate::instructions::product_series_current::AuthenticatedMarketFoundationPreallocationV3;
 use crate::seeds;
 use clutch_failure_policy_runtime::market_replay_v2::{
-    admit_failure_market_replay_v2, decode_and_reopen_failure_market_replay_v2,
+    admit_failure_market_replay_v2, decode_and_reopen_failure_market_replay_from_chain_v2,
+    decode_and_reopen_failure_market_replay_v2,
     AuthenticatedFailureMarketReplayFundingV2, FailureMarketReplayFundingFactsV2,
     FailureMarketReplayFundingReceiptV2, FailureMarketReplayPlanV2,
     FailureMarketReplayStateIdV2, FailureMarketReplayTerminalReceiptV2, FailureMarketReplayV2,
     FAILURE_MARKET_REPLAY_BYTES_V2,
 };
-use clutch_product_series::{ContentId as ProductContentId, MarketFoundationSlotV3};
+use clutch_product_series::{
+    ContentId as ProductContentId, MarketFoundationSlotV3, MarketFoundationSlotV4,
+};
 use clutch_solana_layout::failure_market_replay_v2::{
     FailureMarketReplayAccountV2, FAILURE_MARKET_REPLAY_BODY_BYTES_V2,
 };
@@ -137,6 +146,11 @@ impl AuthenticatedFailureMarketReplayV2 {
         self.authentication_id
     }
 
+    /// Exact framed account data identity.
+    pub(crate) const fn data_id(self) -> ProductContentId {
+        self.data_id
+    }
+
     /// Exact Product foundation capitalization receipt.
     pub(crate) const fn funding(self) -> FailureMarketReplayFundingReceiptV2 {
         self.funding
@@ -238,6 +252,27 @@ pub(crate) fn initialize_failure_market_replay_v2<'a>(
         donation_floor_lamports: product_preallocation.donation_lamports(),
         observed_balance_lamports: product_preallocation.observed_balance_lamports(),
     };
+    initialize_failure_market_replay_with_funding_v2(
+        program_id,
+        replay_account,
+        rent_sysvar,
+        system_program,
+        admission,
+        funding_facts,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn initialize_failure_market_replay_with_funding_v2<'a>(
+    program_id: &Pubkey,
+    replay_account: &AccountInfo<'a>,
+    rent_sysvar: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    admission: AuthenticatedFailureMarketRootV3,
+    funding_facts: FailureMarketReplayFundingFactsV2,
+) -> Outcome<FailureMarketReplayPostimageV2> {
+    let admission_state = admission.state();
+    let policy = admission_state.binding().facts();
     let product_foundation_authority = ProductFailureMarketReplayFundingV2 {
         expected: funding_facts,
     };
@@ -341,6 +376,96 @@ pub(crate) fn initialize_failure_market_replay_v2<'a>(
         replay: authenticated,
         funding,
     })
+}
+
+/// Consume Product's current slot-7 debit and return its move-only RootV3
+/// postwrite after the permanent replay has been hostile-reopened.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub(crate) fn create_failure_market_replay_from_product_foundation_debit_v4<'a>(
+    program_id: &Pubkey,
+    debit: AuthenticatedProductMarketFoundationDebitV4,
+    admission_root_account: &AccountInfo<'a>,
+    replay_account: &AccountInfo<'a>,
+    rent_sysvar: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+) -> Outcome<AuthenticatedFailureFoundationPostwriteV4> {
+    require_system_program(system_program)?;
+    require_distinct(&[
+        admission_root_account.clone(),
+        replay_account.clone(),
+        rent_sysvar.clone(),
+        system_program.clone(),
+    ])?;
+    let admission = authenticate_failure_market_root_v3(
+        program_id,
+        admission_root_account,
+        false,
+    )?;
+    let admission_state = admission.state();
+    let policy = admission_state.binding().facts();
+    let rent = read_rent(rent_sysvar)?;
+    let expected_replay = seeds::failure_market_replay_v2_pda(
+        program_id,
+        &policy.market_instance_id.bytes(),
+        policy.generation,
+    )
+    .0;
+    authenticate_prefunded_failure_destination_v4(
+        &debit,
+        replay_account,
+        system_program,
+        &rent,
+        MarketFoundationSlotV4::FailureReplay,
+        expected_replay,
+        FAILURE_MARKET_REPLAY_ACCOUNT_BYTES_V2,
+        policy.market_instance_id,
+        policy.generation,
+        Pubkey::new_from_array(policy.neutral_sink.bytes()),
+    )?;
+    let funding_facts = FailureMarketReplayFundingFactsV2 {
+        failure_policy_binding_id: admission_state.binding().id(),
+        market_instance_id: policy.market_instance_id,
+        generation: policy.generation,
+        prepaid_funding_receipt_id: debit.id(),
+        replay_account:
+            clutch_failure_policy_runtime::market_policy_v1::FailureMarketAccountIdV1::from_bytes(
+                replay_account.key.to_bytes(),
+            ),
+        permanent_rent_funder:
+            clutch_failure_policy_runtime::market_policy_v1::FailureMarketAccountIdV1::from_bytes(
+                debit.rent_refund_owner().to_bytes(),
+            ),
+        neutral_sink:
+            clutch_failure_policy_runtime::market_policy_v1::FailureMarketAccountIdV1::from_bytes(
+                debit.neutral_lamport_sink().to_bytes(),
+            ),
+        permanent_rent_principal_lamports: debit.principal_lamports(),
+        donation_floor_lamports: debit.destination_donation_floor_lamports(),
+        observed_balance_lamports: debit.destination_balance_after_lamports(),
+    };
+    let postimage = initialize_failure_market_replay_with_funding_v2(
+        program_id,
+        replay_account,
+        rent_sysvar,
+        system_program,
+        admission,
+        funding_facts,
+    )?;
+    let replay = postimage.replay();
+    require(
+        replay.funding() == postimage.funding()
+            && replay.observed_lamports == debit.destination_balance_after_lamports(),
+        ClutchError::MismatchedState,
+    )?;
+    finish_failure_foundation_postwrite_v4(
+        program_id,
+        debit,
+        replay_account,
+        MarketFoundationSlotV4::FailureReplay,
+        replay.data_id(),
+        replay.authentication_id(),
+    )
 }
 
 /// Authenticate exact fresh `0xa3/v2` owner, PDA, frame, semantic body,
@@ -482,6 +607,77 @@ pub(crate) fn reopen_failure_market_replay_v2<'a>(
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
         replay_account.lamports() >= observed_balance_lamports
+            && *replay_account.key != admission.account()
+            && replay_account.key.to_bytes() != policy.recovery_state_id.bytes()
+            && replay_account.key.to_bytes() != policy.recovery_compartment_account_id.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let state_id = replay
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let data_id = framed_data_id(framed);
+    let authentication_id = account_authentication_id(
+        replay_account,
+        data_id,
+        state_id,
+        admission_state
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?
+            .bytes(),
+    );
+    Ok(AuthenticatedFailureMarketReplayV2 {
+        account: *replay_account.key,
+        bump: frame.bump(),
+        replay,
+        state_id,
+        data_id,
+        authentication_id,
+        observed_lamports: replay_account.lamports(),
+        admission_root_account: admission.account(),
+        funding,
+    })
+}
+
+/// Hostile-reopen the replay and its exact funding receipt using chain state
+/// only. The slot-7 debit is persisted in the replay body; payer and sink are
+/// immutable admission facts, so no operator preimage is accepted.
+pub(crate) fn reopen_failure_market_replay_from_chain_v2<'a>(
+    program_id: &Pubkey,
+    replay_account: &AccountInfo<'a>,
+    admission: AuthenticatedFailureMarketRootV3,
+    writable: bool,
+) -> Outcome<AuthenticatedFailureMarketReplayV2> {
+    let admission_state = admission.state();
+    let policy = admission_state.binding().facts();
+    authenticate_metadata(program_id, replay_account, writable)?;
+    let input = replay_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let framed: &[u8; FAILURE_MARKET_REPLAY_ACCOUNT_BYTES_V2] = input
+        .as_ref()
+        .try_into()
+        .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+    let frame = FailureMarketReplayAccountV2::decode(framed)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    expect_pda(
+        replay_account.key,
+        seeds::failure_market_replay_v2_pda(
+            program_id,
+            &policy.market_instance_id.bytes(),
+            policy.generation,
+        ),
+        Some(frame.bump()),
+    )?;
+    let (replay, funding) = decode_and_reopen_failure_market_replay_from_chain_v2(
+        frame.semantic_body(),
+        admission_state,
+        clutch_failure_policy_runtime::market_policy_v1::FailureMarketAccountIdV1::from_bytes(
+            replay_account.key.to_bytes(),
+        ),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        replay_account.lamports() >= funding.facts().observed_balance_lamports
             && *replay_account.key != admission.account()
             && replay_account.key.to_bytes() != policy.recovery_state_id.bytes()
             && replay_account.key.to_bytes() != policy.recovery_compartment_account_id.bytes(),
