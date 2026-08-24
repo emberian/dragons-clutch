@@ -19,6 +19,8 @@ pub mod market;
 pub mod policy;
 /// Resolution-receipt contract.
 pub mod receipt;
+/// Immutable policy plus feed-semantics materialization for Market founding.
+pub mod resolution_material;
 
 /// Refusal returned by this crate's total parsers and constructors.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
