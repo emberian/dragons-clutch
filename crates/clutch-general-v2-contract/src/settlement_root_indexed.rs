@@ -611,6 +611,8 @@ enum IndexedSettlementBaseTransitionV1 {
     },
     /// Release one exact zero-fill Reservation.
     ReleaseUnfilledReservation,
+    /// Create and count the unique merge-funded settlement cash pot.
+    ActivateMergeCashPot,
     /// Complete one owner finalization.
     CompleteOwnerFinalization {
         /// Exact presence of the fee finalization child.
@@ -1040,6 +1042,9 @@ impl IndexedSettlementRootV1AccountV1 {
             IndexedSettlementBaseTransitionV1::ReleaseUnfilledReservation => {
                 self.base.release_unfilled_reservation()?
             }
+            IndexedSettlementBaseTransitionV1::ActivateMergeCashPot => {
+                *crate::prepare_activate_merge_cash_pot_v1(&self.base)?.root()
+            }
             IndexedSettlementBaseTransitionV1::CompleteOwnerFinalization {
                 fee_receipt_created,
             } => self
@@ -1102,6 +1107,11 @@ impl IndexedSettlementRootV1AccountV1 {
     /// Count one authenticated zero-fill Reservation release.
     pub fn release_unfilled_reservation(&self) -> Result<Self, CodecError> {
         self.apply_base_transition(IndexedSettlementBaseTransitionV1::ReleaseUnfilledReservation)
+    }
+
+    /// Count the unique action-37 merge cash-pot creation.
+    pub fn activate_merge_cash_pot(&self) -> Result<Self, CodecError> {
+        self.apply_base_transition(IndexedSettlementBaseTransitionV1::ActivateMergeCashPot)
     }
 
     /// Count one authenticated owner finalization and its exact fee-child bit.

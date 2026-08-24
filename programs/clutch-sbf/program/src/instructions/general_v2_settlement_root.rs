@@ -48,6 +48,7 @@ enum NamedRootTransitionV1 {
         merge_receipt: bool,
     },
     ReleaseUnfilledReservation,
+    ActivateMergeCashPot,
     CompleteOwnerFinalization { fee_receipt_created: bool },
     CompleteMergePayment,
     RetirePortfolioPairArchives { receipt_count: u8 },
@@ -155,6 +156,15 @@ impl AuthenticatedGeneralSettlementRootV1 {
         )
     }
 
+    /// Encode the unique action-37 merge cash-pot activation successor.
+    pub fn encode_merge_cash_activation_successor(
+        &self,
+        expected: &SettlementRootV1AccountV1,
+        output: &mut [u8],
+    ) -> Outcome<()> {
+        self.encode_named_successor(expected, NamedRootTransitionV1::ActivateMergeCashPot, output)
+    }
+
     /// Encode exactly one owner-finalization successor.
     pub fn encode_owner_finalization_successor(
         &self,
@@ -256,6 +266,9 @@ fn apply_legacy_transition(
         NamedRootTransitionV1::ReleaseUnfilledReservation => {
             root.release_unfilled_reservation()
         }
+        NamedRootTransitionV1::ActivateMergeCashPot => {
+            Ok(*clutch_general_v2_contract::prepare_activate_merge_cash_pot_v1(root)?.root())
+        }
         NamedRootTransitionV1::CompleteOwnerFinalization {
             fee_receipt_created,
         } => root.complete_owner_finalization(fee_receipt_created),
@@ -285,6 +298,7 @@ fn apply_indexed_transition(
         NamedRootTransitionV1::ReleaseUnfilledReservation => {
             root.release_unfilled_reservation()
         }
+        NamedRootTransitionV1::ActivateMergeCashPot => root.activate_merge_cash_pot(),
         NamedRootTransitionV1::CompleteOwnerFinalization {
             fee_receipt_created,
         } => root.complete_owner_finalization(fee_receipt_created),
