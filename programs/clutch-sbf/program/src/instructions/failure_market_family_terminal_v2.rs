@@ -497,6 +497,10 @@ fn authenticate_failure_market_family_terminal_owner_v2(
     interval_funding: FailureMarketIntervalFundingReceiptV2,
     quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
     replay_funding: FailureMarketReplayFundingReceiptV2,
+    runtime_writable: bool,
+    interval_cell_writable: bool,
+    interval_history_writable: bool,
+    replay_writable: bool,
 ) -> Outcome<AuthenticatedFailureMarketFamilyTerminalOwnerV2> {
     require_distinct(&[
         admission_root_account.clone(),
@@ -513,7 +517,7 @@ fn authenticate_failure_market_family_terminal_owner_v2(
         admission_root_account,
         runtime_root_account,
         live_admission,
-        false,
+        runtime_writable,
     )?;
     let interval = authenticate_failure_market_interval_accounts_v2(
         program_id,
@@ -522,15 +526,15 @@ fn authenticate_failure_market_family_terminal_owner_v2(
         live_admission,
         interval_funding,
         quote,
-        false,
-        false,
+        interval_cell_writable,
+        interval_history_writable,
     )?;
     let replay = authenticate_failure_market_replay_v2(
         program_id,
         replay_account,
         live_admission,
         replay_funding,
-        false,
+        replay_writable,
     )?;
     let policy = live_admission.state().binding().facts();
     let runtime_state = runtime.state();
@@ -584,6 +588,41 @@ fn authenticate_failure_market_family_terminal_owner_v2(
         ClutchError::MismatchedState,
     )?;
     Ok(authenticated)
+}
+
+/// Reopen the exact durable Failure terminal with only the deletable accounts
+/// writable. The admission root and permanent replay remain read-only. A
+/// Product whole-Market terminal composer consumes this narrow authority
+/// before reverse-order rent closure; no generic writer is exposed.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_failure_market_family_terminal_for_close_v2(
+    program_id: &Pubkey,
+    admission_root_account: &AccountInfo<'_>,
+    runtime_root_account: &AccountInfo<'_>,
+    interval_cell_account: &AccountInfo<'_>,
+    interval_history_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    admission: AuthenticatedFailureMarketRootV2,
+    interval_funding: FailureMarketIntervalFundingReceiptV2,
+    quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+    replay_funding: FailureMarketReplayFundingReceiptV2,
+) -> Outcome<AuthenticatedFailureMarketFamilyTerminalOwnerV2> {
+    authenticate_failure_market_family_terminal_owner_v2(
+        program_id,
+        admission_root_account,
+        runtime_root_account,
+        interval_cell_account,
+        interval_history_account,
+        replay_account,
+        admission,
+        interval_funding,
+        quote,
+        replay_funding,
+        true,
+        true,
+        true,
+        false,
+    )
 }
 
 impl AuthenticatedFailureSharedCoreTerminalOwnerV1
@@ -987,6 +1026,10 @@ pub(crate) fn record_persisted_failure_market_family_terminal_v2<'next>(
         interval_funding,
         quote,
         replay_funding,
+        false,
+        false,
+        false,
+        false,
     )?;
     let (market_root_after, product_terminal) = record_failure_shared_core_terminal_v1(
         program_id,
@@ -1188,6 +1231,21 @@ mod adversarial_family_terminal_tests {
             assert!(owner.contains(predicate));
         }
         assert!(!owner.contains("FailureMarketIntervalFamilySealReceiptV2 {"));
+    }
+
+    #[test]
+    fn close_reopen_widens_only_deletable_failure_accounts() {
+        let source = include_str!("failure_market_family_terminal_v2.rs");
+        let close = source
+            .split("pub(crate) fn authenticate_failure_market_family_terminal_for_close_v2")
+            .nth(1)
+            .and_then(|value| {
+                value.split("impl AuthenticatedFailureSharedCoreTerminalOwnerV1")
+                    .next()
+            })
+            .expect("close-scoped durable owner");
+        assert!(close.contains("true,\n        true,\n        true,\n        false,"));
+        assert!(!close.contains("admission_root_account.is_writable"));
     }
 
     #[test]
