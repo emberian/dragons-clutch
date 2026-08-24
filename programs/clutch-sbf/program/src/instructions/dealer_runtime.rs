@@ -9,13 +9,16 @@
 //! action remains refused before reading accounts.
 
 use clutch_dealer_runtime_contract::{
-    CoveredDealerTerminalV2, DealerSeriesObligationBindingV1, DealerStateV3, FixedCodec, Id,
+    CoveredDealerTerminalV2, DealerSeriesObligationBindingV1,
+    DealerSeriesObligationBindingV2, DealerStateV3, FixedCodec, Id,
 };
+use clutch_fractional_redemption_runtime::MAX_OUTCOMES as FRACTIONAL_MAX_OUTCOMES;
 use clutch_solana_layout::registry::{
     DealerFacilityAction, DEALER_COVERED_SELECTION_ACCOUNT_BYTES,
     DEALER_COVERED_SELECTION_ACCOUNT_TAG, DEALER_COVERED_TERMINAL_ACCOUNT_VERSION,
     DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES, DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
     DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION,
+    DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V2, DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V2,
     DEALER_STATE_V3_ACCOUNT_BYTES, DEALER_STATE_V3_ACCOUNT_TAG, DEALER_STATE_V3_ACCOUNT_VERSION,
 };
 use solana_account_info::AccountInfo;
@@ -141,6 +144,14 @@ pub(crate) struct AuthenticatedDealerSeriesObligationV1 {
     binding: DealerSeriesObligationBindingV1,
 }
 
+/// Private exact account capability for the current Product RootV2/LinkV2
+/// facility-lifetime obligation.
+pub(crate) struct AuthenticatedDealerSeriesObligationV2 {
+    account_id: Id,
+    bump: u8,
+    binding: DealerSeriesObligationBindingV2,
+}
+
 /// Private exact account capability for Product-obligation-counting State V3.
 pub(crate) struct AuthenticatedDealerStateV3 {
     account_id: Id,
@@ -246,6 +257,23 @@ impl AuthenticatedDealerSeriesObligationV1 {
     }
 }
 
+impl AuthenticatedDealerSeriesObligationV2 {
+    /// Exact authenticated physical account.
+    pub(crate) const fn account_id(&self) -> Id {
+        self.account_id
+    }
+
+    /// Exact canonical PDA bump.
+    pub(crate) const fn bump(&self) -> u8 {
+        self.bump
+    }
+
+    /// Borrow the complete current body without minting a detached DTO.
+    pub(crate) const fn binding(&self) -> &DealerSeriesObligationBindingV2 {
+        &self.binding
+    }
+}
+
 /// Authenticate one exact `0xaf/1` Dealer facility obligation account.
 pub(crate) fn authenticate_dealer_series_obligation_v1(
     program_id: &Pubkey,
@@ -294,6 +322,60 @@ pub(crate) fn authenticate_dealer_series_obligation_v1(
         ClutchError::MismatchedState,
     )?;
     Ok(AuthenticatedDealerSeriesObligationV1 {
+        account_id: Id::from_bytes(account.key.to_bytes()),
+        bump: envelope.bump,
+        binding,
+    })
+}
+
+/// Authenticate one exact current `0xaf/v2` Dealer facility obligation.
+pub(crate) fn authenticate_dealer_series_obligation_v2(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    writable: bool,
+) -> Outcome<AuthenticatedDealerSeriesObligationV2> {
+    require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
+    require(!account.executable, ClutchError::ExecutableAccount)?;
+    require(!account.is_signer, ClutchError::MismatchedState)?;
+    require(
+        account.is_writable == writable,
+        if writable {
+            ClutchError::NotWritable
+        } else {
+            ClutchError::UnexpectedWritable
+        },
+    )?;
+    require(
+        account.data_len() == DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V2,
+        ClutchError::WrongDataLength,
+    )?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let (envelope, binding) =
+        decode_dealer_account_body_v1::<DealerSeriesObligationBindingV2>(
+            &data,
+            DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
+            DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V2,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(data);
+    expect_pda(
+        account.key,
+        seeds::dealer_series_obligation_pda(program_id, &binding.key.facility_id.bytes()),
+        Some(envelope.bump),
+    )?;
+    let floor = binding
+        .rent
+        .refundable_principal
+        .checked_add(binding.rent.donation_floor)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        binding.key.binding_account_id.bytes() == account.key.to_bytes()
+            && account.lamports() >= floor,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedDealerSeriesObligationV2 {
         account_id: Id::from_bytes(account.key.to_bytes()),
         bump: envelope.bump,
         binding,
@@ -544,8 +626,26 @@ pub const fn persisted_account_contract_v1(
             });
         }
         registry::DEALER_SERIES_OBLIGATION_ACCOUNT_TAG => (
-            registry::DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION,
+            match version {
+                registry::DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION => {
+                    registry::DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION
+                }
+                registry::DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V2 => {
+                    return Some(DealerPersistedAccountContractV1 {
+                        tag,
+                        version,
+                        account_bytes: registry::DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V2,
+                        lifetime: DealerAccountLifetimeV1::CountedChild,
+                    });
+                }
+                _ => return None,
+            },
             registry::DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES,
+            DealerAccountLifetimeV1::CountedChild,
+        ),
+        registry::DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_TAG => (
+            registry::DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_VERSION,
+            registry::DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_BYTES,
             DealerAccountLifetimeV1::CountedChild,
         ),
         _ => return None,
@@ -600,6 +700,14 @@ pub struct DealerRuntimePayloadV1 {
     pub book_page_count: u8,
     /// Exact current GEN1 Replay sequence for the LP Position receiving a claim.
     pub expected_general_replay_sequence: u64,
+    /// Exact a5 sequence consumed only by Resolve's bounded vector.
+    pub expected_fractional_ledger_sequence: u64,
+    /// Founding a6 sequence consumed only by Resolve.
+    pub expected_fractional_credit_sequence: u64,
+    /// Exact active vector width consumed only by Resolve.
+    pub resolution_outcome_count: u8,
+    /// Exact outcome-ordered facility inventory consumed by Resolve.
+    pub resolution_quantities: [u64; FRACTIONAL_MAX_OUTCOMES],
 }
 
 impl DealerRuntimePayloadV1 {
@@ -626,6 +734,7 @@ impl DealerRuntimePayloadV1 {
             | DealerFacilityAction::AbortBeforeCollection => 16,
             DealerFacilityAction::QueueExit => 32,
             DealerFacilityAction::Claim => 32,
+            DealerFacilityAction::Resolve => 168,
             DealerFacilityAction::Retire => 8,
             _ => 0,
         };
@@ -660,6 +769,10 @@ impl DealerRuntimePayloadV1 {
             row_count: 0,
             book_page_count: 0,
             expected_general_replay_sequence: 0,
+            expected_fractional_ledger_sequence: 0,
+            expected_fractional_credit_sequence: 0,
+            resolution_outcome_count: 0,
+            resolution_quantities: [0; FRACTIONAL_MAX_OUTCOMES],
         };
         match action {
             DealerFacilityAction::Initialize => {
@@ -820,6 +933,43 @@ impl DealerRuntimePayloadV1 {
                     || value.liveness_call_ordinal == 0
                 {
                     return Err(DealerRuntimeContractErrorV1::InvalidField);
+                }
+            }
+            DealerFacilityAction::Resolve => {
+                value.expected_fractional_ledger_sequence = read_u64(input, 16);
+                value.expected_fractional_credit_sequence = read_u64(input, 24);
+                value.resolution_outcome_count = input[32];
+                if input[33..40].iter().any(|byte| *byte != 0) {
+                    return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
+                }
+                let mut index = 0usize;
+                let mut any = false;
+                while index < FRACTIONAL_MAX_OUTCOMES {
+                    value.resolution_quantities[index] = read_u64(input, 40 + index * 8);
+                    any |= value.resolution_quantities[index] != 0;
+                    index += 1;
+                }
+                value.liveness_call_ordinal = read_u32(input, 168);
+                if input[172..176].iter().any(|byte| *byte != 0) {
+                    return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
+                }
+                value.keeper_payment_lamports = read_u64(input, 176);
+                if value.expected_replay_ordinal == 0
+                    || value.expected_fractional_ledger_sequence == 0
+                    || value.expected_fractional_credit_sequence != 1
+                    || value.resolution_outcome_count == 0
+                    || usize::from(value.resolution_outcome_count) > FRACTIONAL_MAX_OUTCOMES
+                    || !any
+                    || value.liveness_call_ordinal == 0
+                {
+                    return Err(DealerRuntimeContractErrorV1::InvalidField);
+                }
+                let mut tail = usize::from(value.resolution_outcome_count);
+                while tail < FRACTIONAL_MAX_OUTCOMES {
+                    if value.resolution_quantities[tail] != 0 {
+                        return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
+                    }
+                    tail += 1;
                 }
             }
             DealerFacilityAction::Retire => {
@@ -1041,6 +1191,14 @@ pub enum DealerMetaRoleV1 {
     SeriesObligation,
     /// Exact Product per-Series Market link whose Dealer latch advances once.
     SeriesMarketLink,
+    /// Finalized full-width Resolution V5.
+    Resolution,
+    /// Canonical a4/v3 Fractional policy.
+    FractionalPolicy,
+    /// Canonical a5/v1 aggregate numerator ledger.
+    FractionalLedger,
+    /// Fresh facility-owned a6/v2 exact-remainder credit.
+    FacilityCredit,
     /// Current V5 compiler bundle selected by the Product link.
     CompilerBundle,
     /// Current V4 attachment selecting the Dealer facility plan.
@@ -1757,6 +1915,52 @@ const CLAIM_TERMINAL: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::SeriesObligation, DealerMetaOwnerV1::SelfProgram, false, false),
 ];
 
+/// Atomic Dealer Resolve/Fractional vector frame. Fractional owns roles 26..39
+/// except the current Product LinkV2 at 25; Dealer writes no Position bytes
+/// after the private Fractional receipt returns.
+const RESOLVE_FACILITY_VECTOR: &[DealerMetaSpecV1] = &[
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
+    meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::FacilityPosition, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::ClaimWork, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::FutureCreditFunding, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::NeutralSink, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
+    meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
+    meta(DealerMetaRoleV1::ProductMarketRoot, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::SeriesObligation, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::SeriesMarketLink, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::Realm, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::CollateralProfile, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::CollateralPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::CollateralTokenProgram, DealerMetaOwnerV1::ExternalExecutable, false, false),
+    meta(DealerMetaRoleV1::CollateralTokenProgramData, DealerMetaOwnerV1::AnyReadOnly, false, false),
+    meta(DealerMetaRoleV1::MarketBinding, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::MarketRuntime, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::MarketInstance, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::Hoard, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::ClaimLedger, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::Resolution, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::FractionalPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::FractionalLedger, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::FacilityCredit, DealerMetaOwnerV1::System, false, true),
+];
+
 const QUEUE_NEW_CALLER: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
@@ -1926,6 +2130,7 @@ pub fn meta_contract_v1(
             Some(&QUEUE_EXISTING_EXTERNAL[..QUEUE_EXISTING_EXTERNAL.len() - 1])
         }
         DealerFacilityAction::Claim => Some(CLAIM_TERMINAL),
+        DealerFacilityAction::Resolve => Some(RESOLVE_FACILITY_VECTOR),
         DealerFacilityAction::Retire
             if payload.retire_target == DEALER_RETIRE_EXIT_TICKET_V1 =>
         {

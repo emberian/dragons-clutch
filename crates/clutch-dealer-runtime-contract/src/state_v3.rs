@@ -10,7 +10,8 @@
 
 use crate::codec::{Reader, Writer, HEADER_BYTES};
 use crate::{
-    DealerPhaseV2, DealerSeriesObligationBindingV1, DealerSeriesObligationPhaseV1,
+    DealerPhaseV2, DealerSeriesObligationBindingV1, DealerSeriesObligationBindingV2,
+    DealerSeriesObligationPhaseV1,
     DealerStateV2, DeletableRentOwnerV1, Error, FixedCodec, Id, Result, DEALER_STATE_BYTES_V2,
     DEALER_STATE_CONTENT_DOMAIN_V3, DELETABLE_RENT_OWNER_BYTES,
 };
@@ -42,6 +43,37 @@ pub struct DealerStateV3 {
 }
 
 impl DealerStateV3 {
+    /// Promote the exact current Product RootV2/LinkV2 admission post-state.
+    pub fn promote_current(
+        base: DealerStateV2,
+        binding: &DealerSeriesObligationBindingV2,
+        product_upgrade_rent: DeletableRentOwnerV1,
+    ) -> Result<Self> {
+        base.validate()?;
+        binding.validate()?;
+        product_upgrade_rent.validate()?;
+        if binding.phase != DealerSeriesObligationPhaseV1::Live
+            || binding.key.policy_id != base.policy_id
+            || binding.key.facility_id != base.facility_id
+            || binding.key.facility_position_binding_id != base.facility_position_binding_id
+            || base.children.leases != 1
+            || base.children.settlement_pots != 1
+            || base.active_lease_id.is_zero()
+            || product_upgrade_rent.neutral_sink != base.rent.neutral_sink
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let value = Self {
+            base,
+            series_obligation_binding_id: binding.binding_id()?,
+            series_obligation_binding_account_id: binding.key.binding_account_id,
+            series_obligation_children: 1,
+            product_upgrade_rent,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Promote the exact SelectLeaseAndBegin post-state while admitting one
     /// authenticated facility-lifetime Product obligation child.
     pub fn promote(
@@ -108,11 +140,60 @@ impl DealerStateV3 {
         Ok(next)
     }
 
+    /// Commit the current Product LinkV2 terminal postwrite while retaining
+    /// the counted rent-owned binding account.
+    pub fn observe_current_terminal_binding(
+        self,
+        binding: &DealerSeriesObligationBindingV2,
+    ) -> Result<Self> {
+        binding.validate()?;
+        if self.series_obligation_children != 1
+            || binding.phase != DealerSeriesObligationPhaseV1::Terminal
+            || binding.key.binding_account_id != self.series_obligation_binding_account_id
+            || binding.key.policy_id != self.base.policy_id
+            || binding.key.facility_id != self.base.facility_id
+            || binding.key.facility_position_binding_id
+                != self.base.facility_position_binding_id
+            || self.base.phase != DealerPhaseV2::Retiring
+            || binding.terminal_state_receipt_id != self.base.terminal_state_receipt_id
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let next = Self {
+            series_obligation_binding_id: binding.binding_id()?,
+            ..self
+        };
+        next.validate()?;
+        Ok(next)
+    }
+
     /// Close the exact terminal binding child after Product has persisted its
     /// terminal link postwrite and rent credits are atomically materialized.
     pub fn close_terminal_binding(
         self,
         binding: &DealerSeriesObligationBindingV1,
+    ) -> Result<Self> {
+        binding.validate()?;
+        if self.series_obligation_children != 1
+            || binding.phase != DealerSeriesObligationPhaseV1::Terminal
+            || binding.key.binding_account_id != self.series_obligation_binding_account_id
+            || binding.binding_id()? != self.series_obligation_binding_id
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let next = Self {
+            series_obligation_binding_account_id: Id::ZERO,
+            series_obligation_children: 0,
+            ..self
+        };
+        next.validate()?;
+        Ok(next)
+    }
+
+    /// Close the exact current Product LinkV2 terminal binding child.
+    pub fn close_current_terminal_binding(
+        self,
+        binding: &DealerSeriesObligationBindingV2,
     ) -> Result<Self> {
         binding.validate()?;
         if self.series_obligation_children != 1

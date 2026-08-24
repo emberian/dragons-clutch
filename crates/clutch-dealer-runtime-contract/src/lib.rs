@@ -224,6 +224,9 @@ pub const DEALER_COVERED_SELECTION_CONTENT_DOMAIN_V1: &[u8] =
 /// Exact content domain for the facility-lifetime Product Series obligation.
 pub const DEALER_SERIES_OBLIGATION_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-runtime/series-obligation/v1\0";
+/// Exact content domain for the current Product V2/V6 Series obligation.
+pub const DEALER_SERIES_OBLIGATION_CONTENT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-runtime/series-obligation/v2\0";
 /// Exact content domain for `FeeBudgetV1`.
 pub const FEE_BUDGET_CONTENT_DOMAIN_V1: &[u8] = b"dragons-clutch/dealer-runtime/fee-budget/v1\0";
 /// Exact content domain for `LivenessBudgetV1`.
