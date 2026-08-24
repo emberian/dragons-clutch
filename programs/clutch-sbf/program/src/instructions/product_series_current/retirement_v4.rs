@@ -21,7 +21,15 @@ use super::{
 use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
-use crate::instructions::product_source_current::AuthenticatedSeriesSourceArtifactsV5;
+use crate::instructions::product_source_current::{
+    AuthenticatedCompiledProductSeriesBundleV6, AuthenticatedSeriesSourceArtifactsV5,
+};
+use crate::instructions::product_series::physical_v4::{
+    retire_current_series_physical_v4, AuthenticatedSeriesPhysicalRetirementV4,
+    SeriesFundingAccountRetirementFactsV4,
+    IX_RETIRE_LAMPORT_REFUND_V4, IX_RETIRE_NEUTRAL_LAMPORT_V4,
+    IX_RETIRE_SYSTEM_PROGRAM_V4, SERIES_PHYSICAL_RETIREMENT_ACCOUNT_COUNT_V4,
+};
 use crate::instructions::source_funding_custody_retirement_v1::{
     AuthenticatedSourceFundingCustodyLifecycleTerminalV1,
     AuthenticatedSourceFundingCustodyRetirementAuthorityV2,
@@ -63,6 +71,8 @@ const PRODUCT_SERIES_TERMINAL_AUTHORITY_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/product-series-terminal-authority/v4\0";
 const PRODUCT_SERIES_LIFECYCLE_TERMINAL_POSTWRITE_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/product-series-lifecycle-terminal-postwrite/v4\0";
+const PRODUCT_SERIES_RETIREMENT_POSTWRITE_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/sbf/product-series-retirement-postwrite/v4\0";
 
 fn hashv(values: &[&[u8]]) -> ContentId {
     ContentId::from_bytes(solana_sha256_hasher::hashv(values).to_bytes())
@@ -99,7 +109,7 @@ struct ProductCountedSeriesLinkRetirementProjectionV4 {
 #[derive(Debug)]
 struct AuthenticatedProductSeriesLinkRetirementV4 {
     id: ContentId,
-    source: AuthenticatedSourceFundingCustodyRetirementV2,
+    source: Box<AuthenticatedSourceFundingCustodyRetirementV2>,
     counted_id: ContentId,
     root_account: Pubkey,
     root_authentication_before: ContentId,
@@ -160,7 +170,7 @@ pub(crate) struct AuthenticatedProductSeriesLifecycleTerminalV4 {
     id: ContentId,
     terminal_authority_id: ContentId,
     link_retirement: AuthenticatedProductSeriesLinkRetirementV4,
-    funding: AuthenticatedSeriesFundingAccountV4,
+    funding: Box<AuthenticatedSeriesFundingAccountV4>,
     funding_terminal_projection: SeriesFundingTerminalProjectionV4,
     funding_terminal_projection_id: ContentId,
     registry_data_id: ContentId,
@@ -202,7 +212,7 @@ impl AuthenticatedProductSeriesLifecycleTerminalV4 {
                 && self.terminal_authority_id == projection.terminal_receipt_id
                 && self.funding_terminal_projection == projection
                 && self.funding_terminal_projection_id == projection_id
-                && &self.funding == funding
+                && self.funding.as_ref() == funding
                 && registry.activation_consumed()
                 && registry.series_registry_account()
                     == self.link_retirement.registry_account
@@ -232,6 +242,181 @@ impl AuthenticatedProductSeriesLifecycleTerminalV4 {
             ClutchError::MismatchedState,
         )?;
         Ok(self.id)
+    }
+}
+
+/// Sole current whole-Series retirement receipt. It owns the full
+/// Failure/Source close, counted Root/Link successor, Terminal ReplayV2 and
+/// physical FundingV4 disposition. All nested authorities are move-only and
+/// private, so no consumer can detach one phase from the atomic outer.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedProductSeriesRetirementV4 {
+    id: ContentId,
+    terminal: AuthenticatedProductSeriesLifecycleTerminalV4,
+    physical: AuthenticatedSeriesPhysicalRetirementV4,
+}
+
+impl AuthenticatedProductSeriesRetirementV4 {
+    pub(crate) const fn id(&self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) fn source_retirement_id(&self) -> ContentId {
+        self.terminal.link_retirement.source.id()
+    }
+
+    pub(crate) fn source_retirement_facts(
+        &self,
+    ) -> SourceFundingCustodyRetirementFactsV2 {
+        self.terminal.link_retirement.source.facts()
+    }
+
+    pub(crate) const fn root_account(&self) -> Pubkey {
+        self.terminal.link_retirement.root_account
+    }
+
+    pub(crate) const fn root_authentication_before(&self) -> ContentId {
+        self.terminal.link_retirement.root_authentication_before
+    }
+
+    pub(crate) const fn root_authentication_after(&self) -> ContentId {
+        self.terminal.link_retirement.root_authentication_after
+    }
+
+    pub(crate) const fn root_semantic_before(&self) -> ContentId {
+        self.terminal.link_retirement.root_semantic_before
+    }
+
+    pub(crate) const fn root_semantic_after(&self) -> ContentId {
+        self.terminal.link_retirement.root_semantic_after
+    }
+
+    pub(crate) const fn root_transition_sequence_before(&self) -> u64 {
+        self.terminal
+            .link_retirement
+            .root_transition_sequence_before
+    }
+
+    pub(crate) const fn root_transition_sequence_after(&self) -> u64 {
+        self.terminal.link_retirement.root_transition_sequence_after
+    }
+
+    pub(crate) const fn link_account(&self) -> Pubkey {
+        self.terminal.link_retirement.link_account
+    }
+
+    pub(crate) const fn link_authentication_before(&self) -> ContentId {
+        self.terminal.link_retirement.link_authentication_before
+    }
+
+    pub(crate) const fn link_authentication_retired(&self) -> ContentId {
+        self.terminal.link_retirement.link_authentication_retired
+    }
+
+    pub(crate) const fn link_data_before(&self) -> ContentId {
+        self.terminal.link_retirement.link_data_before
+    }
+
+    pub(crate) const fn link_data_retired(&self) -> ContentId {
+        self.terminal.link_retirement.link_data_retired
+    }
+
+    pub(crate) const fn link_semantic_before(&self) -> SeriesMarketLinkV2Id {
+        self.terminal.link_retirement.link_semantic_before
+    }
+
+    pub(crate) const fn link_semantic_retired(&self) -> SeriesMarketLinkV2Id {
+        self.terminal.link_retirement.link_semantic_retired
+    }
+
+    pub(crate) const fn link_retirement_projection_id(&self) -> ContentId {
+        self.terminal
+            .link_retirement
+            .link_retirement_projection_id
+    }
+
+    pub(crate) const fn link_rent_principal_lamports(&self) -> u64 {
+        self.terminal.link_retirement.link_rent_principal_lamports
+    }
+
+    pub(crate) const fn link_surplus_donation_lamports(&self) -> u64 {
+        self.terminal.link_retirement.link_surplus_lamports
+    }
+
+    pub(crate) const fn replay_account(&self) -> Pubkey {
+        self.terminal.replay_account
+    }
+
+    pub(crate) const fn replay_authentication_terminal(&self) -> ContentId {
+        self.terminal.replay_authentication_after
+    }
+
+    pub(crate) const fn replay_authentication_before_terminal(&self) -> ContentId {
+        self.terminal.replay_authentication_before
+    }
+
+    pub(crate) const fn replay_data_before_terminal(&self) -> ContentId {
+        self.terminal.replay_data_before
+    }
+
+    pub(crate) const fn replay_data_terminal(&self) -> ContentId {
+        self.terminal.replay_data_after
+    }
+
+    pub(crate) const fn replay_state_before_terminal(&self) -> ContentId {
+        self.terminal.replay_state_before
+    }
+
+    pub(crate) const fn replay_state_terminal(&self) -> ContentId {
+        self.terminal.replay_state_after
+    }
+
+    pub(crate) const fn funding_terminal_projection(
+        &self,
+    ) -> SeriesFundingTerminalProjectionV4 {
+        self.terminal.funding_terminal_projection
+    }
+
+    pub(crate) const fn physical_retirement_id(&self) -> ContentId {
+        self.physical.id()
+    }
+
+    pub(crate) const fn funding_account(&self) -> Pubkey {
+        self.terminal.link_retirement.funding_account
+    }
+
+    pub(crate) const fn funding_state_before_close(&self) -> SeriesFundingStateV4Id {
+        self.terminal.link_retirement.funding_state_id
+    }
+
+    pub(crate) const fn funding_data_before_close(&self) -> ContentId {
+        self.terminal.link_retirement.funding_data_id
+    }
+
+    pub(crate) const fn funding_authentication_before_close(&self) -> ContentId {
+        self.terminal.link_retirement.funding_authentication_id
+    }
+
+    pub(crate) const fn funding_physical_close(
+        &self,
+    ) -> SeriesFundingAccountRetirementFactsV4 {
+        self.physical.funding_close()
+    }
+
+    pub(crate) const fn replay_terminal_projection_id(&self) -> ContentId {
+        self.terminal.replay_terminal_projection.id().content_id()
+    }
+
+    pub(crate) const fn registry_release_id(&self) -> ContentId {
+        self.terminal.link_retirement.registry_release_id
+    }
+
+    pub(crate) const fn capability_profile_id(&self) -> ContentId {
+        self.terminal.link_retirement.capability_profile_id
+    }
+
+    pub(crate) const fn compiler_bundle_id(&self) -> ContentId {
+        self.terminal.link_retirement.compiler_bundle_id
     }
 }
 
@@ -341,8 +526,8 @@ struct AuthenticatedProductSeriesRetirementPreauthorizationV4 {
     replay_data_id: ContentId,
     replay_authentication_id: ContentId,
     source_terminal_id: ContentId,
-    source_terminal_facts: SourceFundingCustodyLifecycleTerminalFactsV1,
-    source_product_release_facts: SourceFundingCustodyProductReleaseFactsV3,
+    source_terminal_facts: Box<SourceFundingCustodyLifecycleTerminalFactsV1>,
+    source_product_release_facts: Box<SourceFundingCustodyProductReleaseFactsV3>,
     counted: ProductCountedSeriesLinkRetirementProjectionV4,
     root_successor: Box<MarketLifecycleRootV2>,
     link_successor: Box<SeriesMarketLinkV2>,
@@ -377,8 +562,8 @@ impl AuthenticatedSourceFundingCustodyRetirementAuthorityV2
             !self.accepted_source_retirement.replace(true)
                 && facts.accounting == self.source_accounting()
                 && facts.lifecycle_terminal_authentication_id == self.source_terminal_id
-                && facts.lifecycle_terminal == self.source_terminal_facts
-                && facts.product_release == self.source_product_release_facts
+            && facts.lifecycle_terminal == *self.source_terminal_facts
+            && facts.product_release == *self.source_product_release_facts
                 && facts.lifecycle_terminal.series_plan_id.bytes() == self.series_plan_id.bytes()
                 && facts.lifecycle_terminal.product_link_account.bytes()
                     == self.counted.link_account.to_bytes()
@@ -628,8 +813,8 @@ fn preauthorize_product_series_retirement_v4(
         replay_data_id: replay.data_id(),
         replay_authentication_id: replay.authentication_id(),
         source_terminal_id,
-        source_terminal_facts,
-        source_product_release_facts,
+        source_terminal_facts: Box::new(source_terminal_facts),
+        source_product_release_facts: Box::new(source_product_release_facts),
         counted,
         root_successor,
         link_successor,
@@ -701,9 +886,9 @@ fn retire_last_product_series_link_v4<'root, 'link>(
             && source_facts.accounting == preauthorization.source_accounting()
             && source_facts.lifecycle_terminal_authentication_id
                 == preauthorization.source_terminal_id
-            && source_facts.lifecycle_terminal == preauthorization.source_terminal_facts
+            && source_facts.lifecycle_terminal == *preauthorization.source_terminal_facts
             && source_facts.product_release
-                == preauthorization.source_product_release_facts
+                == *preauthorization.source_product_release_facts
             && *root_account.key == counted.root_account
             && root.account() == counted.root_account
             && root.authentication_id() == counted.root_authentication_before
@@ -904,7 +1089,7 @@ fn retire_last_product_series_link_v4<'root, 'link>(
     require_live(id)?;
     Ok(AuthenticatedProductSeriesLinkRetirementV4 {
         id,
-        source,
+        source: Box::new(source),
         counted_id: counted.id(),
         root_account: *root_account.key,
         root_authentication_before: counted.root_authentication_before,
@@ -1197,7 +1382,7 @@ fn terminalize_product_series_lifecycle_v4(
         id,
         terminal_authority_id,
         link_retirement,
-        funding: live_funding,
+        funding: Box::new(live_funding),
         funding_terminal_projection,
         funding_terminal_projection_id,
         registry_data_id: live_registry.data_id(),
@@ -1213,6 +1398,149 @@ fn terminalize_product_series_lifecycle_v4(
         replay_state_after,
         replay_terminal_projection,
         replay: rebound_replay,
+    })
+}
+
+/// Sole atomic current whole-Series retirement composer.
+///
+/// Call order is fixed: Source custody close -> counted Root/Link successor ->
+/// physical 0xad close -> Replay retirement record -> Replay terminal seal ->
+/// all eleven vault dispositions -> FundingV4 close. Any later refusal rolls
+/// the entire instruction back, so no intermediate authority is detachable.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn retire_current_product_series_v4<'a, 'root, 'link>(
+    program_id: &Pubkey,
+    registry: &AuthenticatedRegistryCapabilityV4,
+    artifacts: &AuthenticatedSeriesSourceArtifactsV5,
+    bundle: AuthenticatedCompiledProductSeriesBundleV6,
+    registry_account: &AccountInfo<'a>,
+    funding_account: &AccountInfo<'a>,
+    funding: AuthenticatedSeriesFundingAccountV4,
+    root_account: &AccountInfo<'a>,
+    root: AuthenticatedMarketLifecycleRootV2<'_>,
+    link_account: &AccountInfo<'a>,
+    link: AuthenticatedSeriesMarketLinkV2<'_>,
+    replay_account: &AccountInfo<'a>,
+    replay: AuthenticatedSeriesLifecycleReplayV2,
+    route: AuthenticatedSourceRouteV1,
+    schedule: SourceWorkScheduleBindingV1,
+    source_terminal: AuthenticatedSourceFundingCustodyLifecycleTerminalV1,
+    source_custody: &AccountInfo<'a>,
+    physical_accounts: &[AccountInfo<'a>],
+    root_rebound_output: &'root mut MarketLifecycleRootAccountV2,
+    link_rebound_output: &'link mut SeriesMarketLinkAccountV2,
+) -> Outcome<AuthenticatedProductSeriesRetirementV4> {
+    require(
+        physical_accounts.len() == SERIES_PHYSICAL_RETIREMENT_ACCOUNT_COUNT_V4,
+        ClutchError::AccountCount,
+    )?;
+    let refund = &physical_accounts[IX_RETIRE_LAMPORT_REFUND_V4];
+    let neutral_sink = &physical_accounts[IX_RETIRE_NEUTRAL_LAMPORT_V4];
+    let system_program = &physical_accounts[IX_RETIRE_SYSTEM_PROGRAM_V4];
+    require(
+        registry_account.key != funding_account.key
+            && registry_account.key != root_account.key
+            && registry_account.key != link_account.key
+            && registry_account.key != replay_account.key
+            && registry_account.key != source_custody.key
+            && funding_account.key != root_account.key
+            && funding_account.key != link_account.key
+            && funding_account.key != replay_account.key
+            && funding_account.key != source_custody.key
+            && root_account.key != link_account.key
+            && root_account.key != replay_account.key
+            && root_account.key != source_custody.key
+            && link_account.key != replay_account.key
+            && link_account.key != source_custody.key
+            && replay_account.key != source_custody.key,
+        ClutchError::AccountAlias,
+    )?;
+    let prefixes = [
+        registry_account.key,
+        funding_account.key,
+        root_account.key,
+        link_account.key,
+        replay_account.key,
+        source_custody.key,
+    ];
+    let mut outer = 0usize;
+    while outer < physical_accounts.len() {
+        let mut prefix = 0usize;
+        while prefix < prefixes.len() {
+            require(
+                physical_accounts[outer].key != prefixes[prefix],
+                ClutchError::AccountAlias,
+            )?;
+            prefix += 1;
+        }
+        outer += 1;
+    }
+    let link_retirement = retire_product_series_source_and_link_v4(
+        program_id,
+        registry,
+        artifacts,
+        root_account,
+        root,
+        link_account,
+        link,
+        replay_account,
+        replay,
+        &funding,
+        route,
+        schedule,
+        source_terminal,
+        source_custody,
+        refund,
+        neutral_sink,
+        system_program,
+        root_rebound_output,
+        link_rebound_output,
+    )?;
+    let terminal = terminalize_product_series_lifecycle_v4(
+        program_id,
+        registry_account,
+        registry,
+        funding_account,
+        artifacts,
+        replay_account,
+        link_retirement,
+    )?;
+    let physical = retire_current_series_physical_v4(
+        program_id,
+        &terminal,
+        registry,
+        registry_account,
+        funding_account,
+        bundle,
+        artifacts,
+        physical_accounts,
+    )?;
+    require(
+        physical.terminal_projection() == terminal.funding_terminal_projection
+            && physical.id() != terminal.id,
+        ClutchError::MismatchedState,
+    )?;
+    let id = hashv(&[
+        PRODUCT_SERIES_RETIREMENT_POSTWRITE_DOMAIN_V4,
+        program_id.as_ref(),
+        &terminal.id.bytes(),
+        &terminal.link_retirement.id.bytes(),
+        &terminal.link_retirement.source.id().bytes(),
+        &terminal.replay_terminal_projection.id().bytes(),
+        &terminal.funding_terminal_projection_id.bytes(),
+        &physical.id().bytes(),
+        registry_account.key.as_ref(),
+        funding_account.key.as_ref(),
+        root_account.key.as_ref(),
+        link_account.key.as_ref(),
+        replay_account.key.as_ref(),
+        source_custody.key.as_ref(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedProductSeriesRetirementV4 {
+        id,
+        terminal,
+        physical,
     })
 }
 
@@ -1301,5 +1629,35 @@ mod adversarial_source_tests {
         assert!(terminal.contains("authenticate_series_registry_account_v3"));
         assert!(terminal.contains(".terminalize(evidence)"));
         assert!(terminal.contains("write_series_lifecycle_replay_v2"));
+    }
+
+    #[test]
+    fn sole_outer_keeps_every_retirement_authority_move_only() {
+        let source = include_str!("retirement_v4.rs");
+        let receipt = source
+            .split("pub(crate) struct AuthenticatedProductSeriesRetirementV4")
+            .nth(1)
+            .and_then(|value| value.split("impl AuthenticatedProductSeriesRetirementV4").next())
+            .expect("bounded whole-Series receipt");
+        assert!(!receipt.contains("Clone"));
+        assert!(!receipt.contains("Copy"));
+        assert!(receipt.contains("AuthenticatedProductSeriesLifecycleTerminalV4"));
+        assert!(receipt.contains("AuthenticatedSeriesPhysicalRetirementV4"));
+        let outer = source
+            .split("pub(crate) fn retire_current_product_series_v4")
+            .nth(1)
+            .and_then(|value| value.split("#[cfg(test)]").next())
+            .expect("bounded whole-Series outer");
+        let source_close = outer
+            .find("retire_product_series_source_and_link_v4")
+            .expect("Source close");
+        let terminal = outer
+            .find("terminalize_product_series_lifecycle_v4")
+            .expect("Replay terminal");
+        let physical = outer
+            .find("retire_current_series_physical_v4")
+            .expect("physical close");
+        assert!(source_close < terminal && terminal < physical);
+        assert!(!outer.contains("FundingV3"));
     }
 }
