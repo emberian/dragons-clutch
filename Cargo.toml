@@ -7,6 +7,7 @@ members = [
     "crates/dclutch-direct-contract",
     "crates/dclutch-general-contract",
     "crates/dclutch-kernel",
+    "crates/dclutch-market-contract",
     "crates/dclutch-operator",
     "crates/dclutch-pyth-svm",
     "crates/dclutch-pyth-contract",
