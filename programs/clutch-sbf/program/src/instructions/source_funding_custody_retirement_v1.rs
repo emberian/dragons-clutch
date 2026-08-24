@@ -688,7 +688,7 @@ fn authenticate_product_release_evidence_v3(
 
 /// Product-owned terminal identities and immutable destinations. No amount is
 /// supplied: all lamport accounting comes from the hostile-decoded ledger.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SourceFundingCustodyRetirementAccountingV2 {
     pub(crate) funding_terms_id: ContentId,
     pub(crate) product_retirement_authority_id: ContentId,
@@ -751,7 +751,7 @@ pub(crate) trait AuthenticatedSourceFundingCustodyRetirementAuthorityV2 {
 }
 
 /// Private ledger-close postwrite consumed before Funding may close.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedSourceFundingCustodyRetirementV2 {
     id: ContentId,
     product_retirement_authority_id: ContentId,
