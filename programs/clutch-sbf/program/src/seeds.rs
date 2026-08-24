@@ -332,6 +332,9 @@ pub const SEED_PRODUCT_SERIES_LIFECYCLE_REPLAY: &[u8] =
 /// Product-owned Direct global-liveness manifest/allocation lifecycle.
 pub const SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS: &[u8] =
     clutch_solana_layout::product_series::PRODUCT_DIRECT_GLOBAL_LIVENESS_PDA_PREFIX_V1;
+/// One physical generic-liveness row owned by Product `0xba/v1`.
+pub const SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS_COMPARTMENT: &[u8] =
+    b"dc:product-direct-row:v1";
 
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
@@ -517,6 +520,24 @@ pub fn product_direct_global_liveness_pda(
             SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS,
             market_instance_v2_id,
             &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// One canonical Source..Recovery generic-liveness account.
+pub fn product_direct_global_liveness_compartment_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+    kind: u8,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS_COMPARTMENT,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+            &[kind],
         ],
     )
 }
@@ -2107,6 +2128,7 @@ mod tests {
             SEED_PRODUCT_SERIES_MARKET_LINK,
             SEED_PRODUCT_SERIES_LIFECYCLE_REPLAY,
             SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS,
+            SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS_COMPARTMENT,
             SEED_FAILURE_MARKET_ROOT_V2,
             SEED_FAILURE_EXTERNAL_ROOT,
             SEED_FAILURE_REPLAY_TOMBSTONE,
