@@ -7,7 +7,9 @@
 //! bitmap, or generic account vector from a caller.
 
 use crate::account_index::FinalizedAccountAbsence;
-use crate::action_material::StructuredAddressLookupTableV1;
+use crate::action_material::{
+    CanonicalAccountAbsenceV1, StructuredAddressLookupTableV1,
+};
 use crate::rpc_index::{
     CanonicalFamily, CanonicalIntentCoordinate, IndexedProgramRelease, ObservedRpcAccount,
     RpcCommitment,
@@ -71,6 +73,7 @@ pub const GENERAL_ACTION39_FIXED_ROLE_SIGNER_V1: [bool; GENERAL_ACTION39_FIXED_A
     false, false, false, false, false, false, false, false, false, true, false, false,
     false,
 ];
+const GENERAL_ACTION39_FRESH_ROLE_INDICES_V1: [usize; 9] = [14, 15, 19, 20, 40, 41, 42, 43, 44];
 
 const OWNER_PACKAGE: &str =
     "clutch-general-v2-contract+clutch-general-v2-runtime+clutch-product-series";
@@ -201,6 +204,7 @@ pub struct ChainDerivedGeneralAction39MaterialV1 {
     revenue_policy: RevenuePolicyV2,
     payer: Address,
     ordered_accounts: Vec<AccountMeta>,
+    account_absences: Vec<CanonicalAccountAbsenceV1>,
     lookup_table: StructuredAddressLookupTableV1,
 }
 
@@ -211,6 +215,7 @@ impl ChainDerivedGeneralAction39MaterialV1 {
     pub const fn state_sha256(&self) -> [u8; 32] { self.state_sha256 }
     pub const fn payer(&self) -> Address { self.payer }
     pub fn account_metas(&self) -> &[AccountMeta] { &self.ordered_accounts }
+    pub fn account_absences(&self) -> &[CanonicalAccountAbsenceV1] { &self.account_absences }
     pub fn role_labels(&self) -> impl Iterator<Item = &'static str> {
         GENERAL_ACTION39_FIXED_ROLE_LABELS_V1.into_iter().chain(
             (0..self.ordered_accounts.len() - GENERAL_ACTION39_FIXED_ACCOUNT_COUNT_V1)
@@ -349,8 +354,20 @@ pub fn derive_general_action39_material_v1(
     let valid_before_slot = observed_slot
         .checked_add(GENERAL_ACTION39_VALIDITY_SLOTS_V1)
         .ok_or(GeneralAction39MaterialError::Arithmetic)?;
+    let release_key = release.key();
+    let account_absences = fresh_accounts(snapshot)
+        .into_iter()
+        .zip(GENERAL_ACTION39_FRESH_ROLE_INDICES_V1)
+        .map(|(fresh, role_index)| CanonicalAccountAbsenceV1::new(
+            GENERAL_ACTION39_FIXED_ROLE_LABELS_V1[role_index],
+            fresh.address,
+            release_key.clone(),
+            fresh.absence.slot(),
+            fresh.absence.receive_sequence(),
+        ))
+        .collect::<Vec<_>>();
     Ok(ChainDerivedGeneralAction39MaterialV1 {
-        release_key: release.key(),
+        release_key,
         release_manifest_sha256: release.release_manifest_sha256,
         observed_slot,
         valid_before_slot,
@@ -362,6 +379,7 @@ pub fn derive_general_action39_material_v1(
         revenue_policy: policy,
         payer: snapshot.creation.payer.address,
         ordered_accounts,
+        account_absences,
         lookup_table,
     })
 }

@@ -594,6 +594,35 @@ pub struct CanonicalAccountRoleV1 {
     signer: bool,
 }
 
+/// One exact finalized absence which is part of an action prestate but is not
+/// a present restart dependency. The receipt remains release/session bound and
+/// must be reacquired before signing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CanonicalAccountAbsenceV1 {
+    label: &'static str,
+    address: Address,
+    release_key: String,
+    finalized_slot: u64,
+    receive_sequence: u64,
+}
+
+impl CanonicalAccountAbsenceV1 {
+    pub(crate) fn new(
+        label: &'static str,
+        address: Address,
+        release_key: String,
+        finalized_slot: u64,
+        receive_sequence: u64,
+    ) -> Self {
+        Self { label, address, release_key, finalized_slot, receive_sequence }
+    }
+    pub const fn label(&self) -> &'static str { self.label }
+    pub const fn address(&self) -> Address { self.address }
+    pub fn release_key(&self) -> &str { &self.release_key }
+    pub const fn finalized_slot(&self) -> u64 { self.finalized_slot }
+    pub const fn receive_sequence(&self) -> u64 { self.receive_sequence }
+}
+
 impl CanonicalAccountRoleV1 {
     pub(crate) const fn new(
         label: &'static str,
@@ -891,6 +920,7 @@ pub struct CanonicalActionMaterialV1 {
     freshness: ActionFreshnessBoundaryV1,
     fee_payer: Address,
     account_roles: Vec<CanonicalAccountRoleV1>,
+    account_absences: Vec<CanonicalAccountAbsenceV1>,
     planned: PlannedWorkflowNode,
     draft_id: [u8; 32],
 }
@@ -1029,6 +1059,11 @@ impl CanonicalActionMaterialV1 {
     #[must_use]
     pub fn account_roles(&self) -> &[CanonicalAccountRoleV1] {
         &self.account_roles
+    }
+
+    #[must_use]
+    pub fn account_absences(&self) -> &[CanonicalAccountAbsenceV1] {
+        &self.account_absences
     }
 
     #[must_use]
@@ -1251,6 +1286,7 @@ pub fn construct_direct_action_material_v1(
         freshness,
         fee_payer,
         account_roles,
+        account_absences: Vec::new(),
         planned,
         draft_id,
     })
@@ -1401,6 +1437,7 @@ pub(crate) fn finish_chain_derived_direct_material_v2(
         freshness,
         fee_payer,
         account_roles,
+        account_absences: Vec::new(),
         planned,
         draft_id,
     })
@@ -1940,6 +1977,7 @@ pub fn construct_failure_action11_action_material_v1(
         freshness,
         fee_payer: builder.payer(),
         account_roles,
+        account_absences: Vec::new(),
         planned,
         draft_id,
     })
@@ -2007,6 +2045,19 @@ pub fn construct_general_action39_action_material_v1(
             meta.is_signer,
         ))
         .collect::<Vec<_>>();
+    let account_absences = material.account_absences().to_vec();
+    if account_absences.len() != 9
+        || account_absences.iter().any(|absence| {
+            absence.release_key() != release.key()
+                || absence.finalized_slot() != material.observed_slot()
+                || absence.receive_sequence() == 0
+                || !account_roles.iter().any(|role| {
+                    role.label() == absence.label() && role.address() == absence.address()
+                })
+        })
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
     let planned = PlannedWorkflowNode {
         manifest_sha256: release.release_manifest_sha256,
         cursor,
@@ -2045,6 +2096,7 @@ pub fn construct_general_action39_action_material_v1(
         freshness,
         fee_payer: builder.payer(),
         account_roles,
+        account_absences,
         planned,
         draft_id,
     })
@@ -2105,6 +2157,7 @@ pub fn construct_structured_action_material_v1(
         effective_commitment: RpcCommitment::Finalized,
         branch: IndexedBranch::FinalizedScan,
         dependencies,
+        absence_observations: Vec::new(),
     };
     construct_detected_structured_action_material_v1(
         releases,
@@ -2283,6 +2336,7 @@ fn construct_detected_structured_action_material_v1(
         freshness,
         fee_payer: builder.payer(),
         account_roles,
+        account_absences: Vec::new(),
         planned,
         draft_id,
     })
@@ -2436,6 +2490,7 @@ fn detect_unique_create_leaf_v1(
             effective_commitment: RpcCommitment::Finalized,
             branch: IndexedBranch::FinalizedScan,
             dependencies: Vec::new(),
+            absence_observations: Vec::new(),
         };
         if derive_structured_action_v1(
             releases,
@@ -5248,7 +5303,7 @@ pub fn construct_fractional_lifecycle_material_v1(
         capability_profile_id: releases.base.capability_profile_id, coordinate, variant: None,
         driver_account: driver, driver_account_slot: driver_slot, cursor,
         authority_state_sha256: authority, freshness, fee_payer: builder.payer(),
-        account_roles: roles, planned, draft_id,
+        account_roles: roles, account_absences: Vec::new(), planned, draft_id,
     })
 }
 
@@ -6167,6 +6222,7 @@ pub fn construct_fractional_bearer_material_v1(
         freshness,
         fee_payer: builder.payer(),
         account_roles,
+        account_absences: Vec::new(),
         planned,
         draft_id,
     })
@@ -6548,6 +6604,7 @@ pub fn construct_fractional_internal_credit_material_v1(
         freshness,
         fee_payer: builder.payer(),
         account_roles,
+        account_absences: Vec::new(),
         planned,
         draft_id,
     })
@@ -7003,6 +7060,7 @@ pub fn construct_fractional_credit_move_material_v1(
         freshness,
         fee_payer: builder.payer(),
         account_roles,
+        account_absences: Vec::new(),
         planned,
         draft_id,
     })
@@ -7435,6 +7493,7 @@ pub fn construct_fractional_redeem_internal_exact_material_v1(
         freshness,
         fee_payer: builder.payer(),
         account_roles,
+        account_absences: Vec::new(),
         planned,
         draft_id,
     })
@@ -7579,6 +7638,7 @@ fn construct_fractional_seal_claims_exhausted_material_v1(
         freshness,
         fee_payer: builder.payer(),
         account_roles,
+        account_absences: Vec::new(),
         planned,
         draft_id,
     })
@@ -7917,6 +7977,7 @@ pub fn construct_fractional_close_zero_credit_material_v1(
         freshness,
         fee_payer: builder.payer(),
         account_roles,
+        account_absences: Vec::new(),
         planned,
         draft_id,
     })
@@ -8184,6 +8245,7 @@ pub fn construct_dealer_terminal_action_material_v1(
         freshness,
         fee_payer: builder.payer(),
         account_roles,
+        account_absences: Vec::new(),
         planned,
         draft_id,
     })
@@ -9467,6 +9529,7 @@ pub fn construct_source_action_material_v1(
         freshness,
         fee_payer: builder.payer(),
         account_roles,
+        account_absences: Vec::new(),
         planned,
         draft_id,
     })

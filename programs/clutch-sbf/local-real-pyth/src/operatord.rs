@@ -12,7 +12,7 @@ use crate::account_index::{
 use crate::action_material::{
     source_action_from_selection, source_role_label_v2, source_selection_action,
     structured_action_from_selection, structured_selection_action,
-    CanonicalActionMaterialV1,
+    CanonicalAccountAbsenceV1, CanonicalActionMaterialV1,
 };
 use crate::direct_action8_material::{
     DirectAction8CanonicalMaterialV2, DirectAction8OperatorBatchV2,
@@ -114,6 +114,7 @@ pub struct KeeperActionSelection {
     pub effective_commitment: RpcCommitment,
     pub branch: IndexedBranch,
     pub dependencies: Vec<Address>,
+    pub absence_observations: Vec<CanonicalAccountAbsenceV1>,
 }
 
 impl ResumableKeeperSelector {
@@ -186,6 +187,7 @@ impl ResumableKeeperSelector {
                     .iter()
                     .map(|dependency| dependency.account.address)
                     .collect(),
+                absence_observations: Vec::new(),
             });
         }
         selections.sort_by(|left, right| {
@@ -274,6 +276,15 @@ fn merge_chain_material_cursors(
             || current_finalized_slot < freshness.observed_slot
             || current_finalized_slot >= freshness.valid_before_slot
             || !material.reload_authoritative_accounts()
+            || material.account_absences().iter().any(|absence| {
+                absence.release_key() != release.key()
+                    || absence.finalized_slot() != freshness.observed_slot
+                    || absence.receive_sequence() == 0
+                    || finalized.iter().any(|version| {
+                        version.account.address == absence.address()
+                            && version.account.provenance.slot >= absence.finalized_slot()
+                    })
+            })
         {
             return Err(KeeperSelectionError::IncompleteCanonicalHint);
         }
@@ -321,10 +332,12 @@ fn merge_chain_material_cursors(
             observed_commitment: RpcCommitment::Finalized,
             effective_commitment: RpcCommitment::Finalized,
             branch: IndexedBranch::FinalizedScan,
-            dependencies: selection_dependencies_without_driver(
+            dependencies: selection_present_dependencies_without_driver(
                 material.account_roles(),
+                material.account_absences(),
                 material.driver_account(),
             ),
+            absence_observations: material.account_absences().to_vec(),
         });
     }
     if let Some(batch) = direct_batch {
@@ -405,6 +418,7 @@ fn merge_chain_material_cursors(
             effective_commitment: RpcCommitment::Finalized,
             branch: IndexedBranch::FinalizedScan,
             dependencies,
+            absence_observations: Vec::new(),
         });
         }
     }
@@ -464,6 +478,7 @@ fn merge_chain_material_cursors(
                     material.account_roles(),
                     material.driver_account(),
                 ),
+                absence_observations: Vec::new(),
             });
         }
     }
@@ -505,6 +520,26 @@ fn selection_dependencies_without_driver(
         .iter()
         .map(|role| role.address())
         .filter(|address| *address != driver)
+        .collect::<Vec<_>>();
+    dependencies.sort();
+    dependencies.dedup();
+    dependencies
+}
+
+fn selection_present_dependencies_without_driver(
+    roles: &[crate::action_material::CanonicalAccountRoleV1],
+    absences: &[CanonicalAccountAbsenceV1],
+    driver: Address,
+) -> Vec<Address> {
+    let mut dependencies = roles
+        .iter()
+        .map(|role| role.address())
+        .filter(|address| {
+            *address != driver
+                && !absences
+                    .iter()
+                    .any(|absence| absence.address() == *address)
+        })
         .collect::<Vec<_>>();
     dependencies.sort();
     dependencies.dedup();
@@ -1690,7 +1725,7 @@ fn action_verdict_json(
         && coordinate.family_version == GENERAL_V2_FAMILY_VERSION
         && coordinate.local_action == GeneralV2Action::InitializeSettlementRoot.tag()
     {
-        let mut roles = GENERAL_ACTION39_FIXED_ROLE_LABELS_V1
+        GENERAL_ACTION39_FIXED_ROLE_LABELS_V1
             .iter()
             .zip(GENERAL_ACTION39_FIXED_ROLE_WRITABLE_V1)
             .zip(GENERAL_ACTION39_FIXED_ROLE_SIGNER_V1)
@@ -1703,17 +1738,7 @@ fn action_verdict_json(
                 "address": null,
                 "identityDisposition": "unresolved-until-semantic-owner-construction"
             }))
-            .collect::<Vec<_>>();
-        roles.push(json!({
-            "index": "49..52",
-            "role": "order-page-v5",
-            "cardinality": "exactly-1-to-4-derived-from-retained-feed",
-            "writable": false,
-            "signer": false,
-            "address": null,
-            "identityDisposition": "unresolved-until-semantic-owner-construction"
-        }));
-        roles
+            .collect::<Vec<_>>()
     } else if coordinate.family_tag == RECOVERY_FAMILY_TAG
         && coordinate.family_version == RECOVERY_FAMILY_VERSION
         && coordinate.local_action == RecoveryAction::AdvanceIntervalConsensus.tag()
@@ -2490,6 +2515,18 @@ fn read_only_session_id(
         for dependency in &selection.dependencies {
             hash.update(dependency.to_bytes());
         }
+        hash.update(
+            u64::try_from(selection.absence_observations.len())
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+        );
+        for absence in &selection.absence_observations {
+            hash_text(&mut hash, absence.label());
+            hash.update(absence.address().to_bytes());
+            hash_text(&mut hash, absence.release_key());
+            hash.update(absence.finalized_slot().to_le_bytes());
+            hash.update(absence.receive_sequence().to_le_bytes());
+        }
     }
     hash.finalize().into()
 }
@@ -2605,6 +2642,7 @@ fn selection_json(selection: &KeeperActionSelection) -> Value {
         "effectiveCommitment": selection.effective_commitment.name(),
         "branch": branch_json(&selection.branch),
         "dependencies": selection.dependencies.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "absenceObservations": selection.absence_observations.iter().map(absence_observation_json).collect::<Vec<_>>(),
         "cursor": {
             "workflowId": hex32(selection.cursor.workflow_id),
             "lane": lane_name(selection.cursor.lane),
@@ -2622,6 +2660,7 @@ fn session_selection_json(selection: &KeeperActionSelection) -> Value {
         "releaseKey": selection.release_key,
         "action": selection.action,
         "dependencies": selection.dependencies.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "absenceObservations": selection.absence_observations.iter().map(absence_observation_json).collect::<Vec<_>>(),
         "cursor": {
             "workflowId": hex32(selection.cursor.workflow_id),
             "lane": lane_name(selection.cursor.lane),
@@ -2630,6 +2669,17 @@ fn session_selection_json(selection: &KeeperActionSelection) -> Value {
             "item": selection.cursor.position.item.to_string(),
             "observedStateSha256": hex32(selection.cursor.observed_state_sha256)
         }
+    })
+}
+
+fn absence_observation_json(absence: &CanonicalAccountAbsenceV1) -> Value {
+    json!({
+        "role": absence.label(),
+        "address": absence.address().to_string(),
+        "releaseKey": absence.release_key(),
+        "finalizedSlot": absence.finalized_slot().to_string(),
+        "receiveSequence": absence.receive_sequence().to_string(),
+        "disposition": "absent"
     })
 }
 
