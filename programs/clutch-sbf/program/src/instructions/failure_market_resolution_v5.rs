@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Capability-disabled atomic Product/Failure Resolution V5 composer.
+//! Atomic Product/Failure/Source Resolution V5 composer.
 //!
-//! This module is deliberately not routed by dispatch. It is the single live
-//! writer boundary which joins Product's authenticated active Market root,
+//! Recovery78/v1 action 12 reaches only the concrete outer in this module.
+//! It is the single live writer boundary which joins Product's authenticated active Market root,
 //! pinned Series link, and retained slot-10 preallocation to Failure's private
 //! exhaustive interval receipt and Collateral's exact Hoard/ClaimLedger
 //! postimage verifier. The preallocated Resolution PDA supplies only its
