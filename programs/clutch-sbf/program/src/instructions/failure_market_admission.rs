@@ -791,6 +791,81 @@ pub fn authenticate_failure_market_root_v3(
     })
 }
 
+/// Replace the slot-5 same-instruction marker with the exact joined slot-8/9
+/// funding preimage. The immutable admission and quote bodies, bump, balance,
+/// and PDA are preserved byte-for-byte. This writer is callable only by the
+/// Failure interval owner after it has consumed both Product debits.
+pub(crate) fn install_failure_market_interval_funding_preimage_v4(
+    program_id: &Pubkey,
+    root: &AccountInfo<'_>,
+    authenticated: AuthenticatedFailureMarketRootV3,
+    expected_foundation_steps_id: ContentId,
+    expected_foundation_schedule_id: ContentId,
+    expected_foundation_graph_id: ContentId,
+    expected_slot5_root_transition_sequence_after: u64,
+    final_preimage: [u8; FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1],
+) -> Outcome<AuthenticatedFailureMarketRootV3> {
+    let live = authenticate_failure_market_root_v3(program_id, root, true)?;
+    let marker = live.interval_funding_preimage();
+    let policy = live.state().binding().facts();
+    require(
+        live == authenticated
+            && expected_foundation_steps_id != ContentId::ZERO
+            && expected_foundation_schedule_id != ContentId::ZERO
+            && expected_foundation_graph_id != ContentId::ZERO
+            && expected_slot5_root_transition_sequence_after != 0
+            && marker != final_preimage
+            && marker[..32].iter().any(|byte| *byte != 0)
+            && marker[32..64] == expected_foundation_steps_id.bytes()
+            && marker[64..96] == expected_foundation_schedule_id.bytes()
+            && marker[96..128] == expected_foundation_graph_id.bytes()
+            && marker[128..160] == live.state().binding().id().bytes()
+            && marker[160..168]
+                == expected_slot5_root_transition_sequence_after.to_le_bytes()
+            && marker[168..176] == policy.generation.to_le_bytes()
+            && final_preimage.iter().any(|byte| *byte != 0),
+        ClutchError::MismatchedState,
+    )?;
+    let mut admission_body = [0u8; FAILURE_MARKET_ADMISSION_BODY_BYTES_V1];
+    live.state()
+        .encode_into(&mut admission_body)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let mut recovery_quote_body = [0u8; FAILURE_MARKET_RECOVERY_QUOTE_BODY_BYTES_V1];
+    live.recovery_quote()
+        .encode_into(&mut recovery_quote_body)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let record = FailureMarketRootAccountV3 {
+        bump: live.bump(),
+        admission_body,
+        recovery_quote_body,
+        interval_funding_preimage: final_preimage,
+    };
+    let observed_lamports = root.lamports();
+    {
+        let mut data = root
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let output: &mut [u8; FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3] = data
+            .as_mut()
+            .try_into()
+            .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+        record
+            .encode_into(output)
+            .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    }
+    let reopened = authenticate_failure_market_root_v3(program_id, root, true)?;
+    require(
+        reopened.account() == live.account()
+            && reopened.bump() == live.bump()
+            && reopened.state() == live.state()
+            && reopened.recovery_quote() == live.recovery_quote()
+            && reopened.interval_funding_preimage() == final_preimage
+            && root.lamports() == observed_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(reopened)
+}
+
 /// Authenticate the exact close-time accounts and project their postbalances.
 ///
 /// This performs no write and accepts no terminal ID or caller-provided
