@@ -77,8 +77,8 @@ use clutch_solana_layout::direct_market_v1::{
     DirectActionReplayAccountV1, DirectMarketRootAccountV1, DirectReservationAccountV1,
     DirectSelectionAccountV1, DIRECT_RESERVATION_BODY_BYTES_V1,
 };
-use clutch_solana_layout::direct_market_v2::DirectMarketRootAccountV2;
-use clutch_direct_market_runtime::codec_v2::authenticate_direct_root_transition_body_v2;
+use clutch_solana_layout::direct_market_v3::DirectMarketRootAccountV3;
+use clutch_direct_market_runtime::codec_v3::authenticate_direct_root_transition_body_v3;
 use clutch_direct_market_runtime::DirectHashBackendV1;
 use clutch_solana_layout::failure_recovery::{
     decode_failure_account_body_v1, FailureMarketRootAccountV2, FailureReplayTombstoneV1,
@@ -248,7 +248,7 @@ pub enum CanonicalAccountKind {
     FailureIntervalConsensusWork,
     FailureIntervalConsensusReplay,
     DirectMarketRootV1,
-    DirectMarketRootV2,
+    DirectMarketRootV3,
     DirectSelectionV1,
     DirectActionReplayV1,
     DirectReservationV1,
@@ -336,7 +336,7 @@ impl CanonicalAccountKind {
             Self::FailureIntervalConsensusWork => "failure-interval-consensus-work-v1",
             Self::FailureIntervalConsensusReplay => "failure-interval-consensus-replay-v1",
             Self::DirectMarketRootV1 => "direct-market-root-v1",
-            Self::DirectMarketRootV2 => "direct-market-root-v2",
+            Self::DirectMarketRootV3 => "direct-market-root-v3",
             Self::DirectSelectionV1 => "direct-selection-v1",
             Self::DirectActionReplayV1 => "direct-action-replay-v1",
             Self::DirectReservationV1 => "direct-reservation-v1",
@@ -464,19 +464,19 @@ fn decode_direct(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     let projection = if tag_version(
         data,
         registry::DIRECT_MARKET_ROOT_ACCOUNT_TAG,
-        registry::DIRECT_MARKET_ROOT_ACCOUNT_VERSION_V2,
-    ) && data.len() == registry::DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V2
+        registry::DIRECT_MARKET_ROOT_ACCOUNT_VERSION_V3,
+    ) && data.len() == registry::DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3
     {
-        let frame = DirectMarketRootAccountV2::decode(data)
+        let frame = DirectMarketRootAccountV3::decode(data)
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        let root = authenticate_direct_root_transition_body_v2(
+        let root = authenticate_direct_root_transition_body_v3(
             frame.semantic_body(),
             &AccountIndexDirectShaV2,
         )
         .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
         let mut projection = CanonicalAccountProjection::canonical(
             CanonicalFamily::Direct,
-            CanonicalAccountKind::DirectMarketRootV2,
+            CanonicalAccountKind::DirectMarketRootV3,
         );
         projection.generation = Some(root.generation());
         projection.primary_binding = Some(root.market_instance_id());

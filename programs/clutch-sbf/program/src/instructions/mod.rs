@@ -54,13 +54,12 @@ pub mod dealer_facility;
 pub mod dealer_policy;
 /// Capability-disabled Dealer facility account and instruction contracts.
 pub mod dealer_runtime;
-// Legacy Direct V2/V3 source remains in-tree for historical review, but is
-// deliberately absent from this executable module graph. Their allocated
-// wire coordinates are decode-only and refuse at the capability boundary.
+// The V1 adapter remains available only as historical source. Current Direct
+// requests enter the exact b1/v3 account/authentication plane below.
 /// Historical b1/v1 Direct account plane; compiled for review but never routed.
 #[cfg(feature = "profile-full")]
 pub(crate) mod direct_market_v1;
-/// Capability-disabled current b1/v2 Direct account/authentication plane.
+/// Current b1/v3 Direct account/authentication plane.
 #[cfg(feature = "profile-full")]
 pub(crate) mod direct_market_v2;
 pub mod external_exit;
@@ -163,6 +162,9 @@ pub mod general_v2_settlement_root;
 pub mod general_v2_settlement_producer_v5;
 #[cfg(feature = "profile-successor-chain-attached-dev")]
 pub(crate) mod general_market_foundation_v4;
+/// V5-only compact index child and retained-Feed retirement composers.
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+pub(crate) mod general_v2_exact_index_retirement_v1;
 /// Shared immutable Feed/Page/Product traversal authentication for General V5 settlement.
 #[cfg(any(
     all(
