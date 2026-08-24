@@ -20,7 +20,7 @@ use super::super::failure_market_family_terminal_v2::{
 };
 use super::super::fractional_product_consumer::consume_fractional_terminal_v2;
 use super::super::fractional_redemption::AuthenticatedFractionalFamilyPhysicalTerminalV2;
-use super::super::dealer_facility::AuthenticatedDealerFamilyTerminalReceiptV1;
+use super::super::dealer_facility::AuthenticatedDealerFamilyTerminalReceiptV3;
 use super::super::direct_market_v2::{
     AuthenticatedDirectFamilyTerminalV3, AuthenticatedProductDirectFamilyPreterminalV3,
 };
@@ -1558,7 +1558,7 @@ pub(crate) fn consume_absent_liquidity_obligation_v5(
 #[derive(Debug)]
 pub(crate) struct AuthenticatedProductDealerFamilyTerminalV5 {
     id: ContentId,
-    terminal: AuthenticatedDealerFamilyTerminalReceiptV1,
+    terminal: AuthenticatedDealerFamilyTerminalReceiptV3,
     root_account: Pubkey,
     root_authentication_before_id: ContentId,
     root_authentication_after_id: ContentId,
@@ -1619,7 +1619,7 @@ pub(crate) fn consume_dealer_family_terminal_v5(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
     link_account: &AccountInfo<'_>,
-    terminal: AuthenticatedDealerFamilyTerminalReceiptV1,
+    terminal: AuthenticatedDealerFamilyTerminalReceiptV3,
 ) -> Outcome<AuthenticatedProductDealerFamilyTerminalV5> {
     require(
         root_account.key != link_account.key
@@ -1660,6 +1660,14 @@ pub(crate) fn consume_dealer_family_terminal_v5(
             && link_binding.market_binding_id == root_binding_id
             && link_binding.compiler_bundle_id.content_id() == terminal.compiler_bundle_id()
             && link_binding.attachment_plan_id.content_id() == terminal.attachment_plan_id()
+            && link_binding.obligation_configuration_id.content_id()
+                == terminal.obligation_configuration_id()
+            && link
+                .state()
+                .obligation_admission_receipt_id(SeriesLinkObligationV3::Dealer)
+                == terminal.obligation_admission_projection_id()
+            && link.state().transition_sequence()
+                >= terminal.obligation_admission_link_transition_sequence()
             && root.state().resolution_semantic_id() == terminal.resolution_semantic_id()
             && root.state().resolution_data_id() == terminal.resolution_data_id()
             && link.state().phase() == SeriesMarketLinkPhaseV3::Active,

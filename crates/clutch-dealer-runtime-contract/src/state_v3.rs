@@ -244,15 +244,15 @@ impl DealerStateV3 {
         Ok(next)
     }
 
-    /// Close the exact live current binding only after Dealer has physically
+    /// Close the exact live RootV3/LinkV3 binding only after Dealer has physically
     /// terminalized its Position/Replay and the disjoint value owner.
     ///
     /// Product does not authorize this local child deletion. The adapter must
     /// retain the resulting non-Copy Dealer family receipt and pass it directly
     /// to Product's successor terminal writer in the same rollback domain.
-    pub fn close_current_live_binding_after_value(
+    pub fn close_product_v3_live_binding_after_value(
         self,
-        binding: &DealerSeriesObligationBindingV2,
+        binding: &DealerSeriesObligationBindingV3,
         dealer_value_terminal_receipt_id: Id,
     ) -> Result<Self> {
         binding.validate()?;
