@@ -467,7 +467,7 @@ pub fn process(
     ) {
         return process_reserved_disabled(action);
     }
-    require(sequence == 0, ClutchError::Replay)?;
+    require(sequence != 0, ClutchError::Replay)?;
     let _payload = decode_payload_v2(action, payload)?;
     validate_account_contract_v2(action, accounts)?;
     Err(ClutchError::UnsupportedInstruction.into())
