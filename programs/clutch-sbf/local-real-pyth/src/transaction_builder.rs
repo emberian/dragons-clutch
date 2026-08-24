@@ -8,14 +8,15 @@
 
 use clutch_solana_layout::registry::{
     AllocationStatus, ExtensionAction, ExtensionEnvelope, ExtensionFamily, RegistryError,
-    EXTENSION_ENVELOPE_BYTES, MAX_EXTENSION_PAYLOAD_BYTES,
+    EXTENSION_ENVELOPE_BYTES,
 };
 use clutch_solana_layout::source_series::{validate_account_metas_v2, ObservedSourceAccountMetaV2};
 use clutch_solana_layout::Intent;
 use clutch_solana_reference::{Action, ExtensionRequest, Request};
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
-use solana_transaction::Transaction;
+use solana_message::{v0, AddressLookupTableAccount, VersionedMessage};
+use solana_transaction::{versioned::VersionedTransaction, Transaction};
 use std::collections::BTreeSet;
 
 pub type Result<T> = std::result::Result<T, ConstructionError>;
@@ -45,6 +46,8 @@ pub enum ConstructionError {
     MissingExactEquation,
     UnbalancedExactEquation,
     EmptyBundle,
+    MissingLookupTable,
+    InvalidLookupTable,
     PacketTooLarge,
     Serialization,
 }
@@ -73,6 +76,12 @@ impl core::fmt::Display for ConstructionError {
             Self::MissingExactEquation => "instruction omits exact-integer accounting",
             Self::UnbalancedExactEquation => "exact-integer accounting equation is unbalanced",
             Self::EmptyBundle => "atomic transaction bundle is empty",
+            Self::MissingLookupTable => {
+                "current Structured transactions require an authenticated address lookup table"
+            }
+            Self::InvalidLookupTable => {
+                "address lookup table does not cover the exact Structured transaction"
+            }
             Self::PacketTooLarge => {
                 "serialized unsigned transaction exceeds its explicit packet limit"
             }
@@ -245,6 +254,11 @@ pub enum OwnedWireContract {
         action: clutch_solana_layout::collateral_v3_accounts::CollateralActionV3,
         outcome_count: u8,
         selected_outcome: Option<u8>,
+    },
+    /// Exact enabled outer Structured wrapper envelope and account ABI.
+    StructuredWrapperV1 {
+        action: clutch_structured_claim_runtime_contract::StructuredClaimActionV1,
+        product_link_writable: bool,
     },
 }
 
@@ -497,50 +511,97 @@ impl OwnedInstructionDraft {
         Ok(value)
     }
 
-    /// Assemble a production-inert structured-claim successor whose local
-    /// action codec remains owned outside the central action registry. General
-    /// V2 and Source/Series callers must use
-    /// [`Self::allocated_successor`].
-    pub fn semantic_reserved_successor(
-        flow: ProtocolFlow,
+    /// Assemble one current Structured wrapper call through the semantic
+    /// owner's exact action/count/privilege contract. The wrapper program, not
+    /// the central base, is the instruction target. Payload bytes must already
+    /// have been derived by the chain-state constructor.
+    pub(crate) fn enabled_structured_claim_v1(
         action_name: impl Into<String>,
         semantic_owner: SemanticOwner,
-        program_id: Address,
+        wrapper_program: Address,
         accounts: Vec<AccountMeta>,
-        required_signers: Vec<Address>,
         equations: Vec<ExactEquation>,
-        family: ExtensionFamily,
-        local_action: u8,
+        action: clutch_structured_claim_runtime_contract::StructuredClaimActionV1,
+        product_link_writable: bool,
         payload: &[u8],
     ) -> Result<Self> {
-        if family != ExtensionFamily::StructuredClaim {
-            return Err(ConstructionError::UnallocatedRegistryCoordinate);
+        use clutch_structured_claim_adapter::{
+            current_structured_account_meta_v1, current_structured_action_contract_v1,
+            current_structured_alias_allowed_v1,
+        };
+        use clutch_structured_claim_runtime_contract::decode_structured_claim_payload_v1;
+
+        let contract = current_structured_action_contract_v1(action)
+            .ok_or(ConstructionError::InvalidAccountContract)?;
+        if accounts.len() != usize::from(contract.account_count)
+            || decode_structured_claim_payload_v1(action.tag(), payload).is_err()
+        {
+            return Err(ConstructionError::InvalidAccountContract);
         }
-        if local_action == 0 || payload.len() > MAX_EXTENSION_PAYLOAD_BYTES {
-            return Err(if local_action == 0 {
-                ConstructionError::UnallocatedRegistryCoordinate
-            } else {
-                ConstructionError::PayloadTooLong
-            });
+        let mut required_signers = Vec::new();
+        let mut index = 0_usize;
+        while index < accounts.len() {
+            let expected = current_structured_account_meta_v1(
+                action,
+                index,
+                product_link_writable,
+            )
+            .ok_or(ConstructionError::InvalidAccountContract)?;
+            if accounts[index].is_signer != expected.signer
+                || accounts[index].is_writable != expected.writable
+            {
+                return Err(ConstructionError::InvalidAccountContract);
+            }
+            if expected.signer {
+                required_signers.push(accounts[index].pubkey);
+            }
+            let mut right = index + 1;
+            while right < accounts.len() {
+                if accounts[index].pubkey == accounts[right].pubkey
+                    && !current_structured_alias_allowed_v1(action, index, right)
+                {
+                    return Err(ConstructionError::DuplicateAccount);
+                }
+                right += 1;
+            }
+            index += 1;
         }
-        let binding = registry_binding(family, local_action, None)?;
+        let wrapper_index = match action {
+            clutch_structured_claim_runtime_contract::StructuredClaimActionV1::CreateDescriptor => 15,
+            clutch_structured_claim_runtime_contract::StructuredClaimActionV1::WrapFull
+            | clutch_structured_claim_runtime_contract::StructuredClaimActionV1::UnwrapFull
+            | clutch_structured_claim_runtime_contract::StructuredClaimActionV1::RedeemTerminal => 14,
+            clutch_structured_claim_runtime_contract::StructuredClaimActionV1::CompactDonation
+            | clutch_structured_claim_runtime_contract::StructuredClaimActionV1::RetireDescriptor => 11,
+        };
+        if accounts[wrapper_index].pubkey != wrapper_program {
+            return Err(ConstructionError::ForeignProgram);
+        }
+        let family = ExtensionFamily::StructuredClaim;
+        let binding = registry_binding(family, action.tag(), None)?;
         let mut data = Vec::with_capacity(EXTENSION_ENVELOPE_BYTES + payload.len());
         data.push(family.tag());
         data.push(family.version());
-        data.push(local_action);
+        data.push(action.tag());
         data.extend_from_slice(payload);
-        Self::owned_bytes(
-            flow,
-            action_name,
+        let value = Self {
+            flow: ProtocolFlow::StructuredClaim,
+            action_name: action_name.into(),
             semantic_owner,
-            program_id,
+            program_id: wrapper_program,
             accounts,
             required_signers,
             equations,
-            OwnedWireContract::MainSuccessor { binding },
+            registry_binding: Some(binding),
+            runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
+            wire: OwnedWireContract::StructuredWrapperV1 {
+                action,
+                product_link_writable,
+            },
             data,
-            Some(binding),
-        )
+        };
+        value.validate()?;
+        Ok(value)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -603,7 +664,8 @@ impl OwnedInstructionDraft {
             self.wire,
             OwnedWireContract::DisabledDirectMarketRequestV1 { .. }
         );
-        if !source_request && !collateral_request && !direct_request {
+        let structured_wrapper = matches!(self.wire, OwnedWireContract::StructuredWrapperV1 { .. });
+        if !source_request && !collateral_request && !direct_request && !structured_wrapper {
             let mut accounts = BTreeSet::new();
             for account in &self.accounts {
                 if !accounts.insert(account.pubkey) {
@@ -793,6 +855,67 @@ impl OwnedInstructionDraft {
                 )
                 .map_err(|_| ConstructionError::InvalidAccountContract)?;
             }
+            OwnedWireContract::StructuredWrapperV1 {
+                action,
+                product_link_writable,
+            } => {
+                use clutch_structured_claim_adapter::{
+                    current_structured_account_meta_v1, current_structured_action_contract_v1,
+                    current_structured_alias_allowed_v1,
+                };
+                let binding = self
+                    .registry_binding
+                    .ok_or(ConstructionError::UnallocatedRegistryCoordinate)?;
+                if self.flow != ProtocolFlow::StructuredClaim
+                    || self.runtime_admission != RuntimeAdmission::ReleaseBoundEnabled
+                    || binding.family != ExtensionFamily::StructuredClaim
+                    || binding.local_action != action.tag()
+                    || binding.family_status
+                        != ExtensionFamily::StructuredClaim
+                            .allocation_status()
+                            .ok_or(ConstructionError::UnallocatedRegistryCoordinate)?
+                    || self.data.len() < EXTENSION_ENVELOPE_BYTES
+                    || self.data[0] != ExtensionFamily::StructuredClaim.tag()
+                    || self.data[1] != ExtensionFamily::StructuredClaim.version()
+                    || self.data[2] != action.tag()
+                    || clutch_structured_claim_runtime_contract::decode_structured_claim_payload_v1(
+                        action.tag(),
+                        &self.data[EXTENSION_ENVELOPE_BYTES..],
+                    )
+                    .is_err()
+                {
+                    return Err(ConstructionError::WrongWirePrefix);
+                }
+                let contract = current_structured_action_contract_v1(action)
+                    .ok_or(ConstructionError::InvalidAccountContract)?;
+                if self.accounts.len() != usize::from(contract.account_count) {
+                    return Err(ConstructionError::InvalidAccountContract);
+                }
+                let mut left = 0_usize;
+                while left < self.accounts.len() {
+                    let expected = current_structured_account_meta_v1(
+                        action,
+                        left,
+                        product_link_writable,
+                    )
+                    .ok_or(ConstructionError::InvalidAccountContract)?;
+                    if self.accounts[left].is_signer != expected.signer
+                        || self.accounts[left].is_writable != expected.writable
+                    {
+                        return Err(ConstructionError::InvalidAccountContract);
+                    }
+                    let mut right = left + 1;
+                    while right < self.accounts.len() {
+                        if self.accounts[left].pubkey == self.accounts[right].pubkey
+                            && !current_structured_alias_allowed_v1(action, left, right)
+                        {
+                            return Err(ConstructionError::DuplicateAccount);
+                        }
+                        right += 1;
+                    }
+                    left += 1;
+                }
+            }
         }
         Ok(())
     }
@@ -823,6 +946,31 @@ pub struct TransactionTransport {
     pub packet_limit_bytes: usize,
 }
 
+/// Solana message geometry used by one blockhash-free construction artifact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransactionMessageVersionV1 {
+    /// Traditional transaction message with every key stored inline.
+    Legacy,
+    /// Version-zero message backed by one or more on-chain address tables.
+    V0,
+}
+
+/// Exact finalized lookup-table observation used to compile a v0 message.
+/// This is transport provenance, never a protocol account role or authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AddressLookupTableUseV1 {
+    /// Lookup-table account identity encoded in the v0 message.
+    pub account: Address,
+    /// Finalized slot at which the exact table body was observed.
+    pub observed_slot: u64,
+    /// Digest of the complete hostile-decoded table account observation.
+    pub state_sha256: [u8; 32],
+    /// Number of writable role addresses loaded from this table.
+    pub writable_addresses: u16,
+    /// Number of read-only role addresses loaded from this table.
+    pub readonly_addresses: u16,
+}
+
 impl Default for TransactionTransport {
     fn default() -> Self {
         Self {
@@ -842,6 +990,8 @@ pub struct UnsignedProtocolTransaction {
     pub runtime_admissions: Vec<RuntimeAdmission>,
     pub required_signers: Vec<Address>,
     pub exact_equations: Vec<ExactEquation>,
+    pub message_version: TransactionMessageVersionV1,
+    pub address_lookup_tables: Vec<AddressLookupTableUseV1>,
     pub serialized_transaction: Vec<u8>,
     pub has_recent_blockhash: bool,
     pub signed: bool,
@@ -919,6 +1069,11 @@ impl ProtocolTransactionBuilder {
         if drafts.is_empty() {
             return Err(ConstructionError::EmptyBundle);
         }
+        if drafts.iter().any(|draft| {
+            matches!(draft.wire, OwnedWireContract::StructuredWrapperV1 { .. })
+        }) {
+            return Err(ConstructionError::MissingLookupTable);
+        }
         let mut instructions = Vec::with_capacity(drafts.len());
         let mut flows = Vec::new();
         let mut actions = Vec::with_capacity(drafts.len());
@@ -992,6 +1147,117 @@ impl ProtocolTransactionBuilder {
             runtime_admissions,
             required_signers: required_signers.into_iter().collect(),
             exact_equations,
+            message_version: TransactionMessageVersionV1::Legacy,
+            address_lookup_tables: Vec::new(),
+            serialized_transaction,
+            has_recent_blockhash: false,
+            signed: false,
+            submitted: false,
+        })
+    }
+
+    /// Compile exactly one current Structured wrapper instruction as a v0
+    /// message. This crate-private seam is reachable only after the operator
+    /// material constructor has hostile-decoded the finalized lookup-table
+    /// account and proved complete role coverage.
+    pub(crate) fn build_structured_v0(
+        &self,
+        draft: OwnedInstructionDraft,
+        lookup_table: AddressLookupTableAccount,
+        lookup_observed_slot: u64,
+        lookup_state_sha256: [u8; 32],
+    ) -> Result<UnsignedProtocolTransaction> {
+        if !matches!(draft.wire, OwnedWireContract::StructuredWrapperV1 { .. })
+            || draft.flow != ProtocolFlow::StructuredClaim
+            || lookup_table.key == Address::default()
+            || lookup_table.addresses.is_empty()
+            || lookup_table.addresses.len() > 256
+            || lookup_observed_slot == 0
+            || lookup_state_sha256 == [0; 32]
+        {
+            return Err(ConstructionError::InvalidLookupTable);
+        }
+        draft.validate()?;
+        let mut table_addresses = BTreeSet::new();
+        for address in &lookup_table.addresses {
+            if *address == Address::default() || !table_addresses.insert(*address) {
+                return Err(ConstructionError::InvalidLookupTable);
+            }
+        }
+        for account in &draft.accounts {
+            if account.pubkey == lookup_table.key || self.payer == lookup_table.key {
+                return Err(ConstructionError::InvalidLookupTable);
+            }
+            if account.pubkey == self.payer && (!account.is_signer || !account.is_writable) {
+                return Err(ConstructionError::InvalidAccountContract);
+            }
+            if !account.is_signer
+                && account.pubkey != draft.program_id
+                && !table_addresses.contains(&account.pubkey)
+            {
+                return Err(ConstructionError::InvalidLookupTable);
+            }
+        }
+        let mut required_signers = BTreeSet::from([self.payer]);
+        for signer in &draft.required_signers {
+            let represented = *signer == self.payer
+                || draft
+                    .accounts
+                    .iter()
+                    .any(|meta| meta.pubkey == *signer && meta.is_signer);
+            if !represented {
+                return Err(ConstructionError::MissingSignerMeta);
+            }
+            required_signers.insert(*signer);
+        }
+        let instruction = draft.instruction();
+        let message = v0::Message::try_compile(
+            &self.payer,
+            &[instruction],
+            core::slice::from_ref(&lookup_table),
+            Default::default(),
+        )
+        .map_err(|_| ConstructionError::InvalidLookupTable)?;
+        let lookup = match message.address_table_lookups.as_slice() {
+            [lookup] if lookup.account_key == lookup_table.key => lookup,
+            _ => return Err(ConstructionError::InvalidLookupTable),
+        };
+        if lookup.writable_indexes.is_empty() && lookup.readonly_indexes.is_empty() {
+            return Err(ConstructionError::InvalidLookupTable);
+        }
+        let lookup_use = AddressLookupTableUseV1 {
+            account: lookup_table.key,
+            observed_slot: lookup_observed_slot,
+            state_sha256: lookup_state_sha256,
+            writable_addresses: u16::try_from(lookup.writable_indexes.len())
+                .map_err(|_| ConstructionError::InvalidLookupTable)?,
+            readonly_addresses: u16::try_from(lookup.readonly_indexes.len())
+                .map_err(|_| ConstructionError::InvalidLookupTable)?,
+        };
+        let signature_count = usize::from(message.header.num_required_signatures);
+        if signature_count != required_signers.len() {
+            return Err(ConstructionError::MissingSignerMeta);
+        }
+        let transaction = VersionedTransaction {
+            signatures: vec![Default::default(); signature_count],
+            message: VersionedMessage::V0(message),
+        };
+        let serialized_transaction =
+            bincode::serialize(&transaction).map_err(|_| ConstructionError::Serialization)?;
+        if serialized_transaction.len() > self.transport.packet_limit_bytes {
+            return Err(ConstructionError::PacketTooLarge);
+        }
+        Ok(UnsignedProtocolTransaction {
+            schema: CONSTRUCTION_PLAN_SCHEMA,
+            flows: vec![draft.flow],
+            actions: vec![draft.action_name],
+            semantic_owners: vec![draft.semantic_owner],
+            registry_bindings: vec![draft.registry_binding],
+            runtime_admissions: vec![draft.runtime_admission],
+            required_signers: required_signers.into_iter().collect(),
+            exact_equations: draft.equations,
+            message_version: TransactionMessageVersionV1::V0,
+            address_lookup_tables: vec![lookup_use],
             serialized_transaction,
             has_recent_blockhash: false,
             signed: false,
@@ -1428,16 +1694,47 @@ mod tests {
     }
 
     #[test]
-    fn structured_claim_envelope_is_built_without_signing_or_submission() {
+    fn structured_claim_wrapper_uses_exact_current_account_contract() {
+        use clutch_structured_claim_adapter::{
+            current_structured_account_meta_v1, STRUCTURED_FULL_VECTOR_ACCOUNT_COUNT_V1,
+        };
+        use clutch_structured_claim_runtime_contract::{
+            StructuredClaimActionV1, WrapperQuantityPayloadV1,
+        };
+
         let payer = Address::new_from_array([1; 32]);
         let program = Address::new_from_array([2; 32]);
-        let draft = OwnedInstructionDraft::semantic_reserved_successor(
-            ProtocolFlow::StructuredClaim,
+        let action = StructuredClaimActionV1::WrapFull;
+        let accounts = (0..STRUCTURED_FULL_VECTOR_ACCOUNT_COUNT_V1)
+            .map(|index| {
+                let expected = current_structured_account_meta_v1(action, index, false).unwrap();
+                let address = if index == 14 {
+                    program
+                } else {
+                    Address::new_from_array([u8::try_from(index + 3).unwrap(); 32])
+                };
+                if expected.writable {
+                    AccountMeta::new(address, expected.signer)
+                } else {
+                    AccountMeta::new_readonly(address, expected.signer)
+                }
+            })
+            .collect();
+        let payload = WrapperQuantityPayloadV1 {
+            wrapper_product_id: [7; 32],
+            quantity: 9,
+            user_generation: 2,
+            user_replay_sequence: 3,
+            vault_generation: 4,
+            vault_replay_sequence: 5,
+        }
+        .encode()
+        .unwrap();
+        let draft = OwnedInstructionDraft::enabled_structured_claim_v1(
             "wrap-full",
             owner(),
             program,
-            vec![AccountMeta::new_readonly(payer, true)],
-            vec![payer],
+            accounts,
             vec![ExactEquation {
                 name: "full-vector backing".into(),
                 unit: IntegerUnit::WrapperAtoms {
@@ -1446,9 +1743,9 @@ mod tests {
                 left: 9,
                 right: 9,
             }],
-            ExtensionFamily::StructuredClaim,
-            3,
-            &[9; 72],
+            action,
+            false,
+            &payload,
         )
         .unwrap();
         assert_eq!(&draft.data()[..3], &[75, 1, 3]);
@@ -1459,7 +1756,29 @@ mod tests {
             TransactionTransport::default(),
         )
         .unwrap();
-        let plan = builder.build_atomic(&[draft]).unwrap();
+        assert_eq!(
+            builder.build_atomic(core::slice::from_ref(&draft)),
+            Err(ConstructionError::MissingLookupTable)
+        );
+        let lookup_addresses = draft
+            .accounts
+            .iter()
+            .filter(|account| !account.is_signer && account.pubkey != program)
+            .map(|account| account.pubkey)
+            .collect();
+        let plan = builder
+            .build_structured_v0(
+                draft,
+                AddressLookupTableAccount {
+                    key: Address::new_from_array([99; 32]),
+                    addresses: lookup_addresses,
+                },
+                17,
+                [6; 32],
+            )
+            .unwrap();
+        assert_eq!(plan.message_version, TransactionMessageVersionV1::V0);
+        assert_eq!(plan.address_lookup_tables.len(), 1);
         assert!(!plan.has_recent_blockhash);
         assert!(!plan.signed);
         assert!(!plan.submitted);
