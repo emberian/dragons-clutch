@@ -112,6 +112,18 @@ pub(crate) struct GeneralPositionReplayAuthorityV2 {
     pub(crate) market_runtime: MarketRuntimeV3AccountV1,
 }
 
+/// Complete authenticated ordinary-Position and GEN1 Replay prestate under
+/// the Product-authorized current MarketBinding V3 account. V2 remains a
+/// distinct historical authority and cannot satisfy this capability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GeneralPositionReplayAuthorityV3 {
+    pub(crate) position: AuthenticatedPositionV3,
+    pub(crate) projection: GeneralPositionProjectionV3,
+    pub(crate) replay: GeneralPositionReplayPrestateV1,
+    pub(crate) market_binding: MarketBindingV3,
+    pub(crate) market_runtime: MarketRuntimeV3AccountV1,
+}
+
 /// Authenticated full-width collateral and native-claim Market owners.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GeneralMarketLiabilityAuthorityV2 {
@@ -1308,6 +1320,193 @@ pub(crate) fn authenticate_general_position_replay_readonly_v2(
     expected_sequence: u64,
 ) -> Outcome<GeneralPositionReplayAuthorityV2> {
     authenticate_general_position_replay_with_access_v2(
+        program_id,
+        bound,
+        market_binding_account,
+        market_runtime_account,
+        position_account,
+        replay_account,
+        expected_owner,
+        expected_sequence,
+        false,
+    )
+}
+
+/// Authenticate one existing canonical ordinary Position and exact GEN1
+/// Replay against the Product-authorized current MarketBinding V3 account.
+/// The V3 rent/PDA/Product join is reauthenticated before any Position bytes
+/// are projected, so an old 572-byte V2 account cannot enter this path.
+#[allow(clippy::too_many_arguments)]
+fn authenticate_general_position_replay_with_access_v3(
+    program_id: &Pubkey,
+    bound: BoundCollateralProfileV2,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    expected_owner: [u8; 32],
+    expected_sequence: u64,
+    position_writable: bool,
+) -> Outcome<GeneralPositionReplayAuthorityV3> {
+    let (market_binding, market_runtime) =
+        authenticate_general_market_v3(program_id, market_binding_account, market_runtime_account)?;
+    let relation_market = market_binding.base().relation_projection();
+    require_program_account(
+        program_id,
+        position_account,
+        position_writable,
+        POSITION_V3_BYTES,
+    )?;
+    require_program_account(
+        program_id,
+        replay_account,
+        true,
+        clutch_general_v2_contract::GENERAL_REPLAY_ACCOUNT_V1_BYTES,
+    )?;
+    require(
+        bound.market().market
+            == CollateralId::from_bytes(relation_market.market_instance_v2_id.bytes())
+            && bound.market().realm
+                == CollateralId::from_bytes(bound.realm_bound().realm().realm.bytes())
+            && bound.market().profile
+                == CollateralId::from_bytes(bound.realm_bound().realm().profile.bytes()),
+        ClutchError::MismatchedState,
+    )?;
+
+    let position = PositionAccountV3::decode(&position_account.data.borrow())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let fields = position.fields();
+    let purpose_binding = Identity32V1::new(market_runtime_account.key.to_bytes())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let owner = Identity32V1::new(expected_owner)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let market_identity = Identity32V1::new(relation_market.market_instance_v2_id.bytes())
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let expected_position = seeds::position_v3_pda(
+        program_id,
+        &market_identity.bytes(),
+        &expected_owner,
+        PositionPurposeV3::General,
+        &purpose_binding.bytes(),
+    );
+    expect_pda(
+        position_account.key,
+        expected_position,
+        Some(position.stored_bump()),
+    )?;
+    let expected_replay = seeds::purpose_replay_v3_pda(
+        program_id,
+        &position_account.key.to_bytes(),
+        PositionPurposeV3::General,
+        &purpose_binding.bytes(),
+    );
+    expect_pda(replay_account.key, expected_replay, None)?;
+    require(
+        fields.replay_account.bytes() == replay_account.key.to_bytes()
+            && fields.owner == owner
+            && fields.controller == owner
+            && fields.purpose_binding_id == purpose_binding,
+        ClutchError::MismatchedState,
+    )?;
+
+    let projection = project_general_position_v3(
+        position,
+        AdapterPositionMarketBindingV3 {
+            market_instance_id: market_identity,
+            outcome_count: relation_market.outcome_count,
+            realm_id: Identity32V1::new(bound.market().realm.bytes())
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+            collateral_policy_id: Identity32V1::new(bound.policy_id().bytes())
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+            collateral_release_id: Identity32V1::new(
+                bound
+                    .release()
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                    .bytes(),
+            )
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        },
+        AdapterPositionPurposeBindingV3 {
+            owner,
+            controller: owner,
+            purpose_binding_id: purpose_binding,
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let semantic_id = position
+        .semantic_id(&RuntimeSha256)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .bytes();
+    let authenticated = AuthenticatedPositionV3 {
+        account: position_account.key.to_bytes(),
+        general_market_runtime: market_runtime_account.key.to_bytes(),
+        semantic: position,
+        semantic_id,
+        account_authenticated: true,
+        semantic_id_authenticated: true,
+        market_binding_authenticated: true,
+        writable: position_writable,
+    };
+    let replay = project_general_position_replay_prestate_v1(
+        Id32::new(replay_account.key.to_bytes())
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        expected_replay.1,
+        expected_sequence,
+        &replay_account.data.borrow(),
+        authenticated,
+        &RuntimeSha256,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::Replay))?;
+    Ok(GeneralPositionReplayAuthorityV3 {
+        position: authenticated,
+        projection,
+        replay,
+        market_binding,
+        market_runtime,
+    })
+}
+
+/// Authenticate one writable ordinary Position and writable GEN1 Replay
+/// against current MarketBinding V3.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_general_position_replay_v3(
+    program_id: &Pubkey,
+    bound: BoundCollateralProfileV2,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    expected_owner: [u8; 32],
+    expected_sequence: u64,
+) -> Outcome<GeneralPositionReplayAuthorityV3> {
+    authenticate_general_position_replay_with_access_v3(
+        program_id,
+        bound,
+        market_binding_account,
+        market_runtime_account,
+        position_account,
+        replay_account,
+        expected_owner,
+        expected_sequence,
+        true,
+    )
+}
+
+/// Authenticate one read-only ordinary Position and writable GEN1 Replay
+/// against current MarketBinding V3.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_general_position_replay_readonly_v3(
+    program_id: &Pubkey,
+    bound: BoundCollateralProfileV2,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    expected_owner: [u8; 32],
+    expected_sequence: u64,
+) -> Outcome<GeneralPositionReplayAuthorityV3> {
+    authenticate_general_position_replay_with_access_v3(
         program_id,
         bound,
         market_binding_account,

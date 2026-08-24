@@ -16,8 +16,9 @@ use crate::error::{ClutchError, Refusal};
 
 use super::collateral_position_v3::{
     authenticate_general_position_replay_readonly_v2, authenticate_general_position_replay_v1,
-    authenticate_general_position_replay_v2, GeneralPositionReplayAuthorityV1,
-    GeneralPositionReplayAuthorityV2, RuntimeSha256,
+    authenticate_general_position_replay_readonly_v3, authenticate_general_position_replay_v2,
+    authenticate_general_position_replay_v3, GeneralPositionReplayAuthorityV1,
+    GeneralPositionReplayAuthorityV2, GeneralPositionReplayAuthorityV3, RuntimeSha256,
 };
 
 fn current_general_replay_sequence_v1(
@@ -138,6 +139,77 @@ pub(crate) fn authenticate_current_general_position_replay_readonly_v2(
     drop(replay_data);
 
     authenticate_general_position_replay_readonly_v2(
+        program_id,
+        bound,
+        market_binding_account,
+        market_runtime_account,
+        position_account,
+        replay_account,
+        expected_owner,
+        next_sequence,
+    )
+}
+
+/// Authenticate the current ordinary-General Position/Replay pair under the
+/// Product-authorized MarketBinding V3 owner and derive the body-owned next
+/// ordinal. Historical V2 bytes cannot satisfy this exact-width seam.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_current_general_position_replay_v3(
+    program_id: &Pubkey,
+    bound: BoundCollateralProfileV2,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    expected_owner: [u8; 32],
+) -> Outcome<GeneralPositionReplayAuthorityV3> {
+    let replay_data = replay_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let next_sequence = current_general_replay_sequence_v1(
+        &replay_data,
+        position_account.key.to_bytes(),
+        replay_account.key.to_bytes(),
+        market_runtime_account.key.to_bytes(),
+    )?;
+    drop(replay_data);
+
+    authenticate_general_position_replay_v3(
+        program_id,
+        bound,
+        market_binding_account,
+        market_runtime_account,
+        position_account,
+        replay_account,
+        expected_owner,
+        next_sequence,
+    )
+}
+
+/// Authenticate a read-only current ordinary-General Position and writable
+/// GEN1 Replay under Product-authorized MarketBinding V3.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_current_general_position_replay_readonly_v3(
+    program_id: &Pubkey,
+    bound: BoundCollateralProfileV2,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    expected_owner: [u8; 32],
+) -> Outcome<GeneralPositionReplayAuthorityV3> {
+    let replay_data = replay_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let next_sequence = current_general_replay_sequence_v1(
+        &replay_data,
+        position_account.key.to_bytes(),
+        replay_account.key.to_bytes(),
+        market_runtime_account.key.to_bytes(),
+    )?;
+    drop(replay_data);
+
+    authenticate_general_position_replay_readonly_v3(
         program_id,
         bound,
         market_binding_account,

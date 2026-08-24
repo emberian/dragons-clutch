@@ -521,7 +521,7 @@ fn prepare_direct_economic_terminal_from_projection_v1<
         selection,
         &ordered,
         fee_terminal,
-        treasury_prestate,
+        treasury,
         reason,
         consumed_sequence,
         observed_slot,
@@ -862,7 +862,14 @@ fn prepare_terminal_fee(
     )?;
     match (fee.treasury_atoms, treasury) {
         (0, None) => Ok((Some(fee), None)),
-        (0, Some(_)) => Err(DirectMarketErrorV1::MismatchedBinding),
+        // A fee-bearing policy fixes the treasury account suffix before the
+        // selected integer price is evaluated. Authenticate that exact owner
+        // even when this particular exact quote assesses zero atoms, but do
+        // not manufacture a zero-value Position/Replay mutation.
+        (0, Some(prestate)) => {
+            require_treasury_position_binding(root, prestate)?;
+            Ok((Some(fee), None))
+        }
         (_, Some(prestate)) => {
             require_treasury_position_binding(root, prestate)?;
             Ok((Some(fee), Some(prestate)))

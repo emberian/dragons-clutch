@@ -539,6 +539,54 @@ fn direct_fee_projection_supports_zero_and_authenticated_nonzero_rates() {
         rated.binds_policies(&wrong_batch, &rated_revenue),
         Err(DirectMarketErrorV1::MismatchedBinding),
     );
+
+    // A fee-bearing policy still has a positive worst-case reservation
+    // envelope, while an exact zero-dispersion selected coordinate assesses
+    // zero and releases the whole headroom. This is not an inexact conversion
+    // and does not authorize a synthetic zero-value treasury transition.
+    let zero_at_coordinate_batch = clutch_batch::relation_v1::FrozenPolicyV1 {
+        fee_base: FeeBaseV1::CompositeDispersionFloor {
+            dispersion_bps: 100,
+            floor_range_bps: 0,
+        },
+        ..GENERAL_CLEARING_FEE_SHAPE_V1
+    };
+    let zero_at_coordinate = crate::fee_v1::DirectFeePolicyV1::from_policies(
+        &zero_at_coordinate_batch,
+        &rated_revenue,
+    )
+    .unwrap();
+    let zero_envelope = zero_at_coordinate
+        .maximum_buyer_fee_atoms(10_000, 2, 10_000)
+        .unwrap();
+    assert!(zero_envelope > 0);
+    let zero_terminal = zero_at_coordinate
+        .assess_terminal_buyer(
+            10_000,
+            0,
+            2,
+            10_000,
+            &price,
+            id(43),
+            id(44),
+            zero_envelope,
+            &rated_revenue,
+        )
+        .unwrap();
+    assert_eq!(zero_terminal.charged_fee_atoms, 0);
+    assert_eq!(zero_terminal.buyer_rebate_atoms, 0);
+    assert_eq!(zero_terminal.seller_rebate_atoms, 0);
+    assert_eq!(zero_terminal.treasury_atoms, 0);
+    assert_eq!(zero_terminal.refunded_headroom_atoms, zero_envelope);
+
+    let wrong_revenue = RevenuePolicyV1 {
+        treasury: id(45),
+        ..rated_revenue
+    };
+    assert_eq!(
+        rated.binds_policies(&rated_batch, &wrong_revenue),
+        Err(DirectMarketErrorV1::MismatchedBinding),
+    );
 }
 
 #[test]
