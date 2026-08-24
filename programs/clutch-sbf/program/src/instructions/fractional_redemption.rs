@@ -1584,7 +1584,7 @@ pub(crate) fn authenticate_fractional_runtime_release_v1(
 ///
 /// Fields stay private so Product can consume only a value minted from the
 /// actual writable a4/a5/ClaimLedger accounts in the current instruction.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedFractionalFamilyAdmissionPostwriteV1 {
     verified: VerifiedFractionalFamilyAdmissionPostwriteV1,
     runtime_release: AuthenticatedFractionalRuntimeReleaseV1,
@@ -1596,35 +1596,35 @@ pub(crate) struct AuthenticatedFractionalFamilyAdmissionPostwriteV1 {
 }
 
 impl AuthenticatedFractionalFamilyAdmissionPostwriteV1 {
-    pub(crate) const fn family_admission(self) -> FractionalFamilyAdmissionReceiptV1 {
+    pub(crate) const fn family_admission(&self) -> FractionalFamilyAdmissionReceiptV1 {
         self.verified.family_admission()
     }
 
-    pub(crate) const fn verification_id(self) -> Identity32V1 {
+    pub(crate) const fn verification_id(&self) -> Identity32V1 {
         self.verified.verification_id()
     }
 
-    pub(crate) const fn runtime_release(self) -> AuthenticatedFractionalRuntimeReleaseV1 {
+    pub(crate) const fn runtime_release(&self) -> AuthenticatedFractionalRuntimeReleaseV1 {
         self.runtime_release
     }
 
-    pub(crate) const fn resolution_account(self) -> Identity32V1 {
+    pub(crate) const fn resolution_account(&self) -> Identity32V1 {
         self.resolution_account
     }
 
-    pub(crate) const fn resolution_semantic_id(self) -> Identity32V1 {
+    pub(crate) const fn resolution_semantic_id(&self) -> Identity32V1 {
         self.resolution_semantic_id
     }
 
-    pub(crate) const fn resolution_data_id(self) -> Identity32V1 {
+    pub(crate) const fn resolution_data_id(&self) -> Identity32V1 {
         self.resolution_data_id
     }
 
-    pub(crate) const fn native_claim_basis_id(self) -> Identity32V1 {
+    pub(crate) const fn native_claim_basis_id(&self) -> Identity32V1 {
         self.native_claim_basis_id
     }
 
-    pub(crate) const fn authentication_id(self) -> Identity32V1 {
+    pub(crate) const fn authentication_id(&self) -> Identity32V1 {
         self.authentication_id
     }
 }
