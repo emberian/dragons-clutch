@@ -25,10 +25,12 @@ mod compiler_output_v3;
 mod compiler_output_v4;
 mod compiler_output_v5;
 mod compiler_output_v6;
+mod compiler_output_v7;
 mod direct_global_liveness;
 mod failure_begin_schedule_v2;
 mod foundation_funding;
 mod foundation_funding_v3;
+mod foundation_funding_v4;
 mod funding;
 mod funding_state;
 mod funding_state_v2;
@@ -95,6 +97,11 @@ pub use compiler_output_v6::{
     ProductSeriesBundleInputsV6, COMPILED_PRODUCT_SERIES_BUNDLE_V6_BYTES,
     COMPILED_PRODUCT_SERIES_BUNDLE_V6_DOMAIN,
 };
+pub use compiler_output_v7::{
+    assemble_compiled_product_series_bundle_v7, CompiledProductSeriesBundleV7,
+    ProductSeriesBundleInputsV7, COMPILED_PRODUCT_SERIES_BUNDLE_V7_BYTES,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V7_DOMAIN,
+};
 pub use direct_global_liveness::{
     DirectGlobalLivenessAllocationV2, DirectGlobalLivenessCapitalizationV2,
     DirectGlobalLivenessPhaseV2, DirectGlobalLivenessTerminalAccountingV2,
@@ -135,6 +142,11 @@ pub use foundation_funding_v3::{
     MARKET_FOUNDATION_SCHEDULE_V3_DOMAIN, MARKET_FOUNDATION_SLOT_COUNT_V3,
     SERIES_ATTACHMENT_PLAN_BYTES_V5, SERIES_ATTACHMENT_PLAN_V5_DOMAIN,
     SERIES_FUNDING_QUOTE_BYTES_V5, SERIES_FUNDING_QUOTE_V5_DOMAIN,
+};
+pub use foundation_funding_v4::{
+    SeriesAttachmentPlanV6, SeriesFundingQuoteV6, SERIES_ATTACHMENT_PLAN_BYTES_V6,
+    SERIES_ATTACHMENT_PLAN_V6_DOMAIN, SERIES_FUNDING_QUOTE_BYTES_V6,
+    SERIES_FUNDING_QUOTE_V6_DOMAIN,
 };
 pub use funding::{
     project_component_debits, AdapterAuthenticatedComponentStatusV1,
@@ -426,7 +438,11 @@ typed_id!(
 );
 typed_id!(
     CompiledProductSeriesBundleV6Id,
-    "Typed identity of one current 47-slot `CompiledProductSeriesBundleV6` compiler output."
+    "Typed identity of one historical 47-slot `CompiledProductSeriesBundleV6` compiler output."
+);
+typed_id!(
+    CompiledProductSeriesBundleV7Id,
+    "Typed identity of the current 50-slot `CompiledProductSeriesBundleV7` compiler output."
 );
 typed_id!(
     SeriesFundingQuoteId,
@@ -450,7 +466,11 @@ typed_id!(
 );
 typed_id!(
     SeriesFundingQuoteV5Id,
-    "Typed identity of one current 47-slot `SeriesFundingQuoteV5`."
+    "Typed identity of one historical 47-slot `SeriesFundingQuoteV5`."
+);
+typed_id!(
+    SeriesFundingQuoteV6Id,
+    "Typed identity of the current 50-slot `SeriesFundingQuoteV6`."
 );
 typed_id!(
     SeriesFundingStateV2Id,
@@ -486,7 +506,11 @@ typed_id!(
 );
 typed_id!(
     SeriesAttachmentPlanV5Id,
-    "Typed identity of one current `SeriesAttachmentPlanV5`."
+    "Typed identity of one historical QuoteV5-bound `SeriesAttachmentPlanV5`."
+);
+typed_id!(
+    SeriesAttachmentPlanV6Id,
+    "Typed identity of the current QuoteV6-bound `SeriesAttachmentPlanV6`."
 );
 typed_id!(
     MarketFoundationScheduleV1Id,
