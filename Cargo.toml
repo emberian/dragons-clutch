@@ -15,6 +15,7 @@ members = [
     "crates/dclutch-product-contract",
     "crates/dclutch-record-contract",
     "crates/dclutch-realm-contract",
+    "crates/dclutch-rent-contract",
     "crates/dclutch-source-contract",
     "crates/dclutch-terminal-contract",
     "crates/dclutch-token-svm",
