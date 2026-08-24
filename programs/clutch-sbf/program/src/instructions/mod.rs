@@ -45,6 +45,8 @@ pub mod cash_exit;
 pub mod claim_representation_v3;
 pub mod collateral_cash_v3;
 pub(crate) mod collateral_position_v3;
+/// Ordered physical ClaimLedger/Hoard terminal owners for RootV3 retirement.
+pub(crate) mod collateral_shared_core_terminal_v3;
 pub mod complete_set_v3;
 pub mod construction;
 /// Non-production executable Dealer facility slice.
