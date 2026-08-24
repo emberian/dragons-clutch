@@ -483,6 +483,7 @@ pub fn stream_counted_exact_index_root_v1(
         plane_id,
         locator_data_id,
         adjacency_data_id,
+        projection.feed_data_id(),
         input.capability_profile_id,
         &CanonicalSha256,
         root_output,
@@ -633,6 +634,7 @@ fn authenticate_join<'a>(input: AuthenticateCountedExactIndexReadInputV1<'a>, ro
         || locator.settlement_root_account != input.root.account
         || locator.selected_feed_account != input.feed.account
         || locator.selected_feed_data_id != feed_full_data_id
+        || root.selected_feed_data_id() != feed_full_data_id
         || feed_bundle_id != root.base().candidate_bundle_digest()
         || locator.traversal_binding_id != root.base().owner_order_set_digest()
         || locator.plane_id != root.plane_id()
@@ -826,6 +828,7 @@ pub fn retire_counted_exact_index_root_v1(mutation: CountedExactIndexRootMutatio
         || locator.settlement_root_account != sealed.authority.root_account
         || locator.selected_feed_account != sealed.authority.feed_account
         || locator.selected_feed_data_id != sealed.authority.feed_full_data_id
+        || indexed.selected_feed_data_id() != sealed.authority.feed_full_data_id
         || locator.traversal_binding_id != indexed.base().owner_order_set_digest()
         || locator.sibling_account != input.adjacency.account
         || adjacency.sibling_account != input.locator.account

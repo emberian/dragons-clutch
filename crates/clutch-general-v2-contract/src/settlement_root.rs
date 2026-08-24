@@ -1096,6 +1096,56 @@ impl SettlementRootV1AccountV1 {
         Ok(next)
     }
 
+    /// Whether every non-Feed liability is discharged while the exact
+    /// retained Feed remains available for its final authenticated readers.
+    pub(super) fn at_retained_feed_retirement_frontier(&self) -> bool {
+        let Some(expected_unfilled) = self
+            .counts
+            .expected_reservations
+            .checked_sub(self.counts.expected_filled_reservations)
+        else {
+            return false;
+        };
+        self.phase == SettlementRootPhaseV1::Retiring
+            && self.counts.admitted_receipts == self.counts.expected_receipts
+            && self.counts.live_receipts == 0
+            && self.counts.admitted_owner_rows == self.counts.expected_owner_rows
+            && self.counts.live_owner_rows == 0
+            && self.counts.admitted_reservations == self.counts.expected_filled_reservations
+            && self.counts.live_reservations == 0
+            && self.counts.released_unfilled_reservations == expected_unfilled
+            && self.counts.completed_owner_finalizations == self.counts.expected_owner_rows
+            && self.counts.live_fee_finalizations == 0
+            && self.counts.admitted_dealer_children == self.counts.expected_dealer_children
+            && self.counts.live_dealer_children == 0
+            && self.counts.admitted_merge_payments == self.counts.expected_merge_payments
+            && self.counts.completed_merge_payments == self.counts.expected_merge_payments
+            && self.cash_pot_state == SettlementRootChildStateV1::Retired
+            && matches!(
+                self.final_pot_state,
+                SettlementRootChildStateV1::Absent | SettlementRootChildStateV1::Retired
+            )
+            && self.retained_feed_state == SettlementRootChildStateV1::Live
+            && matches!(
+                self.fee_record_state,
+                SettlementRootChildStateV1::Absent | SettlementRootChildStateV1::Retired
+            )
+    }
+
+    /// Structural Feed-retirement successor used only after the adapter closes
+    /// the exact retained Feed in the same rollback domain.
+    pub(super) fn retire_retained_feed_and_finish(&self) -> Result<Self, CodecError> {
+        self.validate()?;
+        if !self.at_retained_feed_retirement_frontier() {
+            return Err(CodecError::InvalidState);
+        }
+        let mut next = *self;
+        next.retained_feed_state = SettlementRootChildStateV1::Retired;
+        next.phase = SettlementRootPhaseV1::Terminal;
+        next.validate()?;
+        Ok(next)
+    }
+
     /// Derive a structural full-account terminal receipt only after every
     /// expected child is observed and retired. This is not a capability: the
     /// retirement adapter must reauthenticate the exact root PDA, program
