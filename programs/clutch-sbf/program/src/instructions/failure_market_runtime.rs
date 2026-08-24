@@ -26,6 +26,7 @@ use clutch_failure_policy_runtime::market_runtime_v1::{
     FailureMarketSourceFailureTransitionReceiptIdV3,
     FailureMarketRuntimeStateCommitmentV1, FailureMarketRuntimeTerminalPlanV2,
     FailureMarketRuntimeV1, FailureMarketSessionBeginPlanV2, FailureMarketSessionTransitionPlanV1,
+    FailureMarketSessionTransitionPlanV2,
     FailureMarketSessionTransitionReceiptIdV1, FAILURE_MARKET_RUNTIME_BYTES_V1,
 };
 use clutch_product_series::ContentId as ProductContentId;
@@ -721,6 +722,108 @@ pub(crate) fn write_failure_market_runtime_begin_plan_v2<
     })
 }
 
+/// Persist one exact current LinkV2 advance/resolution/archive transcript.
+///
+/// This path never lowers the current Product link into historical V1 state.
+/// It hostile-reopens the runtime immediately before and after the write and
+/// preserves its separately owned rent principal and donations exactly.
+pub(crate) fn write_failure_market_runtime_session_plan_v2<
+    A: AuthenticatedFailureMarketRuntimeSessionWriteV1 + ?Sized,
+>(
+    program_id: &Pubkey,
+    admission_root_account: &AccountInfo<'_>,
+    runtime_root: &AccountInfo<'_>,
+    admission_root: AuthenticatedFailureMarketRootV2,
+    authenticated: AuthenticatedFailureMarketRuntimeRootV1,
+    plan: FailureMarketSessionTransitionPlanV2,
+    authority: &A,
+) -> Outcome<AuthenticatedFailureMarketRuntimeSessionPostwriteV1> {
+    require(
+        authenticated.account == *runtime_root.key && runtime_root.is_writable,
+        ClutchError::MismatchedState,
+    )?;
+    let live = authenticate_failure_market_runtime_root_v1(
+        program_id,
+        admission_root_account,
+        runtime_root,
+        admission_root,
+        true,
+    )?;
+    require(live == authenticated, ClutchError::MismatchedState)?;
+    let runtime_before = live.state_commitment;
+    let resulting = plan.resulting_runtime();
+    let runtime_after = resulting
+        .commitment()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let facts = FailureMarketRuntimeSessionWriteFactsV1 {
+        runtime_before,
+        runtime_after,
+        transition_receipt_id: plan.receipt_id(),
+    };
+    authority
+        .authenticate_failure_market_runtime_session_write_v1(facts)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let mut after = live.state;
+    after
+        .commit_plan_v2(plan)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(after == resulting, ClutchError::MismatchedState)?;
+    let balance_before = runtime_root.lamports();
+    let mut runtime_body = [0; FAILURE_MARKET_RUNTIME_BYTES_V1];
+    after
+        .encode_into(&mut runtime_body)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let record = FailureMarketRuntimeRootAccountV1 {
+        bump: live.bump,
+        runtime_body,
+    };
+    {
+        let mut data = runtime_root
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let output: &mut [u8; FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_BYTES_V1] = data
+            .as_mut()
+            .try_into()
+            .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+        record
+            .encode_into(output)
+            .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    }
+    require(runtime_root.lamports() == balance_before, ClutchError::MismatchedState)?;
+    let reopened = authenticate_failure_market_runtime_root_v1(
+        program_id,
+        admission_root_account,
+        runtime_root,
+        admission_root,
+        true,
+    )?;
+    require(
+        reopened.state == after
+            && reopened.state_commitment == runtime_after
+            && reopened.state_commitment != runtime_before,
+        ClutchError::MismatchedState,
+    )?;
+    let id = ProductContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            FAILURE_MARKET_RUNTIME_SESSION_POSTWRITE_DOMAIN_V1,
+            b"current-link-v2",
+            runtime_root.key.as_ref(),
+            &runtime_before.bytes(),
+            &runtime_after.bytes(),
+            &facts.transition_receipt_id.bytes(),
+            &balance_before.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(id != ProductContentId::ZERO, ClutchError::MismatchedState)?;
+    Ok(AuthenticatedFailureMarketRuntimeSessionPostwriteV1 {
+        id,
+        root: reopened,
+        transition_receipt_id: facts.transition_receipt_id,
+        runtime_before,
+    })
+}
+
 /// Persist the final runtime transcript only after the same instruction has
 /// written the Refused cell, appended history, reset the cell, terminalized
 /// Source state, and released the exact Product link. Any refusal rolls every
@@ -1019,6 +1122,36 @@ mod adversarial_runtime_writer_tests {
             .expect("hostile poststate reopen")
             + write;
         assert!(preopen < write && write < balance && balance < postopen);
+        assert!(!writer[..postopen].contains("try_borrow_mut_lamports"));
+    }
+
+    #[test]
+    fn current_session_writer_commits_only_the_v2_plan_after_stale_reopen() {
+        let source = include_str!("failure_market_runtime.rs");
+        let writer = source
+            .split("pub(crate) fn write_failure_market_runtime_session_plan_v2")
+            .nth(1)
+            .and_then(|value| {
+                value
+                    .split("/// Persist the final runtime transcript")
+                    .next()
+            })
+            .expect("current LinkV2 runtime writer");
+        let preopen = writer
+            .find("let live = authenticate_failure_market_runtime_root_v1")
+            .expect("hostile prestate reopen");
+        let authority = writer
+            .find("authenticate_failure_market_runtime_session_write_v1")
+            .expect("private exact authority");
+        let commit = writer.find("commit_plan_v2(plan)").expect("typed V2 commit");
+        let write = writer.find("record.encode_into(output)").expect("body write");
+        let postopen = writer[write..]
+            .find("let reopened = authenticate_failure_market_runtime_root_v1")
+            .expect("hostile poststate reopen")
+            + write;
+        assert!(preopen < authority && authority < commit && commit < write && write < postopen);
+        assert!(writer.contains("b\"current-link-v2\""));
+        assert!(!writer.contains("commit_plan_v1"));
         assert!(!writer[..postopen].contains("try_borrow_mut_lamports"));
     }
 
