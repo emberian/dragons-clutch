@@ -43,6 +43,7 @@ mod market_family_aggregator;
 mod market_family_capability;
 mod market_lifecycle;
 mod market_lifecycle_v2;
+mod market_lifecycle_v3;
 mod market_foundation_v3;
 mod market_foundation_v4;
 mod market_replay;
@@ -270,6 +271,21 @@ pub use market_lifecycle_v2::{
     MARKET_LIFECYCLE_ROOT_BYTES_V2, MARKET_LIFECYCLE_ROOT_DOMAIN_V2,
     MARKET_RESOLUTION_ACTIVATION_DOMAIN_V2, MARKET_SHARED_CORE_COUNT_V2,
     SERIES_LINK_OBLIGATION_COUNT_V2, SERIES_MARKET_LINK_BYTES_V2, SERIES_MARKET_LINK_DOMAIN_V2,
+};
+pub use market_lifecycle_v3::{
+    MarketFoundationCapitalV3, MarketFoundationProgressV3, MarketFoundationStepProjectionV4,
+    MarketFoundingAbortProjectionV3, MarketInstanceTerminalProjectionV3,
+    MarketLifecycleBindingV3, MarketLifecyclePhaseV3, MarketLifecycleRootV3,
+    MarketResolutionActivationV3, MarketSharedCoreTerminalProjectionV3, MarketSharedCoreV3,
+    SeriesLinkObligationAdmissionProjectionV3, SeriesLinkObligationConfigurationV3,
+    SeriesLinkObligationConfigurationV3Id, SeriesLinkObligationDispositionV3,
+    SeriesLinkObligationStatusV3, SeriesLinkObligationTerminalProjectionV3,
+    SeriesLinkObligationV3, SeriesMarketAdmissionProjectionV3, SeriesMarketLinkBindingV3,
+    SeriesMarketLinkPhaseV3, SeriesMarketLinkRetirementProjectionV3, SeriesMarketLinkV3,
+    MARKET_INSTANCE_TERMINAL_PROJECTION_DOMAIN_V3, MARKET_LIFECYCLE_BINDING_DOMAIN_V3,
+    MARKET_LIFECYCLE_ROOT_BYTES_V3, MARKET_LIFECYCLE_ROOT_DOMAIN_V3,
+    MARKET_RESOLUTION_ACTIVATION_DOMAIN_V3, MARKET_SHARED_CORE_COUNT_V3,
+    SERIES_LINK_OBLIGATION_COUNT_V3, SERIES_MARKET_LINK_BYTES_V3, SERIES_MARKET_LINK_DOMAIN_V3,
 };
 pub use market_foundation_v3::{
     authenticate_market_foundation_account_graph_bytes_v3,
@@ -597,6 +613,10 @@ typed_id!(
     "Typed semantic-state identity of the current shared Market lifecycle root."
 );
 typed_id!(
+    MarketLifecycleRootV3Id,
+    "Typed semantic-state identity of the 50-slot current shared Market lifecycle root."
+);
+typed_id!(
     MarketLifecycleReplayReceiptV1Id,
     "Typed identity of one permanent `MarketLifecycleReplayReceiptV1`."
 );
@@ -615,6 +635,10 @@ typed_id!(
 typed_id!(
     SeriesMarketLinkV2Id,
     "Typed semantic-state identity of the current Series Market admission link."
+);
+typed_id!(
+    SeriesMarketLinkV3Id,
+    "Typed semantic-state identity of the current RootV3-bound Series Market admission link."
 );
 typed_id!(
     SeriesLifecycleReplayBindingV1Id,
