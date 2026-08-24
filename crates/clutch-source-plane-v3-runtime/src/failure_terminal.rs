@@ -264,6 +264,61 @@ impl SourceFailureTerminalV1 {
         Ok(domain_id(SOURCE_FAILURE_TERMINAL_DOMAIN, &bytes))
     }
 
+    /// Exact checked Source release manifest selected for this terminal.
+    pub const fn source_release_manifest_id(&self) -> ContentId {
+        self.source_release_manifest_id
+    }
+
+    /// Hostile authentication of the checked Source release account.
+    pub const fn source_release_authentication_id(&self) -> ContentId {
+        self.source_release_authentication_id
+    }
+
+    /// Exact authenticated Source route identity.
+    pub const fn route_id(&self) -> ContentId {
+        self.route_id
+    }
+
+    /// Exact checked SourcePlane contract identity.
+    pub const fn source_plane_contract_id(&self) -> ContentId {
+        self.source_plane_contract_id
+    }
+
+    /// Exact Realm-selected Source specification identity.
+    pub const fn source_spec_id(&self) -> ContentId {
+        self.source_spec_id
+    }
+
+    /// Exact prepaid Source work schedule identity.
+    pub const fn source_work_schedule_id(&self) -> ContentId {
+        self.source_work_schedule_id
+    }
+
+    /// Exact Product Market instance whose Source attempt terminated.
+    pub const fn market_instance_id(&self) -> ContentId {
+        self.market_instance_id
+    }
+
+    /// Exact Failure policy binding selected by the persisted handoff.
+    pub const fn failure_policy_binding_id(&self) -> ContentId {
+        self.failure_policy_binding_id
+    }
+
+    /// Hostile authentication of the persisted absence or refused Result.
+    pub const fn source_fact_authentication_id(&self) -> ContentId {
+        self.source_fact_authentication_id
+    }
+
+    /// Failure schedule generation for the terminal attempt.
+    pub const fn failure_generation(&self) -> u64 {
+        self.failure_generation
+    }
+
+    /// Source occurrence repair generation for the terminal attempt.
+    pub const fn source_repair_generation(&self) -> u64 {
+        self.source_repair_generation
+    }
+
     pub const fn source_reconstruction_id(&self) -> ContentId {
         self.source_reconstruction_id
     }
@@ -1133,6 +1188,22 @@ mod adversarial_tests {
             SourceFailureTerminalAccountV2::decode(&bound_bytes).expect("decode bound"),
             bound
         );
+    }
+
+    #[test]
+    fn hostile_terminal_projection_exposes_only_owned_lifecycle_facts() {
+        let terminal = absence_terminal();
+        assert_eq!(terminal.source_release_manifest_id(), id(1));
+        assert_eq!(terminal.source_release_authentication_id(), id(2));
+        assert_eq!(terminal.route_id(), id(3));
+        assert_eq!(terminal.source_plane_contract_id(), id(4));
+        assert_eq!(terminal.source_spec_id(), id(5));
+        assert_eq!(terminal.source_work_schedule_id(), id(6));
+        assert_eq!(terminal.market_instance_id(), id(12));
+        assert_eq!(terminal.failure_policy_binding_id(), id(13));
+        assert_eq!(terminal.source_fact_authentication_id(), id(14));
+        assert_eq!(terminal.failure_generation(), 1);
+        assert_eq!(terminal.source_repair_generation(), 0);
     }
 
     #[test]
