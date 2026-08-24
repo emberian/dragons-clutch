@@ -82,14 +82,13 @@ Named Lean and Verus lanes check named models or source subsets. No theorem in
 this repository closes the Rust-to-SBF, account, CPI, or runtime refinement
 boundary for the whole protocol.</aside>
 
-<h2>Three different frontends</h2>
+<h2>Two operator surfaces</h2>
 
 <p><strong>This microsite</strong> is a static explanation and makes no network
-request. <strong>Glass</strong>, under <code>apps/static-client</code>, is an
-offline inspector and unsigned intent-byte compiler with no RPC or wallet.
-<strong>Operator Bench</strong>, under <code>apps/operator</code>, renders a
-loopback daemon that holds ephemeral local test signers. None is yet a
-production transaction client.</p>
+request. <strong>Glass</strong>, under <code>apps/static-client</code>, consumes
+release-bound, chain-derived sessions and server-constructed unsigned
+transactions from <code>operatord</code>. Neither surface loads wallet material,
+signs, or submits a transaction.</p>
 
 <h2>Run the checks locally</h2>
 
@@ -102,13 +101,6 @@ installed):</p>
 
 <pre><code>cd apps/static-client
 npm test</code></pre>
-
-<p>Check the Operator browser modules and their exact-integer/accessibility
-invariants (still source/mechanical, not visual QA):</p>
-
-<pre><code>cd apps/operator
-npm test
-npm run check</code></pre>
 
 <p>Run the local-real provider seam without devnet SOL or public RPC:</p>
 
@@ -126,19 +118,6 @@ state. The one-record archive then seals and resolves payout cell 1 because the
 entire admitted conservative interval [99,980,929, 100,019,071] lies there.
 This is a real program/ABI/crypto seam in a local bank, not a current network
 price, redemption/multi-boundary campaign, or production source profile.</p>
-
-<p>Drive the complete local trading example:</p>
-
-<pre><code>CARGO_NET_OFFLINE=true scripts/run_operator_trade.sh</code></pre>
-
-<p>The trading gate normally takes several minutes. It waits on the local
-validator&#8217;s real clock for a short freeze deadline and then the fixed
-1,000-slot candidate window. The Epoch screen shows the current slot, target,
-reason, and remaining slots; after settlement the script requires every
-reported conservation identity to close. It exercises the HTTP/event and bank
-lifecycle; it does not load the browser modules or constitute visual QA. The
-loopback daemon requires an exact local Host, same-origin JSON, and a fresh
-process-local capability cookie for its mutation and event endpoints.</p>
 
 <h2>The next architectural work</h2>
 
