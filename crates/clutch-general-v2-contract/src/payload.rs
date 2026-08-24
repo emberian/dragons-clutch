@@ -58,7 +58,7 @@ pub const CONSUME_PORTFOLIO_PAIR_EGGS_PAYLOAD_BYTES: usize = 104;
 pub const RETIRE_PORTFOLIO_PAIR_ARCHIVES_PAYLOAD_BYTES: usize = 104;
 /// Exact counted-root lifecycle selector width.
 pub const COUNTED_SETTLEMENT_ROOT_SELECTOR_BYTES: usize = 64;
-/// Exact action-27/28/30/48/49 child-retirement selector width.
+/// Exact action-27/28/30/48/49/50 child-retirement selector width.
 pub const SETTLEMENT_CHILD_RETIREMENT_PAYLOAD_BYTES: usize = 96;
 /// Exact action-50 maker-distribution selector width.
 pub const FEE_MAKER_DISTRIBUTION_PAYLOAD_BYTES_V1: usize = 200;
