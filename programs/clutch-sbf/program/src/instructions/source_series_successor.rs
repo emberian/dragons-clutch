@@ -1339,6 +1339,8 @@ pub(super) fn process_reopen_generation(
             &accounts[15],
         ),
     }?;
+    let call_ordinal = u32::try_from(sequence)
+        .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
     let lineage_after_id = opened
         .lineage_after
         .id()
@@ -1350,6 +1352,7 @@ pub(super) fn process_reopen_generation(
                     .latest_generation
                     .checked_add(1)
                     .ok_or(ClutchError::Arithmetic)?
+            && u64::from(call_ordinal) == opened.header.generation
             && opened.lineage_after.is_open
             && opened.lineage_after.active_account == runtime_key(accounts[9].key)
             && opened.lineage_after.last_opened_state_id == opened.account_data_id
@@ -1379,7 +1382,7 @@ pub(super) fn process_reopen_generation(
         kind,
         semantic_receipt_id,
         &accounts[11],
-        u32::try_from(sequence).map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?,
+        call_ordinal,
         ceiling,
         accounts[12].key,
         ceiling,
