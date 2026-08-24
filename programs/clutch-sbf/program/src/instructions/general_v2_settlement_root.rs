@@ -26,7 +26,37 @@ pub const IX_SETTLEMENT_ROOT: usize = 0;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthenticatedGeneralSettlementRootV1 {
     account: Id32,
-    root: SettlementRootV1AccountV1,
+    body: AuthenticatedGeneralSettlementRootBodyV1,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum AuthenticatedGeneralSettlementRootBodyV1 {
+    Legacy(Box<SettlementRootV1AccountV1>),
+    Indexed(Box<IndexedSettlementRootV1AccountV1>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NamedRootTransitionV1 {
+    AdmitMaterialization {
+        owner_rows_created: u8,
+        reservations_admitted: u8,
+        merge_receipt: bool,
+    },
+    ReleaseUnfilledReservation,
+    ActivateMergeCashPot,
+    CompleteOwnerFinalization { fee_receipt_created: bool },
+    CompleteMergePayment,
+    RetireOneReceipt,
+    RetireOneOwnerRow,
+    RetireOneReservation,
+    RetireOneFeeFinalization,
+    BeginRetiring,
+    RetireCashPot,
+    RetireFinalPot,
+    RetireFeeRecord,
+    RetirePortfolioPairArchives { receipt_count: u8 },
+    AdmitDealerChild,
+    RetireDealerChild,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -42,8 +72,324 @@ impl AuthenticatedGeneralSettlementRootV1 {
     }
 
     /// Exact hostile-byte-decoded semantic root.
-    pub const fn root(&self) -> &SettlementRootV1AccountV1 {
-        &self.root
+    pub fn root(&self) -> &SettlementRootV1AccountV1 {
+        match &self.body {
+            AuthenticatedGeneralSettlementRootBodyV1::Legacy(root) => root,
+            AuthenticatedGeneralSettlementRootBodyV1::Indexed(root) => root.base(),
+        }
+    }
+
+    /// Exact authenticated account width for this root version.
+    pub fn account_bytes(&self) -> usize {
+        match &self.body {
+            AuthenticatedGeneralSettlementRootBodyV1::Legacy(_) => {
+                SETTLEMENT_ROOT_ACCOUNT_BYTES
+            }
+            AuthenticatedGeneralSettlementRootBodyV1::Indexed(_) => {
+                INDEXED_SETTLEMENT_ROOT_BYTES_V1
+            }
+        }
+    }
+
+    /// Whether this is the disabled counted exact-index successor.
+    pub fn is_indexed(&self) -> bool {
+        matches!(&self.body, AuthenticatedGeneralSettlementRootBodyV1::Indexed(_))
+    }
+
+    /// Version-specific full root body ID. Indexed roots never collapse to
+    /// the legacy base transcript.
+    pub fn data_id<B: Sha256BackendV1>(&self, backend: &B) -> Outcome<Id32> {
+        match &self.body {
+            AuthenticatedGeneralSettlementRootBodyV1::Legacy(root) => {
+                root.data_id(backend, self.account).map_err(Into::into)
+            }
+            AuthenticatedGeneralSettlementRootBodyV1::Indexed(root) => {
+                root.data_id(backend, self.account).map_err(Into::into)
+            }
+        }
+    }
+
+    /// Encode exactly one action-24 materialization successor while preserving
+    /// an authenticated indexed suffix when present.
+    pub fn encode_materialization_successor(
+        &self,
+        expected: &SettlementRootV1AccountV1,
+        output: &mut [u8],
+    ) -> Outcome<()> {
+        let before = self.root().counts();
+        let after = expected.counts();
+        let owner_rows_created = u8::try_from(
+            after
+                .admitted_owner_rows
+                .checked_sub(before.admitted_owner_rows)
+                .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+        let reservations_admitted = u8::try_from(after
+            .admitted_reservations
+            .checked_sub(before.admitted_reservations)
+            .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?)
+        .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+        let merge_delta = after
+            .admitted_merge_payments
+            .checked_sub(before.admitted_merge_payments)
+            .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+        require(merge_delta <= 1, ClutchError::MismatchedState)?;
+        self.encode_named_successor(
+            expected,
+            NamedRootTransitionV1::AdmitMaterialization {
+                owner_rows_created,
+                reservations_admitted,
+                merge_receipt: merge_delta == 1,
+            },
+            output,
+        )
+    }
+
+    /// Encode exactly one authenticated zero-fill Reservation release.
+    pub fn encode_unfilled_release_successor(
+        &self,
+        expected: &SettlementRootV1AccountV1,
+        output: &mut [u8],
+    ) -> Outcome<()> {
+        self.encode_named_successor(
+            expected,
+            NamedRootTransitionV1::ReleaseUnfilledReservation,
+            output,
+        )
+    }
+
+    /// Encode the unique action-37 merge cash-pot activation successor.
+    pub fn encode_merge_cash_activation_successor(
+        &self,
+        expected: &SettlementRootV1AccountV1,
+        output: &mut [u8],
+    ) -> Outcome<()> {
+        self.encode_named_successor(expected, NamedRootTransitionV1::ActivateMergeCashPot, output)
+    }
+
+    /// Encode exactly one owner-finalization successor.
+    pub fn encode_owner_finalization_successor(
+        &self,
+        expected: &SettlementRootV1AccountV1,
+        fee_receipt_created: bool,
+        output: &mut [u8],
+    ) -> Outcome<()> {
+        self.encode_named_successor(
+            expected,
+            NamedRootTransitionV1::CompleteOwnerFinalization {
+                fee_receipt_created,
+            },
+            output,
+        )
+    }
+
+    /// Encode exactly one merge-payment latch successor.
+    pub fn encode_merge_payment_successor(
+        &self,
+        expected: &SettlementRootV1AccountV1,
+        output: &mut [u8],
+    ) -> Outcome<()> {
+        self.encode_named_successor(
+            expected,
+            NamedRootTransitionV1::CompleteMergePayment,
+            output,
+        )
+    }
+
+    /// Encode one terminal Receipt close counter successor.
+    pub fn encode_receipt_retirement_successor(&self, output: &mut [u8]) -> Outcome<()> {
+        self.encode_named_successor_from_root(NamedRootTransitionV1::RetireOneReceipt, output)
+    }
+
+    /// Encode one finalized OwnerSettlement row close counter successor.
+    pub fn encode_owner_row_retirement_successor(&self, output: &mut [u8]) -> Outcome<()> {
+        self.encode_named_successor_from_root(NamedRootTransitionV1::RetireOneOwnerRow, output)
+    }
+
+    /// Encode one consumed Reservation close counter successor.
+    pub fn encode_reservation_retirement_successor(&self, output: &mut [u8]) -> Outcome<()> {
+        self.encode_named_successor_from_root(NamedRootTransitionV1::RetireOneReservation, output)
+    }
+
+    /// Encode one owner fee-finalization close counter successor.
+    pub fn encode_fee_finalization_retirement_successor(
+        &self,
+        output: &mut [u8],
+    ) -> Outcome<()> {
+        self.encode_named_successor_from_root(
+            NamedRootTransitionV1::RetireOneFeeFinalization,
+            output,
+        )
+    }
+
+    /// Encode the unique fully discharged Settling-to-Retiring phase gate.
+    pub fn encode_begin_retiring_successor(&self, output: &mut [u8]) -> Outcome<()> {
+        self.encode_named_successor_from_root(NamedRootTransitionV1::BeginRetiring, output)
+    }
+
+    /// Encode the exact terminal cash-pot retirement successor.
+    pub fn encode_cash_pot_retirement_successor(&self, output: &mut [u8]) -> Outcome<()> {
+        self.encode_named_successor_from_root(NamedRootTransitionV1::RetireCashPot, output)
+    }
+
+    /// Encode the exact terminal FinalPot retirement successor.
+    pub fn encode_final_pot_retirement_successor(&self, output: &mut [u8]) -> Outcome<()> {
+        self.encode_named_successor_from_root(NamedRootTransitionV1::RetireFinalPot, output)
+    }
+
+    /// Encode the selected fee-record terminal-consumption successor.
+    pub fn encode_fee_record_retirement_successor(&self, output: &mut [u8]) -> Outcome<()> {
+        self.encode_named_successor_from_root(NamedRootTransitionV1::RetireFeeRecord, output)
+    }
+
+    /// Encode one authenticated portfolio archive-pair retirement successor.
+    pub fn encode_portfolio_retirement_successor(
+        &self,
+        expected: &SettlementRootV1AccountV1,
+        receipt_count: u8,
+        output: &mut [u8],
+    ) -> Outcome<()> {
+        self.encode_named_successor(
+            expected,
+            NamedRootTransitionV1::RetirePortfolioPairArchives { receipt_count },
+            output,
+        )
+    }
+
+    /// Encode exactly one Dealer child admission successor.
+    pub fn encode_dealer_admission_successor(
+        &self,
+        expected: &SettlementRootV1AccountV1,
+        output: &mut [u8],
+    ) -> Outcome<()> {
+        self.encode_named_successor(expected, NamedRootTransitionV1::AdmitDealerChild, output)
+    }
+
+    /// Encode exactly one Dealer child retirement successor.
+    pub fn encode_dealer_retirement_successor(
+        &self,
+        expected: &SettlementRootV1AccountV1,
+        output: &mut [u8],
+    ) -> Outcome<()> {
+        self.encode_named_successor(expected, NamedRootTransitionV1::RetireDealerChild, output)
+    }
+
+    fn encode_named_successor(
+        &self,
+        expected: &SettlementRootV1AccountV1,
+        transition: NamedRootTransitionV1,
+        output: &mut [u8],
+    ) -> Outcome<()> {
+        require(output.len() == self.account_bytes(), ClutchError::WrongDataLength)?;
+        match &self.body {
+            AuthenticatedGeneralSettlementRootBodyV1::Legacy(root) => {
+                let successor = apply_legacy_transition(root, transition)?;
+                require(&successor == expected, ClutchError::MismatchedState)?;
+                successor.encode(output)?;
+            }
+            AuthenticatedGeneralSettlementRootBodyV1::Indexed(root) => {
+                let successor = apply_indexed_transition(root, transition)?;
+                require(successor.base() == expected, ClutchError::MismatchedState)?;
+                successor.encode(output)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn encode_named_successor_from_root(
+        &self,
+        transition: NamedRootTransitionV1,
+        output: &mut [u8],
+    ) -> Outcome<()> {
+        require(output.len() == self.account_bytes(), ClutchError::WrongDataLength)?;
+        match &self.body {
+            AuthenticatedGeneralSettlementRootBodyV1::Legacy(root) => {
+                apply_legacy_transition(root, transition)?.encode(output)?;
+            }
+            AuthenticatedGeneralSettlementRootBodyV1::Indexed(root) => {
+                apply_indexed_transition(root, transition)?.encode(output)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn apply_legacy_transition(
+    root: &SettlementRootV1AccountV1,
+    transition: NamedRootTransitionV1,
+) -> Result<SettlementRootV1AccountV1, clutch_general_v2_contract::CodecError> {
+    match transition {
+        NamedRootTransitionV1::AdmitMaterialization {
+            owner_rows_created,
+            reservations_admitted,
+            merge_receipt,
+        } => root.admit_materialization_delta(
+            owner_rows_created,
+            reservations_admitted,
+            merge_receipt,
+        ),
+        NamedRootTransitionV1::ReleaseUnfilledReservation => {
+            root.release_unfilled_reservation()
+        }
+        NamedRootTransitionV1::ActivateMergeCashPot => {
+            Ok(*clutch_general_v2_contract::prepare_activate_merge_cash_pot_v1(root)?.root())
+        }
+        NamedRootTransitionV1::CompleteOwnerFinalization {
+            fee_receipt_created,
+        } => root.complete_owner_finalization(fee_receipt_created),
+        NamedRootTransitionV1::CompleteMergePayment => root.complete_merge_payment(),
+        NamedRootTransitionV1::RetireOneReceipt => root.retire_one_receipt(),
+        NamedRootTransitionV1::RetireOneOwnerRow => root.retire_one_owner_row(),
+        NamedRootTransitionV1::RetireOneReservation => root.retire_one_reservation(),
+        NamedRootTransitionV1::RetireOneFeeFinalization => root.retire_one_fee_finalization(),
+        NamedRootTransitionV1::BeginRetiring => root.begin_retiring(),
+        NamedRootTransitionV1::RetireCashPot => root.retire_cash_pot(),
+        NamedRootTransitionV1::RetireFinalPot => root.retire_final_pot(),
+        NamedRootTransitionV1::RetireFeeRecord => root.retire_fee_record(),
+        NamedRootTransitionV1::RetirePortfolioPairArchives { receipt_count } => {
+            root.retire_portfolio_pair_archives(receipt_count)
+        }
+        NamedRootTransitionV1::AdmitDealerChild => root.admit_dealer_child(),
+        NamedRootTransitionV1::RetireDealerChild => root.retire_dealer_child(),
+    }
+}
+
+fn apply_indexed_transition(
+    root: &IndexedSettlementRootV1AccountV1,
+    transition: NamedRootTransitionV1,
+) -> Result<IndexedSettlementRootV1AccountV1, clutch_general_v2_contract::CodecError> {
+    match transition {
+        NamedRootTransitionV1::AdmitMaterialization {
+            owner_rows_created,
+            reservations_admitted,
+            merge_receipt,
+        } => root.admit_materialization(
+            owner_rows_created,
+            reservations_admitted,
+            merge_receipt,
+        ),
+        NamedRootTransitionV1::ReleaseUnfilledReservation => {
+            root.release_unfilled_reservation()
+        }
+        NamedRootTransitionV1::ActivateMergeCashPot => root.activate_merge_cash_pot(),
+        NamedRootTransitionV1::CompleteOwnerFinalization {
+            fee_receipt_created,
+        } => root.complete_owner_finalization(fee_receipt_created),
+        NamedRootTransitionV1::CompleteMergePayment => root.complete_merge_payment(),
+        NamedRootTransitionV1::RetireOneReceipt => root.retire_one_receipt(),
+        NamedRootTransitionV1::RetireOneOwnerRow => root.retire_one_owner_row(),
+        NamedRootTransitionV1::RetireOneReservation => root.retire_one_reservation(),
+        NamedRootTransitionV1::RetireOneFeeFinalization => root.retire_one_fee_finalization(),
+        NamedRootTransitionV1::BeginRetiring => root.begin_retiring(),
+        NamedRootTransitionV1::RetireCashPot => root.retire_cash_pot(),
+        NamedRootTransitionV1::RetireFinalPot => root.retire_final_pot(),
+        NamedRootTransitionV1::RetireFeeRecord => root.retire_fee_record(),
+        NamedRootTransitionV1::RetirePortfolioPairArchives { receipt_count } => {
+            root.retire_portfolio_pair_archives(receipt_count)
+        }
+        NamedRootTransitionV1::AdmitDealerChild => root.admit_dealer_child(),
+        NamedRootTransitionV1::RetireDealerChild => root.retire_dealer_child(),
     }
 }
 

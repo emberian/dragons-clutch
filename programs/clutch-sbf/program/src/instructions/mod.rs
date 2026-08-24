@@ -181,16 +181,20 @@ pub mod general_v2_settlement_root;
     feature = "profile-successor-chain-attached-dev"
 ))]
 pub mod general_v2_settlement_producer_v5;
-/// Sole checked current General V5 action router.
-#[cfg(feature = "profile-successor-chain-attached-dev")]
-pub(crate) mod general_v2_current;
-#[cfg(feature = "profile-successor-chain-attached-dev")]
-pub(crate) mod general_market_foundation_v4;
-/// Reusable hostile current General V5/Product V3/Revenue V2 read authority.
-pub(crate) mod general_market_current_v5;
-/// V5-only compact index child and retained-Feed retirement composers.
-#[cfg(feature = "profile-successor-chain-attached-dev")]
-pub(crate) mod general_v2_exact_index_retirement_v1;
+/// Ordered indexed-root terminal lifecycle.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_exact_index_retirement_v1;
+/// Typed counted settlement-child retirement and phase gate.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_settlement_retirement_v1;
+/// Nonempty V5 Epoch freeze successor.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_freeze_v5;
+/// Complete coefficient-portfolio settlement and archive retirement.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_portfolio_v5;
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_portfolio_retirement_v5;
 /// Shared immutable Feed/Page/Product traversal authentication for General V5 settlement.
 #[cfg(any(
     all(
