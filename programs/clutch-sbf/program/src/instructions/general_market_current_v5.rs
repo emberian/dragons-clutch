@@ -347,6 +347,7 @@ pub(crate) fn authenticate_general_market_current_v5(
         link_output,
         false,
         false,
+        false,
     )
 }
 
@@ -365,6 +366,7 @@ pub(crate) fn authenticate_general_market_current_v5_for_terminal(
         frame,
         root_output,
         link_output,
+        true,
         true,
         true,
     )
@@ -386,6 +388,7 @@ pub(crate) fn authenticate_general_market_current_for_product_activation_v5(
         link_output,
         true,
         true,
+        false,
     )
 }
 
@@ -406,6 +409,7 @@ pub(crate) fn authenticate_general_market_current_v5_with_root_access(
         link_output,
         product_root_writable,
         false,
+        false,
     )
 }
 
@@ -418,6 +422,7 @@ fn authenticate_general_market_current_v5_with_product_access(
     link_output: &mut SeriesMarketLinkAccountV3,
     product_root_writable: bool,
     series_link_writable: bool,
+    series_funding_writable: bool,
 ) -> Outcome<AuthenticatedGeneralMarketCurrentV5> {
     require_distinct_frame(frame)?;
     require_exact_readonly_account(
@@ -531,7 +536,7 @@ fn authenticate_general_market_current_v5_with_product_access(
         program_id,
         frame.series_funding,
         series_plan_id,
-        product_state_writable,
+        series_funding_writable,
     )?;
     let source_release = authenticate_release(program_id, frame.source_release)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
