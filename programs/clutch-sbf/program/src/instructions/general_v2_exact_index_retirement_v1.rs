@@ -1022,14 +1022,10 @@ pub fn process(
             retire_retained_feed(program_id, &local, selector)
         }
         ExactIndexLifecyclePayloadKindV1::CloseIndexedRoot(selector) => {
-            require(
-                action == GeneralV2Action::CloseIndexedSettlementRoot,
-                ClutchError::UnsupportedInstruction,
-            )?;
             let _ = program_id;
             let _ = accounts;
             let _ = selector;
-            Err(Refusal::Adapter(ClutchError::UnsupportedInstruction))
+            Err(Refusal::Adapter(ClutchError::MismatchedState))
         }
     }
 }
