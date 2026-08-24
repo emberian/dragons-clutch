@@ -2,7 +2,7 @@
 //!
 //! Both the CLI and HTTP adapter call the same function. The adapter decodes
 //! exact rational decimal-string JSON, reopens ReleaseV2/ProfileV4 and the
-//! BundleV6 graph, optionally runs the exact all-support atom solver, and
+//! BundleV7 graph, optionally runs the exact all-support atom solver, and
 //! returns an untrusted proposal. It has no RPC client, persistence, wallet,
 //! signer, transaction builder, or registration authority.
 
@@ -10,9 +10,9 @@ use crate::{bus::Bus, http, Result};
 use clutch_bspline::EdgePolicy;
 use clutch_bspline_shape_compiler::artifact::NativeShapeCertificateV1;
 use clutch_bspline_shape_compiler::exact_market::{
-    bind_exact_market_bundle_v6, compile_exact_market_v1, ExactMarketCompilerRequestV1,
+    bind_exact_market_bundle_v7, compile_exact_market_v1, ExactMarketCompilerRequestV1,
     ExactMarketCoordinateCoverageV1, ExactMarketSearchOutcomeV1,
-    COMPILED_PRODUCT_SERIES_BUNDLE_V6_ARTIFACT_KIND, EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V2,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V7_ARTIFACT_KIND, EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V3,
 };
 use clutch_bspline_shape_compiler::production::{
     compile_production_payoff_v1, AnalyticSmoothPayoffDefinitionV1,
@@ -21,11 +21,11 @@ use clutch_bspline_shape_compiler::production::{
 };
 use clutch_bspline_shape_compiler::{Shape, SpanStatus};
 use clutch_product_series::{
-    assemble_compiled_product_series_bundle_v6, CompiledProductSeriesBundleV6, ContentId,
+    assemble_compiled_product_series_bundle_v7, CompiledProductSeriesBundleV7, ContentId,
     EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2, PriceMeasurePolicyV1,
-    ProductSeriesBundleInputsV6, ProductTemplateV4, RegistryCapabilityProfileV4,
-    RegistryProgramReleaseV2, SeriesAttachmentPlanV5, SeriesFundingQuoteV5,
-    SeriesFundingTermsV2, SeriesPlanV5, COMPILED_PRODUCT_SERIES_BUNDLE_V6_BYTES,
+    ProductSeriesBundleInputsV7, ProductTemplateV4, RegistryCapabilityProfileV4,
+    RegistryProgramReleaseV2, SeriesAttachmentPlanV6, SeriesFundingQuoteV6,
+    SeriesFundingTermsV2, SeriesPlanV5, COMPILED_PRODUCT_SERIES_BUNDLE_V7_BYTES,
 };
 use num_bigint::BigInt;
 use num_rational::BigRational;
@@ -37,11 +37,11 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use solana_address::Address;
 
-pub const ENDPOINT: &str = "/v2/compiler/product-exact-market";
+pub const ENDPOINT: &str = "/v3/compiler/product-exact-market";
 pub const MAX_REQUEST_BYTES: usize = 320 * 1024;
-const REQUEST_SCHEMA: &str = "dragons-clutch/compiler/product-exact-market-request/v2";
+const REQUEST_SCHEMA: &str = "dragons-clutch/compiler/product-exact-market-request/v3";
 const DEFINITION_SCHEMA: &str = "dragons-clutch/compiler/production-payoff-definition/v1";
-const PROPOSAL_SCHEMA: &str = "dragons-clutch/compiler/product-exact-market-proposal/v2";
+const PROPOSAL_SCHEMA: &str = "dragons-clutch/compiler/product-exact-market-proposal/v3";
 
 type CompileResult<T> = std::result::Result<T, String>;
 
@@ -101,8 +101,8 @@ struct BundleInputsWire {
     product_template_v4_bytes_hex: String,
     price_measure_policy_v1_bytes_hex: String,
     market_genesis_profile_v2_bytes_hex: String,
-    series_funding_quote_v5_bytes_hex: String,
-    series_attachment_plan_v5_bytes_hex: String,
+    series_funding_quote_v6_bytes_hex: String,
+    series_attachment_plan_v6_bytes_hex: String,
     series_plan_v5_bytes_hex: String,
     series_funding_terms_v2_bytes_hex: String,
 }
@@ -528,17 +528,17 @@ fn canonical_json(value: &Value, output: &mut String) -> CompileResult<()> {
 }
 
 fn bundle_json(
-    bundle: &CompiledProductSeriesBundleV6,
+    bundle: &CompiledProductSeriesBundleV7,
     program_id: &Address,
 ) -> CompileResult<Value> {
-    let mut bytes = [0_u8; COMPILED_PRODUCT_SERIES_BUNDLE_V6_BYTES];
+    let mut bytes = [0_u8; COMPILED_PRODUCT_SERIES_BUNDLE_V7_BYTES];
     bundle
         .encode_into(&mut bytes)
         .map_err(|error| format!("cannot encode compiled Product/Series bundle: {error:?}"))?;
     let bundle_id = bundle
         .id()
         .map_err(|error| format!("cannot identify compiled Product/Series bundle: {error:?}"))?;
-    let kind = [COMPILED_PRODUCT_SERIES_BUNDLE_V6_ARTIFACT_KIND];
+    let kind = [COMPILED_PRODUCT_SERIES_BUNDLE_V7_ARTIFACT_KIND];
     let digest = bundle_id.bytes();
     let (artifact_pda, artifact_bump) = Address::find_program_address(
         &[
@@ -552,9 +552,9 @@ fn bundle_json(
         "id": id_hex(bundle_id.bytes()),
         "bytesHex": hex(&bytes),
         "artifact": {
-            "kind": COMPILED_PRODUCT_SERIES_BUNDLE_V6_ARTIFACT_KIND.to_string(),
+            "kind": COMPILED_PRODUCT_SERIES_BUNDLE_V7_ARTIFACT_KIND.to_string(),
             "context": id_hex(ContentId::ZERO.bytes()),
-            "exactBodyBytes": COMPILED_PRODUCT_SERIES_BUNDLE_V6_BYTES.to_string(),
+            "exactBodyBytes": COMPILED_PRODUCT_SERIES_BUNDLE_V7_BYTES.to_string(),
             "programId": program_id.to_string(),
             "pda": artifact_pda.to_string(),
             "bump": artifact_bump.to_string(),
@@ -622,22 +622,22 @@ fn parse_exact_market_search(
 
 fn exact_market_json(
     compiled: &clutch_bspline_shape_compiler::production::CompiledProductionPayoffV1,
-    bundle: &CompiledProductSeriesBundleV6,
+    bundle: &CompiledProductSeriesBundleV7,
     value: &ExactMarketSearchWire,
     product_terms_id: ContentId,
 ) -> CompileResult<Value> {
     let request = parse_exact_market_search(value, product_terms_id)?;
     let output = compile_exact_market_v1(compiled, request)
         .map_err(|error| format!("exact market compiler refused input: {error:?}"))?;
-    let sidecar = bind_exact_market_bundle_v6(compiled, bundle, &output)
-        .map_err(|error| format!("BundleV6 exact-market join refused: {error:?}"))?;
-    let mut sidecar_bytes = [0_u8; EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V2];
+    let sidecar = bind_exact_market_bundle_v7(compiled, bundle, &output)
+        .map_err(|error| format!("BundleV7 exact-market join refused: {error:?}"))?;
+    let mut sidecar_bytes = [0_u8; EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V3];
     sidecar
         .encode_into(&mut sidecar_bytes)
-        .map_err(|error| format!("cannot encode exact-market BundleV6 sidecar: {error:?}"))?;
+        .map_err(|error| format!("cannot encode exact-market BundleV7 sidecar: {error:?}"))?;
     let sidecar_id = sidecar
         .content_id()
-        .map_err(|error| format!("cannot identify exact-market BundleV6 sidecar: {error:?}"))?;
+        .map_err(|error| format!("cannot identify exact-market BundleV7 sidecar: {error:?}"))?;
     let outcome = match output.manifest.outcome() {
         ExactMarketSearchOutcomeV1::Solved => "solved",
         ExactMarketSearchOutcomeV1::Unsupported => "unsupported",
@@ -689,7 +689,7 @@ fn exact_market_json(
             "productTermsId": id_hex(output.manifest.product_terms_id().bytes()),
             "nativeClaimBasisId": id_hex(output.manifest.native_claim_basis_id().bytes()),
             "priceId": id_hex(output.manifest.price_id().bytes()),
-            "bundleV6Id": id_hex(sidecar.bundle_v6_id().bytes()),
+            "bundleV7Id": id_hex(sidecar.bundle_v7_id().bytes()),
         },
         "target": {
             "outcomeCount": output.manifest.outcome_count().to_string(),
@@ -714,7 +714,7 @@ fn exact_market_json(
             "bytesHex": hex(&output.manifest_bytes),
         },
         "certificate": certificate,
-        "bundleV6Sidecar": {
+        "bundleV7Sidecar": {
             "id": id_hex(sidecar_id.bytes()),
             "bytesHex": hex(&sidecar_bytes),
             "bundleArtifactKind": sidecar.bundle_artifact_kind().to_string(),
@@ -752,7 +752,7 @@ impl CompilerService {
         let request: CompileRequest = serde_json::from_slice(body)
             .map_err(|error| format!("invalid Product exact-market request JSON: {error}"))?;
         if request.schema != REQUEST_SCHEMA {
-            return Err("request.schema is not product-exact-market-request/v2".to_string());
+            return Err("request.schema is not product-exact-market-request/v3".to_string());
         }
         let program_id = parse_product_program_id(&request.program_id)?;
         let expected_compiler_release = decode_hex(
@@ -841,13 +841,13 @@ impl CompilerService {
                     .to_string(),
             );
         }
-        let funding_quote: SeriesFundingQuoteV5 = decode_body(
-            &request.bundle_inputs.series_funding_quote_v5_bytes_hex,
-            "bundleInputs.seriesFundingQuoteV5BytesHex",
+        let funding_quote: SeriesFundingQuoteV6 = decode_body(
+            &request.bundle_inputs.series_funding_quote_v6_bytes_hex,
+            "bundleInputs.seriesFundingQuoteV6BytesHex",
         )?;
-        let attachment: SeriesAttachmentPlanV5 = decode_body(
-            &request.bundle_inputs.series_attachment_plan_v5_bytes_hex,
-            "bundleInputs.seriesAttachmentPlanV5BytesHex",
+        let attachment: SeriesAttachmentPlanV6 = decode_body(
+            &request.bundle_inputs.series_attachment_plan_v6_bytes_hex,
+            "bundleInputs.seriesAttachmentPlanV6BytesHex",
         )?;
         let series: SeriesPlanV5 = decode_body(
             &request.bundle_inputs.series_plan_v5_bytes_hex,
@@ -857,7 +857,7 @@ impl CompilerService {
             &request.bundle_inputs.series_funding_terms_v2_bytes_hex,
             "bundleInputs.seriesFundingTermsV2BytesHex",
         )?;
-        let bundle = assemble_compiled_product_series_bundle_v6(ProductSeriesBundleInputsV6 {
+        let bundle = assemble_compiled_product_series_bundle_v7(ProductSeriesBundleInputsV7 {
             registry: &registry,
             source_release_manifest_id,
             basis: &compiled.native_claim_basis,
@@ -870,7 +870,7 @@ impl CompilerService {
             series: &series,
             funding_terms: &funding_terms,
         })
-        .map_err(|error| format!("canonical Product/Series BundleV6 join refused: {error:?}"))?;
+        .map_err(|error| format!("canonical Product/Series BundleV7 join refused: {error:?}"))?;
 
         let exact_market = request
             .exact_market_search
@@ -946,7 +946,7 @@ impl CompilerService {
             "certificate": certificate,
             "bounds": bounds,
             "subdivisionDepth": subdivision_depth,
-            "compiledProductSeriesBundleV6": bundle_json(&bundle, &program_id)?,
+            "compiledProductSeriesBundleV7": bundle_json(&bundle, &program_id)?,
             "exactMarket": exact_market,
         }))
     }
