@@ -54,9 +54,9 @@ pub const FRACTIONAL_EXTERNAL_CREDIT_TRANSITION_DOMAIN_V1: &[u8] =
 /// Semantic domain for the private Dealer action-23 vector transition.
 pub const DEALER_FACILITY_VECTOR_TRANSITION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/fractional/dealer-facility-vector-transition/v1\0";
-/// Semantic domain for the exact facility-owned a6/v2 postimage.
-pub const DEALER_FACILITY_CREDIT_STATE_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/fractional/dealer-facility-credit-state/v1\0";
+/// Semantic domain for one exact live-credit to tombstone close.
+pub const FRACTIONAL_CREDIT_CLOSE_TRANSITION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/fractional-redemption/credit-close-transition/v1\0";
 
 #[derive(Clone, Copy, Debug)]
 struct FractionalSha256V1;
@@ -1518,14 +1518,6 @@ impl DealerFacilityVectorTransitionV1 {
     }
 }
 
-fn dealer_facility_credit_state_id_v1(credit: FractionalCreditV2) -> Result<Identity32V1> {
-    let encoded = credit.encode()?;
-    let mut hasher = Sha256::new();
-    hasher.update(DEALER_FACILITY_CREDIT_STATE_DOMAIN_V1);
-    hasher.update(encoded);
-    Identity32V1::new(hasher.finalize().into()).map_err(|_| Error::ZeroIdentity)
-}
-
 /// Prepare the sole bounded-vector Fractional transition for Dealer Resolve.
 ///
 /// The fixed-width dot product is accumulated in canonical outcome order and
@@ -1653,7 +1645,7 @@ pub fn prepare_dealer_facility_vector_transition_v1(
     let facility_position_after_id = facility_position_after
         .semantic_id(&FractionalSha256V1)
         .map_err(|_| Error::PositionRefused)?;
-    let credit_after_id = dealer_facility_credit_state_id_v1(credit_after)?;
+    let credit_after_id = credit_after.state_id()?;
     let ledger_after_id = ledger_after.state_id()?;
     let fractional = custody_after.fractional();
     let mut hasher = Sha256::new();
@@ -2834,14 +2826,20 @@ pub struct CreditCloseFundingPlanV1 {
 /// Complete zero-credit close plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CreditClosePlanV1 {
+    /// Canonical live `0xa6/v2` prestate identity.
+    pub credit_before_id: Identity32V1,
     /// Permanent replay-prevention successor at the same PDA.
     pub tombstone: FractionalCreditTombstoneV2,
+    /// Canonical permanent tombstone poststate identity.
+    pub tombstone_after_id: Identity32V1,
     /// Sole aggregate-credit owner successor.
     pub ledger_after: FractionalLedgerV1,
     /// Canonical unchanged-supply ClaimLedger successor and cross-account IDs.
     pub claim_ledger_after: FractionalClaimLedgerPlanV3,
     /// Exact rent disposition; collateral/credit principal is never included.
     pub funding: CreditCloseFundingPlanV1,
+    /// Canonical identity of the complete a5/ClaimLedger/a6 close transition.
+    pub transition_id: Identity32V1,
 }
 
 /// Close only a zero-numerator credit into its permanent tombstone.
@@ -2863,6 +2861,8 @@ pub fn close_zero_credit_v1(
     if credit.numerator != 0 {
         return Err(Error::CreditOutstanding);
     }
+    let credit_before_id = credit.state_id()?;
+    let ledger_before_id = context.ledger.state_id()?;
     let credit_after_sequence = credit.advanced(expected_credit_sequence)?.next_sequence;
     let rent = credit.rent;
     rent.validate().map_err(|_| Error::RentRefused)?;
@@ -2887,31 +2887,58 @@ pub fn close_zero_credit_v1(
     ledger_after.validate()?;
     let claim_ledger_after =
         prepare_canonical_claim_latch(context, ledger_after, expected_ledger_sequence)?;
+    let tombstone = FractionalCreditTombstoneV2 {
+        policy_account: credit.policy_account,
+        ledger_account: credit.ledger_account,
+        market_instance: credit.market_instance,
+        resolution_account: credit.resolution_account,
+        resolution_data_id: credit.resolution_data_id,
+        claimant: credit.claimant,
+        domain_generation: credit.domain_generation,
+        account_generation: credit.account_generation,
+        closed_next_sequence: credit_after_sequence,
+        stored_bump: credit.stored_bump,
+        permanent_tombstone_principal: rent.permanent_tombstone_principal,
+    };
+    let tombstone_after_id = tombstone.state_id()?;
+    let ledger_after_id = ledger_after.state_id()?;
+    let funding = CreditCloseFundingPlanV1 {
+        payer: rent.payer,
+        payer_refund_lamports: rent.refundable_live_principal,
+        tombstone_lamports: rent.permanent_tombstone_principal,
+        neutral_sink,
+        neutral_lamports: actual_lamports
+            .checked_sub(principal)
+            .ok_or(Error::RentRefused)?,
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(FRACTIONAL_CREDIT_CLOSE_TRANSITION_DOMAIN_V1);
+    for id in [
+        context.policy.state_id()?,
+        ledger_before_id,
+        ledger_after_id,
+        credit_before_id,
+        tombstone_after_id,
+        claim_ledger_after.claim_ledger_before_id(),
+        claim_ledger_after.claim_ledger_after_id(),
+        funding.payer,
+        funding.neutral_sink,
+    ] {
+        hasher.update(id.bytes());
+    }
+    hasher.update(funding.payer_refund_lamports.to_le_bytes());
+    hasher.update(funding.tombstone_lamports.to_le_bytes());
+    hasher.update(funding.neutral_lamports.to_le_bytes());
+    let transition_id =
+        Identity32V1::new(hasher.finalize().into()).map_err(|_| Error::ZeroIdentity)?;
     Ok(CreditClosePlanV1 {
-        tombstone: FractionalCreditTombstoneV2 {
-            policy_account: credit.policy_account,
-            ledger_account: credit.ledger_account,
-            market_instance: credit.market_instance,
-            resolution_account: credit.resolution_account,
-            resolution_data_id: credit.resolution_data_id,
-            claimant: credit.claimant,
-            domain_generation: credit.domain_generation,
-            account_generation: credit.account_generation,
-            closed_next_sequence: credit_after_sequence,
-            stored_bump: credit.stored_bump,
-            permanent_tombstone_principal: rent.permanent_tombstone_principal,
-        },
+        credit_before_id,
+        tombstone,
+        tombstone_after_id,
         ledger_after,
         claim_ledger_after,
-        funding: CreditCloseFundingPlanV1 {
-            payer: rent.payer,
-            payer_refund_lamports: rent.refundable_live_principal,
-            tombstone_lamports: rent.permanent_tombstone_principal,
-            neutral_sink,
-            neutral_lamports: actual_lamports
-                .checked_sub(principal)
-                .ok_or(Error::RentRefused)?,
-        },
+        funding,
+        transition_id,
     })
 }
 
