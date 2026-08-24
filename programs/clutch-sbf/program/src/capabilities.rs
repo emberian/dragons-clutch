@@ -31,10 +31,10 @@ pub const PROFILE_LABEL: &str =
 #[cfg(feature = "profile-general-source-v2-point")]
 pub const PROFILE_LABEL: &str =
     "dragons-clutch/capability-profile/general-source-disabled-point/v2";
-/// First checked chain-attached successor with exact current wire closure.
+/// Current chain-attached successor with no legacy Source or laboratory plane.
 #[cfg(feature = "profile-successor-chain-attached-v1")]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/successor-chain-attached/v1";
+    "dragons-clutch/capability-profile/successor-chain-attached/v2-current-collateral-direct-source-series-no-legacy-source-labs";
 /// Dealer facility binding laboratory. This identity is non-production and
 /// contains no legacy intent capability.
 #[cfg(all(
@@ -85,8 +85,8 @@ pub const PROFILE_ID: [u8; 32] = [
 /// SHA-256 of the chain-attached successor profile label.
 #[cfg(feature = "profile-successor-chain-attached-v1")]
 pub const PROFILE_ID: [u8; 32] = [
-    0xd8, 0xc9, 0x61, 0x9d, 0x28, 0x0b, 0xbf, 0x5a, 0x39, 0x94, 0xd9, 0x51, 0x8d, 0xd1, 0x5a, 0x29,
-    0x88, 0x2a, 0x97, 0xc5, 0x26, 0x55, 0x5f, 0xa8, 0x7b, 0xee, 0xef, 0x29, 0xc8, 0x7b, 0x03, 0x3b,
+    0xb5, 0x86, 0x52, 0x48, 0x59, 0xe1, 0x57, 0xdd, 0xc1, 0x3f, 0x1c, 0xc0, 0xbf, 0x56, 0x48, 0x94,
+    0x06, 0x0f, 0xbd, 0x57, 0x7f, 0x7b, 0x5a, 0x7f, 0xcf, 0xd6, 0xaa, 0xb2, 0x36, 0x74, 0x23, 0xba,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into the laboratory artifact identity.
 #[cfg(all(
@@ -454,7 +454,10 @@ mod tests {
                             .contains(&local_action)
                             || matches!(local_action, 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12));
                     let general_enabled = false;
-                    let source_runtime_enabled = cfg!(feature = "profile-full")
+                    let source_runtime_enabled = cfg!(any(
+                        feature = "profile-full",
+                        feature = "profile-successor-chain-attached-v1"
+                    ))
                         && !DEALER_POLICY_CATALOG_LAB
                         && !GENERAL_V2_IDENTITY_LAB
                         && family_tag == 77
@@ -473,7 +476,10 @@ mod tests {
         assert_eq!(
             ENABLED_EXTENSION_ACTIONS.is_empty(),
             !(DEALER_POLICY_CATALOG_LAB
-                || (cfg!(feature = "profile-full") && !GENERAL_V2_IDENTITY_LAB))
+                || (cfg!(any(
+                    feature = "profile-full",
+                    feature = "profile-successor-chain-attached-v1"
+                )) && !GENERAL_V2_IDENTITY_LAB))
         );
     }
 

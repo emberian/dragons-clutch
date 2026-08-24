@@ -202,9 +202,11 @@ pub const SEED_DIRECT_RECEIPT_V3: &[u8] = b"dc:direct-receipt:v3";
 /// Direct V3 zero-pot seed prefix, disjoint from V2 pots.
 pub const SEED_DIRECT_POT_V3: &[u8] = b"dc:direct-pot:v3";
 /// Immutable authenticated source-spec account seed prefix.
-pub const SEED_SOURCE_SPEC: &[u8] = crate::source_archive::SOURCE_SPEC_SEED_V1;
+pub const SEED_SOURCE_SPEC: &[u8] = b"source-spec-v1";
 /// Per-window authenticated source-archive account seed prefix.
-pub const SEED_SOURCE_ARCHIVE: &[u8] = crate::source_archive::SOURCE_ARCHIVE_SEED_V1;
+pub const SEED_SOURCE_ARCHIVE: &[u8] = b"source-archive-v1";
+const _: () = assert!(SEED_SOURCE_SPEC.len() == 14);
+const _: () = assert!(SEED_SOURCE_ARCHIVE.len() == 17);
 /// Per-Realm revenue-policy record seed prefix; exactly 32 bytes (the seed
 /// cap), the string `docs/design/REVENUE_POLICY_V1.md` §3 names.
 pub const SEED_REVENUE_POLICY: &[u8] = b"dragons-clutch:revenue-policy:v1";

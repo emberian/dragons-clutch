@@ -170,7 +170,9 @@ pub mod native_window;
 #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod pyth_receiver;
 pub mod seeds;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod source;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod source_archive;
 #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod source_archive_v2;

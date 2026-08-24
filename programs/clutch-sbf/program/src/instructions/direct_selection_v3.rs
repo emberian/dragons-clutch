@@ -31,7 +31,8 @@ use clutch_solana_layout::{
 };
 #[cfg(any(
     feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point"
+    feature = "profile-direct-v3-source-v2-point",
+    feature = "profile-successor-chain-attached-v1"
 ))]
 use clutch_solana_reference::DirectV3Request;
 use solana_account_info::AccountInfo;
@@ -98,7 +99,8 @@ macro_rules! borrow_mut {
 /// admit tags 36 through 46 as one all-or-nothing family.
 #[cfg(any(
     feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point"
+    feature = "profile-direct-v3-source-v2-point",
+    feature = "profile-successor-chain-attached-v1"
 ))]
 pub fn process(
     program_id: &Pubkey,
@@ -640,7 +642,8 @@ mod tests {
     #[test]
     #[cfg(any(
         feature = "profile-full",
-        feature = "profile-direct-v3-source-v2-point"
+        feature = "profile-direct-v3-source-v2-point",
+        feature = "profile-successor-chain-attached-v1"
     ))]
     fn every_routed_v3_action_fail_closes_before_reading_state() {
         let market = h(1);

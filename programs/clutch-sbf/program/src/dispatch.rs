@@ -1939,15 +1939,31 @@ mod extension_registry_tests {
                 clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION,
                 local_action,
             );
-            assert!(
-                disabled_canonical_tag(&bytes),
-                "source action {local_action}"
+            let enabled = capabilities::extension_intent_action_enabled(
+                clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG,
+                clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION,
+                local_action,
             );
             assert_eq!(
-                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from),
-                Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                disabled_canonical_tag(&bytes),
+                !enabled,
                 "source action {local_action}"
             );
+            let actual =
+                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from);
+            if enabled {
+                assert_ne!(
+                    actual,
+                    Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                    "enabled source action {local_action} must reach its strict payload decoder"
+                );
+            } else {
+                assert_eq!(
+                    actual,
+                    Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                    "disabled source action {local_action}"
+                );
+            }
         }
         for local_action in clutch_solana_layout::registry::RecurringSeriesAction::FIRST_TAG
             ..=clutch_solana_layout::registry::RecurringSeriesAction::LAST_TAG
