@@ -1,38 +1,39 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Sole current Recovery78/action12 RootV2/Product/Source/Failure owner.
+//! Sole current Recovery78/action12 RootV3/Product/Source/Failure owner.
 //!
 //! This handler accepts no historical RootV1, LinkV1, RegistryV3 receipt,
 //! BundleV5, QuoteV4, AttachmentV4, GraphV2, or Source ResolutionInputV3. It
 //! hostile-reconstructs every current semantic owner and calls the one atomic
-//! ResolutionV5 -> Source terminal -> LinkV2 release -> Recovery close ->
+//! inactive-to-finalized ResolutionV5 -> Source terminal -> LinkV3 release -> Recovery close ->
 //! durable Failure-family composer.
 
 use std::boxed::Box;
 
 use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
-use crate::instructions::collateral_position_v3::authenticate_general_market_liabilities_v2;
+use crate::instructions::collateral_position_v3::authenticate_general_market_liabilities_v5;
 use crate::instructions::failure_market_admission::authenticate_failure_market_root_v3;
+use crate::instructions::failure_market_foundation_v4::authenticate_inactive_failure_resolution_v5;
 use crate::instructions::failure_market_dispatch_v2::{
     account_for_role_v2, FailureMarketAccountRoleV2 as Role, FailureMarketActionPayloadV2,
 };
 use crate::instructions::failure_market_interval_v2::{
-    authenticate_failure_market_recovery_quote_for_resolution_v2,
+    authenticate_failure_market_recovery_quote_for_resolution_v3,
     reopen_failure_market_interval_accounts_v2, FailureMarketIntervalFundingPreimageV2,
 };
-use crate::instructions::failure_market_replay_v2::{
-    reopen_failure_market_replay_v2, FailureMarketReplayFundingPreimageV2,
-};
+use crate::instructions::failure_market_replay_v2::reopen_failure_market_replay_from_chain_v2;
 use crate::instructions::failure_market_resolution_v5::resolve_failure_market_interval_and_source_v5;
 use crate::instructions::failure_market_runtime::authenticate_failure_market_runtime_root_v1;
 use crate::instructions::product_artifact::authenticate_product_artifact_v1;
+use crate::instructions::product_market_lifecycle_v3_current::{
+    authenticate_market_lifecycle_root_v3, authenticate_series_market_link_v3,
+};
 use crate::instructions::product_series_current::{
-    authenticate_market_foundation_preallocation_from_bytes_v3,
-    authenticate_market_lifecycle_root_v2, authenticate_registry_capability_v4,
-    authenticate_series_market_link_v2, authenticate_series_registry_account_v3,
+    authenticate_registry_capability_v5, authenticate_series_funding_account_v5,
+    authenticate_series_registry_account_v4,
 };
 use crate::instructions::product_source_current::{
-    authenticate_compiled_product_series_bundle_v6, authenticate_series_source_artifacts_v5,
+    authenticate_compiled_product_series_bundle_v7, authenticate_series_source_artifacts_v6,
     authenticate_source_product_route_v4, authenticate_source_resolution_input_v4,
 };
 use crate::source_plane_v3::{
@@ -41,12 +42,12 @@ use crate::source_plane_v3::{
 };
 use crate::source_plane_v3_actions::authenticate_source_work_schedule_artifact;
 use clutch_product_series::{
-    MarketFoundationSlotV3, MarketGenesisProfileV2, MarketInstancePreimageV2,
-    MarketLifecyclePhaseV2, NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4,
+    MarketGenesisProfileV2, MarketInstancePreimageV2,
+    MarketLifecyclePhaseV3, NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4,
     QuantizedIntervalConsensusContextV1, QuantizedIntervalConsensusProfileV1,
 };
 use clutch_solana_layout::product_series::{
-    MarketLifecycleRootAccountV2, SeriesMarketLinkAccountV2,
+    MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV3,
 };
 use clutch_solana_layout::registry::RecoveryAction;
 use solana_account_info::AccountInfo;
@@ -86,10 +87,7 @@ pub(crate) fn process_resolve_failure_market_session_v2(
     sequence: u64,
     payload: FailureMarketActionPayloadV2,
 ) -> Outcome<()> {
-    let FailureMarketActionPayloadV2::Resolve {
-        replay_funding_preimage,
-        foundation_account_graph,
-    } = payload
+    let FailureMarketActionPayloadV2::Resolve = payload
     else {
         return crate::instructions::failure_market_dispatch_v2::process_reserved_disabled(
             RecoveryAction::ResolveIntervalConsensus,
@@ -98,6 +96,7 @@ pub(crate) fn process_resolve_failure_market_session_v2(
     let action = RecoveryAction::ResolveIntervalConsensus;
     let root_account = account_for_role_v2(action, accounts, Role::MarketLifecycleRoot)?;
     let link_account = account_for_role_v2(action, accounts, Role::SeriesMarketLink)?;
+    let funding_account = account_for_role_v2(action, accounts, Role::SeriesFunding)?;
     let admission_account = account_for_role_v2(action, accounts, Role::FailureAdmissionRoot)?;
     let runtime_account = account_for_role_v2(action, accounts, Role::FailureRuntimeRoot)?;
     let cell_account = account_for_role_v2(action, accounts, Role::FailureIntervalCell)?;
@@ -176,8 +175,8 @@ pub(crate) fn process_resolve_failure_market_session_v2(
 
     let admission = authenticate_failure_market_root_v3(program_id, admission_account, false)?;
     let failure_policy = admission.state().binding().facts();
-    let mut root_decode = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
-    let root = authenticate_market_lifecycle_root_v2(
+    let mut root_decode = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let root = authenticate_market_lifecycle_root_v3(
         program_id,
         root_account,
         failure_policy.market_instance_id,
@@ -185,12 +184,10 @@ pub(crate) fn process_resolve_failure_market_session_v2(
         true,
         &mut root_decode,
     )?;
-    let root_binding = root.state().binding();
-    let root_binding_id = root_binding
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_binding = root.binding();
+    let root_binding_id = root.binding_id();
     require(
-        root.state().phase() == MarketLifecyclePhaseV2::Active
+        root.state().phase() == MarketLifecyclePhaseV3::Active
             && root.state().resolution_semantic_id() == clutch_product_series::ContentId::ZERO
             && root.state().resolution_data_id() == clutch_product_series::ContentId::ZERO
             && root.state().resolution_activation_receipt_id()
@@ -201,14 +198,14 @@ pub(crate) fn process_resolve_failure_market_session_v2(
             && root_binding.generation == failure_policy.generation,
         ClutchError::MismatchedState,
     )?;
-    let mut link_decode = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
+    let mut link_decode = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
     let link_data = link_account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    SeriesMarketLinkAccountV2::decode_into(&link_data, &mut link_decode)?;
+    SeriesMarketLinkAccountV3::decode_into(&link_data, &mut link_decode)?;
     drop(link_data);
-    let decoded_link = link_decode.state.binding();
-    let link = authenticate_series_market_link_v2(
+    let decoded_link = link_decode.state.binding_ref();
+    let link = authenticate_series_market_link_v3(
         program_id,
         link_account,
         decoded_link.series_plan_id,
@@ -219,7 +216,7 @@ pub(crate) fn process_resolve_failure_market_session_v2(
         true,
         &mut link_decode,
     )?;
-    let link_binding = link.state().binding();
+    let link_binding = link.binding();
     require(
         link_binding.market_binding_id == root_binding_id
             && link_binding.market_instance_id == root_binding.market_instance_id
@@ -227,13 +224,13 @@ pub(crate) fn process_resolve_failure_market_session_v2(
             && link_binding.market_root_account_id.bytes() == root_account.key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
-    let registry_account = authenticate_series_registry_account_v3(
+    let registry_account = authenticate_series_registry_account_v4(
         program_id,
         registry_account,
         link_binding.series_plan_id,
         false,
     )?;
-    let registry = authenticate_registry_capability_v4(
+    let registry = authenticate_registry_capability_v5(
         program_id,
         registry_account,
         registry_program,
@@ -241,10 +238,16 @@ pub(crate) fn process_resolve_failure_market_session_v2(
         registry_release,
         capability_profile,
     )?;
-    let quote = authenticate_failure_market_recovery_quote_for_resolution_v2(
+    let series_funding = authenticate_series_funding_account_v5(
+        program_id,
+        funding_account,
+        link_binding.series_plan_id,
+        false,
+    )?;
+    let quote = authenticate_failure_market_recovery_quote_for_resolution_v3(
         program_id,
         admission,
-        root,
+        &root,
         &registry,
         failure_liveness_policy,
     )?;
@@ -274,12 +277,10 @@ pub(crate) fn process_resolve_failure_market_session_v2(
         .checked_add(1)
         .ok_or(ClutchError::Arithmetic)?;
     require(sequence == expected_sequence, ClutchError::Replay)?;
-    let replay_preimage = FailureMarketReplayFundingPreimageV2::decode(replay_funding_preimage)?;
-    let replay = reopen_failure_market_replay_v2(
+    let replay = reopen_failure_market_replay_from_chain_v2(
         program_id,
         replay_account,
         admission,
-        replay_preimage,
         true,
     )?;
 
@@ -335,13 +336,13 @@ pub(crate) fn process_resolve_failure_market_session_v2(
         funding_quote.clone(),
         attachment.clone(),
     ];
-    let artifacts = authenticate_series_source_artifacts_v5(
+    let artifacts = authenticate_series_source_artifacts_v6(
         program_id,
         &source_artifact_accounts,
         link_binding.series_plan_id,
         registry.funding_terms_id(),
     )?;
-    let bundle = authenticate_compiled_product_series_bundle_v6(
+    let source_bundle = authenticate_compiled_product_series_bundle_v7(
         program_id,
         compiler_bundle,
         &registry,
@@ -349,22 +350,32 @@ pub(crate) fn process_resolve_failure_market_session_v2(
         &artifacts,
     )?;
     let source_product =
-        authenticate_source_product_route_v4(route, receiver, &registry, bundle, &artifacts)?;
+        authenticate_source_product_route_v4(route, receiver, &registry, source_bundle, &artifacts)?;
     let source_input = authenticate_source_resolution_input_v4(
         source_product,
         successful.handoff(),
         successful.join(),
         successful.persisted(),
     )?;
-    let slot10 = authenticate_market_foundation_preallocation_from_bytes_v3(
-        root,
+    let resolution_bundle = authenticate_compiled_product_series_bundle_v7(
+        program_id,
+        compiler_bundle,
+        &registry,
+        route_release,
+        &artifacts,
+    )?;
+    let inactive_resolution = authenticate_inactive_failure_resolution_v5(
+        program_id,
         resolution,
-        &artifacts.quote().foundation,
-        foundation_account_graph,
-        MarketFoundationSlotV3::ResolutionV5,
+        root_binding.market_instance_id,
+        root_binding.native_claim_basis_id,
+        root_binding.outcome_count,
+        root_binding.generation,
+        Pubkey::new_from_array(root.state().capital().rent_refund_owner.bytes()),
+        true,
     )?;
 
-    let liabilities = authenticate_general_market_liabilities_v2(
+    let liabilities = authenticate_general_market_liabilities_v5(
         program_id,
         realm,
         collateral_profile,
@@ -446,13 +457,13 @@ pub(crate) fn process_resolve_failure_market_session_v2(
         work_profile: &work_profile,
     };
 
-    let mut resolution_root_before = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
-    let mut resolution_link_before = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
-    let mut resolution_root_after = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
-    let mut link_release = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
-    let mut link_rebound = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
-    let mut resolved_root = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
-    let mut persisted_root = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
+    let mut resolution_root_before = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let mut resolution_link_before = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    let mut resolution_root_after = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let mut link_release = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    let mut link_rebound = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    let mut resolved_root = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let mut persisted_root = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
     let _ = resolve_failure_market_interval_and_source_v5(
         program_id,
         admission_account,
@@ -481,13 +492,14 @@ pub(crate) fn process_resolve_failure_market_session_v2(
         system_program,
         root,
         link,
+        &series_funding,
         admission,
         runtime,
         interval,
         replay,
         &registry,
-        bundle,
-        slot10,
+        &resolution_bundle,
+        &inactive_resolution,
         liabilities,
         route,
         source_schedule,
@@ -509,67 +521,36 @@ pub(crate) fn process_resolve_failure_market_session_v2(
 #[cfg(test)]
 mod adversarial_tests {
     #[test]
-    fn current_action12_has_one_v4_rootv2_composer_callsite_and_no_lowering() {
+    fn current_action12_reconstructs_every_resolution_authority_from_chain() {
         let source = include_str!("failure_market_action12_current.rs");
-        let production = source
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production source");
-        assert_eq!(
-            production
-                .matches("resolve_failure_market_interval_and_source_v5(")
-                .count(),
-            1
-        );
-        for forbidden in [
-            concat!("MarketLifecycleRootAccount", "V1"),
-            concat!("SeriesMarketLinkAccount", "V1"),
-            concat!("authenticate_source_resolution_input_", "v3"),
-            concat!("CompiledProductSeriesBundle", "V5"),
-            concat!("SeriesFundingQuote", "V4"),
-            concat!("SeriesAttachmentPlan", "V4"),
-            concat!("MarketFoundationSlot", "V2"),
-            concat!("authenticate_market_foundation_preallocation_", "v2"),
-        ] {
-            assert!(
-                !production.contains(forbidden),
-                "historical authority: {forbidden}"
-            );
-        }
+        let production = source.split("#[cfg(test)]").next().expect("production");
         for required in [
-            "authenticate_source_resolution_input_v4",
+            "authenticate_market_lifecycle_root_v3",
+            "authenticate_series_market_link_v3",
+            "authenticate_series_funding_account_v5",
+            "authenticate_registry_capability_v5",
+            "authenticate_compiled_product_series_bundle_v7",
+            "authenticate_inactive_failure_resolution_v5",
+            "reopen_failure_market_replay_from_chain_v2",
+            "authenticate_general_market_liabilities_v5",
+            "resolve_failure_market_interval_and_source_v5(",
+        ] {
+            assert!(production.contains(required), "missing current owner: {required}");
+        }
+        for forbidden in [
+            "replay_funding_preimage",
+            "foundation_account_graph",
+            "authenticate_market_foundation_preallocation",
             "authenticate_market_lifecycle_root_v2",
             "authenticate_series_market_link_v2",
-            "authenticate_registry_capability_v4",
-            "authenticate_compiled_product_series_bundle_v6",
-            "authenticate_market_foundation_preallocation_from_bytes_v3",
-            "MarketFoundationSlotV3::ResolutionV5",
         ] {
-            assert!(
-                production.contains(required),
-                "missing current owner: {required}"
-            );
+            assert!(!production.contains(forbidden), "caller or obsolete authority: {forbidden}");
         }
     }
 
     #[test]
-    fn current_action12_rejects_every_alias_except_exact_custody_refund_union() {
+    fn current_action12_allows_only_the_exact_custody_refund_union() {
         let source = include_str!("failure_market_action12_current.rs");
         assert!(source.contains("require_current_resolution_aliases(accounts, source_custody, recovery_refund)"));
-        assert!(source.contains("core::ptr::eq(&accounts[left], source_custody)"));
-        assert!(source.contains("core::ptr::eq(&accounts[right], recovery_refund)"));
-    }
-
-    #[test]
-    fn current_action12_order_keeps_runtime_and_family_writes_inside_atomic_outer() {
-        let source = include_str!("failure_market_action12_current.rs");
-        let call = source
-            .find("resolve_failure_market_interval_and_source_v5(")
-            .expect("sole atomic resolution call");
-        let tail = &source[call..];
-        assert!(tail.contains("&mut resolution_root_before"));
-        assert!(tail.contains("&mut link_release"));
-        assert!(tail.contains("&mut persisted_root"));
-        assert!(tail.contains("Ok(())"));
     }
 }

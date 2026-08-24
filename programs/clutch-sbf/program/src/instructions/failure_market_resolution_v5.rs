@@ -3,28 +3,30 @@
 //!
 //! Recovery78/v1 action 12 reaches only the concrete outer in this module.
 //! It is the single live writer boundary which joins Product's authenticated active Market root,
-//! pinned Series link, and retained slot-10 preallocation to Failure's private
+//! pinned Series link, physical FundingV5, and Product-founded inactive
+//! ResolutionV5 to Failure's private
 //! exhaustive interval receipt and Collateral's exact Hoard/ClaimLedger
-//! postimage verifier. The preallocated Resolution PDA supplies only its
+//! postimage verifier. The already initialized Resolution PDA supplies only its
 //! separately itemized rent principal; no Recovery work capital, Hoard
 //! principal, future fees, or caller-selected funding source participates.
 
 use crate::accounts::{expect_pda, require, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::collateral_position_v3::{
-    authenticate_market_resolution_activation_postwrite_v5,
-    AuthenticatedMarketResolutionActivationPostwriteV5, GeneralMarketLiabilityAuthorityV2,
+    authenticate_current_market_resolution_activation_postwrite_v5,
+    AuthenticatedMarketResolutionActivationPostwriteV5, GeneralMarketLiabilityAuthorityV5,
     RuntimeSha256,
 };
 use crate::instructions::failure_market_admission::AuthenticatedFailureMarketRootV3;
+use crate::instructions::failure_market_foundation_v4::AuthenticatedInactiveFailureResolutionV5;
 use crate::instructions::failure_market_interval_v2::{
-    archive_resolved_failure_market_interval_link_v3,
+    archive_resolved_failure_market_interval_link_v4,
     write_failure_market_interval_resolution_plan_v2,
     AuthenticatedFailureMarketIntervalAccountsV2, AuthenticatedFailureMarketProductResolutionV2,
     FailureMarketIntervalArchivePostwriteV3,
 };
 use crate::instructions::failure_market_family_terminal_v2::{
-    persist_resolved_failure_market_family_v2,
+    persist_resolved_failure_market_family_v3,
     AuthenticatedFailureMarketFamilyTerminalPostwriteV2,
 };
 use crate::instructions::failure_market_recovery_terminal_v2::{
@@ -32,23 +34,26 @@ use crate::instructions::failure_market_recovery_terminal_v2::{
 };
 use crate::instructions::failure_market_replay_v2::AuthenticatedFailureMarketReplayV2;
 use crate::instructions::failure_market_runtime::{
-    write_failure_market_runtime_session_plan_v2, AuthenticatedFailureMarketRuntimeRootV1,
-    AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
-    AuthenticatedFailureMarketRuntimeSessionWriteV1, FailureMarketRuntimeSessionWriteFactsV1,
+    write_failure_market_runtime_session_plan_v3, AuthenticatedFailureMarketRuntimeRootV1,
+    AuthenticatedFailureMarketRuntimeSessionPostwriteV3,
+    AuthenticatedFailureMarketRuntimeSessionWriteV3, FailureMarketRuntimeSessionWriteFactsV3,
 };
-use crate::instructions::genesis::{
-    allocate_data, assign_data, read_rent, require_system_program, SYSTEM_PROGRAM_ID,
+use crate::instructions::product_failure_link_v3_current::{
+    authenticate_writable_failure_resolution_link_v4,
+    AuthenticatedSeriesFailureSessionReleaseV4,
+    AuthenticatedWritableFailureSessionReleaseLinkV4, FailureSessionReleaseDispositionV4,
+};
+use crate::instructions::product_market_lifecycle_v3_current::{
+    authenticate_market_lifecycle_root_v3, authenticate_series_market_link_v3,
+    record_current_market_resolution_activation_v3,
+    AuthenticatedCurrentMarketResolutionWriteV3, AuthenticatedMarketLifecycleRootV3,
+    AuthenticatedSeriesMarketLinkV3,
 };
 use crate::instructions::product_series_current::{
-    authenticate_market_lifecycle_root_v2, authenticate_series_market_link_v2,
-    authenticate_writable_failure_resolution_link_v3, record_market_resolution_activation_v2,
-    release_series_market_link_failure_v3, AuthenticatedCompiledProductSeriesBundleV6,
-    AuthenticatedMarketFoundationPreallocationV3, AuthenticatedMarketLifecycleRootV2,
-    AuthenticatedMarketResolutionActivationPostwriteV2,
-    AuthenticatedMarketResolutionActivationWriteV2, AuthenticatedRegistryCapabilityV4,
-    AuthenticatedSeriesFailureSessionReleaseV3, AuthenticatedSeriesMarketLinkV2,
-    AuthenticatedWritableFailureSessionReleaseLinkV3, FailureSessionReleaseDispositionV3,
+    AuthenticatedRegistryCapabilityV5, AuthenticatedSeriesFundingAccountV5,
+    FailureSessionReleaseDispositionV3,
 };
+use crate::instructions::product_source_current::AuthenticatedCompiledProductSeriesBundleV7;
 use crate::instructions::product_source_current::AuthenticatedSourceResolutionInputV4;
 use crate::instructions::source_terminal_resolution_v5::{
     close_successful_source_statistic_result_v1, compose_source_resolution_terminal_v1,
@@ -82,29 +87,25 @@ use clutch_failure_policy_runtime::market_interval_history_v2::{
     FailureMarketIntervalTerminalFactsV2,
 };
 use clutch_failure_policy_runtime::market_runtime_v1::{
-    plan_close_failure_market_session_v2, plan_resolve_failure_market_session_v2,
-    AuthenticatedFailureMarketSessionV2, FailureMarketSessionCloseFactsV2,
-    FailureMarketSessionResolutionFactsV2, FailureMarketSessionTransitionReceiptIdV1,
+    plan_close_failure_market_session_v3, plan_resolve_failure_market_session_v3,
+    AuthenticatedFailureMarketSessionV3, FailureMarketSessionCloseFactsV3,
+    FailureMarketSessionResolutionFactsV3, FailureMarketSessionTransitionReceiptIdV3,
 };
 use clutch_product_series::{
     AuthenticatedQuantizedIntervalConsensusHistoryV1, ContentId,
-    MarketFoundationSlotV3, MarketLifecycleBindingV2, MarketLifecyclePhaseV2,
-    MarketLifecycleRootV2, MarketResolutionActivationV2,
+    MarketLifecycleBindingV3, MarketLifecyclePhaseV3, MarketResolutionActivationV3,
     QuantizedIntervalConsensusCertificateV1, QuantizedIntervalConsensusContextV1,
-    QuantizedIntervalConsensusRestorationV1, SeriesAttachmentPlanV5Id, SeriesFundingQuoteV5Id,
-    SeriesFundingTermsV2Id, SeriesMarketLinkPhaseV2,
+    QuantizedIntervalConsensusRestorationV1, SeriesAttachmentPlanV6Id, SeriesFundingQuoteV6Id,
+    SeriesFundingTermsV2Id, SeriesMarketLinkPhaseV3,
 };
-use clutch_retirement::{DeletableRentOwnerV1, Identity32V1};
 use clutch_solana_layout::product_series::{
-    MarketLifecycleRootAccountV2, SeriesMarketLinkAccountV2,
+    MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV3,
 };
 use clutch_source_plane_v3_runtime::{
     AuthenticatedReopenLineageV1, AuthenticatedSourceRouteV1, SourceWorkScheduleBindingV1,
     SuccessfulEvaluationHandoffV1,
 };
 use solana_account_info::AccountInfo;
-use solana_cpi::invoke_signed;
-use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 const FAILURE_MARKET_RESOLUTION_ACTIVATION_AUTHENTICATION_DOMAIN_V5: &[u8] =
@@ -113,6 +114,8 @@ const FAILURE_MARKET_RESOLUTION_FINALIZATION_EVIDENCE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/failure-market-resolution-finalization-evidence/v5\0";
 const FAILURE_MARKET_RESOLUTION_POSTWRITE_DOMAIN_V5: &[u8] =
     b"dragons-clutch/sbf/failure-market-resolution-postwrite/v5\0";
+const FAILURE_MARKET_RESOLUTION_PHYSICAL_POSTWRITE_DOMAIN_V6: &[u8] =
+    b"dragons-clutch/sbf/failure-market-resolution-physical-postwrite/v6\0";
 
 /// Stable byte committed for the only disposition admitted by this composer.
 const RESOLVED_DISPOSITION_BYTE_V2: u8 = 1;
@@ -297,7 +300,7 @@ fn require_source_resolution_final_join_v5(facts: SourceResolutionFinalJoinFacts
 pub(crate) struct AuthenticatedFailureMarketResolutionActivationV5 {
     id: ContentId,
     failure_resolution: FailureMarketIntervalCellResolutionReceiptV2,
-    product_activation: MarketResolutionActivationV2,
+    product_activation: MarketResolutionActivationV3,
     collateral_postwrite: AuthenticatedMarketResolutionActivationPostwriteV5,
     market_root: Pubkey,
     market_root_authentication_before: ContentId,
@@ -305,7 +308,8 @@ pub(crate) struct AuthenticatedFailureMarketResolutionActivationV5 {
     series_link: Pubkey,
     series_link_authentication: ContentId,
     series_link_preauthorization_id: ContentId,
-    slot10_preallocation_id: ContentId,
+    inactive_resolution_authentication_id: ContentId,
+    resolution_physical_postwrite_id: ContentId,
     finalization_evidence_id: ContentId,
 }
 
@@ -316,7 +320,7 @@ impl AuthenticatedFailureMarketResolutionActivationV5 {
     }
 
     /// Product's exact once-only `0xaa` activation postimage.
-    pub(crate) const fn product_activation(self) -> MarketResolutionActivationV2 {
+    pub(crate) const fn product_activation(self) -> MarketResolutionActivationV3 {
         self.product_activation
     }
 
@@ -327,9 +331,14 @@ impl AuthenticatedFailureMarketResolutionActivationV5 {
         self.collateral_postwrite
     }
 
-    /// Exact Product-retained slot-10 preallocation consumed by the writer.
-    pub(crate) const fn slot10_preallocation_id(self) -> ContentId {
-        self.slot10_preallocation_id
+    /// Exact hostile inactive prestate consumed by the physical writer.
+    pub(crate) const fn inactive_resolution_authentication_id(self) -> ContentId {
+        self.inactive_resolution_authentication_id
+    }
+
+    /// Exact inactive-to-finalized Resolution/Hoard/ClaimLedger postwrite.
+    pub(crate) const fn resolution_physical_postwrite_id(self) -> ContentId {
+        self.resolution_physical_postwrite_id
     }
 
     /// Exact evidence identity embedded in Resolution V5 and Product `0xaa`.
@@ -374,16 +383,16 @@ impl AuthenticatedFailureMarketResolutionActivationV5 {
 struct FailureMarketRuntimeResolutionAuthorityV1 {
     runtime_before:
         clutch_failure_policy_runtime::market_runtime_v1::FailureMarketRuntimeStateCommitmentV1,
-    series_link_state_id: clutch_product_series::SeriesMarketLinkV2Id,
+    series_link_state_id: clutch_product_series::SeriesMarketLinkV3Id,
     session_before: ContentId,
     session_after: ContentId,
     resolution_receipt_id: ContentId,
 }
 
-impl AuthenticatedFailureMarketSessionV2 for FailureMarketRuntimeResolutionAuthorityV1 {
-    fn authenticate_failure_market_session_resolution_v2(
+impl AuthenticatedFailureMarketSessionV3 for FailureMarketRuntimeResolutionAuthorityV1 {
+    fn authenticate_failure_market_session_resolution_v3(
         &self,
-        expected: FailureMarketSessionResolutionFactsV2,
+        expected: FailureMarketSessionResolutionFactsV3,
     ) -> clutch_failure_policy_runtime::Result<()> {
         if expected.runtime_before != self.runtime_before
             || expected.series_link_state_id != self.series_link_state_id
@@ -400,20 +409,20 @@ impl AuthenticatedFailureMarketSessionV2 for FailureMarketRuntimeResolutionAutho
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FailureMarketResolvedRuntimeArchiveAuthorityV5 {
-    expected: FailureMarketSessionCloseFactsV2,
+    expected: FailureMarketSessionCloseFactsV3,
 }
 
-impl AuthenticatedFailureMarketSessionV2 for FailureMarketResolvedRuntimeArchiveAuthorityV5 {
-    fn authenticate_failure_market_session_close_v2(
+impl AuthenticatedFailureMarketSessionV3 for FailureMarketResolvedRuntimeArchiveAuthorityV5 {
+    fn authenticate_failure_market_session_close_v3(
         &self,
-        mut expected: FailureMarketSessionCloseFactsV2,
+        mut expected: FailureMarketSessionCloseFactsV3,
     ) -> clutch_failure_policy_runtime::Result<()> {
         let receipt = expected.transition_receipt_id;
         expected.transition_receipt_id =
-            FailureMarketSessionTransitionReceiptIdV1::from_bytes([0; 32]);
+            FailureMarketSessionTransitionReceiptIdV3::from_bytes([0; 32]);
         let mut retained = self.expected;
         retained.transition_receipt_id =
-            FailureMarketSessionTransitionReceiptIdV1::from_bytes([0; 32]);
+            FailureMarketSessionTransitionReceiptIdV3::from_bytes([0; 32]);
         if receipt.bytes() == [0; 32] || expected != retained {
             return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
         }
@@ -423,19 +432,19 @@ impl AuthenticatedFailureMarketSessionV2 for FailureMarketResolvedRuntimeArchive
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FailureMarketResolvedRuntimeArchiveWriteV5 {
-    expected: FailureMarketRuntimeSessionWriteFactsV1,
+    expected: FailureMarketRuntimeSessionWriteFactsV3,
     idle_cell: ContentId,
     idle_runtime: ContentId,
     source_product_release: ContentId,
     runtime_source_product_release: ContentId,
 }
 
-impl AuthenticatedFailureMarketRuntimeSessionWriteV1
+impl AuthenticatedFailureMarketRuntimeSessionWriteV3
     for FailureMarketResolvedRuntimeArchiveWriteV5
 {
-    fn authenticate_failure_market_runtime_session_write_v1(
+    fn authenticate_failure_market_runtime_session_write_v3(
         &self,
-        expected: FailureMarketRuntimeSessionWriteFactsV1,
+        expected: FailureMarketRuntimeSessionWriteFactsV3,
     ) -> clutch_failure_policy_runtime::Result<()> {
         if expected != self.expected
             || self.idle_cell != self.idle_runtime
@@ -553,17 +562,17 @@ fn plan_authenticated_failure_market_resolution_v5(
 /// Runtime write authority minted only after Product, collateral, and cell writes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FailureMarketRuntimeResolutionWriteV1 {
-    expected: FailureMarketRuntimeSessionWriteFactsV1,
+    expected: FailureMarketRuntimeSessionWriteFactsV3,
     cell_state_after: ContentId,
     runtime_session_state_after: ContentId,
     activation_failure_receipt_id: ContentId,
     runtime_resolution_receipt_id: ContentId,
 }
 
-impl AuthenticatedFailureMarketRuntimeSessionWriteV1 for FailureMarketRuntimeResolutionWriteV1 {
-    fn authenticate_failure_market_runtime_session_write_v1(
+impl AuthenticatedFailureMarketRuntimeSessionWriteV3 for FailureMarketRuntimeResolutionWriteV1 {
+    fn authenticate_failure_market_runtime_session_write_v3(
         &self,
-        expected: FailureMarketRuntimeSessionWriteFactsV1,
+        expected: FailureMarketRuntimeSessionWriteFactsV3,
     ) -> clutch_failure_policy_runtime::Result<()> {
         if expected != self.expected
             || self.cell_state_after != self.runtime_session_state_after
@@ -599,7 +608,7 @@ impl AuthenticatedFailureMarketResolutionPostwriteV5 {
         self.activation.failure_resolution
     }
 
-    pub(crate) const fn product_activation(self) -> MarketResolutionActivationV2 {
+    pub(crate) const fn product_activation(self) -> MarketResolutionActivationV3 {
         self.activation.product_activation
     }
 
@@ -647,7 +656,7 @@ pub(crate) struct AuthenticatedResolvedFailureMarketLifecycleV5 {
     source_input: AuthenticatedSourceResolutionInputV4,
     source_terminal: AuthenticatedSourceResolutionTerminalV1,
     archive: FailureMarketIntervalArchivePostwriteV3,
-    link_release: AuthenticatedSeriesFailureSessionReleaseV3,
+    link_release: AuthenticatedSeriesFailureSessionReleaseV4,
     source_product_release: AuthenticatedSourceResolutionProductReleaseV1,
     source_result_close: AuthenticatedSourceResolutionStatisticResultCloseV1,
     recovery_close: AuthenticatedFailureMarketRecoveryClosePostwriteV2,
@@ -782,112 +791,108 @@ impl AuthenticatedSourceResolutionV5TerminalV1 for AuthenticatedFailureMarketRes
 
 /// Private bridge constructed only after the exact collateral postwrite.
 #[derive(Clone, Copy, Debug)]
-struct AuthenticatedProductResolutionRootWriteV5 {
+struct AuthenticatedProductResolutionRootWriteV6<'inactive> {
     root_account: Pubkey,
     root_authentication_before: ContentId,
-    root_data_before: ContentId,
     root_semantic_before: ContentId,
-    activation: MarketResolutionActivationV2,
-    slot10: AuthenticatedMarketFoundationPreallocationV3,
+    root_data_before: ContentId,
+    link_account: Pubkey,
+    link_authentication_id: ContentId,
+    link_semantic_id: clutch_product_series::SeriesMarketLinkV3Id,
+    funding_account: Pubkey,
+    funding_authentication_id: ContentId,
+    funding_data_id: ContentId,
+    inactive: &'inactive AuthenticatedInactiveFailureResolutionV5,
+    activation: MarketResolutionActivationV3,
     collateral_plan_receipt_id: ContentId,
     failure_resolution_id: ContentId,
     collateral_postwrite_id: ContentId,
+    resolution_physical_postwrite_id: ContentId,
     finalization_evidence_id: ContentId,
 }
 
-impl AuthenticatedMarketResolutionActivationWriteV2 for AuthenticatedProductResolutionRootWriteV5 {
-    fn authenticate_market_resolution_activation_write_v2(
+impl AuthenticatedCurrentMarketResolutionWriteV3
+    for AuthenticatedProductResolutionRootWriteV6<'_>
+{
+    fn authenticate_current_market_resolution_write_v3(
         &self,
         root_account: Pubkey,
         root_authentication_before: ContentId,
-        root_data_before: ContentId,
         root_semantic_before: ContentId,
-        expected: MarketResolutionActivationV2,
-        slot10: AuthenticatedMarketFoundationPreallocationV3,
-        collateral_plan_receipt_id: ContentId,
-        collateral_postwrite_receipt_id: ContentId,
-        failure_resolution_receipt_id: ContentId,
+        root_data_before: ContentId,
+        link_account: Pubkey,
+        link_authentication_id: ContentId,
+        link_semantic_id: clutch_product_series::SeriesMarketLinkV3Id,
+        funding_account: Pubkey,
+        funding_authentication_id: ContentId,
+        funding_data_id: ContentId,
+        resolution_account: Pubkey,
+        inactive_resolution_authentication_id: ContentId,
+        resolution_physical_postwrite_id: ContentId,
+        expected: MarketResolutionActivationV3,
     ) -> Outcome<()> {
         require(
             root_account == self.root_account
                 && root_authentication_before == self.root_authentication_before
-                && root_data_before == self.root_data_before
                 && root_semantic_before == self.root_semantic_before
+                && root_data_before == self.root_data_before
+                && link_account == self.link_account
+                && link_authentication_id == self.link_authentication_id
+                && link_semantic_id == self.link_semantic_id
+                && funding_account == self.funding_account
+                && funding_authentication_id == self.funding_authentication_id
+                && funding_data_id == self.funding_data_id
+                && resolution_account == self.inactive.account()
+                && inactive_resolution_authentication_id == self.inactive.authentication_id()
+                && resolution_physical_postwrite_id == self.resolution_physical_postwrite_id
                 && expected == self.activation
-                && slot10 == self.slot10
-                && collateral_plan_receipt_id == self.collateral_plan_receipt_id
-                && collateral_postwrite_receipt_id == self.collateral_postwrite_id
-                && failure_resolution_receipt_id == self.failure_resolution_id
                 && expected.failure_resolution_receipt_id() == self.failure_resolution_id
                 && expected.composite_finalization_evidence_id() == self.finalization_evidence_id
+                && self.collateral_plan_receipt_id != ContentId::ZERO
                 && self.collateral_postwrite_id != ContentId::ZERO,
             ClutchError::MismatchedState,
         )
     }
 }
 
-/// Claim the exact retained Resolution V5 preallocation, atomically write the
-/// three collateral postimages, advance Product's active root once, and mint
+/// Consume the exact Product-founded inactive Resolution V5, atomically write
+/// the three collateral postimages, advance Product's active root once, and mint
 /// the sole private authority accepted by the Failure resolved-cell writer.
 ///
-/// `root_before` and `link_before` are private Product receipts constructed by
-/// their semantic owners. This function does not trust their copied values: it
-/// hostile-reopens both physical accounts and requires byte-for-byte identical
-/// authentication before any write. The link stays read-only and pinned; the
-/// Failure cell is written only by the caller after this function returns.
+/// `root_before`, `link_before`, `funding`, and `inactive` are private receipts
+/// constructed by their physical semantic owners. No quote, funding, graph, or
+/// placeholder bytes are accepted from the instruction payload.
 #[allow(clippy::too_many_arguments)]
-fn activate_failure_market_resolution_v5<'a, 'root, 'post>(
+fn activate_failure_market_resolution_v5<'a>(
     program_id: &Pubkey,
     market_root_account: &AccountInfo<'a>,
     series_link_account: &AccountInfo<'a>,
+    funding: &AuthenticatedSeriesFundingAccountV5,
     resolution_account: &AccountInfo<'a>,
     hoard_account: &AccountInfo<'a>,
     claim_ledger_account: &AccountInfo<'a>,
-    rent_sysvar: &AccountInfo<'a>,
-    system_program: &AccountInfo<'a>,
-    root_before: AuthenticatedMarketLifecycleRootV2<'root>,
-    link_before: AuthenticatedSeriesMarketLinkV2<'_>,
-    link_release: &AuthenticatedWritableFailureSessionReleaseLinkV3,
-    registry: &AuthenticatedRegistryCapabilityV4,
-    bundle: AuthenticatedCompiledProductSeriesBundleV6,
-    slot10: AuthenticatedMarketFoundationPreallocationV3,
-    liabilities: GeneralMarketLiabilityAuthorityV2,
+    root_before: AuthenticatedMarketLifecycleRootV3<'_>,
+    link_before: &AuthenticatedSeriesMarketLinkV3<'_>,
+    link_release: &AuthenticatedWritableFailureSessionReleaseLinkV4,
+    registry: &AuthenticatedRegistryCapabilityV5,
+    bundle: &AuthenticatedCompiledProductSeriesBundleV7,
+    inactive: &AuthenticatedInactiveFailureResolutionV5,
+    liabilities: GeneralMarketLiabilityAuthorityV5,
     failure_resolution: FailureMarketIntervalCellResolutionReceiptV2,
-    root_decode_before: &'root mut MarketLifecycleRootAccountV2,
-    root_decode_after: &'post mut MarketLifecycleRootAccountV2,
+    root_decode_after: &mut MarketLifecycleRootAccountV3,
 ) -> Outcome<AuthenticatedFailureMarketResolutionActivationV5> {
-    require_system_program(system_program)?;
     require_distinct(&[
         market_root_account.clone(),
         series_link_account.clone(),
         resolution_account.clone(),
         hoard_account.clone(),
         claim_ledger_account.clone(),
-        rent_sysvar.clone(),
-        system_program.clone(),
     ])?;
-
-    let expected_root_binding = root_before.state().binding();
-    let live_root = authenticate_market_lifecycle_root_v2(
-        program_id,
-        market_root_account,
-        expected_root_binding.market_instance_id,
-        expected_root_binding.generation,
-        true,
-        root_decode_before,
-    )?;
-    require_exact_cached_account_v5(
-        live_root.account(),
-        root_before.account(),
-        live_root.authentication_id(),
-        root_before.authentication_id(),
-        live_root.value(),
-        root_before.value(),
-    )?;
-    let root = live_root.state();
-    let root_binding = root.binding();
+    let root = root_before.state();
+    let root_transition_sequence_before = root.transition_sequence();
+    let root_binding = *root_before.binding();
     let link = link_before.state();
-    let link_binding = link.binding();
+    let link_binding = link_before.binding();
     let registry_projection = registry.projection();
     let failure_facts = failure_resolution.facts();
     let verified_payout = failure_resolution.verified_payout();
@@ -902,20 +907,19 @@ fn activate_failure_market_resolution_v5<'a, 'root, 'post>(
     let certificate_id = certificate
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let root_binding_id = root_binding
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_binding_id = root_before.binding_id();
 
     require_current_product_failure_join(
         market_root_account,
-        &live_root,
+        &root_before,
         root,
         root_binding_id,
         link_before,
         link_release,
         link,
+        funding,
         registry,
-        &bundle,
+        bundle,
         failure_resolution,
         certificate,
         certificate_id,
@@ -969,12 +973,18 @@ fn activate_failure_market_resolution_v5<'a, 'root, 'post>(
         root_binding,
         registry_projection,
     )?;
-    require_exact_slot10_preallocation(
-        program_id,
-        resolution_account,
-        rent_sysvar,
-        live_root,
-        slot10,
+    let inactive_resolution = inactive.resolution();
+    require(
+        inactive.account() == *resolution_account.key
+            && inactive_resolution.facts.market_instance_id.bytes()
+                == root_binding.market_instance_id.bytes()
+            && inactive_resolution.facts.native_claim_basis_id.bytes()
+                == root_binding.native_claim_basis_id.bytes()
+            && inactive_resolution.facts.outcome_count == root_binding.outcome_count
+            && inactive_resolution.facts.generation == root_binding.generation
+            && inactive_resolution.rent.payer.bytes()
+                == root.capital().rent_refund_owner.bytes(),
+        ClutchError::MismatchedState,
     )?;
 
     let expected_hoard_after_id = HoardV2 {
@@ -992,12 +1002,13 @@ fn activate_failure_market_resolution_v5<'a, 'root, 'post>(
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
 
     let finalization_evidence_id = derive_finalization_evidence_id_v5(
-        live_root,
+        &root_before,
         link_before,
         link_release,
+        funding,
         registry,
-        &bundle,
-        slot10,
+        bundle,
+        inactive,
         liabilities,
         expected_hoard_after_id,
         expected_claim_ledger_after_id,
@@ -1009,13 +1020,6 @@ fn activate_failure_market_resolution_v5<'a, 'root, 'post>(
         payout.denominator,
         &payout.weights,
     )?;
-    let rent = DeletableRentOwnerV1::from_persisted(
-        Identity32V1::new(slot10.rent_refund_owner().to_bytes())
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
-        slot10.principal_lamports(),
-        slot10.donation_lamports(),
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let (expected_resolution, resolution_bump) =
         seeds::resolution_v5_pda(program_id, &root_binding.market_instance_id.bytes());
     let resolution = ResolutionV5::finalized(
@@ -1032,11 +1036,12 @@ fn activate_failure_market_resolution_v5<'a, 'root, 'post>(
             payout_unit_boundary: ResolutionPayoutUnitBoundaryV5::ExactWholeCollateralAtoms,
         },
         resolution_bump,
-        rent,
+        inactive_resolution.rent,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
-        expected_resolution == *resolution_account.key,
+        expected_resolution == *resolution_account.key
+            && resolution_bump == inactive_resolution.stored_bump,
         ClutchError::MismatchedState,
     )?;
     let activation_plan = prepare_market_resolution_activation_v5(
@@ -1053,7 +1058,7 @@ fn activate_failure_market_resolution_v5<'a, 'root, 'post>(
         ClutchError::MismatchedState,
     )?;
 
-    let product_activation = MarketResolutionActivationV2::new(
+    let product_activation = MarketResolutionActivationV3::new(
         root_binding,
         ContentId::from_bytes(activation_plan.resolution_id().bytes()),
         ContentId::from_bytes(activation_plan.resolution_data_id().bytes()),
@@ -1062,20 +1067,17 @@ fn activate_failure_market_resolution_v5<'a, 'root, 'post>(
         finalization_evidence_id,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    write_collateral_activation_postimages_v5(
+    write_collateral_activation_postimages_v6(
         program_id,
-        system_program,
         resolution_account,
         hoard_account,
         claim_ledger_account,
-        root_binding.market_instance_id.bytes(),
-        resolution_bump,
+        inactive,
         resolution,
         activation_plan.hoard_after(),
         activation_plan.claim_ledger_after(),
-        slot10.observed_balance_lamports(),
     )?;
-    let collateral_postwrite = authenticate_market_resolution_activation_postwrite_v5(
+    let collateral_postwrite = authenticate_current_market_resolution_activation_postwrite_v5(
         program_id,
         liabilities,
         activation_plan,
@@ -1088,75 +1090,99 @@ fn activate_failure_market_resolution_v5<'a, 'root, 'post>(
             && collateral_postwrite.liability_authority_receipt_id() == liabilities.receipt_id,
         ClutchError::MismatchedState,
     )?;
-    let root_write_authority = AuthenticatedProductResolutionRootWriteV5 {
-        root_account: live_root.account(),
-        root_authentication_before: live_root.authentication_id(),
-        root_data_before: live_root.data_id(),
-        root_semantic_before: root
-            .semantic_id()
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+    let resolution_physical_postwrite_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            FAILURE_MARKET_RESOLUTION_PHYSICAL_POSTWRITE_DOMAIN_V6,
+            program_id.as_ref(),
+            resolution_account.key.as_ref(),
+            &inactive.authentication_id().bytes(),
+            &inactive.semantic_id().bytes(),
+            &inactive.data_id().bytes(),
+            &activation_plan.resolution_id().bytes(),
+            &activation_plan.resolution_data_id().bytes(),
+            &collateral_postwrite.receipt_id().bytes(),
+            &inactive.observed_lamports().to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_content_id(resolution_physical_postwrite_id)?;
+    let root_write_authority = AuthenticatedProductResolutionRootWriteV6 {
+        root_account: root_before.account(),
+        root_authentication_before: root_before.authentication_id(),
+        root_data_before: root_before.data_id(),
+        root_semantic_before: root_before.semantic_id(),
+        link_account: link_before.account(),
+        link_authentication_id: link_before.authentication_id(),
+        link_semantic_id: link_before.semantic_id(),
+        funding_account: funding.account(),
+        funding_authentication_id: funding.authentication_id(),
+        funding_data_id: funding.data_id(),
+        inactive,
         activation: product_activation,
-        slot10,
         collateral_plan_receipt_id: ContentId::from_bytes(activation_plan.receipt_id().bytes()),
         failure_resolution_id: ContentId::from_bytes(failure_resolution.id().bytes()),
         collateral_postwrite_id: ContentId::from_bytes(collateral_postwrite.receipt_id().bytes()),
+        resolution_physical_postwrite_id,
         finalization_evidence_id,
     };
-    let mut root_successor = MarketLifecycleRootV2::decode_buffer();
-    let (root_after, product_postwrite) = record_market_resolution_activation_v2(
+    let product_postwrite = record_current_market_resolution_activation_v3(
         program_id,
         market_root_account,
-        live_root,
+        root_before,
+        link_before,
+        funding,
+        resolution_account,
+        inactive.authentication_id(),
+        resolution_physical_postwrite_id,
         product_activation,
-        slot10,
-        ContentId::from_bytes(activation_plan.receipt_id().bytes()),
-        ContentId::from_bytes(collateral_postwrite.receipt_id().bytes()),
-        ContentId::from_bytes(failure_resolution.id().bytes()),
         &root_write_authority,
-        &mut root_successor,
         root_decode_after,
     )?;
     require(
-        root_after.state().resolution_activation_receipt_id() == product_activation.id()
-            && root_after.state().resolution_semantic_id()
+        product_postwrite.root_after().state().resolution_activation_receipt_id()
+                == product_activation.id()
+            && product_postwrite.root_after().state().resolution_semantic_id()
                 == product_activation.resolution_semantic_id()
-            && root_after.state().resolution_data_id() == product_activation.resolution_data_id()
-            && root_after.state().transition_sequence()
-                == root
-                    .transition_sequence()
+            && product_postwrite.root_after().state().resolution_data_id()
+                == product_activation.resolution_data_id()
+            && product_postwrite.root_after().state().transition_sequence()
+                == root_transition_sequence_before
                     .checked_add(1)
                     .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?,
         ClutchError::MismatchedState,
     )?;
     require(
         product_postwrite.activation() == product_activation
-            && product_postwrite.slot10_preallocation_id() == slot10.id()
-            && product_postwrite.failure_resolution_receipt_id()
-                == ContentId::from_bytes(failure_resolution.id().bytes())
-            && product_postwrite.root_authentication_before() == live_root.authentication_id()
-            && product_postwrite.root_authentication_after() == root_after.authentication_id(),
+            && product_postwrite.inactive_resolution_authentication_id()
+                == inactive.authentication_id()
+            && product_postwrite.resolution_physical_postwrite_id()
+                == resolution_physical_postwrite_id
+            && product_postwrite.root_authentication_before()
+                == root_write_authority.root_authentication_before,
         ClutchError::MismatchedState,
     )?;
+    let root_authentication_after = product_postwrite.root_after().authentication_id();
 
     let id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
             FAILURE_MARKET_RESOLUTION_ACTIVATION_AUTHENTICATION_DOMAIN_V5,
             market_root_account.key.as_ref(),
-            &live_root.authentication_id().bytes(),
-            &root_after.authentication_id().bytes(),
+            &root_write_authority.root_authentication_before.bytes(),
+            &root_authentication_after.bytes(),
             series_link_account.key.as_ref(),
             &link_before.authentication_id().bytes(),
             &link_release.id().bytes(),
             resolution_account.key.as_ref(),
-            &slot10.id().bytes(),
+            &inactive.authentication_id().bytes(),
+            &resolution_physical_postwrite_id.bytes(),
             &failure_resolution.id().bytes(),
             &certificate_id.bytes(),
             &finalization_evidence_id.bytes(),
             &product_activation.id().bytes(),
             &activation_plan.receipt_id().bytes(),
             &collateral_postwrite.receipt_id().bytes(),
-            &slot10.principal_lamports().to_le_bytes(),
-            &slot10.donation_lamports().to_le_bytes(),
+            &inactive.resolution().rent.refundable_principal.to_le_bytes(),
+            &inactive.resolution().rent.donation_floor.to_le_bytes(),
             &[RESOLVED_DISPOSITION_BYTE_V2],
         ])
         .to_bytes(),
@@ -1168,12 +1194,13 @@ fn activate_failure_market_resolution_v5<'a, 'root, 'post>(
         product_activation,
         collateral_postwrite,
         market_root: *market_root_account.key,
-        market_root_authentication_before: live_root.authentication_id(),
-        market_root_authentication_after: root_after.authentication_id(),
+        market_root_authentication_before: root_write_authority.root_authentication_before,
+        market_root_authentication_after: root_authentication_after,
         series_link: *series_link_account.key,
         series_link_authentication: link_before.authentication_id(),
         series_link_preauthorization_id: link_release.id(),
-        slot10_preallocation_id: slot10.id(),
+        inactive_resolution_authentication_id: inactive.authentication_id(),
+        resolution_physical_postwrite_id,
         finalization_evidence_id,
     })
 }
@@ -1186,7 +1213,7 @@ fn activate_failure_market_resolution_v5<'a, 'root, 'post>(
 /// composer above is private so no sibling module can persist Product's
 /// once-only activation and omit the exact Resolved `0xab/v2` postimage.
 #[allow(clippy::too_many_arguments)]
-fn resolve_failure_market_interval_v5<'a, 'root, 'post>(
+fn resolve_failure_market_interval_v5<'a>(
     program_id: &Pubkey,
     admission_root_account: &AccountInfo<'a>,
     runtime_root_account: &AccountInfo<'a>,
@@ -1197,25 +1224,23 @@ fn resolve_failure_market_interval_v5<'a, 'root, 'post>(
     resolution_account: &AccountInfo<'a>,
     hoard_account: &AccountInfo<'a>,
     claim_ledger_account: &AccountInfo<'a>,
-    rent_sysvar: &AccountInfo<'a>,
-    system_program: &AccountInfo<'a>,
-    root_before: AuthenticatedMarketLifecycleRootV2<'root>,
-    link_before: AuthenticatedSeriesMarketLinkV2<'_>,
-    link_release: &AuthenticatedWritableFailureSessionReleaseLinkV3,
+    funding: &AuthenticatedSeriesFundingAccountV5,
+    root_before: AuthenticatedMarketLifecycleRootV3<'_>,
+    link_before: &AuthenticatedSeriesMarketLinkV3<'_>,
+    link_release: &AuthenticatedWritableFailureSessionReleaseLinkV4,
     admission: AuthenticatedFailureMarketRootV3,
     runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
     interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
-    registry: &AuthenticatedRegistryCapabilityV4,
-    bundle: AuthenticatedCompiledProductSeriesBundleV6,
-    slot10: AuthenticatedMarketFoundationPreallocationV3,
-    liabilities: GeneralMarketLiabilityAuthorityV2,
+    registry: &AuthenticatedRegistryCapabilityV5,
+    bundle: &AuthenticatedCompiledProductSeriesBundleV7,
+    inactive: &AuthenticatedInactiveFailureResolutionV5,
+    liabilities: GeneralMarketLiabilityAuthorityV5,
     resolution: FailureMarketIntervalCellResolutionPlanV2,
-    root_decode_before: &'root mut MarketLifecycleRootAccountV2,
-    root_decode_after: &'post mut MarketLifecycleRootAccountV2,
+    root_decode_after: &mut MarketLifecycleRootAccountV3,
 ) -> Outcome<(
     AuthenticatedFailureMarketResolutionPostwriteV5,
     AuthenticatedFailureMarketIntervalAccountsV2,
-    AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
+    AuthenticatedFailureMarketRuntimeSessionPostwriteV3,
 )> {
     require_distinct_resolution_role_keys_v5([
         *admission_root_account.key,
@@ -1227,17 +1252,13 @@ fn resolve_failure_market_interval_v5<'a, 'root, 'post>(
         *resolution_account.key,
         *hoard_account.key,
         *claim_ledger_account.key,
-        *rent_sysvar.key,
-        *system_program.key,
+        funding.account(),
     ])?;
     let failure_resolution = resolution.receipt();
     let failure_facts = failure_resolution.facts();
     let session_after = ContentId::from_bytes(failure_facts.cell_after.bytes());
     let runtime_resolution_receipt_id = ContentId::from_bytes(failure_resolution.id().bytes());
-    let link_state_id = link_before
-        .state()
-        .semantic_id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let link_state_id = link_before.semantic_id();
     let runtime_authority = FailureMarketRuntimeResolutionAuthorityV1 {
         runtime_before: runtime_before.state_commitment(),
         series_link_state_id: link_state_id,
@@ -1245,7 +1266,7 @@ fn resolve_failure_market_interval_v5<'a, 'root, 'post>(
         session_after,
         resolution_receipt_id: runtime_resolution_receipt_id,
     };
-    let runtime_plan = plan_resolve_failure_market_session_v2(
+    let runtime_plan = plan_resolve_failure_market_session_v3(
         &runtime_authority,
         runtime_before.state(),
         admission.state(),
@@ -1268,20 +1289,18 @@ fn resolve_failure_market_interval_v5<'a, 'root, 'post>(
         program_id,
         market_root_account,
         series_link_account,
+        funding,
         resolution_account,
         hoard_account,
         claim_ledger_account,
-        rent_sysvar,
-        system_program,
         root_before,
         link_before,
         link_release,
         registry,
         bundle,
-        slot10,
+        inactive,
         liabilities,
         failure_resolution,
-        root_decode_before,
         root_decode_after,
     )?;
     let interval_after = write_failure_market_interval_resolution_plan_v2(
@@ -1292,7 +1311,7 @@ fn resolve_failure_market_interval_v5<'a, 'root, 'post>(
         resolution,
         &activation,
     )?;
-    let runtime_write_facts = FailureMarketRuntimeSessionWriteFactsV1 {
+    let runtime_write_facts = FailureMarketRuntimeSessionWriteFactsV3 {
         runtime_before: runtime_before.state_commitment(),
         runtime_after: runtime_plan
             .resulting_runtime()
@@ -1309,7 +1328,7 @@ fn resolve_failure_market_interval_v5<'a, 'root, 'post>(
         ),
         runtime_resolution_receipt_id,
     };
-    let runtime_postwrite = write_failure_market_runtime_session_plan_v2(
+    let runtime_postwrite = write_failure_market_runtime_session_plan_v3(
         program_id,
         admission_root_account,
         runtime_root_account,
@@ -1373,7 +1392,7 @@ fn resolve_failure_market_interval_v5<'a, 'root, 'post>(
 /// close, Recovery close, or family-seal refusal therefore rolls every prior
 /// write back. No caller-selected terminal, reopen, or partial writer exists.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'post>(
+pub(crate) fn resolve_failure_market_interval_and_source_v5<'a>(
     program_id: &Pubkey,
     admission_root_account: &AccountInfo<'a>,
     runtime_root_account: &AccountInfo<'a>,
@@ -1399,29 +1418,30 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
     recovery_refund_owner: &AccountInfo<'a>,
     rent_sysvar: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
-    root_before: AuthenticatedMarketLifecycleRootV2<'root>,
-    link_before: AuthenticatedSeriesMarketLinkV2<'link>,
+    root_before: AuthenticatedMarketLifecycleRootV3<'_>,
+    link_before: AuthenticatedSeriesMarketLinkV3<'_>,
+    funding: &AuthenticatedSeriesFundingAccountV5,
     admission: AuthenticatedFailureMarketRootV3,
     runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
     interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
     replay_before: AuthenticatedFailureMarketReplayV2,
-    registry: &AuthenticatedRegistryCapabilityV4,
-    bundle: AuthenticatedCompiledProductSeriesBundleV6,
-    slot10: AuthenticatedMarketFoundationPreallocationV3,
-    liabilities: GeneralMarketLiabilityAuthorityV2,
+    registry: &AuthenticatedRegistryCapabilityV5,
+    bundle: &AuthenticatedCompiledProductSeriesBundleV7,
+    inactive: &AuthenticatedInactiveFailureResolutionV5,
+    liabilities: GeneralMarketLiabilityAuthorityV5,
     source_route: AuthenticatedSourceRouteV1,
     source_schedule: SourceWorkScheduleBindingV1,
     source_success: SuccessfulEvaluationHandoffV1,
     source_input: AuthenticatedSourceResolutionInputV4,
     source_lineage: AuthenticatedReopenLineageV1,
     context: QuantizedIntervalConsensusContextV1<'_>,
-    root_decode_before: &'root mut MarketLifecycleRootAccountV2,
-    link_decode_before: &mut SeriesMarketLinkAccountV2,
-    root_decode_after: &'post mut MarketLifecycleRootAccountV2,
-    link_release_decode: &mut SeriesMarketLinkAccountV2,
-    link_rebound_output: &mut SeriesMarketLinkAccountV2,
-    resolved_root_auth_decode: &mut MarketLifecycleRootAccountV2,
-    resolved_root_persist_decode: &mut MarketLifecycleRootAccountV2,
+    root_decode_before: &mut MarketLifecycleRootAccountV3,
+    link_decode_before: &mut SeriesMarketLinkAccountV3,
+    root_decode_after: &mut MarketLifecycleRootAccountV3,
+    link_release_decode: &mut SeriesMarketLinkAccountV3,
+    link_rebound_output: &mut SeriesMarketLinkAccountV3,
+    resolved_root_auth_decode: &mut MarketLifecycleRootAccountV3,
+    resolved_root_persist_decode: &mut MarketLifecycleRootAccountV3,
 ) -> Outcome<AuthenticatedResolvedFailureMarketLifecycleV5> {
     require_source_resolution_outer_aliases_v5(
         [
@@ -1460,13 +1480,28 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
                 == *source_result_account.key,
         ClutchError::MismatchedState,
     )?;
-    let resolution_link = authenticate_writable_failure_resolution_link_v3(
+    let resolution_link = authenticate_writable_failure_resolution_link_v4(
         program_id,
         market_root_account,
         root_before,
         series_link_account,
         root_decode_before,
         link_decode_before,
+    )?;
+    let policy = admission.state().binding().facts();
+    let live_root = authenticate_market_lifecycle_root_v3(
+        program_id,
+        market_root_account,
+        policy.market_instance_id,
+        policy.generation,
+        true,
+        root_decode_before,
+    )?;
+    require(
+        live_root.authentication_id() == resolution_link.root_authentication_id()
+            && live_root.semantic_id() == resolution_link.root_semantic_id()
+            && live_root.binding_id() == resolution_link.root_binding_id(),
+        ClutchError::MismatchedState,
     )?;
     let resolution = plan_authenticated_failure_market_resolution_v5(
         admission,
@@ -1485,20 +1520,18 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
         resolution_account,
         hoard_account,
         claim_ledger_account,
-        rent_sysvar,
-        system_program,
-        root_before,
-        link_before,
+        funding,
+        live_root,
+        &link_before,
         &resolution_link,
         admission,
         runtime_before,
         interval_before,
         registry,
         bundle,
-        slot10,
+        inactive,
         liabilities,
         resolution,
-        root_decode_before,
         root_decode_after,
     )?;
     let source_terminal = compose_source_resolution_terminal_v1(
@@ -1525,8 +1558,8 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
         postwrite,
         source_terminal,
     )?;
-    let link_binding = link_before.state().binding();
-    let link_for_release = authenticate_series_market_link_v2(
+    let link_binding = *link_before.binding();
+    let link_for_release = authenticate_series_market_link_v3(
         program_id,
         series_link_account,
         link_binding.series_plan_id,
@@ -1537,14 +1570,16 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
         true,
         link_release_decode,
     )?;
-    let (archive, released_link, link_release) = archive_resolved_failure_market_interval_link_v3(
+    let link_for_release_state = *link_for_release.state();
+    let link_for_release_id = link_for_release.semantic_id();
+    let (archive, released_link, link_release) = archive_resolved_failure_market_interval_link_v4(
         program_id,
         interval_cell_account,
         interval_history_account,
         series_link_account,
         interval_after,
         link_for_release,
-        &resolution_link,
+        resolution_link,
         archive_plan.history_plan,
         archive_plan.append,
         archive_plan.cell_plan,
@@ -1563,16 +1598,10 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
         &link_release,
         &archive,
     )?;
-    let released_link_id = released_link
-        .state()
-        .semantic_id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let expected_runtime_close = FailureMarketSessionCloseFactsV2 {
+    let released_link_id = released_link.semantic_id();
+    let expected_runtime_close = FailureMarketSessionCloseFactsV3 {
         runtime_before: runtime_after.root().state_commitment(),
-        series_link_before: link_for_release
-            .state()
-            .semantic_id()
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        series_link_before: link_for_release_id,
         series_link_after: released_link_id,
         session_before: ContentId::from_bytes(archive.append().terminal_state_commitment().bytes()),
         session_after: ContentId::from_bytes(archive.append().idle_state_commitment().bytes()),
@@ -1584,15 +1613,15 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
         history_after: archive.append().history_after(),
         completed_session_count: archive.append().completed_session_count(),
         source_product_release_binding_id: ContentId::from_bytes(source_product_release.id().bytes()),
-        transition_receipt_id: FailureMarketSessionTransitionReceiptIdV1::from_bytes([0; 32]),
+        transition_receipt_id: FailureMarketSessionTransitionReceiptIdV3::from_bytes([0; 32]),
     };
-    let archive_runtime_plan = plan_close_failure_market_session_v2(
+    let archive_runtime_plan = plan_close_failure_market_session_v3(
         &FailureMarketResolvedRuntimeArchiveAuthorityV5 {
             expected: expected_runtime_close,
         },
         runtime_after.root().state(),
         admission.state(),
-        *link_for_release.state(),
+        link_for_release_state,
         archive.append(),
         ContentId::from_bytes(source_product_release.id().bytes()),
     )
@@ -1605,7 +1634,7 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
                 == ContentId::from_bytes(source_product_release.id().bytes()),
         ClutchError::MismatchedState,
     )?;
-    let archive_runtime_facts = FailureMarketRuntimeSessionWriteFactsV1 {
+    let archive_runtime_facts = FailureMarketRuntimeSessionWriteFactsV3 {
         runtime_before: runtime_after.root().state_commitment(),
         runtime_after: archive_runtime_plan
             .resulting_runtime()
@@ -1613,7 +1642,7 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
         transition_receipt_id: archive_runtime_plan.receipt_id(),
     };
-    let archive_runtime = write_failure_market_runtime_session_plan_v2(
+    let archive_runtime = write_failure_market_runtime_session_plan_v3(
         program_id,
         admission_root_account,
         runtime_root_account,
@@ -1658,8 +1687,7 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
         source_product_release,
         source_result_close,
     )?;
-    let policy = admission.state().binding().facts();
-    let resolved_root = authenticate_market_lifecycle_root_v2(
+    let resolved_root = authenticate_market_lifecycle_root_v3(
         program_id,
         market_root_account,
         policy.market_instance_id,
@@ -1674,7 +1702,7 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
                 == postwrite.product_activation().id(),
         ClutchError::MismatchedState,
     )?;
-    let family_terminal = persist_resolved_failure_market_family_v2(
+    let family_terminal = persist_resolved_failure_market_family_v3(
         program_id,
         market_root_account,
         admission_root_account,
@@ -1682,7 +1710,7 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
         interval_cell_account,
         interval_history_account,
         replay_account,
-        resolved_root,
+        &resolved_root,
         admission,
         recovery_close,
         replay_before,
@@ -1706,23 +1734,24 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
 #[allow(clippy::too_many_arguments)]
 fn require_current_product_failure_join(
     market_root_account: &AccountInfo<'_>,
-    root: &AuthenticatedMarketLifecycleRootV2<'_>,
-    root_state: &clutch_product_series::MarketLifecycleRootV2,
+    root: &AuthenticatedMarketLifecycleRootV3<'_>,
+    root_state: &clutch_product_series::MarketLifecycleRootV3,
     root_binding_id: ContentId,
-    link: AuthenticatedSeriesMarketLinkV2<'_>,
-    release: &AuthenticatedWritableFailureSessionReleaseLinkV3,
-    link_state: clutch_product_series::SeriesMarketLinkV2,
-    registry: &AuthenticatedRegistryCapabilityV4,
-    bundle: &AuthenticatedCompiledProductSeriesBundleV6,
+    link: &AuthenticatedSeriesMarketLinkV3<'_>,
+    release: &AuthenticatedWritableFailureSessionReleaseLinkV4,
+    link_state: &clutch_product_series::SeriesMarketLinkV3,
+    funding: &AuthenticatedSeriesFundingAccountV5,
+    registry: &AuthenticatedRegistryCapabilityV5,
+    bundle: &AuthenticatedCompiledProductSeriesBundleV7,
     failure_resolution: FailureMarketIntervalCellResolutionReceiptV2,
     certificate: clutch_product_series::QuantizedIntervalConsensusCertificateV1,
     certificate_id: clutch_product_series::QuantizedIntervalConsensusCertificateV1Id,
 ) -> Outcome<()> {
-    let root_binding = root_state.binding();
-    let link_binding = link_state.binding();
+    let root_binding = root_state.binding_ref();
+    let link_binding = link_state.binding_ref();
     let projection = registry.projection();
     let bundle_value = bundle.bundle();
-    require_current_series_funding_graph_v5(
+    require_current_series_funding_graph_v6(
         registry.funding_terms_id(),
         bundle_value.funding_terms_id,
         link_binding.funding_terms_id,
@@ -1730,6 +1759,7 @@ fn require_current_product_failure_join(
         link_binding.funding_quote_id,
         bundle_value.attachment_plan_id,
         link_binding.attachment_plan_id,
+        funding,
     )?;
     require(
         root.is_writable()
@@ -1739,7 +1769,7 @@ fn require_current_product_failure_join(
             && release.root_authentication_id() == root.authentication_id()
             && release.link_account() == link.account()
             && release.link_authentication_id() == link.authentication_id()
-            && release.disposition() == FailureSessionReleaseDispositionV3::Resolved
+            && release.disposition() == FailureSessionReleaseDispositionV4::Resolved
             && root.account() == *market_root_account.key
             && root_binding
                 .id()
@@ -1773,6 +1803,8 @@ fn require_current_product_failure_join(
             && bundle_value.source_plane_contract_id == root_binding.source_plane_contract_id
             && bundle_value.source_spec_id == root_binding.source_spec_id
             && link_binding.compiler_bundle_id == bundle.bundle_id()
+            && funding.account().to_bytes() == link_binding.funding_state_account_id.bytes()
+            && !funding.is_writable()
             && link_binding.source_release_id == root_binding.source_release_id
             && link_binding.source_plane_contract_id == root_binding.source_plane_contract_id
             && link_binding.source_spec_id == root_binding.source_spec_id
@@ -1792,8 +1824,8 @@ fn require_exact_collateral_prestate(
     program_id: &Pubkey,
     hoard_account: &AccountInfo<'_>,
     claim_ledger_account: &AccountInfo<'_>,
-    liabilities: GeneralMarketLiabilityAuthorityV2,
-    root_binding: MarketLifecycleBindingV2,
+    liabilities: GeneralMarketLiabilityAuthorityV5,
+    root_binding: MarketLifecycleBindingV3,
     registry: clutch_product_series::RegistryCapabilityProjectionV2,
 ) -> Outcome<()> {
     require_program_owned_writable(hoard_account, program_id, HOARD_V2_BYTES)?;
@@ -1819,7 +1851,7 @@ fn require_exact_collateral_prestate(
     let claim_id = claim_ledger
         .semantic_id(&RuntimeSha256)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let relation_market = liabilities.market_binding.base();
+    let relation_market = liabilities.market_binding.base().base();
     let bound_realm = liabilities.bound.realm_bound().realm();
     let bound_release_id = liabilities
         .bound
@@ -1863,69 +1895,16 @@ fn require_exact_collateral_prestate(
     )
 }
 
-fn require_exact_slot10_preallocation(
-    program_id: &Pubkey,
-    resolution_account: &AccountInfo<'_>,
-    rent_sysvar: &AccountInfo<'_>,
-    root: AuthenticatedMarketLifecycleRootV2<'_>,
-    slot10: AuthenticatedMarketFoundationPreallocationV3,
-) -> Outcome<()> {
-    let binding = root.state().binding();
-    let capital = root.state().capital();
-    let expected_balance = slot10
-        .principal_lamports()
-        .checked_add(slot10.donation_lamports())
-        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
-    let rent = read_rent(rent_sysvar)?;
-    let (expected_resolution, _) =
-        seeds::resolution_v5_pda(program_id, &binding.market_instance_id.bytes());
-    require_slot10_preallocation_facts_v5(Slot10PreallocationFactsV5 {
-        root_phase: root.state().phase(),
-        slot_root_account: slot10.root_account(),
-        root_account: root.account(),
-        slot_root_authentication_id: slot10.root_authentication_id(),
-        root_authentication_id: root.authentication_id(),
-        slot_market_instance_id: slot10.market_instance_id().bytes(),
-        root_market_instance_id: binding.market_instance_id.bytes(),
-        slot_generation: slot10.generation(),
-        root_generation: binding.generation,
-        slot: slot10.slot(),
-        slot_account: slot10.account(),
-        resolution_account: *resolution_account.key,
-        slot_foundation_schedule_id: slot10.foundation_schedule_id().bytes(),
-        root_foundation_schedule_id: binding.foundation_schedule_id.bytes(),
-        slot_foundation_account_graph_id: slot10.foundation_account_graph_id().bytes(),
-        root_foundation_account_graph_id: binding.foundation_account_graph_id.bytes(),
-        slot_foundation_transcript_id: slot10.foundation_transcript_id().bytes(),
-        root_foundation_transcript_id: root.state().foundation().transcript_id.bytes(),
-        slot_rent_refund_owner: slot10.rent_refund_owner().to_bytes(),
-        root_rent_refund_owner: capital.rent_refund_owner.bytes(),
-        slot_neutral_lamport_sink: slot10.neutral_lamport_sink().to_bytes(),
-        root_neutral_lamport_sink: capital.neutral_lamport_sink.bytes(),
-        slot_principal_lamports: slot10.principal_lamports(),
-        minimum_rent_lamports: rent.minimum_balance(RESOLUTION_V5_BYTES)?,
-        slot_observed_balance_lamports: slot10.observed_balance_lamports(),
-        expected_balance_lamports: expected_balance,
-        root_resolution_account_id: binding.resolution_account_id.bytes(),
-        expected_resolution_account: expected_resolution,
-        resolution_owner: *resolution_account.owner,
-        resolution_is_writable: resolution_account.is_writable,
-        resolution_is_signer: resolution_account.is_signer,
-        resolution_is_executable: resolution_account.executable,
-        resolution_data_len: resolution_account.data_len(),
-        resolution_lamports: resolution_account.lamports(),
-    })
-}
-
 #[allow(clippy::too_many_arguments)]
 fn derive_finalization_evidence_id_v5(
-    root: AuthenticatedMarketLifecycleRootV2<'_>,
-    link: AuthenticatedSeriesMarketLinkV2<'_>,
-    release: &AuthenticatedWritableFailureSessionReleaseLinkV3,
-    registry: &AuthenticatedRegistryCapabilityV4,
-    bundle: &AuthenticatedCompiledProductSeriesBundleV6,
-    slot10: AuthenticatedMarketFoundationPreallocationV3,
-    liabilities: GeneralMarketLiabilityAuthorityV2,
+    root: &AuthenticatedMarketLifecycleRootV3<'_>,
+    link: &AuthenticatedSeriesMarketLinkV3<'_>,
+    release: &AuthenticatedWritableFailureSessionReleaseLinkV4,
+    funding: &AuthenticatedSeriesFundingAccountV5,
+    registry: &AuthenticatedRegistryCapabilityV5,
+    bundle: &AuthenticatedCompiledProductSeriesBundleV7,
+    inactive: &AuthenticatedInactiveFailureResolutionV5,
+    liabilities: GeneralMarketLiabilityAuthorityV5,
     expected_hoard_after_id: CollateralId,
     expected_claim_ledger_after_id: CollateralId,
     failure_resolution: FailureMarketIntervalCellResolutionReceiptV2,
@@ -1937,10 +1916,7 @@ fn derive_finalization_evidence_id_v5(
     weights: &[u64; clutch_retirement::MAX_OUTCOMES],
 ) -> Outcome<ContentId> {
     let failure = failure_resolution.facts();
-    let link_state_id = link
-        .state()
-        .semantic_id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let link_state_id = link.semantic_id();
     let weights_bytes = encode_weights(weights);
     let id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
@@ -1961,14 +1937,18 @@ fn derive_finalization_evidence_id_v5(
             &registry.capability_profile_id().bytes(),
             bundle.artifact_account().as_ref(),
             &bundle.bundle_id().bytes(),
-            &slot10.id().bytes(),
-            &slot10.foundation_schedule_id().bytes(),
-            &slot10.foundation_account_graph_id().bytes(),
-            &slot10.foundation_transcript_id().bytes(),
-            &slot10.principal_lamports().to_le_bytes(),
-            &slot10.donation_lamports().to_le_bytes(),
-            slot10.rent_refund_owner().as_ref(),
-            slot10.neutral_lamport_sink().as_ref(),
+            funding.account().as_ref(),
+            &funding.authentication_id().bytes(),
+            &funding.data_id().bytes(),
+            &root.binding().foundation_schedule_id.bytes(),
+            &root.binding().foundation_account_graph_id.bytes(),
+            &root.state().foundation().transcript_id.bytes(),
+            &inactive.authentication_id().bytes(),
+            &inactive.semantic_id().bytes(),
+            &inactive.data_id().bytes(),
+            &inactive.resolution().rent.refundable_principal.to_le_bytes(),
+            &inactive.resolution().rent.donation_floor.to_le_bytes(),
+            &inactive.resolution().rent.payer.bytes(),
             &liabilities.receipt_id.bytes(),
             &liabilities.hoard_semantic_id.bytes(),
             &expected_hoard_after_id.bytes(),
@@ -1998,59 +1978,49 @@ fn derive_finalization_evidence_id_v5(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn write_collateral_activation_postimages_v5<'a>(
+fn write_collateral_activation_postimages_v6<'a>(
     program_id: &Pubkey,
-    system_program: &AccountInfo<'a>,
     resolution_account: &AccountInfo<'a>,
     hoard_account: &AccountInfo<'a>,
     claim_ledger_account: &AccountInfo<'a>,
-    market_instance_id: [u8; 32],
-    resolution_bump: u8,
+    inactive: &AuthenticatedInactiveFailureResolutionV5,
     resolution: ResolutionV5,
     hoard_after: HoardV2,
     claim_ledger_after: ClaimLedgerV3,
-    expected_resolution_balance: u64,
 ) -> Outcome<()> {
+    require_program_owned_writable(resolution_account, program_id, RESOLUTION_V5_BYTES)?;
+    require_program_owned_writable(hoard_account, program_id, HOARD_V2_BYTES)?;
+    require_program_owned_writable(claim_ledger_account, program_id, CLAIM_LEDGER_V3_BYTES)?;
+    require(
+        inactive.account() == *resolution_account.key
+            && inactive.observed_lamports() == resolution_account.lamports()
+            && inactive.resolution().state == clutch_collateral_adapter_v2::ResolutionStateV5::Inactive
+            && resolution.state == clutch_collateral_adapter_v2::ResolutionStateV5::Finalized
+            && resolution.stored_bump == inactive.resolution().stored_bump
+            && resolution.rent == inactive.resolution().rent
+            && resolution.facts.market_instance_id
+                == inactive.resolution().facts.market_instance_id
+            && resolution.facts.native_claim_basis_id
+                == inactive.resolution().facts.native_claim_basis_id
+            && resolution.facts.outcome_count == inactive.resolution().facts.outcome_count
+            && resolution.facts.generation == inactive.resolution().facts.generation,
+        ClutchError::MismatchedState,
+    )?;
+    {
+        let data = resolution_account
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let observed = ResolutionV5::decode(&data)
+            .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+        require(observed == inactive.resolution(), ClutchError::MismatchedState)?;
+    }
+    let resolution_lamports_before = resolution_account.lamports();
     let hoard_lamports_before = hoard_account.lamports();
     let claim_ledger_lamports_before = claim_ledger_account.lamports();
-    let bump_seed = [resolution_bump];
-    let signer_seeds: [&[u8]; 3] = [seeds::SEED_RESOLUTION_V5, &market_instance_id, &bump_seed];
-    let allocate = Instruction::new_with_bytes(
-        SYSTEM_PROGRAM_ID,
-        &allocate_data(RESOLUTION_V5_BYTES),
-        vec![AccountMeta::new(*resolution_account.key, true)],
-    );
-    invoke_signed(
-        &allocate,
-        &[resolution_account.clone(), system_program.clone()],
-        &[&signer_seeds],
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
-    let assign = Instruction::new_with_bytes(
-        SYSTEM_PROGRAM_ID,
-        &assign_data(program_id),
-        vec![AccountMeta::new(*resolution_account.key, true)],
-    );
-    invoke_signed(
-        &assign,
-        &[resolution_account.clone(), system_program.clone()],
-        &[&signer_seeds],
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
-    require(
-        resolution_account.owner == program_id
-            && resolution_account.data_len() == RESOLUTION_V5_BYTES
-            && resolution_account.lamports() == expected_resolution_balance,
-        ClutchError::AccountCreationFailed,
-    )?;
     {
         let mut data = resolution_account
             .try_borrow_mut_data()
             .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-        require(
-            data.iter().all(|byte| *byte == 0),
-            ClutchError::AlreadyInitialized,
-        )?;
         resolution
             .encode(&mut data)
             .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
@@ -2072,7 +2042,7 @@ fn write_collateral_activation_postimages_v5<'a>(
             .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
     }
     require(
-        resolution_account.lamports() == expected_resolution_balance
+        resolution_account.lamports() == resolution_lamports_before
             && hoard_account.lamports() == hoard_lamports_before
             && claim_ledger_account.lamports() == claim_ledger_lamports_before,
         ClutchError::MismatchedState,
@@ -2127,113 +2097,36 @@ fn require_source_resolution_outer_aliases_v5<const P: usize, const E: usize>(
     Ok(())
 }
 
-fn require_exact_cached_account_v5<T: Eq>(
-    live_account: Pubkey,
-    cached_account: Pubkey,
-    live_authentication_id: ContentId,
-    cached_authentication_id: ContentId,
-    live_value: &T,
-    cached_value: &T,
-) -> Outcome<()> {
-    require(
-        live_account == cached_account
-            && live_authentication_id == cached_authentication_id
-            && live_value == cached_value,
-        ClutchError::MismatchedState,
-    )
-}
-
-fn require_current_series_funding_graph_v5(
+fn require_current_series_funding_graph_v6(
     registry_funding_terms_id: SeriesFundingTermsV2Id,
     bundle_funding_terms_id: SeriesFundingTermsV2Id,
     link_funding_terms_id: SeriesFundingTermsV2Id,
-    bundle_funding_quote_id: SeriesFundingQuoteV5Id,
-    link_funding_quote_id: SeriesFundingQuoteV5Id,
-    bundle_attachment_plan_id: SeriesAttachmentPlanV5Id,
-    link_attachment_plan_id: SeriesAttachmentPlanV5Id,
+    bundle_funding_quote_id: SeriesFundingQuoteV6Id,
+    link_funding_quote_id: SeriesFundingQuoteV6Id,
+    bundle_attachment_plan_id: SeriesAttachmentPlanV6Id,
+    link_attachment_plan_id: SeriesAttachmentPlanV6Id,
+    funding: &AuthenticatedSeriesFundingAccountV5,
 ) -> Outcome<()> {
+    let state = funding.state();
     require(
         registry_funding_terms_id == bundle_funding_terms_id
             && registry_funding_terms_id == link_funding_terms_id
             && bundle_funding_quote_id == link_funding_quote_id
-            && bundle_attachment_plan_id == link_attachment_plan_id,
-        ClutchError::MismatchedState,
-    )
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Slot10PreallocationFactsV5 {
-    root_phase: MarketLifecyclePhaseV2,
-    slot_root_account: Pubkey,
-    root_account: Pubkey,
-    slot_root_authentication_id: ContentId,
-    root_authentication_id: ContentId,
-    slot_market_instance_id: [u8; 32],
-    root_market_instance_id: [u8; 32],
-    slot_generation: u64,
-    root_generation: u64,
-    slot: MarketFoundationSlotV3,
-    slot_account: Pubkey,
-    resolution_account: Pubkey,
-    slot_foundation_schedule_id: [u8; 32],
-    root_foundation_schedule_id: [u8; 32],
-    slot_foundation_account_graph_id: [u8; 32],
-    root_foundation_account_graph_id: [u8; 32],
-    slot_foundation_transcript_id: [u8; 32],
-    root_foundation_transcript_id: [u8; 32],
-    slot_rent_refund_owner: [u8; 32],
-    root_rent_refund_owner: [u8; 32],
-    slot_neutral_lamport_sink: [u8; 32],
-    root_neutral_lamport_sink: [u8; 32],
-    slot_principal_lamports: u64,
-    minimum_rent_lamports: u64,
-    slot_observed_balance_lamports: u64,
-    expected_balance_lamports: u64,
-    root_resolution_account_id: [u8; 32],
-    expected_resolution_account: Pubkey,
-    resolution_owner: Pubkey,
-    resolution_is_writable: bool,
-    resolution_is_signer: bool,
-    resolution_is_executable: bool,
-    resolution_data_len: usize,
-    resolution_lamports: u64,
-}
-
-fn require_slot10_preallocation_facts_v5(facts: Slot10PreallocationFactsV5) -> Outcome<()> {
-    require(
-        facts.root_phase == MarketLifecyclePhaseV2::Active
-            && facts.slot_root_account == facts.root_account
-            && facts.slot_root_authentication_id == facts.root_authentication_id
-            && facts.slot_market_instance_id == facts.root_market_instance_id
-            && facts.slot_generation == facts.root_generation
-            && facts.slot == MarketFoundationSlotV3::ResolutionV5
-            && facts.slot_account == facts.resolution_account
-            && facts.slot_foundation_schedule_id == facts.root_foundation_schedule_id
-            && facts.slot_foundation_account_graph_id == facts.root_foundation_account_graph_id
-            && facts.slot_foundation_transcript_id == facts.root_foundation_transcript_id
-            && facts.slot_rent_refund_owner == facts.root_rent_refund_owner
-            && facts.slot_neutral_lamport_sink == facts.root_neutral_lamport_sink
-            && facts.slot_principal_lamports == facts.minimum_rent_lamports
-            && facts.slot_observed_balance_lamports == facts.expected_balance_lamports
-            && facts.root_resolution_account_id == facts.resolution_account.to_bytes()
-            && facts.expected_resolution_account == facts.resolution_account
-            && facts.resolution_owner.to_bytes() == SYSTEM_PROGRAM_ID
-            && facts.resolution_is_writable
-            && !facts.resolution_is_signer
-            && !facts.resolution_is_executable
-            && facts.resolution_data_len == 0
-            && facts.resolution_lamports == facts.expected_balance_lamports,
+            && bundle_attachment_plan_id == link_attachment_plan_id
+            && state.funding_terms_id == registry_funding_terms_id
+            && state.funding_quote_id == bundle_funding_quote_id
+            && state.attachment_plan_id == bundle_attachment_plan_id,
         ClutchError::MismatchedState,
     )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ResolutionAuthorityFactsV5 {
-    root_phase: MarketLifecyclePhaseV2,
+    root_phase: MarketLifecyclePhaseV3,
     root_resolution_semantic_id: ContentId,
     root_resolution_data_id: ContentId,
     root_resolution_activation_receipt_id: ContentId,
-    link_phase: SeriesMarketLinkPhaseV2,
+    link_phase: SeriesMarketLinkPhaseV3,
     active_failure_sessions: u32,
     link_session_binding_id: [u8; 32],
     failure_session_binding_id: [u8; 32],
@@ -2255,11 +2148,11 @@ struct ResolutionAuthorityFactsV5 {
 
 fn require_resolution_authority_facts_v5(facts: ResolutionAuthorityFactsV5) -> Outcome<()> {
     require(
-        facts.root_phase == MarketLifecyclePhaseV2::Active
+        facts.root_phase == MarketLifecyclePhaseV3::Active
             && facts.root_resolution_semantic_id == ContentId::ZERO
             && facts.root_resolution_data_id == ContentId::ZERO
             && facts.root_resolution_activation_receipt_id == ContentId::ZERO
-            && facts.link_phase == SeriesMarketLinkPhaseV2::Active
+            && facts.link_phase == SeriesMarketLinkPhaseV3::Active
             && facts.active_failure_sessions == 1
             && facts.link_session_binding_id == facts.failure_session_binding_id
             && facts.failure_market_instance_id == facts.root_market_instance_id
@@ -2307,540 +2200,48 @@ fn require_live_content_id(id: ContentId) -> Outcome<()> {
 
 #[cfg(test)]
 mod adversarial_tests {
-    use super::*;
-
-    fn content(byte: u8) -> ContentId {
-        ContentId::from_bytes([byte; 32])
-    }
-
-    fn key(byte: u8) -> Pubkey {
-        Pubkey::new_from_array([byte; 32])
-    }
-
-    fn funding_graph() -> (
-        SeriesFundingTermsV2Id,
-        SeriesFundingTermsV2Id,
-        SeriesFundingTermsV2Id,
-        SeriesFundingQuoteV5Id,
-        SeriesFundingQuoteV5Id,
-        SeriesAttachmentPlanV5Id,
-        SeriesAttachmentPlanV5Id,
-    ) {
-        (
-            SeriesFundingTermsV2Id::from_bytes([1; 32]),
-            SeriesFundingTermsV2Id::from_bytes([1; 32]),
-            SeriesFundingTermsV2Id::from_bytes([1; 32]),
-            SeriesFundingQuoteV5Id::from_bytes([2; 32]),
-            SeriesFundingQuoteV5Id::from_bytes([2; 32]),
-            SeriesAttachmentPlanV5Id::from_bytes([3; 32]),
-            SeriesAttachmentPlanV5Id::from_bytes([3; 32]),
-        )
-    }
-
-    fn slot10_facts() -> Slot10PreallocationFactsV5 {
-        Slot10PreallocationFactsV5 {
-            root_phase: MarketLifecyclePhaseV2::Active,
-            slot_root_account: key(1),
-            root_account: key(1),
-            slot_root_authentication_id: content(2),
-            root_authentication_id: content(2),
-            slot_market_instance_id: [3; 32],
-            root_market_instance_id: [3; 32],
-            slot_generation: 1,
-            root_generation: 1,
-            slot: MarketFoundationSlotV3::ResolutionV5,
-            slot_account: key(4),
-            resolution_account: key(4),
-            slot_foundation_schedule_id: [5; 32],
-            root_foundation_schedule_id: [5; 32],
-            slot_foundation_account_graph_id: [6; 32],
-            root_foundation_account_graph_id: [6; 32],
-            slot_foundation_transcript_id: [7; 32],
-            root_foundation_transcript_id: [7; 32],
-            slot_rent_refund_owner: [8; 32],
-            root_rent_refund_owner: [8; 32],
-            slot_neutral_lamport_sink: [9; 32],
-            root_neutral_lamport_sink: [9; 32],
-            slot_principal_lamports: 304,
-            minimum_rent_lamports: 304,
-            slot_observed_balance_lamports: 309,
-            expected_balance_lamports: 309,
-            root_resolution_account_id: key(4).to_bytes(),
-            expected_resolution_account: key(4),
-            resolution_owner: Pubkey::new_from_array(SYSTEM_PROGRAM_ID),
-            resolution_is_writable: true,
-            resolution_is_signer: false,
-            resolution_is_executable: false,
-            resolution_data_len: 0,
-            resolution_lamports: 309,
-        }
-    }
-
-    fn resolution_authority() -> ResolutionAuthorityFactsV5 {
-        ResolutionAuthorityFactsV5 {
-            root_phase: MarketLifecyclePhaseV2::Active,
-            root_resolution_semantic_id: ContentId::ZERO,
-            root_resolution_data_id: ContentId::ZERO,
-            root_resolution_activation_receipt_id: ContentId::ZERO,
-            link_phase: SeriesMarketLinkPhaseV2::Active,
-            active_failure_sessions: 1,
-            link_session_binding_id: [1; 32],
-            failure_session_binding_id: [1; 32],
-            failure_market_instance_id: [2; 32],
-            root_market_instance_id: [2; 32],
-            failure_generation: 3,
-            root_generation: 3,
-            failure_policy_binding_id: [4; 32],
-            root_failure_policy_binding_id: [4; 32],
-            failure_product_certificate_id: [5; 32],
-            product_certificate_id: [5; 32],
-            certificate_source_occurrence_id: [6; 32],
-            link_source_occurrence_id: [6; 32],
-            payout_active_len: 2,
-            root_outcome_count: 2,
-            registry_neutral_lamport_sink: [7; 32],
-            root_neutral_lamport_sink: [7; 32],
-        }
-    }
-
-    fn source_final_join() -> SourceResolutionFinalJoinFactsV5 {
-        SourceResolutionFinalJoinFactsV5 {
-            postwrite_id: content(1),
-            final_cell_authentication_id: content(13),
-            final_cell_state_id: content(2),
-            failure_cell_after_id: content(2),
-            activation_failure_receipt_id: content(3),
-            failure_receipt_id: content(3),
-            activation_product_certificate_id: content(4),
-            failure_product_certificate_id: content(4),
-            activation_market_instance_id: [5; 32],
-            failure_market_instance_id: [5; 32],
-            source_market_instance_id: [5; 32],
-            activation_generation: 6,
-            failure_generation: 6,
-            source_failure_policy_binding_id: [7; 32],
-            failure_policy_binding_id: [7; 32],
-            source_successful_handoff_id: [8; 32],
-            failure_source_handoff_id: [8; 32],
-            resolution_account_id: content(9),
-            resolution_semantic_id: content(10),
-            resolution_data_id: content(11),
-            source_resolution_input_id: content(12),
-            runtime_postwrite_id: content(14),
-        }
-    }
-
     #[test]
-    fn every_resolution_role_alias_refuses() {
-        let distinct = [
-            key(1),
-            key(2),
-            key(3),
-            key(4),
-            key(5),
-            key(6),
-            key(7),
-            key(8),
-            key(9),
-            key(10),
-            key(11),
-        ];
-        assert!(require_distinct_resolution_role_keys_v5(distinct).is_ok());
-        let mut left = 0usize;
-        while left < distinct.len() {
-            let mut right = left + 1;
-            while right < distinct.len() {
-                let mut aliased = distinct;
-                aliased[right] = aliased[left];
-                assert!(require_distinct_resolution_role_keys_v5(aliased).is_err());
-                right += 1;
-            }
-            left += 1;
-        }
-    }
-
-    #[test]
-    fn source_terminal_accounts_cannot_alias_any_resolution_protocol_role() {
-        let protocol = [
-            key(1),
-            key(2),
-            key(3),
-            key(4),
-            key(5),
-            key(6),
-            key(7),
-            key(8),
-            key(9),
-            key(10),
-            key(11),
-            key(12),
-            key(13),
-            key(14),
-            key(15),
-            key(16),
-            key(17),
-        ];
-        let external = [key(18), key(19), key(20)];
-        assert!(require_source_resolution_outer_aliases_v5(protocol, external).is_ok());
-        let mut protocol_index = 0usize;
-        while protocol_index < protocol.len() {
-            let mut external_index = 0usize;
-            while external_index < external.len() {
-                let mut aliased = external;
-                aliased[external_index] = protocol[protocol_index];
-                assert!(require_source_resolution_outer_aliases_v5(protocol, aliased).is_err());
-                external_index += 1;
-            }
-            protocol_index += 1;
-        }
-    }
-
-    #[test]
-    fn stale_root_and_link_snapshots_refuse_account_auth_or_body_substitution() {
-        assert!(require_exact_cached_account_v5(
-            key(1),
-            key(1),
-            content(2),
-            content(2),
-            &3_u64,
-            &3_u64,
-        )
-        .is_ok());
-        for _role in ["root", "link"] {
-            assert!(require_exact_cached_account_v5(
-                key(9),
-                key(1),
-                content(2),
-                content(2),
-                &3_u64,
-                &3_u64,
-            )
-            .is_err());
-            assert!(require_exact_cached_account_v5(
-                key(1),
-                key(1),
-                content(9),
-                content(2),
-                &3_u64,
-                &3_u64,
-            )
-            .is_err());
-            assert!(require_exact_cached_account_v5(
-                key(1),
-                key(1),
-                content(2),
-                content(2),
-                &9_u64,
-                &3_u64,
-            )
-            .is_err());
-        }
-    }
-
-    #[test]
-    fn registry_bundle_and_link_funding_graph_cannot_be_spliced() {
-        let valid = funding_graph();
-        assert!(require_current_series_funding_graph_v5(
-            valid.0, valid.1, valid.2, valid.3, valid.4, valid.5, valid.6,
-        )
-        .is_ok());
-        assert!(require_current_series_funding_graph_v5(
-            SeriesFundingTermsV2Id::from_bytes([9; 32]),
-            valid.1,
-            valid.2,
-            valid.3,
-            valid.4,
-            valid.5,
-            valid.6,
-        )
-        .is_err());
-        assert!(require_current_series_funding_graph_v5(
-            valid.0,
-            SeriesFundingTermsV2Id::from_bytes([9; 32]),
-            valid.2,
-            valid.3,
-            valid.4,
-            valid.5,
-            valid.6,
-        )
-        .is_err());
-        assert!(require_current_series_funding_graph_v5(
-            valid.0,
-            valid.1,
-            SeriesFundingTermsV2Id::from_bytes([9; 32]),
-            valid.3,
-            valid.4,
-            valid.5,
-            valid.6,
-        )
-        .is_err());
-        assert!(require_current_series_funding_graph_v5(
-            valid.0,
-            valid.1,
-            valid.2,
-            SeriesFundingQuoteV5Id::from_bytes([9; 32]),
-            valid.4,
-            valid.5,
-            valid.6,
-        )
-        .is_err());
-        assert!(require_current_series_funding_graph_v5(
-            valid.0,
-            valid.1,
-            valid.2,
-            valid.3,
-            valid.4,
-            SeriesAttachmentPlanV5Id::from_bytes([9; 32]),
-            valid.6,
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn slot10_refuses_reuse_wrong_role_rent_donation_and_recipients() {
-        assert!(require_slot10_preallocation_facts_v5(slot10_facts()).is_ok());
-        macro_rules! refuses {
-            ($field:ident, $value:expr) => {{
-                let mut facts = slot10_facts();
-                facts.$field = $value;
-                assert!(require_slot10_preallocation_facts_v5(facts).is_err());
-            }};
-        }
-        refuses!(root_phase, MarketLifecyclePhaseV2::Retiring);
-        refuses!(slot_root_account, key(99));
-        refuses!(slot_market_instance_id, [99; 32]);
-        refuses!(slot_generation, 2);
-        refuses!(slot, MarketFoundationSlotV3::FailureIntervalWork);
-        refuses!(slot_account, key(99));
-        refuses!(slot_root_authentication_id, content(99));
-        refuses!(slot_foundation_schedule_id, [99; 32]);
-        refuses!(slot_foundation_account_graph_id, [99; 32]);
-        refuses!(slot_foundation_transcript_id, [99; 32]);
-        refuses!(slot_principal_lamports, 303);
-        refuses!(slot_observed_balance_lamports, 310);
-        refuses!(slot_rent_refund_owner, [99; 32]);
-        refuses!(slot_neutral_lamport_sink, [99; 32]);
-        refuses!(root_resolution_account_id, [99; 32]);
-        refuses!(expected_resolution_account, key(99));
-        refuses!(resolution_owner, key(99));
-        refuses!(resolution_is_writable, false);
-        refuses!(resolution_is_signer, true);
-        refuses!(resolution_is_executable, true);
-        refuses!(resolution_data_len, 304);
-        refuses!(resolution_lamports, 310);
-    }
-
-    #[test]
-    fn payout_certificate_session_and_once_only_substitutions_refuse() {
-        assert!(require_resolution_authority_facts_v5(resolution_authority()).is_ok());
-        macro_rules! refuses {
-            ($field:ident, $value:expr) => {{
-                let mut facts = resolution_authority();
-                facts.$field = $value;
-                assert!(require_resolution_authority_facts_v5(facts).is_err());
-            }};
-        }
-        refuses!(root_phase, MarketLifecyclePhaseV2::Retiring);
-        refuses!(root_resolution_semantic_id, content(9));
-        refuses!(root_resolution_data_id, content(9));
-        refuses!(root_resolution_activation_receipt_id, content(9));
-        refuses!(link_phase, SeriesMarketLinkPhaseV2::Retiring);
-        refuses!(active_failure_sessions, 0);
-        refuses!(failure_session_binding_id, [9; 32]);
-        refuses!(failure_market_instance_id, [9; 32]);
-        refuses!(failure_generation, 9);
-        refuses!(failure_policy_binding_id, [9; 32]);
-        refuses!(failure_product_certificate_id, [9; 32]);
-        refuses!(certificate_source_occurrence_id, [9; 32]);
-        refuses!(payout_active_len, 3);
-        refuses!(registry_neutral_lamport_sink, [9; 32]);
-    }
-
-    #[test]
-    fn source_terminal_refuses_every_prewrite_or_cross_market_substitution() {
-        assert!(require_source_resolution_final_join_v5(source_final_join()).is_ok());
-        macro_rules! refuses {
-            ($field:ident, $value:expr) => {{
-                let mut facts = source_final_join();
-                facts.$field = $value;
-                assert!(require_source_resolution_final_join_v5(facts).is_err());
-            }};
-        }
-        refuses!(postwrite_id, ContentId::ZERO);
-        refuses!(final_cell_authentication_id, ContentId::ZERO);
-        refuses!(final_cell_state_id, content(99));
-        refuses!(activation_failure_receipt_id, content(99));
-        refuses!(activation_product_certificate_id, content(99));
-        refuses!(activation_market_instance_id, [99; 32]);
-        refuses!(source_market_instance_id, [99; 32]);
-        refuses!(activation_generation, 99);
-        refuses!(source_failure_policy_binding_id, [99; 32]);
-        refuses!(source_successful_handoff_id, [99; 32]);
-        refuses!(resolution_account_id, ContentId::ZERO);
-        refuses!(resolution_semantic_id, content(9));
-        refuses!(resolution_data_id, content(10));
-        refuses!(source_resolution_input_id, ContentId::ZERO);
-        refuses!(runtime_postwrite_id, ContentId::ZERO);
-    }
-
-    #[test]
-    fn hoard_and_claim_successors_cannot_substitute_authenticated_prestates() {
-        let hoard = CollateralId::from_bytes([1; 32]);
-        let claim = CollateralId::from_bytes([2; 32]);
-        assert!(require_liability_prestate_join_v5(true, true, hoard, hoard, claim, claim).is_ok());
-        assert!(
-            require_liability_prestate_join_v5(false, true, hoard, hoard, claim, claim).is_err()
-        );
-        assert!(
-            require_liability_prestate_join_v5(true, false, hoard, hoard, claim, claim).is_err()
-        );
-        assert!(require_liability_prestate_join_v5(
-            true,
-            true,
-            CollateralId::from_bytes([9; 32]),
-            hoard,
-            claim,
-            claim,
-        )
-        .is_err());
-        assert!(require_liability_prestate_join_v5(
-            true,
-            true,
-            hoard,
-            hoard,
-            CollateralId::from_bytes([9; 32]),
-            claim,
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn product_cell_and_market_runtime_writes_remain_in_one_atomic_resolution_entrypoint() {
+    fn current_resolution_is_a_physical_inactive_to_finalized_transition() {
         let source = include_str!("failure_market_resolution_v5.rs");
-        let outer = source
-            .split("fn resolve_failure_market_interval_v5")
-            .nth(1)
-            .expect("private resolution inner");
-        let activation = outer
-            .find("let activation = activate_failure_market_resolution_v5")
-            .expect("Product/Collateral activation stage");
-        let final_cell = outer
-            .find("let interval_after = write_failure_market_interval_resolution_plan_v2")
-            .expect("final Failure cell stage");
-        let runtime_write = outer
-            .find("let runtime_postwrite = write_failure_market_runtime_session_plan_v2")
-            .expect("shared Failure runtime stage");
-        let success = outer
-            .find("Ok((postwrite, interval_after, runtime_postwrite))")
-            .expect("success");
-        assert!(activation < final_cell && final_cell < runtime_write && runtime_write < success);
-        let forbidden_partial = concat!("pub(crate) fn activate_", "failure_market_resolution_v5");
-        assert!(!source.contains(forbidden_partial));
-    }
-
-    #[test]
-    fn sole_crate_visible_resolution_finishes_every_required_terminal_stage() {
-        let source = include_str!("failure_market_resolution_v5.rs");
-        assert_eq!(
-            source
-                .matches("pub(crate) fn resolve_failure_market_interval_and_source_v5")
-                .count(),
-            1
-        );
-        assert!(!source.contains("pub(crate) fn resolve_failure_market_interval_v5"));
-        let outer = source
-            .split("pub(crate) fn resolve_failure_market_interval_and_source_v5")
-            .nth(1)
-            .unwrap();
-        let failure = outer
-            .find("resolve_failure_market_interval_v5")
-            .expect("complete Product/Collateral/Failure stage");
-        let source_terminal = outer
-            .find("compose_source_resolution_terminal_v1")
-            .expect("Source terminal policy and liveness stage");
-        let archive_plan = outer
-            .find("plan_resolved_failure_market_archive_v5")
-            .expect("resolved append/reset plan");
-        let archive = outer
-            .find("archive_resolved_failure_market_interval_link_v3")
-            .expect("archive and Product link release");
-        let source_product_release = outer
-            .find("bind_source_resolution_product_release_v1")
-            .expect("successful Source-to-Product release binding");
-        let runtime_archive = outer
-            .find("write_failure_market_runtime_session_plan_v2")
-            .expect("durable runtime archive binding");
-        let source_close = outer
-            .find("close_successful_source_statistic_result_v1")
-            .expect("physical Source result close");
-        let recovery_close = outer
-            .find("close_failure_market_recovery_v2")
-            .expect("single-custody Recovery close");
-        let family_terminal = outer
-            .find("persist_resolved_failure_market_family_v2")
-            .expect("durable Failure-family seal");
-        let success = outer
-            .find("Ok(AuthenticatedResolvedFailureMarketLifecycleV5")
-            .expect("sole successful return");
-        assert!(failure < source_terminal);
-        assert!(source_terminal < archive_plan && archive_plan < archive);
-        assert!(archive < source_product_release);
-        assert!(source_product_release < runtime_archive && runtime_archive < source_close);
-        assert!(source_close < recovery_close);
-        assert!(recovery_close < family_terminal && family_terminal < success);
-        assert!(outer.contains("authenticate_writable_failure_resolution_link_v3"));
-        assert!(outer.contains("authenticate_series_market_link_v2"));
-        assert!(outer.contains("resolved_root.authentication_id()"));
-    }
-
-    #[test]
-    fn late_terminal_refusal_is_inside_the_single_svm_rollback_boundary() {
-        let source = include_str!("failure_market_resolution_v5.rs");
-        let outer = source
-            .split("pub(crate) fn resolve_failure_market_interval_and_source_v5")
-            .nth(1)
-            .expect("sole terminal outer");
-        for stage in [
-            "resolve_failure_market_interval_v5",
-            "compose_source_resolution_terminal_v1",
-            "archive_resolved_failure_market_interval_link_v3",
-            "bind_source_resolution_product_release_v1",
+        let production = source.split("#[cfg(test)]").next().expect("production");
+        for required in [
+            "AuthenticatedInactiveFailureResolutionV5",
+            "write_collateral_activation_postimages_v6",
+            "authenticate_current_market_resolution_activation_postwrite_v5",
+            "record_current_market_resolution_activation_v3",
+            "AuthenticatedSeriesFundingAccountV5",
+            "archive_resolved_failure_market_interval_link_v4",
+            "write_failure_market_runtime_session_plan_v3",
+            "persist_resolved_failure_market_family_v3",
+        ] {
+            assert!(production.contains(required), "missing current owner: {required}");
+        }
+        for forbidden in [
+            "allocate_data(",
+            "assign_data(",
+            "AuthenticatedMarketFoundationPreallocationV3",
+            "MarketResolutionActivationV2",
+            "AuthenticatedMarketLifecycleRootV2",
+            "AuthenticatedSeriesMarketLinkV2",
             "write_failure_market_runtime_session_plan_v2",
-            "close_successful_source_statistic_result_v1",
-            "close_failure_market_recovery_v2",
-            "persist_resolved_failure_market_family_v2",
         ] {
-            assert!(outer.contains(stage), "missing atomic stage {stage}");
+            assert!(!production.contains(forbidden), "obsolete authority: {forbidden}");
         }
-        assert!(!source.contains("pub(crate) fn resolve_failure_market_interval_v5"));
-        assert!(!source.contains("pub(crate) fn activate_failure_market_resolution_v5"));
     }
 
     #[test]
-    fn resolved_archive_plan_accepts_only_the_final_cell_and_source_terminal() {
+    fn finalization_evidence_binds_physical_product_and_failure_owners() {
         let source = include_str!("failure_market_resolution_v5.rs");
-        let planner = source
-            .split("fn plan_resolved_failure_market_archive_v5")
-            .nth(1)
-            .and_then(|value| {
-                value.split("/// Stable byte committed for the only disposition")
-                    .next()
-            })
-            .expect("resolved archive planner");
-        for predicate in [
-            "resolution.cell_authentication_after() == interval.cell_authentication_id()",
-            "resolution.cell_state_after()",
-            "cell.disposition() == FailureMarketIntervalCellDispositionV2::Resolved",
-            "terminal.disposition == FailureMarketIntervalTerminalDispositionV2::Resolved",
-            "terminal.session_terminal_receipt_id.bytes()",
-            "failure_resolution.id().bytes()",
-            "source_terminal.id() != ContentId::ZERO",
-            "source_resolution_postwrite_id == resolution.id()",
-            "plan_append_failure_market_interval_history_v2",
-            "plan_reset_failure_market_interval_cell_v2",
-            "reset.append_receipt_id() == append.id()",
+        let production = source.split("#[cfg(test)]").next().expect("production");
+        for required in [
+            "inactive.authentication_id()",
+            "funding.authentication_id()",
+            "foundation_account_graph_id",
+            "foundation().transcript_id",
+            "failure_resolution.id()",
+            "collateral_postwrite.receipt_id()",
         ] {
-            assert!(planner.contains(predicate), "missing archive guard {predicate}");
+            assert!(production.contains(required), "missing evidence edge: {required}");
         }
     }
 }

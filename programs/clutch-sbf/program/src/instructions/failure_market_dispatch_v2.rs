@@ -575,18 +575,15 @@ mod adversarial_contract_tests {
         let resolve = [1_u8; FAILURE_MARKET_RESOLVE_PAYLOAD_BYTES_V2];
         assert!(matches!(
             decode_payload_v2(RecoveryAction::ResolveIntervalConsensus, &resolve),
-            Ok(FailureMarketActionPayloadV2::Resolve { .. })
+            Ok(FailureMarketActionPayloadV2::Resolve)
         ));
         assert!(decode_payload_v2(
             RecoveryAction::BeginIntervalConsensus,
             &session[..session.len() - 1]
         )
         .is_err());
-        assert!(decode_payload_v2(
-            RecoveryAction::ResolveIntervalConsensus,
-            &resolve[..resolve.len() - 1]
-        )
-        .is_err());
+        assert_eq!(resolve.len(), 0);
+        assert!(decode_payload_v2(RecoveryAction::ResolveIntervalConsensus, &[0]).is_err());
     }
 
     #[test]

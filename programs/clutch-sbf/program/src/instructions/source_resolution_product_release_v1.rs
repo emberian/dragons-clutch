@@ -8,8 +8,8 @@
 use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::failure_market_resolution_v5::AuthenticatedFailureMarketResolutionPostwriteV5;
-use crate::instructions::product_series_current::{
-    AuthenticatedSeriesFailureSessionReleaseV3, FailureSessionReleaseDispositionV3,
+use crate::instructions::product_failure_link_v3_current::{
+    AuthenticatedSeriesFailureSessionReleaseV4, FailureSessionReleaseDispositionV4,
 };
 use crate::instructions::product_source_current::AuthenticatedSourceResolutionInputV4;
 use crate::instructions::source_terminal_resolution_v5::AuthenticatedSourceResolutionTerminalV1;
@@ -145,7 +145,7 @@ pub(crate) fn bind_source_resolution_product_release_v1<
     source: AuthenticatedSourceResolutionInputV4,
     terminal: AuthenticatedSourceResolutionTerminalV1,
     resolution: AuthenticatedFailureMarketResolutionPostwriteV5,
-    release: &AuthenticatedSeriesFailureSessionReleaseV3,
+    release: &AuthenticatedSeriesFailureSessionReleaseV4,
     authority: &A,
 ) -> Outcome<AuthenticatedSourceResolutionProductReleaseV1> {
     let route = source.route();
@@ -224,7 +224,7 @@ pub(crate) fn bind_source_resolution_product_release_v1<
         facts.product_release_preauthorization_id,
     ];
     require(
-        release.disposition() == FailureSessionReleaseDispositionV3::Resolved
+        release.disposition() == FailureSessionReleaseDispositionV4::Resolved
             && release.link_account() == resolution.activation().series_link()
             && source_id(release.release_link_preauthorization_id())
                 == resolution.activation().series_link_preauthorization_id()
@@ -286,8 +286,8 @@ mod adversarial_tests {
             .nth(1)
             .expect("successful current release bridge");
         assert!(compose.contains("AuthenticatedSourceResolutionInputV4"));
-        assert!(compose.contains("AuthenticatedSeriesFailureSessionReleaseV3"));
-        assert!(compose.contains("FailureSessionReleaseDispositionV3::Resolved"));
+        assert!(compose.contains("AuthenticatedSeriesFailureSessionReleaseV4"));
+        assert!(compose.contains("FailureSessionReleaseDispositionV4::Resolved"));
         assert!(!compose.contains("SourceAbsent"));
         assert!(!compose.contains("SourceRefused"));
     }
