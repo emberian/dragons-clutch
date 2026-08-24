@@ -1156,6 +1156,15 @@ const SPONSOR_HALT: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
     meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::SeriesObligation, DealerMetaOwnerV1::SelfProgram, false, false),
 ];
 
 const TIMED_CLOSE: &[DealerMetaSpecV1] = &[

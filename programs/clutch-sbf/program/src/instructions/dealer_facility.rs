@@ -25,7 +25,8 @@ use clutch_dealer_runtime_contract::{
     prepare_facility_initialization_v3, prepare_first_lp_page_v2,
     prepare_lapse_epoch_v3, project_covered_dealer_position_v1,
     prepare_lp_contribution_v2, prepare_lp_withdrawal_v2, prepare_next_lp_page_v2,
-    prepare_refund_cancelled_sponsor_v3, CoveredDealerSelectionContextV1,
+    prepare_refund_cancelled_sponsor_v3, prepare_sponsor_halt_dealer_v3,
+    CoveredDealerSelectionContextV1,
     CoveredDealerRowAssetTransitionV2, CoveredDealerSelectionV1, CoveredDealerTerminalV2,
     DealerActionReceiptV1, DealerAssetEndpointKindV1, DealerAssetTransferBundleV2,
     DealerAssetTransferPostObservationV2,
@@ -1026,6 +1027,27 @@ fn authenticate_runtime_bundle(
     [RuntimeCompartmentV1; RUNTIME_COMPARTMENT_COUNT_V1],
     DealerRuntimeLivenessBindingV1,
 )> {
+    authenticate_runtime_bundle_with_access(
+        program_id,
+        dependency,
+        policy_account,
+        compartments,
+        Some(writable_index),
+    )
+}
+
+#[inline(never)]
+fn authenticate_runtime_bundle_with_access(
+    program_id: &Pubkey,
+    dependency: &DealerFundedDependenciesV2,
+    policy_account: &AccountInfo<'_>,
+    compartments: &[AccountInfo<'_>],
+    writable_index: Option<usize>,
+) -> Outcome<(
+    RuntimeLivenessPolicyV1,
+    [RuntimeCompartmentV1; RUNTIME_COMPARTMENT_COUNT_V1],
+    DealerRuntimeLivenessBindingV1,
+)> {
     require(
         dependency.bindings.runtime_liveness_program_id.bytes() == program_id.to_bytes(),
         ClutchError::WrongProgramOwner,
@@ -1075,9 +1097,10 @@ fn authenticate_runtime_bundle(
             !account.executable && !account.is_signer,
             ClutchError::MismatchedState,
         )?;
+        let expected_writable = writable_index == Some(index);
         require(
-            account.is_writable == (index == writable_index),
-            if index == writable_index {
+            account.is_writable == expected_writable,
+            if expected_writable {
                 ClutchError::NotWritable
             } else {
                 ClutchError::UnexpectedWritable
@@ -3400,6 +3423,113 @@ fn initialize_facility(
         DEALER_STATE_V2_ACCOUNT_VERSION,
         state_bump,
         &prepared.state,
+    )
+}
+
+/// Enter UnwindOnly under the exact immutable sponsor signature while
+/// preserving the facility-lifetime Product Series obligation. This path is
+/// deliberately balance-neutral: it never touches Hoard custody, fee state,
+/// or a liveness compartment.
+#[inline(never)]
+fn sponsor_halt(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload_bytes: &[u8],
+) -> Outcome<()> {
+    let payload = DealerRuntimePayloadV1::decode(DealerFacilityAction::SponsorHalt, payload_bytes)
+        .map_err(dealer_fault)?;
+    require(
+        sequence == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[1])?;
+    let authenticated_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
+    let state_v3 = *authenticated_state.state();
+    let state = state_v3.base;
+    require(
+        state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
+        ClutchError::MismatchedState,
+    )?;
+    let obligation = authenticate_live_series_obligation_for_state_v3(
+        program_id,
+        &accounts[15],
+        &accounts[2],
+        &state_v3,
+    )?;
+    let (position_binding, position, replay, replay_binding) = authenticate_position_and_replay(
+        program_id,
+        &accounts[2],
+        &accounts[3],
+        &accounts[4],
+        &policy,
+        &state,
+        false,
+    )?;
+    require(
+        replay.next_transition_ordinal() == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    let dependency = authenticate_dependency(program_id, &accounts[5], state.facility_id)?;
+    let schedule = authenticate_schedule(program_id, &accounts[6])?;
+    let (runtime_policy, _runtime_states, runtime_binding) =
+        authenticate_runtime_bundle_with_access(
+            program_id,
+            &dependency,
+            &accounts[7],
+            &accounts[8..15],
+            None,
+        )?;
+    validate_runtime_dependency_join(
+        program_id,
+        &accounts[2],
+        &policy,
+        &state,
+        &position_binding,
+        &dependency,
+        &schedule,
+        runtime_policy,
+        runtime_binding,
+    )?;
+    let prepared = prepare_sponsor_halt_dealer_v3(
+        &policy,
+        &position_binding,
+        &state,
+        id(accounts[2].key),
+        &dependency,
+        &schedule,
+        &runtime_binding,
+        id(accounts[0].key),
+        &position,
+        &replay,
+        replay_binding,
+    )
+    .map_err(dealer_fault)?;
+    let state_after = state_v3
+        .with_base(prepared.state_after)
+        .map_err(dealer_fault)?;
+    write_dealer_body(
+        &accounts[2],
+        DEALER_STATE_V3_ACCOUNT_TAG,
+        DEALER_STATE_V3_ACCOUNT_VERSION,
+        authenticated_state.bump(),
+        &state_after,
+    )?;
+    prepared
+        .replay
+        .replay_post()
+        .encode_into(&mut accounts[4].data.borrow_mut())
+        .map_err(dealer_fault)?;
+    let observed_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
+    let observed_obligation =
+        authenticate_dealer_series_obligation_v1(program_id, &accounts[15], false)?;
+    let observed_replay = DealerFacilityReplayV1::decode(&accounts[4].data.borrow())
+        .map_err(dealer_fault)?;
+    require(
+        observed_state.state() == &state_after
+            && observed_obligation.binding() == &obligation
+            && observed_replay == prepared.replay.replay_post(),
+        ClutchError::MismatchedState,
     )
 }
 
@@ -6881,6 +7011,7 @@ pub fn process(
             | DealerFacilityAction::Deliver
             | DealerFacilityAction::FinalizeSettlement
             | DealerFacilityAction::AbortBeforeCollection
+            | DealerFacilityAction::SponsorHalt
     );
     if !implemented {
         return super::dealer_runtime::process_reserved_disabled(action);
@@ -6923,6 +7054,9 @@ pub fn process(
         DealerFacilityAction::FinalizeSettlement
         | DealerFacilityAction::AbortBeforeCollection => {
             finalize_or_abort_lease_pot(program_id, accounts, sequence, action, payload)
+        }
+        DealerFacilityAction::SponsorHalt => {
+            sponsor_halt(program_id, accounts, sequence, payload)
         }
         _ => Err(ClutchError::UnsupportedInstruction.into()),
     }
@@ -7010,6 +7144,52 @@ mod select_begin_adversarial_tests {
             DEALER_FAMILY_VERSION,
             DealerFacilityAction::SelectLeaseAndBegin.tag(),
         ));
+    }
+}
+
+#[cfg(test)]
+mod sponsor_halt_adversarial_tests {
+    use super::DealerRuntimePayloadV1;
+    use crate::instructions::dealer_runtime::{meta_contract_v1, DealerMetaRoleV1};
+    use clutch_solana_layout::registry::DealerFacilityAction;
+
+    #[test]
+    fn sponsor_halt_requires_the_complete_immutable_runtime_and_product_child() {
+        let mut payload = [0u8; 16];
+        payload[0..8].copy_from_slice(&1u64.to_le_bytes());
+        payload[8..16].copy_from_slice(&2u64.to_le_bytes());
+        let decoded = DealerRuntimePayloadV1::decode(DealerFacilityAction::SponsorHalt, &payload)
+            .unwrap();
+        let metas = meta_contract_v1(DealerFacilityAction::SponsorHalt, decoded).unwrap();
+        assert_eq!(metas.len(), 16);
+        assert_eq!(metas[7].role, DealerMetaRoleV1::LivenessPolicy);
+        assert_eq!(metas[8].role, DealerMetaRoleV1::LivenessSource);
+        assert_eq!(metas[14].role, DealerMetaRoleV1::LivenessRecovery);
+        assert_eq!(metas[15].role, DealerMetaRoleV1::SeriesObligation);
+        assert!(!metas[15].writable);
+    }
+
+    #[test]
+    fn sponsor_halt_preserves_the_exact_state_v3_obligation_and_replay() {
+        let source = include_str!("dealer_facility.rs");
+        let handler = source
+            .split("fn sponsor_halt")
+            .nth(1)
+            .and_then(|value| value.split("fn bind_epoch").next())
+            .expect("SponsorHalt handler");
+        for guard in [
+            "authenticate_dealer_state_v3",
+            "authenticate_live_series_obligation_for_state_v3",
+            "authenticate_runtime_bundle_with_access",
+            "validate_runtime_dependency_join",
+            "prepare_sponsor_halt_dealer_v3",
+            ".with_base(prepared.state_after)",
+            "DEALER_STATE_V3_ACCOUNT_VERSION",
+            "observed_obligation.binding() == &obligation",
+            "observed_replay == prepared.replay.replay_post()",
+        ] {
+            assert!(handler.contains(guard), "missing sponsor-halt guard {guard}");
+        }
     }
 }
 
