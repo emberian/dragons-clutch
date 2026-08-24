@@ -7,7 +7,8 @@
 //! contract to a count-and-sum check.
 
 use crate::projection::{
-    CertifiedRecipientAllocationV2, SelectedOwnerFeeBookHashV1, SelectedOwnerFeeBookV1,
+    CertifiedRecipientAllocationAccessV2, CertifiedRecipientAllocationV2,
+    SelectedOwnerFeeBookHashV1, SelectedOwnerFeeBookV1,
 };
 use crate::selected::SelectedCompositeFeeV1;
 use crate::intent::RecipientAllocationIntentV1;
@@ -378,26 +379,27 @@ impl FeeRetirementAccumulatorV1 {
 
     /// Fold one exact maker credit in certified recipient order. The adapter
     /// must first authenticate the Position, Replay, and cash-pot successors.
-    pub fn fold_maker_distribution<H: FeeRetirementHashV1>(
+    pub fn fold_maker_distribution<H: FeeRetirementHashV1, C: CertifiedRecipientAllocationAccessV2>(
         mut self,
-        certified: &CertifiedRecipientAllocationV2,
+        certified: &C,
         transition: FeePositionCreditTransitionV1,
         hash: &H,
     ) -> Result<Self> {
         self.validate_open()?;
         transition.validate()?;
-        let allocation = certified.allocation();
         let ordinal = usize::from(self.processed_maker_count);
         if self.processed_owner_count != self.expected_owner_count
             || certified.owner_fee_book_data_id() != self.owner_fee_book_data_id
             || certified.owner_order_set_digest() != self.owner_order_set_digest
             || certified.owner_count() != u16::from(self.expected_owner_count)
-            || allocation.fee_record() != self.fee_record
-            || allocation.maker_len() != self.expected_maker_count
+            || certified.fee_record() != self.fee_record
+            || certified.maker_len() != self.expected_maker_count
             || ordinal >= usize::from(self.expected_maker_count)
-            || transition.position_account != allocation.maker_positions()[ordinal]
+            || transition.position_account
+                != certified.maker_position(self.processed_maker_count)?
             || transition.cash_pot_account != self.settlement_cash_pot
-            || transition.credited_atoms != allocation.maker_rebate_atoms()[ordinal]
+            || transition.credited_atoms
+                != certified.maker_rebate_atoms(self.processed_maker_count)?
         {
             return Err(Error::MismatchedBinding);
         }
@@ -422,9 +424,9 @@ impl FeeRetirementAccumulatorV1 {
 
     /// Fold the sole treasury Position credit after every maker row. Executor
     /// allocation is explicitly absent in the current selected-record schema.
-    pub fn fold_treasury_distribution<H: FeeRetirementHashV1>(
+    pub fn fold_treasury_distribution<H: FeeRetirementHashV1, C: CertifiedRecipientAllocationAccessV2>(
         mut self,
-        certified: &CertifiedRecipientAllocationV2,
+        certified: &C,
         transition: FeePositionCreditTransitionV1,
         hash: &H,
         selected: &SelectedCompositeFeeV1,
@@ -432,17 +434,16 @@ impl FeeRetirementAccumulatorV1 {
     ) -> Result<(Self, TreasuryDistributionAuthorizationV1)> {
         self.validate_open()?;
         transition.validate()?;
-        let allocation = certified.allocation();
         if self.processed_owner_count != self.expected_owner_count
             || self.processed_maker_count != self.expected_maker_count
             || self.treasury_distributed
             || certified.owner_fee_book_data_id() != self.owner_fee_book_data_id
             || certified.owner_order_set_digest() != self.owner_order_set_digest
-            || allocation.fee_record() != self.fee_record
-            || allocation.executor_atoms() != 0
+            || certified.fee_record() != self.fee_record
+            || certified.executor_atoms() != 0
             || transition.position_account != self.treasury_position
             || transition.cash_pot_account != self.settlement_cash_pot
-            || transition.credited_atoms != allocation.treasury_atoms()
+            || transition.credited_atoms != certified.treasury_atoms()
             || selected.fee_record() != self.fee_record
             || selected.selected_candidate() != self.settlement_candidate
             || selected.treasury_position() != self.treasury_position
@@ -480,11 +481,11 @@ impl FeeRetirementAccumulatorV1 {
 
     /// Seal the exact global closure set after every owner row has matched the
     /// complete-book commitment.
-    pub fn complete<H: FeeRetirementHashV1>(
+    pub fn complete<H: FeeRetirementHashV1, C: CertifiedRecipientAllocationAccessV2>(
         self,
         accumulator_closure: ExternalFeeAccountClosureV1,
         global: CandidateFeeAccountClosuresV1,
-        certified: &CertifiedRecipientAllocationV2,
+        certified: &C,
         hash: &H,
     ) -> Result<CompletedFeeRetirementV1> {
         self.validate_open()?;
@@ -496,10 +497,9 @@ impl FeeRetirementAccumulatorV1 {
             || certified.owner_fee_book_data_id() != self.owner_fee_book_data_id
             || certified.owner_order_set_digest() != self.owner_order_set_digest
             || certified.owner_count() != u16::from(self.expected_owner_count)
-            || self.distributed_maker_atoms
-                != certified.allocation().maker_rebate_total()
-            || self.distributed_treasury_atoms != certified.allocation().treasury_atoms()
-            || certified.allocation().executor_atoms() != 0
+            || self.distributed_maker_atoms != certified.maker_rebate_total()
+            || self.distributed_treasury_atoms != certified.treasury_atoms()
+            || certified.executor_atoms() != 0
         {
             return Err(Error::MissingParticipant);
         }
