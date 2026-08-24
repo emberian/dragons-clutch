@@ -21,6 +21,7 @@ use clutch_product_series::{
 pub mod selection_v1;
 pub mod settlement_v1;
 pub mod codec_v1;
+pub mod fee_v1;
 
 /// Maximum funded Reservations ever admitted by one minimal Direct root.
 pub const MAX_DIRECT_RESERVATIONS_V1: u8 = 2;
@@ -42,8 +43,6 @@ pub const MAX_DIRECT_REFUND_RECIPIENTS_V1: usize = 5;
 const FOUNDATION_RECEIPT_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/foundation-receipt/v1\0";
 const DIRECT_EPOCH_SEMANTICS_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/epoch-semantics/v1\0";
-const DIRECT_ZERO_FEE_VENUE_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/direct/zero-fee-venue/v1\0";
 const DIRECT_SCHEDULE_POLICY_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/schedule-policy/v1\0";
 const ACTION_TRANSCRIPT_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/action-transcript/v1\0";
@@ -429,10 +428,24 @@ pub struct DirectMarketBindingV1 {
     /// Direct window identity derived before resolution from the immutable
     /// Market, General owner, and complete schedule.
     pub direct_epoch_semantics_id: [u8; 32],
-    /// Exact compile-time zero-fee policy selected by GenesisV2.
-    pub fee_policy_id: [u8; 32],
-    /// Canonical Direct zero-rate/envelope venue shape.
+    /// Exact revenue-policy identity selected by GenesisV2.
+    pub revenue_policy_id: [u8; 32],
+    /// Exact current General batch-policy identity.
+    pub batch_policy_id: [u8; 32],
+    /// Canonical Direct projection of both complete fee owners.
     pub direct_fee_shape_id: [u8; 32],
+    /// Revenue treasury owner, or the authenticated unset sentinel at zero fee.
+    pub fee_treasury_owner: [u8; 32],
+    /// Composite dispersion rate numerator.
+    pub fee_dispersion_bps: u32,
+    /// Composite quotient-range rate numerator.
+    pub fee_floor_range_bps: u32,
+    /// Standing-maker split numerator.
+    pub fee_maker_rebate_num: u32,
+    /// Treasury split numerator.
+    pub fee_treasury_num: u32,
+    /// Exact split denominator.
+    pub fee_split_den: u32,
     /// Product-selected candidate lifecycle policy.
     pub candidate_lifecycle_policy_id: [u8; 32],
     /// Product-selected present-funded candidate liveness policy.
@@ -495,7 +508,8 @@ impl DirectMarketBindingV1 {
             self.collateral_policy_id,
             self.collateral_release_id,
             self.direct_epoch_semantics_id,
-            self.fee_policy_id,
+            self.revenue_policy_id,
+            self.batch_policy_id,
             self.direct_fee_shape_id,
             self.candidate_lifecycle_policy_id,
             self.candidate_liveness_policy_id,
@@ -514,6 +528,7 @@ impl DirectMarketBindingV1 {
             require_live(semantic_ids[index])?;
             index += 1;
         }
+        self.fee_policy().validate()?;
         require_distinct(&[
             self.resolution_account,
             self.product_root_account,
@@ -524,6 +539,20 @@ impl DirectMarketBindingV1 {
             self.general_market_runtime,
             self.neutral_lamport_sink,
         ])
+    }
+
+    /// Reconstruct the exact copied fee-policy projection.
+    pub const fn fee_policy(self) -> fee_v1::DirectFeePolicyV1 {
+        fee_v1::DirectFeePolicyV1 {
+            batch_policy_id: self.batch_policy_id,
+            revenue_policy_id: self.revenue_policy_id,
+            treasury_owner: self.fee_treasury_owner,
+            dispersion_bps: self.fee_dispersion_bps,
+            floor_range_bps: self.fee_floor_range_bps,
+            maker_rebate_num: self.fee_maker_rebate_num,
+            treasury_num: self.fee_treasury_num,
+            split_den: self.fee_split_den,
+        }
     }
 }
 
@@ -633,76 +662,6 @@ impl DirectFinalResolutionV1 {
             return Err(DirectMarketErrorV1::MismatchedBinding);
         }
         Ok(())
-    }
-}
-
-/// Exact Direct venue shape which can express only zero fees.
-///
-/// Revenue allocation remains owned by the canonical RevenuePolicyV1 digest;
-/// this type owns only the Direct rate and signed-envelope coordinates that
-/// are absent from b4 Reservations.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectZeroFeeVenueV1 {
-    /// Existing canonical RevenuePolicyV1 identity selected by GenesisV2.
-    pub revenue_policy_id: [u8; 32],
-    /// Buyer fee rate in basis points; exactly zero.
-    pub buyer_fee_bps: u32,
-    /// Seller fee rate in basis points; exactly zero.
-    pub seller_fee_bps: u32,
-    /// Maximum signed buyer fee envelope; exactly zero.
-    pub max_buyer_fee_atoms: u64,
-    /// Maximum signed seller fee envelope; exactly zero.
-    pub max_seller_fee_atoms: u64,
-}
-
-impl DirectZeroFeeVenueV1 {
-    /// Construct the only admitted shape from the existing revenue owner.
-    pub fn canonical() -> Result<Self, DirectMarketErrorV1> {
-        let revenue_policy_id = clutch_batch_policy_identity::revenue_policy_v1::revenue_policy_digest(
-            &clutch_batch_policy_identity::revenue_policy_v1::REVENUE_POLICY_V1,
-        )
-        .map_err(|_| DirectMarketErrorV1::MismatchedBinding)?
-        .0;
-        let value = Self {
-            revenue_policy_id,
-            buyer_fee_bps: 0,
-            seller_fee_bps: 0,
-            max_buyer_fee_atoms: 0,
-            max_seller_fee_atoms: 0,
-        };
-        value.validate()?;
-        Ok(value)
-    }
-
-    /// Refuse every nonzero rate or fee envelope.
-    pub fn validate(self) -> Result<(), DirectMarketErrorV1> {
-        require_live(self.revenue_policy_id)?;
-        if self.buyer_fee_bps != 0
-            || self.seller_fee_bps != 0
-            || self.max_buyer_fee_atoms != 0
-            || self.max_seller_fee_atoms != 0
-        {
-            return Err(DirectMarketErrorV1::MismatchedBinding);
-        }
-        Ok(())
-    }
-
-    /// Canonical identity committed by the Direct root and every transcript.
-    pub fn semantic_id<B: DirectHashBackendV1>(
-        self,
-        backend: &B,
-    ) -> Result<[u8; 32], DirectMarketErrorV1> {
-        self.validate()?;
-        let id = backend.sha256_parts(&[
-            DIRECT_ZERO_FEE_VENUE_DOMAIN_V1,
-            &self.revenue_policy_id,
-            &self.buyer_fee_bps.to_le_bytes(),
-            &self.seller_fee_bps.to_le_bytes(),
-            &self.max_buyer_fee_atoms.to_le_bytes(),
-            &self.max_seller_fee_atoms.to_le_bytes(),
-        ]);
-        require_live(id)?;
-        Ok(id)
     }
 }
 
@@ -1003,8 +962,14 @@ impl DirectMarketRootV1 {
             &[self.binding.outcome_count], &self.binding.realm_id,
             &self.binding.collateral_profile_id, &self.binding.collateral_policy_id,
             &self.binding.collateral_release_id, &self.binding.resolution_account,
-            &self.binding.direct_epoch_semantics_id, &self.binding.fee_policy_id,
-            &self.binding.direct_fee_shape_id,
+            &self.binding.direct_epoch_semantics_id, &self.binding.revenue_policy_id,
+            &self.binding.batch_policy_id, &self.binding.direct_fee_shape_id,
+            &self.binding.fee_treasury_owner,
+            &self.binding.fee_dispersion_bps.to_le_bytes(),
+            &self.binding.fee_floor_range_bps.to_le_bytes(),
+            &self.binding.fee_maker_rebate_num.to_le_bytes(),
+            &self.binding.fee_treasury_num.to_le_bytes(),
+            &self.binding.fee_split_den.to_le_bytes(),
             &self.binding.candidate_lifecycle_policy_id,
             &self.binding.candidate_liveness_policy_id,
             &self.binding.direct_schedule_policy_id,
@@ -1559,6 +1524,7 @@ pub trait AuthenticatedDirectFoundationV1 {
         &self, _product_root: &MarketLifecycleRootV1,
         _founder_link: &SeriesMarketLinkV1,
         _compiler_bundle: &CompiledProductSeriesBundleV5,
+        _fee_policy: fee_v1::DirectFeePolicyV1,
         _binding: DirectMarketBindingV1,
         _schedule: DirectScheduleV1, _foundation_slot: u64,
         _root_rent: DirectRentOwnerV1,
@@ -1618,6 +1584,7 @@ pub fn prepare_direct_foundation_v1<
     authority: &A, product_root: &MarketLifecycleRootV1,
     founder_link: &SeriesMarketLinkV1,
     compiler_bundle: &CompiledProductSeriesBundleV5,
+    fee_policy: fee_v1::DirectFeePolicyV1,
     binding: DirectMarketBindingV1,
     schedule: DirectScheduleV1, foundation_slot: u64,
     root_rent: DirectRentOwnerV1,
@@ -1676,9 +1643,9 @@ pub fn prepare_direct_foundation_v1<
     {
         return Err(DirectMarketErrorV1::MismatchedBinding);
     }
-    let zero_fee = DirectZeroFeeVenueV1::canonical()?;
-    if binding.fee_policy_id != zero_fee.revenue_policy_id
-        || binding.direct_fee_shape_id != zero_fee.semantic_id(backend)?
+    fee_policy.validate()?;
+    if binding.fee_policy() != fee_policy
+        || binding.direct_fee_shape_id != fee_policy.semantic_id(backend)?
         || binding.direct_schedule_policy_id != direct_schedule_policy_id_v1(binding, backend)?
         || binding.direct_epoch_semantics_id
             != direct_epoch_semantics_id_v1(binding, schedule, backend)?
@@ -1689,6 +1656,7 @@ pub fn prepare_direct_foundation_v1<
         product_root,
         founder_link,
         compiler_bundle,
+        fee_policy,
         binding,
         schedule,
         foundation_slot,
@@ -1701,8 +1669,14 @@ pub fn prepare_direct_foundation_v1<
         &binding.market_instance_id, &binding.generation.to_le_bytes(), &[binding.outcome_count],
         &binding.realm_id, &binding.collateral_profile_id, &binding.collateral_policy_id,
         &binding.collateral_release_id, &binding.resolution_account,
-        &binding.direct_epoch_semantics_id, &binding.fee_policy_id,
-        &binding.direct_fee_shape_id,
+        &binding.direct_epoch_semantics_id, &binding.revenue_policy_id,
+        &binding.batch_policy_id, &binding.direct_fee_shape_id,
+        &binding.fee_treasury_owner,
+        &binding.fee_dispersion_bps.to_le_bytes(),
+        &binding.fee_floor_range_bps.to_le_bytes(),
+        &binding.fee_maker_rebate_num.to_le_bytes(),
+        &binding.fee_treasury_num.to_le_bytes(),
+        &binding.fee_split_den.to_le_bytes(),
         &binding.candidate_lifecycle_policy_id, &binding.candidate_liveness_policy_id,
         &binding.direct_schedule_policy_id,
         &binding.product_root_account, &binding.product_market_binding_id,

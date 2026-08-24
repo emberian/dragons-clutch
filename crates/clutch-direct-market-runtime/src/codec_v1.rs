@@ -25,13 +25,13 @@ use crate::{
 };
 
 /// Exact semantic bytes inside the `0xb1/1` frame.
-pub const DIRECT_MARKET_ROOT_BODY_BYTES_V1: usize = 1_142;
+pub const DIRECT_MARKET_ROOT_BODY_BYTES_V1: usize = 1_226;
 /// Exact semantic bytes inside the `0xb2/1` frame.
 pub const DIRECT_SELECTION_BODY_BYTES_V1: usize = 1_497;
 /// Exact semantic bytes inside the `0xb3/1` frame.
 pub const DIRECT_ACTION_REPLAY_BODY_BYTES_V1: usize = 321;
 /// Exact semantic bytes inside the `0xb4/1` frame.
-pub const DIRECT_RESERVATION_BODY_BYTES_V1: usize = 453;
+pub const DIRECT_RESERVATION_BODY_BYTES_V1: usize = 469;
 
 /// Encode the sole canonical Direct root body.
 pub fn encode_direct_market_root_body_v1(
@@ -159,6 +159,8 @@ pub fn encode_direct_reservation_body_v1(
     writer.u64(value.price_scale)?;
     writer.u64(value.reserved_cash_atoms)?;
     writer.u64(value.reserved_eggs)?;
+    writer.u64(value.maximum_fee_atoms)?;
+    writer.u64(value.charged_fee_atoms)?;
     write_rent(&mut writer, value.rent)?;
     writer.u8(reservation_phase_byte(value.phase))?;
     writer.id(value.terminal_receipt_id)?;
@@ -195,6 +197,8 @@ pub fn decode_direct_reservation_body_v1(
         price_scale: reader.u64()?,
         reserved_cash_atoms: reader.u64()?,
         reserved_eggs: reader.u64()?,
+        maximum_fee_atoms: reader.u64()?,
+        charged_fee_atoms: reader.u64()?,
         rent: read_rent(&mut reader)?,
         phase: decode_reservation_phase(reader.u8()?)?,
         terminal_receipt_id: reader.id()?,
@@ -389,8 +393,15 @@ fn write_binding(
     writer.id(value.collateral_release_id)?;
     writer.id(value.resolution_account)?;
     writer.id(value.direct_epoch_semantics_id)?;
-    writer.id(value.fee_policy_id)?;
+    writer.id(value.revenue_policy_id)?;
+    writer.id(value.batch_policy_id)?;
     writer.id(value.direct_fee_shape_id)?;
+    writer.id(value.fee_treasury_owner)?;
+    writer.u32(value.fee_dispersion_bps)?;
+    writer.u32(value.fee_floor_range_bps)?;
+    writer.u32(value.fee_maker_rebate_num)?;
+    writer.u32(value.fee_treasury_num)?;
+    writer.u32(value.fee_split_den)?;
     writer.id(value.candidate_lifecycle_policy_id)?;
     writer.id(value.candidate_liveness_policy_id)?;
     writer.id(value.direct_schedule_policy_id)?;
@@ -425,8 +436,15 @@ fn read_binding(reader: &mut BodyReader<'_>) -> Result<DirectMarketBindingV1, Di
         collateral_release_id: reader.id()?,
         resolution_account: reader.id()?,
         direct_epoch_semantics_id: reader.id()?,
-        fee_policy_id: reader.id()?,
+        revenue_policy_id: reader.id()?,
+        batch_policy_id: reader.id()?,
         direct_fee_shape_id: reader.id()?,
+        fee_treasury_owner: reader.id()?,
+        fee_dispersion_bps: reader.u32()?,
+        fee_floor_range_bps: reader.u32()?,
+        fee_maker_rebate_num: reader.u32()?,
+        fee_treasury_num: reader.u32()?,
+        fee_split_den: reader.u32()?,
         candidate_lifecycle_policy_id: reader.id()?,
         candidate_liveness_policy_id: reader.id()?,
         direct_schedule_policy_id: reader.id()?,
@@ -768,9 +786,9 @@ impl<'a> BodyReader<'a> {
     }
 }
 
-const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == 1_142);
+const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == 1_226);
 const _: () = assert!(DIRECT_SELECTION_BODY_BYTES_V1 == 1_497);
 const _: () = assert!(DIRECT_ACTION_REPLAY_BODY_BYTES_V1 == 321);
-const _: () = assert!(DIRECT_RESERVATION_BODY_BYTES_V1 == 453);
+const _: () = assert!(DIRECT_RESERVATION_BODY_BYTES_V1 == 469);
 const _: () = assert!(core::mem::size_of::<[u8; 253]>() == 253);
 const _: EconomicOrderV2 = EMPTY_ECONOMIC_ORDER_V2;

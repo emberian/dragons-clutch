@@ -93,6 +93,8 @@ pub struct DirectReservationV1 {
     pub(crate) price_scale: u64,
     pub(crate) reserved_cash_atoms: u64,
     pub(crate) reserved_eggs: u64,
+    pub(crate) maximum_fee_atoms: u64,
+    pub(crate) charged_fee_atoms: u64,
     pub(crate) rent: DirectRentOwnerV1,
     pub(crate) phase: DirectReservationPhaseV1,
     pub(crate) terminal_receipt_id: [u8; 32],
@@ -117,6 +119,10 @@ impl DirectReservationV1 {
     pub const fn reserved_cash_atoms(self) -> u64 { self.reserved_cash_atoms }
     /// Exact removed seller Eggs.
     pub const fn reserved_eggs(self) -> u64 { self.reserved_eggs }
+    /// Exact policy-derived buyer fee headroom; sellers carry zero.
+    pub const fn maximum_fee_atoms(self) -> u64 { self.maximum_fee_atoms }
+    /// Exact terminal-ceil buyer fee; zero before settlement and on lapse.
+    pub const fn charged_fee_atoms(self) -> u64 { self.charged_fee_atoms }
     /// Current lifecycle.
     pub const fn phase(self) -> DirectReservationPhaseV1 { self.phase }
     /// Persisted rent ownership.
@@ -161,15 +167,23 @@ impl DirectReservationV1 {
                         self.limit_price_units_per_egg,
                         self.price_scale,
                     )?
-                    && self.reserved_eggs == 0 => {}
-            Side::Sell if self.reserved_cash_atoms == 0 && self.reserved_eggs == self.quantity => {}
+                    .checked_add(self.maximum_fee_atoms)
+                    .ok_or(DirectMarketErrorV1::Arithmetic)?
+                    && self.reserved_eggs == 0
+                    && self.charged_fee_atoms <= self.maximum_fee_atoms => {}
+            Side::Sell
+                if self.reserved_cash_atoms == 0
+                    && self.reserved_eggs == self.quantity
+                    && self.maximum_fee_atoms == 0
+                    && self.charged_fee_atoms == 0 => {}
             _ => return Err(DirectMarketErrorV1::MismatchedBinding),
         }
         match self.phase {
-            DirectReservationPhaseV1::Active if self.terminal_receipt_id == [0; 32] => {}
-            DirectReservationPhaseV1::Cancelled
-            | DirectReservationPhaseV1::Settled
-            | DirectReservationPhaseV1::Lapsed => require_live(self.terminal_receipt_id)?,
+            DirectReservationPhaseV1::Active
+                if self.terminal_receipt_id == [0; 32] && self.charged_fee_atoms == 0 => {}
+            DirectReservationPhaseV1::Settled => require_live(self.terminal_receipt_id)?,
+            DirectReservationPhaseV1::Cancelled | DirectReservationPhaseV1::Lapsed
+                if self.charged_fee_atoms == 0 => require_live(self.terminal_receipt_id)?,
             _ => return Err(DirectMarketErrorV1::WrongPhase),
         }
         Ok(())
@@ -246,6 +260,8 @@ impl DirectReservationV1 {
             &self.price_scale.to_le_bytes(),
             &self.reserved_cash_atoms.to_le_bytes(),
             &self.reserved_eggs.to_le_bytes(),
+            &self.maximum_fee_atoms.to_le_bytes(),
+            &self.charged_fee_atoms.to_le_bytes(),
             &self.rent.payer,
             &self.rent.principal_lamports.to_le_bytes(),
             &self.rent.donation_floor_lamports.to_le_bytes(),
@@ -260,6 +276,7 @@ impl DirectReservationV1 {
         mut self,
         phase: DirectReservationPhaseV1,
         receipt: [u8; 32],
+        charged_fee_atoms: u64,
     ) -> Result<Self, DirectMarketErrorV1> {
         if self.phase != DirectReservationPhaseV1::Active
             || phase == DirectReservationPhaseV1::Active
@@ -269,6 +286,7 @@ impl DirectReservationV1 {
         require_live(receipt)?;
         self.phase = phase;
         self.terminal_receipt_id = receipt;
+        self.charged_fee_atoms = charged_fee_atoms;
         self.validate()?;
         Ok(self)
     }
@@ -367,8 +385,18 @@ pub fn prepare_direct_reservation_admission_v1<
         }
         _ => return Err(DirectMarketErrorV1::MismatchedBinding),
     }
+    let maximum_fee_atoms = match side {
+        Side::Buy => binding.fee_policy().maximum_buyer_fee_atoms(
+            quantity,
+            binding.outcome_count,
+            binding.price_scale,
+        )?,
+        Side::Sell => 0,
+    };
     let reserved_cash_atoms = match side {
-        Side::Buy => exact_cash_atoms(quantity, limit_price_units_per_egg, binding.price_scale)?,
+        Side::Buy => exact_cash_atoms(quantity, limit_price_units_per_egg, binding.price_scale)?
+            .checked_add(maximum_fee_atoms)
+            .ok_or(DirectMarketErrorV1::Arithmetic)?,
         Side::Sell => 0,
     };
     let reserved_eggs = match side { Side::Buy => 0, Side::Sell => quantity };
@@ -437,6 +465,8 @@ pub fn prepare_direct_reservation_admission_v1<
         price_scale: binding.price_scale,
         reserved_cash_atoms,
         reserved_eggs,
+        maximum_fee_atoms,
+        charged_fee_atoms: 0,
         rent,
         phase: DirectReservationPhaseV1::Active,
         terminal_receipt_id: [0; 32],

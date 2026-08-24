@@ -58,6 +58,7 @@ const DEALER_SELLER_ROLE: u8 = 13;
 const GENERAL_COLLATERAL_POSITION_ROLE: u8 = 1;
 const DIRECT_MARKET_BUYER_ROLE: u8 = 1;
 const DIRECT_MARKET_SELLER_ROLE: u8 = 2;
+const DIRECT_MARKET_TREASURY_ROLE: u8 = 3;
 
 /// Exhaustive General Replay transition partition for schema v1.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -131,6 +132,8 @@ pub enum GeneralReplayTransitionKindV1 {
     DirectMarketSettleBuyer,
     /// Direct Market V1 action 9 seller settlement endpoint.
     DirectMarketSettleSeller,
+    /// Direct Market V1 action 9 authenticated revenue-treasury credit.
+    DirectMarketSettleTreasury,
     /// Direct Market V1 action 10 buyer empty-market lapse endpoint.
     DirectMarketLapseEmptyBuyer,
     /// Direct Market V1 action 10 seller empty-market lapse endpoint.
@@ -346,6 +349,12 @@ impl GeneralReplayTransitionKindV1 {
                 9,
                 DIRECT_MARKET_SELLER_ROLE,
             ),
+            Self::DirectMarketSettleTreasury => (
+                DIRECT_MARKET_FAMILY,
+                TRANSITION_VERSION_V1,
+                9,
+                DIRECT_MARKET_TREASURY_ROLE,
+            ),
             Self::DirectMarketLapseEmptyBuyer => (
                 DIRECT_MARKET_FAMILY,
                 TRANSITION_VERSION_V1,
@@ -533,6 +542,9 @@ impl GeneralReplayTransitionKindV1 {
             }
             (DIRECT_MARKET_FAMILY, TRANSITION_VERSION_V1, 9, DIRECT_MARKET_SELLER_ROLE) => {
                 Ok(Self::DirectMarketSettleSeller)
+            }
+            (DIRECT_MARKET_FAMILY, TRANSITION_VERSION_V1, 9, DIRECT_MARKET_TREASURY_ROLE) => {
+                Ok(Self::DirectMarketSettleTreasury)
             }
             (DIRECT_MARKET_FAMILY, TRANSITION_VERSION_V1, 10, DIRECT_MARKET_BUYER_ROLE) => {
                 Ok(Self::DirectMarketLapseEmptyBuyer)
@@ -1236,6 +1248,7 @@ where
             | GeneralReplayTransitionKindV1::DirectMarketCancelSeller
             | GeneralReplayTransitionKindV1::DirectMarketSettleBuyer
             | GeneralReplayTransitionKindV1::DirectMarketSettleSeller
+            | GeneralReplayTransitionKindV1::DirectMarketSettleTreasury
             | GeneralReplayTransitionKindV1::DirectMarketLapseEmptyBuyer
             | GeneralReplayTransitionKindV1::DirectMarketLapseEmptySeller
             | GeneralReplayTransitionKindV1::DirectMarketLapseUnselectedBuyer
@@ -1479,6 +1492,7 @@ mod tests {
             (3, DIRECT_MARKET_SELLER_ROLE, GeneralReplayTransitionKindV1::DirectMarketCancelSeller),
             (9, DIRECT_MARKET_BUYER_ROLE, GeneralReplayTransitionKindV1::DirectMarketSettleBuyer),
             (9, DIRECT_MARKET_SELLER_ROLE, GeneralReplayTransitionKindV1::DirectMarketSettleSeller),
+            (9, DIRECT_MARKET_TREASURY_ROLE, GeneralReplayTransitionKindV1::DirectMarketSettleTreasury),
             (10, DIRECT_MARKET_BUYER_ROLE, GeneralReplayTransitionKindV1::DirectMarketLapseEmptyBuyer),
             (10, DIRECT_MARKET_SELLER_ROLE, GeneralReplayTransitionKindV1::DirectMarketLapseEmptySeller),
             (11, DIRECT_MARKET_BUYER_ROLE, GeneralReplayTransitionKindV1::DirectMarketLapseUnselectedBuyer),

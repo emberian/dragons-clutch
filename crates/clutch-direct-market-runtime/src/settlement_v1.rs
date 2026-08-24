@@ -3,6 +3,7 @@
 //! Atomic Direct Reservation, PositionV3, GEN1, and terminal transitions.
 
 use clutch_batch::{PartialPolicy, Side};
+use clutch_batch_policy_identity::revenue_policy_v1::RevenuePolicyV1;
 use clutch_general_v2_contract::{
     project_general_position_replay_prestate_v1, project_general_replay_transition_v1,
     GeneralPositionReplayPrestateV1, GeneralReplayTransitionKindV1,
@@ -10,13 +11,15 @@ use clutch_general_v2_contract::{
 };
 use clutch_owner_settlement::{AuthenticatedPositionV3, PositionSettlementPoststateV3};
 use clutch_retirement::{
-    PositionAccountV3, PositionV3Fields, PositionV3Sha256Backend, ReplayV3HashBackend,
+    PositionAccountV3, PositionPurposeV3, PositionV3Fields, PositionV3Sha256Backend,
+    ReplayV3HashBackend,
 };
 
 use crate::reservation_v1::{
     prepare_direct_reservation_admission_v1, AuthenticatedDirectReservationAdmissionV1,
     DirectReservationPhaseV1, DirectReservationV1,
 };
+use crate::fee_v1::DirectFeeTerminalV1;
 use crate::selection_v1::{
     build_direct_selection_v1, AuthenticatedDirectSelectionFreezeV1,
     DirectSelectionPhaseV1, DirectSelectionV1,
@@ -335,6 +338,23 @@ pub struct DirectEndpointPrestateV1 {
     pub position_replay: GeneralPositionReplayPrestateV1,
 }
 
+/// Exact writable treasury Position/GEN1 prestate, present only when the
+/// authenticated terminal fee split credits nonzero treasury atoms.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectFeeTreasuryPrestateV1 {
+    /// Canonical General Position and Replay prestate for the revenue owner.
+    pub position_replay: GeneralPositionReplayPrestateV1,
+}
+
+/// Exact treasury Position/GEN1 successor for action 9.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectFeeTreasuryPlanV1 {
+    /// Exact Position cash successor.
+    pub position_poststate: PositionSettlementPoststateV3,
+    /// Exact purpose Replay successor under the action-9 treasury role.
+    pub replay_transition: GeneralReplayTransitionPlanV1,
+}
+
 /// Default-deny economic terminal authentication boundary.
 pub trait AuthenticatedDirectEconomicTerminalV1 {
     /// Authenticate the exact writable root/replay/Selection and complete
@@ -345,6 +365,8 @@ pub trait AuthenticatedDirectEconomicTerminalV1 {
         _state: DirectRootReplayPostV1,
         _selection: DirectSelectionV1,
         _ordered_endpoints: &[Option<DirectEndpointPrestateV1>; 2],
+        _fee_terminal: Option<DirectFeeTerminalV1>,
+        _treasury: Option<DirectFeeTreasuryPrestateV1>,
         _reason: DirectTerminalReasonV1,
         _consumed_sequence: u64,
         _observed_slot: u64,
@@ -368,6 +390,10 @@ pub struct DirectEconomicTerminalPlanV1 {
     pub selection: DirectSelectionV1,
     /// Canonical Selection-order endpoint prefix.
     pub endpoints: [Option<DirectEndpointTerminalPlanV1>; 2],
+    /// Exact assessed fee and recipient split, present only for action 9.
+    pub fee_terminal: Option<DirectFeeTerminalV1>,
+    /// Exact nonzero treasury credit; absent for zero-fee and lapse terminals.
+    pub treasury: Option<DirectFeeTreasuryPlanV1>,
     /// Exact active endpoint count derived from Selection.
     pub endpoint_count: u8,
     /// Noncircular common transition committed by both Reservations and GEN1.
@@ -386,6 +412,8 @@ pub fn prepare_direct_economic_terminal_v1<
     state: DirectRootReplayPostV1,
     selection: DirectSelectionV1,
     endpoints: [Option<DirectEndpointPrestateV1>; 2],
+    revenue_policy: Option<&RevenuePolicyV1>,
+    treasury: Option<DirectFeeTreasuryPrestateV1>,
     reason: DirectTerminalReasonV1,
     consumed_sequence: u64,
     observed_slot: u64,
@@ -397,6 +425,8 @@ pub fn prepare_direct_economic_terminal_v1<
         state.root,
         selection,
         endpoints,
+        revenue_policy,
+        treasury,
         reason,
         consumed_sequence,
         observed_slot,
@@ -422,6 +452,8 @@ pub fn prepare_direct_missed_freeze_terminal_v1<
     domain: clutch_batch::relation_v2::EconomicDomainV2,
     price: clutch_batch::relation_v2::PricePreconditionV2,
     endpoints: [Option<DirectEndpointPrestateV1>; 2],
+    revenue_policy: Option<&RevenuePolicyV1>,
+    treasury: Option<DirectFeeTreasuryPrestateV1>,
     consumed_sequence: u64,
     observed_slot: u64,
     backend: &B,
@@ -446,6 +478,8 @@ pub fn prepare_direct_missed_freeze_terminal_v1<
         selection_validation_root,
         selection,
         endpoints,
+        revenue_policy,
+        treasury,
         DirectTerminalReasonV1::MissedFreezeLapse,
         consumed_sequence,
         observed_slot,
@@ -463,6 +497,8 @@ fn prepare_direct_economic_terminal_from_projection_v1<
     selection_validation_root: crate::DirectMarketRootV1,
     selection: DirectSelectionV1,
     endpoints: [Option<DirectEndpointPrestateV1>; 2],
+    revenue_policy: Option<&RevenuePolicyV1>,
+    treasury: Option<DirectFeeTreasuryPrestateV1>,
     reason: DirectTerminalReasonV1,
     consumed_sequence: u64,
     observed_slot: u64,
@@ -472,10 +508,20 @@ fn prepare_direct_economic_terminal_from_projection_v1<
     selection.validate_against(selection_validation_root)?;
     require_terminal_phase(selection, reason)?;
     let ordered = canonical_terminal_endpoints(selection, endpoints, backend)?;
+    let (fee_terminal, treasury_prestate) = prepare_terminal_fee(
+        state.root,
+        selection,
+        &ordered,
+        revenue_policy,
+        treasury,
+        reason,
+    )?;
     authority.authenticate_terminal(
         state,
         selection,
         &ordered,
+        fee_terminal,
+        treasury_prestate,
         reason,
         consumed_sequence,
         observed_slot,
@@ -493,6 +539,14 @@ fn prepare_direct_economic_terminal_from_projection_v1<
         replay_pre_ids[index] = endpoint.position_replay.replay_semantic_id().bytes();
         index += 1;
     }
+    let (treasury_position_pre_id, treasury_replay_pre_id) = match treasury_prestate {
+        Some(value) => (
+            value.position_replay.position().semantic_id,
+            value.position_replay.replay_semantic_id().bytes(),
+        ),
+        None => ([0; 32], [0; 32]),
+    };
+    let fee_transcript = fee_terminal.map_or([0u8; 41], DirectFeeTerminalV1::canonical_transcript);
     let selected_transcript = selection
         .selected_pair()
         .map_or([0u8; 253], |pair| pair.canonical_transcript());
@@ -500,6 +554,7 @@ fn prepare_direct_economic_terminal_from_projection_v1<
         ECONOMIC_TRANSITION_DOMAIN_V1,
         &state.root.binding().market_instance_id,
         &state.root.binding().generation.to_le_bytes(),
+        &state.root.binding().direct_fee_shape_id,
         &[reason.byte()],
         &selection_pre_id,
         &[endpoint_count],
@@ -509,6 +564,9 @@ fn prepare_direct_economic_terminal_from_projection_v1<
         &position_pre_ids[1],
         &replay_pre_ids[0],
         &replay_pre_ids[1],
+        &treasury_position_pre_id,
+        &treasury_replay_pre_id,
+        &fee_transcript,
         &selected_transcript,
         &consumed_sequence.to_le_bytes(),
         &observed_slot.to_le_bytes(),
@@ -543,9 +601,10 @@ fn prepare_direct_economic_terminal_from_projection_v1<
             endpoint.position_replay
         };
         let effect = match reason {
-            DirectTerminalReasonV1::Settled => EndpointEffectV1::Settle(
-                selection.selected_pair().ok_or(DirectMarketErrorV1::WrongPhase)?,
-            ),
+            DirectTerminalReasonV1::Settled => EndpointEffectV1::Settle {
+                pair: selection.selected_pair().ok_or(DirectMarketErrorV1::WrongPhase)?,
+                fee: fee_terminal.ok_or(DirectMarketErrorV1::MismatchedBinding)?,
+            },
             DirectTerminalReasonV1::MissedFreezeLapse
             | DirectTerminalReasonV1::EmptyLapse
             | DirectTerminalReasonV1::NoCandidate
@@ -571,12 +630,28 @@ fn prepare_direct_economic_terminal_from_projection_v1<
         projected[index] = Some(plan);
         index += 1;
     }
+    let treasury_plan = match (treasury_prestate, fee_terminal) {
+        (Some(prestate), Some(fee)) => Some(project_treasury_fee_credit(
+            state.root,
+            prestate,
+            fee,
+            &ordered,
+            &projected,
+            transition_id,
+            backend,
+        )?),
+        (None, Some(fee)) if fee.treasury_atoms == 0 => None,
+        (None, None) => None,
+        _ => return Err(DirectMarketErrorV1::MismatchedBinding),
+    };
     let economic_terminal_receipt_id = terminal_receipt_id(
         state,
         selection_pre_id,
         selection_post_id,
         endpoint_count,
         &projected,
+        fee_terminal,
+        treasury_plan,
         transition_id,
         reason,
         backend,
@@ -596,6 +671,8 @@ fn prepare_direct_economic_terminal_from_projection_v1<
         state,
         selection: selection_post,
         endpoints: projected,
+        fee_terminal,
+        treasury: treasury_plan,
         endpoint_count,
         transition_id,
         economic_terminal_receipt_id,
@@ -605,7 +682,10 @@ fn prepare_direct_economic_terminal_from_projection_v1<
 #[derive(Clone, Copy, Debug)]
 enum EndpointEffectV1 {
     Release,
-    Settle(clutch_batch::direct_pair_v1::SelectedDirectPairV1),
+    Settle {
+        pair: clutch_batch::direct_pair_v1::SelectedDirectPairV1,
+        fee: DirectFeeTerminalV1,
+    },
 }
 
 fn project_terminal_endpoint<B: DirectSettlementHashBackendV1>(
@@ -625,7 +705,12 @@ fn project_terminal_endpoint<B: DirectSettlementHashBackendV1>(
         return Err(DirectMarketErrorV1::MismatchedBinding);
     }
     let position_poststate = position_effect(reservation, position_replay.position(), effect)?;
-    let reservation_post = reservation.terminalize(phase, transition_id)?;
+    let charged_fee_atoms = match (reservation.side(), effect) {
+        (Side::Buy, EndpointEffectV1::Settle { fee, .. }) => fee.charged_fee_atoms,
+        _ => 0,
+    };
+    let reservation_post =
+        reservation.terminalize(phase, transition_id, charged_fee_atoms)?;
     let reservation_post_id = reservation_post.semantic_id(backend)?;
     let replay_transition = project_general_replay_transition_v1(
         position_replay,
@@ -668,11 +753,15 @@ fn position_effect(
                 .checked_add(reservation.reserved_eggs())
                 .ok_or(DirectMarketErrorV1::Arithmetic)?;
         }
-        (Side::Buy, EndpointEffectV1::Settle(pair)) => {
+        (Side::Buy, EndpointEffectV1::Settle { pair, fee }) => {
             require_selected_reservation(reservation, pair)?;
             cash_atoms = cash_atoms
                 .checked_sub(pair.consideration_cash_atoms())
+                .and_then(|value| value.checked_sub(fee.charged_fee_atoms))
                 .ok_or(DirectMarketErrorV1::InvalidPosition)?;
+            cash_atoms = cash_atoms
+                .checked_add(fee.buyer_rebate_atoms)
+                .ok_or(DirectMarketErrorV1::Arithmetic)?;
             reserved_cash_atoms = reserved_cash_atoms
                 .checked_sub(reservation.reserved_cash_atoms())
                 .ok_or(DirectMarketErrorV1::InvalidPosition)?;
@@ -681,10 +770,11 @@ fn position_effect(
                 .checked_add(pair.quantity())
                 .ok_or(DirectMarketErrorV1::Arithmetic)?;
         }
-        (Side::Sell, EndpointEffectV1::Settle(pair)) => {
+        (Side::Sell, EndpointEffectV1::Settle { pair, fee }) => {
             require_selected_reservation(reservation, pair)?;
             cash_atoms = cash_atoms
                 .checked_add(pair.consideration_cash_atoms())
+                .and_then(|value| value.checked_add(fee.seller_rebate_atoms))
                 .ok_or(DirectMarketErrorV1::Arithmetic)?;
             let unfilled = reservation
                 .reserved_eggs()
@@ -713,6 +803,156 @@ fn position_effect(
         general_market_runtime: position.general_market_runtime,
         prestate_semantic_id: position.semantic_id,
         semantic,
+    })
+}
+
+fn prepare_terminal_fee(
+    root: crate::DirectMarketRootV1,
+    selection: DirectSelectionV1,
+    ordered: &[Option<DirectEndpointPrestateV1>; 2],
+    revenue_policy: Option<&RevenuePolicyV1>,
+    treasury: Option<DirectFeeTreasuryPrestateV1>,
+    reason: DirectTerminalReasonV1,
+) -> Result<
+    (Option<DirectFeeTerminalV1>, Option<DirectFeeTreasuryPrestateV1>),
+    DirectMarketErrorV1,
+> {
+    if reason != DirectTerminalReasonV1::Settled {
+        if revenue_policy.is_some() || treasury.is_some() {
+            return Err(DirectMarketErrorV1::MismatchedBinding);
+        }
+        return Ok((None, None));
+    }
+    let pair = selection
+        .selected_pair()
+        .ok_or(DirectMarketErrorV1::WrongPhase)?;
+    let revenue = revenue_policy.ok_or(DirectMarketErrorV1::MismatchedBinding)?;
+    if selection.reservation_count() != 2 {
+        return Err(DirectMarketErrorV1::InvalidCount);
+    }
+    let first = ordered[0].ok_or(DirectMarketErrorV1::InvalidCount)?;
+    let second = ordered[1].ok_or(DirectMarketErrorV1::InvalidCount)?;
+    let (buyer, seller) = match (first.reservation.side(), second.reservation.side()) {
+        (Side::Buy, Side::Sell) => (first, second),
+        (Side::Sell, Side::Buy) => (second, first),
+        _ => return Err(DirectMarketErrorV1::MismatchedBinding),
+    };
+    let binding = root.binding();
+    let fee_policy = binding.fee_policy();
+    let expected_maximum = fee_policy.maximum_buyer_fee_atoms(
+        buyer.reservation.quantity(),
+        binding.outcome_count,
+        binding.price_scale,
+    )?;
+    if buyer.reservation.maximum_fee_atoms() != expected_maximum
+        || seller.reservation.maximum_fee_atoms() != 0
+    {
+        return Err(DirectMarketErrorV1::MismatchedBinding);
+    }
+    let fee = fee_policy.assess_terminal_buyer(
+        pair.quantity(),
+        pair.outcome(),
+        pair.outcome_count(),
+        pair.price_scale(),
+        selection.price(),
+        buyer.position_replay.position().account,
+        seller.position_replay.position().account,
+        buyer.reservation.maximum_fee_atoms(),
+        revenue,
+    )?;
+    match (fee.treasury_atoms, treasury) {
+        (0, None) => Ok((Some(fee), None)),
+        (0, Some(_)) => Err(DirectMarketErrorV1::MismatchedBinding),
+        (_, Some(prestate)) => {
+            require_treasury_position_binding(root, prestate)?;
+            Ok((Some(fee), Some(prestate)))
+        }
+        (_, None) => Err(DirectMarketErrorV1::MismatchedBinding),
+    }
+}
+
+fn require_treasury_position_binding(
+    root: crate::DirectMarketRootV1,
+    treasury: DirectFeeTreasuryPrestateV1,
+) -> Result<(), DirectMarketErrorV1> {
+    let binding = root.binding();
+    let position = treasury.position_replay.position();
+    position
+        .validate_writable()
+        .map_err(|_| DirectMarketErrorV1::InvalidPosition)?;
+    let fields = position.semantic.fields();
+    if fields.purpose != PositionPurposeV3::General
+        || fields.market_instance_id.bytes() != binding.market_instance_id
+        || fields.realm_id.bytes() != binding.realm_id
+        || fields.collateral_policy_id.bytes() != binding.collateral_policy_id
+        || fields.collateral_release_id.bytes() != binding.collateral_release_id
+        || fields.owner.bytes() != binding.fee_treasury_owner
+        || fields.purpose_binding_id.bytes() != binding.general_market_runtime
+        || fields.replay_account.bytes() != treasury.position_replay.replay_account().bytes()
+        || fields.outcome_count != binding.outcome_count
+        || position.general_market_runtime != binding.general_market_runtime
+    {
+        return Err(DirectMarketErrorV1::MismatchedBinding);
+    }
+    Ok(())
+}
+
+fn project_treasury_fee_credit<B: DirectSettlementHashBackendV1>(
+    root: crate::DirectMarketRootV1,
+    prestate: DirectFeeTreasuryPrestateV1,
+    fee: DirectFeeTerminalV1,
+    endpoints: &[Option<DirectEndpointPrestateV1>; 2],
+    endpoint_plans: &[Option<DirectEndpointTerminalPlanV1>; 2],
+    transition_id: [u8; 32],
+    backend: &B,
+) -> Result<DirectFeeTreasuryPlanV1, DirectMarketErrorV1> {
+    if fee.treasury_atoms == 0 {
+        return Err(DirectMarketErrorV1::MismatchedBinding);
+    }
+    require_treasury_position_binding(root, prestate)?;
+    let mut effective = prestate.position_replay;
+    let mut index = 0usize;
+    while index < 2 {
+        if let (Some(endpoint), Some(plan)) = (endpoints[index], endpoint_plans[index]) {
+            if endpoint.position_replay.position().account
+                == prestate.position_replay.position().account
+            {
+                if endpoint.position_replay != prestate.position_replay {
+                    return Err(DirectMarketErrorV1::MismatchedBinding);
+                }
+                effective = successor_position_replay(prestate.position_replay, plan, backend)?;
+            }
+        }
+        index += 1;
+    }
+    let position = effective.position();
+    let fields = position.semantic.fields();
+    let cash_atoms = fields
+        .cash_atoms
+        .checked_add(fee.treasury_atoms)
+        .ok_or(DirectMarketErrorV1::Arithmetic)?;
+    let semantic = PositionAccountV3::new(PositionV3Fields {
+        cash_atoms,
+        ..fields
+    })
+    .map_err(|_| DirectMarketErrorV1::InvalidPosition)?;
+    let position_poststate = PositionSettlementPoststateV3 {
+        account: position.account,
+        general_market_runtime: position.general_market_runtime,
+        prestate_semantic_id: position.semantic_id,
+        semantic,
+    };
+    let replay_transition = project_general_replay_transition_v1(
+        effective,
+        position_poststate,
+        GeneralReplayTransitionKindV1::DirectMarketSettleTreasury,
+        Id32::new(transition_id)?,
+        Id32::new(root.binding().direct_fee_shape_id)?,
+        backend,
+    )?;
+    Ok(DirectFeeTreasuryPlanV1 {
+        position_poststate,
+        replay_transition,
     })
 }
 
@@ -880,6 +1120,8 @@ fn terminal_receipt_id<B: DirectHashBackendV1>(
     selection_post_id: [u8; 32],
     endpoint_count: u8,
     endpoints: &[Option<DirectEndpointTerminalPlanV1>; 2],
+    fee_terminal: Option<DirectFeeTerminalV1>,
+    treasury: Option<DirectFeeTreasuryPlanV1>,
     transition_id: [u8; 32],
     reason: DirectTerminalReasonV1,
     backend: &B,
@@ -903,10 +1145,33 @@ fn terminal_receipt_id<B: DirectHashBackendV1>(
         delta_ids[index] = endpoint.replay_transition.delta_id().bytes();
         index += 1;
     }
+    let fee_transcript =
+        fee_terminal.map_or([0u8; 41], DirectFeeTerminalV1::canonical_transcript);
+    let (
+        treasury_position_account,
+        treasury_position_pre_id,
+        treasury_position_post_id,
+        treasury_replay_account,
+        treasury_replay_pre_id,
+        treasury_replay_post_id,
+        treasury_delta_id,
+    ) = match treasury {
+        Some(value) => (
+            value.position_poststate.account,
+            value.position_poststate.prestate_semantic_id,
+            value.replay_transition.position_poststate_semantic_id().bytes(),
+            value.replay_transition.replay_account().bytes(),
+            value.replay_transition.replay_prestate_semantic_id().bytes(),
+            value.replay_transition.replay_poststate_semantic_id().bytes(),
+            value.replay_transition.delta_id().bytes(),
+        ),
+        None => ([0; 32], [0; 32], [0; 32], [0; 32], [0; 32], [0; 32], [0; 32]),
+    };
     let id = DirectHashBackendV1::sha256_parts(backend, &[
         ECONOMIC_TERMINAL_RECEIPT_DOMAIN_V1,
         &state.root.binding().market_instance_id,
         &state.root.binding().generation.to_le_bytes(),
+        &state.root.binding().direct_fee_shape_id,
         &[reason.byte()],
         &transition_id,
         &selection_pre_id,
@@ -920,6 +1185,14 @@ fn terminal_receipt_id<B: DirectHashBackendV1>(
         &replay_post_ids[1],
         &delta_ids[0],
         &delta_ids[1],
+        &fee_transcript,
+        &treasury_position_account,
+        &treasury_position_pre_id,
+        &treasury_position_post_id,
+        &treasury_replay_account,
+        &treasury_replay_pre_id,
+        &treasury_replay_post_id,
+        &treasury_delta_id,
         &state.replay.action_transcript_id(),
     ]);
     require_live(id)?;

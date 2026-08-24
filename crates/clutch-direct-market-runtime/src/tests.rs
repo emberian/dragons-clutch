@@ -134,6 +134,8 @@ impl AuthenticatedDirectEconomicTerminalV1 for AllowEconomicTerminal {
         _state: DirectRootReplayPostV1,
         _selection: crate::selection_v1::DirectSelectionV1,
         _ordered_endpoints: &[Option<DirectEndpointPrestateV1>; 2],
+        _fee_terminal: Option<crate::fee_v1::DirectFeeTerminalV1>,
+        _treasury: Option<crate::settlement_v1::DirectFeeTreasuryPrestateV1>,
         _reason: DirectTerminalReasonV1,
         _consumed_sequence: u64,
         _observed_slot: u64,
@@ -162,6 +164,11 @@ fn state() -> DirectRootReplayPostV1 {
         selection_deadline_slot: 40,
         settlement_deadline_slot: 50,
     };
+    let fee_policy = crate::fee_v1::DirectFeePolicyV1::from_policies(
+        &clutch_batch_policy_identity::general_clearing_v1::GENERAL_CLEARING_POLICY_V1,
+        &clutch_batch_policy_identity::revenue_policy_v1::REVENUE_POLICY_V1,
+    )
+    .unwrap();
     let mut binding = DirectMarketBindingV1 {
         market_instance_id: id(1),
         generation: 1,
@@ -172,11 +179,15 @@ fn state() -> DirectRootReplayPostV1 {
         collateral_release_id: id(5),
         resolution_account: id(6),
         direct_epoch_semantics_id: [0; 32],
-        fee_policy_id: DirectZeroFeeVenueV1::canonical().unwrap().revenue_policy_id,
-        direct_fee_shape_id: DirectZeroFeeVenueV1::canonical()
-            .unwrap()
-            .semantic_id(&Sha)
-            .unwrap(),
+        revenue_policy_id: fee_policy.revenue_policy_id,
+        batch_policy_id: fee_policy.batch_policy_id,
+        direct_fee_shape_id: fee_policy.semantic_id(&Sha).unwrap(),
+        fee_treasury_owner: fee_policy.treasury_owner,
+        fee_dispersion_bps: fee_policy.dispersion_bps,
+        fee_floor_range_bps: fee_policy.floor_range_bps,
+        fee_maker_rebate_num: fee_policy.maker_rebate_num,
+        fee_treasury_num: fee_policy.treasury_num,
+        fee_split_den: fee_policy.split_den,
         candidate_lifecycle_policy_id: id(36),
         candidate_liveness_policy_id: id(37),
         direct_schedule_policy_id: [0; 32],
@@ -457,18 +468,77 @@ fn cross_namespace_equal_bytes_are_not_account_aliases() {
 }
 
 #[test]
-fn direct_fee_shape_refuses_every_nonzero_rate_and_envelope() {
-    let canonical = DirectZeroFeeVenueV1::canonical().unwrap();
-    assert_eq!(canonical.validate(), Ok(()));
-    assert_ne!(canonical.semantic_id(&Sha).unwrap(), [0; 32]);
-    for hostile in [
-        DirectZeroFeeVenueV1 { buyer_fee_bps: 1, ..canonical },
-        DirectZeroFeeVenueV1 { seller_fee_bps: 1, ..canonical },
-        DirectZeroFeeVenueV1 { max_buyer_fee_atoms: 1, ..canonical },
-        DirectZeroFeeVenueV1 { max_seller_fee_atoms: 1, ..canonical },
-    ] {
-        assert_eq!(hostile.validate(), Err(DirectMarketErrorV1::MismatchedBinding));
-    }
+fn direct_fee_projection_supports_zero_and_authenticated_nonzero_rates() {
+    use clutch_batch::relation_v1::{FeeBaseV1, TEST_COMPOSITE_SMALL};
+    use clutch_batch_policy_identity::general_clearing_v1::{
+        GENERAL_CLEARING_FEE_SHAPE_V1, GENERAL_CLEARING_POLICY_V1,
+    };
+    use clutch_batch_policy_identity::revenue_policy_v1::{
+        RevenuePolicyV1, REVENUE_POLICY_V1,
+    };
+
+    let zero = crate::fee_v1::DirectFeePolicyV1::from_policies(
+        &GENERAL_CLEARING_POLICY_V1,
+        &REVENUE_POLICY_V1,
+    )
+    .unwrap();
+    assert!(!zero.fee_bearing());
+    assert_eq!(zero.maximum_buyer_fee_atoms(1_000, 2, 10_000), Ok(0));
+
+    let rated_batch = clutch_batch::relation_v1::FrozenPolicyV1 {
+        fee_base: TEST_COMPOSITE_SMALL,
+        ..GENERAL_CLEARING_FEE_SHAPE_V1
+    };
+    let rated_revenue = RevenuePolicyV1 {
+        treasury: id(40),
+        ..REVENUE_POLICY_V1
+    };
+    let rated = crate::fee_v1::DirectFeePolicyV1::from_policies(
+        &rated_batch,
+        &rated_revenue,
+    )
+    .unwrap();
+    assert!(rated.fee_bearing());
+    let envelope = rated.maximum_buyer_fee_atoms(10_000, 2, 10_000).unwrap();
+    assert!(envelope > 0);
+    let price = clutch_batch::relation_v2::PricePreconditionV2 {
+        policy_digest: id(41),
+        semantic_price_digest: id(42),
+        prices: {
+            let mut prices = [0; clutch_batch::relation_v1::MAX_OUTCOMES];
+            prices[1] = 10_000;
+            prices
+        },
+    };
+    let terminal = rated
+        .assess_terminal_buyer(
+            10_000,
+            0,
+            2,
+            10_000,
+            &price,
+            id(43),
+            id(44),
+            envelope,
+            &rated_revenue,
+        )
+        .unwrap();
+    assert!(terminal.charged_fee_atoms > 0);
+    assert_eq!(
+        terminal
+            .buyer_rebate_atoms
+            .checked_add(terminal.seller_rebate_atoms)
+            .and_then(|value| value.checked_add(terminal.treasury_atoms)),
+        Some(terminal.charged_fee_atoms),
+    );
+    let wrong_batch = clutch_batch::relation_v1::FrozenPolicyV1 {
+        fee_base: FeeBaseV1::None,
+        ..rated_batch
+    };
+    assert_eq!(
+        rated.binds_policies(&wrong_batch, &rated_revenue),
+        Err(DirectMarketErrorV1::MismatchedBinding),
+    );
 }
 
 #[test]
@@ -1059,6 +1129,8 @@ fn empty_action8_and_missed_verification_deadline_are_total_no_trade_paths() {
         frozen.state,
         frozen.selection,
         endpoints,
+        None,
+        None,
         DirectTerminalReasonV1::UnselectedLapse,
         4,
         40,
@@ -1083,6 +1155,8 @@ fn empty_action8_and_missed_verification_deadline_are_total_no_trade_paths() {
         begun.state,
         begun.selection,
         endpoints,
+        None,
+        None,
         DirectTerminalReasonV1::NoCandidate,
         5,
         31,
@@ -1393,6 +1467,8 @@ fn empty_lapse_terminalizes_the_complete_one_reservation_prefix() {
             }),
             None,
         ],
+        None,
+        None,
         DirectTerminalReasonV1::EmptyLapse,
         3,
         20,
@@ -1468,6 +1544,8 @@ fn missed_freeze_lapse_creates_and_terminalizes_the_complete_selection_once() {
                 }),
                 None,
             ],
+            None,
+            None,
             2,
             29,
             &Sha,
@@ -1490,6 +1568,8 @@ fn missed_freeze_lapse_creates_and_terminalizes_the_complete_selection_once() {
             }),
             None,
         ],
+        None,
+        None,
         2,
         30,
         &Sha,
@@ -1664,6 +1744,8 @@ fn selected_pair_moves_exact_cash_and_eggs_and_releases_full_reserves() {
                 position_replay: buyer_admitted,
             }),
         ],
+        Some(&clutch_batch_policy_identity::revenue_policy_v1::REVENUE_POLICY_V1),
+        None,
         DirectTerminalReasonV1::Settled,
         8,
         33,

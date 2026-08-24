@@ -45,14 +45,17 @@ use clutch_direct_market_runtime::{
     prepare_direct_foundation_v1, AuthenticatedDirectFoundationV1,
     AuthenticatedDirectTerminalV1, DirectActionReplayV1, DirectHashBackendV1,
     DirectFinalResolutionV1, DirectMarketBindingV1, DirectMarketErrorV1, DirectMarketRootV1,
-    DirectRentOwnerV1, DirectZeroFeeVenueV1,
+    DirectRentOwnerV1,
     DirectRetirementSourceV1, DirectRetirementTransferV1, DirectRootPhaseV1,
     DirectRootReplayPostV1, DirectScheduleV1, DirectTerminalReasonV1,
 };
+use clutch_direct_market_runtime::fee_v1::{DirectFeePolicyV1, DirectFeeTerminalV1};
+use clutch_batch_policy_identity::general_clearing_v1::GENERAL_CLEARING_POLICY_V1;
+use clutch_batch_policy_identity::revenue_policy_v1::REVENUE_POLICY_V1;
 use clutch_direct_market_runtime::settlement_v1::{
     prepare_direct_reservation_admission_with_replay_v1, prepare_direct_reservation_cancel_v1,
     prepare_direct_economic_terminal_v1, prepare_direct_missed_freeze_terminal_v1,
-    DirectEndpointPrestateV1,
+    DirectEndpointPrestateV1, DirectFeeTreasuryPrestateV1,
     DirectReservationOrderInputV1,
 };
 use clutch_collateral_adapter_v2::{
@@ -795,6 +798,7 @@ struct DirectFoundationAuthoritySbfV1<'a> {
     product_root: &'a clutch_product_series::MarketLifecycleRootV1,
     founder_link: &'a clutch_product_series::SeriesMarketLinkV1,
     bundle: &'a CompiledProductSeriesBundleV5,
+    fee_policy: &'a DirectFeePolicyV1,
     binding: &'a DirectMarketBindingV1,
     schedule: &'a DirectScheduleV1,
     root_rent: &'a DirectRentOwnerV1,
@@ -809,6 +813,7 @@ impl AuthenticatedDirectFoundationV1 for DirectFoundationAuthoritySbfV1<'_> {
         product_root: &clutch_product_series::MarketLifecycleRootV1,
         founder_link: &clutch_product_series::SeriesMarketLinkV1,
         compiler_bundle: &CompiledProductSeriesBundleV5,
+        fee_policy: DirectFeePolicyV1,
         binding: DirectMarketBindingV1,
         schedule: DirectScheduleV1,
         foundation_slot: u64,
@@ -819,6 +824,7 @@ impl AuthenticatedDirectFoundationV1 for DirectFoundationAuthoritySbfV1<'_> {
         if product_root == self.product_root
             && founder_link == self.founder_link
             && compiler_bundle == self.bundle
+            && fee_policy == *self.fee_policy
             && binding == *self.binding
             && schedule == *self.schedule
             && foundation_slot == self.observed_slot
@@ -1028,9 +1034,14 @@ pub(crate) fn process_direct_initialize_market_v1(
         .semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
         .bytes();
-    let zero_fee = DirectZeroFeeVenueV1::canonical().map_err(map_direct_error_v1)?;
+    let fee_policy = DirectFeePolicyV1::from_policies(
+        &GENERAL_CLEARING_POLICY_V1,
+        &REVENUE_POLICY_V1,
+    )
+    .map_err(map_direct_error_v1)?;
     require(
-        genesis.value().fee_policy_id.bytes() == zero_fee.revenue_policy_id,
+        genesis.value().fee_policy_id.bytes() == fee_policy.revenue_policy_id
+            && market_binding.base().batch_policy_id().bytes() == fee_policy.batch_policy_id,
         ClutchError::MismatchedState,
     )?;
     let mut direct_binding = DirectMarketBindingV1 {
@@ -1043,10 +1054,17 @@ pub(crate) fn process_direct_initialize_market_v1(
         collateral_release_id: product_binding.collateral_release_id.bytes(),
         resolution_account: product_binding.resolution_account_id.bytes(),
         direct_epoch_semantics_id: [0; 32],
-        fee_policy_id: zero_fee.revenue_policy_id,
-        direct_fee_shape_id: zero_fee
+        revenue_policy_id: fee_policy.revenue_policy_id,
+        batch_policy_id: fee_policy.batch_policy_id,
+        direct_fee_shape_id: fee_policy
             .semantic_id(&DirectRuntimeSha256V1)
             .map_err(map_direct_error_v1)?,
+        fee_treasury_owner: fee_policy.treasury_owner,
+        fee_dispersion_bps: fee_policy.dispersion_bps,
+        fee_floor_range_bps: fee_policy.floor_range_bps,
+        fee_maker_rebate_num: fee_policy.maker_rebate_num,
+        fee_treasury_num: fee_policy.treasury_num,
+        fee_split_den: fee_policy.split_den,
         candidate_lifecycle_policy_id: genesis.value().candidate_lifecycle_policy_id.bytes(),
         candidate_liveness_policy_id: genesis.value().candidate_liveness_policy_id.bytes(),
         direct_schedule_policy_id: [0; 32],
@@ -1095,6 +1113,7 @@ pub(crate) fn process_direct_initialize_market_v1(
         product_root: product_root.state(),
         founder_link: founder_link.state(),
         bundle: bundle.value(),
+        fee_policy: &fee_policy,
         binding: &direct_binding,
         schedule: &schedule,
         root_rent: &root_rent,
@@ -1107,6 +1126,7 @@ pub(crate) fn process_direct_initialize_market_v1(
         product_root.state(),
         founder_link.state(),
         bundle.value(),
+        fee_policy,
         direct_binding,
         schedule,
         observed_slot,
@@ -1534,6 +1554,8 @@ impl AuthenticatedDirectEconomicTerminalV1 for DirectEconomicTerminalAuthoritySb
         state: DirectRootReplayPostV1,
         selection: DirectSelectionV1,
         ordered_endpoints: &[Option<DirectEndpointPrestateV1>; 2],
+        fee_terminal: Option<DirectFeeTerminalV1>,
+        treasury: Option<DirectFeeTreasuryPrestateV1>,
         reason: DirectTerminalReasonV1,
         consumed_sequence: u64,
         observed_slot: u64,
@@ -1541,6 +1563,8 @@ impl AuthenticatedDirectEconomicTerminalV1 for DirectEconomicTerminalAuthoritySb
         if state == *self.state
             && selection == *self.selection
             && ordered_endpoints == self.endpoints
+            && fee_terminal.is_some() == (reason == DirectTerminalReasonV1::Settled)
+            && treasury.is_none()
             && reason == self.reason
             && consumed_sequence == self.sequence
             && observed_slot == self.slot
@@ -1572,6 +1596,8 @@ impl AuthenticatedDirectEconomicTerminalV1 for DirectMissedFreezeTerminalAuthori
         state: DirectRootReplayPostV1,
         selection: DirectSelectionV1,
         ordered_endpoints: &[Option<DirectEndpointPrestateV1>; 2],
+        fee_terminal: Option<DirectFeeTerminalV1>,
+        treasury: Option<DirectFeeTreasuryPrestateV1>,
         reason: DirectTerminalReasonV1,
         consumed_sequence: u64,
         observed_slot: u64,
@@ -1587,6 +1613,8 @@ impl AuthenticatedDirectEconomicTerminalV1 for DirectMissedFreezeTerminalAuthori
             || selection.selected_pair().is_some()
             || selection.terminal_receipt_id() != [0; 32]
             || ordered_endpoints != self.endpoints
+            || fee_terminal.is_some()
+            || treasury.is_some()
             || reason != DirectTerminalReasonV1::MissedFreezeLapse
             || consumed_sequence != self.sequence
             || observed_slot != self.slot
@@ -1775,6 +1803,8 @@ fn process_direct_missed_freeze_lapse_v1(
         price.domain(),
         price.price(),
         endpoints,
+        None,
+        None,
         sequence,
         observed_slot,
         &DirectRuntimeSha256V1,
@@ -2274,6 +2304,12 @@ pub(crate) fn process_direct_economic_terminal_v1(
         state,
         selection.value(),
         endpoints,
+        if reason == DirectTerminalReasonV1::Settled {
+            Some(&REVENUE_POLICY_V1)
+        } else {
+            None
+        },
+        None,
         reason,
         sequence,
         observed_slot,

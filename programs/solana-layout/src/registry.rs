@@ -500,7 +500,7 @@ pub const DIRECT_MARKET_ROOT_ACCOUNT_TAG: u8 = 0xb1;
 /// Current Direct root account version.
 pub const DIRECT_MARKET_ROOT_ACCOUNT_VERSION: u8 = 1;
 /// Exact current Direct root frame bytes.
-pub const DIRECT_MARKET_ROOT_ACCOUNT_BYTES: usize = 1_146;
+pub const DIRECT_MARKET_ROOT_ACCOUNT_BYTES: usize = 1_230;
 /// Current Direct exact-selection owner discriminator.
 pub const DIRECT_SELECTION_ACCOUNT_TAG: u8 = 0xb2;
 /// Current Direct exact-selection account version.
@@ -518,7 +518,7 @@ pub const DIRECT_RESERVATION_ACCOUNT_TAG: u8 = 0xb4;
 /// Current Direct funded Reservation account version.
 pub const DIRECT_RESERVATION_ACCOUNT_VERSION: u8 = 1;
 /// Exact current Direct Reservation frame bytes.
-pub const DIRECT_RESERVATION_ACCOUNT_BYTES: usize = 457;
+pub const DIRECT_RESERVATION_ACCOUNT_BYTES: usize = 473;
 /// Immutable General V2 frozen-order locator discriminator.
 pub const GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_TAG: u8 = 0xb5;
 /// First frozen-order locator account version.
