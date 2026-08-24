@@ -8,10 +8,6 @@ rust-version = "1.89"
 [lib]
 path = "src/lib.rs"
 
-# This bounded lane is deliberately its own workspace until canonical
-# integration adds it to the repository workspace in one coordinated edit.
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"
@@ -24,4 +20,3 @@ float_arithmetic = "deny"
 indexing_slicing = "deny"
 panic = "deny"
 unwrap_used = "deny"
-

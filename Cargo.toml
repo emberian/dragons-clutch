@@ -6,6 +6,7 @@ members = [
     "crates/dclutch-operator",
     "crates/dclutch-pyth-svm",
     "crates/dclutch-pyth-contract",
+    "crates/dclutch-product-contract",
     "crates/dclutch-realm-contract",
     "crates/dclutch-token-svm",
     "programs/dclutch-sbf",
