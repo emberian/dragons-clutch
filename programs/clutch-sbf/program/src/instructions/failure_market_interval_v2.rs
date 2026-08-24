@@ -25,8 +25,9 @@ use crate::instructions::genesis::{
 use crate::instructions::product_market::{
     authenticate_market_instance_terminal_v1, release_series_market_link_failure_v1,
     AuthenticatedMarketFoundationPreallocationV2, AuthenticatedMarketInstanceTerminalV1,
-    AuthenticatedSeriesFailureArchivePostwriteV2, AuthenticatedSeriesFailureSessionReleaseV1,
-    AuthenticatedSeriesMarketLinkV1, AuthenticatedWritableFailureResolutionLinkV1,
+    AuthenticatedMarketRecoveryScheduleV1, AuthenticatedSeriesFailureArchivePostwriteV2,
+    AuthenticatedSeriesFailureSessionReleaseV1, AuthenticatedSeriesMarketLinkV1,
+    AuthenticatedWritableFailureResolutionLinkV1,
 };
 use crate::seeds;
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
@@ -40,6 +41,7 @@ use clutch_failure_policy_runtime::market_interval_cell_v2::{
 };
 use clutch_failure_policy_runtime::market_interval_history_v2::{
     admit_failure_market_interval_history_v2, plan_close_failure_market_interval_accounts_v2,
+    reopen_failure_market_interval_funding_v2,
     AuthenticatedFailureMarketIntervalFundingV2, FailureMarketIntervalCloseAuthorizationIdV2,
     FailureMarketIntervalFamilySealReceiptV2, FailureMarketIntervalFundingFactsV2,
     FailureMarketIntervalFundingReceiptV2, FailureMarketIntervalHistoryAppendReceiptV2,
@@ -49,7 +51,11 @@ use clutch_failure_policy_runtime::market_interval_history_v2::{
 use clutch_failure_policy_runtime::market_policy_v1::{
     FailureMarketAccountIdV1, FailureMarketAdmissionStateIdV1,
 };
-use clutch_failure_policy_runtime::market_quote_v1::FailureMarketRecoveryQuoteAdmissionReceiptV1;
+use clutch_failure_policy_runtime::market_quote_v1::{
+    admit_failure_market_recovery_quote_v1, AuthenticatedFailureMarketRecoveryQuoteV1,
+    FailureMarketRecoveryQuoteAdmissionFactsV1, FailureMarketRecoveryQuoteAdmissionReceiptV1,
+    FailureMarketRecoveryQuoteScheduleV1, FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1,
+};
 use clutch_failure_policy_runtime::market_runtime_v1::{
     plan_close_failure_market_session_v1, AuthenticatedFailureMarketSessionV1,
     FailureMarketSessionCloseFactsV1,
@@ -79,6 +85,143 @@ const CLOSE_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/failure-market-interval-physical-close/v2";
 const ARCHIVE_POSTWRITE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/failure-market-interval-archive-postwrite/v2";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProductFailureMarketRecoveryQuoteAuthorityV1 {
+    expected: FailureMarketRecoveryQuoteAdmissionFactsV1,
+}
+
+impl AuthenticatedFailureMarketRecoveryQuoteV1 for ProductFailureMarketRecoveryQuoteAuthorityV1 {
+    fn authenticate_failure_market_recovery_quote(
+        &self,
+        expected: FailureMarketRecoveryQuoteAdmissionFactsV1,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        if expected != self.expected {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// Hostile-decode and admit the exact content-addressed shared Recovery reward
+/// schedule against Product's live Registry/liveness-policy authentication.
+/// The schedule bytes are a preimage only; their recomputed typed identity and
+/// every bound/capital field must equal the private Product receipt.
+pub(crate) fn authenticate_failure_market_recovery_quote_v1(
+    admission: AuthenticatedFailureMarketRootV2,
+    product: AuthenticatedMarketRecoveryScheduleV1,
+    body: &[u8],
+) -> Outcome<FailureMarketRecoveryQuoteAdmissionReceiptV1> {
+    let body: &[u8; FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1] = body
+        .try_into()
+        .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+    let schedule = FailureMarketRecoveryQuoteScheduleV1::decode(body)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let schedule_id = schedule
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let policy = admission.state().binding().facts();
+    let expected = FailureMarketRecoveryQuoteAdmissionFactsV1 {
+        failure_policy_binding_id: admission.state().binding().id(),
+        quote_schedule_id: schedule_id,
+        maximum_calls: schedule.maximum_calls,
+        maximum_progress_units_per_call: schedule.maximum_progress_units_per_call,
+        maximum_lamports_per_call: schedule
+            .maximum_lamports_per_call()
+            .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?,
+        work_principal_lamports: schedule
+            .work_principal_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?,
+    };
+    require(
+        product.market_root_account() != admission.account()
+            && product.recovery_quote_schedule_id().bytes() == schedule_id.bytes()
+            && product.maximum_calls() == expected.maximum_calls
+            && product.maximum_progress_units_per_call()
+                == expected.maximum_progress_units_per_call
+            && product.maximum_lamports_per_call() == expected.maximum_lamports_per_call
+            && product.work_capital_lamports() == expected.work_principal_lamports
+            && product.liveness_policy_id().bytes() == policy.liveness_policy_id.bytes()
+            && product.receipt_program_id().bytes()
+                == policy.recovery_receipt_program_id.bytes()
+            && product.capability_profile_id().bytes()
+                == policy.capability_profile_id.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let authority = ProductFailureMarketRecoveryQuoteAuthorityV1 { expected };
+    admit_failure_market_recovery_quote_v1(
+        &authority,
+        admission.state().binding(),
+        admission.state().recovery_funding(),
+        schedule,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+}
+
+/// Exact content preimage needed to reopen the Product-authenticated interval
+/// capitalization receipt after the retained accounts have been allocated.
+/// The permanent history account stores the domain-separated receipt ID, so
+/// these hostile bytes cannot create authority or alter any funding fact.
+pub(crate) const FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2: usize = 176;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FailureMarketIntervalFundingPreimageV2 {
+    work_preallocation_receipt_id: ProductContentId,
+    history_preallocation_receipt_id: ProductContentId,
+    foundation_schedule_id: ProductContentId,
+    foundation_account_graph_id: ProductContentId,
+    foundation_transcript_id: ProductContentId,
+    work_donation_floor_lamports: u64,
+    history_donation_floor_lamports: u64,
+}
+
+impl FailureMarketIntervalFundingPreimageV2 {
+    /// Hostile-decode every byte of the immutable funding receipt preimage.
+    pub(crate) fn decode(input: &[u8]) -> Outcome<Self> {
+        let input: &[u8; FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2] = input
+            .try_into()
+            .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+        let mut at = 0usize;
+        let mut take_id = || -> Outcome<ProductContentId> {
+            let end = at.checked_add(32).ok_or(ClutchError::Arithmetic)?;
+            let bytes: [u8; 32] = input[at..end]
+                .try_into()
+                .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+            at = end;
+            let id = ProductContentId::from_bytes(bytes);
+            require(!id.is_zero(), ClutchError::MismatchedState)?;
+            Ok(id)
+        };
+        let work_preallocation_receipt_id = take_id()?;
+        let history_preallocation_receipt_id = take_id()?;
+        let foundation_schedule_id = take_id()?;
+        let foundation_account_graph_id = take_id()?;
+        let foundation_transcript_id = take_id()?;
+        let work_donation_floor_lamports = u64::from_le_bytes(
+            input[160..168]
+                .try_into()
+                .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?,
+        );
+        let history_donation_floor_lamports = u64::from_le_bytes(
+            input[168..176]
+                .try_into()
+                .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?,
+        );
+        require(
+            work_preallocation_receipt_id != history_preallocation_receipt_id,
+            ClutchError::MismatchedState,
+        )?;
+        Ok(Self {
+            work_preallocation_receipt_id,
+            history_preallocation_receipt_id,
+            foundation_schedule_id,
+            foundation_account_graph_id,
+            foundation_transcript_id,
+            work_donation_floor_lamports,
+            history_donation_floor_lamports,
+        })
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FailureMarketRuntimeArchiveAuthorityV1 {
@@ -852,6 +995,91 @@ pub(crate) fn authenticate_failure_market_interval_accounts_v2<'a>(
         funding,
         quote,
     })
+}
+
+/// Reopen the immutable interval capitalization receipt from the exact
+/// content preimage committed by the live history account, then authenticate
+/// the paired live accounts. Product's creation receipts are intentionally not
+/// treated as portable runtime capabilities after allocation.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn reopen_failure_market_interval_accounts_v2<'a>(
+    program_id: &Pubkey,
+    cell_account: &AccountInfo<'a>,
+    history_account: &AccountInfo<'a>,
+    admission: AuthenticatedFailureMarketRootV2,
+    quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+    funding_preimage: FailureMarketIntervalFundingPreimageV2,
+    cell_writable: bool,
+    history_writable: bool,
+) -> Outcome<AuthenticatedFailureMarketIntervalAccountsV2> {
+    authenticate_account_metadata(
+        program_id,
+        history_account,
+        FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES,
+        history_writable,
+    )?;
+    let history_data = history_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let history_input: &[u8; FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES] = history_data
+        .as_ref()
+        .try_into()
+        .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+    let history_frame = FailureMarketIntervalHistoryAccountV2::decode(history_input)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let history = FailureMarketIntervalHistoryV2::decode_for_admission(
+        history_frame.semantic_body(),
+        admission.state(),
+        quote,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(history_data);
+    let work_observed_balance_lamports = history
+        .work_rent_principal_lamports()
+        .checked_add(funding_preimage.work_donation_floor_lamports)
+        .ok_or(ClutchError::Arithmetic)?;
+    let history_observed_balance_lamports = history
+        .history_rent_principal_lamports()
+        .checked_add(funding_preimage.history_donation_floor_lamports)
+        .ok_or(ClutchError::Arithmetic)?;
+    let policy = admission.state().binding().facts();
+    let facts = FailureMarketIntervalFundingFactsV2 {
+        failure_policy_binding_id: admission.state().binding().id(),
+        market_instance_id: policy.market_instance_id,
+        generation: policy.generation,
+        work_preallocation_receipt_id: funding_preimage.work_preallocation_receipt_id,
+        history_preallocation_receipt_id: funding_preimage.history_preallocation_receipt_id,
+        foundation_schedule_id: funding_preimage.foundation_schedule_id,
+        foundation_account_graph_id: funding_preimage.foundation_account_graph_id,
+        foundation_transcript_id: funding_preimage.foundation_transcript_id,
+        work_account: history.work_account(),
+        history_account: history.history_account(),
+        rent_refund_owner: history.rent_refund_owner(),
+        neutral_sink: history.neutral_sink(),
+        work_rent_principal_lamports: history.work_rent_principal_lamports(),
+        history_rent_principal_lamports: history.history_rent_principal_lamports(),
+        work_donation_floor_lamports: funding_preimage.work_donation_floor_lamports,
+        work_observed_balance_lamports,
+        history_donation_floor_lamports: funding_preimage.history_donation_floor_lamports,
+        history_observed_balance_lamports,
+    };
+    let funding = reopen_failure_market_interval_funding_v2(
+        admission.state(),
+        quote,
+        history,
+        facts,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    authenticate_failure_market_interval_accounts_v2(
+        program_id,
+        cell_account,
+        history_account,
+        admission,
+        funding,
+        quote,
+        cell_writable,
+        history_writable,
+    )
 }
 
 /// Persist only the deterministic finite-exhaustion terminal.
@@ -2014,5 +2242,40 @@ mod adversarial_account_tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn funding_preimage_refuses_truncation_zero_ids_and_receipt_aliases() {
+        let mut input = [1_u8; FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2];
+        assert!(FailureMarketIntervalFundingPreimageV2::decode(&input).is_err());
+        input[32..64].fill(2);
+        assert!(FailureMarketIntervalFundingPreimageV2::decode(&input).is_ok());
+        assert!(FailureMarketIntervalFundingPreimageV2::decode(&input[..175]).is_err());
+        input[..32].fill(0);
+        assert!(FailureMarketIntervalFundingPreimageV2::decode(&input).is_err());
+    }
+
+    #[test]
+    fn quote_and_funding_reopen_are_content_joined_not_cached_authority() {
+        let source = include_str!("failure_market_interval_v2.rs");
+        let quote = source
+            .split("fn authenticate_failure_market_recovery_quote_v1")
+            .nth(1)
+            .expect("quote owner");
+        for predicate in [
+            "recovery_quote_schedule_id().bytes() == schedule_id.bytes()",
+            "maximum_progress_units_per_call()",
+            "work_capital_lamports()",
+            "capability_profile_id().bytes()",
+        ] {
+            assert!(quote.contains(predicate));
+        }
+        let reopen = source
+            .split("fn reopen_failure_market_interval_accounts_v2")
+            .nth(1)
+            .expect("funding reopen");
+        assert!(reopen.contains("reopen_failure_market_interval_funding_v2"));
+        assert!(reopen.contains("work_donation_floor_lamports"));
+        assert!(reopen.contains("history_donation_floor_lamports"));
     }
 }
