@@ -10,9 +10,11 @@
 
 use clutch_batch::Side;
 use clutch_general_v2_contract::{
-    complete_candidate_feed_v2, DeletableRentOwnerV1,
+    complete_candidate_feed_v2, encode_retire_indexed_settlement_root_v1,
+    CandidateWindowV5AccountV1, DeletableRentOwnerV1, GeneralEpochV6AccountV1,
     AuthenticatedIndexedSettlementRootRentV1, ExactIndexChildrenStateV1, Id32,
-    IndexedSettlementRootV1AccountV1, MarketBindingV2, SettlementRootV1AccountV1,
+    IndexedSettlementRootCloseProjectionV1, IndexedSettlementRootV1AccountV1,
+    MarketBindingV2, SettlementRootV1AccountV1,
     SettlementSliceLegKindV1, SettlementSliceV1, INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG,
     INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION, INDEXED_SETTLEMENT_ROOT_BYTES_V1, MAX_ORDERS,
     MAX_OUTCOMES, MAX_SLICES, SETTLEMENT_SLICE_BYTES,
@@ -483,26 +485,9 @@ pub struct SealedExactIndexPairInputV1<'a> {
     adjacency_body: &'a [u8],
     feed_body: &'a [u8],
 }
-#[derive(Debug)]
-pub struct CountedExactIndexRootMutationV1<'a> {
-    indexed_root: IndexedSettlementRootV1AccountV1,
-    sealed: SealedExactIndexPairInputV1<'a>,
-    _private: (),
-}
-impl CountedExactIndexRootMutationV1<'_> {
-    pub const fn indexed_root(&self) -> &IndexedSettlementRootV1AccountV1 { &self.indexed_root }
-}
-
 pub fn authenticate_counted_exact_index_read_v1<'a>(input: AuthenticateCountedExactIndexReadInputV1<'a>)
     -> Result<SealedExactIndexPairInputV1<'a>, ExactIndexPlaneErrorV1>
 { let (_, sealed) = authenticate_join(input, false, false)?; Ok(sealed) }
-pub fn authenticate_counted_exact_index_retirement_v1<'a>(
-    input: AuthenticateCountedExactIndexReadInputV1<'a>,
-) -> Result<CountedExactIndexRootMutationV1<'a>, ExactIndexPlaneErrorV1>
-{
-    let (indexed_root, sealed) = authenticate_join(input, true, true)?;
-    Ok(CountedExactIndexRootMutationV1 { indexed_root, sealed, _private: () })
-}
 
 fn authenticate_join<'a>(input: AuthenticateCountedExactIndexReadInputV1<'a>, root_writable: bool,
     children_writable: bool) -> Result<(IndexedSettlementRootV1AccountV1,
@@ -702,20 +687,26 @@ impl ExactIndexPlaneClosePostwritesV1 {
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CountedExactIndexRootRetirementPostwritesV1 {
-    indexed_root_poststate: IndexedSettlementRootV1AccountV1,
     indexed_root_poststate_data_id: Id32, close: ExactIndexPlaneClosePostwritesV1,
 }
 impl CountedExactIndexRootRetirementPostwritesV1 {
-    pub const fn indexed_root_poststate(&self) -> &IndexedSettlementRootV1AccountV1 { &self.indexed_root_poststate }
     pub const fn indexed_root_poststate_data_id(&self) -> Id32 { self.indexed_root_poststate_data_id }
     pub const fn close_postwrites(&self) -> &ExactIndexPlaneClosePostwritesV1 { &self.close }
 }
-pub fn retire_counted_exact_index_root_v1(mutation: CountedExactIndexRootMutationV1<'_>,
-    input: CloseExactIndexPlaneInputV1<'_>)
+/// Authenticate and close both exact-index children while streaming the root
+/// successor in the same action-specific composition.
+///
+/// The hostile indexed-root body is decoded only inside this call. Neither its
+/// 1,228-byte value nor a second full poststate crosses the SBF caller boundary.
+pub fn stream_retire_counted_exact_index_root_v1(
+    authentication: AuthenticateCountedExactIndexReadInputV1<'_>,
+    input: CloseExactIndexPlaneInputV1<'_>,
+    root_output: &mut [u8],
+)
     -> Result<CountedExactIndexRootRetirementPostwritesV1, ExactIndexPlaneErrorV1>
 {
-    let indexed = &mutation.indexed_root;
-    let sealed = mutation.sealed;
+    let (indexed, sealed) = authenticate_join(authentication, true, true)?;
+    let indexed = &indexed;
     indexed.validate().map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
     input.market_binding.validate().map_err(|_| ExactIndexPlaneErrorV1::BindingMismatch)?;
     if indexed.index_state() != ExactIndexChildrenStateV1::Live
@@ -765,10 +756,14 @@ pub fn retire_counted_exact_index_root_v1(mutation: CountedExactIndexRootMutatio
     { return Err(ExactIndexPlaneErrorV1::BindingMismatch); }
     let (locator_principal, locator_donation) = close_credits(locator.rent, input.locator.lamports, sink)?;
     let (adjacency_principal, adjacency_donation) = close_credits(adjacency.rent, input.adjacency.lamports, sink)?;
-    let post = indexed.retire_index_children().map_err(|_| ExactIndexPlaneErrorV1::NonTerminalRoot)?;
-    let data_id = post.data_id(&CanonicalSha256, sealed.authority.root_account)
+    let data_id = indexed
+        .encode_retire_index_children_and_data_id(
+            &CanonicalSha256,
+            sealed.authority.root_account,
+            root_output,
+        )
         .map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
-    Ok(CountedExactIndexRootRetirementPostwritesV1 { indexed_root_poststate: post,
+    Ok(CountedExactIndexRootRetirementPostwritesV1 {
         indexed_root_poststate_data_id: data_id,
         close: ExactIndexPlaneClosePostwritesV1 { locator_principal, locator_donation,
             adjacency_principal, adjacency_donation } })
@@ -783,6 +778,365 @@ fn close_credits(rent: DeletableRentOwnerV1, lamports: u64, sink: Id32)
     Ok((ExactIndexCloseCreditV1 { recipient: rent.payer, amount: rent.refundable_principal },
         ExactIndexCloseCreditV1 { recipient: sink,
             amount: lamports.checked_sub(rent.refundable_principal).ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)? }))
+}
+
+#[derive(Clone, Copy, Debug)]
+/// Exact accounts and bytes consumed by retained-Feed retirement.
+pub struct RetireCountedExactFeedInputV1<'a> {
+    /// Executing Dragon's Clutch program identity.
+    pub program_id: Id32,
+    /// Canonical indexed-root PDA.
+    pub root_account: Id32,
+    /// Exact hostile indexed-root body currently stored at `root_account`.
+    pub root_body: &'a [u8],
+    /// Canonical MarketBinding PDA.
+    pub market_binding_account: Id32,
+    /// Already authenticated MarketBinding value.
+    pub market_binding: &'a MarketBindingV2,
+    /// Retained Feed account selected by the root.
+    pub feed_account: Id32,
+    /// Exact hostile Feed body.
+    pub feed_body: &'a [u8],
+    /// Observed Feed lamports before close.
+    pub feed_lamports: u64,
+    /// Observed Feed owner.
+    pub feed_owner: Id32,
+    /// Whether the Feed account is writable.
+    pub feed_writable: bool,
+    /// Whether the Feed account is executable.
+    pub feed_executable: bool,
+    /// Keeper receiving exactly the prepaid Feed close reward.
+    pub keeper_destination: Id32,
+}
+
+/// Compact root-write identity and exact Feed-close credits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CountedExactFeedRetirementPostwritesV1 {
+    indexed_root_poststate_data_id: Id32,
+    feed_principal: ExactIndexCloseCreditV1,
+    feed_donation: ExactIndexCloseCreditV1,
+    feed_keeper_reward: ExactIndexCloseCreditV1,
+}
+
+impl CountedExactFeedRetirementPostwritesV1 {
+    /// Account-bound ID of the streamed terminal indexed root.
+    pub const fn indexed_root_poststate_data_id(&self) -> Id32 {
+        self.indexed_root_poststate_data_id
+    }
+    /// Exact refundable Feed rent principal credit.
+    pub const fn feed_principal_credit(&self) -> ExactIndexCloseCreditV1 {
+        self.feed_principal
+    }
+    /// Neutral-sink credit containing donation floor and late donations.
+    pub const fn feed_donation_credit(&self) -> ExactIndexCloseCreditV1 {
+        self.feed_donation
+    }
+    /// Exact immutable prepaid keeper reward credit.
+    pub const fn feed_keeper_reward_credit(&self) -> ExactIndexCloseCreditV1 {
+        self.feed_keeper_reward
+    }
+}
+
+/// Authenticate and close the retained Feed only after both compact indexes
+/// retired, while streaming the base-`Terminal` indexed-root successor.
+///
+/// This action-specific composer keeps later hostile donations out of keeper
+/// rewards and rent principal: the exact prepaid reward goes to the caller,
+/// the exact principal returns to its payer, and every other lamport goes to
+/// the immutable MarketBinding neutral sink.
+pub fn stream_retire_counted_exact_feed_v1(
+    input: RetireCountedExactFeedInputV1<'_>,
+    root_output: &mut [u8],
+) -> Result<CountedExactFeedRetirementPostwritesV1, ExactIndexPlaneErrorV1> {
+    let indexed_root = IndexedSettlementRootV1AccountV1::decode(input.root_body)
+        .map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
+    indexed_root.validate().map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
+    input.market_binding.validate().map_err(|_| ExactIndexPlaneErrorV1::BindingMismatch)?;
+    if input.program_id.is_zero()
+        || input.root_account.is_zero()
+        || input.market_binding_account.is_zero()
+        || input.feed_account.is_zero()
+        || input.keeper_destination.is_zero()
+        || indexed_root.index_state() != ExactIndexChildrenStateV1::Retired
+        || indexed_root.base().phase()
+            != clutch_general_v2_contract::SettlementRootPhaseV1::Retiring
+        || indexed_root.base().retained_feed_state()
+            != clutch_general_v2_contract::SettlementRootChildStateV1::Live
+        || indexed_root.base().retained_feed() != input.feed_account
+        || indexed_root.base().market_binding() != input.market_binding_account
+        || input.market_binding.base().market != indexed_root.base().market()
+        || input.market_binding.base().market_instance_v2_id
+            != indexed_root.base().market_instance_v2_id()
+        || input.market_binding.batch_policy_id() != indexed_root.base().batch_policy_id()
+        || input.feed_owner != input.program_id
+        || !input.feed_writable
+        || input.feed_executable
+    {
+        return Err(ExactIndexPlaneErrorV1::BindingMismatch);
+    }
+    let physical = [input.root_account, input.market_binding_account, input.feed_account];
+    let mut left = 0usize;
+    while left < physical.len() {
+        let mut right = left + 1;
+        while right < physical.len() {
+            if physical[left] == physical[right] {
+                return Err(ExactIndexPlaneErrorV1::BindingMismatch);
+            }
+            right += 1;
+        }
+        left += 1;
+    }
+    let feed = authenticate_settlement_feed_view_v5(input.feed_account, input.feed_body)
+        .map_err(|_| ExactIndexPlaneErrorV1::CandidateTraversal)?;
+    let header = feed.header();
+    if feed.data_id() != indexed_root.selected_feed_data_id()
+        || feed.candidate_bundle_digest()
+            != indexed_root.base().candidate_bundle_digest()
+        || header.epoch != indexed_root.base().epoch()
+        || header.node != indexed_root.base().source_admission_node()
+        || header.market != indexed_root.base().market()
+        || header.order_set != indexed_root.base().order_set()
+        || header.settlement_candidate_id
+            != indexed_root.base().settlement_candidate_id()
+        || header.settlement_witness_digest
+            != indexed_root.base().settlement_witness_digest()
+        || header.epoch_generation != indexed_root.base().epoch_generation()
+        || header.outcome_count != indexed_root.base().outcome_count()
+        || header.order_count != indexed_root.base().order_count()
+        || header.slice_count != indexed_root.base().counts().expected_receipts
+    {
+        return Err(ExactIndexPlaneErrorV1::BindingMismatch);
+    }
+    let sink = input.market_binding.base().neutral_sink;
+    let rent = header.rent;
+    let forbidden = [input.root_account, input.market_binding_account, input.feed_account];
+    if forbidden.contains(&sink)
+        || forbidden.contains(&rent.payer)
+        || forbidden.contains(&input.keeper_destination)
+    {
+        return Err(ExactIndexPlaneErrorV1::BindingMismatch);
+    }
+    let (feed_principal, feed_donation, feed_keeper_reward) = feed_close_credits(
+        rent,
+        header.close_reward_lamports,
+        input.feed_lamports,
+        sink,
+        input.keeper_destination,
+    )?;
+    let indexed_root_poststate_data_id = indexed_root
+        .encode_retire_feed_and_finish_and_data_id(
+            &CanonicalSha256,
+            input.root_account,
+            root_output,
+        )
+        .map_err(|_| ExactIndexPlaneErrorV1::RootBinding)?;
+    Ok(CountedExactFeedRetirementPostwritesV1 {
+        indexed_root_poststate_data_id,
+        feed_principal,
+        feed_donation,
+        feed_keeper_reward,
+    })
+}
+
+fn feed_close_credits(
+    rent: DeletableRentOwnerV1,
+    close_reward_lamports: u64,
+    lamports: u64,
+    sink: Id32,
+    keeper: Id32,
+) -> Result<
+    (ExactIndexCloseCreditV1, ExactIndexCloseCreditV1, ExactIndexCloseCreditV1),
+    ExactIndexPlaneErrorV1,
+> {
+    rent.validate().map_err(|_| ExactIndexPlaneErrorV1::InvalidRent)?;
+    if close_reward_lamports == 0 || sink.is_zero() || keeper.is_zero() {
+        return Err(ExactIndexPlaneErrorV1::InvalidRent);
+    }
+    let required = rent
+        .refundable_principal
+        .checked_add(rent.donation_floor)
+        .and_then(|value| value.checked_add(close_reward_lamports))
+        .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+    if lamports < required {
+        return Err(ExactIndexPlaneErrorV1::InvalidRent);
+    }
+    let donation = lamports
+        .checked_sub(rent.refundable_principal)
+        .and_then(|value| value.checked_sub(close_reward_lamports))
+        .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+    Ok((
+        ExactIndexCloseCreditV1 { recipient: rent.payer, amount: rent.refundable_principal },
+        ExactIndexCloseCreditV1 { recipient: sink, amount: donation },
+        ExactIndexCloseCreditV1 { recipient: keeper, amount: close_reward_lamports },
+    ))
+}
+
+#[derive(Clone, Copy, Debug)]
+/// Exact hostile terminal indexed-root close inputs.
+pub struct CloseCountedExactRootInputV1<'a> {
+    /// Executing Dragon's Clutch program identity.
+    pub program_id: Id32,
+    /// Indexed-root account being closed.
+    pub root_account: Id32,
+    /// Exact hostile terminal indexed-root body.
+    pub root_body: &'a [u8],
+    /// Observed root lamports before close.
+    pub root_lamports: u64,
+    /// Observed root owner.
+    pub root_owner: Id32,
+    /// Whether the root account is writable.
+    pub root_writable: bool,
+    /// Whether the root account is executable.
+    pub root_executable: bool,
+    /// Independently derived canonical root PDA.
+    pub canonical_root_account: Id32,
+    /// Independently derived canonical root bump.
+    pub canonical_root_bump: u8,
+    /// Canonical writable parent Epoch account.
+    pub epoch_account: Id32,
+    /// Exact hostile parent Epoch body.
+    pub epoch_body: &'a [u8],
+    /// Observed parent Epoch owner.
+    pub epoch_owner: Id32,
+    /// Whether the parent Epoch is writable.
+    pub epoch_writable: bool,
+    /// Whether the parent Epoch is executable.
+    pub epoch_executable: bool,
+    /// Canonical read-only finalized Window account.
+    pub window_account: Id32,
+    /// Exact hostile finalized Window body.
+    pub window_body: &'a [u8],
+    /// Observed finalized Window owner.
+    pub window_owner: Id32,
+    /// Whether the finalized Window is writable.
+    pub window_writable: bool,
+    /// Whether the finalized Window is executable.
+    pub window_executable: bool,
+    /// Canonical MarketBinding PDA.
+    pub market_binding_account: Id32,
+    /// Already authenticated MarketBinding value.
+    pub market_binding: &'a MarketBindingV2,
+}
+
+/// Compact terminal handoff and exact indexed-root close credits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CountedExactRootClosePostwritesV1 {
+    terminal: IndexedSettlementRootCloseProjectionV1,
+    root_principal: ExactIndexCloseCreditV1,
+    root_donation: ExactIndexCloseCreditV1,
+}
+
+impl CountedExactRootClosePostwritesV1 {
+    /// Structural terminal receipt decoded from the exact root bytes.
+    pub const fn terminal(&self) -> &IndexedSettlementRootCloseProjectionV1 {
+        &self.terminal
+    }
+    /// Exact refundable root rent principal credit.
+    pub const fn root_principal_credit(&self) -> ExactIndexCloseCreditV1 {
+        self.root_principal
+    }
+    /// Neutral-sink credit containing donation floor and late donations.
+    pub const fn root_donation_credit(&self) -> ExactIndexCloseCreditV1 {
+        self.root_donation
+    }
+}
+
+/// Hostile-decode the terminal indexed root, stream the parent Epoch's unique
+/// selected-root decrement, and plan the root's exact final close.
+///
+/// The full 1,228-byte body is decoded and hashed inside the contract boundary;
+/// only the compact terminal projection and exact credits cross back to SBF.
+/// The finalized Window remains read-only and proves its historical selected
+/// artifact is this exact root.
+pub fn close_counted_exact_root_v1(
+    input: CloseCountedExactRootInputV1<'_>,
+    epoch_output: &mut [u8],
+) -> Result<CountedExactRootClosePostwritesV1, ExactIndexPlaneErrorV1> {
+    input.market_binding.validate().map_err(|_| ExactIndexPlaneErrorV1::BindingMismatch)?;
+    if input.program_id.is_zero()
+        || input.root_account.is_zero()
+        || input.market_binding_account.is_zero()
+        || input.root_account != input.canonical_root_account
+        || input.epoch_account.is_zero()
+        || input.window_account.is_zero()
+        || input.root_owner != input.program_id
+        || input.epoch_owner != input.program_id
+        || input.window_owner != input.program_id
+        || !input.root_writable
+        || !input.epoch_writable
+        || input.window_writable
+        || input.root_executable
+        || input.epoch_executable
+        || input.window_executable
+    {
+        return Err(ExactIndexPlaneErrorV1::BindingMismatch);
+    }
+    let physical = [
+        input.root_account,
+        input.epoch_account,
+        input.window_account,
+        input.market_binding_account,
+    ];
+    let mut left = 0usize;
+    while left < physical.len() {
+        let mut right = left + 1;
+        while right < physical.len() {
+            if physical[left] == physical[right] {
+                return Err(ExactIndexPlaneErrorV1::BindingMismatch);
+            }
+            right += 1;
+        }
+        left += 1;
+    }
+    let terminal = IndexedSettlementRootV1AccountV1::decode_terminal_close_projection(
+        &CanonicalSha256,
+        input.root_account,
+        input.root_body,
+    )
+    .map_err(|_| ExactIndexPlaneErrorV1::NonTerminalRoot)?;
+    if terminal.terminal().base().root_account() != input.root_account
+        || terminal.stored_bump() != input.canonical_root_bump
+        || terminal.market_binding() != input.market_binding_account
+        || terminal.terminal().base().epoch() != input.epoch_account
+        || terminal.terminal().base().market() != input.market_binding.base().market
+        || terminal.terminal().base().market_instance_v2_id()
+            != input.market_binding.base().market_instance_v2_id
+    {
+        return Err(ExactIndexPlaneErrorV1::BindingMismatch);
+    }
+    let sink = input.market_binding.base().neutral_sink;
+    let rent = terminal.root_rent();
+    if sink == input.root_account
+        || sink == input.epoch_account
+        || sink == input.window_account
+        || sink == input.market_binding_account
+        || rent.payer == input.root_account
+        || rent.payer == input.epoch_account
+        || rent.payer == input.window_account
+        || rent.payer == input.market_binding_account
+    {
+        return Err(ExactIndexPlaneErrorV1::BindingMismatch);
+    }
+    let (root_principal, root_donation) =
+        close_credits(rent, input.root_lamports, sink)?;
+    let epoch = GeneralEpochV6AccountV1::decode(input.epoch_body)
+        .map_err(|_| ExactIndexPlaneErrorV1::BindingMismatch)?;
+    let window = CandidateWindowV5AccountV1::decode(input.window_body)
+        .map_err(|_| ExactIndexPlaneErrorV1::BindingMismatch)?;
+    encode_retire_indexed_settlement_root_v1(
+        &terminal,
+        input.epoch_account,
+        &epoch,
+        input.window_account,
+        &window,
+        epoch_output,
+    )
+    .map_err(|_| ExactIndexPlaneErrorV1::BindingMismatch)?;
+    Ok(CountedExactRootClosePostwritesV1 {
+        terminal,
+        root_principal,
+        root_donation,
+    })
 }
 
 pub fn sealed_locator_data_id_from_raw_v1(body: &[u8]) -> Result<Id32, ExactIndexPlaneErrorV1> {
@@ -1125,5 +1479,27 @@ mod tests {
             close_credits(rent, 53, id(11)),
             Err(ExactIndexPlaneErrorV1::InvalidRent),
         );
+    }
+
+    #[test]
+    fn feed_close_preserves_reward_and_routes_late_donations() {
+        let rent = DeletableRentOwnerV1 {
+            payer: id(11),
+            refundable_principal: 31,
+            donation_floor: 7,
+        };
+        let (principal, donation, keeper) =
+            feed_close_credits(rent, 5, 53, id(12), id(13)).expect("feed credits");
+        assert_eq!((principal.recipient(), principal.amount()), (id(11), 31));
+        assert_eq!((donation.recipient(), donation.amount()), (id(12), 17));
+        assert_eq!((keeper.recipient(), keeper.amount()), (id(13), 5));
+        assert_eq!(principal.amount() + donation.amount() + keeper.amount(), 53);
+        assert_eq!(
+            feed_close_credits(rent, 5, 42, id(12), id(13)),
+            Err(ExactIndexPlaneErrorV1::InvalidRent),
+        );
+        // Credit roles may intentionally coalesce; only source-account aliases
+        // are forbidden by the action composer.
+        assert!(feed_close_credits(rent, 5, 43, id(11), id(11)).is_ok());
     }
 }

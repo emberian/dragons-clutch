@@ -9,7 +9,8 @@
 //! capability remains disabled until the complete SBF transition family lands.
 
 use crate::{
-    CodecError, DeletableRentOwnerV1, Id32, Reader,
+    CandidateWindowV5AccountV1, CodecError, DeletableRentOwnerV1, GeneralEpochPhaseV1,
+    GeneralEpochV6AccountV1, Id32, Reader,
     SettlementRootChildStateV1, SettlementRootPhaseV1, SettlementRootSeedTupleV1,
     SettlementRootTerminalProjectionV1, SettlementRootV1AccountV1, Sha256BackendV1, Writer,
     SETTLEMENT_ROOT_ACCOUNT_BYTES, SETTLEMENT_ROOT_ACCOUNT_TAG,
@@ -650,6 +651,86 @@ pub struct IndexedSettlementRootTerminalProjectionV1 {
     selected_feed_data_id: Id32,
 }
 
+/// Compact terminal close facts decoded from one exact indexed-root body.
+///
+/// This is structural evidence only. The SBF adapter must still authenticate
+/// the program owner, canonical PDA/bump, writable account, MarketBinding, and
+/// exact lamport balance before it may close the root.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IndexedSettlementRootCloseProjectionV1 {
+    terminal: IndexedSettlementRootTerminalProjectionV1,
+    root_rent: DeletableRentOwnerV1,
+    market_binding: Id32,
+    stored_bump: u8,
+}
+
+impl IndexedSettlementRootCloseProjectionV1 {
+    /// Exact terminal receipt and Product occurrence handoff.
+    pub const fn terminal(&self) -> &IndexedSettlementRootTerminalProjectionV1 {
+        &self.terminal
+    }
+    /// Immutable root rent principal and payer.
+    pub const fn root_rent(&self) -> DeletableRentOwnerV1 {
+        self.root_rent
+    }
+    /// MarketBinding account that owns the neutral donation sink.
+    pub const fn market_binding(&self) -> Id32 {
+        self.market_binding
+    }
+    /// Canonical indexed-root PDA bump persisted in the base root.
+    pub const fn stored_bump(&self) -> u8 {
+        self.stored_bump
+    }
+}
+
+/// Atomically consume one exact terminal indexed-root projection and stream
+/// the finalized Epoch successor with its unique selected-root count cleared.
+///
+/// The immutable finalized Window is the authoritative historical pointer to
+/// the selected root. This prevents a terminal projection from another root
+/// in the same Epoch from decrementing the count. The runtime adapter must
+/// still authenticate the exact Epoch and Window accounts, owners, PDAs,
+/// access modes, and unchanged Window bytes before applying the root close.
+pub fn encode_retire_indexed_settlement_root_v1(
+    terminal: &IndexedSettlementRootCloseProjectionV1,
+    epoch_account: Id32,
+    epoch: &GeneralEpochV6AccountV1,
+    window_account: Id32,
+    window: &CandidateWindowV5AccountV1,
+    epoch_output: &mut [u8],
+) -> Result<(), CodecError> {
+    epoch.validate()?;
+    window.validate()?;
+    let selected = terminal.terminal().base();
+    let window = window.base();
+    if epoch_account.is_zero()
+        || window_account.is_zero()
+        || selected.root_account() == epoch_account
+        || selected.root_account() == window_account
+        || epoch_account == window_account
+        || epoch.phase != GeneralEpochPhaseV1::Finalized
+        || epoch.selected_candidate_count != 1
+        || epoch.window != window_account
+        || epoch.market_binding != terminal.market_binding()
+        || epoch.market_runtime != selected.market()
+        || epoch.market_instance_v2_id != selected.market_instance_v2_id()
+        || epoch.generation != selected.epoch_generation()
+        || selected.epoch() != epoch_account
+        || window.epoch != epoch_account
+        || window.market != epoch.market_runtime
+        || window.epoch_generation != epoch.generation
+        || window.finalized_slot == 0
+        || window.selected_candidate_artifact != selected.root_account()
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    GeneralEpochV6AccountV1 {
+        selected_candidate_count: 0,
+        ..*epoch
+    }
+    .encode(epoch_output)
+}
+
 impl IndexedSettlementRootTerminalProjectionV1 {
     /// Exact historical Root V1 terminal coordinates.
     pub const fn base(&self) -> &SettlementRootTerminalProjectionV1 {
@@ -683,6 +764,37 @@ impl IndexedSettlementRootTerminalProjectionV1 {
 }
 
 impl IndexedSettlementRootV1AccountV1 {
+    /// Hostile-decode one exact terminal body into the compact facts needed by
+    /// the root-close adapter, hashing the supplied bytes without re-encoding
+    /// a second indexed-root-sized scratch value.
+    pub fn decode_terminal_close_projection<B: Sha256BackendV1>(
+        backend: &B,
+        root_account: Id32,
+        input: &[u8],
+    ) -> Result<IndexedSettlementRootCloseProjectionV1, CodecError> {
+        if root_account.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        let value = Self::decode(input)?;
+        if !value.is_terminal() {
+            return Err(CodecError::InvalidState);
+        }
+        let terminal = IndexedSettlementRootTerminalProjectionV1 {
+            base: value.base.terminal_projection(backend, root_account)?,
+            indexed_root_data_id: Self::encoded_data_id(backend, root_account, input)?,
+            plane_id: value.plane_id,
+            locator_data_id: value.locator_data_id,
+            adjacency_data_id: value.adjacency_data_id,
+            selected_feed_data_id: value.selected_feed_data_id,
+        };
+        Ok(IndexedSettlementRootCloseProjectionV1 {
+            terminal,
+            root_rent: value.base.root_rent(),
+            market_binding: value.base.market_binding(),
+            stored_bump: value.base.stored_bump(),
+        })
+    }
+
     /// Exact last frontier at which the retained Feed is still readable but
     /// every other base child liability has already been discharged.
     fn at_pre_feed_terminal_frontier(base: &SettlementRootV1AccountV1) -> bool {
@@ -1008,6 +1120,49 @@ impl IndexedSettlementRootV1AccountV1 {
         };
         value.validate()?;
         Ok(value)
+    }
+
+    /// Stream the exact post-index-retirement successor and account-bound ID.
+    ///
+    /// This preserves the retained Feed as the sole remaining readable child
+    /// while avoiding a second indexed-root-sized poststate in the runtime
+    /// composer. Both index closes and this root write must share one rollback
+    /// domain; this structural encoder grants no close authority by itself.
+    pub fn encode_retire_index_children_and_data_id<B: Sha256BackendV1>(
+        &self,
+        backend: &B,
+        root_account: Id32,
+        output: &mut [u8],
+    ) -> Result<Id32, CodecError> {
+        self.validate()?;
+        if root_account.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        if self.state != ExactIndexChildrenStateV1::Live
+            || !Self::at_pre_feed_terminal_frontier(&self.base)
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let counts = ExactIndexChildCountsV1 {
+            expected: INDEXED_SETTLEMENT_ROOT_EXPECTED_CHILDREN_V1,
+            admitted: INDEXED_SETTLEMENT_ROOT_EXPECTED_CHILDREN_V1,
+            live: 0,
+            retired: INDEXED_SETTLEMENT_ROOT_EXPECTED_CHILDREN_V1,
+        };
+        Self::encode_components(
+            &self.base,
+            self.locator_account,
+            self.adjacency_account,
+            self.plane_id,
+            self.locator_data_id,
+            self.adjacency_data_id,
+            self.selected_feed_data_id,
+            self.capability_profile_id,
+            counts,
+            ExactIndexChildrenStateV1::Retired,
+            output,
+        )?;
+        Self::encoded_data_id(backend, root_account, output)
     }
 
     /// Retire the already-authenticated retained Feed and finish the base root.
@@ -1644,11 +1799,26 @@ mod tests {
         let retired = frontier.retire_index_children().unwrap();
         assert_eq!(retired.index_state(), ExactIndexChildrenStateV1::Retired);
         retired.validate().unwrap();
+        let root_account = id(90);
+        let mut streamed_retired = [0u8; INDEXED_SETTLEMENT_ROOT_BYTES_V1];
+        let streamed_retired_id = frontier
+            .encode_retire_index_children_and_data_id(
+                &Sha2Backend,
+                root_account,
+                &mut streamed_retired,
+            )
+            .unwrap();
+        let mut ordinary_retired = [0u8; INDEXED_SETTLEMENT_ROOT_BYTES_V1];
+        retired.encode(&mut ordinary_retired).unwrap();
+        assert_eq!(streamed_retired, ordinary_retired);
+        assert_eq!(
+            streamed_retired_id,
+            retired.data_id(&Sha2Backend, root_account).unwrap(),
+        );
         let terminal = retired.retire_feed_and_finish().unwrap();
         assert_eq!(terminal.base(), &crate::settlement_root::tests::terminal_root());
         terminal.validate().unwrap();
         assert_eq!(terminal.selected_feed_data_id(), retired.selected_feed_data_id());
-        let root_account = id(90);
         let mut streamed_terminal = [0u8; INDEXED_SETTLEMENT_ROOT_BYTES_V1];
         let streamed_terminal_id = retired
             .encode_retire_feed_and_finish_and_data_id(
@@ -1664,6 +1834,116 @@ mod tests {
             streamed_terminal_id,
             terminal.data_id(&Sha2Backend, root_account).unwrap(),
         );
+        let close = IndexedSettlementRootV1AccountV1::decode_terminal_close_projection(
+            &Sha2Backend,
+            root_account,
+            &ordinary_terminal,
+        )
+        .unwrap();
+        assert_eq!(
+            close.terminal(),
+            &terminal.terminal_projection(&Sha2Backend, root_account).unwrap(),
+        );
+        assert_eq!(close.root_rent(), terminal.base().root_rent());
+        assert_eq!(close.market_binding(), terminal.base().market_binding());
+        assert_eq!(close.stored_bump(), terminal.base().stored_bump());
+        let epoch_account = terminal.base().epoch();
+        let epoch = GeneralEpochV6AccountV1 {
+            market_binding: terminal.base().market_binding(),
+            market_runtime: terminal.base().market(),
+            market_instance_v2_id: terminal.base().market_instance_v2_id(),
+            economic_domain: id(91),
+            window: terminal.base().window(),
+            budget: id(92),
+            order_set: terminal.base().order_set(),
+            epoch_index: 1,
+            generation: terminal.base().epoch_generation(),
+            freeze_deadline_slot: 1,
+            frozen_slot: 1,
+            candidate_bundle_count: 0,
+            work_count: 0,
+            selected_candidate_count: 1,
+            rent: DeletableRentOwnerV1 {
+                payer: id(93),
+                refundable_principal: 7,
+                donation_floor: 0,
+            },
+            phase: GeneralEpochPhaseV1::Finalized,
+            stored_bump: 1,
+            flags: 0,
+        };
+        let window = CandidateWindowV5AccountV1::new(crate::CandidateWindowV4AccountV1 {
+            epoch: epoch_account,
+            market: terminal.base().market(),
+            relation_policy_id: id(94),
+            admission_policy_id: id(95),
+            score_policy_id: terminal.base().score_policy_id(),
+            freeze_deadline_slot: 1,
+            frozen_slot: 1,
+            reveal_opens_slot: 2,
+            submission_closes_slot: 3,
+            verification_closes_slot: 4,
+            finalized_slot: 4,
+            admission_head: Id32::ZERO,
+            best_candidate_node: Id32::ZERO,
+            best_settlement_candidate_id: Id32::ZERO,
+            selected_candidate_artifact: root_account,
+            best_rank_key: [0; crate::SCORE_V2_Q_RANK_CAPACITY],
+            admitted_count: 1,
+            revealed_count: 1,
+            verdict_count: 1,
+            valid_verdict_count: 1,
+            expired_commitment_count: 0,
+            expired_unverified_count: 0,
+            live_node_count: 0,
+            closed_node_count: 1,
+            best_ordinal: 0,
+            epoch_generation: terminal.base().epoch_generation(),
+            rent: DeletableRentOwnerV1 {
+                payer: id(96),
+                refundable_principal: 8,
+                donation_floor: 0,
+            },
+            rank_key_len: crate::SCORE_V2_Q_COST_ACTIVE_RANK_BYTES as u8,
+            stored_bump: 2,
+            flags: 0,
+        })
+        .unwrap();
+        let mut epoch_after = [0u8; crate::GENERAL_EPOCH_ACCOUNT_BYTES];
+        encode_retire_indexed_settlement_root_v1(
+            &close,
+            epoch_account,
+            &epoch,
+            terminal.base().window(),
+            &window,
+            &mut epoch_after,
+        )
+        .unwrap();
+        let epoch_after = GeneralEpochV6AccountV1::decode(&epoch_after).unwrap();
+        assert_eq!(epoch_after.selected_candidate_count, 0);
+        let wrong_window = CandidateWindowV5AccountV1::new(crate::CandidateWindowV4AccountV1 {
+            selected_candidate_artifact: id(97),
+            ..*window.base()
+        })
+        .unwrap();
+        let mut wrong_epoch_after = [0u8; crate::GENERAL_EPOCH_ACCOUNT_BYTES];
+        assert!(encode_retire_indexed_settlement_root_v1(
+            &close,
+            epoch_account,
+            &epoch,
+            terminal.base().window(),
+            &wrong_window,
+            &mut wrong_epoch_after,
+        )
+        .is_err());
+        let mut nonterminal = ordinary_terminal;
+        nonterminal[2] = ExactIndexChildrenStateV1::Live.code();
+        assert!(IndexedSettlementRootV1AccountV1::decode_terminal_close_projection(
+            &Sha2Backend,
+            root_account,
+            &nonterminal,
+        )
+        .is_err());
 
         assert_eq!(
             frontier.retire_feed_and_finish(),

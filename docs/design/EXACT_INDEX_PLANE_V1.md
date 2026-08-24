@@ -111,8 +111,12 @@ strict:
    compact children;
 3. a separately authenticated transition retires the Feed and promotes the
    base root to `Terminal`; and
-4. the 1,228-byte indexed root returns its exact principal and sends all
-   nonprincipal lamports to the neutral sink.
+4. the terminal root is joined to the finalized Epoch and immutable Window;
+   the Window's historical selected-artifact pointer must name this exact root;
+   and
+5. one atomic close clears the Epoch's unique selected-root count, returns the
+   1,228-byte indexed-root principal, and sends all root nonprincipal lamports
+   to the neutral sink.
 
 Closing the Feed first, presenting a replacement Feed body, partially closing
 the index pair, or stranding the indexed-root principal is not representable by
@@ -137,6 +141,6 @@ at most Solana's 32-byte seed limit.
 
 `EXACT_INDEX_PLANE_LIVE_ENABLED_V1` remains false. No deployable capability
 profile admits action 39 through this implementation. Promotion additionally
-requires action-specific migration of every root reader/writer, the
-authenticated Feed-retirement and root-close successors, compiled frame/CU
+requires action-specific migration of every root reader/writer, the SBF
+Feed-retirement and Epoch-counted root-close adapters, compiled frame/CU
 measurement, and an independent review of the complete capability unit.
