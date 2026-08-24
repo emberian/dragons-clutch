@@ -26,6 +26,7 @@ use clutch_solana_layout::product_series::{
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
+use super::general_market_foundation_v3::AuthenticatedGeneralMarketPreRootFoundingPlanV3;
 use super::product_artifact::authenticate_product_artifact_v1;
 use super::product_market::{
     authenticate_market_lifecycle_root_v1, authenticate_series_market_link_v1,
@@ -170,6 +171,8 @@ impl AuthenticatedGeneralFamilyPreauthorizationV1 {
 pub(crate) struct AuthenticatedGeneralFoundationLineageV1 {
     graph: AuthenticatedGeneralFamilyPreauthorizationV1,
     general_market_runtime_account: Pubkey,
+    product_founder_foundation_preauthorization_id: ContentId,
+    collateral_founding_authentication_id: ContentId,
     lineage_id: ContentId,
 }
 
@@ -192,6 +195,14 @@ impl AuthenticatedGeneralFoundationLineageV1 {
 
     pub(crate) const fn product_generation(self) -> u64 {
         self.graph.product_generation
+    }
+
+    pub(crate) const fn product_founder_foundation_preauthorization_id(self) -> ContentId {
+        self.product_founder_foundation_preauthorization_id
+    }
+
+    pub(crate) const fn collateral_founding_authentication_id(self) -> ContentId {
+        self.collateral_founding_authentication_id
     }
 }
 
@@ -226,13 +237,10 @@ pub(crate) trait AuthenticatedGeneralMarketBindingFoundationPostwriteV1:
 {
     fn authenticate_general_market_binding_foundation_postwrite_v1(
         &self,
+        _pre_root_plan: &AuthenticatedGeneralMarketPreRootFoundingPlanV3,
         _foundation_lineage_id: ContentId,
         _market_binding_account: Pubkey,
         _market_runtime_account: Pubkey,
-        _market_liability_founding_id: ContentId,
-        _claim_mint_founding_plan_id: ContentId,
-        _claim_issuance_binding_id: ContentId,
-        _general_founding_capability_id: ContentId,
     ) -> Outcome<()> {
         Err(Refusal::Adapter(ClutchError::MismatchedState))
     }
@@ -245,16 +253,13 @@ pub(crate) trait AuthenticatedGeneralMarketRuntimeFoundationPostwriteV1:
     #[allow(clippy::too_many_arguments)]
     fn authenticate_general_market_runtime_foundation_postwrite_v1(
         &self,
+        _pre_root_plan: &AuthenticatedGeneralMarketPreRootFoundingPlanV3,
         _runtime_foundation_authority_id: ContentId,
         _foundation_lineage_id: ContentId,
         _market_binding_foundation_step_id: ContentId,
         _current_founder_authorization_id: ContentId,
         _market_binding_account: Pubkey,
         _market_runtime_account: Pubkey,
-        _market_liability_founding_id: ContentId,
-        _claim_mint_founding_plan_id: ContentId,
-        _claim_issuance_binding_id: ContentId,
-        _general_founding_capability_id: ContentId,
     ) -> Outcome<()> {
         Err(Refusal::Adapter(ClutchError::MismatchedState))
     }
@@ -484,6 +489,7 @@ fn authenticate_link_from_body<'a>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn authenticate_general_foundation_lineage_v1(
     program_id: &Pubkey,
+    pre_root_plan: &AuthenticatedGeneralMarketPreRootFoundingPlanV3,
     founder: AuthenticatedMarketFounderFoundationV1,
     root_account: &AccountInfo<'_>,
     link_account: &AccountInfo<'_>,
@@ -495,6 +501,7 @@ pub(crate) fn authenticate_general_foundation_lineage_v1(
     root_output: &mut MarketLifecycleRootAccountV1,
     link_output: &mut SeriesMarketLinkAccountV1,
 ) -> Outcome<AuthenticatedGeneralFoundationLineageV1> {
+    let retained_product = pre_root_plan.product_preauthorization();
     let root = authenticate_root_from_body(program_id, root_account, true, root_output)?;
     let link = authenticate_link_from_body(
         program_id,
@@ -625,7 +632,20 @@ pub(crate) fn authenticate_general_foundation_lineage_v1(
         left += 1;
     }
     require(
-        founder.root_account() == *root_account.key
+        pre_root_plan.product_market_root_account() == *root_account.key
+            && pre_root_plan.series_market_link_account() == *link_account.key
+            && pre_root_plan.market_binding_account() == general_account
+            && pre_root_plan.market_runtime_account() == general_runtime_account
+            && pre_root_plan.market_instance_v2_id() == root_binding.market_instance_id
+            && pre_root_plan.product_generation() == root_binding.generation
+            && pre_root_plan.series_plan_v5_id() == link_binding.series_plan_id
+            && pre_root_plan.series_ordinal() == link_binding.ordinal
+            && pre_root_plan.compiler_bundle_v5_id() == bundle_id
+            && pre_root_plan.capability_profile_v4_id() == profile_id
+            && pre_root_plan.attachment_plan_v4_id() == attachment_id
+            && retained_product.lifecycle_root_account() == *root_account.key
+            && retained_product.founder_link_account() == *link_account.key
+            && founder.root_account() == *root_account.key
             && founder.root_authentication_id() == root.authentication_id()
             && founder.link_account() == *link_account.key
             && founder.link_authentication_id() == link.authentication_id()
@@ -690,6 +710,14 @@ pub(crate) fn authenticate_general_foundation_lineage_v1(
                 == bundle.value().market_genesis_profile_id
             && attachment_id == bundle.value().attachment_plan_id.content_id()
             && attachment.value().funding_quote_id == bundle.value().funding_quote_id
+            && root_binding.market_liability_founding_id
+                == pre_root_plan.market_liability_founding_id()
+            && root_binding.claim_mint_founding_plan_id
+                == pre_root_plan.claim_mint_founding_plan_id()
+            && root_binding.claim_issuance_binding_id
+                == pre_root_plan.claim_issuance_binding_id()
+            && root_binding.general_founding_capability_id
+                == pre_root_plan.general_founding_capability_id()
             && product_families.admits_new_child(MarketFamilyV1::General)
             && product_families
                 .binding()
@@ -725,6 +753,8 @@ pub(crate) fn authenticate_general_foundation_lineage_v1(
         &root_binding.claim_mint_founding_plan_id.bytes(),
         &root_binding.claim_issuance_binding_id.bytes(),
         &root_binding.general_founding_capability_id.bytes(),
+        &pre_root_plan.product_preauthorization_id().bytes(),
+        &pre_root_plan.collateral_authentication_id().bytes(),
         general_account.as_ref(),
         general_runtime_account.as_ref(),
         &family_admission_sequence.to_le_bytes(),
@@ -751,9 +781,9 @@ pub(crate) fn authenticate_general_foundation_lineage_v1(
         capability_profile_v4_id: profile_id,
         attachment_plan_v4_id: attachment_id,
         market_liability_founding_id: root_binding.market_liability_founding_id,
-        claim_mint_founding_plan_id: root_binding.claim_mint_founding_plan_id,
-        claim_issuance_binding_id: root_binding.claim_issuance_binding_id,
-        general_founding_capability_id: root_binding.general_founding_capability_id,
+        claim_mint_founding_plan_id: pre_root_plan.claim_mint_founding_plan_id(),
+        claim_issuance_binding_id: pre_root_plan.claim_issuance_binding_id(),
+        general_founding_capability_id: pre_root_plan.general_founding_capability_id(),
         general_market_owner_account: general_account,
         general_market_runtime_account: general_runtime_account,
         family_admission_sequence,
@@ -767,8 +797,49 @@ pub(crate) fn authenticate_general_foundation_lineage_v1(
     Ok(AuthenticatedGeneralFoundationLineageV1 {
         graph,
         general_market_runtime_account,
+        product_founder_foundation_preauthorization_id: pre_root_plan
+            .product_preauthorization_id(),
+        collateral_founding_authentication_id: pre_root_plan
+            .collateral_authentication_id(),
         lineage_id,
     })
+}
+
+fn require_retained_general_pre_root_plan_v3(
+    lineage: AuthenticatedGeneralFoundationLineageV1,
+    pre_root_plan: &AuthenticatedGeneralMarketPreRootFoundingPlanV3,
+) -> Outcome<()> {
+    require(
+        lineage.product_founder_foundation_preauthorization_id
+            == pre_root_plan.product_preauthorization_id()
+            && lineage.collateral_founding_authentication_id
+                == pre_root_plan.collateral_authentication_id()
+            && lineage.graph.market_lifecycle_root_account
+                == pre_root_plan.product_market_root_account()
+            && lineage.graph.market_instance_v2_id == pre_root_plan.market_instance_v2_id()
+            && lineage.graph.product_generation == pre_root_plan.product_generation()
+            && lineage.graph.series_plan_v5_id == pre_root_plan.series_plan_v5_id()
+            && lineage.graph.series_ordinal == pre_root_plan.series_ordinal()
+            && lineage.graph.series_market_link_account
+                == pre_root_plan.series_market_link_account()
+            && lineage.graph.compiler_bundle_v5_id == pre_root_plan.compiler_bundle_v5_id()
+            && lineage.graph.capability_profile_v4_id
+                == pre_root_plan.capability_profile_v4_id()
+            && lineage.graph.attachment_plan_v4_id == pre_root_plan.attachment_plan_v4_id()
+            && lineage.graph.market_liability_founding_id
+                == pre_root_plan.market_liability_founding_id()
+            && lineage.graph.claim_mint_founding_plan_id
+                == pre_root_plan.claim_mint_founding_plan_id()
+            && lineage.graph.claim_issuance_binding_id
+                == pre_root_plan.claim_issuance_binding_id()
+            && lineage.graph.general_founding_capability_id
+                == pre_root_plan.general_founding_capability_id()
+            && lineage.graph.general_market_owner_account
+                == pre_root_plan.market_binding_account()
+            && lineage.general_market_runtime_account
+                == pre_root_plan.market_runtime_account(),
+        ClutchError::MismatchedState,
+    )
 }
 
 /// Consume the exact accepted slot-1 Product transition and authorize only
@@ -854,6 +925,7 @@ pub(crate) fn accept_general_market_binding_foundation_v1(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn advance_general_market_binding_foundation_v1<'next, A>(
     program_id: &Pubkey,
+    pre_root_plan: &AuthenticatedGeneralMarketPreRootFoundingPlanV3,
     lineage: AuthenticatedGeneralFoundationLineageV1,
     founder: AuthenticatedMarketFounderFoundationV1,
     root_account: &AccountInfo<'_>,
@@ -875,6 +947,7 @@ where
     A: AuthenticatedGeneralMarketBindingFoundationPostwriteV1 + ?Sized,
 {
     let graph = lineage.graph;
+    require_retained_general_pre_root_plan_v3(lineage, pre_root_plan)?;
     let root_semantic_id = root
         .state()
         .semantic_id()
@@ -892,13 +965,10 @@ where
         ClutchError::MismatchedState,
     )?;
     postwrite.authenticate_general_market_binding_foundation_postwrite_v1(
+        pre_root_plan,
         lineage.lineage_id,
         graph.general_market_owner_account,
         lineage.general_market_runtime_account,
-        graph.market_liability_founding_id,
-        graph.claim_mint_founding_plan_id,
-        graph.claim_issuance_binding_id,
-        graph.general_founding_capability_id,
     )?;
     let (rebound, step) = advance_market_foundation_step_v2(
         program_id,
@@ -1096,6 +1166,7 @@ pub(crate) fn authenticate_general_family_preauthorization_v1(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn advance_general_market_runtime_foundation_v1<'next, A>(
     program_id: &Pubkey,
+    pre_root_plan: &AuthenticatedGeneralMarketPreRootFoundingPlanV3,
     runtime_authority: AuthenticatedGeneralRuntimeFoundationAuthorityV1,
     founder: AuthenticatedMarketFounderFoundationV1,
     root_account: &AccountInfo<'_>,
@@ -1119,6 +1190,7 @@ where
 {
     let lineage = runtime_authority.lineage;
     let graph = lineage.graph;
+    require_retained_general_pre_root_plan_v3(lineage, pre_root_plan)?;
     let root_semantic_id = root
         .state()
         .semantic_id()
@@ -1152,16 +1224,13 @@ where
         ClutchError::MismatchedState,
     )?;
     postwrite.authenticate_general_market_runtime_foundation_postwrite_v1(
+        pre_root_plan,
         runtime_authority.authority_id,
         lineage.lineage_id,
         runtime_authority.market_binding_foundation_step_id,
         founder.id(),
         graph.general_market_owner_account,
         lineage.general_market_runtime_account,
-        graph.market_liability_founding_id,
-        graph.claim_mint_founding_plan_id,
-        graph.claim_issuance_binding_id,
-        graph.general_founding_capability_id,
     )?;
     let (rebound, step) = advance_market_foundation_step_v2(
         program_id,
@@ -1590,6 +1659,8 @@ mod adversarial_tests {
         AuthenticatedGeneralFoundationLineageV1 {
             graph,
             general_market_runtime_account: graph.general_market_runtime_account,
+            product_founder_foundation_preauthorization_id: id(64),
+            collateral_founding_authentication_id: id(65),
             lineage_id: id(41),
         }
     }
@@ -1634,18 +1705,6 @@ mod adversarial_tests {
             MarketFoundationSlotV2::MarketRuntime,
             authority.lineage.general_market_runtime_account,
         )
-    }
-
-    struct RefusingFoundationPostwrite;
-
-    impl AuthenticatedMarketFoundationStepPostwriteV2 for RefusingFoundationPostwrite {}
-    impl AuthenticatedGeneralMarketBindingFoundationPostwriteV1
-        for RefusingFoundationPostwrite
-    {
-    }
-    impl AuthenticatedGeneralMarketRuntimeFoundationPostwriteV1
-        for RefusingFoundationPostwrite
-    {
     }
 
     fn exact_graph_join() -> GeneralFamilyGraphJoinV1 {
@@ -1855,38 +1914,6 @@ mod adversarial_tests {
             stale_runtime_root,
         )
         .is_err());
-    }
-
-    #[test]
-    fn general_specific_foundation_postwrite_traits_default_refuse() {
-        let postwrite = RefusingFoundationPostwrite;
-        let lineage = lineage();
-        assert!(postwrite
-            .authenticate_general_market_binding_foundation_postwrite_v1(
-                lineage.id(),
-                lineage.general_market_owner_account(),
-                lineage.general_market_runtime_account(),
-                lineage.graph.market_liability_founding_id,
-                lineage.graph.claim_mint_founding_plan_id,
-                lineage.graph.claim_issuance_binding_id,
-                lineage.graph.general_founding_capability_id,
-            )
-            .is_err());
-        let runtime_authority = runtime_authority();
-        assert!(postwrite
-            .authenticate_general_market_runtime_foundation_postwrite_v1(
-                runtime_authority.id(),
-                runtime_authority.lineage_id(),
-                runtime_authority.market_binding_foundation_step_id,
-                id(63),
-                runtime_authority.lineage.graph.general_market_owner_account,
-                runtime_authority.general_market_runtime_account(),
-                runtime_authority.lineage.graph.market_liability_founding_id,
-                runtime_authority.lineage.graph.claim_mint_founding_plan_id,
-                runtime_authority.lineage.graph.claim_issuance_binding_id,
-                runtime_authority.lineage.graph.general_founding_capability_id,
-            )
-            .is_err());
     }
 
     #[test]
