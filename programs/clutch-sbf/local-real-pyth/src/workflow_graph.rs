@@ -465,6 +465,9 @@ pub enum WorkflowLane {
     StructuredLifecycle,
     /// Exact chain-derived Fractional redemption lifecycle.
     FractionalRedemption,
+    /// Current General settlement-root creation from one finalized V5
+    /// Epoch/Window/AdmissionNode/Feed traversal and exact absence set.
+    GeneralSettlement,
 }
 
 /// Deterministic cursor position derived from canonical account progress.

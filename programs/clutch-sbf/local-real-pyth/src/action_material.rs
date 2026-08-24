@@ -12,6 +12,9 @@ use crate::failure_action11_material::{
     ChainDerivedFailureAction11MaterialV1, FAILURE_ACTION11_ROLE_LABELS_V1,
     FAILURE_ACTION11_VALIDITY_SLOTS_V1,
 };
+use crate::general_action39_material::{
+    ChainDerivedGeneralAction39MaterialV1, GENERAL_ACTION39_VALIDITY_SLOTS_V1,
+};
 use crate::rpc_index::{
     CanonicalIntentCoordinate, CanonicalIntentVariantV1, IndexedProgramRelease,
     ObservedRpcAccount, RpcCommitment,
@@ -1932,6 +1935,111 @@ pub fn construct_failure_action11_action_material_v1(
         variant: None,
         driver_account: selection.account,
         driver_account_slot: selection.account_slot,
+        cursor,
+        authority_state_sha256,
+        freshness,
+        fee_payer: builder.payer(),
+        account_roles,
+        planned,
+        draft_id,
+    })
+}
+
+/// Join the current General action-39 semantic-owner material to the opaque
+/// daemon artifact. Every role, payload byte, signer, and cursor was already
+/// derived from the same finalized chain snapshot.
+pub fn construct_general_action39_action_material_v1(
+    release: &IndexedProgramRelease,
+    builder: &ProtocolTransactionBuilder,
+    material: &ChainDerivedGeneralAction39MaterialV1,
+) -> Result<CanonicalActionMaterialV1> {
+    let action = clutch_solana_layout::registry::GeneralV2Action::InitializeSettlementRoot;
+    let coordinate = CanonicalIntentCoordinate {
+        family_tag: clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG,
+        family_version: clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION,
+        local_action: action.tag(),
+    };
+    let freshness = ActionFreshnessBoundaryV1 {
+        observed_slot: material.observed_slot(),
+        valid_before_slot: material.valid_before_slot(),
+        maximum_validity_slots: GENERAL_ACTION39_VALIDITY_SLOTS_V1,
+    };
+    freshness.validate()?;
+    let cursor = material.cursor();
+    if cursor.lane != WorkflowLane::GeneralSettlement
+        || cursor.position.phase != 39
+        || cursor.position.item == 0
+        || cursor.observed_state_sha256 != material.state_sha256()
+        || builder.payer() != material.payer()
+        || builder.clutch_program() != release.program_id
+        || builder.clutch_release_sha256() != release.release_manifest_sha256
+    {
+        return Err(CanonicalActionMaterialErrorV1::WrongSelection);
+    }
+    let transaction = material
+        .build_unsigned_transaction(release, builder)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    if transaction.flows != [ProtocolFlow::GeneralV2Settlement]
+        || transaction.actions.len() != 1
+        || transaction.actions[0] != "initialize-general-settlement-root-v5"
+        || transaction.runtime_admissions != [RuntimeAdmission::ReleaseBoundEnabled]
+        || transaction.required_signers != [builder.payer()]
+        || transaction.message_version != TransactionMessageVersionV1::V0
+        || transaction.address_lookup_tables.len() != 1
+        || transaction.has_recent_blockhash
+        || transaction.signed
+        || transaction.submitted
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+    }
+    let labels = material.role_labels().collect::<Vec<_>>();
+    let metas = material.account_metas();
+    if labels.len() != metas.len() {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    let account_roles = metas
+        .iter()
+        .zip(labels)
+        .map(|(meta, label)| CanonicalAccountRoleV1::new(
+            label,
+            meta.pubkey,
+            meta.is_writable,
+            meta.is_signer,
+        ))
+        .collect::<Vec<_>>();
+    let planned = PlannedWorkflowNode {
+        manifest_sha256: release.release_manifest_sha256,
+        cursor,
+        coordinate: CanonicalActionCoordinate::General(action),
+        unsigned_transaction: transaction,
+        reload_authoritative_accounts: true,
+    };
+    let release_key = release.key();
+    let authority_state_sha256 = material.state_sha256();
+    let draft_id = action_material_id(
+        &release_key,
+        &release_key,
+        release.release_manifest_sha256,
+        release.capability_profile_id,
+        coordinate,
+        material.driver_account(),
+        material.observed_slot(),
+        cursor,
+        authority_state_sha256,
+        freshness,
+        builder.payer(),
+        &account_roles,
+        &planned.unsigned_transaction,
+    );
+    Ok(CanonicalActionMaterialV1 {
+        release_key: release_key.clone(),
+        driver_release_key: release_key,
+        release_manifest_sha256: release.release_manifest_sha256,
+        capability_profile_id: release.capability_profile_id,
+        coordinate,
+        variant: None,
+        driver_account: material.driver_account(),
+        driver_account_slot: material.observed_slot(),
         cursor,
         authority_state_sha256,
         freshness,
@@ -9879,6 +9987,7 @@ const fn workflow_lane_byte(lane: crate::workflow_graph::WorkflowLane) -> u8 {
         crate::workflow_graph::WorkflowLane::StructuredLifecycle => 5,
         crate::workflow_graph::WorkflowLane::FractionalRedemption => 6,
         crate::workflow_graph::WorkflowLane::FailureRecovery => 7,
+        crate::workflow_graph::WorkflowLane::GeneralSettlement => 8,
     }
 }
 
