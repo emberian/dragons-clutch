@@ -110,6 +110,34 @@ fn valid_candidate(batch: BatchRootV1, candidate_fill: u8) -> CandidateStateV1<2
     candidate
 }
 
+fn round_trip_general_root(root: GeneralRootV1) {
+    let mut bytes = [0; GENERAL_ROOT_BYTES];
+    root.encode(&mut bytes).expect("root encodes");
+    assert_eq!(&bytes[..8], b"DCLTGRR1");
+    assert_eq!(GeneralRootV1::decode(&bytes), Ok(root));
+}
+
+fn round_trip_batch_root(batch: BatchRootV1) {
+    let mut bytes = [0; BATCH_ROOT_BYTES];
+    batch.encode(&mut bytes).expect("batch encodes");
+    assert_eq!(&bytes[..8], b"DCLTGBR1");
+    assert_eq!(BatchRootV1::decode(&bytes), Ok(batch));
+}
+
+fn round_trip_order_state(state: OrderStateV1) {
+    let mut bytes = [0; ORDER_STATE_BYTES];
+    state.encode(&mut bytes).expect("order state encodes");
+    assert_eq!(&bytes[..8], b"DCLTGOS1");
+    assert_eq!(OrderStateV1::decode(&bytes), Ok(state));
+}
+
+fn round_trip_funding(funding: GeneralFundingV1) {
+    let mut bytes = [0; GENERAL_FUNDING_BYTES];
+    funding.encode(&mut bytes).expect("funding encodes");
+    assert_eq!(&bytes[..8], b"DCLTGFN1");
+    assert_eq!(GeneralFundingV1::decode(&bytes), Ok(funding));
+}
+
 #[test]
 fn golden_config_and_order_round_trip() {
     let config = config();
@@ -531,4 +559,311 @@ fn root_requires_real_quiescence_before_retirement() {
     assert_eq!(root.retire(false), Err(Error::NotQuiescent));
     root.retire(true).expect("funding discharged");
     assert_eq!(root.phase(), GeneralPhase::Retired);
+}
+
+#[test]
+fn general_root_codec_round_trips_every_phase_and_counter_transition() {
+    let mut root = GeneralRootV1::founding(id(9), 7);
+    round_trip_general_root(root);
+    assert_eq!(root.open_batch(), Ok(0));
+    assert_eq!(root.open_batch(), Ok(1));
+    round_trip_general_root(root);
+
+    root.request_quiescence().expect("quiescing");
+    round_trip_general_root(root);
+    root.close_batch().expect("one child retires");
+    round_trip_general_root(root);
+    root.close_batch().expect("last child retires");
+    root.enter_terminal().expect("terminal");
+    round_trip_general_root(root);
+    root.retire(true).expect("retired");
+    round_trip_general_root(root);
+}
+
+#[test]
+fn batch_root_codec_round_trips_every_phase_and_winner_shape() {
+    let mut empty = BatchRootV1::open(id(9), 1, 0, config()).expect("empty batch opens");
+    empty.open_selection(10).expect("empty selection opens");
+    assert_eq!(empty.close_selection(20), Ok(None));
+    round_trip_batch_root(empty);
+    empty.retire(true).expect("empty batch retires");
+    round_trip_batch_root(empty);
+
+    let mut batch = BatchRootV1::open(id(9), 0, 0, config()).expect("batch opens");
+    round_trip_batch_root(batch);
+    batch.open_selection(10).expect("selection opens");
+    round_trip_batch_root(batch);
+
+    let mut candidate = valid_candidate(batch, 40);
+    batch
+        .consider_candidate(&mut candidate, 12)
+        .expect("candidate considered");
+    round_trip_batch_root(batch);
+    batch.close_selection(20).expect("winner freezes");
+    round_trip_batch_root(batch);
+
+    let mut hoard = HoardLedgerV1::new(id(2), 0, 0).expect("empty hoard");
+    let mut cursor = SettlementCursorV1::begin(candidate, &mut batch, &mut hoard, config(), 20)
+        .expect("applying begins");
+    round_trip_batch_root(batch);
+    cursor
+        .settle_page(
+            VerificationPageV1 {
+                page_index: 0,
+                prior_transcript_id: id(50),
+                next_transcript_id: id(51),
+                execution_count: 2,
+                executions: executions(),
+            },
+            candidate,
+            config(),
+            batch,
+        )
+        .expect("page settles");
+    cursor
+        .finish(candidate, &mut batch)
+        .expect("batch quiesces");
+    round_trip_batch_root(batch);
+    batch.retire(true).expect("batch retires");
+    round_trip_batch_root(batch);
+}
+
+#[test]
+fn order_state_codec_round_trips_open_cancelled_partial_and_consumed() {
+    let signed = PortfolioOrderV1::new(PortfolioOrderV1Input {
+        market_identity_id: id(2),
+        claim_basis_id: id(3),
+        owner: id(20),
+        order_id: id(10),
+        generation: 7,
+        batch_sequence: 0,
+        nonce: 55,
+        valid_until_slot: 30,
+        max_lots: 2,
+        max_quote_debit_per_lot_numerator: 0,
+        coefficients: [1, -1],
+        outcome_count: 2,
+    })
+    .expect("valid order");
+    let mut partial = OrderStateV1::open(signed);
+    round_trip_order_state(partial);
+    partial.consume(signed, 1).expect("one lot consumes");
+    round_trip_order_state(partial);
+    partial.consume(signed, 1).expect("last lot consumes");
+    round_trip_order_state(partial);
+
+    let mut cancelled = OrderStateV1::open(signed);
+    cancelled.cancel(id(20), 9, 10).expect("owner cancels");
+    round_trip_order_state(cancelled);
+}
+
+#[test]
+fn general_funding_codec_round_trips_debits_and_atomic_terminal_refund() {
+    let mut funding = GeneralFundingV1::founding(id(4), 10, 20, 30);
+    round_trip_funding(funding);
+    funding
+        .debit(FundingCompartment::Liveness, 3, id(60))
+        .expect("liveness debit");
+    funding
+        .debit(FundingCompartment::Work, 7, id(61))
+        .expect("work debit");
+    round_trip_funding(funding);
+    assert_eq!(
+        funding.refund_terminal(GeneralPhase::Terminal),
+        Ok([7, 13, 30])
+    );
+    round_trip_funding(funding);
+}
+
+#[test]
+fn mutable_state_codecs_reject_wrong_width_type_headers_and_reserved_bytes() {
+    let root = GeneralRootV1::founding(id(9), 7);
+    let mut root_bytes = [0; GENERAL_ROOT_BYTES];
+    root.encode(&mut root_bytes).expect("root encodes");
+    assert_eq!(
+        GeneralRootV1::decode(&root_bytes[..GENERAL_ROOT_BYTES - 1]),
+        Err(Error::InvalidLength)
+    );
+    let mut root_trailing = [0; GENERAL_ROOT_BYTES + 1];
+    root_trailing[..GENERAL_ROOT_BYTES].copy_from_slice(&root_bytes);
+    assert_eq!(
+        GeneralRootV1::decode(&root_trailing),
+        Err(Error::InvalidLength)
+    );
+    root_bytes[..8].copy_from_slice(b"DCLTGBR1");
+    assert_eq!(GeneralRootV1::decode(&root_bytes), Err(Error::InvalidMagic));
+
+    let mut funding_bytes = [0; GENERAL_FUNDING_BYTES];
+    GeneralFundingV1::founding(id(4), 1, 2, 3)
+        .encode(&mut funding_bytes)
+        .expect("funding encodes");
+    assert_eq!(
+        GeneralFundingV1::decode(&funding_bytes[..GENERAL_FUNDING_BYTES - 1]),
+        Err(Error::InvalidLength)
+    );
+    let mut funding_trailing = [0; GENERAL_FUNDING_BYTES + 1];
+    funding_trailing[..GENERAL_FUNDING_BYTES].copy_from_slice(&funding_bytes);
+    assert_eq!(
+        GeneralFundingV1::decode(&funding_trailing),
+        Err(Error::InvalidLength)
+    );
+    funding_bytes[12] = 1;
+    assert_eq!(
+        GeneralFundingV1::decode(&funding_bytes),
+        Err(Error::NonCanonicalReservedBytes)
+    );
+
+    let mut batch_bytes = [0; BATCH_ROOT_BYTES];
+    BatchRootV1::open(id(9), 0, 0, config())
+        .expect("batch opens")
+        .encode(&mut batch_bytes)
+        .expect("batch encodes");
+    assert_eq!(
+        BatchRootV1::decode(&batch_bytes[..BATCH_ROOT_BYTES - 1]),
+        Err(Error::InvalidLength)
+    );
+    let mut batch_trailing = [0; BATCH_ROOT_BYTES + 1];
+    batch_trailing[..BATCH_ROOT_BYTES].copy_from_slice(&batch_bytes);
+    assert_eq!(
+        BatchRootV1::decode(&batch_trailing),
+        Err(Error::InvalidLength)
+    );
+    batch_bytes[84] = 1;
+    assert_eq!(
+        BatchRootV1::decode(&batch_bytes),
+        Err(Error::NonCanonicalReservedBytes)
+    );
+
+    let signed = order(10, 20, 9, [1, -1], 0);
+    let mut order_state_bytes = [0; ORDER_STATE_BYTES];
+    OrderStateV1::open(signed)
+        .encode(&mut order_state_bytes)
+        .expect("order state encodes");
+    assert_eq!(
+        OrderStateV1::decode(&order_state_bytes[..ORDER_STATE_BYTES - 1]),
+        Err(Error::InvalidLength)
+    );
+    let mut order_state_trailing = [0; ORDER_STATE_BYTES + 1];
+    order_state_trailing[..ORDER_STATE_BYTES].copy_from_slice(&order_state_bytes);
+    assert_eq!(
+        OrderStateV1::decode(&order_state_trailing),
+        Err(Error::InvalidLength)
+    );
+    order_state_bytes[13] = 1;
+    assert_eq!(
+        OrderStateV1::decode(&order_state_bytes),
+        Err(Error::NonCanonicalReservedBytes)
+    );
+}
+
+#[test]
+fn general_root_decoder_rejects_unreachable_counts_terminal_children_and_tags() {
+    let mut root = GeneralRootV1::founding(id(9), 7);
+    root.open_batch().expect("batch reserves");
+    let mut bytes = [0; GENERAL_ROOT_BYTES];
+    root.encode(&mut bytes).expect("root encodes");
+
+    bytes[64..68].copy_from_slice(&2_u32.to_le_bytes());
+    assert_eq!(GeneralRootV1::decode(&bytes), Err(Error::NonCanonicalState));
+    bytes[64..68].copy_from_slice(&1_u32.to_le_bytes());
+    bytes[12] = general_phase_tag(GeneralPhase::Terminal);
+    assert_eq!(GeneralRootV1::decode(&bytes), Err(Error::NonCanonicalState));
+    bytes[12] = u8::MAX;
+    assert_eq!(GeneralRootV1::decode(&bytes), Err(Error::InvalidPhase));
+    bytes[12] = general_phase_tag(GeneralPhase::Active);
+    bytes[16..48].fill(0);
+    assert_eq!(GeneralRootV1::decode(&bytes), Err(Error::ZeroIdentifier));
+}
+
+#[test]
+fn batch_root_decoder_rejects_bad_option_shape_deadlines_and_phase_substitution() {
+    let mut bytes = [0; BATCH_ROOT_BYTES];
+    BatchRootV1::open(id(9), 0, 0, config())
+        .expect("batch opens")
+        .encode(&mut bytes)
+        .expect("batch encodes");
+
+    bytes[88] = 1;
+    assert_eq!(
+        BatchRootV1::decode(&bytes),
+        Err(Error::NonCanonicalReservedBytes)
+    );
+    bytes[88] = 0;
+    bytes[13] = 2;
+    assert_eq!(BatchRootV1::decode(&bytes), Err(Error::NonCanonicalState));
+    bytes[13] = 0;
+    bytes[64..72].copy_from_slice(&10_u64.to_le_bytes());
+    assert_eq!(BatchRootV1::decode(&bytes), Err(Error::NonCanonicalState));
+
+    let mut selecting = selecting_batch();
+    let mut candidate = valid_candidate(selecting, 40);
+    selecting
+        .consider_candidate(&mut candidate, 12)
+        .expect("candidate considered");
+    selecting
+        .encode(&mut bytes)
+        .expect("winner-bearing selection encodes");
+    bytes[12] = batch_phase_tag(BatchPhase::Collecting);
+    assert_eq!(BatchRootV1::decode(&bytes), Err(Error::NonCanonicalState));
+}
+
+#[test]
+fn order_state_decoder_rejects_phase_balance_and_identity_substitution() {
+    let signed = order(10, 20, 9, [1, -1], 0);
+    let state = OrderStateV1::open(signed);
+    let mut bytes = [0; ORDER_STATE_BYTES];
+    state.encode(&mut bytes).expect("state encodes");
+
+    bytes[88..96].copy_from_slice(&2_u64.to_le_bytes());
+    let inflated = OrderStateV1::decode(&bytes).expect("internally shaped state");
+    assert_eq!(
+        inflated.authenticate(signed),
+        Err(Error::OrderBindingMismatch)
+    );
+    bytes[88..96].copy_from_slice(&1_u64.to_le_bytes());
+    bytes[16..48].copy_from_slice(id(11).as_bytes());
+    let substituted = OrderStateV1::decode(&bytes).expect("internally shaped state");
+    assert_eq!(
+        substituted.authenticate(signed),
+        Err(Error::OrderBindingMismatch)
+    );
+    bytes[16..48].copy_from_slice(id(10).as_bytes());
+
+    bytes[88..96].copy_from_slice(&0_u64.to_le_bytes());
+    assert_eq!(OrderStateV1::decode(&bytes), Err(Error::NonCanonicalState));
+    bytes[12] = order_phase_tag(OrderPhase::Consumed);
+    bytes[88..96].copy_from_slice(&1_u64.to_le_bytes());
+    assert_eq!(OrderStateV1::decode(&bytes), Err(Error::NonCanonicalState));
+    bytes[12] = u8::MAX;
+    assert_eq!(OrderStateV1::decode(&bytes), Err(Error::InvalidPhase));
+    bytes[12] = order_phase_tag(OrderPhase::Open);
+    bytes[16..48].fill(0);
+    assert_eq!(OrderStateV1::decode(&bytes), Err(Error::ZeroIdentifier));
+}
+
+#[test]
+fn funding_decoder_rejects_overflow_broken_conservation_and_partial_refund() {
+    let mut bytes = [0; GENERAL_FUNDING_BYTES];
+    GeneralFundingV1::founding(id(4), u64::MAX, 20, 30)
+        .encode(&mut bytes)
+        .expect("funding encodes");
+    bytes[96..104].copy_from_slice(&1_u64.to_le_bytes());
+    assert_eq!(
+        GeneralFundingV1::decode(&bytes),
+        Err(Error::ArithmeticOverflow)
+    );
+
+    GeneralFundingV1::founding(id(4), 10, 20, 30)
+        .encode(&mut bytes)
+        .expect("funding encodes");
+    bytes[72..80].copy_from_slice(&9_u64.to_le_bytes());
+    assert_eq!(
+        GeneralFundingV1::decode(&bytes),
+        Err(Error::FundingConservationMismatch)
+    );
+    bytes[120..128].copy_from_slice(&1_u64.to_le_bytes());
+    assert_eq!(
+        GeneralFundingV1::decode(&bytes),
+        Err(Error::NonCanonicalState)
+    );
 }

@@ -20,6 +20,29 @@ The adapter must authenticate those content identities against the Market and
 capability manifest. There is no second feature bitmap, admin switch, or static
 client authority.
 
+## Canonical mutable-state records
+
+The contract is the sole codec and invariant owner for its four persisted
+mutable records. `GeneralRootV1` is exactly 72 bytes, `GeneralFundingV1` is
+exactly 144 bytes, `BatchRootV1` is exactly 136 bytes, and `OrderStateV1` is
+exactly 96 bytes. Each record has a distinct eight-byte type magic plus the V1
+schema and artifact-profile tags, and decoders reject short, trailing,
+reserved, unknown-tag, zero-identity, arithmetically invalid, and unreachable
+state encodings.
+
+The records encode every field read or changed by a transition. Optional
+candidate identities use one canonical discriminator and require an all-zero
+payload when absent. Batch deadlines are strictly increasing, batch winner
+shape agrees with candidate count and phase, root child counts cannot exceed
+reserved sequences or survive terminalization, and order replay phase agrees
+with remaining lots. Replay authentication additionally binds the persisted
+order identity, owner, nonce, and remaining lots to the immutable signed order
+and its original lot ceiling. Funding persists committed, remaining, spent, and
+refunded amounts independently for all three compartments; checked conservation
+and the one atomic terminal-refund shape are revalidated on every decode and
+encode. An SVM adapter must use these codecs directly rather than define a
+parallel account DTO.
+
 ## Frequent-batch lifecycle
 
 The capability root is `Active -> Quiescing -> Terminal -> Retired`. Quiescing
@@ -185,9 +208,10 @@ operator implement and test all of the following:
    receipts, token movements, cursor, and funded work debit.
 5. Make applying pages permissionless and non-expiring, with liveness payments
    drawn only from the segregated compartment.
-6. Persist canonical account encodings for roots, funding, candidate cursors,
-   and settlement cursors. Config, signed orders, and settlement receipts already
-   expose hostile exact-width codecs here.
+6. Add canonical contract-owned account encodings for candidate and settlement
+   cursors. Config, roots, funding, batch roots, order replay state, signed
+   orders, and settlement receipts already expose hostile exact-width codecs
+   here.
 7. Measure account rent, transaction account counts, SBF stack, and compute units
    before replacing any provisional bound.
 

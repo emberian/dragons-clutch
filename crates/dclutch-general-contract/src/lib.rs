@@ -27,12 +27,24 @@ pub const MAX_OUTCOMES_V1: usize = 16;
 pub const MAX_EXECUTIONS_PER_PAGE_V1: usize = 4;
 /// Exact canonical byte width of [`GeneralConfigV1`].
 pub const GENERAL_CONFIG_BYTES: usize = 232;
+/// Exact canonical byte width of [`GeneralRootV1`].
+pub const GENERAL_ROOT_BYTES: usize = 72;
+/// Exact canonical byte width of [`GeneralFundingV1`].
+pub const GENERAL_FUNDING_BYTES: usize = 144;
+/// Exact canonical byte width of [`BatchRootV1`].
+pub const BATCH_ROOT_BYTES: usize = 136;
+/// Exact canonical byte width of [`OrderStateV1`].
+pub const ORDER_STATE_BYTES: usize = 96;
 /// Fixed byte prefix of a [`PortfolioOrderV1`] before its exact `N` coefficients.
 pub const PORTFOLIO_ORDER_BASE_BYTES: usize = 200;
 /// Fixed byte prefix of a [`SettlementReceiptV1`] before its exact `N` deltas.
 pub const SETTLEMENT_RECEIPT_BASE_BYTES: usize = 176;
 
 const CONFIG_MAGIC: [u8; 8] = *b"DCLTGEN1";
+const GENERAL_ROOT_MAGIC: [u8; 8] = *b"DCLTGRR1";
+const GENERAL_FUNDING_MAGIC: [u8; 8] = *b"DCLTGFN1";
+const BATCH_ROOT_MAGIC: [u8; 8] = *b"DCLTGBR1";
+const ORDER_STATE_MAGIC: [u8; 8] = *b"DCLTGOS1";
 const ORDER_MAGIC: [u8; 8] = *b"DCLTGOR1";
 const RECEIPT_MAGIC: [u8; 8] = *b"DCLTGSR1";
 const SCHEMA_V1: u16 = 1;
@@ -49,6 +61,8 @@ pub enum Error {
     UnsupportedSchema,
     /// Reserved or unused fields were not canonical zeroes.
     NonCanonicalReservedBytes,
+    /// Persisted transition fields do not describe a reachable canonical state.
+    NonCanonicalState,
     /// A required content identity was the all-zero sentinel.
     ZeroIdentifier,
     /// Two immutable authorities or occurrence generations differed.
@@ -366,6 +380,52 @@ pub struct GeneralRootV1 {
 }
 
 impl GeneralRootV1 {
+    /// Decode one exact-width canonical General capability root.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        exact_len(bytes, GENERAL_ROOT_BYTES)?;
+        if array::<8>(bytes, 0)? != GENERAL_ROOT_MAGIC {
+            return Err(Error::InvalidMagic);
+        }
+        validate_record_header(bytes)?;
+        require_zero(bytes, 13, 3)?;
+        require_zero(bytes, 68, 4)?;
+        let root = Self {
+            phase: decode_general_phase(read_u8(bytes, 12)?)?,
+            config_id: read_id(bytes, 16)?,
+            generation: read_u64(bytes, 48)?,
+            next_batch_sequence: read_u64(bytes, 56)?,
+            open_batches: read_u32(bytes, 64)?,
+        };
+        root.validate()?;
+        Ok(root)
+    }
+
+    /// Encode one exact-width canonical General capability root.
+    pub fn encode(&self, out: &mut [u8]) -> Result<()> {
+        exact_len(out, GENERAL_ROOT_BYTES)?;
+        self.validate()?;
+        out.fill(0);
+        put(out, 0, &GENERAL_ROOT_MAGIC);
+        put(out, 8, &SCHEMA_V1.to_le_bytes());
+        put(out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
+        put(out, 12, &[general_phase_tag(self.phase)]);
+        put(out, 16, self.config_id.as_bytes());
+        put(out, 48, &self.generation.to_le_bytes());
+        put(out, 56, &self.next_batch_sequence.to_le_bytes());
+        put(out, 64, &self.open_batches.to_le_bytes());
+        Ok(())
+    }
+
+    fn validate(self) -> Result<()> {
+        if u64::from(self.open_batches) > self.next_batch_sequence
+            || matches!(self.phase, GeneralPhase::Terminal | GeneralPhase::Retired)
+                && self.open_batches != 0
+        {
+            return Err(Error::NonCanonicalState);
+        }
+        Ok(())
+    }
+
     /// Found one active General root bound to an authenticated config.
     pub const fn founding(config_id: ContentId, generation: u64) -> Self {
         Self {
@@ -667,6 +727,65 @@ pub struct OrderStateV1 {
 }
 
 impl OrderStateV1 {
+    /// Decode one exact-width canonical signed-order replay state.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        exact_len(bytes, ORDER_STATE_BYTES)?;
+        if array::<8>(bytes, 0)? != ORDER_STATE_MAGIC {
+            return Err(Error::InvalidMagic);
+        }
+        validate_record_header(bytes)?;
+        require_zero(bytes, 13, 3)?;
+        let state = Self {
+            phase: decode_order_phase(read_u8(bytes, 12)?)?,
+            order_id: read_id(bytes, 16)?,
+            owner: read_id(bytes, 48)?,
+            nonce: read_u64(bytes, 80)?,
+            remaining_lots: read_u64(bytes, 88)?,
+        };
+        state.validate()?;
+        Ok(state)
+    }
+
+    /// Encode one exact-width canonical signed-order replay state.
+    pub fn encode(&self, out: &mut [u8]) -> Result<()> {
+        exact_len(out, ORDER_STATE_BYTES)?;
+        self.validate()?;
+        out.fill(0);
+        put(out, 0, &ORDER_STATE_MAGIC);
+        put(out, 8, &SCHEMA_V1.to_le_bytes());
+        put(out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
+        put(out, 12, &[order_phase_tag(self.phase)]);
+        put(out, 16, self.order_id.as_bytes());
+        put(out, 48, self.owner.as_bytes());
+        put(out, 80, &self.nonce.to_le_bytes());
+        put(out, 88, &self.remaining_lots.to_le_bytes());
+        Ok(())
+    }
+
+    /// Authenticate this replay state against the immutable signed order that
+    /// owns it, including the original lot ceiling.
+    pub fn authenticate<const N: usize>(&self, order: PortfolioOrderV1<N>) -> Result<()> {
+        self.validate()?;
+        if self.order_id != order.order_id
+            || self.owner != order.owner
+            || self.nonce != order.nonce
+            || self.remaining_lots > order.max_lots
+        {
+            return Err(Error::OrderBindingMismatch);
+        }
+        Ok(())
+    }
+
+    fn validate(self) -> Result<()> {
+        match self.phase {
+            OrderPhase::Open | OrderPhase::Cancelled if self.remaining_lots == 0 => {
+                Err(Error::NonCanonicalState)
+            }
+            OrderPhase::Consumed if self.remaining_lots != 0 => Err(Error::NonCanonicalState),
+            _ => Ok(()),
+        }
+    }
+
     /// Open replay state after the adapter authenticates the signature and
     /// reserves the unique `(owner, nonce, order_id)` key.
     pub const fn open<const N: usize>(order: PortfolioOrderV1<N>) -> Self {
@@ -699,10 +818,7 @@ impl OrderStateV1 {
         order: PortfolioOrderV1<N>,
         fill_lots: u64,
     ) -> Result<()> {
-        if self.order_id != order.order_id || self.owner != order.owner || self.nonce != order.nonce
-        {
-            return Err(Error::OrderBindingMismatch);
-        }
+        self.authenticate(order)?;
         if self.phase != OrderPhase::Open {
             return Err(Error::OrderUnavailable);
         }
@@ -1121,6 +1237,87 @@ pub struct BatchRootV1 {
 }
 
 impl BatchRootV1 {
+    /// Decode one exact-width canonical frequent-batch root.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        exact_len(bytes, BATCH_ROOT_BYTES)?;
+        if array::<8>(bytes, 0)? != BATCH_ROOT_MAGIC {
+            return Err(Error::InvalidMagic);
+        }
+        validate_record_header(bytes)?;
+        require_zero(bytes, 14, 2)?;
+        require_zero(bytes, 84, 4)?;
+        let best_candidate_bytes = array::<CONTENT_ID_BYTES>(bytes, 88)?;
+        let best_candidate_id = match read_u8(bytes, 13)? {
+            0 => {
+                if best_candidate_bytes.iter().any(|byte| *byte != 0) {
+                    return Err(Error::NonCanonicalReservedBytes);
+                }
+                None
+            }
+            1 => Some(ContentId::new(best_candidate_bytes)?),
+            _ => return Err(Error::NonCanonicalState),
+        };
+        let batch = Self {
+            phase: decode_batch_phase(read_u8(bytes, 12)?)?,
+            config_id: read_id(bytes, 16)?,
+            sequence: read_u64(bytes, 48)?,
+            collection_close: read_u64(bytes, 56)?,
+            selection_close: read_u64(bytes, 64)?,
+            settlement_close: read_u64(bytes, 72)?,
+            candidate_count: read_u32(bytes, 80)?,
+            best_candidate_id,
+            best_score: read_u128(bytes, 120)?,
+        };
+        batch.validate()?;
+        Ok(batch)
+    }
+
+    /// Encode one exact-width canonical frequent-batch root.
+    pub fn encode(&self, out: &mut [u8]) -> Result<()> {
+        exact_len(out, BATCH_ROOT_BYTES)?;
+        self.validate()?;
+        out.fill(0);
+        put(out, 0, &BATCH_ROOT_MAGIC);
+        put(out, 8, &SCHEMA_V1.to_le_bytes());
+        put(out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
+        put(out, 12, &[batch_phase_tag(self.phase)]);
+        put(out, 16, self.config_id.as_bytes());
+        put(out, 48, &self.sequence.to_le_bytes());
+        put(out, 56, &self.collection_close.to_le_bytes());
+        put(out, 64, &self.selection_close.to_le_bytes());
+        put(out, 72, &self.settlement_close.to_le_bytes());
+        put(out, 80, &self.candidate_count.to_le_bytes());
+        if let Some(candidate_id) = self.best_candidate_id {
+            put(out, 13, &[1]);
+            put(out, 88, candidate_id.as_bytes());
+        }
+        put(out, 120, &self.best_score.to_le_bytes());
+        Ok(())
+    }
+
+    fn validate(self) -> Result<()> {
+        if self.collection_close == 0
+            || self.collection_close >= self.selection_close
+            || self.selection_close >= self.settlement_close
+        {
+            return Err(Error::NonCanonicalState);
+        }
+        match (self.candidate_count, self.best_candidate_id) {
+            (0, None) if self.best_score == 0 => {}
+            (0, _) | (_, None) => return Err(Error::NonCanonicalState),
+            (_, Some(_)) => {}
+        }
+        if self.phase == BatchPhase::Collecting && self.candidate_count != 0 {
+            return Err(Error::NonCanonicalState);
+        }
+        if matches!(self.phase, BatchPhase::Settling | BatchPhase::Applying)
+            && self.best_candidate_id.is_none()
+        {
+            return Err(Error::NonCanonicalState);
+        }
+        Ok(())
+    }
+
     /// Create one batch from an already-reserved root sequence.
     pub fn open(
         config_id: ContentId,
@@ -1730,6 +1927,65 @@ pub struct FundingDebitV1 {
 }
 
 impl GeneralFundingV1 {
+    /// Decode one exact-width canonical segregated General funding state.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        exact_len(bytes, GENERAL_FUNDING_BYTES)?;
+        if array::<8>(bytes, 0)? != GENERAL_FUNDING_MAGIC {
+            return Err(Error::InvalidMagic);
+        }
+        validate_record_header(bytes)?;
+        require_zero(bytes, 12, 4)?;
+        let funding = Self {
+            capability_release_id: read_id(bytes, 16)?,
+            committed: [
+                read_u64(bytes, 48)?,
+                read_u64(bytes, 56)?,
+                read_u64(bytes, 64)?,
+            ],
+            remaining: [
+                read_u64(bytes, 72)?,
+                read_u64(bytes, 80)?,
+                read_u64(bytes, 88)?,
+            ],
+            spent: [
+                read_u64(bytes, 96)?,
+                read_u64(bytes, 104)?,
+                read_u64(bytes, 112)?,
+            ],
+            refunded: [
+                read_u64(bytes, 120)?,
+                read_u64(bytes, 128)?,
+                read_u64(bytes, 136)?,
+            ],
+        };
+        funding.validate()?;
+        Ok(funding)
+    }
+
+    /// Encode one exact-width canonical segregated General funding state.
+    pub fn encode(&self, out: &mut [u8]) -> Result<()> {
+        exact_len(out, GENERAL_FUNDING_BYTES)?;
+        self.validate()?;
+        out.fill(0);
+        put(out, 0, &GENERAL_FUNDING_MAGIC);
+        put(out, 8, &SCHEMA_V1.to_le_bytes());
+        put(out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
+        put(out, 16, self.capability_release_id.as_bytes());
+        for (value, offset) in self.committed.iter().zip([48usize, 56, 64]) {
+            put(out, offset, &value.to_le_bytes());
+        }
+        for (value, offset) in self.remaining.iter().zip([72usize, 80, 88]) {
+            put(out, offset, &value.to_le_bytes());
+        }
+        for (value, offset) in self.spent.iter().zip([96usize, 104, 112]) {
+            put(out, offset, &value.to_le_bytes());
+        }
+        for (value, offset) in self.refunded.iter().zip([120usize, 128, 136]) {
+            put(out, offset, &value.to_le_bytes());
+        }
+        Ok(())
+    }
+
     /// Found segregated prepaid funding. Hoard and future fees are not inputs.
     pub const fn founding(
         capability_release_id: ContentId,
@@ -1796,6 +2052,11 @@ impl GeneralFundingV1 {
 
     /// Prove immutable compartment conservation.
     pub fn validate(self) -> Result<()> {
+        if self.refunded.iter().any(|amount| *amount != 0)
+            && self.remaining.iter().any(|amount| *amount != 0)
+        {
+            return Err(Error::NonCanonicalState);
+        }
         for index in 0..3 {
             let remaining = *self.remaining.get(index).ok_or(Error::InvalidLength)?;
             let spent = *self.spent.get(index).ok_or(Error::InvalidLength)?;
@@ -1926,6 +2187,72 @@ fn validate_width(width: usize) -> Result<()> {
     Ok(())
 }
 
+fn validate_record_header(bytes: &[u8]) -> Result<()> {
+    if read_u16(bytes, 8)? != SCHEMA_V1 || read_u16(bytes, 10)? != ARTIFACT_PROFILE_V1 {
+        return Err(Error::UnsupportedSchema);
+    }
+    Ok(())
+}
+
+const fn general_phase_tag(phase: GeneralPhase) -> u8 {
+    match phase {
+        GeneralPhase::Active => 0,
+        GeneralPhase::Quiescing => 1,
+        GeneralPhase::Terminal => 2,
+        GeneralPhase::Retired => 3,
+    }
+}
+
+fn decode_general_phase(tag: u8) -> Result<GeneralPhase> {
+    match tag {
+        0 => Ok(GeneralPhase::Active),
+        1 => Ok(GeneralPhase::Quiescing),
+        2 => Ok(GeneralPhase::Terminal),
+        3 => Ok(GeneralPhase::Retired),
+        _ => Err(Error::InvalidPhase),
+    }
+}
+
+const fn order_phase_tag(phase: OrderPhase) -> u8 {
+    match phase {
+        OrderPhase::Open => 0,
+        OrderPhase::Cancelled => 1,
+        OrderPhase::Consumed => 2,
+    }
+}
+
+fn decode_order_phase(tag: u8) -> Result<OrderPhase> {
+    match tag {
+        0 => Ok(OrderPhase::Open),
+        1 => Ok(OrderPhase::Cancelled),
+        2 => Ok(OrderPhase::Consumed),
+        _ => Err(Error::InvalidPhase),
+    }
+}
+
+const fn batch_phase_tag(phase: BatchPhase) -> u8 {
+    match phase {
+        BatchPhase::Collecting => 0,
+        BatchPhase::Selecting => 1,
+        BatchPhase::Settling => 2,
+        BatchPhase::Applying => 3,
+        BatchPhase::Quiescent => 4,
+        BatchPhase::Retired => 5,
+    }
+}
+
+fn decode_batch_phase(tag: u8) -> Result<BatchPhase> {
+    match tag {
+        0 => Ok(BatchPhase::Collecting),
+        1 => Ok(BatchPhase::Selecting),
+        2 => Ok(BatchPhase::Settling),
+        3 => Ok(BatchPhase::Applying),
+        4 => Ok(BatchPhase::Quiescent),
+        5 => Ok(BatchPhase::Retired),
+        _ => Err(Error::InvalidPhase),
+    }
+}
+
 const fn funding_index(compartment: FundingCompartment) -> usize {
     match compartment {
         FundingCompartment::Liveness => 0,
@@ -1958,12 +2285,20 @@ fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
     Ok(u16::from_le_bytes(array(bytes, offset)?))
 }
 
+fn read_u8(bytes: &[u8], offset: usize) -> Result<u8> {
+    bytes.get(offset).copied().ok_or(Error::InvalidLength)
+}
+
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32> {
     Ok(u32::from_le_bytes(array(bytes, offset)?))
 }
 
 fn read_u64(bytes: &[u8], offset: usize) -> Result<u64> {
     Ok(u64::from_le_bytes(array(bytes, offset)?))
+}
+
+fn read_u128(bytes: &[u8], offset: usize) -> Result<u128> {
+    Ok(u128::from_le_bytes(array(bytes, offset)?))
 }
 
 fn read_i64(bytes: &[u8], offset: usize) -> Result<i64> {
