@@ -72,7 +72,10 @@ entry_count`.
 
 The adapter authenticates the manifest content hash, derives the child using
 `MARKET_OPENING_READINESS_PDA_DOMAIN`, and starts it with the Market child
-count. Each advance must name exactly the next manifest index and supplies the
+count. That canonical domain is `dclutch/open-readiness/v1` (25 bytes), below
+the chain-derived 32-byte maximum for one PDA seed component; adapters must not
+hash or rewrite it. Each advance must name exactly the next manifest index and
+supplies the
 actual canonical `FundingStateV1`, observed present principal, and current
 slot. The kernel calls `validate_market_open`; required pending entries, lazy
 deadline expiry, wrong binding, underfunding, replay, skips, and reordering

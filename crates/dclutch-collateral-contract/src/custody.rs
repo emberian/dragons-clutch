@@ -10,6 +10,8 @@ pub const COLLATERAL_CUSTODY_BYTES: usize = 88;
 pub const COLLATERAL_CUSTODY_MAGIC: [u8; 8] = *b"DCLTCUS1";
 /// Implemented custody-root schema.
 pub const COLLATERAL_CUSTODY_SCHEMA_VERSION: u16 = 1;
+/// Chain-derived maximum byte width of one Solana PDA seed component.
+pub const SVM_MAX_PDA_SEED_BYTES: usize = 32;
 /// PDA domain preceding the Market key for the program-owned custody root.
 pub const COLLATERAL_CUSTODY_PDA_DOMAIN: &[u8] = b"dclutch/collateral-custody/v1";
 /// PDA domain preceding the Market key for its token-program-owned Vault.
@@ -152,6 +154,10 @@ mod tests {
 
     #[test]
     fn exact_round_trip_and_hostile_layouts() {
+        assert_eq!(COLLATERAL_CUSTODY_PDA_DOMAIN.len(), 29);
+        assert_eq!(COLLATERAL_VAULT_PDA_DOMAIN.len(), 27);
+        assert!(COLLATERAL_CUSTODY_PDA_DOMAIN.len() <= SVM_MAX_PDA_SEED_BYTES);
+        assert!(COLLATERAL_VAULT_PDA_DOMAIN.len() <= SVM_MAX_PDA_SEED_BYTES);
         let custody = CollateralCustodyV1::new([1; 32], 9, [2; 32]).expect("valid custody");
         let bytes = custody.to_bytes();
         assert_eq!(CollateralCustodyV1::decode(&bytes), Ok(custody));

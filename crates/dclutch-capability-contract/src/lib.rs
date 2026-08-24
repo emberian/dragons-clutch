@@ -24,6 +24,8 @@ pub const FUNDING_QUOTE_BYTES: usize = 64;
 pub const FUNDING_STATE_BYTES: usize = 192;
 /// Exact transient Market-opening readiness width.
 pub const MARKET_OPENING_READINESS_BYTES: usize = 128;
+/// Chain-derived maximum byte width of one Solana PDA seed component.
+pub const SVM_MAX_PDA_SEED_BYTES: usize = 32;
 /// Maximum profile-1 manifest byte width.
 pub const MAX_MANIFEST_BYTES: usize =
     MANIFEST_HEADER_BYTES + MAX_CAPABILITIES * CAPABILITY_ENTRY_BYTES;
@@ -59,7 +61,7 @@ pub const MARKET_OPENING_READINESS_SCHEMA_VERSION: u16 = 1;
 ///
 /// This crate derives no Solana address. The adapter derives it from this
 /// domain plus exact Market key and generation, then authenticates the record.
-pub const MARKET_OPENING_READINESS_PDA_DOMAIN: &[u8] = b"dclutch/market-opening-readiness/v1";
+pub const MARKET_OPENING_READINESS_PDA_DOMAIN: &[u8] = b"dclutch/open-readiness/v1";
 
 /// The exact canonical empty-manifest preimage.
 pub const EMPTY_MANIFEST_BYTES: [u8; MANIFEST_HEADER_BYTES] = [
@@ -1716,6 +1718,8 @@ mod tests {
 
     #[test]
     fn canonical_empty_manifest_is_exact() {
+        assert_eq!(MARKET_OPENING_READINESS_PDA_DOMAIN.len(), 25);
+        assert!(MARKET_OPENING_READINESS_PDA_DOMAIN.len() <= SVM_MAX_PDA_SEED_BYTES);
         let empty = CapabilityManifestV1::empty();
         assert!(empty.is_ok());
         if let Ok(value) = empty {
