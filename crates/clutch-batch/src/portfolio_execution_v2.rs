@@ -28,8 +28,10 @@
 
 use crate::relation_v1::MAX_OUTCOMES;
 use crate::relation_v2::{
-    validate_candidate_padding_v2, validate_live_order_fill_v2, EconomicBookV2,
-    EconomicCandidateV2, EconomicDomainV2, EconomicErrorV2, PricePreconditionV2, Sha256V2,
+    validate_candidate_padding_v2, validate_live_order_fill_fields_v2,
+    validate_live_order_fill_v2, EconomicBookStreamValidatorV2, EconomicBookV2,
+    EconomicCandidateV2, EconomicDomainV2, EconomicErrorV2, EconomicOrderV2,
+    PricePreconditionV2, Sha256V2,
 };
 use crate::{Side, MAX_ORDERS};
 
@@ -342,6 +344,28 @@ pub struct PortfolioTransitionExpectationV2 {
     pub reservation_consumed: bool,
 }
 
+/// Borrow-bound, constant-space view of one authenticated RelationV2 selection.
+///
+/// Implementations must return the same immutable row/fill at an index for the
+/// duration of one verifier call. The verifier validates every active order in
+/// canonical order and rejects any active fill that the implementation cannot
+/// reproduce. Inactive fills are unrepresentable; inactive AON bits are still
+/// checked explicitly from [`Self::honored_aon_mask`].
+pub trait PortfolioSelectionStreamV2 {
+    /// Number of active canonical order rows.
+    fn order_count(&self) -> u8;
+    /// Decode one active canonical RelationV2 order.
+    fn order(&self, order_index: u8) -> Result<EconomicOrderV2, PortfolioExecutionErrorV2>;
+    /// Read the selected fill for one active canonical order.
+    fn selected_fill(&self, order_index: u8) -> Result<u64, PortfolioExecutionErrorV2>;
+    /// Complete AON mask, including the inactive tail that must be zero.
+    fn honored_aon_mask(&self) -> u64;
+    /// Candidate virtual split coordinate.
+    fn virtual_split(&self) -> u64;
+    /// Candidate virtual merge coordinate.
+    fn virtual_merge(&self) -> u64;
+}
+
 /// Private authenticated-adapter seam.
 ///
 /// Implementations live in the SBF adapter and must check actual owner/PDA,
@@ -356,6 +380,18 @@ pub trait PortfolioAdapterV2 {
         relation_order: &crate::relation_v2::EconomicOrderV2,
         candidate: &EconomicCandidateV2,
     ) -> bool;
+    /// Authenticate selection membership against a borrow-bound fill stream.
+    ///
+    /// The default refusal prevents an adapter written for an owned
+    /// `EconomicCandidateV2` from silently authorizing the streamed boundary.
+    fn authenticate_streamed_selection_membership(
+        &self,
+        _expected: &PortfolioSelectionMembershipExpectationV2,
+        _relation_order: &EconomicOrderV2,
+        _selected_fill: u64,
+    ) -> bool {
+        false
+    }
     fn authenticate_transition(&self, expected: &PortfolioTransitionExpectationV2) -> bool;
     /// Decode every exact V5 sibling pre-data identity, reproduce canonical
     /// `commit_portfolio_pair_delivery` on the complete ordered set, and
@@ -453,6 +489,49 @@ pub fn authenticate_selected_portfolio_order_for_materialization_v2<A: Portfolio
     )
 }
 
+/// Authenticate one materialization-time selected order without rebuilding a
+/// 64-row book or candidate.
+///
+/// The stream is walked in canonical order under the same RelationV2 shape
+/// validator as [`EconomicBookV2::validate`]. Only the selected row and fill
+/// survive the call; no detached book or candidate DTO is minted.
+pub fn authenticate_selected_portfolio_order_streaming_for_materialization_v2<
+    A: PortfolioAdapterV2,
+    S: PortfolioSelectionStreamV2 + ?Sized,
+>(
+    adapter: &A,
+    owner_program_id: PortfolioIdentityV2,
+    domain: &EconomicDomainV2,
+    selection: &S,
+    expected_economic_candidate_digest: PortfolioIdentityV2,
+    record: SelectedPortfolioOrderRecordV2,
+) -> Result<AuthenticatedSelectedPortfolioOrderV2, PortfolioExecutionErrorV2> {
+    record.validate_shape()?;
+    let (order, selected_fill) = validate_stream_and_select_order_v2(
+        domain,
+        selection,
+        record.order_index,
+    )?;
+    authenticate_selected_portfolio_record_accounts_v2(
+        adapter,
+        owner_program_id,
+        domain,
+        expected_economic_candidate_digest,
+        record,
+        order,
+        selected_fill,
+        SelectedAccountAccessV2::Materialization,
+    )?;
+    if !adapter.authenticate_streamed_selection_membership(
+        &PortfolioSelectionMembershipExpectationV2 { record },
+        &order,
+        selected_fill,
+    ) {
+        return Err(PortfolioExecutionErrorV2::SelectionMembershipAuthenticationFailed);
+    }
+    Ok(AuthenticatedSelectedPortfolioOrderV2 { record, order })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SelectedAccountAccessV2 {
     Delivery,
@@ -475,6 +554,46 @@ fn authenticate_selected_portfolio_order_with_access_v2<A: PortfolioAdapterV2>(
     book.validate(domain).map_err(PortfolioExecutionErrorV2::Economic)?;
     validate_candidate_padding_v2(candidate, book.len)
         .map_err(PortfolioExecutionErrorV2::Economic)?;
+    let at = usize::from(record.order_index);
+    if at >= usize::from(book.len) {
+        return Err(PortfolioExecutionErrorV2::OrderMismatch);
+    }
+    let order = book.orders[at];
+    let selected_fill = candidate.fills[at];
+    authenticate_selected_portfolio_record_accounts_v2(
+        adapter,
+        owner_program_id,
+        domain,
+        expected_economic_candidate_digest,
+        record,
+        order,
+        selected_fill,
+        account_access,
+    )?;
+
+    // The owned verifier retains its original adapter boundary. Streamed
+    // callers must opt into the separately named default-refusing method.
+    if !adapter.authenticate_selection_membership(
+        &PortfolioSelectionMembershipExpectationV2 { record },
+        &order,
+        candidate,
+    ) {
+        return Err(PortfolioExecutionErrorV2::SelectionMembershipAuthenticationFailed);
+    }
+    Ok(AuthenticatedSelectedPortfolioOrderV2 { record, order })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_selected_portfolio_record_accounts_v2<A: PortfolioAdapterV2>(
+    adapter: &A,
+    owner_program_id: PortfolioIdentityV2,
+    domain: &EconomicDomainV2,
+    expected_economic_candidate_digest: PortfolioIdentityV2,
+    record: SelectedPortfolioOrderRecordV2,
+    order: EconomicOrderV2,
+    selected_fill: u64,
+    account_access: SelectedAccountAccessV2,
+) -> Result<(), PortfolioExecutionErrorV2> {
     if is_zero_identity(&owner_program_id) {
         return Err(PortfolioExecutionErrorV2::ZeroIdentity);
     }
@@ -489,20 +608,14 @@ fn authenticate_selected_portfolio_order_with_access_v2<A: PortfolioAdapterV2>(
     {
         return Err(PortfolioExecutionErrorV2::CandidateMismatch);
     }
-    let at = usize::from(record.order_index);
-    if at >= usize::from(book.len) {
-        return Err(PortfolioExecutionErrorV2::OrderMismatch);
-    }
-    let order = book.orders[at];
     if record.source_kind != PortfolioSourceOrderKindV2::Portfolio
         || record.order_id != order.order_id
         || record.side != order.side
-        || record.selected_fill_units != candidate.fills[at]
+        || record.selected_fill_units != selected_fill
         || record.selected_fill_units == 0
     {
         return Err(PortfolioExecutionErrorV2::OrderMismatch);
     }
-
     let expectations = [
         PortfolioAccountExpectationV2 {
             role: PortfolioAccountRoleV2::SettlementRoot,
@@ -552,14 +665,65 @@ fn authenticate_selected_portfolio_order_with_access_v2<A: PortfolioAdapterV2>(
         }
         index += 1;
     }
-    if !adapter.authenticate_selection_membership(
-        &PortfolioSelectionMembershipExpectationV2 { record },
-        &order,
-        candidate,
-    ) {
-        return Err(PortfolioExecutionErrorV2::SelectionMembershipAuthenticationFailed);
+    Ok(())
+}
+
+fn validate_stream_and_select_order_v2<S: PortfolioSelectionStreamV2 + ?Sized>(
+    domain: &EconomicDomainV2,
+    selection: &S,
+    selected_order_index: u8,
+) -> Result<(EconomicOrderV2, u64), PortfolioExecutionErrorV2> {
+    let order_count = selection.order_count();
+    if usize::from(order_count) > MAX_ORDERS
+        || usize::from(selected_order_index) >= usize::from(order_count)
+    {
+        return Err(PortfolioExecutionErrorV2::OrderMismatch);
     }
-    Ok(AuthenticatedSelectedPortfolioOrderV2 { record, order })
+    let mut validator = EconomicBookStreamValidatorV2::new(*domain)
+        .map_err(PortfolioExecutionErrorV2::Economic)?;
+    let mut selected = None;
+    let mut index = 0u8;
+    while index < order_count {
+        let order = selection.order(index)?;
+        let fill = selection.selected_fill(index)?;
+        validator
+            .push(order)
+            .map_err(PortfolioExecutionErrorV2::Economic)?;
+        if index == selected_order_index {
+            selected = Some((order, fill));
+        }
+        index = index
+            .checked_add(1)
+            .ok_or(PortfolioExecutionErrorV2::ArithmeticOverflow)?;
+    }
+    if validator.len() != order_count {
+        return Err(PortfolioExecutionErrorV2::OrderMismatch);
+    }
+    require_streamed_aon_tail_v2(order_count, selection.honored_aon_mask())?;
+    selected.ok_or(PortfolioExecutionErrorV2::OrderMismatch)
+}
+
+fn require_streamed_aon_tail_v2(
+    order_count: u8,
+    honored_aon_mask: u64,
+) -> Result<(), PortfolioExecutionErrorV2> {
+    if usize::from(order_count) > MAX_ORDERS {
+        return Err(PortfolioExecutionErrorV2::Economic(
+            EconomicErrorV2::TooManyOrders,
+        ));
+    }
+    let mut order = order_count;
+    while usize::from(order) < MAX_ORDERS {
+        if ((honored_aon_mask >> u32::from(order)) & 1) != 0 {
+            return Err(PortfolioExecutionErrorV2::Economic(
+                EconomicErrorV2::AonMaskNotApplicable { order },
+            ));
+        }
+        order = order
+            .checked_add(1)
+            .ok_or(PortfolioExecutionErrorV2::ArithmeticOverflow)?;
+    }
+    Ok(())
 }
 
 /// Private capability for one exact, exclusive, full coefficient-vector pair.
@@ -744,6 +908,131 @@ pub fn authenticate_exact_portfolio_pair_v2(
     if candidate.virtual_split != 0 || candidate.virtual_merge != 0 {
         return Err(PortfolioExecutionErrorV2::VirtualConversionNotPairable);
     }
+    let (buyer, seller) = order_pair_endpoints_v2(first, second)?;
+    let buy_at = usize::from(buyer.record.order_index);
+    let sell_at = usize::from(seller.record.order_index);
+    if buy_at >= usize::from(book.len) || sell_at >= usize::from(book.len) || buy_at == sell_at {
+        return Err(PortfolioExecutionErrorV2::OrderMismatch);
+    }
+    let buy = book.orders[buy_at];
+    let sell = book.orders[sell_at];
+    validate_live_order_fill_v2(domain, price, candidate, &buy, buyer.record.order_index)
+        .map_err(PortfolioExecutionErrorV2::Economic)?;
+    validate_live_order_fill_v2(domain, price, candidate, &sell, seller.record.order_index)
+        .map_err(PortfolioExecutionErrorV2::Economic)?;
+    let mut index = 0usize;
+    while index < usize::from(book.len) {
+        if index != buy_at && index != sell_at && candidate.fills[index] != 0 {
+            return Err(PortfolioExecutionErrorV2::NonExclusivePair);
+        }
+        index += 1;
+    }
+    compose_exact_portfolio_pair_value_v2(domain, price, boundary, buyer, seller, buy, sell)
+}
+
+/// Compose an exclusive full portfolio pair directly from an authenticated,
+/// borrow-bound order/fill stream.
+///
+/// Every active row is shape-validated in canonical order. Only the two pair
+/// rows are retained, every other active fill must be zero, and inactive AON
+/// bits are refused. Valuation then delegates to the same exact scaled-integer
+/// owner as [`authenticate_exact_portfolio_pair_v2`].
+pub fn authenticate_exact_portfolio_pair_streaming_v2<
+    S: PortfolioSelectionStreamV2 + ?Sized,
+>(
+    domain: &EconomicDomainV2,
+    selection: &S,
+    price: &PricePreconditionV2,
+    boundary: PortfolioValuationBoundaryV2,
+    first: AuthenticatedSelectedPortfolioOrderV2,
+    second: AuthenticatedSelectedPortfolioOrderV2,
+) -> Result<AuthenticatedPortfolioPairV2, PortfolioExecutionErrorV2> {
+    domain.validate().map_err(PortfolioExecutionErrorV2::Economic)?;
+    price.validate(domain).map_err(PortfolioExecutionErrorV2::Economic)?;
+    if boundary != PortfolioValuationBoundaryV2::ExactReceiptDivisionV1 {
+        return Err(PortfolioExecutionErrorV2::UnsupportedRoundingBoundary);
+    }
+    if selection.virtual_split() != 0 || selection.virtual_merge() != 0 {
+        return Err(PortfolioExecutionErrorV2::VirtualConversionNotPairable);
+    }
+    let (buyer, seller) = order_pair_endpoints_v2(first, second)?;
+    let order_count = selection.order_count();
+    let buy_at = buyer.record.order_index;
+    let sell_at = seller.record.order_index;
+    if usize::from(order_count) > MAX_ORDERS
+        || buy_at == sell_at
+        || buy_at >= order_count
+        || sell_at >= order_count
+    {
+        return Err(PortfolioExecutionErrorV2::OrderMismatch);
+    }
+    let mut validator = EconomicBookStreamValidatorV2::new(*domain)
+        .map_err(PortfolioExecutionErrorV2::Economic)?;
+    let mut buy_row = None;
+    let mut sell_row = None;
+    let mut index = 0u8;
+    while index < order_count {
+        let order = selection.order(index)?;
+        let fill = selection.selected_fill(index)?;
+        validator
+            .push(order)
+            .map_err(PortfolioExecutionErrorV2::Economic)?;
+        if index == buy_at {
+            buy_row = Some((order, fill));
+        } else if index == sell_at {
+            sell_row = Some((order, fill));
+        } else if fill != 0 {
+            return Err(PortfolioExecutionErrorV2::NonExclusivePair);
+        }
+        index = index
+            .checked_add(1)
+            .ok_or(PortfolioExecutionErrorV2::ArithmeticOverflow)?;
+    }
+    if validator.len() != order_count {
+        return Err(PortfolioExecutionErrorV2::OrderMismatch);
+    }
+    require_streamed_aon_tail_v2(order_count, selection.honored_aon_mask())?;
+    let (buy, buy_fill) = buy_row.ok_or(PortfolioExecutionErrorV2::OrderMismatch)?;
+    let (sell, sell_fill) = sell_row.ok_or(PortfolioExecutionErrorV2::OrderMismatch)?;
+    if buy != *buyer.economic_order()
+        || sell != *seller.economic_order()
+        || buy_fill != buyer.record.selected_fill_units
+        || sell_fill != seller.record.selected_fill_units
+    {
+        return Err(PortfolioExecutionErrorV2::OrderMismatch);
+    }
+    let honored_aon_mask = selection.honored_aon_mask();
+    validate_live_order_fill_fields_v2(
+        domain,
+        price,
+        &buy,
+        buy_at,
+        buy_fill,
+        ((honored_aon_mask >> u32::from(buy_at)) & 1) != 0,
+    )
+    .map_err(PortfolioExecutionErrorV2::Economic)?;
+    validate_live_order_fill_fields_v2(
+        domain,
+        price,
+        &sell,
+        sell_at,
+        sell_fill,
+        ((honored_aon_mask >> u32::from(sell_at)) & 1) != 0,
+    )
+    .map_err(PortfolioExecutionErrorV2::Economic)?;
+    compose_exact_portfolio_pair_value_v2(domain, price, boundary, buyer, seller, buy, sell)
+}
+
+fn order_pair_endpoints_v2(
+    first: AuthenticatedSelectedPortfolioOrderV2,
+    second: AuthenticatedSelectedPortfolioOrderV2,
+) -> Result<
+    (
+        AuthenticatedSelectedPortfolioOrderV2,
+        AuthenticatedSelectedPortfolioOrderV2,
+    ),
+    PortfolioExecutionErrorV2,
+> {
     let (buyer, seller) = match (first.record.side, second.record.side) {
         (Side::Buy, Side::Sell) => (first, second),
         (Side::Sell, Side::Buy) => (second, first),
@@ -758,17 +1047,18 @@ pub fn authenticate_exact_portfolio_pair_v2(
     {
         return Err(PortfolioExecutionErrorV2::AliasedPairEndpoint);
     }
-    let buy_at = usize::from(buyer.record.order_index);
-    let sell_at = usize::from(seller.record.order_index);
-    if buy_at >= usize::from(book.len) || sell_at >= usize::from(book.len) || buy_at == sell_at {
-        return Err(PortfolioExecutionErrorV2::OrderMismatch);
-    }
-    let buy = book.orders[buy_at];
-    let sell = book.orders[sell_at];
-    validate_live_order_fill_v2(domain, price, candidate, &buy, buyer.record.order_index)
-        .map_err(PortfolioExecutionErrorV2::Economic)?;
-    validate_live_order_fill_v2(domain, price, candidate, &sell, seller.record.order_index)
-        .map_err(PortfolioExecutionErrorV2::Economic)?;
+    Ok((buyer, seller))
+}
+
+fn compose_exact_portfolio_pair_value_v2(
+    domain: &EconomicDomainV2,
+    price: &PricePreconditionV2,
+    boundary: PortfolioValuationBoundaryV2,
+    buyer: AuthenticatedSelectedPortfolioOrderV2,
+    seller: AuthenticatedSelectedPortfolioOrderV2,
+    buy: EconomicOrderV2,
+    sell: EconomicOrderV2,
+) -> Result<AuthenticatedPortfolioPairV2, PortfolioExecutionErrorV2> {
     if buy.coefficients != sell.coefficients {
         return Err(PortfolioExecutionErrorV2::CoefficientMismatch);
     }
@@ -778,13 +1068,6 @@ pub fn authenticate_exact_portfolio_pair_v2(
         || units != sell.quantity
     {
         return Err(PortfolioExecutionErrorV2::NotExactFullPair);
-    }
-    let mut index = 0usize;
-    while index < usize::from(book.len) {
-        if index != buy_at && index != sell_at && candidate.fills[index] != 0 {
-            return Err(PortfolioExecutionErrorV2::NonExclusivePair);
-        }
-        index += 1;
     }
     let mut unit_value = 0u128;
     let mut payoff = [0u64; MAX_OUTCOMES];
