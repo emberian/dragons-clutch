@@ -82,7 +82,81 @@ test("browser_refuses_caller_shaped_transaction_truth", () => {
   assert.match(chain, /serialized transaction encoding or byte count is invalid/);
   assert.match(chain, /discard this draft regardless of outcome|freshnessDisposition/);
   assert.match(app, /Browser-authored protocol material is forbidden/);
-  assert.match(app, /canonical unsigned draft available for inspection/);
+  assert.match(app, /canonical unsigned draft joined to a fresh finalized exact tuple/);
+});
+
+test("source_and_structured_action_material_use_disjoint_current_transport_contracts", () => {
+  const context = browserRealm("chain-client.js");
+  const result = vm.runInContext(`(() => {
+    const account = "11111111111111111111111111111112";
+    const lookup = "11111111111111111111111111111113";
+    const releaseKey = "checked-release";
+    const manifest = "01".repeat(32);
+    const profile = "02".repeat(32);
+    const sessionId = "03".repeat(32);
+    const state = "04".repeat(32);
+    const workflow = "05".repeat(32);
+    const ownerRelease = "06".repeat(32);
+    const make = (familyTag, familyVersion, family, action, flow, messageVersion, addressLookupTables) => {
+      const coordinate = { familyTag, familyVersion, localAction: "1", family, action };
+      const cursor = { workflowId: workflow, lane: family, generation: "1", phase: "1", item: "0", observedStateSha256: state };
+      const selection = { account, releaseKey, action, accountSlot: "100", observedCommitment: "finalized", effectiveCommitment: "finalized", branch: { kind: "finalized-scan" }, dependencies: [], cursor };
+      const configuration = { release: { releaseKey, releaseManifestSha256: manifest, capabilityProfileId: profile, enabledIntents: [{ familyTag, familyVersion, localAction: "1" }] } };
+      const session = { sessionId, release: { releaseKey }, restart: { cursors: [selection] } };
+      const row = {
+        coordinate,
+        releaseAdmission: { enabled: true, releaseKey, capabilityProfileId: profile },
+        stateSelection: selection,
+        semanticOwnerConstructor: "closed-rust-owner",
+        accountRoles: [{ index: "0", role: "payer", writable: true, signer: true, address, identityDisposition: "semantic-owner-derived-and-bound-to-draft" }],
+        callable: true,
+        verdict: "callable-unsigned-draft",
+        reason: "exact current tuple",
+        transactionDraft: {
+          schema: "dragons-clutch/operator-canonical-action-material/v1",
+          draftId: "07".repeat(32),
+          constructionSchema: "dragons-clutch/operator/unsigned-protocol-transaction/v3",
+          driverAccount: account,
+          driverAccountSlot: "100",
+          driverReleaseKey: releaseKey,
+          authorityStateSha256: state,
+          releaseManifestSha256: manifest,
+          capabilityProfileId: profile,
+          feePayer: account,
+          messageVersion,
+          addressLookupTables,
+          recentBlockhash: null,
+          hasRecentBlockhash: false,
+          signed: false,
+          submitted: false,
+          serializedTransactionHex: "00",
+          serializedBytes: "1",
+          actions: [action],
+          flows: [flow],
+          semanticOwners: [{ package: "owner", schema: "schema", releaseSha256: ownerRelease }],
+          registryBindings: [{ familyTag, familyVersion, localAction: "1", allocationStatus: "frozen", centralAction: family === "source" ? "1" : null }],
+          runtimeAdmissions: ["release-bound-enabled"],
+          exactEquations: [{ name: "exact", unit: { kind: "lamports" }, left: "1", right: "1" }],
+          reloadAuthoritativeAccounts: true
+        },
+        signerRequirements: [{ address, semanticRoles: ["payer", "transaction-fee-payer"], signaturePresent: false, keyAccess: false }],
+        freshnessDisposition: { observedSlot: "100", validBeforeSlot: "110", maximumValiditySlots: "10", recentBlockhash: "absent; a launcher must reacquire state before adding one", beforeSigning: "reload", afterSubmission: "discard" }
+      };
+      const raw = { schema: "dragons-clutch/operator-action-capability-set/v1", status: "ready", commitment: "finalized", projectionAuthority: "untrusted-release-and-canonical-codec-projection", signing: false, submission: false, sessionId, releaseKey, capabilityProfileId: profile, freshness: { recentBlockhash: "absent-by-contract", feePayer: "must-be-explicit-in-server-constructed-draft", validBeforeSlot: "must-be-derived-from-a-fresh-clock-observation", beforeSigning: "reload", afterSubmission: "discard" }, actions: [row] };
+      return { raw, configuration, session };
+    };
+    const source = make("77", "2", "source", "initialize-source-head", "source-plane-v3", "legacy", []);
+    const structured = make("75", "1", "structured-claim", "create-structured-descriptor", "structured-claim", "v0", [{ account: lookup, observedSlot: "99", stateSha256: "08".repeat(32), writableAddresses: "1", readonlyAddresses: "1" }]);
+    const sourceOutput = GlassChainClient.validateActionCapabilities(source.raw, source.configuration, source.session);
+    const structuredOutput = GlassChainClient.validateActionCapabilities(structured.raw, structured.configuration, structured.session);
+    structured.raw.actions[0].transactionDraft.addressLookupTables = [];
+    let refused = false;
+    try { GlassChainClient.validateActionCapabilities(structured.raw, structured.configuration, structured.session); } catch (_) { refused = true; }
+    return { sourceFlow: sourceOutput.actions[0].transactionDraft.flows[0], structuredFlow: structuredOutput.actions[0].transactionDraft.flows[0], refused };
+  })()`, context);
+  assert.equal(result.sourceFlow, "source-plane-v3");
+  assert.equal(result.structuredFlow, "structured-claim");
+  assert.equal(result.refused, true);
 });
 
 test("compiler_boundary_names_rust_owner_and_does_not_reimplement_payoff_math", () => {

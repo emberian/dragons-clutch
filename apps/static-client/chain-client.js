@@ -17,6 +17,8 @@
   const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
   const BASE58_INDEX = Object.freeze(Object.fromEntries(Array.from(BASE58_ALPHABET, (character, index) => [character, index])));
   const DECODER_SET = "dragons-clutch/canonical-account-decoders/v7-product-v5-authority";
+  const SOURCE_COORDINATE = Object.freeze({ familyTag: "77", familyVersion: "2", family: "source", flow: "source-plane-v3", messageVersion: "legacy", lookupTables: 0 });
+  const STRUCTURED_COORDINATE = Object.freeze({ familyTag: "75", familyVersion: "1", family: "structured-claim", flow: "structured-claim", messageVersion: "v0", lookupTables: 1 });
   const GROUP_ORDER = Object.freeze(["market", "product", "collateral", "source", "series", "candidate", "settlement", "liquidity", "recovery", "other"]);
   const GROUP_LABELS = Object.freeze({
     market: "Market",
@@ -815,9 +817,13 @@
       }));
       const callable = bool(row.callable, `actions[${index}].callable`);
       if (!callable && (row.verdict !== "unavailable" || row.transactionDraft !== null || row.signerRequirements.length !== 0)) throw new Error("unavailable action carries executable-looking transaction or signer material.");
-      if (!callable) return Object.freeze({ coordinate, accountRoles, callable: false, verdict: row.verdict, reason: text(row.reason, `actions[${index}].reason`, 512), stateSelection: row.stateSelection, transactionDraft: null, signerRequirements: Object.freeze([]) });
+      if (!callable) {
+        const stateSelection = row.stateSelection === null ? null : validateFinalizedStateSelection(row.stateSelection, session, index);
+        if (typeof row.freshnessDisposition !== "string") throw new Error("unavailable action must carry an explicit non-draft freshness disposition.");
+        return Object.freeze({ coordinate, accountRoles, callable: false, verdict: row.verdict, reason: text(row.reason, `actions[${index}].reason`, 512), stateSelection, transactionDraft: null, signerRequirements: Object.freeze([]), freshnessDisposition: null });
+      }
       if (row.verdict !== "callable-unsigned-draft" || row.stateSelection === null) throw new Error("callable action lacks an exact finalized state selection.");
-      const stateSelection = validateCallableStateSelection(row.stateSelection, session, index);
+      const stateSelection = validateFinalizedStateSelection(row.stateSelection, session, index);
       if (accountRoles.length === 0 || accountRoles.some((role) => role.address === null || role.identityDisposition !== "semantic-owner-derived-and-bound-to-draft")) throw new Error("callable action has unresolved account-role identity.");
       const signerRequirements = Object.freeze(row.signerRequirements.map((requirement, signerIndex) => {
         requirePlain(requirement, `actions[${index}].signerRequirements[${signerIndex}]`);
@@ -838,13 +844,14 @@
       const validBeforeSlot = positiveDecimal(row.freshnessDisposition.validBeforeSlot, `actions[${index}].freshnessDisposition.validBeforeSlot`);
       const maximumValiditySlots = positiveDecimal(row.freshnessDisposition.maximumValiditySlots, `actions[${index}].freshnessDisposition.maximumValiditySlots`);
       if (validBeforeSlot <= observedSlot || validBeforeSlot - observedSlot > maximumValiditySlots || observedSlot < BigInt(stateSelection.accountSlot) || row.freshnessDisposition.recentBlockhash !== "absent; a launcher must reacquire state before adding one" || typeof row.freshnessDisposition.beforeSigning !== "string" || typeof row.freshnessDisposition.afterSubmission !== "string") throw new Error("callable action freshness boundary is invalid.");
+      if (transactionDraft.addressLookupTables.some((lookup) => BigInt(lookup.observedSlot) > observedSlot)) throw new Error("callable action uses a lookup-table observation newer than its freshness observation.");
       return Object.freeze({ coordinate, accountRoles, callable: true, verdict: row.verdict, reason: text(row.reason, `actions[${index}].reason`, 512), stateSelection, transactionDraft, signerRequirements, freshnessDisposition: Object.freeze({ observedSlot: observedSlot.toString(), validBeforeSlot: validBeforeSlot.toString(), maximumValiditySlots: maximumValiditySlots.toString() }) });
     });
     if (seen.size !== enabled.size) throw new Error("operatord omitted a checked release-enabled coordinate from its action verdict set.");
     return Object.freeze({ schema: raw.schema, sessionId: session.sessionId, actions: Object.freeze(actions), freshness: Object.freeze({ ...raw.freshness }) });
   };
 
-  const validateCallableStateSelection = (raw, session, index) => {
+  const validateFinalizedStateSelection = (raw, session, index) => {
     requirePlain(raw, `actions[${index}].stateSelection`);
     requirePlain(raw.cursor, `actions[${index}].stateSelection.cursor`);
     if (!Array.isArray(raw.dependencies) || raw.dependencies.length > 128 || raw.releaseKey !== session.release.releaseKey || raw.observedCommitment !== "finalized" || raw.effectiveCommitment !== "finalized") throw new Error("callable state selection is not finalized and release-bound.");
@@ -866,7 +873,7 @@
         observedStateSha256: hash32(raw.cursor.observedStateSha256, `actions[${index}].stateSelection.cursor.observedStateSha256`)
       })
     });
-    if (value.branch.kind !== "finalized-scan" || new Set(value.dependencies).size !== value.dependencies.length) throw new Error("callable state selection is forked or repeats a dependency.");
+    if (value.branch.kind !== "finalized-scan" || new Set([value.account, ...value.dependencies]).size !== value.dependencies.length + 1) throw new Error("action state selection is forked or repeats a named account identity.");
     const restart = session.restart.cursors.find((candidate) => candidate.account === value.account && candidate.action === value.action && candidate.cursor.workflowId === value.cursor.workflowId && candidate.cursor.lane === value.cursor.lane && candidate.cursor.generation === value.cursor.generation && candidate.cursor.phase === value.cursor.phase && candidate.cursor.item === value.cursor.item && candidate.cursor.observedStateSha256 === value.cursor.observedStateSha256);
     if (!restart || restart.dependencies.length !== value.dependencies.length || restart.dependencies.some((dependency, dependencyIndex) => dependency !== value.dependencies[dependencyIndex])) throw new Error("callable state selection differs from the attached onchain-derived restart cursor.");
     return value;
@@ -874,18 +881,35 @@
 
   const validateCanonicalTransactionDraft = (raw, configuration, coordinate, selection, roles, signers, index) => {
     requirePlain(raw, `actions[${index}].transactionDraft`);
-    if (raw.schema !== "dragons-clutch/operator-canonical-action-material/v1" || raw.constructionSchema !== "dragons-clutch/operator/unsigned-protocol-transaction/v3" || hash32(raw.releaseManifestSha256, "draft release manifest") !== configuration.release.releaseManifestSha256 || hash32(raw.capabilityProfileId, "draft capability profile") !== configuration.release.capabilityProfileId || nonzeroAddress(raw.driverAccount, "draft driver account") !== selection.account || decimal(raw.driverAccountSlot, "draft driver account slot").toString() !== selection.accountSlot || raw.recentBlockhash !== null || raw.hasRecentBlockhash !== false || raw.signed !== false || raw.submitted !== false || raw.reloadAuthoritativeAccounts !== true) throw new Error("callable transaction draft violates its release/construction boundary.");
+    if (raw.schema !== "dragons-clutch/operator-canonical-action-material/v1" || raw.constructionSchema !== "dragons-clutch/operator/unsigned-protocol-transaction/v3" || hash32(raw.releaseManifestSha256, "draft release manifest") !== configuration.release.releaseManifestSha256 || hash32(raw.capabilityProfileId, "draft capability profile") !== configuration.release.capabilityProfileId || nonzeroAddress(raw.driverAccount, "draft driver account") !== selection.account || decimal(raw.driverAccountSlot, "draft driver account slot").toString() !== selection.accountSlot || text(raw.driverReleaseKey, "draft driver release key", 320) !== selection.releaseKey || hash32(raw.authorityStateSha256, "draft authority state") !== selection.cursor.observedStateSha256 || raw.recentBlockhash !== null || raw.hasRecentBlockhash !== false || raw.signed !== false || raw.submitted !== false || raw.reloadAuthoritativeAccounts !== true) throw new Error("callable transaction draft violates its release/construction boundary.");
     const feePayer = nonzeroAddress(raw.feePayer, "draft fee payer");
     if (!signers.some((requirement) => requirement.address === feePayer && requirement.semanticRoles.includes("transaction-fee-payer")) || !roles.some((role) => role.address === feePayer && role.signer)) throw new Error("draft fee payer is not the exact signer role.");
     const transactionHex = text(raw.serializedTransactionHex, "serialized transaction", 2464);
     if (!HEX_BYTES.test(transactionHex) || decimal(raw.serializedBytes, "serialized transaction bytes", 1232n).toString() !== String(transactionHex.length / 2)) throw new Error("serialized transaction encoding or byte count is invalid.");
-    if (!Array.isArray(raw.actions) || raw.actions.length !== 1 || !Array.isArray(raw.flows) || raw.flows.length !== 1 || raw.flows[0] !== "source-plane-v3" || !Array.isArray(raw.semanticOwners) || raw.semanticOwners.length !== 1 || !Array.isArray(raw.registryBindings) || raw.registryBindings.length !== 1 || !Array.isArray(raw.runtimeAdmissions) || raw.runtimeAdmissions.length !== 1 || raw.runtimeAdmissions[0] !== "release-bound-enabled" || !Array.isArray(raw.exactEquations) || raw.exactEquations.length === 0) throw new Error("callable draft is not one exact admitted Source action.");
+    if (!Array.isArray(raw.actions) || raw.actions.length !== 1 || raw.actions[0] !== coordinate.action || !Array.isArray(raw.flows) || raw.flows.length !== 1 || !Array.isArray(raw.semanticOwners) || raw.semanticOwners.length !== 1 || !Array.isArray(raw.registryBindings) || raw.registryBindings.length !== 1 || !Array.isArray(raw.runtimeAdmissions) || raw.runtimeAdmissions.length !== 1 || raw.runtimeAdmissions[0] !== "release-bound-enabled" || !Array.isArray(raw.exactEquations) || raw.exactEquations.length === 0 || !Array.isArray(raw.addressLookupTables)) throw new Error("callable draft is not one exact release-admitted semantic-owner action.");
+    const flowContract = [SOURCE_COORDINATE, STRUCTURED_COORDINATE].find((contract) => contract.familyTag === coordinate.familyTag && contract.familyVersion === coordinate.familyVersion && contract.family === coordinate.family) || null;
+    if (flowContract === null) throw new Error("callable draft belongs to a family without a current browser semantic-owner contract.");
+    if (raw.flows[0] !== flowContract.flow || raw.messageVersion !== flowContract.messageVersion || raw.addressLookupTables.length !== flowContract.lookupTables) throw new Error("callable draft differs from its current Source/Structured transport contract.");
+    const addressLookupTables = Object.freeze(raw.addressLookupTables.map((lookup, lookupIndex) => {
+      requirePlain(lookup, `draft.addressLookupTables[${lookupIndex}]`);
+      const writableAddresses = decimal(lookup.writableAddresses, `draft.addressLookupTables[${lookupIndex}].writableAddresses`, 256n);
+      const readonlyAddresses = decimal(lookup.readonlyAddresses, `draft.addressLookupTables[${lookupIndex}].readonlyAddresses`, 256n);
+      if (writableAddresses + readonlyAddresses === 0n || writableAddresses + readonlyAddresses > 256n) throw new Error("draft lookup-table projection has an invalid exact address count.");
+      return Object.freeze({
+        account: nonzeroAddress(lookup.account, `draft.addressLookupTables[${lookupIndex}].account`),
+        observedSlot: positiveDecimal(lookup.observedSlot, `draft.addressLookupTables[${lookupIndex}].observedSlot`).toString(),
+        stateSha256: hash32(lookup.stateSha256, `draft.addressLookupTables[${lookupIndex}].stateSha256`),
+        writableAddresses: writableAddresses.toString(),
+        readonlyAddresses: readonlyAddresses.toString()
+      });
+    }));
     const binding = raw.registryBindings[0];
     requirePlain(binding, "draft registry binding");
     if (positiveDecimal(binding.familyTag, "draft binding family tag", 255n).toString() !== coordinate.familyTag || positiveDecimal(binding.familyVersion, "draft binding family version", 255n).toString() !== coordinate.familyVersion || positiveDecimal(binding.localAction, "draft binding local action", 255n).toString() !== coordinate.localAction || binding.allocationStatus !== "frozen") throw new Error("draft registry binding differs from the checked coordinate.");
+    if ((coordinate.family === "structured-claim" && binding.centralAction !== null) || (coordinate.family === "source" && decimal(binding.centralAction, "draft central Source action", 255n).toString() !== coordinate.localAction)) throw new Error("draft central action binding differs from its family-owned current contract.");
     raw.semanticOwners.forEach((owner, ownerIndex) => { requirePlain(owner, `draft.semanticOwners[${ownerIndex}]`); text(owner.package, "semantic owner package", 160); text(owner.schema, "semantic owner schema", 160); hash32(owner.releaseSha256, "semantic owner release"); });
     raw.exactEquations.forEach((equation, equationIndex) => { requirePlain(equation, `draft.exactEquations[${equationIndex}]`); requirePlain(equation.unit, `draft.exactEquations[${equationIndex}].unit`); text(equation.name, "exact equation name", 200); const left = decimal(equation.left, "exact equation left"); const right = decimal(equation.right, "exact equation right"); if (left !== right) throw new Error("draft exact-integer equation is unbalanced."); });
-    return Object.freeze({ ...raw, draftId: hash32(raw.draftId, "draft ID"), feePayer, serializedTransactionHex: transactionHex });
+    return Object.freeze({ ...raw, draftId: hash32(raw.draftId, "draft ID"), feePayer, addressLookupTables, serializedTransactionHex: transactionHex });
   };
 
   const maximumSlot = (values) => values.reduce((maximum, value) => value > maximum ? value : maximum, 0n);
@@ -897,9 +921,90 @@
     return "other";
   };
 
+  const actionInspectionDisposition = (action, accountByAddress, tipSlot, requestedCommitment) => {
+    if (requestedCommitment !== "finalized") {
+      return Object.freeze({
+        eligible: false,
+        kind: "nonfinal-view-refused",
+        reason: "The visible account projection is processed and rollbackable; switch to finalized and reacquire the complete exact tuple.",
+        observedAccounts: "0",
+        staleAccounts: "0",
+        validBeforeSlot: action.freshnessDisposition === null ? null : action.freshnessDisposition.validBeforeSlot
+      });
+    }
+    if (!action.callable) {
+      return Object.freeze({
+        eligible: false,
+        kind: action.stateSelection === null ? "missing-finalized-selection" : "exact-tuple-unavailable",
+        reason: action.reason,
+        observedAccounts: action.stateSelection === null ? "0" : String(1 + action.stateSelection.dependencies.length),
+        staleAccounts: "0",
+        validBeforeSlot: null
+      });
+    }
+    const selection = action.stateSelection;
+    const namedAddresses = [selection.account, ...selection.dependencies];
+    const missing = namedAddresses.filter((identity) => !accountByAddress.has(identity));
+    if (missing.length !== 0) {
+      return Object.freeze({
+        eligible: false,
+        kind: "missing-finalized-observation",
+        reason: `${missing.length} semantic-owner account observation(s) are absent from the attached finalized session.`,
+        observedAccounts: String(namedAddresses.length - missing.length),
+        staleAccounts: "0",
+        validBeforeSlot: action.freshnessDisposition.validBeforeSlot
+      });
+    }
+    const observations = namedAddresses.map((identity) => accountByAddress.get(identity));
+    const driver = observations[0];
+    if (driver.slot !== selection.accountSlot) {
+      return Object.freeze({
+        eligible: false,
+        kind: "finalized-driver-observation-changed",
+        reason: `The selected driver was observed at slot ${selection.accountSlot}, but the joined finalized account body is now at slot ${driver.slot}.`,
+        observedAccounts: String(observations.length),
+        staleAccounts: "0",
+        validBeforeSlot: action.freshnessDisposition.validBeforeSlot
+      });
+    }
+    const stale = observations.filter((accountValue) => accountValue.stale);
+    if (stale.length !== 0) {
+      return Object.freeze({
+        eligible: false,
+        kind: "stale-finalized-observation",
+        reason: `${stale.length} named finalized account observation(s) exceed the explicit maximum slot lag.`,
+        observedAccounts: String(observations.length),
+        staleAccounts: String(stale.length),
+        validBeforeSlot: action.freshnessDisposition.validBeforeSlot
+      });
+    }
+    if (tipSlot >= BigInt(action.freshnessDisposition.validBeforeSlot)) {
+      return Object.freeze({
+        eligible: false,
+        kind: "draft-freshness-expired",
+        reason: `The projected tip ${tipSlot} has reached the draft's exclusive valid-before slot ${action.freshnessDisposition.validBeforeSlot}.`,
+        observedAccounts: String(observations.length),
+        staleAccounts: "0",
+        validBeforeSlot: action.freshnessDisposition.validBeforeSlot
+      });
+    }
+    return Object.freeze({
+      eligible: true,
+      kind: "finalized-exact-tuple-inspectable",
+      reason: "Checked release, exact finalized driver/dependencies, freshness bound, and canonical unsigned material agree for inspection.",
+      observedAccounts: String(observations.length),
+      staleAccounts: "0",
+      validBeforeSlot: action.freshnessDisposition.validBeforeSlot
+    });
+  };
+
   const deriveSnapshot = (configuration, session, actionCapabilities, health, acquisition, releases, accountResponse, keeperActions, forks, remainingResponseBytes) => {
     const accounts = accountResponse.selected;
     const candidateSlots = forks.nodes.map((node) => BigInt(node.slot)).concat(accounts.map((accountValue) => BigInt(accountValue.slot)));
+    for (const action of actionCapabilities.actions) {
+      if (action.stateSelection !== null) candidateSlots.push(BigInt(action.stateSelection.accountSlot));
+      if (action.freshnessDisposition !== null) candidateSlots.push(BigInt(action.freshnessDisposition.observedSlot));
+    }
     if (forks.finalizedRoot) candidateSlots.push(BigInt(forks.finalizedRoot.slot));
     const tipSlot = maximumSlot(candidateSlots);
     const finalizedSlot = forks.finalizedRoot ? BigInt(forks.finalizedRoot.slot) : null;
@@ -916,15 +1021,21 @@
       return Object.freeze({ ...accountValue, slotLag: lag.toString(), stale: lag > maximumLag, forkState, group: accountGroup(accountValue.kind) });
     });
     const groups = Object.freeze(Object.fromEntries(GROUP_ORDER.map((name) => [name, Object.freeze(annotated.filter((accountValue) => accountValue.group === name))])));
+    const accountByAddress = new Map(annotated.map((accountValue) => [accountValue.address, accountValue]));
+    const inspectedActions = Object.freeze(actionCapabilities.actions.map((action) => Object.freeze({
+      ...action,
+      inspection: actionInspectionDisposition(action, accountByAddress, tipSlot, configuration.commitment)
+    })));
+    const inspectedActionCapabilities = Object.freeze({ ...actionCapabilities, actions: inspectedActions });
     const familySet = new Set(releases.selected.families);
-    const successorCapabilities = actionCapabilities.actions.map((action) => Object.freeze({
+    const successorCapabilities = inspectedActions.map((action) => Object.freeze({
       surface: "successor-action",
       family: action.coordinate.family,
       label: `${action.coordinate.familyTag}/${action.coordinate.familyVersion}/${action.coordinate.localAction} · ${action.coordinate.action}`,
       indexedByRelease: action.stateSelection !== null,
-      allocationStatus: action.callable ? "callable" : "unavailable",
-      enabled: action.callable,
-      reason: action.reason
+      allocationStatus: action.inspection.eligible ? "inspectable" : "refused",
+      enabled: action.inspection.eligible,
+      reason: action.inspection.reason
     }));
     const productIndexed = familySet.has("series") || annotated.some((accountValue) => accountValue.group === "product" || accountValue.group === "series");
     const ownerV3Indexed = familySet.has("position-v3") || familySet.has("replay-v3") || annotated.some((accountValue) => accountValue.kind === "position-v3" || accountValue.kind === "replay-v3" || accountValue.kind.startsWith("general-owner-settlement"));
@@ -988,7 +1099,7 @@
       groups,
       groupLabels: GROUP_LABELS,
       keeperActions,
-      actionCapabilities,
+      actionCapabilities: inspectedActionCapabilities,
       capabilities,
       forks
     };

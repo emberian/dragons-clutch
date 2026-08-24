@@ -10,8 +10,8 @@ The application has three narrow jobs:
 
 1. read the fork-aware untrusted account index exposed by `operatord`;
 2. bind and display exact Product compiler proposals emitted by Rust; and
-3. assemble the outer blockhash-free Solana transaction around exact bytes and
-   account roles supplied by their semantic owner.
+3. validate and inspect a blockhash-free Solana transaction already constructed
+   from exact chain-derived state by its Rust semantic owner.
 
 It is not an explorer, index authority, compiler implementation, wallet, or
 release manifest.
@@ -36,6 +36,8 @@ selected operatord URL and only with sequential `GET` requests to:
 ```text
 /v1/health
 /v1/acquisition
+/v1/session
+/v1/actions
 /v1/releases
 /v1/accounts?commitment={processed|finalized}
 /v1/keeper/next?commitment={processed|finalized}
@@ -116,6 +118,19 @@ is not executable capability admission. The daemon reports the offline
 manifest/profile/source/ELF join and its enabled registry coordinates, but that
 report remains an untrusted projection and is not a current-account runtime
 admission verdict.
+
+For current Source and Structured actions, Glass admits inspection only when
+the `/v1/actions` verdict joins the checked manifest/profile, the exact enabled
+coordinate, one onchain-derived finalized restart cursor, its complete named
+driver/dependency observations, and a still-live exclusive validity slot.
+Source material must be a legacy `source-plane-v3` transaction without lookup
+tables. Structured material must be a v0 `structured-claim` transaction with
+one finalized, digest-bound address lookup table. Missing finalized state,
+changed driver slots, stale dependencies, expired material, unsupported family
+contracts, and release-enabled coordinates without one exact canonical draft
+remain visible as refused dispositions; none can be selected. The browser has
+no manual payload, account-role, semantic-owner, or transaction assembly input
+on this path.
 
 Product/Series registration and Owner/Position V3 lifecycle appear as separate
 `not-authenticated` capability cards. This avoids treating Product compiler
