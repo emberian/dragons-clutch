@@ -2,8 +2,8 @@
 //!
 //! The browser never supplies candidate fills, semantic identities, account
 //! roles, refund recipients, liveness ordinals, or postimages. This module
-//! hostile-decodes one finalized b1/v2+b2+b3 snapshot, derives the sole maximum
-//! exact pair candidate or the next verification transition, replays the same
+//! hostile-decodes one finalized b1/v2+b2+b3 snapshot, derives one deterministic
+//! exact valid pair candidate or the next verification transition, replays the same
 //! pure owners used by SBF, and only then emits one release-bound unsigned
 //! draft. Signing, blockhash acquisition, and submission are outside this
 //! crate.
@@ -233,8 +233,19 @@ pub fn construct_direct_candidate_submission_v1(
         DirectMarketAction::SubmitCandidate,
         sequence,
         prestate_id,
+        [
+            snapshot.root.address,
+            snapshot.replay.address,
+            snapshot.selection.address,
+            Address::new_from_array(
+                decoded.state.root().candidate_liveness().policy_account,
+            ),
+            Address::new_from_array(
+                decoded.state.root().candidate_liveness().candidate_account,
+            ),
+        ],
     )?;
-    let candidate = derive_maximum_exact_candidate(&decoded.selection)?;
+    let candidate = derive_deterministic_valid_candidate(&decoded.selection)?;
     let bond_before = decoded
         .state
         .root()
@@ -433,6 +444,13 @@ pub fn construct_next_direct_candidate_verification_v1(
         wire_action,
         sequence,
         prestate_id,
+        [
+            snapshot.root.address,
+            snapshot.replay.address,
+            snapshot.selection.address,
+            snapshot.liveness_policy.address,
+            snapshot.candidate_compartment.address,
+        ],
     )?;
     let policy_id = sha256(&snapshot.liveness_policy.data);
     if policy_id != binding.policy_data_id {
@@ -646,7 +664,7 @@ fn authenticate_root_address(
     Ok(())
 }
 
-fn derive_maximum_exact_candidate(
+fn derive_deterministic_valid_candidate(
     selection: &clutch_direct_market_runtime::selection_v1::DirectSelectionV1,
 ) -> Result<DirectEconomicCandidateV1, CanonicalActionMaterialErrorV1> {
     let book = selection.book();
@@ -1015,14 +1033,22 @@ fn authenticate_snapshot_set(
 fn authenticate_operator_cursor(
     selection: &KeeperActionSelection,
     generation: u64,
-    _action: DirectMarketAction,
-    _sequence: u64,
-    _prestate_id: [u8; 32],
+    action: DirectMarketAction,
+    sequence: u64,
+    prestate_id: [u8; 32],
+    expected_dependencies: [Address; 5],
 ) -> Result<(), CanonicalActionMaterialErrorV1> {
     if selection.cursor.workflow_id == [0; 32]
         || selection.cursor.lane != WorkflowLane::Candidate
         || selection.cursor.generation != generation
+        || selection.cursor.position.phase != u16::from(action.tag())
+        || selection.cursor.position.item != sequence
         || selection.cursor.observed_state_sha256 == [0; 32]
+        || prestate_id == [0; 32]
+        || selection.dependencies.len() != expected_dependencies.len()
+        || expected_dependencies
+            .iter()
+            .any(|address| !selection.dependencies.contains(address))
     {
         return Err(CanonicalActionMaterialErrorV1::WrongSelection);
     }
@@ -1130,7 +1156,8 @@ mod tests {
     use clutch_batch::Side;
 
     // This source-only adversarial test pins the operator's exact-cash step:
-    // a maximum quantity of five at price 2/3 must derive three, never five.
+    // A quantity bound of five at price 2/3 deterministically derives the
+    // exact-cash fill three, never the inexact fill five.
     #[test]
     fn exact_cash_step_is_not_rounded() {
         assert_eq!(greatest_common_divisor(2, 3), 1);

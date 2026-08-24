@@ -20,7 +20,8 @@ use clutch_dealer_runtime_contract::{
     DealerPolicyV1, DealerRootTombstoneV2, DealerStateV2, DealerTerminalAllocationV1,
     FixedCodec as DealerFixedCodec, LpPageV2, SettlementPotV2, DEALER_FACILITY_REPLAY_BYTES_V1,
 };
-use clutch_direct_market_runtime::codec_v1::decode_direct_market_root_body_v1;
+use clutch_direct_market_runtime::codec_v2::authenticate_direct_root_transition_body_v2;
+use clutch_direct_market_runtime::DirectHashBackendV1;
 use clutch_failure_policy_runtime::market_policy_v1::FailureMarketAdmissionStateV1;
 use clutch_fractional_redemption_runtime::{
     FractionalCreditTombstoneV2, FractionalCreditV2, FractionalLedgerV1, FractionalPolicyV2,
@@ -73,9 +74,10 @@ use clutch_solana_layout::failure_interval_consensus::{
     FailureIntervalConsensusWorkAccountV1,
 };
 use clutch_solana_layout::direct_market_v1::{
-    DirectActionReplayAccountV1, DirectMarketRootAccountV1, DirectReservationAccountV1,
+    DirectActionReplayAccountV1, DirectReservationAccountV1,
     DirectSelectionAccountV1, DIRECT_RESERVATION_BODY_BYTES_V1,
 };
+use clutch_solana_layout::direct_market_v2::DirectMarketRootAccountV2;
 use clutch_solana_layout::failure_recovery::{
     decode_failure_account_body_v1, FailureMarketRootAccountV2, FailureReplayTombstoneV1,
     FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1, FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1,
@@ -116,7 +118,7 @@ pub type Result<T> = core::result::Result<T, AccountIndexError>;
 /// Sole decoder contract admitted by live chain serving. Historical Source V1/V2
 /// and withdrawn account versions are deliberately outside this set.
 pub const CANONICAL_ACCOUNT_DECODER_SET: &str =
-    "dragons-clutch/canonical-account-decoders/v8-source-work-schedule-general-v3-historical-no-keeper-no-selected-candidate-direct-80-product-global-current";
+    "dragons-clutch/canonical-account-decoders/v9-source-work-schedule-general-v3-historical-no-keeper-no-selected-candidate-direct-b1-v2-product-general-revenue-current";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountIndexError {
@@ -229,7 +231,7 @@ pub enum CanonicalAccountKind {
     FailureReplayTombstone,
     FailureIntervalConsensusWork,
     FailureIntervalConsensusReplay,
-    DirectMarketRootV1,
+    DirectMarketRootV2,
     DirectSelectionV1,
     DirectActionReplayV1,
     DirectReservationV1,
@@ -309,7 +311,7 @@ impl CanonicalAccountKind {
             Self::FailureReplayTombstone => "failure-replay-tombstone",
             Self::FailureIntervalConsensusWork => "failure-interval-consensus-work-v1",
             Self::FailureIntervalConsensusReplay => "failure-interval-consensus-replay-v1",
-            Self::DirectMarketRootV1 => "direct-market-root-v1",
+            Self::DirectMarketRootV2 => "direct-market-root-v2",
             Self::DirectSelectionV1 => "direct-selection-v1",
             Self::DirectActionReplayV1 => "direct-action-replay-v1",
             Self::DirectReservationV1 => "direct-reservation-v1",
@@ -428,33 +430,54 @@ impl<'a> CanonicalAccountDecoderRegistry<'a> {
             CanonicalFamily::StructuredClaim => decode_structured(&account.data),
             CanonicalFamily::Dealer => decode_dealer(&account.data),
             CanonicalFamily::Failure => decode_failure(&account.data),
-            CanonicalFamily::Direct => decode_direct(&account.data),
+            CanonicalFamily::Direct => decode_direct(account),
         }
     }
 }
 
-fn decode_direct(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
+fn decode_direct(account: &ObservedRpcAccount) -> Result<Option<CanonicalAccountProjection>> {
+    let data = account.data.as_slice();
     let projection = if tag_version(
         data,
         registry::DIRECT_MARKET_ROOT_ACCOUNT_TAG,
-        registry::DIRECT_MARKET_ROOT_ACCOUNT_VERSION,
-    ) && data.len() == registry::DIRECT_MARKET_ROOT_ACCOUNT_BYTES
+        registry::DIRECT_MARKET_ROOT_ACCOUNT_VERSION_V2,
+    ) && data.len() == registry::DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V2
     {
-        let bytes: &[u8; registry::DIRECT_MARKET_ROOT_ACCOUNT_BYTES] = data
-            .try_into()
+        let frame = DirectMarketRootAccountV2::decode(data)
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        let frame = DirectMarketRootAccountV1::decode(bytes)
+        let root = authenticate_direct_root_transition_body_v2(
+            frame.semantic_body(),
+            &DirectIndexSha,
+        )
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        let root = decode_direct_market_root_body_v1(frame.semantic_body())
-            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        let binding = root.binding();
+        let generation = root.generation().to_le_bytes();
+        let (expected, bump) = Address::find_program_address(
+            &[
+                b"dc:direct-market-root:v2",
+                &root.market_instance_id(),
+                &generation,
+            ],
+            &account.owner,
+        );
+        let rent = root.root_rent();
+        let rent_floor = rent
+            .principal_lamports
+            .checked_add(rent.donation_floor_lamports)
+            .ok_or(AccountIndexError::CanonicalDecodeRefused)?;
+        if account.address != expected
+            || bump != frame.bump()
+            || account.address.to_bytes() != root.direct_root_account()
+            || account.lamports < rent_floor
+        {
+            return Err(AccountIndexError::CanonicalDecodeRefused);
+        }
         let mut projection = CanonicalAccountProjection::canonical(
             CanonicalFamily::Direct,
-            CanonicalAccountKind::DirectMarketRootV1,
+            CanonicalAccountKind::DirectMarketRootV2,
         );
-        projection.generation = Some(binding.generation);
-        projection.primary_binding = Some(binding.market_instance_id);
-        projection.secondary_binding = Some(binding.direct_root_account);
+        projection.generation = Some(root.generation());
+        projection.primary_binding = Some(root.market_instance_id());
+        projection.secondary_binding = Some(root.direct_root_account());
         projection
     } else if tag_version(
         data,
@@ -470,7 +493,7 @@ fn decode_direct(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         CanonicalAccountProjection::contextual(
             CanonicalFamily::Direct,
             CanonicalAccountKind::DirectSelectionV1,
-            "exact DirectMarketRootV1 semantic body",
+            "exact current DirectMarketRootV2 semantic body",
         )
     } else if tag_version(
         data,
@@ -486,7 +509,7 @@ fn decode_direct(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         CanonicalAccountProjection::contextual(
             CanonicalFamily::Direct,
             CanonicalAccountKind::DirectActionReplayV1,
-            "exact DirectMarketRootV1 semantic body",
+            "exact current DirectMarketRootV2 semantic body",
         )
     } else if tag_version(
         data,
@@ -502,12 +525,24 @@ fn decode_direct(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         CanonicalAccountProjection::contextual(
             CanonicalFamily::Direct,
             CanonicalAccountKind::DirectReservationV1,
-            "exact DirectMarketRootV1 semantic body",
+            "exact current DirectMarketRootV2 semantic body",
         )
     } else {
         return Ok(None);
     };
     Ok(Some(projection))
+}
+
+struct DirectIndexSha;
+
+impl DirectHashBackendV1 for DirectIndexSha {
+    fn sha256_parts(&self, parts: &[&[u8]]) -> [u8; 32] {
+        let mut hash = Sha256::new();
+        for part in parts {
+            hash.update(part);
+        }
+        hash.finalize().into()
+    }
 }
 
 fn decode_collateral(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
@@ -2746,6 +2781,25 @@ mod current_decoder_tests {
 mod direct_decoder_tests {
     use super::*;
 
+    fn direct_account(data: Vec<u8>) -> ObservedRpcAccount {
+        ObservedRpcAccount {
+            address: Address::new_from_array([0x41; 32]),
+            owner: Address::new_from_array([0x42; 32]),
+            lamports: u64::MAX,
+            executable: false,
+            rent_epoch: 0,
+            data,
+            provenance: crate::rpc_index::RpcObservationProvenance {
+                cluster_key: "direct-decoder-test".to_string(),
+                release_key: "direct-decoder-test".to_string(),
+                slot: 7,
+                commitment: RpcCommitment::Finalized,
+                source: crate::rpc_index::RpcObservationSource::FinalizedScan,
+                receive_sequence: 1,
+            },
+        }
+    }
+
     #[test]
     fn reservation_frame_requires_root_context_and_canonical_header() {
         let frame = DirectReservationAccountV1::new(
@@ -2755,30 +2809,37 @@ mod direct_decoder_tests {
         .unwrap();
         let mut bytes = [0; registry::DIRECT_RESERVATION_ACCOUNT_BYTES];
         frame.encode_into(&mut bytes).unwrap();
-        let projection = decode_direct(&bytes).unwrap().unwrap();
+        let mut account = direct_account(bytes.to_vec());
+        let projection = decode_direct(&account).unwrap().unwrap();
         assert_eq!(projection.family, CanonicalFamily::Direct);
         assert_eq!(projection.kind, CanonicalAccountKind::DirectReservationV1);
         assert_eq!(
             projection.decode_state,
-            DecodeState::RequiresContext("exact DirectMarketRootV1 semantic body")
+            DecodeState::RequiresContext("exact current DirectMarketRootV2 semantic body")
         );
 
-        bytes[3] = 1;
+        account.data[3] = 1;
         assert_eq!(
-            decode_direct(&bytes),
+            decode_direct(&account),
             Err(AccountIndexError::CanonicalDecodeRefused)
         );
     }
 
     #[test]
     fn retired_direct_account_versions_do_not_enter_current_family() {
-        assert_eq!(
-            decode_direct(&[
-                registry::DIRECT_RESERVATION_ACCOUNT_TAG,
-                registry::DIRECT_RESERVATION_ACCOUNT_VERSION.wrapping_add(1),
-            ]),
-            Ok(None)
-        );
+        let account = direct_account(vec![
+            registry::DIRECT_RESERVATION_ACCOUNT_TAG,
+            registry::DIRECT_RESERVATION_ACCOUNT_VERSION.wrapping_add(1),
+        ]);
+        assert_eq!(decode_direct(&account), Ok(None));
+    }
+
+    #[test]
+    fn historical_b1_v1_is_not_a_current_operator_root() {
+        let mut bytes = vec![0; registry::DIRECT_MARKET_ROOT_ACCOUNT_BYTES];
+        bytes[0] = registry::DIRECT_MARKET_ROOT_ACCOUNT_TAG;
+        bytes[1] = registry::DIRECT_MARKET_ROOT_ACCOUNT_VERSION;
+        assert_eq!(decode_direct(&direct_account(bytes)), Ok(None));
     }
 }
 
