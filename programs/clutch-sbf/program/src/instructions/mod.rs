@@ -71,31 +71,34 @@ pub mod failure_market_runtime;
 #[cfg(feature = "non-production-failure-recovery-lab")]
 pub mod failure_recovery;
 pub mod fractional_redemption;
-/// Deployable current direct-only rent-owned V5 Egg delivery.
+/// Current direct-only rent-owned V5 Egg delivery.
 #[cfg(any(
     all(
         feature = "profile-full",
         not(feature = "profile-non-production-dealer-policy-catalog-lab")
     ),
-    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
 ))]
 pub mod general_v2_direct_v5;
-/// Staged-disabled exact merge-payment composer and atomic writer.
+/// Exact merge-payment composer and atomic writer.
 #[cfg(any(
     all(
         feature = "profile-full",
         not(feature = "profile-non-production-dealer-policy-catalog-lab")
     ),
-    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
 ))]
 pub mod general_v2_merge_payment_v5;
-/// Staged-disabled selected zero-fill Reservation release and atomic close.
+/// Selected zero-fill Reservation release and atomic close.
 #[cfg(any(
     all(
         feature = "profile-full",
         not(feature = "profile-non-production-dealer-policy-catalog-lab")
     ),
-    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
 ))]
 pub mod general_v2_unfilled_release_v1;
 #[cfg(any(
@@ -103,25 +106,25 @@ pub mod general_v2_unfilled_release_v1;
     feature = "profile-successor-chain-attached-dev"
 ))]
 pub mod general_v2_fee_v5;
-/// Staged action-38 owner cash, Replay, root, and fee-terminal executor.
+/// Action-38 owner cash, Replay, root, and fee-terminal executor.
 #[cfg(any(
     feature = "profile-non-production-general-v2-empty-book-identity-lab",
     feature = "profile-successor-chain-attached-dev"
 ))]
 pub mod general_v2_finalize_owner_v5;
-/// Staged action-25 accounting over the exhaustive retained settlement traversal.
+/// Action-25 accounting over the exhaustive retained settlement traversal.
 #[cfg(any(
     feature = "profile-non-production-general-v2-empty-book-identity-lab",
     feature = "profile-successor-chain-attached-dev"
 ))]
 pub mod general_v2_account_receipt_v5;
-/// Staged actions 36/37 virtual complete-set conversion and real-end delivery.
+/// Actions 36/37 virtual complete-set conversion and real-end delivery.
 #[cfg(any(
     feature = "profile-non-production-general-v2-empty-book-identity-lab",
     feature = "profile-successor-chain-attached-dev"
 ))]
 pub mod general_v2_virtual_v5;
-/// Staged action-24 rent-owned V5 materializer; route remains disabled.
+/// Action-24 rent-owned V5 materializer.
 #[cfg(any(
     feature = "profile-non-production-general-v2-empty-book-identity-lab",
     feature = "profile-successor-chain-attached-dev"
@@ -132,7 +135,8 @@ pub mod general_v2_materialize_v5;
         feature = "profile-full",
         not(feature = "profile-non-production-dealer-policy-catalog-lab")
     ),
-    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
 ))]
 pub(crate) mod general_v2_position_replay;
 #[cfg(any(
@@ -140,7 +144,8 @@ pub(crate) mod general_v2_position_replay;
         feature = "profile-full",
         not(feature = "profile-non-production-dealer-policy-catalog-lab")
     ),
-    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
 ))]
 pub mod general_v2_receipt_v5;
 #[cfg(any(
@@ -148,11 +153,11 @@ pub mod general_v2_receipt_v5;
         feature = "profile-full",
         not(feature = "profile-non-production-dealer-policy-catalog-lab")
     ),
-    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
 ))]
 pub mod general_v2_settlement_root;
-/// Staged action-39 producer; the route remains capability-disabled until
-/// action-24 materialization is reachable under the same profile.
+/// Action-39 indexed-root, compact-index, cash-pot, and fee producer.
 #[cfg(any(
     feature = "profile-non-production-general-v2-empty-book-identity-lab",
     feature = "profile-successor-chain-attached-dev"
@@ -195,7 +200,8 @@ pub mod general_v2_portfolio_retirement_v5;
         feature = "profile-full",
         not(feature = "profile-non-production-dealer-policy-catalog-lab")
     ),
-    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
 ))]
 pub mod general_v2_settlement_traversal_v5;
 /// One exhaustive dispatcher seam for the current General settlement successor.
