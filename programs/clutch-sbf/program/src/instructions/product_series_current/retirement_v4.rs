@@ -13,6 +13,7 @@
 use core::cell::Cell;
 
 use super::{
+    authenticate_series_funding_account_v4, authenticate_series_registry_account_v3,
     AuthenticatedMarketLifecycleRootV2, AuthenticatedRegistryCapabilityV4,
     AuthenticatedSeriesFundingAccountV4, AuthenticatedSeriesLifecycleReplayV2,
     AuthenticatedSeriesMarketLinkV2,
@@ -30,12 +31,18 @@ use crate::instructions::source_funding_custody_retirement_v1::{
     SourceFundingCustodyRetirementAccountingV2, SourceFundingCustodyRetirementFactsV2,
 };
 use clutch_product_series::{
-    ContentId, MarketLifecyclePhaseV2, MarketLifecycleRootV2, SeriesFundingPhaseV4,
-    SeriesFundingStateV4Id, SeriesLifecycleReplayBindingV2Id,
+    AuthenticatedSeriesFundingAuthorityV4, ComponentDebitV1, ContentId,
+    MarketLifecyclePhaseV2, MarketLifecycleRootV2, SeriesFundingAbortBindingV4,
+    SeriesFundingComponentV2, SeriesFundingCompletionBindingV4, SeriesFundingPhaseV4,
+    SeriesFundingQuoteV5, SeriesFundingReservationBindingV4, SeriesFundingStateV4,
+    SeriesFundingStateV4Id, SeriesFundingTerminalProjectionV4,
+    SeriesLifecycleReplayBindingV2Id, SeriesLifecycleTerminalEvidenceV2,
+    SeriesLifecycleTerminalProjectionV2,
     SeriesLifecycleLinkRetirementProjectionV2, SeriesLifecycleReplayPhaseV2,
-    SeriesMarketLinkPhaseV2,
+    SeriesMarketLinkPhaseV2, SeriesAttachmentPlanV5,
     SeriesMarketLinkRetirementProjectionV2, SeriesMarketLinkV2, SeriesMarketLinkV2Id,
-    SeriesPlanV5Id,
+    SeriesPlanV5, SeriesPlanV5Id, CompiledProductSeriesBundleV6Id,
+    SeriesFundingTermsV2Id, SERIES_FUNDING_COMPONENT_COUNT_V2,
 };
 use clutch_solana_layout::product_series::{
     MarketLifecycleRootAccountV2, SeriesMarketLinkAccountV2,
@@ -52,6 +59,10 @@ const PRODUCT_SERIES_RETIREMENT_PREAUTHORIZATION_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/product-series-retirement-preauthorization/v4\0";
 const PRODUCT_SERIES_LINK_RETIREMENT_POSTWRITE_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/product-series-link-retirement-postwrite/v4\0";
+const PRODUCT_SERIES_TERMINAL_AUTHORITY_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/sbf/product-series-terminal-authority/v4\0";
+const PRODUCT_SERIES_LIFECYCLE_TERMINAL_POSTWRITE_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/sbf/product-series-lifecycle-terminal-postwrite/v4\0";
 
 fn hashv(values: &[&[u8]]) -> ContentId {
     ContentId::from_bytes(solana_sha256_hasher::hashv(values).to_bytes())
@@ -128,6 +139,120 @@ struct AuthenticatedProductSeriesLinkRetirementV4 {
     replay_state_after: ContentId,
     replay_retirement_projection_id: ContentId,
     replay: AuthenticatedSeriesLifecycleReplayV2,
+    registry_account: Pubkey,
+    registry_authentication_id: ContentId,
+    registry_release_id: ContentId,
+    capability_profile_id: ContentId,
+    funding_account: Pubkey,
+    funding_state_id: SeriesFundingStateV4Id,
+    funding_data_id: ContentId,
+    funding_authentication_id: ContentId,
+    series_plan_id: SeriesPlanV5Id,
+    funding_terms_id: ContentId,
+    compiler_bundle_id: ContentId,
+}
+
+/// Private terminal seal. It owns the exact Source/Link close and the hostile
+/// Terminal ReplayV2 postwrite; the physical FundingV4 disposer must consume
+/// it by value before any receipt can escape the instruction.
+#[derive(Debug)]
+struct AuthenticatedProductSeriesLifecycleTerminalV4 {
+    id: ContentId,
+    terminal_authority_id: ContentId,
+    link_retirement: AuthenticatedProductSeriesLinkRetirementV4,
+    funding: AuthenticatedSeriesFundingAccountV4,
+    funding_terminal_projection: SeriesFundingTerminalProjectionV4,
+    funding_terminal_projection_id: ContentId,
+    registry_data_id: ContentId,
+    registry_authentication_id: ContentId,
+    replay_account: Pubkey,
+    replay_binding_id: SeriesLifecycleReplayBindingV2Id,
+    replay_data_before: ContentId,
+    replay_data_after: ContentId,
+    replay_authentication_before: ContentId,
+    replay_authentication_after: ContentId,
+    replay_state_before: ContentId,
+    replay_state_after: ContentId,
+    replay_terminal_projection: SeriesLifecycleTerminalProjectionV2,
+    replay: AuthenticatedSeriesLifecycleReplayV2,
+}
+
+/// Close-only pure authority bound to the exact hostile Closed FundingV4
+/// state and the private Product terminal prewrite.
+#[derive(Debug)]
+struct ExactProductSeriesFundingTerminalAuthorityV4 {
+    id: ContentId,
+    expected_state: SeriesFundingStateV4,
+}
+
+impl AuthenticatedSeriesFundingAuthorityV4 for ExactProductSeriesFundingTerminalAuthorityV4 {
+    fn authenticate_activation(
+        &self,
+        _series: &SeriesPlanV5,
+        _funding_terms_id: SeriesFundingTermsV2Id,
+        _compiler_bundle_id: CompiledProductSeriesBundleV6Id,
+        _quote: &SeriesFundingQuoteV5,
+        _attachment: &SeriesAttachmentPlanV5,
+        _principal: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+        _donations: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn current_bucket(&self, _series: &SeriesPlanV5) -> clutch_product_series::Result<u64> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_reservation(
+        &self,
+        _state: &SeriesFundingStateV4,
+        _binding: &SeriesFundingReservationBindingV4,
+        _reservation_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_pending_completion(
+        &self,
+        _state: &SeriesFundingStateV4,
+        _binding: &SeriesFundingCompletionBindingV4,
+        _completion_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_pending_abort(
+        &self,
+        _state: &SeriesFundingStateV4,
+        _binding: &SeriesFundingAbortBindingV4,
+        _abort_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_donation(
+        &self,
+        _state: &SeriesFundingStateV4,
+        _component: SeriesFundingComponentV2,
+        _amount: ComponentDebitV1,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_close(
+        &self,
+        state: &SeriesFundingStateV4,
+        terminal_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        if self.id.is_zero()
+            || terminal_receipt_id != self.id
+            || state != &self.expected_state
+            || state.phase != SeriesFundingPhaseV4::Closed
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
 }
 
 impl ProductCountedSeriesLinkRetirementProjectionV4 {
@@ -761,6 +886,17 @@ fn retire_last_product_series_link_v4<'root, 'link>(
         replay_state_after,
         replay_retirement_projection_id,
         replay: rebound_replay,
+        registry_account: preauthorization.registry_account,
+        registry_authentication_id: preauthorization.registry_authentication_id,
+        registry_release_id: preauthorization.registry_release_id,
+        capability_profile_id: preauthorization.capability_profile_id,
+        funding_account: preauthorization.funding_account,
+        funding_state_id: preauthorization.funding_state_id,
+        funding_data_id: preauthorization.funding_data_id,
+        funding_authentication_id: preauthorization.funding_authentication_id,
+        series_plan_id: preauthorization.series_plan_id,
+        funding_terms_id: preauthorization.funding_terms_id,
+        compiler_bundle_id: preauthorization.compiler_bundle_id,
     })
 }
 
@@ -831,6 +967,197 @@ fn retire_product_series_source_and_link_v4<'root, 'link>(
     )
 }
 
+/// Seal the permanent ReplayV2 from the exact physical Source/Link close and
+/// a freshly reopened Closed FundingV4. Funding is not disposed here: the
+/// returned move-only authority must be consumed by the physical vault close.
+#[allow(clippy::too_many_arguments)]
+fn terminalize_product_series_lifecycle_v4(
+    program_id: &Pubkey,
+    registry_account: &AccountInfo<'_>,
+    registry: &AuthenticatedRegistryCapabilityV4,
+    funding_account: &AccountInfo<'_>,
+    artifacts: &AuthenticatedSeriesSourceArtifactsV5,
+    replay_account: &AccountInfo<'_>,
+    link_retirement: AuthenticatedProductSeriesLinkRetirementV4,
+) -> Outcome<AuthenticatedProductSeriesLifecycleTerminalV4> {
+    artifacts.validate_registry_projection(&registry.projection())?;
+    let series = artifacts.series();
+    let series_plan_id = series
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let live_registry = authenticate_series_registry_account_v3(
+        program_id,
+        registry_account,
+        series_plan_id,
+        false,
+    )?;
+    let live_funding = authenticate_series_funding_account_v4(
+        program_id,
+        funding_account,
+        series_plan_id,
+        true,
+    )?;
+    let funding_state_id = live_funding
+        .state()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let replay = link_retirement.replay;
+    let replay_state_before = replay
+        .state()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    require(
+        registry.activation_consumed()
+            && *registry_account.key == link_retirement.registry_account
+            && live_registry.account() == link_retirement.registry_account
+            && live_registry.authentication_id()
+                == link_retirement.registry_authentication_id
+            && live_registry.authentication_id()
+                == registry.series_registry_authentication_id()
+            && live_registry.value().registry_release_id
+                == link_retirement.registry_release_id
+            && live_registry.value().capability_profile_id
+                == link_retirement.capability_profile_id
+            && live_registry.value().activation_consumed
+            && *funding_account.key == link_retirement.funding_account
+            && live_funding.account() == link_retirement.funding_account
+            && funding_state_id == link_retirement.funding_state_id
+            && live_funding.data_id() == link_retirement.funding_data_id
+            && live_funding.authentication_id()
+                == link_retirement.funding_authentication_id
+            && live_funding.state().phase == SeriesFundingPhaseV4::Closed
+            && live_funding.state().series_plan_id == link_retirement.series_plan_id
+            && live_funding.state().funding_terms_id.bytes()
+                == link_retirement.funding_terms_id.bytes()
+            && live_funding.state().compiler_bundle_id.bytes()
+                == link_retirement.compiler_bundle_id.bytes()
+            && *replay_account.key == link_retirement.replay_account
+            && replay.account() == link_retirement.replay_account
+            && replay.authentication_id()
+                == link_retirement.replay_authentication_after
+            && replay.data_id() == link_retirement.replay_data_after
+            && replay_state_before == link_retirement.replay_state_after
+            && replay.state().phase() == SeriesLifecycleReplayPhaseV2::Open
+            && replay.state().binding().id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                == link_retirement.replay_binding_id,
+        ClutchError::MismatchedState,
+    )?;
+    let terminal_authority_id = hashv(&[
+        PRODUCT_SERIES_TERMINAL_AUTHORITY_DOMAIN_V4,
+        &link_retirement.id.bytes(),
+        registry_account.key.as_ref(),
+        &live_registry.data_id().bytes(),
+        &live_registry.authentication_id().bytes(),
+        funding_account.key.as_ref(),
+        &funding_state_id.bytes(),
+        &live_funding.data_id().bytes(),
+        &live_funding.authentication_id().bytes(),
+        replay_account.key.as_ref(),
+        &replay_state_before.bytes(),
+        &replay.data_id().bytes(),
+        &replay.authentication_id().bytes(),
+    ]);
+    require_live(terminal_authority_id)?;
+    let authority = ExactProductSeriesFundingTerminalAuthorityV4 {
+        id: terminal_authority_id,
+        expected_state: *live_funding.state(),
+    };
+    let funding_terminal_projection = live_funding
+        .state()
+        .close(
+            &authority,
+            series,
+            artifacts.quote(),
+            artifacts.attachment(),
+            terminal_authority_id,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding_terminal_projection_id = funding_terminal_projection
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let evidence = SeriesLifecycleTerminalEvidenceV2 {
+        binding_id: link_retirement.replay_binding_id,
+        funding_account_id: ContentId::from_bytes(funding_account.key.to_bytes()),
+        funding_state_id: funding_state_id.content_id(),
+        funding_terminal_projection_id,
+        registry_account_id: ContentId::from_bytes(registry_account.key.to_bytes()),
+        registry_authentication_id: live_registry.authentication_id(),
+        terminal_authority_receipt_id: terminal_authority_id,
+    };
+    let (replay_successor, replay_terminal_projection) = replay
+        .state()
+        .terminalize(evidence)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let rebound_replay = super::write_series_lifecycle_replay_v2(
+        program_id,
+        replay_account,
+        replay,
+        replay_successor,
+    )?;
+    let replay_state_after = rebound_replay
+        .state()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    require(
+        rebound_replay.state().phase() == SeriesLifecycleReplayPhaseV2::Terminal
+            && rebound_replay.state().terminal_projection_id()
+                == replay_terminal_projection.id().content_id()
+            && replay_terminal_projection.funding_terminal_projection_id()
+                == funding_terminal_projection_id
+            && replay_terminal_projection.registry_authentication_id()
+                == live_registry.authentication_id()
+            && replay_terminal_projection.terminal_authority_receipt_id()
+                == terminal_authority_id,
+        ClutchError::MismatchedState,
+    )?;
+    let id = hashv(&[
+        PRODUCT_SERIES_LIFECYCLE_TERMINAL_POSTWRITE_DOMAIN_V4,
+        &terminal_authority_id.bytes(),
+        &link_retirement.id.bytes(),
+        &funding_terminal_projection_id.bytes(),
+        registry_account.key.as_ref(),
+        &live_registry.data_id().bytes(),
+        &live_registry.authentication_id().bytes(),
+        funding_account.key.as_ref(),
+        &funding_state_id.bytes(),
+        &live_funding.data_id().bytes(),
+        &live_funding.authentication_id().bytes(),
+        replay_account.key.as_ref(),
+        &replay_terminal_projection.id().bytes(),
+        &replay_state_before.bytes(),
+        &replay_state_after.bytes(),
+        &replay.data_id().bytes(),
+        &rebound_replay.data_id().bytes(),
+        &replay.authentication_id().bytes(),
+        &rebound_replay.authentication_id().bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedProductSeriesLifecycleTerminalV4 {
+        id,
+        terminal_authority_id,
+        link_retirement,
+        funding: live_funding,
+        funding_terminal_projection,
+        funding_terminal_projection_id,
+        registry_data_id: live_registry.data_id(),
+        registry_authentication_id: live_registry.authentication_id(),
+        replay_account: *replay_account.key,
+        replay_binding_id: replay.state().binding().id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        replay_data_before: replay.data_id(),
+        replay_data_after: rebound_replay.data_id(),
+        replay_authentication_before: replay.authentication_id(),
+        replay_authentication_after: rebound_replay.authentication_id(),
+        replay_state_before,
+        replay_state_after,
+        replay_terminal_projection,
+        replay: rebound_replay,
+    })
+}
+
 #[cfg(test)]
 mod adversarial_source_tests {
     #[test]
@@ -895,5 +1222,26 @@ mod adversarial_source_tests {
         assert!(outer.contains("retire_source_funding_custody_v2"));
         assert!(outer.contains("retire_last_product_series_link_v4"));
         assert!(!outer.contains("clone()"));
+    }
+
+    #[test]
+    fn replay_terminal_seal_is_close_only_and_hostile_postwritten() {
+        let source = include_str!("retirement_v4.rs");
+        let authority = source
+            .split("impl AuthenticatedSeriesFundingAuthorityV4 for ExactProductSeriesFundingTerminalAuthorityV4")
+            .nth(1)
+            .and_then(|value| value.split("impl ProductCountedSeriesLinkRetirementProjectionV4").next())
+            .expect("bounded close-only Funding authority");
+        assert_eq!(authority.matches("UnauthenticatedAuthority").count(), 7);
+        assert!(authority.contains("terminal_receipt_id != self.id"));
+        let terminal = source
+            .split("fn terminalize_product_series_lifecycle_v4")
+            .nth(1)
+            .and_then(|value| value.split("#[cfg(test)]").next())
+            .expect("bounded Replay terminal seal");
+        assert!(terminal.contains("authenticate_series_funding_account_v4"));
+        assert!(terminal.contains("authenticate_series_registry_account_v3"));
+        assert!(terminal.contains(".terminalize(evidence)"));
+        assert!(terminal.contains("write_series_lifecycle_replay_v2"));
     }
 }
