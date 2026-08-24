@@ -1,13 +1,17 @@
 # SourcePlane V3 runtime account contract
 
-Status: **pure runtime contract and capability-disabled SourceSeries successor;
-not a deployment claim**.
+Status: **complete runtime/SBF SourceSeries successor implementation awaiting
+the unified all-or-none profile composition; not a deployment claim**.
 
-The checked chain-attached successor currently admits none of SourceSeries
-`77/v2` actions 1 through 12. The handlers and account codecs are reviewable,
-but the all-or-none gate stays empty until release/request publication, prepaid
-liveness and child-rent custody, ingestion, evaluation, handoff, ResolutionV5,
-terminal close, and any successor-generation funding are one reachable route.
+SourceSeries `77/v2` actions 1 through 12 now have explicit account contracts
+and handlers over one release-selected route. Product privately capitalizes and
+publishes the founding occurrence/request graph; one program-derived custody
+pre-pays bounded liveness, every child/receipt rent source, terminalization,
+and deterministic reopen work; Failure's sole ResolutionV5 outer reconstructs
+the persisted successful handoff and performs terminal/result close atomically.
+Product retirement is the sole consumer allowed to refund the custody's unused
+principal and neutralize every other observed lamport. Central dispatch remains
+the all-or-none capability owner and must not admit a partial lifecycle.
 
 This crate replaces the old opaque/default-deny SourcePlane V3 seams with
 fixed-memory contracts that a small Solana adapter can execute. It does not
@@ -79,11 +83,12 @@ digest derivable from supplied bytes is recomputed here.
   StatisticKey, SourcePlane, SourceSpec, repair generation, and created versus
   exact-existing disposition.
 
-SourceSeries `77/v2` action 10 owns only the exact successful-evaluation handoff
-consumed by the private Product/Failure ResolutionV5 join. Draft absence and
-refused-result action-10 discriminants are rejected by the hostile V2 codec;
-introducing either semantic requires a new wire version and an exact Failure
-owner. Wrong source identities or repair generations are binding refusals, not
+SourceSeries `77/v2` action 10 exhaustively owns the three admitted V2 wire
+variants. `FailureAbsence` authenticates a never-created result and missing
+seal at the exact mature window; `FailureResult` requires an authenticated
+persisted refused result; `SuccessfulEvaluation` requires the exact successful
+result/evidence graph consumed by the private Product/Failure ResolutionV5
+join. Wrong source identities or repair generations are binding refusals, not
 failure evidence.
 
 Result absence is not a boolean. It requires the predictable result PDA to be
@@ -107,26 +112,26 @@ addresses:
 - a fully prefunded account has zero principal and no invented payer authority;
 - close returns principal once and routes the entire remainder to the sink.
 
-Mandatory work is intended to remain in the separate liveness Source
-compartment. A
+Mandatory work is held in the separate liveness Source compartment. A
 `SourceWorkScheduleBindingV1` owns the exact schedule digest, aggregate
 dot-product work capital, maximum calls, largest single-call ceiling, rent, and
 four terminal-path bounds. Each `SourceWorkAuthorizationV1` binds a concrete
 family receipt account, owner program, lifecycle, semantic owner, generation,
 ordinal, and authenticated per-call ceiling for direct projection into the
-liveness runtime. The present SBF creation path still requires the immutable
-schedule payer to sign for child/policy/receipt rent and has no producer for the
-policy or compartment. It is therefore not permissionless or a complete
-funding route and is not admitted by a checked profile.
+liveness runtime. Product's pending SourceWork debit capitalizes the exact
+Rent-derived complete-lifecycle quote before the Market root exists. Child,
+policy, receipt, terminal, and post-terminal reopen creation use only the
+schedule-selected custody PDA; keepers sign to accept work but never fund rent,
+and refund destinations never sign.
 
-## Remaining adapter integration
+## All-or-none integration boundary
 
-All actions 1 through 12 remain disabled together. Their state/CPI handlers do
-not close the funding gap: every bounded child and terminal rent source must be
-pre-capitalized (or funded by a separately authenticated permissionless rent
-custody), refund destinations must not need to sign, and a reopen request must
-carry a complete successor schedule/liveness funding authority rather than
-reviving state after its only compartment has closed.
+The successor profile may expose actions 1 through 12 only together, after the
+Product founder consumes the private capitalization/publication receipt, the
+Failure action-12 outer consumes the persisted Source context and final
+ResolutionV5 postwrite, and Product's counted retirement consumes the private
+Source-custody close receipt before FundingV2 close. There is no legacy
+SourceArchive/SourceGeneration fallback and no public receipt-ID projection.
 
 No test, build, campaign, benchmark, or deployment claim is recorded for this
 implementation slice.
