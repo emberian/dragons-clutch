@@ -6,8 +6,9 @@ rent calculation, CPI, token state, or Market economics.
 
 The contracts intentionally use semantic instruction families instead of the
 historical Dragon's Clutch action table. Provider-specific resolution data is
-outside this crate. Market founding authenticates immutable resolution-policy
-and capability-manifest accounts committed by the canonical Market identity.
+outside this crate. Market founding authenticates immutable Product-Instance,
+resolution-policy, and capability-manifest accounts committed by the canonical
+Market identity.
 It reconstructs the canonical categorical unit-claim basis from the founding
 outcome count rather than requiring a universal ClaimBasis account. Market
 identity commits an occurrence-specific Product Instance which links reusable

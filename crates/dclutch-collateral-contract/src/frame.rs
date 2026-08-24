@@ -34,6 +34,8 @@ pub enum Role {
     PositionOwner,
     /// Immutable reusable collateral Realm PDA.
     Realm,
+    /// Immutable occurrence-specific Product Instance committed by Market identity.
+    ProductInstance,
     /// Mutable Market root and collateral-liability state.
     Market,
     /// Prepaid one-shot resolution Fund direct child.
@@ -234,11 +236,12 @@ pub const CREATE_REALM_FRAME: [AccountRole; 6] = [
 ];
 
 /// Exact atomic Market and resolution-Fund founding frame.
-pub const FOUND_MARKET_AND_FUND_FRAME: [AccountRole; 8] = [
+pub const FOUND_MARKET_AND_FUND_FRAME: [AccountRole; 9] = [
     sponsor(),
     state(Role::Market, true),
     state(Role::ResolutionFund, true),
     immutable(Role::Realm),
+    immutable(Role::ProductInstance),
     immutable(Role::ResolutionPolicy),
     immutable(Role::CapabilityManifest),
     SYSTEM_PROGRAM,
