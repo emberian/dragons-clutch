@@ -1038,4 +1038,25 @@ mod source_contract_tests {
         assert!(source.contains("owner.authenticate_series_wrapper_terminal_owner_v2("));
         assert!(source.contains("rebound.state().obligation_status(SeriesLinkObligationV2::Wrapper)"));
     }
+
+    #[test]
+    fn historical_product_market_has_no_wrapper_writer_authority() {
+        let historical = include_str!("product_market.rs");
+        assert!(!historical.contains(concat!(
+            "AuthenticatedSeriesWrapperAuthorization",
+            "V1"
+        )));
+        assert!(!historical.contains(concat!(
+            "authenticate_series_wrapper_authorization_",
+            "v1("
+        )));
+        assert!(!historical.contains(concat!(
+            "admit_series_wrapper_obligation_",
+            "v1("
+        )));
+        assert!(!historical.contains(concat!(
+            "terminalize_series_wrapper_obligation_",
+            "v1("
+        )));
+    }
 }
