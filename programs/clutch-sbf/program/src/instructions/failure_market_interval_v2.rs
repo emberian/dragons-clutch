@@ -32,11 +32,13 @@ use crate::instructions::product_market::{
 use crate::seeds;
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
     initialize_failure_market_interval_cell_v2, plan_exhaust_failure_market_interval_cell_v2,
+    plan_reset_failure_market_interval_cell_v2,
+    project_failure_market_interval_terminal_history_facts_v2,
     AuthenticatedFailureMarketIntervalCellExhaustionV2,
     FailureMarketIntervalCellActivationReceiptV2,
     FailureMarketIntervalCellAdvancePlanV2, FailureMarketIntervalCellAdvanceReceiptV2,
     FailureMarketIntervalCellDispositionV2, FailureMarketIntervalCellExhaustionPlanV2,
-    FailureMarketIntervalCellExhaustionFactsV2,
+    FailureMarketIntervalCellExhaustionFactsV2, FailureMarketIntervalCellExhaustionReceiptV2,
     FailureMarketIntervalCellPhaseV2, FailureMarketIntervalCellPlanV2,
     FailureMarketIntervalCellResetReceiptV2, FailureMarketIntervalCellResolutionPlanV2,
     FailureMarketIntervalCellResolutionReceiptV2, FailureMarketIntervalCellStateIdV2,
@@ -44,12 +46,14 @@ use clutch_failure_policy_runtime::market_interval_cell_v2::{
 };
 use clutch_failure_policy_runtime::market_interval_history_v2::{
     admit_failure_market_interval_history_v2, plan_close_failure_market_interval_accounts_v2,
-    reopen_failure_market_interval_funding_v2,
+    plan_append_failure_market_interval_history_v2, reopen_failure_market_interval_funding_v2,
+    AuthenticatedFailureMarketIntervalTerminalV2,
     AuthenticatedFailureMarketIntervalFundingV2, FailureMarketIntervalCloseAuthorizationIdV2,
     FailureMarketIntervalFamilySealReceiptV2, FailureMarketIntervalFundingFactsV2,
     FailureMarketIntervalFundingReceiptV2, FailureMarketIntervalHistoryAppendReceiptV2,
     FailureMarketIntervalHistoryPlanV2, FailureMarketIntervalHistoryStateIdV2,
-    FailureMarketIntervalHistoryV2, FAILURE_MARKET_INTERVAL_HISTORY_BYTES_V2,
+    FailureMarketIntervalHistoryV2, FailureMarketIntervalTerminalDispositionV2,
+    FailureMarketIntervalTerminalFactsV2, FAILURE_MARKET_INTERVAL_HISTORY_BYTES_V2,
 };
 use clutch_failure_policy_runtime::market_policy_v1::{
     FailureMarketAccountIdV1, FailureMarketAdmissionStateIdV1,
@@ -126,6 +130,103 @@ struct FailureMarketExhaustionLivenessAuthorityV2 {
     keeper_paid_lamports: u64,
     remaining_calls: u32,
     remaining_work_lamports: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FailureMarketExhaustedArchiveAuthorityV2 {
+    expected: FailureMarketIntervalTerminalFactsV2,
+}
+
+impl AuthenticatedFailureMarketIntervalTerminalV2 for FailureMarketExhaustedArchiveAuthorityV2 {
+    fn authenticate_failure_market_interval_terminal(
+        &self,
+        expected: FailureMarketIntervalTerminalFactsV2,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        if expected != self.expected {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// Exact append/reset batch for one deterministically exhausted session.
+///
+/// Construction stays private to the same-call action13 outer. The terminal
+/// ID is the authenticated exhaustion receipt written into the cell; no
+/// caller-selected disposition or terminal identity can enter Product's link
+/// release.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FailureMarketExhaustedArchivePlanV2 {
+    history_plan: FailureMarketIntervalHistoryPlanV2,
+    append: FailureMarketIntervalHistoryAppendReceiptV2,
+    cell_plan: FailureMarketIntervalCellPlanV2,
+    reset: FailureMarketIntervalCellResetReceiptV2,
+}
+
+impl FailureMarketExhaustedArchivePlanV2 {
+    pub(crate) const fn history_plan(self) -> FailureMarketIntervalHistoryPlanV2 {
+        self.history_plan
+    }
+
+    pub(crate) const fn append(self) -> FailureMarketIntervalHistoryAppendReceiptV2 {
+        self.append
+    }
+
+    pub(crate) const fn cell_plan(self) -> FailureMarketIntervalCellPlanV2 {
+        self.cell_plan
+    }
+
+    pub(crate) const fn reset(self) -> FailureMarketIntervalCellResetReceiptV2 {
+        self.reset
+    }
+}
+
+/// Derive the only archive admitted after the exhaustion cell postwrite.
+pub(crate) fn plan_failure_market_exhausted_archive_v2(
+    admission: AuthenticatedFailureMarketRootV2,
+    interval: AuthenticatedFailureMarketIntervalAccountsV2,
+    exhaustion: FailureMarketIntervalCellExhaustionReceiptV2,
+) -> Outcome<FailureMarketExhaustedArchivePlanV2> {
+    let cell = interval.cell();
+    let history = interval.history();
+    let facts = exhaustion.facts();
+    let terminal = project_failure_market_interval_terminal_history_facts_v2(cell, history)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        exhaustion.failure_policy_binding_id() == cell.failure_policy_binding_id()
+            && facts.cell_after == interval.cell_state_id()
+            && facts.market_instance_id == cell.market_instance_id()
+            && facts.generation == cell.generation()
+            && facts.session_binding_id == cell.session_binding_id()
+            && cell.disposition() == FailureMarketIntervalCellDispositionV2::Exhausted
+            && terminal.disposition == FailureMarketIntervalTerminalDispositionV2::Exhausted
+            && terminal.session_terminal_receipt_id.bytes() == exhaustion.id().bytes()
+            && terminal.terminal_state_commitment.bytes() == interval.cell_state_id().bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let authority = FailureMarketExhaustedArchiveAuthorityV2 { expected: terminal };
+    let (history_plan, append) = plan_append_failure_market_interval_history_v2(
+        &authority,
+        history,
+        admission.state(),
+        interval.quote(),
+        terminal,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let (cell_plan, reset) = plan_reset_failure_market_interval_cell_v2(cell, append)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        append.session_terminal_receipt_id().bytes() == exhaustion.id().bytes()
+            && reset.append_receipt_id() == append.id()
+            && reset.terminal_cell() == interval.cell_state_id(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(FailureMarketExhaustedArchivePlanV2 {
+        history_plan,
+        append,
+        cell_plan,
+        reset,
+    })
 }
 
 impl AuthenticatedFailureMarketIntervalCellExhaustionV2
@@ -2460,5 +2561,27 @@ mod adversarial_account_tests {
         ] {
             assert!(exhaustion.contains(predicate));
         }
+    }
+
+    #[test]
+    fn exhausted_archive_cannot_substitute_terminal_or_disposition() {
+        let source = include_str!("failure_market_interval_v2.rs");
+        let archive = source
+            .split("fn plan_failure_market_exhausted_archive_v2")
+            .nth(1)
+            .expect("exhausted archive owner");
+        for predicate in [
+            "facts.cell_after == interval.cell_state_id()",
+            "facts.session_binding_id == cell.session_binding_id()",
+            "FailureMarketIntervalCellDispositionV2::Exhausted",
+            "FailureMarketIntervalTerminalDispositionV2::Exhausted",
+            "terminal.session_terminal_receipt_id.bytes() == exhaustion.id().bytes()",
+            "append.session_terminal_receipt_id().bytes() == exhaustion.id().bytes()",
+            "reset.terminal_cell() == interval.cell_state_id()",
+        ] {
+            assert!(archive.contains(predicate));
+        }
+        assert!(!archive.contains("Resolved"));
+        assert!(!archive.contains("Refused"));
     }
 }
