@@ -17,9 +17,10 @@ use clutch_collateral_adapter_v2::BoundCollateralProfileV2;
 use clutch_general_v2_contract::{
     decode_settlement_root_payload_v1, GeneralOrderPageSeedTupleV5,
     GeneralReservationSeedTupleV9, Id32, ReleaseUnfilledReservationPayloadV1,
-    SettlementRootPayloadV1, SettlementRootV1AccountV1,
+    SettlementRootPayloadV1,
     GENERAL_REPLAY_ACCOUNT_V1_BYTES, MARKET_BINDING_ACCOUNT_BYTES_V2,
-    MARKET_RUNTIME_ACCOUNT_BYTES, SETTLEMENT_ROOT_ACCOUNT_BYTES,
+    MARKET_RUNTIME_ACCOUNT_BYTES, INDEXED_SETTLEMENT_ROOT_BYTES_V1,
+    SETTLEMENT_ROOT_ACCOUNT_BYTES,
 };
 use clutch_general_v2_runtime::{
     prepare_release_unfilled_reservation_v1, PositionAccountInputV3,
@@ -288,6 +289,7 @@ fn prepare_plan_boxed(
 
 #[inline(never)]
 fn apply_release_bundle_v1(
+    authenticated_root: &AuthenticatedGeneralSettlementRootV1,
     settlement_root: &AccountInfo<'_>,
     retained_feed: &AccountInfo<'_>,
     selected_page: &AccountInfo<'_>,
@@ -324,10 +326,13 @@ fn apply_release_bundle_v1(
         ClutchError::MismatchedState,
     )?;
 
-    let mut root_body = std::vec![0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
-    plan.settlement_root_poststate().encode(&mut root_body)?;
+    let mut root_body = std::vec![0u8; authenticated_root.account_bytes()];
+    authenticated_root.encode_unfilled_release_successor(
+        plan.settlement_root_poststate(),
+        &mut root_body,
+    )?;
     require(
-        settlement_root.data_len() == SETTLEMENT_ROOT_ACCOUNT_BYTES
+        settlement_root.data_len() == authenticated_root.account_bytes()
             && frame.reservation.data_len() == RESERVATION_ACCOUNT_BYTES_V9
             && frame.position.data_len() == POSITION_V3_BYTES
             && frame.replay.data_len() == GENERAL_REPLAY_ACCOUNT_V1_BYTES,
@@ -413,11 +418,16 @@ fn release_unfilled_reservation(
         ClutchError::WrongAccountCount,
     )?;
     require_all_distinct(accounts)?;
+    let root_bytes = accounts[IX_ROOT].data_len();
+    require(
+        matches!(root_bytes, SETTLEMENT_ROOT_ACCOUNT_BYTES | INDEXED_SETTLEMENT_ROOT_BYTES_V1),
+        ClutchError::WrongDataLength,
+    )?;
     require_program_state(
         program_id,
         &accounts[IX_ROOT],
         true,
-        SETTLEMENT_ROOT_ACCOUNT_BYTES,
+        root_bytes,
     )?;
     let page_count = action41_page_count_from_account_len(accounts.len())?;
     let endpoint_at = ACTION41_TRAVERSAL_PREFIX_ACCOUNTS
@@ -500,12 +510,10 @@ fn compose_and_apply_release_unfilled_reservation_v1(
         program_id,
         settlement_root,
         true,
-        SETTLEMENT_ROOT_ACCOUNT_BYTES,
+        authenticated_root.account_bytes(),
     )?;
-    let observed_root = SettlementRootV1AccountV1::decode(&borrow_data(settlement_root)?)?;
     require(
         authenticated_root.account() == id(settlement_root.key)
-            && authenticated_root.root() == &observed_root
             && payload.epoch == authenticated_root.root().epoch()
             && payload.settlement_root == authenticated_root.account(),
         ClutchError::MismatchedState,
@@ -589,6 +597,7 @@ fn compose_and_apply_release_unfilled_reservation_v1(
 
     drop(data);
     apply_release_bundle_v1(
+        authenticated_root,
         settlement_root,
         traversal_frame.retained_feed,
         selected_page,

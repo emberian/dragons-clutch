@@ -523,20 +523,23 @@ fn compose_and_apply_direct_delivery_v5(
     buyer_page: &AccountInfo<'_>,
     seller_page: &AccountInfo<'_>,
 ) -> Outcome<()> {
+    let authenticated_traversal = authenticated.traversal();
+    let traversal = authenticated_traversal.traversal();
+    let collateral = authenticated_traversal.collateral();
+    let root_account = authenticated.root().account();
+    let root_epoch = authenticated.root().root().epoch();
+    let feed_account = authenticated_traversal.feed_account();
     let receipt = authenticate_general_receipt_v5_root_traversal(
         program_id,
         authenticated,
         frame.receipt,
     )?;
-    let authenticated_root = authenticated.root();
-    let authenticated_traversal = authenticated.traversal();
-    let traversal = authenticated_traversal.traversal();
-    let collateral = authenticated_traversal.collateral();
+    let authenticated_root = receipt.root_authority();
     require(
-        request.epoch == authenticated_root.root().epoch()
+        request.epoch == root_epoch
             && request.receipt == receipt.receipt_account()
-            && receipt.settlement_root_account() == authenticated_root.account()
-            && receipt.retained_feed_account() == authenticated_traversal.feed_account(),
+            && receipt.settlement_root_account() == root_account
+            && receipt.retained_feed_account() == feed_account,
         ClutchError::MismatchedState,
     )?;
     let rent = read_rent(frame.rent_sysvar)?;

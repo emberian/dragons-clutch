@@ -41,6 +41,10 @@ use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
 use crate::seeds;
 
+use super::general_v2_settlement_root::{
+    authenticate_writable_general_settlement_root_v1, AuthenticatedGeneralSettlementRootV1,
+};
+
 /// Fixed accounts before committed Receipt and refund-owner suffixes.
 pub const PORTFOLIO_ARCHIVE_FIXED_ACCOUNTS_V2: usize = 10;
 /// Minimum frame: fixed accounts, one Receipt, and one refund owner.
@@ -152,7 +156,7 @@ fn account_frame(
 
 fn authenticate_position_replay(
     program_id: &Pubkey,
-    root: contract::SettlementRootV1AccountV1,
+    root: &contract::SettlementRootV1AccountV1,
     owner: [u8; 32],
     position_account: &AccountInfo<'_>,
     replay_account: &AccountInfo<'_>,
@@ -262,7 +266,7 @@ pub(crate) fn compose_and_apply(
         program_id,
         &accounts[IX_SETTLEMENT_ROOT],
         true,
-        Some(contract::SETTLEMENT_ROOT_ACCOUNT_BYTES),
+        None,
     )?;
     require_program_account(program_id, &accounts[IX_RETAINED_FEED], false, None)?;
     require_program_account(
@@ -310,26 +314,21 @@ pub(crate) fn compose_and_apply(
         refund_index += 1;
     }
 
-    let root_account = id(accounts[IX_SETTLEMENT_ROOT].key);
-    let root = contract::SettlementRootV1AccountV1::decode(&borrow_data(
-        &accounts[IX_SETTLEMENT_ROOT],
-    )?)?;
-    let root_pda = seeds::general_v2_settlement_root_pda(
-        program_id,
-        &root.epoch().bytes(),
-        &root.settlement_candidate_id().bytes(),
-    );
-    require(
-        request.epoch == root.epoch()
-            && request.settlement_root == root_account
-            && *accounts[IX_SETTLEMENT_ROOT].key == root_pda.0
-            && root.stored_bump() == root_pda.1,
-        ClutchError::MismatchedState,
-    )?;
-
     let feed_account = id(accounts[IX_RETAINED_FEED].key);
     let feed_data = borrow_data(&accounts[IX_RETAINED_FEED])?;
     let (feed, _) = contract::complete_candidate_feed_v2(&feed_data, true)?;
+    let root_authority = authenticate_writable_general_settlement_root_v1(
+        program_id,
+        core::slice::from_ref(&accounts[IX_SETTLEMENT_ROOT]),
+        feed.epoch,
+        feed.settlement_candidate_id,
+    )?;
+    let root_account = root_authority.account();
+    let root = root_authority.root();
+    require(
+        request.epoch == root.epoch() && request.settlement_root == root_account,
+        ClutchError::MismatchedState,
+    )?;
     let feed_pda = seeds::general_v2_feed_pda(program_id, &root.source_admission_node().bytes());
     require(
         feed_account == root.retained_feed()
@@ -429,7 +428,7 @@ pub(crate) fn compose_and_apply(
             RetirePortfolioPairArchivesInputV2 {
                 payload: request,
                 settlement_root_account: root_account,
-                settlement_root: &root,
+                settlement_root: root,
                 retained_feed_account: feed_account,
                 retained_feed_body: &feed_data,
                 market_binding_account,
@@ -464,6 +463,7 @@ pub(crate) fn compose_and_apply(
         first_refund_owner,
         receipt_count,
         refund_owner_count,
+        &root_authority,
         &plan,
     )?;
     Ok(terminal)
@@ -490,6 +490,7 @@ fn apply_plan(
     first_refund_owner: usize,
     receipt_count: usize,
     refund_owner_count: usize,
+    authenticated_root: &AuthenticatedGeneralSettlementRootV1,
     plan: &clutch_general_v2_runtime::RetirePortfolioPairArchivesPlanV2,
 ) -> Outcome<()> {
     let receipt_count_u8 = u8::try_from(receipt_count)
@@ -503,8 +504,13 @@ fn apply_plan(
                 == id(accounts[IX_NEUTRAL_SINK].key),
         ClutchError::MismatchedState,
     )?;
-    let mut root_body = std::vec![0u8; contract::SETTLEMENT_ROOT_ACCOUNT_BYTES];
-    plan.settlement_root_poststate().encode(&mut root_body)?;
+    let mut root_body = std::vec![0u8; authenticated_root.account_bytes()];
+    authenticated_root.encode_portfolio_retirement_successor(
+        plan.settlement_root_poststate(),
+        u8::try_from(receipt_count)
+            .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?,
+        &mut root_body,
+    )?;
     let buyer_position_body = plan.buyer_position_poststate()
         .semantic
         .encode()

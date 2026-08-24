@@ -80,6 +80,8 @@ use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 
+use super::general_v2_settlement_root::authenticate_readonly_general_settlement_root_v1;
+
 /// Fixed accounts before the active OrderPage V5 and Receipt V5 suffixes.
 pub const PORTFOLIO_PAIR_FIXED_ACCOUNTS_V2: usize = 11;
 /// Minimum exact account count: fixed prefix plus one page and one receipt.
@@ -423,20 +425,6 @@ fn require_distinct_accounts(accounts: &[AccountInfo<'_>]) -> Outcome<()> {
     Ok(())
 }
 
-fn root_data_id(
-    root_account: Id32,
-    root: contract::SettlementRootV1AccountV1,
-) -> Outcome<Id32> {
-    let mut body = [0u8; contract::SETTLEMENT_ROOT_ACCOUNT_BYTES];
-    root.encode(&mut body)?;
-    Id32::new(RuntimeSha256.sha256(&[
-        contract::SETTLEMENT_ROOT_DATA_ID_DOMAIN_V1,
-        &root_account.bytes(),
-        &body,
-    ]))
-    .map_err(Into::into)
-}
-
 fn project_complete_pages(
     accounts: &[AccountInfo<'_>],
     page_count: usize,
@@ -558,7 +546,7 @@ fn find_page_slot(
 
 fn authenticate_position_replay(
     program_id: &Pubkey,
-    root: contract::SettlementRootV1AccountV1,
+    root: &contract::SettlementRootV1AccountV1,
     owner: [u8; 32],
     position_account: &AccountInfo<'_>,
     replay_account: &AccountInfo<'_>,
@@ -818,8 +806,7 @@ fn consume_portfolio_pair(
         receipt_index += 1;
     }
     require(
-        accounts[IX_SETTLEMENT_ROOT].data_len() == contract::SETTLEMENT_ROOT_ACCOUNT_BYTES
-            && accounts[IX_ECONOMIC_DOMAIN].data_len() == contract::ECONOMIC_DOMAIN_ACCOUNT_BYTES
+        accounts[IX_ECONOMIC_DOMAIN].data_len() == contract::ECONOMIC_DOMAIN_ACCOUNT_BYTES
             && accounts[IX_MARKET_BINDING].data_len()
                 == contract::MARKET_BINDING_ACCOUNT_BYTES_V2
             && accounts[IX_PRICE_GRID].data_len() == account_len::PRICE_GRID
@@ -834,32 +821,28 @@ fn consume_portfolio_pair(
         ClutchError::WrongDataLength,
     )?;
 
-    let root_account = id(accounts[IX_SETTLEMENT_ROOT].key);
-    let root = contract::SettlementRootV1AccountV1::decode(&borrow_data(
-        &accounts[IX_SETTLEMENT_ROOT],
-    )?)?;
-    let root_pda = seeds::general_v2_settlement_root_pda(
-        program_id,
-        &root.epoch().bytes(),
-        &root.settlement_candidate_id().bytes(),
-    );
-    require(
-        request.epoch == root.epoch()
-            && request.settlement_root == root_account
-            && *accounts[IX_SETTLEMENT_ROOT].key == root_pda.0
-            && root.stored_bump() == root_pda.1
-            && root.phase() == contract::SettlementRootPhaseV1::Settling
-            && root.retained_feed_state() == contract::SettlementRootChildStateV1::Live,
-        ClutchError::MismatchedState,
-    )?;
-    let root_pre_data_id = root_data_id(root_account, root)?;
-
     let feed_account = id(accounts[IX_RETAINED_FEED].key);
     let feed_data = borrow_data(&accounts[IX_RETAINED_FEED])?;
     let (feed, feed_economics) = decode_sealed_candidate_feed_v1(&feed_data)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let (_, feed_tail) = contract::complete_candidate_feed_v2(&feed_data, true)?;
     let feed_data_id = contract::candidate_bundle_digest_v1(&RuntimeSha256, &feed_data, true)?;
+    let root_authority = authenticate_readonly_general_settlement_root_v1(
+        program_id,
+        core::slice::from_ref(&accounts[IX_SETTLEMENT_ROOT]),
+        feed.epoch,
+        feed.settlement_candidate_id,
+    )?;
+    let root_account = root_authority.account();
+    let root = root_authority.root();
+    require(
+        request.epoch == root.epoch()
+            && request.settlement_root == root_account
+            && root.phase() == contract::SettlementRootPhaseV1::Settling
+            && root.retained_feed_state() == contract::SettlementRootChildStateV1::Live,
+        ClutchError::MismatchedState,
+    )?;
+    let root_pre_data_id = root_authority.data_id(&RuntimeSha256)?;
     let feed_pda = seeds::general_v2_feed_pda(program_id, &root.source_admission_node().bytes());
     let counts = root.counts();
     require(

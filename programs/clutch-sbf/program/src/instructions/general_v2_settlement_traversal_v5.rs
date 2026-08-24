@@ -219,7 +219,7 @@ struct AuthenticatedPortfolioOrderPlacementV5 {
 
 /// Existing SettlementRoot and immutable traversal after both SBF account
 /// authentication and the pure exhaustive equality bind succeed.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct AuthenticatedRootSettlementTraversalV5<'a, 'info> {
     root: AuthenticatedGeneralSettlementRootV1,
     traversal: &'a AuthenticatedSettlementTraversalV5<'info>,
@@ -235,6 +235,12 @@ impl<'a, 'info> AuthenticatedRootSettlementTraversalV5<'a, 'info> {
     /// Exact immutable traversal equality-bound to the root.
     pub const fn traversal(&self) -> &'a AuthenticatedSettlementTraversalV5<'info> {
         self.traversal
+    }
+
+    /// Consume the equality-bound pair and return the exact version-aware root
+    /// authority for an action-specific writer.
+    pub fn into_root(self) -> AuthenticatedGeneralSettlementRootV1 {
+        self.root
     }
 }
 

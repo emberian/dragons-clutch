@@ -23,6 +23,10 @@ use crate::accounts::{require, require_count, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 
+use super::general_v2_settlement_root::{
+    authenticate_readonly_general_settlement_root_v1,
+    authenticate_writable_general_settlement_root_v1, AuthenticatedGeneralSettlementRootV1,
+};
 use super::general_v2_settlement_traversal_v5::AuthenticatedRootSettlementTraversalV5;
 
 /// SettlementRoot, retained Feed, and writable V5 receipt.
@@ -44,12 +48,12 @@ impl Sha256BackendV1 for RuntimeSha256 {
 }
 
 /// Exact authenticated root/Feed/receipt authority for one General action.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct AuthenticatedGeneralReceiptV5 {
     settlement_root_account: Id32,
     retained_feed_account: Id32,
     receipt_account: Id32,
-    root: contract::SettlementRootV1AccountV1,
+    root: AuthenticatedGeneralSettlementRootV1,
     feed: contract::CandidateFeedHeaderV2,
     receipt: SettlementReceiptAccountV5,
     evidence: SettlementReceiptEvidenceV5,
@@ -72,7 +76,12 @@ impl AuthenticatedGeneralReceiptV5 {
     }
 
     /// Exact hostile-byte-decoded counted root.
-    pub const fn root(&self) -> &contract::SettlementRootV1AccountV1 {
+    pub fn root(&self) -> &contract::SettlementRootV1AccountV1 {
+        self.root.root()
+    }
+
+    /// Version-aware root authority retained for exact named counter writes.
+    pub const fn root_authority(&self) -> &AuthenticatedGeneralSettlementRootV1 {
         &self.root
     }
 
@@ -147,12 +156,6 @@ fn authenticate_general_receipt_v5_inner(
     root_writable: bool,
 ) -> Outcome<AuthenticatedGeneralReceiptV5> {
     require_count(accounts, RECEIPT_V5_AUTH_ACCOUNT_COUNT)?;
-    require_program_state(
-        program_id,
-        &accounts[IX_SETTLEMENT_ROOT],
-        root_writable,
-        Some(contract::SETTLEMENT_ROOT_ACCOUNT_BYTES),
-    )?;
     require_program_state(program_id, &accounts[IX_RETAINED_FEED], false, None)?;
     require_program_state(
         program_id,
@@ -170,34 +173,50 @@ fn authenticate_general_receipt_v5_inner(
     let settlement_root_account = id(accounts[IX_SETTLEMENT_ROOT].key);
     let retained_feed_account = id(accounts[IX_RETAINED_FEED].key);
     let receipt_account = id(accounts[IX_RECEIPT].key);
-    let root =
-        contract::SettlementRootV1AccountV1::decode(&borrow_data(&accounts[IX_SETTLEMENT_ROOT])?)?;
     let feed_data = borrow_data(&accounts[IX_RETAINED_FEED])?;
     let (feed, tail) = contract::complete_candidate_feed_v2(&feed_data, true)?;
     let candidate_bundle_digest =
         contract::candidate_bundle_digest_v1(&RuntimeSha256, &feed_data, true)?;
+    let root = if root_writable {
+        authenticate_writable_general_settlement_root_v1(
+            program_id,
+            core::slice::from_ref(&accounts[IX_SETTLEMENT_ROOT]),
+            feed.epoch,
+            feed.settlement_candidate_id,
+        )?
+    } else {
+        authenticate_readonly_general_settlement_root_v1(
+            program_id,
+            core::slice::from_ref(&accounts[IX_SETTLEMENT_ROOT]),
+            feed.epoch,
+            feed.settlement_candidate_id,
+        )?
+    };
+    let root_value = root.root();
     let receipt_data = borrow_data(&accounts[IX_RECEIPT])?;
     let (receipt, evidence) = project_settlement_receipt_evidence_v5(
         LayoutHash32::new(receipt_account.bytes())?,
         &receipt_data,
     )?;
     let receipt_semantic = receipt.semantic();
-    let counts = root.counts();
+    let counts = root_value.counts();
 
     let root_pda = seeds::general_v2_settlement_root_pda(
         program_id,
-        &root.epoch().bytes(),
-        &root.settlement_candidate_id().bytes(),
+        &root_value.epoch().bytes(),
+        &root_value.settlement_candidate_id().bytes(),
     );
-    let feed_pda = seeds::general_v2_feed_pda(program_id, &root.source_admission_node().bytes());
+    let feed_pda =
+        seeds::general_v2_feed_pda(program_id, &root_value.source_admission_node().bytes());
     let receipt_pda = seeds::general_v2_receipt_v5_pda(
         program_id,
-        &root.epoch().bytes(),
-        &root.settlement_candidate_id().bytes(),
+        &root_value.epoch().bytes(),
+        &root_value.settlement_candidate_id().bytes(),
         receipt_semantic.slice_index,
     );
     require(
-        *accounts[IX_SETTLEMENT_ROOT].key == root_pda.0 && root.stored_bump() == root_pda.1,
+        *accounts[IX_SETTLEMENT_ROOT].key == root_pda.0
+            && root_value.stored_bump() == root_pda.1,
         ClutchError::WrongPda,
     )?;
     require(
@@ -210,25 +229,25 @@ fn authenticate_general_receipt_v5_inner(
     )?;
 
     require(
-        root.phase() == contract::SettlementRootPhaseV1::Settling
-            && root.retained_feed_state() == contract::SettlementRootChildStateV1::Live
-            && root.retained_feed() == retained_feed_account
-            && feed.epoch == root.epoch()
-            && feed.epoch_generation == root.epoch_generation()
-            && feed.market == root.market()
-            && feed.node == root.source_admission_node()
-            && feed.order_set == root.order_set()
-            && feed.settlement_candidate_id == root.settlement_candidate_id()
-            && feed.settlement_witness_digest == root.settlement_witness_digest()
-            && candidate_bundle_digest == root.candidate_bundle_digest()
-            && feed.outcome_count == root.outcome_count()
+        root_value.phase() == contract::SettlementRootPhaseV1::Settling
+            && root_value.retained_feed_state() == contract::SettlementRootChildStateV1::Live
+            && root_value.retained_feed() == retained_feed_account
+            && feed.epoch == root_value.epoch()
+            && feed.epoch_generation == root_value.epoch_generation()
+            && feed.market == root_value.market()
+            && feed.node == root_value.source_admission_node()
+            && feed.order_set == root_value.order_set()
+            && feed.settlement_candidate_id == root_value.settlement_candidate_id()
+            && feed.settlement_witness_digest == root_value.settlement_witness_digest()
+            && candidate_bundle_digest == root_value.candidate_bundle_digest()
+            && feed.outcome_count == root_value.outcome_count()
             && feed.slice_count == counts.expected_receipts
             && counts.admitted_receipts == counts.expected_receipts
             && counts.live_receipts > 0
             && receipt.transition() == SettlementReceiptTransitionCommitmentV5::None
-            && receipt_semantic.epoch.0 == root.epoch().bytes()
-            && receipt_semantic.market.0 == root.market().bytes()
-            && receipt_semantic.candidate.0 == root.settlement_candidate_id().bytes()
+            && receipt_semantic.epoch.0 == root_value.epoch().bytes()
+            && receipt_semantic.market.0 == root_value.market().bytes()
+            && receipt_semantic.candidate.0 == root_value.settlement_candidate_id().bytes()
             && receipt_semantic.slice_index < counts.admitted_receipts
             && receipt_semantic.outcome < feed.outcome_count
             && receipt_semantic.price == exact_price(tail.prices_le(), receipt_semantic.outcome)?,
@@ -264,7 +283,7 @@ pub fn authenticate_general_receipt_v5_root_traversal(
     )?;
     let authenticated_root = authenticated.root();
     let authenticated_traversal = authenticated.traversal();
-    let root = *authenticated_root.root();
+    let root = authenticated_root.root();
     let root_account = authenticated_root.account();
     let retained_feed_account = authenticated_traversal.feed_account();
     let feed = authenticated_traversal.feed();
@@ -322,6 +341,7 @@ pub fn authenticate_general_receipt_v5_root_traversal(
             && bound_price == semantic.price,
         ClutchError::MismatchedState,
     )?;
+    let root = authenticated.into_root();
     Ok(AuthenticatedGeneralReceiptV5 {
         settlement_root_account: root_account,
         retained_feed_account,
