@@ -88,6 +88,8 @@ use clutch_solana_layout::artifact::ArtifactKind;
 
 const SOURCE_FUNDING_CUSTODY_AUTH_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/authenticated-source-funding-custody/v1";
+const SOURCE_FUNDING_CUSTODY_BOOTSTRAP_AUTH_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/sbf/authenticated-source-funding-custody-bootstrap/v1";
 const SOURCE_FUNDING_CUSTODY_PHYSICAL_TRANSITION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/source-funding-custody-physical-transition/v1";
 
@@ -138,6 +140,31 @@ impl AuthenticatedSourceFundingCustodyV1 {
     }
 }
 
+/// Private exact post-transfer bootstrap. It can only be consumed by the
+/// immediate capitalization-receipt binding below and is never returned by a
+/// dispatcher or lifecycle composer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSourceFundingCustodyBootstrapV1 {
+    id: ContentId,
+    account: RuntimeKey,
+    account_data_id: ContentId,
+    ledger: SourceFundingCustodyLedgerV1,
+}
+
+impl AuthenticatedSourceFundingCustodyBootstrapV1 {
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn account_data_id(self) -> ContentId {
+        self.account_data_id
+    }
+
+    pub(crate) const fn ledger(self) -> SourceFundingCustodyLedgerV1 {
+        self.ledger
+    }
+}
+
 /// Authenticate a permissionless prepaid Source rent custody. The program-
 /// owned fixed body is the sole semantic owner of remaining principal and
 /// observed donations; it is writable but never a transaction signer.
@@ -170,6 +197,7 @@ pub(crate) fn authenticate_source_funding_custody_v1(
     )?;
     require(
         ledger.adapter_program == runtime_key(program_id)
+            && ledger.is_live()
             && ledger.release_manifest_id == route.release_manifest_id()
             && ledger.route_id == route.route_id()
             && ledger.source_work_schedule_id == schedule.source_work_schedule_id()
@@ -207,7 +235,7 @@ pub(crate) fn authenticate_source_funding_custody_v1(
 /// principal ledger. The Product preauthorization identity and immutable
 /// FundingTerms refund are private composer inputs, never instruction bytes.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn initialize_source_funding_custody_v1(
+pub(crate) fn initialize_source_funding_custody_bootstrap_v1(
     program_id: &Pubkey,
     route: AuthenticatedSourceRouteV1,
     schedule: SourceWorkScheduleBindingV1,
@@ -217,7 +245,7 @@ pub(crate) fn initialize_source_funding_custody_v1(
     custody_account: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
     rent: &RentParameters,
-) -> Outcome<AuthenticatedSourceFundingCustodyV1> {
+) -> Outcome<AuthenticatedSourceFundingCustodyBootstrapV1> {
     require_system_program(system_program)?;
     schedule.validate_against(route).map_err(source_runtime)?;
     let lifecycle = schedule.lifecycle_id().bytes();
@@ -234,7 +262,7 @@ pub(crate) fn initialize_source_funding_custody_v1(
                 >= rent.minimum_balance(SOURCE_FUNDING_CUSTODY_ACCOUNT_BYTES)?,
         ClutchError::MismatchedState,
     )?;
-    let ledger = SourceFundingCustodyLedgerV1::new(
+    let ledger = SourceFundingCustodyLedgerV1::new_bootstrap(
         runtime_key(program_id),
         route.release_manifest_id(),
         route.route_id(),
@@ -279,7 +307,83 @@ pub(crate) fn initialize_source_funding_custody_v1(
         custody_account,
         &ledger.encode().map_err(source_runtime)?,
     )?;
-    authenticate_source_funding_custody_v1(program_id, route, schedule, custody_account)
+    let data = custody_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let reopened = SourceFundingCustodyLedgerV1::decode(&data).map_err(source_runtime)?;
+    let account_data_id = account_data_id(runtime_key(custody_account.key), &data)
+        .map_err(source_runtime)?;
+    require(
+        reopened == ledger
+            && !reopened.is_live()
+            && custody_account.owner == program_id
+            && custody_account.is_writable
+            && !custody_account.is_signer
+            && !custody_account.executable
+            && data.len() == SOURCE_FUNDING_CUSTODY_ACCOUNT_BYTES
+            && custody_account.lamports() == allocated_principal_lamports
+            && reopened.capitalization_authority_id == capitalization_authority_id,
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SOURCE_FUNDING_CUSTODY_BOOTSTRAP_AUTH_DOMAIN_V1,
+            &route.route_id().bytes(),
+            &schedule.source_work_schedule_id().bytes(),
+            &schedule.lifecycle_id().bytes(),
+            custody_account.key.as_ref(),
+            &account_data_id.bytes(),
+            &reopened.id().map_err(source_runtime)?.bytes(),
+            &custody_account.lamports().to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(AuthenticatedSourceFundingCustodyBootstrapV1 {
+        id,
+        account: runtime_key(custody_account.key),
+        account_data_id,
+        ledger: reopened,
+    })
+}
+
+/// Complete the one-way bootstrap transition and return the sole live custody
+/// authority. The caller passes the receipt it just computed over `bootstrap`;
+/// any later transaction sees only the live body.
+pub(crate) fn bind_source_funding_custody_capitalization_v1(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    schedule: SourceWorkScheduleBindingV1,
+    bootstrap: AuthenticatedSourceFundingCustodyBootstrapV1,
+    capitalization_receipt_id: ContentId,
+    custody_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedSourceFundingCustodyV1> {
+    let data = custody_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let reopened = SourceFundingCustodyLedgerV1::decode(&data).map_err(source_runtime)?;
+    let account_data_id = account_data_id(runtime_key(custody_account.key), &data)
+        .map_err(source_runtime)?;
+    require(
+        bootstrap.account == runtime_key(custody_account.key)
+            && bootstrap.account_data_id == account_data_id
+            && bootstrap.ledger == reopened
+            && !reopened.is_live(),
+        ClutchError::MismatchedState,
+    )?;
+    drop(data);
+    let live = reopened
+        .bind_capitalization_receipt(capitalization_receipt_id)
+        .map_err(source_runtime)?;
+    write_exact_account_data(custody_account, &live.encode().map_err(source_runtime)?)?;
+    let authenticated =
+        authenticate_source_funding_custody_v1(program_id, route, schedule, custody_account)?;
+    require(
+        authenticated.ledger() == live
+            && authenticated.ledger().capitalization_receipt_id == capitalization_receipt_id,
+        ClutchError::MismatchedState,
+    )?;
+    Ok(authenticated)
 }
 
 /// Private postwrite proving the release-selected generic liveness policy and
