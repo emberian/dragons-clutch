@@ -80,6 +80,10 @@ const PRODUCT_MARKET_FOUNDER_ROOT_POSTSTATE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/product-market-founder-root-poststate/v1";
 const PRODUCT_MARKET_FOUNDER_CREATION_RECEIPT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/product-market-founder-creation-receipt/v1";
+const PRODUCT_MARKET_FOUNDER_PREAUTHORIZATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/product-market-founder-preauthorization/v1";
+const PRODUCT_MARKET_FOUNDER_GRAPH_OBSERVATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/product-market-founder-graph-observation/v1";
 const MARKET_CORE_COMPONENT_SEED_V2: u8 = 0;
 const SERIES_ADMISSION_COMPONENT_SEED_V2: u8 = 1;
 const RECOVERY_RESERVE_COMPONENT_SEED_V2: u8 = 2;
@@ -274,6 +278,173 @@ impl AuthenticatedRecoveryReserveCapitalizationV1 {
 
     pub(crate) const fn recovery_data_id(self) -> ContentId {
         self.recovery_data_id
+    }
+}
+
+/// Product-owned pre-root authority for the exact founder custody and account graph.
+///
+/// This receipt is minted only after the FoundationVault and RecoveryReserve
+/// postwrites are hostile-reopened and while the canonical `0xaa` root and
+/// founder `0xad` link remain absent. It deliberately does not invent the
+/// Collateral/General-owned founding identities stored in the immutable root
+/// binding. The private Collateral prewrite plan must retain this exact receipt
+/// and add those identities before Product may construct the root.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedProductMarketFounderFoundationPreauthorizationV1 {
+    id: ContentId,
+    foundation_init_receipt_id: ContentId,
+    recovery_capitalization_receipt_id: ContentId,
+    graph_observation_id: ContentId,
+    series_plan_id: SeriesPlanV5Id,
+    ordinal: u32,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    registry_account: Pubkey,
+    funding_account: Pubkey,
+    funding_state_id: ContentId,
+    funding_account_data_id: ContentId,
+    funding_account_authentication_id: ContentId,
+    funding_transition_sequence: u64,
+    funding_reservation_receipt_id: ContentId,
+    compiler_bundle_id: ContentId,
+    registry_release_id: ContentId,
+    capability_profile_id: ContentId,
+    funding_terms_id: ContentId,
+    funding_quote_id: ContentId,
+    attachment_plan_id: ContentId,
+    product_template_id: ContentId,
+    native_claim_basis_id: ContentId,
+    recovery_policy_id: ContentId,
+    price_measure_policy_id: ContentId,
+    market_genesis_profile_id: ContentId,
+    source_release_id: ContentId,
+    source_plane_contract_id: ContentId,
+    source_spec_id: ContentId,
+    liveness_realm_id: ContentId,
+    liveness_policy_id: ContentId,
+    liveness_quote_schedule_id: ContentId,
+    liveness_lifecycle_id: ContentId,
+    recovery_account: Pubkey,
+    recovery_data_id: ContentId,
+    foundation_schedule_id: MarketFoundationScheduleV2Id,
+    foundation_account_graph_id: MarketFoundationAccountGraphV2Id,
+    outcome_count: u8,
+    lifecycle_root_account: Pubkey,
+    founder_link_account: Pubkey,
+    lifecycle_replay_account: Pubkey,
+    foundation_vault: Pubkey,
+    series_admission_vault: Pubkey,
+    principal_refund_owner: Pubkey,
+    neutral_lamport_sink: Pubkey,
+    foundation_principal_lamports: u64,
+    foundation_donation_lamports: u64,
+    root_rent_principal_lamports: u64,
+    root_prefund_donation_lamports: u64,
+    link_rent_principal_lamports: u64,
+    link_prefund_donation_lamports: u64,
+}
+
+impl AuthenticatedProductMarketFounderFoundationPreauthorizationV1 {
+    pub(crate) const fn id(self) -> ContentId { self.id }
+    pub(crate) const fn foundation_init_receipt_id(self) -> ContentId {
+        self.foundation_init_receipt_id
+    }
+    pub(crate) const fn recovery_capitalization_receipt_id(self) -> ContentId {
+        self.recovery_capitalization_receipt_id
+    }
+    pub(crate) const fn graph_observation_id(self) -> ContentId {
+        self.graph_observation_id
+    }
+    pub(crate) const fn series_plan_id(self) -> SeriesPlanV5Id { self.series_plan_id }
+    pub(crate) const fn ordinal(self) -> u32 { self.ordinal }
+    pub(crate) const fn market_instance_id(self) -> MarketInstanceV2Id {
+        self.market_instance_id
+    }
+    pub(crate) const fn generation(self) -> u64 { self.generation }
+    pub(crate) const fn registry_account(self) -> Pubkey { self.registry_account }
+    pub(crate) const fn funding_account(self) -> Pubkey { self.funding_account }
+    pub(crate) const fn funding_state_id(self) -> ContentId { self.funding_state_id }
+    pub(crate) const fn funding_account_data_id(self) -> ContentId {
+        self.funding_account_data_id
+    }
+    pub(crate) const fn funding_account_authentication_id(self) -> ContentId {
+        self.funding_account_authentication_id
+    }
+    pub(crate) const fn funding_transition_sequence(self) -> u64 {
+        self.funding_transition_sequence
+    }
+    pub(crate) const fn funding_reservation_receipt_id(self) -> ContentId {
+        self.funding_reservation_receipt_id
+    }
+    pub(crate) const fn compiler_bundle_id(self) -> ContentId { self.compiler_bundle_id }
+    pub(crate) const fn registry_release_id(self) -> ContentId { self.registry_release_id }
+    pub(crate) const fn capability_profile_id(self) -> ContentId { self.capability_profile_id }
+    pub(crate) const fn funding_terms_id(self) -> ContentId { self.funding_terms_id }
+    pub(crate) const fn funding_quote_id(self) -> ContentId { self.funding_quote_id }
+    pub(crate) const fn attachment_plan_id(self) -> ContentId { self.attachment_plan_id }
+    pub(crate) const fn product_template_id(self) -> ContentId { self.product_template_id }
+    pub(crate) const fn native_claim_basis_id(self) -> ContentId { self.native_claim_basis_id }
+    pub(crate) const fn recovery_policy_id(self) -> ContentId { self.recovery_policy_id }
+    pub(crate) const fn price_measure_policy_id(self) -> ContentId {
+        self.price_measure_policy_id
+    }
+    pub(crate) const fn market_genesis_profile_id(self) -> ContentId {
+        self.market_genesis_profile_id
+    }
+    pub(crate) const fn source_release_id(self) -> ContentId { self.source_release_id }
+    pub(crate) const fn source_plane_contract_id(self) -> ContentId {
+        self.source_plane_contract_id
+    }
+    pub(crate) const fn source_spec_id(self) -> ContentId { self.source_spec_id }
+    pub(crate) const fn liveness_realm_id(self) -> ContentId { self.liveness_realm_id }
+    pub(crate) const fn liveness_policy_id(self) -> ContentId { self.liveness_policy_id }
+    pub(crate) const fn liveness_quote_schedule_id(self) -> ContentId {
+        self.liveness_quote_schedule_id
+    }
+    pub(crate) const fn liveness_lifecycle_id(self) -> ContentId {
+        self.liveness_lifecycle_id
+    }
+    pub(crate) const fn recovery_account(self) -> Pubkey { self.recovery_account }
+    pub(crate) const fn recovery_data_id(self) -> ContentId { self.recovery_data_id }
+    pub(crate) const fn foundation_schedule_id(self) -> MarketFoundationScheduleV2Id {
+        self.foundation_schedule_id
+    }
+    pub(crate) const fn foundation_account_graph_id(self) -> MarketFoundationAccountGraphV2Id {
+        self.foundation_account_graph_id
+    }
+    pub(crate) const fn outcome_count(self) -> u8 { self.outcome_count }
+    pub(crate) const fn lifecycle_root_account(self) -> Pubkey {
+        self.lifecycle_root_account
+    }
+    pub(crate) const fn founder_link_account(self) -> Pubkey { self.founder_link_account }
+    pub(crate) const fn lifecycle_replay_account(self) -> Pubkey {
+        self.lifecycle_replay_account
+    }
+    pub(crate) const fn foundation_vault(self) -> Pubkey { self.foundation_vault }
+    pub(crate) const fn series_admission_vault(self) -> Pubkey {
+        self.series_admission_vault
+    }
+    pub(crate) const fn principal_refund_owner(self) -> Pubkey {
+        self.principal_refund_owner
+    }
+    pub(crate) const fn neutral_lamport_sink(self) -> Pubkey { self.neutral_lamport_sink }
+    pub(crate) const fn foundation_principal_lamports(self) -> u64 {
+        self.foundation_principal_lamports
+    }
+    pub(crate) const fn foundation_donation_lamports(self) -> u64 {
+        self.foundation_donation_lamports
+    }
+    pub(crate) const fn root_rent_principal_lamports(self) -> u64 {
+        self.root_rent_principal_lamports
+    }
+    pub(crate) const fn root_prefund_donation_lamports(self) -> u64 {
+        self.root_prefund_donation_lamports
+    }
+    pub(crate) const fn link_rent_principal_lamports(self) -> u64 {
+        self.link_rent_principal_lamports
+    }
+    pub(crate) const fn link_prefund_donation_lamports(self) -> u64 {
+        self.link_prefund_donation_lamports
     }
 }
 
@@ -1592,6 +1763,474 @@ fn allocate_assign_founder_pda_v1<'a>(
     .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))
 }
 
+/// Authenticate the exact Product-owned pre-root founder graph after custody
+/// capitalization and before any immutable Market binding exists.
+///
+/// Non-Product foundation slots are committed through a rolling observation
+/// digest but are not interpreted here. Their family owners must refine this
+/// receipt by hostile-authenticating their exact account bodies before the
+/// root creator can consume it. This preserves one semantic owner per slot
+/// while preventing a caller from swapping the ordered 46-account preimage.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_product_market_founder_foundation_preauthorization_v1<'a>(
+    program_id: &Pubkey,
+    foundation_init: AuthenticatedFoundationVaultInitV1,
+    recovery: AuthenticatedRecoveryReserveCapitalizationV1,
+    capability: AuthenticatedRegistryCapabilityV3,
+    compiler_bundle: AuthenticatedCompiledProductSeriesBundleV5,
+    registry: AuthenticatedSeriesRegistryAccountV2,
+    funding: AuthenticatedSeriesFundingAccountV2,
+    account_graph: &MarketFoundationAccountGraphV2,
+    active_foundation_accounts: &[AccountInfo<'a>],
+    series_artifact_accounts: &[AccountInfo<'a>],
+    registry_account: &AccountInfo<'a>,
+    funding_account: &AccountInfo<'a>,
+    funding_quote_account: &AccountInfo<'a>,
+    foundation_vault: &AccountInfo<'a>,
+    series_admission_vault: &AccountInfo<'a>,
+    root_account: &AccountInfo<'a>,
+    founder_link_account: &AccountInfo<'a>,
+    lifecycle_replay_account: &AccountInfo<'a>,
+    recovery_account: &AccountInfo<'a>,
+    principal_refund_owner: &AccountInfo<'a>,
+    neutral_lamport_sink: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    rent_sysvar: &AccountInfo<'a>,
+) -> Outcome<AuthenticatedProductMarketFounderFoundationPreauthorizationV1> {
+    require_system_program(system_program)?;
+    let rent = read_rent(rent_sysvar)?;
+    require_distinct(&[
+        registry_account.clone(),
+        funding_account.clone(),
+        funding_quote_account.clone(),
+        foundation_vault.clone(),
+        series_admission_vault.clone(),
+        root_account.clone(),
+        founder_link_account.clone(),
+        lifecycle_replay_account.clone(),
+        recovery_account.clone(),
+        principal_refund_owner.clone(),
+        neutral_lamport_sink.clone(),
+        system_program.clone(),
+        rent_sysvar.clone(),
+    ])?;
+
+    let init = foundation_init.facts;
+    let recovery_facts = recovery.facts;
+    let bundle = compiler_bundle.bundle();
+    require(
+        foundation_init.executing_program == *program_id
+            && foundation_init.series_registry_account == *registry_account.key
+            && foundation_init.compiler_bundle_artifact_account
+                == compiler_bundle.artifact_account()
+            && foundation_init.funding_quote_artifact_account == *funding_quote_account.key
+            && foundation_init.rent_sysvar == *rent_sysvar.key
+            && foundation_init.rent_lamports_per_byte_year == rent.lamports_per_byte_year
+            && foundation_init.rent_exemption_threshold_bits == rent.exemption_threshold.to_bits()
+            && recovery_facts.foundation_init_receipt_id == foundation_init.id
+            && recovery_facts.series_plan_id == init.series_plan_id
+            && recovery_facts.market_instance_id == init.coordinates.market_instance_id
+            && recovery_facts.generation == init.coordinates.generation
+            && recovery_facts.funding_account == *funding_account.key
+            && recovery_facts.funding_state_id == init.funding_state_id
+            && recovery_facts.funding_transition_sequence == init.funding_transition_sequence
+            && recovery_facts.funding_reservation_receipt_id
+                == init.funding_reservation_receipt_id
+            && recovery_facts.recovery_account == *recovery_account.key
+            && recovery_facts.payer == *principal_refund_owner.key
+            && recovery_facts.neutral_lamport_sink == *neutral_lamport_sink.key
+            && recovery_facts.liveness_lifecycle_id
+                == init.coordinates.liveness_lifecycle_id,
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        capability.program_account() == *program_id
+            && capability.series_registry_account() == *registry_account.key
+            && capability.series_plan_id() == init.series_plan_id
+            && capability.funding_terms_id().content_id() == init.funding_terms_id
+            && capability.compiler_bundle_id() == init.compiler_bundle_id
+            && capability.registry_release_id() == init.registry_release_id
+            && capability.capability_profile_id() == init.capability_profile_id
+            && compiler_bundle.bundle_id().content_id() == init.compiler_bundle_id
+            && bundle.series_plan_id == init.series_plan_id
+            && bundle.funding_terms_id.content_id() == init.funding_terms_id
+            && bundle.funding_quote_id.content_id() == init.funding_quote_id
+            && bundle.registry_release_id == init.registry_release_id
+            && bundle.capability_profile_id.content_id() == init.capability_profile_id,
+        ClutchError::MismatchedState,
+    )?;
+
+    let artifacts = authenticate_series_artifact_accounts_v4(
+        program_id,
+        series_artifact_accounts,
+        bundle.series_plan_id,
+        bundle.funding_terms_id,
+    )?;
+    let live_registry = read_series_registry_account_v2(
+        program_id,
+        registry_account,
+        init.series_plan_id,
+        &rent,
+    )?;
+    require(live_registry == registry, ClutchError::MismatchedState)?;
+    let live_funding = read_series_funding_account_v2(
+        program_id,
+        funding_account,
+        live_registry,
+        &artifacts,
+        &rent,
+    )?;
+    require(
+        live_funding == funding
+            && live_funding.value().state.phase == SeriesFundingPhaseV2::Pending
+            && live_funding.value().state.pending_ordinal == init.ordinal
+            && live_funding.value().state.pending_debits == init.pending_debits
+            && live_funding.value().state.pending_reservation_receipt_id
+                == init.funding_reservation_receipt_id
+            && live_funding.value().state.transition_sequence == init.funding_transition_sequence,
+        ClutchError::MismatchedState,
+    )?;
+    let funding_data = funding_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let funding_data_id =
+        ContentId::from_bytes(solana_sha256_hasher::hashv(&[&funding_data[..]]).to_bytes());
+    drop(funding_data);
+    let funding_state_id = live_funding
+        .value()
+        .state
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    require(
+        funding_data_id == init.funding_account_data_id
+            && funding_state_id == init.funding_state_id,
+        ClutchError::MismatchedState,
+    )?;
+
+    let quote_artifact = authenticate_product_artifact_v1::<SeriesFundingQuoteV4>(
+        program_id,
+        funding_quote_account,
+        init.funding_quote_id,
+    )?;
+    let quote = *quote_artifact.value();
+    let schedule_id = quote
+        .foundation
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    account_graph
+        .validate(&quote.foundation)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let graph_id = account_graph
+        .id(&quote.foundation)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        schedule_id == init.foundation_schedule_id
+            && graph_id == init.coordinates.foundation_account_graph_id
+            && account_graph.market_instance_id == init.coordinates.market_instance_id
+            && account_graph.generation == init.coordinates.generation,
+        ClutchError::MismatchedState,
+    )?;
+    require_canonical_market_foundation_core_v2(program_id, *root_account.key, account_graph)?;
+
+    let replay_slot = account_graph
+        .account(MarketFoundationSlotV2::ProductReplayAnchor)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        *root_account.key == init.coordinates.lifecycle_root_account
+            && *founder_link_account.key == init.coordinates.founder_link_account
+            && *lifecycle_replay_account.key == init.coordinates.lifecycle_replay_account
+            && replay_slot.bytes() == lifecycle_replay_account.key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    for absent in [root_account, founder_link_account, lifecycle_replay_account] {
+        require(
+            absent.is_writable
+                && !absent.is_signer
+                && !absent.executable
+                && absent.owner.to_bytes() == SYSTEM_PROGRAM_ID
+                && absent.data_len() == 0,
+            ClutchError::AlreadyInitialized,
+        )?;
+    }
+    for custody in [foundation_vault, series_admission_vault] {
+        require(
+            custody.is_writable
+                && !custody.is_signer
+                && !custody.executable
+                && custody.owner.to_bytes() == SYSTEM_PROGRAM_ID
+                && custody.data_len() == 0,
+            ClutchError::MismatchedState,
+        )?;
+    }
+    require(
+        *foundation_vault.key == init.foundation_vault
+            && foundation_vault.lamports() == init.foundation_vault_balance_after
+            && *principal_refund_owner.key == init.principal_refund_owner
+            && *neutral_lamport_sink.key == init.neutral_lamport_sink
+            && principal_refund_owner.owner.to_bytes() == SYSTEM_PROGRAM_ID
+            && principal_refund_owner.data_len() == 0
+            && !principal_refund_owner.is_writable
+            && !principal_refund_owner.is_signer
+            && !principal_refund_owner.executable
+            && neutral_lamport_sink.owner.to_bytes() == SYSTEM_PROGRAM_ID
+            && neutral_lamport_sink.data_len() == 0
+            && neutral_lamport_sink.is_writable
+            && !neutral_lamport_sink.is_signer
+            && !neutral_lamport_sink.executable,
+        ClutchError::MismatchedState,
+    )?;
+
+    let recovery_data = recovery_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let recovery_data_id =
+        ContentId::from_bytes(solana_sha256_hasher::hashv(&[&recovery_data[..]]).to_bytes());
+    let recovery_frame = decode_failure_account_body_v1(
+        &recovery_data,
+        registry::FAILURE_EXTERNAL_RECOVERY_ACCOUNT_TAG,
+        registry::FAILURE_EXTERNAL_RECOVERY_ACCOUNT_VERSION,
+        FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1,
+    )?;
+    let recovery_state = RuntimeCompartmentV1::decode(recovery_frame.body)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let recovery_stored_bump = recovery_frame.stored_bump;
+    drop(recovery_data);
+    expect_pda(
+        recovery_account.key,
+        seeds::failure_external_recovery_pda(
+            program_id,
+            &recovery_facts.liveness_lifecycle_id.bytes(),
+            recovery_facts.generation,
+        ),
+        Some(recovery_stored_bump),
+    )?;
+    require(
+        recovery_account.owner == program_id
+            && !recovery_account.is_signer
+            && !recovery_account.executable
+            && recovery_account.data_len() == FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1
+            && recovery_account.lamports() == recovery_facts.recovery_balance_after
+            && recovery_data_id == recovery.recovery_data_id
+            && recovery_state == recovery.recovery_state,
+        ClutchError::MismatchedState,
+    )?;
+
+    let root_index = MarketFoundationSlotV2::LifecycleRoot
+        .index()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_rent_principal_lamports = quote.foundation.slot_principal_lamports[root_index];
+    require(
+        root_rent_principal_lamports
+            == rent.minimum_balance(MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V1)?,
+        ClutchError::MismatchedState,
+    )?;
+    let admission_index = SeriesFundingComponentV2::SeriesAdmission.index();
+    let (expected_admission_vault, admission_vault_bump) = seeds::series_lamport_vault_pda(
+        program_id,
+        &init.series_plan_id.bytes(),
+        SERIES_ADMISSION_COMPONENT_SEED_V2,
+    );
+    expect_pda(
+        series_admission_vault.key,
+        (expected_admission_vault, admission_vault_bump),
+        None,
+    )?;
+    let link_plan = plan_pending_native_component_v1(
+        quote.components[admission_index],
+        live_funding.value().state.pending_debits[admission_index],
+        live_funding.value().state.components[admission_index].remaining_principal,
+        live_funding.value().state.components[admission_index].donations,
+        quote.components[admission_index].lamports,
+        series_admission_vault.lamports(),
+        founder_link_account.lamports(),
+    )?;
+    require(
+        link_plan.payer_debit_lamports
+            == rent.minimum_balance(SERIES_MARKET_LINK_ACCOUNT_BYTES_V1)?,
+        ClutchError::MismatchedState,
+    )?;
+
+    let mut graph_observation_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            PRODUCT_MARKET_FOUNDER_GRAPH_OBSERVATION_DOMAIN_V1,
+            program_id.as_ref(),
+            &graph_id.bytes(),
+            &schedule_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    let mut active_index = 0usize;
+    let mut slot_index = 0usize;
+    while slot_index < account_graph.account_ids.len() {
+        let account_id = account_graph.account_ids[slot_index];
+        if !account_id.is_zero() {
+            let account = active_foundation_accounts
+                .get(active_index)
+                .ok_or_else(|| Refusal::Adapter(ClutchError::AccountCount))?;
+            require(
+                account.key.to_bytes() == account_id.bytes()
+                    && !account.is_signer
+                    && !account.executable,
+                ClutchError::MismatchedState,
+            )?;
+            let data = account
+                .try_borrow_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+            let data_id =
+                ContentId::from_bytes(solana_sha256_hasher::hashv(&[&data[..]]).to_bytes());
+            drop(data);
+            graph_observation_id = ContentId::from_bytes(
+                solana_sha256_hasher::hashv(&[
+                    PRODUCT_MARKET_FOUNDER_GRAPH_OBSERVATION_DOMAIN_V1,
+                    &graph_observation_id.bytes(),
+                    &(slot_index as u64).to_le_bytes(),
+                    account.key.as_ref(),
+                    account.owner.as_ref(),
+                    &account.lamports().to_le_bytes(),
+                    &[u8::from(account.is_writable)],
+                    &data_id.bytes(),
+                ])
+                .to_bytes(),
+            );
+            active_index = active_index
+                .checked_add(1)
+                .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+        }
+        slot_index += 1;
+    }
+    require(
+        active_index == active_foundation_accounts.len() && !graph_observation_id.is_zero(),
+        ClutchError::AccountCount,
+    )?;
+
+    let fixed_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            PRODUCT_MARKET_FOUNDER_PREAUTHORIZATION_DOMAIN_V1,
+            program_id.as_ref(),
+            &foundation_init.id.bytes(),
+            &recovery.id.bytes(),
+            &graph_observation_id.bytes(),
+            registry_account.key.as_ref(),
+            funding_account.key.as_ref(),
+            &funding_state_id.bytes(),
+            &funding_data_id.bytes(),
+            &init.funding_account_authentication_id.bytes(),
+            &init.funding_transition_sequence.to_le_bytes(),
+            &init.funding_reservation_receipt_id.bytes(),
+            &init.compiler_bundle_id.bytes(),
+            &init.registry_release_id.bytes(),
+            &init.capability_profile_id.bytes(),
+            &init.funding_terms_id.bytes(),
+            &init.funding_quote_id.bytes(),
+            &bundle.attachment_plan_id.bytes(),
+            &bundle.product_template_id.bytes(),
+            &bundle.native_claim_basis_id.bytes(),
+            &bundle.evidence_only_recovery_policy_id.bytes(),
+            &bundle.price_measure_policy_id.bytes(),
+            &bundle.market_genesis_profile_id.bytes(),
+            &bundle.source_release_manifest_id.bytes(),
+            &bundle.source_plane_contract_id.bytes(),
+            &bundle.source_spec_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            PRODUCT_MARKET_FOUNDER_PREAUTHORIZATION_DOMAIN_V1,
+            &fixed_id.bytes(),
+            &init.series_plan_id.bytes(),
+            &init.ordinal.to_le_bytes(),
+            &init.coordinates.market_instance_id.bytes(),
+            &init.coordinates.generation.to_le_bytes(),
+            root_account.key.as_ref(),
+            founder_link_account.key.as_ref(),
+            lifecycle_replay_account.key.as_ref(),
+            foundation_vault.key.as_ref(),
+            series_admission_vault.key.as_ref(),
+            recovery_account.key.as_ref(),
+            principal_refund_owner.key.as_ref(),
+            neutral_lamport_sink.key.as_ref(),
+            &schedule_id.bytes(),
+            &graph_id.bytes(),
+            &[quote.foundation.outcome_count],
+            &recovery_facts.liveness_realm_id.bytes(),
+            &recovery_facts.liveness_policy_id.bytes(),
+            &recovery_facts.quote_schedule_id.bytes(),
+            &recovery_facts.liveness_lifecycle_id.bytes(),
+            &recovery_data_id.bytes(),
+            &init.principal_lamports.to_le_bytes(),
+            &init.foundation_vault_donation_lamports.to_le_bytes(),
+            &root_rent_principal_lamports.to_le_bytes(),
+            &root_account.lamports().to_le_bytes(),
+            &link_plan.payer_debit_lamports.to_le_bytes(),
+            &link_plan.destination_donation_lamports.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(AuthenticatedProductMarketFounderFoundationPreauthorizationV1 {
+        id,
+        foundation_init_receipt_id: foundation_init.id,
+        recovery_capitalization_receipt_id: recovery.id,
+        graph_observation_id,
+        series_plan_id: init.series_plan_id,
+        ordinal: init.ordinal,
+        market_instance_id: init.coordinates.market_instance_id,
+        generation: init.coordinates.generation,
+        registry_account: *registry_account.key,
+        funding_account: *funding_account.key,
+        funding_state_id,
+        funding_account_data_id: funding_data_id,
+        funding_account_authentication_id: init.funding_account_authentication_id,
+        funding_transition_sequence: init.funding_transition_sequence,
+        funding_reservation_receipt_id: init.funding_reservation_receipt_id,
+        compiler_bundle_id: init.compiler_bundle_id,
+        registry_release_id: init.registry_release_id,
+        capability_profile_id: init.capability_profile_id,
+        funding_terms_id: init.funding_terms_id,
+        funding_quote_id: init.funding_quote_id,
+        attachment_plan_id: bundle.attachment_plan_id.content_id(),
+        product_template_id: bundle.product_template_id.content_id(),
+        native_claim_basis_id: bundle.native_claim_basis_id.content_id(),
+        recovery_policy_id: bundle.evidence_only_recovery_policy_id.content_id(),
+        price_measure_policy_id: bundle.price_measure_policy_id.content_id(),
+        market_genesis_profile_id: bundle.market_genesis_profile_id.content_id(),
+        source_release_id: bundle.source_release_manifest_id,
+        source_plane_contract_id: bundle.source_plane_contract_id,
+        source_spec_id: bundle.source_spec_id,
+        liveness_realm_id: recovery_facts.liveness_realm_id,
+        liveness_policy_id: recovery_facts.liveness_policy_id,
+        liveness_quote_schedule_id: recovery_facts.quote_schedule_id,
+        liveness_lifecycle_id: recovery_facts.liveness_lifecycle_id,
+        recovery_account: *recovery_account.key,
+        recovery_data_id,
+        foundation_schedule_id: schedule_id,
+        foundation_account_graph_id: graph_id,
+        outcome_count: quote.foundation.outcome_count,
+        lifecycle_root_account: *root_account.key,
+        founder_link_account: *founder_link_account.key,
+        lifecycle_replay_account: *lifecycle_replay_account.key,
+        foundation_vault: *foundation_vault.key,
+        series_admission_vault: *series_admission_vault.key,
+        principal_refund_owner: *principal_refund_owner.key,
+        neutral_lamport_sink: *neutral_lamport_sink.key,
+        foundation_principal_lamports: init.principal_lamports,
+        foundation_donation_lamports: init.foundation_vault_donation_lamports,
+        root_rent_principal_lamports,
+        root_prefund_donation_lamports: root_account.lamports(),
+        link_rent_principal_lamports: link_plan.payer_debit_lamports,
+        link_prefund_donation_lamports: link_plan.destination_donation_lamports,
+    })
+}
+
+fn require_product_market_founder_foundation_preauthorization_v1(
+    live: AuthenticatedProductMarketFounderFoundationPreauthorizationV1,
+    retained: AuthenticatedProductMarketFounderFoundationPreauthorizationV1,
+) -> Outcome<()> {
+    require(live == retained, ClutchError::MismatchedState)
+}
+
 /// Create the sole first shared Market root and its founder Series link.
 ///
 /// This capability-disabled composer consumes the exact prior FoundationVault
@@ -1613,6 +2252,7 @@ pub(crate) fn create_product_market_founder_v1<
 >(
     program_id: &Pubkey,
     authority: &A,
+    preauthorization: AuthenticatedProductMarketFounderFoundationPreauthorizationV1,
     foundation_init: AuthenticatedFoundationVaultInitV1,
     recovery: AuthenticatedRecoveryReserveCapitalizationV1,
     capability: AuthenticatedRegistryCapabilityV3,
@@ -1630,12 +2270,42 @@ pub(crate) fn create_product_market_founder_v1<
     series_admission_vault: &AccountInfo<'a>,
     root_account: &AccountInfo<'a>,
     founder_link_account: &AccountInfo<'a>,
+    lifecycle_replay_account: &AccountInfo<'a>,
     recovery_account: &AccountInfo<'a>,
     principal_refund_owner: &AccountInfo<'a>,
     neutral_lamport_sink: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
     rent_sysvar: &AccountInfo<'a>,
 ) -> Outcome<AuthenticatedProductMarketFounderCreationV1> {
+    let live_preauthorization = authenticate_product_market_founder_foundation_preauthorization_v1(
+        program_id,
+        foundation_init,
+        recovery,
+        capability,
+        compiler_bundle,
+        registry,
+        funding,
+        account_graph,
+        active_foundation_accounts,
+        series_artifact_accounts,
+        registry_account,
+        funding_account,
+        funding_quote_account,
+        foundation_vault,
+        series_admission_vault,
+        root_account,
+        founder_link_account,
+        lifecycle_replay_account,
+        recovery_account,
+        principal_refund_owner,
+        neutral_lamport_sink,
+        system_program,
+        rent_sysvar,
+    )?;
+    require_product_market_founder_foundation_preauthorization_v1(
+        live_preauthorization,
+        preauthorization,
+    )?;
     require_system_program(system_program)?;
     let rent = read_rent(rent_sysvar)?;
     require_distinct(&[
@@ -1646,6 +2316,7 @@ pub(crate) fn create_product_market_founder_v1<
         series_admission_vault.clone(),
         root_account.clone(),
         founder_link_account.clone(),
+        lifecycle_replay_account.clone(),
         recovery_account.clone(),
         principal_refund_owner.clone(),
         neutral_lamport_sink.clone(),
@@ -1775,8 +2446,6 @@ pub(crate) fn create_product_market_founder_v1<
                 account.key.to_bytes() == account_id.bytes()
                     && !account.is_signer
                     && !account.executable
-                    && account.owner.to_bytes() == SYSTEM_PROGRAM_ID
-                    && account.data_len() == 0
                     && (slot_index != MarketFoundationSlotV2::LifecycleRoot.index()
                         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
                         || (*account.key == *root_account.key && account.is_writable)),
@@ -2515,6 +3184,118 @@ mod tests {
         let mut wrong_profile = valid_capability_join();
         wrong_profile.bundle_capability_profile_id = ContentId::from_bytes([41; 32]);
         assert!(authenticate_foundation_capability_bundle_join_v1(wrong_profile).is_err());
+    }
+
+    fn founder_foundation_preauthorization(
+    ) -> AuthenticatedProductMarketFounderFoundationPreauthorizationV1 {
+        AuthenticatedProductMarketFounderFoundationPreauthorizationV1 {
+            id: ContentId::from_bytes([1; 32]),
+            foundation_init_receipt_id: ContentId::from_bytes([2; 32]),
+            recovery_capitalization_receipt_id: ContentId::from_bytes([3; 32]),
+            graph_observation_id: ContentId::from_bytes([4; 32]),
+            series_plan_id: SeriesPlanV5Id::from_bytes([5; 32]),
+            ordinal: 0,
+            market_instance_id: MarketInstanceV2Id::from_bytes([6; 32]),
+            generation: 1,
+            registry_account: Pubkey::new_from_array([7; 32]),
+            funding_account: Pubkey::new_from_array([8; 32]),
+            funding_state_id: ContentId::from_bytes([9; 32]),
+            funding_account_data_id: ContentId::from_bytes([10; 32]),
+            funding_account_authentication_id: ContentId::from_bytes([11; 32]),
+            funding_transition_sequence: 2,
+            funding_reservation_receipt_id: ContentId::from_bytes([12; 32]),
+            compiler_bundle_id: ContentId::from_bytes([13; 32]),
+            registry_release_id: ContentId::from_bytes([14; 32]),
+            capability_profile_id: ContentId::from_bytes([15; 32]),
+            funding_terms_id: ContentId::from_bytes([16; 32]),
+            funding_quote_id: ContentId::from_bytes([17; 32]),
+            attachment_plan_id: ContentId::from_bytes([18; 32]),
+            product_template_id: ContentId::from_bytes([19; 32]),
+            native_claim_basis_id: ContentId::from_bytes([20; 32]),
+            recovery_policy_id: ContentId::from_bytes([21; 32]),
+            price_measure_policy_id: ContentId::from_bytes([22; 32]),
+            market_genesis_profile_id: ContentId::from_bytes([23; 32]),
+            source_release_id: ContentId::from_bytes([24; 32]),
+            source_plane_contract_id: ContentId::from_bytes([25; 32]),
+            source_spec_id: ContentId::from_bytes([26; 32]),
+            liveness_realm_id: ContentId::from_bytes([27; 32]),
+            liveness_policy_id: ContentId::from_bytes([28; 32]),
+            liveness_quote_schedule_id: ContentId::from_bytes([29; 32]),
+            liveness_lifecycle_id: ContentId::from_bytes([30; 32]),
+            recovery_account: Pubkey::new_from_array([31; 32]),
+            recovery_data_id: ContentId::from_bytes([32; 32]),
+            foundation_schedule_id: MarketFoundationScheduleV2Id::from_bytes([33; 32]),
+            foundation_account_graph_id: MarketFoundationAccountGraphV2Id::from_bytes([34; 32]),
+            outcome_count: 2,
+            lifecycle_root_account: Pubkey::new_from_array([35; 32]),
+            founder_link_account: Pubkey::new_from_array([36; 32]),
+            lifecycle_replay_account: Pubkey::new_from_array([37; 32]),
+            foundation_vault: Pubkey::new_from_array([38; 32]),
+            series_admission_vault: Pubkey::new_from_array([39; 32]),
+            principal_refund_owner: Pubkey::new_from_array([40; 32]),
+            neutral_lamport_sink: Pubkey::new_from_array([41; 32]),
+            foundation_principal_lamports: 10_000,
+            foundation_donation_lamports: 7,
+            root_rent_principal_lamports: 1_000,
+            root_prefund_donation_lamports: 11,
+            link_rent_principal_lamports: 900,
+            link_prefund_donation_lamports: 13,
+        }
+    }
+
+    #[test]
+    fn founder_preauthorization_refuses_graph_funding_or_recovery_substitution() {
+        let retained = founder_foundation_preauthorization();
+        assert!(require_product_market_founder_foundation_preauthorization_v1(
+            retained, retained,
+        )
+        .is_ok());
+
+        let mut wrong_graph = retained;
+        wrong_graph.graph_observation_id = ContentId::from_bytes([42; 32]);
+        assert!(require_product_market_founder_foundation_preauthorization_v1(
+            wrong_graph, retained,
+        )
+        .is_err());
+
+        let mut stale_funding = retained;
+        stale_funding.funding_account_authentication_id = ContentId::from_bytes([43; 32]);
+        assert!(require_product_market_founder_foundation_preauthorization_v1(
+            stale_funding, retained,
+        )
+        .is_err());
+
+        let mut wrong_recovery = retained;
+        wrong_recovery.recovery_data_id = ContentId::from_bytes([44; 32]);
+        assert!(require_product_market_founder_foundation_preauthorization_v1(
+            wrong_recovery, retained,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn founder_preauthorization_refuses_account_or_value_owner_substitution() {
+        let retained = founder_foundation_preauthorization();
+        let mut wrong_root = retained;
+        wrong_root.lifecycle_root_account = Pubkey::new_from_array([45; 32]);
+        assert!(require_product_market_founder_foundation_preauthorization_v1(
+            wrong_root, retained,
+        )
+        .is_err());
+
+        let mut wrong_sink = retained;
+        wrong_sink.neutral_lamport_sink = Pubkey::new_from_array([46; 32]);
+        assert!(require_product_market_founder_foundation_preauthorization_v1(
+            wrong_sink, retained,
+        )
+        .is_err());
+
+        let mut discounted_rent = retained;
+        discounted_rent.root_rent_principal_lamports -= 1;
+        assert!(require_product_market_founder_foundation_preauthorization_v1(
+            discounted_rent, retained,
+        )
+        .is_err());
     }
 
     struct NoAuthority;
