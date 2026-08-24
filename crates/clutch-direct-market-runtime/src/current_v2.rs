@@ -52,7 +52,7 @@ pub struct DirectCurrentProductAuthorityV2 {
     pub product_direct_global_liveness_account: [u8; 32],
     pub product_direct_global_liveness_binding_id: [u8; 32],
     pub product_direct_global_liveness_activation_id: [u8; 32],
-    pub activated_general_market_binding_id: [u8; 32],
+    pub activated_product_market_binding_id: [u8; 32],
     pub direct_work_quote_id: [u8; 32],
 }
 
@@ -103,7 +103,7 @@ impl DirectCurrentProductAuthorityV2 {
             &self.product_direct_global_liveness_account,
             &self.product_direct_global_liveness_binding_id,
             &self.product_direct_global_liveness_activation_id,
-            &self.activated_general_market_binding_id,
+            &self.activated_product_market_binding_id,
             &self.direct_work_quote_id,
         ]);
         require_live_v2(id)?;
@@ -132,7 +132,7 @@ impl DirectCurrentProductAuthorityV2 {
             self.product_direct_global_liveness_account,
             self.product_direct_global_liveness_binding_id,
             self.product_direct_global_liveness_activation_id,
-            self.activated_general_market_binding_id,
+            self.activated_product_market_binding_id,
             self.direct_work_quote_id,
         ]
     }
@@ -278,8 +278,8 @@ impl DirectMarketBindingV2 {
         self.fee_policy().validate()?;
         self.candidate_liveness.validate()?;
         if self.fee_treasury_owner != self.general.treasury_owner
-            || self.general.general_market_binding_account
-                != self.product.activated_general_market_binding_id
+            || self.product.product_market_binding_id
+                != self.product.activated_product_market_binding_id
             || self.candidate_liveness.policy_account
                 == self.product.product_direct_global_liveness_account
             || self.candidate_liveness.work_schedule_id != self.product.direct_work_quote_id

@@ -190,7 +190,7 @@ fn write_product(
         value.product_direct_global_liveness_account,
         value.product_direct_global_liveness_binding_id,
         value.product_direct_global_liveness_activation_id,
-        value.activated_general_market_binding_id,
+        value.activated_product_market_binding_id,
         value.direct_work_quote_id,
     ] {
         writer.id(id)?;
@@ -225,7 +225,7 @@ fn read_product(
         product_direct_global_liveness_account: reader.id()?,
         product_direct_global_liveness_binding_id: reader.id()?,
         product_direct_global_liveness_activation_id: reader.id()?,
-        activated_general_market_binding_id: reader.id()?,
+        activated_product_market_binding_id: reader.id()?,
         direct_work_quote_id: reader.id()?,
     })
 }
