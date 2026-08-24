@@ -2141,16 +2141,31 @@ mod extension_registry_tests {
                 clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_VERSION,
                 local_action,
             );
-            assert!(
-                disabled_canonical_tag(&bytes),
-                "direct successor action {local_action}"
+            let enabled = capabilities::extension_intent_action_enabled(
+                clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_TAG,
+                clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_VERSION,
+                local_action,
             );
             assert_eq!(
-                process(&Pubkey::new_from_array([9; 32]), &[], &bytes)
-                    .map_err(ProgramError::from),
-                Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                disabled_canonical_tag(&bytes),
+                !enabled,
                 "direct successor action {local_action}"
             );
+            let actual =
+                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from);
+            if enabled {
+                assert_ne!(
+                    actual,
+                    Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                    "enabled direct action {local_action} must reach its strict account decoder"
+                );
+            } else {
+                assert_eq!(
+                    actual,
+                    Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                    "disabled direct successor action {local_action}"
+                );
+            }
         }
     }
 

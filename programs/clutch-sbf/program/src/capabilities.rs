@@ -286,9 +286,9 @@ const _: () = assert!(
 /// dependency checkpoint.
 ///
 /// The six current Structured actions, Failure actions 10 through 13, and the
-/// complete Fractional family have current handlers joined to their persisted
-/// semantic owners. Other target tuples remain absent until their current
-/// authority tranche is integrated.
+/// complete Fractional and Direct families have current handlers joined to
+/// their persisted semantic owners. Other target tuples remain absent until
+/// their current authority tranche is integrated.
 /// In particular, Source actions 1 through 12 stay gated until Product
 /// consumes the private whole-lifecycle funding-custody retirement transition.
 #[cfg(feature = "profile-successor-chain-attached-dev")]
@@ -313,6 +313,19 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (79, 1, 8),
     (79, 1, 9),
     (79, 1, 10),
+    (80, 1, 1),
+    (80, 1, 2),
+    (80, 1, 3),
+    (80, 1, 4),
+    (80, 1, 5),
+    (80, 1, 6),
+    (80, 1, 7),
+    (80, 1, 8),
+    (80, 1, 9),
+    (80, 1, 10),
+    (80, 1, 11),
+    (80, 1, 12),
+    (80, 1, 13),
 ];
 
 /// Exact extension actions executable by other products.
@@ -589,7 +602,8 @@ mod tests {
                         && ((family_tag == 75
                             && matches!(local_action, 1 | 3 | 5 | 6 | 7 | 8))
                             || (family_tag == 78 && matches!(local_action, 10..=13))
-                            || (family_tag == 79 && matches!(local_action, 1..=10)));
+                            || (family_tag == 79 && matches!(local_action, 1..=10))
+                            || (family_tag == 80 && matches!(local_action, 1..=13)));
                     let expected_enabled = dealer_enabled
                         || general_enabled
                         || source_runtime_enabled
@@ -622,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_successor_is_allocated_but_independently_disabled() {
+    fn direct_successor_is_admitted_atomically() {
         let mut action = clutch_solana_layout::registry::DirectMarketAction::FIRST_TAG;
         while action <= clutch_solana_layout::registry::DirectMarketAction::LAST_TAG {
             assert!(extension_intent_action_allocated(
@@ -630,11 +644,14 @@ mod tests {
                 clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_VERSION,
                 action,
             ));
-            assert!(!extension_intent_action_enabled(
-                clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_TAG,
-                clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_VERSION,
-                action,
-            ));
+            assert_eq!(
+                extension_intent_action_enabled(
+                    clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_TAG,
+                    clutch_solana_layout::registry::DIRECT_MARKET_FAMILY_VERSION,
+                    action,
+                ),
+                SUCCESSOR_CHAIN_ATTACHED_DEV,
+            );
             action += 1;
         }
     }
