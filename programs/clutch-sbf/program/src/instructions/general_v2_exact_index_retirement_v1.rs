@@ -116,6 +116,19 @@ fn require_pairwise_distinct(accounts: &[&AccountInfo<'_>]) -> Outcome<()> {
     Ok(())
 }
 
+fn require_destinations_disjoint_from_state(
+    state: &[&AccountInfo<'_>],
+    destinations: &[&AccountInfo<'_>],
+) -> Outcome<()> {
+    require_pairwise_distinct(state)?;
+    for destination in destinations {
+        for account in state {
+            require(destination.key != account.key, ClutchError::AccountAlias)?;
+        }
+    }
+    Ok(())
+}
+
 fn decode_binding(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
@@ -138,14 +151,19 @@ fn decode_binding(
     Ok(binding)
 }
 
-fn checked_add_credit(balance: u64, credits: &[ExactIndexCloseCreditV1]) -> Outcome<u64> {
-    let mut after = balance;
+fn checked_credit_total(
+    recipient: Id32,
+    credits: &[ExactIndexCloseCreditV1],
+) -> Outcome<u64> {
+    let mut total = 0u64;
     for credit in credits {
-        after = after
-            .checked_add(credit.amount())
-            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        if credit.recipient() == recipient {
+            total = total
+                .checked_add(credit.amount())
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        }
     }
-    Ok(after)
+    Ok(total)
 }
 
 fn set_lamports(account: &AccountInfo<'_>, value: u64) -> Outcome<()> {
@@ -203,15 +221,16 @@ fn retire_index_children(
     require_program_account(program_id, &accounts[IX_FEED], false, None)?;
     require_destination(&accounts[IX_CHILD_PAYER])?;
     require_destination(&accounts[IX_CHILD_SINK])?;
-    require_pairwise_distinct(&[
-        &accounts[IX_ROOT],
-        &accounts[IX_LOCATOR],
-        &accounts[IX_ADJACENCY],
-        &accounts[IX_FEED],
-        &accounts[IX_BINDING],
-        &accounts[IX_CHILD_PAYER],
-        &accounts[IX_CHILD_SINK],
-    ])?;
+    require_destinations_disjoint_from_state(
+        &[
+            &accounts[IX_ROOT],
+            &accounts[IX_LOCATOR],
+            &accounts[IX_ADJACENCY],
+            &accounts[IX_FEED],
+            &accounts[IX_BINDING],
+        ],
+        &[&accounts[IX_CHILD_PAYER], &accounts[IX_CHILD_SINK]],
+    )?;
 
     let binding = decode_binding(program_id, &accounts[IX_BINDING])?;
     require(
@@ -313,19 +332,15 @@ fn retire_index_children(
                 == id(accounts[IX_CHILD_SINK].key),
         ClutchError::MismatchedState,
     )?;
-    let payer_after = checked_add_credit(
-        accounts[IX_CHILD_PAYER].lamports(),
-        &[
-            close.locator_principal_credit(),
-            close.adjacency_principal_credit(),
-        ],
-    )?;
-    let sink_after = checked_add_credit(
-        accounts[IX_CHILD_SINK].lamports(),
-        &[
-            close.locator_donation_credit(),
-            close.adjacency_donation_credit(),
-        ],
+    let credits = [
+        close.locator_principal_credit(),
+        close.adjacency_principal_credit(),
+        close.locator_donation_credit(),
+        close.adjacency_donation_credit(),
+    ];
+    preflight_coalesced_credits(
+        &[&accounts[IX_CHILD_PAYER], &accounts[IX_CHILD_SINK]],
+        &credits,
     )?;
     drop(adjacency_body);
     drop(locator_body);
@@ -341,14 +356,24 @@ fn retire_index_children(
     borrow_mut_data(&accounts[IX_ROOT])?.copy_from_slice(&root_output);
     close_program_account(&accounts[IX_LOCATOR])?;
     close_program_account(&accounts[IX_ADJACENCY])?;
-    set_lamports(&accounts[IX_CHILD_PAYER], payer_after)?;
-    set_lamports(&accounts[IX_CHILD_SINK], sink_after)
+    apply_coalesced_credits(
+        &[&accounts[IX_CHILD_PAYER], &accounts[IX_CHILD_SINK]],
+        &credits,
+    )
 }
 
-fn apply_coalesced_credits(
-    destinations: [&AccountInfo<'_>; 3],
-    credits: [ExactIndexCloseCreditV1; 3],
+fn preflight_coalesced_credits(
+    destinations: &[&AccountInfo<'_>],
+    credits: &[ExactIndexCloseCreditV1],
 ) -> Outcome<()> {
+    for credit in credits {
+        require(
+            destinations
+                .iter()
+                .any(|destination| id(destination.key) == credit.recipient()),
+            ClutchError::MismatchedState,
+        )?;
+    }
     let mut index = 0usize;
     while index < destinations.len() {
         require_destination(destinations[index])?;
@@ -357,17 +382,30 @@ fn apply_coalesced_credits(
             prior += 1;
         }
         if prior == index {
-            let mut total = 0u64;
-            for credit in credits {
-                if credit.recipient() == id(destinations[index].key) {
-                    total = total
-                        .checked_add(credit.amount())
-                        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-                }
-            }
+            destinations[index]
+                .lamports()
+                .checked_add(checked_credit_total(id(destinations[index].key), credits)?)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
+fn apply_coalesced_credits(
+    destinations: &[&AccountInfo<'_>],
+    credits: &[ExactIndexCloseCreditV1],
+) -> Outcome<()> {
+    let mut index = 0usize;
+    while index < destinations.len() {
+        let mut prior = 0usize;
+        while prior < index && destinations[prior].key != destinations[index].key {
+            prior += 1;
+        }
+        if prior == index {
             let after = destinations[index]
                 .lamports()
-                .checked_add(total)
+                .checked_add(checked_credit_total(id(destinations[index].key), credits)?)
                 .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
             set_lamports(destinations[index], after)?;
         }
@@ -402,11 +440,18 @@ fn retire_retained_feed(
         accounts[IX_FEED_RETIRE_KEEPER].is_signer,
         ClutchError::MissingSignature,
     )?;
-    require_pairwise_distinct(&[
-        &accounts[IX_FEED_RETIRE_ROOT],
-        &accounts[IX_FEED_RETIRE_FEED],
-        &accounts[IX_FEED_RETIRE_BINDING],
-    ])?;
+    require_destinations_disjoint_from_state(
+        &[
+            &accounts[IX_FEED_RETIRE_ROOT],
+            &accounts[IX_FEED_RETIRE_FEED],
+            &accounts[IX_FEED_RETIRE_BINDING],
+        ],
+        &[
+            &accounts[IX_FEED_RETIRE_PAYER],
+            &accounts[IX_FEED_RETIRE_SINK],
+            &accounts[IX_FEED_RETIRE_KEEPER],
+        ],
+    )?;
     let feed_body = borrow_data(&accounts[IX_FEED_RETIRE_FEED])?;
     let (feed, _) = contract::complete_candidate_feed_v2(&feed_body, true)?;
     require(feed.epoch == selector.epoch, ClutchError::MismatchedState)?;
@@ -455,6 +500,14 @@ fn retire_retained_feed(
             && credits[2].recipient() == id(accounts[IX_FEED_RETIRE_KEEPER].key),
         ClutchError::MismatchedState,
     )?;
+    preflight_coalesced_credits(
+        &[
+            &accounts[IX_FEED_RETIRE_PAYER],
+            &accounts[IX_FEED_RETIRE_SINK],
+            &accounts[IX_FEED_RETIRE_KEEPER],
+        ],
+        &credits,
+    )?;
     drop(root_body);
     drop(feed_body);
     preflight_writes(&[
@@ -467,12 +520,12 @@ fn retire_retained_feed(
     borrow_mut_data(&accounts[IX_FEED_RETIRE_ROOT])?.copy_from_slice(&root_output);
     close_program_account(&accounts[IX_FEED_RETIRE_FEED])?;
     apply_coalesced_credits(
-        [
+        &[
             &accounts[IX_FEED_RETIRE_PAYER],
             &accounts[IX_FEED_RETIRE_SINK],
             &accounts[IX_FEED_RETIRE_KEEPER],
         ],
-        credits,
+        &credits,
     )
 }
 
@@ -504,14 +557,15 @@ fn close_indexed_root(
     let binding = decode_binding(program_id, &accounts[IX_CLOSE_BINDING])?;
     require_destination(&accounts[IX_CLOSE_PAYER])?;
     require_destination(&accounts[IX_CLOSE_SINK])?;
-    require_pairwise_distinct(&[
-        &accounts[IX_CLOSE_ROOT],
-        &accounts[IX_CLOSE_EPOCH],
-        &accounts[IX_CLOSE_WINDOW],
-        &accounts[IX_CLOSE_BINDING],
-        &accounts[IX_CLOSE_PAYER],
-        &accounts[IX_CLOSE_SINK],
-    ])?;
+    require_destinations_disjoint_from_state(
+        &[
+            &accounts[IX_CLOSE_ROOT],
+            &accounts[IX_CLOSE_EPOCH],
+            &accounts[IX_CLOSE_WINDOW],
+            &accounts[IX_CLOSE_BINDING],
+        ],
+        &[&accounts[IX_CLOSE_PAYER], &accounts[IX_CLOSE_SINK]],
+    )?;
     require(
         selector.epoch == id(accounts[IX_CLOSE_EPOCH].key)
             && selector.settlement_root == id(accounts[IX_CLOSE_ROOT].key)
@@ -575,13 +629,13 @@ fn close_indexed_root(
             && result.root_donation_credit().recipient() == id(accounts[IX_CLOSE_SINK].key),
         ClutchError::WrongPda,
     )?;
-    let payer_after = checked_add_credit(
-        accounts[IX_CLOSE_PAYER].lamports(),
-        &[result.root_principal_credit()],
-    )?;
-    let sink_after = checked_add_credit(
-        accounts[IX_CLOSE_SINK].lamports(),
-        &[result.root_donation_credit()],
+    let credits = [
+        result.root_principal_credit(),
+        result.root_donation_credit(),
+    ];
+    preflight_coalesced_credits(
+        &[&accounts[IX_CLOSE_PAYER], &accounts[IX_CLOSE_SINK]],
+        &credits,
     )?;
     drop(window_body);
     drop(root_body);
@@ -594,8 +648,10 @@ fn close_indexed_root(
     ])?;
     borrow_mut_data(&accounts[IX_CLOSE_EPOCH])?.copy_from_slice(&epoch_output);
     close_program_account(&accounts[IX_CLOSE_ROOT])?;
-    set_lamports(&accounts[IX_CLOSE_PAYER], payer_after)?;
-    set_lamports(&accounts[IX_CLOSE_SINK], sink_after)
+    apply_coalesced_credits(
+        &[&accounts[IX_CLOSE_PAYER], &accounts[IX_CLOSE_SINK]],
+        &credits,
+    )
 }
 
 /// Dispatch-compatible entrypoint for the exact indexed-root terminal chain.
