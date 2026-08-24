@@ -2,7 +2,7 @@
 //!
 //! The browser never supplies candidate fills, semantic identities, account
 //! roles, refund recipients, liveness ordinals, or postimages. This module
-//! hostile-decodes one finalized b1/v2+b2+b3 snapshot, derives one deterministic
+//! hostile-decodes one finalized b1/v3+b2+b3 snapshot, derives one deterministic
 //! exact valid pair candidate or the next verification transition, replays the same
 //! pure owners used by SBF, and only then emits one release-bound unsigned
 //! draft. Signing, blockhash acquisition, and submission are outside this
@@ -25,13 +25,13 @@ use clutch_batch::direct_pair_v1::{
 };
 use clutch_batch::PartialPolicy;
 use clutch_client_contract::direct_market::DirectMarketClientPayloadV1;
-use clutch_direct_market_runtime::codec_v2::{
-    authenticate_direct_root_transition_body_v2,
-    decode_direct_action_replay_body_for_transition_v2,
-    decode_direct_selection_body_for_transition_v2,
-    encode_direct_action_replay_body_into_transition_v2,
-    encode_direct_selection_body_into_transition_v2,
-    write_direct_root_transition_body_v2, AuthenticatedDirectRootTransitionV2,
+use clutch_direct_market_runtime::codec_v3::{
+    authenticate_direct_root_transition_body_v3,
+    decode_direct_action_replay_body_for_transition_v3,
+    decode_direct_selection_body_for_transition_v3,
+    encode_direct_action_replay_body_into_transition_v3,
+    encode_direct_selection_body_into_transition_v3,
+    write_direct_root_transition_body_v3, AuthenticatedDirectRootTransitionV3,
 };
 use clutch_direct_market_runtime::lifecycle_v2::{
     begin_direct_candidate_verification_v2, bind_direct_candidate_work_batch_v2,
@@ -55,18 +55,18 @@ use clutch_liveness::Id as LivenessId;
 use clutch_solana_layout::direct_market_v1::{
     DirectActionReplayAccountV1, DirectSelectionAccountV1,
 };
-use clutch_solana_layout::direct_market_v2::DirectMarketRootAccountV2;
+use clutch_solana_layout::direct_market_v3::DirectMarketRootAccountV3;
 use clutch_solana_layout::direct_market_v1::DirectSubmitCandidatePayloadV1;
 use clutch_solana_layout::registry::{
     DirectMarketAction, DIRECT_ACTION_REPLAY_ACCOUNT_BYTES,
-    DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V2, DIRECT_SELECTION_ACCOUNT_BYTES,
+    DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3, DIRECT_SELECTION_ACCOUNT_BYTES,
 };
 use sha2::{Digest, Sha256};
 use solana_address::Address;
 use solana_instruction::AccountMeta;
 use std::str::FromStr;
 
-const DIRECT_ROOT_SEED_V2: &[u8] = b"dc:direct-market-root:v2";
+const DIRECT_ROOT_SEED_V3: &[u8] = b"dc:direct-market-root:v3";
 const DIRECT_REPLAY_SEED_V1: &[u8] = b"dc:direct-action-replay:v1";
 const DIRECT_SELECTION_SEED_V1: &[u8] = b"dc:direct-selection:v1";
 
@@ -587,9 +587,9 @@ pub(crate) fn decode_direct_state(
             return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
         }
     }
-    let root_frame = DirectMarketRootAccountV2::decode(&root_account.data)
+    let root_frame = DirectMarketRootAccountV3::decode(&root_account.data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
-    let root = authenticate_direct_root_transition_body_v2(
+    let root = authenticate_direct_root_transition_body_v3(
         root_frame.semantic_body(),
         &OperatorSha256V1,
     )
@@ -601,7 +601,7 @@ pub(crate) fn decode_direct_state(
     .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
     let replay_frame = DirectActionReplayAccountV1::decode(replay_bytes)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
-    let replay = decode_direct_action_replay_body_for_transition_v2(
+    let replay = decode_direct_action_replay_body_for_transition_v3(
         replay_frame.semantic_body(),
         &root,
     )
@@ -623,7 +623,7 @@ pub(crate) fn decode_direct_state(
     .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
     let selection_frame = DirectSelectionAccountV1::decode(selection_bytes)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
-    let selection = decode_direct_selection_body_for_transition_v2(
+    let selection = decode_direct_selection_body_for_transition_v3(
         selection_frame.semantic_body(),
         &root,
     )
@@ -656,12 +656,12 @@ fn authenticate_root_address(
     program: Address,
     account: &ObservedRpcAccount,
     stored_bump: u8,
-    root: &AuthenticatedDirectRootTransitionV2,
+    root: &AuthenticatedDirectRootTransitionV3,
 ) -> Result<(), CanonicalActionMaterialErrorV1> {
     let generation = root.generation().to_le_bytes();
     let (expected, bump) = Address::find_program_address(
         &[
-            DIRECT_ROOT_SEED_V2,
+            DIRECT_ROOT_SEED_V3,
             &root.market_instance_id(),
             &generation,
         ],
@@ -935,7 +935,7 @@ fn encode_direct_postimages(
     let mut root = root_pre.data.clone();
     let mut replay = replay_pre.data.clone();
     let mut selection = selection_pre.data.clone();
-    if root.len() != DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V2
+    if root.len() != DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3
         || replay.len() != DIRECT_ACTION_REPLAY_ACCOUNT_BYTES
         || selection.len() != DIRECT_SELECTION_ACCOUNT_BYTES
         || root[2] != decoded.root_bump
@@ -944,19 +944,19 @@ fn encode_direct_postimages(
     {
         return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
     }
-    write_direct_root_transition_body_v2(
+    write_direct_root_transition_body_v3(
         decoded.state.root(),
         &mut root[4..],
         &OperatorSha256V1,
     )
     .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
-    encode_direct_action_replay_body_into_transition_v2(
+    encode_direct_action_replay_body_into_transition_v3(
         decoded.state.replay(),
         decoded.state.root(),
         &mut replay[4..],
     )
     .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
-    encode_direct_selection_body_into_transition_v2(
+    encode_direct_selection_body_into_transition_v3(
         decoded.selection,
         decoded.state.root(),
         &mut selection[4..],

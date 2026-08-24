@@ -1,6 +1,6 @@
 //! Current Direct `80/1` account authentication and writeback plane.
 //!
-//! Current actions accept only the fresh b1/v2 root. The unchanged b2/b3/b4
+//! Current actions accept only the fresh b1/v3 root. The unchanged b2/b3/b4
 //! physical frames are interpreted only after that root has authenticated, so
 //! their historical arithmetic shape cannot become a persisted V1 authority.
 //! Action 1 and action 13 refuse before account inspection until their sole
@@ -20,16 +20,16 @@ use clutch_direct_market_runtime::codec_v1::{
     DIRECT_ACTION_REPLAY_BODY_BYTES_V1, DIRECT_RESERVATION_BODY_BYTES_V1,
     DIRECT_SELECTION_BODY_BYTES_V1,
 };
-use clutch_direct_market_runtime::codec_v2::{
-    authenticate_direct_root_transition_body_v2,
-    decode_direct_action_replay_body_for_transition_v2,
-    decode_direct_reservation_body_for_transition_v2,
-    decode_direct_selection_body_for_transition_v2,
-    encode_direct_action_replay_body_into_transition_v2,
-    encode_direct_reservation_body_into_transition_v2,
-    encode_direct_selection_body_into_transition_v2,
-    write_direct_root_transition_body_v2, AuthenticatedDirectRootTransitionV2,
-    DIRECT_MARKET_ROOT_BODY_BYTES_V2 as RUNTIME_ROOT_BODY_BYTES_V2,
+use clutch_direct_market_runtime::codec_v3::{
+    authenticate_direct_root_transition_body_v3,
+    decode_direct_action_replay_body_for_transition_v3,
+    decode_direct_reservation_body_for_transition_v3,
+    decode_direct_selection_body_for_transition_v3,
+    encode_direct_action_replay_body_into_transition_v3,
+    encode_direct_reservation_body_into_transition_v3,
+    encode_direct_selection_body_into_transition_v3,
+    write_direct_root_transition_body_v3, AuthenticatedDirectRootTransitionV3,
+    DIRECT_MARKET_ROOT_BODY_BYTES_V3 as RUNTIME_ROOT_BODY_BYTES_V2,
 };
 use clutch_direct_market_runtime::lifecycle_v2::{
     prepare_direct_reservation_admission_v2, prepare_direct_reservation_cancel_v2,
@@ -46,7 +46,7 @@ use clutch_direct_market_runtime::lifecycle_v2::{
     AuthenticatedDirectTerminalV2, DirectFamilyTerminalPlanV2,
     DirectRootReplayTransitionV2,
 };
-use clutch_direct_market_runtime::current_v2::DirectCurrentGeneralAuthorityV2;
+use clutch_direct_market_runtime::current_v3::DirectCurrentGeneralAuthorityV2;
 use clutch_direct_market_runtime::fee_v2::DirectFeePolicyV2;
 use clutch_direct_market_runtime::liveness_v1::DirectCandidateWorkBatchV1;
 use clutch_direct_market_runtime::reservation_v1::DirectReservationV1;
@@ -89,20 +89,20 @@ use clutch_liveness::Id as LivenessId;
 use clutch_owner_settlement::{AuthenticatedPositionV3, PositionSettlementPoststateV3};
 use clutch_price_measure::PriceVectorV3;
 use clutch_product_series::{
-    CompiledProductSeriesBundleV6, ContentId, MarketGenesisProfileV2,
+    CompiledProductSeriesBundleV7, ContentId, MarketGenesisProfileV2,
     MarketInstancePreimageV2, NativeClaimBasisV1, PriceMeasurePolicyV1,
 };
 use clutch_retirement::{PositionPurposeV3, PositionV3Sha256Backend, ReplayV3HashBackend};
 use clutch_solana_layout::direct_market_v1::{
     DirectAdmitOrderPayloadV1, DirectSubmitCandidatePayloadV1,
 };
-use clutch_solana_layout::direct_market_v2::{
-    DirectMarketRootAccountV2, DIRECT_MARKET_ROOT_BODY_BYTES_V2,
+use clutch_solana_layout::direct_market_v3::{
+    DirectMarketRootAccountV3, DIRECT_MARKET_ROOT_BODY_BYTES_V3,
 };
 use clutch_solana_layout::registry::{
     DirectMarketAction, DIRECT_ACTION_REPLAY_ACCOUNT_BYTES,
     DIRECT_ACTION_REPLAY_ACCOUNT_TAG, DIRECT_ACTION_REPLAY_ACCOUNT_VERSION,
-    DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V2, DIRECT_RESERVATION_ACCOUNT_BYTES,
+    DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3, DIRECT_RESERVATION_ACCOUNT_BYTES,
     DIRECT_RESERVATION_ACCOUNT_TAG, DIRECT_RESERVATION_ACCOUNT_VERSION,
     DIRECT_SELECTION_ACCOUNT_BYTES, DIRECT_SELECTION_ACCOUNT_TAG,
     DIRECT_SELECTION_ACCOUNT_VERSION,
@@ -143,12 +143,12 @@ const DIRECT_FAMILY_TERMINAL_DOMAIN_V3: &[u8] =
 const DIRECT_ACTION13_CANDIDATE_POSTWRITE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/direct/action13-candidate-postwrite/v2\0";
 
-const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V2 == RUNTIME_ROOT_BODY_BYTES_V2);
-const _: () = assert!(DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V2 == 2_502);
+const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V3 == RUNTIME_ROOT_BODY_BYTES_V2);
+const _: () = assert!(DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3 == 2_502);
 const _: () = assert!(DIRECT_SELECTION_ACCOUNT_BYTES == 1_629);
 const _: () = assert!(DIRECT_ACTION_REPLAY_ACCOUNT_BYTES == 394);
 const _: () = assert!(DIRECT_RESERVATION_ACCOUNT_BYTES == 473);
-const _: () = assert!(core::mem::size_of::<AuthenticatedDirectMarketRootV2>() <= 2_560);
+const _: () = assert!(core::mem::size_of::<AuthenticatedDirectMarketRootV3>() <= 2_560);
 const _: () = assert!(core::mem::size_of::<AuthenticatedDirectActionReplayV2>() <= 512);
 const _: () = assert!(core::mem::size_of::<AuthenticatedDirectSelectionV2>() <= 192);
 
@@ -234,7 +234,7 @@ pub(crate) fn process(
     }
 }
 
-/// Execute action 2 across current b1/v2, fresh b4, and one General V4
+/// Execute action 2 across current b1/v3, fresh b4, and one General V4
 /// Position/Replay pair. The optional peer is derived only from the root's live
 /// Reservation count; the payload carries no peer selector or funding amount.
 #[inline(never)]
@@ -398,7 +398,7 @@ fn process_direct_admit_order_v2(
     )?;
     write_position_post_v2(&accounts[4], &plan.position_poststate)?;
     write_general_replay_post_v2(&accounts[5], &plan.replay_transition)?;
-    write_direct_market_root_v2(&accounts[0], root_bump, state.root())?;
+    write_direct_market_root_v3(&accounts[0], root_bump, state.root())?;
     write_direct_action_replay_v2(
         &accounts[1],
         replay_bump,
@@ -450,7 +450,7 @@ impl AuthenticatedDirectReservationAdmissionV2 for DirectReservationAdmissionAut
 }
 
 /// Execute action 3 and retire exactly one active b4. Principal returns only
-/// to the persisted payer; hostile prefund and surplus go only to b1/v2's
+/// to the persisted payer; hostile prefund and surplus go only to b1/v3's
 /// Realm-authenticated neutral sink.
 #[inline(never)]
 fn process_direct_cancel_order_v2(
@@ -557,7 +557,7 @@ fn process_direct_cancel_order_v2(
     credit_lamports_v2(&accounts[14], plan.retirement.surplus_lamports)?;
     write_position_post_v2(&accounts[4], &plan.endpoint.position_poststate)?;
     write_general_replay_post_v2(&accounts[5], &plan.endpoint.replay_transition)?;
-    write_direct_market_root_v2(&accounts[0], root_bump, state.root())?;
+    write_direct_market_root_v3(&accounts[0], root_bump, state.root())?;
     write_direct_action_replay_v2(
         &accounts[1],
         replay_bump,
@@ -757,7 +757,7 @@ fn process_direct_freeze_book_v2(
         donation_floor_lamports,
         &signer_seeds,
     )?;
-    write_direct_market_root_v2(&accounts[0], root_bump, state.root())?;
+    write_direct_market_root_v3(&accounts[0], root_bump, state.root())?;
     write_direct_action_replay_v2(
         &accounts[1],
         replay_bump,
@@ -1004,7 +1004,7 @@ fn process_direct_nonempty_selection_finalization_v2(
         &selection_value,
         DirectMarketActionV1::FinalizeSelection,
     )?;
-    write_direct_market_root_v2(&accounts[0], root_bump, state.root())?;
+    write_direct_market_root_v3(&accounts[0], root_bump, state.root())?;
     write_direct_action_replay_v2(
         &accounts[1],
         replay_bump,
@@ -1394,7 +1394,7 @@ fn process_direct_settle_pair_v2(
     write_position_post_v2(&accounts[endpoint_end + 3], &treasury_post.position_poststate)?;
     write_general_replay_post_v2(&accounts[endpoint_end + 4], &treasury_post.replay_transition)?;
     accept_treasury_service_transition_v1(&accounts[endpoint_end + 5], service_transition)?;
-    write_direct_market_root_v2(&accounts[0], root_bump, state.root())?;
+    write_direct_market_root_v3(&accounts[0], root_bump, state.root())?;
     write_direct_action_replay_v2(
         &accounts[1],
         replay_bump,
@@ -1519,7 +1519,7 @@ fn process_direct_lapse_terminal_v2(
     }
 }
 
-/// Execute action 10 from an Open b1/v2 after submission close. The exact
+/// Execute action 10 from an Open b1/v3 after submission close. The exact
 /// fresh b2, complete current b4/Position/Replay prefix, canonical Product
 /// price graph, and liveness work are one rollback domain.
 #[inline(never)]
@@ -1733,7 +1733,7 @@ fn process_direct_missed_freeze_lapse_v2(
         )?;
         index += 1;
     }
-    write_direct_market_root_v2(&accounts[0], root_bump, state.root())?;
+    write_direct_market_root_v3(&accounts[0], root_bump, state.root())?;
     write_direct_action_replay_v2(
         &accounts[1],
         replay_bump,
@@ -2109,7 +2109,7 @@ fn process_direct_fee_free_selection_terminal_v2(
         )?;
         index += 1;
     }
-    write_direct_market_root_v2(&accounts[0], root_bump, state.root())?;
+    write_direct_market_root_v3(&accounts[0], root_bump, state.root())?;
     write_direct_action_replay_v2(
         &accounts[1],
         replay_bump,
@@ -2182,13 +2182,13 @@ const _: () = assert!(
     core::mem::size_of::<DirectEconomicTerminalAuthoritySbfV2<'static>>() <= 512
 );
 
-/// Authenticate the current BundleV6, native basis, price policy, Genesis,
+/// Authenticate the current BundleV7, native basis, price policy, Genesis,
 /// and canonical grid before b2 may retain a price vector.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn authenticate_direct_price_precondition_v2(
     program_id: &Pubkey,
-    root: &AuthenticatedDirectMarketRootV2,
+    root: &AuthenticatedDirectMarketRootV3,
     bundle_account: &AccountInfo<'_>,
     basis_account: &AccountInfo<'_>,
     price_policy_account: &AccountInfo<'_>,
@@ -2197,10 +2197,10 @@ fn authenticate_direct_price_precondition_v2(
     reservations: [Option<DirectReservationV1>; 2],
 ) -> Outcome<AuthenticatedDirectPricePreconditionV2> {
     let transition = root.transition();
-    let bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV6>(
+    let bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV7>(
         program_id,
         bundle_account,
-        ContentId::from_bytes(transition.compiler_bundle_v6_id()),
+        ContentId::from_bytes(transition.compiler_bundle_v7_id()),
     )?;
     let basis = authenticate_product_artifact_v1::<NativeClaimBasisV1>(
         program_id,
@@ -2338,22 +2338,22 @@ fn authenticate_direct_price_precondition_v2(
     })
 }
 
-/// Authenticate action 2's exact current BundleV6/Genesis/Grid price limit.
-/// The Bundle identity comes only from b1/v2; no payload policy identity is an
+/// Authenticate action 2's exact current BundleV7/Genesis/Grid price limit.
+/// The Bundle identity comes only from b1/v3; no payload policy identity is an
 /// authority coordinate.
 #[inline(never)]
 fn authenticate_direct_order_limit_v2(
     program_id: &Pubkey,
-    root: &AuthenticatedDirectMarketRootV2,
+    root: &AuthenticatedDirectMarketRootV3,
     bundle_account: &AccountInfo<'_>,
     genesis_account: &AccountInfo<'_>,
     price_grid_account: &AccountInfo<'_>,
     limit: u128,
 ) -> Outcome<()> {
-    let bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV6>(
+    let bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV7>(
         program_id,
         bundle_account,
-        ContentId::from_bytes(root.transition().compiler_bundle_v6_id()),
+        ContentId::from_bytes(root.transition().compiler_bundle_v7_id()),
     )?;
     let genesis = authenticate_product_artifact_v1::<MarketGenesisProfileV2>(
         program_id,
@@ -2399,7 +2399,7 @@ fn authenticate_direct_order_limit_v2(
 }
 
 /// Authenticate the exact current General V4/Runtime and collateral graph
-/// retained by b1/v2. The complete V4 account-data ID makes all Product and
+/// retained by b1/v3. The complete V4 account-data ID makes all Product and
 /// Revenue coordinates transitively immutable; a domain-separated current
 /// General authority ID then proves they are the same coordinates persisted by
 /// this Direct root.
@@ -2407,7 +2407,7 @@ fn authenticate_direct_order_limit_v2(
 #[inline(never)]
 fn authenticate_direct_general_market_v4(
     program_id: &Pubkey,
-    root: &AuthenticatedDirectMarketRootV2,
+    root: &AuthenticatedDirectMarketRootV3,
     realm_account: &AccountInfo<'_>,
     profile_account: &AccountInfo<'_>,
     collateral_policy_account: &AccountInfo<'_>,
@@ -2690,7 +2690,7 @@ fn process_direct_candidate_verification_v2(
         &selection_value,
         runtime_action,
     )?;
-    write_direct_market_root_v2(&accounts[0], root_bump, state.root())?;
+    write_direct_market_root_v3(&accounts[0], root_bump, state.root())?;
     write_direct_action_replay_v2(
         &accounts[1],
         replay_bump,
@@ -2707,7 +2707,7 @@ fn process_direct_candidate_verification_v2(
 
 /// Execute action 5 against exact current root/replay/Selection state.
 ///
-/// Accounts are b1/v2 root W, b3 replay W, b2 Selection W, Clock RO,
+/// Accounts are b1/v3 root W, b3 replay W, b2 Selection W, Clock RO,
 /// submitter signer W, System program, and an optional exact evicted bond
 /// refund owner W. No Product or fee authority is supplied by the caller.
 #[inline(never)]
@@ -2853,7 +2853,7 @@ fn process_direct_submit_candidate_v2(
         ClutchError::MismatchedState,
     )?;
 
-    write_direct_market_root_v2(&accounts[0], root_bump, state.root())?;
+    write_direct_market_root_v3(&accounts[0], root_bump, state.root())?;
     write_direct_action_replay_v2(
         &accounts[1],
         replay_bump,
@@ -3282,7 +3282,7 @@ impl AuthenticatedDirectCandidateTerminalPostwriteV2
 #[inline(never)]
 fn authenticate_direct_candidate_terminal_postwrite_v2(
     program_id: &Pubkey,
-    root: &AuthenticatedDirectMarketRootV2,
+    root: &AuthenticatedDirectMarketRootV3,
     replay_account: &AccountInfo<'_>,
     candidate_account: &AccountInfo<'_>,
     sealed: &DirectFamilyTerminalPlanV2,
@@ -3691,7 +3691,7 @@ where
     let market_instance_id = ContentId::from_bytes(root.transition().market_instance_id());
     let product_root_account = ContentId::from_bytes(root.transition().product_root_account());
     let product_market_binding_id =
-        ContentId::from_bytes(root.transition().product_market_binding_id());
+        ContentId::from_bytes(root.transition().product_market_binding_v3_id());
     let current_product_authority_id =
         ContentId::from_bytes(root.transition().current_product_authority_id());
     let direct_root_id = ContentId::from_bytes(root.account().to_bytes());
@@ -3766,7 +3766,7 @@ where
         state.replay(),
         &DirectRuntimeSha256V2,
     ).map_err(map_direct_error_v2)?;
-    write_direct_market_root_v2(
+    write_direct_market_root_v3(
         direct_root_account,
         root_bump,
         state.root(),
@@ -4040,21 +4040,21 @@ fn require_direct_freeze_liveness_aliases_v2(
 }
 
 #[derive(Debug)]
-struct AuthenticatedDirectMarketRootV2 {
+struct AuthenticatedDirectMarketRootV3 {
     account: Pubkey,
-    transition: AuthenticatedDirectRootTransitionV2,
+    transition: AuthenticatedDirectRootTransitionV3,
     bump: u8,
     data_id: [u8; 32],
     observed_lamports: u64,
 }
 
-impl AuthenticatedDirectMarketRootV2 {
+impl AuthenticatedDirectMarketRootV3 {
     const fn account(&self) -> Pubkey { self.account }
     const fn bump(&self) -> u8 { self.bump }
     const fn data_id(&self) -> [u8; 32] { self.data_id }
     const fn observed_lamports(&self) -> u64 { self.observed_lamports }
-    const fn transition(&self) -> &AuthenticatedDirectRootTransitionV2 { &self.transition }
-    fn into_transition(self) -> AuthenticatedDirectRootTransitionV2 { self.transition }
+    const fn transition(&self) -> &AuthenticatedDirectRootTransitionV3 { &self.transition }
+    fn into_transition(self) -> AuthenticatedDirectRootTransitionV3 { self.transition }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4118,23 +4118,23 @@ impl DirectAccountAccessV2 {
 fn authenticate_direct_market_root_writable_v2(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
-) -> Outcome<AuthenticatedDirectMarketRootV2> {
+) -> Outcome<AuthenticatedDirectMarketRootV3> {
     require_program_state_v2(
         program_id,
         account,
         DirectAccountAccessV2::Writable,
-        DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V2,
+        DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3,
     )?;
     let data = account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let frame = DirectMarketRootAccountV2::decode(&data)?;
-    let transition = authenticate_direct_root_transition_body_v2(
+    let frame = DirectMarketRootAccountV3::decode(&data)?;
+    let transition = authenticate_direct_root_transition_body_v3(
         frame.semantic_body(),
         &DirectRuntimeSha256V2,
     )
     .map_err(map_direct_error_v2)?;
-    let (expected, bump) = seeds::direct_market_root_v2_pda(
+    let (expected, bump) = seeds::direct_market_root_v3_pda(
         program_id,
         &transition.market_instance_id(),
         transition.generation(),
@@ -4154,7 +4154,7 @@ fn authenticate_direct_market_root_writable_v2(
     let data_id = solana_sha256_hasher::hashv(&[&data[..]]).to_bytes();
     require_live_id_v2(data_id)?;
     drop(data);
-    Ok(AuthenticatedDirectMarketRootV2 {
+    Ok(AuthenticatedDirectMarketRootV3 {
         account: *account.key,
         transition,
         bump,
@@ -4167,7 +4167,7 @@ fn authenticate_direct_market_root_writable_v2(
 fn authenticate_direct_action_replay_writable_v2(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
-    root: &AuthenticatedDirectMarketRootV2,
+    root: &AuthenticatedDirectMarketRootV3,
 ) -> Outcome<AuthenticatedDirectActionReplayV2> {
     require_program_state_v2(
         program_id,
@@ -4184,7 +4184,7 @@ fn authenticate_direct_action_replay_writable_v2(
         DIRECT_ACTION_REPLAY_ACCOUNT_VERSION,
         DIRECT_ACTION_REPLAY_BODY_BYTES_V1,
     )?;
-    let value = decode_direct_action_replay_body_for_transition_v2(body, root.transition())
+    let value = decode_direct_action_replay_body_for_transition_v3(body, root.transition())
         .map_err(map_direct_error_v2)?;
     let (expected, expected_bump) =
         seeds::direct_action_replay_v1_pda(program_id, &root.account());
@@ -4220,7 +4220,7 @@ fn authenticate_direct_action_replay_writable_v2(
 fn authenticate_direct_selection_writable_v2(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
-    root: &AuthenticatedDirectMarketRootV2,
+    root: &AuthenticatedDirectMarketRootV3,
 ) -> Outcome<AuthenticatedDirectSelectionV2> {
     require_program_state_v2(
         program_id,
@@ -4238,7 +4238,7 @@ fn authenticate_direct_selection_writable_v2(
         DIRECT_SELECTION_BODY_BYTES_V1,
     )?;
     let value = Box::new(
-        decode_direct_selection_body_for_transition_v2(body, root.transition())
+        decode_direct_selection_body_for_transition_v3(body, root.transition())
             .map_err(map_direct_error_v2)?,
     );
     let (expected, expected_bump) =
@@ -4276,7 +4276,7 @@ fn authenticate_direct_selection_writable_v2(
 fn authenticate_direct_reservation_writable_v2(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
-    root: &AuthenticatedDirectMarketRootV2,
+    root: &AuthenticatedDirectMarketRootV3,
 ) -> Outcome<AuthenticatedDirectReservationV2> {
     authenticate_direct_reservation_with_access_v2(
         program_id,
@@ -4290,7 +4290,7 @@ fn authenticate_direct_reservation_writable_v2(
 fn authenticate_direct_reservation_readonly_v2(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
-    root: &AuthenticatedDirectMarketRootV2,
+    root: &AuthenticatedDirectMarketRootV3,
 ) -> Outcome<AuthenticatedDirectReservationV2> {
     authenticate_direct_reservation_with_access_v2(
         program_id,
@@ -4304,7 +4304,7 @@ fn authenticate_direct_reservation_readonly_v2(
 fn authenticate_direct_reservation_with_access_v2(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
-    root: &AuthenticatedDirectMarketRootV2,
+    root: &AuthenticatedDirectMarketRootV3,
     access: DirectAccountAccessV2,
 ) -> Outcome<AuthenticatedDirectReservationV2> {
     require_program_state_v2(
@@ -4322,7 +4322,7 @@ fn authenticate_direct_reservation_with_access_v2(
         DIRECT_RESERVATION_ACCOUNT_VERSION,
         DIRECT_RESERVATION_BODY_BYTES_V1,
     )?;
-    let value = decode_direct_reservation_body_for_transition_v2(body, root.transition())
+    let value = decode_direct_reservation_body_for_transition_v3(body, root.transition())
         .map_err(map_direct_error_v2)?;
     let (expected, expected_bump) = seeds::direct_reservation_v1_pda(
         program_id,
@@ -4360,7 +4360,7 @@ fn authenticate_direct_reservation_with_access_v2(
 #[inline(never)]
 fn authenticate_direct_resolution_v5_v2(
     program_id: &Pubkey,
-    root: &AuthenticatedDirectMarketRootV2,
+    root: &AuthenticatedDirectMarketRootV3,
     account: &AccountInfo<'_>,
 ) -> Outcome<clutch_direct_market_runtime::DirectFinalResolutionV1> {
     use clutch_collateral_adapter_v2::{ResolutionStateV5, ResolutionV5, RESOLUTION_V5_BYTES};
@@ -4428,17 +4428,17 @@ fn decode_borrowed_child_frame_v2<'a>(
     Ok((input[2], &input[4..]))
 }
 
-fn write_direct_market_root_v2(
+fn write_direct_market_root_v3(
     account: &AccountInfo<'_>,
     bump: u8,
-    transition: &AuthenticatedDirectRootTransitionV2,
+    transition: &AuthenticatedDirectRootTransitionV3,
 ) -> Outcome<()> {
     let mut data = account
         .try_borrow_mut_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let frame = DirectMarketRootAccountV2::decode(&data)?;
+    let frame = DirectMarketRootAccountV3::decode(&data)?;
     require(frame.bump() == bump, ClutchError::MismatchedState)?;
-    write_direct_root_transition_body_v2(
+    write_direct_root_transition_body_v3(
         transition,
         &mut data[4..],
         &DirectRuntimeSha256V2,
@@ -4450,7 +4450,7 @@ fn write_direct_action_replay_v2(
     account: &AccountInfo<'_>,
     bump: u8,
     value: DirectActionReplayV1,
-    transition: &AuthenticatedDirectRootTransitionV2,
+    transition: &AuthenticatedDirectRootTransitionV3,
 ) -> Outcome<()> {
     let mut data = account
         .try_borrow_mut_data()
@@ -4462,7 +4462,7 @@ fn write_direct_action_replay_v2(
         DIRECT_ACTION_REPLAY_BODY_BYTES_V1,
     )?;
     require(observed_bump == bump, ClutchError::MismatchedState)?;
-    encode_direct_action_replay_body_into_transition_v2(value, transition, &mut data[4..])
+    encode_direct_action_replay_body_into_transition_v3(value, transition, &mut data[4..])
         .map_err(map_direct_error_v2)
 }
 
@@ -4470,7 +4470,7 @@ fn write_direct_selection_v2(
     account: &AccountInfo<'_>,
     bump: u8,
     value: DirectSelectionV1,
-    transition: &AuthenticatedDirectRootTransitionV2,
+    transition: &AuthenticatedDirectRootTransitionV3,
 ) -> Outcome<()> {
     let mut data = account
         .try_borrow_mut_data()
@@ -4482,7 +4482,7 @@ fn write_direct_selection_v2(
         DIRECT_SELECTION_BODY_BYTES_V1,
     )?;
     require(observed_bump == bump, ClutchError::MismatchedState)?;
-    encode_direct_selection_body_into_transition_v2(value, transition, &mut data[4..])
+    encode_direct_selection_body_into_transition_v3(value, transition, &mut data[4..])
         .map_err(map_direct_error_v2)
 }
 
@@ -4490,7 +4490,7 @@ fn write_fresh_direct_selection_v2(
     account: &AccountInfo<'_>,
     bump: u8,
     value: DirectSelectionV1,
-    transition: &AuthenticatedDirectRootTransitionV2,
+    transition: &AuthenticatedDirectRootTransitionV3,
 ) -> Outcome<()> {
     require(
         account.is_writable
@@ -4505,7 +4505,7 @@ fn write_fresh_direct_selection_v2(
     data[1] = DIRECT_SELECTION_ACCOUNT_VERSION;
     data[2] = bump;
     data[3] = 0;
-    encode_direct_selection_body_into_transition_v2(value, transition, &mut data[4..])
+    encode_direct_selection_body_into_transition_v3(value, transition, &mut data[4..])
         .map_err(map_direct_error_v2)
 }
 
@@ -4513,7 +4513,7 @@ fn write_direct_reservation_v2(
     account: &AccountInfo<'_>,
     bump: u8,
     value: DirectReservationV1,
-    transition: &AuthenticatedDirectRootTransitionV2,
+    transition: &AuthenticatedDirectRootTransitionV3,
 ) -> Outcome<()> {
     let mut data = account
         .try_borrow_mut_data()
@@ -4525,7 +4525,7 @@ fn write_direct_reservation_v2(
         DIRECT_RESERVATION_BODY_BYTES_V1,
     )?;
     require(observed_bump == bump, ClutchError::MismatchedState)?;
-    encode_direct_reservation_body_into_transition_v2(value, transition, &mut data[4..])
+    encode_direct_reservation_body_into_transition_v3(value, transition, &mut data[4..])
         .map_err(map_direct_error_v2)
 }
 
@@ -4533,7 +4533,7 @@ fn write_fresh_direct_reservation_v2(
     account: &AccountInfo<'_>,
     bump: u8,
     value: DirectReservationV1,
-    transition: &AuthenticatedDirectRootTransitionV2,
+    transition: &AuthenticatedDirectRootTransitionV3,
 ) -> Outcome<()> {
     require(
         account.is_writable
@@ -4548,7 +4548,7 @@ fn write_fresh_direct_reservation_v2(
     data[1] = DIRECT_RESERVATION_ACCOUNT_VERSION;
     data[2] = bump;
     data[3] = 0;
-    encode_direct_reservation_body_into_transition_v2(value, transition, &mut data[4..])
+    encode_direct_reservation_body_into_transition_v3(value, transition, &mut data[4..])
         .map_err(map_direct_error_v2)
 }
 
@@ -4805,7 +4805,7 @@ mod tests {
 
     #[test]
     fn current_action_group_has_exact_frame_bounds() {
-        assert_eq!(DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V2, 2_502);
+        assert_eq!(DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3, 2_502);
         assert_eq!(DIRECT_SELECTION_ACCOUNT_BYTES, 1_629);
         assert_eq!(DIRECT_ACTION_REPLAY_ACCOUNT_BYTES, 394);
         assert_eq!(DIRECT_RESERVATION_ACCOUNT_BYTES, 473);
@@ -4818,7 +4818,7 @@ mod tests {
 
     #[test]
     fn reservation_action_frames_are_structurally_hostile() {
-        // Action 2 derives the sole optional peer from b1/v2's live count;
+        // Action 2 derives the sole optional peer from b1/v3's live count;
         // action 3 has no caller count or refund selector.
         for live_reservations in 0usize..=1 {
             let action_2_accounts = DIRECT_ADMIT_ORDER_FIXED_ACCOUNTS_V2
@@ -4919,7 +4919,7 @@ mod tests {
             .next()
             .expect("bounded composer body");
         let root_postwrite = body
-            .find("write_direct_market_root_v2")
+            .find("write_direct_market_root_v3")
             .expect("terminal root postwrite");
         let manifest_retirement = body
             .find("retire_product_direct_candidate_allocation_v2")

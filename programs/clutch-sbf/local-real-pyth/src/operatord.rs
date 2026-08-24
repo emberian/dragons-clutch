@@ -24,10 +24,10 @@ use clutch_solana_layout::registry::{
     GENERAL_V2_FAMILY_TAG, GENERAL_V2_FAMILY_VERSION, RECOVERY_FAMILY_TAG,
     RECOVERY_FAMILY_VERSION, SOURCE_SERIES_FAMILY_TAG, SOURCE_SERIES_FAMILY_VERSION,
 };
-use clutch_direct_market_runtime::codec_v2::{
-    authenticate_direct_root_transition_body_v2,
-    decode_direct_action_replay_body_for_transition_v2,
-    decode_direct_selection_body_for_transition_v2,
+use clutch_direct_market_runtime::codec_v3::{
+    authenticate_direct_root_transition_body_v3,
+    decode_direct_action_replay_body_for_transition_v3,
+    decode_direct_selection_body_for_transition_v3,
 };
 use clutch_direct_market_runtime::lifecycle_v2::DirectRootReplayTransitionV2;
 use clutch_direct_market_runtime::selection_v1::DirectSelectionPhaseV1;
@@ -42,7 +42,7 @@ use clutch_liveness::{
 use clutch_solana_layout::direct_market_v1::{
     DirectActionReplayAccountV1, DirectSelectionAccountV1,
 };
-use clutch_solana_layout::direct_market_v2::DirectMarketRootAccountV2;
+use clutch_solana_layout::direct_market_v3::DirectMarketRootAccountV3;
 use clutch_solana_layout::source_series::account_contract_v2;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -116,7 +116,7 @@ impl ResumableKeeperSelector {
         let accounts = index.current_accounts(commitment);
         let frontier = KeeperFrontier::from_accounts(&accounts);
         for &version in &accounts {
-            let hint = if version.projection.kind == CanonicalAccountKind::DirectMarketRootV2 {
+            let hint = if version.projection.kind == CanonicalAccountKind::DirectMarketRootV3 {
                 current_direct_candidate_hint_v2(&accounts, version, commitment)?
             } else {
                 version.projection.keeper_hint
@@ -212,7 +212,7 @@ fn dependency_versions<'a>(
                 // Current Direct dependencies are the exact b1/b2/b3 plus
                 // its bound policy and Candidate row selected above. Do not
                 // widen this set through the generic MarketInstance scope.
-                CanonicalAccountKind::DirectMarketRootV2 => false,
+                CanonicalAccountKind::DirectMarketRootV3 => false,
                 CanonicalAccountKind::PositionV3 => {
                     candidate.projection.kind == CanonicalAccountKind::ReplayV3
                         && candidate.projection.primary_binding == Some(driver_address)
@@ -234,13 +234,13 @@ fn direct_candidate_dependency_v2(
     driver: &IndexedAccountVersion,
     candidate: &IndexedAccountVersion,
 ) -> bool {
-    if driver.projection.kind != CanonicalAccountKind::DirectMarketRootV2 {
+    if driver.projection.kind != CanonicalAccountKind::DirectMarketRootV3 {
         return false;
     }
-    let Ok(frame) = DirectMarketRootAccountV2::decode(&driver.account.data) else {
+    let Ok(frame) = DirectMarketRootAccountV3::decode(&driver.account.data) else {
         return false;
     };
-    let Ok(root) = authenticate_direct_root_transition_body_v2(
+    let Ok(root) = authenticate_direct_root_transition_body_v3(
         frame.semantic_body(),
         &DirectOperatorIndexSha,
     ) else {
@@ -254,7 +254,7 @@ fn direct_candidate_dependency_v2(
         || address == binding.candidate_account
 }
 
-/// Derive the current action-5..12 frontier from exact b1/v2+b2+b3 state.
+/// Derive the current action-5..12 frontier from exact b1/v3+b2+b3 state.
 /// A missed-freeze action 10 is the only partition with no existing b2. The
 /// index never treats its hint as execution authority; the action-specific
 /// material constructor hostile-reopens the same bytes and Clock again.
@@ -270,9 +270,9 @@ fn current_direct_candidate_hint_v2(
     {
         return Ok(None);
     }
-    let frame = DirectMarketRootAccountV2::decode(&driver.account.data)
+    let frame = DirectMarketRootAccountV3::decode(&driver.account.data)
         .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
-    let root = authenticate_direct_root_transition_body_v2(
+    let root = authenticate_direct_root_transition_body_v3(
         frame.semantic_body(),
         &DirectOperatorIndexSha,
     )
@@ -288,7 +288,7 @@ fn current_direct_candidate_hint_v2(
             .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
     let replay_frame = DirectActionReplayAccountV1::decode(replay_bytes)
         .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
-    let replay = decode_direct_action_replay_body_for_transition_v2(
+    let replay = decode_direct_action_replay_body_for_transition_v3(
         replay_frame.semantic_body(),
         &root,
     )
@@ -345,7 +345,7 @@ fn current_direct_candidate_hint_v2(
             .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
     let selection_frame = DirectSelectionAccountV1::decode(selection_bytes)
         .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
-    let selection = decode_direct_selection_body_for_transition_v2(
+    let selection = decode_direct_selection_body_for_transition_v3(
         selection_frame.semantic_body(),
         state.root(),
     )

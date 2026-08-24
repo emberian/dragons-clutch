@@ -592,7 +592,7 @@ fn compose_current_successful_failure_begin_v2<'next>(
             && work_profile_id.bytes() == policy.interval_consensus_profile_id.bytes(),
         ClutchError::MismatchedState,
     )?;
-    require_exact_successful_source_join_current_v2(
+    require_exact_successful_source_join_current_v3(
         source.join(),
         source.handoff(),
         link_binding,
@@ -868,7 +868,7 @@ fn reconstruct_exact_action10_source(
     }
 }
 
-pub(crate) fn require_exact_successful_source_join_current_v2(
+pub(crate) fn require_exact_successful_source_join_current_v3(
     source_join: clutch_source_plane_v3_runtime::SourcePolicyHandoffJoinV1,
     source_success: clutch_source_plane_v3_runtime::SuccessfulEvaluationHandoffV1,
     link: clutch_product_series::SeriesMarketLinkBindingV2,
@@ -1001,7 +1001,7 @@ mod adversarial_source_contract_tests {
     fn successful_join_keeps_occurrence_identity_separate_from_pre_root_receipt() {
         let source = include_str!("failure_market_action10_current.rs");
         let join = source
-            .split("fn require_exact_successful_source_join_current_v2")
+            .split("fn require_exact_successful_source_join_current_v3")
             .nth(1)
             .and_then(|value| value.split("fn require_current_source_authority").next())
             .expect("current successful Source join");

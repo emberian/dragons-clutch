@@ -20,7 +20,7 @@ use crate::instructions::failure_market_runtime::{
     AuthenticatedFailureMarketRuntimeSessionWriteV1, FailureMarketRuntimeSessionWriteFactsV1,
 };
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
-use crate::instructions::failure_market_action10_current::require_exact_successful_source_join_current_v2;
+use crate::instructions::failure_market_action10_current::require_exact_successful_source_join_current_v3;
 use crate::instructions::product_failure_begin::require_exact_resolved_edge_policy_v1;
 use crate::instructions::product_failure_begin_current::AuthenticatedProductFailureBeginScheduleV2;
 use crate::instructions::product_series_current::{
@@ -394,7 +394,7 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
                 == root_binding.market_failure_policy_binding_id.bytes(),
         ClutchError::MismatchedState,
     )?;
-    require_exact_successful_source_join_current_v2(
+    require_exact_successful_source_join_current_v3(
         source_join,
         source_success,
         link_binding,

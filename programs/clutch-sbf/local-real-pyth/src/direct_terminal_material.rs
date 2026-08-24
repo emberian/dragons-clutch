@@ -1,6 +1,6 @@
 //! Chain-derived unsigned material for current Direct actions 9 through 12.
 //!
-//! Every account suffix is derived from one finalized b1/v2 root, its b3
+//! Every account suffix is derived from one finalized b1/v3 root, its b3
 //! replay, and either its authenticated b2 Selection or the unique fresh b2
 //! PDA used by the missed-freeze action-10 partition. Browser inputs cannot
 //! choose a terminal reason, fee policy, endpoint, refund recipient, liveness
@@ -29,9 +29,9 @@ use clutch_batch_policy_identity::{
     },
 };
 use clutch_client_contract::direct_market::DirectMarketClientPayloadV1;
-use clutch_direct_market_runtime::codec_v2::{
-    decode_direct_reservation_body_for_transition_v2,
-    AuthenticatedDirectRootTransitionV2,
+use clutch_direct_market_runtime::codec_v3::{
+    decode_direct_reservation_body_for_transition_v3,
+    AuthenticatedDirectRootTransitionV3,
 };
 use clutch_direct_market_runtime::lifecycle_v2::{
     derive_direct_candidate_bond_refund_shape_v2,
@@ -164,7 +164,7 @@ pub struct DirectMissedFreezeSnapshotV2<'a> {
     pub system_program: &'a ObservedRpcAccount,
     pub rent_sysvar: &'a ObservedRpcAccount,
     pub clock: &'a ObservedRpcAccount,
-    pub compiler_bundle_v6: &'a ObservedRpcAccount,
+    pub compiler_bundle_v7: &'a ObservedRpcAccount,
     pub native_claim_basis: &'a ObservedRpcAccount,
     pub price_measure_policy: &'a ObservedRpcAccount,
     pub market_genesis_v2: &'a ObservedRpcAccount,
@@ -180,7 +180,7 @@ pub struct DirectMissedFreezeSnapshotV2<'a> {
     pub liveness: DirectTerminalLivenessSnapshotV2<'a>,
 }
 
-/// Exhaustive current terminal branch. The variant is checked against b1/v2
+/// Exhaustive current terminal branch. The variant is checked against b1/v3
 /// phase and Clock; it is not serialized into the Direct payload.
 #[derive(Clone, Copy, Debug)]
 pub enum DirectTerminalSnapshotV2<'a> {
@@ -240,7 +240,7 @@ impl DirectTerminalActionMaterialV2 {
 }
 
 /// Derive the next current action-9..12 transaction solely from finalized
-/// b1/v2 descendants and immutable General/Product observations.
+/// b1/v3 descendants and immutable General/Product observations.
 #[allow(clippy::too_many_arguments)]
 pub fn construct_next_direct_terminal_material_v2(
     release: &IndexedProgramRelease,
@@ -486,7 +486,7 @@ fn construct_missed_freeze(
         (snapshot.system_program, "system-program", false, false),
         (snapshot.rent_sysvar, "rent-sysvar", false, false),
         (snapshot.clock, "clock-sysvar", false, false),
-        (snapshot.compiler_bundle_v6, "compiler-bundle-v6", false, false),
+        (snapshot.compiler_bundle_v7, "compiler-bundle-v6", false, false),
         (snapshot.native_claim_basis, "native-claim-basis", false, false),
         (snapshot.price_measure_policy, "price-measure-policy", false, false),
         (snapshot.market_genesis_v2, "market-genesis-v2", false, false),
@@ -594,7 +594,7 @@ fn derive_existing_action(
 
 fn authenticate_market_graph(
     release: &IndexedProgramRelease,
-    root: &AuthenticatedDirectRootTransitionV2,
+    root: &AuthenticatedDirectRootTransitionV3,
     market: DirectTerminalMarketSnapshotV2<'_>,
 ) -> Result<Address, CanonicalActionMaterialErrorV1> {
     for account in [
@@ -772,7 +772,7 @@ impl DecodedRootAddressV2 for DecodedDirectSnapshotV1 {
 
 fn authenticate_open_endpoints(
     release: &IndexedProgramRelease,
-    root: &AuthenticatedDirectRootTransitionV2,
+    root: &AuthenticatedDirectRootTransitionV3,
     root_account: &ObservedRpcAccount,
     supplied: [Option<DirectTerminalEndpointSnapshotV2<'_>>; 2],
 ) -> Result<[Option<DirectReservationV1>; 2], CanonicalActionMaterialErrorV1> {
@@ -807,7 +807,7 @@ fn authenticate_open_endpoints(
 
 fn authenticate_reservation(
     release: &IndexedProgramRelease,
-    root: &AuthenticatedDirectRootTransitionV2,
+    root: &AuthenticatedDirectRootTransitionV3,
     root_account: Address,
     endpoint: DirectTerminalEndpointSnapshotV2<'_>,
 ) -> Result<DirectReservationV1, CanonicalActionMaterialErrorV1> {
@@ -822,7 +822,7 @@ fn authenticate_reservation(
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
     let frame = DirectReservationAccountV1::decode(bytes)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
-    let reservation = decode_direct_reservation_body_for_transition_v2(
+    let reservation = decode_direct_reservation_body_for_transition_v3(
         frame.semantic_body(),
         root,
     ).map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
@@ -845,7 +845,7 @@ fn authenticate_reservation(
 
 fn authenticate_position_replay(
     release: &IndexedProgramRelease,
-    root: &AuthenticatedDirectRootTransitionV2,
+    root: &AuthenticatedDirectRootTransitionV3,
     reservation: DirectReservationV1,
     endpoint: DirectTerminalEndpointSnapshotV2<'_>,
 ) -> Result<(), CanonicalActionMaterialErrorV1> {
@@ -861,7 +861,7 @@ fn authenticate_position_replay(
 
 fn authenticate_general_position_replay_projection(
     release: &IndexedProgramRelease,
-    root: &AuthenticatedDirectRootTransitionV2,
+    root: &AuthenticatedDirectRootTransitionV3,
     owner: [u8; 32],
     generation: u64,
     position_account: &ObservedRpcAccount,
@@ -987,7 +987,7 @@ struct AuthenticatedDirectTerminalFeeV2 {
 
 fn authenticate_fee(
     release: &IndexedProgramRelease,
-    root: &AuthenticatedDirectRootTransitionV2,
+    root: &AuthenticatedDirectRootTransitionV3,
     selection: DirectSelectionV1,
     reservations: [Option<DirectReservationV1>; 2],
     fee: DirectFeeSettlementSnapshotV2<'_>,
@@ -1114,7 +1114,7 @@ fn authenticate_fee(
 
 fn authenticate_liveness(
     release: &IndexedProgramRelease,
-    root: &AuthenticatedDirectRootTransitionV2,
+    root: &AuthenticatedDirectRootTransitionV3,
     replay: DirectActionReplayV1,
     value: DirectTerminalLivenessSnapshotV2<'_>,
 ) -> Result<u64, CanonicalActionMaterialErrorV1> {
@@ -1314,7 +1314,7 @@ fn authenticate_missed_aliases(
         snapshot.system_program.address,
         snapshot.rent_sysvar.address,
         snapshot.clock.address,
-        snapshot.compiler_bundle_v6.address,
+        snapshot.compiler_bundle_v7.address,
         snapshot.native_claim_basis.address,
         snapshot.price_measure_policy.address,
         snapshot.market_genesis_v2.address,
@@ -1405,7 +1405,7 @@ fn authenticate_terminal_cursor(
     release: &IndexedProgramRelease,
     selection: &KeeperActionSelection,
     freshness: ActionFreshnessBoundaryV1,
-    root: &AuthenticatedDirectRootTransitionV2,
+    root: &AuthenticatedDirectRootTransitionV3,
     sequence: u64,
     action: DirectMarketAction,
 ) -> Result<(), CanonicalActionMaterialErrorV1> {
@@ -1446,7 +1446,7 @@ fn authenticate_terminal_cursor(
 fn authenticate_fresh_selection(
     release: &IndexedProgramRelease,
     snapshot: DirectMissedFreezeSnapshotV2<'_>,
-    root: &AuthenticatedDirectRootTransitionV2,
+    root: &AuthenticatedDirectRootTransitionV3,
 ) -> Result<(), CanonicalActionMaterialErrorV1> {
     let expected = pda(
         release.program_id,
@@ -1467,11 +1467,11 @@ fn authenticate_fresh_selection(
 
 fn authenticate_missed_price_graph(
     release: &IndexedProgramRelease,
-    root: &AuthenticatedDirectRootTransitionV2,
+    root: &AuthenticatedDirectRootTransitionV3,
     snapshot: DirectMissedFreezeSnapshotV2<'_>,
 ) -> Result<(), CanonicalActionMaterialErrorV1> {
     for account in [
-        snapshot.compiler_bundle_v6,
+        snapshot.compiler_bundle_v7,
         snapshot.native_claim_basis,
         snapshot.price_measure_policy,
         snapshot.market_genesis_v2,
@@ -1480,15 +1480,15 @@ fn authenticate_missed_price_graph(
     ] {
         require_program_account(release, account)?;
     }
-    let bundle_id = content_id::<clutch_product_series::CompiledProductSeriesBundleV6>(
-        snapshot.compiler_bundle_v6,
-        ArtifactKind::CompiledProductSeriesBundleV6,
+    let bundle_id = content_id::<clutch_product_series::CompiledProductSeriesBundleV7>(
+        snapshot.compiler_bundle_v7,
+        ArtifactKind::CompiledProductSeriesBundleV7,
     )?;
-    if bundle_id != root.compiler_bundle_v6_id() {
+    if bundle_id != root.compiler_bundle_v7_id() {
         return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
     }
-    let bundle = clutch_product_series::CompiledProductSeriesBundleV6::decode(
-        &snapshot.compiler_bundle_v6.data,
+    let bundle = clutch_product_series::CompiledProductSeriesBundleV7::decode(
+        &snapshot.compiler_bundle_v7.data,
     ).map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
     if content_id::<clutch_product_series::NativeClaimBasisV1>(
         snapshot.native_claim_basis,
@@ -1548,17 +1548,17 @@ fn decode_open_root_replay(
 ) -> Result<DirectRootReplayTransitionV2, CanonicalActionMaterialErrorV1> {
     require_program_account(release, root_account)?;
     require_program_account(release, replay_account)?;
-    let root_frame = clutch_solana_layout::direct_market_v2::DirectMarketRootAccountV2::decode(
+    let root_frame = clutch_solana_layout::direct_market_v3::DirectMarketRootAccountV3::decode(
         &root_account.data,
     ).map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
-    let root = clutch_direct_market_runtime::codec_v2::authenticate_direct_root_transition_body_v2(
+    let root = clutch_direct_market_runtime::codec_v3::authenticate_direct_root_transition_body_v3(
         root_frame.semantic_body(),
         &OperatorSha256V1,
     ).map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
     let generation = root.generation().to_le_bytes();
     let expected_root = pda(
         release.program_id,
-        &[b"dc:direct-market-root:v2", &root.market_instance_id(), &generation],
+        &[b"dc:direct-market-root:v3", &root.market_instance_id(), &generation],
     );
     if root_account.address != expected_root.0
         || root_frame.bump() != expected_root.1
@@ -1572,7 +1572,7 @@ fn decode_open_root_replay(
     let replay_frame = clutch_solana_layout::direct_market_v1::DirectActionReplayAccountV1::decode(
         replay_bytes,
     ).map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
-    let replay = clutch_direct_market_runtime::codec_v2::decode_direct_action_replay_body_for_transition_v2(
+    let replay = clutch_direct_market_runtime::codec_v3::decode_direct_action_replay_body_for_transition_v3(
         replay_frame.semantic_body(),
         &root,
     ).map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
@@ -1801,7 +1801,7 @@ fn authenticate_missed_observations(
         value.system_program,
         value.rent_sysvar,
         value.clock,
-        value.compiler_bundle_v6,
+        value.compiler_bundle_v7,
         value.native_claim_basis,
         value.price_measure_policy,
         value.market_genesis_v2,
@@ -1917,7 +1917,7 @@ impl ProductContentIdentityV2 for MarketGenesisProfileV2 {
     }
 }
 
-impl ProductContentIdentityV2 for clutch_product_series::CompiledProductSeriesBundleV6 {
+impl ProductContentIdentityV2 for clutch_product_series::CompiledProductSeriesBundleV7 {
     fn content_identity(&self) -> Result<[u8; 32], CanonicalActionMaterialErrorV1> {
         self.id().map(|value| value.content_id().bytes())
             .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)
