@@ -15,10 +15,18 @@ use crate::instructions::failure_market_admission::{
 use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, SYSTEM_PROGRAM_ID,
 };
+use crate::instructions::failure_market_foundation_v4::{
+    authenticate_prefunded_failure_destination_v4, finish_failure_foundation_postwrite_v4,
+    AuthenticatedFailureFoundationPostwriteV4,
+};
+use crate::instructions::product_market_lifecycle_v3_current::{
+    AuthenticatedMarketLifecycleRootV3, AuthenticatedProductMarketFoundationDebitV4,
+};
 use crate::seeds;
 use clutch_failure_policy_runtime::market_policy_v1::FailureMarketAccountIdV1;
 use clutch_failure_policy_runtime::market_runtime_v1::{
     admit_failure_market_runtime_v1, AuthenticatedFailureMarketRuntimeAdmissionV1,
+    FailureMarketRuntimeAdmissionFactsV1,
     FailureMarketRuntimeAdmissionReceiptV1, FailureMarketRuntimeRootFundingFactsV1,
     FailureMarketSourceFailureTransitionPlanV2,
     FailureMarketSourceFailureTransitionReceiptIdV2,
@@ -30,7 +38,9 @@ use clutch_failure_policy_runtime::market_runtime_v1::{
     FailureMarketSessionTransitionReceiptIdV1, FailureMarketSessionTransitionReceiptIdV3,
     FAILURE_MARKET_RUNTIME_BYTES_V1,
 };
-use clutch_product_series::ContentId as ProductContentId;
+use clutch_product_series::{
+    ContentId as ProductContentId, MarketFoundationSlotV4,
+};
 use clutch_solana_layout::failure_recovery::{
     FailureMarketRuntimeRootAccountV1, FAILURE_MARKET_RUNTIME_BODY_BYTES_V1,
     FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_BYTES_V1,
@@ -53,6 +63,46 @@ const FAILURE_MARKET_RUNTIME_SOURCE_FAILURE_POSTWRITE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/failure-market-runtime-source-failure-postwrite/v2\0";
 const FAILURE_MARKET_RUNTIME_SOURCE_FAILURE_POSTWRITE_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/failure-market-runtime-source-failure-postwrite/v4\0";
+const FAILURE_RUNTIME_FOUNDATION_AUTHENTICATION_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/sbf/failure-runtime-foundation-authentication/v4\0";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProductFailureMarketRuntimeFoundationV4 {
+    expected_policy_binding_id: clutch_failure_policy_runtime::FailurePolicyBindingId,
+    expected_market_instance_id: clutch_product_series::MarketInstanceV2Id,
+    expected_generation: u64,
+    expected_admission_state_id:
+        clutch_failure_policy_runtime::market_policy_v1::FailureMarketAdmissionStateIdV1,
+    expected_runtime_account_id: FailureMarketAccountIdV1,
+    expected_foundation_receipt_id: ProductContentId,
+    expected_root_funding: FailureMarketRuntimeRootFundingFactsV1,
+    expected_recovery_funding_receipt_id:
+        clutch_failure_policy_runtime::market_policy_v1::FailureMarketRecoveryFundingReceiptIdV1,
+}
+
+impl AuthenticatedFailureMarketRuntimeAdmissionV1
+    for ProductFailureMarketRuntimeFoundationV4
+{
+    fn authenticate_failure_market_runtime_admission(
+        &self,
+        expected: FailureMarketRuntimeAdmissionFactsV1,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        if expected.failure_policy_binding_id != self.expected_policy_binding_id
+            || expected.market_instance_id != self.expected_market_instance_id
+            || expected.generation != self.expected_generation
+            || expected.admission_state_id != self.expected_admission_state_id
+            || expected.runtime_account_id != self.expected_runtime_account_id
+            || expected.foundation_receipt_id != self.expected_foundation_receipt_id
+            || expected.root_funding != self.expected_root_funding
+            || expected.recovery_funding_receipt_id
+                != self.expected_recovery_funding_receipt_id
+            || expected.runtime_state_commitment.bytes() == [0; 32]
+        {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
+    }
+}
 
 /// Exact authenticated mutable market-scoped Failure runtime root.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -403,6 +453,140 @@ where
         root,
         admission_receipt,
     })
+}
+
+/// Consume Product's current slot-6 debit and persist the distinct shared
+/// Failure runtime. The semantic admission receipt is minted from the exact
+/// debit and hostile admission root, then the physical root is reopened before
+/// Product may advance its foundation cursor.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub(crate) fn create_failure_market_runtime_from_product_foundation_debit_v4<'a>(
+    program_id: &Pubkey,
+    root_before: &AuthenticatedMarketLifecycleRootV3<'_>,
+    debit: AuthenticatedProductMarketFoundationDebitV4,
+    admission_root_account: &AccountInfo<'a>,
+    runtime_root: &AccountInfo<'a>,
+    rent_sysvar: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+) -> Outcome<AuthenticatedFailureFoundationPostwriteV4> {
+    let admission = authenticate_failure_market_root_v3(
+        program_id,
+        admission_root_account,
+        false,
+    )?;
+    let admission_state = admission.state();
+    let policy = admission_state.binding().facts();
+    let rent = read_rent(rent_sysvar)?;
+    let expected_runtime = seeds::failure_external_root_pda(
+        program_id,
+        &policy.market_instance_id.bytes(),
+        policy.generation,
+    )
+    .0;
+    require(
+        root_before.state().phase()
+            == clutch_product_series::MarketLifecyclePhaseV3::Founding
+            && root_before.binding().market_failure_policy_binding_id.bytes()
+                == admission_state.binding().id().bytes()
+            && root_before.binding().market_instance_id == policy.market_instance_id
+            && root_before.binding().generation == policy.generation
+            && root_before.binding_id() == debit.market_binding_id()
+            && root_before.state().capital().rent_refund_owner.bytes()
+                == debit.rent_refund_owner().to_bytes()
+            && root_before.state().capital().neutral_lamport_sink.bytes()
+                == debit.neutral_lamport_sink().to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    authenticate_prefunded_failure_destination_v4(
+        &debit,
+        runtime_root,
+        system_program,
+        &rent,
+        MarketFoundationSlotV4::FailureRuntimeRoot,
+        expected_runtime,
+        FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_BYTES_V1,
+        policy.market_instance_id,
+        policy.generation,
+        debit.neutral_lamport_sink(),
+    )?;
+    let root_funding = FailureMarketRuntimeRootFundingFactsV1 {
+        rent_refund_owner: FailureMarketAccountIdV1::from_bytes(
+            debit.rent_refund_owner().to_bytes(),
+        ),
+        neutral_sink: FailureMarketAccountIdV1::from_bytes(
+            debit.neutral_lamport_sink().to_bytes(),
+        ),
+        rent_principal_lamports: debit.principal_lamports(),
+        donation_floor_lamports: debit.destination_donation_floor_lamports(),
+        observed_balance_lamports: debit.destination_balance_after_lamports(),
+    };
+    let foundation = ProductFailureMarketRuntimeFoundationV4 {
+        expected_policy_binding_id: admission_state.binding().id(),
+        expected_market_instance_id: policy.market_instance_id,
+        expected_generation: policy.generation,
+        expected_admission_state_id: admission_state
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?,
+        expected_runtime_account_id: FailureMarketAccountIdV1::from_bytes(
+            runtime_root.key.to_bytes(),
+        ),
+        expected_foundation_receipt_id: debit.id(),
+        expected_root_funding: root_funding,
+        expected_recovery_funding_receipt_id: admission_state.recovery_funding().id(),
+    };
+    let postimage = initialize_failure_market_runtime_v1(
+        program_id,
+        admission_root_account,
+        runtime_root,
+        rent_sysvar,
+        system_program,
+        admission,
+        &foundation,
+        debit.id(),
+        root_funding,
+    )?;
+    let reopened = authenticate_failure_market_runtime_root_v1(
+        program_id,
+        admission_root_account,
+        runtime_root,
+        admission,
+        true,
+    )?;
+    require(
+        reopened == postimage.root()
+            && reopened.state_commitment()
+                == postimage.admission_receipt().facts().runtime_state_commitment
+            && postimage.admission_receipt().facts().foundation_receipt_id == debit.id(),
+        ClutchError::MismatchedState,
+    )?;
+    let data = runtime_root
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let data_id = ProductContentId::from_bytes(solana_sha256_hasher::hashv(&[&data]).to_bytes());
+    drop(data);
+    let authentication_id = ProductContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            FAILURE_RUNTIME_FOUNDATION_AUTHENTICATION_DOMAIN_V4,
+            program_id.as_ref(),
+            runtime_root.key.as_ref(),
+            &data_id.bytes(),
+            &reopened.state_commitment().bytes(),
+            &runtime_root.lamports().to_le_bytes(),
+            &debit.id().bytes(),
+            &debit.foundation_graph_id().bytes(),
+            &debit.foundation_schedule_id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    finish_failure_foundation_postwrite_v4(
+        program_id,
+        debit,
+        runtime_root,
+        MarketFoundationSlotV4::FailureRuntimeRoot,
+        data_id,
+        authentication_id,
+    )
 }
 
 fn initialize_prefunded_failure_market_runtime_root_v1<'a>(
