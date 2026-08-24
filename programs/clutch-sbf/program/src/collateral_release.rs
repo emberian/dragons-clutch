@@ -104,7 +104,10 @@ pub const LOCAL_REAL_LEGACY_SPL_RELEASE_V2: AdapterReleaseV2 = AdapterReleaseV2:
 );
 
 #[cfg(all(
-    feature = "laboratory-fixtures",
+    any(
+        feature = "laboratory-fixtures",
+        feature = "non-production-structured-custody-lab"
+    ),
     feature = "observed-positive-collateral-release-manifest"
 ))]
 compile_error!(
@@ -146,13 +149,18 @@ impl CompiledCollateralReleaseManifestV2 {
     }
 }
 
-#[cfg(feature = "laboratory-fixtures")]
+#[cfg(any(
+    feature = "laboratory-fixtures",
+    feature = "non-production-structured-custody-lab"
+))]
 static COMPILED_COLLATERAL_RELEASES_V2: [AdapterReleaseV2; 2] = [
     LOCAL_REAL_TOKEN_2022_RELEASE_V2,
     LOCAL_REAL_LEGACY_SPL_RELEASE_V2,
 ];
-
-#[cfg(feature = "laboratory-fixtures")]
+#[cfg(any(
+    feature = "laboratory-fixtures",
+    feature = "non-production-structured-custody-lab"
+))]
 static COMPILED_COLLATERAL_RELEASE_MANIFESTS_V2: [CompiledCollateralReleaseManifestV2; 2] = [
     CompiledCollateralReleaseManifestV2 {
         release: LOCAL_REAL_TOKEN_2022_RELEASE_V2,
@@ -172,12 +180,14 @@ static COMPILED_COLLATERAL_RELEASE_MANIFESTS_V2: [CompiledCollateralReleaseManif
 
 #[cfg(all(
     not(feature = "laboratory-fixtures"),
+    not(feature = "non-production-structured-custody-lab"),
     not(feature = "observed-positive-collateral-release-manifest")
 ))]
 static COMPILED_COLLATERAL_RELEASES_V2: [AdapterReleaseV2; 0] = [];
 
 #[cfg(all(
     not(feature = "laboratory-fixtures"),
+    not(feature = "non-production-structured-custody-lab"),
     not(feature = "observed-positive-collateral-release-manifest")
 ))]
 static COMPILED_COLLATERAL_RELEASE_MANIFESTS_V2: [CompiledCollateralReleaseManifestV2; 0] = [];
@@ -208,10 +218,12 @@ const _: () = assert!(ADAPTER_RELEASE_V2_BYTES == 192);
 
 /// Return the closed release catalog compiled into this program.
 ///
-/// The local-real laboratory ELF has binary-pinned Token-2022 and legacy SPL
-/// rows. Default artifacts have no rows. A public/devnet artifact can select
-/// only the separately reviewed observed-positive manifest compiled into that
-/// exact ELF; the checked repository manifest is currently empty.
+/// The local-real laboratory ELFs have binary-pinned Token-2022 and legacy SPL
+/// rows. The Structured custody laboratory selects those runtime rows directly
+/// without compiling fixture-account builders. Default and public-cluster
+/// artifacts have no rows unless that exact ELF selects the separately reviewed
+/// observed-positive manifest. The checked repository manifest is currently
+/// empty and never accepts build-time environment rows.
 pub fn compiled_collateral_catalog_v2() -> Outcome<AdapterCatalogV2> {
     validate_compiled_collateral_release_manifest_v2(
         compiled_collateral_releases_v2(),

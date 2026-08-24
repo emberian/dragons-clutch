@@ -13,10 +13,14 @@ use crate::{put, take, Error, Result, MAX_OUTCOMES};
 /// the future SBF capability; this isolated pure contract does not allocate a
 /// live account by itself.
 pub const DESCRIPTOR_ACCOUNT_TAG: u8 = 0x88;
-/// Structured-claim descriptor account version.
-pub const DESCRIPTOR_ACCOUNT_VERSION: u8 = 1;
-/// Exact descriptor account width frozen by the adapter plan.
-pub const DESCRIPTOR_ACCOUNT_BYTES: usize = 384;
+/// Withdrawn descriptor-v1 account version. It remains decodable only.
+pub const HISTORICAL_DESCRIPTOR_ACCOUNT_VERSION_V1: u8 = 1;
+/// Exact historical descriptor-v1 account width.
+pub const HISTORICAL_DESCRIPTOR_ACCOUNT_BYTES_V1: usize = 384;
+/// Sole future structured-claim descriptor account version.
+pub const DESCRIPTOR_ACCOUNT_VERSION: u8 = 2;
+/// Exact sole-future descriptor-v2 account width.
+pub const DESCRIPTOR_ACCOUNT_BYTES: usize = 449;
 
 /// Descriptor lifecycle. Supply and backing remain outside this account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,9 +40,16 @@ impl DescriptorStateV1 {
             _ => Err(Error::InvalidState),
         }
     }
+
+    const fn byte(self) -> u8 {
+        match self {
+            Self::Active => 0,
+            Self::Retired => 1,
+        }
+    }
 }
 
-/// Exact 384-byte descriptor image.
+/// Exact 449-byte descriptor-v2 image.
 ///
 /// The wrapper program is the account owner and PDA derivation program, so it
 /// is intentionally reconstructed from authenticated account context rather
@@ -46,12 +57,12 @@ impl DescriptorStateV1 {
 /// likewise reconstructed from authenticated Market/Terms state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
-pub struct StructuredClaimDescriptorV1 {
+pub struct StructuredClaimDescriptorV2 {
     /// Must equal [`DESCRIPTOR_ACCOUNT_TAG`].
     pub tag: u8,
     /// Must equal [`DESCRIPTOR_ACCOUNT_VERSION`].
     pub version: u8,
-    /// Reserved flags; version one requires zero.
+    /// Reserved flags; version two requires zero.
     pub flags: u16,
     /// Exact base Dragon's Clutch program.
     pub base_program: [u8; 32],
@@ -73,6 +84,10 @@ pub struct StructuredClaimDescriptorV1 {
     pub market: [u8; 32],
     /// Complete immutable Terms digest.
     pub terms_digest: [u8; 32],
+    /// Exact Series-link-scoped Structured root binding.
+    pub structured_root_id: [u8; 32],
+    /// Exact authenticated wrapper-recipe identity within that root's set.
+    pub wrapper_recipe_id: [u8; 32],
     /// Primitive GCD-one native-Egg coefficient vector.
     pub primitive: [u64; MAX_OUTCOMES],
     /// Active or permanently retired.
@@ -81,11 +96,13 @@ pub struct StructuredClaimDescriptorV1 {
     pub descriptor_bump: u8,
     /// Canonical wrapper-mint PDA bump.
     pub mint_bump: u8,
+    /// Canonical wrapper mint-authority PDA bump.
+    pub mint_authority_bump: u8,
     /// Canonical wrapper-vault-owner PDA bump.
-    pub vault_bump: u8,
+    pub vault_owner_bump: u8,
 }
 
-impl StructuredClaimDescriptorV1 {
+impl StructuredClaimDescriptorV2 {
     /// Encode the exact canonical account image.
     pub fn encode(&self) -> Result<[u8; DESCRIPTOR_ACCOUNT_BYTES]> {
         self.validate_persisted()?;
@@ -116,6 +133,8 @@ impl StructuredClaimDescriptorV1 {
         )?;
         put(&mut output, &mut cursor, &self.market)?;
         put(&mut output, &mut cursor, &self.terms_digest)?;
+        put(&mut output, &mut cursor, &self.structured_root_id)?;
+        put(&mut output, &mut cursor, &self.wrapper_recipe_id)?;
         let mut index = 0_usize;
         while index < MAX_OUTCOMES {
             put(
@@ -125,10 +144,11 @@ impl StructuredClaimDescriptorV1 {
             )?;
             index += 1;
         }
-        put(&mut output, &mut cursor, &[self.state as u8])?;
+        put(&mut output, &mut cursor, &[self.state.byte()])?;
         put(&mut output, &mut cursor, &[self.descriptor_bump])?;
         put(&mut output, &mut cursor, &[self.mint_bump])?;
-        put(&mut output, &mut cursor, &[self.vault_bump])?;
+        put(&mut output, &mut cursor, &[self.mint_authority_bump])?;
+        put(&mut output, &mut cursor, &[self.vault_owner_bump])?;
         if cursor != DESCRIPTOR_ACCOUNT_BYTES {
             return Err(Error::InvalidLength);
         }
@@ -154,6 +174,8 @@ impl StructuredClaimDescriptorV1 {
         let token_2022_deployment_slot = read_u64(input, &mut cursor)?;
         let market = read_key(input, &mut cursor)?;
         let terms_digest = read_key(input, &mut cursor)?;
+        let structured_root_id = read_key(input, &mut cursor)?;
+        let wrapper_recipe_id = read_key(input, &mut cursor)?;
         let mut primitive = [0_u64; MAX_OUTCOMES];
         let mut index = 0_usize;
         while index < MAX_OUTCOMES {
@@ -163,7 +185,8 @@ impl StructuredClaimDescriptorV1 {
         let state = DescriptorStateV1::from_byte(take(input, &mut cursor, 1)?[0])?;
         let descriptor_bump = take(input, &mut cursor, 1)?[0];
         let mint_bump = take(input, &mut cursor, 1)?[0];
-        let vault_bump = take(input, &mut cursor, 1)?[0];
+        let mint_authority_bump = take(input, &mut cursor, 1)?[0];
+        let vault_owner_bump = take(input, &mut cursor, 1)?[0];
         if cursor != input.len() {
             return Err(Error::InvalidLength);
         }
@@ -181,11 +204,14 @@ impl StructuredClaimDescriptorV1 {
             token_2022_deployment_slot,
             market,
             terms_digest,
+            structured_root_id,
+            wrapper_recipe_id,
             primitive,
             state,
             descriptor_bump,
             mint_bump,
-            vault_bump,
+            mint_authority_bump,
+            vault_owner_bump,
         };
         value.validate_persisted()?;
         Ok(value)
@@ -206,9 +232,14 @@ impl StructuredClaimDescriptorV1 {
             self.token_2022_program,
             self.token_2022_program_data,
             self.market,
+            self.structured_root_id,
+            self.wrapper_recipe_id,
         ];
         require_distinct_nonzero(&keys)?;
-        if self.terms_digest == [0; 32] {
+        if self.terms_digest == [0; 32]
+            || self.terms_digest == self.structured_root_id
+            || self.terms_digest == self.wrapper_recipe_id
+        {
             return Err(Error::InvalidIdentity);
         }
         Ok(())
@@ -262,7 +293,7 @@ impl DescriptorIdentityV1 {
 
 /// Join persisted descriptor bytes to authenticated basis and deployments.
 pub fn reconstruct_descriptor_identity_v1(
-    descriptor: &StructuredClaimDescriptorV1,
+    descriptor: &StructuredClaimDescriptorV2,
     basis: DescriptorBasisV1,
     deployment: DeploymentBinding,
 ) -> Result<DescriptorIdentityV1> {
@@ -307,6 +338,52 @@ pub fn reconstruct_descriptor_identity_v1(
         deployment,
         native_claim_preimage,
     })
+}
+
+/// Decode the withdrawn 384-byte descriptor-v1 shape without promoting it to
+/// a live descriptor authority. Version one stored one bump for two unrelated
+/// PDAs and is therefore never accepted by live construction or mutation.
+pub fn decode_historical_descriptor_v1(input: &[u8]) -> Result<()> {
+    if input.len() != HISTORICAL_DESCRIPTOR_ACCOUNT_BYTES_V1
+        || input[0] != DESCRIPTOR_ACCOUNT_TAG
+        || input[1] != HISTORICAL_DESCRIPTOR_ACCOUNT_VERSION_V1
+    {
+        return Err(Error::InvalidHeader);
+    }
+    if input[2..4] != [0; 2] {
+        return Err(Error::NonCanonicalPadding);
+    }
+    // Decode through the exact old layout sufficiently to retain archival
+    // readability while deliberately minting no typed live capability.
+    let mut cursor = 4_usize;
+    let base_program = read_key(input, &mut cursor)?;
+    let base_program_data = read_key(input, &mut cursor)?;
+    let _ = take(input, &mut cursor, 8)?;
+    let wrapper_program_data = read_key(input, &mut cursor)?;
+    let _ = take(input, &mut cursor, 8)?;
+    let token_2022_program = read_key(input, &mut cursor)?;
+    let token_2022_program_data = read_key(input, &mut cursor)?;
+    let _ = take(input, &mut cursor, 8)?;
+    let market = read_key(input, &mut cursor)?;
+    let terms_digest = read_key(input, &mut cursor)?;
+    let _ = take(input, &mut cursor, 8 * MAX_OUTCOMES)?;
+    let _ = DescriptorStateV1::from_byte(take(input, &mut cursor, 1)?[0])?;
+    let _ = take(input, &mut cursor, 3)?;
+    if cursor != input.len() {
+        return Err(Error::InvalidLength);
+    }
+    require_distinct_nonzero(&[
+        base_program,
+        base_program_data,
+        wrapper_program_data,
+        token_2022_program,
+        token_2022_program_data,
+        market,
+    ])?;
+    if terms_digest == [0; 32] {
+        return Err(Error::InvalidIdentity);
+    }
+    Ok(())
 }
 
 fn require_distinct_nonzero(keys: &[[u8; 32]]) -> Result<()> {
