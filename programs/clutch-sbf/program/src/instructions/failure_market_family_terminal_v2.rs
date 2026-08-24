@@ -30,6 +30,9 @@ use crate::instructions::failure_market_runtime::{
 use crate::instructions::product_series_current::{
     authenticate_market_lifecycle_root_v2, AuthenticatedMarketLifecycleRootV2,
 };
+use crate::instructions::product_market_lifecycle_v3_current::{
+    authenticate_market_lifecycle_root_v3, AuthenticatedMarketLifecycleRootV3,
+};
 use crate::instructions::source_failure_product_release_v1::{
     authenticate_persisted_source_failure_product_release_v3,
     AuthenticatedPersistedSourceFailureProductReleaseV3,
@@ -59,12 +62,14 @@ use clutch_failure_policy_runtime::market_runtime_v1::{
     FailureMarketFamilyTerminalDispositionV2, FailureMarketFamilyTerminalFactsV2,
     FailureMarketFamilyTerminalReceiptV2,
 };
-use clutch_product_series::{ContentId, MarketLifecyclePhaseV2};
+use clutch_product_series::{ContentId, MarketLifecyclePhaseV2, MarketLifecyclePhaseV3};
 use clutch_source_plane_v3::ContentId as SourceContentId;
 use clutch_source_plane_v3_runtime::{
     AuthenticatedSourceRouteV1, SourceFailureProductReleaseDispositionV3,
 };
-use clutch_solana_layout::product_series::MarketLifecycleRootAccountV2;
+use clutch_solana_layout::product_series::{
+    MarketLifecycleRootAccountV2, MarketLifecycleRootAccountV3,
+};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
@@ -1517,8 +1522,129 @@ pub(crate) fn persist_resolved_failure_market_family_v2(
     )
 }
 
+/// Persist the complete Failure terminal tuple against the current Product
+/// RootV3 resolution poststate.
+///
+/// This is the Link-independent half of the current lifecycle. It consumes no
+/// Product link and emits no Product receipt: the later Retiring RootV3
+/// shared-core writer must hostile-reopen the durable Failure tuple through
+/// [`authenticate_failure_market_family_terminal_receipt_v3`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn persist_resolved_failure_market_family_v3(
+    program_id: &Pubkey,
+    market_root_account: &AccountInfo<'_>,
+    admission_root_account: &AccountInfo<'_>,
+    runtime_root_account: &AccountInfo<'_>,
+    interval_cell_account: &AccountInfo<'_>,
+    interval_history_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    resolved_market_root: &AuthenticatedMarketLifecycleRootV3<'_>,
+    admission: AuthenticatedFailureMarketRootV2,
+    recovery_close: AuthenticatedFailureMarketRecoveryClosePostwriteV2,
+    replay_before: AuthenticatedFailureMarketReplayV2,
+    resolved_root_decode: &mut MarketLifecycleRootAccountV3,
+) -> Outcome<AuthenticatedFailureMarketFamilyTerminalPostwriteV2> {
+    require_distinct(&[
+        market_root_account.clone(),
+        admission_root_account.clone(),
+        runtime_root_account.clone(),
+        interval_cell_account.clone(),
+        interval_history_account.clone(),
+        replay_account.clone(),
+    ])?;
+    let policy_binding = admission.state().binding();
+    let policy = policy_binding.facts();
+    let policy_binding_id = policy_binding.id();
+    let live_root = authenticate_market_lifecycle_root_v3(
+        program_id,
+        market_root_account,
+        policy.market_instance_id,
+        policy.generation,
+        true,
+        resolved_root_decode,
+    )?;
+    require(
+        live_root.account() == resolved_market_root.account()
+            && live_root.owner_program() == resolved_market_root.owner_program()
+            && live_root.observed_lamports() == resolved_market_root.observed_lamports()
+            && live_root.is_writable()
+            && resolved_market_root.is_writable()
+            && live_root.data_id() == resolved_market_root.data_id()
+            && live_root.semantic_id() == resolved_market_root.semantic_id()
+            && live_root.binding_id() == resolved_market_root.binding_id()
+            && live_root.authentication_id() == resolved_market_root.authentication_id()
+            && live_root.state() == resolved_market_root.state(),
+        ClutchError::MismatchedState,
+    )?;
+    let root = live_root.state();
+    let binding = live_root.binding();
+    let close = recovery_close.close().facts();
+    require(
+        live_root.account() == *market_root_account.key
+            && live_root.owner_program() == *program_id
+            && root.phase() == MarketLifecyclePhaseV3::Active
+            && binding.market_instance_id == policy.market_instance_id
+            && binding.generation == policy.generation
+            && binding.market_failure_policy_binding_id.bytes() == policy_binding_id.bytes()
+            && binding.recovery_state_id.bytes() == policy.recovery_state_id.bytes()
+            && binding.failure_liveness_policy_id.bytes() == policy.liveness_policy_id.bytes()
+            && binding.failure_liveness_quote_schedule_id.bytes()
+                == policy.recovery_quote_schedule_id.bytes()
+            && root.resolution_semantic_id() != ContentId::ZERO
+            && root.resolution_data_id() != ContentId::ZERO
+            && root.resolution_semantic_id() != root.resolution_data_id()
+            && root.resolution_activation_receipt_id()
+                == close.resolution_activation_receipt_id
+            && root.failure_terminal_receipt_id() == ContentId::ZERO,
+        ClutchError::MismatchedState,
+    )?;
+    write_failure_market_family_terminal_v2(
+        program_id,
+        admission_root_account,
+        runtime_root_account,
+        interval_cell_account,
+        interval_history_account,
+        replay_account,
+        admission,
+        recovery_close,
+        replay_before,
+    )
+}
+
 #[cfg(test)]
 mod adversarial_family_terminal_tests {
+    #[test]
+    fn current_terminal_persistence_uses_only_live_root_v3_authority() {
+        let source = include_str!("failure_market_family_terminal_v2.rs");
+        let current = source
+            .split("pub(crate) fn persist_resolved_failure_market_family_v3")
+            .nth(1)
+            .and_then(|value| value.split("#[cfg(test)]").next())
+            .expect("current RootV3 terminal persistence");
+        for predicate in [
+            "resolved_market_root: &AuthenticatedMarketLifecycleRootV3",
+            "resolved_root_decode: &mut MarketLifecycleRootAccountV3",
+            "authenticate_market_lifecycle_root_v3(",
+            "live_root.authentication_id() == resolved_market_root.authentication_id()",
+            "live_root.state() == resolved_market_root.state()",
+            "MarketLifecyclePhaseV3::Active",
+            "binding.market_failure_policy_binding_id.bytes() == policy_binding_id.bytes()",
+            "binding.recovery_state_id.bytes() == policy.recovery_state_id.bytes()",
+            "binding.failure_liveness_policy_id.bytes() == policy.liveness_policy_id.bytes()",
+            "binding.failure_liveness_quote_schedule_id.bytes()",
+            "root.resolution_activation_receipt_id()",
+            "root.failure_terminal_receipt_id() == ContentId::ZERO",
+            "write_failure_market_family_terminal_v2(",
+        ] {
+            assert!(current.contains(predicate), "missing RootV3 guard {predicate}");
+        }
+        assert!(!current.contains("AuthenticatedMarketLifecycleRootV2"));
+        assert!(!current.contains("MarketLifecycleRootAccountV2"));
+        assert!(!current.contains("AuthenticatedSeriesMarketLinkV2"));
+        assert!(!current.contains("AuthenticatedSeriesMarketLinkV3"));
+        assert!(!current.contains("record_failure_shared_core_terminal"));
+    }
+
     #[test]
     fn product_v3_terminal_receipt_is_move_only_and_failure_owned() {
         let source = include_str!("failure_market_family_terminal_v2.rs");
