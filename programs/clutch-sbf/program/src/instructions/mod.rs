@@ -158,6 +158,8 @@ pub mod general_v2_settlement_root;
     feature = "profile-successor-chain-attached-dev"
 ))]
 pub mod general_v2_settlement_producer_v5;
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+pub(crate) mod general_market_foundation_v4;
 /// Ordered indexed-root terminal lifecycle.
 #[cfg(any(
     feature = "profile-non-production-general-v2-empty-book-identity-lab",
