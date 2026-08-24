@@ -195,6 +195,8 @@ pub mod product_market;
 pub(crate) mod product_market_foundation_init;
 /// Immutable current five-family mask and namespace-anchor authority.
 pub(crate) mod product_market_family_capability_current;
+/// Exact derived 50-slot current Product foundation graph authority.
+pub(crate) mod product_market_foundation_graph_v4_current;
 /// Hostile-only current RootV3/LinkV3 account authentication.
 pub(crate) mod product_market_lifecycle_v3_current;
 /// Persistent current ProductReplayAnchor generation and stage owner.
