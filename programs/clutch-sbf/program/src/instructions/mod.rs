@@ -131,6 +131,8 @@ pub mod general_v2_unfilled_release_v1;
 pub mod general_v2_fee_v5;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub(crate) mod general_v2_fee_creation_v6;
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub(crate) mod general_v2_fee_terminal_pair_v1;
 /// Staged action-24 rent-owned V5 materializer; route remains disabled.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_materialize_v5;
