@@ -157,7 +157,8 @@ pub(crate) mod product_fractional_family;
 pub(crate) mod product_general_family;
 /// Always-compiled Product Market/link account authentication; routes remain capability-gated.
 pub mod product_market;
-#[cfg(feature = "non-production-product-series-lab")]
+/// Always-compiled Product/Series semantic owner; executable routes remain
+/// independently capability-disabled.
 pub mod product_series;
 pub mod resolution_work;
 pub mod series_failure_funding;

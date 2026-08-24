@@ -29,9 +29,9 @@ use crate::instructions::product_artifact::{
 };
 use crate::instructions::product_market::{
     authenticate_series_market_link_v1, retire_and_close_series_market_link_v1,
-    AuthenticatedMarketLifecycleRootV1, AuthenticatedSeriesLinkRetirementAggregatePostwriteV1,
-    AuthenticatedSeriesMarketLinkActivationV1, AuthenticatedSeriesMarketLinkRetirementV1,
-    AuthenticatedSeriesMarketLinkV1, SeriesMarketLinkRetirementPostwriteFactsV1,
+    AuthenticatedMarketLifecycleRootV1, AuthenticatedSeriesMarketLinkActivationV1,
+    AuthenticatedSeriesMarketLinkRetirementV1, AuthenticatedSeriesMarketLinkV1,
+    SeriesMarketLinkRetirementPostwriteFactsV1,
 };
 use crate::instructions::series_failure_funding::{
     mint_series_market_core_funding_receipt_v1, SeriesMarketCoreFundingReceiptV1,
@@ -6610,7 +6610,7 @@ fn mint_series_lifecycle_replay_postwrite_v1(
 
 /// Advance the permanent Series replay only from the exact Product/Funding
 /// completion receipt and the still-live canonical `0xad` postimage.
-pub(crate) fn record_series_lifecycle_admission_v1(
+fn record_series_lifecycle_admission_v1(
     program_id: &Pubkey,
     replay_account: &AccountInfo<'_>,
     replay: AuthenticatedSeriesLifecycleReplayV1,
@@ -6781,7 +6781,7 @@ pub(crate) fn lapse_and_record_series_lifecycle_v1(
 /// canonical link has reached `Retired` and been physically returned to the
 /// System Program; any refusal rolls every prior write and lamport movement
 /// back with the instruction.
-struct SeriesLifecycleLinkRetirementAggregateAuthorityV1<'a, 'info> {
+pub(crate) struct SeriesLifecycleLinkRetirementAggregateAuthorityV1<'a, 'info> {
     program_id: &'a Pubkey,
     replay_account: &'a AccountInfo<'info>,
     replay: AuthenticatedSeriesLifecycleReplayV1,
@@ -6790,10 +6790,8 @@ struct SeriesLifecycleLinkRetirementAggregateAuthorityV1<'a, 'info> {
     accepted: Cell<Option<AuthenticatedSeriesLifecycleReplayPostwriteV1>>,
 }
 
-impl AuthenticatedSeriesLinkRetirementAggregatePostwriteV1
-    for SeriesLifecycleLinkRetirementAggregateAuthorityV1<'_, '_>
-{
-    fn authenticate_series_link_retirement_aggregate_postwrite_v1(
+impl SeriesLifecycleLinkRetirementAggregateAuthorityV1<'_, '_> {
+    pub(crate) fn accept_product_retirement(
         &self,
         facts: SeriesMarketLinkRetirementPostwriteFactsV1,
     ) -> Outcome<ContentId> {
@@ -7423,7 +7421,7 @@ fn complete_series_occurrence_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Siz
 /// `0xaa`/`0xad` receipt. The FundingV2 prestate is hostile-reopened by the
 /// raw writer immediately before mutation and the complete poststate is
 /// hostile-reopened before this receipt is minted.
-pub(crate) fn complete_series_occurrence_from_market_link_v2(
+fn complete_series_occurrence_from_market_link_v2(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
@@ -7524,6 +7522,64 @@ pub(crate) fn complete_series_occurrence_from_market_link_v2(
                 facts.compiler_bundle_id.bytes(),
             ),
         },
+    ))
+}
+
+/// Sole exported completion path for an admitted occurrence. FundingV2 and
+/// the permanent counted replay advance together from the same private Product
+/// link activation; a replay refusal rolls the Funding write back with the
+/// instruction, and neither raw half is callable outside this module.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn complete_and_record_series_lifecycle_admission_v1(
+    program_id: &Pubkey,
+    funding_account: &AccountInfo<'_>,
+    funding: AuthenticatedSeriesFundingAccountV2,
+    replay_account: &AccountInfo<'_>,
+    replay: AuthenticatedSeriesLifecycleReplayV1,
+    link_account: &AccountInfo<'_>,
+    artifacts: &AuthenticatedSeriesArtifactsV4,
+    link_activation: AuthenticatedSeriesMarketLinkActivationV1,
+    rent: &RentParameters,
+) -> Outcome<(
+    AuthenticatedSeriesFundingAccountV2,
+    AuthenticatedSeriesLifecycleReplayV1,
+    AuthenticatedSeriesOccurrenceCompletionV2,
+    AuthenticatedSeriesLifecycleReplayPostwriteV1,
+)> {
+    let (funding_after, completion) = complete_series_occurrence_from_market_link_v2(
+        program_id,
+        funding_account,
+        funding,
+        artifacts,
+        link_activation,
+        rent,
+    )?;
+    let (replay_after, replay_postwrite) = record_series_lifecycle_admission_v1(
+        program_id,
+        replay_account,
+        replay,
+        link_account,
+        completion,
+        rent,
+    )?;
+    require(
+        completion.funding_state_after_id()
+            == funding_after
+                .value()
+                .state
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .content_id()
+            && completion.ordinal() == replay_postwrite.ordinal()
+            && replay_after.account() == replay_postwrite.replay_account()
+            && replay_after.authentication_id() == replay_postwrite.authentication_after_id(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok((
+        funding_after,
+        replay_after,
+        completion,
+        replay_postwrite,
     ))
 }
 
@@ -9575,14 +9631,14 @@ mod series_lifecycle_terminal_postwrite_v1_adversarial_tests {
             .expect("production Product/Series owner");
         assert_eq!(
             series_production
-                .matches("impl AuthenticatedSeriesLinkRetirementAggregatePostwriteV1")
+                .matches("pub(crate) fn accept_product_retirement")
                 .count(),
             1,
         );
         let aggregate = series_production
-            .split("impl AuthenticatedSeriesLinkRetirementAggregatePostwriteV1")
+            .split("pub(crate) fn accept_product_retirement")
             .nth(1)
-            .expect("sole aggregate implementation");
+            .expect("sole concrete aggregate bridge");
         for guard in [
             "product_series_market_link_pda",
             "owner.to_bytes() == SYSTEM_PROGRAM_ID",
@@ -9601,7 +9657,7 @@ mod series_lifecycle_terminal_postwrite_v1_adversarial_tests {
             .expect("single Product link close");
         let physical_close = close.find(".resize(0)").expect("physical close");
         let aggregate_accept = close
-            .find("authenticate_series_link_retirement_aggregate_postwrite_v1")
+            .find("accept_product_retirement")
             .expect("aggregate acceptance");
         assert!(physical_close < aggregate_accept);
     }

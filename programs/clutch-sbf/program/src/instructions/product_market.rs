@@ -13,6 +13,7 @@ use crate::instructions::genesis::{
 use crate::instructions::product_artifact::{
     authenticate_product_artifact_v1, AuthenticatedRegistryCapabilityV3,
 };
+use crate::instructions::product_series::SeriesLifecycleLinkRetirementAggregateAuthorityV1;
 use crate::seeds;
 use clutch_liveness::runtime_adapter_v1::{
     decode_runtime_policy_account_v1, RuntimePersistedAccountViewV1,
@@ -693,17 +694,6 @@ impl SeriesMarketLinkRetirementPostwriteFactsV1 {
     }
     pub(crate) const fn sink_balance_after(self) -> u64 {
         self.sink_balance_after
-    }
-}
-
-/// Default-refusing authority supplied only by a durable counted per-Series
-/// aggregate postwrite. Funding `Closed` alone cannot implement this trait.
-pub(crate) trait AuthenticatedSeriesLinkRetirementAggregatePostwriteV1 {
-    fn authenticate_series_link_retirement_aggregate_postwrite_v1(
-        &self,
-        _facts: SeriesMarketLinkRetirementPostwriteFactsV1,
-    ) -> Outcome<ContentId> {
-        Err(Refusal::Adapter(ClutchError::MismatchedState))
     }
 }
 
@@ -5085,7 +5075,7 @@ fn write_series_market_link_v1<'next>(
 /// boundary prevents a FundingV2 `Closed` projection from standing in for the
 /// missing admitted/retired link partition.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn retire_and_close_series_market_link_v1<'a, A>(
+pub(crate) fn retire_and_close_series_market_link_v1<'a>(
     program_id: &Pubkey,
     root_account: &AccountInfo<'a>,
     root: AuthenticatedMarketLifecycleRootV1<'_>,
@@ -5093,17 +5083,14 @@ pub(crate) fn retire_and_close_series_market_link_v1<'a, A>(
     link: AuthenticatedSeriesMarketLinkV1<'_>,
     refund_owner: &AccountInfo<'a>,
     neutral_lamport_sink: &AccountInfo<'a>,
-    aggregate: &A,
+    aggregate: &SeriesLifecycleLinkRetirementAggregateAuthorityV1<'_, 'a>,
     root_successor_output: &mut MarketLifecycleRootV1,
     link_retiring_output: &mut SeriesMarketLinkV1,
     link_retired_output: &mut SeriesMarketLinkV1,
     root_rebound_output: &mut MarketLifecycleRootAccountV1,
     link_retiring_rebound_output: &mut SeriesMarketLinkAccountV1,
     link_retired_rebound_output: &mut SeriesMarketLinkAccountV1,
-) -> Outcome<AuthenticatedSeriesMarketLinkRetirementV1>
-where
-    A: AuthenticatedSeriesLinkRetirementAggregatePostwriteV1 + ?Sized,
-{
+) -> Outcome<AuthenticatedSeriesMarketLinkRetirementV1> {
     require_distinct(&[
         root_account.clone(),
         link_account.clone(),
@@ -5302,8 +5289,7 @@ where
         ClutchError::MismatchedState,
     )?;
 
-    let aggregate_postwrite_id = aggregate
-        .authenticate_series_link_retirement_aggregate_postwrite_v1(facts)?;
+    let aggregate_postwrite_id = aggregate.accept_product_retirement(facts)?;
     require_live_content_id(aggregate_postwrite_id)?;
     require(
         aggregate_postwrite_id != facts_id
@@ -5989,9 +5975,6 @@ mod adversarial_series_link_retirement_tests {
         }
     }
 
-    struct NoSeriesAggregate;
-    impl AuthenticatedSeriesLinkRetirementAggregatePostwriteV1 for NoSeriesAggregate {}
-
     #[test]
     fn exact_retirement_facts_are_canonical_and_substitution_changes_identity() {
         let exact = facts();
@@ -6034,10 +6017,4 @@ mod adversarial_series_link_retirement_tests {
         assert!(aliased.validate().is_err());
     }
 
-    #[test]
-    fn default_series_aggregate_cannot_close_a_link() {
-        assert!(NoSeriesAggregate
-            .authenticate_series_link_retirement_aggregate_postwrite_v1(facts())
-            .is_err());
-    }
 }
