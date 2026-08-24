@@ -22,6 +22,9 @@ use crate::dealer_terminal_material::DealerTerminalOperatorBatchV1;
 use crate::failure_action11_material::{
     FAILURE_ACTION11_ROLE_LABELS_V1, FAILURE_ACTION11_ROLE_WRITABLE_V1,
 };
+use crate::failure_action13_material::{
+    FAILURE_ACTION13_ROLE_LABELS_V1, FAILURE_ACTION13_ROLE_WRITABLE_V1,
+};
 use crate::rpc_index::{
     public_rpc_endpoint_binding, CanonicalIntentCoordinate, CanonicalIntentVariantV1,
     IndexedProgramRelease, RpcCommitment,
@@ -245,8 +248,13 @@ fn merge_chain_material_cursors(
             WorkflowLane::FailureRecovery => {
                 coordinate.family_tag == RECOVERY_FAMILY_TAG
                     && coordinate.family_version == RECOVERY_FAMILY_VERSION
-                    && coordinate.local_action
-                        == RecoveryAction::AdvanceIntervalConsensus.tag()
+                    && matches!(
+                        RecoveryAction::from_tag(coordinate.local_action),
+                        Some(
+                            RecoveryAction::AdvanceIntervalConsensus
+                                | RecoveryAction::CloseIntervalConsensusWork
+                        )
+                    )
             }
             _ => false,
         };
@@ -285,10 +293,11 @@ fn merge_chain_material_cursors(
             return Err(KeeperSelectionError::IncompleteCanonicalHint);
         }
         if let Some(existing) = cursors.iter().find(|cursor| cursor.cursor == material.cursor()) {
+            let (_, expected_action, _) = coordinate_description(coordinate);
             if material.cursor().lane != WorkflowLane::FailureRecovery
                 || existing.account != material.driver_account()
                 || existing.account_slot != material.driver_account_slot()
-                || existing.action != "advance-failure-interval-consensus"
+                || existing.action != expected_action
             {
                 return Err(KeeperSelectionError::IncompleteCanonicalHint);
             }
@@ -1673,6 +1682,25 @@ fn action_verdict_json(
                 })
             })
             .collect::<Vec<_>>()
+    } else if coordinate.family_tag == RECOVERY_FAMILY_TAG
+        && coordinate.family_version == RECOVERY_FAMILY_VERSION
+        && coordinate.local_action == RecoveryAction::CloseIntervalConsensusWork.tag()
+    {
+        FAILURE_ACTION13_ROLE_LABELS_V1
+            .iter()
+            .zip(FAILURE_ACTION13_ROLE_WRITABLE_V1)
+            .enumerate()
+            .map(|(index, (role, writable))| {
+                json!({
+                    "index": index.to_string(),
+                    "role": role,
+                    "writable": writable,
+                    "signer": false,
+                    "address": null,
+                    "identityDisposition": "unresolved-until-semantic-owner-construction"
+                })
+            })
+            .collect::<Vec<_>>()
     } else {
         source_action(coordinate)
         .map(|action| {
@@ -2082,6 +2110,11 @@ fn action_coordinate(action: &str) -> Option<CanonicalIntentCoordinate> {
             RECOVERY_FAMILY_VERSION,
             RecoveryAction::AdvanceIntervalConsensus.tag(),
         ),
+        "close-failure-interval-consensus-work" => (
+            RECOVERY_FAMILY_TAG,
+            RECOVERY_FAMILY_VERSION,
+            RecoveryAction::CloseIntervalConsensusWork.tag(),
+        ),
         _ => return None,
     };
     Some(CanonicalIntentCoordinate {
@@ -2243,7 +2276,7 @@ fn coordinate_description(
             return (
                 "recovery",
                 "close-failure-interval-consensus-work",
-                Some("missing-product-terminal-preauthorization"),
+                Some("clutch-failure-policy-runtime/current-action13-finite-session-archive-v1"),
             );
         }
         return ("recovery", "recovery-action", None);

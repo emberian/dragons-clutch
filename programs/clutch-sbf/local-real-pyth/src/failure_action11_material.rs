@@ -161,7 +161,6 @@ pub enum FailureAction11MaterialError {
     Funding,
     Arithmetic,
     Construction,
-    MissingProductTerminalPreauthorization,
 }
 
 impl core::fmt::Display for FailureAction11MaterialError {
@@ -174,9 +173,6 @@ impl core::fmt::Display for FailureAction11MaterialError {
             Self::Funding => "Recovery custody cannot fund the exact next step",
             Self::Arithmetic => "Failure action-11 exact arithmetic overflowed",
             Self::Construction => "release-bound Failure action-11 construction refused",
-            Self::MissingProductTerminalPreauthorization => {
-                "current Product state has no exact Failure action-13 terminal preauthorization"
-            }
         })
     }
 }
@@ -692,12 +688,6 @@ pub fn derive_failure_action11_material_v1(
         ordered_accounts,
         lookup_table,
     })
-}
-
-/// Current action 13 remains nonconstructible until Product persists the exact
-/// terminal preauthorization consumed by the Failure owner.
-pub fn derive_failure_action13_material_v1() -> Result<OwnedInstructionDraft> {
-    Err(FailureAction11MaterialError::MissingProductTerminalPreauthorization)
 }
 
 fn authenticate_release(release: &IndexedProgramRelease) -> Result<()> {
