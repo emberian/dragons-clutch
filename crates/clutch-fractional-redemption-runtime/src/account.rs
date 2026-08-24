@@ -75,6 +75,12 @@ pub const FRACTIONAL_LEDGER_STATE_ID_DOMAIN_V1: &[u8] =
 /// Domain for the complete canonical immutable `0xa4/v3` state identity.
 pub const FRACTIONAL_POLICY_STATE_ID_DOMAIN_V3: &[u8] =
     b"dragons-clutch/fractional-redemption/policy-state/v3\0";
+/// Domain for the complete canonical live `0xa6/v2` state identity.
+pub const FRACTIONAL_CREDIT_STATE_ID_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/fractional-redemption/credit-state/v2\0";
+/// Domain for the complete canonical permanent `0xa6/v2` tombstone identity.
+pub const FRACTIONAL_CREDIT_TOMBSTONE_STATE_ID_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/fractional-redemption/credit-tombstone-state/v2\0";
 
 /// Honest no-subsidy terminal rule.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -568,6 +574,15 @@ impl FractionalCreditV2 {
             stored_bump: self.stored_bump,
         }
     }
+
+    /// Hash the complete canonical live credit body.
+    pub fn state_id(self) -> Result<Identity32V1> {
+        let encoded = self.encode()?;
+        let mut hasher = Sha256::new();
+        hasher.update(FRACTIONAL_CREDIT_STATE_ID_DOMAIN_V2);
+        hasher.update(encoded);
+        Identity32V1::new(hasher.finalize().into()).map_err(|_| Error::ZeroIdentity)
+    }
 }
 
 /// V2 permanent replay-prevention identity after a zero-only credit close.
@@ -672,6 +687,15 @@ impl FractionalCreditTombstoneV2 {
             claimant: self.claimant,
             stored_bump: self.stored_bump,
         }
+    }
+
+    /// Hash the complete canonical permanent tombstone body.
+    pub fn state_id(self) -> Result<Identity32V1> {
+        let encoded = self.encode()?;
+        let mut hasher = Sha256::new();
+        hasher.update(FRACTIONAL_CREDIT_TOMBSTONE_STATE_ID_DOMAIN_V2);
+        hasher.update(encoded);
+        Identity32V1::new(hasher.finalize().into()).map_err(|_| Error::ZeroIdentity)
     }
 }
 
