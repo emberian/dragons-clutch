@@ -2233,18 +2233,27 @@ impl DealerFacilityAction {
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
         match self {
-            Self::RegisterRelease => 1,
-            Self::InitializeHead => 2,
-            Self::OpenRawPage => 3,
-            Self::IngestBoundaryBatch => 4,
-            Self::SealRawPage => 5,
-            Self::InitializeWindowWork => 6,
-            Self::FoldWindowPages => 7,
-            Self::SealWindow => 8,
-            Self::EvaluateStatistic => 9,
-            Self::EmitFailureHandoff => 10,
-            Self::ReopenGeneration => 11,
-            Self::CloseGeneration => 12,
+            Self::Initialize => 5,
+            Self::CreateLpPage => 6,
+            Self::FundDependencies => 7,
+            Self::DepositPosition => 8,
+            Self::WithdrawPosition => 9,
+            Self::DepositLp => 10,
+            Self::QueueLpDeposit => 11,
+            Self::ActivateLpPage => 12,
+            Self::LapseEpoch => 13,
+            Self::SelectLeaseAndBegin => 14,
+            Self::Collect => 15,
+            Self::Deliver => 16,
+            Self::FinalizeSettlement => 17,
+            Self::AbortBeforeCollection => 18,
+            Self::QueueExit => 19,
+            Self::SponsorHalt => 20,
+            Self::EnterUnwind => 21,
+            Self::TimedClose => 22,
+            Self::Resolve => 23,
+            Self::Claim => 24,
+            Self::Retire => 25,
         }
     }
 
@@ -2427,12 +2436,14 @@ impl StructuredClaimAction {
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
         match self {
-            Self::RegisterSeries => 13,
-            Self::ActivateFunding => 14,
-            Self::AdvanceOccurrence => 15,
-            Self::LapseOccurrence => 16,
-            Self::ObserveDonation => 17,
-            Self::CloseFunding => 18,
+            Self::CreateDescriptor => 1,
+            Self::WrapCanonical => 2,
+            Self::WrapFull => 3,
+            Self::UnwrapCanonical => 4,
+            Self::UnwrapFull => 5,
+            Self::CompactDonation => 6,
+            Self::RedeemTerminal => 7,
+            Self::RetireDescriptor => 8,
         }
     }
 
