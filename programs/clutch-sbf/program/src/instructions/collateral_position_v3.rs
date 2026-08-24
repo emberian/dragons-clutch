@@ -1944,6 +1944,50 @@ pub(crate) fn authenticate_general_position_replay_from_current_v5(
     })
 }
 
+/// Authenticate one read-only ordinary Position and writable GEN1 Replay
+/// under the same complete current Product/Source/Funding authority. Action 40
+/// advances payment accounting and Replay without acquiring a spurious write
+/// lock on the unchanged Position.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_general_position_replay_readonly_from_current_v5(
+    program_id: &Pubkey,
+    current: &AuthenticatedGeneralMarketCurrentV5,
+    bound: BoundCollateralProfileV2,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    expected_owner: [u8; 32],
+    expected_sequence: u64,
+) -> Outcome<GeneralPositionReplayAuthorityV5> {
+    require(
+        current.binding_account() == *market_binding_account.key
+            && current.runtime_account() == *market_runtime_account.key
+            && current.binding().base().market.bytes() == market_runtime_account.key.to_bytes()
+            && current.runtime().market_binding.bytes() == market_binding_account.key.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let body = authenticate_general_position_replay_body_v2(
+        program_id,
+        bound,
+        current.binding().base().relation_projection(),
+        market_runtime_account,
+        position_account,
+        replay_account,
+        expected_owner,
+        expected_sequence,
+        false,
+    )?;
+    Ok(GeneralPositionReplayAuthorityV5 {
+        position: body.position,
+        projection: body.projection,
+        replay: body.replay,
+        market_binding: *current.binding(),
+        market_runtime: *current.runtime(),
+        current_authentication_id: current.id().bytes(),
+    })
+}
+
 /// Authenticate one writable Position/Replay pair from the compact V5 market
 /// receipt used by already-founded families. The family-specific caller must
 /// first bind this nonforgeable receipt to its own persisted current authority;

@@ -18,6 +18,7 @@ use super::collateral_position_v3::{
     authenticate_general_position_replay_readonly_v2, authenticate_general_position_replay_v1,
     authenticate_general_position_replay_readonly_v3, authenticate_general_position_replay_v2,
     authenticate_general_position_replay_v3, authenticate_general_position_replay_from_current_v5,
+    authenticate_general_position_replay_readonly_from_current_v5,
     authenticate_general_position_replay_from_market_v5, AuthenticatedGeneralMarketV5,
     GeneralPositionReplayAuthorityV1,
     GeneralPositionReplayAuthorityV2, GeneralPositionReplayAuthorityV3,
@@ -176,6 +177,43 @@ pub(crate) fn authenticate_current_general_position_replay_v5(
     )?;
     drop(replay_data);
     authenticate_general_position_replay_from_current_v5(
+        program_id,
+        current,
+        bound,
+        market_binding_account,
+        market_runtime_account,
+        position_account,
+        replay_account,
+        expected_owner,
+        next_sequence,
+    )
+}
+
+/// Authenticate the current ordinary General Position read-only while its
+/// purpose-owned GEN1 Replay remains writable under the complete V5 market
+/// receipt.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_current_general_position_replay_readonly_v5(
+    program_id: &Pubkey,
+    current: &AuthenticatedGeneralMarketCurrentV5,
+    bound: BoundCollateralProfileV2,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+    position_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    expected_owner: [u8; 32],
+) -> Outcome<GeneralPositionReplayAuthorityV5> {
+    let replay_data = replay_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let next_sequence = current_general_replay_sequence_v1(
+        &replay_data,
+        position_account.key.to_bytes(),
+        replay_account.key.to_bytes(),
+        market_runtime_account.key.to_bytes(),
+    )?;
+    drop(replay_data);
+    authenticate_general_position_replay_readonly_from_current_v5(
         program_id,
         current,
         bound,

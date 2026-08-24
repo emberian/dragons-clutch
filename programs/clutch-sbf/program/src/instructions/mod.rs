@@ -111,6 +111,11 @@ mod fractional_product_consumer;
 pub(crate) mod product_failure_begin;
 pub mod fractional_redemption;
 pub(crate) mod full_principal_funding_v1;
+/// Sole hostile read boundary for current General/Product/Source/Funding authority.
+pub(crate) mod general_market_current_v5;
+/// Single checked router for callable current General actions.
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+pub(crate) mod general_v2_current;
 /// Deployable current direct-only rent-owned V5 Egg delivery.
 #[cfg(any(
     all(
@@ -120,22 +125,24 @@ pub(crate) mod full_principal_funding_v1;
     feature = "profile-non-production-general-v2-empty-book-identity-lab"
 ))]
 pub mod general_v2_direct_v5;
-/// Staged-disabled exact merge-payment composer and atomic writer.
+/// Current exact merge-payment composer and atomic writer.
 #[cfg(any(
     all(
         feature = "profile-full",
         not(feature = "profile-non-production-dealer-policy-catalog-lab")
     ),
-    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
 ))]
 pub mod general_v2_merge_payment_v5;
-/// Staged-disabled selected zero-fill Reservation release and atomic close.
+/// Current selected zero-fill Reservation release and atomic close.
 #[cfg(any(
     all(
         feature = "profile-full",
         not(feature = "profile-non-production-dealer-policy-catalog-lab")
     ),
-    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
 ))]
 pub mod general_v2_unfilled_release_v1;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
@@ -166,7 +173,8 @@ pub mod general_v2_materialize_v5;
         feature = "profile-full",
         not(feature = "profile-non-production-dealer-policy-catalog-lab")
     ),
-    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
 ))]
 pub(crate) mod general_v2_position_replay;
 #[cfg(any(
@@ -174,7 +182,8 @@ pub(crate) mod general_v2_position_replay;
         feature = "profile-full",
         not(feature = "profile-non-production-dealer-policy-catalog-lab")
     ),
-    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
 ))]
 pub mod general_v2_receipt_v5;
 #[cfg(any(
@@ -213,7 +222,10 @@ pub mod general_v2_settlement_retirement_v1;
 ))]
 pub mod general_v2_freeze_v5;
 /// Complete coefficient-portfolio settlement and archive retirement.
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub mod general_v2_portfolio_v5;
 #[cfg(any(
     feature = "profile-non-production-general-v2-empty-book-identity-lab",

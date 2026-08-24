@@ -285,10 +285,11 @@ const _: () = assert!(
 /// Exact extension actions executable by the successor product at this
 /// dependency checkpoint.
 ///
-/// The current Dealer policy/facility actions through Claim, the six current
-/// Structured actions, Failure actions 10 through 13, and the complete
-/// Fractional and Direct families have handlers joined to their persisted
-/// semantic owners. Dealer action 25 remains payload-scoped below so the two
+/// General actions 39 through 51 now form one contiguous current settlement
+/// lifecycle. The current Dealer policy/facility actions through Claim, the
+/// six current Structured actions, Failure actions 10 through 13, and the
+/// complete Fractional and Direct families have handlers joined to their
+/// persisted semantic owners. Dealer action 25 remains payload-scoped below so the two
 /// complete Product-composite terminal cuts cannot enable its historical
 /// standalone targets through a coarse tuple.
 /// In particular, Source actions 1 through 12 stay gated until Product
@@ -296,6 +297,9 @@ const _: () = assert!(
 #[cfg(feature = "profile-successor-chain-attached-dev")]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (74, 1, 39),
+    (74, 1, 40),
+    (74, 1, 41),
+    (74, 1, 42),
     (74, 1, 43),
     (74, 1, 44),
     (74, 1, 45),
@@ -630,7 +634,7 @@ mod tests {
                             == clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG
                         && family_version
                             == clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION
-                        && matches!(local_action, 39 | 43..=46 | 48..=51);
+                        && matches!(local_action, 39..=51);
                     let source_runtime_enabled = cfg!(feature = "profile-full")
                         && !SUCCESSOR_CHAIN_ATTACHED_DEV
                         && !DEALER_POLICY_CATALOG_LAB

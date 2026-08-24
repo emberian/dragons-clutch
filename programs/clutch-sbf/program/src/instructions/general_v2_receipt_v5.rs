@@ -24,6 +24,10 @@ use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 
 use super::general_v2_settlement_traversal_v5::AuthenticatedRootSettlementTraversalV5;
+use super::general_v2_settlement_root::{
+    authenticate_readonly_general_settlement_root_v1,
+    authenticate_writable_general_settlement_root_v1,
+};
 
 /// SettlementRoot, retained Feed, and writable V5 receipt.
 pub const RECEIPT_V5_AUTH_ACCOUNT_COUNT: usize = 3;
@@ -151,7 +155,7 @@ fn authenticate_general_receipt_v5_inner(
         program_id,
         &accounts[IX_SETTLEMENT_ROOT],
         root_writable,
-        Some(contract::SETTLEMENT_ROOT_ACCOUNT_BYTES),
+        None,
     )?;
     require_program_state(program_id, &accounts[IX_RETAINED_FEED], false, None)?;
     require_program_state(
@@ -170,8 +174,6 @@ fn authenticate_general_receipt_v5_inner(
     let settlement_root_account = id(accounts[IX_SETTLEMENT_ROOT].key);
     let retained_feed_account = id(accounts[IX_RETAINED_FEED].key);
     let receipt_account = id(accounts[IX_RECEIPT].key);
-    let root =
-        contract::SettlementRootV1AccountV1::decode(&borrow_data(&accounts[IX_SETTLEMENT_ROOT])?)?;
     let feed_data = borrow_data(&accounts[IX_RETAINED_FEED])?;
     let (feed, tail) = contract::complete_candidate_feed_v2(&feed_data, true)?;
     let candidate_bundle_digest =
@@ -182,6 +184,23 @@ fn authenticate_general_receipt_v5_inner(
         &receipt_data,
     )?;
     let receipt_semantic = receipt.semantic();
+    let root_frame = core::slice::from_ref(&accounts[IX_SETTLEMENT_ROOT]);
+    let root_authority = if root_writable {
+        authenticate_writable_general_settlement_root_v1(
+            program_id,
+            root_frame,
+            Id32::new(receipt_semantic.epoch.0)?,
+            Id32::new(receipt_semantic.candidate.0)?,
+        )?
+    } else {
+        authenticate_readonly_general_settlement_root_v1(
+            program_id,
+            root_frame,
+            Id32::new(receipt_semantic.epoch.0)?,
+            Id32::new(receipt_semantic.candidate.0)?,
+        )?
+    };
+    let root = *root_authority.root();
     let counts = root.counts();
 
     let root_pda = seeds::general_v2_settlement_root_pda(

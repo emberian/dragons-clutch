@@ -1,14 +1,18 @@
-//! Capability-disabled authentication seam for the counted General settlement root.
+//! Current authentication seam for legacy and indexed General settlement roots.
 //!
-//! The `0xa9/1` root is the candidate-scoped owner of every live settlement
-//! child count. This module authenticates one existing writable root from the
+//! The candidate-scoped root is the owner of every live settlement child
+//! count. This module authenticates one existing root from the
 //! exact General program owner, canonical epoch/candidate seed tuple, stored
-//! bump, frozen width, and full semantic decoder. It does not expose a
-//! dispatcher route or construct action-39 expectations from caller integers.
+//! bump, supported fixed width, and full semantic decoder. It never constructs
+//! action-39 expectations from caller integers.
 
 use core::cell::Ref;
+use std::boxed::Box;
 
-use clutch_general_v2_contract::{Id32, SettlementRootV1AccountV1, SETTLEMENT_ROOT_ACCOUNT_BYTES};
+use clutch_general_v2_contract::{
+    Id32, IndexedSettlementRootV1AccountV1, SettlementRootV1AccountV1, Sha256BackendV1,
+    INDEXED_SETTLEMENT_ROOT_BYTES_V1, SETTLEMENT_ROOT_ACCOUNT_BYTES,
+};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
@@ -23,7 +27,7 @@ pub const IX_SETTLEMENT_ROOT: usize = 0;
 
 /// Existing program-owned root whose complete account body and PDA passed the
 /// SBF adapter checks.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct AuthenticatedGeneralSettlementRootV1 {
     account: Id32,
     body: AuthenticatedGeneralSettlementRootBodyV1,
@@ -91,7 +95,7 @@ impl AuthenticatedGeneralSettlementRootV1 {
         }
     }
 
-    /// Whether this is the disabled counted exact-index successor.
+    /// Whether this is the current counted exact-index successor.
     pub fn is_indexed(&self) -> bool {
         matches!(&self.body, AuthenticatedGeneralSettlementRootBodyV1::Indexed(_))
     }
@@ -464,13 +468,22 @@ fn authenticate_general_settlement_root_v1(
             require(account.is_writable, ClutchError::NotWritable)?;
         }
     }
-    require(
-        account.data_len() == SETTLEMENT_ROOT_ACCOUNT_BYTES,
-        ClutchError::WrongDataLength,
-    )?;
-
     let root_account = id(account.key);
-    let root = SettlementRootV1AccountV1::decode(&borrow_data(account)?)?;
+    let data = borrow_data(account)?;
+    let body = match data.len() {
+        SETTLEMENT_ROOT_ACCOUNT_BYTES => AuthenticatedGeneralSettlementRootBodyV1::Legacy(
+            Box::new(SettlementRootV1AccountV1::decode(&data)?),
+        ),
+        INDEXED_SETTLEMENT_ROOT_BYTES_V1 => AuthenticatedGeneralSettlementRootBodyV1::Indexed(
+            Box::new(IndexedSettlementRootV1AccountV1::decode(&data)?),
+        ),
+        _ => return Err(Refusal::Adapter(ClutchError::WrongDataLength)),
+    };
+    drop(data);
+    let root = match &body {
+        AuthenticatedGeneralSettlementRootBodyV1::Legacy(root) => root.as_ref(),
+        AuthenticatedGeneralSettlementRootBodyV1::Indexed(root) => root.base(),
+    };
     let canonical = seeds::general_v2_settlement_root_pda(
         program_id,
         &expected_epoch.bytes(),
@@ -487,6 +500,6 @@ fn authenticate_general_settlement_root_v1(
 
     Ok(AuthenticatedGeneralSettlementRootV1 {
         account: root_account,
-        root,
+        body,
     })
 }

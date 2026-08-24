@@ -15,9 +15,10 @@ use solana_pubkey::Pubkey;
 
 use super::{
     general_v2_action47_current, general_v2_exact_index_retirement_v1,
-    general_v2_fee_retirement_v2,
-    general_v2_freeze_v5, general_v2_portfolio_retirement_v5,
+    general_v2_fee_retirement_v2, general_v2_merge_payment_v5,
+    general_v2_freeze_v5, general_v2_portfolio_retirement_v5, general_v2_portfolio_v5,
     general_v2_settlement_producer_v5, general_v2_settlement_retirement_v1,
+    general_v2_unfilled_release_v1,
 };
 
 /// Enter exactly one callable current General action owner.
@@ -32,6 +33,21 @@ pub(crate) fn process(
     match action {
         GeneralV2Action::InitializeSettlementRoot => {
             general_v2_settlement_producer_v5::process(
+                program_id, accounts, sequence, action, payload,
+            )
+        }
+        GeneralV2Action::FinalizeMergeReceiptPayment => {
+            general_v2_merge_payment_v5::process(
+                program_id, accounts, sequence, action, payload,
+            )
+        }
+        GeneralV2Action::ReleaseUnfilledReservation => {
+            general_v2_unfilled_release_v1::process(
+                program_id, accounts, sequence, action, payload,
+            )
+        }
+        GeneralV2Action::ConsumePortfolioPairEggs => {
+            general_v2_portfolio_v5::process(
                 program_id, accounts, sequence, action, payload,
             )
         }

@@ -1,25 +1,24 @@
-//! Staged-disabled action-41 SBF composition and atomic Reservation close.
+//! Current action-41 SBF composition and atomic Reservation close.
 //!
-//! The positional ABI is frozen but staged-disabled. Action 41 consumes the
-//! single shared action-39/24/41 traversal authenticator, then authenticates
+//! Action 41 consumes the common GeneralMarketCurrentV5 Product/Source/
+//! Funding authority and the single shared action-39/41 traversal
+//! authenticator, then authenticates
 //! every mutable endpoint and close destination itself and owns the final
 //! root/Position/Replay write plus ReservationV9 close.
 //!
 //! The selected 4,140-byte page is always borrowed. The returned pure bundle
 //! is boxed, and all four data destinations plus all three lamport destinations
-//! are borrowed before the first mutation. No dispatch arm or capability is
-//! exposed while action 41 remains `ReservedDisabled`.
+//! are borrowed before the first mutation.
 
 use core::cell::{Ref, RefMut};
 use std::boxed::Box;
 
 use clutch_collateral_adapter_v2::BoundCollateralProfileV2;
 use clutch_general_v2_contract::{
-    decode_settlement_root_payload_v1, GeneralOrderPageSeedTupleV5,
-    GeneralReservationSeedTupleV9, Id32, ReleaseUnfilledReservationPayloadV1,
-    SettlementRootPayloadV1, SettlementRootV1AccountV1,
-    GENERAL_REPLAY_ACCOUNT_V1_BYTES, MARKET_BINDING_ACCOUNT_BYTES_V2,
-    MARKET_RUNTIME_ACCOUNT_BYTES, SETTLEMENT_ROOT_ACCOUNT_BYTES,
+    decode_settlement_root_payload_v1, GeneralOrderPageSeedTupleV5, GeneralReservationSeedTupleV9,
+    Id32, ReleaseUnfilledReservationPayloadV1, SettlementRootPayloadV1,
+    GENERAL_REPLAY_ACCOUNT_V1_BYTES, INDEXED_SETTLEMENT_ROOT_BYTES_V1,
+    MARKET_RUNTIME_ACCOUNT_BYTES,
 };
 use clutch_general_v2_runtime::{
     prepare_release_unfilled_reservation_v1, PositionAccountInputV3,
@@ -28,8 +27,8 @@ use clutch_general_v2_runtime::{
 };
 use clutch_retirement::{PositionPurposeV3, POSITION_V3_BYTES};
 use clutch_solana_layout::order_page_v5::{verify_page_v5, ORDER_PAGE_V5_BYTES};
-use clutch_solana_layout::reservation_v9::{ReservationAccountV9, RESERVATION_ACCOUNT_BYTES_V9};
 use clutch_solana_layout::registry::GeneralV2Action;
+use clutch_solana_layout::reservation_v9::{ReservationAccountV9, RESERVATION_ACCOUNT_BYTES_V9};
 use clutch_solana_layout::MAX_ORDER_PAGES;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -40,31 +39,36 @@ use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
 use crate::seeds;
 
-use super::collateral_position_v3::GeneralPositionReplayAuthorityV2;
-use super::general_v2_position_replay::authenticate_current_general_position_replay_v2;
+use super::collateral_position_v3::GeneralPositionReplayAuthorityV5;
+use super::general_market_current_v5::{
+    authenticate_general_market_current_prefix_v5, AuthenticatedGeneralMarketCurrentV5,
+    CURRENT_V5_IX_ARTIFACTS_START, CURRENT_V5_IX_MARKET_BINDING, CURRENT_V5_IX_MARKET_INSTANCE,
+    CURRENT_V5_IX_MARKET_RUNTIME, CURRENT_V5_IX_REALM, GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5,
+};
+use super::general_v2_position_replay::authenticate_current_general_position_replay_v5;
 use super::general_v2_settlement_root::AuthenticatedGeneralSettlementRootV1;
 use super::general_v2_settlement_traversal_v5::{
-    authenticate_settlement_traversal_v5, authenticate_writable_root_settlement_traversal_v5,
-    AuthenticatedRootSettlementTraversalV5, SettlementTraversalAccountFrameV5,
+    authenticate_settlement_traversal_from_current_v5,
+    authenticate_writable_root_settlement_traversal_v5, AuthenticatedRootSettlementTraversalV5,
+    SettlementTraversalAccountFrameV5,
 };
 
+/// Action-local roles following the exact 25-account current-market prefix and
+/// preceding the one-to-four PageV5 suffix.
+pub const ACTION41_LOCAL_TRAVERSAL_ACCOUNTS: usize = 7;
 /// Fixed shared traversal roles before its one-to-four PageV5 suffix.
-pub const ACTION41_TRAVERSAL_PREFIX_ACCOUNTS: usize = 12;
+pub const ACTION41_TRAVERSAL_PREFIX_ACCOUNTS: usize =
+    GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5 + ACTION41_LOCAL_TRAVERSAL_ACCOUNTS;
 /// Exact action-41 endpoint/close roles after the complete PageV5 suffix.
 pub const ACTION41_ENDPOINT_SUFFIX_ACCOUNTS: usize = 5;
 
-const IX_ROOT: usize = 0;
-const IX_FEED: usize = 1;
-const IX_MARKET_BINDING: usize = 2;
-const IX_MARKET_RUNTIME: usize = 3;
-const IX_ECONOMIC_DOMAIN: usize = 4;
-const IX_PRICE_GRID: usize = 5;
-const IX_REALM: usize = 6;
-const IX_PROFILE: usize = 7;
-const IX_COLLATERAL_POLICY: usize = 8;
-const IX_TOKEN_PROGRAM: usize = 9;
-const IX_MARKET_INSTANCE: usize = 10;
-const IX_MARKET_GENESIS: usize = 11;
+const IX_ROOT: usize = GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5;
+const IX_FEED: usize = IX_ROOT + 1;
+const IX_ECONOMIC_DOMAIN: usize = IX_FEED + 1;
+const IX_PRICE_GRID: usize = IX_ECONOMIC_DOMAIN + 1;
+const IX_PROFILE: usize = IX_PRICE_GRID + 1;
+const IX_COLLATERAL_POLICY: usize = IX_PROFILE + 1;
+const IX_TOKEN_PROGRAM: usize = IX_COLLATERAL_POLICY + 1;
 
 /// Exact action-41 endpoint and close suffix after the shared page set.
 #[derive(Clone, Copy, Debug)]
@@ -89,10 +93,10 @@ struct ReleaseData<'a> {
     replay: Ref<'a, [u8]>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 struct AuthenticatedReleaseEndpointV1 {
     reservation: ReservationAccountV9,
-    replay: GeneralPositionReplayAuthorityV2,
+    replay: GeneralPositionReplayAuthorityV5,
     replay_bump: u8,
 }
 
@@ -131,13 +135,13 @@ fn require_program_state(
             ClutchError::UnexpectedWritable
         },
     )?;
-    require(account.data_len() == exact_len, ClutchError::WrongDataLength)
+    require(
+        account.data_len() == exact_len,
+        ClutchError::WrongDataLength,
+    )
 }
 
-fn require_readonly_program_state(
-    program_id: &Pubkey,
-    account: &AccountInfo<'_>,
-) -> Outcome<()> {
+fn require_readonly_program_state(program_id: &Pubkey, account: &AccountInfo<'_>) -> Outcome<()> {
     require(account.owner == program_id, ClutchError::WrongProgramOwner)?;
     require(!account.executable, ClutchError::ExecutableAccount)?;
     require(!account.is_signer, ClutchError::MismatchedState)?;
@@ -202,6 +206,7 @@ fn action41_page_count_from_account_len(total: usize) -> Result<usize, ClutchErr
 #[inline(never)]
 fn authenticate_release_endpoint_v1(
     program_id: &Pubkey,
+    current: &AuthenticatedGeneralMarketCurrentV5,
     root: &AuthenticatedGeneralSettlementRootV1,
     traversal: &dyn SettlementTraversalAccessV5,
     collateral: BoundCollateralProfileV2,
@@ -211,12 +216,7 @@ fn authenticate_release_endpoint_v1(
     frame: ReleaseUnfilledReservationAccountFrameV1<'_, '_>,
     data: &ReleaseData<'_>,
 ) -> Outcome<AuthenticatedReleaseEndpointV1> {
-    require_program_state(
-        program_id,
-        selected_page,
-        false,
-        ORDER_PAGE_V5_BYTES,
-    )?;
+    require_program_state(program_id, selected_page, false, ORDER_PAGE_V5_BYTES)?;
     let page = verify_page_v5(&data.selected_page)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let page_seed = GeneralOrderPageSeedTupleV5::new(root.root().epoch(), page.page_index)?;
@@ -231,8 +231,7 @@ fn authenticate_release_endpoint_v1(
             && page.market.0 == root.root().market().bytes()
             && page.epoch.0 == root.root().epoch().bytes()
             && page.order_set.0 == root.root().order_set().bytes()
-            && traversal.projection().page_account(page.page_index)
-                == Some(id(selected_page.key)),
+            && traversal.projection().page_account(page.page_index) == Some(id(selected_page.key)),
         ClutchError::MismatchedState,
     )?;
 
@@ -255,8 +254,9 @@ fn authenticate_release_endpoint_v1(
     )?;
 
     let owner = reservation.body().owner.bytes();
-    let replay = authenticate_current_general_position_replay_v2(
+    let replay = authenticate_current_general_position_replay_v5(
         program_id,
+        current,
         collateral,
         market_binding,
         market_runtime,
@@ -288,6 +288,7 @@ fn prepare_plan_boxed(
 
 #[inline(never)]
 fn apply_release_bundle_v1(
+    root: &AuthenticatedGeneralSettlementRootV1,
     settlement_root: &AccountInfo<'_>,
     retained_feed: &AccountInfo<'_>,
     selected_page: &AccountInfo<'_>,
@@ -317,17 +318,18 @@ fn apply_release_bundle_v1(
                     .lamports()
                     .checked_add(close.neutral_sink_credit_lamports())
                     .ok_or(ClutchError::Arithmetic)?
-            && close.payer_refund_lamports()
+            && close
+                .payer_refund_lamports()
                 .checked_add(close.neutral_sink_credit_lamports())
                 .ok_or(ClutchError::Arithmetic)?
                 == frame.reservation.lamports(),
         ClutchError::MismatchedState,
     )?;
 
-    let mut root_body = std::vec![0u8; SETTLEMENT_ROOT_ACCOUNT_BYTES];
-    plan.settlement_root_poststate().encode(&mut root_body)?;
+    let mut root_body = std::vec![0u8; root.account_bytes()];
+    root.encode_unfilled_release_successor(plan.settlement_root_poststate(), &mut root_body)?;
     require(
-        settlement_root.data_len() == SETTLEMENT_ROOT_ACCOUNT_BYTES
+        settlement_root.data_len() == root.account_bytes()
             && frame.reservation.data_len() == RESERVATION_ACCOUNT_BYTES_V9
             && frame.position.data_len() == POSITION_V3_BYTES
             && frame.replay.data_len() == GENERAL_REPLAY_ACCOUNT_V1_BYTES,
@@ -375,7 +377,7 @@ fn apply_release_bundle_v1(
     )
 }
 
-/// Strict staged-disabled action-41 positional entrypoint.
+/// Strict current action-41 positional entrypoint.
 pub fn process(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -413,12 +415,7 @@ fn release_unfilled_reservation(
         ClutchError::WrongAccountCount,
     )?;
     require_all_distinct(accounts)?;
-    require_program_state(
-        program_id,
-        &accounts[IX_ROOT],
-        true,
-        SETTLEMENT_ROOT_ACCOUNT_BYTES,
-    )?;
+    let current = authenticate_general_market_current_prefix_v5(program_id, accounts)?;
     let page_count = action41_page_count_from_account_len(accounts.len())?;
     let endpoint_at = ACTION41_TRAVERSAL_PREFIX_ACCOUNTS
         .checked_add(page_count)
@@ -445,24 +442,27 @@ fn release_unfilled_reservation(
             .body()
             .page_index,
     );
-    require(selected_page_index < page_count, ClutchError::MismatchedState)?;
+    require(
+        selected_page_index < page_count,
+        ClutchError::MismatchedState,
+    )?;
     let pages = &accounts[ACTION41_TRAVERSAL_PREFIX_ACCOUNTS..endpoint_at];
     let traversal_frame = SettlementTraversalAccountFrameV5 {
         retained_feed: &accounts[IX_FEED],
-        market_binding: &accounts[IX_MARKET_BINDING],
-        market_runtime: &accounts[IX_MARKET_RUNTIME],
+        market_binding: &accounts[CURRENT_V5_IX_MARKET_BINDING],
+        market_runtime: &accounts[CURRENT_V5_IX_MARKET_RUNTIME],
         economic_domain: &accounts[IX_ECONOMIC_DOMAIN],
         price_grid: &accounts[IX_PRICE_GRID],
-        realm: &accounts[IX_REALM],
+        realm: &accounts[CURRENT_V5_IX_REALM],
         profile: &accounts[IX_PROFILE],
         collateral_policy: &accounts[IX_COLLATERAL_POLICY],
         token_program: &accounts[IX_TOKEN_PROGRAM],
-        market_instance: &accounts[IX_MARKET_INSTANCE],
-        market_genesis: &accounts[IX_MARKET_GENESIS],
+        market_instance: &accounts[CURRENT_V5_IX_MARKET_INSTANCE],
+        market_genesis: &accounts[CURRENT_V5_IX_ARTIFACTS_START + 6],
         pages,
     };
     let authenticated_traversal =
-        authenticate_settlement_traversal_v5(program_id, traversal_frame)?;
+        authenticate_settlement_traversal_from_current_v5(program_id, traversal_frame, &current)?;
     let authenticated = authenticate_writable_root_settlement_traversal_v5(
         program_id,
         &accounts[IX_ROOT],
@@ -471,6 +471,7 @@ fn release_unfilled_reservation(
     compose_and_apply_release_unfilled_reservation_v1(
         program_id,
         payload,
+        &current,
         authenticated,
         &accounts[IX_ROOT],
         traversal_frame,
@@ -485,6 +486,7 @@ fn release_unfilled_reservation(
 fn compose_and_apply_release_unfilled_reservation_v1(
     program_id: &Pubkey,
     payload: ReleaseUnfilledReservationPayloadV1,
+    current: &AuthenticatedGeneralMarketCurrentV5,
     authenticated: AuthenticatedRootSettlementTraversalV5<'_, '_>,
     settlement_root: &AccountInfo<'_>,
     traversal_frame: SettlementTraversalAccountFrameV5<'_, '_>,
@@ -496,16 +498,10 @@ fn compose_and_apply_release_unfilled_reservation_v1(
     let traversal = authenticated_traversal.traversal();
     let collateral = authenticated_traversal.collateral();
     require_distinct_frame(frame)?;
-    require_program_state(
-        program_id,
-        settlement_root,
-        true,
-        SETTLEMENT_ROOT_ACCOUNT_BYTES,
-    )?;
-    let observed_root = SettlementRootV1AccountV1::decode(&borrow_data(settlement_root)?)?;
     require(
-        authenticated_root.account() == id(settlement_root.key)
-            && authenticated_root.root() == &observed_root
+        authenticated_root.is_indexed()
+            && authenticated_root.account() == id(settlement_root.key)
+            && settlement_root.data_len() == authenticated_root.account_bytes()
             && payload.epoch == authenticated_root.root().epoch()
             && payload.settlement_root == authenticated_root.account(),
         ClutchError::MismatchedState,
@@ -521,7 +517,7 @@ fn compose_and_apply_release_unfilled_reservation_v1(
         program_id,
         traversal_frame.market_binding,
         false,
-        MARKET_BINDING_ACCOUNT_BYTES_V2,
+        clutch_general_v2_contract::MARKET_BINDING_ACCOUNT_BYTES_V5,
     )?;
     require_program_state(
         program_id,
@@ -543,6 +539,7 @@ fn compose_and_apply_release_unfilled_reservation_v1(
     };
     let endpoint = Box::new(authenticate_release_endpoint_v1(
         program_id,
+        current,
         authenticated_root,
         traversal,
         collateral,
@@ -589,6 +586,7 @@ fn compose_and_apply_release_unfilled_reservation_v1(
 
     drop(data);
     apply_release_bundle_v1(
+        authenticated_root,
         settlement_root,
         traversal_frame.retained_feed,
         selected_page,
@@ -604,10 +602,10 @@ mod tests {
     #[test]
     fn action41_widths_are_current_successors_only() {
         assert_eq!(RESERVATION_ACCOUNT_BYTES_V9, 666);
-        assert_eq!(SETTLEMENT_ROOT_ACCOUNT_BYTES, 980);
+        assert_eq!(INDEXED_SETTLEMENT_ROOT_BYTES_V1, 1_228);
         assert_eq!(POSITION_V3_BYTES, 480);
         assert_eq!(GENERAL_REPLAY_ACCOUNT_V1_BYTES, 344);
-        assert_eq!(ACTION41_TRAVERSAL_PREFIX_ACCOUNTS, 12);
+        assert_eq!(ACTION41_TRAVERSAL_PREFIX_ACCOUNTS, 32);
         assert_eq!(ACTION41_ENDPOINT_SUFFIX_ACCOUNTS, 5);
     }
 

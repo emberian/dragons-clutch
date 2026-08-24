@@ -222,7 +222,7 @@ struct AuthenticatedPortfolioOrderPlacementV5 {
 
 /// Existing SettlementRoot and immutable traversal after both SBF account
 /// authentication and the pure exhaustive equality bind succeed.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub struct AuthenticatedRootSettlementTraversalV5<'a, 'info> {
     root: AuthenticatedGeneralSettlementRootV1,
     traversal: &'a AuthenticatedSettlementTraversalV5<'info>,

@@ -1,12 +1,15 @@
-//! Live General action 42: consume one exact coefficient-portfolio pair.
+//! Current General action 42: consume one exact coefficient-portfolio pair.
 //!
 //! This adapter owns no coefficients and accepts no caller-shaped economic
 //! rows. It authenticates the counted SettlementRoot, retained sealed Feed,
-//! immutable EconomicDomain/MarketBinding/PriceGrid owners, the complete
+//! immutable EconomicDomain/PriceGrid owners, the complete
 //! bounded OrderPage V5 set, both rent-owned Reservation V9 accounts, both
 //! ordinary Position V3 accounts, both GEN1 Replay accounts, and the complete
 //! canonical active prefix of one through sixteen pending Receipt V5 sibling
-//! accounts. It then consumes the private
+//! accounts. Before any of those local facts are projected, the common current
+//! General prefix joins MarketBindingV5/RuntimeV3 to Product RootV3, LinkV3,
+//! FundingV5, Registry/loader release, the compiled Source graph, and Revenue
+//! policy. It then consumes the private
 //! `clutch-batch` portfolio capability and writes every successor without CPI
 //! or lamport movement. Any missing, extra, duplicated, or reordered sibling
 //! refuses before the first write.
@@ -24,18 +27,15 @@ use clutch_batch::portfolio_execution_v2::{
     authenticate_selected_portfolio_order_v2, portfolio_settlement_receipt_v5_set_digest_v2,
     prepare_portfolio_pair_execution_borrowed_v2, PortfolioAccountExpectationV2,
     PortfolioAccountRoleV2, PortfolioAdapterV2, PortfolioPairExecutionInputV2,
-    PortfolioPairPostSemanticIdsV2,
-    PortfolioPositionPrestateV2, PortfolioReceiptSiblingTraversalSetV2,
-    PortfolioReceiptSiblingTraversalV2, PortfolioReplayPrestateV2,
-    PortfolioReservationLifecycleV2, PortfolioReservationPrestateV2,
-    PortfolioSelectionMembershipExpectationV2,
-    PortfolioSettlementReceiptV5Prestate, PortfolioSettlementReceiptV5SetPrestate,
-    PortfolioSettlementReceiptV5TransitionExpectationV2, PortfolioSourceOrderKindV2,
-    PortfolioTransitionExpectationV2, PortfolioValuationBoundaryV2,
-    SelectedPortfolioOrderRecordV2,
-    SettlementReceiptTransitionKindV2, PORTFOLIO_EXECUTION_VERSION_V2,
-    PORTFOLIO_PAIR_MAX_RECEIPTS_V2, PORTFOLIO_PAIR_RECEIPT_V2_BYTES,
-    PORTFOLIO_PAIR_TRANSITION_COMMITMENT_DOMAIN_V2,
+    PortfolioPairPostSemanticIdsV2, PortfolioPositionPrestateV2,
+    PortfolioReceiptSiblingTraversalSetV2, PortfolioReceiptSiblingTraversalV2,
+    PortfolioReplayPrestateV2, PortfolioReservationLifecycleV2, PortfolioReservationPrestateV2,
+    PortfolioSelectionMembershipExpectationV2, PortfolioSettlementReceiptV5Prestate,
+    PortfolioSettlementReceiptV5SetPrestate, PortfolioSettlementReceiptV5TransitionExpectationV2,
+    PortfolioSourceOrderKindV2, PortfolioTransitionExpectationV2, PortfolioValuationBoundaryV2,
+    SelectedPortfolioOrderRecordV2, SettlementReceiptTransitionKindV2,
+    PORTFOLIO_EXECUTION_VERSION_V2, PORTFOLIO_PAIR_MAX_RECEIPTS_V2,
+    PORTFOLIO_PAIR_RECEIPT_V2_BYTES, PORTFOLIO_PAIR_TRANSITION_COMMITMENT_DOMAIN_V2,
 };
 use clutch_batch::relation_v1::MAX_OUTCOMES;
 use clutch_batch::relation_v2::{
@@ -50,8 +50,8 @@ use clutch_general_v2_contract::{
     Id32, PortfolioSettlementPayloadV1, Sha256BackendV1,
 };
 use clutch_general_v2_runtime::{
-    decode_sealed_candidate_feed_v1, project_owner_blind_book_costed_v1,
-    GeneralOrderPageInputV5, OwnerBlindBookProjectionV2,
+    decode_sealed_candidate_feed_v1, project_owner_blind_book_costed_v1, GeneralOrderPageInputV5,
+    OwnerBlindBookProjectionV2,
 };
 use clutch_owner_settlement::{AuthenticatedPositionV3, PositionSettlementPoststateV3};
 use clutch_retirement::{
@@ -59,76 +59,75 @@ use clutch_retirement::{
     PositionV3Sha256Backend, ReplayV3Envelope, ReplayV3HashBackend, POSITION_V3_BYTES,
 };
 use clutch_solana_layout::order_page_v5::{verify_page_v5, OrderSlotCursorV5};
-use clutch_solana_layout::reservation::{
-    RESERVATION_STATE_CONSUMED, RESERVATION_STATE_ENTITLED,
-};
-use clutch_solana_layout::reservation_v9::{
-    ReservationAccountV9, RESERVATION_ACCOUNT_BYTES_V9,
-};
+use clutch_solana_layout::registry::GeneralV2Action;
+use clutch_solana_layout::reservation::{RESERVATION_STATE_CONSUMED, RESERVATION_STATE_ENTITLED};
+use clutch_solana_layout::reservation_v9::{ReservationAccountV9, RESERVATION_ACCOUNT_BYTES_V9};
 use clutch_solana_layout::settlement_receipt_v5::{
     portfolio_pair_transition_commitment_v2 as layout_portfolio_commitment_v2,
     project_settlement_receipt_evidence_v5, SettlementReceiptAccountV5,
-    SettlementReceiptTransitionCommitmentV5, SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5,
+    SettlementReceiptTransitionCommitmentV5,
     PORTFOLIO_PAIR_TRANSITION_COMMITMENT_DOMAIN_V2 as LAYOUT_PORTFOLIO_DOMAIN_V2,
+    SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5,
 };
-use clutch_solana_layout::registry::GeneralV2Action;
-use clutch_solana_layout::{account_len, Hash32, OrderSlot, PriceGridAccount, ORDER_KIND_PORTFOLIO};
+use clutch_solana_layout::{
+    account_len, Hash32, OrderSlot, PriceGridAccount, ORDER_KIND_PORTFOLIO,
+};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 use crate::accounts::{require, Outcome};
+use crate::capabilities;
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
 
+use super::general_market_current_v5::{
+    authenticate_general_market_current_prefix_v5, CURRENT_V5_IX_MARKET_BINDING,
+    GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5,
+};
+use super::general_v2_settlement_root::authenticate_readonly_general_settlement_root_v1;
+
+/// Action-local accounts after the exact current-market prefix and before the
+/// active OrderPage V5 and Receipt V5 suffixes.
+pub const PORTFOLIO_PAIR_LOCAL_FIXED_ACCOUNTS_V5: usize = 10;
 /// Fixed accounts before the active OrderPage V5 and Receipt V5 suffixes.
-pub const PORTFOLIO_PAIR_FIXED_ACCOUNTS_V2: usize = 11;
+pub const PORTFOLIO_PAIR_FIXED_ACCOUNTS_V2: usize =
+    GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5 + PORTFOLIO_PAIR_LOCAL_FIXED_ACCOUNTS_V5;
 /// Minimum exact account count: fixed prefix plus one page and one receipt.
-pub const PORTFOLIO_PAIR_MIN_ACCOUNTS_V2: usize = 13;
+pub const PORTFOLIO_PAIR_MIN_ACCOUNTS_V2: usize = PORTFOLIO_PAIR_FIXED_ACCOUNTS_V2 + 2;
 /// Maximum exact account count: fixed prefix plus four pages and 16 receipts.
-pub const PORTFOLIO_PAIR_MAX_ACCOUNTS_V2: usize = 31;
+pub const PORTFOLIO_PAIR_MAX_ACCOUNTS_V2: usize = PORTFOLIO_PAIR_FIXED_ACCOUNTS_V2 + 20;
 
-pub const IX_SETTLEMENT_ROOT: usize = 0;
-pub const IX_RETAINED_FEED: usize = 1;
-pub const IX_ECONOMIC_DOMAIN: usize = 2;
-pub const IX_MARKET_BINDING: usize = 3;
-pub const IX_PRICE_GRID: usize = 4;
-pub const IX_BUYER_RESERVATION_V9: usize = 5;
-pub const IX_SELLER_RESERVATION_V9: usize = 6;
-pub const IX_BUYER_POSITION_V3: usize = 7;
-pub const IX_SELLER_POSITION_V3: usize = 8;
-pub const IX_BUYER_REPLAY_GEN1: usize = 9;
-pub const IX_SELLER_REPLAY_GEN1: usize = 10;
-pub const IX_FIRST_ORDER_PAGE_V5: usize = 11;
+pub const IX_SETTLEMENT_ROOT: usize = GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5;
+pub const IX_RETAINED_FEED: usize = IX_SETTLEMENT_ROOT + 1;
+pub const IX_ECONOMIC_DOMAIN: usize = IX_RETAINED_FEED + 1;
+pub const IX_PRICE_GRID: usize = IX_ECONOMIC_DOMAIN + 1;
+pub const IX_BUYER_RESERVATION_V9: usize = IX_PRICE_GRID + 1;
+pub const IX_SELLER_RESERVATION_V9: usize = IX_BUYER_RESERVATION_V9 + 1;
+pub const IX_BUYER_POSITION_V3: usize = IX_SELLER_RESERVATION_V9 + 1;
+pub const IX_SELLER_POSITION_V3: usize = IX_BUYER_POSITION_V3 + 1;
+pub const IX_BUYER_REPLAY_GEN1: usize = IX_SELLER_POSITION_V3 + 1;
+pub const IX_SELLER_REPLAY_GEN1: usize = IX_BUYER_REPLAY_GEN1 + 1;
+pub const IX_FIRST_ORDER_PAGE_V5: usize = PORTFOLIO_PAIR_FIXED_ACCOUNTS_V2;
 
-static EMPTY_RECEIPT_LAYOUT_V2:
-    [Option<SettlementReceiptAccountV5>; PORTFOLIO_PAIR_MAX_RECEIPTS_V2] =
-    [None; PORTFOLIO_PAIR_MAX_RECEIPTS_V2];
+static EMPTY_RECEIPT_LAYOUT_V2: [Option<SettlementReceiptAccountV5>;
+    PORTFOLIO_PAIR_MAX_RECEIPTS_V2] = [None; PORTFOLIO_PAIR_MAX_RECEIPTS_V2];
 static EMPTY_RECEIPT_ACCOUNTS_V2: [Hash32; PORTFOLIO_PAIR_MAX_RECEIPTS_V2] =
     [Hash32::ZERO; PORTFOLIO_PAIR_MAX_RECEIPTS_V2];
 static EMPTY_RECEIPT_PRESTATE_SET_V2: PortfolioSettlementReceiptV5SetPrestate =
     PortfolioSettlementReceiptV5SetPrestate {
         receipt_count: 0,
-        receipts: [
-            PortfolioSettlementReceiptV5Prestate::EMPTY;
-            PORTFOLIO_PAIR_MAX_RECEIPTS_V2
-        ],
+        receipts: [PortfolioSettlementReceiptV5Prestate::EMPTY; PORTFOLIO_PAIR_MAX_RECEIPTS_V2],
     };
-static EMPTY_RECEIPT_TRAVERSAL_V2:
-    [PortfolioReceiptSiblingTraversalV2; PORTFOLIO_PAIR_MAX_RECEIPTS_V2] = [
-    PortfolioReceiptSiblingTraversalV2::EMPTY;
-    PORTFOLIO_PAIR_MAX_RECEIPTS_V2
-];
-static EMPTY_EXECUTION_INPUT_V2: PortfolioPairExecutionInputV2 =
-    PortfolioPairExecutionInputV2 {
-        settlement_receipts: PortfolioSettlementReceiptV5SetPrestate {
-            receipt_count: 0,
-            receipts: [
-                PortfolioSettlementReceiptV5Prestate::EMPTY;
-                PORTFOLIO_PAIR_MAX_RECEIPTS_V2
-            ],
-        },
-        buyer_reservation: EMPTY_RESERVATION_PRESTATE_V2,
-        seller_reservation: EMPTY_RESERVATION_PRESTATE_V2,
+static EMPTY_RECEIPT_TRAVERSAL_V2: [PortfolioReceiptSiblingTraversalV2;
+    PORTFOLIO_PAIR_MAX_RECEIPTS_V2] =
+    [PortfolioReceiptSiblingTraversalV2::EMPTY; PORTFOLIO_PAIR_MAX_RECEIPTS_V2];
+static EMPTY_EXECUTION_INPUT_V2: PortfolioPairExecutionInputV2 = PortfolioPairExecutionInputV2 {
+    settlement_receipts: PortfolioSettlementReceiptV5SetPrestate {
+        receipt_count: 0,
+        receipts: [PortfolioSettlementReceiptV5Prestate::EMPTY; PORTFOLIO_PAIR_MAX_RECEIPTS_V2],
+    },
+    buyer_reservation: EMPTY_RESERVATION_PRESTATE_V2,
+    seller_reservation: EMPTY_RESERVATION_PRESTATE_V2,
         buyer_position: EMPTY_POSITION_PRESTATE_V2,
         seller_position: EMPTY_POSITION_PRESTATE_V2,
         buyer_replay: EMPTY_REPLAY_PRESTATE_V2,
@@ -226,8 +225,7 @@ impl PortfolioBookAdapterV2 for CompleteBookAdapterV2 {
             PortfolioBookAccountRoleV2::SettlementRoot => {
                 expected.account_id == self.page_set.settlement_root_account_id
                     && expected.data_semantic_id == self.page_set.settlement_root_pre_semantic_id
-                    && expected.generation
-                        == Some(self.page_set.settlement_root_epoch_generation)
+                    && expected.generation == Some(self.page_set.settlement_root_epoch_generation)
                     && expected.page_index.is_none()
             }
             PortfolioBookAccountRoleV2::RetainedFeed => {
@@ -269,11 +267,8 @@ struct ExecutionAdapterV2 {
     receipt_pre: Box<[Option<SettlementReceiptAccountV5>; PORTFOLIO_PAIR_MAX_RECEIPTS_V2]>,
     receipt_prestate: Box<PortfolioSettlementReceiptV5SetPrestate>,
     receipt_accounts: Box<[Hash32; PORTFOLIO_PAIR_MAX_RECEIPTS_V2]>,
-    receipt_post: Cell<
-        Option<
-            Box<[Option<SettlementReceiptAccountV5>; PORTFOLIO_PAIR_MAX_RECEIPTS_V2]>,
-        >,
-    >,
+    receipt_post:
+        Cell<Option<Box<[Option<SettlementReceiptAccountV5>; PORTFOLIO_PAIR_MAX_RECEIPTS_V2]>>>,
 }
 
 impl PortfolioAdapterV2 for ExecutionAdapterV2 {
@@ -342,11 +337,12 @@ impl PortfolioAdapterV2 for ExecutionAdapterV2 {
         let mut index = 0usize;
         while index < usize::from(expected.prestate.receipt_count) {
             let successor = self.receipt_pre[index]?
-                .commit_portfolio_pair_delivery(Hash32::from_bytes(
-                    expected.transition_commitment,
-                ))
+                .commit_portfolio_pair_delivery(Hash32::from_bytes(expected.transition_commitment))
                 .ok()?;
-            post_ids[index] = successor.data_id(self.receipt_accounts[index]).ok()?.bytes();
+            post_ids[index] = successor
+                .data_id(self.receipt_accounts[index])
+                .ok()?
+                .bytes();
             post[index] = Some(successor);
             index += 1;
         }
@@ -388,11 +384,7 @@ fn require_program_account(
     Ok(())
 }
 
-fn account_frame(
-    count: usize,
-    page_count: u8,
-    receipt_count: u8,
-) -> Outcome<(usize, usize)> {
+fn account_frame(count: usize, page_count: u8, receipt_count: u8) -> Outcome<(usize, usize)> {
     let pages = usize::from(page_count);
     let receipts = usize::from(receipt_count);
     if !(1..=PORTFOLIO_BOOK_MAX_PAGES_V2).contains(&pages)
@@ -415,26 +407,15 @@ fn require_distinct_accounts(accounts: &[AccountInfo<'_>]) -> Outcome<()> {
     while left < accounts.len() {
         let mut right = left + 1;
         while right < accounts.len() {
-            require(accounts[left].key != accounts[right].key, ClutchError::AccountAlias)?;
+            require(
+                accounts[left].key != accounts[right].key,
+                ClutchError::AccountAlias,
+            )?;
             right += 1;
         }
         left += 1;
     }
     Ok(())
-}
-
-fn root_data_id(
-    root_account: Id32,
-    root: contract::SettlementRootV1AccountV1,
-) -> Outcome<Id32> {
-    let mut body = [0u8; contract::SETTLEMENT_ROOT_ACCOUNT_BYTES];
-    root.encode(&mut body)?;
-    Id32::new(RuntimeSha256.sha256(&[
-        contract::SETTLEMENT_ROOT_DATA_ID_DOMAIN_V1,
-        &root_account.bytes(),
-        &body,
-    ]))
-    .map_err(Into::into)
 }
 
 fn project_complete_pages(
@@ -538,7 +519,10 @@ fn find_page_slot(
             .ok_or(Refusal::Adapter(ClutchError::AccountCount))?,
     )?;
     let header = verify_page_v5(&data)?;
-    require(header.page_index == page_index, ClutchError::MismatchedState)?;
+    require(
+        header.page_index == page_index,
+        ClutchError::MismatchedState,
+    )?;
     let mut cursor = OrderSlotCursorV5::new(&data)?;
     while let Some(step) = cursor.next_slot() {
         let verified = step?;
@@ -668,9 +652,7 @@ fn account_expectation(
     }
 }
 
-fn replay_transition_expectation(
-    endpoint: &EndpointPlanV2,
-) -> PortfolioTransitionExpectationV2 {
+fn replay_transition_expectation(endpoint: &EndpointPlanV2) -> PortfolioTransitionExpectationV2 {
     PortfolioTransitionExpectationV2 {
         role: PortfolioAccountRoleV2::Replay,
         account_id: endpoint.replay_pre.replay_account().bytes(),
@@ -698,10 +680,7 @@ fn write_exact(account: &AccountInfo<'_>, body: &[u8]) -> Outcome<()> {
 }
 
 #[inline(never)]
-fn write_reservation_post(
-    account: &AccountInfo<'_>,
-    post: ReservationAccountV9,
-) -> Outcome<()> {
+fn write_reservation_post(account: &AccountInfo<'_>, post: ReservationAccountV9) -> Outcome<()> {
     let mut bytes = [0u8; RESERVATION_ACCOUNT_BYTES_V9];
     post.encode(&mut bytes)?;
     write_exact(account, &bytes)
@@ -727,17 +706,18 @@ fn write_replay_post(
     write_exact(account, post.replay_poststate_body())
 }
 
-/// Dispatch-compatible action-42 entrypoint.
+/// Dispatch-compatible current action-42 entrypoint.
 ///
 /// Exact account contract:
 ///
-/// - `0`: counted SettlementRoot V1, read-only;
-/// - `1`: retained sealed Feed, read-only;
-/// - `2..=4`: EconomicDomain V2, MarketBinding V2, PriceGrid, read-only;
-/// - `5..=6`: buyer and seller Reservation V9, writable;
-/// - `7..=8`: buyer and seller Position V3, writable;
-/// - `9..=10`: buyer and seller GEN1 purpose Replay, writable;
-/// - `11..11+page_count`: complete OrderPage V5 prefix, read-only and ordered
+/// - `0..25`: exact common GeneralMarketCurrentV5 authority prefix;
+/// - `25`: counted SettlementRoot V1, read-only;
+/// - `26`: retained sealed Feed, read-only;
+/// - `27..=28`: EconomicDomain V2 and PriceGrid, read-only;
+/// - `29..=30`: buyer and seller Reservation V9, writable;
+/// - `31..=32`: buyer and seller Position V3, writable;
+/// - `33..=34`: buyer and seller GEN1 purpose Replay, writable;
+/// - `35..35+page_count`: complete OrderPage V5 prefix, read-only and ordered
 ///   by `page_index`; and
 /// - the exact remaining suffix: every Receipt V5 sibling, writable and
 ///   ordered by retained-Feed `slice_index`.
@@ -754,7 +734,8 @@ pub fn process(
 ) -> Outcome<()> {
     require(sequence == 0, ClutchError::Replay)?;
     require(
-        action == GeneralV2Action::ConsumePortfolioPairEggs,
+        action == GeneralV2Action::ConsumePortfolioPairEggs
+            && capabilities::extension_intent_action_enabled(74, 1, action.tag()),
         ClutchError::UnsupportedInstruction,
     )?;
     let PortfolioSettlementPayloadV1::ConsumePortfolioPairEggs(request) =
@@ -777,12 +758,12 @@ fn consume_portfolio_pair(
         LAYOUT_PORTFOLIO_DOMAIN_V2 == &PORTFOLIO_PAIR_TRANSITION_COMMITMENT_DOMAIN_V2[..],
         ClutchError::MismatchedState,
     )?;
+    let current = authenticate_general_market_current_prefix_v5(program_id, accounts)?;
 
     for index in [
         IX_SETTLEMENT_ROOT,
         IX_RETAINED_FEED,
         IX_ECONOMIC_DOMAIN,
-        IX_MARKET_BINDING,
         IX_PRICE_GRID,
     ] {
         require_program_account(program_id, &accounts[index], false, None)?;
@@ -818,10 +799,7 @@ fn consume_portfolio_pair(
         receipt_index += 1;
     }
     require(
-        accounts[IX_SETTLEMENT_ROOT].data_len() == contract::SETTLEMENT_ROOT_ACCOUNT_BYTES
-            && accounts[IX_ECONOMIC_DOMAIN].data_len() == contract::ECONOMIC_DOMAIN_ACCOUNT_BYTES
-            && accounts[IX_MARKET_BINDING].data_len()
-                == contract::MARKET_BINDING_ACCOUNT_BYTES_V2
+        accounts[IX_ECONOMIC_DOMAIN].data_len() == contract::ECONOMIC_DOMAIN_ACCOUNT_BYTES
             && accounts[IX_PRICE_GRID].data_len() == account_len::PRICE_GRID
             && accounts[IX_BUYER_RESERVATION_V9].data_len() == RESERVATION_ACCOUNT_BYTES_V9
             && accounts[IX_SELLER_RESERVATION_V9].data_len() == RESERVATION_ACCOUNT_BYTES_V9
@@ -835,9 +813,18 @@ fn consume_portfolio_pair(
     )?;
 
     let root_account = id(accounts[IX_SETTLEMENT_ROOT].key);
-    let root = contract::SettlementRootV1AccountV1::decode(&borrow_data(
-        &accounts[IX_SETTLEMENT_ROOT],
+    let entry_receipt = SettlementReceiptAccountV5::decode(&borrow_data(
+        &accounts[first_receipt],
     )?)?;
+    let entry_semantic = entry_receipt.semantic();
+    let root_authority = authenticate_readonly_general_settlement_root_v1(
+        program_id,
+        core::slice::from_ref(&accounts[IX_SETTLEMENT_ROOT]),
+        request.epoch,
+        Id32::new(entry_semantic.candidate.0)?,
+    )?;
+    require(root_authority.is_indexed(), ClutchError::MismatchedState)?;
+    let root = *root_authority.root();
     let root_pda = seeds::general_v2_settlement_root_pda(
         program_id,
         &root.epoch().bytes(),
@@ -852,7 +839,7 @@ fn consume_portfolio_pair(
             && root.retained_feed_state() == contract::SettlementRootChildStateV1::Live,
         ClutchError::MismatchedState,
     )?;
-    let root_pre_data_id = root_data_id(root_account, root)?;
+    let root_pre_data_id = root_authority.data_id(&RuntimeSha256)?;
 
     let feed_account = id(accounts[IX_RETAINED_FEED].key);
     let feed_data = borrow_data(&accounts[IX_RETAINED_FEED])?;
@@ -888,9 +875,8 @@ fn consume_portfolio_pair(
         ClutchError::MismatchedState,
     )?;
 
-    let domain = contract::EconomicDomainV2AccountV1::decode(&borrow_data(
-        &accounts[IX_ECONOMIC_DOMAIN],
-    )?)?;
+    let domain =
+        contract::EconomicDomainV2AccountV1::decode(&borrow_data(&accounts[IX_ECONOMIC_DOMAIN])?)?;
     let domain_pda = seeds::general_v2_economic_domain_pda(program_id, &root.epoch().bytes());
     let domain_digest = contract::economic_domain_digest_v2(&RuntimeSha256, domain.transcript)?;
     require(
@@ -903,15 +889,17 @@ fn consume_portfolio_pair(
         ClutchError::MismatchedState,
     )?;
 
-    let binding = contract::MarketBindingV2::decode(&borrow_data(&accounts[IX_MARKET_BINDING])?)?;
+    let binding = *current.binding().base();
     let binding_pda = seeds::general_v2_market_binding_pda(
         program_id,
         &binding.base().market_instance_v2_id.bytes(),
     );
     require(
         request.settlement_root == root_account
-            && root.market_binding() == id(accounts[IX_MARKET_BINDING].key)
-            && *accounts[IX_MARKET_BINDING].key == binding_pda.0
+            && root.market_binding() == id(&current.binding_account())
+            && current.binding_account() == *accounts[CURRENT_V5_IX_MARKET_BINDING].key
+            && current.binding_account() == binding_pda.0
+            && root.market() == Id32::from_bytes(current.runtime_account().to_bytes())
             && binding.base().stored_bump == binding_pda.1
             && binding.base().market == root.market()
             && binding.base().market_instance_v2_id == root.market_instance_v2_id()
@@ -973,10 +961,8 @@ fn consume_portfolio_pair(
 
     let mut receipt_layout = super::orders_batch::boxed_copy_of(&EMPTY_RECEIPT_LAYOUT_V2)?;
     let mut receipt_accounts = super::orders_batch::boxed_copy_of(&EMPTY_RECEIPT_ACCOUNTS_V2)?;
-    let mut receipt_prestate =
-        super::orders_batch::boxed_copy_of(&EMPTY_RECEIPT_PRESTATE_SET_V2)?;
-    let mut receipt_traversal =
-        super::orders_batch::boxed_copy_of(&EMPTY_RECEIPT_TRAVERSAL_V2)?;
+    let mut receipt_prestate = super::orders_batch::boxed_copy_of(&EMPTY_RECEIPT_PRESTATE_SET_V2)?;
+    let mut receipt_traversal = super::orders_batch::boxed_copy_of(&EMPTY_RECEIPT_TRAVERSAL_V2)?;
     let mut entry_slice: Option<contract::SettlementSliceV1> = None;
     receipt_index = 0;
     while receipt_index < receipt_count {
@@ -985,8 +971,8 @@ fn consume_portfolio_pair(
         let (receipt, receipt_evidence) =
             project_settlement_receipt_evidence_v5(receipt_account, &borrow_data(account)?)?;
         let semantic = receipt.semantic();
-        let canonical_slice_index = u16::try_from(receipt_index)
-            .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+        let canonical_slice_index =
+            u16::try_from(receipt_index).map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
         let canonical_sequence = u64::from(canonical_slice_index)
             .checked_add(1)
             .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
@@ -1037,7 +1023,10 @@ fn consume_portfolio_pair(
                 ClutchError::MismatchedState,
             )?;
         } else {
-            require(request.receipt == id(account.key), ClutchError::MismatchedState)?;
+            require(
+                request.receipt == id(account.key),
+                ClutchError::MismatchedState,
+            )?;
             entry_slice = Some(slice);
         }
         receipt_layout[receipt_index] = Some(receipt);
@@ -1266,12 +1255,10 @@ fn consume_portfolio_pair(
         prices: feed_economics.prices,
     };
 
-    let buyer_reservation = ReservationAccountV9::decode(&borrow_data(
-        &accounts[IX_BUYER_RESERVATION_V9],
-    )?)?;
-    let seller_reservation = ReservationAccountV9::decode(&borrow_data(
-        &accounts[IX_SELLER_RESERVATION_V9],
-    )?)?;
+    let buyer_reservation =
+        ReservationAccountV9::decode(&borrow_data(&accounts[IX_BUYER_RESERVATION_V9])?)?;
+    let seller_reservation =
+        ReservationAccountV9::decode(&borrow_data(&accounts[IX_SELLER_RESERVATION_V9])?)?;
     let buyer_reservation_body = buyer_reservation.body();
     let seller_reservation_body = seller_reservation.body();
     let buyer_reservation_pda = seeds::general_v2_reservation_v9_pda(
@@ -1453,10 +1440,8 @@ fn consume_portfolio_pair(
         ClutchError::MismatchedState,
     )?;
 
-    let buyer_reservation_post =
-        consumed_reservation(buyer_reservation, pair.pair_units())?;
-    let seller_reservation_post =
-        consumed_reservation(seller_reservation, pair.pair_units())?;
+    let buyer_reservation_post = consumed_reservation(buyer_reservation, pair.pair_units())?;
+    let seller_reservation_post = consumed_reservation(seller_reservation, pair.pair_units())?;
     let buyer_fields = buyer_position.semantic.fields();
     let seller_fields = seller_position.semantic.fields();
     let buyer_cash = buyer_fields
@@ -1483,7 +1468,11 @@ fn consume_portfolio_pair(
         .settlement_poststate(buyer_cash, buyer_reserved_cash, buyer_eggs)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let seller_position_post = seller_position
-        .settlement_poststate(seller_cash, seller_fields.reserved_cash_atoms, seller_fields.native_eggs)
+        .settlement_poststate(
+            seller_cash,
+            seller_fields.reserved_cash_atoms,
+            seller_fields.native_eggs,
+        )
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let buyer_position_post_id = buyer_position_post
         .semantic
@@ -1709,10 +1698,11 @@ fn consume_portfolio_pair(
     )?;
     receipt_index = 0;
     while receipt_index < receipt_count {
-        let post = receipt_post[receipt_index]
-            .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+        let post =
+            receipt_post[receipt_index].ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
         require(
-            post.data_id(adapter.receipt_accounts[receipt_index])?.bytes()
+            post.data_id(adapter.receipt_accounts[receipt_index])?
+                .bytes()
                 == prepared.post_semantic_ids().settlement_receipts[receipt_index],
             ClutchError::MismatchedState,
         )?;
@@ -1727,10 +1717,19 @@ fn consume_portfolio_pair(
         &accounts[IX_SELLER_RESERVATION_V9],
         seller_endpoint.reservation_post,
     )?;
-    write_position_post(&accounts[IX_BUYER_POSITION_V3], &buyer_endpoint.position_post)?;
-    write_position_post(&accounts[IX_SELLER_POSITION_V3], &seller_endpoint.position_post)?;
+    write_position_post(
+        &accounts[IX_BUYER_POSITION_V3],
+        &buyer_endpoint.position_post,
+    )?;
+    write_position_post(
+        &accounts[IX_SELLER_POSITION_V3],
+        &seller_endpoint.position_post,
+    )?;
     write_replay_post(&accounts[IX_BUYER_REPLAY_GEN1], &buyer_endpoint.replay_post)?;
-    write_replay_post(&accounts[IX_SELLER_REPLAY_GEN1], &seller_endpoint.replay_post)?;
+    write_replay_post(
+        &accounts[IX_SELLER_REPLAY_GEN1],
+        &seller_endpoint.replay_post,
+    )?;
     receipt_index = 0;
     while receipt_index < receipt_count {
         let receipt_post_bytes = receipt_post[receipt_index]
@@ -1769,18 +1768,24 @@ mod tests {
 
     #[test]
     fn account_frame_binds_complete_page_and_receipt_suffixes() {
-        assert_eq!(account_frame(13, 1, 1), Ok((1, 1)));
-        assert_eq!(account_frame(31, 4, 16), Ok((4, 16)));
         assert_eq!(
-            account_frame(30, 4, 16),
+            account_frame(PORTFOLIO_PAIR_MIN_ACCOUNTS_V2, 1, 1),
+            Ok((1, 1))
+        );
+        assert_eq!(
+            account_frame(PORTFOLIO_PAIR_MAX_ACCOUNTS_V2, 4, 16),
+            Ok((4, 16))
+        );
+        assert_eq!(
+            account_frame(PORTFOLIO_PAIR_MAX_ACCOUNTS_V2 - 1, 4, 16),
             Err(Refusal::Adapter(ClutchError::AccountCount))
         );
         assert_eq!(
-            account_frame(13, 0, 2),
+            account_frame(PORTFOLIO_PAIR_MIN_ACCOUNTS_V2, 0, 2),
             Err(Refusal::Adapter(ClutchError::AccountCount))
         );
         assert_eq!(
-            account_frame(13, 2, 0),
+            account_frame(PORTFOLIO_PAIR_MIN_ACCOUNTS_V2, 2, 0),
             Err(Refusal::Adapter(ClutchError::AccountCount))
         );
     }
