@@ -125,12 +125,24 @@ coordinate, one onchain-derived finalized restart cursor, its complete named
 driver/dependency observations, and a still-live exclusive validity slot.
 Source material must be a legacy `source-plane-v3` transaction without lookup
 tables. Structured material must be a v0 `structured-claim` transaction with
-one finalized, digest-bound address lookup table. Missing finalized state,
+one finalized, digest-bound address lookup table. Its verdict names the
+disjoint wrapper execution release and base scheduling/driver release; Glass
+checks the wrapper Program/deployment/ELF/manifest release key instead of
+pretending the indexed base release owns wrapper instruction bytes. Missing finalized state,
 changed driver slots, stale dependencies, expired material, unsupported family
 contracts, and release-enabled coordinates without one exact canonical draft
 remain visible as refused dispositions; none can be selected. The browser has
 no manual payload, account-role, semantic-owner, or transaction assembly input
 on this path.
+
+Dealer retirement variants are a separate release surface. Glass recognizes
+only the closed `76/1/25/8` active-facility-credit and `76/1/25/9`
+unused-future-credit variants, requires the coarse `76/1/25` tuple to remain
+absent, and joins the exact discriminator set across acquisition, release,
+session, and action projections. Their current daemon draft shape is displayed
+as a refused payload-variant verdict until a complete browser-side Dealer
+account-tuple contract lands; variant visibility never promotes the coarse
+coordinate or makes its bytes selectable.
 
 Product/Series registration and Owner/Position V3 lifecycle appear as separate
 `not-authenticated` capability cards. This avoids treating Product compiler
