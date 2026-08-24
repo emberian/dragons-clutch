@@ -832,6 +832,16 @@ impl AuthenticatedSourceProductRouteV3 {
         self.compiler_bundle_id
     }
 
+    /// Exact current central Registry release retained by this route.
+    pub const fn registry_release_id(self) -> ContentId {
+        self.registry_release_id
+    }
+
+    /// Exact current ProfileV4 capability identity retained by this route.
+    pub const fn capability_profile_id(self) -> ContentId {
+        self.capability_profile_id
+    }
+
     /// Immutable Realm selected by ProfileV4 and GenesisV2.
     pub const fn realm_id(self) -> ContentId {
         self.realm_id
@@ -939,6 +949,7 @@ pub struct AuthenticatedSourceSemanticPublicationV1 {
     window: WindowSpecV3,
     statistic_key: StatisticKeyV3,
     summary_program: SummaryProgramV3,
+    source_work_funding: ComponentDebitV1,
 }
 
 impl AuthenticatedSourceSemanticPublicationV1 {
@@ -970,6 +981,11 @@ impl AuthenticatedSourceSemanticPublicationV1 {
     /// Exact reviewed SummaryProgram selected by ProfileV4.
     pub const fn summary_program(self) -> SummaryProgramV3 {
         self.summary_program
+    }
+
+    /// Exact Product QuoteV4 SourceWork capitalization for this occurrence.
+    pub const fn source_work_funding(self) -> ComponentDebitV1 {
+        self.source_work_funding
     }
 }
 
@@ -1013,6 +1029,8 @@ pub fn authenticate_source_semantic_publication_v1(
         .summary_program
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let source_work_funding =
+        artifacts.quote.components[SeriesFundingComponentV2::SourceWork.index()];
     require(
         compiler_bundle.bundle_id() == route.compiler_bundle_id
             && compiler_bundle.bundle().capability_profile_id.content_id()
@@ -1041,6 +1059,8 @@ pub fn authenticate_source_semantic_publication_v1(
             &window_id.bytes(),
             &statistic_key_id.bytes(),
             &summary_program_id.bytes(),
+            &source_work_funding.lamports.to_le_bytes(),
+            &source_work_funding.collateral_atoms.to_le_bytes(),
             &ordinal.to_le_bytes(),
         ])
         .to_bytes(),
@@ -1053,6 +1073,7 @@ pub fn authenticate_source_semantic_publication_v1(
         window: compiled.window,
         statistic_key: compiled.statistic_key,
         summary_program: compiled.summary_program,
+        source_work_funding,
     })
 }
 
@@ -1061,10 +1082,11 @@ pub fn authenticate_source_semantic_publication_v1(
 /// StatisticKey accounts. The returned receipt is postwrite-only and carries
 /// no caller-selected semantic coordinates.
 #[allow(clippy::too_many_arguments)]
-pub fn publish_source_semantic_inputs_v1(
+pub(crate) fn publish_source_semantic_inputs_v1(
     program_id: &Pubkey,
     publication: AuthenticatedSourceSemanticPublicationV1,
-    payer: &AccountInfo<'_>,
+    custody: crate::source_plane_v3_actions::AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     window_account: &AccountInfo<'_>,
     summary_account: &AccountInfo<'_>,
     statistic_key_account: &AccountInfo<'_>,
@@ -1077,7 +1099,8 @@ pub fn publish_source_semantic_inputs_v1(
         publication.window,
         publication.summary_program,
         publication.statistic_key,
-        payer,
+        custody,
+        custody_account,
         window_account,
         summary_account,
         statistic_key_account,

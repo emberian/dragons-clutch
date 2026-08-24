@@ -7,8 +7,8 @@
 //! mutable postimages advance their durable lineage in the same rollback
 //! domain, immutable accounts retain an explicit payer/donation rent partition,
 //! and every paid transition emits the exact Source receipt plus liveness
-//! intent. These handlers are not a permissionless funding claim: their current
-//! child/receipt creation still needs the immutable schedule payer to sign.
+//! intent. Every lifecycle child is capitalized from the schedule-selected
+//! program-derived custody; keepers sign calls but never supply account rent.
 
 use std::vec;
 use std::vec::Vec;
@@ -18,10 +18,20 @@ use clutch_liveness::runtime_adapter_v1::{
     RuntimeReceiptObservationV1, RuntimeTransferRoleV1, RuntimeTransitionIntentV1,
 };
 use clutch_liveness::Id as LivenessId;
+use clutch_liveness::runtime_v1::{
+    PresentFundingSourceV1, PresentFundingV1, RuntimeCompartmentAdmissionV1,
+    RuntimeCompartmentIdentityV1, RuntimeCompartmentKindV1, RuntimeCompartmentV1,
+    RuntimeLivenessPolicyV1, RUNTIME_LIVENESS_ACCOUNT_BYTES_V1,
+    RUNTIME_LIVENESS_POLICY_BYTES_V1,
+};
 use clutch_source_plane_v3::{
     ContentId, FixedCodec, OpenRawPageV3, SourceHeadV3, SourcePlaneProgramV3, StatisticKeyV3,
     StatisticResultV3, SummaryProgramV3, WindowSpecV3, WindowWorkV3,
+    OPEN_RAW_PAGE_BYTES, RAW_PAGE_BYTES, SOURCE_HEAD_BYTES, STATISTIC_KEY_BYTES,
+    STATISTIC_RESULT_BYTES, SUMMARY_PROGRAM_BYTES, WINDOW_SEAL_BYTES, WINDOW_SPEC_BYTES,
+    WINDOW_WORK_BYTES,
 };
+use clutch_product_series::{CompiledSourceOccurrenceV3, FixedCodec as ProductFixedCodec};
 use clutch_source_plane_v3_adapter::PdaRecipeV3;
 pub use clutch_source_plane_v3_runtime::SourcePolicyHandoffJoinV1;
 use clutch_source_plane_v3_runtime::{
@@ -43,22 +53,24 @@ use clutch_source_plane_v3_runtime::{
     RuntimeAccountHeaderV1, RuntimeAccountViewV1, RuntimeKey, SealBatchModeV1,
     SourcePolicyHandoffAccessV1, SourcePolicyHandoffAccountV1, SourceReleaseManifestV2,
     SourceNoReopenTerminalAccessV1, SourceNoReopenTerminalV1, SourceReceiptDispositionV1,
-    SourceReopenGenerationRequestV1,
+    SourceGenerationRequestV1, SourceReopenGenerationRequestV1,
     SourceTerminalAuthorizationV1, SourceTerminalOutcomeV1,
     SourceWorkAuthorizationV1, SourceWorkKindV1, SourceWorkReceiptAccessV1,
     SourceWorkReceiptAccountV1, SourceWorkScheduleBindingV1, SuccessfulEvaluationHandoffV1,
+    source_runtime_liveness_policy_id_v1,
     REOPEN_LINEAGE_BYTES, RUNTIME_ACCOUNT_HEADER_BYTES,
     SOURCE_NO_REOPEN_TERMINAL_BYTES, SOURCE_REOPEN_GENERATION_REQUEST_BYTES,
 };
 use solana_account_info::AccountInfo;
-use solana_instruction::Instruction;
+use solana_cpi::invoke_signed;
+use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
 use crate::accounts::{expect_pda, require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::{
-    create_pda_account, read_rent, require_creatable, require_system_program, RentParameters,
-    SYSTEM_PROGRAM_ID,
+    allocate_data, assign_data, create_pda_account, read_rent, require_creatable,
+    require_system_program, transfer_data, RentParameters, SYSTEM_PROGRAM_ID,
 };
 use crate::seeds;
 use crate::source_plane_v3::{
@@ -66,9 +78,418 @@ use crate::source_plane_v3::{
     authenticate_reopen_generation_request_before_close,
     project_liveness_receipt, project_liveness_terminal_intent, project_liveness_work_intent,
     runtime_key, SourceV3SbfError,
-    SOURCE_REOPEN_REQUEST_SEED_V1,
 };
 use clutch_solana_layout::artifact::ArtifactKind;
+
+const SOURCE_FUNDING_CUSTODY_AUTH_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/sbf/authenticated-source-funding-custody/v1";
+
+/// Exact System-owned prepaid custody selected by one Source work schedule.
+///
+/// This receipt is constructed only after route/schedule/PDA/owner/privilege
+/// authentication. It contains no caller-selected amount and cannot authorize
+/// a transfer except through the typed Source account constructors below.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSourceFundingCustodyV1 {
+    id: ContentId,
+    account: RuntimeKey,
+    lifecycle_id: ContentId,
+    source_work_schedule_id: ContentId,
+}
+
+impl AuthenticatedSourceFundingCustodyV1 {
+    /// Exact zero-data custody PDA.
+    pub(crate) const fn account(self) -> RuntimeKey {
+        self.account
+    }
+
+    /// Immutable Source lifecycle selecting the PDA.
+    pub(crate) const fn lifecycle_id(self) -> ContentId {
+        self.lifecycle_id
+    }
+
+    /// Exact heterogeneous schedule selecting this custody.
+    pub(crate) const fn source_work_schedule_id(self) -> ContentId {
+        self.source_work_schedule_id
+    }
+
+    /// Complete route/schedule/PDA authentication identity.
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
+}
+
+/// Authenticate a permissionless prepaid Source rent custody. The account is
+/// writable because child creation and close recycle exact principal through
+/// it, but it is never a transaction signer; only its canonical PDA signs the
+/// System CPI.
+pub(crate) fn authenticate_source_funding_custody_v1(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    schedule: SourceWorkScheduleBindingV1,
+    account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedSourceFundingCustodyV1> {
+    schedule.validate_against(route).map_err(source_runtime)?;
+    let (address, _) =
+        seeds::source_funding_custody_pda(program_id, &schedule.lifecycle_id().bytes());
+    require(
+        schedule.payer() == runtime_key(account.key)
+            && account.key == &address
+            && account.owner == &SYSTEM_PROGRAM_ID
+            && account.data_is_empty()
+            && account.is_writable
+            && !account.is_signer
+            && !account.executable,
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SOURCE_FUNDING_CUSTODY_AUTH_DOMAIN_V1,
+            &route.route_id().bytes(),
+            &schedule.source_work_schedule_id().bytes(),
+            &schedule.lifecycle_id().bytes(),
+            account.key.as_ref(),
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(AuthenticatedSourceFundingCustodyV1 {
+        id,
+        account: runtime_key(account.key),
+        lifecycle_id: schedule.lifecycle_id(),
+        source_work_schedule_id: schedule.source_work_schedule_id(),
+    })
+}
+
+/// Private postwrite proving the release-selected generic liveness policy and
+/// its exact Source compartment were created from the prepaid lifecycle
+/// custody. Product consumes this receipt before admitting the occurrence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSourceLifecycleAdmissionV1 {
+    policy_account: RuntimeKey,
+    policy_account_data_id: ContentId,
+    compartment_account: RuntimeKey,
+    compartment_account_data_id: ContentId,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_balance_after: u64,
+    id: ContentId,
+}
+
+/// Exact QuoteV4 SourceWork lamport requirement for one bounded lifecycle.
+/// The reserve deliberately budgets the largest possible child+lineage pair
+/// for every admitted call, so no valid schedule can be stranded by a later
+/// family choice. Unused principal remains in the authenticated custody.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SourceLifecycleCapitalizationQuoteV1 {
+    pub(crate) liveness_work_lamports: u64,
+    pub(crate) permanent_and_child_rent_lamports: u64,
+    pub(crate) total_lamports: u64,
+    pub(crate) id: ContentId,
+}
+
+/// Derive the exact fully-prepaid SourceWork quote from the immutable schedule
+/// and live Rent sysvar. No target account prefund discounts this requirement.
+pub(crate) fn quote_source_lifecycle_capitalization_v1(
+    schedule: SourceWorkScheduleBindingV1,
+    rent: &RentParameters,
+) -> Outcome<SourceLifecycleCapitalizationQuoteV1> {
+    fn add_total(total: u64, value: u64) -> Outcome<u64> {
+        total
+            .checked_add(value)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))
+    }
+    let pre_root_spaces = [
+        RUNTIME_LIVENESS_POLICY_BYTES_V1,
+        RUNTIME_LIVENESS_ACCOUNT_BYTES_V1,
+        clutch_product_series::SOURCE_OCCURRENCE_RECORD_BYTES,
+        WINDOW_SPEC_BYTES,
+        SUMMARY_PROGRAM_BYTES,
+        STATISTIC_KEY_BYTES,
+        clutch_source_plane_v3_runtime::SOURCE_GENERATION_REQUEST_BYTES,
+        REOPEN_LINEAGE_BYTES,
+    ];
+    let mut rent_total = 0_u64;
+    for space in pre_root_spaces {
+        rent_total = add_total(rent_total, rent.minimum_balance(space)?)?;
+    }
+    let largest_runtime_body = OPEN_RAW_PAGE_BYTES
+        .max(RAW_PAGE_BYTES)
+        .max(SOURCE_HEAD_BYTES)
+        .max(WINDOW_WORK_BYTES)
+        .max(WINDOW_SEAL_BYTES)
+        .max(STATISTIC_RESULT_BYTES);
+    let per_call_rent = add_total(
+        rent.minimum_balance(RUNTIME_ACCOUNT_HEADER_BYTES + largest_runtime_body)?,
+        rent.minimum_balance(REOPEN_LINEAGE_BYTES)?,
+    )?;
+    let per_call_rent = add_total(
+        per_call_rent,
+        rent.minimum_balance(clutch_source_plane_v3_runtime::SOURCE_WORK_RECEIPT_ACCOUNT_BYTES)?,
+    )?;
+    rent_total = add_total(
+        rent_total,
+        per_call_rent
+            .checked_mul(u64::from(schedule.maximum_calls()))
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+    )?;
+    let terminal_policy_space = SOURCE_NO_REOPEN_TERMINAL_BYTES
+        .max(SOURCE_REOPEN_GENERATION_REQUEST_BYTES);
+    rent_total = add_total(rent_total, rent.minimum_balance(terminal_policy_space)?)?;
+    rent_total = add_total(
+        rent_total,
+        rent.minimum_balance(clutch_source_plane_v3_runtime::SOURCE_WORK_RECEIPT_ACCOUNT_BYTES)?,
+    )?;
+    let total_lamports = add_total(schedule.work_capital_lamports(), rent_total)?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            b"dragons-clutch/sbf/source-lifecycle-capitalization-quote/v1",
+            &schedule.source_work_schedule_id().bytes(),
+            &schedule.lifecycle_id().bytes(),
+            &schedule.work_capital_lamports().to_le_bytes(),
+            &rent_total.to_le_bytes(),
+            &total_lamports.to_le_bytes(),
+            &rent.lamports_per_byte_year.to_le_bytes(),
+            &rent.exemption_threshold.to_bits().to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(SourceLifecycleCapitalizationQuoteV1 {
+        liveness_work_lamports: schedule.work_capital_lamports(),
+        permanent_and_child_rent_lamports: rent_total,
+        total_lamports,
+        id,
+    })
+}
+
+impl AuthenticatedSourceLifecycleAdmissionV1 {
+    pub(crate) const fn policy_account(self) -> RuntimeKey {
+        self.policy_account
+    }
+
+    pub(crate) const fn policy_account_data_id(self) -> ContentId {
+        self.policy_account_data_id
+    }
+
+    pub(crate) const fn compartment_account(self) -> RuntimeKey {
+        self.compartment_account
+    }
+
+    pub(crate) const fn compartment_account_data_id(self) -> ContentId {
+        self.compartment_account_data_id
+    }
+
+    pub(crate) const fn custody(self) -> AuthenticatedSourceFundingCustodyV1 {
+        self.custody
+    }
+
+    pub(crate) const fn custody_balance_after(self) -> u64 {
+        self.custody_balance_after
+    }
+
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
+}
+
+/// Persist the exact content-addressed runtime-liveness policy and admit its
+/// Source compartment from the same lifecycle custody. The full policy body
+/// is self-authenticating and already selected by SourceReleaseManifestV2;
+/// Product additionally checks its Realm before it calls this private owner.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn admit_source_lifecycle_v1(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    schedule: SourceWorkScheduleBindingV1,
+    policy: RuntimeLivenessPolicyV1,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
+    policy_account: &AccountInfo<'_>,
+    compartment_account: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+    rent_sysvar: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedSourceLifecycleAdmissionV1> {
+    schedule.validate_against(route).map_err(source_runtime)?;
+    let policy_id = source_runtime_liveness_policy_id_v1(policy).map_err(source_runtime)?;
+    let source_policy = policy.compartment(RuntimeCompartmentKindV1::Source);
+    require(
+        policy_id == route.liveness_policy_id()
+            && policy.policy_id.bytes() == route.liveness_policy_id().bytes()
+            && policy.neutral_sink.bytes() == route.neutral_sink().bytes()
+            && source_policy.quote_schedule_id.bytes()
+                == schedule.source_work_schedule_id().bytes()
+            && source_policy.receipt_program_id.bytes() == program_id.to_bytes()
+            && source_policy.maximum_calls == schedule.maximum_calls()
+            && source_policy.maximum_lamports_per_call
+                == schedule.maximum_lamports_per_call()
+            && source_policy.work_capital_lamports == schedule.work_capital_lamports()
+            && source_policy.account_rent_principal_lamports
+                == schedule.rent_principal_lamports()
+            && route.source_compartment_owner() == runtime_key(program_id)
+            && custody.account() == runtime_key(custody_account.key)
+            && custody.lifecycle_id() == schedule.lifecycle_id(),
+        ClutchError::MismatchedState,
+    )?;
+    let terminal_calls = schedule.terminal_path_calls();
+    let terminal_work = schedule.terminal_path_work_lamports();
+    let mut path_index = 0_usize;
+    while path_index < policy.terminal_paths.len() {
+        require(
+            policy.terminal_paths[path_index].calls_for(RuntimeCompartmentKindV1::Source)
+                == terminal_calls[path_index]
+                && policy.terminal_paths[path_index]
+                    .work_lamports_for(RuntimeCompartmentKindV1::Source)
+                    == terminal_work[path_index],
+            ClutchError::MismatchedState,
+        )?;
+        path_index += 1;
+    }
+    let rent = read_rent(rent_sysvar)?;
+    let policy_minimum = rent.minimum_balance(RUNTIME_LIVENESS_POLICY_BYTES_V1)?;
+    let compartment_minimum = rent.minimum_balance(RUNTIME_LIVENESS_ACCOUNT_BYTES_V1)?;
+    require(
+        compartment_minimum == schedule.rent_principal_lamports()
+            && policy_account.is_writable
+            && !policy_account.is_signer
+            && !policy_account.executable
+            && compartment_account.is_writable
+            && !compartment_account.is_signer
+            && !compartment_account.executable
+            && compartment_account.lamports() == 0
+            && compartment_account.data_is_empty()
+            && policy_account.key != compartment_account.key
+            && policy_account.key != custody_account.key
+            && compartment_account.key != custody_account.key,
+        ClutchError::MismatchedState,
+    )?;
+    let (expected_policy, policy_bump) =
+        seeds::source_liveness_policy_pda(program_id, &policy_id.bytes());
+    let (expected_compartment, compartment_bump) =
+        seeds::source_compartment_pda(program_id, &schedule.lifecycle_id().bytes());
+    require(
+        policy_account.key == &expected_policy
+            && compartment_account.key == &expected_compartment
+            && runtime_key(compartment_account.key) == route.source_compartment_account(),
+        ClutchError::WrongPda,
+    )?;
+    let policy_bump_seed = [policy_bump];
+    create_with_raw_seeds_from_custody(
+        program_id,
+        custody,
+        custody_account,
+        policy_account,
+        system_program,
+        &rent,
+        RUNTIME_LIVENESS_POLICY_BYTES_V1,
+        &[
+            seeds::SEED_SOURCE_LIVENESS_POLICY_V1,
+            &policy_id.bytes(),
+            &policy_bump_seed,
+        ],
+    )?;
+    let mut policy_bytes = [0_u8; RUNTIME_LIVENESS_POLICY_BYTES_V1];
+    policy
+        .encode(&mut policy_bytes)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    write_exact_account_data(policy_account, &policy_bytes)?;
+
+    let compartment_bump_seed = [compartment_bump];
+    create_with_raw_seeds_from_custody(
+        program_id,
+        custody,
+        custody_account,
+        compartment_account,
+        system_program,
+        &rent,
+        RUNTIME_LIVENESS_ACCOUNT_BYTES_V1,
+        &[
+            seeds::SEED_SOURCE_COMPARTMENT_V1,
+            &schedule.lifecycle_id().bytes(),
+            &compartment_bump_seed,
+        ],
+    )?;
+    transfer_from_source_custody_v1(
+        program_id,
+        custody,
+        custody_account,
+        compartment_account,
+        system_program,
+        schedule.work_capital_lamports(),
+    )?;
+    require(
+        compartment_account.lamports()
+            == schedule
+                .work_capital_lamports()
+                .checked_add(compartment_minimum)
+                .ok_or(ClutchError::Arithmetic)?,
+        ClutchError::MismatchedState,
+    )?;
+    let state = RuntimeCompartmentV1::admit(
+        policy,
+        RuntimeCompartmentAdmissionV1 {
+            kind: RuntimeCompartmentKindV1::Source,
+            identity: RuntimeCompartmentIdentityV1 {
+                policy_id: policy.policy_id,
+                lifecycle_id: LivenessId::from_bytes(schedule.lifecycle_id().bytes()),
+                account_id: LivenessId::from_bytes(compartment_account.key.to_bytes()),
+                owner: LivenessId::from_bytes(route.source_compartment_owner().bytes()),
+                payer: LivenessId::from_bytes(custody.account().bytes()),
+                neutral_sink: policy.neutral_sink,
+                generation: schedule.generation(),
+            },
+            funding: PresentFundingV1 {
+                payer: LivenessId::from_bytes(custody.account().bytes()),
+                source: PresentFundingSourceV1::PrecapitalizedLivenessEndowment,
+                payer_debit_lamports: schedule
+                    .work_capital_lamports()
+                    .checked_add(compartment_minimum)
+                    .ok_or(ClutchError::Arithmetic)?,
+                account_balance_before: 0,
+                account_balance_after: compartment_account.lamports(),
+            },
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let mut compartment_bytes = [0_u8; RUNTIME_LIVENESS_ACCOUNT_BYTES_V1];
+    state
+        .encode(&mut compartment_bytes)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    write_exact_account_data(compartment_account, &compartment_bytes)?;
+    let policy_data_id = account_data_id(runtime_key(policy_account.key), &policy_bytes)
+        .map_err(source_runtime)?;
+    let compartment_data_id = account_data_id(
+        runtime_key(compartment_account.key),
+        &compartment_bytes,
+    )
+    .map_err(source_runtime)?;
+    let custody_balance_after = custody_account.lamports();
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            b"dragons-clutch/sbf/authenticated-source-lifecycle-admission/v1",
+            &route.route_id().bytes(),
+            &schedule.source_work_schedule_id().bytes(),
+            &policy_id.bytes(),
+            &policy_account.key.to_bytes(),
+            &policy_data_id.bytes(),
+            &compartment_account.key.to_bytes(),
+            &compartment_data_id.bytes(),
+            &custody.id().bytes(),
+            &policy_minimum.to_le_bytes(),
+            &custody_balance_after.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(AuthenticatedSourceLifecycleAdmissionV1 {
+        policy_account: runtime_key(policy_account.key),
+        policy_account_data_id: policy_data_id,
+        compartment_account: runtime_key(compartment_account.key),
+        compartment_account_data_id: compartment_data_id,
+        custody,
+        custody_balance_after,
+        id,
+    })
+}
 
 /// Complete open-account postimage committed with one lineage postimage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -84,6 +505,30 @@ pub struct OpenRuntimeAccountResultV1 {
     pub account_data_id: ContentId,
     /// Durable lineage postimage written atomically.
     pub lineage_after: ReopenLineageV1,
+}
+
+/// Permanent never-opened StatisticResult lineage created with the Product
+/// occurrence. Its existence lets action 10 distinguish true mature absence
+/// from a missing or substituted lineage account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PreallocatedStatisticResultLineageV1 {
+    funding: ImmutableAccountFundingV1,
+    authenticated: AuthenticatedReopenLineageV1,
+    id: ContentId,
+}
+
+impl PreallocatedStatisticResultLineageV1 {
+    pub(crate) const fn authenticated(self) -> AuthenticatedReopenLineageV1 {
+        self.authenticated
+    }
+
+    pub(crate) const fn funding(self) -> ImmutableAccountFundingV1 {
+        self.funding
+    }
+
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
 }
 
 /// Complete in-place state/lineage compare-and-swap result.
@@ -175,6 +620,55 @@ pub struct PublishedSourceSemanticInputsV1 {
     statistic_key: ImmutableSourceInputFundingV1,
     /// Identity of the exact three-account postwrite join.
     receipt_id: ContentId,
+}
+
+/// Private Product-owned immutable occurrence postwrite.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PublishedSourceOccurrenceV1 {
+    occurrence: CompiledSourceOccurrenceV3,
+    funding: ImmutableSourceInputFundingV1,
+    id: ContentId,
+}
+
+impl PublishedSourceOccurrenceV1 {
+    pub(crate) const fn occurrence(self) -> CompiledSourceOccurrenceV3 {
+        self.occurrence
+    }
+
+    pub(crate) const fn account(self) -> RuntimeKey {
+        self.funding.account
+    }
+
+    pub(crate) const fn funding(self) -> ImmutableSourceInputFundingV1 {
+        self.funding
+    }
+
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
+}
+
+/// Immutable Product-owned initial/repair GenerationAuthority request written
+/// under the release-selected authority before action 2 becomes callable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PersistedSourceGenerationRequestV1 {
+    funding: ImmutableSourceInputFundingV1,
+    request: SourceGenerationRequestV1,
+    id: ContentId,
+}
+
+impl PersistedSourceGenerationRequestV1 {
+    pub(crate) const fn funding(self) -> ImmutableSourceInputFundingV1 {
+        self.funding
+    }
+
+    pub(crate) const fn request(self) -> SourceGenerationRequestV1 {
+        self.request
+    }
+
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
 }
 
 /// Exact durable action-10 postwrite and its permanent rent observation.
@@ -331,6 +825,15 @@ pub struct SourceWorkExecutionV1 {
     pub observation: RuntimeReceiptObservationV1,
     /// Sole Source-compartment spend intent; it performs no second debit here.
     pub intent: RuntimeTransitionIntentV1,
+    /// Same-call CreatedMutable authentication for private Source composers.
+    authenticated_receipt: AuthenticatedSourceWorkReceiptV1,
+}
+
+impl SourceWorkExecutionV1 {
+    /// Exact newly written receipt authenticated under CreatedMutable access.
+    pub(crate) const fn authenticated_receipt(self) -> AuthenticatedSourceWorkReceiptV1 {
+        self.authenticated_receipt
+    }
 }
 
 /// One persisted terminal receipt and the sole liveness close intent.
@@ -525,6 +1028,104 @@ pub fn apply_source_work_liveness(
         }
     }
     Ok(transition)
+}
+
+/// Exact one-shot post-terminal reopen payment from the lifecycle custody.
+///
+/// The terminal liveness transition has already returned every unused Source
+/// work lamport to this custody. A persisted GenerationAuthority request and
+/// its closed lineage make the reopen one-shot, while the immutable work
+/// receipt binds the exact reopened postimage. The keeper signs only to accept
+/// responsibility for this call; it never funds rent or becomes principal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedPostterminalSourceWorkV1 {
+    id: ContentId,
+    work_receipt_authentication_id: ContentId,
+    custody: RuntimeKey,
+    keeper: RuntimeKey,
+    custody_balance_before: u64,
+    custody_balance_after: u64,
+    keeper_balance_before: u64,
+    keeper_balance_after: u64,
+    payment_lamports: u64,
+}
+
+impl AuthenticatedPostterminalSourceWorkV1 {
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
+}
+
+/// Pay the exact release-selected TerminalLifecycle ceiling only after the
+/// caller has persisted the work receipt for a successful deterministic
+/// reopen. No generic liveness account is accepted after its terminal close.
+pub(crate) fn apply_postterminal_source_work_from_custody_v1(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    schedule: SourceWorkScheduleBindingV1,
+    work: SourceWorkExecutionV1,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
+    keeper: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedPostterminalSourceWorkV1> {
+    let receipt = work.authenticated_receipt();
+    let payment_lamports = schedule.ceiling_for(SourceWorkKindV1::TerminalLifecycle);
+    require(
+        schedule.payer() == custody.account()
+            && custody.account() == runtime_key(custody_account.key)
+            && receipt.schedule() == schedule
+            && receipt.receipt().work_kind() == Some(SourceWorkKindV1::TerminalLifecycle)
+            && work.intent.call_ceiling_lamports == payment_lamports
+            && work.intent.keeper_payment_lamports == payment_lamports
+            && work.intent.keeper == LivenessId::from_bytes(keeper.key.to_bytes())
+            && keeper.is_writable
+            && keeper.is_signer
+            && !keeper.executable
+            && keeper.key != custody_account.key,
+        ClutchError::MismatchedState,
+    )?;
+    let custody_balance_before = custody_account.lamports();
+    let keeper_balance_before = keeper.lamports();
+    transfer_from_source_custody_v1(
+        program_id,
+        custody,
+        custody_account,
+        keeper,
+        system_program,
+        payment_lamports,
+    )?;
+    let custody_balance_after = custody_account.lamports();
+    let keeper_balance_after = keeper.lamports();
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            b"dragons-clutch/sbf/authenticated-postterminal-source-work/v1",
+            &route.route_id().bytes(),
+            &schedule.source_work_schedule_id().bytes(),
+            &receipt.id().bytes(),
+            &custody.id().bytes(),
+            custody_account.key.as_ref(),
+            keeper.key.as_ref(),
+            &custody_balance_before.to_le_bytes(),
+            &custody_balance_after.to_le_bytes(),
+            &keeper_balance_before.to_le_bytes(),
+            &keeper_balance_after.to_le_bytes(),
+            &payment_lamports.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(AuthenticatedPostterminalSourceWorkV1 {
+        id,
+        work_receipt_authentication_id: receipt.id(),
+        custody: custody.account(),
+        keeper: runtime_key(keeper.key),
+        custody_balance_before,
+        custody_balance_after,
+        keeper_balance_before,
+        keeper_balance_after,
+        payment_lamports,
+    })
 }
 
 /// Apply the sole Source terminal receipt and close its liveness compartment
@@ -812,7 +1413,8 @@ pub fn ingest_parser_boundary_atomic(
     call_ceiling_lamports: u64,
     keeper: &AccountInfo<'_>,
     keeper_payment_lamports: u64,
-    payer: &AccountInfo<'_>,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     payer_refund: &AccountInfo<'_>,
     policy_account: &AccountInfo<'_>,
     compartment_account: &AccountInfo<'_>,
@@ -856,7 +1458,8 @@ pub fn ingest_parser_boundary_atomic(
         call_ceiling_lamports,
         keeper.key,
         keeper_payment_lamports,
-        payer,
+        custody,
+        custody_account,
         system_program,
         rent_sysvar,
     )?;
@@ -914,7 +1517,8 @@ pub fn evaluate_statistic_atomic(
     call_ceiling_lamports: u64,
     keeper: &AccountInfo<'_>,
     keeper_payment_lamports: u64,
-    payer: &AccountInfo<'_>,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     payer_refund: &AccountInfo<'_>,
     policy_account: &AccountInfo<'_>,
     compartment_account: &AccountInfo<'_>,
@@ -941,7 +1545,8 @@ pub fn evaluate_statistic_atomic(
         key,
         evidence,
         evaluation,
-        payer,
+        custody,
+        custody_account,
         result_account,
         result_lineage_account,
         system_program,
@@ -958,7 +1563,8 @@ pub fn evaluate_statistic_atomic(
         call_ceiling_lamports,
         keeper.key,
         keeper_payment_lamports,
-        payer,
+        custody,
+        custody_account,
         system_program,
         rent_sysvar,
     )?;
@@ -1026,7 +1632,8 @@ pub fn bind_work_execution(
     call_ceiling_lamports: u64,
     keeper: &Pubkey,
     keeper_payment_lamports: u64,
-    payer: &AccountInfo<'_>,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
 ) -> Outcome<SourceWorkExecutionV1> {
@@ -1064,7 +1671,8 @@ pub fn bind_work_execution(
         route,
         schedule,
         receipt,
-        payer,
+        custody,
+        custody_account,
         receipt_account,
         system_program,
         rent_sysvar,
@@ -1077,6 +1685,7 @@ pub fn bind_work_execution(
         receipt_funding,
         observation,
         intent,
+        authenticated_receipt: authenticated,
     })
 }
 
@@ -1089,7 +1698,8 @@ pub(crate) fn bind_terminal_execution(
     schedule: SourceWorkScheduleBindingV1,
     terminal_semantic: AuthenticatedSourceTerminalSemanticV1,
     receipt_account: &AccountInfo<'_>,
-    payer: &AccountInfo<'_>,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
 ) -> Outcome<SourceTerminalExecutionV1> {
@@ -1122,7 +1732,8 @@ pub(crate) fn bind_terminal_execution(
         route,
         schedule,
         receipt,
-        payer,
+        custody,
+        custody_account,
         receipt_account,
         system_program,
         rent_sysvar,
@@ -1329,7 +1940,8 @@ pub fn initialize_head(
     program_id: &Pubkey,
     route: AuthenticatedSourceRouteV1,
     authorization: AuthenticatedSourceGenerationV1,
-    payer: &AccountInfo<'_>,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     target: &AccountInfo<'_>,
     lineage_account: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
@@ -1350,7 +1962,8 @@ pub fn initialize_head(
         semantic_binding_id,
         &recipe,
         &body,
-        payer,
+        custody,
+        custody_account,
         target,
         lineage_account,
         system_program,
@@ -1364,7 +1977,8 @@ pub fn open_raw_page(
     program_id: &Pubkey,
     route: AuthenticatedSourceRouteV1,
     head: AuthenticatedSourceHeadV1,
-    payer: &AccountInfo<'_>,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     target: &AccountInfo<'_>,
     lineage_account: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
@@ -1386,7 +2000,8 @@ pub fn open_raw_page(
         semantic_binding_id,
         &recipe,
         &body,
-        payer,
+        custody,
+        custody_account,
         target,
         lineage_account,
         system_program,
@@ -1435,7 +2050,8 @@ pub fn initialize_window_work(
     program_id: &Pubkey,
     route: AuthenticatedSourceRouteV1,
     window: &WindowSpecV3,
-    payer: &AccountInfo<'_>,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     target: &AccountInfo<'_>,
     lineage_account: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
@@ -1451,7 +2067,8 @@ pub fn initialize_window_work(
         window_id,
         &recipe,
         &body,
-        payer,
+        custody,
+        custody_account,
         target,
         lineage_account,
         system_program,
@@ -1502,7 +2119,8 @@ pub fn seal_raw_page(
     head_lineage_account: &AccountInfo<'_>,
     open_lineage_account: &AccountInfo<'_>,
     page_account: &AccountInfo<'_>,
-    payer: &AccountInfo<'_>,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     open_principal_refund: &AccountInfo<'_>,
     neutral_sink: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
@@ -1520,7 +2138,8 @@ pub fn seal_raw_page(
         route,
         &page_recipe,
         &semantic.sealed_page,
-        payer,
+        custody,
+        custody_account,
         page_account,
         system_program,
         rent_sysvar,
@@ -1568,7 +2187,8 @@ pub fn seal_window(
     work_account: &AccountInfo<'_>,
     work_lineage_account: &AccountInfo<'_>,
     seal_account: &AccountInfo<'_>,
-    payer: &AccountInfo<'_>,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     work_principal_refund: &AccountInfo<'_>,
     neutral_sink: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
@@ -1590,7 +2210,8 @@ pub fn seal_window(
         route,
         &recipe,
         &evidence.seal(),
-        payer,
+        custody,
+        custody_account,
         seal_account,
         system_program,
         rent_sysvar,
@@ -1624,7 +2245,9 @@ pub fn persist_evaluation_result(
     key: &StatisticKeyV3,
     evidence: AuthenticatedWindowEvidenceV1,
     evaluation: AuthenticatedEvaluationV1,
-    payer: &AccountInfo<'_>,
+    lineage: AuthenticatedReopenLineageV1,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     result_account: &AccountInfo<'_>,
     lineage_account: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
@@ -1636,19 +2259,121 @@ pub fn persist_evaluation_result(
         ClutchError::MismatchedState,
     )?;
     let recipe = PdaRecipeV3::statistic_result(key_id).map_err(source_pda)?;
-    bootstrap_runtime_account(
+    reopen_runtime_account(
         program_id,
         route,
+        lineage,
         LineageFamilyV1::StatisticResult,
         key_id,
         &recipe,
         &evaluation.result(),
-        payer,
+        custody,
+        custody_account,
         result_account,
         lineage_account,
         system_program,
         rent_sysvar,
     )
+}
+
+/// Preallocate the exact never-opened StatisticResult lineage in the same
+/// Product-owned transaction that publishes its StatisticKey. Mature absence
+/// can therefore be authenticated without trusting a caller-created tombstone,
+/// while action 9 later opens generation one through the ordinary reopen CAS.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn preallocate_statistic_result_lineage_v1(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    key: &StatisticKeyV3,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
+    lineage_account: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+    rent_sysvar: &AccountInfo<'_>,
+) -> Outcome<PreallocatedStatisticResultLineageV1> {
+    require_custody_creation_roles(custody, custody_account, lineage_account, system_program)?;
+    let key_id = key.id().map_err(source_core)?;
+    let recipe_id = ReopenLineageV1::recipe_id_for(
+        route.adapter_program(),
+        route.release_manifest_id(),
+        route.route_id(),
+        LineageFamilyV1::StatisticResult,
+        key_id,
+        route.source_work_schedule_id(),
+    )
+    .map_err(source_runtime)?;
+    let recipe = PdaRecipeV3::reopen_lineage(recipe_id).map_err(source_pda)?;
+    let derived = derive_runtime_pda(program_id, &recipe).map_err(Refusal::from)?;
+    require(
+        derived.address == runtime_key(lineage_account.key),
+        ClutchError::WrongPda,
+    )?;
+    let lineage = ReopenLineageV1::new(
+        route.adapter_program(),
+        route.release_manifest_id(),
+        route.route_id(),
+        key_id,
+        runtime_key(lineage_account.key),
+        LineageFamilyV1::StatisticResult,
+        route.source_work_schedule_id(),
+        route.neutral_sink(),
+    )
+    .map_err(source_runtime)?;
+    let bytes = lineage.encode().map_err(source_runtime)?;
+    let rent = read_rent(rent_sysvar)?;
+    let rent_id = rent_sysvar_id(rent_sysvar)?;
+    let minimum = rent.minimum_balance(REOPEN_LINEAGE_BYTES)?;
+    let before = lineage_account.lamports();
+    let debit = minimum.saturating_sub(before);
+    create_with_recipe_from_custody(
+        program_id,
+        custody,
+        custody_account,
+        lineage_account,
+        system_program,
+        &rent,
+        REOPEN_LINEAGE_BYTES,
+        &recipe,
+        derived.bump,
+    )?;
+    write_exact_account_data(lineage_account, &bytes)?;
+    let data = lineage_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let authenticated = clutch_source_plane_v3_runtime::authenticate_reopen_lineage_account(
+        route,
+        runtime_account_view(lineage_account, &data),
+        derived,
+        LineageAccessV1::Mutable,
+    )
+    .map_err(source_runtime)?;
+    drop(data);
+    let funding = ImmutableAccountFundingV1 {
+        account: runtime_key(lineage_account.key),
+        payer: if debit == 0 { RuntimeKey::ZERO } else { custody.account() },
+        payer_debit_lamports: debit,
+        donation_lamports: before,
+        rent_sysvar_id: rent_id,
+        rent_exempt_minimum_lamports: minimum,
+        account_balance_after: lineage_account.lamports(),
+    };
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            b"dragons-clutch/sbf/preallocated-statistic-result-lineage/v1",
+            &route.route_id().bytes(),
+            &key_id.bytes(),
+            &authenticated.id().bytes(),
+            &authenticated.account_data_id().bytes(),
+            &custody.id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(PreallocatedStatisticResultLineageV1 {
+        funding,
+        authenticated,
+        id,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1657,7 +2382,8 @@ fn publish_immutable_source_input<T: FixedCodec>(
     body: &T,
     semantic_id: ContentId,
     recipe: &PdaRecipeV3,
-    payer: &AccountInfo<'_>,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     target: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
     rent: &RentParameters,
@@ -1665,13 +2391,11 @@ fn publish_immutable_source_input<T: FixedCodec>(
     require(!semantic_id.is_zero(), ClutchError::MismatchedState)?;
     require_system_program(system_program)?;
     require(
-        payer.is_signer
-            && payer.is_writable
-            && !payer.executable
-            && target.is_writable
+        target.is_writable
             && !target.is_signer
             && !target.executable
-            && payer.key != target.key,
+            && custody.account() == runtime_key(custody_account.key)
+            && custody_account.key != target.key,
         ClutchError::MismatchedState,
     )?;
     let derived = derive_runtime_pda(program_id, recipe).map_err(Refusal::from)?;
@@ -1701,12 +2425,13 @@ fn publish_immutable_source_input<T: FixedCodec>(
             semantic_id,
         });
     }
-    require_creation_roles(program_id, payer, target, system_program)?;
+    require_custody_creation_roles(custody, custody_account, target, system_program)?;
     let before = target.lamports();
     let debit = minimum.saturating_sub(before);
-    create_with_recipe(
+    create_with_recipe_from_custody(
         program_id,
-        payer,
+        custody,
+        custody_account,
         target,
         system_program,
         rent,
@@ -1721,7 +2446,7 @@ fn publish_immutable_source_input<T: FixedCodec>(
         payer: if debit == 0 {
             RuntimeKey::ZERO
         } else {
-            runtime_key(payer.key)
+            custody.account()
         },
         payer_debit_lamports: debit,
         permanent_prefund_lamports: before,
@@ -1743,7 +2468,8 @@ pub(crate) fn publish_authenticated_source_semantic_inputs(
     window: WindowSpecV3,
     summary: SummaryProgramV3,
     statistic_key: StatisticKeyV3,
-    payer: &AccountInfo<'_>,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     window_account: &AccountInfo<'_>,
     summary_account: &AccountInfo<'_>,
     statistic_key_account: &AccountInfo<'_>,
@@ -1779,7 +2505,8 @@ pub(crate) fn publish_authenticated_source_semantic_inputs(
         &window,
         window_id,
         &window_recipe,
-        payer,
+        custody,
+        custody_account,
         window_account,
         system_program,
         &rent,
@@ -1789,7 +2516,8 @@ pub(crate) fn publish_authenticated_source_semantic_inputs(
         &summary,
         summary_id,
         &summary_recipe,
-        payer,
+        custody,
+        custody_account,
         summary_account,
         system_program,
         &rent,
@@ -1799,7 +2527,8 @@ pub(crate) fn publish_authenticated_source_semantic_inputs(
         &statistic_key,
         statistic_key_id,
         &statistic_key_recipe,
-        payer,
+        custody,
+        custody_account,
         statistic_key_account,
         system_program,
         &rent,
@@ -1827,6 +2556,90 @@ pub(crate) fn publish_authenticated_source_semantic_inputs(
     })
 }
 
+/// Persist Product's exact compiled occurrence under its content-addressed
+/// PDA. Construction is private to the current Product/Profile/Bundle owner;
+/// the public Source dispatcher cannot supply an occurrence body.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn publish_source_occurrence_v1(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    publication_authorization_id: ContentId,
+    occurrence: CompiledSourceOccurrenceV3,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
+    occurrence_account: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+    rent_sysvar: &AccountInfo<'_>,
+) -> Outcome<PublishedSourceOccurrenceV1> {
+    require(
+        !publication_authorization_id.is_zero()
+            && route.generation_authority_program() == runtime_key(program_id)
+            && route.generation_authority_program() == route.adapter_program(),
+        ClutchError::AuthorizationUnavailable,
+    )?;
+    let occurrence_id = ContentId::from_bytes(
+        occurrence
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            .bytes(),
+    );
+    let (expected, bump) = seeds::source_occurrence_pda(program_id, &occurrence_id.bytes());
+    require(occurrence_account.key == &expected, ClutchError::WrongPda)?;
+    require_custody_creation_roles(custody, custody_account, occurrence_account, system_program)?;
+    let mut bytes = [0_u8; clutch_product_series::SOURCE_OCCURRENCE_RECORD_BYTES];
+    occurrence
+        .encode_into(&mut bytes)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let rent = read_rent(rent_sysvar)?;
+    let minimum = rent.minimum_balance(bytes.len())?;
+    let before = occurrence_account.lamports();
+    let debit = minimum.saturating_sub(before);
+    let bump_seed = [bump];
+    create_with_raw_seeds_from_custody(
+        program_id,
+        custody,
+        custody_account,
+        occurrence_account,
+        system_program,
+        &rent,
+        bytes.len(),
+        &[
+            seeds::SEED_SOURCE_OCCURRENCE_V1,
+            &occurrence_id.bytes(),
+            &bump_seed,
+        ],
+    )?;
+    write_exact_account_data(occurrence_account, &bytes)?;
+    let data_id = account_data_id(runtime_key(occurrence_account.key), &bytes)
+        .map_err(source_runtime)?;
+    let funding = ImmutableSourceInputFundingV1 {
+        account: runtime_key(occurrence_account.key),
+        payer: if debit == 0 { RuntimeKey::ZERO } else { custody.account() },
+        payer_debit_lamports: debit,
+        permanent_prefund_lamports: before,
+        account_data_id: data_id,
+        semantic_id: occurrence_id,
+    };
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            b"dragons-clutch/sbf/published-source-occurrence/v1",
+            &publication_authorization_id.bytes(),
+            &route.route_id().bytes(),
+            &occurrence_account.key.to_bytes(),
+            &occurrence_id.bytes(),
+            &data_id.bytes(),
+            &custody.id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(PublishedSourceOccurrenceV1 {
+        occurrence,
+        funding,
+        id,
+    })
+}
+
 /// Persist action 10's exact Source-only policy handoff as an immutable
 /// content-addressed account and re-authenticate its postimage before return.
 #[allow(clippy::too_many_arguments)]
@@ -1834,7 +2647,8 @@ pub fn persist_source_policy_handoff(
     program_id: &Pubkey,
     route: AuthenticatedSourceRouteV1,
     join: SourcePolicyHandoffJoinV1,
-    payer: &AccountInfo<'_>,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     handoff_account: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
@@ -1847,7 +2661,8 @@ pub fn persist_source_policy_handoff(
         &body,
         join.id(),
         &recipe,
-        payer,
+        custody,
+        custody_account,
         handoff_account,
         system_program,
         &rent,
@@ -1927,7 +2742,8 @@ pub(crate) fn persist_source_no_reopen_terminal(
     program_id: &Pubkey,
     route: AuthenticatedSourceRouteV1,
     body: SourceNoReopenTerminalV1,
-    payer: &AccountInfo<'_>,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     terminal_account: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
@@ -1941,7 +2757,8 @@ pub(crate) fn persist_source_no_reopen_terminal(
         &body,
         terminal_id,
         &recipe,
-        payer,
+        custody,
+        custody_account,
         terminal_account,
         system_program,
         &rent,
@@ -1991,7 +2808,8 @@ pub(crate) fn persist_source_reopen_generation_request(
     program_id: &Pubkey,
     route: AuthenticatedSourceRouteV1,
     request: SourceReopenGenerationRequestV1,
-    payer: &AccountInfo<'_>,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     request_account: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
@@ -2003,13 +2821,11 @@ pub(crate) fn persist_source_reopen_generation_request(
     )?;
     require_system_program(system_program)?;
     require(
-        payer.is_signer
-            && payer.is_writable
-            && !payer.executable
-            && request_account.is_writable
+        request_account.is_writable
             && !request_account.is_signer
             && !request_account.executable
-            && payer.key != request_account.key,
+            && custody.account() == runtime_key(custody_account.key)
+            && custody_account.key != request_account.key,
         ClutchError::MismatchedState,
     )?;
     let request_id = request.id().map_err(source_runtime)?;
@@ -2017,7 +2833,7 @@ pub(crate) fn persist_source_reopen_generation_request(
     let authority = Pubkey::new_from_array(route.generation_authority_program().bytes());
     let (expected, bump) = crate::seeds::find(
         &authority,
-        &[SOURCE_REOPEN_REQUEST_SEED_V1, &request_id.bytes()],
+        &[seeds::SEED_SOURCE_REOPEN_REQUEST_V1, &request_id.bytes()],
     );
     require(request_account.key == &expected, ClutchError::WrongPda)?;
     let rent = read_rent(rent_sysvar)?;
@@ -2034,17 +2850,18 @@ pub(crate) fn persist_source_reopen_generation_request(
             .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
         require(&*data == bytes.as_slice(), ClutchError::MismatchedState)?;
     } else {
-        require_creation_roles(program_id, payer, request_account, system_program)?;
+        require_custody_creation_roles(custody, custody_account, request_account, system_program)?;
         let bump_seed = [bump];
-        create_pda_account(
+        create_with_raw_seeds_from_custody(
             program_id,
-            payer,
+            custody,
+            custody_account,
             request_account,
             system_program,
             &rent,
             bytes.len(),
             &[
-                SOURCE_REOPEN_REQUEST_SEED_V1,
+                seeds::SEED_SOURCE_REOPEN_REQUEST_V1,
                 &request_id.bytes(),
                 &bump_seed,
             ],
@@ -2068,7 +2885,7 @@ pub(crate) fn persist_source_reopen_generation_request(
         payer: if debit == 0 {
             RuntimeKey::ZERO
         } else {
-            runtime_key(payer.key)
+            custody.account()
         },
         payer_debit_lamports: debit,
         permanent_prefund_lamports: before,
@@ -2097,6 +2914,93 @@ pub(crate) fn persist_source_reopen_generation_request(
     })
 }
 
+/// Persist the exact initial/repair GenerationAuthority request reconstructed
+/// by Product from its authenticated occurrence/window graph. The current
+/// release fixes the authority program, schedule, SourceSpec, and contract;
+/// the caller cannot publish a differently scoped request at this address.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn persist_source_generation_request_v1(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    request: SourceGenerationRequestV1,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
+    request_account: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+    rent_sysvar: &AccountInfo<'_>,
+) -> Outcome<PersistedSourceGenerationRequestV1> {
+    request.validate().map_err(source_runtime)?;
+    require(
+        route.generation_authority_program() == runtime_key(program_id)
+            && route.generation_authority_program() == route.adapter_program()
+            && request.source_plane_contract_id == route.source_plane_contract_id()
+            && request.source_spec_id == route.source_spec_id()
+            && request.source_work_schedule_id == route.source_work_schedule_id(),
+        ClutchError::AuthorizationUnavailable,
+    )?;
+    require_system_program(system_program)?;
+    require_custody_creation_roles(custody, custody_account, request_account, system_program)?;
+    let request_id = request.id().map_err(source_runtime)?;
+    let bytes = request.encode().map_err(source_runtime)?;
+    let authority = Pubkey::new_from_array(route.generation_authority_program().bytes());
+    let (expected, bump) = crate::seeds::find(
+        &authority,
+        &[seeds::SEED_SOURCE_GENERATION_REQUEST_V1, &request_id.bytes()],
+    );
+    require(request_account.key == &expected, ClutchError::WrongPda)?;
+    let rent = read_rent(rent_sysvar)?;
+    let minimum = rent.minimum_balance(bytes.len())?;
+    let before = request_account.lamports();
+    let debit = minimum.saturating_sub(before);
+    let bump_seed = [bump];
+    create_with_raw_seeds_from_custody(
+        program_id,
+        custody,
+        custody_account,
+        request_account,
+        system_program,
+        &rent,
+        bytes.len(),
+        &[
+            seeds::SEED_SOURCE_GENERATION_REQUEST_V1,
+            &request_id.bytes(),
+            &bump_seed,
+        ],
+    )?;
+    write_exact_account_data(request_account, &bytes)?;
+    let data = request_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let data_id = account_data_id(runtime_key(request_account.key), &data).map_err(source_runtime)?;
+    let funding = ImmutableSourceInputFundingV1 {
+        account: runtime_key(request_account.key),
+        payer: if debit == 0 { RuntimeKey::ZERO } else { custody.account() },
+        payer_debit_lamports: debit,
+        permanent_prefund_lamports: before,
+        account_data_id: data_id,
+        semantic_id: request_id,
+    };
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            b"dragons-clutch/sbf/source-generation-request-postwrite/v1",
+            &route.route_id().bytes(),
+            &route.adapter_deployment_id().bytes(),
+            &request_account.key.to_bytes(),
+            &data_id.bytes(),
+            &request_id.bytes(),
+            &request.generation_policy_id.bytes(),
+            &custody.id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(PersistedSourceGenerationRequestV1 {
+        funding,
+        request,
+        id,
+    })
+}
+
 /// Persist one immutable RawPage or WindowSeal account with its exact header
 /// and explicit payer/donation rent partition.
 #[allow(clippy::too_many_arguments)]
@@ -2105,12 +3009,13 @@ fn create_immutable_runtime_account<T: RuntimeAccountBodyV1>(
     route: AuthenticatedSourceRouteV1,
     recipe: &PdaRecipeV3,
     body: &T,
-    payer: &AccountInfo<'_>,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     target: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
 ) -> Outcome<(ImmutableAccountFundingV1, RuntimeAccountHeaderV1, ContentId)> {
-    require_creation_roles(program_id, payer, target, system_program)?;
+    require_custody_creation_roles(custody, custody_account, target, system_program)?;
     let derived = derive_runtime_pda(program_id, recipe).map_err(Refusal::from)?;
     require(
         derived.address == runtime_key(target.key),
@@ -2130,7 +3035,7 @@ fn create_immutable_runtime_account<T: RuntimeAccountBodyV1>(
     let payer_key = if debit == 0 {
         RuntimeKey::ZERO
     } else {
-        runtime_key(payer.key)
+        custody.account()
     };
     let header = RuntimeAccountHeaderV1 {
         family: T::FAMILY,
@@ -2144,9 +3049,10 @@ fn create_immutable_runtime_account<T: RuntimeAccountBodyV1>(
     encode_runtime_account(header, body, route.neutral_sink(), &mut postimage)
         .map_err(source_runtime)?;
     let data_id = account_data_id(runtime_key(target.key), &postimage).map_err(source_runtime)?;
-    create_with_recipe(
+    create_with_recipe_from_custody(
         program_id,
-        payer,
+        custody,
+        custody_account,
         target,
         system_program,
         &rent,
@@ -2178,12 +3084,13 @@ pub fn create_work_receipt_account(
     route: AuthenticatedSourceRouteV1,
     schedule: SourceWorkScheduleBindingV1,
     receipt: SourceWorkReceiptAccountV1,
-    payer: &AccountInfo<'_>,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     target: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
 ) -> Outcome<(ImmutableAccountFundingV1, AuthenticatedSourceWorkReceiptV1)> {
-    require_creation_roles(program_id, payer, target, system_program)?;
+    require_custody_creation_roles(custody, custody_account, target, system_program)?;
     let slot = receipt
         .receipt_slot_id(route, schedule)
         .map_err(source_runtime)?;
@@ -2203,9 +3110,10 @@ pub fn create_work_receipt_account(
     let after = before
         .checked_add(debit)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    create_with_recipe(
+    create_with_recipe_from_custody(
         program_id,
-        payer,
+        custody,
+        custody_account,
         target,
         system_program,
         &rent,
@@ -2219,7 +3127,7 @@ pub fn create_work_receipt_account(
         payer: if debit == 0 {
             RuntimeKey::ZERO
         } else {
-            runtime_key(payer.key)
+            custody.account()
         },
         payer_debit_lamports: debit,
         donation_lamports: before,
@@ -2296,18 +3204,16 @@ pub fn reopen_runtime_account<T: RuntimeAccountBodyV1>(
     semantic_binding_id: ContentId,
     recipe: &PdaRecipeV3,
     body: &T,
-    payer: &AccountInfo<'_>,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     target: &AccountInfo<'_>,
     lineage_account: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
 ) -> Outcome<OpenRuntimeAccountResultV1> {
-    require_creation_roles(program_id, payer, target, system_program)?;
+    require_custody_creation_roles(custody, custody_account, target, system_program)?;
     require_lineage_account(route, lineage, lineage_account)?;
-    require(
-        lineage.lineage().latest_generation != 0 && !lineage.lineage().is_open,
-        ClutchError::MismatchedState,
-    )?;
+    require(!lineage.lineage().is_open, ClutchError::MismatchedState)?;
     let derived = derive_runtime_pda(program_id, recipe).map_err(Refusal::from)?;
     let reopen = authorize_reopen(
         route,
@@ -2339,7 +3245,7 @@ pub fn reopen_runtime_account<T: RuntimeAccountBodyV1>(
                 .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?,
             minimum_balance_lamports: minimum,
         },
-        runtime_key(payer.key),
+        custody.account(),
         before,
         debit,
         after,
@@ -2361,9 +3267,10 @@ pub fn reopen_runtime_account<T: RuntimeAccountBodyV1>(
         open_lineage_generation(lineage.lineage(), reopen, data_id).map_err(source_runtime)?;
     let lineage_bytes = lineage_after.encode().map_err(source_runtime)?;
 
-    create_with_recipe(
+    create_with_recipe_from_custody(
         program_id,
-        payer,
+        custody,
+        custody_account,
         target,
         system_program,
         &rent,
@@ -2393,14 +3300,15 @@ fn bootstrap_runtime_account<T: RuntimeAccountBodyV1>(
     semantic_binding_id: ContentId,
     recipe: &PdaRecipeV3,
     body: &T,
-    payer: &AccountInfo<'_>,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
     target: &AccountInfo<'_>,
     lineage_account: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
 ) -> Outcome<OpenRuntimeAccountResultV1> {
-    require_creation_roles(program_id, payer, target, system_program)?;
-    require_creation_roles(program_id, payer, lineage_account, system_program)?;
+    require_custody_creation_roles(custody, custody_account, target, system_program)?;
+    require_custody_creation_roles(custody, custody_account, lineage_account, system_program)?;
     require(target.key != lineage_account.key, ClutchError::AccountAlias)?;
     let target_derived = derive_runtime_pda(program_id, recipe).map_err(Refusal::from)?;
     require(
@@ -2464,7 +3372,7 @@ fn bootstrap_runtime_account<T: RuntimeAccountBodyV1>(
                 .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?,
             minimum_balance_lamports: target_minimum,
         },
-        runtime_key(payer.key),
+        custody.account(),
         target_before,
         target_debit,
         target_after,
@@ -2497,7 +3405,7 @@ fn bootstrap_runtime_account<T: RuntimeAccountBodyV1>(
         payer: if lineage_debit == 0 {
             RuntimeKey::ZERO
         } else {
-            runtime_key(payer.key)
+            custody.account()
         },
         payer_debit_lamports: lineage_debit,
         donation_lamports: lineage_before,
@@ -2506,9 +3414,10 @@ fn bootstrap_runtime_account<T: RuntimeAccountBodyV1>(
         account_balance_after: lineage_after_balance,
     };
 
-    create_with_recipe(
+    create_with_recipe_from_custody(
         program_id,
-        payer,
+        custody,
+        custody_account,
         lineage_account,
         system_program,
         &rent,
@@ -2516,9 +3425,10 @@ fn bootstrap_runtime_account<T: RuntimeAccountBodyV1>(
         &lineage_recipe,
         lineage_derived.bump,
     )?;
-    create_with_recipe(
+    create_with_recipe_from_custody(
         program_id,
-        payer,
+        custody,
+        custody_account,
         target,
         system_program,
         &rent,
@@ -2829,6 +3739,26 @@ fn require_creation_roles(
     )
 }
 
+fn require_custody_creation_roles(
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'_>,
+    target: &AccountInfo<'_>,
+    system_program: &AccountInfo<'_>,
+) -> Outcome<()> {
+    require_system_program(system_program)?;
+    require_creatable(target)?;
+    require(
+        custody.account() == runtime_key(custody_account.key)
+            && custody_account.owner == &SYSTEM_PROGRAM_ID
+            && custody_account.data_is_empty()
+            && custody_account.is_writable
+            && !custody_account.is_signer
+            && !custody_account.executable
+            && custody_account.key != target.key,
+        ClutchError::MismatchedState,
+    )
+}
+
 fn require_lineage_account(
     route: AuthenticatedSourceRouteV1,
     lineage: AuthenticatedReopenLineageV1,
@@ -2874,6 +3804,271 @@ fn create_with_recipe<'a>(
         rent,
         space,
         &seeds[..=count],
+    )
+}
+
+/// Allocate one Source PDA from the exact prepaid lifecycle custody.
+///
+/// The custody and target are both PDAs. The first signs only the rent
+/// shortfall transfer; the second signs only Allocate/Assign. Existing target
+/// prefunds remain neutral donation, so custody supplies only the exact rent
+/// shortfall recorded as its recyclable principal.
+#[allow(clippy::too_many_arguments)]
+fn create_with_recipe_from_custody<'a>(
+    program_id: &Pubkey,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'a>,
+    target: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    rent: &RentParameters,
+    space: usize,
+    recipe: &PdaRecipeV3,
+    target_bump: u8,
+) -> Outcome<()> {
+    require_system_program(system_program)?;
+    require_creatable(target)?;
+    require(
+        custody.account() == runtime_key(custody_account.key)
+            && custody_account.owner == &SYSTEM_PROGRAM_ID
+            && custody_account.data_is_empty()
+            && custody_account.is_writable
+            && !custody_account.is_signer
+            && !custody_account.executable
+            && custody_account.key != target.key,
+        ClutchError::MismatchedState,
+    )?;
+    let minimum = rent.minimum_balance(space)?;
+    let before = target.lamports();
+    if before < minimum {
+        let shortfall = minimum
+            .checked_sub(before)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        let custody_before = custody_account.lamports();
+        let expected_custody_after = custody_before
+            .checked_sub(shortfall)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        let expected_target_after = before
+            .checked_add(shortfall)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        let transfer = Instruction::new_with_bytes(
+            SYSTEM_PROGRAM_ID,
+            &transfer_data(shortfall),
+            vec![
+                AccountMeta::new(*custody_account.key, true),
+                AccountMeta::new(*target.key, false),
+            ],
+        );
+        let lifecycle = custody.lifecycle_id().bytes();
+        let (_, custody_bump) =
+            seeds::source_funding_custody_pda(program_id, &lifecycle);
+        let custody_bump_seed = [custody_bump];
+        invoke_signed(
+            &transfer,
+            &[
+                custody_account.clone(),
+                target.clone(),
+                system_program.clone(),
+            ],
+            &[&[
+                seeds::SEED_SOURCE_FUNDING_CUSTODY_V1,
+                &lifecycle,
+                &custody_bump_seed,
+            ]],
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+        require(
+            custody_account.lamports() == expected_custody_after
+                && target.lamports() == expected_target_after,
+            ClutchError::AccountCreationFailed,
+        )?;
+    }
+    let funded = target.lamports();
+    require(funded >= minimum, ClutchError::AccountCreationFailed)?;
+
+    let mut target_seeds: [&[u8]; clutch_source_plane_v3_adapter::MAX_PDA_SEEDS + 1] =
+        [&[]; clutch_source_plane_v3_adapter::MAX_PDA_SEEDS + 1];
+    let target_seed_count = usize::from(recipe.seed_count());
+    let mut index = 0_usize;
+    while index < target_seed_count {
+        target_seeds[index] = recipe.seed(index).map_err(source_pda)?;
+        index += 1;
+    }
+    let target_bump_seed = [target_bump];
+    target_seeds[target_seed_count] = &target_bump_seed;
+    let signer_seeds = &target_seeds[..=target_seed_count];
+    let allocate = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &allocate_data(space),
+        vec![AccountMeta::new(*target.key, true)],
+    );
+    invoke_signed(
+        &allocate,
+        &[target.clone(), system_program.clone()],
+        &[signer_seeds],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    let assign = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &assign_data(program_id),
+        vec![AccountMeta::new(*target.key, true)],
+    );
+    invoke_signed(
+        &assign,
+        &[target.clone(), system_program.clone()],
+        &[signer_seeds],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    require(
+        target.owner == program_id && target.data_len() == space && target.lamports() == funded,
+        ClutchError::AccountCreationFailed,
+    )
+}
+
+fn transfer_from_source_custody_v1<'a>(
+    program_id: &Pubkey,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'a>,
+    destination: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    lamports: u64,
+) -> Outcome<()> {
+    require_system_program(system_program)?;
+    require(
+        lamports != 0
+            && custody.account() == runtime_key(custody_account.key)
+            && custody_account.owner == &SYSTEM_PROGRAM_ID
+            && custody_account.data_is_empty()
+            && custody_account.is_writable
+            && !custody_account.is_signer
+            && !custody_account.executable
+            && destination.is_writable
+            && custody_account.key != destination.key,
+        ClutchError::MismatchedState,
+    )?;
+    let custody_before = custody_account.lamports();
+    let destination_before = destination.lamports();
+    let instruction = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &transfer_data(lamports),
+        vec![
+            AccountMeta::new(*custody_account.key, true),
+            AccountMeta::new(*destination.key, false),
+        ],
+    );
+    let lifecycle = custody.lifecycle_id().bytes();
+    let (_, custody_bump) = seeds::source_funding_custody_pda(program_id, &lifecycle);
+    let custody_bump_seed = [custody_bump];
+    invoke_signed(
+        &instruction,
+        &[
+            custody_account.clone(),
+            destination.clone(),
+            system_program.clone(),
+        ],
+        &[&[
+            seeds::SEED_SOURCE_FUNDING_CUSTODY_V1,
+            &lifecycle,
+            &custody_bump_seed,
+        ]],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    require(
+        custody_account.lamports()
+            == custody_before
+                .checked_sub(lamports)
+                .ok_or(ClutchError::Arithmetic)?
+            && destination.lamports()
+                == destination_before
+                    .checked_add(lamports)
+                    .ok_or(ClutchError::Arithmetic)?,
+        ClutchError::AccountCreationFailed,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create_with_raw_seeds_from_custody<'a>(
+    program_id: &Pubkey,
+    custody: AuthenticatedSourceFundingCustodyV1,
+    custody_account: &AccountInfo<'a>,
+    target: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    rent: &RentParameters,
+    space: usize,
+    target_signer_seeds: &[&[u8]],
+) -> Outcome<()> {
+    require_custody_creation_roles(custody, custody_account, target, system_program)?;
+    let minimum = rent.minimum_balance(space)?;
+    let before = target.lamports();
+    if before < minimum {
+        let shortfall = minimum
+            .checked_sub(before)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        let custody_before = custody_account.lamports();
+        let transfer = Instruction::new_with_bytes(
+            SYSTEM_PROGRAM_ID,
+            &transfer_data(shortfall),
+            vec![
+                AccountMeta::new(*custody_account.key, true),
+                AccountMeta::new(*target.key, false),
+            ],
+        );
+        let lifecycle = custody.lifecycle_id().bytes();
+        let (_, custody_bump) =
+            seeds::source_funding_custody_pda(program_id, &lifecycle);
+        let custody_bump_seed = [custody_bump];
+        invoke_signed(
+            &transfer,
+            &[
+                custody_account.clone(),
+                target.clone(),
+                system_program.clone(),
+            ],
+            &[&[
+                seeds::SEED_SOURCE_FUNDING_CUSTODY_V1,
+                &lifecycle,
+                &custody_bump_seed,
+            ]],
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+        require(
+            custody_account.lamports()
+                == custody_before
+                    .checked_sub(shortfall)
+                    .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?
+                && target.lamports()
+                    == before
+                        .checked_add(shortfall)
+                        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+            ClutchError::AccountCreationFailed,
+        )?;
+    }
+    let funded = target.lamports();
+    require(funded >= minimum, ClutchError::AccountCreationFailed)?;
+    let allocate = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &allocate_data(space),
+        vec![AccountMeta::new(*target.key, true)],
+    );
+    invoke_signed(
+        &allocate,
+        &[target.clone(), system_program.clone()],
+        &[target_signer_seeds],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    let assign = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &assign_data(program_id),
+        vec![AccountMeta::new(*target.key, true)],
+    );
+    invoke_signed(
+        &assign,
+        &[target.clone(), system_program.clone()],
+        &[target_signer_seeds],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    require(
+        target.owner == program_id && target.data_len() == space && target.lamports() == funded,
+        ClutchError::AccountCreationFailed,
     )
 }
 
@@ -2924,4 +4119,65 @@ fn source_core(error: clutch_source_plane_v3::Error) -> Refusal {
 
 fn source_pda(error: clutch_source_plane_v3_adapter::Error) -> Refusal {
     Refusal::from(SourceV3SbfError::Pda(error))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(byte: u8) -> ContentId {
+        ContentId::from_bytes([byte; 32])
+    }
+
+    fn key(byte: u8) -> RuntimeKey {
+        RuntimeKey::from_bytes([byte; 32])
+    }
+
+    fn schedule() -> SourceWorkScheduleBindingV1 {
+        SourceWorkScheduleBindingV1::new(
+            id(1),
+            id(2),
+            key(3),
+            key(4),
+            key(5),
+            key(6),
+            1,
+            8,
+            10,
+            80,
+            1,
+            [1; 8],
+            [10; 8],
+            [1; 4],
+            [10; 4],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn lifecycle_quote_reserves_every_child_in_addition_to_work_capital() {
+        let rent = RentParameters {
+            lamports_per_byte_year: 3_480,
+            exemption_threshold: 2.0,
+        };
+        let value = quote_source_lifecycle_capitalization_v1(schedule(), &rent).unwrap();
+        assert_eq!(value.liveness_work_lamports, 80);
+        assert!(value.permanent_and_child_rent_lamports > 0);
+        assert_eq!(
+            value.total_lamports,
+            value.liveness_work_lamports + value.permanent_and_child_rent_lamports
+        );
+        assert!(!value.id.is_zero());
+
+        let hostile_rent = RentParameters {
+            lamports_per_byte_year: 3_481,
+            exemption_threshold: 2.0,
+        };
+        assert_ne!(
+            quote_source_lifecycle_capitalization_v1(schedule(), &hostile_rent)
+                .unwrap()
+                .id,
+            value.id
+        );
+    }
 }

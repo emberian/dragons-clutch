@@ -12,17 +12,20 @@ use crate::source_plane_v3::{
     authenticate_evaluation_release_binding, authenticate_head, authenticate_lineage,
     authenticate_occurrence, authenticate_occurrence_window, authenticate_open_page,
     authenticate_persisted_window_evidence_account, authenticate_raw_page, authenticate_route,
-    authenticate_persisted_result_account, authenticate_route_clock_bucket,
+    authenticate_persisted_result_account, authenticate_result_absence,
+    authenticate_route_clock_bucket, authenticate_window_seal_absence,
     authenticate_reopen_generation_request,
     authenticate_statistic_key_input, authenticate_statistic_key_policy_input,
     authenticate_summary_program_input, authenticate_window_spec_input, authenticate_window_work,
     authenticate_work_receipt, invoke_statistic_evaluator, runtime_key,
-    successful_evaluation_handoff,
+    primary_maturity_handoff, source_refusal_handoff, successful_evaluation_handoff,
 };
 use crate::source_plane_v3_actions::{
-    apply_source_work_liveness, authenticate_source_work_schedule_artifact, bind_work_execution,
+    apply_postterminal_source_work_from_custody_v1, apply_source_work_liveness,
+    authenticate_source_funding_custody_v1,
+    authenticate_source_work_schedule_artifact, bind_work_execution,
     close_head_generation, close_open_page_generation, close_statistic_result_generation,
-    close_window_work_generation,
+    close_window_work_generation, join_failure_absence_handoff, join_failure_result_handoff,
     authenticate_source_terminal_policy_for_close,
     fold_window_pages, initialize_window_work, join_successful_evaluation_handoff,
     persist_evaluation_result, persist_source_policy_handoff, reopen_runtime_account,
@@ -37,8 +40,10 @@ use clutch_source_plane_v3_adapter::{
     RuntimeCreationProjectionV1, RuntimeMutationProjectionV1,
 };
 use clutch_source_plane_v3_runtime::{
-    account_data_id, LineageAccessV1, OccurrenceDispositionV1, SourceReopenTargetV1,
-    SourceWorkKindV1,
+    account_data_id, AuthenticatedStatisticResultAbsenceV1,
+    AuthenticatedStatisticResultAccountV1, FailurePolicySourceHandoffV1, LineageAccessV1,
+    OccurrenceDispositionV1, SourceReopenTargetV1, SourceWorkKindV1,
+    SuccessfulEvaluationHandoffV1,
 };
 use clutch_solana_layout::source_series::{
     CloseGenerationIntentV2, EmitFailureHandoffIntentV2, ReopenGenerationIntentV2,
@@ -53,6 +58,22 @@ use solana_pubkey::Pubkey;
 
 const EVALUATOR_REQUEST_MAGIC_V1: [u8; 8] = *b"DCSPEV01";
 const EVALUATOR_REQUEST_BYTES_V1: usize = 256;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SourceHandoffFactV2 {
+    FailureAbsence(
+        FailurePolicySourceHandoffV1,
+        AuthenticatedStatisticResultAbsenceV1,
+    ),
+    FailureResult(
+        FailurePolicySourceHandoffV1,
+        AuthenticatedStatisticResultAccountV1,
+    ),
+    Successful(
+        SuccessfulEvaluationHandoffV1,
+        AuthenticatedStatisticResultAccountV1,
+    ),
+}
 
 /// Execute action 5 as one rollback domain: authenticate both mutable
 /// generations, freeze an immutable page, advance SourceHead, close the
@@ -79,9 +100,8 @@ pub(super) fn process_seal_raw_page(
     )
     .map_err(Refusal::from)?;
     let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
-    require(
-        runtime_key(accounts[19].key) == schedule.payer(),
-        ClutchError::MismatchedState,
+    let custody = authenticate_source_funding_custody_v1(
+        program_id, route, schedule, &accounts[19],
     )?;
     require_live_intent(program_id, &accounts[18], intent)?;
     let head_lineage =
@@ -108,6 +128,7 @@ pub(super) fn process_seal_raw_page(
         &accounts[9],
         &accounts[11],
         &accounts[12],
+        custody,
         &accounts[19],
         &accounts[13],
         &accounts[14],
@@ -171,6 +192,7 @@ pub(super) fn process_seal_raw_page(
         ceiling,
         accounts[18].key,
         ceiling,
+        custody,
         &accounts[19],
         &accounts[20],
         &accounts[21],
@@ -210,9 +232,8 @@ pub(super) fn process_initialize_window_work(
     )
     .map_err(Refusal::from)?;
     let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
-    require(
-        runtime_key(accounts[16].key) == schedule.payer(),
-        ClutchError::MismatchedState,
+    let custody = authenticate_source_funding_custody_v1(
+        program_id, route, schedule, &accounts[16],
     )?;
     require_live_intent(program_id, &accounts[15], intent)?;
     let window_input =
@@ -232,6 +253,7 @@ pub(super) fn process_initialize_window_work(
         program_id,
         route,
         &window,
+        custody,
         &accounts[16],
         &accounts[10],
         &accounts[11],
@@ -278,6 +300,7 @@ pub(super) fn process_initialize_window_work(
         ceiling,
         accounts[15].key,
         ceiling,
+        custody,
         &accounts[16],
         &accounts[17],
         &accounts[18],
@@ -317,9 +340,8 @@ pub(super) fn process_fold_window_page(
     )
     .map_err(Refusal::from)?;
     let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
-    require(
-        runtime_key(accounts[17].key) == schedule.payer(),
-        ClutchError::MismatchedState,
+    let custody = authenticate_source_funding_custody_v1(
+        program_id, route, schedule, &accounts[17],
     )?;
     require_live_intent(program_id, &accounts[16], intent)?;
     let window_input =
@@ -401,6 +423,7 @@ pub(super) fn process_fold_window_page(
         ceiling,
         accounts[16].key,
         ceiling,
+        custody,
         &accounts[17],
         &accounts[18],
         &accounts[19],
@@ -440,9 +463,8 @@ pub(super) fn process_seal_window(
     )
     .map_err(Refusal::from)?;
     let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
-    require(
-        runtime_key(accounts[21].key) == schedule.payer(),
-        ClutchError::MismatchedState,
+    let custody = authenticate_source_funding_custody_v1(
+        program_id, route, schedule, &accounts[21],
     )?;
     require_live_intent(program_id, &accounts[20], intent)?;
     let clock = authenticate_route_clock_bucket(route, &accounts[8]).map_err(Refusal::from)?;
@@ -483,6 +505,7 @@ pub(super) fn process_seal_window(
         &accounts[11],
         &accounts[12],
         &accounts[14],
+        custody,
         &accounts[21],
         &accounts[15],
         &accounts[16],
@@ -552,6 +575,7 @@ pub(super) fn process_seal_window(
         ceiling,
         accounts[20].key,
         ceiling,
+        custody,
         &accounts[21],
         &accounts[22],
         &accounts[23],
@@ -633,9 +657,8 @@ pub(super) fn process_evaluate_statistic(
     )
     .map_err(Refusal::from)?;
     let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
-    require(
-        runtime_key(accounts[22].key) == schedule.payer(),
-        ClutchError::MismatchedState,
+    let custody = authenticate_source_funding_custody_v1(
+        program_id, route, schedule, &accounts[22],
     )?;
     require_live_intent(program_id, &accounts[21], intent)?;
     let clock = authenticate_route_clock_bucket(route, &accounts[8]).map_err(Refusal::from)?;
@@ -720,12 +743,21 @@ pub(super) fn process_evaluate_statistic(
         &evaluator_accounts,
     )
     .map_err(Refusal::from)?;
+    let result_lineage = authenticate_lineage(
+        program_id,
+        route,
+        &accounts[17],
+        LineageAccessV1::Mutable,
+    )
+    .map_err(Refusal::from)?;
     let result = persist_evaluation_result(
         program_id,
         route,
         &key,
         evidence,
         evaluation,
+        result_lineage,
+        custody,
         &accounts[22],
         &accounts[16],
         &accounts[17],
@@ -777,6 +809,7 @@ pub(super) fn process_evaluate_statistic(
         ceiling,
         accounts[21].key,
         ceiling,
+        custody,
         &accounts[22],
         &accounts[23],
         &accounts[24],
@@ -793,23 +826,22 @@ pub(super) fn process_evaluate_statistic(
     Ok(())
 }
 
-/// Persist the successful action-10 Source handoff after joining the exact
-/// shared-Market Failure policy, action-9 result/work receipt, Product
-/// occurrence, immutable Window/StatisticKey, and mature action-8 seal.
+/// Persist one exhaustive action-10 Source handoff after joining the exact
+/// shared-Market Failure policy, Product occurrence, immutable Source facts,
+/// and a newly paid FailureHandoff work receipt.
 ///
 /// This instruction does not classify a relation or write ResolutionV5. The
 /// durable private postwrite is consumed later together with the full current
 /// ProfileV4/BundleV5 Product route.
-pub(super) fn process_emit_successful_handoff(
+pub(super) fn process_emit_source_handoff(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
     intent: EmitFailureHandoffIntentV2,
 ) -> Outcome<()> {
-    require(
-        intent.kind == SourceHandoffKindV2::SuccessfulEvaluation,
-        ClutchError::UnsupportedInstruction,
-    )?;
+    require(sequence != 0, ClutchError::Replay)?;
+    let call_ordinal =
+        u32::try_from(sequence).map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
     let route = authenticate_route(
         program_id,
         &accounts[0],
@@ -822,9 +854,8 @@ pub(super) fn process_emit_successful_handoff(
     )
     .map_err(Refusal::from)?;
     let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
-    require(
-        runtime_key(accounts[18].key) == schedule.payer(),
-        ClutchError::MismatchedState,
+    let custody = authenticate_source_funding_custody_v1(
+        program_id, route, schedule, &accounts[21],
     )?;
     let clock = authenticate_route_clock_bucket(route, &accounts[8]).map_err(Refusal::from)?;
     require(
@@ -883,14 +914,6 @@ pub(super) fn process_emit_successful_handoff(
         occurrence.market_instance_id().bytes() == failure_facts.market_instance_id.bytes(),
         ClutchError::MismatchedState,
     )?;
-    let evidence = authenticate_persisted_window_evidence_account(
-        program_id,
-        route,
-        &accounts[12],
-        clock,
-        &window,
-    )
-    .map_err(Refusal::from)?;
     let result_lineage =
         crate::source_plane_v3::authenticate_lineage(
             program_id,
@@ -899,55 +922,152 @@ pub(super) fn process_emit_successful_handoff(
             LineageAccessV1::ReadOnly,
         )
         .map_err(Refusal::from)?;
-    let result = authenticate_persisted_result_account(
+    let (handoff_id, source_fact) = match intent.kind {
+        SourceHandoffKindV2::FailureAbsence => {
+            let _seal_absence = authenticate_window_seal_absence(
+                program_id,
+                route,
+                &accounts[12],
+                &window,
+            )
+            .map_err(Refusal::from)?;
+            let absence = authenticate_result_absence(
+                program_id,
+                route,
+                &accounts[13],
+                &key,
+                result_lineage,
+            )
+            .map_err(Refusal::from)?;
+            let handoff = primary_maturity_handoff(
+                route,
+                failure_policy_binding_id,
+                occurrence,
+                clock,
+                &window,
+                absence,
+            )
+            .map_err(Refusal::from)?;
+            (handoff.id(), SourceHandoffFactV2::FailureAbsence(handoff, absence))
+        }
+        SourceHandoffKindV2::FailureResult | SourceHandoffKindV2::SuccessfulEvaluation => {
+            let evidence = authenticate_persisted_window_evidence_account(
+                program_id,
+                route,
+                &accounts[12],
+                clock,
+                &window,
+            )
+            .map_err(Refusal::from)?;
+            let result = authenticate_persisted_result_account(
+                program_id,
+                route,
+                &accounts[13],
+                &window,
+                &key,
+                summary_program_id,
+                evidence,
+                result_lineage,
+            )
+            .map_err(Refusal::from)?;
+            match intent.kind {
+                SourceHandoffKindV2::FailureResult => {
+                    require(
+                        result.result().status() == StatisticResultStatusV3::Refused,
+                        ClutchError::MismatchedState,
+                    )?;
+                    let handoff = source_refusal_handoff(
+                        route,
+                        failure_policy_binding_id,
+                        occurrence,
+                        clock,
+                        &window,
+                        evidence,
+                        result,
+                    )
+                    .map_err(Refusal::from)?;
+                    (handoff.id(), SourceHandoffFactV2::FailureResult(handoff, result))
+                }
+                SourceHandoffKindV2::SuccessfulEvaluation => {
+                    require(
+                        result.result().status() == StatisticResultStatusV3::Success,
+                        ClutchError::MismatchedState,
+                    )?;
+                    let handoff = successful_evaluation_handoff(
+                        route,
+                        failure_policy_binding_id,
+                        occurrence,
+                        clock,
+                        &window,
+                        evidence,
+                        result,
+                    )
+                    .map_err(Refusal::from)?;
+                    (handoff.id(), SourceHandoffFactV2::Successful(handoff, result))
+                }
+                SourceHandoffKindV2::FailureAbsence => {
+                    return Err(ClutchError::NonCanonical.into());
+                }
+            }
+        }
+    };
+    require(handoff_id.bytes() == intent.handoff_id, ClutchError::MismatchedState)?;
+    let kind = SourceWorkKindV1::FailureHandoff;
+    let ceiling = schedule.ceiling_for(kind);
+    let work = bind_work_execution(
         program_id,
         route,
-        &accounts[13],
-        &window,
-        &key,
-        summary_program_id,
-        evidence,
-        result_lineage,
-    )
-    .map_err(Refusal::from)?;
+        schedule,
+        kind,
+        handoff_id,
+        &accounts[15],
+        call_ordinal,
+        ceiling,
+        accounts[20].key,
+        ceiling,
+        custody,
+        &accounts[21],
+        &accounts[22],
+        &accounts[23],
+    )?;
+    let authenticated_work = work.authenticated_receipt();
     require(
-        result.result().status() == StatisticResultStatusV3::Success,
+        authenticated_work.id().bytes() == intent.source_work_receipt_id,
         ClutchError::MismatchedState,
     )?;
-    let work = authenticate_work_receipt(program_id, route, schedule, &accounts[15])
-        .map_err(Refusal::from)?;
-    require(
-        sequence == u64::from(work.receipt().call_ordinal())
-            && work.id().bytes() == intent.source_work_receipt_id,
-        ClutchError::MismatchedState,
-    )?;
-    let handoff = successful_evaluation_handoff(
-        route,
-        failure_policy_binding_id,
-        occurrence,
-        clock,
-        &window,
-        evidence,
-        result,
-    )
-    .map_err(Refusal::from)?;
-    require(
-        handoff.id().bytes() == intent.handoff_id,
-        ClutchError::MismatchedState,
-    )?;
-    let joined = join_successful_evaluation_handoff(route, handoff, result, work)?;
+    let joined = match source_fact {
+        SourceHandoffFactV2::FailureAbsence(handoff, absence) => {
+            join_failure_absence_handoff(route, handoff, absence, authenticated_work)?
+        }
+        SourceHandoffFactV2::FailureResult(handoff, result) => {
+            join_failure_result_handoff(route, handoff, result, authenticated_work)?
+        }
+        SourceHandoffFactV2::Successful(handoff, result) => {
+            join_successful_evaluation_handoff(route, handoff, result, authenticated_work)?
+        }
+    };
     let persisted = persist_source_policy_handoff(
         program_id,
         route,
         joined,
-        &accounts[18],
+        custody,
+        &accounts[21],
         &accounts[17],
-        &accounts[19],
-        &accounts[20],
+        &accounts[22],
+        &accounts[23],
     )?;
     require(
         persisted.authenticated().source_policy_handoff_join_id() == joined.id(),
         ClutchError::MismatchedState,
+    )?;
+    apply_source_work_liveness(
+        program_id,
+        route,
+        work,
+        &accounts[18],
+        &accounts[19],
+        &accounts[20],
+        &accounts[21],
     )?;
     Ok(())
 }
@@ -974,6 +1094,10 @@ pub(super) fn process_close_generation(
     )
     .map_err(Refusal::from)?;
     let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
+    let custody = authenticate_source_funding_custody_v1(
+        program_id, route, schedule, &accounts[13],
+    )?;
+    require(accounts[14].key == accounts[13].key, ClutchError::AccountAlias)?;
     let clock = Clock::get().map_err(|_| Refusal::Adapter(ClutchError::WrongClockSysvar))?;
     require(
         clock.slot < intent.valid_before_slot
@@ -1025,8 +1149,8 @@ pub(super) fn process_close_generation(
             lineage,
             &accounts[9],
             &accounts[10],
-            &accounts[12],
-            &accounts[13],
+            &accounts[14],
+            &accounts[15],
             terminal,
         ),
         SourceMutableFamilyV2::OpenRawPage => close_open_page_generation(
@@ -1035,8 +1159,8 @@ pub(super) fn process_close_generation(
             lineage,
             &accounts[9],
             &accounts[10],
-            &accounts[12],
-            &accounts[13],
+            &accounts[14],
+            &accounts[15],
             terminal,
         ),
         SourceMutableFamilyV2::WindowWork => close_window_work_generation(
@@ -1045,8 +1169,8 @@ pub(super) fn process_close_generation(
             lineage,
             &accounts[9],
             &accounts[10],
-            &accounts[12],
-            &accounts[13],
+            &accounts[14],
+            &accounts[15],
             terminal,
         ),
         SourceMutableFamilyV2::StatisticResult => close_statistic_result_generation(
@@ -1055,8 +1179,8 @@ pub(super) fn process_close_generation(
             lineage,
             &accounts[9],
             &accounts[10],
-            &accounts[12],
-            &accounts[13],
+            &accounts[14],
+            &accounts[15],
             terminal,
         ),
     }?;
@@ -1071,6 +1195,7 @@ pub(super) fn process_close_generation(
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
         !close.lineage_after.is_open
+            && custody.account() == runtime_key(accounts[14].key)
             && close.funding.generation == target_generation
             && close.funding.terminal_receipt_id.bytes()
                 == intent.semantic_terminal_receipt_id
@@ -1085,9 +1210,9 @@ pub(super) fn process_close_generation(
 /// Reopen one exact closed Source generation from the immutable typed target
 /// persisted by the release-selected Product/Failure generation owner. The
 /// payload supplies only comparison digests and never supplies body bytes.
-/// The new generation is payer-sponsored: Source terminal composition already
-/// closed the retired generation's liveness compartment, so action 11 cannot
-/// debit that compartment or mint a second terminal/work receipt.
+/// The new generation is capitalized from the same bounded lifecycle custody
+/// and emits one paid TerminalLifecycle work receipt. The keeper signs the
+/// call but never becomes the semantic rent payer or refund owner.
 pub(super) fn process_reopen_generation(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -1107,9 +1232,8 @@ pub(super) fn process_reopen_generation(
     )
     .map_err(Refusal::from)?;
     let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
-    require(
-        runtime_key(accounts[11].key) == schedule.payer(),
-        ClutchError::MismatchedState,
+    let custody = authenticate_source_funding_custody_v1(
+        program_id, route, schedule, &accounts[13],
     )?;
     let clock = Clock::get().map_err(|_| Refusal::Adapter(ClutchError::WrongClockSysvar))?;
     require(
@@ -1164,11 +1288,12 @@ pub(super) fn process_reopen_generation(
             recipe_id,
             &recipe,
             body,
-            &accounts[11],
+            custody,
+            &accounts[13],
             &accounts[9],
             &accounts[10],
-            &accounts[12],
-            &accounts[13],
+            &accounts[14],
+            &accounts[15],
         ),
         SourceReopenTargetV1::OpenRawPage(body) => reopen_runtime_account(
             program_id,
@@ -1178,11 +1303,12 @@ pub(super) fn process_reopen_generation(
             recipe_id,
             &recipe,
             body,
-            &accounts[11],
+            custody,
+            &accounts[13],
             &accounts[9],
             &accounts[10],
-            &accounts[12],
-            &accounts[13],
+            &accounts[14],
+            &accounts[15],
         ),
         SourceReopenTargetV1::WindowWork(body) => reopen_runtime_account(
             program_id,
@@ -1192,11 +1318,12 @@ pub(super) fn process_reopen_generation(
             recipe_id,
             &recipe,
             body,
-            &accounts[11],
+            custody,
+            &accounts[13],
             &accounts[9],
             &accounts[10],
-            &accounts[12],
-            &accounts[13],
+            &accounts[14],
+            &accounts[15],
         ),
         SourceReopenTargetV1::StatisticResult(body) => reopen_runtime_account(
             program_id,
@@ -1206,11 +1333,12 @@ pub(super) fn process_reopen_generation(
             recipe_id,
             &recipe,
             body,
-            &accounts[11],
+            custody,
+            &accounts[13],
             &accounts[9],
             &accounts[10],
-            &accounts[12],
-            &accounts[13],
+            &accounts[14],
+            &accounts[15],
         ),
     }?;
     let lineage_after_id = opened
@@ -1233,5 +1361,44 @@ pub(super) fn process_reopen_generation(
             && !lineage_after_id.is_zero(),
         ClutchError::MismatchedState,
     )?;
+    let semantic_receipt_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            b"dragons-clutch/source-reopen-action/v1",
+            &route.route_id().bytes(),
+            &authorization.id().bytes(),
+            &opened.account_data_id.bytes(),
+            &lineage_after_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!semantic_receipt_id.is_zero(), ClutchError::MismatchedState)?;
+    let kind = SourceWorkKindV1::TerminalLifecycle;
+    let ceiling = schedule.ceiling_for(kind);
+    let work = bind_work_execution(
+        program_id,
+        route,
+        schedule,
+        kind,
+        semantic_receipt_id,
+        &accounts[11],
+        u32::try_from(sequence).map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?,
+        ceiling,
+        accounts[12].key,
+        ceiling,
+        custody,
+        &accounts[13],
+        &accounts[14],
+        &accounts[15],
+    )?;
+    let postterminal = apply_postterminal_source_work_from_custody_v1(
+        program_id,
+        route,
+        schedule,
+        work,
+        &accounts[13],
+        &accounts[12],
+        &accounts[14],
+    )?;
+    require(!postterminal.id().is_zero(), ClutchError::MismatchedState)?;
     Ok(())
 }

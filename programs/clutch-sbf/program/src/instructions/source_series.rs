@@ -12,8 +12,9 @@ use crate::source_plane_v3::{
     authenticate_route_clock_bucket, runtime_key,
 };
 use crate::source_plane_v3_actions::{
-    apply_source_work_liveness, authenticate_source_work_schedule_artifact, bind_work_execution,
-    ingest_parser_boundary_atomic, initialize_head, open_raw_page, register_release_from_artifact,
+    apply_source_work_liveness, authenticate_source_funding_custody_v1,
+    authenticate_source_work_schedule_artifact, bind_work_execution, ingest_parser_boundary_atomic,
+    initialize_head, open_raw_page, register_release_from_artifact,
 };
 use clutch_pyth_parser_v1::PythParserRequestV1;
 use clutch_solana_layout::registry::SourceSeriesAction;
@@ -107,7 +108,7 @@ pub fn process(
         (
             SourceSeriesAction::EmitFailureHandoff,
             SourceSeriesPayloadV2::EmitFailureHandoff(intent),
-        ) => super::source_series_successor::process_emit_successful_handoff(
+        ) => super::source_series_successor::process_emit_source_handoff(
             program_id, accounts, sequence, intent,
         ),
         (
@@ -168,9 +169,8 @@ fn process_initialize_head(
     )
     .map_err(Refusal::from)?;
     let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
-    require(
-        runtime_key(accounts[15].key) == schedule.payer(),
-        ClutchError::MismatchedState,
+    let custody = authenticate_source_funding_custody_v1(
+        program_id, route, schedule, &accounts[15],
     )?;
     let authorization =
         authenticate_generation_request(route, &accounts[8]).map_err(Refusal::from)?;
@@ -184,6 +184,7 @@ fn process_initialize_head(
         program_id,
         route,
         authorization,
+        custody,
         &accounts[15],
         &accounts[9],
         &accounts[10],
@@ -229,6 +230,7 @@ fn process_initialize_head(
         ceiling,
         accounts[14].key,
         ceiling,
+        custody,
         &accounts[15],
         &accounts[16],
         &accounts[17],
@@ -269,9 +271,8 @@ fn process_open_raw_page(
     )
     .map_err(Refusal::from)?;
     let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
-    require(
-        runtime_key(accounts[16].key) == schedule.payer(),
-        ClutchError::MismatchedState,
+    let custody = authenticate_source_funding_custody_v1(
+        program_id, route, schedule, &accounts[16],
     )?;
     require_live_intent(program_id, &accounts[15], intent)?;
     let head_lineage =
@@ -287,6 +288,7 @@ fn process_open_raw_page(
         program_id,
         route,
         head,
+        custody,
         &accounts[16],
         &accounts[10],
         &accounts[11],
@@ -333,6 +335,7 @@ fn process_open_raw_page(
         ceiling,
         accounts[15].key,
         ceiling,
+        custody,
         &accounts[16],
         &accounts[17],
         &accounts[18],
@@ -373,9 +376,8 @@ fn process_ingest_boundary(
     )
     .map_err(Refusal::from)?;
     let schedule = authenticate_source_work_schedule_artifact(program_id, route, &accounts[7])?;
-    require(
-        runtime_key(accounts[21].key) == schedule.payer(),
-        ClutchError::MismatchedState,
+    let custody = authenticate_source_funding_custody_v1(
+        program_id, route, schedule, &accounts[21],
     )?;
     require_live_intent(program_id, &accounts[20], intent)?;
     let clock = authenticate_route_clock_bucket(route, &accounts[8]).map_err(Refusal::from)?;
@@ -449,6 +451,7 @@ fn process_ingest_boundary(
         ceiling,
         &accounts[20],
         ceiling,
+        custody,
         &accounts[21],
         &accounts[21],
         &accounts[18],

@@ -10,7 +10,8 @@ use crate::error::{ClutchError, Refusal};
 use crate::instructions::product_series::AuthenticatedSourceResolutionInputV3;
 use crate::source_plane_v3::{authenticate_lineage, runtime_key};
 use crate::source_plane_v3_actions::{
-    apply_source_terminal_liveness, bind_terminal_execution,
+    apply_source_terminal_liveness, authenticate_source_funding_custody_v1,
+    bind_terminal_execution,
     close_statistic_result_generation, persist_source_no_reopen_terminal,
     persist_source_reopen_generation_request, AuthenticatedSourceTerminalSemanticV1,
     CloseRuntimeAccountResultV1, PersistedSourceNoReopenTerminalV1,
@@ -405,6 +406,12 @@ pub(crate) fn compose_source_resolution_terminal_v1<
     system_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
 ) -> Outcome<AuthenticatedSourceResolutionTerminalV1> {
+    let custody = authenticate_source_funding_custody_v1(
+        program_id,
+        route,
+        schedule,
+        account_payer,
+    )?;
     let product_route = source.route();
     let failure_facts = failure.facts();
     require(
@@ -416,8 +423,8 @@ pub(crate) fn compose_source_resolution_terminal_v1<
             && product_route.source_spec_id() == route.source_spec_id()
             && schedule.source_work_schedule_id() == route.source_work_schedule_id()
             && schedule.generation() == failure_facts.generation
-            && runtime_key(account_payer.key) == schedule.payer()
-            && runtime_key(payer_refund.key) == schedule.payer()
+            && custody.account() == schedule.payer()
+            && payer_refund.key == account_payer.key
             && source.failure_policy_binding_id().bytes()
                 == failure.failure_policy_binding_id().bytes()
             && source.successful_evaluation_handoff_id().bytes()
@@ -457,6 +464,7 @@ pub(crate) fn compose_source_resolution_terminal_v1<
                 program_id,
                 route,
                 body,
+                custody,
                 account_payer,
                 terminal_policy_account,
                 system_program,
@@ -496,6 +504,7 @@ pub(crate) fn compose_source_resolution_terminal_v1<
                 program_id,
                 route,
                 request,
+                custody,
                 account_payer,
                 terminal_policy_account,
                 system_program,
@@ -517,6 +526,7 @@ pub(crate) fn compose_source_resolution_terminal_v1<
         schedule,
         terminal_semantic,
         terminal_receipt_account,
+        custody,
         account_payer,
         system_program,
         rent_sysvar,
@@ -631,7 +641,7 @@ pub(crate) fn close_successful_source_statistic_result_v1(
             && lineage_before.active_account == runtime_key(result_account.key)
             && lineage_before.last_opened_state_id == source.result_account_data_id()
             && principal_refund.is_writable
-            && principal_refund.is_signer
+            && !principal_refund.is_signer
             && !principal_refund.executable
             && runtime_key(principal_refund.key) == terminal.payer()
             && neutral_sink.is_writable
