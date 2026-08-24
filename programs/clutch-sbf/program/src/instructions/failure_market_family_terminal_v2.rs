@@ -89,8 +89,8 @@ const FAMILY_TERMINAL_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/failure-market-terminal-authentication/v2";
 const FAMILY_TERMINAL_RECEIPT_DOMAIN_V3: &[u8] =
     b"dragons-clutch/sbf/failure-market-family-terminal-receipt/v3";
-const FAMILY_PHYSICAL_CLOSE_DOMAIN_V3: &[u8] =
-    b"dragons-clutch/sbf/failure-market-family-physical-close/v3";
+const FAMILY_PHYSICAL_TERMINAL_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/failure-market-family-physical-terminal/v3";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FailureMarketFamilyAggregateAuthorityV2 {
@@ -1444,13 +1444,20 @@ pub(crate) fn retire_failed_failure_source_family_into_product_v3<'root, 'link, 
     )
 }
 
-/// Move-only proof that every deletable Failure account was closed only after
-/// the hostile live Product RootV3 reached whole-Market terminality.
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedFailureMarketPhysicalCloseV3 {
+/// Move-only proof that every deletable Failure account was closed under one
+/// exact hostile Product RootV3 Retiring prestate.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedFailureMarketPhysicalTerminalV3<'root> {
     id: ContentId,
-    market_terminal_projection_id: ContentId,
+    market_root_before: AuthenticatedMarketLifecycleRootV3<'root>,
+    market_root_data_before_id: ContentId,
+    market_root_semantic_before_id: ContentId,
+    market_root_binding_id: ContentId,
+    market_root_authentication_before_id: ContentId,
+    market_root_transition_sequence: u64,
     failure_terminal_receipt_id: ContentId,
+    failure_terminal_facts: FailureMarketFamilyTerminalConsumerFactsV3,
+    family_seal_id: ContentId,
     interval_close_authorization_id: ContentId,
     admission_root_account: Pubkey,
     runtime_root_account: Pubkey,
@@ -1463,19 +1470,144 @@ pub(crate) struct AuthenticatedFailureMarketPhysicalCloseV3 {
     neutralized_donation_lamports: u64,
 }
 
-impl AuthenticatedFailureMarketPhysicalCloseV3 {
+/// Complete Failure-derived tuple the Product RootV3 retirement writer must
+/// exact-compare before consuming the physical terminal receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FailureMarketPhysicalTerminalConsumerFactsV3 {
+    pub id: ContentId,
+    pub market_root_data_before_id: ContentId,
+    pub market_root_semantic_before_id: ContentId,
+    pub market_root_binding_id: ContentId,
+    pub market_root_authentication_before_id: ContentId,
+    pub market_root_transition_sequence: u64,
+    pub failure_terminal_receipt_id: ContentId,
+    pub failure_terminal_facts: FailureMarketFamilyTerminalConsumerFactsV3,
+    pub family_seal_id: ContentId,
+    pub interval_close_authorization_id: ContentId,
+    pub admission_root_account: Pubkey,
+    pub runtime_root_account: Pubkey,
+    pub interval_cell_account: Pubkey,
+    pub interval_history_account: Pubkey,
+    pub replay_account: Pubkey,
+    pub rent_refund_owner: Pubkey,
+    pub neutral_sink: Pubkey,
+    pub refunded_principal_lamports: u64,
+    pub neutralized_donation_lamports: u64,
+}
+
+impl<'root> AuthenticatedFailureMarketPhysicalTerminalV3<'root> {
     pub(crate) const fn id(&self) -> ContentId { self.id }
-    pub(crate) const fn market_terminal_projection_id(&self) -> ContentId {
-        self.market_terminal_projection_id
+    pub(crate) const fn market_root_before(
+        &self,
+    ) -> &AuthenticatedMarketLifecycleRootV3<'root> {
+        &self.market_root_before
+    }
+    pub(crate) const fn market_root_data_before_id(&self) -> ContentId {
+        self.market_root_data_before_id
+    }
+    pub(crate) const fn market_root_semantic_before_id(&self) -> ContentId {
+        self.market_root_semantic_before_id
+    }
+    pub(crate) const fn market_root_binding_id(&self) -> ContentId {
+        self.market_root_binding_id
+    }
+    pub(crate) const fn market_root_authentication_before_id(&self) -> ContentId {
+        self.market_root_authentication_before_id
+    }
+    pub(crate) const fn market_root_transition_sequence(&self) -> u64 {
+        self.market_root_transition_sequence
     }
     pub(crate) const fn failure_terminal_receipt_id(&self) -> ContentId {
         self.failure_terminal_receipt_id
     }
+    pub(crate) const fn failure_terminal_facts(
+        &self,
+    ) -> FailureMarketFamilyTerminalConsumerFactsV3 {
+        self.failure_terminal_facts
+    }
+    pub(crate) const fn family_seal_id(&self) -> ContentId { self.family_seal_id }
+    pub(crate) const fn interval_close_authorization_id(&self) -> ContentId {
+        self.interval_close_authorization_id
+    }
+    pub(crate) const fn admission_root_account(&self) -> Pubkey { self.admission_root_account }
+    pub(crate) const fn runtime_root_account(&self) -> Pubkey { self.runtime_root_account }
+    pub(crate) const fn interval_cell_account(&self) -> Pubkey { self.interval_cell_account }
+    pub(crate) const fn interval_history_account(&self) -> Pubkey {
+        self.interval_history_account
+    }
+    pub(crate) const fn replay_account(&self) -> Pubkey { self.replay_account }
+    pub(crate) const fn rent_refund_owner(&self) -> Pubkey { self.rent_refund_owner }
+    pub(crate) const fn neutral_sink(&self) -> Pubkey { self.neutral_sink }
     pub(crate) const fn refunded_principal_lamports(&self) -> u64 {
         self.refunded_principal_lamports
     }
     pub(crate) const fn neutralized_donation_lamports(&self) -> u64 {
         self.neutralized_donation_lamports
+    }
+
+    pub(crate) const fn consumer_facts(&self) -> FailureMarketPhysicalTerminalConsumerFactsV3 {
+        FailureMarketPhysicalTerminalConsumerFactsV3 {
+            id: self.id,
+            market_root_data_before_id: self.market_root_data_before_id,
+            market_root_semantic_before_id: self.market_root_semantic_before_id,
+            market_root_binding_id: self.market_root_binding_id,
+            market_root_authentication_before_id: self.market_root_authentication_before_id,
+            market_root_transition_sequence: self.market_root_transition_sequence,
+            failure_terminal_receipt_id: self.failure_terminal_receipt_id,
+            failure_terminal_facts: self.failure_terminal_facts,
+            family_seal_id: self.family_seal_id,
+            interval_close_authorization_id: self.interval_close_authorization_id,
+            admission_root_account: self.admission_root_account,
+            runtime_root_account: self.runtime_root_account,
+            interval_cell_account: self.interval_cell_account,
+            interval_history_account: self.interval_history_account,
+            replay_account: self.replay_account,
+            rent_refund_owner: self.rent_refund_owner,
+            neutral_sink: self.neutral_sink,
+            refunded_principal_lamports: self.refunded_principal_lamports,
+            neutralized_donation_lamports: self.neutralized_donation_lamports,
+        }
+    }
+
+    /// Consume the sole receipt into Product's exact root preauthorization and
+    /// immutable Failure terminal facts. No caller can reconstruct either.
+    pub(crate) fn into_product_parts(
+        self,
+    ) -> (
+        AuthenticatedMarketLifecycleRootV3<'root>,
+        FailureMarketPhysicalTerminalConsumerFactsV3,
+    ) {
+        let facts = self.consumer_facts();
+        (self.market_root_before, facts)
+    }
+}
+
+/// Default-refusing, consuming Product boundary for the sole physical Failure
+/// terminal. Implementers cannot return scalar facts while retaining a second
+/// usable copy of the root preauthorization.
+pub(crate) trait AuthenticatedFailureMarketPhysicalTerminalAuthorityV3<'root>:
+    Sized
+{
+    fn into_authenticated_failure_market_physical_terminal_v3(
+        self,
+    ) -> Outcome<(
+        AuthenticatedMarketLifecycleRootV3<'root>,
+        FailureMarketPhysicalTerminalConsumerFactsV3,
+    )> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+}
+
+impl<'root> AuthenticatedFailureMarketPhysicalTerminalAuthorityV3<'root>
+    for AuthenticatedFailureMarketPhysicalTerminalV3<'root>
+{
+    fn into_authenticated_failure_market_physical_terminal_v3(
+        self,
+    ) -> Outcome<(
+        AuthenticatedMarketLifecycleRootV3<'root>,
+        FailureMarketPhysicalTerminalConsumerFactsV3,
+    )> {
+        Ok(self.into_product_parts())
     }
 }
 
@@ -1495,15 +1627,17 @@ fn require_failure_close_destination(
 }
 
 /// Close the reusable interval pair, mutable runtime root, and immutable
-/// admission root in reverse dependency order after Product RootV3 is
-/// terminal and has consumed this exact Failure V3 receipt.
+/// admission root in reverse dependency order under one exact writable
+/// Product RootV3 Retiring prestate.
 ///
 /// The permanent replay account remains read-only. Exact prepaid rent from all
 /// four deleted accounts returns to the single immutable refund owner; every
 /// initial or later donation goes only to the shared neutral sink. All
-/// postbalances and all close plans are computed before the first write.
+/// postbalances and all close plans are computed before the first write. The
+/// returned receipt owns the exact RootV3 preauthentication and must be
+/// consumed by Product before that root can advance; it is not detachable.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn close_failure_market_family_after_product_terminal_v3(
+pub(crate) fn close_failure_market_family_for_product_retirement_v3<'root>(
     program_id: &Pubkey,
     market_root_account: &AccountInfo<'_>,
     admission_root_account: &AccountInfo<'_>,
@@ -1517,8 +1651,8 @@ pub(crate) fn close_failure_market_family_after_product_terminal_v3(
     interval_funding: FailureMarketIntervalFundingReceiptV2,
     quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
     replay_funding: FailureMarketReplayFundingReceiptV2,
-    market_root_decode: &mut MarketLifecycleRootAccountV3,
-) -> Outcome<AuthenticatedFailureMarketPhysicalCloseV3> {
+    market_root_decode: &'root mut MarketLifecycleRootAccountV3,
+) -> Outcome<AuthenticatedFailureMarketPhysicalTerminalV3<'root>> {
     require_distinct(&[
         market_root_account.clone(),
         admission_root_account.clone(),
@@ -1529,14 +1663,14 @@ pub(crate) fn close_failure_market_family_after_product_terminal_v3(
         rent_refund_owner.clone(),
         neutral_sink.clone(),
     ])?;
-    require(!market_root_account.is_writable, ClutchError::UnexpectedWritable)?;
+    require(market_root_account.is_writable, ClutchError::NotWritable)?;
     let policy = admission.state().binding().facts();
     let market_root = authenticate_market_lifecycle_root_v3(
         program_id,
         market_root_account,
         policy.market_instance_id,
         policy.generation,
-        false,
+        true,
         market_root_decode,
     )?;
     let terminal_owner = authenticate_failure_market_family_terminal_for_close_v3(
@@ -1554,20 +1688,16 @@ pub(crate) fn close_failure_market_family_after_product_terminal_v3(
     let failure_terminal = AuthenticatedFailureMarketFamilyTerminalReceiptV3::from_owner(
         terminal_owner,
     )?;
-    let terminal_projection = market_root
-        .state()
-        .terminal_projection()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
-        market_root.state().phase() == MarketLifecyclePhaseV3::Terminal
+        market_root.state().phase() == MarketLifecyclePhaseV3::Retiring
             && market_root.account() == *market_root_account.key
             && market_root.owner_program() == *program_id
             && market_root.binding().market_instance_id == failure_terminal.facts.market_instance_id
             && market_root.binding().generation == failure_terminal.facts.generation
-            && market_root.state().failure_terminal_receipt_id() == failure_terminal.id()
-            && terminal_projection.root_semantic_id() == market_root.semantic_id()
-            && terminal_projection.market_instance_id() == failure_terminal.facts.market_instance_id
-            && terminal_projection.generation() == failure_terminal.facts.generation,
+            && market_root.state().failure_terminal_receipt_id() == ContentId::ZERO
+            && market_root.state().resolution_semantic_id() != ContentId::ZERO
+            && market_root.state().resolution_data_id() != ContentId::ZERO
+            && market_root.state().resolution_activation_receipt_id() != ContentId::ZERO,
         ClutchError::MismatchedState,
     )?;
 
@@ -1698,10 +1828,14 @@ pub(crate) fn close_failure_market_family_after_product_terminal_v3(
 
     let id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
-            FAMILY_PHYSICAL_CLOSE_DOMAIN_V3,
+            FAMILY_PHYSICAL_TERMINAL_DOMAIN_V3,
+            &market_root.data_id().bytes(),
+            &market_root.semantic_id().bytes(),
+            &market_root.binding_id().bytes(),
             &market_root.authentication_id().bytes(),
-            &terminal_projection.id().bytes(),
+            &market_root.state().transition_sequence().to_le_bytes(),
             &failure_terminal.id().bytes(),
+            &failure_terminal.family_seal_id().bytes(),
             &interval_close.authorization_id.bytes(),
             admission_root_account.key.as_ref(),
             runtime_root_account.key.as_ref(),
@@ -1716,10 +1850,17 @@ pub(crate) fn close_failure_market_family_after_product_terminal_v3(
         .to_bytes(),
     );
     require(!id.is_zero(), ClutchError::MismatchedState)?;
-    Ok(AuthenticatedFailureMarketPhysicalCloseV3 {
+    Ok(AuthenticatedFailureMarketPhysicalTerminalV3 {
         id,
-        market_terminal_projection_id: terminal_projection.id(),
+        market_root_data_before_id: market_root.data_id(),
+        market_root_semantic_before_id: market_root.semantic_id(),
+        market_root_binding_id: market_root.binding_id(),
+        market_root_authentication_before_id: market_root.authentication_id(),
+        market_root_transition_sequence: market_root.state().transition_sequence(),
+        market_root_before: market_root,
         failure_terminal_receipt_id: failure_terminal.id(),
+        failure_terminal_facts: failure_terminal.facts(),
+        family_seal_id: failure_terminal.family_seal_id(),
         interval_close_authorization_id: ContentId::from_bytes(
             interval_close.authorization_id.bytes(),
         ),
@@ -2653,18 +2794,20 @@ mod adversarial_family_terminal_tests {
     }
 
     #[test]
-    fn physical_close_requires_live_terminal_root_and_conserves_every_lamport() {
+    fn physical_terminal_requires_live_retiring_root_and_conserves_every_lamport() {
         let source = include_str!("failure_market_family_terminal_v2.rs");
         let close = source
-            .split("pub(crate) fn close_failure_market_family_after_product_terminal_v3")
+            .split("pub(crate) fn close_failure_market_family_for_product_retirement_v3")
             .nth(1)
             .and_then(|value| value.split("/// Produce one durable Failure terminal chain").next())
             .expect("RootV3 physical Failure close");
         for guard in [
             "authenticate_market_lifecycle_root_v3",
-            "MarketLifecyclePhaseV3::Terminal",
-            "failure_terminal_receipt_id() == failure_terminal.id()",
-            "terminal_projection.root_semantic_id() == market_root.semantic_id()",
+            "MarketLifecyclePhaseV3::Retiring",
+            "failure_terminal_receipt_id() == ContentId::ZERO",
+            "resolution_semantic_id() != ContentId::ZERO",
+            "resolution_data_id() != ContentId::ZERO",
+            "resolution_activation_receipt_id() != ContentId::ZERO",
             "plan_close_failure_market_interval_accounts_v2",
             "project_root_balance_disposition",
             "runtime_donation >= runtime_funding.donation_floor_lamports",
@@ -2680,19 +2823,60 @@ mod adversarial_family_terminal_tests {
         assert!(cell < history && history < runtime && runtime < admission);
         assert!(!close.contains("AuthenticatedMarketInstanceTerminalV1"));
         assert!(!close.contains("AuthenticatedMarketLifecycleRootV2"));
+        assert!(!close.contains("MarketLifecyclePhaseV3::Terminal"));
+        assert!(!close.contains("terminal_projection"));
     }
 
     #[test]
-    fn physical_close_receipt_is_noncopy_and_not_product_authority() {
+    fn physical_terminal_receipt_is_move_only_and_carries_product_preauthorization() {
         let source = include_str!("failure_market_family_terminal_v2.rs");
         let receipt = source
-            .split("pub(crate) struct AuthenticatedFailureMarketPhysicalCloseV3")
+            .split("pub(crate) struct AuthenticatedFailureMarketPhysicalTerminalV3")
             .nth(1)
             .and_then(|value| value.split("fn require_failure_close_destination").next())
-            .expect("physical close receipt");
+            .expect("physical terminal receipt");
         assert!(!receipt.contains("derive(Clone"));
         assert!(!receipt.contains("derive(Copy"));
         assert!(receipt.contains("pub(crate) const fn id(&self)"));
+        assert!(receipt.contains("market_root_before: AuthenticatedMarketLifecycleRootV3"));
+        assert!(receipt.contains("pub(crate) fn into_product_parts("));
+        assert!(receipt.contains("FailureMarketPhysicalTerminalConsumerFactsV3"));
         assert!(!receipt.contains("ProductPostwrite"));
+    }
+
+    #[test]
+    fn physical_terminal_precedes_product_and_commits_every_closed_owner() {
+        let source = include_str!("failure_market_family_terminal_v2.rs");
+        let close = source
+            .split("pub(crate) fn close_failure_market_family_for_product_retirement_v3")
+            .nth(1)
+            .and_then(|value| value.split("/// Produce one durable Failure terminal chain").next())
+            .expect("RootV3 preterminal close");
+        let writes = close.find("**cell_lamports = 0").expect("first physical close write");
+        let receipt = close
+            .find("Ok(AuthenticatedFailureMarketPhysicalTerminalV3")
+            .expect("move-only physical terminal receipt");
+        assert!(writes < receipt);
+        for committed in [
+            "&market_root.data_id().bytes()",
+            "&market_root.semantic_id().bytes()",
+            "&market_root.binding_id().bytes()",
+            "&market_root.authentication_id().bytes()",
+            "&market_root.state().transition_sequence().to_le_bytes()",
+            "&failure_terminal.id().bytes()",
+            "&failure_terminal.family_seal_id().bytes()",
+            "&interval_close.authorization_id.bytes()",
+            "admission_root_account.key.as_ref()",
+            "runtime_root_account.key.as_ref()",
+            "interval_cell_account.key.as_ref()",
+            "interval_history_account.key.as_ref()",
+            "replay_account.key.as_ref()",
+            "rent_refund_owner.key.as_ref()",
+            "neutral_sink.key.as_ref()",
+        ] {
+            assert!(close.contains(committed), "missing physical terminal commitment {committed}");
+        }
+        assert!(!close.contains("consume_source_family_terminal_into_product_v3"));
+        assert!(!close.contains("record_failure_shared_core_terminal"));
     }
 }
