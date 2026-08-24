@@ -54,6 +54,7 @@ pub mod collateral;
 pub mod collateral_v3_accounts;
 pub mod direct_selection;
 pub mod direct_selection_v3;
+pub mod dealer_runtime;
 pub mod direct_market_v1;
 pub mod direct_market_v3;
 pub mod failure_recovery;

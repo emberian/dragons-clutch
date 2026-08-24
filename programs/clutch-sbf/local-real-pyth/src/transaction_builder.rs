@@ -111,6 +111,8 @@ pub enum ProtocolFlow {
     ProductSeries,
     FractionalRedemption,
     StructuredClaim,
+    /// Current Dealer policy/facility actions 1 through 24.
+    DealerFacility,
     /// Payload-scoped current Dealer facility retirement targets 8 and 9.
     DealerFacilityTerminal,
     KeeperSettlement,
@@ -298,6 +300,11 @@ pub enum OwnedWireContract {
     /// Exact central Dealer request for one closed terminal discriminator.
     DealerTerminalRetireV1 {
         variant: crate::rpc_index::CanonicalIntentVariantV1,
+        sequence: u64,
+    },
+    /// Exact enabled Dealer facility request for one action in `5..=24`.
+    DealerFacilityRequestV1 {
+        action: clutch_solana_layout::registry::DealerFacilityAction,
         sequence: u64,
     },
 }
@@ -1702,6 +1709,88 @@ impl OwnedInstructionDraft {
         Ok(value)
     }
 
+    /// Construct one exact successor-enabled Dealer facility request.
+    ///
+    /// Payload decoding and account role/privilege/alias validation come from
+    /// `clutch-solana-layout::dealer_runtime`, the same semantic owner consumed
+    /// by the SBF adapter. This constructor deliberately excludes action 25;
+    /// its two current payload variants use the terminal constructor below.
+    pub(crate) fn enabled_dealer_facility_v1(
+        semantic_owner: SemanticOwner,
+        program_id: Address,
+        accounts: Vec<AccountMeta>,
+        equations: Vec<ExactEquation>,
+        action: clutch_solana_layout::registry::DealerFacilityAction,
+        sequence: u64,
+        payload: &[u8],
+    ) -> Result<Self> {
+        use clutch_solana_layout::dealer_runtime::{
+            meta_contract_v1, validate_meta_keys_distinct_v1, DealerRuntimePayloadV1,
+        };
+
+        if action == clutch_solana_layout::registry::DealerFacilityAction::Retire {
+            return Err(ConstructionError::UnallocatedRegistryCoordinate);
+        }
+        let decoded = DealerRuntimePayloadV1::decode(action, payload)
+            .map_err(|_| ConstructionError::WrongWireLength)?;
+        if decoded.expected_replay_ordinal != sequence {
+            return Err(ConstructionError::WrongWirePrefix);
+        }
+        let contract = meta_contract_v1(action, decoded)
+            .ok_or(ConstructionError::InvalidAccountContract)?;
+        if accounts.len() != contract.len() {
+            return Err(ConstructionError::InvalidAccountContract);
+        }
+        let mut keys = Vec::with_capacity(accounts.len());
+        let mut required_signers = Vec::new();
+        for (account, spec) in accounts.iter().zip(contract.iter()) {
+            if account.is_signer != spec.signer || account.is_writable != spec.writable {
+                return Err(ConstructionError::InvalidAccountContract);
+            }
+            keys.push(account.pubkey.to_bytes());
+            if spec.signer {
+                required_signers.push(account.pubkey);
+            }
+        }
+        validate_meta_keys_distinct_v1(contract, &keys)
+            .map_err(|_| ConstructionError::DuplicateAccount)?;
+
+        let family = ExtensionFamily::Dealer;
+        let binding = registry_binding(
+            family,
+            action.tag(),
+            Some(ExtensionAction::DealerFacility(action)),
+        )?;
+        let request = ExtensionRequest {
+            sequence,
+            envelope: ExtensionEnvelope {
+                family,
+                action: ExtensionAction::DealerFacility(action),
+                payload: payload.to_vec(),
+            },
+        };
+        let mut data = vec![0; 13 + EXTENSION_ENVELOPE_BYTES + payload.len()];
+        let exact = request
+            .encode(&mut data)
+            .map_err(|_| ConstructionError::WrongWireLength)?;
+        data.truncate(exact);
+        let value = Self {
+            flow: ProtocolFlow::DealerFacility,
+            action_name: format!("dealer-facility-{}", action.label()),
+            semantic_owner,
+            program_id,
+            accounts,
+            required_signers,
+            equations,
+            registry_binding: Some(binding),
+            runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
+            wire: OwnedWireContract::DealerFacilityRequestV1 { action, sequence },
+            data,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Construct the exact central request for Dealer action 25 target 8 or
     /// 9. The payload was derived from finalized account bytes by the action
     /// material owner; this boundary rechecks its canonical fixed layout and
@@ -1884,6 +1973,7 @@ impl OwnedInstructionDraft {
             OwnedWireContract::FractionalRedemptionRequestV1 { .. }
         );
         let structured_wrapper = matches!(self.wire, OwnedWireContract::StructuredWrapperV1 { .. });
+        let dealer_facility = matches!(self.wire, OwnedWireContract::DealerFacilityRequestV1 { .. });
         let dealer_terminal = matches!(self.wire, OwnedWireContract::DealerTerminalRetireV1 { .. });
         if !source_request
             && !failure_request
@@ -1891,6 +1981,7 @@ impl OwnedInstructionDraft {
             && !direct_request
             && !fractional_request
             && !structured_wrapper
+            && !dealer_facility
             && !dealer_terminal
         {
             let mut accounts = BTreeSet::new();
@@ -1966,7 +2057,9 @@ impl OwnedInstructionDraft {
                         family == ExtensionFamily::FractionalRedemption
                     }
                     ProtocolFlow::StructuredClaim => family == ExtensionFamily::StructuredClaim,
-                    ProtocolFlow::DealerFacilityTerminal => family == ExtensionFamily::Dealer,
+                    ProtocolFlow::DealerFacility | ProtocolFlow::DealerFacilityTerminal => {
+                        family == ExtensionFamily::Dealer
+                    }
                     ProtocolFlow::CollateralCustodyV3
                     | ProtocolFlow::DirectMarketV1
                     | ProtocolFlow::Liveness => false,
@@ -2657,6 +2750,48 @@ impl OwnedInstructionDraft {
                     left += 1;
                 }
             }
+            OwnedWireContract::DealerFacilityRequestV1 { action, sequence } => {
+                use clutch_solana_layout::dealer_runtime::{
+                    meta_contract_v1, validate_meta_keys_distinct_v1, DealerRuntimePayloadV1,
+                };
+
+                let request = ExtensionRequest::decode(&self.data)
+                    .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                let binding = self
+                    .registry_binding
+                    .ok_or(ConstructionError::UnallocatedRegistryCoordinate)?;
+                if action == clutch_solana_layout::registry::DealerFacilityAction::Retire
+                    || request.sequence != sequence
+                    || request.envelope.family != ExtensionFamily::Dealer
+                    || request.envelope.action != ExtensionAction::DealerFacility(action)
+                    || binding.family != ExtensionFamily::Dealer
+                    || binding.local_action != action.tag()
+                    || binding.central_action != Some(ExtensionAction::DealerFacility(action))
+                    || self.flow != ProtocolFlow::DealerFacility
+                    || self.runtime_admission != RuntimeAdmission::ReleaseBoundEnabled
+                {
+                    return Err(ConstructionError::UnallocatedRegistryCoordinate);
+                }
+                let decoded = DealerRuntimePayloadV1::decode(action, &request.envelope.payload)
+                    .map_err(|_| ConstructionError::WrongWireLength)?;
+                if decoded.expected_replay_ordinal != sequence {
+                    return Err(ConstructionError::WrongWirePrefix);
+                }
+                let contract = meta_contract_v1(action, decoded)
+                    .ok_or(ConstructionError::InvalidAccountContract)?;
+                if self.accounts.len() != contract.len() {
+                    return Err(ConstructionError::InvalidAccountContract);
+                }
+                let mut keys = Vec::with_capacity(self.accounts.len());
+                for (account, spec) in self.accounts.iter().zip(contract.iter()) {
+                    if account.is_signer != spec.signer || account.is_writable != spec.writable {
+                        return Err(ConstructionError::InvalidAccountContract);
+                    }
+                    keys.push(account.pubkey.to_bytes());
+                }
+                validate_meta_keys_distinct_v1(contract, &keys)
+                    .map_err(|_| ConstructionError::DuplicateAccount)?;
+            }
             OwnedWireContract::DealerTerminalRetireV1 { variant, sequence } => {
                 let request = ExtensionRequest::decode(&self.data)
                     .map_err(|_| ConstructionError::WrongWirePrefix)?;
@@ -2936,6 +3071,7 @@ impl ProtocolTransactionBuilder {
             matches!(
                 draft.wire,
                 OwnedWireContract::StructuredWrapperV1 { .. }
+                    | OwnedWireContract::DealerFacilityRequestV1 { .. }
                     | OwnedWireContract::DealerTerminalRetireV1 { .. }
                     | OwnedWireContract::MainFailureRequestV1 { .. }
             )
@@ -2963,6 +3099,7 @@ impl ProtocolTransactionBuilder {
                     | OwnedWireContract::EnabledDirectMarketRequestV1 { .. }
                     | OwnedWireContract::EnabledDirectFinalizeSelectionRequestV2 { .. }
                     | OwnedWireContract::CollateralReplayRequestV3 { .. }
+                    | OwnedWireContract::DealerFacilityRequestV1 { .. }
                     | OwnedWireContract::DealerTerminalRetireV1 { .. }
             ) && draft.program_id != self.clutch_program
             {
@@ -3077,6 +3214,7 @@ impl ProtocolTransactionBuilder {
         let supported = matches!(
             draft.wire,
             OwnedWireContract::StructuredWrapperV1 { .. }
+                | OwnedWireContract::DealerFacilityRequestV1 { .. }
                 | OwnedWireContract::DealerTerminalRetireV1 { .. }
                 | OwnedWireContract::MainFailureRequestV1 { .. }
         );
@@ -3084,6 +3222,7 @@ impl ProtocolTransactionBuilder {
             || !matches!(
                 draft.flow,
                 ProtocolFlow::StructuredClaim
+                    | ProtocolFlow::DealerFacility
                     | ProtocolFlow::DealerFacilityTerminal
                     | ProtocolFlow::FailureRecovery
             )
