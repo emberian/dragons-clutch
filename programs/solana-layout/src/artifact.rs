@@ -36,18 +36,23 @@ use clutch_product_series::{
 };
 use clutch_product_series::{
     CompiledProductSeriesBundleV2, CompiledProductSeriesBundleV3, CompiledProductSeriesBundleV4,
-    CompiledProductSeriesBundleV5, FixedCodec, MarketInstancePreimageV2,
+    CompiledProductSeriesBundleV5, CompiledProductSeriesBundleV6, FixedCodec,
+    MarketInstancePreimageV2,
     RegistryCapabilityProfileV2, RegistryCapabilityProfileV3, RegistryCapabilityProfileV4,
     RegistryProgramReleaseV1, RegistryProgramReleaseV2, SeriesAttachmentPlanV2,
-    SeriesAttachmentPlanV3, SeriesAttachmentPlanV4, SeriesFundingQuoteV2, SeriesFundingQuoteV3,
-    SeriesFundingQuoteV4, COMPILED_PRODUCT_SERIES_BUNDLE_V2_BYTES,
+    SeriesAttachmentPlanV3, SeriesAttachmentPlanV4, SeriesAttachmentPlanV5,
+    SeriesFundingQuoteV2, SeriesFundingQuoteV3, SeriesFundingQuoteV4, SeriesFundingQuoteV5,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V2_BYTES,
     COMPILED_PRODUCT_SERIES_BUNDLE_V3_BYTES, COMPILED_PRODUCT_SERIES_BUNDLE_V4_BYTES,
-    COMPILED_PRODUCT_SERIES_BUNDLE_V5_BYTES, MARKET_INSTANCE_PREIMAGE_V2_BYTES,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V5_BYTES, COMPILED_PRODUCT_SERIES_BUNDLE_V6_BYTES,
+    MARKET_INSTANCE_PREIMAGE_V2_BYTES,
     REGISTRY_CAPABILITY_PROFILE_V2_BYTES, REGISTRY_CAPABILITY_PROFILE_V3_BYTES,
     REGISTRY_CAPABILITY_PROFILE_V4_BYTES, REGISTRY_PROGRAM_RELEASE_V1_BYTES,
     REGISTRY_PROGRAM_RELEASE_V2_BYTES, SERIES_ATTACHMENT_PLAN_BYTES_V2,
     SERIES_ATTACHMENT_PLAN_BYTES_V3, SERIES_ATTACHMENT_PLAN_BYTES_V4,
-    SERIES_FUNDING_QUOTE_BYTES_V2, SERIES_FUNDING_QUOTE_BYTES_V3, SERIES_FUNDING_QUOTE_BYTES_V4,
+    SERIES_ATTACHMENT_PLAN_BYTES_V5, SERIES_FUNDING_QUOTE_BYTES_V2,
+    SERIES_FUNDING_QUOTE_BYTES_V3, SERIES_FUNDING_QUOTE_BYTES_V4,
+    SERIES_FUNDING_QUOTE_BYTES_V5,
 };
 use clutch_source_plane_v3_runtime::{
     SourceReleaseManifestV1, SourceReleaseManifestV2, SourceWorkScheduleBindingV1,
@@ -80,6 +85,9 @@ const _: () = {
     assert!(SERIES_FUNDING_QUOTE_BYTES_V4 == 592);
     assert!(COMPILED_PRODUCT_SERIES_BUNDLE_V4_BYTES == 528);
     assert!(SERIES_ATTACHMENT_PLAN_BYTES_V4 == 112);
+    assert!(SERIES_FUNDING_QUOTE_BYTES_V5 == 600);
+    assert!(COMPILED_PRODUCT_SERIES_BUNDLE_V6_BYTES == 528);
+    assert!(SERIES_ATTACHMENT_PLAN_BYTES_V5 == 112);
 };
 
 #[cfg(feature = "non-production-product-series-lab")]
@@ -204,18 +212,24 @@ pub enum ArtifactKind {
     CompiledProductSeriesBundleV3 = 53,
     /// Withdrawn provisional attachment plan bound to QuoteV3.
     SeriesAttachmentPlanV3 = 54,
-    /// Current 46-slot recurring-Series funding quote V4.
+    /// Historical 46-slot recurring-Series funding quote V4.
     SeriesFundingQuoteV4 = 55,
     /// Withdrawn compiler graph binding historical ProfileV3 and Quote/Attachment V4.
     CompiledProductSeriesBundleV4 = 56,
-    /// Current operational attachment plan bound to one exact QuoteV4.
+    /// Historical operational attachment plan bound to one exact QuoteV4.
     SeriesAttachmentPlanV4 = 57,
     /// Locus-explicit Registry executable release successor.
     RegistryProgramReleaseV2 = 58,
     /// ReleaseV2-bound central capability profile successor.
     RegistryCapabilityProfileV4 = 59,
-    /// Current exact compiler graph binding ProfileV4 and Quote/Attachment V4.
+    /// Historical compiler graph binding ProfileV4 and Quote/Attachment V4.
     CompiledProductSeriesBundleV5 = 60,
+    /// Current 47-slot recurring-Series funding quote V5.
+    SeriesFundingQuoteV5 = 61,
+    /// Current operational attachment plan bound to one exact QuoteV5.
+    SeriesAttachmentPlanV5 = 62,
+    /// Current compiler graph binding ProfileV4 and Quote/Attachment V5.
+    CompiledProductSeriesBundleV6 = 63,
 }
 
 impl ArtifactKind {
@@ -271,6 +285,9 @@ impl ArtifactKind {
             58 => Ok(Self::RegistryProgramReleaseV2),
             59 => Ok(Self::RegistryCapabilityProfileV4),
             60 => Ok(Self::CompiledProductSeriesBundleV5),
+            61 => Ok(Self::SeriesFundingQuoteV5),
+            62 => Ok(Self::SeriesAttachmentPlanV5),
+            63 => Ok(Self::CompiledProductSeriesBundleV6),
             _ => Err(CodecError::InvalidEnum),
         }
     }
@@ -312,6 +329,9 @@ impl ArtifactKind {
             Self::RegistryProgramReleaseV2 => 58,
             Self::RegistryCapabilityProfileV4 => 59,
             Self::CompiledProductSeriesBundleV5 => 60,
+            Self::SeriesFundingQuoteV5 => 61,
+            Self::SeriesAttachmentPlanV5 => 62,
+            Self::CompiledProductSeriesBundleV6 => 63,
         }
     }
 
@@ -352,6 +372,9 @@ impl ArtifactKind {
             Self::RegistryProgramReleaseV2 => REGISTRY_PROGRAM_RELEASE_V2_BYTES,
             Self::RegistryCapabilityProfileV4 => REGISTRY_CAPABILITY_PROFILE_V4_BYTES,
             Self::CompiledProductSeriesBundleV5 => COMPILED_PRODUCT_SERIES_BUNDLE_V5_BYTES,
+            Self::SeriesFundingQuoteV5 => SERIES_FUNDING_QUOTE_BYTES_V5,
+            Self::SeriesAttachmentPlanV5 => SERIES_ATTACHMENT_PLAN_BYTES_V5,
+            Self::CompiledProductSeriesBundleV6 => COMPILED_PRODUCT_SERIES_BUNDLE_V6_BYTES,
         }
     }
 
@@ -393,6 +416,9 @@ impl ArtifactKind {
                 | Self::RegistryProgramReleaseV2
                 | Self::RegistryCapabilityProfileV4
                 | Self::CompiledProductSeriesBundleV5
+                | Self::SeriesFundingQuoteV5
+                | Self::SeriesAttachmentPlanV5
+                | Self::CompiledProductSeriesBundleV6
         )
     }
 
@@ -412,6 +438,9 @@ impl ArtifactKind {
             | Self::SeriesFundingQuoteV3
             | Self::CompiledProductSeriesBundleV3
             | Self::SeriesAttachmentPlanV3 => ArtifactRegistrationStatus::Withdrawn,
+            Self::SeriesFundingQuoteV4
+            | Self::SeriesAttachmentPlanV4
+            | Self::CompiledProductSeriesBundleV5 => ArtifactRegistrationStatus::Withdrawn,
             _ => ArtifactRegistrationStatus::Current,
         }
     }
@@ -1181,6 +1210,48 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
             }
             Ok(0)
         }
+        ArtifactKind::SeriesFundingQuoteV5 => {
+            let value =
+                SeriesFundingQuoteV5::decode(body).map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        ArtifactKind::SeriesAttachmentPlanV5 => {
+            let value = SeriesAttachmentPlanV5::decode(body)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        ArtifactKind::CompiledProductSeriesBundleV6 => {
+            let value = CompiledProductSeriesBundleV6::decode(body)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
         #[cfg(all(
             feature = "non-production-product-series-lab",
             not(target_os = "solana")
@@ -1540,7 +1611,7 @@ mod tests {
         );
 
         for (tag, expected) in (u8::MIN..=u8::MAX).map(|tag| {
-            let expected = if (32..=60).contains(&tag) {
+            let expected = if (32..=63).contains(&tag) {
                 Ok(match tag {
                     32 => ArtifactKind::NativeClaimBasisV1,
                     33 => ArtifactKind::EvidenceOnlyRecoveryPolicyV1,
@@ -1571,6 +1642,9 @@ mod tests {
                     58 => ArtifactKind::RegistryProgramReleaseV2,
                     59 => ArtifactKind::RegistryCapabilityProfileV4,
                     60 => ArtifactKind::CompiledProductSeriesBundleV5,
+                    61 => ArtifactKind::SeriesFundingQuoteV5,
+                    62 => ArtifactKind::SeriesAttachmentPlanV5,
+                    63 => ArtifactKind::CompiledProductSeriesBundleV6,
                     _ => unreachable!(),
                 })
             } else {
@@ -1578,7 +1652,7 @@ mod tests {
             };
             (tag, expected)
         }) {
-            if (32..=60).contains(&tag) {
+            if (32..=63).contains(&tag) {
                 assert_eq!(ArtifactKind::from_byte(tag), expected, "kind {tag}");
             }
         }
@@ -1792,6 +1866,18 @@ mod tests {
             ArtifactKind::from_byte(60),
             Ok(ArtifactKind::CompiledProductSeriesBundleV5)
         );
+        assert_eq!(
+            ArtifactKind::from_byte(61),
+            Ok(ArtifactKind::SeriesFundingQuoteV5)
+        );
+        assert_eq!(
+            ArtifactKind::from_byte(62),
+            Ok(ArtifactKind::SeriesAttachmentPlanV5)
+        );
+        assert_eq!(
+            ArtifactKind::from_byte(63),
+            Ok(ArtifactKind::CompiledProductSeriesBundleV6)
+        );
         let source = binding(ArtifactKind::SourceReleaseManifestV1);
         assert_eq!(source.exact_len, 1_008);
         assert_eq!(
@@ -1819,6 +1905,9 @@ mod tests {
             ArtifactKind::SeriesFundingQuoteV3,
             ArtifactKind::CompiledProductSeriesBundleV3,
             ArtifactKind::SeriesAttachmentPlanV3,
+            ArtifactKind::SeriesFundingQuoteV4,
+            ArtifactKind::SeriesAttachmentPlanV4,
+            ArtifactKind::CompiledProductSeriesBundleV5,
         ] {
             let historical = binding(kind);
             assert_eq!(historical.validate(), Ok(()));
@@ -1830,9 +1919,9 @@ mod tests {
         for kind in [
             ArtifactKind::RegistryProgramReleaseV2,
             ArtifactKind::RegistryCapabilityProfileV4,
-            ArtifactKind::SeriesFundingQuoteV4,
-            ArtifactKind::SeriesAttachmentPlanV4,
-            ArtifactKind::CompiledProductSeriesBundleV5,
+            ArtifactKind::SeriesFundingQuoteV5,
+            ArtifactKind::SeriesAttachmentPlanV5,
+            ArtifactKind::CompiledProductSeriesBundleV6,
         ] {
             assert_eq!(binding(kind).validate_for_registration(), Ok(()));
         }
