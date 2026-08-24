@@ -45,8 +45,9 @@ use crate::instructions::product_market::{
     authenticate_market_lifecycle_root_v1, authenticate_series_market_link_v1,
     authenticate_writable_failure_resolution_link_v1, record_market_resolution_activation_v1,
     AuthenticatedMarketFoundationPreallocationV2, AuthenticatedMarketLifecycleRootV1,
-    AuthenticatedMarketResolutionActivationWriteV1, AuthenticatedSeriesFailureSessionReleaseV1,
+    AuthenticatedMarketResolutionActivationWriteV1, AuthenticatedSeriesFailureSessionReleaseV2,
     AuthenticatedWritableFailureResolutionLinkV1,
+    AuthenticatedWritableFailureSessionReleaseLinkV2,
 };
 use crate::instructions::product_series::AuthenticatedSourceResolutionInputV3;
 use crate::instructions::source_terminal_resolution_v5::{
@@ -559,12 +560,12 @@ impl AuthenticatedFailureMarketResolutionPostwriteV5 {
 /// StatisticResult close, Recovery-custody close, and Failure-family seal have
 /// all succeeded in one SVM instruction. Product's later Retiring latch
 /// hostile-reopens the persisted accounts instead of trusting this value.
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub(crate) struct AuthenticatedResolvedFailureMarketLifecycleV5 {
     resolution: AuthenticatedFailureMarketResolutionPostwriteV5,
     source_terminal: AuthenticatedSourceResolutionTerminalV1,
     archive: FailureMarketIntervalArchivePostwriteV2,
-    link_release: AuthenticatedSeriesFailureSessionReleaseV1,
+    link_release: AuthenticatedSeriesFailureSessionReleaseV2,
     source_result_close: AuthenticatedSourceResolutionStatisticResultCloseV1,
     recovery_close: AuthenticatedFailureMarketRecoveryClosePostwriteV2,
     family_terminal: AuthenticatedFailureMarketFamilyTerminalPostwriteV2,
@@ -1387,6 +1388,8 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
         true,
         link_release_decode,
     )?;
+    let release_link =
+        AuthenticatedWritableFailureSessionReleaseLinkV2::resolved(resolution_link);
     let (archive, link_release, archive_runtime) = archive_failure_market_interval_session_v2(
         program_id,
         admission_root_account,
@@ -1396,7 +1399,7 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
         series_link_account,
         interval_after,
         link_for_release,
-        resolution_link,
+        &release_link,
         admission,
         runtime_after.root(),
         archive_plan.history_plan,
@@ -1406,7 +1409,7 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
         link_rebound_output,
     )?;
     require(
-        link_release.resolution_link_preauthorization_id()
+        link_release.release_link_preauthorization_id()
             == postwrite.activation().series_link_preauthorization_id(),
         ClutchError::MismatchedState,
     )?;

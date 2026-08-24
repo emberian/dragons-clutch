@@ -288,6 +288,15 @@ pub const ARCHIVE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2]
     meta(Role::FailureRuntimeRoot, true, false, false),
     meta(Role::FailureIntervalCell, true, false, false),
     meta(Role::FailureIntervalHistory, true, false, false),
+    meta(Role::SeriesRegistry, false, false, false),
+    meta(Role::RegistryProgram, false, false, true),
+    meta(Role::RegistryProgramData, false, false, false),
+    meta(Role::RegistryReleaseArtifact, false, false, false),
+    meta(Role::CapabilityProfileArtifact, false, false, false),
+    meta(Role::CompilerBundleArtifact, false, false, false),
+    meta(Role::FundingQuoteArtifact, false, false, false),
+    meta(Role::FailureLivenessPolicy, false, false, false),
+    meta(Role::FailureRecoveryCompartment, false, false, false),
 ];
 
 /// Current caller-neutral payload.
@@ -756,5 +765,29 @@ mod adversarial_contract_tests {
         assert!(!production.contains("failure_replay_tombstone"));
         assert!(production.contains("FailureMarketReplay"));
         assert!(production.contains("FailureIntervalHistory"));
+    }
+
+    #[test]
+    fn exhausted_archive_reopens_full_authority_without_mutating_recovery() {
+        for role in [
+            Role::SeriesRegistry,
+            Role::RegistryProgram,
+            Role::RegistryProgramData,
+            Role::RegistryReleaseArtifact,
+            Role::CapabilityProfileArtifact,
+            Role::CompilerBundleArtifact,
+            Role::FundingQuoteArtifact,
+            Role::FailureLivenessPolicy,
+            Role::FailureRecoveryCompartment,
+        ] {
+            assert!(ARCHIVE_FAILURE_MARKET_SESSION_METAS_V2
+                .iter()
+                .any(|meta| meta.role == role));
+        }
+        let recovery = ARCHIVE_FAILURE_MARKET_SESSION_METAS_V2
+            .iter()
+            .find(|meta| meta.role == Role::FailureRecoveryCompartment)
+            .expect("read-only exhaustion capital evidence");
+        assert!(!recovery.writable && !recovery.signer && !recovery.executable);
     }
 }

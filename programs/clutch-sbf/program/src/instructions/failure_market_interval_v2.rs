@@ -23,11 +23,13 @@ use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, SYSTEM_PROGRAM_ID,
 };
 use crate::instructions::product_market::{
-    authenticate_market_instance_terminal_v1, release_series_market_link_failure_v1,
+    authenticate_market_instance_terminal_v1, authenticate_writable_failure_exhausted_link_v2,
+    release_series_market_link_failure_v2,
     AuthenticatedMarketFoundationPreallocationV2, AuthenticatedMarketInstanceTerminalV1,
-    AuthenticatedMarketRecoveryScheduleV1, AuthenticatedSeriesFailureArchivePostwriteV2,
-    AuthenticatedSeriesFailureSessionReleaseV1, AuthenticatedSeriesMarketLinkV1,
-    AuthenticatedWritableFailureResolutionLinkV1,
+    AuthenticatedMarketLifecycleRootV1, AuthenticatedMarketRecoveryScheduleV1,
+    AuthenticatedSeriesFailureArchivePostwriteV2,
+    AuthenticatedSeriesFailureSessionReleaseV2, AuthenticatedSeriesMarketLinkV1,
+    AuthenticatedWritableFailureSessionReleaseLinkV2, FailureSessionReleaseDispositionV2,
 };
 use crate::seeds;
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
@@ -660,7 +662,8 @@ pub(crate) struct FailureMarketIntervalArchivePostwriteV2 {
     append: FailureMarketIntervalHistoryAppendReceiptV2,
     reset: FailureMarketIntervalCellResetReceiptV2,
     source_occurrence_id: SourceOccurrenceV1Id,
-    resolution_link_preauthorization_id: ProductContentId,
+    release_link_preauthorization_id: ProductContentId,
+    release_disposition: FailureSessionReleaseDispositionV2,
 }
 
 impl FailureMarketIntervalArchivePostwriteV2 {
@@ -691,8 +694,13 @@ impl FailureMarketIntervalArchivePostwriteV2 {
     }
 
     /// Exact Product-owned writable-link preauthorization consumed at release.
-    pub(crate) const fn resolution_link_preauthorization_id(self) -> ProductContentId {
-        self.resolution_link_preauthorization_id
+    pub(crate) const fn release_link_preauthorization_id(self) -> ProductContentId {
+        self.release_link_preauthorization_id
+    }
+
+    /// Exact disjoint Product release disposition.
+    pub(crate) const fn release_disposition(self) -> FailureSessionReleaseDispositionV2 {
+        self.release_disposition
     }
 }
 
@@ -733,11 +741,15 @@ impl AuthenticatedSeriesFailureArchivePostwriteV2 for FailureMarketIntervalArchi
         ))
     }
 
-    fn resolution_link_preauthorization_id(&self) -> Outcome<ProductContentId> {
-        Ok(self.resolution_link_preauthorization_id)
+    fn release_link_preauthorization_id(&self) -> Outcome<ProductContentId> {
+        Ok(self.release_link_preauthorization_id)
     }
 
-    fn authenticate_series_failure_archive_postwrite_v2(
+    fn release_disposition(&self) -> Outcome<FailureSessionReleaseDispositionV2> {
+        Ok(self.release_disposition)
+    }
+
+    fn authenticate_series_failure_archive_release_postwrite_v2(
         &self,
         archive_postwrite_id: ProductContentId,
         append_receipt_id: ProductContentId,
@@ -747,7 +759,8 @@ impl AuthenticatedSeriesFailureArchivePostwriteV2 for FailureMarketIntervalArchi
         source_occurrence_id: SourceOccurrenceV1Id,
         session_binding_id: ProductContentId,
         session_terminal_receipt_id: ProductContentId,
-        resolution_link_preauthorization_id: ProductContentId,
+        release_disposition: FailureSessionReleaseDispositionV2,
+        release_link_preauthorization_id: ProductContentId,
     ) -> Outcome<()> {
         require(
             archive_postwrite_id == self.id
@@ -759,8 +772,8 @@ impl AuthenticatedSeriesFailureArchivePostwriteV2 for FailureMarketIntervalArchi
                 && session_binding_id.bytes() == self.append.session_binding_id().bytes()
                 && session_terminal_receipt_id.bytes()
                     == self.append.session_terminal_receipt_id().bytes()
-                && resolution_link_preauthorization_id
-                    == self.resolution_link_preauthorization_id,
+                && release_disposition == self.release_disposition
+                && release_link_preauthorization_id == self.release_link_preauthorization_id,
             ClutchError::MismatchedState,
         )
     }
@@ -1643,9 +1656,10 @@ fn write_failure_market_interval_archive_v2<'a>(
     append: FailureMarketIntervalHistoryAppendReceiptV2,
     cell_plan: FailureMarketIntervalCellPlanV2,
     reset: FailureMarketIntervalCellResetReceiptV2,
-    resolution_link_preauthorization_id: ProductContentId,
+    release_link_preauthorization_id: ProductContentId,
+    release_disposition: FailureSessionReleaseDispositionV2,
 ) -> Outcome<FailureMarketIntervalArchivePostwriteV2> {
-    require_live_data_id(resolution_link_preauthorization_id)?;
+    require_live_data_id(release_link_preauthorization_id)?;
     let source_occurrence_id = authenticated
         .cell
         .product_work()
@@ -1752,7 +1766,8 @@ fn write_failure_market_interval_archive_v2<'a>(
             &append.market_instance_id().bytes(),
             &append.generation().to_le_bytes(),
             &source_occurrence_id.bytes(),
-            &resolution_link_preauthorization_id.bytes(),
+            &[failure_release_disposition_byte_v2(release_disposition)],
+            &release_link_preauthorization_id.bytes(),
         ])
         .to_bytes(),
     );
@@ -1763,8 +1778,18 @@ fn write_failure_market_interval_archive_v2<'a>(
         append,
         reset,
         source_occurrence_id,
-        resolution_link_preauthorization_id,
+        release_link_preauthorization_id,
+        release_disposition,
     })
+}
+
+const fn failure_release_disposition_byte_v2(
+    disposition: FailureSessionReleaseDispositionV2,
+) -> u8 {
+    match disposition {
+        FailureSessionReleaseDispositionV2::Resolved => 1,
+        FailureSessionReleaseDispositionV2::Exhausted => 2,
+    }
 }
 
 /// Atomically archive one exact terminal Failure session and release its
@@ -1785,7 +1810,7 @@ pub(crate) fn archive_failure_market_interval_session_v2<'a, 'link>(
     series_link_account: &AccountInfo<'a>,
     interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
     link_before: AuthenticatedSeriesMarketLinkV1<'link>,
-    resolution_link: AuthenticatedWritableFailureResolutionLinkV1,
+    release_link: &AuthenticatedWritableFailureSessionReleaseLinkV2,
     admission: AuthenticatedFailureMarketRootV2,
     runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
     history_plan: FailureMarketIntervalHistoryPlanV2,
@@ -1795,7 +1820,7 @@ pub(crate) fn archive_failure_market_interval_session_v2<'a, 'link>(
     link_rebound_output: &mut SeriesMarketLinkAccountV1,
 ) -> Outcome<(
     FailureMarketIntervalArchivePostwriteV2,
-    AuthenticatedSeriesFailureSessionReleaseV1,
+    AuthenticatedSeriesFailureSessionReleaseV2,
     AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
 )> {
     require_distinct(&[
@@ -1847,13 +1872,14 @@ pub(crate) fn archive_failure_market_interval_session_v2<'a, 'link>(
         append,
         cell_plan,
         reset,
-        resolution_link.id(),
+        release_link.id(),
+        release_link.disposition(),
     )?;
-    let release = release_series_market_link_failure_v1(
+    let release = release_series_market_link_failure_v2(
         program_id,
         series_link_account,
         link_before,
-        resolution_link,
+        release_link,
         &archive,
         link_rebound_output,
     )?;
@@ -1874,8 +1900,9 @@ pub(crate) fn archive_failure_market_interval_session_v2<'a, 'link>(
             && release.reset_receipt_id().bytes() == archive.reset().id().bytes()
             && release.session_terminal_receipt_id()
                 == archive.append().session_terminal_receipt_id()
-            && release.resolution_link_preauthorization_id()
-                == archive.resolution_link_preauthorization_id(),
+            && release.release_link_preauthorization_id()
+                == archive.release_link_preauthorization_id()
+            && release.release_disposition() == archive.release_disposition(),
         ClutchError::MismatchedState,
     )?;
     let runtime_write_facts = FailureMarketRuntimeSessionWriteFactsV1 {
@@ -1920,6 +1947,84 @@ pub(crate) fn archive_failure_market_interval_session_v2<'a, 'link>(
         ClutchError::MismatchedState,
     )?;
     Ok((archive, release, runtime_postwrite))
+}
+
+/// Atomically derive deterministic exhaustion, persist the terminal cell,
+/// append it to shared history, reset the reusable cell, release the exact
+/// Product link pin, and advance the shared Failure runtime transcript.
+///
+/// Recovery remains read-only throughout: action13 proves a finite boundary
+/// but neither closes nor recapitalizes the sole liveness custody.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn exhaust_and_archive_failure_market_interval_session_v2<'a, 'root, 'link>(
+    program_id: &Pubkey,
+    market_root_account: &AccountInfo<'a>,
+    series_link_account: &AccountInfo<'a>,
+    admission_root_account: &AccountInfo<'a>,
+    runtime_root_account: &AccountInfo<'a>,
+    cell_account: &AccountInfo<'a>,
+    history_account: &AccountInfo<'a>,
+    liveness_policy_account: &AccountInfo<'a>,
+    recovery_account: &AccountInfo<'a>,
+    root_before: AuthenticatedMarketLifecycleRootV1<'root>,
+    link_before: AuthenticatedSeriesMarketLinkV1<'link>,
+    admission: AuthenticatedFailureMarketRootV2,
+    runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
+    interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
+    root_reopen_output: &mut MarketLifecycleRootAccountV1,
+    link_preauthorization_output: &mut SeriesMarketLinkAccountV1,
+    link_rebound_output: &mut SeriesMarketLinkAccountV1,
+) -> Outcome<(
+    FailureMarketIntervalArchivePostwriteV2,
+    AuthenticatedSeriesFailureSessionReleaseV2,
+    AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
+)> {
+    let release_link = authenticate_writable_failure_exhausted_link_v2(
+        program_id,
+        market_root_account,
+        root_before,
+        series_link_account,
+        root_reopen_output,
+        link_preauthorization_output,
+    )?;
+    let exhaustion = plan_failure_market_interval_exhaustion_v2(
+        program_id,
+        liveness_policy_account,
+        recovery_account,
+        admission,
+        interval_before,
+    )?;
+    let exhaustion_receipt = exhaustion.receipt();
+    let interval_exhausted = write_failure_market_interval_exhaustion_plan_v2(
+        program_id,
+        cell_account,
+        history_account,
+        interval_before,
+        exhaustion,
+    )?;
+    let archive = plan_failure_market_exhausted_archive_v2(
+        admission,
+        interval_exhausted,
+        exhaustion_receipt,
+    )?;
+    archive_failure_market_interval_session_v2(
+        program_id,
+        admission_root_account,
+        runtime_root_account,
+        cell_account,
+        history_account,
+        series_link_account,
+        interval_exhausted,
+        link_before,
+        &release_link,
+        admission,
+        runtime_before,
+        archive.history_plan(),
+        archive.append(),
+        archive.cell_plan(),
+        archive.reset(),
+        link_rebound_output,
+    )
 }
 
 /// Persist the exhaustive family seal. Session appends cannot use this
@@ -2484,7 +2589,7 @@ mod adversarial_account_tests {
             .find("let archive = write_failure_market_interval_archive_v2")
             .unwrap();
         let release = source[outer..]
-            .find("let release = release_series_market_link_failure_v1")
+            .find("let release = release_series_market_link_failure_v2")
             .unwrap();
         let runtime = source[outer..]
             .find("let runtime_postwrite = write_failure_market_runtime_session_plan_v1")
@@ -2498,10 +2603,11 @@ mod adversarial_account_tests {
             .nth(1)
             .and_then(|value| value.split("/// Atomically archive one exact terminal").next())
             .expect("private paired archive writer");
-        assert!(archive_writer.contains("resolution_link_preauthorization_id"));
-        assert!(source[outer..].contains("resolution_link.id()"));
+        assert!(archive_writer.contains("release_link_preauthorization_id"));
+        assert!(archive_writer.contains("release_disposition"));
+        assert!(source[outer..].contains("release_link.id()"));
         assert!(source[outer..]
-            .contains("release.resolution_link_preauthorization_id()"));
+            .contains("release.release_link_preauthorization_id()"));
         assert_eq!(
             source
                 .matches("pub(crate) fn archive_failure_market_interval_session_v2")
@@ -2583,5 +2689,32 @@ mod adversarial_account_tests {
         }
         assert!(!archive.contains("Resolved"));
         assert!(!archive.contains("Refused"));
+    }
+
+    #[test]
+    fn exhaustion_outer_preauthorizes_then_writes_and_releases_atomically() {
+        let source = include_str!("failure_market_interval_v2.rs");
+        let outer = source
+            .split("fn exhaust_and_archive_failure_market_interval_session_v2")
+            .nth(1)
+            .expect("action13 outer");
+        let preauth = outer
+            .find("authenticate_writable_failure_exhausted_link_v2")
+            .expect("typed Product preauthorization");
+        let plan = outer
+            .find("plan_failure_market_interval_exhaustion_v2")
+            .expect("deterministic liveness boundary");
+        let write = outer
+            .find("write_failure_market_interval_exhaustion_plan_v2")
+            .expect("terminal cell write");
+        let archive = outer
+            .find("plan_failure_market_exhausted_archive_v2")
+            .expect("exact append/reset derivation");
+        let release = outer
+            .find("archive_failure_market_interval_session_v2")
+            .expect("paired Product release");
+        assert!(preauth < plan && plan < write && write < archive && archive < release);
+        assert!(!outer.contains("close_failure_market_recovery_v2"));
+        assert!(!outer.contains("try_borrow_mut_data"));
     }
 }
