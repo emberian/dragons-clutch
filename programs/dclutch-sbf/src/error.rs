@@ -73,6 +73,18 @@ pub enum AdapterError {
     RentCreditCreateCpi = 31,
     /// RentCredit creation or withdrawal did not produce its exact account and balance state.
     RentCreditPostcondition = 32,
+    /// Position, Market, Realm, Vault, Mint, token, RentCredit, or owner facts failed.
+    PositionAuthentication = 33,
+    /// A Position or related rent source was below its required current capitalization.
+    PositionRentUnderfunded = 34,
+    /// The System Program refused exact Position PDA creation.
+    PositionCreateCpi = 35,
+    /// The Realm-selected token program refused an exact collateral transfer.
+    CollateralTransferCpi = 36,
+    /// A Position/collateral transition did not produce its exact post-state.
+    PositionPostcondition = 37,
+    /// An empty Position could not be retired wholly into its immutable RentCredit.
+    PositionClose = 38,
 }
 
 impl From<AdapterError> for ProgramError {

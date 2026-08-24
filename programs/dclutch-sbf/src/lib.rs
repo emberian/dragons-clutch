@@ -32,6 +32,7 @@ mod close_fund;
 mod error;
 mod found_market;
 mod open_vault;
+mod position;
 mod provider;
 mod realm;
 mod rent_credit;
@@ -69,6 +70,27 @@ pub fn process_instruction(
         RoutedInstruction::OpenCollateralVault(instruction) => {
             open_vault::process_open_collateral_vault(program_id, accounts, instruction)
         }
+        RoutedInstruction::CreatePositionAndSplit(instruction) => {
+            position::process_create_position_and_split(program_id, accounts, instruction)
+        }
+        RoutedInstruction::SplitCompleteSet(instruction) => {
+            position::process_split_complete_set(program_id, accounts, instruction)
+        }
+        RoutedInstruction::MergeCompleteSet(instruction) => {
+            position::process_merge_complete_set(program_id, accounts, instruction)
+        }
+        RoutedInstruction::RedeemResolvedOutcome(instruction) => {
+            position::process_redeem_resolved_outcome(program_id, accounts, instruction)
+        }
+        RoutedInstruction::TransferClaims(instruction) => {
+            position::process_transfer_claims(program_id, accounts, instruction)
+        }
+        RoutedInstruction::SweepSurplus(instruction) => {
+            position::process_sweep_surplus(program_id, accounts, instruction)
+        }
+        RoutedInstruction::CloseEmptyPosition(instruction) => {
+            position::process_close_empty_position(program_id, accounts, instruction)
+        }
     }
 }
 
@@ -77,6 +99,13 @@ enum RoutedInstruction<'a> {
     CreateRealm(dclutch_collateral_contract::CreateRealmV1),
     FoundMarketAndFund(dclutch_collateral_contract::FoundMarketAndFundV1),
     OpenCollateralVault(dclutch_collateral_contract::OpenCollateralVaultV1),
+    CreatePositionAndSplit(dclutch_collateral_contract::CreatePositionAndSplitV1),
+    SplitCompleteSet(dclutch_collateral_contract::SplitCompleteSetV1),
+    MergeCompleteSet(dclutch_collateral_contract::MergeCompleteSetV1),
+    RedeemResolvedOutcome(dclutch_collateral_contract::RedeemResolvedOutcomeV1),
+    TransferClaims(dclutch_collateral_contract::TransferClaimsV1),
+    SweepSurplus(dclutch_collateral_contract::SweepSurplusV1),
+    CloseEmptyPosition(dclutch_collateral_contract::CloseEmptyPositionV1),
 }
 
 fn decode_instruction(instruction_data: &[u8]) -> Result<RoutedInstruction<'_>, ProgramError> {
@@ -94,6 +123,27 @@ fn decode_instruction(instruction_data: &[u8]) -> Result<RoutedInstruction<'_>, 
             }
             CollateralInstructionV1::OpenCollateralVault(instruction) => {
                 Ok(RoutedInstruction::OpenCollateralVault(instruction))
+            }
+            CollateralInstructionV1::CreatePositionAndSplit(instruction) => {
+                Ok(RoutedInstruction::CreatePositionAndSplit(instruction))
+            }
+            CollateralInstructionV1::SplitCompleteSet(instruction) => {
+                Ok(RoutedInstruction::SplitCompleteSet(instruction))
+            }
+            CollateralInstructionV1::MergeCompleteSet(instruction) => {
+                Ok(RoutedInstruction::MergeCompleteSet(instruction))
+            }
+            CollateralInstructionV1::RedeemResolvedOutcome(instruction) => {
+                Ok(RoutedInstruction::RedeemResolvedOutcome(instruction))
+            }
+            CollateralInstructionV1::TransferClaims(instruction) => {
+                Ok(RoutedInstruction::TransferClaims(instruction))
+            }
+            CollateralInstructionV1::SweepSurplus(instruction) => {
+                Ok(RoutedInstruction::SweepSurplus(instruction))
+            }
+            CollateralInstructionV1::CloseEmptyPosition(instruction) => {
+                Ok(RoutedInstruction::CloseEmptyPosition(instruction))
             }
             _ => Err(AdapterError::InvalidInstruction.into()),
         };
