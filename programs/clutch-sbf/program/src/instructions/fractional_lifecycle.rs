@@ -39,7 +39,6 @@ use super::fractional_redemption::{
     authenticate_fractional_family_admission_postwrite_v1,
     authenticate_fractional_family_terminal_postwrite_v1,
     authenticate_fractional_runtime_release_v1,
-    consume_fractional_family_terminal_postwrite_v2,
     execute_fractional_family_physical_terminal_v2,
     prepare_fractional_family_physical_terminal_v2,
 };
@@ -61,6 +60,8 @@ use super::product_market_replay_current::authenticate_market_lifecycle_replay_v
 use super::product_series_current::{
     authenticate_registry_capability_v5, authenticate_series_registry_account_v4,
 };
+use super::product_series_current::retirement_v5::
+    consume_fractional_family_physical_terminal_v5;
 
 const ROOT: usize = 0;
 const MARKET_BINDING: usize = 1;
@@ -838,7 +839,7 @@ pub(super) fn process_close_empty_ledger(
         &mut root_before,
     )?;
     let mut link_body = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
-    let (schedule, series_plan_id, funding_terms_id, compiler_bundle_id, link) =
+    let (schedule, series_plan_id, funding_terms_id, compiler_bundle_id, _link) =
         authenticate_schedule_and_series(
             program_id,
             &root,
@@ -994,19 +995,13 @@ pub(super) fn process_close_empty_ledger(
         refund,
         sink,
     )?;
-    let mut product_before = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
-    let mut product_successor = Box::new(MarketLifecycleRootV3::decode_buffer());
-    let mut product_after = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
-    let accepted = consume_fractional_family_terminal_postwrite_v2(
+    let accepted = consume_fractional_family_physical_terminal_v5(
         program_id,
         &accounts[ROOT],
+        &accounts[aux + terminal_aux::FOUNDER_LINK],
         physical,
-        &link,
         &schedule,
         &graph,
-        &mut product_before,
-        &mut product_successor,
-        &mut product_after,
     )?;
     require(accepted.id() != ContentId::ZERO, ClutchError::MismatchedState)
 }
@@ -1117,7 +1112,7 @@ mod adversarial_tests {
             .find("execute_fractional_family_physical_terminal_v2(")
             .expect("physical terminal execution");
         let product_consume = body
-            .find("consume_fractional_family_terminal_postwrite_v2(")
+            .find("consume_fractional_family_physical_terminal_v5(")
             .expect("Product terminal consumption");
         assert!(physical_close < product_consume);
         assert!(body.contains("prepare_fractional_family_physical_terminal_v2("));

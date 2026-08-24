@@ -408,7 +408,7 @@ impl FractionalTerminalIntentV1 {
     }
 }
 
-/// Exact Solana meta geometry frozen for the disabled capability review.
+/// Exact Solana meta geometry for the sole current successor route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FractionalAccountContractV1 {
     /// Exact live-state account count, or fixed count excluding suffixes.
@@ -613,30 +613,6 @@ pub const fn fractional_account_contract_v1(
             external_writable_mask: (1 << 0) | (1 << 4) | (1 << 11) | (1 << 12),
         },
     }
-}
-
-/// Minimal Solana account-meta projection for the capability boundary.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SolanaAccountMetaProjectionV1 {
-    /// Exact account key.
-    pub key: [u8; 32],
-    /// Runtime writable bit.
-    pub writable: bool,
-    /// Runtime signer bit.
-    pub signer: bool,
-}
-
-/// Fail closed before parsing payload bytes or inspecting any account meta.
-///
-/// This pure refusal projection does not own SBF dispatch. The concrete SBF
-/// handlers already perform the program-ownership, PDA, Resolution,
-/// ClaimLedger, Hoard, Position/Replay, token, and rent checks; checked dispatch
-/// independently refuses all ten tuples through its central capability table.
-pub fn refuse_disabled_fractional_redemption_v1(
-    _instruction_data: &[u8],
-    _accounts: &[SolanaAccountMetaProjectionV1],
-) -> Result<()> {
-    Err(Error::CapabilityDisabled)
 }
 
 const _: () = assert!(FRACTIONAL_REDEMPTION_FAMILY_TAG == 79);

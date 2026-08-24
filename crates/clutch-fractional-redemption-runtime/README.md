@@ -4,12 +4,11 @@ This crate promotes `research/fractional-redemption` into a safe, `no_std`,
 allocation-free, fixed-layout runtime contract. The SBF adapter contains all
 ten handlers, including Product-owned atomic family admission and terminal
 consumption around the Fractional-owned account writes, deletion, and rent
-splits. Their capability remains disabled until the whole family passes one
-checked unified successor closure. Intent family `79/v1`, actions `1..=10`, and account coordinates
-`0xa4/v3`, `0xa5/v1`, `0xa6/v2`, and `0xa7/v2` are centrally reserved as
-`ReservedDisabled` in the in-flight profile. The frozen complete
-`successor-chain-attached-dev` identity admits actions 1 through 10 together or
-admits none of them.
+splits. The frozen `successor-chain-attached-dev` profile admits intent family
+`79/v1` actions `1..=10` as one exact all-or-none set. Current account
+coordinates `0xa4/v3`, `0xa5/v1`, `0xa6/v2`, and `0xa7/v2` are consequently
+`NonProductionLab`; no separate disabled, laboratory, or per-Fractional
+profile identity can select an alternate authority.
 
 The new persisted facts have one owner each:
 
@@ -139,14 +138,13 @@ pre-deletion account bodies, both observed rent balances, and an action-10
 release narrowed from the loader-authenticated registry capability. Product's
 consumer can accept those private values but cannot construct them or replace
 their receipt. Product's atomic aggregator/root consumers and private
-Foundation preallocation authority are present. Actions 1 and 10, like actions
-2 through 9, remain disabled until the whole Product/Source/General/Direct/
-Fractional/Structured/Dealer/Failure and observed-release closure is admitted
-by the one exact linked capability profile.
+Foundation preallocation authority are present. The unified successor dev
+profile admits actions 1 through 10 as one exact set; no per-Fractional lab,
+disabled DTO, or alternate Product family writer remains selectable.
 
 ## Solana activation boundary
 
-The always-compiled, currently capability-refused account order is:
+The always-compiled current account order is:
 
 The SBF lifecycle outers authenticate the current 50-slot
 `MarketFoundationAccountGraphV4` while carrying only the accounts they
@@ -214,8 +212,9 @@ default-refusing writer remains the sole owner of the root successor.
   ClaimLedger to Retiring, and then passes the move-only terminal receipt to
   Product. Any later refusal rolls the whole instruction back.
 
-Disabled tuples refuse before parsing payloads or inspecting accounts. All ten
-handlers perform their typed authentication, external-effect ordering where
+Profiles that do not contain the exact current tuple refuse in central dispatch
+before parsing payloads or inspecting accounts. All ten handlers perform their
+typed authentication, external-effect ordering where
 applicable, and atomic writeback. Action 2 remains independent of bearer
 claim-release availability, and action 9 remains independent because it reads
 no mint and performs no claim CPI. Action 10 authenticates the current claim
@@ -225,9 +224,6 @@ Fractional will allocate, assign, and write those exact prestates without
 debiting or refunding them again. Product remains the sole owner of the
 Foundation debit/donation evidence and persisted typed claim-issuance binding;
 the Fractional adapter will not invent a duplicate owner or provision mock
-state. Action 10 consumes Product's private terminal writer before deletion;
-Fractional owns release authentication, terminal postwrite verification,
-account deletion, and both exact rent splits. The central in-flight profile
-still requires the remaining family implementations and positive checked
-collateral/claim release rows before its one acceptance switch can enable any
-successor tuple.
+state. Fractional owns release authentication, terminal postwrite verification,
+account deletion, and both exact rent splits; Product then consumes the sole
+move-only physical receipt directly into RootV3 in the same instruction.

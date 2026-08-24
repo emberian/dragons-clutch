@@ -629,9 +629,9 @@ fn process_source_v3(
 }
 
 /// Decode the strict FractionalRedemption envelope after the central exact
-/// capability check. Until Product Foundation admits actions 1 and 2 together,
-/// `disabled_canonical_tag` refuses every tuple before this function is
-/// reachable or any account is inspected.
+/// capability check. The successor profile admits actions 1 through 10 as one
+/// callable family; this router does not project them through a disabled or
+/// historical Fractional path.
 #[inline(never)]
 fn process_fractional_redemption(
     program_id: &Pubkey,

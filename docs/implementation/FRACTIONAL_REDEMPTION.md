@@ -1,13 +1,12 @@
 # Exact fractional redemption for native B-spline Eggs
 
-Status: **ALL TEN ROUTES IMPLEMENTED / UNIFIED PROFILE CLOSURE IN FLIGHT** (2026-08-24).
+Status: **ALL TEN ROUTES IMPLEMENTED / UNIFIED SUCCESSOR DEV PROFILE** (2026-08-24).
 `crates/clutch-fractional-redemption-runtime` now owns the safe `no_std`,
 no-allocation, fixed-layout transition and account contract. Intent family
-79/v1 and current accounts `0xa4/v3`, `0xa5/v1`, `0xa6/v2`, and `0xa7/v2`
-remain `ReservedDisabled` while the in-flight unified profile has an empty
-capability mask. Concrete handlers exist for actions 1 through 10. The frozen
-complete profile admits that exact action range all-or-none only after every
-cross-family and observed-release dependency joins.
+79/v1 actions 1 through 10 are admitted as one all-or-none set by the frozen
+`successor-chain-attached-dev` profile. Current accounts `0xa4/v3`, `0xa5/v1`,
+`0xa6/v2`, and `0xa7/v2` are `NonProductionLab`; withdrawn predecessors remain
+decode-only and cannot authorize construction or dispatch.
 `research/fractional-redemption` remains the
 derivation and exhaustive small-domain model, not a second runtime truth.
 
@@ -414,9 +413,9 @@ registry capability narrowed to action 10. Product consumes that private value;
 it cannot construct a substitute receipt, invent either release, or reuse the Realm
 collateral release retained by the policy. Action 9 remains claim-release
 independent because it reads no mint and performs no claim CPI. Product's stable atomic
-aggregator/root consumer is present, but the executable route remains disabled
-pending the whole-family release review, exact capability-profile admission,
-and linked artifact evidence described below.
+RootV3 family terminal consumer is the sole Product latch and retains the
+exact release, artifact, graph, LinkV3, and physical rent evidence described
+below.
 
 ## 6. Selected runtime contract and activation boundary
 
@@ -441,13 +440,14 @@ arithmetic truth. The runtime does not claim that a particular reachable
 B-spline family has a smaller universal lot without the corresponding gcd
 evidence.
 
-All ten SBF handlers are present but remain capability-refused in the in-flight
+All ten SBF handlers are admitted together by the unified successor development
 profile. Action 1 consumes Product's private slot-11/12
 preallocation authority, allocates and assigns the exact prefunded PDAs without
 a second debit, hostile-reloads a4/a5/ClaimLedger, and promotes the private
 receipt into Product atomically. Action 10 hostile-verifies terminal
-postimages, consumes Product terminality first, then deletes both accounts and
-applies their independent principal/donation splits. Product Foundation
+postimages, physically terminalizes and closes both accounts with their
+independent principal/donation splits, then passes the move-only receipt into
+the sole Product RootV3 terminal latch. Product Foundation
 remains the sole owner of the original debit and preallocation evidence.
 Action 3 already composes the real Token-2022
 burn adapter and Realm-selected collateral CPI, orders burn acceptance before
@@ -459,17 +459,14 @@ ProgramData, checked release row, and ELF identity; only then may it observe
 mint supply or perform a terminal write. The resulting claim-release receipt
 is an independent field of Product's private terminal writer authority. Action
 9 remains independent because it performs neither a mint read nor claim CPI.
-Static hostile/valid contract cases are authored but intentionally not run in
-this integration tranche. Family 79/v1 stays `ReservedDisabled` until the
-unified complete-profile switch joins every family and positive checked
-collateral/claim release row.
+Static hostile/valid contract cases are authored. No separate Fractional
+disabled/laboratory profile or alternate Product family writer remains.
 
-The action-1/action-10 outer now consumes the current 47-slot
-`MarketFoundationAccountGraphV3`: 15 fixed core accounts including the exact
-`HoardCollateralVault`, then one mint/custody pair per active outcome. It joins
-`MarketLifecycleRootV2`, `SeriesMarketLinkV2`, `SeriesFundingQuoteV5`, and
-read-only `SeriesRegistryV3`; the complete Product founder/terminal producer
-chain remains an explicit callability dependency.
+The action-1/action-10 outer uses exact `32 + outcome_count` geometry, at most
+48 accounts. Custody and General treasury addresses are derived from hostile
+current Product/Revenue authority instead of supplied as metas. It joins the
+50-slot `MarketFoundationAccountGraphV4`, `MarketLifecycleRootV3`, read-only
+`SeriesMarketLinkV3`, FundingQuoteV6/BundleV7, and RegistryV4/CapabilityV5.
 
 ## 7. Evidence and intentionally deferred validation
 

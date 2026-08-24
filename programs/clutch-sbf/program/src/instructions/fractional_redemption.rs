@@ -49,10 +49,7 @@ use clutch_fractional_redemption_runtime::{
     FRACTIONAL_LEDGER_ACCOUNT_BYTES, FRACTIONAL_POLICY_ACCOUNT_BYTES,
     FRACTIONAL_REDEMPTION_FAMILY_TAG, FRACTIONAL_REDEMPTION_FAMILY_VERSION,
 };
-use clutch_product_series::{
-    ContentId, MarketFoundationAccountGraphV4, MarketFoundationScheduleV4,
-    MarketLifecycleRootV3,
-};
+use clutch_product_series::ContentId;
 use clutch_retirement::{
     admit_initial_rent_split, admit_reopen_rent_split, Identity32V1, RentSplitAdmissionPlanV2,
     PositionAccountV3, PositionV3Sha256Backend, POSITION_V3_BYTES,
@@ -72,7 +69,7 @@ use super::external_redemption_v3::{
     invoke_claim_collateral_payout, observe_outcome_mints_for_bearer_v3, runtime_account_view,
 };
 use super::product_market_lifecycle_v3_current::{
-    authenticate_market_lifecycle_root_v3, AuthenticatedSeriesMarketLinkV3,
+    authenticate_market_lifecycle_root_v3,
 };
 use super::product_series_current::AuthenticatedRegistryCapabilityV5;
 use super::genesis::{
@@ -1770,37 +1767,6 @@ pub(crate) fn authenticate_fractional_family_admission_postwrite_v1(
     })
 }
 
-/// Atomically consume an exact hostile-authenticated Fractional founding
-/// postwrite into Product's sole family aggregator owner.
-///
-/// The concrete Initialize handler calls this after writing a4/a5/ClaimLedger
-/// and before returning success; transaction rollback then keeps all four
-/// accounts atomic on any Product refusal.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn consume_fractional_family_admission_postwrite_v2(
-    program_id: &Pubkey,
-    root_account: &AccountInfo<'_>,
-    postwrite: AuthenticatedFractionalFamilyAdmissionPostwriteV1,
-    link: &AuthenticatedSeriesMarketLinkV3<'_>,
-    schedule: &MarketFoundationScheduleV4,
-    graph: &MarketFoundationAccountGraphV4,
-    root_before_output: &mut MarketLifecycleRootAccountV3,
-    root_successor_output: &mut MarketLifecycleRootV3,
-    root_after_output: &mut MarketLifecycleRootAccountV3,
-) -> Outcome<super::product_series_current::AuthenticatedProductFractionalFamilyAdmissionV2> {
-    super::fractional_product_consumer::consume_fractional_admission_v2(
-        program_id,
-        root_account,
-        postwrite,
-        link,
-        schedule,
-        graph,
-        root_before_output,
-        root_successor_output,
-        root_after_output,
-    )
-}
-
 /// Adapter-authenticated terminal postwrite before a4/a5 deletion.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedFractionalFamilyTerminalPostwriteV1 {
@@ -2268,33 +2234,6 @@ pub(crate) fn execute_fractional_family_physical_terminal_v2(
         neutral_sink_lamports_before: prepared.neutral_sink_lamports_before,
         neutral_sink_lamports_after,
     })
-}
-
-/// Consume the exact move-only Fractional physical terminal into Product only
-/// after action 10 has closed a4/a5 and applied the exact rent disposition.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn consume_fractional_family_terminal_postwrite_v2(
-    program_id: &Pubkey,
-    root_account: &AccountInfo<'_>,
-    terminal: AuthenticatedFractionalFamilyPhysicalTerminalV2,
-    link: &AuthenticatedSeriesMarketLinkV3<'_>,
-    schedule: &MarketFoundationScheduleV4,
-    graph: &MarketFoundationAccountGraphV4,
-    root_before_output: &mut MarketLifecycleRootAccountV3,
-    root_successor_output: &mut MarketLifecycleRootV3,
-    root_after_output: &mut MarketLifecycleRootAccountV3,
-) -> Outcome<super::product_series_current::AuthenticatedProductFractionalFamilyTerminalV2> {
-    super::fractional_product_consumer::consume_fractional_terminal_v2(
-        program_id,
-        root_account,
-        terminal,
-        link,
-        schedule,
-        graph,
-        root_before_output,
-        root_successor_output,
-        root_after_output,
-    )
 }
 
 fn decode_fractional_accounts(
@@ -2789,7 +2728,7 @@ mod loader_alias_tests {
             .find("pub(crate) fn execute_fractional_family_physical_terminal_v2")
             .expect("physical terminal executor");
         let end = source[start..]
-            .find("pub(crate) fn consume_fractional_family_terminal_postwrite_v2")
+            .find("fn decode_fractional_accounts")
             .map(|offset| start + offset)
             .expect("physical terminal executor end");
         let body = &source[start..end];

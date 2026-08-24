@@ -1962,7 +1962,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG,
             version: FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_VERSION,
         },
-        status: AllocationStatus::ReservedDisabled,
+        status: AllocationStatus::NonProductionLab,
         name: "fractional-redemption-policy-v3-account",
     },
     CollisionLedgerEntry {
@@ -1971,7 +1971,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_TAG,
             version: FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_VERSION,
         },
-        status: AllocationStatus::ReservedDisabled,
+        status: AllocationStatus::NonProductionLab,
         name: "fractional-redemption-ledger-v1-account",
     },
     CollisionLedgerEntry {
@@ -1989,7 +1989,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_TAG,
             version: FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_VERSION,
         },
-        status: AllocationStatus::ReservedDisabled,
+        status: AllocationStatus::NonProductionLab,
         name: "fractional-redemption-credit-v2-account",
     },
     CollisionLedgerEntry {
@@ -2007,7 +2007,7 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_TAG,
             version: FRACTIONAL_REDEMPTION_CREDIT_TOMBSTONE_ACCOUNT_VERSION,
         },
-        status: AllocationStatus::ReservedDisabled,
+        status: AllocationStatus::NonProductionLab,
         name: "fractional-redemption-credit-tombstone-v2-account",
     },
     CollisionLedgerEntry {
@@ -3034,10 +3034,10 @@ impl RecoveryAction {
 
 /// Exact fractional-redemption family-local actions inside 79/v1.
 ///
-/// Coordinates freeze the runtime contract while every tuple remains
-/// capability-disabled. Activation must join Resolution, ClaimLedger V3,
-/// Hoard V2, Position/Replay V3, Realm collateral, Token-2022 claims, and rent
-/// atomically.
+/// The unified successor development profile admits this exact all-or-none
+/// set. Each action joins current Resolution, ClaimLedger V3, Hoard V2,
+/// Position/Replay V3, Realm collateral, Token-2022 release identity, and rent
+/// ownership atomically.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FractionalRedemptionAction {
@@ -3988,7 +3988,7 @@ mod tests {
     }
 
     #[test]
-    fn fractional_redemption_account_block_is_complete_and_disabled() {
+    fn fractional_redemption_current_account_block_is_complete_and_nonproduction() {
         let expected = [
             (
                 FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG,
@@ -4023,7 +4023,7 @@ mod tests {
             });
             assert_eq!(
                 matching.next().map(|entry| entry.status),
-                Some(AllocationStatus::ReservedDisabled),
+                Some(AllocationStatus::NonProductionLab),
                 "account {tag}/{version}"
             );
             assert!(
