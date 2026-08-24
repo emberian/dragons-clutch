@@ -3,13 +3,18 @@
 //!
 //! The program-owned custody body, not Product or an instruction payload,
 //! owns allocated/remaining principal and every observed donation. Product's
-//! final counted-retirement receipt authenticates lifecycle completion and the
-//! immutable FundingTerms destinations before this adapter closes the ledger.
+//! exact LinkV3 prestate authenticates lifecycle completion and immutable
+//! FundingTerms destinations. Source closes first and emits one move-only
+//! family terminal receipt; Product may only consume that receipt afterwards.
 
 use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::{require_system_program, SYSTEM_PROGRAM_ID};
-use crate::instructions::product_series_current::AuthenticatedSeriesMarketLinkV2;
+use crate::instructions::product_market_lifecycle_v3_current::{
+    authenticate_market_lifecycle_root_v3, authenticate_series_market_link_v3,
+    AuthenticatedMarketLifecycleRootV3, AuthenticatedSeriesMarketLinkV3,
+};
+use crate::instructions::product_series_current::AuthenticatedSeriesFundingAccountV5;
 use crate::instructions::source_failure_product_release_v1::
     AuthenticatedPersistedSourceFailureProductReleaseV3;
 use crate::source_plane_v3::runtime_key;
@@ -22,14 +27,17 @@ use clutch_source_plane_v3_runtime::{
     SourceFailureKindV1, SourceFailureProductReleaseDispositionV3,
     SourceFundingCustodyLedgerV1, SourceWorkScheduleBindingV1,
 };
-use clutch_product_series::SeriesMarketLinkPhaseV2;
+use clutch_product_series::{MarketLifecyclePhaseV3, SeriesFundingPhaseV5, SeriesMarketLinkPhaseV3};
+use clutch_solana_layout::product_series::{
+    MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV3,
+};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 const SOURCE_FUNDING_CUSTODY_POSTTERMINAL_AUTH_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/source-funding-custody-postterminal-auth/v2";
-const SOURCE_FUNDING_CUSTODY_RETIREMENT_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/sbf/source-funding-custody-retirement/v2";
+const SOURCE_FAMILY_TERMINAL_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/source-family-terminal/v3";
 const SOURCE_FUNDING_CUSTODY_LIFECYCLE_TERMINAL_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/source-funding-custody-lifecycle-terminal/v1";
 const SOURCE_FUNDING_CUSTODY_PRODUCT_RELEASE_DOMAIN_V3: &[u8] =
@@ -368,7 +376,7 @@ pub(crate) fn authenticate_source_funding_custody_lifecycle_terminal_v1<
     authority: A,
     route: AuthenticatedSourceRouteV1,
     schedule: SourceWorkScheduleBindingV1,
-    link: &AuthenticatedSeriesMarketLinkV2<'_>,
+    link: &AuthenticatedSeriesMarketLinkV3<'_>,
     custody: AuthenticatedSourceFundingCustodyV1,
 ) -> Outcome<AuthenticatedSourceFundingCustodyLifecycleTerminalV1> {
     let ledger = custody.ledger();
@@ -414,7 +422,7 @@ pub(crate) fn authenticate_source_funding_custody_lifecycle_terminal_v1<
             && !founder.capitalization_receipt_id.is_zero()
             && founder.capitalization_authority_id != founder.capitalization_receipt_id
             && link.is_writable()
-            && link_state.phase() == SeriesMarketLinkPhaseV2::Retiring
+            && link_state.phase() == SeriesMarketLinkPhaseV3::Retiring
             && !founder.product_link_authentication_id.is_zero()
             && !founder.product_link_semantic_id.is_zero()
             && link_binding.source_occurrence_receipt_id
@@ -686,13 +694,13 @@ fn authenticate_product_release_evidence_v3(
     }
 }
 
-/// Product-owned terminal identities and immutable destinations. No amount is
-/// supplied: all lamport accounting comes from the hostile-decoded ledger.
+/// Locally derived Product/Funding identities and immutable destinations.
+/// This is never accepted from an instruction payload: all amounts remain
+/// owned by the hostile-decoded Source ledger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SourceFundingCustodyRetirementAccountingV2 {
+pub(crate) struct SourceFamilyTerminalAccountingV3 {
     pub(crate) funding_terms_id: ContentId,
-    pub(crate) product_retirement_authority_id: ContentId,
-    pub(crate) counted_retirement_receipt_id: ContentId,
+    pub(crate) lifecycle_terminal_receipt_id: ContentId,
     pub(crate) source_funding_custody: RuntimeKey,
     pub(crate) lamport_principal_refund: RuntimeKey,
     pub(crate) neutral_lamport_sink: RuntimeKey,
@@ -700,8 +708,8 @@ pub(crate) struct SourceFundingCustodyRetirementAccountingV2 {
 
 /// Complete locally derived pre/post retirement facts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SourceFundingCustodyRetirementFactsV2 {
-    pub(crate) accounting: SourceFundingCustodyRetirementAccountingV2,
+pub(crate) struct SourceFamilyTerminalFactsV3 {
+    pub(crate) accounting: SourceFamilyTerminalAccountingV3,
     pub(crate) lifecycle_terminal_authentication_id: ContentId,
     pub(crate) lifecycle_terminal: SourceFundingCustodyLifecycleTerminalFactsV1,
     pub(crate) product_release: SourceFundingCustodyProductReleaseFactsV3,
@@ -741,35 +749,21 @@ pub(crate) struct SourceFundingCustodyRetirementFactsV2 {
     pub(crate) neutral_sink_balance_after: u64,
 }
 
-/// Default-refusing Product retirement owner.
-pub(crate) trait AuthenticatedSourceFundingCustodyRetirementAuthorityV2 {
-    fn authenticate_source_funding_custody_retirement_v2(
-        &self,
-        _facts: SourceFundingCustodyRetirementFactsV2,
-    ) -> Outcome<ContentId> {
-        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
-    }
-}
-
-/// Private ledger-close postwrite consumed before Funding may close.
+/// Move-only physical Source-family terminal consumed by Product V3.
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedSourceFundingCustodyRetirementV2 {
+pub(crate) struct AuthenticatedSourceFamilyTerminalV3 {
     id: ContentId,
-    product_retirement_authority_id: ContentId,
-    facts: SourceFundingCustodyRetirementFactsV2,
+    facts: SourceFamilyTerminalFactsV3,
     custody_account_data_after_id: ContentId,
+    lifecycle_terminal: AuthenticatedSourceFundingCustodyLifecycleTerminalV1,
 }
 
-impl AuthenticatedSourceFundingCustodyRetirementV2 {
+impl AuthenticatedSourceFamilyTerminalV3 {
     pub(crate) const fn id(&self) -> ContentId {
         self.id
     }
 
-    pub(crate) const fn product_retirement_authority_id(&self) -> ContentId {
-        self.product_retirement_authority_id
-    }
-
-    pub(crate) const fn facts(&self) -> SourceFundingCustodyRetirementFactsV2 {
+    pub(crate) const fn facts(&self) -> SourceFamilyTerminalFactsV3 {
         self.facts
     }
 
@@ -790,25 +784,23 @@ fn require_system_destination(account: &AccountInfo<'_>, expected: RuntimeKey) -
     )
 }
 
-/// Close one exact terminal custody. Remaining recorded principal returns to
-/// FundingTerms; recorded and newly observed donations go only to the route's
-/// neutral sink. Neither recipient signs.
+/// Physically terminalize one exact Source family before Product retirement.
+/// Remaining recorded principal returns to FundingTerms; recorded and newly
+/// observed donations go only to the route's neutral sink. Neither recipient
+/// signs, and no caller-shaped Product authorization participates.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn retire_source_funding_custody_v2<
-    A: AuthenticatedSourceFundingCustodyRetirementAuthorityV2 + ?Sized,
->(
+pub(crate) fn terminalize_source_family_v3(
     program_id: &Pubkey,
-    authority: &A,
     route: AuthenticatedSourceRouteV1,
     schedule: SourceWorkScheduleBindingV1,
     lifecycle_terminal: AuthenticatedSourceFundingCustodyLifecycleTerminalV1,
-    link: &AuthenticatedSeriesMarketLinkV2<'_>,
-    accounting: SourceFundingCustodyRetirementAccountingV2,
+    link: &AuthenticatedSeriesMarketLinkV3<'_>,
+    funding: &AuthenticatedSeriesFundingAccountV5,
     custody_account: &AccountInfo<'_>,
     principal_refund: &AccountInfo<'_>,
     neutral_sink: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
-) -> Outcome<AuthenticatedSourceFundingCustodyRetirementV2> {
+) -> Outcome<AuthenticatedSourceFamilyTerminalV3> {
     require_system_program(system_program)?;
     let custody = authenticate_source_funding_custody_v1(
         program_id,
@@ -816,17 +808,22 @@ pub(crate) fn retire_source_funding_custody_v2<
         schedule,
         custody_account,
     )?;
-    require_system_destination(principal_refund, accounting.lamport_principal_refund)?;
-    require_system_destination(neutral_sink, accounting.neutral_lamport_sink)?;
     let link_state = link.state();
     let link_semantic_id = link_state
         .semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let link_binding = link_state.binding();
+    let accounting = SourceFamilyTerminalAccountingV3 {
+        funding_terms_id: ContentId::from_bytes(link_binding.funding_terms_id.bytes()),
+        lifecycle_terminal_receipt_id: lifecycle_terminal.id(),
+        source_funding_custody: custody.account(),
+        lamport_principal_refund: custody.ledger().principal_refund,
+        neutral_lamport_sink: custody.ledger().neutral_sink,
+    };
+    require_system_destination(principal_refund, accounting.lamport_principal_refund)?;
+    require_system_destination(neutral_sink, accounting.neutral_lamport_sink)?;
     let terminal_ids = [
         accounting.funding_terms_id,
-        accounting.product_retirement_authority_id,
-        accounting.counted_retirement_receipt_id,
         lifecycle_terminal.id(),
     ];
     let lifecycle_terminal_facts = lifecycle_terminal.facts();
@@ -835,7 +832,15 @@ pub(crate) fn retire_source_funding_custody_v2<
         terminal_ids.iter().all(|id| !id.is_zero())
             && all_distinct_ids(&terminal_ids)
             && link.is_writable()
-            && link_state.phase() == SeriesMarketLinkPhaseV2::Retiring
+            && link_state.phase() == SeriesMarketLinkPhaseV3::Retiring
+            && !funding.is_writable()
+            && funding.account().to_bytes() == link_binding.funding_state_account_id.bytes()
+            && funding.state().series_plan_id == link_binding.series_plan_id
+            && funding.state().funding_terms_id == link_binding.funding_terms_id
+            && funding.state().funding_quote_id == link_binding.funding_quote_id
+            && funding.state().attachment_plan_id == link_binding.attachment_plan_id
+            && funding.state().compiler_bundle_id == link_binding.compiler_bundle_id
+            && funding.state().phase != SeriesFundingPhaseV5::Pending
             && lifecycle_terminal_facts.product_link_account.bytes()
                 == link.account().to_bytes()
             && lifecycle_terminal_facts.product_link_account_data_id.bytes()
@@ -882,7 +887,7 @@ pub(crate) fn retire_source_funding_custody_v2<
         .ledger()
         .observe_terminal_balance(
             custody_account.lamports(),
-            accounting.counted_retirement_receipt_id,
+            accounting.lifecycle_terminal_receipt_id,
         )
         .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
     require(
@@ -959,9 +964,7 @@ pub(crate) fn retire_source_funding_custody_v2<
             &custody_owner_after.bytes(),
             &custody_account_data_after_id.bytes(),
             &0_u64.to_le_bytes(),
-            &lifecycle_terminal.id().bytes(),
-            &accounting.product_retirement_authority_id.bytes(),
-            &accounting.counted_retirement_receipt_id.bytes(),
+            &accounting.lifecycle_terminal_receipt_id.bytes(),
         ])
         .to_bytes(),
     );
@@ -988,7 +991,7 @@ pub(crate) fn retire_source_funding_custody_v2<
     let neutral_sink_balance_after = neutral_sink_balance_before
         .checked_add(ledger_before.donation_lamports)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    let facts = SourceFundingCustodyRetirementFactsV2 {
+    let facts = SourceFamilyTerminalFactsV3 {
         accounting,
         lifecycle_terminal_authentication_id: lifecycle_terminal.id(),
         lifecycle_terminal: lifecycle_terminal_facts,
@@ -1030,12 +1033,6 @@ pub(crate) fn retire_source_funding_custody_v2<
         neutral_sink_balance_before,
         neutral_sink_balance_after,
     };
-    let product_retirement_authority_id =
-        authority.authenticate_source_funding_custody_retirement_v2(facts)?;
-    require(
-        product_retirement_authority_id == accounting.product_retirement_authority_id,
-        ClutchError::AuthorizationUnavailable,
-    )?;
     {
         let mut custody_balance = custody_account
             .try_borrow_mut_lamports()
@@ -1071,8 +1068,10 @@ pub(crate) fn retire_source_funding_custody_v2<
     )?;
     let id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
-            SOURCE_FUNDING_CUSTODY_RETIREMENT_DOMAIN_V2,
-            &product_retirement_authority_id.bytes(),
+            SOURCE_FAMILY_TERMINAL_DOMAIN_V3,
+            &funding.account().to_bytes(),
+            &funding.data_id().bytes(),
+            &funding.authentication_id().bytes(),
             &accounting.funding_terms_id.bytes(),
             &ledger_before.capitalization_authority_id.bytes(),
             &ledger_before.capitalization_receipt_id.bytes(),
@@ -1084,7 +1083,7 @@ pub(crate) fn retire_source_funding_custody_v2<
                 .bytes(),
             &lifecycle_terminal_facts.source_product_release_binding_id.bytes(),
             &lifecycle_terminal_facts.failure_family_terminal_receipt_id.bytes(),
-            &accounting.counted_retirement_receipt_id.bytes(),
+            &accounting.lifecycle_terminal_receipt_id.bytes(),
             &accounting.source_funding_custody.bytes(),
             &accounting.lamport_principal_refund.bytes(),
             &accounting.neutral_lamport_sink.bytes(),
@@ -1121,12 +1120,15 @@ pub(crate) fn retire_source_funding_custody_v2<
         ])
         .to_bytes(),
     );
-    require(!id.is_zero(), ClutchError::MismatchedState)?;
-    Ok(AuthenticatedSourceFundingCustodyRetirementV2 {
+    require(
+        !id.is_zero() && id != lifecycle_terminal.id(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedSourceFamilyTerminalV3 {
         id,
-        product_retirement_authority_id,
         facts,
         custody_account_data_after_id,
+        lifecycle_terminal,
     })
 }
 

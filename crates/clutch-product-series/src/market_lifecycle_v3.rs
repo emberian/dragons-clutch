@@ -2709,13 +2709,19 @@ impl SeriesMarketLinkV3 {
     }
 
     /// Emit the exact link retirement projection consumed by the shared root.
-    pub fn retirement_projection(self) -> Result<SeriesMarketLinkRetirementProjectionV3> {
+    pub fn retirement_projection(
+        self,
+        source_family_terminal_receipt_id: ContentId,
+    ) -> Result<SeriesMarketLinkRetirementProjectionV3> {
         self.validate()?;
-        if self.phase != SeriesMarketLinkPhaseV3::Retiring {
+        source_family_terminal_receipt_id.validate()?;
+        if self.phase != SeriesMarketLinkPhaseV3::Retiring
+            || source_family_terminal_receipt_id == self.market_admission_receipt_id
+        {
             return Err(Error::WorkStateMismatch);
         }
         let semantic_id = self.semantic_id()?;
-        let mut body = [0u8; 148];
+        let mut body = [0u8; 180];
         body[..32].copy_from_slice(&semantic_id.bytes());
         body[32..64].copy_from_slice(&self.binding.market_instance_id.bytes());
         body[64..96].copy_from_slice(&self.binding.series_plan_id.bytes());
@@ -2723,6 +2729,7 @@ impl SeriesMarketLinkV3 {
         body[100..108].copy_from_slice(&self.binding.generation.to_le_bytes());
         body[108..116].copy_from_slice(&self.transition_sequence.to_le_bytes());
         body[116..148].copy_from_slice(&self.market_admission_receipt_id.bytes());
+        body[148..180].copy_from_slice(&source_family_terminal_receipt_id.bytes());
         let id = content_id(b"dragons-clutch/series-market-link-retirement/v3", &body);
         Ok(SeriesMarketLinkRetirementProjectionV3 {
             id,
@@ -2733,6 +2740,7 @@ impl SeriesMarketLinkV3 {
             generation: self.binding.generation,
             transition_sequence: self.transition_sequence,
             market_admission_receipt_id: self.market_admission_receipt_id,
+            source_family_terminal_receipt_id,
         })
     }
 
@@ -2753,6 +2761,9 @@ impl SeriesMarketLinkV3 {
         if self.phase != SeriesMarketLinkPhaseV3::Retiring
             || projection.link_semantic_id != self.semantic_id()?
             || projection.market_admission_receipt_id != self.market_admission_receipt_id
+            || projection.source_family_terminal_receipt_id == ContentId::ZERO
+            || projection.source_family_terminal_receipt_id
+                == projection.market_admission_receipt_id
         {
             return Err(Error::UnauthenticatedAuthority);
         }
@@ -2950,6 +2961,7 @@ pub struct SeriesMarketLinkRetirementProjectionV3 {
     generation: u64,
     transition_sequence: u64,
     market_admission_receipt_id: ContentId,
+    source_family_terminal_receipt_id: ContentId,
 }
 
 impl SeriesMarketLinkRetirementProjectionV3 {
@@ -2984,6 +2996,10 @@ impl SeriesMarketLinkRetirementProjectionV3 {
     /// Exact original root admission receipt.
     pub const fn market_admission_receipt_id(self) -> ContentId {
         self.market_admission_receipt_id
+    }
+    /// Exact move-only Source family terminal consumed before Product writes.
+    pub const fn source_family_terminal_receipt_id(self) -> ContentId {
+        self.source_family_terminal_receipt_id
     }
 }
 

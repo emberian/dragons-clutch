@@ -1,4 +1,4 @@
-//! Current Product V3/V5/V6 authority for Source occurrence publication.
+//! Current Product V3/V5/V7 authority for Source occurrence publication.
 //!
 //! This module is the sole current successor join from hostile-authenticated
 //! Product artifacts and Registry/Profile authority into liability-free Source
@@ -9,9 +9,7 @@ use crate::accounts::{require, require_count, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::product_artifact::authenticate_product_artifact_v1;
 use crate::instructions::product_artifact::AuthenticatedRegistryCapabilityReleaseV3;
-use crate::instructions::product_series_current::{
-    AuthenticatedRegistryCapabilityV4, AuthenticatedRegistryCapabilityV5,
-};
+use crate::instructions::product_series_current::AuthenticatedRegistryCapabilityV5;
 use crate::instructions::product_series::{
     IX_SERIES_ARTIFACT_ATTACHMENT, IX_SERIES_ARTIFACT_BASIS,
     IX_SERIES_ARTIFACT_FUNDING_TERMS,
@@ -21,16 +19,14 @@ use crate::instructions::product_series::{
     SERIES_ARTIFACT_ACCOUNT_COUNT_V1,
 };
 use clutch_product_series::{
-    assemble_compiled_product_series_bundle_v6, assemble_compiled_product_series_bundle_v7,
+    assemble_compiled_product_series_bundle_v7,
     compile_source_semantic_inputs_v2,
-    AuthenticatedSourceSeriesAuthorityV3, CompiledProductSeriesBundleV6,
-    CompiledProductSeriesBundleV6Id, CompiledProductSeriesBundleV7,
+    AuthenticatedSourceSeriesAuthorityV3, CompiledProductSeriesBundleV7,
     CompiledProductSeriesBundleV7Id,
     CompiledSourceOccurrenceV3, ComponentDebitV1, ContentId,
     EvidenceOnlyRecoveryPolicyV1, MarketGenesisProfileV2, NativeClaimBasisV1,
-    PriceMeasurePolicyV1, ProductSeriesBundleInputsV6, ProductSeriesBundleInputsV7,
-    ProductTemplateV4, RegistryCapabilityProjectionV2, SeriesAttachmentPlanV5,
-    SeriesAttachmentPlanV6, SeriesFundingComponentV2, SeriesFundingQuoteV5,
+    PriceMeasurePolicyV1, ProductSeriesBundleInputsV7, ProductTemplateV4,
+    RegistryCapabilityProjectionV2, SeriesAttachmentPlanV6, SeriesFundingComponentV2,
     SeriesFundingQuoteV6, SeriesFundingTermsV2, SeriesFundingTermsV2Id, SeriesPlanV5,
     SeriesPlanV5Id,
 };
@@ -69,7 +65,7 @@ pub(crate) struct AuthenticatedProductSourceAuthorityV2 {
 
 impl AuthenticatedProductSourceAuthorityV2 {
     fn new(
-        registry: &AuthenticatedRegistryCapabilityV4,
+        registry: &AuthenticatedRegistryCapabilityV5,
         source_release: AuthenticatedSourceReleaseV1,
     ) -> Outcome<Self> {
         let projection = registry.projection();
@@ -209,83 +205,6 @@ impl AuthenticatedSourceSeriesAuthorityV3 for AuthenticatedProductSourceAuthorit
         Ok(self.resolved_coverage_policy_value)
     }
 }
-/// Exact nine-account QuoteV5/AttachmentV5 artifact graph.
-#[derive(Debug)]
-pub(crate) struct AuthenticatedSeriesSourceArtifactsV5 {
-    series: Box<SeriesPlanV5>,
-    funding_terms: Box<SeriesFundingTermsV2>,
-    template: Box<ProductTemplateV4>,
-    basis: Box<NativeClaimBasisV1>,
-    recovery: Box<EvidenceOnlyRecoveryPolicyV1>,
-    price_policy: Box<PriceMeasurePolicyV1>,
-    genesis: Box<MarketGenesisProfileV2>,
-    quote: Box<SeriesFundingQuoteV5>,
-    attachment: Box<SeriesAttachmentPlanV5>,
-}
-
-impl AuthenticatedSeriesSourceArtifactsV5 {
-    pub(crate) fn validate_registry_projection(
-        &self,
-        projection: &RegistryCapabilityProjectionV2,
-    ) -> Outcome<()> {
-        self.series
-            .validate_bindings_v5(
-                &self.template,
-                &self.basis,
-                &self.recovery,
-                &self.price_policy,
-                &self.genesis,
-                &self.attachment,
-                projection,
-            )
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-        self.funding_terms
-            .validate_bindings(
-                &self.series,
-                &self.template,
-                &self.basis,
-                &self.recovery,
-                &self.price_policy,
-                &self.genesis,
-                projection,
-            )
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-        self.quote
-            .validate()
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-        require(
-            self.quote.evidence_only_recovery_policy_id
-                == self
-                    .recovery
-                    .id()
-                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-                    .content_id()
-                && self.attachment.funding_quote_id
-                    == self
-                        .quote
-                        .id()
-                        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
-            ClutchError::MismatchedState,
-        )
-    }
-
-    pub(crate) fn series(&self) -> &SeriesPlanV5 {
-        &self.series
-    }
-
-    pub(crate) fn funding_terms(&self) -> &SeriesFundingTermsV2 {
-        &self.funding_terms
-    }
-
-    pub(crate) fn quote(&self) -> &SeriesFundingQuoteV5 {
-        &self.quote
-    }
-
-    pub(crate) fn attachment(&self) -> &SeriesAttachmentPlanV5 {
-        &self.attachment
-    }
-}
-
 /// Exact nine-account QuoteV6/AttachmentV6 artifact graph.
 ///
 /// This value is move-only so the current BundleV7 reconstruction and
@@ -359,29 +278,6 @@ impl AuthenticatedSeriesSourceArtifactsV6 {
     pub(crate) fn attachment(&self) -> &SeriesAttachmentPlanV6 { &self.attachment }
 }
 
-/// Hostile-authenticated current BundleV6 reconstructed from all semantic
-/// owners rather than accepted as an independent caller claim.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedCompiledProductSeriesBundleV6 {
-    artifact_account: Pubkey,
-    bundle: CompiledProductSeriesBundleV6,
-    bundle_id: CompiledProductSeriesBundleV6Id,
-}
-
-impl AuthenticatedCompiledProductSeriesBundleV6 {
-    pub(crate) const fn artifact_account(self) -> Pubkey {
-        self.artifact_account
-    }
-
-    pub(crate) const fn bundle(self) -> CompiledProductSeriesBundleV6 {
-        self.bundle
-    }
-
-    pub(crate) const fn bundle_id(self) -> CompiledProductSeriesBundleV6Id {
-        self.bundle_id
-    }
-}
-
 /// Hostile-authenticated BundleV7 reconstructed from every current semantic
 /// owner. The move-only wrapper prevents a BundleV7 ID from replacing the
 /// exact artifact account and reconstructed body at the physical boundary.
@@ -452,7 +348,7 @@ impl AuthenticatedProductSeriesRegistrationV5 {
     pub(crate) const fn neutral_lamport_sink(&self) -> Pubkey { self.neutral_lamport_sink }
 }
 
-/// Private Source/ProfileV4/BundleV6 route selected by current Product state.
+/// Private Source/ProfileV4/BundleV7 route selected by current Product state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedSourceProductRouteV4 {
     id: ContentId,
@@ -464,7 +360,7 @@ pub(crate) struct AuthenticatedSourceProductRouteV4 {
     source_spec_id: ContentId,
     registry_release_id: ContentId,
     capability_profile_id: ContentId,
-    compiler_bundle_id: CompiledProductSeriesBundleV6Id,
+    compiler_bundle_id: CompiledProductSeriesBundleV7Id,
     market_genesis_profile_id: clutch_product_series::MarketGenesisProfileV2Id,
     realm_id: ContentId,
     profile_id: ContentId,
@@ -497,7 +393,7 @@ impl AuthenticatedSourceProductRouteV4 {
         self.source_spec_id
     }
 
-    pub(crate) const fn compiler_bundle_id(self) -> CompiledProductSeriesBundleV6Id {
+    pub(crate) const fn compiler_bundle_id(self) -> CompiledProductSeriesBundleV7Id {
         self.compiler_bundle_id
     }
 
@@ -519,7 +415,7 @@ impl AuthenticatedSourceProductRouteV4 {
 }
 
 /// Private authority to create or authenticate one exact ordinal's immutable
-/// Source semantic accounts from BundleV6/QuoteV5/AttachmentV5.
+/// Source semantic accounts from BundleV7/QuoteV6/AttachmentV6.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedSourceSemanticPublicationV2 {
     id: ContentId,
@@ -559,138 +455,6 @@ impl AuthenticatedSourceSemanticPublicationV2 {
     pub(crate) const fn source_work_funding(self) -> ComponentDebitV1 {
         self.source_work_funding
     }
-}
-
-/// Hostile-authenticate the current nine immutable Product artifacts.
-pub(crate) fn authenticate_series_source_artifacts_v5(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-    expected_series: SeriesPlanV5Id,
-    expected_funding_terms: SeriesFundingTermsV2Id,
-) -> Outcome<AuthenticatedSeriesSourceArtifactsV5> {
-    require_count(accounts, SERIES_ARTIFACT_ACCOUNT_COUNT_V1)?;
-    expected_series
-        .validate()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    expected_funding_terms
-        .validate()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let series = authenticate_product_artifact_v1::<SeriesPlanV5>(
-        program_id,
-        &accounts[IX_SERIES_ARTIFACT_PLAN],
-        expected_series.content_id(),
-    )?
-    .into_value();
-    let funding_terms = authenticate_product_artifact_v1::<SeriesFundingTermsV2>(
-        program_id,
-        &accounts[IX_SERIES_ARTIFACT_FUNDING_TERMS],
-        expected_funding_terms.content_id(),
-    )?
-    .into_value();
-    require(
-        series
-            .id()
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-            == expected_series
-            && funding_terms
-                .id()
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-                == expected_funding_terms
-            && funding_terms.series_plan_id == expected_series,
-        ClutchError::MismatchedState,
-    )?;
-    let template = authenticate_product_artifact_v1::<ProductTemplateV4>(
-        program_id,
-        &accounts[IX_SERIES_ARTIFACT_TEMPLATE],
-        series.product_template_id.content_id(),
-    )?
-    .into_value();
-    let genesis = authenticate_product_artifact_v1::<MarketGenesisProfileV2>(
-        program_id,
-        &accounts[IX_SERIES_ARTIFACT_GENESIS],
-        series.market_genesis_profile_id.content_id(),
-    )?
-    .into_value();
-    let attachment = authenticate_product_artifact_v1::<SeriesAttachmentPlanV5>(
-        program_id,
-        &accounts[IX_SERIES_ARTIFACT_ATTACHMENT],
-        series.attachment_plan_id.content_id(),
-    )?
-    .into_value();
-    let basis = authenticate_product_artifact_v1::<NativeClaimBasisV1>(
-        program_id,
-        &accounts[IX_SERIES_ARTIFACT_BASIS],
-        template.native_claim_basis_id.content_id(),
-    )?
-    .into_value();
-    let recovery = authenticate_product_artifact_v1::<EvidenceOnlyRecoveryPolicyV1>(
-        program_id,
-        &accounts[IX_SERIES_ARTIFACT_RECOVERY],
-        template.evidence_only_recovery_policy_id.content_id(),
-    )?
-    .into_value();
-    let price_policy = authenticate_product_artifact_v1::<PriceMeasurePolicyV1>(
-        program_id,
-        &accounts[IX_SERIES_ARTIFACT_PRICE_POLICY],
-        genesis.price_measure_policy_id.content_id(),
-    )?
-    .into_value();
-    let quote = authenticate_product_artifact_v1::<SeriesFundingQuoteV5>(
-        program_id,
-        &accounts[IX_SERIES_ARTIFACT_QUOTE],
-        attachment.funding_quote_id.content_id(),
-    )?
-    .into_value();
-    require(
-        template
-            .id()
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-            == series.product_template_id
-            && genesis
-                .id()
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-                == series.market_genesis_profile_id
-            && attachment
-                .id()
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-                .content_id()
-                == series.attachment_plan_id.content_id()
-            && recovery
-                .id()
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-                == template.evidence_only_recovery_policy_id
-            && price_policy
-                .id()
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-                == genesis.price_measure_policy_id
-            && quote
-                .id()
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-                == attachment.funding_quote_id
-            && quote.evidence_only_recovery_policy_id
-                == template.evidence_only_recovery_policy_id.content_id(),
-        ClutchError::MismatchedState,
-    )?;
-    template
-        .validate_bindings(&basis, &recovery)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    genesis
-        .validate_bindings(&basis, &price_policy)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    quote
-        .validate()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    Ok(AuthenticatedSeriesSourceArtifactsV5 {
-        series,
-        funding_terms,
-        template,
-        basis,
-        recovery,
-        price_policy,
-        genesis,
-        quote,
-        attachment,
-    })
 }
 
 /// Hostile-authenticate the current QuoteV6/AttachmentV6 artifact graph.
@@ -819,59 +583,6 @@ pub(crate) fn authenticate_series_source_artifacts_v6(
         genesis,
         quote,
         attachment,
-    })
-}
-
-/// Reconstruct and hostile-authenticate the sole current BundleV6 graph.
-pub(crate) fn authenticate_compiled_product_series_bundle_v6(
-    program_id: &Pubkey,
-    bundle_account: &AccountInfo<'_>,
-    registry: &AuthenticatedRegistryCapabilityV4,
-    source_release: AuthenticatedSourceReleaseV1,
-    artifacts: &AuthenticatedSeriesSourceArtifactsV5,
-) -> Outcome<AuthenticatedCompiledProductSeriesBundleV6> {
-    artifacts.validate_registry_projection(&registry.projection())?;
-    let expected = assemble_compiled_product_series_bundle_v6(ProductSeriesBundleInputsV6 {
-        registry: &registry.projection(),
-        source_release_manifest_id: ContentId::from_bytes(source_release.manifest_id().bytes()),
-        basis: &artifacts.basis,
-        recovery: &artifacts.recovery,
-        template: &artifacts.template,
-        price_policy: &artifacts.price_policy,
-        genesis: &artifacts.genesis,
-        funding_quote: &artifacts.quote,
-        attachment: &artifacts.attachment,
-        series: &artifacts.series,
-        funding_terms: &artifacts.funding_terms,
-    })
-    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let expected_id = expected
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    require(
-        artifacts
-            .series
-            .id()
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-            == registry.series_plan_id()
-            && artifacts
-                .funding_terms
-                .id()
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-                == registry.funding_terms_id()
-            && expected_id == registry.compiler_bundle_id(),
-        ClutchError::MismatchedState,
-    )?;
-    let decoded = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV6>(
-        program_id,
-        bundle_account,
-        expected_id.content_id(),
-    )?;
-    require(*decoded.value() == expected, ClutchError::MismatchedState)?;
-    Ok(AuthenticatedCompiledProductSeriesBundleV6 {
-        artifact_account: *bundle_account.key,
-        bundle: expected,
-        bundle_id: expected_id,
     })
 }
 
@@ -1032,13 +743,13 @@ pub(crate) fn authenticate_product_series_registration_v5(
     })
 }
 
-/// Join exact Source deployment/receiver authority to current Product V6.
+/// Join exact Source deployment/receiver authority to current Product V7.
 pub(crate) fn authenticate_source_product_route_v4(
     route: AuthenticatedSourceRouteV1,
     receiver: AuthenticatedReceiverRouteV2,
-    registry: &AuthenticatedRegistryCapabilityV4,
-    bundle: AuthenticatedCompiledProductSeriesBundleV6,
-    artifacts: &AuthenticatedSeriesSourceArtifactsV5,
+    registry: &AuthenticatedRegistryCapabilityV5,
+    bundle: AuthenticatedCompiledProductSeriesBundleV7,
+    artifacts: &AuthenticatedSeriesSourceArtifactsV6,
 ) -> Outcome<AuthenticatedSourceProductRouteV4> {
     let bundle_value = bundle.bundle();
     let genesis_id = artifacts
@@ -1109,13 +820,13 @@ pub(crate) fn authenticate_source_product_route_v4(
     })
 }
 
-/// Recompile the sole Source semantic graph for one V6 Series ordinal.
+/// Recompile the sole Source semantic graph for one V7 Series ordinal.
 pub(crate) fn authenticate_source_semantic_publication_v2(
     route: AuthenticatedSourceProductRouteV4,
     source_release: AuthenticatedSourceReleaseV1,
-    artifacts: &AuthenticatedSeriesSourceArtifactsV5,
-    registry: &AuthenticatedRegistryCapabilityV4,
-    compiler_bundle: AuthenticatedCompiledProductSeriesBundleV6,
+    artifacts: &AuthenticatedSeriesSourceArtifactsV6,
+    registry: &AuthenticatedRegistryCapabilityV5,
+    compiler_bundle: AuthenticatedCompiledProductSeriesBundleV7,
     ordinal: u32,
 ) -> Outcome<AuthenticatedSourceSemanticPublicationV2> {
     let projection = registry.projection();
@@ -1233,7 +944,7 @@ pub(crate) fn publish_source_semantic_inputs_v2(
     )
 }
 
-/// Successful Source handoff bound to the current BundleV6 Product route.
+/// Successful Source handoff bound to the current BundleV7 Product route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedSourceResolutionInputV4 {
     id: ContentId,
@@ -1320,7 +1031,7 @@ impl AuthenticatedSourceResolutionInputV4 {
     }
 }
 
-/// Bind Source's successful action-10 postwrite to BundleV6 without accepting
+/// Bind Source's successful action-10 postwrite to BundleV7 without accepting
 /// any caller-selected result, Market, Window, or Statistic identity.
 pub(crate) fn authenticate_source_resolution_input_v4(
     route: AuthenticatedSourceProductRouteV4,
@@ -1439,14 +1150,14 @@ mod adversarial_tests {
             .split_once("pub(crate) struct AuthenticatedSeriesSourceArtifactsV6")
             .expect("V6 artifact authority")
             .1
-            .split_once("/// Hostile-authenticated current BundleV6")
+            .split_once("/// Hostile-authenticated BundleV7")
             .expect("bounded V6 artifact authority")
             .0;
         let bundle = source
             .split_once("pub(crate) struct AuthenticatedCompiledProductSeriesBundleV7")
             .expect("V7 bundle authority")
             .1
-            .split_once("/// Private Source/ProfileV4/BundleV6 route")
+            .split_once("/// Private Source/ProfileV4/BundleV7 route")
             .expect("bounded V7 bundle authority")
             .0;
         let reconstruction = source
@@ -1470,17 +1181,17 @@ mod adversarial_tests {
     }
 
     #[test]
-    fn current_publication_has_no_bundle_v5_or_quote_v4_authority() {
+    fn current_publication_has_no_bundle_v6_or_quote_v5_authority() {
         let source = include_str!("product_source_current.rs");
         let production = source
             .split("#[cfg(test)]")
             .next()
             .expect("current Source production module");
-        assert!(production.contains("CompiledProductSeriesBundleV6"));
-        assert!(production.contains("SeriesFundingQuoteV5"));
-        assert!(production.contains("SeriesAttachmentPlanV5"));
+        assert!(production.contains("CompiledProductSeriesBundleV7"));
+        assert!(production.contains("SeriesFundingQuoteV6"));
+        assert!(production.contains("SeriesAttachmentPlanV6"));
         assert!(production.contains("compile_source_semantic_inputs_v2"));
-        assert!(production.contains("AuthenticatedRegistryCapabilityV4"));
+        assert!(production.contains("AuthenticatedRegistryCapabilityV5"));
         assert!(production.contains("AuthenticatedProductSourceAuthorityV2"));
         assert!(production.contains("authority.require_route(route)?"));
         assert!(!production.contains("CompiledProductSeriesBundleV5"));
@@ -1488,6 +1199,10 @@ mod adversarial_tests {
         assert!(!production.contains("SeriesAttachmentPlanV4"));
         assert!(!production.contains("AuthenticatedRegistryCapabilityV3"));
         assert!(!production.contains("AuthenticatedProductSourceAuthorityV1"));
+        assert!(!production.contains("CompiledProductSeriesBundleV6"));
+        assert!(!production.contains("SeriesFundingQuoteV5"));
+        assert!(!production.contains("SeriesAttachmentPlanV5"));
+        assert!(!production.contains("AuthenticatedRegistryCapabilityV4"));
         assert!(production.contains("expected_id == registry.compiler_bundle_id()"));
     }
 }
