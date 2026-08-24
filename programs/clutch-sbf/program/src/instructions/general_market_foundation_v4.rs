@@ -42,7 +42,7 @@ use super::revenue_policy_v2::{
     derive_revenue_market_treasury_v1, AuthenticatedRevenuePolicyRecordV2,
     RevenueMarketTreasuryDerivationV1,
 };
-use super::product_market_foundation_current::{
+use super::product_market_lifecycle_v3_current::{
     AuthenticatedProductMarketFoundationDebitV4,
     AuthenticatedProductMarketFoundationStepPostwriteV4,
 };
