@@ -25,6 +25,9 @@ use super::{
     TermsAccount, HASH_BYTES,
 };
 use clutch_collateral_adapter_v2::{CollateralPolicyV2, COLLATERAL_POLICY_V2_BYTES};
+use clutch_failure_policy_runtime::market_quote_v1::{
+    FailureMarketRecoveryQuoteScheduleV1, FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1,
+};
 use clutch_liveness::runtime_v1::{
     RuntimeLivenessPolicyV1, RUNTIME_LIVENESS_POLICY_BYTES_V1,
 };
@@ -277,6 +280,8 @@ pub enum ArtifactKind {
     CompiledProductSeriesBundleV7 = 68,
     /// Canonical full Source runtime-liveness policy proposal body.
     RuntimeLivenessPolicyV1 = 69,
+    /// Exact market Recovery attempt-pricing and bounded-call schedule.
+    FailureMarketRecoveryQuoteScheduleV1 = 70,
 }
 
 impl ArtifactKind {
@@ -341,6 +346,7 @@ impl ArtifactKind {
             67 => Ok(Self::SeriesAttachmentPlanV6),
             68 => Ok(Self::CompiledProductSeriesBundleV7),
             69 => Ok(Self::RuntimeLivenessPolicyV1),
+            70 => Ok(Self::FailureMarketRecoveryQuoteScheduleV1),
             _ => Err(CodecError::InvalidEnum),
         }
     }
@@ -391,6 +397,7 @@ impl ArtifactKind {
             Self::SeriesAttachmentPlanV6 => 67,
             Self::CompiledProductSeriesBundleV7 => 68,
             Self::RuntimeLivenessPolicyV1 => 69,
+            Self::FailureMarketRecoveryQuoteScheduleV1 => 70,
         }
     }
 
@@ -440,6 +447,9 @@ impl ArtifactKind {
             Self::SeriesAttachmentPlanV6 => SERIES_ATTACHMENT_PLAN_BYTES_V6,
             Self::CompiledProductSeriesBundleV7 => COMPILED_PRODUCT_SERIES_BUNDLE_V7_BYTES,
             Self::RuntimeLivenessPolicyV1 => RUNTIME_LIVENESS_POLICY_BYTES_V1,
+            Self::FailureMarketRecoveryQuoteScheduleV1 => {
+                FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1
+            }
         }
     }
 
@@ -490,6 +500,7 @@ impl ArtifactKind {
                 | Self::SeriesAttachmentPlanV6
                 | Self::CompiledProductSeriesBundleV7
                 | Self::RuntimeLivenessPolicyV1
+                | Self::FailureMarketRecoveryQuoteScheduleV1
         )
     }
 
@@ -1408,6 +1419,23 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
             }
             Ok(0)
         }
+        ArtifactKind::FailureMarketRecoveryQuoteScheduleV1 => {
+            let exact: &[u8; FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1] = body
+                .try_into()
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            let value = FailureMarketRecoveryQuoteScheduleV1::decode(exact)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
         #[cfg(all(
             feature = "non-production-product-series-lab",
             not(target_os = "solana")
@@ -1807,6 +1835,7 @@ mod tests {
                     67 => ArtifactKind::SeriesAttachmentPlanV6,
                     68 => ArtifactKind::CompiledProductSeriesBundleV7,
                     69 => ArtifactKind::RuntimeLivenessPolicyV1,
+                    70 => ArtifactKind::FailureMarketRecoveryQuoteScheduleV1,
                     _ => unreachable!(),
                 })
             } else {
@@ -1814,7 +1843,7 @@ mod tests {
             };
             (tag, expected)
         }) {
-            if (32..=69).contains(&tag) {
+            if (32..=70).contains(&tag) {
                 assert_eq!(ArtifactKind::from_byte(tag), expected, "kind {tag}");
             }
         }
@@ -2110,6 +2139,7 @@ mod tests {
             ArtifactKind::SeriesAttachmentPlanV6,
             ArtifactKind::CompiledProductSeriesBundleV7,
             ArtifactKind::RuntimeLivenessPolicyV1,
+            ArtifactKind::FailureMarketRecoveryQuoteScheduleV1,
         ] {
             assert_eq!(binding(kind).validate_for_registration(), Ok(()));
         }

@@ -475,7 +475,8 @@ fn expected_final_pda(program_id: &Pubkey, binding: ArtifactBinding) -> (Pubkey,
         | ArtifactKind::SeriesFundingQuoteV6
         | ArtifactKind::SeriesAttachmentPlanV6
         | ArtifactKind::CompiledProductSeriesBundleV7
-        | ArtifactKind::RuntimeLivenessPolicyV1) => {
+        | ArtifactKind::RuntimeLivenessPolicyV1
+        | ArtifactKind::FailureMarketRecoveryQuoteScheduleV1) => {
             seeds::product_artifact_pda(program_id, kind.byte(), &digest)
         }
     }
@@ -930,7 +931,8 @@ fn create_final<'a>(
         | ArtifactKind::SeriesFundingQuoteV6
         | ArtifactKind::SeriesAttachmentPlanV6
         | ArtifactKind::CompiledProductSeriesBundleV7
-        | ArtifactKind::RuntimeLivenessPolicyV1) => {
+        | ArtifactKind::RuntimeLivenessPolicyV1
+        | ArtifactKind::FailureMarketRecoveryQuoteScheduleV1) => {
             let kind_byte = [kind.byte()];
             create_artifact_pda(
                 program_id,
