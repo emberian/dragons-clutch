@@ -1618,6 +1618,27 @@ pub fn revenue_policy_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8)
     find(program_id, &[SEED_REVENUE_POLICY, realm])
 }
 
+/// Treasury-service-ledger seed domain.  Its account tag `0xbb` occupies the
+/// account namespace; this seed has no relationship to intent family `81`.
+pub const SEED_TREASURY_SERVICE_LEDGER_V1: &[u8] = b"treasury-service-v1";
+
+/// Canonical counted service-ledger address for one Market-scoped ordinary
+/// treasury Position.
+pub fn treasury_service_ledger_v1_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    treasury_position_account: &Pubkey,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_TREASURY_SERVICE_LEDGER_V1,
+            market_instance_v2_id,
+            &treasury_position_account.to_bytes(),
+        ],
+    )
+}
+
 /* ------------------------------------------------------------------------ */
 /* Token plane — PROPOSED appends                                            */
 /* ------------------------------------------------------------------------ */

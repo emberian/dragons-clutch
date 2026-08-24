@@ -49,7 +49,7 @@ use crate::instructions::product_series;
 use crate::instructions::structured_custody;
 use crate::instructions::{
     artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3, external_redemption_v3,
-    fractional_redemption, genesis, observe_resolve, source_ingest_v2,
+    fractional_redemption, genesis, observe_resolve, revenue_policy_v2, source_ingest_v2,
 };
 #[cfg(feature = "profile-full")]
 use crate::instructions::{direct_market_v1, resolution_work, source_ingest};
@@ -77,6 +77,7 @@ enum Route {
     Artifact,
     Genesis,
     FractionalRedemption,
+    RealmRevenueV2,
     #[cfg(feature = "profile-full")]
     SourceIngest,
     SourceIngestV2,
@@ -159,6 +160,19 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                     }) =>
             {
                 Route::FractionalRedemption
+            }
+            Some(clutch_solana_layout::registry::REALM_REVENUE_V2_FAMILY_TAG)
+                if instruction_data.get(14).copied()
+                    == Some(clutch_solana_layout::registry::REALM_REVENUE_V2_FAMILY_VERSION)
+                    && instruction_data.get(15).copied().is_some_and(|action| {
+                        capabilities::extension_intent_action_enabled(
+                            clutch_solana_layout::registry::REALM_REVENUE_V2_FAMILY_TAG,
+                            clutch_solana_layout::registry::REALM_REVENUE_V2_FAMILY_VERSION,
+                            action,
+                        )
+                    }) =>
+            {
+                Route::RealmRevenueV2
             }
             #[cfg(feature = "non-production-structured-custody-lab")]
             Some(clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_TAG)
@@ -292,6 +306,9 @@ pub fn process(
         Route::FractionalRedemption => {
             process_fractional_redemption(program_id, accounts, instruction_data)
         }
+        Route::RealmRevenueV2 => {
+            process_realm_revenue_v2(program_id, accounts, instruction_data)
+        }
         #[cfg(feature = "profile-full")]
         Route::SourceIngest => process_source_ingest(program_id, accounts, instruction_data),
         Route::SourceIngestV2 => process_source_ingest_v2(program_id, accounts, instruction_data),
@@ -338,8 +355,9 @@ fn process_dealer_policy(
         | ExtensionAction::SourceV3(_)
         | ExtensionAction::RecurringSeries(_)
         | ExtensionAction::Recovery(_)
+        | ExtensionAction::FractionalRedemption(_)
         | ExtensionAction::DirectMarket(_)
-        | ExtensionAction::FractionalRedemption(_) => unexpected_route(),
+        | ExtensionAction::RealmRevenueV2(_) => unexpected_route(),
     }
 }
 
@@ -369,8 +387,9 @@ fn process_recurring_series(
         | ExtensionAction::StructuredClaim(_)
         | ExtensionAction::SourceV3(_)
         | ExtensionAction::Recovery(_)
+        | ExtensionAction::FractionalRedemption(_)
         | ExtensionAction::DirectMarket(_)
-        | ExtensionAction::FractionalRedemption(_) => unexpected_route(),
+        | ExtensionAction::RealmRevenueV2(_) => unexpected_route(),
     }
 }
 
@@ -500,6 +519,28 @@ fn process_fractional_redemption(
         | ExtensionAction::RecurringSeries(_)
         | ExtensionAction::Recovery(_)
         | ExtensionAction::DirectMarket(_) => unexpected_route(),
+    }
+}
+
+/// Decode the strict Realm/revenue successor envelope after exact capability
+/// admission and enter its V2-only handler.
+#[inline(never)]
+fn process_realm_revenue_v2(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    instruction_data: &[u8],
+) -> Outcome<()> {
+    let request =
+        ExtensionRequest::decode(instruction_data).map_err(|_| ClutchError::NonCanonical)?;
+    match request.envelope.action {
+        ExtensionAction::RealmRevenueV2(action) => revenue_policy_v2::process(
+            program_id,
+            accounts,
+            request.sequence,
+            action,
+            request.envelope.payload,
+        ),
+        _ => unexpected_route(),
     }
 }
 
