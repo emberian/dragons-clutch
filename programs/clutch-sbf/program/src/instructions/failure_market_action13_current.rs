@@ -146,7 +146,8 @@ pub(crate) fn process_archive_failure_market_session_v3(
             && registry.capability_profile_id() == root_binding.capability_profile_id
             && bundle.semantic_id() == registry.compiler_bundle_id().content_id()
             && bundle.value().registry_release_id == registry.registry_release_id()
-            && bundle.value().capability_profile_id == registry.capability_profile_id()
+            && bundle.value().capability_profile_id.bytes()
+                == registry.capability_profile_id().bytes()
             && bundle.value().series_plan_id == link_binding.series_plan_id
             && bundle.value().funding_quote_id == link_binding.funding_quote_id
             && bundle.semantic_id().bytes() == link_binding.compiler_bundle_id.bytes()
