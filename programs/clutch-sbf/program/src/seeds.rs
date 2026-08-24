@@ -984,6 +984,48 @@ pub fn general_v2_treasury_ledger_pda(program_id: &Pubkey, fee_record: &[u8; 32]
     find(program_id, &[SEED_GENERAL_V2_TREASURY_LEDGER, fee_record])
 }
 
+/// Canonical streaming fee-retirement accumulator for one selected record.
+pub fn general_v2_fee_retirement_accumulator_pda(
+    program_id: &Pubkey,
+    fee_record: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            clutch_general_v2_contract::FEE_RETIREMENT_ACCUMULATOR_SEED_DOMAIN_V1,
+            fee_record,
+        ],
+    )
+}
+
+/// Canonical durable candidate-wide fee-closure manifest.
+pub fn general_v2_fee_closure_manifest_pda(
+    program_id: &Pubkey,
+    fee_record: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            clutch_general_v2_contract::FEE_CLOSURE_MANIFEST_SEED_DOMAIN_V1,
+            fee_record,
+        ],
+    )
+}
+
+/// Canonical durable candidate-wide fee terminal receipt.
+pub fn general_v2_fee_terminal_receipt_pda(
+    program_id: &Pubkey,
+    fee_record: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            clutch_general_v2_contract::FEE_TERMINAL_RECEIPT_SEED_DOMAIN_V1,
+            fee_record,
+        ],
+    )
+}
+
 /// Canonical disabled buyer-first cash-pot address for one final candidate.
 pub fn general_v2_settlement_cash_pot_pda(
     program_id: &Pubkey,
