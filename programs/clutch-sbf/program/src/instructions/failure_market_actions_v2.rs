@@ -7,18 +7,423 @@
 
 use std::boxed::Box;
 
-use crate::accounts::{require_distinct, Outcome};
+use crate::accounts::{require, require_distinct, Outcome};
+use crate::error::ClutchError;
 use crate::instructions::failure_market_dispatch_v2::{
     account_for_role_v2, FailureMarketAccountRoleV2 as Role, FailureMarketActionPayloadV2,
 };
-use crate::instructions::failure_market_execution_v2::authenticate_failure_market_execution_v2;
+use crate::instructions::failure_market_execution_v2::{
+    authenticate_failure_market_execution_v2, authenticate_failure_market_product_context_v2,
+    authenticate_failure_market_source_route_v2,
+};
+use crate::instructions::failure_market_interval_advance_v2::advance_failure_market_interval_paid_v2;
 use crate::instructions::failure_market_interval_v2::exhaust_and_archive_failure_market_interval_session_v2;
+use crate::instructions::product_failure_begin::{
+    authenticate_product_failure_begin_schedule_v1, begin_failure_market_interval_session_v2,
+};
+use crate::source_plane_v3::authenticate_successful_source_handoff_from_accounts_v1;
 use clutch_solana_layout::product_series::{
     MarketLifecycleRootAccountV1, SeriesMarketLinkAccountV1,
 };
 use clutch_solana_layout::registry::RecoveryAction;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
+
+/// Refuse every alias except one deliberately unioned recipient pair.
+///
+/// Advance permits only Keeper==RecoveryRefundOwner. The inner liveness owner
+/// reauthenticates that union's effective writable metadata and exact economic
+/// identities; no third role may inherit it.
+fn require_distinct_except_pair(
+    accounts: &[AccountInfo<'_>],
+    first: usize,
+    second: usize,
+) -> Outcome<()> {
+    let mut left = 0usize;
+    while left < accounts.len() {
+        let mut right = left + 1;
+        while right < accounts.len() {
+            if accounts[left].key == accounts[right].key {
+                require(
+                    (left == first && right == second) || (left == second && right == first),
+                    ClutchError::AccountAlias,
+                )?;
+            }
+            right += 1;
+        }
+        left += 1;
+    }
+    Ok(())
+}
+
+/// Begin one recurring shared-Market Failure interval from exact Product and
+/// persisted Source authority, then atomically pin the initiating Series link.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn process_begin_failure_market_session_v2(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload: FailureMarketActionPayloadV2<'_>,
+) -> Outcome<()> {
+    let FailureMarketActionPayloadV2::Begin {
+        recovery_quote_schedule,
+        interval_funding_preimage,
+    } = payload
+    else {
+        return crate::instructions::failure_market_dispatch_v2::process_reserved_disabled(
+            RecoveryAction::BeginIntervalConsensus,
+        );
+    };
+    let action = RecoveryAction::BeginIntervalConsensus;
+    require_distinct(accounts)?;
+    let root_account = account_for_role_v2(action, accounts, Role::MarketLifecycleRoot)?;
+    let link_account = account_for_role_v2(action, accounts, Role::SeriesMarketLink)?;
+    let admission_account = account_for_role_v2(action, accounts, Role::FailureAdmissionRoot)?;
+    let runtime_account = account_for_role_v2(action, accounts, Role::FailureRuntimeRoot)?;
+    let cell_account = account_for_role_v2(action, accounts, Role::FailureIntervalCell)?;
+    let history_account = account_for_role_v2(action, accounts, Role::FailureIntervalHistory)?;
+    let series_registry = account_for_role_v2(action, accounts, Role::SeriesRegistry)?;
+    let registry_program = account_for_role_v2(action, accounts, Role::RegistryProgram)?;
+    let registry_programdata = account_for_role_v2(action, accounts, Role::RegistryProgramData)?;
+    let registry_release =
+        account_for_role_v2(action, accounts, Role::RegistryReleaseArtifact)?;
+    let capability_profile =
+        account_for_role_v2(action, accounts, Role::CapabilityProfileArtifact)?;
+    let compiler_bundle = account_for_role_v2(action, accounts, Role::CompilerBundleArtifact)?;
+    let funding_quote = account_for_role_v2(action, accounts, Role::FundingQuoteArtifact)?;
+    let series_plan = account_for_role_v2(action, accounts, Role::SeriesPlanArtifact)?;
+    let template = account_for_role_v2(action, accounts, Role::ProductTemplateArtifact)?;
+    let basis = account_for_role_v2(action, accounts, Role::NativeClaimBasisArtifact)?;
+    let recovery_policy = account_for_role_v2(action, accounts, Role::RecoveryPolicyArtifact)?;
+    let price = account_for_role_v2(action, accounts, Role::PriceMeasurePolicyArtifact)?;
+    let genesis = account_for_role_v2(action, accounts, Role::MarketGenesisArtifact)?;
+    let attachment = account_for_role_v2(action, accounts, Role::AttachmentPlanArtifact)?;
+    let market = account_for_role_v2(action, accounts, Role::MarketInstanceArtifact)?;
+    let source_release = account_for_role_v2(action, accounts, Role::SourceRelease)?;
+    let source_adapter = account_for_role_v2(action, accounts, Role::SourceAdapterProgram)?;
+    let source_adapter_data =
+        account_for_role_v2(action, accounts, Role::SourceAdapterProgramData)?;
+    let source_parser = account_for_role_v2(action, accounts, Role::SourceParserProgram)?;
+    let source_parser_data =
+        account_for_role_v2(action, accounts, Role::SourceParserProgramData)?;
+    let source_parser_config = account_for_role_v2(action, accounts, Role::SourceParserConfig)?;
+    let source_spec = account_for_role_v2(action, accounts, Role::SourceSpec)?;
+    let source_work_schedule =
+        account_for_role_v2(action, accounts, Role::SourceWorkSchedule)?;
+    let source_occurrence = account_for_role_v2(action, accounts, Role::SourceOccurrence)?;
+    let source_window = account_for_role_v2(action, accounts, Role::SourceWindowArtifact)?;
+    let source_key = account_for_role_v2(action, accounts, Role::SourceStatisticKeyArtifact)?;
+    let source_summary = account_for_role_v2(action, accounts, Role::SourceSummaryArtifact)?;
+    let source_seal = account_for_role_v2(action, accounts, Role::SourceWindowSeal)?;
+    let source_result = account_for_role_v2(action, accounts, Role::SourceStatisticResult)?;
+    let source_lineage = account_for_role_v2(action, accounts, Role::SourceResultLineage)?;
+    let source_handoff = account_for_role_v2(action, accounts, Role::SourceHandoffReceipt)?;
+    let source_work_receipt = account_for_role_v2(action, accounts, Role::SourceWorkReceipt)?;
+    let liveness_policy = account_for_role_v2(action, accounts, Role::FailureLivenessPolicy)?;
+
+    let mut root_before = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
+    let mut link_before = Box::new(SeriesMarketLinkAccountV1::decode_buffer());
+    let execution = authenticate_failure_market_execution_v2(
+        program_id,
+        root_account,
+        link_account,
+        admission_account,
+        runtime_account,
+        cell_account,
+        history_account,
+        series_registry,
+        registry_program,
+        registry_programdata,
+        registry_release,
+        capability_profile,
+        compiler_bundle,
+        funding_quote,
+        liveness_policy,
+        recovery_quote_schedule,
+        interval_funding_preimage,
+        false,
+        true,
+        true,
+        false,
+        &mut root_before,
+        &mut link_before,
+    )?;
+    execution.require_next_sequence(sequence)?;
+    let source = authenticate_failure_market_source_route_v2(
+        program_id,
+        &execution,
+        source_release,
+        source_adapter,
+        source_adapter_data,
+        source_parser,
+        source_parser_data,
+        source_parser_config,
+        source_spec,
+        source_work_schedule,
+    )?;
+    let successful = authenticate_successful_source_handoff_from_accounts_v1(
+        program_id,
+        source.route(),
+        source.schedule(),
+        source_occurrence,
+        source_window,
+        source_key,
+        source_summary,
+        source_seal,
+        source_result,
+        source_lineage,
+        source_handoff,
+        source_work_receipt,
+    )?;
+    let product = authenticate_failure_market_product_context_v2(
+        program_id,
+        &execution,
+        template,
+        basis,
+        price,
+        genesis,
+        market,
+    )?;
+    let mut schedule_root = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
+    let mut schedule_link = Box::new(SeriesMarketLinkAccountV1::decode_buffer());
+    let schedule = authenticate_product_failure_begin_schedule_v1(
+        program_id,
+        root_account,
+        link_account,
+        execution.root(),
+        execution.link(),
+        execution.registry(),
+        compiler_bundle,
+        series_plan,
+        template,
+        basis,
+        recovery_policy,
+        price,
+        genesis,
+        attachment,
+        market,
+        &mut schedule_root,
+        &mut schedule_link,
+    )?;
+    let interval = successful.interval();
+    let occurrence = interval.occurrence();
+    let result = interval.statistic_result();
+    let statistic_key = interval.statistic_key();
+    let summary = interval.summary_program();
+    let seal = interval.window_seal();
+    let window = interval.window();
+    let context = product.context(
+        &occurrence,
+        &result,
+        &statistic_key,
+        &summary,
+        &seal,
+        &window,
+    );
+    let mut root_rebound = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
+    let mut link_rebound = Box::new(SeriesMarketLinkAccountV1::decode_buffer());
+    let _ = begin_failure_market_interval_session_v2(
+        program_id,
+        root_account,
+        link_account,
+        cell_account,
+        history_account,
+        admission_account,
+        runtime_account,
+        execution.root(),
+        execution.link(),
+        execution.admission(),
+        execution.runtime(),
+        execution.interval(),
+        schedule,
+        successful.join(),
+        successful.handoff(),
+        context,
+        &mut root_rebound,
+        &mut link_rebound,
+    )?;
+    Ok(())
+}
+
+/// Apply one exact priced progress step through the sole Recovery custody.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn process_advance_failure_market_session_v2(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload: FailureMarketActionPayloadV2<'_>,
+) -> Outcome<()> {
+    let FailureMarketActionPayloadV2::Advance {
+        requested_coordinates,
+        recovery_quote_schedule,
+        interval_funding_preimage,
+    } = payload
+    else {
+        return crate::instructions::failure_market_dispatch_v2::process_reserved_disabled(
+            RecoveryAction::AdvanceIntervalConsensus,
+        );
+    };
+    let action = RecoveryAction::AdvanceIntervalConsensus;
+    let refund_index = accounts
+        .len()
+        .checked_sub(1)
+        .ok_or(ClutchError::WrongAccountCount)?;
+    let keeper_index = refund_index
+        .checked_sub(1)
+        .ok_or(ClutchError::WrongAccountCount)?;
+    require_distinct_except_pair(accounts, keeper_index, refund_index)?;
+    let root_account = account_for_role_v2(action, accounts, Role::MarketLifecycleRoot)?;
+    let link_account = account_for_role_v2(action, accounts, Role::SeriesMarketLink)?;
+    let admission_account = account_for_role_v2(action, accounts, Role::FailureAdmissionRoot)?;
+    let runtime_account = account_for_role_v2(action, accounts, Role::FailureRuntimeRoot)?;
+    let cell_account = account_for_role_v2(action, accounts, Role::FailureIntervalCell)?;
+    let history_account = account_for_role_v2(action, accounts, Role::FailureIntervalHistory)?;
+    let series_registry = account_for_role_v2(action, accounts, Role::SeriesRegistry)?;
+    let registry_program = account_for_role_v2(action, accounts, Role::RegistryProgram)?;
+    let registry_programdata = account_for_role_v2(action, accounts, Role::RegistryProgramData)?;
+    let registry_release =
+        account_for_role_v2(action, accounts, Role::RegistryReleaseArtifact)?;
+    let capability_profile =
+        account_for_role_v2(action, accounts, Role::CapabilityProfileArtifact)?;
+    let compiler_bundle = account_for_role_v2(action, accounts, Role::CompilerBundleArtifact)?;
+    let funding_quote = account_for_role_v2(action, accounts, Role::FundingQuoteArtifact)?;
+    let template = account_for_role_v2(action, accounts, Role::ProductTemplateArtifact)?;
+    let basis = account_for_role_v2(action, accounts, Role::NativeClaimBasisArtifact)?;
+    let price = account_for_role_v2(action, accounts, Role::PriceMeasurePolicyArtifact)?;
+    let genesis = account_for_role_v2(action, accounts, Role::MarketGenesisArtifact)?;
+    let market = account_for_role_v2(action, accounts, Role::MarketInstanceArtifact)?;
+    let source_release = account_for_role_v2(action, accounts, Role::SourceRelease)?;
+    let source_adapter = account_for_role_v2(action, accounts, Role::SourceAdapterProgram)?;
+    let source_adapter_data =
+        account_for_role_v2(action, accounts, Role::SourceAdapterProgramData)?;
+    let source_parser = account_for_role_v2(action, accounts, Role::SourceParserProgram)?;
+    let source_parser_data =
+        account_for_role_v2(action, accounts, Role::SourceParserProgramData)?;
+    let source_parser_config = account_for_role_v2(action, accounts, Role::SourceParserConfig)?;
+    let source_spec = account_for_role_v2(action, accounts, Role::SourceSpec)?;
+    let source_work_schedule =
+        account_for_role_v2(action, accounts, Role::SourceWorkSchedule)?;
+    let source_occurrence = account_for_role_v2(action, accounts, Role::SourceOccurrence)?;
+    let source_window = account_for_role_v2(action, accounts, Role::SourceWindowArtifact)?;
+    let source_key = account_for_role_v2(action, accounts, Role::SourceStatisticKeyArtifact)?;
+    let source_summary = account_for_role_v2(action, accounts, Role::SourceSummaryArtifact)?;
+    let source_seal = account_for_role_v2(action, accounts, Role::SourceWindowSeal)?;
+    let source_result = account_for_role_v2(action, accounts, Role::SourceStatisticResult)?;
+    let source_lineage = account_for_role_v2(action, accounts, Role::SourceResultLineage)?;
+    let source_handoff = account_for_role_v2(action, accounts, Role::SourceHandoffReceipt)?;
+    let source_work_receipt = account_for_role_v2(action, accounts, Role::SourceWorkReceipt)?;
+    let liveness_policy = account_for_role_v2(action, accounts, Role::FailureLivenessPolicy)?;
+    let recovery = account_for_role_v2(action, accounts, Role::FailureRecoveryCompartment)?;
+    let keeper = account_for_role_v2(action, accounts, Role::Keeper)?;
+    let refund = account_for_role_v2(action, accounts, Role::RecoveryRefundOwner)?;
+
+    let mut root_before = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
+    let mut link_before = Box::new(SeriesMarketLinkAccountV1::decode_buffer());
+    let execution = authenticate_failure_market_execution_v2(
+        program_id,
+        root_account,
+        link_account,
+        admission_account,
+        runtime_account,
+        cell_account,
+        history_account,
+        series_registry,
+        registry_program,
+        registry_programdata,
+        registry_release,
+        capability_profile,
+        compiler_bundle,
+        funding_quote,
+        liveness_policy,
+        recovery_quote_schedule,
+        interval_funding_preimage,
+        false,
+        false,
+        true,
+        false,
+        &mut root_before,
+        &mut link_before,
+    )?;
+    execution.require_next_sequence(sequence)?;
+    let source = authenticate_failure_market_source_route_v2(
+        program_id,
+        &execution,
+        source_release,
+        source_adapter,
+        source_adapter_data,
+        source_parser,
+        source_parser_data,
+        source_parser_config,
+        source_spec,
+        source_work_schedule,
+    )?;
+    let successful = authenticate_successful_source_handoff_from_accounts_v1(
+        program_id,
+        source.route(),
+        source.schedule(),
+        source_occurrence,
+        source_window,
+        source_key,
+        source_summary,
+        source_seal,
+        source_result,
+        source_lineage,
+        source_handoff,
+        source_work_receipt,
+    )?;
+    let product = authenticate_failure_market_product_context_v2(
+        program_id,
+        &execution,
+        template,
+        basis,
+        price,
+        genesis,
+        market,
+    )?;
+    let interval = successful.interval();
+    let occurrence = interval.occurrence();
+    let result = interval.statistic_result();
+    let statistic_key = interval.statistic_key();
+    let summary = interval.summary_program();
+    let seal = interval.window_seal();
+    let window = interval.window();
+    let context = product.context(
+        &occurrence,
+        &result,
+        &statistic_key,
+        &summary,
+        &seal,
+        &window,
+    );
+    let mut root_reopen = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
+    let mut link_reopen = Box::new(SeriesMarketLinkAccountV1::decode_buffer());
+    let _ = advance_failure_market_interval_paid_v2(
+        program_id,
+        root_account,
+        link_account,
+        cell_account,
+        history_account,
+        admission_account,
+        runtime_account,
+        liveness_policy,
+        recovery,
+        keeper,
+        refund,
+        execution.registry(),
+        execution.root(),
+        execution.link(),
+        execution.admission(),
+        execution.runtime(),
+        execution.interval(),
+        successful.join(),
+        successful.handoff(),
+        context,
+        requested_coordinates,
+        &mut root_reopen,
+        &mut link_reopen,
+    )?;
+    Ok(())
+}
 
 /// Execute the deterministic finite-exhaustion action13 path.
 ///
@@ -116,6 +521,49 @@ pub(crate) fn process_archive_failure_market_session_v2(
 
 #[cfg(test)]
 mod adversarial_action_tests {
+    #[test]
+    fn begin_reconstructs_source_and_compiler_authority_before_atomic_pin() {
+        let source = include_str!("failure_market_actions_v2.rs");
+        let handler = source
+            .split("fn process_begin_failure_market_session_v2")
+            .nth(1)
+            .and_then(|value| value.split("fn process_advance_failure_market_session_v2").next())
+            .expect("action10 handler");
+        for owner in [
+            "require_distinct(accounts)",
+            "authenticate_failure_market_execution_v2",
+            "execution.require_next_sequence(sequence)",
+            "authenticate_failure_market_source_route_v2",
+            "authenticate_successful_source_handoff_from_accounts_v1",
+            "authenticate_product_failure_begin_schedule_v1",
+            "begin_failure_market_interval_session_v2",
+        ] {
+            assert!(handler.contains(owner));
+        }
+        assert!(!handler.contains("ExternalRecoveryStateV1"));
+    }
+
+    #[test]
+    fn advance_reconstructs_source_and_allows_only_keeper_refund_union() {
+        let source = include_str!("failure_market_actions_v2.rs");
+        let handler = source
+            .split("fn process_advance_failure_market_session_v2")
+            .nth(1)
+            .and_then(|value| value.split("fn process_archive_failure_market_session_v2").next())
+            .expect("action11 handler");
+        for owner in [
+            "require_distinct_except_pair(accounts, keeper_index, refund_index)",
+            "authenticate_failure_market_execution_v2",
+            "execution.require_next_sequence(sequence)",
+            "authenticate_successful_source_handoff_from_accounts_v1",
+            "authenticate_failure_market_product_context_v2",
+            "advance_failure_market_interval_paid_v2",
+        ] {
+            assert!(handler.contains(owner));
+        }
+        assert!(!handler.contains("ExternalRecoveryStateV1"));
+    }
+
     #[test]
     fn action13_has_one_typed_routed_outer_and_no_recovery_close() {
         let source = include_str!("failure_market_actions_v2.rs");

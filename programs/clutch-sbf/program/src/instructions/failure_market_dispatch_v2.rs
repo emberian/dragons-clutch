@@ -10,7 +10,10 @@
 use crate::accounts::{require, Outcome};
 use crate::capabilities;
 use crate::error::ClutchError;
-use crate::instructions::failure_market_actions_v2::process_archive_failure_market_session_v2;
+use crate::instructions::failure_market_actions_v2::{
+    process_advance_failure_market_session_v2, process_archive_failure_market_session_v2,
+    process_begin_failure_market_session_v2,
+};
 use crate::instructions::failure_market_interval_v2::FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2;
 use crate::instructions::failure_market_replay_v2::FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2;
 use clutch_failure_policy_runtime::market_quote_v1::FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1;
@@ -510,12 +513,16 @@ pub fn process(
     let payload = decode_payload_v2(action, payload)?;
     validate_account_contract_v2(action, accounts)?;
     match action {
+        RecoveryAction::BeginIntervalConsensus => {
+            process_begin_failure_market_session_v2(program_id, accounts, sequence, payload)
+        }
+        RecoveryAction::AdvanceIntervalConsensus => {
+            process_advance_failure_market_session_v2(program_id, accounts, sequence, payload)
+        }
         RecoveryAction::CloseIntervalConsensusWork => {
             process_archive_failure_market_session_v2(program_id, accounts, sequence, payload)
         }
-        RecoveryAction::BeginIntervalConsensus
-        | RecoveryAction::AdvanceIntervalConsensus
-        | RecoveryAction::ResolveIntervalConsensus => {
+        RecoveryAction::ResolveIntervalConsensus => {
             Err(ClutchError::UnsupportedInstruction.into())
         }
         RecoveryAction::InitializeFailureRoot
