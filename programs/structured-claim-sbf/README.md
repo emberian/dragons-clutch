@@ -44,16 +44,19 @@ are the distinct Hoard authority, neutral token, Structured root, Product
 `0xad` link, and immutable FundingTermsV2 artifact; the three loader releases
 follow them at indices 29 through 31.
 Descriptor retirement uses a 33-account frame. Its two additional read-only
-roles reopen the exact current BundleV6 and AttachmentV5 consumed by Product's
-private LinkV2 terminal writer. The wrapper first revokes the
+roles reopen the exact current BundleV6 and AttachmentV5 used to reauthenticate
+the Product lineage without borrowing Product write authority. The wrapper first revokes the
 zero-supply mint through its private mint-authority PDA, persists the descriptor
 tombstone, and calls the base with only the distinct vault-owner PDA signed.
 The base seals the purpose Replay, writes the permanent Position tombstone,
 deletes Replay with exact principal/donation disposition, advances the
-Structured root, and, for the last descriptor only, consumes Product's Wrapper
-obligation through Product's private terminal receipt before deleting the root.
-The wrapper hostile-reconciles every postimage and exact rent delta. Descriptor
-v1 is decode-only; live state is descriptor v2.
+Structured root, and physically deletes the final root with exact
+principal/donation separation. That last close yields one non-Copy
+Structured-family receipt inside the base invocation. Until the current Product
+RootV3/LinkV3 consumer is composed in that same invocation, the public final
+route deliberately fails and SVM rollback prevents a detached terminal receipt.
+The wrapper hostile-reconciles every successful postimage and exact rent delta.
+Descriptor v1 is decode-only; live state is descriptor v2.
 
 Every route requires `ObservedPositive` wrapper/base/Token-2022 release
 artifacts. Each release reauthenticates the executable Program's linked

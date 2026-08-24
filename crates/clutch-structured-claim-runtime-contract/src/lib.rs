@@ -79,7 +79,7 @@ pub use projection::{
 pub use terminal::{
     prepare_structured_descriptor_terminal_owner_v1, prepare_structured_descriptor_terminal_v1,
     StructuredDescriptorTerminalOwnerPlanV1, StructuredDescriptorTerminalPlanV1,
-    StructuredProductWrapperTerminalProjectionV1, StructuredRootCloseDispositionV1,
+    StructuredRootCloseDispositionV1,
     STRUCTURED_DESCRIPTOR_ACTIVE_BODY_DOMAIN_V1, STRUCTURED_DESCRIPTOR_CLOSE_RECEIPT_DOMAIN_V1,
     STRUCTURED_DESCRIPTOR_RETIRED_BODY_DOMAIN_V1,
 };

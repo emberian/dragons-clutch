@@ -20,6 +20,7 @@ use crate::source_plane_v3_actions::SourceLifecycleCapitalizationQuoteV1;
 use clutch_product_series::{
     AuthenticatedSeriesFundingAuthorityV5, CompiledProductSeriesBundleV7Id,
     ComponentDebitV1, ContentId, SeriesAttachmentPlanV6, SeriesFundingAbortBindingV5,
+    MarketFoundationScheduleV4Id,
     SeriesFundingComponentV2, SeriesFundingCompletionBindingV5,
     SeriesFundingQuoteV6, SeriesFundingReservationBindingV5, SeriesFundingStateV5,
     SeriesFundingStateV5Id, SeriesFundingTerminalProjectionV5, SeriesFundingTermsV2Id,
@@ -355,6 +356,7 @@ pub(crate) struct AuthenticatedSeriesPhysicalCapitalizationV5 {
     funding_terms_id: ContentId,
     compiler_bundle_id: ContentId,
     funding_quote_id: ContentId,
+    foundation_schedule_id: MarketFoundationScheduleV4Id,
     attachment_plan_id: ContentId,
     registry_account: Pubkey,
     registry_authentication_id: ContentId,
@@ -450,6 +452,10 @@ impl AuthenticatedSeriesPhysicalCapitalizationV5 {
 
     pub(crate) const fn funding_quote_id(&self) -> ContentId {
         self.funding_quote_id
+    }
+
+    pub(crate) const fn foundation_schedule_id(&self) -> MarketFoundationScheduleV4Id {
+        self.foundation_schedule_id
     }
 
     pub(crate) const fn attachment_plan_id(&self) -> ContentId {
@@ -569,6 +575,10 @@ impl AuthenticatedSeriesPhysicalFounderV5 {
 
     pub(crate) const fn attachment_plan_id(&self) -> ContentId {
         self.capitalization.attachment_plan_id
+    }
+
+    pub(crate) const fn foundation_schedule_id(&self) -> MarketFoundationScheduleV4Id {
+        self.capitalization.foundation_schedule_id
     }
 
     pub(crate) const fn collateral_realm_id(&self) -> ContentId {
@@ -1834,6 +1844,11 @@ pub(crate) fn capitalize_current_series_physical_v5<'a>(
         .attachment()
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let foundation_schedule_id = artifacts
+        .quote()
+        .foundation
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let live_registry = authenticate_series_registry_account_v4(
         program_id,
         registry_account,
@@ -2054,6 +2069,7 @@ pub(crate) fn capitalize_current_series_physical_v5<'a>(
             &registry_value.rent_principal_lamports.to_le_bytes(),
             &live_registry.observed_lamports().to_le_bytes(),
             &bundle.bundle_id().bytes(),
+            &foundation_schedule_id.bytes(),
             &lamport.id.bytes(),
             &collateral.id.bytes(),
             funding_account.key.as_ref(),
@@ -2084,6 +2100,7 @@ pub(crate) fn capitalize_current_series_physical_v5<'a>(
         funding_terms_id: funding_terms_id.content_id(),
         compiler_bundle_id: bundle.bundle_id().content_id(),
         funding_quote_id: funding_quote_id.content_id(),
+        foundation_schedule_id,
         attachment_plan_id: attachment_plan_id.content_id(),
         registry_account: live_registry.account(),
         registry_authentication_id: live_registry.authentication_id(),
@@ -2244,6 +2261,7 @@ mod source_invariants {
             "registry_capability_id",
             "compiler_bundle_id",
             "funding_quote_id",
+            "foundation_schedule_id",
             "attachment_plan_id",
             "funding_authentication_id",
             "programdata_sha256",

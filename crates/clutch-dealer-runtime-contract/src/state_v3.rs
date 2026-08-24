@@ -212,6 +212,40 @@ impl DealerStateV3 {
         Ok(next)
     }
 
+    /// Close the exact live current binding only after Dealer has physically
+    /// terminalized its Position/Replay and the disjoint value owner.
+    ///
+    /// Product does not authorize this local child deletion. The adapter must
+    /// retain the resulting non-Copy Dealer family receipt and pass it directly
+    /// to Product's successor terminal writer in the same rollback domain.
+    pub fn close_current_live_binding_after_value(
+        self,
+        binding: &DealerSeriesObligationBindingV2,
+        dealer_value_terminal_receipt_id: Id,
+    ) -> Result<Self> {
+        binding.validate()?;
+        dealer_value_terminal_receipt_id.validate_live()?;
+        if self.series_obligation_children != 1
+            || binding.phase != DealerSeriesObligationPhaseV1::Live
+            || binding.key.binding_account_id != self.series_obligation_binding_account_id
+            || binding.binding_id()? != self.series_obligation_binding_id
+            || self.base.phase != DealerPhaseV2::Retiring
+            || self.base.children.facility_positions != 0
+            || self.base.children.facility_replays != 0
+            || self.base.terminal_state_receipt_id.is_zero()
+            || self.base.terminal_replay_semantic_id.is_zero()
+        {
+            return Err(Error::MismatchedBinding);
+        }
+        let next = Self {
+            series_obligation_binding_account_id: Id::ZERO,
+            series_obligation_children: 0,
+            ..self
+        };
+        next.validate()?;
+        Ok(next)
+    }
+
     /// Validate the combined exhaustive child partition.
     pub fn validate(&self) -> Result<()> {
         self.base.validate()?;
