@@ -12,11 +12,12 @@
 //! Position balances, Replay ordinals, the immutable Resolution vector, and
 //! Realm collateral remain owned by their canonical components.
 //!
-//! The Solana account adapter remains capability-disabled. It must establish
-//! program ownership, canonical PDAs, signers, the immutable Resolution and
-//! full-width ClaimLedger V3/Hoard V2 owners, exact Token-2022 burn deltas,
-//! exact Realm-selected collateral deltas, rent exemption, and rollback before
-//! committing one of this crate's complete plans.
+//! The concrete Solana account adapter exists, but every action remains
+//! capability-disabled. Its handlers establish program ownership, canonical
+//! PDAs, signers, the immutable Resolution and full-width ClaimLedger V3/Hoard
+//! V2 owners, exact Token-2022 burn deltas, exact Realm-selected collateral
+//! deltas, rent exemption, and rollback before committing one of this crate's
+//! complete plans.
 
 mod account;
 mod adapter;

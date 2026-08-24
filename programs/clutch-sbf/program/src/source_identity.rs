@@ -9,16 +9,9 @@
 //!
 //! ## The two blocks
 //!
-//! * [`fixture`] — the fabricated Pyth-shaped identity used by bank tests and
-//!   the local-validator walk. It is compiled only into the explicit
-//!   `non-production-mock-source` ELF and retires
-//!   `SourceReleaseUnavailable` (`0x79`) for exactly one laboratory spec.
-//!   Every one of its account addresses is a program-derived address, so no
-//!   private key exists for any of them and no account can be created at them
-//!   on a real cluster by anyone. See [`fixture`]'s own documentation for the
-//!   full unreachability argument, which
-//!   `fixture_addresses_are_program_derived_and_therefore_unreachable` and
-//!   `programs/clutch-sbf/svm-tests/tests/r2_pull_identity.rs` check.
+//! * [`fixture`] — the retired fabricated Pyth-shaped identity retained only
+//!   as hostile decoder input and shared adapter-version test data. No feature
+//!   registers it and no deployable ELF can admit it.
 //! * [`mainnet`] — the production pins. **Every value is `None`/absent and the
 //!   production release is not registered.** Filling this block in is the E2
 //!   freeze act of `docs/implementation/R2_PHASE0_RUNBOOK.md` §4.3, and it is
@@ -49,14 +42,6 @@ use crate::instructions_sysvar::{
     PostAbiPositionsV1, PostAbiV2, META_FLAG_IS_SIGNER, META_FLAG_IS_WRITABLE,
 };
 use crate::loader_state::UPGRADEABLE_LOADER_ID;
-
-#[cfg(all(
-    feature = "non-production-mock-source",
-    feature = "non-production-real-pyth-lab"
-))]
-compile_error!(
-    "non-production-mock-source and non-production-real-pyth-lab are distinct ELF identities"
-);
 
 /// Canonical Clock sysvar address, `SysvarC1ock11111111111111111111111111111111`.
 ///
@@ -103,19 +88,18 @@ pub struct PullReleaseV2 {
     pub post_abi: PostAbiV2,
 }
 
-/// The fabricated, provably unreachable Pyth-shaped laboratory identity.
+/// The retired fabricated Pyth-shaped hostile-test identity.
 ///
 /// ## Why a fabricated identity remains available
 ///
-/// This identity exercises the complete source lifecycle in an explicitly
-/// non-production mock-source ELF. The default ELF deliberately registers no
-/// fabricated release; local lifecycle evidence therefore cannot be mistaken
-/// for source authority in the artifact intended for real infrastructure.
+/// No current feature registers this identity. It remains available only to
+/// prove that a structurally valid but unregistered source release refuses.
 ///
 /// ## Why it admits nothing anywhere
 ///
-/// Value admission through this release requires an executable, loader-owned
-/// account to exist at [`fixture::RECEIVER_PROGRAM`]. That address is
+/// The release is absent from [`REGISTERED_RELEASES`] in every current ELF, so
+/// selection refuses before account authentication. Independently, its old
+/// receiver address is
 /// `find_program_address(&[b"dc-r2-fixture-receiver"], &UPGRADEABLE_LOADER_ID)`
 /// — a program-derived address, hence off the ed25519 curve, hence no private
 /// key exists for it. Deploying a program requires the program account to sign
@@ -127,20 +111,14 @@ pub struct PullReleaseV2 {
 /// the fixture is
 /// structurally a deployment rather than a stand-in for one.
 ///
-/// A local bank and a local validator can place arbitrary accounts at
-/// arbitrary addresses, which is exactly why the lifecycle runs there and
-/// nowhere else.
-///
 /// ## What it is not
 ///
 /// It is **not** the "interim registry entry to get ahead" that
 /// `R2_PULL_PROMOTION_PLAN.md` §6 forbids: that prohibition is about admitting
 /// a *provisional production Pyth identity* before the E2 freeze, and no Pyth
 /// address, feed id, config digest, or deployment slot appears anywhere in this
-/// module. It is also not production-provider evidence: a green campaign here
-/// says the *runtime path* is correct, never that the *provider* behaves as
-/// modeled (`R2_PULL_PROMOTION_PLAN.md` §6, `PYTH_PULL_PROFILE_R2.md` §"Default
-/// release STOPs", all of which remain open).
+/// module. Historical campaigns that used this row are retained only as
+/// historical evidence and confer no current runtime authority.
 pub mod fixture {
     use super::{
         PostAbiPositionsV1, PostAbiV2, PullReleaseV2, CLOCK_SYSVAR_ID, META_FLAG_IS_SIGNER,
@@ -646,15 +624,8 @@ pub fn select_release(spec: crate::source_v2::spec::SourceSpecV2) -> Option<Pull
 /// collateral boundary, and again at resolution. Adding a row is a new ELF
 /// identity and a full reseal cycle by construction
 /// (`R2_PULL_PROMOTION_PLAN.md` §4 item 3).
-#[cfg(not(any(
-    feature = "non-production-mock-source",
-    feature = "non-production-real-pyth-lab"
-)))]
+#[cfg(not(feature = "non-production-real-pyth-lab"))]
 pub const REGISTERED_RELEASES: &[PullReleaseV2] = &[];
-
-/// The fabricated row exists only in the explicit mock-source ELF.
-#[cfg(feature = "non-production-mock-source")]
-pub const REGISTERED_RELEASES: &[PullReleaseV2] = &[fixture::RELEASE];
 
 /// The real observed Pyth row exists alone in its unmistakably non-production
 /// laboratory ELF; it never inherits the fabricated fixture authority.
@@ -690,13 +661,8 @@ mod tests {
         assert!(mainnet::PARSER_VERSION.is_none());
         assert!(mainnet::ACTIVATION_UNIX_TIMESTAMP.is_none());
         assert!(mainnet::POST_ABI.is_none());
-        #[cfg(not(any(
-            feature = "non-production-mock-source",
-            feature = "non-production-real-pyth-lab"
-        )))]
+        #[cfg(not(feature = "non-production-real-pyth-lab"))]
         assert!(REGISTERED_RELEASES.is_empty());
-        #[cfg(feature = "non-production-mock-source")]
-        assert_eq!(REGISTERED_RELEASES, &[fixture::RELEASE]);
         #[cfg(feature = "non-production-real-pyth-lab")]
         assert_eq!(REGISTERED_RELEASES, &[real_pyth_lab::RELEASE]);
     }
@@ -750,54 +716,8 @@ mod tests {
         fixture::REGISTERED_SPEC_FIELDS
     }
 
-    #[cfg(feature = "non-production-mock-source")]
     #[test]
-    fn the_mock_registry_admits_exactly_the_fixture_release() {
-        use crate::source_v2::spec::{SourceSpecFieldsV2, SourceSpecV2};
-
-        let admitted = SourceSpecV2::new(fixture_spec_fields()).expect("valid spec");
-        assert_eq!(admitted.feed_id(), fixture::REGISTERED_SPEC_ID);
-        assert_eq!(select_release(admitted), Some(fixture::RELEASE));
-
-        // Every structurally flexible field is load-bearing: change any one
-        // while preserving a valid canonical SourceSpec and `0x79` stands.
-        for mutate in [
-            (|c: &mut SourceSpecFieldsV2| c.source_adapter_id[0] ^= 1)
-                as fn(&mut SourceSpecFieldsV2),
-            |c| c.source_adapter_version += 1,
-            |c| c.parser_id += 1,
-            |c| c.parser_version += 1,
-            |c| c.receiver_program[0] ^= 1,
-            |c| c.receiver_programdata[0] ^= 1,
-            |c| c.receiver_config[0] ^= 1,
-            |c| c.config_digest[0] ^= 1,
-            |c| c.provider_feed_id[0] ^= 1,
-            |c| c.programdata_deployment_slot += 1,
-            |c| c.base_asset_id[0] ^= 1,
-            |c| c.quote_asset_id[0] ^= 1,
-            |c| c.normalized_decimals += 1,
-            |c| c.grid_family_id += 1,
-            |c| c.grid_version += 1,
-            |c| c.bucket_seconds += 1,
-            |c| c.boundary_grace_seconds += 1,
-            |c| c.max_staleness_slots += 1,
-            |c| c.max_staleness_seconds += 1,
-            |c| c.max_future_seconds += 1,
-            |c| c.max_confidence_atoms += 1,
-            |c| c.max_confidence_bps += 1,
-            |c| c.confidence_multiplier += 1,
-        ] {
-            let mut case = fixture_spec_fields();
-            mutate(&mut case);
-            let spec = SourceSpecV2::new(case).expect("still structurally valid");
-            assert_ne!(spec.feed_id(), fixture::REGISTERED_SPEC_ID);
-            assert_eq!(select_release(spec), None);
-        }
-    }
-
-    #[cfg(not(feature = "non-production-mock-source"))]
-    #[test]
-    fn non_mock_elf_refuses_the_fixture_release() {
+    fn every_current_elf_refuses_the_retired_fixture_release() {
         use crate::source_v2::spec::SourceSpecV2;
 
         let fixture = SourceSpecV2::new(fixture_spec_fields()).expect("valid fixture spec");

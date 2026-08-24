@@ -21,6 +21,7 @@ use pythnet_sdk::{
 };
 use serde_wormhole::RawMessage;
 use solana_address::Address;
+use clutch_source_plane_v3_runtime::{account_data_id, RuntimeKey};
 use wormhole_sdk::vaa::{Body, Header, Signature as VaaSignature};
 use wormhole_sdk::Vaa;
 
@@ -61,19 +62,58 @@ pub fn captured_operator_releases(
 ) -> Result<(ReleasedProgram, ReleasedProgram), Box<dyn std::error::Error>> {
     let receiver_elf = fixture("receiver.so")?;
     let router_elf = fixture("router.so")?;
+    let receiver_program = receiver_program_body(real_pyth_lab::RECEIVER_PROGRAMDATA);
+    let receiver_programdata = programdata_body(
+        real_pyth_lab::RECEIVER_DEPLOYMENT_SLOT,
+        Some(real_pyth_lab::UPGRADE_AUTHORITY),
+        [0; 32],
+        &receiver_elf,
+    );
+    let router_program = receiver_program_body(real_pyth_lab::ROUTER_PROGRAMDATA);
+    let router_programdata = programdata_body(
+        real_pyth_lab::ROUTER_DEPLOYMENT_SLOT,
+        Some(real_pyth_lab::UPGRADE_AUTHORITY),
+        [0; 32],
+        &router_elf,
+    );
     let receiver = ReleasedProgram {
         program_id: Address::new_from_array(real_pyth_lab::RECEIVER_PROGRAM),
+        program_account_data_id: source_account_data_id(
+            real_pyth_lab::RECEIVER_PROGRAM,
+            &receiver_program,
+        )?,
         program_data: Address::new_from_array(real_pyth_lab::RECEIVER_PROGRAMDATA),
+        programdata_account_data_id: source_account_data_id(
+            real_pyth_lab::RECEIVER_PROGRAMDATA,
+            &receiver_programdata,
+        )?,
         deployment_slot: real_pyth_lab::RECEIVER_DEPLOYMENT_SLOT,
         elf_sha256: sha256_digest(&receiver_elf),
     };
     let router = ReleasedProgram {
         program_id: Address::new_from_array(real_pyth_lab::ROUTER_PROGRAM),
+        program_account_data_id: source_account_data_id(
+            real_pyth_lab::ROUTER_PROGRAM,
+            &router_program,
+        )?,
         program_data: Address::new_from_array(real_pyth_lab::ROUTER_PROGRAMDATA),
+        programdata_account_data_id: source_account_data_id(
+            real_pyth_lab::ROUTER_PROGRAMDATA,
+            &router_programdata,
+        )?,
         deployment_slot: real_pyth_lab::ROUTER_DEPLOYMENT_SLOT,
         elf_sha256: sha256_digest(&router_elf),
     };
     Ok((receiver, router))
+}
+
+fn source_account_data_id(
+    address: [u8; 32],
+    body: &[u8],
+) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+    account_data_id(RuntimeKey::from_bytes(address), body)
+        .map(|identity| identity.bytes())
+        .map_err(|error| format!("Source V3 account digest refused body: {error:?}").into())
 }
 
 pub fn deployment_accounts() -> Result<Vec<ProviderAccount>, Box<dyn std::error::Error>> {

@@ -678,6 +678,8 @@ def main(argv: list[str] | None = None) -> int:
             if (
                 manifest["build_contract"]["cargo_profile_feature"] == "profile-full"
                 and manifest["build_contract"]["source_identity"] == "production-inert"
+                and manifest["build_contract"]["collateral_release_identity"]
+                == "production-inert"
             ):
                 default, default_work = build_once(
                     repo=repo,
@@ -714,6 +716,9 @@ def main(argv: list[str] | None = None) -> int:
                     "name": manifest["profile_name"],
                     "label": manifest["profile_label"],
                     "source_identity": manifest["source_identity"],
+                    "collateral_release_identity": manifest[
+                        "collateral_release_identity"
+                    ],
                     "cargo_features": manifest["cargo_features"],
                     "capability_profile_identity_sha256": manifest[
                         "profile_identity_sha256"
@@ -721,6 +726,8 @@ def main(argv: list[str] | None = None) -> int:
                     "identity_manifest_sha256": manifest["identity_manifest_sha256"],
                     "semantic_owners": manifest["capabilities"],
                     "central_registry": manifest["central_registry"],
+                    "wire_surface": manifest["wire_surface"],
+                    "wire_surface_sha256": manifest["wire_surface_sha256"],
                     "reproducible": True,
                     "measurements": [first, second],
                     "default_feature_equivalence": default_equivalence,

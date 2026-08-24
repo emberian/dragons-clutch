@@ -14,7 +14,7 @@ description = "Fail-closed SourceSeries operator construction with an opt-in loc
 [features]
 default = ["operator"]
 builder = ["dep:solana-keypair"]
-operator = ["dep:base64", "dep:serde", "dep:serde_json", "dep:sha2"]
+operator = ["dep:base64", "dep:serde", "dep:serde_json"]
 campaign = [
   "dep:clutch-sbf",
   "dep:clutch-sbf-svm-tests",
@@ -53,6 +53,7 @@ clutch-batch-policy-identity = { path = "../../../research/batch-policy-identity
 clutch-client-contract = { path = "../../../crates/clutch-client-contract" }
 clutch-collateral-adapter-v2 = { path = "../../../crates/clutch-collateral-adapter-v2" }
 clutch-dealer-runtime-contract = { path = "../../../crates/clutch-dealer-runtime-contract" }
+clutch-direct-market-runtime = { path = "../../../crates/clutch-direct-market-runtime" }
 clutch-failure-policy-runtime = { path = "../../../crates/clutch-failure-policy-runtime" }
 clutch-fractional-redemption-runtime = { path = "../../../crates/clutch-fractional-redemption-runtime" }
 clutch-general-v2-contract = { path = "../../../crates/clutch-general-v2-contract" }
@@ -83,7 +84,7 @@ base64 = { version = "=0.22.1", optional = true }
 bincode = "=1.3.3"
 serde = { version = "=1.0.228", features = ["derive"], optional = true }
 serde_json = { version = "=1.0.151", optional = true }
-sha2 = { version = "=0.10.9", optional = true }
+sha2 = "=0.10.9"
 
 # Same coherent host transaction stack as svm-tests/devnet-paces.
 solana-account = { version = "=4.3.2", optional = true }

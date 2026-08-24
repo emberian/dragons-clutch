@@ -1,3 +1,7 @@
+#![cfg(any())]
+//! Historical Direct V2 bank campaign. The wire remains decode-only, while
+//! the handler is intentionally absent from every current program artifact.
+//!
 //! Real-SBF evidence for the bounded V2 authority chain and its measured cost.
 //!
 //! Candidate, Window, receipt, pot, and Epoch accounts start as predictable

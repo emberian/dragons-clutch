@@ -6,12 +6,10 @@
 //! bytes: append and seal read the frozen source account through a
 //! compile-time parser selected by a closed registry.
 //!
-//! The default build deliberately registers no source release.  It therefore
-//! refuses every action with [`ClutchError::SourceReleaseUnavailable`] before
-//! a CPI or state write.  The `non-production-mock-source` feature changes the
-//! ELF and installs one deterministic laboratory parser/deployment pair for
-//! local-bank lifecycle evidence.  It is not a provider ABI and is not a
-//! production deployment candidate.
+//! This withdrawn V1 family registers no source release. It therefore refuses
+//! every action with [`ClutchError::SourceReleaseUnavailable`] before a CPI or
+//! state write. Real source admission belongs to the successor Source plane;
+//! there is no alternate mock-source ELF.
 
 use crate::accounts::{
     expect_pda, require, require_count, require_distinct, require_signer, Outcome,
@@ -20,15 +18,11 @@ use crate::error::{ClutchError, Refusal};
 use crate::instructions::{artifact, construction, genesis};
 use crate::seeds;
 use crate::source::{check_terms_binding, SourceSpecV1, TermsSourceBindingV1, TrustedClockV1};
-#[cfg(feature = "non-production-mock-source")]
-use crate::source::{PriceParserV1, SourceAccountView, SourceError};
 use crate::source_archive::{
     self, ArchiveAccountViewV1, SealedArchiveReceiptV1, SourceArchiveError,
     SourceSpecAccountViewV1, VerifiedSourceSpecAccountV1, SOURCE_ARCHIVE_ACCOUNT_V1_BYTES,
     SOURCE_SPEC_ACCOUNT_V1_BYTES,
 };
-#[cfg(feature = "non-production-mock-source")]
-use crate::source_archive::{DeploymentAuthenticatorV1, RuntimeAccountViewV1};
 #[cfg(not(feature = "profile-full"))]
 use crate::source_archive_v2::SOURCE_SPEC_ACCOUNT_V2_BYTES;
 use crate::source_archive_v2::{
@@ -729,117 +723,8 @@ fn source_refusal(_: SourceArchiveError) -> Refusal {
     Refusal::Adapter(ClutchError::SourceAdmissionFailed)
 }
 
-#[cfg(feature = "non-production-mock-source")]
-fn source_view<'data>(account: &AccountInfo<'_>, data: &'data [u8]) -> SourceAccountView<'data> {
-    SourceAccountView::new(
-        account.key.to_bytes(),
-        account.owner.to_bytes(),
-        account.executable,
-        data,
-    )
-}
-
-#[cfg(feature = "non-production-mock-source")]
-fn runtime_view<'data>(
-    account: &AccountInfo<'_>,
-    data: &'data [u8],
-) -> RuntimeAccountViewV1<'data> {
-    RuntimeAccountViewV1::new(
-        account.key.to_bytes(),
-        account.owner.to_bytes(),
-        account.executable,
-        data,
-    )
-}
-
-#[cfg(feature = "non-production-mock-source")]
-const MOCK_ADAPTER: [u8; 32] = [0xa1; 32];
-#[cfg(feature = "non-production-mock-source")]
-const MOCK_PROGRAM: [u8; 32] = [0xb2; 32];
-#[cfg(feature = "non-production-mock-source")]
-const MOCK_PROGRAM_OWNER: [u8; 32] = [0xb3; 32];
-#[cfg(feature = "non-production-mock-source")]
-const MOCK_DEPLOYMENT: [u8; 32] = [0xd4; 32];
-#[cfg(feature = "non-production-mock-source")]
-const MOCK_DEPLOYMENT_OWNER: [u8; 32] = [0xd5; 32];
-#[cfg(feature = "non-production-mock-source")]
-const MOCK_SOURCE: [u8; 32] = [0xc3; 32];
-
-#[cfg(feature = "non-production-mock-source")]
-struct MockDeployment;
-
-#[cfg(feature = "non-production-mock-source")]
-impl DeploymentAuthenticatorV1 for MockDeployment {
-    const VERIFIER_ID: [u8; 32] = [0xd6; 32];
-    const VERIFIER_VERSION: u32 = 1;
-    const PROVIDER_PROGRAM: [u8; 32] = MOCK_PROGRAM;
-    const PROVIDER_PROGRAM_OWNER: [u8; 32] = MOCK_PROGRAM_OWNER;
-    const DEPLOYMENT_ACCOUNT: [u8; 32] = MOCK_DEPLOYMENT;
-    const DEPLOYMENT_OWNER: [u8; 32] = MOCK_DEPLOYMENT_OWNER;
-
-    fn deployment_generation(
-        provider_program_data: &[u8],
-        deployment_account_data: &[u8],
-    ) -> Result<u64, SourceArchiveError> {
-        if provider_program_data != b"MOCK-PROVIDER-V1"
-            || deployment_account_data.len() != 12
-            || &deployment_account_data[..4] != b"DEP1"
-        {
-            return Err(SourceArchiveError::DeploymentAdapterRefused);
-        }
-        let mut generation = [0_u8; 8];
-        generation.copy_from_slice(&deployment_account_data[4..12]);
-        Ok(u64::from_le_bytes(generation))
-    }
-}
-
-#[cfg(feature = "non-production-mock-source")]
-struct MockParser;
-
-#[cfg(feature = "non-production-mock-source")]
-impl PriceParserV1 for MockParser {
-    const SOURCE_ADAPTER_ID: [u8; 32] = MOCK_ADAPTER;
-    const SOURCE_ADAPTER_VERSION: u32 = 7;
-    const PARSER_ID: u16 = 11;
-    const PARSER_VERSION: u16 = 3;
-
-    fn parse(account: SourceAccountView<'_>) -> Result<crate::source::ParsedPriceV1, SourceError> {
-        let bytes = account.data();
-        if bytes.len() != 77 || &bytes[..4] != b"SRC1" {
-            return Err(SourceError::ParserRefused);
-        }
-        Ok(crate::source::ParsedPriceV1 {
-            deployment_generation: u64_at(bytes, 4),
-            source_sequence: u64_at(bytes, 12),
-            publish_slot: u64_at(bytes, 20),
-            publish_time: u64_at(bytes, 28),
-            canonical_bucket: u64_at(bytes, 36),
-            price_atoms: u128_at(bytes, 44),
-            confidence_atoms: u128_at(bytes, 60),
-            finalized_bucket: bytes[76] == 1,
-        })
-    }
-}
-
-#[cfg(feature = "non-production-mock-source")]
-fn is_mock_release(spec: SourceSpecV1) -> bool {
-    spec.source_adapter_id().bytes() == MOCK_ADAPTER
-        && spec.source_adapter_version() == 7
-        && spec.parser_id() == 11
-        && spec.parser_version() == 3
-        && spec.source_program() == MOCK_PROGRAM
-        && spec.source_account() == MOCK_SOURCE
-        && spec.deployment_generation() == 19
-}
-
-#[cfg(not(feature = "non-production-mock-source"))]
 fn release_registered(_: SourceSpecV1) -> bool {
     false
-}
-
-#[cfg(feature = "non-production-mock-source")]
-fn release_registered(spec: SourceSpecV1) -> bool {
-    is_mock_release(spec)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -851,29 +736,8 @@ fn initialize_registered_spec(
     deployment: &AccountInfo,
     source: &AccountInfo,
 ) -> Outcome<()> {
-    if !release_registered(spec) {
-        return Err(ClutchError::SourceReleaseUnavailable.into());
-    }
-    #[cfg(feature = "non-production-mock-source")]
-    {
-        let provider_data = provider.data.borrow();
-        let deployment_data = deployment.data.borrow();
-        let source_data = source.data.borrow();
-        source_archive::initialize_authenticated_source_spec_account::<MockParser, MockDeployment>(
-            out,
-            spec,
-            bump,
-            runtime_view(provider, &provider_data),
-            runtime_view(deployment, &deployment_data),
-            source_view(source, &source_data),
-        )
-        .map_err(source_refusal)
-    }
-    #[cfg(not(feature = "non-production-mock-source"))]
-    {
-        let _ = (out, bump, provider, deployment, source);
-        Err(ClutchError::SourceReleaseUnavailable.into())
-    }
+    let _ = (out, spec, bump, provider, deployment, source);
+    Err(ClutchError::SourceReleaseUnavailable.into())
 }
 
 fn initialize_registered_archive(
@@ -882,19 +746,8 @@ fn initialize_registered_archive(
     window: WindowDomain,
     bump: u8,
 ) -> Outcome<()> {
-    if !release_registered(spec.spec()) {
-        return Err(ClutchError::SourceReleaseUnavailable.into());
-    }
-    #[cfg(feature = "non-production-mock-source")]
-    {
-        source_archive::initialize_genesis_archive::<MockDeployment>(out, spec, window, bump)
-            .map_err(source_refusal)
-    }
-    #[cfg(not(feature = "non-production-mock-source"))]
-    {
-        let _ = (out, window, bump);
-        Err(ClutchError::SourceReleaseUnavailable.into())
-    }
+    let _ = (out, spec, window, bump);
+    Err(ClutchError::SourceReleaseUnavailable.into())
 }
 
 fn registered_open_sequence(
@@ -902,19 +755,8 @@ fn registered_open_sequence(
     spec: VerifiedSourceSpecAccountV1,
     window: WindowDomain,
 ) -> Outcome<u64> {
-    if !release_registered(spec.spec()) {
-        return Err(ClutchError::SourceReleaseUnavailable.into());
-    }
-    #[cfg(feature = "non-production-mock-source")]
-    {
-        source_archive::open_archive_sequence::<MockDeployment>(archive, spec, window)
-            .map_err(source_refusal)
-    }
-    #[cfg(not(feature = "non-production-mock-source"))]
-    {
-        let _ = (archive, window);
-        Err(ClutchError::SourceReleaseUnavailable.into())
-    }
+    let _ = (archive, spec, window);
+    Err(ClutchError::SourceReleaseUnavailable.into())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -927,30 +769,8 @@ fn append_registered(
     deployment: &AccountInfo,
     source: &AccountInfo,
 ) -> Outcome<()> {
-    if !release_registered(spec.spec()) {
-        return Err(ClutchError::SourceReleaseUnavailable.into());
-    }
-    #[cfg(feature = "non-production-mock-source")]
-    {
-        let provider_data = provider.data.borrow();
-        let deployment_data = deployment.data.borrow();
-        let source_data = source.data.borrow();
-        source_archive::append_authenticated::<MockParser, MockDeployment>(
-            archive,
-            spec,
-            window,
-            clock,
-            runtime_view(provider, &provider_data),
-            runtime_view(deployment, &deployment_data),
-            source_view(source, &source_data),
-        )
-        .map_err(source_refusal)
-    }
-    #[cfg(not(feature = "non-production-mock-source"))]
-    {
-        let _ = (archive, window, clock, provider, deployment, source);
-        Err(ClutchError::SourceReleaseUnavailable.into())
-    }
+    let _ = (archive, spec, window, clock, provider, deployment, source);
+    Err(ClutchError::SourceReleaseUnavailable.into())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -963,47 +783,11 @@ fn seal_registered(
     deployment: &AccountInfo,
     source: &AccountInfo,
 ) -> Outcome<()> {
-    if !release_registered(spec.spec()) {
-        return Err(ClutchError::SourceReleaseUnavailable.into());
-    }
-    #[cfg(feature = "non-production-mock-source")]
-    {
-        let provider_data = provider.data.borrow();
-        let deployment_data = deployment.data.borrow();
-        let source_data = source.data.borrow();
-        source_archive::seal_archive_authenticated::<MockParser, MockDeployment>(
-            archive,
-            spec,
-            window,
-            clock,
-            runtime_view(provider, &provider_data),
-            runtime_view(deployment, &deployment_data),
-            source_view(source, &source_data),
-        )
-        .map_err(source_refusal)
-    }
-    #[cfg(not(feature = "non-production-mock-source"))]
-    {
-        let _ = (archive, window, clock, provider, deployment, source);
-        Err(ClutchError::SourceReleaseUnavailable.into())
-    }
+    let _ = (archive, spec, window, clock, provider, deployment, source);
+    Err(ClutchError::SourceReleaseUnavailable.into())
 }
 
-#[cfg(feature = "non-production-mock-source")]
-fn u64_at(bytes: &[u8], offset: usize) -> u64 {
-    let mut out = [0_u8; 8];
-    out.copy_from_slice(&bytes[offset..offset + 8]);
-    u64::from_le_bytes(out)
-}
-
-#[cfg(feature = "non-production-mock-source")]
-fn u128_at(bytes: &[u8], offset: usize) -> u128 {
-    let mut out = [0_u8; 16];
-    out.copy_from_slice(&bytes[offset..offset + 16]);
-    u128::from_le_bytes(out)
-}
-
-#[cfg(all(test, not(feature = "non-production-mock-source")))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1035,49 +819,7 @@ mod tests {
             confidence_multiplier: 2,
             selection_rule: SELECTION_FINALIZED_BUCKET_RECORD,
         })
-        .expect("valid mock identity");
+        .expect("valid retired identity shape");
         assert!(!release_registered(spec));
-    }
-}
-
-#[cfg(all(test, feature = "non-production-mock-source"))]
-mod mock_registry_tests {
-    use super::*;
-    use crate::source::{
-        SourceSpecFieldsV1, ORIENTATION_QUOTE_PER_BASE, SELECTION_FINALIZED_BUCKET_RECORD,
-    };
-
-    fn spec(parser_version: u16, deployment_generation: u64) -> SourceSpecV1 {
-        SourceSpecV1::new(SourceSpecFieldsV1 {
-            source_adapter_id: Hash32::from_bytes(MOCK_ADAPTER),
-            source_adapter_version: 7,
-            parser_id: 11,
-            parser_version,
-            source_program: MOCK_PROGRAM,
-            source_account: MOCK_SOURCE,
-            deployment_generation,
-            base_asset_id: Hash32::from_bytes([1; 32]),
-            quote_asset_id: Hash32::from_bytes([2; 32]),
-            orientation: ORIENTATION_QUOTE_PER_BASE,
-            normalized_decimals: 8,
-            grid_family_id: 4,
-            grid_version: 2,
-            bucket_seconds: 60,
-            max_staleness_slots: 20,
-            max_staleness_seconds: 90,
-            max_future_seconds: 2,
-            max_confidence_atoms: 5_000,
-            max_confidence_bps: 100,
-            confidence_multiplier: 2,
-            selection_rule: SELECTION_FINALIZED_BUCKET_RECORD,
-        })
-        .expect("valid mock-shaped spec")
-    }
-
-    #[test]
-    fn mock_elf_registers_only_its_exact_compiled_parser_and_deployment_release() {
-        assert!(release_registered(spec(3, 19)));
-        assert!(!release_registered(spec(4, 19)));
-        assert!(!release_registered(spec(3, 20)));
     }
 }

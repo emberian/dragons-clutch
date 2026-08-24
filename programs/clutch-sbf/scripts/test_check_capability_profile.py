@@ -78,6 +78,7 @@ def manifest(
     evidence_path: str | None = None,
     evidence_profile_name: str | None = None,
     source_identity: str = "production-inert",
+    collateral_release_identity: str = "production-inert",
     profile_feature: str = "profile-general-source-v2-point",
     budget_limits: dict[str, int] | None = None,
 ) -> dict[str, object]:
@@ -89,6 +90,7 @@ def manifest(
     build_contract = {
         "cargo_profile_feature": profile_feature,
         "source_identity": source_identity,
+        "collateral_release_identity": collateral_release_identity,
         "expected_undefined_dynamic_symbols": SYSCALLS,
     }
     identity = checker.profile_identity(
@@ -186,6 +188,7 @@ def measurement_document(value: dict[str, object]) -> dict[str, object]:
     if (
         contract["cargo_profile_feature"] == "profile-full"  # type: ignore[index]
         and contract["source_identity"] == "production-inert"  # type: ignore[index]
+        and contract["collateral_release_identity"] == "production-inert"  # type: ignore[index]
     ):
         default_equivalence = {
             "capability_profile_identity_sha256": identity,
@@ -248,6 +251,7 @@ def measurement_document(value: dict[str, object]) -> dict[str, object]:
                 "name": value["profile"]["name"],  # type: ignore[index]
                 "label": value["profile"]["label"],  # type: ignore[index]
                 "source_identity": contract["source_identity"],  # type: ignore[index]
+                "collateral_release_identity": contract["collateral_release_identity"],  # type: ignore[index]
                 "cargo_features": checker.cargo_features(contract),  # type: ignore[arg-type]
                 "capability_profile_identity_sha256": identity,
                 "identity_manifest_sha256": checker.measurement_input_manifest_sha256(
@@ -305,7 +309,7 @@ class CapabilityProfileTests(unittest.TestCase):
             )
             self.assertNotEqual(original, summary["profile_identity_sha256"])
 
-    def test_all_eleven_semantic_owners_are_mandatory_and_ordered(self) -> None:
+    def test_all_twelve_semantic_owners_are_mandatory_and_ordered(self) -> None:
         value = manifest()
         value["capabilities"].pop()  # type: ignore[union-attr]
         with self.assertRaisesRegex(checker.ProfileError, "missing capability slots"):
@@ -318,6 +322,118 @@ class CapabilityProfileTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(checker.ProfileError, "noncanonical order"):
             checker.validate_manifest(value, repo=ROOT)
+
+    def test_successor_dev_build_selector_and_release_rows_fail_closed(self) -> None:
+        contract = checker.validate_build_contract(
+            {
+                "cargo_profile_feature": checker.SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_FEATURE,
+                "source_identity": "runtime-real-pyth-release",
+                "collateral_release_identity": (
+                    "observed-positive-collateral-and-claim-release"
+                ),
+                "expected_undefined_dynamic_symbols": SYSCALLS,
+            }
+        )
+        self.assertEqual(
+            checker.cargo_features(contract),
+            [
+                "custom-heap",
+                checker.SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_FEATURE,
+                "observed-positive-collateral-release-manifest",
+            ],
+        )
+        with self.assertRaisesRegex(
+            checker.ProfileError,
+            "observed-positive collateral release rows are absent or mismatched",
+        ):
+            checker.require_populated_observed_release_manifest(ROOT)
+
+        hostile = copy.deepcopy(contract)
+        hostile["collateral_release_identity"] = "production-inert"
+        with self.assertRaisesRegex(
+            checker.ProfileError,
+            "requires observed-positive collateral and claim releases",
+        ):
+            checker.validate_build_contract(hostile)
+
+    def test_successor_dev_family_closure_is_all_or_none(self) -> None:
+        rows = capabilities("linked")
+        for row in rows:
+            row["required_intent_triples"] = []
+            row["required_account_coordinates"] = []
+        by_slot = {row["slot"]: row for row in rows}
+        by_slot["source-plane"]["required_intent_triples"] = copy.deepcopy(
+            checker.CURRENT_SOURCE_EXTENSION_TRIPLES
+        )
+        by_slot["series-products"]["required_intent_triples"] = copy.deepcopy(
+            checker.CURRENT_SERIES_EXTENSION_TRIPLES
+        )
+        by_slot["recovery"]["required_intent_triples"] = copy.deepcopy(
+            checker.CURRENT_RECOVERY_EXTENSION_TRIPLES
+        )
+        by_slot["structured-claim"]["required_intent_triples"] = copy.deepcopy(
+            checker.CURRENT_STRUCTURED_EXTENSION_TRIPLES
+        )
+        by_slot["liquidity-dealer"]["required_intent_triples"] = copy.deepcopy(
+            checker.CURRENT_DEALER_EXTENSION_TRIPLES
+        )
+        by_slot["fractional-redemption"]["required_intent_triples"] = copy.deepcopy(
+            checker.CURRENT_FRACTIONAL_EXTENSION_TRIPLES
+        )
+        by_slot["relation"]["required_intent_triples"] = sorted(
+            copy.deepcopy(checker.CURRENT_GENERAL_EXTENSION_TRIPLES)
+            + copy.deepcopy(checker.CURRENT_DIRECT_EXTENSION_TRIPLES)
+        )
+        registry = linked_coverage(rows)
+        contract = checker.validate_build_contract(
+            {
+                "cargo_profile_feature": checker.SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_FEATURE,
+                "source_identity": "runtime-real-pyth-release",
+                "collateral_release_identity": (
+                    "observed-positive-collateral-and-claim-release"
+                ),
+                "expected_undefined_dynamic_symbols": SYSCALLS,
+            }
+        )
+        checker.validate_successor_dependency_closure(
+            contract,
+            checker.SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_LABEL,
+            rows,
+            registry,
+        )
+
+        partial = copy.deepcopy(registry)
+        partial["enabled_intent_triples"].remove([79, 1, 10])
+        with self.assertRaisesRegex(
+            checker.ProfileError, "extension closure is incomplete"
+        ):
+            checker.validate_successor_dependency_closure(
+                contract,
+                checker.SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_LABEL,
+                rows,
+                partial,
+            )
+
+        wrong_owner_rows = copy.deepcopy(rows)
+        fractional = by_slot["fractional-redemption"]
+        wrong_owner_fractional = next(
+            row
+            for row in wrong_owner_rows
+            if row["slot"] == fractional["slot"]
+        )
+        wrong_owner_fractional["required_intent_triples"].remove([79, 1, 10])
+        next(
+            row for row in wrong_owner_rows if row["slot"] == "relation"
+        )["required_intent_triples"].append([79, 1, 10])
+        with self.assertRaisesRegex(
+            checker.ProfileError, "fractional-redemption does not own"
+        ):
+            checker.validate_successor_dependency_closure(
+                contract,
+                checker.SUCCESSOR_CHAIN_ATTACHED_DEV_PROFILE_LABEL,
+                wrong_owner_rows,
+                registry,
+            )
 
     def test_missing_linked_intent_or_account_coverage_refuses(self) -> None:
         value = manifest(linkage="linked")

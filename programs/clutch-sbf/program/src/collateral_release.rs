@@ -104,10 +104,7 @@ pub const LOCAL_REAL_LEGACY_SPL_RELEASE_V2: AdapterReleaseV2 = AdapterReleaseV2:
 );
 
 #[cfg(all(
-    any(
-        feature = "laboratory-fixtures",
-        feature = "non-production-structured-custody-lab"
-    ),
+    feature = "laboratory-fixtures",
     feature = "observed-positive-collateral-release-manifest"
 ))]
 compile_error!(
@@ -149,18 +146,12 @@ impl CompiledCollateralReleaseManifestV2 {
     }
 }
 
-#[cfg(any(
-    feature = "laboratory-fixtures",
-    feature = "non-production-structured-custody-lab"
-))]
+#[cfg(feature = "laboratory-fixtures")]
 static COMPILED_COLLATERAL_RELEASES_V2: [AdapterReleaseV2; 2] = [
     LOCAL_REAL_TOKEN_2022_RELEASE_V2,
     LOCAL_REAL_LEGACY_SPL_RELEASE_V2,
 ];
-#[cfg(any(
-    feature = "laboratory-fixtures",
-    feature = "non-production-structured-custody-lab"
-))]
+#[cfg(feature = "laboratory-fixtures")]
 static COMPILED_COLLATERAL_RELEASE_MANIFESTS_V2: [CompiledCollateralReleaseManifestV2; 2] = [
     CompiledCollateralReleaseManifestV2 {
         release: LOCAL_REAL_TOKEN_2022_RELEASE_V2,
@@ -180,14 +171,12 @@ static COMPILED_COLLATERAL_RELEASE_MANIFESTS_V2: [CompiledCollateralReleaseManif
 
 #[cfg(all(
     not(feature = "laboratory-fixtures"),
-    not(feature = "non-production-structured-custody-lab"),
     not(feature = "observed-positive-collateral-release-manifest")
 ))]
 static COMPILED_COLLATERAL_RELEASES_V2: [AdapterReleaseV2; 0] = [];
 
 #[cfg(all(
     not(feature = "laboratory-fixtures"),
-    not(feature = "non-production-structured-custody-lab"),
     not(feature = "observed-positive-collateral-release-manifest")
 ))]
 static COMPILED_COLLATERAL_RELEASE_MANIFESTS_V2: [CompiledCollateralReleaseManifestV2; 0] = [];

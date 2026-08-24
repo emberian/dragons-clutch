@@ -627,21 +627,8 @@ mod tests {
         assert_eq!(decode_spec_body(&body).expect("body decodes"), spec);
     }
 
-    #[cfg(feature = "non-production-mock-source")]
     #[test]
-    fn the_mock_registry_admits_the_fixture_release_and_nothing_beside_it() {
-        let spec = SourceSpecV2::new(fields()).expect("the fixture identity is a valid spec");
-        assert!(registered_release(spec).is_ok());
-
-        let mut other = fields();
-        other.parser_version = fixture::PARSER_VERSION + 1;
-        let unregistered = SourceSpecV2::new(other).expect("a well-formed unregistered spec");
-        assert!(registered_release(unregistered).is_err());
-    }
-
-    #[cfg(not(feature = "non-production-mock-source"))]
-    #[test]
-    fn a_non_mock_elf_refuses_the_fixture_release() {
+    fn every_current_elf_refuses_the_retired_fixture_release() {
         let spec = SourceSpecV2::new(fields()).expect("the fixture identity is a valid spec");
         assert!(registered_release(spec).is_err());
     }

@@ -73,6 +73,31 @@ pub enum AccountFamilyV3 {
 }
 
 impl AccountFamilyV3 {
+    /// Exact frozen wire discriminant for this account family.
+    pub const fn word(self) -> u16 {
+        match self {
+            Self::SourcePlaneProgram => 1,
+            Self::SourceHead => 2,
+            Self::OpenRawPage => 3,
+            Self::RawPage => 4,
+            Self::WindowSpec => 5,
+            Self::WindowWork => 6,
+            Self::WindowClosureReceipt => 7,
+            Self::WindowSeal => 8,
+            Self::SummaryProgram => 9,
+            Self::StatisticKey => 10,
+            Self::StatisticResult => 11,
+            Self::ProductTemplate => 12,
+            Self::PayoutTable => 13,
+            Self::WorkEnvelope => 14,
+            Self::LiquidityEnvelope => 15,
+            Self::SeriesPlan => 16,
+            Self::SeriesFunding => 17,
+            Self::InstanceDescriptor => 18,
+            Self::DrawdownSummary => 19,
+        }
+    }
+
     /// Decode only exact proposal values.
     pub fn decode(value: u16) -> Result<Self> {
         match value {
@@ -200,7 +225,7 @@ pub fn encode_account<T: AccountBodyV3>(
     output.fill(0);
     output[..8].copy_from_slice(&ACCOUNT_MAGIC);
     output[8..10].copy_from_slice(&ACCOUNT_LAYOUT_VERSION.to_le_bytes());
-    output[10..12].copy_from_slice(&(header.family as u16).to_le_bytes());
+    output[10..12].copy_from_slice(&header.family.word().to_le_bytes());
     output[12] = header.bump;
     // 13 is flags and 14..16 are reserved; all remain zero.
     let terminal = header.terminal.encode(neutral_sink)?;
@@ -262,7 +287,7 @@ pub fn canonical_account_state_digest<const N: usize, T: AccountBodyV3>(
     hasher.update(ACCOUNT_DIGEST_DOMAIN);
     hasher.update(ACCOUNT_MAGIC);
     hasher.update(ACCOUNT_LAYOUT_VERSION.to_le_bytes());
-    hasher.update((header.family as u16).to_le_bytes());
+    hasher.update(header.family.word().to_le_bytes());
     hasher.update([header.bump, 0, 0, 0]);
     hasher.update(terminal);
     hasher.update(core);

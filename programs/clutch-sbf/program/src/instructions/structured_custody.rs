@@ -78,8 +78,7 @@ use solana_pubkey::Pubkey;
 use crate::accounts::{require, require_count, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::loader_state::{
-    decode_loader_pair_v1, decode_synthesized_genesis_loader_pair_v1, LoaderAccountViewV1,
-    UPGRADEABLE_LOADER_ID,
+    decode_loader_pair_v1, LoaderAccountViewV1, UPGRADEABLE_LOADER_ID,
 };
 use crate::seeds;
 
@@ -3618,6 +3617,10 @@ fn authenticate_structured_program_release_v2(
         release_id,
     )?;
     let release = *authenticated.value();
+    require(
+        release.locus == RegistryReleaseLocusV2::ObservedPositive,
+        ClutchError::AuthorizationUnavailable,
+    )?;
     let program_body = program
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
@@ -3636,20 +3639,10 @@ fn authenticate_structured_program_release_v2(
         program_data.executable,
         &program_data_body,
     );
-    let deployment_slot = match release.locus {
-        RegistryReleaseLocusV2::SynthesizedGenesisZero => {
-            decode_synthesized_genesis_loader_pair_v1(program_view, programdata_view)
-                .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?
-                .deployment_slot
-        }
-        RegistryReleaseLocusV2::ObservedPositive => decode_loader_pair_v1(
-            program_view,
-            programdata_view,
-        )
+    let deployment_slot = decode_loader_pair_v1(program_view, programdata_view)
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?
         .state
-        .deployment_slot,
-    };
+        .deployment_slot;
     require(
         authenticated.semantic_id() == release_id
             && release.program.bytes() == program.key.to_bytes()
@@ -3658,13 +3651,7 @@ fn authenticate_structured_program_release_v2(
                 == solana_sha256_hasher::hashv(&[&program_data_body]).to_bytes()
             && release.capability_manifest_id == expected_manifest_id
             && release.deployment_slot == deployment_slot
-            && (matches!(
-                (release.locus, deployment_slot),
-                (RegistryReleaseLocusV2::SynthesizedGenesisZero, 0)
-            ) || matches!(
-                (release.locus, deployment_slot),
-                (RegistryReleaseLocusV2::ObservedPositive, slot) if slot != 0
-            )),
+            && deployment_slot != 0,
         ClutchError::AuthorizationUnavailable,
     )?;
     Ok((release_id, release))

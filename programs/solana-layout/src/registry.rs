@@ -184,6 +184,8 @@ pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG: u8 = 0x79;
 pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION: u8 = 1;
 /// General V2 immutable candidate-cost Market-binding successor version.
 pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V2: u8 = 2;
+/// Product-family-authorized, rent-owned General Market-binding version.
+pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V3: u8 = 3;
 /// Counted-retirement Replay-successor account discriminator.
 pub const REPLAY_SUCCESSOR_ACCOUNT_TAG: u8 = 0x7a;
 /// Counted-retirement Replay-successor account version.
@@ -454,8 +456,10 @@ pub const FAILURE_MARKET_REPLAY_ACCOUNT_BYTES_V2: usize = 256;
 pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG: u8 = 0xa4;
 /// Withdrawn policy version whose offset 80 meant payout-vector digest.
 pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_V1_VERSION: u8 = 1;
-/// Canonical Resolution-V5-data-bound policy version.
-pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_VERSION: u8 = 2;
+/// Withdrawn pre-activation policy whose PDA depended on future Resolution data.
+pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_V2_VERSION: u8 = 2;
+/// Canonical prefundable policy version; the body still binds exact Resolution data.
+pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_VERSION: u8 = 3;
 /// Exact immutable fractional-redemption policy bytes.
 pub const FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_BYTES: usize = 296;
 /// Sole aggregate numerator-credit ledger discriminator.
@@ -532,18 +536,26 @@ pub const DEALER_COVERED_SELECTION_ACCOUNT_TAG: u8 = 0xae;
 pub const DIRECT_MARKET_ROOT_ACCOUNT_TAG: u8 = 0xb1;
 /// Current Direct root account version.
 pub const DIRECT_MARKET_ROOT_ACCOUNT_VERSION: u8 = 1;
+/// Exact current Direct root frame bytes.
+pub const DIRECT_MARKET_ROOT_ACCOUNT_BYTES: usize = 1_230;
 /// Current Direct exact-selection owner discriminator.
 pub const DIRECT_SELECTION_ACCOUNT_TAG: u8 = 0xb2;
 /// Current Direct exact-selection account version.
 pub const DIRECT_SELECTION_ACCOUNT_VERSION: u8 = 1;
+/// Exact current Direct Selection frame bytes.
+pub const DIRECT_SELECTION_ACCOUNT_BYTES: usize = 1_501;
 /// Current Direct permanent action replay/terminal receipt discriminator.
 pub const DIRECT_ACTION_REPLAY_ACCOUNT_TAG: u8 = 0xb3;
 /// Current Direct permanent action replay/terminal receipt version.
 pub const DIRECT_ACTION_REPLAY_ACCOUNT_VERSION: u8 = 1;
+/// Exact permanent Direct action replay frame bytes.
+pub const DIRECT_ACTION_REPLAY_ACCOUNT_BYTES: usize = 325;
 /// Current Direct funded Reservation owner discriminator.
 pub const DIRECT_RESERVATION_ACCOUNT_TAG: u8 = 0xb4;
 /// Current Direct funded Reservation account version.
 pub const DIRECT_RESERVATION_ACCOUNT_VERSION: u8 = 1;
+/// Exact current Direct Reservation frame bytes.
+pub const DIRECT_RESERVATION_ACCOUNT_BYTES: usize = 473;
 /// Immutable General V2 frozen-order locator discriminator.
 pub const GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_TAG: u8 = 0xb5;
 /// First frozen-order locator account version.
@@ -579,6 +591,10 @@ pub const DEALER_COVERED_SELECTION_ACCOUNT_BYTES: usize =
 pub const PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG: u8 = 0xb0;
 /// First Product Market-lifecycle replay receipt version.
 pub const PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_VERSION: u8 = 1;
+/// Permanent counted Product Series-lifecycle replay discriminator.
+pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG: u8 = 0xb8;
+/// First permanent counted Product Series-lifecycle replay version.
+pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION: u8 = 1;
 /// Bytes occupied by the successor family tag, family version, and local action.
 pub const EXTENSION_ENVELOPE_BYTES: usize = 3;
 /// Largest successor action payload without changing the frozen packet ceiling.
@@ -591,6 +607,7 @@ const _: () = assert!(DIRECT_MARKET_ROOT_ACCOUNT_TAG == 0xb1);
 const _: () = assert!(DIRECT_SELECTION_ACCOUNT_TAG == 0xb2);
 const _: () = assert!(DIRECT_ACTION_REPLAY_ACCOUNT_TAG == 0xb3);
 const _: () = assert!(DIRECT_RESERVATION_ACCOUNT_TAG == 0xb4);
+const _: () = assert!(PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG == 0xb8);
 const _: () = assert!(GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_TAG == 0xb5);
 const _: () = assert!(GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG == 0xb6);
 const _: () = assert!(GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG == 0xb9);
@@ -635,7 +652,8 @@ const _: () =
     assert!(GENERAL_ORDER_PAGE_V5_ACCOUNT_VERSION == super::order_page_v5::ORDER_PAGE_V5_VERSION);
 const _: () = assert!(EXTENSION_ENVELOPE_BYTES <= MAX_INTENT_BYTES);
 const _: () = assert!(FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_V1_VERSION == 1);
-const _: () = assert!(FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_VERSION == 2);
+const _: () = assert!(FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_V2_VERSION == 2);
+const _: () = assert!(FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_VERSION == 3);
 const _: () = assert!(FRACTIONAL_REDEMPTION_LEDGER_ACCOUNT_VERSION == 1);
 const _: () = assert!(FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_V1_VERSION == 1);
 const _: () = assert!(FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_VERSION == 2);
@@ -1175,6 +1193,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
+            version: GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V3,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-market-binding-v3-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
             tag: REPLAY_SUCCESSOR_ACCOUNT_TAG,
             version: REPLAY_SUCCESSOR_ACCOUNT_VERSION,
         },
@@ -1680,10 +1707,19 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG,
+            version: FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_V2_VERSION,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "fractional-redemption-policy-v2-unprefundable-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG,
             version: FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_VERSION,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "fractional-redemption-policy-v2-account",
+        name: "fractional-redemption-policy-v3-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1864,6 +1900,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "product-market-lifecycle-replay-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG,
+            version: PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "product-series-lifecycle-replay-v1-account",
     },
 ];
 
@@ -2720,7 +2765,7 @@ pub enum DirectMarketAction {
     FinalizeSelection = 8,
     /// Atomically settle the selected Egg/cash pair and both GEN1 replays.
     SettlePair = 9,
-    /// Terminalize a frozen epoch with no submitted candidate.
+    /// Terminalize a no-trade prefix, creating Selection if freeze was missed.
     LapseEmpty = 10,
     /// Terminalize a nonempty epoch whose verification never selected.
     LapseUnselected = 11,
@@ -3147,6 +3192,10 @@ mod tests {
             (
                 GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
                 GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V2,
+            ),
+            (
+                GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
+                GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V3,
             ),
             (
                 REPLAY_SUCCESSOR_ACCOUNT_TAG,
@@ -3581,11 +3630,15 @@ mod tests {
     }
 
     #[test]
-    fn fractional_redemption_reinterpreted_v1_accounts_are_withdrawn() {
+    fn fractional_redemption_superseded_accounts_are_withdrawn() {
         let withdrawn = [
             (
                 FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG,
                 FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_V1_VERSION,
+            ),
+            (
+                FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_TAG,
+                FRACTIONAL_REDEMPTION_POLICY_ACCOUNT_V2_VERSION,
             ),
             (
                 FRACTIONAL_REDEMPTION_CREDIT_ACCOUNT_TAG,
@@ -3832,5 +3885,23 @@ mod tests {
         let mut bytes = [0_u8; MAX_INTENT_BYTES];
         assert_eq!(envelope.encode(&mut bytes), Ok(MAX_INTENT_BYTES));
         assert_eq!(ExtensionEnvelope::decode(&bytes), Ok(envelope));
+    }
+
+    #[test]
+    fn permanent_series_lifecycle_replay_coordinate_is_unique_and_disabled() {
+        let mut matching = CENTRAL_COLLISION_LEDGER.iter().filter(|entry| {
+            coordinates_include(
+                entry.coordinates,
+                WireNamespace::MainAccount,
+                PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG,
+                PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION,
+            )
+        });
+        assert_eq!(
+            matching.next().map(|entry| entry.status),
+            Some(AllocationStatus::ReservedDisabled),
+        );
+        assert!(matching.next().is_none());
+        assert_eq!(PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG, 0xb8);
     }
 }

@@ -34,6 +34,8 @@ pub const SERIES_LINK_OBLIGATION_COUNT_V1: usize = 4;
 pub const MARKET_LIFECYCLE_ROOT_BYTES_V1: usize = 2_448;
 /// Exact per-Series `0xad` semantic body width.
 pub const SERIES_MARKET_LINK_BYTES_V1: usize = 1_232;
+/// Exact canonical byte preimage for one V2 foundation account graph.
+pub const MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V2: usize = 1_544;
 
 /// Shared Market binding identity domain.
 pub const MARKET_LIFECYCLE_BINDING_DOMAIN_V1: &[u8] = b"dragons-clutch/market-lifecycle-binding/v1";
@@ -213,7 +215,7 @@ impl MarketFoundationAccountGraphV2 {
         schedule: &MarketFoundationScheduleV2,
     ) -> Result<MarketFoundationAccountGraphV2Id> {
         self.validate(schedule)?;
-        let mut body = [0u8; 1_544];
+        let mut body = [0u8; MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V2];
         body[..32].copy_from_slice(&self.market_instance_id.bytes());
         body[32..40].copy_from_slice(&self.generation.to_le_bytes());
         body[40..72].copy_from_slice(&self.foundation_schedule_id.bytes());
@@ -233,6 +235,138 @@ impl MarketFoundationAccountGraphV2 {
         account.validate()?;
         Ok(account)
     }
+}
+
+/// Borrowed, structurally authenticated V2 graph preimage.
+///
+/// Fields are private so a caller cannot construct a view over unchecked
+/// bytes. The account accessor reads only from the already-validated complete
+/// preimage and therefore does not materialize the 46-ID body.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedMarketFoundationAccountGraphBytesV2<'a> {
+    input: &'a [u8],
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    foundation_schedule_id: MarketFoundationScheduleV2Id,
+    graph_id: MarketFoundationAccountGraphV2Id,
+}
+
+impl AuthenticatedMarketFoundationAccountGraphBytesV2<'_> {
+    /// Full-width Market parsed from the exact preimage.
+    pub const fn market_instance_id(self) -> MarketInstanceV2Id { self.market_instance_id }
+    /// Exact nonzero generation parsed from the exact preimage.
+    pub const fn generation(self) -> u64 { self.generation }
+    /// Exact schedule identity checked against the supplied schedule body.
+    pub const fn foundation_schedule_id(self) -> MarketFoundationScheduleV2Id {
+        self.foundation_schedule_id
+    }
+    /// Content identity of the complete canonical 1,544-byte preimage.
+    pub const fn graph_id(self) -> MarketFoundationAccountGraphV2Id { self.graph_id }
+    /// Read one active slot from the already-validated complete preimage.
+    pub fn account(self, slot: MarketFoundationSlotV2) -> Result<ContentId> {
+        let index = slot.index()?;
+        let at = 72usize
+            .checked_add(index.checked_mul(32).ok_or(Error::ArithmeticOverflow)?)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let account = ContentId::from_bytes(
+            self.input[at..at + 32]
+                .try_into()
+                .map_err(|_| Error::InvalidCodec)?,
+        );
+        account.validate()?;
+        Ok(account)
+    }
+}
+
+/// Validate and identify one canonical V2 graph directly from caller-owned bytes.
+///
+/// This is the stack-bounded hostile decoder for adapters. It never allocates
+/// or constructs the 1,544-byte Rust value on the callee frame. The returned
+/// tuple is only the exact authenticated header and content identity; callers
+/// must use [`authenticate_market_foundation_account_graph_slot_v2`] to obtain
+/// a slot from the same complete preimage.
+pub fn authenticate_market_foundation_account_graph_bytes_v2<'a>(
+    input: &'a [u8],
+    schedule: &MarketFoundationScheduleV2,
+) -> Result<AuthenticatedMarketFoundationAccountGraphBytesV2<'a>> {
+    if input.len() != MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V2 {
+        return Err(Error::InvalidCodec);
+    }
+    schedule.validate()?;
+    let market_instance_id = MarketInstanceV2Id::from_bytes(
+        input[..32].try_into().map_err(|_| Error::InvalidCodec)?,
+    );
+    let generation = u64::from_le_bytes(
+        input[32..40]
+            .try_into()
+            .map_err(|_| Error::InvalidCodec)?,
+    );
+    let foundation_schedule_id = MarketFoundationScheduleV2Id::from_bytes(
+        input[40..72]
+            .try_into()
+            .map_err(|_| Error::InvalidCodec)?,
+    );
+    market_instance_id.validate()?;
+    foundation_schedule_id.validate()?;
+    if generation == 0 || foundation_schedule_id != schedule.id()? {
+        return Err(Error::MismatchedArtifact);
+    }
+
+    let expected = expected_foundation_bitmap(schedule.outcome_count)?;
+    let mut index = 0usize;
+    while index < MARKET_FOUNDATION_SLOT_COUNT_V2 {
+        let at = 72usize
+            .checked_add(index.checked_mul(32).ok_or(Error::ArithmeticOverflow)?)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let account = ContentId::from_bytes(
+            input[at..at + 32]
+                .try_into()
+                .map_err(|_| Error::InvalidCodec)?,
+        );
+        let active = expected & slot_bit(index)? != 0;
+        if active != !account.is_zero() {
+            return Err(Error::NonCanonicalPadding);
+        }
+        if active {
+            account.validate()?;
+            let mut prior = 0usize;
+            while prior < index {
+                let prior_at = 72usize
+                    .checked_add(prior.checked_mul(32).ok_or(Error::ArithmeticOverflow)?)
+                    .ok_or(Error::ArithmeticOverflow)?;
+                if input[prior_at..prior_at + 32] == input[at..at + 32] {
+                    return Err(Error::MismatchedArtifact);
+                }
+                prior += 1;
+            }
+        }
+        index += 1;
+    }
+    let id = MarketFoundationAccountGraphV2Id::from_bytes(
+        content_id(
+            b"dragons-clutch/market-foundation-account-graph/v2",
+            input,
+        )
+        .bytes(),
+    );
+    id.validate()?;
+    Ok(AuthenticatedMarketFoundationAccountGraphBytesV2 {
+        input,
+        market_instance_id,
+        generation,
+        foundation_schedule_id,
+        graph_id: id,
+    })
+}
+
+/// Authenticate one exact slot from the same complete caller-owned V2 preimage.
+pub fn authenticate_market_foundation_account_graph_slot_v2(
+    input: &[u8],
+    schedule: &MarketFoundationScheduleV2,
+    slot: MarketFoundationSlotV2,
+) -> Result<(MarketFoundationAccountGraphV2Id, ContentId)> {
+    let authenticated = authenticate_market_foundation_account_graph_bytes_v2(input, schedule)?;
+    Ok((authenticated.graph_id(), authenticated.account(slot)?))
 }
 
 /// Shared Market lifecycle phase.
@@ -1358,6 +1492,20 @@ impl MarketLifecycleRootV1 {
         self,
         retirement: SeriesMarketLinkRetirementProjectionV1,
     ) -> Result<Self> {
+        let mut output = Self::decode_buffer();
+        self.retire_series_link_into(retirement, &mut output)?;
+        Ok(output)
+    }
+
+    /// Consume one retiring Series link into caller-owned storage.
+    ///
+    /// The SBF owner uses this frame-bounded form so a 2,452-byte root
+    /// successor is never retained as an additional adapter-frame local.
+    pub fn retire_series_link_into(
+        &self,
+        retirement: SeriesMarketLinkRetirementProjectionV1,
+        output: &mut Self,
+    ) -> Result<()> {
         self.validate()?;
         if self.phase != MarketLifecyclePhaseV1::Active
             || retirement.market_instance_id != self.binding.market_instance_id
@@ -1371,7 +1519,7 @@ impl MarketLifecycleRootV1 {
             .transition_sequence
             .checked_add(1)
             .ok_or(Error::ArithmeticOverflow)?;
-        let next = Self {
+        *output = Self {
             transition_sequence: sequence,
             live_series_links: self
                 .live_series_links
@@ -1387,10 +1535,9 @@ impl MarketLifecycleRootV1 {
                 retirement.id,
                 sequence,
             ),
-            ..self
+            ..*self
         };
-        next.validate()?;
-        Ok(next)
+        output.validate()
     }
 
     /// Disable new links and delegate product-family admission sealing.
@@ -2522,7 +2669,7 @@ impl SeriesMarketLinkV1 {
     pub fn pin_failure_session(self, failure_begin_receipt_id: ContentId) -> Result<Self> {
         self.validate()?;
         failure_begin_receipt_id.validate()?;
-        if self.phase != SeriesMarketLinkPhaseV1::Active {
+        if self.phase != SeriesMarketLinkPhaseV1::Active || self.active_failure_sessions != 0 {
             return Err(Error::WorkStateMismatch);
         }
         let sequence = self
@@ -2556,7 +2703,7 @@ impl SeriesMarketLinkV1 {
     pub fn release_failure_session(self, failure_terminal_receipt_id: ContentId) -> Result<Self> {
         self.validate()?;
         failure_terminal_receipt_id.validate()?;
-        if self.phase != SeriesMarketLinkPhaseV1::Active || self.active_failure_sessions == 0 {
+        if self.phase != SeriesMarketLinkPhaseV1::Active || self.active_failure_sessions != 1 {
             return Err(Error::WorkStateMismatch);
         }
         let sequence = self
@@ -2635,6 +2782,13 @@ impl SeriesMarketLinkV1 {
 
     /// Enter link retirement only after every obligation and Failure pin closes.
     pub fn begin_retirement(self) -> Result<Self> {
+        let mut output = Self::decode_buffer();
+        self.begin_retirement_into(&mut output)?;
+        Ok(output)
+    }
+
+    /// Enter link retirement into caller-owned storage.
+    pub fn begin_retirement_into(&self, output: &mut Self) -> Result<()> {
         self.validate()?;
         if self.phase != SeriesMarketLinkPhaseV1::Active
             || self.active_failure_sessions != 0
@@ -2645,16 +2799,15 @@ impl SeriesMarketLinkV1 {
         {
             return Err(Error::WorkIncomplete);
         }
-        let next = Self {
+        *output = Self {
             phase: SeriesMarketLinkPhaseV1::Retiring,
             transition_sequence: self
                 .transition_sequence
                 .checked_add(1)
                 .ok_or(Error::ArithmeticOverflow)?,
-            ..self
+            ..*self
         };
-        next.validate()?;
-        Ok(next)
+        output.validate()
     }
 
     /// Emit the exact link retirement projection consumed by the shared root.
@@ -2687,6 +2840,17 @@ impl SeriesMarketLinkV1 {
 
     /// Mark the link retired only in the same atomic instruction as root consumption.
     pub fn mark_retired(self, projection: SeriesMarketLinkRetirementProjectionV1) -> Result<Self> {
+        let mut output = Self::decode_buffer();
+        self.mark_retired_into(projection, &mut output)?;
+        Ok(output)
+    }
+
+    /// Mark the link retired into caller-owned storage.
+    pub fn mark_retired_into(
+        &self,
+        projection: SeriesMarketLinkRetirementProjectionV1,
+        output: &mut Self,
+    ) -> Result<()> {
         self.validate()?;
         if self.phase != SeriesMarketLinkPhaseV1::Retiring
             || projection.link_semantic_id != self.semantic_id()?
@@ -2694,16 +2858,15 @@ impl SeriesMarketLinkV1 {
         {
             return Err(Error::UnauthenticatedAuthority);
         }
-        let next = Self {
+        *output = Self {
             phase: SeriesMarketLinkPhaseV1::Retired,
             transition_sequence: self
                 .transition_sequence
                 .checked_add(1)
                 .ok_or(Error::ArithmeticOverflow)?,
-            ..self
+            ..*self
         };
-        next.validate()?;
-        Ok(next)
+        output.validate()
     }
 
     /// Mark a never-activated link aborted after exact shared-root abort authorization.
@@ -2863,7 +3026,8 @@ impl SeriesMarketLinkV1 {
         {
             return Err(Error::WorkStateMismatch);
         }
-        if self.active_failure_sessions > self.failure_sessions_started
+        if self.active_failure_sessions > 1
+            || self.active_failure_sessions > self.failure_sessions_started
             || (self.failure_sessions_started == 0)
                 != (self.failure_session_transcript_id == ContentId::ZERO)
         {

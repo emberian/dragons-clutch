@@ -283,6 +283,26 @@ impl FailureMarketIntervalHistoryV2 {
         self.history_account
     }
 
+    /// Immutable recipient of both exact account-rent principals.
+    pub const fn rent_refund_owner(self) -> FailureMarketAccountIdV1 {
+        self.rent_refund_owner
+    }
+
+    /// Immutable destination for every unsolicited lamport.
+    pub const fn neutral_sink(self) -> FailureMarketAccountIdV1 {
+        self.neutral_sink
+    }
+
+    /// Canonical reusable-cell rent principal admitted at creation.
+    pub const fn work_rent_principal_lamports(self) -> u64 {
+        self.work_rent_principal_lamports
+    }
+
+    /// Canonical append-history rent principal admitted at creation.
+    pub const fn history_rent_principal_lamports(self) -> u64 {
+        self.history_rent_principal_lamports
+    }
+
     /// Exact number of completed sessions.
     pub const fn completed_session_count(self) -> u64 {
         self.completed_session_count
@@ -688,6 +708,44 @@ pub fn admit_failure_market_interval_history_v2<
     }
     history.validate_against(admission, quote)?;
     Ok((history, funding))
+}
+
+/// Reopen the exact capitalization receipt committed by an authenticated
+/// permanent history account.
+///
+/// The supplied facts are a content preimage, not authority. Initial creation
+/// already required Product's private retained-slot receipts; later operations
+/// hostile-decode the program-owned history and may recover the same
+/// private-field receipt only when the complete domain-separated preimage
+/// hashes to the receipt ID persisted there. This avoids treating a stale
+/// Product account-authentication ID as a timeless capability.
+pub fn reopen_failure_market_interval_funding_v2(
+    admission: FailureMarketAdmissionStateV1,
+    quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+    history: FailureMarketIntervalHistoryV2,
+    facts: FailureMarketIntervalFundingFactsV2,
+) -> Result<FailureMarketIntervalFundingReceiptV2> {
+    history.validate_against(admission, quote)?;
+    validate_funding_facts(admission, quote, facts)?;
+    let mut hasher = Sha256::new();
+    hasher.update(FUNDING_DOMAIN_V2);
+    hash_funding_facts(&mut hasher, facts);
+    let id = FailureMarketIntervalFundingReceiptIdV2::from_bytes(hasher.finalize().into());
+    require_live(id.bytes())?;
+    if id != history.funding_receipt_id
+        || facts.failure_policy_binding_id != history.failure_policy_binding_id
+        || facts.market_instance_id != history.market_instance_id
+        || facts.generation != history.generation
+        || facts.work_account != history.work_account
+        || facts.history_account != history.history_account
+        || facts.rent_refund_owner != history.rent_refund_owner
+        || facts.neutral_sink != history.neutral_sink
+        || facts.work_rent_principal_lamports != history.work_rent_principal_lamports
+        || facts.history_rent_principal_lamports != history.history_rent_principal_lamports
+    {
+        return Err(Error::BindingMismatch);
+    }
+    Ok(FailureMarketIntervalFundingReceiptV2 { id, facts })
 }
 
 /// Append one exact terminal session before the reusable cell resets to Idle.

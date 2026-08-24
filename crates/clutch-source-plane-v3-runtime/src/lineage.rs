@@ -40,6 +40,16 @@ pub enum LineageFamilyV1 {
 }
 
 impl LineageFamilyV1 {
+    const fn byte(self) -> u8 {
+        match self {
+            Self::SourceHead => 1,
+            Self::OpenRawPage => 2,
+            Self::WindowWork => 3,
+            Self::EvaluationWork => 4,
+            Self::StatisticResult => 5,
+        }
+    }
+
     fn decode(value: u8) -> Result<Self> {
         match value {
             1 => Ok(Self::SourceHead),
@@ -158,7 +168,7 @@ impl ReopenLineageV2 {
         let mut out = [0; REOPEN_LINEAGE_BYTES];
         out[..8].copy_from_slice(&LINEAGE_MAGIC);
         out[8..10].copy_from_slice(&SCHEMA_V2.to_le_bytes());
-        out[10] = self.family as u8;
+        out[10] = self.family.byte();
         out[16..48].copy_from_slice(&self.adapter_program.bytes());
         out[48..80].copy_from_slice(&self.release_manifest_id.bytes());
         out[80..112].copy_from_slice(&self.route_id.bytes());
@@ -242,7 +252,7 @@ impl ReopenLineageV2 {
         live_id(semantic_binding_id)?;
         live_id(source_work_schedule_id)?;
         let mut bytes = [0; 168];
-        bytes[0] = family as u8;
+        bytes[0] = family.byte();
         bytes[8..40].copy_from_slice(&adapter_program.bytes());
         bytes[40..72].copy_from_slice(&release_manifest_id.bytes());
         bytes[72..104].copy_from_slice(&route_id.bytes());
@@ -424,7 +434,7 @@ pub fn authorize_reopen(
         .ok_or(Error::ArithmeticOverflow)?;
     let lineage_before_id = lineage.id()?;
     let mut bytes = [0; 152];
-    bytes[0] = family as u8;
+    bytes[0] = family.byte();
     bytes[8..40].copy_from_slice(&semantic_binding_id.bytes());
     bytes[40..72].copy_from_slice(&lineage_before_id.bytes());
     bytes[72..104].copy_from_slice(&target_account.bytes());

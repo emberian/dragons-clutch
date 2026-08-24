@@ -17,6 +17,7 @@ mod fee_rent_v3;
 mod fee_terminal;
 mod final_pot;
 mod market_binding_v2;
+mod market_binding_v3;
 mod owner_settlement;
 mod payload;
 mod position_replay;
@@ -33,6 +34,7 @@ pub use fee_rent_v3::*;
 pub use fee_terminal::*;
 pub use final_pot::*;
 pub use market_binding_v2::*;
+pub use market_binding_v3::*;
 pub use owner_settlement::*;
 pub use payload::*;
 pub use position_replay::*;
@@ -983,6 +985,10 @@ pub const MARKET_BINDING_ACCOUNT_VERSION: u8 = 1;
 pub const MARKET_BINDING_ACCOUNT_VERSION_V2: u8 = 2;
 /// Exact candidate-cost Market-binding successor bytes.
 pub const MARKET_BINDING_ACCOUNT_BYTES_V2: usize = 572;
+/// Product-family-authorized Market-binding successor version.
+pub const MARKET_BINDING_ACCOUNT_VERSION_V3: u8 = 3;
+/// Exact Product-family-authorized, rent-owned Market-binding bytes.
+pub const MARKET_BINDING_ACCOUNT_BYTES_V3: usize = 952;
 /// Codec projection of the centrally owned Replay-successor account tag.
 pub const REPLAY_SUCCESSOR_ACCOUNT_TAG: u8 = 0x7a;
 /// First Replay-successor account version.
@@ -1179,6 +1185,11 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 41] = [
         tag: MARKET_BINDING_ACCOUNT_TAG,
         version: MARKET_BINDING_ACCOUNT_VERSION_V2,
         owner: "clutch-general-v2-contract/MarketBindingV2",
+    },
+    AccountAllocationV1 {
+        tag: MARKET_BINDING_ACCOUNT_TAG,
+        version: MARKET_BINDING_ACCOUNT_VERSION_V3,
+        owner: "clutch-general-v2-contract/MarketBindingV3",
     },
     AccountAllocationV1 {
         tag: REPLAY_SUCCESSOR_ACCOUNT_TAG,
