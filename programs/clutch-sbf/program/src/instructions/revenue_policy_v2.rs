@@ -122,8 +122,11 @@ impl AuthenticatedRevenuePolicyRecordV2 {
 pub(crate) struct RevenueMarketTreasuryDerivationV1 {
     authority: AuthenticatedRevenuePolicyRecordV2,
     market_instance_v2_id: Hash32,
+    general_market_runtime_account: Pubkey,
     treasury_position_account: Pubkey,
     treasury_position_bump: u8,
+    treasury_replay_account: Pubkey,
+    treasury_replay_bump: u8,
     treasury_service_ledger_account: Pubkey,
     treasury_service_ledger_bump: u8,
 }
@@ -139,6 +142,11 @@ impl RevenueMarketTreasuryDerivationV1 {
         self.market_instance_v2_id
     }
 
+    /// Canonical General MarketRuntime used as Position/Replay purpose binding.
+    pub(crate) const fn general_market_runtime_account(self) -> Pubkey {
+        self.general_market_runtime_account
+    }
+
     /// Canonical ordinary treasury PositionV3 account.
     pub(crate) const fn treasury_position_account(self) -> Pubkey {
         self.treasury_position_account
@@ -147,6 +155,16 @@ impl RevenueMarketTreasuryDerivationV1 {
     /// Canonical ordinary treasury PositionV3 bump.
     pub(crate) const fn treasury_position_bump(self) -> u8 {
         self.treasury_position_bump
+    }
+
+    /// Canonical mandatory purpose-owned GEN1 ReplayV3 account.
+    pub(crate) const fn treasury_replay_account(self) -> Pubkey {
+        self.treasury_replay_account
+    }
+
+    /// Canonical mandatory purpose-owned GEN1 ReplayV3 bump.
+    pub(crate) const fn treasury_replay_bump(self) -> u8 {
+        self.treasury_replay_bump
     }
 
     /// Canonical counted treasury-service-ledger account.
@@ -222,19 +240,31 @@ pub(crate) fn derive_revenue_market_treasury_v1(
     program_id: &Pubkey,
     authority: AuthenticatedRevenuePolicyRecordV2,
     market_instance_v2_id: Hash32,
+    general_market_runtime_account: Pubkey,
 ) -> Outcome<RevenueMarketTreasuryDerivationV1> {
     require(
         market_instance_v2_id != Hash32::ZERO,
         ClutchError::MismatchedState,
     )?;
+    require(
+        general_market_runtime_account != Pubkey::new_from_array([0; 32]),
+        ClutchError::MismatchedState,
+    )?;
     let market_bytes = market_instance_v2_id.bytes();
     let treasury_owner = authority.treasury_owner().bytes();
+    let runtime_bytes = general_market_runtime_account.to_bytes();
     let (treasury_position_account, treasury_position_bump) = seeds::position_v3_pda(
         program_id,
         &market_bytes,
         &treasury_owner,
         PositionPurposeV3::General,
-        &market_bytes,
+        &runtime_bytes,
+    );
+    let (treasury_replay_account, treasury_replay_bump) = seeds::purpose_replay_v3_pda(
+        program_id,
+        &treasury_position_account.to_bytes(),
+        PositionPurposeV3::General,
+        &runtime_bytes,
     );
     let (treasury_service_ledger_account, treasury_service_ledger_bump) =
         seeds::treasury_service_ledger_v1_pda(
@@ -245,8 +275,11 @@ pub(crate) fn derive_revenue_market_treasury_v1(
     Ok(RevenueMarketTreasuryDerivationV1 {
         authority,
         market_instance_v2_id,
+        general_market_runtime_account,
         treasury_position_account,
         treasury_position_bump,
+        treasury_replay_account,
+        treasury_replay_bump,
         treasury_service_ledger_account,
         treasury_service_ledger_bump,
     })
