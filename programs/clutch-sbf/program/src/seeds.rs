@@ -45,21 +45,22 @@ pub fn find(program_id: &Pubkey, seeds: &[&[u8]]) -> (Pubkey, u8) {
 }
 
 /// Realm account seed prefix.
-pub const SEED_REALM: &[u8] = b"dragons-clutch:realm:v1";
+pub const SEED_REALM: &[u8] = clutch_collateral_adapter_v2::REALM_PDA_SEED_V1;
 /// Profile account seed prefix.
-pub const SEED_PROFILE: &[u8] = b"dragons-clutch:profile:v1";
+pub const SEED_PROFILE: &[u8] = clutch_collateral_adapter_v2::PROFILE_PDA_SEED_V1;
 /// Market account seed prefix.
 pub const SEED_MARKET: &[u8] = b"dragons-clutch:market:v1";
 /// Hoard account seed prefix.
 pub const SEED_HOARD: &[u8] = b"dragons-clutch:hoard:v1";
 /// Full-width MarketInstance Hoard V2 seed prefix.
-pub const SEED_HOARD_V2: &[u8] = b"dc:hoard:v2";
+pub const SEED_HOARD_V2: &[u8] = clutch_collateral_adapter_v2::HOARD_V2_PDA_SEED_V1;
 /// Position account seed prefix.
 pub const SEED_POSITION: &[u8] = b"dragons-clutch:position:v1";
 /// Reference-only kernel-aggregate account seed prefix.
 pub const SEED_KERNEL: &[u8] = b"dragons-clutch:kernel:v1";
 /// Full-width native ClaimLedger V3 seed prefix.
-pub const SEED_CLAIM_LEDGER_V3: &[u8] = b"dc:claim-ledger:v3";
+pub const SEED_CLAIM_LEDGER_V3: &[u8] =
+    clutch_collateral_adapter_v2::CLAIM_LEDGER_V3_PDA_SEED_V1;
 /// Immutable exact fractional-redemption policy V3.
 pub const SEED_FRACTIONAL_POLICY_V3: &[u8] =
     clutch_fractional_redemption_runtime::FRACTIONAL_POLICY_PDA_PREFIX;
@@ -157,7 +158,7 @@ pub const SEED_DEALER_ACTION_RECEIPT: &[u8] =
 pub const SEED_DEALER_COVERED_SELECTION: &[u8] =
     clutch_dealer_runtime_contract::DEALER_COVERED_SELECTION_PDA_DOMAIN_V1;
 /// Canonical raw collateral-policy artifact seed prefix.
-pub const SEED_POLICY: &[u8] = b"dragons-clutch:policy:v1";
+pub const SEED_POLICY: &[u8] = clutch_collateral_adapter_v2::COLLATERAL_POLICY_PDA_SEED_V1;
 /// Canonical full-width batch-policy artifact seed prefix.
 pub const SEED_BATCH_POLICY: &[u8] = b"dragons-clutch:batch-policy:v1";
 /// DirectBatchPolicy V3 final-artifact seed prefix, disjoint from legacy policy.
@@ -1645,11 +1646,13 @@ pub const SEED_OUTCOME_MINT_V2: &[u8] = b"dc:outcome-mint:v2";
 /// Shortened from the plan's `hoard-authority`, which does not fit a seed.
 pub const SEED_HOARD_AUTHORITY: &[u8] = b"dragons-clutch:hoard-auth:v1";
 /// Full-width Hoard V2 signing authority.
-pub const SEED_HOARD_AUTHORITY_V2: &[u8] = b"dc:hoard-auth:v2";
+pub const SEED_HOARD_AUTHORITY_V2: &[u8] =
+    clutch_collateral_adapter_v2::HOARD_AUTHORITY_V2_PDA_SEED_V1;
 /// Hoard token-account seed prefix; 29 bytes.
 pub const SEED_HOARD_TOKEN: &[u8] = b"dragons-clutch:hoard-token:v1";
 /// Full-width Hoard V2 collateral token account.
-pub const SEED_HOARD_TOKEN_V2: &[u8] = b"dc:hoard-token:v2";
+pub const SEED_HOARD_TOKEN_V2: &[u8] =
+    clutch_collateral_adapter_v2::HOARD_TOKEN_V2_PDA_SEED_V1;
 
 /// Canonical outcome-mint address and bump.
 ///
