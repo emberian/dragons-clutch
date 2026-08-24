@@ -32,9 +32,10 @@ use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
 use crate::seeds;
 
 use super::general_v2_fee_terminal_pair_v1::{
-    authenticate_fee_terminal_pair_v1, AuthenticatedFeeTerminalPairV1,
-    FeeTerminalPairExpectationV1,
+    authenticate_fee_terminal_pair_v1, authenticate_final_market_fee_terminal_v1,
+    AuthenticatedFinalMarketFeeTerminalV1, FeeTerminalPairExpectationV1,
 };
+use super::general_market_current_v5::AuthenticatedGeneralMarketCurrentV5;
 pub const RETIRE_INDEX_CHILDREN_ACCOUNT_COUNT_V1: usize = 7;
 pub const RETIRE_RETAINED_FEED_ACCOUNT_COUNT_V1: usize = 6;
 /// Exact General account frame consumed after Product's move-only terminal.
@@ -249,6 +250,32 @@ pub(crate) trait AuthenticatedProductSeriesRetirementForGeneralV5: Sized {
     }
 }
 
+/// Move-only, no-write preauthorization for the final General indexed close.
+/// It is constructed before Position/Product terminalization, may be borrowed
+/// by their same-instruction owners, and is consumed only after Product returns
+/// its non-detachable whole-Series terminal receipt.
+pub(crate) struct AuthenticatedGeneralIndexedCloseV5 {
+    accounts: [Id32; CLOSE_INDEXED_ROOT_ACCOUNT_COUNT_V1],
+    binding: MarketBindingV5,
+    terminal: contract::IndexedSettlementRootCloseProjectionV1,
+    epoch_output: std::vec::Vec<u8>,
+    credits: [CoalescedCloseCreditV1; 6],
+    root_balance_lamports: u64,
+    fee_terminal: AuthenticatedFinalMarketFeeTerminalV1,
+}
+
+impl AuthenticatedGeneralIndexedCloseV5 {
+    pub(crate) const fn fee_terminal(&self) -> &AuthenticatedFinalMarketFeeTerminalV1 {
+        &self.fee_terminal
+    }
+    pub(crate) const fn market_authority(&self) -> contract::CurrentMarketAuthorityV5 {
+        self.binding.authority()
+    }
+    pub(crate) const fn market_instance_id(&self) -> Id32 {
+        self.binding.base().market_instance_v2_id
+    }
+}
+
 /// Consume Product's exact non-Copy whole-Series terminal into the immutable
 /// General V5 authority. Root/Link schema-specific access remains localized
 /// inside Product's receipt owner.
@@ -256,7 +283,7 @@ fn authenticate_product_whole_market_terminal_v1<P>(
     product: P,
     binding: &MarketBindingV5,
     terminal: &contract::IndexedSettlementRootCloseProjectionV1,
-    fee_pair: &AuthenticatedFeeTerminalPairV1,
+    fee_terminal: &AuthenticatedFinalMarketFeeTerminalV1,
 ) -> Outcome<()>
 where
     P: AuthenticatedProductSeriesRetirementForGeneralV5,
@@ -266,14 +293,13 @@ where
         binding.base().market_instance_v2_id,
         authority,
     )?;
-    let general_fee = fee_pair.general();
-    let dealer_fee = fee_pair.dealer();
+    let dealer_fee = fee_terminal.dealer();
     require(
         !product_receipt_id.is_zero()
             && terminal.terminal().base().market() == binding.base().market
-            && general_fee.terminal_receipt.0 == fee_pair.terminal_account().bytes()
-            && general_fee.closure_manifest.0 == fee_pair.manifest_account().bytes()
-            && dealer_fee.terminal_receipt.0 == fee_pair.terminal_account().bytes()
+            && fee_terminal.terminal_account() == Id32::from_bytes(dealer_fee.terminal_receipt.0)
+            && fee_terminal.manifest_account_data_id() != Id32::ZERO
+            && fee_terminal.terminal_account_data_id() != Id32::ZERO
             && dealer_fee.fee_record.0 == terminal.fee_record().bytes()
             && dealer_fee.settlement_candidate.0
                 == terminal.terminal().base().settlement_candidate_id().bytes(),
@@ -629,15 +655,13 @@ fn retire_retained_feed(
 }
 
 #[inline(never)]
-pub(crate) fn close_indexed_root_after_product_series_retirement_v5<P>(
+pub(crate) fn preauthenticate_general_indexed_close_v5(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     selector: contract::CountedSettlementRootSelectorV1,
-    product: P,
-) -> Outcome<()>
-where
-    P: AuthenticatedProductSeriesRetirementForGeneralV5,
-{
+    current: &AuthenticatedGeneralMarketCurrentV5,
+    treasury_service_ledger: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedGeneralIndexedCloseV5> {
     require_count(accounts, CLOSE_INDEXED_ROOT_ACCOUNT_COUNT_V1)?;
     require_program_account(
         program_id,
@@ -693,6 +717,8 @@ where
     require(
         selector.epoch == id(accounts[IX_CLOSE_EPOCH].key)
             && selector.settlement_root == id(accounts[IX_CLOSE_ROOT].key)
+            && current.binding_account() == *accounts[IX_CLOSE_BINDING].key
+            && current.binding() == binding.as_ref()
             && id(accounts[IX_CLOSE_SINK].key) == binding.base().neutral_sink,
         ClutchError::MismatchedState,
     )?;
@@ -740,7 +766,7 @@ where
         &mut epoch_output,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let terminal = result.terminal();
+    let terminal = *result.terminal();
     let root_pda = seeds::general_v2_settlement_root_pda(
         program_id,
         &terminal.terminal().base().epoch().bytes(),
@@ -754,33 +780,54 @@ where
             && result.root_donation_credit().recipient() == id(accounts[IX_CLOSE_SINK].key),
         ClutchError::WrongPda,
     )?;
+    let fee_expectation = FeeTerminalPairExpectationV1 {
+        fee_record: terminal.fee_record(),
+        settlement_root: terminal.terminal().base().root_account(),
+        selected_feed_data_id: terminal.terminal().selected_feed_data_id(),
+        market: terminal.terminal().base().market(),
+        epoch: terminal.terminal().base().epoch(),
+        settlement_candidate: terminal.terminal().base().settlement_candidate_id(),
+    };
     let fee_pair = authenticate_fee_terminal_pair_v1(
         program_id,
         &accounts[IX_CLOSE_FEE_MANIFEST],
         &accounts[IX_CLOSE_FEE_TERMINAL],
-        FeeTerminalPairExpectationV1 {
-            fee_record: terminal.fee_record(),
-            settlement_root: terminal.terminal().base().root_account(),
-            selected_feed_data_id: terminal.terminal().selected_feed_data_id(),
-            market: terminal.terminal().base().market(),
-            epoch: terminal.terminal().base().epoch(),
-            settlement_candidate: terminal.terminal().base().settlement_candidate_id(),
-        },
+        fee_expectation,
         true,
     )?;
-    let manifest_rent = fee_pair.manifest_rent();
-    let terminal_rent = fee_pair.terminal_rent();
+    let fee_terminal = authenticate_final_market_fee_terminal_v1(
+        program_id,
+        fee_pair,
+        current,
+        treasury_service_ledger,
+    )?;
+    let manifest_rent = fee_terminal.manifest_rent();
+    let terminal_rent = fee_terminal.terminal_rent();
     require(
         terminal.fee_record() != Id32::ZERO
+            && fee_terminal.current_binding_account() == id(accounts[IX_CLOSE_BINDING].key)
+            && fee_terminal.current_binding_data_id() != Id32::ZERO
+            && fee_terminal.current_market_authority() == binding.authority()
+            && fee_terminal.manifest_account() == id(accounts[IX_CLOSE_FEE_MANIFEST].key)
+            && fee_terminal.terminal_account() == id(accounts[IX_CLOSE_FEE_TERMINAL].key)
+            && fee_terminal.expectation() == fee_expectation
+            && fee_expectation.fee_record == terminal.fee_record()
+            && fee_expectation.settlement_root == terminal.terminal().base().root_account()
+            && fee_expectation.selected_feed_data_id
+                == terminal.terminal().selected_feed_data_id()
+            && fee_expectation.market == terminal.terminal().base().market()
+            && fee_expectation.epoch == terminal.terminal().base().epoch()
+            && fee_expectation.settlement_candidate
+                == terminal.terminal().base().settlement_candidate_id()
             && manifest_rent.payer == id(accounts[IX_CLOSE_MANIFEST_PAYER].key)
             && terminal_rent.payer == id(accounts[IX_CLOSE_TERMINAL_PAYER].key),
         ClutchError::MismatchedState,
     )?;
-    let manifest_donation = fee_pair
+    let manifest_donation = fee_terminal
         .manifest_observed_balance_lamports()
         .checked_sub(manifest_rent.refundable_principal)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    let terminal_donation = fee_pair
+    let terminal_donation = fee_terminal
         .terminal_observed_balance_lamports()
         .checked_sub(terminal_rent.refundable_principal)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
@@ -825,16 +872,60 @@ where
         &credits,
     )?;
 
-    authenticate_product_whole_market_terminal_v1(
-        product,
-        &binding,
-        terminal,
-        &fee_pair,
-    )?;
-
     drop(window_body);
     drop(root_body);
     drop(epoch_body);
+    Ok(AuthenticatedGeneralIndexedCloseV5 {
+        accounts: [
+            id(accounts[0].key), id(accounts[1].key), id(accounts[2].key),
+            id(accounts[3].key), id(accounts[4].key), id(accounts[5].key),
+            id(accounts[6].key), id(accounts[7].key), id(accounts[8].key),
+            id(accounts[9].key),
+        ],
+        binding: *binding,
+        terminal,
+        epoch_output,
+        credits,
+        root_balance_lamports: accounts[IX_CLOSE_ROOT].lamports(),
+        fee_terminal,
+    })
+}
+
+/// Consume the exact preauthorization after Product has terminalized in this
+/// same instruction, then perform the final General Epoch postwrite and close
+/// the indexed root plus durable b9 pair. No state is re-derived from Product
+/// projections and no write occurs before the Product receipt is accepted.
+#[inline(never)]
+pub(crate) fn close_indexed_root_after_product_series_retirement_v5<P>(
+    accounts: &[AccountInfo<'_>],
+    preauthorized: AuthenticatedGeneralIndexedCloseV5,
+    product: P,
+) -> Outcome<()>
+where
+    P: AuthenticatedProductSeriesRetirementForGeneralV5,
+{
+    require_count(accounts, CLOSE_INDEXED_ROOT_ACCOUNT_COUNT_V1)?;
+    let actual = [
+        id(accounts[0].key), id(accounts[1].key), id(accounts[2].key),
+        id(accounts[3].key), id(accounts[4].key), id(accounts[5].key),
+        id(accounts[6].key), id(accounts[7].key), id(accounts[8].key),
+        id(accounts[9].key),
+    ];
+    require(
+        actual == preauthorized.accounts
+            && accounts[IX_CLOSE_ROOT].lamports() == preauthorized.root_balance_lamports
+            && accounts[IX_CLOSE_FEE_MANIFEST].lamports()
+                == preauthorized.fee_terminal.manifest_observed_balance_lamports()
+            && accounts[IX_CLOSE_FEE_TERMINAL].lamports()
+                == preauthorized.fee_terminal.terminal_observed_balance_lamports(),
+        ClutchError::MismatchedState,
+    )?;
+    authenticate_product_whole_market_terminal_v1(
+        product,
+        &preauthorized.binding,
+        &preauthorized.terminal,
+        &preauthorized.fee_terminal,
+    )?;
     preflight_writes(&[
         &accounts[IX_CLOSE_ROOT],
         &accounts[IX_CLOSE_EPOCH],
@@ -845,7 +936,7 @@ where
         &accounts[IX_CLOSE_TERMINAL_PAYER],
         &accounts[IX_CLOSE_SINK],
     ])?;
-    borrow_mut_data(&accounts[IX_CLOSE_EPOCH])?.copy_from_slice(&epoch_output);
+    borrow_mut_data(&accounts[IX_CLOSE_EPOCH])?.copy_from_slice(&preauthorized.epoch_output);
     close_program_account(&accounts[IX_CLOSE_FEE_MANIFEST])?;
     close_program_account(&accounts[IX_CLOSE_FEE_TERMINAL])?;
     close_program_account(&accounts[IX_CLOSE_ROOT])?;
@@ -856,7 +947,7 @@ where
             &accounts[IX_CLOSE_TERMINAL_PAYER],
             &accounts[IX_CLOSE_SINK],
         ],
-        &credits,
+        &preauthorized.credits,
     )
 }
 
@@ -914,15 +1005,24 @@ mod tests {
     }
 
     #[test]
-    fn root_close_requires_the_move_only_product_receipt() {
+    fn root_close_requires_preterminal_pair_auth_then_move_only_product_receipt() {
         let source = include_str!("general_v2_exact_index_retirement_v1.rs");
+        let preauth = source
+            .split("pub(crate) fn preauthenticate_general_indexed_close_v5")
+            .nth(1)
+            .and_then(|body| body.split("/// Consume the exact preauthorization").next())
+            .expect("bounded indexed-root preauthorization");
         let close = source
             .split("pub(crate) fn close_indexed_root_after_product_series_retirement_v5")
             .nth(1)
             .and_then(|body| body.split("/// Dispatch-compatible entrypoint").next())
             .expect("bounded indexed-root close");
+        assert!(preauth.contains("authenticate_fee_terminal_pair_v1("));
+        assert!(preauth.contains("authenticate_final_market_fee_terminal_v1("));
+        assert!(!preauth.contains("close_program_account("));
         assert!(close.contains("P: AuthenticatedProductSeriesRetirementForGeneralV5"));
         assert!(close.contains("authenticate_product_whole_market_terminal_v1("));
+        assert!(close.contains("preauthorized: AuthenticatedGeneralIndexedCloseV5"));
         assert!(!close.contains("product_accounts"));
         assert!(!close.contains("AuthenticatedProductSeriesRetirementV4"));
     }

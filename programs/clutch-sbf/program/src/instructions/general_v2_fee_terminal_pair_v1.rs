@@ -19,12 +19,19 @@ use clutch_fee_runtime_contract::terminal::{
 use clutch_fee_runtime_contract::Id as FeeId;
 use clutch_general_v2_contract as contract;
 use clutch_general_v2_contract::{DeletableRentOwnerV1, Id32};
+use clutch_product_series::ContentId;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::seeds;
+
+use super::general_market_current_v5::AuthenticatedGeneralMarketCurrentV5;
+use super::revenue_policy_v2::authenticate_treasury_service_ledger_v1;
+
+const FINAL_MARKET_FEE_TERMINAL_AUTHORITY_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/general-final-market-fee-terminal/v1\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimeSha256;
@@ -60,6 +67,7 @@ pub(crate) struct FeeTerminalPairExpectationV1 {
 
 /// Compact non-forgeable authority derived only from two persisted accounts.
 pub(crate) struct AuthenticatedFeeTerminalPairV1 {
+    expectation: FeeTerminalPairExpectationV1,
     manifest_account: Id32,
     terminal_account: Id32,
     manifest_account_data_id: Id32,
@@ -70,11 +78,16 @@ pub(crate) struct AuthenticatedFeeTerminalPairV1 {
     terminal_rent: DeletableRentOwnerV1,
     manifest_observed_balance_lamports: u64,
     terminal_observed_balance_lamports: u64,
+    revenue_policy: Id32,
+    treasury_position: Id32,
     general: GeneralFeeTerminalProjectionV1,
     dealer: DealerFeeTerminalProjectionV1,
 }
 
 impl AuthenticatedFeeTerminalPairV1 {
+    pub(crate) const fn expectation(&self) -> FeeTerminalPairExpectationV1 {
+        self.expectation
+    }
     pub(crate) const fn manifest_account(&self) -> Id32 {
         self.manifest_account
     }
@@ -122,6 +135,136 @@ impl AuthenticatedFeeTerminalPairV1 {
     pub(crate) const fn dealer(&self) -> DealerFeeTerminalProjectionV1 {
         self.dealer
     }
+}
+
+/// Move-only preauthorization proving that the exact durable fee pair is
+/// settled under the current General V5 authority and that its counted
+/// treasury service ledger has no unsettled epoch remaining.  It is minted
+/// before Product/Position terminal writes and consumed only by the final
+/// General indexed-root/b9 close.
+pub(crate) struct AuthenticatedFinalMarketFeeTerminalV1 {
+    authentication_id: ContentId,
+    current_binding_account: Id32,
+    current_binding_data_id: Id32,
+    current_market_authority: contract::CurrentMarketAuthorityV5,
+    pair: AuthenticatedFeeTerminalPairV1,
+}
+
+impl AuthenticatedFinalMarketFeeTerminalV1 {
+    pub(crate) const fn authentication_id(&self) -> ContentId { self.authentication_id }
+    pub(crate) const fn current_binding_account(&self) -> Id32 {
+        self.current_binding_account
+    }
+    pub(crate) const fn current_binding_data_id(&self) -> Id32 {
+        self.current_binding_data_id
+    }
+    pub(crate) const fn current_market_authority(&self) -> contract::CurrentMarketAuthorityV5 {
+        self.current_market_authority
+    }
+    pub(crate) const fn manifest_account(&self) -> Id32 { self.pair.manifest_account }
+    pub(crate) const fn terminal_account(&self) -> Id32 { self.pair.terminal_account }
+    pub(crate) const fn manifest_account_data_id(&self) -> Id32 {
+        self.pair.manifest_account_data_id
+    }
+    pub(crate) const fn terminal_account_data_id(&self) -> Id32 {
+        self.pair.terminal_account_data_id
+    }
+    pub(crate) const fn fee_record(&self) -> Id32 {
+        Id32::from_bytes(self.pair.general.fee_record.0)
+    }
+    pub(crate) const fn market(&self) -> Id32 {
+        Id32::from_bytes(self.pair.general.market.0)
+    }
+    pub(crate) const fn epoch(&self) -> Id32 {
+        Id32::from_bytes(self.pair.general.epoch.0)
+    }
+    pub(crate) const fn settlement_candidate(&self) -> Id32 {
+        Id32::from_bytes(self.pair.general.settlement_candidate.0)
+    }
+    pub(crate) const fn treasury_position(&self) -> Id32 { self.pair.treasury_position }
+    pub(crate) const fn revenue_policy(&self) -> Id32 { self.pair.revenue_policy }
+    pub(crate) const fn value_disposition_receipt(&self) -> Id32 {
+        Id32::from_bytes(self.pair.general.value_disposition_receipt.0)
+    }
+    pub(crate) const fn outcome(&self) -> FeeTerminalOutcomeV1 { self.pair.general.outcome }
+    pub(crate) const fn expectation(&self) -> FeeTerminalPairExpectationV1 {
+        self.pair.expectation
+    }
+    pub(crate) const fn manifest_rent(&self) -> DeletableRentOwnerV1 {
+        self.pair.manifest_rent
+    }
+    pub(crate) const fn terminal_rent(&self) -> DeletableRentOwnerV1 {
+        self.pair.terminal_rent
+    }
+    pub(crate) const fn manifest_observed_balance_lamports(&self) -> u64 {
+        self.pair.manifest_observed_balance_lamports
+    }
+    pub(crate) const fn terminal_observed_balance_lamports(&self) -> u64 {
+        self.pair.terminal_observed_balance_lamports
+    }
+    pub(crate) const fn dealer(&self) -> DealerFeeTerminalProjectionV1 {
+        self.pair.dealer
+    }
+}
+
+/// Consume a read-only hostile-authenticated b9 pair into the one-shot final
+/// market fee authority.  The 0xbb body is independently hostile-decoded and
+/// must prove that every admitted epoch is settled.
+#[inline(never)]
+pub(crate) fn authenticate_final_market_fee_terminal_v1(
+    program_id: &Pubkey,
+    pair: AuthenticatedFeeTerminalPairV1,
+    current: &AuthenticatedGeneralMarketCurrentV5,
+    treasury_service_ledger: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedFinalMarketFeeTerminalV1> {
+    let binding = current.binding();
+    let authority = binding.authority();
+    let service = authenticate_treasury_service_ledger_v1(
+        program_id,
+        treasury_service_ledger,
+        current.treasury(),
+        false,
+    )?;
+    let service_body = service.body();
+    require(
+        pair.general.outcome == FeeTerminalOutcomeV1::Settled
+            && pair.general.market.0 == binding.base().market.bytes()
+            && pair.revenue_policy == authority.revenue_policy_v2_digest()
+            && pair.treasury_position == authority.treasury_position_account()
+            && service.account() == current.treasury().treasury_service_ledger_account()
+            && service_body.admitted_epoch_count == service_body.settled_epoch_count,
+        ClutchError::MismatchedState,
+    )?;
+    let authentication_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            FINAL_MARKET_FEE_TERMINAL_AUTHORITY_DOMAIN_V1,
+            &current.id().bytes(),
+            &pair.manifest_account.bytes(),
+            &pair.manifest_account_data_id.bytes(),
+            &pair.terminal_account.bytes(),
+            &pair.terminal_account_data_id.bytes(),
+            &pair.general.fee_record.0,
+            &pair.expectation.settlement_root.bytes(),
+            &pair.expectation.selected_feed_data_id.bytes(),
+            &pair.general.market.0,
+            &pair.general.epoch.0,
+            &pair.general.settlement_candidate.0,
+            &pair.treasury_position.bytes(),
+            &pair.revenue_policy.bytes(),
+            &pair.general.value_disposition_receipt.0,
+            treasury_service_ledger.key.as_ref(),
+            &service_body.admitted_epoch_count.to_le_bytes(),
+            &service_body.settled_epoch_count.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    Ok(AuthenticatedFinalMarketFeeTerminalV1 {
+        authentication_id,
+        current_binding_account: Id32::from_bytes(current.binding_account().to_bytes()),
+        current_binding_data_id: Id32::from_bytes(current.binding_data_id().bytes()),
+        current_market_authority: authority,
+        pair,
+    })
 }
 
 fn borrow_data<'a, 'info>(account: &'a AccountInfo<'info>) -> Outcome<Ref<'a, [u8]>> {
@@ -229,6 +372,8 @@ pub(crate) fn authenticate_fee_terminal_pair_v1(
 
     let general = terminal.semantic.project_general();
     let dealer = terminal.semantic.project_dealer();
+    let revenue_policy = Id32::from_bytes(terminal.semantic.revenue_policy().0);
+    let treasury_position = Id32::from_bytes(terminal.semantic.treasury_position().0);
     let runtime_release = contract::fee_runtime_semantic_release_id_v2(&RuntimeSha256)?;
     let selected_pda = seeds::general_v2_selected_fee_record_pda(
         program_id,
@@ -283,6 +428,7 @@ pub(crate) fn authenticate_fee_terminal_pair_v1(
     let terminal_observed_balance_lamports =
         checked_persisted_balance(terminal_account, terminal.rent)?;
     Ok(AuthenticatedFeeTerminalPairV1 {
+        expectation,
         manifest_account: Id32::from_bytes(manifest_account.key.to_bytes()),
         terminal_account: Id32::from_bytes(terminal_account.key.to_bytes()),
         manifest_account_data_id,
@@ -293,6 +439,8 @@ pub(crate) fn authenticate_fee_terminal_pair_v1(
         terminal_rent: terminal.rent,
         manifest_observed_balance_lamports,
         terminal_observed_balance_lamports,
+        revenue_policy,
+        treasury_position,
         general,
         dealer,
     })
