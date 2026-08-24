@@ -23,6 +23,8 @@
   const FRACTIONAL_COORDINATE = Object.freeze({ familyTag: "79", familyVersion: "1", family: "fractional", flow: "fractional-redemption", messageVersion: "legacy", lookupTables: 0 });
   const FRACTIONAL_ACTION_CONTRACTS = Object.freeze({
     "2": Object.freeze({ action: "redeem-fractional-internal-exact", ownerSchema: "fractional-redemption/79/1/2/redeem-internal-exact", driverRole: 12, equationNames: Object.freeze(["chain-derived internal Eggs burned", "chain-derived exact collateral payout"]) }),
+    "3": Object.freeze({ action: "redeem-fractional-bearer-exact", ownerSchema: "fractional-redemption/79/1/3/redeem-bearer-exact", driverRole: 12, equationNames: Object.freeze(["holder-approved bearer Eggs burned", "chain-derived whole collateral payout", "chain-derived retained payout numerator"]) }),
+    "5": Object.freeze({ action: "redeem-fractional-bearer-credit", ownerSchema: "fractional-redemption/79/1/5/redeem-bearer-credit", driverRole: 12, equationNames: Object.freeze(["holder-approved bearer Eggs burned", "chain-derived whole collateral payout", "chain-derived retained payout numerator"]) }),
     "8": Object.freeze({ action: "close-fractional-zero-credit", ownerSchema: "fractional-redemption/79/1/8/close-zero-credit", driverRole: 13, equationNames: Object.freeze(["chain-derived zero-credit rent split"]) }),
     "9": Object.freeze({ action: "seal-fractional-claims-exhausted", ownerSchema: "fractional-redemption/79/1/9/seal-claims-exhausted", driverRole: 11, equationNames: Object.freeze(["chain-derived zero native claim supply"]) })
   });
@@ -1142,6 +1144,9 @@
       ["claim-ledger-v3", false, true], ["resolution-v5", false, false], ["fractional-policy-v3", false, false], ["fractional-ledger-v1", false, true]
     ];
     let expected;
+    let geometry = "fixed";
+    let holderChoice = null;
+    let payerIndex = null;
     if (coordinate.localAction === "2") {
       expected = [["claimant", true, false], ...common, ["position-v3", false, true], ["general-replay-v3", false, true]];
     } else if (coordinate.localAction === "9") {
@@ -1152,14 +1157,58 @@
         ["claimant", true, payerAlias], ...common, ["fractional-credit-v2", false, true],
         ["credit-rent-payer", payerAlias, true], ["market-lifecycle-root-v2", false, false], ["neutral-sink", false, true], ["rent-sysvar", false, false]
       ];
+    } else if (coordinate.localAction === "3" || coordinate.localAction === "5") {
+      const creditIndex = coordinate.localAction === "5" ? accountRoles.findIndex((role, roleIndex) => roleIndex >= 23 && role.role === "fractional-credit-v2") : -1;
+      const outcomeCount = coordinate.localAction === "3" ? accountRoles.length - 21 : creditIndex - 21;
+      const creation = coordinate.localAction === "5" && creditIndex >= 0 && accountRoles.length === creditIndex + 6;
+      if (outcomeCount < 2 || outcomeCount > 16 || (coordinate.localAction === "3" && accountRoles.length !== 21 + outcomeCount) || (coordinate.localAction === "5" && (creditIndex < 23 || (!creation && accountRoles.length !== creditIndex + 4)))) throw new Error("Fractional bearer material has invalid dynamic outcome/credit geometry.");
+      payerIndex = creation ? creditIndex + 4 : null;
+      const payerAlias = payerIndex !== null && accountRoles[0].address === accountRoles[payerIndex].address;
+      const selectedOutcomeRoles = accountRoles.slice(21, 21 + outcomeCount).map((role, outcome) => role.role === "outcome-mint" && role.writable ? outcome : null).filter((outcome) => outcome !== null);
+      if (selectedOutcomeRoles.length !== 1) throw new Error("Fractional bearer material does not select exactly one writable outcome mint.");
+      const selectedOutcome = selectedOutcomeRoles[0];
+      const prefix = [
+        ["claimant", true, payerAlias], ["realm", false, false], ["profile", false, false], ["collateral-policy", false, false], ["collateral-token-program", false, false],
+        ["market-binding-v2", false, false], ["market-runtime-v3", false, false], ["market-instance-preimage-v2", false, false], ["hoard-v2", false, true],
+        ["claim-ledger-v3", false, true], ["resolution-v5", false, false], ["fractional-policy-v3", false, false], ["fractional-ledger-v1", false, true],
+        ["collateral-mint", false, false], ["collateral-destination", false, true], ["hoard-authority", false, false], ["hoard-token", false, true],
+        ["outcome-token-program", false, false], ["outcome-token-programdata", false, false], ["bearer-source", false, true], ["collateral-token-programdata", false, false]
+      ];
+      const outcomes = Array.from({ length: outcomeCount }, (_, outcome) => ["outcome-mint", false, outcome === selectedOutcome]);
+      const suffix = coordinate.localAction === "5" ? [
+        ["fractional-credit-v2", false, true], ["market-lifecycle-root-v2", false, false], ["neutral-lamport-sink", false, false], ["rent-sysvar", false, false],
+        ...(creation ? [["credit-funding-payer", true, true], ["system-program", false, false]] : [])
+      ] : [];
+      expected = [...prefix, ...outcomes, ...suffix];
+      geometry = coordinate.localAction === "3" ? `bearer-exact-21+${outcomeCount}` : creation ? `bearer-credit-27+${outcomeCount}` : `bearer-credit-25+${outcomeCount}`;
+      requirePlain(transactionDraft.exactEquations[0].unit, "Fractional holder Eggs unit");
+      const equationOutcome = positiveDecimal(transactionDraft.exactEquations[0].unit.outcome, "Fractional holder outcome", 15n).toString();
+      const quantity = positiveDecimal(transactionDraft.exactEquations[0].left, "Fractional holder quantity").toString();
+      if (transactionDraft.exactEquations[0].unit.kind !== "egg-atoms" || equationOutcome !== String(selectedOutcome)) throw new Error("Fractional holder outcome differs from its selected chain-derived mint and exact burn equation.");
+      holderChoice = Object.freeze({
+        schema: "dragons-clutch/browser/fractional-holder-intent/v1",
+        kind: coordinate.localAction === "3" ? "redeem-bearer-exact" : "redeem-bearer-credit",
+        claimant: accountRoles[0].address,
+        bearerSource: accountRoles[19].address,
+        outcome: String(selectedOutcome),
+        quantity,
+        collateralDestination: accountRoles[14].address,
+        fundingPayer: payerIndex === null ? null : accountRoles[payerIndex].address,
+        disposition: "holder-approved-choices-reauthenticated-against-finalized-chain-derived-material"
+      });
     } else {
       throw new Error("Fractional action lacks a landed exact browser material contract.");
     }
     const exactRoles = expected.map(([role, signer, writable]) => directRole(role, signer, writable));
     if (!contract || coordinate.action !== contract.action || row.semanticOwnerConstructor !== `clutch-fractional-redemption-runtime/${contract.ownerSchema}` || !directRolesMatch(accountRoles, exactRoles)) throw new Error("Fractional verdict differs from its exact landed chain-derived material contract.");
+    const loaderAlias = (left, right) => (left === 4 && right === 17) || (left === 18 && right === 20);
+    if ((coordinate.localAction === "3" || coordinate.localAction === "5") && ((accountRoles[4].address === accountRoles[17].address) !== (accountRoles[18].address === accountRoles[20].address))) throw new Error("Fractional bearer loader program/programdata aliases are not correlated.");
     for (let left = 0; left < accountRoles.length; left += 1) {
       for (let right = left + 1; right < accountRoles.length; right += 1) {
-        if (accountRoles[left].address === accountRoles[right].address && !(coordinate.localAction === "8" && left === 0 && right === 14)) throw new Error("Fractional exact tuple contains an unowned account alias.");
+        const permitted = (coordinate.localAction === "8" && left === 0 && right === 14)
+          || ((coordinate.localAction === "3" || coordinate.localAction === "5") && loaderAlias(left, right))
+          || (coordinate.localAction === "5" && payerIndex !== null && left === 0 && right === payerIndex);
+        if (accountRoles[left].address === accountRoles[right].address && !permitted) throw new Error("Fractional exact tuple contains an unowned account alias.");
       }
     }
     const driver = accountRoles[contract.driverRole];
@@ -1188,8 +1237,9 @@
     return Object.freeze({
       schema: "dragons-clutch/browser/fractional-chain-material-contract/v1",
       provenance: "all-account-identities-metas-payload-and-amounts-derived-from-finalized-chain-state",
-      holderChoice: null,
-      holderChoiceDisposition: "none-for-current-actions-2-8-9"
+      geometry,
+      holderChoice,
+      holderChoiceDisposition: holderChoice === null ? "none-for-current-actions-2-8-9" : "irreducible-holder-choices-only-no-account-meta-authority"
     });
   };
 
@@ -1460,10 +1510,13 @@
       });
     }
     if (action.fractionalContract) {
+      const holderDisposition = action.fractionalContract.holderChoice === null
+        ? "this action asks for no holder-authored semantic input"
+        : "only the displayed claimant/source/outcome/quantity/destination/funding choices are holder-approved; every account meta and derived field remains chain-owned";
       return Object.freeze({
         eligible: true,
         kind: "finalized-exact-fractional-chain-material-inspectable",
-        reason: `Fractional action ${action.coordinate.localAction} is fully chain-derived: exact finalized identities, metas, amount equations, replay cursor, release, and unsigned bytes agree; this action asks for no holder-authored semantic input.`,
+        reason: `Fractional action ${action.coordinate.localAction} has exact finalized identities, metas, amount equations, replay cursor, release, and unsigned bytes; ${holderDisposition}.`,
         observedAccounts: String(observations.length),
         staleAccounts: "0",
         validBeforeSlot: action.freshnessDisposition.validBeforeSlot
