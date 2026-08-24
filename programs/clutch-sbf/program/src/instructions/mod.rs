@@ -140,6 +140,7 @@ pub mod general_v2_virtual_v5;
     feature = "profile-successor-chain-attached-dev"
 ))]
 pub mod general_v2_materialize_v5;
+mod general_v2_owner_fee_assessment_v6;
 #[cfg(any(
     all(
         feature = "profile-full",

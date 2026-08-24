@@ -146,6 +146,29 @@ pub struct VisitedPortfolioFeeWeightRowV2 {
     terminal_fee_atoms: u64,
 }
 
+/// Exact whole-owner fee certificate shared by action-24 charging and the
+/// certified maker-weight plane.
+///
+/// The numerator is the selected CompositeDispersionFloor numerator before
+/// carry or atom rounding.  It is derived beside the terminal assessment from
+/// the same owner-netted payoff and selected prices, so the persisted
+/// assessment work cannot substitute an order-local or consideration weight.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnerTerminalCompositeFeeCertificateV2 {
+    carry: OwnerFeeCarryV1,
+    assessment: OwnerFeeAssessmentV1,
+    exact_weight_numerator: u128,
+}
+
+impl OwnerTerminalCompositeFeeCertificateV2 {
+    /// Closed terminal carry for the exact owner.
+    pub const fn carry(self) -> OwnerFeeCarryV1 { self.carry }
+    /// Sole terminal-ceil charge for the exact owner.
+    pub const fn assessment(self) -> OwnerFeeAssessmentV1 { self.assessment }
+    /// Unrounded owner-netted CompositeDispersionFloor numerator.
+    pub const fn exact_weight_numerator(self) -> u128 { self.exact_weight_numerator }
+}
+
 impl VisitedPortfolioFeeWeightRowV2 {
     /// Traversal-authenticated order owner before Position projection.
     pub const fn owner(self) -> Id32 { self.owner }
@@ -424,6 +447,17 @@ pub fn derive_owner_terminal_composite_fee_v2(
     selected: &SelectedCompositeFeeV2,
     owner: Id32,
 ) -> Result<(OwnerFeeCarryV1, OwnerFeeAssessmentV1), SettlementAdapterErrorV1> {
+    let certificate = certify_owner_terminal_composite_fee_v2(traversal, selected, owner)?;
+    Ok((certificate.carry(), certificate.assessment()))
+}
+
+/// Certify the charging result and its pre-rounding maker-weight numerator in
+/// one traversal-owned derivation.
+pub fn certify_owner_terminal_composite_fee_v2(
+    traversal: &dyn SettlementTraversalAccessV5,
+    selected: &SelectedCompositeFeeV2,
+    owner: Id32,
+) -> Result<OwnerTerminalCompositeFeeCertificateV2, SettlementAdapterErrorV1> {
     if owner.is_zero()
         || selected.realm().0 != traversal.projection().realm().bytes()
         || selected.market().0 != traversal.projection().feed().market.bytes()
@@ -444,6 +478,13 @@ pub fn derive_owner_terminal_composite_fee_v2(
         return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
     }
     let prices = traversal_prices(traversal)?;
+    let quote = selected.quote_owner(&payoff, &prices, 0)?;
+    if quote.exact_numerator != quote.base_numerator
+        || quote.exact_denominator != quote.base_denominator
+        || quote.base_denominator != selected.carry_denominator()
+    {
+        return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
+    }
     let carry = OwnerFeeCarryV1::admit(selected, FeeId(owner.bytes()))?;
     let (carry, assessment) = carry.assess(
         selected,
@@ -456,11 +497,16 @@ pub fn derive_owner_terminal_composite_fee_v2(
         || assessment.next_carry() != 0
         || assessment.boundary() != AssessmentBoundaryV1::TerminalCeil
         || assessment.charged_atoms() != carry.paid_atoms()
-        || (carry.paid_atoms() != 0 && !has_buy)
+        || u128::from(assessment.charged_atoms()) != quote.terminal_ceil_atoms
+        || (quote.base_numerator != 0 && !has_buy)
     {
         return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
     }
-    Ok((carry, assessment))
+    Ok(OwnerTerminalCompositeFeeCertificateV2 {
+        carry,
+        assessment,
+        exact_weight_numerator: quote.base_numerator,
+    })
 }
 
 fn pristine_fee_envelope_matches_plan(
@@ -531,11 +577,68 @@ pub fn derive_owner_fee_envelope_v2(
     order_index: u8,
     reservation: ReservationAccountV9,
 ) -> Result<FeeEnvelopeV1, SettlementAdapterErrorV1> {
-    reservation.validate()?;
-    let body = reservation.body();
     let (row, expected_reservation) =
         owner_fee_order_and_reservation_id_v2(traversal, owner, order_index)?;
     let feed = traversal.projection().feed();
+    derive_owner_fee_envelope_from_page_v2(
+        feed,
+        traversal.projection().price_grid_id(),
+        traversal.projection().terms(),
+        traversal.projection().reservation_policy(),
+        owner,
+        order_index,
+        traversal.selected_fill(order_index)?,
+        row,
+        reservation,
+    )
+    .and_then(|envelope| {
+        if envelope.intent.0 != expected_reservation.bytes() {
+            Err(SettlementAdapterErrorV1::ReservationSetMismatch)
+        } else {
+            Ok(envelope)
+        }
+    })
+}
+
+/// Recompute one exact signed fee envelope from a single root-bound retained
+/// Feed and one hostile-authenticated frozen page row.
+///
+/// This is the bounded continuation counterpart to
+/// [`derive_owner_fee_envelope_v2`]. It accepts no payoff, fee, weight, or
+/// Reservation identity from the caller. The adapter supplies the already
+/// authenticated current authority scalars and must rejoin the accumulated
+/// transcript to the complete traversal before minting any liability.
+#[allow(clippy::too_many_arguments)]
+pub fn derive_owner_fee_envelope_from_page_v2(
+    feed: CandidateFeedHeaderV2,
+    price_grid_id: Id32,
+    terms: Id32,
+    reservation_policy: Id32,
+    owner: Id32,
+    order_index: u8,
+    selected_fill: u64,
+    row: crate::StreamedOwnerBlindOrderV5,
+    reservation: ReservationAccountV9,
+) -> Result<FeeEnvelopeV1, SettlementAdapterErrorV1> {
+    if owner.is_zero()
+        || price_grid_id.is_zero()
+        || terms.is_zero()
+        || reservation_policy.is_zero()
+        || order_index >= feed.order_count
+        || selected_fill == 0
+        || row.membership().owner() != owner
+    {
+        return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
+    }
+    reservation.validate()?;
+    let body = reservation.body();
+    let expected_reservation = canonical_reservation_id_v9(
+        LayoutHash32(feed.market.bytes()),
+        LayoutHash32(feed.epoch.bytes()),
+        LayoutHash32(owner.bytes()),
+        row.position_generation(),
+        LayoutHash32(row.membership().order_id().bytes()),
+    );
     let expected_plan = ReservationPlan::for_order(
         row.membership().slot(),
         feed.outcome_count,
@@ -572,9 +675,9 @@ pub fn derive_owner_fee_envelope_v2(
         || body.epoch.bytes() != feed.epoch.bytes()
         || body.owner.bytes() != owner.bytes()
         || body.order_id.bytes() != row.membership().order_id().bytes()
-        || body.price_grid.bytes() != traversal.projection().price_grid_id().bytes()
-        || body.terms.bytes() != traversal.projection().terms().bytes()
-        || body.policy.bytes() != traversal.projection().reservation_policy().bytes()
+        || body.price_grid.bytes() != price_grid_id.bytes()
+        || body.terms.bytes() != terms.bytes()
+        || body.policy.bytes() != reservation_policy.bytes()
         || body.position_generation != row.position_generation()
         || body.order_generation != row.membership().generation()
         || body.page_index != row.page_index()

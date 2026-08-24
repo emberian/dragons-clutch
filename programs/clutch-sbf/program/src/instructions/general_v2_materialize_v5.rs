@@ -48,6 +48,9 @@ use super::general_v2_fee_v5::{
     PreparedOwnerFeeAction24V5,
 };
 use super::general_v2_settlement_producer_v5::{create_from_payer, encode_account, rent_owner};
+use super::general_v2_owner_fee_assessment_v6::{
+    try_process_action24_owner_fee_assessment_v6, Action24AssessmentDispatchV1,
+};
 use super::general_v2_settlement_root::AuthenticatedGeneralSettlementRootV1;
 use super::general_v2_settlement_traversal_v5::{
     authenticate_portfolio_materialization_sibling_set_v5, authenticate_settlement_traversal_v5,
@@ -61,16 +64,14 @@ pub const ACTION24_TRAVERSAL_PREFIX_ACCOUNTS: usize = 12;
 pub const ACTION24_CREATION_HEADER_ACCOUNTS: usize = 4;
 /// Owner row, ReservationV9, and PositionV3 for one real endpoint.
 pub const ACTION24_ENDPOINT_ACCOUNTS: usize = 3;
-/// Candidate-wide fee accounts shared by every newly created owner row.
-pub const ACTION24_FEE_COMMON_ACCOUNTS: usize = 4;
-/// Fixed fresh owner-fee roles: carry then payer snapshot.
-///
-/// They are followed by `filled_owner_order_count - 1` read-only V9
-/// Reservations in ascending Reservation identity, excluding the endpoint
-/// Reservation already present in the fixed endpoint triple.
-pub const ACTION24_FEE_OWNER_ACCOUNTS: usize = 2;
+/// Candidate-wide fee roles: selected, batch, Revenue record/preimage, sink.
+pub const ACTION24_FEE_COMMON_ACCOUNTS: usize = 5;
+/// Fixed fresh-owner roles: carry, payer snapshot, completed assessment work.
+pub const ACTION24_FEE_OWNER_ACCOUNTS: usize = 3;
 /// Receipt targets after the first fixed receipt role for a Portfolio pair.
 pub const ACTION24_PORTFOLIO_EXTRA_RECEIPTS_MAX: usize = PORTFOLIO_PAIR_MAX_RECEIPTS_V2 - 1;
+/// Deployed instruction ceiling leaves one of Solana's 64 keys for the program.
+pub const ACTION24_MAX_ACCOUNT_INFOS_V5: usize = 63;
 
 const IX_ROOT: usize = 0;
 const IX_FEED: usize = 1;
@@ -212,7 +213,6 @@ fn non_page_account_count(
     endpoint_count: usize,
     fresh_owner_count: usize,
     fee_present: bool,
-    other_owner_reservation_count: usize,
 ) -> Outcome<usize> {
     require(
         (1..=2).contains(&endpoint_count),
@@ -240,7 +240,6 @@ fn non_page_account_count(
         .checked_add(ACTION24_CREATION_HEADER_ACCOUNTS)
         .and_then(|value| value.checked_add(endpoint_accounts))
         .and_then(|value| value.checked_add(fee_accounts))
-        .and_then(|value| value.checked_add(other_owner_reservation_count))
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))
 }
 
@@ -248,7 +247,6 @@ fn non_page_account_count(
 fn portfolio_non_page_account_count(
     receipt_count: u8,
     fee_present: bool,
-    other_owner_reservation_count: usize,
 ) -> Outcome<usize> {
     let receipt_count = usize::from(receipt_count);
     require(
@@ -270,7 +268,6 @@ fn portfolio_non_page_account_count(
         .checked_add(ACTION24_CREATION_HEADER_ACCOUNTS)
         .and_then(|value| value.checked_add(2 * ACTION24_ENDPOINT_ACCOUNTS))
         .and_then(|value| value.checked_add(fee_accounts))
-        .and_then(|value| value.checked_add(other_owner_reservation_count))
         .and_then(|value| value.checked_add(receipt_count - 1))
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))
 }
@@ -455,21 +452,8 @@ fn prepare_owner_fee_evidence(
                 .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
                 .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
             let owner = Id32::new(membership.owner)?;
-            let basis = entitlement
-                .owner_basis(owner)
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-            let envelope_count = basis
-                .expected_buy_order_mask()
-                .count_ones()
-                .checked_add(basis.expected_sell_order_mask().count_ones())
-                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-            let other_reservation_count = usize::try_from(envelope_count)
-                .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?
-                .checked_sub(1)
-                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
             let owner_fee_end = owner_fee_at
                 .checked_add(ACTION24_FEE_OWNER_ACCOUNTS)
-                .and_then(|value| value.checked_add(other_reservation_count))
                 .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
             require(owner_fee_end <= accounts.len(), ClutchError::WrongAccountCount)?;
             let carry_rent = rent_owner(
@@ -503,10 +487,9 @@ fn prepare_owner_fee_evidence(
                             realm: &accounts[IX_REALM],
                             revenue_policy_preimage: &accounts[fee_at + 3],
                         },
-                        endpoint_order_index: order_indices[ordinal],
-                        endpoint_reservation: &accounts[endpoint_base(ordinal)? + 1],
-                        other_reservations: &accounts
-                            [owner_fee_at + ACTION24_FEE_OWNER_ACCOUNTS..owner_fee_end],
+                        assessment_work: &accounts[owner_fee_at + 2],
+                        work_rent_payer: &accounts[IX_RENT_PAYER],
+                        neutral_sink: &accounts[fee_at + 4],
                         carry_rent,
                         payer_rent,
                     },
@@ -873,41 +856,37 @@ mod tests {
 
     #[test]
     fn account_partition_is_exact_and_presence_explicit() {
-        assert_eq!(non_page_account_count(1, 0, false, 0).unwrap(), 19);
-        assert_eq!(non_page_account_count(2, 0, false, 0).unwrap(), 22);
-        assert_eq!(non_page_account_count(1, 1, true, 0).unwrap(), 25);
-        assert_eq!(non_page_account_count(2, 2, true, 7).unwrap(), 37);
+        assert_eq!(non_page_account_count(1, 0, false).unwrap(), 19);
+        assert_eq!(non_page_account_count(2, 0, false).unwrap(), 22);
+        assert_eq!(non_page_account_count(1, 1, true).unwrap(), 27);
+        assert_eq!(non_page_account_count(2, 2, true).unwrap(), 33);
     }
 
     #[test]
     fn account_partition_refuses_impossible_fresh_rows() {
-        assert!(non_page_account_count(0, 0, false, 0).is_err());
-        assert!(non_page_account_count(3, 0, false, 0).is_err());
-        assert!(non_page_account_count(1, 2, true, 0).is_err());
+        assert!(non_page_account_count(0, 0, false).is_err());
+        assert!(non_page_account_count(3, 0, false).is_err());
+        assert!(non_page_account_count(1, 2, true).is_err());
     }
 
     #[test]
     fn portfolio_partition_is_capability_counted_and_bounded() {
-        assert_eq!(portfolio_non_page_account_count(1, false, 0).unwrap(), 22);
-        assert_eq!(portfolio_non_page_account_count(16, false, 0).unwrap(), 37);
-        assert_eq!(portfolio_non_page_account_count(1, true, 0).unwrap(), 30);
-        assert_eq!(portfolio_non_page_account_count(16, true, 9).unwrap(), 54);
-        assert!(portfolio_non_page_account_count(0, false, 0).is_err());
-        assert!(portfolio_non_page_account_count(17, true, 0).is_err());
+        assert_eq!(portfolio_non_page_account_count(1, false).unwrap(), 22);
+        assert_eq!(portfolio_non_page_account_count(16, false).unwrap(), 37);
+        assert_eq!(portfolio_non_page_account_count(1, true).unwrap(), 33);
+        assert_eq!(portfolio_non_page_account_count(16, true).unwrap(), 48);
+        assert!(portfolio_non_page_account_count(0, false).is_err());
+        assert!(portfolio_non_page_account_count(17, true).is_err());
     }
 
     #[test]
-    fn exhaustive_fee_envelopes_do_not_impose_a_legacy_key_ceiling() {
-        // One endpoint may be the first materialized order for an owner that
-        // owns all 64 filled orders: the fixed endpoint supplies one
-        // Reservation and the fee suffix supplies the other 63.
-        assert_eq!(non_page_account_count(1, 1, true, 63).unwrap(), 88);
-        // A 16-receipt portfolio pair plus two fresh owners can still cover a
-        // complete 64-order envelope set. Versioned transactions/ALTs carry
-        // this explicit account graph; 32 keys is not a protocol limit.
-        let non_page = portfolio_non_page_account_count(16, true, 62).unwrap();
-        assert_eq!(non_page, 107);
-        assert!(non_page + MAX_ORDER_PAGES + 1 <= 128);
+    fn completed_assessment_work_keeps_every_final_frame_under_64() {
+        let generic = non_page_account_count(2, 2, true).unwrap();
+        let portfolio = portfolio_non_page_account_count(16, true).unwrap();
+        assert_eq!(generic + MAX_ORDER_PAGES, 37);
+        assert_eq!(portfolio + MAX_ORDER_PAGES, 52);
+        assert!(generic + MAX_ORDER_PAGES <= 63);
+        assert!(portfolio + MAX_ORDER_PAGES <= 63);
     }
 
     #[test]
@@ -1099,6 +1078,28 @@ fn fee_creation_account<'a, 'info>(
     found.ok_or(Refusal::Adapter(ClutchError::MismatchedState))
 }
 
+fn set_lamports_v5(account: &AccountInfo<'_>, value: u64) -> Outcome<()> {
+    let mut lamports = account
+        .try_borrow_mut_lamports()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    **lamports = value;
+    Ok(())
+}
+
+fn close_owner_fee_assessment_work_v5(account: &AccountInfo<'_>) -> Outcome<()> {
+    set_lamports_v5(account, 0)?;
+    account
+        .resize(0)
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    account.assign(&SYSTEM_PROGRAM_ID);
+    require(
+        account.lamports() == 0
+            && account.data_len() == 0
+            && account.owner == &SYSTEM_PROGRAM_ID,
+        ClutchError::MismatchedState,
+    )
+}
+
 #[inline(never)]
 fn apply_owner_fee_creations_v5<'info>(
     program_id: &Pubkey,
@@ -1108,6 +1109,93 @@ fn apply_owner_fee_creations_v5<'info>(
 ) -> Outcome<()> {
     let payer = &accounts[IX_RENT_PAYER];
     let system = &accounts[IX_SYSTEM];
+    let payer_before = payer.lamports();
+    let mut creation_principal = 0u64;
+    let mut work_refund = 0u64;
+    let mut work_donation = 0u64;
+    let mut neutral_sink = None;
+    for fee in fees {
+        let Some(creation) = fee.as_ref().and_then(PreparedOwnerFeeAction24V5::creation) else {
+            continue;
+        };
+        creation_principal = creation_principal
+            .checked_add(creation.carry_rent().refundable_principal)
+            .and_then(|value| {
+                value.checked_add(creation.payer_rent().refundable_principal)
+            })
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        work_refund = work_refund
+            .checked_add(creation.assessment_work_rent().refundable_principal)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        work_donation = work_donation
+            .checked_add(creation.assessment_work_donation_lamports())
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        let work_account = fee_creation_account(accounts, creation.assessment_work_account())?;
+        let sink_account = fee_creation_account(accounts, creation.neutral_sink())?;
+        require(
+            work_account.owner == program_id
+                && work_account.is_writable
+                && !work_account.is_signer
+                && !work_account.executable
+                && work_account.data_len()
+                    == contract::OWNER_FEE_ASSESSMENT_WORK_ACCOUNT_BYTES_V1
+                && creation.assessment_work_rent().payer == id(payer.key)
+                && work_account.lamports()
+                    == creation
+                        .assessment_work_rent()
+                        .refundable_principal
+                        .checked_add(creation.assessment_work_donation_lamports())
+                        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?
+                && creation.assessment_work_donation_lamports()
+                    >= creation.assessment_work_rent().donation_floor
+                && sink_account.is_writable
+                && !sink_account.is_signer
+                && !sink_account.executable,
+            ClutchError::MismatchedState,
+        )?;
+        let mut decoded = super::general_v2_owner_fee_assessment_v6::boxed_work_scratch_v6()?;
+        let work_data_id = contract::OwnerFeeAssessmentWorkV1AccountV1::decode_into_and_data_id(
+            &borrow_data(work_account)?,
+            &mut decoded,
+            &RuntimeSha256,
+            id(work_account.key),
+        )?;
+        require(
+            !decoded.semantic.is_ready()
+                && decoded.semantic.next_page() == decoded.semantic.page_count()
+                && decoded.rent == creation.assessment_work_rent()
+                && work_data_id == creation.assessment_work_data_id(),
+            ClutchError::MismatchedState,
+        )?;
+        if let Some(expected) = neutral_sink {
+            require(expected == id(sink_account.key), ClutchError::MismatchedState)?;
+        } else {
+            neutral_sink = Some(id(sink_account.key));
+        }
+        for account in [work_account, payer, sink_account] {
+            let data = account
+                .try_borrow_mut_data()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+            drop(data);
+            let lamports = account
+                .try_borrow_mut_lamports()
+                .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+            drop(lamports);
+        }
+    }
+    let payer_after_creates = payer_before
+        .checked_sub(creation_principal)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let payer_after_close = payer_after_creates
+        .checked_add(work_refund)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let sink_after = match neutral_sink {
+        Some(sink) => fee_creation_account(accounts, sink)?
+            .lamports()
+            .checked_add(work_donation)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+        None => 0,
+    };
     for fee in fees {
         let Some(creation) = fee.as_ref().and_then(PreparedOwnerFeeAction24V5::creation) else {
             continue;
@@ -1191,6 +1279,24 @@ fn apply_owner_fee_creations_v5<'info>(
                         .refundable_principal
                         .checked_add(creation.payer_rent().donation_floor)
                         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+            ClutchError::MismatchedState,
+        )?;
+    }
+    require(payer.lamports() == payer_after_creates, ClutchError::MismatchedState)?;
+    for fee in fees {
+        let Some(creation) = fee.as_ref().and_then(PreparedOwnerFeeAction24V5::creation) else {
+            continue;
+        };
+        let work_account = fee_creation_account(accounts, creation.assessment_work_account())?;
+        close_owner_fee_assessment_work_v5(work_account)?;
+    }
+    if let Some(sink) = neutral_sink {
+        let sink_account = fee_creation_account(accounts, sink)?;
+        set_lamports_v5(payer, payer_after_close)?;
+        set_lamports_v5(sink_account, sink_after)?;
+    } else {
+        require(
+            creation_principal == 0 && work_refund == 0 && work_donation == 0,
             ClutchError::MismatchedState,
         )?;
     }
@@ -1429,6 +1535,19 @@ pub fn process(
         ClutchError::UnsupportedInstruction,
     )?;
     let request = FreezeEntitlementPayloadV1::decode(payload)?;
+    if try_process_action24_owner_fee_assessment_v6(
+        program_id,
+        accounts,
+        request.epoch,
+        request.settlement_root,
+    )? == Action24AssessmentDispatchV1::Applied
+    {
+        return Ok(());
+    }
+    require(
+        accounts.len() <= ACTION24_MAX_ACCOUNT_INFOS_V5,
+        ClutchError::WrongAccountCount,
+    )?;
     require(
         accounts.len()
             >= ACTION24_TRAVERSAL_PREFIX_ACCOUNTS

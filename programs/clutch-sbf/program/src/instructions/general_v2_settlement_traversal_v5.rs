@@ -32,10 +32,12 @@ use clutch_general_v2_contract::{
 };
 use clutch_general_v2_runtime::{
     authenticate_settlement_feed_view_v5, authenticate_settlement_order_book_view_v5,
+    authenticate_settlement_page_view_v5,
     bind_settlement_root_traversal_v5, derive_settlement_traversal_projection_v5,
     project_owner_blind_book_stream_costed_v1, read_authenticated_feed_fill_v5,
     read_authenticated_feed_slice_v5,
     GeneralOrderPageInputV5, SettlementAdapterErrorV1, SettlementOrderBookBindingV5,
+    SettlementPageViewV5,
     SettlementTraversalAccessV5, SettlementTraversalProjectionV5, StreamedOwnerBlindOrderV5,
 };
 use clutch_retirement::{
@@ -90,6 +92,241 @@ pub struct SettlementTraversalAccountFrameV5<'a, 'info> {
     pub market_genesis: &'a AccountInfo<'info>,
     /// Complete one-to-four canonical OrderPage V5 accounts in page order.
     pub pages: &'a [AccountInfo<'info>],
+}
+
+/// One-page immutable authority frame for an action-24 fee continuation.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SettlementPageContinuationFrameV5<'a, 'info> {
+    pub(crate) retained_feed: &'a AccountInfo<'info>,
+    pub(crate) market_binding: &'a AccountInfo<'info>,
+    pub(crate) market_runtime: &'a AccountInfo<'info>,
+    pub(crate) economic_domain: &'a AccountInfo<'info>,
+    pub(crate) price_grid: &'a AccountInfo<'info>,
+    pub(crate) realm: &'a AccountInfo<'info>,
+    pub(crate) profile: &'a AccountInfo<'info>,
+    pub(crate) collateral_policy: &'a AccountInfo<'info>,
+    pub(crate) token_program: &'a AccountInfo<'info>,
+    pub(crate) market_instance: &'a AccountInfo<'info>,
+    pub(crate) market_genesis: &'a AccountInfo<'info>,
+    pub(crate) page: &'a AccountInfo<'info>,
+}
+
+/// Borrow-bound one-page continuation authority. It cannot implement the
+/// complete traversal trait and therefore cannot mint settlement liabilities.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedSettlementPageContinuationV5<'info> {
+    market: MarketBindingV4,
+    retained_feed: AccountInfo<'info>,
+    page: AccountInfo<'info>,
+    feed: CandidateFeedHeaderV2,
+    feed_data_id: Id32,
+    page_data_id: Id32,
+    page_index: u8,
+    page_count: u8,
+    page_physical_count: u8,
+    page_live_count: u8,
+    domain: clutch_batch::relation_v2::EconomicDomainV2,
+    price_grid_id: Id32,
+    realm: Id32,
+}
+
+impl AuthenticatedSettlementPageContinuationV5<'_> {
+    pub(crate) const fn market(&self) -> &MarketBindingV4 { &self.market }
+    pub(crate) const fn feed(&self) -> CandidateFeedHeaderV2 { self.feed }
+    pub(crate) fn feed_account(&self) -> Id32 { id(self.retained_feed.key) }
+    pub(crate) const fn feed_data_id(&self) -> Id32 { self.feed_data_id }
+    pub(crate) fn page_account(&self) -> Id32 { id(self.page.key) }
+    pub(crate) const fn page_data_id(&self) -> Id32 { self.page_data_id }
+    pub(crate) const fn page_index(&self) -> u8 { self.page_index }
+    pub(crate) const fn page_count(&self) -> u8 { self.page_count }
+    pub(crate) const fn page_physical_count(&self) -> u8 { self.page_physical_count }
+    pub(crate) const fn page_live_count(&self) -> u8 { self.page_live_count }
+    pub(crate) const fn price_grid_id(&self) -> Id32 { self.price_grid_id }
+    pub(crate) const fn realm(&self) -> Id32 { self.realm }
+
+    pub(crate) fn selected_fill(&self, order_index: u8) -> Outcome<u64> {
+        let data = borrow_data(&self.retained_feed)?;
+        let view = settlement_outcome(authenticate_settlement_feed_view_v5(
+            id(self.retained_feed.key),
+            &data,
+        ))?;
+        require(
+            view.header() == self.feed && view.data_id() == self.feed_data_id,
+            ClutchError::MismatchedState,
+        )?;
+        settlement_outcome(read_authenticated_feed_fill_v5(
+            &data,
+            self.feed,
+            order_index,
+        ))
+    }
+
+    pub(crate) fn settlement_slice(
+        &self,
+        slice_index: u16,
+    ) -> Outcome<clutch_general_v2_runtime::CanonicalSettlementSliceV1> {
+        let data = borrow_data(&self.retained_feed)?;
+        let view = settlement_outcome(authenticate_settlement_feed_view_v5(
+            id(self.retained_feed.key),
+            &data,
+        ))?;
+        require(view.data_id() == self.feed_data_id, ClutchError::MismatchedState)?;
+        settlement_outcome(read_authenticated_feed_slice_v5(
+            &data,
+            self.feed,
+            slice_index,
+        ))
+    }
+
+    pub(crate) fn order_at_physical_slot(
+        &self,
+        physical_slot: u8,
+    ) -> Outcome<StreamedOwnerBlindOrderV5> {
+        require(physical_slot < self.page_physical_count, ClutchError::MismatchedState)?;
+        let data = borrow_data(&self.page)?;
+        let view: SettlementPageViewV5<'_> = settlement_outcome(
+            authenticate_settlement_page_view_v5(
+                GeneralOrderPageInputV5 { account: id(self.page.key), body: &data },
+                self.feed.market,
+                self.feed.epoch,
+                self.feed.order_set,
+                self.page_index,
+                self.page_count,
+                u8::try_from(verify_page_v5(&data)?.set_order_count)
+                    .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?,
+            ),
+        )?;
+        require(view.data_id() == self.page_data_id, ClutchError::MismatchedState)?;
+        let mut local = 0u8;
+        while local < self.page_live_count {
+            let row = settlement_outcome(view.order(&self.domain, local))?
+                .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+            if row.page_slot() == physical_slot {
+                return Ok(row);
+            }
+            local = local
+                .checked_add(1)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        }
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+}
+
+/// Authenticate one exact retained Feed and one frozen page without
+/// materializing or claiming authority over the complete page set.
+#[inline(never)]
+pub(crate) fn authenticate_settlement_page_continuation_v5<'info>(
+    program_id: &Pubkey,
+    frame: SettlementPageContinuationFrameV5<'_, 'info>,
+) -> Outcome<AuthenticatedSettlementPageContinuationV5<'info>> {
+    let fixed = [
+        frame.retained_feed, frame.market_binding, frame.market_runtime,
+        frame.economic_domain, frame.price_grid, frame.realm, frame.profile,
+        frame.collateral_policy, frame.token_program, frame.market_instance,
+        frame.market_genesis, frame.page,
+    ];
+    let mut left = 0usize;
+    while left < fixed.len() {
+        let mut right = left + 1;
+        while right < fixed.len() {
+            require(fixed[left].key != fixed[right].key, ClutchError::AccountAlias)?;
+            right += 1;
+        }
+        left += 1;
+    }
+    require_readonly_program_state(program_id, frame.retained_feed, None)?;
+    require_readonly_program_state(
+        program_id,
+        frame.economic_domain,
+        Some(contract::ECONOMIC_DOMAIN_ACCOUNT_BYTES),
+    )?;
+    require_readonly_program_state(program_id, frame.price_grid, Some(account_len::PRICE_GRID))?;
+    require_readonly_program_state(program_id, frame.page, Some(ORDER_PAGE_V5_BYTES))?;
+
+    let feed_data = borrow_data(frame.retained_feed)?;
+    let (feed, _) = contract::complete_candidate_feed_v2(&feed_data, true)?;
+    expect_pda(
+        frame.retained_feed.key,
+        seeds::general_v2_feed_pda(program_id, &feed.node.bytes()),
+        Some(feed.stored_bump),
+    )?;
+    let feed_view = settlement_outcome(authenticate_settlement_feed_view_v5(
+        id(frame.retained_feed.key),
+        &feed_data,
+    ))?;
+    let domain = contract::EconomicDomainV2AccountV1::decode(&borrow_data(frame.economic_domain)?)?;
+    expect_pda(
+        frame.economic_domain.key,
+        seeds::general_v2_economic_domain_pda(program_id, &feed.epoch.bytes()),
+        Some(domain.stored_bump),
+    )?;
+    let grid = PriceGridAccount::decode(&borrow_data(frame.price_grid)?)?;
+    expect_pda(
+        frame.price_grid.key,
+        seeds::grid_pda(program_id, &grid.realm.bytes(), &grid.grid.bytes()),
+        Some(grid.stored_bump),
+    )?;
+    let current = authenticate_general_market_collateral_v4(
+        program_id, frame.market_binding, frame.market_runtime, frame.realm,
+        frame.profile, frame.collateral_policy, frame.token_program,
+        frame.market_instance, frame.market_genesis,
+    )?;
+    let market = current.market_binding();
+    let base = market.base().base();
+    require(
+        current.market_genesis().price_grid_id.bytes() == grid.grid.bytes()
+            && grid.realm.bytes() == current.market_genesis().realm_id.bytes()
+            && grid.price_scale == base.price_scale
+            && feed.market == base.market
+            && feed.epoch == domain.epoch,
+        ClutchError::MismatchedState,
+    )?;
+    let page_data = borrow_data(frame.page)?;
+    let header = verify_page_v5(&page_data)?;
+    let page_index = u8::try_from(header.page_index)
+        .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let page_count = u8::try_from(header.page_count)
+        .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let set_order_count = u8::try_from(header.set_order_count)
+        .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        (1..=MAX_ORDER_PAGES).contains(&usize::from(page_count))
+            && page_index < page_count,
+        ClutchError::MismatchedState,
+    )?;
+    let page_pda = seeds::general_v2_order_page_v5_pda(
+        program_id,
+        &feed.epoch.bytes(),
+        u16::from(page_index),
+    );
+    require(
+        *frame.page.key == page_pda.0 && header.stored_bump == page_pda.1,
+        ClutchError::WrongPda,
+    )?;
+    let page_view = settlement_outcome(authenticate_settlement_page_view_v5(
+        GeneralOrderPageInputV5 { account: id(frame.page.key), body: &page_data },
+        feed.market,
+        feed.epoch,
+        feed.order_set,
+        page_index,
+        page_count,
+        set_order_count,
+    ))?;
+    Ok(AuthenticatedSettlementPageContinuationV5 {
+        market,
+        retained_feed: frame.retained_feed.clone(),
+        page: frame.page.clone(),
+        feed,
+        feed_data_id: feed_view.data_id(),
+        page_data_id: page_view.data_id(),
+        page_index,
+        page_count,
+        page_physical_count: page_view.physical_slot_count(),
+        page_live_count: page_view.live_order_count(),
+        domain: domain.domain,
+        price_grid_id: Id32::new(grid.grid.bytes())?,
+        realm: Id32::new(grid.realm.bytes())?,
+    })
 }
 
 /// Program-authenticated immutable traversal facts.

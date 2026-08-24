@@ -488,6 +488,45 @@ pub fn authenticate_counted_exact_index_read_v1<'a>(input: AuthenticateCountedEx
     -> Result<SealedExactIndexPairInputV1<'a>, ExactIndexPlaneErrorV1>
 { let (_, sealed) = authenticate_join(input, false, false)?; Ok(sealed) }
 
+/// One root-authenticated dense-order location in the retained frozen page
+/// set. The private sealed pair is required so raw locator bytes alone cannot
+/// name an owner or page.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedFrozenOrderLocationV1 {
+    page_index: u16,
+    page_slot: u8,
+}
+
+impl AuthenticatedFrozenOrderLocationV1 {
+    /// Canonical V5 page index.
+    pub const fn page_index(self) -> u16 { self.page_index }
+    /// Physical populated slot, including preceding tombstones.
+    pub const fn page_slot(self) -> u8 { self.page_slot }
+}
+
+/// Read one compact location only after full root/Feed/child-body identity
+/// authentication. This is bounded addressing, not page-row authority.
+pub fn frozen_order_location_from_sealed_accounts_v1(
+    sealed: &SealedExactIndexPairInputV1<'_>,
+    order_index: u8,
+) -> Result<AuthenticatedFrozenOrderLocationV1, ExactIndexPlaneErrorV1> {
+    let common = decode_common(sealed.locator_body, FROZEN_ORDER_LOCATOR_MAGIC_V1)?;
+    if common.plane_id != sealed.authority.plane_id || order_index >= common.order_count {
+        return Err(ExactIndexPlaneErrorV1::BindingMismatch);
+    }
+    let location = read_locator(sealed.locator_body, usize::from(order_index))?;
+    if usize::from(location.page_index) >= usize::from(common.page_count)
+        || location.page_slot
+            >= common.page_physical_slot_counts[usize::from(location.page_index)]
+    {
+        return Err(ExactIndexPlaneErrorV1::InvalidLocator);
+    }
+    Ok(AuthenticatedFrozenOrderLocationV1 {
+        page_index: location.page_index,
+        page_slot: location.page_slot,
+    })
+}
+
 fn authenticate_feed_bump_v1(
     stored_bump: u8,
     canonical_bump: u8,

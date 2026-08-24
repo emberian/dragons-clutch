@@ -241,6 +241,33 @@ impl OwnerFeeAssessmentWorkV1 {
         order_count: u8,
         neutral_sink: Id32,
     ) -> Result<Self, CodecError> {
+        let mut output = Self {
+            authority,
+            next_page: 0,
+            page_count: 0,
+            order_count: 0,
+            envelope_count: 0,
+            phase: 0,
+            processed_buy_mask: 0,
+            processed_sell_mask: 0,
+            exact_weight_numerator: 0,
+            charged_atoms: 0,
+            neutral_sink: Id32::ZERO,
+            envelopes: [EMPTY_ENVELOPE; MAX_FEE_ROWS_V1],
+        };
+        Self::begin_into(&mut output, authority, page_count, order_count, neutral_sink)?;
+        Ok(output)
+    }
+
+    /// Initialize caller-owned storage without returning the large work body
+    /// through an SBF stack frame.
+    pub fn begin_into(
+        output: &mut Self,
+        authority: OwnerFeeAssessmentAuthorityV1,
+        page_count: u8,
+        order_count: u8,
+        neutral_sink: Id32,
+    ) -> Result<(), CodecError> {
         authority.validate()?;
         if page_count == 0 || page_count > 4 || order_count == 0 || order_count > 64 {
             return Err(CodecError::InvalidCount);
@@ -252,20 +279,19 @@ impl OwnerFeeAssessmentWorkV1 {
         {
             return Err(CodecError::MismatchedBinding);
         }
-        Ok(Self {
-            authority,
-            next_page: 0,
-            page_count,
-            order_count,
-            envelope_count: 0,
-            phase: WORK_PHASE_COLLECTING,
-            processed_buy_mask: 0,
-            processed_sell_mask: 0,
-            exact_weight_numerator: 0,
-            charged_atoms: 0,
-            neutral_sink,
-            envelopes: [EMPTY_ENVELOPE; MAX_FEE_ROWS_V1],
-        })
+        output.authority = authority;
+        output.next_page = 0;
+        output.page_count = page_count;
+        output.order_count = order_count;
+        output.envelope_count = 0;
+        output.phase = WORK_PHASE_COLLECTING;
+        output.processed_buy_mask = 0;
+        output.processed_sell_mask = 0;
+        output.exact_weight_numerator = 0;
+        output.charged_atoms = 0;
+        output.neutral_sink = neutral_sink;
+        output.envelopes.fill(EMPTY_ENVELOPE);
+        Ok(())
     }
 
     /// Immutable source binding.
@@ -378,6 +404,7 @@ impl OwnerFeeAssessmentWorkV1 {
             || (expected_buy_mask | expected_sell_mask).count_ones()
                 != u32::from(self.envelope_count)
             || self.envelope_count == 0
+            || (exact_weight_numerator == 0) != (charged_atoms == 0)
             || (charged_atoms != 0 && expected_buy_mask == 0)
         {
             return Err(CodecError::MismatchedBinding);
@@ -411,6 +438,7 @@ impl OwnerFeeAssessmentWorkV1 {
             }
             WORK_PHASE_READY => {
                 if self.next_page != self.page_count
+                    || (self.exact_weight_numerator == 0) != (self.charged_atoms == 0)
                     || (self.charged_atoms != 0 && self.processed_buy_mask == 0)
                 {
                     return Err(CodecError::InvalidState);
@@ -469,22 +497,24 @@ impl OwnerFeeAssessmentWorkV1 {
         Ok(())
     }
 
-    fn decode(reader: &mut Reader<'_>) -> Result<Self, CodecError> {
-        let authority = OwnerFeeAssessmentAuthorityV1::decode(reader)?;
-        let next_page = reader.u8()?;
-        let page_count = reader.u8()?;
-        let order_count = reader.u8()?;
-        let envelope_count = reader.u8()?;
-        let phase = reader.u8()?;
+    fn decode_into(
+        reader: &mut Reader<'_>,
+        output: &mut Self,
+    ) -> Result<(), CodecError> {
+        output.authority = OwnerFeeAssessmentAuthorityV1::decode(reader)?;
+        output.next_page = reader.u8()?;
+        output.page_count = reader.u8()?;
+        output.order_count = reader.u8()?;
+        output.envelope_count = reader.u8()?;
+        output.phase = reader.u8()?;
         if reader.array::<3>()? != [0; 3] {
             return Err(CodecError::NonCanonicalPadding);
         }
-        let processed_buy_mask = reader.u64()?;
-        let processed_sell_mask = reader.u64()?;
-        let exact_weight_numerator = reader.u128()?;
-        let charged_atoms = reader.u64()?;
-        let neutral_sink = Id32::new(reader.array()?)?;
-        let mut envelopes = [EMPTY_ENVELOPE; MAX_FEE_ROWS_V1];
+        output.processed_buy_mask = reader.u64()?;
+        output.processed_sell_mask = reader.u64()?;
+        output.exact_weight_numerator = reader.u128()?;
+        output.charged_atoms = reader.u64()?;
+        output.neutral_sink = Id32::new(reader.array()?)?;
         let mut index = 0usize;
         while index < MAX_FEE_ROWS_V1 {
             let intent_bytes: [u8; 32] = reader.array()?;
@@ -494,7 +524,7 @@ impl OwnerFeeAssessmentWorkV1 {
                 1 => FeeEnvelopeFundingV1::BuyCashReservation,
                 _ => return Err(CodecError::InvalidState),
             };
-            envelopes[index] = OwnerFeeAssessmentEnvelopeV1 {
+            output.envelopes[index] = OwnerFeeAssessmentEnvelopeV1 {
                 order_index,
                 funding,
                 intent: if intent_bytes == [0; 32] {
@@ -506,22 +536,7 @@ impl OwnerFeeAssessmentWorkV1 {
             };
             index += 1;
         }
-        let work = Self {
-            authority,
-            next_page,
-            page_count,
-            order_count,
-            envelope_count,
-            phase,
-            processed_buy_mask,
-            processed_sell_mask,
-            exact_weight_numerator,
-            charged_atoms,
-            neutral_sink,
-            envelopes,
-        };
-        work.validate()?;
-        Ok(work)
+        output.validate()
     }
 }
 
@@ -537,6 +552,48 @@ pub struct OwnerFeeAssessmentWorkV1AccountV1 {
 }
 
 impl OwnerFeeAssessmentWorkV1AccountV1 {
+    /// Invalid zero storage used only as a heap-resident decode destination.
+    pub const fn output_scratch() -> Self {
+        Self {
+            semantic: OwnerFeeAssessmentWorkV1 {
+                authority: OwnerFeeAssessmentAuthorityV1 {
+                    settlement_root_account: Id32::ZERO,
+                    selected_fee_record_account: Id32::ZERO,
+                    selected_fee_record_data_id: Id32::ZERO,
+                    realm: Id32::ZERO,
+                    revenue_policy_record_account: Id32::ZERO,
+                    revenue_policy_record_v2_id: Id32::ZERO,
+                    revenue_policy_v2_digest: Id32::ZERO,
+                    retained_feed_account: Id32::ZERO,
+                    retained_feed_data_id: Id32::ZERO,
+                    owner: Id32::ZERO,
+                    owner_row_account: Id32::ZERO,
+                    market: Id32::ZERO,
+                    epoch: Id32::ZERO,
+                    order_set: Id32::ZERO,
+                    owner_order_set_digest: Id32::ZERO,
+                },
+                next_page: 0,
+                page_count: 0,
+                order_count: 0,
+                envelope_count: 0,
+                phase: 0,
+                processed_buy_mask: 0,
+                processed_sell_mask: 0,
+                exact_weight_numerator: 0,
+                charged_atoms: 0,
+                neutral_sink: Id32::ZERO,
+                envelopes: [EMPTY_ENVELOPE; MAX_FEE_ROWS_V1],
+            },
+            rent: DeletableRentOwnerV1 {
+                payer: Id32::ZERO,
+                refundable_principal: 0,
+                donation_floor: 0,
+            },
+            stored_bump: 0,
+        }
+    }
+
     fn validate_rent_bindings(&self) -> Result<(), CodecError> {
         self.rent.validate()?;
         if self.rent.payer == self.semantic.authority.settlement_root_account
@@ -566,6 +623,14 @@ impl OwnerFeeAssessmentWorkV1AccountV1 {
 
     /// Hostile decode with all semantic and padding invariants restored.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let mut output = Self::output_scratch();
+        Self::decode_into(input, &mut output)?;
+        Ok(output)
+    }
+
+    /// Decode directly into caller-owned storage so the SBF boundary can keep
+    /// the 3,300-byte object on the heap rather than returning it by value.
+    pub fn decode_into(input: &[u8], output: &mut Self) -> Result<(), CodecError> {
         let mut reader = Reader::exact(input, OWNER_FEE_ASSESSMENT_WORK_ACCOUNT_BYTES_V1)?;
         if reader.u8()? != OWNER_FEE_ASSESSMENT_WORK_ACCOUNT_TAG {
             return Err(CodecError::WrongTag);
@@ -573,24 +638,47 @@ impl OwnerFeeAssessmentWorkV1AccountV1 {
         if reader.u8()? != OWNER_FEE_ASSESSMENT_WORK_ACCOUNT_VERSION {
             return Err(CodecError::WrongVersion);
         }
-        let semantic = OwnerFeeAssessmentWorkV1::decode(&mut reader)?;
-        let rent = DeletableRentOwnerV1 {
+        OwnerFeeAssessmentWorkV1::decode_into(&mut reader, &mut output.semantic)?;
+        output.rent = DeletableRentOwnerV1 {
             payer: Id32::new(reader.array()?)?,
             refundable_principal: reader.u64()?,
             donation_floor: reader.u64()?,
         };
-        rent.validate()?;
-        let stored_bump = reader.u8()?;
+        output.rent.validate()?;
+        output.stored_bump = reader.u8()?;
         if reader.u8()? != 0 {
             return Err(CodecError::NonCanonicalPadding);
         }
         reader.finish()?;
-        let account = Self { semantic, rent, stored_bump };
-        account.validate_rent_bindings()?;
-        Ok(account)
+        output.validate_rent_bindings()?;
+        Ok(())
     }
 
-    /// Bind the exact account bytes and address for continuation replay checks.
+    /// Hostile-decode directly into caller-owned storage and derive the full
+    /// account identity from those exact authenticated bytes.
+    ///
+    /// This is the SBF path: unlike [`Self::data_id`], it does not allocate a
+    /// second 3,300-byte encoded body in the callee frame.
+    pub fn decode_into_and_data_id<B: Sha256BackendV1>(
+        input: &[u8],
+        output: &mut Self,
+        backend: &B,
+        account: Id32,
+    ) -> Result<Id32, CodecError> {
+        if account.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        Self::decode_into(input, output)?;
+        Id32::new(backend.sha256(&[
+            OWNER_FEE_ASSESSMENT_WORK_DATA_ID_DOMAIN_V1,
+            &account.bytes(),
+            input,
+        ]))
+    }
+
+    /// Bind a host-owned semantic object and address for reference tooling.
+    /// Live SBF code uses [`Self::decode_into_and_data_id`] to avoid a second
+    /// maximum-width frame-local body.
     pub fn data_id<B: Sha256BackendV1>(
         &self,
         backend: &B,
@@ -618,6 +706,23 @@ const _: () = assert!(OWNER_FEE_ASSESSMENT_WORK_ACCOUNT_BYTES_V1 <= 10_240);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct TestHash;
+
+    impl Sha256BackendV1 for TestHash {
+        fn sha256(&self, parts: &[&[u8]]) -> [u8; 32] {
+            let mut output = [0u8; 32];
+            let mut index = 0usize;
+            for part in parts {
+                for byte in *part {
+                    output[index % 32] ^= *byte;
+                    index += 1;
+                }
+            }
+            output[0] |= 1;
+            output
+        }
+    }
 
     fn id(byte: u8) -> Id32 { Id32::new([byte; 32]).unwrap() }
 
@@ -662,7 +767,36 @@ mod tests {
         assert!(work.record_page_envelope(0, envelope(1, 21, true)).is_err());
         work.finish_page(0).unwrap();
         assert!(work.seal(1, 0, 99, 1).is_err());
+        assert!(work.seal(1, 4, 0, 1).is_err());
+        assert!(work.seal(1, 4, 99, 0).is_err());
         work.seal(1, 4, 99, 1).unwrap();
         assert!(work.is_ready());
+    }
+
+    #[test]
+    fn bounded_decode_hash_matches_host_reference_and_rejects_tamper() {
+        let mut semantic = OwnerFeeAssessmentWorkV1::begin(authority(), 1, 4, id(16)).unwrap();
+        semantic.record_page_envelope(0, envelope(0, 21, true)).unwrap();
+        semantic.finish_page(0).unwrap();
+        let account = OwnerFeeAssessmentWorkV1AccountV1 {
+            semantic,
+            rent: DeletableRentOwnerV1 {
+                payer: id(17), refundable_principal: 90, donation_floor: 7,
+            },
+            stored_bump: 4,
+        };
+        let account_id = id(18);
+        let mut bytes = [0u8; OWNER_FEE_ASSESSMENT_WORK_ACCOUNT_BYTES_V1];
+        account.encode(&mut bytes).unwrap();
+        let mut decoded = OwnerFeeAssessmentWorkV1AccountV1::output_scratch();
+        let streamed = OwnerFeeAssessmentWorkV1AccountV1::decode_into_and_data_id(
+            &bytes, &mut decoded, &TestHash, account_id,
+        ).unwrap();
+        assert_eq!(decoded, account);
+        assert_eq!(streamed, account.data_id(&TestHash, account_id).unwrap());
+        bytes[2 + AUTHORITY_BYTES + 4] = 9;
+        assert!(OwnerFeeAssessmentWorkV1AccountV1::decode_into_and_data_id(
+            &bytes, &mut decoded, &TestHash, account_id,
+        ).is_err());
     }
 }
