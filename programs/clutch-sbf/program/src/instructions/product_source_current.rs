@@ -8,8 +8,9 @@
 use crate::accounts::{require, require_count, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::product_artifact::{
-    authenticate_product_artifact_v1, AuthenticatedRegistryCapabilityV3,
+    authenticate_product_artifact_v1,
 };
+use crate::instructions::product_series_current::AuthenticatedRegistryCapabilityV4;
 use crate::instructions::product_series::{
     AuthenticatedProductSourceAuthorityV1, IX_SERIES_ARTIFACT_ATTACHMENT,
     IX_SERIES_ARTIFACT_BASIS, IX_SERIES_ARTIFACT_FUNDING_TERMS,
@@ -379,7 +380,7 @@ pub(crate) fn authenticate_series_source_artifacts_v5(
 pub(crate) fn authenticate_compiled_product_series_bundle_v6(
     program_id: &Pubkey,
     bundle_account: &AccountInfo<'_>,
-    registry: AuthenticatedRegistryCapabilityV3,
+    registry: &AuthenticatedRegistryCapabilityV4,
     source_release: AuthenticatedSourceReleaseV1,
     artifacts: &AuthenticatedSeriesSourceArtifactsV5,
 ) -> Outcome<AuthenticatedCompiledProductSeriesBundleV6> {
@@ -418,7 +419,7 @@ pub(crate) fn authenticate_compiled_product_series_bundle_v6(
 pub(crate) fn authenticate_source_product_route_v4(
     route: AuthenticatedSourceRouteV1,
     receiver: AuthenticatedReceiverRouteV2,
-    registry: AuthenticatedRegistryCapabilityV3,
+    registry: &AuthenticatedRegistryCapabilityV4,
     bundle: AuthenticatedCompiledProductSeriesBundleV6,
     artifacts: &AuthenticatedSeriesSourceArtifactsV5,
 ) -> Outcome<AuthenticatedSourceProductRouteV4> {
@@ -783,8 +784,10 @@ mod adversarial_tests {
         assert!(source.contains("SeriesFundingQuoteV5"));
         assert!(source.contains("SeriesAttachmentPlanV5"));
         assert!(source.contains("compile_source_semantic_inputs_v2"));
+        assert!(source.contains("AuthenticatedRegistryCapabilityV4"));
         assert!(!source.contains("CompiledProductSeriesBundleV5"));
         assert!(!source.contains("SeriesFundingQuoteV4"));
         assert!(!source.contains("SeriesAttachmentPlanV4"));
+        assert!(!source.contains("AuthenticatedRegistryCapabilityV3"));
     }
 }

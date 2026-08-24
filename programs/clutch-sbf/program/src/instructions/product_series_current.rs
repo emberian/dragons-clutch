@@ -191,6 +191,38 @@ impl AuthenticatedRegistryCapabilityV4 {
         self.projection
     }
     pub(crate) const fn programdata_sha256(&self) -> ContentId { self.programdata_sha256 }
+    pub(crate) const fn semantic_owners(
+        &self,
+    ) -> clutch_product_series::CapabilitySemanticOwnersV2 {
+        self.profile.rules.semantic_owners
+    }
+    pub(crate) const fn realm_collateral(
+        &self,
+    ) -> clutch_product_series::RealmCollateralProjectionV1 {
+        self.profile.rules.realm_collateral
+    }
+    pub(crate) const fn statistic_registry_value(&self) -> u16 {
+        self.profile.rules.statistic_registry_value
+    }
+    pub(crate) const fn resolved_statistic(
+        &self,
+    ) -> clutch_source_plane_v3::StatisticKindV3 {
+        self.profile.rules.resolved_statistic
+    }
+    pub(crate) const fn coverage_policy_registry_value(&self) -> u16 {
+        self.profile.rules.coverage_policy_registry_value
+    }
+    pub(crate) const fn ambiguity_policy_registry_value(&self) -> u8 {
+        self.profile.rules.ambiguity_policy_registry_value
+    }
+    pub(crate) const fn edge_policy_registry_value(&self) -> u8 {
+        self.profile.rules.edge_policy_registry_value
+    }
+    pub(crate) const fn resolved_edge_policy(
+        &self,
+    ) -> clutch_product_series::QuantizedEdgePolicyV1 {
+        self.profile.rules.resolved_edge_policy
+    }
 }
 
 /// Exact current 0x80/version3 funding authentication.
