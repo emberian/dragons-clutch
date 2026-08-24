@@ -4,9 +4,9 @@
 //!
 //! The V1 transition core remains the sole owner of phase, counter, replay,
 //! ranking, and exact Reservation arithmetic.  Its root projection is private,
-//! total, and one-way: callers authenticate current b1/v2 state, the wrapper
+//! total, and one-way: callers authenticate current b1/v3 state, the wrapper
 //! checks every projected input supplied to the V1 core, and the successor is
-//! reconstructed and revalidated as b1/v2 before it can leave this module.
+//! reconstructed and revalidated as b1/v3 before it can leave this module.
 //! No V1 Product or General authority is exposed or persisted by this API.
 
 use clutch_batch::direct_pair_v1::DirectEconomicCandidateV1;
@@ -17,10 +17,10 @@ use clutch_batch_policy_identity::revenue_policy_v2::RevenuePolicyV2;
 use clutch_general_v2_contract::GeneralPositionReplayPrestateV1;
 use clutch_owner_settlement::{AuthenticatedPositionV3, PositionSettlementPoststateV3};
 
-use crate::current_v2::{
-    direct_foundation_root_semantic_id_v2, DirectMarketBindingV2,
+use crate::current_v3::{
+    direct_foundation_root_semantic_id_v3, DirectMarketBindingV3,
 };
-use crate::codec_v2::AuthenticatedDirectRootTransitionV2;
+use crate::codec_v3::AuthenticatedDirectRootTransitionV3;
 use crate::fee_v1::DirectFeeTerminalV1;
 use crate::fee_v2::DirectFeePolicyV2;
 use crate::liveness_v1::{
@@ -49,12 +49,15 @@ use crate::settlement_v1::{
 use crate::{
     DirectActionReplayV1, DirectHashBackendV1, DirectMarketActionV1,
     DirectMarketErrorV1, DirectRentOwnerV1, DirectReplayPhaseV1,
-    DirectRetirementTransferV1, DirectRootReplayPostV1, DirectScheduleV1,
+    DirectRetirementTransferV1, DirectRootPhaseV1, DirectRootReplayPostV1, DirectScheduleV1,
     DirectTerminalReasonV1,
 };
 
-const FOUNDATION_RECEIPT_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/direct/foundation-receipt/v2\0";
+const DIRECT_TREASURY_SERVICE_SETTLEMENT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/direct/treasury-service-settlement/v2\0";
+
+const FOUNDATION_RECEIPT_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/direct/foundation-receipt/v3\0";
 const ACTION_TRANSCRIPT_DOMAIN_V2: &[u8] =
     b"dragons-clutch/direct/action-transcript/v2\0";
 const TERMINAL_RECEIPT_DOMAIN_V2: &[u8] =
@@ -63,13 +66,13 @@ const TERMINAL_LIVENESS_SEAL_DOMAIN_V2: &[u8] =
     b"dragons-clutch/direct/terminal-liveness-seal/v2\0";
 
 /// Default-deny current action-1 authority.
-pub trait AuthenticatedDirectFoundationV2 {
-    /// Authenticate the absent b1/v2 and b3 accounts, exact current Product
+pub trait AuthenticatedDirectFoundationV3 {
+    /// Authenticate the absent b1/v3 and b3 accounts, exact current Product
     /// family admission, General V4/Revenue authority, 0xba/v2 allocation,
     /// rent funding, schedule policy, and observed Clock slot.
-    fn authenticate_foundation_v2(
+    fn authenticate_foundation_v3(
         &self,
-        _binding: &DirectMarketBindingV2,
+        _binding: &DirectMarketBindingV3,
         _schedule: DirectScheduleV1,
         _root_rent: DirectRentOwnerV1,
         _action_replay_rent: DirectRentOwnerV1,
@@ -81,17 +84,17 @@ pub trait AuthenticatedDirectFoundationV2 {
 
 /// Explicit refusing current action-1 authority.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct NoDirectFoundationAuthorityV2;
+pub struct NoDirectFoundationAuthorityV3;
 
-impl AuthenticatedDirectFoundationV2 for NoDirectFoundationAuthorityV2 {}
+impl AuthenticatedDirectFoundationV3 for NoDirectFoundationAuthorityV3 {}
 
 /// Compact current action-1 receipt. The 2.5KiB root and permanent replay are
 /// streamed into caller-provided bodies and never returned by value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectFoundationReceiptV2 {
+pub struct DirectFoundationReceiptV3 {
     /// Sole current Direct foundation receipt.
     pub admission_receipt_id: [u8; 32],
-    /// Exact semantic identity of the streamed fresh b1/v2 root.
+    /// Exact semantic identity of the streamed fresh b1/v3 root.
     pub root_semantic_id: [u8; 32],
     /// Exact semantic identity of the streamed permanent b3 replay.
     pub replay_semantic_id: [u8; 32],
@@ -103,26 +106,26 @@ pub struct DirectFoundationReceiptV2 {
     pub candidate_liveness_allocation_receipt_id: [u8; 32],
 }
 
-/// Compact current b1/v2+b3 transition authority for actions 2..13.
+/// Compact current b1/v3+b3 transition authority for actions 2..13.
 ///
 /// The root token retains only the private injective arithmetic projection and
-/// current V2 semantic IDs; no 2.5KiB current root is copied into this state.
+/// current V3 semantic IDs; no 2.5KiB current root is copied into this state.
 #[derive(Debug, Eq, PartialEq)]
 pub struct DirectRootReplayTransitionV2 {
-    root: AuthenticatedDirectRootTransitionV2,
+    root: AuthenticatedDirectRootTransitionV3,
     replay: DirectActionReplayV1,
 }
 
 impl DirectRootReplayTransitionV2 {
     pub fn authenticate(
-        root: AuthenticatedDirectRootTransitionV2,
+        root: AuthenticatedDirectRootTransitionV3,
         replay: DirectActionReplayV1,
     ) -> Result<Self, DirectMarketErrorV1> {
         replay.validate_against(root.projected_root())?;
         Ok(Self { root, replay })
     }
 
-    pub const fn root(&self) -> &AuthenticatedDirectRootTransitionV2 { &self.root }
+    pub const fn root(&self) -> &AuthenticatedDirectRootTransitionV3 { &self.root }
     pub const fn replay(&self) -> DirectActionReplayV1 { self.replay }
 
     pub fn validate(&self) -> Result<(), DirectMarketErrorV1> {
@@ -165,12 +168,12 @@ impl DirectRootReplayTransitionV2 {
 /// committed atomically with the Product family and `0xba/v2` successors
 /// authenticated by `authority`.
 #[allow(clippy::too_many_arguments)]
-pub fn prepare_direct_foundation_into_v2<
-    A: AuthenticatedDirectFoundationV2 + ?Sized,
+pub fn prepare_direct_foundation_into_v3<
+    A: AuthenticatedDirectFoundationV3 + ?Sized,
     B: DirectHashBackendV1,
 >(
     authority: &A,
-    binding: &DirectMarketBindingV2,
+    binding: &DirectMarketBindingV3,
     schedule: DirectScheduleV1,
     root_rent: DirectRentOwnerV1,
     action_replay_rent: DirectRentOwnerV1,
@@ -178,7 +181,7 @@ pub fn prepare_direct_foundation_into_v2<
     root_body_out: &mut [u8],
     replay_body_out: &mut [u8; crate::codec_v1::DIRECT_ACTION_REPLAY_BODY_BYTES_V1],
     backend: &B,
-) -> Result<DirectFoundationReceiptV2, DirectMarketErrorV1> {
+) -> Result<DirectFoundationReceiptV3, DirectMarketErrorV1> {
     binding.validate()?;
     schedule.validate()?;
     root_rent.validate()?;
@@ -189,7 +192,7 @@ pub fn prepare_direct_foundation_into_v2<
     {
         return Err(DirectMarketErrorV1::MismatchedBinding);
     }
-    authority.authenticate_foundation_v2(
+    authority.authenticate_foundation_v3(
         binding,
         schedule,
         root_rent,
@@ -197,14 +200,14 @@ pub fn prepare_direct_foundation_into_v2<
         observed_slot,
     )?;
     let binding_id = binding.semantic_id(backend)?;
-    let root_id = direct_foundation_root_semantic_id_v2(
+    let root_id = direct_foundation_root_semantic_id_v3(
         binding,
         schedule,
         root_rent,
         backend,
     )?;
     let admission_receipt_id = backend.sha256_parts(&[
-        FOUNDATION_RECEIPT_DOMAIN_V2,
+        FOUNDATION_RECEIPT_DOMAIN_V3,
         &binding_id,
         &root_id,
         &binding.product.product_family_prestate_id,
@@ -277,7 +280,7 @@ pub fn prepare_direct_foundation_into_v2<
     projected_root.validate()?;
     replay.validate_against(projected_root)?;
     let replay_semantic_id = replay.semantic_id(projected_root, backend)?;
-    crate::codec_v2::encode_direct_market_foundation_body_v2(
+    crate::codec_v3::encode_direct_market_foundation_body_v3(
         binding,
         schedule,
         root_rent,
@@ -287,7 +290,7 @@ pub fn prepare_direct_foundation_into_v2<
         replay,
         projected_root,
     )?;
-    Ok(DirectFoundationReceiptV2 {
+    Ok(DirectFoundationReceiptV3 {
         admission_receipt_id,
         root_semantic_id: root_id,
         replay_semantic_id,
@@ -299,7 +302,7 @@ pub fn prepare_direct_foundation_into_v2<
     })
 }
 
-/// Derive one exact Candidate work batch from current b1/v2 state.
+/// Derive one exact Candidate work batch from current b1/v3 state.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_direct_candidate_work_batch_v2<B: DirectHashBackendV1>(
     state: &DirectRootReplayTransitionV2,
@@ -333,6 +336,39 @@ pub fn bind_direct_candidate_work_batch_v2<B: DirectHashBackendV1>(
     let replay = bind_direct_candidate_work_batch_v1(&projection, batch, backend)?;
     replay.validate_against(projection.root)?;
     state.replay = replay;
+    state.validate()
+}
+
+/// Bind General's sole 0xbb settlement receipt into the permanent b3
+/// transcript after the exact economic action-9 transition and before its
+/// Candidate work batch is sealed. General remains the arithmetic and account
+/// owner of the ledger; Direct retains only the nonzero transition receipt.
+pub fn bind_direct_treasury_service_settlement_v2<B: DirectHashBackendV1>(
+    state: &mut DirectRootReplayTransitionV2,
+    treasury_service_transition_id: [u8; 32],
+    backend: &B,
+) -> Result<(), DirectMarketErrorV1> {
+    state.validate()?;
+    require_live(treasury_service_transition_id)?;
+    if state.root().phase() != DirectRootPhaseV1::Terminal
+        || state.root().terminal_reason() != Some(DirectTerminalReasonV1::Settled)
+        || !state.replay.candidate_liveness_pending()
+        || state.replay.economic_terminal_receipt_id() == [0; 32]
+    {
+        return Err(DirectMarketErrorV1::WrongPhase);
+    }
+    let prior = state.replay.action_transcript_id();
+    state.replay.action_transcript_id = backend.sha256_parts(&[
+        DIRECT_TREASURY_SERVICE_SETTLEMENT_DOMAIN_V2,
+        &state.root().market_instance_id(),
+        &state.root().generation().to_le_bytes(),
+        &state.root().direct_epoch_semantics_id(),
+        &state.root().root_semantic_id(),
+        &state.replay.economic_terminal_receipt_id(),
+        &treasury_service_transition_id,
+        &prior,
+    ]);
+    require_live(state.replay.action_transcript_id)?;
     state.validate()
 }
 
@@ -898,6 +934,38 @@ pub struct DirectEconomicTerminalPlanV2 {
     pub candidate_bond_refunds: Option<DirectCandidateBondRefundPlanV1>,
 }
 
+/// Compact, receipt-independent projection of the exact retained-candidate
+/// principal refund vector. The canonical V1 arithmetic remains the sole
+/// vector owner; current operator adapters use this projection only to choose
+/// the required sorted writable account suffix before the terminal receipt is
+/// minted onchain.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectCandidateBondRefundShapeV2 {
+    pub refunds: [Option<crate::selection_v1::DirectCandidateBondRefundV1>; 3],
+    pub refund_count: u8,
+    pub total_lamports: u64,
+}
+
+/// Derive the exact sorted and coalesced bond-refund suffix through the
+/// already-frozen V1 transition arithmetic. The synthetic receipt input is
+/// discarded and cannot become admissible transition evidence.
+pub fn derive_direct_candidate_bond_refund_shape_v2(
+    state: &DirectRootReplayTransitionV2,
+    selection: DirectSelectionV1,
+) -> Result<Option<DirectCandidateBondRefundShapeV2>, DirectMarketErrorV1> {
+    let projection = state.transition_projection()?;
+    let plan = crate::selection_v1::candidate_bond_refunds_v1(
+        selection,
+        projection.root,
+        state.root().root_semantic_id(),
+    )?;
+    Ok(plan.map(|value| DirectCandidateBondRefundShapeV2 {
+        refunds: value.refunds,
+        refund_count: value.refund_count,
+        total_lamports: value.total_lamports,
+    }))
+}
+
 /// Prepare current action 8's no-candidate branch or action 9..12 under
 /// RevenuePolicyV2-native authority.
 ///
@@ -1113,9 +1181,10 @@ fn convert_economic_plan_v2<B: DirectHashBackendV1>(
 
 /// Default-deny current action-13 Product/archive authority.
 pub trait AuthenticatedDirectTerminalV2 {
-    /// Authenticate the complete current Product RootV2/LinkV2/family
-    /// prestate, finalized Resolution, b1/v2/b2/b3/b4 deletion set, transfer
-    /// vector, and exact Product family successor identities.
+    /// Authenticate the complete current Product RootV3/LinkV3 family
+    /// prestate, finalized Resolution, b1/v3/b2/b3/b4 deletion set, and
+    /// transfer vector. Product derives the successor only after this receipt
+    /// is sealed, avoiding a receipt/poststate hash cycle.
     #[allow(clippy::too_many_arguments)]
     fn authenticate_terminal_v2(
         &self,
@@ -1128,7 +1197,6 @@ pub trait AuthenticatedDirectTerminalV2 {
         _retirement: &DirectRetirementTransferV1,
         _retirement_transfer_id: [u8; 32],
         _product_family_prestate_id: [u8; 32],
-        _product_family_poststate_id: [u8; 32],
         _consumed_sequence: u64,
         _observed_slot: u64,
         _family_terminal_sequence: u32,
@@ -1154,7 +1222,6 @@ pub struct DirectFamilyTerminalPreparationV2 {
     replay_post: DirectActionReplayV1,
     provisional_terminal_receipt_id: [u8; 32],
     product_family_prestate_id: [u8; 32],
-    product_family_poststate_id: [u8; 32],
     family_terminal_sequence: u32,
 }
 
@@ -1165,10 +1232,11 @@ impl DirectFamilyTerminalPreparationV2 {
     }
 }
 
-/// Final sealed current Direct terminal facts consumed by Product and 0xba/v2.
+/// Final sealed Direct facts used to retire `0xba/v2` and close the Direct
+/// archive before the move-only family terminal is handed to Product RootV3.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectFamilyTerminalPlanV2 {
-    /// Exact b1/v2 root identity before deletion.
+    /// Exact b1/v3 root identity before deletion.
     pub root_semantic_id: [u8; 32],
     /// Permanent b3 identity before action 13.
     pub replay_pre_semantic_id: [u8; 32],
@@ -1180,14 +1248,38 @@ pub struct DirectFamilyTerminalPlanV2 {
     pub final_resolution: crate::DirectFinalResolutionV1,
     /// Terminal replay after the exact eighth Candidate work batch.
     pub replay_post: DirectActionReplayV1,
-    /// Sole current terminal receipt consumed by Product.
+    /// Sole Direct terminal identity later embedded in the family receipt.
     pub terminal_receipt_id: [u8; 32],
     /// Authenticated Product family prestate identity.
     pub product_family_prestate_id: [u8; 32],
-    /// Exact Product family successor identity.
-    pub product_family_poststate_id: [u8; 32],
     /// Zero-based terminal occurrence coordinate.
     pub family_terminal_sequence: u32,
+}
+
+/// Bind the authenticated provisional action-13 replay into the compact
+/// transition token before the eighth Candidate work batch. The preparation's
+/// fields are private and originate only from `prepare_direct_family_terminal_v2`.
+pub fn bind_direct_family_terminal_preparation_v2<B: DirectHashBackendV1>(
+    state: &mut DirectRootReplayTransitionV2,
+    preparation: &DirectFamilyTerminalPreparationV2,
+    backend: &B,
+) -> Result<(), DirectMarketErrorV1> {
+    state.validate()?;
+    let replay_pre = state
+        .replay
+        .semantic_id(state.root.projected_root(), backend)?;
+    if state.root.root_semantic_id() != preparation.root_semantic_id
+        || replay_pre != preparation.replay_pre_semantic_id
+        || !preparation.replay_post.candidate_liveness_pending()
+        || preparation.replay_post.candidate_liveness_completed_calls() != 7
+    {
+        return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+    }
+    preparation
+        .replay_post
+        .validate_against(state.root.projected_root())?;
+    state.replay = preparation.replay_post;
+    Ok(())
 }
 
 /// Prepare current action 13 before its final Candidate work batch.
@@ -1203,7 +1295,6 @@ pub fn prepare_direct_family_terminal_v2<
     final_resolution: crate::DirectFinalResolutionV1,
     retirement: &DirectRetirementTransferV1,
     product_family_prestate_id: [u8; 32],
-    product_family_poststate_id: [u8; 32],
     consumed_sequence: u64,
     observed_slot: u64,
     family_terminal_sequence: u32,
@@ -1219,13 +1310,11 @@ pub fn prepare_direct_family_terminal_v2<
         final_resolution.semantic_id,
         final_resolution.data_id,
         product_family_prestate_id,
-        product_family_poststate_id,
     ] {
         crate::require_live(id)?;
     }
     if state.root().phase() != crate::DirectRootPhaseV1::Terminal
         || final_resolution.account != state.root().resolution_account()
-        || product_family_prestate_id == product_family_poststate_id
     {
         return Err(DirectMarketErrorV1::MismatchedBinding);
     }
@@ -1285,7 +1374,6 @@ pub fn prepare_direct_family_terminal_v2<
         retirement,
         retirement_transfer_id,
         product_family_prestate_id,
-        product_family_poststate_id,
         consumed_sequence,
         observed_slot,
         family_terminal_sequence,
@@ -1301,7 +1389,6 @@ pub fn prepare_direct_family_terminal_v2<
     let provisional_terminal_receipt_id = backend.sha256_parts(&[
         TERMINAL_RECEIPT_DOMAIN_V2,
         &product_family_prestate_id,
-        &product_family_poststate_id,
         &state.root().market_instance_id(),
         &state.root().generation().to_le_bytes(),
         &state.root().direct_root_account(),
@@ -1341,7 +1428,6 @@ pub fn prepare_direct_family_terminal_v2<
         replay_post,
         provisional_terminal_receipt_id,
         product_family_prestate_id,
-        product_family_poststate_id,
         family_terminal_sequence,
     })
 }
@@ -1349,7 +1435,7 @@ pub fn prepare_direct_family_terminal_v2<
 /// Seal action 13 only after the exact eighth Candidate work receipt is bound.
 pub fn seal_direct_family_terminal_liveness_v2<B: DirectHashBackendV1>(
     preparation: DirectFamilyTerminalPreparationV2,
-    root: &AuthenticatedDirectRootTransitionV2,
+    root: &AuthenticatedDirectRootTransitionV3,
     retirement: &DirectRetirementTransferV1,
     final_resolution: crate::DirectFinalResolutionV1,
     bound_replay: DirectActionReplayV1,
@@ -1402,7 +1488,6 @@ pub fn seal_direct_family_terminal_liveness_v2<B: DirectHashBackendV1>(
         TERMINAL_LIVENESS_SEAL_DOMAIN_V2,
         &preparation.provisional_terminal_receipt_id,
         &preparation.product_family_prestate_id,
-        &preparation.product_family_poststate_id,
         &bound_replay.action_transcript_id(),
         &bound_replay.candidate_liveness_completed_calls().to_le_bytes(),
         &bound_replay.candidate_liveness_last_receipt_id(),
@@ -1421,12 +1506,11 @@ pub fn seal_direct_family_terminal_liveness_v2<B: DirectHashBackendV1>(
         replay_post,
         terminal_receipt_id,
         product_family_prestate_id: preparation.product_family_prestate_id,
-        product_family_poststate_id: preparation.product_family_poststate_id,
         family_terminal_sequence: preparation.family_terminal_sequence,
     })
 }
 
-const _: () = assert!(core::mem::size_of::<DirectFoundationReceiptV2>() <= 224);
+const _: () = assert!(core::mem::size_of::<DirectFoundationReceiptV3>() <= 224);
 const _: () = assert!(core::mem::size_of::<DirectRootReplayTransitionV2>() <= 2_816);
 const _: () = assert!(core::mem::size_of::<DirectSelectionTransitionEffectsV2>() <= 512);
 const _: () = assert!(core::mem::size_of::<DirectFamilyTerminalPreparationV2>() <= 768);

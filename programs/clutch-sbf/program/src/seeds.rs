@@ -218,8 +218,8 @@ pub const SEED_DIRECT_RECEIPT_V3: &[u8] = b"dc:direct-receipt:v3";
 pub const SEED_DIRECT_POT_V3: &[u8] = b"dc:direct-pot:v3";
 /// Current `0xb1/1` Direct Market root; disjoint from every legacy window.
 pub const SEED_DIRECT_MARKET_ROOT_V1: &[u8] = b"dc:direct-market-root:v1";
-/// Current General-V4/Product-V2 Direct root domain.
-pub const SEED_DIRECT_MARKET_ROOT_V2: &[u8] = b"dc:direct-market-root:v2";
+/// Current General-V4/Product-V3 Direct root domain.
+pub const SEED_DIRECT_MARKET_ROOT_V3: &[u8] = b"dc:direct-market-root:v3";
 /// Current permanent `0xb3/1` Direct action replay/receipt.
 pub const SEED_DIRECT_ACTION_REPLAY_V1: &[u8] = b"dc:direct-action-replay:v1";
 /// Current `0xb2/1` exact Selection owner.
@@ -1517,11 +1517,11 @@ pub fn direct_market_root_v1_pda(
     )
 }
 
-/// Canonical current Direct `0xb1/2` root address.
+/// Canonical current Direct `0xb1/3` root address.
 ///
 /// The fresh domain prevents a historical V1 root at the same Market and
 /// generation from being reinterpreted as current authority.
-pub fn direct_market_root_v2_pda(
+pub fn direct_market_root_v3_pda(
     program_id: &Pubkey,
     market_instance_id: &[u8; 32],
     generation: u64,
@@ -1529,7 +1529,7 @@ pub fn direct_market_root_v2_pda(
     find(
         program_id,
         &[
-            SEED_DIRECT_MARKET_ROOT_V2,
+            SEED_DIRECT_MARKET_ROOT_V3,
             market_instance_id,
             &generation.to_le_bytes(),
         ],

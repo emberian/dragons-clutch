@@ -1,13 +1,13 @@
-//! Current Direct root authority over General V4 and Product V2 state.
+//! Current Direct root authority over General V4 and Product V3 state.
 //!
 //! `DirectMarketRootV1` is a historical BundleV5/General-V3 owner.  This
-//! module deliberately does not persist or expose that DTO.  The V2 root
+//! module deliberately does not persist or expose that DTO. The V3 root
 //! stores every current Product, General, Revenue, and global-liveness
-//! coordinate under a fresh domain.  Until the transition arithmetic is
+//! coordinate under a fresh domain. Until the transition arithmetic is
 //! mechanically generalized, a crate-private total projection may invoke the
-//! already-reviewed V1 arithmetic.  The projection commits the complete V2
+//! already-reviewed V1 arithmetic. The projection commits the complete V3
 //! Product and General authorities, and every poststate is reconstructed into
-//! V2 and revalidated before it can leave this module.
+//! V3 and revalidated before it can leave this module.
 
 use crate::fee_v2::DirectFeePolicyV2;
 use crate::liveness_v1::DirectCandidateLivenessBindingV1;
@@ -17,37 +17,46 @@ use crate::{
     DirectScheduleV1, DirectTerminalReasonV1, MAX_DIRECT_RESERVATIONS_V1,
 };
 
-const PRODUCT_AUTHORITY_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/direct/current-product-authority/v2\0";
+const PRODUCT_AUTHORITY_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/direct/current-product-authority/v3\0";
 const GENERAL_AUTHORITY_DOMAIN_V2: &[u8] =
     b"dragons-clutch/direct/current-general-authority/v2\0";
-pub(crate) const BINDING_DOMAIN_V2: &[u8] = b"dragons-clutch/direct/market-binding/v2\0";
-pub(crate) const ROOT_STATE_DOMAIN_V2: &[u8] = b"dragons-clutch/direct/root-state/v2\0";
-const DIRECT_EPOCH_SEMANTICS_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/direct/epoch-semantics/v2\0";
+pub(crate) const BINDING_DOMAIN_V3: &[u8] = b"dragons-clutch/direct/market-binding/v3\0";
+pub(crate) const ROOT_STATE_DOMAIN_V3: &[u8] = b"dragons-clutch/direct/root-state/v3\0";
+const DIRECT_EPOCH_SEMANTICS_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/direct/epoch-semantics/v3\0";
 
-/// Exact current Product authority retained by Direct b1/v2.
+/// Exact current Product authority retained by Direct b1/v3.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DirectCurrentProductAuthorityV2 {
+pub struct DirectCurrentProductAuthorityV3 {
     pub product_root_account: [u8; 32],
-    pub product_market_binding_id: [u8; 32],
+    /// Exact immutable `MarketLifecycleBindingV3::id()` authenticated from
+    /// Product RootV3. Direct does not duplicate that large binding.
+    pub product_market_binding_v3_id: [u8; 32],
     pub product_generation: u64,
     pub product_family_prestate_id: [u8; 32],
     pub product_family_poststate_id: [u8; 32],
     pub product_family_admission_receipt_id: [u8; 32],
     pub family_admission_sequence: u32,
     pub series_link_account: [u8; 32],
-    pub series_link_v2_id: [u8; 32],
+    /// Exact Product-owned SeriesPlanV5 identity used to authenticate the
+    /// canonical `0xad/v3` PDA without trusting caller material.
+    pub series_plan_v5_id: [u8; 32],
+    /// Exact immutable `SeriesMarketLinkBindingV3::id()`. This commits the
+    /// entire SeriesPlanV5/ordinal/Market/Source/FundingV5 tuple without
+    /// persisting a detachable copy of those Product-owned facts or a mutable
+    /// LinkV3 state identity which would become stale as obligations close.
+    pub series_link_binding_v3_id: [u8; 32],
     pub series_ordinal: u32,
-    pub compiler_bundle_v6_id: [u8; 32],
-    pub funding_quote_v5_id: [u8; 32],
-    pub attachment_plan_v5_id: [u8; 32],
-    pub foundation_schedule_v3_id: [u8; 32],
-    pub foundation_graph_v3_id: [u8; 32],
+    pub compiler_bundle_v7_id: [u8; 32],
+    pub funding_quote_v6_id: [u8; 32],
+    pub attachment_plan_v6_id: [u8; 32],
+    pub foundation_schedule_v4_id: [u8; 32],
+    pub foundation_graph_v4_id: [u8; 32],
     pub market_liability_founding_id: [u8; 32],
     pub claim_mint_founding_plan_id: [u8; 32],
     pub claim_issuance_binding_id: [u8; 32],
-    pub general_founding_policy_id: [u8; 32],
+    pub general_founding_capability_v3_id: [u8; 32],
     pub product_preauthorization_id: [u8; 32],
     pub product_direct_global_liveness_account: [u8; 32],
     pub product_direct_global_liveness_binding_id: [u8; 32],
@@ -56,7 +65,7 @@ pub struct DirectCurrentProductAuthorityV2 {
     pub direct_work_quote_id: [u8; 32],
 }
 
-impl DirectCurrentProductAuthorityV2 {
+impl DirectCurrentProductAuthorityV3 {
     /// Refuse zero identities, generation zero, and cross-role account aliases.
     pub fn validate(&self) -> Result<(), DirectMarketErrorV1> {
         if self.product_generation == 0 {
@@ -79,26 +88,27 @@ impl DirectCurrentProductAuthorityV2 {
     ) -> Result<[u8; 32], DirectMarketErrorV1> {
         self.validate()?;
         let id = backend.sha256_parts(&[
-            PRODUCT_AUTHORITY_DOMAIN_V2,
+            PRODUCT_AUTHORITY_DOMAIN_V3,
             &self.product_root_account,
-            &self.product_market_binding_id,
+            &self.product_market_binding_v3_id,
             &self.product_generation.to_le_bytes(),
             &self.product_family_prestate_id,
             &self.product_family_poststate_id,
             &self.product_family_admission_receipt_id,
             &self.family_admission_sequence.to_le_bytes(),
             &self.series_link_account,
-            &self.series_link_v2_id,
+            &self.series_plan_v5_id,
+            &self.series_link_binding_v3_id,
             &self.series_ordinal.to_le_bytes(),
-            &self.compiler_bundle_v6_id,
-            &self.funding_quote_v5_id,
-            &self.attachment_plan_v5_id,
-            &self.foundation_schedule_v3_id,
-            &self.foundation_graph_v3_id,
+            &self.compiler_bundle_v7_id,
+            &self.funding_quote_v6_id,
+            &self.attachment_plan_v6_id,
+            &self.foundation_schedule_v4_id,
+            &self.foundation_graph_v4_id,
             &self.market_liability_founding_id,
             &self.claim_mint_founding_plan_id,
             &self.claim_issuance_binding_id,
-            &self.general_founding_policy_id,
+            &self.general_founding_capability_v3_id,
             &self.product_preauthorization_id,
             &self.product_direct_global_liveness_account,
             &self.product_direct_global_liveness_binding_id,
@@ -110,24 +120,25 @@ impl DirectCurrentProductAuthorityV2 {
         Ok(id)
     }
 
-    pub(crate) fn ids(&self) -> [[u8; 32]; 22] {
+    pub(crate) fn ids(&self) -> [[u8; 32]; 23] {
         [
             self.product_root_account,
-            self.product_market_binding_id,
+            self.product_market_binding_v3_id,
             self.product_family_prestate_id,
             self.product_family_poststate_id,
             self.product_family_admission_receipt_id,
             self.series_link_account,
-            self.series_link_v2_id,
-            self.compiler_bundle_v6_id,
-            self.funding_quote_v5_id,
-            self.attachment_plan_v5_id,
-            self.foundation_schedule_v3_id,
-            self.foundation_graph_v3_id,
+            self.series_plan_v5_id,
+            self.series_link_binding_v3_id,
+            self.compiler_bundle_v7_id,
+            self.funding_quote_v6_id,
+            self.attachment_plan_v6_id,
+            self.foundation_schedule_v4_id,
+            self.foundation_graph_v4_id,
             self.market_liability_founding_id,
             self.claim_mint_founding_plan_id,
             self.claim_issuance_binding_id,
-            self.general_founding_policy_id,
+            self.general_founding_capability_v3_id,
             self.product_preauthorization_id,
             self.product_direct_global_liveness_account,
             self.product_direct_global_liveness_binding_id,
@@ -138,7 +149,7 @@ impl DirectCurrentProductAuthorityV2 {
     }
 }
 
-/// Exact current General and Revenue authority retained by Direct b1/v2.
+/// Exact current General and Revenue authority retained by Direct b1/v3.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectCurrentGeneralAuthorityV2 {
     pub general_market_binding_account: [u8; 32],
@@ -208,7 +219,7 @@ impl DirectCurrentGeneralAuthorityV2 {
 
 /// Fresh current Direct binding.  No V1/V3 Product field is reinterpreted.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DirectMarketBindingV2 {
+pub struct DirectMarketBindingV3 {
     pub market_instance_id: [u8; 32],
     pub generation: u64,
     pub outcome_count: u8,
@@ -231,7 +242,7 @@ pub struct DirectMarketBindingV2 {
     pub candidate_liveness_policy_id: [u8; 32],
     pub candidate_liveness: DirectCandidateLivenessBindingV1,
     pub direct_schedule_policy_id: [u8; 32],
-    pub product: DirectCurrentProductAuthorityV2,
+    pub product: DirectCurrentProductAuthorityV3,
     pub general: DirectCurrentGeneralAuthorityV2,
     pub direct_root_account: [u8; 32],
     pub action_replay_account: [u8; 32],
@@ -241,7 +252,7 @@ pub struct DirectMarketBindingV2 {
     pub price_scale: u64,
 }
 
-impl DirectMarketBindingV2 {
+impl DirectMarketBindingV3 {
     /// Validate the complete current cross-plane authority and fee/liveness facts.
     pub fn validate(&self) -> Result<(), DirectMarketErrorV1> {
         if self.generation == 0
@@ -279,7 +290,7 @@ impl DirectMarketBindingV2 {
         self.candidate_liveness.validate()?;
         if self.fee_treasury_owner != self.general.treasury_owner
             || self.revenue_policy_id != self.general.revenue_policy_v2_digest
-            || self.product.product_market_binding_id
+            || self.product.product_market_binding_v3_id
                 != self.product.activated_product_market_binding_id
             || self.candidate_liveness.policy_account
                 == self.product.product_direct_global_liveness_account
@@ -330,7 +341,7 @@ impl DirectMarketBindingV2 {
             .ok_or(DirectMarketErrorV1::Arithmetic)
     }
 
-    /// Complete V2 binding identity.
+    /// Complete V3 binding identity.
     pub fn semantic_id<B: DirectHashBackendV1>(
         &self,
         backend: &B,
@@ -347,7 +358,7 @@ impl DirectMarketBindingV2 {
         }
         let candidate_id = candidate_liveness_id_v2(self.candidate_liveness, backend)?;
         let id = backend.sha256_parts(&[
-            BINDING_DOMAIN_V2,
+            BINDING_DOMAIN_V3,
             &self.market_instance_id,
             &self.generation.to_le_bytes(),
             &[self.outcome_count],
@@ -393,7 +404,7 @@ impl DirectMarketBindingV2 {
         let product_id = self.product.semantic_id(backend)?;
         let general_id = self.general.semantic_id(backend)?;
         let id = backend.sha256_parts(&[
-            DIRECT_EPOCH_SEMANTICS_DOMAIN_V2,
+            DIRECT_EPOCH_SEMANTICS_DOMAIN_V3,
             &self.market_instance_id,
             &self.generation.to_le_bytes(),
             &self.direct_root_account,
@@ -448,12 +459,12 @@ impl DirectMarketBindingV2 {
             candidate_liveness: self.candidate_liveness,
             direct_schedule_policy_id: self.direct_schedule_policy_id,
             product_root_account: self.product.product_root_account,
-            product_market_binding_id: self.product.product_market_binding_id,
+            product_market_binding_id: self.product.product_market_binding_v3_id,
             product_family_prestate_id: self.product.product_family_prestate_id,
             general_product_preauthorization_id: self.product.product_preauthorization_id,
             family_admission_sequence: self.product.family_admission_sequence,
             founder_series_link_account: self.product.series_link_account,
-            founder_series_link_binding_id: self.product.series_link_v2_id,
+            founder_series_link_binding_id: self.product.series_link_binding_v3_id,
             compiler_bundle_v5_id: product_id,
             founder_series_plan_id: general_id,
             founder_series_ordinal: self.product.series_ordinal,
@@ -471,11 +482,11 @@ impl DirectMarketBindingV2 {
     }
 }
 
-/// Current b1/v2 root.  Dynamic lifecycle geometry is unchanged and remains
-/// owned by the reviewed Direct arithmetic, while the authority is V2-only.
+/// Current b1/v3 root. Dynamic lifecycle geometry is unchanged and remains
+/// owned by the reviewed Direct arithmetic, while the authority is V3-only.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DirectMarketRootV2 {
-    pub(crate) binding: DirectMarketBindingV2,
+pub struct DirectMarketRootV3 {
+    pub(crate) binding: DirectMarketBindingV3,
     pub(crate) schedule: DirectScheduleV1,
     pub(crate) root_rent: DirectRentOwnerV1,
     pub(crate) phase: DirectRootPhaseV1,
@@ -488,10 +499,10 @@ pub struct DirectMarketRootV2 {
     pub(crate) selection_account: [u8; 32],
 }
 
-impl DirectMarketRootV2 {
+impl DirectMarketRootV3 {
     /// Construct the only fresh open current root.
     pub fn new_open(
-        binding: DirectMarketBindingV2,
+        binding: DirectMarketBindingV3,
         schedule: DirectScheduleV1,
         root_rent: DirectRentOwnerV1,
     ) -> Result<Self, DirectMarketErrorV1> {
@@ -512,7 +523,7 @@ impl DirectMarketRootV2 {
         Ok(value)
     }
 
-    pub const fn binding(&self) -> &DirectMarketBindingV2 { &self.binding }
+    pub const fn binding(&self) -> &DirectMarketBindingV3 { &self.binding }
     pub const fn schedule(&self) -> DirectScheduleV1 { self.schedule }
     pub const fn root_rent(&self) -> DirectRentOwnerV1 { self.root_rent }
     pub const fn phase(&self) -> DirectRootPhaseV1 { self.phase }
@@ -596,7 +607,7 @@ impl DirectMarketRootV2 {
         Ok(())
     }
 
-    /// Fresh domain-separated identity of the complete b1/v2 state.
+    /// Fresh domain-separated identity of the complete b1/v3 state.
     pub fn semantic_id<B: DirectHashBackendV1>(
         &self,
         backend: &B,
@@ -605,7 +616,7 @@ impl DirectMarketRootV2 {
         let binding_id = self.binding.semantic_id(backend)?;
         let terminal = self.terminal_reason.map_or(0, DirectTerminalReasonV1::byte);
         let id = backend.sha256_parts(&[
-            ROOT_STATE_DOMAIN_V2,
+            ROOT_STATE_DOMAIN_V3,
             &binding_id,
             &self.schedule.admission_opens_slot.to_le_bytes(),
             &self.schedule.admission_closes_slot.to_le_bytes(),
@@ -653,7 +664,7 @@ impl DirectMarketRootV2 {
         Ok(value)
     }
 
-    /// Reconstruct and check one V1-arithmetic successor under the same V2 authority.
+    /// Reconstruct and check one V1-arithmetic successor under the same V3 authority.
     pub(crate) fn accept_transition_projection<B: DirectHashBackendV1>(
         &self,
         before: DirectMarketRootV1,
@@ -687,9 +698,9 @@ impl DirectMarketRootV2 {
 
 /// Derive the exact semantic identity of the fresh action-1 root without
 /// materializing the 2.5KiB current root by value. The caller must stream the
-/// same binding, schedule, and rent into the canonical V2 codec.
-pub fn direct_foundation_root_semantic_id_v2<B: DirectHashBackendV1>(
-    binding: &DirectMarketBindingV2,
+/// same binding, schedule, and rent into the canonical V3 codec.
+pub fn direct_foundation_root_semantic_id_v3<B: DirectHashBackendV1>(
+    binding: &DirectMarketBindingV3,
     schedule: DirectScheduleV1,
     root_rent: DirectRentOwnerV1,
     backend: &B,
@@ -699,7 +710,7 @@ pub fn direct_foundation_root_semantic_id_v2<B: DirectHashBackendV1>(
     root_rent.validate()?;
     let binding_id = binding.semantic_id(backend)?;
     let id = backend.sha256_parts(&[
-        ROOT_STATE_DOMAIN_V2,
+        ROOT_STATE_DOMAIN_V3,
         &binding_id,
         &schedule.admission_opens_slot.to_le_bytes(),
         &schedule.admission_closes_slot.to_le_bytes(),
@@ -727,7 +738,7 @@ pub fn direct_foundation_root_semantic_id_v2<B: DirectHashBackendV1>(
 /// Current root plus unchanged permanent b3/v1 replay owner.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectRootReplayPostV2 {
-    pub root: DirectMarketRootV2,
+    pub root: DirectMarketRootV3,
     pub replay: DirectActionReplayV1,
 }
 
@@ -775,7 +786,7 @@ impl DirectRootReplayPostV2 {
     }
 
     /// Apply one reviewed arithmetic successor directly into caller-owned
-    /// current storage. This avoids materializing a second 2.5KiB V2 root in
+    /// current storage. This avoids materializing a second 2.5KiB V3 root in
     /// an SBF frame while preserving the same injective pre/post checks.
     pub(crate) fn accept_transition_projection_in_place<B: DirectHashBackendV1>(
         &mut self,
@@ -843,7 +854,7 @@ pub(crate) fn candidate_liveness_id_v2<B: DirectHashBackendV1>(
 }
 
 fn require_fresh_child_account_v2(
-    binding: &DirectMarketBindingV2,
+    binding: &DirectMarketBindingV3,
     child: [u8; 32],
 ) -> Result<(), DirectMarketErrorV1> {
     require_live_v2(child)?;
