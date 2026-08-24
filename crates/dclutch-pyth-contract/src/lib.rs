@@ -41,12 +41,19 @@ pub enum Error {
     ZeroIdentifier,
     /// The base and quote asset semantic identifiers were identical.
     IdenticalAssetSemanticIdentifiers,
-    /// A required bounty was zero.
-    ZeroBounty,
     /// An exact checked arithmetic operation overflowed.
     ArithmeticOverflow,
     /// The actual funding balance cannot meet its immutable minimum.
     Underfunded,
+    /// Canonical capability funding validation refused the composition.
+    InvalidCapabilityFunding {
+        /// Exact capability-contract refusal.
+        error: dclutch_capability_contract::Error,
+    },
+    /// The supplied founding selection was not the manifest's unique selection.
+    FundingSelectionMismatch,
+    /// A persisted resolution Fund did not have the required activated shape.
+    InvalidResolutionFundShape,
     /// The external outcome count was outside the supported range.
     InvalidOutcomeCount,
     /// A receipt kind byte was not canonical.
