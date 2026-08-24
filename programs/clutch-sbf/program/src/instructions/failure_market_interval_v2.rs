@@ -1416,8 +1416,8 @@ pub(super) struct FailureMarketIntervalArchivePostwriteV3 {
     source_occurrence_id: SourceOccurrenceV1Id,
     release_link_preauthorization_id: ProductContentId,
     release_disposition: FailureSessionReleaseDispositionV3,
-    source_failure_receipt: FailureMarketIntervalCellSourceFailureReceiptV2,
-    source_terminal: AuthenticatedSourceFailureTerminalPostwriteV1,
+    source_failure_receipt: Option<FailureMarketIntervalCellSourceFailureReceiptV2>,
+    source_terminal: Option<AuthenticatedSourceFailureTerminalPostwriteV1>,
 }
 
 const fn current_release_disposition_v4(
@@ -1438,8 +1438,12 @@ impl AuthenticatedSourceFailureProductReleaseAuthorityV1
         &self,
         expected: SourceFailureProductReleaseFactsV1,
     ) -> Outcome<()> {
-        let source = self.source_terminal;
-        let source_failure = self.source_failure_receipt;
+        let source = self
+            .source_terminal
+            .ok_or(ClutchError::AuthorizationUnavailable)?;
+        let source_failure = self
+            .source_failure_receipt
+            .ok_or(ClutchError::AuthorizationUnavailable)?;
         require(
             expected.source_terminal_postwrite_id == source.id()
                 && expected.source_terminal_authority_facts == source.authority_facts()
@@ -2798,7 +2802,7 @@ fn write_failure_market_interval_archive_v2<'a>(
     })
 }
 
-/// Current four-disposition LinkV2 append/reset writer. Visibility is limited
+/// Current four-disposition LinkV3 append/reset writer. Visibility is limited
 /// to the instruction-composer module tree; callers cannot detach this write
 /// from Product release and the final runtime transcript.
 #[allow(clippy::too_many_arguments)]
@@ -2812,50 +2816,63 @@ pub(super) fn write_failure_market_interval_archive_v3<'a>(
     cell_plan: FailureMarketIntervalCellPlanV2,
     reset: FailureMarketIntervalCellResetReceiptV2,
     source_occurrence_id: SourceOccurrenceV1Id,
-    source_failure_receipt: FailureMarketIntervalCellSourceFailureReceiptV2,
-    source_terminal: AuthenticatedSourceFailureTerminalPostwriteV1,
+    source_failure_receipt: Option<FailureMarketIntervalCellSourceFailureReceiptV2>,
+    source_terminal: Option<AuthenticatedSourceFailureTerminalPostwriteV1>,
     release_link_preauthorization_id: ProductContentId,
     release_disposition: FailureSessionReleaseDispositionV3,
 ) -> Outcome<FailureMarketIntervalArchivePostwriteV3> {
     require_live_data_id(release_link_preauthorization_id)?;
-    require(
-        matches!(
-            release_disposition,
-            FailureSessionReleaseDispositionV3::SourceAbsent
-                | FailureSessionReleaseDispositionV3::SourceRefused
-        ),
-        ClutchError::MismatchedState,
-    )?;
     let expected_cell_disposition = match release_disposition {
+        FailureSessionReleaseDispositionV3::Resolved => {
+            FailureMarketIntervalCellDispositionV2::Resolved
+        }
+        FailureSessionReleaseDispositionV3::Exhausted => {
+            FailureMarketIntervalCellDispositionV2::Exhausted
+        }
         FailureSessionReleaseDispositionV3::SourceAbsent => {
             FailureMarketIntervalCellDispositionV2::SourceAbsent
         }
         FailureSessionReleaseDispositionV3::SourceRefused => {
             FailureMarketIntervalCellDispositionV2::SourceRefused
         }
-        FailureSessionReleaseDispositionV3::Resolved
-        | FailureSessionReleaseDispositionV3::Exhausted => {
-            return Err(Refusal::Adapter(ClutchError::MismatchedState));
-        }
     };
     require(
         authenticated.cell.phase() == FailureMarketIntervalCellPhaseV2::Resolved
             && authenticated.cell.disposition() == expected_cell_disposition
-            && authenticated
-                .cell
-                .product_work()
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-                .is_none(),
+            && (matches!(
+                release_disposition,
+                FailureSessionReleaseDispositionV3::Resolved
+                    | FailureSessionReleaseDispositionV3::Exhausted
+            )
+                || authenticated
+                    .cell
+                    .product_work()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                    .is_none()),
         ClutchError::MismatchedState,
     )?;
-    require(
-        source_failure_receipt.cell_after() == authenticated.cell_state_id
-            && source_failure_receipt.facts().source_terminal_postwrite_id
-                == source_terminal.id()
-            && source_terminal.source_failure_kind()
-                == source_failure_receipt.facts().source_kind,
-        ClutchError::MismatchedState,
-    )?;
+    match (source_failure_receipt, source_terminal) {
+        (Some(source_failure), Some(source)) => require(
+            matches!(
+                release_disposition,
+                FailureSessionReleaseDispositionV3::SourceAbsent
+                    | FailureSessionReleaseDispositionV3::SourceRefused
+            )
+                && source_failure.cell_after() == authenticated.cell_state_id
+                && source_failure.facts().source_terminal_postwrite_id == source.id()
+                && source.source_failure_kind() == source_failure.facts().source_kind,
+            ClutchError::MismatchedState,
+        )?,
+        (None, None) => require(
+            matches!(
+                release_disposition,
+                FailureSessionReleaseDispositionV3::Resolved
+                    | FailureSessionReleaseDispositionV3::Exhausted
+            ),
+            ClutchError::MismatchedState,
+        )?,
+        _ => return Err(Refusal::Adapter(ClutchError::MismatchedState)),
+    }
     let mut next_history = authenticated.history;
     next_history
         .commit_plan(history_plan)
@@ -2935,6 +2952,15 @@ pub(super) fn write_failure_market_interval_archive_v3<'a>(
         history_authentication_id,
         ..authenticated
     };
+    let source_terminal_id = source_terminal
+        .map(|source| ProductContentId::from_bytes(source.id().bytes()))
+        .unwrap_or(ProductContentId::ZERO);
+    let source_terminal_authentication_id = source_terminal
+        .map(|source| ProductContentId::from_bytes(source.terminal_receipt_authentication_id().bytes()))
+        .unwrap_or(ProductContentId::ZERO);
+    let source_disposition_id = source_terminal
+        .map(|source| ProductContentId::from_bytes(source.physical_disposition_id().bytes()))
+        .unwrap_or(ProductContentId::ZERO);
     let id = ProductContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
             ARCHIVE_POSTWRITE_DOMAIN_V3,
@@ -2956,9 +2982,9 @@ pub(super) fn write_failure_market_interval_archive_v3<'a>(
             &append.market_instance_id().bytes(),
             &append.generation().to_le_bytes(),
             &source_occurrence_id.bytes(),
-            &source_terminal.id().bytes(),
-            &source_terminal.terminal_receipt_authentication_id().bytes(),
-            &source_terminal.physical_disposition_id().bytes(),
+            &source_terminal_id.bytes(),
+            &source_terminal_authentication_id.bytes(),
+            &source_disposition_id.bytes(),
             &[release_disposition.wire_byte()],
             &release_link_preauthorization_id.bytes(),
         ])
