@@ -714,9 +714,7 @@ pub fn solve_quantized_atom_pair_hull_v1(
     while coordinate < active_coordinates {
         let atom = basis
             .evaluate_point(coordinates.coordinates[coordinate])
-            .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                witness: u8_index(coordinate)?,
-            })?;
+            .map_err(|_| atom_evaluation_error(coordinate))?;
         report.singleton_evaluations = report
             .singleton_evaluations
             .checked_add(1)
@@ -742,9 +740,7 @@ pub fn solve_quantized_atom_pair_hull_v1(
     while left < active_coordinates {
         let left_atom = basis
             .evaluate_point(coordinates.coordinates[left])
-            .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                witness: u8_index(left)?,
-            })?;
+            .map_err(|_| atom_evaluation_error(left))?;
         let mut right = left + 1;
         while right < active_coordinates {
             if report.pair_evaluations == plan.maximum_pair_evaluations {
@@ -758,9 +754,7 @@ pub fn solve_quantized_atom_pair_hull_v1(
                 .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
             let right_atom = basis
                 .evaluate_point(coordinates.coordinates[right])
-                .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                    witness: u8_index(right)?,
-                })?;
+                .map_err(|_| atom_evaluation_error(right))?;
             if let Some((left_mass, right_mass, denominator)) = solve_pair_weights(
                 &left_atom.weights,
                 &right_atom.weights,
@@ -827,9 +821,7 @@ pub fn solve_quantized_atom_support3_hull_v1(
     while coordinate < active_coordinates {
         let atom = basis
             .evaluate_point(coordinates.coordinates[coordinate])
-            .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                witness: u8_index(coordinate)?,
-            })?;
+            .map_err(|_| atom_evaluation_error(coordinate))?;
         report.singleton_evaluations = report
             .singleton_evaluations
             .checked_add(1)
@@ -854,9 +846,7 @@ pub fn solve_quantized_atom_support3_hull_v1(
     while left < active_coordinates {
         let left_atom = basis
             .evaluate_point(coordinates.coordinates[left])
-            .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                witness: u8_index(left)?,
-            })?;
+            .map_err(|_| atom_evaluation_error(left))?;
         let mut right = left + 1;
         while right < active_coordinates {
             if report.pair_evaluations == plan.maximum_pair_evaluations {
@@ -870,9 +860,7 @@ pub fn solve_quantized_atom_support3_hull_v1(
                 .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
             let right_atom = basis
                 .evaluate_point(coordinates.coordinates[right])
-                .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                    witness: u8_index(right)?,
-                })?;
+                .map_err(|_| atom_evaluation_error(right))?;
             if let Some((left_mass, right_mass, denominator)) = solve_pair_weights(
                 &left_atom.weights,
                 &right_atom.weights,
@@ -904,16 +892,12 @@ pub fn solve_quantized_atom_support3_hull_v1(
     while left < active_coordinates {
         let left_atom = basis
             .evaluate_point(coordinates.coordinates[left])
-            .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                witness: u8_index(left)?,
-            })?;
+            .map_err(|_| atom_evaluation_error(left))?;
         let mut middle = left + 1;
         while middle < active_coordinates {
             let middle_atom = basis
                 .evaluate_point(coordinates.coordinates[middle])
-                .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                    witness: u8_index(middle)?,
-                })?;
+                .map_err(|_| atom_evaluation_error(middle))?;
             let mut right = middle + 1;
             while right < active_coordinates {
                 if report.triple_evaluations == plan.maximum_triple_evaluations {
@@ -927,9 +911,7 @@ pub fn solve_quantized_atom_support3_hull_v1(
                     .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
                 let right_atom = basis
                     .evaluate_point(coordinates.coordinates[right])
-                    .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                        witness: u8_index(right)?,
-                    })?;
+                    .map_err(|_| atom_evaluation_error(right))?;
                 match solve_triple_weights(
                     &left_atom.weights,
                     &middle_atom.weights,
@@ -1027,9 +1009,7 @@ pub fn solve_quantized_atom_support4_hull_v1(
     while coordinate < active_coordinates {
         let atom = basis
             .evaluate_point(coordinates.coordinates[coordinate])
-            .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                witness: u8_index(coordinate)?,
-            })?;
+            .map_err(|_| atom_evaluation_error(coordinate))?;
         report.singleton_evaluations = report
             .singleton_evaluations
             .checked_add(1)
@@ -1054,9 +1034,7 @@ pub fn solve_quantized_atom_support4_hull_v1(
     while left < active_coordinates {
         let left_atom = basis
             .evaluate_point(coordinates.coordinates[left])
-            .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                witness: u8_index(left)?,
-            })?;
+            .map_err(|_| atom_evaluation_error(left))?;
         let mut right = left + 1;
         while right < active_coordinates {
             if report.pair_evaluations == plan.maximum_pair_evaluations {
@@ -1070,9 +1048,7 @@ pub fn solve_quantized_atom_support4_hull_v1(
                 .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
             let right_atom = basis
                 .evaluate_point(coordinates.coordinates[right])
-                .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                    witness: u8_index(right)?,
-                })?;
+                .map_err(|_| atom_evaluation_error(right))?;
             if let Some((left_mass, right_mass, denominator)) = solve_pair_weights(
                 &left_atom.weights,
                 &right_atom.weights,
@@ -1105,16 +1081,12 @@ pub fn solve_quantized_atom_support4_hull_v1(
     while left < active_coordinates {
         let left_atom = basis
             .evaluate_point(coordinates.coordinates[left])
-            .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                witness: u8_index(left)?,
-            })?;
+            .map_err(|_| atom_evaluation_error(left))?;
         let mut middle = left + 1;
         while middle < active_coordinates {
             let middle_atom = basis
                 .evaluate_point(coordinates.coordinates[middle])
-                .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                    witness: u8_index(middle)?,
-                })?;
+                .map_err(|_| atom_evaluation_error(middle))?;
             let mut right = middle + 1;
             while right < active_coordinates {
                 if report.triple_evaluations == plan.maximum_triple_evaluations {
@@ -1128,9 +1100,7 @@ pub fn solve_quantized_atom_support4_hull_v1(
                     .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
                 let right_atom = basis
                     .evaluate_point(coordinates.coordinates[right])
-                    .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                        witness: u8_index(right)?,
-                    })?;
+                    .map_err(|_| atom_evaluation_error(right))?;
                 match solve_triple_weights(
                     &left_atom.weights,
                     &middle_atom.weights,
@@ -1178,23 +1148,17 @@ pub fn solve_quantized_atom_support4_hull_v1(
     while left < active_coordinates {
         let left_atom = basis
             .evaluate_point(coordinates.coordinates[left])
-            .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                witness: u8_index(left)?,
-            })?;
+            .map_err(|_| atom_evaluation_error(left))?;
         let mut first_middle = left + 1;
         while first_middle < active_coordinates {
             let first_middle_atom = basis
                 .evaluate_point(coordinates.coordinates[first_middle])
-                .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                    witness: u8_index(first_middle)?,
-                })?;
+                .map_err(|_| atom_evaluation_error(first_middle))?;
             let mut second_middle = first_middle + 1;
             while second_middle < active_coordinates {
                 let second_middle_atom = basis
                     .evaluate_point(coordinates.coordinates[second_middle])
-                    .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                        witness: u8_index(second_middle)?,
-                    })?;
+                    .map_err(|_| atom_evaluation_error(second_middle))?;
                 let mut right = second_middle + 1;
                 while right < active_coordinates {
                     if report.quartet_evaluations == plan.maximum_quartet_evaluations {
@@ -1208,9 +1172,7 @@ pub fn solve_quantized_atom_support4_hull_v1(
                         .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
                     let right_atom = basis
                         .evaluate_point(coordinates.coordinates[right])
-                        .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                            witness: u8_index(right)?,
-                        })?;
+                        .map_err(|_| atom_evaluation_error(right))?;
                     match solve_quartet_weights(
                         [
                             &left_atom.weights,
@@ -1306,9 +1268,7 @@ pub fn solve_quantized_atom_hull_v1(
     while coordinate < active_coordinates {
         let atom = basis
             .evaluate_point(coordinates.coordinates[coordinate])
-            .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                witness: u8_index(coordinate)?,
-            })?;
+            .map_err(|_| atom_evaluation_error(coordinate))?;
         report.evaluations_by_support[0] = report.evaluations_by_support[0]
             .checked_add(1)
             .ok_or(QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)?;
@@ -1361,9 +1321,7 @@ pub fn solve_quantized_atom_hull_v1(
                 let source_index = combination[selected];
                 let atom = basis
                     .evaluate_point(coordinates.coordinates[source_index])
-                    .map_err(|_| ErrorV1::AtomEvaluationFailed {
-                        witness: u8_index(source_index)?,
-                    })?;
+                    .map_err(|_| atom_evaluation_error(source_index))?;
                 atoms[selected] = atom.weights;
                 selected_coordinates[selected] = coordinates.coordinates[source_index];
                 selected += 1;
@@ -2303,6 +2261,15 @@ const fn gcd(mut left: u64, mut right: u64) -> u64 {
 
 fn u8_index(index: usize) -> ResultPairSolverV1<u8> {
     u8::try_from(index).map_err(|_| QuantizedAtomPairSolverErrorV1::ArithmeticOverflow)
+}
+
+fn atom_evaluation_error(index: usize) -> QuantizedAtomPairSolverErrorV1 {
+    match u8_index(index) {
+        Ok(witness) => QuantizedAtomPairSolverErrorV1::PriceMeasure(
+            ErrorV1::AtomEvaluationFailed { witness },
+        ),
+        Err(error) => error,
+    }
 }
 
 #[cfg(test)]
