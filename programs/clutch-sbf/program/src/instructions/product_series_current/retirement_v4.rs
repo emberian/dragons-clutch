@@ -1543,7 +1543,9 @@ pub(crate) fn retire_current_product_series_v4<'a, 'root, 'link>(
     physical_accounts: &[AccountInfo<'a>],
     root_rebound_output: &'root mut MarketLifecycleRootAccountV2,
     link_rebound_output: &'link mut SeriesMarketLinkAccountV2,
-) -> Outcome<AuthenticatedProductSeriesRetirementV4> {
+    general_close_accounts: &[AccountInfo<'a>],
+    general_close_selector: clutch_general_v2_contract::CountedSettlementRootSelectorV1,
+) -> Outcome<()> {
     require(
         physical_accounts.len() == SERIES_PHYSICAL_RETIREMENT_ACCOUNT_COUNT_V4,
         ClutchError::AccountCount,
@@ -1651,11 +1653,18 @@ pub(crate) fn retire_current_product_series_v4<'a, 'root, 'link>(
         source_custody.key.as_ref(),
     ]);
     require_live(id)?;
-    Ok(AuthenticatedProductSeriesRetirementV4 {
+    let receipt = AuthenticatedProductSeriesRetirementV4 {
         id,
         terminal,
         physical,
-    })
+    };
+    crate::instructions::general_v2_exact_index_retirement_v1::
+        close_indexed_root_after_product_series_retirement_v4(
+            program_id,
+            general_close_accounts,
+            general_close_selector,
+            receipt,
+        )
 }
 
 #[cfg(test)]
@@ -1772,6 +1781,8 @@ mod adversarial_source_tests {
             .find("retire_current_series_physical_v4")
             .expect("physical close");
         assert!(source_close < terminal && terminal < physical);
+        assert!(outer.contains("close_indexed_root_after_product_series_retirement_v4"));
+        assert!(!outer.contains("Outcome<AuthenticatedProductSeriesRetirementV4>"));
         assert!(!outer.contains("FundingV3"));
     }
 
