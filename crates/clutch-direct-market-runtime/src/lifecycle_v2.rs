@@ -10,12 +10,16 @@
 //! No V1 Product or General authority is exposed or persisted by this API.
 
 use clutch_batch::direct_pair_v1::DirectEconomicCandidateV1;
+use clutch_batch::relation_v1::FrozenPolicyV1;
 use clutch_batch::relation_v2::{EconomicDomainV2, PricePreconditionV2};
 use clutch_batch::{PartialPolicy, Side};
+use clutch_batch_policy_identity::revenue_policy_v2::RevenuePolicyV2;
 use clutch_general_v2_contract::GeneralPositionReplayPrestateV1;
 use clutch_owner_settlement::{AuthenticatedPositionV3, PositionSettlementPoststateV3};
 
 use crate::current_v2::DirectRootReplayPostV2;
+use crate::fee_v1::DirectFeeTerminalV1;
+use crate::fee_v2::DirectFeePolicyV2;
 use crate::reservation_v1::{
     AuthenticatedDirectReservationAdmissionV1, DirectReservationV1,
 };
@@ -26,14 +30,19 @@ use crate::selection_v1::{
     DirectCandidateBondMovementV1, DirectCandidateBondRefundPlanV1, DirectSelectionV1,
 };
 use crate::settlement_v1::{
+    prepare_direct_economic_terminal_from_current_projection_v2,
+    prepare_direct_missed_freeze_terminal_v1,
     prepare_direct_reservation_admission_with_replay_v1,
     prepare_direct_reservation_cancel_v1, AuthenticatedDirectReservationCancelV1,
-    DirectEndpointTerminalPlanV1, DirectReservationOrderInputV1,
+    AuthenticatedDirectEconomicTerminalV1, DirectEndpointPrestateV1,
+    DirectEndpointTerminalPlanV1, DirectFeeTreasuryPlanV1,
+    DirectFeeTreasuryPrestateV1, DirectReservationOrderInputV1,
     DirectSettlementHashBackendV1,
 };
 use crate::{
     DirectHashBackendV1, DirectMarketErrorV1, DirectRentOwnerV1,
     DirectRetirementTransferV1, DirectRootReplayPostV1,
+    DirectTerminalReasonV1,
 };
 
 /// Default-deny current action-2 account authority.
@@ -524,6 +533,272 @@ fn convert_selection_plan_v2<B: DirectHashBackendV1>(
         state: current_state,
         selection: plan.selection,
         candidate_bond_movement: plan.candidate_bond_movement,
+        candidate_bond_refunds: plan.candidate_bond_refunds,
+    })
+}
+
+/// Default-deny current action-9..12 account authority.
+pub trait AuthenticatedDirectEconomicTerminalV2 {
+    /// Authenticate the exact current root/replay, Selection, canonical
+    /// Reservation/Position/Replay prefix, optional RevenuePolicyV2 treasury
+    /// plane, terminal reason, action sequence, and clock slot.
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_terminal_v2(
+        &self,
+        _state: &DirectRootReplayPostV2,
+        _selection: DirectSelectionV1,
+        _ordered_endpoints: &[Option<DirectEndpointPrestateV1>; 2],
+        _fee_policy: DirectFeePolicyV2,
+        _realm: [u8; 32],
+        _batch_policy: Option<&FrozenPolicyV1>,
+        _revenue_policy: Option<&RevenuePolicyV2>,
+        _fee_terminal: Option<DirectFeeTerminalV1>,
+        _treasury: Option<DirectFeeTreasuryPrestateV1>,
+        _reason: DirectTerminalReasonV1,
+        _consumed_sequence: u64,
+        _observed_slot: u64,
+    ) -> Result<(), DirectMarketErrorV1> {
+        Err(DirectMarketErrorV1::UnauthenticatedAuthority)
+    }
+}
+
+/// Explicit refusing current action-9..12 authority.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoDirectEconomicTerminalAuthorityV2;
+
+impl AuthenticatedDirectEconomicTerminalV2 for NoDirectEconomicTerminalAuthorityV2 {}
+
+/// Atomic current action-9..12 poststate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectEconomicTerminalPlanV2 {
+    /// Terminal b1/v2 root and permanent b3 replay.
+    pub state: DirectRootReplayPostV2,
+    /// Terminal Selection archive.
+    pub selection: DirectSelectionV1,
+    /// Canonical Selection-order endpoint prefix.
+    pub endpoints: [Option<DirectEndpointTerminalPlanV1>; 2],
+    /// Exact assessed fee and split, present only for action 9.
+    pub fee_terminal: Option<DirectFeeTerminalV1>,
+    /// Exact nonzero current treasury credit, present only when needed.
+    pub treasury: Option<DirectFeeTreasuryPlanV1>,
+    /// Exact active endpoint count derived from Selection.
+    pub endpoint_count: u8,
+    /// Noncircular common transition commitment.
+    pub transition_id: [u8; 32],
+    /// Sole permanent economic terminal receipt.
+    pub economic_terminal_receipt_id: [u8; 32],
+    /// Complete retained-candidate principal refunds, when still pending.
+    pub candidate_bond_refunds: Option<DirectCandidateBondRefundPlanV1>,
+}
+
+/// Prepare current action 9..12 under RevenuePolicyV2-native authority.
+///
+/// Action 9 supplies both immutable policy preimages and the canonical
+/// treasury Position/Replay prestate. Lapse actions must supply none of them.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_direct_economic_terminal_v2<
+    A: AuthenticatedDirectEconomicTerminalV2 + ?Sized,
+    B: DirectSettlementHashBackendV1,
+>(
+    authority: &A,
+    state: DirectRootReplayPostV2,
+    selection: DirectSelectionV1,
+    endpoints: [Option<DirectEndpointPrestateV1>; 2],
+    realm: [u8; 32],
+    batch_policy: Option<&FrozenPolicyV1>,
+    revenue_policy: Option<&RevenuePolicyV2>,
+    treasury: Option<DirectFeeTreasuryPrestateV1>,
+    reason: DirectTerminalReasonV1,
+    consumed_sequence: u64,
+    observed_slot: u64,
+    backend: &B,
+) -> Result<DirectEconomicTerminalPlanV2, DirectMarketErrorV1> {
+    let fee_policy = state.root.binding().fee_policy();
+    let projection = state.transition_projection(backend)?;
+    let projection_authority = ProjectedEconomicAuthorityV2 {
+        authority,
+        current_state: &state,
+        projected_state: projection,
+        fee_policy,
+        realm,
+        batch_policy,
+        revenue_policy,
+        treasury,
+        reason,
+        consumed_sequence,
+        observed_slot,
+    };
+    let plan = prepare_direct_economic_terminal_from_current_projection_v2(
+        &projection_authority,
+        projection,
+        selection,
+        endpoints,
+        fee_policy,
+        realm,
+        batch_policy,
+        revenue_policy,
+        treasury,
+        reason,
+        consumed_sequence,
+        observed_slot,
+        backend,
+    )?;
+    drop(projection_authority);
+    convert_economic_plan_v2(state, projection, plan, backend)
+}
+
+/// Prepare the action-10 missed-freeze lapse from a still-open current root.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_direct_missed_freeze_terminal_v2<
+    F: AuthenticatedDirectSelectionFreezeV2 + ?Sized,
+    A: AuthenticatedDirectEconomicTerminalV2 + ?Sized,
+    B: DirectSettlementHashBackendV1,
+>(
+    freeze_authority: &F,
+    terminal_authority: &A,
+    state: DirectRootReplayPostV2,
+    selection_account: [u8; 32],
+    selection_rent: DirectRentOwnerV1,
+    reservations: [Option<DirectReservationV1>; 2],
+    domain: EconomicDomainV2,
+    price: PricePreconditionV2,
+    endpoints: [Option<DirectEndpointPrestateV1>; 2],
+    consumed_sequence: u64,
+    observed_slot: u64,
+    backend: &B,
+) -> Result<DirectEconomicTerminalPlanV2, DirectMarketErrorV1> {
+    freeze_authority.authenticate_freeze_v2(
+        &state,
+        selection_account,
+        selection_rent,
+        &reservations,
+        &domain,
+        &price,
+        consumed_sequence,
+        observed_slot,
+    )?;
+    let fee_policy = state.root.binding().fee_policy();
+    let projection = state.transition_projection(backend)?;
+    let mut reservation_semantic_ids = [[0; 32]; 2];
+    let mut index = 0usize;
+    while index < usize::from(projection.root.live_reservations()) {
+        reservation_semantic_ids[index] = reservations[index]
+            .ok_or(DirectMarketErrorV1::InvalidCount)?
+            .semantic_id(backend)?;
+        index += 1;
+    }
+    let projected_freeze = ProjectedFreezeAuthorityV2 {
+        root: projection.root,
+        selection_account,
+        rent: selection_rent,
+        reservations,
+        reservation_semantic_ids,
+        domain,
+        price,
+    };
+    let projected_terminal = ProjectedEconomicAuthorityV2 {
+        authority: terminal_authority,
+        current_state: &state,
+        projected_state: projection,
+        fee_policy,
+        realm: state.root.binding().realm_id,
+        batch_policy: None,
+        revenue_policy: None,
+        treasury: None,
+        reason: DirectTerminalReasonV1::MissedFreezeLapse,
+        consumed_sequence,
+        observed_slot,
+    };
+    let plan = prepare_direct_missed_freeze_terminal_v1(
+        &projected_freeze,
+        &projected_terminal,
+        projection,
+        selection_account,
+        selection_rent,
+        reservations,
+        domain,
+        price,
+        endpoints,
+        None,
+        None,
+        consumed_sequence,
+        observed_slot,
+        backend,
+    )?;
+    drop(projected_terminal);
+    convert_economic_plan_v2(state, projection, plan, backend)
+}
+
+#[derive(Debug)]
+struct ProjectedEconomicAuthorityV2<'a, A: ?Sized> {
+    authority: &'a A,
+    current_state: &'a DirectRootReplayPostV2,
+    projected_state: DirectRootReplayPostV1,
+    fee_policy: DirectFeePolicyV2,
+    realm: [u8; 32],
+    batch_policy: Option<&'a FrozenPolicyV1>,
+    revenue_policy: Option<&'a RevenuePolicyV2>,
+    treasury: Option<DirectFeeTreasuryPrestateV1>,
+    reason: DirectTerminalReasonV1,
+    consumed_sequence: u64,
+    observed_slot: u64,
+}
+
+impl<A: AuthenticatedDirectEconomicTerminalV2 + ?Sized>
+    AuthenticatedDirectEconomicTerminalV1 for ProjectedEconomicAuthorityV2<'_, A>
+{
+    fn authenticate_terminal(
+        &self,
+        state: DirectRootReplayPostV1,
+        selection: DirectSelectionV1,
+        ordered_endpoints: &[Option<DirectEndpointPrestateV1>; 2],
+        fee_terminal: Option<DirectFeeTerminalV1>,
+        treasury: Option<DirectFeeTreasuryPrestateV1>,
+        reason: DirectTerminalReasonV1,
+        consumed_sequence: u64,
+        observed_slot: u64,
+    ) -> Result<(), DirectMarketErrorV1> {
+        if state != self.projected_state
+            || treasury != self.treasury
+            || reason != self.reason
+            || consumed_sequence != self.consumed_sequence
+            || observed_slot != self.observed_slot
+        {
+            return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+        }
+        self.authority.authenticate_terminal_v2(
+            self.current_state,
+            selection,
+            ordered_endpoints,
+            self.fee_policy,
+            self.realm,
+            self.batch_policy,
+            self.revenue_policy,
+            fee_terminal,
+            treasury,
+            reason,
+            consumed_sequence,
+            observed_slot,
+        )
+    }
+}
+
+fn convert_economic_plan_v2<B: DirectHashBackendV1>(
+    state: DirectRootReplayPostV2,
+    projection: DirectRootReplayPostV1,
+    plan: crate::settlement_v1::DirectEconomicTerminalPlanV1,
+    backend: &B,
+) -> Result<DirectEconomicTerminalPlanV2, DirectMarketErrorV1> {
+    let current_state = state.accept_transition_projection(projection, plan.state, backend)?;
+    Ok(DirectEconomicTerminalPlanV2 {
+        state: current_state,
+        selection: plan.selection,
+        endpoints: plan.endpoints,
+        fee_terminal: plan.fee_terminal,
+        treasury: plan.treasury,
+        endpoint_count: plan.endpoint_count,
+        transition_id: plan.transition_id,
+        economic_terminal_receipt_id: plan.economic_terminal_receipt_id,
         candidate_bond_refunds: plan.candidate_bond_refunds,
     })
 }
