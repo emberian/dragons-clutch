@@ -9,7 +9,7 @@
 
 use crate::accounts::{expect_pda, require, Outcome};
 use crate::error::{ClutchError, Refusal};
-use crate::instructions::failure_market_admission::AuthenticatedFailureMarketRootV2;
+use crate::instructions::failure_market_admission::AuthenticatedFailureMarketRootV3;
 use crate::instructions::failure_market_interval_v2::{
     write_failure_market_interval_paid_advance_v2, AuthenticatedFailureMarketIntervalAccountsV2,
     AuthenticatedFailureMarketIntervalPaidAdvanceV2,
@@ -297,7 +297,7 @@ pub(crate) fn advance_failure_market_interval_paid_v3<'root, 'link>(
     product_schedule: &AuthenticatedProductFailureScheduleV3,
     root_before: AuthenticatedMarketLifecycleRootV3<'_>,
     link_before: AuthenticatedSeriesMarketLinkV3<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
     interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
     source_join: SourcePolicyHandoffJoinV1,
@@ -634,7 +634,7 @@ fn authenticate_failure_recovery_liveness_prestate_v2(
     recovery_account: &AccountInfo<'_>,
     payer_refund: &AccountInfo<'_>,
     keeper: &AccountInfo<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     interval: AuthenticatedFailureMarketIntervalAccountsV2,
 ) -> Outcome<AuthenticatedFailureRecoveryLivenessPrestateV2> {
     require(
@@ -1056,7 +1056,7 @@ fn require_distinct_paid_advance_accounts_v2(
     recovery: &AccountInfo<'_>,
     keeper: &AccountInfo<'_>,
     payer: &AccountInfo<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     source_join: SourcePolicyHandoffJoinV1,
 ) -> Outcome<()> {
     require(

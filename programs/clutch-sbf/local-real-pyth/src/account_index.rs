@@ -89,6 +89,7 @@ use clutch_solana_layout::failure_recovery::{
     FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1, FAILURE_LIVENESS_POLICY_BODY_BYTES_V1,
     FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3, FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_BYTES_V1,
 };
+};
 use clutch_solana_layout::failure_market_interval_v2::{
     FailureMarketIntervalCellAccountV2, FailureMarketIntervalHistoryAccountV2,
 };
@@ -2943,7 +2944,7 @@ mod current_decoder_tests {
         for (tag, version) in [
             (
                 registry::FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG,
-                registry::FAILURE_MARKET_ROOT_ACCOUNT_VERSION_V2,
+                registry::FAILURE_MARKET_ROOT_ACCOUNT_VERSION_V3,
             ),
             (
                 registry::FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG,

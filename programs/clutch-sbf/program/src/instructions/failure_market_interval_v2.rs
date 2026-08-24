@@ -12,7 +12,7 @@
 use crate::accounts::{expect_pda, require, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::failure_market_admission::{
-    authenticate_failure_market_root_v2, AuthenticatedFailureMarketRootV2,
+    authenticate_failure_market_root_v3, AuthenticatedFailureMarketRootV3,
 };
 use crate::instructions::failure_market_runtime::{
     write_failure_market_runtime_session_plan_v1, AuthenticatedFailureMarketRuntimeRootV1,
@@ -350,7 +350,7 @@ pub(crate) trait AuthenticatedFailureMarketSourceFailurePostwriteV2 {
 pub(crate) fn plan_failure_market_source_failure_cell_v2<
     A: AuthenticatedFailureMarketSourceFailurePostwriteV2 + ?Sized,
 >(
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     interval: AuthenticatedFailureMarketIntervalAccountsV2,
     session_binding_id: SourceContentId,
     session_schedule_id: SourceContentId,
@@ -484,7 +484,7 @@ impl FailureMarketSourceFailureArchivePlanV2 {
 
 /// Derive the canonical SourceAbsent/SourceRefused append/reset from the exact terminal cell.
 pub(crate) fn plan_failure_market_source_failure_archive_v2(
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     interval: AuthenticatedFailureMarketIntervalAccountsV2,
     source_failure: FailureMarketIntervalCellSourceFailureReceiptV2,
 ) -> Outcome<FailureMarketSourceFailureArchivePlanV2> {
@@ -560,7 +560,7 @@ impl FailureMarketExhaustedArchivePlanV2 {
 
 /// Derive the only archive admitted after the exhaustion cell postwrite.
 pub(crate) fn plan_failure_market_exhausted_archive_v2(
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     interval: AuthenticatedFailureMarketIntervalAccountsV2,
     exhaustion: FailureMarketIntervalCellExhaustionReceiptV2,
 ) -> Outcome<FailureMarketExhaustedArchivePlanV2> {
@@ -639,7 +639,7 @@ pub(crate) fn plan_failure_market_interval_exhaustion_v2(
     program_id: &Pubkey,
     liveness_policy_account: &AccountInfo<'_>,
     recovery_account: &AccountInfo<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     interval: AuthenticatedFailureMarketIntervalAccountsV2,
 ) -> Outcome<FailureMarketIntervalCellExhaustionPlanV2> {
     require(
@@ -751,7 +751,7 @@ pub(crate) fn plan_failure_market_interval_exhaustion_v2(
 /// The schedule bytes are a preimage only; their recomputed typed identity and
 /// every bound/capital field must equal the private Product receipt.
 pub(crate) fn authenticate_failure_market_recovery_quote_v1(
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     product: AuthenticatedMarketRecoveryScheduleV1,
     body: &[u8],
 ) -> Outcome<FailureMarketRecoveryQuoteAdmissionReceiptV1> {
@@ -806,11 +806,10 @@ pub(crate) fn authenticate_failure_market_recovery_quote_v1(
 /// policy body. No historical RootV1/BundleV5 receipt is accepted here.
 pub(crate) fn authenticate_failure_market_recovery_quote_v2(
     program_id: &Pubkey,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     root: AuthenticatedMarketLifecycleRootV2<'_>,
     registry: &AuthenticatedRegistryCapabilityV4,
     liveness_policy_account: &AccountInfo<'_>,
-    body: &[u8],
 ) -> Outcome<AuthenticatedFailureMarketRecoveryQuoteV2> {
     authenticate_failure_market_recovery_quote_with_root_access_v2(
         program_id,
@@ -818,7 +817,6 @@ pub(crate) fn authenticate_failure_market_recovery_quote_v2(
         root,
         registry,
         liveness_policy_account,
-        body,
         false,
     )
 }
@@ -828,11 +826,10 @@ pub(crate) fn authenticate_failure_market_recovery_quote_v2(
 /// not relax ordinary Begin/Advance authority to accept unexpected writability.
 pub(crate) fn authenticate_failure_market_recovery_quote_for_resolution_v2(
     program_id: &Pubkey,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     root: AuthenticatedMarketLifecycleRootV2<'_>,
     registry: &AuthenticatedRegistryCapabilityV4,
     liveness_policy_account: &AccountInfo<'_>,
-    body: &[u8],
 ) -> Outcome<AuthenticatedFailureMarketRecoveryQuoteV2> {
     authenticate_failure_market_recovery_quote_with_root_access_v2(
         program_id,
@@ -840,7 +837,6 @@ pub(crate) fn authenticate_failure_market_recovery_quote_for_resolution_v2(
         root,
         registry,
         liveness_policy_account,
-        body,
         true,
     )
 }
@@ -848,11 +844,10 @@ pub(crate) fn authenticate_failure_market_recovery_quote_for_resolution_v2(
 #[allow(clippy::too_many_arguments)]
 fn authenticate_failure_market_recovery_quote_with_root_access_v2(
     program_id: &Pubkey,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     root: AuthenticatedMarketLifecycleRootV2<'_>,
     registry: &AuthenticatedRegistryCapabilityV4,
     liveness_policy_account: &AccountInfo<'_>,
-    body: &[u8],
     expected_root_writable: bool,
 ) -> Outcome<AuthenticatedFailureMarketRecoveryQuoteV2> {
     require(
@@ -864,11 +859,7 @@ fn authenticate_failure_market_recovery_quote_with_root_access_v2(
             && liveness_policy_account.data_len() == FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1,
         ClutchError::MismatchedState,
     )?;
-    let body: &[u8; FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1] = body
-        .try_into()
-        .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
-    let schedule = FailureMarketRecoveryQuoteScheduleV1::decode(body)
-        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let schedule = admission.recovery_quote();
     let schedule_id = schedule
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
@@ -984,11 +975,10 @@ fn authenticate_failure_market_recovery_quote_with_root_access_v2(
 /// RegistryV5, and the full immutable liveness-policy account.
 pub(crate) fn authenticate_failure_market_recovery_quote_v3(
     program_id: &Pubkey,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     root: &AuthenticatedMarketLifecycleRootV3<'_>,
     registry: &AuthenticatedRegistryCapabilityV5,
     liveness_policy_account: &AccountInfo<'_>,
-    body: &[u8],
 ) -> Outcome<AuthenticatedFailureMarketRecoveryQuoteV3> {
     authenticate_failure_market_recovery_quote_with_root_access_v3(
         program_id,
@@ -996,7 +986,6 @@ pub(crate) fn authenticate_failure_market_recovery_quote_v3(
         root,
         registry,
         liveness_policy_account,
-        body,
         false,
     )
 }
@@ -1005,11 +994,10 @@ pub(crate) fn authenticate_failure_market_recovery_quote_v3(
 /// unresolved RootV3 that the same atomic composer will activate.
 pub(crate) fn authenticate_failure_market_recovery_quote_for_resolution_v3(
     program_id: &Pubkey,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     root: &AuthenticatedMarketLifecycleRootV3<'_>,
     registry: &AuthenticatedRegistryCapabilityV5,
     liveness_policy_account: &AccountInfo<'_>,
-    body: &[u8],
 ) -> Outcome<AuthenticatedFailureMarketRecoveryQuoteV3> {
     authenticate_failure_market_recovery_quote_with_root_access_v3(
         program_id,
@@ -1017,7 +1005,6 @@ pub(crate) fn authenticate_failure_market_recovery_quote_for_resolution_v3(
         root,
         registry,
         liveness_policy_account,
-        body,
         true,
     )
 }
@@ -1025,11 +1012,10 @@ pub(crate) fn authenticate_failure_market_recovery_quote_for_resolution_v3(
 #[allow(clippy::too_many_arguments)]
 fn authenticate_failure_market_recovery_quote_with_root_access_v3(
     program_id: &Pubkey,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     root: &AuthenticatedMarketLifecycleRootV3<'_>,
     registry: &AuthenticatedRegistryCapabilityV5,
     liveness_policy_account: &AccountInfo<'_>,
-    body: &[u8],
     expected_root_writable: bool,
 ) -> Outcome<AuthenticatedFailureMarketRecoveryQuoteV3> {
     require(
@@ -1041,11 +1027,7 @@ fn authenticate_failure_market_recovery_quote_with_root_access_v3(
             && liveness_policy_account.data_len() == FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1,
         ClutchError::MismatchedState,
     )?;
-    let body: &[u8; FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1] = body
-        .try_into()
-        .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
-    let schedule = FailureMarketRecoveryQuoteScheduleV1::decode(body)
-        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let schedule = admission.recovery_quote();
     let schedule_id = schedule
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
@@ -1868,7 +1850,7 @@ pub(crate) fn initialize_failure_market_interval_accounts_v2<'a>(
     history_account: &AccountInfo<'a>,
     rent_sysvar: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
     work_preallocation: AuthenticatedMarketFoundationPreallocationV3,
     history_preallocation: AuthenticatedMarketFoundationPreallocationV3,
@@ -1882,7 +1864,7 @@ pub(crate) fn initialize_failure_market_interval_accounts_v2<'a>(
         system_program.clone(),
     ])?;
     let live_admission =
-        authenticate_failure_market_root_v2(program_id, admission_root_account, false)?;
+        authenticate_failure_market_root_v3(program_id, admission_root_account, false)?;
     require(live_admission == admission, ClutchError::MismatchedState)?;
     let admission = live_admission;
     let admission_state = admission.state();
@@ -2075,7 +2057,7 @@ pub(crate) fn authenticate_failure_market_interval_accounts_v2<'a>(
     program_id: &Pubkey,
     cell_account: &AccountInfo<'a>,
     history_account: &AccountInfo<'a>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     funding: FailureMarketIntervalFundingReceiptV2,
     quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
     cell_writable: bool,
@@ -2227,7 +2209,7 @@ pub(crate) fn reopen_failure_market_interval_accounts_v2<'a>(
     program_id: &Pubkey,
     cell_account: &AccountInfo<'a>,
     history_account: &AccountInfo<'a>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
     funding_preimage: FailureMarketIntervalFundingPreimageV2,
     cell_writable: bool,
@@ -2407,7 +2389,7 @@ pub(crate) fn write_failure_market_interval_begin_plan_v2<
     program_id: &Pubkey,
     cell_account: &AccountInfo<'_>,
     history_account: &AccountInfo<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     authenticated: AuthenticatedFailureMarketIntervalAccountsV2,
     plan: FailureMarketIntervalCellPlanV2,
     receipt: FailureMarketIntervalCellActivationReceiptV2,
@@ -2474,7 +2456,7 @@ pub(crate) fn write_failure_market_interval_paid_advance_v2<
     program_id: &Pubkey,
     cell_account: &AccountInfo<'_>,
     history_account: &AccountInfo<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     authenticated: AuthenticatedFailureMarketIntervalAccountsV2,
     advance: FailureMarketIntervalCellAdvancePlanV2,
     authority: &A,
@@ -3103,7 +3085,7 @@ pub(crate) fn archive_failure_market_interval_session_v2<'a, 'link>(
     interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
     link_before: AuthenticatedSeriesMarketLinkV1<'link>,
     release_link: &AuthenticatedWritableFailureSessionReleaseLinkV2,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
     history_plan: FailureMarketIntervalHistoryPlanV2,
     append: FailureMarketIntervalHistoryAppendReceiptV2,
@@ -3259,7 +3241,7 @@ pub(crate) fn archive_failure_market_interval_session_v3<'a, 'link>(
     interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
     link_before: AuthenticatedSeriesMarketLinkV2<'link>,
     release_link: &AuthenticatedWritableFailureSessionReleaseLinkV3,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
     history_plan: FailureMarketIntervalHistoryPlanV2,
     append: FailureMarketIntervalHistoryAppendReceiptV2,
@@ -3417,7 +3399,7 @@ pub(crate) fn exhaust_and_archive_failure_market_interval_session_v2<'a, 'root, 
     recovery_account: &AccountInfo<'a>,
     root_before: AuthenticatedMarketLifecycleRootV1<'root>,
     link_before: AuthenticatedSeriesMarketLinkV1<'link>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
     interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
     root_reopen_output: &mut MarketLifecycleRootAccountV1,
@@ -3569,7 +3551,7 @@ pub(crate) fn close_failure_market_interval_accounts_v2<'a>(
         ClutchError::UnexpectedWritable,
     )?;
     let live_admission =
-        authenticate_failure_market_root_v2(program_id, admission_root_account, false)?;
+        authenticate_failure_market_root_v3(program_id, admission_root_account, false)?;
     let live_market_terminal = authenticate_market_instance_terminal_v1(
         program_id,
         market_root_account,

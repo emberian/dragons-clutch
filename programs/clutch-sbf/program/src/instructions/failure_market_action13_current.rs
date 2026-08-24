@@ -12,7 +12,7 @@ use std::boxed::Box;
 
 use crate::accounts::{require, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
-use crate::instructions::failure_market_admission::authenticate_failure_market_root_v2;
+use crate::instructions::failure_market_admission::authenticate_failure_market_root_v3;
 use crate::instructions::failure_market_dispatch_v2::{
     account_for_role_v2, FailureMarketAccountRoleV2 as Role, FailureMarketActionPayloadV2,
 };
@@ -136,7 +136,7 @@ fn compose_current_failure_exhaustion_archive_v3<'a>(
     recovery: &AccountInfo<'a>,
     root: AuthenticatedMarketLifecycleRootV3<'_>,
     link: AuthenticatedSeriesMarketLinkV3<'_>,
-    admission: crate::instructions::failure_market_admission::AuthenticatedFailureMarketRootV2,
+    admission: crate::instructions::failure_market_admission::AuthenticatedFailureMarketRootV3,
     runtime: AuthenticatedFailureMarketRuntimeRootV1,
     interval: AuthenticatedFailureMarketIntervalAccountsV2,
     root_rebound: &mut MarketLifecycleRootAccountV3,
@@ -303,10 +303,7 @@ pub(crate) fn process_archive_failure_market_session_v3(
     sequence: u64,
     payload: FailureMarketActionPayloadV2<'_>,
 ) -> Outcome<()> {
-    let FailureMarketActionPayloadV2::Archive {
-        recovery_quote_schedule,
-        interval_funding_preimage,
-    } = payload
+    let FailureMarketActionPayloadV2::Archive = payload
     else {
         return crate::instructions::failure_market_dispatch_v2::process_reserved_disabled(
             RecoveryAction::CloseIntervalConsensusWork,
@@ -332,7 +329,7 @@ pub(crate) fn process_archive_failure_market_session_v3(
     let liveness_policy = account_for_role_v2(action, accounts, Role::FailureLivenessPolicy)?;
     let recovery = account_for_role_v2(action, accounts, Role::FailureRecoveryCompartment)?;
 
-    let admission = authenticate_failure_market_root_v2(program_id, admission_account, false)?;
+    let admission = authenticate_failure_market_root_v3(program_id, admission_account, false)?;
     let policy = admission.state().binding().facts();
     let mut root_decode = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
     let root = authenticate_market_lifecycle_root_v3(
@@ -450,10 +447,11 @@ pub(crate) fn process_archive_failure_market_session_v3(
         &root,
         &registry,
         liveness_policy,
-        recovery_quote_schedule,
     )?;
-    let interval_funding =
-        FailureMarketIntervalFundingPreimageV2::decode(interval_funding_preimage)?;
+    let interval_funding_preimage = admission.interval_funding_preimage();
+    let interval_funding = FailureMarketIntervalFundingPreimageV2::decode(
+        &interval_funding_preimage,
+    )?;
     let interval = reopen_failure_market_interval_accounts_v2(
         program_id,
         cell_account,

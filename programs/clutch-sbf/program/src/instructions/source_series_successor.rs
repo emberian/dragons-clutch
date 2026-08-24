@@ -30,7 +30,7 @@ use crate::source_plane_v3_actions::{
     persist_evaluation_result, persist_source_policy_handoff, reopen_runtime_account,
     seal_raw_page, seal_window,
 };
-use crate::instructions::failure_market_admission::authenticate_failure_market_root_v2;
+use crate::instructions::failure_market_admission::authenticate_failure_market_root_v3;
 use clutch_source_plane_v3::ContentId;
 use clutch_source_plane_v3_adapter::{
     project_runtime_evaluate_statistic, project_runtime_fold_window_page,
@@ -861,7 +861,7 @@ pub(super) fn process_emit_source_handoff(
         clock.snapshot().slot < intent.valid_before_slot,
         ClutchError::Replay,
     )?;
-    let failure = authenticate_failure_market_root_v2(program_id, &accounts[16], false)?;
+    let failure = authenticate_failure_market_root_v3(program_id, &accounts[16], false)?;
     let failure_binding = failure.state().binding();
     let failure_facts = failure_binding.facts();
     let failure_policy_binding_id = ContentId::from_bytes(failure_binding.id().bytes());

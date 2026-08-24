@@ -22,6 +22,17 @@ pub const FAILURE_MARKET_ROOT_RESERVED_BYTES_V2: usize =
     FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2 - FAILURE_MARKET_ADMISSION_BODY_BYTES_V1;
 /// The shared-Market successor deliberately preserves the funded `0xa0` size.
 pub const FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2: usize = FAILURE_EXTERNAL_ROOT_ACCOUNT_BYTES_V1;
+/// Exact retained current Recovery quote-schedule preimage width.
+pub const FAILURE_MARKET_RECOVERY_QUOTE_BODY_BYTES_V1: usize = 192;
+/// Exact retained interval-capitalization reconstruction preimage width.
+pub const FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1: usize = 176;
+/// Reserved zero tail after current admission plus quote-schedule ownership.
+pub const FAILURE_MARKET_ROOT_RESERVED_BYTES_V3: usize = FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2
+    - FAILURE_MARKET_ADMISSION_BODY_BYTES_V1
+    - FAILURE_MARKET_RECOVERY_QUOTE_BODY_BYTES_V1
+    - FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1;
+/// Current root preserves the already-funded physical account width.
+pub const FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3: usize = FAILURE_EXTERNAL_ROOT_ACCOUNT_BYTES_V1;
 /// Exact semantic body of the market-scoped mutable Failure runtime.
 pub const FAILURE_MARKET_RUNTIME_BODY_BYTES_V1: usize = 2_048;
 /// Reserved zero tail retained inside the canonical `0xa0` funded width.
@@ -388,6 +399,91 @@ impl FailureMarketRootAccountV2 {
         Ok(Self {
             bump: input[2],
             admission_body,
+        })
+    }
+}
+
+/// Current `0xa0/v4` shared-Market admission and exact Recovery quote owner.
+///
+/// V2 retained only a schedule digest and aggregate liveness bounds, which
+/// cannot reconstruct per-attempt prices. V3 consumes part of the account's
+/// already-funded reserved tail so every later action can derive the exact
+/// schedule from current chain state without another rent-bearing account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketRootAccountV3 {
+    /// Canonical PDA bump. The physical PDA remains the shared Market root.
+    pub bump: u8,
+    /// Complete canonical Failure Market admission body.
+    pub admission_body: [u8; FAILURE_MARKET_ADMISSION_BODY_BYTES_V1],
+    /// Complete canonical per-attempt Recovery quote preimage.
+    pub recovery_quote_body: [u8; FAILURE_MARKET_RECOVERY_QUOTE_BODY_BYTES_V1],
+    /// Exact Product-authenticated reusable-cell capitalization preimage.
+    pub interval_funding_preimage:
+        [u8; FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1],
+}
+
+impl FailureMarketRootAccountV3 {
+    /// Encode every owned byte and clear the remaining prepaid reserve.
+    pub fn encode_into(
+        &self,
+        output: &mut [u8; FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3],
+    ) -> Result<()> {
+        if self.admission_body.iter().all(|byte| *byte == 0)
+            || self.recovery_quote_body.iter().all(|byte| *byte == 0)
+            || self.interval_funding_preimage.iter().all(|byte| *byte == 0)
+        {
+            return Err(CodecError::ZeroValue);
+        }
+        output.fill(0);
+        output[0] = registry::FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG;
+        output[1] = registry::FAILURE_MARKET_ROOT_ACCOUNT_VERSION_V3;
+        output[2] = self.bump;
+        let admission_start = FAILURE_ACCOUNT_HEADER_BYTES_V1;
+        let admission_end = admission_start + FAILURE_MARKET_ADMISSION_BODY_BYTES_V1;
+        let quote_end = admission_end + FAILURE_MARKET_RECOVERY_QUOTE_BODY_BYTES_V1;
+        let funding_end = quote_end + FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1;
+        output[admission_start..admission_end].copy_from_slice(&self.admission_body);
+        output[admission_end..quote_end].copy_from_slice(&self.recovery_quote_body);
+        output[quote_end..funding_end].copy_from_slice(&self.interval_funding_preimage);
+        Ok(())
+    }
+
+    /// Decode only the fresh version and reject every unowned tail byte.
+    pub fn decode(input: &[u8; FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3]) -> Result<Self> {
+        if input[0] != registry::FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != registry::FAILURE_MARKET_ROOT_ACCOUNT_VERSION_V3 {
+            return Err(CodecError::WrongVersion);
+        }
+        if input[3] != 0 {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        let admission_start = FAILURE_ACCOUNT_HEADER_BYTES_V1;
+        let admission_end = admission_start + FAILURE_MARKET_ADMISSION_BODY_BYTES_V1;
+        let quote_end = admission_end + FAILURE_MARKET_RECOVERY_QUOTE_BODY_BYTES_V1;
+        let funding_end = quote_end + FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1;
+        if input[funding_end..].iter().any(|byte| *byte != 0) {
+            return Err(CodecError::NonCanonicalPadding);
+        }
+        let mut admission_body = [0u8; FAILURE_MARKET_ADMISSION_BODY_BYTES_V1];
+        admission_body.copy_from_slice(&input[admission_start..admission_end]);
+        let mut recovery_quote_body = [0u8; FAILURE_MARKET_RECOVERY_QUOTE_BODY_BYTES_V1];
+        recovery_quote_body.copy_from_slice(&input[admission_end..quote_end]);
+        let mut interval_funding_preimage =
+            [0u8; FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1];
+        interval_funding_preimage.copy_from_slice(&input[quote_end..funding_end]);
+        if admission_body.iter().all(|byte| *byte == 0)
+            || recovery_quote_body.iter().all(|byte| *byte == 0)
+            || interval_funding_preimage.iter().all(|byte| *byte == 0)
+        {
+            return Err(CodecError::ZeroValue);
+        }
+        Ok(Self {
+            bump: input[2],
+            admission_body,
+            recovery_quote_body,
+            interval_funding_preimage,
         })
     }
 }

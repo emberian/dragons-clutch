@@ -12,7 +12,7 @@
 use crate::accounts::{require, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::failure_market_admission::{
-    authenticate_failure_market_root_v2, AuthenticatedFailureMarketRootV2,
+    authenticate_failure_market_root_v3, AuthenticatedFailureMarketRootV3,
 };
 use crate::instructions::failure_market_interval_v2::{
     authenticate_failure_market_interval_accounts_v2, write_failure_market_interval_family_seal_v2,
@@ -180,7 +180,7 @@ impl AuthenticatedFailureMarketIntervalFamilySealV2 for FailureMarketHistorySeal
 pub(crate) struct AuthenticatedFailureMarketFamilyTerminalPostwriteV2 {
     id: ContentId,
     owner_release_id: ContentId,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     aggregate: FailureMarketFamilyAggregateReceiptV2,
     replay_terminal: FailureMarketReplayTerminalReceiptV2,
     family_terminal: FailureMarketFamilyTerminalReceiptV2,
@@ -202,7 +202,7 @@ impl AuthenticatedFailureMarketFamilyTerminalPostwriteV2 {
     }
 
     /// Exact immutable Failure admission root retained through Product consume.
-    pub(crate) const fn admission(&self) -> AuthenticatedFailureMarketRootV2 {
+    pub(crate) const fn admission(&self) -> AuthenticatedFailureMarketRootV3 {
         self.admission
     }
 
@@ -384,7 +384,7 @@ pub(crate) struct AuthenticatedFailureMarketFamilyTerminalOwnerV2 {
     id: ContentId,
     owner_release_id: ContentId,
     family_terminal_receipt_id: ContentId,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     runtime: AuthenticatedFailureMarketRuntimeRootV1,
     replay: AuthenticatedFailureMarketReplayV2,
     interval: AuthenticatedFailureMarketIntervalAccountsV2,
@@ -426,7 +426,7 @@ impl AuthenticatedFailureMarketFamilyTerminalOwnerV2 {
         self.runtime.state().source_result_close_receipt_id()
     }
 
-    pub(crate) const fn admission(&self) -> AuthenticatedFailureMarketRootV2 {
+    pub(crate) const fn admission(&self) -> AuthenticatedFailureMarketRootV3 {
         self.admission
     }
 
@@ -972,7 +972,7 @@ impl AuthenticatedFailureMarketIntervalFamilySealV2
 }
 
 fn derive_terminal_owner_release_id_v2(
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     runtime: AuthenticatedFailureMarketRuntimeRootV1,
     replay: AuthenticatedFailureMarketReplayV2,
     interval: AuthenticatedFailureMarketIntervalAccountsV2,
@@ -1036,7 +1036,7 @@ fn authenticate_failure_market_family_terminal_owner_v2(
     interval_cell_account: &AccountInfo<'_>,
     interval_history_account: &AccountInfo<'_>,
     replay_account: &AccountInfo<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     interval_funding: FailureMarketIntervalFundingReceiptV2,
     quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
     replay_funding: FailureMarketReplayFundingReceiptV2,
@@ -1053,7 +1053,7 @@ fn authenticate_failure_market_family_terminal_owner_v2(
         replay_account.clone(),
     ])?;
     let live_admission =
-        authenticate_failure_market_root_v2(program_id, admission_root_account, false)?;
+        authenticate_failure_market_root_v3(program_id, admission_root_account, false)?;
     require(live_admission == admission, ClutchError::MismatchedState)?;
     let runtime = authenticate_failure_market_runtime_root_v1(
         program_id,
@@ -1148,7 +1148,7 @@ pub(crate) fn authenticate_failure_market_family_terminal_receipt_v3(
     interval_cell_account: &AccountInfo<'_>,
     interval_history_account: &AccountInfo<'_>,
     replay_account: &AccountInfo<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     interval_funding: FailureMarketIntervalFundingReceiptV2,
     quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
     replay_funding: FailureMarketReplayFundingReceiptV2,
@@ -1184,7 +1184,7 @@ pub(crate) fn authenticate_failure_market_family_terminal_for_close_v2(
     interval_cell_account: &AccountInfo<'_>,
     interval_history_account: &AccountInfo<'_>,
     replay_account: &AccountInfo<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     interval_funding: FailureMarketIntervalFundingReceiptV2,
     quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
     replay_funding: FailureMarketReplayFundingReceiptV2,
@@ -1218,7 +1218,7 @@ pub(crate) fn authenticate_failure_market_family_terminal_for_source_retirement_
     interval_cell_account: &AccountInfo<'_>,
     interval_history_account: &AccountInfo<'_>,
     replay_account: &AccountInfo<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     interval_funding: FailureMarketIntervalFundingReceiptV2,
     quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
     replay_funding: FailureMarketReplayFundingReceiptV2,
@@ -1263,7 +1263,7 @@ pub(crate) fn retire_successful_failure_source_family_into_product_v3<
     principal_refund: &AccountInfo<'_>,
     neutral_sink: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     interval_funding: FailureMarketIntervalFundingReceiptV2,
     quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
     replay_funding: FailureMarketReplayFundingReceiptV2,
@@ -1362,7 +1362,7 @@ pub(crate) fn retire_failed_failure_source_family_into_product_v3<'root, 'link, 
     principal_refund: &AccountInfo<'_>,
     neutral_sink: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     interval_funding: FailureMarketIntervalFundingReceiptV2,
     quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
     replay_funding: FailureMarketReplayFundingReceiptV2,
@@ -1457,7 +1457,7 @@ fn write_failure_market_family_terminal_v2<'a>(
     interval_cell_account: &AccountInfo<'a>,
     interval_history_account: &AccountInfo<'a>,
     replay_account: &AccountInfo<'a>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     recovery_close: AuthenticatedFailureMarketRecoveryClosePostwriteV2,
     replay_before: AuthenticatedFailureMarketReplayV2,
 ) -> Outcome<AuthenticatedFailureMarketFamilyTerminalPostwriteV2> {
@@ -1469,7 +1469,7 @@ fn write_failure_market_family_terminal_v2<'a>(
         replay_account.clone(),
     ])?;
     let live_admission =
-        authenticate_failure_market_root_v2(program_id, admission_root_account, false)?;
+        authenticate_failure_market_root_v3(program_id, admission_root_account, false)?;
     require(live_admission == admission, ClutchError::MismatchedState)?;
     let live_runtime = authenticate_failure_market_runtime_root_v1(
         program_id,
@@ -1701,7 +1701,7 @@ pub(crate) fn persist_resolved_failure_market_family_v2(
     interval_history_account: &AccountInfo<'_>,
     replay_account: &AccountInfo<'_>,
     resolved_market_root: AuthenticatedMarketLifecycleRootV2<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     recovery_close: AuthenticatedFailureMarketRecoveryClosePostwriteV2,
     replay_before: AuthenticatedFailureMarketReplayV2,
     resolved_root_decode: &mut MarketLifecycleRootAccountV2,
@@ -1768,7 +1768,7 @@ pub(crate) fn persist_resolved_failure_market_family_v3(
     interval_history_account: &AccountInfo<'_>,
     replay_account: &AccountInfo<'_>,
     resolved_market_root: &AuthenticatedMarketLifecycleRootV3<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     recovery_close: AuthenticatedFailureMarketRecoveryClosePostwriteV2,
     replay_before: AuthenticatedFailureMarketReplayV2,
     resolved_root_decode: &mut MarketLifecycleRootAccountV3,
@@ -2054,7 +2054,7 @@ mod adversarial_family_terminal_tests {
             .expect("first write");
         let prewrite = &outer[..first_write];
         for guard in [
-            "authenticate_failure_market_root_v2",
+            "authenticate_failure_market_root_v3",
             "live_admission == admission",
             "authenticate_failure_market_runtime_root_v1",
             "live_runtime == recovery_close.runtime()",
@@ -2123,7 +2123,7 @@ mod adversarial_family_terminal_tests {
             })
             .expect("persisted current terminal authority");
         for predicate in [
-            "authenticate_failure_market_root_v2",
+            "authenticate_failure_market_root_v3",
             "authenticate_failure_market_runtime_root_v1",
             "authenticate_failure_market_interval_accounts_v2",
             "authenticate_failure_market_replay_v2",

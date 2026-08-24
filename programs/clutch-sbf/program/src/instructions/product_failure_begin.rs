@@ -9,7 +9,7 @@
 
 use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
-use crate::instructions::failure_market_admission::AuthenticatedFailureMarketRootV2;
+use crate::instructions::failure_market_admission::AuthenticatedFailureMarketRootV3;
 use crate::instructions::failure_market_interval_v2::{
     write_failure_market_interval_begin_plan_v2, AuthenticatedFailureMarketIntervalAccountsV2,
     AuthenticatedFailureMarketIntervalBeginV2,
@@ -471,7 +471,7 @@ pub(crate) fn begin_failure_market_interval_session_v2<'next>(
     runtime_root_account: &AccountInfo<'_>,
     root_before: AuthenticatedMarketLifecycleRootV1<'_>,
     link_before: AuthenticatedSeriesMarketLinkV1<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
     interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
     schedule: AuthenticatedProductFailureBeginScheduleV1,
@@ -779,7 +779,7 @@ fn require_begin_receipt_prestates_v2(
     history_account: &AccountInfo<'_>,
     root: AuthenticatedMarketLifecycleRootV1<'_>,
     link: AuthenticatedSeriesMarketLinkV1<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     interval: AuthenticatedFailureMarketIntervalAccountsV2,
     schedule: AuthenticatedProductFailureBeginScheduleV1,
 ) -> Outcome<()> {
@@ -910,7 +910,7 @@ pub(crate) fn require_exact_successful_source_join_v2(
 fn derive_failure_market_interval_begin_preauthorization_id_v2(
     root: AuthenticatedMarketLifecycleRootV1<'_>,
     link: AuthenticatedSeriesMarketLinkV1<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     runtime: AuthenticatedFailureMarketRuntimeRootV1,
     interval: AuthenticatedFailureMarketIntervalAccountsV2,
     schedule: AuthenticatedProductFailureBeginScheduleV1,
@@ -982,7 +982,7 @@ fn require_distinct_product_failure_begin_transition_accounts_v2(
     history_account: &AccountInfo<'_>,
     admission_root_account: &AccountInfo<'_>,
     runtime_root_account: &AccountInfo<'_>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     source_join: SourcePolicyHandoffJoinV1,
 ) -> Outcome<()> {
     let accounts = [
