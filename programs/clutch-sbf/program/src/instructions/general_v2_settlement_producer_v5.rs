@@ -28,6 +28,9 @@ use clutch_solana_layout::registry::{
     GeneralV2Action, REVENUE_POLICY_RECORD_V2_ACCOUNT_BYTES,
     TREASURY_SERVICE_LEDGER_V1_ACCOUNT_BYTES,
 };
+use clutch_solana_layout::product_series::{
+    MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV3,
+};
 use clutch_solana_layout::MAX_ORDER_PAGES;
 use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
@@ -50,8 +53,12 @@ use super::general_v2_fee_creation_v6::{
     prepare_candidate_fee_creation_v6, treasury_ledger_v6, CandidateFeeAuthorityFrameV6,
 };
 use super::general_v2_settlement_traversal_v5::{
-    authenticate_settlement_traversal_v5, AuthenticatedSettlementTraversalV5,
+    authenticate_settlement_traversal_from_current_v5, AuthenticatedSettlementTraversalV5,
     SettlementTraversalAccountFrameV5,
+};
+use super::general_market_current_v5::{
+    authenticate_general_market_current_v5, AuthenticatedGeneralMarketCurrentV5,
+    GeneralMarketCurrentAccountFrameV5,
 };
 
 /// Fixed action-39 roles before the mandatory current fee suffix.
@@ -59,7 +66,11 @@ pub const ACTION39_COMMON_PREFIX_ACCOUNTS: usize = 15;
 /// Current fee suffix: recipient, batch, service ledger, Revenue Record,
 /// treasury ledger, and retirement accumulator.
 pub const ACTION39_FEE_SUFFIX_ACCOUNTS: usize = 6;
-/// Fixed creation/sysvar roles after the mandatory fee suffix.
+/// Product RootV3/LinkV3/FundingV5 and the remaining current V7 authority
+/// accounts not already present in the common/fee prefixes.
+pub const ACTION39_CURRENT_SUFFIX_ACCOUNTS: usize = 19;
+/// Fixed creation/sysvar roles after the mandatory fee and current-authority
+/// suffixes.
 pub const ACTION39_CREATION_SUFFIX_ACCOUNTS: usize = 9;
 
 const IX_EPOCH: usize = 0;
@@ -83,6 +94,25 @@ const IX_TREASURY_SERVICE_LEDGER: usize = 17;
 const IX_REVENUE_POLICY_RECORD: usize = 18;
 const IX_TREASURY_LEDGER: usize = 19;
 const IX_FEE_ACCUMULATOR: usize = 20;
+const IX_CURRENT_PRODUCT_ROOT: usize = 21;
+const IX_CURRENT_SERIES_LINK: usize = 22;
+const IX_CURRENT_SERIES_FUNDING: usize = 23;
+const IX_CURRENT_SERIES_REGISTRY: usize = 24;
+const IX_CURRENT_REGISTRY_PROGRAM: usize = 25;
+const IX_CURRENT_REGISTRY_PROGRAMDATA: usize = 26;
+const IX_CURRENT_REGISTRY_RELEASE: usize = 27;
+const IX_CURRENT_CAPABILITY_PROFILE: usize = 28;
+const IX_CURRENT_SOURCE_RELEASE: usize = 29;
+const IX_CURRENT_COMPILER_BUNDLE: usize = 30;
+const IX_CURRENT_REVENUE_PREIMAGE: usize = 31;
+const IX_CURRENT_SERIES_PLAN: usize = 32;
+const IX_CURRENT_FUNDING_TERMS: usize = 33;
+const IX_CURRENT_TEMPLATE: usize = 34;
+const IX_CURRENT_NATIVE_BASIS: usize = 35;
+const IX_CURRENT_RECOVERY: usize = 36;
+const IX_CURRENT_PRICE_POLICY: usize = 37;
+const IX_CURRENT_QUOTE: usize = 38;
+const IX_CURRENT_ATTACHMENT: usize = 39;
 
 fn id(key: &Pubkey) -> Id32 {
     Id32::from_bytes(key.to_bytes())
@@ -154,8 +184,51 @@ fn decode_node_boxed(account: &AccountInfo<'_>) -> Outcome<Box<AdmissionNodeV4Ac
 fn authenticate_traversal_boxed<'a, 'info>(
     program_id: &Pubkey,
     frame: SettlementTraversalAccountFrameV5<'a, 'info>,
+    current: &AuthenticatedGeneralMarketCurrentV5,
 ) -> Outcome<Box<AuthenticatedSettlementTraversalV5<'info>>> {
-    Ok(Box::new(authenticate_settlement_traversal_v5(program_id, frame)?))
+    Ok(Box::new(authenticate_settlement_traversal_from_current_v5(
+        program_id, frame, current,
+    )?))
+}
+
+#[inline(never)]
+fn authenticate_action39_current_market_v5(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+) -> Outcome<AuthenticatedGeneralMarketCurrentV5> {
+    let artifacts = vec![
+        accounts[IX_CURRENT_SERIES_PLAN].clone(),
+        accounts[IX_CURRENT_FUNDING_TERMS].clone(),
+        accounts[IX_CURRENT_TEMPLATE].clone(),
+        accounts[IX_CURRENT_NATIVE_BASIS].clone(),
+        accounts[IX_CURRENT_RECOVERY].clone(),
+        accounts[IX_CURRENT_PRICE_POLICY].clone(),
+        accounts[IX_MARKET_GENESIS].clone(),
+        accounts[IX_CURRENT_QUOTE].clone(),
+        accounts[IX_CURRENT_ATTACHMENT].clone(),
+    ];
+    let frame = GeneralMarketCurrentAccountFrameV5 {
+        market_binding: &accounts[IX_MARKET_BINDING],
+        market_runtime: &accounts[IX_MARKET_RUNTIME],
+        product_root: &accounts[IX_CURRENT_PRODUCT_ROOT],
+        series_link: &accounts[IX_CURRENT_SERIES_LINK],
+        series_funding: &accounts[IX_CURRENT_SERIES_FUNDING],
+        series_registry: &accounts[IX_CURRENT_SERIES_REGISTRY],
+        registry_program: &accounts[IX_CURRENT_REGISTRY_PROGRAM],
+        registry_programdata: &accounts[IX_CURRENT_REGISTRY_PROGRAMDATA],
+        registry_release_artifact: &accounts[IX_CURRENT_REGISTRY_RELEASE],
+        capability_profile_artifact: &accounts[IX_CURRENT_CAPABILITY_PROFILE],
+        source_release: &accounts[IX_CURRENT_SOURCE_RELEASE],
+        compiler_bundle: &accounts[IX_CURRENT_COMPILER_BUNDLE],
+        market_instance: &accounts[IX_MARKET_INSTANCE],
+        realm: &accounts[IX_REALM],
+        revenue_record: &accounts[IX_REVENUE_POLICY_RECORD],
+        revenue_policy_preimage: &accounts[IX_CURRENT_REVENUE_PREIMAGE],
+        artifacts: &artifacts,
+    };
+    let mut root = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let mut link = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    authenticate_general_market_current_v5(program_id, &frame, &mut root, &mut link)
 }
 
 #[inline(never)]
@@ -337,6 +410,7 @@ fn initialize_settlement_root(
         accounts.len()
             >= ACTION39_COMMON_PREFIX_ACCOUNTS
                 + ACTION39_FEE_SUFFIX_ACCOUNTS
+                + ACTION39_CURRENT_SUFFIX_ACCOUNTS
                 + ACTION39_CREATION_SUFFIX_ACCOUNTS
                 + 1,
         ClutchError::WrongAccountCount,
@@ -418,7 +492,9 @@ fn initialize_settlement_root(
         Some(TREASURY_SERVICE_LEDGER_V1_ACCOUNT_BYTES),
     )?;
 
-    let creation_at = ACTION39_COMMON_PREFIX_ACCOUNTS + ACTION39_FEE_SUFFIX_ACCOUNTS;
+    let creation_at = ACTION39_COMMON_PREFIX_ACCOUNTS
+        + ACTION39_FEE_SUFFIX_ACCOUNTS
+        + ACTION39_CURRENT_SUFFIX_ACCOUNTS;
     let ix_root = creation_at;
     let ix_cash_pot = creation_at + 1;
     let ix_final_pot = creation_at + 2;
@@ -439,6 +515,7 @@ fn initialize_settlement_root(
     require_system_program(&accounts[ix_system])?;
     let rent = read_rent(&accounts[ix_rent])?;
     let current_slot = read_clock_slot(&accounts[ix_clock])?;
+    let current = authenticate_action39_current_market_v5(program_id, accounts)?;
     let authenticated = authenticate_traversal_boxed(
         program_id,
         SettlementTraversalAccountFrameV5 {
@@ -455,6 +532,7 @@ fn initialize_settlement_root(
             market_genesis: &accounts[IX_MARKET_GENESIS],
             pages: &accounts[first_page..],
         },
+        &current,
     )?;
     let feed = authenticated.feed();
     let market = authenticated.market();
@@ -489,16 +567,21 @@ fn initialize_settlement_root(
     )?;
 
     let epoch_semantic_id = epoch.semantics_digest(&RuntimeSha256)?;
+    require(
+        request.revenue_policy == current.revenue().policy(),
+        ClutchError::MismatchedState,
+    )?;
     let prepared_fee = prepare_candidate_fee_creation_v6(
         program_id,
         &authenticated,
+        &current,
         CandidateFeeAuthorityFrameV6 {
             realm: &accounts[IX_REALM],
             batch_policy: &accounts[IX_BATCH_POLICY],
             revenue_policy_record: &accounts[IX_REVENUE_POLICY_RECORD],
             treasury_service_ledger: &accounts[IX_TREASURY_SERVICE_LEDGER],
         },
-        request.revenue_policy,
+        current.revenue().policy(),
         request.epoch,
         epoch_semantic_id,
         node.base().settlement_candidate_id,
@@ -984,10 +1067,23 @@ mod tests {
         assert_eq!(
             ACTION39_COMMON_PREFIX_ACCOUNTS
                 + ACTION39_FEE_SUFFIX_ACCOUNTS
+                + ACTION39_CURRENT_SUFFIX_ACCOUNTS
                 + ACTION39_CREATION_SUFFIX_ACCOUNTS
                 + MAX_ORDER_PAGES,
-            34,
+            53,
         );
+        assert!(
+            ACTION39_COMMON_PREFIX_ACCOUNTS
+                + ACTION39_FEE_SUFFIX_ACCOUNTS
+                + ACTION39_CURRENT_SUFFIX_ACCOUNTS
+                + ACTION39_CREATION_SUFFIX_ACCOUNTS
+                + MAX_ORDER_PAGES
+                < 64
+        );
+        let source = include_str!("general_v2_settlement_producer_v5.rs");
+        assert!(source.contains("authenticate_action39_current_market_v5"));
+        assert!(source.contains("authenticate_settlement_traversal_from_current_v5"));
+        assert!(!source.contains("authenticate_settlement_traversal_v5(program_id, frame"));
         assert_eq!(
             action39_total_principal(2, 3, 5, 7, 11, 13, 17, None, None),
             Some(58),
