@@ -2453,7 +2453,20 @@ impl SourceSeriesAction {
 
     /// Return the local action tag.
     pub const fn tag(self) -> u8 {
-        self as u8
+        match self {
+            Self::RegisterRelease => 1,
+            Self::InitializeHead => 2,
+            Self::OpenRawPage => 3,
+            Self::IngestBoundaryBatch => 4,
+            Self::SealRawPage => 5,
+            Self::InitializeWindowWork => 6,
+            Self::FoldWindowPages => 7,
+            Self::SealWindow => 8,
+            Self::EvaluateStatistic => 9,
+            Self::EmitFailureHandoff => 10,
+            Self::ReopenGeneration => 11,
+            Self::CloseGeneration => 12,
+        }
     }
 
     /// Decode one Source-owned local action tag.
