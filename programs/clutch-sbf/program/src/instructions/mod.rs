@@ -170,6 +170,7 @@ pub mod product_market;
 /// Always-compiled current Product/Series authority. Dispatcher tuples remain
 /// separately capability-gated, including in source-empty releases.
 pub mod product_series;
+pub(crate) mod product_series_current;
 pub mod resolution_work;
 pub mod series_failure_funding;
 pub mod source_ingest;
