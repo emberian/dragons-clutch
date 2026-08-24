@@ -31,9 +31,12 @@ use crate::instructions::product_market::{
 };
 use crate::seeds;
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
-    initialize_failure_market_interval_cell_v2, FailureMarketIntervalCellActivationReceiptV2,
+    initialize_failure_market_interval_cell_v2, plan_exhaust_failure_market_interval_cell_v2,
+    AuthenticatedFailureMarketIntervalCellExhaustionV2,
+    FailureMarketIntervalCellActivationReceiptV2,
     FailureMarketIntervalCellAdvancePlanV2, FailureMarketIntervalCellAdvanceReceiptV2,
     FailureMarketIntervalCellDispositionV2, FailureMarketIntervalCellExhaustionPlanV2,
+    FailureMarketIntervalCellExhaustionFactsV2,
     FailureMarketIntervalCellPhaseV2, FailureMarketIntervalCellPlanV2,
     FailureMarketIntervalCellResetReceiptV2, FailureMarketIntervalCellResolutionPlanV2,
     FailureMarketIntervalCellResolutionReceiptV2, FailureMarketIntervalCellStateIdV2,
@@ -63,15 +66,28 @@ use clutch_failure_policy_runtime::market_runtime_v1::{
 use clutch_product_series::{
     ContentId as ProductContentId, MarketFoundationSlotV2, SourceOccurrenceV1Id,
 };
+use clutch_liveness::runtime_adapter_v1::{
+    decode_runtime_policy_account_v1, RuntimePersistedAccountViewV1,
+};
+use clutch_liveness::runtime_v1::{
+    RuntimeCompartmentKindV1, RuntimeCompartmentPhaseV1, RuntimeCompartmentV1,
+};
+use clutch_liveness::Id as LivenessId;
 use clutch_solana_layout::failure_market_interval_v2::{
     FailureMarketIntervalCellAccountV2, FailureMarketIntervalHistoryAccountV2,
     FAILURE_MARKET_INTERVAL_CELL_BODY_BYTES_V2, FAILURE_MARKET_INTERVAL_HISTORY_BODY_BYTES_V2,
+};
+use clutch_solana_layout::failure_recovery::{
+    decode_failure_account_body_v1, FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1,
+    FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1, FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1,
+    FAILURE_LIVENESS_POLICY_BODY_BYTES_V1,
 };
 use clutch_solana_layout::product_series::MarketLifecycleRootAccountV1;
 use clutch_solana_layout::product_series::SeriesMarketLinkAccountV1;
 use clutch_solana_layout::registry::{
     FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES, FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_BYTES,
 };
+use clutch_solana_layout::registry;
 use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
 use solana_instruction::{AccountMeta, Instruction};
@@ -101,6 +117,155 @@ impl AuthenticatedFailureMarketRecoveryQuoteV1 for ProductFailureMarketRecoveryQ
         }
         Ok(())
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FailureMarketExhaustionLivenessAuthorityV2 {
+    cell_state_id: FailureMarketIntervalCellStateIdV2,
+    completed_calls: u64,
+    keeper_paid_lamports: u64,
+    remaining_calls: u32,
+    remaining_work_lamports: u64,
+}
+
+impl AuthenticatedFailureMarketIntervalCellExhaustionV2
+    for FailureMarketExhaustionLivenessAuthorityV2
+{
+    fn authenticate_failure_market_interval_cell_exhaustion(
+        &self,
+        expected: FailureMarketIntervalCellExhaustionFactsV2,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        let boundary_matches = match expected.reason {
+            clutch_failure_policy_runtime::market_interval_cell_v2::FailureMarketIntervalExhaustionReasonV2::AttemptProgress => true,
+            clutch_failure_policy_runtime::market_interval_cell_v2::FailureMarketIntervalExhaustionReasonV2::MarketCalls => {
+                self.remaining_calls == 0
+            }
+            clutch_failure_policy_runtime::market_interval_cell_v2::FailureMarketIntervalExhaustionReasonV2::MarketPrincipal => {
+                self.remaining_work_lamports == 0
+            }
+        };
+        if expected.cell_before != self.cell_state_id
+            || expected.aggregate_work_calls != self.completed_calls
+            || expected.aggregate_reward_lamports != self.keeper_paid_lamports
+            || !boundary_matches
+        {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// Authenticate the read-only Recovery custody and derive the only canonical
+/// finite exhaustion transition for the current reusable session.
+pub(crate) fn plan_failure_market_interval_exhaustion_v2(
+    program_id: &Pubkey,
+    liveness_policy_account: &AccountInfo<'_>,
+    recovery_account: &AccountInfo<'_>,
+    admission: AuthenticatedFailureMarketRootV2,
+    interval: AuthenticatedFailureMarketIntervalAccountsV2,
+) -> Outcome<FailureMarketIntervalCellExhaustionPlanV2> {
+    require(
+        liveness_policy_account.owner == program_id
+            && !liveness_policy_account.is_writable
+            && !liveness_policy_account.is_signer
+            && !liveness_policy_account.executable
+            && liveness_policy_account.data_len() == FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1
+            && recovery_account.owner == program_id
+            && !recovery_account.is_writable
+            && !recovery_account.is_signer
+            && !recovery_account.executable
+            && recovery_account.data_len() == FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1,
+        ClutchError::MismatchedState,
+    )?;
+    let policy_data = liveness_policy_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let recovery_data = recovery_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let policy_frame = decode_failure_account_body_v1(
+        &policy_data,
+        registry::FAILURE_LIVENESS_POLICY_ACCOUNT_TAG,
+        registry::FAILURE_LIVENESS_POLICY_ACCOUNT_VERSION,
+        FAILURE_LIVENESS_POLICY_BODY_BYTES_V1,
+    )?;
+    let recovery_frame = decode_failure_account_body_v1(
+        &recovery_data,
+        registry::FAILURE_EXTERNAL_RECOVERY_ACCOUNT_TAG,
+        registry::FAILURE_EXTERNAL_RECOVERY_ACCOUNT_VERSION,
+        FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1,
+    )?;
+    let policy = decode_runtime_policy_account_v1(
+        liveness_id(program_id),
+        liveness_id(liveness_policy_account.key),
+        RuntimePersistedAccountViewV1 {
+            account_id: liveness_id(liveness_policy_account.key),
+            owner_program_id: liveness_id(liveness_policy_account.owner),
+            lamports: liveness_policy_account.lamports(),
+            data: policy_frame.body,
+            writable: false,
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let recovery = RuntimeCompartmentV1::decode(recovery_frame.body)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    recovery
+        .validate_against_policy(policy)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let facts = admission.state().binding().facts();
+    let quote = interval.quote().facts();
+    require(
+        recovery.kind == RuntimeCompartmentKindV1::Recovery
+            && recovery.phase == RuntimeCompartmentPhaseV1::Active
+            && recovery.identity.account_id == liveness_id(recovery_account.key)
+            && recovery.identity.account_id == facts.recovery_compartment_account_id
+            && recovery.identity.owner == liveness_id(program_id)
+            && recovery.identity.policy_id == policy.policy_id
+            && policy.policy_id == facts.liveness_policy_id
+            && recovery.identity.lifecycle_id == facts.liveness_lifecycle_id
+            && recovery.identity.generation == facts.generation
+            && recovery.quote_schedule_id == facts.recovery_quote_schedule_id
+            && recovery.quote_schedule_id.bytes() == quote.quote_schedule_id.bytes()
+            && recovery.maximum_calls == quote.maximum_calls
+            && recovery.maximum_lamports_per_call == quote.maximum_lamports_per_call
+            && recovery.capitalized_work_lamports == quote.work_principal_lamports
+            && recovery.completed_work_ceiling_lamports == recovery.keeper_paid_lamports
+            && recovery_account.lamports()
+                >= recovery
+                    .expected_account_balance_lamports()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        ClutchError::MismatchedState,
+    )?;
+    expect_pda(
+        liveness_policy_account.key,
+        seeds::failure_liveness_policy_pda(program_id, &policy.policy_id.bytes()),
+        Some(policy_frame.stored_bump),
+    )?;
+    expect_pda(
+        recovery_account.key,
+        seeds::failure_external_recovery_pda(
+            program_id,
+            &recovery.identity.lifecycle_id.bytes(),
+            recovery.identity.generation,
+        ),
+        Some(recovery_frame.stored_bump),
+    )?;
+    let authority = FailureMarketExhaustionLivenessAuthorityV2 {
+        cell_state_id: interval.cell_state_id(),
+        completed_calls: u64::from(recovery.completed_calls),
+        keeper_paid_lamports: recovery.keeper_paid_lamports,
+        remaining_calls: recovery.remaining_calls,
+        remaining_work_lamports: recovery.remaining_work_lamports,
+    };
+    plan_exhaust_failure_market_interval_cell_v2(
+        &authority,
+        interval.cell(),
+        admission.state(),
+        interval.funding(),
+        interval.history(),
+        interval.quote(),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
 }
 
 /// Hostile-decode and admit the exact content-addressed shared Recovery reward
@@ -2277,5 +2442,23 @@ mod adversarial_account_tests {
         assert!(reopen.contains("reopen_failure_market_interval_funding_v2"));
         assert!(reopen.contains("work_donation_floor_lamports"));
         assert!(reopen.contains("history_donation_floor_lamports"));
+    }
+
+    #[test]
+    fn exhaustion_is_derived_from_read_only_single_custody() {
+        let source = include_str!("failure_market_interval_v2.rs");
+        let exhaustion = source
+            .split("fn plan_failure_market_interval_exhaustion_v2")
+            .nth(1)
+            .expect("exhaustion owner");
+        for predicate in [
+            "!recovery_account.is_writable",
+            "recovery.completed_work_ceiling_lamports == recovery.keeper_paid_lamports",
+            "completed_calls: u64::from(recovery.completed_calls)",
+            "remaining_work_lamports: recovery.remaining_work_lamports",
+            "plan_exhaust_failure_market_interval_cell_v2",
+        ] {
+            assert!(exhaustion.contains(predicate));
+        }
     }
 }
