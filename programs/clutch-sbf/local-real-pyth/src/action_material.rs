@@ -4308,7 +4308,11 @@ fn derive_fractional_credit_admission_v1(
         &release.program_id,
     );
     let root_pda = Address::find_program_address(
-        &[b"dc:market-lifecycle-root:v1", &core.market_instance_id.bytes()],
+        &[
+            b"dc:market-lifecycle-root:v1",
+            &core.market_instance_id.bytes(),
+            &core.policy.domain_generation.to_le_bytes(),
+        ],
         &release.program_id,
     );
     let root = MarketLifecycleRootAccountV3::decode(&frame.market_root.data)
@@ -6360,7 +6364,11 @@ pub fn construct_fractional_close_zero_credit_material_v1(
         &release.program_id,
     );
     let root_pda = Address::find_program_address(
-        &[b"dc:market-lifecycle-root:v1", &market_instance_id.bytes()],
+        &[
+            b"dc:market-lifecycle-root:v1",
+            &market_instance_id.bytes(),
+            &policy.domain_generation.to_le_bytes(),
+        ],
         &release.program_id,
     );
     let required_credit_lamports = credit
