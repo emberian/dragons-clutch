@@ -49,8 +49,6 @@ use clutch_dealer_runtime_contract::{
     DealerPhaseV2, DealerQueueExitLivenessV1, DealerTerminalStateReceiptV2,
     DealerPositionMarketJoinV2, DealerPositionObservationV3, DealerReplayAccountBindingV1,
     DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1, DealerSelectedFeeRecordBindingV1,
-    DealerSeriesObligationBindingV1, DealerSeriesObligationKeyV1,
-    DealerSeriesObligationBindingV2, DealerSeriesObligationKeyV2,
     DealerSeriesObligationBindingV3, DealerSeriesObligationKeyV3,
     DealerSeriesObligationPhaseV1, DealerSeriesObligationValueClosePlanV3,
     DealerStateV2, DealerStateV3,
@@ -105,10 +103,9 @@ use clutch_general_v2_runtime::{
 };
 use clutch_product_series::{
     ContentId, MarketGenesisProfileV2, MarketInstancePreimageV2, MarketInstanceV2Id,
-    MarketFamilyV1, MarketLifecyclePhaseV2, MarketLifecyclePhaseV3, MarketLifecycleRootV3,
+    MarketFamilyV1, MarketLifecyclePhaseV3, MarketLifecycleRootV3,
     NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4,
-    QuantizedEdgePolicyV1, SeriesLinkObligationStatusV2, SeriesLinkObligationStatusV3,
-    SeriesLinkObligationV2, SeriesLinkObligationV3, SeriesMarketLinkPhaseV2,
+    QuantizedEdgePolicyV1, SeriesLinkObligationStatusV3, SeriesLinkObligationV3,
     SeriesMarketLinkPhaseV3, SeriesMarketLinkV3, SeriesPlanV5Id,
 };
 use clutch_liveness::runtime_adapter_v1::{
@@ -210,15 +207,8 @@ use super::product_artifact::{
     authenticate_product_artifact_v1, authenticate_registry_capability_v3,
     authenticate_series_registry_capability_refs_v2, AuthenticatedProductArtifactV1,
 };
-use super::product_market::{
-    admit_series_dealer_obligation_v1, authenticate_series_dealer_authorization_v1,
-    authenticate_market_lifecycle_root_v1, authenticate_series_market_link_v1,
-    AuthenticatedSeriesDealerAdmissionOwnerV1, AuthenticatedSeriesDealerAuthorizationV1,
-};
 use clutch_solana_layout::product_series::{
-    MarketLifecycleRootAccountV1, MarketLifecycleRootAccountV2,
-    MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV1, SeriesMarketLinkAccountV2,
-    SeriesMarketLinkAccountV3,
+    MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV3,
 };
 use crate::instructions_sysvar::{InstructionsSysvarV1, SYSVAR_OWNER_ID};
 use super::dealer_runtime::{
@@ -250,16 +240,6 @@ use super::product_market_lifecycle_v3_current::{
 };
 use super::product_market_replay_current::{
     authenticate_market_lifecycle_replay_v2, AuthenticatedMarketLifecycleReplayV2,
-};
-use super::product_series_current::{
-    admit_series_dealer_obligation_v2, authenticate_market_lifecycle_root_v2,
-    authenticate_live_series_dealer_obligation_v2, authenticate_registry_capability_v4,
-    authenticate_series_market_link_v2,
-    authenticate_series_registry_account_v3,
-    AuthenticatedSeriesDealerAdmissionOwnerV2,
-    AuthenticatedSeriesDealerTerminalV2, AuthenticatedLiveSeriesDealerObligationV2,
-    AuthenticatedMarketLifecycleRootV2, AuthenticatedRegistryCapabilityV4,
-    AuthenticatedSeriesMarketLinkV2,
 };
 use super::product_series_current::retirement_v5::consume_dealer_family_terminal_v5;
 use super::genesis::{
@@ -305,8 +285,6 @@ const DEALER_PRODUCT_TERMINAL_ACTIVE_ACCOUNT_COUNT_V3: usize = 41;
 const DEALER_PRODUCT_TERMINAL_UNUSED_ACCOUNT_COUNT_V3: usize = 38;
 const DEALER_GENERAL_REPLAY_VALUE_EVIDENCE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/dealer-general-replay-value-evidence/v2\0";
-const DEALER_SERIES_ADMISSION_PREWRITE_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/sbf/dealer-series-admission-prewrite/v1\0";
 const DEALER_POSITION_REPLAY_CLOSE_POSTWRITE_DOMAIN_V3: &[u8] =
     b"dragons-clutch/sbf/dealer-position-replay-close-postwrite/v3\0";
 const DEALER_PRODUCT_RESOLUTION_AUTHENTICATION_DOMAIN_V3: &[u8] =
@@ -339,33 +317,6 @@ struct DealerCollateralAuthorityAccountsV2<'a, 'info> {
     claim_ledger: &'a AccountInfo<'info>,
 }
 
-/// Non-detachable Dealer owner of the first Product obligation admission.
-/// The plan exists only after the exact V2 State, facility/0xaf PDAs, current
-/// Product authority, rent principal, hostile prefund, refund owner, and sink
-/// have all been authenticated before any write or CPI.
-struct AuthenticatedDealerSeriesAdmissionPrewriteV1 {
-    authentication_id: ContentId,
-    product_authorization_id: ContentId,
-    state_account_id: Id,
-    state_pre_content_id: Id,
-    key: DealerSeriesObligationKeyV1,
-    owner_admission_receipt_id: Id,
-    rent: DeletableRentOwnerV1,
-}
-
-/// Current Product/Dealer first-lease prewrite. This non-Copy value owns only
-/// Dealer facts; Product independently authenticates RootV2, LinkV2,
-/// RegistryV3/ReleaseV2/ProfileV4, BundleV6, and AttachmentV5 before invoking
-/// the exact callback below.
-struct AuthenticatedDealerSeriesAdmissionPrewriteV2 {
-    authentication_id: ContentId,
-    state_account_id: Id,
-    state_pre_content_id: Id,
-    key: clutch_dealer_runtime_contract::DealerSeriesObligationKeyV2,
-    owner_admission_receipt_id: Id,
-    capability_profile_id: Id,
-    rent: DeletableRentOwnerV1,
-}
 
 const DEALER_PRODUCT_FOUNDING_PREWRITE_DOMAIN_V3: &[u8] =
     b"dragons-clutch/sbf/dealer-product-founding-prewrite/v3\0";
@@ -962,24 +913,6 @@ fn seal_dealer_family_terminal_receipt_v3(
     })
 }
 
-/// Exact already-live Product obligation retained across later Dealer leases.
-/// This is authenticated from the hostile StateV3 and `0xaf` bodies plus the
-/// current Product root/link/Registry authority; no caller-shaped admission
-/// tuple can select the existing path.
-#[derive(Clone, Copy)]
-struct AuthenticatedExistingDealerSeriesAdmissionV1 {
-    state: DealerStateV3,
-    obligation: DealerSeriesObligationBindingV1,
-}
-
-/// Hostile current Product/Dealer proof for a later lease after the once-only
-/// first-lease admission. This receipt is read-only and cannot advance LinkV2.
-struct AuthenticatedExistingDealerSeriesAdmissionV2 {
-    state: DealerStateV3,
-    obligation: DealerSeriesObligationBindingV2,
-    product: AuthenticatedLiveSeriesDealerObligationV2,
-}
-
 /// Hostile current Product/Dealer proof for later leases after the one-shot
 /// RootV3-family and LinkV3-obligation founding transaction.
 struct AuthenticatedExistingDealerSeriesAdmissionV3 {
@@ -987,395 +920,7 @@ struct AuthenticatedExistingDealerSeriesAdmissionV3 {
     obligation: DealerSeriesObligationBindingV3,
 }
 
-impl AuthenticatedSeriesDealerAdmissionOwnerV1
-    for AuthenticatedDealerSeriesAdmissionPrewriteV1
-{
-    fn authenticate_series_dealer_admission_owner_v1(
-        &self,
-        authorization: AuthenticatedSeriesDealerAuthorizationV1,
-    ) -> Outcome<ContentId> {
-        let expected_owner_receipt_id = self
-            .key
-            .admission_owner_receipt_id(
-                Id::from_bytes(authorization.link_semantic_id().bytes()),
-                authorization
-                    .link_transition_sequence()
-                    .checked_add(1)
-                    .ok_or(ClutchError::Arithmetic)?,
-            )
-            .map_err(dealer_fault)?;
-        require(
-            self.authentication_id != ContentId::ZERO
-                && self.product_authorization_id == authorization.id()
-                && authorization.root_account()
-                    == authorization.product_market_root_account()
-                && authorization.root_authentication_id() != ContentId::ZERO
-                && authorization.root_semantic_id() != ContentId::ZERO
-                && authorization.registry_account() != authorization.root_account()
-                && authorization.registry_programdata_account()
-                    != authorization.registry_account()
-                && authorization.registry_programdata_sha256() != ContentId::ZERO
-                && authorization.registry_release_id() != ContentId::ZERO
-                && self.key.dealer_state_account_id == self.state_account_id
-                && self.key.product_market_root_account_id
-                    == id(&authorization.root_account())
-                && self.key.product_market_binding_id
-                    == Id::from_bytes(authorization.product_market_binding_id().bytes())
-                && self.key.market_instance_v2_id
-                    == Id::from_bytes(authorization.market_instance_id().bytes())
-                && self.key.series_plan_v5_id
-                    == Id::from_bytes(authorization.series_plan_id().bytes())
-                && self.key.series_market_link_account_id == id(&authorization.link_account())
-                && self.key.attachment_plan_v4_id
-                    == Id::from_bytes(authorization.attachment_plan_id().bytes())
-                && self.key.product_generation == authorization.generation()
-                && self.key.series_ordinal == authorization.ordinal()
-                && self.rent.neutral_sink
-                    == Id::from_bytes(authorization.neutral_lamport_sink().bytes())
-                && self.rent.refundable_principal != 0
-                && self.rent.payer != self.rent.neutral_sink
-                && self.state_pre_content_id != Id::ZERO
-                && self.owner_admission_receipt_id == expected_owner_receipt_id,
-            ClutchError::AuthorizationUnavailable,
-        )?;
-        Ok(ContentId::from_bytes(
-            self.owner_admission_receipt_id.bytes(),
-        ))
-    }
-}
 
-impl AuthenticatedSeriesDealerAdmissionOwnerV2
-    for AuthenticatedDealerSeriesAdmissionPrewriteV2
-{
-    fn owner_admission_receipt_id(&self) -> Outcome<ContentId> {
-        Ok(ContentId::from_bytes(self.owner_admission_receipt_id.bytes()))
-    }
-
-    fn dealer_obligation_account(&self) -> Outcome<Pubkey> {
-        Ok(Pubkey::new_from_array(self.key.binding_account_id.bytes()))
-    }
-
-    fn dealer_state_account(&self) -> Outcome<Pubkey> {
-        Ok(Pubkey::new_from_array(self.state_account_id.bytes()))
-    }
-
-    fn dealer_state_presemantic_id(&self) -> Outcome<ContentId> {
-        Ok(ContentId::from_bytes(self.state_pre_content_id.bytes()))
-    }
-
-    fn dealer_facility_id(&self) -> Outcome<ContentId> {
-        Ok(ContentId::from_bytes(self.key.facility_id.bytes()))
-    }
-
-    fn dealer_position_binding_id(&self) -> Outcome<ContentId> {
-        Ok(ContentId::from_bytes(
-            self.key.facility_position_binding_id.bytes(),
-        ))
-    }
-
-    fn dealer_rent_principal_lamports(&self) -> Outcome<u64> {
-        Ok(self.rent.refundable_principal)
-    }
-
-    fn dealer_prefund_donation_lamports(&self) -> Outcome<u64> {
-        Ok(self.rent.donation_floor)
-    }
-
-    fn rent_refund_owner(&self) -> Outcome<ContentId> {
-        Ok(ContentId::from_bytes(self.rent.payer.bytes()))
-    }
-
-    fn neutral_lamport_sink(&self) -> Outcome<ContentId> {
-        Ok(ContentId::from_bytes(self.rent.neutral_sink.bytes()))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn authenticate_series_dealer_admission_owner_v2(
-        &self,
-        authorization_id: ContentId,
-        root_account: Pubkey,
-        root_binding_id: ContentId,
-        link_account: Pubkey,
-        _link_binding_id: ContentId,
-        series_plan_id: SeriesPlanV5Id,
-        ordinal: u32,
-        market_instance_id: MarketInstanceV2Id,
-        generation: u64,
-        _funding_quote_id: clutch_product_series::SeriesFundingQuoteV5Id,
-        compiler_bundle_id: clutch_product_series::CompiledProductSeriesBundleV6Id,
-        attachment_plan_id: clutch_product_series::SeriesAttachmentPlanV5Id,
-        liquidity_facility_plan_id: ContentId,
-        _registry_release_id: ContentId,
-        capability_profile_id: ContentId,
-        _dealer_obligation_configuration_id: ContentId,
-        dealer_obligation_account: Pubkey,
-        dealer_state_account: Pubkey,
-        dealer_state_presemantic_id: ContentId,
-        dealer_facility_id: ContentId,
-        dealer_position_binding_id: ContentId,
-        dealer_rent_principal_lamports: u64,
-        dealer_prefund_donation_lamports: u64,
-        rent_refund_owner: ContentId,
-        neutral_lamport_sink: ContentId,
-        owner_admission_receipt_id: ContentId,
-    ) -> Outcome<()> {
-        require(
-            self.authentication_id != ContentId::ZERO
-                && authorization_id != ContentId::ZERO
-                && self.key.product_market_root_account_id == id(&root_account)
-                && self.key.product_market_binding_id
-                    == Id::from_bytes(root_binding_id.bytes())
-                && self.key.series_market_link_account_id == id(&link_account)
-                && self.key.series_plan_v5_id == Id::from_bytes(series_plan_id.bytes())
-                && self.key.series_ordinal == ordinal
-                && self.key.market_instance_v2_id == Id::from_bytes(market_instance_id.bytes())
-                && self.key.product_generation == generation
-                && self.key.compiler_bundle_v6_id
-                    == Id::from_bytes(compiler_bundle_id.bytes())
-                && self.key.attachment_plan_v5_id
-                    == Id::from_bytes(attachment_plan_id.bytes())
-                && self.key.policy_id == Id::from_bytes(liquidity_facility_plan_id.bytes())
-                && self.key.binding_account_id == id(&dealer_obligation_account)
-                && self.state_account_id == id(&dealer_state_account)
-                && self.state_pre_content_id
-                    == Id::from_bytes(dealer_state_presemantic_id.bytes())
-                && self.key.facility_id == Id::from_bytes(dealer_facility_id.bytes())
-                && self.key.facility_position_binding_id
-                    == Id::from_bytes(dealer_position_binding_id.bytes())
-                && self.rent.refundable_principal == dealer_rent_principal_lamports
-                && self.rent.donation_floor == dealer_prefund_donation_lamports
-                && self.rent.payer == Id::from_bytes(rent_refund_owner.bytes())
-                && self.rent.neutral_sink == Id::from_bytes(neutral_lamport_sink.bytes())
-                && self.owner_admission_receipt_id
-                    == Id::from_bytes(owner_admission_receipt_id.bytes())
-                && self.capability_profile_id
-                    == Id::from_bytes(capability_profile_id.bytes()),
-            ClutchError::MismatchedState,
-        )
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn authenticate_dealer_series_admission_prewrite_v1(
-    program_id: &Pubkey,
-    authorization: AuthenticatedSeriesDealerAuthorizationV1,
-    state_account: &AccountInfo<'_>,
-    state: &DealerStateV2,
-    obligation_account: &AccountInfo<'_>,
-    key: DealerSeriesObligationKeyV1,
-    stored_bump: u8,
-    rent_payer: &AccountInfo<'_>,
-    refundable_principal: u64,
-    donation_floor: u64,
-) -> Outcome<AuthenticatedDealerSeriesAdmissionPrewriteV1> {
-    key.validate().map_err(dealer_fault)?;
-    state.validate().map_err(dealer_fault)?;
-    let state_pre_content_id = state.state_content_id().map_err(dealer_fault)?;
-    let next_sequence = authorization
-        .link_transition_sequence()
-        .checked_add(1)
-        .ok_or(ClutchError::Arithmetic)?;
-    let owner_admission_receipt_id = key
-        .admission_owner_receipt_id(
-            Id::from_bytes(authorization.link_semantic_id().bytes()),
-            next_sequence,
-        )
-        .map_err(dealer_fault)?;
-    let (expected_obligation, expected_bump) =
-        seeds::dealer_series_obligation_pda(program_id, &state.facility_id.bytes());
-    require(
-        authorization.requires_product_admission()
-            && state.phase == DealerPhaseV2::Trading
-            && state_account.owner == program_id
-            && state_account.is_writable
-            && state_account.data_len() == DEALER_STATE_V2_ACCOUNT_BYTES
-            && key.dealer_state_account_id == id(state_account.key)
-            && key.facility_id == state.facility_id
-            && key.policy_id == state.policy_id
-            && key.facility_position_binding_id == state.facility_position_binding_id
-            && obligation_account.key == &expected_obligation
-            && stored_bump == expected_bump
-            && obligation_account.owner == &SYSTEM_PROGRAM_ID
-            && obligation_account.is_writable
-            && !obligation_account.is_signer
-            && !obligation_account.executable
-            && obligation_account.data_len() == 0
-            && obligation_account.lamports() == donation_floor
-            && refundable_principal != 0
-            && rent_payer.key != obligation_account.key
-            && rent_payer.key.to_bytes() != authorization.neutral_lamport_sink().bytes(),
-        ClutchError::AuthorizationUnavailable,
-    )?;
-    let rent = DeletableRentOwnerV1 {
-        payer: id(rent_payer.key),
-        neutral_sink: Id::from_bytes(authorization.neutral_lamport_sink().bytes()),
-        refundable_principal,
-        donation_floor,
-    };
-    rent.validate().map_err(dealer_fault)?;
-    let authentication_id = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            DEALER_SERIES_ADMISSION_PREWRITE_DOMAIN_V1,
-            program_id.as_ref(),
-            &authorization.id().bytes(),
-            state_account.key.as_ref(),
-            &state_pre_content_id.bytes(),
-            obligation_account.key.as_ref(),
-            &key.binding_account_id.bytes(),
-            &owner_admission_receipt_id.bytes(),
-            rent_payer.key.as_ref(),
-            &rent.neutral_sink.bytes(),
-            &refundable_principal.to_le_bytes(),
-            &donation_floor.to_le_bytes(),
-            &[stored_bump],
-        ])
-        .to_bytes(),
-    );
-    require(authentication_id != ContentId::ZERO, ClutchError::AuthorizationUnavailable)?;
-    Ok(AuthenticatedDealerSeriesAdmissionPrewriteV1 {
-        authentication_id,
-        product_authorization_id: authorization.id(),
-        state_account_id: id(state_account.key),
-        state_pre_content_id,
-        key,
-        owner_admission_receipt_id,
-        rent,
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn authenticate_dealer_series_admission_prewrite_v2(
-    program_id: &Pubkey,
-    root: AuthenticatedMarketLifecycleRootV2<'_>,
-    link: AuthenticatedSeriesMarketLinkV2<'_>,
-    registry: &AuthenticatedRegistryCapabilityV4,
-    state_account: &AccountInfo<'_>,
-    state: &DealerStateV2,
-    obligation_account: &AccountInfo<'_>,
-    key: clutch_dealer_runtime_contract::DealerSeriesObligationKeyV2,
-    stored_bump: u8,
-    rent_payer: &AccountInfo<'_>,
-    refundable_principal: u64,
-    donation_floor: u64,
-) -> Outcome<AuthenticatedDealerSeriesAdmissionPrewriteV2> {
-    use clutch_product_series::{
-        MarketLifecyclePhaseV2, SeriesLinkObligationStatusV2, SeriesLinkObligationV2,
-        SeriesMarketLinkPhaseV2,
-    };
-
-    key.validate().map_err(dealer_fault)?;
-    state.validate().map_err(dealer_fault)?;
-    let state_pre_content_id = state.state_content_id().map_err(dealer_fault)?;
-    let root_binding = root.state().binding();
-    let link_binding = link.state().binding();
-    let root_binding_id = root_binding
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let link_semantic_id = link
-        .state()
-        .semantic_id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let next_sequence = link
-        .state()
-        .transition_sequence()
-        .checked_add(1)
-        .ok_or(ClutchError::Arithmetic)?;
-    let owner_admission_receipt_id = key
-        .admission_owner_receipt_id(
-            Id::from_bytes(link_semantic_id.bytes()),
-            next_sequence,
-        )
-        .map_err(dealer_fault)?;
-    let (expected_obligation, expected_bump) =
-        seeds::dealer_series_obligation_pda(program_id, &state.facility_id.bytes());
-    require(
-        !root.is_writable()
-            && link.is_writable()
-            && root.state().phase() == MarketLifecyclePhaseV2::Active
-            && root.state().resolution_semantic_id() == ContentId::ZERO
-            && root.state().resolution_data_id() == ContentId::ZERO
-            && root.state().resolution_activation_receipt_id() == ContentId::ZERO
-            && link.state().phase() == SeriesMarketLinkPhaseV2::Active
-            && link
-                .state()
-                .obligation_status(SeriesLinkObligationV2::Dealer)
-                == SeriesLinkObligationStatusV2::EnabledNeverFounded
-            && registry.activation_consumed()
-            && state.phase == DealerPhaseV2::Trading
-            && state_account.owner == program_id
-            && state_account.is_writable
-            && state_account.data_len() == DEALER_STATE_V2_ACCOUNT_BYTES
-            && key.dealer_state_account_id == id(state_account.key)
-            && key.facility_id == state.facility_id
-            && key.policy_id == state.policy_id
-            && key.facility_position_binding_id == state.facility_position_binding_id
-            && key.product_market_root_account_id == id(&root.account())
-            && key.product_market_binding_id == Id::from_bytes(root_binding_id.bytes())
-            && key.market_instance_v2_id == Id::from_bytes(root_binding.market_instance_id.bytes())
-            && key.product_generation == root_binding.generation
-            && key.series_market_link_account_id == id(&link.account())
-            && key.series_plan_v5_id == Id::from_bytes(link_binding.series_plan_id.bytes())
-            && key.series_ordinal == link_binding.ordinal
-            && key.compiler_bundle_v6_id
-                == Id::from_bytes(link_binding.compiler_bundle_id.bytes())
-            && key.attachment_plan_v5_id
-                == Id::from_bytes(link_binding.attachment_plan_id.bytes())
-            && registry.series_plan_id() == link_binding.series_plan_id
-            && registry.registry_release_id() == root_binding.registry_release_id
-            && registry.capability_profile_id() == root_binding.capability_profile_id
-            && obligation_account.key == &expected_obligation
-            && stored_bump == expected_bump
-            && obligation_account.owner == &SYSTEM_PROGRAM_ID
-            && obligation_account.is_writable
-            && !obligation_account.is_signer
-            && !obligation_account.executable
-            && obligation_account.data_len() == 0
-            && obligation_account.lamports() == donation_floor
-            && refundable_principal != 0
-            && rent_payer.key != obligation_account.key
-            && rent_payer.key.to_bytes() == link_binding.rent_refund_owner.bytes()
-            && rent_payer.key.to_bytes() != link_binding.neutral_lamport_sink.bytes(),
-        ClutchError::AuthorizationUnavailable,
-    )?;
-    let rent = DeletableRentOwnerV1 {
-        payer: id(rent_payer.key),
-        neutral_sink: Id::from_bytes(link_binding.neutral_lamport_sink.bytes()),
-        refundable_principal,
-        donation_floor,
-    };
-    rent.validate().map_err(dealer_fault)?;
-    let authentication_id = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            DEALER_SERIES_ADMISSION_PREWRITE_DOMAIN_V1,
-            b"current-v2\0",
-            program_id.as_ref(),
-            &root.authentication_id().bytes(),
-            &link.authentication_id().bytes(),
-            &registry.id().bytes(),
-            state_account.key.as_ref(),
-            &state_pre_content_id.bytes(),
-            obligation_account.key.as_ref(),
-            &key.binding_account_id.bytes(),
-            &owner_admission_receipt_id.bytes(),
-            rent_payer.key.as_ref(),
-            &rent.neutral_sink.bytes(),
-            &refundable_principal.to_le_bytes(),
-            &donation_floor.to_le_bytes(),
-            &[stored_bump],
-        ])
-        .to_bytes(),
-    );
-    require(authentication_id != ContentId::ZERO, ClutchError::AuthorizationUnavailable)?;
-    Ok(AuthenticatedDealerSeriesAdmissionPrewriteV2 {
-        authentication_id,
-        state_account_id: id(state_account.key),
-        state_pre_content_id,
-        key,
-        owner_admission_receipt_id,
-        capability_profile_id: Id::from_bytes(registry.capability_profile_id().bytes()),
-        rent,
-    })
-}
 
 #[allow(clippy::too_many_arguments)]
 fn authenticate_dealer_product_founding_prewrite_v3(
@@ -1634,110 +1179,6 @@ fn authenticate_dealer_product_founding_postwrites_v3(
     ))
 }
 
-fn authenticate_existing_dealer_series_admission_v1(
-    authorization: AuthenticatedSeriesDealerAuthorizationV1,
-    state_account: &AccountInfo<'_>,
-    state: DealerStateV3,
-    obligation_account: &AccountInfo<'_>,
-    obligation: DealerSeriesObligationBindingV1,
-) -> Outcome<AuthenticatedExistingDealerSeriesAdmissionV1> {
-    state.validate().map_err(dealer_fault)?;
-    obligation.validate().map_err(dealer_fault)?;
-    let binding_id = obligation.binding_id().map_err(dealer_fault)?;
-    require(
-        !authorization.requires_product_admission()
-            && authorization.dealer_status()
-                == clutch_product_series::SeriesLinkObligationStatusV1::Live
-            && authorization.dealer_admission_receipt_id().bytes()
-                == obligation.admission_owner_receipt_id.bytes()
-            && state.series_obligation_children == 1
-            && state.series_obligation_binding_account_id == id(obligation_account.key)
-            && state.series_obligation_binding_id == binding_id
-            && obligation.phase == DealerSeriesObligationPhaseV1::Live
-            && obligation.key.binding_account_id == id(obligation_account.key)
-            && obligation.key.dealer_state_account_id == id(state_account.key)
-            && obligation.key.policy_id == state.base.policy_id
-            && obligation.key.facility_id == state.base.facility_id
-            && obligation.key.facility_position_binding_id
-                == state.base.facility_position_binding_id
-            && obligation.key.market_instance_v2_id.bytes()
-                == authorization.market_instance_id().bytes()
-            && obligation.key.product_market_root_account_id
-                == id(&authorization.product_market_root_account())
-            && obligation.key.product_market_binding_id.bytes()
-                == authorization.product_market_binding_id().bytes()
-            && obligation.key.series_plan_v5_id.bytes()
-                == authorization.series_plan_id().bytes()
-            && obligation.key.series_market_link_account_id
-                == id(&authorization.link_account())
-            && obligation.key.attachment_plan_v4_id.bytes()
-                == authorization.attachment_plan_id().bytes()
-            && obligation.key.product_generation == authorization.generation()
-            && obligation.key.series_ordinal == authorization.ordinal()
-            && authorization.link_transition_sequence()
-                >= obligation.admission_link_transition_sequence
-            && obligation.rent.neutral_sink.bytes()
-                == authorization.neutral_lamport_sink().bytes(),
-        ClutchError::AuthorizationUnavailable,
-    )?;
-    Ok(AuthenticatedExistingDealerSeriesAdmissionV1 { state, obligation })
-}
-
-fn authenticate_existing_dealer_series_admission_v2(
-    product: AuthenticatedLiveSeriesDealerObligationV2,
-    state_account: &AccountInfo<'_>,
-    state: DealerStateV3,
-    obligation_account: &AccountInfo<'_>,
-    obligation: DealerSeriesObligationBindingV2,
-) -> Outcome<AuthenticatedExistingDealerSeriesAdmissionV2> {
-    state.validate().map_err(dealer_fault)?;
-    obligation.validate().map_err(dealer_fault)?;
-    let binding_id = obligation.binding_id().map_err(dealer_fault)?;
-    require(
-        product.id() != ContentId::ZERO
-            && product.root_authentication_id() != ContentId::ZERO
-            && product.link_authentication_id() != ContentId::ZERO
-            && product.registry_capability_id() != ContentId::ZERO
-            && state.series_obligation_children == 1
-            && state.series_obligation_binding_account_id == id(obligation_account.key)
-            && state.series_obligation_binding_id == binding_id
-            && obligation.phase == DealerSeriesObligationPhaseV1::Live
-            && obligation.key.binding_account_id == id(obligation_account.key)
-            && obligation.key.dealer_state_account_id == id(state_account.key)
-            && obligation.key.policy_id == state.base.policy_id
-            && obligation.key.facility_id == state.base.facility_id
-            && obligation.key.facility_position_binding_id
-                == state.base.facility_position_binding_id
-            && obligation.key.market_instance_v2_id.bytes()
-                == product.market_instance_id().bytes()
-            && obligation.key.product_market_root_account_id == id(&product.root_account())
-            && obligation.key.product_market_binding_id
-                == Id::from_bytes(product.root_binding_id().bytes())
-            && obligation.key.series_plan_v5_id.bytes() == product.series_plan_id().bytes()
-            && obligation.key.series_market_link_account_id == id(&product.link_account())
-            && obligation.key.compiler_bundle_v6_id.bytes()
-                == product.compiler_bundle_id().bytes()
-            && obligation.key.attachment_plan_v5_id.bytes()
-                == product.attachment_plan_id().bytes()
-            && obligation.key.policy_id.bytes()
-                == product.liquidity_facility_plan_id().bytes()
-            && obligation.key.product_generation == product.generation()
-            && obligation.key.series_ordinal == product.ordinal()
-            && product.dealer_admission_receipt_id().bytes()
-                == obligation.admission_projection_id.bytes()
-            && product.link_transition_sequence()
-                >= obligation.admission_link_transition_sequence
-            && obligation.rent.payer.bytes() == product.rent_refund_owner().bytes()
-            && obligation.rent.neutral_sink.bytes()
-                == product.neutral_lamport_sink().bytes(),
-        ClutchError::AuthorizationUnavailable,
-    )?;
-    Ok(AuthenticatedExistingDealerSeriesAdmissionV2 {
-        state,
-        obligation,
-        product,
-    })
-}
 
 fn authenticate_existing_dealer_series_admission_v3(
     root: &AuthenticatedMarketLifecycleRootV3<'_>,
@@ -2497,8 +1938,8 @@ fn authenticate_future_credit_funding(
 /// Delete the unused future-credit funding owner and partition its balance.
 ///
 /// This helper is intentionally private and has no raw-plan caller. The final
-/// action25 passes the hostile-reopened live `0xaf/v2` and exact
-/// post-Position/Replay Retiring StateV3 before any Product terminal write.
+/// action25 passes the hostile-reopened live StateV3 root and exact
+/// post-Position/Replay Retiring base state before any Product terminal write.
 /// The alternative live-a6 path is owned by Fractional and cannot call this
 /// function after action23 has deleted `0xbc/v1`.
 #[inline(never)]
@@ -8211,10 +7652,11 @@ fn claim_terminal_allocation(
 }
 
 /// Queue an immutable LP owner's exit without mutating its sealed page.
-/// Before first lease admission this consumes the exact StateV2/Position/Replay
-/// boundary; afterward it additionally preserves StateV3's live Product
-/// obligation. New ticket rent is always supplied by the owner, including on
-/// the optional Retirement-funded maintenance path. Hoard custody is absent.
+/// Before first lease admission this consumes the exact empty-obligation
+/// StateV3/Position/Replay boundary; afterward it additionally preserves the
+/// live Product obligation. New ticket rent is always supplied by the owner,
+/// including on the optional Retirement-funded maintenance path. Hoard custody
+/// is absent.
 #[inline(never)]
 fn queue_exit(
     program_id: &Pubkey,
@@ -8627,9 +8069,9 @@ fn queue_exit(
     Ok(())
 }
 
-/// Bind the next General epoch to either the founding StateV2 root or the
-/// admitted StateV3 root. Repeated epochs preserve the exact live Product
-/// obligation and never lower the state back to V2.
+/// Bind the next General epoch to the current StateV3 root. Repeated epochs
+/// preserve its exact live Product obligation, or its canonical empty Product
+/// child before first admission.
 #[inline(never)]
 fn bind_epoch(
     program_id: &Pubkey,
@@ -12588,9 +12030,9 @@ mod epoch_state_version_adversarial_tests {
             .expect("BindEpoch handler");
         for guard in [
             "authenticate_dealer_state_v3",
-            "authenticate_state(program_id, &accounts[2])",
+            "let current_state_v3 = *authenticated.state()",
             "authenticate_live_series_obligation_for_state_v3",
-            "current.with_base(prepared.state_after)",
+            ".with_base(prepared.state_after)",
             "observed_obligation.binding() == value",
             "observed_receipt == receipt",
             "observed_epoch == epoch",
@@ -12606,9 +12048,9 @@ mod epoch_state_version_adversarial_tests {
             .expect("LapseEpoch handler");
         for guard in [
             "authenticate_dealer_state_v3",
-            "authenticate_state(program_id, &accounts[2])",
+            "let current_state_v3 = *authenticated.state()",
             "authenticate_live_series_obligation_for_state_v3",
-            "current.with_base(prepared.state_after)",
+            ".with_base(prepared.state_after)",
             "observed_obligation.binding() == value",
             "observed_receipt == receipt",
             "observed_position == position_after_observation",
@@ -12632,13 +12074,16 @@ mod epoch_state_version_adversarial_tests {
     }
 
     #[test]
-    fn epoch_actions_remain_disabled_until_the_complete_family_closes() {
+    fn epoch_actions_follow_the_successor_capability_profile() {
         for action in [DealerFacilityAction::BindEpoch, DealerFacilityAction::LapseEpoch] {
-            assert!(!crate::capabilities::extension_intent_action_enabled(
-                DEALER_FAMILY_TAG,
-                DEALER_FAMILY_VERSION,
-                action.tag(),
-            ));
+            assert_eq!(
+                crate::capabilities::extension_intent_action_enabled(
+                    DEALER_FAMILY_TAG,
+                    DEALER_FAMILY_VERSION,
+                    action.tag(),
+                ),
+                cfg!(feature = "profile-successor-chain-attached-dev"),
+            );
         }
     }
 }
@@ -12769,9 +12214,8 @@ mod select_begin_adversarial_tests {
             "authenticate_dealer_product_founding_prewrite_v3",
             "authenticate_existing_dealer_series_admission_v3",
             "create_full_principal_pda",
-            "fund_and_resize_program_account",
             "DealerSeriesObligationBindingV3::new_live",
-            "DealerStateV3::promote_product_v3",
+            ".admit_product_v3(prepared.dealer.state_after, &series_obligation)",
             "authenticate_dealer_product_founding_postwrites_v3",
             "commit_product_family_admission_v3",
             "commit_product_link_obligation_admission_v3",
@@ -12826,11 +12270,11 @@ mod select_begin_adversarial_tests {
             .and_then(|value| value.split("fn authenticate_dealer_collateral_value_v2").next())
             .expect("Dealer admission prewriter");
         for guard in [
-            "state.state_content_id()",
+            "state.state_id()",
             "link.state().transition_sequence()",
             "family_namespace_anchor_id",
             "seeds::dealer_series_obligation_pda",
-            "state_account.data_len() == DEALER_STATE_V2_ACCOUNT_BYTES",
+            "state_account.data_len() == DEALER_STATE_V3_ACCOUNT_BYTES",
             "obligation_account.owner == &SYSTEM_PROGRAM_ID",
             "obligation_account.data_len() == 0",
             "obligation_account.lamports() == donation_floor",
@@ -12863,12 +12307,15 @@ mod select_begin_adversarial_tests {
     }
 
     #[test]
-    fn complete_begin_handler_remains_outside_every_current_capability_profile() {
-        assert!(!crate::capabilities::extension_intent_action_enabled(
-            DEALER_FAMILY_TAG,
-            DEALER_FAMILY_VERSION,
-            DealerFacilityAction::SelectLeaseAndBegin.tag(),
-        ));
+    fn complete_begin_handler_follows_the_successor_capability_profile() {
+        assert_eq!(
+            crate::capabilities::extension_intent_action_enabled(
+                DEALER_FAMILY_TAG,
+                DEALER_FAMILY_VERSION,
+                DealerFacilityAction::SelectLeaseAndBegin.tag(),
+            ),
+            cfg!(feature = "profile-successor-chain-attached-dev"),
+        );
     }
 }
 
@@ -12933,7 +12380,7 @@ mod sponsor_halt_adversarial_tests {
             .expect("SponsorHalt handler");
         for guard in [
             "authenticate_dealer_state_v3",
-            "authenticate_state(program_id, &accounts[2])",
+            "let current_state_v3 = *authenticated.state()",
             "authenticate_live_series_obligation_for_state_v3",
             "authenticate_runtime_bundle_with_access",
             "validate_runtime_dependency_join",
@@ -13006,7 +12453,7 @@ mod timed_close_adversarial_tests {
     }
 
     #[test]
-    fn pre_admission_unwind_uses_state_v2_without_a_fictional_product_child() {
+    fn pre_admission_unwind_uses_state_v3_without_a_fictional_product_child() {
         let mut pre_admission = payload();
         pre_admission[20] = 0;
         for action in [DealerFacilityAction::EnterUnwind, DealerFacilityAction::TimedClose] {
@@ -13266,7 +12713,7 @@ mod current_terminal_cut_adversarial_tests {
         let receipt = source
             .split("fn seal_dealer_family_terminal_receipt_v3")
             .nth(1)
-            .and_then(|value| value.split("struct AuthenticatedExistingDealerSeriesAdmissionV1").next())
+            .and_then(|value| value.split("struct AuthenticatedExistingDealerSeriesAdmissionV3").next())
             .expect("Dealer family receipt sealer");
         for guard in [
             "state_after.state_id()",
