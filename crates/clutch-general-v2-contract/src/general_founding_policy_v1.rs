@@ -70,7 +70,6 @@ impl GeneralFoundingPolicyV1 {
     pub fn validate(self) -> Result<(), CodecError> {
         if self.admission_policy_id.is_zero()
             || self.settlement_policy_id.is_zero()
-            || self.admission_policy_id == self.settlement_policy_id
             || self.price_scale == 0
             || self.commit_span_slots == 0
             || self.reveal_span_slots == 0
