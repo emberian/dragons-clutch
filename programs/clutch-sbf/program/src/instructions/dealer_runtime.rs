@@ -620,6 +620,7 @@ impl DealerRuntimePayloadV1 {
             | DealerFacilityAction::SelectLeaseAndBegin
             | DealerFacilityAction::EnterUnwind
             | DealerFacilityAction::TimedClose => 16,
+            DealerFacilityAction::SponsorHalt => 8,
             DealerFacilityAction::Collect | DealerFacilityAction::Deliver => 24,
             DealerFacilityAction::FinalizeSettlement
             | DealerFacilityAction::AbortBeforeCollection => 16,
@@ -681,9 +682,7 @@ impl DealerRuntimePayloadV1 {
             | DealerFacilityAction::CancelFunding
             | DealerFacilityAction::RefundCancelledSponsor
             | DealerFacilityAction::BindEpoch
-            | DealerFacilityAction::LapseEpoch
-            | DealerFacilityAction::EnterUnwind
-            | DealerFacilityAction::TimedClose => {
+            | DealerFacilityAction::LapseEpoch => {
                 value.liveness_call_ordinal = read_u32(input, 16);
                 if input[20..24].iter().any(|byte| *byte != 0) {
                     return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
@@ -691,6 +690,23 @@ impl DealerRuntimePayloadV1 {
                 value.keeper_payment_lamports = read_u64(input, 24);
                 if value.liveness_call_ordinal == 0 {
                     return Err(DealerRuntimeContractErrorV1::InvalidField);
+                }
+            }
+            DealerFacilityAction::EnterUnwind | DealerFacilityAction::TimedClose => {
+                value.liveness_call_ordinal = read_u32(input, 16);
+                value.existing_series_admission = decode_bool(input[20])?;
+                if input[21..24].iter().any(|byte| *byte != 0) {
+                    return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
+                }
+                value.keeper_payment_lamports = read_u64(input, 24);
+                if value.liveness_call_ordinal == 0 {
+                    return Err(DealerRuntimeContractErrorV1::InvalidField);
+                }
+            }
+            DealerFacilityAction::SponsorHalt => {
+                value.existing_series_admission = decode_bool(input[16])?;
+                if input[17..24].iter().any(|byte| *byte != 0) {
+                    return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
                 }
             }
             DealerFacilityAction::FinalizeSettlement
@@ -763,9 +779,7 @@ impl DealerRuntimePayloadV1 {
                 value.entry_index = input[20];
                 value.existing_ticket = decode_bool(input[21])?;
                 value.external_liveness = decode_bool(input[22])?;
-                if input[23] != 0 {
-                    return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
-                }
+                value.existing_series_admission = decode_bool(input[23])?;
                 value.share_delta = read_u64(input, 24);
                 value.liveness_call_ordinal = read_u32(input, 32);
                 if input[36..40].iter().any(|byte| *byte != 0) {
@@ -1742,6 +1756,18 @@ const QUEUE_NEW_CALLER: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
 ];
 
+const QUEUE_NEW_CALLER_PRE_ADMISSION: &[DealerMetaSpecV1] = &[
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
+    meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::FacilityPosition, DealerMetaOwnerV1::PositionRuntime, false, false),
+    meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::LpPage, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::ExitTicket, DealerMetaOwnerV1::System, false, true),
+    meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
+    meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
+];
+
 const QUEUE_EXISTING_CALLER: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, false),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
@@ -1837,19 +1863,52 @@ pub fn meta_contract_v1(
         ),
         DealerFacilityAction::FinalizeSettlement => Some(FINALIZE_SETTLEMENT),
         DealerFacilityAction::AbortBeforeCollection => Some(ABORT_BEFORE_COLLECTION),
-        DealerFacilityAction::SponsorHalt => Some(SPONSOR_HALT),
-        DealerFacilityAction::EnterUnwind => Some(ENTER_UNWIND),
-        DealerFacilityAction::TimedClose => Some(TIMED_CLOSE),
+        DealerFacilityAction::SponsorHalt if payload.existing_series_admission => {
+            Some(SPONSOR_HALT)
+        }
+        DealerFacilityAction::SponsorHalt => Some(&SPONSOR_HALT[..SPONSOR_HALT.len() - 1]),
+        DealerFacilityAction::EnterUnwind if payload.existing_series_admission => {
+            Some(ENTER_UNWIND)
+        }
+        DealerFacilityAction::EnterUnwind => Some(&ENTER_UNWIND[..ENTER_UNWIND.len() - 1]),
+        DealerFacilityAction::TimedClose if payload.existing_series_admission => {
+            Some(TIMED_CLOSE)
+        }
+        DealerFacilityAction::TimedClose => Some(&TIMED_CLOSE[..TIMED_CLOSE.len() - 1]),
         DealerFacilityAction::QueueExit
-            if !payload.external_liveness && !payload.existing_ticket =>
+            if !payload.external_liveness
+                && !payload.existing_ticket
+                && payload.existing_series_admission =>
         {
             Some(QUEUE_NEW_CALLER)
         }
-        DealerFacilityAction::QueueExit if !payload.external_liveness => {
+        DealerFacilityAction::QueueExit
+            if !payload.external_liveness && !payload.existing_ticket =>
+        {
+            Some(QUEUE_NEW_CALLER_PRE_ADMISSION)
+        }
+        DealerFacilityAction::QueueExit
+            if !payload.external_liveness && payload.existing_series_admission =>
+        {
             Some(QUEUE_EXISTING_CALLER)
         }
-        DealerFacilityAction::QueueExit if !payload.existing_ticket => Some(QUEUE_NEW_EXTERNAL),
-        DealerFacilityAction::QueueExit => Some(QUEUE_EXISTING_EXTERNAL),
+        DealerFacilityAction::QueueExit if !payload.external_liveness => {
+            Some(&QUEUE_EXISTING_CALLER[..QUEUE_EXISTING_CALLER.len() - 1])
+        }
+        DealerFacilityAction::QueueExit
+            if !payload.existing_ticket && payload.existing_series_admission =>
+        {
+            Some(QUEUE_NEW_EXTERNAL)
+        }
+        DealerFacilityAction::QueueExit if !payload.existing_ticket => {
+            Some(&QUEUE_NEW_EXTERNAL[..QUEUE_NEW_EXTERNAL.len() - 1])
+        }
+        DealerFacilityAction::QueueExit if payload.existing_series_admission => {
+            Some(QUEUE_EXISTING_EXTERNAL)
+        }
+        DealerFacilityAction::QueueExit => {
+            Some(&QUEUE_EXISTING_EXTERNAL[..QUEUE_EXISTING_EXTERNAL.len() - 1])
+        }
         DealerFacilityAction::Claim => Some(CLAIM_TERMINAL),
         DealerFacilityAction::Retire
             if payload.retire_target == DEALER_RETIRE_EXIT_TICKET_V1 =>

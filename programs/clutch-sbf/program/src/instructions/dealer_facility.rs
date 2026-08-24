@@ -3773,10 +3773,10 @@ fn initialize_facility(
     )
 }
 
-/// Enter UnwindOnly under the exact immutable sponsor signature while
-/// preserving the facility-lifetime Product Series obligation. This path is
-/// deliberately balance-neutral: it never touches Hoard custody, fee state,
-/// or a liveness compartment.
+/// Enter UnwindOnly under the exact immutable sponsor signature. Before the
+/// first lease the authoritative root remains StateV2 and no Product Series
+/// obligation exists; after first admission the same transition preserves the
+/// exact StateV3/`0xaf` edge. This path is balance-neutral in both cases.
 #[inline(never)]
 fn sponsor_halt(
     program_id: &Pubkey,
@@ -3791,18 +3791,24 @@ fn sponsor_halt(
         ClutchError::Replay,
     )?;
     let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[1])?;
-    let authenticated_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
-    let state_v3 = *authenticated_state.state();
-    let state = state_v3.base;
+    let (state, state_v3, state_bump, obligation) = if payload.existing_series_admission {
+        let authenticated = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
+        let state_v3 = *authenticated.state();
+        let obligation = authenticate_live_series_obligation_for_state_v3(
+            program_id,
+            &accounts[15],
+            &accounts[2],
+            &state_v3,
+        )?;
+        (state_v3.base, Some(state_v3), authenticated.bump(), Some(obligation))
+    } else {
+        let state = authenticate_state(program_id, &accounts[2])?;
+        let bump = accounts[2].data.borrow()[2];
+        (state, None, bump, None)
+    };
     require(
         state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
         ClutchError::MismatchedState,
-    )?;
-    let obligation = authenticate_live_series_obligation_for_state_v3(
-        program_id,
-        &accounts[15],
-        &accounts[2],
-        &state_v3,
     )?;
     let (position_binding, position, replay, replay_binding) = authenticate_position_and_replay(
         program_id,
@@ -3852,30 +3858,48 @@ fn sponsor_halt(
         replay_binding,
     )
     .map_err(dealer_fault)?;
-    let state_after = state_v3
-        .with_base(prepared.state_after)
-        .map_err(dealer_fault)?;
-    write_dealer_body(
-        &accounts[2],
-        DEALER_STATE_V3_ACCOUNT_TAG,
-        DEALER_STATE_V3_ACCOUNT_VERSION,
-        authenticated_state.bump(),
-        &state_after,
-    )?;
+    let state_after_v3 = match state_v3 {
+        Some(current) => Some(current.with_base(prepared.state_after).map_err(dealer_fault)?),
+        None => None,
+    };
+    match state_after_v3 {
+        Some(state_after) => write_dealer_body(
+            &accounts[2],
+            DEALER_STATE_V3_ACCOUNT_TAG,
+            DEALER_STATE_V3_ACCOUNT_VERSION,
+            state_bump,
+            &state_after,
+        )?,
+        None => write_dealer_body(
+            &accounts[2],
+            DEALER_STATE_V2_ACCOUNT_TAG,
+            DEALER_STATE_V2_ACCOUNT_VERSION,
+            state_bump,
+            &prepared.state_after,
+        )?,
+    };
     prepared
         .replay
         .replay_post()
         .encode_into(&mut accounts[4].data.borrow_mut())
         .map_err(dealer_fault)?;
-    let observed_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
-    let observed_obligation =
-        authenticate_dealer_series_obligation_v1(program_id, &accounts[15], false)?;
     let observed_replay = DealerFacilityReplayV1::decode(&accounts[4].data.borrow())
         .map_err(dealer_fault)?;
+    let state_matches = match state_after_v3 {
+        Some(state_after) => {
+            let observed_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
+            let observed_obligation =
+                authenticate_dealer_series_obligation_v1(program_id, &accounts[15], false)?;
+            let obligation_matches = match obligation.as_ref() {
+                Some(value) => observed_obligation.binding() == value,
+                None => false,
+            };
+            observed_state.state() == &state_after && obligation_matches
+        }
+        None => authenticate_state(program_id, &accounts[2])? == prepared.state_after,
+    };
     require(
-        observed_state.state() == &state_after
-            && observed_obligation.binding() == &obligation
-            && observed_replay == prepared.replay.replay_post(),
+        state_matches && observed_replay == prepared.replay.replay_post(),
         ClutchError::MismatchedState,
     )
 }
@@ -3925,13 +3949,20 @@ fn funded_unwind(
     action: DealerFacilityAction,
     payload_bytes: &[u8],
 ) -> Outcome<()> {
-    let expected_count = match action {
+    let payload = DealerRuntimePayloadV1::decode(action, payload_bytes).map_err(dealer_fault)?;
+    let admitted_count = match action {
         DealerFacilityAction::EnterUnwind => ENTER_UNWIND_ACCOUNT_COUNT,
         DealerFacilityAction::TimedClose => TIMED_CLOSE_ACCOUNT_COUNT,
         _ => return Err(ClutchError::UnsupportedInstruction.into()),
     };
+    let expected_count = if payload.existing_series_admission {
+        admitted_count
+    } else {
+        admitted_count
+            .checked_sub(1)
+            .ok_or(ClutchError::Arithmetic)?
+    };
     require_count(accounts, expected_count)?;
-    let payload = DealerRuntimePayloadV1::decode(action, payload_bytes).map_err(dealer_fault)?;
     require(
         sequence == payload.expected_replay_ordinal,
         ClutchError::Replay,
@@ -3941,23 +3972,29 @@ fn funded_unwind(
     require_aliases(accounts, (0, 16))?;
 
     let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[1])?;
-    let authenticated_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
-    let state_v3 = *authenticated_state.state();
-    let state = state_v3.base;
-    require(
-        state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
-        ClutchError::MismatchedState,
-    )?;
     let (clock_index, rent_index, system_index, obligation_index) = match action {
         DealerFacilityAction::EnterUnwind => (None, 17usize, 18usize, 19usize),
         DealerFacilityAction::TimedClose => (Some(17usize), 18usize, 19usize, 20usize),
         _ => return Err(ClutchError::UnsupportedInstruction.into()),
     };
-    let obligation = authenticate_live_series_obligation_for_state_v3(
-        program_id,
-        &accounts[obligation_index],
-        &accounts[2],
-        &state_v3,
+    let (state, state_v3, state_bump, obligation) = if payload.existing_series_admission {
+        let authenticated = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
+        let state_v3 = *authenticated.state();
+        let obligation = authenticate_live_series_obligation_for_state_v3(
+            program_id,
+            &accounts[obligation_index],
+            &accounts[2],
+            &state_v3,
+        )?;
+        (state_v3.base, Some(state_v3), authenticated.bump(), Some(obligation))
+    } else {
+        let state = authenticate_state(program_id, &accounts[2])?;
+        let bump = accounts[2].data.borrow()[2];
+        (state, None, bump, None)
+    };
+    require(
+        state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
+        ClutchError::MismatchedState,
     )?;
     let (position_binding, position, replay, replay_binding) =
         authenticate_position_and_replay(
@@ -4097,9 +4134,10 @@ fn funded_unwind(
         _ => return Err(ClutchError::MismatchedState.into()),
     }
     .map_err(dealer_fault)?;
-    let state_after = state_v3
-        .with_base(prepared.state_after)
-        .map_err(dealer_fault)?;
+    let state_after_v3 = match state_v3 {
+        Some(current) => Some(current.with_base(prepared.state_after).map_err(dealer_fault)?),
+        None => None,
+    };
 
     create_full_principal_pda(
         program_id,
@@ -4127,26 +4165,28 @@ fn funded_unwind(
         receipt_bump,
         &receipt,
     )?;
-    write_dealer_body(
-        &accounts[2],
-        DEALER_STATE_V3_ACCOUNT_TAG,
-        DEALER_STATE_V3_ACCOUNT_VERSION,
-        authenticated_state.bump(),
-        &state_after,
-    )?;
+    match state_after_v3 {
+        Some(state_after) => write_dealer_body(
+            &accounts[2],
+            DEALER_STATE_V3_ACCOUNT_TAG,
+            DEALER_STATE_V3_ACCOUNT_VERSION,
+            state_bump,
+            &state_after,
+        )?,
+        None => write_dealer_body(
+            &accounts[2],
+            DEALER_STATE_V2_ACCOUNT_TAG,
+            DEALER_STATE_V2_ACCOUNT_VERSION,
+            state_bump,
+            &prepared.state_after,
+        )?,
+    };
     prepared
         .replay
         .replay_post()
         .encode_into(&mut accounts[4].data.borrow_mut())
         .map_err(dealer_fault)?;
 
-    let observed_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
-    let observed_obligation =
-        authenticate_dealer_series_obligation_v1(
-            program_id,
-            &accounts[obligation_index],
-            false,
-        )?;
     let (_, observed_receipt) = authenticate_action_receipt(program_id, &accounts[15])?;
     let (_, observed_position, observed_replay, _) = authenticate_position_and_replay(
         program_id,
@@ -4160,9 +4200,24 @@ fn funded_unwind(
     let retirement_data = accounts[13]
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let state_matches = match state_after_v3 {
+        Some(state_after) => {
+            let observed_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
+            let observed_obligation = authenticate_dealer_series_obligation_v1(
+                program_id,
+                &accounts[obligation_index],
+                false,
+            )?;
+            let obligation_matches = match obligation.as_ref() {
+                Some(value) => observed_obligation.binding() == value,
+                None => false,
+            };
+            observed_state.state() == &state_after && obligation_matches
+        }
+        None => authenticate_state(program_id, &accounts[2])? == prepared.state_after,
+    };
     require(
-        observed_state.state() == &state_after
-            && observed_obligation.binding() == &obligation
+        state_matches
             && observed_receipt == receipt
             && observed_position == position
             && observed_replay == prepared.replay.replay_post()
@@ -4519,9 +4574,10 @@ fn claim_terminal_allocation(
 }
 
 /// Queue an immutable LP owner's exit without mutating its sealed page.
-/// Caller-funded and optional Retirement-funded maintenance share one exact
-/// StateV3/Position/Replay/Product-obligation boundary. New ticket rent is
-/// always supplied by the owner; Hoard collateral and fee state are absent.
+/// Before first lease admission this consumes the exact StateV2/Position/Replay
+/// boundary; afterward it additionally preserves StateV3's live Product
+/// obligation. New ticket rent is always supplied by the owner, including on
+/// the optional Retirement-funded maintenance path. Hoard custody is absent.
 #[inline(never)]
 fn queue_exit(
     program_id: &Pubkey,
@@ -4531,12 +4587,19 @@ fn queue_exit(
 ) -> Outcome<()> {
     let payload = DealerRuntimePayloadV1::decode(DealerFacilityAction::QueueExit, payload_bytes)
         .map_err(dealer_fault)?;
-    let expected_count = if payload.external_liveness {
+    let admitted_count = if payload.external_liveness {
         QUEUE_EXIT_EXTERNAL_ACCOUNT_COUNT
     } else if payload.existing_ticket {
         QUEUE_EXIT_CALLER_EXISTING_ACCOUNT_COUNT
     } else {
         QUEUE_EXIT_CALLER_NEW_ACCOUNT_COUNT
+    };
+    let expected_count = if payload.existing_series_admission {
+        admitted_count
+    } else {
+        admitted_count
+            .checked_sub(1)
+            .ok_or(ClutchError::Arithmetic)?
     };
     require_count(accounts, expected_count)?;
     require(
@@ -4552,19 +4615,25 @@ fn queue_exit(
     }
 
     let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[1])?;
-    let authenticated_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
-    let state_v3 = *authenticated_state.state();
-    let state = state_v3.base;
+    let obligation_index = if payload.external_liveness { 21 } else { 7 };
+    let (state, state_v3, state_bump, obligation) = if payload.existing_series_admission {
+        let authenticated = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
+        let state_v3 = *authenticated.state();
+        let obligation = authenticate_live_series_obligation_for_state_v3(
+            program_id,
+            &accounts[obligation_index],
+            &accounts[2],
+            &state_v3,
+        )?;
+        (state_v3.base, Some(state_v3), authenticated.bump(), Some(obligation))
+    } else {
+        let state = authenticate_state(program_id, &accounts[2])?;
+        let bump = accounts[2].data.borrow()[2];
+        (state, None, bump, None)
+    };
     require(
         state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
         ClutchError::MismatchedState,
-    )?;
-    let obligation_index = if payload.external_liveness { 21 } else { 7 };
-    let obligation = authenticate_live_series_obligation_for_state_v3(
-        program_id,
-        &accounts[obligation_index],
-        &accounts[2],
-        &state_v3,
     )?;
     let (position_binding, position, replay, replay_binding) =
         authenticate_position_and_replay(
@@ -4597,7 +4666,12 @@ fn queue_exit(
     let rent = if payload.external_liveness {
         Some(read_rent(&accounts[19])?)
     } else if !payload.existing_ticket {
-        Some(read_rent(&accounts[8])?)
+        let rent_index = if payload.existing_series_admission {
+            8usize
+        } else {
+            7usize
+        };
+        Some(read_rent(&accounts[rent_index])?)
     } else {
         None
     };
@@ -4778,11 +4852,20 @@ fn queue_exit(
         .map_err(dealer_fault)?;
         (prepared.ticket, prepared.state_after, prepared.replay)
     };
-    let state_after = state_v3.with_base(state_after_base).map_err(dealer_fault)?;
+    let state_after_v3 = match state_v3 {
+        Some(current) => Some(current.with_base(state_after_base).map_err(dealer_fault)?),
+        None => None,
+    };
 
     if !payload.existing_ticket {
         let rent = rent.as_ref().ok_or(ClutchError::MismatchedState)?;
-        let system_index = if payload.external_liveness { 20 } else { 9 };
+        let system_index = if payload.external_liveness {
+            20usize
+        } else if payload.existing_series_admission {
+            9usize
+        } else {
+            8usize
+        };
         let (observed_principal, observed_donation) = create_full_principal_pda(
             program_id,
             &accounts[0],
@@ -4843,24 +4926,27 @@ fn queue_exit(
         expected_ticket_bump,
         &ticket_after,
     )?;
-    write_dealer_body(
-        &accounts[2],
-        DEALER_STATE_V3_ACCOUNT_TAG,
-        DEALER_STATE_V3_ACCOUNT_VERSION,
-        authenticated_state.bump(),
-        &state_after,
-    )?;
+    match state_after_v3 {
+        Some(state_after) => write_dealer_body(
+            &accounts[2],
+            DEALER_STATE_V3_ACCOUNT_TAG,
+            DEALER_STATE_V3_ACCOUNT_VERSION,
+            state_bump,
+            &state_after,
+        )?,
+        None => write_dealer_body(
+            &accounts[2],
+            DEALER_STATE_V2_ACCOUNT_TAG,
+            DEALER_STATE_V2_ACCOUNT_VERSION,
+            state_bump,
+            &state_after_base,
+        )?,
+    };
     replay_after
         .replay_post()
         .encode_into(&mut accounts[4].data.borrow_mut())
         .map_err(dealer_fault)?;
 
-    let observed_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
-    let observed_obligation = authenticate_dealer_series_obligation_v1(
-        program_id,
-        &accounts[obligation_index],
-        false,
-    )?;
     let (_, observed_ticket) = authenticate_exit_ticket(program_id, &accounts[6])?;
     let (_, observed_position, observed_replay, _) = authenticate_position_and_replay(
         program_id,
@@ -4871,9 +4957,24 @@ fn queue_exit(
         &state_after_base,
         false,
     )?;
+    let state_matches = match state_after_v3 {
+        Some(state_after) => {
+            let observed_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
+            let observed_obligation = authenticate_dealer_series_obligation_v1(
+                program_id,
+                &accounts[obligation_index],
+                false,
+            )?;
+            let obligation_matches = match obligation.as_ref() {
+                Some(value) => observed_obligation.binding() == value,
+                None => false,
+            };
+            observed_state.state() == &state_after && obligation_matches
+        }
+        None => authenticate_state(program_id, &accounts[2])? == state_after_base,
+    };
     require(
-        observed_state.state() == &state_after
-            && observed_obligation.binding() == &obligation
+        state_matches
             && observed_ticket == ticket_after
             && observed_position == position
             && observed_replay == replay_after.replay_post(),
@@ -8801,9 +8902,10 @@ mod sponsor_halt_adversarial_tests {
 
     #[test]
     fn sponsor_halt_requires_the_complete_immutable_runtime_and_product_child() {
-        let mut payload = [0u8; 16];
+        let mut payload = [0u8; 24];
         payload[0..8].copy_from_slice(&1u64.to_le_bytes());
         payload[8..16].copy_from_slice(&2u64.to_le_bytes());
+        payload[16] = 1;
         let decoded = DealerRuntimePayloadV1::decode(DealerFacilityAction::SponsorHalt, &payload)
             .unwrap();
         let metas = meta_contract_v1(DealerFacilityAction::SponsorHalt, decoded).unwrap();
@@ -8813,6 +8915,34 @@ mod sponsor_halt_adversarial_tests {
         assert_eq!(metas[14].role, DealerMetaRoleV1::LivenessRecovery);
         assert_eq!(metas[15].role, DealerMetaRoleV1::SeriesObligation);
         assert!(!metas[15].writable);
+
+        payload[16] = 0;
+        let decoded = DealerRuntimePayloadV1::decode(DealerFacilityAction::SponsorHalt, &payload)
+            .unwrap();
+        let metas = meta_contract_v1(DealerFacilityAction::SponsorHalt, decoded).unwrap();
+        assert_eq!(metas.len(), 15);
+        assert!(!metas.iter().any(|meta| meta.role == DealerMetaRoleV1::SeriesObligation));
+    }
+
+    #[test]
+    fn sponsor_halt_refuses_ambiguous_admission_or_noncanonical_tail() {
+        let mut payload = [0u8; 24];
+        payload[0..8].copy_from_slice(&1u64.to_le_bytes());
+        payload[8..16].copy_from_slice(&2u64.to_le_bytes());
+        payload[16] = 2;
+        assert!(DealerRuntimePayloadV1::decode(
+            DealerFacilityAction::SponsorHalt,
+            &payload,
+        )
+        .is_err());
+
+        payload[16] = 0;
+        payload[17] = 1;
+        assert!(DealerRuntimePayloadV1::decode(
+            DealerFacilityAction::SponsorHalt,
+            &payload,
+        )
+        .is_err());
     }
 
     #[test]
@@ -8825,13 +8955,14 @@ mod sponsor_halt_adversarial_tests {
             .expect("SponsorHalt handler");
         for guard in [
             "authenticate_dealer_state_v3",
+            "authenticate_state(program_id, &accounts[2])",
             "authenticate_live_series_obligation_for_state_v3",
             "authenticate_runtime_bundle_with_access",
             "validate_runtime_dependency_join",
             "prepare_sponsor_halt_dealer_v3",
             ".with_base(prepared.state_after)",
             "DEALER_STATE_V3_ACCOUNT_VERSION",
-            "observed_obligation.binding() == &obligation",
+            "obligation_matches",
             "observed_replay == prepared.replay.replay_post()",
         ] {
             assert!(handler.contains(guard), "missing sponsor-halt guard {guard}");
@@ -8854,6 +8985,7 @@ mod timed_close_adversarial_tests {
         payload[0..8].copy_from_slice(&1u64.to_le_bytes());
         payload[8..16].copy_from_slice(&2u64.to_le_bytes());
         payload[16..20].copy_from_slice(&3u32.to_le_bytes());
+        payload[20] = 1;
         payload[24..32].copy_from_slice(&4u64.to_le_bytes());
         payload
     }
@@ -8896,6 +9028,29 @@ mod timed_close_adversarial_tests {
     }
 
     #[test]
+    fn pre_admission_unwind_uses_state_v2_without_a_fictional_product_child() {
+        let mut pre_admission = payload();
+        pre_admission[20] = 0;
+        for action in [DealerFacilityAction::EnterUnwind, DealerFacilityAction::TimedClose] {
+            let decoded = DealerRuntimePayloadV1::decode(action, &pre_admission).unwrap();
+            let metas = meta_contract_v1(action, decoded).unwrap();
+            let admitted_count = if action == DealerFacilityAction::EnterUnwind {
+                ENTER_UNWIND_ACCOUNT_COUNT
+            } else {
+                TIMED_CLOSE_ACCOUNT_COUNT
+            };
+            assert_eq!(metas.len(), admitted_count - 1);
+            assert!(!metas.iter().any(|meta| meta.role == DealerMetaRoleV1::SeriesObligation));
+        }
+        pre_admission[20] = 2;
+        assert!(DealerRuntimePayloadV1::decode(
+            DealerFacilityAction::TimedClose,
+            &pre_admission,
+        )
+        .is_err());
+    }
+
+    #[test]
     fn timed_close_refuses_missing_liveness_ordinal_and_padding_drift() {
         let mut missing_ordinal = payload();
         missing_ordinal[16..20].copy_from_slice(&0u32.to_le_bytes());
@@ -8906,7 +9061,7 @@ mod timed_close_adversarial_tests {
         .is_err());
 
         let mut padding = payload();
-        padding[20] = 1;
+        padding[21] = 1;
         assert!(DealerRuntimePayloadV1::decode(
             DealerFacilityAction::TimedClose,
             &padding,
@@ -8933,7 +9088,7 @@ mod timed_close_adversarial_tests {
             "apply_liveness_transition",
             "DEALER_STATE_V3_ACCOUNT_VERSION",
             "authenticate_action_receipt",
-            "observed_obligation.binding() == &obligation",
+            "obligation_matches",
             "observed_position == position",
             "liveness_transition.post_account_data",
         ] {
@@ -8995,6 +9150,7 @@ mod queue_exit_adversarial_tests {
         payload[20] = 4;
         payload[21] = u8::from(existing);
         payload[22] = u8::from(external);
+        payload[23] = 1;
         payload[24..32].copy_from_slice(&5u64.to_le_bytes());
         if external {
             payload[32..36].copy_from_slice(&6u32.to_le_bytes());
@@ -9043,6 +9199,32 @@ mod queue_exit_adversarial_tests {
     }
 
     #[test]
+    fn queue_before_first_lease_omits_only_the_product_obligation() {
+        for (existing, external, admitted_count) in [
+            (false, false, QUEUE_EXIT_CALLER_NEW_ACCOUNT_COUNT),
+            (true, false, QUEUE_EXIT_CALLER_EXISTING_ACCOUNT_COUNT),
+            (false, true, QUEUE_EXIT_EXTERNAL_ACCOUNT_COUNT),
+            (true, true, QUEUE_EXIT_EXTERNAL_ACCOUNT_COUNT),
+        ] {
+            let mut frame = payload(existing, external);
+            frame[23] = 0;
+            let decoded = DealerRuntimePayloadV1::decode(DealerFacilityAction::QueueExit, &frame)
+                .unwrap();
+            let metas = meta_contract_v1(DealerFacilityAction::QueueExit, decoded).unwrap();
+            assert_eq!(metas.len(), admitted_count - 1);
+            assert!(!metas.iter().any(|meta| meta.role == DealerMetaRoleV1::SeriesObligation));
+            if !external && !existing {
+                assert_eq!(metas[7].role, DealerMetaRoleV1::Rent);
+                assert_eq!(metas[8].role, DealerMetaRoleV1::SystemProgram);
+            }
+        }
+
+        let mut invalid = payload(false, false);
+        invalid[23] = 2;
+        assert!(DealerRuntimePayloadV1::decode(DealerFacilityAction::QueueExit, &invalid).is_err());
+    }
+
+    #[test]
     fn queue_payload_refuses_detached_or_ambiguous_liveness_fields() {
         let mut missing = payload(false, true);
         missing[32..36].copy_from_slice(&0u32.to_le_bytes());
@@ -9081,7 +9263,7 @@ mod queue_exit_adversarial_tests {
             "prepare_increase_exit_ticket_v1",
             "create_full_principal_pda",
             "DEALER_EXIT_TICKET_ACCOUNT_VERSION",
-            "observed_obligation.binding() == &obligation",
+            "obligation_matches",
             "observed_position == position",
         ] {
             assert!(handler.contains(guard), "missing QueueExit guard {guard}");
