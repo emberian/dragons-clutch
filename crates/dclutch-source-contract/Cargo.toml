@@ -1,26 +1,12 @@
 [package]
 name = "dclutch-source-contract"
 version = "0.1.0"
-edition = "2024"
-license = "AGPL-3.0-or-later"
-rust-version = "1.89"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
 
 [lib]
 path = "src/lib.rs"
 
-# This crate is deliberately an independently testable contract package until
-# the integration branch elects to add it to the workspace member list.
-[workspace]
-
-[lints.rust]
-missing_docs = "deny"
-unsafe_code = "forbid"
-
-[lints.clippy]
-cast_possible_truncation = "deny"
-cast_sign_loss = "deny"
-checked_conversions = "deny"
-float_arithmetic = "deny"
-indexing_slicing = "deny"
-panic = "deny"
-unwrap_used = "deny"
+[lints]
+workspace = true

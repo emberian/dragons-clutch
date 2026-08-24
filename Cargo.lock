@@ -306,6 +306,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-product-compiler"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-contract",
+ "sha2",
+]
+
+[[package]]
 name = "dclutch-product-contract"
 version = "0.1.0"
 
@@ -340,6 +348,10 @@ dependencies = [
  "solana-sdk-ids",
  "solana-system-interface",
 ]
+
+[[package]]
+name = "dclutch-source-contract"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-terminal-contract"
