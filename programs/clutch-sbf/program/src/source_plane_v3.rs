@@ -92,13 +92,11 @@ const ACCOUNT_VECTOR_ENTRY_BYTES: usize = 105;
 /// Maximum ordered accounts admitted to one reviewed Source parser invocation.
 pub const MAX_SOURCE_PARSER_ACCOUNTS: usize = 16;
 
-/// Route one centrally allocated but profile-disabled SourcePlane action to refusal.
+/// Route one centrally allocated but non-admitted SourcePlane action to refusal.
 ///
 /// This boundary is deliberately account-free. The dispatcher calls it before
-/// account inspection, so merely allocating actions 1 through 12 cannot make a
-/// partially implemented action 2 through 12 executable. The exhaustive match also
-/// prevents a newly allocated Source action from inheriting this refusal
-/// without an explicit review here.
+/// account inspection. The exhaustive match prevents a newly allocated Source
+/// action from inheriting this refusal without an explicit review here.
 #[inline(never)]
 pub fn process_reserved_disabled(
     action: clutch_solana_layout::registry::SourceSeriesAction,

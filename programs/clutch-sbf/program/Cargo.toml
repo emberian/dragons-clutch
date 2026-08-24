@@ -74,10 +74,11 @@ profile-general-source-v2-point = [
     "clutch-solana-reference/profile-general-source-v2-point",
 ]
 # The sole successor-development product. This compiles the broad current
-# substrate plus every optional successor-family adapter under one selector;
-# central capability admission remains fail-closed until the exact all-family
-# closure and populated observed-positive collateral/claim manifests land.
-# Per-family laboratory features are not dependencies of this profile.
+# substrate plus every optional successor-family adapter under one selector.
+# Runtime callability is owned by the exact capability table; a checked release
+# separately selects a populated observed-positive collateral/claim manifest.
+# Per-family laboratory and release-manifest features are not dependencies of
+# this profile.
 profile-successor-chain-attached-dev = [
     "profile-full",
     "dep:clutch-fee-runtime-contract",
@@ -89,7 +90,6 @@ profile-successor-chain-attached-dev = [
     "clutch-structured-claim-adapter/profile-successor-chain-attached-dev",
     "clutch-solana-layout/profile-successor-chain-attached-dev",
     "clutch-solana-reference/profile-successor-chain-attached-dev",
-    "observed-positive-collateral-release-manifest",
 ]
 # A distinct non-production Dealer product containing the immutable policy and
 # liveness catalogs plus exact facility Initialize and BindEpoch transitions. The hostile

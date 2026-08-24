@@ -209,7 +209,7 @@ pub(super) fn process_seal_raw_page(
 }
 
 /// Execute action 6 from the exact Product occurrence and its immutable
-/// content-addressed WindowSpec, while keeping capability admission false.
+/// content-addressed WindowSpec after central capability admission.
 pub(super) fn process_initialize_window_work(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],

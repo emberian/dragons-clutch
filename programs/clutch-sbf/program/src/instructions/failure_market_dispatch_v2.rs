@@ -4,8 +4,8 @@
 //! Recovery78/v1 actions 10 through 13 retain their allocated coordinates,
 //! but they no longer inherit the withdrawn caller-ID payloads or occurrence-
 //! scoped `ExternalV2` account contract. This always-compiled module owns the
-//! exact current ordered roles and the only hostile payload decoder. While the
-//! central capability is false, [`process`] refuses before inspecting either.
+//! exact current ordered roles and the only hostile payload decoder. Profiles
+//! that do not admit these actions refuse before inspecting either.
 
 use crate::accounts::{require, Outcome};
 use crate::capabilities;
@@ -692,22 +692,25 @@ mod adversarial_contract_tests {
     }
 
     #[test]
-    fn disabled_current_actions_ignore_hostile_payloads_and_accounts() {
+    fn profile_capability_precedes_hostile_payloads_and_accounts() {
         for action in [
             RecoveryAction::BeginIntervalConsensus,
             RecoveryAction::AdvanceIntervalConsensus,
             RecoveryAction::ResolveIntervalConsensus,
             RecoveryAction::CloseIntervalConsensusWork,
         ] {
-            assert!(!capabilities::extension_intent_action_enabled(
+            let enabled = capabilities::extension_intent_action_enabled(
                 registry::RECOVERY_FAMILY_TAG,
                 registry::RECOVERY_FAMILY_VERSION,
                 recovery_action_byte_v2(action),
-            ));
-            assert_eq!(
-                process(&Pubkey::new_from_array([7; 32]), &[], u64::MAX, action, &[0xff; 41]),
-                Err(ClutchError::UnsupportedInstruction.into()),
             );
+            let result =
+                process(&Pubkey::new_from_array([7; 32]), &[], u64::MAX, action, &[0xff; 41]);
+            if enabled {
+                assert_ne!(result, Err(ClutchError::UnsupportedInstruction.into()));
+            } else {
+                assert_eq!(result, Err(ClutchError::UnsupportedInstruction.into()));
+            }
         }
     }
 

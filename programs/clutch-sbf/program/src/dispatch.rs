@@ -365,9 +365,8 @@ fn recovery_v2_action(
     }
 }
 
-/// Decode the strict extension envelope and enter only the current checked,
-/// capability-disabled Failure contract. The module itself refuses before
-/// payload or account access while every Recovery capability remains false.
+/// Decode the strict extension envelope and enter the current checked Failure
+/// contract. The module itself rechecks capability before payload or accounts.
 #[inline(never)]
 fn process_recovery_v2(
     program_id: &Pubkey,
@@ -1994,15 +1993,27 @@ mod extension_registry_tests {
                 clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION,
                 local_action,
             );
-            assert!(
-                disabled_canonical_tag(&bytes),
-                "source action {local_action}"
+            let enabled = capabilities::extension_intent_action_enabled(
+                clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG,
+                clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION,
+                local_action,
             );
-            assert_eq!(
-                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from),
-                Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
-                "source action {local_action}"
-            );
+            assert_eq!(disabled_canonical_tag(&bytes), !enabled, "source action {local_action}");
+            let actual =
+                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from);
+            if enabled {
+                assert_ne!(
+                    actual,
+                    Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                    "enabled source action {local_action} must reach its strict payload decoder"
+                );
+            } else {
+                assert_eq!(
+                    actual,
+                    Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                    "disabled source action {local_action}"
+                );
+            }
         }
         for local_action in clutch_solana_layout::registry::RecurringSeriesAction::FIRST_TAG
             ..=clutch_solana_layout::registry::RecurringSeriesAction::LAST_TAG
@@ -2064,15 +2075,27 @@ mod extension_registry_tests {
                 clutch_solana_layout::registry::RECOVERY_FAMILY_VERSION,
                 local_action,
             );
-            assert!(
-                disabled_canonical_tag(&bytes),
-                "recovery action {local_action}"
+            let enabled = capabilities::extension_intent_action_enabled(
+                clutch_solana_layout::registry::RECOVERY_FAMILY_TAG,
+                clutch_solana_layout::registry::RECOVERY_FAMILY_VERSION,
+                local_action,
             );
-            assert_eq!(
-                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from),
-                Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
-                "recovery action {local_action}"
-            );
+            assert_eq!(disabled_canonical_tag(&bytes), !enabled, "recovery action {local_action}");
+            let actual =
+                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from);
+            if enabled {
+                assert_ne!(
+                    actual,
+                    Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                    "enabled recovery action {local_action} must reach its strict payload decoder"
+                );
+            } else {
+                assert_eq!(
+                    actual,
+                    Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                    "disabled recovery action {local_action}"
+                );
+            }
         }
         for local_action in clutch_solana_layout::registry::DirectMarketAction::FIRST_TAG
             ..=clutch_solana_layout::registry::DirectMarketAction::LAST_TAG
