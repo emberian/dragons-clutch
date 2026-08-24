@@ -12,7 +12,11 @@
 use clutch_batch::relation_v1::{FrozenPolicyV1, SelfCrossPolicyV1, MAX_OUTCOMES};
 use clutch_batch::{Side, MAX_ORDERS};
 use clutch_batch_policy_identity::batch_policy_digest;
+use clutch_fee_runtime_contract::allocation::{FeeEnvelopeFundingV1, FeeEnvelopeV1};
 pub use clutch_fee_runtime_contract::selected::SelectedCompositeFeeV2;
+use clutch_fee_runtime_contract::selected::{
+    AssessmentBoundaryV1, OwnerFeeAssessmentV1, OwnerFeeCarryV1,
+};
 pub use clutch_fee_runtime_contract::weight_v2::{
     CompositeFeeWeightRowV2, CompositeFeeWeightTranscriptV2,
 };
@@ -22,6 +26,11 @@ use clutch_fee_runtime_contract::weight_v2::{
 };
 use clutch_fee_runtime_contract::{Error as FeeError, Id as FeeId};
 use clutch_general_v2_contract::Id32;
+use clutch_solana_layout::reservation::{
+    ReservationPlan, ORDER_KIND_PORTFOLIO, ORDER_KIND_SINGLE, RESERVATION_STATE_ACTIVE,
+};
+use clutch_solana_layout::reservation_v9::{canonical_reservation_id_v9, ReservationAccountV9};
+use clutch_solana_layout::Hash32 as LayoutHash32;
 
 use crate::{
     AdapterPositionMarketBindingV3, AuthenticatedSettlementPositionBookV3,
@@ -399,6 +408,203 @@ where
         nonzero_weight_row_count,
         total_weight,
         collected_fee_atoms,
+    })
+}
+
+/// Derive one owner's exact terminal charge from the same owner-netted
+/// selected payoff used by the certified maker-weight plane.
+///
+/// This is the charging-side projection of the existing weight semantic
+/// owner: it streams the retained Feed and frozen pages, aggregates the whole
+/// executed buy payoff once, reads the same selected prices, and applies the
+/// fee runtime's sole terminal-ceil boundary. No order-local quote, caller
+/// payoff, consideration surrogate, or caller fee amount enters this path.
+pub fn derive_owner_terminal_composite_fee_v2(
+    traversal: &dyn SettlementTraversalAccessV5,
+    selected: &SelectedCompositeFeeV2,
+    owner: Id32,
+) -> Result<(OwnerFeeCarryV1, OwnerFeeAssessmentV1), SettlementAdapterErrorV1> {
+    if owner.is_zero()
+        || selected.realm().0 != traversal.projection().realm().bytes()
+        || selected.market().0 != traversal.projection().feed().market.bytes()
+        || selected.epoch().0 != traversal.projection().feed().epoch.bytes()
+        || selected.selected_candidate().0
+            != traversal
+                .projection()
+                .feed()
+                .settlement_candidate_id
+                .bytes()
+        || selected.price_scale() != traversal.projection().feed().price_scale
+        || selected.outcome_count() != traversal.projection().feed().outcome_count
+    {
+        return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
+    }
+    let (payoff, has_buy, has_sell) = owner_executed_payoff(traversal, owner)?;
+    if !has_buy && !has_sell {
+        return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
+    }
+    let prices = traversal_prices(traversal)?;
+    let carry = OwnerFeeCarryV1::admit(selected, FeeId(owner.bytes()))?;
+    let (carry, assessment) = carry.assess(
+        selected,
+        &payoff,
+        &prices,
+        AssessmentBoundaryV1::TerminalCeil,
+    )?;
+    if !carry.is_closed()
+        || carry.remainder() != 0
+        || assessment.next_carry() != 0
+        || assessment.boundary() != AssessmentBoundaryV1::TerminalCeil
+        || assessment.charged_atoms() != carry.paid_atoms()
+        || (carry.paid_atoms() != 0 && !has_buy)
+    {
+        return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
+    }
+    Ok((carry, assessment))
+}
+
+fn pristine_fee_envelope_matches_plan(
+    initial_cash_atoms: u64,
+    remaining_cash_atoms: u64,
+    max_fee_atoms: u64,
+    initial_internal: &[u64; MAX_OUTCOMES],
+    remaining_internal: &[u64; MAX_OUTCOMES],
+    expected: ReservationPlan,
+) -> bool {
+    initial_cash_atoms == expected.cash_atoms
+        && remaining_cash_atoms == expected.cash_atoms
+        && max_fee_atoms == expected.max_fee_atoms
+        && *initial_internal == expected.internal
+        && *remaining_internal == expected.internal
+}
+
+fn owner_fee_order_and_reservation_id_v2(
+    traversal: &dyn SettlementTraversalAccessV5,
+    owner: Id32,
+    order_index: u8,
+) -> Result<(crate::StreamedOwnerBlindOrderV5, Id32), SettlementAdapterErrorV1> {
+    if owner.is_zero() || traversal.selected_fill(order_index)? == 0 {
+        return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
+    }
+    let row = traversal
+        .order(order_index)?
+        .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+    if row.membership().owner() != owner {
+        return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
+    }
+    let feed = traversal.projection().feed();
+    let reservation = canonical_reservation_id_v9(
+        LayoutHash32(feed.market.bytes()),
+        LayoutHash32(feed.epoch.bytes()),
+        LayoutHash32(owner.bytes()),
+        row.position_generation(),
+        LayoutHash32(row.membership().order_id().bytes()),
+    );
+    Ok((row, Id32::new(reservation.bytes())?))
+}
+
+/// Derive the canonical signed-Reservation identity for one filled order in
+/// an authenticated owner basis.
+///
+/// This bounded locator reads only the frozen order row and selected fill; it
+/// does not reconstruct settlement membership or scan the slice tail.
+pub fn derive_owner_fee_reservation_id_v2(
+    traversal: &dyn SettlementTraversalAccessV5,
+    owner: Id32,
+    order_index: u8,
+) -> Result<Id32, SettlementAdapterErrorV1> {
+    owner_fee_order_and_reservation_id_v2(traversal, owner, order_index)
+        .map(|(_, reservation)| reservation)
+}
+
+/// Recompute one signed fee envelope from the same frozen order row that owns
+/// its selected fill.
+///
+/// The Reservation is not accepted as an independent statement of its cash
+/// or Egg capacity. Its complete pristine envelope is rederived from the
+/// authenticated page slot, retained Feed width/scale, and signed fee cap.
+/// The live adapter remains responsible for the account owner, canonical PDA,
+/// stored bump, and meta permissions.
+pub fn derive_owner_fee_envelope_v2(
+    traversal: &dyn SettlementTraversalAccessV5,
+    owner: Id32,
+    order_index: u8,
+    reservation: ReservationAccountV9,
+) -> Result<FeeEnvelopeV1, SettlementAdapterErrorV1> {
+    reservation.validate()?;
+    let body = reservation.body();
+    let (row, expected_reservation) =
+        owner_fee_order_and_reservation_id_v2(traversal, owner, order_index)?;
+    let feed = traversal.projection().feed();
+    let expected_plan = ReservationPlan::for_order(
+        row.membership().slot(),
+        feed.outcome_count,
+        feed.price_scale,
+        body.max_fee_atoms,
+    )?;
+    let (side, order_kind, funding) = match (
+        row.economic_order().side,
+        row.membership().kind(),
+    ) {
+        (Side::Buy, crate::FrozenOrderKindV1::Single) => (
+            0u8,
+            ORDER_KIND_SINGLE,
+            FeeEnvelopeFundingV1::BuyCashReservation,
+        ),
+        (Side::Buy, crate::FrozenOrderKindV1::Portfolio) => (
+            0u8,
+            ORDER_KIND_PORTFOLIO,
+            FeeEnvelopeFundingV1::BuyCashReservation,
+        ),
+        (Side::Sell, crate::FrozenOrderKindV1::Single) => (
+            1u8,
+            ORDER_KIND_SINGLE,
+            FeeEnvelopeFundingV1::NoCashReservation,
+        ),
+        (Side::Sell, crate::FrozenOrderKindV1::Portfolio) => (
+            1u8,
+            ORDER_KIND_PORTFOLIO,
+            FeeEnvelopeFundingV1::NoCashReservation,
+        ),
+    };
+    if body.reservation.bytes() != expected_reservation.bytes()
+        || body.market.bytes() != feed.market.bytes()
+        || body.epoch.bytes() != feed.epoch.bytes()
+        || body.owner.bytes() != owner.bytes()
+        || body.order_id.bytes() != row.membership().order_id().bytes()
+        || body.price_grid.bytes() != traversal.projection().price_grid_id().bytes()
+        || body.terms.bytes() != traversal.projection().terms().bytes()
+        || body.policy.bytes() != traversal.projection().reservation_policy().bytes()
+        || body.position_generation != row.position_generation()
+        || body.order_generation != row.membership().generation()
+        || body.page_index != row.page_index()
+        || body.outcome_count != feed.outcome_count
+        || body.side != side
+        || body.order_kind != order_kind
+        || body.state != RESERVATION_STATE_ACTIVE
+        || !pristine_fee_envelope_matches_plan(
+            body.initial_cash_atoms,
+            body.remaining_cash_atoms,
+            body.max_fee_atoms,
+            &body.initial_internal,
+            &body.remaining_internal,
+            expected_plan,
+        )
+        || body.release_generation != 0
+        || body.entitled_units != 0
+        || body.consumed_units != 0
+        || body.paid_units != 0
+        || body.fee_debited_atoms != 0
+        || body.fee_carry_numerator != 0
+    {
+        return Err(SettlementAdapterErrorV1::ReservationSetMismatch);
+    }
+    Ok(FeeEnvelopeV1 {
+        owner: FeeId(owner.bytes()),
+        intent: FeeId(expected_reservation.bytes()),
+        funding,
+        max_fee_atoms: body.max_fee_atoms,
+        debited_atoms: 0,
     })
 }
 
@@ -861,5 +1067,45 @@ mod tests {
         assert_eq!(payoff, [0u64; MAX_OUTCOMES]);
         assert!(!has_buy);
         assert!(!has_sell);
+    }
+
+    #[test]
+    fn signed_fee_envelope_cannot_replace_the_frozen_order_plan() {
+        let mut internal = [0u64; MAX_OUTCOMES];
+        internal[1] = 17;
+        let expected = ReservationPlan {
+            cash_atoms: 31,
+            internal,
+            max_fee_atoms: 7,
+            outcome_count: 2,
+            order_kind: ORDER_KIND_PORTFOLIO,
+            side: 0,
+        };
+        assert!(pristine_fee_envelope_matches_plan(
+            31,
+            31,
+            7,
+            &internal,
+            &internal,
+            expected,
+        ));
+        assert!(!pristine_fee_envelope_matches_plan(
+            30,
+            30,
+            7,
+            &internal,
+            &internal,
+            expected,
+        ));
+        let mut substituted = internal;
+        substituted[1] = 18;
+        assert!(!pristine_fee_envelope_matches_plan(
+            31,
+            31,
+            7,
+            &substituted,
+            &substituted,
+            expected,
+        ));
     }
 }

@@ -1,12 +1,12 @@
 //! Current counted-root fee-bearing owner evidence for General settlement.
 //!
-//! This module authenticates the immutable selected fee record, terminal
-//! owner carry, persisted payer-allocation snapshot, and both policy
-//! preimages before entering the fee semantic owner's V4 projection. It then
-//! composes those facts with the canonical counted-root V5 row, Position,
-//! Replay prestate, and cash-pot realization. It does not freeze General's
-//! positional account ABI or perform writes; the General handler owns the
-//! atomic account mutation and root-counter capability.
+//! This module authenticates the immutable selected fee record and both policy
+//! preimages, derives each owner's terminal fee from the retained traversal,
+//! and authenticates the exhaustive signed Reservation-envelope set before
+//! action 24 can create the rent-owned carry and payer snapshot. Action 38
+//! later hostile-reauthenticates those exact accounts before entering the fee
+//! semantic owner's V4 projection. The General handlers remain the only
+//! atomic account writers and root-counter capabilities.
 //!
 //! The returned evidence proves fee selection and payer allocation only.  In
 //! particular it proves no current Reservation balance, Position cash,
@@ -29,11 +29,15 @@ use clutch_fee_runtime_contract::intent::{
     FeeRecordAccountIdV1, OwnerFeeCarryAccountIdV1, OwnerFeeTransitionIntentV1,
     OwnerSettlementAccountIdV1, PayerAllocationAccountIdV1,
 };
-use clutch_fee_runtime_contract::projection::{
-    project_pre_row_owner_fee_v4, reauthenticate_persisted_payer_allocation_snapshot_v1,
-    AuthenticatedSelectedOwnerFeeV4, CertifiedRecipientAllocationV2,
+use clutch_fee_runtime_contract::allocation::{
+    allocate_payer_debit_into, FeeEnvelopeFundingV1, FeeEnvelopeV1, PayerAllocationV1,
 };
-use clutch_fee_runtime_contract::Id as FeeId;
+use clutch_fee_runtime_contract::projection::{
+    authenticate_created_payer_allocation_snapshot_v1, project_pre_row_owner_fee_v4,
+    reauthenticate_persisted_payer_allocation_snapshot_v1, AuthenticatedSelectedOwnerFeeV4,
+    CertifiedRecipientAllocationV2,
+};
+use clutch_fee_runtime_contract::{Id as FeeId, MAX_FEE_ROWS_V1};
 use clutch_fee_runtime_contract::selected::{SelectedCompositeFeeV1, SelectedCompositeFeeV2};
 use clutch_fee_runtime_contract::terminal::{
     CandidateFeeAccountRoleV1, ExternalFeeAccountClosureV1, FeeTerminalOutcomeV1,
@@ -41,7 +45,7 @@ use clutch_fee_runtime_contract::terminal::{
 };
 use clutch_general_v2_contract::{
     fee_runtime_semantic_release_id_v1, fee_runtime_semantic_release_id_v2,
-    payer_allocation_account_data_id_v1,
+    payer_allocation_account_data_id_v2,
     prepare_owner_fee_rent_transition_v3, project_general_replay_transition_v1,
     recipient_allocation_account_data_id_v2,
     FeeLamportTransferV2,
@@ -59,7 +63,9 @@ use clutch_general_v2_contract::{
     SELECTED_FEE_RECORD_ACCOUNT_BYTES, SELECTED_FEE_RECORD_ACCOUNT_BYTES_V2,
 };
 use clutch_general_v2_runtime::{
-    derive_root_owner_basis_v4, derive_settlement_root_expectation_from_certified_fee_v2,
+    derive_owner_fee_envelope_v2, derive_owner_terminal_composite_fee_v2,
+    derive_owner_fee_reservation_id_v2, derive_root_owner_basis_v4,
+    derive_settlement_root_expectation_from_certified_fee_v2,
     derive_zero_fee_owner_finalization_evidence_v5, prepare_realize_owner_cash_v5,
     project_owner_settlement_account_v5, CandidateEntitlementProjectionV5,
     OwnerCashRealizationPlanV5, OwnerRowFeeEvidenceV5, OwnerSettlementAccountProjectionV5,
@@ -72,12 +78,17 @@ use clutch_owner_settlement::{
 };
 use clutch_retirement::{PositionV3Sha256Backend, ReplayV3HashBackend};
 use clutch_solana_layout::revenue::{RevenuePolicyRecordV1, REVENUE_POLICY_RECORD_BYTES};
+use clutch_solana_layout::reservation_v9::{
+    ReservationAccountV9, RESERVATION_ACCOUNT_BYTES_V9,
+};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
+use std::boxed::Box;
 
 use crate::accounts::{expect_pda, require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::general_v2_settlement_root::AuthenticatedGeneralSettlementRootV1;
+use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
 use crate::seeds;
 
 use super::revenue_policy_v2::{
@@ -86,6 +97,8 @@ use super::revenue_policy_v2::{
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimeSha256;
+
+const _: () = assert!(MAX_FEE_ROWS_V1 == clutch_owner_settlement::MAX_ORDERS);
 
 impl Sha256BackendV1 for RuntimeSha256 {
     fn sha256(&self, parts: &[&[u8]]) -> [u8; 32] {
@@ -127,6 +140,29 @@ pub(crate) struct OwnerFeeSnapshotAccountFrameV5<'a, 'info> {
     pub realm: &'a AccountInfo<'info>,
     /// Untrusted carrier of the exact RevenuePolicyV2 preimage.
     pub revenue_policy_preimage: &'a AccountInfo<'info>,
+}
+
+/// Fresh action-24 owner-fee accounts plus the exhaustive reservation source.
+///
+/// The endpoint Reservation is already a fixed action-24 role. Every other
+/// filled order for this owner appears exactly once in `other_reservations`,
+/// in canonical Reservation-identity order with the endpoint omitted. The
+/// constructor independently derives that order from the retained Feed/page
+/// traversal and refuses omissions, extras, duplicates, or reordering.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct OwnerFeeCreationAccountFrameV5<'a, 'info> {
+    /// Common current fee accounts and the two fresh PDA targets.
+    pub snapshot: OwnerFeeSnapshotAccountFrameV5<'a, 'info>,
+    /// Dense frozen-order index of the fixed endpoint Reservation.
+    pub endpoint_order_index: u8,
+    /// The fixed writable endpoint Reservation already used by action 24.
+    pub endpoint_reservation: &'a AccountInfo<'info>,
+    /// Read-only Reservations for every other filled order of this owner.
+    pub other_reservations: &'a [AccountInfo<'info>],
+    /// Exact separately funded rent owner for the fresh carry.
+    pub carry_rent: DeletableRentOwnerV1,
+    /// Exact separately funded rent owner for the fresh payer snapshot.
+    pub payer_rent: DeletableRentOwnerV1,
 }
 
 /// Named native-rent accounts used only by fee-bearing action 38.
@@ -504,8 +540,8 @@ impl PreparedCandidateFeeCollectionClosureV5 {
 /// Presence-explicit fee account input selected only from the counted root.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum OwnerFeeAccountInputV5<'a, 'info> {
-    /// A live root fee record requires the complete real account graph and its
-    /// registered revenue-policy preimage.
+    /// Action 38's live root fee record requires the complete persisted
+    /// account graph and its registered revenue-policy preimage.
     CandidateFee {
         /// Exact named fee account frame; no remaining-account tail.
         frame: OwnerFeeSnapshotAccountFrameV5<'a, 'info>,
@@ -514,13 +550,17 @@ pub(crate) enum OwnerFeeAccountInputV5<'a, 'info> {
     NoFeeRecord,
 }
 
-/// How the caller will use the authenticated snapshot accounts.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OwnerFeeSnapshotUseV5 {
-    /// Action 24 reads the terminal fee snapshot while creating a row.
-    Materialize,
-    /// Action 38 consumes the payer snapshot and transitions the carry.
-    Finalize,
+/// Presence-explicit action-24 input for atomic owner-fee snapshot creation.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum OwnerFeeAction24InputV5<'a, 'info> {
+    /// The counted root names a live current fee record, so both rent-owned
+    /// per-owner PDAs must be absent and created in this instruction.
+    CandidateFee {
+        /// Exact current fee graph and exhaustive signed Reservation envelope set.
+        frame: OwnerFeeCreationAccountFrameV5<'a, 'info>,
+    },
+    /// The counted root has canonical fee absence and no fee accounts appear.
+    NoFeeRecord,
 }
 
 /// Root/traversal-derived immutable owner facts.
@@ -619,11 +659,34 @@ pub(crate) enum PreparedOwnerFeeEvidenceV5 {
 }
 
 /// Root-bound allocation-only result for one action-24 V5 row creation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct PreparedOwnerFeeAction24V5 {
     owner_row_seed: OwnerSettlementSeedTupleV5,
     owner_row_bump: u8,
-    evidence: PreparedOwnerFeeEvidenceV5,
+    row_fee_evidence: OwnerRowFeeEvidenceV5,
+    creation: Option<PreparedOwnerFeeCreationV5>,
+}
+
+/// Exact bytes and rent bindings for action 24's two fresh per-owner accounts.
+///
+/// The maximum-width payer body lives on the heap; this capability therefore
+/// crosses the SBF composer as two pointers rather than a 2.7-KiB by-value
+/// account object. Fields stay private so no caller can substitute bytes after
+/// the signed Reservation envelope set has been authenticated.
+#[derive(Debug)]
+pub(crate) struct PreparedOwnerFeeCreationV5 {
+    selected: SelectedCompositeFeeV2,
+    fee_record: Id32,
+    owner: Id32,
+    carry_account: Id32,
+    payer_allocation_account: Id32,
+    carry_bump: u8,
+    payer_bump: u8,
+    carry_rent: DeletableRentOwnerV1,
+    payer_rent: DeletableRentOwnerV1,
+    payer_data_id: Id32,
+    carry_body: Box<[u8; OWNER_FEE_CARRY_ACCOUNT_BYTES_V3]>,
+    payer_body: Box<[u8; PAYER_ALLOCATION_ACCOUNT_BYTES_V2]>,
 }
 
 /// Root-bound authenticated V5 owner-row/fee prestate for action 38.
@@ -759,20 +822,42 @@ impl PreparedOwnerFeeAction24V5 {
         self.owner_row_bump
     }
 
-    /// Exact root/policy/payer evidence with an explicit no-fee branch.
-    pub const fn evidence(&self) -> PreparedOwnerFeeEvidenceV5 {
-        self.evidence
-    }
-
     /// Dependency-ready input for the pure General row materializer.
     pub const fn owner_row_fee_evidence(&self) -> OwnerRowFeeEvidenceV5 {
-        match self.evidence {
-            PreparedOwnerFeeEvidenceV5::CandidateFee(value) => {
-                OwnerRowFeeEvidenceV5::CandidateFee(value.selected_fee())
-            }
-            PreparedOwnerFeeEvidenceV5::NoFeeRecord(_) => OwnerRowFeeEvidenceV5::NoFeeRecord,
-        }
+        self.row_fee_evidence
     }
+
+    /// Borrow the exact fresh-account write capability, when fees are present.
+    pub const fn creation(&self) -> Option<&PreparedOwnerFeeCreationV5> {
+        self.creation.as_ref()
+    }
+}
+
+impl PreparedOwnerFeeCreationV5 {
+    /// Exact selected semantic required to hostile-decode the carry postwrite.
+    pub const fn selected(&self) -> SelectedCompositeFeeV2 { self.selected }
+    /// Selected fee-record identity owning both per-owner PDAs.
+    pub const fn fee_record(&self) -> Id32 { self.fee_record }
+    /// Traversal-derived semantic owner.
+    pub const fn owner(&self) -> Id32 { self.owner }
+    /// Fresh carry PDA.
+    pub const fn carry_account(&self) -> Id32 { self.carry_account }
+    /// Fresh payer-allocation PDA.
+    pub const fn payer_allocation_account(&self) -> Id32 { self.payer_allocation_account }
+    /// Canonical carry bump.
+    pub const fn carry_bump(&self) -> u8 { self.carry_bump }
+    /// Canonical payer-allocation bump.
+    pub const fn payer_bump(&self) -> u8 { self.payer_bump }
+    /// Exact separately funded carry rent owner.
+    pub const fn carry_rent(&self) -> DeletableRentOwnerV1 { self.carry_rent }
+    /// Exact separately funded payer-snapshot rent owner.
+    pub const fn payer_rent(&self) -> DeletableRentOwnerV1 { self.payer_rent }
+    /// Exact full-data identity of the payer postwrite.
+    pub const fn payer_data_id(&self) -> Id32 { self.payer_data_id }
+    /// Canonical current carry outer bytes.
+    pub fn carry_body(&self) -> &[u8] { &*self.carry_body }
+    /// Canonical current payer-allocation outer bytes.
+    pub fn payer_body(&self) -> &[u8] { &*self.payer_body }
 }
 
 impl PreparedOwnerFeeEvidenceV5 {
@@ -1522,12 +1607,11 @@ fn prepare_candidate_fee_collection_terminal_close_v5(
 }
 
 #[inline(never)]
-fn authenticate_owner_fee_snapshot_v5(
+fn authenticate_owner_fee_common_v5(
     program_id: &Pubkey,
     context: RootDerivedOwnerFeeContextV5<'_>,
     frame: OwnerFeeSnapshotAccountFrameV5<'_, '_>,
-    usage: OwnerFeeSnapshotUseV5,
-) -> Outcome<PreparedOwnerFeeSnapshotV5> {
+) -> Outcome<SelectedCompositeFeeV2> {
     require_distinct_frame(context.root_account, &frame)?;
     require(
         !frame.revenue_policy_preimage.is_writable
@@ -1549,20 +1633,6 @@ fn authenticate_owner_fee_snapshot_v5(
         SELECTED_FEE_RECORD_ACCOUNT_BYTES_V2,
     )?;
     require_read_only_program_state(program_id, frame.batch_policy, BATCH_POLICY_BYTES)?;
-    let snapshot_writable = usage == OwnerFeeSnapshotUseV5::Finalize;
-    require_snapshot_state(
-        program_id,
-        frame.owner_fee_carry,
-        OWNER_FEE_CARRY_ACCOUNT_BYTES_V3,
-        snapshot_writable,
-    )?;
-    require_snapshot_state(
-        program_id,
-        frame.payer_allocation,
-        PAYER_ALLOCATION_ACCOUNT_BYTES_V2,
-        snapshot_writable,
-    )?;
-
     let batch = decode_batch_policy(&borrow_data(frame.batch_policy)?)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let batch_id = batch_policy_digest(&batch)
@@ -1639,6 +1709,28 @@ fn authenticate_owner_fee_snapshot_v5(
             outcome_count: context.root.outcome_count(),
         },
     )?;
+    Ok(selected)
+}
+
+#[inline(never)]
+fn authenticate_owner_fee_snapshot_v5(
+    program_id: &Pubkey,
+    context: RootDerivedOwnerFeeContextV5<'_>,
+    frame: OwnerFeeSnapshotAccountFrameV5<'_, '_>,
+) -> Outcome<PreparedOwnerFeeSnapshotV5> {
+    let selected = authenticate_owner_fee_common_v5(program_id, context, frame)?;
+    require_snapshot_state(
+        program_id,
+        frame.owner_fee_carry,
+        OWNER_FEE_CARRY_ACCOUNT_BYTES_V3,
+        true,
+    )?;
+    require_snapshot_state(
+        program_id,
+        frame.payer_allocation,
+        PAYER_ALLOCATION_ACCOUNT_BYTES_V2,
+        true,
+    )?;
 
     let carry_account = OwnerFeeCarryV3AccountV1::decode(
         &borrow_data(frame.owner_fee_carry)?,
@@ -1699,14 +1791,14 @@ fn authenticate_owner_fee_snapshot_v5(
         )))?,
     ))?;
     let payer_data = borrow_data(frame.payer_allocation)?;
-    let payer_data_id = payer_allocation_account_data_id_v1(&payer_data, &RuntimeSha256)?;
+    let payer_data_id = payer_allocation_account_data_id_v2(&payer_data, &RuntimeSha256)?;
     drop(payer_data);
     let snapshot = map_fee(reauthenticate_persisted_payer_allocation_snapshot_v1(
         &selected,
         &transition,
         &carry_account.semantic,
         &payer_account.semantic,
-        payer_data_id,
+        FeeId(payer_data_id.bytes()),
     ))?;
     let selected_fee = map_fee(project_pre_row_owner_fee_v4(
         &selected,
@@ -1731,11 +1823,360 @@ fn authenticate_owner_fee_snapshot_v5(
     })
 }
 
+const EMPTY_FEE_ENVELOPE_V1: FeeEnvelopeV1 = FeeEnvelopeV1 {
+    owner: FeeId([0; 32]),
+    intent: FeeId([0; 32]),
+    funding: FeeEnvelopeFundingV1::NoCashReservation,
+    max_fee_atoms: 0,
+    debited_atoms: 0,
+};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct OwnerFeeReservationLocatorV5 {
+    reservation: [u8; 32],
+    order_index: u8,
+}
+
+const EMPTY_OWNER_FEE_RESERVATION_LOCATOR_V5: OwnerFeeReservationLocatorV5 =
+    OwnerFeeReservationLocatorV5 {
+        reservation: [0; 32],
+        order_index: 0,
+    };
+
+#[inline(never)]
+fn boxed_empty_fee_envelopes_v1() -> Outcome<Box<[FeeEnvelopeV1; MAX_FEE_ROWS_V1]>> {
+    static EMPTY: [FeeEnvelopeV1; MAX_FEE_ROWS_V1] =
+        [EMPTY_FEE_ENVELOPE_V1; MAX_FEE_ROWS_V1];
+    super::orders_batch::boxed_copy_of(&EMPTY)
+}
+
+#[inline(never)]
+fn boxed_empty_owner_fee_reservation_locators_v5(
+) -> Outcome<Box<[OwnerFeeReservationLocatorV5; MAX_FEE_ROWS_V1]>> {
+    static EMPTY: [OwnerFeeReservationLocatorV5; MAX_FEE_ROWS_V1] =
+        [EMPTY_OWNER_FEE_RESERVATION_LOCATOR_V5; MAX_FEE_ROWS_V1];
+    super::orders_batch::boxed_copy_of(&EMPTY)
+}
+
+#[inline(never)]
+fn boxed_zero_carry_body_v3() -> Outcome<Box<[u8; OWNER_FEE_CARRY_ACCOUNT_BYTES_V3]>> {
+    static ZERO: [u8; OWNER_FEE_CARRY_ACCOUNT_BYTES_V3] =
+        [0; OWNER_FEE_CARRY_ACCOUNT_BYTES_V3];
+    super::orders_batch::boxed_copy_of(&ZERO)
+}
+
+#[inline(never)]
+fn boxed_zero_payer_body_v2() -> Outcome<Box<[u8; PAYER_ALLOCATION_ACCOUNT_BYTES_V2]>> {
+    static ZERO: [u8; PAYER_ALLOCATION_ACCOUNT_BYTES_V2] =
+        [0; PAYER_ALLOCATION_ACCOUNT_BYTES_V2];
+    super::orders_batch::boxed_copy_of(&ZERO)
+}
+
+#[inline(never)]
+fn boxed_empty_payer_allocation_v1() -> Outcome<Box<PayerAllocationV1>> {
+    static EMPTY: PayerAllocationV1 = PayerAllocationV1::output_scratch();
+    super::orders_batch::boxed_copy_of(&EMPTY)
+}
+
+fn require_fresh_fee_target_v5(
+    target: &AccountInfo<'_>,
+    rent: DeletableRentOwnerV1,
+    root_account: Id32,
+) -> Outcome<()> {
+    rent.validate()?;
+    require(
+        target.owner == &SYSTEM_PROGRAM_ID
+            && target.data_len() == 0
+            && target.is_writable
+            && !target.is_signer
+            && !target.executable
+            && rent.payer != id(target.key)
+            && rent.payer != root_account
+            && rent.refundable_principal != 0
+            && rent.donation_floor == target.lamports(),
+        ClutchError::AccountCreationFailed,
+    )
+}
+
+fn filled_owner_order_indices_v5(
+    basis: OwnerSettlementExpectationBasisV4,
+    endpoint_order_index: u8,
+) -> Outcome<([u8; MAX_FEE_ROWS_V1], u8)> {
+    filled_owner_order_indices_from_masks_v5(
+        basis.expected_buy_order_mask(),
+        basis.expected_sell_order_mask(),
+        endpoint_order_index,
+    )
+}
+
+fn filled_owner_order_indices_from_masks_v5(
+    buy_mask: u64,
+    sell_mask: u64,
+    endpoint_order_index: u8,
+) -> Outcome<([u8; MAX_FEE_ROWS_V1], u8)> {
+    require(buy_mask & sell_mask == 0, ClutchError::MismatchedState)?;
+    let mask = buy_mask | sell_mask;
+    require(
+        mask != 0
+            && usize::from(endpoint_order_index) < MAX_FEE_ROWS_V1
+            && mask & (1u64 << endpoint_order_index) != 0,
+        ClutchError::MismatchedState,
+    )?;
+    let mut indices = [0u8; MAX_FEE_ROWS_V1];
+    let mut len = 0usize;
+    let mut order_index = 0u8;
+    while usize::from(order_index) < MAX_FEE_ROWS_V1 {
+        if mask & (1u64 << order_index) != 0 {
+            indices[len] = order_index;
+            len += 1;
+        }
+        order_index = order_index
+            .checked_add(1)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    }
+    let len = u8::try_from(len).map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    Ok((indices, len))
+}
+
+#[inline(never)]
+fn authenticate_owner_fee_envelopes_v5(
+    program_id: &Pubkey,
+    context: RootDerivedOwnerFeeContextV5<'_>,
+    traversal: &dyn SettlementTraversalAccessV5,
+    frame: &OwnerFeeCreationAccountFrameV5<'_, '_>,
+) -> Outcome<(Box<[FeeEnvelopeV1; MAX_FEE_ROWS_V1]>, u8)> {
+    let (indices, envelope_len) =
+        filled_owner_order_indices_v5(context.basis, frame.endpoint_order_index)?;
+    require(
+        frame.other_reservations.len()
+            == usize::from(envelope_len)
+                .checked_sub(1)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+        ClutchError::WrongAccountCount,
+    )?;
+
+    // Project one Reservation identity per filled order into a heap-resident
+    // compact locator table, then sort the table without rescanning the
+    // retained pages/slices inside insertion-sort comparisons. The later
+    // semantic pass reauthenticates each complete Reservation envelope.
+    let mut locators = boxed_empty_owner_fee_reservation_locators_v5()?;
+    let mut index = 0usize;
+    while index < usize::from(envelope_len) {
+        let order_index = indices[index];
+        let reservation = derive_owner_fee_reservation_id_v2(
+            traversal,
+            Id32::from_bytes(context.basis.owner()),
+            order_index,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let current = OwnerFeeReservationLocatorV5 {
+            reservation: reservation.bytes(),
+            order_index,
+        };
+        let mut insert = index;
+        while insert > 0 {
+            let previous = locators[insert - 1];
+            if previous.reservation < current.reservation {
+                break;
+            }
+            require(
+                previous.reservation != current.reservation,
+                ClutchError::AccountAlias,
+            )?;
+            locators[insert] = previous;
+            insert -= 1;
+        }
+        locators[insert] = current;
+        index += 1;
+    }
+
+    let mut envelopes = boxed_empty_fee_envelopes_v1()?;
+    let mut other_at = 0usize;
+    index = 0;
+    while index < usize::from(envelope_len) {
+        let locator = locators[index];
+        let order_index = locator.order_index;
+        let account = if order_index == frame.endpoint_order_index {
+            frame.endpoint_reservation
+        } else {
+            let account = frame
+                .other_reservations
+                .get(other_at)
+                .ok_or(Refusal::Adapter(ClutchError::WrongAccountCount))?;
+            other_at = other_at
+                .checked_add(1)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+            require(!account.is_writable, ClutchError::UnexpectedWritable)?;
+            account
+        };
+        require(
+            account.owner == program_id
+                && !account.is_signer
+                && !account.executable
+                && account.data_len() == RESERVATION_ACCOUNT_BYTES_V9,
+            ClutchError::MismatchedState,
+        )?;
+        let reservation = ReservationAccountV9::decode(&borrow_data(account)?)?;
+        let body = reservation.body();
+        let reservation_rent = reservation.rent();
+        let accounted_rent = reservation_rent
+            .refundable_principal
+            .checked_add(reservation_rent.donation_floor)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        let envelope = derive_owner_fee_envelope_v2(
+            traversal,
+            Id32::from_bytes(context.basis.owner()),
+            order_index,
+            reservation,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let expected_pda =
+            seeds::general_v2_reservation_v9_pda(program_id, &envelope.intent.0);
+        require(
+            *account.key == expected_pda.0
+                && body.stored_bump == expected_pda.1
+                && body.reservation.bytes() == locator.reservation
+                && envelope.intent.0 == locator.reservation
+                && account.lamports() >= accounted_rent,
+            ClutchError::MismatchedState,
+        )?;
+        envelopes[index] = envelope;
+        index += 1;
+    }
+    require(
+        other_at == frame.other_reservations.len(),
+        ClutchError::WrongAccountCount,
+    )?;
+    Ok((envelopes, envelope_len))
+}
+
+#[inline(never)]
+fn prepare_created_owner_fee_snapshot_v5(
+    program_id: &Pubkey,
+    context: RootDerivedOwnerFeeContextV5<'_>,
+    traversal: &dyn SettlementTraversalAccessV5,
+    frame: OwnerFeeCreationAccountFrameV5<'_, '_>,
+) -> Outcome<(AuthenticatedSelectedOwnerFeeV4, PreparedOwnerFeeCreationV5)> {
+    let selected = authenticate_owner_fee_common_v5(program_id, context, frame.snapshot)?;
+    require_fresh_fee_target_v5(
+        frame.snapshot.owner_fee_carry,
+        frame.carry_rent,
+        context.root_account,
+    )?;
+    require_fresh_fee_target_v5(
+        frame.snapshot.payer_allocation,
+        frame.payer_rent,
+        context.root_account,
+    )?;
+    require(
+        frame.carry_rent.payer == frame.payer_rent.payer,
+        ClutchError::MismatchedState,
+    )?;
+
+    let owner = Id32::new(context.basis.owner())?;
+    let carry_pda = seeds::general_v2_owner_fee_carry_pda(
+        program_id,
+        &selected.fee_record().0,
+        &owner.bytes(),
+    );
+    let payer_pda = seeds::general_v2_payer_allocation_pda(
+        program_id,
+        &selected.fee_record().0,
+        &owner.bytes(),
+    );
+    expect_pda(frame.snapshot.owner_fee_carry.key, carry_pda, None)?;
+    expect_pda(frame.snapshot.payer_allocation.key, payer_pda, None)?;
+
+    let (envelopes, envelope_len) =
+        authenticate_owner_fee_envelopes_v5(program_id, context, traversal, &frame)?;
+    let (carry, assessment) = derive_owner_terminal_composite_fee_v2(
+        traversal,
+        &selected,
+        owner,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let mut payer = boxed_empty_payer_allocation_v1()?;
+    map_fee(allocate_payer_debit_into(
+        &assessment,
+        &envelopes,
+        envelope_len,
+        &mut *payer,
+    ))?;
+    let carry_account = OwnerFeeCarryV3AccountV1 {
+        semantic: carry,
+        rent: frame.carry_rent,
+        stored_bump: carry_pda.1,
+    };
+    let mut carry_body = boxed_zero_carry_body_v3()?;
+    carry_account.encode(&mut *carry_body)?;
+    let mut payer_body = boxed_zero_payer_body_v2()?;
+    clutch_general_v2_contract::encode_payer_allocation_v2_account_from_ref(
+        &*payer,
+        frame.payer_rent,
+        payer_pda.1,
+        &mut *payer_body,
+    )?;
+    let payer_data_id = payer_allocation_account_data_id_v2(&*payer_body, &RuntimeSha256)?;
+    let transition = map_fee(OwnerFeeTransitionIntentV1::bind(
+        &selected,
+        FeeId(owner.bytes()),
+        map_fee(FeeRecordAccountIdV1::admit(fee_id(
+            frame.snapshot.selected_fee_record.key,
+        )))?,
+        map_fee(OwnerFeeCarryAccountIdV1::admit(fee_id(
+            frame.snapshot.owner_fee_carry.key,
+        )))?,
+        map_fee(PayerAllocationAccountIdV1::admit(fee_id(
+            frame.snapshot.payer_allocation.key,
+        )))?,
+        map_fee(OwnerSettlementAccountIdV1::admit(fee_id(
+            frame.snapshot.owner_row.key,
+        )))?,
+    ))?;
+    let snapshot = map_fee(authenticate_created_payer_allocation_snapshot_v1(
+        &selected,
+        &transition,
+        &carry,
+        &assessment,
+        &*payer,
+        &envelopes,
+        envelope_len,
+        FeeId(payer_data_id.bytes()),
+    ))?;
+    let selected_fee = map_fee(project_pre_row_owner_fee_v4(
+        &selected,
+        fee_id(frame.snapshot.owner_row.key),
+        context.basis,
+        snapshot,
+    ))?;
+    require(
+        selected_fee.expectation().owner_order_set_digest()
+            == context.root.owner_order_set_digest().bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok((
+        selected_fee,
+        PreparedOwnerFeeCreationV5 {
+            selected,
+            fee_record: Id32::from_bytes(selected.fee_record().0),
+            owner,
+            carry_account: id(frame.snapshot.owner_fee_carry.key),
+            payer_allocation_account: id(frame.snapshot.payer_allocation.key),
+            carry_bump: carry_pda.1,
+            payer_bump: payer_pda.1,
+            carry_rent: frame.carry_rent,
+            payer_rent: frame.payer_rent,
+            payer_data_id,
+            carry_body,
+            payer_body,
+        },
+    ))
+}
+
 fn prepare_root_owner_fee_evidence_v5(
     program_id: &Pubkey,
     context: RootDerivedOwnerFeeContextV5<'_>,
     accounts: OwnerFeeAccountInputV5<'_, '_>,
-    usage: OwnerFeeSnapshotUseV5,
 ) -> Outcome<PreparedOwnerFeeEvidenceV5> {
     match accounts {
         OwnerFeeAccountInputV5::CandidateFee { frame } => Ok(PreparedOwnerFeeEvidenceV5::CandidateFee(
@@ -1743,7 +2184,6 @@ fn prepare_root_owner_fee_evidence_v5(
                 program_id,
                 context,
                 frame,
-                usage,
             )?,
         )),
         OwnerFeeAccountInputV5::NoFeeRecord => prepare_no_fee_owner_v5(context),
@@ -1764,7 +2204,7 @@ pub(crate) fn prepare_owner_fee_action24_v5(
     entitlement: &CandidateEntitlementProjectionV5<'_>,
     owner: Id32,
     owner_row: &AccountInfo<'_>,
-    fee_accounts: OwnerFeeAccountInputV5<'_, '_>,
+    fee_accounts: OwnerFeeAction24InputV5<'_, '_>,
 ) -> Outcome<PreparedOwnerFeeAction24V5> {
     require(
         authenticated_root.account() == entitlement.settlement_root_account()
@@ -1804,16 +2244,29 @@ pub(crate) fn prepare_owner_fee_action24_v5(
         basis,
         current_market_authority,
     )?;
-    let evidence = prepare_root_owner_fee_evidence_v5(
-        program_id,
-        context,
-        fee_accounts,
-        OwnerFeeSnapshotUseV5::Materialize,
-    )?;
+    let (row_fee_evidence, creation) = match fee_accounts {
+        OwnerFeeAction24InputV5::CandidateFee { frame } => {
+            let (selected_fee, creation) = prepare_created_owner_fee_snapshot_v5(
+                program_id,
+                context,
+                entitlement.traversal(),
+                frame,
+            )?;
+            (
+                OwnerRowFeeEvidenceV5::CandidateFee(selected_fee),
+                Some(creation),
+            )
+        }
+        OwnerFeeAction24InputV5::NoFeeRecord => {
+            prepare_no_fee_owner_v5(context)?;
+            (OwnerRowFeeEvidenceV5::NoFeeRecord, None)
+        }
+    };
     Ok(PreparedOwnerFeeAction24V5 {
         owner_row_seed,
         owner_row_bump: derived.1,
-        evidence,
+        row_fee_evidence,
+        creation,
     })
 }
 
@@ -1914,12 +2367,7 @@ pub(crate) fn prepare_owner_fee_action38_v5(
         basis,
         current_market_authority,
     )?;
-    let evidence = prepare_root_owner_fee_evidence_v5(
-        program_id,
-        context,
-        fee_accounts,
-        OwnerFeeSnapshotUseV5::Finalize,
-    )?;
+    let evidence = prepare_root_owner_fee_evidence_v5(program_id, context, fee_accounts)?;
     require(
         evidence.expectation() == expectation,
         ClutchError::MismatchedState,
@@ -2221,6 +2669,26 @@ mod tests {
             ),
             Err(Refusal::Adapter(ClutchError::MismatchedState))
         );
+    }
+
+    #[test]
+    fn lazy_fee_creation_requires_endpoint_in_disjoint_filled_masks() {
+        let (indices, len) =
+            filled_owner_order_indices_from_masks_v5((1 << 1) | (1 << 63), 1 << 9, 9)
+                .unwrap();
+        assert_eq!(len, 3);
+        assert_eq!(&indices[..3], &[1, 9, 63]);
+        assert!(filled_owner_order_indices_from_masks_v5(1 << 1, 1 << 1, 1).is_err());
+        assert!(filled_owner_order_indices_from_masks_v5(1 << 1, 0, 2).is_err());
+        assert!(filled_owner_order_indices_from_masks_v5(0, 0, 0).is_err());
+    }
+
+    #[test]
+    fn current_payer_data_id_is_width_and_version_specific() {
+        let v2 = [0u8; PAYER_ALLOCATION_ACCOUNT_BYTES_V2];
+        let historical = [0u8; clutch_general_v2_contract::PAYER_ALLOCATION_ACCOUNT_BYTES];
+        assert!(payer_allocation_account_data_id_v2(&v2, &RuntimeSha256).is_ok());
+        assert!(payer_allocation_account_data_id_v2(&historical, &RuntimeSha256).is_err());
     }
 
 }

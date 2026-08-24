@@ -561,40 +561,54 @@ pub fn encode_payer_allocation_v1(
     allocation: &PayerAllocationV1,
 ) -> Result<[u8; PAYER_ALLOCATION_ACCOUNT_V1_BYTES]> {
     let mut output = [0u8; PAYER_ALLOCATION_ACCOUNT_V1_BYTES];
+    encode_payer_allocation_v1_into(allocation, &mut output)?;
+    Ok(output)
+}
+
+/// Encode one canonical payer allocation directly into exact caller-owned
+/// storage.
+///
+/// This is the bounded-adapter form of [`encode_payer_allocation_v1`]; it
+/// avoids a maximum-width return value while preserving the identical wire
+/// transcript.
+pub fn encode_payer_allocation_v1_into(
+    allocation: &PayerAllocationV1,
+    output: &mut [u8],
+) -> Result<()> {
+    exact_len(output, PAYER_ALLOCATION_ACCOUNT_V1_BYTES)?;
     let mut cursor = 0usize;
-    put_header(&mut output, &mut cursor, PAYER_ALLOCATION_MAGIC_V1)?;
-    put(&mut output, &mut cursor, &allocation.fee_record().0)?;
-    put(&mut output, &mut cursor, &allocation.owner().0)?;
-    put(&mut output, &mut cursor, &[allocation.len()])?;
-    put(&mut output, &mut cursor, &[allocation.boundary().byte()])?;
-    put(&mut output, &mut cursor, &[0; 2])?;
+    put_header(output, &mut cursor, PAYER_ALLOCATION_MAGIC_V1)?;
+    put(output, &mut cursor, &allocation.fee_record().0)?;
+    put(output, &mut cursor, &allocation.owner().0)?;
+    put(output, &mut cursor, &[allocation.len()])?;
+    put(output, &mut cursor, &[allocation.boundary().byte()])?;
+    put(output, &mut cursor, &[0; 2])?;
     put(
-        &mut output,
+        output,
         &mut cursor,
         &allocation.total_debit_atoms().to_le_bytes(),
     )?;
     put(
-        &mut output,
+        output,
         &mut cursor,
         &allocation.next_carry().to_le_bytes(),
     )?;
     put(
-        &mut output,
+        output,
         &mut cursor,
         &allocation.carry_denominator().to_le_bytes(),
     )?;
     let mut index = 0usize;
     while index < MAX_FEE_ROWS_V1 {
-        put(&mut output, &mut cursor, &allocation.intents()[index].0)?;
+        put(output, &mut cursor, &allocation.intents()[index].0)?;
         put(
-            &mut output,
+            output,
             &mut cursor,
             &allocation.debit_atoms()[index].to_le_bytes(),
         )?;
         index += 1;
     }
-    finish(cursor, output.len())?;
-    Ok(output)
+    finish(cursor, output.len())
 }
 
 pub fn decode_payer_allocation_v1(
@@ -1153,8 +1167,8 @@ fn put_header(
     put_header_version(output, cursor, magic, CODEC_VERSION_V1)
 }
 
-fn put_header_version<const N: usize>(
-    output: &mut [u8; N],
+fn put_header_version(
+    output: &mut [u8],
     cursor: &mut usize,
     magic: [u8; 8],
     version: u16,

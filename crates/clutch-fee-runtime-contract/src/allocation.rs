@@ -52,6 +52,27 @@ pub struct PayerAllocationV1 {
 }
 
 impl PayerAllocationV1 {
+    /// Invalid all-zero storage used only as the destination of
+    /// [`allocate_payer_debit_into`].
+    ///
+    /// It is deliberately not a constructor for protocol state: strict
+    /// decoders and authenticated projections refuse the zero identities and
+    /// width, while the writer overwrites every field before returning
+    /// success.
+    pub const fn output_scratch() -> Self {
+        Self {
+            fee_record: Id([0; 32]),
+            owner: Id([0; 32]),
+            len: 0,
+            intents: [Id([0; 32]); MAX_FEE_ROWS_V1],
+            debit_atoms: [0; MAX_FEE_ROWS_V1],
+            total_debit_atoms: 0,
+            next_carry: 0,
+            carry_denominator: 0,
+            boundary: AssessmentBoundaryV1::FragmentFloor,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn restore_persisted(
         fee_record: Id,
@@ -161,6 +182,58 @@ pub fn allocate_payer_debit(
     envelopes: &[FeeEnvelopeV1; MAX_FEE_ROWS_V1],
     len: u8,
 ) -> Result<PayerAllocationV1> {
+    let mut output = PayerAllocationV1::output_scratch();
+    allocate_payer_debit_into(assessment, envelopes, len, &mut output)?;
+    Ok(output)
+}
+
+/// Allocate directly into caller-owned storage.
+///
+/// This is byte-for-byte the same canonical prefix allocation as
+/// [`allocate_payer_debit`]. It exists so bounded adapters can keep the
+/// maximum-width result in heap/account storage instead of materializing it in
+/// an SBF stack frame.
+pub fn allocate_payer_debit_into(
+    assessment: &OwnerFeeAssessmentV1,
+    envelopes: &[FeeEnvelopeV1; MAX_FEE_ROWS_V1],
+    len: u8,
+    output: &mut PayerAllocationV1,
+) -> Result<()> {
+    let (owner, fee_atoms) = validate_payer_debit_inputs(assessment, envelopes, len)?;
+    let mut index = 0usize;
+    while index < MAX_FEE_ROWS_V1 {
+        output.intents[index] = Id([0; 32]);
+        output.debit_atoms[index] = 0;
+        index += 1;
+    }
+    let mut remaining = fee_atoms;
+    index = 0;
+    while index < usize::from(len) {
+        let headroom = envelopes[index].max_fee_atoms - envelopes[index].debited_atoms;
+        let debit = core::cmp::min(headroom, remaining);
+        output.intents[index] = envelopes[index].intent;
+        output.debit_atoms[index] = debit;
+        remaining -= debit;
+        index += 1;
+    }
+    if remaining != 0 {
+        return Err(Error::ConservationFailure);
+    }
+    output.fee_record = assessment.fee_record();
+    output.owner = owner;
+    output.len = len;
+    output.total_debit_atoms = fee_atoms;
+    output.next_carry = assessment.next_carry();
+    output.carry_denominator = assessment.denominator();
+    output.boundary = assessment.boundary();
+    Ok(())
+}
+
+fn validate_payer_debit_inputs(
+    assessment: &OwnerFeeAssessmentV1,
+    envelopes: &[FeeEnvelopeV1; MAX_FEE_ROWS_V1],
+    len: u8,
+) -> Result<(Id, u64)> {
     let owner = assessment.owner();
     let fee_atoms = assessment.charged_atoms();
     live(assessment.fee_record())?;
@@ -203,33 +276,52 @@ pub fn allocate_payer_debit(
     if capacity < u128::from(fee_atoms) {
         return Err(Error::FeeEnvelopeExceeded);
     }
+    Ok((owner, fee_atoms))
+}
 
-    let mut intents = [Id([0u8; 32]); MAX_FEE_ROWS_V1];
-    let mut output = [0u64; MAX_FEE_ROWS_V1];
+/// Verify that an existing allocation is exactly the canonical prefix result
+/// for one assessment and signed-envelope set, without constructing another
+/// maximum-width allocation by value.
+pub fn verify_payer_debit(
+    allocation: &PayerAllocationV1,
+    assessment: &OwnerFeeAssessmentV1,
+    envelopes: &[FeeEnvelopeV1; MAX_FEE_ROWS_V1],
+    len: u8,
+) -> Result<()> {
+    let (owner, fee_atoms) = validate_payer_debit_inputs(assessment, envelopes, len)?;
+    if allocation.fee_record != assessment.fee_record()
+        || allocation.owner != owner
+        || allocation.len != len
+        || allocation.total_debit_atoms != fee_atoms
+        || allocation.next_carry != assessment.next_carry()
+        || allocation.carry_denominator != assessment.denominator()
+        || allocation.boundary != assessment.boundary()
+    {
+        return Err(Error::MismatchedBinding);
+    }
     let mut remaining = fee_atoms;
-    index = 0;
+    let mut index = 0usize;
     while index < usize::from(len) {
         let headroom = envelopes[index].max_fee_atoms - envelopes[index].debited_atoms;
         let debit = core::cmp::min(headroom, remaining);
-        intents[index] = envelopes[index].intent;
-        output[index] = debit;
+        if allocation.intents[index] != envelopes[index].intent
+            || allocation.debit_atoms[index] != debit
+        {
+            return Err(Error::MismatchedBinding);
+        }
         remaining -= debit;
         index += 1;
     }
     if remaining != 0 {
         return Err(Error::ConservationFailure);
     }
-    Ok(PayerAllocationV1 {
-        fee_record: assessment.fee_record(),
-        owner,
-        len,
-        intents,
-        debit_atoms: output,
-        total_debit_atoms: fee_atoms,
-        next_carry: assessment.next_carry(),
-        carry_denominator: assessment.denominator(),
-        boundary: assessment.boundary(),
-    })
+    while index < MAX_FEE_ROWS_V1 {
+        if allocation.intents[index] != Id([0; 32]) || allocation.debit_atoms[index] != 0 {
+            return Err(Error::NonCanonicalPadding);
+        }
+        index += 1;
+    }
+    Ok(())
 }
 
 /// One verified standing maker and its exact allocation weight.

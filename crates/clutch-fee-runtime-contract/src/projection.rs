@@ -10,7 +10,7 @@ use clutch_owner_settlement::{
 };
 
 use crate::allocation::{
-    allocate_payer_debit, allocate_recipients, allocate_recipients_from_weight_stream_v2,
+    allocate_recipients, allocate_recipients_from_weight_stream_v2, verify_payer_debit,
     FeeEnvelopeFundingV1, FeeEnvelopeV1, PayerAllocationV1, RecipientAllocationV1,
     StandingMakerRowV1,
 };
@@ -708,10 +708,7 @@ pub fn project_terminal_owner_fee_v1(
         return Err(Error::InvalidAccountData);
     }
 
-    let recomputed = allocate_payer_debit(assessment, envelopes, envelope_len)?;
-    if recomputed != *payer {
-        return Err(Error::MismatchedBinding);
-    }
+    verify_payer_debit(payer, assessment, envelopes, envelope_len)?;
 
     let mut post_debited_atoms = 0u128;
     let mut has_buy_envelope = false;
@@ -832,10 +829,7 @@ pub fn authenticate_created_payer_allocation_snapshot_v1<
     {
         return Err(Error::MismatchedBinding);
     }
-    let recomputed = allocate_payer_debit(assessment, envelopes, envelope_len)?;
-    if recomputed != *payer {
-        return Err(Error::MismatchedBinding);
-    }
+    verify_payer_debit(payer, assessment, envelopes, envelope_len)?;
     let mut cumulative_debit_atoms = 0u128;
     let mut has_buy_envelope = false;
     let mut index = 0usize;
@@ -1052,10 +1046,7 @@ pub fn project_pre_row_owner_fee_v2(
         return Err(Error::TerminalStateRequired);
     }
 
-    let recomputed = allocate_payer_debit(assessment, envelopes, envelope_len)?;
-    if recomputed != *payer {
-        return Err(Error::MismatchedBinding);
-    }
+    verify_payer_debit(payer, assessment, envelopes, envelope_len)?;
 
     let has_buy = basis.expected_buy_order_mask() != 0;
     let mut post_debited_atoms = 0u128;

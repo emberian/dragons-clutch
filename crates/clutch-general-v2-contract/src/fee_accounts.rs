@@ -23,6 +23,7 @@ use clutch_fee_runtime_contract::codec::{
     decode_persisted_payer_allocation_v1, decode_recipient_allocation_v1,
     decode_treasury_ledger_v1, encode_fee_record_v1, encode_fee_record_v2,
     encode_owner_fee_carry_v1, encode_payer_allocation_v1,
+    encode_payer_allocation_v1_into,
     encode_certified_recipient_allocation_v3_from_access_into,
     encode_recipient_allocation_v1, encode_treasury_ledger_v1,
     BorrowedCertifiedRecipientAllocationV3, CertifiedRecipientAllocationAccessV3,
@@ -583,11 +584,8 @@ pub struct PayerAllocationV2AccountV1 {
 impl PayerAllocationV2AccountV1 {
     /// Encode from the fully authenticated signed-envelope allocation.
     pub fn encode(&self, output: &mut [u8]) -> Result<(), CodecError> {
-        let body = map_fee_error(encode_payer_allocation_v1(&self.semantic))?;
-        encode_rent_owned_outer(
-            PAYER_ALLOCATION_ACCOUNT_TAG,
-            PAYER_ALLOCATION_ACCOUNT_VERSION_V2,
-            &body,
+        encode_payer_allocation_v2_account_from_ref(
+            &self.semantic,
             self.rent,
             self.stored_bump,
             output,
@@ -629,6 +627,53 @@ impl PayerAllocationV2AccountV1 {
             stored_bump,
         })
     }
+}
+
+/// Stream one current rent-owned payer snapshot into exact caller-owned
+/// account storage.
+///
+/// This is the bounded-adapter equivalent of
+/// [`PayerAllocationV2AccountV1::encode`]. It preserves the same outer bytes
+/// without constructing either the maximum-width semantic account or its
+/// inner wire array by value.
+pub fn encode_payer_allocation_v2_account_from_ref(
+    semantic: &PayerAllocationV1,
+    rent: DeletableRentOwnerV1,
+    stored_bump: u8,
+    output: &mut [u8],
+) -> Result<(), CodecError> {
+    rent.validate()?;
+    if output.len() != PAYER_ALLOCATION_ACCOUNT_BYTES_V2 {
+        return Err(CodecError::WrongLength);
+    }
+    output[0] = PAYER_ALLOCATION_ACCOUNT_TAG;
+    output[1] = PAYER_ALLOCATION_ACCOUNT_VERSION_V2;
+    let body_end = 2usize
+        .checked_add(PAYER_ALLOCATION_ACCOUNT_V1_BYTES)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    map_fee_error(encode_payer_allocation_v1_into(
+        semantic,
+        &mut output[2..body_end],
+    ))?;
+    let payer_end = body_end
+        .checked_add(32)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    output[body_end..payer_end].copy_from_slice(&rent.payer.bytes());
+    let principal_end = payer_end
+        .checked_add(8)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    output[payer_end..principal_end]
+        .copy_from_slice(&rent.refundable_principal.to_le_bytes());
+    let donation_end = principal_end
+        .checked_add(8)
+        .ok_or(CodecError::ArithmeticOverflow)?;
+    if donation_end.checked_add(2) != Some(output.len()) {
+        return Err(CodecError::WrongLength);
+    }
+    output[principal_end..donation_end].copy_from_slice(&rent.donation_floor.to_le_bytes());
+    output[donation_end] = stored_bump;
+    output[donation_end + 1] = 0;
+    Ok(())
 }
 
 /// Historical candidate-wide recipient snapshot outer envelope.
@@ -1125,6 +1170,36 @@ mod tests {
         assert_eq!(
             RecipientAllocationV2AccountV1::decode_persisted(&v2_width_v3_tag),
             Err(CodecError::WrongVersion)
+        );
+    }
+
+    #[test]
+    fn streamed_payer_v2_encoder_matches_the_canonical_outer() {
+        let account = PayerAllocationV2AccountV1 {
+            semantic: PayerAllocationV1::output_scratch(),
+            rent: rent(),
+            stored_bump: 29,
+        };
+        let mut canonical = [0u8; PAYER_ALLOCATION_ACCOUNT_BYTES_V2];
+        let mut streamed = [0u8; PAYER_ALLOCATION_ACCOUNT_BYTES_V2];
+        account.encode(&mut canonical).unwrap();
+        encode_payer_allocation_v2_account_from_ref(
+            &account.semantic,
+            account.rent,
+            account.stored_bump,
+            &mut streamed,
+        )
+        .unwrap();
+        assert_eq!(streamed, canonical);
+        let short_len = streamed.len() - 1;
+        assert_eq!(
+            encode_payer_allocation_v2_account_from_ref(
+                &account.semantic,
+                account.rent,
+                account.stored_bump,
+                &mut streamed[..short_len],
+            ),
+            Err(CodecError::WrongLength)
         );
     }
 

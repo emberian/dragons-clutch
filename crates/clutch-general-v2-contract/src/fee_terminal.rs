@@ -33,6 +33,12 @@ use crate::{
 /// Canonical data-ID domain for complete General fee outer-account bytes.
 pub const GENERAL_FEE_ACCOUNT_DATA_ID_DOMAIN_V1: &[u8] =
     b"dragons-clutch/general-fee-account-data/v1\0";
+/// Fresh complete-data identity domain for the rent-owned payer snapshot.
+///
+/// V2 is wider than the historical non-rent outer, so accepting it under the
+/// V1 transcript would silently reinterpret a persisted coordinate.
+pub const PAYER_ALLOCATION_ACCOUNT_DATA_ID_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/general-payer-allocation-data/v2\0";
 /// Canonical data-ID domain for the exact owner fee-rent transition preimage.
 pub const OWNER_FEE_RENT_DATA_ID_DOMAIN_V2: &[u8] =
     b"dragons-clutch/owner-fee-rent-transition/v2\0";
@@ -76,6 +82,20 @@ pub fn payer_allocation_account_data_id_v1<B: Sha256BackendV1>(
         return Err(CodecError::WrongLength);
     }
     Id32::new(backend.sha256(&[GENERAL_FEE_ACCOUNT_DATA_ID_DOMAIN_V1, bytes]))
+}
+
+/// Hash the exact canonical rent-owned V2 payer-allocation outer bytes.
+pub fn payer_allocation_account_data_id_v2<B: Sha256BackendV1>(
+    bytes: &[u8],
+    backend: &B,
+) -> Result<Id32, CodecError> {
+    if bytes.len() != crate::PAYER_ALLOCATION_ACCOUNT_BYTES_V2 {
+        return Err(CodecError::WrongLength);
+    }
+    Id32::new(backend.sha256(&[
+        PAYER_ALLOCATION_ACCOUNT_DATA_ID_DOMAIN_V2,
+        bytes,
+    ]))
 }
 
 /// Hash the exact canonical SettlementCashPot semantic successor body.
