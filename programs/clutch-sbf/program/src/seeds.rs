@@ -316,6 +316,12 @@ pub const SEED_PRODUCT_MARKET_FOUNDATION_VAULT: &[u8] = b"dc:market-foundation-v
 pub const SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY: &[u8] = b"dc:market-lifecycle-replay:v1";
 /// Per-Series/ordinal Product Market-admission link.
 pub const SEED_PRODUCT_SERIES_MARKET_LINK: &[u8] = b"dc:series-market-link:v1";
+/// Permanent counted Product Series-lifecycle replay.
+pub const SEED_PRODUCT_SERIES_LIFECYCLE_REPLAY: &[u8] =
+    clutch_solana_layout::product_series::SERIES_LIFECYCLE_REPLAY_PDA_PREFIX_V1;
+/// Product-owned Direct global-liveness manifest/allocation lifecycle.
+pub const SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS: &[u8] =
+    clutch_solana_layout::product_series::PRODUCT_DIRECT_GLOBAL_LIVENESS_PDA_PREFIX_V1;
 
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
@@ -483,6 +489,22 @@ pub fn product_market_lifecycle_root_pda(
         program_id,
         &[
             SEED_PRODUCT_MARKET_LIFECYCLE_ROOT,
+            market_instance_v2_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
+/// Canonical separate Product Direct global-liveness account.
+pub fn product_direct_global_liveness_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS,
             market_instance_v2_id,
             &generation.to_le_bytes(),
         ],
@@ -1993,6 +2015,8 @@ mod tests {
             SEED_PRODUCT_MARKET_FOUNDATION_VAULT,
             SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY,
             SEED_PRODUCT_SERIES_MARKET_LINK,
+            SEED_PRODUCT_SERIES_LIFECYCLE_REPLAY,
+            SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS,
             SEED_FAILURE_MARKET_ROOT_V2,
             SEED_FAILURE_EXTERNAL_ROOT,
             SEED_FAILURE_REPLAY_TOMBSTONE,
