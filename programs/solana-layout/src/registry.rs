@@ -671,6 +671,9 @@ const _: () = assert!(PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG == 0xaa);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG == 0xab);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG == 0xac);
 const _: () = assert!(PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG == 0xad);
+const _: () = assert!(SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_TAG == 0xbd);
+const _: () = assert!(SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_VERSION == 1);
+const _: () = assert!(SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_BYTES == 400);
 const _: () = assert!(STRUCTURED_MARKET_ROOT_ACCOUNT_TAG == 0xb7);
 const _: () = assert!(STRUCTURED_MARKET_ROOT_ACCOUNT_BYTES == 656);
 

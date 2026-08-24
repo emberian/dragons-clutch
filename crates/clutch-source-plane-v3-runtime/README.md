@@ -7,8 +7,9 @@ SourceSeries `77/v2` actions 1 through 12 now have explicit account contracts
 and handlers over one release-selected route. Product privately capitalizes and
 publishes the founding occurrence/request graph; one program-derived custody
 pre-pays bounded liveness, every child/receipt rent source, terminalization,
-and deterministic reopen work; Failure's sole ResolutionV5 outer reconstructs
-the persisted successful handoff and performs terminal/result close atomically.
+and deterministic reopen work. The sole current Failure ResolutionV5 outer is
+required to reconstruct the persisted successful handoff and perform
+terminal/result close atomically before the family can be admitted.
 Product retirement is the sole consumer allowed to refund the custody's unused
 principal and neutralize every other observed lamport. Central dispatch remains
 the all-or-none capability owner and must not admit a partial lifecycle.
