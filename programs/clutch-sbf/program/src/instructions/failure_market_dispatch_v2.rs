@@ -10,6 +10,7 @@
 use crate::accounts::{require, Outcome};
 use crate::capabilities;
 use crate::error::ClutchError;
+use crate::instructions::failure_market_actions_v2::process_archive_failure_market_session_v2;
 use crate::instructions::failure_market_interval_v2::FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2;
 use crate::instructions::failure_market_replay_v2::FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2;
 use clutch_failure_policy_runtime::market_quote_v1::FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1;
@@ -492,7 +493,7 @@ pub const fn recovery_action_byte_v2(action: RecoveryAction) -> u8 {
 /// payload decoder or any account field is touched.
 #[inline(never)]
 pub fn process(
-    _program_id: &Pubkey,
+    program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
     action: RecoveryAction,
@@ -506,9 +507,27 @@ pub fn process(
         return process_reserved_disabled(action);
     }
     require(sequence != 0, ClutchError::Replay)?;
-    let _payload = decode_payload_v2(action, payload)?;
+    let payload = decode_payload_v2(action, payload)?;
     validate_account_contract_v2(action, accounts)?;
-    Err(ClutchError::UnsupportedInstruction.into())
+    match action {
+        RecoveryAction::CloseIntervalConsensusWork => {
+            process_archive_failure_market_session_v2(program_id, accounts, sequence, payload)
+        }
+        RecoveryAction::BeginIntervalConsensus
+        | RecoveryAction::AdvanceIntervalConsensus
+        | RecoveryAction::ResolveIntervalConsensus => {
+            Err(ClutchError::UnsupportedInstruction.into())
+        }
+        RecoveryAction::InitializeFailureRoot
+        | RecoveryAction::TriggerSourceFailure
+        | RecoveryAction::TriggerRelationRefusal
+        | RecoveryAction::AdvanceRecoverySchedule
+        | RecoveryAction::AcceptRecoveryWork
+        | RecoveryAction::ResolveCallerFunded
+        | RecoveryAction::ResolvePaidRecovery
+        | RecoveryAction::CloseRecoveryFunding
+        | RecoveryAction::CloseFailureRoot => process_reserved_disabled(action),
+    }
 }
 
 /// Exhaustive refusal prevents newly allocated actions inheriting a route.
@@ -616,6 +635,19 @@ mod adversarial_contract_tests {
             .find("validate_account_contract_v2")
             .expect("account validation");
         assert!(capability < payload && payload < accounts);
+    }
+
+    #[test]
+    fn admitted_action13_reaches_only_its_concrete_owner() {
+        let source = include_str!("failure_market_dispatch_v2.rs");
+        let process = source
+            .split("pub fn process(")
+            .nth(1)
+            .and_then(|value| value.split("pub fn process_reserved_disabled").next())
+            .expect("single dispatcher");
+        assert!(process.contains("RecoveryAction::CloseIntervalConsensusWork =>"));
+        assert!(process.contains("process_archive_failure_market_session_v2"));
+        assert!(!process.contains("failure_recovery::"));
     }
 
     #[test]
