@@ -945,10 +945,10 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     } else {
         return Ok(None);
     };
-    /* No General extension tuple is executable in the checked release. Keep
-     * canonical account indexing, but never advertise an impossible keeper
-     * action merely because an authenticated historical/current-state account
-     * has a locally recognizable cursor. */
+    /* A single-account projection cannot authorize current General work.
+     * Action39 and the terminal actions require a finalized multi-account V5
+     * join, so their chain-derived material owners set the driver cursor only
+     * after reconstructing the complete account contract. */
     projection.keeper_hint = None;
     Ok(Some(projection))
 }

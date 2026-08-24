@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Current Product- and Revenue-authorized MarketBinding successor.
+//! Historical Product- and Revenue-authorized MarketBinding V4 decoder.
 //!
 //! V3 remains the immutable historical BundleV5/AttachmentV4 schema. V4 starts
-//! again from the complete V2 General body and binds the current Product
+//! again from the complete V2 General body and bound the withdrawn Product
 //! RootV2/LinkV2/GraphV3/ScheduleV3/QuoteV5/AttachmentV5/BundleV6 authority.
 //! It also pins the Realm-founded RevenuePolicyV2 authority and the two
 //! Market-scoped treasury accounts created by the Product-to-General founder.
@@ -44,8 +44,7 @@ const TREASURY_POSITION_ACCOUNT_OFFSET: usize =
 const TREASURY_SERVICE_LEDGER_ACCOUNT_OFFSET: usize = TREASURY_POSITION_ACCOUNT_OFFSET + 32;
 const RENT_OFFSET: usize = TREASURY_SERVICE_LEDGER_ACCOUNT_OFFSET + 32;
 
-/// Immutable current Product and Revenue coordinates authenticated before the
-/// General MarketBinding write.
+/// Immutable historical Product and Revenue coordinates decoded from V4.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CurrentMarketAuthorityV4 {
     product_market_root_account: Id32,
@@ -74,9 +73,9 @@ pub struct CurrentMarketAuthorityV4 {
 }
 
 impl CurrentMarketAuthorityV4 {
-    /// Construct the complete current immutable authority.
+    /// Reconstruct the historical immutable body during exact archive decode.
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    fn new(
         product_market_root_account: Id32,
         product_market_binding_id: Id32,
         product_generation: u64,
@@ -241,7 +240,7 @@ impl CurrentMarketAuthorityV4 {
     }
 }
 
-/// Immutable current General Market binding.
+/// Immutable historical General Market binding. No live adapter accepts it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MarketBindingV4 {
     base: MarketBindingV2,
@@ -250,8 +249,8 @@ pub struct MarketBindingV4 {
 }
 
 impl MarketBindingV4 {
-    /// Construct the exact current binding after Product/Revenue founding.
-    pub fn new(
+    /// Reconstruct an exact historical body during archive decode and tests.
+    fn new(
         base: MarketBindingV2,
         authority: CurrentMarketAuthorityV4,
         rent: DeletableRentOwnerV1,
@@ -263,12 +262,12 @@ impl MarketBindingV4 {
 
     /// Complete owner-net candidate-cost General body.
     pub const fn base(&self) -> &MarketBindingV2 { &self.base }
-    /// Exact current Product/Revenue authority.
+    /// Exact historical Product/Revenue coordinates.
     pub const fn authority(&self) -> CurrentMarketAuthorityV4 { self.authority }
     /// Sole deletable rent owner for this immutable account.
     pub const fn rent(&self) -> DeletableRentOwnerV1 { self.rent }
 
-    /// Validate the complete V2 body, current authority, and exact rent owner.
+    /// Validate the complete historical V2 body, V4 coordinates, and rent owner.
     pub fn validate(&self) -> Result<(), CodecError> {
         self.base.validate()?;
         self.authority.validate()?;

@@ -56,7 +56,7 @@
   const DIRECT_RESERVATION_AUTHORITY_ROLES = Object.freeze([
     directRole("general-position-v3", false, true), directRole("general-position-replay-v3", false, true), directRole("realm", false, false),
     directRole("collateral-profile", false, false), directRole("collateral-policy", false, false), directRole("token-program", false, false),
-    directRole("general-market-binding-v4", false, false), directRole("general-market-runtime", false, false), directRole("market-instance-v2", false, false)
+    directRole("general-market-binding-v5", false, false), directRole("general-market-runtime", false, false), directRole("market-instance-v2", false, false)
   ]);
   const DIRECT_CANDIDATE_TAIL = Object.freeze([
     directRole("candidate-liveness-policy", false, false), directRole("candidate-compartment", false, true),
@@ -1071,7 +1071,7 @@
       const noCandidate = [
         directRole("direct-root-v2", false, true), directRole("direct-action-replay-v1", false, true), directRole("direct-selection-v1", false, true),
         directRole("realm-v1", false, false), directRole("collateral-profile-v2", false, false), directRole("collateral-policy-v2", false, false),
-        directRole("collateral-token-program", false, false), directRole("general-market-binding-v4", false, false), directRole("general-market-runtime-v3", false, false),
+        directRole("collateral-token-program", false, false), directRole("general-market-binding-v5", false, false), directRole("general-market-runtime-v3", false, false),
         directRole("market-instance-v2-artifact", false, false), directRole("market-genesis-profile-v2-artifact", false, false), directRole("clock-sysvar", false, false),
         directRole("direct-reservation-v1", false, true), directRole("general-position-v3", false, true), directRole("general-position-replay-v3", false, true),
         directRole("direct-reservation-v1", false, true), directRole("general-position-v3", false, true), directRole("general-position-replay-v3", false, true),

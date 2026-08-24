@@ -767,7 +767,7 @@ impl InitializeSettlementRootPayloadV1 {
 /// Current action-39 selector with the exact immutable RevenuePolicyV2
 /// preimage carried in instruction data rather than consuming an AccountInfo.
 /// The preimage is untrusted until action39 joins its digest and copied fields
-/// to the physical RecordV2 and retained MarketBindingV4 authority.
+/// to the physical RecordV2 and retained MarketBindingV5 authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InitializeSettlementRootPayloadV2 {
     /// Counted parent Epoch PDA.
@@ -1089,7 +1089,7 @@ pub struct FeeFinalizeGlobalsPayloadV1 {
     pub terminal_receipt: Id32,
     pub closure_manifest: Id32,
     /// Exact untrusted RevenuePolicyV2 preimage reauthenticated against the
-    /// immutable Realm record and MarketBindingV4 before 0xbb settlement.
+    /// immutable Realm record and MarketBindingV5 before 0xbb settlement.
     pub revenue_policy: RevenuePolicyV2,
 }
 

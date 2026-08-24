@@ -44,7 +44,7 @@ const _: () = {
 pub enum MarketFoundationSlotV4 {
     /// Product lifecycle root.
     LifecycleRoot,
-    /// General MarketBindingV4.
+    /// General MarketBindingV5.
     MarketBinding,
     /// General MarketRuntimeV3.
     MarketRuntime,
