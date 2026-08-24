@@ -211,13 +211,37 @@ fn encode_runtime_header(
     output[1] = RUNTIME_ACCOUNT_GLOBAL_VERSION;
     output[2..8].copy_from_slice(&RUNTIME_ACCOUNT_MAGIC_SUFFIX);
     output[8..10].copy_from_slice(&RUNTIME_ACCOUNT_LAYOUT_VERSION.to_le_bytes());
-    output[10..12].copy_from_slice(&(header.family as u16).to_le_bytes());
+    output[10..12].copy_from_slice(&runtime_account_family_word(header.family)?.to_le_bytes());
     output[12] = header.bump;
     output[16..48].copy_from_slice(&header.principal_recipient.bytes());
     output[48..56].copy_from_slice(&header.payer_principal_lamports.to_le_bytes());
     output[56..64].copy_from_slice(&header.donation_floor_lamports.to_le_bytes());
     output[64..72].copy_from_slice(&header.generation.to_le_bytes());
     Ok(output)
+}
+
+const fn runtime_account_family_word(family: AccountFamilyV3) -> Result<u16> {
+    match family {
+        AccountFamilyV3::SourceHead => Ok(2),
+        AccountFamilyV3::OpenRawPage => Ok(3),
+        AccountFamilyV3::RawPage => Ok(4),
+        AccountFamilyV3::WindowWork => Ok(6),
+        AccountFamilyV3::WindowSeal => Ok(8),
+        AccountFamilyV3::StatisticResult => Ok(11),
+        AccountFamilyV3::SourcePlaneProgram
+        | AccountFamilyV3::WindowSpec
+        | AccountFamilyV3::WindowClosureReceipt
+        | AccountFamilyV3::SummaryProgram
+        | AccountFamilyV3::StatisticKey
+        | AccountFamilyV3::ProductTemplate
+        | AccountFamilyV3::PayoutTable
+        | AccountFamilyV3::WorkEnvelope
+        | AccountFamilyV3::LiquidityEnvelope
+        | AccountFamilyV3::SeriesPlan
+        | AccountFamilyV3::SeriesFunding
+        | AccountFamilyV3::InstanceDescriptor
+        | AccountFamilyV3::DrawdownSummary => Err(Error::InvalidCodec),
+    }
 }
 
 /// Registered global account discriminator for one promoted runtime family.

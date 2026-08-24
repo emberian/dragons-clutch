@@ -38,6 +38,8 @@ const OCCURRENCE_JOIN_DOMAIN: &[u8] = b"dragons-clutch/source-occurrence-join/v1
 const FAILURE_HANDOFF_DOMAIN: &[u8] = b"dragons-clutch/failure-policy-source-handoff/v1";
 const SUCCESS_HANDOFF_DOMAIN: &[u8] = b"dragons-clutch/successful-evaluation-source-handoff/v1";
 const POLICY_HANDOFF_JOIN_DOMAIN: &[u8] = b"dragons-clutch/source-policy-handoff-account-join/v1";
+const PERSISTED_POLICY_HANDOFF_RECORD_AUTH_DOMAIN: &[u8] =
+    b"dragons-clutch/authenticated-source-policy-handoff-record/v1";
 const PERSISTED_POLICY_HANDOFF_AUTH_DOMAIN: &[u8] =
     b"dragons-clutch/authenticated-persisted-source-policy-handoff/v1";
 const SOURCE_POLICY_HANDOFF_MAGIC: [u8; 8] = *b"DCSPHF01";
@@ -620,7 +622,19 @@ pub struct AuthenticatedStatisticResultAccountV1 {
     window_evidence_id: ContentId,
     result: StatisticResultV3,
     summary_program_id: ContentId,
+    access: StatisticResultAccountAccessV1,
     authentication_id: ContentId,
+}
+
+/// Exact privilege accepted while authenticating one persisted result.
+/// Mutable access exists only so the composed ResolutionV5 instruction can
+/// authenticate and physically close the same immutable result generation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StatisticResultAccountAccessV1 {
+    /// Ordinary durable-consumer authentication.
+    ExistingReadOnly,
+    /// Same-call terminal ResolutionV5 authentication and close.
+    ResolutionMutable,
 }
 
 impl AuthenticatedStatisticResultAccountV1 {
@@ -662,6 +676,11 @@ impl AuthenticatedStatisticResultAccountV1 {
     /// Exact SummaryProgram whose semantics the persisted result satisfies.
     pub const fn summary_program_id(self) -> ContentId {
         self.summary_program_id
+    }
+
+    /// Exact privilege authenticated for this receipt.
+    pub const fn access(self) -> StatisticResultAccountAccessV1 {
+        self.access
     }
 
     /// Complete owner/PDA/body/evaluation/lineage authentication identity.
@@ -846,6 +865,7 @@ pub fn authenticate_statistic_result_account(
         Some(summary),
         evidence,
         authenticated_lineage,
+        StatisticResultAccountAccessV1::ExistingReadOnly,
     )
 }
 
@@ -874,6 +894,36 @@ pub fn authenticate_persisted_statistic_result_account(
         None,
         evidence,
         authenticated_lineage,
+        StatisticResultAccountAccessV1::ExistingReadOnly,
+    )
+}
+
+/// Authenticate the exact durable result under the sole composed ResolutionV5
+/// privilege union. Both result and lineage must be writable because the same
+/// instruction consumes their authenticated preimages and closes the result
+/// generation; no generic reader accepts these privileges.
+#[allow(clippy::too_many_arguments)]
+pub fn authenticate_persisted_statistic_result_account_for_resolution(
+    route: AuthenticatedSourceRouteV1,
+    account: RuntimeAccountViewV1<'_>,
+    derived_pda: RuntimeDerivedPdaV1,
+    window: &WindowSpecV3,
+    key: &StatisticKeyV3,
+    summary_program_id: ContentId,
+    evidence: AuthenticatedWindowEvidenceV1,
+    authenticated_lineage: AuthenticatedReopenLineageV1,
+) -> Result<AuthenticatedStatisticResultAccountV1> {
+    authenticate_statistic_result_account_inner(
+        route,
+        account,
+        derived_pda,
+        window,
+        key,
+        summary_program_id,
+        None,
+        evidence,
+        authenticated_lineage,
+        StatisticResultAccountAccessV1::ResolutionMutable,
     )
 }
 
@@ -888,9 +938,21 @@ fn authenticate_statistic_result_account_inner(
     summary: Option<&SummaryProgramV3>,
     evidence: AuthenticatedWindowEvidenceV1,
     authenticated_lineage: AuthenticatedReopenLineageV1,
+    access: StatisticResultAccountAccessV1,
 ) -> Result<AuthenticatedStatisticResultAccountV1> {
-    require_immutable_adapter_account(route, account)?;
-    if authenticated_lineage.access() != LineageAccessV1::ReadOnly {
+    match access {
+        StatisticResultAccountAccessV1::ExistingReadOnly => {
+            require_immutable_adapter_account(route, account)?;
+        }
+        StatisticResultAccountAccessV1::ResolutionMutable => {
+            require_mutable_adapter_account(route, account)?;
+        }
+    }
+    let expected_lineage_access = match access {
+        StatisticResultAccountAccessV1::ExistingReadOnly => LineageAccessV1::ReadOnly,
+        StatisticResultAccountAccessV1::ResolutionMutable => LineageAccessV1::Mutable,
+    };
+    if authenticated_lineage.access() != expected_lineage_access {
         return Err(Error::WrongPrivilege);
     }
     validate_window_route(route, window)?;
@@ -960,6 +1022,7 @@ fn authenticate_statistic_result_account_inner(
         window_evidence_id: evidence.id(),
         result,
         summary_program_id,
+        access,
         authentication_id: domain_id(RESULT_ACCOUNT_AUTH_DOMAIN, &bytes),
     })
 }
@@ -972,6 +1035,15 @@ pub enum OccurrenceDispositionV1 {
     Created = 1,
     /// Exact independently existing canonical occurrence was authenticated.
     ExactExisting = 2,
+}
+
+impl OccurrenceDispositionV1 {
+    const fn byte(self) -> u8 {
+        match self {
+            Self::Created => 1,
+            Self::ExactExisting => 2,
+        }
+    }
 }
 
 /// Private-field runtime receipt joining Product/Series provenance to one
@@ -1165,7 +1237,7 @@ fn occurrence_join_preimage(receipt: OccurrenceWindowReceiptV1) -> [u8; 376] {
     bytes[200..232].copy_from_slice(&receipt.window_id.bytes());
     bytes[232..264].copy_from_slice(&receipt.statistic_key_id.bytes());
     bytes[264..272].copy_from_slice(&receipt.repair_generation.to_le_bytes());
-    bytes[272] = receipt.disposition as u8;
+    bytes[272] = receipt.disposition.byte();
     bytes[280..312].copy_from_slice(&receipt.occurrence_account_authentication_id.bytes());
     bytes[312..344].copy_from_slice(&receipt.route_id.bytes());
     bytes[344..376].copy_from_slice(&receipt.clock_policy_id.bytes());
@@ -1297,6 +1369,15 @@ pub enum SourceFailureKindV1 {
     PrimaryMaturityWithoutAcceptedResolution = 1,
     /// Reviewed evaluator returned exact stable refusal content.
     SourceEvaluationRefused = 2,
+}
+
+impl SourceFailureKindV1 {
+    const fn byte(self) -> u8 {
+        match self {
+            Self::PrimaryMaturityWithoutAcceptedResolution => 1,
+            Self::SourceEvaluationRefused => 2,
+        }
+    }
 }
 
 /// Exact successful source evaluation offered to a downstream relation policy.
@@ -1523,8 +1604,8 @@ impl SourcePolicyHandoffJoinV1 {
             result.id(),
             handoff.clock(),
             work_receipt,
-            SourceWorkKindV1::EvaluateStatistic,
-            result.account_data_id(),
+            SourceWorkKindV1::FailureHandoff,
+            handoff.id(),
         )
     }
 
@@ -1571,8 +1652,8 @@ impl SourcePolicyHandoffJoinV1 {
             result.id(),
             handoff.clock(),
             work_receipt,
-            SourceWorkKindV1::EvaluateStatistic,
-            result.account_data_id(),
+            SourceWorkKindV1::FailureHandoff,
+            handoff.id(),
         )
     }
 
@@ -1960,6 +2041,90 @@ pub struct AuthenticatedPersistedSourcePolicyHandoffV1 {
     authentication_id: ContentId,
 }
 
+/// Route/PDA/body authentication of a durable handoff before its underlying
+/// Source accounts are rejoined.
+///
+/// This is deliberately weaker than
+/// [`AuthenticatedPersistedSourcePolicyHandoffV1`]: it proves only the exact
+/// self-authenticating record account. Its private body is exposed through
+/// narrow getters so an adapter can reopen the occurrence, result, evidence,
+/// and work accounts named by the record and reconstruct the stronger receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedSourcePolicyHandoffRecordV1 {
+    account: RuntimeKey,
+    account_data_id: ContentId,
+    body: SourcePolicyHandoffAccountV1,
+    authentication_id: ContentId,
+}
+
+impl AuthenticatedSourcePolicyHandoffRecordV1 {
+    /// Physical content-addressed handoff account.
+    pub const fn account(self) -> RuntimeKey {
+        self.account
+    }
+
+    /// Complete account-byte digest.
+    pub const fn account_data_id(self) -> ContentId {
+        self.account_data_id
+    }
+
+    /// Stored semantic handoff identity.
+    pub const fn handoff_id(self) -> ContentId {
+        self.body.handoff_id
+    }
+
+    /// Stored exact private Source join identity.
+    pub const fn source_policy_handoff_join_id(self) -> ContentId {
+        self.body.source_policy_handoff_join_id
+    }
+
+    /// Product/Series occurrence account which must be reopened exactly.
+    pub const fn occurrence_account(self) -> RuntimeKey {
+        self.body.occurrence_account
+    }
+
+    /// StatisticResult (or absent-result slot) which must be reopened exactly.
+    pub const fn result_account(self) -> RuntimeKey {
+        self.body.result_account
+    }
+
+    /// Persisted work receipt which must be reopened exactly.
+    pub const fn work_receipt_account(self) -> RuntimeKey {
+        self.body.work_receipt_account
+    }
+
+    /// Exact downstream FailurePolicy binding selected before evaluation.
+    pub const fn failure_policy_binding_id(self) -> ContentId {
+        self.body.failure_policy_binding_id
+    }
+
+    /// Exact Window identity fixed by Product compilation.
+    pub const fn window_id(self) -> ContentId {
+        self.body.window_id
+    }
+
+    /// Exact StatisticKey identity fixed by Product compilation.
+    pub const fn statistic_key_id(self) -> ContentId {
+        self.body.statistic_key_id
+    }
+
+    /// Persisted maturity Clock snapshot. A consumer must revalidate it under
+    /// the release-selected Clock policy; no live Clock is required later.
+    pub const fn clock(self) -> ClockSnapshotV1 {
+        self.body.clock
+    }
+
+    /// Exact Source-liveness generation retained by the work receipt.
+    pub const fn generation(self) -> u64 {
+        self.body.generation
+    }
+
+    /// Route/PDA/body authentication identity of this weaker record receipt.
+    pub const fn id(self) -> ContentId {
+        self.authentication_id
+    }
+}
+
 impl AuthenticatedPersistedSourcePolicyHandoffV1 {
     /// Physical content-addressed handoff account.
     pub const fn account(self) -> RuntimeKey {
@@ -1980,6 +2145,53 @@ impl AuthenticatedPersistedSourcePolicyHandoffV1 {
     pub const fn id(self) -> ContentId {
         self.authentication_id
     }
+}
+
+/// Authenticate the exact read-only handoff record without trusting a caller
+/// to supply the private join it is meant to prove.
+///
+/// The embedded join ID is recomputed by the hostile decoder and is also the
+/// sole content-addressed PDA recipe. This grants no Source fact authority by
+/// itself; the adapter must reconstruct the named accounts and then invoke the
+/// stronger [`authenticate_persisted_source_policy_handoff`].
+pub fn authenticate_source_policy_handoff_record(
+    route: AuthenticatedSourceRouteV1,
+    account: RuntimeAccountViewV1<'_>,
+    derived_pda: RuntimeDerivedPdaV1,
+) -> Result<AuthenticatedSourcePolicyHandoffRecordV1> {
+    if account.owner != route.adapter_program() {
+        return Err(Error::WrongOwner);
+    }
+    if account.executable || account.signer || account.writable {
+        return Err(Error::WrongPrivilege);
+    }
+    let body = SourcePolicyHandoffAccountV1::decode(account.data).map_err(Error::Core)?;
+    if body.route_id != route.route_id()
+        || body.release_authentication_id != route.release_authentication_id()
+        || body.clock_policy_id != route.clock_policy_id()
+        || body.source_spec_id != route.source_spec_id()
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let recipe = PdaRecipeV3::source_policy_handoff(body.source_policy_handoff_join_id)?;
+    derived_pda.validate_for(
+        route.adapter_program(),
+        recipe.id()?,
+        account.key,
+        derived_pda.bump,
+    )?;
+    let account_data_id = account_data_id(account.key, account.data)?;
+    let mut bytes = [0_u8; 128];
+    bytes[..32].copy_from_slice(&route.route_id().bytes());
+    bytes[32..64].copy_from_slice(&account.key.bytes());
+    bytes[64..96].copy_from_slice(&account_data_id.bytes());
+    bytes[96..128].copy_from_slice(&body.source_policy_handoff_join_id.bytes());
+    Ok(AuthenticatedSourcePolicyHandoffRecordV1 {
+        account: account.key,
+        account_data_id,
+        body,
+        authentication_id: domain_id(PERSISTED_POLICY_HANDOFF_RECORD_AUTH_DOMAIN, &bytes),
+    })
 }
 
 /// Authenticate one exact persisted handoff against the private live join.
@@ -2127,7 +2339,7 @@ impl FailurePolicySourceHandoffV1 {
         absence_or_evaluation_receipt_id: ContentId,
     ) -> Result<Self> {
         let mut bytes = [0; 224];
-        bytes[0] = kind as u8;
+        bytes[0] = kind.byte();
         bytes[8..40].copy_from_slice(&failure_policy_binding_id.bytes());
         bytes[40..72].copy_from_slice(&occurrence.id().bytes());
         bytes[72..80].copy_from_slice(&clock.slot.to_le_bytes());
