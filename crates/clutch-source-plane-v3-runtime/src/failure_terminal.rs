@@ -790,6 +790,7 @@ impl FixedCodec for SourceFailureTerminalAccountV2 {
         output[..8].copy_from_slice(&SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_MAGIC);
         output[8] = self.phase.wire_byte();
         output[9] = self.disposition.map_or(0, |value| value.wire_byte());
+        output[10..12].copy_from_slice(&2_u16.to_le_bytes());
         self.terminal.encode_into(&mut output[16..688])?;
         let ids = [
             self.product_release_binding_id,
@@ -828,7 +829,10 @@ impl FixedCodec for SourceFailureTerminalAccountV2 {
         if input[..8] != SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_MAGIC {
             return Err(clutch_source_plane_v3::Error::BadMagic);
         }
-        if input[10..16].iter().any(|byte| *byte != 0) {
+        if input[10..12] != 2_u16.to_le_bytes() {
+            return Err(clutch_source_plane_v3::Error::BadVersion);
+        }
+        if input[12..16].iter().any(|byte| *byte != 0) {
             return Err(clutch_source_plane_v3::Error::NonCanonicalReserved);
         }
         let read_32 = |at: usize| {
