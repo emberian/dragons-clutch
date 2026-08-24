@@ -537,6 +537,173 @@ impl AuthenticatedPreRootSourceOccurrenceV1 {
     pub(crate) const fn generation_request_data_id(&self) -> ContentId {
         ContentId::from_bytes(self.generation_request.funding().account_data_id.bytes())
     }
+
+    /// Consume the sole FundingV4 reservation into Product's completion owner
+    /// while retaining a non-Copy Source postwrite with the full published
+    /// graph and live 0xbd custody authority. No ID-only projection can make
+    /// this split or reconstruct either half.
+    pub(crate) fn into_product_founder_parts(
+        self,
+    ) -> (
+        AuthenticatedProductSeriesFundingReservationV4,
+        AuthenticatedPreRootSourceOccurrencePostwriteV3,
+    ) {
+        let Self {
+            id,
+            product_preauthorization_id,
+            source_route,
+            product_publication,
+            capitalization,
+            lifecycle,
+            occurrence_publication,
+            semantic_publication,
+            result_lineage,
+            generation_request,
+            occurrence,
+        } = self;
+        let (funding_reservation, capitalization) =
+            capitalization.into_product_founder_parts();
+        (
+            funding_reservation,
+            AuthenticatedPreRootSourceOccurrencePostwriteV3 {
+                id,
+                product_preauthorization_id,
+                source_route,
+                product_publication,
+                capitalization,
+                lifecycle,
+                occurrence_publication,
+                semantic_publication,
+                result_lineage,
+                generation_request,
+                occurrence,
+            },
+        )
+    }
+}
+
+/// Final non-Copy Source founder postwrite retained after Product consumes the
+/// unique FundingV4 reservation in its completion transition.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedPreRootSourceOccurrencePostwriteV3 {
+    id: ContentId,
+    product_preauthorization_id: ContentId,
+    source_route: AuthenticatedSourceRouteV1,
+    product_publication: AuthenticatedSourceSemanticPublicationV2,
+    capitalization: AuthenticatedSourceWorkCapitalizationPostwriteV3,
+    lifecycle: AuthenticatedSourceLifecycleAdmissionV1,
+    occurrence_publication: PublishedSourceOccurrenceV1,
+    semantic_publication: PublishedSourceSemanticInputsV1,
+    result_lineage: PreallocatedStatisticResultLineageV1,
+    generation_request: PersistedSourceGenerationRequestV1,
+    occurrence: OccurrenceSourceReceiptV1,
+}
+
+impl AuthenticatedPreRootSourceOccurrencePostwriteV3 {
+    pub(crate) const fn id(&self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn occurrence(&self) -> OccurrenceSourceReceiptV1 {
+        self.occurrence
+    }
+
+    pub(crate) const fn capitalization(
+        &self,
+    ) -> &AuthenticatedSourceWorkCapitalizationPostwriteV3 {
+        &self.capitalization
+    }
+
+    pub(crate) const fn product_preauthorization_id(&self) -> ContentId {
+        self.product_preauthorization_id
+    }
+
+    pub(crate) const fn source_route(&self) -> AuthenticatedSourceRouteV1 {
+        self.source_route
+    }
+
+    pub(crate) const fn product_publication(&self) -> AuthenticatedSourceSemanticPublicationV2 {
+        self.product_publication
+    }
+
+    pub(crate) const fn liveness_policy_account(
+        &self,
+    ) -> clutch_source_plane_v3_runtime::RuntimeKey {
+        self.lifecycle.policy_account()
+    }
+
+    pub(crate) const fn liveness_policy_data_id(&self) -> ContentId {
+        ContentId::from_bytes(self.lifecycle.policy_account_data_id().bytes())
+    }
+
+    pub(crate) const fn source_compartment_account(
+        &self,
+    ) -> clutch_source_plane_v3_runtime::RuntimeKey {
+        self.lifecycle.compartment_account()
+    }
+
+    pub(crate) const fn source_compartment_data_id(&self) -> ContentId {
+        ContentId::from_bytes(self.lifecycle.compartment_account_data_id().bytes())
+    }
+
+    pub(crate) const fn occurrence_account(&self) -> clutch_source_plane_v3_runtime::RuntimeKey {
+        self.occurrence_publication.funding().account
+    }
+
+    pub(crate) const fn occurrence_data_id(&self) -> ContentId {
+        ContentId::from_bytes(self.occurrence_publication.funding().account_data_id.bytes())
+    }
+
+    pub(crate) const fn window_account(&self) -> clutch_source_plane_v3_runtime::RuntimeKey {
+        self.semantic_publication.window().account
+    }
+
+    pub(crate) const fn window_data_id(&self) -> ContentId {
+        ContentId::from_bytes(self.semantic_publication.window().account_data_id.bytes())
+    }
+
+    pub(crate) const fn summary_account(&self) -> clutch_source_plane_v3_runtime::RuntimeKey {
+        self.semantic_publication.summary().account
+    }
+
+    pub(crate) const fn summary_data_id(&self) -> ContentId {
+        ContentId::from_bytes(self.semantic_publication.summary().account_data_id.bytes())
+    }
+
+    pub(crate) const fn statistic_key_account(
+        &self,
+    ) -> clutch_source_plane_v3_runtime::RuntimeKey {
+        self.semantic_publication.statistic_key().account
+    }
+
+    pub(crate) const fn statistic_key_data_id(&self) -> ContentId {
+        ContentId::from_bytes(
+            self.semantic_publication
+                .statistic_key()
+                .account_data_id
+                .bytes(),
+        )
+    }
+
+    pub(crate) const fn result_lineage_account(
+        &self,
+    ) -> clutch_source_plane_v3_runtime::RuntimeKey {
+        self.result_lineage.authenticated().lineage().lineage_account
+    }
+
+    pub(crate) const fn result_lineage_data_id(&self) -> ContentId {
+        ContentId::from_bytes(self.result_lineage.authenticated().account_data_id().bytes())
+    }
+
+    pub(crate) const fn generation_request_account(
+        &self,
+    ) -> clutch_source_plane_v3_runtime::RuntimeKey {
+        self.generation_request.funding().account
+    }
+
+    pub(crate) const fn generation_request_data_id(&self) -> ContentId {
+        ContentId::from_bytes(self.generation_request.funding().account_data_id.bytes())
+    }
 }
 
 /// Publish every Source-owned pre-root account from the exact capitalized
@@ -800,6 +967,41 @@ pub(crate) struct AuthenticatedSourceWorkCapitalizationV3 {
     funding_reservation: AuthenticatedProductSeriesFundingReservationV4,
 }
 
+/// Retained Source capitalization postwrite after the sole Product founder
+/// compositor consumes the non-Copy FundingV4 reservation. This is not an ID
+/// projection: it retains the exact live 0xbd custody authority and every
+/// hostile FundingV4/source-capital fact required by retirement.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedSourceWorkCapitalizationPostwriteV3 {
+    id: ContentId,
+    product_preauthorization_id: ContentId,
+    facts: SourceWorkCapitalizationFactsV3,
+    quote: SourceLifecycleCapitalizationQuoteV1,
+    custody: AuthenticatedSourceFundingCustodyV1,
+}
+
+impl AuthenticatedSourceWorkCapitalizationPostwriteV3 {
+    pub(crate) const fn id(&self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn product_preauthorization_id(&self) -> ContentId {
+        self.product_preauthorization_id
+    }
+
+    pub(crate) const fn facts(&self) -> SourceWorkCapitalizationFactsV3 {
+        self.facts
+    }
+
+    pub(crate) const fn quote(&self) -> SourceLifecycleCapitalizationQuoteV1 {
+        self.quote
+    }
+
+    pub(crate) const fn custody(&self) -> AuthenticatedSourceFundingCustodyV1 {
+        self.custody
+    }
+}
+
 impl AuthenticatedSourceWorkCapitalizationV3 {
     pub(crate) const fn id(&self) -> ContentId {
         self.id
@@ -825,6 +1027,32 @@ impl AuthenticatedSourceWorkCapitalizationV3 {
         &self,
     ) -> &AuthenticatedProductSeriesFundingReservationV4 {
         &self.funding_reservation
+    }
+
+    fn into_product_founder_parts(
+        self,
+    ) -> (
+        AuthenticatedProductSeriesFundingReservationV4,
+        AuthenticatedSourceWorkCapitalizationPostwriteV3,
+    ) {
+        let Self {
+            id,
+            product_preauthorization_id,
+            facts,
+            quote,
+            custody,
+            funding_reservation,
+        } = self;
+        (
+            funding_reservation,
+            AuthenticatedSourceWorkCapitalizationPostwriteV3 {
+                id,
+                product_preauthorization_id,
+                facts,
+                quote,
+                custody,
+            },
+        )
     }
 }
 
@@ -1505,5 +1733,29 @@ mod current_adversarial_tests {
         assert!(current.contains("bootstrap.id()"));
         assert!(current.contains("bootstrap.account_data_id()"));
         assert!(current.contains("bootstrap\n                .ledger()"));
+    }
+
+    #[test]
+    fn funding_reservation_has_one_consuming_product_founder_exit() {
+        let source = include_str!("source_occurrence_foundation_v1.rs");
+        assert_eq!(
+            source
+                .matches("pub(crate) fn into_product_founder_parts(")
+                .count(),
+            1
+        );
+        let split = source
+            .split("pub(crate) fn into_product_founder_parts(")
+            .nth(1)
+            .expect("sole consuming Source founder split")
+            .split("/// Final non-Copy Source founder postwrite")
+            .next()
+            .expect("bounded split");
+        assert!(split.contains("capitalization.into_product_founder_parts()"));
+        assert!(split.contains("AuthenticatedPreRootSourceOccurrencePostwriteV3"));
+        assert!(!split.contains(".clone()"));
+        assert!(!source.contains(
+            "pub(crate) fn funding_reservation(self) -> AuthenticatedProductSeriesFundingReservationV4"
+        ));
     }
 }
