@@ -13,8 +13,9 @@ use std::boxed::Box;
 use clutch_fee_runtime_contract::terminal::FeeTerminalOutcomeV1;
 use clutch_general_v2_contract::{
     prepare_general_treasury_position_terminal_v1,
-    project_general_position_replay_prestate_v1, GeneralReplayExtensionV1,
-    Id32, GENERAL_REPLAY_ACCOUNT_V1_BYTES, GENERAL_REPLAY_EXTENSION_SCHEMA_V1,
+    project_general_position_replay_prestate_v1, CurrentMarketAuthorityV5,
+    GeneralReplayExtensionV1, Id32, GENERAL_REPLAY_ACCOUNT_V1_BYTES,
+    GENERAL_REPLAY_EXTENSION_SCHEMA_V1,
 };
 use clutch_owner_settlement::AuthenticatedPositionV3;
 use clutch_product_series::{
@@ -155,6 +156,7 @@ fn insert_recipient(
 #[derive(Debug)]
 pub(crate) struct AuthenticatedProductPositionPhysicalTerminalV5 {
     id: ContentId,
+    current_authority: CurrentMarketAuthorityV5,
     physical_terminal_id: ContentId,
     shared_core_projection_id: ContentId,
     owner_release_id: ContentId,
@@ -179,6 +181,9 @@ pub(crate) struct AuthenticatedProductPositionPhysicalTerminalV5 {
 
 impl AuthenticatedProductPositionPhysicalTerminalV5 {
     pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn current_authority(&self) -> CurrentMarketAuthorityV5 {
+        self.current_authority
+    }
     pub(crate) const fn physical_terminal_id(&self) -> ContentId {
         self.physical_terminal_id
     }
@@ -718,6 +723,7 @@ pub(crate) fn retire_current_general_treasury_position_into_product_v5(
     require_live(id)?;
     Ok(AuthenticatedProductPositionPhysicalTerminalV5 {
         id,
+        current_authority: current.binding().authority(),
         physical_terminal_id,
         shared_core_projection_id: projection.id(),
         owner_release_id,
