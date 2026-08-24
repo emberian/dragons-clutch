@@ -512,4 +512,32 @@ mod source_contract_tests {
         }
         assert!(source.contains("failure_quote.authenticate_product_failure_begin_quote_v2("));
     }
+
+    #[test]
+    fn active_schedule_reauthentication_cannot_mint_a_second_pin() {
+        let source = include_str!("product_failure_begin_current.rs");
+        let begin = source
+            .split("pub(crate) fn authenticate_product_failure_begin_schedule_v2")
+            .nth(1)
+            .and_then(|value| {
+                value
+                    .split("pub(crate) fn authenticate_product_failure_active_schedule_v2")
+                    .next()
+            })
+            .expect("current begin schedule owner");
+        let active = source
+            .split("pub(crate) fn authenticate_product_failure_active_schedule_v2")
+            .nth(1)
+            .and_then(|value| {
+                value
+                    .split("fn authenticate_product_failure_schedule_v2")
+                    .next()
+            })
+            .expect("current active schedule owner");
+        assert!(begin.contains("attempt_index, true, 0"));
+        assert!(active.contains("attempt_index, false, 1"));
+        assert!(source.contains("require_cached_current_root_and_link("));
+        assert!(source.contains("link_state.active_failure_sessions() == expected_active_failure_sessions"));
+        assert!(source.contains("root_state.resolution_activation_receipt_id() == ContentId::ZERO"));
+    }
 }
