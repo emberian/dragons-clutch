@@ -11,7 +11,8 @@
 use clutch_owner_settlement::SettlementCashPotV1;
 
 use crate::{
-    prepare_activate_merge_cash_pot_v1, CodecError, DeletableRentOwnerV1, Id32, Reader,
+    prepare_activate_merge_cash_pot_v1, CandidateWindowV5AccountV1, CodecError,
+    DeletableRentOwnerV1, GeneralEpochPhaseV1, GeneralEpochV6AccountV1, Id32, Reader,
     SettlementRootChildStateV1, SettlementRootPhaseV1, SettlementRootSeedTupleV1,
     SettlementRootTerminalProjectionV1, SettlementRootV1AccountV1, Sha256BackendV1, Writer,
     SETTLEMENT_ROOT_ACCOUNT_BYTES, SETTLEMENT_ROOT_ACCOUNT_TAG,
@@ -652,6 +653,72 @@ pub struct IndexedSettlementRootTerminalProjectionV1 {
     selected_feed_data_id: Id32,
 }
 
+/// Compact facts needed to close one terminal indexed root.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IndexedSettlementRootCloseProjectionV1 {
+    terminal: IndexedSettlementRootTerminalProjectionV1,
+    root_rent: DeletableRentOwnerV1,
+    market_binding: Id32,
+    stored_bump: u8,
+}
+
+impl IndexedSettlementRootCloseProjectionV1 {
+    pub const fn terminal(&self) -> &IndexedSettlementRootTerminalProjectionV1 {
+        &self.terminal
+    }
+    pub const fn root_rent(&self) -> DeletableRentOwnerV1 {
+        self.root_rent
+    }
+    pub const fn market_binding(&self) -> Id32 {
+        self.market_binding
+    }
+    pub const fn stored_bump(&self) -> u8 {
+        self.stored_bump
+    }
+}
+
+/// Clear the unique selected-root count after authenticating the finalized
+/// Window's immutable selected-artifact pointer to this exact terminal root.
+pub fn encode_retire_indexed_settlement_root_v1(
+    terminal: &IndexedSettlementRootCloseProjectionV1,
+    epoch_account: Id32,
+    epoch: &GeneralEpochV6AccountV1,
+    window_account: Id32,
+    window: &CandidateWindowV5AccountV1,
+    epoch_output: &mut [u8],
+) -> Result<(), CodecError> {
+    epoch.validate()?;
+    window.validate()?;
+    let selected = terminal.terminal().base();
+    let window = window.base();
+    if epoch_account.is_zero()
+        || window_account.is_zero()
+        || selected.root_account() == epoch_account
+        || selected.root_account() == window_account
+        || epoch_account == window_account
+        || epoch.phase != GeneralEpochPhaseV1::Finalized
+        || epoch.selected_candidate_count != 1
+        || epoch.window != window_account
+        || epoch.market_binding != terminal.market_binding()
+        || epoch.market_runtime != selected.market()
+        || epoch.market_instance_v2_id != selected.market_instance_v2_id()
+        || epoch.generation != selected.epoch_generation()
+        || selected.epoch() != epoch_account
+        || window.epoch != epoch_account
+        || window.market != epoch.market_runtime
+        || window.epoch_generation != epoch.generation
+        || window.finalized_slot == 0
+        || window.selected_candidate_artifact != selected.root_account()
+    {
+        return Err(CodecError::MismatchedBinding);
+    }
+    GeneralEpochV6AccountV1 {
+        selected_candidate_count: 0,
+        ..*epoch
+    }
+    .encode(epoch_output)
+}
+
 /// Atomic indexed-root plus merge cash-pot activation plan.
 ///
 /// This preserves the base contract's only lawful action-37 transition: the
@@ -726,6 +793,35 @@ impl IndexedSettlementRootTerminalProjectionV1 {
 }
 
 impl IndexedSettlementRootV1AccountV1 {
+    /// Hostile-decode the exact terminal body and hash those supplied bytes.
+    pub fn decode_terminal_close_projection<B: Sha256BackendV1>(
+        backend: &B,
+        root_account: Id32,
+        input: &[u8],
+    ) -> Result<IndexedSettlementRootCloseProjectionV1, CodecError> {
+        if root_account.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        let value = Self::decode(input)?;
+        if !value.is_terminal() {
+            return Err(CodecError::InvalidState);
+        }
+        let terminal = IndexedSettlementRootTerminalProjectionV1 {
+            base: value.base.terminal_projection(backend, root_account)?,
+            indexed_root_data_id: Self::encoded_data_id(backend, root_account, input)?,
+            plane_id: value.plane_id,
+            locator_data_id: value.locator_data_id,
+            adjacency_data_id: value.adjacency_data_id,
+            selected_feed_data_id: value.selected_feed_data_id,
+        };
+        Ok(IndexedSettlementRootCloseProjectionV1 {
+            terminal,
+            root_rent: value.base.root_rent(),
+            market_binding: value.base.market_binding(),
+            stored_bump: value.base.stored_bump(),
+        })
+    }
+
     /// Exact last frontier at which the retained Feed is still readable but
     /// every other base child liability has already been discharged.
     fn at_pre_feed_terminal_frontier(base: &SettlementRootV1AccountV1) -> bool {
@@ -1018,6 +1114,44 @@ impl IndexedSettlementRootV1AccountV1 {
         };
         value.validate()?;
         Ok(value)
+    }
+
+    /// Stream the exact post-index-retirement successor and account-bound ID.
+    pub fn encode_retire_index_children_and_data_id<B: Sha256BackendV1>(
+        &self,
+        backend: &B,
+        root_account: Id32,
+        output: &mut [u8],
+    ) -> Result<Id32, CodecError> {
+        self.validate()?;
+        if root_account.is_zero() {
+            return Err(CodecError::ZeroIdentity);
+        }
+        if self.state != ExactIndexChildrenStateV1::Live
+            || !Self::at_pre_feed_terminal_frontier(&self.base)
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let counts = ExactIndexChildCountsV1 {
+            expected: INDEXED_SETTLEMENT_ROOT_EXPECTED_CHILDREN_V1,
+            admitted: INDEXED_SETTLEMENT_ROOT_EXPECTED_CHILDREN_V1,
+            live: 0,
+            retired: INDEXED_SETTLEMENT_ROOT_EXPECTED_CHILDREN_V1,
+        };
+        Self::encode_components(
+            &self.base,
+            self.locator_account,
+            self.adjacency_account,
+            self.plane_id,
+            self.locator_data_id,
+            self.adjacency_data_id,
+            self.selected_feed_data_id,
+            self.capability_profile_id,
+            counts,
+            ExactIndexChildrenStateV1::Retired,
+            output,
+        )?;
+        Self::encoded_data_id(backend, root_account, output)
     }
 
     /// Retire the already-authenticated retained Feed and finish the base root.
