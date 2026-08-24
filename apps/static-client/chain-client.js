@@ -224,6 +224,28 @@
     return Object.freeze(variants);
   };
 
+  const validateIntentVariants = (raw, name, enabledIntents) => {
+    if (!Array.isArray(raw) || raw.length > DEALER_VARIANT_CONTRACTS.length) throw new Error(`${name} is not a bounded current payload-variant set.`);
+    const coarse = new Set(enabledIntents.map((intent) => `${intent.familyTag}:${intent.familyVersion}:${intent.localAction}`));
+    const variants = raw.map((variant, index) => {
+      requirePlain(variant, `${name}[${index}]`);
+      const value = Object.freeze({
+        familyTag: positiveDecimal(variant.familyTag, `${name}[${index}].familyTag`, 255n).toString(),
+        familyVersion: positiveDecimal(variant.familyVersion, `${name}[${index}].familyVersion`, 255n).toString(),
+        localAction: positiveDecimal(variant.localAction, `${name}[${index}].localAction`, 255n).toString(),
+        payloadDiscriminator: positiveDecimal(variant.payloadDiscriminator, `${name}[${index}].payloadDiscriminator`, 255n).toString(),
+        name: text(variant.name, `${name}[${index}].name`, 96)
+      });
+      const contract = DEALER_VARIANT_CONTRACTS.find((candidate) => candidate.familyTag === value.familyTag && candidate.familyVersion === value.familyVersion && candidate.localAction === value.localAction && candidate.payloadDiscriminator === value.payloadDiscriminator && candidate.name === value.name);
+      if (!contract) throw new Error(`${name}[${index}] is not a closed current Dealer payload variant.`);
+      if (coarse.has(`${value.familyTag}:${value.familyVersion}:${value.localAction}`)) throw new Error(`${name}[${index}] illegally promotes its disabled coarse Dealer coordinate.`);
+      return value;
+    });
+    const keys = variants.map((variant) => `${variant.familyTag.padStart(3, "0")}:${variant.familyVersion.padStart(3, "0")}:${variant.localAction.padStart(3, "0")}:${variant.payloadDiscriminator.padStart(3, "0")}`);
+    if (new Set(keys).size !== keys.length || keys.some((key, index) => index > 0 && keys[index - 1] >= key)) throw new Error(`${name} is duplicated or not in canonical coordinate/discriminator order.`);
+    return Object.freeze(variants);
+  };
+
   const boundedUrl = (value, name, schemes, allowQuery = false, preserveExact = false) => {
     text(value, name, 512);
     let parsed;
