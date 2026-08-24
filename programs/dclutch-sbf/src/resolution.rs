@@ -1,11 +1,13 @@
 //! Atomic price and permissionless failure resolution transitions.
 
 use dclutch_kernel::resolution::categorical_pyth_v1::PythV1Observation;
+use dclutch_market_contract::market::{CategoricalMarketV1, CategoricalSettlementSummaryV1};
+use dclutch_product_contract::{ContentId, terminal::ResolutionKind};
 use dclutch_pyth_contract::{
     instruction::{
         ResolveCategoricalFailureV1, ResolveCategoricalInstructionV1, ResolveCategoricalPythV1,
     },
-    market::MarketStateV1,
+    policy::CategoricalPythPolicyRecordV1,
     receipt::{Clock as ReceiptClock, PriceInput, ResolutionReceiptV1},
 };
 use dclutch_pyth_svm::FullPriceUpdateV2;
@@ -51,15 +53,17 @@ fn process_price(
         instruction.generation(),
         instruction.child_count(),
     )?;
-    let funding = authenticate_fund(
+    let (funding, material) = authenticate_fund(
         program_id,
         frame.fund,
         frame.market,
+        frame.material,
+        frame.manifest,
         frame.sponsor,
-        instruction.generation(),
+        market,
     )?;
     let clock = Clock::get().map_err(|_| AdapterError::AccountData)?;
-    let release = selected_release(market.release_id, clock.unix_timestamp)?;
+    let release = selected_release(*material.policy().release_id(), clock.unix_timestamp)?;
     let provider_facts = authenticate_provider(&frame, release, instruction.body(), funding)?;
     let body_digest = hash(instruction.body()).to_bytes();
     let update = provider::post_and_load(
@@ -67,7 +71,7 @@ fn process_price(
         provider_facts,
         instruction.body(),
         clock.slot,
-        market.provider_feed_id,
+        *material.feed_profile().provider_feed_id(),
     )?;
 
     dispatch_price_width(
@@ -77,6 +81,7 @@ fn process_price(
         clock,
         update,
         body_digest,
+        *material.policy(),
     )?;
     close_fund::close_price(&frame, funding)
 }
@@ -93,15 +98,23 @@ fn process_failure(
         instruction.generation(),
         instruction.child_count(),
     )?;
-    let funding = authenticate_fund(
+    let (funding, material) = authenticate_fund(
         program_id,
         frame.fund,
         frame.market,
+        frame.material,
+        frame.manifest,
         frame.sponsor,
-        instruction.generation(),
+        market,
     )?;
     let clock = Clock::get().map_err(|_| AdapterError::AccountData)?;
-    dispatch_failure_width(market.outcome_count, &frame, instruction, clock)?;
+    dispatch_failure_width(
+        market.outcome_count,
+        &frame,
+        instruction,
+        clock,
+        *material.policy(),
+    )?;
     close_fund::close_failure(&frame, funding)
 }
 
@@ -113,23 +126,24 @@ fn dispatch_price_width(
     clock: Clock,
     update: FullPriceUpdateV2,
     body_digest: [u8; 32],
+    policy: CategoricalPythPolicyRecordV1,
 ) -> Result<(), ProgramError> {
     match outcomes {
-        2 => transition_price::<2>(frame, instruction, clock, update, body_digest),
-        3 => transition_price::<3>(frame, instruction, clock, update, body_digest),
-        4 => transition_price::<4>(frame, instruction, clock, update, body_digest),
-        5 => transition_price::<5>(frame, instruction, clock, update, body_digest),
-        6 => transition_price::<6>(frame, instruction, clock, update, body_digest),
-        7 => transition_price::<7>(frame, instruction, clock, update, body_digest),
-        8 => transition_price::<8>(frame, instruction, clock, update, body_digest),
-        9 => transition_price::<9>(frame, instruction, clock, update, body_digest),
-        10 => transition_price::<10>(frame, instruction, clock, update, body_digest),
-        11 => transition_price::<11>(frame, instruction, clock, update, body_digest),
-        12 => transition_price::<12>(frame, instruction, clock, update, body_digest),
-        13 => transition_price::<13>(frame, instruction, clock, update, body_digest),
-        14 => transition_price::<14>(frame, instruction, clock, update, body_digest),
-        15 => transition_price::<15>(frame, instruction, clock, update, body_digest),
-        16 => transition_price::<16>(frame, instruction, clock, update, body_digest),
+        2 => transition_price::<2>(frame, instruction, clock, update, body_digest, policy),
+        3 => transition_price::<3>(frame, instruction, clock, update, body_digest, policy),
+        4 => transition_price::<4>(frame, instruction, clock, update, body_digest, policy),
+        5 => transition_price::<5>(frame, instruction, clock, update, body_digest, policy),
+        6 => transition_price::<6>(frame, instruction, clock, update, body_digest, policy),
+        7 => transition_price::<7>(frame, instruction, clock, update, body_digest, policy),
+        8 => transition_price::<8>(frame, instruction, clock, update, body_digest, policy),
+        9 => transition_price::<9>(frame, instruction, clock, update, body_digest, policy),
+        10 => transition_price::<10>(frame, instruction, clock, update, body_digest, policy),
+        11 => transition_price::<11>(frame, instruction, clock, update, body_digest, policy),
+        12 => transition_price::<12>(frame, instruction, clock, update, body_digest, policy),
+        13 => transition_price::<13>(frame, instruction, clock, update, body_digest, policy),
+        14 => transition_price::<14>(frame, instruction, clock, update, body_digest, policy),
+        15 => transition_price::<15>(frame, instruction, clock, update, body_digest, policy),
+        16 => transition_price::<16>(frame, instruction, clock, update, body_digest, policy),
         _ => Err(AdapterError::AccountData.into()),
     }
 }
@@ -140,23 +154,24 @@ fn dispatch_failure_width(
     frame: &FailureFrame<'_, '_>,
     instruction: ResolveCategoricalFailureV1,
     clock: Clock,
+    policy: CategoricalPythPolicyRecordV1,
 ) -> Result<(), ProgramError> {
     match outcomes {
-        2 => transition_failure::<2>(frame, instruction, clock),
-        3 => transition_failure::<3>(frame, instruction, clock),
-        4 => transition_failure::<4>(frame, instruction, clock),
-        5 => transition_failure::<5>(frame, instruction, clock),
-        6 => transition_failure::<6>(frame, instruction, clock),
-        7 => transition_failure::<7>(frame, instruction, clock),
-        8 => transition_failure::<8>(frame, instruction, clock),
-        9 => transition_failure::<9>(frame, instruction, clock),
-        10 => transition_failure::<10>(frame, instruction, clock),
-        11 => transition_failure::<11>(frame, instruction, clock),
-        12 => transition_failure::<12>(frame, instruction, clock),
-        13 => transition_failure::<13>(frame, instruction, clock),
-        14 => transition_failure::<14>(frame, instruction, clock),
-        15 => transition_failure::<15>(frame, instruction, clock),
-        16 => transition_failure::<16>(frame, instruction, clock),
+        2 => transition_failure::<2>(frame, instruction, clock, policy),
+        3 => transition_failure::<3>(frame, instruction, clock, policy),
+        4 => transition_failure::<4>(frame, instruction, clock, policy),
+        5 => transition_failure::<5>(frame, instruction, clock, policy),
+        6 => transition_failure::<6>(frame, instruction, clock, policy),
+        7 => transition_failure::<7>(frame, instruction, clock, policy),
+        8 => transition_failure::<8>(frame, instruction, clock, policy),
+        9 => transition_failure::<9>(frame, instruction, clock, policy),
+        10 => transition_failure::<10>(frame, instruction, clock, policy),
+        11 => transition_failure::<11>(frame, instruction, clock, policy),
+        12 => transition_failure::<12>(frame, instruction, clock, policy),
+        13 => transition_failure::<13>(frame, instruction, clock, policy),
+        14 => transition_failure::<14>(frame, instruction, clock, policy),
+        15 => transition_failure::<15>(frame, instruction, clock, policy),
+        16 => transition_failure::<16>(frame, instruction, clock, policy),
         _ => Err(AdapterError::AccountData.into()),
     }
 }
@@ -168,10 +183,10 @@ fn transition_price<const N: usize>(
     clock: Clock,
     update: FullPriceUpdateV2,
     body_digest: [u8; 32],
+    policy_record: CategoricalPythPolicyRecordV1,
 ) -> Result<(), ProgramError> {
     let mut state = decode_market::<N>(frame.market)?;
-    let policy = state
-        .policy()
+    let policy = policy_record
         .to_kernel_policy()
         .map_err(|_| AdapterError::MarketTransition)?;
     let resolution = policy
@@ -204,11 +219,17 @@ fn transition_price<const N: usize>(
         outcome_count,
     )
     .map_err(|_| AdapterError::MarketTransition)?;
+    let settlement = settlement_summary::<N>(
+        receipt,
+        ResolutionKind::Occurrence,
+        usize::from(winner),
+        clock.slot,
+    )?;
     resolve_state(
         &mut state,
         instruction.generation(),
         instruction.child_count(),
-        receipt,
+        settlement,
     )?;
 
     // Reclaim succeeds before any dClutch account is persistently changed.
@@ -222,10 +243,10 @@ fn transition_failure<const N: usize>(
     frame: &FailureFrame<'_, '_>,
     instruction: ResolveCategoricalFailureV1,
     clock: Clock,
+    policy_record: CategoricalPythPolicyRecordV1,
 ) -> Result<(), ProgramError> {
     let mut state = decode_market::<N>(frame.market)?;
-    let policy = state
-        .policy()
+    let policy = policy_record
         .to_kernel_policy()
         .map_err(|_| AdapterError::MarketTransition)?;
     let resolution = policy
@@ -242,40 +263,64 @@ fn transition_failure<const N: usize>(
         },
     )
     .map_err(|_| AdapterError::MarketTransition)?;
+    let settlement = settlement_summary::<N>(
+        receipt,
+        ResolutionKind::Failure,
+        usize::from(winner),
+        clock.slot,
+    )?;
     resolve_state(
         &mut state,
         instruction.generation(),
         instruction.child_count(),
-        receipt,
+        settlement,
     )?;
     encode_market(frame.market, &state)
 }
 
 #[inline(never)]
 fn resolve_state<const N: usize>(
-    state: &mut MarketStateV1<N>,
+    state: &mut CategoricalMarketV1<N>,
     generation: u64,
     child_count: u64,
-    receipt: ResolutionReceiptV1,
+    settlement: CategoricalSettlementSummaryV1,
 ) -> Result<(), ProgramError> {
     state
-        .resolve_with_receipt(generation, child_count, receipt)
+        .resolve_with_summary(generation, settlement)
+        .map_err(|_| AdapterError::MarketTransition)?;
+    state
+        .retire_child(generation, child_count)
         .map_err(|_| AdapterError::MarketTransition)?;
     Ok(())
 }
 
+fn settlement_summary<const N: usize>(
+    receipt: ResolutionReceiptV1,
+    kind: ResolutionKind,
+    winner: usize,
+    observed_slot: u64,
+) -> Result<CategoricalSettlementSummaryV1, ProgramError> {
+    let evidence_id = ContentId::new(hash(&receipt.to_bytes()).to_bytes())
+        .map_err(|_| AdapterError::MarketTransition)?;
+    let terminal_sequence = observed_slot
+        .checked_add(1)
+        .ok_or(AdapterError::Arithmetic)?;
+    CategoricalSettlementSummaryV1::resolved::<N>(evidence_id, kind, winner, terminal_sequence)
+        .map_err(|_| AdapterError::MarketTransition.into())
+}
+
 fn decode_market<const N: usize>(
     account: &AccountInfo<'_>,
-) -> Result<MarketStateV1<N>, ProgramError> {
+) -> Result<CategoricalMarketV1<N>, ProgramError> {
     let data = account
         .try_borrow_data()
         .map_err(|_| AdapterError::AccountData)?;
-    MarketStateV1::decode(&data).map_err(|_| AdapterError::AccountData.into())
+    CategoricalMarketV1::decode(&data).map_err(|_| AdapterError::AccountData.into())
 }
 
 fn encode_market<const N: usize>(
     account: &AccountInfo<'_>,
-    state: &MarketStateV1<N>,
+    state: &CategoricalMarketV1<N>,
 ) -> Result<(), ProgramError> {
     let mut data = account
         .try_borrow_mut_data()

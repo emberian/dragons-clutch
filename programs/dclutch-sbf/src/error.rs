@@ -57,6 +57,16 @@ pub enum AdapterError {
     FundCreateCpi = 23,
     /// Founding did not persist exact Market, Fund, owner, rent, and debit postconditions.
     FoundingPostcondition = 24,
+    /// Market, Realm, token release, Mint, or custody inputs did not authenticate.
+    VaultAuthentication = 25,
+    /// The System Program refused exact collateral-custody PDA creation.
+    CustodyCreateCpi = 26,
+    /// The System Program refused exact collateral-Vault PDA creation.
+    VaultCreateCpi = 27,
+    /// The Realm-selected token program refused exact `InitializeAccount3`.
+    VaultInitializeCpi = 28,
+    /// Opening did not persist exact Market, custody, Vault, rent, and debit postconditions.
+    VaultPostcondition = 29,
 }
 
 impl From<AdapterError> for ProgramError {

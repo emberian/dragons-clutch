@@ -21,6 +21,7 @@ dclutch-capability-contract = { path = "../../crates/dclutch-capability-contract
 dclutch-collateral-contract = { path = "../../crates/dclutch-collateral-contract" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-kernel = { path = "../../crates/dclutch-kernel" }
+dclutch-market-contract = { path = "../../crates/dclutch-market-contract" }
 dclutch-product-contract = { path = "../../crates/dclutch-product-contract" }
 dclutch-pyth-contract = { path = "../../crates/dclutch-pyth-contract" }
 dclutch-pyth-svm = { path = "../../crates/dclutch-pyth-svm" }

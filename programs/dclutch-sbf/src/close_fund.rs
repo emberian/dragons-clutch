@@ -1,5 +1,6 @@
 //! Exact two-destination Fund distribution and closure.
 
+use dclutch_pyth_contract::funding::required_resolution_minimum_balance;
 use solana_program::{account_info::AccountInfo, program_error::ProgramError};
 
 use crate::{
@@ -42,14 +43,14 @@ pub(crate) fn close_failure(
 }
 
 fn price_distribution(facts: FundFacts) -> Result<Distribution, ProgramError> {
-    let resolver = facts
-        .fund
-        .provider_fee_reimbursement()
-        .checked_add(facts.fund.success_bounty())
+    let remaining = facts.funding.remaining();
+    let resolver = remaining
+        .provider_principal()
+        .checked_add(remaining.bounty_principal())
         .ok_or(AdapterError::Arithmetic)?;
     let sponsor = facts
         .required_rent
-        .checked_add(facts.classification.sponsor_refund_excess())
+        .checked_add(facts.sponsor_refund_excess)
         .ok_or(AdapterError::Arithmetic)?;
     validate_minimum(facts)?;
     Ok(Distribution {
@@ -59,26 +60,27 @@ fn price_distribution(facts: FundFacts) -> Result<Distribution, ProgramError> {
 }
 
 fn failure_distribution(facts: FundFacts) -> Result<Distribution, ProgramError> {
+    let remaining = facts.funding.remaining();
     let sponsor = facts
         .required_rent
-        .checked_add(facts.fund.provider_fee_reimbursement())
-        .and_then(|value| value.checked_add(facts.classification.sponsor_refund_excess()))
+        .checked_add(remaining.provider_principal())
+        .and_then(|value| value.checked_add(facts.sponsor_refund_excess))
         .ok_or(AdapterError::Arithmetic)?;
     validate_minimum(facts)?;
     Ok(Distribution {
-        first: facts.fund.success_bounty(),
+        first: remaining.bounty_principal(),
         second: sponsor,
     })
 }
 
 fn validate_minimum(facts: FundFacts) -> Result<(), ProgramError> {
-    let expected = facts
-        .fund
-        .minimum_balance(facts.required_rent)
-        .map_err(|_| AdapterError::FundClose)?;
-    if facts.classification.minimum() != expected
-        || facts.classification.sponsor_refund_recipient() != facts.fund.sponsor_refund()
-    {
+    let expected =
+        required_resolution_minimum_balance(facts.funding).map_err(|_| AdapterError::FundClose)?;
+    let reconstructed = facts
+        .required_rent
+        .checked_add(facts.funding.remaining().total_principal())
+        .ok_or(AdapterError::Arithmetic)?;
+    if expected != reconstructed || facts.sponsor_refund == [0; 32] {
         return Err(AdapterError::FundClose.into());
     }
     Ok(())
@@ -159,22 +161,60 @@ fn distribute_and_close(
 
 #[cfg(test)]
 mod tests {
-    use dclutch_pyth_contract::funding::ResolutionFundV1;
-    use solana_program::pubkey::Pubkey;
+    use dclutch_capability_contract::{
+        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
+        ContentId, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+    };
+    use dclutch_pyth_contract::funding::construct_required_resolution_funding;
+    use solana_program::{hash::hash, pubkey::Pubkey};
     use std::{boxed::Box, vec::Vec};
 
     use super::*;
 
     fn facts(actual: u64) -> FundFacts {
-        let fund = ResolutionFundV1::new([1; 32], 7, [2; 32], 3, 5).expect("fund");
         let required_rent = 11;
-        FundFacts {
-            fund,
-            classification: fund
-                .classify_balance(actual, required_rent)
-                .expect("funded"),
+        let quote = FundingQuoteV1::new(required_rent, 0, 0, 3, 5, 0, 0).expect("quote");
+        let entry = CapabilityEntryV1::new(
+            content_id(10),
+            content_id(11),
+            content_id(12),
+            content_id(13),
+            content_id(14),
+            content_id(15),
+            ActivationPolicy::RequiredAtFounding,
+            0,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            quote,
+        )
+        .expect("entry");
+        let mut manifest_bytes = [0; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+        let manifest =
+            CapabilityManifestV1::encode_into(&[entry], &mut manifest_bytes).expect("manifest");
+        let manifest_id =
+            ContentId::new(hash(manifest.as_bytes()).to_bytes()).expect("manifest ID");
+        let selected = manifest
+            .required_founding_entry_for_config(content_id(12))
+            .expect("selected entry");
+        let funding = construct_required_resolution_funding(
+            manifest_id,
+            manifest,
+            selected,
             required_rent,
+            44,
+        )
+        .expect("funding");
+        let minimum = required_resolution_minimum_balance(funding).expect("minimum");
+        FundFacts {
+            funding,
+            required_rent,
+            sponsor_refund_excess: actual.checked_sub(minimum).expect("funded"),
+            sponsor_refund: [2; 32],
         }
+    }
+
+    fn content_id(value: u8) -> ContentId {
+        ContentId::new([value; 32]).expect("content ID")
     }
 
     fn account(key: u8, lamports: u64, owner: Pubkey) -> AccountInfo<'static> {

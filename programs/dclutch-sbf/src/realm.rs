@@ -208,7 +208,7 @@ fn authenticate_create_realm(
     })
 }
 
-fn select_adapter_release(
+pub(crate) fn select_adapter_release(
     release_id: [u8; 32],
 ) -> Result<CollateralAdapterReleaseV1, ProgramError> {
     for release in PRODUCTION_ADAPTER_RELEASES {
@@ -219,7 +219,7 @@ fn select_adapter_release(
     Err(AdapterError::RealmAuthentication.into())
 }
 
-fn require_authority_policy(
+pub(crate) fn require_authority_policy(
     policy: MintAuthorityPolicy,
     authority: &COption<[u8; 32]>,
 ) -> Result<(), ProgramError> {
@@ -231,7 +231,7 @@ fn require_authority_policy(
     }
 }
 
-fn require_freeze_policy(
+pub(crate) fn require_freeze_policy(
     policy: FreezeAuthorityPolicy,
     authority: &COption<[u8; 32]>,
 ) -> Result<(), ProgramError> {
@@ -243,7 +243,7 @@ fn require_freeze_policy(
     }
 }
 
-fn recognized_program_loader(owner: &Pubkey) -> bool {
+pub(crate) fn recognized_program_loader(owner: &Pubkey) -> bool {
     owner == &bpf_loader::ID || owner == &bpf_loader_upgradeable::ID
 }
 
@@ -349,7 +349,6 @@ mod tests {
     ) -> RealmV1 {
         let release = release_for(token_program);
         RealmV1::new(RealmV1Input {
-            collateral_semantic_id: [9; 32],
             token_program,
             collateral_mint: mint.to_bytes(),
             collateral_adapter_release_id: hash(&release.to_bytes()).to_bytes(),
@@ -476,7 +475,7 @@ mod tests {
         );
 
         let mut input = canonical.to_bytes();
-        if let Some(release_byte) = input.get_mut(112) {
+        if let Some(release_byte) = input.get_mut(80) {
             *release_byte ^= 1;
         }
         let wrong_release = RealmV1::decode(&input).expect("still canonical Realm shape");

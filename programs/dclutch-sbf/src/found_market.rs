@@ -1,28 +1,34 @@
 //! Atomic founding of one authenticated categorical-Pyth Market and Fund.
 
-use dclutch_capability_contract::{CapabilityManifestV1, FundingQuoteV1};
+use dclutch_capability_contract::CapabilityManifestV1;
 use dclutch_collateral_contract::{
     AccountPrivilege, FoundMarketAndFundV1, InstructionTag, validate_account_frame,
 };
 use dclutch_core_contract::{MARKET_ROOT_BYTES, MarketIdentity, MarketRoot};
+use dclutch_market_contract::market::{
+    CategoricalMarketV1, CategoricalSettlementSummaryV1, MARKET_BASE_BYTES,
+};
 use dclutch_product_contract::{
-    ContentId as ProductContentId,
-    capacity::CapacityProfileV1,
-    claim::{CategoricalUnitV1, ClaimBasisProfileV1},
+    ContentId as ProductContentId, capacity::CapacityProfileV1, claim::CategoricalUnitV1,
     product::InstanceV1,
 };
 use dclutch_pyth_contract::{
-    feed_profile::PythFeedProfileV1,
-    funding::{FUNDING_BYTES, ResolutionFundV1},
-    market::{MARKET_BASE_BYTES, MarketStateV1},
-    policy::CategoricalPythPolicyRecordV1,
-    receipt::ResolutionReceiptV1,
+    funding::{
+        FUNDING_BYTES, FundingStateV1, construct_required_resolution_funding,
+        required_resolution_minimum_balance,
+    },
     resolution_material::CategoricalPythResolutionMaterialV1,
 };
 use dclutch_realm_contract::{REALM_PDA_DOMAIN, RealmV1};
 use solana_program::{
-    account_info::AccountInfo, hash::hash, program::invoke_signed, program_error::ProgramError,
-    pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize,
+    account_info::AccountInfo,
+    clock::Clock,
+    hash::hash,
+    program::invoke_signed,
+    program_error::ProgramError,
+    pubkey::Pubkey,
+    rent::Rent,
+    sysvar::{Sysvar, SysvarSerialize},
 };
 use solana_sdk_ids::{native_loader, system_program, sysvar};
 use solana_system_interface::instruction::create_account;
@@ -97,8 +103,7 @@ struct FoundingPlan {
     fund_bump: u8,
     market_rent: u64,
     fund_balance: u64,
-    provider_fee_reimbursement: u64,
-    resolution_success_bounty: u64,
+    fund: FundingStateV1,
     sponsor_before: u64,
 }
 
@@ -109,7 +114,10 @@ pub(crate) fn process_found_market_and_fund(
     instruction: FoundMarketAndFundV1,
 ) -> Result<(), ProgramError> {
     let frame = FoundingFrame::parse(accounts)?;
-    let plan = authenticate_founding(program_id, &frame, instruction)?;
+    let current_slot = Clock::get()
+        .map_err(|_| AdapterError::FoundingAuthentication)?
+        .slot;
+    let plan = authenticate_founding(program_id, &frame, instruction, current_slot)?;
 
     let market_space =
         u64::try_from(market_bytes(plan.outcome_count)?).map_err(|_| AdapterError::Arithmetic)?;
@@ -179,6 +187,7 @@ fn authenticate_founding(
     program_id: &Pubkey,
     frame: &FoundingFrame<'_, '_>,
     instruction: FoundMarketAndFundV1,
+    current_slot: u64,
 ) -> Result<FoundingPlan, ProgramError> {
     authenticate_account_identities(program_id, frame)?;
     authenticate_immutable_records(program_id, frame, instruction)?;
@@ -197,39 +206,15 @@ fn authenticate_founding(
     }
 
     let root = founding_root(identity, frame.sponsor.key.to_bytes())?;
-    let material_data = frame
-        .resolution_material
-        .try_borrow_data()
-        .map_err(|_| AdapterError::FoundingAuthentication)?;
-    let material = CategoricalPythResolutionMaterialV1::decode(&material_data)
-        .map_err(|_| AdapterError::FoundingAuthentication)?;
-    let expected_market_bytes = validate_selected_market(
-        instruction.outcome_count(),
-        root,
-        *material.policy(),
-        *material.feed_profile(),
-    )?;
-    drop(material_data);
+    let expected_market_bytes = validate_selected_market(instruction.outcome_count(), root)?;
 
     let rent = Rent::from_account_info(frame.rent_sysvar)
         .map_err(|_| AdapterError::FoundingAuthentication)?;
     let market_rent = rent.minimum_balance(expected_market_bytes);
     let fund_rent = rent.minimum_balance(FUNDING_BYTES);
-    let quote = authenticate_fund_quote(frame, identity, fund_rent)?;
-    let fund = ResolutionFundV1::new(
-        frame.market.key.to_bytes(),
-        identity.generation(),
-        frame.sponsor.key.to_bytes(),
-        quote.provider_principal(),
-        quote.bounty_principal(),
-    )
-    .map_err(|_| AdapterError::FoundingAuthentication)?;
-    let fund_balance = fund
-        .minimum_balance(fund_rent)
-        .map_err(|_| AdapterError::Arithmetic)?;
-    if fund_balance != quote.total_principal() {
-        return Err(AdapterError::FoundingAuthentication.into());
-    }
+    let fund = authenticate_fund(frame, identity, fund_rent, current_slot)?;
+    let fund_balance =
+        required_resolution_minimum_balance(fund).map_err(|_| AdapterError::Arithmetic)?;
     let total_debit = market_rent
         .checked_add(fund_balance)
         .ok_or(AdapterError::Arithmetic)?;
@@ -263,17 +248,17 @@ fn authenticate_founding(
         fund_bump,
         market_rent,
         fund_balance,
-        provider_fee_reimbursement: quote.provider_principal(),
-        resolution_success_bounty: quote.bounty_principal(),
+        fund,
         sponsor_before: frame.sponsor.lamports(),
     })
 }
 
-fn authenticate_fund_quote(
+fn authenticate_fund(
     frame: &FoundingFrame<'_, '_>,
     identity: MarketIdentity,
     fund_rent: u64,
-) -> Result<FundingQuoteV1, ProgramError> {
+    current_slot: u64,
+) -> Result<FundingStateV1, ProgramError> {
     let material_data = frame
         .resolution_material
         .try_borrow_data()
@@ -292,9 +277,14 @@ fn authenticate_fund_quote(
     if selected.entry().release_id().to_bytes() != *material.policy().release_id() {
         return Err(AdapterError::FoundingAuthentication.into());
     }
-    selected
-        .validate_one_shot_resolution_fund_quote(fund_rent)
-        .map_err(|_| AdapterError::FoundingAuthentication.into())
+    construct_required_resolution_funding(
+        identity.capability_manifest_id(),
+        manifest,
+        selected,
+        fund_rent,
+        current_slot,
+    )
+    .map_err(|_| AdapterError::FoundingAuthentication.into())
 }
 
 fn authenticate_account_identities(
@@ -404,10 +394,7 @@ fn authenticate_immutable_records(
     let product_claim_id =
         ProductContentId::new(claim_digest).map_err(|_| AdapterError::FoundingAuthentication)?;
     instance
-        .validate_claim_basis(
-            product_claim_id,
-            ClaimBasisProfileV1::CategoricalUnit(claim),
-        )
+        .validate_claim_basis(product_claim_id, claim)
         .map_err(|_| AdapterError::ContentIdentity)?;
     drop(capacity_data);
 
@@ -458,42 +445,20 @@ fn persist_founding(
         return Err(AdapterError::FoundingPostcondition.into());
     }
 
-    let material_data = frame
-        .resolution_material
-        .try_borrow_data()
-        .map_err(|_| AdapterError::FoundingPostcondition)?;
-    let material = CategoricalPythResolutionMaterialV1::decode(&material_data)
-        .map_err(|_| AdapterError::FoundingPostcondition)?;
     let root = founding_root(plan.identity, frame.sponsor.key.to_bytes())?;
     let mut market_data = frame
         .market
         .try_borrow_mut_data()
         .map_err(|_| AdapterError::FoundingPostcondition)?;
-    encode_selected_market(
-        plan.outcome_count,
-        &mut market_data,
-        root,
-        *material.policy(),
-        *material.feed_profile(),
-    )?;
+    encode_selected_market(plan.outcome_count, &mut market_data, root)?;
     drop(market_data);
-    drop(material_data);
 
-    let fund = ResolutionFundV1::new(
-        frame.market.key.to_bytes(),
-        plan.identity.generation(),
-        frame.sponsor.key.to_bytes(),
-        plan.provider_fee_reimbursement,
-        plan.resolution_success_bounty,
-    )
-    .map_err(|_| AdapterError::FoundingPostcondition)?;
     let mut fund_data = frame
         .fund
         .try_borrow_mut_data()
         .map_err(|_| AdapterError::FoundingPostcondition)?;
-    fund.encode(&mut fund_data)
-        .map_err(|_| AdapterError::FoundingPostcondition)?;
-    if ResolutionFundV1::decode(&fund_data) != Ok(fund) {
+    fund_data.copy_from_slice(&plan.fund.to_bytes());
+    if FundingStateV1::decode(&fund_data) != Ok(plan.fund) {
         return Err(AdapterError::FoundingPostcondition.into());
     }
     Ok(())
@@ -507,15 +472,9 @@ fn founding_root(identity: MarketIdentity, sponsor: [u8; 32]) -> Result<MarketRo
     Ok(root)
 }
 
-type MarketValidator =
-    fn(MarketRoot, CategoricalPythPolicyRecordV1, PythFeedProfileV1) -> Result<usize, ProgramError>;
+type MarketValidator = fn(MarketRoot) -> Result<usize, ProgramError>;
 
-type MarketEncoder = fn(
-    &mut [u8],
-    MarketRoot,
-    CategoricalPythPolicyRecordV1,
-    PythFeedProfileV1,
-) -> Result<(), ProgramError>;
+type MarketEncoder = fn(&mut [u8], MarketRoot) -> Result<(), ProgramError>;
 
 const MARKET_VALIDATORS: [MarketValidator; 15] = [
     validate_market::<2>,
@@ -553,61 +512,40 @@ const MARKET_ENCODERS: [MarketEncoder; 15] = [
     encode_market::<16>,
 ];
 
-fn validate_selected_market(
-    outcome_count: u8,
-    root: MarketRoot,
-    policy: CategoricalPythPolicyRecordV1,
-    feed_profile: PythFeedProfileV1,
-) -> Result<usize, ProgramError> {
+fn validate_selected_market(outcome_count: u8, root: MarketRoot) -> Result<usize, ProgramError> {
     let validator = MARKET_VALIDATORS
         .get(outcome_index(outcome_count)?)
         .copied()
         .ok_or(AdapterError::FoundingAuthentication)?;
-    validator(root, policy, feed_profile)
+    validator(root)
 }
 
 fn encode_selected_market(
     outcome_count: u8,
     output: &mut [u8],
     root: MarketRoot,
-    policy: CategoricalPythPolicyRecordV1,
-    feed_profile: PythFeedProfileV1,
 ) -> Result<(), ProgramError> {
     let encoder = MARKET_ENCODERS
         .get(outcome_index(outcome_count)?)
         .copied()
         .ok_or(AdapterError::FoundingPostcondition)?;
-    encoder(output, root, policy, feed_profile)
+    encoder(output, root)
 }
 
-fn validate_market<const N: usize>(
-    root: MarketRoot,
-    policy: CategoricalPythPolicyRecordV1,
-    feed_profile: PythFeedProfileV1,
-) -> Result<usize, ProgramError> {
-    let outcome_count = u8::try_from(N).map_err(|_| AdapterError::FoundingAuthentication)?;
-    let receipt = ResolutionReceiptV1::empty(outcome_count)
-        .map_err(|_| AdapterError::FoundingAuthentication)?;
-    MarketStateV1::<N>::new(root, policy, feed_profile, 0, [0; N], receipt)
+fn validate_market<const N: usize>(root: MarketRoot) -> Result<usize, ProgramError> {
+    CategoricalMarketV1::<N>::new(root, 0, [0; N], CategoricalSettlementSummaryV1::empty())
         .map_err(|_| AdapterError::MarketTransition)?;
-    MarketStateV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic.into())
+    CategoricalMarketV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic.into())
 }
 
-fn encode_market<const N: usize>(
-    output: &mut [u8],
-    root: MarketRoot,
-    policy: CategoricalPythPolicyRecordV1,
-    feed_profile: PythFeedProfileV1,
-) -> Result<(), ProgramError> {
-    let outcome_count = u8::try_from(N).map_err(|_| AdapterError::FoundingPostcondition)?;
-    let receipt = ResolutionReceiptV1::empty(outcome_count)
-        .map_err(|_| AdapterError::FoundingPostcondition)?;
-    let state = MarketStateV1::<N>::new(root, policy, feed_profile, 0, [0; N], receipt)
-        .map_err(|_| AdapterError::FoundingPostcondition)?;
+fn encode_market<const N: usize>(output: &mut [u8], root: MarketRoot) -> Result<(), ProgramError> {
+    let state =
+        CategoricalMarketV1::<N>::new(root, 0, [0; N], CategoricalSettlementSummaryV1::empty())
+            .map_err(|_| AdapterError::FoundingPostcondition)?;
     state
         .encode(output)
         .map_err(|_| AdapterError::FoundingPostcondition)?;
-    if MarketStateV1::<N>::decode(output) != Ok(state) {
+    if CategoricalMarketV1::<N>::decode(output) != Ok(state) {
         return Err(AdapterError::FoundingPostcondition.into());
     }
     Ok(())
@@ -671,16 +609,16 @@ const _: () = assert!(MARKET_ROOT_BYTES == 232);
 #[cfg(test)]
 mod tests {
     use dclutch_capability_contract::{
-        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, MANIFEST_HEADER_BYTES,
-        MAX_DEPENDENCIES_PER_CAPABILITY,
+        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, FundingQuoteV1,
+        MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
     };
     use dclutch_core_contract::ContentId as CoreContentId;
     use dclutch_kernel::resolution::categorical_pyth_v1::{
         CategoricalPythV1PolicyInput, MAX_PRICE_CELLS,
     };
     use dclutch_product_contract::{
-        capacity::{CapacityEnvelope, CapacityProfileId, CapacityProfileV1Input, ExactWordWidth},
-        claim::{CATEGORICAL_UNIT_DENOMINATOR, CategoricalUnitV1Input, RedemptionRounding},
+        capacity::{CapacityEnvelope, CapacityProfileId, CapacityProfileV1Input},
+        claim::CategoricalUnitV1Input,
         product::InstanceV1Input,
     };
     use dclutch_pyth_contract::{
@@ -720,7 +658,6 @@ mod tests {
         fn new_with_manifest(outcome_count: u8, manifest_case: ManifestCase) -> Self {
             let program_id = Pubkey::new_unique();
             let realm = RealmV1::new(RealmV1Input {
-                collateral_semantic_id: [1; 32],
                 token_program: [2; 32],
                 collateral_mint: [3; 32],
                 collateral_adapter_release_id: [4; 32],
@@ -740,8 +677,6 @@ mod tests {
                 CategoricalUnitV1Input {
                     capacity_profile_id: CapacityProfileId::new(capacity_id),
                     outcome_count: u32::from(outcome_count),
-                    payout_denominator: CATEGORICAL_UNIT_DENOMINATOR,
-                    rounding: RedemptionRounding::ExactOnly,
                 },
                 capacity,
             )
@@ -888,7 +823,7 @@ mod tests {
 
         fn authenticate(&self) -> Result<FoundingPlan, ProgramError> {
             let frame = FoundingFrame::parse(&self.accounts)?;
-            authenticate_founding(&self.program_id, &frame, self.instruction)
+            authenticate_founding(&self.program_id, &frame, self.instruction, 44)
         }
     }
 
@@ -998,14 +933,12 @@ mod tests {
     fn capacity() -> CapacityProfileV1 {
         CapacityProfileV1::new(CapacityProfileV1Input {
             envelope: CapacityEnvelope::Measured,
-            word_width: ExactWordWidth::Eight,
             verifier_release_id: product_id([10; 32]),
             envelope_basis_id: product_id([11; 32]),
             max_artifact_bytes: 128,
             page_payload_bytes: 64,
             max_pages: 2,
             max_partition_cells: 16,
-            max_coefficient_entries: 16,
         })
         .expect("valid capacity")
     }
@@ -1094,23 +1027,11 @@ mod tests {
             );
 
             let frame = FoundingFrame::parse(&fixture.accounts).expect("exact frame");
-            let material_data = frame
-                .resolution_material
-                .try_borrow_data()
-                .expect("material data");
-            let material = CategoricalPythResolutionMaterialV1::decode(&material_data)
-                .expect("canonical material");
             let root =
                 founding_root(plan.identity, frame.sponsor.key.to_bytes()).expect("founding root");
             let mut output = vec![0; market_bytes(outcome_count).expect("market bytes")];
-            encode_selected_market(
-                outcome_count,
-                &mut output,
-                root,
-                *material.policy(),
-                *material.feed_profile(),
-            )
-            .expect("typed encode and decode postcondition");
+            encode_selected_market(outcome_count, &mut output, root)
+                .expect("typed encode and decode postcondition");
             assert_eq!(output.get(10), Some(&outcome_count));
         }
     }
@@ -1235,8 +1156,8 @@ mod tests {
         let valid = Fixture::new(2);
         let plan = valid.authenticate().expect("manifest-authorized funding");
         let fund_rent = Rent::default().minimum_balance(FUNDING_BYTES);
-        assert_eq!(plan.provider_fee_reimbursement, 3);
-        assert_eq!(plan.resolution_success_bounty, 5);
+        assert_eq!(plan.fund.remaining().provider_principal(), 3);
+        assert_eq!(plan.fund.remaining().bounty_principal(), 5);
         assert_eq!(plan.fund_balance, fund_rent + 3 + 5);
     }
 
@@ -1298,11 +1219,14 @@ mod tests {
             let frame = FoundingFrame::parse(&fixture.accounts).expect("created frame");
             persist_founding(&fixture.program_id, &frame, plan).expect("exact persistence");
             let fund_data = frame.fund.try_borrow_data().expect("fund data");
-            let fund = ResolutionFundV1::decode(&fund_data).expect("canonical Fund");
-            assert_eq!(fund.market(), market_key.as_ref());
-            assert_eq!(fund.sponsor_refund(), frame.sponsor.key.as_ref());
-            assert_eq!(fund.provider_fee_reimbursement(), 3);
-            assert_eq!(fund.success_bounty(), 5);
+            let fund = FundingStateV1::decode(&fund_data).expect("canonical Fund");
+            assert_eq!(
+                fund.manifest_content_id(),
+                plan.identity.capability_manifest_id()
+            );
+            assert_eq!(fund.activation_slot(), 44);
+            assert_eq!(fund.remaining().provider_principal(), 3);
+            assert_eq!(fund.remaining().bounty_principal(), 5);
             assert_eq!(
                 frame.resolution_material.data_len(),
                 RESOLUTION_MATERIAL_BYTES
@@ -1313,6 +1237,6 @@ mod tests {
     #[test]
     fn declared_market_root_width_remains_the_contract_width() {
         assert_eq!(MARKET_ROOT_BYTES, 232);
-        assert_eq!(REALM_BYTES, 144);
+        assert_eq!(REALM_BYTES, 112);
     }
 }

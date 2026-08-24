@@ -1,8 +1,17 @@
 //! Exact account-frame, replay, funding, and provider authentication.
 
+use dclutch_capability_contract::CapabilityManifestV1;
+use dclutch_core_contract::ContentId;
+use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome_count};
 use dclutch_pyth_contract::{
-    funding::{BalanceClassification, ResolutionFundV1},
-    market::MarketStateV1,
+    frame::{
+        ResolutionAccountPrivilegeV1, ResolutionFrameErrorV1, validate_failure_resolution_frame_v1,
+        validate_price_resolution_frame_v1,
+    },
+    funding::{
+        FundingStateV1, required_resolution_minimum_balance, validate_required_resolution_funding,
+    },
+    resolution_material::CategoricalPythResolutionMaterialV1,
 };
 use dclutch_pyth_svm::{
     PostUpdateParamsView, ProgramDataV3View, ProgramV3View, PythReleaseV1, ReceiverConfigV2View,
@@ -26,12 +35,14 @@ const UPGRADEABLE_LOADER: Pubkey = Pubkey::new_from_array([
 /// Canonical System Program address.
 pub(crate) const SYSTEM_PROGRAM: Pubkey = Pubkey::new_from_array([0; 32]);
 
-/// Exact 13-role price-resolution account frame.
+/// Exact 15-role price-resolution account frame.
 pub(crate) struct PriceFrame<'a, 'info> {
     pub(crate) resolver: &'a AccountInfo<'info>,
     pub(crate) update: &'a AccountInfo<'info>,
     pub(crate) market: &'a AccountInfo<'info>,
     pub(crate) fund: &'a AccountInfo<'info>,
+    pub(crate) material: &'a AccountInfo<'info>,
+    pub(crate) manifest: &'a AccountInfo<'info>,
     pub(crate) sponsor: &'a AccountInfo<'info>,
     pub(crate) receiver: &'a AccountInfo<'info>,
     pub(crate) receiver_programdata: &'a AccountInfo<'info>,
@@ -45,7 +56,7 @@ pub(crate) struct PriceFrame<'a, 'info> {
 
 impl<'a, 'info> PriceFrame<'a, 'info> {
     pub(crate) fn parse(accounts: &'a [AccountInfo<'info>]) -> Result<Self, ProgramError> {
-        if accounts.len() != 13 {
+        if accounts.len() != 15 {
             return Err(AdapterError::AccountFrameLength.into());
         }
         let frame = Self {
@@ -53,85 +64,76 @@ impl<'a, 'info> PriceFrame<'a, 'info> {
             update: account(accounts, 1)?,
             market: account(accounts, 2)?,
             fund: account(accounts, 3)?,
-            sponsor: account(accounts, 4)?,
-            receiver: account(accounts, 5)?,
-            receiver_programdata: account(accounts, 6)?,
-            config: account(accounts, 7)?,
-            encoded_vaa: account(accounts, 8)?,
-            router: account(accounts, 9)?,
-            router_programdata: account(accounts, 10)?,
-            treasury: account(accounts, 11)?,
-            system: account(accounts, 12)?,
+            material: account(accounts, 4)?,
+            manifest: account(accounts, 5)?,
+            sponsor: account(accounts, 6)?,
+            receiver: account(accounts, 7)?,
+            receiver_programdata: account(accounts, 8)?,
+            config: account(accounts, 9)?,
+            encoded_vaa: account(accounts, 10)?,
+            router: account(accounts, 11)?,
+            router_programdata: account(accounts, 12)?,
+            treasury: account(accounts, 13)?,
+            system: account(accounts, 14)?,
         };
         frame.validate_privileges()?;
         Ok(frame)
     }
 
     fn validate_privileges(&self) -> Result<(), ProgramError> {
-        expect(self.resolver, true, true, false)?;
-        expect(self.update, true, true, false)?;
-        expect(self.market, false, true, false)?;
-        expect(self.fund, false, true, false)?;
-        // The immutable sponsor-refund destination never grants authority.
-        // A duplicate fee-payer role can legitimately union a signer bit.
-        expect_writable_executable(self.sponsor, true, false)?;
-        expect(self.receiver, false, false, true)?;
-        expect(self.receiver_programdata, false, false, false)?;
-        expect(self.config, false, false, false)?;
-        expect(self.encoded_vaa, false, false, false)?;
-        expect(self.router, false, false, true)?;
-        expect(self.router_programdata, false, false, false)?;
-        expect(self.treasury, false, true, false)?;
-        expect(self.system, false, false, true)?;
-
-        // The two payout roles may alias each other. They may not alias the
-        // Fund, persistent Market, or mutable provider accounts.
-        if self.fund.key == self.resolver.key
-            || self.fund.key == self.sponsor.key
-            || self.resolver.key == self.update.key
-            || self.resolver.key == self.treasury.key
-            || self.update.key == self.treasury.key
-            || self.sponsor.key == self.update.key
-            || self.sponsor.key == self.market.key
-            || self.sponsor.key == self.treasury.key
-        {
-            return Err(AdapterError::AccountIdentity.into());
-        }
-        Ok(())
+        let privileges = [
+            resolution_privilege(self.resolver),
+            resolution_privilege(self.update),
+            resolution_privilege(self.market),
+            resolution_privilege(self.fund),
+            resolution_privilege(self.material),
+            resolution_privilege(self.manifest),
+            resolution_privilege(self.sponsor),
+            resolution_privilege(self.receiver),
+            resolution_privilege(self.receiver_programdata),
+            resolution_privilege(self.config),
+            resolution_privilege(self.encoded_vaa),
+            resolution_privilege(self.router),
+            resolution_privilege(self.router_programdata),
+            resolution_privilege(self.treasury),
+            resolution_privilege(self.system),
+        ];
+        validate_price_resolution_frame_v1(&privileges).map_err(map_resolution_frame_error)
     }
 }
 
-/// Exact four-role permissionless failure-resolution account frame.
+/// Exact six-role permissionless failure-resolution account frame.
 pub(crate) struct FailureFrame<'a, 'info> {
     pub(crate) bounty_recipient: &'a AccountInfo<'info>,
     pub(crate) market: &'a AccountInfo<'info>,
     pub(crate) fund: &'a AccountInfo<'info>,
+    pub(crate) material: &'a AccountInfo<'info>,
+    pub(crate) manifest: &'a AccountInfo<'info>,
     pub(crate) sponsor: &'a AccountInfo<'info>,
 }
 
 impl<'a, 'info> FailureFrame<'a, 'info> {
     pub(crate) fn parse(accounts: &'a [AccountInfo<'info>]) -> Result<Self, ProgramError> {
-        if accounts.len() != 4 {
+        if accounts.len() != 6 {
             return Err(AdapterError::AccountFrameLength.into());
         }
         let frame = Self {
             bounty_recipient: account(accounts, 0)?,
             market: account(accounts, 1)?,
             fund: account(accounts, 2)?,
-            sponsor: account(accounts, 3)?,
+            material: account(accounts, 3)?,
+            manifest: account(accounts, 4)?,
+            sponsor: account(accounts, 5)?,
         };
-        expect_writable_executable(frame.bounty_recipient, true, false)?;
-        expect(frame.market, false, true, false)?;
-        expect(frame.fund, false, true, false)?;
-        expect_writable_executable(frame.sponsor, true, false)?;
-        // Only the two payout roles may alias; neither may alias owned state.
-        if frame.fund.key == frame.bounty_recipient.key
-            || frame.fund.key == frame.sponsor.key
-            || frame.market.key == frame.bounty_recipient.key
-            || frame.market.key == frame.sponsor.key
-        {
-            return Err(AdapterError::AccountIdentity.into());
-        }
+        let privileges = [
+            resolution_privilege(frame.bounty_recipient),
+            resolution_privilege(frame.market),
+            resolution_privilege(frame.fund),
+            resolution_privilege(frame.material),
+            resolution_privilege(frame.manifest),
+            resolution_privilege(frame.sponsor),
+        ];
+        validate_failure_resolution_frame_v1(&privileges).map_err(map_resolution_frame_error)?;
         Ok(frame)
     }
 }
@@ -139,17 +141,19 @@ impl<'a, 'info> FailureFrame<'a, 'info> {
 /// Authenticated immutable Market facts needed outside generic outcome dispatch.
 #[derive(Clone, Copy)]
 pub(crate) struct MarketFacts {
-    pub(crate) release_id: [u8; 32],
-    pub(crate) provider_feed_id: [u8; 32],
     pub(crate) outcome_count: u8,
+    pub(crate) resolution_policy_id: ContentId,
+    pub(crate) capability_manifest_id: ContentId,
+    pub(crate) rent_refund: [u8; 32],
 }
 
 /// Authenticated immutable Fund and exact live-balance classification.
 #[derive(Clone, Copy)]
 pub(crate) struct FundFacts {
-    pub(crate) fund: ResolutionFundV1,
-    pub(crate) classification: BalanceClassification,
+    pub(crate) funding: FundingStateV1,
     pub(crate) required_rent: u64,
+    pub(crate) sponsor_refund_excess: u64,
+    pub(crate) sponsor_refund: [u8; 32],
 }
 
 /// Exact receiver fee and temporary-account rent expected from `post_update`.
@@ -172,7 +176,7 @@ pub(crate) fn authenticate_market(
     let data = market
         .try_borrow_data()
         .map_err(|_| AdapterError::AccountData)?;
-    let outcomes = data.get(10).copied().ok_or(AdapterError::AccountData)?;
+    let outcomes = decode_market_outcome_count(&data).map_err(|_| AdapterError::AccountData)?;
     match outcomes {
         2 => market_facts::<2>(program_id, market.key, &data, generation, child_count),
         3 => market_facts::<3>(program_id, market.key, &data, generation, child_count),
@@ -201,18 +205,10 @@ fn market_facts<const N: usize>(
     generation: u64,
     child_count: u64,
 ) -> Result<MarketFacts, ProgramError> {
-    let market = MarketStateV1::<N>::decode(bytes).map_err(|_| AdapterError::AccountData)?;
+    let market = CategoricalMarketV1::<N>::decode(bytes).map_err(|_| AdapterError::AccountData)?;
     let root = market.root();
     if root.identity().generation() != generation || root.outstanding_children() != child_count {
         return Err(AdapterError::ReplayMismatch.into());
-    }
-    if hash(&market.policy().to_bytes()).to_bytes()
-        != root.identity().resolution_policy_id().to_bytes()
-    {
-        return Err(AdapterError::ContentIdentity.into());
-    }
-    if hash(&market.feed_profile().to_bytes()).to_bytes() != *market.policy().feed_profile_id() {
-        return Err(AdapterError::ContentIdentity.into());
     }
     if root.phase() != dclutch_core_contract::Phase::Open {
         return Err(AdapterError::ReplayMismatch.into());
@@ -224,19 +220,11 @@ fn market_facts<const N: usize>(
         return Err(AdapterError::AccountIdentity.into());
     }
 
-    // Refuse an unretirable child count before paying the provider.
-    let mut next_root = root;
-    next_root
-        .transition_phase(generation, dclutch_core_contract::Phase::Resolved)
-        .map_err(|_| AdapterError::ReplayMismatch)?;
-    next_root
-        .retire_child(generation, child_count)
-        .map_err(|_| AdapterError::ReplayMismatch)?;
-
     Ok(MarketFacts {
-        release_id: *market.policy().release_id(),
-        provider_feed_id: *market.feed_profile().provider_feed_id(),
         outcome_count: u8::try_from(N).map_err(|_| AdapterError::AccountData)?,
+        resolution_policy_id: root.identity().resolution_policy_id(),
+        capability_manifest_id: root.identity().capability_manifest_id(),
+        rent_refund: root.rent_refund(),
     })
 }
 
@@ -244,36 +232,86 @@ pub(crate) fn authenticate_fund(
     program_id: &Pubkey,
     fund_account: &AccountInfo<'_>,
     market: &AccountInfo<'_>,
+    material_account: &AccountInfo<'_>,
+    manifest_account: &AccountInfo<'_>,
     sponsor: &AccountInfo<'_>,
-    generation: u64,
-) -> Result<FundFacts, ProgramError> {
-    if fund_account.owner != program_id || fund_account.key == sponsor.key {
+    market_facts: MarketFacts,
+) -> Result<(FundFacts, CategoricalPythResolutionMaterialV1), ProgramError> {
+    if fund_account.owner != program_id
+        || material_account.owner != program_id
+        || manifest_account.owner != program_id
+        || fund_account.key == sponsor.key
+        || sponsor.key.to_bytes() != market_facts.rent_refund
+        || sponsor.owner != &SYSTEM_PROGRAM
+        || !sponsor.data_is_empty()
+    {
         return Err(AdapterError::AccountIdentity.into());
     }
     let (expected, _) = Pubkey::find_program_address(&[FUND_SEED, market.key.as_ref()], program_id);
     if fund_account.key != &expected {
         return Err(AdapterError::AccountIdentity.into());
     }
+    let material_data = material_account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::AccountData)?;
+    let material = CategoricalPythResolutionMaterialV1::decode(&material_data)
+        .map_err(|_| AdapterError::AccountData)?;
+    if material.to_bytes().as_slice() != &material_data[..]
+        || hash(&material.policy().to_bytes()).to_bytes()
+            != market_facts.resolution_policy_id.to_bytes()
+        || hash(&material.feed_profile().to_bytes()).to_bytes()
+            != *material.policy().feed_profile_id()
+    {
+        return Err(AdapterError::ContentIdentity.into());
+    }
+
+    let manifest_data = manifest_account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::AccountData)?;
+    let manifest =
+        CapabilityManifestV1::decode(&manifest_data).map_err(|_| AdapterError::AccountData)?;
+    if manifest.as_bytes() != &manifest_data[..]
+        || hash(manifest.as_bytes()).to_bytes() != market_facts.capability_manifest_id.to_bytes()
+    {
+        return Err(AdapterError::ContentIdentity.into());
+    }
+    let selected = manifest
+        .required_founding_entry_for_config(market_facts.resolution_policy_id)
+        .map_err(|_| AdapterError::AccountData)?;
+    if selected.entry().release_id().to_bytes() != *material.policy().release_id() {
+        return Err(AdapterError::ContentIdentity.into());
+    }
+
     let data = fund_account
         .try_borrow_data()
         .map_err(|_| AdapterError::AccountData)?;
-    let fund = ResolutionFundV1::decode(&data).map_err(|_| AdapterError::AccountData)?;
-    if fund.market() != market.key.as_ref()
-        || fund.generation() != generation
-        || fund.sponsor_refund() != sponsor.key.as_ref()
-    {
-        return Err(AdapterError::ReplayMismatch.into());
-    }
+    let funding = FundingStateV1::decode(&data).map_err(|_| AdapterError::AccountData)?;
     let rent = Rent::get().map_err(|_| AdapterError::AccountData)?;
     let required_rent = rent.minimum_balance(data.len());
-    let classification = fund
-        .classify_balance(fund_account.lamports(), required_rent)
-        .map_err(|_| AdapterError::FundUnderfunded)?;
-    Ok(FundFacts {
-        fund,
-        classification,
+    let minimum =
+        required_resolution_minimum_balance(funding).map_err(|_| AdapterError::FundUnderfunded)?;
+    let sponsor_refund_excess = fund_account
+        .lamports()
+        .checked_sub(minimum)
+        .ok_or(AdapterError::FundUnderfunded)?;
+    validate_required_resolution_funding(
+        funding,
+        market_facts.capability_manifest_id,
+        manifest,
+        selected,
         required_rent,
-    })
+        funding.remaining().total_principal(),
+    )
+    .map_err(|_| AdapterError::FundUnderfunded)?;
+    Ok((
+        FundFacts {
+            funding,
+            required_rent,
+            sponsor_refund_excess,
+            sponsor_refund: market_facts.rent_refund,
+        },
+        material,
+    ))
 }
 
 #[inline(never)]
@@ -337,7 +375,7 @@ pub(crate) fn authenticate_provider(
     if frame.treasury.key != &expected_treasury {
         return Err(AdapterError::ProviderAuthentication.into());
     }
-    if funding.fund.provider_fee_reimbursement() != config.fee() {
+    if funding.funding.remaining().provider_principal() != config.fee() {
         return Err(AdapterError::FundUnderfunded.into());
     }
     let rent = Rent::get().map_err(|_| AdapterError::AccountData)?;
@@ -421,27 +459,25 @@ fn account<'a, 'info>(
         .ok_or(AdapterError::AccountFrameLength.into())
 }
 
-fn expect(
-    account: &AccountInfo<'_>,
-    signer: bool,
-    writable: bool,
-    executable: bool,
-) -> Result<(), ProgramError> {
-    if account.is_signer != signer {
-        return Err(AdapterError::AccountPrivilege.into());
+fn resolution_privilege(account: &AccountInfo<'_>) -> ResolutionAccountPrivilegeV1 {
+    ResolutionAccountPrivilegeV1 {
+        key: account.key.to_bytes(),
+        is_signer: account.is_signer,
+        is_writable: account.is_writable,
+        is_executable: account.executable,
     }
-    expect_writable_executable(account, writable, executable)
 }
 
-fn expect_writable_executable(
-    account: &AccountInfo<'_>,
-    writable: bool,
-    executable: bool,
-) -> Result<(), ProgramError> {
-    if account.is_writable != writable || account.executable != executable {
-        return Err(AdapterError::AccountPrivilege.into());
+fn map_resolution_frame_error(error: ResolutionFrameErrorV1) -> ProgramError {
+    match error {
+        ResolutionFrameErrorV1::InvalidAccountCount => AdapterError::AccountFrameLength.into(),
+        ResolutionFrameErrorV1::UnsafeAlias => AdapterError::AccountIdentity.into(),
+        ResolutionFrameErrorV1::InsufficientPrivilege
+        | ResolutionFrameErrorV1::UnexpectedPrivilege
+        | ResolutionFrameErrorV1::InvalidExecutablePrivilege => {
+            AdapterError::AccountPrivilege.into()
+        }
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -457,12 +493,14 @@ mod tests {
         AccountInfo::new(key, signer, writable, lamports, data, owner, executable)
     }
 
-    fn price_accounts() -> [AccountInfo<'static>; 13] {
+    fn price_accounts() -> [AccountInfo<'static>; 15] {
         [
             test_account(true, true, false),
             test_account(true, true, false),
             test_account(false, true, false),
             test_account(false, true, false),
+            test_account(false, false, false),
+            test_account(false, false, false),
             test_account(false, true, false),
             test_account(false, false, true),
             test_account(false, false, false),
@@ -475,11 +513,13 @@ mod tests {
         ]
     }
 
-    fn failure_accounts(bounty_signer: bool, sponsor_signer: bool) -> [AccountInfo<'static>; 4] {
+    fn failure_accounts(bounty_signer: bool, sponsor_signer: bool) -> [AccountInfo<'static>; 6] {
         [
             test_account(bounty_signer, true, false),
             test_account(false, true, false),
             test_account(false, true, false),
+            test_account(false, false, false),
+            test_account(false, false, false),
             test_account(sponsor_signer, true, false),
         ]
     }
@@ -509,7 +549,7 @@ mod tests {
         );
 
         let mut writable_receiver = price_accounts();
-        writable_receiver[5] = test_account(false, true, true);
+        writable_receiver[7] = test_account(false, true, true);
         assert_eq!(
             PriceFrame::parse(&writable_receiver).err(),
             Some(AdapterError::AccountPrivilege.into())
@@ -519,7 +559,7 @@ mod tests {
     #[test]
     fn price_frame_allows_resolver_sponsor_alias_and_refuses_extras() {
         let mut aliased_sponsor = price_accounts();
-        aliased_sponsor[4] = aliased_sponsor[0].clone();
+        aliased_sponsor[6] = aliased_sponsor[0].clone();
         assert!(PriceFrame::parse(&aliased_sponsor).is_ok());
 
         let mut extras = Vec::from(price_accounts());
@@ -533,7 +573,7 @@ mod tests {
     #[test]
     fn price_and_failure_frames_refuse_a_self_refunding_fund() {
         let mut price = price_accounts();
-        price[4] = price[3].clone();
+        price[6] = price[3].clone();
         assert_eq!(
             PriceFrame::parse(&price).err(),
             Some(AdapterError::AccountIdentity.into())
@@ -552,7 +592,7 @@ mod tests {
         assert!(FailureFrame::parse(&failure_accounts(false, false)).is_ok());
         assert!(FailureFrame::parse(&failure_accounts(true, true)).is_ok());
         let mut aliased = failure_accounts(false, false);
-        aliased[3] = aliased[0].clone();
+        aliased[5] = aliased[0].clone();
         assert!(FailureFrame::parse(&aliased).is_ok());
     }
 }

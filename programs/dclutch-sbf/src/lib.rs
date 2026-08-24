@@ -30,6 +30,7 @@ mod authenticate;
 mod close_fund;
 mod error;
 mod found_market;
+mod open_vault;
 mod provider;
 mod realm;
 mod resolution;
@@ -58,6 +59,9 @@ pub fn process_instruction(
         RoutedInstruction::FoundMarketAndFund(instruction) => {
             found_market::process_found_market_and_fund(program_id, accounts, instruction)
         }
+        RoutedInstruction::OpenCollateralVault(instruction) => {
+            open_vault::process_open_collateral_vault(program_id, accounts, instruction)
+        }
     }
 }
 
@@ -65,6 +69,7 @@ enum RoutedInstruction<'a> {
     Resolve(ResolveCategoricalInstructionV1<'a>),
     CreateRealm(dclutch_collateral_contract::CreateRealmV1),
     FoundMarketAndFund(dclutch_collateral_contract::FoundMarketAndFundV1),
+    OpenCollateralVault(dclutch_collateral_contract::OpenCollateralVaultV1),
 }
 
 fn decode_instruction(instruction_data: &[u8]) -> Result<RoutedInstruction<'_>, ProgramError> {
@@ -79,6 +84,9 @@ fn decode_instruction(instruction_data: &[u8]) -> Result<RoutedInstruction<'_>, 
             }
             CollateralInstructionV1::FoundMarketAndFund(instruction) => {
                 Ok(RoutedInstruction::FoundMarketAndFund(instruction))
+            }
+            CollateralInstructionV1::OpenCollateralVault(instruction) => {
+                Ok(RoutedInstruction::OpenCollateralVault(instruction))
             }
             _ => Err(AdapterError::InvalidInstruction.into()),
         };
@@ -104,7 +112,6 @@ mod tests {
 
     fn realm() -> RealmV1 {
         RealmV1::new(RealmV1Input {
-            collateral_semantic_id: [1; 32],
             token_program: [2; 32],
             collateral_mint: [3; 32],
             collateral_adapter_release_id: [4; 32],
@@ -154,13 +161,13 @@ mod tests {
             ))
         ));
 
-        let mut unsupported = [0; OPEN_COLLATERAL_VAULT_BYTES];
+        let mut open = [0; OPEN_COLLATERAL_VAULT_BYTES];
         OpenCollateralVaultV1::new(1, 2)
-            .encode(&mut unsupported)
+            .encode(&mut open)
             .expect("exact encoding");
-        assert_eq!(
-            decode_instruction(&unsupported).err(),
-            Some(ProgramError::from(AdapterError::InvalidInstruction))
-        );
+        assert!(matches!(
+            decode_instruction(&open),
+            Ok(RoutedInstruction::OpenCollateralVault(_))
+        ));
     }
 }
