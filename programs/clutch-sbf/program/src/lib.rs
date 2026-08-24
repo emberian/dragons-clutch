@@ -83,6 +83,11 @@
 #[cfg(all(target_os = "solana", test))]
 compile_error!("host-forensic General fixtures cannot compile for Solana");
 
+#[cfg(feature = "non-production-mock-source")]
+compile_error!(
+    "the mock-source ELF has been withdrawn; use the successor Source plane or an explicit real-provider laboratory profile"
+);
+
 #[cfg(not(any(
     feature = "profile-full",
     feature = "profile-direct-v3-source-v2-point",

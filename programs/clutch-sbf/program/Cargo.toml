@@ -22,9 +22,9 @@ default = ["custom-heap", "profile-full"]
 # transaction-requested heap frame (up to 256 KiB).  A feature only because
 # that is the macro's suppression mechanism; it is always on.
 custom-heap = []
-# Changes the program ELF by registering one deterministic laboratory source
-# parser/deployment pair. Never use for a production deployment or attribute
-# its SVM evidence to the default artifact.
+# Withdrawn compatibility selector. It exists only so stale callers receive a
+# deliberate compile-time refusal instead of Cargo's ambiguous unknown-feature
+# error; it cannot produce an ELF.
 non-production-mock-source = []
 # Registers the byte-pinned Pyth receiver deployment used only by the local
 # real-program campaign. The observation carried by that campaign is locally

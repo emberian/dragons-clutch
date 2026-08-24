@@ -9,10 +9,9 @@
 # The ELF is staged into `tests/fixtures/` and is deliberately NOT committed: a
 # checked-in binary is a second copy of the program that goes stale silently.
 #
-# Default usage builds the production-inert ELF: it contains one unreachable
-# off-curve fixture release and no production release. V1 mock source/value
-# scenarios require the explicit, differently compiled laboratory profile:
-#   ./run_svm_tests.sh --non-production-mock-source [test filters ...]
+# Default usage builds the production-inert ELF. It registers no source
+# release; source success must use an explicitly selected real-provider lab or
+# the successor source plane.
 # The deployed-Pyth local campaign is a separate, explicit test-only ELF:
 #   ./run_svm_tests.sh --non-production-real-pyth-lab real_pyth_router_verifies_then_post_update
 # The successor identity/solver-claim campaign is a mutually exclusive SBF product:
@@ -29,12 +28,7 @@ test_features=()
 build_default=()
 test_default=()
 build_lab_receiver=1
-if [ "${1:-}" = "--non-production-mock-source" ]; then
-  shift
-  profile="NON-PRODUCTION-non-production-mock-source"
-  build_features=(--features non-production-mock-source)
-  test_features=(--features non-production-mock-source)
-elif [ "${1:-}" = "--non-production-real-pyth-lab" ]; then
+if [ "${1:-}" = "--non-production-real-pyth-lab" ]; then
   shift
   profile="NON-PRODUCTION-non-production-real-pyth-lab"
   build_features=(--features non-production-real-pyth-lab)

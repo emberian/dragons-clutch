@@ -84,14 +84,11 @@ identity and strand candidate/work accounts outside the retained top three.
 Those two deletions now fail closed pending persisted reservation/child counts
 and a monotone epoch generation or tombstone. Artifact reproducibility is not a
 seal, release, deployment, or substitute for the complete bank and
-signed-validator promotion campaign. Against those frozen sources, the
-complete default production-inert bank profile (one unreachable fixture
-release, no production release) passed 165 tests with zero failures using that
-exact ELF. The separately compiled `non-production-mock-source`
-profile passed 168 tests with zero failures using its distinct 2,110,240-byte
-ELF `342fdfcb0e6b0836ec9ecd492d9a8577c87f493b49fd8c35e3cb47c448d06112`.
-The mock result exercises laboratory source/value paths and is not production
-source evidence.
+signed-validator promotion campaign. The former `non-production-mock-source`
+ELF, signed-walk launchers, and mock devnet-paces driver are withdrawn and
+cannot produce a current artifact. Their old results remain historical evidence
+only. Current source work uses the successor Source plane and explicitly
+identified real-provider infrastructure.
 
 ### Implemented and bounded
 
