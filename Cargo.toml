@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/dclutch-capability-contract",
     "crates/dclutch-collateral-contract",
     "crates/dclutch-core-contract",
     "crates/dclutch-kernel",

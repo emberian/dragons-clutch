@@ -272,6 +272,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-capability-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+]
+
+[[package]]
 name = "dclutch-collateral-contract"
 version = "0.1.0"
 dependencies = [
