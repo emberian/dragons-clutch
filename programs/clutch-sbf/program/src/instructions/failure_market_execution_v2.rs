@@ -35,6 +35,8 @@ use crate::instructions::product_market::{
     AuthenticatedMarketFoundationPreallocationV2, AuthenticatedMarketLifecycleRootV1,
     AuthenticatedSeriesMarketLinkV1,
 };
+use crate::source_plane_v3::authenticate_route;
+use crate::source_plane_v3_actions::authenticate_source_work_schedule_artifact;
 use clutch_failure_policy_runtime::market_quote_v1::FailureMarketRecoveryQuoteAdmissionReceiptV1;
 use clutch_product_series::{
     CompiledProductSeriesBundleV5, ContentId, MarketGenesisProfileV2, MarketInstancePreimageV2,
@@ -46,6 +48,7 @@ use clutch_source_plane_v3::{
     CompiledSourceOccurrenceV3, StatisticKeyV3, StatisticResultV3, SummaryProgramV3, WindowSealV3,
     WindowSpecV3,
 };
+use clutch_source_plane_v3_runtime::{AuthenticatedSourceRouteV1, SourceWorkScheduleBindingV1};
 use clutch_solana_layout::product_series::{
     MarketLifecycleRootAccountV1, SeriesMarketLinkAccountV1,
 };
@@ -110,6 +113,95 @@ impl<'root, 'link> AuthenticatedFailureMarketExecutionV2<'root, 'link> {
             .ok_or(ClutchError::Arithmetic)?;
         require(sequence == expected, ClutchError::Replay)
     }
+}
+
+/// Exact current registered Source route and immutable paid-work schedule.
+///
+/// Both values are reconstructed from program-owned accounts and joined to
+/// Product's live Market/link and Failure's immutable policy. The physical
+/// account tuple, rather than a caller-supplied route ID, is the authority
+/// consumed by action10 through action12.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedFailureMarketSourceRouteV2 {
+    route: AuthenticatedSourceRouteV1,
+    schedule: SourceWorkScheduleBindingV1,
+}
+
+impl AuthenticatedFailureMarketSourceRouteV2 {
+    pub(crate) const fn route(self) -> AuthenticatedSourceRouteV1 {
+        self.route
+    }
+
+    pub(crate) const fn schedule(self) -> SourceWorkScheduleBindingV1 {
+        self.schedule
+    }
+}
+
+/// Hostile-authenticate the complete Source route prefix used by current
+/// Failure actions and join it to every Market-scoped owner.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_failure_market_source_route_v2(
+    program_id: &Pubkey,
+    execution: &AuthenticatedFailureMarketExecutionV2<'_, '_>,
+    source_release_account: &AccountInfo<'_>,
+    adapter_program: &AccountInfo<'_>,
+    adapter_programdata: &AccountInfo<'_>,
+    parser_program: &AccountInfo<'_>,
+    parser_programdata: &AccountInfo<'_>,
+    parser_config: &AccountInfo<'_>,
+    source_spec_account: &AccountInfo<'_>,
+    source_work_schedule_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedFailureMarketSourceRouteV2> {
+    let route = authenticate_route(
+        program_id,
+        source_release_account,
+        adapter_program,
+        adapter_programdata,
+        parser_program,
+        parser_programdata,
+        parser_config,
+        source_spec_account,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let schedule = authenticate_source_work_schedule_artifact(
+        program_id,
+        route,
+        source_work_schedule_account,
+    )?;
+    let policy = execution.admission().state().binding().facts();
+    let root = execution.root().state().binding();
+    let link = execution.link().state().binding();
+    let bundle = execution.bundle().value();
+    require(
+        route.release_account().bytes() == source_release_account.key.to_bytes()
+            && route.release_manifest_id().bytes() == policy.source_release_manifest_id.bytes()
+            && route.release_manifest_id().bytes() == root.source_release_id.bytes()
+            && route.release_manifest_id().bytes() == bundle.source_release_manifest_id.bytes()
+            && route.release_authentication_id().bytes()
+                == policy.source_release_authentication_id.bytes()
+            && route.route_id().bytes() == root.source_route_id.bytes()
+            && route.route_id().bytes() == link.source_route_id.bytes()
+            && route.source_plane_contract_id().bytes()
+                == policy.source_plane_contract_id.bytes()
+            && route.source_plane_contract_id().bytes() == root.source_plane_contract_id.bytes()
+            && route.source_plane_contract_id().bytes() == link.source_plane_contract_id.bytes()
+            && route.source_plane_contract_id().bytes()
+                == bundle.source_plane_contract_id.bytes()
+            && route.source_spec_id().bytes() == policy.source_spec_id.bytes()
+            && route.source_spec_id().bytes() == root.source_spec_id.bytes()
+            && route.source_spec_id().bytes() == link.source_spec_id.bytes()
+            && route.source_spec_id().bytes() == bundle.source_spec_id.bytes()
+            && route.clock_policy_id().bytes() == policy.clock_policy_id.bytes()
+            && route.clock_policy_id().bytes() == root.clock_policy_id.bytes()
+            && route.clock_policy_id().bytes() == link.clock_policy_id.bytes()
+            && schedule.source_work_schedule_id() == route.source_work_schedule_id()
+            && schedule.generation() == policy.generation
+            && schedule.generation() == root.generation
+            && schedule.source_compartment_account() == route.source_compartment_account()
+            && schedule.source_compartment_owner() == route.source_compartment_owner(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedFailureMarketSourceRouteV2 { route, schedule })
 }
 
 /// Current immutable Product bodies and central work profile admitted for a
@@ -539,6 +631,37 @@ mod adversarial_join_tests {
         assert!(source.contains("FailureMarketIntervalFundingPreimageV2::decode"));
         assert!(!source.contains("FailureMarketRecoveryQuoteAdmissionReceiptV1 {"));
         assert!(!source.contains("FailureMarketIntervalFundingReceiptV2 {"));
+    }
+
+    #[test]
+    fn registered_source_route_is_joined_across_all_current_owners() {
+        let source = include_str!("failure_market_execution_v2.rs");
+        let route = source
+            .split("fn authenticate_failure_market_source_route_v2")
+            .nth(1)
+            .expect("Source route owner");
+        for predicate in [
+            "authenticate_route(",
+            "authenticate_source_work_schedule_artifact(",
+            "policy.source_release_manifest_id",
+            "root.source_release_id",
+            "bundle.source_release_manifest_id",
+            "root.source_route_id",
+            "link.source_route_id",
+            "policy.source_plane_contract_id",
+            "root.source_plane_contract_id",
+            "link.source_plane_contract_id",
+            "bundle.source_plane_contract_id",
+            "policy.source_spec_id",
+            "root.source_spec_id",
+            "link.source_spec_id",
+            "bundle.source_spec_id",
+            "policy.clock_policy_id",
+            "schedule.source_work_schedule_id() == route.source_work_schedule_id()",
+            "schedule.generation() == policy.generation",
+        ] {
+            assert!(route.contains(predicate));
+        }
     }
 
     #[test]
