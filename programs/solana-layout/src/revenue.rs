@@ -1,4 +1,5 @@
-//! The revenue plane's one account family: the per-Realm policy record.
+//! The revenue plane's immutable per-Realm policy record and counted
+//! per-Market treasury-service ledger.
 //!
 //! `docs/design/REVENUE_POLICY_V1.md` §3, under the adopted decisions of
 //! `docs/decisions/ADOPTED_2026-08-20.md` items 6 and 8:
@@ -7,6 +8,7 @@
 //! | --- | ---: | ---: | --- |
 //! | [`RevenuePolicyRecordV1`] | 27/v1 | 156 | historical deferred-treasury pin; decode-only for successor admission |
 //! | [`RevenuePolicyRecordV2`] | 27/v2 | 160 | one successor Realm's immutable fee rates, beneficiary, Market-scoped Position lifecycle, and exact deletable-rent owner |
+//! | [`TreasuryServiceLedgerV1`] | 0xbb/v1 | 268 | one Market's exhaustive admitted/settled fee-bearing Epoch counts and deletable-rent owner |
 //!
 //! **The record's absence IS the zero-take state (D4).**  Existing Realms are
 //! zero-take forever by construction: no retrofit instruction exists, because
