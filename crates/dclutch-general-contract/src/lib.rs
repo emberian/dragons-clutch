@@ -295,6 +295,11 @@ impl GeneralConfigV1 {
         self.market_identity_id
     }
 
+    /// Return the selected liftable capacity-profile identity.
+    pub const fn capacity_profile_id(self) -> ContentId {
+        self.capacity_profile_id
+    }
+
     /// Return the exact ClaimBasis identity.
     pub const fn claim_basis_id(self) -> ContentId {
         self.claim_basis_id
@@ -303,6 +308,11 @@ impl GeneralConfigV1 {
     /// Return the selected capability release identity.
     pub const fn capability_release_id(self) -> ContentId {
         self.capability_release_id
+    }
+
+    /// Return the Realm-selected settlement-asset identity.
+    pub const fn settlement_asset_id(self) -> ContentId {
+        self.settlement_asset_id
     }
 
     /// Return the immutable occurrence generation.
@@ -318,6 +328,16 @@ impl GeneralConfigV1 {
     /// Return the finite ClaimBasis width.
     pub const fn outcome_count(self) -> u16 {
         self.outcome_count
+    }
+
+    /// Return the immutable candidate execution bound.
+    pub const fn max_orders_per_candidate(self) -> u32 {
+        self.max_orders_per_candidate
+    }
+
+    /// Return the immutable candidate page bound.
+    pub const fn max_pages_per_candidate(self) -> u32 {
+        self.max_pages_per_candidate
     }
 }
 
@@ -413,6 +433,21 @@ impl GeneralRootV1 {
     /// Return the current lifecycle phase.
     pub const fn phase(self) -> GeneralPhase {
         self.phase
+    }
+
+    /// Return the authenticated config commitment.
+    pub const fn config_id(self) -> ContentId {
+        self.config_id
+    }
+
+    /// Return the immutable Market generation.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    /// Return the exact direct batch-child count.
+    pub const fn open_batches(self) -> u32 {
+        self.open_batches
     }
 }
 
@@ -567,6 +602,36 @@ impl PortfolioOrderV1 {
     pub const fn nonce(self) -> u64 {
         self.nonce
     }
+
+    /// Return the Market identity commitment.
+    pub const fn market_identity_id(self) -> ContentId {
+        self.market_identity_id
+    }
+
+    /// Return the exact ClaimBasis commitment.
+    pub const fn claim_basis_id(self) -> ContentId {
+        self.claim_basis_id
+    }
+
+    /// Return the immutable Market generation.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    /// Return the exact batch sequence.
+    pub const fn batch_sequence(self) -> u64 {
+        self.batch_sequence
+    }
+
+    /// Return the last slot through which this order remains executable.
+    pub const fn valid_until_slot(self) -> u64 {
+        self.valid_until_slot
+    }
+
+    /// Return one atomic-lot coefficient vector.
+    pub const fn coefficients(self) -> [i64; MAX_OUTCOMES_V1] {
+        self.coefficients
+    }
 }
 
 /// Mutable lifecycle of one adapter-authenticated signed order record.
@@ -653,6 +718,11 @@ impl OrderStateV1 {
     /// Return the replay lifecycle phase.
     pub const fn phase(self) -> OrderPhase {
         self.phase
+    }
+
+    /// Return the signed-order commitment.
+    pub const fn order_id(self) -> ContentId {
+        self.order_id
     }
 }
 
@@ -978,6 +1048,26 @@ impl CandidateStateV1 {
     pub const fn transcript_id(self) -> ContentId {
         self.transcript_id
     }
+
+    /// Return the permissionless candidate submitter identity.
+    pub const fn submitter(self) -> ContentId {
+        self.submission.submitter
+    }
+
+    /// Return the exact batch sequence.
+    pub const fn batch_sequence(self) -> u64 {
+        self.submission.batch_sequence
+    }
+
+    /// Return the exact verified execution count.
+    pub const fn verified_executions(self) -> u32 {
+        self.verified_executions
+    }
+
+    /// Return the verified virtual complete-set delta.
+    pub const fn complete_set_delta(self) -> i128 {
+        self.complete_set_delta
+    }
 }
 
 /// Lifecycle of one frequent batch.
@@ -1132,6 +1222,31 @@ impl BatchRootV1 {
     pub const fn collection_close(self) -> u64 {
         self.collection_close
     }
+
+    /// Return the authenticated config commitment.
+    pub const fn config_id(self) -> ContentId {
+        self.config_id
+    }
+
+    /// Return the immutable batch sequence.
+    pub const fn sequence(self) -> u64 {
+        self.sequence
+    }
+
+    /// Return the immutable candidate-selection close.
+    pub const fn selection_close(self) -> u64 {
+        self.selection_close
+    }
+
+    /// Return the immutable pre-application settlement close.
+    pub const fn settlement_close(self) -> u64 {
+        self.settlement_close
+    }
+
+    /// Return the selected candidate, if any.
+    pub const fn best_candidate_id(self) -> Option<ContentId> {
+        self.best_candidate_id
+    }
 }
 
 /// Conserved collateral and equal per-outcome complete-set liability.
@@ -1199,6 +1314,11 @@ impl HoardLedgerV1 {
     /// Return equal liabilities outstanding for every partition cell.
     pub const fn liability_units_per_outcome(self) -> u64 {
         self.liability_units_per_outcome
+    }
+
+    /// Return the Market identity whose Hoard this ledger projects.
+    pub const fn market_identity_id(self) -> ContentId {
+        self.market_identity_id
     }
 }
 
@@ -1666,6 +1786,19 @@ impl GeneralFundingV1 {
     /// Return true once all prepaid principal has been spent or refunded.
     pub fn is_discharged(self) -> bool {
         self.remaining.iter().all(|amount| *amount == 0)
+    }
+
+    /// Return the capability release whose manifest quote funded this state.
+    pub const fn capability_release_id(self) -> ContentId {
+        self.capability_release_id
+    }
+
+    /// Return exact remaining prepaid principal in one compartment.
+    pub fn remaining(self, compartment: FundingCompartment) -> Result<u64> {
+        self.remaining
+            .get(funding_index(compartment))
+            .copied()
+            .ok_or(Error::InvalidLength)
     }
 }
 
