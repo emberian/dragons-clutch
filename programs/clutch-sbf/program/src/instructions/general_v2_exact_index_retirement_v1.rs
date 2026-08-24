@@ -76,6 +76,14 @@ fn borrow_mut_data<'a, 'info>(
     Ok(RefMut::map(data, |bytes| &mut **bytes))
 }
 
+#[inline(never)]
+fn decode_complete_feed_boxed(
+    body: &[u8],
+) -> Outcome<Box<contract::CandidateFeedHeaderV2>> {
+    let (feed, _) = contract::complete_candidate_feed_v2(body, true)?;
+    Ok(Box::new(feed))
+}
+
 fn require_program_account(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
@@ -239,7 +247,7 @@ fn retire_index_children(
         ClutchError::MismatchedState,
     )?;
     let feed_body = borrow_data(&accounts[IX_FEED])?;
-    let (feed, _) = contract::complete_candidate_feed_v2(&feed_body, true)?;
+    let feed = decode_complete_feed_boxed(&feed_body)?;
     require(feed.epoch == selector.epoch, ClutchError::MismatchedState)?;
     let root_pda = seeds::general_v2_settlement_root_pda(
         program_id,
@@ -454,7 +462,7 @@ fn retire_retained_feed(
         ],
     )?;
     let feed_body = borrow_data(&accounts[IX_FEED_RETIRE_FEED])?;
-    let (feed, _) = contract::complete_candidate_feed_v2(&feed_body, true)?;
+    let feed = decode_complete_feed_boxed(&feed_body)?;
     require(feed.epoch == selector.epoch, ClutchError::MismatchedState)?;
     let root_pda = seeds::general_v2_settlement_root_pda(
         program_id,
