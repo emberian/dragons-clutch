@@ -42,6 +42,10 @@ const _: () = assert!(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum ResolutionStateV5 {
+    /// Product founded the canonical account, but no payout truth exists yet.
+    /// The immutable Market coordinate and rent ownership are already bound;
+    /// finalization evidence and payout values remain canonically zero.
+    Inactive = 0,
     /// Product and Failure evidence has finalized the vector; claims may exit.
     Finalized = 1,
     /// All joined native liabilities are exhausted; no payout may be consumed.
@@ -51,6 +55,7 @@ pub enum ResolutionStateV5 {
 impl ResolutionStateV5 {
     fn decode(value: u8) -> Result<Self> {
         match value {
+            0 => Ok(Self::Inactive),
             1 => Ok(Self::Finalized),
             2 => Ok(Self::Terminal),
             _ => Err(Error::InvalidParameter),
@@ -248,6 +253,37 @@ pub struct ResolutionV5 {
 }
 
 impl ResolutionV5 {
+    /// Construct the exact Product-founded account before Failure has emitted
+    /// a payout vector. This is a real program-owned lifecycle state, not a
+    /// system-owned rent placeholder and not finalization authority.
+    pub fn inactive(
+        market_instance_id: Id,
+        native_claim_basis_id: Id,
+        outcome_count: u8,
+        generation: u64,
+        stored_bump: u8,
+        rent: DeletableRentOwnerV1,
+    ) -> Result<Self> {
+        let value = Self {
+            facts: ResolutionFinalizationFactsV5 {
+                market_instance_id,
+                native_claim_basis_id,
+                finalization_evidence_id: Id::from_bytes([0; 32]),
+                outcome_count,
+                payout_denominator: 0,
+                payout_weights: [0; MAX_OUTCOMES],
+                generation,
+                payout_unit_boundary:
+                    ResolutionPayoutUnitBoundaryV5::ExactWholeCollateralAtoms,
+            },
+            state: ResolutionStateV5::Inactive,
+            stored_bump,
+            rent,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Construct the exact finalized postimage after private writer authority.
     pub fn finalized(
         facts: ResolutionFinalizationFactsV5,
@@ -266,7 +302,26 @@ impl ResolutionV5 {
 
     /// Validate the complete canonical body.
     pub fn validate(self) -> Result<()> {
-        self.facts.validate()?;
+        match self.state {
+            ResolutionStateV5::Inactive => {
+                self.facts.market_instance_id.require_live()?;
+                self.facts.native_claim_basis_id.require_live()?;
+                if !self.facts.finalization_evidence_id.is_zero()
+                    || self.facts.generation == 0
+                    || usize::from(self.facts.outcome_count) < 2
+                    || usize::from(self.facts.outcome_count) > MAX_OUTCOMES
+                    || self.facts.payout_denominator != 0
+                    || self.facts.payout_weights.iter().any(|weight| *weight != 0)
+                    || self.facts.payout_unit_boundary
+                        != ResolutionPayoutUnitBoundaryV5::ExactWholeCollateralAtoms
+                {
+                    return Err(Error::InvalidParameter);
+                }
+            }
+            ResolutionStateV5::Finalized | ResolutionStateV5::Terminal => {
+                self.facts.validate()?;
+            }
+        }
         self.rent.validate().map_err(|_| Error::InvalidParameter)
     }
 
