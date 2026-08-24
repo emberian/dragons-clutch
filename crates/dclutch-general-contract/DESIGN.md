@@ -82,7 +82,7 @@ transaction. The maximum V1 settlement frame is therefore 28 accounts.
 ## Canonical mutable-state records
 
 The contract is the sole codec and invariant owner for its persisted records.
-`GeneralConfigV1` is exactly 200 bytes, `GeneralRootV1` is exactly 104 bytes,
+`GeneralConfigV1` is exactly 200 bytes, `GeneralRootV1` is exactly 136 bytes,
 `GeneralFundingV1` is exactly 144 bytes, `BatchRootV1` is exactly 136 bytes, and
 `OrderStateV1` is exactly 96 bytes. Exact-N `GeneralOrderCustodyV1<N>` is
 `192 + 8N` bytes, `CandidateStateV1<N>` is `376 + 24N` bytes, and
@@ -97,8 +97,9 @@ payload when absent. Batch deadlines are strictly increasing, batch winner
 shape agrees with candidate count and phase, root child counts cannot exceed
 reserved sequences or survive terminalization, and order replay phase agrees
 with remaining lots. The root persists the nonzero permanent RentCredit
-beneficiary for config/root/funding and batch rent; this is never supplied by a
-close caller. Candidate submission uses an exact signing key which is also that
+beneficiary for config/root/funding and batch rent plus the exact Market key
+needed to reconstruct its own PDA from persisted truth; neither is supplied by
+a later caller. Candidate submission uses an exact signing key which is also that
 candidate's permanent rent beneficiary. Replay authentication additionally
 binds the persisted order identity, exact nonzero signing key, nonce, and
 remaining lots to the immutable signed order and its original lot ceiling.

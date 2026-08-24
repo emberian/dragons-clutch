@@ -739,7 +739,7 @@ fn funding_is_prepaid_segregated_and_conserved() {
 
 #[test]
 fn root_requires_real_quiescence_before_retirement() {
-    let mut root = GeneralRootV1::founding(id(9), 7, [90; 32]).expect("root");
+    let mut root = GeneralRootV1::founding([8; 32], id(9), 7, [90; 32]).expect("root");
     assert_eq!(root.open_batch(), Ok(0));
     root.request_quiescence().expect("quiescing");
     assert_eq!(root.enter_terminal(), Err(Error::NotQuiescent));
@@ -752,7 +752,7 @@ fn root_requires_real_quiescence_before_retirement() {
 
 #[test]
 fn general_root_codec_round_trips_every_phase_and_counter_transition() {
-    let mut root = GeneralRootV1::founding(id(9), 7, [90; 32]).expect("root");
+    let mut root = GeneralRootV1::founding([8; 32], id(9), 7, [90; 32]).expect("root");
     round_trip_general_root(root);
     assert_eq!(root.open_batch(), Ok(0));
     assert_eq!(root.open_batch(), Ok(1));
@@ -875,7 +875,7 @@ fn general_funding_codec_round_trips_debits_and_atomic_terminal_refund() {
 
 #[test]
 fn mutable_state_codecs_reject_wrong_width_type_headers_and_reserved_bytes() {
-    let root = GeneralRootV1::founding(id(9), 7, [90; 32]).expect("root");
+    let root = GeneralRootV1::founding([8; 32], id(9), 7, [90; 32]).expect("root");
     let mut root_bytes = [0; GENERAL_ROOT_BYTES];
     root.encode(&mut root_bytes).expect("root encodes");
     assert_eq!(
@@ -956,14 +956,14 @@ fn mutable_state_codecs_reject_wrong_width_type_headers_and_reserved_bytes() {
 
 #[test]
 fn general_root_decoder_rejects_unreachable_counts_terminal_children_and_tags() {
-    let mut root = GeneralRootV1::founding(id(9), 7, [90; 32]).expect("root");
+    let mut root = GeneralRootV1::founding([8; 32], id(9), 7, [90; 32]).expect("root");
     root.open_batch().expect("batch reserves");
     let mut bytes = [0; GENERAL_ROOT_BYTES];
     root.encode(&mut bytes).expect("root encodes");
 
-    bytes[96..100].copy_from_slice(&2_u32.to_le_bytes());
+    bytes[128..132].copy_from_slice(&2_u32.to_le_bytes());
     assert_eq!(GeneralRootV1::decode(&bytes), Err(Error::NonCanonicalState));
-    bytes[96..100].copy_from_slice(&1_u32.to_le_bytes());
+    bytes[128..132].copy_from_slice(&1_u32.to_le_bytes());
     bytes[12] = general_phase_tag(GeneralPhase::Terminal);
     assert_eq!(GeneralRootV1::decode(&bytes), Err(Error::NonCanonicalState));
     bytes[12] = u8::MAX;
@@ -973,6 +973,9 @@ fn general_root_decoder_rejects_unreachable_counts_terminal_children_and_tags() 
     assert_eq!(GeneralRootV1::decode(&bytes), Err(Error::ZeroIdentifier));
     bytes[16..48].copy_from_slice(id(9).as_bytes());
     bytes[48..80].fill(0);
+    assert_eq!(GeneralRootV1::decode(&bytes), Err(Error::ZeroIdentifier));
+    bytes[48..80].copy_from_slice(&[8; 32]);
+    bytes[80..112].fill(0);
     assert_eq!(GeneralRootV1::decode(&bytes), Err(Error::ZeroIdentifier));
 }
 
@@ -1227,6 +1230,7 @@ fn activation_plan_binds_market_frame_rent_and_every_content_preimage() {
     )
     .expect("complete activation plan");
     assert_eq!(plan.market_root_after().outstanding_children(), 1);
+    assert_eq!(plan.root().market(), [2; 32]);
     assert_eq!(plan.root().rent_beneficiary(), [90; 32]);
     assert_eq!(plan.creation_recipient(), [1; 32]);
     assert_eq!(plan.general_funding_account_balance(), Ok(63));

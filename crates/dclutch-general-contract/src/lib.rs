@@ -37,7 +37,7 @@ pub const MAX_EXECUTIONS_PER_PAGE_V1: usize = 4;
 /// Exact canonical byte width of [`GeneralConfigV1`].
 pub const GENERAL_CONFIG_BYTES: usize = 200;
 /// Exact canonical byte width of [`GeneralRootV1`].
-pub const GENERAL_ROOT_BYTES: usize = 104;
+pub const GENERAL_ROOT_BYTES: usize = 136;
 /// Exact canonical byte width of [`GeneralFundingV1`].
 pub const GENERAL_FUNDING_BYTES: usize = 144;
 /// Exact canonical byte width of [`BatchRootV1`].
@@ -1700,7 +1700,12 @@ pub fn activate_general_v1<'a>(
     if accounts.get(14).ok_or(Error::InvalidLength)?.key != rent_beneficiary {
         return Err(Error::AuthorityMismatch);
     }
-    let root = GeneralRootV1::founding(config_id, instruction.config.generation, rent_beneficiary)?;
+    let root = GeneralRootV1::founding(
+        market,
+        config_id,
+        instruction.config.generation,
+        rent_beneficiary,
+    )?;
     let config_seeds = GeneralConfigPdaSeedsV1::new(config_id);
     let root_seeds = GeneralRootPdaSeedsV1::new(market, instruction.config.generation, config_id)?;
     let funding_seeds = GeneralFundingPdaSeedsV1::new(
@@ -1933,6 +1938,7 @@ pub enum GeneralPhase {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralRootV1 {
     config_id: ContentId,
+    market: [u8; 32],
     rent_beneficiary: [u8; 32],
     generation: u64,
     next_batch_sequence: u64,
@@ -1949,14 +1955,15 @@ impl GeneralRootV1 {
         }
         validate_record_header(bytes)?;
         require_zero(bytes, 13, 3)?;
-        require_zero(bytes, 100, 4)?;
+        require_zero(bytes, 132, 4)?;
         let root = Self {
             phase: decode_general_phase(read_u8(bytes, 12)?)?,
             config_id: read_id(bytes, 16)?,
-            rent_beneficiary: array::<32>(bytes, 48)?,
-            generation: read_u64(bytes, 80)?,
-            next_batch_sequence: read_u64(bytes, 88)?,
-            open_batches: read_u32(bytes, 96)?,
+            market: array::<32>(bytes, 48)?,
+            rent_beneficiary: array::<32>(bytes, 80)?,
+            generation: read_u64(bytes, 112)?,
+            next_batch_sequence: read_u64(bytes, 120)?,
+            open_batches: read_u32(bytes, 128)?,
         };
         root.validate()?;
         Ok(root)
@@ -1972,14 +1979,16 @@ impl GeneralRootV1 {
         put(out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
         put(out, 12, &[general_phase_tag(self.phase)]);
         put(out, 16, self.config_id.as_bytes());
-        put(out, 48, &self.rent_beneficiary);
-        put(out, 80, &self.generation.to_le_bytes());
-        put(out, 88, &self.next_batch_sequence.to_le_bytes());
-        put(out, 96, &self.open_batches.to_le_bytes());
+        put(out, 48, &self.market);
+        put(out, 80, &self.rent_beneficiary);
+        put(out, 112, &self.generation.to_le_bytes());
+        put(out, 120, &self.next_batch_sequence.to_le_bytes());
+        put(out, 128, &self.open_batches.to_le_bytes());
         Ok(())
     }
 
     fn validate(self) -> Result<()> {
+        require_nonzero_key(&self.market)?;
         require_nonzero_key(&self.rent_beneficiary)?;
         if u64::from(self.open_batches) > self.next_batch_sequence
             || matches!(self.phase, GeneralPhase::Terminal | GeneralPhase::Retired)
@@ -1992,13 +2001,16 @@ impl GeneralRootV1 {
 
     /// Found one active General root bound to an authenticated config.
     pub fn founding(
+        market: [u8; 32],
         config_id: ContentId,
         generation: u64,
         rent_beneficiary: [u8; 32],
     ) -> Result<Self> {
+        require_nonzero_key(&market)?;
         require_nonzero_key(&rent_beneficiary)?;
         Ok(Self {
             config_id,
+            market,
             rent_beneficiary,
             generation,
             next_batch_sequence: 0,
@@ -2068,6 +2080,11 @@ impl GeneralRootV1 {
     /// Return the authenticated config commitment.
     pub const fn config_id(self) -> ContentId {
         self.config_id
+    }
+
+    /// Return the immutable provider-neutral Market account key.
+    pub const fn market(self) -> [u8; 32] {
+        self.market
     }
 
     /// Return the immutable Market generation.
