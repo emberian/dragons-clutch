@@ -32,6 +32,8 @@ const PRODUCT_MARKET_FAMILY_CAPABILITY_ARTIFACT_AUTHENTICATION_DOMAIN_V1: &[u8] 
     b"dragons-clutch/sbf/product-market-family-capability-artifact-authentication/v1\0";
 const PRODUCT_MARKET_FAMILY_CAPABILITY_CURRENT_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/product-market-family-capability-current-authentication/v1\0";
+const PRODUCT_MARKET_FAMILY_CAPABILITY_PERSISTED_AUTHENTICATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/sbf/product-market-family-capability-persisted-authentication/v1\0";
 
 struct ExactMarketFamilyInitializationV1 {
     policy_id: ContentId,
@@ -305,6 +307,131 @@ pub(crate) fn complete_market_family_capability_policy_v1(
         family_namespace_anchors,
         aggregator,
         founder_artifact_authentication_id: artifact.id,
+    })
+}
+
+/// Hostile-reconstruct the immutable family authority from the permanent
+/// Market replay before RootV3 exists.
+///
+/// Action 14 consumes the instruction-local physical founder while creating
+/// `MarketLifecycleReplayV2`.  Every later action-15 stage must therefore use
+/// the replay binding as the durable owner of generation, physical
+/// capitalization, Registry release/profile, and the original policy
+/// authentication.  Requiring the vanished physical receipt here would make
+/// continuation impossible; accepting only a policy ID would make it
+/// unauthenticated.  This constructor does neither: it hostile-decodes the
+/// content-addressed policy and current RegistryV4 authority, recomputes all
+/// namespace anchors and the initial aggregator, and equality-checks the full
+/// persisted binding.
+#[inline(never)]
+pub(crate) fn authenticate_persisted_market_family_capability_policy_v1(
+    program_id: &Pubkey,
+    registry: &AuthenticatedRegistryCapabilityV5,
+    replay: &AuthenticatedMarketLifecycleReplayV2,
+    policy_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedMarketFamilyCapabilityPolicyV1> {
+    let replay_binding = replay.state().binding();
+    let policy = authenticate_product_artifact_v1::<MarketFamilyCapabilityPolicyV1>(
+        program_id,
+        policy_account,
+        replay_binding.market_family_capability_policy_id,
+    )?;
+    let value = policy.value();
+    require(
+        registry.activation_consumed()
+            && replay.generation() != 0
+            && replay_binding.market_family_capability_authentication_id != ContentId::ZERO
+            && replay_binding.physical_capitalization_receipt_id != ContentId::ZERO
+            && replay_binding.registry_release_id.content_id()
+                == registry.registry_release_id()
+            && replay_binding.capability_profile_id.content_id()
+                == registry.capability_profile_id()
+            && replay_binding.market_family_capability_policy_id == policy.semantic_id()
+            && value.registry_capability_profile_id.content_id()
+                == registry.capability_profile_id()
+            && value.realm_id == registry.realm_collateral().realm_id
+            && value.collateral_profile_id == registry.realm_collateral().profile_id
+            && policy.account() != registry.series_registry_account()
+            && replay.account() != registry.series_registry_account()
+            && replay.account() != policy.account(),
+        ClutchError::MismatchedState,
+    )?;
+    let market_instance_id = replay_binding.market_instance_id;
+    let generation = replay_binding.generation;
+    let market = market_instance_id.bytes();
+    let mut family_namespace_anchors = [ContentId::ZERO; MARKET_FAMILY_COUNT_V1];
+    let mut index = 0usize;
+    while index < MARKET_FAMILY_COUNT_V1 {
+        let family = MARKET_FAMILIES_V1[index];
+        family_namespace_anchors[index] = ContentId::from_bytes(
+            seeds::product_market_family_root_v1_pda(
+                program_id,
+                &market,
+                generation,
+                family.byte(),
+            )
+            .0
+            .to_bytes(),
+        );
+        index = index.checked_add(1).ok_or(ClutchError::Arithmetic)?;
+    }
+    let binding = MarketFamilyAggregatorBindingV1 {
+        market_instance_id,
+        generation,
+        registry_release_id: RegistryProgramReleaseV1Id::from_bytes(
+            registry.registry_release_id().bytes(),
+        ),
+        capability_profile_id: RegistryCapabilityProfileV3Id::from_bytes(
+            registry.capability_profile_id().bytes(),
+        ),
+        enabled_family_mask: value.enabled_family_mask,
+        family_root_ids: family_namespace_anchors,
+    };
+    let binding_id = binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let initialization = ExactMarketFamilyInitializationV1 {
+        policy_id: policy.semantic_id(),
+        binding_id: binding_id.content_id(),
+    };
+    let aggregator = MarketFamilyAggregatorV1::initialize(&initialization, binding)
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            PRODUCT_MARKET_FAMILY_CAPABILITY_PERSISTED_AUTHENTICATION_DOMAIN_V1,
+            program_id.as_ref(),
+            replay.account().as_ref(),
+            &replay.authentication_id().bytes(),
+            &replay_binding
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .bytes(),
+            &replay_binding.market_family_capability_authentication_id.bytes(),
+            &replay_binding.physical_capitalization_receipt_id.bytes(),
+            &registry.id().bytes(),
+            registry.series_registry_account().as_ref(),
+            policy.account().as_ref(),
+            &policy.semantic_id().bytes(),
+            &market_instance_id.bytes(),
+            &generation.to_le_bytes(),
+            &binding_id.bytes(),
+            &family_namespace_anchors[MarketFamilyV1::General.index()].bytes(),
+            &family_namespace_anchors[MarketFamilyV1::Direct.index()].bytes(),
+            &family_namespace_anchors[MarketFamilyV1::Fractional.index()].bytes(),
+            &family_namespace_anchors[MarketFamilyV1::Dealer.index()].bytes(),
+            &family_namespace_anchors[MarketFamilyV1::Structured.index()].bytes(),
+            &[value.enabled_family_mask],
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(AuthenticatedMarketFamilyCapabilityPolicyV1 {
+        id,
+        policy,
+        family_namespace_anchors,
+        aggregator,
+        founder_artifact_authentication_id:
+            replay_binding.market_family_capability_authentication_id,
     })
 }
 

@@ -14,7 +14,7 @@ use crate::instructions::product_market_replay_current::{
     AuthenticatedProductMarketReplayFoundationPostwriteV2,
 };
 use crate::instructions::product_market_foundation_graph_v4_current::
-    AuthenticatedCurrentMarketFoundationGraphV4;
+    AuthenticatedCurrentMarketFoundationGraphAuthorityV4;
 use crate::seeds;
 use clutch_product_series::{
     ContentId, MarketFoundationScheduleV4, MarketFoundationSlotV4,
@@ -651,12 +651,12 @@ pub(crate) fn authenticate_series_market_link_v3<'state>(
 /// slots, the graph account remains funded and its lamport balance is unchanged.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-pub(crate) fn settle_next_current_product_market_replay_foundation_v4<'a>(
+pub(crate) fn settle_next_current_product_market_replay_foundation_v4<'a, G>(
     program_id: &Pubkey,
     root: &AuthenticatedMarketLifecycleRootV3<'_>,
     replay: AuthenticatedMarketLifecycleReplayV2,
     schedule: &MarketFoundationScheduleV4,
-    graph_authority: &AuthenticatedCurrentMarketFoundationGraphV4,
+    graph_authority: &G,
     replay_account: &AccountInfo<'a>,
     foundation_vault: &AccountInfo<'a>,
     bootstrap_payer: &AccountInfo<'a>,
@@ -664,7 +664,10 @@ pub(crate) fn settle_next_current_product_market_replay_foundation_v4<'a>(
 ) -> Outcome<(
     AuthenticatedProductMarketFoundationDebitV4,
     AuthenticatedProductMarketReplayFoundationPostwriteV2,
-)> {
+)>
+where
+    G: AuthenticatedCurrentMarketFoundationGraphAuthorityV4 + ?Sized,
+{
     let graph = graph_authority.graph();
     schedule
         .validate()
@@ -711,7 +714,7 @@ pub(crate) fn settle_next_current_product_market_replay_foundation_v4<'a>(
         .ok_or(ClutchError::SeriesCustodyDeltaMismatch)?;
     let replay_observed_lamports = replay.observed_lamports();
     require(
-        graph_authority.id() != ContentId::ZERO
+        graph_authority.authentication_id() != ContentId::ZERO
             && graph_authority.schedule_id() == schedule_id
             && graph_authority.graph_id() == graph_id
             && graph_authority.market_instance_id() == binding.market_instance_id
@@ -853,16 +856,19 @@ pub(crate) fn settle_next_current_product_market_replay_foundation_v4<'a>(
 /// advance RootV3.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-pub(crate) fn debit_next_current_product_market_foundation_v4<'a>(
+pub(crate) fn debit_next_current_product_market_foundation_v4<'a, G>(
     program_id: &Pubkey,
     root: &AuthenticatedMarketLifecycleRootV3<'_>,
     replay: &AuthenticatedMarketLifecycleReplayV2,
     schedule: &MarketFoundationScheduleV4,
-    graph_authority: &AuthenticatedCurrentMarketFoundationGraphV4,
+    graph_authority: &G,
     foundation_vault: &AccountInfo<'a>,
     destination: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
-) -> Outcome<AuthenticatedProductMarketFoundationDebitV4> {
+) -> Outcome<AuthenticatedProductMarketFoundationDebitV4>
+where
+    G: AuthenticatedCurrentMarketFoundationGraphAuthorityV4 + ?Sized,
+{
     let graph = graph_authority.graph();
     schedule
         .validate()
@@ -913,7 +919,7 @@ pub(crate) fn debit_next_current_product_market_foundation_v4<'a>(
         MarketLifecycleReplayPhaseV2::FoundationSettled
     };
     require(
-        graph_authority.id() != ContentId::ZERO
+        graph_authority.authentication_id() != ContentId::ZERO
             && graph_authority.schedule_id() == schedule_id
             && graph_authority.graph_id() == graph_id
             && graph_authority.market_instance_id() == binding.market_instance_id
@@ -1089,12 +1095,12 @@ pub(crate) fn debit_next_current_product_market_foundation_v4<'a>(
 /// final Product state write.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-pub(crate) fn record_current_product_market_foundation_step_v4<'state, P>(
+pub(crate) fn record_current_product_market_foundation_step_v4<'state, P, G>(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
     root_before: AuthenticatedMarketLifecycleRootV3<'_>,
     schedule: &MarketFoundationScheduleV4,
-    graph_authority: &AuthenticatedCurrentMarketFoundationGraphV4,
+    graph_authority: &G,
     debit: AuthenticatedProductMarketFoundationDebitV4,
     postwrite: P,
     successor_state: &mut MarketLifecycleRootV3,
@@ -1102,6 +1108,7 @@ pub(crate) fn record_current_product_market_foundation_step_v4<'state, P>(
 ) -> Outcome<AuthenticatedProductMarketFoundationStepV4<'state>>
 where
     P: AuthenticatedProductMarketFoundationStepPostwriteV4,
+    G: AuthenticatedCurrentMarketFoundationGraphAuthorityV4 + ?Sized,
 {
     let graph = graph_authority.graph();
     let schedule_id = schedule
@@ -1111,7 +1118,7 @@ where
         .id(schedule)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
-        graph_authority.id() != ContentId::ZERO
+        graph_authority.authentication_id() != ContentId::ZERO
             && graph_authority.schedule_id() == schedule_id
             && graph_authority.graph_id() == graph_id
             && graph_authority.market_instance_id()
