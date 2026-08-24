@@ -333,7 +333,7 @@ pub fn authenticate_failure_market_runtime_root_v1<'a>(
     writable: bool,
 ) -> Outcome<AuthenticatedFailureMarketRuntimeRootV1> {
     let live_admission =
-        authenticate_failure_market_root_v3(program_id, admission_root_account, false)?;
+        authenticate_failure_market_root_v3(program_id, admission_root_account, true)?;
     require(
         live_admission == admission_root,
         ClutchError::MismatchedState,
@@ -473,7 +473,7 @@ pub(crate) fn create_failure_market_runtime_from_product_foundation_debit_v4<'a>
     let admission = authenticate_failure_market_root_v3(
         program_id,
         admission_root_account,
-        false,
+        true,
     )?;
     let admission_state = admission.state();
     let policy = admission_state.binding().facts();
