@@ -2,7 +2,9 @@
 
 use clutch_batch::exact_integer::exact_mul_div_rem;
 use clutch_batch_policy_identity::revenue_policy_v1::{RevenuePolicyV1, StandingMakerV1};
-use clutch_batch_policy_identity::revenue_policy_v2::RevenuePolicyV2;
+use clutch_batch_policy_identity::revenue_policy_v2::{
+    MakerWeightAuthorityV2, RevenuePolicyV2,
+};
 
 use crate::selected::{
     AssessmentBoundaryV1, OwnerFeeAssessmentV1, SelectedCompositeFeeV1,
@@ -592,8 +594,8 @@ pub fn allocate_recipients(
 /// final-atom boundary.
 #[inline(never)]
 pub fn allocate_recipients_from_weight_stream_v2<F>(
-    selected: &SelectedCompositeFeeV1,
-    policy: &RevenuePolicyV1,
+    selected: &SelectedCompositeFeeV2,
+    policy: &RevenuePolicyV2,
     transcript: CompositeFeeWeightTranscriptV2,
     mut row_at: F,
 ) -> Result<RecipientAllocationV1>
@@ -602,7 +604,8 @@ where
 {
     selected.binds_revenue_policy(policy)?;
     policy.validate().map_err(|_| Error::InvalidPolicy)?;
-    if policy.standing_maker != StandingMakerV1::AllRestingMakers
+    if policy.maker_weight_authority
+        != MakerWeightAuthorityV2::CertifiedOwnerNettedCompositeNumerator
         || transcript.policy_id() != COMPOSITE_FEE_WEIGHT_POLICY_V2.id()?
         || transcript.fee_record() != selected.fee_record()
         || transcript.common_denominator() != selected.carry_denominator()
@@ -644,15 +647,28 @@ where
         collected_fee_atoms = add(collected_fee_atoms, terminal)?;
         index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
     }
-    if collected_fee_atoms == 0 {
-        return Err(Error::EmptyAllocation);
-    }
-
     let split = policy
         .allocate_split(collected_fee_atoms)
         .map_err(|_| Error::InvalidPolicy)?;
-    if split.maker_rebate_atoms != 0 && transcript.len() == 0 {
-        return Err(Error::EmptyAllocation);
+    if transcript.len() == 0 {
+        if transcript.total_weight() != 0
+            || collected_fee_atoms != 0
+            || split.maker_rebate_atoms != 0
+            || split.executor_atoms != 0
+            || split.treasury_atoms != 0
+        {
+            return Err(Error::ConservationFailure);
+        }
+        return RecipientAllocationV1::restore_persisted(
+            selected.fee_record(),
+            0,
+            [Id([0; 32]); MAX_FEE_ROWS_V1],
+            [0; MAX_FEE_ROWS_V1],
+            0,
+            0,
+            0,
+            0,
+        );
     }
 
     let mut positions = [Id([0u8; 32]); MAX_FEE_ROWS_V1];

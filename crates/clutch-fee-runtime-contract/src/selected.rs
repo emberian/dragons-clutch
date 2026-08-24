@@ -47,6 +47,16 @@ pub enum AssessmentBoundaryV1 {
     TerminalCeil,
 }
 
+impl AssessmentBoundaryV1 {
+    /// Canonical fixed-layout discriminant.
+    pub const fn byte(self) -> u8 {
+        match self {
+            Self::FragmentFloor => 0,
+            Self::TerminalCeil => 1,
+        }
+    }
+}
+
 /// Runtime-sized result of an exact `u128` composite quote.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OwnerFeeAssessmentV1 {
@@ -188,7 +198,10 @@ impl SelectedCompositeFeeV1 {
         ] {
             live(identity)?;
         }
-        if !(2..=MAX_OUTCOMES as u8).contains(&outcome_count) || price_scale == 0 {
+        if outcome_count < 2
+            || usize::from(outcome_count) > MAX_OUTCOMES
+            || price_scale == 0
+        {
             return Err(Error::InvalidWidth);
         }
         batch.validate().map_err(|_| Error::InvalidPolicy)?;
