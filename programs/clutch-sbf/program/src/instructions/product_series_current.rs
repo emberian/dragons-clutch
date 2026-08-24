@@ -3582,10 +3582,7 @@ where
         require_live(id)?;
     }
     require(
-        matches!(
-            root.state().phase(),
-            MarketLifecyclePhaseV2::Active | MarketLifecyclePhaseV2::Retiring
-        )
+        root.state().phase() == MarketLifecyclePhaseV2::Active
             && link.state().phase() == SeriesMarketLinkPhaseV2::Active
             && link
                 .state()
@@ -5279,6 +5276,10 @@ mod source_contract_tests {
             "let resolution_semantic_id = root.state().resolution_semantic_id()"
         ));
         assert!(terminal.contains("resolution_activation_receipt_id"));
+        assert!(terminal.contains(
+            "root.state().phase() == MarketLifecyclePhaseV2::Active"
+        ));
+        assert!(!terminal.contains("MarketLifecyclePhaseV2::Retiring"));
         assert!(terminal.contains("link_binding.rent_refund_owner == root_capital.rent_refund_owner"));
         assert!(terminal.contains("SeriesLinkObligationStatusV2::Live"));
         assert!(terminal.contains("SeriesLinkObligationStatusV2::Terminal"));
