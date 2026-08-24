@@ -29,6 +29,28 @@ use super::general_v2_settlement_root::{
 };
 use super::general_v2_settlement_traversal_v5::AuthenticatedRootSettlementTraversalV5;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReceiptTransitionPolicyV5 {
+    NeutralOnly,
+    Accounting,
+}
+
+const fn transition_allowed_v5(
+    transition: SettlementReceiptTransitionCommitmentV5,
+    policy: ReceiptTransitionPolicyV5,
+) -> bool {
+    match policy {
+        ReceiptTransitionPolicyV5::NeutralOnly => {
+            matches!(transition, SettlementReceiptTransitionCommitmentV5::None)
+        }
+        ReceiptTransitionPolicyV5::Accounting => matches!(
+            transition,
+            SettlementReceiptTransitionCommitmentV5::None
+                | SettlementReceiptTransitionCommitmentV5::PortfolioPairPending
+        ),
+    }
+}
+
 /// SettlementRoot, retained Feed, and writable V5 receipt.
 pub const RECEIPT_V5_AUTH_ACCOUNT_COUNT: usize = 3;
 /// Counted SettlementRoot; read-only or writable as fixed by the action.
@@ -270,10 +292,11 @@ fn authenticate_general_receipt_v5_inner(
 ///
 /// This is the sole action-26/portfolio-neutral bridge. It does not accept raw
 /// root, Feed, candidate, price, or page facts and performs no mutation.
-pub fn authenticate_general_receipt_v5_root_traversal(
+fn authenticate_general_receipt_v5_root_traversal_inner(
     program_id: &Pubkey,
     authenticated: AuthenticatedRootSettlementTraversalV5<'_, '_>,
     receipt_account_info: &AccountInfo<'_>,
+    transition_policy: ReceiptTransitionPolicyV5,
 ) -> Outcome<AuthenticatedGeneralReceiptV5> {
     require_program_state(
         program_id,
@@ -331,7 +354,7 @@ pub fn authenticate_general_receipt_v5_root_traversal(
             && feed.slice_count == counts.expected_receipts
             && counts.admitted_receipts == counts.expected_receipts
             && counts.live_receipts > 0
-            && receipt.transition() == SettlementReceiptTransitionCommitmentV5::None
+            && transition_allowed_v5(receipt.transition(), transition_policy)
             && semantic.epoch.0 == root.epoch().bytes()
             && semantic.market.0 == root.market().bytes()
             && semantic.candidate.0 == root.settlement_candidate_id().bytes()
@@ -351,6 +374,39 @@ pub fn authenticate_general_receipt_v5_root_traversal(
         receipt,
         evidence,
     })
+}
+
+/// Authenticate a neutral direct/split/merge V5 receipt against one complete
+/// root traversal. Portfolio receipts remain excluded from delivery routes.
+pub fn authenticate_general_receipt_v5_root_traversal(
+    program_id: &Pubkey,
+    authenticated: AuthenticatedRootSettlementTraversalV5<'_, '_>,
+    receipt_account_info: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedGeneralReceiptV5> {
+    authenticate_general_receipt_v5_root_traversal_inner(
+        program_id,
+        authenticated,
+        receipt_account_info,
+        ReceiptTransitionPolicyV5::NeutralOnly,
+    )
+}
+
+/// Authenticate one V5 receipt for action 25 accounting.
+///
+/// The accounting latch is shared by scalar and portfolio receipts. A pending
+/// portfolio commitment is admitted here, while a committed portfolio
+/// delivery remains terminal and cannot be re-accounted.
+pub fn authenticate_general_receipt_v5_accounting_root_traversal(
+    program_id: &Pubkey,
+    authenticated: AuthenticatedRootSettlementTraversalV5<'_, '_>,
+    receipt_account_info: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedGeneralReceiptV5> {
+    authenticate_general_receipt_v5_root_traversal_inner(
+        program_id,
+        authenticated,
+        receipt_account_info,
+        ReceiptTransitionPolicyV5::Accounting,
+    )
 }
 
 /// Authenticate an existing V5 receipt for an action that does not mutate root.
@@ -416,6 +472,28 @@ mod tests {
             exact_price(&11_u64.to_le_bytes(), 1),
             Err(ClutchError::WrongDataLength.into())
         );
+    }
+
+    #[test]
+    fn accounting_transition_policy_never_admits_committed_portfolio_receipts() {
+        assert!(transition_allowed_v5(
+            SettlementReceiptTransitionCommitmentV5::None,
+            ReceiptTransitionPolicyV5::Accounting,
+        ));
+        assert!(transition_allowed_v5(
+            SettlementReceiptTransitionCommitmentV5::PortfolioPairPending,
+            ReceiptTransitionPolicyV5::Accounting,
+        ));
+        assert!(!transition_allowed_v5(
+            SettlementReceiptTransitionCommitmentV5::PortfolioPairCommitted(
+                LayoutHash32::new([1; 32]).unwrap(),
+            ),
+            ReceiptTransitionPolicyV5::Accounting,
+        ));
+        assert!(!transition_allowed_v5(
+            SettlementReceiptTransitionCommitmentV5::PortfolioPairPending,
+            ReceiptTransitionPolicyV5::NeutralOnly,
+        ));
     }
 
     #[test]
