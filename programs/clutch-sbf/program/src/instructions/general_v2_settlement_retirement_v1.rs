@@ -11,7 +11,7 @@ use clutch_fee_runtime_contract::{Id as FeeId, OwnerFeeFinalizationOutcomeV2};
 use clutch_general_v2_contract as contract;
 use clutch_general_v2_contract::{
     decode_settlement_retirement_payload_v1, CountedSettlementRootSelectorV1,
-    DeletableRentOwnerV1, Id32, MarketBindingV2, SettlementChildRetirementPayloadV1,
+    DeletableRentOwnerV1, Id32, MarketBindingV4, SettlementChildRetirementPayloadV1,
     SettlementRetirementPayloadKindV1,
 };
 use clutch_solana_layout::registry::GeneralV2Action;
@@ -96,20 +96,20 @@ fn require_destination(account: &AccountInfo<'_>) -> Outcome<()> {
     require(!account.executable, ClutchError::ExecutableAccount)
 }
 
-fn decode_binding(program_id: &Pubkey, account: &AccountInfo<'_>) -> Outcome<MarketBindingV2> {
+fn decode_binding(program_id: &Pubkey, account: &AccountInfo<'_>) -> Outcome<MarketBindingV4> {
     require_program_state(
         program_id,
         account,
         false,
-        Some(contract::MARKET_BINDING_ACCOUNT_BYTES_V2),
+        Some(contract::MARKET_BINDING_ACCOUNT_BYTES_V4),
     )?;
-    let binding = MarketBindingV2::decode(&borrow_data(account)?)?;
+    let binding = MarketBindingV4::decode(&borrow_data(account)?)?;
     let canonical = seeds::general_v2_market_binding_pda(
         program_id,
-        &binding.base().market_instance_v2_id.bytes(),
+        &binding.base().base().market_instance_v2_id.bytes(),
     );
     require(
-        *account.key == canonical.0 && binding.base().stored_bump == canonical.1,
+        *account.key == canonical.0 && binding.base().base().stored_bump == canonical.1,
         ClutchError::WrongPda,
     )?;
     Ok(binding)
@@ -131,14 +131,14 @@ fn authenticate_root(
 fn require_root_binding(
     root: &AuthenticatedGeneralSettlementRootV1,
     binding_account: &AccountInfo<'_>,
-    binding: &MarketBindingV2,
+    binding: &MarketBindingV4,
 ) -> Outcome<()> {
     let value = root.root();
     require(
         value.market_binding() == id(binding_account.key)
-            && value.market() == binding.base().market
-            && value.market_instance_v2_id() == binding.base().market_instance_v2_id
-            && value.batch_policy_id() == binding.batch_policy_id(),
+            && value.market() == binding.base().base().market
+            && value.market_instance_v2_id() == binding.base().base().market_instance_v2_id
+            && value.batch_policy_id() == binding.base().batch_policy_id(),
         ClutchError::MismatchedState,
     )
 }
@@ -241,7 +241,7 @@ fn prepare_child_frame(
     accounts: &[AccountInfo<'_>],
     selector: SettlementChildRetirementPayloadV1,
     exact_child_len: usize,
-) -> Outcome<(AuthenticatedGeneralSettlementRootV1, MarketBindingV2)> {
+) -> Outcome<(AuthenticatedGeneralSettlementRootV1, MarketBindingV4)> {
     require_count(accounts, SETTLEMENT_CHILD_CLOSE_ACCOUNT_COUNT_V1)?;
     require(selector.child == id(accounts[IX_CHILD].key), ClutchError::MismatchedState)?;
     require_program_state(program_id, &accounts[IX_CHILD], true, Some(exact_child_len))?;
@@ -264,7 +264,7 @@ fn prepare_child_frame(
     let binding = decode_binding(program_id, &accounts[IX_BINDING])?;
     require_root_binding(&root, &accounts[IX_BINDING], &binding)?;
     require(
-        binding.base().neutral_sink == id(accounts[IX_SINK].key),
+        binding.base().base().neutral_sink == id(accounts[IX_SINK].key),
         ClutchError::MismatchedState,
     )?;
     Ok((root, binding))
@@ -499,7 +499,7 @@ fn close_pot(
         return Err(Refusal::Adapter(ClutchError::MismatchedState));
     };
     require(
-        binding.base().neutral_sink == id(accounts[IX_SINK].key),
+        binding.base().base().neutral_sink == id(accounts[IX_SINK].key),
         ClutchError::MismatchedState,
     )?;
     let (payer_after, sink_after) = checked_close_balances(

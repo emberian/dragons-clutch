@@ -15,8 +15,9 @@ use clutch_collateral_adapter_v2::{
 };
 use clutch_general_v2_contract::{
     project_general_position_replay_prestate_v1, GeneralPositionReplayPrestateV1, Id32,
-    MarketBindingV1, MarketBindingV2, MarketRuntimeV3AccountV1, MARKET_BINDING_ACCOUNT_BYTES,
-    MARKET_BINDING_ACCOUNT_BYTES_V2, MARKET_RUNTIME_ACCOUNT_BYTES,
+    MarketBindingV1, MarketBindingV2, MarketBindingV4, MarketRuntimeV3AccountV1,
+    MARKET_BINDING_ACCOUNT_BYTES, MARKET_BINDING_ACCOUNT_BYTES_V2,
+    MARKET_BINDING_ACCOUNT_BYTES_V4, MARKET_RUNTIME_ACCOUNT_BYTES,
 };
 use clutch_owner_settlement::AuthenticatedPositionV3;
 use clutch_product_series::MarketInstancePreimageV2;
@@ -517,6 +518,48 @@ pub(crate) fn authenticate_general_market_v2(
     let binding = MarketBindingV2::decode(&market_binding_account.data.borrow())?;
     let runtime = MarketRuntimeV3AccountV1::decode(&market_runtime_account.data.borrow())?;
     let base = binding.base();
+    expect_pda(
+        market_binding_account.key,
+        seeds::general_v2_market_binding_pda(program_id, &base.market_instance_v2_id.bytes()),
+        Some(base.stored_bump),
+    )?;
+    expect_pda(
+        market_runtime_account.key,
+        seeds::general_v2_market_runtime_pda(program_id, &market_binding_account.key.to_bytes()),
+        Some(runtime.stored_bump),
+    )?;
+    require(
+        base.market.bytes() == market_runtime_account.key.to_bytes()
+            && runtime.market_binding.bytes() == market_binding_account.key.to_bytes()
+            && runtime.market_instance_v2_id == base.market_instance_v2_id,
+        ClutchError::MismatchedState,
+    )?;
+    Ok((binding, runtime))
+}
+
+/// Authenticate only the current Product/Revenue-authorized General
+/// MarketBinding V4 and its stable runtime. V1/V2/V3 accounts cannot enter
+/// this successor authority.
+pub(crate) fn authenticate_general_market_v4(
+    program_id: &Pubkey,
+    market_binding_account: &AccountInfo<'_>,
+    market_runtime_account: &AccountInfo<'_>,
+) -> Outcome<(MarketBindingV4, MarketRuntimeV3AccountV1)> {
+    require_program_account(
+        program_id,
+        market_binding_account,
+        false,
+        MARKET_BINDING_ACCOUNT_BYTES_V4,
+    )?;
+    require_program_account(
+        program_id,
+        market_runtime_account,
+        false,
+        MARKET_RUNTIME_ACCOUNT_BYTES,
+    )?;
+    let binding = MarketBindingV4::decode(&market_binding_account.data.borrow())?;
+    let runtime = MarketRuntimeV3AccountV1::decode(&market_runtime_account.data.borrow())?;
+    let base = binding.base().base();
     expect_pda(
         market_binding_account.key,
         seeds::general_v2_market_binding_pda(program_id, &base.market_instance_v2_id.bytes()),

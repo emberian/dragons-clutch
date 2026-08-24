@@ -41,13 +41,13 @@ use clutch_general_v2_contract::{
     recipient_allocation_account_data_id_v2,
     FeeLamportTransferV2,
     GeneralPositionReplayPrestateV1, GeneralReplayTransitionKindV1,
-    GeneralReplayTransitionPlanV1, Id32, MarketBindingV2, OwnerFeeCarryV3AccountV1,
+    GeneralReplayTransitionPlanV1, Id32, MarketBindingV4, OwnerFeeCarryV3AccountV1,
     OwnerFeeFinalizationV4AccountV1, OwnerFeeRentTransitionAccountsV3,
     OwnerFeeRentTransitionPlanV3, DeletableRentOwnerV1, OwnerSettlementSeedTupleV5,
     OwnerSettlementV5AccountV1, PayerAllocationV2AccountV1, SelectedFeeRecordV1AccountV1,
     RecipientAllocationV2AccountV1, SettlementRootChildStateV1, SettlementRootPhaseV1,
     SettlementRootV1AccountV1,
-    Sha256BackendV1, MARKET_BINDING_ACCOUNT_BYTES_V2, OWNER_FEE_CARRY_ACCOUNT_BYTES_V3,
+    Sha256BackendV1, MARKET_BINDING_ACCOUNT_BYTES_V4, OWNER_FEE_CARRY_ACCOUNT_BYTES_V3,
     OWNER_FEE_FINALIZATION_ACCOUNT_BYTES_V4, OWNER_SETTLEMENT_ACCOUNT_BYTES_V5,
     PAYER_ALLOCATION_ACCOUNT_BYTES_V2, RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2,
     SELECTED_FEE_RECORD_ACCOUNT_BYTES,
@@ -1161,10 +1161,10 @@ pub fn prepare_candidate_fee_collection_terminal_close_v5(
     require_read_only_program_state(
         program_id,
         frame.market_binding,
-        MARKET_BINDING_ACCOUNT_BYTES_V2,
+        MARKET_BINDING_ACCOUNT_BYTES_V4,
     )?;
-    let market_binding = MarketBindingV2::decode(&borrow_data(frame.market_binding)?)?;
-    let binding = market_binding.base();
+    let market_binding = MarketBindingV4::decode(&borrow_data(frame.market_binding)?)?;
+    let binding = market_binding.base().base();
     expect_pda(
         frame.market_binding.key,
         seeds::general_v2_market_binding_pda(
@@ -1177,7 +1177,7 @@ pub fn prepare_candidate_fee_collection_terminal_close_v5(
     require(
         id(frame.market_binding.key) == authority.market_binding
             && binding.market == expected.market
-            && market_binding.batch_policy_id() == expected.batch_policy
+            && market_binding.base().batch_policy_id() == expected.batch_policy
             && id(frame.neutral_sink.key) == binding.neutral_sink
             && id(frame.rent_refund_owner.key) == collection.recipient_rent.payer
             && authority.runtime_release == runtime_release,
@@ -1671,10 +1671,10 @@ fn prepare_owner_fee_finalization_v5(
     require_read_only_program_state(
         program_id,
         rent_frame.market_binding,
-        MARKET_BINDING_ACCOUNT_BYTES_V2,
+        MARKET_BINDING_ACCOUNT_BYTES_V4,
     )?;
-    let market_binding = MarketBindingV2::decode(&borrow_data(rent_frame.market_binding)?)?;
-    let binding = market_binding.base();
+    let market_binding = MarketBindingV4::decode(&borrow_data(rent_frame.market_binding)?)?;
+    let binding = market_binding.base().base();
     expect_pda(
         rent_frame.market_binding.key,
         seeds::general_v2_market_binding_pda(
@@ -1688,7 +1688,8 @@ fn prepare_owner_fee_finalization_v5(
             && binding.market == authenticated_root.root().market()
             && binding.market_instance_v2_id
                 == authenticated_root.root().market_instance_v2_id()
-            && market_binding.batch_policy_id() == authenticated_root.root().batch_policy_id()
+            && market_binding.base().batch_policy_id()
+                == authenticated_root.root().batch_policy_id()
             && id(rent_frame.neutral_sink.key) == binding.neutral_sink,
         ClutchError::MismatchedState,
     )?;

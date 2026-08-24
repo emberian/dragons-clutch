@@ -409,7 +409,7 @@ fn initialize_settlement_root(
     let feed = authenticated.feed();
     let market = authenticated.market();
     let traversal = authenticated.traversal();
-    let base = market.base();
+    let base = market.base().base();
 
     let epoch_pda = seeds::general_v2_epoch_pda(
         program_id,

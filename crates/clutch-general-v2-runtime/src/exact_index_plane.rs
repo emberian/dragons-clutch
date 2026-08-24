@@ -14,7 +14,7 @@ use clutch_general_v2_contract::{
     CandidateWindowV5AccountV1, DeletableRentOwnerV1, GeneralEpochV6AccountV1,
     AuthenticatedIndexedSettlementRootRentV1, ExactIndexChildrenStateV1, Id32,
     IndexedSettlementRootCloseProjectionV1, IndexedSettlementRootV1AccountV1,
-    MarketBindingV2, SettlementRootV1AccountV1,
+    MarketBindingV4, SettlementRootV1AccountV1,
     SettlementSliceLegKindV1, SettlementSliceV1, INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG,
     INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION, INDEXED_SETTLEMENT_ROOT_BYTES_V1, MAX_ORDERS,
     MAX_OUTCOMES, MAX_SLICES, SETTLEMENT_SLICE_BYTES,
@@ -674,7 +674,7 @@ pub struct ExactIndexCloseAccountInputV1 {
 }
 #[derive(Clone, Copy, Debug)]
 pub struct CloseExactIndexPlaneInputV1<'a> {
-    pub market_binding_account: Id32, pub market_binding: &'a MarketBindingV2,
+    pub market_binding_account: Id32, pub market_binding: &'a MarketBindingV4,
     pub locator: ExactIndexCloseAccountInputV1,
     pub adjacency: ExactIndexCloseAccountInputV1,
 }
@@ -733,14 +733,14 @@ pub fn stream_retire_counted_exact_index_root_v1(
         || input.locator.owner != input.locator.program_id || input.adjacency.owner != input.adjacency.program_id
         || input.locator.program_id != input.adjacency.program_id || !input.locator.writable
         || !input.adjacency.writable || input.locator.executable || input.adjacency.executable
-        || input.market_binding.base().market != indexed.base().market()
-        || input.market_binding.base().market_instance_v2_id
+        || input.market_binding.base().base().market != indexed.base().market()
+        || input.market_binding.base().base().market_instance_v2_id
             != indexed.base().market_instance_v2_id()
         || input.market_binding.batch_policy_id() != indexed.base().batch_policy_id()
     { return Err(ExactIndexPlaneErrorV1::BindingMismatch); }
     let locator = decode_common(sealed.locator_body, FROZEN_ORDER_LOCATOR_MAGIC_V1)?;
     let adjacency = decode_common(sealed.adjacency_body, CANDIDATE_ORDER_SLICE_INDEX_MAGIC_V1)?;
-    let sink = input.market_binding.base().neutral_sink;
+    let sink = input.market_binding.base().base().neutral_sink;
     if !locator.semantic_eq(&adjacency)
         || locator.settlement_root_account != sealed.authority.root_account
         || locator.selected_feed_account != sealed.authority.feed_account
@@ -802,7 +802,7 @@ pub struct RetireCountedExactFeedInputV1<'a> {
     /// Canonical MarketBinding PDA.
     pub market_binding_account: Id32,
     /// Already authenticated MarketBinding value.
-    pub market_binding: &'a MarketBindingV2,
+    pub market_binding: &'a MarketBindingV4,
     /// Retained Feed account selected by the root.
     pub feed_account: Id32,
     /// Exact hostile Feed body.
@@ -874,8 +874,8 @@ pub fn stream_retire_counted_exact_feed_v1(
             != clutch_general_v2_contract::SettlementRootChildStateV1::Live
         || indexed_root.base().retained_feed() != input.feed_account
         || indexed_root.base().market_binding() != input.market_binding_account
-        || input.market_binding.base().market != indexed_root.base().market()
-        || input.market_binding.base().market_instance_v2_id
+        || input.market_binding.base().base().market != indexed_root.base().market()
+        || input.market_binding.base().base().market_instance_v2_id
             != indexed_root.base().market_instance_v2_id()
         || input.market_binding.batch_policy_id() != indexed_root.base().batch_policy_id()
         || input.feed_owner != input.program_id
@@ -917,7 +917,7 @@ pub fn stream_retire_counted_exact_feed_v1(
     {
         return Err(ExactIndexPlaneErrorV1::BindingMismatch);
     }
-    let sink = input.market_binding.base().neutral_sink;
+    let sink = input.market_binding.base().base().neutral_sink;
     let rent = header.rent;
     let forbidden = [input.root_account, input.market_binding_account, input.feed_account];
     if forbidden.contains(&sink)
@@ -1025,7 +1025,7 @@ pub struct CloseCountedExactRootInputV1<'a> {
     /// Canonical MarketBinding PDA.
     pub market_binding_account: Id32,
     /// Already authenticated MarketBinding value.
-    pub market_binding: &'a MarketBindingV2,
+    pub market_binding: &'a MarketBindingV4,
 }
 
 /// Compact terminal handoff and exact indexed-root close credits.
@@ -1106,13 +1106,13 @@ pub fn close_counted_exact_root_v1(
     if terminal.terminal().base().root_account() != input.root_account
         || terminal.market_binding() != input.market_binding_account
         || terminal.terminal().base().epoch() != input.epoch_account
-        || terminal.terminal().base().market() != input.market_binding.base().market
+        || terminal.terminal().base().market() != input.market_binding.base().base().market
         || terminal.terminal().base().market_instance_v2_id()
-            != input.market_binding.base().market_instance_v2_id
+            != input.market_binding.base().base().market_instance_v2_id
     {
         return Err(ExactIndexPlaneErrorV1::BindingMismatch);
     }
-    let sink = input.market_binding.base().neutral_sink;
+    let sink = input.market_binding.base().base().neutral_sink;
     let rent = terminal.root_rent();
     if sink == input.root_account
         || sink == input.epoch_account

@@ -17,7 +17,7 @@ use clutch_general_v2_contract::{
     decode_settlement_root_payload_v1, GeneralOrderPageSeedTupleV5,
     GeneralReservationSeedTupleV9, Id32, ReleaseUnfilledReservationPayloadV1,
     SettlementRootPayloadV1,
-    GENERAL_REPLAY_ACCOUNT_V1_BYTES, MARKET_BINDING_ACCOUNT_BYTES_V2,
+    GENERAL_REPLAY_ACCOUNT_V1_BYTES, MARKET_BINDING_ACCOUNT_BYTES_V4,
     MARKET_RUNTIME_ACCOUNT_BYTES, INDEXED_SETTLEMENT_ROOT_BYTES_V1,
 };
 use clutch_general_v2_runtime::{
@@ -524,7 +524,7 @@ fn compose_and_apply_release_unfilled_reservation_v1(
         program_id,
         traversal_frame.market_binding,
         false,
-        MARKET_BINDING_ACCOUNT_BYTES_V2,
+        MARKET_BINDING_ACCOUNT_BYTES_V4,
     )?;
     require_program_state(
         program_id,

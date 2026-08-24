@@ -808,7 +808,7 @@ fn consume_portfolio_pair(
     require(
         accounts[IX_ECONOMIC_DOMAIN].data_len() == contract::ECONOMIC_DOMAIN_ACCOUNT_BYTES
             && accounts[IX_MARKET_BINDING].data_len()
-                == contract::MARKET_BINDING_ACCOUNT_BYTES_V2
+                == contract::MARKET_BINDING_ACCOUNT_BYTES_V4
             && accounts[IX_PRICE_GRID].data_len() == account_len::PRICE_GRID
             && accounts[IX_BUYER_RESERVATION_V9].data_len() == RESERVATION_ACCOUNT_BYTES_V9
             && accounts[IX_SELLER_RESERVATION_V9].data_len() == RESERVATION_ACCOUNT_BYTES_V9
@@ -886,23 +886,23 @@ fn consume_portfolio_pair(
         ClutchError::MismatchedState,
     )?;
 
-    let binding = contract::MarketBindingV2::decode(&borrow_data(&accounts[IX_MARKET_BINDING])?)?;
+    let binding = contract::MarketBindingV4::decode(&borrow_data(&accounts[IX_MARKET_BINDING])?)?;
     let binding_pda = seeds::general_v2_market_binding_pda(
         program_id,
-        &binding.base().market_instance_v2_id.bytes(),
+        &binding.base().base().market_instance_v2_id.bytes(),
     );
     require(
         request.settlement_root == root_account
             && root.market_binding() == id(accounts[IX_MARKET_BINDING].key)
             && *accounts[IX_MARKET_BINDING].key == binding_pda.0
-            && binding.base().stored_bump == binding_pda.1
-            && binding.base().market == root.market()
-            && binding.base().market_instance_v2_id == root.market_instance_v2_id()
-            && binding.batch_policy_id() == root.batch_policy_id()
-            && binding.base().score_policy_id == root.score_policy_id()
-            && binding.base().outcome_count == root.outcome_count()
-            && binding.base().relation_policy_id == feed.relation_policy_id
-            && binding.base().price_measure_policy_v1_id == feed.price_measure_policy_v1_id,
+            && binding.base().base().stored_bump == binding_pda.1
+            && binding.base().base().market == root.market()
+            && binding.base().base().market_instance_v2_id == root.market_instance_v2_id()
+            && binding.base().batch_policy_id() == root.batch_policy_id()
+            && binding.base().base().score_policy_id == root.score_policy_id()
+            && binding.base().base().outcome_count == root.outcome_count()
+            && binding.base().base().relation_policy_id == feed.relation_policy_id
+            && binding.base().base().price_measure_policy_v1_id == feed.price_measure_policy_v1_id,
         ClutchError::MismatchedState,
     )?;
 
@@ -920,7 +920,7 @@ fn consume_portfolio_pair(
         page_count,
         root.order_set(),
         &domain,
-        &binding,
+        binding.base(),
         &grid,
     )?;
     require(
