@@ -128,7 +128,7 @@ use super::product_market::{
     authenticate_market_lifecycle_root_v1, authenticate_series_market_link_v1,
     AuthenticatedMarketLifecycleRootV1,
 };
-use super::product_direct_global_liveness::retire_product_direct_candidate_liveness_v1;
+use super::product_direct_global_liveness::retire_product_direct_candidate_liveness_v2;
 
 const DIRECT_ACCOUNT_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/account-authentication/v1\0";
@@ -3021,7 +3021,7 @@ pub(crate) fn process_direct_retire_terminal_v1(
             plan.terminal_receipt_id,
         )
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let product_retirement = retire_product_direct_candidate_liveness_v1(
+    let product_retirement = retire_product_direct_candidate_liveness_v2(
         program_id,
         product_root,
         &plan,
