@@ -137,10 +137,11 @@ StructuredClaim `75/1` reserves actions 1 through 8:
 8. `RetireDescriptor`
 
 Current source/account contracts exist only for actions 1/3/5/6/7/8, with
-exact outer/base counts 34/32/32/32/33/31 respectively. Actions 2 and 4 are
+exact outer/base counts 34/32/32/32/33/33 respectively. Actions 2 and 4 are
 withdrawn execution routes. The checked Structured wrapper/base/Token-2022
-release contract admits an exact zero action mask, so allocation and compiled
-source do not activate any Structured tuple.
+release join admits exactly mask `0x01ea` under the frozen base profile
+identity, while the central tuple registry still keeps every Structured action
+absent until the unified successor closure is callable.
 
 SourceSeries `77/2` reserves disjoint owner ranges. SourcePlane V3 owns actions
 1 through 12:

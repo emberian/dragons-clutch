@@ -2617,4 +2617,25 @@ mod source_contract_tests {
         assert!(source.contains("claim_ledger_transition_id, fractional_release_id, binding.capability_profile_id"));
         assert!(!source.contains("pub(crate) fn write_market_lifecycle_root_v2<'next>("));
     }
+
+    #[test]
+    fn historical_product_market_has_no_wrapper_writer_authority() {
+        let historical = include_str!("product_market.rs");
+        assert!(!historical.contains(concat!(
+            "AuthenticatedSeriesWrapperAuthorization",
+            "V1"
+        )));
+        assert!(!historical.contains(concat!(
+            "authenticate_series_wrapper_authorization_",
+            "v1("
+        )));
+        assert!(!historical.contains(concat!(
+            "admit_series_wrapper_obligation_",
+            "v1("
+        )));
+        assert!(!historical.contains(concat!(
+            "terminalize_series_wrapper_obligation_",
+            "v1("
+        )));
+    }
 }
