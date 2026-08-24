@@ -10,6 +10,8 @@ pub mod account_index;
 pub mod action_material;
 #[cfg(feature = "operator")]
 pub mod failure_source_action10_material;
+#[cfg(feature = "operator")]
+pub mod failure_action11_material;
 #[cfg(feature = "campaign")]
 mod capture;
 #[cfg(feature = "operator")]

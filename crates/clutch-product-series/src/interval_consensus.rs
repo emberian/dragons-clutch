@@ -298,6 +298,12 @@ impl QuantizedIntervalConsensusWorkV1 {
         self.checked_coordinates
     }
 
+    /// Immutable per-transition coordinate ceiling selected by the current
+    /// central capability profile when this work state was created.
+    pub const fn maximum_coordinates_per_advance(&self) -> u16 {
+        self.maximum_coordinates_per_advance
+    }
+
     /// Inclusive interval coordinate count.
     pub fn total_coordinates(&self) -> Result<u64> {
         inclusive_coordinate_count(self.low, self.high)

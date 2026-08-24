@@ -99,6 +99,7 @@ pub enum ProtocolFlow {
     CollateralCustodyV3,
     MarketEpochCreation,
     SourcePlaneV3,
+    FailureRecovery,
     GeneralV2Candidate,
     GeneralV2Settlement,
     GeneralV2Fees,
@@ -240,6 +241,10 @@ pub enum OwnedWireContract {
         binding: SuccessorRegistryBinding,
         sequence: u64,
     },
+    MainFailureRequestV1 {
+        binding: SuccessorRegistryBinding,
+        sequence: u64,
+    },
     /// Exact replay request for the allocated-but-disabled Direct `80/1`
     /// family. This remains distinct from an enabled Source request so a
     /// construction artifact cannot silently promote runtime admission.
@@ -279,6 +284,74 @@ pub struct OwnedInstructionDraft {
 }
 
 impl OwnedInstructionDraft {
+    /// Assemble current Failure action 11 from hostile-authenticated chain
+    /// state. RootV3 owns both immutable preimages, so only the canonical
+    /// bounded coordinate count remains on the wire.
+    #[cfg(feature = "operator")]
+    pub(crate) fn checked_release_failure_action11_v1(
+        release: &crate::rpc_index::IndexedProgramRelease,
+        semantic_owner: SemanticOwner,
+        accounts: Vec<AccountMeta>,
+        equations: Vec<ExactEquation>,
+        sequence: u64,
+        requested_coordinates: u16,
+    ) -> Result<Self> {
+        use crate::rpc_index::{CanonicalFamily, CanonicalIntentCoordinate};
+        use clutch_solana_layout::registry::RecoveryAction;
+
+        const ACTION: RecoveryAction = RecoveryAction::AdvanceIntervalConsensus;
+        let central_action = ExtensionAction::Recovery(ACTION);
+        let family = central_action.family();
+        let coordinate = CanonicalIntentCoordinate {
+            family_tag: family.tag(),
+            family_version: family.version(),
+            local_action: central_action.local_tag(),
+        };
+        release
+            .validate()
+            .map_err(|_| ConstructionError::UnallocatedRegistryCoordinate)?;
+        if sequence == 0
+            || requested_coordinates == 0
+            || semantic_owner.release_sha256 != release.release_manifest_sha256
+            || !release.families.contains(&CanonicalFamily::Failure)
+            || release.enabled_intents.binary_search(&coordinate).is_err()
+        {
+            return Err(ConstructionError::UnallocatedRegistryCoordinate);
+        }
+        validate_failure_action11_metas_v1(&accounts)?;
+        let binding = registry_binding(family, central_action.local_tag(), Some(central_action))?;
+        let mut payload = [0u8; 8];
+        payload[..2].copy_from_slice(&requested_coordinates.to_le_bytes());
+        let request = ExtensionRequest {
+            sequence,
+            envelope: ExtensionEnvelope {
+                family,
+                action: central_action,
+                payload: &payload,
+            },
+        };
+        let mut data = vec![0; 13 + EXTENSION_ENVELOPE_BYTES + payload.len()];
+        let exact = request
+            .encode(&mut data)
+            .map_err(|_| ConstructionError::WrongWireLength)?;
+        data.truncate(exact);
+        let value = Self {
+            flow: ProtocolFlow::FailureRecovery,
+            action_name: "advance-failure-interval-consensus-v1".into(),
+            semantic_owner,
+            program_id: release.program_id,
+            accounts,
+            required_signers: Vec::new(),
+            equations,
+            registry_binding: Some(binding),
+            runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
+            wire: OwnedWireContract::MainFailureRequestV1 { binding, sequence },
+            data,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Admit an enabled full-width collateral instruction after decoding the
     /// exact request variant and validating every account role. The first
     /// role is the authenticated owner/claimant signer and is retained as a
@@ -730,6 +803,10 @@ impl OwnedInstructionDraft {
             OwnedWireContract::MainSuccessorRequest { binding, .. }
                 if binding.family == ExtensionFamily::SourceSeries
         );
+        let failure_request = matches!(
+            self.wire,
+            OwnedWireContract::MainFailureRequestV1 { .. }
+        );
         let collateral_request = matches!(
             self.wire,
             OwnedWireContract::CollateralReplayRequestV3 { .. }
@@ -739,7 +816,12 @@ impl OwnedInstructionDraft {
             OwnedWireContract::DisabledDirectMarketRequestV1 { .. }
         );
         let structured_wrapper = matches!(self.wire, OwnedWireContract::StructuredWrapperV1 { .. });
-        if !source_request && !collateral_request && !direct_request && !structured_wrapper {
+        if !source_request
+            && !failure_request
+            && !collateral_request
+            && !direct_request
+            && !structured_wrapper
+        {
             let mut accounts = BTreeSet::new();
             for account in &self.accounts {
                 if !accounts.insert(account.pubkey) {
@@ -808,6 +890,7 @@ impl OwnedInstructionDraft {
                     ProtocolFlow::ProductSeries | ProtocolFlow::SourcePlaneV3 => {
                         family == ExtensionFamily::SourceSeries
                     }
+                    ProtocolFlow::FailureRecovery => family == ExtensionFamily::Recovery,
                     ProtocolFlow::StructuredClaim => family == ExtensionFamily::StructuredClaim,
                     ProtocolFlow::CollateralCustodyV3
                     | ProtocolFlow::DirectMarketV1
@@ -860,6 +943,33 @@ impl OwnedInstructionDraft {
                     .collect::<Vec<_>>();
                 validate_account_metas_v2(action, &observed)
                     .map_err(|_| ConstructionError::InvalidAccountContract)?;
+            }
+            OwnedWireContract::MainFailureRequestV1 { binding, sequence } => {
+                use clutch_solana_layout::registry::RecoveryAction;
+
+                let request = ExtensionRequest::decode(&self.data)
+                    .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                let expected = ExtensionAction::Recovery(
+                    RecoveryAction::AdvanceIntervalConsensus,
+                );
+                if sequence == 0
+                    || request.sequence != sequence
+                    || request.envelope.family != ExtensionFamily::Recovery
+                    || request.envelope.family != binding.family
+                    || request.envelope.action != expected
+                    || binding.local_action != expected.local_tag()
+                    || binding.central_action != Some(expected)
+                    || binding.family_status != AllocationStatus::Frozen
+                    || self.registry_binding != Some(binding)
+                    || self.flow != ProtocolFlow::FailureRecovery
+                    || self.runtime_admission != RuntimeAdmission::ReleaseBoundEnabled
+                    || request.envelope.payload.len() != 8
+                    || request.envelope.payload[..2] == [0, 0]
+                    || request.envelope.payload[2..] != [0; 6]
+                {
+                    return Err(ConstructionError::UnallocatedRegistryCoordinate);
+                }
+                validate_failure_action11_metas_v1(&self.accounts)?;
             }
             OwnedWireContract::DisabledDirectMarketRequestV1 { binding, sequence } => {
                 let request = ExtensionRequest::decode(&self.data)
@@ -1014,6 +1124,49 @@ impl OwnedInstructionDraft {
     }
 }
 
+/// Mirror the exact currently enabled Failure action-11 account ABI at the
+/// host construction boundary. Executable bits are authenticated from the
+/// account observations before this constructor is reached; Solana's
+/// `AccountMeta` wire format carries only signer and writable privileges.
+fn validate_failure_action11_metas_v1(accounts: &[AccountMeta]) -> Result<()> {
+    const ACCOUNT_COUNT: usize = 42;
+    const KEEPER_INDEX: usize = 40;
+    const REFUND_OWNER_INDEX: usize = 41;
+    const WRITABLE: [bool; ACCOUNT_COUNT] = [
+        false, false, false, true, true, false, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false, false, false, false, false,
+        false, false, false, true, true, false,
+    ];
+    if accounts.len() != ACCOUNT_COUNT {
+        return Err(ConstructionError::InvalidAccountContract);
+    }
+    let mut left = 0usize;
+    while left < accounts.len() {
+        if accounts[left].pubkey == Address::default() || accounts[left].is_signer {
+            return Err(ConstructionError::InvalidAccountContract);
+        }
+        let mut expected_writable = WRITABLE[left];
+        let mut right = 0usize;
+        while right < accounts.len() {
+            if left != right && accounts[left].pubkey == accounts[right].pubkey {
+                if !((left == KEEPER_INDEX && right == REFUND_OWNER_INDEX)
+                    || (left == REFUND_OWNER_INDEX && right == KEEPER_INDEX))
+                {
+                    return Err(ConstructionError::DuplicateAccount);
+                }
+                expected_writable |= WRITABLE[right];
+            }
+            right += 1;
+        }
+        if accounts[left].is_writable != expected_writable {
+            return Err(ConstructionError::InvalidAccountContract);
+        }
+        left += 1;
+    }
+    Ok(())
+}
+
 /// Explicit transport bounds. They are deployment/session configuration, not
 /// protocol invariants, so alternate local infrastructure can raise them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1164,6 +1317,7 @@ impl ProtocolTransactionBuilder {
                 draft.wire,
                 OwnedWireContract::MainSuccessor { .. }
                     | OwnedWireContract::MainSuccessorRequest { .. }
+                    | OwnedWireContract::MainFailureRequestV1 { .. }
                     | OwnedWireContract::DisabledDirectMarketRequestV1 { .. }
                     | OwnedWireContract::CollateralReplayRequestV3 { .. }
             ) && draft.program_id != self.clutch_program
@@ -1183,6 +1337,17 @@ impl ProtocolTransactionBuilder {
                 // itself to remain read-only. A transaction payer is globally
                 // writable after privilege union even if this instruction's
                 // meta says read-only, so that alias cannot be submitted.
+                return Err(ConstructionError::InvalidAccountContract);
+            }
+            if matches!(draft.wire, OwnedWireContract::MainFailureRequestV1 { .. })
+                && draft
+                    .accounts
+                    .iter()
+                    .any(|account| account.pubkey == self.payer)
+            {
+                // The payer is a global signer and writable key in the
+                // compiled message. Action 11 deliberately has no signer
+                // roles, so any payer alias would widen its onchain ABI.
                 return Err(ConstructionError::InvalidAccountContract);
             }
             for signer in &draft.required_signers {

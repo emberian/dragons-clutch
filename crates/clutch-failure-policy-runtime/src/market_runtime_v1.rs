@@ -1011,11 +1011,11 @@ impl FailureMarketRuntimeV1 {
         Ok(())
     }
 
-    /// Decode only against the independently authenticated immutable
-    /// admission root. Raw bytes cannot select their own policy binding.
-    pub fn decode_for_admission(
+    /// Hostile-decode and fully validate the semantic owner's canonical body.
+    /// Cross-account admission authority remains a separate mandatory join
+    /// for execution.
+    pub fn decode_canonical(
         input: &[u8; FAILURE_MARKET_RUNTIME_BYTES_V1],
-        admission: FailureMarketAdmissionStateV1,
     ) -> Result<Self> {
         if input[..8] != MAGIC_V1 {
             return Err(Error::BadMagic);
@@ -1079,6 +1079,17 @@ impl FailureMarketRuntimeV1 {
             completed_session_count,
             session_ids,
         };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Decode only against the independently authenticated immutable
+    /// admission root. Raw bytes cannot select their own policy binding.
+    pub fn decode_for_admission(
+        input: &[u8; FAILURE_MARKET_RUNTIME_BYTES_V1],
+        admission: FailureMarketAdmissionStateV1,
+    ) -> Result<Self> {
+        let value = Self::decode_canonical(input)?;
         value.validate_against_admission(admission)?;
         Ok(value)
     }

@@ -404,12 +404,11 @@ impl FailureMarketIntervalHistoryV2 {
         Ok(())
     }
 
-    /// Hostile-decode exact permanent history bytes against authenticated
-    /// immutable admission and quote receipts.
-    pub fn decode_for_admission(
+    /// Hostile-decode and fully validate the semantic owner's canonical body.
+    /// Admission and quote authority remain a separate mandatory join for
+    /// execution.
+    pub fn decode_canonical(
         input: &[u8; FAILURE_MARKET_INTERVAL_HISTORY_BYTES_V2],
-        admission: FailureMarketAdmissionStateV1,
-        quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
     ) -> Result<Self> {
         if input[..8] != MAGIC_V2 {
             return Err(Error::BadMagic);
@@ -464,6 +463,18 @@ impl FailureMarketIntervalHistoryV2 {
         {
             return Err(Error::NonCanonicalReserved);
         }
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Hostile-decode exact permanent history bytes against authenticated
+    /// immutable admission and quote receipts.
+    pub fn decode_for_admission(
+        input: &[u8; FAILURE_MARKET_INTERVAL_HISTORY_BYTES_V2],
+        admission: FailureMarketAdmissionStateV1,
+        quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+    ) -> Result<Self> {
+        let value = Self::decode_canonical(input)?;
         value.validate_against(admission, quote)?;
         Ok(value)
     }

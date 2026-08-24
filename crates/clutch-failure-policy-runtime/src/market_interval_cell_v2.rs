@@ -251,6 +251,31 @@ impl FailureMarketIntervalCellV2 {
         self.completed_session_count
     }
 
+    /// Monotone paid-transition count inside the currently pinned session.
+    pub const fn transition_nonce(self) -> u64 {
+        self.transition_nonce
+    }
+
+    /// Exact accepted progress already priced against the active attempt row.
+    pub const fn accepted_progress_units(self) -> u64 {
+        self.accepted_progress_units
+    }
+
+    /// Exact count of Recovery-funded work calls in this session.
+    pub const fn completed_work_calls(self) -> u64 {
+        self.completed_work_calls
+    }
+
+    /// Exact cumulative keeper rewards paid in this session.
+    pub const fn exact_reward_lamports(self) -> u64 {
+        self.exact_reward_lamports
+    }
+
+    /// Immutable principal-refund owner fixed by Product capitalization.
+    pub const fn rent_refund_owner(self) -> FailureMarketAccountIdV1 {
+        self.rent_refund_owner
+    }
+
     /// Current active attempt row, or zero while Idle.
     pub const fn attempt_index(self) -> u8 {
         self.attempt_index
@@ -259,6 +284,16 @@ impl FailureMarketIntervalCellV2 {
     /// Exact current session binding, or zero while Idle.
     pub const fn session_binding_id(self) -> SourceContentId {
         self.session_binding_id
+    }
+
+    /// Exact successful Source handoff pinned by the active session.
+    pub const fn source_handoff_id(self) -> SourceContentId {
+        self.source_handoff_id
+    }
+
+    /// Exact Source work schedule pinned by the active session.
+    pub const fn session_schedule_id(self) -> SourceContentId {
+        self.session_schedule_id
     }
 
     /// Current structural Product work, absent while Idle or for a direct
@@ -346,14 +381,11 @@ impl FailureMarketIntervalCellV2 {
         Ok(())
     }
 
-    /// Hostile-decode against exact authenticated admission, capitalization,
-    /// history, and shared quote receipts.
-    pub fn decode_for_admission(
+    /// Hostile-decode and fully validate the semantic owner's canonical body.
+    /// Cross-account admission, funding, history, and quote authority remains
+    /// a separate mandatory join for execution.
+    pub fn decode_canonical(
         input: &[u8; FAILURE_MARKET_INTERVAL_CELL_BYTES_V2],
-        admission: FailureMarketAdmissionStateV1,
-        funding: FailureMarketIntervalFundingReceiptV2,
-        history: FailureMarketIntervalHistoryV2,
-        quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
     ) -> Result<Self> {
         if input[..8] != CELL_MAGIC_V2 {
             return Err(Error::BadMagic);
@@ -426,6 +458,20 @@ impl FailureMarketIntervalCellV2 {
             terminal_receipt_id,
             product_work_body,
         };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Hostile-decode against exact authenticated admission, capitalization,
+    /// history, and shared quote receipts.
+    pub fn decode_for_admission(
+        input: &[u8; FAILURE_MARKET_INTERVAL_CELL_BYTES_V2],
+        admission: FailureMarketAdmissionStateV1,
+        funding: FailureMarketIntervalFundingReceiptV2,
+        history: FailureMarketIntervalHistoryV2,
+        quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+    ) -> Result<Self> {
+        let value = Self::decode_canonical(input)?;
         value.validate_against(admission, funding, history, quote)?;
         Ok(value)
     }

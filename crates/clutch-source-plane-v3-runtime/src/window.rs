@@ -2020,6 +2020,56 @@ impl SourcePolicyHandoffAccountV1 {
     pub const fn handoff_id(self) -> ContentId {
         self.handoff_id
     }
+
+    /// Exact authenticated Source route retained by the durable handoff.
+    pub const fn route_id(self) -> ContentId {
+        self.route_id
+    }
+
+    /// Full Source release-account authentication retained by the handoff.
+    pub const fn release_authentication_id(self) -> ContentId {
+        self.release_authentication_id
+    }
+
+    /// Product/Series occurrence account consumed by the Source join.
+    pub const fn occurrence_account(self) -> RuntimeKey {
+        self.occurrence_account
+    }
+
+    /// Persisted StatisticResult account consumed by the Source join.
+    pub const fn result_account(self) -> RuntimeKey {
+        self.result_account
+    }
+
+    /// Persisted Source work receipt consumed by the handoff.
+    pub const fn work_receipt_account(self) -> RuntimeKey {
+        self.work_receipt_account
+    }
+
+    /// Failure policy binding selected before evaluation.
+    pub const fn failure_policy_binding_id(self) -> ContentId {
+        self.failure_policy_binding_id
+    }
+
+    /// Exact SourceSpec fixed by the authenticated route.
+    pub const fn source_spec_id(self) -> ContentId {
+        self.source_spec_id
+    }
+
+    /// Exact Window identity fixed by Product compilation.
+    pub const fn window_id(self) -> ContentId {
+        self.window_id
+    }
+
+    /// Exact StatisticKey identity fixed by Product compilation.
+    pub const fn statistic_key_id(self) -> ContentId {
+        self.statistic_key_id
+    }
+
+    /// Source repair generation retained by the paid work receipt.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
 }
 
 impl FixedCodec for SourcePolicyHandoffAccountV1 {

@@ -1221,6 +1221,20 @@ fn coordinate_description(
     if coordinate.family_tag == RECOVERY_FAMILY_TAG
         && coordinate.family_version == RECOVERY_FAMILY_VERSION
     {
+        if coordinate.local_action == RecoveryAction::AdvanceIntervalConsensus.tag() {
+            return (
+                "recovery",
+                "advance-failure-interval-consensus",
+                Some("clutch-failure-policy-runtime/current-action11-chain-state-v1"),
+            );
+        }
+        if coordinate.local_action == RecoveryAction::CloseIntervalConsensusWork.tag() {
+            return (
+                "recovery",
+                "close-failure-interval-consensus-work",
+                Some("missing-product-terminal-preauthorization"),
+            );
+        }
         return ("recovery", "recovery-action", None);
     }
     ("unknown", "unknown-action", None)
@@ -1231,6 +1245,7 @@ const fn protocol_flow_name(flow: ProtocolFlow) -> &'static str {
         ProtocolFlow::CollateralCustodyV3 => "collateral-custody-v3",
         ProtocolFlow::MarketEpochCreation => "market-epoch-creation",
         ProtocolFlow::SourcePlaneV3 => "source-plane-v3",
+        ProtocolFlow::FailureRecovery => "failure-recovery",
         ProtocolFlow::GeneralV2Candidate => "general-v2-candidate",
         ProtocolFlow::GeneralV2Settlement => "general-v2-settlement",
         ProtocolFlow::GeneralV2Fees => "general-v2-fees",
@@ -1542,6 +1557,7 @@ const fn lane_name(lane: WorkflowLane) -> &'static str {
     match lane {
         WorkflowLane::Creation => "creation",
         WorkflowLane::SourceCrank => "source-crank",
+        WorkflowLane::FailureRecovery => "failure-recovery",
         WorkflowLane::Candidate => "candidate",
         WorkflowLane::KeeperReceipts => "keeper-receipts",
         WorkflowLane::RecoveryRetirement => "recovery-retirement",

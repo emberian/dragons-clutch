@@ -23,6 +23,11 @@ use clutch_dealer_runtime_contract::{
 };
 use clutch_direct_market_runtime::codec_v1::decode_direct_market_root_body_v1;
 use clutch_failure_policy_runtime::market_policy_v1::FailureMarketAdmissionStateV1;
+use clutch_failure_policy_runtime::market_interval_cell_v2::{
+    FailureMarketIntervalCellPhaseV2, FailureMarketIntervalCellV2,
+};
+use clutch_failure_policy_runtime::market_interval_history_v2::FailureMarketIntervalHistoryV2;
+use clutch_failure_policy_runtime::market_runtime_v1::FailureMarketRuntimeV1;
 use clutch_fractional_redemption_runtime::{
     FractionalCreditTombstoneV2, FractionalCreditV2, FractionalLedgerV1, FractionalPolicyV3,
     FRACTIONAL_CREDIT_ACCOUNT_BYTES, FRACTIONAL_CREDIT_ACCOUNT_TAG,
@@ -67,20 +72,20 @@ use clutch_retirement::{
     ReplayV3HashBackend, ReplayV3Lifecycle, POSITION_ACCOUNT_TAG, POSITION_ACCOUNT_VERSION_V3,
     PURPOSE_REPLAY_ACCOUNT_TAG, PURPOSE_REPLAY_ACCOUNT_VERSION_V3,
 };
-use clutch_solana_layout::failure_interval_consensus::{
-    FailureIntervalConsensusPhaseV1, FailureIntervalConsensusReplayAccountV1,
-    FailureIntervalConsensusWorkAccountV1,
-};
 use clutch_solana_layout::direct_market_v1::{
     DirectActionReplayAccountV1, DirectMarketRootAccountV1, DirectReservationAccountV1,
     DirectSelectionAccountV1, DIRECT_RESERVATION_BODY_BYTES_V1,
 };
 use clutch_solana_layout::failure_recovery::{
-    decode_failure_account_body_v1, FailureMarketRootAccountV3, FailureReplayTombstoneV1,
+    decode_failure_account_body_v1, FailureMarketRootAccountV3,
+    FailureMarketRuntimeRootAccountV1, FailureReplayTombstoneV1,
     FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1, FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1,
     FAILURE_EXTERNAL_ROOT_ACCOUNT_BYTES_V1, FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2,
     FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1, FAILURE_LIVENESS_POLICY_BODY_BYTES_V1,
-    FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3,
+    FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3, FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_BYTES_V1,
+};
+use clutch_solana_layout::failure_market_interval_v2::{
+    FailureMarketIntervalCellAccountV2, FailureMarketIntervalHistoryAccountV2,
 };
 use clutch_solana_layout::order_page_v5::OrderPageAccountV5;
 use clutch_solana_layout::product_series::{
@@ -116,7 +121,7 @@ pub type Result<T> = core::result::Result<T, AccountIndexError>;
 /// Sole decoder contract admitted by live chain serving. Historical Source V1/V2
 /// and withdrawn account versions are deliberately outside this set.
 pub const CANONICAL_ACCOUNT_DECODER_SET: &str =
-    "dragons-clutch/canonical-account-decoders/v6-current-dealer-terminal-targets-8-9";
+    "dragons-clutch/canonical-account-decoders/v7-current-failure-root-runtime-cell";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountIndexError {
@@ -227,6 +232,7 @@ pub enum CanonicalAccountKind {
     DealerReplay,
     FailureExternalRoot,
     FailureMarketRootV3,
+    FailureMarketRuntimeV1,
     FailureLivenessPolicy,
     FailureRecoveryCompartment,
     FailureReplayTombstone,
@@ -310,11 +316,12 @@ impl CanonicalAccountKind {
             Self::DealerReplay => "dealer-replay",
             Self::FailureExternalRoot => "failure-external-root",
             Self::FailureMarketRootV3 => "failure-market-root-v3",
+            Self::FailureMarketRuntimeV1 => "failure-market-runtime-v1",
             Self::FailureLivenessPolicy => "failure-liveness-policy",
             Self::FailureRecoveryCompartment => "failure-recovery-compartment",
             Self::FailureReplayTombstone => "failure-replay-tombstone",
-            Self::FailureIntervalConsensusWork => "failure-interval-consensus-work-v1",
-            Self::FailureIntervalConsensusReplay => "failure-interval-consensus-replay-v1",
+            Self::FailureIntervalConsensusWork => "failure-market-interval-cell-v2",
+            Self::FailureIntervalConsensusReplay => "failure-market-interval-history-v2",
             Self::DirectMarketRootV1 => "direct-market-root-v1",
             Self::DirectSelectionV1 => "direct-selection-v1",
             Self::DirectActionReplayV1 => "direct-action-replay-v1",
@@ -1684,6 +1691,35 @@ fn decode_failure(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     } else if tag_version(
         data,
         registry::FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG,
+        registry::FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_VERSION_V1,
+    ) {
+        let bytes: &[u8; FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_BYTES_V1] = data
+            .try_into()
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let frame = FailureMarketRuntimeRootAccountV1::decode(bytes)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let runtime = FailureMarketRuntimeV1::decode_canonical(&frame.runtime_body)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Failure,
+            CanonicalAccountKind::FailureMarketRuntimeV1,
+        );
+        projection.primary_binding = Some(runtime.policy_binding_id().bytes());
+        projection.secondary_binding = Some(runtime.active_session_pin_id().bytes());
+        projection.keeper_hint = (runtime.phase()
+            == clutch_failure_policy_runtime::market_runtime_v1::FailureMarketRuntimePhaseV1::IntervalActive)
+            .then_some(KeeperHint {
+                lane: None,
+                position: WorkflowPosition {
+                    phase: 1,
+                    item: runtime.transition_sequence(),
+                },
+                action: "advance-failure-interval-consensus",
+            });
+        Ok(Some(projection))
+    } else if tag_version(
+        data,
+        registry::FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG,
         registry::FAILURE_EXTERNAL_ROOT_ACCOUNT_VERSION,
     ) && data.len() == FAILURE_EXTERNAL_ROOT_ACCOUNT_BYTES_V1
     {
@@ -1771,21 +1807,23 @@ fn decode_failure(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         let bytes: &[u8; registry::FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_BYTES] = data
             .try_into()
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        let value = FailureIntervalConsensusWorkAccountV1::decode(bytes)
+        let frame = FailureMarketIntervalCellAccountV2::decode(bytes)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let value = FailureMarketIntervalCellV2::decode_canonical(frame.semantic_body())
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
         let mut projection = CanonicalAccountProjection::canonical(
             CanonicalFamily::Failure,
             CanonicalAccountKind::FailureIntervalConsensusWork,
         );
-        projection.generation = Some(value.generation);
-        projection.primary_binding = Some(value.interval_binding_id);
-        projection.secondary_binding = Some(value.failure_policy_binding_id);
-        projection.keeper_hint = (value.phase == FailureIntervalConsensusPhaseV1::Active)
+        projection.generation = Some(value.generation());
+        projection.primary_binding = Some(value.market_instance_id().bytes());
+        projection.secondary_binding = Some(value.failure_policy_binding_id().bytes());
+        projection.keeper_hint = (value.phase() == FailureMarketIntervalCellPhaseV2::Active)
             .then_some(KeeperHint {
-                lane: None,
+                lane: Some(WorkflowLane::FailureRecovery),
                 position: WorkflowPosition {
                     phase: 1,
-                    item: value.transition_nonce,
+                    item: value.transition_nonce(),
                 },
                 action: "advance-failure-interval-consensus",
             });
@@ -1798,15 +1836,17 @@ fn decode_failure(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         let bytes: &[u8; registry::FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES] = data
             .try_into()
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        let value = FailureIntervalConsensusReplayAccountV1::decode(bytes)
+        let frame = FailureMarketIntervalHistoryAccountV2::decode(bytes)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let value = FailureMarketIntervalHistoryV2::decode_canonical(frame.semantic_body())
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
         let mut projection = CanonicalAccountProjection::canonical(
             CanonicalFamily::Failure,
             CanonicalAccountKind::FailureIntervalConsensusReplay,
         );
-        projection.generation = Some(value.generation);
-        projection.primary_binding = Some(value.interval_binding_id);
-        projection.secondary_binding = Some(value.failure_policy_binding_id);
+        projection.generation = Some(value.generation());
+        projection.primary_binding = Some(value.market_instance_id().bytes());
+        projection.secondary_binding = Some(value.failure_policy_binding_id().bytes());
         Ok(Some(projection))
     } else {
         Ok(None)

@@ -453,6 +453,7 @@ fn hash_manifest_string(hasher: &mut Sha256, value: &str) {
 pub enum WorkflowLane {
     Creation,
     SourceCrank,
+    FailureRecovery,
     Candidate,
     KeeperReceipts,
     RecoveryRetirement,
@@ -935,6 +936,7 @@ pub struct PlannedWorkflowNode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CanonicalActionCoordinate {
     General(GeneralV2Action),
+    Recovery(clutch_solana_layout::registry::RecoveryAction),
     SourceRegistry(SourceSeriesAction),
     SourceTransition {
         registry: SourceSeriesAction,
@@ -2350,6 +2352,11 @@ fn construct(
             // historical observation/parser types for hostile read-only
             // inspection, but do not turn any of them into transaction bytes.
             return Err(WorkflowGraphError::NotReady);
+        }
+        CanonicalActionCoordinate::Recovery(_) => {
+            // Current Recovery construction is owned by the finalized-chain
+            // Failure material boundary, not by generic workflow payloads.
+            return Err(WorkflowGraphError::InvalidCanonicalPayload);
         }
         CanonicalActionCoordinate::Series(action) => {
             validate_series_payload(action, &material.payload)?;
