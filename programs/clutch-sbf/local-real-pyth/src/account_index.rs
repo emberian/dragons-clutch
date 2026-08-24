@@ -82,7 +82,9 @@ use clutch_solana_layout::failure_recovery::{
     FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2,
 };
 use clutch_solana_layout::order_page_v5::OrderPageAccountV5;
-use clutch_solana_layout::product_series::{SeriesFundingAccountV1, SeriesRegistryAccountV1};
+use clutch_solana_layout::product_series::{
+    ProductDirectGlobalLivenessAccountV1, SeriesFundingAccountV1, SeriesRegistryAccountV1,
+};
 use clutch_solana_layout::registry;
 use clutch_solana_layout::reservation_v9::ReservationAccountV9;
 use clutch_solana_layout::settlement_receipt_v5::SettlementReceiptAccountV5;
@@ -112,7 +114,7 @@ pub type Result<T> = core::result::Result<T, AccountIndexError>;
 /// Sole decoder contract admitted by live chain serving. Historical Source V1/V2
 /// and withdrawn account versions are deliberately outside this set.
 pub const CANONICAL_ACCOUNT_DECODER_SET: &str =
-    "dragons-clutch/canonical-account-decoders/v5-source-work-schedule-general-no-keeper-no-selected-candidate-direct-80-current";
+    "dragons-clutch/canonical-account-decoders/v6-source-work-schedule-general-no-keeper-no-selected-candidate-direct-80-product-global-current";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountIndexError {
@@ -181,6 +183,7 @@ pub enum CanonicalAccountKind {
     GeneralFinalPot,
     SeriesRegistry,
     SeriesFunding,
+    ProductDirectGlobalLivenessV1,
     SourceRelease,
     SourceWorkSchedule,
     SourceHead,
@@ -259,6 +262,7 @@ impl CanonicalAccountKind {
             Self::GeneralFinalPot => "general-final-pot",
             Self::SeriesRegistry => "series-registry",
             Self::SeriesFunding => "series-funding",
+            Self::ProductDirectGlobalLivenessV1 => "product-direct-global-liveness-v1",
             Self::SourceRelease => "source-release",
             Self::SourceWorkSchedule => "source-work-schedule",
             Self::SourceHead => "source-head",
@@ -919,6 +923,21 @@ fn decode_series(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
                 "advance-series-occurrence"
             },
         });
+        Ok(Some(projection))
+    } else if tag_version(
+        data,
+        registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG,
+        registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_VERSION,
+    ) {
+        let value = ProductDirectGlobalLivenessAccountV1::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::canonical(
+            CanonicalFamily::Series,
+            CanonicalAccountKind::ProductDirectGlobalLivenessV1,
+        );
+        projection.generation = Some(value.state.generation());
+        projection.primary_binding = Some(value.state.market_instance_id().bytes());
+        projection.secondary_binding = Some(value.state.lifecycle_root_account().bytes());
         Ok(Some(projection))
     } else {
         Ok(None)
@@ -2586,6 +2605,23 @@ mod current_decoder_tests {
                 FRACTIONAL_LEDGER_ACCOUNT_VERSION,
             ]),
             Err(AccountIndexError::CanonicalDecodeRefused)
+        );
+
+        assert_eq!(
+            decode_series(&[
+                registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG,
+                registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_VERSION,
+            ]),
+            Err(AccountIndexError::CanonicalDecodeRefused),
+            "a truncated Product 0xba header cannot enter the current decoder",
+        );
+        assert_eq!(
+            decode_series(&vec![
+                registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG;
+                registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES
+            ]),
+            Err(AccountIndexError::CanonicalDecodeRefused),
+            "a width-correct Product 0xba forgery must fail the full semantic decoder",
         );
 
         assert_eq!(decode_dealer(b"DCDSTAT1"), Ok(None));
