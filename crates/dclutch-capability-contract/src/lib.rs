@@ -67,6 +67,11 @@ pub const MARKET_OPENING_READINESS_SCHEMA_VERSION: u16 = 1;
 /// This crate derives no Solana address. The adapter derives it from this
 /// domain plus exact Market key and generation, then authenticates the record.
 pub const MARKET_OPENING_READINESS_PDA_DOMAIN: &[u8] = b"dclutch/open-readiness/v1";
+/// Adapter PDA seed domain for one manifest-selected capability funding ledger.
+///
+/// The SDK-free contract owns the exact ordered seed projection; the adapter
+/// remains responsible for Solana PDA derivation and owner authentication.
+pub const CAPABILITY_FUNDING_PDA_DOMAIN_V1: &[u8] = b"dclutch/cap-funding/v1";
 
 /// The exact canonical empty-manifest preimage.
 pub const EMPTY_MANIFEST_BYTES: [u8; MANIFEST_HEADER_BYTES] = [
@@ -1092,6 +1097,82 @@ impl FundingStateV1 {
     }
 }
 
+/// Canonical PDA seed projection for one physical capability funding ledger.
+///
+/// A Market root authenticates `manifest_content_id`; the selected manifest
+/// entry then binds the entry index, immutable config, and implementation
+/// release. This makes physical funding unique without giving an individual
+/// capability a parallel derivation convention.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CapabilityFundingDerivationV1 {
+    market: [u8; 32],
+    generation_le: [u8; 8],
+    entry_index_le: [u8; 2],
+    config_id: [u8; 32],
+    release_id: [u8; 32],
+}
+
+impl CapabilityFundingDerivationV1 {
+    /// Validate funding-to-manifest binding and construct exact ordered seeds.
+    pub fn new(
+        market: [u8; 32],
+        generation: u64,
+        manifest_content_id: ContentId,
+        manifest: CapabilityManifestV1<'_>,
+        funding: FundingStateV1,
+    ) -> Result<Self> {
+        require_nonzero_identifier(&market)?;
+        if funding.manifest_content_id() != manifest_content_id {
+            return Err(Error::FundingBindingMismatch);
+        }
+        let entry = manifest.entry(funding.entry_index())?;
+        Ok(Self {
+            market,
+            generation_le: generation.to_le_bytes(),
+            entry_index_le: funding.entry_index().to_le_bytes(),
+            config_id: entry.config_id().to_bytes(),
+            release_id: entry.release_id().to_bytes(),
+        })
+    }
+
+    /// Return the exact ordered PDA seed components.
+    pub fn seed_components(&self) -> [&[u8]; 6] {
+        [
+            CAPABILITY_FUNDING_PDA_DOMAIN_V1,
+            self.market.as_slice(),
+            self.generation_le.as_slice(),
+            self.entry_index_le.as_slice(),
+            self.config_id.as_slice(),
+            self.release_id.as_slice(),
+        ]
+    }
+
+    /// Return the authenticated Market key seed.
+    pub const fn market(self) -> [u8; 32] {
+        self.market
+    }
+
+    /// Return the immutable Market generation seed.
+    pub const fn generation(self) -> u64 {
+        u64::from_le_bytes(self.generation_le)
+    }
+
+    /// Return the selected manifest entry index seed.
+    pub const fn entry_index(self) -> u16 {
+        u16::from_le_bytes(self.entry_index_le)
+    }
+
+    /// Return the selected immutable capability config identity seed.
+    pub const fn config_id(self) -> [u8; 32] {
+        self.config_id
+    }
+
+    /// Return the selected immutable capability release identity seed.
+    pub const fn release_id(self) -> [u8; 32] {
+        self.release_id
+    }
+}
+
 /// Transient direct Market child proving canonical opening-capability readiness.
 ///
 /// This record owns only progression and a sponsor's rent-refund identity.
@@ -2007,6 +2088,84 @@ mod tests {
         assert_eq!(
             FundingQuoteV1::decode(&encoded),
             Err(Error::FundingTotalMismatch)
+        );
+    }
+
+    #[test]
+    fn capability_funding_derivation_is_manifest_bound_and_ordered() {
+        assert_eq!(CAPABILITY_FUNDING_PDA_DOMAIN_V1.len(), 22);
+        assert!(CAPABILITY_FUNDING_PDA_DOMAIN_V1.len() <= SVM_MAX_PDA_SEED_BYTES);
+
+        let entries = [entry(1, ActivationPolicy::PrepaidLazy, None)];
+        let mut storage = [0u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+        let canonical = manifest(&entries, &mut storage);
+        let manifest_id = id(99);
+        let funding = FundingStateV1::new(manifest_id, canonical, 0, quote().total_principal())
+            .expect("canonical funding");
+        let derivation =
+            CapabilityFundingDerivationV1::new([7; 32], 11, manifest_id, canonical, funding)
+                .expect("canonical derivation");
+        let seeds = derivation.seed_components();
+        assert_eq!(seeds[0], CAPABILITY_FUNDING_PDA_DOMAIN_V1);
+        assert_eq!(seeds[1], &[7; 32]);
+        assert_eq!(seeds[2], 11u64.to_le_bytes().as_slice());
+        assert_eq!(seeds[3], 0u16.to_le_bytes().as_slice());
+        assert_eq!(seeds[4], id(22).as_bytes());
+        assert_eq!(seeds[5], id(21).as_bytes());
+        assert_eq!(derivation.market(), [7; 32]);
+        assert_eq!(derivation.generation(), 11);
+        assert_eq!(derivation.entry_index(), 0);
+
+        assert_eq!(
+            CapabilityFundingDerivationV1::new([0; 32], 11, manifest_id, canonical, funding,),
+            Err(Error::ZeroIdentifier)
+        );
+        assert_eq!(
+            CapabilityFundingDerivationV1::new([7; 32], 11, id(98), canonical, funding),
+            Err(Error::FundingBindingMismatch)
+        );
+
+        let substituted_entries = [entry_with_config(
+            1,
+            23,
+            ActivationPolicy::PrepaidLazy,
+            None,
+            quote(),
+        )];
+        let mut substituted_storage = [0u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+        let substituted = manifest(&substituted_entries, &mut substituted_storage);
+        let substituted_derivation =
+            CapabilityFundingDerivationV1::new([7; 32], 11, manifest_id, substituted, funding)
+                .expect("adapter must separately authenticate manifest hash");
+        assert_ne!(derivation.config_id(), substituted_derivation.config_id());
+        assert_ne!(
+            derivation.seed_components(),
+            substituted_derivation.seed_components()
+        );
+
+        let release_substitution = CapabilityEntryV1::new(
+            id(1),
+            id(26),
+            id(22),
+            id(23),
+            id(24),
+            id(25),
+            ActivationPolicy::PrepaidLazy,
+            500,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            quote(),
+        )
+        .expect("valid substituted release");
+        let mut release_storage = [0u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+        let release_manifest = manifest(&[release_substitution], &mut release_storage);
+        let release_derivation =
+            CapabilityFundingDerivationV1::new([7; 32], 11, manifest_id, release_manifest, funding)
+                .expect("adapter must separately authenticate manifest hash");
+        assert_ne!(derivation.release_id(), release_derivation.release_id());
+        assert_ne!(
+            derivation.seed_components(),
+            release_derivation.seed_components()
         );
     }
 
