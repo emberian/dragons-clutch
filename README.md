@@ -11,11 +11,20 @@ small Market Core and optional capabilities.
 
 ## Status
 
-This repository is a new implementation scaffold. It has no deployed program,
+This repository is active greenfield development. It has no deployed program,
 official frontend, live market, wallet integration, production source profile,
-or release. The initial kernel implements only categorical complete-set
-liability transitions. Smooth claims, Solana adapters, trading, Pyth resolution,
-and operator workflows remain to be built as vertical slices.
+or release.
+
+The implemented first-profile foundation includes exact categorical
+complete-set accounting, compact Market/Realm/Position contracts, funded
+release-bound Pyth price and permissionless-failure resolution, exact provider
+CPI construction, chain-derived unsigned resolution instructions, and a local
+SVM test that executes the real dClutch SBF ELF. Exact SDK-free legacy Token and
+zero-extension Token-2022 adapter profiles are present, but Market founding,
+token custody, split/merge/redemption CPI, trading, product compilation,
+liquidity, and frontend workflows are not yet end to end. The categorical Pyth
+composition is a cheap first profile, not the protocol's general product
+ceiling.
 
 ## Architecture in one picture
 
