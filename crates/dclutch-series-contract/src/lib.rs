@@ -24,6 +24,8 @@ pub const OCCURRENCE_CAPITALIZATION_BYTES_V1: usize = 112;
 pub const SERIES_ROOT_BYTES_V1: usize = 184;
 /// Exact width of [`SeriesEscrowV1`].
 pub const SERIES_ESCROW_BYTES_V1: usize = 144;
+/// Exact width of the permanent [`SeriesReplayGuardV1`].
+pub const SERIES_REPLAY_GUARD_BYTES_V1: usize = 48;
 /// Exact width of [`OccurrenceTicketV1`].
 pub const OCCURRENCE_TICKET_BYTES_V1: usize = 248;
 
@@ -50,6 +52,8 @@ pub const OCCURRENCE_CAPITALIZATION_MAGIC_V1: [u8; 8] = *b"DCLTSCV1";
 pub const SERIES_ROOT_MAGIC_V1: [u8; 8] = *b"DCLTSRT1";
 /// Persistent escrow magic.
 pub const SERIES_ESCROW_MAGIC_V1: [u8; 8] = *b"DCLTSES1";
+/// Persistent permanent replay-guard magic.
+pub const SERIES_REPLAY_GUARD_MAGIC_V1: [u8; 8] = *b"DCLTSGD1";
 /// Persistent one-use ticket magic.
 pub const OCCURRENCE_TICKET_MAGIC_V1: [u8; 8] = *b"DCLTSTK1";
 /// Instruction magic shared by all V1 Series actions.
@@ -63,12 +67,16 @@ pub const SERIES_ROOT_PDA_DOMAIN_V1: &[u8] = b"dclutch/series-root/v1";
 pub const SERIES_ESCROW_PDA_DOMAIN_V1: &[u8] = b"dclutch/series-escrow/v1";
 /// Ticket PDA domain. Its 24 bytes are below the chain-derived seed limit.
 pub const SERIES_TICKET_PDA_DOMAIN_V1: &[u8] = b"dclutch/series-ticket/v1";
+/// Replay-guard PDA domain. Its 23 bytes are below the chain-derived seed limit.
+pub const SERIES_REPLAY_GUARD_PDA_DOMAIN_V1: &[u8] = b"dclutch/series-guard/v1";
 /// Width of the exact root PDA derivation preimage.
 pub const SERIES_ROOT_PDA_PREIMAGE_BYTES_V1: usize = 119;
 /// Width of the exact escrow PDA derivation preimage.
 pub const SERIES_ESCROW_PDA_PREIMAGE_BYTES_V1: usize = 57;
 /// Width of the exact ticket PDA derivation preimage.
 pub const SERIES_TICKET_PDA_PREIMAGE_BYTES_V1: usize = 65;
+/// Width of the exact replay-guard PDA derivation preimage.
+pub const SERIES_REPLAY_GUARD_PDA_PREIMAGE_BYTES_V1: usize = 56;
 
 /// Canonical System Program key bytes.
 pub const SYSTEM_PROGRAM_ID: [u8; IDENTITY_BYTES] = [0; IDENTITY_BYTES];
@@ -132,7 +140,7 @@ pub enum Error {
     Underfunded,
     /// Observed escrow balance could not cover rent plus root-owned principal.
     PresentPrincipalMismatch,
-    /// A destination account expected to be vacant already held lamports.
+    /// A destination was not a data-empty, nonexecutable System-owned account.
     AccountNotVacant,
     /// Exact checked integer arithmetic failed.
     ArithmeticOverflow,
@@ -154,6 +162,12 @@ pub enum Error {
     OutstandingTickets,
     /// Spendable Series principal remained at close.
     ClosePrincipalRemaining,
+    /// A permanent replay guard was below its authenticated rent floor.
+    ReplayGuardUnderfunded,
+    /// A replay guard did not bind the canonical Series root address.
+    ReplayGuardMismatch,
+    /// V1 replay guards are intentionally permanent and cannot close.
+    PermanentReplayGuard,
 }
 
 /// Result alias for Series operations.
@@ -258,6 +272,29 @@ impl OccurrenceTicketPdaPreimageV1 {
         put(&mut output, 24, &self.series_root_address.to_bytes());
         put(&mut output, 56, &self.occurrence_index.to_le_bytes());
         put(&mut output, 64, &[self.bump]);
+        output
+    }
+}
+
+/// Exact ordered PDA preimage for the permanent guard belonging to a root.
+///
+/// The adapter derives with three seeds in this order: replay-guard domain,
+/// root address, and the one-byte bump.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesReplayGuardPdaPreimageV1 {
+    /// Root account address seed.
+    pub series_root_address: IdentityV1,
+    /// Canonical one-byte bump seed.
+    pub bump: u8,
+}
+
+impl SeriesReplayGuardPdaPreimageV1 {
+    /// Encode the fixed-width concatenation used by derivation fixtures.
+    pub fn to_bytes(self) -> [u8; SERIES_REPLAY_GUARD_PDA_PREIMAGE_BYTES_V1] {
+        let mut output = [0; SERIES_REPLAY_GUARD_PDA_PREIMAGE_BYTES_V1];
+        put(&mut output, 0, SERIES_REPLAY_GUARD_PDA_DOMAIN_V1);
+        put(&mut output, 23, &self.series_root_address.to_bytes());
+        put(&mut output, 55, &[self.bump]);
         output
     }
 }
@@ -901,6 +938,50 @@ impl SeriesEscrowV1 {
     }
 }
 
+/// Permanent small marker preventing a closed Series root from being recreated.
+///
+/// The guard is created atomically with the root and never closes. Exhausted
+/// close retains its authenticated current rent floor and credits only guard
+/// surplus to the immutable beneficiary's RentCredit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesReplayGuardV1 {
+    /// Root account address protected for all time.
+    pub series_root_address: IdentityV1,
+    /// Canonical replay-guard PDA bump.
+    pub pda_bump: u8,
+}
+
+impl SeriesReplayGuardV1 {
+    /// Hostile-decode one exact permanent replay guard.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        check_exact_magic_schema(
+            bytes,
+            SERIES_REPLAY_GUARD_BYTES_V1,
+            SERIES_REPLAY_GUARD_MAGIC_V1,
+        )?;
+        require_zero(bytes, 11, 5)?;
+        Ok(Self {
+            series_root_address: IdentityV1::decode_at(bytes, 16)?,
+            pda_bump: read_byte(bytes, 10)?,
+        })
+    }
+
+    /// Encode one canonical permanent replay guard.
+    pub fn to_bytes(self) -> [u8; SERIES_REPLAY_GUARD_BYTES_V1] {
+        let mut output = [0; SERIES_REPLAY_GUARD_BYTES_V1];
+        put_record_header(&mut output, &SERIES_REPLAY_GUARD_MAGIC_V1);
+        put(&mut output, 10, &[self.pda_bump]);
+        put(&mut output, 16, &self.series_root_address.to_bytes());
+        output
+    }
+
+    /// Refuse deletion: retaining this marker is the cross-lifecycle replay proof.
+    pub const fn plan_close(self) -> Result<()> {
+        let _ = self;
+        Err(Error::PermanentReplayGuard)
+    }
+}
+
 /// Compact one-use bridge between Series release and exact Market Found.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OccurrenceTicketV1 {
@@ -1037,17 +1118,20 @@ pub struct CreateSeriesV1 {
     pub root_bump: u8,
     /// Escrow PDA bump.
     pub escrow_bump: u8,
+    /// Permanent replay-guard PDA bump.
+    pub replay_guard_bump: u8,
 }
 
 impl CreateSeriesV1 {
     /// Hostile-decode an exact create instruction.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         check_instruction_header(bytes, CREATE_SERIES_BYTES_V1, SeriesActionV1::CreateSeries)?;
-        require_zero(bytes, 50, 6)?;
+        require_zero(bytes, 51, 5)?;
         Ok(Self {
             refund_authority: IdentityV1::decode_at(bytes, 16)?,
             root_bump: read_byte(bytes, 48)?,
             escrow_bump: read_byte(bytes, 49)?,
+            replay_guard_bump: read_byte(bytes, 50)?,
         })
     }
 
@@ -1058,6 +1142,7 @@ impl CreateSeriesV1 {
         put(&mut output, 16, &self.refund_authority.to_bytes());
         put(&mut output, 48, &[self.root_bump]);
         put(&mut output, 49, &[self.escrow_bump]);
+        put(&mut output, 50, &[self.replay_guard_bump]);
         output
     }
 }
@@ -1216,6 +1301,33 @@ pub struct AccountMetaV1 {
     pub is_executable: bool,
 }
 
+/// Authenticated ownership/data facts for a creatable PDA destination.
+///
+/// A System-owned, data-empty, nonexecutable address is vacant even when an
+/// unsolicited transfer pre-funded it. Treating nonzero lamports as occupied
+/// would make deterministic Series PDAs publicly dust-DoSable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VacantAccountFactsV1 {
+    /// Complete observed lamport balance.
+    pub lamports: u64,
+    /// Authenticated owner program key.
+    pub owner: [u8; IDENTITY_BYTES],
+    /// Authenticated current data length.
+    pub data_len: u64,
+    /// Authenticated executable flag.
+    pub is_executable: bool,
+}
+
+impl VacantAccountFactsV1 {
+    /// Validate a destination that the adapter may allocate and assign by PDA signature.
+    pub fn validate(&self) -> Result<()> {
+        if self.owner != SYSTEM_PROGRAM_ID || self.data_len != 0 || self.is_executable {
+            return Err(Error::AccountNotVacant);
+        }
+        Ok(())
+    }
+}
+
 /// Exact account-role frame for Series creation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CreateSeriesFrameV1 {
@@ -1229,6 +1341,8 @@ pub struct CreateSeriesFrameV1 {
     pub series_root: AccountMetaV1,
     /// Vacant writable Series escrow PDA.
     pub series_escrow: AccountMetaV1,
+    /// Vacant writable permanent replay-guard PDA.
+    pub replay_guard: AccountMetaV1,
     /// Existing permanent RentCredit.
     pub rent_credit: AccountMetaV1,
     /// Canonical System Program.
@@ -1239,13 +1353,14 @@ pub struct CreateSeriesFrameV1 {
 
 impl CreateSeriesFrameV1 {
     /// Validate exact role order, privileges, canonical programs, and non-aliasing.
-    pub fn validate(accounts: &[AccountMetaV1; 8]) -> Result<Self> {
+    pub fn validate(accounts: &[AccountMetaV1; 9]) -> Result<Self> {
         let [
             payer,
             recipe,
             aggregate,
             root,
             escrow,
+            guard,
             rent_credit,
             system,
             rent,
@@ -1255,17 +1370,19 @@ impl CreateSeriesFrameV1 {
         require_privilege(aggregate, false, false, false)?;
         require_privilege(root, false, true, false)?;
         require_privilege(escrow, false, true, false)?;
+        require_privilege(guard, false, true, false)?;
         require_privilege(rent_credit, false, false, false)?;
         require_system(system)?;
         require_rent(rent)?;
         require_distinct(accounts)?;
-        require_nonzero_roles(&[payer, recipe, aggregate, root, escrow, rent_credit])?;
+        require_nonzero_roles(&[payer, recipe, aggregate, root, escrow, guard, rent_credit])?;
         Ok(Self {
             payer,
             recipe,
             capitalization_aggregate: aggregate,
             series_root: root,
             series_escrow: escrow,
+            replay_guard: guard,
             rent_credit,
             system_program: system,
             rent_sysvar: rent,
@@ -1344,29 +1461,33 @@ pub struct CloseExhaustedFrameV1 {
     pub series_root: AccountMetaV1,
     /// Writable empty-principal escrow.
     pub series_escrow: AccountMetaV1,
+    /// Writable permanent replay guard, retained at its rent floor.
+    pub replay_guard: AccountMetaV1,
     /// Writable permanent RentCredit.
     pub rent_credit: AccountMetaV1,
-    /// Canonical System Program.
-    pub system_program: AccountMetaV1,
+    /// Canonical Rent sysvar.
+    pub rent_sysvar: AccountMetaV1,
 }
 
 impl CloseExhaustedFrameV1 {
-    /// Validate exact role order, privileges, canonical System, and non-aliasing.
-    pub fn validate(accounts: &[AccountMetaV1; 5]) -> Result<Self> {
-        let [actor, root, escrow, rent_credit, system] = *accounts;
+    /// Validate exact role order, privileges, canonical Rent, and non-aliasing.
+    pub fn validate(accounts: &[AccountMetaV1; 6]) -> Result<Self> {
+        let [actor, root, escrow, guard, rent_credit, rent] = *accounts;
         require_privilege(actor, true, false, false)?;
         require_privilege(root, false, true, false)?;
         require_privilege(escrow, false, true, false)?;
+        require_privilege(guard, false, true, false)?;
         require_privilege(rent_credit, false, true, false)?;
-        require_system(system)?;
+        require_rent(rent)?;
         require_distinct(accounts)?;
-        require_nonzero_roles(&[actor, root, escrow, rent_credit])?;
+        require_nonzero_roles(&[actor, root, escrow, guard, rent_credit])?;
         Ok(Self {
             actor,
             series_root: root,
             series_escrow: escrow,
+            replay_guard: guard,
             rent_credit,
-            system_program: system,
+            rent_sysvar: rent,
         })
     }
 }
@@ -1378,14 +1499,24 @@ pub struct CreateSeriesPlanV1 {
     pub root: SeriesRootV1,
     /// Newly initialized escrow binding.
     pub escrow: SeriesEscrowV1,
+    /// Newly initialized permanent replay guard.
+    pub replay_guard: SeriesReplayGuardV1,
     /// Payer balance before creation.
     pub payer_before: u64,
     /// Payer balance after exact creation funding.
     pub payer_after: u64,
+    /// Root balance before allocation/assignment.
+    pub root_before: u64,
     /// Root balance after exact rent funding.
     pub root_after: u64,
+    /// Escrow balance before allocation/assignment.
+    pub escrow_before: u64,
     /// Escrow balance after rent plus all finite principal.
     pub escrow_after: u64,
+    /// Replay-guard balance before allocation/assignment.
+    pub replay_guard_before: u64,
+    /// Permanent replay-guard balance after exact rent funding.
+    pub replay_guard_after: u64,
 }
 
 /// Plan exact creation from vacant accounts and authenticated immutable content.
@@ -1398,15 +1529,17 @@ pub fn plan_create_series_v1(
     aggregate: &CapitalizationAggregateV1,
     instruction: CreateSeriesV1,
     payer_before: u64,
-    root_before: u64,
-    escrow_before: u64,
+    root_before: VacantAccountFactsV1,
+    escrow_before: VacantAccountFactsV1,
+    replay_guard_before: VacantAccountFactsV1,
     root_rent: u64,
     escrow_rent: u64,
+    replay_guard_rent: u64,
 ) -> Result<CreateSeriesPlanV1> {
-    if root_before != 0 || escrow_before != 0 {
-        return Err(Error::AccountNotVacant);
-    }
-    if root_rent == 0 || escrow_rent == 0 {
+    root_before.validate()?;
+    escrow_before.validate()?;
+    replay_guard_before.validate()?;
+    if root_rent == 0 || escrow_rent == 0 || replay_guard_rent == 0 {
         return Err(Error::Underfunded);
     }
     let root = SeriesRootV1::new(
@@ -1424,20 +1557,45 @@ pub fn plan_create_series_v1(
         refund_authority: instruction.refund_authority,
         pda_bump: instruction.escrow_bump,
     };
-    let escrow_after = escrow_rent
+    let replay_guard = SeriesReplayGuardV1 {
+        series_root_address: root_address,
+        pda_bump: instruction.replay_guard_bump,
+    };
+    let escrow_target = escrow_rent
         .checked_add(aggregate.total_principal)
         .ok_or(Error::ArithmeticOverflow)?;
-    let debit = root_rent
-        .checked_add(escrow_after)
+    let root_top_up = required_top_up(root_before.lamports, root_rent)?;
+    let escrow_top_up = required_top_up(escrow_before.lamports, escrow_target)?;
+    let replay_guard_top_up = required_top_up(replay_guard_before.lamports, replay_guard_rent)?;
+    let debit = root_top_up
+        .checked_add(escrow_top_up)
+        .and_then(|subtotal| subtotal.checked_add(replay_guard_top_up))
         .ok_or(Error::ArithmeticOverflow)?;
     let payer_after = payer_before.checked_sub(debit).ok_or(Error::Underfunded)?;
+    let root_after = root_before
+        .lamports
+        .checked_add(root_top_up)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let escrow_after = escrow_before
+        .lamports
+        .checked_add(escrow_top_up)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let replay_guard_after = replay_guard_before
+        .lamports
+        .checked_add(replay_guard_top_up)
+        .ok_or(Error::ArithmeticOverflow)?;
     Ok(CreateSeriesPlanV1 {
         root,
         escrow,
+        replay_guard,
         payer_before,
         payer_after,
-        root_after: root_rent,
+        root_before: root_before.lamports,
+        root_after,
+        escrow_before: escrow_before.lamports,
         escrow_after,
+        replay_guard_before: replay_guard_before.lamports,
+        replay_guard_after,
     })
 }
 
@@ -1586,6 +1744,51 @@ pub fn plan_instantiate_next_v1(
     })
 }
 
+/// Exact authenticated identity and funding bundle the Found owner must accept.
+///
+/// This is output from ticket validation, never caller wire authority. The SBF
+/// adapter must obtain an accepted Found transition for this entire bundle and
+/// commit it atomically with the surrounding ticket/root/RentCredit plan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FoundCompositionObligationsV1 {
+    /// Realm identity selecting collateral.
+    pub realm_id: IdentityV1,
+    /// Terms identity.
+    pub terms_id: IdentityV1,
+    /// Exact categorical basis identity.
+    pub claim_basis_id: IdentityV1,
+    /// Capacity-profile identity.
+    pub capacity_profile_id: IdentityV1,
+    /// Compiler release that owns Product construction.
+    pub compiler_release_id: IdentityV1,
+    /// Occurrence artifact identity.
+    pub occurrence_artifact_id: IdentityV1,
+    /// Occurrence identity.
+    pub occurrence_id: IdentityV1,
+    /// Product instance identity.
+    pub product_instance_id: IdentityV1,
+    /// Source specification identity.
+    pub source_spec_id: IdentityV1,
+    /// Source window identity.
+    pub source_window_id: IdentityV1,
+    /// Statistic identity.
+    pub statistic_id: IdentityV1,
+    /// Resolution-policy identity.
+    pub resolution_policy_id: IdentityV1,
+    /// Capability-manifest identity.
+    pub capability_manifest_id: IdentityV1,
+    /// Exact Market identity to Found.
+    pub market_identity_id: IdentityV1,
+    /// Exact occurrence index.
+    pub occurrence_index: u64,
+    /// Exact scheduled time.
+    pub occurrence_time: i64,
+    /// Exact Market generation.
+    pub generation: u64,
+    /// Exact ticket principal admitted only to Found obligations.
+    pub market_principal: u64,
+}
+
 /// Pure obligations that a measured Found adapter must satisfy atomically.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TicketConsumptionPlanV1 {
@@ -1597,6 +1800,8 @@ pub struct TicketConsumptionPlanV1 {
     pub market_identity_id: IdentityV1,
     /// Exact principal routed only into authenticated Found obligations.
     pub market_principal: u64,
+    /// Complete exact identity/funding input required by Found.
+    pub found_obligations: FoundCompositionObligationsV1,
     /// Ticket lamports before complete deletion.
     pub ticket_lamports_before: u64,
     /// Ticket lamports after complete deletion.
@@ -1676,11 +1881,32 @@ pub fn plan_consume_ticket_v1(
         ..root
     };
     root_after.validate_for(recipe_id, aggregate_id, recipe, aggregate)?;
+    let found_obligations = FoundCompositionObligationsV1 {
+        realm_id: recipe.realm_id,
+        terms_id: recipe.terms_id,
+        claim_basis_id: recipe.claim_basis_id,
+        capacity_profile_id: recipe.capacity_profile_id,
+        compiler_release_id: recipe.compiler_release_id,
+        occurrence_artifact_id: derived.occurrence_artifact_id,
+        occurrence_id: derived.occurrence_id,
+        product_instance_id: derived.product_instance_id,
+        source_spec_id: derived.source_spec_id,
+        source_window_id: derived.source_window_id,
+        statistic_id: derived.statistic_id,
+        resolution_policy_id: derived.resolution_policy_id,
+        capability_manifest_id: derived.capability_manifest_id,
+        market_identity_id: derived.market_identity_id,
+        occurrence_index: derived.occurrence_index,
+        occurrence_time: derived.occurrence_time,
+        generation: derived.generation,
+        market_principal: ticket.market_principal,
+    };
     Ok(TicketConsumptionPlanV1 {
         root_before: root,
         root_after,
         market_identity_id: ticket.market_identity_id,
         market_principal: ticket.market_principal,
+        found_obligations,
         ticket_lamports_before: observed_ticket_lamports,
         ticket_lamports_after: 0,
         rent_credit_before,
@@ -1695,14 +1921,18 @@ pub struct CloseExhaustedPlanV1 {
     pub root_lamports_before: u64,
     /// Escrow balance before complete close.
     pub escrow_lamports_before: u64,
+    /// Replay-guard balance before retaining its current rent floor.
+    pub replay_guard_lamports_before: u64,
     /// Permanent RentCredit balance before close.
     pub rent_credit_before: u64,
-    /// Permanent RentCredit balance after both complete credits.
+    /// Permanent RentCredit balance after root, escrow, and guard-surplus credit.
     pub rent_credit_after: u64,
     /// Root balance after close.
     pub root_lamports_after: u64,
     /// Escrow balance after close.
     pub escrow_lamports_after: u64,
+    /// Replay-guard balance retained permanently after close.
+    pub replay_guard_lamports_after: u64,
 }
 
 /// Plan permissionless close only after exhaustion and ticket consumption.
@@ -1711,13 +1941,17 @@ pub fn plan_close_exhausted_v1(
     root: SeriesRootV1,
     root_address: IdentityV1,
     escrow: SeriesEscrowV1,
+    replay_guard: SeriesReplayGuardV1,
     instruction: CloseExhaustedV1,
     root_lamports_before: u64,
     escrow_lamports_before: u64,
+    replay_guard_lamports_before: u64,
+    authenticated_replay_guard_rent_minimum: u64,
     rent_credit_before: u64,
 ) -> Result<CloseExhaustedPlanV1> {
     root.validate_internal()?;
     validate_escrow(&escrow, root_address, &root)?;
+    validate_replay_guard(&replay_guard, root_address)?;
     if root.phase != SeriesPhaseV1::Exhausted
         || instruction.expected_released_allocations != root.released_allocations
     {
@@ -1729,8 +1963,17 @@ pub fn plan_close_exhausted_v1(
     if root.remaining_principal != 0 {
         return Err(Error::ClosePrincipalRemaining);
     }
+    if authenticated_replay_guard_rent_minimum == 0
+        || replay_guard_lamports_before < authenticated_replay_guard_rent_minimum
+    {
+        return Err(Error::ReplayGuardUnderfunded);
+    }
+    let replay_guard_surplus = replay_guard_lamports_before
+        .checked_sub(authenticated_replay_guard_rent_minimum)
+        .ok_or(Error::ReplayGuardUnderfunded)?;
     let credit = root_lamports_before
         .checked_add(escrow_lamports_before)
+        .and_then(|subtotal| subtotal.checked_add(replay_guard_surplus))
         .ok_or(Error::ArithmeticOverflow)?;
     let rent_credit_after = rent_credit_before
         .checked_add(credit)
@@ -1738,10 +1981,12 @@ pub fn plan_close_exhausted_v1(
     Ok(CloseExhaustedPlanV1 {
         root_lamports_before,
         escrow_lamports_before,
+        replay_guard_lamports_before,
         rent_credit_before,
         rent_credit_after,
         root_lamports_after: 0,
         escrow_lamports_after: 0,
+        replay_guard_lamports_after: authenticated_replay_guard_rent_minimum,
     })
 }
 
@@ -1758,6 +2003,22 @@ fn validate_escrow(
         return Err(Error::AggregateMismatch);
     }
     Ok(())
+}
+
+fn validate_replay_guard(guard: &SeriesReplayGuardV1, root_address: IdentityV1) -> Result<()> {
+    if guard.series_root_address != root_address {
+        return Err(Error::ReplayGuardMismatch);
+    }
+    Ok(())
+}
+
+fn required_top_up(observed: u64, target: u64) -> Result<u64> {
+    if observed >= target {
+        return Ok(0);
+    }
+    target
+        .checked_sub(observed)
+        .ok_or(Error::ArithmeticOverflow)
 }
 
 fn check_record_header(bytes: &[u8], width: usize, magic: [u8; 8]) -> Result<()> {

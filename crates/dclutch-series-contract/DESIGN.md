@@ -43,7 +43,8 @@ fee. The adapter proves each item is the canonical item selected by the
 aggregate and capitalization derivation release.
 
 At creation, a separate Series escrow must hold the aggregate's entire
-principal now. Root state conserves:
+principal now, and a 48-byte permanent replay guard must be funded at its
+authenticated current rent minimum. Root state conserves:
 
 ```text
 remaining allocations + released allocations = total allocations
@@ -87,21 +88,54 @@ decrement the Series ticket count atomically. Until the complete physical frame
 is measured, this crate makes no claim that those actions fit one Solana
 transaction.
 
+`FoundCompositionObligationsV1` is the exact transient output of successful
+ticket validation. It carries Realm, Terms, ClaimBasis, CapacityProfile,
+compiler, occurrence, Product, source, statistic, resolution, manifest, Market,
+generation, time, and exact Market-principal facts. It is not caller wire. The
+adapter must obtain an accepted Found transition for that complete bundle, then
+commit Found, the ticket's complete deletion, the root ticket-count decrement,
+and RentCredit delta in one rollback domain. No individual sub-transition may
+land when any other sub-transition refuses.
+
 PDA derivations are exact and domain-separated. Root uses ordered seeds
 `[root-domain, recipe-id, aggregate-id, refund-authority, bump]`; escrow uses
 `[escrow-domain, root-address, bump]`; ticket uses
-`[ticket-domain, root-address, index-le-u64, bump]`. Fixed-width concatenated
-preimages are exposed only for stable fixtures; the adapter must preserve these
-seed boundaries when calling the chain PDA primitive.
+`[ticket-domain, root-address, index-le-u64, bump]`; permanent replay guard uses
+`[guard-domain, root-address, bump]`. Fixed-width concatenated preimages are
+exposed only for stable fixtures; the adapter must preserve these seed
+boundaries when calling the chain PDA primitive.
+
+## Cross-lifecycle replay guard
+
+Deleting every record that remembers a Series would make recreation at the same
+root PDA possible; rejecting that by proving arbitrary historical Market
+nonexistence is neither bounded nor sound. Create therefore requires a vacant
+canonical `SeriesReplayGuardV1` and creates it atomically with Root and escrow.
+The guard binds the root address and bump; the canonical root PDA already
+commits recipe, aggregate, and beneficiary, so the guard does not duplicate
+those facts. It is permanent and has no close instruction, so a later Create at
+the same root necessarily refuses even after Root and escrow close.
+
+Vacancy means authenticated System ownership, empty data, and nonexecutable
+state—not zero lamports. Pre-funded deterministic PDAs are allocated/assigned
+and only their exact target deficits are charged to the payer. Consequently an
+outsider cannot block Create by dusting Root, escrow, or guard; any excess stays
+an unsolicited donation outside root-owned principal.
+
+This is intentional permanent replay state, not recoverable Series rent. During
+exhausted close, the adapter authenticates current guard rent. The complete Root
+and escrow balances plus any guard balance above that rent floor are credited to
+RentCredit; exactly the current guard rent minimum remains. A guard below that
+floor refuses close rather than deleting or silently subsidizing replay safety.
 
 ## Exhaustion and close
 
 Series V1 has no cancellation, skip, mutable cadence, mutable recipe, or
 unfunded extension. It closes only after every finite allocation was released,
 every ticket was consumed, and root-owned escrow principal is zero. Closing
-credits the complete observed Root and escrow account balances to the immutable
-RentCredit. Those balances are account rent plus possible unsolicited
-donations, never Hoard or unspent Series capitalization.
+credits the complete observed Root and escrow account balances and replay-guard
+surplus to the immutable RentCredit. Those balances are account rent plus
+possible unsolicited donations, never Hoard or unspent Series capitalization.
 
 ## Bounds and lifting
 

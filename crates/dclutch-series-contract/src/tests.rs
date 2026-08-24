@@ -4,6 +4,15 @@ fn id(value: u8) -> IdentityV1 {
     IdentityV1::new([value; IDENTITY_BYTES]).expect("nonzero identity")
 }
 
+fn vacant(lamports: u64) -> VacantAccountFactsV1 {
+    VacantAccountFactsV1 {
+        lamports,
+        owner: SYSTEM_PROGRAM_ID,
+        data_len: 0,
+        is_executable: false,
+    }
+}
+
 fn recipe() -> SeriesRecipeV1 {
     SeriesRecipeV1 {
         realm_id: id(1),
@@ -74,6 +83,7 @@ fn created() -> (
     IdentityV1,
     SeriesRootV1,
     SeriesEscrowV1,
+    SeriesReplayGuardV1,
 ) {
     let root_address = id(200);
     let recipe_id = id(201);
@@ -88,23 +98,28 @@ fn created() -> (
             refund_authority: id(203),
             root_bump: 7,
             escrow_bump: 8,
+            replay_guard_bump: 9,
         },
         1_000,
-        0,
-        0,
+        vacant(0),
+        vacant(0),
+        vacant(0),
         10,
         20,
+        10,
     )
     .expect("valid creation");
-    assert_eq!(plan.payer_after, 910);
+    assert_eq!(plan.payer_after, 900);
     assert_eq!(plan.root_after, 10);
     assert_eq!(plan.escrow_after, 80);
+    assert_eq!(plan.replay_guard_after, 10);
     (
         root_address,
         recipe_id,
         aggregate_id,
         plan.root,
         plan.escrow,
+        plan.replay_guard,
     )
 }
 
@@ -168,9 +183,13 @@ fn all_persistent_preimages_round_trip_at_exact_widths() {
         Ok(capitalization)
     );
 
-    let (root_address, _, _, root, escrow) = created();
+    let (root_address, _, _, root, escrow, replay_guard) = created();
     assert_eq!(SeriesRootV1::decode(&root.to_bytes()), Ok(root));
     assert_eq!(SeriesEscrowV1::decode(&escrow.to_bytes()), Ok(escrow));
+    assert_eq!(
+        SeriesReplayGuardV1::decode(&replay_guard.to_bytes()),
+        Ok(replay_guard)
+    );
     let plan = instantiate(root, root_address, recipe_id, aggregate_id, escrow, 80);
     assert_eq!(plan.derived_occurrence, derived(recipe_id, 0));
     assert_eq!(
@@ -185,6 +204,7 @@ fn instructions_are_exact_and_reserved_bytes_are_hostile() {
         refund_authority: id(1),
         root_bump: 2,
         escrow_bump: 3,
+        replay_guard_bump: 4,
     };
     assert_eq!(CreateSeriesV1::decode(&create.to_bytes()), Ok(create));
     assert_eq!(
@@ -256,7 +276,7 @@ fn recipe_bounds_are_explicit_and_checked() {
 
 #[test]
 fn instantiation_is_gap_free_conservative_and_exhaustive() {
-    let (root_address, recipe_id, aggregate_id, mut root, escrow) = created();
+    let (root_address, recipe_id, aggregate_id, mut root, escrow, _guard) = created();
     let mut escrow_balance = 85;
     let mut tickets = [None, None, None];
     for slot in &mut tickets {
@@ -319,7 +339,7 @@ fn instantiation_is_gap_free_conservative_and_exhaustive() {
 
 #[test]
 fn stale_gap_time_derivation_and_funding_substitutions_refuse_without_mutation() {
-    let (root_address, recipe_id, aggregate_id, root, escrow) = created();
+    let (root_address, recipe_id, aggregate_id, root, escrow, _guard) = created();
     let occurrence = derived(recipe_id, 0);
     let cap = capitalization(recipe_id, 0);
     let call = |instruction, observed, derived_value: &DerivedOccurrenceV1, cap_value| {
@@ -423,7 +443,7 @@ fn stale_gap_time_derivation_and_funding_substitutions_refuse_without_mutation()
 
 #[test]
 fn successful_release_cannot_be_replayed_after_root_advances() {
-    let (root_address, recipe_id, aggregate_id, root, escrow) = created();
+    let (root_address, recipe_id, aggregate_id, root, escrow, _guard) = created();
     let first = instantiate(root, root_address, recipe_id, aggregate_id, escrow, 80);
     let occurrence = derived(recipe_id, 0);
     let cap = capitalization(recipe_id, 0);
@@ -459,10 +479,34 @@ fn successful_release_cannot_be_replayed_after_root_advances() {
 
 #[test]
 fn ticket_consumption_routes_market_principal_and_all_surplus_to_rent_credit() {
-    let (root_address, recipe_id, aggregate_id, root, escrow) = created();
+    let (root_address, recipe_id, aggregate_id, root, escrow, _guard) = created();
     let first = instantiate(root, root_address, recipe_id, aggregate_id, escrow, 80);
     let occurrence = derived(recipe_id, 0);
     let capitalization = capitalization(recipe_id, 0);
+    let wrong_ticket = OccurrenceTicketV1 {
+        market_identity_id: id(250),
+        ..first.ticket
+    };
+    assert_eq!(
+        plan_consume_ticket_v1(
+            first.root_after,
+            root_address,
+            recipe_id,
+            &recipe(),
+            aggregate_id,
+            &aggregate(recipe_id),
+            first.ticket.derived_occurrence_id,
+            &occurrence,
+            occurrence.capitalization_id,
+            &capitalization,
+            wrong_ticket,
+            ConsumeTicketV1 { expected_index: 0 },
+            23,
+            100,
+        ),
+        Err(Error::TicketMismatch)
+    );
+    assert_eq!(first.root_after.outstanding_tickets, 1);
     let plan = plan_consume_ticket_v1(
         first.root_after,
         root_address,
@@ -481,6 +525,21 @@ fn ticket_consumption_routes_market_principal_and_all_surplus_to_rent_credit() {
     )
     .expect("one-use ticket consumption");
     assert_eq!(plan.market_principal, 15);
+    assert_eq!(plan.found_obligations.realm_id, recipe().realm_id);
+    assert_eq!(
+        plan.found_obligations.product_instance_id,
+        occurrence.product_instance_id
+    );
+    assert_eq!(
+        plan.found_obligations.capability_manifest_id,
+        occurrence.capability_manifest_id
+    );
+    assert_eq!(
+        plan.found_obligations.market_identity_id,
+        occurrence.market_identity_id
+    );
+    assert_eq!(plan.found_obligations.generation, occurrence.generation);
+    assert_eq!(plan.found_obligations.market_principal, 15);
     assert_eq!(plan.rent_credit_after, 108);
     assert_eq!(plan.ticket_lamports_after, 0);
     assert_eq!(plan.root_after.outstanding_tickets, 0);
@@ -508,17 +567,20 @@ fn ticket_consumption_routes_market_principal_and_all_surplus_to_rent_credit() {
 
 #[test]
 fn close_requires_exhaustion_zero_principal_and_zero_tickets() {
-    let (root_address, recipe_id, aggregate_id, mut root, escrow) = created();
+    let (root_address, recipe_id, aggregate_id, mut root, escrow, replay_guard) = created();
     assert_eq!(
         plan_close_exhausted_v1(
             root,
             root_address,
             escrow,
+            replay_guard,
             CloseExhaustedV1 {
                 expected_released_allocations: 0,
             },
             10,
             80,
+            10,
+            10,
             100,
         ),
         Err(Error::SeriesNotExhausted)
@@ -543,11 +605,14 @@ fn close_requires_exhaustion_zero_principal_and_zero_tickets() {
             root,
             root_address,
             escrow,
+            replay_guard,
             CloseExhaustedV1 {
                 expected_released_allocations: 3,
             },
             10,
             20,
+            10,
+            10,
             100,
         ),
         Err(Error::OutstandingTickets)
@@ -577,21 +642,43 @@ fn close_requires_exhaustion_zero_principal_and_zero_tickets() {
         .expect("consume each ticket")
         .root_after;
     }
+    assert_eq!(
+        plan_close_exhausted_v1(
+            root,
+            root_address,
+            escrow,
+            replay_guard,
+            CloseExhaustedV1 {
+                expected_released_allocations: 3,
+            },
+            10,
+            20,
+            9,
+            10,
+            100,
+        ),
+        Err(Error::ReplayGuardUnderfunded)
+    );
     let close = plan_close_exhausted_v1(
         root,
         root_address,
         escrow,
+        replay_guard,
         CloseExhaustedV1 {
             expected_released_allocations: 3,
         },
         10,
         20,
+        12,
+        10,
         100,
     )
     .expect("fully exhausted close");
-    assert_eq!(close.rent_credit_after, 130);
+    assert_eq!(close.rent_credit_after, 132);
     assert_eq!(close.root_lamports_after, 0);
     assert_eq!(close.escrow_lamports_after, 0);
+    assert_eq!(close.replay_guard_lamports_after, 10);
+    assert_eq!(replay_guard.plan_close(), Err(Error::PermanentReplayGuard));
 }
 
 #[test]
@@ -626,6 +713,29 @@ fn exact_frames_reject_aliasing_and_privilege_escalation() {
         InstantiateNextFrameV1::validate(&escalated),
         Err(Error::InvalidAccountPrivilege)
     );
+
+    let create_accounts = [
+        meta([11; 32], true, true, false),
+        meta([12; 32], false, false, false),
+        meta([13; 32], false, false, false),
+        meta([14; 32], false, true, false),
+        meta([15; 32], false, true, false),
+        meta([16; 32], false, true, false),
+        meta([17; 32], false, false, false),
+        meta(SYSTEM_PROGRAM_ID, false, false, true),
+        meta(RENT_SYSVAR_ID, false, false, false),
+    ];
+    assert!(CreateSeriesFrameV1::validate(&create_accounts).is_ok());
+
+    let close_accounts = [
+        meta([21; 32], true, false, false),
+        meta([22; 32], false, true, false),
+        meta([23; 32], false, true, false),
+        meta([24; 32], false, true, false),
+        meta([25; 32], false, true, false),
+        meta(RENT_SYSVAR_ID, false, false, false),
+    ];
+    assert!(CloseExhaustedFrameV1::validate(&close_accounts).is_ok());
 }
 
 #[test]
@@ -633,6 +743,7 @@ fn pda_domains_obey_chain_seed_component_bound() {
     assert!(SERIES_ROOT_PDA_DOMAIN_V1.len() <= 32);
     assert!(SERIES_ESCROW_PDA_DOMAIN_V1.len() <= 32);
     assert!(SERIES_TICKET_PDA_DOMAIN_V1.len() <= 32);
+    assert!(SERIES_REPLAY_GUARD_PDA_DOMAIN_V1.len() <= 32);
 
     let root = SeriesRootPdaPreimageV1 {
         recipe_id: id(1),
@@ -659,11 +770,82 @@ fn pda_domains_obey_chain_seed_component_bound() {
         Some(0x0102_0304_0506_0708_u64.to_le_bytes().as_slice())
     );
     assert_eq!(ticket.get(64), Some(&10));
+
+    let guard = SeriesReplayGuardPdaPreimageV1 {
+        series_root_address: id(9),
+        bump: 11,
+    }
+    .to_bytes();
+    assert_eq!(guard.get(..23), Some(SERIES_REPLAY_GUARD_PDA_DOMAIN_V1));
+    assert_eq!(guard.get(23..55), Some(id(9).to_bytes().as_slice()));
+    assert_eq!(guard.get(55), Some(&11));
+}
+
+#[test]
+fn permanent_guard_blocks_root_resurrection_after_close() {
+    let root_address = id(200);
+    let recipe_id = id(201);
+    let aggregate_id = id(202);
+    let instruction = CreateSeriesV1 {
+        refund_authority: id(203),
+        root_bump: 7,
+        escrow_bump: 8,
+        replay_guard_bump: 9,
+    };
+    assert_eq!(
+        plan_create_series_v1(
+            root_address,
+            recipe_id,
+            aggregate_id,
+            &recipe(),
+            &aggregate(recipe_id),
+            instruction,
+            1_000,
+            vacant(0),
+            vacant(0),
+            VacantAccountFactsV1 {
+                lamports: 10,
+                owner: [77; IDENTITY_BYTES],
+                data_len: u64::try_from(SERIES_REPLAY_GUARD_BYTES_V1)
+                    .expect("guard width fits u64"),
+                is_executable: false,
+            },
+            10,
+            20,
+            10,
+        ),
+        Err(Error::AccountNotVacant)
+    );
+    let dusted = plan_create_series_v1(
+        root_address,
+        recipe_id,
+        aggregate_id,
+        &recipe(),
+        &aggregate(recipe_id),
+        instruction,
+        1_000,
+        vacant(12),
+        vacant(85),
+        vacant(14),
+        10,
+        20,
+        10,
+    )
+    .expect("System-owned empty dusting is not occupation");
+    assert_eq!(dusted.payer_after, 1_000);
+    assert_eq!(dusted.root_after, 12);
+    assert_eq!(dusted.escrow_after, 85);
+    assert_eq!(dusted.replay_guard_after, 14);
+    let guard = SeriesReplayGuardV1 {
+        series_root_address: root_address,
+        pda_bump: instruction.replay_guard_bump,
+    };
+    assert_eq!(guard.plan_close(), Err(Error::PermanentReplayGuard));
 }
 
 #[test]
 fn future_release_and_insufficient_current_ticket_rent_refuse() {
-    let (root_address, recipe_id, aggregate_id, root, escrow) = created();
+    let (root_address, recipe_id, aggregate_id, root, escrow, _guard) = created();
     let occurrence = derived(recipe_id, 0);
     let cap = capitalization(recipe_id, 0);
     let instruction = InstantiateNextV1 {
