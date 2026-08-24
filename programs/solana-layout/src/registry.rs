@@ -61,7 +61,7 @@ pub const REVENUE_POLICY_RECORD_V2_ACCOUNT_TAG: u8 = 27;
 /// Realm-owned immutable RevenuePolicyRecord V2 version.
 pub const REVENUE_POLICY_RECORD_V2_ACCOUNT_VERSION: u8 = 2;
 /// Exact immutable RevenuePolicyRecord V2 width.
-pub const REVENUE_POLICY_RECORD_V2_ACCOUNT_BYTES: usize = 160;
+pub const REVENUE_POLICY_RECORD_V2_ACCOUNT_BYTES: usize = 177;
 /// Per-Market counted treasury-service ledger account discriminator.
 pub const TREASURY_SERVICE_LEDGER_V1_ACCOUNT_TAG: u8 = 0xbb;
 /// Per-Market counted treasury-service ledger account version.
@@ -4176,7 +4176,7 @@ mod tests {
         assert_eq!(REALM_REVENUE_V2_FAMILY_TAG, 0x51);
         assert_eq!(TREASURY_SERVICE_LEDGER_V1_ACCOUNT_TAG, 0xbb);
         assert_ne!(REALM_REVENUE_V2_FAMILY_TAG, TREASURY_SERVICE_LEDGER_V1_ACCOUNT_TAG);
-        assert_eq!(REVENUE_POLICY_RECORD_V2_ACCOUNT_BYTES, 160);
+        assert_eq!(REVENUE_POLICY_RECORD_V2_ACCOUNT_BYTES, 177);
         assert_eq!(TREASURY_SERVICE_LEDGER_V1_ACCOUNT_BYTES, 268);
         for (tag, version) in [
             (

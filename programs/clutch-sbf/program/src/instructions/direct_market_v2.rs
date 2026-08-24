@@ -72,9 +72,7 @@ use clutch_batch::relation_v2::{
 use clutch_batch::{PartialPolicy, Side};
 use clutch_batch::relation_v1::FrozenPolicyV1;
 use clutch_batch_policy_identity::{batch_policy_digest, decode_batch_policy, BATCH_POLICY_BYTES};
-use clutch_batch_policy_identity::revenue_policy_v2::{
-    RevenuePolicyV2, REVENUE_POLICY_V2_BYTES,
-};
+use clutch_batch_policy_identity::revenue_policy_v2::RevenuePolicyV2;
 use clutch_collateral_adapter_v2::{
     refine_market_collateral_v2, BoundCollateralProfileV2, Id as CollateralId,
     MarketCollateralBindingV2,
@@ -1681,23 +1679,12 @@ fn process_direct_settle_pair_v2(
         ),
         None,
     )?;
-    require(
-        !accounts[endpoint_end + 2].is_writable
-            && !accounts[endpoint_end + 2].is_signer
-            && !accounts[endpoint_end + 2].executable
-            && accounts[endpoint_end + 2].data_len() == REVENUE_POLICY_V2_BYTES,
-        ClutchError::MismatchedState,
-    )?;
-    let revenue_preimage = accounts[endpoint_end + 2]
-        .try_borrow_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     let revenue = authenticate_revenue_policy_record_v2(
         program_id,
         &accounts[3],
         &accounts[endpoint_end + 1],
-        &revenue_preimage,
+        &accounts[endpoint_end + 2],
     )?;
-    drop(revenue_preimage);
     drop(batch_data);
     let fee_policy = root.transition().fee_policy();
     fee_policy
