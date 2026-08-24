@@ -16,7 +16,7 @@ use crate::instructions::collateral_position_v3::{
     AuthenticatedMarketResolutionActivationPostwriteV5, GeneralMarketLiabilityAuthorityV2,
     RuntimeSha256,
 };
-use crate::instructions::failure_market_admission::AuthenticatedFailureMarketRootV2;
+use crate::instructions::failure_market_admission::AuthenticatedFailureMarketRootV3;
 use crate::instructions::failure_market_interval_v2::{
     archive_resolved_failure_market_interval_link_v3,
     write_failure_market_interval_resolution_plan_v2,
@@ -171,7 +171,7 @@ impl AuthenticatedSourceResolutionProductReleaseAuthorityV1
 /// a generic terminal DTO: every fact comes from the hostile-reopened resolved
 /// cell and its private resolution/Source receipts.
 fn plan_resolved_failure_market_archive_v5(
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     interval: AuthenticatedFailureMarketIntervalAccountsV2,
     resolution: AuthenticatedFailureMarketResolutionPostwriteV5,
     source_terminal: AuthenticatedSourceResolutionTerminalV1,
@@ -502,7 +502,7 @@ impl AuthenticatedFailureMarketIntervalCellResolutionV2
 }
 
 fn plan_authenticated_failure_market_resolution_v5(
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     interval: AuthenticatedFailureMarketIntervalAccountsV2,
     source_success: SuccessfulEvaluationHandoffV1,
     context: QuantizedIntervalConsensusContextV1<'_>,
@@ -1202,7 +1202,7 @@ fn resolve_failure_market_interval_v5<'a, 'root, 'post>(
     root_before: AuthenticatedMarketLifecycleRootV2<'root>,
     link_before: AuthenticatedSeriesMarketLinkV2<'_>,
     link_release: &AuthenticatedWritableFailureSessionReleaseLinkV3,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
     interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
     registry: &AuthenticatedRegistryCapabilityV4,
@@ -1401,7 +1401,7 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
     system_program: &AccountInfo<'a>,
     root_before: AuthenticatedMarketLifecycleRootV2<'root>,
     link_before: AuthenticatedSeriesMarketLinkV2<'link>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
     interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
     replay_before: AuthenticatedFailureMarketReplayV2,

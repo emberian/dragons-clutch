@@ -295,7 +295,6 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (78, 1, 10),
     (78, 1, 11),
     (78, 1, 12),
-    (78, 1, 13),
 ];
 
 /// Exact extension actions executable by other products.

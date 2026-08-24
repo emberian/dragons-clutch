@@ -11,13 +11,13 @@ use std::boxed::Box;
 
 use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
-use crate::instructions::failure_market_admission::authenticate_failure_market_root_v2;
+use crate::instructions::failure_market_admission::authenticate_failure_market_root_v3;
 use crate::instructions::failure_market_dispatch_v2::{
     account_for_role_v2, FailureMarketAccountRoleV2 as Role, FailureMarketActionPayloadV2,
 };
 use crate::instructions::failure_market_interval_advance_v2::advance_failure_market_interval_paid_v2;
 use crate::instructions::failure_market_interval_v2::{
-    authenticate_failure_market_recovery_quote_for_resolution_v2,
+    authenticate_failure_market_recovery_quote_v2,
     reopen_failure_market_interval_accounts_v2, FailureMarketIntervalFundingPreimageV2,
 };
 use crate::instructions::failure_market_runtime::authenticate_failure_market_runtime_root_v1;
@@ -77,8 +77,6 @@ pub(crate) fn process_advance_failure_market_session_v2(
 ) -> Outcome<()> {
     let FailureMarketActionPayloadV2::Advance {
         requested_coordinates,
-        recovery_quote_schedule,
-        interval_funding_preimage,
     } = payload
     else {
         return crate::instructions::failure_market_dispatch_v2::process_reserved_disabled(
@@ -133,7 +131,7 @@ pub(crate) fn process_advance_failure_market_session_v2(
     let refund = account_for_role_v2(action, accounts, Role::RecoveryRefundOwner)?;
     require_advance_aliases(accounts, keeper, refund)?;
 
-    let admission = authenticate_failure_market_root_v2(program_id, admission_account, false)?;
+    let admission = authenticate_failure_market_root_v3(program_id, admission_account, false)?;
     let policy = admission.state().binding().facts();
     let mut root_decode = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
     let root = authenticate_market_lifecycle_root_v2(
@@ -188,15 +186,15 @@ pub(crate) fn process_advance_failure_market_session_v2(
         registry_release,
         capability_profile,
     )?;
-    let quote = authenticate_failure_market_recovery_quote_for_resolution_v2(
+    let quote = authenticate_failure_market_recovery_quote_v2(
         program_id,
         admission,
         root,
         &registry,
         liveness_policy,
-        recovery_quote_schedule,
     )?;
-    let funding = FailureMarketIntervalFundingPreimageV2::decode(interval_funding_preimage)?;
+    let funding_preimage = admission.interval_funding_preimage();
+    let funding = FailureMarketIntervalFundingPreimageV2::decode(&funding_preimage)?;
     let interval = reopen_failure_market_interval_accounts_v2(
         program_id,
         cell_account,

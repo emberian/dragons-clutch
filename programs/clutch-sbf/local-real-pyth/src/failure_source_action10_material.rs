@@ -26,7 +26,7 @@ use clutch_liveness::runtime_v1::{
 use clutch_liveness::Id as LivenessId;
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::failure_recovery::{
-    FailureMarketRootAccountV2, FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2,
+    FailureMarketRootAccountV3, FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3,
 };
 use clutch_solana_layout::registry::{ExtensionFamily, SourceSeriesAction};
 use clutch_solana_layout::source_series::{
@@ -983,12 +983,12 @@ fn authenticate_failure_root(
     if account.owner != program_id || account.executable {
         return Err(FailureSourceAction10MaterialError::ChainAuthority);
     }
-    let bytes: &[u8; FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2] = account
+    let bytes: &[u8; FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3] = account
         .data
         .as_slice()
         .try_into()
         .map_err(|_| FailureSourceAction10MaterialError::ChainAuthority)?;
-    let root = FailureMarketRootAccountV2::decode(bytes)
+    let root = FailureMarketRootAccountV3::decode(bytes)
         .map_err(|_| FailureSourceAction10MaterialError::ChainAuthority)?;
     let state = FailureMarketAdmissionStateV1::decode(&root.admission_body)
         .map_err(|_| FailureSourceAction10MaterialError::ChainAuthority)?;

@@ -12,7 +12,7 @@ use std::boxed::Box;
 use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::collateral_position_v3::authenticate_general_market_liabilities_v2;
-use crate::instructions::failure_market_admission::authenticate_failure_market_root_v2;
+use crate::instructions::failure_market_admission::authenticate_failure_market_root_v3;
 use crate::instructions::failure_market_dispatch_v2::{
     account_for_role_v2, FailureMarketAccountRoleV2 as Role, FailureMarketActionPayloadV2,
 };
@@ -87,8 +87,6 @@ pub(crate) fn process_resolve_failure_market_session_v2(
     payload: FailureMarketActionPayloadV2<'_>,
 ) -> Outcome<()> {
     let FailureMarketActionPayloadV2::Resolve {
-        recovery_quote_schedule,
-        interval_funding_preimage,
         replay_funding_preimage,
         foundation_account_graph,
     } = payload
@@ -176,7 +174,7 @@ pub(crate) fn process_resolve_failure_market_session_v2(
     let system_program = account_for_role_v2(action, accounts, Role::SystemProgram)?;
     require_current_resolution_aliases(accounts, source_custody, recovery_refund)?;
 
-    let admission = authenticate_failure_market_root_v2(program_id, admission_account, false)?;
+    let admission = authenticate_failure_market_root_v3(program_id, admission_account, false)?;
     let failure_policy = admission.state().binding().facts();
     let mut root_decode = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
     let root = authenticate_market_lifecycle_root_v2(
@@ -249,10 +247,10 @@ pub(crate) fn process_resolve_failure_market_session_v2(
         root,
         &registry,
         failure_liveness_policy,
-        recovery_quote_schedule,
     )?;
+    let interval_funding_preimage = admission.interval_funding_preimage();
     let interval_funding =
-        FailureMarketIntervalFundingPreimageV2::decode(interval_funding_preimage)?;
+        FailureMarketIntervalFundingPreimageV2::decode(&interval_funding_preimage)?;
     let interval = reopen_failure_market_interval_accounts_v2(
         program_id,
         cell_account,

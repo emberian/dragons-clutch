@@ -22,15 +22,20 @@ use clutch_failure_policy_runtime::market_policy_v1::{
     FailureMarketRootBalanceDispositionV1, FailureMarketRootFundingReceiptV1,
     FAILURE_MARKET_ADMISSION_STATE_BYTES_V1,
 };
+use clutch_failure_policy_runtime::market_quote_v1::{
+    FailureMarketRecoveryQuoteScheduleV1, FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1,
+};
 use clutch_liveness::runtime_adapter_v1::{
     decode_runtime_policy_account_v1, RuntimePersistedAccountViewV1,
 };
 use clutch_liveness::runtime_v1::{RuntimeCompartmentKindV1, RuntimeCompartmentV1};
 use clutch_liveness::Id as LivenessId;
 use clutch_solana_layout::failure_recovery::{
-    decode_failure_account_body_v1, FailureMarketRootAccountV2,
+    decode_failure_account_body_v1, FailureMarketRootAccountV3,
     FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1, FAILURE_LIVENESS_POLICY_BODY_BYTES_V1,
-    FAILURE_MARKET_ADMISSION_BODY_BYTES_V1, FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2,
+    FAILURE_MARKET_ADMISSION_BODY_BYTES_V1,
+    FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1,
+    FAILURE_MARKET_RECOVERY_QUOTE_BODY_BYTES_V1, FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3,
 };
 use clutch_solana_layout::registry;
 use solana_account_info::AccountInfo;
@@ -40,6 +45,10 @@ use solana_pubkey::Pubkey;
 
 const _: () =
     assert!(FAILURE_MARKET_ADMISSION_BODY_BYTES_V1 == FAILURE_MARKET_ADMISSION_STATE_BYTES_V1);
+const _: () = assert!(
+    FAILURE_MARKET_RECOVERY_QUOTE_BODY_BYTES_V1
+        == FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1
+);
 
 /// Private full-body authentication of one initial Recovery custody.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -67,15 +76,18 @@ impl AuthenticatedFailureMarketRecoveryFundingV1 for AuthenticatedFailureMarketL
     }
 }
 
-/// Existing authenticated `0xa0/v2` shared-Market root.
+/// Existing authenticated current `0xa0/v4` shared-Market root.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedFailureMarketRootV2 {
+pub struct AuthenticatedFailureMarketRootV3 {
     account: Pubkey,
     bump: u8,
     state: FailureMarketAdmissionStateV1,
+    recovery_quote: FailureMarketRecoveryQuoteScheduleV1,
+    interval_funding_preimage:
+        [u8; FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1],
 }
 
-impl AuthenticatedFailureMarketRootV2 {
+impl AuthenticatedFailureMarketRootV3 {
     /// Exact physical root account.
     pub const fn account(self) -> Pubkey {
         self.account
@@ -90,6 +102,20 @@ impl AuthenticatedFailureMarketRootV2 {
     pub const fn state(self) -> FailureMarketAdmissionStateV1 {
         self.state
     }
+
+    /// Exact persisted per-attempt Recovery price schedule. This is chain
+    /// state, never a caller payload or static-client projection.
+    pub const fn recovery_quote(self) -> FailureMarketRecoveryQuoteScheduleV1 {
+        self.recovery_quote
+    }
+
+    /// Exact retained Product capitalization preimage for the reusable
+    /// interval pair. It is decoded again by the Failure owner before use.
+    pub const fn interval_funding_preimage(
+        self,
+    ) -> [u8; FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1] {
+        self.interval_funding_preimage
+    }
 }
 
 /// Exact writable account prestate for eventual terminal root disposition.
@@ -100,7 +126,7 @@ impl AuthenticatedFailureMarketRootV2 {
 /// receipt must still be consumed before any mutation may use this value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedFailureMarketClosePrestateV2 {
-    root: AuthenticatedFailureMarketRootV2,
+    root: AuthenticatedFailureMarketRootV3,
     disposition: FailureMarketRootBalanceDispositionV1,
     refund_owner_post_balance: u64,
     neutral_sink_post_balance: u64,
@@ -108,7 +134,7 @@ pub(crate) struct AuthenticatedFailureMarketClosePrestateV2 {
 
 impl AuthenticatedFailureMarketClosePrestateV2 {
     /// Exact authenticated root and immutable policy/funding state.
-    pub(crate) const fn root(self) -> AuthenticatedFailureMarketRootV2 {
+    pub(crate) const fn root(self) -> AuthenticatedFailureMarketRootV3 {
         self.root
     }
 
@@ -131,14 +157,14 @@ impl AuthenticatedFailureMarketClosePrestateV2 {
 /// Atomic semantic postimage of one fully joined Market Failure admission.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FailureMarketAdmissionPostimageV1 {
-    root: AuthenticatedFailureMarketRootV2,
+    root: AuthenticatedFailureMarketRootV3,
     liveness: AuthenticatedFailureMarketLivenessV1,
     recovery_funding: FailureMarketRecoveryFundingReceiptV1,
 }
 
 impl FailureMarketAdmissionPostimageV1 {
     /// Newly persisted authenticated shared root.
-    pub const fn root(self) -> AuthenticatedFailureMarketRootV2 {
+    pub const fn root(self) -> AuthenticatedFailureMarketRootV3 {
         self.root
     }
 
@@ -247,11 +273,14 @@ pub(crate) fn authenticate_initial_market_recovery_funding_v1(
 /// Allocation/assignment and the Product FoundationVault debit occur outside
 /// this helper but in the same atomic instruction. This function verifies the
 /// exact authenticated postfund balance before the first and only data write.
-fn persist_failure_market_root_v2(
+fn persist_failure_market_root_v3(
     program_id: &Pubkey,
     root: &AccountInfo<'_>,
     state: FailureMarketAdmissionStateV1,
-) -> Outcome<AuthenticatedFailureMarketRootV2> {
+    recovery_quote: FailureMarketRecoveryQuoteScheduleV1,
+    interval_funding_preimage:
+        [u8; FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1],
+) -> Outcome<AuthenticatedFailureMarketRootV3> {
     let policy = state.binding().facts();
     let funding = state.root_funding().facts();
     let expected_balance = funding
@@ -263,7 +292,7 @@ fn persist_failure_market_root_v2(
             && root.is_writable
             && !root.is_signer
             && !root.executable
-            && root.data_len() == FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2,
+            && root.data_len() == FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3,
         ClutchError::MismatchedState,
     )?;
     require(
@@ -284,9 +313,26 @@ fn persist_failure_market_root_v2(
     state
         .encode_into(&mut admission_body)
         .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
-    let record = FailureMarketRootAccountV2 {
+    let quote_id = recovery_quote
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    require(
+        quote_id.bytes() == policy.recovery_quote_schedule_id.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        interval_funding_preimage.iter().any(|byte| *byte != 0),
+        ClutchError::MismatchedState,
+    )?;
+    let mut recovery_quote_body = [0u8; FAILURE_MARKET_RECOVERY_QUOTE_BODY_BYTES_V1];
+    recovery_quote
+        .encode_into(&mut recovery_quote_body)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let record = FailureMarketRootAccountV3 {
         bump,
         admission_body,
+        recovery_quote_body,
+        interval_funding_preimage,
     };
     let mut data = root
         .try_borrow_mut_data()
@@ -295,17 +341,19 @@ fn persist_failure_market_root_v2(
         data.iter().all(|byte| *byte == 0),
         ClutchError::AlreadyInitialized,
     )?;
-    let output: &mut [u8; FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2] = data
+    let output: &mut [u8; FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3] = data
         .as_mut()
         .try_into()
         .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
     record
         .encode_into(output)
         .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
-    Ok(AuthenticatedFailureMarketRootV2 {
+    Ok(AuthenticatedFailureMarketRootV3 {
         account: *root.key,
         bump,
         state,
+        recovery_quote,
+        interval_funding_preimage,
     })
 }
 
@@ -316,13 +364,16 @@ fn persist_failure_market_root_v2(
 /// cannot source rent from a signer, Recovery custody, Hoard, or future fees.
 /// The supplied canonical Rent sysvar fixes the exact refundable principal for
 /// the current 2,172-byte account width; prior lamports remain donations.
-fn initialize_prefunded_failure_market_root_v2<'a>(
+fn initialize_prefunded_failure_market_root_v3<'a>(
     program_id: &Pubkey,
     root: &AccountInfo<'a>,
     rent_sysvar: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
     state: FailureMarketAdmissionStateV1,
-) -> Outcome<AuthenticatedFailureMarketRootV2> {
+    recovery_quote: FailureMarketRecoveryQuoteScheduleV1,
+    interval_funding_preimage:
+        [u8; FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1],
+) -> Outcome<AuthenticatedFailureMarketRootV3> {
     require_system_program(system_program)?;
     require_distinct(&[root.clone(), rent_sysvar.clone(), system_program.clone()])?;
     let rent = read_rent(rent_sysvar)?;
@@ -341,7 +392,7 @@ fn initialize_prefunded_failure_market_root_v2<'a>(
             && root.lamports() == expected_balance
             && funding.observed_balance_lamports == expected_balance
             && funding.rent_principal_lamports
-                == rent.minimum_balance(FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2)?
+                == rent.minimum_balance(FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3)?
             && funding.root_account_id.bytes() == root.key.to_bytes()
             && policy.recovery_state_id.bytes() != root.key.to_bytes(),
         ClutchError::MismatchedState,
@@ -363,7 +414,7 @@ fn initialize_prefunded_failure_market_root_v2<'a>(
     ];
     let allocate = Instruction::new_with_bytes(
         SYSTEM_PROGRAM_ID,
-        &allocate_data(FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2),
+        &allocate_data(FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3),
         vec![AccountMeta::new(*root.key, true)],
     );
     invoke_signed(
@@ -385,11 +436,17 @@ fn initialize_prefunded_failure_market_root_v2<'a>(
     .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
     require(
         root.owner == program_id
-            && root.data_len() == FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2
+            && root.data_len() == FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3
             && root.lamports() == expected_balance,
         ClutchError::AccountCreationFailed,
     )?;
-    persist_failure_market_root_v2(program_id, root, state)
+    persist_failure_market_root_v3(
+        program_id,
+        root,
+        state,
+        recovery_quote,
+        interval_funding_preimage,
+    )
 }
 
 /// Execute the complete non-routable shared-Market admission join.
@@ -399,7 +456,7 @@ fn initialize_prefunded_failure_market_root_v2<'a>(
 /// seam without authenticating the full liveness bodies and exact current
 /// Recovery balance first.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn initialize_failure_market_admission_v1<'a>(
+pub(crate) fn initialize_failure_market_admission_v3<'a>(
     program_id: &Pubkey,
     root: &AccountInfo<'a>,
     liveness_policy_account: &AccountInfo<'a>,
@@ -409,6 +466,9 @@ pub(crate) fn initialize_failure_market_admission_v1<'a>(
     binding: FailureMarketPolicyBindingV1,
     root_funding: FailureMarketRootFundingReceiptV1,
     recovery_prepaid_debit_receipt_id: FailureMarketPrepaidDebitReceiptIdV1,
+    recovery_quote: FailureMarketRecoveryQuoteScheduleV1,
+    interval_funding_preimage:
+        [u8; FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1],
 ) -> Outcome<FailureMarketAdmissionPostimageV1> {
     require_distinct(&[
         root.clone(),
@@ -427,12 +487,14 @@ pub(crate) fn initialize_failure_market_admission_v1<'a>(
     let state =
         FailureMarketAdmissionStateV1::from_receipts(binding, recovery_funding, root_funding)
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let root = initialize_prefunded_failure_market_root_v2(
+    let root = initialize_prefunded_failure_market_root_v3(
         program_id,
         root,
         rent_sysvar,
         system_program,
         state,
+        recovery_quote,
+        interval_funding_preimage,
     )?;
     Ok(FailureMarketAdmissionPostimageV1 {
         root,
@@ -442,11 +504,11 @@ pub(crate) fn initialize_failure_market_admission_v1<'a>(
 }
 
 /// Authenticate an existing shared-Market policy/funding root.
-pub fn authenticate_failure_market_root_v2(
+pub fn authenticate_failure_market_root_v3(
     program_id: &Pubkey,
     root: &AccountInfo<'_>,
     writable: bool,
-) -> Outcome<AuthenticatedFailureMarketRootV2> {
+) -> Outcome<AuthenticatedFailureMarketRootV3> {
     require(root.owner == program_id, ClutchError::WrongProgramOwner)?;
     require(!root.is_signer, ClutchError::NonCanonical)?;
     require(!root.executable, ClutchError::ExecutableAccount)?;
@@ -461,19 +523,33 @@ pub fn authenticate_failure_market_root_v2(
     let data = root
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let input: &[u8; FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2] = data
+    let input: &[u8; FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3] = data
         .as_ref()
         .try_into()
         .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
-    let record = FailureMarketRootAccountV2::decode(input)
+    let record = FailureMarketRootAccountV3::decode(input)
         .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
     let state = FailureMarketAdmissionStateV1::decode(&record.admission_body)
         .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let recovery_quote = FailureMarketRecoveryQuoteScheduleV1::decode(&record.recovery_quote_body)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    require(
+        record
+            .interval_funding_preimage
+            .iter()
+            .any(|byte| *byte != 0),
+        ClutchError::MismatchedState,
+    )?;
     let policy = state.binding().facts();
     let root_funding = state.root_funding().facts();
     require(
         policy.recovery_state_id.bytes() != root.key.to_bytes()
             && policy.recovery_receipt_program_id == liveness_id(program_id)
+            && recovery_quote
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?
+                .bytes()
+                == policy.recovery_quote_schedule_id.bytes()
             && root_funding.root_account_id.bytes() == root.key.to_bytes()
             && root.lamports() >= root_funding.observed_balance_lamports,
         ClutchError::MismatchedState,
@@ -487,10 +563,12 @@ pub fn authenticate_failure_market_root_v2(
         ),
         Some(record.bump),
     )?;
-    Ok(AuthenticatedFailureMarketRootV2 {
+    Ok(AuthenticatedFailureMarketRootV3 {
         account: *root.key,
         bump: record.bump,
         state,
+        recovery_quote,
+        interval_funding_preimage: record.interval_funding_preimage,
     })
 }
 
@@ -511,7 +589,7 @@ pub(crate) fn authenticate_failure_market_close_prestate_v2<'a>(
         require(!recipient.is_signer, ClutchError::NonCanonical)?;
         require(!recipient.executable, ClutchError::ExecutableAccount)?;
     }
-    let authenticated = authenticate_failure_market_root_v2(program_id, root, true)?;
+    let authenticated = authenticate_failure_market_root_v3(program_id, root, true)?;
     let disposition = authenticated
         .state()
         .project_root_balance_disposition(root.lamports())

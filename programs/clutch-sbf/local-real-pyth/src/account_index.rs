@@ -76,11 +76,11 @@ use clutch_solana_layout::direct_market_v1::{
     DirectSelectionAccountV1, DIRECT_RESERVATION_BODY_BYTES_V1,
 };
 use clutch_solana_layout::failure_recovery::{
-    decode_failure_account_body_v1, FailureMarketRootAccountV2, FailureReplayTombstoneV1,
+    decode_failure_account_body_v1, FailureMarketRootAccountV3, FailureReplayTombstoneV1,
     FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1, FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1,
     FAILURE_EXTERNAL_ROOT_ACCOUNT_BYTES_V1, FAILURE_EXTERNAL_ROOT_BODY_BYTES_V2,
     FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1, FAILURE_LIVENESS_POLICY_BODY_BYTES_V1,
-    FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2,
+    FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3,
 };
 use clutch_solana_layout::order_page_v5::OrderPageAccountV5;
 use clutch_solana_layout::product_series::{
@@ -226,7 +226,7 @@ pub enum CanonicalAccountKind {
     DealerActionReceipt,
     DealerReplay,
     FailureExternalRoot,
-    FailureMarketRootV2,
+    FailureMarketRootV3,
     FailureLivenessPolicy,
     FailureRecoveryCompartment,
     FailureReplayTombstone,
@@ -309,7 +309,7 @@ impl CanonicalAccountKind {
             Self::DealerActionReceipt => "dealer-action-receipt-v1",
             Self::DealerReplay => "dealer-replay",
             Self::FailureExternalRoot => "failure-external-root",
-            Self::FailureMarketRootV2 => "failure-market-root-v2",
+            Self::FailureMarketRootV3 => "failure-market-root-v3",
             Self::FailureLivenessPolicy => "failure-liveness-policy",
             Self::FailureRecoveryCompartment => "failure-recovery-compartment",
             Self::FailureReplayTombstone => "failure-replay-tombstone",
@@ -1662,12 +1662,12 @@ fn decode_failure(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     if tag_version(
         data,
         registry::FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG,
-        registry::FAILURE_MARKET_ROOT_ACCOUNT_VERSION_V2,
+        registry::FAILURE_MARKET_ROOT_ACCOUNT_VERSION_V3,
     ) {
-        let bytes: &[u8; FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V2] = data
+        let bytes: &[u8; FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3] = data
             .try_into()
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        let record = FailureMarketRootAccountV2::decode(bytes)
+        let record = FailureMarketRootAccountV3::decode(bytes)
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
         let state = FailureMarketAdmissionStateV1::decode(&record.admission_body)
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
@@ -1675,7 +1675,7 @@ fn decode_failure(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
         let facts = policy.facts();
         let mut projection = CanonicalAccountProjection::canonical(
             CanonicalFamily::Failure,
-            CanonicalAccountKind::FailureMarketRootV2,
+            CanonicalAccountKind::FailureMarketRootV3,
         );
         projection.generation = Some(facts.generation);
         projection.primary_binding = Some(facts.market_instance_id.bytes());
@@ -2767,7 +2767,7 @@ mod current_decoder_tests {
         for (tag, version) in [
             (
                 registry::FAILURE_EXTERNAL_ROOT_ACCOUNT_TAG,
-                registry::FAILURE_MARKET_ROOT_ACCOUNT_VERSION_V2,
+                registry::FAILURE_MARKET_ROOT_ACCOUNT_VERSION_V3,
             ),
             (
                 registry::FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG,

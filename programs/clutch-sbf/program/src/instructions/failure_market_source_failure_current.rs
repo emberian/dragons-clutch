@@ -9,7 +9,7 @@
 
 use crate::accounts::{require, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
-use crate::instructions::failure_market_admission::AuthenticatedFailureMarketRootV2;
+use crate::instructions::failure_market_admission::AuthenticatedFailureMarketRootV3;
 use crate::instructions::failure_market_interval_v2::{
     plan_failure_market_source_failure_archive_v2,
     plan_failure_market_source_failure_cell_v2,
@@ -315,7 +315,7 @@ pub(crate) fn compose_failure_market_source_failure_attempt_v3<'root, 'link, 're
     history_account: &AccountInfo<'_>,
     root_before: AuthenticatedMarketLifecycleRootV2<'root>,
     link_before: AuthenticatedSeriesMarketLinkV2<'link>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
     interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
     quote: AuthenticatedFailureMarketRecoveryQuoteV2,

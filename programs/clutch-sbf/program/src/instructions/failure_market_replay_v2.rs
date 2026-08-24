@@ -9,7 +9,7 @@
 use crate::accounts::{expect_pda, require, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::failure_market_admission::{
-    authenticate_failure_market_root_v2, AuthenticatedFailureMarketRootV2,
+    authenticate_failure_market_root_v3, AuthenticatedFailureMarketRootV3,
 };
 use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, SYSTEM_PROGRAM_ID,
@@ -192,7 +192,7 @@ pub(crate) fn initialize_failure_market_replay_v2<'a>(
     replay_account: &AccountInfo<'a>,
     rent_sysvar: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     product_preallocation: AuthenticatedMarketFoundationPreallocationV3,
 ) -> Outcome<FailureMarketReplayPostimageV2> {
     require_system_program(system_program)?;
@@ -203,7 +203,7 @@ pub(crate) fn initialize_failure_market_replay_v2<'a>(
         system_program.clone(),
     ])?;
     let live_admission =
-        authenticate_failure_market_root_v2(program_id, admission_root_account, false)?;
+        authenticate_failure_market_root_v3(program_id, admission_root_account, false)?;
     require(live_admission == admission, ClutchError::MismatchedState)?;
     let admission = live_admission;
     let admission_state = admission.state();
@@ -348,7 +348,7 @@ pub(crate) fn initialize_failure_market_replay_v2<'a>(
 pub(crate) fn authenticate_failure_market_replay_v2<'a>(
     program_id: &Pubkey,
     replay_account: &AccountInfo<'a>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     funding: FailureMarketReplayFundingReceiptV2,
     writable: bool,
 ) -> Outcome<AuthenticatedFailureMarketReplayV2> {
@@ -430,7 +430,7 @@ pub(crate) fn authenticate_failure_market_replay_v2<'a>(
 pub(crate) fn reopen_failure_market_replay_v2<'a>(
     program_id: &Pubkey,
     replay_account: &AccountInfo<'a>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     preimage: FailureMarketReplayFundingPreimageV2,
     writable: bool,
 ) -> Outcome<AuthenticatedFailureMarketReplayV2> {
@@ -517,7 +517,7 @@ pub(crate) fn reopen_failure_market_replay_v2<'a>(
 pub(crate) fn write_failure_market_replay_terminal_v2<'a>(
     program_id: &Pubkey,
     replay_account: &AccountInfo<'a>,
-    admission: AuthenticatedFailureMarketRootV2,
+    admission: AuthenticatedFailureMarketRootV3,
     authenticated: AuthenticatedFailureMarketReplayV2,
     plan: FailureMarketReplayPlanV2,
     receipt: FailureMarketReplayTerminalReceiptV2,

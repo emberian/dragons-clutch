@@ -10,7 +10,7 @@
 use crate::accounts::{expect_pda, require, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::failure_market_admission::{
-    authenticate_failure_market_root_v2, AuthenticatedFailureMarketRootV2,
+    authenticate_failure_market_root_v3, AuthenticatedFailureMarketRootV3,
 };
 use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, SYSTEM_PROGRAM_ID,
@@ -235,11 +235,11 @@ pub fn authenticate_failure_market_runtime_root_v1<'a>(
     program_id: &Pubkey,
     admission_root_account: &AccountInfo<'a>,
     runtime_root: &AccountInfo<'a>,
-    admission_root: AuthenticatedFailureMarketRootV2,
+    admission_root: AuthenticatedFailureMarketRootV3,
     writable: bool,
 ) -> Outcome<AuthenticatedFailureMarketRuntimeRootV1> {
     let live_admission =
-        authenticate_failure_market_root_v2(program_id, admission_root_account, false)?;
+        authenticate_failure_market_root_v3(program_id, admission_root_account, false)?;
     require(
         live_admission == admission_root,
         ClutchError::MismatchedState,
@@ -318,7 +318,7 @@ pub(crate) fn initialize_failure_market_runtime_v1<'a, A>(
     runtime_root: &AccountInfo<'a>,
     rent_sysvar: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
-    admission_root: AuthenticatedFailureMarketRootV2,
+    admission_root: AuthenticatedFailureMarketRootV3,
     product_foundation_authority: &A,
     foundation_receipt_id: ProductContentId,
     root_funding: FailureMarketRuntimeRootFundingFactsV1,
@@ -327,7 +327,7 @@ where
     A: AuthenticatedFailureMarketRuntimeAdmissionV1 + ?Sized,
 {
     let live_admission =
-        authenticate_failure_market_root_v2(program_id, admission_root_account, false)?;
+        authenticate_failure_market_root_v3(program_id, admission_root_account, false)?;
     require(
         live_admission == admission_root,
         ClutchError::MismatchedState,
@@ -367,7 +367,7 @@ fn initialize_prefunded_failure_market_runtime_root_v1<'a>(
     runtime_root: &AccountInfo<'a>,
     rent_sysvar: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
-    admission_root: AuthenticatedFailureMarketRootV2,
+    admission_root: AuthenticatedFailureMarketRootV3,
     state: FailureMarketRuntimeV1,
 ) -> Outcome<AuthenticatedFailureMarketRuntimeRootV1> {
     require_system_program(system_program)?;
@@ -458,7 +458,7 @@ fn persist_failure_market_runtime_root_v1(
     program_id: &Pubkey,
     admission_root_account: &AccountInfo<'_>,
     runtime_root: &AccountInfo<'_>,
-    admission_root: AuthenticatedFailureMarketRootV2,
+    admission_root: AuthenticatedFailureMarketRootV3,
     state: FailureMarketRuntimeV1,
 ) -> Outcome<AuthenticatedFailureMarketRuntimeRootV1> {
     let policy = admission_root.state().binding().facts();
@@ -529,7 +529,7 @@ pub(crate) fn write_failure_market_runtime_session_plan_v1<
     program_id: &Pubkey,
     admission_root_account: &AccountInfo<'_>,
     runtime_root: &AccountInfo<'_>,
-    admission_root: AuthenticatedFailureMarketRootV2,
+    admission_root: AuthenticatedFailureMarketRootV3,
     authenticated: AuthenticatedFailureMarketRuntimeRootV1,
     plan: FailureMarketSessionTransitionPlanV1,
     authority: &A,
@@ -631,7 +631,7 @@ pub(crate) fn write_failure_market_runtime_begin_plan_v2<
     program_id: &Pubkey,
     admission_root_account: &AccountInfo<'_>,
     runtime_root: &AccountInfo<'_>,
-    admission_root: AuthenticatedFailureMarketRootV2,
+    admission_root: AuthenticatedFailureMarketRootV3,
     authenticated: AuthenticatedFailureMarketRuntimeRootV1,
     plan: FailureMarketSessionBeginPlanV2,
     authority: &A,
@@ -731,7 +731,7 @@ pub(crate) fn write_failure_market_runtime_source_failure_plan_v2<
     program_id: &Pubkey,
     admission_root_account: &AccountInfo<'_>,
     runtime_root: &AccountInfo<'_>,
-    admission_root: AuthenticatedFailureMarketRootV2,
+    admission_root: AuthenticatedFailureMarketRootV3,
     authenticated: AuthenticatedFailureMarketRuntimeRootV1,
     plan: FailureMarketSourceFailureTransitionPlanV2,
     authority: &A,
@@ -833,7 +833,7 @@ pub(crate) fn write_failure_market_runtime_source_failure_plan_v3<
     program_id: &Pubkey,
     admission_root_account: &AccountInfo<'_>,
     runtime_root: &AccountInfo<'_>,
-    admission_root: AuthenticatedFailureMarketRootV2,
+    admission_root: AuthenticatedFailureMarketRootV3,
     authenticated: AuthenticatedFailureMarketRuntimeRootV1,
     plan: FailureMarketSourceFailureTransitionPlanV3,
     authority: &A,
@@ -937,7 +937,7 @@ pub(crate) fn write_failure_market_runtime_terminal_plan_v2<'a>(
     program_id: &Pubkey,
     admission_root_account: &AccountInfo<'a>,
     runtime_root: &AccountInfo<'a>,
-    admission_root: AuthenticatedFailureMarketRootV2,
+    admission_root: AuthenticatedFailureMarketRootV3,
     authenticated: AuthenticatedFailureMarketRuntimeRootV1,
     plan: FailureMarketRuntimeTerminalPlanV2,
 ) -> Outcome<AuthenticatedFailureMarketRuntimeRootV1> {
