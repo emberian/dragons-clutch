@@ -33,7 +33,7 @@ use clutch_fractional_redemption_runtime::{
 use clutch_general_v2_contract::{
     complete_candidate_feed_v2, AdmissionNodeV4AccountV1,
     CandidateWindowV5AccountV1, ClearWorkV3AccountV1, EconomicDomainV2AccountV1,
-    EpochBudgetV2AccountV1, GeneralEpochV6AccountV1, MarketBindingV2, MarketRuntimeV3AccountV1,
+    EpochBudgetV2AccountV1, GeneralEpochV6AccountV1, MarketBindingV4, MarketRuntimeV3AccountV1,
     IndexedSettlementRootV1AccountV1, OwnerSettlementV5AccountV1,
     SettlementCashPotV1AccountV1, SettlementRootV1AccountV1, ADMISSION_NODE_ACCOUNT_TAG,
     ADMISSION_NODE_ACCOUNT_VERSION_V2,
@@ -42,7 +42,7 @@ use clutch_general_v2_contract::{
     ECONOMIC_DOMAIN_ACCOUNT_TAG, ECONOMIC_DOMAIN_ACCOUNT_VERSION, EPOCH_BUDGET_ACCOUNT_TAG,
     EPOCH_BUDGET_ACCOUNT_VERSION, FINAL_POT_ACCOUNT_BYTES, FINAL_POT_ACCOUNT_TAG,
     FINAL_POT_ACCOUNT_VERSION, GENERAL_EPOCH_ACCOUNT_TAG, GENERAL_EPOCH_ACCOUNT_VERSION,
-    MARKET_BINDING_ACCOUNT_TAG, MARKET_BINDING_ACCOUNT_VERSION_V2, MARKET_RUNTIME_ACCOUNT_TAG,
+    MARKET_BINDING_ACCOUNT_TAG, MARKET_BINDING_ACCOUNT_VERSION_V4, MARKET_RUNTIME_ACCOUNT_TAG,
     MARKET_RUNTIME_ACCOUNT_VERSION, OWNER_FEE_CARRY_ACCOUNT_BYTES, OWNER_FEE_CARRY_ACCOUNT_TAG,
     OWNER_FEE_CARRY_ACCOUNT_VERSION, OWNER_FEE_FINALIZATION_ACCOUNT_BYTES,
     OWNER_FEE_FINALIZATION_ACCOUNT_VERSION, OWNER_SETTLEMENT_ACCOUNT_TAG,
@@ -81,6 +81,12 @@ use clutch_solana_layout::failure_recovery::{
 use clutch_solana_layout::order_page_v5::OrderPageAccountV5;
 use clutch_solana_layout::product_series::{SeriesFundingAccountV1, SeriesRegistryAccountV1};
 use clutch_solana_layout::registry;
+use clutch_solana_layout::revenue::{
+    RevenuePolicyRecordV2, TreasuryServiceLedgerV1, REVENUE_POLICY_RECORD_BYTES_V2,
+    REVENUE_POLICY_RECORD_TAG, REVENUE_POLICY_RECORD_VERSION_V2,
+    TREASURY_SERVICE_LEDGER_V1_BYTES, TREASURY_SERVICE_LEDGER_V1_TAG,
+    TREASURY_SERVICE_LEDGER_V1_VERSION,
+};
 use clutch_solana_layout::reservation_v9::ReservationAccountV9;
 use clutch_solana_layout::settlement_receipt_v5::SettlementReceiptAccountV5;
 use clutch_source_plane_v3::{
@@ -192,6 +198,8 @@ pub enum CanonicalAccountKind {
     FeePayerAllocation,
     FeeRecipientAllocation,
     FeeTreasuryLedger,
+    RevenuePolicyRecordV2,
+    TreasuryServiceLedgerV1,
     LivenessPolicy,
     LivenessCompartment,
     PositionV3,
@@ -265,6 +273,8 @@ impl CanonicalAccountKind {
             Self::FeePayerAllocation => "fee-payer-allocation",
             Self::FeeRecipientAllocation => "fee-recipient-allocation",
             Self::FeeTreasuryLedger => "fee-treasury-ledger",
+            Self::RevenuePolicyRecordV2 => "revenue-policy-record-v2",
+            Self::TreasuryServiceLedgerV1 => "treasury-service-ledger-v1",
             Self::LivenessPolicy => "liveness-policy",
             Self::LivenessCompartment => "liveness-compartment",
             Self::PositionV3 => "position-v3",
@@ -583,16 +593,16 @@ fn decode_general(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
     } else if tag_version(
         data,
         MARKET_BINDING_ACCOUNT_TAG,
-        MARKET_BINDING_ACCOUNT_VERSION_V2,
+        MARKET_BINDING_ACCOUNT_VERSION_V4,
     ) {
         let value =
-            MarketBindingV2::decode(data).map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+            MarketBindingV4::decode(data).map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
         let mut projection = CanonicalAccountProjection::canonical(
             CanonicalFamily::General,
             CanonicalAccountKind::GeneralMarketBinding,
         );
-        projection.primary_binding = Some(value.base().market.bytes());
-        projection.secondary_binding = Some(value.base().market_instance_v2_id.bytes());
+        projection.primary_binding = Some(value.base().base().market.bytes());
+        projection.secondary_binding = Some(value.base().base().market_instance_v2_id.bytes());
         projection
     } else if tag_version(
         data,
@@ -998,6 +1008,42 @@ fn decode_source(
 }
 
 fn decode_fee(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
+    if tag_version(
+        data,
+        REVENUE_POLICY_RECORD_TAG,
+        REVENUE_POLICY_RECORD_VERSION_V2,
+    ) && data.len() == REVENUE_POLICY_RECORD_BYTES_V2
+    {
+        let value = RevenuePolicyRecordV2::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::contextual(
+            CanonicalFamily::Fees,
+            CanonicalAccountKind::RevenuePolicyRecordV2,
+            "exact RevenuePolicyV2 preimage and canonical Realm PDA",
+        );
+        projection.generation = Some(value.terminal_generation);
+        projection.primary_binding = Some(value.realm.bytes());
+        projection.secondary_binding = Some(value.policy_digest.bytes());
+        return Ok(Some(projection));
+    }
+    if tag_version(
+        data,
+        TREASURY_SERVICE_LEDGER_V1_TAG,
+        TREASURY_SERVICE_LEDGER_V1_VERSION,
+    ) && data.len() == TREASURY_SERVICE_LEDGER_V1_BYTES
+    {
+        let value = TreasuryServiceLedgerV1::decode(data)
+            .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
+        let mut projection = CanonicalAccountProjection::contextual(
+            CanonicalFamily::Fees,
+            CanonicalAccountKind::TreasuryServiceLedgerV1,
+            "current MarketBindingV4, ordinary treasury PositionV3, and ReplayV3",
+        );
+        projection.generation = Some(value.treasury_position_founding_generation);
+        projection.primary_binding = Some(value.market_instance_v2_id.bytes());
+        projection.secondary_binding = Some(value.treasury_position_account.bytes());
+        return Ok(Some(projection));
+    }
     let contextual = if tag_version(
         data,
         SELECTED_FEE_RECORD_ACCOUNT_TAG,
