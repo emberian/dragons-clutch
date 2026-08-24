@@ -61,6 +61,7 @@ use clutch_source_plane_v3_runtime::{
     SourceWorkScheduleBindingV1,
 };
 use clutch_structured_claim_runtime_contract::StructuredClaimActionV1;
+use clutch_fractional_redemption_runtime::FractionalRedemptionActionV1;
 use solana_address::Address;
 use solana_instruction::AccountMeta;
 use sha2::{Digest, Sha256};
@@ -459,6 +460,8 @@ pub enum WorkflowLane {
     /// Exact current Structured lifecycle actions derived from one finalized
     /// semantic-owner account frame rather than a generic keeper hint.
     StructuredLifecycle,
+    /// Exact chain-derived Fractional redemption lifecycle.
+    FractionalRedemption,
 }
 
 /// Deterministic cursor position derived from canonical account progress.
@@ -942,6 +945,7 @@ pub enum CanonicalActionCoordinate {
     },
     Series(RecurringSeriesAction),
     StructuredClaim(StructuredClaimActionV1),
+    FractionalRedemption(FractionalRedemptionActionV1),
 }
 
 /// Account absence observed by an untrusted reader. It can drive construction,

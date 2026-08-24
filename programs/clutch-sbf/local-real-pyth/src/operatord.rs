@@ -1237,6 +1237,7 @@ const fn protocol_flow_name(flow: ProtocolFlow) -> &'static str {
         ProtocolFlow::DirectEggSettlement => "direct-egg-settlement",
         ProtocolFlow::Liveness => "liveness",
         ProtocolFlow::ProductSeries => "product-series",
+        ProtocolFlow::FractionalRedemption => "fractional-redemption",
         ProtocolFlow::StructuredClaim => "structured-claim",
         ProtocolFlow::KeeperSettlement => "keeper-settlement",
         ProtocolFlow::RecoveryRetirement => "recovery-retirement",

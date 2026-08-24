@@ -3438,6 +3438,7 @@ const fn workflow_lane_byte(lane: crate::workflow_graph::WorkflowLane) -> u8 {
         crate::workflow_graph::WorkflowLane::KeeperReceipts => 3,
         crate::workflow_graph::WorkflowLane::RecoveryRetirement => 4,
         crate::workflow_graph::WorkflowLane::StructuredLifecycle => 5,
+        crate::workflow_graph::WorkflowLane::FractionalRedemption => 6,
     }
 }
 

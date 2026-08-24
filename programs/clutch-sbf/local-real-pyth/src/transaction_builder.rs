@@ -107,6 +107,7 @@ pub enum ProtocolFlow {
     DirectEggSettlement,
     Liveness,
     ProductSeries,
+    FractionalRedemption,
     StructuredClaim,
     KeeperSettlement,
     RecoveryRetirement,
@@ -238,6 +239,14 @@ pub enum OwnedWireContract {
     /// ordinal and therefore cannot be silently supplied by a launcher.
     MainSuccessorRequest {
         binding: SuccessorRegistryBinding,
+        sequence: u64,
+    },
+    /// Exact enabled outer replay request for one current Fractional
+    /// redemption action. The semantic owner fixes both payload width and the
+    /// complete account privilege bitmap.
+    FractionalRedemptionRequestV1 {
+        binding: SuccessorRegistryBinding,
+        action: clutch_fractional_redemption_runtime::FractionalRedemptionActionV1,
         sequence: u64,
     },
     /// Exact replay request for the allocated-but-disabled Direct `80/1`
@@ -511,6 +520,101 @@ impl OwnedInstructionDraft {
         Ok(value)
     }
 
+    /// Assemble the current exact internal Fractional redemption from bytes
+    /// produced by the chain-state constructor. No account vector, signer, or
+    /// payload shape can be weakened after this boundary.
+    pub(crate) fn enabled_fractional_redeem_internal_exact_v1(
+        action_name: impl Into<String>,
+        semantic_owner: SemanticOwner,
+        program_id: Address,
+        accounts: Vec<AccountMeta>,
+        equations: Vec<ExactEquation>,
+        sequence: u64,
+        payload: &[u8],
+    ) -> Result<Self> {
+        use clutch_fractional_redemption_runtime::{
+            fractional_account_contract_v1, FractionalRedeemIntentV1,
+            FractionalRedemptionActionV1,
+        };
+
+        let action = FractionalRedemptionActionV1::RedeemInternalExact;
+        let contract = fractional_account_contract_v1(action);
+        let intent = FractionalRedeemIntentV1::decode(payload)
+            .map_err(|_| ConstructionError::WrongWirePrefix)?;
+        if sequence == 0
+            || intent.expected_ledger_sequence != sequence
+            || intent.expected_credit_sequence != 0
+            || intent.expected_position_replay_sequence == 0
+            || intent.claim_source != intent.payout_target
+            || intent.credit_mode != 0
+            || accounts.len() != usize::from(contract.account_count)
+        {
+            return Err(ConstructionError::InvalidAccountContract);
+        }
+        let mut required_signers = Vec::new();
+        let mut identities = BTreeSet::new();
+        for (index, account) in accounts.iter().enumerate() {
+            let mask = 1_u32
+                .checked_shl(u32::try_from(index).map_err(|_| ConstructionError::InvalidAccountContract)?)
+                .ok_or(ConstructionError::InvalidAccountContract)?;
+            let expected_signer = contract.signer_mask & mask != 0;
+            let expected_writable = contract.writable_mask & mask != 0;
+            if account.is_signer != expected_signer
+                || account.is_writable != expected_writable
+                || !identities.insert(account.pubkey)
+            {
+                return Err(ConstructionError::InvalidAccountContract);
+            }
+            if expected_signer {
+                required_signers.push(account.pubkey);
+            }
+        }
+        if accounts[0].pubkey.to_bytes() != intent.claimant.bytes()
+            || accounts[11].pubkey.to_bytes() != intent.credit_or_policy.bytes()
+            || accounts[13].pubkey.to_bytes() != intent.claim_source.bytes()
+        {
+            return Err(ConstructionError::InvalidAccountContract);
+        }
+        let central_action = ExtensionAction::FractionalRedemption(action);
+        let binding = registry_binding(
+            ExtensionFamily::FractionalRedemption,
+            action.tag(),
+            Some(central_action),
+        )?;
+        let request = ExtensionRequest {
+            sequence,
+            envelope: ExtensionEnvelope {
+                family: ExtensionFamily::FractionalRedemption,
+                action: central_action,
+                payload,
+            },
+        };
+        let mut data = vec![0; 13 + EXTENSION_ENVELOPE_BYTES + payload.len()];
+        let exact = request
+            .encode(&mut data)
+            .map_err(|_| ConstructionError::WrongWireLength)?;
+        data.truncate(exact);
+        let value = Self {
+            flow: ProtocolFlow::FractionalRedemption,
+            action_name: action_name.into(),
+            semantic_owner,
+            program_id,
+            accounts,
+            required_signers,
+            equations,
+            registry_binding: Some(binding),
+            runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
+            wire: OwnedWireContract::FractionalRedemptionRequestV1 {
+                binding,
+                action,
+                sequence,
+            },
+            data,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Assemble one current Structured wrapper call through the semantic
     /// owner's exact action/count/privilege contract. The wrapper program, not
     /// the central base, is the instruction target. Payload bytes must already
@@ -734,6 +838,9 @@ impl OwnedInstructionDraft {
                     ProtocolFlow::ProductSeries | ProtocolFlow::SourcePlaneV3 => {
                         family == ExtensionFamily::SourceSeries
                     }
+                    ProtocolFlow::FractionalRedemption => {
+                        family == ExtensionFamily::FractionalRedemption
+                    }
                     ProtocolFlow::StructuredClaim => family == ExtensionFamily::StructuredClaim,
                     ProtocolFlow::CollateralCustodyV3
                     | ProtocolFlow::DirectMarketV1
@@ -785,6 +892,59 @@ impl OwnedInstructionDraft {
                     .collect::<Vec<_>>();
                 validate_account_metas_v2(action, &observed)
                     .map_err(|_| ConstructionError::InvalidAccountContract)?;
+            }
+            OwnedWireContract::FractionalRedemptionRequestV1 {
+                binding,
+                action,
+                sequence,
+            } => {
+                use clutch_fractional_redemption_runtime::{
+                    fractional_account_contract_v1, FractionalRedeemIntentV1,
+                    FractionalRedemptionActionV1,
+                };
+
+                let request = ExtensionRequest::decode(&self.data)
+                    .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                if action != FractionalRedemptionActionV1::RedeemInternalExact
+                    || sequence == 0
+                    || request.sequence != sequence
+                    || request.envelope.family != ExtensionFamily::FractionalRedemption
+                    || request.envelope.action != ExtensionAction::FractionalRedemption(action)
+                    || self.registry_binding != Some(binding)
+                    || binding.family != ExtensionFamily::FractionalRedemption
+                    || binding.local_action != action.tag()
+                    || binding.family.allocation_status() != Some(binding.family_status)
+                    || binding.central_action != Some(ExtensionAction::FractionalRedemption(action))
+                    || self.flow != ProtocolFlow::FractionalRedemption
+                    || self.runtime_admission != RuntimeAdmission::ReleaseBoundEnabled
+                {
+                    return Err(ConstructionError::UnallocatedRegistryCoordinate);
+                }
+                let intent = FractionalRedeemIntentV1::decode(request.envelope.payload)
+                    .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                let contract = fractional_account_contract_v1(action);
+                if intent.expected_ledger_sequence != sequence
+                    || intent.expected_credit_sequence != 0
+                    || intent.expected_position_replay_sequence == 0
+                    || intent.claim_source != intent.payout_target
+                    || intent.credit_mode != 0
+                    || self.accounts.len() != usize::from(contract.account_count)
+                    || self.accounts[0].pubkey.to_bytes() != intent.claimant.bytes()
+                    || self.accounts[11].pubkey.to_bytes() != intent.credit_or_policy.bytes()
+                    || self.accounts[13].pubkey.to_bytes() != intent.claim_source.bytes()
+                {
+                    return Err(ConstructionError::InvalidAccountContract);
+                }
+                for (index, account) in self.accounts.iter().enumerate() {
+                    let mask = 1_u32
+                        .checked_shl(u32::try_from(index).map_err(|_| ConstructionError::InvalidAccountContract)?)
+                        .ok_or(ConstructionError::InvalidAccountContract)?;
+                    if account.is_signer != (contract.signer_mask & mask != 0)
+                        || account.is_writable != (contract.writable_mask & mask != 0)
+                    {
+                        return Err(ConstructionError::InvalidAccountContract);
+                    }
+                }
             }
             OwnedWireContract::DisabledDirectMarketRequestV1 { binding, sequence } => {
                 let request = ExtensionRequest::decode(&self.data)
@@ -1089,11 +1249,25 @@ impl ProtocolTransactionBuilder {
                 draft.wire,
                 OwnedWireContract::MainSuccessor { .. }
                     | OwnedWireContract::MainSuccessorRequest { .. }
+                    | OwnedWireContract::FractionalRedemptionRequestV1 { .. }
                     | OwnedWireContract::DisabledDirectMarketRequestV1 { .. }
                     | OwnedWireContract::CollateralReplayRequestV3 { .. }
             ) && draft.program_id != self.clutch_program
             {
                 return Err(ConstructionError::ForeignProgram);
+            }
+            if matches!(
+                draft.wire,
+                OwnedWireContract::FractionalRedemptionRequestV1 {
+                    action: clutch_fractional_redemption_runtime::FractionalRedemptionActionV1::RedeemInternalExact,
+                    ..
+                }
+            ) && draft.accounts.first().map(|account| account.pubkey) == Some(self.payer)
+            {
+                // The exact internal claimant role is read-only. Solana makes
+                // the transaction payer globally writable after privilege
+                // union, so that alias is not an executable transaction.
+                return Err(ConstructionError::InvalidAccountContract);
             }
             if matches!(
                 draft.wire,
