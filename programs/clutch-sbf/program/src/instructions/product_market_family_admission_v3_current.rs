@@ -283,7 +283,7 @@ where
                     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
             && replay_binding.market_family_capability_policy_id == family_policy.policy_id()
             && replay_binding.market_family_capability_authentication_id
-                == family_policy.id()
+                == family_policy.founder_artifact_authentication_id()
             && current_families.binding() == family_policy.aggregator().binding()
             && current_families.admits_new_child(family)
             && family_namespace_anchor_id
