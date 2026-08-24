@@ -112,10 +112,12 @@ impl SourceFundingCustodyLifecycleTerminalFactsV1 {
 /// Default-refusing boundary implemented only by Failure's exact final
 /// successful or SourceAbsent/SourceRefused postwrite.
 pub(crate) trait AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1 {
-    fn authenticate_source_funding_custody_lifecycle_terminal_v1(
+    /// Return the exact terminal tuple retained by the final Failure/Product
+    /// postwrite. No instruction payload or caller projection supplies these
+    /// identities.
+    fn source_funding_custody_lifecycle_terminal_facts_v1(
         &self,
-        _expected: SourceFundingCustodyLifecycleTerminalFactsV1,
-    ) -> Outcome<()> {
+    ) -> Outcome<SourceFundingCustodyLifecycleTerminalFactsV1> {
         Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
     }
 }
@@ -146,8 +148,8 @@ pub(crate) fn authenticate_source_funding_custody_lifecycle_terminal_v1<
     route: AuthenticatedSourceRouteV1,
     schedule: SourceWorkScheduleBindingV1,
     custody: AuthenticatedSourceFundingCustodyV1,
-    expected: SourceFundingCustodyLifecycleTerminalFactsV1,
 ) -> Outcome<AuthenticatedSourceFundingCustodyLifecycleTerminalV1> {
+    let expected = authority.source_funding_custody_lifecycle_terminal_facts_v1()?;
     let ids = [
         expected.capitalization_receipt_id,
         expected.pre_root_source_occurrence_id,
@@ -190,7 +192,6 @@ pub(crate) fn authenticate_source_funding_custody_lifecycle_terminal_v1<
             && expected.lamport_principal_refund != expected.neutral_lamport_sink,
         ClutchError::MismatchedState,
     )?;
-    authority.authenticate_source_funding_custody_lifecycle_terminal_v1(expected)?;
     let id = expected.id();
     require(!id.is_zero(), ClutchError::MismatchedState)?;
     Ok(AuthenticatedSourceFundingCustodyLifecycleTerminalV1 { id, facts: expected })
@@ -545,6 +546,26 @@ mod adversarial_tests {
             SourceFundingCustodyTerminalDispositionV1::SourceRefused.wire_byte(),
             3
         );
+    }
+
+    #[test]
+    fn lifecycle_terminal_facts_come_only_from_final_failure_authority() {
+        let source = include_str!("source_funding_custody_retirement_v1.rs");
+        let authenticate = source
+            .split("pub(crate) fn authenticate_source_funding_custody_lifecycle_terminal_v1")
+            .nth(1)
+            .and_then(|value| {
+                value
+                    .split("/// Product-owned terminal identities")
+                    .next()
+            })
+            .expect("bounded lifecycle terminal authentication");
+        assert!(authenticate.contains(
+            "authority.source_funding_custody_lifecycle_terminal_facts_v1()?"
+        ));
+        assert!(!authenticate.contains(
+            "expected: SourceFundingCustodyLifecycleTerminalFactsV1"
+        ));
     }
 
     #[test]
