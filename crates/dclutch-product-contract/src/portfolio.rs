@@ -17,6 +17,11 @@ pub const MAX_PORTFOLIO_CLAIMS: usize = 16;
 pub const PORTFOLIO_TEMPLATE_MAGIC: [u8; 8] = *b"DCLTPFT1";
 /// Implemented portfolio-template schema version.
 pub const PORTFOLIO_TEMPLATE_SCHEMA_VERSION: u16 = 1;
+/// Canonical content-identity byte domain for a portfolio-template preimage.
+///
+/// Hash derivation is an adapter concern; this Product-owned value names the
+/// semantic namespace that adapters must supply when identifying this record.
+pub const PORTFOLIO_TEMPLATE_CONTENT_DOMAIN_V1: &[u8] = b"dclutch.portfolio-template.v1";
 
 const CLAIM_BASIS_ID_OFFSET: usize = 16;
 const RESULT_DOMAIN_ID_OFFSET: usize = 48;

@@ -19,7 +19,9 @@ use core::fmt;
 
 use dclutch_product_contract::capacity::{CapacityProfileId, CapacityProfileV1};
 use dclutch_product_contract::claim::{CategoricalUnitV1, CategoricalUnitV1Input};
-use dclutch_product_contract::portfolio::PortfolioTemplateV1;
+use dclutch_product_contract::portfolio::{
+    PORTFOLIO_TEMPLATE_CONTENT_DOMAIN_V1, PortfolioTemplateV1,
+};
 use dclutch_product_contract::product::{
     InstanceV1, InstanceV1Input, OccurrenceV1, OccurrenceV1Input, TermsV1, TermsV1Input,
 };
@@ -383,7 +385,7 @@ pub fn compile<const N: usize>(
     let mut portfolio_template_bytes = vec![0; PortfolioTemplateV1::<N>::encoded_len()?];
     portfolio_template.encode(&mut portfolio_template_bytes)?;
     let portfolio_template_id =
-        content_id(b"dclutch.portfolio-template.v1", &portfolio_template_bytes)?;
+        content_id(PORTFOLIO_TEMPLATE_CONTENT_DOMAIN_V1, &portfolio_template_bytes)?;
     let certificate = CompilerCertificate {
         version: CERTIFICATE_VERSION,
         shape_commitment: shape_commitment(&request.domain, &request.shape)?,
@@ -484,7 +486,7 @@ pub fn recheck<const N: usize>(
     let occurrence_id = content_id(b"dclutch.occurrence.v1", &occurrence.to_bytes())?;
     let claim_basis_id = content_id(b"dclutch.claim-basis.v1", &claim_basis.to_bytes())?;
     let portfolio_template_id = content_id(
-        b"dclutch.portfolio-template.v1",
+        PORTFOLIO_TEMPLATE_CONTENT_DOMAIN_V1,
         &output.portfolio_template_bytes,
     )?;
     let instance_id = content_id(b"dclutch.instance.v1", &instance.to_bytes())?;
@@ -1239,6 +1241,45 @@ mod tests {
             &substitute.to_bytes(),
         )
         .expect("substitute identity");
+        assert_ne!(substitute_id, expected_id);
+    }
+
+    #[test]
+    fn portfolio_template_identity_uses_product_namespace_and_exact_bytes() {
+        assert_eq!(
+            PORTFOLIO_TEMPLATE_CONTENT_DOMAIN_V1,
+            b"dclutch.portfolio-template.v1"
+        );
+        let request = request::<3>(ProductShape::BinaryThreshold {
+            threshold: 60,
+            payout: ExactAmount {
+                numerator: 1,
+                denominator: 1,
+            },
+            failure_payout: ExactAmount::ZERO,
+        });
+        let compiled = compile(&request).expect("compiled");
+        let expected_id = content_id(
+            PORTFOLIO_TEMPLATE_CONTENT_DOMAIN_V1,
+            &compiled.portfolio_template_bytes,
+        )
+        .expect("portfolio-template identity");
+        assert_eq!(compiled.certificate.portfolio_template_id, expected_id);
+
+        let substitute = PortfolioTemplateV1::new(
+            compiled.instance.claim_basis_id(),
+            compiled.instance.result_domain_id(),
+            [1, 0, 0],
+            1,
+        )
+        .expect("same-width substitute");
+        let mut substitute_bytes = vec![0; PortfolioTemplateV1::<3>::encoded_len().expect("width")];
+        substitute
+            .encode(&mut substitute_bytes)
+            .expect("substitute encoding");
+        assert_ne!(substitute_bytes, compiled.portfolio_template_bytes);
+        let substitute_id = content_id(PORTFOLIO_TEMPLATE_CONTENT_DOMAIN_V1, &substitute_bytes)
+            .expect("substitute identity");
         assert_ne!(substitute_id, expected_id);
     }
 }
