@@ -22,7 +22,8 @@ use clutch_product_series::{
     AuthenticatedMarketFamilyAuthorityV1, MarketFamilyAggregatorV1, MarketFamilyStatusV1,
     MarketFamilyV1,
     MarketLifecyclePhaseV2, MarketLifecycleRootV2, MarketResolutionActivationV2,
-    AuthenticatedSeriesFundingAuthorityV4, SeriesFundingReservationBindingV4,
+    AuthenticatedSeriesFundingAuthorityV4, SeriesFundingCompletionBindingV4,
+    SeriesFundingCompletionBindingV4Id, SeriesFundingReservationBindingV4,
     SeriesFundingReservationBindingV4Id, SeriesFundingStateV3, SeriesFundingStateV4,
     SeriesFundingStateV4Id,
     AuthenticatedSeriesFundingAuthorityV3, SeriesFundingComponentV2,
@@ -59,6 +60,10 @@ const SERIES_FUNDING_AUTHENTICATION_DOMAIN_V4: &[u8] =
     b"dragons-clutch/series-funding-account-authentication/v4\0";
 const SERIES_FUNDING_RESERVATION_POSTWRITE_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/series-funding-reservation-postwrite/v4\0";
+const SERIES_FUNDING_COMPLETION_POSTWRITE_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/sbf/series-funding-completion-postwrite/v4\0";
+const SERIES_FUNDING_COMPLETION_AUTHORIZATION_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/sbf/series-funding-completion-authorization/v4\0";
 const SERIES_LIFECYCLE_REPLAY_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-lifecycle-replay-authentication/v2\0";
 const MARKET_LIFECYCLE_AUTHENTICATION_DOMAIN_V2: &[u8] =
@@ -339,6 +344,57 @@ impl AuthenticatedProductSeriesFundingReservationV4 {
     }
     pub(crate) const fn pending(&self) -> &AuthenticatedSeriesFundingAccountV4 {
         &self.pending
+    }
+}
+
+/// Exact hostile Pending→Active/Closed postwrite produced only after the
+/// Source/Root/Link/replay completion join is physically persisted.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedProductSeriesFundingCompletionV4 {
+    id: ContentId,
+    completion_binding_id: SeriesFundingCompletionBindingV4Id,
+    reservation_postwrite_id: ContentId,
+    funding_account: Pubkey,
+    funding_state_before_id: SeriesFundingStateV4Id,
+    funding_state_after_id: SeriesFundingStateV4Id,
+    funding_data_before_id: ContentId,
+    funding_data_after_id: ContentId,
+    funding_authentication_before_id: ContentId,
+    funding_authentication_after_id: ContentId,
+    completed_ordinal: u32,
+    rebound: AuthenticatedSeriesFundingAccountV4,
+}
+
+impl AuthenticatedProductSeriesFundingCompletionV4 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn completion_binding_id(&self) -> SeriesFundingCompletionBindingV4Id {
+        self.completion_binding_id
+    }
+    pub(crate) const fn reservation_postwrite_id(&self) -> ContentId {
+        self.reservation_postwrite_id
+    }
+    pub(crate) const fn funding_account(&self) -> Pubkey { self.funding_account }
+    pub(crate) const fn funding_state_before_id(&self) -> SeriesFundingStateV4Id {
+        self.funding_state_before_id
+    }
+    pub(crate) const fn funding_state_after_id(&self) -> SeriesFundingStateV4Id {
+        self.funding_state_after_id
+    }
+    pub(crate) const fn funding_data_before_id(&self) -> ContentId {
+        self.funding_data_before_id
+    }
+    pub(crate) const fn funding_data_after_id(&self) -> ContentId {
+        self.funding_data_after_id
+    }
+    pub(crate) const fn funding_authentication_before_id(&self) -> ContentId {
+        self.funding_authentication_before_id
+    }
+    pub(crate) const fn funding_authentication_after_id(&self) -> ContentId {
+        self.funding_authentication_after_id
+    }
+    pub(crate) const fn completed_ordinal(&self) -> u32 { self.completed_ordinal }
+    pub(crate) const fn rebound(&self) -> &AuthenticatedSeriesFundingAccountV4 {
+        &self.rebound
     }
 }
 
@@ -2802,6 +2858,82 @@ struct ExactSeriesFundingReservationAuthorityV4 {
     reservation_receipt_id: ContentId,
 }
 
+#[derive(Debug)]
+struct ExactSeriesFundingCompletionAuthorityV4 {
+    state_before_id: SeriesFundingStateV4Id,
+    binding_id: SeriesFundingCompletionBindingV4Id,
+    completion_receipt_id: ContentId,
+}
+
+impl AuthenticatedSeriesFundingAuthorityV4 for ExactSeriesFundingCompletionAuthorityV4 {
+    fn authenticate_activation(
+        &self,
+        _series: &SeriesPlanV5,
+        _funding_terms_id: SeriesFundingTermsV2Id,
+        _compiler_bundle_id: clutch_product_series::CompiledProductSeriesBundleV6Id,
+        _quote: &SeriesFundingQuoteV5,
+        _attachment: &SeriesAttachmentPlanV5,
+        _principal: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+        _donations: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn current_bucket(&self, _series: &SeriesPlanV5) -> clutch_product_series::Result<u64> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_reservation(
+        &self,
+        _state: &SeriesFundingStateV4,
+        _binding: &SeriesFundingReservationBindingV4,
+        _reservation_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_pending_completion(
+        &self,
+        state: &SeriesFundingStateV4,
+        binding: &SeriesFundingCompletionBindingV4,
+        completion_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        if state.id()? != self.state_before_id
+            || binding.id()? != self.binding_id
+            || completion_receipt_id != self.completion_receipt_id
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+
+    fn authenticate_pending_abort(
+        &self,
+        _state: &SeriesFundingStateV4,
+        _binding: &clutch_product_series::SeriesFundingAbortBindingV4,
+        _abort_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_donation(
+        &self,
+        _state: &SeriesFundingStateV4,
+        _component: SeriesFundingComponentV2,
+        _amount: ComponentDebitV1,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+
+    fn authenticate_close(
+        &self,
+        _state: &SeriesFundingStateV4,
+        _terminal_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        Err(clutch_product_series::Error::UnauthenticatedAuthority)
+    }
+}
+
 impl AuthenticatedSeriesFundingAuthorityV4 for ExactSeriesFundingReservationAuthorityV4 {
     fn authenticate_activation(
         &self,
@@ -2971,6 +3103,126 @@ fn reserve_series_funding_v4_with_binding(
         funding_data_before_id: before_data_id,
         funding_authentication_before_id: before_authentication_id,
         pending: rebound,
+    })
+}
+
+/// Private final FundingV4 completion half. Its caller must have already
+/// persisted the exact Source, RootV2, LinkV2, and replay poststates named by
+/// `binding`; Funding clears Pending last and returns one hostile postwrite.
+#[inline(never)]
+fn complete_series_funding_v4_with_binding(
+    program_id: &Pubkey,
+    funding_account: &AccountInfo<'_>,
+    reservation: AuthenticatedProductSeriesFundingReservationV4,
+    series: &SeriesPlanV5,
+    quote: &SeriesFundingQuoteV5,
+    attachment: &SeriesAttachmentPlanV5,
+    binding: SeriesFundingCompletionBindingV4,
+) -> Outcome<AuthenticatedProductSeriesFundingCompletionV4> {
+    let reservation_binding_id = reservation
+        .binding()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let binding_id = binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let before_state_id = reservation.funding_state_pending_id()?;
+    require(
+        reservation.funding_account() == *funding_account.key
+            && reservation.pending().is_writable()
+            && reservation.pending().account() == *funding_account.key
+            && reservation.pending().state().phase
+                == clutch_product_series::SeriesFundingPhaseV4::Pending
+            && binding.reservation_binding_id == reservation_binding_id
+            && binding.funding_account_id.bytes() == funding_account.key.to_bytes()
+            && binding.funding_account_authentication_pending_id
+                == reservation.funding_authentication_pending_id()
+            && binding.funding_pending_state_id == before_state_id,
+        ClutchError::MismatchedState,
+    )?;
+    let completion_receipt_id = hashv(&[
+        SERIES_FUNDING_COMPLETION_AUTHORIZATION_DOMAIN_V4,
+        program_id.as_ref(),
+        funding_account.key.as_ref(),
+        &reservation.id().bytes(),
+        &reservation_binding_id.bytes(),
+        &binding_id.bytes(),
+        &before_state_id.bytes(),
+        &reservation.funding_data_pending_id().bytes(),
+        &reservation.funding_authentication_pending_id().bytes(),
+    ]);
+    require_live(completion_receipt_id)?;
+    let authority = ExactSeriesFundingCompletionAuthorityV4 {
+        state_before_id: before_state_id,
+        binding_id,
+        completion_receipt_id,
+    };
+    let mut successor = *reservation.pending().state();
+    let completed_ordinal = successor
+        .complete_pending(
+            &authority,
+            series,
+            quote,
+            attachment,
+            &binding,
+            completion_receipt_id,
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        completed_ordinal == reservation.binding().ordinal,
+        ClutchError::MismatchedState,
+    )?;
+    let reservation_postwrite_id = reservation.id();
+    let before_data_id = reservation.funding_data_pending_id();
+    let before_authentication_id = reservation.funding_authentication_pending_id();
+    let rebound = write_series_funding_state_v4(
+        program_id,
+        funding_account,
+        reservation.pending,
+        successor,
+    )?;
+    let after_state_id = rebound
+        .state()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        rebound.state().phase != clutch_product_series::SeriesFundingPhaseV4::Pending
+            && rebound.state().pending_pre_source_reservation_binding_id.is_zero()
+            && rebound.state().pending_reservation_receipt_id.is_zero()
+            && rebound.state().pending_clock_receipt_id.is_zero()
+            && rebound.state().pending_clock_bucket == 0,
+        ClutchError::MismatchedState,
+    )?;
+    let id = hashv(&[
+        SERIES_FUNDING_COMPLETION_POSTWRITE_DOMAIN_V4,
+        program_id.as_ref(),
+        funding_account.key.as_ref(),
+        &reservation_postwrite_id.bytes(),
+        &reservation_binding_id.bytes(),
+        &binding_id.bytes(),
+        &completion_receipt_id.bytes(),
+        &before_state_id.bytes(),
+        &after_state_id.bytes(),
+        &before_data_id.bytes(),
+        &rebound.data_id().bytes(),
+        &before_authentication_id.bytes(),
+        &rebound.authentication_id().bytes(),
+        &completed_ordinal.to_le_bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedProductSeriesFundingCompletionV4 {
+        id,
+        completion_binding_id: binding_id,
+        reservation_postwrite_id,
+        funding_account: *funding_account.key,
+        funding_state_before_id: before_state_id,
+        funding_state_after_id: after_state_id,
+        funding_data_before_id: before_data_id,
+        funding_data_after_id: rebound.data_id(),
+        funding_authentication_before_id: before_authentication_id,
+        funding_authentication_after_id: rebound.authentication_id(),
+        completed_ordinal,
+        rebound,
     })
 }
 
@@ -4911,6 +5163,17 @@ mod source_contract_tests {
         ));
         assert!(source.contains(
             "pending_clock_receipt_id == binding.clock_receipt_id"
+        ));
+        assert!(source.contains("fn complete_series_funding_v4_with_binding("));
+        assert!(!source.contains(
+            "pub(crate) fn complete_series_funding_v4_with_binding("
+        ));
+        assert!(source.contains("SERIES_FUNDING_COMPLETION_AUTHORIZATION_DOMAIN_V4"));
+        assert!(source.contains(
+            "binding.funding_account_authentication_pending_id\n                == reservation.funding_authentication_pending_id()"
+        ));
+        assert!(source.contains(
+            "rebound.state().pending_pre_source_reservation_binding_id.is_zero()"
         ));
     }
 
