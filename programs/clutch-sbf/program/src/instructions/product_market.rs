@@ -68,6 +68,10 @@ const SERIES_WRAPPER_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-wrapper-authentication/v1";
 const SERIES_WRAPPER_TERMINAL_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-wrapper-terminal-authentication/v1";
+const SERIES_DEALER_AUTHENTICATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/series-dealer-authentication/v1";
+const SERIES_DEALER_ADMISSION_AUTHENTICATION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/series-dealer-admission-authentication/v1";
 const SERIES_FAILURE_RELEASE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-failure-release-authentication/v1";
 const SERIES_FAILURE_RESOLUTION_LINK_PREAUTHORIZATION_DOMAIN_V1: &[u8] =
@@ -1475,6 +1479,48 @@ pub struct AuthenticatedSeriesWrapperAuthorizationV1 {
     link_transition_sequence: u64,
 }
 
+/// Private Product authorization for one exact facility-lifetime Dealer
+/// obligation.  The Dealer adapter may consume this value only while it also
+/// creates the counted obligation account and promotes its State account; it
+/// is not a caller-shaped projection of a Product link.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSeriesDealerAuthorizationV1 {
+    id: ContentId,
+    link_account: Pubkey,
+    link_authentication_id: ContentId,
+    link_semantic_id: SeriesMarketLinkV1Id,
+    link_binding_id: ContentId,
+    product_market_root_account: Pubkey,
+    product_market_binding_id: ContentId,
+    dealer_obligation_configuration_id: ContentId,
+    series_plan_id: SeriesPlanV5Id,
+    ordinal: u32,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    attachment_plan_id: ContentId,
+    compiler_bundle_id: ContentId,
+    capability_profile_id: ContentId,
+    liquidity_facility_plan_id: ContentId,
+    rent_refund_owner: ContentId,
+    neutral_lamport_sink: ContentId,
+    dealer_status: SeriesLinkObligationStatusV1,
+    dealer_admission_receipt_id: ContentId,
+    link_transition_sequence: u64,
+}
+
+/// Hostile-reauthenticated Product postwrite for the first Dealer obligation.
+/// The borrowed rebound prevents a sibling module from retaining only a tuple
+/// of IDs and dropping the exact Product account poststate.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSeriesDealerAdmissionV1<'state> {
+    id: ContentId,
+    authorization: AuthenticatedSeriesDealerAuthorizationV1,
+    link_authentication_after: ContentId,
+    link_semantic_after: SeriesMarketLinkV1Id,
+    product_admission_projection_id: ContentId,
+    rebound: AuthenticatedSeriesMarketLinkV1<'state>,
+}
+
 /// Default-refusing Structured owner consumed by the Product Wrapper terminalizer.
 ///
 /// Implementations must be private postwrite receipts which prove the complete
@@ -1884,6 +1930,125 @@ impl AuthenticatedSeriesFailureSessionReleaseV1 {
     }
 }
 
+impl AuthenticatedSeriesDealerAuthorizationV1 {
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn link_account(self) -> Pubkey {
+        self.link_account
+    }
+
+    pub(crate) const fn link_authentication_id(self) -> ContentId {
+        self.link_authentication_id
+    }
+
+    pub(crate) const fn link_semantic_id(self) -> SeriesMarketLinkV1Id {
+        self.link_semantic_id
+    }
+
+    pub(crate) const fn link_binding_id(self) -> ContentId {
+        self.link_binding_id
+    }
+
+    pub(crate) const fn product_market_root_account(self) -> Pubkey {
+        self.product_market_root_account
+    }
+
+    pub(crate) const fn product_market_binding_id(self) -> ContentId {
+        self.product_market_binding_id
+    }
+
+    pub(crate) const fn dealer_obligation_configuration_id(self) -> ContentId {
+        self.dealer_obligation_configuration_id
+    }
+
+    pub(crate) const fn series_plan_id(self) -> SeriesPlanV5Id {
+        self.series_plan_id
+    }
+
+    pub(crate) const fn ordinal(self) -> u32 {
+        self.ordinal
+    }
+
+    pub(crate) const fn market_instance_id(self) -> MarketInstanceV2Id {
+        self.market_instance_id
+    }
+
+    pub(crate) const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    pub(crate) const fn attachment_plan_id(self) -> ContentId {
+        self.attachment_plan_id
+    }
+
+    pub(crate) const fn compiler_bundle_id(self) -> ContentId {
+        self.compiler_bundle_id
+    }
+
+    pub(crate) const fn capability_profile_id(self) -> ContentId {
+        self.capability_profile_id
+    }
+
+    pub(crate) const fn liquidity_facility_plan_id(self) -> ContentId {
+        self.liquidity_facility_plan_id
+    }
+
+    pub(crate) const fn rent_refund_owner(self) -> ContentId {
+        self.rent_refund_owner
+    }
+
+    pub(crate) const fn neutral_lamport_sink(self) -> ContentId {
+        self.neutral_lamport_sink
+    }
+
+    pub(crate) const fn dealer_status(self) -> SeriesLinkObligationStatusV1 {
+        self.dealer_status
+    }
+
+    pub(crate) const fn dealer_admission_receipt_id(self) -> ContentId {
+        self.dealer_admission_receipt_id
+    }
+
+    pub(crate) const fn link_transition_sequence(self) -> u64 {
+        self.link_transition_sequence
+    }
+
+    pub(crate) const fn requires_product_admission(self) -> bool {
+        matches!(
+            self.dealer_status,
+            SeriesLinkObligationStatusV1::EnabledNeverFounded
+        )
+    }
+}
+
+impl<'state> AuthenticatedSeriesDealerAdmissionV1<'state> {
+    pub(crate) const fn id(&self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn authorization(&self) -> AuthenticatedSeriesDealerAuthorizationV1 {
+        self.authorization
+    }
+
+    pub(crate) const fn link_authentication_after(&self) -> ContentId {
+        self.link_authentication_after
+    }
+
+    pub(crate) const fn link_semantic_after(&self) -> SeriesMarketLinkV1Id {
+        self.link_semantic_after
+    }
+
+    pub(crate) const fn product_admission_projection_id(&self) -> ContentId {
+        self.product_admission_projection_id
+    }
+
+    pub(crate) const fn rebound(&self) -> AuthenticatedSeriesMarketLinkV1<'state> {
+        self.rebound
+    }
+}
+
 impl AuthenticatedSeriesWrapperAuthorizationV1 {
     /// Authorization identity.
     pub const fn id(self) -> ContentId {
@@ -1968,6 +2133,109 @@ impl AuthenticatedSeriesWrapperAuthorizationV1 {
             SeriesLinkObligationStatusV1::EnabledNeverFounded
         )
     }
+}
+
+/// Join an authenticated active link to the exact V5 compiler bundle and V4
+/// attachment which select its facility plan.  The Product link remains the
+/// sole owner of obligation status and transition sequence.
+pub(crate) fn authenticate_series_dealer_authorization_v1(
+    program_id: &Pubkey,
+    link: AuthenticatedSeriesMarketLinkV1<'_>,
+    compiler_bundle_account: &AccountInfo<'_>,
+    attachment_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedSeriesDealerAuthorizationV1> {
+    let binding = link.state().binding();
+    let dealer_status = link
+        .state()
+        .obligation_status(SeriesLinkObligationV1::Dealer);
+    require(
+        link.state().phase() == SeriesMarketLinkPhaseV1::Active
+            && matches!(
+                dealer_status,
+                SeriesLinkObligationStatusV1::EnabledNeverFounded
+                    | SeriesLinkObligationStatusV1::Live
+            )
+            && (dealer_status == SeriesLinkObligationStatusV1::Live || link.is_writable()),
+        ClutchError::MismatchedState,
+    )?;
+    let bundle = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV5>(
+        program_id,
+        compiler_bundle_account,
+        binding.compiler_output_id,
+    )?;
+    let attachment = authenticate_product_artifact_v1::<SeriesAttachmentPlanV4>(
+        program_id,
+        attachment_account,
+        binding.attachment_plan_id,
+    )?;
+    let attachment_id = attachment
+        .value()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        bundle.value().series_plan_id == binding.series_plan_id
+            && bundle.value().funding_quote_id == binding.funding_quote_id
+            && bundle.value().attachment_plan_id.content_id() == binding.attachment_plan_id
+            && bundle.value().capability_profile_id.content_id() == binding.capability_profile_id
+            && attachment_id.content_id() == binding.attachment_plan_id
+            && attachment.value().funding_quote_id == bundle.value().funding_quote_id
+            && attachment.value().funding_quote_id == binding.funding_quote_id,
+        ClutchError::MismatchedState,
+    )?;
+    let link_semantic_id = link
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let link_binding_id = binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let dealer_admission_receipt_id = link
+        .state()
+        .obligation_admission_receipt_id(SeriesLinkObligationV1::Dealer);
+    let link_transition_sequence = link.state().transition_sequence();
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SERIES_DEALER_AUTHENTICATION_DOMAIN_V1,
+            link.account().as_ref(),
+            &link.authentication_id().bytes(),
+            &link_semantic_id.bytes(),
+            compiler_bundle_account.key.as_ref(),
+            &bundle.semantic_id().bytes(),
+            attachment_account.key.as_ref(),
+            &attachment.semantic_id().bytes(),
+            &attachment.value().liquidity_facility_plan_id.bytes(),
+            &[series_link_status_byte(dealer_status)],
+            &dealer_admission_receipt_id.bytes(),
+            &link_transition_sequence.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_content_id(id)?;
+    Ok(AuthenticatedSeriesDealerAuthorizationV1 {
+        id,
+        link_account: link.account(),
+        link_authentication_id: link.authentication_id(),
+        link_semantic_id,
+        link_binding_id,
+        product_market_root_account: Pubkey::new_from_array(
+            binding.market_root_account_id.bytes(),
+        ),
+        product_market_binding_id: binding.market_binding_id,
+        dealer_obligation_configuration_id: binding.obligation_configuration_id.content_id(),
+        series_plan_id: binding.series_plan_id,
+        ordinal: binding.ordinal,
+        market_instance_id: binding.market_instance_id,
+        generation: binding.generation,
+        attachment_plan_id: binding.attachment_plan_id,
+        compiler_bundle_id: binding.compiler_output_id,
+        capability_profile_id: binding.capability_profile_id,
+        liquidity_facility_plan_id: attachment.value().liquidity_facility_plan_id,
+        rent_refund_owner: binding.rent_refund_owner,
+        neutral_lamport_sink: binding.neutral_lamport_sink,
+        dealer_status,
+        dealer_admission_receipt_id,
+        link_transition_sequence,
+    })
 }
 
 /// Join an authenticated active link to its exact BundleV4 and AttachmentV4.
@@ -5966,6 +6234,101 @@ pub(crate) fn retire_and_close_series_market_link_v1<'a>(
     })
 }
 
+/// Persist the first Product-side Dealer admission in the same instruction
+/// which creates the counted Dealer obligation and promotes its State.  The
+/// returned receipt retains the exact rebound account and cannot be replaced
+/// by a detached projection tuple.
+pub(crate) fn admit_series_dealer_obligation_v1<'next>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    authenticated: AuthenticatedSeriesMarketLinkV1<'_>,
+    authorization: AuthenticatedSeriesDealerAuthorizationV1,
+    dealer_admission_owner_receipt_id: ContentId,
+    rebound_output: &'next mut SeriesMarketLinkAccountV1,
+) -> Outcome<AuthenticatedSeriesDealerAdmissionV1<'next>> {
+    require_live_content_id(dealer_admission_owner_receipt_id)?;
+    let semantic_before = authenticated
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        authenticated.is_writable()
+            && authorization.requires_product_admission()
+            && authorization.link_account == authenticated.account()
+            && authorization.link_authentication_id == authenticated.authentication_id()
+            && authorization.link_semantic_id == semantic_before
+            && authorization.dealer_admission_receipt_id == ContentId::ZERO
+            && authorization.link_transition_sequence
+                == authenticated.state().transition_sequence(),
+        ClutchError::MismatchedState,
+    )?;
+    let next_sequence = authorization
+        .link_transition_sequence
+        .checked_add(1)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let projection = SeriesLinkObligationAdmissionProjectionV1 {
+        link_semantic_id: semantic_before,
+        obligation: SeriesLinkObligationV1::Dealer,
+        link_transition_sequence: next_sequence,
+        owner_admission_receipt_id: dealer_admission_owner_receipt_id,
+    };
+    let product_admission_projection_id = projection
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let successor = authenticated
+        .state()
+        .admit_obligation(projection)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let rebound = write_series_market_link_v1(
+        program_id,
+        account,
+        authenticated,
+        &successor,
+        rebound_output,
+    )?;
+    let link_semantic_after = rebound
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        rebound
+            .state()
+            .obligation_status(SeriesLinkObligationV1::Dealer)
+            == SeriesLinkObligationStatusV1::Live
+            && rebound
+                .state()
+                .obligation_admission_receipt_id(SeriesLinkObligationV1::Dealer)
+                == product_admission_projection_id
+            && rebound.state().transition_sequence() == next_sequence,
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SERIES_DEALER_ADMISSION_AUTHENTICATION_DOMAIN_V1,
+            program_id.as_ref(),
+            account.key.as_ref(),
+            &authorization.id.bytes(),
+            &authorization.link_authentication_id.bytes(),
+            &rebound.authentication_id().bytes(),
+            &semantic_before.bytes(),
+            &link_semantic_after.bytes(),
+            &dealer_admission_owner_receipt_id.bytes(),
+            &product_admission_projection_id.bytes(),
+            &next_sequence.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_content_id(id)?;
+    Ok(AuthenticatedSeriesDealerAdmissionV1 {
+        id,
+        authorization,
+        link_authentication_after: rebound.authentication_id(),
+        link_semantic_after,
+        product_admission_projection_id,
+        rebound,
+    })
+}
+
 /// Persist the first Product-side Wrapper admission in the same instruction
 /// that an authenticated Structured owner accepts its root/descriptor.
 pub(crate) fn admit_series_wrapper_obligation_v1<'next>(
@@ -6953,4 +7316,75 @@ mod adversarial_series_link_retirement_tests {
         assert!(aliased.validate().is_err());
     }
 
+}
+
+#[cfg(test)]
+mod adversarial_series_dealer_admission_tests {
+    use super::*;
+
+    fn id(byte: u8) -> ContentId {
+        ContentId::from_bytes([byte; 32])
+    }
+
+    fn authorization(
+        dealer_status: SeriesLinkObligationStatusV1,
+    ) -> AuthenticatedSeriesDealerAuthorizationV1 {
+        AuthenticatedSeriesDealerAuthorizationV1 {
+            id: id(1),
+            link_account: Pubkey::new_from_array([2; 32]),
+            link_authentication_id: id(3),
+            link_semantic_id: SeriesMarketLinkV1Id::from_bytes([4; 32]),
+            link_binding_id: id(5),
+            product_market_root_account: Pubkey::new_from_array([17; 32]),
+            product_market_binding_id: id(18),
+            dealer_obligation_configuration_id: id(6),
+            series_plan_id: SeriesPlanV5Id::from_bytes([7; 32]),
+            ordinal: 8,
+            market_instance_id: MarketInstanceV2Id::from_bytes([9; 32]),
+            generation: 10,
+            attachment_plan_id: id(11),
+            compiler_bundle_id: id(12),
+            capability_profile_id: id(13),
+            liquidity_facility_plan_id: id(14),
+            rent_refund_owner: id(15),
+            neutral_lamport_sink: id(16),
+            dealer_status,
+            dealer_admission_receipt_id: ContentId::ZERO,
+            link_transition_sequence: 17,
+        }
+    }
+
+    #[test]
+    fn only_never_founded_dealer_authority_can_advance_product_admission() {
+        assert!(authorization(SeriesLinkObligationStatusV1::EnabledNeverFounded)
+            .requires_product_admission());
+        assert!(!authorization(SeriesLinkObligationStatusV1::Live)
+            .requires_product_admission());
+        assert!(!authorization(SeriesLinkObligationStatusV1::Terminal)
+            .requires_product_admission());
+        assert!(!authorization(SeriesLinkObligationStatusV1::CapabilityDisabled)
+            .requires_product_admission());
+    }
+
+    #[test]
+    fn dealer_admission_source_retains_exact_pre_and_post_product_authority() {
+        let source = include_str!("product_market.rs");
+        let admission = source
+            .split("pub(crate) fn admit_series_dealer_obligation_v1")
+            .nth(1)
+            .and_then(|value| value.split("/// Persist the first Product-side Wrapper").next())
+            .expect("Dealer admission owner");
+        for guard in [
+            "authorization.link_authentication_id == authenticated.authentication_id()",
+            "authorization.link_semantic_id == semantic_before",
+            "obligation: SeriesLinkObligationV1::Dealer",
+            "owner_admission_receipt_id: dealer_admission_owner_receipt_id",
+            "write_series_market_link_v1",
+            "obligation_admission_receipt_id(SeriesLinkObligationV1::Dealer)",
+            "product_admission_projection_id",
+            "rebound",
+        ] {
+            assert!(admission.contains(guard), "missing Dealer admission guard {guard}");
+        }
+    }
 }

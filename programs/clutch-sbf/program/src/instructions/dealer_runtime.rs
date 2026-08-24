@@ -969,6 +969,12 @@ pub enum DealerMetaRoleV1 {
     CoveredSelection,
     /// Counted facility-lifetime Product Series obligation binding.
     SeriesObligation,
+    /// Exact Product per-Series Market link whose Dealer latch advances once.
+    SeriesMarketLink,
+    /// Current V5 compiler bundle selected by the Product link.
+    CompilerBundle,
+    /// Current V4 attachment selecting the Dealer facility plan.
+    Attachment,
     /// Canonical frozen General OrderPage V5.
     OrderPage,
     /// Sole refundable-rent recipient.
@@ -1220,7 +1226,7 @@ const LAPSE_EPOCH: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
 ];
 
-const SELECT_LEASE_BEGIN_FIXED_COUNT: usize = 48;
+const SELECT_LEASE_BEGIN_FIXED_COUNT: usize = 52;
 const SELECT_LEASE_BEGIN: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
@@ -1270,6 +1276,10 @@ const SELECT_LEASE_BEGIN: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::MarketRuntime, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
     meta(DealerMetaRoleV1::Hoard, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::ClaimLedger, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::SeriesMarketLink, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::CompilerBundle, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::Attachment, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::SeriesObligation, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
     meta(DealerMetaRoleV1::OrderPage, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
