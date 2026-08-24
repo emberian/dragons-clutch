@@ -26,6 +26,7 @@ use clutch_fee_runtime_contract::terminal::{
 
 use crate::{
     CodecError, DeletableRentOwnerV1, Id32, Sha256BackendV1,
+    FEE_RETIREMENT_ACCOUNT_BYTES_V2, FEE_RETIREMENT_ACCOUNT_BYTES_V3,
     OWNER_FEE_FINALIZATION_ACCOUNT_BYTES_V4, RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2,
 };
 
@@ -41,6 +42,10 @@ pub const OWNER_FEE_FINALIZATION_ACCOUNT_DATA_ID_DOMAIN_V4: &[u8] =
 /// Full-outer data-ID domain for the certified recipient-allocation account.
 pub const RECIPIENT_ALLOCATION_ACCOUNT_DATA_ID_DOMAIN_V2: &[u8] =
     b"dragons-clutch/certified-recipient-allocation-account-data/v2\0";
+pub const FEE_CLOSURE_MANIFEST_ACCOUNT_DATA_ID_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/fee-closure-manifest-account-data/v2\0";
+pub const FEE_TERMINAL_ACCOUNT_DATA_ID_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/fee-terminal-account-data/v3\0";
 
 /// Hash the exact hostile-byte-authenticated 548-byte 0x83/v4 outer account.
 pub fn owner_fee_finalization_account_data_id_v4<B: Sha256BackendV1>(
@@ -68,6 +73,26 @@ pub fn recipient_allocation_account_data_id_v2<B: Sha256BackendV1>(
         RECIPIENT_ALLOCATION_ACCOUNT_DATA_ID_DOMAIN_V2,
         bytes,
     ]))
+}
+
+pub fn fee_closure_manifest_account_data_id_v2<B: Sha256BackendV1>(
+    bytes: &[u8],
+    backend: &B,
+) -> Result<Id32, CodecError> {
+    if bytes.len() != FEE_RETIREMENT_ACCOUNT_BYTES_V2 {
+        return Err(CodecError::WrongLength);
+    }
+    Id32::new(backend.sha256(&[FEE_CLOSURE_MANIFEST_ACCOUNT_DATA_ID_DOMAIN_V2, bytes]))
+}
+
+pub fn fee_terminal_account_data_id_v3<B: Sha256BackendV1>(
+    bytes: &[u8],
+    backend: &B,
+) -> Result<Id32, CodecError> {
+    if bytes.len() != FEE_RETIREMENT_ACCOUNT_BYTES_V3 {
+        return Err(CodecError::WrongLength);
+    }
+    Id32::new(backend.sha256(&[FEE_TERMINAL_ACCOUNT_DATA_ID_DOMAIN_V3, bytes]))
 }
 
 /// Derive the exact fee semantic schema release committed by terminal state.

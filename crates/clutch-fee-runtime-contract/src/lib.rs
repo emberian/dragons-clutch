@@ -16,6 +16,7 @@ pub mod codec;
 pub mod integration;
 pub mod intent;
 pub mod projection;
+pub mod retirement;
 pub mod selected;
 pub mod terminal;
 pub mod treasury;

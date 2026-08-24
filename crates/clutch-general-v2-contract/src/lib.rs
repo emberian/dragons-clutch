@@ -160,6 +160,12 @@ pub const PAYER_ALLOCATION_SEED_DOMAIN_V1: &[u8] = b"owner-payer-allocation:v1";
 pub const RECIPIENT_ALLOCATION_SEED_DOMAIN_V1: &[u8] = b"candidate-recipient-allocation:v1";
 /// Fresh selected-record-scoped treasury ledger PDA seed domain.
 pub const TREASURY_LEDGER_SEED_DOMAIN_V1: &[u8] = b"fee-treasury-ledger:v1";
+/// Canonical streaming fee-retirement accumulator PDA domain.
+pub const FEE_RETIREMENT_ACCUMULATOR_SEED_DOMAIN_V1: &[u8] = b"fee-retire-acc:v1";
+/// Durable fee-closure manifest PDA domain.
+pub const FEE_CLOSURE_MANIFEST_SEED_DOMAIN_V1: &[u8] = b"fee-close-manifest:v1";
+/// Durable candidate-wide fee-terminal receipt PDA domain.
+pub const FEE_TERMINAL_RECEIPT_SEED_DOMAIN_V1: &[u8] = b"fee-terminal-receipt:v1";
 /// Fresh buyer-first candidate settlement cash-pot PDA seed domain.
 pub const SETTLEMENT_CASH_POT_SEED_DOMAIN_V1: &[u8] = b"settlement-cash-pot:v1";
 /// Fresh counted General V2 Epoch PDA seed domain.
@@ -923,6 +929,16 @@ pub const TREASURY_LEDGER_ACCOUNT_BYTES: usize = 148;
 pub const TREASURY_LEDGER_ACCOUNT_VERSION_V2: u8 = 2;
 /// Exact rent-owned RevenuePolicyV2 treasury-ledger outer bytes.
 pub const TREASURY_LEDGER_ACCOUNT_BYTES_V2: usize = 196;
+/// Compact fee retirement/terminal account family tag.
+pub const FEE_RETIREMENT_ACCOUNT_TAG: u8 = 0xb9;
+/// Durable candidate-wide closure-manifest version.
+pub const FEE_RETIREMENT_CLOSURE_MANIFEST_ACCOUNT_VERSION: u8 = 2;
+/// Durable candidate-wide fee-terminal version.
+pub const FEE_RETIREMENT_TERMINAL_ACCOUNT_VERSION: u8 = 3;
+/// Exact rent-owned closure-manifest width.
+pub const FEE_RETIREMENT_ACCOUNT_BYTES_V2: usize = 580;
+/// Exact rent-owned terminal-receipt width.
+pub const FEE_RETIREMENT_ACCOUNT_BYTES_V3: usize = 596;
 /// Fresh disabled buyer-first settlement cash-pot envelope tag.
 pub const SETTLEMENT_CASH_POT_ACCOUNT_TAG: u8 = 0x87;
 /// First buyer-first settlement cash-pot envelope version.
@@ -1218,6 +1234,16 @@ pub const ACCOUNT_ALLOCATIONS_V1: [AccountAllocationV1; 40] = [
         version: INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION,
         owner: "clutch-general-v2-contract/IndexedSettlementRootV1AccountV1",
     },
+    AccountAllocationV1 {
+        tag: FEE_RETIREMENT_ACCOUNT_TAG,
+        version: FEE_RETIREMENT_CLOSURE_MANIFEST_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/FeeClosureManifestV2AccountV1",
+    },
+    AccountAllocationV1 {
+        tag: FEE_RETIREMENT_ACCOUNT_TAG,
+        version: FEE_RETIREMENT_TERMINAL_ACCOUNT_VERSION,
+        owner: "clutch-general-v2-contract/FeeRecordTerminalV3AccountV1",
+    },
 ];
 
 const _: () = assert!(MAX_OUTCOMES == 16);
@@ -1227,6 +1253,9 @@ const _: () = assert!(MAX_ORDERS_U8 == 64);
 const _: () = assert!(MAX_QUANTIZED_ATOMS == 16);
 const _: () = assert!(MAX_QUANTIZED_ATOMS_U8 == 16);
 const _: () = assert!(MAX_SLICES_U16 == 416);
+const _: () = assert!(FEE_RETIREMENT_ACCUMULATOR_SEED_DOMAIN_V1.len() <= 32);
+const _: () = assert!(FEE_CLOSURE_MANIFEST_SEED_DOMAIN_V1.len() <= 32);
+const _: () = assert!(FEE_TERMINAL_RECEIPT_SEED_DOMAIN_V1.len() <= 32);
 
 #[cfg(test)]
 mod seed_tests {

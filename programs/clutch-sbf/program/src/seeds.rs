@@ -1026,6 +1026,27 @@ pub fn fractional_credit_v2_pda(
     )
 }
 
+pub fn general_v2_fee_retirement_accumulator_pda(
+    program_id: &Pubkey,
+    fee_record: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[clutch_general_v2_contract::FEE_RETIREMENT_ACCUMULATOR_SEED_DOMAIN_V1, fee_record])
+}
+
+pub fn general_v2_fee_closure_manifest_pda(
+    program_id: &Pubkey,
+    fee_record: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[clutch_general_v2_contract::FEE_CLOSURE_MANIFEST_SEED_DOMAIN_V1, fee_record])
+}
+
+pub fn general_v2_fee_terminal_receipt_pda(
+    program_id: &Pubkey,
+    fee_record: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(program_id, &[clutch_general_v2_contract::FEE_TERMINAL_RECEIPT_SEED_DOMAIN_V1, fee_record])
+}
+
 /// Canonical disabled selected fee-record address for one SelectedCandidate.
 pub fn general_v2_selected_fee_record_pda(
     program_id: &Pubkey,
