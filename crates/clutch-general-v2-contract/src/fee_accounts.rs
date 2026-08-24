@@ -13,12 +13,12 @@ use clutch_batch::relation_v1::FrozenPolicyV1;
 use clutch_batch_policy_identity::revenue_policy_v1::RevenuePolicyV1;
 use clutch_batch_policy_identity::revenue_policy_v2::RevenuePolicyV2;
 use clutch_fee_runtime_contract::allocation::{
-    CertifiedRecipientAllocationHeaderV2, FeeEnvelopeV1, PayerAllocationV1,
-    RecipientAllocationV1, StandingMakerRowV1,
+    FeeEnvelopeV1, PayerAllocationV1, RecipientAllocationV1, StandingMakerRowV1,
 };
 use clutch_fee_runtime_contract::codec::{
     decode_borrowed_certified_recipient_allocation_v3, decode_fee_record_v1,
     decode_fee_record_v2, decode_owner_fee_carry_v1, decode_payer_allocation_v1,
+    decode_persisted_fee_record_v2,
     decode_persisted_certified_recipient_allocation_v2,
     decode_persisted_payer_allocation_v1, decode_recipient_allocation_v1,
     decode_treasury_ledger_v1, encode_fee_record_v1, encode_fee_record_v2,
@@ -26,7 +26,6 @@ use clutch_fee_runtime_contract::codec::{
     encode_certified_recipient_allocation_v3_from_access_into,
     encode_recipient_allocation_v1, encode_treasury_ledger_v1,
     BorrowedCertifiedRecipientAllocationV3, CertifiedRecipientAllocationAccessV3,
-    CertifiedRecipientAllocationEncoderV2, CertifiedRecipientAllocationViewV2,
     CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES, CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES,
     FEE_RECORD_ACCOUNT_V1_BYTES,
     OWNER_FEE_CARRY_ACCOUNT_V1_BYTES,
@@ -280,6 +279,23 @@ impl SelectedFeeRecordV2AccountV1 {
             )?;
         Ok(Self {
             semantic: map_fee_error(decode_fee_record_v2(&body, batch, revenue))?,
+            rent,
+            stored_bump,
+        })
+    }
+
+    /// Structurally decode the current immutable outer without a parallel
+    /// policy preimage. Current callers must independently bind every copied
+    /// authority field to the hostile-authenticated MarketBindingV4.
+    pub fn decode_persisted(input: &[u8]) -> Result<Self, CodecError> {
+        let (body, rent, stored_bump) =
+            decode_rent_owned_outer::<FEE_RECORD_ACCOUNT_V1_BYTES>(
+                SELECTED_FEE_RECORD_ACCOUNT_TAG,
+                SELECTED_FEE_RECORD_ACCOUNT_VERSION_V2,
+                input,
+            )?;
+        Ok(Self {
+            semantic: map_fee_error(decode_persisted_fee_record_v2(&body))?,
             rent,
             stored_bump,
         })
@@ -771,117 +787,6 @@ impl RecipientAllocationV2AccountV1 {
         )?;
         Ok(Self {
             semantic: map_fee_error(decode_persisted_certified_recipient_allocation_v2(&body))?,
-            rent,
-            stored_bump,
-        })
-    }
-}
-
-/// Incremental writer for the current rent-owned certified recipient account.
-///
-/// The semantic encoder borrows only the exact inner body. This outer writer
-/// fixes the tag, version, rent owner, bump, and padding before rows are
-/// streamed directly from the authenticated traversal, avoiding an owning
-/// 64-row allocation on the SBF frame.
-pub struct RecipientAllocationV2StreamingEncoderAccountV1<'a> {
-    semantic: CertifiedRecipientAllocationEncoderV2<'a>,
-    rent: DeletableRentOwnerV1,
-    stored_bump: u8,
-}
-
-impl<'a> RecipientAllocationV2StreamingEncoderAccountV1<'a> {
-    pub fn begin(
-        output: &'a mut [u8],
-        header: CertifiedRecipientAllocationHeaderV2,
-        rent: DeletableRentOwnerV1,
-        stored_bump: u8,
-    ) -> Result<Self, CodecError> {
-        rent.validate()?;
-        if output.len() != RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2 {
-            return Err(CodecError::WrongLength);
-        }
-        output.fill(0);
-        output[0] = RECIPIENT_ALLOCATION_ACCOUNT_TAG;
-        output[1] = RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2;
-        let body_end = 2usize
-            .checked_add(CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES)
-            .ok_or(CodecError::ArithmeticOverflow)?;
-        let rent_at = body_end;
-        output[rent_at..rent_at + 32].copy_from_slice(&rent.payer.bytes());
-        output[rent_at + 32..rent_at + 40]
-            .copy_from_slice(&rent.refundable_principal.to_le_bytes());
-        output[rent_at + 40..rent_at + 48].copy_from_slice(&rent.donation_floor.to_le_bytes());
-        output[rent_at + 48] = stored_bump;
-        output[rent_at + 49] = 0;
-        let semantic = map_fee_error(CertifiedRecipientAllocationEncoderV2::begin(
-            &mut output[2..body_end],
-            header,
-        ))?;
-        Ok(Self {
-            semantic,
-            rent,
-            stored_bump,
-        })
-    }
-
-    pub fn push_maker(
-        &mut self,
-        position: FeeRuntimeId,
-        rebate_atoms: u64,
-    ) -> Result<(), CodecError> {
-        map_fee_error(self.semantic.push_maker(position, rebate_atoms))
-    }
-
-    pub fn complete(self) -> Result<RecipientAllocationV2ViewAccountV1<'a>, CodecError> {
-        Ok(RecipientAllocationV2ViewAccountV1 {
-            semantic: map_fee_error(self.semantic.complete())?,
-            rent: self.rent,
-            stored_bump: self.stored_bump,
-        })
-    }
-}
-
-/// Borrowed allocation-free view of the rent-owned certified recipient outer.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RecipientAllocationV2ViewAccountV1<'a> {
-    pub semantic: CertifiedRecipientAllocationViewV2<'a>,
-    pub rent: DeletableRentOwnerV1,
-    pub stored_bump: u8,
-}
-
-impl<'a> RecipientAllocationV2ViewAccountV1<'a> {
-    pub fn decode(input: &'a [u8]) -> Result<Self, CodecError> {
-        if input.len() != RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2 {
-            return Err(CodecError::WrongLength);
-        }
-        if input[0] != RECIPIENT_ALLOCATION_ACCOUNT_TAG {
-            return Err(CodecError::WrongTag);
-        }
-        if input[1] != RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2 {
-            return Err(CodecError::WrongVersion);
-        }
-        let body_end = 2usize
-            .checked_add(CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES)
-            .ok_or(CodecError::ArithmeticOverflow)?;
-        let mut reader = Reader::exact(
-            &input[body_end..],
-            DELETABLE_RENT_OWNER_BYTES + 2,
-        )?;
-        let rent = DeletableRentOwnerV1 {
-            payer: Id32::new(reader.array()?)?,
-            refundable_principal: reader.u64()?,
-            donation_floor: reader.u64()?,
-        };
-        rent.validate()?;
-        let stored_bump = reader.u8()?;
-        if reader.u8()? != 0 {
-            return Err(CodecError::InvalidState);
-        }
-        reader.finish()?;
-        Ok(Self {
-            semantic: map_fee_error(CertifiedRecipientAllocationViewV2::decode(
-                &input[2..body_end],
-            ))?,
             rent,
             stored_bump,
         })

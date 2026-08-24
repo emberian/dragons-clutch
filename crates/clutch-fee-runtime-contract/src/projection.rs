@@ -760,8 +760,8 @@ pub fn project_terminal_owner_fee_v1(
     })
 }
 
-fn bind_persisted_payer_snapshot_v1(
-    selected: &SelectedCompositeFeeV1,
+fn bind_persisted_payer_snapshot_v1<S: SelectedCompositeFeeAccess + ?Sized>(
+    selected: &S,
     transition: &OwnerFeeTransitionIntentV1,
     carry: &OwnerFeeCarryV1,
     payer: &PayerAllocationV1,
@@ -811,8 +811,10 @@ fn bind_persisted_payer_snapshot_v1(
 /// canonical outer account bytes that will be persisted. This path proves fee
 /// authorization and allocation but deliberately does not attest present cash.
 #[allow(clippy::too_many_arguments)]
-pub fn authenticate_created_payer_allocation_snapshot_v1(
-    selected: &SelectedCompositeFeeV1,
+pub fn authenticate_created_payer_allocation_snapshot_v1<
+    S: SelectedCompositeFeeAccess + ?Sized,
+>(
+    selected: &S,
     transition: &OwnerFeeTransitionIntentV1,
     carry: &OwnerFeeCarryV1,
     assessment: &OwnerFeeAssessmentV1,
@@ -872,8 +874,10 @@ pub fn authenticate_created_payer_allocation_snapshot_v1(
 /// exact outer bytes, and complete-data ID. This function then joins those
 /// persisted semantics to the selected fee record and terminal carry. It does
 /// not prove cash existence or Reservation coverage.
-pub fn reauthenticate_persisted_payer_allocation_snapshot_v1(
-    selected: &SelectedCompositeFeeV1,
+pub fn reauthenticate_persisted_payer_allocation_snapshot_v1<
+    S: SelectedCompositeFeeAccess + ?Sized,
+>(
+    selected: &S,
     transition: &OwnerFeeTransitionIntentV1,
     carry: &OwnerFeeCarryV1,
     payer: &PayerAllocationV1,

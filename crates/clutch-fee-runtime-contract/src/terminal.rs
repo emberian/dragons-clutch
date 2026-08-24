@@ -1875,7 +1875,7 @@ pub fn build_aborted_fee_terminal_receipt_v1(
 #[allow(clippy::too_many_arguments)]
 pub fn build_settled_fee_terminal_from_accumulator_v2<
     H: FeeRetirementHashV1,
-    C: crate::projection::CertifiedRecipientAllocationAccessV2,
+    C: crate::codec::CertifiedRecipientAllocationAccessV3 + ?Sized,
 >(
     terminal_receipt: Id,
     closure_manifest_receipt: Id,
@@ -1890,9 +1890,9 @@ pub fn build_settled_fee_terminal_from_accumulator_v2<
     let accumulator = completed.accumulator();
     if accumulator.fee_record() != selected.fee_record()
         || accumulator.settlement_candidate() != selected.selected_candidate()
-        || accumulator.owner_fee_book_data_id() != certified.owner_fee_book_data_id()
         || accumulator.owner_order_set_digest() != certified.owner_order_set_digest()
-        || u16::from(accumulator.expected_owner_count()) != certified.owner_count()
+        || accumulator.expected_owner_count() != certified.nonzero_weight_row_count()
+        || accumulator.expected_maker_count() != certified.row_count()
         || accumulator.expected_fee_atoms()
             != u128::from(certified.collected_fee_atoms())
         || recipient_intent.fee_record().identity() != selected.fee_record()
@@ -1912,9 +1912,9 @@ pub fn build_settled_fee_terminal_from_accumulator_v2<
         || treasury.treasury_position() != selected.treasury_position()
         || treasury.outstanding_epochs() != 0
         || treasury.credited_atoms() != certified.treasury_atoms()
-        || treasury.withdrawn_atoms() != 0
-        || treasury.available_atoms() != certified.treasury_atoms()
-        || treasury.is_closed()
+        || treasury.withdrawn_atoms() != certified.treasury_atoms()
+        || treasury.available_atoms() != 0
+        || !treasury.is_closed()
         || u128::from(add(
             add(certified.maker_rebate_total(), certified.executor_atoms())?,
             certified.treasury_atoms(),

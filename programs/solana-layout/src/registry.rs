@@ -298,6 +298,14 @@ pub const GENERAL_V2_PAYER_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG: u8 = 0x85;
 /// General V2 temporary candidate-wide recipient-allocation version.
 pub const GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION: u8 = 1;
+/// Historical rent-owned complete-book-certified recipient version.
+pub const GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2: u8 = 2;
+/// Current rent-owned exact portfolio-weight recipient version.
+pub const GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V3: u8 = 3;
+/// Exact historical V2 recipient outer width.
+pub const GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2: usize = 2_764;
+/// Exact current V3 recipient outer width.
+pub const GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V3: usize = 2_796;
 /// General V2 selected-record treasury-ledger envelope discriminator.
 pub const GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG: u8 = 0x86;
 /// General V2 selected-record treasury-ledger envelope version.
@@ -599,6 +607,10 @@ const _: () = assert!(GENERAL_V2_FROZEN_ORDER_LOCATOR_ACCOUNT_TAG == 0xb5);
 const _: () = assert!(GENERAL_V2_CANDIDATE_ADJACENCY_ACCOUNT_TAG == 0xb6);
 const _: () = assert!(GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG == 0xb9);
 const _: () = assert!(GENERAL_V2_FEE_RETIREMENT_ACCOUNT_TAG == 185);
+const _: () = assert!(GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2 == 2);
+const _: () = assert!(GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V3 == 3);
+const _: () = assert!(GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2 == 2_764);
+const _: () = assert!(GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V3 == 2_796);
 const _: () = assert!(GENERAL_V2_FAMILY_TAG == 0x4a);
 const _: () = assert!(LEGACY_INTENT_FIRST_TAG == super::CREATE_TAG);
 const _: () = assert!(LEGACY_INTENT_LAST_TAG == super::SEAL_SOURCE_ARCHIVE_V2_TAG);
@@ -1382,6 +1394,24 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "general-v2-recipient-allocation-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+            version: GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "historical-general-v2-recipient-allocation-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+            version: GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V3,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "current-general-v2-recipient-allocation-v3-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -3219,6 +3249,14 @@ mod tests {
                 GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
             ),
             (
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2,
+            ),
+            (
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V3,
+            ),
+            (
                 GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG,
                 GENERAL_V2_TREASURY_LEDGER_ACCOUNT_VERSION,
             ),
@@ -3391,6 +3429,14 @@ mod tests {
             (
                 GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG,
                 GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
+            ),
+            (
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2,
+            ),
+            (
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_TAG,
+                GENERAL_V2_RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V3,
             ),
             (
                 GENERAL_V2_TREASURY_LEDGER_ACCOUNT_TAG,
