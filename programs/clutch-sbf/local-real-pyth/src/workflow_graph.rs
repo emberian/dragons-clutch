@@ -1763,7 +1763,10 @@ impl SourceCrankObservation<'_> {
     }
 }
 
-pub fn plan_source_crank(
+/// Internal typed planner. Public operator callers must enter through a
+/// finalized raw-account constructor that authenticates every semantic body,
+/// physical identity, balance, and absence witness before reaching this seam.
+pub(crate) fn plan_source_crank(
     manifest: &ExplicitOperatorReleaseManifest,
     builder: &ProtocolTransactionBuilder,
     observation: SourceCrankObservation<'_>,
