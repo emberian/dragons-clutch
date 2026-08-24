@@ -31,6 +31,10 @@ pub const DEALER_RETIRE_FUNDED_DEPENDENCIES_V1: u8 = 5;
 pub const DEALER_RETIRE_POSITION_REPLAY_V1: u8 = 6;
 /// Retire selector for the live State into its permanent tombstone.
 pub const DEALER_RETIRE_STATE_ROOT_V1: u8 = 7;
+/// Atomically terminalize a live facility a6 credit with current Product.
+pub const DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1: u8 = 8;
+/// Atomically close never-consumed 0xbc funding with current Product.
+pub const DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1: u8 = 9;
 
 /// Strict disabled-contract error.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -436,7 +440,7 @@ impl DealerRuntimePayloadV1 {
             DealerFacilityAction::Retire => {
                 value.retire_target = input[16];
                 value.terminal_last_page = decode_bool(input[17])?;
-                if !(DEALER_RETIRE_EXIT_TICKET_V1..=DEALER_RETIRE_STATE_ROOT_V1)
+                if !(DEALER_RETIRE_EXIT_TICKET_V1..=DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1)
                     .contains(&value.retire_target)
                 {
                     return Err(DealerRuntimeContractErrorV1::InvalidField);
@@ -1101,6 +1105,90 @@ const RETIRE_POSITION_REPLAY: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::NeutralSink, DealerMetaOwnerV1::Signer, false, true),
 ];
 
+/// Current terminal cut with a live facility-owned Fractional a6/v2.
+///
+/// The first 44 roles are the exact Dealer terminal Replay, Product LinkV2,
+/// and Realm-selected Position retirement graph. Fractional exclusively owns
+/// the final four value roles and returns a non-Copy receipt to this outer.
+const RETIRE_ACTIVE_FACILITY_CREDIT: &[DealerMetaSpecV1] = &[
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, false),
+    meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::FacilityPosition, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::FacilityReplay, DealerMetaOwnerV1::PositionRuntime, false, true),
+    meta(DealerMetaRoleV1::FundedDependencies, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSchedule, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::LivenessSource, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessCandidate, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessClearing, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessSettlement, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, false),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::NeutralSink, DealerMetaOwnerV1::Signer, false, true),
+    meta(DealerMetaRoleV1::Clock, DealerMetaOwnerV1::ClockSysvar, false, false),
+    meta(DealerMetaRoleV1::Rent, DealerMetaOwnerV1::RentSysvar, false, false),
+    meta(DealerMetaRoleV1::SystemProgram, DealerMetaOwnerV1::System, false, false),
+    meta(DealerMetaRoleV1::SeriesObligation, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::ProductMarketRoot, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::SeriesRegistry, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::CurrentProgram, DealerMetaOwnerV1::ExternalExecutable, false, false),
+    meta(DealerMetaRoleV1::CurrentProgramData, DealerMetaOwnerV1::AnyReadOnly, false, false),
+    meta(DealerMetaRoleV1::RegistryRelease, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::CapabilityProfile, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::SeriesMarketLink, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::CompilerBundle, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::Attachment, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::Realm, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::CollateralProfile, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::CollateralPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::CollateralTokenProgram, DealerMetaOwnerV1::ExternalExecutable, false, false),
+    meta(DealerMetaRoleV1::CollateralTokenProgramData, DealerMetaOwnerV1::AnyReadOnly, false, false),
+    meta(DealerMetaRoleV1::MarketBinding, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::MarketRuntime, DealerMetaOwnerV1::GeneralV2Runtime, false, false),
+    meta(DealerMetaRoleV1::MarketInstance, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::Hoard, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::ClaimLedger, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::Resolution, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::FractionalPolicy, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::FractionalLedger, DealerMetaOwnerV1::SelfProgram, false, true),
+    meta(DealerMetaRoleV1::FacilityCredit, DealerMetaOwnerV1::SelfProgram, false, true),
+];
+
+/// Current terminal cut when Resolve never consumed Dealer's 0xbc/v1 owner.
+const RETIRE_UNUSED_FUTURE_CREDIT: &[DealerMetaSpecV1] = &[
+    RETIRE_ACTIVE_FACILITY_CREDIT[0], RETIRE_ACTIVE_FACILITY_CREDIT[1],
+    RETIRE_ACTIVE_FACILITY_CREDIT[2], RETIRE_ACTIVE_FACILITY_CREDIT[3],
+    RETIRE_ACTIVE_FACILITY_CREDIT[4], RETIRE_ACTIVE_FACILITY_CREDIT[5],
+    RETIRE_ACTIVE_FACILITY_CREDIT[6], RETIRE_ACTIVE_FACILITY_CREDIT[7],
+    RETIRE_ACTIVE_FACILITY_CREDIT[8], RETIRE_ACTIVE_FACILITY_CREDIT[9],
+    RETIRE_ACTIVE_FACILITY_CREDIT[10], RETIRE_ACTIVE_FACILITY_CREDIT[11],
+    RETIRE_ACTIVE_FACILITY_CREDIT[12], RETIRE_ACTIVE_FACILITY_CREDIT[13],
+    RETIRE_ACTIVE_FACILITY_CREDIT[14], RETIRE_ACTIVE_FACILITY_CREDIT[15],
+    RETIRE_ACTIVE_FACILITY_CREDIT[16], RETIRE_ACTIVE_FACILITY_CREDIT[17],
+    RETIRE_ACTIVE_FACILITY_CREDIT[18], RETIRE_ACTIVE_FACILITY_CREDIT[19],
+    RETIRE_ACTIVE_FACILITY_CREDIT[20], RETIRE_ACTIVE_FACILITY_CREDIT[21],
+    RETIRE_ACTIVE_FACILITY_CREDIT[22], RETIRE_ACTIVE_FACILITY_CREDIT[23],
+    RETIRE_ACTIVE_FACILITY_CREDIT[24], RETIRE_ACTIVE_FACILITY_CREDIT[25],
+    RETIRE_ACTIVE_FACILITY_CREDIT[26], RETIRE_ACTIVE_FACILITY_CREDIT[27],
+    RETIRE_ACTIVE_FACILITY_CREDIT[28], RETIRE_ACTIVE_FACILITY_CREDIT[29],
+    RETIRE_ACTIVE_FACILITY_CREDIT[30], RETIRE_ACTIVE_FACILITY_CREDIT[31],
+    RETIRE_ACTIVE_FACILITY_CREDIT[32], RETIRE_ACTIVE_FACILITY_CREDIT[33],
+    RETIRE_ACTIVE_FACILITY_CREDIT[34], RETIRE_ACTIVE_FACILITY_CREDIT[35],
+    RETIRE_ACTIVE_FACILITY_CREDIT[36], RETIRE_ACTIVE_FACILITY_CREDIT[37],
+    RETIRE_ACTIVE_FACILITY_CREDIT[38], RETIRE_ACTIVE_FACILITY_CREDIT[39],
+    RETIRE_ACTIVE_FACILITY_CREDIT[40], RETIRE_ACTIVE_FACILITY_CREDIT[41],
+    RETIRE_ACTIVE_FACILITY_CREDIT[42],
+    meta(DealerMetaRoleV1::ClaimLedger, DealerMetaOwnerV1::SelfProgram, false, false),
+    meta(DealerMetaRoleV1::FutureCreditFunding, DealerMetaOwnerV1::SelfProgram, false, true),
+];
+
 const RETIRE_STATE_ROOT: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, false),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
@@ -1260,6 +1348,16 @@ pub fn meta_contract_v1(
             if payload.retire_target == DEALER_RETIRE_STATE_ROOT_V1 =>
         {
             Some(RETIRE_STATE_ROOT)
+        }
+        DealerFacilityAction::Retire
+            if payload.retire_target == DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1 =>
+        {
+            Some(RETIRE_ACTIVE_FACILITY_CREDIT)
+        }
+        DealerFacilityAction::Retire
+            if payload.retire_target == DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1 =>
+        {
+            Some(RETIRE_UNUSED_FUTURE_CREDIT)
         }
         _ => None,
     }
