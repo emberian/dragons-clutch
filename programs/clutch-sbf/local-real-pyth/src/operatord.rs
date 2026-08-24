@@ -227,7 +227,12 @@ fn merge_chain_material_cursors(
                 WorkflowLane::SourceCrank
                     | WorkflowLane::FractionalRedemption
                     | WorkflowLane::FailureRecovery
-            )
+            ) || (material.coordinate().family_tag == GENERAL_V2_FAMILY_TAG
+                && material.coordinate().family_version == GENERAL_V2_FAMILY_VERSION
+                && matches!(
+                    material.cursor().lane,
+                    WorkflowLane::Candidate | WorkflowLane::RecoveryRetirement
+                ))
         })
         .collect::<Vec<_>>();
     if direct_batch.is_none() && dealer_batch.is_none() && chain_materials.is_empty() {
@@ -260,6 +265,23 @@ fn merge_chain_material_cursors(
                         Some(
                             RecoveryAction::AdvanceIntervalConsensus
                                 | RecoveryAction::CloseIntervalConsensusWork
+                        )
+                    )
+            }
+            WorkflowLane::Candidate | WorkflowLane::RecoveryRetirement => {
+                coordinate.family_tag == GENERAL_V2_FAMILY_TAG
+                    && coordinate.family_version == GENERAL_V2_FAMILY_VERSION
+                    && matches!(
+                        GeneralV2Action::from_tag(coordinate.local_action),
+                        Some(
+                            GeneralV2Action::FreezeEpochV5
+                                | GeneralV2Action::RetirePortfolioPairArchives
+                                | GeneralV2Action::RetireExactIndexChildren
+                                | GeneralV2Action::RetireRetainedFeed
+                                | GeneralV2Action::CloseOwnerSettlementRow
+                                | GeneralV2Action::CloseOwnerFeeFinalization
+                                | GeneralV2Action::AdvanceFeeRetirement
+                                | GeneralV2Action::BeginSettlementRetirement
                         )
                     )
             }
@@ -301,10 +323,14 @@ fn merge_chain_material_cursors(
         }
         if let Some(existing) = cursors.iter().find(|cursor| cursor.cursor == material.cursor()) {
             let (_, expected_action, _) = coordinate_description(coordinate);
-            if material.cursor().lane != WorkflowLane::FailureRecovery
-                || existing.account != material.driver_account()
+            if existing.account != material.driver_account()
                 || existing.account_slot != material.driver_account_slot()
-                || existing.action != expected_action
+                || match material.cursor().lane {
+                    WorkflowLane::FailureRecovery
+                    | WorkflowLane::Candidate
+                    | WorkflowLane::RecoveryRetirement => existing.action != expected_action,
+                    _ => true,
+                }
             {
                 return Err(KeeperSelectionError::IncompleteCanonicalHint);
             }
@@ -2107,6 +2133,46 @@ fn action_coordinate(action: &str) -> Option<CanonicalIntentCoordinate> {
             GENERAL_V2_FAMILY_VERSION,
             GeneralV2Action::ClosePosition.tag(),
         ),
+        "general-freeze-nonempty-book-v5" => (
+            GENERAL_V2_FAMILY_TAG,
+            GENERAL_V2_FAMILY_VERSION,
+            GeneralV2Action::FreezeEpochV5.tag(),
+        ),
+        "general-retire-portfolio-pair-archives" => (
+            GENERAL_V2_FAMILY_TAG,
+            GENERAL_V2_FAMILY_VERSION,
+            GeneralV2Action::RetirePortfolioPairArchives.tag(),
+        ),
+        "general-retire-exact-index-children" => (
+            GENERAL_V2_FAMILY_TAG,
+            GENERAL_V2_FAMILY_VERSION,
+            GeneralV2Action::RetireExactIndexChildren.tag(),
+        ),
+        "general-retire-retained-feed" => (
+            GENERAL_V2_FAMILY_TAG,
+            GENERAL_V2_FAMILY_VERSION,
+            GeneralV2Action::RetireRetainedFeed.tag(),
+        ),
+        "general-close-owner-settlement-row-v5" => (
+            GENERAL_V2_FAMILY_TAG,
+            GENERAL_V2_FAMILY_VERSION,
+            GeneralV2Action::CloseOwnerSettlementRow.tag(),
+        ),
+        "general-close-owner-fee-finalization-v4" => (
+            GENERAL_V2_FAMILY_TAG,
+            GENERAL_V2_FAMILY_VERSION,
+            GeneralV2Action::CloseOwnerFeeFinalization.tag(),
+        ),
+        "general-advance-fee-retirement-v1" => (
+            GENERAL_V2_FAMILY_TAG,
+            GENERAL_V2_FAMILY_VERSION,
+            GeneralV2Action::AdvanceFeeRetirement.tag(),
+        ),
+        "general-begin-settlement-retirement" => (
+            GENERAL_V2_FAMILY_TAG,
+            GENERAL_V2_FAMILY_VERSION,
+            GeneralV2Action::BeginSettlementRetirement.tag(),
+        ),
         "advance-failure-recovery" => (
             RECOVERY_FAMILY_TAG,
             RECOVERY_FAMILY_VERSION,
@@ -2211,7 +2277,14 @@ fn coordinate_description(
     if coordinate.family_tag == GENERAL_V2_FAMILY_TAG
         && coordinate.family_version == GENERAL_V2_FAMILY_VERSION
     {
-        return ("general", "general-v2-action", None);
+        let Some(action) = GeneralV2Action::from_tag(coordinate.local_action) else {
+            return ("general", "unknown-general-v2-action", None);
+        };
+        let name = crate::transaction_builder::general_terminal_action_name_v5(action)
+            .unwrap_or("non-current-general-v2-action");
+        let builder = crate::transaction_builder::general_terminal_action_name_v5(action)
+            .map(|_| "clutch-general-v2-contract/current-v5-terminal-account-contract-v1");
+        return ("general", name, builder);
     }
     if coordinate.family_tag == STRUCTURED_CLAIM_FAMILY_TAG
         && coordinate.family_version == STRUCTURED_CLAIM_FAMILY_VERSION

@@ -7,8 +7,8 @@
 //! no keypair, blockhash, RPC, signing, or submission dependency.
 
 use clutch_solana_layout::registry::{
-    AllocationStatus, ExtensionAction, ExtensionEnvelope, ExtensionFamily, RegistryError,
-    EXTENSION_ENVELOPE_BYTES,
+    AllocationStatus, ExtensionAction, ExtensionEnvelope, ExtensionFamily, GeneralV2Action,
+    RegistryError, EXTENSION_ENVELOPE_BYTES,
 };
 use clutch_solana_layout::source_series::{validate_account_metas_v2, ObservedSourceAccountMetaV2};
 use clutch_solana_layout::Intent;
@@ -314,6 +314,320 @@ pub enum OwnedWireContract {
         action: clutch_solana_layout::registry::DealerFacilityAction,
         sequence: u64,
     },
+    /// Exact enabled current-General terminal request. The action fixes its
+    /// payload codec, complete V5 account geometry, aliases, and flow.
+    GeneralTerminalRequestV5 {
+        binding: SuccessorRegistryBinding,
+        action: GeneralV2Action,
+        sequence: u64,
+    },
+}
+
+/// One exact role in the current General V5 terminal frames.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GeneralTerminalAccountSpecV5 {
+    pub label: &'static str,
+    pub signer: bool,
+    pub writable: bool,
+}
+
+const fn general_terminal_spec_v5(
+    label: &'static str,
+    signer: bool,
+    writable: bool,
+) -> GeneralTerminalAccountSpecV5 {
+    GeneralTerminalAccountSpecV5 {
+        label,
+        signer,
+        writable,
+    }
+}
+
+const GENERAL_CURRENT_PREFIX_V5: [GeneralTerminalAccountSpecV5; 25] = [
+    general_terminal_spec_v5("market-binding-v5", false, false),
+    general_terminal_spec_v5("market-runtime-v3", false, false),
+    general_terminal_spec_v5("product-market-root-v3", false, false),
+    general_terminal_spec_v5("product-series-link-v3", false, false),
+    general_terminal_spec_v5("series-funding-v5", false, false),
+    general_terminal_spec_v5("series-registry-v4", false, false),
+    general_terminal_spec_v5("registry-program", false, false),
+    general_terminal_spec_v5("registry-programdata", false, false),
+    general_terminal_spec_v5("registry-release-artifact", false, false),
+    general_terminal_spec_v5("capability-profile-artifact", false, false),
+    general_terminal_spec_v5("source-release", false, false),
+    general_terminal_spec_v5("compiler-bundle-v7", false, false),
+    general_terminal_spec_v5("market-instance-v2", false, false),
+    general_terminal_spec_v5("realm", false, false),
+    general_terminal_spec_v5("revenue-policy-record-v2", false, false),
+    general_terminal_spec_v5("revenue-policy-v2-preimage", false, false),
+    general_terminal_spec_v5("series-plan-v5", false, false),
+    general_terminal_spec_v5("series-funding-terms-v2", false, false),
+    general_terminal_spec_v5("market-template-v4", false, false),
+    general_terminal_spec_v5("native-basis-v1", false, false),
+    general_terminal_spec_v5("recovery-policy-v1", false, false),
+    general_terminal_spec_v5("price-policy-v1", false, false),
+    general_terminal_spec_v5("market-genesis-v2", false, false),
+    general_terminal_spec_v5("series-quote-v6", false, false),
+    general_terminal_spec_v5("series-attachment-v6", false, false),
+];
+
+const GENERAL_ACTION50_PREFIX_V5: [GeneralTerminalAccountSpecV5; 34] = [
+    general_terminal_spec_v5("settlement-root", false, false),
+    general_terminal_spec_v5("fee-retirement-accumulator", false, true),
+    general_terminal_spec_v5("recipient-allocation", false, false),
+    general_terminal_spec_v5("settlement-cash-pot", false, true),
+    general_terminal_spec_v5("maker-position-v3", false, true),
+    general_terminal_spec_v5("maker-replay-v3", false, true),
+    general_terminal_spec_v5("market-binding-v5", false, false),
+    general_terminal_spec_v5("market-runtime-v3", false, false),
+    general_terminal_spec_v5("realm", false, false),
+    general_terminal_spec_v5("collateral-profile", false, false),
+    general_terminal_spec_v5("collateral-policy", false, false),
+    general_terminal_spec_v5("collateral-token-program", false, false),
+    general_terminal_spec_v5("market-instance-v2", false, false),
+    general_terminal_spec_v5("product-market-root-v3", false, false),
+    general_terminal_spec_v5("product-series-link-v3", false, false),
+    general_terminal_spec_v5("series-funding-v5", false, false),
+    general_terminal_spec_v5("series-registry-v4", false, false),
+    general_terminal_spec_v5("registry-program", false, false),
+    general_terminal_spec_v5("registry-programdata", false, false),
+    general_terminal_spec_v5("registry-release-artifact", false, false),
+    general_terminal_spec_v5("capability-profile-artifact", false, false),
+    general_terminal_spec_v5("source-release", false, false),
+    general_terminal_spec_v5("compiler-bundle-v7", false, false),
+    general_terminal_spec_v5("revenue-policy-record-v2", false, false),
+    general_terminal_spec_v5("revenue-policy-v2-preimage", false, false),
+    general_terminal_spec_v5("series-plan-v5", false, false),
+    general_terminal_spec_v5("series-funding-terms-v2", false, false),
+    general_terminal_spec_v5("market-template-v4", false, false),
+    general_terminal_spec_v5("native-basis-v1", false, false),
+    general_terminal_spec_v5("recovery-policy-v1", false, false),
+    general_terminal_spec_v5("price-policy-v1", false, false),
+    general_terminal_spec_v5("market-genesis-v2", false, false),
+    general_terminal_spec_v5("series-quote-v6", false, false),
+    general_terminal_spec_v5("series-attachment-v6", false, false),
+];
+
+pub(crate) fn general_terminal_action_name_v5(action: GeneralV2Action) -> Option<&'static str> {
+    match action {
+        GeneralV2Action::FreezeEpochV5 => Some("general-freeze-nonempty-book-v5"),
+        GeneralV2Action::RetirePortfolioPairArchives => Some("general-retire-portfolio-pair-archives"),
+        GeneralV2Action::RetireExactIndexChildren => Some("general-retire-exact-index-children"),
+        GeneralV2Action::RetireRetainedFeed => Some("general-retire-retained-feed"),
+        GeneralV2Action::CloseOwnerSettlementRow => Some("general-close-owner-settlement-row-v5"),
+        GeneralV2Action::CloseOwnerFeeFinalization => Some("general-close-owner-fee-finalization-v4"),
+        GeneralV2Action::AdvanceFeeRetirement => Some("general-advance-fee-retirement-v1"),
+        GeneralV2Action::BeginSettlementRetirement => Some("general-begin-settlement-retirement"),
+        _ => None,
+    }
+}
+
+pub(crate) const fn general_terminal_flow_v5(action: GeneralV2Action) -> Option<ProtocolFlow> {
+    match action {
+        GeneralV2Action::FreezeEpochV5 => Some(ProtocolFlow::GeneralV2Candidate),
+        GeneralV2Action::AdvanceFeeRetirement => Some(ProtocolFlow::GeneralV2Fees),
+        GeneralV2Action::RetirePortfolioPairArchives
+        | GeneralV2Action::RetireExactIndexChildren
+        | GeneralV2Action::RetireRetainedFeed
+        | GeneralV2Action::CloseOwnerSettlementRow
+        | GeneralV2Action::CloseOwnerFeeFinalization
+        | GeneralV2Action::BeginSettlementRetirement => Some(ProtocolFlow::GeneralV2Settlement),
+        _ => None,
+    }
+}
+
+fn validate_general_terminal_payload_v5(action: GeneralV2Action, payload: &[u8]) -> Result<()> {
+    let valid = match action {
+        GeneralV2Action::FreezeEpochV5 => {
+            clutch_general_v2_contract::FreezeEpochPayloadV1::decode(payload).map(|_| ())
+        }
+        GeneralV2Action::RetirePortfolioPairArchives => {
+            clutch_general_v2_contract::decode_portfolio_settlement_payload_v1(
+                action.tag(),
+                payload,
+            )
+            .map(|_| ())
+        }
+        GeneralV2Action::RetireExactIndexChildren | GeneralV2Action::RetireRetainedFeed => {
+            clutch_general_v2_contract::decode_exact_index_lifecycle_payload_v1(
+                action.tag(),
+                payload,
+            )
+            .map(|_| ())
+        }
+        GeneralV2Action::CloseOwnerSettlementRow
+        | GeneralV2Action::CloseOwnerFeeFinalization
+        | GeneralV2Action::BeginSettlementRetirement => {
+            clutch_general_v2_contract::decode_settlement_retirement_payload_v1(
+                action.tag(),
+                payload,
+            )
+            .map(|_| ())
+        }
+        GeneralV2Action::AdvanceFeeRetirement => {
+            clutch_general_v2_contract::decode_fee_retirement_payload_v1(action.tag(), payload)
+                .map(|_| ())
+        }
+        _ => return Err(ConstructionError::UnallocatedRegistryCoordinate),
+    };
+    valid.map_err(|_| ConstructionError::WrongWireLength)
+}
+
+pub(crate) fn general_terminal_account_count_v5(
+    action: GeneralV2Action,
+    payload: &[u8],
+) -> Result<usize> {
+    validate_general_terminal_payload_v5(action, payload)?;
+    match action {
+        GeneralV2Action::FreezeEpochV5 => Err(ConstructionError::InvalidAccountContract),
+        GeneralV2Action::RetirePortfolioPairArchives => {
+            let count = 37usize
+                .checked_add(usize::from(payload[96]))
+                .and_then(|value| value.checked_add(usize::from(payload[97])))
+                .ok_or(ConstructionError::InvalidAccountContract)?;
+            if count > 64 {
+                return Err(ConstructionError::InvalidAccountContract);
+            }
+            Ok(count)
+        }
+        GeneralV2Action::RetireExactIndexChildren => Ok(31),
+        GeneralV2Action::RetireRetainedFeed => Ok(30),
+        GeneralV2Action::CloseOwnerSettlementRow
+        | GeneralV2Action::CloseOwnerFeeFinalization => Ok(29),
+        GeneralV2Action::AdvanceFeeRetirement => match payload.len() {
+            clutch_general_v2_contract::FEE_MAKER_DISTRIBUTION_PAYLOAD_BYTES_V1 => Ok(34),
+            clutch_general_v2_contract::FEE_FINALIZE_GLOBALS_PAYLOAD_BYTES_V1 => Ok(45),
+            _ => Err(ConstructionError::WrongWireLength),
+        },
+        GeneralV2Action::BeginSettlementRetirement => Ok(26),
+        _ => Err(ConstructionError::UnallocatedRegistryCoordinate),
+    }
+}
+
+pub(crate) fn general_terminal_account_spec_v5(
+    action: GeneralV2Action,
+    index: usize,
+    account_count: usize,
+    payload: &[u8],
+) -> Option<GeneralTerminalAccountSpecV5> {
+    if action != GeneralV2Action::AdvanceFeeRetirement && index < GENERAL_CURRENT_PREFIX_V5.len() {
+        return GENERAL_CURRENT_PREFIX_V5.get(index).copied();
+    }
+    match action {
+        GeneralV2Action::FreezeEpochV5 if (33..=36).contains(&account_count) => match index {
+            25 => Some(general_terminal_spec_v5("epoch-v6", false, true)),
+            26 => Some(general_terminal_spec_v5("economic-domain-v2", false, false)),
+            27 => Some(general_terminal_spec_v5("candidate-window-v4", false, true)),
+            28 => Some(general_terminal_spec_v5("epoch-budget-v2", false, true)),
+            29 => Some(general_terminal_spec_v5("price-grid", false, false)),
+            30 => Some(general_terminal_spec_v5("clock-sysvar", false, false)),
+            31 => Some(general_terminal_spec_v5("keeper-reward-destination", false, true)),
+            32..=35 if index < account_count => {
+                Some(general_terminal_spec_v5("order-page-v5", false, true))
+            }
+            _ => None,
+        },
+        GeneralV2Action::RetirePortfolioPairArchives => {
+            let receipt_count = usize::from(*payload.get(96)?);
+            let refund_start = 37usize.checked_add(receipt_count)?;
+            match index {
+                25 => Some(general_terminal_spec_v5("collateral-profile", false, false)),
+                26 => Some(general_terminal_spec_v5("collateral-policy", false, false)),
+                27 => Some(general_terminal_spec_v5("collateral-token-program", false, false)),
+                28 => Some(general_terminal_spec_v5("settlement-root", false, true)),
+                29 => Some(general_terminal_spec_v5("retained-candidate-feed", false, false)),
+                30 => Some(general_terminal_spec_v5("neutral-sink", false, true)),
+                31 => Some(general_terminal_spec_v5("buyer-reservation-v9", false, true)),
+                32 => Some(general_terminal_spec_v5("seller-reservation-v9", false, true)),
+                33 => Some(general_terminal_spec_v5("buyer-position-v3", false, true)),
+                34 => Some(general_terminal_spec_v5("seller-position-v3", false, true)),
+                35 => Some(general_terminal_spec_v5("buyer-replay-v3", false, true)),
+                36 => Some(general_terminal_spec_v5("seller-replay-v3", false, true)),
+                37.. if index < refund_start => {
+                    Some(general_terminal_spec_v5("settlement-receipt-v5", false, true))
+                }
+                _ if index < account_count => {
+                    Some(general_terminal_spec_v5("persisted-refund-owner", false, true))
+                }
+                _ => None,
+            }
+        }
+        GeneralV2Action::RetireExactIndexChildren if account_count == 31 => match index {
+            25 => Some(general_terminal_spec_v5("settlement-root", false, true)),
+            26 => Some(general_terminal_spec_v5("exact-locator-index", false, true)),
+            27 => Some(general_terminal_spec_v5("exact-adjacency-index", false, true)),
+            28 => Some(general_terminal_spec_v5("retained-candidate-feed", false, false)),
+            29 => Some(general_terminal_spec_v5("child-rent-payer", false, true)),
+            30 => Some(general_terminal_spec_v5("neutral-sink", false, true)),
+            _ => None,
+        },
+        GeneralV2Action::RetireRetainedFeed if account_count == 30 => match index {
+            25 => Some(general_terminal_spec_v5("settlement-root", false, true)),
+            26 => Some(general_terminal_spec_v5("retained-candidate-feed", false, true)),
+            27 => Some(general_terminal_spec_v5("feed-rent-payer", false, true)),
+            28 => Some(general_terminal_spec_v5("neutral-sink", false, true)),
+            29 => Some(general_terminal_spec_v5("keeper", true, true)),
+            _ => None,
+        },
+        GeneralV2Action::CloseOwnerSettlementRow | GeneralV2Action::CloseOwnerFeeFinalization
+            if account_count == 29 => match index {
+                25 => Some(general_terminal_spec_v5("settlement-root", false, true)),
+                26 => Some(general_terminal_spec_v5("terminal-child", false, true)),
+                27 => Some(general_terminal_spec_v5("child-rent-payer", false, true)),
+                28 => Some(general_terminal_spec_v5("neutral-sink", false, true)),
+                _ => None,
+            },
+        GeneralV2Action::BeginSettlementRetirement if account_count == 26 => match index {
+            25 => Some(general_terminal_spec_v5("settlement-root", false, true)),
+            _ => None,
+        },
+        GeneralV2Action::AdvanceFeeRetirement => {
+            if index < GENERAL_ACTION50_PREFIX_V5.len() {
+                let mut spec = GENERAL_ACTION50_PREFIX_V5[index];
+                if account_count == 45 && matches!(index, 0 | 2) {
+                    spec.writable = true;
+                }
+                return Some(spec);
+            }
+            if account_count != 45 {
+                return None;
+            }
+            match index {
+                34 => Some(general_terminal_spec_v5("epoch-v6", false, false)),
+                35 => Some(general_terminal_spec_v5("selected-fee-record-v2", false, true)),
+                36 => Some(general_terminal_spec_v5("treasury-ledger-v2", false, true)),
+                37 => Some(general_terminal_spec_v5("treasury-service-ledger", false, true)),
+                38 => Some(general_terminal_spec_v5("fee-closure-manifest-v2", false, true)),
+                39 => Some(general_terminal_spec_v5("fee-terminal-receipt-v3", false, true)),
+                40 => Some(general_terminal_spec_v5("creation-payer", true, true)),
+                41 => Some(general_terminal_spec_v5("refund-payer", false, true)),
+                42 => Some(general_terminal_spec_v5("neutral-sink", false, true)),
+                43 => Some(general_terminal_spec_v5("system-program", false, false)),
+                44 => Some(general_terminal_spec_v5("rent-sysvar", false, false)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+pub(crate) const fn general_terminal_alias_allowed_v5(
+    action: GeneralV2Action,
+    left: usize,
+    right: usize,
+) -> bool {
+    match action {
+        GeneralV2Action::RetireExactIndexChildren => left == 29 && right == 30,
+        GeneralV2Action::RetireRetainedFeed => {
+            matches!((left, right), (27, 28) | (27, 29) | (28, 29))
+        }
+        GeneralV2Action::CloseOwnerSettlementRow
+        | GeneralV2Action::CloseOwnerFeeFinalization => left == 27 && right == 28,
+        GeneralV2Action::AdvanceFeeRetirement => {
+            matches!((left, right), (40, 41) | (40, 42) | (41, 42))
+        }
+        _ => false,
+    }
 }
 
 /// One exact role in the payload-scoped Dealer terminal frame.
@@ -2075,6 +2389,100 @@ impl OwnedInstructionDraft {
         Ok(value)
     }
 
+    /// Construct one exact current General V5 terminal request. The closed
+    /// action set owns the payload decoder and full account-role grammar; a
+    /// caller cannot use this seam for action 47 or any historical General
+    /// coordinate.
+    pub(crate) fn enabled_general_terminal_v5(
+        semantic_owner: SemanticOwner,
+        program_id: Address,
+        accounts: Vec<AccountMeta>,
+        equations: Vec<ExactEquation>,
+        action: GeneralV2Action,
+        payload: &[u8],
+    ) -> Result<Self> {
+        validate_general_terminal_payload_v5(action, payload)?;
+        let expected_count = if action == GeneralV2Action::FreezeEpochV5 {
+            if !(33..=36).contains(&accounts.len()) {
+                return Err(ConstructionError::InvalidAccountContract);
+            }
+            accounts.len()
+        } else {
+            general_terminal_account_count_v5(action, payload)?
+        };
+        if accounts.len() != expected_count {
+            return Err(ConstructionError::InvalidAccountContract);
+        }
+        let mut required_signers = Vec::new();
+        let mut left = 0usize;
+        while left < accounts.len() {
+            let spec = general_terminal_account_spec_v5(
+                action,
+                left,
+                accounts.len(),
+                payload,
+            )
+            .ok_or(ConstructionError::InvalidAccountContract)?;
+            if accounts[left].pubkey == Address::default()
+                || accounts[left].is_signer != spec.signer
+                || accounts[left].is_writable != spec.writable
+            {
+                return Err(ConstructionError::InvalidAccountContract);
+            }
+            if spec.signer {
+                required_signers.push(accounts[left].pubkey);
+            }
+            let mut right = left + 1;
+            while right < accounts.len() {
+                if accounts[left].pubkey == accounts[right].pubkey
+                    && !general_terminal_alias_allowed_v5(action, left, right)
+                {
+                    return Err(ConstructionError::DuplicateAccount);
+                }
+                right += 1;
+            }
+            left += 1;
+        }
+        let family = ExtensionFamily::GeneralV2;
+        let central_action = ExtensionAction::GeneralV2(action);
+        let binding = registry_binding(family, action.tag(), Some(central_action))?;
+        let request = ExtensionRequest {
+            sequence: 0,
+            envelope: ExtensionEnvelope {
+                family,
+                action: central_action,
+                payload: payload.to_vec(),
+            },
+        };
+        let mut data = vec![0; 13 + EXTENSION_ENVELOPE_BYTES + payload.len()];
+        let exact = request
+            .encode(&mut data)
+            .map_err(|_| ConstructionError::WrongWireLength)?;
+        data.truncate(exact);
+        let value = Self {
+            flow: general_terminal_flow_v5(action)
+                .ok_or(ConstructionError::UnallocatedRegistryCoordinate)?,
+            action_name: general_terminal_action_name_v5(action)
+                .ok_or(ConstructionError::UnallocatedRegistryCoordinate)?
+                .into(),
+            semantic_owner,
+            program_id,
+            accounts,
+            required_signers,
+            equations,
+            registry_binding: Some(binding),
+            runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
+            wire: OwnedWireContract::GeneralTerminalRequestV5 {
+                binding,
+                action,
+                sequence: 0,
+            },
+            data,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Construct the exact central request for Dealer action 25 target 8 or
     /// 9. The payload was derived from finalized account bytes by the action
     /// material owner; this boundary rechecks its canonical fixed layout and
@@ -2263,6 +2671,10 @@ impl OwnedInstructionDraft {
         let structured_wrapper = matches!(self.wire, OwnedWireContract::StructuredWrapperV1 { .. });
         let dealer_facility = matches!(self.wire, OwnedWireContract::DealerFacilityRequestV1 { .. });
         let dealer_terminal = matches!(self.wire, OwnedWireContract::DealerTerminalRetireV1 { .. });
+        let general_terminal = matches!(
+            self.wire,
+            OwnedWireContract::GeneralTerminalRequestV5 { .. }
+        );
         if !source_request
             && !failure_request
             && !collateral_request
@@ -2271,6 +2683,7 @@ impl OwnedInstructionDraft {
             && !structured_wrapper
             && !dealer_facility
             && !dealer_terminal
+            && !general_terminal
         {
             let mut accounts = BTreeSet::new();
             for account in &self.accounts {
@@ -3170,6 +3583,67 @@ impl OwnedInstructionDraft {
                     }
                 }
             }
+            OwnedWireContract::GeneralTerminalRequestV5 {
+                binding,
+                action,
+                sequence,
+            } => {
+                let request = ExtensionRequest::decode(&self.data)
+                    .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                if sequence != 0
+                    || request.sequence != sequence
+                    || request.envelope.family != ExtensionFamily::GeneralV2
+                    || request.envelope.action != ExtensionAction::GeneralV2(action)
+                    || self.registry_binding != Some(binding)
+                    || binding.family != ExtensionFamily::GeneralV2
+                    || binding.local_action != action.tag()
+                    || binding.central_action != Some(ExtensionAction::GeneralV2(action))
+                    || binding.family.allocation_status() != Some(binding.family_status)
+                    || self.flow
+                        != general_terminal_flow_v5(action)
+                            .ok_or(ConstructionError::UnallocatedRegistryCoordinate)?
+                    || self.runtime_admission != RuntimeAdmission::ReleaseBoundEnabled
+                {
+                    return Err(ConstructionError::UnallocatedRegistryCoordinate);
+                }
+                validate_general_terminal_payload_v5(action, &request.envelope.payload)?;
+                let expected_count = if action == GeneralV2Action::FreezeEpochV5 {
+                    if !(33..=36).contains(&self.accounts.len()) {
+                        return Err(ConstructionError::InvalidAccountContract);
+                    }
+                    self.accounts.len()
+                } else {
+                    general_terminal_account_count_v5(action, &request.envelope.payload)?
+                };
+                if self.accounts.len() != expected_count {
+                    return Err(ConstructionError::InvalidAccountContract);
+                }
+                let mut left = 0usize;
+                while left < self.accounts.len() {
+                    let spec = general_terminal_account_spec_v5(
+                        action,
+                        left,
+                        self.accounts.len(),
+                        &request.envelope.payload,
+                    )
+                    .ok_or(ConstructionError::InvalidAccountContract)?;
+                    if self.accounts[left].is_signer != spec.signer
+                        || self.accounts[left].is_writable != spec.writable
+                    {
+                        return Err(ConstructionError::InvalidAccountContract);
+                    }
+                    let mut right = left + 1;
+                    while right < self.accounts.len() {
+                        if self.accounts[left].pubkey == self.accounts[right].pubkey
+                            && !general_terminal_alias_allowed_v5(action, left, right)
+                        {
+                            return Err(ConstructionError::DuplicateAccount);
+                        }
+                        right += 1;
+                    }
+                    left += 1;
+                }
+            }
         }
         Ok(())
     }
@@ -3427,6 +3901,7 @@ impl ProtocolTransactionBuilder {
                     | OwnedWireContract::DealerTerminalRetireV1 { .. }
                     | OwnedWireContract::MainFailureRequestV1 { .. }
                     | OwnedWireContract::MainFailureArchiveRequestV1 { .. }
+                    | OwnedWireContract::GeneralTerminalRequestV5 { .. }
             )
         }) {
             return Err(ConstructionError::MissingLookupTable);
@@ -3455,6 +3930,7 @@ impl ProtocolTransactionBuilder {
                     | OwnedWireContract::CollateralReplayRequestV3 { .. }
                     | OwnedWireContract::DealerFacilityRequestV1 { .. }
                     | OwnedWireContract::DealerTerminalRetireV1 { .. }
+                    | OwnedWireContract::GeneralTerminalRequestV5 { .. }
             ) && draft.program_id != self.clutch_program
             {
                 return Err(ConstructionError::ForeignProgram);
@@ -3662,6 +4138,7 @@ impl ProtocolTransactionBuilder {
                 | OwnedWireContract::DealerTerminalRetireV1 { .. }
                 | OwnedWireContract::MainFailureRequestV1 { .. }
                 | OwnedWireContract::MainFailureArchiveRequestV1 { .. }
+                | OwnedWireContract::GeneralTerminalRequestV5 { .. }
         );
         if !supported
             || !matches!(
@@ -3670,6 +4147,9 @@ impl ProtocolTransactionBuilder {
                     | ProtocolFlow::DealerFacility
                     | ProtocolFlow::DealerFacilityTerminal
                     | ProtocolFlow::FailureRecovery
+                    | ProtocolFlow::GeneralV2Candidate
+                    | ProtocolFlow::GeneralV2Settlement
+                    | ProtocolFlow::GeneralV2Fees
             )
             || lookup_table.key == Address::default()
             || lookup_table.addresses.is_empty()
@@ -3686,11 +4166,20 @@ impl ProtocolTransactionBuilder {
                 return Err(ConstructionError::InvalidLookupTable);
             }
         }
+        let payer_instruction_union = draft
+            .accounts
+            .iter()
+            .any(|account| {
+                account.pubkey == self.payer && account.is_signer && account.is_writable
+            });
         for account in &draft.accounts {
             if account.pubkey == lookup_table.key || self.payer == lookup_table.key {
                 return Err(ConstructionError::InvalidLookupTable);
             }
-            if account.pubkey == self.payer && (!account.is_signer || !account.is_writable) {
+            if account.pubkey == self.payer
+                && (!account.is_signer || !account.is_writable)
+                && !payer_instruction_union
+            {
                 return Err(ConstructionError::InvalidAccountContract);
             }
             if !account.is_signer
