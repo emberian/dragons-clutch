@@ -439,6 +439,7 @@ impl RpcIndexPlan {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RpcRequestPurpose {
     ProgramScan,
+    ExactAccountBatch,
     ProgramSubscription,
     BlockSubscription,
     SlotSubscription,
@@ -453,6 +454,68 @@ pub struct PlannedRpcRequest {
     pub commitment: RpcCommitment,
     pub purpose: RpcRequestPurpose,
     pub body: Value,
+}
+
+/// One bounded, address-exact finalized `getMultipleAccounts` request. The
+/// ordered address vector is retained outside the JSON body so a transport
+/// cannot relabel response positions before hostile decoding.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlannedExactAccountBatchV1 {
+    rpc: PlannedRpcRequest,
+    addresses: Vec<Address>,
+    minimum_context_slot: u64,
+}
+
+impl PlannedExactAccountBatchV1 {
+    #[must_use]
+    pub const fn rpc(&self) -> &PlannedRpcRequest { &self.rpc }
+    #[must_use]
+    pub fn addresses(&self) -> &[Address] { &self.addresses }
+}
+
+impl RpcIndexPlan {
+    pub fn exact_finalized_account_batch_v1(
+        &self,
+        release_key: &str,
+        request_id: u64,
+        minimum_context_slot: u64,
+        addresses: Vec<Address>,
+    ) -> Result<PlannedExactAccountBatchV1> {
+        self.validate()?;
+        let release = self.release(release_key)?;
+        if request_id == 0
+            || minimum_context_slot == 0
+            || addresses.is_empty()
+            || addresses.len() > 64
+        {
+            return Err(RpcIndexError::InvalidBound);
+        }
+        let mut unique = BTreeSet::new();
+        if addresses.iter().any(|address| !unique.insert(*address)) {
+            return Err(RpcIndexError::InvalidAccount);
+        }
+        Ok(PlannedExactAccountBatchV1 {
+            rpc: PlannedRpcRequest {
+                request_id,
+                release_key: release.key(),
+                program_id: release.program_id,
+                commitment: RpcCommitment::Finalized,
+                purpose: RpcRequestPurpose::ExactAccountBatch,
+                body: json!({
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": "getMultipleAccounts",
+                    "params": [addresses.iter().map(ToString::to_string).collect::<Vec<_>>(), {
+                        "commitment": "finalized",
+                        "encoding": "base64",
+                        "minContextSlot": minimum_context_slot
+                    }]
+                }),
+            },
+            addresses,
+            minimum_context_slot,
+        })
+    }
 }
 
 pub fn decode_response_result<'a>(
@@ -483,7 +546,9 @@ fn require_notification_envelope(
         RpcRequestPurpose::BlockSubscription => "blockNotification",
         RpcRequestPurpose::SlotSubscription => "slotsUpdatesNotification",
         RpcRequestPurpose::RootSubscription => "rootNotification",
-        RpcRequestPurpose::ProgramScan => return Err(RpcIndexError::WrongRequest),
+        RpcRequestPurpose::ProgramScan | RpcRequestPurpose::ExactAccountBatch => {
+            return Err(RpcIndexError::WrongRequest)
+        }
     };
     if notification.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
         || notification.get("method").and_then(Value::as_str) != Some(method)
@@ -517,7 +582,9 @@ pub fn decode_subscription_registration(
         | RpcRequestPurpose::RootSubscription => {
             require_topology_request(plan, request, request.purpose)?;
         }
-        RpcRequestPurpose::ProgramScan => return Err(RpcIndexError::WrongRequest),
+        RpcRequestPurpose::ProgramScan | RpcRequestPurpose::ExactAccountBatch => {
+            return Err(RpcIndexError::WrongRequest)
+        }
     }
     result
         .as_u64()
@@ -537,6 +604,7 @@ pub fn notification_subscription_id(notification: &Value) -> Result<u64> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RpcObservationSource {
     FinalizedScan,
+    FinalizedExactBatch { request_id: u64 },
     ProcessedSubscription { subscription_id: u64 },
 }
 
@@ -734,6 +802,110 @@ pub struct ObservedRpcAccount {
     pub rent_epoch: u64,
     pub data: Vec<u8>,
     pub provenance: RpcObservationProvenance,
+}
+
+/// One exact address position from a finalized account batch. Absence is
+/// retained as first-class evidence so a fresh PDA is never represented by a
+/// caller-invented zero-valued account.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FinalizedExactAccountV1 {
+    Present(ObservedRpcAccount),
+    Absent {
+        address: Address,
+        provenance: RpcObservationProvenance,
+    },
+}
+
+impl FinalizedExactAccountV1 {
+    #[must_use]
+    pub const fn address(&self) -> Address {
+        match self {
+            Self::Present(account) => account.address,
+            Self::Absent { address, .. } => *address,
+        }
+    }
+
+    #[must_use]
+    pub const fn provenance(&self) -> &RpcObservationProvenance {
+        match self {
+            Self::Present(account) => &account.provenance,
+            Self::Absent { provenance, .. } => provenance,
+        }
+    }
+}
+
+pub fn decode_exact_finalized_account_batch_v1(
+    plan: &RpcIndexPlan,
+    request: &PlannedExactAccountBatchV1,
+    response: &Value,
+    receive_sequence_start: u64,
+) -> Result<Vec<FinalizedExactAccountV1>> {
+    plan.validate()?;
+    let release = plan.release(&request.rpc.release_key)?;
+    if request.rpc.purpose != RpcRequestPurpose::ExactAccountBatch
+        || request.rpc.commitment != RpcCommitment::Finalized
+        || request.rpc.program_id != release.program_id
+    {
+        return Err(RpcIndexError::WrongRequest);
+    }
+    let result = decode_response_result(plan, &request.rpc, response)?;
+    let slot = result
+        .get("context")
+        .and_then(|value| value.get("slot"))
+        .and_then(Value::as_u64)
+        .filter(|slot| *slot > 0)
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    if slot < request.minimum_context_slot {
+        return Err(RpcIndexError::MalformedResponse);
+    }
+    let values = result
+        .get("value")
+        .and_then(Value::as_array)
+        .ok_or(RpcIndexError::MalformedResponse)?;
+    if values.len() != request.addresses.len() {
+        return Err(RpcIndexError::MalformedResponse);
+    }
+    let mut total = 0usize;
+    let mut output = Vec::with_capacity(values.len());
+    for (index, (address, value)) in request.addresses.iter().zip(values).enumerate() {
+        let receive_sequence = receive_sequence_start
+            .checked_add(u64::try_from(index).map_err(|_| RpcIndexError::InvalidBound)?)
+            .ok_or(RpcIndexError::InvalidBound)?;
+        let provenance = RpcObservationProvenance {
+            cluster_key: plan.cluster.key(),
+            release_key: request.rpc.release_key.clone(),
+            slot,
+            commitment: RpcCommitment::Finalized,
+            source: RpcObservationSource::FinalizedExactBatch {
+                request_id: request.rpc.request_id,
+            },
+            receive_sequence,
+        };
+        if value.is_null() {
+            output.push(FinalizedExactAccountV1::Absent {
+                address: *address,
+                provenance,
+            });
+            continue;
+        }
+        let decoded = decode_account_value(value, plan.bounds)?;
+        total = total
+            .checked_add(decoded.data.len())
+            .ok_or(RpcIndexError::ResponseTooLarge)?;
+        if total > plan.bounds.maximum_total_response_bytes {
+            return Err(RpcIndexError::ResponseTooLarge);
+        }
+        output.push(FinalizedExactAccountV1::Present(ObservedRpcAccount {
+            address: *address,
+            owner: decoded.owner,
+            lamports: decoded.lamports,
+            executable: decoded.executable,
+            rent_epoch: decoded.rent_epoch,
+            data: decoded.data,
+            provenance,
+        }));
+    }
+    Ok(output)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1148,6 +1320,61 @@ mod tests {
         assert_eq!(
             classify_program_removal(&account(release.program_id, 7, false, &[1]), &release),
             Ok(None)
+        );
+    }
+
+    #[test]
+    fn exact_batch_retains_absence_and_refuses_stale_or_shifted_positions() {
+        let plan = RpcIndexPlan {
+            cluster: RpcClusterBinding {
+                cluster_name: "solana-devnet".to_string(),
+                genesis_hash: "11".repeat(16),
+                rpc_http_url: "https://api.devnet.solana.com".to_string(),
+                rpc_websocket_url: "wss://api.devnet.solana.com/".to_string(),
+            },
+            releases: vec![release()],
+            bounds: RpcAcquisitionBounds {
+                maximum_accounts_per_scan: 64,
+                maximum_account_data_bytes: 1_024,
+                maximum_total_response_bytes: 32_768,
+                maximum_subscriptions: 8,
+            },
+        };
+        let addresses = vec![Address::default(), Address::new_from_array([0x45; 32])];
+        let request = plan.exact_finalized_account_batch_v1(
+            &plan.releases[0].key(), 77, 10, addresses.clone(),
+        ).unwrap();
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 77,
+            "result": {
+                "context": {"slot": 11},
+                "value": [{
+                    "owner": Address::default().to_string(),
+                    "lamports": 1,
+                    "executable": true,
+                    "rentEpoch": 0,
+                    "data": ["", "base64"]
+                }, null]
+            }
+        });
+        let decoded = decode_exact_finalized_account_batch_v1(&plan, &request, &response, 9)
+            .unwrap();
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[0].address(), addresses[0]);
+        assert!(matches!(decoded[1], FinalizedExactAccountV1::Absent { .. }));
+
+        let mut stale = response.clone();
+        stale["result"]["context"]["slot"] = json!(9);
+        assert_eq!(
+            decode_exact_finalized_account_batch_v1(&plan, &request, &stale, 9),
+            Err(RpcIndexError::MalformedResponse),
+        );
+        let mut shifted = response;
+        shifted["result"]["value"] = json!([null]);
+        assert_eq!(
+            decode_exact_finalized_account_batch_v1(&plan, &request, &shifted, 9),
+            Err(RpcIndexError::MalformedResponse),
         );
     }
 }

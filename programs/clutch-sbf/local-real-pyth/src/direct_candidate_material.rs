@@ -13,6 +13,7 @@ use crate::action_material::{
     ActionFreshnessBoundaryV1, CanonicalActionMaterialErrorV1,
     CanonicalActionMaterialV1,
 };
+use crate::direct_order_material::finalized_dependency_digest;
 use crate::operatord::KeeperActionSelection;
 use crate::rpc_index::{IndexedProgramRelease, ObservedRpcAccount, RpcCommitment};
 use crate::transaction_builder::{
@@ -81,6 +82,10 @@ pub struct DirectCandidateSubmissionSnapshotV1<'a> {
     /// browser request. The returned transaction remains unsigned.
     pub submitter: &'a ObservedRpcAccount,
     pub system_program: &'a ObservedRpcAccount,
+    /// Read-only cursor dependencies. They are not action-5 metas, but bind
+    /// the scheduler to the same globally capitalized Candidate state.
+    pub cursor_liveness_policy: &'a ObservedRpcAccount,
+    pub cursor_candidate_compartment: &'a ObservedRpcAccount,
     /// Present only when the derived top-three transition evicts a bond owner.
     pub evicted_refund_owner: Option<&'a ObservedRpcAccount>,
 }
@@ -204,6 +209,11 @@ pub fn construct_direct_candidate_submission_v1(
         snapshot.system_program,
     ];
     authenticate_snapshot_set(release, freshness, &accounts)?;
+    authenticate_snapshot_set(
+        release,
+        freshness,
+        &[snapshot.cursor_liveness_policy, snapshot.cursor_candidate_compartment],
+    )?;
     if let Some(refund) = snapshot.evicted_refund_owner {
         authenticate_snapshot_set(release, freshness, &[refund])?;
     }
@@ -233,17 +243,8 @@ pub fn construct_direct_candidate_submission_v1(
         DirectMarketAction::SubmitCandidate,
         sequence,
         prestate_id,
-        [
-            snapshot.root.address,
-            snapshot.replay.address,
-            snapshot.selection.address,
-            Address::new_from_array(
-                decoded.state.root().candidate_liveness().policy_account,
-            ),
-            Address::new_from_array(
-                decoded.state.root().candidate_liveness().candidate_account,
-            ),
-        ],
+        [snapshot.root, snapshot.replay, snapshot.selection,
+            snapshot.cursor_liveness_policy, snapshot.cursor_candidate_compartment],
     )?;
     let candidate = derive_deterministic_valid_candidate(&decoded.selection)?;
     let bond_before = decoded
@@ -444,13 +445,8 @@ pub fn construct_next_direct_candidate_verification_v1(
         wire_action,
         sequence,
         prestate_id,
-        [
-            snapshot.root.address,
-            snapshot.replay.address,
-            snapshot.selection.address,
-            snapshot.liveness_policy.address,
-            snapshot.candidate_compartment.address,
-        ],
+        [snapshot.root, snapshot.replay, snapshot.selection,
+            snapshot.liveness_policy, snapshot.candidate_compartment],
     )?;
     let policy_id = sha256(&snapshot.liveness_policy.data);
     if policy_id != binding.policy_data_id {
@@ -1036,17 +1032,21 @@ fn authenticate_operator_cursor(
     action: DirectMarketAction,
     sequence: u64,
     prestate_id: [u8; 32],
-    expected_dependencies: [Address; 5],
+    expected_dependencies: [&ObservedRpcAccount; 5],
 ) -> Result<(), CanonicalActionMaterialErrorV1> {
+    let mut dependencies = expected_dependencies;
+    dependencies.sort_by_key(|account| account.address);
+    let dependency_id = finalized_dependency_digest(&dependencies)?;
+    let expected_addresses = expected_dependencies.map(|account| account.address);
     if selection.cursor.workflow_id == [0; 32]
         || selection.cursor.lane != WorkflowLane::Candidate
         || selection.cursor.generation != generation
         || selection.cursor.position.phase != u16::from(action.tag())
         || selection.cursor.position.item != sequence
-        || selection.cursor.observed_state_sha256 == [0; 32]
+        || selection.cursor.observed_state_sha256 != dependency_id
         || prestate_id == [0; 32]
         || selection.dependencies.len() != expected_dependencies.len()
-        || expected_dependencies
+        || expected_addresses
             .iter()
             .any(|address| !selection.dependencies.contains(address))
     {

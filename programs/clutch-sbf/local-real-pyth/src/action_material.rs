@@ -765,7 +765,11 @@ pub(crate) fn finish_chain_derived_direct_material_v2(
         || selection.effective_commitment != crate::rpc_index::RpcCommitment::Finalized
         || selection.action != action_name
         || selection.account != root
-        || freshness.observed_slot != selection.account_slot
+        // An address-exact finalized reacquisition may land at a later slot
+        // than the index scan which scheduled the cursor. The typed material
+        // owner must rederive and compare the exact dependency digest; time
+        // may advance, but it may never move behind the selected observation.
+        || freshness.observed_slot < selection.account_slot
     {
         return Err(CanonicalActionMaterialErrorV1::WrongSelection);
     }

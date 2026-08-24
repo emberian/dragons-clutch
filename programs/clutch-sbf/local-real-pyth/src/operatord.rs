@@ -493,10 +493,11 @@ fn direct_candidate_dependency_v2(
     let address = candidate.account.address.to_bytes();
     address == root.action_replay_account()
         || address == root.selection_account()
-        || (0..root.live_reservations()).any(|index| {
-            root.reservation_account(index)
-                .is_ok_and(|reservation| reservation == address)
-        })
+        || (root.phase() == DirectRootPhaseV1::Open
+            && (0..root.live_reservations()).any(|index| {
+                root.reservation_account(index)
+                    .is_ok_and(|reservation| reservation == address)
+            }))
         || address == binding.policy_account
         || address == binding.candidate_account
 }
@@ -1034,6 +1035,7 @@ pub struct OperatorJsonApi<'index> {
     index: &'index CanonicalAccountIndex,
     selector: ResumableKeeperSelector,
     action_materials: &'index [CanonicalActionMaterialV1],
+    configured_direct_operator: Option<Address>,
 }
 
 impl<'index> OperatorJsonApi<'index> {
@@ -1046,6 +1048,7 @@ impl<'index> OperatorJsonApi<'index> {
             index,
             selector,
             action_materials: &[],
+            configured_direct_operator: None,
         }
     }
 
@@ -1061,7 +1064,56 @@ impl<'index> OperatorJsonApi<'index> {
             index,
             selector,
             action_materials,
+            configured_direct_operator: None,
         }
+    }
+
+    /// Bind server-owned Direct signer selection and opaque materials. The
+    /// operator public key is deployment configuration, never a query/body
+    /// value, and this API still exposes no signature or submission method.
+    pub fn with_direct_operator_materials(
+        index: &'index CanonicalAccountIndex,
+        selector: ResumableKeeperSelector,
+        action_materials: &'index [CanonicalActionMaterialV1],
+        operator: Address,
+    ) -> Result<Self, KeeperSelectionError> {
+        if operator == Address::default() {
+            return Err(KeeperSelectionError::IncompleteCanonicalHint);
+        }
+        Ok(Self {
+            index,
+            selector,
+            action_materials,
+            configured_direct_operator: Some(operator),
+        })
+    }
+
+    fn selections(
+        &self,
+        commitment: RpcCommitment,
+    ) -> Result<Vec<KeeperActionSelection>, KeeperSelectionError> {
+        let mut selections = self.selector.select(self.index, commitment)?;
+        if let Some(operator) = self.configured_direct_operator {
+            selections.extend(self.selector.select_direct_operator_reservations_v2(
+                self.index,
+                commitment,
+                operator,
+            )?);
+        }
+        selections.sort_by_key(|selection| {
+            (
+                selection.account,
+                selection.cursor.position.phase,
+                selection.cursor.position.item,
+                selection.action,
+            )
+        });
+        selections.dedup_by(|left, right| {
+            left.account == right.account
+                && left.cursor == right.cursor
+                && left.action == right.action
+        });
+        Ok(selections)
     }
 
     /// Handle one already-bounded HTTP request target. No endpoint mutates
@@ -1154,7 +1206,7 @@ impl<'index> OperatorJsonApi<'index> {
             );
         };
         let accounts = self.index.current_accounts(RpcCommitment::Finalized);
-        let cursors = match self.selector.select(self.index, RpcCommitment::Finalized) {
+        let cursors = match self.selections(RpcCommitment::Finalized) {
             Ok(cursors) => cursors,
             Err(error) => {
                 return response(
@@ -1248,7 +1300,7 @@ impl<'index> OperatorJsonApi<'index> {
                 }),
             );
         };
-        let cursors = match self.selector.select(self.index, RpcCommitment::Finalized) {
+        let cursors = match self.selections(RpcCommitment::Finalized) {
             Ok(cursors) => cursors,
             Err(error) => {
                 return response(
@@ -1346,7 +1398,7 @@ impl<'index> OperatorJsonApi<'index> {
     }
 
     fn keeper(&self, commitment: RpcCommitment) -> OperatorJsonResponse {
-        match self.selector.select(self.index, commitment) {
+        match self.selections(commitment) {
             Ok(selections) => response(
                 200,
                 json!({

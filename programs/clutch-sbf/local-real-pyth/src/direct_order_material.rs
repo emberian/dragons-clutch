@@ -339,6 +339,87 @@ impl AuthenticatedDirectReservationCancelV2 for CancelAuthorityV2 {
     }
 }
 
+/// Derive action 2's fresh Reservation address before the final exact-account
+/// batch. This is the first phase of daemon acquisition only: it reuses the
+/// same hostile graph and deterministic-order owners as the final material
+/// constructor and returns no caller-selectable economics.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn derive_direct_admit_reservation_address_v2(
+    release: &IndexedProgramRelease,
+    freshness: ActionFreshnessBoundaryV1,
+    root_account: &ObservedRpcAccount,
+    replay_account: &ObservedRpcAccount,
+    operator: Address,
+    authority_accounts: DirectReservationAuthoritySnapshotV2<'_>,
+    compiler_bundle_v6: &ObservedRpcAccount,
+    price_grid: &ObservedRpcAccount,
+    existing_peer: Option<&ObservedRpcAccount>,
+) -> Result<Address, CanonicalActionMaterialErrorV1> {
+    let fixed = [root_account, replay_account, compiler_bundle_v6, price_grid];
+    authenticate_snapshot_set(release, freshness, &fixed)?;
+    authenticate_snapshot_set(
+        release,
+        freshness,
+        &reservation_authority_accounts(authority_accounts),
+    )?;
+    if let Some(peer) = existing_peer {
+        authenticate_snapshot_set(release, freshness, &[peer])?;
+    }
+    let decoded = decode_root_replay(release, root_account, replay_account)?;
+    let root_count = usize::from(decoded.state.root().live_reservations());
+    let peer = match (root_count, existing_peer) {
+        (0, None) => None,
+        (1, Some(account)) => Some(decode_reservation(
+            release,
+            root_account,
+            account,
+            &decoded.state,
+            0,
+        )?),
+        _ => return Err(CanonicalActionMaterialErrorV1::InvalidPlan),
+    };
+    if peer.is_some_and(|value| value.owner() == operator.to_bytes()) {
+        return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+    }
+    let graph = authenticate_reservation_graph(
+        release,
+        root_account,
+        &decoded.state,
+        operator,
+        authority_accounts,
+    )?;
+    let (_, _, grid) = authenticate_order_artifacts(
+        release,
+        &decoded.state,
+        compiler_bundle_v6,
+        authority_accounts.market_genesis_v2,
+        price_grid,
+    )?;
+    let fields = graph.position_replay.position().semantic.fields();
+    let (side, outcome, quantity, limit) = derive_operator_owned_order(
+        decoded.state.root(),
+        fields.cash_atoms,
+        fields.reserved_cash_atoms,
+        fields.native_eggs,
+        peer,
+        &grid,
+    )?;
+    let order_id = derive_operator_order_id(
+        release,
+        root_account.address,
+        operator,
+        decoded.state.replay().next_action_sequence(),
+        side,
+        outcome,
+        quantity,
+        limit,
+    );
+    Ok(Address::find_program_address(
+        &[DIRECT_RESERVATION_SEED_V1, root_account.address.as_ref(), &order_id],
+        &release.program_id,
+    ).0)
+}
+
 /// Derive one deterministic valid operator-owned order and construct current
 /// action 2. This is deliberately not a generic customer order API: the actor
 /// is the transaction builder's payer, the Position is its exact current
@@ -358,7 +439,7 @@ pub fn construct_direct_admit_order_v2(
         snapshot.root,
         snapshot.replay,
         snapshot.fresh_reservation,
-        snapshot.actor_payer,
+        snapshot.actor_payer.address,
         snapshot.system_program,
         snapshot.rent_sysvar,
         snapshot.clock,
@@ -397,7 +478,7 @@ pub fn construct_direct_admit_order_v2(
         release,
         snapshot.root,
         &decoded.state,
-        snapshot.actor_payer,
+        snapshot.actor_payer.address,
         snapshot.authority,
     )?;
     let (bundle, genesis, grid) = authenticate_order_artifacts(
@@ -667,7 +748,7 @@ pub fn construct_direct_cancel_order_v2(
         release,
         snapshot.root,
         &decoded.state,
-        snapshot.actor_payer,
+        snapshot.actor_payer.address,
         snapshot.authority,
     )?;
     let sequence = decoded.state.replay().next_action_sequence();
@@ -835,7 +916,7 @@ fn authenticate_reservation_graph(
     release: &IndexedProgramRelease,
     root_account: &ObservedRpcAccount,
     state: &DirectRootReplayTransitionV2,
-    actor: &ObservedRpcAccount,
+    actor: Address,
     accounts: DirectReservationAuthoritySnapshotV2<'_>,
 ) -> Result<AuthenticatedReservationGraphV2, CanonicalActionMaterialErrorV1> {
     for account in [
@@ -1006,7 +1087,7 @@ fn authenticate_reservation_graph(
         &[
             POSITION_V3_PDA_PREFIX,
             &root.market_instance_id(),
-            actor.address.as_ref(),
+            actor.as_ref(),
             &purpose_seed,
             accounts.general_market_runtime.address.as_ref(),
         ],
@@ -1032,8 +1113,8 @@ fn authenticate_reservation_graph(
         || fields.realm_id.bytes() != root.realm_id()
         || fields.collateral_policy_id.bytes() != root.collateral_policy_id()
         || fields.collateral_release_id.bytes() != root.collateral_release_id()
-        || fields.owner.bytes() != actor.address.to_bytes()
-        || fields.controller.bytes() != actor.address.to_bytes()
+        || fields.owner.bytes() != actor.to_bytes()
+        || fields.controller.bytes() != actor.to_bytes()
         || fields.replay_account.bytes() != replay_pda.to_bytes()
         || fields.purpose_binding_id.bytes()
             != accounts.general_market_runtime.address.to_bytes()
@@ -1089,9 +1170,9 @@ fn authenticate_reservation_graph(
                 .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?,
         },
         AdapterPositionPurposeBindingV3 {
-            owner: Identity32V1::new(actor.address.to_bytes())
+            owner: Identity32V1::new(actor.to_bytes())
                 .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?,
-            controller: Identity32V1::new(actor.address.to_bytes())
+            controller: Identity32V1::new(actor.to_bytes())
                 .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?,
             purpose_binding_id: Identity32V1::new(
                 accounts.general_market_runtime.address.to_bytes(),
@@ -1407,7 +1488,7 @@ fn authenticate_signer_cursor(
     Ok(())
 }
 
-fn finalized_dependency_digest(
+pub(crate) fn finalized_dependency_digest(
     dependencies: &[&ObservedRpcAccount],
 ) -> Result<[u8; 32], CanonicalActionMaterialErrorV1> {
     let mut hash = Sha256::new();

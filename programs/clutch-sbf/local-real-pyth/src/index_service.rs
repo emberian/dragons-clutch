@@ -434,7 +434,9 @@ impl RpcIndexEngine {
                     events
                 }
             }
-            RpcRequestPurpose::ProgramScan => return Err(RpcIndexEngineError::UnknownRequest),
+            RpcRequestPurpose::ProgramScan | RpcRequestPurpose::ExactAccountBatch => {
+                return Err(RpcIndexEngineError::UnknownRequest)
+            }
         };
         self.next_receive_sequence = next_sequence;
         Ok(events)

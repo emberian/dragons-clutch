@@ -12,6 +12,8 @@ pub mod action_material;
 pub mod direct_candidate_material;
 #[cfg(feature = "operator")]
 pub mod direct_order_material;
+#[cfg(feature = "operator")]
+pub mod direct_operator_server;
 #[cfg(feature = "campaign")]
 mod capture;
 #[cfg(feature = "operator")]
