@@ -235,17 +235,19 @@ fn simplex_is_exact_and_has_one_canonical_width() {
     );
 
     prices[1] = 60;
-    assert!(CandidateStateV1::submit(
-        id(40),
-        CandidateSubmissionV1 {
-            prices,
-            ..submission
-        },
-        config(),
-        batch,
-        10
-    )
-    .is_ok());
+    assert!(
+        CandidateStateV1::submit(
+            id(40),
+            CandidateSubmissionV1 {
+                prices,
+                ..submission
+            },
+            config(),
+            batch,
+            10
+        )
+        .is_ok()
+    );
 }
 
 #[test]
