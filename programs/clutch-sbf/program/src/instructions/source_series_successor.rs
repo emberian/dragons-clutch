@@ -1,9 +1,8 @@
-//! Capability-false SourceSeries 77/v2 successor actions.
+//! Current SourceSeries 77/v2 successor actions.
 //!
 //! These handlers are compiled so their exact account/state joins can be
-//! reviewed, but central dispatch remains the sole capability owner. Actions
-//! 5 through 12 stay disabled in every checked profile until the complete
-//! Source-to-ResolutionV5 chain is admitted.
+//! reviewed, while central dispatch remains the sole all-or-none capability
+//! owner. No handler or inner receipt independently enables a tuple.
 
 use super::source_series::require_live_intent;
 use crate::accounts::{require, Outcome};

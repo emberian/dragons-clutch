@@ -1,8 +1,7 @@
 //! SourcePlane V3 mutation handlers entered only by exact capability tuples.
 //!
-//! The central SourceSeries 77/v2 coordinates are allocated; action 1 release
-//! registration and actions 2/3 SourceHead/OpenRawPage creation are live in
-//! full profiles. This module owns their complete inner execution: semantic outputs are
+//! The central SourceSeries 77/v2 coordinates are allocated and admitted only
+//! as one complete family by the central profile. This module owns their inner execution: semantic outputs are
 //! checked before instruction success, predictable accounts are prefund-safe,
 //! mutable postimages advance their durable lineage in the same rollback
 //! domain, immutable accounts retain an explicit payer/donation rent partition,

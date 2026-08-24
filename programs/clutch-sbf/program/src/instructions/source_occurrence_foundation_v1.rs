@@ -123,6 +123,18 @@ impl AuthenticatedSourceWorkCapitalizationV1 {
     pub(crate) const fn custody(self) -> AuthenticatedSourceFundingCustodyV1 {
         self.custody
     }
+
+    /// Exact pending FundingV2 debit and physical custody movement retained by
+    /// Product's founder and later Source-custody retirement owners.
+    pub(crate) const fn facts(self) -> SourceWorkCapitalizationFactsV1 {
+        self.facts
+    }
+
+    /// Rent-derived complete lifecycle allocation. Product persists its ID and
+    /// exact total so retirement cannot relabel spent principal or donations.
+    pub(crate) const fn quote(self) -> SourceLifecycleCapitalizationQuoteV1 {
+        self.quote
+    }
 }
 
 /// Fully capitalize one Source lifecycle from FundingV2's exact pending debit.

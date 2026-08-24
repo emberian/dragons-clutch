@@ -17,14 +17,14 @@
 //!
 //! ## Current runtime boundary
 //!
-//! The `InitSourceSpec`, `InitSourceArchive`, `AppendSourceArchive`, and
-//! `SealSourceArchive` instructions call this module through a compile-time
-//! closed registry and persist the exact receipt `Resolve` authenticates. The
-//! default artifact intentionally registers no provider/parser release and
-//! refuses before mutation; only the explicitly different
-//! `non-production-mock-source` ELF exercises the complete local-bank path.
-//! Legacy `Intent::FeedAdvance` still folds a caller-supplied observation page
-//! and must not be described as source-authenticated. See
+//! Only historical, explicitly non-successor laboratory profiles retain the
+//! `InitSourceSpec`, archive, and legacy Resolve consumers of this module. The
+//! checked chain-attached successor compiles this authority out; its allocated
+//! SourceSeries V3 family is implemented but remains centrally unavailable
+//! until the Product founder and custody-retirement authorities join the same
+//! all-or-none profile closure. Legacy
+//! `Intent::FeedAdvance` folds a caller-supplied observation page and must not
+//! be described as source-authenticated. See
 //! `docs/implementation/AUTHENTICATED_SOURCE_CONSTRUCTION_V1.md`.
 
 use clutch_accumulator::{Grid, Observation, MAX_VALUE};

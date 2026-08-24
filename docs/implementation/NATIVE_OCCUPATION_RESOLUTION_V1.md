@@ -287,12 +287,13 @@ measurements, payer/close-recipient rules, conflict/rollback tests, and a proof
 that no skip, duplicate, archive substitution, partial-finalize, or abandoned
 work account can alter semantics are prerequisites to promotion.
 
-One independent operatorless gap remains outside this cut, while a follow-up
-closed the second:
+The following statements describe only this historical V1 cut. Both were
+superseded by later independently versioned successors:
 
-- provider ingestion and public SourceArchive construction are not routed; the
-  real-bank archive is canonical and verified but installed at genesis, so this
-  is not a provider-ingestion claim; and
+- **Superseded by SourceSeries 77/v2:** the current route authenticates the
+  release-selected receiver/parser boundary and persists SourceHead/page/window
+  generations; legacy public SourceArchive construction is not current
+  authority; and
 - **Closed by `RECORDED_REDEMPTION_SBF.md`:** `RedeemInternal` now consumes
   immutable Terms plus the persisted v2/v3/v4 Resolution record and accepts no
   Feed or caller evidence buffer. The retired expanded account list refuses.

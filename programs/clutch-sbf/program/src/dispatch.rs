@@ -49,11 +49,17 @@ use crate::instructions::product_series;
 use crate::instructions::structured_custody;
 use crate::instructions::{
     artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3, external_redemption_v3,
-    failure_market_dispatch_v2, fractional_redemption, genesis, observe_resolve,
-    source_ingest_v2,
+    failure_market_dispatch_v2, fractional_redemption, genesis,
 };
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
+use crate::instructions::{observe_resolve, source_ingest_v2};
 #[cfg(feature = "profile-full")]
-use crate::instructions::{direct_market_v1, resolution_work, source_ingest};
+use crate::instructions::direct_market_v1;
+#[cfg(all(
+    feature = "profile-full",
+    not(feature = "profile-successor-chain-attached-dev")
+))]
+use crate::instructions::{resolution_work, source_ingest};
 use clutch_solana_layout::registry::ExtensionAction;
 use clutch_solana_layout::Intent;
 use clutch_solana_reference::{Action, ExtensionRequest, Request};
@@ -191,7 +197,10 @@ fn route_hint(instruction_data: &[u8]) -> Route {
             Some(INTENT_MERGE_HINT | INTENT_MATERIALIZE_HINT | INTENT_DEMATERIALIZE_HINT) => {
                 Route::MergeMaterialize
             }
-            #[cfg(feature = "profile-full")]
+            #[cfg(all(
+                feature = "profile-full",
+                not(feature = "profile-successor-chain-attached-dev")
+            ))]
             Some(INTENT_FEED_ADVANCE_HINT) => Route::ObserveResolve,
             Some(INTENT_REDEEM_EXTERNAL_HINT) => Route::ExternalExit,
             Some(INTENT_WITHDRAW_CASH_HINT) => Route::CashExit,
@@ -207,7 +216,10 @@ fn route_hint(instruction_data: &[u8]) -> Route {
                 | INTENT_ENDOW_HINT
                 | INTENT_CLOSE_REVENUE_POLICY_RECORD_HINT,
             ) => Route::Genesis,
-            #[cfg(feature = "profile-full")]
+            #[cfg(all(
+                feature = "profile-full",
+                not(feature = "profile-successor-chain-attached-dev")
+            ))]
             Some(
                 INTENT_INIT_SOURCE_SPEC_HINT
                 | INTENT_INIT_SOURCE_ARCHIVE_HINT
@@ -218,13 +230,17 @@ fn route_hint(instruction_data: &[u8]) -> Route {
              * The two never share a frame: V1's append holds three provider
              * account views and v2's holds six, and the pull authentication
              * join below it is the deepest call in either family. */
+            #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
             Some(
                 INTENT_INIT_SOURCE_SPEC_V2_HINT
                 | INTENT_INIT_SOURCE_ARCHIVE_V2_HINT
                 | INTENT_APPEND_SOURCE_ARCHIVE_V2_HINT
                 | INTENT_SEAL_SOURCE_ARCHIVE_V2_HINT,
             ) => Route::SourceIngestV2,
-            #[cfg(feature = "profile-full")]
+            #[cfg(all(
+                feature = "profile-full",
+                not(feature = "profile-successor-chain-attached-dev")
+            ))]
             Some(
                 INTENT_BEGIN_RESOLUTION_WORK_HINT
                 | INTENT_FOLD_RESOLUTION_WORK_HINT
@@ -233,6 +249,7 @@ fn route_hint(instruction_data: &[u8]) -> Route {
             ) => Route::ResolutionWork,
             _ => Route::DecodeOnly,
         },
+        #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
         Some(ACTION_RESOLVE_HINT | ACTION_REDEEM_INTERNAL_HINT) => Route::ObserveResolve,
         _ => Route::DecodeOnly,
     }
@@ -288,7 +305,10 @@ pub fn process(
         Route::MergeMaterialize => {
             process_merge_materialize(program_id, accounts, instruction_data)
         }
+        #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
         Route::ObserveResolve => process_observe_resolve(program_id, accounts, instruction_data),
+        #[cfg(feature = "profile-successor-chain-attached-dev")]
+        Route::ObserveResolve => decode_only(instruction_data),
         Route::ExternalExit => process_external_exit(program_id, accounts, instruction_data),
         Route::CashExit => process_cash_exit(program_id, accounts, instruction_data),
         Route::Artifact => process_artifact(program_id, accounts, instruction_data),
@@ -296,11 +316,30 @@ pub fn process(
         Route::FractionalRedemption => {
             process_fractional_redemption(program_id, accounts, instruction_data)
         }
-        #[cfg(feature = "profile-full")]
+        #[cfg(all(
+            feature = "profile-full",
+            not(feature = "profile-successor-chain-attached-dev")
+        ))]
         Route::SourceIngest => process_source_ingest(program_id, accounts, instruction_data),
+        #[cfg(all(
+            feature = "profile-full",
+            feature = "profile-successor-chain-attached-dev"
+        ))]
+        Route::SourceIngest => decode_only(instruction_data),
+        #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
         Route::SourceIngestV2 => process_source_ingest_v2(program_id, accounts, instruction_data),
-        #[cfg(feature = "profile-full")]
+        #[cfg(feature = "profile-successor-chain-attached-dev")]
+        Route::SourceIngestV2 => decode_only(instruction_data),
+        #[cfg(all(
+            feature = "profile-full",
+            not(feature = "profile-successor-chain-attached-dev")
+        ))]
         Route::ResolutionWork => process_resolution_work(program_id, accounts, instruction_data),
+        #[cfg(all(
+            feature = "profile-full",
+            feature = "profile-successor-chain-attached-dev"
+        ))]
+        Route::ResolutionWork => decode_only(instruction_data),
         #[cfg(feature = "profile-non-production-dealer-policy-catalog-lab")]
         Route::DealerPolicy => process_dealer_policy(program_id, accounts, instruction_data),
         #[cfg(feature = "non-production-product-series-lab")]
@@ -751,6 +790,7 @@ fn process_merge_materialize(
 }
 
 #[inline(never)]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 fn process_observe_resolve(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -841,7 +881,10 @@ fn process_genesis(
 }
 
 #[inline(never)]
-#[cfg(feature = "profile-full")]
+#[cfg(all(
+    feature = "profile-full",
+    not(feature = "profile-successor-chain-attached-dev")
+))]
 fn process_source_ingest(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -860,6 +903,7 @@ fn process_source_ingest(
 }
 
 #[inline(never)]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 fn process_source_ingest_v2(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -878,7 +922,10 @@ fn process_source_ingest_v2(
 }
 
 #[inline(never)]
-#[cfg(feature = "profile-full")]
+#[cfg(all(
+    feature = "profile-full",
+    not(feature = "profile-successor-chain-attached-dev")
+))]
 fn process_resolution_work(
     program_id: &Pubkey,
     accounts: &[AccountInfo],

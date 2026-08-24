@@ -165,6 +165,7 @@ pub mod genesis;
 pub mod market_init;
 #[cfg(test)]
 pub mod merge_materialize;
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod observe_resolve;
 pub mod orders_batch;
 pub mod product_artifact;
@@ -177,13 +178,19 @@ pub(crate) mod product_market_foundation_init;
 /// Always-compiled Product/Series semantic owner; executable routes remain
 /// independently capability-disabled.
 pub mod product_series;
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod resolution_work;
 pub mod series_failure_funding;
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod source_ingest;
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub mod source_ingest_v2;
 pub mod source_series;
 pub mod source_series_successor;
 pub(crate) mod source_occurrence_foundation_v1;
+/// Private Product-retirement consumer for the prepaid Source lifecycle
+/// custody. It is always compiled and has no caller-facing dispatcher.
+pub(crate) mod source_funding_custody_retirement_v1;
 /// Unrouted private Source terminal composer. It is always compiled so the
 /// current final Failure postwrite can implement its default-refusing bridge;
 /// no checked capability tuple enters it until the complete chain is admitted.

@@ -7,10 +7,13 @@
 //! consumed directly from `clutch-source-plane-v3-runtime`; there is no SBF-
 //! local Source release, Clock policy, page, result, or handoff DTO.
 //!
-//! SourceSeries 77/v2 action 1 is the artifact-authenticated release registry
-//! seam; actions 2 and 3 are its atomic SourceHead/OpenRawPage lineage,
-//! receipt, and liveness creation path in full profiles. Actions 4 through 12
-//! remain separately disabled until their complete runtime joins enter dispatch.
+//! SourceSeries 77/v2 reserves an artifact-authenticated release registry and
+//! the complete Source lifecycle. Its current implementation includes the
+//! Product-owned founding request/policy producer, fully prepaid PDA custody,
+//! hostile ingest/evaluate/handoff reconstruction, Failure ResolutionV5
+//! terminal join, deterministic reopen, result close, and private Product
+//! retirement drain. Central dispatch remains the sole all-or-none capability
+//! owner; code presence by itself is not capability.
 
 use clutch_liveness::{
     runtime_adapter_v1::{
@@ -77,7 +80,7 @@ use crate::loader_state::{
     decode_loader_pair_v1, LoaderAccountViewV1, PROGRAMDATA_SLOT_OFFSET, PROGRAM_LINK_OFFSET,
     UPGRADEABLE_LOADER_ID,
 };
-use crate::source_identity::CLOCK_SYSVAR_ID;
+use crate::instructions::artifact::CLOCK_SYSVAR_ID;
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
 
 const CLOCK_SYSVAR_BYTES_V1: usize = 40;
@@ -89,7 +92,7 @@ const ACCOUNT_VECTOR_ENTRY_BYTES: usize = 105;
 /// Maximum ordered accounts admitted to one reviewed Source parser invocation.
 pub const MAX_SOURCE_PARSER_ACCOUNTS: usize = 16;
 
-/// Route one centrally allocated but disabled SourcePlane action to refusal.
+/// Route one centrally allocated but profile-disabled SourcePlane action to refusal.
 ///
 /// This boundary is deliberately account-free. The dispatcher calls it before
 /// account inspection, so merely allocating actions 1 through 12 cannot make a
@@ -1157,7 +1160,7 @@ pub fn authenticate_clock_bucket(
     release: AuthenticatedSourceReleaseV1,
     clock_account: &AccountInfo<'_>,
 ) -> SourceV3SbfResult<AuthenticatedClockBucketV1> {
-    if clock_account.key.to_bytes() != CLOCK_SYSVAR_ID
+    if *clock_account.key != CLOCK_SYSVAR_ID
         || clock_account.is_signer
         || clock_account.is_writable
     {
@@ -1180,7 +1183,7 @@ pub fn authenticate_route_clock_bucket(
     route: AuthenticatedSourceRouteV1,
     clock_account: &AccountInfo<'_>,
 ) -> SourceV3SbfResult<AuthenticatedClockBucketV1> {
-    if clock_account.key.to_bytes() != CLOCK_SYSVAR_ID
+    if *clock_account.key != CLOCK_SYSVAR_ID
         || clock_account.is_signer
         || clock_account.is_writable
     {
