@@ -22,9 +22,9 @@
 //! | [`split`] | historical lowered-ledger Split implementation; no checked dispatch |
 //! | [`merge_materialize`] | historical lowered-ledger Merge/representation implementation; no checked dispatch |
 //! | [`market_init`] | host-forensic legacy Market founder; no checked dispatch |
-//! | [`observe_resolve`] | `Intent::FeedAdvance`, `Action::Resolve`, `Action::RedeemInternal` |
-//! | [`source_ingest`] | `Intent::InitSourceSpec`, `Intent::InitSourceArchive`, `Intent::AppendSourceArchive`, `Intent::SealSourceArchive` |
-//! | [`source_ingest_v2`] | `Intent::InitSourceSpecV2`, `Intent::InitSourceArchiveV2`, `Intent::AppendSourceArchiveV2`, `Intent::SealSourceArchiveV2` |
+//! | [`observe_resolve`] | legacy host-fixture `Intent::FeedAdvance`; successor profiles compile it out and Product/Failure own ResolutionV5 |
+//! | [`source_ingest`] | legacy SourceArchive V1 host fixtures; successor profiles compile it out |
+//! | [`source_ingest_v2`] | legacy SourceArchive V2 host fixtures; successor profiles compile it out |
 //! | [`orders_batch`] | `Intent::PlaceOrder`, `Intent::CancelOrder`, `Intent::SubmitDirectPage`, `Intent::SettlePage`, `Intent::InitClearWork`, `Intent::GrowClearWork`, `Intent::InitEpoch`, `Intent::FreezeEpoch`, `Intent::AdvanceClearWork`, `Intent::AdvanceClearSlices`, `Intent::CompleteClearWork`, `Intent::SubmitCandidate`, `Intent::WriteCandidateFeed`, `Intent::SealCandidate`, `Intent::FinalizeSelection`, `Intent::FreezeEntitlement`, `Intent::EntitleSlice` |
 //! | `general_v2_fee_v5` | current counted-root/rent-owned V5 owner fee authentication and action-38 composition; account order remains General-owned |
 //! | `general_v2_receipt_v5` | exact SettlementRoot/retained-Feed/PDA authentication for rent-owned General Receipt V5 |
@@ -177,6 +177,9 @@ pub mod source_ingest_v2;
 pub mod source_series;
 pub mod source_series_successor;
 pub(crate) mod source_occurrence_foundation_v1;
+/// Private Product-retirement consumer for the prepaid Source lifecycle
+/// custody. It is always compiled and has no caller-facing dispatcher.
+pub(crate) mod source_funding_custody_retirement_v1;
 /// Unrouted private Source terminal composer. It is always compiled so the
 /// current final Failure postwrite can implement its default-refusing bridge;
 /// no checked capability tuple enters it until the complete chain is admitted.

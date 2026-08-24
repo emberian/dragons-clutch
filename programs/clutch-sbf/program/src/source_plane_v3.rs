@@ -7,10 +7,13 @@
 //! consumed directly from `clutch-source-plane-v3-runtime`; there is no SBF-
 //! local Source release, Clock policy, page, result, or handoff DTO.
 //!
-//! SourceSeries 77/v2 action 1 is the artifact-authenticated release registry
-//! seam; actions 2 and 3 are its atomic SourceHead/OpenRawPage lineage,
-//! receipt, and liveness creation path in full profiles. Actions 4 through 12
-//! remain separately disabled until their complete runtime joins enter dispatch.
+//! SourceSeries 77/v2 reserves an artifact-authenticated release registry and
+//! the complete Source lifecycle. Its successor implementation includes the
+//! Product-owned founding request/policy producer, fully prepaid PDA custody,
+//! hostile ingest/evaluate/handoff reconstruction, deterministic reopen,
+//! result close, and private Product retirement drain. Central dispatch remains
+//! the sole all-or-none capability owner; code presence by itself is not
+//! capability.
 
 use clutch_liveness::{
     runtime_adapter_v1::{
@@ -89,7 +92,7 @@ const ACCOUNT_VECTOR_ENTRY_BYTES: usize = 105;
 /// Maximum ordered accounts admitted to one reviewed Source parser invocation.
 pub const MAX_SOURCE_PARSER_ACCOUNTS: usize = 16;
 
-/// Route one centrally allocated but disabled SourcePlane action to refusal.
+/// Route one centrally allocated but profile-disabled SourcePlane action to refusal.
 ///
 /// This boundary is deliberately account-free. The dispatcher calls it before
 /// account inspection, so merely allocating actions 1 through 12 cannot make a
