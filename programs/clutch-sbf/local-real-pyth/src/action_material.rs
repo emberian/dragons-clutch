@@ -5248,8 +5248,8 @@ pub fn construct_fractional_lifecycle_material_v1(
         }
     }
     if addresses.len() > 64
-        || frame.accounts[aux + 3].address == frame.accounts[aux + 5].address
-        != (frame.accounts[aux + 4].address == frame.accounts[aux + 6].address)
+        || (frame.accounts[aux + 3].address == frame.accounts[aux + 5].address)
+            != (frame.accounts[aux + 4].address == frame.accounts[aux + 6].address)
     {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
