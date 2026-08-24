@@ -468,6 +468,56 @@ pub fn decode_fee_record_v2(
     Ok(selected)
 }
 
+/// Structurally decode the exact current selected transcript without
+/// accepting its copied policy identities as authority. The adapter must join
+/// those fields to hostile-authenticated batch/Revenue/Market state.
+pub fn decode_persisted_fee_record_v2(input: &[u8]) -> Result<SelectedCompositeFeeV2> {
+    exact_len(input, FEE_RECORD_ACCOUNT_V1_BYTES)?;
+    let mut cursor = 0usize;
+    take_header_version(
+        input,
+        &mut cursor,
+        FEE_RECORD_MAGIC_V2,
+        CODEC_VERSION_V2,
+    )?;
+    let fee_record = read_id(input, &mut cursor)?;
+    let realm = read_id(input, &mut cursor)?;
+    let market = read_id(input, &mut cursor)?;
+    let epoch = read_id(input, &mut cursor)?;
+    let candidate = read_id(input, &mut cursor)?;
+    let batch_policy = read_id(input, &mut cursor)?;
+    let revenue_policy = read_id(input, &mut cursor)?;
+    let treasury_owner = read_id(input, &mut cursor)?;
+    let treasury_position = read_id(input, &mut cursor)?;
+    let price_scale = read_u64(input, &mut cursor)?;
+    let outcome_count = read_u8(input, &mut cursor)?;
+    require_zero(take(input, &mut cursor, 3)?)?;
+    let dispersion_bps = read_u32(input, &mut cursor)?;
+    let floor_range_bps = read_u32(input, &mut cursor)?;
+    let carry_denominator = read_u128(input, &mut cursor)?;
+    finish(cursor, input.len())?;
+    let selected = SelectedCompositeFeeV2::restore_persisted(
+        fee_record,
+        realm,
+        market,
+        epoch,
+        candidate,
+        batch_policy,
+        revenue_policy,
+        treasury_owner,
+        treasury_position,
+        price_scale,
+        outcome_count,
+        dispersion_bps,
+        floor_range_bps,
+        carry_denominator,
+    )?;
+    if encode_fee_record_v2(&selected)?.as_slice() != input {
+        return Err(Error::MismatchedBinding);
+    }
+    Ok(selected)
+}
+
 pub fn encode_owner_fee_carry_v1(
     carry: &OwnerFeeCarryV1,
 ) -> Result<[u8; OWNER_FEE_CARRY_ACCOUNT_V1_BYTES]> {

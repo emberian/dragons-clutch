@@ -16,17 +16,16 @@ use clutch_fee_runtime_contract::allocation::{
     FeeEnvelopeV1, PayerAllocationV1, RecipientAllocationV1, StandingMakerRowV1,
 };
 use clutch_fee_runtime_contract::codec::{
-    decode_borrowed_certified_recipient_allocation_v3,
-    decode_fee_record_v1, decode_fee_record_v2, decode_owner_fee_carry_v1,
-    decode_payer_allocation_v1,
+    decode_borrowed_certified_recipient_allocation_v3, decode_fee_record_v1,
+    decode_fee_record_v2, decode_owner_fee_carry_v1, decode_payer_allocation_v1,
+    decode_persisted_fee_record_v2,
     decode_persisted_certified_recipient_allocation_v2,
     decode_persisted_payer_allocation_v1, decode_recipient_allocation_v1,
     decode_treasury_ledger_v1, encode_fee_record_v1, encode_fee_record_v2,
-    encode_owner_fee_carry_v1, encode_certified_recipient_allocation_v2,
-    encode_payer_allocation_v1, encode_recipient_allocation_v1,
+    encode_owner_fee_carry_v1, encode_payer_allocation_v1,
     encode_certified_recipient_allocation_v3_from_access_into,
+    encode_recipient_allocation_v1, encode_treasury_ledger_v1,
     BorrowedCertifiedRecipientAllocationV3, CertifiedRecipientAllocationAccessV3,
-    encode_treasury_ledger_v1,
     CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES, CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES,
     FEE_RECORD_ACCOUNT_V1_BYTES,
     OWNER_FEE_CARRY_ACCOUNT_V1_BYTES,
@@ -42,12 +41,10 @@ use clutch_fee_runtime_contract::retirement::{
     FeeRetirementAccumulatorV1, FEE_RETIREMENT_ACCUMULATOR_BODY_V1_BYTES,
 };
 pub use clutch_fee_runtime_contract::terminal::{
-    AuthenticatedOwnerFeeFinalizationV1, FeeClosureManifestReceiptV1,
-    FeeClosureManifestReceiptV2, FeeRecordTerminalReceiptV1, FeeTerminalOutcomeV1,
-    FeeTerminalReceiptBundleV1, FeeTerminalReceiptBundleV2, GeneralFeeTerminalProjectionV1,
+    AuthenticatedOwnerFeeFinalizationV1, FeeClosureManifestReceiptV2, FeeRecordTerminalReceiptV1,
+    FeeTerminalOutcomeV1, FeeTerminalReceiptBundleV1, GeneralFeeTerminalProjectionV1,
     GeneralOwnerFeeFinalizationProjectionV2, OwnerFeeFinalizationOutcomeV2,
-    OwnerFeeFinalizationReceiptV1, FEE_CLOSURE_MANIFEST_V1_BYTES,
-    FEE_CLOSURE_MANIFEST_V2_BYTES,
+    OwnerFeeFinalizationReceiptV1, FEE_CLOSURE_MANIFEST_V2_BYTES,
     FEE_TERMINAL_RECEIPT_V1_BYTES, OWNER_FEE_FINALIZATION_BODY_V2_BYTES,
 };
 use clutch_fee_runtime_contract::treasury::TreasuryLedgerV1;
@@ -74,8 +71,7 @@ use crate::{
     TREASURY_LEDGER_ACCOUNT_TAG, TREASURY_LEDGER_ACCOUNT_VERSION,
     TREASURY_LEDGER_ACCOUNT_VERSION_V2, FEE_RETIREMENT_ACCOUNT_BYTES_V1,
     FEE_RETIREMENT_ACCOUNT_BYTES_V2, FEE_RETIREMENT_ACCOUNT_BYTES_V3,
-    FEE_RETIREMENT_ACCOUNT_TAG,
-    FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_VERSION,
+    FEE_RETIREMENT_ACCOUNT_TAG, FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_VERSION,
     FEE_RETIREMENT_CLOSURE_MANIFEST_ACCOUNT_VERSION,
     FEE_RETIREMENT_TERMINAL_ACCOUNT_VERSION,
 };
@@ -287,6 +283,24 @@ impl SelectedFeeRecordV2AccountV1 {
             stored_bump,
         })
     }
+
+    /// Structurally decode the current immutable outer without a parallel
+    /// policy preimage. Current callers must independently bind every copied
+    /// authority field to the hostile-authenticated MarketBindingV4.
+    pub fn decode_persisted(input: &[u8]) -> Result<Self, CodecError> {
+        let (body, rent, stored_bump) =
+            decode_rent_owned_outer::<FEE_RECORD_ACCOUNT_V1_BYTES>(
+                SELECTED_FEE_RECORD_ACCOUNT_TAG,
+                SELECTED_FEE_RECORD_ACCOUNT_VERSION_V2,
+                input,
+            )?;
+        Ok(Self {
+            semantic: map_fee_error(decode_persisted_fee_record_v2(&body))?,
+            rent,
+            stored_bump,
+        })
+    }
+
     pub fn data_id<B: Sha256BackendV1>(
         &self,
         backend: &B,
@@ -842,7 +856,7 @@ impl TreasuryLedgerV2AccountV1 {
                 TREASURY_LEDGER_ACCOUNT_TAG,
                 TREASURY_LEDGER_ACCOUNT_VERSION_V2,
                 input,
-        )?;
+            )?;
         Ok(Self {
             semantic: map_fee_error(decode_treasury_ledger_v1(&body, selected))?,
             rent,
@@ -883,7 +897,7 @@ impl FeeRetirementAccumulatorV1AccountV1 {
                 FEE_RETIREMENT_ACCOUNT_TAG,
                 FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_VERSION,
                 input,
-        )?;
+            )?;
         Ok(Self {
             semantic: map_fee_error(FeeRetirementAccumulatorV1::decode(&body))?,
             rent,
@@ -924,7 +938,7 @@ impl FeeClosureManifestV2AccountV1 {
                 FEE_RETIREMENT_ACCOUNT_TAG,
                 FEE_RETIREMENT_CLOSURE_MANIFEST_ACCOUNT_VERSION,
                 input,
-        )?;
+            )?;
         Ok(Self {
             semantic: map_fee_error(FeeClosureManifestReceiptV2::decode(&body))?,
             rent,
