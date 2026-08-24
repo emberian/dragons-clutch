@@ -210,7 +210,7 @@ test("the operator entrypoint has one canonical chain session and no mock fallba
   const [html, app] = await Promise.all([source("index.html"), source("app.js")]);
   assert.match(app, /dragons-clutch\/operator-read-only-session-manifest\/v1/);
   assert.match(app, /finalized onchain account bodies plus immutable checked release and RPC bindings/);
-  assert.match(app, /restart cursor refers to a noncanonical account identity/);
+  assert.match(app, /restart cursor refers to a noncanonical or repeated account identity/);
   assert.match(app, /credentials: "omit"/);
   assert.match(app, /method: "GET"/);
   assert.doesNotMatch(app, /localStorage|sessionStorage|EventSource|WebSocket|signTransaction|sendTransaction/);

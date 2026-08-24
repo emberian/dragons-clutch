@@ -187,7 +187,7 @@ fn dependency_digest(
     dependencies: &[&IndexedAccountVersion],
 ) -> [u8; 32] {
     let mut hash = Sha256::new();
-    hash.update(b"dragons-clutch/operator-index-observation/v2-lamports-rent-data-length");
+    hash.update(b"dragons-clutch/operator-index-observation/v3-semantic-finalized-state");
     hash.update([match commitment {
         RpcCommitment::Processed => 1,
         RpcCommitment::Finalized => 2,
@@ -195,8 +195,6 @@ fn dependency_digest(
     for dependency in dependencies {
         hash.update(dependency.account.address.to_bytes());
         hash.update(dependency.account.owner.to_bytes());
-        hash.update(dependency.account.provenance.slot.to_le_bytes());
-        hash.update(dependency.account.provenance.receive_sequence.to_le_bytes());
         hash.update(dependency.account.lamports.to_le_bytes());
         hash.update(dependency.account.rent_epoch.to_le_bytes());
         hash.update(
@@ -212,17 +210,21 @@ fn dependency_digest(
                 .to_le_bytes(),
         );
         hash.update(release);
-        match &dependency.branch {
-            IndexedBranch::FinalizedScan => hash.update([0]),
-            IndexedBranch::Processed { blockhash } => {
-                hash.update([1]);
-                let blockhash = blockhash.as_bytes();
-                hash.update(
-                    u64::try_from(blockhash.len())
-                        .unwrap_or(u64::MAX)
-                        .to_le_bytes(),
-                );
-                hash.update(blockhash);
+        if commitment == RpcCommitment::Processed {
+            hash.update(dependency.account.provenance.slot.to_le_bytes());
+            hash.update(dependency.account.provenance.receive_sequence.to_le_bytes());
+            match &dependency.branch {
+                IndexedBranch::FinalizedScan => hash.update([0]),
+                IndexedBranch::Processed { blockhash } => {
+                    hash.update([1]);
+                    let blockhash = blockhash.as_bytes();
+                    hash.update(
+                        u64::try_from(blockhash.len())
+                            .unwrap_or(u64::MAX)
+                            .to_le_bytes(),
+                    );
+                    hash.update(blockhash);
+                }
             }
         }
     }
@@ -477,7 +479,7 @@ impl<'index> OperatorJsonApi<'index> {
                     "identitySource": "finalized onchain account bodies plus immutable checked release and RPC bindings",
                     "accountCount": accounts.len().to_string(),
                     "cursorCount": cursors.len().to_string(),
-                    "cursors": cursors.iter().map(selection_json).collect::<Vec<_>>()
+                    "cursors": cursors.iter().map(session_selection_json).collect::<Vec<_>>()
                 }
             }),
         )
@@ -606,8 +608,6 @@ fn read_only_session_id(
         hash.update(version.account.address.to_bytes());
         hash.update(version.account.owner.to_bytes());
         hash_text(&mut hash, &version.account.provenance.release_key);
-        hash.update(version.account.provenance.slot.to_le_bytes());
-        hash.update(version.account.provenance.receive_sequence.to_le_bytes());
         hash.update(version.account.lamports.to_le_bytes());
         hash.update(version.account.rent_epoch.to_le_bytes());
         hash.update(
@@ -636,7 +636,6 @@ fn read_only_session_id(
         hash.update(selection.account.to_bytes());
         hash_text(&mut hash, &selection.release_key);
         hash_text(&mut hash, selection.action);
-        hash.update(selection.account_slot.to_le_bytes());
         hash.update(selection.cursor.workflow_id);
         hash_text(&mut hash, lane_name(selection.cursor.lane));
         hash.update(selection.cursor.generation.to_le_bytes());
@@ -694,8 +693,6 @@ fn session_account_json(version: &IndexedAccountVersion) -> Value {
         "address": version.account.address.to_string(),
         "owner": version.account.owner.to_string(),
         "releaseKey": version.account.provenance.release_key,
-        "slot": version.account.provenance.slot.to_string(),
-        "receiveSequence": version.account.provenance.receive_sequence.to_string(),
         "lamports": version.account.lamports.to_string(),
         "rentEpoch": version.account.rent_epoch.to_string(),
         "dataBytes": version.account.data.len().to_string(),
@@ -763,6 +760,23 @@ fn selection_json(selection: &KeeperActionSelection) -> Value {
         "observedCommitment": selection.observed_commitment.name(),
         "effectiveCommitment": selection.effective_commitment.name(),
         "branch": branch_json(&selection.branch),
+        "dependencies": selection.dependencies.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "cursor": {
+            "workflowId": hex32(selection.cursor.workflow_id),
+            "lane": lane_name(selection.cursor.lane),
+            "generation": selection.cursor.generation.to_string(),
+            "phase": selection.cursor.position.phase.to_string(),
+            "item": selection.cursor.position.item.to_string(),
+            "observedStateSha256": hex32(selection.cursor.observed_state_sha256)
+        }
+    })
+}
+
+fn session_selection_json(selection: &KeeperActionSelection) -> Value {
+    json!({
+        "account": selection.account.to_string(),
+        "releaseKey": selection.release_key,
+        "action": selection.action,
         "dependencies": selection.dependencies.iter().map(ToString::to_string).collect::<Vec<_>>(),
         "cursor": {
             "workflowId": hex32(selection.cursor.workflow_id),

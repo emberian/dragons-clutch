@@ -479,8 +479,6 @@
       address: nonzeroAddress(raw.address, `session.canonicalAccounts[${index}].address`),
       owner: nonzeroAddress(raw.owner, `session.canonicalAccounts[${index}].owner`),
       releaseKey: text(raw.releaseKey, `session.canonicalAccounts[${index}].releaseKey`, 320),
-      slot: decimal(raw.slot, `session.canonicalAccounts[${index}].slot`).toString(),
-      receiveSequence: decimal(raw.receiveSequence, `session.canonicalAccounts[${index}].receiveSequence`).toString(),
       lamports: decimal(raw.lamports, `session.canonicalAccounts[${index}].lamports`).toString(),
       rentEpoch: decimal(raw.rentEpoch, `session.canonicalAccounts[${index}].rentEpoch`).toString(),
       dataBytes: positiveDecimal(raw.dataBytes, `session.canonicalAccounts[${index}].dataBytes`).toString(),
@@ -499,6 +497,26 @@
     });
     if (value.owner !== configuration.release.programId || value.releaseKey !== configuration.release.releaseKey) throw new Error(`session.canonicalAccounts[${index}] is not owned by the checked release.`);
     return value;
+  };
+
+  const validateRestartCursor = (raw, index) => {
+    requirePlain(raw, `session.restart.cursors[${index}]`);
+    requirePlain(raw.cursor, `session.restart.cursors[${index}].cursor`);
+    if (!Array.isArray(raw.dependencies) || raw.dependencies.length > 128) throw new Error(`session.restart.cursors[${index}].dependencies is invalid.`);
+    return Object.freeze({
+      account: nonzeroAddress(raw.account, `session.restart.cursors[${index}].account`),
+      releaseKey: text(raw.releaseKey, `session.restart.cursors[${index}].releaseKey`, 320),
+      action: text(raw.action, `session.restart.cursors[${index}].action`, 80),
+      dependencies: Object.freeze(raw.dependencies.map((dependency, dependencyIndex) => nonzeroAddress(dependency, `session.restart.cursors[${index}].dependencies[${dependencyIndex}]`))),
+      cursor: Object.freeze({
+        workflowId: hash32(raw.cursor.workflowId, `session.restart.cursors[${index}].cursor.workflowId`),
+        lane: text(raw.cursor.lane, `session.restart.cursors[${index}].cursor.lane`, 48),
+        generation: positiveDecimal(raw.cursor.generation, `session.restart.cursors[${index}].cursor.generation`).toString(),
+        phase: decimal(raw.cursor.phase, `session.restart.cursors[${index}].cursor.phase`, 65535n).toString(),
+        item: decimal(raw.cursor.item, `session.restart.cursors[${index}].cursor.item`).toString(),
+        observedStateSha256: hash32(raw.cursor.observedStateSha256, `session.restart.cursors[${index}].cursor.observedStateSha256`)
+      })
+    });
   };
 
   const validateSession = (raw, configuration) => {
@@ -542,12 +560,11 @@
         || raw.restart.identitySource !== "finalized onchain account bodies plus immutable checked release and RPC bindings"
         || decimal(raw.restart.accountCount, "session.restart.accountCount").toString() !== String(canonicalAccounts.length)
         || !Array.isArray(raw.restart.cursors)) throw new Error("session restart contract is malformed or not onchain-owned.");
-    const restartConfiguration = Object.freeze({ ...configuration, commitment: "finalized" });
-    const cursors = validateKeeper({ effectiveCommitment: "finalized", authorityEligible: false, actions: raw.restart.cursors }, restartConfiguration);
+    const cursors = Object.freeze(raw.restart.cursors.map((cursor, index) => validateRestartCursor(cursor, index)));
     if (decimal(raw.restart.cursorCount, "session.restart.cursorCount").toString() !== String(cursors.length)) throw new Error("session restart cursor count differs from its exact cursor set.");
     const addresses = new Set(canonicalAccounts.map((accountValue) => accountValue.address));
     for (const cursor of cursors) {
-      if (cursor.observedCommitment !== "finalized" || cursor.branch.kind !== "finalized-scan") throw new Error("session restart cursor is not derived from a finalized scan.");
+      if (cursor.releaseKey !== configuration.release.releaseKey) throw new Error("session restart cursor names another release.");
       if (!addresses.has(cursor.account) || cursor.dependencies.some((dependency) => !addresses.has(dependency))) throw new Error("session restart cursor names an identity not owned by a finalized canonical account decode.");
       if (new Set(cursor.dependencies).size !== cursor.dependencies.length) throw new Error("session restart cursor repeats a dependency identity.");
     }
@@ -622,7 +639,7 @@
     for (const identity of session.canonicalAccounts) {
       const accountValue = finalized.get(identity.address);
       if (!accountValue || accountValue.branch.kind !== "finalized-scan") throw new Error("session identity is absent from the finalized canonical account endpoint.");
-      for (const field of ["owner", "releaseKey", "slot", "receiveSequence", "lamports", "rentEpoch", "dataBytes", "dataSha256", "accountTag", "accountVersion", "family", "kind", "generation", "primaryBinding", "secondaryBinding"]) {
+      for (const field of ["owner", "releaseKey", "lamports", "rentEpoch", "dataBytes", "dataSha256", "accountTag", "accountVersion", "family", "kind", "generation", "primaryBinding", "secondaryBinding"]) {
         if (accountValue[field] !== identity[field]) throw new Error(`session identity ${identity.address} differs from finalized canonical account field ${field}.`);
       }
       if (accountValue.decode.status !== identity.decode.status || accountValue.decode.requirement !== identity.decode.requirement) throw new Error(`session identity ${identity.address} differs from its finalized canonical decode disposition.`);

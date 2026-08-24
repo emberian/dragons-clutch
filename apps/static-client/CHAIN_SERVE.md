@@ -12,7 +12,10 @@ coordinates, canonical decoder set, finalized account identities/body digests,
 and onchain-derived workflow cursors. The endpoint is unavailable during an
 incomplete bootstrap or when more than one release would make the singular
 browser identity ambiguous. It persists no daemon-local phases, caller roles,
-fixture rows, signer facts, or future work guesses.
+fixture rows, signer facts, future work guesses, scan-context slots, or
+daemon-assigned receive sequences. Finalized restart identity therefore stays
+stable across a daemon restart when the release, transport binding, and exact
+onchain account envelopes/bodies have not changed.
 
 ```text
 operatord compose-chain-config \

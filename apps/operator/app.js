@@ -99,8 +99,6 @@ const validateManifest = (raw) => {
       address: address(row.address, `session.canonicalAccounts[${index}].address`),
       owner: address(row.owner, `session.canonicalAccounts[${index}].owner`),
       releaseKey: requiredText(row.releaseKey, `session.canonicalAccounts[${index}].releaseKey`, null, 320),
-      slot: decimal(row.slot, `session.canonicalAccounts[${index}].slot`),
-      receiveSequence: decimal(row.receiveSequence, `session.canonicalAccounts[${index}].receiveSequence`),
       lamports: decimal(row.lamports, `session.canonicalAccounts[${index}].lamports`),
       rentEpoch: decimal(row.rentEpoch, `session.canonicalAccounts[${index}].rentEpoch`),
       dataBytes: decimal(row.dataBytes, `session.canonicalAccounts[${index}].dataBytes`),
@@ -127,12 +125,10 @@ const validateManifest = (raw) => {
   const cursors = Object.freeze(raw.restart.cursors.map((row, index) => {
     object(row, `session.restart.cursors[${index}]`);
     object(row.cursor, `session.restart.cursors[${index}].cursor`);
-    object(row.branch, `session.restart.cursors[${index}].branch`);
-    if (!Array.isArray(row.dependencies) || row.releaseKey !== release.releaseKey || row.effectiveCommitment !== "finalized" || row.observedCommitment !== "finalized" || row.branch.kind !== "finalized-scan") throw new Error(`session.restart.cursors[${index}] is not finalized or release-bound.`);
+    if (!Array.isArray(row.dependencies) || row.releaseKey !== release.releaseKey) throw new Error(`session.restart.cursors[${index}] is not release-bound.`);
     const cursor = Object.freeze({
       account: address(row.account, `session.restart.cursors[${index}].account`),
       action: requiredText(row.action, `session.restart.cursors[${index}].action`, null, 80),
-      accountSlot: decimal(row.accountSlot, `session.restart.cursors[${index}].accountSlot`),
       workflowId: hash(row.cursor.workflowId, `session.restart.cursors[${index}].cursor.workflowId`),
       lane: requiredText(row.cursor.lane, `session.restart.cursors[${index}].cursor.lane`, null, 48),
       generation: decimal(row.cursor.generation, `session.restart.cursors[${index}].cursor.generation`),
@@ -170,7 +166,7 @@ const render = (manifest) => {
   $("account-count").textContent = `${manifest.accounts.length} identities`;
   $("account-rows").replaceChildren(...manifest.accounts.map((account) => {
     const row = document.createElement("tr");
-    for (const value of [account.kind, account.address, account.lamports, `${account.accountTag} / ${account.accountVersion}`, account.slot, account.generation ?? "none", account.decode.status]) {
+    for (const value of [account.kind, account.address, account.lamports, account.dataBytes, `${account.accountTag} / ${account.accountVersion}`, account.generation ?? "none", account.decode.status]) {
       const cell = document.createElement("td"); cell.textContent = value; row.append(cell);
     }
     return row;
