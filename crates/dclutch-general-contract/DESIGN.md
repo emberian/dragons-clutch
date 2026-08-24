@@ -193,3 +193,22 @@ operator implement and test all of the following:
 
 The static operator or index may discover and construct these calls, but it is
 an untrusted projection of the onchain records above.
+
+## Exact physical vector geometry
+
+Every persisted outcome-bearing semantic record is const-generic over its
+selected ClaimBasis width `N`: `PortfolioOrderV1<N>`, candidate state and
+cursor, settlement cursor, `SettlementReceiptV1<N>`, and the page result that
+carries receipts. Their constructors require the recorded outcome count to
+equal `N`. Orders and receipts expose checked exact `encoded_len`, decode only
+that length, and encode only into that length. Consequently an N=2 order is
+216 bytes rather than the former 328-byte max-width record (112 bytes saved);
+an N=2 receipt is 192 bytes rather than 312 bytes (120 bytes saved). N=16
+orders are 328 bytes and receipts are 304 bytes; the latter also removes the
+former unused eight-byte tail.
+
+`VerificationPageV1<N>` and `SettlementPageResultV1<N>` retain only the
+separate `MAX_EXECUTIONS_PER_PAGE_V1` fixed execution envelope. That bound is
+an ephemeral stack/page-work bound, not an outcome vector and not an account
+or rent geometry. The `N`-dependent orders, prices, cursors, and receipts
+inside the envelope remain exact-width.

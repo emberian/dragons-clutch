@@ -27,10 +27,10 @@ pub const MAX_OUTCOMES_V1: usize = 16;
 pub const MAX_EXECUTIONS_PER_PAGE_V1: usize = 4;
 /// Exact canonical byte width of [`GeneralConfigV1`].
 pub const GENERAL_CONFIG_BYTES: usize = 232;
-/// Exact canonical byte width of [`PortfolioOrderV1`].
-pub const PORTFOLIO_ORDER_BYTES: usize = 328;
-/// Exact canonical byte width of [`SettlementReceiptV1`].
-pub const SETTLEMENT_RECEIPT_BYTES: usize = 312;
+/// Fixed byte prefix of a [`PortfolioOrderV1`] before its exact `N` coefficients.
+pub const PORTFOLIO_ORDER_BASE_BYTES: usize = 200;
+/// Fixed byte prefix of a [`SettlementReceiptV1`] before its exact `N` deltas.
+pub const SETTLEMENT_RECEIPT_BASE_BYTES: usize = 176;
 
 const CONFIG_MAGIC: [u8; 8] = *b"DCLTGEN1";
 const ORDER_MAGIC: [u8; 8] = *b"DCLTGOR1";
@@ -453,7 +453,7 @@ impl GeneralRootV1 {
 
 /// Exact signed coefficient portfolio and immutable execution authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PortfolioOrderV1 {
+pub struct PortfolioOrderV1<const N: usize> {
     market_identity_id: ContentId,
     claim_basis_id: ContentId,
     owner: ContentId,
@@ -464,13 +464,13 @@ pub struct PortfolioOrderV1 {
     valid_until_slot: u64,
     max_lots: u64,
     max_quote_debit_per_lot_numerator: i128,
-    coefficients: [i64; MAX_OUTCOMES_V1],
+    coefficients: [i64; N],
     outcome_count: u16,
 }
 
 /// Inputs for one atomic coefficient portfolio order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PortfolioOrderV1Input {
+pub struct PortfolioOrderV1Input<const N: usize> {
     /// Market identity commitment.
     pub market_identity_id: ContentId,
     /// Exact ClaimBasis identity.
@@ -492,14 +492,14 @@ pub struct PortfolioOrderV1Input {
     /// Upper bound on `dot(coefficients, prices)` per lot, in scale units.
     pub max_quote_debit_per_lot_numerator: i128,
     /// Signed, cell-canonical coefficients for one atomic lot.
-    pub coefficients: [i64; MAX_OUTCOMES_V1],
-    /// Exact ClaimBasis width; unused coefficient words must be zero.
+    pub coefficients: [i64; N],
+    /// Exact ClaimBasis width, which must equal the selected const width.
     pub outcome_count: u16,
 }
 
-impl PortfolioOrderV1 {
+impl<const N: usize> PortfolioOrderV1<N> {
     /// Validate and construct one atomic portfolio order.
-    pub fn new(input: PortfolioOrderV1Input) -> Result<Self> {
+    pub fn new(input: PortfolioOrderV1Input<N>) -> Result<Self> {
         validate_portfolio(&input.coefficients, input.outcome_count, true)?;
         if input.max_lots == 0 {
             return Err(Error::InvalidFill);
@@ -521,8 +521,16 @@ impl PortfolioOrderV1 {
     }
 
     /// Decode the exact canonical signed-order preimage.
+    pub fn encoded_len() -> Result<usize> {
+        validate_width(N)?;
+        PORTFOLIO_ORDER_BASE_BYTES
+            .checked_add(N.checked_mul(8).ok_or(Error::ArithmeticOverflow)?)
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Decode one exact-width canonical signed-order preimage.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        exact_len(bytes, PORTFOLIO_ORDER_BYTES)?;
+        exact_len(bytes, Self::encoded_len()?)?;
         if array::<8>(bytes, 0)? != ORDER_MAGIC {
             return Err(Error::InvalidMagic);
         }
@@ -530,9 +538,9 @@ impl PortfolioOrderV1 {
             return Err(Error::UnsupportedSchema);
         }
         require_zero(bytes, 14, 2)?;
-        let mut coefficients = [0i64; MAX_OUTCOMES_V1];
+        let mut coefficients = [0i64; N];
         let mut index = 0usize;
-        while index < MAX_OUTCOMES_V1 {
+        while index < N {
             let offset = 200usize
                 .checked_add(index.checked_mul(8).ok_or(Error::ArithmeticOverflow)?)
                 .ok_or(Error::ArithmeticOverflow)?;
@@ -556,9 +564,11 @@ impl PortfolioOrderV1 {
         })
     }
 
-    /// Encode the exact canonical signed-order preimage.
-    pub fn to_bytes(self) -> [u8; PORTFOLIO_ORDER_BYTES] {
-        let mut out = [0u8; PORTFOLIO_ORDER_BYTES];
+    /// Encode into one exact-width caller-owned signed-order buffer.
+    #[allow(clippy::needless_borrow)]
+    pub fn encode(&self, mut out: &mut [u8]) -> Result<()> {
+        exact_len(out, Self::encoded_len()?)?;
+        out.fill(0);
         put(&mut out, 0, &ORDER_MAGIC);
         put(&mut out, 8, &SCHEMA_V1.to_le_bytes());
         put(&mut out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
@@ -585,7 +595,7 @@ impl PortfolioOrderV1 {
                 put(&mut out, offset, &coefficient.to_le_bytes());
             }
         }
-        out
+        Ok(())
     }
 
     /// Return the unique signed-order identity.
@@ -629,7 +639,7 @@ impl PortfolioOrderV1 {
     }
 
     /// Return one atomic-lot coefficient vector.
-    pub const fn coefficients(self) -> [i64; MAX_OUTCOMES_V1] {
+    pub const fn coefficients(self) -> [i64; N] {
         self.coefficients
     }
 }
@@ -659,7 +669,7 @@ pub struct OrderStateV1 {
 impl OrderStateV1 {
     /// Open replay state after the adapter authenticates the signature and
     /// reserves the unique `(owner, nonce, order_id)` key.
-    pub const fn open(order: PortfolioOrderV1) -> Self {
+    pub const fn open<const N: usize>(order: PortfolioOrderV1<N>) -> Self {
         Self {
             order_id: order.order_id,
             owner: order.owner,
@@ -684,7 +694,11 @@ impl OrderStateV1 {
         Ok(())
     }
 
-    fn validate_snapshot(self, order: PortfolioOrderV1, fill_lots: u64) -> Result<()> {
+    fn validate_snapshot<const N: usize>(
+        self,
+        order: PortfolioOrderV1<N>,
+        fill_lots: u64,
+    ) -> Result<()> {
         if self.order_id != order.order_id || self.owner != order.owner || self.nonce != order.nonce
         {
             return Err(Error::OrderBindingMismatch);
@@ -698,7 +712,11 @@ impl OrderStateV1 {
         Ok(())
     }
 
-    fn consume(&mut self, order: PortfolioOrderV1, fill_lots: u64) -> Result<()> {
+    fn consume<const N: usize>(
+        &mut self,
+        order: PortfolioOrderV1<N>,
+        fill_lots: u64,
+    ) -> Result<()> {
         self.validate_snapshot(order, fill_lots)?;
         self.remaining_lots = self
             .remaining_lots
@@ -728,9 +746,9 @@ impl OrderStateV1 {
 
 /// One atomic scalar fill presented in a verification or settlement page.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ExecutionV1 {
+pub struct ExecutionV1<const N: usize> {
     /// Full signed atomic portfolio preimage.
-    pub order: PortfolioOrderV1,
+    pub order: PortfolioOrderV1<N>,
     /// Adapter-authenticated replay state snapshot.
     pub order_state: OrderStateV1,
     /// One scalar applied uniformly to every coefficient.
@@ -739,7 +757,7 @@ pub struct ExecutionV1 {
 
 /// Permissionless candidate submission preimage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CandidateSubmissionV1 {
+pub struct CandidateSubmissionV1<const N: usize> {
     /// Exact Market identity commitment.
     pub market_identity_id: ContentId,
     /// Exact ClaimBasis identity.
@@ -759,8 +777,8 @@ pub struct CandidateSubmissionV1 {
     /// Claimed preference-surplus score recomputed by the verifier.
     pub claimed_score: u128,
     /// Exact scaled-integer simplex coordinates.
-    pub prices: [u64; MAX_OUTCOMES_V1],
-    /// Exact ClaimBasis width; unused coordinates must be zero.
+    pub prices: [u64; N],
+    /// Exact ClaimBasis width, which must equal the selected const width.
     pub outcome_count: u16,
 }
 
@@ -782,15 +800,15 @@ pub enum CandidatePhase {
 
 /// Fixed-layout candidate state and committed resumable verifier cursor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CandidateStateV1 {
+pub struct CandidateStateV1<const N: usize> {
     candidate_id: ContentId,
-    submission: CandidateSubmissionV1,
+    submission: CandidateSubmissionV1<N>,
     phase: CandidatePhase,
     verified_pages: u32,
     verified_executions: u32,
     last_order_id: Option<ContentId>,
     transcript_id: ContentId,
-    net_coefficients: [i128; MAX_OUTCOMES_V1],
+    net_coefficients: [i128; N],
     total_quote_debit_numerator: i128,
     score: u128,
     complete_set_delta: i128,
@@ -798,7 +816,7 @@ pub struct CandidateStateV1 {
 
 /// One bounded verification page.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct VerificationPageV1 {
+pub struct VerificationPageV1<const N: usize> {
     /// Zero-based page index committed in the candidate cursor.
     pub page_index: u32,
     /// Current transcript commitment.
@@ -808,16 +826,16 @@ pub struct VerificationPageV1 {
     /// Number of leading executions used in the fixed envelope.
     pub execution_count: u8,
     /// Fixed V1 execution envelope.
-    pub executions: [Option<ExecutionV1>; MAX_EXECUTIONS_PER_PAGE_V1],
+    pub executions: [Option<ExecutionV1<N>>; MAX_EXECUTIONS_PER_PAGE_V1],
 }
 
-impl CandidateStateV1 {
+impl<const N: usize> CandidateStateV1<N> {
     /// Create a permissionless submitted candidate after exact authority and
     /// simplex validation. Signature and digest authentication are adapter
     /// responsibilities.
     pub fn submit(
         candidate_id: ContentId,
-        submission: CandidateSubmissionV1,
+        submission: CandidateSubmissionV1<N>,
         config: GeneralConfigV1,
         batch: BatchRootV1,
         now_slot: u64,
@@ -854,7 +872,7 @@ impl CandidateStateV1 {
             verified_pages: 0,
             verified_executions: 0,
             last_order_id: None,
-            net_coefficients: [0; MAX_OUTCOMES_V1],
+            net_coefficients: [0; N],
             total_quote_debit_numerator: 0,
             score: 0,
             complete_set_delta: 0,
@@ -865,7 +883,7 @@ impl CandidateStateV1 {
     /// unchanged because work is performed on a copied cursor first.
     pub fn verify_page(
         &mut self,
-        page: VerificationPageV1,
+        page: VerificationPageV1<N>,
         config: GeneralConfigV1,
         batch: BatchRootV1,
         now_slot: u64,
@@ -916,7 +934,7 @@ impl CandidateStateV1 {
 
     fn verify_execution(
         &mut self,
-        execution: ExecutionV1,
+        execution: ExecutionV1<N>,
         config: GeneralConfigV1,
         batch: BatchRootV1,
     ) -> Result<()> {
@@ -1144,9 +1162,9 @@ impl BatchRootV1 {
     /// Consider one fully verified candidate. Higher exact score wins; equal
     /// score uses lexicographically smaller content identity. This is the
     /// **best valid submitted candidate**, not an optimal clearing claim.
-    pub fn consider_candidate(
+    pub fn consider_candidate<const N: usize>(
         &mut self,
-        candidate: &mut CandidateStateV1,
+        candidate: &mut CandidateStateV1<N>,
         now_slot: u64,
     ) -> Result<()> {
         if self.phase != BatchPhase::Selecting || now_slot >= self.selection_close {
@@ -1324,7 +1342,7 @@ impl HoardLedgerV1 {
 
 /// Exact receipt for one atomic portfolio fill.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SettlementReceiptV1 {
+pub struct SettlementReceiptV1<const N: usize> {
     /// Winning candidate commitment.
     pub candidate_id: ContentId,
     /// Signed order commitment.
@@ -1348,15 +1366,26 @@ pub struct SettlementReceiptV1 {
     /// Prefix carry after the one named rounding boundary.
     pub carry_after: u64,
     /// Signed claim-token deltas in canonical ClaimBasis order.
-    pub outcome_deltas: [i64; MAX_OUTCOMES_V1],
-    /// Exact ClaimBasis width.
+    pub outcome_deltas: [i64; N],
+    /// Exact ClaimBasis width, which must equal the selected const width.
     pub outcome_count: u16,
 }
 
-impl SettlementReceiptV1 {
-    /// Encode an exact adapter-consumable settlement receipt.
-    pub fn to_bytes(self) -> [u8; SETTLEMENT_RECEIPT_BYTES] {
-        let mut out = [0u8; SETTLEMENT_RECEIPT_BYTES];
+impl<const N: usize> SettlementReceiptV1<N> {
+    /// Return the checked exact encoded receipt width for `N` deltas.
+    pub fn encoded_len() -> Result<usize> {
+        validate_width(N)?;
+        SETTLEMENT_RECEIPT_BASE_BYTES
+            .checked_add(N.checked_mul(8).ok_or(Error::ArithmeticOverflow)?)
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Encode into one exact-width adapter-consumable receipt buffer.
+    #[allow(clippy::needless_borrow)]
+    pub fn encode(&self, mut out: &mut [u8]) -> Result<()> {
+        exact_len(out, Self::encoded_len()?)?;
+        validate_portfolio(&self.outcome_deltas, self.outcome_count, false)?;
+        out.fill(0);
         put(&mut out, 0, &RECEIPT_MAGIC);
         put(&mut out, 8, &SCHEMA_V1.to_le_bytes());
         put(&mut out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
@@ -1380,12 +1409,12 @@ impl SettlementReceiptV1 {
                 put(&mut out, offset, &delta.to_le_bytes());
             }
         }
-        out
+        Ok(())
     }
 
-    /// Decode one exact receipt and reject noncanonical unused deltas.
+    /// Decode one exact receipt and reject wrong-width or width-substituted deltas.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        exact_len(bytes, SETTLEMENT_RECEIPT_BYTES)?;
+        exact_len(bytes, Self::encoded_len()?)?;
         if array::<8>(bytes, 0)? != RECEIPT_MAGIC {
             return Err(Error::InvalidMagic);
         }
@@ -1393,8 +1422,7 @@ impl SettlementReceiptV1 {
             return Err(Error::UnsupportedSchema);
         }
         require_zero(bytes, 14, 2)?;
-        require_zero(bytes, 304, 8)?;
-        let mut outcome_deltas = [0i64; MAX_OUTCOMES_V1];
+        let mut outcome_deltas = [0i64; N];
         for (index, target) in outcome_deltas.iter_mut().enumerate() {
             let offset = index
                 .checked_mul(8)
@@ -1424,30 +1452,30 @@ impl SettlementReceiptV1 {
 
 /// Committed settlement replay cursor for the selected candidate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SettlementCursorV1 {
+pub struct SettlementCursorV1<const N: usize> {
     candidate_id: ContentId,
     transcript_id: ContentId,
     settled_pages: u32,
     settled_executions: u32,
     last_order_id: Option<ContentId>,
     rounding_carry: u64,
-    net_coefficients: [i128; MAX_OUTCOMES_V1],
+    net_coefficients: [i128; N],
     total_quote_debit_numerator: i128,
     score: u128,
 }
 
 /// Fixed result envelope from one settlement page.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SettlementPageResultV1 {
+pub struct SettlementPageResultV1<const N: usize> {
     /// Number of leading results in both fixed arrays.
     pub execution_count: u8,
     /// Mutated replay states which the adapter must persist atomically.
     pub order_states: [Option<OrderStateV1>; MAX_EXECUTIONS_PER_PAGE_V1],
     /// Exact token-transfer receipts which the adapter must consume atomically.
-    pub receipts: [Option<SettlementReceiptV1>; MAX_EXECUTIONS_PER_PAGE_V1],
+    pub receipts: [Option<SettlementReceiptV1<N>>; MAX_EXECUTIONS_PER_PAGE_V1],
 }
 
-impl SettlementCursorV1 {
+impl<const N: usize> SettlementCursorV1<N> {
     /// Begin replay of exactly the selected verified candidate.
     ///
     /// The adapter proves referenced order custody remains locked, then moves
@@ -1455,7 +1483,7 @@ impl SettlementCursorV1 {
     /// same atomic call. Once applying begins, settlement cannot expire or
     /// select another result.
     pub fn begin(
-        candidate: CandidateStateV1,
+        candidate: CandidateStateV1<N>,
         batch: &mut BatchRootV1,
         hoard: &mut HoardLedgerV1,
         config: GeneralConfigV1,
@@ -1484,7 +1512,7 @@ impl SettlementCursorV1 {
             settled_executions: 0,
             last_order_id: None,
             rounding_carry: 0,
-            net_coefficients: [0; MAX_OUTCOMES_V1],
+            net_coefficients: [0; N],
             total_quote_debit_numerator: 0,
             score: 0,
         };
@@ -1498,11 +1526,11 @@ impl SettlementCursorV1 {
     /// all returned mutations atomically with this cursor.
     pub fn settle_page(
         &mut self,
-        page: VerificationPageV1,
-        candidate: CandidateStateV1,
+        page: VerificationPageV1<N>,
+        candidate: CandidateStateV1<N>,
         config: GeneralConfigV1,
         batch: BatchRootV1,
-    ) -> Result<SettlementPageResultV1> {
+    ) -> Result<SettlementPageResultV1<N>> {
         if candidate.candidate_id != self.candidate_id || batch.phase != BatchPhase::Applying {
             return Err(Error::CandidateNotSelected);
         }
@@ -1546,11 +1574,11 @@ impl SettlementCursorV1 {
 
     fn settle_execution(
         &mut self,
-        execution: ExecutionV1,
-        candidate: CandidateStateV1,
+        execution: ExecutionV1<N>,
+        candidate: CandidateStateV1<N>,
         config: GeneralConfigV1,
         batch: BatchRootV1,
-    ) -> Result<(OrderStateV1, SettlementReceiptV1)> {
+    ) -> Result<(OrderStateV1, SettlementReceiptV1<N>)> {
         validate_execution_binding(execution, config, batch)?;
         if self
             .last_order_id
@@ -1581,7 +1609,7 @@ impl SettlementCursorV1 {
         let quote_delta_atoms =
             i64::try_from(quote_delta_i128).map_err(|_| Error::TokenAmountOutOfRange)?;
         let carry_after = u64::try_from(carry_after_i128).map_err(|_| Error::ArithmeticOverflow)?;
-        let mut outcome_deltas = [0i64; MAX_OUTCOMES_V1];
+        let mut outcome_deltas = [0i64; N];
         let width = usize::from(config.outcome_count);
         for ((receipt_delta, net), coefficient) in outcome_deltas
             .iter_mut()
@@ -1642,7 +1670,7 @@ impl SettlementCursorV1 {
     /// Finish exact replay and make the already-capitalized batch quiescent.
     /// Each page is atomic with its cursor, replay states, and custody transfer;
     /// prepaid liveness drives a started application to completion.
-    pub fn finish(&self, candidate: CandidateStateV1, batch: &mut BatchRootV1) -> Result<()> {
+    pub fn finish(&self, candidate: CandidateStateV1<N>, batch: &mut BatchRootV1) -> Result<()> {
         if batch.phase != BatchPhase::Applying
             || batch.best_candidate_id != Some(self.candidate_id)
             || candidate.candidate_id != self.candidate_id
@@ -1802,8 +1830,8 @@ impl GeneralFundingV1 {
     }
 }
 
-fn validate_execution_binding(
-    execution: ExecutionV1,
+fn validate_execution_binding<const N: usize>(
+    execution: ExecutionV1<N>,
     config: GeneralConfigV1,
     batch: BatchRootV1,
 ) -> Result<()> {
@@ -1839,20 +1867,17 @@ fn validate_authority(
     Ok(())
 }
 
-fn validate_prices(
-    prices: &[u64; MAX_OUTCOMES_V1],
+fn validate_prices<const N: usize>(
+    prices: &[u64; N],
     outcome_count: u16,
     price_scale: u64,
 ) -> Result<()> {
     let width = usize::from(outcome_count);
-    if !(2..=MAX_OUTCOMES_V1).contains(&width) {
+    if width != N || !(2..=MAX_OUTCOMES_V1).contains(&width) {
         return Err(Error::InvalidOutcomeCount);
     }
-    if prices.iter().skip(width).any(|price| *price != 0) {
-        return Err(Error::NonCanonicalPortfolio);
-    }
     let mut sum = 0u64;
-    for price in prices.iter().take(width) {
+    for price in prices {
         sum = sum.checked_add(*price).ok_or(Error::ArithmeticOverflow)?;
     }
     if sum != price_scale {
@@ -1861,50 +1886,44 @@ fn validate_prices(
     Ok(())
 }
 
-fn validate_portfolio(
-    coefficients: &[i64; MAX_OUTCOMES_V1],
+fn validate_portfolio<const N: usize>(
+    coefficients: &[i64; N],
     outcome_count: u16,
     require_nonzero: bool,
 ) -> Result<()> {
     let width = usize::from(outcome_count);
-    if !(2..=MAX_OUTCOMES_V1).contains(&width) {
+    if width != N || !(2..=MAX_OUTCOMES_V1).contains(&width) {
         return Err(Error::InvalidOutcomeCount);
     }
-    if coefficients
-        .iter()
-        .skip(width)
-        .any(|coefficient| *coefficient != 0)
-    {
-        return Err(Error::NonCanonicalPortfolio);
-    }
-    if require_nonzero
-        && coefficients
-            .iter()
-            .take(width)
-            .all(|coefficient| *coefficient == 0)
-    {
+    if require_nonzero && coefficients.iter().all(|coefficient| *coefficient == 0) {
         return Err(Error::EmptyPortfolio);
     }
     Ok(())
 }
 
-fn portfolio_dot(
-    coefficients: &[i64; MAX_OUTCOMES_V1],
-    prices: &[u64; MAX_OUTCOMES_V1],
+fn portfolio_dot<const N: usize>(
+    coefficients: &[i64; N],
+    prices: &[u64; N],
     outcome_count: u16,
 ) -> Result<i128> {
+    if usize::from(outcome_count) != N {
+        return Err(Error::InvalidOutcomeCount);
+    }
     let mut total = 0i128;
-    for (coefficient, price) in coefficients
-        .iter()
-        .zip(prices.iter())
-        .take(usize::from(outcome_count))
-    {
+    for (coefficient, price) in coefficients.iter().zip(prices.iter()) {
         let term = i128::from(*coefficient)
             .checked_mul(i128::from(*price))
             .ok_or(Error::ArithmeticOverflow)?;
         total = total.checked_add(term).ok_or(Error::ArithmeticOverflow)?;
     }
     Ok(total)
+}
+
+fn validate_width(width: usize) -> Result<()> {
+    if !(2..=MAX_OUTCOMES_V1).contains(&width) {
+        return Err(Error::InvalidOutcomeCount);
+    }
+    Ok(())
 }
 
 const fn funding_index(compartment: FundingCompartment) -> usize {

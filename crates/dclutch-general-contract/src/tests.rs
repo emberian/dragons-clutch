@@ -29,10 +29,7 @@ fn order(
     nonce: u64,
     coefficients: [i64; 2],
     limit: i128,
-) -> PortfolioOrderV1 {
-    let mut full = [0i64; MAX_OUTCOMES_V1];
-    full[0] = coefficients[0];
-    full[1] = coefficients[1];
+) -> PortfolioOrderV1<2> {
     PortfolioOrderV1::new(PortfolioOrderV1Input {
         market_identity_id: id(2),
         claim_basis_id: id(3),
@@ -44,7 +41,7 @@ fn order(
         valid_until_slot: 30,
         max_lots: 1,
         max_quote_debit_per_lot_numerator: limit,
-        coefficients: full,
+        coefficients,
         outcome_count: 2,
     })
     .expect("valid order")
@@ -56,7 +53,7 @@ fn selecting_batch() -> BatchRootV1 {
     batch
 }
 
-fn executions() -> [Option<ExecutionV1>; MAX_EXECUTIONS_PER_PAGE_V1] {
+fn executions() -> [Option<ExecutionV1<2>>; MAX_EXECUTIONS_PER_PAGE_V1] {
     let first = order(10, 20, 0, [1, 0], 50);
     let second = order(11, 21, 0, [0, 1], 70);
     [
@@ -75,10 +72,8 @@ fn executions() -> [Option<ExecutionV1>; MAX_EXECUTIONS_PER_PAGE_V1] {
     ]
 }
 
-fn valid_candidate(batch: BatchRootV1, candidate_fill: u8) -> CandidateStateV1 {
-    let mut prices = [0u64; MAX_OUTCOMES_V1];
-    prices[0] = 40;
-    prices[1] = 60;
+fn valid_candidate(batch: BatchRootV1, candidate_fill: u8) -> CandidateStateV1<2> {
+    let prices = [40u64, 60];
     let submission = CandidateSubmissionV1 {
         market_identity_id: id(2),
         claim_basis_id: id(3),
@@ -124,10 +119,14 @@ fn golden_config_and_order_round_trip() {
     assert_eq!(GeneralConfigV1::decode(&bytes), Ok(config));
 
     let order = order(10, 20, 9, [-2, 3], 77);
-    let bytes = order.to_bytes();
-    assert_eq!(bytes.len(), PORTFOLIO_ORDER_BYTES);
+    let mut bytes = [0; 216];
+    order.encode(&mut bytes).expect("order encodes");
+    assert_eq!(
+        bytes.len(),
+        PortfolioOrderV1::<2>::encoded_len().expect("length")
+    );
     assert_eq!(&bytes[..8], b"DCLTGOR1");
-    assert_eq!(PortfolioOrderV1::decode(&bytes), Ok(order));
+    assert_eq!(PortfolioOrderV1::<2>::decode(&bytes), Ok(order));
 }
 
 #[test]
@@ -139,20 +138,84 @@ fn hostile_decoders_reject_reserved_and_unused_words() {
         Err(Error::NonCanonicalReservedBytes)
     );
 
-    let mut order_bytes = order(10, 20, 9, [1, -1], 10).to_bytes();
+    let mut encoded_order = [0; 216];
+    order(10, 20, 9, [1, -1], 10)
+        .encode(&mut encoded_order)
+        .expect("order encodes");
+    let mut order_bytes = [0; 224];
+    order_bytes[..216].copy_from_slice(&encoded_order);
     order_bytes[216] = 1;
     assert_eq!(
-        PortfolioOrderV1::decode(&order_bytes),
-        Err(Error::NonCanonicalPortfolio)
+        PortfolioOrderV1::<2>::decode(&order_bytes),
+        Err(Error::InvalidLength)
+    );
+}
+
+#[test]
+fn outcome_vector_codecs_scale_exactly_with_selected_width() {
+    assert_eq!(PortfolioOrderV1::<2>::encoded_len(), Ok(216));
+    assert_eq!(PortfolioOrderV1::<16>::encoded_len(), Ok(328));
+    assert_eq!(SettlementReceiptV1::<2>::encoded_len(), Ok(192));
+    assert_eq!(SettlementReceiptV1::<16>::encoded_len(), Ok(304));
+
+    let order = order(10, 20, 9, [1, -1], 10);
+    let mut short = [0; 216];
+    order.encode(&mut short).expect("two-outcome order encodes");
+    assert_eq!(
+        PortfolioOrderV1::<16>::decode(&short),
+        Err(Error::InvalidLength)
+    );
+
+    let bad_width = PortfolioOrderV1::<2>::new(PortfolioOrderV1Input {
+        market_identity_id: id(2),
+        claim_basis_id: id(3),
+        owner: id(20),
+        order_id: id(10),
+        generation: 7,
+        batch_sequence: 0,
+        nonce: 9,
+        valid_until_slot: 30,
+        max_lots: 1,
+        max_quote_debit_per_lot_numerator: 10,
+        coefficients: [1, -1],
+        outcome_count: 16,
+    });
+    assert_eq!(bad_width, Err(Error::InvalidOutcomeCount));
+
+    let receipt = SettlementReceiptV1::<2> {
+        candidate_id: id(40),
+        order_id: id(10),
+        owner: id(20),
+        generation: 7,
+        batch_sequence: 0,
+        nonce: 9,
+        fill_lots: 1,
+        remaining_lots: 0,
+        quote_delta_atoms: -1,
+        carry_before: 0,
+        carry_after: 0,
+        outcome_deltas: [1, -1],
+        outcome_count: 2,
+    };
+    let mut receipt_bytes = [0; 192];
+    receipt
+        .encode(&mut receipt_bytes)
+        .expect("two-outcome receipt encodes");
+    assert_eq!(
+        SettlementReceiptV1::<16>::decode(&receipt_bytes),
+        Err(Error::InvalidLength)
+    );
+    receipt_bytes[12..14].copy_from_slice(&16_u16.to_le_bytes());
+    assert_eq!(
+        SettlementReceiptV1::<2>::decode(&receipt_bytes),
+        Err(Error::InvalidOutcomeCount)
     );
 }
 
 #[test]
 fn simplex_is_exact_and_has_one_canonical_width() {
     let batch = selecting_batch();
-    let mut prices = [0u64; MAX_OUTCOMES_V1];
-    prices[0] = 40;
-    prices[1] = 59;
+    let mut prices = [40u64, 59];
     let submission = CandidateSubmissionV1 {
         market_identity_id: id(2),
         claim_basis_id: id(3),
@@ -172,28 +235,23 @@ fn simplex_is_exact_and_has_one_canonical_width() {
     );
 
     prices[1] = 60;
-    prices[2] = 1;
-    assert_eq!(
-        CandidateStateV1::submit(
-            id(40),
-            CandidateSubmissionV1 {
-                prices,
-                ..submission
-            },
-            config(),
-            batch,
-            10,
-        ),
-        Err(Error::NonCanonicalPortfolio)
-    );
+    assert!(CandidateStateV1::submit(
+        id(40),
+        CandidateSubmissionV1 {
+            prices,
+            ..submission
+        },
+        config(),
+        batch,
+        10
+    )
+    .is_ok());
 }
 
 #[test]
 fn paginated_failure_does_not_advance_cursor() {
     let batch = selecting_batch();
-    let mut prices = [0u64; MAX_OUTCOMES_V1];
-    prices[0] = 40;
-    prices[1] = 60;
+    let prices = [40u64, 60];
     let mut candidate = CandidateStateV1::submit(
         id(40),
         CandidateSubmissionV1 {
@@ -241,9 +299,7 @@ fn paginated_failure_does_not_advance_cursor() {
 #[test]
 fn imbalance_cannot_reach_valid_candidate() {
     let batch = selecting_batch();
-    let mut prices = [0u64; MAX_OUTCOMES_V1];
-    prices[0] = 40;
-    prices[1] = 60;
+    let prices = [40u64, 60];
     let first = order(10, 20, 0, [1, 0], 50);
     let mut candidate = CandidateStateV1::submit(
         id(40),
@@ -363,8 +419,9 @@ fn settlement_prefix_carry_conserves_exact_complete_set() {
         OrderPhase::Consumed
     );
 
-    let bytes = first.to_bytes();
-    assert_eq!(SettlementReceiptV1::decode(&bytes), Ok(first));
+    let mut bytes = [0; 192];
+    first.encode(&mut bytes).expect("receipt encodes");
+    assert_eq!(SettlementReceiptV1::<2>::decode(&bytes), Ok(first));
     cursor
         .finish(candidate, &mut batch)
         .expect("exact settlement finishes");
