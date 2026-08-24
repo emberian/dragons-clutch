@@ -6,8 +6,8 @@
 
 use dclutch_capability_contract::{
     CapabilityFundingDerivationV1, CapabilityManifestV1, ContentId as CapabilityContentId,
-    MARKET_OPENING_READINESS_BYTES, MARKET_OPENING_READINESS_PDA_DOMAIN, MarketOpeningReadinessV1,
-    RequiredFoundingEntryV1,
+    FundingAssetClassV1, FundingQuoteV1, MARKET_OPENING_READINESS_BYTES,
+    MARKET_OPENING_READINESS_PDA_DOMAIN, MarketOpeningReadinessV1, RequiredFoundingEntryV1,
 };
 use dclutch_collateral_contract::{
     COLLATERAL_CUSTODY_BYTES, COLLATERAL_CUSTODY_PDA_DOMAIN, COLLATERAL_VAULT_PDA_DOMAIN,
@@ -637,8 +637,9 @@ pub fn build_found_market_and_fund_v1(
         .map_err(|_| FoundationError::InvalidRecord)?;
     let market_space = validate_market_space(outcome_count, root)?;
     let market_rent = rent.minimum_balance(market_space);
+    let native_funding = resolution_native_funding(funding_quote)?;
     let total_sponsor_debit = market_rent
-        .checked_add(funding_quote.total_principal())
+        .checked_add(native_funding.total_lamports)
         .ok_or(FoundationError::ArithmeticOverflow)?;
     require_sponsor_balance(state.sponsor.lamports, total_sponsor_debit)?;
 
@@ -665,11 +666,56 @@ pub fn build_found_market_and_fund_v1(
             sponsor: state.sponsor.key,
             realm_rent: 0,
             market_rent,
-            fund_rent,
-            provider_fee_reimbursement: funding_quote.provider_principal(),
-            resolution_success_bounty: funding_quote.bounty_principal(),
+            fund_rent: native_funding.rent_lamports,
+            provider_fee_reimbursement: native_funding.provider_lamports,
+            resolution_success_bounty: native_funding.bounty_lamports,
             total_sponsor_debit,
         },
+    })
+}
+
+#[derive(Clone, Copy)]
+struct ResolutionNativeFunding {
+    rent_lamports: u64,
+    provider_lamports: u64,
+    bounty_lamports: u64,
+    total_lamports: u64,
+}
+
+fn resolution_native_funding(
+    quote: FundingQuoteV1,
+) -> Result<ResolutionNativeFunding, FoundationError> {
+    let amounts = quote.amounts();
+    let provider = amounts.provider();
+    if quote.realm_collateral().is_some()
+        || amounts.realm_collateral_total() != 0
+        || amounts.rent().asset_class() != FundingAssetClassV1::NativeLamports
+        || !matches!(
+            provider.asset_class(),
+            FundingAssetClassV1::NotApplicable | FundingAssetClassV1::NativeLamports
+        )
+        || amounts.bounty().asset_class() != FundingAssetClassV1::NativeLamports
+        || amounts.creation().amount() != 0
+        || amounts.work().amount() != 0
+        || amounts.liquidity().amount() != 0
+        || amounts.service().amount() != 0
+    {
+        return Err(FoundationError::InvalidFundingAuthority);
+    }
+    let total_lamports = amounts
+        .rent()
+        .amount()
+        .checked_add(provider.amount())
+        .and_then(|value| value.checked_add(amounts.bounty().amount()))
+        .ok_or(FoundationError::ArithmeticOverflow)?;
+    if amounts.native_lamports_total() != total_lamports {
+        return Err(FoundationError::InvalidFundingAuthority);
+    }
+    Ok(ResolutionNativeFunding {
+        rent_lamports: amounts.rent().amount(),
+        provider_lamports: provider.amount(),
+        bounty_lamports: amounts.bounty().amount(),
+        total_lamports,
     })
 }
 

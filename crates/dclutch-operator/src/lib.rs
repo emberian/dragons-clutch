@@ -9,6 +9,7 @@
 
 use dclutch_capability_contract::{
     CapabilityFundingDerivationV1, CapabilityManifestV1, ContentId as CapabilityContentId,
+    FundingCustodyObservationV1,
 };
 use dclutch_collateral_contract::{COMPACT_TERMINAL_MARKET_BYTES, CompactTerminalMarketV1};
 use dclutch_core_contract::Phase;
@@ -98,7 +99,7 @@ pub struct ObservedAccount {
 pub struct ResolutionState {
     /// Provider-neutral categorical Market.
     pub market: ObservedAccount,
-    /// Raw 192-byte capability funding state.
+    /// Raw canonical typed capability-funding state.
     pub fund: ObservedAccount,
     /// Immutable Pyth policy plus feed-semantics material.
     pub resolution_material: ObservedAccount,
@@ -112,7 +113,7 @@ pub struct ResolutionState {
     pub rent_credit: ObservedAccount,
     /// Canonical Rent sysvar used to authenticate finalized raw records.
     pub rent_sysvar: ObservedAccount,
-    /// Same-snapshot rent-exempt minimum for the 192-byte funding account.
+    /// Same-snapshot rent-exempt minimum for the canonical funding account.
     pub fund_rent_minimum: u64,
 }
 
@@ -582,13 +583,16 @@ fn decode_state(program_id: Pubkey, state: &ResolutionState) -> Result<Facts, Er
     if selected.entry().release_id().to_bytes() != *material.policy().release_id() {
         return Err(Error::ContentIdentityMismatch);
     }
+    let custody =
+        FundingCustodyObservationV1::native_only(state.fund.lamports, state.fund_rent_minimum)
+            .map_err(|_| Error::FundUnderfunded)?;
     validate_required_resolution_funding(
         funding,
         manifest_id,
         manifest,
         selected,
         state.fund_rent_minimum,
-        funding.remaining().total_principal(),
+        custody,
     )
     .map_err(|_| Error::FundUnderfunded)?;
     let minimum =
@@ -615,8 +619,8 @@ fn decode_state(program_id: Pubkey, state: &ResolutionState) -> Result<Facts, Er
     facts.price_window_end = price_window_end;
     facts.funding = FundingReport {
         fund_rent_refund: state.fund_rent_minimum,
-        provider_fee_reimbursement: funding.remaining().provider_principal(),
-        bounty: funding.remaining().bounty_principal(),
+        provider_fee_reimbursement: funding.remaining().provider().amount(),
+        bounty: funding.remaining().bounty().amount(),
         unclassified_credit_excess: sponsor_refund_excess,
     };
     Ok(facts)
@@ -823,8 +827,8 @@ fn select_release(release_id: [u8; 32], observed_time: i64) -> Result<PythReleas
 mod tests {
     use super::*;
     use dclutch_capability_contract::{
-        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, FundingQuoteV1,
-        MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
+        FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
     };
     use dclutch_core_contract::{ContentId, MarketIdentity, MarketRoot};
     use dclutch_kernel::resolution::categorical_pyth_v1::{
@@ -859,6 +863,35 @@ mod tests {
             executable: false,
             data,
         }
+    }
+
+    fn native_resolution_quote(rent: u64, provider: u64, bounty: u64) -> FundingQuoteV1 {
+        let native = |amount| {
+            CompartmentFundingV1::native_lamports(amount).expect("native resolution amount")
+        };
+        let not_applicable = CompartmentFundingV1::not_applicable();
+        FundingQuoteV1::new(
+            FundingAmountsV1::new(
+                native(rent),
+                not_applicable,
+                not_applicable,
+                if provider == 0 {
+                    not_applicable
+                } else {
+                    native(provider)
+                },
+                if bounty == 0 {
+                    not_applicable
+                } else {
+                    native(bounty)
+                },
+                not_applicable,
+                not_applicable,
+            )
+            .expect("typed native resolution amounts"),
+            None,
+        )
+        .expect("typed native resolution quote")
     }
 
     fn finalized_record(
@@ -951,7 +984,7 @@ mod tests {
         .expect("policy");
         let material = CategoricalPythResolutionMaterialV1::new(policy, feed).expect("material");
         let policy_id = hash(&policy.to_bytes()).to_bytes();
-        let quote = FundingQuoteV1::new(100, 0, 0, 7, 11, 0, 0).expect("quote");
+        let quote = native_resolution_quote(100, 7, 11);
         let entry = CapabilityEntryV1::new(
             CapabilityContentId::new([11; 32]).expect("kind"),
             CapabilityContentId::new([9; 32]).expect("release"),
@@ -1003,7 +1036,10 @@ mod tests {
             7,
         )
         .expect("funding");
-        assert_eq!(FUNDING_BYTES, 192);
+        assert_eq!(
+            FUNDING_BYTES,
+            dclutch_capability_contract::FUNDING_STATE_BYTES
+        );
         let fund_data = funding.to_bytes().to_vec();
         let derivation = CapabilityFundingDerivationV1::new(
             market_key.to_bytes(),

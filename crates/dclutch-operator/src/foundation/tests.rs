@@ -1,6 +1,7 @@
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
-    ContentId as CapabilityContentId, FundingQuoteV1, MANIFEST_HEADER_BYTES,
+    CompartmentFundingV1, ContentId as CapabilityContentId, FundingAmountsV1,
+    FundingCustodyObservationV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, RealmCollateralBindingV1,
 };
 use dclutch_collateral_contract::{CreateRealmV1, FoundMarketAndFundV1};
 use dclutch_kernel::resolution::categorical_pyth_v1::{
@@ -27,6 +28,66 @@ fn observation() -> Observation {
         unix_timestamp: 1_800_000_000,
         finality: Finality::Finalized,
     }
+}
+
+fn native_resolution_quote(rent: u64, provider: u64, bounty: u64) -> FundingQuoteV1 {
+    let native = |amount| CompartmentFundingV1::native_lamports(amount).expect("native amount");
+    let not_applicable = CompartmentFundingV1::not_applicable();
+    FundingQuoteV1::new(
+        FundingAmountsV1::new(
+            native(rent),
+            not_applicable,
+            not_applicable,
+            if provider == 0 {
+                not_applicable
+            } else {
+                native(provider)
+            },
+            if bounty == 0 {
+                not_applicable
+            } else {
+                native(bounty)
+            },
+            not_applicable,
+            not_applicable,
+        )
+        .expect("typed native resolution amounts"),
+        None,
+    )
+    .expect("typed native resolution quote")
+}
+
+#[test]
+fn resolution_sponsor_debit_refuses_realm_collateral_substitution() {
+    let native = |amount| CompartmentFundingV1::native_lamports(amount).expect("native amount");
+    let realm = CompartmentFundingV1::realm_collateral(1).expect("realm amount");
+    let not_applicable = CompartmentFundingV1::not_applicable();
+    let binding = RealmCollateralBindingV1::new(
+        CapabilityContentId::new([1; 32]).expect("realm ID"),
+        CapabilityContentId::new([2; 32]).expect("release ID"),
+        [3; 32],
+        [4; 32],
+        [5; 32],
+    )
+    .expect("binding");
+    let quote = FundingQuoteV1::new(
+        FundingAmountsV1::new(
+            native(100),
+            not_applicable,
+            not_applicable,
+            not_applicable,
+            native(1),
+            realm,
+            not_applicable,
+        )
+        .expect("typed amounts"),
+        Some(binding),
+    )
+    .expect("typed quote");
+    assert!(matches!(
+        resolution_native_funding(quote),
+        Err(FoundationError::InvalidFundingAuthority)
+    ));
 }
 
 fn observed(
@@ -285,8 +346,7 @@ impl FoundFixture {
             finalized_record(program_id, 5, material_data);
         let policy_id_bytes = hash(&policy.to_bytes()).to_bytes();
         let fund_rent = Rent::default().minimum_balance(FUNDING_BYTES);
-        let funding_quote =
-            FundingQuoteV1::new(fund_rent, 0, 0, 17, 23, 0, 0).expect("exact Fund quote");
+        let funding_quote = native_resolution_quote(fund_rent, 17, 23);
         let manifest_data = resolution_manifest(
             *policy.release_id(),
             policy_id_bytes,
@@ -555,7 +615,9 @@ fn found_market_rebuilds_identity_pdas_wire_privileges_and_debit() {
             .resolution_funding
             .entry()
             .funding_quote()
-            .rent_principal(),
+            .amounts()
+            .rent()
+            .amount(),
         report.debit.fund_rent
     );
     assert_eq!(
@@ -579,16 +641,8 @@ fn founding_funding_authority_refuses_wrong_quote_config_and_release() {
     let fund_rent = Rent::default().minimum_balance(FUNDING_BYTES);
 
     let mut wrong_rent = fixture.state.clone();
-    let wrong_rent_quote = FundingQuoteV1::new(
-        fund_rent.checked_add(1).expect("small rent"),
-        0,
-        0,
-        17,
-        23,
-        0,
-        0,
-    )
-    .expect("wrong rent quote remains canonical");
+    let wrong_rent_quote =
+        native_resolution_quote(fund_rent.checked_add(1).expect("small rent"), 17, 23);
     wrong_rent.capability_manifest.data = resolution_manifest(
         release_id,
         config_id,
@@ -602,7 +656,7 @@ fn founding_funding_authority_refuses_wrong_quote_config_and_release() {
     );
     assert_eq!(wrong_rent, before);
 
-    let exact_quote = FundingQuoteV1::new(fund_rent, 0, 0, 17, 23, 0, 0).expect("exact quote");
+    let exact_quote = native_resolution_quote(fund_rent, 17, 23);
     let mut wrong_config = fixture.state.clone();
     wrong_config.capability_manifest.data =
         resolution_manifest(release_id, [71; 32], capability_capacity_id, exact_quote);
@@ -619,8 +673,7 @@ fn founding_funding_authority_refuses_wrong_quote_config_and_release() {
         Err(FoundationError::AddressMismatch)
     );
 
-    let zero_bounty = FundingQuoteV1::new(fund_rent, 0, 0, 17, 0, 0, 0)
-        .expect("zero-bounty quote remains canonical");
+    let zero_bounty = native_resolution_quote(fund_rent, 17, 0);
     let mut missing_bounty = fixture.state.clone();
     missing_bounty.capability_manifest.data =
         resolution_manifest(release_id, config_id, capability_capacity_id, zero_bounty);
@@ -848,7 +901,12 @@ fn open_state() -> (Pubkey, OpenCollateralVaultState) {
             manifest,
             0,
             funding,
-            funding.remaining().total_principal(),
+            FundingCustodyObservationV1::native_only(
+                dclutch_pyth_contract::funding::required_resolution_minimum_balance(funding)
+                    .expect("minimum"),
+                Rent::default().minimum_balance(dclutch_pyth_contract::funding::FUNDING_BYTES),
+            )
+            .expect("native-only custody"),
             observation().slot,
         )
         .expect("ready");
