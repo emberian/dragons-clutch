@@ -1,6 +1,7 @@
 use super::direct_pair_v1::{
-    authenticate_selected_direct_pair_v1, AuthenticatedDirectSelectionAuthorityV1,
-    DirectCashBoundaryV1, DirectPairErrorV1, NoDirectSelectionAuthorityV1,
+    authenticate_compact_selected_direct_pair_v1, authenticate_selected_direct_pair_v1,
+    AuthenticatedDirectSelectionAuthorityV1, DirectCashBoundaryV1, DirectEconomicBookV1,
+    DirectEconomicCandidateV1, DirectPairErrorV1, NoDirectSelectionAuthorityV1,
 };
 use super::relation_v1::MAX_OUTCOMES;
 use super::relation_v2::{
@@ -24,6 +25,24 @@ impl AuthenticatedDirectSelectionAuthorityV1 for ExactAuthority {
         _book: &EconomicBookV2,
         _price: &PricePreconditionV2,
         _candidate: &EconomicCandidateV2,
+        economics: &super::relation_v2::VerifiedEconomicsV2,
+    ) -> Result<(), DirectPairErrorV1> {
+        if selection_transcript_id == self.transcript
+            && economics.economic_candidate_digest == self.digest
+        {
+            Ok(())
+        } else {
+            Err(DirectPairErrorV1::UnauthenticatedSelection)
+        }
+    }
+
+    fn authenticate_compact_selected_pair(
+        &self,
+        selection_transcript_id: [u8; 32],
+        _domain: &EconomicDomainV2,
+        _orders: &[EconomicOrderV2; 2],
+        _price: &PricePreconditionV2,
+        _candidate: DirectEconomicCandidateV1,
         economics: &super::relation_v2::VerifiedEconomicsV2,
     ) -> Result<(), DirectPairErrorV1> {
         if selection_transcript_id == self.transcript
@@ -150,6 +169,23 @@ fn full_width_direct_pair_is_exact_and_private() {
     assert_eq!(selected.consideration_cash_atoms(), 5);
     assert_eq!(selected.boundary(), DirectCashBoundaryV1::ExactOnly);
     assert_eq!(selected.canonical_transcript().len(), 253);
+
+    let compact = authenticate_compact_selected_direct_pair_v1(
+        &authority,
+        authority.transcript,
+        &domain,
+        &DirectEconomicBookV1 {
+            orders: [book.orders[0], book.orders[1]],
+            len: 2,
+        },
+        &price,
+        DirectEconomicCandidateV1 {
+            fills: [8, 8],
+            honored_aon_mask: 0,
+        },
+    )
+    .unwrap();
+    assert_eq!(compact.canonical_transcript(), selected.canonical_transcript());
 }
 
 #[test]

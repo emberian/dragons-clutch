@@ -37,7 +37,7 @@ use clutch_product_series::{
 use clutch_product_series::{
     CompiledProductSeriesBundleV2, CompiledProductSeriesBundleV3, CompiledProductSeriesBundleV4,
     CompiledProductSeriesBundleV5, CompiledProductSeriesBundleV6, FixedCodec,
-    MarketInstancePreimageV2,
+    MarketFamilyCapabilityPolicyV1, MarketInstancePreimageV2,
     RegistryCapabilityProfileV2, RegistryCapabilityProfileV3, RegistryCapabilityProfileV4,
     RegistryProgramReleaseV1, RegistryProgramReleaseV2, SeriesAttachmentPlanV2,
     SeriesAttachmentPlanV3, SeriesAttachmentPlanV4, SeriesAttachmentPlanV5,
@@ -45,6 +45,7 @@ use clutch_product_series::{
     COMPILED_PRODUCT_SERIES_BUNDLE_V2_BYTES,
     COMPILED_PRODUCT_SERIES_BUNDLE_V3_BYTES, COMPILED_PRODUCT_SERIES_BUNDLE_V4_BYTES,
     COMPILED_PRODUCT_SERIES_BUNDLE_V5_BYTES, COMPILED_PRODUCT_SERIES_BUNDLE_V6_BYTES,
+    MARKET_FAMILY_CAPABILITY_POLICY_BYTES_V1,
     MARKET_INSTANCE_PREIMAGE_V2_BYTES,
     REGISTRY_CAPABILITY_PROFILE_V2_BYTES, REGISTRY_CAPABILITY_PROFILE_V3_BYTES,
     REGISTRY_CAPABILITY_PROFILE_V4_BYTES, REGISTRY_PROGRAM_RELEASE_V1_BYTES,
@@ -57,6 +58,9 @@ use clutch_product_series::{
 use clutch_source_plane_v3_runtime::{
     SourceReleaseManifestV1, SourceReleaseManifestV2, SourceWorkScheduleBindingV1,
     SOURCE_RELEASE_MANIFEST_BYTES, SOURCE_RELEASE_MANIFEST_V1_BYTES, SOURCE_WORK_SCHEDULE_BYTES,
+};
+use clutch_structured_claim_runtime_contract::{
+    WrapperRecipeHashV1, WrapperRecipeSetV1, WRAPPER_RECIPE_SET_BYTES_V1,
 };
 
 const PRODUCT_BASIS_BYTES: usize = 2_352;
@@ -141,7 +145,26 @@ pub const ARTIFACT_STAGE_HEADER_BYTES: usize = 2
     + HASH_BYTES
     + ARTIFACT_STAGE_RESERVED_BYTES;
 /// Largest artifact body admitted by this transport revision.
-pub const MAX_ARTIFACT_BYTES: usize = PRODUCT_BASIS_BYTES;
+pub const MAX_ARTIFACT_BYTES: usize = WRAPPER_RECIPE_SET_BYTES_V1;
+
+struct WrapperRecipeArtifactSha256V1;
+
+impl WrapperRecipeHashV1 for WrapperRecipeArtifactSha256V1 {
+    fn hashv(&self, slices: &[&[u8]]) -> [u8; 32] {
+        #[cfg(target_os = "solana")]
+        {
+            solana_sha256_hasher::hashv(slices).to_bytes()
+        }
+        #[cfg(not(target_os = "solana"))]
+        {
+            let mut hash = super::Sha256::new();
+            for slice in slices {
+                hash.update(slice);
+            }
+            hash.finish()
+        }
+    }
+}
 
 /// Whether an immutable artifact coordinate admits new registrations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -230,6 +253,10 @@ pub enum ArtifactKind {
     SeriesAttachmentPlanV5 = 62,
     /// Current compiler graph binding ProfileV4 and Quote/Attachment V5.
     CompiledProductSeriesBundleV6 = 63,
+    /// Structured-owned fixed wrapper-recipe bodies for one Product-owned set ID.
+    WrapperRecipeSetV1 = 64,
+    /// Immutable Realm/Profile/Registry-bound five-family capability policy.
+    MarketFamilyCapabilityPolicyV1 = 65,
 }
 
 impl ArtifactKind {
@@ -288,6 +315,8 @@ impl ArtifactKind {
             61 => Ok(Self::SeriesFundingQuoteV5),
             62 => Ok(Self::SeriesAttachmentPlanV5),
             63 => Ok(Self::CompiledProductSeriesBundleV6),
+            64 => Ok(Self::WrapperRecipeSetV1),
+            65 => Ok(Self::MarketFamilyCapabilityPolicyV1),
             _ => Err(CodecError::InvalidEnum),
         }
     }
@@ -332,6 +361,8 @@ impl ArtifactKind {
             Self::SeriesFundingQuoteV5 => 61,
             Self::SeriesAttachmentPlanV5 => 62,
             Self::CompiledProductSeriesBundleV6 => 63,
+            Self::WrapperRecipeSetV1 => 64,
+            Self::MarketFamilyCapabilityPolicyV1 => 65,
         }
     }
 
@@ -375,6 +406,8 @@ impl ArtifactKind {
             Self::SeriesFundingQuoteV5 => SERIES_FUNDING_QUOTE_BYTES_V5,
             Self::SeriesAttachmentPlanV5 => SERIES_ATTACHMENT_PLAN_BYTES_V5,
             Self::CompiledProductSeriesBundleV6 => COMPILED_PRODUCT_SERIES_BUNDLE_V6_BYTES,
+            Self::WrapperRecipeSetV1 => WRAPPER_RECIPE_SET_BYTES_V1,
+            Self::MarketFamilyCapabilityPolicyV1 => MARKET_FAMILY_CAPABILITY_POLICY_BYTES_V1,
         }
     }
 
@@ -419,6 +452,8 @@ impl ArtifactKind {
                 | Self::SeriesFundingQuoteV5
                 | Self::SeriesAttachmentPlanV5
                 | Self::CompiledProductSeriesBundleV6
+                | Self::WrapperRecipeSetV1
+                | Self::MarketFamilyCapabilityPolicyV1
         )
     }
 
@@ -1252,6 +1287,33 @@ pub fn validate_artifact(binding: ArtifactBinding, body: &[u8]) -> Result<u8> {
             }
             Ok(0)
         }
+        ArtifactKind::WrapperRecipeSetV1 => {
+            let value = WrapperRecipeSetV1::decode(body, &WrapperRecipeArtifactSha256V1)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id(&WrapperRecipeArtifactSha256V1)
+                    .map_err(|_| CodecError::MismatchedBinding)?,
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
+        ArtifactKind::MarketFamilyCapabilityPolicyV1 => {
+            let value = MarketFamilyCapabilityPolicyV1::decode(body)
+                .map_err(|_| CodecError::MismatchedBinding)?;
+            if Hash32::from_bytes(
+                value
+                    .id()
+                    .map_err(|_| CodecError::MismatchedBinding)?
+                    .bytes(),
+            ) != binding.digest
+            {
+                return Err(CodecError::MismatchedBinding);
+            }
+            Ok(0)
+        }
         #[cfg(all(
             feature = "non-production-product-series-lab",
             not(target_os = "solana")
@@ -1611,7 +1673,7 @@ mod tests {
         );
 
         for (tag, expected) in (u8::MIN..=u8::MAX).map(|tag| {
-            let expected = if (32..=63).contains(&tag) {
+            let expected = if (32..=65).contains(&tag) {
                 Ok(match tag {
                     32 => ArtifactKind::NativeClaimBasisV1,
                     33 => ArtifactKind::EvidenceOnlyRecoveryPolicyV1,
@@ -1645,6 +1707,8 @@ mod tests {
                     61 => ArtifactKind::SeriesFundingQuoteV5,
                     62 => ArtifactKind::SeriesAttachmentPlanV5,
                     63 => ArtifactKind::CompiledProductSeriesBundleV6,
+                    64 => ArtifactKind::WrapperRecipeSetV1,
+                    65 => ArtifactKind::MarketFamilyCapabilityPolicyV1,
                     _ => unreachable!(),
                 })
             } else {
@@ -1652,7 +1716,7 @@ mod tests {
             };
             (tag, expected)
         }) {
-            if (32..=63).contains(&tag) {
+            if (32..=65).contains(&tag) {
                 assert_eq!(ArtifactKind::from_byte(tag), expected, "kind {tag}");
             }
         }
@@ -1878,6 +1942,14 @@ mod tests {
             ArtifactKind::from_byte(63),
             Ok(ArtifactKind::CompiledProductSeriesBundleV6)
         );
+        assert_eq!(
+            ArtifactKind::from_byte(64),
+            Ok(ArtifactKind::WrapperRecipeSetV1)
+        );
+        assert_eq!(
+            ArtifactKind::from_byte(65),
+            Ok(ArtifactKind::MarketFamilyCapabilityPolicyV1)
+        );
         let source = binding(ArtifactKind::SourceReleaseManifestV1);
         assert_eq!(source.exact_len, 1_008);
         assert_eq!(
@@ -1922,6 +1994,8 @@ mod tests {
             ArtifactKind::SeriesFundingQuoteV5,
             ArtifactKind::SeriesAttachmentPlanV5,
             ArtifactKind::CompiledProductSeriesBundleV6,
+            ArtifactKind::WrapperRecipeSetV1,
+            ArtifactKind::MarketFamilyCapabilityPolicyV1,
         ] {
             assert_eq!(binding(kind).validate_for_registration(), Ok(()));
         }

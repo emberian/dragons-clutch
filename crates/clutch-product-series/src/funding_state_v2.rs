@@ -20,6 +20,9 @@ const SCHEMA_V2: u16 = 2;
 /// Semantic identity domain of the exact current state.
 pub const SERIES_FUNDING_STATE_V2_DOMAIN: &[u8] =
     b"dragons-clutch/series-funding-state/v2";
+/// Semantic identity of the exact current terminal principal/donation view.
+pub const SERIES_FUNDING_TERMINAL_PROJECTION_V2_DOMAIN: &[u8] =
+    b"dragons-clutch/series-funding-terminal-projection/v2";
 /// Exact bytes per separately accounted component.
 pub const SERIES_COMPONENT_CAPITAL_BYTES_V2: usize = 40;
 /// Exact current state width with no unnamed authority-bearing padding.
@@ -791,6 +794,36 @@ pub struct SeriesFundingTerminalProjectionV2 {
     pub terminal_receipt_id: ContentId,
 }
 
+impl SeriesFundingTerminalProjectionV2 {
+    /// Hash the complete current terminal projection under its sole pure owner.
+    pub fn id(self) -> Result<ContentId> {
+        self.series_plan_id.validate()?;
+        self.funding_terms_id.validate()?;
+        self.compiler_bundle_id.validate()?;
+        self.terminal_receipt_id.validate()?;
+        let mut body = [0u8; 328];
+        let mut writer = Writer::new(&mut body, 328)?;
+        writer.id(self.series_plan_id.content_id());
+        writer.id(self.funding_terms_id.content_id());
+        writer.id(self.compiler_bundle_id.content_id());
+        writer.u64(self.transition_sequence);
+        for component in self.refundable_principal {
+            writer.u64(component.lamports);
+            writer.u64(component.collateral_atoms);
+        }
+        for component in self.donation_residue {
+            writer.u64(component.lamports);
+            writer.u64(component.collateral_atoms);
+        }
+        writer.id(self.terminal_receipt_id);
+        writer.finish()?;
+        Ok(content_id(
+            SERIES_FUNDING_TERMINAL_PROJECTION_V2_DOMAIN,
+            &body,
+        ))
+    }
+}
+
 fn validate_reservation_debits(
     quote: &SeriesFundingQuoteV4,
     disposition: SeriesMarketDispositionV1,
@@ -1217,5 +1250,48 @@ mod tests {
             Err(Error::WorkStateMismatch)
         );
         assert_eq!(state, before);
+    }
+
+    #[test]
+    fn terminal_projection_identity_binds_every_value_and_authority() {
+        let principal = [
+            ComponentDebitV1 {
+                lamports: 3,
+                collateral_atoms: 5,
+            };
+            SERIES_FUNDING_COMPONENT_COUNT_V2
+        ];
+        let donations = [
+            ComponentDebitV1 {
+                lamports: 7,
+                collateral_atoms: 11,
+            };
+            SERIES_FUNDING_COMPONENT_COUNT_V2
+        ];
+        let projection = SeriesFundingTerminalProjectionV2 {
+            series_plan_id: SeriesPlanV5Id::from_bytes([1; 32]),
+            funding_terms_id: SeriesFundingTermsV2Id::from_bytes([2; 32]),
+            compiler_bundle_id: CompiledProductSeriesBundleV5Id::from_bytes([3; 32]),
+            transition_sequence: 13,
+            refundable_principal: principal,
+            donation_residue: donations,
+            terminal_receipt_id: ContentId::from_bytes([4; 32]),
+        };
+        let expected = projection.id().unwrap();
+        let mut changed = projection;
+        changed.transition_sequence += 1;
+        assert_ne!(expected, changed.id().unwrap());
+        changed = projection;
+        changed.refundable_principal[0].lamports += 1;
+        assert_ne!(expected, changed.id().unwrap());
+        changed = projection;
+        changed.donation_residue[SERIES_FUNDING_COMPONENT_COUNT_V2 - 1].collateral_atoms += 1;
+        assert_ne!(expected, changed.id().unwrap());
+        changed = projection;
+        changed.terminal_receipt_id = ContentId::from_bytes([5; 32]);
+        assert_ne!(expected, changed.id().unwrap());
+        changed = projection;
+        changed.terminal_receipt_id = ContentId::ZERO;
+        assert_eq!(changed.id(), Err(Error::ZeroIdentity));
     }
 }

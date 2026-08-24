@@ -1,12 +1,15 @@
 # Structured-claim SBF successor adapter
 
-Status: **current action owners are staged behind exact zero capability masks;
-neither the wrapper nor the base program admits a Structured action, and no
-artifact has been built, measured, deployed, or validated** (2026-08-24).
+Status: **actions 1/3/5/6/7/8 are admitted only by the unified
+`profile-successor-chain-attached-dev` source profile; no successor artifact
+has been built, measured, deployed, or validated** (2026-08-24).
 
-This crate consumes `clutch-structured-claim-runtime-contract` as the only
-owner of structured-claim descriptor bytes, family-local payload codecs, and
-economic transitions. The former adapter-local descriptor (`0xd1`), request,
+This crate consumes `clutch-structured-claim-runtime-contract` as the owner of
+structured-claim descriptor bytes, family-local payload codecs, roots, replay
+extensions, and terminal plans. The adapter's current lifecycle composes only
+hostile-decoded HoardV2, ClaimLedgerV3, PositionV3, ReplayV3, ResolutionV5,
+Product, and collateral authorities; the former parallel `MarketLedger` and
+model route planner have been physically deleted. The former adapter-local descriptor (`0xd1`), request,
 wrapper-replay, route planner, backing reconstruction, and post-state DTOs were
 deleted. There is no compatibility decoder: a historical parallel-adapter
 image cannot be mistaken for the canonical descriptor.
@@ -29,36 +32,50 @@ supply, Market phase, and payouts remain base-program facts.
 
 ## Runtime activation
 
-The structured family is `75/v1`, with eight runtime-contract actions:
+The central allocation ledger reserves eight `75/v1` coordinates. The current
+runtime contract recognizes only six actions:
 
 1. create descriptor;
-2. canonical wrap;
 3. full-vector wrap;
-4. canonical unwind;
 5. full-vector unwind;
 6. beneficiary-free donation compaction;
 7. exact terminal redemption; and
 8. permanent descriptor retirement.
 
-The adapter default remains fail-closed. The historical name
-`live-current-wrapper` currently stages the current wrapper code but its action
-mask is exactly zero, as is the base program's Structured mask. All eight
-actions therefore refuse at capability admission before account loading. A
-future checked release must rotate the profile/release identity and admit only
-the actions whose complete base/wrapper compositions and evidence have landed.
+Tags 2 and 4 have no current action or payload variant. They are rejected as
+unknown immediately after the three-byte family header; the registry reservation
+is not a compatibility decoder or an execution path.
 
-Activation must be atomic with all of the following:
+The adapter default remains fail-closed. The explicit
+`profile-successor-chain-attached-dev` wrapper feature admits exactly actions
+1, 3, 5, 6, 7, and 8 (`0x01ea`). The central program independently selects
+the identically named unified profile and admits the same six tuples. Actions
+2 and 4 refuse before payload or account loading on both sides.
 
-- central capability activation for only the implemented family-local actions,
-  descriptor account `0x88/2`, and root account `0xb7/1`;
-- an exact capability-profile tuple and new profile/release identity;
-- main-dispatcher routing to this crate;
-- promotion of the laboratory-only base Position V3 action-35 handler into a
-  checked release identity;
-- the supplied parser plans wired into the pinned Token-2022 byte parser;
-- linked ELF, stack, heap, compute, CPI-depth, account-count, rollback, rent,
-  SVM, and local-validator evidence; and
-- a checked release manifest.
+Actions 1, 3, 5, 6, 7, and 8 have one shared source/account contract used by
+both wrapper and base: founding uses 34 accounts, full-vector wrap/unwind use
+32, compaction uses 32, terminal redemption uses 33, and retirement uses 33.
+Retirement's current Product terminal authority includes read-only BundleV6
+and AttachmentV5 artifacts in addition to the writable LinkV2 used only for
+the last live descriptor.
+Their exact token effects are permanent-mint initialization, mint, burn,
+optional Hoard-surplus disposition, burn, and mint-authority revocation. The
+withdrawn canonical actions 2 and 4 have no current execution contract. The
+exact table is content-addressed by
+`STRUCTURED_CURRENT_ACCOUNT_CONTRACT_ID_V1`; current wrapper/base/Token-2022
+release authentication consumes the single aggregate release contract.
+
+Runtime admission remains conditional on all of the following:
+
+- the exact six-action wrapper/base capability intersection;
+- three content-addressed `RegistryProgramReleaseV2` artifacts naming the
+  checked wrapper, unified-base, and Token-2022 manifest identities;
+- exact executable Program-to-ProgramData linkage, `ObservedPositive` locus,
+  positive loader slot, and SHA-256 of each complete ProgramData body,
+  including its ELF;
+- descriptor/root continuity over the derived three-release owner identity;
+  and
+- main dispatch only for the same six actions.
 
 ## Trust-boundary responsibilities
 
@@ -66,12 +83,12 @@ This adapter stays separate from `programs/clutch-sbf` deliberately. The
 descriptor, wrapper mint, mint-authority PDA, wrapper executable, and
 Token-2022 post-CPI observations belong to the wrapper deployment, while the
 base program alone owns Position V3 and Replay writes. Linking the adapter as
-a shared `no_std` library lets both entrypoints reconstruct one identical
-typed custody call without moving wrapper authority into the base ELF or
-inventing a second account DTO. It does **not** authorize either side to trust
-the other's projection: the wrapper prepares the private-field call, and the
-base must reconstruct it again from its own `AccountInfo` observations before
-publishing all four successors atomically.
+a shared `no_std` library gives both entrypoints one exact account-count,
+release-manifest, Token-2022, and successor-projection contract without moving
+wrapper authority into the base ELF or inventing a second persisted truth. It
+does **not** authorize either side to trust the other's projection: each side
+hostile-authenticates the accounts it owns and reconciles the exact joined
+postimages before success.
 
 The adapter owns only facts that cannot live in the pure runtime contract:
 
@@ -79,15 +96,16 @@ The adapter owns only facts that cannot live in the pure runtime contract:
   executable bits, and deployment slots;
 - SHA-256 of runtime-owned native-claim and wrapper-product preimages;
 - descriptor, mint, mint-authority, and vault-owner PDA authentication;
-- exact account-role ordering, access, program ownership, and pairwise
-  nonaliasing;
+- the shared current action/account-count contract, with exact route-local role
+  ordering, access, program ownership, and pairwise nonaliasing enforced by
+  both SBF composers;
 - hostile decoding of the current Realm/Profile/policy, MarketBinding/runtime,
   MarketInstance, Hoard V2, ClaimLedger V3, Position V3, and purpose-owned
-  Replay accounts on canonical and full-vector custody routes, with current
+  Replay accounts on full-vector custody routes, with current
   Hoard V2 and ClaimLedger V3 successors for the full-vector routes;
 - projection through a named base-PDA verifier;
 - projection through a named pinned Token-2022 parser; and
-- exact ordered outer CPI/write plans plus receipt reconciliation.
+- exact ordered outer CPI/write plans plus hostile post-CPI reconciliation.
 
 `CanonicalToken2022DecoderV1` is the concrete hostile-byte implementation of
 the `Token2022DecoderV1` trust boundary. It uses the pinned Token-2022 layout and rejects
@@ -102,82 +120,21 @@ requirements exact. `plan_token_2022_cpi_v1` emits the real Token-2022 byte
 layouts and metas for `InitializeMint2`, `MintToChecked`, `BurnChecked`, and
 `SetAuthority(MintTokens, None)`; it is not a mock execution result.
 
-## Ephemeral structured custody
+## Current successor ownership
 
-Canonical wrap/unwind uses General V2 family `74/v1`, local action 35, with
-the canonical 298-byte payload owned by
-`clutch-structured-claim-runtime-contract`. The 314-byte CPI instruction is
-encoded by the base program's sole canonical `ExtensionRequest` codec with
-sequence zero; it is not a raw family/action prefix. `authority_id` is a
-SHA-256 digest over domain
-`dragons-clutch/authenticated-structured-custody-call/v1\0` and the exact
-1,480-byte authority-neutral projection. It binds action 35, the exact local
-wrapper action, descriptor/product/deployments, MarketBinding and Product
-artifacts, the full-width Hoard/ClaimLedger prestates and current lifecycle,
-Realm collateral-policy/release identities, user actor, vault PDA, both
-complete Position V3 semantic prestates, both complete Replay prestates, and
-the exact transfer delta.
+The deleted canonical action-2/4 route previously manufactured a Structured
+authority transcript for General V2 action 35. That parallel transfer planner,
+its public preparation/reconstruction receipts, its 30-account wrapper
+executor, and its duplicate General payload/CPI codec have been physically
+removed. Family-envelope parsing rejects the former action-2/4 tags as unknown;
+current Replay V3 construction, encoding, and hostile decode likewise have no
+variant for either action.
 
-There is no generic capability account and no wildcard signer. The wrapper
-prepares the call and the base reconstructs it through the same function. The
-frozen action-35 CPI metas are:
-
-0. vault-owner PDA, signer, read-only;
-1. immutable Realm, read-only;
-2. immutable Profile V2, read-only;
-3. exact sealed CollateralPolicy V2 artifact, read-only;
-4. Realm-selected collateral token executable, read-only;
-5. immutable General V2 MarketBinding, read-only;
-6. stable General V2 MarketRuntime, read-only;
-7. source Position V3, writable;
-8. source purpose-owned Replay V3, writable;
-9. destination Position V3, writable;
-10. destination purpose-owned Replay V3, writable;
-11. user Position controller, signer, read-only;
-12. immutable `0x88/1` descriptor, read-only;
-13. pinned wrapper executable, read-only;
-14. pinned wrapper ProgramData, read-only;
-15. pinned base executable, read-only;
-16. pinned base ProgramData, read-only;
-17. pinned Token-2022 executable for the wrapper plane, read-only;
-18. pinned Token-2022 ProgramData, read-only;
-19. exact NativeClaimBasisV1 Product artifact, read-only;
-20. exact MarketInstanceV2 preimage account, read-only;
-21. canonical full-width Hoard V2 carrying current liability lifecycle, read-only; and
-22. canonical full-width ClaimLedger V3 aggregate owner, read-only.
-
-No legacy Market, Kernel, Terms, Hoard, SupplyLedger, or lowered Position DTO
-participates in this custody authority. The Profile chain chooses collateral;
-the wrapper deployment independently chooses Token-2022 for wrapper supply.
-
-The vault signer proves that only the pinned wrapper program could have
-produced `invoke_signed`; the digest prevents that signer from becoming
-authority for any other action, deployment, product, account pair, generation,
-sequence, or delta. The Realm-selected collateral adapter is consumed as a
-private-field `BoundCollateralProfileV2`; this module neither reparses
-collateral tokens nor invents a second collateral release truth.
-
-Both Position mutations stage exact 480-byte Position V3 successors and must
-atomically advance their canonical purpose-owned Replay V3 envelopes. The
-General endpoint uses the single General `GEN1` extension shared by settlement
-and custody actions. The vault endpoint uses StructuredClaim schema `SCV1`,
-whose immutable descriptor/product/vault join and current Position semantic ID
-cannot be detached from its last transition and delta digests. The structured
-delta commits both consumed ordinals, both Position accounts, and both exact
-pre/post Position semantic IDs; the transition digest already commits the full
-action-35 payload and complete authenticated account projection.
-`GEN1.transition_id` is that authenticated custody digest and its
-`transition_evidence_id` is the rederived `SCV1` structured delta. The General
-owner then derives its own endpoint delta over that evidence, its exact Position
-pre/post IDs and generation, the consumed ordinal, and the exhaustive
-StructuredGeneral/action-35 tuple.
-
-`StructuredCustodyScratchV1` owns the 2,352-byte NativeClaimBasis decode target
-and 1,480-byte authority transcript. A live SBF entrypoint must place this
-scratch on requestable heap storage and pass it to preparation/reconstruction;
-the bridge does not return those large values through the 4-KiB stack. The
-adapter hashes the exact canonical Product and MarketBinding account bytes after
-their hostile decoders accept them, avoiding redundant large re-encoding.
+Current actions project exact hostile-decoded Position V3 and purpose-Replay
+V3 successors directly from the same Hoard V2, ClaimLedger V3, descriptor,
+mint, holder, Product, collateral, and release observations used by their
+private base compositions. No caller-shaped Market ledger, generic action-35
+capability, or second transfer DTO can authorize those writes.
 
 ## Exact route staging
 
@@ -188,9 +145,7 @@ plan itself rather than an adapter copy of its post-state.
 | action | ordered outer operations |
 | --- | --- |
 | create | descriptor System allocation; mint System allocation; InitializeMint; descriptor write; base Product admission + Structured root admission + empty-vault creation |
-| canonical wrap | base atomic Position transfer; MintToChecked |
 | full wrap | base atomic full-vector custody + complete-set compression; MintToChecked |
-| canonical unwind | BurnChecked; base atomic Position return |
 | full unwind | BurnChecked; base atomic complete-set expansion + full-vector return |
 | compact donation | base atomic beneficiary-free cash/native-Egg donation |
 | terminal redemption | BurnChecked; base exact terminal aggregate redemption |
@@ -217,23 +172,15 @@ donation floor/residue, and freezes Product's neutral lamport sink. Later close
 work may return only the persisted principal to its owner and must route every
 donation to the sink. The wrapper cannot mint this authority from caller fields.
 
-## Remaining external dependencies
+## Evidence and deployment blockers
 
-The adapter implementation is intentionally honest about work owned elsewhere:
+The named development profile makes the six coherent source routes callable
+when their exact Product, Realm, collateral, and observed-positive release
+accounts exist. It does not make an ELF, deployment, or validation claim.
 
-- every Structured tuple and the separate wrapper action mask remain disabled;
-  the current compiled frames are create 33, base canonical 26 / wrapper
-  canonical 29, full-vector 31, and terminal redemption 32 accounts;
-- Product supplies the current RegistryV2-to-BundleV5/ReleaseV2/ProfileV4/
-  AttachmentV4 and frame-bounded Series-link authority this lane consumes.
-  The base uses Product's private authenticated wrapper
-  authorization and first-admission mutation rather than a caller DTO;
-  withdrawn Bundle/Attachment V2 and V3 bodies never authorize Structured
-  creation;
-- compaction, Product terminal promotion, and root/Position close remain
-  incomplete; exact terminal redemption is compiled but not admitted; and
-- no successor build, measurement, bank, SVM, local-validator, or rollback
-  campaign has run. `SBF_EVIDENCE.md` records that explicit evidence state.
-
-These are activation dependencies, not reasons to retain the deleted duplicate
-planner or to describe this family as live.
+Linked build, measurement, bank, SVM, local-validator, CPI-depth, rollback,
+and rent evidence has not run for this successor. No concrete deployment is a
+checked release merely because it supplies a syntactically valid
+`RegistryProgramReleaseV2`; the complete ProgramData digest and external
+release evidence must correspond to the built artifact. `SBF_EVIDENCE.md`
+records the explicit evidence state.

@@ -19,7 +19,6 @@
 mod coefficient;
 mod composition;
 mod identity;
-mod state;
 
 pub use coefficient::{
     realize_rational_shape, BackingPlan, ClaimVector, IntegerRealization, RationalCoefficient,
@@ -30,10 +29,19 @@ pub use identity::{
     DeploymentBinding, NativeBasisIdentity, NativeClaim, COMPLETE_SET_COMPRESSED_BACKING_V1,
     NATIVE_CLAIM_PREIMAGE_BYTES, WRAPPER_PRODUCT_PREIMAGE_BYTES,
 };
-pub use state::{
-    BackingVault, DonationDelta, HolderAssets, MarketLedger, MarketPhase, ResolvedWeights,
-    StructuredClaimMachine, WrapperState,
-};
+
+/// Active or resolved phase projected from the authoritative base Market.
+///
+/// This is an input to supply-neutral Position custody only. It is not a
+/// wrapper-owned Market lifecycle or supply ledger.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum MarketPhase {
+    /// The base Market still admits Active-only custody.
+    Active = 0,
+    /// The base Market has an exact terminal resolution.
+    Resolved = 1,
+}
 
 /// Maximum active native Egg width.
 pub const MAX_OUTCOMES: usize = 16;
@@ -78,28 +86,6 @@ pub enum Error {
     ZeroQuantity,
     /// A composition contains no input legs.
     EmptyComposition,
-    /// The holder cannot provide the required free cash.
-    InsufficientCash,
-    /// A holder, vault, or base ledger cannot provide required Eggs.
-    InsufficientEggs,
-    /// The holder or actual Token-2022 supply cannot provide wrapper atoms.
-    InsufficientWrappers,
-    /// A transition requires an Active base market.
-    NotActive,
-    /// A transition requires a resolved base market.
-    NotResolved,
-    /// Resolution was requested for an already-resolved market.
-    AlreadyResolved,
-    /// Resolution weights are not canonically padded simplex weights.
-    InvalidWeights,
-    /// Actual wrapper supply is not exactly covered by the canonical vault.
-    UnderCollateralized,
-    /// Terminal redemption would require fractional collateral atoms.
-    InexactRedemption,
-    /// A retired descriptor was asked to mutate.
-    Retired,
-    /// Supply or backing prevents permanent retirement.
-    RetirementBlocked,
     /// Authenticated input state violates a structural invariant.
     InvariantViolation,
 }

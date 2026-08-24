@@ -14,15 +14,16 @@ use crate::instructions::failure_market_admission::{
 use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, SYSTEM_PROGRAM_ID,
 };
-use crate::instructions::product_market::AuthenticatedMarketFoundationPreallocationV2;
+use crate::instructions::product_series_current::AuthenticatedMarketFoundationPreallocationV3;
 use crate::seeds;
 use clutch_failure_policy_runtime::market_replay_v2::{
-    admit_failure_market_replay_v2, AuthenticatedFailureMarketReplayFundingV2,
-    FailureMarketReplayFundingFactsV2, FailureMarketReplayFundingReceiptV2,
-    FailureMarketReplayPlanV2, FailureMarketReplayStateIdV2, FailureMarketReplayTerminalReceiptV2,
-    FailureMarketReplayV2, FAILURE_MARKET_REPLAY_BYTES_V2,
+    admit_failure_market_replay_v2, decode_and_reopen_failure_market_replay_v2,
+    AuthenticatedFailureMarketReplayFundingV2, FailureMarketReplayFundingFactsV2,
+    FailureMarketReplayFundingReceiptV2, FailureMarketReplayPlanV2,
+    FailureMarketReplayStateIdV2, FailureMarketReplayTerminalReceiptV2, FailureMarketReplayV2,
+    FAILURE_MARKET_REPLAY_BYTES_V2,
 };
-use clutch_product_series::{ContentId as ProductContentId, MarketFoundationSlotV2};
+use clutch_product_series::{ContentId as ProductContentId, MarketFoundationSlotV3};
 use clutch_solana_layout::failure_market_replay_v2::{
     FailureMarketReplayAccountV2, FAILURE_MARKET_REPLAY_BODY_BYTES_V2,
 };
@@ -34,6 +35,70 @@ use solana_pubkey::Pubkey;
 
 const REPLAY_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/failure-market-replay-account-authentication/v2";
+
+/// Exact immutable capitalization preimage committed by permanent replay.
+pub(crate) const FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2: usize = 112;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FailureMarketReplayFundingPreimageV2 {
+    prepaid_funding_receipt_id: ProductContentId,
+    permanent_rent_funder: clutch_failure_policy_runtime::market_policy_v1::FailureMarketAccountIdV1,
+    neutral_sink: clutch_failure_policy_runtime::market_policy_v1::FailureMarketAccountIdV1,
+    permanent_rent_principal_lamports: u64,
+    donation_floor_lamports: u64,
+}
+
+impl FailureMarketReplayFundingPreimageV2 {
+    /// Decode a hostile content preimage; the persisted receipt hash remains
+    /// the only authority for accepting these facts.
+    pub(crate) fn decode(input: &[u8]) -> Outcome<Self> {
+        let input: &[u8; FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2] = input
+            .try_into()
+            .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+        let prepaid_funding_receipt_id = ProductContentId::from_bytes(
+            input[..32]
+                .try_into()
+                .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?,
+        );
+        let permanent_rent_funder =
+            clutch_failure_policy_runtime::market_policy_v1::FailureMarketAccountIdV1::from_bytes(
+                input[32..64]
+                    .try_into()
+                    .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?,
+            );
+        let neutral_sink =
+            clutch_failure_policy_runtime::market_policy_v1::FailureMarketAccountIdV1::from_bytes(
+                input[64..96]
+                    .try_into()
+                    .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?,
+            );
+        let permanent_rent_principal_lamports = u64::from_le_bytes(
+            input[96..104]
+                .try_into()
+                .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?,
+        );
+        let donation_floor_lamports = u64::from_le_bytes(
+            input[104..112]
+                .try_into()
+                .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?,
+        );
+        require(
+            !prepaid_funding_receipt_id.is_zero()
+                && permanent_rent_funder.bytes() != [0; 32]
+                && neutral_sink.bytes() != [0; 32]
+                && permanent_rent_funder != neutral_sink
+                && permanent_rent_principal_lamports != 0,
+            ClutchError::MismatchedState,
+        )?;
+        Ok(Self {
+            prepaid_funding_receipt_id,
+            permanent_rent_funder,
+            neutral_sink,
+            permanent_rent_principal_lamports,
+            donation_floor_lamports,
+        })
+    }
+}
 
 const _: () = assert!(FAILURE_MARKET_REPLAY_BODY_BYTES_V2 == FAILURE_MARKET_REPLAY_BYTES_V2);
 
@@ -128,7 +193,7 @@ pub(crate) fn initialize_failure_market_replay_v2<'a>(
     rent_sysvar: &AccountInfo<'a>,
     system_program: &AccountInfo<'a>,
     admission: AuthenticatedFailureMarketRootV2,
-    product_preallocation: AuthenticatedMarketFoundationPreallocationV2,
+    product_preallocation: AuthenticatedMarketFoundationPreallocationV3,
 ) -> Outcome<FailureMarketReplayPostimageV2> {
     require_system_program(system_program)?;
     require_distinct(&[
@@ -144,7 +209,7 @@ pub(crate) fn initialize_failure_market_replay_v2<'a>(
     let admission_state = admission.state();
     let policy = admission_state.binding().facts();
     require(
-        product_preallocation.slot() == MarketFoundationSlotV2::FailureReplay
+        product_preallocation.slot() == MarketFoundationSlotV3::FailureReplay
             && product_preallocation.market_instance_id() == policy.market_instance_id
             && product_preallocation.generation() == policy.generation
             && product_preallocation.account() == *replay_account.key
@@ -359,6 +424,95 @@ pub(crate) fn authenticate_failure_market_replay_v2<'a>(
     })
 }
 
+/// Hostile-reopen the permanent replay funding receipt from the exact content
+/// preimage committed at Product-authorized creation, then authenticate the
+/// current replay account. No cached foundation receipt crosses transactions.
+pub(crate) fn reopen_failure_market_replay_v2<'a>(
+    program_id: &Pubkey,
+    replay_account: &AccountInfo<'a>,
+    admission: AuthenticatedFailureMarketRootV2,
+    preimage: FailureMarketReplayFundingPreimageV2,
+    writable: bool,
+) -> Outcome<AuthenticatedFailureMarketReplayV2> {
+    let admission_state = admission.state();
+    let policy = admission_state.binding().facts();
+    authenticate_metadata(program_id, replay_account, writable)?;
+    let input = replay_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let framed: &[u8; FAILURE_MARKET_REPLAY_ACCOUNT_BYTES_V2] = input
+        .as_ref()
+        .try_into()
+        .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+    let frame = FailureMarketReplayAccountV2::decode(framed)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    expect_pda(
+        replay_account.key,
+        seeds::failure_market_replay_v2_pda(
+            program_id,
+            &policy.market_instance_id.bytes(),
+            policy.generation,
+        ),
+        Some(frame.bump()),
+    )?;
+    let observed_balance_lamports = preimage
+        .permanent_rent_principal_lamports
+        .checked_add(preimage.donation_floor_lamports)
+        .ok_or(ClutchError::Arithmetic)?;
+    let facts = FailureMarketReplayFundingFactsV2 {
+        failure_policy_binding_id: admission_state.binding().id(),
+        market_instance_id: policy.market_instance_id,
+        generation: policy.generation,
+        prepaid_funding_receipt_id: preimage.prepaid_funding_receipt_id,
+        replay_account:
+            clutch_failure_policy_runtime::market_policy_v1::FailureMarketAccountIdV1::from_bytes(
+                replay_account.key.to_bytes(),
+            ),
+        permanent_rent_funder: preimage.permanent_rent_funder,
+        neutral_sink: preimage.neutral_sink,
+        permanent_rent_principal_lamports: preimage.permanent_rent_principal_lamports,
+        donation_floor_lamports: preimage.donation_floor_lamports,
+        observed_balance_lamports,
+    };
+    let (replay, funding) = decode_and_reopen_failure_market_replay_v2(
+        frame.semantic_body(),
+        admission_state,
+        facts,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        replay_account.lamports() >= observed_balance_lamports
+            && *replay_account.key != admission.account()
+            && replay_account.key.to_bytes() != policy.recovery_state_id.bytes()
+            && replay_account.key.to_bytes() != policy.recovery_compartment_account_id.bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    let state_id = replay
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let data_id = framed_data_id(framed);
+    let authentication_id = account_authentication_id(
+        replay_account,
+        data_id,
+        state_id,
+        admission_state
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?
+            .bytes(),
+    );
+    Ok(AuthenticatedFailureMarketReplayV2 {
+        account: *replay_account.key,
+        bump: frame.bump(),
+        replay,
+        state_id,
+        data_id,
+        authentication_id,
+        observed_lamports: replay_account.lamports(),
+        admission_root_account: admission.account(),
+        funding,
+    })
+}
+
 /// Persist the exact one-shot replay terminal postimage and reauthenticate it.
 pub(crate) fn write_failure_market_replay_terminal_v2<'a>(
     program_id: &Pubkey,
@@ -499,4 +653,44 @@ fn account_authentication_id(
 
 fn framed_data_id(data: &[u8]) -> ProductContentId {
     ProductContentId::from_bytes(solana_sha256_hasher::hashv(&[data]).to_bytes())
+}
+
+#[cfg(test)]
+mod adversarial_reopen_tests {
+    use super::*;
+
+    #[test]
+    fn replay_funding_preimage_refuses_truncation_zero_and_owner_alias() {
+        let mut input = [1_u8; FAILURE_MARKET_REPLAY_FUNDING_PREIMAGE_BYTES_V2];
+        assert!(FailureMarketReplayFundingPreimageV2::decode(&input).is_err());
+        input[64..96].fill(2);
+        assert!(FailureMarketReplayFundingPreimageV2::decode(&input).is_ok());
+        assert!(FailureMarketReplayFundingPreimageV2::decode(&input[..111]).is_err());
+        input[..32].fill(0);
+        assert!(FailureMarketReplayFundingPreimageV2::decode(&input).is_err());
+    }
+
+    #[test]
+    fn replay_reopen_uses_persisted_receipt_hash_not_product_cache() {
+        let source = include_str!("failure_market_replay_v2.rs");
+        let reopen = source
+            .split("fn reopen_failure_market_replay_v2")
+            .nth(1)
+            .expect("replay reopen");
+        assert!(reopen.contains("decode_and_reopen_failure_market_replay_v2"));
+        assert!(reopen.contains("replay_account.lamports() >= observed_balance_lamports"));
+        assert!(!reopen.contains("AuthenticatedMarketFoundationPreallocationV2"));
+    }
+
+    #[test]
+    fn replay_initialization_accepts_only_current_product_slot_seven_authority() {
+        let source = include_str!("failure_market_replay_v2.rs");
+        let initialize = source
+            .split("fn initialize_failure_market_replay_v2")
+            .nth(1)
+            .expect("replay initialization");
+        assert!(initialize.contains("AuthenticatedMarketFoundationPreallocationV3"));
+        assert!(initialize.contains("MarketFoundationSlotV3::FailureReplay"));
+        assert!(!initialize.contains("MarketFoundationSlotV2::FailureReplay"));
+    }
 }

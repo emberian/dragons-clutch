@@ -1,3 +1,7 @@
+#![cfg(any())]
+//! Historical Direct V3 bank campaign. The wire remains decode-only, while
+//! the handler is intentionally absent from every current program artifact.
+//!
 //! Real-SBF campaign for the complete routed Direct V3 lifecycle.
 //!
 //! Everything the family owns is driven through the routed instructions on a

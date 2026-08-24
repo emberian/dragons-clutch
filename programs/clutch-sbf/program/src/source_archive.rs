@@ -8,12 +8,12 @@
 //! registry and construct every account view from `AccountInfo`, never from
 //! instruction bytes.
 //!
-//! The live `Resolve` instruction authenticates the canonical account through
-//! [`verify_recorded_sealed_archive_view`] before either projecting point
-//! evidence or folding occupation evidence.  The verifier checks the account
-//! key and owner, source/spec/grid/window lineage, every record link, seal, and
-//! recomputed commitment.  A same-domain caller buffer at another key or under
-//! another owner therefore cannot produce its lifetime-bound capability.
+//! Historical full-profile `Resolve` authenticates this canonical account
+//! through [`verify_recorded_sealed_archive_view`] before projecting evidence.
+//! The checked successor compiles both this module and that consumer out; this
+//! codec is not alternate Source authority for a deployable successor. The
+//! verifier checks the account key and owner, source/spec/grid/window lineage,
+//! every record link, seal, and recomputed commitment.
 
 pub use clutch_accumulator::{CoveragePolicy, FeedIdentity, Grid, WindowDomain};
 use clutch_accumulator::{Observation, WINDOW_DOMAIN_BYTES, WINDOW_DOMAIN_TAG};

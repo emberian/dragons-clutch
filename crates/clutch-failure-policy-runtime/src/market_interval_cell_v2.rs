@@ -17,7 +17,11 @@ use clutch_product_series::{
     VerifiedQuantizedIntervalPayoutV1, QUANTIZED_INTERVAL_CONSENSUS_WORK_BYTES_V1,
 };
 use clutch_source_plane_v3::ContentId as SourceContentId;
-use clutch_source_plane_v3_runtime::SuccessfulEvaluationHandoffV1;
+use clutch_source_plane_v3_runtime::{
+    FailurePolicySourceHandoffV1, RuntimeKey as SourceRuntimeKey, SourceFailureKindV1,
+    SourcePolicyHandoffJoinV1,
+    SuccessfulEvaluationHandoffV1,
+};
 use sha2::{Digest, Sha256};
 
 use crate::market_interval_history_v2::{
@@ -42,6 +46,8 @@ const CELL_RESOLUTION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/failure-market-interval-cell-resolution/v2";
 const CELL_EXHAUSTION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/failure-market-interval-cell-exhaustion/v2";
+const CELL_SOURCE_FAILURE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/failure-market-interval-cell-source-failure/v2";
 const CELL_RESET_DOMAIN_V2: &[u8] = b"dragons-clutch/failure-market-interval-cell-reset/v2";
 const HEADER_BYTES_V2: usize = 16;
 const AMOUNT_COUNT_V2: usize = 7;
@@ -100,6 +106,10 @@ cell_id!(
     FailureMarketIntervalCellExhaustionReceiptIdV2,
     "Typed private receipt for one deterministic finite-budget exhaustion."
 );
+cell_id!(
+    FailureMarketIntervalCellSourceFailureReceiptIdV2,
+    "Typed private receipt for one exact zero-payout Source failure attempt."
+);
 
 /// Reusable-cell lifecycle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -142,6 +152,10 @@ pub enum FailureMarketIntervalCellDispositionV2 {
     Resolved = 1,
     /// The finite authenticated progress budget was exhausted.
     Exhausted = 2,
+    /// Mature Source absence consumed this attempt without Product work.
+    SourceAbsent = 3,
+    /// Stable evaluator refusal consumed this attempt without Product work.
+    SourceRefused = 4,
 }
 
 impl FailureMarketIntervalCellDispositionV2 {
@@ -150,6 +164,8 @@ impl FailureMarketIntervalCellDispositionV2 {
             Self::None => 0,
             Self::Resolved => 1,
             Self::Exhausted => 2,
+            Self::SourceAbsent => 3,
+            Self::SourceRefused => 4,
         }
     }
 
@@ -158,6 +174,8 @@ impl FailureMarketIntervalCellDispositionV2 {
             0 => Ok(Self::None),
             1 => Ok(Self::Resolved),
             2 => Ok(Self::Exhausted),
+            3 => Ok(Self::SourceAbsent),
+            4 => Ok(Self::SourceRefused),
             _ => Err(Error::InvalidEnum),
         }
     }
@@ -243,9 +261,16 @@ impl FailureMarketIntervalCellV2 {
         self.session_binding_id
     }
 
-    /// Current structural Product work, absent only while Idle.
+    /// Current structural Product work, absent while Idle or for a direct
+    /// zero-payout Source-failure terminal.
     pub fn product_work(self) -> Result<Option<QuantizedIntervalConsensusWorkV1>> {
-        if self.phase == FailureMarketIntervalCellPhaseV2::Idle {
+        if self.phase == FailureMarketIntervalCellPhaseV2::Idle
+            || matches!(
+                self.disposition,
+                FailureMarketIntervalCellDispositionV2::SourceAbsent
+                    | FailureMarketIntervalCellDispositionV2::SourceRefused
+            )
+        {
             Ok(None)
         } else {
             Ok(Some(QuantizedIntervalConsensusWorkV1::decode(
@@ -461,13 +486,36 @@ impl FailureMarketIntervalCellV2 {
             }
             FailureMarketIntervalCellPhaseV2::Active
             | FailureMarketIntervalCellPhaseV2::Resolved => {
-                if session_ids.iter().any(|id| id.is_zero()) || no_work {
+                if session_ids.iter().any(|id| id.is_zero()) {
                     return Err(Error::WrongPhase);
                 }
                 let expected_attempt = u8::try_from(self.completed_session_count)
                     .map_err(|_| Error::BindingMismatch)?;
                 if self.attempt_index != expected_attempt {
                     return Err(Error::BindingMismatch);
+                }
+                let direct_source_failure = self.phase == FailureMarketIntervalCellPhaseV2::Resolved
+                    && matches!(
+                        self.disposition,
+                        FailureMarketIntervalCellDispositionV2::SourceAbsent
+                            | FailureMarketIntervalCellDispositionV2::SourceRefused
+                    );
+                if direct_source_failure {
+                    if !no_work
+                        || self.transition_nonce != 0
+                        || self.accepted_progress_units != 0
+                        || self.completed_work_calls != 0
+                        || self.exact_reward_lamports != 0
+                        || !self.last_transition_receipt_id.is_zero()
+                        || !self.last_liveness_work_receipt_id.is_zero()
+                        || self.terminal_receipt_id.is_zero()
+                    {
+                        return Err(Error::BindingMismatch);
+                    }
+                    return Ok(());
+                }
+                if no_work {
+                    return Err(Error::WrongPhase);
                 }
                 let work = QuantizedIntervalConsensusWorkV1::decode(&self.product_work_body)?;
                 if work.market_instance_id() != self.market_instance_id
@@ -1153,6 +1201,264 @@ impl FailureMarketIntervalCellResolutionPlanV2 {
     }
 }
 
+/// Complete Source-owned failure attempt admitted without Product work.
+///
+/// This projection is not authority. The adapter must authenticate the
+/// persisted Source handoff and its exact physical terminal postwrite before
+/// it may accept these facts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketIntervalCellSourceFailureFactsV2 {
+    /// Exact Idle cell prestate.
+    pub cell_before: FailureMarketIntervalCellStateIdV2,
+    /// Exact paired append-only history prestate.
+    pub history_before: crate::market_interval_history_v2::FailureMarketIntervalHistoryStateIdV2,
+    /// Exact prior append-only root.
+    pub history_root: FailureMarketIntervalHistoryRootV2,
+    /// Zero-based finite attempt row consumed by this failure.
+    pub attempt_index: u8,
+    /// Exact Product post-pin transcript retained through archive.
+    pub session_binding_id: SourceContentId,
+    /// Canonical per-Series schedule projection for this attempt.
+    pub session_schedule_id: SourceContentId,
+    /// Source-owned absence versus stable-refusal classification.
+    pub source_kind: SourceFailureKindV1,
+    /// Exact Source semantic handoff identity.
+    pub source_handoff_id: SourceContentId,
+    /// Full release/account/result-or-absence/work authentication join.
+    pub source_join_id: SourceContentId,
+    /// Product/Series occurrence identity which selected this Source attempt.
+    pub source_occurrence_id: SourceContentId,
+    /// Physical occurrence account retained by the Source join.
+    pub source_occurrence_account: SourceRuntimeKey,
+    /// Physical predictable StatisticResult slot, created or never created.
+    pub result_or_absence_account: SourceRuntimeKey,
+    /// Authenticated absence or refused-result account fact.
+    pub source_fact_authentication_id: SourceContentId,
+    /// Exact Source FailureHandoff work-receipt authentication.
+    pub source_work_receipt_authentication_id: SourceContentId,
+    /// Exact repair generation selected by the Series occurrence.
+    pub source_repair_generation: u64,
+    /// Exact evaluated Window identity.
+    pub window_id: SourceContentId,
+    /// Exact StatisticKey identity.
+    pub statistic_key_id: SourceContentId,
+    /// Evidence identity, zero only for mature absence.
+    pub window_evidence_id: SourceContentId,
+    /// StatisticResult identity, zero only for mature absence.
+    pub statistic_result_id: SourceContentId,
+    /// Stable refusal code, zero only for mature absence.
+    pub refusal_code: u32,
+    /// Source-owned physical terminal/tombstone postwrite for this attempt.
+    pub source_terminal_postwrite_id: SourceContentId,
+}
+
+/// Private Source/Product/link authority for one direct failure attempt.
+pub trait AuthenticatedFailureMarketIntervalCellSourceFailureV2 {
+    /// Authenticate exact current Source state, finite schedule row, Product
+    /// link pin, and Source terminal postwrite.
+    fn authenticate_failure_market_interval_cell_source_failure(
+        &self,
+        _expected: FailureMarketIntervalCellSourceFailureFactsV2,
+    ) -> Result<()> {
+        Err(Error::BindingMismatch)
+    }
+}
+
+/// Private receipt for one zero-payout Source failure terminal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketIntervalCellSourceFailureReceiptV2 {
+    id: FailureMarketIntervalCellSourceFailureReceiptIdV2,
+    facts: FailureMarketIntervalCellSourceFailureFactsV2,
+    cell_after: FailureMarketIntervalCellStateIdV2,
+}
+
+impl FailureMarketIntervalCellSourceFailureReceiptV2 {
+    /// Exact terminal receipt identity.
+    pub const fn id(self) -> FailureMarketIntervalCellSourceFailureReceiptIdV2 {
+        self.id
+    }
+
+    /// Complete authenticated Source failure facts.
+    pub const fn facts(self) -> FailureMarketIntervalCellSourceFailureFactsV2 {
+        self.facts
+    }
+
+    /// Exact SourceAbsent or SourceRefused cell poststate.
+    pub const fn cell_after(self) -> FailureMarketIntervalCellStateIdV2 {
+        self.cell_after
+    }
+}
+
+/// Consume one exact finite Source attempt as an evidence-only zero-payout
+/// terminal. No Product work, liveness call, reward, or resolution is minted.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_refuse_failure_market_interval_cell_v2<
+    A: AuthenticatedFailureMarketIntervalCellSourceFailureV2 + ?Sized,
+>(
+    authority: &A,
+    cell: FailureMarketIntervalCellV2,
+    admission: FailureMarketAdmissionStateV1,
+    funding: FailureMarketIntervalFundingReceiptV2,
+    history: FailureMarketIntervalHistoryV2,
+    quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+    session_binding_id: SourceContentId,
+    session_schedule_id: SourceContentId,
+    source_failure: FailurePolicySourceHandoffV1,
+    source_join: SourcePolicyHandoffJoinV1,
+    source_terminal_postwrite_id: SourceContentId,
+) -> Result<(
+    FailureMarketIntervalCellPlanV2,
+    FailureMarketIntervalCellSourceFailureReceiptV2,
+)> {
+    cell.validate_against(admission, funding, history, quote)?;
+    if cell.phase != FailureMarketIntervalCellPhaseV2::Idle
+        || history.family_terminal_receipt_id().bytes() != [0; 32]
+    {
+        return Err(Error::WrongPhase);
+    }
+    for id in [
+        session_binding_id,
+        session_schedule_id,
+        source_failure.id(),
+        source_join.id(),
+        source_terminal_postwrite_id,
+    ] {
+        require_live(id.bytes())?;
+    }
+    let occurrence = source_failure.occurrence();
+    let attempt_index =
+        u8::try_from(cell.completed_session_count).map_err(|_| Error::BindingMismatch)?;
+    if usize::from(attempt_index) >= usize::from(quote.schedule().attempt_count)
+        || source_failure.failure_policy_binding_id().bytes()
+            != cell.failure_policy_binding_id.bytes()
+        || occurrence.market_instance_id().bytes() != cell.market_instance_id.bytes()
+        || source_join.handoff_id() != source_failure.id()
+        || source_join.failure_policy_binding_id() != source_failure.failure_policy_binding_id()
+        || source_join.occurrence_account() != occurrence.occurrence_account()
+        || source_join.result_or_absence_account().is_zero()
+        || source_join.source_fact_authentication_id() != source_failure.source_fact_receipt_id()
+        || source_join.clock() != source_failure.clock()
+        || source_join.clock_policy_id() != occurrence.clock_policy_id()
+        || source_join.source_spec_id() != occurrence.source_spec_id()
+        || source_join.window_id() != occurrence.window_id()
+        || source_join.statistic_key_id() != occurrence.statistic_key_id()
+        || source_join.generation() == 0
+        || source_join.work_receipt_authentication_id().is_zero()
+        || source_terminal_postwrite_id == source_failure.id()
+        || source_terminal_postwrite_id == source_join.id()
+    {
+        return Err(Error::BindingMismatch);
+    }
+    match source_failure.kind() {
+        SourceFailureKindV1::PrimaryMaturityWithoutAcceptedResolution => {
+            if !source_failure.window_evidence_id().is_zero()
+                || !source_failure.statistic_result_id().is_zero()
+                || source_failure.refusal_code() != 0
+            {
+                return Err(Error::BindingMismatch);
+            }
+        }
+        SourceFailureKindV1::SourceEvaluationRefused => {
+            if source_failure.window_evidence_id().is_zero()
+                || source_failure.statistic_result_id().is_zero()
+                || source_failure.refusal_code() == 0
+            {
+                return Err(Error::BindingMismatch);
+            }
+        }
+    }
+    let cell_before = cell.id()?;
+    let facts = FailureMarketIntervalCellSourceFailureFactsV2 {
+        cell_before,
+        history_before: history.id()?,
+        history_root: history.history_root(),
+        attempt_index,
+        session_binding_id,
+        session_schedule_id,
+        source_kind: source_failure.kind(),
+        source_handoff_id: source_failure.id(),
+        source_join_id: source_join.id(),
+        source_occurrence_id: occurrence.occurrence_record_id(),
+        source_occurrence_account: occurrence.occurrence_account(),
+        result_or_absence_account: source_join.result_or_absence_account(),
+        source_fact_authentication_id: source_join.source_fact_authentication_id(),
+        source_work_receipt_authentication_id: source_join.work_receipt_authentication_id(),
+        source_repair_generation: occurrence.repair_generation(),
+        window_id: occurrence.window_id(),
+        statistic_key_id: occurrence.statistic_key_id(),
+        window_evidence_id: source_failure.window_evidence_id(),
+        statistic_result_id: source_failure.statistic_result_id(),
+        refusal_code: source_failure.refusal_code(),
+        source_terminal_postwrite_id,
+    };
+    authority.authenticate_failure_market_interval_cell_source_failure(facts)?;
+    let mut receipt_hasher = Sha256::new();
+    receipt_hasher.update(CELL_SOURCE_FAILURE_DOMAIN_V2);
+    receipt_hasher.update(cell.failure_policy_binding_id.bytes());
+    receipt_hasher.update(cell.market_instance_id.bytes());
+    receipt_hasher.update(cell.generation.to_le_bytes());
+    receipt_hasher.update(cell_before.bytes());
+    receipt_hasher.update(facts.history_before.bytes());
+    receipt_hasher.update(facts.history_root.bytes());
+    receipt_hasher.update([source_failure_kind_byte(facts.source_kind)]);
+    receipt_hasher.update([attempt_index]);
+    receipt_hasher.update(session_binding_id.bytes());
+    receipt_hasher.update(session_schedule_id.bytes());
+    receipt_hasher.update(facts.source_handoff_id.bytes());
+    receipt_hasher.update(facts.source_join_id.bytes());
+    receipt_hasher.update(facts.source_occurrence_id.bytes());
+    receipt_hasher.update(facts.source_occurrence_account.bytes());
+    receipt_hasher.update(facts.result_or_absence_account.bytes());
+    receipt_hasher.update(facts.source_fact_authentication_id.bytes());
+    receipt_hasher.update(facts.source_work_receipt_authentication_id.bytes());
+    receipt_hasher.update(facts.source_repair_generation.to_le_bytes());
+    receipt_hasher.update(facts.window_id.bytes());
+    receipt_hasher.update(facts.statistic_key_id.bytes());
+    receipt_hasher.update(facts.window_evidence_id.bytes());
+    receipt_hasher.update(facts.statistic_result_id.bytes());
+    receipt_hasher.update(facts.refusal_code.to_le_bytes());
+    receipt_hasher.update(source_terminal_postwrite_id.bytes());
+    let id = FailureMarketIntervalCellSourceFailureReceiptIdV2::from_bytes(
+        receipt_hasher.finalize().into(),
+    );
+    require_live(id.bytes())?;
+    let mut after = cell;
+    after.phase = FailureMarketIntervalCellPhaseV2::Resolved;
+    after.disposition = match source_failure.kind() {
+        SourceFailureKindV1::PrimaryMaturityWithoutAcceptedResolution => {
+            FailureMarketIntervalCellDispositionV2::SourceAbsent
+        }
+        SourceFailureKindV1::SourceEvaluationRefused => {
+            FailureMarketIntervalCellDispositionV2::SourceRefused
+        }
+    };
+    after.attempt_index = attempt_index;
+    after.session_binding_id = session_binding_id;
+    after.source_handoff_id = source_failure.id();
+    after.session_schedule_id = session_schedule_id;
+    after.terminal_receipt_id = SourceContentId::from_bytes(id.bytes());
+    after.validate_against(admission, funding, history, quote)?;
+    let cell_after = after.id()?;
+    Ok((
+        FailureMarketIntervalCellPlanV2 {
+            before: cell,
+            after,
+        },
+        FailureMarketIntervalCellSourceFailureReceiptV2 {
+            id,
+            facts,
+            cell_after,
+        },
+    ))
+}
+
+const fn source_failure_kind_byte(kind: SourceFailureKindV1) -> u8 {
+    match kind {
+        SourceFailureKindV1::PrimaryMaturityWithoutAcceptedResolution => 1,
+        SourceFailureKindV1::SourceEvaluationRefused => 2,
+    }
+}
+
 /// Restore Product's private exhaustive payout only from the exact persisted
 /// transition chain, then latch one once-only Failure resolution receipt.
 #[allow(clippy::too_many_arguments)]
@@ -1483,6 +1789,12 @@ pub fn project_failure_market_interval_terminal_history_facts_v2(
         FailureMarketIntervalCellDispositionV2::Exhausted => {
             FailureMarketIntervalTerminalDispositionV2::Exhausted
         }
+        FailureMarketIntervalCellDispositionV2::SourceAbsent => {
+            FailureMarketIntervalTerminalDispositionV2::SourceAbsent
+        }
+        FailureMarketIntervalCellDispositionV2::SourceRefused => {
+            FailureMarketIntervalTerminalDispositionV2::SourceRefused
+        }
         FailureMarketIntervalCellDispositionV2::None => return Err(Error::WrongPhase),
     };
     let idle = project_idle_failure_market_interval_cell_v2(cell)?;
@@ -1758,5 +2070,40 @@ mod tests {
             canonical_exhaustion_reason(4, 5, 6, 7, 10, 11),
             Err(Error::WrongPhase)
         );
+    }
+
+    #[test]
+    fn direct_source_failure_is_zero_work_and_canonically_distinct() {
+        let mut refused = idle_cell();
+        refused.phase = FailureMarketIntervalCellPhaseV2::Resolved;
+        refused.disposition = FailureMarketIntervalCellDispositionV2::SourceRefused;
+        refused.session_binding_id = SourceContentId::from_bytes([8; 32]);
+        refused.source_handoff_id = SourceContentId::from_bytes([9; 32]);
+        refused.session_schedule_id = SourceContentId::from_bytes([10; 32]);
+        refused.terminal_receipt_id = SourceContentId::from_bytes([11; 32]);
+        assert_eq!(refused.validate(), Ok(()));
+        assert_eq!(refused.product_work(), Ok(None));
+
+        let mut fabricated_work = refused;
+        fabricated_work.product_work_body[0] = 1;
+        assert_eq!(fabricated_work.validate(), Err(Error::BindingMismatch));
+
+        let mut fabricated_reward = refused;
+        fabricated_reward.completed_work_calls = 1;
+        fabricated_reward.exact_reward_lamports = 1;
+        fabricated_reward.last_liveness_work_receipt_id = SourceContentId::from_bytes([12; 32]);
+        assert_eq!(fabricated_reward.validate(), Err(Error::BindingMismatch));
+
+        let mut collapsed_disposition = refused;
+        collapsed_disposition.disposition = FailureMarketIntervalCellDispositionV2::Exhausted;
+        assert_eq!(collapsed_disposition.validate(), Err(Error::WrongPhase));
+        assert_ne!(
+            FailureMarketIntervalCellDispositionV2::SourceRefused.byte(),
+            FailureMarketIntervalCellDispositionV2::Exhausted.byte()
+        );
+        let mut absent = refused;
+        absent.disposition = FailureMarketIntervalCellDispositionV2::SourceAbsent;
+        assert_eq!(absent.validate(), Ok(()));
+        assert_ne!(absent.id().unwrap(), refused.id().unwrap());
     }
 }

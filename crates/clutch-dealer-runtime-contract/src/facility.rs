@@ -8,7 +8,7 @@ use crate::{
     DealerPositionObservationV3, DealerReplayAccountBindingV1, DealerRuntimeActionV1,
     DealerRuntimeLivenessBindingV1, DealerStateV1, DealerStateV2, DealerTransitionIntentV1,
     DealerTransitionLivenessModeV1, Error, FacilityPositionBindingV2, FixedCodec, Id,
-    PreparedDealerPositionPairTransferV1, PreparedDealerReplayTransitionV1, Result,
+    PreparedDealerGeneralPositionTransferV3, PreparedDealerReplayTransitionV1, Result,
     SponsorCapitalDispositionV1,
 };
 
@@ -683,7 +683,7 @@ pub struct PreparedDealerInitializationV3 {
     /// Canonical initialized State body supplied to the exact validator.
     pub state: DealerStateV2,
     /// Sponsor-to-facility PositionV3 transfer.
-    pub transfer: PreparedDealerPositionPairTransferV1,
+    pub transfer: PreparedDealerGeneralPositionTransferV3,
     /// First accepted Replay intent, advancing the founding ordinal to one.
     pub replay: PreparedDealerReplayTransitionV1,
 }
@@ -707,7 +707,7 @@ pub fn prepare_facility_initialization_v3(
     authorization: &DealerActionLivenessAuthorizationV1,
     position: &DealerPositionObservationV3,
     state: &DealerStateV2,
-    transfer: PreparedDealerPositionPairTransferV1,
+    transfer: PreparedDealerGeneralPositionTransferV3,
     replay: &DealerFacilityReplayV1,
     replay_binding: DealerReplayAccountBindingV1,
 ) -> Result<PreparedDealerInitializationV3> {
@@ -725,7 +725,8 @@ pub fn prepare_facility_initialization_v3(
     )?;
     authorization.validate_against(schedule, runtime)?;
     replay.validate()?;
-    let bundle = transfer.bundle();
+    let position_transfer = transfer.transfer();
+    let bundle = position_transfer.bundle();
     bundle.validate()?;
     if authorization.action != DealerRuntimeActionV1::Initialize
         || dependency.initialize_receipt_account_id != authorization.receipt_account_id
@@ -760,7 +761,7 @@ pub fn prepare_facility_initialization_v3(
             position_post_semantic_id: bundle.destination_post_semantic_id,
             liveness_receipt_semantic_id: authorization.receipt_semantic_id,
             fee_evidence_id: Id::ZERO,
-            asset_transfer_bundle_id: bundle.bundle_id()?,
+            asset_transfer_bundle_id: transfer.commitment_id(),
             position_generation_before: state.generation,
             position_generation_after: state.generation,
             expected_ordinal: crate::DEALER_FACILITY_REPLAY_FOUNDING_ORDINAL_V1,

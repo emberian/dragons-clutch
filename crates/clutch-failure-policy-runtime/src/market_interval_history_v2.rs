@@ -160,8 +160,10 @@ pub enum FailureMarketIntervalTerminalDispositionV2 {
     Resolved = 1,
     /// Finite authenticated source/recovery attempts were exhausted.
     Exhausted = 2,
-    /// Authenticated source/relation evaluation refused this session.
-    Refused = 3,
+    /// Mature Source absence consumed this attempt without Product work.
+    SourceAbsent = 3,
+    /// Stable evaluator refusal consumed this attempt without Product work.
+    SourceRefused = 4,
 }
 
 impl FailureMarketIntervalTerminalDispositionV2 {
@@ -169,7 +171,8 @@ impl FailureMarketIntervalTerminalDispositionV2 {
         match self {
             Self::Resolved => 1,
             Self::Exhausted => 2,
-            Self::Refused => 3,
+            Self::SourceAbsent => 3,
+            Self::SourceRefused => 4,
         }
     }
 }
@@ -281,6 +284,26 @@ impl FailureMarketIntervalHistoryV2 {
     /// Permanent append-only history account.
     pub const fn history_account(self) -> FailureMarketAccountIdV1 {
         self.history_account
+    }
+
+    /// Immutable recipient of both exact account-rent principals.
+    pub const fn rent_refund_owner(self) -> FailureMarketAccountIdV1 {
+        self.rent_refund_owner
+    }
+
+    /// Immutable destination for every unsolicited lamport.
+    pub const fn neutral_sink(self) -> FailureMarketAccountIdV1 {
+        self.neutral_sink
+    }
+
+    /// Canonical reusable-cell rent principal admitted at creation.
+    pub const fn work_rent_principal_lamports(self) -> u64 {
+        self.work_rent_principal_lamports
+    }
+
+    /// Canonical append-history rent principal admitted at creation.
+    pub const fn history_rent_principal_lamports(self) -> u64 {
+        self.history_rent_principal_lamports
     }
 
     /// Exact number of completed sessions.
@@ -551,6 +574,7 @@ pub struct FailureMarketIntervalHistoryAppendReceiptV2 {
     session_terminal_receipt_id: ProductContentId,
     terminal_state_commitment: ProductContentId,
     idle_state_commitment: ProductContentId,
+    disposition: FailureMarketIntervalTerminalDispositionV2,
     completed_session_count: u64,
 }
 
@@ -630,6 +654,11 @@ impl FailureMarketIntervalHistoryAppendReceiptV2 {
         self.idle_state_commitment
     }
 
+    /// Canonical terminal class committed into the append-only root.
+    pub const fn disposition(self) -> FailureMarketIntervalTerminalDispositionV2 {
+        self.disposition
+    }
+
     /// Resulting one-based completed-session count.
     pub const fn completed_session_count(self) -> u64 {
         self.completed_session_count
@@ -688,6 +717,44 @@ pub fn admit_failure_market_interval_history_v2<
     }
     history.validate_against(admission, quote)?;
     Ok((history, funding))
+}
+
+/// Reopen the exact capitalization receipt committed by an authenticated
+/// permanent history account.
+///
+/// The supplied facts are a content preimage, not authority. Initial creation
+/// already required Product's private retained-slot receipts; later operations
+/// hostile-decode the program-owned history and may recover the same
+/// private-field receipt only when the complete domain-separated preimage
+/// hashes to the receipt ID persisted there. This avoids treating a stale
+/// Product account-authentication ID as a timeless capability.
+pub fn reopen_failure_market_interval_funding_v2(
+    admission: FailureMarketAdmissionStateV1,
+    quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+    history: FailureMarketIntervalHistoryV2,
+    facts: FailureMarketIntervalFundingFactsV2,
+) -> Result<FailureMarketIntervalFundingReceiptV2> {
+    history.validate_against(admission, quote)?;
+    validate_funding_facts(admission, quote, facts)?;
+    let mut hasher = Sha256::new();
+    hasher.update(FUNDING_DOMAIN_V2);
+    hash_funding_facts(&mut hasher, facts);
+    let id = FailureMarketIntervalFundingReceiptIdV2::from_bytes(hasher.finalize().into());
+    require_live(id.bytes())?;
+    if id != history.funding_receipt_id
+        || facts.failure_policy_binding_id != history.failure_policy_binding_id
+        || facts.market_instance_id != history.market_instance_id
+        || facts.generation != history.generation
+        || facts.work_account != history.work_account
+        || facts.history_account != history.history_account
+        || facts.rent_refund_owner != history.rent_refund_owner
+        || facts.neutral_sink != history.neutral_sink
+        || facts.work_rent_principal_lamports != history.work_rent_principal_lamports
+        || facts.history_rent_principal_lamports != history.history_rent_principal_lamports
+    {
+        return Err(Error::BindingMismatch);
+    }
+    Ok(FailureMarketIntervalFundingReceiptV2 { id, facts })
 }
 
 /// Append one exact terminal session before the reusable cell resets to Idle.
@@ -787,6 +854,7 @@ pub fn plan_append_failure_market_interval_history_v2<
             session_terminal_receipt_id: terminal.session_terminal_receipt_id,
             terminal_state_commitment: terminal.terminal_state_commitment,
             idle_state_commitment: terminal.idle_state_commitment,
+            disposition: terminal.disposition,
             completed_session_count: next_count,
         },
     ))
@@ -898,6 +966,45 @@ pub fn plan_seal_failure_market_interval_history_v2<
             history_after,
         },
     ))
+}
+
+/// Reconstruct the unique family-seal receipt from its durable sealed
+/// history postimage and the same authenticated family-terminal authority.
+///
+/// The seal receipt is deliberately not a separately persisted DTO. This
+/// reverse derivation clears the sole terminal rent-close path without letting
+/// a caller choose `history_before`, aggregate counters, or the family receipt:
+/// all are recovered from the canonical sealed account body, then replayed
+/// through [`plan_seal_failure_market_interval_history_v2`].
+pub fn reconstruct_failure_market_interval_family_seal_v2<
+    A: AuthenticatedFailureMarketIntervalFamilySealV2 + ?Sized,
+>(
+    authority: &A,
+    sealed: FailureMarketIntervalHistoryV2,
+    admission: FailureMarketAdmissionStateV1,
+    quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+) -> Result<FailureMarketIntervalFamilySealReceiptV2> {
+    sealed.validate_against(admission, quote)?;
+    let family_terminal_receipt_id = sealed.family_terminal_receipt_id;
+    require_live(family_terminal_receipt_id.bytes())?;
+    let mut before = sealed;
+    before.family_terminal_receipt_id = FailureMarketFamilyTerminalReceiptIdV2::from_bytes([0; 32]);
+    before.validate_against(admission, quote)?;
+    let (plan, receipt) = plan_seal_failure_market_interval_history_v2(
+        authority,
+        before,
+        admission,
+        quote,
+        family_terminal_receipt_id,
+    )?;
+    if plan.before != before
+        || plan.after != sealed
+        || receipt.history_after != sealed.id()?
+        || receipt.facts.family_terminal_receipt_id != family_terminal_receipt_id
+    {
+        return Err(Error::BindingMismatch);
+    }
+    Ok(receipt)
 }
 
 /// Exact reverse-order terminal disposition of the reusable and history accounts.
@@ -1261,6 +1368,7 @@ pub(crate) fn runtime_test_append(
         session_terminal_receipt_id,
         terminal_state_commitment,
         idle_state_commitment,
+        disposition: FailureMarketIntervalTerminalDispositionV2::Resolved,
         completed_session_count: after.completed_session_count,
     };
     (after, receipt)
@@ -1269,6 +1377,28 @@ pub(crate) fn runtime_test_append(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn durable_seal_reconstruction_has_no_caller_selected_prestate() {
+        let source = include_str!("market_interval_history_v2.rs");
+        let reconstruction = source
+            .split("pub fn reconstruct_failure_market_interval_family_seal_v2")
+            .nth(1)
+            .and_then(|value| value.split("/// Exact reverse-order terminal disposition").next())
+            .expect("durable family seal reconstruction");
+        for predicate in [
+            "sealed.validate_against(admission, quote)",
+            "let family_terminal_receipt_id = sealed.family_terminal_receipt_id",
+            "before.family_terminal_receipt_id = FailureMarketFamilyTerminalReceiptIdV2::from_bytes([0; 32])",
+            "plan_seal_failure_market_interval_history_v2",
+            "plan.after != sealed",
+            "receipt.history_after != sealed.id()?",
+        ] {
+            assert!(reconstruction.contains(predicate));
+        }
+        assert!(!reconstruction.contains("history_before:"));
+        assert!(!reconstruction.contains("family_terminal_receipt_id:"));
+    }
 
     fn empty_history() -> FailureMarketIntervalHistoryV2 {
         FailureMarketIntervalHistoryV2 {

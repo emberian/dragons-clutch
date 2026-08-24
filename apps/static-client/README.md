@@ -77,9 +77,10 @@ semantic-owner codecs. The Dealer upload-stage allocation is explicitly
 non-production and is not part of live discovery.
 
 When a checked release explicitly selects the `fractional` family, Glass
-recognizes only the current Resolution-data-bound Policy V2, Ledger V1, Credit
-V2, and Tombstone V2 layouts. Withdrawn fractional V1 layouts are not fallback
-DTOs, and their presence does not create redemption capability.
+recognizes only the current physical-Resolution-account/Resolution-data-bound
+Policy V3, Ledger V1, Credit V2, and Tombstone V2 layouts. Withdrawn Policy V1,
+unprefundable Policy V2, and credit/tombstone V1 layouts are not fallback DTOs,
+and their presence does not create redemption capability.
 
 ## Projection semantics
 
@@ -130,17 +131,17 @@ math. The compiler form accepts:
 - an exact rational definition JSON object in which all integers and rational
   components are strings;
 - exact current RegistryProgramReleaseV2, RegistryCapabilityProfileV4,
-  QuoteV4, AttachmentV4, and remaining BundleV5 input bodies;
+  QuoteV5, AttachmentV5, and remaining BundleV6 input bodies;
 - an optional bounded exact-market search over explicit integer coordinates;
   and
 - an explicit expected compiler-release SHA-256 pinned by operatord.
 
 The form calls the pure bounded
-`POST /v1/compiler/product-exact-market` endpoint. The same implementation is
+`POST /v2/compiler/product-exact-market` endpoint. The same implementation is
 available through
 `operatord compile-product-exact-market --compiler-release-sha256 HASH` for
 stdin/stdout proposal import. Both call Rust `compile_production_payoff_v1`,
-the current `assemble_compiled_product_series_bundle_v5`, and, when requested,
+the current `assemble_compiled_product_series_bundle_v6`, and, when requested,
 the bounded all-support exact atom solver.
 
 The page computes SHA-256 over both canonical sorted-key UTF-8 definition JSON
@@ -149,15 +150,15 @@ the configured expected compiler-release SHA-256. That release hash is a
 configuration join, not a measurement of the running binary. The Product
 program address comes from the acquired checked-release projection; operatord
 requires it to be canonical, nonzero, and equal to the Program coordinate in
-RegistryProgramReleaseV2 before deriving the kind-60 BundleV5 artifact PDA.
+RegistryProgramReleaseV2 before deriving the kind-63 BundleV6 artifact PDA.
 
 Glass then displays exact-in-span versus certified-approximation status, all
 exact rational error bounds, the canonical 2,352-byte native-basis proposal,
-its certificate, and the 528-byte BundleV5 plus all sixteen typed identities.
+its certificate, and the 528-byte BundleV6 plus all sixteen typed identities.
 The bundle capability-profile ID must match the daemon-projected checked
 release. An analytic result also carries its exact certification subdivision
 depth. An exact-market request additionally returns a canonical work manifest,
-an optional verifier certificate, and a BundleV5-bound sidecar. It never claims
+an optional verifier certificate, and a BundleV6-bound sidecar. It never claims
 a unique price, fair value, or optimal clearing.
 
 The compiler endpoint is loopback-only and has no RPC, wallet, signing,
@@ -166,37 +167,31 @@ submission, registration, or persistence path. Its output is always marked
 transport shape and exact request joins but deliberately does not become a
 second semantic owner by reimplementing Rust codecs. Registration remains the
 only authority: the program must reopen the loader-authenticated registry
-release, ProfileV4, Source release, every canonical artifact, BundleV5, and any
+release, ProfileV4, Source release, every canonical artifact, BundleV6, and any
 exact-market evidence, then recompute every identity, PDA, and binding.
 
-## Unsigned construction boundary
+## Canonical transaction-material boundary
 
-`successor-builder.js` is the browser counterpart to the Rust outer
-`ProtocolTransactionBuilder`. It accepts one to sixteen explicit instructions.
-Each draft names its flow, successor family and action, semantic-owner package,
-schema and release digest, lowercase payload bytes, ordered account roles,
-required signer public keys, and at least one balanced exact `u128` equation.
-Equation units use the Rust categories rather than free text: lamports;
-collateral, fee, or wrapper atoms bound to a mint; price units bound to a
-positive scale; or Egg atoms bound to a Market identity and outcome.
+The browser has no successor transaction builder and accepts no caller-shaped
+payload, account-meta, capability, or accounting DTO. It acquires `/v1/actions`
+inside the same finalized session bracket as the account projection. Every
+verdict must name one exact coordinate enabled by the checked release. A
+control remains unavailable until operatord has rerun the semantic owner's
+constructor from reacquired onchain bytes and supplied a complete ordered role
+projection, explicit signer public identities, balanced exact-integer
+equations, and one deterministic zero-blockhash/zero-signature transaction.
 
-The builder validates those declarations, adds the three-byte successor
-envelope, compiles the canonical legacy Solana message key order, installs an
-all-zero recent blockhash, and serializes one zero signature per required
-message signer. It emits hex and base64 bytes with an explicit packet-size
-limit. It cannot decide semantic payloads, infer account metas, enable a route,
-obtain a recent blockhash, sign, or submit.
-
-Projected keeper cursors remain deliberately non-selectable because the read
-API does not yet expose a release-authenticated successor coordinate. Exact
-family tag/version/action bytes come from the semantic-owner draft and the
-output marks them as construction material, never runtime capability. Every
-workflow node states that authoritative accounts must be reloaded.
+Adding a fresh recent blockhash and choosing an authorized fee payer are a
+separate wallet-launcher boundary. That launcher must reacquire all named
+prestate first. After submission it must discard the draft and reacquire both
+`/v1/session` and `/v1/actions`; neither Glass nor operatord advances from an
+expected poststate.
 
 ## Files
 
-- `chain-client.js`: operatord-only target and bounded projection transport.
-- `successor-builder.js`: exact outer message and unsigned transaction bytes.
+- `chain-client.js`: operatord-only target, canonical `/v1/session`
+  attach/restart contract, `/v1/actions` capability/draft contract, and bounded
+  projection transport.
 - `compiler-proposal.js`: bounded pure-compiler transport and exact proposal
   validation; no compiler math.
 - [`COMPILER_TRANSPORT.md`](COMPILER_TRANSPORT.md): exact Rust adapter JSON

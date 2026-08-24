@@ -121,6 +121,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "clutch-direct-market-runtime"
+version = "0.1.0"
+dependencies = [
+ "clutch-batch",
+ "clutch-general-v2-contract",
+ "clutch-owner-settlement",
+ "clutch-product-series",
+ "clutch-retirement",
+]
+
+[[package]]
 name = "clutch-failure-policy-adapter"
 version = "0.1.0"
 dependencies = [
@@ -263,6 +274,7 @@ dependencies = [
  "clutch-bspline-accumulator",
  "clutch-collateral-adapter-v2",
  "clutch-dealer-runtime-contract",
+ "clutch-direct-market-runtime",
  "clutch-evidence-recovery",
  "clutch-failure-policy-adapter",
  "clutch-failure-policy-runtime",

@@ -8,11 +8,11 @@ use sha2::{Digest, Sha256};
 use crate::{
     DealerActionLivenessAuthorizationV1, DealerAssetTransferAmountsV1, DealerFacilityReplayV1,
     DealerFeeTerminalJoinV1, DealerFundedDependenciesV2, DealerLeaseV2, DealerLivenessScheduleV1,
-    DealerPhaseV2, DealerPolicyV1, DealerPositionMarketJoinV1, DealerPositionObservationV3,
+    DealerPhaseV2, DealerPolicyV1, DealerPositionMarketJoinV2, DealerPositionObservationV3,
     DealerPotCustodyTransitionV1, DealerReplayAccountBindingV1, DealerRuntimeActionV1,
     DealerRuntimeLivenessBindingV1, DealerStateV2, DealerTransferPositionV3,
     DealerTransitionIntentV1, DealerTransitionLivenessModeV1, Error, FacilityPositionBindingV2, Id,
-    PreparedDealerPositionPotTransferV1, PreparedDealerReplayTransitionV1, Result,
+    PreparedDealerPositionPotTransferV2, PreparedDealerReplayTransitionV1, Result,
     SettlementPotPhaseV1, SettlementPotV2, MAX_OUTCOMES,
 };
 
@@ -134,7 +134,7 @@ impl DealerLeasePotCloseTransitionV3 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreparedDealerLeasePotCloseV3 {
     state_after: DealerStateV2,
-    transfer: PreparedDealerPositionPotTransferV1,
+    transfer: PreparedDealerPositionPotTransferV2,
     replay: PreparedDealerReplayTransitionV1,
     close: DealerLeasePotCloseTransitionV3,
 }
@@ -146,7 +146,7 @@ impl PreparedDealerLeasePotCloseV3 {
     }
 
     /// Exact Pot-to-facility Position transfer.
-    pub const fn transfer(self) -> PreparedDealerPositionPotTransferV1 {
+    pub const fn transfer(self) -> PreparedDealerPositionPotTransferV2 {
         self.transfer
     }
 
@@ -176,7 +176,7 @@ pub fn prepare_finalize_lease_pot_v3(
     runtime: &DealerRuntimeLivenessBindingV1,
     authorization: &DealerActionLivenessAuthorizationV1,
     fee_terminal: &DealerFeeTerminalJoinV1,
-    market: DealerPositionMarketJoinV1,
+    market: DealerPositionMarketJoinV2,
     position: &DealerPositionObservationV3,
     replay: &DealerFacilityReplayV1,
     replay_binding: DealerReplayAccountBindingV1,
@@ -226,7 +226,7 @@ pub fn prepare_abort_lease_pot_v3(
     runtime: &DealerRuntimeLivenessBindingV1,
     authorization: &DealerActionLivenessAuthorizationV1,
     fee_terminal: &DealerFeeTerminalJoinV1,
-    market: DealerPositionMarketJoinV1,
+    market: DealerPositionMarketJoinV2,
     position: &DealerPositionObservationV3,
     replay: &DealerFacilityReplayV1,
     replay_binding: DealerReplayAccountBindingV1,
@@ -283,7 +283,7 @@ fn prepare_lease_pot_close_common_v3(
     runtime: &DealerRuntimeLivenessBindingV1,
     authorization: &DealerActionLivenessAuthorizationV1,
     fee_terminal: &DealerFeeTerminalJoinV1,
-    market: DealerPositionMarketJoinV1,
+    market: DealerPositionMarketJoinV2,
     position: &DealerPositionObservationV3,
     replay: &DealerFacilityReplayV1,
     replay_binding: DealerReplayAccountBindingV1,
@@ -391,7 +391,7 @@ fn prepare_lease_pot_close_common_v3(
         replay,
         rent,
     )?;
-    let transfer = crate::prepare_dealer_position_pot_transfer_v1(
+    let transfer = crate::prepare_dealer_position_pot_transfer_v2(
         action,
         market,
         DealerTransferPositionV3::Facility {

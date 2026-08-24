@@ -5,25 +5,28 @@ use crate::runtime_contract::{
     CREATE_DESCRIPTOR_PAYLOAD_BYTES, STRUCTURED_CLAIM_FAMILY_TAG,
     STRUCTURED_CLAIM_FAMILY_VERSION,
 };
-use crate::{Error, Result};
+use crate::{
+    Error, Result, IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1,
+    STRUCTURED_CURRENT_RELEASE_CONTRACT_V1,
+};
 
-/// All family-local actions allocated by the canonical runtime contract.
-pub const RESERVED_STRUCTURED_CLAIM_ACTION_MASK: u16 =
-    ((1_u16 << (StructuredClaimActionV1::LAST_TAG + 1)) - 1)
-        & !((1_u16 << StructuredClaimActionV1::FIRST_TAG) - 1);
+/// All family-local coordinates reserved by the central collision ledger.
+///
+/// Reservation is not decoding authority: current action parsing recognizes
+/// only the six actions in [`IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1`].
+pub const RESERVED_STRUCTURED_CLAIM_ACTION_MASK: u16 = 0x01fe;
 
 /// Runtime actions admitted by this adapter artifact.
 ///
-/// The default is empty. The separately deployed wrapper feature is also empty
-/// until every current authority join is present in one executable frame.
-#[cfg(not(feature = "live-current-wrapper"))]
+/// The default is empty. The separately deployed wrapper admits only the
+/// action intersection selected by the exact three-release join.
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 pub const ENABLED_STRUCTURED_CLAIM_ACTION_MASK: u16 = 0;
-/// Wrapper build seam. No action is admitted until the current Product,
-/// deployment-release, and collateral-route joins are executable together.
-#[cfg(feature = "live-current-wrapper")]
-pub const ENABLED_STRUCTURED_CLAIM_ACTION_MASK: u16 = 0;
+/// Exact unified successor development profile for the wrapper artifact.
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+pub const ENABLED_STRUCTURED_CLAIM_ACTION_MASK: u16 =
+    STRUCTURED_CURRENT_RELEASE_CONTRACT_V1.admitted_action_mask;
 
-const _: () = assert!(StructuredClaimActionV1::LAST_TAG < 16);
 const _: () = assert!(
     STRUCTURED_CLAIM_FAMILY_TAG == clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_TAG
 );
@@ -31,12 +34,17 @@ const _: () = assert!(
     STRUCTURED_CLAIM_FAMILY_VERSION
         == clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_VERSION
 );
-#[cfg(not(feature = "live-current-wrapper"))]
+#[cfg(not(feature = "profile-successor-chain-attached-dev"))]
 const _: () = assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK == 0);
-#[cfg(feature = "live-current-wrapper")]
-const _: () = assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK == 0);
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+const _: () = assert!(
+    ENABLED_STRUCTURED_CLAIM_ACTION_MASK == IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1
+);
 const _: () =
     assert!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK & !RESERVED_STRUCTURED_CLAIM_ACTION_MASK == 0);
+const _: () = assert!(
+    ENABLED_STRUCTURED_CLAIM_ACTION_MASK & !IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1 == 0
+);
 const _: () = assert!(
     CREATE_DESCRIPTOR_PAYLOAD_BYTES
         <= clutch_solana_layout::registry::MAX_EXTENSION_PAYLOAD_BYTES
@@ -88,9 +96,8 @@ pub fn decode_instruction_v1(input: &[u8]) -> Result<StructuredClaimPayloadV1> {
 
 /// Apply the current ELF's runtime capability gate.
 ///
-/// Only the exact three-byte extension header is inspected. With the current
-/// empty mask this always refuses an allocated structured-claim action before
-/// payload or account data is read.
+/// Only the exact three-byte extension header is inspected. Disabled actions
+/// always refuse before payload or account data is read.
 pub fn admit_runtime_envelope_v1(input: &[u8]) -> Result<StructuredClaimEnvelopeV1<'_>> {
     let envelope = StructuredClaimEnvelopeV1::decode_header(input)?;
     let bit = 1_u16

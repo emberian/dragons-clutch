@@ -14,8 +14,10 @@
 
 use crate::relation_v1::MAX_OUTCOMES;
 use crate::relation_v2::{
-    verify_economic_candidate_v2, EconomicBookV2, EconomicCandidateV2, EconomicDomainV2,
-    EconomicErrorV2, PricePreconditionV2, VerifiedEconomicsV2,
+    validate_two_order_prefix_v2, verify_economic_candidate_v2,
+    verify_two_order_economic_candidate_v2, EconomicBookV2, EconomicCandidateV2,
+    EconomicDomainV2, EconomicErrorV2, EconomicOrderV2, PricePreconditionV2,
+    VerifiedEconomicsV2,
 };
 use crate::{Side, MAX_ORDERS};
 
@@ -96,6 +98,20 @@ pub trait AuthenticatedDirectSelectionAuthorityV1 {
     ) -> Result<(), DirectPairErrorV1> {
         Err(DirectPairErrorV1::UnauthenticatedSelection)
     }
+
+    /// Authenticate the frame-safe exact two-row projection and its canonical
+    /// general-width RelationV2 digest.
+    fn authenticate_compact_selected_pair(
+        &self,
+        _selection_transcript_id: [u8; 32],
+        _domain: &EconomicDomainV2,
+        _orders: &[EconomicOrderV2; 2],
+        _price: &PricePreconditionV2,
+        _candidate: DirectEconomicCandidateV1,
+        _economics: &VerifiedEconomicsV2,
+    ) -> Result<(), DirectPairErrorV1> {
+        Err(DirectPairErrorV1::UnauthenticatedSelection)
+    }
 }
 
 /// Explicit default-deny authority for callers without persisted traversal
@@ -104,6 +120,44 @@ pub trait AuthenticatedDirectSelectionAuthorityV1 {
 pub struct NoDirectSelectionAuthorityV1;
 
 impl AuthenticatedDirectSelectionAuthorityV1 for NoDirectSelectionAuthorityV1 {}
+
+/// Exact two-order book used by the Direct specialization.
+///
+/// The two rows remain ordered by canonical RelationV2 order identity. Its
+/// verifier emits the same digest as a 64-row [`EconomicBookV2`] with exact
+/// empty padding but never materializes that larger value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectEconomicBookV1 {
+    /// Exact sorted active rows followed by canonical empty padding.
+    pub orders: [EconomicOrderV2; 2],
+    /// Active prefix in `0..=2`.
+    pub len: u8,
+}
+
+impl DirectEconomicBookV1 {
+    /// Validate the exact fixed-capacity RelationV2 prefix.
+    pub fn validate(&self, domain: &EconomicDomainV2) -> Result<(), DirectPairErrorV1> {
+        validate_two_order_prefix_v2(domain, &self.orders, self.len)
+            .map_err(DirectPairErrorV1::Economic)
+    }
+}
+
+/// Compact coordinates of one Direct candidate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectEconomicCandidateV1 {
+    /// Fill units for the exact two sorted rows.
+    pub fills: [u64; 2],
+    /// Exact AON bits for those two rows; upper bits are forbidden.
+    pub honored_aon_mask: u8,
+}
+
+impl DirectEconomicCandidateV1 {
+    /// Canonical zero-fill witness.
+    pub const EMPTY: Self = Self {
+        fills: [0; 2],
+        honored_aon_mask: 0,
+    };
+}
 
 /// Private exact Direct pair selected by one authenticated traversal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -304,6 +358,108 @@ pub fn authenticate_selected_direct_pair_v1<A: AuthenticatedDirectSelectionAutho
         consideration_cash_atoms,
         boundary: DirectCashBoundaryV1::ExactOnly,
     })
+}
+
+/// Frame-safe Direct specialization of the exact RelationV2 two-row book.
+///
+/// Candidate identity and ScoreV2-Q are byte-for-byte the canonical
+/// general-width RelationV2 result with 62 empty rows and 62 zero fills.
+pub fn authenticate_compact_selected_direct_pair_v1<
+    A: AuthenticatedDirectSelectionAuthorityV1 + ?Sized,
+>(
+    authority: &A,
+    selection_transcript_id: [u8; 32],
+    domain: &EconomicDomainV2,
+    book: &DirectEconomicBookV1,
+    price: &PricePreconditionV2,
+    candidate: DirectEconomicCandidateV1,
+) -> Result<SelectedDirectPairV1, DirectPairErrorV1> {
+    if all_zero(&selection_transcript_id) {
+        return Err(DirectPairErrorV1::ZeroSelectionIdentity);
+    }
+    if book.len != 2 {
+        return Err(DirectPairErrorV1::WrongBookShape);
+    }
+    let economics = verify_two_order_economic_candidate_v2(
+        domain,
+        &book.orders,
+        price,
+        candidate.fills,
+        candidate.honored_aon_mask,
+    )?;
+    let first = book.orders[0];
+    let second = book.orders[1];
+    let (buy, buy_index, sell, sell_index) = match (first.side, second.side) {
+        (Side::Buy, Side::Sell) => (first, 0u8, second, 1u8),
+        (Side::Sell, Side::Buy) => (second, 1u8, first, 0u8),
+        _ => return Err(DirectPairErrorV1::WrongSidePartition),
+    };
+    let buy_outcome = single_egg_outcome(domain.outcome_count, &buy.coefficients)?;
+    let sell_outcome = single_egg_outcome(domain.outcome_count, &sell.coefficients)?;
+    if buy_outcome != sell_outcome {
+        return Err(DirectPairErrorV1::OutcomeMismatch);
+    }
+    let buy_fill = candidate.fills[usize::from(buy_index)];
+    let sell_fill = candidate.fills[usize::from(sell_index)];
+    if buy_fill == 0 || buy_fill != sell_fill {
+        return Err(DirectPairErrorV1::FillMismatch);
+    }
+    require_exact_economics(&economics, buy_outcome, buy_fill)?;
+    let price_units_per_egg = price.prices[usize::from(buy_outcome)];
+    let consideration_price_units = u128::from(buy_fill)
+        .checked_mul(u128::from(price_units_per_egg))
+        .ok_or(DirectPairErrorV1::ArithmeticOverflow)?;
+    let scale = u128::from(domain.price_scale);
+    if consideration_price_units % scale != 0 {
+        return Err(DirectPairErrorV1::InexactCashConversion);
+    }
+    let consideration_cash_atoms = u64::try_from(consideration_price_units / scale)
+        .map_err(|_| DirectPairErrorV1::ArithmeticOverflow)?;
+    authority.authenticate_compact_selected_pair(
+        selection_transcript_id,
+        domain,
+        &book.orders,
+        price,
+        candidate,
+        &economics,
+    )?;
+    Ok(SelectedDirectPairV1 {
+        selection_transcript_id,
+        economic_candidate_digest: economics.economic_candidate_digest,
+        semantic_price_digest: price.semantic_price_digest,
+        buy_order_id: buy.order_id,
+        sell_order_id: sell.order_id,
+        buy_order_index: buy_index,
+        sell_order_index: sell_index,
+        outcome: buy_outcome,
+        outcome_count: domain.outcome_count,
+        quantity: buy_fill,
+        price_units_per_egg,
+        price_scale: domain.price_scale,
+        consideration_price_units,
+        consideration_cash_atoms,
+        boundary: DirectCashBoundaryV1::ExactOnly,
+    })
+}
+
+/// Verify one compact Direct candidate through the RelationV2-owned projection.
+pub fn verify_compact_direct_candidate_v1(
+    domain: &EconomicDomainV2,
+    book: &DirectEconomicBookV1,
+    price: &PricePreconditionV2,
+    candidate: DirectEconomicCandidateV1,
+) -> Result<VerifiedEconomicsV2, DirectPairErrorV1> {
+    if book.len != 2 {
+        return Err(DirectPairErrorV1::WrongBookShape);
+    }
+    verify_two_order_economic_candidate_v2(
+        domain,
+        &book.orders,
+        price,
+        candidate.fills,
+        candidate.honored_aon_mask,
+    )
+    .map_err(DirectPairErrorV1::Economic)
 }
 
 fn single_egg_outcome(

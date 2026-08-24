@@ -14,32 +14,27 @@ default = ["profile-full"]
 profile-full = [
     "clutch-retirement-adapter/profile-full",
     "clutch-solana-layout/profile-full",
-    "clutch-solana-reference/profile-full",
 ]
 profile-direct-v3-source-v2-point = [
     "clutch-retirement-adapter/profile-direct-v3-source-v2-point",
     "clutch-solana-layout/profile-direct-v3-source-v2-point",
-    "clutch-solana-reference/profile-direct-v3-source-v2-point",
 ]
 profile-general-source-v2-point = [
     "clutch-retirement-adapter/profile-general-source-v2-point",
     "clutch-solana-layout/profile-general-source-v2-point",
-    "clutch-solana-reference/profile-general-source-v2-point",
 ]
-# Stages the current Structured wrapper code in a distinct non-production ELF.
-# The compiled action mask remains exactly zero; this feature admits no action.
-live-current-wrapper = []
+# Admits the exact current Structured action/release contract for the separately
+# deployed wrapper in the unified successor-chain-attached development profile.
+# The base program must select the identically named profile independently.
+profile-successor-chain-attached-dev = []
 
 [dependencies]
 clutch-collateral-adapter-v2 = { path = "../../crates/clutch-collateral-adapter-v2" }
 clutch-general-v2-contract = { path = "../../crates/clutch-general-v2-contract" }
-clutch-kernel = { path = "../../crates/clutch-kernel" }
 clutch-owner-settlement = { path = "../../crates/clutch-owner-settlement" }
-clutch-product-series = { path = "../../crates/clutch-product-series" }
 clutch-retirement = { path = "../../crates/clutch-retirement" }
 clutch-retirement-adapter = { path = "../../crates/clutch-retirement-adapter", default-features = false }
 clutch-solana-layout = { path = "../solana-layout", default-features = false }
-clutch-solana-reference = { path = "../solana-reference", default-features = false }
 clutch-structured-claim = { path = "../../crates/clutch-structured-claim" }
 clutch-structured-claim-runtime-contract = { path = "../../crates/clutch-structured-claim-runtime-contract" }
 

@@ -1,7 +1,17 @@
 # SourcePlane V3 runtime account contract
 
-Status: **pure runtime contract with SourceSeries actions 1 through 4 wired to
-the central SBF dispatcher; not a deployment claim**.
+Status: **successor runtime/SBF implementation under unified all-or-none profile
+composition; not a deployment claim**.
+
+SourceSeries `77/v2` actions 1 through 12 now have explicit account contracts
+and handlers over one release-selected route. Product privately capitalizes and
+publishes the founding occurrence/request graph; one program-derived custody
+pre-pays bounded liveness, every child/receipt rent source, terminalization,
+and deterministic reopen work; Failure's sole ResolutionV5 outer reconstructs
+the persisted successful handoff and performs terminal/result close atomically.
+Product retirement is the sole consumer allowed to refund the custody's unused
+principal and neutralize every other observed lamport. Central dispatch remains
+the all-or-none capability owner and must not admit a partial lifecycle.
 
 This crate replaces the old opaque/default-deny SourcePlane V3 seams with
 fixed-memory contracts that a small Solana adapter can execute. It does not
@@ -73,10 +83,13 @@ digest derivable from supplied bytes is recomputed here.
   StatisticKey, SourcePlane, SourceSpec, repair generation, and created versus
   exact-existing disposition.
 
-The failure handoff has only two source-owned facts: authenticated absence at
-primary maturity, or an exact stable refused `StatisticResultV3`. Neither path
-chooses a failure payout. Wrong source identities or repair generations are
-binding refusals, not failure evidence.
+SourceSeries `77/v2` action 10 exhaustively owns the three admitted V2 wire
+variants. `FailureAbsence` authenticates a never-created result and missing
+seal at the exact mature window; `FailureResult` requires an authenticated
+persisted refused result; `SuccessfulEvaluation` requires the exact successful
+result/evidence graph consumed by the private Product/Failure ResolutionV5
+join. Wrong source identities or repair generations are binding refusals, not
+failure evidence.
 
 Result absence is not a boolean. It requires the predictable result PDA to be
 an unallocated zero-balance System account and its authenticated durable
@@ -99,21 +112,27 @@ addresses:
 - a fully prefunded account has zero principal and no invented payer authority;
 - close returns principal once and routes the entire remainder to the sink.
 
-Mandatory work remains in the separate liveness Source compartment. A
+Mandatory work is held in the separate liveness Source compartment. A
 `SourceWorkScheduleBindingV1` owns the exact schedule digest, aggregate
 dot-product work capital, maximum calls, largest single-call ceiling, rent, and
 four terminal-path bounds. Each `SourceWorkAuthorizationV1` binds a concrete
 family receipt account, owner program, lifecycle, semantic owner, generation,
 ordinal, and authenticated per-call ceiling for direct projection into the
-liveness runtime.
+liveness runtime. Product's pending SourceWork debit capitalizes the exact
+Rent-derived complete-lifecycle quote before the Market root exists. Child,
+policy, receipt, terminal, and post-terminal reopen creation use only the
+schedule-selected custody PDA; keepers sign to accept work but never fund rent,
+and refund destinations never sign.
 
-## Remaining adapter integration
+## All-or-none integration boundary
 
-Actions 5 through 12 still need their exact SBF state, CPI, funding, and
-operator joins before their independently disabled capability tuples may be
-enabled. Actions 1 through 4 now have exact account-meta tables, release-bound
-runtime attestations, and atomic state/work/liveness handling, but remain code
-rather than evidence that SourcePlane V3 is live on any cluster.
+The successor profile may expose actions 1 through 12 only together, after
+every persisted action-10 variant has a complete terminal consumer, Product's
+founder consumes the private capitalization/publication receipt, and Product's
+counted retirement consumes the private Source-custody close receipt before
+current Funding close. The successful Failure action-12 outer must consume the
+persisted Source context and final ResolutionV5 postwrite. There is no legacy
+SourceArchive/SourceGeneration fallback and no public receipt-ID projection.
 
 No test, build, campaign, benchmark, or deployment claim is recorded for this
 implementation slice.

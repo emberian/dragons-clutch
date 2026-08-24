@@ -40,6 +40,16 @@ pub enum LineageFamilyV1 {
 }
 
 impl LineageFamilyV1 {
+    const fn byte(self) -> u8 {
+        match self {
+            Self::SourceHead => 1,
+            Self::OpenRawPage => 2,
+            Self::WindowWork => 3,
+            Self::EvaluationWork => 4,
+            Self::StatisticResult => 5,
+        }
+    }
+
     fn decode(value: u8) -> Result<Self> {
         match value {
             1 => Ok(Self::SourceHead),
@@ -75,7 +85,8 @@ pub struct ReopenLineageV2 {
     pub active_account: RuntimeKey,
     /// Canonical state digest observed at most recent open/transition.
     pub last_opened_state_id: ContentId,
-    /// Exact terminal receipt for latest generation, or zero while open/never-created.
+    /// Exact terminal receipt for the latest generation, or for permanent
+    /// retirement of a never-created slot; zero only while open/reopenable.
     pub last_close_receipt_id: ContentId,
     /// Source work schedule governing every generation.
     pub source_work_schedule_id: ContentId,
@@ -133,7 +144,6 @@ impl ReopenLineageV2 {
             if self.is_open
                 || !self.active_account.is_zero()
                 || !self.last_opened_state_id.is_zero()
-                || !self.last_close_receipt_id.is_zero()
             {
                 return Err(Error::InvalidLineage);
             }
@@ -158,7 +168,7 @@ impl ReopenLineageV2 {
         let mut out = [0; REOPEN_LINEAGE_BYTES];
         out[..8].copy_from_slice(&LINEAGE_MAGIC);
         out[8..10].copy_from_slice(&SCHEMA_V2.to_le_bytes());
-        out[10] = self.family as u8;
+        out[10] = self.family.byte();
         out[16..48].copy_from_slice(&self.adapter_program.bytes());
         out[48..80].copy_from_slice(&self.release_manifest_id.bytes());
         out[80..112].copy_from_slice(&self.route_id.bytes());
@@ -242,7 +252,7 @@ impl ReopenLineageV2 {
         live_id(semantic_binding_id)?;
         live_id(source_work_schedule_id)?;
         let mut bytes = [0; 168];
-        bytes[0] = family as u8;
+        bytes[0] = family.byte();
         bytes[8..40].copy_from_slice(&adapter_program.bytes());
         bytes[40..72].copy_from_slice(&release_manifest_id.bytes());
         bytes[72..104].copy_from_slice(&route_id.bytes());
@@ -404,6 +414,7 @@ pub fn authorize_reopen(
     live_id(pda_recipe_id)?;
     target_account.validate()?;
     if lineage.is_open
+        || (lineage.latest_generation == 0 && !lineage.last_close_receipt_id.is_zero())
         || lineage.adapter_program != route.adapter_program()
         || lineage.family != family
         || lineage.semantic_binding_id != semantic_binding_id
@@ -424,7 +435,7 @@ pub fn authorize_reopen(
         .ok_or(Error::ArithmeticOverflow)?;
     let lineage_before_id = lineage.id()?;
     let mut bytes = [0; 152];
-    bytes[0] = family as u8;
+    bytes[0] = family.byte();
     bytes[8..40].copy_from_slice(&semantic_binding_id.bytes());
     bytes[40..72].copy_from_slice(&lineage_before_id.bytes());
     bytes[72..104].copy_from_slice(&target_account.bytes());
@@ -439,6 +450,41 @@ pub fn authorize_reopen(
         next_generation,
         authorization_id: domain_id(REOPEN_AUTH_DOMAIN, &bytes),
     })
+}
+
+/// Permanently retire an exact never-created semantic slot.
+///
+/// This is the absence branch's tombstone transition: it does not fabricate a
+/// generation or active account, while the nonzero terminal receipt makes all
+/// later `authorize_reopen` calls fail closed.
+pub fn retire_never_created_lineage(
+    authenticated_lineage: AuthenticatedReopenLineageV1,
+    family: LineageFamilyV1,
+    semantic_binding_id: ContentId,
+    terminal_receipt_id: ContentId,
+) -> Result<ReopenLineageV1> {
+    if authenticated_lineage.access() != LineageAccessV1::Mutable {
+        return Err(Error::WrongPrivilege);
+    }
+    let lineage = authenticated_lineage.lineage();
+    lineage.validate()?;
+    live_id(terminal_receipt_id)?;
+    if lineage.family != family
+        || lineage.semantic_binding_id != semantic_binding_id
+        || lineage.latest_generation != 0
+        || lineage.is_open
+        || !lineage.active_account.is_zero()
+        || !lineage.last_opened_state_id.is_zero()
+        || !lineage.last_close_receipt_id.is_zero()
+    {
+        return Err(Error::InvalidLineage);
+    }
+    let next = ReopenLineageV1 {
+        last_close_receipt_id: terminal_receipt_id,
+        ..lineage
+    };
+    next.validate()?;
+    Ok(next)
 }
 
 /// Atomically mark the authorized generation open at one canonical state digest.
@@ -532,6 +578,87 @@ fn key_at(input: &[u8], at: usize) -> RuntimeKey {
 
 fn id_at(input: &[u8], at: usize) -> ContentId {
     ContentId::from_bytes(key_at(input, at).bytes())
+}
+
+#[cfg(test)]
+mod adversarial_tests {
+    use super::*;
+
+    fn id(seed: u8) -> ContentId {
+        ContentId::from_bytes([seed; 32])
+    }
+
+    fn key(seed: u8) -> RuntimeKey {
+        RuntimeKey::from_bytes([seed; 32])
+    }
+
+    fn authenticated(access: LineageAccessV1) -> AuthenticatedReopenLineageV1 {
+        let lineage = ReopenLineageV1::new(
+            key(1),
+            id(2),
+            id(3),
+            id(4),
+            key(5),
+            LineageFamilyV1::StatisticResult,
+            id(6),
+            key(7),
+        )
+        .unwrap();
+        AuthenticatedReopenLineageV1 {
+            lineage,
+            account_data_id: id(8),
+            access,
+            authentication_id: id(9),
+        }
+    }
+
+    #[test]
+    fn absent_result_retirement_is_not_an_open_or_fabricated_generation() {
+        let retired = retire_never_created_lineage(
+            authenticated(LineageAccessV1::Mutable),
+            LineageFamilyV1::StatisticResult,
+            id(4),
+            id(10),
+        )
+        .unwrap();
+        assert_eq!(retired.latest_generation, 0);
+        assert!(!retired.is_open);
+        assert!(retired.active_account.is_zero());
+        assert!(retired.last_opened_state_id.is_zero());
+        assert_eq!(retired.last_close_receipt_id, id(10));
+        assert!(retired.validate().is_ok());
+    }
+
+    #[test]
+    fn absent_result_retirement_refuses_privilege_family_and_recipe_substitution() {
+        assert_eq!(
+            retire_never_created_lineage(
+                authenticated(LineageAccessV1::ReadOnly),
+                LineageFamilyV1::StatisticResult,
+                id(4),
+                id(10),
+            ),
+            Err(Error::WrongPrivilege)
+        );
+        assert_eq!(
+            retire_never_created_lineage(
+                authenticated(LineageAccessV1::Mutable),
+                LineageFamilyV1::EvaluationWork,
+                id(4),
+                id(10),
+            ),
+            Err(Error::InvalidLineage)
+        );
+        assert_eq!(
+            retire_never_created_lineage(
+                authenticated(LineageAccessV1::Mutable),
+                LineageFamilyV1::StatisticResult,
+                id(11),
+                id(10),
+            ),
+            Err(Error::InvalidLineage)
+        );
+    }
 }
 
 fn le_u16(input: &[u8]) -> u16 {

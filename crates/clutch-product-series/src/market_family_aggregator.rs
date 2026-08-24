@@ -204,7 +204,7 @@ impl MarketFamilyCountsV1 {
     }
 }
 
-/// Immutable binding of one aggregator to its Market and canonical roots.
+/// Immutable binding of one aggregator to its Market and namespace anchors.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MarketFamilyAggregatorBindingV1 {
     /// Shared economic Market identity; never a Series identity.
@@ -217,10 +217,11 @@ pub struct MarketFamilyAggregatorBindingV1 {
     pub capability_profile_id: RegistryCapabilityProfileV3Id,
     /// Enabled-family bits in [`MARKET_FAMILIES_V1`] order.
     pub enabled_family_mask: u8,
-    /// Canonical Market-scoped family-root account identities.
+    /// Canonical Market-scoped family namespace-anchor identities.
     ///
-    /// Disabled families still have a canonical root identity so an adapter can
-    /// authenticate absence at exactly one address.
+    /// These are domain-separated identities of canonical PDA addresses, not
+    /// five additional persisted root accounts. Disabled families retain the
+    /// same anchor so an adapter can authenticate absence at one exact address.
     pub family_root_ids: [ContentId; MARKET_FAMILY_COUNT_V1],
 }
 
@@ -263,7 +264,7 @@ impl MarketFamilyAggregatorBindingV1 {
         self.enabled_family_mask & family.mask() != 0
     }
 
-    /// Canonical family-root identity for one partition.
+    /// Canonical family namespace-anchor identity for one partition.
     pub const fn family_root_id(&self, family: MarketFamilyV1) -> ContentId {
         self.family_root_ids[family.index()]
     }
@@ -320,12 +321,13 @@ impl MarketFamilyAggregatorBindingV1Id {
     }
 }
 
-/// Default-deny adapter boundary for family-root lifecycle changes.
+/// Default-deny adapter boundary for family namespace lifecycle changes.
 ///
 /// Implementing this Rust trait is not cryptographic authentication. A live
 /// adapter must make its implementation constructible only after checking the
-/// aggregator and family-root account addresses, owners, exact bodies, PDAs,
-/// registry provenance, and the named child admission or terminal receipt.
+/// aggregator, namespace anchor, concrete child account addresses, owners,
+/// exact bodies, PDAs, registry provenance, and the named child admission or
+/// terminal receipt.
 pub trait AuthenticatedMarketFamilyAuthorityV1 {
     /// Authenticate initialization of the exact immutable binding.
     fn authenticate_initialization(
@@ -335,7 +337,7 @@ pub trait AuthenticatedMarketFamilyAuthorityV1 {
         Err(Error::UnauthenticatedAuthority)
     }
 
-    /// Authenticate one unique child admission owned by the named family root.
+    /// Authenticate one unique child admission owned below the named anchor.
     fn authenticate_admission(
         &self,
         _current: &MarketFamilyAggregatorV1,
@@ -347,7 +349,7 @@ pub trait AuthenticatedMarketFamilyAuthorityV1 {
         Err(Error::UnauthenticatedAuthority)
     }
 
-    /// Authenticate one unique child terminal receipt owned by the family root.
+    /// Authenticate one unique child terminal receipt owned below the anchor.
     fn authenticate_terminal(
         &self,
         _current: &MarketFamilyAggregatorV1,
@@ -518,7 +520,7 @@ impl MarketFamilyAggregatorV1 {
         Ok(value)
     }
 
-    /// Immutable Market and canonical family-root binding.
+    /// Immutable Market and canonical family namespace-anchor binding.
     pub const fn binding(&self) -> &MarketFamilyAggregatorBindingV1 {
         &self.binding
     }

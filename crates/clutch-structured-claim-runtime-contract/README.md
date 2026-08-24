@@ -1,14 +1,14 @@
 # `clutch-structured-claim-runtime-contract`
 
-This crate is the allocation-free runtime contract between the pure
-`clutch-structured-claim` economics and the small SBF/Token-2022 adapters. It
+This crate is the allocation-free current lifecycle contract between the pure
+`clutch-structured-claim` product algebra and the small SBF/Token-2022 adapters. It
 keeps the historical 384-byte descriptor v1 decode-only, freezes the sole
 future 449-byte descriptor v2, and owns the exact 656-byte Series-scoped
 Structured root plus fixed-depth wrapper-recipe membership. The descriptor
 reconstructs native-claim and deployment/root/recipe-bound product identity
-from authenticated Product, basis, and deployment facts. Custody stages the
-required atomic Position cash/native-Egg transfer without touching global
-supply or Hoard collateral.
+from authenticated Product, basis, and deployment facts. Current lifecycle
+plans stage exact HoardV2, ClaimLedgerV3, PositionV3, and purpose-Replay V3
+successors; they do not manufacture a parallel Market or transfer authority.
 
 The first inline recipe-set profile carries at most sixteen ordered leaves so
 its fixed proof fits the existing instruction packet. That is a wire-profile
@@ -27,13 +27,12 @@ structured claims are live. The SBF adapter remains responsible for exact
 owner/PDA/ProgramData/slot/Token-2022 authentication, Replay account binding,
 transaction execution, post-delta checks, and rollback.
 
-The canonical and full-vector wrap/unwind planners join actual mint supply and
-holder balance to the pure economic machine, stage exact Market and
-Position/Replay poststates, and return the precise `MintToChecked` or
-`BurnChecked` quantity. Full routes include the authoritative base complete-set
-Merge/Split poststate rather than simulating it as a transfer. The runtime also
-stages beneficiary-free surplus compaction and exact resolved terminal-lot
-redemption. These routes never spend reserved Position cash.
+The superseded `MarketLedger` transition model has been physically removed.
+Current wrap/unwind, compaction, redemption, and retirement instead consume the
+exact HoardV2, ClaimLedgerV3, PositionV3, ReplayV3, ResolutionV5, Product, and
+collateral authorities owned by their respective contracts. Shared projections
+in this crate are hostile observations or terminal-close facts, never a second
+Market or supply owner.
 
 Retirement now requires zero actual mint supply, empty canonical backing, and
 an authenticated successor base-Position close receipt. The descriptor and
@@ -41,12 +40,15 @@ extension-free mint remain permanent identity tombstones; retirement revokes
 mint authority instead of pretending Token-2022 can close an extension-free
 mint or redirect its locked rent.
 
-The family-local wire allocates eight strict actions: descriptor creation,
-canonical/full wrap, canonical/full unwind, beneficiary-free donation
-compaction, exact terminal redemption, and retirement. Every quantity route
+The central registry reserves eight family-local coordinates, while this
+current wire recognizes only descriptor creation, full-vector wrap/unwind,
+beneficiary-free donation compaction, exact terminal redemption, and
+retirement. The former canonical action-2/4 variants and payload decoders are
+deleted; current source/account contracts exist only for actions 1/3/5/6/7/8.
+Every quantity payload
 binds the wrapper product, user/vault generations, and both Replay sequences;
 trailing, truncated, zero-quantity, and unknown-action payloads have no
-interpretation.
+interpretation. Reserved registry tags 2 and 4 fail as unknown actions.
 
 Descriptor and mint creation is pre-fund safe: system-owned zero-data targets
 may already carry lamports, the creator funds only each exact rent shortfall,

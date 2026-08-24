@@ -7,7 +7,7 @@
 //! the authorization below only from Product's private authenticated receipt.
 
 use clutch_product_series::{
-    CompiledProductSeriesBundleV5Id, ContentId, MarketInstanceV2Id, SeriesAttachmentPlanV4Id,
+    CompiledProductSeriesBundleV6Id, ContentId, MarketInstanceV2Id, SeriesAttachmentPlanV5Id,
     SeriesPlanV5Id,
 };
 use clutch_structured_claim::DeploymentBinding;
@@ -141,9 +141,9 @@ pub struct StructuredMarketRootBindingV1 {
     /// Product/Source generation.
     pub generation: u64,
     /// Exact successor attachment.
-    pub attachment_plan_id: SeriesAttachmentPlanV4Id,
+    pub attachment_plan_id: SeriesAttachmentPlanV5Id,
     /// Exact successor compiler bundle.
-    pub compiler_output_id: CompiledProductSeriesBundleV5Id,
+    pub compiler_output_id: CompiledProductSeriesBundleV6Id,
     /// Exact compiler semantic owner.
     pub compiler_release_id: ContentId,
     /// Exact loader-authenticated central Registry ReleaseV2.
@@ -894,8 +894,8 @@ fn decode_binding(input: [u8; STRUCTURED_MARKET_ROOT_BINDING_BYTES_V1]) -> Resul
         link_account: read_id(&input, &mut cursor)?,
         series_plan_id: SeriesPlanV5Id::from_bytes(read_id(&input, &mut cursor)?),
         market_instance_id: MarketInstanceV2Id::from_bytes(read_id(&input, &mut cursor)?),
-        attachment_plan_id: SeriesAttachmentPlanV4Id::from_bytes(read_id(&input, &mut cursor)?),
-        compiler_output_id: CompiledProductSeriesBundleV5Id::from_bytes(read_id(&input, &mut cursor)?),
+        attachment_plan_id: SeriesAttachmentPlanV5Id::from_bytes(read_id(&input, &mut cursor)?),
+        compiler_output_id: CompiledProductSeriesBundleV6Id::from_bytes(read_id(&input, &mut cursor)?),
         compiler_release_id: ContentId::from_bytes(read_id(&input, &mut cursor)?),
         registry_release_id: ContentId::from_bytes(read_id(&input, &mut cursor)?),
         capability_profile_id: ContentId::from_bytes(read_id(&input, &mut cursor)?),
@@ -975,8 +975,8 @@ mod tests {
             ordinal: 3,
             market_instance_id: MarketInstanceV2Id::from_bytes([4; 32]),
             generation: 5,
-            attachment_plan_id: SeriesAttachmentPlanV4Id::from_bytes([6; 32]),
-            compiler_output_id: CompiledProductSeriesBundleV5Id::from_bytes([7; 32]),
+            attachment_plan_id: SeriesAttachmentPlanV5Id::from_bytes([6; 32]),
+            compiler_output_id: CompiledProductSeriesBundleV6Id::from_bytes([7; 32]),
             compiler_release_id: id(8),
             registry_release_id: id(9),
             capability_profile_id: id(10),

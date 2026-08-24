@@ -57,6 +57,7 @@ def explicit_profile_features(feature: str) -> list[str]:
         {
             "cargo_profile_feature": feature,
             "source_identity": "production-inert",
+            "collateral_release_identity": "production-inert",
         }
     )
 

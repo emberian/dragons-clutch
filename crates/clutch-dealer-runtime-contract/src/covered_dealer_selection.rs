@@ -142,13 +142,14 @@ impl CoveredDealerSettlementRowV1 {
 
 /// Indivisible authenticated row asset transition committed by facility Replay.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CoveredDealerRowAssetTransitionV1 {
+pub struct CoveredDealerRowAssetTransitionV2 {
     action: DealerRuntimeActionV1,
     row: CoveredDealerSettlementRowV1,
+    collateral_value_receipt_id: Id,
     bundle_id: Id,
 }
 
-impl CoveredDealerRowAssetTransitionV1 {
+impl CoveredDealerRowAssetTransitionV2 {
     /// Construct only from the joined private row authority and adapter-
     /// rederived exact account postimages.
     #[allow(clippy::too_many_arguments)]
@@ -164,6 +165,7 @@ impl CoveredDealerRowAssetTransitionV1 {
         general_replay_post_semantic_id: Id,
         pot_pre_content_id: Id,
         pot_post_content_id: Id,
+        collateral_value_receipt_id: Id,
     ) -> Result<Self> {
         let action_byte = match action {
             DealerRuntimeActionV1::Collect => 15u8,
@@ -185,6 +187,7 @@ impl CoveredDealerRowAssetTransitionV1 {
             general_replay_post_semantic_id,
             pot_pre_content_id,
             pot_post_content_id,
+            collateral_value_receipt_id,
         ] {
             identity.validate_live()?;
         }
@@ -204,7 +207,7 @@ impl CoveredDealerRowAssetTransitionV1 {
             _ => return Err(Error::InvalidParameter),
         };
         let mut hasher = Sha256::new();
-        hasher.update(b"dragons-clutch/dealer-covered-row-asset-transition/v1\0");
+        hasher.update(b"dragons-clutch/dealer-covered-row-asset-transition/v2\0");
         hasher.update([action_byte, side_byte]);
         hasher.update(row.row_index.to_le_bytes());
         hasher.update([row.order_index]);
@@ -224,6 +227,7 @@ impl CoveredDealerRowAssetTransitionV1 {
             general_replay_post_semantic_id,
             pot_pre_content_id,
             pot_post_content_id,
+            collateral_value_receipt_id,
         ] {
             hasher.update(identity.bytes());
         }
@@ -236,6 +240,7 @@ impl CoveredDealerRowAssetTransitionV1 {
         Ok(Self {
             action,
             row,
+            collateral_value_receipt_id,
             bundle_id,
         })
     }
@@ -1654,7 +1659,7 @@ mod covered_row_adversarial_tests {
     }
 
     fn transition(action: DealerRuntimeActionV1, row: CoveredDealerSettlementRowV1) -> Id {
-        CoveredDealerRowAssetTransitionV1::new(
+        CoveredDealerRowAssetTransitionV2::new(
             action,
             row,
             id(10),
@@ -1666,6 +1671,7 @@ mod covered_row_adversarial_tests {
             id(16),
             id(17),
             id(18),
+            id(19),
         )
         .unwrap()
         .bundle_id()
@@ -1687,14 +1693,14 @@ mod covered_row_adversarial_tests {
     }
 
     #[test]
-    fn action_side_and_every_postimage_identity_change_the_bundle() {
+    fn action_side_postimages_and_collateral_receipt_change_the_bundle() {
         let buy = row(Side::Buy);
         let collect = transition(DealerRuntimeActionV1::Collect, buy);
         let deliver = transition(DealerRuntimeActionV1::Deliver, buy);
         let sell = transition(DealerRuntimeActionV1::Collect, row(Side::Sell));
         assert_ne!(collect, deliver);
         assert_ne!(collect, sell);
-        let changed = CoveredDealerRowAssetTransitionV1::new(
+        let changed = CoveredDealerRowAssetTransitionV2::new(
             DealerRuntimeActionV1::Collect,
             buy,
             id(10),
@@ -1705,7 +1711,8 @@ mod covered_row_adversarial_tests {
             id(15),
             id(16),
             id(17),
-            id(19),
+            id(18),
+            id(20),
         )
         .unwrap()
         .bundle_id();
@@ -1715,7 +1722,7 @@ mod covered_row_adversarial_tests {
     #[test]
     fn unchanged_reservation_replay_or_pot_postimage_refuses() {
         let buy = row(Side::Buy);
-        assert!(CoveredDealerRowAssetTransitionV1::new(
+        assert!(CoveredDealerRowAssetTransitionV2::new(
             DealerRuntimeActionV1::Collect,
             buy,
             id(10),
@@ -1727,6 +1734,7 @@ mod covered_row_adversarial_tests {
             id(16),
             id(17),
             id(18),
+            id(19),
         )
         .is_err());
     }
