@@ -202,7 +202,6 @@ pub(crate) fn process_advance_failure_market_session_v2(
         cell_account,
         history_account,
         admission,
-        admission,
         quote.receipt(),
         funding,
         true,
