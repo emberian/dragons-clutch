@@ -2898,18 +2898,24 @@ mod adversarial_family_terminal_tests {
     #[test]
     fn physical_terminal_receipt_is_move_only_and_carries_product_preauthorization() {
         let source = include_str!("failure_market_family_terminal_v2.rs");
-        let receipt = source
+        let declaration = source
             .split("pub(crate) struct AuthenticatedFailureMarketPhysicalTerminalV3")
             .nth(1)
-            .and_then(|value| value.split("fn require_failure_close_destination").next())
-            .expect("physical terminal receipt");
-        assert!(!receipt.contains("derive(Clone"));
-        assert!(!receipt.contains("derive(Copy"));
-        assert!(receipt.contains("pub(crate) const fn id(&self)"));
-        assert!(receipt.contains("market_root_before: AuthenticatedMarketLifecycleRootV3"));
-        assert!(receipt.contains("pub(crate) fn into_product_parts("));
-        assert!(receipt.contains("FailureMarketPhysicalTerminalConsumerFactsV3"));
-        assert!(!receipt.contains("ProductPostwrite"));
+            .and_then(|value| value.split("/// Complete Failure-derived tuple").next())
+            .expect("physical terminal declaration");
+        assert!(!declaration.contains("derive(Clone"));
+        assert!(!declaration.contains("derive(Copy"));
+        assert!(declaration.contains("market_root_before: AuthenticatedMarketLifecycleRootV3"));
+
+        let implementation = source
+            .split("impl<'root> AuthenticatedFailureMarketPhysicalTerminalV3<'root>")
+            .nth(1)
+            .and_then(|value| value.split("/// Default-refusing, consuming Product boundary").next())
+            .expect("physical terminal implementation");
+        assert!(implementation.contains("pub(crate) const fn id(&self)"));
+        assert!(implementation.contains("pub(crate) fn into_product_parts("));
+        assert!(implementation.contains("FailureMarketPhysicalTerminalConsumerFactsV3"));
+        assert!(!implementation.contains("ProductPostwrite"));
     }
 
     #[test]
