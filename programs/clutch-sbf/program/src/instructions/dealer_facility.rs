@@ -11607,11 +11607,13 @@ mod current_terminal_cut_adversarial_tests {
         DealerFacilityAction, DEALER_FAMILY_TAG, DEALER_FAMILY_VERSION,
     };
 
-    fn payload(target: u8) -> [u8; 24] {
-        let mut payload = [0u8; 24];
+    fn payload(target: u8) -> [u8; 40] {
+        let mut payload = [0u8; 40];
         payload[0..8].copy_from_slice(&11u64.to_le_bytes());
         payload[8..16].copy_from_slice(&17u64.to_le_bytes());
         payload[16] = target;
+        payload[24..28].copy_from_slice(&19u32.to_le_bytes());
+        payload[32..40].copy_from_slice(&23u64.to_le_bytes());
         payload
     }
 
@@ -11624,6 +11626,10 @@ mod current_terminal_cut_adversarial_tests {
         .unwrap();
         let active = meta_contract_v1(DealerFacilityAction::Retire, active).unwrap();
         assert_eq!(active.len(), RETIRE_ACTIVE_FACILITY_CREDIT_ACCOUNT_COUNT);
+        assert!(active[0].writable);
+        assert_eq!(active[15].role, DealerMetaRoleV1::LivenessReceipt);
+        assert_eq!(active[15].owner, DealerMetaOwnerV1::System);
+        assert!(active[15].writable);
         assert_eq!(active[24].role, DealerMetaRoleV1::SeriesObligation);
         assert!(active[24].writable);
         assert_eq!(active[25].role, DealerMetaRoleV1::ProductMarketRoot);
@@ -11673,6 +11679,33 @@ mod current_terminal_cut_adversarial_tests {
         let mut padding = payload(DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1);
         padding[18] = 1;
         assert!(DealerRuntimePayloadV1::decode(DealerFacilityAction::Retire, &padding).is_err());
+
+        let mut missing_liveness_ordinal = payload(DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1);
+        missing_liveness_ordinal[24..28].copy_from_slice(&0u32.to_le_bytes());
+        assert!(DealerRuntimePayloadV1::decode(
+            DealerFacilityAction::Retire,
+            &missing_liveness_ordinal,
+        )
+        .is_err());
+
+        let mut liveness_padding = payload(DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1);
+        liveness_padding[28] = 1;
+        assert!(DealerRuntimePayloadV1::decode(
+            DealerFacilityAction::Retire,
+            &liveness_padding,
+        )
+        .is_err());
+
+        let mut legacy = [0u8; 24];
+        legacy[0..8].copy_from_slice(&11u64.to_le_bytes());
+        legacy[8..16].copy_from_slice(&17u64.to_le_bytes());
+        legacy[16] = crate::instructions::dealer_runtime::DEALER_RETIRE_POSITION_REPLAY_V1;
+        assert!(DealerRuntimePayloadV1::decode(DealerFacilityAction::Retire, &legacy).is_ok());
+        assert!(DealerRuntimePayloadV1::decode(
+            DealerFacilityAction::Retire,
+            &legacy[..23],
+        )
+        .is_err());
     }
 
     #[test]

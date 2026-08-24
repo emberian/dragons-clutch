@@ -739,7 +739,20 @@ impl DealerRuntimePayloadV1 {
             DealerFacilityAction::QueueExit => 32,
             DealerFacilityAction::Claim => 32,
             DealerFacilityAction::Resolve => 168,
-            DealerFacilityAction::Retire => 8,
+            DealerFacilityAction::Retire => {
+                if input.len() < DEALER_RUNTIME_PAYLOAD_PREFIX_BYTES_V1 + 2 {
+                    return Err(DealerRuntimeContractErrorV1::Truncated);
+                }
+                if matches!(
+                    input[16],
+                    DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1
+                        | DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1
+                ) {
+                    24
+                } else {
+                    8
+                }
+            }
             _ => 0,
         };
         let expected = DEALER_RUNTIME_PAYLOAD_PREFIX_BYTES_V1 + suffix_len;
@@ -1004,6 +1017,20 @@ impl DealerRuntimePayloadV1 {
                     || (!page_target && value.page_ordinal != 0)
                 {
                     return Err(DealerRuntimeContractErrorV1::InvalidField);
+                }
+                if matches!(
+                    value.retire_target,
+                    DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1
+                        | DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1
+                ) {
+                    value.liveness_call_ordinal = read_u32(input, 24);
+                    if input[28..32].iter().any(|byte| *byte != 0) {
+                        return Err(DealerRuntimeContractErrorV1::NonCanonicalPadding);
+                    }
+                    value.keeper_payment_lamports = read_u64(input, 32);
+                    if value.liveness_call_ordinal == 0 {
+                        return Err(DealerRuntimeContractErrorV1::InvalidField);
+                    }
                 }
             }
             _ => {}
@@ -1878,7 +1905,7 @@ const RETIRE_POSITION_REPLAY: &[DealerMetaSpecV1] = &[
 /// and Realm-selected Position retirement graph. Fractional exclusively owns
 /// the final four value roles and returns a non-Copy receipt to this outer.
 const RETIRE_ACTIVE_FACILITY_CREDIT: &[DealerMetaSpecV1] = &[
-    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, false),
+    meta(DealerMetaRoleV1::Actor, DealerMetaOwnerV1::Signer, true, true),
     meta(DealerMetaRoleV1::Policy, DealerMetaOwnerV1::SelfProgram, false, false),
     meta(DealerMetaRoleV1::State, DealerMetaOwnerV1::SelfProgram, false, true),
     meta(DealerMetaRoleV1::FacilityPosition, DealerMetaOwnerV1::PositionRuntime, false, true),
@@ -1893,7 +1920,7 @@ const RETIRE_ACTIVE_FACILITY_CREDIT: &[DealerMetaSpecV1] = &[
     meta(DealerMetaRoleV1::LivenessResolution, DealerMetaOwnerV1::LivenessRuntime, false, false),
     meta(DealerMetaRoleV1::LivenessRetirement, DealerMetaOwnerV1::LivenessRuntime, false, true),
     meta(DealerMetaRoleV1::LivenessRecovery, DealerMetaOwnerV1::LivenessRuntime, false, false),
-    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::LivenessRuntime, false, true),
+    meta(DealerMetaRoleV1::LivenessReceipt, DealerMetaOwnerV1::System, false, true),
     meta(DealerMetaRoleV1::LivenessPayer, DealerMetaOwnerV1::Signer, false, true),
     meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
     meta(DealerMetaRoleV1::RentPayer, DealerMetaOwnerV1::Signer, false, true),
