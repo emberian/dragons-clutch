@@ -318,11 +318,6 @@ pub(crate) struct AuthenticatedProductMarketFounderFoundationPreauthorizationV1 
     recovery_policy_id: ContentId,
     price_measure_policy_id: ContentId,
     market_genesis_profile_id: ContentId,
-    failure_liveness_policy_account: Pubkey,
-    failure_liveness_policy_id: ContentId,
-    failure_recovery_quote_schedule_id: ContentId,
-    candidate_lifecycle_policy_id: ContentId,
-    candidate_liveness_policy_id: ContentId,
     liveness_realm_id: ContentId,
     liveness_lifecycle_id: ContentId,
     foundation_schedule_id: MarketFoundationScheduleV2Id,
@@ -366,21 +361,6 @@ impl AuthenticatedProductMarketFounderFoundationPreauthorizationV1 {
     }
     pub(crate) const fn market_genesis_profile_id(&self) -> ContentId {
         self.market_genesis_profile_id
-    }
-    pub(crate) const fn failure_liveness_policy_id(&self) -> ContentId {
-        self.failure_liveness_policy_id
-    }
-    pub(crate) const fn failure_liveness_policy_account(&self) -> Pubkey {
-        self.failure_liveness_policy_account
-    }
-    pub(crate) const fn failure_recovery_quote_schedule_id(&self) -> ContentId {
-        self.failure_recovery_quote_schedule_id
-    }
-    pub(crate) const fn candidate_lifecycle_policy_id(&self) -> ContentId {
-        self.candidate_lifecycle_policy_id
-    }
-    pub(crate) const fn candidate_liveness_policy_id(&self) -> ContentId {
-        self.candidate_liveness_policy_id
     }
     pub(crate) const fn liveness_realm_id(&self) -> ContentId { self.liveness_realm_id }
     pub(crate) const fn liveness_lifecycle_id(&self) -> ContentId {
@@ -555,7 +535,6 @@ pub(crate) trait AuthenticatedProductMarketFounderCreationAuthorityV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedProductMarketFounderCreationV1 {
     id: ContentId,
-    product_preauthorization_id: ContentId,
     facts: ProductMarketFounderCreationFactsV1,
     root_semantic_id: ContentId,
     root_data_id: ContentId,
@@ -569,10 +548,6 @@ pub(crate) struct AuthenticatedProductMarketFounderCreationV1 {
 impl AuthenticatedProductMarketFounderCreationV1 {
     pub(crate) const fn id(self) -> ContentId {
         self.id
-    }
-
-    pub(crate) const fn product_preauthorization_id(self) -> ContentId {
-        self.product_preauthorization_id
     }
 
     pub(crate) const fn facts(self) -> ProductMarketFounderCreationFactsV1 {
@@ -2248,8 +2223,6 @@ pub(crate) fn authenticate_product_market_founder_foundation_preauthorization_v1
             &bundle.evidence_only_recovery_policy_id.bytes(),
             &bundle.price_measure_policy_id.bytes(),
             &bundle.market_genesis_profile_id.bytes(),
-            &artifacts.candidate_lifecycle_policy_id().bytes(),
-            &artifacts.candidate_liveness_policy_id().bytes(),
             &bundle.source_release_manifest_id.bytes(),
             &bundle.source_plane_contract_id.bytes(),
             &bundle.source_spec_id.bytes(),
@@ -2277,7 +2250,6 @@ pub(crate) fn authenticate_product_market_founder_foundation_preauthorization_v1
             &graph_id.bytes(),
             &[quote.foundation.outcome_count],
             &recovery_facts.liveness_realm_id.bytes(),
-            recovery_facts.liveness_policy_account.as_ref(),
             &recovery_facts.liveness_policy_id.bytes(),
             &recovery_facts.quote_schedule_id.bytes(),
             &recovery_facts.liveness_lifecycle_id.bytes(),
@@ -2310,11 +2282,6 @@ pub(crate) fn authenticate_product_market_founder_foundation_preauthorization_v1
         recovery_policy_id: bundle.evidence_only_recovery_policy_id.content_id(),
         price_measure_policy_id: bundle.price_measure_policy_id.content_id(),
         market_genesis_profile_id: bundle.market_genesis_profile_id.content_id(),
-        failure_liveness_policy_account: recovery_facts.liveness_policy_account,
-        failure_liveness_policy_id: recovery_facts.liveness_policy_id,
-        failure_recovery_quote_schedule_id: recovery_facts.quote_schedule_id,
-        candidate_lifecycle_policy_id: artifacts.candidate_lifecycle_policy_id(),
-        candidate_liveness_policy_id: artifacts.candidate_liveness_policy_id(),
         liveness_realm_id: recovery_facts.liveness_realm_id,
         liveness_lifecycle_id: recovery_facts.liveness_lifecycle_id,
         foundation_schedule_id: schedule_id,
@@ -3113,7 +3080,6 @@ pub(crate) fn create_product_market_founder_v1<
         solana_sha256_hasher::hashv(&[
             PRODUCT_MARKET_FOUNDER_CREATION_RECEIPT_DOMAIN_V1,
             program_id.as_ref(),
-            &preauthorization.id().bytes(),
             &foundation_init.id.bytes(),
             &recovery.id.bytes(),
             registry_account.key.as_ref(),
@@ -3148,7 +3114,6 @@ pub(crate) fn create_product_market_founder_v1<
     require(!id.is_zero(), ClutchError::MismatchedState)?;
     Ok(AuthenticatedProductMarketFounderCreationV1 {
         id,
-        product_preauthorization_id: preauthorization.id(),
         facts,
         root_semantic_id,
         root_data_id,
@@ -3400,11 +3365,6 @@ mod tests {
             recovery_policy_id: ContentId::from_bytes([21; 32]),
             price_measure_policy_id: ContentId::from_bytes([22; 32]),
             market_genesis_profile_id: ContentId::from_bytes([23; 32]),
-            failure_liveness_policy_account: Pubkey::new_from_array([50; 32]),
-            failure_liveness_policy_id: ContentId::from_bytes([26; 32]),
-            failure_recovery_quote_schedule_id: ContentId::from_bytes([51; 32]),
-            candidate_lifecycle_policy_id: ContentId::from_bytes([24; 32]),
-            candidate_liveness_policy_id: ContentId::from_bytes([25; 32]),
             liveness_realm_id: ContentId::from_bytes([27; 32]),
             liveness_lifecycle_id: ContentId::from_bytes([28; 32]),
             foundation_schedule_id: MarketFoundationScheduleV2Id::from_bytes([33; 32]),

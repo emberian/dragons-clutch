@@ -14,11 +14,6 @@ use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_creatable, require_system_program,
     transfer_data, RentParameters, SYSTEM_PROGRAM_ID,
 };
-use crate::instructions::product_market::authenticate_market_lifecycle_root_v1;
-use crate::instructions::product_market_foundation_init::{
-    AuthenticatedProductMarketFounderCreationV1,
-    AuthenticatedProductMarketFounderFoundationPreauthorizationV1,
-};
 use crate::seeds;
 use clutch_liveness::runtime_v1::{
     PresentFundingSourceV1, PresentFundingV1, RuntimeCompartmentAdmissionV1,
@@ -27,23 +22,27 @@ use clutch_liveness::runtime_v1::{
     RUNTIME_LIVENESS_ACCOUNT_BYTES_V1, RUNTIME_LIVENESS_POLICY_BYTES_V1,
 };
 use clutch_liveness::Id as LivenessId;
-use clutch_direct_market_runtime::{DirectFamilyTerminalPlanV1, DirectReplayPhaseV1};
 use clutch_product_series::{
     ContentId, DirectGlobalLivenessCapitalizationV2, DirectGlobalLivenessPhaseV2,
-    DirectGlobalLivenessV2, DirectWorkQuoteV1, FixedCodec, MarketFamilyV1,
-    MarketInstanceV2Id, MarketLifecyclePhaseV1, ProductDirectGlobalLivenessAuthorityV2,
+    DirectGlobalLivenessV2, DirectWorkQuoteV1, FixedCodec,
+    MarketInstanceV2Id, ProductDirectGlobalLivenessAuthorityV2,
     DIRECT_GLOBAL_LIVENESS_ALLOCATION_CALL_WIDTH_V2,
     DIRECT_GLOBAL_LIVENESS_BINDING_DOMAIN_V2,
     DIRECT_GLOBAL_LIVENESS_CAPITALIZATION_DOMAIN_V2,
 };
 use clutch_solana_layout::product_series::{
-    MarketLifecycleRootAccountV1, ProductDirectGlobalLivenessAccountV2,
-    PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V2,
+    ProductDirectGlobalLivenessAccountV2, PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V2,
 };
 use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
+
+use super::product_market_foundation_current::
+    AuthenticatedProductMarketFounderFoundationPreauthorizationV3;
+use super::product_series_current::{
+    AuthenticatedMarketLifecycleRootV2, AuthenticatedProductSeriesActivationCompletionV4,
+};
 
 const PRODUCT_DIRECT_GLOBAL_LIFECYCLE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-direct-global-lifecycle/v2";
@@ -53,8 +52,6 @@ const PRODUCT_DIRECT_ACCOUNT_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-direct-global-account-authentication/v2";
 const PRODUCT_DIRECT_FOUNDER_ACTIVATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/product-direct-global-founder-activation/v2";
-const PRODUCT_DIRECT_CANDIDATE_RETIREMENT_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/sbf/product-direct-global-candidate-retirement/v2";
 
 /// One small row result retained while seven accounts are created serially.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -84,6 +81,7 @@ struct AuthenticatedRuntimeLivenessPolicyFactsV1 {
 pub(crate) struct AuthenticatedProductDirectGlobalLivenessCapitalizationV2 {
     state_semantic_id: ContentId,
     global_bundle_binding_id: ContentId,
+    global_capitalization_receipt_id: ContentId,
     work_quote: DirectWorkQuoteV1,
     account_data_id: ContentId,
     account_authentication_id: ContentId,
@@ -106,6 +104,9 @@ impl AuthenticatedProductDirectGlobalLivenessCapitalizationV2 {
     }
     pub(crate) const fn global_bundle_binding_id(&self) -> ContentId {
         self.global_bundle_binding_id
+    }
+    pub(crate) const fn global_capitalization_receipt_id(&self) -> ContentId {
+        self.global_capitalization_receipt_id
     }
     pub(crate) const fn work_quote(&self) -> DirectWorkQuoteV1 {
         self.work_quote
@@ -200,38 +201,6 @@ impl AuthenticatedProductDirectGlobalLivenessActivationV2 {
     }
 }
 
-/// Private Product postwrite proving one final sealed Direct plan retired the
-/// matching current allocation and no provisional action-13 plan entered the
-/// Product writer.
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedProductDirectCandidateRetirementV2 {
-    id: ContentId,
-    state: DirectGlobalLivenessV2,
-    account_data_id: ContentId,
-    account_authentication_id: ContentId,
-    direct_terminal_receipt_id: ContentId,
-    family_terminal_sequence: u32,
-    product_family_poststate_id: ContentId,
-}
-
-impl AuthenticatedProductDirectCandidateRetirementV2 {
-    pub(crate) const fn id(&self) -> ContentId { self.id }
-    pub(crate) const fn state(&self) -> &DirectGlobalLivenessV2 { &self.state }
-    pub(crate) const fn account_data_id(&self) -> ContentId { self.account_data_id }
-    pub(crate) const fn account_authentication_id(&self) -> ContentId {
-        self.account_authentication_id
-    }
-    pub(crate) const fn direct_terminal_receipt_id(&self) -> ContentId {
-        self.direct_terminal_receipt_id
-    }
-    pub(crate) const fn family_terminal_sequence(&self) -> u32 {
-        self.family_terminal_sequence
-    }
-    pub(crate) const fn product_family_poststate_id(&self) -> ContentId {
-        self.product_family_poststate_id
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 struct ExactCapitalizationAuthorityV2;
 
@@ -270,32 +239,6 @@ impl ProductDirectGlobalLivenessAuthorityV2 for ExactFounderActivationAuthorityV
     }
 }
 
-struct ExactDirectCandidateRetirementAuthorityV2<'state> {
-    expected_state: &'state DirectGlobalLivenessV2,
-    expected_terminal_receipt_id: ContentId,
-    expected_family_terminal_sequence: u32,
-}
-
-impl ProductDirectGlobalLivenessAuthorityV2
-    for ExactDirectCandidateRetirementAuthorityV2<'_>
-{
-    fn authenticate_candidate_retirement(
-        &self,
-        state: &DirectGlobalLivenessV2,
-        direct_terminal_receipt_id: ContentId,
-        family_terminal_sequence: u32,
-    ) -> clutch_product_series::Result<()> {
-        if state == self.expected_state
-            && direct_terminal_receipt_id == self.expected_terminal_receipt_id
-            && family_terminal_sequence == self.expected_family_terminal_sequence
-        {
-            Ok(())
-        } else {
-            Err(clutch_product_series::Error::UnauthenticatedAuthority)
-        }
-    }
-}
-
 fn require_direct_work_quote_authority_v1(
     work_quote: DirectWorkQuoteV1,
     candidate_lifecycle_policy_id: ContentId,
@@ -321,10 +264,10 @@ fn require_direct_work_quote_authority_v1(
 /// and no route calls it except the eventual atomic Product founder outer.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-fn capitalize_product_direct_global_liveness_v2<'a>(
+pub(super) fn capitalize_product_direct_global_liveness_v2<'a>(
     program_id: &Pubkey,
-    founder: &AuthenticatedProductMarketFounderFoundationPreauthorizationV1,
-    work_quote: DirectWorkQuoteV1,
+    founder: &AuthenticatedProductMarketFounderFoundationPreauthorizationV3,
+    work_quote_bytes: &[u8],
     policy_account: &AccountInfo<'a>,
     manifest_account: &AccountInfo<'a>,
     payer: &AccountInfo<'a>,
@@ -351,8 +294,7 @@ fn capitalize_product_direct_global_liveness_v2<'a>(
         rent_sysvar,
     )?;
     let policy = authenticate_policy_v1(program_id, founder, policy_account, &rent)?;
-    work_quote
-        .validate()
+    let work_quote = DirectWorkQuoteV1::decode(work_quote_bytes)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let founder_preauthorization_id = founder.id();
 
@@ -559,6 +501,7 @@ fn capitalize_product_direct_global_liveness_v2<'a>(
     Ok(AuthenticatedProductDirectGlobalLivenessCapitalizationV2 {
         state_semantic_id,
         global_bundle_binding_id,
+        global_capitalization_receipt_id,
         work_quote,
         account_data_id: reopened.data_id,
         account_authentication_id: reopened.authentication_id,
@@ -655,33 +598,51 @@ fn authenticate_expected_product_direct_global_liveness_postwrite_v2(
     })
 }
 
-/// Consume the capitalization postwrite only after hostile-reopening the exact
-/// Product founder root and its immutable binding. This is the sole raw
-/// Founding-to-Active writer and remains crate-private for composition into the
-/// one Product founder instruction.
+/// Final current Founding-to-Active write. The caller must first consume the
+/// unique creation authority through Product's concrete RootV2/LinkV2/
+/// replayV2/FundingV4 tail and pass only that tail's move-only receipt.
 #[inline(never)]
-fn activate_product_direct_global_liveness_from_founder_v2<'state>(
+pub(super) fn activate_product_direct_global_liveness_from_current_founder_v2(
     program_id: &Pubkey,
-    capitalization: AuthenticatedProductDirectGlobalLivenessCapitalizationV2,
-    founder_creation: AuthenticatedProductMarketFounderCreationV1,
+    completion: AuthenticatedProductSeriesActivationCompletionV4,
     manifest_account: &AccountInfo<'_>,
-    root_account: &AccountInfo<'_>,
-    root_output: &'state mut MarketLifecycleRootAccountV1,
+    root: AuthenticatedMarketLifecycleRootV2<'_>,
 ) -> Outcome<AuthenticatedProductDirectGlobalLivenessActivationV2> {
+    let (
+        founder_creation_receipt_id,
+        expected_root_account,
+        expected_root_binding_id,
+        expected_root_authentication_id,
+        expected_root_semantic_id,
+        expected_preauthorization_id,
+        capitalization,
+    ) = completion.into_direct_activation_parts();
+    let root_binding_id = root.state().binding_ref().id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_semantic_id = root.state().semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_authentication_id = root.authentication_id();
     require(
-        manifest_account.key != root_account.key,
+        root.is_writable()
+            && root.state().phase() == clutch_product_series::MarketLifecyclePhaseV2::Active
+            && root.account() == expected_root_account
+            && root_binding_id == expected_root_binding_id
+            && root.authentication_id() == expected_root_authentication_id
+            && root_semantic_id == expected_root_semantic_id
+            && root.state().binding().direct_global_liveness_binding_id
+                == capitalization.global_bundle_binding_id(),
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        root.account() == expected_root_account
+            && manifest_account.key != &root.account(),
         ClutchError::AccountAlias,
     )?;
     let current = authenticate_product_direct_global_liveness_v2(
-        program_id,
-        manifest_account,
-        true,
-    )?;
-    let expected_manifest_balance = capitalization.expected_manifest_balance();
-    let current_semantic_id = current
-        .state()
-        .semantic_id()
+        program_id, manifest_account, true)?;
+    let current_semantic_id = current.state().semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let expected_manifest_balance = capitalization.expected_manifest_balance();
     require(
         current.state().phase() == DirectGlobalLivenessPhaseV2::Founding
             && current_semantic_id == capitalization.state_semantic_id()
@@ -689,246 +650,54 @@ fn activate_product_direct_global_liveness_from_founder_v2<'state>(
             && current.work_quote() == capitalization.work_quote()
             && current.data_id() == capitalization.account_data_id()
             && current.authentication_id() == capitalization.account_authentication_id()
-            && current.observed_lamports() == expected_manifest_balance,
-        ClutchError::MismatchedState,
-    )?;
-
-    let facts = founder_creation.facts();
-    require(
-        facts.root_account == *root_account.key
-            && founder_creation.product_preauthorization_id()
-                == current.state().founder_preauthorization_id()
+            && current.observed_lamports() == expected_manifest_balance
+            && current.state().founder_preauthorization_id()
+                == expected_preauthorization_id
             && current.state().lifecycle_root_account().bytes()
-                == root_account.key.to_bytes(),
+                == root.account().to_bytes()
+            && current.activated_market_binding_id() == ContentId::ZERO,
         ClutchError::MismatchedState,
     )?;
-    let root = authenticate_market_lifecycle_root_v1(
-        program_id,
-        root_account,
-        current.state().market_instance_id(),
-        current.state().generation(),
-        true,
-        root_output,
-    )?;
-    let root_semantic_id = root
-        .state()
-        .semantic_id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let root_binding_id = root
-        .state()
-        .binding()
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    require(
-        root.state().phase() == MarketLifecyclePhaseV1::Founding
-            && root_semantic_id == founder_creation.root_semantic_id()
-            && root.authentication_id() == founder_creation.root_authentication_id()
-            && root_binding_id != current.state().founder_preauthorization_id(),
-        ClutchError::MismatchedState,
-    )?;
-
-    let founder_creation_receipt_id = founder_creation.id();
     let capitalization_authentication_id = capitalization.account_authentication_id();
     let stored_bump = current.stored_bump;
-    let state = current.into_state();
-    let next = state
-        .activate_founder(
-            &ExactFounderActivationAuthorityV2 {
-                expected_state_semantic_id: current_semantic_id,
-                expected_founder_receipt_id: founder_creation_receipt_id,
-                expected_market_binding_id: root_binding_id,
-            },
-            founder_creation_receipt_id,
-            root_binding_id,
-        )
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let next = current.into_state().activate_founder(
+        &ExactFounderActivationAuthorityV2 {
+            expected_state_semantic_id: current_semantic_id,
+            expected_founder_receipt_id: founder_creation_receipt_id,
+            expected_market_binding_id: root_binding_id,
+        },
+        founder_creation_receipt_id,
+        root_binding_id,
+    ).map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     write_manifest_state_v2(
-        manifest_account,
-        &next,
-        next.manifest_rent_principal_lamports(),
-        stored_bump,
-    )?;
+        manifest_account, &next, next.manifest_rent_principal_lamports(), stored_bump)?;
     drop(capitalization);
-    require(
-        manifest_account.lamports() == expected_manifest_balance,
-        ClutchError::MismatchedState,
-    )?;
-    let next_semantic_id = next
-        .semantic_id()
+    require(manifest_account.lamports() == expected_manifest_balance,
+        ClutchError::MismatchedState)?;
+    let next_semantic_id = next.semantic_id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let reopened = authenticate_expected_product_direct_global_liveness_postwrite_v2(
-        program_id,
-        manifest_account,
-        next_semantic_id,
-        expected_manifest_balance,
-    )?;
-    let id = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            PRODUCT_DIRECT_FOUNDER_ACTIVATION_DOMAIN_V2,
-            program_id.as_ref(),
-            manifest_account.key.as_ref(),
-            &capitalization_authentication_id.bytes(),
-            &founder_creation_receipt_id.bytes(),
-            &root_semantic_id.bytes(),
-            &root.authentication_id().bytes(),
-            &reopened.data_id.bytes(),
-            &reopened.authentication_id.bytes(),
-        ])
-        .to_bytes(),
-    );
-    id.validate()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        program_id, manifest_account, next_semantic_id, expected_manifest_balance)?;
+    let id = ContentId::from_bytes(solana_sha256_hasher::hashv(&[
+        PRODUCT_DIRECT_FOUNDER_ACTIVATION_DOMAIN_V2,
+        program_id.as_ref(), manifest_account.key.as_ref(),
+        &capitalization_authentication_id.bytes(),
+        &founder_creation_receipt_id.bytes(), &root_semantic_id.bytes(),
+        &root_authentication_id.bytes(), &root_binding_id.bytes(),
+        &reopened.data_id.bytes(), &reopened.authentication_id.bytes(),
+    ]).to_bytes());
+    id.validate().map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     Ok(AuthenticatedProductDirectGlobalLivenessActivationV2 {
-        id,
-        state: next,
-        account_data_id: reopened.data_id,
+        id, state: next, account_data_id: reopened.data_id,
         account_authentication_id: reopened.authentication_id,
-        founder_creation_receipt_id,
-        root_semantic_id,
-        root_authentication_id: root.authentication_id(),
-    })
-}
-
-/// Retire one current Product allocation only from Direct's final sealed
-/// eighth-call action-13 plan.  The Direct root successor will replace the
-/// temporary V1 plan parameter with its V2 wrapper; the Product writer already
-/// consumes only the sealed terminal facts and current `0xba/v2` state.
-#[inline(never)]
-pub(crate) fn retire_product_direct_candidate_liveness_v2(
-    program_id: &Pubkey,
-    product_root: AuthenticatedMarketLifecycleRootV1<'_>,
-    plan: &DirectFamilyTerminalPlanV1,
-    family_terminal_sequence: u32,
-    manifest_account: &AccountInfo<'_>,
-) -> Outcome<AuthenticatedProductDirectCandidateRetirementV2> {
-    require(
-        product_root.is_writable()
-            && product_root.account() != *manifest_account.key
-            && matches!(
-                product_root.state().phase(),
-                MarketLifecyclePhaseV1::Active | MarketLifecyclePhaseV1::Retiring
-            )
-            && plan.replay_post.phase() == DirectReplayPhaseV1::Terminal
-            && !plan.replay_post.candidate_liveness_pending()
-            && plan.replay_post.candidate_liveness_completed_calls()
-                == DIRECT_GLOBAL_LIVENESS_ALLOCATION_CALL_WIDTH_V2
-            && plan.replay_post.candidate_liveness_last_receipt_id() != [0; 32]
-            && plan.replay_post.candidate_liveness_batch_receipt_id() != [0; 32]
-            && plan.replay_post.family_terminal_receipt_id()
-                == plan.terminal_receipt_id.bytes(),
-        ClutchError::MismatchedState,
-    )?;
-    let current = authenticate_product_direct_global_liveness_v2(
-        program_id,
-        manifest_account,
-        true,
-    )?;
-    let binding = product_root.state().binding();
-    let binding_id = binding
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let direct_family = product_root
-        .state()
-        .product_families()
-        .family(MarketFamilyV1::Direct);
-    let counts = direct_family.counts();
-    require(
-        current.state().phase() == DirectGlobalLivenessPhaseV2::Active
-            && current.state().market_instance_id() == binding.market_instance_id
-            && current.state().generation() == binding.generation
-            && current.state().lifecycle_root_account().bytes()
-                == product_root.account().to_bytes()
-            && current.state().activated_market_binding_id() == binding_id
-            && current.state().realm_id() == binding.realm_id
-            && current.state().neutral_lamport_sink()
-                == product_root.state().capital().neutral_lamport_sink
-            && current.state().admitted_allocations() == counts.admitted
-            && current.state().live_allocations() == counts.live
-            && current.state().retired_allocations() == counts.terminal
-            && family_terminal_sequence == counts.terminal,
-        ClutchError::MismatchedState,
-    )?;
-
-    let product_post = product_root
-        .state()
-        .terminalize_product_family_child(
-            &plan.product_authority,
-            MarketFamilyV1::Direct,
-            family_terminal_sequence,
-            plan.terminal_receipt_id,
-        )
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let product_family_poststate_id = product_post
-        .product_families()
-        .semantic_id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-        .content_id();
-    let next = current
-        .state()
-        .retire_candidate(
-            &ExactDirectCandidateRetirementAuthorityV2 {
-                expected_state: current.state(),
-                expected_terminal_receipt_id: plan.terminal_receipt_id,
-                expected_family_terminal_sequence: family_terminal_sequence,
-            },
-            plan.terminal_receipt_id,
-            family_terminal_sequence,
-        )
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let observed_lamports = current.observed_lamports();
-    let stored_bump = current.stored_bump;
-    drop(current);
-    write_manifest_state_v2(
-        manifest_account,
-        &next,
-        next.manifest_rent_principal_lamports(),
-        stored_bump,
-    )?;
-    require(
-        manifest_account.lamports() == observed_lamports,
-        ClutchError::MismatchedState,
-    )?;
-    let reopened = authenticate_product_direct_global_liveness_v2(
-        program_id,
-        manifest_account,
-        true,
-    )?;
-    require(
-        reopened.state() == &next && reopened.observed_lamports() == observed_lamports,
-        ClutchError::MismatchedState,
-    )?;
-    let id = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            PRODUCT_DIRECT_CANDIDATE_RETIREMENT_DOMAIN_V2,
-            program_id.as_ref(),
-            manifest_account.key.as_ref(),
-            product_root.account().as_ref(),
-            &product_root.authentication_id().bytes(),
-            &plan.terminal_receipt_id.bytes(),
-            &family_terminal_sequence.to_le_bytes(),
-            &product_family_poststate_id.bytes(),
-            &reopened.data_id().bytes(),
-            &reopened.authentication_id().bytes(),
-        ])
-        .to_bytes(),
-    );
-    id.validate()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    Ok(AuthenticatedProductDirectCandidateRetirementV2 {
-        id,
-        state: next,
-        account_data_id: reopened.data_id(),
-        account_authentication_id: reopened.authentication_id(),
-        direct_terminal_receipt_id: plan.terminal_receipt_id,
-        family_terminal_sequence,
-        product_family_poststate_id,
+        founder_creation_receipt_id, root_semantic_id, root_authentication_id,
     })
 }
 
 #[inline(never)]
 fn authenticate_policy_v1(
     program_id: &Pubkey,
-    founder: &AuthenticatedProductMarketFounderFoundationPreauthorizationV1,
+    founder: &AuthenticatedProductMarketFounderFoundationPreauthorizationV3,
     policy_account: &AccountInfo<'_>,
     rent: &RentParameters,
 ) -> Outcome<AuthenticatedRuntimeLivenessPolicyFactsV1> {
@@ -1128,7 +897,7 @@ fn capitalize_row_v1<'a>(
 #[allow(clippy::too_many_arguments)]
 fn authenticate_fixed_roles_v1(
     program_id: &Pubkey,
-    founder: &AuthenticatedProductMarketFounderFoundationPreauthorizationV1,
+    founder: &AuthenticatedProductMarketFounderFoundationPreauthorizationV3,
     policy_account: &AccountInfo<'_>,
     manifest_account: &AccountInfo<'_>,
     payer: &AccountInfo<'_>,

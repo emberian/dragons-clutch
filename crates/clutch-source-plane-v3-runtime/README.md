@@ -1,7 +1,13 @@
 # SourcePlane V3 runtime account contract
 
-Status: **pure runtime contract with SourceSeries actions 1 through 4 wired to
-the central SBF dispatcher; not a deployment claim**.
+Status: **pure runtime contract and capability-disabled SourceSeries successor;
+not a deployment claim**.
+
+The checked chain-attached successor currently admits none of SourceSeries
+`77/v2` actions 1 through 12. The handlers and account codecs are reviewable,
+but the all-or-none gate stays empty until release/request publication, prepaid
+liveness and child-rent custody, ingestion, evaluation, handoff, ResolutionV5,
+terminal close, and any successor-generation funding are one reachable route.
 
 This crate replaces the old opaque/default-deny SourcePlane V3 seams with
 fixed-memory contracts that a small Solana adapter can execute. It does not
@@ -73,10 +79,12 @@ digest derivable from supplied bytes is recomputed here.
   StatisticKey, SourcePlane, SourceSpec, repair generation, and created versus
   exact-existing disposition.
 
-The failure handoff has only two source-owned facts: authenticated absence at
-primary maturity, or an exact stable refused `StatisticResultV3`. Neither path
-chooses a failure payout. Wrong source identities or repair generations are
-binding refusals, not failure evidence.
+SourceSeries `77/v2` action 10 owns only the exact successful-evaluation handoff
+consumed by the private Product/Failure ResolutionV5 join. Draft absence and
+refused-result action-10 discriminants are rejected by the hostile V2 codec;
+introducing either semantic requires a new wire version and an exact Failure
+owner. Wrong source identities or repair generations are binding refusals, not
+failure evidence.
 
 Result absence is not a boolean. It requires the predictable result PDA to be
 an unallocated zero-balance System account and its authenticated durable
@@ -99,21 +107,26 @@ addresses:
 - a fully prefunded account has zero principal and no invented payer authority;
 - close returns principal once and routes the entire remainder to the sink.
 
-Mandatory work remains in the separate liveness Source compartment. A
+Mandatory work is intended to remain in the separate liveness Source
+compartment. A
 `SourceWorkScheduleBindingV1` owns the exact schedule digest, aggregate
 dot-product work capital, maximum calls, largest single-call ceiling, rent, and
 four terminal-path bounds. Each `SourceWorkAuthorizationV1` binds a concrete
 family receipt account, owner program, lifecycle, semantic owner, generation,
 ordinal, and authenticated per-call ceiling for direct projection into the
-liveness runtime.
+liveness runtime. The present SBF creation path still requires the immutable
+schedule payer to sign for child/policy/receipt rent and has no producer for the
+policy or compartment. It is therefore not permissionless or a complete
+funding route and is not admitted by a checked profile.
 
 ## Remaining adapter integration
 
-Actions 5 through 12 still need their exact SBF state, CPI, funding, and
-operator joins before their independently disabled capability tuples may be
-enabled. Actions 1 through 4 now have exact account-meta tables, release-bound
-runtime attestations, and atomic state/work/liveness handling, but remain code
-rather than evidence that SourcePlane V3 is live on any cluster.
+All actions 1 through 12 remain disabled together. Their state/CPI handlers do
+not close the funding gap: every bounded child and terminal rent source must be
+pre-capitalized (or funded by a separately authenticated permissionless rent
+custody), refund destinations must not need to sign, and a reopen request must
+carry a complete successor schedule/liveness funding authority rather than
+reviving state after its only compartment has closed.
 
 No test, build, campaign, benchmark, or deployment claim is recorded for this
 implementation slice.

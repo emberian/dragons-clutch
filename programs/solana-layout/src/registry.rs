@@ -244,21 +244,27 @@ pub const DEALER_POLICY_ACCOUNT_BYTES: usize =
 pub const SOURCE_SERIES_REGISTRY_ACCOUNT_TAG: u8 = 0x7f;
 /// Source/Series registry account version.
 pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V1: u8 = 1;
-/// Current Source/Series registry account version retaining BundleV5.
+/// Historical Source/Series registry account version retaining BundleV5.
 pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2: u8 = 2;
+/// Current Source/Series registry account version retaining BundleV6.
+pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V3: u8 = 3;
 /// Historical decoder coordinate retained for untrusted index clients only.
-/// Runtime authority must use [`SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2`].
-#[deprecated(note = "V1 is withdrawn; use SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2")]
+/// Runtime authority must use [`SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V3`].
+#[deprecated(note = "V1 is withdrawn; use SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V3")]
 pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION: u8 =
     SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V1;
 /// Source/Series present-funding account discriminator.
 pub const SOURCE_SERIES_FUNDING_ACCOUNT_TAG: u8 = 0x80;
 /// Source/Series present-funding account version.
 pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V1: u8 = 1;
-/// Current BundleV5/QuoteV4 Series funding account version.
+/// Historical BundleV5/QuoteV4 Series funding account version.
 pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V2: u8 = 2;
+/// Historical cyclic BundleV6/QuoteV5 Series funding account version.
+pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V3: u8 = 3;
+/// Current acyclic pre-Source reservation Series funding account version.
+pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V4: u8 = 4;
 /// Historical decoder coordinate retained for untrusted index clients only.
-#[deprecated(note = "V1 is withdrawn; use SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V2")]
+#[deprecated(note = "V1 is withdrawn; use SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V4")]
 pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION: u8 =
     SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V1;
 /// General V2 owner-aggregated settlement account discriminator.
@@ -359,6 +365,12 @@ pub const SOURCE_V3_STATISTIC_RESULT_ACCOUNT_VERSION: u8 = 1;
 pub const SOURCE_V3_WORK_RECEIPT_ACCOUNT_TAG: u8 = 0x92;
 /// SourcePlane V3 liveness-work receipt account version.
 pub const SOURCE_V3_WORK_RECEIPT_ACCOUNT_VERSION: u8 = 1;
+/// Mutable exact-principal Source lifecycle custody discriminator.
+pub const SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_TAG: u8 = 0xaf;
+/// Current Source lifecycle custody version.
+pub const SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_VERSION: u8 = 1;
+/// Exact Source lifecycle custody width.
+pub const SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_BYTES: usize = 400;
 /// Fixed global envelope preceding each Dealer runtime semantic body.
 pub const DEALER_RUNTIME_ACCOUNT_HEADER_BYTES: usize = 8;
 /// Immutable Dealer liveness-schedule account discriminator.
@@ -524,12 +536,24 @@ pub const GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION: u8 = 2;
 pub const GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_BYTES: usize = 1_196;
 /// Product shared Market lifecycle root discriminator.
 pub const PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG: u8 = 0xaa;
-/// First Product shared Market lifecycle-root version.
-pub const PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION: u8 = 1;
+/// Historical Product shared Market lifecycle-root version.
+pub const PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION_V1: u8 = 1;
+/// Current Product shared Market lifecycle-root version.
+pub const PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION_V2: u8 = 2;
+/// Historical compatibility alias for decode-only clients.
+#[deprecated(note = "V1 is withdrawn; use PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION_V2")]
+pub const PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION: u8 =
+    PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION_V1;
 /// Product per-Series/ordinal Market-admission link discriminator.
 pub const PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG: u8 = 0xad;
-/// First Product Series-Market-link version.
-pub const PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION: u8 = 1;
+/// Historical Product Series-Market-link version.
+pub const PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION_V1: u8 = 1;
+/// Current Product Series-Market-link version.
+pub const PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION_V2: u8 = 2;
+/// Historical compatibility alias for decode-only clients.
+#[deprecated(note = "V1 is withdrawn; use PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION_V2")]
+pub const PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION: u8 =
+    PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION_V1;
 /// Counted Dealer CoveredDealer selection attachment discriminator.
 pub const DEALER_COVERED_SELECTION_ACCOUNT_TAG: u8 = 0xae;
 /// Current Direct root and lifecycle-count owner discriminator.
@@ -583,8 +607,14 @@ pub const PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_TAG: u8 = 0xb0;
 pub const PRODUCT_MARKET_LIFECYCLE_REPLAY_ACCOUNT_VERSION: u8 = 1;
 /// Permanent counted Product Series-lifecycle replay discriminator.
 pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG: u8 = 0xb8;
-/// First permanent counted Product Series-lifecycle replay version.
-pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION: u8 = 1;
+/// Historical permanent counted Product Series-lifecycle replay version.
+pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V1: u8 = 1;
+/// Current permanent counted Product Series-lifecycle replay version.
+pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V2: u8 = 2;
+/// Historical compatibility alias for decode-only clients.
+#[deprecated(note = "V1 is withdrawn; use PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V2")]
+pub const PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION: u8 =
+    PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V1;
 /// Product-owned Direct global-liveness manifest and allocation lifecycle discriminator.
 pub const PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG: u8 = 0xba;
 /// Current acyclic Product Direct global-liveness account version.
@@ -1281,8 +1311,17 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
             version: SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2,
         },
+        status: AllocationStatus::Withdrawn,
+        name: "withdrawn-source-series-registry-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
+            version: SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V3,
+        },
         status: AllocationStatus::ReservedDisabled,
-        name: "source-series-registry-v2-account",
+        name: "source-series-registry-v3-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1299,8 +1338,26 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
             version: SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V2,
         },
+        status: AllocationStatus::Withdrawn,
+        name: "withdrawn-source-series-funding-v2-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
+            version: SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V3,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "withdrawn-source-series-funding-v3-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
+            version: SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V4,
+        },
         status: AllocationStatus::ReservedDisabled,
-        name: "source-series-funding-v2-account",
+        name: "source-series-funding-v4-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1544,6 +1601,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "source-v3-work-receipt-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_TAG,
+            version: SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_VERSION,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "source-v3-funding-custody-v1-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1801,10 +1867,19 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG,
-            version: PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION,
+            version: PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION_V1,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "withdrawn-product-market-lifecycle-root-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG,
+            version: PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_VERSION_V2,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "product-market-lifecycle-root-v1-account",
+        name: "product-market-lifecycle-root-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1855,10 +1930,19 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG,
-            version: PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION,
+            version: PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION_V1,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "withdrawn-product-series-market-link-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: PRODUCT_SERIES_MARKET_LINK_ACCOUNT_TAG,
+            version: PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION_V2,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "product-series-market-link-v1-account",
+        name: "product-series-market-link-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1882,10 +1966,19 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG,
-            version: PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION,
+            version: PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V1,
+        },
+        status: AllocationStatus::Withdrawn,
+        name: "withdrawn-product-series-lifecycle-replay-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG,
+            version: PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V2,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "product-series-lifecycle-replay-v1-account",
+        name: "product-series-lifecycle-replay-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -3335,11 +3428,11 @@ mod tests {
             (DEALER_POLICY_ACCOUNT_TAG, DEALER_POLICY_ACCOUNT_VERSION),
             (
                 SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
-                SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2,
+                SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V3,
             ),
             (
                 SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
-                SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V2,
+                SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V4,
             ),
             (
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
@@ -3452,6 +3545,10 @@ mod tests {
             (
                 SOURCE_V3_WORK_RECEIPT_ACCOUNT_TAG,
                 SOURCE_V3_WORK_RECEIPT_ACCOUNT_VERSION,
+            ),
+            (
+                SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_TAG,
+                SOURCE_V3_FUNDING_CUSTODY_ACCOUNT_VERSION,
             ),
         ];
         for (tag, version) in expected {
@@ -3835,5 +3932,23 @@ mod tests {
         let mut bytes = [0_u8; MAX_INTENT_BYTES];
         assert_eq!(envelope.encode(&mut bytes), Ok(MAX_INTENT_BYTES));
         assert_eq!(ExtensionEnvelope::decode(&bytes), Ok(envelope));
+    }
+
+    #[test]
+    fn permanent_series_lifecycle_replay_coordinate_is_unique_and_disabled() {
+        let mut matching = CENTRAL_COLLISION_LEDGER.iter().filter(|entry| {
+            coordinates_include(
+                entry.coordinates,
+                WireNamespace::MainAccount,
+                PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG,
+                PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_VERSION_V2,
+            )
+        });
+        assert_eq!(
+            matching.next().map(|entry| entry.status),
+            Some(AllocationStatus::ReservedDisabled),
+        );
+        assert!(matching.next().is_none());
+        assert_eq!(PRODUCT_SERIES_LIFECYCLE_REPLAY_ACCOUNT_TAG, 0xb8);
     }
 }

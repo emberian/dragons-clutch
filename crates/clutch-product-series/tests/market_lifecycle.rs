@@ -1,12 +1,15 @@
 use clutch_product_series::{
-    ContentId, Error, FixedCodec, MarketFoundationAccountGraphV2, MarketFoundationScheduleV2,
-    MarketFoundationSlotV2, MarketInstanceV2Id, SeriesFundingQuoteV4Id, SeriesFundingTermsV2Id,
+    authenticate_market_foundation_account_graph_bytes_v2,
+    authenticate_market_foundation_account_graph_slot_v2, ContentId, Error, FixedCodec,
+    MarketFoundationAccountGraphV2, MarketFoundationScheduleV2, MarketFoundationSlotV2,
+    MarketInstanceV2Id, SeriesFundingQuoteV4Id, SeriesFundingTermsV2Id,
     SeriesLinkObligationAdmissionProjectionV1, SeriesLinkObligationConfigurationV1,
     SeriesLinkObligationDispositionV1, SeriesLinkObligationStatusV1,
     SeriesLinkObligationTerminalProjectionV1, SeriesLinkObligationV1, SeriesMarketDispositionV1,
     SeriesMarketLinkBindingV1, SeriesMarketLinkV1, SeriesPlanV5Id, SourceOccurrenceV1Id,
-    MARKET_FOUNDATION_CORE_SLOT_COUNT_V2, MARKET_FOUNDATION_MAX_OUTCOMES_V2,
-    MARKET_FOUNDATION_SLOT_COUNT_V2, SERIES_MARKET_LINK_BYTES_V1,
+    MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V2, MARKET_FOUNDATION_CORE_SLOT_COUNT_V2,
+    MARKET_FOUNDATION_MAX_OUTCOMES_V2, MARKET_FOUNDATION_SLOT_COUNT_V2,
+    SERIES_MARKET_LINK_BYTES_V1,
 };
 
 fn id(byte: u8) -> ContentId {
@@ -103,6 +106,19 @@ fn account_graph() -> MarketFoundationAccountGraphV2 {
     }
 }
 
+fn account_graph_bytes(graph: MarketFoundationAccountGraphV2) -> [u8; MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V2] {
+    let mut out = [0u8; MARKET_FOUNDATION_ACCOUNT_GRAPH_BYTES_V2];
+    out[..32].copy_from_slice(&graph.market_instance_id.bytes());
+    out[32..40].copy_from_slice(&graph.generation.to_le_bytes());
+    out[40..72].copy_from_slice(&graph.foundation_schedule_id.bytes());
+    let mut at = 72usize;
+    for account in graph.account_ids {
+        out[at..at + 32].copy_from_slice(&account.bytes());
+        at += 32;
+    }
+    out
+}
+
 #[test]
 fn configuration_refuses_caller_shaped_terminal_initial_state() {
     let mut configuration = configuration();
@@ -197,6 +213,10 @@ fn disabled_and_enabled_unfounded_require_authenticated_absence() {
 #[test]
 fn hostile_active_failure_session_cannot_erase_transcript() {
     let pinned = active_link().pin_failure_session(id(27)).unwrap();
+    assert_eq!(
+        pinned.pin_failure_session(id(28)),
+        Err(Error::WorkStateMismatch)
+    );
     let mut body = [0_u8; SERIES_MARKET_LINK_BYTES_V1];
     pinned.encode_into(&mut body).unwrap();
     body[SERIES_MARKET_LINK_BYTES_V1 - 32..].fill(0);
@@ -208,14 +228,17 @@ fn hostile_active_failure_session_cannot_erase_transcript() {
 
 #[test]
 fn failure_transcript_survives_session_release() {
-    let released = active_link()
-        .pin_failure_session(id(27))
-        .unwrap()
-        .release_failure_session(id(28))
-        .unwrap();
+    let pinned = active_link().pin_failure_session(id(27)).unwrap();
+    let pinned_transcript = pinned.failure_session_transcript_id();
+    let released = pinned.release_failure_session(id(28)).unwrap();
     assert_eq!(released.active_failure_sessions(), 0);
     assert_eq!(released.failure_sessions_started(), 1);
     assert_ne!(released.failure_session_transcript_id(), ContentId::ZERO);
+    assert_ne!(released.failure_session_transcript_id(), pinned_transcript);
+    assert_eq!(
+        released.release_failure_session(id(28)),
+        Err(Error::WorkStateMismatch)
+    );
 
     let mut body = [0_u8; SERIES_MARKET_LINK_BYTES_V1];
     released.encode_into(&mut body).unwrap();
@@ -253,4 +276,63 @@ fn foundation_graph_refuses_role_alias_and_noncanonical_tail() {
     let mut tailed = account_graph();
     tailed.account_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V2 + 3] = id(250);
     assert_eq!(tailed.validate(schedule), Err(Error::NonCanonicalPadding));
+}
+
+#[test]
+fn streamed_foundation_graph_matches_struct_owner_and_exact_slot() {
+    let graph = account_graph();
+    let schedule = schedule();
+    let bytes = account_graph_bytes(graph);
+    let authenticated =
+        authenticate_market_foundation_account_graph_bytes_v2(&bytes, &schedule).unwrap();
+    assert_eq!(authenticated.market_instance_id(), graph.market_instance_id);
+    assert_eq!(authenticated.generation(), graph.generation);
+    assert_eq!(authenticated.foundation_schedule_id(), graph.foundation_schedule_id);
+    assert_eq!(authenticated.graph_id(), graph.id(&schedule).unwrap());
+    let (same_graph, replay) = authenticate_market_foundation_account_graph_slot_v2(
+        &bytes,
+        &schedule,
+        MarketFoundationSlotV2::ProductReplayAnchor,
+    )
+    .unwrap();
+    assert_eq!(same_graph, authenticated.graph_id());
+    assert_eq!(replay, graph.account(MarketFoundationSlotV2::ProductReplayAnchor).unwrap());
+}
+
+#[test]
+fn streamed_foundation_graph_refuses_length_alias_tail_and_schedule_splice() {
+    let graph = account_graph();
+    let schedule = schedule();
+    let bytes = account_graph_bytes(graph);
+    assert_eq!(
+        authenticate_market_foundation_account_graph_bytes_v2(&bytes[..bytes.len() - 1], &schedule),
+        Err(Error::InvalidCodec),
+    );
+
+    let mut alias = bytes;
+    let failure_admission = 72 + MarketFoundationSlotV2::FailureAdmissionRoot.index().unwrap() * 32;
+    let failure_runtime = 72 + MarketFoundationSlotV2::FailureRuntimeRoot.index().unwrap() * 32;
+    let copied: [u8; 32] = alias[failure_admission..failure_admission + 32]
+        .try_into()
+        .unwrap();
+    alias[failure_runtime..failure_runtime + 32].copy_from_slice(&copied);
+    assert_eq!(
+        authenticate_market_foundation_account_graph_bytes_v2(&alias, &schedule),
+        Err(Error::MismatchedArtifact),
+    );
+
+    let mut tail = bytes;
+    let inactive = 72 + (MARKET_FOUNDATION_CORE_SLOT_COUNT_V2 + 3) * 32;
+    tail[inactive..inactive + 32].fill(250);
+    assert_eq!(
+        authenticate_market_foundation_account_graph_bytes_v2(&tail, &schedule),
+        Err(Error::NonCanonicalPadding),
+    );
+
+    let mut other_schedule = schedule;
+    other_schedule.founding_timeout_buckets += 1;
+    assert_eq!(
+        authenticate_market_foundation_account_graph_bytes_v2(&bytes, &other_schedule),
+        Err(Error::MismatchedArtifact),
+    );
 }

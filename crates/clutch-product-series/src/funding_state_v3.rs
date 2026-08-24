@@ -1,32 +1,33 @@
 //! Current six-compartment recurring-Series funding state.
 //!
-//! This is a fresh owner for QuoteV4/AttachmentV4/BundleV5. Historical
-//! `SeriesFundingStateV1` bytes are never decoded as this state. One pending
-//! ordinal is explicit so a founder can enter inert phased Market founding
-//! without advancing the Series cursor or permitting a second debit.
+//! This is a fresh owner for QuoteV5/AttachmentV5/BundleV6. Historical
+//! `SeriesFundingStateV1` and `SeriesFundingStateV2` bytes are never decoded as
+//! this state. One pending ordinal is explicit so a founder can enter inert
+//! phased Market founding without advancing the Series cursor or permitting a
+//! second debit.
 
 use crate::codec::{Reader, Writer};
 use crate::{
-    content_id, CompiledProductSeriesBundleV5Id, ComponentDebitV1, ContentId, Error, FixedCodec,
-    MarketInstanceV2Id, Result, SeriesAttachmentPlanV4, SeriesAttachmentPlanV4Id,
-    SeriesFundingComponentV2, SeriesFundingQuoteV4, SeriesFundingQuoteV4Id,
-    SeriesFundingStateV2Id, SeriesFundingTermsV2Id, SeriesMarketDispositionV1, SeriesPlanV5,
+    content_id, CompiledProductSeriesBundleV6Id, ComponentDebitV1, ContentId, Error, FixedCodec,
+    MarketInstanceV2Id, Result, SeriesAttachmentPlanV5, SeriesAttachmentPlanV5Id,
+    SeriesFundingComponentV2, SeriesFundingQuoteV5, SeriesFundingQuoteV5Id,
+    SeriesFundingStateV3Id, SeriesFundingTermsV2Id, SeriesMarketDispositionV1, SeriesPlanV5,
     SeriesPlanV5Id, SourceOccurrenceV1Id, SERIES_FUNDING_COMPONENT_COUNT_V2,
 };
 
-const MAGIC_V2: [u8; 8] = *b"DCSFSTV2";
-const SCHEMA_V2: u16 = 2;
+const MAGIC_V3: [u8; 8] = *b"DCSFSTV3";
+const SCHEMA_V3: u16 = 3;
 
 /// Semantic identity domain of the exact current state.
-pub const SERIES_FUNDING_STATE_V2_DOMAIN: &[u8] =
-    b"dragons-clutch/series-funding-state/v2";
+pub const SERIES_FUNDING_STATE_V3_DOMAIN: &[u8] =
+    b"dragons-clutch/series-funding-state/v3";
 /// Semantic identity of the exact current terminal principal/donation view.
-pub const SERIES_FUNDING_TERMINAL_PROJECTION_V2_DOMAIN: &[u8] =
-    b"dragons-clutch/series-funding-terminal-projection/v2";
+pub const SERIES_FUNDING_TERMINAL_PROJECTION_V3_DOMAIN: &[u8] =
+    b"dragons-clutch/series-funding-terminal-projection/v3";
 /// Exact bytes per separately accounted component.
-pub const SERIES_COMPONENT_CAPITAL_BYTES_V2: usize = 40;
+pub const SERIES_COMPONENT_CAPITAL_BYTES_V3: usize = 40;
 /// Exact current state width with no unnamed authority-bearing padding.
-pub const SERIES_FUNDING_STATE_BYTES_V2: usize = 16
+pub const SERIES_FUNDING_STATE_BYTES_V3: usize = 16
     + 5 * 32
     + 3 * 4
     + 8
@@ -34,13 +35,13 @@ pub const SERIES_FUNDING_STATE_BYTES_V2: usize = 16
     + 4
     + 32
     + SERIES_FUNDING_COMPONENT_COUNT_V2 * 16
-    + SERIES_FUNDING_COMPONENT_COUNT_V2 * SERIES_COMPONENT_CAPITAL_BYTES_V2;
+    + SERIES_FUNDING_COMPONENT_COUNT_V2 * SERIES_COMPONENT_CAPITAL_BYTES_V3;
 
-const _: () = assert!(SERIES_FUNDING_STATE_BYTES_V2 == 664);
+const _: () = assert!(SERIES_FUNDING_STATE_BYTES_V3 == 664);
 
 /// Exhaustive successor funding phase.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SeriesFundingPhaseV2 {
+pub enum SeriesFundingPhaseV3 {
     /// No occurrence reservation is outstanding and ordinals remain.
     Active,
     /// Exactly `next_ordinal` has been debited and is awaiting atomic admission.
@@ -49,7 +50,7 @@ pub enum SeriesFundingPhaseV2 {
     Closed,
 }
 
-impl SeriesFundingPhaseV2 {
+impl SeriesFundingPhaseV3 {
     const fn byte(self) -> u8 {
         match self {
             Self::Active => 1,
@@ -70,7 +71,7 @@ impl SeriesFundingPhaseV2 {
 
 /// Principal, donation, and exact-unit consumption for one compartment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SeriesComponentCapitalV2 {
+pub struct SeriesComponentCapitalV3 {
     /// Payer-owned principal not yet committed to an admitted ordinal.
     pub remaining_principal: ComponentDebitV1,
     /// Unowned unsolicited balance surplus, never usable as principal.
@@ -79,7 +80,7 @@ pub struct SeriesComponentCapitalV2 {
     pub consumed_allocations: u32,
 }
 
-impl SeriesComponentCapitalV2 {
+impl SeriesComponentCapitalV3 {
     /// Canonical zero component.
     pub const ZERO: Self = Self {
         remaining_principal: ComponentDebitV1::ZERO,
@@ -92,15 +93,15 @@ impl SeriesComponentCapitalV2 {
 ///
 /// SBF implementations must derive each success from authenticated accounts;
 /// caller-shaped facts must not implement this trait in value-bearing code.
-pub trait AuthenticatedSeriesFundingAuthorityV2 {
+pub trait AuthenticatedSeriesFundingAuthorityV3 {
     /// Authenticate the exact initial bodies and physical deposits.
     fn authenticate_activation(
         &self,
         series: &SeriesPlanV5,
         funding_terms_id: SeriesFundingTermsV2Id,
-        compiler_bundle_id: CompiledProductSeriesBundleV5Id,
-        quote: &SeriesFundingQuoteV4,
-        attachment: &SeriesAttachmentPlanV4,
+        compiler_bundle_id: CompiledProductSeriesBundleV6Id,
+        quote: &SeriesFundingQuoteV5,
+        attachment: &SeriesAttachmentPlanV5,
         principal: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
         donations: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
     ) -> Result<()>;
@@ -112,7 +113,7 @@ pub trait AuthenticatedSeriesFundingAuthorityV2 {
     #[allow(clippy::too_many_arguments)]
     fn authenticate_reservation(
         &self,
-        state: &SeriesFundingStateV2,
+        state: &SeriesFundingStateV3,
         ordinal: u32,
         market_instance_id: MarketInstanceV2Id,
         source_occurrence_id: SourceOccurrenceV1Id,
@@ -125,21 +126,21 @@ pub trait AuthenticatedSeriesFundingAuthorityV2 {
     /// Authenticate completion of the exact pending link/founding transition.
     fn authenticate_pending_completion(
         &self,
-        state: &SeriesFundingStateV2,
+        state: &SeriesFundingStateV3,
         completion_receipt_id: ContentId,
     ) -> Result<()>;
 
     /// Authenticate an abort which returned every pending principal unit.
     fn authenticate_pending_abort(
         &self,
-        state: &SeriesFundingStateV2,
+        state: &SeriesFundingStateV3,
         abort_receipt_id: ContentId,
     ) -> Result<()>;
 
     /// Authenticate physical surplus for exactly one component.
     fn authenticate_donation(
         &self,
-        state: &SeriesFundingStateV2,
+        state: &SeriesFundingStateV3,
         component: SeriesFundingComponentV2,
         amount: ComponentDebitV1,
     ) -> Result<()>;
@@ -147,24 +148,24 @@ pub trait AuthenticatedSeriesFundingAuthorityV2 {
     /// Authenticate all terminal custody poststates and destinations.
     fn authenticate_close(
         &self,
-        state: &SeriesFundingStateV2,
+        state: &SeriesFundingStateV3,
         terminal_receipt_id: ContentId,
     ) -> Result<()>;
 }
 
 /// Exact current mutable state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SeriesFundingStateV2 {
+pub struct SeriesFundingStateV3 {
     /// Registered finite Series.
     pub series_plan_id: SeriesPlanV5Id,
     /// Immutable refund/sink/collateral ownership.
     pub funding_terms_id: SeriesFundingTermsV2Id,
-    /// Current 46-slot quote.
-    pub funding_quote_id: SeriesFundingQuoteV4Id,
-    /// Current QuoteV4-bound attachment.
-    pub attachment_plan_id: SeriesAttachmentPlanV4Id,
-    /// Exact compiler/Source/capability graph retained by SeriesRegistry V2.
-    pub compiler_bundle_id: CompiledProductSeriesBundleV5Id,
+    /// Current 47-slot quote.
+    pub funding_quote_id: SeriesFundingQuoteV5Id,
+    /// Current QuoteV5-bound attachment.
+    pub attachment_plan_id: SeriesAttachmentPlanV5Id,
+    /// Exact compiler/Source/capability graph retained by SeriesRegistry V3.
+    pub compiler_bundle_id: CompiledProductSeriesBundleV6Id,
     /// Frozen finite ordinal count.
     pub instance_count: u32,
     /// Only ordinal which may be reserved or lapsed next.
@@ -174,7 +175,7 @@ pub struct SeriesFundingStateV2 {
     /// Monotone mutation sequence.
     pub transition_sequence: u64,
     /// Explicit exhaustive lifecycle phase.
-    pub phase: SeriesFundingPhaseV2,
+    pub phase: SeriesFundingPhaseV3,
     /// Founder/converger classification of the pending ordinal.
     pub pending_disposition: Option<SeriesMarketDispositionV1>,
     /// Exact pending Market, or zero outside Pending.
@@ -190,19 +191,19 @@ pub struct SeriesFundingStateV2 {
     /// Exact component debits held by the pending transition.
     pub pending_debits: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
     /// Six disjoint principal/donation ledgers.
-    pub components: [SeriesComponentCapitalV2; SERIES_FUNDING_COMPONENT_COUNT_V2],
+    pub components: [SeriesComponentCapitalV3; SERIES_FUNDING_COMPONENT_COUNT_V2],
 }
 
-impl SeriesFundingStateV2 {
-    /// Activate current state from exact V4 artifacts and physical deposits.
+impl SeriesFundingStateV3 {
+    /// Activate current state from exact V5/V6 artifacts and physical deposits.
     #[allow(clippy::too_many_arguments)]
-    pub fn activate<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+    pub fn activate<A: AuthenticatedSeriesFundingAuthorityV3 + ?Sized>(
         authority: &A,
         series: &SeriesPlanV5,
         funding_terms_id: SeriesFundingTermsV2Id,
-        compiler_bundle_id: CompiledProductSeriesBundleV5Id,
-        quote: &SeriesFundingQuoteV4,
-        attachment: &SeriesAttachmentPlanV4,
+        compiler_bundle_id: CompiledProductSeriesBundleV6Id,
+        quote: &SeriesFundingQuoteV5,
+        attachment: &SeriesAttachmentPlanV5,
         principal: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
         donations: [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
     ) -> Result<Self> {
@@ -214,14 +215,14 @@ impl SeriesFundingStateV2 {
         if attachment.funding_quote_id != quote.id()? {
             return Err(Error::MismatchedArtifact);
         }
-        let mut components = [SeriesComponentCapitalV2::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2];
+        let mut components = [SeriesComponentCapitalV3::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2];
         let mut index = 0usize;
         while index < SERIES_FUNDING_COMPONENT_COUNT_V2 {
             let expected = multiply_debit(quote.components[index], series.instance_count)?;
             if principal[index] != expected {
                 return Err(Error::InsufficientPrepayment);
             }
-            components[index] = SeriesComponentCapitalV2 {
+            components[index] = SeriesComponentCapitalV3 {
                 remaining_principal: principal[index],
                 donations: donations[index],
                 consumed_allocations: 0,
@@ -247,7 +248,7 @@ impl SeriesFundingStateV2 {
             next_ordinal: 0,
             lapsed_count: 0,
             transition_sequence: 0,
-            phase: SeriesFundingPhaseV2::Active,
+            phase: SeriesFundingPhaseV3::Active,
             pending_disposition: None,
             pending_market_instance_id: ContentId::ZERO,
             pending_source_occurrence_id: ContentId::ZERO,
@@ -263,12 +264,12 @@ impl SeriesFundingStateV2 {
 
     /// Reserve exactly the next eligible created ordinal.
     #[allow(clippy::too_many_arguments)]
-    pub fn reserve_created<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+    pub fn reserve_created<A: AuthenticatedSeriesFundingAuthorityV3 + ?Sized>(
         &mut self,
         authority: &A,
         series: &SeriesPlanV5,
-        quote: &SeriesFundingQuoteV4,
-        attachment: &SeriesAttachmentPlanV4,
+        quote: &SeriesFundingQuoteV5,
+        attachment: &SeriesAttachmentPlanV5,
         market_instance_id: MarketInstanceV2Id,
         source_occurrence_id: SourceOccurrenceV1Id,
         series_market_link_id: ContentId,
@@ -277,7 +278,7 @@ impl SeriesFundingStateV2 {
         reservation_receipt_id: ContentId,
     ) -> Result<u32> {
         self.validate_against(series, quote, attachment)?;
-        if self.phase != SeriesFundingPhaseV2::Active || self.next_ordinal >= self.instance_count {
+        if self.phase != SeriesFundingPhaseV3::Active || self.next_ordinal >= self.instance_count {
             return Err(Error::SeriesNotActive);
         }
         market_instance_id.validate()?;
@@ -312,7 +313,7 @@ impl SeriesFundingStateV2 {
             }
             index += 1;
         }
-        next.phase = SeriesFundingPhaseV2::Pending;
+        next.phase = SeriesFundingPhaseV3::Pending;
         next.pending_disposition = Some(disposition);
         next.pending_market_instance_id = market_instance_id.content_id();
         next.pending_source_occurrence_id = source_occurrence_id.content_id();
@@ -327,16 +328,16 @@ impl SeriesFundingStateV2 {
     }
 
     /// Commit the exact pending admission and advance the cursor once.
-    pub fn complete_pending<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+    pub fn complete_pending<A: AuthenticatedSeriesFundingAuthorityV3 + ?Sized>(
         &mut self,
         authority: &A,
         series: &SeriesPlanV5,
-        quote: &SeriesFundingQuoteV4,
-        attachment: &SeriesAttachmentPlanV4,
+        quote: &SeriesFundingQuoteV5,
+        attachment: &SeriesAttachmentPlanV5,
         completion_receipt_id: ContentId,
     ) -> Result<u32> {
         self.validate_against(series, quote, attachment)?;
-        if self.phase != SeriesFundingPhaseV2::Pending {
+        if self.phase != SeriesFundingPhaseV3::Pending {
             return Err(Error::WorkStateMismatch);
         }
         completion_receipt_id.validate()?;
@@ -349,9 +350,9 @@ impl SeriesFundingStateV2 {
             .ok_or(Error::ArithmeticOverflow)?;
         next.clear_pending();
         next.phase = if next.next_ordinal == next.instance_count {
-            SeriesFundingPhaseV2::Closed
+            SeriesFundingPhaseV3::Closed
         } else {
-            SeriesFundingPhaseV2::Active
+            SeriesFundingPhaseV3::Active
         };
         next.transition_sequence = increment(next.transition_sequence)?;
         next.validate_against(series, quote, attachment)?;
@@ -361,16 +362,16 @@ impl SeriesFundingStateV2 {
 
     /// Abort inert founding after an authenticated reverse-close and restore
     /// only the exact pending principal. Donations never enter this equation.
-    pub fn abort_pending<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+    pub fn abort_pending<A: AuthenticatedSeriesFundingAuthorityV3 + ?Sized>(
         &mut self,
         authority: &A,
         series: &SeriesPlanV5,
-        quote: &SeriesFundingQuoteV4,
-        attachment: &SeriesAttachmentPlanV4,
+        quote: &SeriesFundingQuoteV5,
+        attachment: &SeriesAttachmentPlanV5,
         abort_receipt_id: ContentId,
     ) -> Result<u32> {
         self.validate_against(series, quote, attachment)?;
-        if self.phase != SeriesFundingPhaseV2::Pending {
+        if self.phase != SeriesFundingPhaseV3::Pending {
             return Err(Error::WorkStateMismatch);
         }
         abort_receipt_id.validate()?;
@@ -392,7 +393,7 @@ impl SeriesFundingStateV2 {
             index += 1;
         }
         next.clear_pending();
-        next.phase = SeriesFundingPhaseV2::Active;
+        next.phase = SeriesFundingPhaseV3::Active;
         next.transition_sequence = increment(next.transition_sequence)?;
         next.validate_against(series, quote, attachment)?;
         *self = next;
@@ -400,15 +401,15 @@ impl SeriesFundingStateV2 {
     }
 
     /// Advance one elapsed ordinal without spending or reserving principal.
-    pub fn lapse<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+    pub fn lapse<A: AuthenticatedSeriesFundingAuthorityV3 + ?Sized>(
         &mut self,
         authority: &A,
         series: &SeriesPlanV5,
-        quote: &SeriesFundingQuoteV4,
-        attachment: &SeriesAttachmentPlanV4,
+        quote: &SeriesFundingQuoteV5,
+        attachment: &SeriesAttachmentPlanV5,
     ) -> Result<u32> {
         self.validate_against(series, quote, attachment)?;
-        if self.phase != SeriesFundingPhaseV2::Active || self.next_ordinal >= self.instance_count {
+        if self.phase != SeriesFundingPhaseV3::Active || self.next_ordinal >= self.instance_count {
             return Err(Error::SeriesNotActive);
         }
         let ordinal = self.next_ordinal;
@@ -425,9 +426,9 @@ impl SeriesFundingStateV2 {
             .checked_add(1)
             .ok_or(Error::ArithmeticOverflow)?;
         next.phase = if next.next_ordinal == next.instance_count {
-            SeriesFundingPhaseV2::Closed
+            SeriesFundingPhaseV3::Closed
         } else {
-            SeriesFundingPhaseV2::Active
+            SeriesFundingPhaseV3::Active
         };
         next.transition_sequence = increment(next.transition_sequence)?;
         next.validate_against(series, quote, attachment)?;
@@ -436,17 +437,17 @@ impl SeriesFundingStateV2 {
     }
 
     /// Record authenticated physical surplus without changing principal.
-    pub fn add_donation<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+    pub fn add_donation<A: AuthenticatedSeriesFundingAuthorityV3 + ?Sized>(
         &mut self,
         authority: &A,
         series: &SeriesPlanV5,
-        quote: &SeriesFundingQuoteV4,
-        attachment: &SeriesAttachmentPlanV4,
+        quote: &SeriesFundingQuoteV5,
+        attachment: &SeriesAttachmentPlanV5,
         component: SeriesFundingComponentV2,
         amount: ComponentDebitV1,
     ) -> Result<()> {
         self.validate_against(series, quote, attachment)?;
-        if self.phase == SeriesFundingPhaseV2::Pending {
+        if self.phase == SeriesFundingPhaseV3::Pending {
             return Err(Error::WorkStateMismatch);
         }
         if amount == ComponentDebitV1::ZERO {
@@ -463,16 +464,16 @@ impl SeriesFundingStateV2 {
     }
 
     /// Mint the sole terminal disposition after authenticated custody closure.
-    pub fn close<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+    pub fn close<A: AuthenticatedSeriesFundingAuthorityV3 + ?Sized>(
         &self,
         authority: &A,
         series: &SeriesPlanV5,
-        quote: &SeriesFundingQuoteV4,
-        attachment: &SeriesAttachmentPlanV4,
+        quote: &SeriesFundingQuoteV5,
+        attachment: &SeriesAttachmentPlanV5,
         terminal_receipt_id: ContentId,
-    ) -> Result<SeriesFundingTerminalProjectionV2> {
+    ) -> Result<SeriesFundingTerminalProjectionV3> {
         self.validate_against(series, quote, attachment)?;
-        if self.phase != SeriesFundingPhaseV2::Closed {
+        if self.phase != SeriesFundingPhaseV3::Closed {
             return Err(Error::SeriesNotClosed);
         }
         terminal_receipt_id.validate()?;
@@ -485,7 +486,7 @@ impl SeriesFundingStateV2 {
             donations[index] = self.components[index].donations;
             index += 1;
         }
-        Ok(SeriesFundingTerminalProjectionV2 {
+        Ok(SeriesFundingTerminalProjectionV3 {
             series_plan_id: self.series_plan_id,
             funding_terms_id: self.funding_terms_id,
             compiler_bundle_id: self.compiler_bundle_id,
@@ -500,8 +501,8 @@ impl SeriesFundingStateV2 {
     pub fn validate_against(
         &self,
         series: &SeriesPlanV5,
-        quote: &SeriesFundingQuoteV4,
-        attachment: &SeriesAttachmentPlanV4,
+        quote: &SeriesFundingQuoteV5,
+        attachment: &SeriesAttachmentPlanV5,
     ) -> Result<()> {
         self.validate()?;
         series.validate_shape()?;
@@ -523,7 +524,7 @@ impl SeriesFundingStateV2 {
         if self.transition_sequence < minimum_sequence {
             return Err(Error::InvalidSchedule);
         }
-        if self.phase == SeriesFundingPhaseV2::Pending {
+        if self.phase == SeriesFundingPhaseV3::Pending {
             validate_reservation_debits(
                 quote,
                 self.pending_disposition.ok_or(Error::InvalidComponentStatus)?,
@@ -547,7 +548,7 @@ impl SeriesFundingStateV2 {
             if consumed > admitted {
                 return Err(Error::InvalidComponentStatus);
             }
-            let pending_delta = if self.phase == SeriesFundingPhaseV2::Pending
+            let pending_delta = if self.phase == SeriesFundingPhaseV3::Pending
                 && self.pending_debits[index] != ComponentDebitV1::ZERO
             {
                 1
@@ -576,11 +577,11 @@ impl SeriesFundingStateV2 {
     }
 
     /// Typed semantic identity of the complete state.
-    pub fn id(&self) -> Result<SeriesFundingStateV2Id> {
-        let mut body = [0u8; SERIES_FUNDING_STATE_BYTES_V2];
+    pub fn id(&self) -> Result<SeriesFundingStateV3Id> {
+        let mut body = [0u8; SERIES_FUNDING_STATE_BYTES_V3];
         self.encode_into(&mut body)?;
-        Ok(SeriesFundingStateV2Id::from_bytes(
-            content_id(SERIES_FUNDING_STATE_V2_DOMAIN, &body).bytes(),
+        Ok(SeriesFundingStateV3Id::from_bytes(
+            content_id(SERIES_FUNDING_STATE_V3_DOMAIN, &body).bytes(),
         ))
     }
 
@@ -596,7 +597,7 @@ impl SeriesFundingStateV2 {
         {
             return Err(Error::InvalidSchedule);
         }
-        let pending = self.phase == SeriesFundingPhaseV2::Pending;
+        let pending = self.phase == SeriesFundingPhaseV3::Pending;
         if pending {
             if self.next_ordinal >= self.instance_count
                 || self.pending_ordinal != self.next_ordinal
@@ -626,9 +627,9 @@ impl SeriesFundingStateV2 {
             return Err(Error::NonCanonicalPadding);
         }
         match self.phase {
-            SeriesFundingPhaseV2::Active if self.next_ordinal < self.instance_count => {}
-            SeriesFundingPhaseV2::Pending if self.next_ordinal < self.instance_count => {}
-            SeriesFundingPhaseV2::Closed if self.next_ordinal == self.instance_count => {}
+            SeriesFundingPhaseV3::Active if self.next_ordinal < self.instance_count => {}
+            SeriesFundingPhaseV3::Pending if self.next_ordinal < self.instance_count => {}
+            SeriesFundingPhaseV3::Closed if self.next_ordinal == self.instance_count => {}
             _ => return Err(Error::InvalidSchedule),
         }
         Ok(())
@@ -638,7 +639,7 @@ impl SeriesFundingStateV2 {
         self.next_ordinal
             .checked_sub(self.lapsed_count)
             .and_then(|created| {
-                created.checked_add(if self.phase == SeriesFundingPhaseV2::Pending {
+                created.checked_add(if self.phase == SeriesFundingPhaseV3::Pending {
                     1
                 } else {
                     0
@@ -658,14 +659,14 @@ impl SeriesFundingStateV2 {
     }
 }
 
-impl FixedCodec for SeriesFundingStateV2 {
-    const ENCODED_LEN: usize = SERIES_FUNDING_STATE_BYTES_V2;
+impl FixedCodec for SeriesFundingStateV3 {
+    const ENCODED_LEN: usize = SERIES_FUNDING_STATE_BYTES_V3;
 
     fn encode_into(&self, output: &mut [u8]) -> Result<()> {
         self.validate()?;
         let mut writer = Writer::new(output, Self::ENCODED_LEN)?;
-        writer.bytes(&MAGIC_V2);
-        writer.u16(SCHEMA_V2);
+        writer.bytes(&MAGIC_V3);
+        writer.u16(SCHEMA_V3);
         writer.u8(self.phase.byte());
         writer.u8(match self.pending_disposition {
             None => 0,
@@ -708,11 +709,11 @@ impl FixedCodec for SeriesFundingStateV2 {
 
     fn decode(input: &[u8]) -> Result<Self> {
         let mut reader = Reader::new(input, Self::ENCODED_LEN)?;
-        reader.magic(&MAGIC_V2)?;
-        if reader.u16() != SCHEMA_V2 {
+        reader.magic(&MAGIC_V3)?;
+        if reader.u16() != SCHEMA_V3 {
             return Err(Error::BadVersion);
         }
-        let phase = SeriesFundingPhaseV2::decode(reader.u8())?;
+        let phase = SeriesFundingPhaseV3::decode(reader.u8())?;
         let pending_disposition = match reader.u8() {
             0 => None,
             1 => Some(SeriesMarketDispositionV1::Founder),
@@ -722,9 +723,9 @@ impl FixedCodec for SeriesFundingStateV2 {
         reader.reserved(4)?;
         let series_plan_id = SeriesPlanV5Id::from_bytes(reader.id().bytes());
         let funding_terms_id = SeriesFundingTermsV2Id::from_bytes(reader.id().bytes());
-        let funding_quote_id = SeriesFundingQuoteV4Id::from_bytes(reader.id().bytes());
-        let attachment_plan_id = SeriesAttachmentPlanV4Id::from_bytes(reader.id().bytes());
-        let compiler_bundle_id = CompiledProductSeriesBundleV5Id::from_bytes(reader.id().bytes());
+        let funding_quote_id = SeriesFundingQuoteV5Id::from_bytes(reader.id().bytes());
+        let attachment_plan_id = SeriesAttachmentPlanV5Id::from_bytes(reader.id().bytes());
+        let compiler_bundle_id = CompiledProductSeriesBundleV6Id::from_bytes(reader.id().bytes());
         let instance_count = reader.u32();
         let next_ordinal = reader.u32();
         let lapsed_count = reader.u32();
@@ -739,7 +740,7 @@ impl FixedCodec for SeriesFundingStateV2 {
             debit.lamports = reader.u64();
             debit.collateral_atoms = reader.u64();
         }
-        let mut components = [SeriesComponentCapitalV2::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2];
+        let mut components = [SeriesComponentCapitalV3::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2];
         for component in &mut components {
             component.remaining_principal.lamports = reader.u64();
             component.remaining_principal.collateral_atoms = reader.u64();
@@ -777,13 +778,13 @@ impl FixedCodec for SeriesFundingStateV2 {
 /// Terminal principal/donation projection. FundingTerms owns destinations;
 /// this projection owns only exact component amounts and retained authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SeriesFundingTerminalProjectionV2 {
+pub struct SeriesFundingTerminalProjectionV3 {
     /// Exact closed Series.
     pub series_plan_id: SeriesPlanV5Id,
     /// Exact immutable destination owner.
     pub funding_terms_id: SeriesFundingTermsV2Id,
     /// Exact current compiler graph.
-    pub compiler_bundle_id: CompiledProductSeriesBundleV5Id,
+    pub compiler_bundle_id: CompiledProductSeriesBundleV6Id,
     /// Last committed mutable sequence.
     pub transition_sequence: u64,
     /// Remaining payer principal by V2 component order.
@@ -794,7 +795,7 @@ pub struct SeriesFundingTerminalProjectionV2 {
     pub terminal_receipt_id: ContentId,
 }
 
-impl SeriesFundingTerminalProjectionV2 {
+impl SeriesFundingTerminalProjectionV3 {
     /// Hash the complete current terminal projection under its sole pure owner.
     pub fn id(self) -> Result<ContentId> {
         self.series_plan_id.validate()?;
@@ -818,14 +819,14 @@ impl SeriesFundingTerminalProjectionV2 {
         writer.id(self.terminal_receipt_id);
         writer.finish()?;
         Ok(content_id(
-            SERIES_FUNDING_TERMINAL_PROJECTION_V2_DOMAIN,
+            SERIES_FUNDING_TERMINAL_PROJECTION_V3_DOMAIN,
             &body,
         ))
     }
 }
 
 fn validate_reservation_debits(
-    quote: &SeriesFundingQuoteV4,
+    quote: &SeriesFundingQuoteV5,
     disposition: SeriesMarketDispositionV1,
     debits: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
 ) -> Result<()> {
@@ -908,14 +909,14 @@ mod tests {
 
     struct DonationOnlyAuthority;
 
-    impl AuthenticatedSeriesFundingAuthorityV2 for DonationOnlyAuthority {
+    impl AuthenticatedSeriesFundingAuthorityV3 for DonationOnlyAuthority {
         fn authenticate_activation(
             &self,
             _series: &SeriesPlanV5,
             _funding_terms_id: SeriesFundingTermsV2Id,
-            _compiler_bundle_id: CompiledProductSeriesBundleV5Id,
-            _quote: &SeriesFundingQuoteV4,
-            _attachment: &SeriesAttachmentPlanV4,
+            _compiler_bundle_id: CompiledProductSeriesBundleV6Id,
+            _quote: &SeriesFundingQuoteV5,
+            _attachment: &SeriesAttachmentPlanV5,
             _principal: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
             _donations: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
         ) -> Result<()> {
@@ -928,7 +929,7 @@ mod tests {
 
         fn authenticate_reservation(
             &self,
-            _state: &SeriesFundingStateV2,
+            _state: &SeriesFundingStateV3,
             _ordinal: u32,
             _market_instance_id: MarketInstanceV2Id,
             _source_occurrence_id: SourceOccurrenceV1Id,
@@ -942,7 +943,7 @@ mod tests {
 
         fn authenticate_pending_completion(
             &self,
-            _state: &SeriesFundingStateV2,
+            _state: &SeriesFundingStateV3,
             _completion_receipt_id: ContentId,
         ) -> Result<()> {
             Err(Error::UnauthenticatedAuthority)
@@ -950,7 +951,7 @@ mod tests {
 
         fn authenticate_pending_abort(
             &self,
-            _state: &SeriesFundingStateV2,
+            _state: &SeriesFundingStateV3,
             _abort_receipt_id: ContentId,
         ) -> Result<()> {
             Err(Error::UnauthenticatedAuthority)
@@ -958,7 +959,7 @@ mod tests {
 
         fn authenticate_donation(
             &self,
-            _state: &SeriesFundingStateV2,
+            _state: &SeriesFundingStateV3,
             _component: SeriesFundingComponentV2,
             _amount: ComponentDebitV1,
         ) -> Result<()> {
@@ -967,25 +968,25 @@ mod tests {
 
         fn authenticate_close(
             &self,
-            _state: &SeriesFundingStateV2,
+            _state: &SeriesFundingStateV3,
             _terminal_receipt_id: ContentId,
         ) -> Result<()> {
             Err(Error::UnauthenticatedAuthority)
         }
     }
 
-    fn active_state() -> SeriesFundingStateV2 {
-        SeriesFundingStateV2 {
+    fn active_state() -> SeriesFundingStateV3 {
+        SeriesFundingStateV3 {
             series_plan_id: SeriesPlanV5Id::from_bytes([1; 32]),
             funding_terms_id: SeriesFundingTermsV2Id::from_bytes([2; 32]),
-            funding_quote_id: SeriesFundingQuoteV4Id::from_bytes([3; 32]),
-            attachment_plan_id: SeriesAttachmentPlanV4Id::from_bytes([4; 32]),
-            compiler_bundle_id: CompiledProductSeriesBundleV5Id::from_bytes([5; 32]),
+            funding_quote_id: SeriesFundingQuoteV5Id::from_bytes([3; 32]),
+            attachment_plan_id: SeriesAttachmentPlanV5Id::from_bytes([4; 32]),
+            compiler_bundle_id: CompiledProductSeriesBundleV6Id::from_bytes([5; 32]),
             instance_count: 1,
             next_ordinal: 0,
             lapsed_count: 0,
             transition_sequence: 0,
-            phase: SeriesFundingPhaseV2::Active,
+            phase: SeriesFundingPhaseV3::Active,
             pending_disposition: None,
             pending_market_instance_id: ContentId::ZERO,
             pending_source_occurrence_id: ContentId::ZERO,
@@ -993,23 +994,23 @@ mod tests {
             pending_ordinal: 0,
             pending_reservation_receipt_id: ContentId::ZERO,
             pending_debits: [ComponentDebitV1::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2],
-            components: [SeriesComponentCapitalV2::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2],
+            components: [SeriesComponentCapitalV3::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2],
         }
     }
 
-    fn joined_fixtures() -> (SeriesPlanV5, SeriesFundingQuoteV4, SeriesAttachmentPlanV4) {
-        let mut slot_principal_lamports = [0u64; crate::MARKET_FOUNDATION_SLOT_COUNT_V2];
+    fn joined_fixtures() -> (SeriesPlanV5, SeriesFundingQuoteV5, SeriesAttachmentPlanV5) {
+        let mut slot_principal_lamports = [0u64; crate::MARKET_FOUNDATION_SLOT_COUNT_V3];
         for principal in &mut slot_principal_lamports
-            [..crate::MARKET_FOUNDATION_CORE_SLOT_COUNT_V2 + 2]
+            [..crate::MARKET_FOUNDATION_CORE_SLOT_COUNT_V3 + 2]
         {
             *principal = 10;
         }
-        let custody_start = crate::MARKET_FOUNDATION_CORE_SLOT_COUNT_V2
-            + crate::MARKET_FOUNDATION_MAX_OUTCOMES_V2;
+        let custody_start = crate::MARKET_FOUNDATION_CORE_SLOT_COUNT_V3
+            + crate::MARKET_FOUNDATION_MAX_OUTCOMES_V3;
         for principal in &mut slot_principal_lamports[custody_start..custody_start + 2] {
             *principal = 10;
         }
-        let foundation = crate::MarketFoundationScheduleV2 {
+        let foundation = crate::MarketFoundationScheduleV3 {
             outcome_count: 2,
             slot_principal_lamports,
             founding_timeout_buckets: 40,
@@ -1020,7 +1021,7 @@ mod tests {
         components[SeriesFundingComponentV2::SeriesAdmission.index()].lamports = 20;
         components[SeriesFundingComponentV2::RecoveryReserve.index()].lamports = 31;
         components[SeriesFundingComponentV2::SourceWork.index()].lamports = 7;
-        let quote = SeriesFundingQuoteV4 {
+        let quote = SeriesFundingQuoteV5 {
             evidence_only_recovery_policy_id: ContentId::from_bytes([11; 32]),
             failure_liveness_policy_id: ContentId::from_bytes([12; 32]),
             failure_recovery_quote_schedule_id: ContentId::from_bytes([13; 32]),
@@ -1028,7 +1029,7 @@ mod tests {
             foundation,
             recovery_rent_principal_lamports: 10,
         };
-        let attachment = SeriesAttachmentPlanV4 {
+        let attachment = SeriesAttachmentPlanV5 {
             funding_quote_id: quote.id().unwrap(),
             liquidity_facility_plan_id: ContentId::from_bytes([14; 32]),
             wrapper_recipe_set_id: ContentId::from_bytes([15; 32]),
@@ -1048,9 +1049,9 @@ mod tests {
         (series, quote, attachment)
     }
 
-    fn pending_state() -> (SeriesFundingStateV2, SeriesPlanV5, SeriesFundingQuoteV4, SeriesAttachmentPlanV4) {
+    fn pending_state() -> (SeriesFundingStateV3, SeriesPlanV5, SeriesFundingQuoteV5, SeriesAttachmentPlanV5) {
         let (series, quote, attachment) = joined_fixtures();
-        let mut components = [SeriesComponentCapitalV2::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2];
+        let mut components = [SeriesComponentCapitalV3::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2];
         let mut index = 0usize;
         while index < SERIES_FUNDING_COMPONENT_COUNT_V2 {
             components[index].remaining_principal = multiply_debit(quote.components[index], 2).unwrap();
@@ -1071,17 +1072,17 @@ mod tests {
             .unwrap();
             components[index].consumed_allocations = 1;
         }
-        let state = SeriesFundingStateV2 {
+        let state = SeriesFundingStateV3 {
             series_plan_id: series.id().unwrap(),
             funding_terms_id: SeriesFundingTermsV2Id::from_bytes([18; 32]),
             funding_quote_id: quote.id().unwrap(),
             attachment_plan_id: attachment.id().unwrap(),
-            compiler_bundle_id: CompiledProductSeriesBundleV5Id::from_bytes([19; 32]),
+            compiler_bundle_id: CompiledProductSeriesBundleV6Id::from_bytes([19; 32]),
             instance_count: 2,
             next_ordinal: 0,
             lapsed_count: 0,
             transition_sequence: 1,
-            phase: SeriesFundingPhaseV2::Pending,
+            phase: SeriesFundingPhaseV3::Pending,
             pending_disposition: Some(SeriesMarketDispositionV1::Founder),
             pending_market_instance_id: ContentId::from_bytes([20; 32]),
             pending_source_occurrence_id: ContentId::from_bytes([21; 32]),
@@ -1096,9 +1097,9 @@ mod tests {
 
     #[test]
     fn current_width_is_exact_and_not_the_historical_state_width() {
-        assert_eq!(SERIES_FUNDING_STATE_BYTES_V2, 664);
+        assert_eq!(SERIES_FUNDING_STATE_BYTES_V3, 664);
         assert_ne!(
-            SERIES_FUNDING_STATE_BYTES_V2,
+            SERIES_FUNDING_STATE_BYTES_V3,
             crate::SERIES_FUNDING_STATE_BYTES
         );
     }
@@ -1106,13 +1107,13 @@ mod tests {
     #[test]
     fn codec_round_trips_and_refuses_a_caller_shaped_pending_phase() {
         let value = active_state();
-        let mut body = [0; SERIES_FUNDING_STATE_BYTES_V2];
+        let mut body = [0; SERIES_FUNDING_STATE_BYTES_V3];
         value.encode_into(&mut body).unwrap();
-        assert_eq!(SeriesFundingStateV2::decode(&body), Ok(value));
-        body[10] = SeriesFundingPhaseV2::Pending.byte();
+        assert_eq!(SeriesFundingStateV3::decode(&body), Ok(value));
+        body[10] = SeriesFundingPhaseV3::Pending.byte();
         body[11] = 1;
         assert_eq!(
-            SeriesFundingStateV2::decode(&body),
+            SeriesFundingStateV3::decode(&body),
             Err(Error::ZeroIdentity)
         );
     }
@@ -1124,14 +1125,14 @@ mod tests {
         components[SeriesFundingComponentV2::SeriesAdmission.index()].lamports = 10;
         components[SeriesFundingComponentV2::RecoveryReserve.index()].lamports = 30;
         components[SeriesFundingComponentV2::SourceWork.index()].lamports = 7;
-        let quote = SeriesFundingQuoteV4 {
+        let quote = SeriesFundingQuoteV5 {
             evidence_only_recovery_policy_id: ContentId::from_bytes([11; 32]),
             failure_liveness_policy_id: ContentId::from_bytes([12; 32]),
             failure_recovery_quote_schedule_id: ContentId::from_bytes([13; 32]),
             components,
-            foundation: crate::MarketFoundationScheduleV2 {
+            foundation: crate::MarketFoundationScheduleV3 {
                 outcome_count: 2,
-                slot_principal_lamports: [0; crate::MARKET_FOUNDATION_SLOT_COUNT_V2],
+                slot_principal_lamports: [0; crate::MARKET_FOUNDATION_SLOT_COUNT_V3],
                 founding_timeout_buckets: 1,
             },
             recovery_rent_principal_lamports: 1,
@@ -1268,10 +1269,10 @@ mod tests {
             };
             SERIES_FUNDING_COMPONENT_COUNT_V2
         ];
-        let projection = SeriesFundingTerminalProjectionV2 {
+        let projection = SeriesFundingTerminalProjectionV3 {
             series_plan_id: SeriesPlanV5Id::from_bytes([1; 32]),
             funding_terms_id: SeriesFundingTermsV2Id::from_bytes([2; 32]),
-            compiler_bundle_id: CompiledProductSeriesBundleV5Id::from_bytes([3; 32]),
+            compiler_bundle_id: CompiledProductSeriesBundleV6Id::from_bytes([3; 32]),
             transition_sequence: 13,
             refundable_principal: principal,
             donation_residue: donations,
