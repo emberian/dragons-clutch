@@ -1,18 +1,12 @@
-//! Ephemeral typed custody authority and exact General V2 action-35 CPI plan.
+//! Exact current Position V3 and purpose-Replay V3 successor plans.
 
-use clutch_collateral_adapter_v2::{
-    BoundCollateralProfileV2, ClaimLedgerV3, CollateralPolicyV2, HoardV2,
-    MarketLiabilityLifecycleV1,
-};
+use clutch_collateral_adapter_v2::{ClaimLedgerV3, HoardV2};
 use clutch_general_v2_contract::{
     project_general_position_replay_prestate_v1, project_general_replay_transition_v1,
-    GeneralReplayTransitionKindV1, Id32, MarketBindingV1, MarketRuntimeV3AccountV1,
-    GENERAL_REPLAY_ACCOUNT_V1_BYTES, GENERAL_REPLAY_EXTENSION_SCHEMA_V1,
+    GeneralReplayTransitionKindV1, Id32, GENERAL_REPLAY_ACCOUNT_V1_BYTES,
+    GENERAL_REPLAY_EXTENSION_SCHEMA_V1,
 };
 use clutch_owner_settlement::{AuthenticatedPositionV3, PositionSettlementPoststateV3};
-use clutch_product_series::{
-    FixedCodec, MarketInstancePreimageV2, NativeClaimBasisV1, NATIVE_CLAIM_BASIS_DOMAIN,
-};
 use clutch_retirement::{
     Identity32V1, PositionAccountV3, PositionLifecycleV3, PositionPurposeV3,
     PositionV3Sha256Backend, ReplayV3Envelope, ReplayV3HashBackend, ReplayV3Lifecycle,
@@ -22,128 +16,38 @@ use clutch_retirement_adapter::{
     AccountAccessV2 as RetirementAccountAccessV2, AccountViewV2 as RetirementAccountViewV2,
     CanonicalPdaV1,
 };
-use clutch_solana_layout::{
-    registry::{ExtensionAction, ExtensionEnvelope, ExtensionFamily, GeneralV2Action},
-    ProfileAccount, RealmAccount,
-};
-use clutch_solana_reference::ExtensionRequest;
-use clutch_structured_claim::MarketPhase;
 #[cfg(not(target_os = "solana"))]
 use sha2::{Digest, Sha256};
 
 use crate::runtime_contract::{
-    prepare_atomic_position_asset_transfer_v1, AssetTransferPhasePolicyV1,
-    AtomicPositionAssetTransferRequestV1, DescriptorStateV1, PositionAssetTransferAuthorityKindV1,
-    PositionAssetTransferPayloadV1, PositionProjectionV1, StructuredClaimActionV1,
-    StructuredClaimReplayDeltaV1, StructuredClaimReplayExtensionV1,
-    StructuredClaimReplayTransitionV1, StructuredClaimVaultReplayDeltaV1,
-    StructuredCustodyCallProjectionV1,
-    POSITION_ASSET_TRANSFER_PAYLOAD_BYTES, STRUCTURED_CLAIM_REPLAY_DELTA_DOMAIN_V1,
-    STRUCTURED_CLAIM_REPLAY_EXTENSION_SCHEMA_V1, STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES,
-    STRUCTURED_CUSTODY_CALL_V1_DOMAIN, STRUCTURED_CLAIM_VAULT_REPLAY_DELTA_DOMAIN_V1,
+    PositionProjectionV1, StructuredClaimActionV1, StructuredClaimReplayDeltaV1,
+    StructuredClaimReplayExtensionV1, StructuredClaimReplayTransitionV1,
+    StructuredClaimVaultReplayDeltaV1, STRUCTURED_CLAIM_REPLAY_DELTA_DOMAIN_V1,
+    STRUCTURED_CLAIM_REPLAY_EXTENSION_SCHEMA_V1,
+    STRUCTURED_CLAIM_VAULT_REPLAY_DELTA_DOMAIN_V1,
 };
 use crate::{
-    decode_owned_descriptor_v1, is_zero, AccountRoleV1, BasePositionPdaVerifierV1,
-    BoundDescriptorV1, CurrentStructuredTransitionPlanV1, Error, Key, RawAccountV1, Result,
-    RuntimeDeploymentsV1,
+    is_zero, AccountRoleV1, BasePositionPdaVerifierV1, BoundDescriptorV1,
+    CurrentStructuredTransitionPlanV1, Error, Key, RawAccountV1, Result,
 };
 
 /// Digest domain for an exact canonical live descriptor body.
 pub const STRUCTURED_CUSTODY_DESCRIPTOR_BODY_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-custody/descriptor-body/v1\0";
-/// Digest domain for an exact full-width Hoard V2 prestate.
-pub const STRUCTURED_CUSTODY_HOARD_BODY_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/structured-custody/hoard-v2-body/v1\0";
-/// Digest domain for an exact canonical General V2 MarketBinding body.
-pub const STRUCTURED_CUSTODY_MARKET_BINDING_BODY_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/structured-custody/market-binding-body/v1\0";
-/// Digest domain for an exact canonical General V2 MarketRuntime body.
-pub const STRUCTURED_CUSTODY_MARKET_RUNTIME_BODY_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/structured-custody/market-runtime-body/v1\0";
-/// Digest domain for an exact full-width ClaimLedger V3 prestate.
-pub const STRUCTURED_CUSTODY_CLAIM_LEDGER_BODY_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/structured-custody/claim-ledger-v3-body/v1\0";
-/// Exact account count for structured custody through General action 35.
+/// Exact core projection width shared by current full-vector actions.
 pub const STRUCTURED_CUSTODY_ACCOUNT_COUNT: usize = 23;
-const IX_VAULT_AUTHORITY: usize = 0;
-const IX_REALM: usize = 1;
-const IX_PROFILE: usize = 2;
-const IX_COLLATERAL_POLICY: usize = 3;
-const IX_COLLATERAL_TOKEN_PROGRAM: usize = 4;
-const IX_MARKET_BINDING: usize = 5;
 const IX_MARKET_RUNTIME: usize = 6;
 const IX_SOURCE_POSITION: usize = 7;
 const IX_SOURCE_REPLAY: usize = 8;
 const IX_DESTINATION_POSITION: usize = 9;
 const IX_DESTINATION_REPLAY: usize = 10;
-const IX_ACTOR: usize = 11;
-const IX_DESCRIPTOR: usize = 12;
-const IX_WRAPPER_PROGRAM: usize = 13;
-const IX_WRAPPER_PROGRAM_DATA: usize = 14;
 const IX_BASE_PROGRAM: usize = 15;
-const IX_BASE_PROGRAM_DATA: usize = 16;
-const IX_WRAPPER_TOKEN_2022_PROGRAM: usize = 17;
-const IX_WRAPPER_TOKEN_2022_PROGRAM_DATA: usize = 18;
-const IX_NATIVE_CLAIM_BASIS: usize = 19;
-const IX_MARKET_INSTANCE: usize = 20;
 const IX_HOARD_V2: usize = 21;
 const IX_CLAIM_LEDGER_V3: usize = 22;
-/// Exact outer base request, General family envelope, and 298-byte action body.
-pub const BASE_POSITION_TRANSFER_CPI_BYTES: usize = 314;
-/// Exact canonical Position V3 account width staged by action 35.
+/// Exact canonical Position V3 successor width staged by current actions.
 pub const POSITION_V3_WRITE_BYTES: usize = 480;
 /// Largest Replay V3 body staged by this bridge (common prefix + SCV1).
 pub const MAX_CUSTODY_REPLAY_V3_WRITE_BYTES: usize = 416;
-
-/// Caller-owned large decode/hash storage for the 4-KiB SBF stack boundary.
-///
-/// An SBF entrypoint should place this value on its requestable heap and reuse
-/// it for the wrapper-side preparation and base-side reconstruction. Keeping
-/// these values here prevents a 2,352-byte Product decode plus a 1,480-byte
-/// authority transcript from being returned through one call frame.
-#[derive(Debug)]
-pub struct StructuredCustodyScratchV1 {
-    native_claim_basis: NativeClaimBasisV1,
-    authority_preimage: [u8; STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES],
-}
-
-impl StructuredCustodyScratchV1 {
-    /// Canonical empty scratch value; it carries no authenticated semantics.
-    pub const ZEROED: Self = Self {
-        native_claim_basis: NativeClaimBasisV1::ZEROED,
-        authority_preimage: [0; STRUCTURED_CUSTODY_CALL_PREIMAGE_BYTES],
-    };
-}
-
-/// One exact Solana CPI account meta without importing the Solana SDK.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CpiAccountMetaV1 {
-    /// Runtime account address.
-    pub address: Key,
-    /// Whether the callee observes a signer.
-    pub signer: bool,
-    /// Whether the callee may mutate the account.
-    pub writable: bool,
-}
-
-impl CpiAccountMetaV1 {
-    const EMPTY: Self = Self {
-        address: [0; 32],
-        signer: false,
-        writable: false,
-    };
-}
-
-/// Exact General V2 action-35 instruction and ordered CPI metas.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BasePositionTransferCpiV1 {
-    /// Exact base program selected by the immutable descriptor.
-    pub program_id: Key,
-    /// Canonical base `ExtensionRequest(sequence=0, GeneralV2/1/action35/payload298)`.
-    pub data: [u8; BASE_POSITION_TRANSFER_CPI_BYTES],
-    /// Frozen common prefix followed by every reconstruction input.
-    pub accounts: [CpiAccountMetaV1; STRUCTURED_CUSTODY_ACCOUNT_COUNT],
-}
 
 /// One exact staged Position V3 compare-and-write.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -201,98 +105,6 @@ pub struct StructuredVaultPoststateV1 {
     pub structured_delta_id: Key,
 }
 
-/// Target-specific PDA checks that cannot live in a pure codec.
-///
-/// An SBF implementation must derive every address with Solana's program
-/// address primitive. Returning true from caller-authored booleans is not an
-/// implementation of this boundary.
-pub trait StructuredCustodyPdaVerifierV1: BasePositionPdaVerifierV1 {
-    /// Verify the canonical immutable Realm PDA and stored bump.
-    fn verify_realm(&self, base_program: Key, address: Key, realm_id: Key, stored_bump: u8)
-        -> bool;
-
-    /// Verify the canonical immutable Profile V2 PDA.
-    fn verify_profile(
-        &self,
-        base_program: Key,
-        address: Key,
-        realm_id: Key,
-        profile_id: Key,
-    ) -> bool;
-
-    /// Verify the canonical sealed collateral-policy artifact PDA.
-    fn verify_collateral_policy(
-        &self,
-        base_program: Key,
-        address: Key,
-        profile_id: Key,
-        policy_id: Key,
-    ) -> bool;
-
-    /// Parse the upgradeable-loader Program/ProgramData pair and verify its
-    /// exact linkage, deployment slot, owner, executable, and read-only state.
-    fn verify_upgradeable_deployment(
-        &self,
-        upgradeable_loader: Key,
-        program: &RawAccountV1<'_>,
-        program_data: &RawAccountV1<'_>,
-        expected_deployment_slot: u64,
-    ) -> bool;
-
-    /// Verify `general-market-binding:v1 || MarketInstanceV2Id` and stored bump.
-    fn verify_market_binding(
-        &self,
-        base_program: Key,
-        address: Key,
-        market_instance_id: Key,
-        stored_bump: u8,
-    ) -> bool;
-
-    /// Verify the stable General V2 MarketRuntime selected by MarketBinding.
-    fn verify_market_runtime(
-        &self,
-        base_program: Key,
-        address: Key,
-        market_binding: Key,
-        stored_bump: u8,
-    ) -> bool;
-
-    /// Verify the canonical full-width Hoard V2 PDA.
-    fn verify_hoard_v2(
-        &self,
-        base_program: Key,
-        address: Key,
-        market_instance_id: Key,
-        stored_bump: u8,
-    ) -> bool;
-
-    /// Verify the canonical full-width ClaimLedger V3 PDA.
-    fn verify_claim_ledger_v3(
-        &self,
-        base_program: Key,
-        address: Key,
-        market_instance_id: Key,
-        stored_bump: u8,
-    ) -> bool;
-
-    /// Verify a base-owned Product artifact address for its exact kind and id.
-    fn verify_product_artifact(
-        &self,
-        base_program: Key,
-        address: Key,
-        artifact_kind: u8,
-        content_id: Key,
-    ) -> bool;
-
-    /// Verify the exact base-owned account carrying a MarketInstanceV2 preimage.
-    fn verify_market_instance_artifact(
-        &self,
-        base_program: Key,
-        address: Key,
-        market_instance_id: Key,
-    ) -> bool;
-}
-
 /// SHA-256 backend shared by host planning and SBF reconstruction.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AdapterSha256V1;
@@ -338,114 +150,6 @@ impl ReplayV3HashBackend for AdapterSha256V1 {
     }
 }
 
-/// Private-field authority minted only by complete wrapper/base reconstruction.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedStructuredCustodyCallV1 {
-    authority_id: Key,
-    local_action: StructuredClaimActionV1,
-    transfer: PositionAssetTransferPayloadV1,
-    source_after: PositionProjectionV1,
-    destination_after: PositionProjectionV1,
-    poststate: StructuredCustodyPoststateV1,
-    cpi: BasePositionTransferCpiV1,
-}
-
-impl AuthenticatedStructuredCustodyCallV1 {
-    /// Exact domain-separated authority digest placed in action 35.
-    pub const fn authority_id(&self) -> Key {
-        self.authority_id
-    }
-
-    /// Exact wrapper action inferred from the authenticated endpoint purposes.
-    pub const fn local_action(&self) -> StructuredClaimActionV1 {
-        self.local_action
-    }
-
-    /// Exact final action-35 payload carrying this typed authority digest.
-    pub const fn transfer(&self) -> PositionAssetTransferPayloadV1 {
-        self.transfer
-    }
-
-    /// Runtime-owned source successor reconstructed from authoritative state.
-    pub const fn source_after(&self) -> PositionProjectionV1 {
-        self.source_after
-    }
-
-    /// Runtime-owned destination successor reconstructed from authoritative state.
-    pub const fn destination_after(&self) -> PositionProjectionV1 {
-        self.destination_after
-    }
-
-    /// Exact four-account compare-and-write poststate staged for the base.
-    pub const fn poststate(&self) -> StructuredCustodyPoststateV1 {
-        self.poststate
-    }
-
-    /// Exact CPI instruction bytes and ordered account metas.
-    pub const fn cpi(&self) -> BasePositionTransferCpiV1 {
-        self.cpi
-    }
-}
-
-/// Reconstruct and authenticate one structured-custody Position V3 call.
-///
-/// Both the wrapper and General action-35 handler call this same function over
-/// their independently authenticated account views. No rent-bearing generic
-/// capability account exists: the vault PDA signer plus this exact digest is
-/// the ephemeral typed authority.
-#[allow(clippy::too_many_arguments)]
-pub fn authenticate_structured_custody_call_v1<P: StructuredCustodyPdaVerifierV1>(
-    accounts: &[RawAccountV1<'_>],
-    descriptor: &BoundDescriptorV1,
-    deployments: RuntimeDeploymentsV1,
-    collateral: BoundCollateralProfileV2,
-    transfer: PositionAssetTransferPayloadV1,
-    scratch: &mut StructuredCustodyScratchV1,
-    verifier: &P,
-) -> Result<AuthenticatedStructuredCustodyCallV1> {
-    reconstruct_structured_custody_call_v1(
-        accounts,
-        descriptor,
-        deployments,
-        collateral,
-        transfer,
-        scratch,
-        verifier,
-        true,
-    )
-}
-
-/// Prepare the wrapper side of a typed custody call from an authority-neutral payload.
-///
-/// The supplied `authority_id` must be zero. The returned call installs the
-/// reconstructed digest into the final 298-byte payload and CPI bytes. The
-/// base subsequently calls [`authenticate_structured_custody_call_v1`] over
-/// the final payload and the same authenticated account projection.
-#[allow(clippy::too_many_arguments)]
-pub fn prepare_structured_custody_call_v1<P: StructuredCustodyPdaVerifierV1>(
-    accounts: &[RawAccountV1<'_>],
-    descriptor: &BoundDescriptorV1,
-    deployments: RuntimeDeploymentsV1,
-    collateral: BoundCollateralProfileV2,
-    authority_neutral_transfer: PositionAssetTransferPayloadV1,
-    scratch: &mut StructuredCustodyScratchV1,
-    verifier: &P,
-) -> Result<AuthenticatedStructuredCustodyCallV1> {
-    if authority_neutral_transfer.authority_id != [0; 32] {
-        return Err(Error::CustodyAuthorityMismatch);
-    }
-    reconstruct_structured_custody_call_v1(
-        accounts,
-        descriptor,
-        deployments,
-        collateral,
-        authority_neutral_transfer,
-        scratch,
-        verifier,
-        false,
-    )
-}
-
 /// Build exact Position/Replay V3 postimages for a current full-width route.
 ///
 /// The caller must have produced `plan` directly from the same authenticated
@@ -455,7 +159,7 @@ pub fn prepare_structured_custody_call_v1<P: StructuredCustodyPdaVerifierV1>(
 /// General and Structured replay owners exactly once around the plan receipt.
 /// It performs no write and grants no CPI authority by itself.
 pub fn prepare_current_structured_position_poststate_v1<
-    P: StructuredCustodyPdaVerifierV1,
+    P: BasePositionPdaVerifierV1,
 >(
     accounts: &[RawAccountV1<'_>],
     descriptor: &BoundDescriptorV1,
@@ -624,7 +328,7 @@ pub fn prepare_current_structured_position_poststate_v1<
 /// used by the current compaction planner. This helper independently hostile-
 /// decodes the Structured pair, checks every immutable owner/rent coordinate,
 /// and advances only its purpose Replay around the transition receipt.
-pub fn prepare_current_structured_vault_poststate_v1<P: StructuredCustodyPdaVerifierV1>(
+pub fn prepare_current_structured_vault_poststate_v1<P: BasePositionPdaVerifierV1>(
     vault_position_account: &RawAccountV1<'_>,
     vault_replay_account: &RawAccountV1<'_>,
     hoard_account: &RawAccountV1<'_>,
@@ -791,379 +495,6 @@ pub fn prepare_current_structured_vault_poststate_v1<P: StructuredCustodyPdaVeri
         vault_position,
         vault_replay,
         structured_delta_id,
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn reconstruct_structured_custody_call_v1<P: StructuredCustodyPdaVerifierV1>(
-    accounts: &[RawAccountV1<'_>],
-    descriptor: &BoundDescriptorV1,
-    deployments: RuntimeDeploymentsV1,
-    collateral: BoundCollateralProfileV2,
-    transfer: PositionAssetTransferPayloadV1,
-    scratch: &mut StructuredCustodyScratchV1,
-    verifier: &P,
-    authenticate_final_digest: bool,
-) -> Result<AuthenticatedStructuredCustodyCallV1> {
-    validate_account_frame(accounts, descriptor, deployments)?;
-    let descriptor_prestate = decode_owned_descriptor_v1(
-        deployments.binding.wrapper_program,
-        descriptor.addresses().descriptor,
-        &accounts[IX_DESCRIPTOR],
-    )?;
-    if descriptor.descriptor().state != DescriptorStateV1::Active
-        || descriptor_prestate != *descriptor.descriptor()
-        || descriptor.identity().deployment != deployments.binding
-    {
-        return Err(Error::CustodyAuthorityMismatch);
-    }
-    let base_program = deployments.binding.base_program;
-    let realm =
-        RealmAccount::decode(accounts[IX_REALM].data).map_err(|_| Error::ProductBoundary)?;
-    let profile =
-        ProfileAccount::decode(accounts[IX_PROFILE].data).map_err(|_| Error::ProductBoundary)?;
-    let collateral_policy = CollateralPolicyV2::decode(accounts[IX_COLLATERAL_POLICY].data)
-        .map_err(|_| Error::ProductBoundary)?;
-    let collateral_policy_id = collateral_policy
-        .id()
-        .map_err(|_| Error::ProductBoundary)?
-        .bytes();
-    let market_binding = MarketBindingV1::decode(accounts[IX_MARKET_BINDING].data)
-        .map_err(|_| Error::ProductBoundary)?;
-    let market_runtime = MarketRuntimeV3AccountV1::decode(accounts[IX_MARKET_RUNTIME].data)
-        .map_err(|_| Error::ProductBoundary)?;
-    NativeClaimBasisV1::decode_into(
-        accounts[IX_NATIVE_CLAIM_BASIS].data,
-        &mut scratch.native_claim_basis,
-    )
-    .map_err(|_| Error::ProductBoundary)?;
-    let basis = &scratch.native_claim_basis;
-    let market_instance = MarketInstancePreimageV2::decode(accounts[IX_MARKET_INSTANCE].data)
-        .map_err(|_| Error::ProductBoundary)?;
-    let hoard = HoardV2::decode(accounts[IX_HOARD_V2].data).map_err(|_| Error::ProductBoundary)?;
-    let claim_ledger = ClaimLedgerV3::decode(accounts[IX_CLAIM_LEDGER_V3].data)
-        .map_err(|_| Error::ProductBoundary)?;
-    let sha = AdapterSha256V1;
-    let basis_id = sha.hash(
-        NATIVE_CLAIM_BASIS_DOMAIN,
-        accounts[IX_NATIVE_CLAIM_BASIS].data,
-    );
-    let market_instance_id = market_instance
-        .id()
-        .map_err(|_| Error::ProductBoundary)?
-        .bytes();
-    if market_binding.market_instance_v2_id.bytes() != market_instance_id
-        || market_binding.market_genesis_profile_v2_id.bytes()
-            != market_instance
-                .market_genesis_profile_id
-                .content_id()
-                .bytes()
-        || market_binding.native_claim_basis_id.bytes() != basis_id
-        || market_binding.outcome_count != basis.outcome_count
-        || market_binding.basis_degree != basis.basis_degree
-        || descriptor.descriptor().market != market_instance_id
-        || descriptor.descriptor().terms_digest != basis_id
-        || descriptor.identity().claim.basis.market != market_instance_id
-        || descriptor.identity().claim.basis.terms != basis_id
-        || descriptor.identity().claim.basis.basis_degree != basis.basis_degree
-        || descriptor.identity().claim.basis.outcome_count != basis.outcome_count
-        || descriptor.identity().claim.basis.denominator != basis.denominator
-    {
-        return Err(Error::ProductBoundary);
-    }
-    let collateral_market = collateral.market();
-    let collateral_realm = collateral.realm_bound().realm();
-    let collateral_release_id = collateral
-        .release()
-        .id()
-        .map_err(|_| Error::ProductBoundary)?
-        .bytes();
-    if realm.realm.bytes() != collateral_realm.realm.bytes()
-        || realm.profile.bytes() != collateral_realm.profile.bytes()
-        || profile.realm != realm.realm
-        || profile.profile != realm.profile
-        || profile.collateral_policy_id.bytes() != collateral_policy_id
-        || profile.adapter_release_id.bytes() != collateral_release_id
-        || collateral.policy_id().bytes() != collateral_policy_id
-        || collateral_policy.adapter_release.bytes() != collateral_release_id
-        || accounts[IX_COLLATERAL_TOKEN_PROGRAM].key != collateral.release().token_program.bytes()
-        || accounts[IX_WRAPPER_TOKEN_2022_PROGRAM].key != deployments.binding.token_2022_program
-        || collateral_market.market.bytes() != market_instance_id
-        || collateral_market.realm != collateral_realm.realm
-        || collateral_market.profile != collateral_realm.profile
-        || collateral_market.collateral_cap_atoms != market_instance.collateral_cap
-        || market_runtime.market_binding.bytes() != accounts[IX_MARKET_BINDING].key
-        || market_runtime.market_instance_v2_id.bytes() != market_instance_id
-        || hoard.market_instance_id.bytes() != market_instance_id
-        || hoard.realm_id.bytes() != realm.realm.bytes()
-        || hoard.profile_id.bytes() != profile.profile.bytes()
-        || hoard.collateral_policy_id.bytes() != collateral_policy_id
-        || hoard.collateral_release_id.bytes() != collateral_release_id
-        || hoard.authority != collateral_market.hoard_authority
-        || hoard.token_account != collateral_market.hoard_token_account
-        || hoard.collateral_cap_atoms != market_instance.collateral_cap
-        || hoard.outcome_count != basis.outcome_count
-        || claim_ledger.market_instance_id != hoard.market_instance_id
-        || claim_ledger.realm_id != hoard.realm_id
-        || claim_ledger.native_claim_basis_id.bytes() != basis_id
-        || claim_ledger.lifecycle != hoard.lifecycle
-        || claim_ledger.outcome_count != hoard.outcome_count
-    {
-        return Err(Error::ProductBoundary);
-    }
-    let market_phase = decode_market_phase(hoard.lifecycle)?;
-    if !verifier.verify_upgradeable_deployment(
-        deployments.upgradeable_loader,
-        &accounts[IX_WRAPPER_PROGRAM],
-        &accounts[IX_WRAPPER_PROGRAM_DATA],
-        deployments.binding.wrapper_deployment_slot,
-    ) || !verifier.verify_upgradeable_deployment(
-        deployments.upgradeable_loader,
-        &accounts[IX_BASE_PROGRAM],
-        &accounts[IX_BASE_PROGRAM_DATA],
-        deployments.binding.base_deployment_slot,
-    ) || !verifier.verify_upgradeable_deployment(
-        deployments.upgradeable_loader,
-        &accounts[IX_WRAPPER_TOKEN_2022_PROGRAM],
-        &accounts[IX_WRAPPER_TOKEN_2022_PROGRAM_DATA],
-        deployments.binding.token_2022_deployment_slot,
-    ) || !verifier.verify_realm(
-        base_program,
-        accounts[IX_REALM].key,
-        realm.realm.bytes(),
-        realm.stored_bump,
-    ) || !verifier.verify_profile(
-        base_program,
-        accounts[IX_PROFILE].key,
-        realm.realm.bytes(),
-        profile.profile.bytes(),
-    ) || !verifier.verify_collateral_policy(
-        base_program,
-        accounts[IX_COLLATERAL_POLICY].key,
-        profile.profile.bytes(),
-        collateral_policy_id,
-    ) || !verifier.verify_market_binding(
-        base_program,
-        accounts[IX_MARKET_BINDING].key,
-        market_instance_id,
-        market_binding.stored_bump,
-    ) || !verifier.verify_market_runtime(
-        base_program,
-        accounts[IX_MARKET_RUNTIME].key,
-        accounts[IX_MARKET_BINDING].key,
-        market_runtime.stored_bump,
-    ) || !verifier.verify_hoard_v2(
-        base_program,
-        accounts[IX_HOARD_V2].key,
-        market_instance_id,
-        hoard.stored_bump,
-    ) || !verifier.verify_claim_ledger_v3(
-        base_program,
-        accounts[IX_CLAIM_LEDGER_V3].key,
-        market_instance_id,
-        claim_ledger.stored_bump,
-    ) || !verifier.verify_product_artifact(
-        base_program,
-        accounts[IX_NATIVE_CLAIM_BASIS].key,
-        32,
-        basis_id,
-    ) || !verifier.verify_market_instance_artifact(
-        base_program,
-        accounts[IX_MARKET_INSTANCE].key,
-        market_instance_id,
-    ) {
-        return Err(Error::PdaMismatch);
-    }
-
-    let source = authenticate_position_v3(&accounts[IX_SOURCE_POSITION], base_program, verifier)?;
-    let source_replay = authenticate_replay_v3(
-        &accounts[IX_SOURCE_REPLAY],
-        accounts[IX_SOURCE_POSITION].key,
-        source,
-        base_program,
-        verifier,
-        sha,
-    )?;
-    let destination =
-        authenticate_position_v3(&accounts[IX_DESTINATION_POSITION], base_program, verifier)?;
-    let destination_replay = authenticate_replay_v3(
-        &accounts[IX_DESTINATION_REPLAY],
-        accounts[IX_DESTINATION_POSITION].key,
-        destination,
-        base_program,
-        verifier,
-        sha,
-    )?;
-    validate_position_pair(
-        source,
-        &source_replay,
-        &accounts[IX_SOURCE_POSITION],
-        &accounts[IX_SOURCE_REPLAY],
-        market_instance_id,
-        collateral_realm.realm.bytes(),
-        collateral_policy_id,
-        collateral_release_id,
-        basis.outcome_count,
-        claim_ledger,
-    )?;
-    validate_position_pair(
-        destination,
-        &destination_replay,
-        &accounts[IX_DESTINATION_POSITION],
-        &accounts[IX_DESTINATION_REPLAY],
-        market_instance_id,
-        collateral_realm.realm.bytes(),
-        collateral_policy_id,
-        collateral_release_id,
-        basis.outcome_count,
-        claim_ledger,
-    )?;
-
-    let (local_action, user, vault) = direction(source, destination)?;
-    let vault_authority = descriptor.addresses().vault_owner;
-    if vault.owner().bytes() != vault_authority
-        || vault.controller().bytes() != vault_authority
-        || vault.purpose_binding_id().bytes() != descriptor.wrapper_product_id()
-        || user.controller().bytes() != accounts[IX_ACTOR].key
-        || user.purpose_binding_id().bytes() != accounts[IX_MARKET_RUNTIME].key
-        || accounts[IX_VAULT_AUTHORITY].key != vault_authority
-        || transfer.market != market_instance_id
-        || transfer.source_owner != source.owner().bytes()
-        || transfer.destination_owner != destination.owner().bytes()
-        || transfer.source_generation != source.generation()
-        || transfer.destination_generation != destination.generation()
-        || transfer.source_replay_sequence != source_replay.header().next_sequence()
-        || transfer.destination_replay_sequence != destination_replay.header().next_sequence()
-        || transfer.authority_kind != PositionAssetTransferAuthorityKindV1::StructuredCustody
-    {
-        return Err(Error::CustodyAuthorityMismatch);
-    }
-    validate_transfer_padding(transfer, source.outcome_count())?;
-    let transition = prepare_atomic_position_asset_transfer_v1(
-        basis.outcome_count,
-        market_phase,
-        position_projection(source, &source_replay),
-        position_projection(destination, &destination_replay),
-        AtomicPositionAssetTransferRequestV1 {
-            market: transfer.market,
-            source_owner: transfer.source_owner,
-            destination_owner: transfer.destination_owner,
-            source_generation: transfer.source_generation,
-            destination_generation: transfer.destination_generation,
-            source_replay_sequence: transfer.source_replay_sequence,
-            destination_replay_sequence: transfer.destination_replay_sequence,
-            cash_atoms: transfer.cash_atoms,
-            internal: transfer.internal,
-            phase_policy: transfer.phase_policy,
-        },
-    )?;
-    let source_post = position_successor(source, transition.source)?;
-    let destination_post = position_successor(destination, transition.destination)?;
-
-    let source_body_digest = source
-        .semantic_id(&sha)
-        .map_err(|_| Error::ProductBoundary)?
-        .bytes();
-    let destination_body_digest = destination
-        .semantic_id(&sha)
-        .map_err(|_| Error::ProductBoundary)?
-        .bytes();
-    let source_replay_semantic_id = source_replay
-        .semantic_id(&sha)
-        .map_err(|_| Error::ProductBoundary)?
-        .bytes();
-    let destination_replay_semantic_id = destination_replay
-        .semantic_id(&sha)
-        .map_err(|_| Error::ProductBoundary)?
-        .bytes();
-    let projection = StructuredCustodyCallProjectionV1 {
-        target_base_program: base_program,
-        wrapper_local_action: local_action,
-        descriptor_account: accounts[IX_DESCRIPTOR].key,
-        descriptor_body_digest: sha.hash(
-            STRUCTURED_CUSTODY_DESCRIPTOR_BODY_DOMAIN_V1,
-            accounts[IX_DESCRIPTOR].data,
-        ),
-        native_claim_id: descriptor.native_claim_id(),
-        wrapper_product_id: descriptor.wrapper_product_id(),
-        deployment: deployments.binding,
-        hoard_account: accounts[IX_HOARD_V2].key,
-        hoard_body_digest: sha.hash(
-            STRUCTURED_CUSTODY_HOARD_BODY_DOMAIN_V1,
-            accounts[IX_HOARD_V2].data,
-        ),
-        market_binding_account: accounts[IX_MARKET_BINDING].key,
-        market_binding_body_digest: sha.hash(
-            STRUCTURED_CUSTODY_MARKET_BINDING_BODY_DOMAIN_V1,
-            accounts[IX_MARKET_BINDING].data,
-        ),
-        market_runtime_account: accounts[IX_MARKET_RUNTIME].key,
-        market_runtime_body_digest: sha.hash(
-            STRUCTURED_CUSTODY_MARKET_RUNTIME_BODY_DOMAIN_V1,
-            accounts[IX_MARKET_RUNTIME].data,
-        ),
-        native_claim_basis_account: accounts[IX_NATIVE_CLAIM_BASIS].key,
-        native_claim_basis_id: basis_id,
-        market_instance_account: accounts[IX_MARKET_INSTANCE].key,
-        market_instance_id,
-        claim_ledger_account: accounts[IX_CLAIM_LEDGER_V3].key,
-        claim_ledger_body_digest: sha.hash(
-            STRUCTURED_CUSTODY_CLAIM_LEDGER_BODY_DOMAIN_V1,
-            accounts[IX_CLAIM_LEDGER_V3].data,
-        ),
-        realm_id: collateral_realm.realm.bytes(),
-        collateral_policy_id,
-        collateral_release_id,
-        vault_authority,
-        user_actor: accounts[IX_ACTOR].key,
-        source_position_account: accounts[IX_SOURCE_POSITION].key,
-        source_position_body_digest: source_body_digest,
-        source_replay_account: accounts[IX_SOURCE_REPLAY].key,
-        source_replay_body_digest: source_replay_semantic_id,
-        destination_position_account: accounts[IX_DESTINATION_POSITION].key,
-        destination_position_body_digest: destination_body_digest,
-        destination_replay_account: accounts[IX_DESTINATION_REPLAY].key,
-        destination_replay_body_digest: destination_replay_semantic_id,
-        transfer,
-    };
-    projection.encode_preimage_into(&mut scratch.authority_preimage)?;
-    let authority_id = sha.hash(
-        STRUCTURED_CUSTODY_CALL_V1_DOMAIN,
-        &scratch.authority_preimage,
-    );
-    if is_zero(&authority_id)
-        || (authenticate_final_digest && authority_id != transfer.authority_id)
-        || (!authenticate_final_digest && transfer.authority_id != [0; 32])
-    {
-        return Err(Error::CustodyAuthorityMismatch);
-    }
-    let final_transfer = transfer.with_custody_authority(authority_id)?;
-    let poststate = prepare_custody_poststate(
-        accounts,
-        descriptor,
-        local_action,
-        source,
-        source_post,
-        source_replay,
-        source_body_digest,
-        source_replay_semantic_id,
-        destination,
-        destination_post,
-        destination_replay,
-        destination_body_digest,
-        destination_replay_semantic_id,
-        authority_id,
-        sha,
-    )?;
-    let cpi = build_cpi(base_program, accounts, final_transfer)?;
-    Ok(AuthenticatedStructuredCustodyCallV1 {
-        authority_id,
-        local_action,
-        transfer: final_transfer,
-        source_after: transition.source,
-        destination_after: transition.destination,
-        poststate,
-        cpi,
     })
 }
 
@@ -1472,121 +803,6 @@ fn position_write(
     })
 }
 
-fn validate_account_frame(
-    accounts: &[RawAccountV1<'_>],
-    descriptor: &BoundDescriptorV1,
-    deployments: RuntimeDeploymentsV1,
-) -> Result<()> {
-    if accounts.len() != STRUCTURED_CUSTODY_ACCOUNT_COUNT {
-        return Err(Error::InvalidAccounts);
-    }
-    deployments.validate()?;
-    let expected_roles = [
-        AccountRoleV1::VaultAuthority,
-        AccountRoleV1::Realm,
-        AccountRoleV1::Profile,
-        AccountRoleV1::CollateralPolicy,
-        AccountRoleV1::CollateralTokenProgram,
-        AccountRoleV1::MarketBinding,
-        AccountRoleV1::MarketRuntime,
-        AccountRoleV1::SourcePositionV3,
-        AccountRoleV1::SourceReplayV3,
-        AccountRoleV1::DestinationPositionV3,
-        AccountRoleV1::DestinationReplayV3,
-        AccountRoleV1::Actor,
-        AccountRoleV1::Descriptor,
-        AccountRoleV1::WrapperProgram,
-        AccountRoleV1::WrapperProgramData,
-        AccountRoleV1::BaseProgram,
-        AccountRoleV1::BaseProgramData,
-        AccountRoleV1::Token2022Program,
-        AccountRoleV1::Token2022ProgramData,
-        AccountRoleV1::NativeClaimBasisArtifact,
-        AccountRoleV1::MarketInstanceArtifact,
-        AccountRoleV1::HoardV2,
-        AccountRoleV1::ClaimLedgerV3,
-    ];
-    let writable = [
-        false, false, false, false, false, false, false, true, true, true, true, false, false,
-        false, false, false, false, false, false, false, false, false, false,
-    ];
-    let signer = [
-        true, false, false, false, false, false, false, false, false, false, false, true, false,
-        false, false, false, false, false, false, false, false, false, false,
-    ];
-    let executable = [
-        false, false, false, false, true, false, false, false, false, false, false, false, false,
-        true, false, true, false, true, false, false, false, false, false,
-    ];
-    let mut index = 0_usize;
-    while index < accounts.len() {
-        if accounts[index].role != expected_roles[index]
-            || accounts[index].writable != writable[index]
-            || accounts[index].signer != signer[index]
-            || accounts[index].executable != executable[index]
-            || is_zero(&accounts[index].key)
-        {
-            return Err(Error::InvalidAccounts);
-        }
-        let mut later = index + 1;
-        while later < accounts.len() {
-            if accounts[index].key == accounts[later].key
-                && !is_admitted_readonly_program_alias(index, later)
-            {
-                return Err(Error::InvalidAccounts);
-            }
-            later += 1;
-        }
-        index += 1;
-    }
-    let binding = deployments.binding;
-    if accounts[IX_DESCRIPTOR].key != descriptor.addresses().descriptor
-        || accounts[IX_DESCRIPTOR].owner != binding.wrapper_program
-        || accounts[IX_WRAPPER_PROGRAM].key != binding.wrapper_program
-        || accounts[IX_WRAPPER_PROGRAM].owner != deployments.upgradeable_loader
-        || accounts[IX_WRAPPER_PROGRAM_DATA].key != binding.wrapper_program_data
-        || accounts[IX_WRAPPER_PROGRAM_DATA].owner != deployments.upgradeable_loader
-        || accounts[IX_BASE_PROGRAM].key != binding.base_program
-        || accounts[IX_BASE_PROGRAM].owner != deployments.upgradeable_loader
-        || accounts[IX_BASE_PROGRAM_DATA].key != binding.base_program_data
-        || accounts[IX_BASE_PROGRAM_DATA].owner != deployments.upgradeable_loader
-        || accounts[IX_WRAPPER_TOKEN_2022_PROGRAM].key != binding.token_2022_program
-        || accounts[IX_WRAPPER_TOKEN_2022_PROGRAM].owner != deployments.upgradeable_loader
-        || accounts[IX_WRAPPER_TOKEN_2022_PROGRAM_DATA].key != binding.token_2022_program_data
-        || accounts[IX_WRAPPER_TOKEN_2022_PROGRAM_DATA].owner != deployments.upgradeable_loader
-    {
-        return Err(Error::InvalidDeployment);
-    }
-    for index in [
-        IX_REALM,
-        IX_PROFILE,
-        IX_COLLATERAL_POLICY,
-        IX_MARKET_BINDING,
-        IX_MARKET_RUNTIME,
-        IX_SOURCE_POSITION,
-        IX_SOURCE_REPLAY,
-        IX_DESTINATION_POSITION,
-        IX_DESTINATION_REPLAY,
-        IX_NATIVE_CLAIM_BASIS,
-        IX_MARKET_INSTANCE,
-        IX_HOARD_V2,
-        IX_CLAIM_LEDGER_V3,
-    ] {
-        if accounts[index].owner != binding.base_program {
-            return Err(Error::InvalidAccounts);
-        }
-    }
-    Ok(())
-}
-
-/// A Realm may select Token-2022 as its collateral program. In that case the
-/// collateral executable and the wrapper-token executable are the same
-/// read-only account. No data-bearing, signer, writable, ProgramData, or
-/// semantically distinct role is permitted to alias.
-const fn is_admitted_readonly_program_alias(left: usize, right: usize) -> bool {
-    left == IX_COLLATERAL_TOKEN_PROGRAM && right == IX_WRAPPER_TOKEN_2022_PROGRAM
-}
-
 #[allow(clippy::too_many_arguments)]
 fn validate_position_pair(
     position: PositionAccountV3,
@@ -1628,7 +844,7 @@ fn validate_position_pair(
     Ok(())
 }
 
-fn authenticate_position_v3<P: StructuredCustodyPdaVerifierV1>(
+fn authenticate_position_v3<P: BasePositionPdaVerifierV1>(
     account: &RawAccountV1<'_>,
     base_program: Key,
     verifier: &P,
@@ -1653,7 +869,7 @@ fn authenticate_position_v3<P: StructuredCustodyPdaVerifierV1>(
     Ok(position)
 }
 
-fn authenticate_replay_v3<'a, P: StructuredCustodyPdaVerifierV1>(
+fn authenticate_replay_v3<'a, P: BasePositionPdaVerifierV1>(
     account: &RawAccountV1<'a>,
     position_account: Key,
     position: PositionAccountV3,
@@ -1696,232 +912,4 @@ fn general_id(bytes: Key) -> Result<Id32> {
     Id32::new(bytes).map_err(|_| Error::CustodyAuthorityMismatch)
 }
 
-fn direction(
-    source: PositionAccountV3,
-    destination: PositionAccountV3,
-) -> Result<(
-    StructuredClaimActionV1,
-    PositionAccountV3,
-    PositionAccountV3,
-)> {
-    match (source.purpose(), destination.purpose()) {
-        (PositionPurposeV3::General, PositionPurposeV3::StructuredClaim) => {
-            Ok((StructuredClaimActionV1::WrapCanonical, source, destination))
-        }
-        (PositionPurposeV3::StructuredClaim, PositionPurposeV3::General) => Ok((
-            StructuredClaimActionV1::UnwrapCanonical,
-            destination,
-            source,
-        )),
-        _ => Err(Error::CustodyAuthorityMismatch),
-    }
-}
-
-fn validate_transfer_padding(
-    transfer: PositionAssetTransferPayloadV1,
-    outcome_count: u8,
-) -> Result<()> {
-    let width = usize::from(outcome_count);
-    if !(2..=crate::runtime_contract::MAX_OUTCOMES).contains(&width) {
-        return Err(Error::ProductBoundary);
-    }
-    let mut index = width;
-    while index < crate::runtime_contract::MAX_OUTCOMES {
-        if transfer.internal[index] != 0 {
-            return Err(Error::CustodyAuthorityMismatch);
-        }
-        index += 1;
-    }
-    match transfer.phase_policy {
-        AssetTransferPhasePolicyV1::ActiveOnly | AssetTransferPhasePolicyV1::ActiveOrResolved => {
-            Ok(())
-        }
-    }
-}
-
-fn decode_market_phase(lifecycle: MarketLiabilityLifecycleV1) -> Result<MarketPhase> {
-    match lifecycle {
-        MarketLiabilityLifecycleV1::Open => Ok(MarketPhase::Active),
-        MarketLiabilityLifecycleV1::Resolved => Ok(MarketPhase::Resolved),
-        MarketLiabilityLifecycleV1::Retiring => Err(Error::ProductBoundary),
-    }
-}
-
-fn position_projection(
-    position: PositionAccountV3,
-    replay: &ReplayV3Envelope<'_>,
-) -> PositionProjectionV1 {
-    PositionProjectionV1 {
-        market: position.market_instance_id().bytes(),
-        owner: position.owner().bytes(),
-        generation: position.generation(),
-        replay_sequence: replay.header().next_sequence(),
-        cash_atoms: position.cash_atoms(),
-        reserved_cash_atoms: position.reserved_cash_atoms(),
-        internal: position.native_eggs(),
-        closed: position.lifecycle() != PositionLifecycleV3::Open,
-    }
-}
-
-fn build_cpi(
-    base_program: Key,
-    accounts: &[RawAccountV1<'_>],
-    transfer: PositionAssetTransferPayloadV1,
-) -> Result<BasePositionTransferCpiV1> {
-    if accounts.len() != STRUCTURED_CUSTODY_ACCOUNT_COUNT {
-        return Err(Error::InvalidAccounts);
-    }
-    let mut data = [0_u8; BASE_POSITION_TRANSFER_CPI_BYTES];
-    let payload = transfer.encode()?;
-    let request = ExtensionRequest {
-        sequence: 0,
-        envelope: ExtensionEnvelope {
-            family: ExtensionFamily::GeneralV2,
-            action: ExtensionAction::GeneralV2(GeneralV2Action::TransferPositionAssets),
-            payload: &payload,
-        },
-    };
-    let written = request
-        .encode(&mut data)
-        .map_err(|_| Error::InvalidInstruction)?;
-    if written != BASE_POSITION_TRANSFER_CPI_BYTES {
-        return Err(Error::InvalidInstruction);
-    }
-    let mut metas = [CpiAccountMetaV1::EMPTY; STRUCTURED_CUSTODY_ACCOUNT_COUNT];
-    let mut index = 0_usize;
-    while index < accounts.len() {
-        metas[index] = CpiAccountMetaV1 {
-            address: accounts[index].key,
-            signer: accounts[index].signer,
-            writable: accounts[index].writable,
-        };
-        index += 1;
-    }
-    Ok(BasePositionTransferCpiV1 {
-        program_id: base_program,
-        data,
-        accounts: metas,
-    })
-}
-
-const _: () = assert!(BASE_POSITION_TRANSFER_CPI_BYTES == 13 + 3 + 298);
 const _: () = assert!(STRUCTURED_CUSTODY_ACCOUNT_COUNT == 23);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn transfer() -> PositionAssetTransferPayloadV1 {
-        let mut internal = [0; crate::runtime_contract::MAX_OUTCOMES];
-        internal[0] = 1;
-        PositionAssetTransferPayloadV1 {
-            market: [1; 32],
-            source_owner: [2; 32],
-            destination_owner: [3; 32],
-            source_generation: 4,
-            destination_generation: 5,
-            source_replay_sequence: 6,
-            destination_replay_sequence: 7,
-            cash_atoms: 0,
-            internal,
-            phase_policy: AssetTransferPhasePolicyV1::ActiveOnly,
-            authority_kind: PositionAssetTransferAuthorityKindV1::StructuredCustody,
-            authority_id: [8; 32],
-        }
-    }
-
-    fn raw_accounts() -> [RawAccountV1<'static>; STRUCTURED_CUSTODY_ACCOUNT_COUNT] {
-        let roles = [
-            AccountRoleV1::VaultAuthority,
-            AccountRoleV1::Realm,
-            AccountRoleV1::Profile,
-            AccountRoleV1::CollateralPolicy,
-            AccountRoleV1::CollateralTokenProgram,
-            AccountRoleV1::MarketBinding,
-            AccountRoleV1::MarketRuntime,
-            AccountRoleV1::SourcePositionV3,
-            AccountRoleV1::SourceReplayV3,
-            AccountRoleV1::DestinationPositionV3,
-            AccountRoleV1::DestinationReplayV3,
-            AccountRoleV1::Actor,
-            AccountRoleV1::Descriptor,
-            AccountRoleV1::WrapperProgram,
-            AccountRoleV1::WrapperProgramData,
-            AccountRoleV1::BaseProgram,
-            AccountRoleV1::BaseProgramData,
-            AccountRoleV1::Token2022Program,
-            AccountRoleV1::Token2022ProgramData,
-            AccountRoleV1::NativeClaimBasisArtifact,
-            AccountRoleV1::MarketInstanceArtifact,
-            AccountRoleV1::HoardV2,
-            AccountRoleV1::ClaimLedgerV3,
-        ];
-        let mut accounts = [RawAccountV1 {
-            role: AccountRoleV1::VaultAuthority,
-            key: [1; 32],
-            owner: [200; 32],
-            lamports: 1,
-            data: &[],
-            signer: false,
-            writable: false,
-            executable: false,
-        }; STRUCTURED_CUSTODY_ACCOUNT_COUNT];
-        let mut index = 0_usize;
-        while index < accounts.len() {
-            accounts[index].role = roles[index];
-            accounts[index].key = [u8::try_from(index + 1).expect("bounded account index"); 32];
-            accounts[index].signer = index == IX_VAULT_AUTHORITY || index == IX_ACTOR;
-            accounts[index].writable =
-                (IX_SOURCE_POSITION..=IX_DESTINATION_REPLAY).contains(&index);
-            accounts[index].executable = matches!(
-                index,
-                IX_COLLATERAL_TOKEN_PROGRAM
-                    | IX_WRAPPER_PROGRAM
-                    | IX_BASE_PROGRAM
-                    | IX_WRAPPER_TOKEN_2022_PROGRAM
-            );
-            index += 1;
-        }
-        accounts
-    }
-
-    #[test]
-    fn custody_cpi_uses_only_the_canonical_outer_extension_request() {
-        let accounts = raw_accounts();
-        let plan = build_cpi([200; 32], &accounts, transfer()).unwrap();
-        let decoded = ExtensionRequest::decode(&plan.data).unwrap();
-        assert_eq!(decoded.sequence, 0);
-        assert_eq!(
-            decoded.envelope.action,
-            ExtensionAction::GeneralV2(GeneralV2Action::TransferPositionAssets)
-        );
-        assert_eq!(decoded.envelope.payload, &transfer().encode().unwrap());
-        assert!(ExtensionRequest::decode(&plan.data[13..]).is_err());
-    }
-
-    #[test]
-    fn custody_cpi_refuses_truncated_or_expanded_account_contracts() {
-        let accounts = raw_accounts();
-        assert_eq!(
-            build_cpi([200; 32], &accounts[..accounts.len() - 1], transfer()),
-            Err(Error::InvalidAccounts)
-        );
-        assert_eq!(
-            build_cpi([200; 32], &[], transfer()),
-            Err(Error::InvalidAccounts)
-        );
-    }
-
-    #[test]
-    fn account_frame_allows_only_the_token_2022_collateral_executable_alias() {
-        let mut accounts = raw_accounts();
-        accounts[IX_COLLATERAL_TOKEN_PROGRAM].key =
-            accounts[IX_WRAPPER_TOKEN_2022_PROGRAM].key;
-        assert!(is_admitted_readonly_program_alias(
-            IX_COLLATERAL_TOKEN_PROGRAM,
-            IX_WRAPPER_TOKEN_2022_PROGRAM
-        ));
-        accounts[IX_REALM].key = accounts[IX_PROFILE].key;
-        assert!(!is_admitted_readonly_program_alias(IX_REALM, IX_PROFILE));
-    }
-}

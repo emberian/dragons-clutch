@@ -195,7 +195,8 @@ workflow node states that authoritative accounts must be reloaded.
 
 ## Files
 
-- `chain-client.js`: operatord-only target and bounded projection transport.
+- `chain-client.js`: operatord-only target, canonical `/v1/session`
+  attach/restart contract, and bounded projection transport.
 - `successor-builder.js`: exact outer message and unsigned transaction bytes.
 - `compiler-proposal.js`: bounded pure-compiler transport and exact proposal
   validation; no compiler math.

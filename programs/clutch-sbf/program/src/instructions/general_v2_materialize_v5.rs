@@ -19,8 +19,8 @@ use clutch_general_v2_contract::{
     FreezeEntitlementPayloadV1, Id32, OwnerSettlementSeedTupleV5, SettlementRootChildStateV1,
 };
 use clutch_general_v2_runtime::{
-    derive_candidate_entitlement_projection_v4, prepare_materialize_entitlement_slice_v5,
-    prepare_materialize_portfolio_pair_v5, CandidateEntitlementProjectionV4,
+    derive_candidate_entitlement_projection_v5, prepare_materialize_entitlement_slice_v5,
+    prepare_materialize_portfolio_pair_v5, CandidateEntitlementProjectionV5,
     EntitlementEndpointInputV5, MaterializationReservationInputV9,
     MaterializeEntitlementSliceInputV5, MaterializeEntitlementSlicePlanV5,
     MaterializePortfolioPairInputV5, MaterializePortfolioPairPlanV5,
@@ -116,7 +116,7 @@ fn require_all_distinct(accounts: &[AccountInfo<'_>]) -> Outcome<()> {
 }
 
 fn endpoint_order_indices(
-    entitlement: &CandidateEntitlementProjectionV4,
+    entitlement: &CandidateEntitlementProjectionV5<'_>,
 ) -> Outcome<([u8; 2], usize)> {
     let slice = entitlement.current_slice();
     match (slice.buy(), slice.sell(), slice.route()) {
@@ -134,16 +134,18 @@ fn endpoint_order_indices(
 }
 
 fn current_slice_is_portfolio_pair(
-    root_traversal: &super::general_v2_settlement_traversal_v5::AuthenticatedRootSettlementTraversalV5<'_>,
+    root_traversal: &super::general_v2_settlement_traversal_v5::AuthenticatedRootSettlementTraversalV5<'_, '_>,
 ) -> Outcome<bool> {
-    let entitlement = derive_candidate_entitlement_projection_v4(
+    let entitlement = derive_candidate_entitlement_projection_v5(
         root_traversal.root().account(),
         root_traversal.root().root(),
         root_traversal.traversal().traversal(),
-    )?;
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let (order_indices, endpoint_count) = endpoint_order_indices(&entitlement)?;
     let first = entitlement
         .settlement_membership(order_indices[0])
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
         .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
     if endpoint_count == 1 {
         require(
@@ -154,6 +156,7 @@ fn current_slice_is_portfolio_pair(
     }
     let second = entitlement
         .settlement_membership(order_indices[1])
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
         .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
     match (first.order_kind, second.order_kind) {
         (
@@ -320,10 +323,10 @@ fn creation_funding(
     })
 }
 
-fn select_traversal(
+fn select_traversal<'info>(
     program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-) -> Outcome<(AuthenticatedSettlementTraversalV5, usize)> {
+    accounts: &[AccountInfo<'info>],
+) -> Outcome<(AuthenticatedSettlementTraversalV5<'info>, usize)> {
     let mut selected = None;
     let mut selected_pages = 0usize;
     let mut page_count = 1usize;
@@ -364,7 +367,7 @@ fn prepare_owner_fee_evidence(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     root: &super::general_v2_settlement_root::AuthenticatedGeneralSettlementRootV1,
-    entitlement: &CandidateEntitlementProjectionV4,
+    entitlement: &CandidateEntitlementProjectionV5<'_>,
     order_indices: [u8; 2],
     endpoint_count: usize,
     fresh: [bool; 2],
@@ -382,6 +385,7 @@ fn prepare_owner_fee_evidence(
             if fresh[ordinal] {
                 let membership = entitlement
                     .settlement_membership(order_indices[ordinal])
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
                     .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
                 out[ordinal] = Some(prepare_owner_fee_action24_v5(
                     program_id,
@@ -427,6 +431,7 @@ fn prepare_owner_fee_evidence(
             )?;
             let membership = entitlement
                 .settlement_membership(order_indices[ordinal])
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
                 .ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
             out[ordinal] = Some(prepare_owner_fee_action24_v5(
                 program_id,
@@ -531,16 +536,17 @@ fn make_endpoint_input<'a>(
 fn prepare_generic_plan(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    root_traversal: &super::general_v2_settlement_traversal_v5::AuthenticatedRootSettlementTraversalV5<'_>,
+    root_traversal: &super::general_v2_settlement_traversal_v5::AuthenticatedRootSettlementTraversalV5<'_, '_>,
     page_count: usize,
     rent: &RentParameters,
 ) -> Outcome<Box<MaterializeEntitlementSlicePlanV5>> {
     let root = root_traversal.root();
-    let entitlement = Box::new(derive_candidate_entitlement_projection_v4(
+    let entitlement = Box::new(derive_candidate_entitlement_projection_v5(
         root.account(),
         root.root(),
         root_traversal.traversal().traversal(),
-    )?);
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?);
     let (order_indices, endpoint_count) = endpoint_order_indices(&entitlement)?;
     let mut fresh = [false; 2];
     let mut ordinal = 0usize;
@@ -663,7 +669,8 @@ fn prepare_generic_plan(
             contract::SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5,
         )?,
         endpoints: [Some(endpoint0), endpoint1],
-    })?;
+    })
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     Ok(Box::new(plan))
 }
 
@@ -671,17 +678,18 @@ fn prepare_generic_plan(
 fn prepare_portfolio_plan(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    root_traversal: &super::general_v2_settlement_traversal_v5::AuthenticatedRootSettlementTraversalV5<'_>,
+    root_traversal: &super::general_v2_settlement_traversal_v5::AuthenticatedRootSettlementTraversalV5<'_, '_>,
     page_count: usize,
     rent: &RentParameters,
     sibling_set: AuthenticatedPortfolioReceiptSiblingSetV2,
 ) -> Outcome<(Box<MaterializePortfolioPairPlanV5>, usize)> {
     let root = root_traversal.root();
-    let entitlement = Box::new(derive_candidate_entitlement_projection_v4(
+    let entitlement = Box::new(derive_candidate_entitlement_projection_v5(
         root.account(),
         root.root(),
         root_traversal.traversal().traversal(),
-    )?);
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?);
     let pair = sibling_set.pair();
     let order_indices = [
         pair.buyer().record().order_index,
@@ -798,7 +806,8 @@ fn prepare_portfolio_plan(
         sibling_set,
         receipts,
         endpoints: [endpoint0, endpoint1],
-    })?;
+    })
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     Ok((Box::new(plan), fee_end))
 }
 

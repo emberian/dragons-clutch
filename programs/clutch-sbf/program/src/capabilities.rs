@@ -227,9 +227,10 @@ pub const fn extension_intent_action_allocated(
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
     &[(77, 2, 1), (77, 2, 2), (77, 2, 3), (77, 2, 4)];
 
-/// Structured laboratory build seam. Runtime tuples remain empty until
-/// Product BundleV5/ReleaseV2/ProfileV4, locus-aware deployment releases, and
-/// the collateral value-route receipt are joined in one exact account frame.
+/// Structured laboratory build seam. Actions 1/3/5/6/7/8 have one closed
+/// current account contract, but runtime tuples remain empty because the checked
+/// wrapper/base release identities still describe zero-Structured-capability
+/// artifacts and no replacement release evidence has been admitted.
 #[cfg(all(
     feature = "profile-full",
     feature = "non-production-structured-custody-lab",

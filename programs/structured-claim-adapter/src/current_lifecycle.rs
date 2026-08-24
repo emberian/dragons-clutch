@@ -240,8 +240,8 @@ fn compaction_disposition_transition_id_from_evidence<B: PositionV3Sha256Backend
     Ok(id)
 }
 
-/// Prepare current descriptor retirement without consulting the withdrawn
-/// modeled MarketLedger. The current Hoard/Claim owners are authenticated only
+/// Prepare current descriptor retirement from current account owners only.
+/// The current Hoard/Claim owners are authenticated only
 /// to prove this descriptor still belongs to the exact live Market/Realm
 /// liability domain; retirement itself moves no economic atom in either owner.
 /// The base adapter must construct `vault_retirement` from the canonical
@@ -754,7 +754,7 @@ pub fn prepare_current_redeem_terminal_v1<B: PositionV3Sha256Backend>(
     let denominator = u128::from(resolution.facts.payout_denominator);
     if residual_numerator % denominator != 0 {
         return Err(Error::Runtime(
-            crate::runtime_contract::Error::EconomicTransitionRefused,
+            crate::runtime_contract::Error::InexactTerminalPayout,
         ));
     }
     let residual_payout = u64::try_from(residual_numerator / denominator)

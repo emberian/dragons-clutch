@@ -150,6 +150,31 @@ p { margin: 0.5rem 0; }
   font-size: 0.78rem;
 }
 
+.attach-form {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) minmax(16rem, 3fr) auto;
+  gap: 0.6rem;
+  align-items: center;
+  margin-top: 0.8rem;
+}
+.attach-form label { color: var(--ink-2); font-size: 0.78rem; }
+.attach-form input, .attach-form button, .callout button {
+  min-height: 2.2rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  padding: 0.35rem 0.55rem;
+}
+.attach-form button { cursor: pointer; border-color: var(--accent); color: var(--accent); }
+.callout button { margin-left: auto; }
+.table-scroll { overflow-x: auto; }
+[hidden] { display: none !important; }
+@media (max-width: 680px) {
+  .attach-form { grid-template-columns: 1fr; }
+}
+
 /* ---- cards and readouts ---- */
 .card {
   padding: 0.9rem 1rem;
