@@ -22,7 +22,7 @@ Legacy source `rent_refund` bytes mean this immutable authority, never a direct 
 
 ## Wire and frame grammar
 
-All wires begin with `DCLTRIX1`, schema `u16=1`, an action byte, and five zero reserved bytes. Create is exactly 56 bytes: 16-byte header, 32-byte nonzero authority, one bump, and seven zero reserved bytes. It is permissionless; authority is payload data and not an account or signer. Its ordered frame is `[payer, vacant_credit, SystemProgram, Rent]`. Payer is signer+writable and creation funds exactly the current Rent minimum.
+All wires begin with the RentCredit-specific `DCLTRCI1`, schema `u16=1`, an action byte, and five zero reserved bytes. This domain is deliberately distinct from immutable-record construction. Create is exactly 56 bytes: 16-byte header, 32-byte nonzero authority, one bump, and seven zero reserved bytes. It is permissionless; authority is payload data and not an account or signer. Its ordered frame is `[payer, vacant_credit, SystemProgram, Rent]`. Payer is signer+writable and creation funds exactly the current Rent minimum.
 
 Withdraw is exactly 24 bytes: 16-byte header plus nonzero little-endian `u64` requested amount. Its ordered frame is `[credit, authority, recipient, Rent]`. Credit is writable non-signer. A distinct authority is only checked as the exact bound key and a readonly signer; the contract intentionally does not inspect its owner, data, executable status, or lamports. Recipient is a separately supplied writable, nonexecuting, data-empty, System-owned wallet authenticated by the adapter. Rent is canonical and readonly. Authority may equal recipient only under merged runtime signer+writable privilege union; every other role alias is refused.
 

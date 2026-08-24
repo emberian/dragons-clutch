@@ -37,7 +37,7 @@ pub const RENT_CREDIT_PDA_DOMAIN_BYTES_V1: usize = 22;
 /// Canonical persistent-account magic.
 pub const RENT_CREDIT_MAGIC_V1: [u8; 8] = *b"DCLTRNT1";
 /// Canonical rent-credit instruction magic.
-pub const RENT_CREDIT_INSTRUCTION_MAGIC_V1: [u8; 8] = *b"DCLTRIX1";
+pub const RENT_CREDIT_INSTRUCTION_MAGIC_V1: [u8; 8] = *b"DCLTRCI1";
 /// Implemented persistent-account and instruction schema version.
 pub const RENT_CREDIT_SCHEMA_VERSION_V1: u16 = 1;
 
