@@ -7,6 +7,8 @@
 //! This crate owns no Solana accounts, Pyth SDK types, CPI, rent lookup, or
 //! authority policy.  Adapters supply those values and use these exact layouts.
 
+/// Inline Pyth feed-semantics contract.
+pub mod feed_profile;
 /// Funding-account contract.
 pub mod funding;
 /// Resolve-instruction contract.
@@ -35,6 +37,8 @@ pub enum Error {
     NonCanonicalReservedBytes,
     /// A required opaque identifier was all zero.
     ZeroIdentifier,
+    /// The base and quote asset semantic identifiers were identical.
+    IdenticalAssetSemanticIdentifiers,
     /// A required bounty was zero.
     ZeroBounty,
     /// An exact checked arithmetic operation overflowed.

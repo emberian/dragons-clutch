@@ -1,18 +1,21 @@
 //! One-account categorical Market state composed from existing contracts.
 //!
-//! The embedded [`CategoricalPythPolicyRecordV1`] is shape- and
-//! semantics-validated here. This SDK-free crate deliberately performs no
-//! hashing. A composing SBF adapter **must** hash the canonical policy bytes
-//! and compare that content identity with
+//! The embedded [`CategoricalPythPolicyRecordV1`] and [`PythFeedProfileV1`] are
+//! shape- and semantics-validated here. This SDK-free crate deliberately
+//! performs no hashing. A composing SBF adapter **must** hash the canonical
+//! policy bytes and compare that content identity with
 //! [`MarketIdentity::resolution_policy_id`](dclutch_core_contract::MarketIdentity::resolution_policy_id).
-//! Neither [`MarketStateV1::new`] nor [`MarketStateV1::decode`] claims that this
-//! required identity comparison has occurred.
+//! It must separately hash the exact canonical feed-profile bytes and compare
+//! that content identity with [`CategoricalPythPolicyRecordV1::feed_profile_id`].
+//! Neither [`MarketStateV1::new`] nor [`MarketStateV1::decode`] claims that
+//! either required identity comparison has occurred.
 
 use dclutch_core_contract::{MARKET_ROOT_BYTES, MarketRoot, Phase as RootPhase};
 use dclutch_kernel::{CategoricalLedger, Phase as LedgerPhase};
 
 use crate::{
     Error, Result, array,
+    feed_profile::{FEED_PROFILE_BYTES, PythFeedProfileV1},
     policy::{CategoricalPythPolicyRecordV1, POLICY_BYTES},
     receipt::{RECEIPT_BYTES, ReceiptKind, ResolutionReceiptV1},
     zero,
@@ -23,16 +26,17 @@ pub const MARKET_MAGIC: [u8; 8] = *b"DCLTMKT1";
 /// Implemented composed Market schema.
 pub const MARKET_SCHEMA_VERSION: u16 = 1;
 /// Fixed Market bytes excluding the `N` eight-byte supply entries.
-pub const MARKET_BASE_BYTES: usize = 704;
+pub const MARKET_BASE_BYTES: usize = 810;
 /// Exact width of a two-outcome Market account.
-pub const BINARY_MARKET_BYTES: usize = 720;
+pub const BINARY_MARKET_BYTES: usize = 826;
 /// Exact width of a sixteen-outcome Market account.
-pub const MAX_MARKET_BYTES: usize = 832;
+pub const MAX_MARKET_BYTES: usize = 938;
 
 const ROOT_OFFSET: usize = 16;
 const POLICY_OFFSET: usize = 184;
-const HOARD_OFFSET: usize = 568;
-const SUPPLY_OFFSET: usize = 576;
+const FEED_PROFILE_OFFSET: usize = 568;
+const HOARD_OFFSET: usize = 674;
+const SUPPLY_OFFSET: usize = 682;
 
 /// Private-field V1 composition of root, policy, liabilities, and receipt.
 ///
@@ -43,6 +47,7 @@ const SUPPLY_OFFSET: usize = 576;
 pub struct MarketStateV1<const N: usize> {
     root: MarketRoot,
     policy: CategoricalPythPolicyRecordV1,
+    feed_profile: PythFeedProfileV1,
     hoard_atoms: u64,
     supply: [u64; N],
     receipt: ResolutionReceiptV1,
@@ -52,12 +57,13 @@ impl<const N: usize> MarketStateV1<N> {
     /// Construct and cross-validate one composed Market account.
     ///
     /// This validates only canonical shape, lifecycle, policy, receipt, and
-    /// ledger solvency. The composing SBF adapter remains obligated to hash the
-    /// canonical policy record and compare it with the root's resolution-policy
-    /// content identity.
+    /// ledger solvency. The composing SBF adapter remains obligated to hash
+    /// both canonical records and compare them with their respective content
+    /// identities in the root and policy.
     pub fn new(
         root: MarketRoot,
         policy: CategoricalPythPolicyRecordV1,
+        feed_profile: PythFeedProfileV1,
         hoard_atoms: u64,
         supply: [u64; N],
         receipt: ResolutionReceiptV1,
@@ -65,6 +71,7 @@ impl<const N: usize> MarketStateV1<N> {
         let state = Self {
             root,
             policy,
+            feed_profile,
             hoard_atoms,
             supply,
             receipt,
@@ -104,6 +111,9 @@ impl<const N: usize> MarketStateV1<N> {
         let policy_end = POLICY_OFFSET
             .checked_add(POLICY_BYTES)
             .ok_or(Error::ArithmeticOverflow)?;
+        let feed_profile_end = FEED_PROFILE_OFFSET
+            .checked_add(FEED_PROFILE_BYTES)
+            .ok_or(Error::ArithmeticOverflow)?;
         let receipt_offset = receipt_offset::<N>()?;
         let receipt_end = receipt_offset
             .checked_add(RECEIPT_BYTES)
@@ -117,6 +127,11 @@ impl<const N: usize> MarketStateV1<N> {
         let policy = CategoricalPythPolicyRecordV1::decode(
             bytes
                 .get(POLICY_OFFSET..policy_end)
+                .ok_or(Error::InvalidLength)?,
+        )?;
+        let feed_profile = PythFeedProfileV1::decode(
+            bytes
+                .get(FEED_PROFILE_OFFSET..feed_profile_end)
                 .ok_or(Error::InvalidLength)?,
         )?;
         let hoard_atoms = u64::from_le_bytes(array(bytes, HOARD_OFFSET)?);
@@ -134,7 +149,7 @@ impl<const N: usize> MarketStateV1<N> {
                 .ok_or(Error::InvalidLength)?,
             outcome_count,
         )?;
-        Self::new(root, policy, hoard_atoms, supply, receipt)
+        Self::new(root, policy, feed_profile, hoard_atoms, supply, receipt)
     }
 
     /// Encode into the exact caller-owned account buffer without partial mutation.
@@ -148,8 +163,9 @@ impl<const N: usize> MarketStateV1<N> {
 
         let root = self.root.to_bytes();
         let policy = self.policy.to_bytes();
+        let feed_profile = self.feed_profile.to_bytes();
         let receipt = self.receipt.to_bytes();
-        let receipt_offset = SUPPLY_OFFSET + N * 8;
+        let receipt_offset = receipt_offset::<N>()?;
 
         output.fill(0);
         put(output, 0, &MARKET_MAGIC);
@@ -157,6 +173,7 @@ impl<const N: usize> MarketStateV1<N> {
         put(output, 10, &[outcome_count]);
         put(output, ROOT_OFFSET, &root);
         put(output, POLICY_OFFSET, &policy);
+        put(output, FEED_PROFILE_OFFSET, &feed_profile);
         put(output, HOARD_OFFSET, &self.hoard_atoms.to_le_bytes());
         for (index, amount) in self.supply.iter().enumerate() {
             put(output, SUPPLY_OFFSET + index * 8, &amount.to_le_bytes());
@@ -165,13 +182,14 @@ impl<const N: usize> MarketStateV1<N> {
         Ok(())
     }
 
-    /// Validate the composed account without asserting its policy content hash.
+    /// Validate the composed account without asserting either content hash.
     pub fn validate(&self) -> Result<()> {
         let outcome_count = outcome_count::<N>()?;
         self.root
             .validate()
             .map_err(|error| Error::InvalidMarketRoot { error })?;
         self.policy.to_kernel_policy()?;
+        self.feed_profile.validate()?;
         if usize::from(self.policy.price_cell_count())
             .checked_add(1)
             .ok_or(Error::ArithmeticOverflow)?
@@ -211,6 +229,11 @@ impl<const N: usize> MarketStateV1<N> {
     /// Borrow the embedded validated categorical Pyth policy record.
     pub const fn policy(&self) -> &CategoricalPythPolicyRecordV1 {
         &self.policy
+    }
+
+    /// Borrow the inline canonical Pyth feed-semantics profile.
+    pub const fn feed_profile(&self) -> &PythFeedProfileV1 {
+        &self.feed_profile
     }
 
     /// Return claimant-backing collateral atoms.
@@ -300,6 +323,7 @@ mod tests {
     use dclutch_kernel::{Error as LedgerError, MAX_OUTCOMES};
 
     use crate::{
+        feed_profile::FEED_PROFILE_MAGIC,
         policy::POLICY_MAGIC,
         receipt::{Clock, PriceInput},
     };
@@ -379,6 +403,10 @@ mod tests {
         })
     }
 
+    fn feed_profile() -> Result<PythFeedProfileV1> {
+        PythFeedProfileV1::new([4; 32], [5; 32], [6; 32])
+    }
+
     fn empty<const N: usize>() -> Result<ResolutionReceiptV1> {
         ResolutionReceiptV1::empty(u8::try_from(N).map_err(|_| Error::InvalidOutcomeCount)?)
     }
@@ -422,6 +450,7 @@ mod tests {
         let binary = MarketStateV1::new(
             root(RootPhase::Open)?,
             policy::<2>()?,
+            feed_profile()?,
             9,
             [9, 8],
             empty::<2>()?,
@@ -434,24 +463,26 @@ mod tests {
         assert_eq!(binary_bytes.get(11..16), Some(&[0; 5][..]));
         assert_eq!(binary_bytes.get(16..24), Some(&b"DCLTROOT"[..]));
         assert_eq!(binary_bytes.get(184..192), Some(&POLICY_MAGIC[..]));
-        assert_eq!(binary_bytes.get(568..576), Some(&9u64.to_le_bytes()[..]));
-        assert_eq!(binary_bytes.get(576..584), Some(&9u64.to_le_bytes()[..]));
-        assert_eq!(binary_bytes.get(584..592), Some(&8u64.to_le_bytes()[..]));
-        assert_eq!(binary_bytes.get(592..600), Some(&b"DCLTRCP1"[..]));
+        assert_eq!(binary_bytes.get(568..576), Some(&FEED_PROFILE_MAGIC[..]));
+        assert_eq!(binary_bytes.get(674..682), Some(&9u64.to_le_bytes()[..]));
+        assert_eq!(binary_bytes.get(682..690), Some(&9u64.to_le_bytes()[..]));
+        assert_eq!(binary_bytes.get(690..698), Some(&8u64.to_le_bytes()[..]));
+        assert_eq!(binary_bytes.get(698..706), Some(&b"DCLTRCP1"[..]));
         round_trip(binary)?;
 
         let maximum = MarketStateV1::new(
             root(RootPhase::Open)?,
             policy::<MAX_OUTCOMES>()?,
+            feed_profile()?,
             16,
             [16; MAX_OUTCOMES],
             empty::<MAX_OUTCOMES>()?,
         )?;
         let mut maximum_bytes = [0u8; MAX_MARKET_BYTES];
         maximum.encode(&mut maximum_bytes)?;
-        assert_eq!(maximum_bytes.get(576..584), Some(&16u64.to_le_bytes()[..]));
-        assert_eq!(maximum_bytes.get(696..704), Some(&16u64.to_le_bytes()[..]));
-        assert_eq!(maximum_bytes.get(704..712), Some(&b"DCLTRCP1"[..]));
+        assert_eq!(maximum_bytes.get(682..690), Some(&16u64.to_le_bytes()[..]));
+        assert_eq!(maximum_bytes.get(802..810), Some(&16u64.to_le_bytes()[..]));
+        assert_eq!(maximum_bytes.get(810..818), Some(&b"DCLTRCP1"[..]));
         round_trip(maximum)?;
         Ok(())
     }
@@ -461,6 +492,7 @@ mod tests {
         round_trip(MarketStateV1::new(
             root(RootPhase::Founding)?,
             policy::<2>()?,
+            feed_profile()?,
             0,
             [0, 0],
             empty::<2>()?,
@@ -468,6 +500,7 @@ mod tests {
         round_trip(MarketStateV1::new(
             root(RootPhase::Open)?,
             policy::<2>()?,
+            feed_profile()?,
             7,
             [7, 6],
             empty::<2>()?,
@@ -475,6 +508,7 @@ mod tests {
         round_trip(MarketStateV1::new(
             root(RootPhase::Resolved)?,
             policy::<2>()?,
+            feed_profile()?,
             4,
             [4, 99],
             price_receipt::<2>(0)?,
@@ -482,6 +516,7 @@ mod tests {
         round_trip(MarketStateV1::new(
             root(RootPhase::Resolved)?,
             policy::<2>()?,
+            feed_profile()?,
             4,
             [99, 4],
             ResolutionReceiptV1::failure(
@@ -496,6 +531,7 @@ mod tests {
         round_trip(MarketStateV1::new(
             root(RootPhase::Retiring)?,
             policy::<2>()?,
+            feed_profile()?,
             3,
             [3, 2],
             empty::<2>()?,
@@ -503,6 +539,7 @@ mod tests {
         round_trip(MarketStateV1::new(
             root(RootPhase::Retiring)?,
             policy::<2>()?,
+            feed_profile()?,
             2,
             [88, 2],
             ResolutionReceiptV1::failure(
@@ -517,13 +554,15 @@ mod tests {
         round_trip(MarketStateV1::new(
             root(RootPhase::Retired)?,
             policy::<2>()?,
+            feed_profile()?,
             0,
             [0, 0],
             empty::<2>()?,
         )?)?;
-        round_trip(MarketStateV1::new(
+        let terminal_retired = MarketStateV1::new(
             root(RootPhase::Retired)?,
             policy::<2>()?,
+            feed_profile()?,
             0,
             [0, 0],
             ResolutionReceiptV1::failure(
@@ -534,7 +573,13 @@ mod tests {
                     unix_timestamp: 116,
                 },
             )?,
-        )?)?;
+        )?;
+        let mut terminal_bytes = [0u8; BINARY_MARKET_BYTES];
+        terminal_retired.encode(&mut terminal_bytes)?;
+        let retained = MarketStateV1::<2>::decode(&terminal_bytes)?;
+        assert_eq!(retained.feed_profile(), terminal_retired.feed_profile());
+        assert_eq!(retained.receipt(), terminal_retired.receipt());
+        round_trip(terminal_retired)?;
         Ok(())
     }
 
@@ -544,6 +589,7 @@ mod tests {
             MarketStateV1::new(
                 root(RootPhase::Founding)?,
                 policy::<2>()?,
+                feed_profile()?,
                 0,
                 [0, 0],
                 price_receipt::<2>(0)?,
@@ -554,6 +600,7 @@ mod tests {
             MarketStateV1::new(
                 root(RootPhase::Open)?,
                 policy::<2>()?,
+                feed_profile()?,
                 0,
                 [0, 0],
                 price_receipt::<2>(0)?,
@@ -564,6 +611,7 @@ mod tests {
             MarketStateV1::new(
                 root(RootPhase::Resolved)?,
                 policy::<2>()?,
+                feed_profile()?,
                 0,
                 [0, 0],
                 empty::<2>()?,
@@ -574,6 +622,7 @@ mod tests {
             MarketStateV1::new(
                 root(RootPhase::Open)?,
                 policy::<3>()?,
+                feed_profile()?,
                 0,
                 [0, 0],
                 empty::<2>()?,
@@ -584,6 +633,7 @@ mod tests {
             MarketStateV1::new(
                 root(RootPhase::Resolved)?,
                 policy::<2>()?,
+                feed_profile()?,
                 0,
                 [0, 0],
                 price_receipt::<2>(1)?,
@@ -594,6 +644,7 @@ mod tests {
             MarketStateV1::new(
                 root(RootPhase::Resolved)?,
                 policy::<2>()?,
+                feed_profile()?,
                 0,
                 [0, 0],
                 ResolutionReceiptV1::failure(
@@ -611,6 +662,7 @@ mod tests {
             MarketStateV1::new(
                 root(RootPhase::Founding)?,
                 policy::<2>()?,
+                feed_profile()?,
                 1,
                 [0, 0],
                 empty::<2>()?,
@@ -621,6 +673,7 @@ mod tests {
             MarketStateV1::new(
                 root(RootPhase::Founding)?,
                 policy::<2>()?,
+                feed_profile()?,
                 0,
                 [1, 0],
                 empty::<2>()?,
@@ -631,6 +684,7 @@ mod tests {
             MarketStateV1::new(
                 root(RootPhase::Retired)?,
                 policy::<2>()?,
+                feed_profile()?,
                 1,
                 [0, 0],
                 empty::<2>()?,
@@ -641,6 +695,7 @@ mod tests {
             MarketStateV1::new(
                 root(RootPhase::Retired)?,
                 policy::<2>()?,
+                feed_profile()?,
                 0,
                 [0, 1],
                 empty::<2>()?,
@@ -656,6 +711,7 @@ mod tests {
             MarketStateV1::new(
                 root(RootPhase::Open)?,
                 policy::<2>()?,
+                feed_profile()?,
                 4,
                 [5, 4],
                 empty::<2>()?,
@@ -668,6 +724,7 @@ mod tests {
             MarketStateV1::new(
                 root(RootPhase::Resolved)?,
                 policy::<2>()?,
+                feed_profile()?,
                 4,
                 [5, 99],
                 price_receipt::<2>(0)?,
@@ -684,6 +741,7 @@ mod tests {
         let state = MarketStateV1::new(
             root(RootPhase::Open)?,
             policy::<2>()?,
+            feed_profile()?,
             1,
             [1, 1],
             empty::<2>()?,
@@ -734,6 +792,14 @@ mod tests {
             .ok_or(Error::InvalidLength)? = 0;
         assert_eq!(
             MarketStateV1::<2>::decode(&bad_policy),
+            Err(Error::InvalidMagic)
+        );
+        let mut bad_feed_profile = bytes;
+        *bad_feed_profile
+            .get_mut(FEED_PROFILE_OFFSET)
+            .ok_or(Error::InvalidLength)? = 0;
+        assert_eq!(
+            MarketStateV1::<2>::decode(&bad_feed_profile),
             Err(Error::InvalidMagic)
         );
         let before = [0x5a; BINARY_MARKET_BYTES - 1];
