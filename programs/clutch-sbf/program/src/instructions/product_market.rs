@@ -105,7 +105,7 @@ const FAILURE_SHARED_CORE_TERMINAL_POSTWRITE_DOMAIN_V1: &[u8] =
 /// include identities not repeated by the Product root. This helper must not
 /// guess those identities. It does make the common core non-caller-shaped,
 /// including the reusable V2 Failure interval cell and append-only history.
-fn require_canonical_market_foundation_core_v2(
+pub(crate) fn require_canonical_market_foundation_core_v2(
     program_id: &Pubkey,
     root_account: Pubkey,
     account_graph: &MarketFoundationAccountGraphV2,
