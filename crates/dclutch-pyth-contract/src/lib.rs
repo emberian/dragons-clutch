@@ -9,6 +9,8 @@
 
 /// Inline Pyth feed-semantics contract.
 pub mod feed_profile;
+/// Exact SDK-free resolution account-role and privilege frames.
+pub mod frame;
 /// Funding-account contract.
 pub mod funding;
 /// Resolve-instruction contract.
