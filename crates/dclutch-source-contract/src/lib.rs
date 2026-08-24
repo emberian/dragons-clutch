@@ -3400,6 +3400,7 @@ impl SourceResolutionStateV1 {
                 child.validate_for_resolution(
                     self.market,
                     self.generation,
+                    material_id,
                     source_spec_id,
                     material.window_id,
                     resolution_evidence_id,
@@ -4238,10 +4239,12 @@ impl SharedObservationStateV1 {
     }
 
     /// Validate one accepted child before reusing its immutable evidence set.
+    #[allow(clippy::too_many_arguments)]
     pub fn validate_for_resolution(
         self,
         market: [u8; 32],
         generation: u64,
+        material_id: ContentId,
         source_spec_id: ContentId,
         window_spec_id: ContentId,
         evidence_id: ContentId,
@@ -4250,6 +4253,7 @@ impl SharedObservationStateV1 {
         if self.phase != SharedObservationPhaseV1::Accepted
             || self.market != market
             || self.generation != generation
+            || self.material_id != material_id
             || self.source_spec_id != source_spec_id
             || self.window_spec_id != window_spec_id
             || self.evidence_id != Some(evidence_id)
@@ -6503,8 +6507,12 @@ mod tests {
             Err(Error::InvalidSharedObservation)
         );
         child
-            .validate_for_resolution([30; 32], 7, id(3), id(4), id(23), &evidence)
+            .validate_for_resolution([30; 32], 7, id(22), id(3), id(4), id(23), &evidence)
             .expect("reusable accepted child");
+        assert_eq!(
+            child.validate_for_resolution([30; 32], 7, id(24), id(3), id(4), id(23), &evidence,),
+            Err(Error::InvalidSharedObservation)
+        );
         child.retire(7, 106, 1, 1).expect("retire child");
         assert_eq!(child.phase(), SharedObservationPhaseV1::Retired);
 
@@ -6578,7 +6586,7 @@ mod tests {
         assert_eq!(median_child.phase(), SharedObservationPhaseV1::Accepted);
         assert_eq!(median_child.observation(1), Ok(observations[1]));
         median_child
-            .validate_for_resolution([30; 32], 7, id(3), id(4), id(28), &observations)
+            .validate_for_resolution([30; 32], 7, id(24), id(3), id(4), id(28), &observations)
             .expect("exact progressive observations");
         assert_eq!(
             SharedObservationStateV1::decode(&median_child.to_bytes()),

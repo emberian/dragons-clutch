@@ -1472,6 +1472,44 @@ mod tests {
         drop(material_data);
         assert!(wrong_feed_link.authenticate().is_err());
 
+        // A separately finalized, internally valid material record with the
+        // same adapter release cannot substitute for the Market-committed
+        // resolution-policy preimage.
+        let mut substituted_material = Fixture::new(2);
+        let feed = PythFeedProfileV1::new([7; 32], [8; 32], [9; 32]).expect("feed profile");
+        let other_policy = policy(3, hash(&feed.to_bytes()).to_bytes());
+        let other_material = CategoricalPythResolutionMaterialV1::new(other_policy, feed)
+            .expect("canonical substitute material");
+        let other_bytes = other_material.to_bytes();
+        let (other_key, other_cursor) = record_pair(
+            &substituted_material.program_id,
+            PYTH_RESOLUTION_MATERIAL_SCHEMA_RELEASE_ID_V1,
+            hash(&other_bytes).to_bytes(),
+        );
+        let program_id = substituted_material.program_id;
+        *test_account_mut(&mut substituted_material.accounts, 8) = leak_account(
+            other_key,
+            false,
+            false,
+            Rent::default().minimum_balance(other_bytes.len()),
+            other_bytes.to_vec(),
+            program_id,
+            false,
+        );
+        *test_account_mut(&mut substituted_material.accounts, 14) = leak_account(
+            other_cursor,
+            false,
+            false,
+            0,
+            vec![],
+            system_program::ID,
+            false,
+        );
+        assert_eq!(
+            substituted_material.authenticate().err(),
+            Some(ProgramError::from(AdapterError::FoundingAuthentication))
+        );
+
         let mut trailing_manifest = Fixture::new(2);
         let manifest_key = *test_account(&trailing_manifest.accounts, 9).key;
         let program_id = trailing_manifest.program_id;
