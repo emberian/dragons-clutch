@@ -137,6 +137,12 @@ pub const SOURCE_V1: bool =
 pub const SOURCE_V2: bool = !DEALER_POLICY_CATALOG_LAB
     && !GENERAL_V2_IDENTITY_LAB
     && !SUCCESSOR_CHAIN_ATTACHED_DEV;
+/// The legacy General clearing family is withdrawn from every current profile.
+///
+/// Retained historical modules still branch on this named capability while
+/// they are compiled outside the successor profile, so preserve the symbol as
+/// a constant refusal rather than deleting the contract boundary.
+pub const GENERAL_CLEARING: bool = false;
 /// Whether the profile contains occupation and resumable resolution.
 pub const OCCUPATION_RESOLUTION: bool =
     cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB && !SUCCESSOR_CHAIN_ATTACHED_DEV;
