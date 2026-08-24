@@ -686,7 +686,7 @@ mod adversarial_contract_tests {
         assert!(process.contains("process_advance_failure_market_session_v2"));
         assert!(process.contains("process_resolve_failure_market_session_v2"));
         assert!(process.contains("RecoveryAction::CloseIntervalConsensusWork =>"));
-        assert!(process.contains("process_archive_failure_market_session_v2"));
+        assert!(process.contains("process_archive_failure_market_session_v3"));
         assert!(!process.contains("failure_recovery::"));
     }
 

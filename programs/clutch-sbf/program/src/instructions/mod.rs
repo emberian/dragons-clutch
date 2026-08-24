@@ -68,7 +68,6 @@ pub(crate) mod failure_market_action11_current;
 pub(crate) mod failure_market_action12_current;
 pub(crate) mod failure_market_action13_current;
 /// Concrete checked owners for current Market Failure actions 10-13.
-pub(crate) mod failure_market_actions_v2;
 /// Capability-disabled atomic paid Failure interval advance.
 pub(crate) mod failure_market_interval_advance_v2;
 /// Always-compiled checked-disabled current Failure action contract.
