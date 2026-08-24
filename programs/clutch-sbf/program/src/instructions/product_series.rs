@@ -15,6 +15,7 @@
 pub(crate) mod physical_v4;
 pub(crate) mod physical_v5;
 pub(crate) mod replay_v3;
+pub(crate) mod replay_v3_founder;
 
 use core::cell::Cell;
 
