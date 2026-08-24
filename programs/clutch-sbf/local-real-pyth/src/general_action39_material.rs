@@ -58,10 +58,24 @@ pub const GENERAL_ACTION39_FIXED_ROLE_LABELS_V1: [&str; GENERAL_ACTION39_FIXED_A
     "final-pot-v1", "frozen-order-locator-v1", "candidate-slice-index-v1", "rent-payer",
     "system-program", "rent-sysvar", "clock-sysvar",
 ];
+pub const GENERAL_ACTION39_FIXED_ROLE_WRITABLE_V1: [bool; GENERAL_ACTION39_FIXED_ACCOUNT_COUNT_V1] = [
+    true, true, false, false, false, false, false, false, false, false, false, false,
+    false, false, true, true, false, true, false, true, true, false, false, false,
+    false, false, false, false, false, false, false, false, false, false, false, false,
+    false, false, false, false, true, true, true, true, true, true, false, false, false,
+];
+pub const GENERAL_ACTION39_FIXED_ROLE_SIGNER_V1: [bool; GENERAL_ACTION39_FIXED_ACCOUNT_COUNT_V1] = [
+    false, false, false, false, false, false, false, false, false, false, false, false,
+    false, false, false, false, false, false, false, false, false, false, false, false,
+    false, false, false, false, false, false, false, false, false, false, false, false,
+    false, false, false, false, false, false, false, false, false, true, false, false,
+    false,
+];
 
 const OWNER_PACKAGE: &str =
     "clutch-general-v2-contract+clutch-general-v2-runtime+clutch-product-series";
-const OWNER_SCHEMA: &str = "dragons-clutch/operator/general-action39-material/v1";
+pub const GENERAL_ACTION39_OWNER_SCHEMA_V1: &str =
+    "dragons-clutch/operator/general-action39-material/v1";
 
 pub type GeneralAction39MaterialResult<T> = core::result::Result<T, GeneralAction39MaterialError>;
 type Result<T> = GeneralAction39MaterialResult<T>;
@@ -206,7 +220,7 @@ impl ChainDerivedGeneralAction39MaterialV1 {
     pub fn cursor(&self) -> ResumableWorkflowCursor {
         ResumableWorkflowCursor {
             workflow_id: action39_workflow_id(self.release_manifest_sha256, self.epoch),
-            lane: WorkflowLane::Candidate,
+            lane: WorkflowLane::GeneralSettlement,
             generation: self.generation,
             position: WorkflowPosition { phase: 39, item: self.selected_ordinal },
             observed_state_sha256: self.state_sha256,
@@ -218,7 +232,7 @@ impl ChainDerivedGeneralAction39MaterialV1 {
             release,
             SemanticOwner {
                 package: OWNER_PACKAGE.into(),
-                schema: OWNER_SCHEMA.into(),
+                schema: GENERAL_ACTION39_OWNER_SCHEMA_V1.into(),
                 release_sha256: self.release_manifest_sha256,
             },
             self.ordered_accounts.clone(),
@@ -253,6 +267,27 @@ impl ChainDerivedGeneralAction39MaterialV1 {
             self.lookup_table.state_sha256(),
         ))
         .map_err(map_construction)
+    }
+    pub(crate) fn build_unsigned_transaction(
+        &self,
+        release: &IndexedProgramRelease,
+        builder: &ProtocolTransactionBuilder,
+    ) -> Result<UnsignedProtocolTransaction> {
+        if builder.payer() != self.payer {
+            return Err(GeneralAction39MaterialError::Construction);
+        }
+        let draft = self.unsigned_instruction(release)?;
+        builder
+            .build_exact_v0(
+                draft,
+                self.lookup_table.table(),
+                self.lookup_table.observed_slot(),
+                self.lookup_table.state_sha256(),
+            )
+            .map_err(map_construction)
+    }
+    pub(crate) fn driver_account(&self) -> Address {
+        Address::new_from_array(self.selected_node)
     }
 }
 

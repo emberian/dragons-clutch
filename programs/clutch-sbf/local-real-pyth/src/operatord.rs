@@ -22,6 +22,10 @@ use crate::dealer_terminal_material::DealerTerminalOperatorBatchV1;
 use crate::failure_action11_material::{
     FAILURE_ACTION11_ROLE_LABELS_V1, FAILURE_ACTION11_ROLE_WRITABLE_V1,
 };
+use crate::general_action39_material::{
+    GENERAL_ACTION39_FIXED_ROLE_LABELS_V1, GENERAL_ACTION39_FIXED_ROLE_SIGNER_V1,
+    GENERAL_ACTION39_FIXED_ROLE_WRITABLE_V1, GENERAL_ACTION39_OWNER_SCHEMA_V1,
+};
 use crate::rpc_index::{
     public_rpc_endpoint_binding, CanonicalIntentCoordinate, CanonicalIntentVariantV1,
     IndexedProgramRelease, RpcCommitment,
@@ -221,7 +225,9 @@ fn merge_chain_material_cursors(
         .filter(|material| {
             matches!(
                 material.cursor().lane,
-                WorkflowLane::FractionalRedemption | WorkflowLane::FailureRecovery
+                WorkflowLane::FractionalRedemption
+                    | WorkflowLane::FailureRecovery
+                    | WorkflowLane::GeneralSettlement
             )
         })
         .collect::<Vec<_>>();
@@ -247,6 +253,12 @@ fn merge_chain_material_cursors(
                     && coordinate.family_version == RECOVERY_FAMILY_VERSION
                     && coordinate.local_action
                         == RecoveryAction::AdvanceIntervalConsensus.tag()
+            }
+            WorkflowLane::GeneralSettlement => {
+                coordinate.family_tag == GENERAL_V2_FAMILY_TAG
+                    && coordinate.family_version == GENERAL_V2_FAMILY_VERSION
+                    && coordinate.local_action
+                        == GeneralV2Action::InitializeSettlementRoot.tag()
             }
             _ => false,
         };
@@ -277,7 +289,8 @@ fn merge_chain_material_cursors(
             || material.account_roles().iter().any(|role| {
                 finalized.iter().any(|version| {
                     version.account.address == role.address()
-                        && version.account.owner == release.program_id
+                        && (version.account.owner == release.program_id
+                            || general_action39_fresh_role(role.label()))
                         && version.account.provenance.slot > freshness.observed_slot
                 })
             })
@@ -285,10 +298,14 @@ fn merge_chain_material_cursors(
             return Err(KeeperSelectionError::IncompleteCanonicalHint);
         }
         if let Some(existing) = cursors.iter().find(|cursor| cursor.cursor == material.cursor()) {
-            if material.cursor().lane != WorkflowLane::FailureRecovery
-                || existing.account != material.driver_account()
+            let expected_action = match material.cursor().lane {
+                WorkflowLane::FailureRecovery => "advance-failure-interval-consensus",
+                WorkflowLane::GeneralSettlement => "initialize-general-settlement-root-v5",
+                _ => return Err(KeeperSelectionError::IncompleteCanonicalHint),
+            };
+            if existing.account != material.driver_account()
                 || existing.account_slot != material.driver_account_slot()
-                || existing.action != "advance-failure-interval-consensus"
+                || existing.action != expected_action
             {
                 return Err(KeeperSelectionError::IncompleteCanonicalHint);
             }
@@ -463,6 +480,21 @@ fn merge_chain_material_cursors(
         return Err(KeeperSelectionError::InvalidCapacity);
     }
     Ok(cursors)
+}
+
+fn general_action39_fresh_role(label: &str) -> bool {
+    matches!(
+        label,
+        "selected-fee-record-v2"
+            | "recipient-allocation-v3"
+            | "treasury-ledger-v2"
+            | "fee-retirement-accumulator-v1"
+            | "indexed-settlement-root-v1"
+            | "settlement-cash-pot-v1"
+            | "final-pot-v1"
+            | "frozen-order-locator-v1"
+            | "candidate-slice-index-v1"
+    )
 }
 
 fn selection_dependencies_without_driver(
@@ -1654,7 +1686,35 @@ fn action_verdict_json(
         .iter()
         .find(|cursor| action_coordinate(cursor.action) == Some(coordinate));
     let (family, action, semantic_builder) = coordinate_description(coordinate);
-    let unresolved_roles = if coordinate.family_tag == RECOVERY_FAMILY_TAG
+    let unresolved_roles = if coordinate.family_tag == GENERAL_V2_FAMILY_TAG
+        && coordinate.family_version == GENERAL_V2_FAMILY_VERSION
+        && coordinate.local_action == GeneralV2Action::InitializeSettlementRoot.tag()
+    {
+        let mut roles = GENERAL_ACTION39_FIXED_ROLE_LABELS_V1
+            .iter()
+            .zip(GENERAL_ACTION39_FIXED_ROLE_WRITABLE_V1)
+            .zip(GENERAL_ACTION39_FIXED_ROLE_SIGNER_V1)
+            .enumerate()
+            .map(|(index, ((role, writable), signer))| json!({
+                "index": index.to_string(),
+                "role": role,
+                "writable": writable,
+                "signer": signer,
+                "address": null,
+                "identityDisposition": "unresolved-until-semantic-owner-construction"
+            }))
+            .collect::<Vec<_>>();
+        roles.push(json!({
+            "index": "49..52",
+            "role": "order-page-v5",
+            "cardinality": "exactly-1-to-4-derived-from-retained-feed",
+            "writable": false,
+            "signer": false,
+            "address": null,
+            "identityDisposition": "unresolved-until-semantic-owner-construction"
+        }));
+        roles
+    } else if coordinate.family_tag == RECOVERY_FAMILY_TAG
         && coordinate.family_version == RECOVERY_FAMILY_VERSION
         && coordinate.local_action == RecoveryAction::AdvanceIntervalConsensus.tag()
     {
@@ -2057,6 +2117,11 @@ fn action_coordinate(action: &str) -> Option<CanonicalIntentCoordinate> {
         });
     }
     let (family_tag, family_version, local_action) = match action {
+        "initialize-general-settlement-root-v5" => (
+            GENERAL_V2_FAMILY_TAG,
+            GENERAL_V2_FAMILY_VERSION,
+            GeneralV2Action::InitializeSettlementRoot.tag(),
+        ),
         "advance-series-occurrence" => (
             SOURCE_SERIES_FAMILY_TAG,
             SOURCE_SERIES_FAMILY_VERSION,
@@ -2154,6 +2219,13 @@ fn coordinate_description(
     if coordinate.family_tag == GENERAL_V2_FAMILY_TAG
         && coordinate.family_version == GENERAL_V2_FAMILY_VERSION
     {
+        if coordinate.local_action == GeneralV2Action::InitializeSettlementRoot.tag() {
+            return (
+                "general",
+                "initialize-general-settlement-root-v5",
+                Some(GENERAL_ACTION39_OWNER_SCHEMA_V1),
+            );
+        }
         return ("general", "general-v2-action", None);
     }
     if coordinate.family_tag == STRUCTURED_CLAIM_FAMILY_TAG
@@ -2580,6 +2652,7 @@ const fn lane_name(lane: WorkflowLane) -> &'static str {
         WorkflowLane::RecoveryRetirement => "recovery-retirement",
         WorkflowLane::StructuredLifecycle => "structured-lifecycle",
         WorkflowLane::FractionalRedemption => "fractional-redemption",
+        WorkflowLane::GeneralSettlement => "general-settlement",
     }
 }
 
