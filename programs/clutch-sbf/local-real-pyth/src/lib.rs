@@ -6,6 +6,8 @@
 
 #[cfg(feature = "operator")]
 pub mod account_index;
+#[cfg(feature = "operator")]
+pub mod failure_source_action10_material;
 #[cfg(feature = "campaign")]
 mod capture;
 #[cfg(feature = "operator")]
