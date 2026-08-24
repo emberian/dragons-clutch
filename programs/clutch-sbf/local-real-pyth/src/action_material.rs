@@ -118,6 +118,9 @@ use std::collections::BTreeSet;
 pub const CANONICAL_ACTION_MATERIAL_SCHEMA_V1: &str =
     "dragons-clutch/operator-canonical-action-material/v1";
 
+const OUTCOME_CUSTODY_PDA_DOMAIN_V1: &[u8] = b"dc:outcome-custody:v1";
+const TREASURY_SERVICE_LEDGER_PDA_DOMAIN_V1: &[u8] = b"treasury-service-v1";
+
 pub type Result<T> = core::result::Result<T, CanonicalActionMaterialErrorV1>;
 
 /// Fail-closed construction errors. None grants execution authority.
@@ -4407,7 +4410,7 @@ pub fn construct_fractional_lifecycle_material_v1(
     if workflow_id == [0; 32]
         || builder.clutch_program() != releases.base.program_id
         || builder.clutch_release_sha256() != releases.base.elf_sha256
-        || frame.accounts.len() < 39
+        || frame.accounts.len() < 34
     {
         return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
     }
@@ -4417,11 +4420,11 @@ pub fn construct_fractional_lifecycle_material_v1(
     let binding = root.state.binding();
     let outcomes = usize::from(binding.outcome_count);
     if !(2..=MARKET_FOUNDATION_MAX_OUTCOMES_V4).contains(&outcomes)
-        || frame.accounts.len() != 35 + 2 * outcomes
+        || frame.accounts.len() != 32 + outcomes
     {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
-    let aux = MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + 2 * outcomes + 3;
+    let aux = MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + outcomes;
     let cluster = &frame.accounts[0].provenance.cluster_key;
     let release_key = releases.base.key();
     let mut addresses = BTreeSet::new();
@@ -4441,7 +4444,8 @@ pub fn construct_fractional_lifecycle_material_v1(
             return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
         }
     }
-    if frame.accounts[aux + 3].address == frame.accounts[aux + 5].address
+    if addresses.len() > 64
+        || frame.accounts[aux + 3].address == frame.accounts[aux + 5].address
         != (frame.accounts[aux + 4].address == frame.accounts[aux + 6].address)
     {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
@@ -4471,6 +4475,8 @@ pub fn construct_fractional_lifecycle_material_v1(
         ArtifactKind::SeriesFundingQuoteV6,
         quote_id.content_id().bytes(),
     )?;
+    let market_binding = MarketBindingV4::decode(&frame.accounts[1].data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let mut graph_ids = [ContentId::ZERO; MARKET_FOUNDATION_SLOT_COUNT_V4];
     for index in 0..MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 {
         graph_ids[index] = ContentId::from_bytes(frame.accounts[index].address.to_bytes());
@@ -4478,19 +4484,68 @@ pub fn construct_fractional_lifecycle_material_v1(
     for index in 0..outcomes {
         graph_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + index] =
             ContentId::from_bytes(frame.accounts[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + index].address.to_bytes());
+        let outcome_index = u8::try_from(index)
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+        let generation = binding.generation.to_le_bytes();
+        let custody = Address::find_program_address(
+            &[
+                OUTCOME_CUSTODY_PDA_DOMAIN_V1,
+                &binding.market_instance_id.bytes(),
+                &generation,
+                &[outcome_index],
+            ],
+            &program,
+        )
+        .0;
         graph_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + MARKET_FOUNDATION_MAX_OUTCOMES_V4 + index] =
-            ContentId::from_bytes(frame.accounts[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + outcomes + index].address.to_bytes());
+            ContentId::from_bytes(custody.to_bytes());
     }
-    let treasury = MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + 2 * outcomes;
+    let revenue = market_binding.authority();
+    let purpose = [u8::from(PositionPurposeV3::General)];
+    let treasury_position = Address::find_program_address(
+        &[
+            POSITION_V3_PDA_PREFIX,
+            &binding.market_instance_id.bytes(),
+            &revenue.treasury_owner().bytes(),
+            &purpose,
+            &frame.accounts[2].address.to_bytes(),
+        ],
+        &program,
+    )
+    .0;
+    let treasury_replay = Address::find_program_address(
+        &[
+            PURPOSE_REPLAY_V3_PDA_PREFIX,
+            &treasury_position.to_bytes(),
+            &purpose,
+            &frame.accounts[2].address.to_bytes(),
+        ],
+        &program,
+    )
+    .0;
+    let treasury_service = Address::find_program_address(
+        &[
+            TREASURY_SERVICE_LEDGER_PDA_DOMAIN_V1,
+            &binding.market_instance_id.bytes(),
+            &treasury_position.to_bytes(),
+        ],
+        &program,
+    )
+    .0;
+    if revenue.treasury_position_account().bytes() != treasury_position.to_bytes()
+        || revenue.treasury_service_ledger_account().bytes() != treasury_service.to_bytes()
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
     graph_ids[MarketFoundationSlotV4::GeneralTreasuryPosition.index()
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?] =
-        ContentId::from_bytes(frame.accounts[treasury].address.to_bytes());
+        ContentId::from_bytes(treasury_position.to_bytes());
     graph_ids[MarketFoundationSlotV4::GeneralTreasuryReplay.index()
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?] =
-        ContentId::from_bytes(frame.accounts[treasury + 1].address.to_bytes());
+        ContentId::from_bytes(treasury_replay.to_bytes());
     graph_ids[MarketFoundationSlotV4::TreasuryServiceLedger.index()
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?] =
-        ContentId::from_bytes(frame.accounts[treasury + 2].address.to_bytes());
+        ContentId::from_bytes(treasury_service.to_bytes());
     let graph = MarketFoundationAccountGraphV4 {
         market_instance_id: binding.market_instance_id,
         generation: binding.generation,
@@ -4573,8 +4628,6 @@ pub fn construct_fractional_lifecycle_material_v1(
     let market_instance = MarketInstancePreimageV2::decode(&frame.accounts[aux + 7].data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let market_id = market_instance.id().map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
-    let market_binding = MarketBindingV4::decode(&frame.accounts[1].data)
-        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let market_runtime = MarketRuntimeV3AccountV1::decode(&frame.accounts[2].data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let hoard = HoardV2::decode(&frame.accounts[3].data)
@@ -4659,11 +4712,6 @@ pub fn construct_fractional_lifecycle_material_v1(
             return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
         }
     }
-    for index in treasury..treasury + 3 {
-        if frame.accounts[index].owner != program || frame.accounts[index].executable {
-            return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
-        }
-    }
     for index in [aux, aux + 1, aux + 2, aux + 7, aux + 8, aux + 9, aux + 10, aux + 13, aux + 14] {
         if frame.accounts[index].owner != program || frame.accounts[index].executable {
             return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
@@ -4676,11 +4724,8 @@ pub fn construct_fractional_lifecycle_material_v1(
     }
     for index in 0..outcomes {
         let mint = frame.accounts[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + index];
-        let custody = frame.accounts[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + outcomes + index];
         if mint.owner != frame.accounts[aux + 5].address
-            || custody.owner != frame.accounts[aux + 5].address
             || mint.executable
-            || custody.executable
         {
             return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
         }
@@ -4783,6 +4828,9 @@ pub fn construct_fractional_lifecycle_material_v1(
         return Err(CanonicalActionMaterialErrorV1::CoordinateDisabled);
     }
     let contract = clutch_fractional_redemption_runtime::fractional_account_contract_v1(action);
+    if !contract.foundation_outcome_mint_suffix || contract.post_mint_accounts != 0 {
+        return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+    }
     let mut metas = Vec::with_capacity(frame.accounts.len());
     let mut roles = Vec::with_capacity(frame.accounts.len());
     for (index, account) in frame.accounts.iter().copied().enumerate() {
@@ -4798,10 +4846,8 @@ pub fn construct_fractional_lifecycle_material_v1(
         roles.push(CanonicalAccountRoleV1 {
             label: if index < 15 {
                 "foundation-core"
-            } else if index < 15 + 2 * outcomes {
-                "foundation-outcome"
-            } else if index < aux {
-                "foundation-treasury"
+            } else if index < 15 + outcomes {
+                "foundation-outcome-mint"
             } else {
                 "lifecycle-authority"
             },
@@ -9640,6 +9686,24 @@ mod tests {
     use crate::transaction_builder::{ExactEquation, SemanticOwner, CONSTRUCTION_PLAN_SCHEMA};
     use crate::workflow_graph::{WorkflowLane, WorkflowPosition};
     use clutch_solana_layout::source_series::SourceAccountRoleV2;
+
+    #[test]
+    fn fractional_lifecycle_material_derives_omitted_graph_accounts() {
+        let source = include_str!("action_material.rs");
+        let start = source
+            .find("pub fn construct_fractional_lifecycle_material_v1(")
+            .unwrap();
+        let end = source[start..]
+            .find("pub fn construct_fractional_bearer_material_v1(")
+            .unwrap()
+            + start;
+        let body = &source[start..end];
+        assert!(body.contains("frame.accounts.len() != 32 + outcomes"));
+        assert!(body.contains("OUTCOME_CUSTODY_PDA_DOMAIN_V1"));
+        assert!(body.contains("revenue.treasury_position_account()"));
+        assert!(body.contains("PURPOSE_REPLAY_V3_PDA_PREFIX"));
+        assert!(!body.contains("foundation-treasury"));
+    }
 
     #[test]
     fn structured_operator_material_uses_only_current_product_lineage() {

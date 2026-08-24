@@ -16,13 +16,14 @@ use clutch_fractional_redemption_runtime::{
     FractionalTerminalIntentV1, PayoutVectorV1, TerminalRemainderPolicyV1,
     FRACTIONAL_LEDGER_ACCOUNT_BYTES, FRACTIONAL_POLICY_ACCOUNT_BYTES,
 };
+use clutch_general_v2_contract::MarketBindingV4;
 use clutch_product_series::{
     ContentId, MarketFoundationAccountGraphV4, MarketFoundationScheduleV4,
     MarketFoundationSlotV4, MarketLifecycleRootV3, SeriesFundingQuoteV6,
     MARKET_FOUNDATION_CORE_SLOT_COUNT_V4, MARKET_FOUNDATION_MAX_OUTCOMES_V4,
     MARKET_FOUNDATION_SLOT_COUNT_V4,
 };
-use clutch_retirement::{DeletableRentOwnerV1, Identity32V1};
+use clutch_retirement::{DeletableRentOwnerV1, Identity32V1, PositionPurposeV3};
 use clutch_solana_layout::product_series::{
     MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV3,
 };
@@ -65,6 +66,8 @@ const RESOLUTION: usize = 10;
 const POLICY: usize = 11;
 const LEDGER: usize = 12;
 const FIRST_OUTCOME_MINT: usize = MARKET_FOUNDATION_CORE_SLOT_COUNT_V4;
+const MAX_FRACTIONAL_LIFECYCLE_ACCOUNTS: usize =
+    MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + MARKET_FOUNDATION_MAX_OUTCOMES_V4 + 17;
 
 const INITIALIZE_AUX_ACCOUNTS: usize = 17;
 const TERMINAL_AUX_ACCOUNTS: usize = 17;
@@ -135,8 +138,7 @@ fn graph_account_count(outcome_count: u8) -> Outcome<usize> {
         ClutchError::NonCanonical,
     )?;
     MARKET_FOUNDATION_CORE_SLOT_COUNT_V4
-        .checked_add(outcomes.checked_mul(2).ok_or(ClutchError::Arithmetic)?)
-        .and_then(|count| count.checked_add(3))
+        .checked_add(outcomes)
         .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))
 }
 
@@ -191,7 +193,10 @@ fn require_outer_contract(
     let expected = graph_count
         .checked_add(aux_count)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    require(accounts.len() == expected, ClutchError::AccountCount)?;
+    require(
+        accounts.len() == expected && expected <= MAX_FRACTIONAL_LIFECYCLE_ACCOUNTS,
+        ClutchError::AccountCount,
+    )?;
     let aux = graph_count;
     let mut index = 0usize;
     while index < accounts.len() {
@@ -229,11 +234,13 @@ fn require_outer_contract(
 }
 
 fn build_graph(
+    program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     schedule: &MarketFoundationScheduleV4,
     market: clutch_product_series::MarketInstanceV2Id,
     generation: u64,
     outcome_count: u8,
+    revenue_binding: &MarketBindingV4,
 ) -> Outcome<MarketFoundationAccountGraphV4> {
     let outcomes = usize::from(outcome_count);
     let mut account_ids = [ContentId::ZERO; MARKET_FOUNDATION_SLOT_COUNT_V4];
@@ -246,25 +253,48 @@ fn build_graph(
     while outcome < outcomes {
         account_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + outcome] =
             ContentId::from_bytes(accounts[FIRST_OUTCOME_MINT + outcome].key.to_bytes());
+        let outcome_index = u8::try_from(outcome).map_err(|_| ClutchError::Arithmetic)?;
+        let custody =
+            seeds::outcome_custody_v1_pda(program_id, &market.bytes(), generation, outcome_index).0;
         account_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4
             + MARKET_FOUNDATION_MAX_OUTCOMES_V4
-            + outcome] = ContentId::from_bytes(
-            accounts[FIRST_OUTCOME_MINT + outcomes + outcome]
-                .key
-                .to_bytes(),
-        );
+            + outcome] = ContentId::from_bytes(custody.to_bytes());
         outcome += 1;
     }
-    let treasury = FIRST_OUTCOME_MINT + outcomes * 2;
+    let revenue = revenue_binding.authority();
+    let runtime = accounts[MARKET_RUNTIME].key.to_bytes();
+    let treasury_owner = revenue.treasury_owner().bytes();
+    let treasury_position = seeds::position_v3_pda(
+        program_id,
+        &market.bytes(),
+        &treasury_owner,
+        PositionPurposeV3::General,
+        &runtime,
+    )
+    .0;
+    let treasury_replay = seeds::purpose_replay_v3_pda(
+        program_id,
+        &treasury_position.to_bytes(),
+        PositionPurposeV3::General,
+        &runtime,
+    )
+    .0;
+    let treasury_service =
+        seeds::treasury_service_ledger_v1_pda(program_id, &market.bytes(), &treasury_position).0;
+    require(
+        revenue.treasury_position_account().bytes() == treasury_position.to_bytes()
+            && revenue.treasury_service_ledger_account().bytes() == treasury_service.to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
     account_ids[MarketFoundationSlotV4::GeneralTreasuryPosition.index()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?] =
-        ContentId::from_bytes(accounts[treasury].key.to_bytes());
+        ContentId::from_bytes(treasury_position.to_bytes());
     account_ids[MarketFoundationSlotV4::GeneralTreasuryReplay.index()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?] =
-        ContentId::from_bytes(accounts[treasury + 1].key.to_bytes());
+        ContentId::from_bytes(treasury_replay.to_bytes());
     account_ids[MarketFoundationSlotV4::TreasuryServiceLedger.index()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?] =
-        ContentId::from_bytes(accounts[treasury + 2].key.to_bytes());
+        ContentId::from_bytes(treasury_service.to_bytes());
     let graph = MarketFoundationAccountGraphV4 {
         market_instance_id: market,
         generation,
@@ -492,11 +522,13 @@ pub(super) fn process_initialize(
             &mut link_body,
         )?;
     let graph = build_graph(
+        program_id,
         accounts,
         &schedule,
         binding.market_instance_id,
         binding.generation,
         outcome_count,
+        &liabilities.market_binding,
     )?;
     require(
         graph.id(&schedule)
@@ -768,11 +800,13 @@ pub(super) fn process_close_empty_ledger(
             &mut link_body,
         )?;
     let graph = build_graph(
+        program_id,
         accounts,
         &schedule,
         binding.market_instance_id,
         binding.generation,
         outcome_count,
+        &liabilities.market_binding,
     )?;
     require(
         graph.id(&schedule)
@@ -935,10 +969,21 @@ mod adversarial_tests {
 
     #[test]
     fn outer_geometry_is_exact_and_bounded() {
-        assert_eq!(graph_account_count(1), Ok(17));
-        assert_eq!(graph_account_count(16), Ok(47));
+        assert_eq!(graph_account_count(1), Ok(16));
+        assert_eq!(graph_account_count(16), Ok(31));
+        assert_eq!(MAX_FRACTIONAL_LIFECYCLE_ACCOUNTS, 48);
         assert!(graph_account_count(0).is_err());
         assert!(graph_account_count(17).is_err());
+    }
+
+    #[test]
+    fn omitted_graph_roles_are_derived_from_current_authorities() {
+        let source = include_str!("fractional_lifecycle.rs");
+        assert!(source.contains("seeds::outcome_custody_v1_pda("));
+        assert!(source.contains("revenue.treasury_position_account()"));
+        assert!(source.contains("seeds::purpose_replay_v3_pda("));
+        assert!(source.contains("revenue.treasury_service_ledger_account()"));
+        assert!(!source.contains("outcomes.checked_mul(2)"));
     }
 
     #[test]
