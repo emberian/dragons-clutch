@@ -229,6 +229,7 @@
     const verdicts = $("action-verdicts");
     reset(verdicts);
     for (const action of actions) {
+      const fractionalHolderPending = action.coordinate.familyTag === "79" && action.coordinate.familyVersion === "1" && ["3", "4", "5", "6", "7"].includes(action.coordinate.localAction);
       const label = `${action.coordinate.familyTag}/${action.coordinate.familyVersion}/${action.coordinate.localAction}${action.payloadVariant ? `/${action.payloadVariant.payloadDiscriminator}` : ""} · ${action.payloadVariant ? action.payloadVariant.name : action.coordinate.action}`;
       const card = create("article", `action-verdict ${action.inspection.eligible ? "eligible" : "refused"}`);
       const heading = create("div", "card-heading");
@@ -243,7 +244,7 @@
         definition("Observed tuple accounts", action.inspection.observedAccounts),
         definition("Stale tuple accounts", action.inspection.staleAccounts),
         definition("Current material contract", action.directContract ? `${action.directContract.schema} · ${action.directContract.branch}` : action.fractionalContract ? action.fractionalContract.schema : action.payloadVariant ? `exact Dealer target-${action.payloadVariant.payloadDiscriminator}` : "release-bound family contract"),
-        definition("Holder-authored choices", action.fractionalContract ? "none — identities, metas, amounts, and payload are chain-derived" : "none on this inspection surface"),
+        definition("Holder-authored choices", action.fractionalContract ? "none — identities, metas, amounts, and payload are chain-derived" : fractionalHolderPending ? "not accepted yet — only a constructor-defined holder-intent selector may enable this; raw account IDs and metas are forbidden" : "none on this inspection surface"),
         definition("Execution-Clock postcondition", action.directContract && action.directContract.symbolicPostcondition ? `${action.directContract.symbolicPostcondition.writableAccounts.length} exact writable accounts · ${action.directContract.symbolicPostcondition.contractId}` : "not required"),
         definition("Canonical unsigned material", action.transactionDraft ? `${action.transactionDraft.flows[0]} · ${action.transactionDraft.messageVersion} · ${action.transactionDraft.serializedBytes} bytes` : "unavailable"),
         definition("Exclusive valid-before slot", action.inspection.validBeforeSlot)
