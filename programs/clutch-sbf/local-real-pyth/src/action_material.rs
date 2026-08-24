@@ -28,7 +28,8 @@ use crate::workflow_graph::{
     SourceCrankObservation, SourceWorkflowActionMaterial, WorkflowGraphError,
 };
 use clutch_solana_layout::registry::{
-    AllocationStatus, DirectMarketAction, ExtensionAction, ExtensionFamily,
+    AllocationStatus, DirectMarketAction, ExtensionAction, ExtensionFamily, GeneralV2Action,
+    GENERAL_V2_FAMILY_TAG, GENERAL_V2_FAMILY_VERSION,
     DIRECT_MARKET_FAMILY_TAG, DIRECT_MARKET_FAMILY_VERSION, STRUCTURED_CLAIM_FAMILY_TAG,
     STRUCTURED_CLAIM_FAMILY_VERSION, SOURCE_SERIES_FAMILY_TAG, SOURCE_SERIES_FAMILY_VERSION,
 };
@@ -558,6 +559,12 @@ impl WrapperRecipeHashV1 for OperatorSha256V1 {
 
 impl ReplayV3HashBackend for OperatorSha256V1 {
     fn sha256_parts(&self, parts: &[&[u8]]) -> [u8; 32] {
+        self.hashv(parts)
+    }
+}
+
+impl clutch_general_v2_contract::Sha256BackendV1 for OperatorSha256V1 {
+    fn sha256(&self, parts: &[&[u8]]) -> [u8; 32] {
         self.hashv(parts)
     }
 }
@@ -7884,6 +7891,434 @@ const DEALER_RUNTIME_LIVENESS_POLICY_PDA_DOMAIN_V1: &[u8] =
 const DEALER_RUNTIME_LIVENESS_ACCOUNT_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-live-account-v1";
 const PRODUCT_MARKET_LIFECYCLE_ROOT_PDA_DOMAIN_V1: &[u8] = b"dc:market-lifecycle-root:v1";
 const PRODUCT_SERIES_MARKET_LINK_PDA_DOMAIN_V1: &[u8] = b"dc:series-market-link:v1";
+
+const GENERAL_TERMINAL_SEMANTIC_OWNER_SCHEMA_V1: &str =
+    "dragons-clutch/general-v5-terminal/actions43-46-48-51/v1";
+
+fn general_terminal_root_v1(
+    release: &IndexedProgramRelease,
+    account: StructuredChainAccountV1<'_>,
+) -> Result<clutch_general_v2_contract::IndexedSettlementRootV1AccountV1> {
+    if account.owner()? != release.program_id || account.executable() {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    clutch_general_v2_contract::IndexedSettlementRootV1AccountV1::decode(account.data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)
+}
+
+fn append_general_id_v1(payload: &mut Vec<u8>, address: Address) -> Result<()> {
+    if address == Address::default() {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    payload.extend_from_slice(&address.to_bytes());
+    Ok(())
+}
+
+fn derive_general_terminal_payload_v5(
+    release: &IndexedProgramRelease,
+    action: GeneralV2Action,
+    accounts: &[StructuredChainAccountV1<'_>],
+) -> Result<(Vec<u8>, Address, u64, u64)> {
+    let mut payload = Vec::new();
+    match action {
+        GeneralV2Action::FreezeEpochV5 => {
+            let epoch_account = *accounts
+                .get(25)
+                .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            if epoch_account.owner()? != release.program_id || epoch_account.executable() {
+                return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+            }
+            let epoch = clutch_general_v2_contract::GeneralEpochV6AccountV1::decode(
+                epoch_account.data()?,
+            )
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let semantics = epoch
+                .semantics_digest(&OperatorSha256V1)
+                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            payload.extend_from_slice(&semantics.bytes());
+            Ok((payload, epoch_account.address, epoch.generation, epoch.epoch_index))
+        }
+        GeneralV2Action::RetirePortfolioPairArchives => {
+            let root_account = *accounts
+                .get(28)
+                .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let root = general_terminal_root_v1(release, root_account)?;
+            let receipt_count = u8::try_from(root.base().counts().expected_receipts)
+                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            if receipt_count == 0 {
+                return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+            }
+            let receipt_start = 37usize;
+            let refund_start = receipt_start
+                .checked_add(usize::from(receipt_count))
+                .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let refund_count = accounts
+                .len()
+                .checked_sub(refund_start)
+                .and_then(|value| u8::try_from(value).ok())
+                .filter(|value| (1..=18).contains(value))
+                .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let first_receipt = *accounts
+                .get(receipt_start)
+                .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            if first_receipt.owner()? != release.program_id || first_receipt.executable() {
+                return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+            }
+            clutch_solana_layout::settlement_receipt_v5::SettlementReceiptAccountV5::decode(
+                first_receipt.data()?,
+            )
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            payload.extend_from_slice(&root.base().epoch().bytes());
+            append_general_id_v1(&mut payload, root_account.address)?;
+            append_general_id_v1(&mut payload, first_receipt.address)?;
+            payload.extend_from_slice(&[receipt_count, refund_count]);
+            payload.extend_from_slice(&[0; 6]);
+            Ok((
+                payload,
+                root_account.address,
+                root.base().epoch_generation(),
+                u64::from(receipt_count),
+            ))
+        }
+        GeneralV2Action::RetireExactIndexChildren
+        | GeneralV2Action::RetireRetainedFeed
+        | GeneralV2Action::CloseOwnerSettlementRow
+        | GeneralV2Action::CloseOwnerFeeFinalization
+        | GeneralV2Action::BeginSettlementRetirement => {
+            let root_account = *accounts
+                .get(25)
+                .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let root = general_terminal_root_v1(release, root_account)?;
+            if action == GeneralV2Action::RetireExactIndexChildren
+                && (accounts.get(26).map(|account| account.address)
+                    != Some(Address::new_from_array(root.locator_account().bytes()))
+                    || accounts.get(27).map(|account| account.address)
+                        != Some(Address::new_from_array(root.adjacency_account().bytes()))
+                    || accounts.get(28).map(|account| account.address)
+                        != Some(Address::new_from_array(root.base().retained_feed().bytes())))
+            {
+                return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+            }
+            if action == GeneralV2Action::RetireRetainedFeed
+                && accounts.get(26).map(|account| account.address)
+                    != Some(Address::new_from_array(root.base().retained_feed().bytes()))
+            {
+                return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+            }
+            payload.extend_from_slice(&root.base().epoch().bytes());
+            append_general_id_v1(&mut payload, root_account.address)?;
+            let item = if matches!(
+                action,
+                GeneralV2Action::CloseOwnerSettlementRow
+                    | GeneralV2Action::CloseOwnerFeeFinalization
+            ) {
+                let child = accounts
+                    .get(26)
+                    .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+                append_general_id_v1(&mut payload, child.address)?;
+                u64::from(root.base().counts().live_owner_rows)
+                    .saturating_add(u64::from(root.base().counts().live_fee_finalizations))
+            } else {
+                u64::from(root.index_counts().live)
+            };
+            Ok((
+                payload,
+                root_account.address,
+                root.base().epoch_generation(),
+                item,
+            ))
+        }
+        GeneralV2Action::AdvanceFeeRetirement => {
+            let root_account = *accounts
+                .first()
+                .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let root = general_terminal_root_v1(release, root_account)?;
+            let accumulator_account = *accounts
+                .get(1)
+                .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            if accumulator_account.owner()? != release.program_id || accumulator_account.executable()
+            {
+                return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+            }
+            let accumulator =
+                clutch_general_v2_contract::FeeRetirementAccumulatorV1AccountV1::decode(
+                    accumulator_account.data()?,
+                )
+                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let maker_ordinal = accumulator.semantic.processed_maker_count();
+            let final_frame = accounts.len() == 45;
+            payload.extend_from_slice(&[if final_frame { 2 } else { 1 }, 1]);
+            payload.extend_from_slice(&root.base().epoch().bytes());
+            append_general_id_v1(&mut payload, root_account.address)?;
+            payload.extend_from_slice(&root.base().fee_record().bytes());
+            append_general_id_v1(&mut payload, accumulator_account.address)?;
+            append_general_id_v1(
+                &mut payload,
+                accounts
+                    .get(2)
+                    .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?
+                    .address,
+            )?;
+            if final_frame {
+                for index in [36usize, 3, 39, 38] {
+                    append_general_id_v1(
+                        &mut payload,
+                        accounts
+                            .get(index)
+                            .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?
+                            .address,
+                    )?;
+                }
+                let policy = accounts
+                    .get(24)
+                    .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?
+                    .data()?;
+                if policy.len()
+                    != clutch_batch_policy_identity::revenue_policy_v2::REVENUE_POLICY_V2_BYTES
+                {
+                    return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+                }
+                payload.extend_from_slice(policy);
+                payload.extend_from_slice(&[0; 6]);
+            } else {
+                append_general_id_v1(
+                    &mut payload,
+                    accounts
+                        .get(4)
+                        .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?
+                        .address,
+                )?;
+                payload.push(maker_ordinal);
+                payload.extend_from_slice(&[0; 5]);
+            }
+            Ok((
+                payload,
+                accumulator_account.address,
+                root.base().epoch_generation(),
+                u64::from(maker_ordinal),
+            ))
+        }
+        _ => Err(CanonicalActionMaterialErrorV1::CoordinateDisabled),
+    }
+}
+
+fn general_terminal_authority_state_id_v5(
+    action: GeneralV2Action,
+    accounts: &[StructuredChainAccountV1<'_>],
+    lookup_state_sha256: [u8; 32],
+) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"dragons-clutch/operator/general-v5-terminal-authority/v1\0");
+    hash.update([action.tag()]);
+    hash.update(lookup_state_sha256);
+    for account in accounts {
+        hash.update(account.address.to_bytes());
+        hash.update(account.observed_slot.to_le_bytes());
+        if let Some(observed) = account.present {
+            hash.update([1]);
+            hash.update(observed.owner.to_bytes());
+            hash.update(observed.lamports.to_le_bytes());
+            hash.update([u8::from(observed.executable)]);
+            hash.update(Sha256::digest(&observed.data));
+        } else {
+            hash.update([0]);
+        }
+    }
+    hash.finalize().into()
+}
+
+/// Construct one exact unsigned current-General terminal request from a
+/// finalized role frame. Payload identities, counts, ordinals, and cursor are
+/// derived from the hostile account bytes; callers provide no instruction
+/// bytes, role labels, privilege flags, sequence, or semantic DTO.
+#[allow(clippy::too_many_arguments)]
+pub fn construct_general_terminal_action_material_v5(
+    release: &IndexedProgramRelease,
+    builder: &ProtocolTransactionBuilder,
+    action: GeneralV2Action,
+    workflow_id: [u8; 32],
+    freshness: ActionFreshnessBoundaryV1,
+    accounts: &[StructuredChainAccountV1<'_>],
+    lookup_table: &StructuredAddressLookupTableV1,
+) -> Result<CanonicalActionMaterialV1> {
+    release
+        .validate()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    freshness.validate()?;
+    let coordinate = CanonicalIntentCoordinate {
+        family_tag: GENERAL_V2_FAMILY_TAG,
+        family_version: GENERAL_V2_FAMILY_VERSION,
+        local_action: action.tag(),
+    };
+    if workflow_id == [0; 32]
+        || builder.clutch_program() != release.program_id
+        || builder.clutch_release_sha256() != release.elf_sha256
+        || release.enabled_intents.binary_search(&coordinate).is_err()
+        || crate::transaction_builder::general_terminal_action_name_v5(action).is_none()
+        || lookup_table.observed_slot > freshness.observed_slot
+        || lookup_table.cluster_key.trim().is_empty()
+        || accounts.iter().any(|account| {
+            account.address == Address::default()
+                || account.observed_slot == 0
+                || account.observed_slot > freshness.observed_slot
+                || account.present.is_some_and(|present| {
+                    present.provenance.commitment != RpcCommitment::Finalized
+                        || present.provenance.cluster_key != lookup_table.cluster_key
+                })
+        })
+    {
+        return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
+    }
+    let final_action50 = action == GeneralV2Action::AdvanceFeeRetirement && accounts.len() == 45;
+    if accounts.iter().enumerate().any(|(index, account)| {
+        let must_be_absent = final_action50 && matches!(index, 38 | 39);
+        must_be_absent != account.present.is_none()
+    }) {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    let (payload, driver_account, generation, item) =
+        derive_general_terminal_payload_v5(release, action, accounts)?;
+    let expected_count = if action == GeneralV2Action::FreezeEpochV5 {
+        if !(33..=36).contains(&accounts.len()) {
+            return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+        }
+        accounts.len()
+    } else {
+        crate::transaction_builder::general_terminal_account_count_v5(action, &payload)
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?
+    };
+    if accounts.len() != expected_count {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    let mut metas = Vec::with_capacity(accounts.len());
+    let mut account_roles = Vec::with_capacity(accounts.len());
+    for (index, account) in accounts.iter().enumerate() {
+        let spec = crate::transaction_builder::general_terminal_account_spec_v5(
+            action,
+            index,
+            accounts.len(),
+            &payload,
+        )
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
+        metas.push(if spec.writable {
+            AccountMeta::new(account.address, spec.signer)
+        } else {
+            AccountMeta::new_readonly(account.address, spec.signer)
+        });
+        account_roles.push(CanonicalAccountRoleV1::new(
+            spec.label,
+            account.address,
+            spec.writable,
+            spec.signer,
+        ));
+    }
+    let observed_lamports = accounts.iter().try_fold(0u128, |total, account| {
+        total.checked_add(u128::from(
+            account.present.map_or(0, |present| present.lamports),
+        ))
+    })
+    .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let draft = OwnedInstructionDraft::enabled_general_terminal_v5(
+        SemanticOwner {
+            package: "clutch-general-v2-contract".into(),
+            schema: GENERAL_TERMINAL_SEMANTIC_OWNER_SCHEMA_V1.into(),
+            release_sha256: release.elf_sha256,
+        },
+        release.program_id,
+        metas,
+        vec![ExactEquation {
+            name: "hostile-decoded General V5 terminal prestate balance".into(),
+            unit: IntegerUnit::Lamports,
+            left: observed_lamports,
+            right: observed_lamports,
+        }],
+        action,
+        &payload,
+    )
+    .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let unsigned_transaction = builder
+        .build_exact_v0(
+            draft,
+            lookup_table.table.clone(),
+            lookup_table.observed_slot,
+            lookup_table.state_sha256,
+        )
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let authority_state_sha256 =
+        general_terminal_authority_state_id_v5(action, accounts, lookup_table.state_sha256);
+    let driver = accounts
+        .iter()
+        .find(|account| account.address == driver_account)
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let cursor = ResumableWorkflowCursor {
+        workflow_id,
+        lane: if action == GeneralV2Action::FreezeEpochV5 {
+            WorkflowLane::Candidate
+        } else {
+            WorkflowLane::RecoveryRetirement
+        },
+        generation,
+        position: WorkflowPosition {
+            phase: u16::from(action.tag()),
+            item,
+        },
+        observed_state_sha256: authority_state_sha256,
+    };
+    let planned = PlannedWorkflowNode {
+        manifest_sha256: release.release_manifest_sha256,
+        cursor,
+        coordinate: CanonicalActionCoordinate::General(action),
+        unsigned_transaction,
+        reload_authoritative_accounts: true,
+    };
+    if planned.unsigned_transaction.flows
+        != [crate::transaction_builder::general_terminal_flow_v5(action)
+            .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?]
+        || planned.unsigned_transaction.runtime_admissions
+            != [RuntimeAdmission::ReleaseBoundEnabled]
+        || planned.unsigned_transaction.message_version != TransactionMessageVersionV1::V0
+        || planned.unsigned_transaction.serialized_transaction.is_empty()
+        || planned.unsigned_transaction.exact_equations.is_empty()
+        || planned.unsigned_transaction.has_recent_blockhash
+        || planned.unsigned_transaction.signed
+        || planned.unsigned_transaction.submitted
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+    }
+    let release_key = release.key();
+    let draft_id = action_material_id(
+        &release_key,
+        &release_key,
+        release.release_manifest_sha256,
+        release.capability_profile_id,
+        coordinate,
+        driver_account,
+        driver.observed_slot,
+        cursor,
+        authority_state_sha256,
+        freshness,
+        builder.payer(),
+        &account_roles,
+        &planned.unsigned_transaction,
+    );
+    Ok(CanonicalActionMaterialV1 {
+        release_key: release_key.clone(),
+        driver_release_key: release_key,
+        release_manifest_sha256: release.release_manifest_sha256,
+        capability_profile_id: release.capability_profile_id,
+        coordinate,
+        variant: None,
+        driver_account,
+        driver_account_slot: driver.observed_slot,
+        cursor,
+        authority_state_sha256,
+        freshness,
+        fee_payer: builder.payer(),
+        account_roles,
+        planned,
+        draft_id,
+    })
+}
 
 #[derive(Clone, Copy, Debug)]
 struct DerivedDealerTerminalV1 {
