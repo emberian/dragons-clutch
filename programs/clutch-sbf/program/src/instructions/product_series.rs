@@ -13,6 +13,7 @@
 //! caller-shaped authentication facts.
 
 pub(crate) mod physical_v4;
+pub(crate) mod physical_v5;
 
 use core::cell::Cell;
 
