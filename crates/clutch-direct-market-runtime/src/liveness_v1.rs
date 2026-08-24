@@ -579,6 +579,18 @@ pub fn prepare_direct_candidate_work_batch_v1<B: DirectHashBackendV1>(
     Ok(batch)
 }
 
+/// Clear the transient pending marker only after the exact typed receipt batch
+/// has been planned against the shared Candidate prestate.
+pub fn bind_direct_candidate_work_batch_v1<B: DirectHashBackendV1>(
+    state: &DirectRootReplayPostV1,
+    batch: DirectCandidateWorkBatchV1,
+    backend: &B,
+) -> Result<crate::DirectActionReplayV1, DirectMarketErrorV1> {
+    state
+        .replay
+        .bind_candidate_liveness_batch(state.root, batch, backend)
+}
+
 fn derive_direct_candidate_work_receipt_v1<B: DirectHashBackendV1>(
     batch: DirectCandidateWorkBatchV1,
     binding: DirectCandidateLivenessBindingV1,
