@@ -15,10 +15,10 @@ use crate::source_plane_v3::{
 use crate::source_plane_v3_actions::{
     apply_source_terminal_liveness, authenticate_source_funding_custody_v1,
     bind_terminal_execution, close_statistic_result_generation,
-    persist_source_failure_terminal_v2, retire_absent_statistic_result_lineage_v1,
+    persist_source_failure_terminal_v3, retire_absent_statistic_result_lineage_v1,
     AuthenticatedAbsentStatisticResultLineageRetirementV1,
     AuthenticatedSourceTerminalSemanticV1, CloseRuntimeAccountResultV1,
-    PersistedSourceFailureTerminalV2, SourceTerminalExecutionV1,
+    PersistedSourceFailureTerminalV3, SourceTerminalExecutionV1,
 };
 use clutch_liveness::runtime_adapter_v1::{
     RuntimeAtomicTransitionV1, RuntimeTransitionActionV1,
@@ -377,7 +377,7 @@ impl AuthenticatedSourceFailurePhysicalDispositionV1 {
 pub(crate) struct AuthenticatedSourceFailureTerminalPostwriteV1 {
     id: ContentId,
     authority_facts: SourceFailureTerminalAuthorityFactsV1,
-    persisted_policy: PersistedSourceFailureTerminalV2,
+    persisted_policy: PersistedSourceFailureTerminalV3,
     terminal: SourceTerminalExecutionV1,
     liveness: RuntimeAtomicTransitionV1,
     physical: AuthenticatedSourceFailurePhysicalDispositionV1,
@@ -396,7 +396,7 @@ impl AuthenticatedSourceFailureTerminalPostwriteV1 {
         self.authority_facts.source_failure_kind
     }
 
-    pub(crate) const fn persisted_policy(self) -> PersistedSourceFailureTerminalV2 {
+    pub(crate) const fn persisted_policy(self) -> PersistedSourceFailureTerminalV3 {
         self.persisted_policy
     }
 
@@ -534,7 +534,7 @@ pub(crate) fn compose_source_failure_terminal_v1<
         source.disposition(),
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let persisted_policy = persist_source_failure_terminal_v2(
+    let persisted_policy = persist_source_failure_terminal_v3(
         program_id,
         route,
         body,
@@ -757,7 +757,7 @@ mod adversarial_tests {
             .find("authenticate_source_failure_terminal_authority_v1")
             .expect("post-pin preauthorization");
         let persist = body
-            .find("persist_source_failure_terminal_v2")
+            .find("persist_source_failure_terminal_v3")
             .expect("durable Source terminal");
         let terminal = body
             .find("bind_terminal_execution")
