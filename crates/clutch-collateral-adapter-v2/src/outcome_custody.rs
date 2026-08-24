@@ -193,6 +193,9 @@ fn validate_outcome_custody_partition_v1(
     outcome_mints: [Id; MAX_OUTCOMES],
     outcome_custodies: [Id; MAX_OUTCOMES],
     collateral_mint: Id,
+    collateral_token_program: Id,
+    collateral_programdata: Id,
+    collateral_parser: Id,
     hoard_token_account: Id,
     hoard_authority: Id,
     owner_authority: Id,
@@ -214,7 +217,16 @@ fn validate_outcome_custody_partition_v1(
             let custody = outcome_custodies[index];
             if mint == custody
                 || mint == collateral_mint
+                || mint == collateral_token_program
+                || mint == collateral_programdata
+                || mint == collateral_parser
+                || mint == hoard_token_account
+                || mint == hoard_authority
+                || mint == owner_authority
                 || custody == collateral_mint
+                || custody == collateral_token_program
+                || custody == collateral_programdata
+                || custody == collateral_parser
                 || custody == hoard_token_account
                 || custody == hoard_authority
                 || custody == owner_authority
@@ -255,6 +267,9 @@ pub fn prepare_outcome_custody_founding_v1(
         request.outcome_mints,
         request.outcome_custodies,
         bound.policy().mint,
+        bound.release().token_program,
+        bound.release().token_program_deployment,
+        bound.release().parser_cpi_code,
         bound.market().hoard_token_account,
         bound.market().hoard_authority,
         request.owner_authority,
@@ -368,6 +383,9 @@ mod tests {
                 Id::from_bytes([5; 32]),
                 Id::from_bytes([6; 32]),
                 Id::from_bytes([7; 32]),
+                Id::from_bytes([8; 32]),
+                Id::from_bytes([9; 32]),
+                Id::from_bytes([10; 32]),
             ),
             Err(Error::NonCanonicalPadding),
         );
@@ -390,8 +408,36 @@ mod tests {
                 Id::from_bytes([5; 32]),
                 Id::from_bytes([6; 32]),
                 Id::from_bytes([7; 32]),
+                Id::from_bytes([8; 32]),
+                Id::from_bytes([9; 32]),
+                Id::from_bytes([10; 32]),
             ),
             Err(Error::MismatchedBinding),
+        );
+    }
+
+    #[test]
+    fn active_prefix_and_zero_tail_are_canonical() {
+        let mut mints = [Id::ZERO; MAX_OUTCOMES];
+        let mut custodies = [Id::ZERO; MAX_OUTCOMES];
+        mints[0] = Id::from_bytes([1; 32]);
+        mints[1] = Id::from_bytes([2; 32]);
+        custodies[0] = Id::from_bytes([3; 32]);
+        custodies[1] = Id::from_bytes([8; 32]);
+        assert_eq!(
+            validate_outcome_custody_partition_v1(
+                2,
+                mints,
+                custodies,
+                Id::from_bytes([4; 32]),
+                Id::from_bytes([5; 32]),
+                Id::from_bytes([6; 32]),
+                Id::from_bytes([7; 32]),
+                Id::from_bytes([9; 32]),
+                Id::from_bytes([10; 32]),
+                Id::from_bytes([11; 32]),
+            ),
+            Ok(()),
         );
     }
 }
