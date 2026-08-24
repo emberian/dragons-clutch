@@ -136,7 +136,6 @@ compile_error!("Dragon's Clutch capability profiles are mutually exclusive");
         feature = "profile-non-production-dealer-policy-catalog-lab",
         feature = "profile-non-production-general-v2-empty-book-identity-lab",
         feature = "non-production-product-series-lab",
-        feature = "non-production-structured-custody-lab",
         feature = "non-production-failure-recovery-lab",
         feature = "non-production-mock-source",
         feature = "non-production-real-pyth-lab",
@@ -151,20 +150,6 @@ compile_error!(
     not(feature = "profile-full")
 ))]
 compile_error!("the Product/Series artifact-catalog laboratory requires profile-full");
-#[cfg(all(
-    feature = "non-production-structured-custody-lab",
-    not(feature = "profile-full")
-))]
-compile_error!("the Structured custody laboratory requires profile-full");
-#[cfg(all(
-    feature = "non-production-structured-custody-lab",
-    any(
-        feature = "non-production-product-series-lab",
-        feature = "profile-non-production-dealer-policy-catalog-lab",
-        feature = "profile-non-production-general-v2-empty-book-identity-lab"
-    )
-))]
-compile_error!("the Structured custody laboratory has its own exclusive artifact identity");
 
 pub mod accounts;
 pub mod capabilities;

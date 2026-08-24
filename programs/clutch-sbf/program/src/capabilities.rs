@@ -317,8 +317,7 @@ pub const SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTIONS:
     not(feature = "profile-successor-chain-attached-dev"),
     not(any(
         feature = "profile-non-production-dealer-policy-catalog-lab",
-        feature = "profile-non-production-general-v2-empty-book-identity-lab",
-        feature = "non-production-structured-custody-lab"
+        feature = "profile-non-production-general-v2-empty-book-identity-lab"
     ))
 ))]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
@@ -333,25 +332,6 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
     } else {
         &[]
     };
-
-/// Structured laboratory build seam. Actions 1/3/5/6/7/8 have one closed
-/// current account contract, but runtime tuples remain empty because the checked
-/// wrapper/base release identities still describe zero-Structured-capability
-/// artifacts and no replacement release evidence has been admitted.
-#[cfg(all(
-    feature = "profile-full",
-    feature = "non-production-structured-custody-lab",
-    not(any(
-        feature = "profile-non-production-dealer-policy-catalog-lab",
-        feature = "profile-non-production-general-v2-empty-book-identity-lab"
-    ))
-))]
-pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
-    (77, 2, 1),
-    (77, 2, 2),
-    (77, 2, 3),
-    (77, 2, 4),
-];
 
 /// Narrow non-laboratory profiles have not yet admitted Source execution.
 #[cfg(all(

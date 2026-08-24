@@ -50,7 +50,7 @@ use crate::instructions::dealer_policy;
 use crate::instructions::direct_selection_v3;
 #[cfg(feature = "non-production-product-series-lab")]
 use crate::instructions::product_series;
-#[cfg(feature = "non-production-structured-custody-lab")]
+#[cfg(feature = "profile-successor-chain-attached-dev")]
 use crate::instructions::structured_custody;
 use crate::instructions::{
     artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3, external_redemption_v3,
@@ -104,7 +104,7 @@ enum Route {
     DealerPolicy,
     #[cfg(feature = "non-production-product-series-lab")]
     RecurringSeries,
-    #[cfg(feature = "non-production-structured-custody-lab")]
+    #[cfg(feature = "profile-successor-chain-attached-dev")]
     StructuredClaim,
     DecodeOnly,
 }
@@ -188,7 +188,7 @@ fn route_hint(instruction_data: &[u8]) -> Route {
             {
                 Route::FractionalRedemption
             }
-            #[cfg(feature = "non-production-structured-custody-lab")]
+            #[cfg(feature = "profile-successor-chain-attached-dev")]
             Some(clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_TAG)
                 if instruction_data.get(14).copied()
                     == Some(clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_VERSION)
@@ -350,7 +350,7 @@ pub fn process(
         Route::DealerPolicy => process_dealer_policy(program_id, accounts, instruction_data),
         #[cfg(feature = "non-production-product-series-lab")]
         Route::RecurringSeries => process_recurring_series(program_id, accounts, instruction_data),
-        #[cfg(feature = "non-production-structured-custody-lab")]
+        #[cfg(feature = "profile-successor-chain-attached-dev")]
         Route::StructuredClaim => {
             process_structured_claim(program_id, accounts, instruction_data)
         }
@@ -508,7 +508,7 @@ fn disabled_dealer_facility_action(
     }
 }
 
-#[cfg(feature = "non-production-structured-custody-lab")]
+#[cfg(feature = "profile-successor-chain-attached-dev")]
 #[inline(never)]
 fn process_structured_claim(
     program_id: &Pubkey,
