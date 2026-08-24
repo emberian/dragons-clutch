@@ -14,13 +14,15 @@
 //! wired.
 
 use clutch_product_series::{
-    CompiledProductSeriesBundleV5Id, ContentId, FixedCodec, MarketInstanceV2Id,
-    MarketLifecycleReplayReceiptV1, MarketLifecycleRootV1, SeriesFundingComponentV1,
-    SeriesFundingStateV1, SeriesFundingStateV2, SeriesFundingTermsV2Id, SeriesMarketLinkV1,
-    SeriesPlanV5Id, SourceOccurrenceV1Id,
+    CompiledProductSeriesBundleV5Id, ContentId, DirectGlobalLivenessV1, FixedCodec,
+    MarketInstanceV2Id, MarketLifecycleReplayReceiptV1, MarketLifecycleRootV1,
+    SeriesFundingComponentV1, SeriesFundingStateV1, SeriesFundingStateV2,
+    SeriesFundingTermsV2Id, SeriesLifecycleReplayV1, SeriesMarketLinkV1, SeriesPlanV5Id,
+    SourceOccurrenceV1Id, DIRECT_GLOBAL_LIVENESS_BYTES_V1,
     MARKET_LIFECYCLE_REPLAY_RECEIPT_BYTES_V1, MARKET_LIFECYCLE_ROOT_BYTES_V1,
     SERIES_COLLATERAL_VAULT_COUNT_V2, SERIES_FUNDING_COMPONENT_COUNT,
-    SERIES_FUNDING_STATE_BYTES, SERIES_FUNDING_STATE_BYTES_V2, SERIES_MARKET_LINK_BYTES_V1,
+    SERIES_FUNDING_STATE_BYTES, SERIES_FUNDING_STATE_BYTES_V2,
+    SERIES_LIFECYCLE_REPLAY_BYTES_V1, SERIES_MARKET_LINK_BYTES_V1,
 };
 
 use crate::{digest, is_zero, registry, CodecError, Hash32, Result, HASH_BYTES};
@@ -60,6 +62,14 @@ pub const MARKET_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V1: usize =
 /// Exact framed per-Series SeriesMarketLink account width.
 pub const SERIES_MARKET_LINK_ACCOUNT_BYTES_V1: usize =
     PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + SERIES_MARKET_LINK_BYTES_V1;
+/// Canonical Product-owned Direct global-liveness PDA prefix.
+pub const PRODUCT_DIRECT_GLOBAL_LIVENESS_PDA_PREFIX_V1: &[u8] =
+    b"dc:product-direct-live:v1";
+/// Exact framed Product Direct global-liveness account width.
+pub const PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V1: usize =
+    PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1 + DIRECT_GLOBAL_LIVENESS_BYTES_V1;
+
+const _: () = assert!(PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V1 == 1_024);
 
 /// Recompute the sole shared authentication identity for one exact Product
 /// SeriesMarketLink account. Product and standalone attachment adapters must
@@ -970,6 +980,97 @@ impl MarketLifecycleRootAccountV1 {
             return Err(CodecError::ZeroValue);
         }
         Ok(())
+    }
+}
+
+/// Program-owned frame for the Product Direct global-liveness manifest.
+///
+/// The embedded state owns no physical work balance. Its rent field is the
+/// exact separately refundable principal locked in this `0xba/v1` account;
+/// any lamports above it are neutral-sink donation and may never discount the
+/// payer's required debit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductDirectGlobalLivenessAccountV1 {
+    /// Sole Product semantic manifest/allocation lifecycle.
+    pub state: DirectGlobalLivenessV1,
+    /// Exact refundable payer-funded account rent principal.
+    pub rent_principal_lamports: u64,
+    /// Canonical Product Direct global-liveness PDA bump.
+    pub stored_bump: u8,
+}
+
+impl ProductDirectGlobalLivenessAccountV1 {
+    /// Encode the exact `0xba/v1` hostile account frame.
+    pub fn encode(&self, output: &mut [u8]) -> Result<()> {
+        Self::encode_parts(
+            &self.state,
+            self.rent_principal_lamports,
+            self.stored_bump,
+            output,
+        )
+    }
+
+    /// Encode from borrowed state without an additional 1,008-byte copy.
+    pub fn encode_parts(
+        state: &DirectGlobalLivenessV1,
+        rent_principal_lamports: u64,
+        stored_bump: u8,
+        output: &mut [u8],
+    ) -> Result<()> {
+        require_exact(output, PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V1)?;
+        state.validate().map_err(map_product_error)?;
+        if rent_principal_lamports == 0
+            || rent_principal_lamports != state.manifest_rent_principal_lamports()
+        {
+            return Err(if rent_principal_lamports == 0 {
+                CodecError::ZeroValue
+            } else {
+                CodecError::MismatchedBinding
+            });
+        }
+        output.fill(0);
+        output[0] = registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG;
+        output[1] = registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_VERSION;
+        output[2] = stored_bump;
+        output[8..16].copy_from_slice(&rent_principal_lamports.to_le_bytes());
+        state
+            .encode_into(&mut output[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..])
+            .map_err(map_product_error)
+    }
+
+    /// Hostile-decode the exact tag/version/width and complete semantic body.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        require_exact(input, PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_BYTES_V1)?;
+        if input[0] != registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_TAG {
+            return Err(CodecError::WrongTag);
+        }
+        if input[1] != registry::PRODUCT_DIRECT_GLOBAL_LIVENESS_ACCOUNT_VERSION {
+            return Err(CodecError::WrongVersion);
+        }
+        require_reserved(&input[3..8])?;
+        let rent_principal_lamports = u64::from_le_bytes(
+            input[8..16]
+                .try_into()
+                .map_err(|_| CodecError::Truncated)?,
+        );
+        let state = DirectGlobalLivenessV1::decode(
+            &input[PRODUCT_MARKET_ACCOUNT_HEADER_BYTES_V1..],
+        )
+        .map_err(map_product_error)?;
+        if rent_principal_lamports == 0
+            || rent_principal_lamports != state.manifest_rent_principal_lamports()
+        {
+            return Err(if rent_principal_lamports == 0 {
+                CodecError::ZeroValue
+            } else {
+                CodecError::MismatchedBinding
+            });
+        }
+        Ok(Self {
+            state,
+            rent_principal_lamports,
+            stored_bump: input[2],
+        })
     }
 }
 
