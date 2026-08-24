@@ -68,3 +68,23 @@ seeds; successful CPI; exact before/after token balances, lamports, and account
 closure; transaction rollback; and correspondence between these byte views and
 the program binary executing on the selected cluster. These source digests are
 ABI provenance, not evidence about any deployed binary.
+
+## Canonical adapter releases
+
+`release.rs` owns two exact 216-byte V1 content preimages. Each commits the
+profile kind, token program ID, exact Mint and Account widths, refusal of all
+extension storage, the three instruction tags used here, the interface crate
+release identity, archive digest, and the three reviewed source-file digests.
+The interface release identities are SHA-256 of the exact ASCII strings
+`crates.io:spl-token-interface@3.0.0` and
+`crates.io:spl-token-2022-interface@3.1.1`.
+
+The canonical SHA-256 content IDs are:
+
+- Legacy exact-transfer V1:
+  `956395ad71cc2030b58cfd7900233c89ae96ff049f23d7dbecc3ae8f8e0d6d3f`
+- Token-2022 zero-extension exact-transfer V1:
+  `228c14f9e501f86138d3f19e5ea815af628c0adf499dc6a93dd8cb185c870e29`
+
+These identify dClutch's parser and instruction semantics. They deliberately do
+not identify a deployed token-program binary or its upgrade authority.

@@ -1,4 +1,4 @@
-//! Stable program-local refusals for the SBF resolution adapter.
+//! Stable program-local refusals for the dClutch SBF adapter.
 
 use solana_program::program_error::ProgramError;
 
@@ -43,6 +43,12 @@ pub enum AdapterError {
     Arithmetic = 16,
     /// The Fund could not be distributed and closed canonically.
     FundClose = 17,
+    /// Realm account, mint, token program, rent, or release facts did not authenticate.
+    RealmAuthentication = 18,
+    /// The System Program refused exact Realm PDA creation.
+    RealmCreateCpi = 19,
+    /// Realm creation or persistence did not produce exact postconditions.
+    RealmPostcondition = 20,
 }
 
 impl From<AdapterError> for ProgramError {

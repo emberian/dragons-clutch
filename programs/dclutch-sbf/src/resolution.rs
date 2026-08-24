@@ -169,7 +169,7 @@ fn transition_price<const N: usize>(
     update: FullPriceUpdateV2,
     body_digest: [u8; 32],
 ) -> Result<(), ProgramError> {
-    let state = decode_market::<N>(frame.market)?;
+    let mut state = decode_market::<N>(frame.market)?;
     let policy = state
         .policy()
         .to_kernel_policy()
@@ -204,8 +204,8 @@ fn transition_price<const N: usize>(
         outcome_count,
     )
     .map_err(|_| AdapterError::MarketTransition)?;
-    let next = resolved_state(
-        state,
+    resolve_state(
+        &mut state,
         instruction.generation(),
         instruction.child_count(),
         receipt,
@@ -214,7 +214,7 @@ fn transition_price<const N: usize>(
     // Reclaim succeeds before any dClutch account is persistently changed.
     // Any later refusal still rolls the CPI back atomically at runtime.
     provider::reclaim(frame)?;
-    encode_market(frame.market, &next)
+    encode_market(frame.market, &state)
 }
 
 #[inline(never)]
@@ -223,7 +223,7 @@ fn transition_failure<const N: usize>(
     instruction: ResolveCategoricalFailureV1,
     clock: Clock,
 ) -> Result<(), ProgramError> {
-    let state = decode_market::<N>(frame.market)?;
+    let mut state = decode_market::<N>(frame.market)?;
     let policy = state
         .policy()
         .to_kernel_policy()
@@ -242,26 +242,26 @@ fn transition_failure<const N: usize>(
         },
     )
     .map_err(|_| AdapterError::MarketTransition)?;
-    let next = resolved_state(
-        state,
+    resolve_state(
+        &mut state,
         instruction.generation(),
         instruction.child_count(),
         receipt,
     )?;
-    encode_market(frame.market, &next)
+    encode_market(frame.market, &state)
 }
 
 #[inline(never)]
-fn resolved_state<const N: usize>(
-    mut state: MarketStateV1<N>,
+fn resolve_state<const N: usize>(
+    state: &mut MarketStateV1<N>,
     generation: u64,
     child_count: u64,
     receipt: ResolutionReceiptV1,
-) -> Result<MarketStateV1<N>, ProgramError> {
+) -> Result<(), ProgramError> {
     state
         .resolve_with_receipt(generation, child_count, receipt)
         .map_err(|_| AdapterError::MarketTransition)?;
-    Ok(state)
+    Ok(())
 }
 
 fn decode_market<const N: usize>(

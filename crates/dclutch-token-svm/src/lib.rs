@@ -22,6 +22,8 @@ extern crate std;
 pub mod instruction;
 /// Exact-transfer program profiles and cross-account checks.
 pub mod profile;
+/// Canonical immutable collateral-adapter release preimages.
+pub mod release;
 /// Exact Mint and base Account state parsers.
 pub mod state;
 
@@ -31,6 +33,10 @@ pub use instruction::{
     TransferCheckedView, close_account, initialize_account3, transfer_checked,
 };
 pub use profile::{AuthorityRole, ExactTransferFacts, ExactTransferInput, ExactTransferProfileV1};
+pub use release::{
+    ADAPTER_RELEASE_BYTES, ADAPTER_RELEASE_MAGIC, ADAPTER_RELEASE_SCHEMA_VERSION,
+    CollateralAdapterReleaseV1, ExtensionStoragePolicy, PRODUCTION_ADAPTER_RELEASES, ProfileKind,
+};
 pub use state::{ACCOUNT_BYTES, AccountState, COption, MINT_BYTES, Mint, TokenAccount};
 
 /// One raw SVM public-key or address value without an SDK dependency.
@@ -123,6 +129,8 @@ pub enum Error {
     InsufficientFunds,
     /// The exact destination post-balance exceeded `u64`.
     ArithmeticOverflow,
+    /// A collateral-adapter release preimage was not one exact production row.
+    InvalidAdapterRelease,
 }
 
 /// Result alias for this crate.

@@ -17,11 +17,16 @@ custom-panic = []
 non-production-real-pyth-lab = ["dclutch-pyth-svm/synthetic-local-fixture"]
 
 [dependencies]
+dclutch-collateral-contract = { path = "../../crates/dclutch-collateral-contract" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-kernel = { path = "../../crates/dclutch-kernel" }
 dclutch-pyth-contract = { path = "../../crates/dclutch-pyth-contract" }
 dclutch-pyth-svm = { path = "../../crates/dclutch-pyth-svm" }
+dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
+dclutch-token-svm = { path = "../../crates/dclutch-token-svm" }
 solana-program = { version = "=3.0.0", default-features = false }
+solana-sdk-ids = "=3.0.0"
+solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 
 [lints]
 workspace = true
