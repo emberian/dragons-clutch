@@ -34,6 +34,7 @@ DIRECT_V3_TAGS = frozenset(range(36, 47))
 SOURCE_V1_TAGS = frozenset(range(23, 27))
 SOURCE_V2_TAGS = frozenset(range(70, 74))
 CURRENT_SOURCE_EXTENSION_TRIPLES = [[77, 2, action] for action in range(1, 5)]
+CURRENT_FRACTIONAL_EXTENSION_TRIPLES = [[79, 1, action] for action in range(1, 11)]
 SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE = "profile-successor-chain-attached-v1"
 # This is the complete local-action-zero wire surface of the first
 # chain-attached successor.  It intentionally excludes legacy market founding,
@@ -56,6 +57,10 @@ CAPABILITY_OWNERS: tuple[tuple[str, str], ...] = (
     ("clear-work-feed", "dragons-clutch/semantic-owner/clear-work-feed"),
     ("retirement", "dragons-clutch/semantic-owner/retirement"),
     ("source-plane", "dragons-clutch/semantic-owner/source-plane"),
+    (
+        "fractional-redemption",
+        "dragons-clutch/semantic-owner/fractional-redemption",
+    ),
     ("series-products", "dragons-clutch/semantic-owner/series-products"),
     ("recovery", "dragons-clutch/semantic-owner/recovery"),
     ("structured-claim", "dragons-clutch/semantic-owner/structured-claim"),
@@ -387,6 +392,49 @@ def validate_wire_surface(
         require(
             required_source_extensions == [] and enabled_source_extensions == [],
             "wire_surface: narrow profile unexpectedly retains Source V3 actions",
+        )
+
+    fractional_owner = next(
+        row for row in capabilities if row["slot"] == "fractional-redemption"
+    )
+    required_fractional_extensions = [
+        triple
+        for triple in fractional_owner["required_intent_triples"]
+        if triple[0] == 79
+    ]
+    all_required_fractional_extensions = [
+        triple
+        for row in capabilities
+        for triple in row["required_intent_triples"]
+        if triple[0] == 79
+    ]
+    require(
+        all_required_fractional_extensions == required_fractional_extensions,
+        "wire_surface: Fractional actions have a non-Fractional semantic owner",
+    )
+    require(
+        required_fractional_extensions
+        in ([], CURRENT_FRACTIONAL_EXTENSION_TRIPLES),
+        "wire_surface: Fractional requirements must be empty or exactly 79/v1 actions 1 through 10",
+    )
+    enabled_fractional_extensions = [
+        triple
+        for triple in central_registry["enabled_intent_triples"]
+        if triple[0] == 79
+    ]
+    require(
+        enabled_fractional_extensions in ([], CURRENT_FRACTIONAL_EXTENSION_TRIPLES),
+        "wire_surface: Fractional enablement must be empty or exactly 79/v1 actions 1 through 10",
+    )
+    if fractional_owner["linkage"] == "linked":
+        require(
+            enabled_fractional_extensions == required_fractional_extensions,
+            "wire_surface: linked Fractional owner does not exactly match central enablement",
+        )
+    else:
+        require(
+            enabled_fractional_extensions == [],
+            "wire_surface: planned Fractional owner unexpectedly enables actions",
         )
 
     if profile_feature == SUCCESSOR_CHAIN_ATTACHED_PROFILE_FEATURE:

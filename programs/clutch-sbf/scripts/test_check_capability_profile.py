@@ -887,6 +887,93 @@ class CapabilityProfileTests(unittest.TestCase):
         ):
             checker.validate_manifest(hostile, repo=ROOT)
 
+    def test_fractional_semantic_owner_and_all_or_none_enablement(self) -> None:
+        value = manifest()
+        fractional = next(
+            row
+            for row in value["capabilities"]
+            if row["slot"] == "fractional-redemption"
+        )
+        self.assertEqual(
+            [triple for triple in fractional["required_intent_triples"] if triple[0] == 79],
+            [],
+        )
+        checker.validate_manifest(value, repo=ROOT)
+
+        fully_enabled = copy.deepcopy(value)
+        full_fractional = next(
+            row
+            for row in fully_enabled["capabilities"]
+            if row["slot"] == "fractional-redemption"
+        )
+        full_fractional["required_intent_triples"].extend(
+            copy.deepcopy(checker.CURRENT_FRACTIONAL_EXTENSION_TRIPLES)
+        )
+        full_fractional["required_intent_triples"].sort()
+        fully_enabled["central_registry"] = linked_coverage(
+            fully_enabled["capabilities"]
+        )
+        fully_enabled["wire_surface"] = wire_surface(
+            fully_enabled["central_registry"]
+        )
+        fully_enabled["profile"]["identity_sha256"] = checker.profile_identity(
+            fully_enabled["profile"]["name"],
+            fully_enabled["profile"]["label"],
+            fully_enabled["build_contract"],
+            fully_enabled["capabilities"],
+            fully_enabled["central_registry"],
+            fully_enabled["wire_surface"],
+            fully_enabled["artifact_budget"]["limits"],
+        )
+        checker.validate_manifest(fully_enabled, repo=ROOT)
+
+        partial_required = copy.deepcopy(value)
+        partial_fractional = next(
+            row
+            for row in partial_required["capabilities"]
+            if row["slot"] == "fractional-redemption"
+        )
+        partial_fractional["required_intent_triples"].append([79, 1, 1])
+        partial_fractional["required_intent_triples"].sort()
+        partial_required["central_registry"] = linked_coverage(
+            partial_required["capabilities"]
+        )
+        partial_required["wire_surface"] = wire_surface(
+            partial_required["central_registry"]
+        )
+        partial_required["profile"]["identity_sha256"] = checker.profile_identity(
+            partial_required["profile"]["name"],
+            partial_required["profile"]["label"],
+            partial_required["build_contract"],
+            partial_required["capabilities"],
+            partial_required["central_registry"],
+            partial_required["wire_surface"],
+            partial_required["artifact_budget"]["limits"],
+        )
+        with self.assertRaisesRegex(
+            checker.ProfileError, "exactly 79/v1 actions 1 through 10"
+        ):
+            checker.validate_manifest(partial_required, repo=ROOT)
+
+        wrong_owner = copy.deepcopy(value)
+        wrong_owner["capabilities"][0]["required_intent_triples"].append([79, 1, 1])
+        wrong_owner["capabilities"][0]["required_intent_triples"].sort()
+        wrong_owner["central_registry"] = linked_coverage(wrong_owner["capabilities"])
+        wrong_owner["wire_surface"] = wire_surface(wrong_owner["central_registry"])
+        wrong_owner["profile"]["identity_sha256"] = checker.profile_identity(
+            wrong_owner["profile"]["name"],
+            wrong_owner["profile"]["label"],
+            wrong_owner["build_contract"],
+            wrong_owner["capabilities"],
+            wrong_owner["central_registry"],
+            wrong_owner["wire_surface"],
+            wrong_owner["artifact_budget"]["limits"],
+        )
+        with self.assertRaisesRegex(
+            checker.ProfileError, "non-Fractional semantic owner"
+        ):
+            checker.validate_manifest(wrong_owner, repo=ROOT)
+
     def test_full_profile_records_cargo_default_identity_marker(self) -> None:
         full = checker.validate_manifest(
             manifest(profile_feature="profile-full"), repo=ROOT
