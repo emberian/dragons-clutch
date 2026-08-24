@@ -12,7 +12,12 @@ use clutch_liveness::runtime_v1::{
     RUNTIME_COMPARTMENT_ORDER_V1,
 };
 
-use crate::{require_live, DirectHashBackendV1, DirectMarketErrorV1};
+use crate::selection_v1::{DirectSelectionPhaseV1, DirectSelectionV1};
+use crate::{
+    require_live, DirectHashBackendV1, DirectMarketActionV1, DirectMarketErrorV1,
+    DirectReplayPhaseV1, DirectRootPhaseV1, DirectRootReplayPostV1,
+    DirectTerminalReasonV1,
+};
 
 const DIRECT_CANDIDATE_WORK_SCHEDULE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/candidate-work-schedule/v1\0";
@@ -20,6 +25,12 @@ const DIRECT_GLOBAL_LIVENESS_ROW_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/global-liveness-row/v1\0";
 const DIRECT_GLOBAL_LIVENESS_BUNDLE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/global-liveness-bundle/v1\0";
+const DIRECT_CANDIDATE_WORK_RECEIPT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/direct/candidate-work-receipt/v1\0";
+const DIRECT_CANDIDATE_WORK_RECEIPT_CHAIN_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/direct/candidate-work-receipt-chain/v1\0";
+const DIRECT_CANDIDATE_WORK_BATCH_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/direct/candidate-work-batch/v1\0";
 
 /// Exact number of protocol-funded calls reserved for a complete Direct path.
 ///
@@ -159,6 +170,605 @@ impl DirectCandidateWorkScheduleV1 {
         ]);
         require_live(id)?;
         Ok(id)
+    }
+}
+
+/// Canonical role order in every exact Direct Candidate allocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectCandidateWorkRoleV1 {
+    /// Action 4 freezes the complete Reservation prefix.
+    FreezeBook,
+    /// Action 6 opens exact retained-candidate verification.
+    BeginVerification,
+    /// First retained candidate verification, or a terminal elision proof.
+    VerifyCandidate0,
+    /// Second retained candidate verification, or a terminal elision proof.
+    VerifyCandidate1,
+    /// Third retained candidate verification, or a terminal elision proof.
+    VerifyCandidate2,
+    /// Action 8 finalizes the best valid submitted candidate or empty set.
+    FinalizeSelection,
+    /// Exactly one settlement/no-trade/lapse terminal transition.
+    EconomicTerminal,
+    /// Action 13 closes the complete Direct archive family.
+    RetireTerminal,
+}
+
+impl DirectCandidateWorkRoleV1 {
+    /// Zero-based position in the immutable eight-role allocation.
+    pub const fn index(self) -> u8 {
+        match self {
+            Self::FreezeBook => 0,
+            Self::BeginVerification => 1,
+            Self::VerifyCandidate0 => 2,
+            Self::VerifyCandidate1 => 3,
+            Self::VerifyCandidate2 => 4,
+            Self::FinalizeSelection => 5,
+            Self::EconomicTerminal => 6,
+            Self::RetireTerminal => 7,
+        }
+    }
+
+    const fn mask(self) -> u8 {
+        match self {
+            Self::FreezeBook => 0x01,
+            Self::BeginVerification => 0x02,
+            Self::VerifyCandidate0 => 0x04,
+            Self::VerifyCandidate1 => 0x08,
+            Self::VerifyCandidate2 => 0x10,
+            Self::FinalizeSelection => 0x20,
+            Self::EconomicTerminal => 0x40,
+            Self::RetireTerminal => 0x80,
+        }
+    }
+
+    fn from_index(index: u8) -> Result<Self, DirectMarketErrorV1> {
+        match index {
+            0 => Ok(Self::FreezeBook),
+            1 => Ok(Self::BeginVerification),
+            2 => Ok(Self::VerifyCandidate0),
+            3 => Ok(Self::VerifyCandidate1),
+            4 => Ok(Self::VerifyCandidate2),
+            5 => Ok(Self::FinalizeSelection),
+            6 => Ok(Self::EconomicTerminal),
+            7 => Ok(Self::RetireTerminal),
+            _ => Err(DirectMarketErrorV1::InvalidCount),
+        }
+    }
+
+    /// Exact immutable ceiling selected by the Direct schedule owner.
+    pub const fn ceiling(self, schedule: DirectCandidateWorkScheduleV1) -> u64 {
+        match self {
+            Self::FreezeBook => schedule.freeze_book_lamports,
+            Self::BeginVerification => schedule.begin_verification_lamports,
+            Self::VerifyCandidate0
+            | Self::VerifyCandidate1
+            | Self::VerifyCandidate2 => schedule.verify_candidate_lamports,
+            Self::FinalizeSelection => schedule.finalize_selection_lamports,
+            Self::EconomicTerminal => schedule.economic_terminal_lamports,
+            Self::RetireTerminal => schedule.retire_terminal_lamports,
+        }
+    }
+}
+
+/// Whether a role performed live Direct work or proved that a terminal
+/// partition made that role unreachable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectCandidateWorkDispositionV1 {
+    /// The enclosing Direct action performed this role's live work.
+    Executed,
+    /// A canonical terminal partition proved the role unreachable.
+    TerminallyElided,
+}
+
+impl DirectCandidateWorkDispositionV1 {
+    const fn byte(self) -> u8 {
+        match self {
+            Self::Executed => 1,
+            Self::TerminallyElided => 2,
+        }
+    }
+}
+
+/// One typed child receipt projected from the permanent b3 owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectCandidateWorkReceiptV1 {
+    role: DirectCandidateWorkRoleV1,
+    disposition: DirectCandidateWorkDispositionV1,
+    call_ordinal: u32,
+    call_ceiling_lamports: u64,
+    keeper_payment_lamports: u64,
+    receipt_id: [u8; 32],
+    predecessor_receipt_id: [u8; 32],
+}
+
+impl DirectCandidateWorkReceiptV1 {
+    /// Immutable role coordinate.
+    pub const fn role(self) -> DirectCandidateWorkRoleV1 { self.role }
+    /// Executed or terminally-elided disposition.
+    pub const fn disposition(self) -> DirectCandidateWorkDispositionV1 { self.disposition }
+    /// Exact shared Candidate call ordinal.
+    pub const fn call_ordinal(self) -> u32 { self.call_ordinal }
+    /// Exact immutable work ceiling consumed at this ordinal.
+    pub const fn call_ceiling_lamports(self) -> u64 { self.call_ceiling_lamports }
+    /// Exact keeper payment; zero only for terminal elision.
+    pub const fn keeper_payment_lamports(self) -> u64 { self.keeper_payment_lamports }
+    /// Typed child receipt identity.
+    pub const fn receipt_id(self) -> [u8; 32] { self.receipt_id }
+    /// Previous shared Candidate work receipt in the gapless chain.
+    pub const fn predecessor_receipt_id(self) -> [u8; 32] {
+        self.predecessor_receipt_id
+    }
+}
+
+/// Allocation- and frame-bounded complete receipt batch for one Direct action.
+///
+/// Child receipts are derived one at a time with [`Self::receipt`]; the batch
+/// never carries an array of full runtime transition plans.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectCandidateWorkBatchV1 {
+    market_instance_id: [u8; 32],
+    generation: u64,
+    direct_root_account: [u8; 32],
+    replay_account: [u8; 32],
+    direct_action_transcript_id: [u8; 32],
+    action: DirectMarketActionV1,
+    candidate_account: [u8; 32],
+    candidate_pre_data_id: [u8; 32],
+    keeper: [u8; 32],
+    completed_calls_before: u32,
+    completed_calls_after: u32,
+    executed_mask: u8,
+    predecessor_receipt_id: [u8; 32],
+    prior_batch_receipt_id: [u8; 32],
+    receipt_count: u8,
+    total_call_ceiling_lamports: u64,
+    total_keeper_payment_lamports: u64,
+    total_payer_refund_lamports: u64,
+    receipt_chain_id: [u8; 32],
+    last_receipt_id: [u8; 32],
+    batch_receipt_id: [u8; 32],
+}
+
+impl DirectCandidateWorkBatchV1 {
+    /// Number of this occurrence's roles consumed before the action.
+    pub const fn completed_calls_before(self) -> u32 { self.completed_calls_before }
+    /// Number of this occurrence's roles consumed after the action.
+    pub const fn completed_calls_after(self) -> u32 { self.completed_calls_after }
+    /// Shared Candidate receipt immediately preceding this batch.
+    pub const fn predecessor_receipt_id(self) -> [u8; 32] {
+        self.predecessor_receipt_id
+    }
+    /// Number of sequential child receipts in this action.
+    pub const fn receipt_count(self) -> u8 { self.receipt_count }
+    /// Sum of every consumed immutable call ceiling.
+    pub const fn total_call_ceiling_lamports(self) -> u64 {
+        self.total_call_ceiling_lamports
+    }
+    /// Sum paid to the keeper for executed roles.
+    pub const fn total_keeper_payment_lamports(self) -> u64 {
+        self.total_keeper_payment_lamports
+    }
+    /// Sum returned to the immutable liveness payer for elided roles.
+    pub const fn total_payer_refund_lamports(self) -> u64 {
+        self.total_payer_refund_lamports
+    }
+    /// Last child receipt, also persisted by the shared Candidate account.
+    pub const fn last_receipt_id(self) -> [u8; 32] { self.last_receipt_id }
+    /// Complete per-action child-chain commitment persisted by b3.
+    pub const fn batch_receipt_id(self) -> [u8; 32] { self.batch_receipt_id }
+
+    /// Recompute one exact child without retaining the other transition rows.
+    pub fn receipt<B: DirectHashBackendV1>(
+        self,
+        index: u8,
+        binding: DirectCandidateLivenessBindingV1,
+        backend: &B,
+    ) -> Result<DirectCandidateWorkReceiptV1, DirectMarketErrorV1> {
+        if index >= self.receipt_count {
+            return Err(DirectMarketErrorV1::InvalidCount);
+        }
+        let mut predecessor = self.predecessor_receipt_id;
+        let mut offset = 0u8;
+        while offset <= index {
+            let role_index = u8::try_from(self.completed_calls_before)
+                .map_err(|_| DirectMarketErrorV1::Arithmetic)?
+                .checked_add(offset)
+                .ok_or(DirectMarketErrorV1::Arithmetic)?;
+            let receipt = derive_direct_candidate_work_receipt_v1(
+                self,
+                binding,
+                DirectCandidateWorkRoleV1::from_index(role_index)?,
+                predecessor,
+                backend,
+            )?;
+            if offset == index {
+                return Ok(receipt);
+            }
+            predecessor = receipt.receipt_id;
+            offset = offset.checked_add(1).ok_or(DirectMarketErrorV1::Arithmetic)?;
+        }
+        Err(DirectMarketErrorV1::InvalidCount)
+    }
+
+    pub(crate) fn validate_replay_binding(
+        self,
+        replay: crate::DirectActionReplayV1,
+        root: crate::DirectMarketRootV1,
+    ) -> Result<(), DirectMarketErrorV1> {
+        let binding = root.binding();
+        if self.market_instance_id != binding.market_instance_id
+            || self.generation != binding.generation
+            || self.direct_root_account != binding.direct_root_account
+            || self.replay_account != binding.action_replay_account
+            || self.direct_action_transcript_id != replay.action_transcript_id()
+            || self.candidate_account != binding.candidate_liveness.candidate_account
+            || self.prior_batch_receipt_id
+                != replay.candidate_liveness_batch_receipt_id()
+            || self.completed_calls_before
+                != replay.candidate_liveness_completed_calls()
+            || !replay.candidate_liveness_pending()
+        {
+            return Err(DirectMarketErrorV1::MismatchedBinding);
+        }
+        Ok(())
+    }
+}
+
+/// Derive the canonical exact role range for one already-prepared Direct
+/// semantic transition. No payload count, role mask, or caller ordinal exists.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_direct_candidate_work_batch_v1<B: DirectHashBackendV1>(
+    state: DirectRootReplayPostV1,
+    selection: Option<&DirectSelectionV1>,
+    action: DirectMarketActionV1,
+    candidate_completed_calls: u32,
+    candidate_last_receipt_id: [u8; 32],
+    candidate_pre_data_id: [u8; 32],
+    keeper: [u8; 32],
+    backend: &B,
+) -> Result<DirectCandidateWorkBatchV1, DirectMarketErrorV1> {
+    state.replay.validate_against(state.root)?;
+    if !action.requires_candidate_liveness()
+        || !state.replay.candidate_liveness_pending()
+    {
+        return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+    }
+    require_live(candidate_pre_data_id)?;
+    require_live(keeper)?;
+    let binding = state.root.binding();
+    binding.candidate_liveness.validate()?;
+    if keeper == binding.candidate_liveness.candidate_account
+        || keeper == binding.neutral_lamport_sink
+    {
+        return Err(DirectMarketErrorV1::IdentityAlias);
+    }
+    let progress_before = state.replay.candidate_liveness_completed_calls();
+    let expected_global_completed = binding
+        .candidate_liveness
+        .first_call_ordinal
+        .checked_sub(1)
+        .and_then(|value| value.checked_add(progress_before))
+        .ok_or(DirectMarketErrorV1::Arithmetic)?;
+    if candidate_completed_calls != expected_global_completed
+        || (candidate_completed_calls == 0) != (candidate_last_receipt_id == [0; 32])
+        || (progress_before != 0
+            && candidate_last_receipt_id
+                != state.replay.candidate_liveness_last_receipt_id())
+    {
+        return Err(DirectMarketErrorV1::Replay);
+    }
+    if progress_before != 0 {
+        require_live(candidate_last_receipt_id)?;
+    }
+    let (completed_calls_after, executed_mask) = canonical_direct_work_partition_v1(
+        state,
+        selection,
+        action,
+        progress_before,
+    )?;
+    let receipt_count_u32 = completed_calls_after
+        .checked_sub(progress_before)
+        .ok_or(DirectMarketErrorV1::Arithmetic)?;
+    let receipt_count = u8::try_from(receipt_count_u32)
+        .map_err(|_| DirectMarketErrorV1::Arithmetic)?;
+    if receipt_count == 0 || receipt_count > 7 {
+        return Err(DirectMarketErrorV1::InvalidCount);
+    }
+    let consumed_action_sequence = state
+        .replay
+        .next_action_sequence()
+        .checked_sub(1)
+        .ok_or(DirectMarketErrorV1::Arithmetic)?;
+    let mut batch = DirectCandidateWorkBatchV1 {
+        market_instance_id: binding.market_instance_id,
+        generation: binding.generation,
+        direct_root_account: binding.direct_root_account,
+        replay_account: binding.action_replay_account,
+        direct_action_transcript_id: state.replay.action_transcript_id(),
+        action,
+        candidate_account: binding.candidate_liveness.candidate_account,
+        candidate_pre_data_id,
+        keeper,
+        completed_calls_before: progress_before,
+        completed_calls_after,
+        executed_mask,
+        predecessor_receipt_id: candidate_last_receipt_id,
+        prior_batch_receipt_id: state.replay.candidate_liveness_batch_receipt_id(),
+        receipt_count,
+        total_call_ceiling_lamports: 0,
+        total_keeper_payment_lamports: 0,
+        total_payer_refund_lamports: 0,
+        receipt_chain_id: backend.sha256_parts(&[
+            DIRECT_CANDIDATE_WORK_RECEIPT_CHAIN_DOMAIN_V1,
+            &binding.candidate_liveness.allocation_receipt_id,
+            &state.replay.candidate_liveness_batch_receipt_id(),
+            &candidate_pre_data_id,
+            &candidate_last_receipt_id,
+        ]),
+        last_receipt_id: [0; 32],
+        batch_receipt_id: [0; 32],
+    };
+    require_live(batch.receipt_chain_id)?;
+    let mut index = 0u8;
+    let mut predecessor = candidate_last_receipt_id;
+    while index < receipt_count {
+        let role_index = u8::try_from(progress_before)
+            .map_err(|_| DirectMarketErrorV1::Arithmetic)?
+            .checked_add(index)
+            .ok_or(DirectMarketErrorV1::Arithmetic)?;
+        let receipt = derive_direct_candidate_work_receipt_v1(
+            batch,
+            binding.candidate_liveness,
+            DirectCandidateWorkRoleV1::from_index(role_index)?,
+            predecessor,
+            backend,
+        )?;
+        batch.total_call_ceiling_lamports = batch
+            .total_call_ceiling_lamports
+            .checked_add(receipt.call_ceiling_lamports)
+            .ok_or(DirectMarketErrorV1::Arithmetic)?;
+        batch.total_keeper_payment_lamports = batch
+            .total_keeper_payment_lamports
+            .checked_add(receipt.keeper_payment_lamports)
+            .ok_or(DirectMarketErrorV1::Arithmetic)?;
+        batch.total_payer_refund_lamports = batch
+            .total_payer_refund_lamports
+            .checked_add(
+                receipt
+                    .call_ceiling_lamports
+                    .checked_sub(receipt.keeper_payment_lamports)
+                    .ok_or(DirectMarketErrorV1::Arithmetic)?,
+            )
+            .ok_or(DirectMarketErrorV1::Arithmetic)?;
+        batch.receipt_chain_id = backend.sha256_parts(&[
+            DIRECT_CANDIDATE_WORK_RECEIPT_CHAIN_DOMAIN_V1,
+            &batch.receipt_chain_id,
+            &receipt.receipt_id,
+        ]);
+        require_live(batch.receipt_chain_id)?;
+        predecessor = receipt.receipt_id;
+        index = index.checked_add(1).ok_or(DirectMarketErrorV1::Arithmetic)?;
+    }
+    batch.last_receipt_id = predecessor;
+    batch.batch_receipt_id = backend.sha256_parts(&[
+        DIRECT_CANDIDATE_WORK_BATCH_DOMAIN_V1,
+        &batch.market_instance_id,
+        &batch.generation.to_le_bytes(),
+        &batch.direct_root_account,
+        &batch.replay_account,
+        &batch.direct_action_transcript_id,
+        &[batch.action.byte()],
+        &consumed_action_sequence.to_le_bytes(),
+        &batch.candidate_account,
+        &batch.candidate_pre_data_id,
+        &batch.keeper,
+        &batch.completed_calls_before.to_le_bytes(),
+        &batch.completed_calls_after.to_le_bytes(),
+        &[batch.executed_mask],
+        &batch.predecessor_receipt_id,
+        &batch.prior_batch_receipt_id,
+        &[batch.receipt_count],
+        &batch.total_call_ceiling_lamports.to_le_bytes(),
+        &batch.total_keeper_payment_lamports.to_le_bytes(),
+        &batch.total_payer_refund_lamports.to_le_bytes(),
+        &batch.receipt_chain_id,
+        &batch.last_receipt_id,
+    ]);
+    require_live(batch.batch_receipt_id)?;
+    Ok(batch)
+}
+
+fn derive_direct_candidate_work_receipt_v1<B: DirectHashBackendV1>(
+    batch: DirectCandidateWorkBatchV1,
+    binding: DirectCandidateLivenessBindingV1,
+    role: DirectCandidateWorkRoleV1,
+    predecessor_receipt_id: [u8; 32],
+    backend: &B,
+) -> Result<DirectCandidateWorkReceiptV1, DirectMarketErrorV1> {
+    binding.validate()?;
+    if binding.candidate_account != batch.candidate_account {
+        return Err(DirectMarketErrorV1::MismatchedBinding);
+    }
+    let disposition = if batch.executed_mask & role.mask() != 0 {
+        DirectCandidateWorkDispositionV1::Executed
+    } else {
+        DirectCandidateWorkDispositionV1::TerminallyElided
+    };
+    let call_ordinal = binding
+        .first_call_ordinal
+        .checked_add(u32::from(role.index()))
+        .ok_or(DirectMarketErrorV1::Arithmetic)?;
+    let call_ceiling_lamports = role.ceiling(binding.work_schedule);
+    let keeper_payment_lamports = if disposition
+        == DirectCandidateWorkDispositionV1::Executed
+    {
+        call_ceiling_lamports
+    } else {
+        0
+    };
+    let receipt_id = backend.sha256_parts(&[
+        DIRECT_CANDIDATE_WORK_RECEIPT_DOMAIN_V1,
+        &batch.market_instance_id,
+        &batch.generation.to_le_bytes(),
+        &batch.direct_root_account,
+        &batch.replay_account,
+        &batch.direct_action_transcript_id,
+        &[batch.action.byte()],
+        &binding.allocation_receipt_id,
+        &binding.work_schedule_id,
+        &batch.candidate_account,
+        &batch.candidate_pre_data_id,
+        &predecessor_receipt_id,
+        &[role.index()],
+        &[disposition.byte()],
+        &call_ordinal.to_le_bytes(),
+        &call_ceiling_lamports.to_le_bytes(),
+        &keeper_payment_lamports.to_le_bytes(),
+        &batch.keeper,
+    ]);
+    require_live(receipt_id)?;
+    Ok(DirectCandidateWorkReceiptV1 {
+        role,
+        disposition,
+        call_ordinal,
+        call_ceiling_lamports,
+        keeper_payment_lamports,
+        receipt_id,
+        predecessor_receipt_id,
+    })
+}
+
+fn canonical_direct_work_partition_v1(
+    state: DirectRootReplayPostV1,
+    selection: Option<&DirectSelectionV1>,
+    action: DirectMarketActionV1,
+    progress_before: u32,
+) -> Result<(u32, u8), DirectMarketErrorV1> {
+    let selection = selection.ok_or(DirectMarketErrorV1::MismatchedBinding)?;
+    selection.validate_against(state.root)?;
+    match action {
+        DirectMarketActionV1::FreezeBook => {
+            if progress_before == 0
+                && matches!(
+                    state.root.phase(),
+                    DirectRootPhaseV1::FrozenEmpty | DirectRootPhaseV1::SubmissionOpen
+                )
+            {
+                Ok((1, DirectCandidateWorkRoleV1::FreezeBook.mask()))
+            } else {
+                Err(DirectMarketErrorV1::WrongPhase)
+            }
+        }
+        DirectMarketActionV1::BeginVerification => {
+            if progress_before == 1
+                && state.root.phase() == DirectRootPhaseV1::Verifying
+                && selection.phase() == DirectSelectionPhaseV1::Verifying
+                && selection.verification_cursor() == 0
+            {
+                Ok((2, DirectCandidateWorkRoleV1::BeginVerification.mask()))
+            } else {
+                Err(DirectMarketErrorV1::WrongPhase)
+            }
+        }
+        DirectMarketActionV1::VerifyCandidate => {
+            let cursor = u32::from(selection.verification_cursor());
+            let after = 2u32.checked_add(cursor).ok_or(DirectMarketErrorV1::Arithmetic)?;
+            if state.root.phase() == DirectRootPhaseV1::Verifying
+                && selection.phase() == DirectSelectionPhaseV1::Verifying
+                && cursor != 0
+                && cursor <= 3
+                && progress_before.checked_add(1) == Some(after)
+            {
+                let role_index = u8::try_from(after.checked_sub(1)
+                    .ok_or(DirectMarketErrorV1::Arithmetic)?)
+                    .map_err(|_| DirectMarketErrorV1::Arithmetic)?;
+                Ok((after, DirectCandidateWorkRoleV1::from_index(role_index)?.mask()))
+            } else {
+                Err(DirectMarketErrorV1::WrongPhase)
+            }
+        }
+        DirectMarketActionV1::FinalizeSelection => {
+            if state.root.phase() == DirectRootPhaseV1::Selected
+                && selection.phase() == DirectSelectionPhaseV1::Selected
+                && selection.candidate_count() != 0
+                && selection.verification_cursor() == selection.candidate_count()
+                && progress_before
+                    == 2u32
+                        .checked_add(u32::from(selection.candidate_count()))
+                        .ok_or(DirectMarketErrorV1::Arithmetic)?
+            {
+                Ok((6, DirectCandidateWorkRoleV1::FinalizeSelection.mask()))
+            } else if state.root.phase() == DirectRootPhaseV1::Terminal
+                && state.root.terminal_reason() == Some(DirectTerminalReasonV1::NoCandidate)
+                && selection.phase() == DirectSelectionPhaseV1::Terminal
+                && selection.candidate_count() == 0
+                && progress_before == 2
+            {
+                Ok((
+                    7,
+                    DirectCandidateWorkRoleV1::FinalizeSelection.mask()
+                        | DirectCandidateWorkRoleV1::EconomicTerminal.mask(),
+                ))
+            } else {
+                Err(DirectMarketErrorV1::WrongPhase)
+            }
+        }
+        DirectMarketActionV1::SettlePair
+        | DirectMarketActionV1::LapseEmpty
+        | DirectMarketActionV1::LapseUnselected
+        | DirectMarketActionV1::LapseSelected => {
+            let reason = state.root.terminal_reason().ok_or(DirectMarketErrorV1::WrongPhase)?;
+            let reason_matches = matches!(
+                (action, reason),
+                (DirectMarketActionV1::SettlePair, DirectTerminalReasonV1::Settled)
+                    | (
+                        DirectMarketActionV1::LapseEmpty,
+                        DirectTerminalReasonV1::MissedFreezeLapse
+                            | DirectTerminalReasonV1::EmptyLapse
+                    )
+                    | (
+                        DirectMarketActionV1::LapseUnselected,
+                        DirectTerminalReasonV1::UnselectedLapse
+                    )
+                    | (
+                        DirectMarketActionV1::LapseSelected,
+                        DirectTerminalReasonV1::SelectedLapse
+                    )
+            );
+            if !reason_matches
+                || state.root.phase() != DirectRootPhaseV1::Terminal
+                || selection.phase() != DirectSelectionPhaseV1::Terminal
+                || progress_before >= 7
+            {
+                return Err(DirectMarketErrorV1::WrongPhase);
+            }
+            let mut executed = DirectCandidateWorkRoleV1::EconomicTerminal.mask();
+            if reason == DirectTerminalReasonV1::MissedFreezeLapse {
+                if progress_before != 0 {
+                    return Err(DirectMarketErrorV1::Replay);
+                }
+                executed |= DirectCandidateWorkRoleV1::FreezeBook.mask();
+            }
+            Ok((7, executed))
+        }
+        DirectMarketActionV1::RetireTerminal => {
+            if state.root.phase() == DirectRootPhaseV1::Terminal
+                && state.replay.phase() == DirectReplayPhaseV1::Terminal
+                && selection.phase() == DirectSelectionPhaseV1::Terminal
+                && progress_before == 7
+            {
+                Ok((8, DirectCandidateWorkRoleV1::RetireTerminal.mask()))
+            } else {
+                Err(DirectMarketErrorV1::WrongPhase)
+            }
+        }
+        DirectMarketActionV1::InitializeMarket
+        | DirectMarketActionV1::AdmitOrder
+        | DirectMarketActionV1::CancelOrder
+        | DirectMarketActionV1::SubmitCandidate => {
+            Err(DirectMarketErrorV1::UnauthenticatedAuthority)
+        }
     }
 }
 

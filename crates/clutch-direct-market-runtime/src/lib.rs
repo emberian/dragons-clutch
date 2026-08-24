@@ -47,6 +47,8 @@ const DIRECT_EPOCH_SEMANTICS_DOMAIN_V1: &[u8] =
 const DIRECT_SCHEDULE_POLICY_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/schedule-policy/v1\0";
 const ACTION_TRANSCRIPT_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/action-transcript/v1\0";
+const REPLAY_LIVENESS_BATCH_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/direct/replay-liveness-batch/v1\0";
 const ROOT_STATE_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/root-state/v1\0";
 const REPLAY_STATE_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/replay-state/v1\0";
 const TERMINAL_RECEIPT_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/terminal-receipt/v1\0";
@@ -1080,6 +1082,10 @@ pub struct DirectActionReplayV1 {
     foundation_receipt_id: [u8; 32],
     economic_terminal_receipt_id: [u8; 32],
     family_terminal_receipt_id: [u8; 32],
+    candidate_liveness_completed_calls: u32,
+    candidate_liveness_last_receipt_id: [u8; 32],
+    candidate_liveness_batch_receipt_id: [u8; 32],
+    candidate_liveness_pending: bool,
 }
 
 impl DirectActionReplayV1 {
@@ -1101,6 +1107,22 @@ impl DirectActionReplayV1 {
     pub const fn family_terminal_receipt_id(self) -> [u8; 32] {
         self.family_terminal_receipt_id
     }
+    /// Number of this occurrence's exact eight Candidate roles already consumed.
+    pub const fn candidate_liveness_completed_calls(self) -> u32 {
+        self.candidate_liveness_completed_calls
+    }
+    /// Last shared Candidate work receipt emitted by this occurrence.
+    pub const fn candidate_liveness_last_receipt_id(self) -> [u8; 32] {
+        self.candidate_liveness_last_receipt_id
+    }
+    /// Complete latest per-action Candidate receipt-batch commitment.
+    pub const fn candidate_liveness_batch_receipt_id(self) -> [u8; 32] {
+        self.candidate_liveness_batch_receipt_id
+    }
+    /// True only in a pure transient plan awaiting the atomic liveness join.
+    pub const fn candidate_liveness_pending(self) -> bool {
+        self.candidate_liveness_pending
+    }
 
     /// Validate permanent replay facts against the exact current root.
     pub fn validate_against(self, root: DirectMarketRootV1) -> Result<(), DirectMarketErrorV1> {
@@ -1121,6 +1143,46 @@ impl DirectActionReplayV1 {
             || self.replay_account != binding.action_replay_account
         {
             return Err(DirectMarketErrorV1::MismatchedBinding);
+        }
+        if self.candidate_liveness_completed_calls
+            > liveness_v1::DIRECT_CANDIDATE_RESERVED_CALLS_V1
+            || (self.candidate_liveness_completed_calls == 0)
+                != (self.candidate_liveness_last_receipt_id == [0; 32])
+            || (self.candidate_liveness_completed_calls == 0)
+                != (self.candidate_liveness_batch_receipt_id == [0; 32])
+        {
+            return Err(DirectMarketErrorV1::Replay);
+        }
+        if self.candidate_liveness_completed_calls != 0 {
+            require_live(self.candidate_liveness_last_receipt_id)?;
+            require_live(self.candidate_liveness_batch_receipt_id)?;
+        }
+        if !self.candidate_liveness_pending {
+            let progress_matches = match (root.phase, self.phase) {
+                (DirectRootPhaseV1::Open, DirectReplayPhaseV1::Active) => {
+                    self.candidate_liveness_completed_calls == 0
+                }
+                (
+                    DirectRootPhaseV1::FrozenEmpty | DirectRootPhaseV1::SubmissionOpen,
+                    DirectReplayPhaseV1::Active,
+                ) => self.candidate_liveness_completed_calls == 1,
+                (DirectRootPhaseV1::Verifying, DirectReplayPhaseV1::Active) => {
+                    (2..=5).contains(&self.candidate_liveness_completed_calls)
+                }
+                (DirectRootPhaseV1::Selected, DirectReplayPhaseV1::Active) => {
+                    self.candidate_liveness_completed_calls == 6
+                }
+                (DirectRootPhaseV1::Terminal, DirectReplayPhaseV1::Active) => {
+                    self.candidate_liveness_completed_calls == 7
+                }
+                (DirectRootPhaseV1::Terminal, DirectReplayPhaseV1::Terminal) => {
+                    self.candidate_liveness_completed_calls == 8
+                }
+                _ => false,
+            };
+            if !progress_matches {
+                return Err(DirectMarketErrorV1::Replay);
+            }
         }
         match (root.phase, self.phase) {
             (DirectRootPhaseV1::Terminal, DirectReplayPhaseV1::Active) => {
@@ -1161,6 +1223,10 @@ impl DirectActionReplayV1 {
             &self.next_action_sequence.to_le_bytes(), &self.action_transcript_id,
             &self.foundation_receipt_id, &self.economic_terminal_receipt_id,
             &self.family_terminal_receipt_id,
+            &self.candidate_liveness_completed_calls.to_le_bytes(),
+            &self.candidate_liveness_last_receipt_id,
+            &self.candidate_liveness_batch_receipt_id,
+            &[u8::from(self.candidate_liveness_pending)],
         ]);
         require_live(id)?;
         Ok(id)
@@ -1200,6 +1266,43 @@ impl DirectActionReplayV1 {
             &observed_slot.to_le_bytes(), &evidence_id, &self.action_transcript_id,
         ]);
         require_live(self.action_transcript_id)?;
+        self.candidate_liveness_pending = self.candidate_liveness_pending
+            || action.requires_candidate_liveness();
+        Ok(self)
+    }
+
+    pub(crate) fn bind_candidate_liveness_batch<B: DirectHashBackendV1>(
+        mut self,
+        root: DirectMarketRootV1,
+        batch: liveness_v1::DirectCandidateWorkBatchV1,
+        backend: &B,
+    ) -> Result<Self, DirectMarketErrorV1> {
+        self.validate_against(root)?;
+        if !self.candidate_liveness_pending
+            || batch.completed_calls_before() != self.candidate_liveness_completed_calls
+            || (self.candidate_liveness_completed_calls != 0
+                && batch.predecessor_receipt_id()
+                    != self.candidate_liveness_last_receipt_id)
+        {
+            return Err(DirectMarketErrorV1::Replay);
+        }
+        batch.validate_replay_binding(self, root)?;
+        let prior_action_transcript = self.action_transcript_id;
+        self.candidate_liveness_completed_calls = batch.completed_calls_after();
+        self.candidate_liveness_last_receipt_id = batch.last_receipt_id();
+        self.candidate_liveness_batch_receipt_id = batch.batch_receipt_id();
+        self.candidate_liveness_pending = false;
+        self.action_transcript_id = backend.sha256_parts(&[
+            REPLAY_LIVENESS_BATCH_DOMAIN_V1,
+            &self.market_instance_id,
+            &self.direct_root_account,
+            &prior_action_transcript,
+            &self.candidate_liveness_completed_calls.to_le_bytes(),
+            &self.candidate_liveness_last_receipt_id,
+            &self.candidate_liveness_batch_receipt_id,
+        ]);
+        require_live(self.action_transcript_id)?;
+        self.validate_against(root)?;
         Ok(self)
     }
 }
@@ -1245,6 +1348,22 @@ impl DirectMarketActionV1 {
             Self::LapseEmpty => 10, Self::LapseUnselected => 11,
             Self::LapseSelected => 12, Self::RetireTerminal => 13,
         }
+    }
+
+    /// Whether this action must join one or more exact Candidate work roles.
+    pub const fn requires_candidate_liveness(self) -> bool {
+        matches!(
+            self,
+            Self::FreezeBook
+                | Self::BeginVerification
+                | Self::VerifyCandidate
+                | Self::FinalizeSelection
+                | Self::SettlePair
+                | Self::LapseEmpty
+                | Self::LapseUnselected
+                | Self::LapseSelected
+                | Self::RetireTerminal
+        )
     }
 }
 
@@ -1803,6 +1922,10 @@ pub fn prepare_direct_foundation_v1<
         phase: DirectReplayPhaseV1::Active, next_action_sequence: 1,
         action_transcript_id: initial_transcript, foundation_receipt_id: receipt_bytes,
         economic_terminal_receipt_id: [0; 32], family_terminal_receipt_id: [0; 32],
+        candidate_liveness_completed_calls: 0,
+        candidate_liveness_last_receipt_id: [0; 32],
+        candidate_liveness_batch_receipt_id: [0; 32],
+        candidate_liveness_pending: false,
     };
     replay.validate_against(root)?;
     let admission_receipt_id = ContentId::from_bytes(receipt_bytes);

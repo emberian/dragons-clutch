@@ -32,7 +32,7 @@ pub const DIRECT_MARKET_ROOT_BODY_BYTES_V1: usize = 1_722;
 /// Exact semantic bytes inside the `0xb2/1` frame.
 pub const DIRECT_SELECTION_BODY_BYTES_V1: usize = 1_625;
 /// Exact semantic bytes inside the `0xb3/1` frame.
-pub const DIRECT_ACTION_REPLAY_BODY_BYTES_V1: usize = 321;
+pub const DIRECT_ACTION_REPLAY_BODY_BYTES_V1: usize = 390;
 /// Exact semantic bytes inside the `0xb4/1` frame.
 pub const DIRECT_RESERVATION_BODY_BYTES_V1: usize = 469;
 
@@ -89,6 +89,9 @@ pub fn encode_direct_action_replay_body_v1(
     root: DirectMarketRootV1,
 ) -> Result<[u8; DIRECT_ACTION_REPLAY_BODY_BYTES_V1], DirectMarketErrorV1> {
     value.validate_against(root)?;
+    if value.candidate_liveness_pending {
+        return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+    }
     let mut output = [0u8; DIRECT_ACTION_REPLAY_BODY_BYTES_V1];
     let mut writer = BodyWriter::new(&mut output);
     writer.id(value.market_instance_id)?;
@@ -103,6 +106,10 @@ pub fn encode_direct_action_replay_body_v1(
     writer.id(value.foundation_receipt_id)?;
     writer.id(value.economic_terminal_receipt_id)?;
     writer.id(value.family_terminal_receipt_id)?;
+    writer.u32(value.candidate_liveness_completed_calls)?;
+    writer.id(value.candidate_liveness_last_receipt_id)?;
+    writer.id(value.candidate_liveness_batch_receipt_id)?;
+    writer.u8(if value.candidate_liveness_pending { 1 } else { 0 })?;
     writer.finish()?;
     Ok(output)
 }
@@ -126,8 +133,19 @@ pub fn decode_direct_action_replay_body_v1(
         foundation_receipt_id: reader.id()?,
         economic_terminal_receipt_id: reader.id()?,
         family_terminal_receipt_id: reader.id()?,
+        candidate_liveness_completed_calls: reader.u32()?,
+        candidate_liveness_last_receipt_id: reader.id()?,
+        candidate_liveness_batch_receipt_id: reader.id()?,
+        candidate_liveness_pending: match reader.u8()? {
+            0 => false,
+            1 => true,
+            _ => return Err(DirectMarketErrorV1::InvalidCount),
+        },
     };
     reader.finish()?;
+    if value.candidate_liveness_pending {
+        return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+    }
     value.validate_against(root)?;
     Ok(value)
 }
@@ -868,7 +886,7 @@ impl<'a> BodyReader<'a> {
 
 const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V1 == 1_722);
 const _: () = assert!(DIRECT_SELECTION_BODY_BYTES_V1 == 1_625);
-const _: () = assert!(DIRECT_ACTION_REPLAY_BODY_BYTES_V1 == 321);
+const _: () = assert!(DIRECT_ACTION_REPLAY_BODY_BYTES_V1 == 390);
 const _: () = assert!(DIRECT_RESERVATION_BODY_BYTES_V1 == 469);
 const _: () = assert!(core::mem::size_of::<[u8; 253]>() == 253);
 const _: EconomicOrderV2 = EMPTY_ECONOMIC_ORDER_V2;

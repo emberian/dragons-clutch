@@ -9,6 +9,10 @@ use crate::reservation_v1::{
     prepare_direct_reservation_admission_v1, AuthenticatedDirectReservationAdmissionV1,
     DirectReservationPhaseV1,
 };
+use crate::liveness_v1::{
+    prepare_direct_candidate_work_batch_v1, DirectCandidateWorkDispositionV1,
+    DirectCandidateWorkRoleV1,
+};
 use crate::selection_v1::{
     begin_direct_candidate_verification_v1, finalize_direct_selection_v1,
     prepare_direct_selection_freeze_v1, submit_direct_candidate_v1,
@@ -280,6 +284,10 @@ fn state() -> DirectRootReplayPostV1 {
         foundation_receipt_id: DirectHashBackendV1::sha256_parts(&Sha, &[b"foundation"]),
         economic_terminal_receipt_id: [0; 32],
         family_terminal_receipt_id: [0; 32],
+        candidate_liveness_completed_calls: 0,
+        candidate_liveness_last_receipt_id: [0; 32],
+        candidate_liveness_batch_receipt_id: [0; 32],
+        candidate_liveness_pending: false,
     };
     replay.validate_against(root).unwrap();
     DirectRootReplayPostV1 { root, replay }
@@ -1273,6 +1281,132 @@ fn empty_action8_and_missed_verification_deadline_are_total_no_trade_paths() {
     assert_eq!(seller_post.cash_atoms, 0);
     assert_eq!(seller_post.native_eggs[0], 10);
     assert_eq!(seller_post.outstanding_reservations, 0);
+}
+
+#[test]
+fn candidate_liveness_elides_only_unreachable_roles_and_binds_b3() {
+    let (frozen, endpoints) = submission_open_pair_with_endpoints();
+    let binding = frozen.state.root.binding().candidate_liveness;
+    let freeze_batch = prepare_direct_candidate_work_batch_v1(
+        frozen.state,
+        Some(&frozen.selection),
+        DirectMarketActionV1::FreezeBook,
+        0,
+        [0; 32],
+        id(90),
+        id(91),
+        &Sha,
+    )
+    .unwrap();
+    let freeze_receipt = freeze_batch.receipt(0, binding, &Sha).unwrap();
+    assert_eq!(freeze_batch.receipt_count(), 1);
+    assert_eq!(freeze_receipt.role(), DirectCandidateWorkRoleV1::FreezeBook);
+    assert_eq!(freeze_receipt.disposition(), DirectCandidateWorkDispositionV1::Executed);
+    assert_eq!(freeze_receipt.call_ordinal(), binding.first_call_ordinal);
+    assert_eq!(freeze_receipt.call_ceiling_lamports(), 1);
+    assert_eq!(freeze_receipt.keeper_payment_lamports(), 1);
+    let frozen_state = DirectRootReplayPostV1 {
+        root: frozen.state.root,
+        replay: frozen
+            .state
+            .replay
+            .bind_candidate_liveness_batch(frozen.state.root, freeze_batch, &Sha)
+            .unwrap(),
+    };
+    assert_eq!(frozen_state.replay.candidate_liveness_completed_calls(), 1);
+
+    let begun = begin_direct_candidate_verification_v1(
+        frozen_state,
+        frozen.selection,
+        4,
+        30,
+        &Sha,
+    )
+    .unwrap();
+    let begin_batch = prepare_direct_candidate_work_batch_v1(
+        begun.state,
+        Some(&begun.selection),
+        DirectMarketActionV1::BeginVerification,
+        1,
+        freeze_receipt.receipt_id(),
+        id(92),
+        id(91),
+        &Sha,
+    )
+    .unwrap();
+    let begin_receipt = begin_batch.receipt(0, binding, &Sha).unwrap();
+    let begun_state = DirectRootReplayPostV1 {
+        root: begun.state.root,
+        replay: begun
+            .state
+            .replay
+            .bind_candidate_liveness_batch(begun.state.root, begin_batch, &Sha)
+            .unwrap(),
+    };
+    assert_eq!(begun_state.replay.candidate_liveness_completed_calls(), 2);
+
+    let terminal = prepare_direct_economic_terminal_v1(
+        &AllowEconomicTerminal,
+        begun_state,
+        begun.selection,
+        endpoints,
+        None,
+        None,
+        DirectTerminalReasonV1::NoCandidate,
+        5,
+        31,
+        &Sha,
+    )
+    .unwrap();
+    let terminal_batch = prepare_direct_candidate_work_batch_v1(
+        terminal.state,
+        Some(&terminal.selection),
+        DirectMarketActionV1::FinalizeSelection,
+        2,
+        begin_receipt.receipt_id(),
+        id(93),
+        id(91),
+        &Sha,
+    )
+    .unwrap();
+    assert_eq!(terminal_batch.receipt_count(), 5);
+    assert_eq!(terminal_batch.total_call_ceiling_lamports(), 5);
+    assert_eq!(terminal_batch.total_keeper_payment_lamports(), 2);
+    assert_eq!(terminal_batch.total_payer_refund_lamports(), 3);
+    assert_eq!(
+        terminal_batch.receipt(0, binding, &Sha).unwrap().disposition(),
+        DirectCandidateWorkDispositionV1::TerminallyElided,
+    );
+    assert_eq!(
+        terminal_batch.receipt(3, binding, &Sha).unwrap().role(),
+        DirectCandidateWorkRoleV1::FinalizeSelection,
+    );
+    assert_eq!(
+        terminal_batch.receipt(4, binding, &Sha).unwrap().role(),
+        DirectCandidateWorkRoleV1::EconomicTerminal,
+    );
+    let terminal_replay = terminal
+        .state
+        .replay
+        .bind_candidate_liveness_batch(terminal.state.root, terminal_batch, &Sha)
+        .unwrap();
+    assert_eq!(terminal_replay.candidate_liveness_completed_calls(), 7);
+    assert_eq!(
+        terminal_replay.candidate_liveness_last_receipt_id(),
+        terminal_batch.last_receipt_id(),
+    );
+    let encoded = encode_direct_action_replay_body_v1(terminal_replay, terminal.state.root)
+        .unwrap();
+    assert_eq!(
+        decode_direct_action_replay_body_v1(&encoded, terminal.state.root),
+        Ok(terminal_replay),
+    );
+    let mut pending = terminal_replay;
+    pending.candidate_liveness_pending = true;
+    assert_eq!(
+        encode_direct_action_replay_body_v1(pending, terminal.state.root),
+        Err(DirectMarketErrorV1::UnauthenticatedAuthority),
+    );
 }
 
 #[test]
