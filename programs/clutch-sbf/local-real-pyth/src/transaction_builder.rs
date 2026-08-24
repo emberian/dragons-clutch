@@ -644,6 +644,7 @@ impl OwnedInstructionDraft {
                     action,
                     clutch_solana_layout::registry::SourceSeriesAction::InitializeHead
                         | clutch_solana_layout::registry::SourceSeriesAction::OpenRawPage
+                        | clutch_solana_layout::registry::SourceSeriesAction::IngestBoundaryBatch
                 ) {
                     return Err(ConstructionError::UnallocatedRegistryCoordinate);
                 }
@@ -969,6 +970,13 @@ impl ProtocolTransactionBuilder {
     #[must_use]
     pub const fn clutch_program(&self) -> Address {
         self.clutch_program
+    }
+
+    /// Public fee-payer identity carried by every blockhash-free draft. This
+    /// exposes no key or signing capability.
+    #[must_use]
+    pub const fn payer(&self) -> Address {
+        self.payer
     }
 }
 

@@ -210,13 +210,16 @@ test("the operator entrypoint has one canonical chain session and no mock fallba
   const [html, app] = await Promise.all([source("index.html"), source("app.js")]);
   assert.match(app, /dragons-clutch\/operator-read-only-session-manifest\/v1/);
   assert.match(app, /finalized onchain account bodies plus immutable checked release and RPC bindings/);
+  assert.match(app, /operator-canonical-action-material\/v1/);
+  assert.match(app, /callable signer requirements differ from exact signer account roles/);
+  assert.match(app, /serialized transaction byte count is inconsistent/);
   assert.match(app, /restart cursor refers to a noncanonical or repeated account identity/);
   assert.match(app, /credentials: "omit"/);
   assert.match(app, /method: "GET"/);
   assert.doesNotMatch(app, /localStorage|sessionStorage|EventSource|WebSocket|signTransaction|sendTransaction/);
   assert.doesNotMatch(app, /non-production-mock|fixture|retained transcript/i);
   assert.match(html, /No fixture or default source is available/);
-  assert.match(app, /Execution unavailable/);
+  assert.match(app, /callable-unsigned-draft/);
 });
 
 test("belief dragging updates in place and freeze is phase-disabled", async () => {

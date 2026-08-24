@@ -357,7 +357,7 @@
     const output = action.transactionDraft;
     state.construction = output;
     $("workflow-output").textContent = JSON.stringify(output, null, 2);
-    $("workflow-status").textContent = "constructed · runtime disabled";
+    $("workflow-status").textContent = "canonical unsigned draft inspected · blockhash/signing/submission absent";
     $("copy-workflow").disabled = false;
   };
 
@@ -413,6 +413,14 @@
       event.preventDefault();
       clearError("workflow-error");
       try { await buildWorkflow(); } catch (error) { setError("workflow-error", error.message); }
+    });
+    $("keeper-action").addEventListener("change", () => {
+      const action = actionForSelection();
+      const callable = Boolean(action && action.callable && action.transactionDraft);
+      $("build-workflow").disabled = !callable;
+      $("workflow-status").textContent = callable
+        ? "canonical unsigned draft available for inspection"
+        : "no callable canonical draft selected";
     });
     $("copy-workflow").addEventListener("click", () => { if (state.construction) copy($("workflow-output").textContent, $("copy-workflow")); });
   };

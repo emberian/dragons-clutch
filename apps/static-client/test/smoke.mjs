@@ -77,7 +77,12 @@ test("browser_refuses_caller_shaped_transaction_truth", () => {
   assert.match(chain, /operator-action-capability-set\/v1/);
   assert.match(chain, /action verdict is absent from, or duplicated within, the checked release enabled-intent set/);
   assert.match(chain, /unavailable action carries executable-looking transaction or signer material/);
+  assert.match(chain, /operator-canonical-action-material\/v1/);
+  assert.match(chain, /callable signer requirements differ from exact signer roles/);
+  assert.match(chain, /serialized transaction encoding or byte count is invalid/);
+  assert.match(chain, /discard this draft regardless of outcome|freshnessDisposition/);
   assert.match(app, /Browser-authored protocol material is forbidden/);
+  assert.match(app, /canonical unsigned draft available for inspection/);
 });
 
 test("compiler_boundary_names_rust_owner_and_does_not_reimplement_payoff_math", () => {
