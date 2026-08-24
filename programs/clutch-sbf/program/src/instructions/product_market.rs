@@ -27,6 +27,7 @@ use clutch_liveness::runtime_adapter_v1::{
 use clutch_liveness::runtime_v1::RuntimeCompartmentKindV1;
 use clutch_liveness::Id as LivenessId;
 use clutch_product_series::{
+    authenticate_market_foundation_account_graph_bytes_v2,
     AuthenticatedMarketFamilyAuthorityV1, CompiledProductSeriesBundleV5, ContentId,
     MarketFamilyAggregatorV1, MarketFamilyV1, MarketFoundationAccountGraphV2,
     MarketFoundationScheduleV2, MarketFoundationSlotV2, MarketFoundationStepProjectionV2,
@@ -122,9 +123,30 @@ pub(crate) fn require_canonical_market_foundation_core_v2(
 ) -> Outcome<()> {
     let market = account_graph.market_instance_id.bytes();
     let generation = account_graph.generation;
-    let market_binding = account_graph
-        .account(MarketFoundationSlotV2::MarketBinding)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require_canonical_market_foundation_core_accounts_v2(
+        program_id,
+        root_account,
+        market,
+        generation,
+        |slot| {
+            account_graph
+                .account(slot)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+        },
+    )
+}
+
+fn require_canonical_market_foundation_core_accounts_v2<F>(
+    program_id: &Pubkey,
+    root_account: Pubkey,
+    market: [u8; 32],
+    generation: u64,
+    mut account: F,
+) -> Outcome<()>
+where
+    F: FnMut(MarketFoundationSlotV2) -> Outcome<ContentId>,
+{
+    let market_binding = account(MarketFoundationSlotV2::MarketBinding)?;
     let fixed = [
         (
             MarketFoundationSlotV2::LifecycleRoot,
@@ -176,24 +198,37 @@ pub(crate) fn require_canonical_market_foundation_core_v2(
         ),
     ];
     require(
-        account_graph
-            .account(MarketFoundationSlotV2::LifecycleRoot)
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-            .bytes()
+        account(MarketFoundationSlotV2::LifecycleRoot)?.bytes()
             == root_account.to_bytes(),
         ClutchError::MismatchedState,
     )?;
     for (slot, expected) in fixed {
         require(
-            account_graph
-                .account(slot)
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-                .bytes()
-                == expected.to_bytes(),
+            account(slot)?.bytes() == expected.to_bytes(),
             ClutchError::MismatchedState,
         )?;
     }
     Ok(())
+}
+
+/// Authenticate the fixed Product/General/Failure graph core directly from a
+/// caller-owned 1,544-byte preimage without constructing the full graph value.
+fn require_canonical_market_foundation_core_bytes_v2(
+    program_id: &Pubkey,
+    root_account: Pubkey,
+    authenticated: clutch_product_series::AuthenticatedMarketFoundationAccountGraphBytesV2<'_>,
+) -> Outcome<()> {
+    require_canonical_market_foundation_core_accounts_v2(
+        program_id,
+        root_account,
+        authenticated.market_instance_id().bytes(),
+        authenticated.generation(),
+        |slot| {
+            authenticated
+                .account(slot)
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
+        },
+    )
 }
 
 /// Exact authenticated shared `0xaa/1` account.
@@ -2392,6 +2427,74 @@ pub(crate) fn authenticate_market_foundation_preallocation_v2(
         root.account(),
         account_graph,
     )?;
+    let schedule_id = schedule
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let account_graph_id = account_graph
+        .id(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    authenticate_market_foundation_preallocation_join_v2(
+        root,
+        account,
+        schedule,
+        slot,
+        schedule_id,
+        account_graph_id,
+        account_graph.market_instance_id,
+        account_graph.generation,
+        account_graph
+            .account(slot)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+    )
+}
+
+/// Stack-bounded retained-slot authentication from one hostile caller-owned
+/// graph preimage. The pure Product owner validates the complete 1,544 bytes;
+/// this adapter only joins that authenticated view to the live root and PDA.
+pub(crate) fn authenticate_market_foundation_preallocation_from_bytes_v2(
+    root: AuthenticatedMarketLifecycleRootV1<'_>,
+    account: &AccountInfo<'_>,
+    schedule: &MarketFoundationScheduleV2,
+    account_graph_bytes: &[u8],
+    slot: MarketFoundationSlotV2,
+) -> Outcome<AuthenticatedMarketFoundationPreallocationV2> {
+    let graph = authenticate_market_foundation_account_graph_bytes_v2(
+        account_graph_bytes,
+        schedule,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require_canonical_market_foundation_core_bytes_v2(
+        root.owner_program(),
+        root.account(),
+        graph,
+    )?;
+    authenticate_market_foundation_preallocation_join_v2(
+        root,
+        account,
+        schedule,
+        slot,
+        graph.foundation_schedule_id(),
+        graph.graph_id(),
+        graph.market_instance_id(),
+        graph.generation(),
+        graph
+            .account(slot)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_market_foundation_preallocation_join_v2(
+    root: AuthenticatedMarketLifecycleRootV1<'_>,
+    account: &AccountInfo<'_>,
+    schedule: &MarketFoundationScheduleV2,
+    slot: MarketFoundationSlotV2,
+    schedule_id: clutch_product_series::MarketFoundationScheduleV2Id,
+    account_graph_id: clutch_product_series::MarketFoundationAccountGraphV2Id,
+    graph_market_instance_id: MarketInstanceV2Id,
+    graph_generation: u64,
+    graph_slot_account: ContentId,
+) -> Outcome<AuthenticatedMarketFoundationPreallocationV2> {
     let index = slot
         .index()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
@@ -2418,21 +2521,12 @@ pub(crate) fn authenticate_market_foundation_preallocation_v2(
     )?;
     let binding = root.state().binding();
     let capital = root.state().capital();
-    let schedule_id = schedule
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let account_graph_id = account_graph
-        .id(schedule)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
         schedule_id == binding.foundation_schedule_id
             && account_graph_id == binding.foundation_account_graph_id
-            && account_graph.market_instance_id == binding.market_instance_id
-            && account_graph.generation == binding.generation
-            && account_graph
-                .account(slot)
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-                == ContentId::from_bytes(account.key.to_bytes())
+            && graph_market_instance_id == binding.market_instance_id
+            && graph_generation == binding.generation
+            && graph_slot_account == ContentId::from_bytes(account.key.to_bytes())
             && account.is_writable
             && !account.is_signer
             && !account.executable
