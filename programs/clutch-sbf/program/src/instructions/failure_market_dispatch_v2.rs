@@ -93,9 +93,10 @@ pub enum FailureMarketAccountRoleV2 {
     SourceTerminalReceipt,
     SourceLivenessPolicy,
     SourceLivenessCompartment,
-    SourcePayerRefund,
+    /// Program-derived prepaid Source lifecycle rent custody and exact
+    /// principal-refund destination. It is never a transaction signer.
+    SourceFundingCustody,
     SourceNeutralSink,
-    SourceAccountPayer,
     RentSysvar,
     SystemProgram,
 }
@@ -263,9 +264,8 @@ pub const RESOLVE_FAILURE_MARKET_SESSION_METAS_V2: &[FailureMarketAccountMetaV2]
     meta(Role::SourceTerminalReceipt, true, false, false),
     meta(Role::SourceLivenessPolicy, false, false, false),
     meta(Role::SourceLivenessCompartment, true, false, false),
-    meta(Role::SourcePayerRefund, true, true, false),
+    meta(Role::SourceFundingCustody, true, false, false),
     meta(Role::SourceNeutralSink, true, false, false),
-    meta(Role::SourceAccountPayer, true, true, false),
     meta(Role::FailureLivenessPolicy, false, false, false),
     meta(Role::FailureRecoveryCompartment, true, false, false),
     meta(Role::RecoveryRefundOwner, true, false, false),
@@ -716,11 +716,11 @@ mod adversarial_contract_tests {
             .expect("mutable result lineage");
         let refund = RESOLVE_FAILURE_MARKET_SESSION_METAS_V2
             .iter()
-            .find(|meta| meta.role == Role::SourcePayerRefund)
-            .expect("Source result principal refund");
+            .find(|meta| meta.role == Role::SourceFundingCustody)
+            .expect("prepaid Source lifecycle custody and principal refund");
         assert!(result.writable && !result.signer);
         assert!(lineage.writable && !lineage.signer);
-        assert!(refund.writable && refund.signer);
+        assert!(refund.writable && !refund.signer);
     }
 
     #[test]
