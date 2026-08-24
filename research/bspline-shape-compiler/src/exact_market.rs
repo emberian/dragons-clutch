@@ -18,7 +18,7 @@ use clutch_price_measure::{
     QUANTIZED_ATOM_MIXTURE_CERTIFICATE_BYTES_V1,
 };
 use clutch_product_series::{
-    CompiledProductSeriesBundleV6, CompiledProductSeriesBundleV6Id, ContentId,
+    CompiledProductSeriesBundleV7, CompiledProductSeriesBundleV7Id, ContentId,
     Error as ProductError, MAX_OUTCOMES,
 };
 use sha2::{Digest, Sha256};
@@ -36,19 +36,19 @@ pub const EXACT_MARKET_WORK_MANIFEST_DOMAIN_V1: &[u8] =
 /// Domain separating the certificate transport checksum in the manifest.
 pub const EXACT_MARKET_CERTIFICATE_OUTPUT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/exact-market-certificate-output/v1";
-/// Exact byte width of the BundleV6-bound operator sidecar.
-pub const EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V2: usize = 176;
-/// Domain separating the current BundleV6-bound operator sidecar identity.
-pub const EXACT_MARKET_BUNDLE_SIDECAR_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/exact-market-bundle-sidecar/v2";
+/// Exact byte width of the BundleV7-bound operator sidecar.
+pub const EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V3: usize = 176;
+/// Domain separating the current BundleV7-bound operator sidecar identity.
+pub const EXACT_MARKET_BUNDLE_SIDECAR_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/exact-market-bundle-sidecar/v3";
 /// Current immutable Product compiler bundle artifact kind.
-pub const COMPILED_PRODUCT_SERIES_BUNDLE_V6_ARTIFACT_KIND: u8 = 63;
+pub const COMPILED_PRODUCT_SERIES_BUNDLE_V7_ARTIFACT_KIND: u8 = 68;
 
 const EXACT_MARKET_WORK_MANIFEST_MAGIC_V1: [u8; 8] = *b"DCEMWV1\0";
 const EXACT_MARKET_WORK_MANIFEST_SCHEMA_V1: u16 = 1;
 const EXACT_MARKET_SOLVER_SEMANTICS_V1: u16 = 1;
-const EXACT_MARKET_BUNDLE_SIDECAR_MAGIC_V2: [u8; 8] = *b"DCEMSV2\0";
-const EXACT_MARKET_BUNDLE_SIDECAR_SCHEMA_V2: u16 = 2;
+const EXACT_MARKET_BUNDLE_SIDECAR_MAGIC_V3: [u8; 8] = *b"DCEMSV3\0";
+const EXACT_MARKET_BUNDLE_SIDECAR_SCHEMA_V3: u16 = 3;
 
 const _: () = assert!(MAX_OUTCOMES == 16);
 const _: () = assert!(MAX_QUANTIZED_ATOM_SOLVER_COORDINATES_V1 == 64);
@@ -667,25 +667,25 @@ impl CompiledExactMarketV1 {
 }
 
 /// Canonical compiler sidecar joining one exact search to the current Product
-/// BundleV6 artifact coordinate.
+/// BundleV7 artifact coordinate.
 ///
 /// The all-zero artifact context is the exact globally content-addressed
 /// Product artifact context accepted by the uploader. The adapter derives the
-/// final PDA from its authenticated program ID, kind 63, and `bundle_v6_id`;
+/// final PDA from its authenticated program ID, kind 68, and `bundle_v7_id`;
 /// neither this sidecar nor the offline compiler authenticates that PDA.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ExactMarketBundleSidecarV2 {
+pub struct ExactMarketBundleSidecarV3 {
     bundle_artifact_context: ContentId,
-    bundle_v6_id: CompiledProductSeriesBundleV6Id,
+    bundle_v7_id: CompiledProductSeriesBundleV7Id,
     work_manifest_id: ContentId,
     certificate_output_id: ContentId,
     market_id: ContentId,
 }
 
-impl ExactMarketBundleSidecarV2 {
-    /// Current immutable artifact kind; exactly 63 / BundleV6.
+impl ExactMarketBundleSidecarV3 {
+    /// Current immutable artifact kind; exactly 68 / BundleV7.
     pub const fn bundle_artifact_kind(&self) -> u8 {
-        COMPILED_PRODUCT_SERIES_BUNDLE_V6_ARTIFACT_KIND
+        COMPILED_PRODUCT_SERIES_BUNDLE_V7_ARTIFACT_KIND
     }
 
     /// Exact globally content-addressed artifact context; always all-zero.
@@ -693,9 +693,9 @@ impl ExactMarketBundleSidecarV2 {
         self.bundle_artifact_context
     }
 
-    /// Typed identity of the complete current Product BundleV6 graph.
-    pub const fn bundle_v6_id(&self) -> CompiledProductSeriesBundleV6Id {
-        self.bundle_v6_id
+    /// Typed identity of the complete current Product BundleV7 graph.
+    pub const fn bundle_v7_id(&self) -> CompiledProductSeriesBundleV7Id {
+        self.bundle_v7_id
     }
 
     /// Identity of the exact search work/coverage manifest.
@@ -716,15 +716,15 @@ impl ExactMarketBundleSidecarV2 {
     /// Encode the unique fixed-width sidecar body.
     pub fn encode_into(
         &self,
-        output: &mut [u8; EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V2],
+        output: &mut [u8; EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V3],
     ) -> Result<(), ExactMarketManifestErrorV1> {
         self.validate()?;
         let mut cursor = 0_usize;
-        put(output, &mut cursor, &EXACT_MARKET_BUNDLE_SIDECAR_MAGIC_V2)?;
+        put(output, &mut cursor, &EXACT_MARKET_BUNDLE_SIDECAR_MAGIC_V3)?;
         put(
             output,
             &mut cursor,
-            &EXACT_MARKET_BUNDLE_SIDECAR_SCHEMA_V2.to_le_bytes(),
+            &EXACT_MARKET_BUNDLE_SIDECAR_SCHEMA_V3.to_le_bytes(),
         )?;
         put(
             output,
@@ -734,12 +734,12 @@ impl ExactMarketBundleSidecarV2 {
         put(
             output,
             &mut cursor,
-            &[COMPILED_PRODUCT_SERIES_BUNDLE_V6_ARTIFACT_KIND],
+            &[COMPILED_PRODUCT_SERIES_BUNDLE_V7_ARTIFACT_KIND],
         )?;
         put(output, &mut cursor, &[0; 3])?;
         for id in [
             self.bundle_artifact_context,
-            self.bundle_v6_id.content_id(),
+            self.bundle_v7_id.content_id(),
             self.work_manifest_id,
             self.certificate_output_id,
             self.market_id,
@@ -754,14 +754,14 @@ impl ExactMarketBundleSidecarV2 {
 
     /// Decode and structurally validate one hostile exact-width sidecar.
     pub fn decode(input: &[u8]) -> Result<Self, ExactMarketManifestErrorV1> {
-        if input.len() != EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V2 {
+        if input.len() != EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V3 {
             return Err(ExactMarketManifestErrorV1::InvalidLength);
         }
         let mut reader = Reader::new(input);
-        if reader.take::<8>()? != EXACT_MARKET_BUNDLE_SIDECAR_MAGIC_V2
-            || reader.u16()? != EXACT_MARKET_BUNDLE_SIDECAR_SCHEMA_V2
+        if reader.take::<8>()? != EXACT_MARKET_BUNDLE_SIDECAR_MAGIC_V3
+            || reader.u16()? != EXACT_MARKET_BUNDLE_SIDECAR_SCHEMA_V3
             || reader.u16()? != EXACT_MARKET_SOLVER_SEMANTICS_V1
-            || reader.u8()? != COMPILED_PRODUCT_SERIES_BUNDLE_V6_ARTIFACT_KIND
+            || reader.u8()? != COMPILED_PRODUCT_SERIES_BUNDLE_V7_ARTIFACT_KIND
         {
             return Err(ExactMarketManifestErrorV1::InvalidDiscriminant);
         }
@@ -770,7 +770,7 @@ impl ExactMarketBundleSidecarV2 {
         }
         let value = Self {
             bundle_artifact_context: ContentId::from_bytes(reader.take::<32>()?),
-            bundle_v6_id: CompiledProductSeriesBundleV6Id::from_bytes(reader.take::<32>()?),
+            bundle_v7_id: CompiledProductSeriesBundleV7Id::from_bytes(reader.take::<32>()?),
             work_manifest_id: ContentId::from_bytes(reader.take::<32>()?),
             certificate_output_id: ContentId::from_bytes(reader.take::<32>()?),
             market_id: ContentId::from_bytes(reader.take::<32>()?),
@@ -779,7 +779,7 @@ impl ExactMarketBundleSidecarV2 {
             return Err(ExactMarketManifestErrorV1::InvalidLength);
         }
         value.validate()?;
-        let mut canonical = [0_u8; EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V2];
+        let mut canonical = [0_u8; EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V3];
         value.encode_into(&mut canonical)?;
         if canonical.as_slice() != input {
             return Err(ExactMarketManifestErrorV1::NonCanonicalPadding);
@@ -789,9 +789,9 @@ impl ExactMarketBundleSidecarV2 {
 
     /// Domain-separated identity of the exact sidecar bytes.
     pub fn content_id(&self) -> Result<ContentId, ExactMarketManifestErrorV1> {
-        let mut body = [0_u8; EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V2];
+        let mut body = [0_u8; EXACT_MARKET_BUNDLE_SIDECAR_BYTES_V3];
         self.encode_into(&mut body)?;
-        Ok(domain_id(EXACT_MARKET_BUNDLE_SIDECAR_DOMAIN_V2, &body))
+        Ok(domain_id(EXACT_MARKET_BUNDLE_SIDECAR_DOMAIN_V3, &body))
     }
 
     /// Reopen the complete Product compiler output, exact search output, and
@@ -799,7 +799,7 @@ impl ExactMarketBundleSidecarV2 {
     pub fn verify(
         &self,
         compiled_payoff: &CompiledProductionPayoffV1,
-        bundle: &CompiledProductSeriesBundleV6,
+        bundle: &CompiledProductSeriesBundleV7,
         exact_market: &CompiledExactMarketV1,
     ) -> Result<(), ExactMarketCompilerErrorV1> {
         self.validate()?;
@@ -810,7 +810,7 @@ impl ExactMarketBundleSidecarV2 {
                 != exact_market.manifest.native_claim_basis_id
             || bundle.market_genesis_profile_id.content_id()
                 != exact_market.manifest.product_terms_id
-            || self.bundle_v6_id != expected_bundle_id
+            || self.bundle_v7_id != expected_bundle_id
             || self.work_manifest_id != exact_market.manifest_id
             || self.certificate_output_id
                 != exact_market.manifest.certificate_output_id
@@ -825,7 +825,7 @@ impl ExactMarketBundleSidecarV2 {
         if !self.bundle_artifact_context.is_zero() {
             return Err(ExactMarketManifestErrorV1::NonCanonicalPadding);
         }
-        if self.bundle_v6_id.content_id().is_zero()
+        if self.bundle_v7_id.content_id().is_zero()
             || self.work_manifest_id.is_zero()
             || self.market_id.is_zero()
         {
@@ -836,11 +836,11 @@ impl ExactMarketBundleSidecarV2 {
 }
 
 /// Bind one exact search output to the sole current Product compiler graph.
-pub fn bind_exact_market_bundle_v6(
+pub fn bind_exact_market_bundle_v7(
     compiled_payoff: &CompiledProductionPayoffV1,
-    bundle: &CompiledProductSeriesBundleV6,
+    bundle: &CompiledProductSeriesBundleV7,
     exact_market: &CompiledExactMarketV1,
-) -> Result<ExactMarketBundleSidecarV2, ExactMarketCompilerErrorV1> {
+) -> Result<ExactMarketBundleSidecarV3, ExactMarketCompilerErrorV1> {
     exact_market.verify(compiled_payoff)?;
     if bundle.native_claim_basis_id != compiled_payoff.native_claim_basis_id
         || bundle.native_claim_basis_id.content_id()
@@ -850,9 +850,9 @@ pub fn bind_exact_market_bundle_v6(
     {
         return Err(ExactMarketCompilerErrorV1::OutputMismatch);
     }
-    let value = ExactMarketBundleSidecarV2 {
+    let value = ExactMarketBundleSidecarV3 {
         bundle_artifact_context: ContentId::ZERO,
-        bundle_v6_id: bundle.id()?,
+        bundle_v7_id: bundle.id()?,
         work_manifest_id: exact_market.manifest_id,
         certificate_output_id: exact_market.manifest.certificate_output_id,
         market_id: exact_market.manifest.market_id,
@@ -879,7 +879,7 @@ pub enum ExactMarketCompilerErrorV1 {
     Solver(QuantizedAtomSolverErrorV1),
     /// Canonical work-manifest construction or decoding refused.
     Manifest(ExactMarketManifestErrorV1),
-    /// Current Product BundleV6 construction or identity refused.
+    /// Current Product BundleV7 construction or identity refused.
     Product(ProductError),
     /// Recomputed output disagreed with stored bytes or IDs.
     OutputMismatch,

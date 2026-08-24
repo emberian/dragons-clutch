@@ -186,8 +186,10 @@ pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION: u8 = 1;
 pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V2: u8 = 2;
 /// Historical BundleV5/AttachmentV4 General Market-binding version.
 pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V3: u8 = 3;
-/// Current Product/Revenue-authorized General Market-binding version.
+/// Historical RootV2/LinkV2 Product/Revenue-authorized General version.
 pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V4: u8 = 4;
+/// Current RootV3/LinkV3/FundingV5 Product/Revenue-authorized General version.
+pub const GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V5: u8 = 5;
 /// Counted-retirement Replay-successor account discriminator.
 pub const REPLAY_SUCCESSOR_ACCOUNT_TAG: u8 = 0x7a;
 /// Counted-retirement Replay-successor account version.
@@ -545,7 +547,7 @@ pub const GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_BYTES: usize = 980;
 /// Counted exact-index General V2 settlement-root successor version.
 pub const GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION: u8 = 2;
 /// Exact fixed width of the counted exact-index settlement-root successor.
-pub const GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_BYTES: usize = 1_196;
+pub const GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_BYTES: usize = 1_228;
 /// Product shared Market lifecycle root discriminator.
 pub const PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG: u8 = 0xaa;
 /// Historical Product shared Market lifecycle-root version.
@@ -578,10 +580,10 @@ pub const DIRECT_MARKET_ROOT_ACCOUNT_TAG: u8 = 0xb1;
 pub const DIRECT_MARKET_ROOT_ACCOUNT_VERSION: u8 = 1;
 /// Exact historical Direct root frame bytes.
 pub const DIRECT_MARKET_ROOT_ACCOUNT_BYTES: usize = 1_726;
-/// Current General-V4/Product-V2 Direct root account version.
-pub const DIRECT_MARKET_ROOT_ACCOUNT_VERSION_V2: u8 = 2;
+/// Current General-V4/Product-V3 Direct root account version.
+pub const DIRECT_MARKET_ROOT_ACCOUNT_VERSION_V3: u8 = 3;
 /// Exact current Direct root frame bytes.
-pub const DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V2: usize = 2_502;
+pub const DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3: usize = 2_534;
 /// Current Direct exact-selection owner discriminator.
 pub const DIRECT_SELECTION_ACCOUNT_TAG: u8 = 0xb2;
 /// Current Direct exact-selection account version.
@@ -737,7 +739,7 @@ const _: () = assert!(DEALER_EXIT_TICKET_ACCOUNT_TAG == 0x9f);
 const _: () = assert!(DEALER_ACTION_RECEIPT_ACCOUNT_TAG == 0xa8);
 const _: () = assert!(GENERAL_V2_SETTLEMENT_ROOT_ACCOUNT_TAG == 0xa9);
 const _: () = assert!(GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION == 2);
-const _: () = assert!(GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_BYTES == 1_196);
+const _: () = assert!(GENERAL_V2_INDEXED_SETTLEMENT_ROOT_ACCOUNT_BYTES == 1_228);
 const _: () = assert!(PRODUCT_MARKET_LIFECYCLE_ROOT_ACCOUNT_TAG == 0xaa);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_TAG == 0xab);
 const _: () = assert!(FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_TAG == 0xac);
@@ -952,10 +954,10 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         coordinates: AllocationCoordinates::Exact {
             namespace: WireNamespace::MainAccount,
             tag: DIRECT_MARKET_ROOT_ACCOUNT_TAG,
-            version: DIRECT_MARKET_ROOT_ACCOUNT_VERSION_V2,
+            version: DIRECT_MARKET_ROOT_ACCOUNT_VERSION_V3,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "direct-market-root-v2-account",
+        name: "direct-market-root-v3-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1279,7 +1281,16 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             version: GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V4,
         },
         status: AllocationStatus::ReservedDisabled,
-        name: "general-v2-market-binding-v4-account",
+        name: "historical-general-v2-market-binding-v4-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
+            version: GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V5,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "general-v2-market-binding-v5-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -3394,6 +3405,10 @@ mod tests {
             (
                 GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
                 GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V4,
+            ),
+            (
+                GENERAL_V2_MARKET_BINDING_ACCOUNT_TAG,
+                GENERAL_V2_MARKET_BINDING_ACCOUNT_VERSION_V5,
             ),
             (
                 REPLAY_SUCCESSOR_ACCOUNT_TAG,

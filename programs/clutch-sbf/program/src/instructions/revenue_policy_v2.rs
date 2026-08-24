@@ -21,11 +21,13 @@ use clutch_batch_policy_identity::revenue_policy_v2::{
     decode_revenue_policy_v2, revenue_policy_record_v2_id, revenue_policy_v2_digest,
     treasury_position_derivation_policy_v2_id, RevenuePolicyV2,
 };
+use clutch_general_v2_contract::GENERAL_POSITION_FOUNDING_GENERATION_V1;
 use clutch_retirement::PositionPurposeV3;
 use clutch_solana_layout::registry::RealmRevenueV2Action;
 use clutch_solana_layout::revenue::{
     CloseRevenuePolicyRecordV2Payload, InitializeFeeBearingRealmV2Payload,
-    RevenuePolicyRecordV2, REVENUE_POLICY_RECORD_BYTES_V2,
+    RevenuePolicyRecordV2, TreasuryServiceLedgerV1, REVENUE_POLICY_RECORD_BYTES_V2,
+    TREASURY_SERVICE_LEDGER_V1_BYTES,
 };
 use clutch_solana_layout::{
     account_len, canonical_realm_id, Hash32, RealmAccount,
@@ -37,6 +39,11 @@ use solana_sdk_ids::incinerator;
 use super::direct_selection_v3::{
     create_pda_account_full_principal, direct_creation_funding, DIRECT_NEUTRAL_SINK_V3,
 };
+
+const TREASURY_SERVICE_ADMISSION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/treasury-service/admit/v1\0";
+const TREASURY_SERVICE_SETTLEMENT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/treasury-service/settle/v1\0";
 
 /// Exact accounts for action 1.
 pub const INITIALIZE_FEE_BEARING_REALM_V2_ACCOUNT_COUNT: usize = 6;
@@ -282,6 +289,267 @@ pub(crate) fn derive_revenue_market_treasury_v1(
         treasury_replay_bump,
         treasury_service_ledger_account,
         treasury_service_ledger_bump,
+    })
+}
+
+/// Nonforgeable authentication of one live 0xbb ledger.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedTreasuryServiceLedgerV1 {
+    account: Pubkey,
+    body: TreasuryServiceLedgerV1,
+}
+
+impl AuthenticatedTreasuryServiceLedgerV1 {
+    /// Exact physical ledger account.
+    pub(crate) const fn account(self) -> Pubkey { self.account }
+    /// Exact hostile-decoded body.
+    pub(crate) const fn body(self) -> TreasuryServiceLedgerV1 { self.body }
+}
+
+/// Authenticate a live 0xbb ledger against the exact immutable Realm/Market
+/// derivation. The mutable Position/Replay bodies are authenticated at their
+/// own current boundary; this aggregate owns only service conservation.
+#[inline(never)]
+pub(crate) fn authenticate_treasury_service_ledger_v1(
+    program_id: &Pubkey,
+    ledger_account: &AccountInfo,
+    derivation: RevenueMarketTreasuryDerivationV1,
+    writable: bool,
+) -> Outcome<AuthenticatedTreasuryServiceLedgerV1> {
+    accounts::validate_state_role_lengths(
+        program_id,
+        ledger_account,
+        writable,
+        &[TREASURY_SERVICE_LEDGER_V1_BYTES],
+    )?;
+    require(
+        *ledger_account.key == derivation.treasury_service_ledger_account,
+        ClutchError::WrongPda,
+    )?;
+    let body = TreasuryServiceLedgerV1::decode(&ledger_account.data.borrow())?;
+    let authority = derivation.authority;
+    require(
+        body.realm == authority.realm()
+            && body.revenue_policy_record_account
+                == Hash32::from_bytes(authority.record_account.to_bytes())
+            && body.revenue_policy_record_v2_id == authority.record_semantic_id
+            && body.market_instance_v2_id == derivation.market_instance_v2_id
+            && body.treasury_owner == authority.treasury_owner()
+            && body.treasury_position_account
+                == Hash32::from_bytes(derivation.treasury_position_account.to_bytes())
+            && body.treasury_position_generation
+                == GENERAL_POSITION_FOUNDING_GENERATION_V1,
+        ClutchError::MismatchedState,
+    )?;
+    expect_pda(
+        ledger_account.key,
+        seeds::treasury_service_ledger_v1_pda(
+            program_id,
+            &body.market_instance_v2_id.bytes(),
+            &derivation.treasury_position_account,
+        ),
+        Some(body.stored_bump),
+    )?;
+    let accounted = body
+        .refundable_rent_principal
+        .checked_add(body.donation_floor)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        ledger_account.lamports() >= accounted,
+        ClutchError::AggregateClosureMismatch,
+    )?;
+    Ok(AuthenticatedTreasuryServiceLedgerV1 {
+        account: *ledger_account.key,
+        body,
+    })
+}
+
+/// Default-refusing authority for exactly one fee-bearing epoch admission.
+pub(crate) trait AuthenticatedTreasuryServiceAdmissionV1 {
+    fn realm(&self) -> Option<Hash32> { None }
+    fn market_instance_v2_id(&self) -> Option<Hash32> { None }
+    fn revenue_policy_record_account(&self) -> Option<Pubkey> { None }
+    fn revenue_policy_record_v2_id(&self) -> Option<Hash32> { None }
+    fn revenue_policy_v2_digest(&self) -> Option<Hash32> { None }
+    fn treasury_owner(&self) -> Option<Hash32> { None }
+    fn treasury_position_account(&self) -> Option<Pubkey> { None }
+    fn treasury_service_ledger_account(&self) -> Option<Pubkey> { None }
+    fn epoch_semantic_id(&self) -> Option<Hash32> { None }
+    fn admitted_epoch_count_before(&self) -> Option<u64> { None }
+    fn settled_epoch_count_before(&self) -> Option<u64> { None }
+}
+
+/// Default-refusing authority for exactly one terminal fee-bearing service.
+pub(crate) trait AuthenticatedTreasuryServiceSettlementV1:
+    AuthenticatedTreasuryServiceAdmissionV1
+{
+    fn service_is_terminal(&self) -> Option<bool> { None }
+}
+
+/// Kind of one exact counted ledger transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TreasuryServiceTransitionKindV1 {
+    AdmitEpoch,
+    SettleEpoch,
+}
+
+/// Private compare-and-write plan for one exact 0xbb transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PreparedTreasuryServiceTransitionV1 {
+    account: Pubkey,
+    before: TreasuryServiceLedgerV1,
+    after: TreasuryServiceLedgerV1,
+    epoch_semantic_id: Hash32,
+    transition_id: Hash32,
+    kind: TreasuryServiceTransitionKindV1,
+}
+
+impl PreparedTreasuryServiceTransitionV1 {
+    pub(crate) const fn after(self) -> TreasuryServiceLedgerV1 { self.after }
+    pub(crate) const fn transition_id(self) -> Hash32 { self.transition_id }
+    pub(crate) const fn epoch_semantic_id(self) -> Hash32 { self.epoch_semantic_id }
+    pub(crate) const fn kind(self) -> TreasuryServiceTransitionKindV1 { self.kind }
+}
+
+fn require_service_evidence<E: AuthenticatedTreasuryServiceAdmissionV1>(
+    authenticated: AuthenticatedTreasuryServiceLedgerV1,
+    derivation: RevenueMarketTreasuryDerivationV1,
+    evidence: &E,
+) -> Outcome<Hash32> {
+    let authority = derivation.authority;
+    let epoch = evidence
+        .epoch_semantic_id()
+        .ok_or(ClutchError::MismatchedState)?;
+    require(
+        epoch != Hash32::ZERO
+            && evidence.realm() == Some(authority.realm())
+            && evidence.market_instance_v2_id() == Some(derivation.market_instance_v2_id)
+            && evidence.revenue_policy_record_account() == Some(authority.record_account)
+            && evidence.revenue_policy_record_v2_id() == Some(authority.record_semantic_id)
+            && evidence.revenue_policy_v2_digest() == Some(authority.policy_digest)
+            && evidence.treasury_owner() == Some(authority.treasury_owner())
+            && evidence.treasury_position_account()
+                == Some(derivation.treasury_position_account)
+            && evidence.treasury_service_ledger_account() == Some(authenticated.account)
+            && evidence.admitted_epoch_count_before()
+                == Some(authenticated.body.admitted_epoch_count)
+            && evidence.settled_epoch_count_before()
+                == Some(authenticated.body.settled_epoch_count),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(epoch)
+}
+
+/// Prepare one exact aggregate admission from private evidence.
+pub(crate) fn prepare_treasury_service_admission_v1<E>(
+    authenticated: AuthenticatedTreasuryServiceLedgerV1,
+    derivation: RevenueMarketTreasuryDerivationV1,
+    evidence: &E,
+) -> Outcome<PreparedTreasuryServiceTransitionV1>
+where
+    E: AuthenticatedTreasuryServiceAdmissionV1,
+{
+    let epoch = require_service_evidence(authenticated, derivation, evidence)?;
+    let after = authenticated.body.admit_epoch()?;
+    prepare_service_transition(
+        authenticated,
+        after,
+        epoch,
+        TreasuryServiceTransitionKindV1::AdmitEpoch,
+    )
+}
+
+/// Prepare one exact aggregate settlement from private terminal evidence.
+pub(crate) fn prepare_treasury_service_settlement_v1<E>(
+    authenticated: AuthenticatedTreasuryServiceLedgerV1,
+    derivation: RevenueMarketTreasuryDerivationV1,
+    evidence: &E,
+) -> Outcome<PreparedTreasuryServiceTransitionV1>
+where
+    E: AuthenticatedTreasuryServiceSettlementV1,
+{
+    let epoch = require_service_evidence(authenticated, derivation, evidence)?;
+    require(
+        evidence.service_is_terminal() == Some(true),
+        ClutchError::MismatchedState,
+    )?;
+    let after = authenticated.body.settle_epoch()?;
+    prepare_service_transition(
+        authenticated,
+        after,
+        epoch,
+        TreasuryServiceTransitionKindV1::SettleEpoch,
+    )
+}
+
+fn prepare_service_transition(
+    authenticated: AuthenticatedTreasuryServiceLedgerV1,
+    after: TreasuryServiceLedgerV1,
+    epoch: Hash32,
+    kind: TreasuryServiceTransitionKindV1,
+) -> Outcome<PreparedTreasuryServiceTransitionV1> {
+    let (domain, kind_byte) = match kind {
+        TreasuryServiceTransitionKindV1::AdmitEpoch => {
+            (TREASURY_SERVICE_ADMISSION_DOMAIN_V1, 1u8)
+        }
+        TreasuryServiceTransitionKindV1::SettleEpoch => {
+            (TREASURY_SERVICE_SETTLEMENT_DOMAIN_V1, 2u8)
+        }
+    };
+    let transition_id = Hash32::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            domain,
+            &authenticated.account.to_bytes(),
+            &epoch.bytes(),
+            &authenticated.body.admitted_epoch_count.to_le_bytes(),
+            &authenticated.body.settled_epoch_count.to_le_bytes(),
+            &after.admitted_epoch_count.to_le_bytes(),
+            &after.settled_epoch_count.to_le_bytes(),
+            &[kind_byte],
+        ])
+        .to_bytes(),
+    );
+    require(transition_id != Hash32::ZERO, ClutchError::MismatchedState)?;
+    Ok(PreparedTreasuryServiceTransitionV1 {
+        account: authenticated.account,
+        before: authenticated.body,
+        after,
+        epoch_semantic_id: epoch,
+        transition_id,
+        kind,
+    })
+}
+
+/// Compare the actual body, write one prepared transition, and hostile-decode
+/// its postimage.
+pub(crate) fn accept_treasury_service_transition_v1(
+    account: &AccountInfo,
+    prepared: PreparedTreasuryServiceTransitionV1,
+) -> Outcome<AuthenticatedTreasuryServiceLedgerV1> {
+    require(
+        *account.key == prepared.account && account.is_writable,
+        ClutchError::MismatchedState,
+    )?;
+    {
+        let data = account.data.borrow();
+        require(
+            TreasuryServiceLedgerV1::decode(&data)? == prepared.before,
+            ClutchError::Replay,
+        )?;
+    }
+    {
+        let mut data = account
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        prepared.after.encode(&mut data)?;
+        require(
+            TreasuryServiceLedgerV1::decode(&data)? == prepared.after,
+            ClutchError::MismatchedState,
+        )?;
+    }
+    Ok(AuthenticatedTreasuryServiceLedgerV1 {
+        account: prepared.account,
+        body: prepared.after,
     })
 }
 

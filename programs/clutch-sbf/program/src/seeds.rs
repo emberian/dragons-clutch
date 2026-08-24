@@ -218,8 +218,8 @@ pub const SEED_DIRECT_RECEIPT_V3: &[u8] = b"dc:direct-receipt:v3";
 pub const SEED_DIRECT_POT_V3: &[u8] = b"dc:direct-pot:v3";
 /// Current `0xb1/1` Direct Market root; disjoint from every legacy window.
 pub const SEED_DIRECT_MARKET_ROOT_V1: &[u8] = b"dc:direct-market-root:v1";
-/// Current General-V4/Product-V2 Direct root domain.
-pub const SEED_DIRECT_MARKET_ROOT_V2: &[u8] = b"dc:direct-market-root:v2";
+/// Current General-V4/Product-V3 Direct root domain.
+pub const SEED_DIRECT_MARKET_ROOT_V3: &[u8] = b"dc:direct-market-root:v3";
 /// Current permanent `0xb3/1` Direct action replay/receipt.
 pub const SEED_DIRECT_ACTION_REPLAY_V1: &[u8] = b"dc:direct-action-replay:v1";
 /// Current `0xb2/1` exact Selection owner.
@@ -331,8 +331,9 @@ pub const SEED_FAILURE_MARKET_INTERVAL_HISTORY_V2: &[u8] = b"dc:fail-int-history
 pub const SEED_PRODUCT_MARKET_LIFECYCLE_ROOT: &[u8] = b"dc:market-lifecycle-root:v1";
 /// Zero-data Product foundation principal/donation vault.
 pub const SEED_PRODUCT_MARKET_FOUNDATION_VAULT: &[u8] = b"dc:market-foundation-vault:v1";
-/// Permanent compact Product Market-lifecycle replay anchor.
-pub const SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY: &[u8] = b"dc:market-lifecycle-replay:v1";
+/// Permanent market-only Product Market-lifecycle replay anchor.
+pub const SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY_V2: &[u8] =
+    b"dc:market-lifecycle-replay:v2";
 /// Non-persisted Market-family namespace anchor.
 pub const SEED_PRODUCT_MARKET_FAMILY_ROOT_V1: &[u8] = b"dc:product-family-root:v1";
 /// Per-Series/ordinal Product Market-admission link.
@@ -569,18 +570,16 @@ pub fn product_market_foundation_vault_pda(
     )
 }
 
-/// Derive the permanent Product Market-lifecycle replay anchor.
-pub fn product_market_lifecycle_replay_pda(
+/// Derive the sole permanent market-only Product lifecycle replay anchor.
+pub fn product_market_lifecycle_replay_v2_pda(
     program_id: &Pubkey,
     market_instance_v2_id: &[u8; 32],
-    generation: u64,
 ) -> (Pubkey, u8) {
     find(
         program_id,
         &[
-            SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY,
+            SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY_V2,
             market_instance_v2_id,
-            &generation.to_le_bytes(),
         ],
     )
 }
@@ -1517,11 +1516,11 @@ pub fn direct_market_root_v1_pda(
     )
 }
 
-/// Canonical current Direct `0xb1/2` root address.
+/// Canonical current Direct `0xb1/3` root address.
 ///
 /// The fresh domain prevents a historical V1 root at the same Market and
 /// generation from being reinterpreted as current authority.
-pub fn direct_market_root_v2_pda(
+pub fn direct_market_root_v3_pda(
     program_id: &Pubkey,
     market_instance_id: &[u8; 32],
     generation: u64,
@@ -1529,7 +1528,7 @@ pub fn direct_market_root_v2_pda(
     find(
         program_id,
         &[
-            SEED_DIRECT_MARKET_ROOT_V2,
+            SEED_DIRECT_MARKET_ROOT_V3,
             market_instance_id,
             &generation.to_le_bytes(),
         ],
@@ -2243,7 +2242,7 @@ mod tests {
         let prefixes = [
             SEED_PRODUCT_MARKET_LIFECYCLE_ROOT,
             SEED_PRODUCT_MARKET_FOUNDATION_VAULT,
-            SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY,
+            SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY_V2,
             SEED_PRODUCT_SERIES_MARKET_LINK,
             SEED_PRODUCT_SERIES_LIFECYCLE_REPLAY,
             SEED_PRODUCT_DIRECT_GLOBAL_LIVENESS,

@@ -54,13 +54,12 @@ pub mod dealer_facility;
 pub mod dealer_policy;
 /// Capability-disabled Dealer facility account and instruction contracts.
 pub mod dealer_runtime;
-// Legacy Direct V2/V3 source remains in-tree for historical review, but is
-// deliberately absent from this executable module graph. Their allocated
-// wire coordinates are decode-only and refuse at the capability boundary.
+// The V1 adapter remains available only as historical source. Current Direct
+// requests enter the exact b1/v3 account/authentication plane below.
 /// Historical b1/v1 Direct account plane; compiled for review but never routed.
 #[cfg(feature = "profile-full")]
 pub(crate) mod direct_market_v1;
-/// Capability-disabled current b1/v2 Direct account/authentication plane.
+/// Current b1/v3 Direct account/authentication plane.
 #[cfg(feature = "profile-full")]
 pub(crate) mod direct_market_v2;
 pub mod external_exit;
@@ -163,6 +162,9 @@ pub mod general_v2_settlement_root;
 pub mod general_v2_settlement_producer_v5;
 #[cfg(feature = "profile-successor-chain-attached-dev")]
 pub(crate) mod general_market_foundation_v4;
+/// V5-only compact index child and retained-Feed retirement composers.
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+pub(crate) mod general_v2_exact_index_retirement_v1;
 /// Shared immutable Feed/Page/Product traversal authentication for General V5 settlement.
 #[cfg(any(
     all(
@@ -195,10 +197,16 @@ pub mod product_market;
 pub(crate) mod product_market_foundation_init;
 /// Immutable current five-family mask and namespace-anchor authority.
 pub(crate) mod product_market_family_capability_current;
+/// Exact derived 50-slot current Product foundation graph authority.
+pub(crate) mod product_market_foundation_graph_v4_current;
 /// Hostile-only current RootV3/LinkV3 account authentication.
 pub(crate) mod product_market_lifecycle_v3_current;
+pub(crate) mod product_failure_link_v3_current;
+pub(crate) mod product_market_family_admission_v3_current;
 /// Persistent current ProductReplayAnchor generation and stage owner.
 pub(crate) mod product_market_replay_current;
+/// Sole current FundingV5 Active-to-Pending reservation postwrite.
+pub(crate) mod product_series_funding_v5_current;
 /// Sole current FundingV4/SourceV3 Product founder authority; no capability route is admitted.
 pub(crate) mod product_market_foundation_current;
 /// Always-compiled Product/Series semantic owner; executable routes remain

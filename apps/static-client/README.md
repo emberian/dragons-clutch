@@ -10,8 +10,8 @@ The application has three narrow jobs:
 
 1. read the fork-aware untrusted account index exposed by `operatord`;
 2. bind and display exact Product compiler proposals emitted by Rust; and
-3. assemble the outer blockhash-free Solana transaction around exact bytes and
-   account roles supplied by their semantic owner.
+3. validate and inspect a blockhash-free Solana transaction already constructed
+   from exact chain-derived state by its Rust semantic owner.
 
 It is not an explorer, index authority, compiler implementation, wallet, or
 release manifest.
@@ -36,6 +36,8 @@ selected operatord URL and only with sequential `GET` requests to:
 ```text
 /v1/health
 /v1/acquisition
+/v1/session
+/v1/actions
 /v1/releases
 /v1/accounts?commitment={processed|finalized}
 /v1/keeper/next?commitment={processed|finalized}
@@ -117,6 +119,35 @@ manifest/profile/source/ELF join and its enabled registry coordinates, but that
 report remains an untrusted projection and is not a current-account runtime
 admission verdict.
 
+For current Source and Structured actions, Glass admits inspection only when
+the `/v1/actions` verdict joins the checked manifest/profile, the exact enabled
+coordinate, one onchain-derived finalized restart cursor, its complete named
+driver/dependency observations, and a still-live exclusive validity slot.
+Source material must be a legacy `source-plane-v3` transaction without lookup
+tables. Structured material must be a v0 `structured-claim` transaction with
+one finalized, digest-bound address lookup table. Its verdict names the
+disjoint wrapper execution release and base scheduling/driver release; Glass
+checks the wrapper Program/deployment/ELF/manifest release key instead of
+pretending the indexed base release owns wrapper instruction bytes. Missing finalized state,
+changed driver slots, stale dependencies, expired material, unsupported family
+contracts, and release-enabled coordinates without one exact canonical draft
+remain visible as refused dispositions; none can be selected. The browser has
+no manual payload, account-role, semantic-owner, or transaction assembly input
+on this path.
+
+Dealer retirement variants are a separate release surface. Glass recognizes
+only the closed `76/1/25/8` active-facility-credit and `76/1/25/9`
+unused-future-credit variants, requires the coarse `76/1/25` tuple to remain
+absent, and joins the exact discriminator set across acquisition, release,
+session, and action projections. Target 8 is selectable only with its exact
+48-role finalized observation set; target 9 requires its distinct exact
+45-role set. Both require the frozen role names/privileges, one v0 lookup
+table, the target-specific semantic owner and runtime admission, exact signer
+roles and integer equations, the state-v3 driver observation, and an unexpired
+freshness boundary. The liveness-receipt creation target is the sole required
+finalized absence. Targets 1–7, a coarse action-25 tuple, incomplete role
+frames, or stale observations remain refused.
+
 Product/Series registration and Owner/Position V3 lifecycle appear as separate
 `not-authenticated` capability cards. This avoids treating Product compiler
 proposals, Position/Replay codecs, or owner-settlement rows as runtime
@@ -131,7 +162,7 @@ math. The compiler form accepts:
 - an exact rational definition JSON object in which all integers and rational
   components are strings;
 - exact current RegistryProgramReleaseV2, RegistryCapabilityProfileV4,
-  QuoteV5, AttachmentV5, and remaining BundleV6 input bodies;
+  QuoteV6, AttachmentV6, and remaining BundleV7 input bodies;
 - an optional bounded exact-market search over explicit integer coordinates;
   and
 - an explicit expected compiler-release SHA-256 pinned by operatord.
@@ -150,15 +181,15 @@ the configured expected compiler-release SHA-256. That release hash is a
 configuration join, not a measurement of the running binary. The Product
 program address comes from the acquired checked-release projection; operatord
 requires it to be canonical, nonzero, and equal to the Program coordinate in
-RegistryProgramReleaseV2 before deriving the kind-63 BundleV6 artifact PDA.
+RegistryProgramReleaseV2 before deriving the kind-68 BundleV7 artifact PDA.
 
 Glass then displays exact-in-span versus certified-approximation status, all
 exact rational error bounds, the canonical 2,352-byte native-basis proposal,
-its certificate, and the 528-byte BundleV6 plus all sixteen typed identities.
+its certificate, and the 528-byte BundleV7 plus all sixteen typed identities.
 The bundle capability-profile ID must match the daemon-projected checked
 release. An analytic result also carries its exact certification subdivision
 depth. An exact-market request additionally returns a canonical work manifest,
-an optional verifier certificate, and a BundleV6-bound sidecar. It never claims
+an optional verifier certificate, and a BundleV7-bound sidecar. It never claims
 a unique price, fair value, or optimal clearing.
 
 The compiler endpoint is loopback-only and has no RPC, wallet, signing,
@@ -167,7 +198,7 @@ submission, registration, or persistence path. Its output is always marked
 transport shape and exact request joins but deliberately does not become a
 second semantic owner by reimplementing Rust codecs. Registration remains the
 only authority: the program must reopen the loader-authenticated registry
-release, ProfileV4, Source release, every canonical artifact, BundleV6, and any
+release, ProfileV4, Source release, every canonical artifact, BundleV7, and any
 exact-market evidence, then recompute every identity, PDA, and binding.
 
 ## Canonical transaction-material boundary

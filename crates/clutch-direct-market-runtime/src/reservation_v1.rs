@@ -107,6 +107,14 @@ impl DirectReservationV1 {
     pub const fn order_id(self) -> [u8; 32] { self.order_id }
     /// Semantic owner of the Position.
     pub const fn owner(self) -> [u8; 32] { self.owner }
+    /// Canonical ordinary General Position account funded by this order.
+    pub const fn position_account(self) -> [u8; 32] { self.position_account }
+    /// Purpose-owned GEN1 Replay paired with the Position.
+    pub const fn position_replay_account(self) -> [u8; 32] {
+        self.position_replay_account
+    }
+    /// Nonzero Position generation retained at reservation admission.
+    pub const fn position_generation(self) -> u64 { self.position_generation }
     /// Buy or sell side.
     pub const fn side(self) -> Side { self.side }
     /// Selected scalar outcome.

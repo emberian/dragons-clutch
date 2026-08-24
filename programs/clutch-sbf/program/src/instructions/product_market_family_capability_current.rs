@@ -57,6 +57,18 @@ impl AuthenticatedMarketFamilyCapabilityPolicyArtifactV1 {
     pub(crate) const fn capability_profile_id(&self) -> ContentId {
         self.capability_profile_id
     }
+    pub(crate) const fn physical_founder_id(&self) -> ContentId {
+        self.physical_founder_id
+    }
+    pub(crate) const fn physical_capitalization_id(&self) -> ContentId {
+        self.physical_capitalization_id
+    }
+    pub(crate) const fn registry_capability_id(&self) -> ContentId {
+        self.registry_capability_id
+    }
+    pub(crate) const fn attachment_plan_id(&self) -> ContentId {
+        self.attachment_plan_id
+    }
 }
 
 impl AuthenticatedMarketFamilyAuthorityV1 for ExactMarketFamilyInitializationV1 {

@@ -9,15 +9,15 @@ use crate::runtime_contract::StructuredClaimActionV1;
 
 /// Canonical label committing the exact current action/count/token-effect set.
 pub const STRUCTURED_CURRENT_ACCOUNT_CONTRACT_LABEL_V1: &str =
-    "dragons-clutch/structured-claim/current-account-contract/v1/a1=35:init-mint+recipe-set;a3=32:mint;a5=32:burn;a6=32:dispose-hoard-surplus;a7=33:burn;a8=33:revoke-mint-authority";
+    "dragons-clutch/structured-claim/current-account-contract/v1/product=root-v3+link-v3+registry-v4+bundle-v7+attachment-v6;a1=36:init-mint+recipe-set;a3=32:mint;a5=32:burn;a6=32:dispose-hoard-surplus;a7=33:burn;a8=34:revoke-mint-authority";
 /// SHA-256 identity of [`STRUCTURED_CURRENT_ACCOUNT_CONTRACT_LABEL_V1`].
 pub const STRUCTURED_CURRENT_ACCOUNT_CONTRACT_ID_V1: [u8; 32] = [
-    0x89, 0x86, 0x01, 0xc5, 0xf5, 0xe5, 0x0f, 0x58, 0x46, 0x6a, 0x7b, 0x9f, 0x4c, 0xdb, 0x6f, 0xe4,
-    0xb6, 0x5e, 0x18, 0xc8, 0x6d, 0xd1, 0x2d, 0xc4, 0x63, 0xb0, 0x72, 0x4a, 0x21, 0x96, 0x97, 0xd5,
+    0x69, 0xb8, 0x2f, 0x81, 0x5b, 0xa0, 0xeb, 0x72, 0xbb, 0x01, 0xcf, 0x8b, 0x0c, 0x1f, 0xf0, 0x7c,
+    0x67, 0x17, 0x16, 0xbb, 0xb5, 0x2b, 0x50, 0x51, 0x4e, 0xc3, 0x59, 0x9e, 0x18, 0xd1, 0xac, 0x4a,
 ];
 
 /// Exact account count for action 1.
-pub const STRUCTURED_CREATE_ACCOUNT_COUNT_V1: usize = 35;
+pub const STRUCTURED_CREATE_ACCOUNT_COUNT_V1: usize = 36;
 /// Exact account count for actions 3 and 5.
 pub const STRUCTURED_FULL_VECTOR_ACCOUNT_COUNT_V1: usize = 32;
 /// Exact account count for action 6.
@@ -25,7 +25,7 @@ pub const STRUCTURED_COMPACTION_ACCOUNT_COUNT_V1: usize = 32;
 /// Exact account count for action 7.
 pub const STRUCTURED_TERMINAL_REDEMPTION_ACCOUNT_COUNT_V1: usize = 33;
 /// Exact account count for action 8.
-pub const STRUCTURED_DESCRIPTOR_RETIREMENT_ACCOUNT_COUNT_V1: usize = 33;
+pub const STRUCTURED_DESCRIPTOR_RETIREMENT_ACCOUNT_COUNT_V1: usize = 34;
 
 /// Implemented current action bits. This is not an executable capability mask.
 pub const IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1: u16 =
@@ -102,12 +102,13 @@ enum CurrentStructuredAccountRoleV1 {
     HoardAuthority,
     NeutralToken,
     StructuredRoot,
-    SeriesLinkV2,
-    CompilerBundleV6,
-    AttachmentV5,
+    ProductRootV3,
+    SeriesLinkV3,
+    CompilerBundleV7,
+    AttachmentV6,
     WrapperRecipeSetV1,
     FundingTermsV2,
-    SeriesRegistryV3,
+    SeriesRegistryV4,
     RegistryReleaseV2,
     CapabilityProfileV4,
     WrapperReleaseV2,
@@ -159,12 +160,13 @@ impl CurrentStructuredAccountRoleV1 {
             Self::HoardAuthority => "hoard-authority",
             Self::NeutralToken => "realm-neutral-token",
             Self::StructuredRoot => "structured-root",
-            Self::SeriesLinkV2 => "series-market-link-v2",
-            Self::CompilerBundleV6 => "compiler-bundle-v6",
-            Self::AttachmentV5 => "attachment-v5",
+            Self::ProductRootV3 => "product-market-root-v3",
+            Self::SeriesLinkV3 => "series-market-link-v3",
+            Self::CompilerBundleV7 => "compiler-bundle-v7",
+            Self::AttachmentV6 => "attachment-v6",
             Self::WrapperRecipeSetV1 => "wrapper-recipe-set-v1",
             Self::FundingTermsV2 => "funding-terms-v2",
-            Self::SeriesRegistryV3 => "series-registry-v3",
+            Self::SeriesRegistryV4 => "series-registry-v4",
             Self::RegistryReleaseV2 => "registry-release-v2",
             Self::CapabilityProfileV4 => "capability-profile-v4",
             Self::WrapperReleaseV2 => "structured-wrapper-release-v2",
@@ -191,8 +193,9 @@ pub struct CurrentStructuredAccountMetaV1 {
 }
 
 /// Return the semantic-owner account projection for one current action.
-/// `product_link_writable` is admitted only for action 1 first admission and
-/// action 8 final-family retirement; all other callers must pass false.
+/// `product_link_writable` selects the inseparable Product RootV3+LinkV3
+/// mutation pair only for action 1 first admission and action 8 final-family
+/// retirement; all other callers must pass false.
 pub const fn current_structured_account_meta_v1(
     action: StructuredClaimActionV1,
     index: usize,
@@ -229,7 +232,7 @@ pub const fn current_structured_account_meta_v1(
     let writable = match action {
         StructuredClaimActionV1::CreateDescriptor => {
             matches!(index, 1 | 11 | 12 | 13 | 14 | 25)
-                || (index == 26 && product_link_writable)
+                || (matches!(index, 26 | 35) && product_link_writable)
         }
         StructuredClaimActionV1::WrapFull
         | StructuredClaimActionV1::UnwrapFull
@@ -241,7 +244,7 @@ pub const fn current_structured_account_meta_v1(
         }
         StructuredClaimActionV1::RetireDescriptor => {
             matches!(index, 8 | 9 | 10 | 21 | 23 | 27 | 28)
-                || (index == 24 && product_link_writable)
+                || (matches!(index, 24 | 33) && product_link_writable)
         }
     };
     let executable = match action {
@@ -292,10 +295,11 @@ const fn create_role(index: usize) -> Option<CurrentStructuredAccountRoleV1> {
         15 => R::WrapperProgram, 16 => R::WrapperProgramData, 17 => R::BaseProgram,
         18 => R::BaseProgramData, 19 => R::Token2022Program, 20 => R::Token2022ProgramData,
         21 => R::NativeClaimBasis, 22 => R::MarketInstance, 23 => R::HoardV2,
-        24 => R::ClaimLedgerV3, 25 => R::StructuredRoot, 26 => R::SeriesLinkV2,
-        27 => R::CompilerBundleV6, 28 => R::AttachmentV5, 29 => R::WrapperRecipeSetV1,
-        30 => R::SeriesRegistryV3, 31 => R::RegistryReleaseV2, 32 => R::CapabilityProfileV4,
-        33 => R::WrapperReleaseV2, 34 => R::TokenReleaseV2, _ => return None,
+        24 => R::ClaimLedgerV3, 25 => R::StructuredRoot, 26 => R::SeriesLinkV3,
+        27 => R::CompilerBundleV7, 28 => R::AttachmentV6, 29 => R::WrapperRecipeSetV1,
+        30 => R::SeriesRegistryV4, 31 => R::RegistryReleaseV2, 32 => R::CapabilityProfileV4,
+        33 => R::WrapperReleaseV2, 34 => R::TokenReleaseV2, 35 => R::ProductRootV3,
+        _ => return None,
     })
 }
 
@@ -334,7 +338,7 @@ const fn compaction_role(index: usize) -> Option<CurrentStructuredAccountRoleV1>
         17 => R::NativeClaimBasis, 18 => R::MarketInstance, 19 => R::HoardV2,
         20 => R::ClaimLedgerV3, 21 => R::WrapperMint, 22 => R::CollateralMint,
         23 => R::HoardToken, 24 => R::HoardAuthority, 25 => R::NeutralToken,
-        26 => R::StructuredRoot, 27 => R::SeriesLinkV2, 28 => R::FundingTermsV2,
+        26 => R::StructuredRoot, 27 => R::SeriesLinkV3, 28 => R::FundingTermsV2,
         29 => R::WrapperReleaseV2, 30 => R::BaseReleaseV2, 31 => R::TokenReleaseV2,
         _ => return None,
     })
@@ -351,10 +355,10 @@ const fn retirement_role(index: usize) -> Option<CurrentStructuredAccountRoleV1>
         14 => R::BaseProgramData, 15 => R::Token2022Program, 16 => R::Token2022ProgramData,
         17 => R::NativeClaimBasis, 18 => R::MarketInstance, 19 => R::HoardV2,
         20 => R::ClaimLedgerV3, 21 => R::WrapperMint, 22 => R::MintAuthority,
-        23 => R::StructuredRoot, 24 => R::SeriesLinkV2, 25 => R::CompilerBundleV6,
-        26 => R::AttachmentV5, 27 => R::RefundOwner, 28 => R::NeutralLamportSink,
+        23 => R::StructuredRoot, 24 => R::SeriesLinkV3, 25 => R::CompilerBundleV7,
+        26 => R::AttachmentV6, 27 => R::RefundOwner, 28 => R::NeutralLamportSink,
         29 => R::WrapperReleaseV2, 30 => R::BaseReleaseV2, 31 => R::TokenReleaseV2,
-        32 => R::SystemProgram, _ => return None,
+        32 => R::SystemProgram, 33 => R::ProductRootV3, _ => return None,
     })
 }
 
@@ -476,8 +480,36 @@ mod tests {
             true,
         )
         .unwrap();
+        let create_root = current_structured_account_meta_v1(
+            StructuredClaimActionV1::CreateDescriptor,
+            35,
+            true,
+        )
+        .unwrap();
+        let terminal_root = current_structured_account_meta_v1(
+            StructuredClaimActionV1::RetireDescriptor,
+            33,
+            true,
+        )
+        .unwrap();
         assert!(create_link.writable);
         assert!(terminal_link.writable);
+        assert!(create_root.writable);
+        assert!(terminal_root.writable);
+        assert!(!current_structured_account_meta_v1(
+            StructuredClaimActionV1::CreateDescriptor,
+            35,
+            false,
+        )
+        .unwrap()
+        .writable);
+        assert!(!current_structured_account_meta_v1(
+            StructuredClaimActionV1::RetireDescriptor,
+            33,
+            false,
+        )
+        .unwrap()
+        .writable);
         assert!(current_structured_account_meta_v1(
             StructuredClaimActionV1::WrapFull,
             0,

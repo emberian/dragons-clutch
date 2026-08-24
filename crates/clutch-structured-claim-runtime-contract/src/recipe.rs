@@ -119,7 +119,7 @@ impl WrapperRecipeV1 {
 /// Exact no-allocation body published through the generic Product artifact
 /// transport for one Product-owned wrapper-recipe set identity.
 ///
-/// Product continues to own only the set ID carried by AttachmentV5.
+/// Product continues to own only the set ID carried by AttachmentV6.
 /// Structured owns these recipe bodies and their fixed-depth membership
 /// semantics. Active recipes are ordered and pairwise distinct; every unused
 /// body is the exact all-zero sentinel.

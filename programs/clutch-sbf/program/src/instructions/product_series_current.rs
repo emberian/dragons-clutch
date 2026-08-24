@@ -103,6 +103,8 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 use clutch_retirement::{DeletableRentOwnerV1, Identity32V1};
 
+pub(crate) mod retirement_v5;
+
 const SERIES_REGISTRY_AUTHENTICATION_DOMAIN_V3: &[u8] =
     b"dragons-clutch/series-registry-account-authentication/v3\0";
 const SERIES_REGISTRY_CAPABILITY_REFS_DOMAIN_V3: &[u8] =
@@ -9254,7 +9256,7 @@ fn require_canonical_market_foundation_core_v3(
             seeds::failure_market_interval_history_v2_pda(program_id, &market, generation).0),
         (MarketFoundationSlotV3::ResolutionV5, seeds::resolution_v5_pda(program_id, &market).0),
         (MarketFoundationSlotV3::ProductReplayAnchor,
-            seeds::product_market_lifecycle_replay_pda(program_id, &market, generation).0),
+            seeds::product_market_lifecycle_replay_v2_pda(program_id, &market).0),
         (MarketFoundationSlotV3::HoardCollateralVault,
             seeds::hoard_token_v2_pda(program_id, &market).0),
     ];
@@ -9300,7 +9302,7 @@ fn require_canonical_market_foundation_graph_v3(
             seeds::failure_market_interval_history_v2_pda(program_id, &market, generation).0),
         (MarketFoundationSlotV3::ResolutionV5, seeds::resolution_v5_pda(program_id, &market).0),
         (MarketFoundationSlotV3::ProductReplayAnchor,
-            seeds::product_market_lifecycle_replay_pda(program_id, &market, generation).0),
+            seeds::product_market_lifecycle_replay_v2_pda(program_id, &market).0),
         (MarketFoundationSlotV3::HoardCollateralVault,
             seeds::hoard_token_v2_pda(program_id, &market).0),
     ];

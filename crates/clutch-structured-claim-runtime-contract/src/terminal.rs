@@ -279,7 +279,7 @@ fn require_distinct_nonzero(identities: &[[u8; 32]]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use clutch_product_series::{
-        CompiledProductSeriesBundleV6Id, MarketInstanceV2Id, SeriesAttachmentPlanV5Id,
+        CompiledProductSeriesBundleV7Id, MarketInstanceV2Id, SeriesAttachmentPlanV6Id,
         SeriesPlanV5Id,
     };
 
@@ -322,8 +322,8 @@ mod tests {
             ordinal: 3,
             market_instance_id: MarketInstanceV2Id::from_bytes([4; 32]),
             generation: 5,
-            attachment_plan_id: SeriesAttachmentPlanV5Id::from_bytes([6; 32]),
-            compiler_output_id: CompiledProductSeriesBundleV6Id::from_bytes([7; 32]),
+            attachment_plan_id: SeriesAttachmentPlanV6Id::from_bytes([6; 32]),
+            compiler_output_id: CompiledProductSeriesBundleV7Id::from_bytes([7; 32]),
             compiler_release_id: id(8),
             registry_release_id: id(9),
             capability_profile_id: id(10),

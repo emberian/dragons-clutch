@@ -7,6 +7,7 @@
 
 use crate::account_index::{
     CanonicalAccountIndex, CanonicalAccountKind, DecodeState, IndexedAccountVersion, IndexedBranch,
+    KeeperHint,
 };
 use crate::action_material::{
     source_action_from_selection, source_role_label_v2, source_selection_action,
@@ -33,6 +34,23 @@ use clutch_solana_layout::registry::{
     RECOVERY_FAMILY_VERSION, SOURCE_SERIES_FAMILY_TAG, SOURCE_SERIES_FAMILY_VERSION,
     STRUCTURED_CLAIM_FAMILY_TAG, STRUCTURED_CLAIM_FAMILY_VERSION,
 };
+use clutch_direct_market_runtime::codec_v3::{
+    authenticate_direct_root_transition_body_v3,
+    decode_direct_action_replay_body_for_transition_v3,
+    decode_direct_selection_body_for_transition_v3,
+};
+use clutch_direct_market_runtime::lifecycle_v2::DirectRootReplayTransitionV2;
+use clutch_direct_market_runtime::selection_v1::DirectSelectionPhaseV1;
+use clutch_direct_market_runtime::{DirectHashBackendV1, DirectRootPhaseV1};
+use clutch_liveness::{
+    RuntimeCompartmentKindV1, RuntimeCompartmentPhaseV1, RuntimeCompartmentV1,
+    RuntimeLivenessPolicyV1, RUNTIME_LIVENESS_ACCOUNT_BYTES_V1,
+    RUNTIME_LIVENESS_POLICY_BYTES_V1,
+};
+use clutch_solana_layout::direct_market_v1::{
+    DirectActionReplayAccountV1, DirectSelectionAccountV1,
+};
+use clutch_solana_layout::direct_market_v3::DirectMarketRootAccountV3;
 use clutch_solana_layout::source_series::account_contract_v2;
 use clutch_fractional_redemption_runtime::{
     FractionalRedemptionActionV1, FRACTIONAL_REDEMPTION_FAMILY_TAG,
@@ -110,7 +128,12 @@ impl ResumableKeeperSelector {
         let accounts = index.current_accounts(commitment);
         let frontier = KeeperFrontier::from_accounts(&accounts);
         for &version in &accounts {
-            let Some(hint) = version.projection.keeper_hint else {
+            let hint = if version.projection.kind == CanonicalAccountKind::DirectMarketRootV3 {
+                current_direct_candidate_hint_v2(&accounts, version, commitment)?
+            } else {
+                version.projection.keeper_hint
+            };
+            let Some(hint) = hint else {
                 continue;
             };
             let Some(lane) = hint.lane else {
@@ -493,11 +516,18 @@ fn dependency_versions<'a>(
             if candidate.account.address == driver.account.address {
                 return true;
             }
+            if direct_candidate_dependency_v2(driver, candidate) {
+                return true;
+            }
             if source_dependency(accounts, driver, candidate) {
                 return true;
             }
             match driver.projection.kind {
                 CanonicalAccountKind::GeneralMarketRuntime => false,
+                // Current Direct dependencies are the exact b1/b2/b3 plus
+                // its bound policy and Candidate row selected above. Do not
+                // widen this set through the generic MarketInstance scope.
+                CanonicalAccountKind::DirectMarketRootV3 => false,
                 CanonicalAccountKind::PositionV3 => {
                     candidate.projection.kind == CanonicalAccountKind::ReplayV3
                         && candidate.projection.primary_binding == Some(driver_address)
@@ -513,6 +543,322 @@ fn dependency_versions<'a>(
             }
         })
         .collect()
+}
+
+fn direct_candidate_dependency_v2(
+    driver: &IndexedAccountVersion,
+    candidate: &IndexedAccountVersion,
+) -> bool {
+    if driver.projection.kind != CanonicalAccountKind::DirectMarketRootV3 {
+        return false;
+    }
+    let Ok(frame) = DirectMarketRootAccountV3::decode(&driver.account.data) else {
+        return false;
+    };
+    let Ok(root) = authenticate_direct_root_transition_body_v3(
+        frame.semantic_body(),
+        &DirectOperatorIndexSha,
+    ) else {
+        return false;
+    };
+    let binding = root.candidate_liveness();
+    let address = candidate.account.address.to_bytes();
+    address == root.action_replay_account()
+        || address == root.selection_account()
+        || address == binding.policy_account
+        || address == binding.candidate_account
+}
+
+/// Derive the current action-5..13 frontier from exact b1/v3+b2+b3 state.
+/// A missed-freeze action 10 is the only partition with no existing b2. The
+/// index never treats its hint as execution authority; the action-specific
+/// material constructor hostile-reopens the same bytes and Clock again.
+fn current_direct_candidate_hint_v2(
+    accounts: &[&IndexedAccountVersion],
+    driver: &IndexedAccountVersion,
+    requested_commitment: RpcCommitment,
+) -> Result<Option<KeeperHint>, KeeperSelectionError> {
+    // Current Direct work is originated only from the fork-independent
+    // finalized index. A processed observation cannot mint this cursor.
+    if requested_commitment != RpcCommitment::Finalized
+        || driver.account.provenance.commitment != RpcCommitment::Finalized
+    {
+        return Ok(None);
+    }
+    let frame = DirectMarketRootAccountV3::decode(&driver.account.data)
+        .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let root = authenticate_direct_root_transition_body_v3(
+        frame.semantic_body(),
+        &DirectOperatorIndexSha,
+    )
+    .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let replay_address = Address::new_from_array(root.action_replay_account());
+    let replay_version = exact_direct_dependency_v2(accounts, driver, replay_address)?;
+    let replay_bytes: &[u8; clutch_solana_layout::registry::DIRECT_ACTION_REPLAY_ACCOUNT_BYTES] =
+        replay_version
+            .account
+            .data
+            .as_slice()
+            .try_into()
+            .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let replay_frame = DirectActionReplayAccountV1::decode(replay_bytes)
+        .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let replay = decode_direct_action_replay_body_for_transition_v3(
+        replay_frame.semantic_body(),
+        &root,
+    )
+    .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let (expected_replay, replay_bump) = Address::find_program_address(
+        &[b"dc:direct-action-replay:v1", driver.account.address.as_ref()],
+        &driver.account.owner,
+    );
+    if replay_version.account.address != expected_replay
+        || replay_frame.bump() != replay_bump
+        || replay_version.account.owner != driver.account.owner
+        || replay_version.account.executable
+        || replay_version.account.provenance.slot != driver.account.provenance.slot
+    {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    let replay_rent = replay.rent();
+    let replay_floor = replay_rent
+        .principal_lamports
+        .checked_add(replay_rent.donation_floor_lamports)
+        .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+    if replay_version.account.lamports < replay_floor {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    let state = DirectRootReplayTransitionV2::authenticate(root, replay)
+        .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let slot = driver.account.provenance.slot;
+    let schedule = state.root().schedule();
+    if state.root().selection_account() == [0; 32] {
+        if state.root().phase() != DirectRootPhaseV1::Open
+            || slot < schedule.submission_closes_slot
+        {
+            return Ok(None);
+        }
+        authenticate_direct_candidate_liveness_v2(accounts, driver, &state)?;
+        return Ok(Some(KeeperHint {
+            lane: Some(WorkflowLane::Candidate),
+            position: WorkflowPosition {
+                phase: u16::from(DirectMarketAction::LapseEmpty.tag()),
+                item: state.replay().next_action_sequence(),
+            },
+            action: "lapse-empty-direct-market",
+        }));
+    }
+
+    let selection_address = Address::new_from_array(state.root().selection_account());
+    let selection_version = exact_direct_dependency_v2(accounts, driver, selection_address)?;
+    let selection_bytes: &[u8; clutch_solana_layout::registry::DIRECT_SELECTION_ACCOUNT_BYTES] =
+        selection_version
+            .account
+            .data
+            .as_slice()
+            .try_into()
+            .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let selection_frame = DirectSelectionAccountV1::decode(selection_bytes)
+        .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let selection = decode_direct_selection_body_for_transition_v3(
+        selection_frame.semantic_body(),
+        state.root(),
+    )
+    .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let (expected_selection, selection_bump) = Address::find_program_address(
+        &[b"dc:direct-selection:v1", driver.account.address.as_ref()],
+        &driver.account.owner,
+    );
+    let selection_rent = selection.rent();
+    let selection_bonds = state
+        .root()
+        .outstanding_candidate_bond_lamports(selection)
+        .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let selection_floor = selection_rent
+        .principal_lamports
+        .checked_add(selection_rent.donation_floor_lamports)
+        .and_then(|value| value.checked_add(selection_bonds))
+        .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+    if selection_version.account.address != expected_selection
+        || selection_frame.bump() != selection_bump
+        || selection.account() != selection_version.account.address.to_bytes()
+        || selection_version.account.owner != driver.account.owner
+        || selection_version.account.executable
+        || selection_version.account.provenance.slot != driver.account.provenance.slot
+        || selection_version.account.lamports < selection_floor
+    {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    let (action, phase) = match state.root().phase() {
+        DirectRootPhaseV1::SubmissionOpen
+            if slot < schedule.submission_closes_slot
+                && selection.phase() == DirectSelectionPhaseV1::SubmissionOpen
+                && selection.candidate_count() == 0 =>
+        {
+            ("submit-direct-candidate", DirectMarketAction::SubmitCandidate.tag())
+        }
+        DirectRootPhaseV1::SubmissionOpen
+            if slot >= schedule.submission_closes_slot
+                && slot < schedule.selection_deadline_slot
+                && selection.phase() == DirectSelectionPhaseV1::SubmissionOpen
+                && selection.candidate_count() > 0 =>
+        {
+            ("begin-direct-verification", DirectMarketAction::BeginVerification.tag())
+        }
+        DirectRootPhaseV1::Verifying
+            if slot < schedule.selection_deadline_slot
+                && selection.phase() == DirectSelectionPhaseV1::Verifying
+                && selection.verification_cursor() < selection.candidate_count() =>
+        {
+            ("verify-direct-candidate", DirectMarketAction::VerifyCandidate.tag())
+        }
+        DirectRootPhaseV1::FrozenEmpty
+            if slot >= schedule.submission_closes_slot
+                && selection.phase() == DirectSelectionPhaseV1::FrozenEmpty =>
+        {
+            ("lapse-empty-direct-market", DirectMarketAction::LapseEmpty.tag())
+        }
+        DirectRootPhaseV1::SubmissionOpen | DirectRootPhaseV1::Verifying
+            if slot >= schedule.selection_deadline_slot
+                && matches!(
+                    selection.phase(),
+                    DirectSelectionPhaseV1::SubmissionOpen
+                        | DirectSelectionPhaseV1::Verifying
+                ) =>
+        {
+            ("lapse-unselected-direct-market", DirectMarketAction::LapseUnselected.tag())
+        }
+        DirectRootPhaseV1::Selected
+            if slot < schedule.settlement_deadline_slot
+                && selection.phase() == DirectSelectionPhaseV1::Selected =>
+        {
+            ("settle-direct-pair", DirectMarketAction::SettlePair.tag())
+        }
+        DirectRootPhaseV1::Selected
+            if slot >= schedule.settlement_deadline_slot
+                && selection.phase() == DirectSelectionPhaseV1::Selected =>
+        {
+            ("lapse-selected-direct-market", DirectMarketAction::LapseSelected.tag())
+        }
+        DirectRootPhaseV1::Terminal
+            if state.replay().phase()
+                == clutch_direct_market_runtime::DirectReplayPhaseV1::Active
+                && state.replay().candidate_liveness_completed_calls() == 7
+                && !state.replay().candidate_liveness_pending()
+                && state.replay().family_terminal_receipt_id() == [0; 32] =>
+        {
+            ("retire-direct-terminal", DirectMarketAction::RetireTerminal.tag())
+        }
+        _ => return Ok(None),
+    };
+    // All work and terminal coordinates spend the same already-capitalized
+    // Candidate row, so the hint requires its exact current policy/postimage.
+    authenticate_direct_candidate_liveness_v2(accounts, driver, &state)?;
+    Ok(Some(KeeperHint {
+        lane: Some(WorkflowLane::Candidate),
+        position: WorkflowPosition {
+            phase: u16::from(phase),
+            item: state.replay().next_action_sequence(),
+        },
+        action,
+    }))
+}
+
+fn authenticate_direct_candidate_liveness_v2(
+    accounts: &[&IndexedAccountVersion],
+    driver: &IndexedAccountVersion,
+    state: &DirectRootReplayTransitionV2,
+) -> Result<(), KeeperSelectionError> {
+    let binding = state.root().candidate_liveness();
+    let policy_version = exact_direct_dependency_v2(
+        accounts,
+        driver,
+        Address::new_from_array(binding.policy_account),
+    )?;
+    let candidate_version = exact_direct_dependency_v2(
+        accounts,
+        driver,
+        Address::new_from_array(binding.candidate_account),
+    )?;
+    if policy_version.account.owner != driver.account.owner
+        || candidate_version.account.owner != driver.account.owner
+        || policy_version.account.executable
+        || candidate_version.account.executable
+        || policy_version.account.provenance.slot != driver.account.provenance.slot
+        || candidate_version.account.provenance.slot != driver.account.provenance.slot
+        || policy_version.account.data.len() != RUNTIME_LIVENESS_POLICY_BYTES_V1
+        || candidate_version.account.data.len() != RUNTIME_LIVENESS_ACCOUNT_BYTES_V1
+    {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    let policy = RuntimeLivenessPolicyV1::decode(&policy_version.account.data)
+        .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let candidate = RuntimeCompartmentV1::decode(&candidate_version.account.data)
+        .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    candidate
+        .validate_against_policy(policy)
+        .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    let policy_data_id: [u8; 32] = Sha256::digest(&policy_version.account.data).into();
+    let candidate_data_id: [u8; 32] = Sha256::digest(&candidate_version.account.data).into();
+    let expected_balance = candidate
+        .expected_account_balance_lamports()
+        .map_err(|_| KeeperSelectionError::IncompleteCanonicalHint)?;
+    if policy_data_id != binding.policy_data_id
+        || policy.policy_id.bytes() != state.root().candidate_liveness_policy_id()
+        || policy.policy_id.bytes() != binding.policy_account
+        || policy.realm_id.bytes() != state.root().realm_id()
+        || policy.neutral_sink.bytes() != state.root().neutral_lamport_sink()
+        || candidate.kind != RuntimeCompartmentKindV1::Candidate
+        || candidate.phase != RuntimeCompartmentPhaseV1::Active
+        || candidate.remaining_calls == 0
+        || candidate.identity.lifecycle_id.bytes() != binding.global_lifecycle_id
+        || candidate.identity.account_id.bytes() != binding.candidate_account
+        || candidate.identity.owner.bytes() != binding.candidate_semantic_owner
+        || candidate.identity.generation != binding.candidate_generation
+        || candidate.identity.neutral_sink.bytes() != state.root().neutral_lamport_sink()
+        || candidate.quote_schedule_id.bytes() != binding.candidate_quote_schedule_id
+        || candidate.receipt_program_id.bytes() != binding.candidate_receipt_program_id
+        || candidate.receipt_program_id.bytes() != driver.account.owner.to_bytes()
+        || candidate_version.account.lamports < expected_balance
+        || (state.replay().candidate_liveness_completed_calls() == 0
+            && candidate_data_id != binding.candidate_data_id)
+    {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    Ok(())
+}
+
+fn exact_direct_dependency_v2<'a>(
+    accounts: &[&'a IndexedAccountVersion],
+    driver: &IndexedAccountVersion,
+    address: Address,
+) -> Result<&'a IndexedAccountVersion, KeeperSelectionError> {
+    let mut matches = accounts.iter().copied().filter(|version| {
+        version.account.address == address
+            && version.account.provenance.release_key
+                == driver.account.provenance.release_key
+            && version.account.provenance.commitment
+                == driver.account.provenance.commitment
+    });
+    let found = matches
+        .next()
+        .ok_or(KeeperSelectionError::IncompleteCanonicalHint)?;
+    if matches.next().is_some() {
+        return Err(KeeperSelectionError::IncompleteCanonicalHint);
+    }
+    Ok(found)
+}
+
+struct DirectOperatorIndexSha;
+
+impl DirectHashBackendV1 for DirectOperatorIndexSha {
+    fn sha256_parts(&self, parts: &[&[u8]]) -> [u8; 32] {
+        let mut hash = Sha256::new();
+        for part in parts {
+            hash.update(part);
+        }
+        hash.finalize().into()
+    }
 }
 
 fn source_dependency(

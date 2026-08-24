@@ -150,7 +150,7 @@ impl DirectFeePolicyV2 {
         Ok(())
     }
 
-    /// Canonical identity committed by b1/v2 and its reservation descendants.
+    /// Canonical identity committed by b1/v3 and its reservation descendants.
     pub fn semantic_id<B: DirectHashBackendV1>(
         self,
         backend: &B,

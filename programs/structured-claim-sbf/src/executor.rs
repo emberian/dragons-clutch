@@ -4,10 +4,11 @@ use clutch_collateral_adapter_v2::{
     ClaimLedgerV3, HoardV2, MarketLiabilityLifecycleV1, ResolutionStateV5, ResolutionV5,
 };
 use clutch_product_series::{
-    CompiledProductSeriesBundleV6, ContentId, FixedCodec, MarketInstancePreimageV2,
-    NativeClaimBasisV1, RegistryCapabilityProfileV4,
-    SeriesAttachmentPlanV5, SeriesLinkObligationStatusV2, SeriesLinkObligationV2,
-    SeriesMarketLinkPhaseV2,
+    CompiledProductSeriesBundleV7, ContentId, FixedCodec, MarketFamilyStatusV1,
+    MarketFamilyV1, MarketInstancePreimageV2, NativeClaimBasisV1,
+    RegistryCapabilityProfileV4,
+    SeriesAttachmentPlanV6, SeriesLinkObligationStatusV3, SeriesLinkObligationV3,
+    SeriesMarketLinkPhaseV3,
 };
 use clutch_retirement::{
     PositionAccountV3, PositionPurposeV3, PositionV3Sha256Backend, ReplayV3Envelope,
@@ -15,9 +16,10 @@ use clutch_retirement::{
 };
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::product_series::{
-    series_market_link_authentication_id_v2, SeriesMarketLinkAccountV2,
-    SeriesRegistryAccountV3, SERIES_MARKET_LINK_ACCOUNT_BYTES_V2,
-    SERIES_REGISTRY_ACCOUNT_BYTES_V3,
+    series_market_link_authentication_id_v3, MarketLifecycleRootAccountV3,
+    SeriesMarketLinkAccountV3, SeriesRegistryAccountV4,
+    MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V3, SERIES_MARKET_LINK_ACCOUNT_BYTES_V3,
+    SERIES_REGISTRY_ACCOUNT_BYTES_V4,
 };
 use clutch_solana_layout::registry::{
     ExtensionAction, ExtensionFamily, StructuredClaimAction,
@@ -104,11 +106,13 @@ const CREATE_SERIES_LINK: usize = 26;
 const CREATE_COMPILER_BUNDLE: usize = 27;
 const CREATE_ATTACHMENT: usize = 28;
 const CREATE_RECIPE_SET: usize = 29;
-const CREATE_SERIES_REGISTRY_V3: usize = 30;
+const CREATE_SERIES_REGISTRY_V4: usize = 30;
 const CREATE_REGISTRY_RELEASE_V2: usize = 31;
 const CREATE_CAPABILITY_PROFILE_V4: usize = 32;
 const CREATE_WRAPPER_RELEASE_V2: usize = 33;
 const CREATE_TOKEN_RELEASE_V2: usize = 34;
+const CREATE_PRODUCT_ROOT_V3: usize = 35;
+const _: () = assert!(CREATE_PRODUCT_ROOT_V3 + 1 == CREATE_ACCOUNT_COUNT);
 const STRUCTURED_ROOT_SEED_V1: &[u8] = b"dc:structured-root:v1";
 const COMPACTION_TOKEN_IDENTITY_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-claim/compaction-token-identity/v1\0";
@@ -205,7 +209,8 @@ const R_WRAPPER_RELEASE: usize = 29;
 const R_BASE_RELEASE: usize = 30;
 const R_TOKEN_RELEASE: usize = 31;
 const R_SYSTEM: usize = 32;
-const _: () = assert!(R_SYSTEM + 1 == RETIREMENT_ACCOUNT_COUNT);
+const R_PRODUCT_ROOT_V3: usize = 33;
+const _: () = assert!(R_PRODUCT_ROOT_V3 + 1 == RETIREMENT_ACCOUNT_COUNT);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct AuthenticatedStructuredDeploymentsV2 {
@@ -609,13 +614,69 @@ fn retire_descriptor(
     let refund_balance_before = accounts[R_REFUND_OWNER].lamports();
     let sink_balance_before = accounts[R_NEUTRAL_SINK].lamports();
     let link_balance_before = accounts[R_LINK].lamports();
+    let product_root_balance_before = accounts[R_PRODUCT_ROOT_V3].lamports();
+    let product_root_data_before = accounts[R_PRODUCT_ROOT_V3]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let mut product_root_before = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    MarketLifecycleRootAccountV3::decode_into(
+        &product_root_data_before,
+        &mut product_root_before,
+    )
+    .map_err(|_| WrapperError::Identity)?;
+    drop(product_root_data_before);
     let link_data_before = accounts[R_LINK]
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
-    let mut link_before = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
-    SeriesMarketLinkAccountV2::decode_into(&link_data_before, &mut link_before)
+    let mut link_before = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    SeriesMarketLinkAccountV3::decode_into(&link_data_before, &mut link_before)
         .map_err(|_| WrapperError::Identity)?;
     drop(link_data_before);
+    let product_binding = product_root_before.state.binding_ref();
+    let link_binding = link_before.state.binding_ref();
+    let product_binding_id = product_binding
+        .id()
+        .map_err(|_| WrapperError::Identity)?;
+    let product_root_pda = Pubkey::find_program_address(
+        &[
+            b"dc:market-lifecycle-root:v1",
+            &product_binding.market_instance_id.bytes(),
+            &product_binding.generation.to_le_bytes(),
+        ],
+        accounts[R_BASE_PROGRAM].key,
+    );
+    if *accounts[R_PRODUCT_ROOT_V3].key != product_root_pda.0
+        || product_root_before.stored_bump != product_root_pda.1
+        || product_root_balance_before < product_root_before.rent_principal_lamports
+        || link_binding.market_root_account_id.bytes()
+            != accounts[R_PRODUCT_ROOT_V3].key.to_bytes()
+        || link_binding.market_binding_id != product_binding_id
+        || product_binding.market_instance_id != root_before.binding.market_instance_id
+        || product_binding.generation != root_before.binding.generation
+        || product_binding.registry_release_id != root_before.binding.registry_release_id
+        || product_binding.capability_profile_id != root_before.binding.capability_profile_id
+        || !matches!(
+            product_root_before.state.phase(),
+            clutch_product_series::MarketLifecyclePhaseV3::Active
+                | clutch_product_series::MarketLifecyclePhaseV3::Retiring
+        )
+        || product_root_before
+            .state
+            .product_families()
+            .family(MarketFamilyV1::Structured)
+            .status()
+            != MarketFamilyStatusV1::Live
+        || link_before
+            .state
+            .obligation_status(SeriesLinkObligationV3::Structured)
+            != SeriesLinkObligationStatusV3::Live
+        || link_before
+            .state
+            .obligation_status(SeriesLinkObligationV3::Wrapper)
+            != SeriesLinkObligationStatusV3::Live
+    {
+        return Err(WrapperError::Identity);
+    }
 
     let revoke = plan_token_2022_cpi_v1(
         accounts[R_TOKEN_PROGRAM].key.to_bytes(),
@@ -670,6 +731,8 @@ fn retire_descriptor(
         sink_balance_before,
         link_balance_before,
         &link_before,
+        product_root_balance_before,
+        &product_root_before,
         family_terminal,
         &bound,
     )
@@ -1247,10 +1310,12 @@ fn validate_create_accounts(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -
     for index in [PAYER, CREATE_POSITION, CREATE_REPLAY, CREATE_DESCRIPTOR, CREATE_MINT, CREATE_STRUCTURED_ROOT] {
         writable[index] = true;
     }
-    writable[CREATE_SERIES_LINK] = structured_root_requires_product_write(
+    let requires_product_admission = structured_root_requires_product_write(
         accounts[CREATE_STRUCTURED_ROOT].owner,
         accounts[CREATE_STRUCTURED_ROOT].data_len(),
     );
+    writable[CREATE_SERIES_LINK] = requires_product_admission;
+    writable[CREATE_PRODUCT_ROOT_V3] = requires_product_admission;
     let mut executable = [false; CREATE_ACCOUNT_COUNT];
     for index in [SYSTEM, CREATE_COLLATERAL_TOKEN, CREATE_WRAPPER_PROGRAM, CREATE_BASE_PROGRAM, CREATE_TOKEN_PROGRAM] {
         executable[index] = true;
@@ -1260,6 +1325,9 @@ fn validate_create_accounts(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -
         || accounts[CREATE_DESCRIPTOR].key == accounts[CREATE_MINT].key
         || accounts[CREATE_POSITION].key == accounts[CREATE_REPLAY].key
         || accounts[PAYER].key == accounts[VAULT_AUTHORITY].key
+        || accounts[CREATE_PRODUCT_ROOT_V3].owner != accounts[CREATE_BASE_PROGRAM].key
+        || accounts[CREATE_PRODUCT_ROOT_V3].data_len()
+            != MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V3
     {
         return Err(WrapperError::Accounts);
     }
@@ -1299,7 +1367,7 @@ fn authenticate_create_recipe_set(
     let attachment_data = accounts[CREATE_ATTACHMENT]
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
-    let attachment = SeriesAttachmentPlanV5::decode(&attachment_data)
+    let attachment = SeriesAttachmentPlanV6::decode(&attachment_data)
         .map_err(|_| WrapperError::Identity)?;
     drop(attachment_data);
     let recipe_data = accounts[CREATE_RECIPE_SET]
@@ -1518,6 +1586,9 @@ fn validate_retirement_accounts(
         || accounts[R_REPLAY].owner != accounts[R_BASE_PROGRAM].key
         || accounts[R_ROOT].owner != accounts[R_BASE_PROGRAM].key
         || accounts[R_LINK].owner != accounts[R_BASE_PROGRAM].key
+        || accounts[R_PRODUCT_ROOT_V3].owner != accounts[R_BASE_PROGRAM].key
+        || accounts[R_PRODUCT_ROOT_V3].data_len()
+            != MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V3
         || accounts[R_COMPILER_BUNDLE].owner != accounts[R_BASE_PROGRAM].key
         || accounts[R_ATTACHMENT].owner != accounts[R_BASE_PROGRAM].key
         || accounts[R_DESCRIPTOR].owner != program_id
@@ -1574,6 +1645,7 @@ const fn retirement_account_writable(index: usize, _family_terminal: bool) -> bo
             | R_REFUND_OWNER
             | R_NEUTRAL_SINK
     )
+        || (_family_terminal && matches!(index, R_LINK | R_PRODUCT_ROOT_V3))
 }
 
 fn validate_privileges<const N: usize>(
@@ -2219,7 +2291,9 @@ fn reconcile_retirement(
     refund_balance_before: u64,
     sink_balance_before: u64,
     link_balance_before: u64,
-    link_before: &SeriesMarketLinkAccountV2,
+    link_before: &SeriesMarketLinkAccountV3,
+    product_root_balance_before: u64,
+    product_root_before: &MarketLifecycleRootAccountV3,
     family_terminal: bool,
     bound: &clutch_structured_claim_adapter::BoundDescriptorV1,
 ) -> Result<()> {
@@ -2324,7 +2398,7 @@ fn reconcile_retirement(
             .content_id(),
         product_admission_receipt_id: link_before
             .state
-            .obligation_admission_receipt_id(SeriesLinkObligationV2::Wrapper),
+            .obligation_admission_receipt_id(SeriesLinkObligationV3::Wrapper),
         last_observed_link_transition_sequence: link_before.state.transition_sequence(),
     };
     if family_terminal {
@@ -2405,11 +2479,15 @@ fn reconcile_retirement(
                 .last_observed_link_transition_sequence
         || link_before
             .state
-            .obligation_status(SeriesLinkObligationV2::Wrapper)
-            != SeriesLinkObligationStatusV2::Live
+            .obligation_status(SeriesLinkObligationV3::Structured)
+            != SeriesLinkObligationStatusV3::Live
         || link_before
             .state
-            .obligation_admission_receipt_id(SeriesLinkObligationV2::Wrapper)
+            .obligation_status(SeriesLinkObligationV3::Wrapper)
+            != SeriesLinkObligationStatusV3::Live
+        || link_before
+            .state
+            .obligation_admission_receipt_id(SeriesLinkObligationV3::Wrapper)
             != root_before.product_lineage.product_admission_receipt_id
     {
         return Err(WrapperError::BaseCustody);
@@ -2417,15 +2495,177 @@ fn reconcile_retirement(
     let link_data_after = accounts[R_LINK]
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
-    let mut link_after = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
-    SeriesMarketLinkAccountV2::decode_into(&link_data_after, &mut link_after)
+    let mut link_after = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    SeriesMarketLinkAccountV3::decode_into(&link_data_after, &mut link_after)
         .map_err(|_| WrapperError::Identity)?;
-    if *link_after != *link_before {
+    drop(link_data_after);
+    let product_root_data_after = accounts[R_PRODUCT_ROOT_V3]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let mut product_root_after = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    MarketLifecycleRootAccountV3::decode_into(
+        &product_root_data_after,
+        &mut product_root_after,
+    )
+    .map_err(|_| WrapperError::Identity)?;
+    drop(product_root_data_after);
+    if accounts[R_LINK].lamports() != link_balance_before
+        || accounts[R_PRODUCT_ROOT_V3].lamports() != product_root_balance_before
+        || product_root_after.rent_principal_lamports
+            != product_root_before.rent_principal_lamports
+        || product_root_after.stored_bump != product_root_before.stored_bump
+    {
         return Err(WrapperError::BaseCustody);
     }
-    drop(link_data_after);
-    if accounts[R_LINK].lamports() != link_balance_before {
+    if family_terminal {
+        reconcile_product_structured_terminal(
+            product_root_before,
+            &product_root_after,
+            link_before,
+            &link_after,
+        )?;
+    } else if *link_after != *link_before || *product_root_after != *product_root_before {
         return Err(WrapperError::BaseCustody);
+    }
+    Ok(())
+}
+
+fn reconcile_product_structured_terminal(
+    root_before: &MarketLifecycleRootAccountV3,
+    root_after: &MarketLifecycleRootAccountV3,
+    link_before: &SeriesMarketLinkAccountV3,
+    link_after: &SeriesMarketLinkAccountV3,
+) -> Result<()> {
+    let before_families = root_before.state.product_families();
+    let after_families = root_after.state.product_families();
+    let before_structured = before_families.family(MarketFamilyV1::Structured);
+    let after_structured = after_families.family(MarketFamilyV1::Structured);
+    let expected_live = before_structured
+        .counts()
+        .live
+        .checked_sub(1)
+        .ok_or(WrapperError::Arithmetic)?;
+    let expected_terminal = before_structured
+        .counts()
+        .terminal
+        .checked_add(1)
+        .ok_or(WrapperError::Arithmetic)?;
+    if root_after.state.binding_ref() != root_before.state.binding_ref()
+        || root_after.state.phase() != root_before.state.phase()
+        || root_after.state.transition_sequence()
+            != root_before
+                .state
+                .transition_sequence()
+                .checked_add(1)
+                .ok_or(WrapperError::Arithmetic)?
+        || root_after.state.capital() != root_before.state.capital()
+        || root_after.state.foundation() != root_before.state.foundation()
+        || root_after.state.admitted_series_links() != root_before.state.admitted_series_links()
+        || root_after.state.live_series_links() != root_before.state.live_series_links()
+        || root_after.state.retired_series_links() != root_before.state.retired_series_links()
+        || root_after.state.shared_core_terminal_receipts()
+            != root_before.state.shared_core_terminal_receipts()
+        || root_after.state.resolution_semantic_id() != root_before.state.resolution_semantic_id()
+        || root_after.state.resolution_data_id() != root_before.state.resolution_data_id()
+        || root_after.state.resolution_activation_receipt_id()
+            != root_before.state.resolution_activation_receipt_id()
+        || after_families.binding() != before_families.binding()
+        || after_families.phase() != before_families.phase()
+        || after_families.transition_sequence()
+            != before_families
+                .transition_sequence()
+                .checked_add(1)
+                .ok_or(WrapperError::Arithmetic)?
+        || after_structured.counts().admitted != before_structured.counts().admitted
+        || after_structured.counts().live != expected_live
+        || after_structured.counts().terminal != expected_terminal
+        || after_structured.last_admission_transition_id()
+            != before_structured.last_admission_transition_id()
+        || after_structured.last_terminal_transition_id().is_zero()
+        || after_structured.last_terminal_transition_id()
+            == before_structured.last_terminal_transition_id()
+        || after_structured.status()
+            != if expected_live == 0 {
+                MarketFamilyStatusV1::Terminal
+            } else {
+                MarketFamilyStatusV1::Live
+            }
+    {
+        return Err(WrapperError::BaseCustody);
+    }
+    for family in [
+        MarketFamilyV1::General,
+        MarketFamilyV1::Direct,
+        MarketFamilyV1::Fractional,
+        MarketFamilyV1::Dealer,
+    ] {
+        if after_families.family(family) != before_families.family(family) {
+            return Err(WrapperError::BaseCustody);
+        }
+    }
+
+    if link_after.state.binding_ref() != link_before.state.binding_ref()
+        || link_after.state.transition_sequence()
+            != link_before
+                .state
+                .transition_sequence()
+                .checked_add(2)
+                .ok_or(WrapperError::Arithmetic)?
+        || link_after.state.market_admission_sequence()
+            != link_before.state.market_admission_sequence()
+        || link_after.state.market_admission_receipt_id()
+            != link_before.state.market_admission_receipt_id()
+        || link_after.state.rent_principal_lamports()
+            != link_before.state.rent_principal_lamports()
+        || link_after.state.current_donation_lamports()
+            != link_before.state.current_donation_lamports()
+        || link_after.state.active_failure_sessions()
+            != link_before.state.active_failure_sessions()
+        || link_after.state.failure_sessions_started()
+            != link_before.state.failure_sessions_started()
+        || link_after.state.failure_session_transcript_id()
+            != link_before.state.failure_session_transcript_id()
+        || link_after
+            .state
+            .obligation_status(SeriesLinkObligationV3::Structured)
+            != SeriesLinkObligationStatusV3::Terminal
+        || link_after
+            .state
+            .obligation_status(SeriesLinkObligationV3::Wrapper)
+            != SeriesLinkObligationStatusV3::Terminal
+        || link_after
+            .state
+            .obligation_admission_receipt_id(SeriesLinkObligationV3::Structured)
+            != link_before
+                .state
+                .obligation_admission_receipt_id(SeriesLinkObligationV3::Structured)
+        || link_after
+            .state
+            .obligation_admission_receipt_id(SeriesLinkObligationV3::Wrapper)
+            != link_before
+                .state
+                .obligation_admission_receipt_id(SeriesLinkObligationV3::Wrapper)
+        || link_after
+            .state
+            .obligation_terminal_receipt_id(SeriesLinkObligationV3::Structured)
+            .is_zero()
+        || link_after
+            .state
+            .obligation_terminal_receipt_id(SeriesLinkObligationV3::Wrapper)
+            .is_zero()
+    {
+        return Err(WrapperError::BaseCustody);
+    }
+    for obligation in [SeriesLinkObligationV3::Dealer, SeriesLinkObligationV3::Liquidity] {
+        if link_after.state.obligation_status(obligation)
+                != link_before.state.obligation_status(obligation)
+            || link_after.state.obligation_admission_receipt_id(obligation)
+                != link_before.state.obligation_admission_receipt_id(obligation)
+            || link_after.state.obligation_terminal_receipt_id(obligation)
+                != link_before.state.obligation_terminal_receipt_id(obligation)
+        {
+            return Err(WrapperError::BaseCustody);
+        }
     }
     Ok(())
 }
@@ -2550,7 +2790,8 @@ fn invoke_base_create(
             is_writable: matches!(
                 index,
                 PAYER | CREATE_POSITION | CREATE_REPLAY | CREATE_STRUCTURED_ROOT
-            ) || (index == CREATE_SERIES_LINK && accounts[index].is_writable),
+            ) || (matches!(index, CREATE_SERIES_LINK | CREATE_PRODUCT_ROOT_V3)
+                && accounts[index].is_writable),
         });
         infos.push(accounts[index].clone());
         index += 1;
@@ -3069,7 +3310,7 @@ fn reconcile_product_series_link(
 ) -> Result<()> {
     let account = &accounts[CREATE_SERIES_LINK];
     if account.owner != accounts[CREATE_BASE_PROGRAM].key
-        || account.data_len() != SERIES_MARKET_LINK_ACCOUNT_BYTES_V2
+        || account.data_len() != SERIES_MARKET_LINK_ACCOUNT_BYTES_V3
         || account.is_signer
         || account.is_writable != expected_writable
         || account.executable
@@ -3081,11 +3322,30 @@ fn reconcile_product_series_link(
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
     let framed_data_id = hashv(&[&data[..]]).to_bytes();
-    let mut link = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
-    SeriesMarketLinkAccountV2::decode_into(&data, &mut link)
+    let mut link = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    SeriesMarketLinkAccountV3::decode_into(&data, &mut link)
         .map_err(|_| WrapperError::Identity)?;
     drop(data);
     let binding = link.state.binding();
+    let product_root_data = accounts[CREATE_PRODUCT_ROOT_V3]
+        .try_borrow_data()
+        .map_err(|_| WrapperError::Borrow)?;
+    let mut product_root = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    MarketLifecycleRootAccountV3::decode_into(&product_root_data, &mut product_root)
+        .map_err(|_| WrapperError::Identity)?;
+    drop(product_root_data);
+    let product_binding = product_root.state.binding_ref();
+    let product_binding_id = product_binding
+        .id()
+        .map_err(|_| WrapperError::Identity)?;
+    let product_root_pda = Pubkey::find_program_address(
+        &[
+            b"dc:market-lifecycle-root:v1",
+            &product_binding.market_instance_id.bytes(),
+            &product_binding.generation.to_le_bytes(),
+        ],
+        accounts[CREATE_BASE_PROGRAM].key,
+    );
     let semantic_id = link
         .state
         .semantic_id()
@@ -3106,7 +3366,7 @@ fn reconcile_product_series_link(
         .checked_add(link.state.current_donation_lamports())
         .ok_or(WrapperError::Arithmetic)?;
     let authentication_id = ContentId::from_bytes(
-        series_market_link_authentication_id_v2(
+        series_market_link_authentication_id_v3(
             account.key.to_bytes(),
             accounts[CREATE_BASE_PROGRAM].key.to_bytes(),
             framed_data_id,
@@ -3119,6 +3379,30 @@ fn reconcile_product_series_link(
     if *account.key != expected_pda.0
         || link.stored_bump != expected_pda.1
         || observed_lamports < accounted_lamports
+        || *accounts[CREATE_PRODUCT_ROOT_V3].key != product_root_pda.0
+        || product_root.stored_bump != product_root_pda.1
+        || accounts[CREATE_PRODUCT_ROOT_V3].lamports() < product_root.rent_principal_lamports
+        || accounts[CREATE_PRODUCT_ROOT_V3].is_signer
+        || accounts[CREATE_PRODUCT_ROOT_V3].is_writable != expected_writable
+        || accounts[CREATE_PRODUCT_ROOT_V3].executable
+        || product_binding_id != binding.market_binding_id
+        || binding.market_root_account_id.bytes()
+            != accounts[CREATE_PRODUCT_ROOT_V3].key.to_bytes()
+        || product_binding.market_instance_id != binding.market_instance_id
+        || product_binding.generation != binding.generation
+        || product_binding.registry_release_id != root.binding.registry_release_id
+        || product_binding.capability_profile_id != binding.capability_profile_id
+        || !matches!(
+            product_root.state.phase(),
+            clutch_product_series::MarketLifecyclePhaseV3::Active
+                | clutch_product_series::MarketLifecyclePhaseV3::Retiring
+        )
+        || product_root
+            .state
+            .product_families()
+            .family(MarketFamilyV1::Structured)
+            .status()
+            != MarketFamilyStatusV1::Live
         || binding.series_plan_id != root.binding.series_plan_id
         || binding.ordinal != root.binding.ordinal
         || binding.market_instance_id != root.binding.market_instance_id
@@ -3128,14 +3412,18 @@ fn reconcile_product_series_link(
         || binding.capability_profile_id != root.binding.capability_profile_id
         || binding.rent_refund_owner != root.binding.rent_refund_owner
         || binding.neutral_lamport_sink != root.binding.neutral_lamport_sink
-        || link.state.phase() != SeriesMarketLinkPhaseV2::Active
+        || link.state.phase() != SeriesMarketLinkPhaseV3::Active
         || link
             .state
-            .obligation_status(SeriesLinkObligationV2::Wrapper)
-            != SeriesLinkObligationStatusV2::Live
+            .obligation_status(SeriesLinkObligationV3::Structured)
+            != SeriesLinkObligationStatusV3::Live
         || link
             .state
-            .obligation_admission_receipt_id(SeriesLinkObligationV2::Wrapper)
+            .obligation_status(SeriesLinkObligationV3::Wrapper)
+            != SeriesLinkObligationStatusV3::Live
+        || link
+            .state
+            .obligation_admission_receipt_id(SeriesLinkObligationV3::Wrapper)
             != root.product_lineage.product_admission_receipt_id
         || binding.id().map_err(|_| WrapperError::Identity)?
             != root.product_lineage.link_binding_id
@@ -3156,17 +3444,17 @@ fn decode_structured_product_artifacts(
     accounts: &[AccountInfo<'_>],
     deployments: AuthenticatedStructuredDeploymentsV2,
 ) -> Result<(
-    Box<CompiledProductSeriesBundleV6>,
-    Box<SeriesAttachmentPlanV5>,
-    SeriesRegistryAccountV3,
+    Box<CompiledProductSeriesBundleV7>,
+    Box<SeriesAttachmentPlanV6>,
+    SeriesRegistryAccountV4,
     Box<RegistryCapabilityProfileV4>,
 )> {
     if accounts[CREATE_COMPILER_BUNDLE].owner != accounts[CREATE_BASE_PROGRAM].key
         || accounts[CREATE_ATTACHMENT].owner != accounts[CREATE_BASE_PROGRAM].key
         || accounts[CREATE_RECIPE_SET].owner != accounts[CREATE_BASE_PROGRAM].key
-        || accounts[CREATE_SERIES_REGISTRY_V3].owner != accounts[CREATE_BASE_PROGRAM].key
+        || accounts[CREATE_SERIES_REGISTRY_V4].owner != accounts[CREATE_BASE_PROGRAM].key
         || accounts[CREATE_CAPABILITY_PROFILE_V4].owner != accounts[CREATE_BASE_PROGRAM].key
-        || accounts[CREATE_SERIES_REGISTRY_V3].data_len() != SERIES_REGISTRY_ACCOUNT_BYTES_V3
+        || accounts[CREATE_SERIES_REGISTRY_V4].data_len() != SERIES_REGISTRY_ACCOUNT_BYTES_V4
     {
         return Err(WrapperError::Identity);
     }
@@ -3174,7 +3462,7 @@ fn decode_structured_product_artifacts(
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
     let bundle = Box::new(
-        CompiledProductSeriesBundleV6::decode(&bundle_data)
+        CompiledProductSeriesBundleV7::decode(&bundle_data)
             .map_err(|_| WrapperError::Identity)?,
     );
     drop(bundle_data);
@@ -3182,14 +3470,14 @@ fn decode_structured_product_artifacts(
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
     let attachment = Box::new(
-        SeriesAttachmentPlanV5::decode(&attachment_data)
+        SeriesAttachmentPlanV6::decode(&attachment_data)
             .map_err(|_| WrapperError::Identity)?,
     );
     drop(attachment_data);
-    let registry_data = accounts[CREATE_SERIES_REGISTRY_V3]
+    let registry_data = accounts[CREATE_SERIES_REGISTRY_V4]
         .try_borrow_data()
         .map_err(|_| WrapperError::Borrow)?;
-    let registry = SeriesRegistryAccountV3::decode(&registry_data)
+    let registry = SeriesRegistryAccountV4::decode(&registry_data)
         .map_err(|_| WrapperError::Identity)?;
     drop(registry_data);
     let profile_data = accounts[CREATE_CAPABILITY_PROFILE_V4]
@@ -3208,13 +3496,13 @@ fn decode_structured_product_artifacts(
     if *accounts[CREATE_COMPILER_BUNDLE].key
         != product_artifact_pda(
             accounts[CREATE_BASE_PROGRAM].key,
-            ArtifactKind::CompiledProductSeriesBundleV6.byte(),
+            ArtifactKind::CompiledProductSeriesBundleV7.byte(),
             bundle_id,
         )
         || *accounts[CREATE_ATTACHMENT].key
             != product_artifact_pda(
                 accounts[CREATE_BASE_PROGRAM].key,
-                ArtifactKind::SeriesAttachmentPlanV5.byte(),
+                ArtifactKind::SeriesAttachmentPlanV6.byte(),
                 attachment_id,
             )
         || *accounts[CREATE_CAPABILITY_PROFILE_V4].key
@@ -3231,10 +3519,10 @@ fn decode_structured_product_artifacts(
                 &[b"dc:series-registry:v1", &registry.series_plan_id.bytes()],
                 accounts[CREATE_BASE_PROGRAM].key,
             );
-            *accounts[CREATE_SERIES_REGISTRY_V3].key != expected_registry.0
+            *accounts[CREATE_SERIES_REGISTRY_V4].key != expected_registry.0
                 || registry.stored_bump != expected_registry.1
         }
-        || accounts[CREATE_SERIES_REGISTRY_V3].lamports() < registry.rent_principal_lamports
+        || accounts[CREATE_SERIES_REGISTRY_V4].lamports() < registry.rent_principal_lamports
         || registry.registry_release_id != deployments.base_release_id
         || registry.capability_profile_id
             != profile.id().map_err(|_| WrapperError::Identity)?.content_id()
@@ -3270,6 +3558,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn wrapper_decodes_only_current_product_structured_artifacts() {
+        let source = include_str!("executor.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        for required in [
+            "SeriesMarketLinkAccountV3",
+            "series_market_link_authentication_id_v3(",
+            "SeriesRegistryAccountV4",
+            "CompiledProductSeriesBundleV7",
+            "SeriesAttachmentPlanV6",
+        ] {
+            assert!(production.contains(required));
+        }
+        for withdrawn in [
+            "SeriesMarketLinkAccountV2",
+            "series_market_link_authentication_id_v2(",
+            "SeriesRegistryAccountV3",
+            "CompiledProductSeriesBundleV6",
+            "SeriesAttachmentPlanV5",
+        ] {
+            assert!(!production.contains(withdrawn));
+        }
+    }
+
+    #[test]
     fn later_root_refuses_product_link_write_privilege() {
         assert!(structured_root_requires_product_write(&system_program::ID, 0));
         assert!(!structured_root_requires_product_write(&system_program::ID, 1));
@@ -3280,10 +3592,12 @@ mod tests {
     }
 
     #[test]
-    fn retirement_owner_never_borrows_product_link_write_privilege() {
-        assert_eq!(RETIREMENT_ACCOUNT_COUNT, 33);
+    fn retirement_owner_mutates_product_root_and_link_only_for_family_terminal() {
+        assert_eq!(RETIREMENT_ACCOUNT_COUNT, 34);
         assert!(!retirement_account_writable(R_LINK, false));
-        assert!(!retirement_account_writable(R_LINK, true));
+        assert!(retirement_account_writable(R_LINK, true));
+        assert!(!retirement_account_writable(R_PRODUCT_ROOT_V3, false));
+        assert!(retirement_account_writable(R_PRODUCT_ROOT_V3, true));
         for index in [R_DESCRIPTOR, R_MINT, R_POSITION, R_REPLAY, R_ROOT] {
             assert!(retirement_account_writable(index, false));
             assert!(retirement_account_writable(index, true));
