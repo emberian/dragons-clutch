@@ -335,6 +335,36 @@ test("fractional_bearer_material_exposes_choices_without_account_meta_authority"
   assert.equal(result.metaRefused, true);
 });
 
+test("fractional_credit_transfer_binds_holder_route_to_exact_geometry", () => {
+  const context = browserRealm("chain-client.js");
+  const result = vm.runInContext(`(() => {
+    const address = (value) => GlassChainClient.encodeBase58(new Uint8Array(32).fill(value));
+    const labels = ["source-claimant", "destination-claimant", "realm", "profile", "collateral-policy", "collateral-token-program", "market-binding-v2", "market-runtime-v3", "market-instance-preimage-v2", "hoard-v2", "claim-ledger-v3", "resolution-v5", "fractional-policy-v3", "fractional-ledger-v1", "source-credit-v2", "destination-credit-v2", "payout-and-lifecycle-role", "payout-and-lifecycle-role", "payout-and-lifecycle-role", "payout-and-lifecycle-role", "payout-and-lifecycle-role"];
+    const writable = new Set([9, 10, 13, 14, 15, 16, 17]);
+    const addresses = labels.map((_, index) => address(index + 1));
+    const manifest = "51".repeat(32), profile = "52".repeat(32), elf = "53".repeat(32), state = "54".repeat(32);
+    const releaseKey = address(50) + ":1:" + elf + ":" + manifest;
+    const coordinate = { familyTag: "79", familyVersion: "1", localAction: "6", family: "fractional", action: "transfer-fractional-credit" };
+    const cursor = { workflowId: "55".repeat(32), lane: "fractional-redemption", generation: "1", phase: "6", item: "1", observedStateSha256: state };
+    const selection = { account: addresses[13], releaseKey, action: coordinate.action, accountSlot: "100", observedCommitment: "finalized", effectiveCommitment: "finalized", branch: { kind: "finalized-scan" }, dependencies: [], cursor };
+    const configuration = { release: { releaseKey, releaseManifestSha256: manifest, capabilityProfileId: profile, elfSha256: elf, enabledIntents: [{ familyTag: "79", familyVersion: "1", localAction: "6" }], enabledIntentVariants: [] } };
+    const session = { sessionId: "56".repeat(32), release: { releaseKey }, restart: { cursors: [selection] } };
+    const row = { coordinate, releaseAdmission: { enabled: true, scope: "single-release-execution-and-driver-v1", releaseKey, executionReleaseKey: releaseKey, driverReleaseKey: releaseKey, executionReleaseManifestSha256: manifest, capabilityProfileId: profile }, stateSelection: selection, semanticOwnerConstructor: "clutch-fractional-redemption-runtime/fractional-redemption/79/1/6/transfer-credit", accountRoles: labels.map((role, index) => ({ index: String(index), role, signer: index < 2, writable: writable.has(index), address: addresses[index], identityDisposition: "semantic-owner-derived-and-bound-to-draft" })), callable: true, verdict: "callable-unsigned-draft", reason: "two holder consents joined to finalized credits", symbolicPostcondition: null,
+      transactionDraft: { schema: "dragons-clutch/operator-canonical-action-material/v1", draftId: "57".repeat(32), constructionSchema: "dragons-clutch/operator/unsigned-protocol-transaction/v3", driverAccount: addresses[13], driverAccountSlot: "100", driverReleaseKey: releaseKey, executionReleaseKey: releaseKey, authorityStateSha256: state, releaseManifestSha256: manifest, capabilityProfileId: profile, feePayer: addresses[0], messageVersion: "legacy", addressLookupTables: [], recentBlockhash: null, hasRecentBlockhash: false, signed: false, submitted: false, serializedTransactionHex: "00", serializedBytes: "1", actions: [coordinate.action], flows: ["fractional-redemption"], semanticOwners: [{ package: "clutch-fractional-redemption-runtime", schema: "fractional-redemption/79/1/6/transfer-credit", releaseSha256: elf }], registryBindings: [{ familyTag: "79", familyVersion: "1", localAction: "6", allocationStatus: "frozen", centralAction: "6" }], runtimeAdmissions: ["release-bound-enabled"], exactEquations: [{ name: "holder-approved credit numerator moved", unit: { kind: "price-units", scale: "10" }, left: "3", right: "3" }, { name: "chain-derived whole credit payout", unit: { kind: "collateral-atoms", mint: address(40) }, left: "1", right: "1" }], reloadAuthoritativeAccounts: true },
+      signerRequirements: [{ address: addresses[0], semanticRoles: ["source-claimant", "transaction-fee-payer"], signaturePresent: false, keyAccess: false }, { address: addresses[1], semanticRoles: ["destination-claimant"], signaturePresent: false, keyAccess: false }], freshnessDisposition: { observedSlot: "100", validBeforeSlot: "110", maximumValiditySlots: "10", recentBlockhash: "absent; a launcher must reacquire state before adding one", beforeSigning: "reload", afterSubmission: "discard" } };
+    const raw = { schema: "dragons-clutch/operator-action-capability-set/v1", status: "ready", commitment: "finalized", projectionAuthority: "untrusted-release-and-canonical-codec-projection", signing: false, submission: false, sessionId: session.sessionId, releaseKey, capabilityProfileId: profile, freshness: { recentBlockhash: "absent-by-contract", feePayer: "must-be-explicit-in-server-constructed-draft", validBeforeSlot: "must-be-derived-from-a-fresh-clock-observation", beforeSigning: "reload", afterSubmission: "discard" }, actions: [row] };
+    const accepted = GlassChainClient.validateActionCapabilities(raw, configuration, session);
+    row.accountRoles[16].writable = false;
+    let routeRefused = false;
+    try { GlassChainClient.validateActionCapabilities(raw, configuration, session); } catch (_) { routeRefused = true; }
+    return { choice: accepted.actions[0].fractionalContract.holderChoice, geometry: accepted.actions[0].fractionalContract.geometry, routeRefused };
+  })()`, context);
+  assert.equal(result.choice.numerator, "3");
+  assert.equal(result.choice.payout.kind, "internal-position");
+  assert.equal(result.geometry, "transfer-internal-live-credit-21-roles");
+  assert.equal(result.routeRefused, true);
+});
+
 test("compiler_boundary_names_rust_owner_and_does_not_reimplement_payoff_math", () => {
   assert.match(html, /compile_production_payoff_v1/);
   assert.match(html, /current BundleV7 assembler/);
