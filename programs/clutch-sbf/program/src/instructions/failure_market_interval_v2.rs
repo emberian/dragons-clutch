@@ -11,6 +11,7 @@
 
 use crate::accounts::{expect_pda, require, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
+use crate::instructions::collateral_position_v3::RuntimeSha256;
 use crate::instructions::failure_market_admission::{
     authenticate_failure_market_root_v3, install_failure_market_interval_funding_preimage_v4,
     AuthenticatedFailureMarketRootV3,
@@ -115,6 +116,7 @@ use clutch_liveness::runtime_v1::{
     RuntimeCompartmentKindV1, RuntimeCompartmentPhaseV1, RuntimeCompartmentV1,
 };
 use clutch_liveness::Id as LivenessId;
+use clutch_solana_layout::failure_action12_projection::project_failure_interval_cell_authentication_v2;
 use clutch_solana_layout::failure_market_interval_v2::{
     FailureMarketIntervalCellAccountV2, FailureMarketIntervalHistoryAccountV2,
     FAILURE_MARKET_INTERVAL_CELL_BODY_BYTES_V2, FAILURE_MARKET_INTERVAL_HISTORY_BODY_BYTES_V2,
@@ -3349,12 +3351,14 @@ fn write_failure_market_interval_cell_plan_inner_v2(
     let cell_state_id = next
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
-    let cell_authentication_id = account_authentication_id(
-        CELL_AUTHENTICATION_DOMAIN_V2,
-        cell_account,
+    let cell_authentication_id = project_failure_interval_cell_authentication_v2(
+        &RuntimeSha256,
+        cell_account.key.to_bytes(),
+        cell_account.owner.to_bytes(),
         cell_data_id,
-        cell_state_id.bytes(),
-        authenticated.admission_state_id.bytes(),
+        ProductContentId::from_bytes(cell_state_id.bytes()),
+        ProductContentId::from_bytes(authenticated.admission_state_id.bytes()),
+        cell_account.lamports(),
     );
     require_live_data_id(cell_authentication_id)?;
     Ok(AuthenticatedFailureMarketIntervalAccountsV2 {

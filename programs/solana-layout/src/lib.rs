@@ -57,6 +57,7 @@ pub mod direct_selection_v3;
 pub mod dealer_runtime;
 pub mod direct_market_v1;
 pub mod direct_market_v3;
+pub mod failure_action12_projection;
 pub mod failure_recovery;
 pub mod failure_interval_consensus;
 pub mod failure_market_interval_v2;

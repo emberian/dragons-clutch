@@ -101,6 +101,12 @@ use clutch_product_series::{
 use clutch_solana_layout::product_series::{
     MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV3,
 };
+use clutch_solana_layout::failure_action12_projection::{
+    project_failure_action12_resolution_v5, project_failure_resolution_activation_v5,
+    project_failure_resolution_physical_postwrite_v6,
+    FailureAction12FinalizationEvidenceProjectionV5, FailureAction12ReceiptProjectionV5,
+    FailureAction12RegistryProjectionV5,
+};
 use clutch_source_plane_v3_runtime::{
     AuthenticatedReopenLineageV1, AuthenticatedSourceRouteV1, SourceWorkScheduleBindingV1,
     SuccessfulEvaluationHandoffV1,
@@ -108,17 +114,6 @@ use clutch_source_plane_v3_runtime::{
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
-const FAILURE_MARKET_RESOLUTION_ACTIVATION_AUTHENTICATION_DOMAIN_V5: &[u8] =
-    b"dragons-clutch/sbf/failure-market-resolution-activation/v5\0";
-const FAILURE_MARKET_RESOLUTION_FINALIZATION_EVIDENCE_DOMAIN_V5: &[u8] =
-    b"dragons-clutch/failure-market-resolution-finalization-evidence/v5\0";
-const FAILURE_MARKET_RESOLUTION_POSTWRITE_DOMAIN_V5: &[u8] =
-    b"dragons-clutch/sbf/failure-market-resolution-postwrite/v5\0";
-const FAILURE_MARKET_RESOLUTION_PHYSICAL_POSTWRITE_DOMAIN_V6: &[u8] =
-    b"dragons-clutch/sbf/failure-market-resolution-physical-postwrite/v6\0";
-
-/// Stable byte committed for the only disposition admitted by this composer.
-const RESOLVED_DISPOSITION_BYTE_V2: u8 = 1;
 const _: () = assert!(clutch_retirement::MAX_OUTCOMES * 8 == 128);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1090,20 +1085,17 @@ fn activate_failure_market_resolution_v5<'a>(
             && collateral_postwrite.liability_authority_receipt_id() == liabilities.receipt_id,
         ClutchError::MismatchedState,
     )?;
-    let resolution_physical_postwrite_id = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            FAILURE_MARKET_RESOLUTION_PHYSICAL_POSTWRITE_DOMAIN_V6,
-            program_id.as_ref(),
-            resolution_account.key.as_ref(),
-            &inactive.authentication_id().bytes(),
-            &inactive.semantic_id().bytes(),
-            &inactive.data_id().bytes(),
-            &activation_plan.resolution_id().bytes(),
-            &activation_plan.resolution_data_id().bytes(),
-            &collateral_postwrite.receipt_id().bytes(),
-            &inactive.observed_lamports().to_le_bytes(),
-        ])
-        .to_bytes(),
+    let resolution_physical_postwrite_id = project_failure_resolution_physical_postwrite_v6(
+        &RuntimeSha256,
+        program_id.to_bytes(),
+        resolution_account.key.to_bytes(),
+        inactive.authentication_id(),
+        inactive.semantic_id(),
+        inactive.data_id(),
+        ContentId::from_bytes(activation_plan.resolution_id().bytes()),
+        ContentId::from_bytes(activation_plan.resolution_data_id().bytes()),
+        ContentId::from_bytes(collateral_postwrite.receipt_id().bytes()),
+        inactive.observed_lamports(),
     );
     require_live_content_id(resolution_physical_postwrite_id)?;
     let root_write_authority = AuthenticatedProductResolutionRootWriteV6 {
@@ -1163,29 +1155,25 @@ fn activate_failure_market_resolution_v5<'a>(
     )?;
     let root_authentication_after = product_postwrite.root_after().authentication_id();
 
-    let id = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            FAILURE_MARKET_RESOLUTION_ACTIVATION_AUTHENTICATION_DOMAIN_V5,
-            market_root_account.key.as_ref(),
-            &root_write_authority.root_authentication_before.bytes(),
-            &root_authentication_after.bytes(),
-            series_link_account.key.as_ref(),
-            &link_before.authentication_id().bytes(),
-            &link_release.id().bytes(),
-            resolution_account.key.as_ref(),
-            &inactive.authentication_id().bytes(),
-            &resolution_physical_postwrite_id.bytes(),
-            &failure_resolution.id().bytes(),
-            &certificate_id.bytes(),
-            &finalization_evidence_id.bytes(),
-            &product_activation.id().bytes(),
-            &activation_plan.receipt_id().bytes(),
-            &collateral_postwrite.receipt_id().bytes(),
-            &inactive.resolution().rent.refundable_principal.to_le_bytes(),
-            &inactive.resolution().rent.donation_floor.to_le_bytes(),
-            &[RESOLVED_DISPOSITION_BYTE_V2],
-        ])
-        .to_bytes(),
+    let id = project_failure_resolution_activation_v5(
+        &RuntimeSha256,
+        market_root_account.key.to_bytes(),
+        root_write_authority.root_authentication_before,
+        root_authentication_after,
+        series_link_account.key.to_bytes(),
+        link_before.authentication_id(),
+        link_release.id(),
+        resolution_account.key.to_bytes(),
+        inactive.authentication_id(),
+        resolution_physical_postwrite_id,
+        ContentId::from_bytes(failure_resolution.id().bytes()),
+        certificate_id,
+        finalization_evidence_id,
+        product_activation.id(),
+        ContentId::from_bytes(activation_plan.receipt_id().bytes()),
+        ContentId::from_bytes(collateral_postwrite.receipt_id().bytes()),
+        inactive.resolution().rent.refundable_principal,
+        inactive.resolution().rent.donation_floor,
     );
     require_live_content_id(id)?;
     Ok(AuthenticatedFailureMarketResolutionActivationV5 {
@@ -1347,32 +1335,25 @@ fn resolve_failure_market_interval_v5<'a>(
                 == runtime_resolution_receipt_id,
         ClutchError::MismatchedState,
     )?;
-    let postwrite_id = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            FAILURE_MARKET_RESOLUTION_POSTWRITE_DOMAIN_V5,
-            admission_root_account.key.as_ref(),
-            runtime_root_account.key.as_ref(),
-            market_root_account.key.as_ref(),
-            series_link_account.key.as_ref(),
-            interval_cell_account.key.as_ref(),
-            &activation.id().bytes(),
-            &activation.market_root_authentication_after().bytes(),
-            &interval_after.cell_authentication_id().bytes(),
-            &interval_after.cell_state_id().bytes(),
-            &runtime_postwrite.id().bytes(),
-            &runtime_postwrite.transition_receipt_id().bytes(),
-            &activation
-                .product_activation()
-                .resolution_semantic_id()
-                .bytes(),
-            &activation.product_activation().resolution_data_id().bytes(),
-            &activation
-                .product_activation()
-                .resolution_account_id()
-                .bytes(),
-        ])
-        .to_bytes(),
+    let projection = project_failure_action12_resolution_v5(
+        &RuntimeSha256,
+        admission_root_account.key.to_bytes(),
+        runtime_root_account.key.to_bytes(),
+        market_root_account.key.to_bytes(),
+        series_link_account.key.to_bytes(),
+        interval_cell_account.key.to_bytes(),
+        activation.id(),
+        activation.market_root_authentication_after(),
+        interval_after.cell_authentication_id(),
+        ContentId::from_bytes(interval_after.cell_state_id().bytes()),
+        runtime_postwrite.id(),
+        ContentId::from_bytes(runtime_postwrite.transition_receipt_id().bytes()),
+        activation.product_activation().resolution_semantic_id(),
+        activation.product_activation().resolution_data_id(),
+        activation.product_activation().resolution_account_id(),
+        ContentId::from_bytes(failure_resolution.id().bytes()),
     );
+    let postwrite_id = projection.postwrite_id();
     require_live_content_id(postwrite_id)?;
     let postwrite = AuthenticatedFailureMarketResolutionPostwriteV5 {
         id: postwrite_id,
@@ -1917,62 +1898,72 @@ fn derive_finalization_evidence_id_v5(
 ) -> Outcome<ContentId> {
     let failure = failure_resolution.facts();
     let link_state_id = link.semantic_id();
-    let weights_bytes = encode_weights(weights);
-    let id = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            FAILURE_MARKET_RESOLUTION_FINALIZATION_EVIDENCE_DOMAIN_V5,
-            &root_binding_id.bytes(),
-            root.account().as_ref(),
-            &root.authentication_id().bytes(),
-            link.account().as_ref(),
-            &link.authentication_id().bytes(),
-            &release.id().bytes(),
-            &link_state_id.bytes(),
-            registry.series_registry_account().as_ref(),
-            registry.program_account().as_ref(),
-            registry.programdata_account().as_ref(),
-            registry.release_artifact_account().as_ref(),
-            registry.profile_artifact_account().as_ref(),
-            &registry.registry_release_id().bytes(),
-            &registry.capability_profile_id().bytes(),
-            bundle.artifact_account().as_ref(),
-            &bundle.bundle_id().bytes(),
-            funding.account().as_ref(),
-            &funding.authentication_id().bytes(),
-            &funding.data_id().bytes(),
-            &root.binding().foundation_schedule_id.bytes(),
-            &root.binding().foundation_account_graph_id.bytes(),
-            &root.state().foundation().transcript_id.bytes(),
-            &inactive.authentication_id().bytes(),
-            &inactive.semantic_id().bytes(),
-            &inactive.data_id().bytes(),
-            &inactive.resolution().rent.refundable_principal.to_le_bytes(),
-            &inactive.resolution().rent.donation_floor.to_le_bytes(),
-            &inactive.resolution().rent.payer.bytes(),
-            &liabilities.receipt_id.bytes(),
-            &liabilities.hoard_semantic_id.bytes(),
-            &expected_hoard_after_id.bytes(),
-            &liabilities.claim_ledger_semantic_id.bytes(),
-            &expected_claim_ledger_after_id.bytes(),
-            &failure_resolution.id().bytes(),
-            &failure_resolution.failure_policy_binding_id().bytes(),
-            &failure.cell_before.bytes(),
-            &failure.cell_after.bytes(),
-            &failure.session_binding_id.bytes(),
-            &failure.source_handoff_id.bytes(),
-            &failure.terminal_work_id.bytes(),
-            &certificate_id.bytes(),
-            &failure.last_runtime_work_receipt_id.bytes(),
-            &failure.completed_work_calls.to_le_bytes(),
-            &failure.exact_reward_lamports.to_le_bytes(),
-            resolution_account.as_ref(),
-            &[outcome_count],
-            &denominator.to_le_bytes(),
-            &weights_bytes,
-            &[RESOLVED_DISPOSITION_BYTE_V2],
-        ])
-        .to_bytes(),
-    );
+    let projection = FailureAction12FinalizationEvidenceProjectionV5 {
+        root_binding_id,
+        root: (root.account().to_bytes(), root.authentication_id()),
+        link: (link.account().to_bytes(), link.authentication_id()),
+        link_release_id: release.id(),
+        link_state_id: ContentId::from_bytes(link_state_id.bytes()),
+        registry: FailureAction12RegistryProjectionV5 {
+            series_registry_account: registry.series_registry_account().to_bytes(),
+            program_account: registry.program_account().to_bytes(),
+            programdata_account: registry.programdata_account().to_bytes(),
+            release_artifact_account: registry.release_artifact_account().to_bytes(),
+            profile_artifact_account: registry.profile_artifact_account().to_bytes(),
+            registry_release_id: registry.registry_release_id(),
+            capability_profile_id: registry.capability_profile_id(),
+        },
+        bundle: (bundle.artifact_account().to_bytes(), bundle.bundle_id()),
+        funding: (
+            funding.account().to_bytes(),
+            funding.authentication_id(),
+            funding.data_id(),
+        ),
+        foundation: (
+            root.binding().foundation_schedule_id,
+            root.binding().foundation_account_graph_id,
+            root.state().foundation().transcript_id,
+        ),
+        inactive: (
+            inactive.authentication_id(),
+            inactive.semantic_id(),
+            inactive.data_id(),
+        ),
+        inactive_rent: (
+            inactive.resolution().rent.refundable_principal,
+            inactive.resolution().rent.donation_floor,
+            inactive.resolution().rent.payer.bytes(),
+        ),
+        liabilities: (
+            ContentId::from_bytes(liabilities.receipt_id.bytes()),
+            ContentId::from_bytes(liabilities.hoard_semantic_id.bytes()),
+            ContentId::from_bytes(expected_hoard_after_id.bytes()),
+            ContentId::from_bytes(liabilities.claim_ledger_semantic_id.bytes()),
+            ContentId::from_bytes(expected_claim_ledger_after_id.bytes()),
+        ),
+        failure: FailureAction12ReceiptProjectionV5 {
+            resolution_id: ContentId::from_bytes(failure_resolution.id().bytes()),
+            failure_policy_binding_id: ContentId::from_bytes(
+                failure_resolution.failure_policy_binding_id().bytes(),
+            ),
+            cell_before: ContentId::from_bytes(failure.cell_before.bytes()),
+            cell_after: ContentId::from_bytes(failure.cell_after.bytes()),
+            session_binding_id: ContentId::from_bytes(failure.session_binding_id.bytes()),
+            source_handoff_id: ContentId::from_bytes(failure.source_handoff_id.bytes()),
+            terminal_work_id: ContentId::from_bytes(failure.terminal_work_id.bytes()),
+            product_certificate_id: certificate_id,
+            last_runtime_work_receipt_id: ContentId::from_bytes(
+                failure.last_runtime_work_receipt_id.bytes(),
+            ),
+            completed_work_calls: failure.completed_work_calls,
+            exact_reward_lamports: failure.exact_reward_lamports,
+        },
+        resolution_account: resolution_account.to_bytes(),
+        outcome_count,
+        denominator,
+        weights: *weights,
+    };
+    let id = projection.id(&RuntimeSha256);
     require_live_content_id(id)?;
     Ok(id)
 }
@@ -2181,17 +2172,6 @@ fn require_liability_prestate_join_v5(
             && live_claim_ledger_id == authenticated_claim_ledger_id,
         ClutchError::MismatchedState,
     )
-}
-
-fn encode_weights(weights: &[u64; clutch_retirement::MAX_OUTCOMES]) -> [u8; 128] {
-    let mut output = [0u8; 128];
-    let mut index = 0usize;
-    while index < clutch_retirement::MAX_OUTCOMES {
-        let start = index * 8;
-        output[start..start + 8].copy_from_slice(&weights[index].to_le_bytes());
-        index += 1;
-    }
-    output
 }
 
 fn require_live_content_id(id: ContentId) -> Outcome<()> {

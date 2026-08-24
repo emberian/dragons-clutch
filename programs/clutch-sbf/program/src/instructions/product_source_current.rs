@@ -34,15 +34,15 @@ use clutch_source_plane_v3::{
     SourcePlaneProgramV3, StatisticKeyV3, StatisticKindV3, SummaryProgramV3, WindowSpecV3,
 };
 use clutch_source_plane_v3_runtime::{
+    project_source_product_route_id_v4, project_source_resolution_input_id_v4,
     AuthenticatedPersistedSourcePolicyHandoffV1, AuthenticatedReceiverRouteV2,
     AuthenticatedSourceReleaseV1, AuthenticatedSourceRouteV1, RuntimeKey,
-    SourcePolicyHandoffJoinV1, SuccessfulEvaluationHandoffV1,
+    SourcePolicyHandoffJoinV1, SourceProductRouteIdProjectionV4,
+    SourceResolutionInputIdProjectionV4, SuccessfulEvaluationHandoffV1,
 };
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
-const SOURCE_PRODUCT_ROUTE_AUTHENTICATION_DOMAIN_V4: &[u8] =
-    b"dragons-clutch/source-product-route-authentication/v4";
 const SOURCE_SEMANTIC_PUBLICATION_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/source-semantic-publication-authentication/v2";
 const PRODUCT_SERIES_REGISTRATION_AUTHENTICATION_DOMAIN_V5: &[u8] =
@@ -783,26 +783,24 @@ pub(crate) fn authenticate_source_product_route_v4(
             && projection.realm_collateral == collateral,
         ClutchError::MismatchedState,
     )?;
-    let id = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            SOURCE_PRODUCT_ROUTE_AUTHENTICATION_DOMAIN_V4,
-            &route.route_id().bytes(),
-            &receiver.id().bytes(),
-            &route.release_manifest_id().bytes(),
-            &route.release_authentication_id().bytes(),
-            &route.source_plane_contract_id().bytes(),
-            &route.source_spec_id().bytes(),
-            &registry.registry_release_id().bytes(),
-            &registry.capability_profile_id().bytes(),
-            &bundle.bundle_id().bytes(),
-            &genesis_id.bytes(),
-            &collateral.realm_id.bytes(),
-            &collateral.profile_id.bytes(),
-            &collateral.collateral_mint.bytes(),
-            &collateral.token_program.bytes(),
-        ])
-        .to_bytes(),
-    );
+    let id = project_source_product_route_id_v4(&SourceProductRouteIdProjectionV4 {
+        source_route_id: ContentId::from_bytes(route.route_id().bytes()),
+        receiver_route_id: ContentId::from_bytes(receiver.id().bytes()),
+        source_release_manifest_id: ContentId::from_bytes(route.release_manifest_id().bytes()),
+        source_release_authentication_id: ContentId::from_bytes(
+            route.release_authentication_id().bytes(),
+        ),
+        source_plane_contract_id: ContentId::from_bytes(route.source_plane_contract_id().bytes()),
+        source_spec_id: ContentId::from_bytes(route.source_spec_id().bytes()),
+        registry_release_id: registry.registry_release_id(),
+        capability_profile_id: registry.capability_profile_id(),
+        compiler_bundle_id: bundle.bundle_id().content_id(),
+        market_genesis_profile_id: genesis_id.content_id(),
+        realm_id: collateral.realm_id,
+        profile_id: collateral.profile_id,
+        collateral_mint: collateral.collateral_mint,
+        collateral_token_program: collateral.token_program,
+    });
     require(!id.is_zero(), ClutchError::MismatchedState)?;
     Ok(AuthenticatedSourceProductRouteV4 {
         id,
@@ -1067,28 +1065,30 @@ pub(crate) fn authenticate_source_resolution_input_v4(
             && persisted.source_policy_handoff_join_id() == source.id(),
         ClutchError::MismatchedState,
     )?;
-    let id = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            b"dragons-clutch/source-resolution-input/v4",
-            &route.id.bytes(),
-            &source.id().bytes(),
-            &persisted.id().bytes(),
-            &persisted.account().bytes(),
-            &handoff.id().bytes(),
-            &occurrence.id().bytes(),
-            &source.occurrence_account().bytes(),
-            &source.result_or_absence_account().bytes(),
-            &handoff.result_account_data_id().bytes(),
-            &handoff.result_account_authentication_id().bytes(),
-            &source.work_receipt_authentication_id().bytes(),
-            &handoff.failure_policy_binding_id().bytes(),
-            &occurrence.market_instance_id().bytes(),
-            &occurrence.repair_generation().to_le_bytes(),
-            &occurrence.window_id().bytes(),
-            &occurrence.statistic_key_id().bytes(),
-        ])
-        .to_bytes(),
-    );
+    let id = project_source_resolution_input_id_v4(&SourceResolutionInputIdProjectionV4 {
+        route_id: route.id,
+        source_handoff_authentication_id: ContentId::from_bytes(source.id().bytes()),
+        persisted_handoff_authentication_id: ContentId::from_bytes(persisted.id().bytes()),
+        persisted_handoff_account: persisted.account(),
+        successful_evaluation_handoff_id: ContentId::from_bytes(handoff.id().bytes()),
+        occurrence_id: ContentId::from_bytes(occurrence.id().bytes()),
+        occurrence_account: source.occurrence_account(),
+        result_account: source.result_or_absence_account(),
+        result_account_data_id: ContentId::from_bytes(handoff.result_account_data_id().bytes()),
+        result_account_authentication_id: ContentId::from_bytes(
+            handoff.result_account_authentication_id().bytes(),
+        ),
+        work_receipt_authentication_id: ContentId::from_bytes(
+            source.work_receipt_authentication_id().bytes(),
+        ),
+        failure_policy_binding_id: ContentId::from_bytes(
+            handoff.failure_policy_binding_id().bytes(),
+        ),
+        market_instance_id: ContentId::from_bytes(occurrence.market_instance_id().bytes()),
+        source_repair_generation: occurrence.repair_generation(),
+        window_id: ContentId::from_bytes(occurrence.window_id().bytes()),
+        statistic_key_id: ContentId::from_bytes(occurrence.statistic_key_id().bytes()),
+    });
     require(!id.is_zero(), ClutchError::MismatchedState)?;
     Ok(AuthenticatedSourceResolutionInputV4 {
         id,

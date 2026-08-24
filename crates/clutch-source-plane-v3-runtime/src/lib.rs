@@ -26,6 +26,7 @@ mod funding;
 mod ingest;
 mod lineage;
 mod reopen;
+mod source_resolution_projection;
 mod terminal;
 mod window;
 
@@ -93,6 +94,10 @@ pub use reopen::{
     AuthenticatedSourceReopenGenerationV1, AuthenticatedSourceReopenPrecloseV1,
     SourceReopenFamilyV1, SourceReopenGenerationRequestV1, SourceReopenTargetV1,
     SOURCE_REOPEN_GENERATION_REQUEST_BYTES, SOURCE_REOPEN_TARGET_BODY_BYTES,
+};
+pub use source_resolution_projection::{
+    project_source_product_route_id_v4, project_source_resolution_input_id_v4,
+    SourceProductRouteIdProjectionV4, SourceResolutionInputIdProjectionV4,
 };
 pub use terminal::{
     authenticate_source_no_reopen_terminal, AuthenticatedSourceNoReopenTerminalV1,

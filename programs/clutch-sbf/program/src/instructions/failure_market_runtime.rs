@@ -9,6 +9,7 @@
 
 use crate::accounts::{expect_pda, require, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
+use crate::instructions::collateral_position_v3::RuntimeSha256;
 use crate::instructions::failure_market_admission::{
     authenticate_failure_market_root_v3, AuthenticatedFailureMarketRootV3,
 };
@@ -41,6 +42,7 @@ use clutch_failure_policy_runtime::market_runtime_v1::{
 use clutch_product_series::{
     ContentId as ProductContentId, MarketFoundationSlotV4,
 };
+use clutch_solana_layout::failure_action12_projection::project_failure_runtime_session_postwrite_v3;
 use clutch_solana_layout::failure_recovery::{
     FailureMarketRuntimeRootAccountV1, FAILURE_MARKET_RUNTIME_BODY_BYTES_V1,
     FAILURE_MARKET_RUNTIME_ROOT_ACCOUNT_BYTES_V1,
@@ -1119,17 +1121,28 @@ fn persist_current_session_runtime_v3(
             && reopened.state_commitment != runtime_before,
         ClutchError::MismatchedState,
     )?;
-    let id = ProductContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            domain,
-            runtime_root.key.as_ref(),
-            &runtime_before.bytes(),
-            &runtime_after.bytes(),
-            &transition_receipt_id.bytes(),
-            &balance_before.to_le_bytes(),
-        ])
-        .to_bytes(),
-    );
+    let id = if domain == FAILURE_MARKET_RUNTIME_SESSION_POSTWRITE_DOMAIN_V3 {
+        project_failure_runtime_session_postwrite_v3(
+            &RuntimeSha256,
+            runtime_root.key.to_bytes(),
+            ProductContentId::from_bytes(runtime_before.bytes()),
+            ProductContentId::from_bytes(runtime_after.bytes()),
+            ProductContentId::from_bytes(transition_receipt_id.bytes()),
+            balance_before,
+        )
+    } else {
+        ProductContentId::from_bytes(
+            solana_sha256_hasher::hashv(&[
+                domain,
+                runtime_root.key.as_ref(),
+                &runtime_before.bytes(),
+                &runtime_after.bytes(),
+                &transition_receipt_id.bytes(),
+                &balance_before.to_le_bytes(),
+            ])
+            .to_bytes(),
+        )
+    };
     require(id != ProductContentId::ZERO, ClutchError::MismatchedState)?;
     Ok(AuthenticatedFailureMarketRuntimeSessionPostwriteV3 {
         id,

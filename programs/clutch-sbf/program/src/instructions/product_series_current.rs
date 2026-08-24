@@ -93,6 +93,7 @@ use clutch_solana_layout::product_series::{
     SERIES_REGISTRY_ACCOUNT_BYTES_V3,
     SERIES_REGISTRY_ACCOUNT_BYTES_V4,
 };
+use clutch_solana_layout::failure_action12_projection::project_series_funding_authentication_v5;
 use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
 use solana_instruction::{AccountMeta, Instruction};
@@ -115,8 +116,6 @@ const REGISTRY_CAPABILITY_AUTHENTICATION_DOMAIN_V5: &[u8] =
     b"dragons-clutch/registry-capability-authentication/v5\0";
 const SERIES_FUNDING_AUTHENTICATION_DOMAIN_V4: &[u8] =
     b"dragons-clutch/series-funding-account-authentication/v4\0";
-const SERIES_FUNDING_AUTHENTICATION_DOMAIN_V5: &[u8] =
-    b"dragons-clutch/series-funding-account-authentication/v5\0";
 const SERIES_FUNDING_RESERVATION_POSTWRITE_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/series-funding-reservation-postwrite/v4\0";
 const SERIES_FUNDING_COMPLETION_POSTWRITE_DOMAIN_V4: &[u8] =
@@ -2620,26 +2619,17 @@ pub(crate) fn authenticate_series_funding_account_v5(
         observed_lamports >= value.rent_principal_lamports,
         ClutchError::MismatchedState,
     )?;
-    let mut vault_rent = [0u8; 40];
-    for (index, principal) in value
-        .collateral_vault_rent_principal_lamports
-        .iter()
-        .enumerate()
-    {
-        let at = index.checked_mul(8).ok_or(ClutchError::Arithmetic)?;
-        vault_rent[at..at + 8].copy_from_slice(&principal.to_le_bytes());
-    }
-    let authentication_id = hashv(&[
-        SERIES_FUNDING_AUTHENTICATION_DOMAIN_V5,
-        account.key.as_ref(),
-        program_id.as_ref(),
-        &data_id.bytes(),
-        &state_id.bytes(),
-        &value.rent_principal_lamports.to_le_bytes(),
-        &vault_rent,
-        &observed_lamports.to_le_bytes(),
-        &[value.stored_bump],
-    ]);
+    let authentication_id = project_series_funding_authentication_v5(
+        &RuntimeSha256,
+        account.key.to_bytes(),
+        program_id.to_bytes(),
+        data_id,
+        state_id,
+        value.rent_principal_lamports,
+        value.collateral_vault_rent_principal_lamports,
+        observed_lamports,
+        value.stored_bump,
+    );
     require_live(authentication_id)?;
     Ok(AuthenticatedSeriesFundingAccountV5 {
         account: *account.key,

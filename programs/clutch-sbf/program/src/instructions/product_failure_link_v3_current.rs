@@ -6,6 +6,7 @@
 
 use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
+use crate::instructions::collateral_position_v3::RuntimeSha256;
 use clutch_product_series::{
     ContentId, MarketInstanceV2Id, MarketLifecyclePhaseV3, SeriesMarketLinkPhaseV3,
     SeriesMarketLinkV3, SeriesMarketLinkV3Id, SeriesPlanV5Id, SourceOccurrenceV1Id,
@@ -13,6 +14,7 @@ use clutch_product_series::{
 use clutch_solana_layout::product_series::{
     MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV3,
 };
+use clutch_solana_layout::failure_action12_projection::project_series_failure_release_preauthentication_v4;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
@@ -23,8 +25,6 @@ use super::product_market_lifecycle_v3_current::{
 
 const SERIES_FAILURE_BEGIN_AUTHENTICATION_DOMAIN_V3: &[u8] =
     b"dragons-clutch/sbf/series-failure-begin-authentication/v3\0";
-const SERIES_FAILURE_RELEASE_PREAUTHENTICATION_DOMAIN_V4: &[u8] =
-    b"dragons-clutch/sbf/series-failure-release-preauthentication/v4\0";
 const SERIES_FAILURE_RELEASE_AUTHENTICATION_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/series-failure-release-authentication/v4\0";
 
@@ -569,24 +569,24 @@ fn authenticate_writable_failure_session_release_link_v4(
             && binding.generation == cached_binding.generation,
         ClutchError::MismatchedState,
     )?;
-    let id = hashv(&[
-        SERIES_FAILURE_RELEASE_PREAUTHENTICATION_DOMAIN_V4,
-        &[disposition.wire_byte()],
-        program_id.as_ref(),
-        live_root.account().as_ref(),
-        &live_root.data_id().bytes(),
-        &live_root.authentication_id().bytes(),
-        &live_root.semantic_id().bytes(),
-        &live_root.binding_id().bytes(),
-        link.account().as_ref(),
-        &link.data_id().bytes(),
-        &link.authentication_id().bytes(),
-        &link.semantic_id().bytes(),
-        &link.binding_id().bytes(),
-        &state.transition_sequence().to_le_bytes(),
-        &state.failure_sessions_started().to_le_bytes(),
-        &transcript.bytes(),
-    ]);
+    let id = project_series_failure_release_preauthentication_v4(
+        &RuntimeSha256,
+        disposition.wire_byte(),
+        program_id.to_bytes(),
+        live_root.account().to_bytes(),
+        live_root.data_id(),
+        live_root.authentication_id(),
+        live_root.semantic_id(),
+        live_root.binding_id(),
+        link.account().to_bytes(),
+        link.data_id(),
+        link.authentication_id(),
+        link.semantic_id().bytes(),
+        link.binding_id(),
+        state.transition_sequence(),
+        state.failure_sessions_started(),
+        transcript,
+    );
     require_live(id)?;
     Ok(AuthenticatedWritableFailureSessionReleaseLinkV4 {
         id,

@@ -24,6 +24,9 @@ use clutch_collateral_adapter_v2::{
 };
 use clutch_product_series::{ContentId, MarketFoundationSlotV4, MarketInstanceV2Id};
 use clutch_retirement::DeletableRentOwnerV1;
+use clutch_solana_layout::failure_action12_projection::{
+    project_inactive_resolution_authentication_v5, FailureAction12ProjectionHashV1,
+};
 use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
 use solana_instruction::{AccountMeta, Instruction};
@@ -31,8 +34,6 @@ use solana_pubkey::Pubkey;
 
 const FAILURE_FOUNDATION_POSTWRITE_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/failure-foundation-postwrite/v4\0";
-const INACTIVE_RESOLUTION_AUTHENTICATION_DOMAIN_V5: &[u8] =
-    b"dragons-clutch/sbf/inactive-resolution-authentication/v5\0";
 
 /// Exact one-use Product postwrite for one of Failure slots 5 through 10.
 #[derive(Debug)]
@@ -309,6 +310,12 @@ impl clutch_retirement::PositionV3Sha256Backend for RuntimeSha256 {
     }
 }
 
+impl FailureAction12ProjectionHashV1 for RuntimeSha256 {
+    fn hashv(&self, parts: &[&[u8]]) -> [u8; 32] {
+        solana_sha256_hasher::hashv(parts).to_bytes()
+    }
+}
+
 /// Hostile authentication of a Product-founded, not-yet-finalized payout
 /// owner. Redemption paths do not accept this type.
 #[derive(Debug)]
@@ -394,20 +401,17 @@ pub(crate) fn authenticate_inactive_failure_resolution_v5(
             .bytes(),
     );
     let observed_lamports = account.lamports();
-    let authentication_id = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            INACTIVE_RESOLUTION_AUTHENTICATION_DOMAIN_V5,
-            program_id.as_ref(),
-            account.key.as_ref(),
-            &semantic_id.bytes(),
-            &data_id.bytes(),
-            &observed_lamports.to_le_bytes(),
-            &expected_market_instance_id.bytes(),
-            &expected_native_claim_basis_id.bytes(),
-            &expected_generation.to_le_bytes(),
-            &[expected_outcome_count],
-        ])
-        .to_bytes(),
+    let authentication_id = project_inactive_resolution_authentication_v5(
+        &RuntimeSha256,
+        program_id.to_bytes(),
+        account.key.to_bytes(),
+        semantic_id,
+        data_id,
+        observed_lamports,
+        expected_market_instance_id.bytes(),
+        expected_native_claim_basis_id,
+        expected_generation,
+        expected_outcome_count,
     );
     require(
         semantic_id != ContentId::ZERO

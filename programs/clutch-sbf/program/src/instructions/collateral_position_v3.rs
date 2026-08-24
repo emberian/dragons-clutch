@@ -23,7 +23,7 @@ use clutch_general_v2_contract::{
     MARKET_RUNTIME_ACCOUNT_BYTES,
 };
 use clutch_owner_settlement::AuthenticatedPositionV3;
-use clutch_product_series::MarketInstancePreimageV2;
+use clutch_product_series::{ContentId, MarketInstancePreimageV2};
 use clutch_retirement::{
     project_general_position_v3, AdapterPositionMarketBindingV3, AdapterPositionPurposeBindingV3,
     DeletableRentOwnerV1, GeneralPositionProjectionV3, Identity32V1, PositionAccountV3,
@@ -32,6 +32,13 @@ use clutch_retirement::{
 use clutch_solana_layout::collateral_v3_accounts::{
     validate_inferred_collateral_account_metas_with_v3, CollateralActionV3,
     ObservedCollateralAccountMetaV3,
+};
+use clutch_solana_layout::failure_action12_projection::{
+    project_general_market_binding_data_id_v5,
+    project_general_market_liability_authority_v5,
+    project_general_market_narrow_authentication_v5,
+    project_general_market_runtime_data_id_v3,
+    project_market_resolution_activation_postwrite_v5, FailureAction12ProjectionHashV1,
 };
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -49,10 +56,6 @@ const GENERAL_MARKET_LIABILITY_AUTHORITY_DOMAIN_V2: &[u8] =
     b"dragons-clutch/general-market/liability-authority/v2\0";
 const GENERAL_MARKET_VALUE_AUTHORITY_DOMAIN_V5: &[u8] =
     b"dragons-clutch/general-market/value-authority/v5\0";
-const GENERAL_MARKET_LIABILITY_AUTHORITY_DOMAIN_V5: &[u8] =
-    b"dragons-clutch/general-market/liability-authority/v5\0";
-const GENERAL_MARKET_NARROW_AUTHENTICATION_DOMAIN_V5: &[u8] =
-    b"dragons-clutch/general-market/narrow-authentication/v5\0";
 const GENERAL_MARKET_BINDING_DATA_DOMAIN_V2: &[u8] =
     b"dragons-clutch/general-market/binding-data/v2\0";
 const GENERAL_MARKET_RUNTIME_DATA_DOMAIN_V3: &[u8] =
@@ -97,6 +100,12 @@ impl PositionV3Sha256Backend for RuntimeSha256 {
 
 impl ReplayV3HashBackend for RuntimeSha256 {
     fn sha256_parts(&self, parts: &[&[u8]]) -> [u8; 32] {
+        solana_sha256_hasher::hashv(parts).to_bytes()
+    }
+}
+
+impl FailureAction12ProjectionHashV1 for RuntimeSha256 {
+    fn hashv(&self, parts: &[&[u8]]) -> [u8; 32] {
         solana_sha256_hasher::hashv(parts).to_bytes()
     }
 }
@@ -756,21 +765,27 @@ pub(crate) fn authenticate_general_market_v5_with_data_ids(
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     let binding = MarketBindingV5::decode(&binding_data)?;
     let base = binding.base().base();
-    let binding_data_id = authenticated_account_data_id_v1(
-        b"dragons-clutch/sbf/general-market-binding/data/v5\0",
-        market_binding_account.key,
-        &binding_data,
-    )?;
+    let binding_data_id = CollateralId::from_bytes(
+        project_general_market_binding_data_id_v5(
+            &RuntimeSha256,
+            market_binding_account.key.to_bytes(),
+            &binding_data,
+        )
+        .bytes(),
+    );
     drop(binding_data);
     let runtime_data = market_runtime_account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
     let runtime = MarketRuntimeV3AccountV1::decode(&runtime_data)?;
-    let runtime_data_id = authenticated_account_data_id_v1(
-        GENERAL_MARKET_RUNTIME_DATA_DOMAIN_V3,
-        market_runtime_account.key,
-        &runtime_data,
-    )?;
+    let runtime_data_id = CollateralId::from_bytes(
+        project_general_market_runtime_data_id_v3(
+            &RuntimeSha256,
+            market_runtime_account.key.to_bytes(),
+            &runtime_data,
+        )
+        .bytes(),
+    );
     drop(runtime_data);
     expect_pda(
         market_binding_account.key,
@@ -789,15 +804,15 @@ pub(crate) fn authenticate_general_market_v5_with_data_ids(
         ClutchError::MismatchedState,
     )?;
     let id = CollateralId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            GENERAL_MARKET_NARROW_AUTHENTICATION_DOMAIN_V5,
-            program_id.as_ref(),
-            market_binding_account.key.as_ref(),
-            &binding_data_id.bytes(),
-            market_runtime_account.key.as_ref(),
-            &runtime_data_id.bytes(),
-        ])
-        .to_bytes(),
+        project_general_market_narrow_authentication_v5(
+            &RuntimeSha256,
+            program_id.to_bytes(),
+            market_binding_account.key.to_bytes(),
+            ContentId::from_bytes(binding_data_id.bytes()),
+            market_runtime_account.key.to_bytes(),
+            ContentId::from_bytes(runtime_data_id.bytes()),
+        )
+        .bytes(),
     );
     id.require_live()
         .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
@@ -1174,26 +1189,26 @@ pub(crate) fn authenticate_general_market_liabilities_v5(
     let claim_ledger_lamports = claim_ledger_account.lamports();
     require_deletable_rent_coverage_v1(hoard.rent, hoard_lamports, false)?;
     require_deletable_rent_coverage_v1(claim_ledger.rent, claim_ledger_lamports, false)?;
+    let collateral_release_id = bound
+        .release()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?;
     let receipt_id = CollateralId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            GENERAL_MARKET_LIABILITY_AUTHORITY_DOMAIN_V5,
-            &authenticated_market.id().bytes(),
-            market_instance_account.key.as_ref(),
-            &market_instance_id.bytes(),
-            hoard_account.key.as_ref(),
-            &hoard_semantic_id.bytes(),
-            &hoard_lamports.to_le_bytes(),
-            claim_ledger_account.key.as_ref(),
-            &claim_ledger_semantic_id.bytes(),
-            &claim_ledger_lamports.to_le_bytes(),
-            &realm.policy_id().bytes(),
-            &bound
-                .release()
-                .id()
-                .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?
-                .bytes(),
-        ])
-        .to_bytes(),
+        project_general_market_liability_authority_v5(
+            &RuntimeSha256,
+            ContentId::from_bytes(authenticated_market.id().bytes()),
+            market_instance_account.key.to_bytes(),
+            ContentId::from_bytes(market_instance_id.bytes()),
+            hoard_account.key.to_bytes(),
+            ContentId::from_bytes(hoard_semantic_id.bytes()),
+            hoard_lamports,
+            claim_ledger_account.key.to_bytes(),
+            ContentId::from_bytes(claim_ledger_semantic_id.bytes()),
+            claim_ledger_lamports,
+            ContentId::from_bytes(realm.policy_id().bytes()),
+            ContentId::from_bytes(collateral_release_id.bytes()),
+        )
+        .bytes(),
     );
     receipt_id
         .require_live()
@@ -1378,22 +1393,22 @@ pub(crate) fn authenticate_market_resolution_activation_postwrite_v5(
         ClutchError::MismatchedState,
     )?;
     let receipt_id = CollateralId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            MARKET_RESOLUTION_ACTIVATION_POSTWRITE_DOMAIN_V5,
-            &liabilities.receipt_id.bytes(),
-            &plan.receipt_id().bytes(),
-            resolution_account.key.as_ref(),
-            &resolution_semantic_id.bytes(),
-            &resolution_data_id.bytes(),
-            &resolution_lamports.to_le_bytes(),
-            hoard_account.key.as_ref(),
-            &hoard_semantic_id.bytes(),
-            &hoard_lamports.to_le_bytes(),
-            claim_ledger_account.key.as_ref(),
-            &claim_ledger_semantic_id.bytes(),
-            &claim_ledger_lamports.to_le_bytes(),
-        ])
-        .to_bytes(),
+        project_market_resolution_activation_postwrite_v5(
+            &RuntimeSha256,
+            ContentId::from_bytes(liabilities.receipt_id.bytes()),
+            ContentId::from_bytes(plan.receipt_id().bytes()),
+            resolution_account.key.to_bytes(),
+            ContentId::from_bytes(resolution_semantic_id.bytes()),
+            ContentId::from_bytes(resolution_data_id.bytes()),
+            resolution_lamports,
+            hoard_account.key.to_bytes(),
+            ContentId::from_bytes(hoard_semantic_id.bytes()),
+            hoard_lamports,
+            claim_ledger_account.key.to_bytes(),
+            ContentId::from_bytes(claim_ledger_semantic_id.bytes()),
+            claim_ledger_lamports,
+        )
+        .bytes(),
     );
     receipt_id
         .require_live()

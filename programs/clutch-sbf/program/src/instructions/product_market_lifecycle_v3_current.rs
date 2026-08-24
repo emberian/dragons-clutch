@@ -8,6 +8,7 @@
 
 use crate::accounts::{expect_pda, require, Outcome};
 use crate::error::{ClutchError, Refusal};
+use crate::instructions::collateral_position_v3::RuntimeSha256;
 use crate::instructions::genesis::{transfer_data, SYSTEM_PROGRAM_ID};
 use crate::instructions::product_market_replay_current::{
     settle_current_product_market_replay_foundation_v2, AuthenticatedMarketLifecycleReplayV2,
@@ -31,13 +32,12 @@ use clutch_solana_layout::product_series::{
     SeriesMarketLinkAccountV3, MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V3,
     SERIES_MARKET_LINK_ACCOUNT_BYTES_V3,
 };
+use clutch_solana_layout::failure_action12_projection::project_market_lifecycle_root_authentication_v3;
 use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 
-const MARKET_LIFECYCLE_ROOT_AUTHENTICATION_DOMAIN_V3: &[u8] =
-    b"dragons-clutch/sbf/market-lifecycle-root-authentication/v3\0";
 const PRODUCT_MARKET_FOUNDATION_CURRENT_MATERIAL_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/product-market-foundation-current-material/v4\0";
 const PRODUCT_MARKET_FOUNDATION_CURRENT_STEPS_DOMAIN_V4: &[u8] =
@@ -542,17 +542,18 @@ pub(crate) fn authenticate_market_lifecycle_root_v3<'state>(
     let binding_id = binding
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let authentication_id = hashv(&[
-        MARKET_LIFECYCLE_ROOT_AUTHENTICATION_DOMAIN_V3,
-        account.key.as_ref(),
-        program_id.as_ref(),
-        &data_id.bytes(),
-        &semantic_id.bytes(),
-        &binding_id.bytes(),
-        &observed_lamports.to_le_bytes(),
-        &value.rent_principal_lamports.to_le_bytes(),
-        &[value.stored_bump, u8::from(require_writable)],
-    ]);
+    let authentication_id = project_market_lifecycle_root_authentication_v3(
+        &RuntimeSha256,
+        account.key.to_bytes(),
+        program_id.to_bytes(),
+        data_id,
+        semantic_id,
+        binding_id,
+        observed_lamports,
+        value.rent_principal_lamports,
+        value.stored_bump,
+        require_writable,
+    );
     require_live(authentication_id)?;
     Ok(AuthenticatedMarketLifecycleRootV3 {
         account: *account.key,
