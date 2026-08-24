@@ -294,7 +294,9 @@ version = "0.1.0"
 name = "dclutch-dealer-contract"
 version = "0.1.0"
 dependencies = [
+ "dclutch-capability-contract",
  "dclutch-core-contract",
+ "dclutch-realm-contract",
 ]
 
 [[package]]
@@ -302,11 +304,17 @@ name = "dclutch-direct-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-realm-contract",
+ "dclutch-rent-contract",
 ]
 
 [[package]]
 name = "dclutch-general-contract"
 version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-core-contract",
+ "sha2",
+]
 
 [[package]]
 name = "dclutch-kernel"
@@ -329,10 +337,13 @@ dependencies = [
  "dclutch-collateral-contract",
  "dclutch-core-contract",
  "dclutch-kernel",
+ "dclutch-market-contract",
  "dclutch-product-contract",
  "dclutch-pyth-contract",
  "dclutch-pyth-svm",
  "dclutch-realm-contract",
+ "dclutch-record-contract",
+ "dclutch-rent-contract",
  "dclutch-token-svm",
  "solana-program",
  "solana-sdk-ids",
@@ -355,7 +366,6 @@ name = "dclutch-pyth-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-contract",
- "dclutch-core-contract",
  "dclutch-kernel",
 ]
 
@@ -372,23 +382,36 @@ name = "dclutch-record-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-rent-contract"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-sbf"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-contract",
  "dclutch-collateral-contract",
  "dclutch-core-contract",
+ "dclutch-direct-contract",
  "dclutch-kernel",
  "dclutch-market-contract",
  "dclutch-product-contract",
  "dclutch-pyth-contract",
  "dclutch-pyth-svm",
  "dclutch-realm-contract",
+ "dclutch-record-contract",
+ "dclutch-rent-contract",
+ "dclutch-terminal-contract",
  "dclutch-token-svm",
+ "solana-instructions-sysvar",
  "solana-program",
  "solana-sdk-ids",
  "solana-system-interface",
 ]
+
+[[package]]
+name = "dclutch-series-contract"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-source-contract"
@@ -399,7 +422,7 @@ name = "dclutch-terminal-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
- "dclutch-product-contract",
+ "dclutch-market-contract",
 ]
 
 [[package]]

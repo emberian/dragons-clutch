@@ -91,6 +91,18 @@ pub enum AdapterError {
     ReadinessCreateCpi = 40,
     /// Readiness creation or canonical advancement did not persist its exact state.
     ReadinessPostcondition = 41,
+    /// A Direct Market, policy, intent, replay, custody, or account fact failed.
+    DirectAuthentication = 42,
+    /// The canonical Direct semantic transition refused.
+    DirectTransition = 43,
+    /// A System Program CPI required by Direct refused.
+    DirectCreateCpi = 44,
+    /// A token-program CPI required by Direct refused.
+    DirectTokenCpi = 45,
+    /// Direct execution did not produce its exact account or balance post-state.
+    DirectPostcondition = 46,
+    /// A Direct record or replay root could not close into its permanent RentCredit.
+    DirectClose = 47,
 }
 
 impl From<AdapterError> for ProgramError {

@@ -20,6 +20,7 @@ non-production-real-pyth-lab = ["dclutch-pyth-svm/synthetic-local-fixture"]
 dclutch-capability-contract = { path = "../../crates/dclutch-capability-contract" }
 dclutch-collateral-contract = { path = "../../crates/dclutch-collateral-contract" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
+dclutch-direct-contract = { path = "../../crates/dclutch-direct-contract" }
 dclutch-kernel = { path = "../../crates/dclutch-kernel" }
 dclutch-market-contract = { path = "../../crates/dclutch-market-contract" }
 dclutch-product-contract = { path = "../../crates/dclutch-product-contract" }
@@ -31,6 +32,7 @@ dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
 dclutch-terminal-contract = { path = "../../crates/dclutch-terminal-contract" }
 dclutch-token-svm = { path = "../../crates/dclutch-token-svm" }
 solana-program = { version = "=3.0.0", default-features = false }
+solana-instructions-sysvar = "=3.0.1"
 solana-sdk-ids = "=3.0.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 
