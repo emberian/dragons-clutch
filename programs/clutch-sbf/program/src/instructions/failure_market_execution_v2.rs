@@ -20,14 +20,19 @@ use crate::instructions::failure_market_interval_v2::{
 use crate::instructions::failure_market_runtime::{
     authenticate_failure_market_runtime_root_v1, AuthenticatedFailureMarketRuntimeRootV1,
 };
+use crate::instructions::failure_market_replay_v2::{
+    reopen_failure_market_replay_v2, AuthenticatedFailureMarketReplayV2,
+    FailureMarketReplayFundingPreimageV2,
+};
 use crate::instructions::product_artifact::{
     authenticate_product_artifact_v1, authenticate_registry_capability_v3,
     authenticate_series_registry_capability_refs_v2, AuthenticatedProductArtifactV1,
     AuthenticatedRegistryCapabilityV3,
 };
 use crate::instructions::product_market::{
-    authenticate_market_lifecycle_root_v1, authenticate_market_recovery_schedule_v1,
-    authenticate_series_market_link_v1, AuthenticatedMarketLifecycleRootV1,
+    authenticate_market_foundation_preallocation_v2, authenticate_market_lifecycle_root_v1,
+    authenticate_market_recovery_schedule_v1, authenticate_series_market_link_v1,
+    AuthenticatedMarketFoundationPreallocationV2, AuthenticatedMarketLifecycleRootV1,
     AuthenticatedSeriesMarketLinkV1,
 };
 use clutch_failure_policy_runtime::market_quote_v1::FailureMarketRecoveryQuoteAdmissionReceiptV1;
@@ -278,6 +283,65 @@ pub(crate) fn decode_failure_market_foundation_graph_v2(
         ClutchError::MismatchedState,
     )?;
     Ok(graph)
+}
+
+/// Exact replay/slot-10 authority needed only by successful Resolution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedFailureMarketResolutionFoundationV2 {
+    replay: AuthenticatedFailureMarketReplayV2,
+    resolution: AuthenticatedMarketFoundationPreallocationV2,
+}
+
+impl AuthenticatedFailureMarketResolutionFoundationV2 {
+    pub(crate) const fn replay(self) -> AuthenticatedFailureMarketReplayV2 {
+        self.replay
+    }
+    pub(crate) const fn resolution(self) -> AuthenticatedMarketFoundationPreallocationV2 {
+        self.resolution
+    }
+}
+
+/// Reopen the permanent replay commitment and the still-zero slot-10
+/// Resolution preallocation under one current root/schedule/graph.
+pub(crate) fn authenticate_failure_market_resolution_foundation_v2(
+    program_id: &Pubkey,
+    execution: &AuthenticatedFailureMarketExecutionV2<'_, '_>,
+    replay_account: &AccountInfo<'_>,
+    resolution_account: &AccountInfo<'_>,
+    replay_funding_preimage_body: &[u8],
+    foundation_account_graph_body: &[u8],
+) -> Outcome<AuthenticatedFailureMarketResolutionFoundationV2> {
+    let replay_preimage =
+        FailureMarketReplayFundingPreimageV2::decode(replay_funding_preimage_body)?;
+    let replay = reopen_failure_market_replay_v2(
+        program_id,
+        replay_account,
+        execution.admission(),
+        replay_preimage,
+        true,
+    )?;
+    let graph = decode_failure_market_foundation_graph_v2(
+        execution,
+        foundation_account_graph_body,
+    )?;
+    let resolution = authenticate_market_foundation_preallocation_v2(
+        execution.root(),
+        resolution_account,
+        &execution.funding_quote().value().foundation,
+        &graph,
+        clutch_product_series::MarketFoundationSlotV2::ResolutionV5,
+    )?;
+    require(
+        resolution.root_account() == execution.root().account()
+            && resolution.root_authentication_id() == execution.root().authentication_id()
+            && resolution.market_instance_id()
+                == execution.root().state().binding().market_instance_id
+            && resolution.generation() == execution.root().state().binding().generation
+            && resolution.account() == *resolution_account.key
+            && replay.account() != resolution.account(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedFailureMarketResolutionFoundationV2 { replay, resolution })
 }
 
 /// Reopen the full shared authority prefix for one action.
