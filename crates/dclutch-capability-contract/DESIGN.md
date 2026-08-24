@@ -24,23 +24,69 @@ Market.
 
 ## Funding boundary
 
-`FundingQuoteV1` is immutable manifest content. `FundingStateV1` is a separate
-mutable ledger bound to the manifest content identity and entry index. Every
-principal atom is segregated as rent, creation, work, provider, bounty,
-liquidity, or service principal. Initial state requires all quoted principal
-to be presently held. Remaining plus released principal must equal the quote
-in every compartment, and the observed holding account must equal remaining
-principal exactly.
+`FundingQuoteV1` is 304 bytes of immutable manifest content. Each Rent,
+Creation, Work, Provider, Bounty, Liquidity, and Service compartment contains
+an explicit asset class and amount. Zero has exactly one representation:
+`NotApplicable(0)`. A positive compartment is either `NativeLamports` or
+`RealmCollateral`. Rent and Creation are mathematical/SVM compartments and may
+only be native lamports; the other five are capability-selected. Capability
+profiles narrow that choice further: for example, General admits native Work,
+Bounty, and Service but no Realm collateral, while Dealer admits Realm
+Liquidity and Service and requires its unused generic compartments to be N/A.
 
-Hoard collateral and expected future fees are outside this model and cannot be
-named as capability funding. An adapter must atomically pair a successful
-state transition with the corresponding lamport or token movement; this pure
-contract does not claim to observe account balances itself.
+The quote and both halves of the 320-byte `FundingStateV1` carry independent
+checked native-lamport and Realm-collateral totals. There is deliberately no
+cross-asset `total_principal`, addition, comparison, exchange rate, or unit
+conversion. Remaining plus released must reproduce every quoted compartment
+with the same asset class and must conserve each asset total separately.
+
+Any nonzero Realm collateral requires one immutable binding containing the
+Realm content identity, collateral-release identity, token-program key, mint,
+and refund token beneficiary. The binding is absent—and its 160-byte region is
+canonical zero—when Realm collateral is zero. DREGG is not named or special.
+The selected mint comes only through the Market's immutable Realm authority.
+
+Physical custody is also two-dimensional. The program-owned funding-state PDA
+holds exactly its current Rent minimum plus remaining native lamports. An
+optional canonical Realm token vault holds remaining collateral atomic units;
+its authority is a separate canonical capability-funding authority PDA. The
+adapter authenticates state/vault ownership, derives all three addresses,
+obtains current Rent, and constructs `FundingCustodyObservationV1`. Ordinary
+construction, readiness, activation, and releases require exact equality and
+therefore refuse both underfunding and donations. A token vault additionally
+must match the quote's Realm, release, program, mint, authority, and vault PDA.
+
+The seed domains are distinct:
+
+- `dclutch/cap-funding/v1` derives the program-owned funding state from Market,
+  generation, manifest entry, config, and capability release;
+- `dclutch/cap-fund-auth/v1` derives its token-signing authority from the
+  funding-state key; and
+- `dclutch/cap-fund-vault/v1` derives the optional token vault from authority,
+  token program, and mint.
+
+`activate` releases only exact native Rent and Creation amounts. A subsequent
+compartment release returns a typed transfer plan, so a Realm amount cannot be
+executed as lamports or vice versa. The capability-specific adapter still owns
+the beneficiary rule for nonterminal Work/Provider/Bounty/Liquidity/Service
+movement and must persist state only with the successful physical transfer.
+
+Terminal or abandonment close returns a complete `FundingClosePlanV1` rather
+than a mixed total. Remaining native funding, state/vault Rent, and unsolicited
+lamport donations route to the authenticated immutable Market RentCredit.
+Remaining Realm collateral and unsolicited same-mint token donations route to
+the quote's immutable token beneficiary. Donations are explicitly classified
+as gifts to those refund destinations, never protocol revenue. The plan covers
+every observed lamport and token atom, so neither an emptied vault nor its Rent
+can become stranded.
+
+Hoard collateral and expected future fees are unrepresentable here. Hoard is
+never a funding source, beneficiary, fee, or close residual.
 
 `RequiredAtFounding` entries must activate before Market opening.
-`PrepaidLazy` entries may remain pending through opening, but their exact
-creation and rent principal is present from founding and activation must occur
-no later than the committed slot deadline.
+`PrepaidLazy` entries may remain pending through opening, but their exact typed
+custody—including native creation/rent and any Realm vault—is present from
+founding and activation must occur no later than the committed slot deadline.
 
 Market founding selects resolution funding by immutable meaning, not by a
 caller-supplied amount or a conventional manifest position. The authenticated
@@ -49,17 +95,18 @@ equals the Market identity's `resolution_policy_id`. The total no-allocation
 selector returns that entry together with its canonical index and refuses both
 missing and ambiguous matches; manifest order is never a tie breaker.
 
-The current one-shot Pyth resolution Fund is a specialized adapter profile. At
-its adapter boundary, the selected entry's quote must contain exactly:
+The current one-shot Pyth resolution Fund is a specialized native-only adapter
+profile. At its adapter boundary, the selected entry's quote must contain:
 
 - Fund-account rent equal to the authenticated Rent calculation;
 - provider reimbursement committed by the manifest; and
 - a positive resolution-success bounty.
 
-Creation, work, liquidity, and service principal must all be zero because the
-specialized Fund does not physically hold those compartments. The provider and
-bounty values are derived from this immutable quote. They do not appear in the
-founding instruction, and neither collateral nor future fees may replace them.
+Creation, Work, Liquidity, and Service must be N/A. Rent, Provider, and Bounty
+must be native lamports, and the Realm binding must be absent because the Fund
+has no token vault. Provider and bounty values are derived from the immutable
+quote. They do not appear in the founding instruction, and neither Realm
+collateral nor future fees may replace them.
 
 ## Market-opening readiness
 
@@ -76,11 +123,12 @@ count. That canonical domain is `dclutch/open-readiness/v1` (25 bytes), below
 the chain-derived 32-byte maximum for one PDA seed component; adapters must not
 hash or rewrite it. Each advance must name exactly the next manifest index and
 supplies the
-actual canonical `FundingStateV1`, observed present principal, and current
-slot. The kernel calls `validate_market_open`; required pending entries, lazy
-deadline expiry, wrong binding, underfunding, replay, skips, and reordering
-refuse before readiness changes. Funding state remains the sole owner of every
-amount, quote, released compartment, and activation fact.
+actual canonical `FundingStateV1`, typed physical custody observation, and
+current slot. The kernel calls `validate_market_open`; required pending entries,
+lazy deadline expiry, wrong Realm/mint/program/authority/vault, missing vault,
+donations, underfunding, replay, skips, and reordering refuse before readiness
+changes. Funding state remains the sole owner of every amount, released
+compartment, and activation fact; the manifest quote remains immutable truth.
 
 After an advance and before Open, the SBF adapter must seal capability
 operations: while the Market is Founding, no capability operation may release

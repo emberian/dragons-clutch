@@ -12,21 +12,21 @@
 
 use core::convert::TryInto;
 
+/// Typed funding quotes, custody observations, PDA projections, and transitions.
+pub mod funding;
 /// SDK-free readiness account frames and state-transition planning.
 pub mod readiness_frame;
 /// Exact readiness instruction wires without SVM dependencies.
 pub mod readiness_instruction;
+
+pub use funding::*;
 
 pub use dclutch_core_contract::ContentId;
 
 /// Exact manifest header width.
 pub const MANIFEST_HEADER_BYTES: usize = 16;
 /// Exact profile-1 capability-entry width.
-pub const CAPABILITY_ENTRY_BYTES: usize = 288;
-/// Exact immutable funding-quote width.
-pub const FUNDING_QUOTE_BYTES: usize = 64;
-/// Exact mutable funding-state width.
-pub const FUNDING_STATE_BYTES: usize = 192;
+pub const CAPABILITY_ENTRY_BYTES: usize = 528;
 /// Exact transient Market-opening readiness width.
 pub const MARKET_OPENING_READINESS_BYTES: usize = 128;
 /// Chain-derived maximum byte width of one Solana PDA seed component.
@@ -54,10 +54,6 @@ pub const MANIFEST_MAGIC: [u8; 8] = *b"DCLTCAP1";
 pub const MANIFEST_SCHEMA_VERSION: u16 = 1;
 /// Implemented provisional artifact profile.
 pub const ARTIFACT_PROFILE_V1: u16 = 1;
-/// Canonical funding-state magic.
-pub const FUNDING_STATE_MAGIC: [u8; 8] = *b"DCLTCFS1";
-/// Implemented funding-state schema version.
-pub const FUNDING_STATE_SCHEMA_VERSION: u16 = 1;
 /// Canonical transient Market-opening readiness magic.
 pub const MARKET_OPENING_READINESS_MAGIC: [u8; 8] = *b"DCLTMOR1";
 /// Implemented Market-opening readiness schema.
@@ -67,11 +63,6 @@ pub const MARKET_OPENING_READINESS_SCHEMA_VERSION: u16 = 1;
 /// This crate derives no Solana address. The adapter derives it from this
 /// domain plus exact Market key and generation, then authenticates the record.
 pub const MARKET_OPENING_READINESS_PDA_DOMAIN: &[u8] = b"dclutch/open-readiness/v1";
-/// Adapter PDA seed domain for one manifest-selected capability funding ledger.
-///
-/// The SDK-free contract owns the exact ordered seed projection; the adapter
-/// remains responsible for Solana PDA derivation and owner authentication.
-pub const CAPABILITY_FUNDING_PDA_DOMAIN_V1: &[u8] = b"dclutch/cap-funding/v1";
 
 /// The exact canonical empty-manifest preimage.
 pub const EMPTY_MANIFEST_BYTES: [u8; MANIFEST_HEADER_BYTES] = [
@@ -97,27 +88,6 @@ const ENTRY_RESERVED_BYTES: usize = 6;
 const ACTIVATION_DEADLINE_OFFSET: usize = 200;
 const DEPENDENCIES_OFFSET: usize = 208;
 const QUOTE_OFFSET: usize = 224;
-
-const FUNDING_RENT_OFFSET: usize = 0;
-const FUNDING_CREATION_OFFSET: usize = 8;
-const FUNDING_WORK_OFFSET: usize = 16;
-const FUNDING_PROVIDER_OFFSET: usize = 24;
-const FUNDING_BOUNTY_OFFSET: usize = 32;
-const FUNDING_LIQUIDITY_OFFSET: usize = 40;
-const FUNDING_SERVICE_OFFSET: usize = 48;
-const FUNDING_TOTAL_OFFSET: usize = 56;
-
-const STATE_SCHEMA_OFFSET: usize = 8;
-const STATE_STATUS_OFFSET: usize = 10;
-const STATE_HEADER_RESERVED_OFFSET: usize = 11;
-const STATE_HEADER_RESERVED_BYTES: usize = 5;
-const STATE_MANIFEST_ID_OFFSET: usize = 16;
-const STATE_ENTRY_INDEX_OFFSET: usize = 48;
-const STATE_BODY_RESERVED_OFFSET: usize = 50;
-const STATE_BODY_RESERVED_BYTES: usize = 6;
-const STATE_ACTIVATION_SLOT_OFFSET: usize = 56;
-const STATE_REMAINING_OFFSET: usize = 64;
-const STATE_RELEASED_OFFSET: usize = 128;
 
 const READINESS_SCHEMA_OFFSET: usize = 8;
 const READINESS_RESERVED_OFFSET: usize = 10;
@@ -168,16 +138,40 @@ pub enum Error {
     MissingActivationDeadline,
     /// A lazy entry did not prepay any rent or creation principal.
     MissingLazyCreationFunding,
-    /// Summing exact principal compartments overflowed `u64`.
+    /// Summing exact amounts within one physical asset class overflowed `u64`.
     ArithmeticOverflow,
-    /// An encoded total did not equal its exact compartment sum.
-    FundingTotalMismatch,
+    /// An asset-class tag was unknown.
+    UnknownFundingAssetClass,
+    /// Zero or N/A used a noncanonical asset-class representation.
+    NonCanonicalFundingAssetClass,
+    /// Rent or Creation was not N/A or native lamports.
+    InvalidCompartmentAssetClass,
+    /// An encoded per-asset total did not equal its exact compartment sum.
+    FundingAssetTotalMismatch,
+    /// Realm collateral was quoted without its immutable binding.
+    MissingRealmCollateralBinding,
+    /// A Realm binding existed although no Realm collateral was quoted.
+    UnexpectedRealmCollateralBinding,
+    /// Observed Realm, release, token program, or mint differed from the quote.
+    RealmCollateralBindingMismatch,
     /// A funding-state status byte was unknown.
     UnknownFundingStatus,
     /// Funding state did not bind to the supplied manifest entry.
     FundingBindingMismatch,
-    /// Present observed principal did not exactly equal remaining principal.
-    PresentPrincipalMismatch,
+    /// Present observed native lamports did not equal remaining lamports.
+    PresentNativeLamportsMismatch,
+    /// Present observed Realm tokens did not equal remaining Realm collateral.
+    PresentRealmCollateralMismatch,
+    /// A quote requiring Realm collateral had no authenticated token vault.
+    MissingRealmCollateralVault,
+    /// A native-only quote was paired with a Realm token vault.
+    UnexpectedRealmCollateralVault,
+    /// An observed token authority was not the canonical funding-authority PDA.
+    FundingAuthorityMismatch,
+    /// An observed token vault was not the canonical funding-vault PDA.
+    FundingVaultMismatch,
+    /// Physical custody did not contain its exact Rent or semantic principal.
+    UnderfundedPhysicalCustody,
     /// Remaining plus released principal did not equal the immutable quote.
     FundingConservationMismatch,
     /// The requested compartment had insufficient segregated principal.
@@ -240,191 +234,6 @@ impl ActivationPolicy {
         }
     }
 }
-
-/// Exact principal compartments used by an immutable quote or mutable ledger.
-///
-/// These are present capitalization categories. Hoard collateral and expected
-/// future fee revenue are intentionally not representable.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct FundingAmountsV1 {
-    rent_principal: u64,
-    creation_principal: u64,
-    work_principal: u64,
-    provider_principal: u64,
-    bounty_principal: u64,
-    liquidity_principal: u64,
-    service_principal: u64,
-    total_principal: u64,
-}
-
-impl FundingAmountsV1 {
-    /// Construct compartments and their checked canonical total.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        rent_principal: u64,
-        creation_principal: u64,
-        work_principal: u64,
-        provider_principal: u64,
-        bounty_principal: u64,
-        liquidity_principal: u64,
-        service_principal: u64,
-    ) -> Result<Self> {
-        let values = [
-            rent_principal,
-            creation_principal,
-            work_principal,
-            provider_principal,
-            bounty_principal,
-            liquidity_principal,
-            service_principal,
-        ];
-        let total_principal = checked_sum(&values)?;
-        Ok(Self {
-            rent_principal,
-            creation_principal,
-            work_principal,
-            provider_principal,
-            bounty_principal,
-            liquidity_principal,
-            service_principal,
-            total_principal,
-        })
-    }
-
-    /// Decode one exact canonical compartment record.
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != FUNDING_QUOTE_BYTES {
-            return Err(Error::InvalidLength);
-        }
-        let result = Self::new(
-            read_u64(bytes, FUNDING_RENT_OFFSET)?,
-            read_u64(bytes, FUNDING_CREATION_OFFSET)?,
-            read_u64(bytes, FUNDING_WORK_OFFSET)?,
-            read_u64(bytes, FUNDING_PROVIDER_OFFSET)?,
-            read_u64(bytes, FUNDING_BOUNTY_OFFSET)?,
-            read_u64(bytes, FUNDING_LIQUIDITY_OFFSET)?,
-            read_u64(bytes, FUNDING_SERVICE_OFFSET)?,
-        )?;
-        if result.total_principal != read_u64(bytes, FUNDING_TOTAL_OFFSET)? {
-            return Err(Error::FundingTotalMismatch);
-        }
-        Ok(result)
-    }
-
-    /// Return the exact canonical bytes.
-    pub fn to_bytes(self) -> [u8; FUNDING_QUOTE_BYTES] {
-        let mut output = [0u8; FUNDING_QUOTE_BYTES];
-        put_u64(&mut output, FUNDING_RENT_OFFSET, self.rent_principal);
-        put_u64(
-            &mut output,
-            FUNDING_CREATION_OFFSET,
-            self.creation_principal,
-        );
-        put_u64(&mut output, FUNDING_WORK_OFFSET, self.work_principal);
-        put_u64(
-            &mut output,
-            FUNDING_PROVIDER_OFFSET,
-            self.provider_principal,
-        );
-        put_u64(&mut output, FUNDING_BOUNTY_OFFSET, self.bounty_principal);
-        put_u64(
-            &mut output,
-            FUNDING_LIQUIDITY_OFFSET,
-            self.liquidity_principal,
-        );
-        put_u64(&mut output, FUNDING_SERVICE_OFFSET, self.service_principal);
-        put_u64(&mut output, FUNDING_TOTAL_OFFSET, self.total_principal);
-        output
-    }
-
-    /// Return rent principal.
-    pub const fn rent_principal(self) -> u64 {
-        self.rent_principal
-    }
-    /// Return physical-creation principal.
-    pub const fn creation_principal(self) -> u64 {
-        self.creation_principal
-    }
-    /// Return ongoing work principal.
-    pub const fn work_principal(self) -> u64 {
-        self.work_principal
-    }
-    /// Return provider principal.
-    pub const fn provider_principal(self) -> u64 {
-        self.provider_principal
-    }
-    /// Return resolution or maintenance bounty principal.
-    pub const fn bounty_principal(self) -> u64 {
-        self.bounty_principal
-    }
-    /// Return segregated liquidity principal.
-    pub const fn liquidity_principal(self) -> u64 {
-        self.liquidity_principal
-    }
-    /// Return service principal.
-    pub const fn service_principal(self) -> u64 {
-        self.service_principal
-    }
-    /// Return the checked sum of all compartments.
-    pub const fn total_principal(self) -> u64 {
-        self.total_principal
-    }
-
-    fn value(self, compartment: FundingCompartment) -> u64 {
-        match compartment {
-            FundingCompartment::Rent => self.rent_principal,
-            FundingCompartment::Creation => self.creation_principal,
-            FundingCompartment::Work => self.work_principal,
-            FundingCompartment::Provider => self.provider_principal,
-            FundingCompartment::Bounty => self.bounty_principal,
-            FundingCompartment::Liquidity => self.liquidity_principal,
-            FundingCompartment::Service => self.service_principal,
-        }
-    }
-
-    fn with_value(self, compartment: FundingCompartment, value: u64) -> Result<Self> {
-        Self::new(
-            if compartment == FundingCompartment::Rent {
-                value
-            } else {
-                self.rent_principal
-            },
-            if compartment == FundingCompartment::Creation {
-                value
-            } else {
-                self.creation_principal
-            },
-            if compartment == FundingCompartment::Work {
-                value
-            } else {
-                self.work_principal
-            },
-            if compartment == FundingCompartment::Provider {
-                value
-            } else {
-                self.provider_principal
-            },
-            if compartment == FundingCompartment::Bounty {
-                value
-            } else {
-                self.bounty_principal
-            },
-            if compartment == FundingCompartment::Liquidity {
-                value
-            } else {
-                self.liquidity_principal
-            },
-            if compartment == FundingCompartment::Service {
-                value
-            } else {
-                self.service_principal
-            },
-        )
-    }
-}
-
-/// Immutable funding quote committed by one capability entry.
-pub type FundingQuoteV1 = FundingAmountsV1;
 
 /// One canonical capability entry selected by a Market manifest.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -590,7 +399,7 @@ impl CapabilityEntryV1 {
             .copied()
             .ok_or(Error::InvalidDependency)
     }
-    /// Return the immutable present-principal quote.
+    /// Return the immutable typed funding quote.
     pub const fn funding_quote(self) -> FundingQuoteV1 {
         self.funding_quote
     }
@@ -629,16 +438,26 @@ impl RequiredFoundingEntryV1 {
         exact_fund_rent: u64,
     ) -> Result<FundingQuoteV1> {
         let quote = self.entry.funding_quote;
-        if quote.rent_principal != exact_fund_rent {
+        let amounts = quote.amounts();
+        if amounts.rent().asset_class() != FundingAssetClassV1::NativeLamports
+            || amounts.rent().amount() != exact_fund_rent
+        {
             return Err(Error::ResolutionFundRentMismatch);
         }
-        if quote.bounty_principal == 0 {
+        if amounts.bounty().asset_class() != FundingAssetClassV1::NativeLamports
+            || amounts.bounty().amount() == 0
+        {
             return Err(Error::MissingResolutionFundBounty);
         }
-        if quote.creation_principal != 0
-            || quote.work_principal != 0
-            || quote.liquidity_principal != 0
-            || quote.service_principal != 0
+        if quote.realm_collateral().is_some()
+            || amounts.creation().amount() != 0
+            || amounts.work().amount() != 0
+            || amounts.liquidity().amount() != 0
+            || amounts.service().amount() != 0
+            || !matches!(
+                amounts.provider().asset_class(),
+                FundingAssetClassV1::NotApplicable | FundingAssetClassV1::NativeLamports
+            )
         {
             return Err(Error::ExtraneousResolutionFundPrincipal);
         }
@@ -756,420 +575,6 @@ impl<'a> CapabilityManifestV1<'a> {
             index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
         }
         selected.ok_or(Error::RequiredFoundingConfigMissing)
-    }
-}
-
-/// Mutable lifecycle status for one capability's prepaid funding state.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub enum FundingStatus {
-    /// Exact quote principal is present but physical activation has not run.
-    Pending = 0,
-    /// Physical activation completed atomically with rent/creation release.
-    Active = 1,
-}
-
-impl FundingStatus {
-    fn decode(value: u8) -> Result<Self> {
-        match value {
-            0 => Ok(Self::Pending),
-            1 => Ok(Self::Active),
-            _ => Err(Error::UnknownFundingStatus),
-        }
-    }
-
-    const fn byte(self) -> u8 {
-        match self {
-            Self::Pending => 0,
-            Self::Active => 1,
-        }
-    }
-}
-
-/// A segregated funding compartment that may be released after activation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FundingCompartment {
-    /// Child rent principal, released only by activation.
-    Rent,
-    /// Child physical-creation principal, released only by activation.
-    Creation,
-    /// Ongoing work principal.
-    Work,
-    /// Provider principal.
-    Provider,
-    /// Bounty principal.
-    Bounty,
-    /// Liquidity principal.
-    Liquidity,
-    /// Service principal.
-    Service,
-}
-
-/// Exact activation transfer plan returned for atomic adapter execution.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ActivationDebitV1 {
-    rent_principal: u64,
-    creation_principal: u64,
-}
-
-impl ActivationDebitV1 {
-    /// Return rent principal that must move atomically with activation.
-    pub const fn rent_principal(self) -> u64 {
-        self.rent_principal
-    }
-    /// Return creation principal that must move atomically with activation.
-    pub const fn creation_principal(self) -> u64 {
-        self.creation_principal
-    }
-}
-
-/// Separately mutable, manifest-bound capability funding ledger.
-///
-/// The composing adapter supplies the observed holding-account principal to
-/// [`Self::new`] and [`Self::validate_against`]. It must commit state only in
-/// the same successful transaction that executes a returned debit.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FundingStateV1 {
-    manifest_content_id: ContentId,
-    entry_index: u16,
-    status: FundingStatus,
-    activation_slot: u64,
-    remaining: FundingAmountsV1,
-    released: FundingAmountsV1,
-}
-
-impl FundingStateV1 {
-    /// Construct an exactly prepaid pending state for one manifest entry.
-    pub fn new(
-        manifest_content_id: ContentId,
-        manifest: CapabilityManifestV1<'_>,
-        entry_index: u16,
-        observed_present_principal: u64,
-    ) -> Result<Self> {
-        let entry = manifest.entry(entry_index)?;
-        if observed_present_principal != entry.funding_quote.total_principal {
-            return Err(Error::PresentPrincipalMismatch);
-        }
-        Ok(Self {
-            manifest_content_id,
-            entry_index,
-            status: FundingStatus::Pending,
-            activation_slot: 0,
-            remaining: entry.funding_quote,
-            released: FundingAmountsV1::default(),
-        })
-    }
-
-    /// Decode one exact canonical funding-state record.
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != FUNDING_STATE_BYTES {
-            return Err(Error::InvalidLength);
-        }
-        if read_array::<8>(bytes, 0)? != FUNDING_STATE_MAGIC {
-            return Err(Error::InvalidMagic);
-        }
-        if read_u16(bytes, STATE_SCHEMA_OFFSET)? != FUNDING_STATE_SCHEMA_VERSION {
-            return Err(Error::UnsupportedSchema);
-        }
-        require_zero(
-            bytes,
-            STATE_HEADER_RESERVED_OFFSET,
-            STATE_HEADER_RESERVED_BYTES,
-        )?;
-        require_zero(bytes, STATE_BODY_RESERVED_OFFSET, STATE_BODY_RESERVED_BYTES)?;
-        let result = Self {
-            manifest_content_id: read_content_id(bytes, STATE_MANIFEST_ID_OFFSET)?,
-            entry_index: read_u16(bytes, STATE_ENTRY_INDEX_OFFSET)?,
-            status: FundingStatus::decode(read_byte(bytes, STATE_STATUS_OFFSET)?)?,
-            activation_slot: read_u64(bytes, STATE_ACTIVATION_SLOT_OFFSET)?,
-            remaining: FundingAmountsV1::decode(subslice(
-                bytes,
-                STATE_REMAINING_OFFSET,
-                FUNDING_QUOTE_BYTES,
-            )?)?,
-            released: FundingAmountsV1::decode(subslice(
-                bytes,
-                STATE_RELEASED_OFFSET,
-                FUNDING_QUOTE_BYTES,
-            )?)?,
-        };
-        match result.status {
-            FundingStatus::Pending
-                if result.activation_slot != 0 || result.released.total_principal != 0 =>
-            {
-                Err(Error::InvalidFundingStatus)
-            }
-            FundingStatus::Active => Ok(result),
-            FundingStatus::Pending => Ok(result),
-        }
-    }
-
-    /// Return exact canonical bytes.
-    pub fn to_bytes(self) -> [u8; FUNDING_STATE_BYTES] {
-        let mut output = [0u8; FUNDING_STATE_BYTES];
-        copy_infallible(&mut output, 0, &FUNDING_STATE_MAGIC);
-        put_u16(
-            &mut output,
-            STATE_SCHEMA_OFFSET,
-            FUNDING_STATE_SCHEMA_VERSION,
-        );
-        put_byte(&mut output, STATE_STATUS_OFFSET, self.status.byte());
-        copy_content_id(
-            &mut output,
-            STATE_MANIFEST_ID_OFFSET,
-            self.manifest_content_id,
-        );
-        put_u16(&mut output, STATE_ENTRY_INDEX_OFFSET, self.entry_index);
-        put_u64(
-            &mut output,
-            STATE_ACTIVATION_SLOT_OFFSET,
-            self.activation_slot,
-        );
-        copy_infallible(
-            &mut output,
-            STATE_REMAINING_OFFSET,
-            &self.remaining.to_bytes(),
-        );
-        copy_infallible(
-            &mut output,
-            STATE_RELEASED_OFFSET,
-            &self.released.to_bytes(),
-        );
-        output
-    }
-
-    /// Validate binding, per-compartment quote conservation, pending/active
-    /// invariants, and exact presently held principal.
-    pub fn validate_against(
-        self,
-        manifest_content_id: ContentId,
-        manifest: CapabilityManifestV1<'_>,
-        observed_present_principal: u64,
-    ) -> Result<()> {
-        if self.manifest_content_id != manifest_content_id {
-            return Err(Error::FundingBindingMismatch);
-        }
-        let entry = manifest.entry(self.entry_index)?;
-        validate_conservation(self.remaining, self.released, entry.funding_quote)?;
-        if observed_present_principal != self.remaining.total_principal {
-            return Err(Error::PresentPrincipalMismatch);
-        }
-        match self.status {
-            FundingStatus::Pending => {
-                if self.activation_slot != 0 || self.released.total_principal != 0 {
-                    return Err(Error::InvalidFundingStatus);
-                }
-            }
-            FundingStatus::Active => {
-                if self.remaining.rent_principal != 0
-                    || self.remaining.creation_principal != 0
-                    || self.released.rent_principal != entry.funding_quote.rent_principal
-                    || self.released.creation_principal != entry.funding_quote.creation_principal
-                {
-                    return Err(Error::FundingConservationMismatch);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Determine whether this funding state permits Market opening at a slot.
-    pub fn validate_market_open(
-        self,
-        manifest_content_id: ContentId,
-        manifest: CapabilityManifestV1<'_>,
-        observed_present_principal: u64,
-        current_slot: u64,
-    ) -> Result<()> {
-        self.validate_against(manifest_content_id, manifest, observed_present_principal)?;
-        let entry = manifest.entry(self.entry_index)?;
-        match (entry.activation_policy, self.status) {
-            (ActivationPolicy::RequiredAtFounding, FundingStatus::Pending) => {
-                Err(Error::FoundingCapabilityInactive)
-            }
-            (ActivationPolicy::PrepaidLazy, FundingStatus::Pending)
-                if current_slot > entry.activation_deadline_slot =>
-            {
-                Err(Error::ActivationDeadlineElapsed)
-            }
-            _ => Ok(()),
-        }
-    }
-
-    /// Activate a capability and segregatedly release its exact rent and
-    /// creation quote. The adapter executes the returned transfer plan and
-    /// persists this mutation atomically only after physical creation succeeds.
-    pub fn activate(
-        &mut self,
-        manifest_content_id: ContentId,
-        manifest: CapabilityManifestV1<'_>,
-        observed_present_principal: u64,
-        current_slot: u64,
-    ) -> Result<ActivationDebitV1> {
-        self.validate_against(manifest_content_id, manifest, observed_present_principal)?;
-        if self.status != FundingStatus::Pending {
-            return Err(Error::InvalidFundingStatus);
-        }
-        let entry = manifest.entry(self.entry_index)?;
-        if entry.activation_policy == ActivationPolicy::PrepaidLazy
-            && current_slot > entry.activation_deadline_slot
-        {
-            return Err(Error::ActivationDeadlineElapsed);
-        }
-        let debit = ActivationDebitV1 {
-            rent_principal: entry.funding_quote.rent_principal,
-            creation_principal: entry.funding_quote.creation_principal,
-        };
-        let mut next_remaining = self.remaining;
-        let mut next_released = self.released;
-        move_compartment(
-            &mut next_remaining,
-            &mut next_released,
-            FundingCompartment::Rent,
-            debit.rent_principal,
-        )?;
-        move_compartment(
-            &mut next_remaining,
-            &mut next_released,
-            FundingCompartment::Creation,
-            debit.creation_principal,
-        )?;
-        self.remaining = next_remaining;
-        self.released = next_released;
-        self.status = FundingStatus::Active;
-        self.activation_slot = current_slot;
-        Ok(debit)
-    }
-
-    /// Release exact principal from one non-activation compartment.
-    pub fn release(
-        &mut self,
-        manifest_content_id: ContentId,
-        manifest: CapabilityManifestV1<'_>,
-        observed_present_principal: u64,
-        compartment: FundingCompartment,
-        principal: u64,
-    ) -> Result<()> {
-        self.validate_against(manifest_content_id, manifest, observed_present_principal)?;
-        if self.status != FundingStatus::Active {
-            return Err(Error::InvalidFundingStatus);
-        }
-        if principal == 0 {
-            return Err(Error::ZeroPrincipalRelease);
-        }
-        if matches!(
-            compartment,
-            FundingCompartment::Rent | FundingCompartment::Creation
-        ) {
-            return Err(Error::ActivationCompartmentRequired);
-        }
-        move_compartment(
-            &mut self.remaining,
-            &mut self.released,
-            compartment,
-            principal,
-        )
-    }
-
-    /// Return the bound manifest content identity.
-    pub const fn manifest_content_id(self) -> ContentId {
-        self.manifest_content_id
-    }
-    /// Return the bound manifest entry index.
-    pub const fn entry_index(self) -> u16 {
-        self.entry_index
-    }
-    /// Return activation status.
-    pub const fn status(self) -> FundingStatus {
-        self.status
-    }
-    /// Return the activation slot, or zero while pending.
-    pub const fn activation_slot(self) -> u64 {
-        self.activation_slot
-    }
-    /// Return exact presently held principal by compartment.
-    pub const fn remaining(self) -> FundingAmountsV1 {
-        self.remaining
-    }
-    /// Return exact previously released principal by compartment.
-    pub const fn released(self) -> FundingAmountsV1 {
-        self.released
-    }
-}
-
-/// Canonical PDA seed projection for one physical capability funding ledger.
-///
-/// A Market root authenticates `manifest_content_id`; the selected manifest
-/// entry then binds the entry index, immutable config, and implementation
-/// release. This makes physical funding unique without giving an individual
-/// capability a parallel derivation convention.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CapabilityFundingDerivationV1 {
-    market: [u8; 32],
-    generation_le: [u8; 8],
-    entry_index_le: [u8; 2],
-    config_id: [u8; 32],
-    release_id: [u8; 32],
-}
-
-impl CapabilityFundingDerivationV1 {
-    /// Validate funding-to-manifest binding and construct exact ordered seeds.
-    pub fn new(
-        market: [u8; 32],
-        generation: u64,
-        manifest_content_id: ContentId,
-        manifest: CapabilityManifestV1<'_>,
-        funding: FundingStateV1,
-    ) -> Result<Self> {
-        require_nonzero_identifier(&market)?;
-        if funding.manifest_content_id() != manifest_content_id {
-            return Err(Error::FundingBindingMismatch);
-        }
-        let entry = manifest.entry(funding.entry_index())?;
-        Ok(Self {
-            market,
-            generation_le: generation.to_le_bytes(),
-            entry_index_le: funding.entry_index().to_le_bytes(),
-            config_id: entry.config_id().to_bytes(),
-            release_id: entry.release_id().to_bytes(),
-        })
-    }
-
-    /// Return the exact ordered PDA seed components.
-    pub fn seed_components(&self) -> [&[u8]; 6] {
-        [
-            CAPABILITY_FUNDING_PDA_DOMAIN_V1,
-            self.market.as_slice(),
-            self.generation_le.as_slice(),
-            self.entry_index_le.as_slice(),
-            self.config_id.as_slice(),
-            self.release_id.as_slice(),
-        ]
-    }
-
-    /// Return the authenticated Market key seed.
-    pub const fn market(self) -> [u8; 32] {
-        self.market
-    }
-
-    /// Return the immutable Market generation seed.
-    pub const fn generation(self) -> u64 {
-        u64::from_le_bytes(self.generation_le)
-    }
-
-    /// Return the selected manifest entry index seed.
-    pub const fn entry_index(self) -> u16 {
-        u16::from_le_bytes(self.entry_index_le)
-    }
-
-    /// Return the selected immutable capability config identity seed.
-    pub const fn config_id(self) -> [u8; 32] {
-        self.config_id
-    }
-
-    /// Return the selected immutable capability release identity seed.
-    pub const fn release_id(self) -> [u8; 32] {
-        self.release_id
     }
 }
 
@@ -1296,7 +701,7 @@ impl MarketOpeningReadinessV1 {
         manifest: CapabilityManifestV1<'_>,
         expected_entry_index: u16,
         funding: FundingStateV1,
-        observed_present_principal: u64,
+        custody: FundingCustodyObservationV1,
         current_slot: u64,
     ) -> Result<()> {
         self.validate_binding(market, generation, manifest_content_id, manifest)?;
@@ -1309,12 +714,7 @@ impl MarketOpeningReadinessV1 {
         if funding.entry_index() != expected_entry_index {
             return Err(Error::FundingBindingMismatch);
         }
-        funding.validate_market_open(
-            manifest_content_id,
-            manifest,
-            observed_present_principal,
-            current_slot,
-        )?;
+        funding.validate_market_open(manifest_content_id, manifest, custody, current_slot)?;
         self.next_entry_index = self
             .next_entry_index
             .checked_add(1)
@@ -1533,76 +933,12 @@ fn validate_activation(
         }
         ActivationPolicy::PrepaidLazy if deadline == 0 => Err(Error::MissingActivationDeadline),
         ActivationPolicy::PrepaidLazy
-            if quote.rent_principal == 0 && quote.creation_principal == 0 =>
+            if quote.amounts().rent().amount() == 0 && quote.amounts().creation().amount() == 0 =>
         {
             Err(Error::MissingLazyCreationFunding)
         }
         _ => Ok(()),
     }
-}
-
-fn validate_conservation(
-    remaining: FundingAmountsV1,
-    released: FundingAmountsV1,
-    quote: FundingQuoteV1,
-) -> Result<()> {
-    let compartments = [
-        FundingCompartment::Rent,
-        FundingCompartment::Creation,
-        FundingCompartment::Work,
-        FundingCompartment::Provider,
-        FundingCompartment::Bounty,
-        FundingCompartment::Liquidity,
-        FundingCompartment::Service,
-    ];
-    for compartment in compartments {
-        if remaining
-            .value(compartment)
-            .checked_add(released.value(compartment))
-            .ok_or(Error::ArithmeticOverflow)?
-            != quote.value(compartment)
-        {
-            return Err(Error::FundingConservationMismatch);
-        }
-    }
-    if remaining
-        .total_principal
-        .checked_add(released.total_principal)
-        .ok_or(Error::ArithmeticOverflow)?
-        != quote.total_principal
-    {
-        return Err(Error::FundingConservationMismatch);
-    }
-    Ok(())
-}
-
-fn move_compartment(
-    remaining: &mut FundingAmountsV1,
-    released: &mut FundingAmountsV1,
-    compartment: FundingCompartment,
-    principal: u64,
-) -> Result<()> {
-    let new_remaining = remaining
-        .value(compartment)
-        .checked_sub(principal)
-        .ok_or(Error::InsufficientCompartmentPrincipal)?;
-    let new_released = released
-        .value(compartment)
-        .checked_add(principal)
-        .ok_or(Error::ArithmeticOverflow)?;
-    let next_remaining = remaining.with_value(compartment, new_remaining)?;
-    let next_released = released.with_value(compartment, new_released)?;
-    *remaining = next_remaining;
-    *released = next_released;
-    Ok(())
-}
-
-fn checked_sum(values: &[u64]) -> Result<u64> {
-    let mut total = 0u64;
-    for value in values {
-        total = total.checked_add(*value).ok_or(Error::ArithmeticOverflow)?;
-    }
-    Ok(total)
 }
 
 fn require_nonzero_identifier(identifier: &[u8; 32]) -> Result<()> {
@@ -1730,10 +1066,42 @@ mod tests {
     }
 
     fn quote() -> FundingQuoteV1 {
-        match FundingQuoteV1::new(10, 20, 30, 40, 50, 60, 70) {
+        match native_quote(10, 20, 30, 40, 50, 60, 70) {
             Ok(value) => value,
             Err(_) => unreachable_total(),
         }
+    }
+
+    fn native_amount(value: u64) -> Result<CompartmentFundingV1> {
+        if value == 0 {
+            Ok(CompartmentFundingV1::not_applicable())
+        } else {
+            CompartmentFundingV1::native_lamports(value)
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn native_quote(
+        rent: u64,
+        creation: u64,
+        work: u64,
+        provider: u64,
+        bounty: u64,
+        liquidity: u64,
+        service: u64,
+    ) -> Result<FundingQuoteV1> {
+        FundingQuoteV1::new(
+            FundingAmountsV1::new(
+                native_amount(rent)?,
+                native_amount(creation)?,
+                native_amount(work)?,
+                native_amount(provider)?,
+                native_amount(bounty)?,
+                native_amount(liquidity)?,
+                native_amount(service)?,
+            )?,
+            None,
+        )
     }
 
     fn entry(kind: u8, policy: ActivationPolicy, dependency: Option<u8>) -> CapabilityEntryV1 {
@@ -1874,7 +1242,7 @@ mod tests {
 
     #[test]
     fn one_shot_resolution_fund_quote_has_only_held_compartments() {
-        let fund_quote = match FundingQuoteV1::new(100, 0, 0, 40, 50, 0, 0) {
+        let fund_quote = match native_quote(100, 0, 0, 40, 50, 0, 0) {
             Ok(value) => value,
             Err(_) => unreachable_total(),
         };
@@ -1902,23 +1270,23 @@ mod tests {
 
         let invalid_quotes = [
             (
-                FundingQuoteV1::new(100, 0, 0, 40, 0, 0, 0),
+                native_quote(100, 0, 0, 40, 0, 0, 0),
                 Error::MissingResolutionFundBounty,
             ),
             (
-                FundingQuoteV1::new(100, 1, 0, 40, 50, 0, 0),
+                native_quote(100, 1, 0, 40, 50, 0, 0),
                 Error::ExtraneousResolutionFundPrincipal,
             ),
             (
-                FundingQuoteV1::new(100, 0, 1, 40, 50, 0, 0),
+                native_quote(100, 0, 1, 40, 50, 0, 0),
                 Error::ExtraneousResolutionFundPrincipal,
             ),
             (
-                FundingQuoteV1::new(100, 0, 0, 40, 50, 1, 0),
+                native_quote(100, 0, 0, 40, 50, 1, 0),
                 Error::ExtraneousResolutionFundPrincipal,
             ),
             (
-                FundingQuoteV1::new(100, 0, 0, 40, 50, 0, 1),
+                native_quote(100, 0, 0, 40, 50, 0, 1),
                 Error::ExtraneousResolutionFundPrincipal,
             ),
         ];
@@ -2011,7 +1379,7 @@ mod tests {
             CapabilityEntryV1::decode(&hostile),
             Err(Error::NonCanonicalReservedBytes)
         );
-        let zero_quote = match FundingQuoteV1::new(0, 0, 1, 0, 0, 0, 0) {
+        let zero_quote = match native_quote(0, 0, 1, 0, 0, 0, 0) {
             Ok(value) => value,
             Err(_) => unreachable_total(),
         };
@@ -2075,434 +1443,5 @@ mod tests {
                 Err(Error::ZeroContentId)
             );
         }
-    }
-
-    #[test]
-    fn funding_totals_are_checked_and_canonical() {
-        assert_eq!(
-            FundingQuoteV1::new(u64::MAX, 1, 0, 0, 0, 0, 0),
-            Err(Error::ArithmeticOverflow)
-        );
-        let mut encoded = quote().to_bytes();
-        mutate(&mut encoded, FUNDING_TOTAL_OFFSET, 0);
-        assert_eq!(
-            FundingQuoteV1::decode(&encoded),
-            Err(Error::FundingTotalMismatch)
-        );
-    }
-
-    #[test]
-    fn capability_funding_derivation_is_manifest_bound_and_ordered() {
-        assert_eq!(CAPABILITY_FUNDING_PDA_DOMAIN_V1.len(), 22);
-        assert!(CAPABILITY_FUNDING_PDA_DOMAIN_V1.len() <= SVM_MAX_PDA_SEED_BYTES);
-
-        let entries = [entry(1, ActivationPolicy::PrepaidLazy, None)];
-        let mut storage = [0u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
-        let canonical = manifest(&entries, &mut storage);
-        let manifest_id = id(99);
-        let funding = FundingStateV1::new(manifest_id, canonical, 0, quote().total_principal())
-            .expect("canonical funding");
-        let derivation =
-            CapabilityFundingDerivationV1::new([7; 32], 11, manifest_id, canonical, funding)
-                .expect("canonical derivation");
-        let seeds = derivation.seed_components();
-        assert_eq!(seeds[0], CAPABILITY_FUNDING_PDA_DOMAIN_V1);
-        assert_eq!(seeds[1], &[7; 32]);
-        assert_eq!(seeds[2], 11u64.to_le_bytes().as_slice());
-        assert_eq!(seeds[3], 0u16.to_le_bytes().as_slice());
-        assert_eq!(seeds[4], id(22).as_bytes());
-        assert_eq!(seeds[5], id(21).as_bytes());
-        assert_eq!(derivation.market(), [7; 32]);
-        assert_eq!(derivation.generation(), 11);
-        assert_eq!(derivation.entry_index(), 0);
-
-        assert_eq!(
-            CapabilityFundingDerivationV1::new([0; 32], 11, manifest_id, canonical, funding,),
-            Err(Error::ZeroIdentifier)
-        );
-        assert_eq!(
-            CapabilityFundingDerivationV1::new([7; 32], 11, id(98), canonical, funding),
-            Err(Error::FundingBindingMismatch)
-        );
-
-        let substituted_entries = [entry_with_config(
-            1,
-            23,
-            ActivationPolicy::PrepaidLazy,
-            None,
-            quote(),
-        )];
-        let mut substituted_storage = [0u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
-        let substituted = manifest(&substituted_entries, &mut substituted_storage);
-        let substituted_derivation =
-            CapabilityFundingDerivationV1::new([7; 32], 11, manifest_id, substituted, funding)
-                .expect("adapter must separately authenticate manifest hash");
-        assert_ne!(derivation.config_id(), substituted_derivation.config_id());
-        assert_ne!(
-            derivation.seed_components(),
-            substituted_derivation.seed_components()
-        );
-
-        let release_substitution = CapabilityEntryV1::new(
-            id(1),
-            id(26),
-            id(22),
-            id(23),
-            id(24),
-            id(25),
-            ActivationPolicy::PrepaidLazy,
-            500,
-            0,
-            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
-            quote(),
-        )
-        .expect("valid substituted release");
-        let mut release_storage = [0u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
-        let release_manifest = manifest(&[release_substitution], &mut release_storage);
-        let release_derivation =
-            CapabilityFundingDerivationV1::new([7; 32], 11, manifest_id, release_manifest, funding)
-                .expect("adapter must separately authenticate manifest hash");
-        assert_ne!(derivation.release_id(), release_derivation.release_id());
-        assert_ne!(
-            derivation.seed_components(),
-            release_derivation.seed_components()
-        );
-    }
-
-    #[test]
-    fn funding_is_prepaid_activated_and_conserved() {
-        let entries = [entry(1, ActivationPolicy::PrepaidLazy, None)];
-        let mut storage = [0u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
-        let manifest = manifest(&entries, &mut storage);
-        let manifest_id = id(99);
-        assert_eq!(
-            FundingStateV1::new(manifest_id, manifest, 0, quote().total_principal() - 1),
-            Err(Error::PresentPrincipalMismatch)
-        );
-        let mut state =
-            match FundingStateV1::new(manifest_id, manifest, 0, quote().total_principal()) {
-                Ok(value) => value,
-                Err(_) => unreachable_total(),
-            };
-        assert!(
-            state
-                .validate_market_open(manifest_id, manifest, quote().total_principal(), 400,)
-                .is_ok()
-        );
-        let debit = state.activate(manifest_id, manifest, quote().total_principal(), 500);
-        assert_eq!(
-            debit,
-            Ok(ActivationDebitV1 {
-                rent_principal: 10,
-                creation_principal: 20,
-            })
-        );
-        assert!(
-            state
-                .validate_against(manifest_id, manifest, quote().total_principal() - 30,)
-                .is_ok()
-        );
-        assert!(
-            state
-                .release(
-                    manifest_id,
-                    manifest,
-                    quote().total_principal() - 30,
-                    FundingCompartment::Provider,
-                    40,
-                )
-                .is_ok()
-        );
-        assert_eq!(
-            state.release(
-                manifest_id,
-                manifest,
-                quote().total_principal() - 70,
-                FundingCompartment::Provider,
-                1,
-            ),
-            Err(Error::InsufficientCompartmentPrincipal)
-        );
-        assert_eq!(
-            state.release(
-                manifest_id,
-                manifest,
-                quote().total_principal() - 70,
-                FundingCompartment::Rent,
-                1,
-            ),
-            Err(Error::ActivationCompartmentRequired)
-        );
-        assert!(
-            state
-                .validate_against(manifest_id, manifest, quote().total_principal() - 70,)
-                .is_ok()
-        );
-        let round_trip = FundingStateV1::decode(&state.to_bytes());
-        assert_eq!(round_trip, Ok(state));
-    }
-
-    #[test]
-    fn founding_and_deadline_rules_are_exact() {
-        let founding = entry(1, ActivationPolicy::RequiredAtFounding, None);
-        let lazy = entry(2, ActivationPolicy::PrepaidLazy, None);
-        let entries = [founding, lazy];
-        let mut storage = [0u8; MANIFEST_HEADER_BYTES + 2 * CAPABILITY_ENTRY_BYTES];
-        let manifest = manifest(&entries, &mut storage);
-        let mut founding_state =
-            match FundingStateV1::new(id(99), manifest, 0, quote().total_principal()) {
-                Ok(value) => value,
-                Err(_) => unreachable_total(),
-            };
-        assert_eq!(
-            founding_state.validate_market_open(id(99), manifest, quote().total_principal(), 1,),
-            Err(Error::FoundingCapabilityInactive)
-        );
-        assert!(
-            founding_state
-                .activate(id(99), manifest, quote().total_principal(), 1)
-                .is_ok()
-        );
-        assert!(
-            founding_state
-                .validate_market_open(id(99), manifest, quote().total_principal() - 30, 1,)
-                .is_ok()
-        );
-        let mut lazy_state =
-            match FundingStateV1::new(id(99), manifest, 1, quote().total_principal()) {
-                Ok(value) => value,
-                Err(_) => unreachable_total(),
-            };
-        let before = lazy_state;
-        assert_eq!(
-            lazy_state.activate(id(99), manifest, quote().total_principal(), 501),
-            Err(Error::ActivationDeadlineElapsed)
-        );
-        assert_eq!(lazy_state, before);
-        assert_eq!(
-            lazy_state.validate_market_open(id(99), manifest, quote().total_principal(), 501,),
-            Err(Error::ActivationDeadlineElapsed)
-        );
-    }
-
-    #[test]
-    fn funding_state_hostile_encoding_is_refused() {
-        let entries = [entry(1, ActivationPolicy::RequiredAtFounding, None)];
-        let mut storage = [0u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
-        let manifest = manifest(&entries, &mut storage);
-        let state = match FundingStateV1::new(id(99), manifest, 0, quote().total_principal()) {
-            Ok(value) => value,
-            Err(_) => unreachable_total(),
-        };
-        let mut bytes = state.to_bytes();
-        mutate(&mut bytes, STATE_HEADER_RESERVED_OFFSET, 1);
-        assert_eq!(
-            FundingStateV1::decode(&bytes),
-            Err(Error::NonCanonicalReservedBytes)
-        );
-        let mut wrong_total = state.to_bytes();
-        mutate(
-            &mut wrong_total,
-            STATE_REMAINING_OFFSET + FUNDING_TOTAL_OFFSET,
-            0,
-        );
-        assert_eq!(
-            FundingStateV1::decode(&wrong_total),
-            Err(Error::FundingTotalMismatch)
-        );
-
-        let mut conserved_lie = state.to_bytes();
-        put_u64(
-            &mut conserved_lie,
-            STATE_REMAINING_OFFSET + FUNDING_WORK_OFFSET,
-            quote().work_principal() - 1,
-        );
-        put_u64(
-            &mut conserved_lie,
-            STATE_REMAINING_OFFSET + FUNDING_TOTAL_OFFSET,
-            quote().total_principal() - 1,
-        );
-        let decoded = match FundingStateV1::decode(&conserved_lie) {
-            Ok(value) => value,
-            Err(_) => unreachable_total(),
-        };
-        assert_eq!(
-            decoded.validate_against(id(99), manifest, quote().total_principal() - 1),
-            Err(Error::FundingConservationMismatch)
-        );
-    }
-
-    #[test]
-    fn readiness_advances_only_canonical_actual_funding_and_opens_only_when_derived_ready() {
-        let entries = [
-            entry(1, ActivationPolicy::RequiredAtFounding, None),
-            entry(2, ActivationPolicy::PrepaidLazy, None),
-        ];
-        let mut storage = [0u8; MANIFEST_HEADER_BYTES + 2 * CAPABILITY_ENTRY_BYTES];
-        let manifest = manifest(&entries, &mut storage);
-        let manifest_id = id(99);
-        let mut readiness =
-            match MarketOpeningReadinessV1::begin([7; 32], 3, manifest_id, manifest, [8; 32]) {
-                Ok(value) => value,
-                Err(_) => unreachable_total(),
-            };
-        let initial = readiness;
-        let mut founding =
-            match FundingStateV1::new(manifest_id, manifest, 0, quote().total_principal()) {
-                Ok(value) => value,
-                Err(_) => unreachable_total(),
-            };
-        assert_eq!(
-            readiness.advance(
-                [7; 32],
-                3,
-                manifest_id,
-                manifest,
-                0,
-                founding,
-                quote().total_principal(),
-                1,
-            ),
-            Err(Error::FoundingCapabilityInactive)
-        );
-        assert_eq!(readiness, initial);
-        assert_eq!(
-            readiness.advance(
-                [7; 32],
-                3,
-                manifest_id,
-                manifest,
-                1,
-                founding,
-                quote().total_principal(),
-                1,
-            ),
-            Err(Error::ReadinessIndexMismatch)
-        );
-        assert_eq!(readiness, initial);
-        assert!(
-            founding
-                .activate(manifest_id, manifest, quote().total_principal(), 1)
-                .is_ok()
-        );
-        assert_eq!(
-            readiness.advance(
-                [7; 32],
-                3,
-                manifest_id,
-                manifest,
-                0,
-                founding,
-                quote().total_principal() - 31,
-                1,
-            ),
-            Err(Error::PresentPrincipalMismatch)
-        );
-        assert_eq!(readiness, initial);
-        assert!(
-            readiness
-                .advance(
-                    [7; 32],
-                    3,
-                    manifest_id,
-                    manifest,
-                    0,
-                    founding,
-                    quote().total_principal() - 30,
-                    1,
-                )
-                .is_ok()
-        );
-        assert_eq!(readiness.next_entry_index(), 1);
-        assert_eq!(
-            readiness.require_ready_for_open([7; 32], 3, manifest_id, manifest),
-            Err(Error::ReadinessIncomplete)
-        );
-        let lazy = match FundingStateV1::new(manifest_id, manifest, 1, quote().total_principal()) {
-            Ok(value) => value,
-            Err(_) => unreachable_total(),
-        };
-        assert_eq!(
-            readiness.advance(
-                [7; 32],
-                3,
-                manifest_id,
-                manifest,
-                0,
-                lazy,
-                quote().total_principal(),
-                400,
-            ),
-            Err(Error::ReadinessIndexMismatch)
-        );
-        assert!(
-            readiness
-                .advance(
-                    [7; 32],
-                    3,
-                    manifest_id,
-                    manifest,
-                    1,
-                    lazy,
-                    quote().total_principal(),
-                    400,
-                )
-                .is_ok()
-        );
-        assert!(readiness.is_ready());
-        assert!(
-            readiness
-                .require_ready_for_open([7; 32], 3, manifest_id, manifest)
-                .is_ok()
-        );
-        assert_eq!(
-            readiness.advance(
-                [7; 32],
-                3,
-                manifest_id,
-                manifest,
-                2,
-                lazy,
-                quote().total_principal(),
-                400,
-            ),
-            Err(Error::ReadinessIndexMismatch)
-        );
-        assert_eq!(
-            readiness.require_ready_for_open([6; 32], 3, manifest_id, manifest),
-            Err(Error::ReadinessBindingMismatch)
-        );
-        assert_eq!(
-            readiness.require_ready_for_open([7; 32], 3, id(98), manifest),
-            Err(Error::ReadinessBindingMismatch)
-        );
-        let one_entry = [entry(1, ActivationPolicy::RequiredAtFounding, None)];
-        let mut shorter_storage = [0u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
-        let shorter_manifest =
-            match CapabilityManifestV1::encode_into(&one_entry, &mut shorter_storage) {
-                Ok(value) => value,
-                Err(_) => unreachable_total(),
-            };
-        assert_eq!(
-            readiness.require_ready_for_open([7; 32], 3, manifest_id, shorter_manifest),
-            Err(Error::ReadinessBindingMismatch)
-        );
-        let mut malformed_manifest = [0u8; MANIFEST_HEADER_BYTES + 2 * CAPABILITY_ENTRY_BYTES];
-        malformed_manifest.copy_from_slice(manifest.as_bytes());
-        mutate(&mut malformed_manifest, MANIFEST_RESERVED_OFFSET, 1);
-        assert_eq!(
-            CapabilityManifestV1::decode(&malformed_manifest),
-            Err(Error::NonCanonicalReservedBytes)
-        );
-        assert_eq!(
-            MarketOpeningReadinessV1::decode(&readiness.to_bytes()),
-            Ok(readiness)
-        );
-        let mut hostile = readiness.to_bytes();
-        mutate(&mut hostile, READINESS_BODY_RESERVED_OFFSET, 1);
-        assert_eq!(
-            MarketOpeningReadinessV1::decode(&hostile),
-            Err(Error::NonCanonicalReservedBytes)
-        );
     }
 }

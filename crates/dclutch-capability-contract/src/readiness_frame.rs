@@ -8,8 +8,8 @@
 use dclutch_core_contract::{ContentId, MarketRoot, Phase};
 
 use crate::{
-    CapabilityManifestV1, FundingStateV1, MARKET_OPENING_READINESS_PDA_DOMAIN,
-    MarketOpeningReadinessV1,
+    CapabilityManifestV1, FundingCustodyObservationV1, FundingStateV1,
+    MARKET_OPENING_READINESS_PDA_DOMAIN, MarketOpeningReadinessV1,
     readiness_instruction::{AdvanceMarketOpeningReadinessV1, BeginMarketOpeningReadinessV1},
 };
 
@@ -310,30 +310,6 @@ impl AuthenticatedRentCreditBeneficiaryV1 {
     }
 }
 
-/// Authenticated observed capitalization of the selected FundingState account.
-///
-/// The adapter obtains this number from the account, not instruction bytes.
-/// It is checked against the FundingState's derived remaining principal before
-/// readiness advances.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FundingAccountCapitalizationV1 {
-    observed_present_principal: u64,
-}
-
-impl FundingAccountCapitalizationV1 {
-    /// Construct from the adapter's exact observed funding-account principal.
-    pub const fn new(observed_present_principal: u64) -> Self {
-        Self {
-            observed_present_principal,
-        }
-    }
-
-    /// Return the exact observed present principal.
-    pub const fn observed_present_principal(self) -> u64 {
-        self.observed_present_principal
-    }
-}
-
 /// Successful Begin state, ready for atomic SVM account creation and persistence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BeginMarketOpeningReadinessPlanV1<'a> {
@@ -382,7 +358,7 @@ pub struct AdvanceMarketOpeningReadinessObservationV1<'a> {
     readiness: MarketOpeningReadinessV1,
     manifest: CapabilityManifestV1<'a>,
     funding: FundingStateV1,
-    capitalization: FundingAccountCapitalizationV1,
+    custody: FundingCustodyObservationV1,
     current_slot: u64,
 }
 
@@ -393,7 +369,7 @@ impl<'a> AdvanceMarketOpeningReadinessObservationV1<'a> {
         readiness: MarketOpeningReadinessV1,
         manifest: CapabilityManifestV1<'a>,
         funding: FundingStateV1,
-        capitalization: FundingAccountCapitalizationV1,
+        custody: FundingCustodyObservationV1,
         current_slot: u64,
     ) -> Self {
         Self {
@@ -401,7 +377,7 @@ impl<'a> AdvanceMarketOpeningReadinessObservationV1<'a> {
             readiness,
             manifest,
             funding,
-            capitalization,
+            custody,
             current_slot,
         }
     }
@@ -479,8 +455,9 @@ pub fn begin_market_opening_readiness<'a>(
 /// intentionally absent from both the account frame and instruction wire.
 /// The adapter must prove every supplied account's owner/PDA/content identity,
 /// hash the exact manifest preimage, read the FundingState bytes, observe the
-/// funding account capitalization, and persist the returned readiness record
-/// only if all checks and the transaction itself succeed.
+/// program-owned state's lamports and any authenticated Realm token vault, and
+/// persist the returned readiness record only if all checks and the transaction
+/// itself succeed.
 pub fn advance_market_opening_readiness<'a>(
     instruction: AdvanceMarketOpeningReadinessV1,
     frame: AdvanceMarketOpeningReadinessFrameV1,
@@ -498,7 +475,7 @@ pub fn advance_market_opening_readiness<'a>(
             observation.manifest,
             instruction.expected_entry_index(),
             observation.funding,
-            observation.capitalization.observed_present_principal(),
+            observation.custody,
             observation.current_slot,
         )
         .map_err(ReadinessFrameError::Capability)?;
@@ -578,8 +555,8 @@ fn is_zero(bytes: &[u8; READINESS_PUBKEY_BYTES]) -> bool {
 mod tests {
     use super::*;
     use crate::{
-        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, FundingAmountsV1,
-        MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
+        FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
     };
 
     fn id(value: u8) -> ContentId {
@@ -637,7 +614,20 @@ mod tests {
     fn manifest<'a>(
         storage: &'a mut [u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES],
     ) -> CapabilityManifestV1<'a> {
-        let quote = FundingAmountsV1::new(0, 0, 5, 0, 0, 0, 0).expect("quote");
+        let quote = FundingQuoteV1::new(
+            FundingAmountsV1::new(
+                CompartmentFundingV1::not_applicable(),
+                CompartmentFundingV1::not_applicable(),
+                CompartmentFundingV1::native_lamports(5).expect("work lamports"),
+                CompartmentFundingV1::not_applicable(),
+                CompartmentFundingV1::not_applicable(),
+                CompartmentFundingV1::not_applicable(),
+                CompartmentFundingV1::not_applicable(),
+            )
+            .expect("amounts"),
+            None,
+        )
+        .expect("quote");
         let entry = CapabilityEntryV1::new(
             id(20),
             id(21),
@@ -751,7 +741,8 @@ mod tests {
                 .expect("credit beneficiary"),
         )
         .expect("begin plan");
-        let mut funding = FundingStateV1::new(id(5), manifest, 0, 5).expect("funding");
+        let custody = FundingCustodyObservationV1::native_only(105, 100).expect("custody");
+        let mut funding = FundingStateV1::new(id(5), manifest, 0, custody).expect("funding");
         assert_eq!(
             advance_market_opening_readiness(
                 AdvanceMarketOpeningReadinessV1::new(7, 0),
@@ -761,7 +752,7 @@ mod tests {
                     begin.readiness(),
                     manifest,
                     funding,
-                    FundingAccountCapitalizationV1::new(5),
+                    custody,
                     10,
                 ),
             ),
@@ -770,7 +761,7 @@ mod tests {
             ))
         );
         funding
-            .activate(id(5), manifest, 5, 10)
+            .activate(id(5), manifest, custody, 10)
             .expect("activate founding capability");
         assert_eq!(
             advance_market_opening_readiness(
@@ -781,12 +772,12 @@ mod tests {
                     begin.readiness(),
                     manifest,
                     funding,
-                    FundingAccountCapitalizationV1::new(4),
+                    FundingCustodyObservationV1::native_only(104, 100).expect("short custody"),
                     10,
                 ),
             ),
             Err(ReadinessFrameError::Capability(
-                crate::Error::PresentPrincipalMismatch
+                crate::Error::PresentNativeLamportsMismatch
             ))
         );
         let plan = advance_market_opening_readiness(
@@ -797,7 +788,7 @@ mod tests {
                 begin.readiness(),
                 manifest,
                 funding,
-                FundingAccountCapitalizationV1::new(5),
+                custody,
                 10,
             ),
         )
