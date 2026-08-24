@@ -9,6 +9,8 @@
 
 use sha2::{Digest, Sha256};
 
+use clutch_batch::exact_integer::exact_mul_div_rem;
+
 use crate::{live, Error, Id, Result, MAX_FEE_ROWS_V1};
 
 /// Fresh semantic version for selected-execution fee weighting.
@@ -434,8 +436,13 @@ pub fn composite_fee_hamilton_share_v2(
     if exact_weight == 0 || total_weight == 0 || exact_weight > total_weight {
         return Err(Error::InvalidWidth);
     }
-    let (floor_atoms, remainder) =
-        mul_u64_u128_div_rem(total_atoms, exact_weight, total_weight)?;
+    let (floor_atoms, remainder) = exact_mul_div_rem(
+        u128::from(total_atoms),
+        exact_weight,
+        total_weight,
+    )
+    .map_err(|_| Error::ArithmeticOverflow)?;
+    let floor_atoms = u64::try_from(floor_atoms).map_err(|_| Error::AmountOutOfRange)?;
     Ok(CompositeFeeHamiltonShareV2 { floor_atoms, remainder })
 }
 
@@ -522,43 +529,6 @@ pub fn allocate_composite_fee_weight_atoms_v2(
     })
 }
 
-/// Exact `(left * weight) / denominator` for `u64 * u128` without a wider
-/// primitive or overflow. The quotient is at most `left` because
-/// `weight <= denominator` for every row in a total-weight book.
-fn mul_u64_u128_div_rem(
-    left: u64,
-    weight: u128,
-    denominator: u128,
-) -> Result<(u64, u128)> {
-    if denominator == 0 || weight > denominator {
-        return Err(Error::InvalidWidth);
-    }
-    let mut quotient = 0u64;
-    let mut remainder = 0u128;
-    let mut bit = 64u32;
-    while bit != 0 {
-        bit -= 1;
-        quotient = quotient.checked_mul(2).ok_or(Error::ArithmeticOverflow)?;
-        let mut digit = 0u64;
-        if remainder >= denominator - remainder {
-            remainder -= denominator - remainder;
-            digit = 1;
-        } else {
-            remainder += remainder;
-        }
-        if ((left >> bit) & 1) != 0 {
-            if remainder >= denominator - weight {
-                remainder -= denominator - weight;
-                digit = digit.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
-            } else {
-                remainder += weight;
-            }
-        }
-        quotient = quotient.checked_add(digit).ok_or(Error::ArithmeticOverflow)?;
-    }
-    Ok((quotient, remainder))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -624,6 +594,42 @@ mod tests {
                 Ok(if prior.is_none() { Some(row) } else { Some(row) })
             }),
             Err(Error::DuplicateIdentity)
+        );
+    }
+
+    #[test]
+    fn indexed_cache_commitment_accepts_exact_empty_and_refuses_hidden_tail() {
+        let empty = composite_fee_weight_transcript_from_indexed_rows_v2(
+            id(8),
+            11,
+            0,
+            |_| Ok(None),
+        )
+        .unwrap();
+        assert_eq!(empty.len(), 0);
+        assert_eq!(empty.total_weight(), 0);
+
+        let rows = [
+            CompositeFeeWeightRowV2::structural(id(1), 5).unwrap(),
+            CompositeFeeWeightRowV2::structural(id(2), 7).unwrap(),
+        ];
+        let exact = composite_fee_weight_transcript_from_indexed_rows_v2(
+            id(8),
+            11,
+            2,
+            |index| Ok(rows.get(usize::from(index)).copied()),
+        )
+        .unwrap();
+        assert_eq!(exact.len(), 2);
+        assert_eq!(exact.total_weight(), 12);
+        assert_eq!(
+            composite_fee_weight_transcript_from_indexed_rows_v2(
+                id(8),
+                11,
+                1,
+                |index| Ok(rows.get(usize::from(index)).copied()),
+            ),
+            Err(Error::NonCanonicalPadding)
         );
     }
 
