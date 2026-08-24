@@ -7,6 +7,7 @@
 
 use dclutch_core_contract::{ContentId, Phase};
 use dclutch_realm_contract::POSITION_PDA_DOMAIN;
+use dclutch_record_contract::RAW_RECORD_PDA_SEED_V1;
 
 use crate::{MAX_NATIVE_CLAIMS, MIN_NATIVE_CLAIMS, instruction::DealerActionV1};
 
@@ -14,8 +15,11 @@ use crate::{MAX_NATIVE_CLAIMS, MIN_NATIVE_CLAIMS, instruction::DealerActionV1};
 pub const DEALER_PUBKEY_BYTES: usize = 32;
 /// Canonical Pool PDA domain.
 pub const DEALER_POOL_PDA_DOMAIN_V1: &[u8] = b"dclutch/dealer-pool/v1";
-/// Canonical immutable-config PDA domain.
-pub const DEALER_CONFIG_PDA_DOMAIN_V1: &[u8] = b"dclutch/dealer-config/v1";
+/// Immutable generic-record schema/release ID for Dealer ladder config bytes.
+pub const DEALER_CONFIG_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
+    0x6a, 0x11, 0xa5, 0x99, 0x65, 0x9e, 0x04, 0xad, 0x27, 0x54, 0xf7, 0x39, 0x23, 0x12, 0xbb, 0x4d,
+    0xaa, 0x52, 0xdb, 0xed, 0xa7, 0x9e, 0x56, 0x3d, 0xa8, 0xd8, 0x90, 0x13, 0x00, 0x04, 0x10, 0xf0,
+];
 /// Canonical LP-position PDA domain.
 pub const DEALER_LP_PDA_DOMAIN_V1: &[u8] = b"dclutch/dealer-lp/v1";
 /// Canonical segregated collateral-vault PDA domain.
@@ -96,6 +100,8 @@ pub enum DealerAccountRoleV1 {
     FundingCollateralVault,
     /// Immutable Dealer ladder configuration.
     LiquidityConfig,
+    /// Canonical vacant staging cursor proving config finalization.
+    LiquidityConfigStaging,
     /// Mutable Dealer Pool root.
     Pool,
     /// Mutable or vacant compact LP position.
@@ -116,8 +122,6 @@ pub enum DealerAccountRoleV1 {
     ServiceRefundVault,
     /// Permanent RentCredit receiving all Pool close lamports.
     PoolRentCredit,
-    /// Permanent RentCredit receiving all config close lamports.
-    ConfigRentCredit,
     /// Permanent RentCredit receiving all LP-position close lamports.
     LpRentCredit,
     /// Permanent RentCredit of the Pool authority receiving Pool Position rent.
@@ -198,11 +202,11 @@ pub fn dealer_account_count<const N: usize>(action: DealerActionV1) -> Result<us
     validate_profile::<N>()?;
     let base: usize = match action {
         DealerActionV1::ActivatePool => 24,
-        DealerActionV1::CreateLpPosition => 9,
-        DealerActionV1::AddLiquidity | DealerActionV1::RemoveLiquidity => 13,
-        DealerActionV1::Trade => 12,
-        DealerActionV1::ResetLadder => 3,
-        DealerActionV1::CloseLpPosition => 7,
+        DealerActionV1::CreateLpPosition => 10,
+        DealerActionV1::AddLiquidity | DealerActionV1::RemoveLiquidity => 14,
+        DealerActionV1::Trade => 13,
+        DealerActionV1::ResetLadder => 4,
+        DealerActionV1::CloseLpPosition => 8,
         DealerActionV1::RetirePool => 16,
     };
     Ok(base)
@@ -229,6 +233,7 @@ pub fn dealer_account_role<const N: usize>(
                 DealerAccountRoleV1::CapabilityFundingAuthority,
                 DealerAccountRoleV1::FundingCollateralVault,
                 DealerAccountRoleV1::LiquidityConfig,
+                DealerAccountRoleV1::LiquidityConfigStaging,
                 DealerAccountRoleV1::Pool,
                 DealerAccountRoleV1::LpPosition,
                 DealerAccountRoleV1::ParticipantPosition,
@@ -238,7 +243,6 @@ pub fn dealer_account_role<const N: usize>(
                 DealerAccountRoleV1::PoolServiceVault,
                 DealerAccountRoleV1::PoolPositionRentCredit,
                 DealerAccountRoleV1::PoolRentCredit,
-                DealerAccountRoleV1::ConfigRentCredit,
                 DealerAccountRoleV1::LpRentCredit,
                 DealerAccountRoleV1::CollateralMint,
                 DealerAccountRoleV1::TokenProgram,
@@ -254,6 +258,7 @@ pub fn dealer_account_role<const N: usize>(
                 DealerAccountRoleV1::Market,
                 DealerAccountRoleV1::Pool,
                 DealerAccountRoleV1::LiquidityConfig,
+                DealerAccountRoleV1::LiquidityConfigStaging,
                 DealerAccountRoleV1::LpPosition,
                 DealerAccountRoleV1::LpRentCredit,
                 DealerAccountRoleV1::SystemProgram,
@@ -268,6 +273,7 @@ pub fn dealer_account_role<const N: usize>(
                 DealerAccountRoleV1::Market,
                 DealerAccountRoleV1::Pool,
                 DealerAccountRoleV1::LiquidityConfig,
+                DealerAccountRoleV1::LiquidityConfigStaging,
                 DealerAccountRoleV1::LpPosition,
                 DealerAccountRoleV1::ParticipantPosition,
                 DealerAccountRoleV1::PoolPosition,
@@ -286,6 +292,7 @@ pub fn dealer_account_role<const N: usize>(
                 DealerAccountRoleV1::Market,
                 DealerAccountRoleV1::Pool,
                 DealerAccountRoleV1::LiquidityConfig,
+                DealerAccountRoleV1::LiquidityConfigStaging,
                 DealerAccountRoleV1::ParticipantPosition,
                 DealerAccountRoleV1::PoolPosition,
                 DealerAccountRoleV1::CollateralVault,
@@ -301,6 +308,7 @@ pub fn dealer_account_role<const N: usize>(
                 DealerAccountRoleV1::Market,
                 DealerAccountRoleV1::Pool,
                 DealerAccountRoleV1::LiquidityConfig,
+                DealerAccountRoleV1::LiquidityConfigStaging,
             ],
         ),
         DealerActionV1::CloseLpPosition => role_at(
@@ -310,6 +318,7 @@ pub fn dealer_account_role<const N: usize>(
                 DealerAccountRoleV1::Market,
                 DealerAccountRoleV1::Pool,
                 DealerAccountRoleV1::LiquidityConfig,
+                DealerAccountRoleV1::LiquidityConfigStaging,
                 DealerAccountRoleV1::LpPosition,
                 DealerAccountRoleV1::LpRentCredit,
                 DealerAccountRoleV1::SystemProgram,
@@ -322,6 +331,7 @@ pub fn dealer_account_role<const N: usize>(
                 DealerAccountRoleV1::Realm,
                 DealerAccountRoleV1::Pool,
                 DealerAccountRoleV1::LiquidityConfig,
+                DealerAccountRoleV1::LiquidityConfigStaging,
                 DealerAccountRoleV1::PoolPosition,
                 DealerAccountRoleV1::PoolPrincipalVault,
                 DealerAccountRoleV1::PoolFeeVault,
@@ -330,7 +340,6 @@ pub fn dealer_account_role<const N: usize>(
                 DealerAccountRoleV1::ParticipantPosition,
                 DealerAccountRoleV1::PoolPositionRentCredit,
                 DealerAccountRoleV1::PoolRentCredit,
-                DealerAccountRoleV1::ConfigRentCredit,
                 DealerAccountRoleV1::CollateralMint,
                 DealerAccountRoleV1::TokenProgram,
                 DealerAccountRoleV1::SystemProgram,
@@ -400,22 +409,27 @@ impl PoolPdaSeedsV1 {
     }
 }
 
-/// Exact immutable-config PDA seed projection.
+/// Exact generic finalized-record PDA seed projection for immutable config.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ConfigPdaSeedsV1(PoolPdaSeedsV1);
+pub struct ConfigPdaSeedsV1 {
+    schema_release_id: [u8; 32],
+    config_id: [u8; 32],
+}
 
 impl ConfigPdaSeedsV1 {
-    /// Construct from authenticated Market occurrence and immutable config ID.
-    pub fn new(market: [u8; 32], generation: u64, config_id: ContentId) -> Result<Self> {
-        Ok(Self(PoolPdaSeedsV1::new(market, generation, config_id)?))
+    /// Construct from the immutable config content digest.
+    pub const fn new(config_id: ContentId) -> Self {
+        Self {
+            schema_release_id: DEALER_CONFIG_SCHEMA_RELEASE_ID_V1,
+            config_id: config_id.to_bytes(),
+        }
     }
-    /// Return ordered domain-separated seed components.
-    pub fn seed_components(&self) -> [&[u8]; 4] {
+    /// Return the generic record lifecycle's exact ordered seed components.
+    pub fn seed_components(&self) -> [&[u8]; 3] {
         [
-            DEALER_CONFIG_PDA_DOMAIN_V1,
-            self.0.market.as_slice(),
-            self.0.generation_le.as_slice(),
-            self.0.config_id.as_slice(),
+            RAW_RECORD_PDA_SEED_V1,
+            self.schema_release_id.as_slice(),
+            self.config_id.as_slice(),
         ]
     }
 }
@@ -613,8 +627,7 @@ pub const fn dealer_account_privileges(
                 DealerActionV1::ActivatePool | DealerActionV1::RetirePool
             )
         }
-        DealerAccountRoleV1::LiquidityConfig => matches!(action, DealerActionV1::RetirePool),
-        DealerAccountRoleV1::PoolRentCredit | DealerAccountRoleV1::ConfigRentCredit => {
+        DealerAccountRoleV1::PoolRentCredit => {
             matches!(action, DealerActionV1::RetirePool)
         }
         DealerAccountRoleV1::LpRentCredit => {
@@ -630,6 +643,8 @@ pub const fn dealer_account_privileges(
         DealerAccountRoleV1::Realm
         | DealerAccountRoleV1::CapabilityManifest
         | DealerAccountRoleV1::CapabilityFundingAuthority
+        | DealerAccountRoleV1::LiquidityConfig
+        | DealerAccountRoleV1::LiquidityConfigStaging
         | DealerAccountRoleV1::CollateralMint
         | DealerAccountRoleV1::TokenProgram
         | DealerAccountRoleV1::SystemProgram
@@ -677,9 +692,7 @@ const fn safe_alias(
 const fn is_rent_credit(role: DealerAccountRoleV1) -> bool {
     matches!(
         role,
-        DealerAccountRoleV1::PoolRentCredit
-            | DealerAccountRoleV1::ConfigRentCredit
-            | DealerAccountRoleV1::LpRentCredit
+        DealerAccountRoleV1::PoolRentCredit | DealerAccountRoleV1::LpRentCredit
     )
 }
 

@@ -38,10 +38,13 @@ transition in V1.
 
 The config is an immutable content-addressed physical record assembled before
 Dealer activation and authenticated against the Market-selected capability
-entry. Prices and capacities never travel in an activation instruction. V1
-uses the config account's immutable RentCredit beneficiary as both the bootstrap
-LP owner and the unused-service refund authority. The activation plan requires
-the Pool attachment, Pool rent, initial LP rent, and signer account to name that
+entry. It lives at the generic finalized raw-record PDA under the fixed Dealer
+config schema-release ID; its staging cursor must already be vacant. Dealer
+never creates or closes that reusable record. Prices and capacities never
+travel in an activation instruction. V1 uses the config's immutable
+`liquidity_owner` as both the bootstrap LP owner and the unused-service refund
+authority. The activation plan requires the Pool attachment, Pool rent, initial
+LP rent, and signer account to name that
 same authority. This prevents a permissionless activator from taking ownership
 of prepaid liquidity without adding a second owner record.
 
@@ -49,7 +52,7 @@ of prepaid liquidity without adding a second owner record.
 
 Dealer has one hostile-decodable instruction family with eight actions:
 Activate/Open, create LP position, add, remove, trade, timed reset, close LP
-position, and retire Pool/config. Wires contain only generation/replay guards,
+position, and retire Pool occurrence state. Wires contain only generation/replay guards,
 compact LP IDs, requested shares/claim quantity, and maximum/minimum collateral
 or reserve limits. They never contain an account key, observed balance,
 FundingState compartment amount, price, capacity, fee rate, reset interval,
@@ -63,9 +66,10 @@ The activation plan joins all of the following before returning any state:
 3. the selected manifest entry from the FundingState's own entry index;
 4. that entry's immutable Dealer release/config IDs;
 5. the reusable capability-owned `CapabilityFundingDerivationV1` seed root;
-6. the immutable bootstrap owner/refund/RentCredit authority;
-7. exact observed FundingState capitalization; and
-8. Market direct-child replay.
+6. shared capability FundingState, token-authority, and Realm-Vault derivations;
+7. the immutable bootstrap owner/refund authority;
+8. separate exact native-lamport and Realm-collateral observations; and
+9. Market direct-child replay.
 
 Rent and creation debit comes only from `FundingStateV1::activate`. LP principal
 and service capitalization are the entire then-present Liquidity and Service
@@ -87,14 +91,14 @@ The exact domain-separated PDA seed preimages are:
 
 ```text
 Pool   = ["dclutch/dealer-pool/v1",   Market key, generation_le, config_id]
-Config = ["dclutch/dealer-config/v1", Market key, generation_le, config_id]
+Config = ["dclutch-raw-record-v1", config_schema_release_id, config_id]
 LP     = ["dclutch/dealer-lp/v1",     Market key, generation_le, config_id, lp_id]
 ```
 
 FundingState deliberately does not get a Dealer derivation. Activation uses the
-capability crate's shared six-component funding derivation after the adapter
-authenticates the exact manifest content hash. Pool/config domain separation
-prevents identical remaining seed components from aliasing.
+capability crate's shared funding-state, authority, and Vault derivations after
+the adapter authenticates the exact manifest content hash. The config uses the
+generic finalized-record lifecycle and its schema/content domain separation.
 
 Every action has one exact ordered frame. It names Market, Realm, native
 Position, collateral Vault, Pool/config/LP roots, the applicable Pool custody
@@ -274,7 +278,8 @@ recipient or donation amount truth.
 Empty LP positions may be reused or closed under both replay clocks. Pool
 retirement requires zero shares, zero LP value, and zero live positions. It
 refunds unused service collateral only to its immutable beneficiary and emits
-the Pool and config RentCredit terms. Rent, service, fees, and LP principal never
+the Pool RentCredit terms. The finalized config remains reusable and untouched.
+Rent, service, fees, and LP principal never
 substitute for one another.
 
 ## Why V1 is not an FPMM
@@ -303,14 +308,14 @@ kernel `no_alloc`.
 
 | Contract | Formula | N=2, B=1 | N=2, B=8 | N=16, B=1 | N=16, B=8 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Immutable config | `88 + 32NB` | 152 | 600 | 600 | 4,184 |
+| Immutable config | `80 + 32NB` | 144 | 592 | 592 | 4,176 |
 | Mutable Pool | `392 + 8N + 16NB` | 440 | 664 | 776 | 2,568 |
 | Execution receipt | `184 + 16B` | 200 | 312 | 200 | 312 |
 | LP position | `152` | 152 | 152 | 152 | 152 |
 
 The full Pool-only attachment is 264 bytes, compact mutable-parent references and
 rent terms are each 40 bytes, and children never duplicate the attachment. Tests also
-round-trip concrete N=2/B=2 widths (config 216, Pool 472, execution 216) and the
+round-trip concrete N=2/B=2 widths (config 208, Pool 472, execution 216) and the
 maximum N=16/B=8 profile. These are schema facts; rent and compute effects still
 require SBF/local-validator measurement.
 
@@ -324,18 +329,18 @@ Instruction and exact-frame widths are:
 | Action | Wire bytes | N=2 accounts | N=16 accounts |
 | --- | ---: | ---: | ---: |
 | Activate/Open | 80 | 24 | 24 |
-| Create LP position | 56 | 9 | 9 |
-| Add liquidity | `88 + 8N` | 13 | 13 |
-| Remove liquidity | `88 + 8N` | 13 | 13 |
-| Trade | 56 | 12 | 12 |
-| Timed reset | 24 | 3 | 3 |
-| Close LP position | 64 | 7 | 7 |
-| Retire Pool/config | 32 | 16 | 16 |
+| Create LP position | 56 | 10 | 10 |
+| Add liquidity | `88 + 8N` | 14 | 14 |
+| Remove liquidity | `88 + 8N` | 14 | 14 |
+| Trade | 56 | 13 | 13 |
+| Timed reset | 24 | 4 | 4 |
+| Close LP position | 64 | 8 | 8 |
+| Retire Pool | 32 | 16 | 16 |
 
 These counts exclude the executing Dealer program ID from the instruction's
 account-index vector. All remain below the pinned 128 account-lock ceiling. A
 one-signature, one-instruction legacy message under the canonical short-vector
-serialization model is 1,009 bytes for N=16 Activate, 783 bytes for N=16
+serialization model is 1,009 bytes for N=16 Activate, 816 bytes for N=16
 Add/Remove (including their 216-byte limit wires), and 729 bytes for Retire with
 a separate fee payer. They fit the 1,232-byte packet individually without a
 lookup table. Multi-instruction composition may still require v0/LUT transport.

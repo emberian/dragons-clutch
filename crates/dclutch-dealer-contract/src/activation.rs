@@ -145,7 +145,7 @@ impl<const N: usize, const B: usize> ActivatePoolPlanV1<N, B> {
     }
 }
 
-/// Successful quiescent Pool/config retirement joined to Market child replay.
+/// Successful quiescent Pool retirement joined to Market child replay.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RetirePoolPlanV1<const N: usize, const B: usize> {
     market: MarketRoot,
@@ -162,7 +162,7 @@ impl<const N: usize, const B: usize> RetirePoolPlanV1<N, B> {
     pub const fn pool(self) -> PoolState<N, B> {
         self.pool
     }
-    /// Return exact service refund and Pool/config RentCredit destinations.
+    /// Return exact service refund and Pool RentCredit destination.
     pub const fn receipt(self) -> PoolRetirementReceipt {
         self.receipt
     }
@@ -175,7 +175,7 @@ impl<const N: usize, const B: usize> RetirePoolPlanV1<N, B> {
 /// `authenticated_now_slot` is read from the adapter's trusted Clock
 /// syscall/sysvar access; neither is instruction data. `pool_rent` and
 /// `initial_position_rent` are constructed from observed Rent minima and the
-/// immutable config RentCredit beneficiary. `pool_position_rent` is the Rent
+/// immutable config liquidity owner. `pool_position_rent` is the Rent
 /// minimum of the shared native Position owned by the Pool PDA.
 #[allow(clippy::too_many_arguments)]
 pub fn activate_pool<const N: usize, const B: usize>(
@@ -241,10 +241,10 @@ pub fn activate_pool<const N: usize, const B: usize>(
         return Err(ActivationError::AuthorityMismatch);
     }
 
-    // V1 uses the content-bound config RentCredit beneficiary as the immutable
+    // V1 uses the content-bound config liquidity owner as the immutable
     // bootstrap LP and service-refund authority. This avoids any caller-chosen
     // owner for prepaid liquidity without adding a parallel authority record.
-    let immutable_owner = config.rent_credit().beneficiary();
+    let immutable_owner = config.liquidity_owner();
     if initial_owner != immutable_owner
         || attachment.service_refund_beneficiary() != immutable_owner
         || pool_rent.beneficiary() != immutable_owner
@@ -269,9 +269,7 @@ pub fn activate_pool<const N: usize, const B: usize>(
             .map_err(ActivationError::Capability)?;
     let pool_seeds = PoolPdaSeedsV1::new(market_address, request.generation(), config.content_id())
         .map_err(ActivationError::Frame)?;
-    let config_seeds =
-        ConfigPdaSeedsV1::new(market_address, request.generation(), config.content_id())
-            .map_err(ActivationError::Frame)?;
+    let config_seeds = ConfigPdaSeedsV1::new(config.content_id());
     let lp_seeds = LpPositionPdaSeedsV1::new(
         market_address,
         request.generation(),
@@ -447,7 +445,7 @@ fn custody_after(
     }
 }
 
-/// Retire a quiescent Pool/config and decrement Market direct-child replay.
+/// Retire a quiescent Pool and decrement Market direct-child replay.
 pub fn retire_pool<const N: usize, const B: usize>(
     market: MarketRoot,
     pool: PoolState<N, B>,

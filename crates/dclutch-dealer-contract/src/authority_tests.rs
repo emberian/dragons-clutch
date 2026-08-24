@@ -14,7 +14,7 @@ use crate::{
     LiquidityAttachment, LiquidityConfigV1, RentCreditTerms,
     activation::{ActivationError, activate_pool},
     frame::{
-        ConfigPdaSeedsV1, DEALER_CONFIG_PDA_DOMAIN_V1, DEALER_LP_PDA_DOMAIN_V1,
+        ConfigPdaSeedsV1, DEALER_CONFIG_SCHEMA_RELEASE_ID_V1, DEALER_LP_PDA_DOMAIN_V1,
         DEALER_POOL_PDA_DOMAIN_V1, DEALER_RENT_SYSVAR_ID, DEALER_SYSTEM_PROGRAM_ID,
         DealerAccountMetaV1, DealerAccountRoleV1, DealerCollateralCompartmentV1,
         DealerCollateralVaultPdaSeedsV1, DealerFrameV1, FrameError, LpPositionPdaSeedsV1,
@@ -54,7 +54,7 @@ fn config<const N: usize, const B: usize>() -> LiquidityConfigV1<N, B> {
     }
     LiquidityConfigV1::new(
         id(7),
-        rent(55),
+        OWNER,
         10_000,
         25,
         1_000,
@@ -187,7 +187,7 @@ fn exact_frames_enforce_counts_privileges_and_explicit_aliases() {
     );
     assert_eq!(
         dealer_account_count::<16>(DealerActionV1::AddLiquidity),
-        Ok(13)
+        Ok(14)
     );
     assert_eq!(
         dealer_account_count::<16>(DealerActionV1::RetirePool),
@@ -211,9 +211,8 @@ fn exact_frames_enforce_counts_privileges_and_explicit_aliases() {
     let mut safe = frame::<2>(DealerActionV1::ActivatePool);
     let activator_key = safe.first().expect("activator role").key;
     safe.get_mut(1).expect("LP owner role").key = activator_key;
-    // Pool/config/LP RentCredits may be the same permanent beneficiary credit.
-    let rent_credit_key = safe.get(17).expect("Pool RentCredit role").key;
-    safe.get_mut(18).expect("config RentCredit role").key = rent_credit_key;
+    // Pool/LP RentCredits may be the same permanent beneficiary credit.
+    let rent_credit_key = safe.get(18).expect("Pool RentCredit role").key;
     safe.get_mut(19).expect("LP RentCredit role").key = rent_credit_key;
     assert!(DealerFrameV1::<2>::new(DealerActionV1::ActivatePool, &safe).is_ok());
 }
@@ -222,7 +221,7 @@ fn exact_frames_enforce_counts_privileges_and_explicit_aliases() {
 fn clock_is_not_a_meta_and_phase_contract_is_exact() {
     assert_eq!(
         dealer_account_count::<2>(DealerActionV1::ResetLadder),
-        Ok(3)
+        Ok(4)
     );
     let reset = frame::<2>(DealerActionV1::ResetLadder);
     assert_eq!(
@@ -231,7 +230,7 @@ fn clock_is_not_a_meta_and_phase_contract_is_exact() {
             .map(|account| account.key)
             .collect::<Vec<_>>()
             .len(),
-        3
+        4
     );
     assert_eq!(
         validate_market_phase(DealerActionV1::Trade, Phase::Open),
@@ -284,7 +283,7 @@ fn exact_n16_account_and_legacy_packet_risk_is_locked() {
     let add_bytes = legacy_single_instruction_bytes(add_accounts, 216, true);
     let retire_bytes = legacy_single_instruction_bytes(retire_accounts, 32, false);
     assert_eq!(activate_bytes, 1_009);
-    assert_eq!(add_bytes, 783);
+    assert_eq!(add_bytes, 816);
     assert_eq!(retire_bytes, 729);
     assert!(activate_bytes < crate::frame::SOLANA_PACKET_DATA_SIZE_V1);
     assert!(add_bytes < crate::frame::SOLANA_PACKET_DATA_SIZE_V1);
@@ -295,7 +294,7 @@ fn exact_n16_account_and_legacy_packet_risk_is_locked() {
 #[test]
 fn pda_preimages_are_domain_separated_and_substitution_sensitive() {
     let pool = PoolPdaSeedsV1::new(MARKET_ADDRESS, 9, id(7)).expect("pool seeds");
-    let config = ConfigPdaSeedsV1::new(MARKET_ADDRESS, 9, id(7)).expect("config seeds");
+    let config = ConfigPdaSeedsV1::new(id(7));
     let lp = LpPositionPdaSeedsV1::new(MARKET_ADDRESS, 9, id(7), [44; 32]).expect("LP seeds");
     let pool_position =
         PoolPositionPdaSeedsV1::new(MARKET_ADDRESS, POOL_ADDRESS).expect("Pool Position seeds");
@@ -310,7 +309,15 @@ fn pda_preimages_are_domain_separated_and_substitution_sensitive() {
     )
     .expect("fee Vault seeds");
     assert_eq!(pool.seed_components()[0], DEALER_POOL_PDA_DOMAIN_V1);
-    assert_eq!(config.seed_components()[0], DEALER_CONFIG_PDA_DOMAIN_V1);
+    assert_eq!(
+        config.seed_components()[0],
+        dclutch_record_contract::RAW_RECORD_PDA_SEED_V1
+    );
+    assert_eq!(
+        config.seed_components()[1],
+        DEALER_CONFIG_SCHEMA_RELEASE_ID_V1
+    );
+    assert_eq!(config.seed_components()[2], id(7).as_bytes());
     assert_eq!(lp.seed_components()[0], DEALER_LP_PDA_DOMAIN_V1);
     assert_eq!(pool.seed_components()[1], MARKET_ADDRESS.as_slice());
     assert_eq!(pool.seed_components()[2], 9u64.to_le_bytes().as_slice());

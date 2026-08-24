@@ -58,8 +58,8 @@ const PARENT_GENERATION_OFFSET: usize = 32;
 const RENT_BENEFICIARY_OFFSET: usize = 0;
 const RENT_PRINCIPAL_OFFSET: usize = 32;
 
-const CONFIG_RENT_OFFSET: usize = HEADER_BYTES;
-const CONFIG_PRICE_SCALE_OFFSET: usize = CONFIG_RENT_OFFSET + RENT_CREDIT_TERMS_BYTES;
+const CONFIG_OWNER_OFFSET: usize = HEADER_BYTES;
+const CONFIG_PRICE_SCALE_OFFSET: usize = CONFIG_OWNER_OFFSET + 32;
 const CONFIG_FEE_BPS_OFFSET: usize = CONFIG_PRICE_SCALE_OFFSET + 8;
 const CONFIG_RESERVED_OFFSET: usize = CONFIG_FEE_BPS_OFFSET + 2;
 const CONFIG_RESERVED_BYTES: usize = 6;
@@ -381,7 +381,7 @@ impl RentCreditTerms {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LiquidityConfigV1<const N: usize, const B: usize> {
     content_id: ContentId,
-    rent_credit: RentCreditTerms,
+    liquidity_owner: [u8; 32],
     price_scale: u64,
     fee_bps: u16,
     max_trade_quantity: u64,
@@ -397,7 +397,7 @@ impl<const N: usize, const B: usize> LiquidityConfigV1<N, B> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         content_id: ContentId,
-        rent_credit: RentCreditTerms,
+        liquidity_owner: [u8; 32],
         price_scale: u64,
         fee_bps: u16,
         max_trade_quantity: u64,
@@ -417,6 +417,9 @@ impl<const N: usize, const B: usize> LiquidityConfigV1<N, B> {
         if reset_interval_slots == 0 {
             return Err(Error::InvalidResetInterval);
         }
+        if all_zero(&liquidity_owner) {
+            return Err(Error::ZeroIdentity);
+        }
         validate_ladder(
             price_scale,
             &bid_prices,
@@ -426,7 +429,7 @@ impl<const N: usize, const B: usize> LiquidityConfigV1<N, B> {
         )?;
         Ok(Self {
             content_id,
-            rent_credit,
+            liquidity_owner,
             price_scale,
             fee_bps,
             max_trade_quantity,
@@ -458,11 +461,7 @@ impl<const N: usize, const B: usize> LiquidityConfigV1<N, B> {
         let ask_capacity_offset = checked_offset(bid_capacity_offset, 8, cells)?;
         Self::new(
             content_id,
-            RentCreditTerms::decode(subslice(
-                bytes,
-                CONFIG_RENT_OFFSET,
-                RENT_CREDIT_TERMS_BYTES,
-            )?)?,
+            read_array(bytes, CONFIG_OWNER_OFFSET)?,
             read_u64(bytes, CONFIG_PRICE_SCALE_OFFSET)?,
             read_u16(bytes, CONFIG_FEE_BPS_OFFSET)?,
             read_u64(bytes, CONFIG_MAX_QUANTITY_OFFSET)?,
@@ -481,7 +480,7 @@ impl<const N: usize, const B: usize> LiquidityConfigV1<N, B> {
         }
         out.fill(0);
         encode_header(out, CONFIG_MAGIC);
-        put(out, CONFIG_RENT_OFFSET, &self.rent_credit.to_bytes());
+        put(out, CONFIG_OWNER_OFFSET, &self.liquidity_owner);
         put_u64(out, CONFIG_PRICE_SCALE_OFFSET, self.price_scale);
         put_u16(out, CONFIG_FEE_BPS_OFFSET, self.fee_bps);
         put_u64(out, CONFIG_MAX_QUANTITY_OFFSET, self.max_trade_quantity);
@@ -502,9 +501,9 @@ impl<const N: usize, const B: usize> LiquidityConfigV1<N, B> {
     pub const fn content_id(&self) -> ContentId {
         self.content_id
     }
-    /// Return configuration-account rent attribution.
-    pub const fn rent_credit(&self) -> RentCreditTerms {
-        self.rent_credit
+    /// Return immutable bootstrap LP and unused-service beneficiary authority.
+    pub const fn liquidity_owner(&self) -> [u8; 32] {
+        self.liquidity_owner
     }
     /// Return named collateral price scale.
     pub const fn price_scale(&self) -> u64 {
@@ -1057,7 +1056,6 @@ pub struct PoolRetirementReceipt {
     service_refund_beneficiary: [u8; 32],
     service_refund_collateral: u64,
     pool_rent_credit: RentCreditTerms,
-    config_rent_credit: RentCreditTerms,
 }
 
 impl PoolRetirementReceipt {
@@ -1080,10 +1078,6 @@ impl PoolRetirementReceipt {
     /// Return Pool-account funded rent attribution.
     pub const fn pool_rent_credit(&self) -> RentCreditTerms {
         self.pool_rent_credit
-    }
-    /// Return immutable-config-account funded rent attribution.
-    pub const fn config_rent_credit(&self) -> RentCreditTerms {
-        self.config_rent_credit
     }
 }
 
@@ -1233,7 +1227,6 @@ impl<const N: usize, const B: usize> PoolState<N, B> {
             service_refund_beneficiary: next.attachment.service_refund_beneficiary,
             service_refund_collateral: service_refund,
             pool_rent_credit: next.rent_credit,
-            config_rent_credit: config.rent_credit,
         };
         next.validate()?;
         *self = next;

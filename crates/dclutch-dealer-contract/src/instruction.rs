@@ -28,7 +28,7 @@ pub const TRADE_BYTES: usize = 56;
 pub const RESET_LADDER_BYTES: usize = 24;
 /// Exact LP-position close wire width.
 pub const CLOSE_LP_POSITION_BYTES: usize = 64;
-/// Exact Pool/config retirement wire width.
+/// Exact Pool retirement wire width.
 pub const RETIRE_POOL_BYTES: usize = 32;
 
 const SCHEMA_OFFSET: usize = 8;
@@ -102,7 +102,7 @@ pub type Result<T> = core::result::Result<T, InstructionError>;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum DealerActionV1 {
-    /// Activate selected capability funding and open Pool/config custody.
+    /// Activate selected capability funding and open Pool custody.
     ActivatePool = 1,
     /// Create one reusable zero-share LP position.
     CreateLpPosition = 2,
@@ -348,7 +348,7 @@ pub enum DealerInstructionV1<const N: usize> {
     },
     /// Close one empty LP position.
     CloseLpPosition(CloseLpPositionV1),
-    /// Retire Pool/config using a Market child-count replay guard.
+    /// Retire Pool using a Market child-count replay guard.
     RetirePool {
         /// Exact Pool replay sequence selected for retirement.
         expected_pool_sequence: u64,

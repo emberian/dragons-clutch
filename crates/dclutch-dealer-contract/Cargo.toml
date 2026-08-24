@@ -12,6 +12,7 @@ path = "src/lib.rs"
 dclutch-capability-contract = { path = "../dclutch-capability-contract" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-realm-contract = { path = "../dclutch-realm-contract" }
+dclutch-record-contract = { path = "../dclutch-record-contract" }
 
 [lints]
 workspace = true

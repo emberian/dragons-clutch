@@ -47,16 +47,7 @@ fn config_with_identity<const N: usize, const B: usize>(
         }
     }
     LiquidityConfigV1::new(
-        content_id,
-        rent(20),
-        10_000,
-        25,
-        2_500,
-        100,
-        bids,
-        asks,
-        capacities,
-        capacities,
+        content_id, [20; 32], 10_000, 25, 2_500, 100, bids, asks, capacities, capacities,
     )
     .expect("fixture config")
 }
@@ -96,10 +87,10 @@ fn n2_n16_widths_are_exact_and_compact_codecs_round_trip() {
     assert_eq!(LIQUIDITY_ATTACHMENT_BYTES, 264);
     assert_eq!(RENT_CREDIT_TERMS_BYTES, 40);
     assert_eq!(LP_POSITION_BYTES, 152);
-    assert_eq!(LiquidityConfigV1::<2, 2>::encoded_len(), Ok(216));
+    assert_eq!(LiquidityConfigV1::<2, 2>::encoded_len(), Ok(208));
     assert_eq!(PoolState::<2, 2>::encoded_len(), Ok(472));
     assert_eq!(ExecutionReceipt::<2>::encoded_len(), Ok(216));
-    assert_eq!(LiquidityConfigV1::<16, 8>::encoded_len(), Ok(4_184));
+    assert_eq!(LiquidityConfigV1::<16, 8>::encoded_len(), Ok(4_176));
     assert_eq!(PoolState::<16, 8>::encoded_len(), Ok(2_568));
     assert_eq!(ExecutionReceipt::<8>::encoded_len(), Ok(312));
 
@@ -217,7 +208,7 @@ fn quote_refuses_inventory_cash_depth_limits_and_zero_rounding() {
 
     let tiny_config = LiquidityConfigV1::new(
         id(7),
-        rent(20),
+        [20; 32],
         10_000,
         1,
         10,
@@ -310,7 +301,7 @@ fn timed_reset_preserves_depth_and_only_reopens_identical_config() {
 
     let overflowing_interval = LiquidityConfigV1::new(
         id(7),
-        rent(20),
+        [20; 32],
         10_000,
         25,
         10,
@@ -397,7 +388,6 @@ fn last_lp_exact_sweep_then_rentcredit_and_service_retirement() {
     assert_eq!(retired.service_refund_collateral(), service);
     assert_eq!(retired.service_refund_beneficiary(), [9; 32]);
     assert_eq!(retired.pool_rent_credit(), rent(30));
-    assert_eq!(retired.config_rent_credit(), rent(20));
     assert_eq!(pool.status(), PoolStatus::Retired);
 }
 
@@ -466,7 +456,7 @@ fn malformed_ladder_alias_profile_and_reserved_bytes_refuse() {
     assert_eq!(
         LiquidityConfigV1::new(
             id(7),
-            rent(20),
+            [20; 32],
             100,
             1,
             10,
@@ -494,7 +484,7 @@ fn complete_set_top_of_book_no_arbitrage_is_exact_checked_and_extremal() {
     let capacities = [[10u64]; 2];
     let equality = LiquidityConfigV1::new(
         id(7),
-        rent(20),
+        [20; 32],
         10_000,
         1,
         10,
@@ -508,7 +498,7 @@ fn complete_set_top_of_book_no_arbitrage_is_exact_checked_and_extremal() {
 
     let bid_cross_by_one = LiquidityConfigV1::new(
         id(7),
-        rent(20),
+        [20; 32],
         10_000,
         10_000,
         10,
@@ -522,7 +512,7 @@ fn complete_set_top_of_book_no_arbitrage_is_exact_checked_and_extremal() {
 
     let ask_cross_by_one = LiquidityConfigV1::new(
         id(7),
-        rent(20),
+        [20; 32],
         10_000,
         1,
         10,
@@ -536,7 +526,7 @@ fn complete_set_top_of_book_no_arbitrage_is_exact_checked_and_extremal() {
 
     let overflow = LiquidityConfigV1::new(
         id(7),
-        rent(20),
+        [20; 32],
         u64::MAX,
         1,
         10,
@@ -550,7 +540,7 @@ fn complete_set_top_of_book_no_arbitrage_is_exact_checked_and_extremal() {
 
     let n16 = LiquidityConfigV1::new(
         id(7),
-        rent(20),
+        [20; 32],
         16_000,
         1,
         10,
