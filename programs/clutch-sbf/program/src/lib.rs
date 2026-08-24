@@ -31,11 +31,11 @@
 //! Every broader settlement form still refuses.  See
 //! `docs/implementation/COUPLED_SETTLEMENT_V1.md`.
 //!
-//! Resolve authenticates and consumes the canonical sealed source archive,
-//! including its pinned adapter-release identity.  Provider ingestion and
-//! public archive construction are not routed: the current bank evidence
-//! installs canonical archive bytes at genesis and is not a provider-ingestion
-//! claim.  Candidate selection, entitlement creation, general
+//! Historical full-profile Resolve code consumes the legacy sealed Source
+//! archive used by bring-up fixtures. The checked chain-attached successor
+//! compiles that Source/SourceArchive/ObserveResolve authority out and admits
+//! no SourceSeries action until its whole real-Pyth and prepaid-liveness
+//! lifecycle is reachable. Candidate selection, entitlement creation, general
 //! partial/portfolio settlement, and the full blank-bank venue lifecycle also
 //! remain incomplete.  Evidence labels and the current dependency order live
 //! in `CURRENT_TRUTH.md` and `docs/V1_BACKLOG.md`; older bring-up documents are

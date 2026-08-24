@@ -1,14 +1,14 @@
 //! SourcePlane V3 mutation handlers entered only by exact capability tuples.
 //!
-//! The central SourceSeries 77/v2 coordinates are allocated; action 1 release
-//! registration and actions 2/3 SourceHead/OpenRawPage creation are live in
-//! full profiles. This module owns their complete inner execution: semantic outputs are
+//! The central SourceSeries 77/v2 coordinates are allocated, but the checked
+//! successor admits none of actions 1 through 12 until the complete lifecycle
+//! and prepaid funding route are reachable. This module owns their inner execution: semantic outputs are
 //! checked before instruction success, predictable accounts are prefund-safe,
 //! mutable postimages advance their durable lineage in the same rollback
 //! domain, immutable accounts retain an explicit payer/donation rent partition,
 //! and every paid transition emits the exact Source receipt plus liveness
-//! intent. The dispatcher cannot enter any remaining handler until its
-//! separate capability tuple is admitted.
+//! intent. These handlers are not a permissionless funding claim: their current
+//! child/receipt creation still needs the immutable schedule payer to sign.
 
 use std::vec;
 use std::vec::Vec;

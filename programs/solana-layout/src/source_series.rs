@@ -131,13 +131,14 @@ impl RegisterReleaseIntentV2 {
 }
 
 /// Closed handoff shape emitted by action 10.
+///
+/// Version two owns only the successful-evaluation handoff consumed by the
+/// private Product/Failure ResolutionV5 join. Historical draft bytes `1` and
+/// `2` never acquired an executable failure-evidence owner and are rejected;
+/// allocation of those semantics requires a new wire version.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum SourceHandoffKindV2 {
-    /// Mature StatisticResult PDA was canonically absent.
-    FailureAbsence = 1,
-    /// A persisted evaluator refusal produced the failure handoff.
-    FailureResult = 2,
     /// A persisted successful evaluation produced the downstream-review handoff.
     SuccessfulEvaluation = 3,
 }
@@ -145,16 +146,12 @@ pub enum SourceHandoffKindV2 {
 impl SourceHandoffKindV2 {
     const fn wire_byte(self) -> u8 {
         match self {
-            Self::FailureAbsence => 1,
-            Self::FailureResult => 2,
             Self::SuccessfulEvaluation => 3,
         }
     }
 
     fn decode(byte: u8) -> Result<Self> {
         match byte {
-            1 => Ok(Self::FailureAbsence),
-            2 => Ok(Self::FailureResult),
             3 => Ok(Self::SuccessfulEvaluation),
             _ => Err(CodecError::InvalidEnum),
         }
@@ -1043,7 +1040,7 @@ mod tests {
             ),
             registry::SourceSeriesAction::EmitFailureHandoff => {
                 SourceSeriesPayloadV2::EmitFailureHandoff(EmitFailureHandoffIntentV2 {
-                    kind: SourceHandoffKindV2::FailureResult,
+                    kind: SourceHandoffKindV2::SuccessfulEvaluation,
                     handoff_id: [0x22; 32],
                     source_work_receipt_id: [0x33; 32],
                     valid_before_slot: 901,
@@ -1129,7 +1126,7 @@ mod tests {
     fn lifecycle_payloads_refuse_zero_unknown_and_noncanonical_reserved_bytes() {
         let mut handoff = [0_u8; EMIT_FAILURE_HANDOFF_PAYLOAD_BYTES_V2];
         EmitFailureHandoffIntentV2 {
-            kind: SourceHandoffKindV2::FailureAbsence,
+            kind: SourceHandoffKindV2::SuccessfulEvaluation,
             handoff_id: [1; 32],
             source_work_receipt_id: [2; 32],
             valid_before_slot: 3,
@@ -1148,6 +1145,15 @@ mod tests {
             EmitFailureHandoffIntentV2::decode(&hostile),
             Err(CodecError::InvalidEnum)
         );
+        for withdrawn in [1_u8, 2_u8] {
+            hostile = handoff;
+            hostile[0] = withdrawn;
+            assert_eq!(
+                EmitFailureHandoffIntentV2::decode(&hostile),
+                Err(CodecError::InvalidEnum),
+                "withdrawn action-10 branch {withdrawn}",
+            );
+        }
         hostile = handoff;
         hostile[8..40].fill(0);
         assert_eq!(

@@ -7,10 +7,11 @@
 //! consumed directly from `clutch-source-plane-v3-runtime`; there is no SBF-
 //! local Source release, Clock policy, page, result, or handoff DTO.
 //!
-//! SourceSeries 77/v2 action 1 is the artifact-authenticated release registry
-//! seam; actions 2 and 3 are its atomic SourceHead/OpenRawPage lineage,
-//! receipt, and liveness creation path in full profiles. Actions 4 through 12
-//! remain separately disabled until their complete runtime joins enter dispatch.
+//! SourceSeries 77/v2 reserves an artifact-authenticated release registry and
+//! the complete Source lifecycle. The checked successor admits none of actions
+//! 1 through 12: current handlers lack an authenticated producer for the
+//! liveness policy/compartment and still depend on a fixed payer signer for
+//! bounded child and terminal rent. Code presence is not capability.
 
 use clutch_liveness::{
     runtime_adapter_v1::{
