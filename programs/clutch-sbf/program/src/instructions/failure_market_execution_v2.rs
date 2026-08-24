@@ -35,7 +35,10 @@ use crate::instructions::product_market::{
     AuthenticatedMarketFoundationPreallocationV2, AuthenticatedMarketLifecycleRootV1,
     AuthenticatedSeriesMarketLinkV1,
 };
-use crate::source_plane_v3::authenticate_route;
+use crate::instructions::product_series::{
+    authenticate_source_product_route_v3, AuthenticatedSourceProductRouteV3,
+};
+use crate::source_plane_v3::{authenticate_receiver_route, authenticate_route};
 use crate::source_plane_v3_actions::authenticate_source_work_schedule_artifact;
 use clutch_failure_policy_runtime::market_quote_v1::FailureMarketRecoveryQuoteAdmissionReceiptV1;
 use clutch_product_series::{
@@ -218,6 +221,12 @@ pub(crate) struct AuthenticatedFailureMarketProductContextV2 {
 }
 
 impl AuthenticatedFailureMarketProductContextV2 {
+    pub(crate) const fn genesis(
+        &self,
+    ) -> &AuthenticatedProductArtifactV1<MarketGenesisProfileV2> {
+        &self.genesis
+    }
+
     /// Borrow the exact authenticated Product/Source context without
     /// persisting another copy of any body.
     #[allow(clippy::too_many_arguments)]
@@ -246,6 +255,41 @@ impl AuthenticatedFailureMarketProductContextV2 {
             work_profile: &self.work_profile,
         }
     }
+}
+
+/// Reopen the release-selected receiver deployment and mint the sole private
+/// Source/Product route needed by Resolution V5.
+pub(crate) fn authenticate_failure_market_source_product_route_v3(
+    execution: &AuthenticatedFailureMarketExecutionV2<'_, '_>,
+    source: AuthenticatedFailureMarketSourceRouteV2,
+    product: &AuthenticatedFailureMarketProductContextV2,
+    receiver_program: &AccountInfo<'_>,
+    receiver_programdata: &AccountInfo<'_>,
+    receiver_config: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedSourceProductRouteV3> {
+    let receiver = authenticate_receiver_route(
+        source.route(),
+        receiver_program,
+        receiver_programdata,
+        receiver_config,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let route = authenticate_source_product_route_v3(
+        source.route(),
+        receiver,
+        execution.registry(),
+        execution.bundle(),
+        product.genesis(),
+    )?;
+    require(
+        route.source_route_id() == source.route().route_id()
+            && route.compiler_bundle_id().content_id() == execution.bundle().semantic_id()
+            && route.source_release_manifest_id() == source.route().release_manifest_id()
+            && route.source_plane_contract_id() == source.route().source_plane_contract_id()
+            && route.source_spec_id() == source.route().source_spec_id(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(route)
 }
 
 /// Authenticate every immutable Product body used by Begin/Advance/Resolve
@@ -662,6 +706,21 @@ mod adversarial_join_tests {
         ] {
             assert!(route.contains(predicate));
         }
+    }
+
+    #[test]
+    fn resolution_reopens_the_release_selected_receiver() {
+        let source = include_str!("failure_market_execution_v2.rs");
+        let route = source
+            .split("fn authenticate_failure_market_source_product_route_v3")
+            .nth(1)
+            .expect("Source/Product route owner");
+        assert!(route.contains("authenticate_receiver_route("));
+        assert!(route.contains("authenticate_source_product_route_v3("));
+        assert!(route.contains("route.compiler_bundle_id().content_id()"));
+        assert!(route.contains("route.source_release_manifest_id()"));
+        assert!(route.contains("route.source_plane_contract_id()"));
+        assert!(route.contains("route.source_spec_id()"));
     }
 
     #[test]
