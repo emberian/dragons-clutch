@@ -525,6 +525,7 @@ fn successful_source_custody_terminal_facts_v1(
                 == policy.source_release_authentication_id.bytes()
             && founder.source_generation == policy.generation
             && founder.neutral_lamport_sink.bytes() == policy.neutral_sink.bytes()
+            && founder.product_link_account.bytes() == source_product_link_account.bytes()
             && !source_terminal.is_zero()
             && !source_result_close.is_zero()
             && !source_product_release.is_zero()
@@ -547,6 +548,9 @@ fn successful_source_custody_terminal_facts_v1(
         capitalization_authority_id: founder.capitalization_authority_id,
         capitalization_receipt_id: founder.capitalization_receipt_id,
         pre_root_source_occurrence_id: founder.pre_root_source_occurrence_id,
+        product_link_account: founder.product_link_account,
+        product_link_authentication_id: founder.product_link_authentication_id,
+        product_link_semantic_id: founder.product_link_semantic_id,
         source_terminal_postwrite_id: source_terminal,
         source_result_or_absence_close_receipt_id: source_result_close,
         source_product_release_binding_id: source_product_release,
@@ -1459,6 +1463,9 @@ mod adversarial_family_terminal_tests {
             "founder.source_release_authentication_id.bytes()",
             "founder.source_generation == policy.generation",
             "founder.neutral_lamport_sink.bytes() == policy.neutral_sink.bytes()",
+            "founder.product_link_account.bytes() == source_product_link_account.bytes()",
+            "product_link_authentication_id: founder.product_link_authentication_id",
+            "product_link_semantic_id: founder.product_link_semantic_id",
             "source_terminal_postwrite_id: source_terminal",
             "source_result_or_absence_close_receipt_id: source_result_close",
             "source_product_release_binding_id: source_product_release",
