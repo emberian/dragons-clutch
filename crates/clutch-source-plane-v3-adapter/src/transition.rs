@@ -140,7 +140,7 @@ impl AccountStateV3 {
             return Err(Error::InvalidParameter);
         }
         Ok(Self {
-            family: family as u16,
+            family: family.word(),
             binding_id,
             state_digest,
             generation,
