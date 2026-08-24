@@ -8,5 +8,9 @@ rust-version.workspace = true
 [lib]
 path = "src/lib.rs"
 
+[dependencies]
+dclutch-core-contract = { path = "../dclutch-core-contract" }
+dclutch-kernel = { path = "../dclutch-kernel" }
+
 [lints]
 workspace = true

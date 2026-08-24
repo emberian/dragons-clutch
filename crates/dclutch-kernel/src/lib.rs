@@ -68,12 +68,27 @@ pub struct CategoricalLedger<const N: usize> {
 impl<const N: usize> CategoricalLedger<N> {
     /// Construct an empty open ledger after validating the selected width.
     pub fn new() -> Result<Self> {
-        validate_width::<N>()?;
-        Ok(Self {
-            hoard_atoms: 0,
-            supply: [0; N],
-            phase: Phase::Open,
-        })
+        Self::from_parts(0, [0; N], Phase::Open)
+    }
+
+    /// Construct a ledger from persisted parts after validating every invariant.
+    ///
+    /// This is the checked composition boundary for account codecs. It refuses
+    /// an unsupported width, an out-of-range terminal winner, or an insolvent
+    /// liability vector before returning a value.
+    pub fn from_parts(hoard_atoms: u64, supply: [u64; N], phase: Phase) -> Result<Self> {
+        let ledger = Self {
+            hoard_atoms,
+            supply,
+            phase,
+        };
+        ledger.validate()?;
+        Ok(ledger)
+    }
+
+    /// Consume the ledger and return its exact validated composition parts.
+    pub const fn into_parts(self) -> (u64, [u64; N], Phase) {
+        (self.hoard_atoms, self.supply, self.phase)
     }
 
     /// Return claimant-backing collateral atoms.
@@ -307,5 +322,35 @@ mod tests {
         let before = ledger;
         assert_eq!(ledger.split_complete_set(1), Err(Error::ArithmeticOverflow));
         assert_eq!(ledger, before);
+    }
+
+    #[test]
+    fn checked_parts_are_the_only_persistent_composition_boundary() -> Result<()> {
+        let open = CategoricalLedger::<3>::from_parts(9, [9, 8, 7], Phase::Open)?;
+        assert_eq!(open.into_parts(), (9, [9, 8, 7], Phase::Open));
+
+        let resolved =
+            CategoricalLedger::<3>::from_parts(4, [99, 4, 88], Phase::Resolved { winner: 1 })?;
+        assert_eq!(
+            resolved.into_parts(),
+            (4, [99, 4, 88], Phase::Resolved { winner: 1 })
+        );
+        assert_eq!(
+            CategoricalLedger::<3>::from_parts(8, [9, 8, 7], Phase::Open),
+            Err(Error::Insolvent)
+        );
+        assert_eq!(
+            CategoricalLedger::<3>::from_parts(3, [99, 4, 88], Phase::Resolved { winner: 1 }),
+            Err(Error::Insolvent)
+        );
+        assert_eq!(
+            CategoricalLedger::<3>::from_parts(99, [0; 3], Phase::Resolved { winner: 3 }),
+            Err(Error::InvalidOutcome)
+        );
+        assert_eq!(
+            CategoricalLedger::<1>::from_parts(0, [0; 1], Phase::Open),
+            Err(Error::InvalidOutcomeCount)
+        );
+        Ok(())
     }
 }

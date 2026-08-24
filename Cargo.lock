@@ -13,6 +13,10 @@ version = "0.1.0"
 [[package]]
 name = "dclutch-pyth-contract"
 version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-kernel",
+]
 
 [[package]]
 name = "dclutch-pyth-svm"
