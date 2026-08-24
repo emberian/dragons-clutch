@@ -413,7 +413,7 @@ fn prepare_owner_fee_evidence(
     require(
         !revenue_preimage.is_writable
             && !revenue_preimage.is_signer
-            && revenue_preimage.executable
+            && !revenue_preimage.executable
             && revenue_preimage.data_len() == REVENUE_POLICY_BYTES,
         ClutchError::MismatchedState,
     )?;

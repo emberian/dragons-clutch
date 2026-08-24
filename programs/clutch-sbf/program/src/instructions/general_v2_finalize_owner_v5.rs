@@ -467,7 +467,7 @@ pub fn process<'info>(
     let revenue: Option<RevenuePolicyV1> = if fee_bearing {
         let preimage = &accounts[suffix_at + REL_REVENUE_PREIMAGE];
         require(
-            preimage.executable
+            !preimage.executable
                 && !preimage.is_writable
                 && !preimage.is_signer
                 && preimage.data_len() == REVENUE_POLICY_BYTES,

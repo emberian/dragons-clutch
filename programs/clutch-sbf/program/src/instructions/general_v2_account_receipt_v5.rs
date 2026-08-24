@@ -166,7 +166,7 @@ fn route_and_order(
             SettlementLegV1::Split | SettlementLegV1::Merge => None,
         },
     ];
-    let mut selected = None;
+    let mut matched = [None, None];
     for candidate in candidates.into_iter().flatten() {
         let membership = traversal
             .settlement_membership(candidate.1)
@@ -177,11 +177,15 @@ fn route_and_order(
             SettlementSideV1::Sell => semantic.sell_order_id.bytes(),
         };
         if membership.owner == owner.bytes() && membership.order_id == expected_order {
-            require(selected.is_none(), ClutchError::MismatchedState)?;
-            selected = Some(candidate);
+            let at = match candidate.0 {
+                SettlementSideV1::Buy => 0,
+                SettlementSideV1::Sell => 1,
+            };
+            require(matched[at].is_none(), ClutchError::MismatchedState)?;
+            matched[at] = Some(candidate.1);
         }
     }
-    let (side, order_index) = selected.ok_or(Refusal::Adapter(ClutchError::MismatchedState))?;
+    let (side, order_index) = select_unaccounted_end(matched, semantic.accounted_end_mask)?;
     let mut completes = true;
     let mut next = semantic
         .slice_index
@@ -200,6 +204,27 @@ fn route_and_order(
         next = next.checked_add(1).ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
     }
     Ok((side, expected_route, order_index, completes))
+}
+
+/// Select one receipt end without excluding valid same-owner self-crosses.
+///
+/// Direct receipts account buy before sell when both ends belong to the same
+/// owner. The persisted end mask then makes the second call unambiguous.
+fn select_unaccounted_end(
+    matched: [Option<u8>; 2],
+    accounted_end_mask: u8,
+) -> Outcome<(SettlementSideV1, u8)> {
+    if accounted_end_mask & RECEIPT_ACCOUNTED_BUY_END == 0 {
+        if let Some(order) = matched[0] {
+            return Ok((SettlementSideV1::Buy, order));
+        }
+    }
+    if accounted_end_mask & RECEIPT_ACCOUNTED_SELL_END == 0 {
+        if let Some(order) = matched[1] {
+            return Ok((SettlementSideV1::Sell, order));
+        }
+    }
+    Err(Refusal::Adapter(ClutchError::MismatchedState))
 }
 
 fn locate_order_slot(
@@ -582,6 +607,28 @@ mod tests {
                 ACTION25_TRAVERSAL_PREFIX_ACCOUNTS + 5 + ACTION25_SUFFIX_ACCOUNTS,
             ),
             Err(ClutchError::WrongAccountCount),
+        );
+    }
+
+    #[test]
+    fn same_owner_direct_receipt_accounts_each_end_once_in_canonical_order() {
+        assert_eq!(
+            select_unaccounted_end([Some(3), Some(9)], 0),
+            Ok((SettlementSideV1::Buy, 3)),
+        );
+        assert_eq!(
+            select_unaccounted_end(
+                [Some(3), Some(9)],
+                RECEIPT_ACCOUNTED_BUY_END,
+            ),
+            Ok((SettlementSideV1::Sell, 9)),
+        );
+        assert_eq!(
+            select_unaccounted_end(
+                [Some(3), Some(9)],
+                RECEIPT_ACCOUNTED_BUY_END | RECEIPT_ACCOUNTED_SELL_END,
+            ),
+            Err(Refusal::Adapter(ClutchError::MismatchedState)),
         );
     }
 }
