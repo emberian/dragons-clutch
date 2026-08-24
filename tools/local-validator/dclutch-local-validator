@@ -1,0 +1,274 @@
+#!/usr/bin/env bash
+# Keyless, offline local-validator profile launcher.  See README.md.
+set -euo pipefail
+
+readonly LAUNCHER_VERSION="1"
+readonly RECEIVER_ID="rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp"
+readonly ROUTER_ID="HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL"
+readonly RECEIVER_PROGRAMDATA="3UV7w2yTaqVcUAbWm1KUXdcE1Ziw8CfyyCpZvhKFkPfX"
+readonly ROUTER_PROGRAMDATA="9hLWdeVhSG9ufuQFA5d6zUoZ6qXoMRWrS8i4HGFHnR1x"
+readonly RECEIVER_SLOT="460336311"
+readonly ROUTER_SLOT="460336290"
+readonly RPC_PORT="18890"
+readonly FAUCET_PORT="18892"
+readonly GOSSIP_PORT="18893"
+readonly DYNAMIC_PORT_RANGE="18900-18931"
+readonly MINT_PUBKEY="11111111111111111111111111111111"
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd -P)
+FIXTURE_DIR="$REPO_ROOT/fixtures/pyth/local-upgraded-2026-08-22"
+FIXTURE_SUMS="$SCRIPT_DIR/fixture-sha256.txt"
+PROFILE_NAME="dclutch-local-validator-profile.json"
+SENTINEL_NAME=".dclutch-local-validator-owner"
+PID_NAME="dclutch-local-validator.pid"
+
+die() { printf 'dclutch-local-validator: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+Usage:
+  dclutch-local-validator verify-fixtures
+  dclutch-local-validator start --ledger ABSOLUTE_NEW_DIR --dclutch-elf PATH \
+    --dclutch-program-id PUBKEY --dclutch-sha256 SHA256 [--foreground]
+  dclutch-local-validator status --ledger ABSOLUTE_DIR
+  dclutch-local-validator stop --ledger ABSOLUTE_DIR
+
+`start` only creates a previously nonexistent, explicitly named ledger directory.
+It never reads Solana CLI configuration, wallet files, browser sessions, or public RPC.
+EOF
+}
+
+sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
+
+require_command() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
+
+is_sha256() { [[ "$1" =~ ^[0-9a-f]{64}$ ]]; }
+
+is_pubkey_text() { [[ "$1" =~ ^[1-9A-HJ-NP-Za-km-z]{32,44}$ ]]; }
+
+canonical_existing_file() {
+  [[ -f "$1" ]] || die "not a regular file: $1"
+  local parent base
+  parent=$(cd -- "$(dirname -- "$1")" && pwd -P)
+  base=$(basename -- "$1")
+  printf '%s/%s\n' "$parent" "$base"
+}
+
+canonical_new_ledger() {
+  [[ "$1" = /* ]] || die "--ledger must be an absolute path"
+  [[ ! -e "$1" && ! -L "$1" ]] || die "ledger must be a fresh nonexistent directory: $1"
+  local parent base
+  parent=$(cd -- "$(dirname -- "$1")" && pwd -P) || die "ledger parent does not exist: $(dirname -- "$1")"
+  base=$(basename -- "$1")
+  [[ "$base" != "." && "$base" != ".." && -n "$base" ]] || die "unsafe ledger basename"
+  [[ "$parent" != "/" ]] || die "refusing a ledger directly under /; choose a scoped directory"
+  printf '%s/%s\n' "$parent" "$base"
+}
+
+canonical_owned_ledger() {
+  [[ "$1" = /* ]] || die "--ledger must be an absolute path"
+  [[ -d "$1" && ! -L "$1" ]] || die "not a local-validator ledger directory: $1"
+  local ledger
+  ledger=$(cd -- "$1" && pwd -P)
+  [[ -f "$ledger/$SENTINEL_NAME" ]] || die "refusing a directory without this tool's sentinel"
+  [[ "$(<"$ledger/$SENTINEL_NAME")" = "dclutch-local-validator-ledger-v1" ]] || die "invalid ledger sentinel"
+  printf '%s\n' "$ledger"
+}
+
+assert_elf() {
+  local magic
+  magic=$(od -An -tx1 -N4 "$1" | tr -d '[:space:]')
+  [[ "$magic" = "7f454c46" ]] || die "not an ELF file: $1"
+}
+
+verify_fixtures() {
+  require_command shasum
+  [[ -d "$FIXTURE_DIR" ]] || die "missing fixture directory: $FIXTURE_DIR"
+  [[ -f "$FIXTURE_SUMS" ]] || die "missing pin file: $FIXTURE_SUMS"
+  local expected relative actual listed=0
+  while IFS='  ' read -r expected relative; do
+    [[ -z "$expected" || "$expected" = \#* ]] && continue
+    is_sha256 "$expected" || die "invalid fixture pin in $FIXTURE_SUMS"
+    [[ -n "$relative" && "$relative" != */* && "$relative" != .*/* ]] || die "unsafe fixture path in pin file"
+    [[ -f "$FIXTURE_DIR/$relative" ]] || die "missing pinned fixture: $relative"
+    actual=$(sha256 "$FIXTURE_DIR/$relative")
+    [[ "$actual" = "$expected" ]] || die "fixture hash mismatch: $relative"
+    listed=$((listed + 1))
+  done < "$FIXTURE_SUMS"
+  [[ "$listed" -eq 10 ]] || die "expected ten pinned fixture artifacts, found $listed"
+  local fixture_file_count
+  fixture_file_count=$(find "$FIXTURE_DIR" -type f -print | wc -l | tr -d '[:space:]')
+  [[ "$fixture_file_count" -eq "$listed" ]] || die "fixture directory contains unpinned or missing artifacts"
+  assert_elf "$FIXTURE_DIR/receiver.so"
+  assert_elf "$FIXTURE_DIR/router.so"
+  printf 'verified %s committed Pyth fixture artifacts\n' "$listed"
+}
+
+validator_version() {
+  "$1" --version 2>&1 | head -n 1
+}
+
+require_validator_4_0_2() {
+  require_command solana-test-validator
+  VALIDATOR=$(command -v solana-test-validator)
+  VALIDATOR=$(canonical_existing_file "$VALIDATOR")
+  VALIDATOR_VERSION=$(validator_version "$VALIDATOR")
+  [[ "$VALIDATOR_VERSION" == solana-test-validator\ 4.0.2\ * ]] || die "requires solana-test-validator 4.0.2; found: $VALIDATOR_VERSION"
+}
+
+json_string() {
+  local value=$1
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//$'\n'/\\n}
+  printf '"%s"' "$value"
+}
+
+write_profile() {
+  local ledger=$1 dclutch_id=$2 dclutch_elf=$3 dclutch_hash=$4 mode=$5
+  local profile="$ledger/$PROFILE_NAME"
+  {
+    printf '{\n'
+    printf '  "schema": "dclutch-local-validator-profile-v1",\n'
+    printf '  "launcher_version": "%s",\n' "$LAUNCHER_VERSION"
+    printf '  "profile_class": "local-elf-tail-execution",\n'
+    printf '  "release_bound_provider_loader_evidence": false,\n'
+    printf '  "release_bound_provider_loader_evidence_reason": "solana-test-validator 4.0.2 --upgradeable-program accepts only program id, ELF, and authority. It generates Program and ProgramData headers at genesis; it cannot install the captured complete provider account bodies, canonical captured ProgramData addresses, or captured deployment slots. --bpf-program has no ProgramData account. This profile therefore proves only local execution of hash-pinned ELF tails, never the captured release-bound provider-loader evidence.",\n'
+    printf '  "validator": {"path": '; json_string "$VALIDATOR"; printf ', "version": '; json_string "$VALIDATOR_VERSION"; printf '},\n'
+    printf '  "tool_versions": {"launcher": "%s", "solana_test_validator": ' "$LAUNCHER_VERSION"; json_string "$VALIDATOR_VERSION"; printf ', "provider_fixture_capture_solana_test_validator": "solana-test-validator 4.0.2 (src:549805f3; feat:6ff76655, client:Agave)"},\n'
+    printf '  "config_path": "/dev/null",\n'
+    printf '  "key_policy": "No caller keypair is read or supplied. solana-test-validator may generate validator, vote, stake, and faucet keypairs only inside this fresh ledger.",\n'
+    printf '  "network": {"bind_address": "127.0.0.1", "rpc_url": "http://127.0.0.1:%s", "rpc_port": %s, "websocket_port": %s, "faucet_port": %s, "gossip_port": %s, "dynamic_port_range": "%s"},\n' "$RPC_PORT" "$RPC_PORT" "$((RPC_PORT + 1))" "$FAUCET_PORT" "$GOSSIP_PORT" "$DYNAMIC_PORT_RANGE"
+    printf '  "ledger": '; json_string "$ledger"; printf ',\n'
+    printf '  "start_mode": '; json_string "$mode"; printf ',\n'
+    printf '  "programs": [\n'
+    printf '    {"name": "dclutch", "program_id": '; json_string "$dclutch_id"; printf ', "elf_path": '; json_string "$dclutch_elf"; printf ', "sha256": "%s", "loader": "upgradeable", "upgrade_authority": "none"},\n' "$dclutch_hash"
+    printf '    {"name": "pyth-receiver", "program_id": "%s", "captured_programdata": "%s", "captured_deployment_slot": %s, "elf_path": ' "$RECEIVER_ID" "$RECEIVER_PROGRAMDATA" "$RECEIVER_SLOT"; json_string "$FIXTURE_DIR/receiver.so"; printf ', "sha256": "c5079559864fc34dbd5fe87b4aa9fba3a1ed22690363ec490449e8660e73af64", "loader": "upgradeable", "upgrade_authority": "none"},\n'
+    printf '    {"name": "pyth-router", "program_id": "%s", "captured_programdata": "%s", "captured_deployment_slot": %s, "elf_path": ' "$ROUTER_ID" "$ROUTER_PROGRAMDATA" "$ROUTER_SLOT"; json_string "$FIXTURE_DIR/router.so"; printf ', "sha256": "f9061f03a81b89db29f4603677e3b3d89b3bbf08d67827b2832f18a4e2b61acb", "loader": "upgradeable", "upgrade_authority": "none"}\n'
+    printf '  ],\n'
+    printf '  "fixture_pin_file": '; json_string "$FIXTURE_SUMS"; printf '\n}\n'
+  } > "$profile"
+}
+
+rpc_ready() {
+  local attempt
+  for attempt in $(seq 1 30); do
+    if curl --fail --silent --show-error --max-time 1 \
+      -H 'content-type: application/json' \
+      --data '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' \
+      "http://127.0.0.1:$RPC_PORT" | grep -q '"result":"ok"'; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+pid_is_our_validator() {
+  local ledger=$1 pid=$2 command_line
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  command_line=$(ps -p "$pid" -o command= 2>/dev/null || true)
+  [[ "$command_line" == *"solana-test-validator"* && "$command_line" == *"--ledger $ledger"* ]]
+}
+
+start() {
+  local ledger_arg='' dclutch_elf_arg='' dclutch_id='' expected_hash='' foreground=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --ledger) ledger_arg=${2-}; shift 2 ;;
+      --dclutch-elf) dclutch_elf_arg=${2-}; shift 2 ;;
+      --dclutch-program-id) dclutch_id=${2-}; shift 2 ;;
+      --dclutch-sha256) expected_hash=${2-}; shift 2 ;;
+      --foreground) foreground=1; shift ;;
+      *) die "unknown start option: $1" ;;
+    esac
+  done
+  [[ -n "$ledger_arg" && -n "$dclutch_elf_arg" && -n "$dclutch_id" && -n "$expected_hash" ]] || die "start requires --ledger, --dclutch-elf, --dclutch-program-id, and --dclutch-sha256"
+  is_pubkey_text "$dclutch_id" || die "--dclutch-program-id is not base58 pubkey-shaped"
+  [[ "$dclutch_id" != "$RECEIVER_ID" && "$dclutch_id" != "$ROUTER_ID" ]] || die "dClutch program ID must not collide with a provider fixture program ID"
+  is_sha256 "$expected_hash" || die "--dclutch-sha256 must be lowercase SHA-256"
+  local ledger dclutch_elf actual_hash mode
+  ledger=$(canonical_new_ledger "$ledger_arg")
+  dclutch_elf=$(canonical_existing_file "$dclutch_elf_arg")
+  assert_elf "$dclutch_elf"
+  actual_hash=$(sha256 "$dclutch_elf")
+  [[ "$actual_hash" = "$expected_hash" ]] || die "dClutch ELF hash does not match --dclutch-sha256"
+  verify_fixtures
+  require_command curl
+  require_validator_4_0_2
+  mkdir -- "$ledger"
+  printf 'dclutch-local-validator-ledger-v1\n' > "$ledger/$SENTINEL_NAME"
+  if [[ "$foreground" -eq 1 ]]; then mode=foreground; else mode=background; fi
+  write_profile "$ledger" "$dclutch_id" "$dclutch_elf" "$actual_hash" "$mode"
+  local -a args=(
+    --config /dev/null
+    --ledger "$ledger"
+    --mint "$MINT_PUBKEY"
+    --bind-address 127.0.0.1
+    --rpc-port "$RPC_PORT"
+    --faucet-port "$FAUCET_PORT"
+    --gossip-port "$GOSSIP_PORT"
+    --dynamic-port-range "$DYNAMIC_PORT_RANGE"
+    --upgradeable-program "$dclutch_id" "$dclutch_elf" none
+    --upgradeable-program "$RECEIVER_ID" "$FIXTURE_DIR/receiver.so" none
+    --upgradeable-program "$ROUTER_ID" "$FIXTURE_DIR/router.so" none
+  )
+  if [[ "$foreground" -eq 1 ]]; then
+    "$VALIDATOR" "${args[@]}" &
+  else
+    "$VALIDATOR" "${args[@]}" > "$ledger/launcher.log" 2>&1 &
+  fi
+  local pid=$!
+  printf '%s\n' "$pid" > "$ledger/$PID_NAME"
+  if ! rpc_ready; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    die "validator did not pass the local RPC readiness probe; inspect $ledger/validator.log and $ledger/launcher.log"
+  fi
+  printf 'ready: http://127.0.0.1:%s\nprofile: %s\n' "$RPC_PORT" "$ledger/$PROFILE_NAME"
+  if [[ "$foreground" -eq 1 ]]; then
+    trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' INT TERM
+    wait "$pid"
+  fi
+}
+
+status() {
+  [[ $# -eq 2 && "$1" = "--ledger" ]] || die "usage: status --ledger ABSOLUTE_DIR"
+  local ledger pid=''
+  ledger=$(canonical_owned_ledger "$2")
+  [[ -f "$ledger/$PROFILE_NAME" ]] || die "missing profile: $ledger/$PROFILE_NAME"
+  [[ -f "$ledger/$PID_NAME" ]] && pid=$(<"$ledger/$PID_NAME")
+  if [[ -n "$pid" ]] && pid_is_our_validator "$ledger" "$pid" && rpc_ready; then
+    printf '{"status":"ready","pid":%s,"profile":' "$pid"; json_string "$ledger/$PROFILE_NAME"; printf '}\n'
+  else
+    printf '{"status":"not-ready","pid":'; [[ "$pid" =~ ^[0-9]+$ ]] && printf '%s' "$pid" || printf 'null'; printf ',"profile":'; json_string "$ledger/$PROFILE_NAME"; printf '}\n'
+    return 1
+  fi
+}
+
+stop() {
+  [[ $# -eq 2 && "$1" = "--ledger" ]] || die "usage: stop --ledger ABSOLUTE_DIR"
+  local ledger pid
+  ledger=$(canonical_owned_ledger "$2")
+  [[ -f "$ledger/$PID_NAME" ]] || die "no managed validator pid file"
+  pid=$(<"$ledger/$PID_NAME")
+  pid_is_our_validator "$ledger" "$pid" || die "refusing to signal a stale or unrecognized pid"
+  kill "$pid"
+  printf 'sent TERM to managed validator pid %s\n' "$pid"
+}
+
+main() {
+  [[ $# -ge 1 ]] || { usage >&2; exit 1; }
+  case "$1" in
+    verify-fixtures) [[ $# -eq 1 ]] || die "verify-fixtures takes no options"; verify_fixtures ;;
+    start) shift; start "$@" ;;
+    status) shift; status "$@" ;;
+    stop) shift; stop "$@" ;;
+    -h|--help|help) usage ;;
+    *) die "unknown command: $1" ;;
+  esac
+}
+
+main "$@"
