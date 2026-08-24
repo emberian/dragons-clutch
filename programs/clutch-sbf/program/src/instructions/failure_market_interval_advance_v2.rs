@@ -15,9 +15,9 @@ use crate::instructions::failure_market_interval_v2::{
     AuthenticatedFailureMarketIntervalPaidAdvanceV2,
 };
 use crate::instructions::failure_market_runtime::{
-    write_failure_market_runtime_session_plan_v2, AuthenticatedFailureMarketRuntimeRootV1,
-    AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
-    AuthenticatedFailureMarketRuntimeSessionWriteV1, FailureMarketRuntimeSessionWriteFactsV1,
+    write_failure_market_runtime_session_plan_v3, AuthenticatedFailureMarketRuntimeRootV1,
+    AuthenticatedFailureMarketRuntimeSessionPostwriteV3,
+    AuthenticatedFailureMarketRuntimeSessionWriteV3, FailureMarketRuntimeSessionWriteFactsV3,
 };
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
 use crate::instructions::product_failure_begin::require_exact_resolved_edge_policy_v1;
@@ -185,7 +185,7 @@ impl AuthenticatedFailureMarketSessionV3 for FailureMarketRuntimePaidAdvanceAuth
 /// Physical runtime write admitted only after Recovery and cell postwrites.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FailureMarketRuntimePaidAdvanceWriteV2 {
-    expected: FailureMarketRuntimeSessionWriteFactsV1,
+    expected: FailureMarketRuntimeSessionWriteFactsV3,
     cell_state_after: ContentId,
     runtime_session_state_after: ContentId,
     live_link_state_id: clutch_product_series::SeriesMarketLinkV3Id,
@@ -194,10 +194,10 @@ struct FailureMarketRuntimePaidAdvanceWriteV2 {
     advance_liveness_receipt_id: ContentId,
 }
 
-impl AuthenticatedFailureMarketRuntimeSessionWriteV1 for FailureMarketRuntimePaidAdvanceWriteV2 {
-    fn authenticate_failure_market_runtime_session_write_v1(
+impl AuthenticatedFailureMarketRuntimeSessionWriteV3 for FailureMarketRuntimePaidAdvanceWriteV2 {
+    fn authenticate_failure_market_runtime_session_write_v3(
         &self,
-        expected: FailureMarketRuntimeSessionWriteFactsV1,
+        expected: FailureMarketRuntimeSessionWriteFactsV3,
     ) -> clutch_failure_policy_runtime::Result<()> {
         if expected != self.expected
             || self.cell_state_after != self.runtime_session_state_after
@@ -309,7 +309,7 @@ pub(crate) fn advance_failure_market_interval_paid_v3<'root, 'link>(
 ) -> Outcome<(
     AuthenticatedFailureMarketPaidAdvancePostwriteV2,
     AuthenticatedFailureMarketIntervalAccountsV2,
-    AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
+    AuthenticatedFailureMarketRuntimeSessionPostwriteV3,
 )> {
     require_distinct_paid_advance_accounts_v2(
         root_account,
@@ -557,7 +557,7 @@ pub(crate) fn advance_failure_market_interval_paid_v3<'root, 'link>(
         .resulting_runtime()
         .commitment()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let runtime_postwrite = write_failure_market_runtime_session_plan_v2(
+    let runtime_postwrite = write_failure_market_runtime_session_plan_v3(
         program_id,
         admission_root_account,
         runtime_root_account,
@@ -565,7 +565,7 @@ pub(crate) fn advance_failure_market_interval_paid_v3<'root, 'link>(
         runtime_before,
         runtime_plan,
         &FailureMarketRuntimePaidAdvanceWriteV2 {
-            expected: FailureMarketRuntimeSessionWriteFactsV1 {
+            expected: FailureMarketRuntimeSessionWriteFactsV3 {
                 runtime_before: runtime_before.state_commitment(),
                 runtime_after: runtime_after_commitment,
                 transition_receipt_id: runtime_plan.receipt_id(),
@@ -1255,7 +1255,7 @@ mod tests {
             .find("let interval_after = write_failure_market_interval_paid_advance_v2")
             .unwrap();
         let market_runtime_write = source[outer..]
-            .find("let runtime_postwrite = write_failure_market_runtime_session_plan_v2")
+            .find("let runtime_postwrite = write_failure_market_runtime_session_plan_v3")
             .unwrap();
         assert!(runtime_write < cell_write && cell_write < market_runtime_write);
         assert_eq!(

@@ -292,6 +292,11 @@ impl AuthenticatedSeriesFailureSessionReleaseV4 {
     pub(crate) const fn session_terminal_receipt_id(&self) -> ContentId {
         self.session_terminal_receipt_id
     }
+    pub(crate) const fn archive_postwrite_id(&self) -> ContentId {
+        self.archive_postwrite_id
+    }
+    pub(crate) const fn append_receipt_id(&self) -> ContentId { self.append_receipt_id }
+    pub(crate) const fn reset_receipt_id(&self) -> ContentId { self.reset_receipt_id }
     pub(crate) const fn release_link_preauthorization_id(&self) -> ContentId {
         self.release_link_preauthorization_id
     }

@@ -9,8 +9,8 @@
 
 use crate::accounts::{require, Outcome};
 use crate::error::{ClutchError, Refusal};
-use crate::instructions::product_series_current::{
-    AuthenticatedSeriesFailureSessionReleaseV3, FailureSessionReleaseDispositionV3,
+use crate::instructions::product_failure_link_v3_current::{
+    AuthenticatedSeriesFailureSessionReleaseV4, FailureSessionReleaseDispositionV4,
 };
 use crate::instructions::source_failure_terminal_v1::{
     AuthenticatedSourceFailureTerminalPostwriteV1, SourceFailureTerminalAuthorityFactsV1,
@@ -52,7 +52,7 @@ pub(crate) struct SourceFailureProductReleaseFactsV1 {
     pub(crate) source_terminal_receipt_authentication_id: ContentId,
     pub(crate) source_physical_disposition_id: ContentId,
     pub(crate) product_release_id: ContentId,
-    pub(crate) product_release_disposition: FailureSessionReleaseDispositionV3,
+    pub(crate) product_release_disposition: FailureSessionReleaseDispositionV4,
     pub(crate) product_link_account: Pubkey,
     pub(crate) product_link_authentication_before: ContentId,
     pub(crate) product_link_authentication_after: ContentId,
@@ -136,15 +136,15 @@ pub(crate) fn bind_source_failure_product_release_v1<
     A: AuthenticatedSourceFailureProductReleaseAuthorityV1 + ?Sized,
 >(
     source: AuthenticatedSourceFailureTerminalPostwriteV1,
-    release: &AuthenticatedSeriesFailureSessionReleaseV3,
+    release: &AuthenticatedSeriesFailureSessionReleaseV4,
     authority: &A,
 ) -> Outcome<AuthenticatedSourceFailureProductReleaseV1> {
     let expected_disposition = match source.source_failure_kind() {
         SourceFailureKindV1::PrimaryMaturityWithoutAcceptedResolution => {
-            FailureSessionReleaseDispositionV3::SourceAbsent
+            FailureSessionReleaseDispositionV4::SourceAbsent
         }
         SourceFailureKindV1::SourceEvaluationRefused => {
-            FailureSessionReleaseDispositionV3::SourceRefused
+            FailureSessionReleaseDispositionV4::SourceRefused
         }
     };
     let facts = SourceFailureProductReleaseFactsV1 {
@@ -445,14 +445,14 @@ pub(crate) fn bind_persisted_source_failure_product_release_v3(
         ClutchError::MismatchedState,
     )?;
     let disposition = match facts.product_release_disposition {
-        FailureSessionReleaseDispositionV3::SourceAbsent => {
+        FailureSessionReleaseDispositionV4::SourceAbsent => {
             SourceFailureProductReleaseDispositionV3::SourceAbsent
         }
-        FailureSessionReleaseDispositionV3::SourceRefused => {
+        FailureSessionReleaseDispositionV4::SourceRefused => {
             SourceFailureProductReleaseDispositionV3::SourceRefused
         }
-        FailureSessionReleaseDispositionV3::Resolved
-        | FailureSessionReleaseDispositionV3::Exhausted => {
+        FailureSessionReleaseDispositionV4::Resolved
+        | FailureSessionReleaseDispositionV4::Exhausted => {
             return Err(Refusal::Adapter(ClutchError::MismatchedState));
         }
     };
@@ -580,11 +580,11 @@ mod adversarial_tests {
     #[test]
     fn bridge_is_exhaustive_over_source_terminal_dispositions() {
         assert_eq!(
-            FailureSessionReleaseDispositionV3::SourceAbsent.wire_byte(),
+            FailureSessionReleaseDispositionV4::SourceAbsent.wire_byte(),
             3
         );
         assert_eq!(
-            FailureSessionReleaseDispositionV3::SourceRefused.wire_byte(),
+            FailureSessionReleaseDispositionV4::SourceRefused.wire_byte(),
             4
         );
         let source = include_str!("source_failure_product_release_v1.rs");
@@ -594,8 +594,8 @@ mod adversarial_tests {
             .expect("private post-release bridge");
         assert!(compose.contains("PrimaryMaturityWithoutAcceptedResolution"));
         assert!(compose.contains("SourceEvaluationRefused"));
-        assert!(!compose.contains("FailureSessionReleaseDispositionV3::Resolved"));
-        assert!(!compose.contains("FailureSessionReleaseDispositionV3::Exhausted"));
+        assert!(!compose.contains("FailureSessionReleaseDispositionV4::Resolved"));
+        assert!(!compose.contains("FailureSessionReleaseDispositionV4::Exhausted"));
     }
 
     #[test]
