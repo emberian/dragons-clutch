@@ -1,6 +1,5 @@
 //! Atomic price and permissionless failure resolution transitions.
 
-use dclutch_core_contract::Phase as RootPhase;
 use dclutch_kernel::resolution::categorical_pyth_v1::PythV1Observation;
 use dclutch_pyth_contract::{
     instruction::{
@@ -209,7 +208,6 @@ fn transition_price<const N: usize>(
         state,
         instruction.generation(),
         instruction.child_count(),
-        usize::from(winner),
         receipt,
     )?;
 
@@ -248,7 +246,6 @@ fn transition_failure<const N: usize>(
         state,
         instruction.generation(),
         instruction.child_count(),
-        usize::from(winner),
         receipt,
     )?;
     encode_market(frame.market, &next)
@@ -256,34 +253,15 @@ fn transition_failure<const N: usize>(
 
 #[inline(never)]
 fn resolved_state<const N: usize>(
-    state: MarketStateV1<N>,
+    mut state: MarketStateV1<N>,
     generation: u64,
     child_count: u64,
-    winner: usize,
     receipt: ResolutionReceiptV1,
 ) -> Result<MarketStateV1<N>, ProgramError> {
-    let mut root = state.root();
-    root.transition_phase(generation, RootPhase::Resolved)
+    state
+        .resolve_with_receipt(generation, child_count, receipt)
         .map_err(|_| AdapterError::MarketTransition)?;
-    root.retire_child(generation, child_count)
-        .map_err(|_| AdapterError::MarketTransition)?;
-
-    let mut ledger = state
-        .to_kernel_ledger()
-        .map_err(|_| AdapterError::MarketTransition)?;
-    ledger
-        .resolve(winner)
-        .map_err(|_| AdapterError::MarketTransition)?;
-    let (hoard_atoms, supply, _) = ledger.into_parts();
-    MarketStateV1::new(
-        root,
-        *state.policy(),
-        *state.feed_profile(),
-        hoard_atoms,
-        supply,
-        receipt,
-    )
-    .map_err(|_| AdapterError::MarketTransition.into())
+    Ok(state)
 }
 
 fn decode_market<const N: usize>(
