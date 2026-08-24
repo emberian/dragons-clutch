@@ -11,10 +11,12 @@ use crate::rpc_index::{
     ObservedRpcAccountRemoval, RpcAccountRemovalKind, RpcCommitment,
     RpcObservationProvenance,
 };
+use crate::action_material::{ActionFreshnessBoundaryV1, CanonicalActionMaterialV1};
 use crate::transaction_builder::{
     ConstructionError, ExactEquation, IntegerUnit, OwnedInstructionDraft,
     ProtocolTransactionBuilder, SemanticOwner, TransactionTransport, UnsignedProtocolTransaction,
 };
+use crate::workflow_graph::{ResumableWorkflowCursor, WorkflowLane, WorkflowPosition};
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::registry::{ExtensionFamily, SourceSeriesAction};
 use clutch_solana_layout::source_series::{
@@ -200,6 +202,9 @@ pub struct ChainDerivedSourceAction11MaterialV1 {
     keeper_balance_after_lamports: u64,
     valid_before_slot: u64,
     keeper: Address,
+    driver_account: Address,
+    observed_slot: u64,
+    authority_state_sha256: [u8; 32],
     ordered_accounts: Vec<AccountMeta>,
 }
 
@@ -289,6 +294,42 @@ impl ChainDerivedSourceAction11MaterialV1 {
             self.keeper, self.program_id, self.release_manifest_sha256, transport,
         ).and_then(|builder| builder.build_source_v0(draft)).map_err(map_construction)
     }
+
+    /// Promote this opaque Source material into the read-only operator API.
+    /// `workflow_id` names only the local resumable cursor namespace.
+    pub fn canonical_material(
+        &self,
+        release: &IndexedProgramRelease,
+        workflow_id: [u8; 32],
+        transport: TransactionTransport,
+    ) -> Result<CanonicalActionMaterialV1> {
+        let cursor = ResumableWorkflowCursor {
+            workflow_id,
+            lane: WorkflowLane::SourceCrank,
+            generation: u64::from(self.call_ordinal),
+            position: WorkflowPosition {
+                phase: SOURCE_ACTION11_LOCAL_ACTION_V1,
+                item: u64::from(self.call_ordinal),
+            },
+            observed_state_sha256: self.authority_state_sha256,
+        };
+        CanonicalActionMaterialV1::from_chain_derived_source_v2(
+            release,
+            SourceSeriesAction::ReopenGeneration,
+            self.driver_account,
+            self.observed_slot,
+            cursor,
+            ActionFreshnessBoundaryV1 {
+                observed_slot: self.observed_slot,
+                valid_before_slot: self.valid_before_slot,
+                maximum_validity_slots: SOURCE_ACTION11_VALIDITY_SLOTS_V1,
+            },
+            self.keeper,
+            &self.ordered_accounts,
+            self.unsigned_transaction(release, transport)?,
+        )
+        .map_err(|_| SourceAction11MaterialError::Construction)
+    }
 }
 
 /// Derive action 11 without caller-authored semantic fields or account metas.
@@ -298,6 +339,7 @@ pub fn derive_source_action11_material_v1(
 ) -> Result<ChainDerivedSourceAction11MaterialV1> {
     authenticate_release_shape(release)?;
     authenticate_snapshot_provenance(release, snapshot)?;
+    let authority_state_sha256 = snapshot_digest(snapshot);
     let program_id = release.program_id;
     let program_key = runtime_key(program_id);
 
@@ -550,6 +592,9 @@ pub fn derive_source_action11_material_v1(
         keeper_balance_after_lamports,
         valid_before_slot,
         keeper: snapshot.keeper.address,
+        driver_account: snapshot.generation_lineage.address,
+        observed_slot: snapshot.source_release.provenance.slot,
+        authority_state_sha256,
         ordered_accounts,
     })
 }
@@ -814,6 +859,45 @@ fn derive_recipe(program_id: Address, recipe: PdaRecipeV3) -> Result<RuntimeDeri
 fn hashv(parts: &[&[u8]]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     for part in parts { hasher.update(part); }
+    hasher.finalize().into()
+}
+
+fn snapshot_digest(snapshot: SourceAction11ChainSnapshotV1<'_>) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"dragons-clutch/operator/source-action11-finalized-snapshot/v1\0");
+    hasher.update(snapshot.source_release.provenance.slot.to_le_bytes());
+    for account in [
+        snapshot.source_release, snapshot.adapter_program, snapshot.adapter_program_data,
+        snapshot.parser_program, snapshot.parser_program_data, snapshot.parser_config,
+        snapshot.source_spec, snapshot.source_work_schedule, snapshot.generation_authority,
+        snapshot.generation_lineage, snapshot.keeper, snapshot.source_funding_custody,
+        snapshot.rent_sysvar,
+    ] {
+        hasher.update(account.address.to_bytes());
+        hasher.update(account.owner.to_bytes());
+        hasher.update(account.lamports.to_le_bytes());
+        hasher.update([u8::from(account.executable)]);
+        hasher.update((account.data.len() as u64).to_le_bytes());
+        hasher.update(&account.data);
+    }
+    for slot in [snapshot.generation_target, snapshot.source_work_receipt] {
+        match slot {
+            ObservedSourceReopenSlotV1::Present(account) => {
+                hasher.update([1]);
+                hasher.update(account.address.to_bytes());
+                hasher.update(account.owner.to_bytes());
+                hasher.update(account.lamports.to_le_bytes());
+                hasher.update(&account.data);
+            }
+            ObservedSourceReopenSlotV1::Removed(account) => {
+                hasher.update([2]);
+                hasher.update(account.address.to_bytes());
+                hasher.update(account.observed_owner.to_bytes());
+                hasher.update(account.observed_lamports.to_le_bytes());
+                hasher.update((account.observed_data_bytes as u64).to_le_bytes());
+            }
+        }
+    }
     hasher.finalize().into()
 }
 

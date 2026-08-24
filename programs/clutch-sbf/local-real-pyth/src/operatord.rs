@@ -224,7 +224,9 @@ fn merge_chain_material_cursors(
         .filter(|material| {
             matches!(
                 material.cursor().lane,
-                WorkflowLane::FractionalRedemption | WorkflowLane::FailureRecovery
+                WorkflowLane::SourceCrank
+                    | WorkflowLane::FractionalRedemption
+                    | WorkflowLane::FailureRecovery
             )
         })
         .collect::<Vec<_>>();
@@ -241,6 +243,11 @@ fn merge_chain_material_cursors(
         let coordinate = material.coordinate();
         let freshness = material.freshness();
         let lane_coordinate_matches = match material.cursor().lane {
+            WorkflowLane::SourceCrank => {
+                coordinate.family_tag == SOURCE_SERIES_FAMILY_TAG
+                    && coordinate.family_version == SOURCE_SERIES_FAMILY_VERSION
+                    && SourceSeriesAction::from_tag(coordinate.local_action).is_some()
+            }
             WorkflowLane::FractionalRedemption => {
                 coordinate.family_tag == FRACTIONAL_REDEMPTION_FAMILY_TAG
                     && coordinate.family_version == FRACTIONAL_REDEMPTION_FAMILY_VERSION
@@ -2161,13 +2168,30 @@ fn coordinate_description(
     }
     if let Some(action) = source_action(coordinate) {
         let name = source_selection_action(action);
-        let builder = matches!(
-            action,
+        let builder = Some(match action {
+            SourceSeriesAction::RegisterRelease => {
+                "dragons-clutch/operator/source-action1-material/v1"
+            }
             SourceSeriesAction::InitializeHead
-                | SourceSeriesAction::OpenRawPage
-                | SourceSeriesAction::IngestBoundaryBatch
-        )
-        .then_some("clutch-source-plane-v3-adapter/intent-preimage-v3");
+            | SourceSeriesAction::OpenRawPage
+            | SourceSeriesAction::IngestBoundaryBatch
+            | SourceSeriesAction::SealRawPage
+            | SourceSeriesAction::InitializeWindowWork
+            | SourceSeriesAction::FoldWindowPages
+            | SourceSeriesAction::SealWindow
+            | SourceSeriesAction::EvaluateStatistic => {
+                "clutch-source-plane-v3-adapter/intent-preimage-v3"
+            }
+            SourceSeriesAction::EmitFailureHandoff => {
+                "dragons-clutch/operator/failure-source-action10-material/v1"
+            }
+            SourceSeriesAction::ReopenGeneration => {
+                "dragons-clutch/operator/source-action11-material/v1"
+            }
+            SourceSeriesAction::CloseGeneration => {
+                "dragons-clutch/operator/source-action12-material/v1"
+            }
+        });
         return ("source", name, builder);
     }
     if coordinate.family_tag == SOURCE_SERIES_FAMILY_TAG
