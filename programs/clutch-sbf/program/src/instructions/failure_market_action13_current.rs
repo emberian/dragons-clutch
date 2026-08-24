@@ -196,8 +196,8 @@ pub(crate) fn process_archive_failure_market_session_v3(
         .ok_or(ClutchError::Arithmetic)?;
     require(
         sequence == expected_sequence
-            && interval.cell().session_binding_id()
-                == link.state().failure_session_transcript_id(),
+            && interval.cell().session_binding_id().bytes()
+                == link.state().failure_session_transcript_id().bytes(),
         ClutchError::Replay,
     )?;
 
