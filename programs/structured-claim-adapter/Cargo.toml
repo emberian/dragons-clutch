@@ -26,6 +26,9 @@ profile-general-source-v2-point = [
     "clutch-solana-layout/profile-general-source-v2-point",
     "clutch-solana-reference/profile-general-source-v2-point",
 ]
+# Stages the current Structured wrapper code in a distinct non-production ELF.
+# The compiled action mask remains exactly zero; this feature admits no action.
+live-current-wrapper = []
 
 [dependencies]
 clutch-collateral-adapter-v2 = { path = "../../crates/clutch-collateral-adapter-v2" }

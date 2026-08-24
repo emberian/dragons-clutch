@@ -40,6 +40,38 @@ name = "clutch-bspline"
 version = "0.1.0"
 
 [[package]]
+name = "clutch-candidate-lifecycle"
+version = "0.1.0"
+
+[[package]]
+name = "clutch-collateral-adapter-v2"
+version = "0.1.0"
+dependencies = [
+ "clutch-retirement",
+ "sha2",
+]
+
+[[package]]
+name = "clutch-fee-runtime-contract"
+version = "0.1.0"
+dependencies = [
+ "clutch-batch",
+ "clutch-batch-policy-identity",
+ "clutch-owner-settlement",
+]
+
+[[package]]
+name = "clutch-general-v2-contract"
+version = "0.1.0"
+dependencies = [
+ "clutch-batch",
+ "clutch-batch-policy-identity",
+ "clutch-fee-runtime-contract",
+ "clutch-owner-settlement",
+ "clutch-retirement",
+]
+
+[[package]]
 name = "clutch-kernel"
 version = "0.1.0"
 
@@ -48,11 +80,57 @@ name = "clutch-liveness"
 version = "0.1.0"
 
 [[package]]
+name = "clutch-owner-settlement"
+version = "0.1.0"
+dependencies = [
+ "clutch-retirement",
+]
+
+[[package]]
+name = "clutch-price-measure"
+version = "0.1.0"
+dependencies = [
+ "clutch-bspline",
+]
+
+[[package]]
+name = "clutch-product-series"
+version = "0.1.0"
+dependencies = [
+ "clutch-bspline",
+ "clutch-price-measure",
+ "clutch-source-plane-v3",
+ "sha2",
+]
+
+[[package]]
+name = "clutch-retirement"
+version = "0.1.0"
+dependencies = [
+ "clutch-candidate-lifecycle",
+]
+
+[[package]]
+name = "clutch-retirement-adapter"
+version = "0.1.0"
+dependencies = [
+ "clutch-collateral-adapter-v2",
+ "clutch-general-v2-contract",
+ "clutch-retirement",
+ "clutch-solana-layout",
+ "clutch-solana-reference",
+]
+
+[[package]]
 name = "clutch-solana-layout"
 version = "0.1.0"
 dependencies = [
  "clutch-batch",
  "clutch-batch-policy-identity",
+ "clutch-collateral-adapter-v2",
+ "clutch-product-series",
+ "clutch-source-plane-v3-adapter",
+ "clutch-source-plane-v3-runtime",
  "solana-sha256-hasher",
 ]
 
@@ -67,6 +145,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "clutch-source-plane-v3"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
+name = "clutch-source-plane-v3-adapter"
+version = "0.1.0"
+dependencies = [
+ "clutch-source-plane-v3",
+ "clutch-source-profile-v1",
+ "clutch-terminal-identity-v1",
+ "sha2",
+]
+
+[[package]]
+name = "clutch-source-plane-v3-runtime"
+version = "0.1.0"
+dependencies = [
+ "clutch-product-series",
+ "clutch-source-plane-v3",
+ "clutch-source-plane-v3-adapter",
+ "clutch-terminal-identity-v1",
+ "sha2",
+]
+
+[[package]]
+name = "clutch-source-profile-v1"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
 name = "clutch-structured-claim"
 version = "0.1.0"
 dependencies = [
@@ -74,17 +187,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "clutch-structured-claim-runtime-contract"
-version = "0.1.0"
-dependencies = [
- "clutch-structured-claim",
-]
-
-[[package]]
 name = "clutch-structured-claim-adapter"
 version = "0.1.0"
 dependencies = [
+ "clutch-collateral-adapter-v2",
+ "clutch-general-v2-contract",
  "clutch-kernel",
+ "clutch-owner-settlement",
+ "clutch-product-series",
+ "clutch-retirement",
+ "clutch-retirement-adapter",
  "clutch-solana-layout",
  "clutch-solana-reference",
  "clutch-structured-claim",
@@ -92,6 +204,21 @@ dependencies = [
  "sha2",
  "solana-pubkey",
  "solana-sha256-hasher",
+]
+
+[[package]]
+name = "clutch-structured-claim-runtime-contract"
+version = "0.1.0"
+dependencies = [
+ "clutch-product-series",
+ "clutch-structured-claim",
+]
+
+[[package]]
+name = "clutch-terminal-identity-v1"
+version = "0.1.0"
+dependencies = [
+ "clutch-liveness",
 ]
 
 [[package]]

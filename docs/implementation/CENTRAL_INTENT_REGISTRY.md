@@ -378,7 +378,8 @@ pure runtime elsewhere does not make a route executable.
 | `0x85/2` | General V2 | sole future rent-owned complete-book-certified recipient allocation (2,764 bytes) |
 | `0x86/1` | General V2 | treasury ledger |
 | `0x87/1` | General V2 | settlement cash pot |
-| `0x88/1` | StructuredClaim | descriptor |
+| `0x88/1` | StructuredClaim history | withdrawn 384-byte descriptor; decode-only |
+| `0x88/2` | StructuredClaim | sole future 449-byte root/recipe-bound descriptor |
 | `0x89/1` | General V2 | FinalPot |
 | `0x8a/1` | SourcePlane V3 | historical release without receiver deployment authentication; never executable |
 | `0x8a/2` | SourcePlane V3 | receiver-release-authenticated release |
@@ -422,6 +423,7 @@ pure runtime elsewhere does not make a route executable.
 | `0xac/2` | Failure/history | append-only aggregate interval-session history |
 | `0xad/1` | Product | per-Series/ordinal SeriesMarketLink V1 |
 | `0xae/1` | Dealer | counted CoveredDealer selection attachment (5,444 bytes) |
+| `0xaf/1` | Dealer | counted facility-lifetime Product Series-obligation binding (772 bytes) |
 | `0xb0/1` | Product/replay | permanent compact MarketLifecycle replay receipt; replaces terminal `0xaa/1` |
 | `0xb1/1` | Direct | current counted Market root |
 | `0xb2/1` | Direct | current exact Selection owner |
@@ -429,6 +431,7 @@ pure runtime elsewhere does not make a route executable.
 | `0xb4/1` | Direct | current funded Reservation owner |
 | `0xb5/1` | General V2 | reserved-disabled compact frozen-order locator (at most 528 bytes) |
 | `0xb6/1` | General V2 | reserved-disabled compact Feed-slice reference index (at most 2,448 bytes; CandidateFeed remains semantic owner) |
+| `0xb7/1` | StructuredClaim | 656-byte Series-scoped descriptor-family root |
 
 `0x96/1` and `0x97/1` remain unallocated. Dealer uses the canonical global
 Position V3 and purpose-owned Replay V3 families rather than minting local
