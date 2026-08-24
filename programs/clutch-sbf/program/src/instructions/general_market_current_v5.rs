@@ -584,7 +584,7 @@ fn authenticate_general_market_current_v5_with_product_access(
             && authority.product_market_binding_v3_id().bytes() == root_binding_id.bytes()
             && authority.product_generation() == root_binding.generation
             && authority.series_market_link_account().bytes() == frame.series_link.key.to_bytes()
-            && authority.series_market_link_v3_id().bytes() == link.semantic_id().bytes()
+            && authority.series_market_link_v3_id().bytes() == link.binding_id().bytes()
             && authority.series_ordinal() == link_binding.ordinal
             && authority.compiler_bundle_v7_id().bytes() == bundle_id.bytes()
             && authority.funding_quote_v6_id().bytes() == quote_id.bytes()
@@ -834,6 +834,7 @@ mod adversarial_source_tests {
             "authenticate_series_funding_account_v5",
             "authenticate_compiled_product_series_bundle_v7",
             "authenticate_revenue_policy_record_v2",
+            "authority.series_market_link_v3_id().bytes() == link.binding_id().bytes()",
         ] {
             assert!(production.contains(required), "missing {required}");
         }
