@@ -1412,6 +1412,16 @@ impl MarketLifecycleRootV3 {
 
     /// Seal the Market and emit the only whole-Market terminal projection.
     pub fn finalize_terminal(self) -> Result<(Self, MarketInstanceTerminalProjectionV3)> {
+        let mut output = Self::decode_buffer();
+        let projection = self.finalize_terminal_into(&mut output)?;
+        Ok((output, projection))
+    }
+
+    /// Frame-bounded terminal projection into caller-owned RootV3 storage.
+    pub fn finalize_terminal_into(
+        &self,
+        output: &mut Self,
+    ) -> Result<MarketInstanceTerminalProjectionV3> {
         self.validate()?;
         if self.phase != MarketLifecyclePhaseV3::Retiring
             || self
@@ -1422,18 +1432,17 @@ impl MarketLifecycleRootV3 {
             return Err(Error::WorkIncomplete);
         }
         let (product_families, _) = self.product_families.finalize_terminal()?;
-        let next = Self {
+        *output = Self {
             phase: MarketLifecyclePhaseV3::Terminal,
             transition_sequence: self
                 .transition_sequence
                 .checked_add(1)
                 .ok_or(Error::ArithmeticOverflow)?,
             product_families,
-            ..self
+            ..*self
         };
-        next.validate()?;
-        let projection = next.terminal_projection()?;
-        Ok((next, projection))
+        output.validate()?;
+        output.terminal_projection()
     }
 
     /// Re-derive the whole-Market terminal projection from a terminal root.
