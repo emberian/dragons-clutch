@@ -47,59 +47,61 @@ use super::product_source_retirement_outer_v5::{
     ProductSourceRetirementDispositionV5,
 };
 
-/// Canonical current-General prefix occupies indices 0..25.
+/// Compact current-General roles occupy indices 0..24. Realm is omitted from
+/// the prefix and borrowed from Product's physical slice, so the instruction
+/// never repeats a pubkey merely to satisfy two named frames.
 pub(crate) const ACTION47_CURRENT_PREFIX_END_V1: usize =
-    GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5;
+    GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5 - 1;
 
 /// Product's exact physical FundingV5 retirement slice.
 pub(crate) const ACTION47_PHYSICAL_START_V1: usize = ACTION47_CURRENT_PREFIX_END_V1;
 pub(crate) const ACTION47_PHYSICAL_END_V1: usize = ACTION47_PHYSICAL_START_V1 + 24;
 pub(crate) const ACTION47_IX_CLAIM_LEDGER_V1: usize = ACTION47_PHYSICAL_END_V1;
-pub(crate) const ACTION47_IX_HOARD_V1: usize = 50;
-pub(crate) const ACTION47_IX_HOARD_TOKEN_V1: usize = 51;
-pub(crate) const ACTION47_IX_HOARD_AUTHORITY_V1: usize = 52;
-pub(crate) const ACTION47_IX_FOUNDATION_VAULT_V1: usize = 53;
+pub(crate) const ACTION47_IX_HOARD_V1: usize = 49;
+pub(crate) const ACTION47_IX_HOARD_TOKEN_V1: usize = 50;
+pub(crate) const ACTION47_IX_HOARD_AUTHORITY_V1: usize = 51;
+pub(crate) const ACTION47_IX_FOUNDATION_VAULT_V1: usize = 52;
 
 /// Source-only roles beyond the Product/current shared core.
-pub(crate) const ACTION47_IX_LIFECYCLE_REPLAY_V1: usize = 54;
-pub(crate) const ACTION47_IX_SOURCE_ADAPTER_PROGRAM_V1: usize = 55;
-pub(crate) const ACTION47_IX_SOURCE_ADAPTER_PROGRAMDATA_V1: usize = 56;
-pub(crate) const ACTION47_IX_SOURCE_PARSER_PROGRAM_V1: usize = 57;
-pub(crate) const ACTION47_IX_SOURCE_PARSER_PROGRAMDATA_V1: usize = 58;
-pub(crate) const ACTION47_IX_SOURCE_PARSER_CONFIG_V1: usize = 59;
-pub(crate) const ACTION47_IX_SOURCE_SPEC_V1: usize = 60;
-pub(crate) const ACTION47_IX_SOURCE_WORK_SCHEDULE_V1: usize = 61;
-pub(crate) const ACTION47_IX_SOURCE_CUSTODY_V1: usize = 62;
+pub(crate) const ACTION47_IX_LIFECYCLE_REPLAY_V1: usize = 53;
+pub(crate) const ACTION47_IX_SOURCE_ADAPTER_PROGRAM_V1: usize = 54;
+pub(crate) const ACTION47_IX_SOURCE_ADAPTER_PROGRAMDATA_V1: usize = 55;
+pub(crate) const ACTION47_IX_SOURCE_PARSER_PROGRAM_V1: usize = 56;
+pub(crate) const ACTION47_IX_SOURCE_PARSER_PROGRAMDATA_V1: usize = 57;
+pub(crate) const ACTION47_IX_SOURCE_PARSER_CONFIG_V1: usize = 58;
+pub(crate) const ACTION47_IX_SOURCE_SPEC_V1: usize = 59;
+pub(crate) const ACTION47_IX_SOURCE_WORK_SCHEDULE_V1: usize = 60;
+pub(crate) const ACTION47_IX_SOURCE_CUSTODY_V1: usize = 61;
 
 /// Failure accounts. The first five are shared with Product's finalizer.
-pub(crate) const ACTION47_IX_FAILURE_ADMISSION_V1: usize = 63;
-pub(crate) const ACTION47_IX_FAILURE_RUNTIME_V1: usize = 64;
-pub(crate) const ACTION47_IX_FAILURE_CELL_V1: usize = 65;
-pub(crate) const ACTION47_IX_FAILURE_HISTORY_V1: usize = 66;
-pub(crate) const ACTION47_IX_FAILURE_REPLAY_V1: usize = 67;
-pub(crate) const ACTION47_IX_FAILURE_LIVENESS_POLICY_V1: usize = 68;
+pub(crate) const ACTION47_IX_FAILURE_ADMISSION_V1: usize = 62;
+pub(crate) const ACTION47_IX_FAILURE_RUNTIME_V1: usize = 63;
+pub(crate) const ACTION47_IX_FAILURE_CELL_V1: usize = 64;
+pub(crate) const ACTION47_IX_FAILURE_HISTORY_V1: usize = 65;
+pub(crate) const ACTION47_IX_FAILURE_REPLAY_V1: usize = 66;
+pub(crate) const ACTION47_IX_FAILURE_LIVENESS_POLICY_V1: usize = 67;
 
 /// General indexed-root and durable b9 roles not already in the V5 prefix.
-pub(crate) const ACTION47_IX_INDEXED_ROOT_V1: usize = 69;
-pub(crate) const ACTION47_IX_EPOCH_V1: usize = 70;
-pub(crate) const ACTION47_IX_WINDOW_V1: usize = 71;
-pub(crate) const ACTION47_IX_FEE_MANIFEST_V1: usize = 72;
-pub(crate) const ACTION47_IX_FEE_TERMINAL_V1: usize = 73;
-pub(crate) const ACTION47_IX_INDEXED_ROOT_PAYER_V1: usize = 74;
-pub(crate) const ACTION47_IX_MANIFEST_PAYER_V1: usize = 75;
-pub(crate) const ACTION47_IX_TERMINAL_PAYER_V1: usize = 76;
+pub(crate) const ACTION47_IX_INDEXED_ROOT_V1: usize = 68;
+pub(crate) const ACTION47_IX_EPOCH_V1: usize = 69;
+pub(crate) const ACTION47_IX_WINDOW_V1: usize = 70;
+pub(crate) const ACTION47_IX_FEE_MANIFEST_V1: usize = 71;
+pub(crate) const ACTION47_IX_FEE_TERMINAL_V1: usize = 72;
+pub(crate) const ACTION47_IX_INDEXED_ROOT_PAYER_V1: usize = 73;
+pub(crate) const ACTION47_IX_MANIFEST_PAYER_V1: usize = 74;
+pub(crate) const ACTION47_IX_TERMINAL_PAYER_V1: usize = 75;
 
 /// General treasury Position roles not already in Product/current state.
-pub(crate) const ACTION47_IX_TREASURY_SERVICE_LEDGER_V1: usize = 77;
-pub(crate) const ACTION47_IX_TREASURY_POSITION_V1: usize = 78;
-pub(crate) const ACTION47_IX_TREASURY_REPLAY_V1: usize = 79;
-pub(crate) const ACTION47_IX_POSITION_REFUND_V1: usize = 80;
-pub(crate) const ACTION47_IX_REPLAY_REFUND_V1: usize = 81;
+pub(crate) const ACTION47_IX_TREASURY_SERVICE_LEDGER_V1: usize = 76;
+pub(crate) const ACTION47_IX_TREASURY_POSITION_V1: usize = 77;
+pub(crate) const ACTION47_IX_TREASURY_REPLAY_V1: usize = 78;
+pub(crate) const ACTION47_IX_POSITION_REFUND_V1: usize = 79;
+pub(crate) const ACTION47_IX_REPLAY_REFUND_V1: usize = 80;
 
 /// Failed Source retirement appends the one immutable Source terminal owner.
-pub(crate) const ACTION47_IX_FAILED_SOURCE_TERMINAL_V1: usize = 82;
-pub(crate) const ACTION47_SUCCESSFUL_ACCOUNT_COUNT_V1: usize = 82;
-pub(crate) const ACTION47_FAILED_ACCOUNT_COUNT_V1: usize = 83;
+pub(crate) const ACTION47_IX_FAILED_SOURCE_TERMINAL_V1: usize = 81;
+pub(crate) const ACTION47_SUCCESSFUL_ACCOUNT_COUNT_V1: usize = 81;
+pub(crate) const ACTION47_FAILED_ACCOUNT_COUNT_V1: usize = 82;
 
 const CURRENT_IX_BINDING: usize = 0;
 const CURRENT_IX_ROOT: usize = 2;
@@ -107,9 +109,10 @@ const CURRENT_IX_LINK: usize = 3;
 const CURRENT_IX_FUNDING: usize = 4;
 const CURRENT_IX_REGISTRY: usize = 5;
 const CURRENT_IX_SOURCE_RELEASE: usize = 10;
-const CURRENT_IX_REALM: usize = 13;
-const CURRENT_IX_ARTIFACT_START: usize = 16;
-const CURRENT_IX_ARTIFACT_END: usize = 25;
+const CURRENT_IX_REVENUE_RECORD: usize = 13;
+const CURRENT_IX_REVENUE_PREIMAGE: usize = 14;
+const CURRENT_IX_ARTIFACT_START: usize = 15;
+const CURRENT_IX_ARTIFACT_END: usize = 24;
 
 const PHYSICAL_IX_LAMPORT_REFUND: usize = ACTION47_PHYSICAL_START_V1 + 2;
 const PHYSICAL_IX_NEUTRAL_LAMPORT: usize = ACTION47_PHYSICAL_START_V1 + 3;
@@ -133,9 +136,9 @@ fn current_frame<'frame, 'info>(
         source_release: &accounts[10],
         compiler_bundle: &accounts[11],
         market_instance: &accounts[12],
-        realm: &accounts[13],
-        revenue_record: &accounts[14],
-        revenue_policy_preimage: &accounts[15],
+        realm: &accounts[PHYSICAL_IX_REALM],
+        revenue_record: &accounts[CURRENT_IX_REVENUE_RECORD],
+        revenue_policy_preimage: &accounts[CURRENT_IX_REVENUE_PREIMAGE],
         artifacts: &accounts[CURRENT_IX_ARTIFACT_START..CURRENT_IX_ARTIFACT_END],
     }
 }
@@ -224,11 +227,6 @@ fn compose_action47(
             || accounts.len() == ACTION47_FAILED_ACCOUNT_COUNT_V1,
         ClutchError::AccountCount,
     )?;
-    require(
-        accounts[CURRENT_IX_REALM].key == accounts[PHYSICAL_IX_REALM].key,
-        ClutchError::MismatchedState,
-    )?;
-
     let product = product_frame(accounts)?;
     let frame = current_frame(accounts);
     let mut root = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
