@@ -115,17 +115,25 @@ pre-existing canonical RentCredit for that beneficiary. The root and live
 record persist their original payer identity; a Buy record and escrow share one
 beneficiary.
 
-Every full fill, cancellation, expiry, invalidated-record unwind, and root close classifies each closed
-program or token account independently. `terminal_rent_transition_v2` names the
-authenticated rent principal and every excess lamport as an
-`unclassified_donation`; their sum goes to the persisted payer's canonical
-RentCredit. Nothing goes to the closer or an arbitrary sink, and donated
-lamports are not called fees, rent, revenue, or reserve capital.
+Every full fill, cancellation, expiry, invalidated-record unwind, and root close
+classifies each closed program or token account independently.
+`terminal_rent_transition_v2` names the authenticated rent principal and every
+excess lamport as an `unclassified_donation`; their sum goes to the persisted
+refund authority's canonical RentCredit. Nothing goes to the closer or an
+arbitrary sink, and donated lamports are not called fees, rent, revenue, or
+reserve capital.
 
-The pure RentCredit account contract has not landed yet. Direct therefore owns
-only the exact `RentCredit` role and beneficiary requirement, not speculative
-RentCredit bytes. The SBF seam must derive and authenticate the canonical
-RentCredit through that pure contract when it lands.
+`dclutch-rent-contract` is the sole owner of that permanent credit. Direct
+hostile-decodes its exact 48-byte `RentCreditV1`, validates the immutable
+`RefundAuthority` and persisted bump, and projects the actual PDA seeds
+`[b"dclutch/rent-credit/v1", refund_authority, bump]`. The SBF adapter verifies
+the Rent program owner and derives the supplied key from that projection.
+`terminal_rent_credit_close_plan_v1` then delegates balance conservation to
+`SourceCloseCreditPlanV1`: the complete observed source balance must be the
+exact credit delta, the source post-balance must be zero, and the observed
+credit post-balance must match. The 32-byte payer fields in Direct roots and
+records are therefore immutable refund-authority identities, never arbitrary
+payout addresses.
 
 ## Fixed layouts and instruction data
 
@@ -240,13 +248,15 @@ policy, source delegation, escrow authority, custody, RentCredit beneficiary,
 and close effects, but it does not execute them. The SBF adapter must still:
 
 - decode canonical Market/Realm/Position/policy/root/record state and PDA bumps;
-- use trusted `Clock::get()` and authenticate Rent/RentCredit derivation;
+- use trusted `Clock::get()`, decode the 48-byte `RentCreditV1`, verify its
+  `dclutch-rent-contract` owner, and derive its key from the projected domain,
+  refund authority, and persisted bump;
 - inspect InstructionsSysvar and require successful adjacent native Ed25519;
 - decode Token/Token-2022 owner, mint, delegate, allowance, escrow, vault, and
   Custody authority fields;
 - create/close accounts, invoke token transfers with exact PDA seeds, classify
-  account and token-account rent independently, and route the entire close
-  balance to the persisted payer's RentCredit; and
+  account and token-account rent independently, then apply the exact
+  `SourceCloseCreditPlanV1` source-zero/credit-delta postconditions; and
 - apply Market/Position/root/record/token effects with rollback on any refusal
   or failed CPI.
 

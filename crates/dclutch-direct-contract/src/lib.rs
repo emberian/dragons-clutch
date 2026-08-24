@@ -40,16 +40,16 @@ pub use state::{
     DIRECT_INTENT_RECORD_BYTES_V2, DIRECT_INTENT_RECORD_MAGIC_V2,
     DIRECT_INTENT_RECORD_PDA_DOMAIN_V2, DIRECT_INTENT_RECORD_SCHEMA_VERSION_V2,
     DIRECT_INTENT_SCHEMA_VERSION_V2, DirectCancelV2, DirectIntentInputV2, DirectIntentRecordV2,
-    DirectIntentV2, ExpirationInputV2, ExpirationV2, InlineParticipantAccountsV2,
-    IntentLifecycleV2, InvalidatedCloseInputV1, LiveRecordCloseV2, MAKER_REPLAY_ROOT_BYTES_V2,
-    MAKER_REPLAY_ROOT_MAGIC_V2, MAKER_REPLAY_ROOT_PDA_DOMAIN_V2,
+    DirectIntentV2, DirectRentCreditClosePlanV1, ExpirationInputV2, ExpirationV2,
+    InlineParticipantAccountsV2, IntentLifecycleV2, InvalidatedCloseInputV1, LiveRecordCloseV2,
+    MAKER_REPLAY_ROOT_BYTES_V2, MAKER_REPLAY_ROOT_MAGIC_V2, MAKER_REPLAY_ROOT_PDA_DOMAIN_V2,
     MAKER_REPLAY_ROOT_SCHEMA_VERSION_V2, MakerReplayRootV2, ParticipantAccountsV2,
     RecordAfterFillV2, RegistrationInputV2, RegistrationV2, ReplayRegistrationStatusV2,
     ReplayRootStateV2, RootClosureV2, Side, TerminalRentTransitionV2, VENUE_FEE_POLICY_BYTES_V2,
     VENUE_FEE_POLICY_MAGIC_V2, VENUE_FEE_POLICY_SCHEMA_VERSION_V2, VenueFeePolicyV2,
     cancel_intent_v2, cancel_through_v1, close_invalidated_intent_v1, close_replay_registration_v2,
     expire_intent_v2, prepare_replay_root_close_v2, register_intent_v2,
-    terminal_rent_transition_v2,
+    terminal_rent_credit_close_plan_v1, terminal_rent_transition_v2,
 };
 
 /// Exact scaled integer price denominator.
@@ -180,6 +180,14 @@ pub enum Error {
     PacketProfileMismatch,
     /// Live-account rent inputs were not monotone or solvent.
     InvalidRentTransition,
+    /// The canonical RentCredit record, binding, or exact close-credit plan refused.
+    RentCreditContract(dclutch_rent_contract::Error),
+}
+
+impl From<dclutch_rent_contract::Error> for Error {
+    fn from(error: dclutch_rent_contract::Error) -> Self {
+        Self::RentCreditContract(error)
+    }
 }
 
 /// Result alias for this crate.

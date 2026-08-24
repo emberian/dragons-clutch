@@ -1,4 +1,5 @@
 use dclutch_realm_contract::PositionV1;
+use dclutch_rent_contract::{RefundAuthority, RentCreditV1, SourceCloseCreditPlanV1};
 
 use crate::{
     Error, FEE_BASIS_POINTS_DENOMINATOR, PRICE_SCALE, Result, adapter, array, fee, nonzero, one,
@@ -1714,6 +1715,36 @@ pub struct TerminalRentTransitionV2 {
     pub rent_credit_total: u64,
 }
 
+/// Canonical RentCredit binding and exact complete-source close plan.
+///
+/// The returned [`RentCreditV1`] exposes the landed contract's exact PDA seed
+/// projection. The composing SBF adapter must additionally authenticate the
+/// Rent program owner and prove that the supplied account key is the PDA
+/// derived from those seeds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectRentCreditClosePlanV1 {
+    rent_credit: RentCreditV1,
+    classification: TerminalRentTransitionV2,
+    source_close: SourceCloseCreditPlanV1,
+}
+
+impl DirectRentCreditClosePlanV1 {
+    /// Return the hostile-decoded credit whose state binds authority and bump.
+    pub const fn rent_credit(self) -> RentCreditV1 {
+        self.rent_credit
+    }
+
+    /// Return Direct's honest rent-principal/donation classification.
+    pub const fn classification(self) -> TerminalRentTransitionV2 {
+        self.classification
+    }
+
+    /// Return the Rent contract's exact complete-source credit transition.
+    pub const fn source_close(self) -> SourceCloseCreditPlanV1 {
+        self.source_close
+    }
+}
+
 /// Classify a close balance without reclassifying donated lamports as rent;
 /// the full returned total is for the persisted payer's canonical RentCredit.
 pub fn terminal_rent_transition_v2(
@@ -1729,5 +1760,36 @@ pub fn terminal_rent_transition_v2(
             .checked_sub(authenticated_rent_principal)
             .ok_or(Error::InvalidRentTransition)?,
         rent_credit_total: current_lamports,
+    })
+}
+
+/// Bind one terminal Direct source to the landed permanent RentCredit contract.
+///
+/// `persisted_refund_authority` is the immutable beneficiary stored in the
+/// replay root or live record. `derived_pda_bump` must come from deriving the
+/// supplied RentCredit account under the Rent program; it is not caller-authored
+/// authority. The complete observed source balance, including any explicitly
+/// unclassified donation, becomes the exact credit delta.
+pub fn terminal_rent_credit_close_plan_v1(
+    persisted_refund_authority: [u8; 32],
+    rent_credit_account_data: &[u8],
+    derived_pda_bump: u8,
+    source_before: u64,
+    authenticated_rent_principal: u64,
+    rent_credit_before: u64,
+) -> Result<DirectRentCreditClosePlanV1> {
+    let authority = RefundAuthority::new(persisted_refund_authority)?;
+    let rent_credit = RentCreditV1::decode(rent_credit_account_data)?;
+    rent_credit.validate_binding(authority, derived_pda_bump)?;
+    let classification = terminal_rent_transition_v2(source_before, authenticated_rent_principal)?;
+    let source_close = SourceCloseCreditPlanV1::new(
+        source_before,
+        rent_credit_before,
+        classification.rent_credit_total,
+    )?;
+    Ok(DirectRentCreditClosePlanV1 {
+        rent_credit,
+        classification,
+        source_close,
     })
 }

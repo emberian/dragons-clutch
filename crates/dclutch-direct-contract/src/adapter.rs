@@ -1090,7 +1090,7 @@ pub fn validate_registered_escrow_authority_v2(
 pub enum AccountRoleV2 {
     /// Signer paying System account creation; never inferred from Position owner.
     SystemPayer,
-    /// Pre-existing canonical RentCredit for the persisted rent beneficiary.
+    /// Pre-existing 48-byte RentCredit PDA from the persisted refund authority.
     RentCredit,
     /// Canonical Market account.
     Market,

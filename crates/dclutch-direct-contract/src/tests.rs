@@ -987,14 +987,46 @@ fn aliases_mixed_modes_and_packet_overflow_refuse() -> Result<()> {
 }
 
 #[test]
-fn rent_principal_and_donation_are_not_conflated() -> Result<()> {
-    let transition = terminal_rent_transition_v2(12, 9)?;
+fn rent_principal_and_donation_bind_to_exact_permanent_credit() -> Result<()> {
+    let authority =
+        dclutch_rent_contract::RefundAuthority::new(key(231)).expect("nonzero refund authority");
+    let rent_credit = dclutch_rent_contract::RentCreditV1::new(authority, 17);
+    let plan =
+        terminal_rent_credit_close_plan_v1(key(231), &rent_credit.to_bytes(), 17, 12, 9, 100)?;
+    let transition = plan.classification();
     assert_eq!(transition.rent_principal, 9);
     assert_eq!(transition.unclassified_donation, 3);
     assert_eq!(transition.rent_credit_total, 12);
     assert_eq!(
+        plan.rent_credit().pda_seeds().domain(),
+        dclutch_rent_contract::RENT_CREDIT_PDA_DOMAIN_V1
+    );
+    assert_eq!(
+        plan.rent_credit().pda_seeds().refund_authority().to_bytes(),
+        key(231)
+    );
+    assert_eq!(plan.rent_credit().pda_seeds().bump(), 17);
+    assert_eq!(plan.source_close().source_before(), 12);
+    assert_eq!(plan.source_close().credit_before(), 100);
+    assert_eq!(plan.source_close().credited_lamports(), 12);
+    plan.source_close()
+        .validate_post(0, 112)
+        .expect("exact source close");
+    assert_eq!(
         terminal_rent_transition_v2(8, 9),
         Err(Error::InvalidRentTransition)
+    );
+    assert_eq!(
+        terminal_rent_credit_close_plan_v1(key(230), &rent_credit.to_bytes(), 17, 12, 9, 100,),
+        Err(Error::RentCreditContract(
+            dclutch_rent_contract::Error::CreditBindingMismatch
+        ))
+    );
+    assert_eq!(
+        terminal_rent_credit_close_plan_v1(key(231), &rent_credit.to_bytes(), 16, 12, 9, 100,),
+        Err(Error::RentCreditContract(
+            dclutch_rent_contract::Error::CreditBindingMismatch
+        ))
     );
     Ok(())
 }
