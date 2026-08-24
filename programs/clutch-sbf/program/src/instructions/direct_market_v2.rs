@@ -123,7 +123,13 @@ use super::collateral_position_v3::{
 };
 use super::general_v2_position_replay::
     authenticate_current_general_position_replay_from_market_v5;
+use super::general_market_current_v5::{
+    GeneralMarketCurrentAccountFrameV5, GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5,
+};
 use super::product_artifact::authenticate_product_artifact_v1;
+use super::product_direct_foundation_v3_current::{
+    compose_product_direct_initialize_market_v3, ProductDirectInitializeMarketAccountFrameV3,
+};
 use super::product_market_family_admission_v3_current::{
     AuthenticatedProductFamilyAdmissionOwnerV3,
     AuthenticatedProductFamilyAdmissionPlanV3,
@@ -618,9 +624,57 @@ pub(crate) fn process(
             process_direct_family_retirement_v3(program_id, accounts, sequence, payload)
         }
         DirectMarketAction::InitializeMarket => {
-            Err(Refusal::Adapter(ClutchError::UnsupportedInstruction))
+            process_direct_initialize_market_v3(program_id, accounts, sequence, payload)
         }
     }
+}
+
+/// Decode Direct action 1 into Product's sole current 41-role foundation
+/// frame. Product owns the semantic composition and consumes every move-only
+/// admission, allocation, physical-founder, activation, and replay receipt.
+#[inline(never)]
+fn process_direct_initialize_market_v3(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload: &[u8],
+) -> Outcome<()> {
+    const PRODUCT_REPLAY: usize = GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5;
+    const FAMILY_POLICY: usize = PRODUCT_REPLAY + 1;
+    const LIVENESS_MANIFEST: usize = FAMILY_POLICY + 1;
+    const LIVENESS_START: usize = LIVENESS_MANIFEST + 1;
+    const LIVENESS_END: usize = LIVENESS_START + 7;
+    const DIRECT_START: usize = LIVENESS_END;
+    const DIRECT_END: usize = DIRECT_START + 6;
+
+    require(accounts.len() == DIRECT_END, ClutchError::AccountCount)?;
+    let frame = ProductDirectInitializeMarketAccountFrameV3 {
+        general: GeneralMarketCurrentAccountFrameV5 {
+            market_binding: &accounts[0],
+            market_runtime: &accounts[1],
+            product_root: &accounts[2],
+            series_link: &accounts[3],
+            series_funding: &accounts[4],
+            series_registry: &accounts[5],
+            registry_program: &accounts[6],
+            registry_programdata: &accounts[7],
+            registry_release_artifact: &accounts[8],
+            capability_profile_artifact: &accounts[9],
+            source_release: &accounts[10],
+            compiler_bundle: &accounts[11],
+            market_instance: &accounts[12],
+            realm: &accounts[13],
+            revenue_record: &accounts[14],
+            revenue_policy_preimage: &accounts[15],
+            artifacts: &accounts[16..GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5],
+        },
+        product_replay: &accounts[PRODUCT_REPLAY],
+        family_policy: &accounts[FAMILY_POLICY],
+        liveness_manifest: &accounts[LIVENESS_MANIFEST],
+        liveness_compartments: &accounts[LIVENESS_START..LIVENESS_END],
+        direct: &accounts[DIRECT_START..DIRECT_END],
+    };
+    compose_product_direct_initialize_market_v3(program_id, &frame, sequence, payload)
 }
 
 /// Route the exact current action-13 account vector through Product's
