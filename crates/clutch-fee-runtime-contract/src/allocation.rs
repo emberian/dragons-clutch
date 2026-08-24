@@ -3,6 +3,10 @@
 use clutch_batch_policy_identity::revenue_policy_v1::{RevenuePolicyV1, StandingMakerV1};
 
 use crate::selected::{AssessmentBoundaryV1, OwnerFeeAssessmentV1, SelectedCompositeFeeV1};
+use crate::weight_v2::{
+    composite_fee_hamilton_share_v2, composite_fee_weight_transcript_v2,
+    CompositeFeeWeightRowV2, CompositeFeeWeightTranscriptV2, COMPOSITE_FEE_WEIGHT_POLICY_V2,
+};
 use crate::{add, live, Error, Id, Result, MAX_FEE_ROWS_V1};
 
 /// One signed intent's remaining fee authorization.
@@ -444,4 +448,150 @@ pub fn allocate_recipients(
         treasury_atoms: split.treasury_atoms,
         collected_fee_atoms,
     })
+}
+
+/// Allocate recipients from the exact V2 selected-execution weight stream.
+///
+/// The callback is replayed rather than retained. Every replay must reproduce
+/// the transcript's complete Position-sorted, zero-omitting row sequence.
+/// Collected fee atoms are derived as the sum of each row's terminal ceiling
+/// under the transcript denominator; neither the fee total nor any recipient
+/// row is accepted from the caller. The revenue policy owns only the split,
+/// while V2 owns row eligibility, measure, ordering, and the sole Hamilton
+/// final-atom boundary.
+#[inline(never)]
+pub fn allocate_recipients_from_weight_stream_v2<F>(
+    selected: &SelectedCompositeFeeV1,
+    policy: &RevenuePolicyV1,
+    transcript: CompositeFeeWeightTranscriptV2,
+    mut row_at: F,
+) -> Result<RecipientAllocationV1>
+where
+    F: FnMut(u8) -> Result<Option<CompositeFeeWeightRowV2>>,
+{
+    selected.binds_revenue_policy(policy)?;
+    policy.validate().map_err(|_| Error::InvalidPolicy)?;
+    if policy.standing_maker != StandingMakerV1::AllRestingMakers
+        || transcript.policy_id() != COMPOSITE_FEE_WEIGHT_POLICY_V2.id()?
+        || transcript.fee_record() != selected.fee_record()
+        || transcript.common_denominator() != selected.carry_denominator()
+        || usize::from(transcript.len()) > MAX_FEE_ROWS_V1
+    {
+        return Err(Error::MismatchedBinding);
+    }
+
+    let mut stream_index = 0u8;
+    let reproduced = composite_fee_weight_transcript_v2(
+        selected.fee_record(),
+        selected.carry_denominator(),
+        |_| {
+            let row = row_at(stream_index)?;
+            if row.is_some() {
+                stream_index = stream_index
+                    .checked_add(1)
+                    .ok_or(Error::ArithmeticOverflow)?;
+            }
+            Ok(row)
+        },
+    )?;
+    if reproduced != transcript {
+        return Err(Error::MismatchedBinding);
+    }
+
+    let mut collected_fee_atoms = 0u64;
+    let mut index = 0u8;
+    while index < transcript.len() {
+        let row = row_at(index)?.ok_or(Error::MismatchedBinding)?;
+        let quotient = row.exact_numerator() / transcript.common_denominator();
+        let remainder = row.exact_numerator() % transcript.common_denominator();
+        let floor = u64::try_from(quotient).map_err(|_| Error::AmountOutOfRange)?;
+        let terminal = if remainder == 0 {
+            floor
+        } else {
+            floor.checked_add(1).ok_or(Error::ArithmeticOverflow)?
+        };
+        collected_fee_atoms = add(collected_fee_atoms, terminal)?;
+        index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+    }
+    if collected_fee_atoms == 0 {
+        return Err(Error::EmptyAllocation);
+    }
+
+    let split = policy
+        .allocate_split(collected_fee_atoms)
+        .map_err(|_| Error::InvalidPolicy)?;
+    if split.maker_rebate_atoms != 0 && transcript.len() == 0 {
+        return Err(Error::EmptyAllocation);
+    }
+
+    let mut positions = [Id([0u8; 32]); MAX_FEE_ROWS_V1];
+    let mut output = [0u64; MAX_FEE_ROWS_V1];
+    let mut maker_sum = 0u64;
+    index = 0;
+    while index < transcript.len() {
+        let target = row_at(index)?.ok_or(Error::MismatchedBinding)?;
+        positions[usize::from(index)] = target.position();
+        let target_share = composite_fee_hamilton_share_v2(
+            split.maker_rebate_atoms,
+            target.exact_numerator(),
+            transcript.total_weight(),
+        )?;
+
+        let mut assigned = 0u64;
+        let mut higher_ranked = 0u64;
+        let mut cursor = 0u8;
+        while cursor < transcript.len() {
+            let row = row_at(cursor)?.ok_or(Error::MismatchedBinding)?;
+            let share = composite_fee_hamilton_share_v2(
+                split.maker_rebate_atoms,
+                row.exact_numerator(),
+                transcript.total_weight(),
+            )?;
+            assigned = add(assigned, share.floor_atoms())?;
+            if share.remainder() > target_share.remainder()
+                || (share.remainder() == target_share.remainder()
+                    && row.position() < target.position())
+            {
+                higher_ranked = higher_ranked
+                    .checked_add(1)
+                    .ok_or(Error::ArithmeticOverflow)?;
+            }
+            cursor = cursor.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        }
+        let dust = split
+            .maker_rebate_atoms
+            .checked_sub(assigned)
+            .ok_or(Error::ConservationFailure)?;
+        if dust > u64::from(transcript.len()) {
+            return Err(Error::ConservationFailure);
+        }
+        let extra = if target_share.remainder() != 0 && higher_ranked < dust {
+            1u64
+        } else {
+            0u64
+        };
+        let atoms = target_share
+            .floor_atoms()
+            .checked_add(extra)
+            .ok_or(Error::ArithmeticOverflow)?;
+        output[usize::from(index)] = atoms;
+        maker_sum = add(maker_sum, atoms)?;
+        index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+    }
+    if maker_sum != split.maker_rebate_atoms
+        || add(add(maker_sum, split.executor_atoms)?, split.treasury_atoms)?
+            != collected_fee_atoms
+    {
+        return Err(Error::ConservationFailure);
+    }
+    RecipientAllocationV1::restore_persisted(
+        selected.fee_record(),
+        transcript.len(),
+        positions,
+        output,
+        maker_sum,
+        split.executor_atoms,
+        split.treasury_atoms,
+        collected_fee_atoms,
+    )
 }
