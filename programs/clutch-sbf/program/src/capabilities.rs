@@ -296,6 +296,14 @@ const _: () = assert!(
 #[cfg(feature = "profile-successor-chain-attached-dev")]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
     (74, 1, 39),
+    (74, 1, 43),
+    (74, 1, 44),
+    (74, 1, 45),
+    (74, 1, 46),
+    (74, 1, 48),
+    (74, 1, 49),
+    (74, 1, 50),
+    (74, 1, 51),
     (75, 1, 1),
     (75, 1, 3),
     (75, 1, 5),
@@ -621,9 +629,7 @@ mod tests {
                             == clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG
                         && family_version
                             == clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION
-                        && local_action
-                            == clutch_solana_layout::registry::GeneralV2Action::InitializeSettlementRoot
-                                .tag();
+                        && matches!(local_action, 39 | 43..=46 | 48..=51);
                     let source_runtime_enabled = cfg!(feature = "profile-full")
                         && !SUCCESSOR_CHAIN_ATTACHED_DEV
                         && !DEALER_POLICY_CATALOG_LAB
