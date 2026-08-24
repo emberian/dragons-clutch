@@ -49,8 +49,8 @@ pub const RELEASE_UNFILLED_RESERVATION_PAYLOAD_BYTES: usize = 64;
 pub const CONSUME_PORTFOLIO_PAIR_EGGS_PAYLOAD_BYTES: usize = 104;
 /// Exact action-44 portfolio archive-retirement selector width.
 pub const RETIRE_PORTFOLIO_PAIR_ARCHIVES_PAYLOAD_BYTES: usize = 104;
-/// Exact action-45 through action-47 indexed lifecycle selector width.
-pub const EXACT_INDEX_LIFECYCLE_PAYLOAD_BYTES: usize = 64;
+/// Exact counted-root lifecycle selector width.
+pub const COUNTED_SETTLEMENT_ROOT_SELECTOR_BYTES: usize = 64;
 /// Exact action-27/28/30/48/49/50 child-retirement selector width.
 pub const SETTLEMENT_CHILD_RETIREMENT_PAYLOAD_BYTES: usize = 96;
 
@@ -937,7 +937,7 @@ pub struct CountedSettlementRootSelectorV1 {
 impl CountedSettlementRootSelectorV1 {
     /// Decode exactly two distinct live identities.
     pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
-        let mut reader = Reader::exact(input, EXACT_INDEX_LIFECYCLE_PAYLOAD_BYTES)?;
+        let mut reader = Reader::exact(input, COUNTED_SETTLEMENT_ROOT_SELECTOR_BYTES)?;
         let value = Self {
             epoch: live_id(&mut reader)?,
             settlement_root: live_id(&mut reader)?,
@@ -1485,7 +1485,7 @@ mod tests {
 
     #[test]
     fn actions45_through_47_share_one_strict_disjoint_selector() {
-        let mut selector = [0u8; EXACT_INDEX_LIFECYCLE_PAYLOAD_BYTES];
+        let mut selector = [0u8; COUNTED_SETTLEMENT_ROOT_SELECTOR_BYTES];
         selector[..ID_BYTES].copy_from_slice(&live(1));
         selector[ID_BYTES..].copy_from_slice(&live(2));
 
@@ -1544,7 +1544,7 @@ mod tests {
             Err(CodecError::MismatchedBinding)
         );
 
-        let mut root = [0u8; EXACT_INDEX_LIFECYCLE_PAYLOAD_BYTES];
+        let mut root = [0u8; COUNTED_SETTLEMENT_ROOT_SELECTOR_BYTES];
         root[..ID_BYTES].copy_from_slice(&live(1));
         root[ID_BYTES..].copy_from_slice(&live(2));
         assert!(matches!(

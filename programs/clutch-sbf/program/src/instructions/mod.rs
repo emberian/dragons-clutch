@@ -134,6 +134,9 @@ pub mod general_v2_settlement_producer_v5;
 /// Ordered indexed-root terminal lifecycle.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_exact_index_retirement_v1;
+/// Typed counted settlement-child retirement and phase gate.
+#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+pub mod general_v2_settlement_retirement_v1;
 /// Nonempty V5 Epoch freeze successor.
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_freeze_v5;
