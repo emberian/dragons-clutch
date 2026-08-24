@@ -12,7 +12,8 @@
 use crate::accounts::{expect_pda, require, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::failure_market_admission::{
-    authenticate_failure_market_root_v3, AuthenticatedFailureMarketRootV3,
+    authenticate_failure_market_root_v3, install_failure_market_interval_funding_preimage_v4,
+    AuthenticatedFailureMarketRootV3,
 };
 use crate::instructions::failure_market_foundation_v4::{
     authenticate_prefunded_failure_destination_v4, finish_failure_foundation_postwrite_v4,
@@ -147,6 +148,8 @@ const ARCHIVE_POSTWRITE_DOMAIN_V3: &[u8] =
     b"dragons-clutch/failure-market-interval-archive-postwrite/v3";
 const INTERVAL_WORK_FOUNDATION_AUTHENTICATION_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/failure-interval-work-foundation-authentication/v4\0";
+const INTERVAL_HISTORY_FOUNDATION_AUTHENTICATION_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/sbf/failure-interval-history-foundation-authentication/v4\0";
 const INTERVAL_WORK_FOUNDATION_MAGIC_V4: [u8; 8] = *b"FMIWFD4\0";
 const INTERVAL_WORK_FOUNDATION_VERSION_V4: u16 = 4;
 const INTERVAL_WORK_FOUNDATION_HEADER_BYTES_V4: usize = 16;
@@ -1337,6 +1340,53 @@ pub(crate) struct FailureMarketIntervalFundingPreimageV2 {
 }
 
 impl FailureMarketIntervalFundingPreimageV2 {
+    fn from_current_foundation_v4(
+        work: FailureMarketIntervalWorkFoundationV4,
+        history: &AuthenticatedProductMarketFoundationDebitV4,
+    ) -> Outcome<Self> {
+        require(
+            work.debit_id != history.id()
+                && work.foundation_steps_id == history.foundation_steps_id()
+                && work.market_binding_id == history.market_binding_id()
+                && work.foundation_schedule_id == history.foundation_schedule_id()
+                && work.foundation_graph_id == history.foundation_graph_id()
+                && work.market_instance_id.bytes() == history.market_instance_id().bytes()
+                && work.generation == history.generation()
+                && work.rent_refund_owner == history.rent_refund_owner()
+                && work.neutral_sink == history.neutral_lamport_sink(),
+            ClutchError::MismatchedState,
+        )?;
+        Ok(Self {
+            work_preallocation_receipt_id: work.debit_id,
+            history_preallocation_receipt_id: history.id(),
+            foundation_schedule_id: work.foundation_schedule_id,
+            foundation_account_graph_id: work.foundation_graph_id,
+            // In the current lifecycle this field is the accepted, rolling
+            // foundation-steps authority rather than a portable transcript.
+            foundation_transcript_id: work.foundation_steps_id,
+            work_donation_floor_lamports: work.donation_floor_lamports,
+            history_donation_floor_lamports: history.destination_donation_floor_lamports(),
+        })
+    }
+
+    fn encode(self) -> [u8; FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2] {
+        let mut output = [0u8; FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2];
+        let mut at = 0usize;
+        for id in [
+            self.work_preallocation_receipt_id,
+            self.history_preallocation_receipt_id,
+            self.foundation_schedule_id,
+            self.foundation_account_graph_id,
+            self.foundation_transcript_id,
+        ] {
+            output[at..at + 32].copy_from_slice(&id.bytes());
+            at += 32;
+        }
+        output[160..168].copy_from_slice(&self.work_donation_floor_lamports.to_le_bytes());
+        output[168..176].copy_from_slice(&self.history_donation_floor_lamports.to_le_bytes());
+        output
+    }
+
     /// Hostile-decode every byte of the immutable funding receipt preimage.
     pub(crate) fn decode(input: &[u8]) -> Outcome<Self> {
         let input: &[u8; FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BYTES_V2] = input
@@ -1394,15 +1444,13 @@ struct AuthenticatedFailureMarketIntervalWorkFoundationV4 {
 fn authenticate_failure_market_interval_work_foundation_v4(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
-    expected: FailureMarketIntervalWorkFoundationV4,
 ) -> Outcome<AuthenticatedFailureMarketIntervalWorkFoundationV4> {
     require(
         account.owner == program_id
             && account.is_writable
             && !account.is_signer
             && !account.executable
-            && account.data_len() == FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_BYTES
-            && account.lamports() == expected.observed_balance_lamports,
+            && account.data_len() == FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_BYTES,
         ClutchError::MismatchedState,
     )?;
     let data = account
@@ -1415,7 +1463,10 @@ fn authenticate_failure_market_interval_work_foundation_v4(
     let frame = FailureMarketIntervalCellAccountV2::decode(input)
         .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
     let pending = FailureMarketIntervalWorkFoundationV4::decode(frame.semantic_body())?;
-    require(pending == expected, ClutchError::MismatchedState)?;
+    require(
+        account.lamports() == pending.observed_balance_lamports,
+        ClutchError::MismatchedState,
+    )?;
     expect_pda(
         account.key,
         seeds::failure_market_interval_cell_v2_pda(
@@ -1587,7 +1638,6 @@ pub(crate) fn create_failure_market_interval_work_from_product_foundation_debit_
     let authenticated = authenticate_failure_market_interval_work_foundation_v4(
         program_id,
         cell_account,
-        pending,
     )?;
     require(
         authenticated.pending == pending
@@ -1601,6 +1651,297 @@ pub(crate) fn create_failure_market_interval_work_from_product_foundation_debit_
         MarketFoundationSlotV4::FailureIntervalWork,
         authenticated.data_id,
         authenticated.authentication_id,
+    )
+}
+
+/// Consume the current slot-9 Product debit, join it to the hostile slot-8
+/// physical state, and install the canonical empty history and Idle cell. The
+/// same write replaces the admission root's slot-5 marker with the complete
+/// current funding preimage, so no live Failure path can observe an incomplete
+/// interval family.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub(crate) fn create_failure_market_interval_history_from_product_foundation_debit_v4<'a>(
+    program_id: &Pubkey,
+    root_before: &AuthenticatedMarketLifecycleRootV3<'_>,
+    debit: AuthenticatedProductMarketFoundationDebitV4,
+    admission_root_account: &AccountInfo<'a>,
+    cell_account: &AccountInfo<'a>,
+    history_account: &AccountInfo<'a>,
+    rent_sysvar: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+) -> Outcome<AuthenticatedFailureFoundationPostwriteV4> {
+    require_system_program(system_program)?;
+    require_distinct(&[
+        admission_root_account.clone(),
+        cell_account.clone(),
+        history_account.clone(),
+        rent_sysvar.clone(),
+        system_program.clone(),
+    ])?;
+    let admission =
+        authenticate_failure_market_root_v3(program_id, admission_root_account, true)?;
+    let admission_state = admission.state();
+    let policy = admission_state.binding().facts();
+    let admission_state_id = ProductContentId::from_bytes(
+        admission_state
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?
+            .bytes(),
+    );
+    let work = authenticate_failure_market_interval_work_foundation_v4(
+        program_id,
+        cell_account,
+    )?;
+    let pending = work.pending;
+    let expected_history = seeds::failure_market_interval_history_v2_pda(
+        program_id,
+        &policy.market_instance_id.bytes(),
+        policy.generation,
+    )
+    .0;
+    let rent = read_rent(rent_sysvar)?;
+    let slot5_root_transition_sequence_after = debit
+        .root_transition_sequence_after()
+        .checked_sub(4)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        root_before.state().phase()
+            == clutch_product_series::MarketLifecyclePhaseV3::Founding
+            && root_before.binding_id() == debit.market_binding_id()
+            && root_before.binding().market_instance_id == policy.market_instance_id
+            && root_before.binding().generation == policy.generation
+            && root_before.binding().market_failure_policy_binding_id.bytes()
+                == admission_state.binding().id().bytes()
+            && root_before.binding().foundation_schedule_id.content_id()
+                == debit.foundation_schedule_id()
+            && root_before.binding().foundation_account_graph_id.content_id()
+                == debit.foundation_graph_id()
+            && root_before.state().capital().rent_refund_owner.bytes()
+                == debit.rent_refund_owner().to_bytes()
+            && root_before.state().capital().neutral_lamport_sink.bytes()
+                == debit.neutral_lamport_sink().to_bytes()
+            && pending.foundation_steps_id == debit.foundation_steps_id()
+            && pending.market_binding_id == debit.market_binding_id()
+            && pending.foundation_schedule_id == debit.foundation_schedule_id()
+            && pending.foundation_graph_id == debit.foundation_graph_id()
+            && pending.failure_policy_binding_id.bytes()
+                == admission_state.binding().id().bytes()
+            && pending.market_instance_id.bytes() == policy.market_instance_id.bytes()
+            && pending.admission_state_id == admission_state_id
+            && pending.history_account == expected_history
+            && pending.rent_refund_owner == debit.rent_refund_owner()
+            && pending.neutral_sink == debit.neutral_lamport_sink()
+            && pending.generation == policy.generation
+            && pending.root_transition_sequence_after
+                == debit
+                    .root_transition_sequence_after()
+                    .checked_sub(1)
+                    .ok_or(ClutchError::Arithmetic)?
+            && pending.debit_id != debit.id(),
+        ClutchError::MismatchedState,
+    )?;
+    authenticate_prefunded_failure_destination_v4(
+        &debit,
+        history_account,
+        system_program,
+        &rent,
+        MarketFoundationSlotV4::FailureIntervalHistory,
+        expected_history,
+        FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES,
+        policy.market_instance_id,
+        policy.generation,
+        debit.neutral_lamport_sink(),
+    )?;
+
+    let schedule = admission.recovery_quote();
+    let schedule_id = schedule
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let quote_facts = FailureMarketRecoveryQuoteAdmissionFactsV1 {
+        failure_policy_binding_id: admission_state.binding().id(),
+        quote_schedule_id: schedule_id,
+        maximum_calls: schedule.maximum_calls,
+        maximum_progress_units_per_call: schedule.maximum_progress_units_per_call,
+        maximum_lamports_per_call: schedule
+            .maximum_lamports_per_call()
+            .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?,
+        work_principal_lamports: schedule
+            .work_principal_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?,
+    };
+    let quote = admit_failure_market_recovery_quote_v1(
+        &ProductFailureMarketRecoveryQuoteAuthorityV1 {
+            expected: quote_facts,
+        },
+        admission_state.binding(),
+        admission_state.recovery_funding(),
+        schedule,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding_facts = FailureMarketIntervalFundingFactsV2 {
+        failure_policy_binding_id: admission_state.binding().id(),
+        market_instance_id: policy.market_instance_id,
+        generation: policy.generation,
+        work_preallocation_receipt_id: pending.debit_id,
+        history_preallocation_receipt_id: debit.id(),
+        foundation_schedule_id: pending.foundation_schedule_id,
+        foundation_account_graph_id: pending.foundation_graph_id,
+        foundation_transcript_id: pending.foundation_steps_id,
+        work_account: FailureMarketAccountIdV1::from_bytes(cell_account.key.to_bytes()),
+        history_account: FailureMarketAccountIdV1::from_bytes(history_account.key.to_bytes()),
+        rent_refund_owner: FailureMarketAccountIdV1::from_bytes(
+            pending.rent_refund_owner.to_bytes(),
+        ),
+        neutral_sink: FailureMarketAccountIdV1::from_bytes(pending.neutral_sink.to_bytes()),
+        work_rent_principal_lamports: pending.rent_principal_lamports,
+        history_rent_principal_lamports: debit.principal_lamports(),
+        work_donation_floor_lamports: pending.donation_floor_lamports,
+        work_observed_balance_lamports: pending.observed_balance_lamports,
+        history_donation_floor_lamports: debit.destination_donation_floor_lamports(),
+        history_observed_balance_lamports: debit.destination_balance_after_lamports(),
+    };
+    let (history, funding) = admit_failure_market_interval_history_v2(
+        &ProductFailureMarketIntervalFundingV2 {
+            expected: funding_facts,
+        },
+        admission_state,
+        quote,
+        funding_facts,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let cell = initialize_failure_market_interval_cell_v2(
+        admission_state,
+        funding,
+        history,
+        quote,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let (_, history_bump) = seeds::failure_market_interval_history_v2_pda(
+        program_id,
+        &policy.market_instance_id.bytes(),
+        policy.generation,
+    );
+    allocate_assign_interval_account_v2(
+        program_id,
+        history_account,
+        system_program,
+        seeds::SEED_FAILURE_MARKET_INTERVAL_HISTORY_V2,
+        policy.market_instance_id.bytes(),
+        policy.generation,
+        history_bump,
+        FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES,
+    )?;
+    let (_, cell_bump) = seeds::failure_market_interval_cell_v2_pda(
+        program_id,
+        &policy.market_instance_id.bytes(),
+        policy.generation,
+    );
+    let cell_output = encode_cell(cell_bump, cell)?;
+    let history_output = encode_history(history_bump, history)?;
+    {
+        let mut cell_data = cell_account
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let mut history_data = history_account
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let cell_destination: &mut [u8; FAILURE_INTERVAL_CONSENSUS_WORK_ACCOUNT_BYTES] =
+            cell_data
+                .as_mut()
+                .try_into()
+                .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+        let history_destination: &mut [u8; FAILURE_INTERVAL_CONSENSUS_REPLAY_ACCOUNT_BYTES] =
+            history_data
+                .as_mut()
+                .try_into()
+                .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+        require(
+            framed_data_id(cell_destination) == work.data_id
+                && history_destination.iter().all(|byte| *byte == 0),
+            ClutchError::MismatchedState,
+        )?;
+        cell_destination.copy_from_slice(&cell_output);
+        history_destination.copy_from_slice(&history_output);
+    }
+    let funding_preimage = FailureMarketIntervalFundingPreimageV2::from_current_foundation_v4(
+        pending,
+        &debit,
+    )?;
+    let funding_preimage_bytes = funding_preimage.encode();
+    require(
+        FailureMarketIntervalFundingPreimageV2::decode(&funding_preimage_bytes)?
+            == funding_preimage,
+        ClutchError::MismatchedState,
+    )?;
+    let admission_after = install_failure_market_interval_funding_preimage_v4(
+        program_id,
+        admission_root_account,
+        admission,
+        pending.foundation_steps_id,
+        pending.foundation_schedule_id,
+        pending.foundation_graph_id,
+        slot5_root_transition_sequence_after,
+        funding_preimage_bytes,
+    )?;
+    let accounts = authenticate_failure_market_interval_accounts_v2(
+        program_id,
+        cell_account,
+        history_account,
+        admission_after,
+        funding,
+        quote,
+        true,
+        true,
+    )?;
+    require(
+        accounts.cell == cell
+            && accounts.history == history
+            && accounts.funding == funding
+            && accounts.quote == quote
+            && accounts.cell_observed_lamports == pending.observed_balance_lamports
+            && accounts.history_observed_lamports
+                == debit.destination_balance_after_lamports(),
+        ClutchError::MismatchedState,
+    )?;
+    let admission_data = admission_root_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let admission_data_id = framed_data_id(admission_data.as_ref());
+    drop(admission_data);
+    let authentication_id = ProductContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            INTERVAL_HISTORY_FOUNDATION_AUTHENTICATION_DOMAIN_V4,
+            program_id.as_ref(),
+            root_before.account().as_ref(),
+            &root_before.authentication_id().bytes(),
+            admission_root_account.key.as_ref(),
+            &admission_data_id.bytes(),
+            cell_account.key.as_ref(),
+            &accounts.cell_data_id.bytes(),
+            &accounts.cell_state_id.bytes(),
+            &accounts.cell_authentication_id.bytes(),
+            history_account.key.as_ref(),
+            &accounts.history_data_id.bytes(),
+            &accounts.history_state_id.bytes(),
+            &accounts.history_authentication_id.bytes(),
+            &work.authentication_id.bytes(),
+            &funding.id().bytes(),
+            &quote.id().bytes(),
+            &debit.id().bytes(),
+            &debit.foundation_steps_id().bytes(),
+            &debit.foundation_graph_id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_data_id(authentication_id)?;
+    finish_failure_foundation_postwrite_v4(
+        program_id,
+        debit,
+        history_account,
+        MarketFoundationSlotV4::FailureIntervalHistory,
+        accounts.history_data_id,
+        authentication_id,
     )
 }
 
