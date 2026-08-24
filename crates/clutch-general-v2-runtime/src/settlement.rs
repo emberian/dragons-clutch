@@ -5783,6 +5783,50 @@ fn derive_merge_payment_owner_finalization_evidence_v5(
     Id32::new(hash.finalize().into()).map_err(SettlementAdapterErrorV1::Contract)
 }
 
+/// Derive the stable zero-fee action-40 selector from the exact persisted
+/// counted root, finalized owner row, and candidate cash pot. This is the
+/// chain-derived operator boundary for the zero-fee branch; it exposes no
+/// caller-selected intermediate hash and reproduces the same two-domain
+/// derivation consumed by the settlement transition.
+pub fn derive_zero_fee_merge_payment_stable_evidence_v5(
+    settlement_root_account: Id32,
+    root: &SettlementRootV1AccountV1,
+    owner_row: &OwnerSettlementV5AccountV1,
+    cash_pot: SettlementCashPotV1AccountV1,
+) -> Result<Id32, SettlementAdapterErrorV1> {
+    let owner = Id32::new(owner_row.semantic.expectation().owner())?;
+    if !root.fee_record().is_zero()
+        || owner_row.semantic.expectation().candidate()
+            != root.settlement_candidate_id().bytes()
+        || cash_pot.semantic.expectation.candidate
+            != root.settlement_candidate_id().bytes()
+        || cash_pot.semantic.expectation.epoch != root.epoch().bytes()
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let row_data_id = owner_row.data_id(&CanonicalSha256)?;
+    let pot_data_id = clutch_general_v2_contract::settlement_cash_pot_poststate_data_id_v1(
+        cash_pot.semantic,
+        &CanonicalSha256,
+    )?;
+    let action38 = derive_zero_fee_owner_finalization_evidence_fields_v5(
+        settlement_root_account,
+        root.settlement_candidate_id(),
+        owner,
+        row_data_id,
+        pot_data_id,
+    )?;
+    derive_merge_payment_owner_finalization_evidence_v5(
+        settlement_root_account,
+        root.settlement_candidate_id(),
+        owner,
+        row_data_id,
+        pot_data_id,
+        MergePaymentFinalizationSourceV5::ZeroFeeReplay,
+        action38,
+    )
+}
+
 /// Prepare one exact merge-receipt payment after owner cash finalization.
 ///
 /// The plan moves no cash and does not mutate Position. It atomically advances

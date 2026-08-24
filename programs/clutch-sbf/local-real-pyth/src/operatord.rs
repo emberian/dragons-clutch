@@ -295,8 +295,15 @@ fn merge_chain_material_cursors(
             WorkflowLane::GeneralSettlement => {
                 coordinate.family_tag == GENERAL_V2_FAMILY_TAG
                     && coordinate.family_version == GENERAL_V2_FAMILY_VERSION
-                    && coordinate.local_action
-                        == GeneralV2Action::InitializeSettlementRoot.tag()
+                    && matches!(
+                        GeneralV2Action::from_tag(coordinate.local_action),
+                        Some(
+                            GeneralV2Action::InitializeSettlementRoot
+                                | GeneralV2Action::FinalizeMergeReceiptPayment
+                                | GeneralV2Action::ReleaseUnfilledReservation
+                                | GeneralV2Action::ConsumePortfolioPairEggs
+                        )
+                    )
             }
             _ => false,
         };
@@ -2097,7 +2104,17 @@ fn callable_action_verdict_json(
         "releaseAdmission": {
             "enabled": true,
             "releaseKey": release.key(),
-            "capabilityProfileId": hex32(release.capability_profile_id)
+            "capabilityProfileId": hex32(release.capability_profile_id),
+            "scope": if coordinate.family_tag == STRUCTURED_CLAIM_FAMILY_TAG
+                && coordinate.family_version == STRUCTURED_CLAIM_FAMILY_VERSION
+            {
+                "structured-composite-wrapper-execution-base-driver-v1"
+            } else {
+                "single-release-execution-and-driver-v1"
+            },
+            "executionReleaseKey": material.release_key(),
+            "driverReleaseKey": material.driver_release_key(),
+            "executionReleaseManifestSha256": hex32(material.release_manifest_sha256())
         },
         "stateSelection": selection_json(selection),
         "semanticOwnerConstructor": semantic_builder,
@@ -2111,6 +2128,7 @@ fn callable_action_verdict_json(
             "constructionSchema": transaction.schema,
             "driverAccount": material.driver_account().to_string(),
             "driverAccountSlot": material.driver_account_slot().to_string(),
+            "executionReleaseKey": material.release_key(),
             "driverReleaseKey": material.driver_release_key(),
             "authorityStateSha256": hex32(material.authority_state_sha256()),
             "releaseManifestSha256": hex32(material.release_manifest_sha256()),
@@ -2203,6 +2221,21 @@ fn action_coordinate(action: &str) -> Option<CanonicalIntentCoordinate> {
             GENERAL_V2_FAMILY_TAG,
             GENERAL_V2_FAMILY_VERSION,
             GeneralV2Action::InitializeSettlementRoot.tag(),
+        ),
+        "general-finalize-merge-receipt-payment-v5" => (
+            GENERAL_V2_FAMILY_TAG,
+            GENERAL_V2_FAMILY_VERSION,
+            GeneralV2Action::FinalizeMergeReceiptPayment.tag(),
+        ),
+        "general-release-unfilled-reservation-v5" => (
+            GENERAL_V2_FAMILY_TAG,
+            GENERAL_V2_FAMILY_VERSION,
+            GeneralV2Action::ReleaseUnfilledReservation.tag(),
+        ),
+        "general-consume-portfolio-pair-v5" => (
+            GENERAL_V2_FAMILY_TAG,
+            GENERAL_V2_FAMILY_VERSION,
+            GeneralV2Action::ConsumePortfolioPairEggs.tag(),
         ),
         "advance-series-occurrence" => (
             SOURCE_SERIES_FAMILY_TAG,

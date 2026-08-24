@@ -8424,8 +8424,8 @@ const DEALER_RUNTIME_LIVENESS_ACCOUNT_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-live-ac
 const PRODUCT_MARKET_LIFECYCLE_ROOT_PDA_DOMAIN_V1: &[u8] = b"dc:market-lifecycle-root:v1";
 const PRODUCT_SERIES_MARKET_LINK_PDA_DOMAIN_V1: &[u8] = b"dc:series-market-link:v1";
 
-const GENERAL_TERMINAL_SEMANTIC_OWNER_SCHEMA_V1: &str =
-    "dragons-clutch/general-v5-terminal/actions43-46-48-51/v1";
+const GENERAL_CURRENT_SEMANTIC_OWNER_SCHEMA_V2: &str =
+    "dragons-clutch/general-v5-current/actions40-46-48-51/v2";
 
 fn general_terminal_root_v1(
     release: &IndexedProgramRelease,
@@ -8453,6 +8453,145 @@ fn derive_general_terminal_payload_v5(
 ) -> Result<(Vec<u8>, Address, u64, u64)> {
     let mut payload = Vec::new();
     match action {
+        GeneralV2Action::FinalizeMergeReceiptPayment => {
+            let root_account = *accounts
+                .get(25)
+                .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let indexed = general_terminal_root_v1(release, root_account)?;
+            let root = indexed.base();
+            let receipt_account = *accounts
+                .get(27)
+                .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let receipt =
+                clutch_solana_layout::settlement_receipt_v5::SettlementReceiptAccountV5::decode(
+                    receipt_account.data()?,
+                )
+                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let fee_bearing = !root.fee_record().is_zero();
+            if accounts.len() != if fee_bearing { 39 } else { 38 }
+                || receipt.semantic().epoch.0 != root.epoch().bytes()
+                || receipt.semantic().candidate.0 != root.settlement_candidate_id().bytes()
+            {
+                return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+            }
+            let evidence = if fee_bearing {
+                [0; 32]
+            } else {
+                let cash_pot = clutch_general_v2_contract::SettlementCashPotV1AccountV1::decode(
+                    accounts
+                        .get(32)
+                        .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?
+                        .data()?,
+                )
+                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+                let row = clutch_general_v2_contract::OwnerSettlementV5AccountV1::decode(
+                    accounts
+                        .get(33)
+                        .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?
+                        .data()?,
+                )
+                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+                clutch_general_v2_runtime::derive_zero_fee_merge_payment_stable_evidence_v5(
+                    clutch_general_v2_contract::Id32::new(root_account.address.to_bytes())
+                        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?,
+                    root,
+                    &row,
+                    cash_pot,
+                )
+                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?
+                .bytes()
+            };
+            payload.extend_from_slice(&root.epoch().bytes());
+            append_general_id_v1(&mut payload, receipt_account.address)?;
+            payload.extend_from_slice(&evidence);
+            Ok((
+                payload,
+                root_account.address,
+                root.epoch_generation(),
+                u64::from(receipt.semantic().slice_index),
+            ))
+        }
+        GeneralV2Action::ReleaseUnfilledReservation => {
+            let root_account = *accounts
+                .get(25)
+                .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let root = general_terminal_root_v1(release, root_account)?;
+            let pages = accounts
+                .len()
+                .checked_sub(37)
+                .filter(|count| (1..=4).contains(count))
+                .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let reservation = accounts
+                .get(32 + pages)
+                .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            if reservation.owner()? != release.program_id || reservation.executable() {
+                return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+            }
+            let reservation_body =
+                clutch_solana_layout::reservation_v9::ReservationAccountV9::decode(
+                    reservation.data()?,
+                )
+                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            if usize::from(reservation_body.body().page_index) >= pages {
+                return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+            }
+            payload.extend_from_slice(&root.base().epoch().bytes());
+            append_general_id_v1(&mut payload, root_account.address)?;
+            Ok((
+                payload,
+                root_account.address,
+                root.base().epoch_generation(),
+                u64::from(reservation_body.body().page_index),
+            ))
+        }
+        GeneralV2Action::ConsumePortfolioPairEggs => {
+            let root_account = *accounts
+                .get(25)
+                .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let root = general_terminal_root_v1(release, root_account)?;
+            let receipt_count = usize::from(root.base().counts().expected_receipts);
+            let page_count = accounts
+                .len()
+                .checked_sub(35)
+                .and_then(|value| value.checked_sub(receipt_count))
+                .filter(|value| (1..=4).contains(value))
+                .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            if !(1..=16).contains(&receipt_count) {
+                return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+            }
+            let entry = *accounts
+                .get(35 + page_count)
+                .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            let receipt =
+                clutch_solana_layout::settlement_receipt_v5::SettlementReceiptAccountV5::decode(
+                    entry.data()?,
+                )
+                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+            if receipt.semantic().epoch.0 != root.base().epoch().bytes()
+                || receipt.semantic().candidate.0
+                    != root.base().settlement_candidate_id().bytes()
+            {
+                return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+            }
+            payload.extend_from_slice(&root.base().epoch().bytes());
+            append_general_id_v1(&mut payload, root_account.address)?;
+            append_general_id_v1(&mut payload, entry.address)?;
+            payload.push(
+                u8::try_from(page_count)
+                    .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?,
+            );
+            payload.push(
+                u8::try_from(receipt_count)
+                    .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?,
+            );
+            payload.extend_from_slice(&[0; 6]);
+            Ok((
+                payload,
+                root_account.address,
+                root.base().epoch_generation(),
+                u64::from(receipt.semantic().slice_index),
+            ))
+        }
         GeneralV2Action::FreezeEpochV5 => {
             let epoch_account = *accounts
                 .get(25)
@@ -8716,8 +8855,18 @@ pub fn construct_general_terminal_action_material_v5(
     }
     let (payload, driver_account, generation, item) =
         derive_general_terminal_payload_v5(release, action, accounts)?;
-    let expected_count = if action == GeneralV2Action::FreezeEpochV5 {
-        if !(33..=36).contains(&accounts.len()) {
+    let expected_count = if matches!(
+        action,
+        GeneralV2Action::FreezeEpochV5 | GeneralV2Action::ReleaseUnfilledReservation
+    ) {
+        let valid = match action {
+            GeneralV2Action::FreezeEpochV5 => (33..=36).contains(&accounts.len()),
+            GeneralV2Action::ReleaseUnfilledReservation => {
+                (38..=41).contains(&accounts.len())
+            }
+            _ => false,
+        };
+        if !valid {
             return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
         }
         accounts.len()
@@ -8759,7 +8908,7 @@ pub fn construct_general_terminal_action_material_v5(
     let draft = OwnedInstructionDraft::enabled_general_terminal_v5(
         SemanticOwner {
             package: "clutch-general-v2-contract".into(),
-            schema: GENERAL_TERMINAL_SEMANTIC_OWNER_SCHEMA_V1.into(),
+            schema: GENERAL_CURRENT_SEMANTIC_OWNER_SCHEMA_V2.into(),
             release_sha256: release.elf_sha256,
         },
         release.program_id,
@@ -8790,10 +8939,12 @@ pub fn construct_general_terminal_action_material_v5(
         .ok_or(CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let cursor = ResumableWorkflowCursor {
         workflow_id,
-        lane: if action == GeneralV2Action::FreezeEpochV5 {
-            WorkflowLane::Candidate
-        } else {
-            WorkflowLane::RecoveryRetirement
+        lane: match action {
+            GeneralV2Action::FreezeEpochV5 => WorkflowLane::Candidate,
+            GeneralV2Action::FinalizeMergeReceiptPayment
+            | GeneralV2Action::ReleaseUnfilledReservation
+            | GeneralV2Action::ConsumePortfolioPairEggs => WorkflowLane::GeneralSettlement,
+            _ => WorkflowLane::RecoveryRetirement,
         },
         generation,
         position: WorkflowPosition {

@@ -429,6 +429,15 @@ const GENERAL_ACTION50_PREFIX_V5: [GeneralTerminalAccountSpecV5; 34] = [
 
 pub(crate) fn general_terminal_action_name_v5(action: GeneralV2Action) -> Option<&'static str> {
     match action {
+        GeneralV2Action::FinalizeMergeReceiptPayment => {
+            Some("general-finalize-merge-receipt-payment-v5")
+        }
+        GeneralV2Action::ReleaseUnfilledReservation => {
+            Some("general-release-unfilled-reservation-v5")
+        }
+        GeneralV2Action::ConsumePortfolioPairEggs => {
+            Some("general-consume-portfolio-pair-v5")
+        }
         GeneralV2Action::FreezeEpochV5 => Some("general-freeze-nonempty-book-v5"),
         GeneralV2Action::RetirePortfolioPairArchives => Some("general-retire-portfolio-pair-archives"),
         GeneralV2Action::RetireExactIndexChildren => Some("general-retire-exact-index-children"),
@@ -445,7 +454,10 @@ pub(crate) const fn general_terminal_flow_v5(action: GeneralV2Action) -> Option<
     match action {
         GeneralV2Action::FreezeEpochV5 => Some(ProtocolFlow::GeneralV2Candidate),
         GeneralV2Action::AdvanceFeeRetirement => Some(ProtocolFlow::GeneralV2Fees),
-        GeneralV2Action::RetirePortfolioPairArchives
+        GeneralV2Action::FinalizeMergeReceiptPayment
+        | GeneralV2Action::ReleaseUnfilledReservation
+        | GeneralV2Action::ConsumePortfolioPairEggs
+        | GeneralV2Action::RetirePortfolioPairArchives
         | GeneralV2Action::RetireExactIndexChildren
         | GeneralV2Action::RetireRetainedFeed
         | GeneralV2Action::CloseOwnerSettlementRow
@@ -457,6 +469,18 @@ pub(crate) const fn general_terminal_flow_v5(action: GeneralV2Action) -> Option<
 
 fn validate_general_terminal_payload_v5(action: GeneralV2Action, payload: &[u8]) -> Result<()> {
     let valid = match action {
+        GeneralV2Action::FinalizeMergeReceiptPayment
+        | GeneralV2Action::ReleaseUnfilledReservation => {
+            clutch_general_v2_contract::decode_settlement_root_payload_v1(action.tag(), payload)
+                .map(|_| ())
+        }
+        GeneralV2Action::ConsumePortfolioPairEggs => {
+            clutch_general_v2_contract::decode_portfolio_settlement_payload_v1(
+                action.tag(),
+                payload,
+            )
+            .map(|_| ())
+        }
         GeneralV2Action::FreezeEpochV5 => {
             clutch_general_v2_contract::FreezeEpochPayloadV1::decode(payload).map(|_| ())
         }
@@ -498,6 +522,31 @@ pub(crate) fn general_terminal_account_count_v5(
 ) -> Result<usize> {
     validate_general_terminal_payload_v5(action, payload)?;
     match action {
+        GeneralV2Action::FinalizeMergeReceiptPayment => match payload.len() {
+            clutch_general_v2_contract::FINALIZE_MERGE_RECEIPT_PAYMENT_PAYLOAD_BYTES => {
+                if payload[64..96].iter().all(|byte| *byte == 0) {
+                    Ok(39)
+                } else {
+                    Ok(38)
+                }
+            }
+            _ => Err(ConstructionError::WrongWireLength),
+        },
+        GeneralV2Action::ReleaseUnfilledReservation => {
+            Err(ConstructionError::InvalidAccountContract)
+        }
+        GeneralV2Action::ConsumePortfolioPairEggs => {
+            let pages = usize::from(payload[96]);
+            let receipts = usize::from(payload[97]);
+            let count = 35usize
+                .checked_add(pages)
+                .and_then(|value| value.checked_add(receipts))
+                .ok_or(ConstructionError::InvalidAccountContract)?;
+            if !(1..=4).contains(&pages) || !(1..=16).contains(&receipts) || count > 55 {
+                return Err(ConstructionError::InvalidAccountContract);
+            }
+            Ok(count)
+        }
         GeneralV2Action::FreezeEpochV5 => Err(ConstructionError::InvalidAccountContract),
         GeneralV2Action::RetirePortfolioPairArchives => {
             let count = 37usize
@@ -533,6 +582,87 @@ pub(crate) fn general_terminal_account_spec_v5(
         return GENERAL_CURRENT_PREFIX_V5.get(index).copied();
     }
     match action {
+        GeneralV2Action::FinalizeMergeReceiptPayment if matches!(account_count, 38 | 39) => {
+            match index {
+                25 => Some(general_terminal_spec_v5("settlement-root", false, true)),
+                26 => Some(general_terminal_spec_v5("retained-candidate-feed", false, false)),
+                27 => Some(general_terminal_spec_v5("settlement-receipt-v5", false, true)),
+                28 => Some(general_terminal_spec_v5("collateral-profile", false, false)),
+                29 => Some(general_terminal_spec_v5("collateral-policy", false, false)),
+                30 => Some(general_terminal_spec_v5("collateral-token-program", false, false)),
+                31 => Some(general_terminal_spec_v5("rent-sysvar", false, false)),
+                32 => Some(general_terminal_spec_v5("settlement-cash-pot", false, false)),
+                33 => Some(general_terminal_spec_v5("owner-settlement-v5", false, false)),
+                34 => Some(general_terminal_spec_v5("order-page-v5", false, false)),
+                35 => Some(general_terminal_spec_v5("reservation-v9", false, true)),
+                36 => Some(general_terminal_spec_v5("position-v3", false, false)),
+                37 => Some(general_terminal_spec_v5("replay-v3", false, true)),
+                38 if account_count == 39 => Some(general_terminal_spec_v5(
+                    "owner-fee-finalization-v4",
+                    false,
+                    false,
+                )),
+                _ => None,
+            }
+        }
+        GeneralV2Action::ReleaseUnfilledReservation if (38..=41).contains(&account_count) => {
+            let endpoint = account_count.checked_sub(5)?;
+            match index {
+                25 => Some(general_terminal_spec_v5("settlement-root", false, true)),
+                26 => Some(general_terminal_spec_v5("retained-candidate-feed", false, false)),
+                27 => Some(general_terminal_spec_v5("economic-domain-v2", false, false)),
+                28 => Some(general_terminal_spec_v5("price-grid", false, false)),
+                29 => Some(general_terminal_spec_v5("collateral-profile", false, false)),
+                30 => Some(general_terminal_spec_v5("collateral-policy", false, false)),
+                31 => Some(general_terminal_spec_v5("collateral-token-program", false, false)),
+                32.. if index < endpoint => {
+                    Some(general_terminal_spec_v5("order-page-v5", false, false))
+                }
+                _ if index == endpoint => {
+                    Some(general_terminal_spec_v5("reservation-v9", false, true))
+                }
+                _ if index == endpoint + 1 => {
+                    Some(general_terminal_spec_v5("position-v3", false, true))
+                }
+                _ if index == endpoint + 2 => {
+                    Some(general_terminal_spec_v5("replay-v3", false, true))
+                }
+                _ if index == endpoint + 3 => {
+                    Some(general_terminal_spec_v5("reservation-rent-payer", false, true))
+                }
+                _ if index == endpoint + 4 => {
+                    Some(general_terminal_spec_v5("neutral-sink", false, true))
+                }
+                _ => None,
+            }
+        }
+        GeneralV2Action::ConsumePortfolioPairEggs if (37..=55).contains(&account_count) => {
+            let pages = usize::from(*payload.get(96)?);
+            let receipts = usize::from(*payload.get(97)?);
+            let receipt_start = 35usize.checked_add(pages)?;
+            if account_count != receipt_start.checked_add(receipts)? {
+                return None;
+            }
+            match index {
+                25 => Some(general_terminal_spec_v5("settlement-root", false, false)),
+                26 => Some(general_terminal_spec_v5("retained-candidate-feed", false, false)),
+                27 => Some(general_terminal_spec_v5("economic-domain-v2", false, false)),
+                28 => Some(general_terminal_spec_v5("price-grid", false, false)),
+                29 => Some(general_terminal_spec_v5("buyer-reservation-v9", false, true)),
+                30 => Some(general_terminal_spec_v5("seller-reservation-v9", false, true)),
+                31 => Some(general_terminal_spec_v5("buyer-position-v3", false, true)),
+                32 => Some(general_terminal_spec_v5("seller-position-v3", false, true)),
+                33 => Some(general_terminal_spec_v5("buyer-replay-v3", false, true)),
+                34 => Some(general_terminal_spec_v5("seller-replay-v3", false, true)),
+                35.. if index < receipt_start => {
+                    Some(general_terminal_spec_v5("order-page-v5", false, false))
+                }
+                _ if index < account_count => {
+                    Some(general_terminal_spec_v5("settlement-receipt-v5", false, true))
+                }
+                _ => None,
+            }
+        }
         GeneralV2Action::FreezeEpochV5 if (33..=36).contains(&account_count) => match index {
             25 => Some(general_terminal_spec_v5("epoch-v6", false, true)),
             26 => Some(general_terminal_spec_v5("economic-domain-v2", false, false)),
@@ -2699,8 +2829,18 @@ impl OwnedInstructionDraft {
         payload: &[u8],
     ) -> Result<Self> {
         validate_general_terminal_payload_v5(action, payload)?;
-        let expected_count = if action == GeneralV2Action::FreezeEpochV5 {
-            if !(33..=36).contains(&accounts.len()) {
+        let expected_count = if matches!(
+            action,
+            GeneralV2Action::FreezeEpochV5 | GeneralV2Action::ReleaseUnfilledReservation
+        ) {
+            let valid = match action {
+                GeneralV2Action::FreezeEpochV5 => (33..=36).contains(&accounts.len()),
+                GeneralV2Action::ReleaseUnfilledReservation => {
+                    (38..=41).contains(&accounts.len())
+                }
+                _ => false,
+            };
+            if !valid {
                 return Err(ConstructionError::InvalidAccountContract);
             }
             accounts.len()
@@ -3992,8 +4132,21 @@ impl OwnedInstructionDraft {
                     return Err(ConstructionError::UnallocatedRegistryCoordinate);
                 }
                 validate_general_terminal_payload_v5(action, &request.envelope.payload)?;
-                let expected_count = if action == GeneralV2Action::FreezeEpochV5 {
-                    if !(33..=36).contains(&self.accounts.len()) {
+                let expected_count = if matches!(
+                    action,
+                    GeneralV2Action::FreezeEpochV5
+                        | GeneralV2Action::ReleaseUnfilledReservation
+                ) {
+                    let valid = match action {
+                        GeneralV2Action::FreezeEpochV5 => {
+                            (33..=36).contains(&self.accounts.len())
+                        }
+                        GeneralV2Action::ReleaseUnfilledReservation => {
+                            (38..=41).contains(&self.accounts.len())
+                        }
+                        _ => false,
+                    };
+                    if !valid {
                         return Err(ConstructionError::InvalidAccountContract);
                     }
                     self.accounts.len()
@@ -4835,6 +4988,112 @@ mod tests {
     use clutch_solana_layout::registry::{GeneralV2Action, SourceSeriesAction};
     use clutch_solana_layout::source_series::account_contract_v2;
     use clutch_solana_layout::{Hash32, Intent};
+
+    #[test]
+    fn current_general_settlement_geometry_is_payload_owned_and_exact() {
+        let mut action40 = [0u8;
+            clutch_general_v2_contract::FINALIZE_MERGE_RECEIPT_PAYMENT_PAYLOAD_BYTES];
+        action40[..32].fill(1);
+        action40[32..64].fill(2);
+        assert_eq!(
+            general_terminal_account_count_v5(
+                GeneralV2Action::FinalizeMergeReceiptPayment,
+                &action40,
+            ),
+            Ok(39)
+        );
+        assert_eq!(
+            general_terminal_account_spec_v5(
+                GeneralV2Action::FinalizeMergeReceiptPayment,
+                &action40,
+                39,
+                38,
+            )
+            .map(|role| (role.label, role.writable)),
+            Some(("owner-fee-finalization-v4", false))
+        );
+        action40[64..96].fill(3);
+        assert_eq!(
+            general_terminal_account_count_v5(
+                GeneralV2Action::FinalizeMergeReceiptPayment,
+                &action40,
+            ),
+            Ok(38)
+        );
+        assert_eq!(
+            general_terminal_account_spec_v5(
+                GeneralV2Action::FinalizeMergeReceiptPayment,
+                &action40,
+                38,
+                36,
+            )
+            .map(|role| (role.label, role.writable)),
+            Some(("position-v3", false))
+        );
+
+        let mut action41 = [0u8;
+            clutch_general_v2_contract::RELEASE_UNFILLED_RESERVATION_PAYLOAD_BYTES];
+        action41[..32].fill(1);
+        action41[32..64].fill(2);
+        validate_general_terminal_payload_v5(
+            GeneralV2Action::ReleaseUnfilledReservation,
+            &action41,
+        )
+        .unwrap();
+        assert_eq!(
+            general_terminal_account_spec_v5(
+                GeneralV2Action::ReleaseUnfilledReservation,
+                &action41,
+                40,
+                34,
+            )
+            .map(|role| role.label),
+            Some("order-page-v5")
+        );
+        assert_eq!(
+            general_terminal_account_spec_v5(
+                GeneralV2Action::ReleaseUnfilledReservation,
+                &action41,
+                40,
+                35,
+            )
+            .map(|role| role.label),
+            Some("reservation-v9")
+        );
+
+        let mut action42 =
+            [0u8; clutch_general_v2_contract::CONSUME_PORTFOLIO_PAIR_EGGS_PAYLOAD_BYTES];
+        action42[..32].fill(1);
+        action42[32..64].fill(2);
+        action42[64..96].fill(3);
+        action42[96] = 4;
+        action42[97] = 16;
+        assert_eq!(
+            general_terminal_account_count_v5(
+                GeneralV2Action::ConsumePortfolioPairEggs,
+                &action42,
+            ),
+            Ok(55)
+        );
+        assert_eq!(
+            general_terminal_account_spec_v5(
+                GeneralV2Action::ConsumePortfolioPairEggs,
+                &action42,
+                55,
+                39,
+            )
+            .map(|role| role.label),
+            Some("settlement-receipt-v5")
+        );
+        action42[96] = 0;
+        assert_eq!(
+            general_terminal_account_count_v5(
+                GeneralV2Action::ConsumePortfolioPairEggs,
+                &action42,
+            ),
+            Err(ConstructionError::WrongWireLength)
+        );
+    }
 
     #[test]
     fn fractional_lifecycle_builder_uses_one_meta_per_outcome() {
