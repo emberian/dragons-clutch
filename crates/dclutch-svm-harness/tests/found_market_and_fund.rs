@@ -9,21 +9,16 @@ use dclutch_core_contract::{ContentId as CoreContentId, MarketIdentity, Phase};
 use dclutch_kernel::resolution::categorical_pyth_v1::{
     CategoricalPythV1PolicyInput, MAX_PRICE_CELLS,
 };
+use dclutch_market_contract::market::CategoricalMarketV1;
 use dclutch_product_contract::{
     ContentId as ProductContentId,
-    capacity::{
-        CapacityEnvelope, CapacityProfileId, CapacityProfileV1, CapacityProfileV1Input,
-        ExactWordWidth,
-    },
-    claim::{
-        CATEGORICAL_UNIT_DENOMINATOR, CategoricalUnitV1, CategoricalUnitV1Input, RedemptionRounding,
-    },
+    capacity::{CapacityEnvelope, CapacityProfileId, CapacityProfileV1, CapacityProfileV1Input},
+    claim::{CategoricalUnitV1, CategoricalUnitV1Input},
     product::{InstanceV1, InstanceV1Input},
 };
 use dclutch_pyth_contract::{
     feed_profile::PythFeedProfileV1,
-    funding::{FUNDING_BYTES, ResolutionFundV1},
-    market::MarketStateV1,
+    funding::{FUNDING_BYTES, FundingStateV1},
     policy::CategoricalPythPolicyRecordV1,
     resolution_material::CategoricalPythResolutionMaterialV1,
 };
@@ -148,7 +143,6 @@ fn manifest_bytes(entries: &[CapabilityEntryV1]) -> Vec<u8> {
 fn fixture(fault: Fault) -> Fixture {
     require_sbf_out_dir();
     let realm_value = RealmV1::new(RealmV1Input {
-        collateral_semantic_id: [1; 32],
         token_program: [2; 32],
         collateral_mint: [3; 32],
         collateral_adapter_release_id: [4; 32],
@@ -162,14 +156,12 @@ fn fixture(fault: Fault) -> Fixture {
 
     let capacity_value = CapacityProfileV1::new(CapacityProfileV1Input {
         envelope: CapacityEnvelope::Measured,
-        word_width: ExactWordWidth::Eight,
         verifier_release_id: product_id([5; 32]),
         envelope_basis_id: product_id([6; 32]),
         max_artifact_bytes: 16,
         page_payload_bytes: 16,
         max_pages: 1,
         max_partition_cells: 2,
-        max_coefficient_entries: 2,
     })
     .expect("canonical capacity profile");
     let capacity_bytes = capacity_value.to_bytes();
@@ -186,8 +178,6 @@ fn fixture(fault: Fault) -> Fixture {
         CategoricalUnitV1Input {
             capacity_profile_id: claim_capacity_id,
             outcome_count: 2,
-            payout_denominator: CATEGORICAL_UNIT_DENOMINATOR,
-            rounding: RedemptionRounding::ExactOnly,
         },
         capacity_value,
     )
@@ -287,8 +277,9 @@ fn fixture(fault: Fault) -> Fixture {
     };
 
     let rent = Rent::default();
-    let market_rent =
-        rent.minimum_balance(MarketStateV1::<2>::encoded_len().expect("two-outcome Market width"));
+    let market_rent = rent.minimum_balance(
+        CategoricalMarketV1::<2>::encoded_len().expect("two-outcome Market width"),
+    );
     let fund_rent = rent.minimum_balance(FUNDING_BYTES);
     let required = market_rent
         .checked_add(fund_rent)
@@ -400,14 +391,6 @@ async fn observed_account(context: &mut ProgramTestContext, address: Pubkey) -> 
 #[tokio::test]
 async fn found_market_and_fund_uses_real_elf_system_cpis_and_persists_exact_state() {
     let fixture = fixture(Fault::None);
-    let expected_fund = ResolutionFundV1::new(
-        fixture.canonical_market.to_bytes(),
-        GENERATION,
-        fixture.sponsor.pubkey().to_bytes(),
-        PROVIDER_FEE,
-        SUCCESS_BOUNTY,
-    )
-    .expect("expected fund");
     let instruction = founding_instruction(&fixture);
     let mut context = fixture.test.start_with_context().await;
     submit(&mut context, &fixture.sponsor, instruction)
@@ -423,10 +406,11 @@ async fn found_market_and_fund_uses_real_elf_system_cpis_and_persists_exact_stat
     let sponsor = observed_account(&mut context, fixture.sponsor.pubkey())
         .await
         .expect("sponsor exists");
-    let market_state = MarketStateV1::<2>::decode(&market.data).expect("exact MarketStateV1<2>");
+    let market_state = CategoricalMarketV1::<2>::decode(&market.data)
+        .expect("exact provider-neutral categorical Market");
     let rent = Rent::default();
     let market_rent =
-        rent.minimum_balance(MarketStateV1::<2>::encoded_len().expect("Market width"));
+        rent.minimum_balance(CategoricalMarketV1::<2>::encoded_len().expect("Market width"));
     let fund_rent = rent.minimum_balance(FUNDING_BYTES);
     let fund_lamports = fund_rent + PROVIDER_FEE + SUCCESS_BOUNTY;
 
@@ -434,7 +418,7 @@ async fn found_market_and_fund_uses_real_elf_system_cpis_and_persists_exact_stat
     assert_eq!(market.lamports, market_rent);
     assert_eq!(
         market.data.len(),
-        MarketStateV1::<2>::encoded_len().expect("Market width")
+        CategoricalMarketV1::<2>::encoded_len().expect("Market width")
     );
     assert_eq!(market_state.root().phase(), Phase::Founding);
     assert_eq!(market_state.root().outstanding_children(), 1);
@@ -442,10 +426,10 @@ async fn found_market_and_fund_uses_real_elf_system_cpis_and_persists_exact_stat
     assert_eq!(market_state.supply(), &[0, 0]);
     assert_eq!(fund.owner, PROGRAM_ID);
     assert_eq!(fund.lamports, fund_lamports);
-    assert_eq!(fund.data, expected_fund.to_bytes());
-    assert_eq!(ResolutionFundV1::decode(&fund.data), Ok(expected_fund));
-    assert_eq!(expected_fund.provider_fee_reimbursement(), PROVIDER_FEE);
-    assert_eq!(expected_fund.success_bounty(), SUCCESS_BOUNTY);
+    let funding = FundingStateV1::decode(&fund.data).expect("exact raw FundingState");
+    assert_eq!(funding.remaining().provider_principal(), PROVIDER_FEE);
+    assert_eq!(funding.remaining().bounty_principal(), SUCCESS_BOUNTY);
+    assert_eq!(funding.released().rent_principal(), fund_rent);
     assert_eq!(
         sponsor.lamports,
         fixture.sponsor_before - market_rent - fund_lamports

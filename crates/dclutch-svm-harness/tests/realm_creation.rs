@@ -70,7 +70,6 @@ fn fixture(fault: Fault) -> Fixture {
     let release = CollateralAdapterReleaseV1::legacy_exact_transfer();
     let release_id = hash(&release.to_bytes()).to_bytes();
     let realm_value = RealmV1::new(RealmV1Input {
-        collateral_semantic_id: [51; 32],
         token_program: LEGACY_TOKEN_PROGRAM_ID,
         collateral_mint: MINT.to_bytes(),
         collateral_adapter_release_id: release_id,
