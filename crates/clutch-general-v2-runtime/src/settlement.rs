@@ -1422,7 +1422,7 @@ fn settlement_coordinates_v4(
 }
 
 /// Constant-space access to the exact authenticated frozen V5 book.
-pub trait SettlementOrderBookAccessV5 {
+pub trait SettlementOrderBookAccessV5: core::fmt::Debug {
     /// Exact authenticated MarketBinding projection.
     fn market_binding(&self) -> &MarketBindingV1;
     /// Canonical Market identity.
