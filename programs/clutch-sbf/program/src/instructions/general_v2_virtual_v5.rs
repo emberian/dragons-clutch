@@ -11,7 +11,7 @@
 //! writer in that same instruction.
 
 use core::cell::{Ref, RefMut};
-use std::boxed::Box;
+use std::{boxed::Box, vec, vec::Vec};
 
 use clutch_collateral_adapter_v2::{
     admit_collateral_account_v2, admit_collateral_mint_v2, ClaimLedgerV3, HoardV2,
@@ -150,6 +150,18 @@ struct AuthenticatedEndpointV5 {
 struct LiabilitySuccessorsV5 {
     hoard: HoardV2,
     claim_ledger: ClaimLedgerV3,
+}
+
+/// Heap-backed canonical postbodies kept out of the action's bounded SBF frame.
+#[derive(Debug)]
+struct CommonPoststateBodiesV5 {
+    receipt: Vec<u8>,
+    reservation: Vec<u8>,
+    position: Vec<u8>,
+    replay: Vec<u8>,
+    final_pot: Vec<u8>,
+    hoard: Vec<u8>,
+    claim_ledger: Vec<u8>,
 }
 
 fn id(key: &Pubkey) -> Id32 {
@@ -868,7 +880,7 @@ fn common_poststates(
     replay_kind: contract::GeneralReplayTransitionKindV1,
     delivery_id: [u8; 32],
     receipt_data_id: [u8; 32],
-) -> Outcome<([u8; SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5], [u8; RESERVATION_ACCOUNT_BYTES_V9], [u8; POSITION_V3_BYTES], [u8; GENERAL_REPLAY_ACCOUNT_V1_BYTES], [u8; FINAL_POT_ACCOUNT_BYTES], [u8; HOARD_V2_BYTES], [u8; CLAIM_LEDGER_V3_BYTES])> {
+) -> Outcome<CommonPoststateBodiesV5> {
     let mut receipt_semantic = SettlementReceiptAccountV5::decode(&borrow_data(frame.receipt)?)?.semantic();
     receipt_semantic.settled_quantity = receipt_semantic.quantity;
     receipt_semantic.consumed_flags = receipt_delivery_mask | if exhaust_receipt { RECEIPT_FLAG_SLICE_EXHAUSTED } else { 0 };
@@ -886,15 +898,29 @@ fn common_poststates(
         RESERVATION_STATE_ENTITLED
     };
     let reservation_post = ReservationAccountV9::new(reservation_body, endpoint.reservation.rent())?;
-    let mut reservation_bytes = [0u8; RESERVATION_ACCOUNT_BYTES_V9]; reservation_post.encode(&mut reservation_bytes)?;
-    let position_bytes = position.semantic.encode()?;
+    let mut receipt_bytes = vec![0u8; SETTLEMENT_RECEIPT_ACCOUNT_BYTES_V5];
+    receipt_post.encode(&mut receipt_bytes)?;
+    let mut reservation_bytes = vec![0u8; RESERVATION_ACCOUNT_BYTES_V9];
+    reservation_post.encode(&mut reservation_bytes)?;
+    let mut position_bytes = vec![0u8; POSITION_V3_BYTES];
+    position_bytes.copy_from_slice(&position.semantic.encode()?);
     let replay = contract::project_general_replay_transition_v1(endpoint.replay.replay, position, replay_kind, Id32::new(delivery_id)?, Id32::new(receipt_data_id)?, &RuntimeSha256)?;
-    let mut final_bytes = [0u8; FINAL_POT_ACCOUNT_BYTES];
+    let mut final_bytes = vec![0u8; FINAL_POT_ACCOUNT_BYTES];
     FinalPotV1AccountV1 { semantic: final_semantic, ..final_outer }.encode_against_settlement_root(final_binding, &mut final_bytes)?;
     let liabilities = liability_successors(value_authority, ledger)?;
-    let mut hoard_bytes = [0u8; HOARD_V2_BYTES]; liabilities.hoard.encode(&mut hoard_bytes).map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let mut claim_bytes = [0u8; CLAIM_LEDGER_V3_BYTES]; liabilities.claim_ledger.encode(&mut claim_bytes).map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    Ok((receipt_post.encode_exact()?, reservation_bytes, position_bytes, *replay.replay_poststate_body(), final_bytes, hoard_bytes, claim_bytes))
+    let mut hoard_bytes = vec![0u8; HOARD_V2_BYTES];
+    liabilities.hoard.encode(&mut hoard_bytes).map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let mut claim_bytes = vec![0u8; CLAIM_LEDGER_V3_BYTES];
+    liabilities.claim_ledger.encode(&mut claim_bytes).map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(CommonPoststateBodiesV5 {
+        receipt: receipt_bytes,
+        reservation: reservation_bytes,
+        position: position_bytes,
+        replay: replay.replay_poststate_body().to_vec(),
+        final_pot: final_bytes,
+        hoard: hoard_bytes,
+        claim_ledger: claim_bytes,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -914,14 +940,14 @@ fn apply_split(
         plan.receipt.final_pot, plan.market_ledger, replay_kind, plan.delivery_transition_id, receipt_data_id)?;
     let cash_outer = SettlementCashPotV1AccountV1::decode(&borrow_data(frame.cash_pot)?)?;
     let cash_bytes = SettlementCashPotV1AccountV1 { semantic: plan.cash_pot, ..cash_outer };
-    let mut cash_body = [0u8; SETTLEMENT_CASH_POT_ACCOUNT_BYTES]; cash_bytes.encode(&mut cash_body)?;
+    let mut cash_body = vec![0u8; SETTLEMENT_CASH_POT_ACCOUNT_BYTES]; cash_bytes.encode(&mut cash_body)?;
     let mut receipt_out = borrow_mut_data(frame.receipt)?; let mut reservation_out = borrow_mut_data(frame.reservation)?;
     let mut position_out = borrow_mut_data(frame.position)?; let mut replay_out = borrow_mut_data(frame.replay)?;
     let mut final_out = borrow_mut_data(frame.final_pot)?; let mut hoard_out = borrow_mut_data(frame.hoard)?;
     let mut claim_out = borrow_mut_data(frame.claim_ledger)?; let mut cash_out = borrow_mut_data(frame.cash_pot)?;
-    receipt_out.copy_from_slice(&bodies.0); reservation_out.copy_from_slice(&bodies.1); position_out.copy_from_slice(&bodies.2);
-    replay_out.copy_from_slice(&bodies.3); final_out.copy_from_slice(&bodies.4); hoard_out.copy_from_slice(&bodies.5);
-    claim_out.copy_from_slice(&bodies.6); cash_out.copy_from_slice(&cash_body); Ok(())
+    receipt_out.copy_from_slice(&bodies.receipt); reservation_out.copy_from_slice(&bodies.reservation); position_out.copy_from_slice(&bodies.position);
+    replay_out.copy_from_slice(&bodies.replay); final_out.copy_from_slice(&bodies.final_pot); hoard_out.copy_from_slice(&bodies.hoard);
+    claim_out.copy_from_slice(&bodies.claim_ledger); cash_out.copy_from_slice(&cash_body); Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -968,9 +994,9 @@ fn apply_merge<'info>(
     let mut hoard_out = borrow_mut_data(frame.hoard)?; let mut claim_out = borrow_mut_data(frame.claim_ledger)?;
     let mut root_out = if funded.is_some() { Some(borrow_mut_data(&accounts[IX_ROOT])?) } else { None };
     let mut cash_out = if funded.is_some() { Some(borrow_mut_data(frame.cash_pot)?) } else { None };
-    receipt_out.copy_from_slice(&bodies.0); row_out.copy_from_slice(&row_bytes); reservation_out.copy_from_slice(&bodies.1);
-    position_out.copy_from_slice(&bodies.2); replay_out.copy_from_slice(&bodies.3); final_out.copy_from_slice(&bodies.4);
-    hoard_out.copy_from_slice(&bodies.5); claim_out.copy_from_slice(&bodies.6);
+    receipt_out.copy_from_slice(&bodies.receipt); row_out.copy_from_slice(&row_bytes); reservation_out.copy_from_slice(&bodies.reservation);
+    position_out.copy_from_slice(&bodies.position); replay_out.copy_from_slice(&bodies.replay); final_out.copy_from_slice(&bodies.final_pot);
+    hoard_out.copy_from_slice(&bodies.hoard); claim_out.copy_from_slice(&bodies.claim_ledger);
     if let (Some(root_body), Some(pot_body), Some(root_dest), Some(pot_dest)) = (root_bytes.as_ref(), cash_bytes.as_ref(), root_out.as_mut(), cash_out.as_mut()) { root_dest.copy_from_slice(root_body); pot_dest.copy_from_slice(pot_body); }
     Ok(())
 }
