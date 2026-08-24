@@ -189,7 +189,7 @@ where
         ),
         (
             MarketFoundationSlotV2::ProductReplayAnchor,
-            seeds::product_market_lifecycle_replay_pda(program_id, &market, generation).0,
+            seeds::product_market_lifecycle_replay_v2_pda(program_id, &market).0,
         ),
     ];
     require(
@@ -2185,10 +2185,9 @@ fn authenticate_market_lifecycle_replay_with_mode_v1(
             && account.lamports() >= value.permanent_rent_principal_lamports,
         ClutchError::MismatchedState,
     )?;
-    let (expected, bump) = seeds::product_market_lifecycle_replay_pda(
+    let (expected, bump) = seeds::product_market_lifecycle_replay_v2_pda(
         program_id,
         &expected_market_instance_id.bytes(),
-        expected_generation,
     );
     expect_pda(account.key, (expected, bump), Some(value.stored_bump))?;
     let data_id = ContentId::from_bytes(solana_sha256_hasher::hashv(&[&data[..]]).to_bytes());
@@ -2229,10 +2228,9 @@ pub(crate) fn require_market_lifecycle_replay_absent_v1(
     generation: u64,
     require_writable: bool,
 ) -> Outcome<u64> {
-    let (expected, bump) = seeds::product_market_lifecycle_replay_pda(
+    let (expected, bump) = seeds::product_market_lifecycle_replay_v2_pda(
         program_id,
         &market_instance_id.bytes(),
-        generation,
     );
     expect_pda(account.key, (expected, bump), None)?;
     require(
@@ -4775,18 +4773,15 @@ pub(crate) fn close_market_lifecycle_to_replay_v1<'a>(
         replay_principal,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let (_, replay_bump) = seeds::product_market_lifecycle_replay_pda(
+    let (_, replay_bump) = seeds::product_market_lifecycle_replay_v2_pda(
         program_id,
         &binding.market_instance_id.bytes(),
-        binding.generation,
     );
-    let generation_bytes = binding.generation.to_le_bytes();
     let market_bytes = binding.market_instance_id.bytes();
     let bump_seed = [replay_bump];
-    let replay_signer: [&[u8]; 4] = [
-        seeds::SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY,
+    let replay_signer: [&[u8]; 3] = [
+        seeds::SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY_V2,
         &market_bytes,
-        &generation_bytes,
         &bump_seed,
     ];
     let allocate = Instruction::new_with_bytes(
