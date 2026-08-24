@@ -149,8 +149,9 @@ pub(crate) trait AuthenticatedProductMarketFoundationCurrentOwnerV2 {
 ///
 /// Implementations live beside the concrete account writer and must retain its
 /// private typed postwrite. The consuming method deliberately returns the
-/// receipt ID only after authenticating the full Product cursor tuple; Product
-/// never accepts a caller-supplied ID or a pre-collected receipt array.
+/// receipt ID and exact live vault donation only after authenticating the full
+/// Product cursor tuple. Product never accepts a caller-supplied ID or a
+/// pre-collected receipt array, and donation can only increase across steps.
 pub(crate) trait AuthenticatedProductMarketFoundationStepPostwriteV3: Sized {
     #[allow(clippy::too_many_arguments)]
     fn consume_product_market_foundation_step_postwrite_v3(
@@ -166,11 +167,11 @@ pub(crate) trait AuthenticatedProductMarketFoundationStepPostwriteV3: Sized {
         _principal_lamports: u64,
         _principal_before_lamports: u64,
         _principal_after_lamports: u64,
-        _donation_lamports: u64,
+        _minimum_donation_lamports: u64,
         _foundation_vault_account: Pubkey,
         _rent_refund_owner: Pubkey,
         _neutral_lamport_sink: Pubkey,
-    ) -> Outcome<ContentId> {
+    ) -> Outcome<(ContentId, u64)> {
         Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
     }
 }
@@ -629,7 +630,7 @@ impl AuthenticatedProductMarketFounderCurrentCreationV3 {
         let principal_before_lamports = state.capital().principal_remaining_lamports;
         let principal_after_lamports = principal_before_lamports
             .checked_sub(principal_lamports).ok_or(ClutchError::Arithmetic)?;
-        let donation_lamports = capital.vault_current_donation_lamports;
+        let minimum_donation_lamports = capital.vault_current_donation_lamports;
         let account_id = graph.account(slot)
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
         require(
@@ -639,7 +640,7 @@ impl AuthenticatedProductMarketFounderCurrentCreationV3 {
                 && account_id == graph.account_ids[index],
             ClutchError::MismatchedState,
         )?;
-        let accepted_poststate_receipt_id = postwrite
+        let (accepted_poststate_receipt_id, observed_donation_lamports) = postwrite
             .consume_product_market_foundation_step_postwrite_v3(
                 self.id,
                 self.preauthorization.id,
@@ -652,12 +653,16 @@ impl AuthenticatedProductMarketFounderCurrentCreationV3 {
                 principal_lamports,
                 principal_before_lamports,
                 principal_after_lamports,
-                donation_lamports,
+                minimum_donation_lamports,
                 self.preauthorization.foundation_vault_account,
                 self.preauthorization.principal_refund_owner,
                 self.preauthorization.neutral_lamport_sink,
             )?;
-        require_live(accepted_poststate_receipt_id)?;
+        require(
+            !accepted_poststate_receipt_id.is_zero()
+                && observed_donation_lamports >= minimum_donation_lamports,
+            ClutchError::MismatchedState,
+        )?;
         self.foundation_steps.consumed_bitmap |= bit;
         self.foundation_steps.consumed_steps = self.foundation_steps.consumed_steps
             .checked_add(1).ok_or(ClutchError::Arithmetic)?;
@@ -681,8 +686,8 @@ impl AuthenticatedProductMarketFounderCurrentCreationV3 {
             principal_lamports,
             principal_before_lamports,
             principal_after_lamports,
-            donation_before_lamports: donation_lamports,
-            donation_after_lamports: donation_lamports,
+            donation_before_lamports: observed_donation_lamports,
+            donation_after_lamports: observed_donation_lamports,
             account_id,
             accepted_poststate_receipt_id,
         })
