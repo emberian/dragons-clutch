@@ -43,6 +43,7 @@ mod rent_credit;
 mod resolution;
 #[cfg(feature = "non-production-real-pyth-lab")]
 mod synthetic_release;
+mod terminal;
 
 pub use error::AdapterError;
 
@@ -105,6 +106,9 @@ pub fn process_instruction(
         RoutedInstruction::CloseEmptyPosition(instruction) => {
             position::process_close_empty_position(program_id, accounts, instruction)
         }
+        RoutedInstruction::CompactTerminalMarket(instruction) => {
+            terminal::process_compact_terminal_market(program_id, accounts, instruction)
+        }
     }
 }
 
@@ -120,6 +124,7 @@ enum RoutedInstruction<'a> {
     TransferClaims(dclutch_collateral_contract::TransferClaimsV1),
     SweepSurplus(dclutch_collateral_contract::SweepSurplusV1),
     CloseEmptyPosition(dclutch_collateral_contract::CloseEmptyPositionV1),
+    CompactTerminalMarket(dclutch_collateral_contract::CompactTerminalMarketV1),
 }
 
 fn decode_instruction(instruction_data: &[u8]) -> Result<RoutedInstruction<'_>, ProgramError> {
@@ -159,6 +164,9 @@ fn decode_instruction(instruction_data: &[u8]) -> Result<RoutedInstruction<'_>, 
             CollateralInstructionV1::CloseEmptyPosition(instruction) => {
                 Ok(RoutedInstruction::CloseEmptyPosition(instruction))
             }
+            CollateralInstructionV1::CompactTerminalMarket(instruction) => {
+                Ok(RoutedInstruction::CompactTerminalMarket(instruction))
+            }
             _ => Err(AdapterError::InvalidInstruction.into()),
         };
     }
@@ -170,8 +178,9 @@ fn decode_instruction(instruction_data: &[u8]) -> Result<RoutedInstruction<'_>, 
 #[cfg(test)]
 mod tests {
     use dclutch_collateral_contract::{
-        CREATE_REALM_BYTES, CreateRealmV1, FOUND_MARKET_AND_FUND_BYTES, FoundMarketAndFundV1,
-        OPEN_COLLATERAL_VAULT_BYTES, OpenCollateralVaultV1,
+        COMPACT_TERMINAL_MARKET_BYTES, CREATE_REALM_BYTES, CompactTerminalMarketV1, CreateRealmV1,
+        FOUND_MARKET_AND_FUND_BYTES, FoundMarketAndFundV1, OPEN_COLLATERAL_VAULT_BYTES,
+        OpenCollateralVaultV1,
     };
     use dclutch_core_contract::{ContentId, MarketIdentity};
     use dclutch_pyth_contract::instruction::{RESOLVE_FAILURE_BYTES, ResolveCategoricalFailureV1};
@@ -240,6 +249,15 @@ mod tests {
         assert!(matches!(
             decode_instruction(&open),
             Ok(RoutedInstruction::OpenCollateralVault(_))
+        ));
+
+        let mut compact = [0; COMPACT_TERMINAL_MARKET_BYTES];
+        CompactTerminalMarketV1::new(7)
+            .encode(&mut compact)
+            .expect("terminal compaction encoding");
+        assert!(matches!(
+            decode_instruction(&compact),
+            Ok(RoutedInstruction::CompactTerminalMarket(_))
         ));
     }
 

@@ -6,10 +6,13 @@
 //! exact current-Rent shrink delta, preserves the credit data byte-for-byte,
 //! and writes the terminal representation in one SVM instruction.
 
+use dclutch_collateral_contract::{
+    AccountPrivilege, CompactTerminalMarketV1, InstructionTag, validate_account_frame,
+};
 use dclutch_core_contract::MarketRoot;
-use dclutch_market_contract::market::{decode_market_outcome_count, CategoricalMarketV1};
+use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome_count};
 use dclutch_rent_contract::{CreditBalancePlanV1, RefundAuthority, RentCreditV1};
-use dclutch_terminal_contract::{TerminalCategoricalMarketV1, TERMINAL_CATEGORICAL_MARKET_BYTES};
+use dclutch_terminal_contract::{TERMINAL_CATEGORICAL_MARKET_BYTES, TerminalCategoricalMarketV1};
 use solana_program::{
     account_info::AccountInfo, hash::hash, program_error::ProgramError, pubkey::Pubkey, rent::Rent,
     sysvar::SysvarSerialize,
@@ -17,9 +20,9 @@ use solana_program::{
 use solana_sdk_ids::sysvar;
 
 use crate::{
+    AdapterError,
     authenticate::MARKET_SEED,
     records::{authenticate_rent_credit, map_rent_error, require_unchanged_rent_credit},
-    AdapterError,
 };
 
 #[derive(Clone, Copy)]
@@ -54,15 +57,48 @@ struct TerminalCompactionPlan {
 /// keys must be distinct. Authentication and application are deliberately
 /// joined here so a caller never owns an independently executable credit or
 /// projection handoff.
-#[allow(dead_code)] // Called by the separately owned terminal routing seam.
+pub(crate) fn process_compact_terminal_market(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction: CompactTerminalMarketV1,
+) -> Result<(), ProgramError> {
+    if accounts.len() != 3 {
+        return Err(AdapterError::AccountFrameLength.into());
+    }
+    let market = accounts.first().ok_or(AdapterError::AccountFrameLength)?;
+    let rent_credit = accounts.get(1).ok_or(AdapterError::AccountFrameLength)?;
+    let rent_sysvar = accounts.get(2).ok_or(AdapterError::AccountFrameLength)?;
+    let privileges = [market, rent_credit, rent_sysvar].map(|account| AccountPrivilege {
+        is_signer: account.is_signer,
+        is_writable: account.is_writable,
+        is_executable: account.executable,
+    });
+    validate_account_frame(InstructionTag::CompactTerminalMarket, &privileges)
+        .map_err(|_| AdapterError::AccountPrivilege)?;
+    compact_terminal_market(
+        program_id,
+        market,
+        rent_credit,
+        rent_sysvar,
+        instruction.generation(),
+    )
+}
+
 #[inline(never)]
-pub(crate) fn compact_terminal_market(
+fn compact_terminal_market(
     program_id: &Pubkey,
     market: &AccountInfo<'_>,
     rent_credit: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
+    expected_generation: u64,
 ) -> Result<(), ProgramError> {
-    let plan = authenticate_terminal_compaction(program_id, market, rent_credit, rent_sysvar)?;
+    let plan = authenticate_terminal_compaction(
+        program_id,
+        market,
+        rent_credit,
+        rent_sysvar,
+        expected_generation,
+    )?;
     apply_terminal_compaction(program_id, market, rent_credit, plan)
 }
 
@@ -80,6 +116,7 @@ fn authenticate_terminal_compaction(
     market: &AccountInfo<'_>,
     rent_credit: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
+    expected_generation: u64,
 ) -> Result<TerminalCompactionPlan, ProgramError> {
     authenticate_market_account(program_id, market)?;
     let rent = authenticate_rent_sysvar(rent_sysvar)?;
@@ -103,6 +140,9 @@ fn authenticate_terminal_compaction(
         &data,
         &rent,
     )?;
+    if projection.root.identity().generation() != expected_generation {
+        return Err(AdapterError::ReplayMismatch.into());
+    }
     let authority = RefundAuthority::new(projection.root.rent_refund()).map_err(map_rent_error)?;
     let rent_credit_state = authenticate_rent_credit(program_id, rent_credit, authority, None)?;
     let credit_balance =
@@ -364,7 +404,7 @@ fn verify_terminal_width<const N: usize>(bytes: &[u8]) -> Result<(), ProgramErro
 mod tests {
     use dclutch_core_contract::{ContentId, MarketIdentity, MarketRoot, Phase};
     use dclutch_market_contract::market::CategoricalSettlementSummaryV1;
-    use dclutch_product_contract::{terminal::ResolutionKind, ContentId as ProductContentId};
+    use dclutch_product_contract::{ContentId as ProductContentId, terminal::ResolutionKind};
     use dclutch_rent_contract::RENT_CREDIT_PDA_DOMAIN_V1;
     use solana_program::rent::Rent;
     use std::{boxed::Box, vec, vec::Vec};
@@ -597,8 +637,14 @@ mod tests {
         let (credit, expected_credit_state) = rent_credit_account(&program_id, [6; 32], true, 1);
         let rent_sysvar = rent_account(&rent);
 
-        let plan = authenticate_terminal_compaction(&program_id, &market, &credit, &rent_sysvar)
-            .expect("authenticated terminal compaction");
+        let plan = authenticate_terminal_compaction(
+            &program_id,
+            &market,
+            &credit,
+            &rent_sysvar,
+            GENERATION,
+        )
+        .expect("authenticated terminal compaction");
         let expected_delta = rent
             .minimum_balance(market.data_len())
             .checked_sub(rent.minimum_balance(TERMINAL_CATEGORICAL_MARKET_BYTES))
@@ -616,6 +662,17 @@ mod tests {
             plan.projection.market_lamports_after_credit,
             rent.minimum_balance(TERMINAL_CATEGORICAL_MARKET_BYTES) + 17
         );
+        assert_eq!(
+            authenticate_terminal_compaction(
+                &program_id,
+                &market,
+                &credit,
+                &rent_sysvar,
+                GENERATION + 1,
+            )
+            .err(),
+            Some(AdapterError::ReplayMismatch.into())
+        );
     }
 
     #[test]
@@ -628,8 +685,14 @@ mod tests {
         let rent_sysvar = rent_account(&rent);
         let (readonly_credit, _) = rent_credit_account(&program_id, [6; 32], false, 1);
         assert_eq!(
-            authenticate_terminal_compaction(&program_id, &market, &readonly_credit, &rent_sysvar,)
-                .err(),
+            authenticate_terminal_compaction(
+                &program_id,
+                &market,
+                &readonly_credit,
+                &rent_sysvar,
+                GENERATION,
+            )
+            .err(),
             Some(AdapterError::AccountPrivilege.into())
         );
 
@@ -640,8 +703,14 @@ mod tests {
             .expect("credit data")
             .to_vec();
         assert_eq!(
-            authenticate_terminal_compaction(&program_id, &market, &wrong_credit, &rent_sysvar,)
-                .err(),
+            authenticate_terminal_compaction(
+                &program_id,
+                &market,
+                &wrong_credit,
+                &rent_sysvar,
+                GENERATION,
+            )
+            .err(),
             Some(AdapterError::AccountIdentity.into())
         );
 
@@ -667,18 +736,28 @@ mod tests {
         let market = market_account::<2>(&program_id, &rent, 0);
         let rent_sysvar = rent_account(&rent);
         let (under_reserve, _) = rent_credit_account(&program_id, [6; 32], true, 0);
-        assert!(authenticate_terminal_compaction(
-            &program_id,
-            &market,
-            &under_reserve,
-            &rent_sysvar,
-        )
-        .is_ok());
+        assert!(
+            authenticate_terminal_compaction(
+                &program_id,
+                &market,
+                &under_reserve,
+                &rent_sysvar,
+                GENERATION,
+            )
+            .is_ok()
+        );
 
         let (overflow, _) = rent_credit_account(&program_id, [6; 32], true, u64::MAX);
         let market_before = market.lamports();
         assert_eq!(
-            authenticate_terminal_compaction(&program_id, &market, &overflow, &rent_sysvar).err(),
+            authenticate_terminal_compaction(
+                &program_id,
+                &market,
+                &overflow,
+                &rent_sysvar,
+                GENERATION,
+            )
+            .err(),
             Some(AdapterError::Arithmetic.into())
         );
         assert_eq!(market.lamports(), market_before);
@@ -692,8 +771,14 @@ mod tests {
         let market = market_account::<5>(&program_id, &rent, 23);
         let (credit, _) = rent_credit_account(&program_id, [6; 32], true, 9);
         let rent_sysvar = rent_account(&rent);
-        let plan = authenticate_terminal_compaction(&program_id, &market, &credit, &rent_sysvar)
-            .expect("authenticated plan");
+        let plan = authenticate_terminal_compaction(
+            &program_id,
+            &market,
+            &credit,
+            &rent_sysvar,
+            GENERATION,
+        )
+        .expect("authenticated plan");
 
         {
             let mut data = market.try_borrow_mut_data().expect("market data");
