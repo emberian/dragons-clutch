@@ -4,20 +4,24 @@ use dclutch_realm_contract::PositionV1;
 
 use crate::state::{
     DirectIntentRecordV2, DirectIntentV2, InlineParticipantAccountsV2, MakerReplayRootV2,
-    ParticipantAccountsV2, RecordAfterFillV2, Side, VenueFeePolicyV2, position_matches,
-    venue_authorized,
+    ParticipantAccountsV2, RecordAfterFillV2, ReplayRootStateV2, Side, VenueFeePolicyV2,
+    position_matches, venue_authorized,
 };
 use crate::{Error, Result, fee, quote, width};
 
 /// Inputs to an immediate signed two-party FOK/IOC execution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InlineOrdinaryMatchV2<const N: usize> {
-    /// Current adapter-authenticated Clock slot.
+    /// Canonical Market phase authenticated from program-owned state.
+    pub phase: crate::adapter::MarketPhaseV2,
+    /// Current trusted `Clock::get()` slot.
     pub slot: u64,
-    /// Seller replay root consuming exactly one nonce.
-    pub seller_replay_root: MakerReplayRootV2,
-    /// Buyer replay root consuming exactly one nonce.
-    pub buyer_replay_root: MakerReplayRootV2,
+    /// Seller replay root, or canonical first-use absence.
+    pub seller_replay_root: ReplayRootStateV2,
+    /// Buyer replay root, or canonical first-use absence.
+    pub buyer_replay_root: ReplayRootStateV2,
+    /// Separate System payer for any first-use replay-root creation.
+    pub root_creation_payer: [u8; 32],
     /// Exact signed seller intent embedded in adapter data.
     pub seller_intent: DirectIntentV2,
     /// Exact signed buyer intent embedded in adapter data.
@@ -34,6 +38,10 @@ pub struct InlineOrdinaryMatchV2<const N: usize> {
     pub seller_position: PositionV1<N>,
     /// Buyer Position credited atomically.
     pub buyer_position: PositionV1<N>,
+    /// Realm-selected collateral mint.
+    pub collateral_mint: [u8; 32],
+    /// Authenticated buyer source delegate projection.
+    pub buyer_debit_authority: crate::adapter::BuyDebitAuthorityV2,
     /// Immediate positive fill.
     pub fill: u64,
     /// Exact execution price.
@@ -68,6 +76,10 @@ pub fn settle_inline_ordinary_v2<const N: usize>(
     input: InlineOrdinaryMatchV2<N>,
 ) -> Result<InlineOrdinarySettlementV2<N>> {
     width(N)?;
+    crate::adapter::require_market_phase_v2(
+        crate::adapter::AdapterActionV2::InlineOrdinary,
+        input.phase,
+    )?;
     let ask = input.seller_intent;
     let bid = input.buyer_intent;
     inline_common(
@@ -105,8 +117,21 @@ pub fn settle_inline_ordinary_v2<const N: usize>(
     let total = gross
         .checked_add(venue_fee)
         .ok_or(Error::ArithmeticOverflow)?;
-    let seller_replay_root = input.seller_replay_root.consume_inline(ask, input.fill)?;
-    let buyer_replay_root = input.buyer_replay_root.consume_inline(bid, input.fill)?;
+    crate::adapter::validate_buy_debit_authority_v2(
+        input.buyer_debit_authority,
+        bid,
+        input.buyer_accounts.replay_root,
+        input.collateral_mint,
+        total,
+    )?;
+    let seller_replay_root = input
+        .seller_replay_root
+        .open_for_intent(ask, input.root_creation_payer)?
+        .consume_inline(ask, input.fill)?;
+    let buyer_replay_root = input
+        .buyer_replay_root
+        .open_for_intent(bid, input.root_creation_payer)?
+        .consume_inline(bid, input.fill)?;
     let outcome = usize::from(ask.outcome());
     if outcome >= N {
         return Err(Error::InvalidOutcome);
@@ -133,12 +158,16 @@ pub fn settle_inline_ordinary_v2<const N: usize>(
 /// Inputs to an immediate N=2 complementary buy or sell execution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InlineComplementaryMatchV2<const N: usize> {
-    /// Current adapter-authenticated Clock slot.
+    /// Canonical Market phase authenticated from program-owned state.
+    pub phase: crate::adapter::MarketPhaseV2,
+    /// Current trusted `Clock::get()` slot.
     pub slot: u64,
     /// Common Buy or Sell direction.
     pub side: Side,
     /// Replay roots in canonical outcome order.
-    pub replay_roots: [MakerReplayRootV2; N],
+    pub replay_roots: [ReplayRootStateV2; N],
+    /// Separate System payer for any first-use replay-root creation.
+    pub root_creation_payer: [u8; 32],
     /// Exact signed intents in canonical outcome order.
     pub intents: [DirectIntentV2; N],
     /// Sealed native authorizations in canonical outcome order.
@@ -147,6 +176,10 @@ pub struct InlineComplementaryMatchV2<const N: usize> {
     pub accounts: [InlineParticipantAccountsV2; N],
     /// Positions debited or credited atomically.
     pub positions: [PositionV1<N>; N],
+    /// Realm-selected collateral mint.
+    pub collateral_mint: [u8; 32],
+    /// Authenticated Buy source delegates; all absent for a Sell merge.
+    pub buy_debit_authorities: [Option<crate::adapter::BuyDebitAuthorityV2>; N],
     /// Common immediate fill.
     pub fill: u64,
     /// Exact prices summing to one collateral atom.
@@ -188,8 +221,19 @@ pub fn settle_inline_complementary_v2<const N: usize>(
     if input.fill == 0 {
         return Err(Error::ZeroQuantity);
     }
+    let action = match input.side {
+        Side::Buy => crate::adapter::AdapterActionV2::InlineSplit,
+        Side::Sell => crate::adapter::AdapterActionV2::InlineMerge,
+    };
+    crate::adapter::require_market_phase_v2(action, input.phase)?;
     let first = *input.intents.first().ok_or(Error::InvalidInlineWidth)?;
-    let mut roots = input.replay_roots;
+    let seed_root = input
+        .replay_roots
+        .first()
+        .copied()
+        .ok_or(Error::InvalidInlineWidth)?
+        .open_for_intent(first, input.root_creation_payer)?;
+    let mut roots = [seed_root; N];
     let mut positions = input.positions;
     let mut gross = [0; N];
     let mut fees = [0; N];
@@ -233,7 +277,25 @@ pub fn settle_inline_complementary_v2<const N: usize>(
             .ok_or(Error::ArithmeticOverflow)?;
         gross[index] = quote(input.fill, price)?;
         fees[index] = fee(gross[index], input.fee_policy.fee_basis_points())?;
-        roots[index] = roots[index].consume_inline(intent, input.fill)?;
+        let exact_debit = gross[index]
+            .checked_add(fees[index])
+            .ok_or(Error::ArithmeticOverflow)?;
+        match input.side {
+            Side::Buy => crate::adapter::validate_buy_debit_authority_v2(
+                input.buy_debit_authorities[index].ok_or(Error::InvalidBuyDebitAuthority)?,
+                intent,
+                input.accounts[index].replay_root,
+                input.collateral_mint,
+                exact_debit,
+            )?,
+            Side::Sell if input.buy_debit_authorities[index].is_some() => {
+                return Err(Error::InvalidBuyDebitAuthority);
+            }
+            Side::Sell => {}
+        }
+        roots[index] = input.replay_roots[index]
+            .open_for_intent(intent, input.root_creation_payer)?
+            .consume_inline(intent, input.fill)?;
         match input.side {
             Side::Buy => positions[index].credit_outcome(index, input.fill),
             Side::Sell => positions[index].debit_outcome(index, input.fill),
@@ -294,7 +356,9 @@ fn inline_alias(left: InlineParticipantAccountsV2, right: InlineParticipantAccou
 /// Inputs to an ordinary permissionless persisted-record transfer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OrdinaryMatchV2<const N: usize> {
-    /// Current adapter-authenticated Clock slot.
+    /// Canonical Market phase authenticated from program-owned state.
+    pub phase: crate::adapter::MarketPhaseV2,
+    /// Current trusted `Clock::get()` slot.
     pub slot: u64,
     /// Seller maker replay root.
     pub seller_replay_root: MakerReplayRootV2,
@@ -312,6 +376,10 @@ pub struct OrdinaryMatchV2<const N: usize> {
     pub seller_position: PositionV1<N>,
     /// Buyer Position to credit.
     pub buyer_position: PositionV1<N>,
+    /// Realm-selected collateral mint.
+    pub collateral_mint: [u8; 32],
+    /// Authenticated registered Buy escrow authority projection.
+    pub buyer_escrow_authority: crate::adapter::EscrowAuthorityV2,
     /// Matcher-selected positive fill.
     pub fill: u64,
     /// Matcher-selected exact scaled execution price.
@@ -352,6 +420,10 @@ pub fn settle_ordinary_v2<const N: usize>(
     input: OrdinaryMatchV2<N>,
 ) -> Result<OrdinarySettlementV2<N>> {
     width(N)?;
+    crate::adapter::require_market_phase_v2(
+        crate::adapter::AdapterActionV2::Ordinary,
+        input.phase,
+    )?;
     let ask = input.seller_record.intent();
     let bid = input.buyer_record.intent();
     if ask.side() != Side::Sell
@@ -367,6 +439,13 @@ pub fn settle_ordinary_v2<const N: usize>(
     }
     input.seller_accounts.validate(ask)?;
     input.buyer_accounts.validate(bid)?;
+    crate::adapter::validate_registered_escrow_authority_v2(
+        input.buyer_escrow_authority,
+        input.buyer_record,
+        input.buyer_accounts.record,
+        input.buyer_accounts.escrow,
+        input.collateral_mint,
+    )?;
     distinct_participants(&[input.seller_accounts, input.buyer_accounts])?;
     position_matches(input.seller_position, ask)?;
     position_matches(input.buyer_position, bid)?;
@@ -413,7 +492,9 @@ pub fn settle_ordinary_v2<const N: usize>(
 /// Inputs to one exhaustive complementary-buy split.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ComplementaryBuyMatchV2<const N: usize> {
-    /// Current adapter-authenticated Clock slot.
+    /// Canonical Market phase authenticated from program-owned state.
+    pub phase: crate::adapter::MarketPhaseV2,
+    /// Current trusted `Clock::get()` slot.
     pub slot: u64,
     /// Maker replay roots in canonical outcome order.
     pub buyer_replay_roots: [MakerReplayRootV2; N],
@@ -423,6 +504,10 @@ pub struct ComplementaryBuyMatchV2<const N: usize> {
     pub buyer_accounts: [ParticipantAccountsV2; N],
     /// Buyer Positions in canonical outcome order.
     pub buyer_positions: [PositionV1<N>; N],
+    /// Realm-selected collateral mint.
+    pub collateral_mint: [u8; 32],
+    /// Authenticated escrow authorities in canonical outcome order.
+    pub escrow_authorities: [crate::adapter::EscrowAuthorityV2; N],
     /// Common matcher-selected fill.
     pub fill: u64,
     /// Exact prices summing to [`crate::PRICE_SCALE`].
@@ -457,6 +542,7 @@ pub fn settle_split_v2<const N: usize>(
     input: ComplementaryBuyMatchV2<N>,
 ) -> Result<SplitSettlementV2<N>> {
     width(N)?;
+    crate::adapter::require_market_phase_v2(crate::adapter::AdapterActionV2::Split, input.phase)?;
     if input.fill == 0 {
         return Err(Error::ZeroQuantity);
     }
@@ -495,6 +581,13 @@ pub fn settle_split_v2<const N: usize>(
         }
         makers[index] = *intent.maker();
         input.buyer_accounts[index].validate(intent)?;
+        crate::adapter::validate_registered_escrow_authority_v2(
+            input.escrow_authorities[index],
+            record,
+            input.buyer_accounts[index].record,
+            input.buyer_accounts[index].escrow,
+            input.collateral_mint,
+        )?;
         position_matches(positions[index], intent)?;
         venue_authorized(intent, input.fee_policy, input.fee_recipient_account)?;
         let price = input.execution_prices[index];
@@ -539,7 +632,9 @@ pub fn settle_split_v2<const N: usize>(
 /// Inputs to one exhaustive complementary-sell merge.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ComplementarySellMatchV2<const N: usize> {
-    /// Current adapter-authenticated Clock slot.
+    /// Canonical Market phase authenticated from program-owned state.
+    pub phase: crate::adapter::MarketPhaseV2,
+    /// Current trusted `Clock::get()` slot.
     pub slot: u64,
     /// Maker replay roots in canonical outcome order.
     pub seller_replay_roots: [MakerReplayRootV2; N],
@@ -585,6 +680,7 @@ pub fn settle_merge_v2<const N: usize>(
     input: ComplementarySellMatchV2<N>,
 ) -> Result<MergeSettlementV2<N>> {
     width(N)?;
+    crate::adapter::require_market_phase_v2(crate::adapter::AdapterActionV2::Merge, input.phase)?;
     if input.fill == 0 {
         return Err(Error::ZeroQuantity);
     }

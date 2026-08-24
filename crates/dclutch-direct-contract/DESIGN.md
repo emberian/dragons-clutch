@@ -1,194 +1,254 @@
 # Direct permissionless matching contract
 
 `dclutch-direct-contract` is safe Rust, `no_std`, `no_alloc`, fixed-layout,
-and SDK-free. It owns semantic intent, replay, reservation, settlement, and the
-hostile-decodable SBF boundary. It does not claim to perform token CPI, PDA
-derivation, account-owner authentication, native Ed25519 cryptography, Rent
-sysvar reads, or transaction introspection.
+and SDK-free. It owns Direct intent, replay, reservation, settlement, adapter
+routing, account-frame, phase, and hostile token-authority semantics. The SBF
+adapter remains responsible for decoding the canonical program-owned accounts,
+calling native programs, and applying the returned effects atomically.
 
-## One authorization and replay model
+## One authorization and replay owner
 
-A maker signs the exact 232-byte `DirectIntentV2` preimage. It binds Market,
-generation, maker Ed25519 key, gap-free nonce, inclusive slot interval, side,
-execution lifecycle, outcome, aggregate fill capacity, price limit, fee config
-and rate, native Position account, and collateral token account. The lifecycle
-is one of immediate fill-or-kill, immediate-or-cancel, or registered resting.
+A maker signs one exact 232-byte `DirectIntentV2`. It binds Market, generation,
+maker Ed25519 key, gap-free nonce, inclusive slot interval, side, execution
+lifecycle, outcome, aggregate fill capacity, price limit, fee configuration and
+rate, native Position account, and collateral token account. The lifecycle is
+inline fill-or-kill, inline immediate-or-cancel, or registered resting.
 
-Every signed path uses one canonical cross-instruction Ed25519 layout. Public
-keys and signatures occur once in the immediately preceding pinned native
-Ed25519 instruction; exact descriptor offsets point to nonoverlapping intent
-bytes in the following Direct instruction. The kernel authenticates program ID,
-adjacency, descriptor count/order/offsets/instruction indices, no trailing data,
-signers, and messages. This removes duplicate message bytes without accepting a
-caller authorization DTO.
+Every signed path uses the same cross-instruction Ed25519 form. Public keys and
+signatures occur in the immediately preceding pinned native Ed25519 instruction;
+descriptors point to nonoverlapping exact preimages in the following Direct
+instruction. The parser checks program ID, adjacency, descriptor count/order,
+all instruction indices and offsets, exact total length, no trailing bytes,
+signer, and message. A caller supplies no authorization attestation.
 
-There are two intentional state lifecycles under the same signed preimage and
-maker replay root:
+Both lifecycles consume one 144-byte replay root for `(Market, generation,
+maker)`:
 
 1. Inline FOK/IOC consumes the exact next nonce without incrementing live count.
-   The transaction atomically debits seller Position or buyer token account,
-   credits the counterparty/Market vault, pays fees, and discards any IOC
-   remainder. It creates no record, escrow, cancellation right, or per-order
-   rent. FOK requires `fill == max_fill`; IOC accepts a positive smaller fill.
-2. Registered resting consumes the exact next nonce and increments live count.
-   In the same atomic registration, the SBF adapter must:
+   It creates no intent record or collateral escrow. The first inline action may
+   atomically create an absent canonical root at nonce zero using a separate
+   System payer; subsequent actions use the same root. FOK requires
+   `fill == max_fill`; IOC accepts a positive smaller fill and discards the
+   remainder.
+2. Registered resting consumes the exact next nonce, increments live count, and
+   creates a 304-byte live record. A Sell moves `max_fill` native claims from
+   the signed Position into record custody. A Buy moves
+   `floor(max_fill * limit / PRICE_SCALE)` plus the maximum floor fee into a
+   record-associated token escrow. Partial fills consume only this custody.
 
-   - authenticate Market, fee policy, native Position, Realm token program/mint,
-     canonical replay-root/record/escrow PDAs, and record absence;
-   - for a Sell, debit `max_fill` claims from the signed Position into semantic
-     record custody; or
-   - for a Buy, transfer `floor(max_fill * limit / PRICE_SCALE)` plus the maximum
-     floor fee into the record-associated token escrow.
+There is no per-order terminal tombstone. Full fill, cancellation, or expiry
+closes the live record and decrements root live count. A closed nonce is below
+the root high-water mark, and two actions racing the same next nonce contend for
+the same writable root. Nonces cannot skip. `u64::MAX` refuses because the
+high-water mark cannot advance.
 
-The resulting 304-byte program-owned live record is the resting settlement
-authorization. An inline match instead carries the signed intents and the
-sealed native evidence in the same transaction. A matcher supplies no owner
-attestation and no signature bytes to either semantic checker. Inline and
-registered legs cannot mix inside one settlement action, and signed lifecycle
-prevents a relayer from turning an intended IOC into a resting order. Partial
-fills update only registered records. Completion, exact signed cancellation, or
-permissionless close strictly after `valid_through_slot` decrements live count
-and closes the live record atomically.
+The maker also has an O(1) kill switch. `CancelThroughV1` signs a strictly
+increasing `minimum_live_nonce` no greater than `next_registration_nonce`.
+Applying it updates only the replay root; no service enumerates or cancels
+records. Every settlement rejects a record below the threshold, and anyone may
+subsequently call the side-specific invalidated-record close to return remaining
+claims or collateral and rent to the record's stored destinations. Each physical
+close decrements live count, so root retirement still proves that no custody is
+stranded.
 
-Both lifecycles consume the same `next_registration_nonce`; a nonce won by an
-inline transaction cannot later register, and a registered nonce cannot execute
-inline. Replay is not one permanent tombstone per order. The 136-byte maker root
-is the single monotonic high-water mark. A replayed closed nonce is below
-`next_registration_nonce`; two transactions racing the same next nonce contend
-for the same writable root and only the first state transition remains valid.
-Nonces cannot skip. `u64::MAX` cannot register because the high-water mark could
-not advance.
+## Phase and trusted slot authority
 
-During authenticated Market retirement, the `CloseReplayRegistration` adapter
-action must authenticate the actual program-owned Market and generation while
-irreversibly closing Market registration and each root's registration status.
-The kernel accepts no caller-authored retirement boolean. New registration then
-refuses. A root closes only after registration is closed and its live count is
-zero; the Market is then unable to recreate a valid registration path. This
-Market account/phase join remains part of the SBF seam until that entrypoint is
-implemented.
+The SBF adapter decodes the canonical Market account and projects its phase into
+the Direct phase checker. Direct does not persist a second Market phase.
 
-## Custody, fills, and rent
+| Actions | Admitted canonical phase |
+|---|---|
+| Register, ordinary, split, merge, all inline | Open only |
+| Cancel-through, cancel, expire, close invalidated | Open, Resolved, or Retiring |
+| Close replay registration, close replay root | Retiring only |
+| Any Direct action | Never Founding or Retired |
 
-Registered ordinary settlement consumes one reserved Sell and one escrowed Buy. It releases
-the exact quote from buyer escrow to the signed seller token account, releases
-the floor fee to the policy recipient, and credits the signed buyer Position.
-The seller Position was debited at registration and is not debited again.
+Every route needing a slot uses the trusted return from `Clock::get()`. Slot is
+not instruction data and Clock is not an account meta. Registration and every
+fill require `valid_from_slot <= Clock.slot <= valid_through_slot`. Expiry is
+permissionless only when `Clock.slot > valid_through_slot`. Cancellation does
+not need a slot and remains available throughout every permitted unwind phase.
 
-A registered complementary split consumes N escrowed Buys in canonical outcome order.
-Prices sum exactly to `PRICE_SCALE`; exact gross debits sum to `fill`; the Market
-vault receives that fill; and each signed Position receives its indexed claim.
-A registered complementary merge consumes N claim-reserved Sells in canonical outcome
-order. It debits the Market vault by `fill`, releases each exact gross quote less
-its floor fee to the signed seller account, and never touches a maker Position a
-second time. Inline ordinary performs the corresponding Position/token movements
-directly. Inline complementary settlement is admitted only for N=2, the sole
-measured complementary width that fits with all native signatures and intents.
+`CloseReplayRegistration` irreversibly marks the root terminal during Retiring.
+`CloseReplayRoot` additionally requires that terminal mark and `live_count == 0`.
+Its close effect retains the final nonce high-water for retirement evidence; a
+caller-authored retirement boolean is never accepted.
 
-Full fill, cancellation, and expiry return unused Buy collateral to the signed
-maker token account or remaining Sell claims to the signed Position. The live
-record stores its rent payer. A Buy uses that same payer for its escrow account;
-closing both returns each authenticated rent principal to that payer. A Sell has
-no escrow account and refunds only live-record rent. Lamports above an
-authenticated rent principal are donations and go to a neutral sink, never to
-the closer. The replay root has its own persisted rent payer and refunds only at
-safe Market retirement. Thus the permanent rent cost is one root per active
-maker/Market generation, not one tombstone per historical intent.
+## Token and native-claim custody
 
-Quotes use exact scaled integers. `fill * price / PRICE_SCALE` must divide
-exactly or refuse. The only rounding boundary is
-`floor(gross * fee_basis_points / 10_000)`. `u128` intermediates preserve the
-full `u64` input domain and conversion back to `u64` is checked.
+Off-chain Ed25519 authorization cannot itself debit an SPL token account. The
+chosen preauthorization is the existing per-maker replay-root PDA as the exact
+Token/Token-2022 delegate on the signed Buy source account. Before a Buy debit,
+the adapter decodes the token account and requires:
 
-## Fixed layouts
+- source address equals the signed collateral account;
+- token owner equals the signed maker;
+- mint equals the immutable Realm collateral mint;
+- delegate equals the canonical replay-root PDA; and
+- delegated allowance equals the one exact atomic debit.
+
+The replay-root seeds sign the CPI. Registration consumes the exact maximum
+reserve; inline execution consumes its exact gross plus floor fee. An absent
+first-use root is created before the debit in the same atomic instruction. Sell
+registration and registered Sell matching never use this token delegate: native
+claims are reserved into the live record at registration.
+
+A registered Buy escrow is a token account whose authority is the exact live-
+record PDA. Every release and final token close uses the live-record seeds.
+Full fill, cancellation, and expiry close both the Buy escrow and live record.
+Sell close returns remaining claims to the signed Position; Buy close returns
+unused collateral to the signed maker account.
+
+Ordinary matching transfers from one Buy escrow to the signed seller and fee
+recipient; it does not touch the Market vault. Complete-set split and merge are
+the only vault routes. They carry the canonical Market vault and its `Custody`
+PDA. Split/merge mark Market writable because complete-set issuance/retirement
+changes the Market ledger. Realm and collateral mint occur only on routes with
+token semantics. Templates remain offchain bundles of native outcome claims,
+not a second Direct liability basis.
+
+## Rent and RentCredit
+
+System creation payer, Position owner, maker, and matcher are distinct roles.
+Every root/record/escrow creation frame carries the separate System payer plus a
+pre-existing canonical RentCredit for that beneficiary. The root and live
+record persist their original payer identity; a Buy record and escrow share one
+beneficiary.
+
+Every full fill, cancellation, expiry, invalidated-record unwind, and root close classifies each closed
+program or token account independently. `terminal_rent_transition_v2` names the
+authenticated rent principal and every excess lamport as an
+`unclassified_donation`; their sum goes to the persisted payer's canonical
+RentCredit. Nothing goes to the closer or an arbitrary sink, and donated
+lamports are not called fees, rent, revenue, or reserve capital.
+
+The pure RentCredit account contract has not landed yet. Direct therefore owns
+only the exact `RentCredit` role and beneficiary requirement, not speculative
+RentCredit bytes. The SBF seam must derive and authenticate the canonical
+RentCredit through that pure contract when it lands.
+
+## Fixed layouts and instruction data
 
 | Record | Bytes | Equation |
 |---|---:|---|
-| Signed intent | 232 | header 16 (including lifecycle) + economic facts 152 + Position 32 + collateral account 32 |
-| Maker replay root | 136 | header 16 + Market 32 + generation 8 + maker 32 + next nonce 8 + live count 8 + rent payer 32 |
-| Live intent | 304 | header 16 + intent 232 + filled 8 + reserved claims 8 + reserved collateral 8 + rent payer 32 |
+| Signed intent | 232 | header 16 + economic facts 152 + Position 32 + collateral account 32 |
+| Maker replay root | 144 | header 16 + Market 32 + generation 8 + maker 32 + next nonce 8 + live count 8 + minimum-live nonce 8 + payer 32 |
+| Live intent | 304 | header 16 + intent 232 + filled 8 + reserved claims 8 + reserved collateral 8 + payer 32 |
 | Cancel message | 96 | header 16 + Market 32 + generation 8 + maker 32 + nonce 8 |
 | Venue fee policy | 120 | header 16 + Market 32 + generation 8 + config 32 + recipient 32 |
 
-The adapter instruction header is 16 bytes. Registration data is `16 + 232 =
-248`; cancellation is `16 + 96 = 112`; registered ordinary is `16 + fill 8 +
-price 8 + two mode bytes = 34`; registered split/merge are `24 + 9N`. Inline
-ordinary is `34 + 2*232 = 498`; inline complementary is `24 + 9N + 232N =
-24 + 241N`.
+The common adapter header is 16 bytes. Registration is `16 + 232 = 248`;
+cancellation is `16 + 96 = 112`; expiry and replay closes are 16; registered
+ordinary is 34; registered split/merge are `24 + 9N`; inline ordinary is
+`34 + 2*232 = 498`; inline complementary is `24 + 241N`.
+
+## Exact action frames
+
+The public hostile router validates magic, schema, action, participant count,
+and zero reserved bytes before dispatching to an exact-width action codec.
+There is no generic header-only close path: registration close and root close
+have separate public codecs.
+
+| Action | Instruction accounts | Required shape summary |
+|---|---:|---|
+| Register Buy | 15 | System payer, RentCredit, Market, Realm, policy, root, record, escrow, Position, source, mint, token, System, Rent, Instructions |
+| Register Sell | 10 | System payer, RentCredit, Market, policy, root, record, Position, System, Rent, Instructions |
+| Cancel Buy | 13 | Market, Realm, root, record, escrow, Position, refund source, RentCredit, mint, token, System, Rent, Instructions |
+| Cancel Sell | 8 | Market, root, record, Position, RentCredit, System, Rent, Instructions |
+| Expire Buy | 12 | Cancel Buy without Instructions |
+| Expire Sell | 7 | Cancel Sell without Instructions |
+| Ordinary | 19 | token base 8 + persisted Sell 5 + persisted Buy 6 |
+| Split N | `10 + 6N` | writable Market/vault, Realm/mint/token/Custody base + N Buy custody groups |
+| Merge N | `10 + 5N` | writable Market/vault, Realm/mint/token/Custody base + N Sell custody groups |
+| Close registration | 2 | writable Market and replay root |
+| Close root | 5 | Market, root, RentCredit, System, Rent |
+| Cancel through | 3 | Market, replay root, Instructions |
+| Close invalidated Buy | 12 | Expire Buy frame; no Clock meta exists |
+| Close invalidated Sell | 7 | Expire Sell frame; no Clock meta exists |
+| Inline ordinary | 17 | creation/signature/token base 11 + two root/Position/collateral groups |
+| Inline split/merge N=2 | `13 + 3N = 19` | inline base adds writable vault and Custody |
+
+Every inline route carries InstructionsSysvar. No route carries Clock. RentCredit
+aliases are permitted only with other RentCredit roles; unsafe cross-role and
+participant aliases refuse.
 
 ## Measured Solana v0 envelope
 
-These are measured physical profiles, not provisional limits. A local isolated
-measurement program used the repository's pinned `solana-sdk = 3.0.0`,
-`solana-packet = 3.0.0`, transitive `solana-transaction = 3.1.0`, and
-`bincode = 1.3.3`. It constructed actual `v0::Message::try_compile` messages and
-serialized `VersionedTransaction`s with one fee-payer signature, one ALT, the
-exact instruction account count/data width, and no compute-budget padding.
-`solana-packet 3.0.0::PACKET_DATA_SIZE` is 1,232 bytes and
-`solana-transaction 3.1.0::MAX_TX_ACCOUNT_LOCKS` is 128.
+The physical numbers were recomputed after the frame correction. The isolated
+measurement uses exact `solana-sdk = 3.0.0`, `solana-packet = 3.0.0`, transitive
+`solana-transaction = 3.1.0`, and `bincode = 1.3.3`. It constructs actual
+`v0::Message::try_compile` messages and serializes `VersionedTransaction`s with
+one fee-payer signature, one ALT containing non-signer metas, invoked programs
+static, exact Direct data, and the exact native Ed25519 instruction where used.
+There is no compute-budget padding. The pinned ceilings are 1,232 packet bytes
+and 128 loaded-account locks.
 
-- Buy registration: 13 instruction accounts, native Ed25519 data
-  `2 + 14 + 32 + 64 = 112`, Direct data 248, 626 serialized bytes.
-- Sell registration: 12 instruction accounts, the same 112/248 data, 624 bytes.
-- Inline ordinary: 12 instruction accounts, Ed25519 data
-  `2 + 2*(14+32+64) = 222`, Direct data 498, 985 bytes.
-- Inline complementary N=2: 12 instruction accounts, Ed25519 data 222, Direct
-  data `24 + 241*2 = 506`, 993 bytes.
-- Ordinary: 15 instruction accounts, 34 data bytes, 268 bytes, 16 total locks
-  including the Direct program.
-- Split: `6 + 5N` instruction accounts (root, record, escrow, Position, maker
-  collateral per Buy), `24 + 9N` data bytes.
-- Merge: `6 + 4N` instruction accounts (root, record, Position, maker collateral
-  per Sell), `24 + 9N` data bytes.
+| Action | Ix accounts | Direct data | Ed25519 data | Serialized bytes | Locks |
+|---|---:|---:|---:|---:|---:|
+| Register Buy | 15 | 248 | 112 | 630 | 17 |
+| Register Sell | 10 | 248 | 112 | 620 | 12 |
+| Cancel Buy | 13 | 112 | 112 | 521 | 16 |
+| Cancel Sell | 8 | 112 | 112 | 511 | 11 |
+| Expire Buy | 12 | 16 | — | 276 | 14 |
+| Expire Sell | 7 | 16 | — | 266 | 9 |
+| Ordinary | 19 | 34 | — | 308 | 21 |
+| Close registration | 2 | 16 | — | 256 | 4 |
+| Close root | 5 | 16 | — | 262 | 7 |
+| Cancel through | 3 | 112 | 112 | 501 | 6 |
+| Close invalidated Buy | 12 | 16 | — | 276 | 14 |
+| Close invalidated Sell | 7 | 16 | — | 266 | 9 |
+| Inline ordinary | 17 | 498 | 222 | 995 | 19 |
+| Inline complement N=2 | 19 | 506 | 222 | 1,007 | 21 |
 
-| N | Split accounts | Split bytes | Merge accounts | Merge bytes |
-|---:|---:|---:|---:|---:|
-| 2 | 16 | 278 | 14 | 274 |
-| 3 | 21 | 297 | 18 | 291 |
-| 4 | 26 | 316 | 22 | 308 |
-| 5 | 31 | 335 | 26 | 325 |
-| 6 | 36 | 354 | 30 | 342 |
-| 7 | 41 | 373 | 34 | 359 |
-| 8 | 46 | 392 | 38 | 376 |
-| 9 | 51 | 411 | 42 | 393 |
-| 10 | 56 | 430 | 46 | 410 |
-| 11 | 61 | 449 | 50 | 427 |
-| 12 | 66 | 469 | 54 | 445 |
-| 13 | 71 | 488 | 58 | 462 |
-| 14 | 76 | 507 | 62 | 479 |
-| 15 | 81 | 526 | 66 | 496 |
-| 16 | 86 | 545 | 70 | 513 |
+Registered complete-set geometry remains within both physical limits:
 
-At N=16 the larger registered split has 87 total locks including the program and 545
-serialized bytes, below both pinned ceilings. This supports the current
-Position N=2..16 profile through persisted authorization.
+| N | Split accounts | Split bytes | Split locks | Merge accounts | Merge bytes | Merge locks |
+|---:|---:|---:|---:|---:|---:|---:|
+| 2 | 22 | 322 | 24 | 20 | 318 | 22 |
+| 3 | 28 | 343 | 30 | 25 | 337 | 27 |
+| 4 | 34 | 364 | 36 | 30 | 356 | 32 |
+| 5 | 40 | 385 | 42 | 35 | 375 | 37 |
+| 6 | 46 | 406 | 48 | 40 | 394 | 42 |
+| 7 | 52 | 427 | 54 | 45 | 413 | 47 |
+| 8 | 58 | 448 | 60 | 50 | 432 | 52 |
+| 9 | 64 | 469 | 66 | 55 | 451 | 57 |
+| 10 | 70 | 490 | 72 | 60 | 470 | 62 |
+| 11 | 76 | 511 | 78 | 65 | 489 | 67 |
+| 12 | 82 | 533 | 84 | 70 | 509 | 72 |
+| 13 | 88 | 554 | 90 | 75 | 528 | 77 |
+| 14 | 94 | 575 | 96 | 80 | 547 | 82 |
+| 15 | 100 | 596 | 102 | 85 | 566 | 87 |
+| 16 | 106 | 617 | 108 | 90 | 585 | 92 |
 
-Inline complementary N=3 is already 1,350 serialized bytes and therefore
-refuses; its size grows by 357 bytes for each additional maker under this exact
-layout. The measured N=2..16 inline sequence is `993, 1350, 1707, 2064, 2421,
-2778, 3135, 3492, 3849, 4206, 4563, 4920, 5277, 5634, 5991`; only the first
-entry fits. Even granting all makers one perfectly shared message, N=16 native
-Ed25519 scaffolding alone is
-`2 + 16 * (14 descriptor + 32 public key + 64 signature) = 1,762` bytes. That
-already exceeds the entire 1,232-byte packet before the shared message, v0
-framing, fee-payer signature, accounts, or settlement instruction. Sixteen
-individual intent messages embedded in Direct data make the measured N=16
-transaction 5,991 bytes with lifecycle mode bytes. Registered preregistration
-for N>=3 is therefore a product decision forced by the packet envelope, while
-ordinary and N=2 retain a rent-free immediate path.
+Inline complementary N=2 fits at 1,007 bytes. N=3 is 1,364 bytes and refuses.
+The exact N=2..16 reference sequence is `1007, 1364, 1721, 2078, 2435, 2792,
+3149, 3506, 3863, 4220, 4577, 4934, 5291, 5648, 6005`. Independently, even a
+perfectly shared message leaves N=16 native Ed25519 scaffolding at
+`2 + 16*(14+32+64) = 1,762` bytes before message or transaction framing.
+Registered custody is therefore required for complementary N>=3. Ordinary and
+N=2 retain intentional rent-free inline execution.
 
-Adding compute-budget instructions or changing lookup/static placement changes
-serialized size; the adapter must measure the actual transaction and refuse
-above 1,232 bytes or 128 locks. The table is the reproducible reference shape,
-not permission to skip live packet admission.
+The adapter must still inspect the live serialized transaction and refuse above
+1,232 bytes or 128 locks. Adding compute-budget instructions or changing ALT
+placement changes bytes; these values define the pinned reference profile, not
+permission to skip live physical admission.
 
 ## Remaining SBF seam
 
-The kernel returns exact effects but does not yet execute them. The SBF adapter
-must implement the encoded actions and atomically authenticate program owners,
-PDA seeds and bumps, Realm token program/mint, Position and fee-policy bytes,
-Market/generation/phase, Clock/Rent/instructions sysvars, native Ed25519 success,
-Token-2022 account ownership/mint/authority, escrow balance, token transfers,
-account create/close/realloc, root write conflicts, and rollback on any failed
-CPI. Until that seam exists and is exercised, the contract is not a deployed or
+The kernel now describes sufficient action routing, account roles, phase/slot
+policy, source delegation, escrow authority, custody, RentCredit beneficiary,
+and close effects, but it does not execute them. The SBF adapter must still:
+
+- decode canonical Market/Realm/Position/policy/root/record state and PDA bumps;
+- use trusted `Clock::get()` and authenticate Rent/RentCredit derivation;
+- inspect InstructionsSysvar and require successful adjacent native Ed25519;
+- decode Token/Token-2022 owner, mint, delegate, allowance, escrow, vault, and
+  Custody authority fields;
+- create/close accounts, invoke token transfers with exact PDA seeds, classify
+  account and token-account rent independently, and route the entire close
+  balance to the persisted payer's RentCredit; and
+- apply Market/Position/root/record/token effects with rollback on any refusal
+  or failed CPI.
+
+Until that adapter exists and is exercised, Direct is not deployed or an
 end-to-end trading implementation.

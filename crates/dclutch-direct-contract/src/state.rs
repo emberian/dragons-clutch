@@ -16,7 +16,7 @@ pub const MAKER_REPLAY_ROOT_MAGIC_V2: [u8; 8] = *b"DCLTRPY2";
 /// Maker replay-root schema version.
 pub const MAKER_REPLAY_ROOT_SCHEMA_VERSION_V2: u16 = 2;
 /// Exact maker replay-root width.
-pub const MAKER_REPLAY_ROOT_BYTES_V2: usize = 136;
+pub const MAKER_REPLAY_ROOT_BYTES_V2: usize = 144;
 /// Canonical live intent-record magic.
 pub const DIRECT_INTENT_RECORD_MAGIC_V2: [u8; 8] = *b"DCLTREC2";
 /// Live intent-record schema version.
@@ -29,6 +29,12 @@ pub const DIRECT_CANCEL_MAGIC_V2: [u8; 8] = *b"DCLTCAN2";
 pub const DIRECT_CANCEL_SCHEMA_VERSION_V2: u16 = 2;
 /// Exact signed cancellation-message width.
 pub const DIRECT_CANCEL_BYTES_V2: usize = 96;
+/// Canonical O(1) cancel-through message magic.
+pub const DIRECT_CANCEL_THROUGH_MAGIC_V1: [u8; 8] = *b"DCLTCTH1";
+/// Cancel-through message schema version.
+pub const DIRECT_CANCEL_THROUGH_SCHEMA_VERSION_V1: u16 = 1;
+/// Exact cancel-through signed-message width.
+pub const DIRECT_CANCEL_THROUGH_BYTES_V1: usize = 96;
 /// Canonical venue-fee-policy magic.
 pub const VENUE_FEE_POLICY_MAGIC_V2: [u8; 8] = *b"DCLTFEE2";
 /// Venue-fee-policy schema version.
@@ -65,7 +71,8 @@ const ROOT_BUMP_OFFSET: usize = 11;
 const ROOT_RESERVED_OFFSET: usize = 12;
 const ROOT_NEXT_NONCE_OFFSET: usize = 88;
 const ROOT_LIVE_COUNT_OFFSET: usize = 96;
-const ROOT_RENT_PAYER_OFFSET: usize = 104;
+const ROOT_MINIMUM_LIVE_NONCE_OFFSET: usize = 104;
+const ROOT_RENT_PAYER_OFFSET: usize = 112;
 
 const RECORD_STATUS_OFFSET: usize = 10;
 const RECORD_BUMP_OFFSET: usize = 11;
@@ -393,6 +400,50 @@ impl ReplayRegistrationStatusV2 {
     }
 }
 
+/// Hostile account-state branch for the one canonical maker replay root.
+/// `Absent` is accepted only for the first gap-free nonce and causes atomic
+/// creation using the current instruction's separate System payer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReplayRootStateV2 {
+    /// Existing program-owned root decoded from the canonical PDA.
+    Existing(MakerReplayRootV2),
+    /// Canonical PDA is absent and must be created at this bump.
+    Absent {
+        /// Canonical PDA bump checked by the SBF adapter.
+        bump: u8,
+    },
+}
+
+impl ReplayRootStateV2 {
+    /// Wrap an existing canonical replay root.
+    pub const fn existing(root: MakerReplayRootV2) -> Self {
+        Self::Existing(root)
+    }
+
+    /// Describe a first-use canonical replay-root creation.
+    pub const fn absent(bump: u8) -> Self {
+        Self::Absent { bump }
+    }
+
+    pub(crate) fn open_for_intent(
+        self,
+        intent: DirectIntentV2,
+        creation_payer: [u8; 32],
+    ) -> Result<MakerReplayRootV2> {
+        nonzero(&creation_payer)?;
+        match self {
+            Self::Existing(root) => Ok(root),
+            Self::Absent { bump } => MakerReplayRootV2::new(
+                *intent.market(),
+                intent.generation(),
+                *intent.maker(),
+                creation_payer,
+                bump,
+            ),
+        }
+    }
+}
+
 /// One compact replay high-water mark per `(Market, generation, maker)`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MakerReplayRootV2 {
@@ -401,13 +452,14 @@ pub struct MakerReplayRootV2 {
     maker: [u8; 32],
     next_nonce: u64,
     live_count: u64,
+    minimum_live_nonce: u64,
     rent_payer: [u8; 32],
     bump: u8,
     registration: ReplayRegistrationStatusV2,
 }
 
 impl MakerReplayRootV2 {
-    /// Construct a new gap-free root before first registration.
+    /// Construct a new gap-free root before the maker's first Direct nonce.
     pub fn new(
         market: [u8; 32],
         generation: u64,
@@ -424,6 +476,7 @@ impl MakerReplayRootV2 {
             maker,
             next_nonce: 0,
             live_count: 0,
+            minimum_live_nonce: 0,
             rent_payer,
             bump,
             registration: ReplayRegistrationStatusV2::Open,
@@ -448,6 +501,7 @@ impl MakerReplayRootV2 {
             maker: array(bytes, MAKER_OFFSET)?,
             next_nonce: u64::from_le_bytes(array(bytes, ROOT_NEXT_NONCE_OFFSET)?),
             live_count: u64::from_le_bytes(array(bytes, ROOT_LIVE_COUNT_OFFSET)?),
+            minimum_live_nonce: u64::from_le_bytes(array(bytes, ROOT_MINIMUM_LIVE_NONCE_OFFSET)?),
             rent_payer: array(bytes, ROOT_RENT_PAYER_OFFSET)?,
             bump: one(bytes, ROOT_BUMP_OFFSET)?,
             registration: ReplayRegistrationStatusV2::decode(one(bytes, ROOT_STATUS_OFFSET)?)?,
@@ -488,6 +542,11 @@ impl MakerReplayRootV2 {
             ROOT_LIVE_COUNT_OFFSET,
             &self.live_count.to_le_bytes(),
         );
+        put(
+            output,
+            ROOT_MINIMUM_LIVE_NONCE_OFFSET,
+            &self.minimum_live_nonce.to_le_bytes(),
+        );
         put(output, ROOT_RENT_PAYER_OFFSET, &self.rent_payer);
         Ok(())
     }
@@ -512,6 +571,10 @@ impl MakerReplayRootV2 {
     pub const fn live_intent_count(&self) -> u64 {
         self.live_count
     }
+    /// Return the first nonce still eligible for matching.
+    pub const fn minimum_live_nonce(&self) -> u64 {
+        self.minimum_live_nonce
+    }
     /// Return original root-rent payer.
     pub const fn rent_payer(&self) -> &[u8; 32] {
         &self.rent_payer
@@ -532,6 +595,9 @@ impl MakerReplayRootV2 {
         if self.live_count > self.next_nonce {
             return Err(Error::LiveCountInvariant);
         }
+        if self.minimum_live_nonce > self.next_nonce {
+            return Err(Error::InvalidCancelThrough);
+        }
         Ok(())
     }
 
@@ -542,6 +608,14 @@ impl MakerReplayRootV2 {
             || self.maker != *intent.maker()
         {
             return Err(Error::ReplayRootMismatch);
+        }
+        Ok(())
+    }
+
+    fn for_active_intent(self, intent: DirectIntentV2) -> Result<()> {
+        self.for_intent(intent)?;
+        if intent.nonce() < self.minimum_live_nonce {
+            return Err(Error::IntentInvalidated);
         }
         Ok(())
     }
@@ -606,7 +680,11 @@ impl MakerReplayRootV2 {
 /// handler. The SBF entrypoint must authenticate the canonical Market account,
 /// generation, program owner, and terminal phase; no generic caller authority
 /// or boolean retirement attestation is accepted by this contract.
-pub fn close_replay_registration_v2(root: MakerReplayRootV2) -> Result<MakerReplayRootV2> {
+pub fn close_replay_registration_v2(
+    root: MakerReplayRootV2,
+    phase: adapter::MarketPhaseV2,
+) -> Result<MakerReplayRootV2> {
+    adapter::require_market_phase_v2(adapter::AdapterActionV2::CloseReplayRegistration, phase)?;
     root.validate()?;
     if root.registration != ReplayRegistrationStatusV2::Open {
         return Err(Error::RegistrationClosed);
@@ -624,10 +702,16 @@ pub struct RootClosureV2 {
     pub rent_refund_payer: [u8; 32],
     /// Final refused nonce high-water retained in retirement evidence/logging.
     pub final_next_nonce: u64,
+    /// Final maker-signed minimum-live threshold retained in retirement evidence.
+    pub final_minimum_live_nonce: u64,
 }
 
 /// Prepare root closure inside the authenticated Market-retirement handler.
-pub fn prepare_replay_root_close_v2(root: MakerReplayRootV2) -> Result<RootClosureV2> {
+pub fn prepare_replay_root_close_v2(
+    root: MakerReplayRootV2,
+    phase: adapter::MarketPhaseV2,
+) -> Result<RootClosureV2> {
+    adapter::require_market_phase_v2(adapter::AdapterActionV2::CloseReplayRoot, phase)?;
     root.validate()?;
     if root.registration != ReplayRegistrationStatusV2::Closed {
         return Err(Error::RegistrationStillOpen);
@@ -638,6 +722,7 @@ pub fn prepare_replay_root_close_v2(root: MakerReplayRootV2) -> Result<RootClosu
     Ok(RootClosureV2 {
         rent_refund_payer: root.rent_payer,
         final_next_nonce: root.next_nonce,
+        final_minimum_live_nonce: root.minimum_live_nonce,
     })
 }
 
@@ -840,7 +925,7 @@ impl DirectIntentRecordV2 {
         collateral_debit: u64,
     ) -> Result<(RecordAfterFillV2, MakerReplayRootV2)> {
         self.validate()?;
-        root.for_intent(self.intent)?;
+        root.for_active_intent(self.intent)?;
         if slot < self.intent.from || slot > self.intent.through {
             return Err(Error::IntentExpired);
         }
@@ -956,29 +1041,87 @@ pub struct RegistrationV2<const N: usize> {
     pub reserved_collateral_debit: u64,
 }
 
-/// Create one live authorization/custody record and advance gap-free replay.
+/// Complete hostile input for one atomic registered-intent creation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegistrationInputV2<const N: usize> {
+    /// Existing replay root or canonical first-use absence.
+    pub replay_root: ReplayRootStateV2,
+    /// Exact maker-signed registered intent.
+    pub intent: DirectIntentV2,
+    /// Sealed immediately preceding native authorization.
+    pub authorization: adapter::Ed25519AuthorizationV2,
+    /// Canonical Market phase projection.
+    pub phase: adapter::MarketPhaseV2,
+    /// Trusted `Clock::get()` slot.
+    pub slot: u64,
+    /// Exact root/record/Position/collateral physical bindings.
+    pub accounts: ParticipantAccountsV2,
+    /// Separate signer paying root/record/escrow creation and persisted refund beneficiary.
+    pub system_payer: [u8; 32],
+    /// Realm-selected collateral mint for Buy; absent for Sell.
+    pub collateral_mint: Option<[u8; 32]>,
+    /// Authenticated exact source delegate for Buy; absent for Sell.
+    pub buy_debit_authority: Option<adapter::BuyDebitAuthorityV2>,
+    /// Canonical live-record PDA bump.
+    pub record_bump: u8,
+    /// Current native Position.
+    pub position: PositionV1<N>,
+}
+
+/// Create one live authorization/custody record inside the signed slot window
+/// using the SBF adapter's trusted `Clock::get()` slot, and advance replay.
 pub fn register_intent_v2<const N: usize>(
-    root: MakerReplayRootV2,
-    intent: DirectIntentV2,
-    authorization: adapter::Ed25519AuthorizationV2,
-    accounts: ParticipantAccountsV2,
-    record_bump: u8,
-    record_rent_payer: [u8; 32],
-    mut position: PositionV1<N>,
+    input: RegistrationInputV2<N>,
 ) -> Result<RegistrationV2<N>> {
+    let RegistrationInputV2 {
+        replay_root,
+        intent,
+        authorization,
+        phase,
+        slot,
+        accounts,
+        system_payer,
+        collateral_mint,
+        buy_debit_authority,
+        record_bump,
+        mut position,
+    } = input;
     width(N)?;
+    let action = match intent.side() {
+        Side::Buy => adapter::AdapterActionV2::RegisterBuy,
+        Side::Sell => adapter::AdapterActionV2::RegisterSell,
+    };
+    adapter::require_market_phase_v2(action, phase)?;
     authorization.authorizes_registration(intent)?;
+    if slot < intent.valid_from_slot() || slot > intent.valid_through_slot() {
+        return Err(Error::IntentExpired);
+    }
     accounts.validate(intent)?;
-    nonzero(&record_rent_payer)?;
+    nonzero(&system_payer)?;
     position_matches(position, intent)?;
     let outcome = usize::from(intent.outcome);
     if outcome >= N {
         return Err(Error::InvalidOutcome);
     }
-    let next_root = root.register(intent)?;
+    let next_root = replay_root
+        .open_for_intent(intent, system_payer)?
+        .register(intent)?;
     let (claims, collateral) = match intent.side {
-        Side::Buy => (0, maximum_buy_reserve(intent)?),
+        Side::Buy => {
+            let collateral = maximum_buy_reserve(intent)?;
+            adapter::validate_buy_debit_authority_v2(
+                buy_debit_authority.ok_or(Error::InvalidBuyDebitAuthority)?,
+                intent,
+                accounts.replay_root,
+                collateral_mint.ok_or(Error::InvalidBuyDebitAuthority)?,
+                collateral,
+            )?;
+            (0, collateral)
+        }
         Side::Sell => {
+            if collateral_mint.is_some() || buy_debit_authority.is_some() {
+                return Err(Error::InvalidBuyDebitAuthority);
+            }
             position
                 .debit_outcome(outcome, intent.max_fill)
                 .map_err(position_error)?;
@@ -992,7 +1135,7 @@ pub fn register_intent_v2<const N: usize>(
             filled: 0,
             reserved_claims: claims,
             reserved_collateral: collateral,
-            rent_payer: record_rent_payer,
+            rent_payer: system_payer,
             bump: record_bump,
         },
         position,
@@ -1063,6 +1206,113 @@ impl DirectCancelV2 {
     }
 }
 
+/// Maker-signed O(1) replay-root invalidation threshold.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CancelThroughV1 {
+    market: [u8; 32],
+    generation: u64,
+    maker: [u8; 32],
+    minimum_live_nonce: u64,
+}
+
+impl CancelThroughV1 {
+    /// Construct a strictly advancing threshold no greater than the root's
+    /// already-consumed next nonce.
+    pub fn new(root: MakerReplayRootV2, minimum_live_nonce: u64) -> Result<Self> {
+        root.validate()?;
+        if minimum_live_nonce <= root.minimum_live_nonce || minimum_live_nonce > root.next_nonce {
+            return Err(Error::InvalidCancelThrough);
+        }
+        Ok(Self {
+            market: root.market,
+            generation: root.generation,
+            maker: root.maker,
+            minimum_live_nonce,
+        })
+    }
+
+    /// Decode one exact signed cancel-through message.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() != DIRECT_CANCEL_THROUGH_BYTES_V1 {
+            return Err(Error::InvalidLength);
+        }
+        if array::<8>(bytes, 0)? != DIRECT_CANCEL_THROUGH_MAGIC_V1 {
+            return Err(Error::InvalidMagic);
+        }
+        if u16::from_le_bytes(array(bytes, 8)?) != DIRECT_CANCEL_THROUGH_SCHEMA_VERSION_V1 {
+            return Err(Error::UnsupportedSchema);
+        }
+        zeros(bytes, 10, 6)?;
+        let value = Self {
+            market: array(bytes, MARKET_OFFSET)?,
+            generation: u64::from_le_bytes(array(bytes, GENERATION_OFFSET)?),
+            maker: array(bytes, MAKER_OFFSET)?,
+            minimum_live_nonce: u64::from_le_bytes(array(bytes, NONCE_OFFSET)?),
+        };
+        nonzero(&value.market)?;
+        nonzero(&value.maker)?;
+        Ok(value)
+    }
+
+    /// Return exact maker-signed bytes.
+    pub fn signed_preimage(self) -> [u8; DIRECT_CANCEL_THROUGH_BYTES_V1] {
+        let mut output = [0; DIRECT_CANCEL_THROUGH_BYTES_V1];
+        put(&mut output, 0, &DIRECT_CANCEL_THROUGH_MAGIC_V1);
+        put(
+            &mut output,
+            8,
+            &DIRECT_CANCEL_THROUGH_SCHEMA_VERSION_V1.to_le_bytes(),
+        );
+        put(&mut output, MARKET_OFFSET, &self.market);
+        put(
+            &mut output,
+            GENERATION_OFFSET,
+            &self.generation.to_le_bytes(),
+        );
+        put(&mut output, MAKER_OFFSET, &self.maker);
+        put(
+            &mut output,
+            NONCE_OFFSET,
+            &self.minimum_live_nonce.to_le_bytes(),
+        );
+        output
+    }
+
+    /// Return the first nonce remaining matchable after the update.
+    pub const fn minimum_live_nonce(self) -> u64 {
+        self.minimum_live_nonce
+    }
+    /// Return the signing maker.
+    pub const fn maker(&self) -> &[u8; 32] {
+        &self.maker
+    }
+}
+
+/// Apply one maker-authorized O(1) invalidation threshold to the sole replay
+/// root. Persisted records are unwound separately and permissionlessly.
+pub fn cancel_through_v1(
+    root: MakerReplayRootV2,
+    message: CancelThroughV1,
+    authorization: adapter::Ed25519AuthorizationV2,
+    phase: adapter::MarketPhaseV2,
+) -> Result<MakerReplayRootV2> {
+    adapter::require_market_phase_v2(adapter::AdapterActionV2::CancelThrough, phase)?;
+    authorization.authorizes_cancel_through(message)?;
+    root.validate()?;
+    if message.market != root.market
+        || message.generation != root.generation
+        || message.maker != root.maker
+        || message.minimum_live_nonce <= root.minimum_live_nonce
+        || message.minimum_live_nonce > root.next_nonce
+    {
+        return Err(Error::InvalidCancelThrough);
+    }
+    Ok(MakerReplayRootV2 {
+        minimum_live_nonce: message.minimum_live_nonce,
+        ..root
+    })
+}
+
 /// Atomic cancellation effects.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CancellationV2<const N: usize> {
@@ -1074,19 +1324,64 @@ pub struct CancellationV2<const N: usize> {
     pub position: PositionV1<N>,
 }
 
+/// Complete hostile input for one signed live-intent cancellation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CancellationInputV2<const N: usize> {
+    /// Existing maker replay root.
+    pub replay_root: MakerReplayRootV2,
+    /// Program-owned live record.
+    pub record: DirectIntentRecordV2,
+    /// Sealed exact cancellation authorization.
+    pub authorization: adapter::Ed25519AuthorizationV2,
+    /// Canonical Market phase projection.
+    pub phase: adapter::MarketPhaseV2,
+    /// Exact physical bindings.
+    pub accounts: ParticipantAccountsV2,
+    /// Realm collateral mint for Buy; absent for Sell.
+    pub collateral_mint: Option<[u8; 32]>,
+    /// Live-record escrow authority for Buy; absent for Sell.
+    pub escrow_authority: Option<adapter::EscrowAuthorityV2>,
+    /// Current native Position.
+    pub position: PositionV1<N>,
+}
+
 /// Cancel live intent with exact native-Ed25519 maker authorization.
 pub fn cancel_intent_v2<const N: usize>(
-    root: MakerReplayRootV2,
-    record: DirectIntentRecordV2,
-    authorization: adapter::Ed25519AuthorizationV2,
-    accounts: ParticipantAccountsV2,
-    mut position: PositionV1<N>,
+    input: CancellationInputV2<N>,
 ) -> Result<CancellationV2<N>> {
+    let CancellationInputV2 {
+        replay_root,
+        record,
+        authorization,
+        phase,
+        accounts,
+        collateral_mint,
+        escrow_authority,
+        mut position,
+    } = input;
     width(N)?;
+    let action = match record.intent.side() {
+        Side::Buy => adapter::AdapterActionV2::CancelBuy,
+        Side::Sell => adapter::AdapterActionV2::CancelSell,
+    };
+    adapter::require_market_phase_v2(action, phase)?;
     authorization.authorizes_cancellation(record)?;
     accounts.validate(record.intent)?;
+    match record.intent.side() {
+        Side::Buy => adapter::validate_registered_escrow_authority_v2(
+            escrow_authority.ok_or(Error::InvalidEscrowAuthority)?,
+            record,
+            accounts.record,
+            accounts.escrow,
+            collateral_mint.ok_or(Error::InvalidEscrowAuthority)?,
+        )?,
+        Side::Sell if collateral_mint.is_some() || escrow_authority.is_some() => {
+            return Err(Error::InvalidEscrowAuthority);
+        }
+        Side::Sell => {}
+    }
     position_matches(position, record.intent)?;
-    root.for_intent(record.intent)?;
+    replay_root.for_intent(record.intent)?;
     let outcome = usize::from(record.intent.outcome);
     if outcome >= N {
         return Err(Error::InvalidOutcome);
@@ -1096,7 +1391,7 @@ pub fn cancel_intent_v2<const N: usize>(
             .credit_outcome(outcome, record.reserved_claims)
             .map_err(position_error)?;
     }
-    let next_root = root.close_live(record.intent)?;
+    let next_root = replay_root.close_live(record.intent)?;
     Ok(CancellationV2 {
         replay_root: next_root,
         close: LiveRecordCloseV2 {
@@ -1120,21 +1415,64 @@ pub struct ExpirationV2<const N: usize> {
     pub position: PositionV1<N>,
 }
 
+/// Complete hostile input for one permissionless post-expiry close.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExpirationInputV2<const N: usize> {
+    /// Existing maker replay root.
+    pub replay_root: MakerReplayRootV2,
+    /// Program-owned live record.
+    pub record: DirectIntentRecordV2,
+    /// Canonical Market phase projection.
+    pub phase: adapter::MarketPhaseV2,
+    /// Trusted `Clock::get()` slot.
+    pub slot: u64,
+    /// Exact physical bindings.
+    pub accounts: ParticipantAccountsV2,
+    /// Realm collateral mint for Buy; absent for Sell.
+    pub collateral_mint: Option<[u8; 32]>,
+    /// Live-record escrow authority for Buy; absent for Sell.
+    pub escrow_authority: Option<adapter::EscrowAuthorityV2>,
+    /// Current native Position.
+    pub position: PositionV1<N>,
+}
+
 /// Close and refund an intent strictly after its inclusive validity boundary.
-pub fn expire_intent_v2<const N: usize>(
-    root: MakerReplayRootV2,
-    record: DirectIntentRecordV2,
-    slot: u64,
-    accounts: ParticipantAccountsV2,
-    mut position: PositionV1<N>,
-) -> Result<ExpirationV2<N>> {
+pub fn expire_intent_v2<const N: usize>(input: ExpirationInputV2<N>) -> Result<ExpirationV2<N>> {
+    let ExpirationInputV2 {
+        replay_root,
+        record,
+        phase,
+        slot,
+        accounts,
+        collateral_mint,
+        escrow_authority,
+        mut position,
+    } = input;
     width(N)?;
+    let action = match record.intent.side() {
+        Side::Buy => adapter::AdapterActionV2::ExpireBuy,
+        Side::Sell => adapter::AdapterActionV2::ExpireSell,
+    };
+    adapter::require_market_phase_v2(action, phase)?;
     if slot <= record.intent.through {
         return Err(Error::IntentNotExpired);
     }
     accounts.validate(record.intent)?;
+    match record.intent.side() {
+        Side::Buy => adapter::validate_registered_escrow_authority_v2(
+            escrow_authority.ok_or(Error::InvalidEscrowAuthority)?,
+            record,
+            accounts.record,
+            accounts.escrow,
+            collateral_mint.ok_or(Error::InvalidEscrowAuthority)?,
+        )?,
+        Side::Sell if collateral_mint.is_some() || escrow_authority.is_some() => {
+            return Err(Error::InvalidEscrowAuthority);
+        }
+        Side::Sell => {}
+    }
     position_matches(position, record.intent)?;
-    root.for_intent(record.intent)?;
+    replay_root.for_intent(record.intent)?;
     let outcome = usize::from(record.intent.outcome);
     if outcome >= N {
         return Err(Error::InvalidOutcome);
@@ -1144,7 +1482,89 @@ pub fn expire_intent_v2<const N: usize>(
             .credit_outcome(outcome, record.reserved_claims)
             .map_err(position_error)?;
     }
-    let next_root = root.close_live(record.intent)?;
+    let next_root = replay_root.close_live(record.intent)?;
+    Ok(ExpirationV2 {
+        replay_root: next_root,
+        close: LiveRecordCloseV2 {
+            closed_nonce: record.intent.nonce,
+            rent_refund_payer: record.rent_payer,
+            collateral_refund: record.reserved_collateral,
+            claim_refund: record.reserved_claims,
+        },
+        position,
+    })
+}
+
+/// Complete hostile input for permissionlessly unwinding one record invalidated
+/// by the maker's replay-root minimum-live nonce.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InvalidatedCloseInputV1<const N: usize> {
+    /// Maker replay root carrying the signed threshold.
+    pub replay_root: MakerReplayRootV2,
+    /// Program-owned invalidated live record.
+    pub record: DirectIntentRecordV2,
+    /// Canonical Market phase projection.
+    pub phase: adapter::MarketPhaseV2,
+    /// Exact physical bindings.
+    pub accounts: ParticipantAccountsV2,
+    /// Realm collateral mint for Buy; absent for Sell.
+    pub collateral_mint: Option<[u8; 32]>,
+    /// Live-record escrow authority for Buy; absent for Sell.
+    pub escrow_authority: Option<adapter::EscrowAuthorityV2>,
+    /// Current native Position.
+    pub position: PositionV1<N>,
+}
+
+/// Permissionlessly close and refund a registered record below the maker's
+/// signed minimum-live nonce. No enumeration or centralized cancel service is
+/// required; each close returns assets to the record's signed destinations.
+pub fn close_invalidated_intent_v1<const N: usize>(
+    input: InvalidatedCloseInputV1<N>,
+) -> Result<ExpirationV2<N>> {
+    let InvalidatedCloseInputV1 {
+        replay_root,
+        record,
+        phase,
+        accounts,
+        collateral_mint,
+        escrow_authority,
+        mut position,
+    } = input;
+    width(N)?;
+    let action = match record.intent.side() {
+        Side::Buy => adapter::AdapterActionV2::CloseInvalidatedBuy,
+        Side::Sell => adapter::AdapterActionV2::CloseInvalidatedSell,
+    };
+    adapter::require_market_phase_v2(action, phase)?;
+    replay_root.for_intent(record.intent)?;
+    if record.intent.nonce >= replay_root.minimum_live_nonce {
+        return Err(Error::IntentNotInvalidated);
+    }
+    accounts.validate(record.intent)?;
+    match record.intent.side() {
+        Side::Buy => adapter::validate_registered_escrow_authority_v2(
+            escrow_authority.ok_or(Error::InvalidEscrowAuthority)?,
+            record,
+            accounts.record,
+            accounts.escrow,
+            collateral_mint.ok_or(Error::InvalidEscrowAuthority)?,
+        )?,
+        Side::Sell if collateral_mint.is_some() || escrow_authority.is_some() => {
+            return Err(Error::InvalidEscrowAuthority);
+        }
+        Side::Sell => {}
+    }
+    position_matches(position, record.intent)?;
+    let outcome = usize::from(record.intent.outcome);
+    if outcome >= N {
+        return Err(Error::InvalidOutcome);
+    }
+    if record.reserved_claims != 0 {
+        position
+            .credit_outcome(outcome, record.reserved_claims)
+            .map_err(position_error)?;
+    }
+    let next_root = replay_root.close_live(record.intent)?;
     Ok(ExpirationV2 {
         replay_root: next_root,
         close: LiveRecordCloseV2 {
@@ -1286,13 +1706,16 @@ fn maximum_buy_reserve_for(intent: DirectIntentV2, quantity: u64) -> Result<u64>
 /// Exact rent consequences of fully closing one live account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TerminalRentTransitionV2 {
-    /// Authenticated rent principal returned to persisted payer.
-    pub payer_refund: u64,
-    /// Excess above rent principal sent to neutral donation sink.
-    pub neutral_donation: u64,
+    /// Authenticated account/token-account rent principal.
+    pub rent_principal: u64,
+    /// Lamports above principal, explicitly unclassified as economic revenue.
+    pub unclassified_donation: u64,
+    /// Total lamports credited to the persisted payer's canonical RentCredit.
+    pub rent_credit_total: u64,
 }
 
-/// Calculate close refund without reclassifying donated lamports as rent.
+/// Classify a close balance without reclassifying donated lamports as rent;
+/// the full returned total is for the persisted payer's canonical RentCredit.
 pub fn terminal_rent_transition_v2(
     current_lamports: u64,
     authenticated_rent_principal: u64,
@@ -1301,9 +1724,10 @@ pub fn terminal_rent_transition_v2(
         return Err(Error::InvalidRentTransition);
     }
     Ok(TerminalRentTransitionV2 {
-        payer_refund: authenticated_rent_principal,
-        neutral_donation: current_lamports
+        rent_principal: authenticated_rent_principal,
+        unclassified_donation: current_lamports
             .checked_sub(authenticated_rent_principal)
             .ok_or(Error::InvalidRentTransition)?,
+        rent_credit_total: current_lamports,
     })
 }

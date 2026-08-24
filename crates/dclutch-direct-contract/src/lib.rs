@@ -33,19 +33,23 @@ pub use settlement::{
     settle_split_v2,
 };
 pub use state::{
-    CancellationV2, DIRECT_CANCEL_BYTES_V2, DIRECT_CANCEL_MAGIC_V2,
-    DIRECT_CANCEL_SCHEMA_VERSION_V2, DIRECT_INTENT_BYTES_V2, DIRECT_INTENT_ESCROW_PDA_DOMAIN_V2,
-    DIRECT_INTENT_MAGIC_V2, DIRECT_INTENT_RECORD_BYTES_V2, DIRECT_INTENT_RECORD_MAGIC_V2,
+    CancelThroughV1, CancellationInputV2, CancellationV2, DIRECT_CANCEL_BYTES_V2,
+    DIRECT_CANCEL_MAGIC_V2, DIRECT_CANCEL_SCHEMA_VERSION_V2, DIRECT_CANCEL_THROUGH_BYTES_V1,
+    DIRECT_CANCEL_THROUGH_MAGIC_V1, DIRECT_CANCEL_THROUGH_SCHEMA_VERSION_V1,
+    DIRECT_INTENT_BYTES_V2, DIRECT_INTENT_ESCROW_PDA_DOMAIN_V2, DIRECT_INTENT_MAGIC_V2,
+    DIRECT_INTENT_RECORD_BYTES_V2, DIRECT_INTENT_RECORD_MAGIC_V2,
     DIRECT_INTENT_RECORD_PDA_DOMAIN_V2, DIRECT_INTENT_RECORD_SCHEMA_VERSION_V2,
     DIRECT_INTENT_SCHEMA_VERSION_V2, DirectCancelV2, DirectIntentInputV2, DirectIntentRecordV2,
-    DirectIntentV2, ExpirationV2, InlineParticipantAccountsV2, IntentLifecycleV2,
-    LiveRecordCloseV2, MAKER_REPLAY_ROOT_BYTES_V2, MAKER_REPLAY_ROOT_MAGIC_V2,
-    MAKER_REPLAY_ROOT_PDA_DOMAIN_V2, MAKER_REPLAY_ROOT_SCHEMA_VERSION_V2, MakerReplayRootV2,
-    ParticipantAccountsV2, RecordAfterFillV2, RegistrationV2, ReplayRegistrationStatusV2,
-    RootClosureV2, Side, TerminalRentTransitionV2, VENUE_FEE_POLICY_BYTES_V2,
+    DirectIntentV2, ExpirationInputV2, ExpirationV2, InlineParticipantAccountsV2,
+    IntentLifecycleV2, InvalidatedCloseInputV1, LiveRecordCloseV2, MAKER_REPLAY_ROOT_BYTES_V2,
+    MAKER_REPLAY_ROOT_MAGIC_V2, MAKER_REPLAY_ROOT_PDA_DOMAIN_V2,
+    MAKER_REPLAY_ROOT_SCHEMA_VERSION_V2, MakerReplayRootV2, ParticipantAccountsV2,
+    RecordAfterFillV2, RegistrationInputV2, RegistrationV2, ReplayRegistrationStatusV2,
+    ReplayRootStateV2, RootClosureV2, Side, TerminalRentTransitionV2, VENUE_FEE_POLICY_BYTES_V2,
     VENUE_FEE_POLICY_MAGIC_V2, VENUE_FEE_POLICY_SCHEMA_VERSION_V2, VenueFeePolicyV2,
-    cancel_intent_v2, close_replay_registration_v2, expire_intent_v2, prepare_replay_root_close_v2,
-    register_intent_v2, terminal_rent_transition_v2,
+    cancel_intent_v2, cancel_through_v1, close_invalidated_intent_v1, close_replay_registration_v2,
+    expire_intent_v2, prepare_replay_root_close_v2, register_intent_v2,
+    terminal_rent_transition_v2,
 };
 
 /// Exact scaled integer price denominator.
@@ -100,6 +104,12 @@ pub enum Error {
     RegistrationClosed,
     /// Replay root live count could not be incremented or decremented.
     LiveCountInvariant,
+    /// Maker-signed cancel-through threshold was non-monotone or beyond next nonce.
+    InvalidCancelThrough,
+    /// Settlement attempted to consume a record below the root's live threshold.
+    IntentInvalidated,
+    /// Permissionless invalidation close targeted a still-live nonce.
+    IntentNotInvalidated,
     /// A root close was attempted while live intents remained.
     LiveIntentsRemain,
     /// Root close was attempted before Market retirement closed registration.
@@ -148,6 +158,8 @@ pub enum Error {
     ForgedSignature,
     /// Adapter action was unknown or wrong for requested decoder.
     UnknownAdapterAction,
+    /// Canonical Market phase did not admit this Direct action.
+    MarketPhaseRefused,
     /// Adapter participant count did not equal canonical action width.
     InvalidParticipantCount,
     /// Settlement authorization modes were not all identical.
@@ -158,6 +170,10 @@ pub enum Error {
     InvalidInlineWidth,
     /// Adapter account count, privilege, or aliasing was invalid.
     InvalidAccountFrame,
+    /// Buy source owner, delegate, allowance, or account binding was invalid.
+    InvalidBuyDebitAuthority,
+    /// Registered collateral escrow was not controlled by its live-record PDA.
+    InvalidEscrowAuthority,
     /// Serialized v0 transaction exceeded pinned packet/account limits.
     PacketEnvelopeExceeded,
     /// Signature, LUT, instruction data, or account profile was noncanonical.

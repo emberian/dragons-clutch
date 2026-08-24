@@ -1,7 +1,8 @@
 //! Exact SDK-free description of the Direct SBF adapter boundary.
 
 use crate::state::{
-    DIRECT_INTENT_BYTES_V2, DirectCancelV2, DirectIntentRecordV2, DirectIntentV2, Side,
+    CancelThroughV1, DIRECT_INTENT_BYTES_V2, DirectCancelV2, DirectIntentRecordV2, DirectIntentV2,
+    Side,
 };
 use crate::{Error, Result, array, nonzero, one, put, zeros};
 
@@ -42,6 +43,10 @@ impl Ed25519AuthorizationV2 {
             *record.intent().maker(),
             &DirectCancelV2::for_record(record).signed_preimage(),
         )
+    }
+
+    pub(crate) fn authorizes_cancel_through(self, message: CancelThroughV1) -> Result<()> {
+        self.matches(*message.maker(), &message.signed_preimage())
     }
 
     pub(crate) fn authorizes_inline(self, intent: DirectIntentV2) -> Result<()> {
@@ -241,6 +246,8 @@ pub const DIRECT_ADAPTER_HEADER_BYTES_V2: usize = 16;
 pub const REGISTER_INSTRUCTION_BYTES_V2: usize = 248;
 /// Exact cancel instruction data width.
 pub const CANCEL_INSTRUCTION_BYTES_V2: usize = 112;
+/// Exact O(1) cancel-through instruction width.
+pub const CANCEL_THROUGH_INSTRUCTION_BYTES_V1: usize = 112;
 /// Exact expire and root-lifecycle instruction data width.
 pub const HEADER_ONLY_INSTRUCTION_BYTES_V2: usize = 16;
 /// Exact ordinary settlement instruction data width.
@@ -249,9 +256,6 @@ pub const ORDINARY_INSTRUCTION_BYTES_V2: usize = 34;
 pub const INLINE_ORDINARY_INSTRUCTION_BYTES_V2: usize = 498;
 /// Fixed complementary data before N prices and N mode bytes.
 pub const COMPLEMENTARY_INSTRUCTION_BASE_BYTES_V2: usize = 24;
-/// Settlement accounts independent of participant count.
-pub const SETTLEMENT_BASE_ACCOUNT_COUNT_V2: usize = 6;
-
 const ACTION_OFFSET: usize = 10;
 const PARTICIPANTS_OFFSET: usize = 11;
 const HEADER_RESERVED_OFFSET: usize = 12;
@@ -289,10 +293,17 @@ pub enum AdapterActionV2 {
     InlineSplit = 13,
     /// Immediate N=2 complete-set merge with native signatures and no live records.
     InlineMerge = 14,
+    /// Maker-signed O(1) minimum-live-nonce advance.
+    CancelThrough = 15,
+    /// Permissionlessly unwind one invalidated registered Buy.
+    CloseInvalidatedBuy = 16,
+    /// Permissionlessly unwind one invalidated registered Sell.
+    CloseInvalidatedSell = 17,
 }
 
 impl AdapterActionV2 {
-    fn decode(value: u8) -> Result<Self> {
+    /// Decode one hostile action discriminator.
+    pub fn decode(value: u8) -> Result<Self> {
         match value {
             1 => Ok(Self::RegisterBuy),
             2 => Ok(Self::RegisterSell),
@@ -308,10 +319,14 @@ impl AdapterActionV2 {
             12 => Ok(Self::InlineOrdinary),
             13 => Ok(Self::InlineSplit),
             14 => Ok(Self::InlineMerge),
+            15 => Ok(Self::CancelThrough),
+            16 => Ok(Self::CloseInvalidatedBuy),
+            17 => Ok(Self::CloseInvalidatedSell),
             _ => Err(Error::UnknownAdapterAction),
         }
     }
-    const fn byte(self) -> u8 {
+    /// Return the canonical hostile action discriminator.
+    pub const fn discriminator(self) -> u8 {
         match self {
             Self::RegisterBuy => 1,
             Self::RegisterSell => 2,
@@ -327,12 +342,71 @@ impl AdapterActionV2 {
             Self::InlineOrdinary => 12,
             Self::InlineSplit => 13,
             Self::InlineMerge => 14,
+            Self::CancelThrough => 15,
+            Self::CloseInvalidatedBuy => 16,
+            Self::CloseInvalidatedSell => 17,
         }
     }
 }
 
-/// Sole settlement authorization mode. Registration is the exact equivalence
-/// bridge from native signature to persisted replay/custody state.
+/// Canonical Market-phase projection authenticated from the program-owned
+/// Market account by the SBF adapter. This is not persisted Direct state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MarketPhaseV2 {
+    /// Market has not opened.
+    Founding,
+    /// Market admits new trading and intent registration.
+    Open,
+    /// Market outcome is resolved; only live-intent unwind remains.
+    Resolved,
+    /// Market is retiring; unwind and replay-root closure remain.
+    Retiring,
+    /// Market is fully retired and admits no Direct action.
+    Retired,
+}
+
+/// Enforce the exact Direct action/Market-phase matrix.
+pub fn require_market_phase_v2(action: AdapterActionV2, phase: MarketPhaseV2) -> Result<()> {
+    let accepted = match action {
+        AdapterActionV2::RegisterBuy
+        | AdapterActionV2::RegisterSell
+        | AdapterActionV2::Ordinary
+        | AdapterActionV2::Split
+        | AdapterActionV2::Merge
+        | AdapterActionV2::InlineOrdinary
+        | AdapterActionV2::InlineSplit
+        | AdapterActionV2::InlineMerge => phase == MarketPhaseV2::Open,
+        AdapterActionV2::CancelBuy
+        | AdapterActionV2::CancelSell
+        | AdapterActionV2::ExpireBuy
+        | AdapterActionV2::ExpireSell
+        | AdapterActionV2::CancelThrough
+        | AdapterActionV2::CloseInvalidatedBuy
+        | AdapterActionV2::CloseInvalidatedSell => matches!(
+            phase,
+            MarketPhaseV2::Open | MarketPhaseV2::Resolved | MarketPhaseV2::Retiring
+        ),
+        AdapterActionV2::CloseReplayRegistration | AdapterActionV2::CloseReplayRoot => {
+            phase == MarketPhaseV2::Retiring
+        }
+    };
+    if accepted {
+        Ok(())
+    } else {
+        Err(Error::MarketPhaseRefused)
+    }
+}
+
+/// Decoded hostile common header used to route to one exact action codec.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdapterHeaderV2 {
+    /// Routed action.
+    pub action: AdapterActionV2,
+    /// Exact participant count encoded by the action.
+    pub participants: u8,
+}
+
+/// The two physical representations of the same signed Direct intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum AuthorizationModeV2 {
@@ -457,6 +531,49 @@ pub fn decode_cancel_instruction_v2(bytes: &[u8], side: Side) -> Result<DirectCa
     DirectCancelV2::decode(bytes.get(BODY_OFFSET..).ok_or(Error::InvalidLength)?)
 }
 
+/// Encode the maker-signed O(1) replay-root invalidation threshold.
+pub fn encode_cancel_through_instruction_v1(
+    message: CancelThroughV1,
+) -> [u8; CANCEL_THROUGH_INSTRUCTION_BYTES_V1] {
+    let mut output = [0; CANCEL_THROUGH_INSTRUCTION_BYTES_V1];
+    encode_header(&mut output, AdapterActionV2::CancelThrough, 1);
+    put(&mut output, BODY_OFFSET, &message.signed_preimage());
+    output
+}
+
+/// Decode the exact maker-signed replay-root invalidation threshold.
+pub fn decode_cancel_through_instruction_v1(bytes: &[u8]) -> Result<CancelThroughV1> {
+    if bytes.len() != CANCEL_THROUGH_INSTRUCTION_BYTES_V1 {
+        return Err(Error::InvalidLength);
+    }
+    if decode_common_header(bytes, 1)? != AdapterActionV2::CancelThrough {
+        return Err(Error::UnknownAdapterAction);
+    }
+    CancelThroughV1::decode(bytes.get(BODY_OFFSET..).ok_or(Error::InvalidLength)?)
+}
+
+/// Encode one permissionless invalidated-record unwind.
+pub fn encode_close_invalidated_instruction_v1(
+    side: Side,
+) -> [u8; HEADER_ONLY_INSTRUCTION_BYTES_V2] {
+    let action = side_action(
+        side,
+        AdapterActionV2::CloseInvalidatedBuy,
+        AdapterActionV2::CloseInvalidatedSell,
+    );
+    encode_header_only(action)
+}
+
+/// Decode one exact permissionless invalidated-record unwind.
+pub fn decode_close_invalidated_instruction_v1(bytes: &[u8], side: Side) -> Result<()> {
+    let action = side_action(
+        side,
+        AdapterActionV2::CloseInvalidatedBuy,
+        AdapterActionV2::CloseInvalidatedSell,
+    );
+    decode_header_only(bytes, action)
+}
+
 /// Encode exact post-expiry close action for persisted side.
 pub fn encode_expire_instruction_v2(side: Side) -> [u8; HEADER_ONLY_INSTRUCTION_BYTES_V2] {
     let mut output = [0; HEADER_ONLY_INSTRUCTION_BYTES_V2];
@@ -480,6 +597,42 @@ pub fn decode_expire_instruction_v2(bytes: &[u8], side: Side) -> Result<()> {
         AdapterActionV2::ExpireSell,
     );
     if decode_common_header(bytes, 1)? != expected {
+        return Err(Error::UnknownAdapterAction);
+    }
+    Ok(())
+}
+
+/// Encode the exact authenticated Market-retirement registration close.
+pub fn encode_close_replay_registration_instruction_v2() -> [u8; HEADER_ONLY_INSTRUCTION_BYTES_V2] {
+    encode_header_only(AdapterActionV2::CloseReplayRegistration)
+}
+
+/// Decode the exact authenticated Market-retirement registration close.
+pub fn decode_close_replay_registration_instruction_v2(bytes: &[u8]) -> Result<()> {
+    decode_header_only(bytes, AdapterActionV2::CloseReplayRegistration)
+}
+
+/// Encode the exact zero-live replay-root close.
+pub fn encode_close_replay_root_instruction_v2() -> [u8; HEADER_ONLY_INSTRUCTION_BYTES_V2] {
+    encode_header_only(AdapterActionV2::CloseReplayRoot)
+}
+
+/// Decode the exact zero-live replay-root close.
+pub fn decode_close_replay_root_instruction_v2(bytes: &[u8]) -> Result<()> {
+    decode_header_only(bytes, AdapterActionV2::CloseReplayRoot)
+}
+
+fn encode_header_only(action: AdapterActionV2) -> [u8; HEADER_ONLY_INSTRUCTION_BYTES_V2] {
+    let mut output = [0; HEADER_ONLY_INSTRUCTION_BYTES_V2];
+    encode_header(&mut output, action, 1);
+    output
+}
+
+fn decode_header_only(bytes: &[u8], action: AdapterActionV2) -> Result<()> {
+    if bytes.len() != HEADER_ONLY_INSTRUCTION_BYTES_V2 {
+        return Err(Error::InvalidLength);
+    }
+    if decode_common_header(bytes, 1)? != action {
         return Err(Error::UnknownAdapterAction);
     }
     Ok(())
@@ -814,7 +967,7 @@ fn encode_header(output: &mut [u8], action: AdapterActionV2, participants: u8) {
     put(output, 0, &DIRECT_ADAPTER_MAGIC_V2);
     put(output, 8, &DIRECT_ADAPTER_SCHEMA_VERSION_V2.to_le_bytes());
     if let Some(value) = output.get_mut(ACTION_OFFSET) {
-        *value = action.byte();
+        *value = action.discriminator();
     }
     if let Some(value) = output.get_mut(PARTICIPANTS_OFFSET) {
         *value = participants;
@@ -822,6 +975,16 @@ fn encode_header(output: &mut [u8], action: AdapterActionV2, participants: u8) {
 }
 
 fn decode_common_header(bytes: &[u8], participants: u8) -> Result<AdapterActionV2> {
+    let header = decode_adapter_header_v2(bytes)?;
+    if header.participants != participants {
+        return Err(Error::InvalidParticipantCount);
+    }
+    Ok(header.action)
+}
+
+/// Decode and validate the common header before action-specific routing.
+/// Action codecs still enforce their exact total instruction-data width.
+pub fn decode_adapter_header_v2(bytes: &[u8]) -> Result<AdapterHeaderV2> {
     if bytes.len() < DIRECT_ADAPTER_HEADER_BYTES_V2 {
         return Err(Error::InvalidLength);
     }
@@ -831,11 +994,11 @@ fn decode_common_header(bytes: &[u8], participants: u8) -> Result<AdapterActionV
     if u16::from_le_bytes(array(bytes, 8)?) != DIRECT_ADAPTER_SCHEMA_VERSION_V2 {
         return Err(Error::UnsupportedSchema);
     }
-    if one(bytes, PARTICIPANTS_OFFSET)? != participants {
-        return Err(Error::InvalidParticipantCount);
-    }
     zeros(bytes, HEADER_RESERVED_OFFSET, 4)?;
-    AdapterActionV2::decode(one(bytes, ACTION_OFFSET)?)
+    Ok(AdapterHeaderV2 {
+        action: AdapterActionV2::decode(one(bytes, ACTION_OFFSET)?)?,
+        participants: one(bytes, PARTICIPANTS_OFFSET)?,
+    })
 }
 
 fn modes(bytes: &[u8], expected: AuthorizationModeV2) -> Result<()> {
@@ -849,13 +1012,90 @@ fn modes(bytes: &[u8], expected: AuthorizationModeV2) -> Result<()> {
     Ok(())
 }
 
+/// SDK-free projection of the authenticated Token/Token-2022 fields used for
+/// one maker-authorized Buy debit. The SBF adapter must decode these fields
+/// from the signed source account; callers do not attest them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BuyDebitAuthorityV2 {
+    /// Token account being debited.
+    pub token_account: [u8; 32],
+    /// Token account mint.
+    pub mint: [u8; 32],
+    /// Token account owner/authority.
+    pub owner: [u8; 32],
+    /// Token delegate recorded by Token/Token-2022.
+    pub delegate: [u8; 32],
+    /// Remaining delegated allowance before this debit.
+    pub delegated_amount: u64,
+}
+
+/// Require the per-maker replay-root PDA as the exact preauthorized delegate
+/// for one signed Buy source and one exact atomic debit.
+pub fn validate_buy_debit_authority_v2(
+    authority: BuyDebitAuthorityV2,
+    intent: DirectIntentV2,
+    replay_root_account: [u8; 32],
+    collateral_mint: [u8; 32],
+    exact_debit: u64,
+) -> Result<()> {
+    if intent.side() != Side::Buy
+        || authority.token_account != *intent.collateral_account()
+        || authority.mint != collateral_mint
+        || authority.owner != *intent.maker()
+        || authority.delegate != replay_root_account
+        || authority.delegated_amount != exact_debit
+    {
+        return Err(Error::InvalidBuyDebitAuthority);
+    }
+    nonzero(&replay_root_account)?;
+    nonzero(&collateral_mint)?;
+    Ok(())
+}
+
+/// SDK-free projection of one registered Buy escrow's Token/Token-2022 fields.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EscrowAuthorityV2 {
+    /// Escrow token account.
+    pub token_account: [u8; 32],
+    /// Escrow mint.
+    pub mint: [u8; 32],
+    /// Escrow token authority.
+    pub authority: [u8; 32],
+}
+
+/// Require a registered Buy escrow to be controlled by its exact live-record
+/// PDA. The live-record PDA signs every release and the final token close.
+pub fn validate_registered_escrow_authority_v2(
+    authority: EscrowAuthorityV2,
+    record: DirectIntentRecordV2,
+    record_account: [u8; 32],
+    escrow_account: [u8; 32],
+    collateral_mint: [u8; 32],
+) -> Result<()> {
+    if record.intent().side() != Side::Buy
+        || authority.token_account != escrow_account
+        || authority.mint != collateral_mint
+        || authority.authority != record_account
+    {
+        return Err(Error::InvalidEscrowAuthority);
+    }
+    nonzero(&record_account)?;
+    nonzero(&escrow_account)?;
+    nonzero(&collateral_mint)?;
+    Ok(())
+}
+
 /// Canonical physical account role.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccountRoleV2 {
-    /// Transaction fee payer and permissionless matcher/sponsor.
-    Payer,
+    /// Signer paying System account creation; never inferred from Position owner.
+    SystemPayer,
+    /// Pre-existing canonical RentCredit for the persisted rent beneficiary.
+    RentCredit,
     /// Canonical Market account.
     Market,
+    /// Immutable Realm selecting collateral mint and token program.
+    Realm,
     /// Immutable Market-selected fee policy.
     VenuePolicy,
     /// Maker replay-root PDA.
@@ -870,6 +1110,8 @@ pub enum AccountRoleV2 {
     MakerCollateral,
     /// Market collateral vault.
     MarketVault,
+    /// Canonical Market-vault custody authority PDA.
+    Custody,
     /// Fee recipient token account named by policy.
     FeeRecipient,
     /// Realm collateral mint.
@@ -882,10 +1124,6 @@ pub enum AccountRoleV2 {
     RentSysvar,
     /// Instructions sysvar for signature inspection.
     InstructionsSysvar,
-    /// Clock sysvar for permissionless expiry.
-    ClockSysvar,
-    /// Persisted replay-root rent payer receiving close refund.
-    RootRentPayer,
 }
 
 /// One hostile account meta projected into SDK-free key and privileges.
@@ -902,37 +1140,26 @@ pub struct AdapterAccountMetaV2 {
 /// Return exact instruction account count for action.
 pub fn account_count_v2(action: AdapterActionV2, participants: usize) -> Result<usize> {
     match action {
-        AdapterActionV2::RegisterBuy => one_participant(participants, 13),
-        AdapterActionV2::RegisterSell => one_participant(participants, 12),
-        AdapterActionV2::CancelBuy | AdapterActionV2::ExpireBuy => {
-            one_participant(participants, 11)
-        }
-        AdapterActionV2::CancelSell | AdapterActionV2::ExpireSell => {
-            one_participant(participants, 10)
-        }
-        AdapterActionV2::Ordinary => {
-            if participants == 2 {
-                Ok(15)
-            } else {
-                Err(Error::InvalidParticipantCount)
-            }
-        }
-        AdapterActionV2::Split => settlement_count(participants, 5),
-        AdapterActionV2::Merge => settlement_count(participants, 4),
-        AdapterActionV2::CloseReplayRegistration => one_participant(participants, 3),
-        AdapterActionV2::CloseReplayRoot => one_participant(participants, 6),
-        AdapterActionV2::InlineOrdinary => {
-            if participants == 2 {
-                Ok(12)
-            } else {
-                Err(Error::InvalidParticipantCount)
-            }
-        }
+        AdapterActionV2::RegisterBuy => one_participant(participants, 15),
+        AdapterActionV2::RegisterSell => one_participant(participants, 10),
+        AdapterActionV2::CancelBuy => one_participant(participants, 13),
+        AdapterActionV2::CancelSell => one_participant(participants, 8),
+        AdapterActionV2::ExpireBuy => one_participant(participants, 12),
+        AdapterActionV2::ExpireSell => one_participant(participants, 7),
+        AdapterActionV2::Ordinary => exact_participants(participants, 2, 19),
+        AdapterActionV2::Split => settlement_count(participants, 10, 6),
+        AdapterActionV2::Merge => settlement_count(participants, 10, 5),
+        AdapterActionV2::CloseReplayRegistration => one_participant(participants, 2),
+        AdapterActionV2::CloseReplayRoot => one_participant(participants, 5),
+        AdapterActionV2::CancelThrough => one_participant(participants, 3),
+        AdapterActionV2::CloseInvalidatedBuy => one_participant(participants, 12),
+        AdapterActionV2::CloseInvalidatedSell => one_participant(participants, 7),
+        AdapterActionV2::InlineOrdinary => exact_participants(participants, 2, 17),
         AdapterActionV2::InlineSplit | AdapterActionV2::InlineMerge => {
             if participants != 2 {
                 return Err(Error::InvalidInlineWidth);
             }
-            settlement_count(participants, 3)
+            settlement_count(participants, 13, 3)
         }
     }
 }
@@ -945,17 +1172,24 @@ fn one_participant(participants: usize, accounts: usize) -> Result<usize> {
     }
 }
 
-fn settlement_count(participants: usize, per_participant: usize) -> Result<usize> {
+fn exact_participants(participants: usize, expected: usize, accounts: usize) -> Result<usize> {
+    if participants == expected {
+        Ok(accounts)
+    } else {
+        Err(Error::InvalidParticipantCount)
+    }
+}
+
+fn settlement_count(participants: usize, base: usize, per_participant: usize) -> Result<usize> {
     if !(2..=16).contains(&participants) {
         return Err(Error::InvalidParticipantCount);
     }
-    SETTLEMENT_BASE_ACCOUNT_COUNT_V2
-        .checked_add(
-            participants
-                .checked_mul(per_participant)
-                .ok_or(Error::ArithmeticOverflow)?,
-        )
-        .ok_or(Error::ArithmeticOverflow)
+    base.checked_add(
+        participants
+            .checked_mul(per_participant)
+            .ok_or(Error::ArithmeticOverflow)?,
+    )
+    .ok_or(Error::ArithmeticOverflow)
 }
 
 /// Return exact account role for action and index.
@@ -971,8 +1205,10 @@ pub fn account_role_v2(
         AdapterActionV2::RegisterBuy => role_at(
             index,
             &[
-                AccountRoleV2::Payer,
+                AccountRoleV2::SystemPayer,
+                AccountRoleV2::RentCredit,
                 AccountRoleV2::Market,
+                AccountRoleV2::Realm,
                 AccountRoleV2::VenuePolicy,
                 AccountRoleV2::ReplayRoot,
                 AccountRoleV2::IntentRecord,
@@ -989,15 +1225,13 @@ pub fn account_role_v2(
         AdapterActionV2::RegisterSell => role_at(
             index,
             &[
-                AccountRoleV2::Payer,
+                AccountRoleV2::SystemPayer,
+                AccountRoleV2::RentCredit,
                 AccountRoleV2::Market,
                 AccountRoleV2::VenuePolicy,
                 AccountRoleV2::ReplayRoot,
                 AccountRoleV2::IntentRecord,
                 AccountRoleV2::Position,
-                AccountRoleV2::MakerCollateral,
-                AccountRoleV2::CollateralMint,
-                AccountRoleV2::TokenProgram,
                 AccountRoleV2::SystemProgram,
                 AccountRoleV2::RentSysvar,
                 AccountRoleV2::InstructionsSysvar,
@@ -1006,13 +1240,15 @@ pub fn account_role_v2(
         AdapterActionV2::CancelBuy => role_at(
             index,
             &[
-                AccountRoleV2::Payer,
                 AccountRoleV2::Market,
+                AccountRoleV2::Realm,
                 AccountRoleV2::ReplayRoot,
                 AccountRoleV2::IntentRecord,
                 AccountRoleV2::IntentEscrow,
                 AccountRoleV2::Position,
                 AccountRoleV2::MakerCollateral,
+                AccountRoleV2::RentCredit,
+                AccountRoleV2::CollateralMint,
                 AccountRoleV2::TokenProgram,
                 AccountRoleV2::SystemProgram,
                 AccountRoleV2::RentSysvar,
@@ -1022,13 +1258,11 @@ pub fn account_role_v2(
         AdapterActionV2::CancelSell => role_at(
             index,
             &[
-                AccountRoleV2::Payer,
                 AccountRoleV2::Market,
                 AccountRoleV2::ReplayRoot,
                 AccountRoleV2::IntentRecord,
                 AccountRoleV2::Position,
-                AccountRoleV2::MakerCollateral,
-                AccountRoleV2::TokenProgram,
+                AccountRoleV2::RentCredit,
                 AccountRoleV2::SystemProgram,
                 AccountRoleV2::RentSysvar,
                 AccountRoleV2::InstructionsSysvar,
@@ -1037,96 +1271,189 @@ pub fn account_role_v2(
         AdapterActionV2::ExpireBuy => role_at(
             index,
             &[
-                AccountRoleV2::Payer,
                 AccountRoleV2::Market,
+                AccountRoleV2::Realm,
                 AccountRoleV2::ReplayRoot,
                 AccountRoleV2::IntentRecord,
                 AccountRoleV2::IntentEscrow,
                 AccountRoleV2::Position,
                 AccountRoleV2::MakerCollateral,
+                AccountRoleV2::RentCredit,
+                AccountRoleV2::CollateralMint,
                 AccountRoleV2::TokenProgram,
                 AccountRoleV2::SystemProgram,
                 AccountRoleV2::RentSysvar,
-                AccountRoleV2::ClockSysvar,
             ],
         ),
         AdapterActionV2::ExpireSell => role_at(
             index,
             &[
-                AccountRoleV2::Payer,
                 AccountRoleV2::Market,
                 AccountRoleV2::ReplayRoot,
                 AccountRoleV2::IntentRecord,
                 AccountRoleV2::Position,
-                AccountRoleV2::MakerCollateral,
-                AccountRoleV2::TokenProgram,
+                AccountRoleV2::RentCredit,
                 AccountRoleV2::SystemProgram,
                 AccountRoleV2::RentSysvar,
-                AccountRoleV2::ClockSysvar,
             ],
         ),
         AdapterActionV2::Ordinary => role_at(
             index,
             &[
-                AccountRoleV2::Payer,
                 AccountRoleV2::Market,
+                AccountRoleV2::Realm,
+                AccountRoleV2::VenuePolicy,
+                AccountRoleV2::FeeRecipient,
+                AccountRoleV2::CollateralMint,
+                AccountRoleV2::TokenProgram,
+                AccountRoleV2::SystemProgram,
+                AccountRoleV2::RentSysvar,
+                AccountRoleV2::ReplayRoot,
+                AccountRoleV2::IntentRecord,
+                AccountRoleV2::Position,
+                AccountRoleV2::MakerCollateral,
+                AccountRoleV2::RentCredit,
+                AccountRoleV2::ReplayRoot,
+                AccountRoleV2::IntentRecord,
+                AccountRoleV2::IntentEscrow,
+                AccountRoleV2::Position,
+                AccountRoleV2::MakerCollateral,
+                AccountRoleV2::RentCredit,
+            ],
+        ),
+        AdapterActionV2::Split => repeating_role(
+            index,
+            &[
+                AccountRoleV2::Market,
+                AccountRoleV2::Realm,
                 AccountRoleV2::VenuePolicy,
                 AccountRoleV2::MarketVault,
+                AccountRoleV2::Custody,
                 AccountRoleV2::FeeRecipient,
+                AccountRoleV2::CollateralMint,
                 AccountRoleV2::TokenProgram,
-                AccountRoleV2::ReplayRoot,
-                AccountRoleV2::IntentRecord,
-                AccountRoleV2::Position,
-                AccountRoleV2::MakerCollateral,
-                AccountRoleV2::ReplayRoot,
-                AccountRoleV2::IntentRecord,
-                AccountRoleV2::IntentEscrow,
-                AccountRoleV2::Position,
-                AccountRoleV2::MakerCollateral,
+                AccountRoleV2::SystemProgram,
+                AccountRoleV2::RentSysvar,
             ],
-        ),
-        AdapterActionV2::Split => repeating_settlement_role(
-            index,
             &[
                 AccountRoleV2::ReplayRoot,
                 AccountRoleV2::IntentRecord,
                 AccountRoleV2::IntentEscrow,
                 AccountRoleV2::Position,
                 AccountRoleV2::MakerCollateral,
+                AccountRoleV2::RentCredit,
             ],
         ),
-        AdapterActionV2::Merge => repeating_settlement_role(
+        AdapterActionV2::Merge => repeating_role(
             index,
             &[
-                AccountRoleV2::ReplayRoot,
-                AccountRoleV2::IntentRecord,
-                AccountRoleV2::Position,
-                AccountRoleV2::MakerCollateral,
-            ],
-        ),
-        AdapterActionV2::CloseReplayRegistration => role_at(
-            index,
-            &[
-                AccountRoleV2::Payer,
                 AccountRoleV2::Market,
+                AccountRoleV2::Realm,
+                AccountRoleV2::VenuePolicy,
+                AccountRoleV2::MarketVault,
+                AccountRoleV2::Custody,
+                AccountRoleV2::FeeRecipient,
+                AccountRoleV2::CollateralMint,
+                AccountRoleV2::TokenProgram,
+                AccountRoleV2::SystemProgram,
+                AccountRoleV2::RentSysvar,
+            ],
+            &[
                 AccountRoleV2::ReplayRoot,
+                AccountRoleV2::IntentRecord,
+                AccountRoleV2::Position,
+                AccountRoleV2::MakerCollateral,
+                AccountRoleV2::RentCredit,
             ],
         ),
+        AdapterActionV2::CloseReplayRegistration => {
+            role_at(index, &[AccountRoleV2::Market, AccountRoleV2::ReplayRoot])
+        }
         AdapterActionV2::CloseReplayRoot => role_at(
             index,
             &[
-                AccountRoleV2::Payer,
                 AccountRoleV2::Market,
                 AccountRoleV2::ReplayRoot,
-                AccountRoleV2::RootRentPayer,
+                AccountRoleV2::RentCredit,
                 AccountRoleV2::SystemProgram,
                 AccountRoleV2::RentSysvar,
             ],
         ),
-        AdapterActionV2::InlineOrdinary
-        | AdapterActionV2::InlineSplit
-        | AdapterActionV2::InlineMerge => repeating_settlement_role(
+        AdapterActionV2::CancelThrough => role_at(
             index,
+            &[
+                AccountRoleV2::Market,
+                AccountRoleV2::ReplayRoot,
+                AccountRoleV2::InstructionsSysvar,
+            ],
+        ),
+        AdapterActionV2::CloseInvalidatedBuy => role_at(
+            index,
+            &[
+                AccountRoleV2::Market,
+                AccountRoleV2::Realm,
+                AccountRoleV2::ReplayRoot,
+                AccountRoleV2::IntentRecord,
+                AccountRoleV2::IntentEscrow,
+                AccountRoleV2::Position,
+                AccountRoleV2::MakerCollateral,
+                AccountRoleV2::RentCredit,
+                AccountRoleV2::CollateralMint,
+                AccountRoleV2::TokenProgram,
+                AccountRoleV2::SystemProgram,
+                AccountRoleV2::RentSysvar,
+            ],
+        ),
+        AdapterActionV2::CloseInvalidatedSell => role_at(
+            index,
+            &[
+                AccountRoleV2::Market,
+                AccountRoleV2::ReplayRoot,
+                AccountRoleV2::IntentRecord,
+                AccountRoleV2::Position,
+                AccountRoleV2::RentCredit,
+                AccountRoleV2::SystemProgram,
+                AccountRoleV2::RentSysvar,
+            ],
+        ),
+        AdapterActionV2::InlineOrdinary => repeating_role(
+            index,
+            &[
+                AccountRoleV2::SystemPayer,
+                AccountRoleV2::RentCredit,
+                AccountRoleV2::Market,
+                AccountRoleV2::Realm,
+                AccountRoleV2::VenuePolicy,
+                AccountRoleV2::FeeRecipient,
+                AccountRoleV2::CollateralMint,
+                AccountRoleV2::TokenProgram,
+                AccountRoleV2::SystemProgram,
+                AccountRoleV2::RentSysvar,
+                AccountRoleV2::InstructionsSysvar,
+            ],
+            &[
+                AccountRoleV2::ReplayRoot,
+                AccountRoleV2::Position,
+                AccountRoleV2::MakerCollateral,
+            ],
+        ),
+        AdapterActionV2::InlineSplit | AdapterActionV2::InlineMerge => repeating_role(
+            index,
+            &[
+                AccountRoleV2::SystemPayer,
+                AccountRoleV2::RentCredit,
+                AccountRoleV2::Market,
+                AccountRoleV2::Realm,
+                AccountRoleV2::VenuePolicy,
+                AccountRoleV2::MarketVault,
+                AccountRoleV2::Custody,
+                AccountRoleV2::FeeRecipient,
+                AccountRoleV2::CollateralMint,
+                AccountRoleV2::TokenProgram,
+                AccountRoleV2::SystemProgram,
+                AccountRoleV2::RentSysvar,
+                AccountRoleV2::InstructionsSysvar,
+            ],
             &[
                 AccountRoleV2::ReplayRoot,
                 AccountRoleV2::Position,
@@ -1140,22 +1467,16 @@ fn role_at(index: usize, roles: &[AccountRoleV2]) -> Result<AccountRoleV2> {
     roles.get(index).copied().ok_or(Error::InvalidAccountFrame)
 }
 
-fn repeating_settlement_role(index: usize, roles: &[AccountRoleV2]) -> Result<AccountRoleV2> {
-    if index < SETTLEMENT_BASE_ACCOUNT_COUNT_V2 {
-        return role_at(
-            index,
-            &[
-                AccountRoleV2::Payer,
-                AccountRoleV2::Market,
-                AccountRoleV2::VenuePolicy,
-                AccountRoleV2::MarketVault,
-                AccountRoleV2::FeeRecipient,
-                AccountRoleV2::TokenProgram,
-            ],
-        );
+fn repeating_role(
+    index: usize,
+    base: &[AccountRoleV2],
+    participant: &[AccountRoleV2],
+) -> Result<AccountRoleV2> {
+    if index < base.len() {
+        return role_at(index, base);
     }
-    roles
-        .get((index - SETTLEMENT_BASE_ACCOUNT_COUNT_V2) % roles.len())
+    participant
+        .get((index - base.len()) % participant.len())
         .copied()
         .ok_or(Error::InvalidAccountFrame)
 }
@@ -1174,15 +1495,20 @@ pub fn validate_account_frame_v2(
         if role != AccountRoleV2::SystemProgram {
             nonzero(&account.key)?;
         }
-        if accounts
+        for (prior_index, prior) in accounts
             .get(..index)
             .ok_or(Error::InvalidAccountFrame)?
             .iter()
-            .any(|prior| prior.key == account.key)
+            .enumerate()
         {
-            return Err(Error::Alias);
+            if prior.key == account.key {
+                let prior_role = account_role_v2(action, participants, prior_index)?;
+                if role != AccountRoleV2::RentCredit || prior_role != AccountRoleV2::RentCredit {
+                    return Err(Error::Alias);
+                }
+            }
         }
-        let expected = expected_privileges(action, role);
+        let expected = expected_privileges(action, index, role);
         if (account.is_signer, account.is_writable) != expected {
             return Err(Error::InvalidAccountFrame);
         }
@@ -1190,11 +1516,48 @@ pub fn validate_account_frame_v2(
     Ok(())
 }
 
-const fn expected_privileges(action: AdapterActionV2, role: AccountRoleV2) -> (bool, bool) {
+const fn expected_privileges(
+    action: AdapterActionV2,
+    index: usize,
+    role: AccountRoleV2,
+) -> (bool, bool) {
     match role {
-        AccountRoleV2::Payer => (true, true),
-        AccountRoleV2::Market if matches!(action, AdapterActionV2::CloseReplayRegistration) => {
+        AccountRoleV2::SystemPayer => (true, true),
+        AccountRoleV2::RentCredit
+            if matches!(
+                action,
+                AdapterActionV2::RegisterBuy
+                    | AdapterActionV2::RegisterSell
+                    | AdapterActionV2::InlineOrdinary
+                    | AdapterActionV2::InlineSplit
+                    | AdapterActionV2::InlineMerge
+            ) =>
+        {
+            (false, false)
+        }
+        AccountRoleV2::Market
+            if matches!(
+                action,
+                AdapterActionV2::Split
+                    | AdapterActionV2::Merge
+                    | AdapterActionV2::InlineSplit
+                    | AdapterActionV2::InlineMerge
+                    | AdapterActionV2::CloseReplayRegistration
+            ) =>
+        {
             (false, true)
+        }
+        AccountRoleV2::Position
+            if matches!(
+                action,
+                AdapterActionV2::RegisterBuy
+                    | AdapterActionV2::CancelBuy
+                    | AdapterActionV2::ExpireBuy
+                    | AdapterActionV2::CloseInvalidatedBuy
+                    | AdapterActionV2::Merge
+            ) || (matches!(action, AdapterActionV2::Ordinary) && index == 10) =>
+        {
+            (false, false)
         }
         AccountRoleV2::ReplayRoot
         | AccountRoleV2::IntentRecord
@@ -1203,15 +1566,16 @@ const fn expected_privileges(action: AdapterActionV2, role: AccountRoleV2) -> (b
         | AccountRoleV2::MakerCollateral
         | AccountRoleV2::MarketVault
         | AccountRoleV2::FeeRecipient
-        | AccountRoleV2::RootRentPayer => (false, true),
+        | AccountRoleV2::RentCredit => (false, true),
         AccountRoleV2::Market
+        | AccountRoleV2::Realm
         | AccountRoleV2::VenuePolicy
+        | AccountRoleV2::Custody
         | AccountRoleV2::CollateralMint
         | AccountRoleV2::TokenProgram
         | AccountRoleV2::SystemProgram
         | AccountRoleV2::RentSysvar
-        | AccountRoleV2::InstructionsSysvar
-        | AccountRoleV2::ClockSysvar => (false, false),
+        | AccountRoleV2::InstructionsSysvar => (false, false),
     }
 }
 
@@ -1224,28 +1588,42 @@ pub const MEASURED_LOOKUP_TABLES_V2: usize = 1;
 /// Transaction signatures in measured permissionless profile.
 pub const MEASURED_TRANSACTION_SIGNATURES_V2: usize = 1;
 /// Measured ordinary serialized v0 bytes.
-pub const MEASURED_ORDINARY_V0_BYTES_V2: usize = 268;
+pub const MEASURED_ORDINARY_V0_BYTES_V2: usize = 308;
 /// Measured buy-registration serialized v0 bytes with cross-instruction message.
-pub const MEASURED_BUY_REGISTRATION_V0_BYTES_V2: usize = 626;
+pub const MEASURED_BUY_REGISTRATION_V0_BYTES_V2: usize = 630;
 /// Measured sell-registration serialized v0 bytes.
-pub const MEASURED_SELL_REGISTRATION_V0_BYTES_V2: usize = 624;
+pub const MEASURED_SELL_REGISTRATION_V0_BYTES_V2: usize = 620;
+/// Measured Buy cancellation serialized v0 bytes.
+pub const MEASURED_CANCEL_BUY_V0_BYTES_V2: usize = 521;
+/// Measured Sell cancellation serialized v0 bytes.
+pub const MEASURED_CANCEL_SELL_V0_BYTES_V2: usize = 511;
+/// Measured Buy expiry serialized v0 bytes.
+pub const MEASURED_EXPIRE_BUY_V0_BYTES_V2: usize = 276;
+/// Measured Sell expiry serialized v0 bytes.
+pub const MEASURED_EXPIRE_SELL_V0_BYTES_V2: usize = 266;
+/// Measured registration-close serialized v0 bytes.
+pub const MEASURED_CLOSE_REGISTRATION_V0_BYTES_V2: usize = 256;
+/// Measured replay-root close serialized v0 bytes.
+pub const MEASURED_CLOSE_ROOT_V0_BYTES_V2: usize = 262;
+/// Measured O(1) cancel-through serialized v0 bytes.
+pub const MEASURED_CANCEL_THROUGH_V0_BYTES_V1: usize = 501;
 /// Measured immediate ordinary serialized v0 bytes.
-pub const MEASURED_INLINE_ORDINARY_V0_BYTES_V2: usize = 985;
+pub const MEASURED_INLINE_ORDINARY_V0_BYTES_V2: usize = 995;
 /// Measured immediate N=2 complementary serialized v0 bytes.
-pub const MEASURED_INLINE_COMPLEMENTARY_N2_V0_BYTES_V2: usize = 993;
+pub const MEASURED_INLINE_COMPLEMENTARY_N2_V0_BYTES_V2: usize = 1_007;
 /// Measured inline complementary reference bytes for N=2..16. Admission still
 /// refuses every entry after N=2 because it exceeds the 1,232-byte packet.
 pub const MEASURED_INLINE_COMPLEMENTARY_REFERENCE_V0_BYTES_V2: [usize; 15] = [
-    993, 1_350, 1_707, 2_064, 2_421, 2_778, 3_135, 3_492, 3_849, 4_206, 4_563, 4_920, 5_277, 5_634,
-    5_991,
+    1_007, 1_364, 1_721, 2_078, 2_435, 2_792, 3_149, 3_506, 3_863, 4_220, 4_577, 4_934, 5_291,
+    5_648, 6_005,
 ];
 /// Measured split serialized v0 bytes for N=2..16.
 pub const MEASURED_SPLIT_V0_BYTES_V2: [usize; 15] = [
-    278, 297, 316, 335, 354, 373, 392, 411, 430, 449, 469, 488, 507, 526, 545,
+    322, 343, 364, 385, 406, 427, 448, 469, 490, 511, 533, 554, 575, 596, 617,
 ];
 /// Measured merge serialized v0 bytes for N=2..16.
 pub const MEASURED_MERGE_V0_BYTES_V2: [usize; 15] = [
-    274, 291, 308, 325, 342, 359, 376, 393, 410, 427, 445, 462, 479, 496, 513,
+    318, 337, 356, 375, 394, 413, 432, 451, 470, 489, 509, 528, 547, 566, 585,
 ];
 
 /// One pinned measured transaction shape.
@@ -1265,13 +1643,21 @@ pub struct MeasuredEnvelopeV2 {
     pub serialized_transaction_bytes: usize,
 }
 
-/// Return exact measured persisted settlement profile.
-pub fn measured_settlement_envelope_v2(
-    action: AdapterActionV2,
-    participants: usize,
-) -> Result<MeasuredEnvelopeV2> {
-    let accounts = account_count_v2(action, participants)?;
-    let data = match action {
+/// Return the exact Direct instruction-data width for one routed action.
+pub fn instruction_data_bytes_v2(action: AdapterActionV2, participants: usize) -> Result<usize> {
+    account_count_v2(action, participants)?;
+    let bytes = match action {
+        AdapterActionV2::RegisterBuy | AdapterActionV2::RegisterSell => {
+            REGISTER_INSTRUCTION_BYTES_V2
+        }
+        AdapterActionV2::CancelBuy | AdapterActionV2::CancelSell => CANCEL_INSTRUCTION_BYTES_V2,
+        AdapterActionV2::CancelThrough => CANCEL_THROUGH_INSTRUCTION_BYTES_V1,
+        AdapterActionV2::ExpireBuy
+        | AdapterActionV2::ExpireSell
+        | AdapterActionV2::CloseReplayRegistration
+        | AdapterActionV2::CloseReplayRoot
+        | AdapterActionV2::CloseInvalidatedBuy
+        | AdapterActionV2::CloseInvalidatedSell => HEADER_ONLY_INSTRUCTION_BYTES_V2,
         AdapterActionV2::Ordinary => ORDINARY_INSTRUCTION_BYTES_V2,
         AdapterActionV2::Split | AdapterActionV2::Merge => {
             complementary_instruction_bytes_v2(participants)?
@@ -1280,9 +1666,29 @@ pub fn measured_settlement_envelope_v2(
         AdapterActionV2::InlineSplit | AdapterActionV2::InlineMerge => {
             inline_complementary_instruction_bytes_v2(participants)?
         }
-        _ => return Err(Error::UnknownAdapterAction),
     };
+    Ok(bytes)
+}
+
+/// Return the exact pinned one-ALT v0 envelope for any Direct action.
+pub fn measured_action_envelope_v2(
+    action: AdapterActionV2,
+    participants: usize,
+) -> Result<MeasuredEnvelopeV2> {
+    let accounts = account_count_v2(action, participants)?;
+    let data = instruction_data_bytes_v2(action, participants)?;
     let measured = match action {
+        AdapterActionV2::RegisterBuy => MEASURED_BUY_REGISTRATION_V0_BYTES_V2,
+        AdapterActionV2::RegisterSell => MEASURED_SELL_REGISTRATION_V0_BYTES_V2,
+        AdapterActionV2::CancelBuy => MEASURED_CANCEL_BUY_V0_BYTES_V2,
+        AdapterActionV2::CancelSell => MEASURED_CANCEL_SELL_V0_BYTES_V2,
+        AdapterActionV2::ExpireBuy => MEASURED_EXPIRE_BUY_V0_BYTES_V2,
+        AdapterActionV2::ExpireSell => MEASURED_EXPIRE_SELL_V0_BYTES_V2,
+        AdapterActionV2::CloseReplayRegistration => MEASURED_CLOSE_REGISTRATION_V0_BYTES_V2,
+        AdapterActionV2::CloseReplayRoot => MEASURED_CLOSE_ROOT_V0_BYTES_V2,
+        AdapterActionV2::CancelThrough => MEASURED_CANCEL_THROUGH_V0_BYTES_V1,
+        AdapterActionV2::CloseInvalidatedBuy => MEASURED_EXPIRE_BUY_V0_BYTES_V2,
+        AdapterActionV2::CloseInvalidatedSell => MEASURED_EXPIRE_SELL_V0_BYTES_V2,
         AdapterActionV2::Ordinary => MEASURED_ORDINARY_V0_BYTES_V2,
         AdapterActionV2::Split => measured_at(&MEASURED_SPLIT_V0_BYTES_V2, participants)?,
         AdapterActionV2::Merge => measured_at(&MEASURED_MERGE_V0_BYTES_V2, participants)?,
@@ -1290,7 +1696,25 @@ pub fn measured_settlement_envelope_v2(
         AdapterActionV2::InlineSplit | AdapterActionV2::InlineMerge => {
             MEASURED_INLINE_COMPLEMENTARY_N2_V0_BYTES_V2
         }
-        _ => return Err(Error::UnknownAdapterAction),
+    };
+    let extra_locks = match action {
+        AdapterActionV2::RegisterBuy
+        | AdapterActionV2::RegisterSell
+        | AdapterActionV2::InlineOrdinary
+        | AdapterActionV2::InlineSplit
+        | AdapterActionV2::InlineMerge => 2,
+        AdapterActionV2::CancelBuy
+        | AdapterActionV2::CancelSell
+        | AdapterActionV2::CancelThrough => 3,
+        AdapterActionV2::ExpireBuy
+        | AdapterActionV2::ExpireSell
+        | AdapterActionV2::Ordinary
+        | AdapterActionV2::Split
+        | AdapterActionV2::Merge
+        | AdapterActionV2::CloseReplayRegistration
+        | AdapterActionV2::CloseReplayRoot
+        | AdapterActionV2::CloseInvalidatedBuy
+        | AdapterActionV2::CloseInvalidatedSell => 2,
     };
     Ok(MeasuredEnvelopeV2 {
         action,
@@ -1298,21 +1722,29 @@ pub fn measured_settlement_envelope_v2(
         instruction_accounts: accounts,
         instruction_data_bytes: data,
         total_account_locks: accounts
-            .checked_add(
-                if matches!(
-                    action,
-                    AdapterActionV2::InlineOrdinary
-                        | AdapterActionV2::InlineSplit
-                        | AdapterActionV2::InlineMerge
-                ) {
-                    2
-                } else {
-                    1
-                },
-            )
+            .checked_add(extra_locks)
             .ok_or(Error::ArithmeticOverflow)?,
         serialized_transaction_bytes: measured,
     })
+}
+
+/// Return exact measured persisted/immediate settlement profile.
+pub fn measured_settlement_envelope_v2(
+    action: AdapterActionV2,
+    participants: usize,
+) -> Result<MeasuredEnvelopeV2> {
+    if !matches!(
+        action,
+        AdapterActionV2::Ordinary
+            | AdapterActionV2::Split
+            | AdapterActionV2::Merge
+            | AdapterActionV2::InlineOrdinary
+            | AdapterActionV2::InlineSplit
+            | AdapterActionV2::InlineMerge
+    ) {
+        return Err(Error::UnknownAdapterAction);
+    }
+    measured_action_envelope_v2(action, participants)
 }
 
 fn measured_at(table: &[usize; 15], participants: usize) -> Result<usize> {

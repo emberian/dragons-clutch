@@ -95,6 +95,37 @@ fn policy(bps: u16) -> Result<VenueFeePolicyV2> {
     VenueFeePolicyV2::new(key(7), 3, key(8), key(99), bps)
 }
 
+fn buy_reserve(value: DirectIntentV2) -> u64 {
+    let gross = u64::try_from(
+        u128::from(value.max_fill()) * u128::from(value.limit_price()) / u128::from(PRICE_SCALE),
+    )
+    .unwrap_or(0);
+    gross
+        + u64::try_from(
+            u128::from(gross) * u128::from(value.fee_basis_points())
+                / u128::from(FEE_BASIS_POINTS_DENOMINATOR),
+        )
+        .unwrap_or(0)
+}
+
+fn buy_authority(value: DirectIntentV2, exact_debit: u64) -> adapter::BuyDebitAuthorityV2 {
+    adapter::BuyDebitAuthorityV2 {
+        token_account: *value.collateral_account(),
+        mint: key(6),
+        owner: *value.maker(),
+        delegate: inline_accounts(value).replay_root,
+        delegated_amount: exact_debit,
+    }
+}
+
+fn escrow_authority(value: DirectIntentV2) -> adapter::EscrowAuthorityV2 {
+    adapter::EscrowAuthorityV2 {
+        token_account: accounts(value).escrow,
+        mint: key(6),
+        authority: accounts(value).record,
+    }
+}
+
 fn authorization(
     signer: [u8; 32],
     message: &[u8],
@@ -155,15 +186,28 @@ fn register(
     balances: [u64; 2],
 ) -> Result<RegistrationV2<2>> {
     let instruction = encode_register_instruction_v2(value)?;
-    register_intent_v2(
-        replay_root,
-        value,
-        authorization(*value.maker(), &value.signed_preimage(), &instruction, 16)?,
-        accounts(value),
-        9,
-        key(230 + value.maker()[0]),
-        position(value.maker()[0], balances)?,
-    )
+    let buy_debit = if value.side() == Side::Buy {
+        Some(buy_authority(value, buy_reserve(value)))
+    } else {
+        None
+    };
+    register_intent_v2(RegistrationInputV2 {
+        replay_root: ReplayRootStateV2::existing(replay_root),
+        intent: value,
+        authorization: authorization(*value.maker(), &value.signed_preimage(), &instruction, 16)?,
+        phase: adapter::MarketPhaseV2::Open,
+        slot: 12,
+        accounts: accounts(value),
+        system_payer: key(230 + value.maker()[0]),
+        collateral_mint: if value.side() == Side::Buy {
+            Some(key(6))
+        } else {
+            None
+        },
+        buy_debit_authority: buy_debit,
+        record_bump: 9,
+        position: position(value.maker()[0], balances)?,
+    })
 }
 
 #[test]
@@ -395,6 +439,7 @@ fn ordinary_partial_fills_use_only_persisted_custody_and_close_cleanly() -> Resu
     assert_eq!(buyer.record.reserved_collateral(), 6);
 
     let first = settle_ordinary_v2(OrdinaryMatchV2 {
+        phase: adapter::MarketPhaseV2::Open,
         slot: 12,
         seller_replay_root: seller.replay_root,
         buyer_replay_root: buyer.replay_root,
@@ -404,6 +449,8 @@ fn ordinary_partial_fills_use_only_persisted_custody_and_close_cleanly() -> Resu
         buyer_accounts: accounts(bid),
         seller_position: seller.position,
         buyer_position: buyer.position,
+        collateral_mint: key(6),
+        buyer_escrow_authority: escrow_authority(bid),
         fill: 5,
         execution_price: 600_000,
         fee_policy: policy(0)?,
@@ -428,6 +475,7 @@ fn ordinary_partial_fills_use_only_persisted_custody_and_close_cleanly() -> Resu
         seller_position: first.seller_position,
         buyer_position: first.buyer_position,
         ..OrdinaryMatchV2 {
+            phase: adapter::MarketPhaseV2::Open,
             slot: 12,
             seller_replay_root: seller.replay_root,
             buyer_replay_root: buyer.replay_root,
@@ -437,6 +485,8 @@ fn ordinary_partial_fills_use_only_persisted_custody_and_close_cleanly() -> Resu
             buyer_accounts: accounts(bid),
             seller_position: seller.position,
             buyer_position: buyer.position,
+            collateral_mint: key(6),
+            buyer_escrow_authority: escrow_authority(bid),
             fill: 5,
             execution_price: 600_000,
             fee_policy: policy(0)?,
@@ -458,47 +508,59 @@ fn cancellation_expiry_refunds_exact_payers_and_double_close_refuses() -> Result
     let cancel_message = DirectCancelV2::for_record(registration.record).signed_preimage();
     let cancel_instruction =
         encode_cancel_instruction_v2(Side::Sell, DirectCancelV2::for_record(registration.record));
-    let cancelled = cancel_intent_v2(
-        registration.replay_root,
-        registration.record,
-        authorization(key(1), &cancel_message, &cancel_instruction, 16)?,
-        accounts(sell),
-        registration.position,
-    )?;
+    let cancelled = cancel_intent_v2(CancellationInputV2 {
+        replay_root: registration.replay_root,
+        record: registration.record,
+        authorization: authorization(key(1), &cancel_message, &cancel_instruction, 16)?,
+        phase: adapter::MarketPhaseV2::Open,
+        accounts: accounts(sell),
+        collateral_mint: None,
+        escrow_authority: None,
+        position: registration.position,
+    })?;
     assert_eq!(cancelled.position.balances(), &[10, 0]);
     assert_eq!(cancelled.close.claim_refund, 10);
     assert_eq!(cancelled.close.rent_refund_payer, key(231));
     assert_eq!(cancelled.replay_root.live_intent_count(), 0);
     assert_eq!(
-        cancel_intent_v2(
-            cancelled.replay_root,
-            registration.record,
-            authorization(key(1), &cancel_message, &cancel_instruction, 16)?,
-            accounts(sell),
-            registration.position,
-        ),
+        cancel_intent_v2(CancellationInputV2 {
+            replay_root: cancelled.replay_root,
+            record: registration.record,
+            authorization: authorization(key(1), &cancel_message, &cancel_instruction, 16)?,
+            phase: adapter::MarketPhaseV2::Resolved,
+            accounts: accounts(sell),
+            collateral_mint: None,
+            escrow_authority: None,
+            position: registration.position,
+        }),
         Err(Error::LiveCountInvariant)
     );
 
     let buy = intent(2, Side::Buy, 0, 0, PRICE_SCALE, 1, 0)?;
     let buy_registration = register(buy, root(2)?, [0, 0])?;
     assert_eq!(
-        expire_intent_v2(
-            buy_registration.replay_root,
-            buy_registration.record,
-            20,
-            accounts(buy),
-            buy_registration.position,
-        ),
+        expire_intent_v2(ExpirationInputV2 {
+            replay_root: buy_registration.replay_root,
+            record: buy_registration.record,
+            phase: adapter::MarketPhaseV2::Open,
+            slot: 20,
+            accounts: accounts(buy),
+            collateral_mint: Some(key(6)),
+            escrow_authority: Some(escrow_authority(buy)),
+            position: buy_registration.position,
+        }),
         Err(Error::IntentNotExpired)
     );
-    let expired = expire_intent_v2(
-        buy_registration.replay_root,
-        buy_registration.record,
-        21,
-        accounts(buy),
-        buy_registration.position,
-    )?;
+    let expired = expire_intent_v2(ExpirationInputV2 {
+        replay_root: buy_registration.replay_root,
+        record: buy_registration.record,
+        phase: adapter::MarketPhaseV2::Resolved,
+        slot: 21,
+        accounts: accounts(buy),
+        collateral_mint: Some(key(6)),
+        escrow_authority: Some(escrow_authority(buy)),
+        position: buy_registration.position,
+    })?;
     assert_eq!(expired.close.collateral_refund, 1);
     assert_eq!(expired.close.rent_refund_payer, key(232));
     Ok(())
@@ -518,10 +580,11 @@ fn wrong_root_and_market_retirement_lifecycle_refuse() -> Result<()> {
     );
     let registration = register(value, root(1)?, [0, 0])?;
     assert_eq!(
-        prepare_replay_root_close_v2(registration.replay_root),
+        prepare_replay_root_close_v2(registration.replay_root, adapter::MarketPhaseV2::Retiring,),
         Err(Error::RegistrationStillOpen)
     );
-    let closed_registration = close_replay_registration_v2(registration.replay_root)?;
+    let closed_registration =
+        close_replay_registration_v2(registration.replay_root, adapter::MarketPhaseV2::Retiring)?;
     assert_eq!(
         register(
             intent(1, Side::Buy, 0, 1, PRICE_SCALE, 1, 0)?,
@@ -531,19 +594,24 @@ fn wrong_root_and_market_retirement_lifecycle_refuse() -> Result<()> {
         Err(Error::RegistrationClosed)
     );
     assert_eq!(
-        prepare_replay_root_close_v2(closed_registration),
+        prepare_replay_root_close_v2(closed_registration, adapter::MarketPhaseV2::Retiring),
         Err(Error::LiveIntentsRemain)
     );
-    let expired = expire_intent_v2(
-        closed_registration,
-        registration.record,
-        21,
-        accounts(value),
-        registration.position,
-    )?;
-    let root_close = prepare_replay_root_close_v2(expired.replay_root)?;
+    let expired = expire_intent_v2(ExpirationInputV2 {
+        replay_root: closed_registration,
+        record: registration.record,
+        phase: adapter::MarketPhaseV2::Retiring,
+        slot: 21,
+        accounts: accounts(value),
+        collateral_mint: Some(key(6)),
+        escrow_authority: Some(escrow_authority(value)),
+        position: registration.position,
+    })?;
+    let root_close =
+        prepare_replay_root_close_v2(expired.replay_root, adapter::MarketPhaseV2::Retiring)?;
     assert_eq!(root_close.rent_refund_payer, key(21));
     assert_eq!(root_close.final_next_nonce, 1);
+    assert_eq!(root_close.final_minimum_live_nonce, 0);
     Ok(())
 }
 
@@ -551,6 +619,18 @@ fn wrong_root_and_market_retirement_lifecycle_refuse() -> Result<()> {
 fn hostile_root_counts_and_nonce_overflow_refuse() -> Result<()> {
     let mut bytes = [0; MAKER_REPLAY_ROOT_BYTES_V2];
     root(1)?.encode(&mut bytes)?;
+    bytes
+        .get_mut(104..112)
+        .ok_or(Error::InvalidLength)?
+        .copy_from_slice(&1_u64.to_le_bytes());
+    assert_eq!(
+        MakerReplayRootV2::decode(&bytes),
+        Err(Error::InvalidCancelThrough)
+    );
+    bytes
+        .get_mut(104..112)
+        .ok_or(Error::InvalidLength)?
+        .copy_from_slice(&0_u64.to_le_bytes());
     bytes
         .get_mut(96..104)
         .ok_or(Error::InvalidLength)?
@@ -592,11 +672,14 @@ fn complementary_paths_are_custodied_conservative_and_atomic_on_refusal() -> Res
     let first = register(buy0, root(1)?, [0, 0])?;
     let second = register(buy1, root(2)?, [0, 0])?;
     let split_input = ComplementaryBuyMatchV2 {
+        phase: adapter::MarketPhaseV2::Open,
         slot: 12,
         buyer_replay_roots: [first.replay_root, second.replay_root],
         buyer_records: [first.record, second.record],
         buyer_accounts: [accounts(buy0), accounts(buy1)],
         buyer_positions: [first.position, second.position],
+        collateral_mint: key(6),
+        escrow_authorities: [escrow_authority(buy0), escrow_authority(buy1)],
         fill: 10,
         execution_prices: [500_000, 500_000],
         fee_policy: policy(0)?,
@@ -620,6 +703,7 @@ fn complementary_paths_are_custodied_conservative_and_atomic_on_refusal() -> Res
     let third = register(sell0, root(3)?, [10, 0])?;
     let fourth = register(sell1, root(4)?, [0, 10])?;
     let merge = settle_merge_v2(ComplementarySellMatchV2 {
+        phase: adapter::MarketPhaseV2::Open,
         slot: 12,
         seller_replay_roots: [third.replay_root, fourth.replay_root],
         seller_records: [third.record, fourth.record],
@@ -683,9 +767,11 @@ fn inline_fok_ioc_consumes_same_nonce_without_live_rent_and_cross_mode_replay_re
         ],
     )?;
     let settled = settle_inline_ordinary_v2(InlineOrdinaryMatchV2 {
+        phase: adapter::MarketPhaseV2::Open,
         slot: 12,
-        seller_replay_root: root(1)?,
-        buyer_replay_root: root(2)?,
+        seller_replay_root: ReplayRootStateV2::absent(1),
+        buyer_replay_root: ReplayRootStateV2::absent(2),
+        root_creation_payer: key(200),
         seller_intent: ask,
         buyer_intent: bid,
         seller_authorization: authorizations[0],
@@ -694,6 +780,8 @@ fn inline_fok_ioc_consumes_same_nonce_without_live_rent_and_cross_mode_replay_re
         buyer_accounts: inline_accounts(bid),
         seller_position: position(1, [5, 0])?,
         buyer_position: position(2, [0, 0])?,
+        collateral_mint: key(6),
+        buyer_debit_authority: buy_authority(bid, 3),
         fill: 5,
         execution_price: 600_000,
         fee_policy: policy(0)?,
@@ -703,6 +791,8 @@ fn inline_fok_ioc_consumes_same_nonce_without_live_rent_and_cross_mode_replay_re
     assert_eq!(settled.buyer_position.balances(), &[5, 0]);
     assert_eq!(settled.seller_replay_root.next_registration_nonce(), 1);
     assert_eq!(settled.seller_replay_root.live_intent_count(), 0);
+    assert_eq!(settled.seller_replay_root.rent_payer(), &key(200));
+    assert_eq!(settled.buyer_replay_root.rent_payer(), &key(200));
 
     let resting_same_nonce = intent(1, Side::Sell, 0, 0, 400_000, 5, 0)?;
     assert_eq!(
@@ -713,11 +803,13 @@ fn inline_fok_ioc_consumes_same_nonce_without_live_rent_and_cross_mode_replay_re
     let registered = register(resting_same_nonce, root(1)?, [5, 0])?;
     assert_eq!(
         settle_inline_ordinary_v2(InlineOrdinaryMatchV2 {
-            seller_replay_root: registered.replay_root,
+            seller_replay_root: ReplayRootStateV2::existing(registered.replay_root),
             ..InlineOrdinaryMatchV2 {
+                phase: adapter::MarketPhaseV2::Open,
                 slot: 12,
-                seller_replay_root: root(1)?,
-                buyer_replay_root: root(2)?,
+                seller_replay_root: ReplayRootStateV2::existing(root(1)?),
+                buyer_replay_root: ReplayRootStateV2::existing(root(2)?),
+                root_creation_payer: key(200),
                 seller_intent: ask,
                 buyer_intent: bid,
                 seller_authorization: authorizations[0],
@@ -726,6 +818,8 @@ fn inline_fok_ioc_consumes_same_nonce_without_live_rent_and_cross_mode_replay_re
                 buyer_accounts: inline_accounts(bid),
                 seller_position: position(1, [5, 0])?,
                 buyer_position: position(2, [0, 0])?,
+                collateral_mint: key(6),
+                buyer_debit_authority: buy_authority(bid, 3),
                 fill: 5,
                 execution_price: 600_000,
                 fee_policy: policy(0)?,
@@ -785,13 +879,17 @@ fn inline_complementary_n2_fits_and_n3_is_physically_refused() -> Result<()> {
         ],
     )?;
     let settled = settle_inline_complementary_v2(InlineComplementaryMatchV2 {
+        phase: adapter::MarketPhaseV2::Open,
         slot: 12,
         side: Side::Buy,
-        replay_roots: [root(1)?, root(2)?],
+        replay_roots: [ReplayRootStateV2::absent(1), ReplayRootStateV2::absent(2)],
+        root_creation_payer: key(200),
         intents: [a, b],
         authorizations,
         accounts: [inline_accounts(a), inline_accounts(b)],
         positions: [position(1, [0, 0])?, position(2, [0, 0])?],
+        collateral_mint: key(6),
+        buy_debit_authorities: [Some(buy_authority(a, 5)), Some(buy_authority(b, 5))],
         fill: 10,
         execution_prices: [500_000, 500_000],
         fee_policy: policy(0)?,
@@ -808,9 +906,9 @@ fn inline_complementary_n2_fits_and_n3_is_physically_refused() -> Result<()> {
         measured_settlement_envelope_v2(AdapterActionV2::InlineSplit, 3),
         Err(Error::InvalidInlineWidth)
     );
-    assert_eq!(measured_inline_complementary_reference_v2(2)?, 993);
-    assert_eq!(measured_inline_complementary_reference_v2(3)?, 1_350);
-    assert_eq!(measured_inline_complementary_reference_v2(16)?, 5_991);
+    assert_eq!(measured_inline_complementary_reference_v2(2)?, 1_007);
+    assert_eq!(measured_inline_complementary_reference_v2(3)?, 1_364);
+    assert_eq!(measured_inline_complementary_reference_v2(16)?, 6_005);
     Ok(())
 }
 
@@ -824,6 +922,7 @@ fn aliases_mixed_modes_and_packet_overflow_refuse() -> Result<()> {
     buyer_accounts.record = accounts(ask).record;
     assert_eq!(
         settle_ordinary_v2(OrdinaryMatchV2 {
+            phase: adapter::MarketPhaseV2::Open,
             slot: 12,
             seller_replay_root: seller.replay_root,
             buyer_replay_root: buyer.replay_root,
@@ -833,6 +932,11 @@ fn aliases_mixed_modes_and_packet_overflow_refuse() -> Result<()> {
             buyer_accounts,
             seller_position: seller.position,
             buyer_position: buyer.position,
+            collateral_mint: key(6),
+            buyer_escrow_authority: adapter::EscrowAuthorityV2 {
+                authority: buyer_accounts.record,
+                ..escrow_authority(bid)
+            },
             fill: 1,
             execution_price: PRICE_SCALE,
             fee_policy: policy(0)?,
@@ -854,9 +958,9 @@ fn aliases_mixed_modes_and_packet_overflow_refuse() -> Result<()> {
     );
 
     let split16 = measured_settlement_envelope_v2(AdapterActionV2::Split, 16)?;
-    assert_eq!(split16.instruction_accounts, 86);
-    assert_eq!(split16.total_account_locks, 87);
-    assert_eq!(split16.serialized_transaction_bytes, 545);
+    assert_eq!(split16.instruction_accounts, 106);
+    assert_eq!(split16.total_account_locks, 108);
+    assert_eq!(split16.serialized_transaction_bytes, 617);
     assert!(split16.serialized_transaction_bytes < SOLANA_PACKET_DATA_SIZE_3_0);
     let packet = PacketAdmissionV2 {
         serialized_transaction_bytes: split16.serialized_transaction_bytes,
@@ -885,11 +989,349 @@ fn aliases_mixed_modes_and_packet_overflow_refuse() -> Result<()> {
 #[test]
 fn rent_principal_and_donation_are_not_conflated() -> Result<()> {
     let transition = terminal_rent_transition_v2(12, 9)?;
-    assert_eq!(transition.payer_refund, 9);
-    assert_eq!(transition.neutral_donation, 3);
+    assert_eq!(transition.rent_principal, 9);
+    assert_eq!(transition.unclassified_donation, 3);
+    assert_eq!(transition.rent_credit_total, 12);
     assert_eq!(
         terminal_rent_transition_v2(8, 9),
         Err(Error::InvalidRentTransition)
     );
+    Ok(())
+}
+
+#[test]
+fn hostile_action_routing_phase_and_slot_matrix_refuse() -> Result<()> {
+    let close_registration = adapter::encode_close_replay_registration_instruction_v2();
+    assert_eq!(
+        adapter::decode_adapter_header_v2(&close_registration)?,
+        adapter::AdapterHeaderV2 {
+            action: AdapterActionV2::CloseReplayRegistration,
+            participants: 1,
+        }
+    );
+    adapter::decode_close_replay_registration_instruction_v2(&close_registration)?;
+    assert_eq!(
+        adapter::decode_close_replay_root_instruction_v2(&close_registration),
+        Err(Error::UnknownAdapterAction)
+    );
+    let mut reserved = close_registration;
+    reserved[12] = 1;
+    assert_eq!(
+        adapter::decode_adapter_header_v2(&reserved),
+        Err(Error::NonCanonicalReservedBytes)
+    );
+
+    adapter::require_market_phase_v2(AdapterActionV2::RegisterBuy, adapter::MarketPhaseV2::Open)?;
+    assert_eq!(
+        adapter::require_market_phase_v2(
+            AdapterActionV2::RegisterBuy,
+            adapter::MarketPhaseV2::Resolved,
+        ),
+        Err(Error::MarketPhaseRefused)
+    );
+    for phase in [
+        adapter::MarketPhaseV2::Open,
+        adapter::MarketPhaseV2::Resolved,
+        adapter::MarketPhaseV2::Retiring,
+    ] {
+        adapter::require_market_phase_v2(AdapterActionV2::ExpireBuy, phase)?;
+    }
+    assert_eq!(
+        adapter::require_market_phase_v2(
+            AdapterActionV2::CloseReplayRoot,
+            adapter::MarketPhaseV2::Retired,
+        ),
+        Err(Error::MarketPhaseRefused)
+    );
+
+    let value = intent(1, Side::Buy, 0, 0, PRICE_SCALE, 1, 0)?;
+    let instruction = encode_register_instruction_v2(value)?;
+    assert_eq!(
+        register_intent_v2(RegistrationInputV2 {
+            replay_root: ReplayRootStateV2::absent(1),
+            intent: value,
+            authorization: authorization(
+                *value.maker(),
+                &value.signed_preimage(),
+                &instruction,
+                16,
+            )?,
+            phase: adapter::MarketPhaseV2::Open,
+            slot: 9,
+            accounts: accounts(value),
+            system_payer: key(200),
+            collateral_mint: Some(key(6)),
+            buy_debit_authority: Some(buy_authority(value, 1)),
+            record_bump: 9,
+            position: position(1, [0, 0])?,
+        }),
+        Err(Error::IntentExpired)
+    );
+    Ok(())
+}
+
+#[test]
+fn token_delegate_and_live_record_escrow_authority_are_exact() -> Result<()> {
+    let value = intent(1, Side::Buy, 0, 0, PRICE_SCALE, 2, 0)?;
+    let authority = buy_authority(value, 2);
+    adapter::validate_buy_debit_authority_v2(
+        authority,
+        value,
+        accounts(value).replay_root,
+        key(6),
+        2,
+    )?;
+    assert_eq!(
+        adapter::validate_buy_debit_authority_v2(
+            adapter::BuyDebitAuthorityV2 {
+                delegate: key(222),
+                ..authority
+            },
+            value,
+            accounts(value).replay_root,
+            key(6),
+            2,
+        ),
+        Err(Error::InvalidBuyDebitAuthority)
+    );
+    assert_eq!(
+        adapter::validate_buy_debit_authority_v2(
+            adapter::BuyDebitAuthorityV2 {
+                delegated_amount: 3,
+                ..authority
+            },
+            value,
+            accounts(value).replay_root,
+            key(6),
+            2,
+        ),
+        Err(Error::InvalidBuyDebitAuthority)
+    );
+    let registered = register(value, root(1)?, [0, 0])?;
+    let escrow = escrow_authority(value);
+    adapter::validate_registered_escrow_authority_v2(
+        escrow,
+        registered.record,
+        accounts(value).record,
+        accounts(value).escrow,
+        key(6),
+    )?;
+    assert_eq!(
+        adapter::validate_registered_escrow_authority_v2(
+            adapter::EscrowAuthorityV2 {
+                authority: key(222),
+                ..escrow
+            },
+            registered.record,
+            accounts(value).record,
+            accounts(value).escrow,
+            key(6),
+        ),
+        Err(Error::InvalidEscrowAuthority)
+    );
+    Ok(())
+}
+
+#[test]
+fn corrected_account_frames_are_action_specific_and_rent_credit_alias_safe() -> Result<()> {
+    assert_eq!(
+        adapter::account_count_v2(AdapterActionV2::RegisterBuy, 1)?,
+        15
+    );
+    assert_eq!(
+        adapter::account_count_v2(AdapterActionV2::RegisterSell, 1)?,
+        10
+    );
+    assert_eq!(adapter::account_count_v2(AdapterActionV2::Ordinary, 2)?, 19);
+    assert_eq!(adapter::account_count_v2(AdapterActionV2::Split, 16)?, 106);
+    assert_eq!(adapter::account_count_v2(AdapterActionV2::Merge, 16)?, 90);
+    assert_eq!(
+        adapter::account_count_v2(AdapterActionV2::InlineOrdinary, 2)?,
+        17
+    );
+    assert_eq!(
+        adapter::account_count_v2(AdapterActionV2::CancelThrough, 1)?,
+        3
+    );
+    assert_eq!(
+        adapter::account_count_v2(AdapterActionV2::CloseInvalidatedBuy, 1)?,
+        12
+    );
+    assert_eq!(
+        adapter::account_role_v2(AdapterActionV2::InlineOrdinary, 2, 10)?,
+        adapter::AccountRoleV2::InstructionsSysvar
+    );
+    assert_eq!(
+        adapter::account_role_v2(AdapterActionV2::InlineSplit, 2, 6)?,
+        adapter::AccountRoleV2::Custody
+    );
+
+    let mut split = [adapter::AdapterAccountMetaV2 {
+        key: [0; 32],
+        is_signer: false,
+        is_writable: false,
+    }; 22];
+    for (index, meta) in split.iter_mut().enumerate() {
+        meta.key = key(u8::try_from(index + 1).map_err(|_| Error::ArithmeticOverflow)?);
+        meta.is_writable = matches!(index, 0 | 3 | 5 | 10..=21);
+    }
+    split[8].key = [0; 32];
+    adapter::validate_account_frame_v2(AdapterActionV2::Split, 2, &split)?;
+    split[21].key = split[15].key;
+    adapter::validate_account_frame_v2(AdapterActionV2::Split, 2, &split)?;
+    split[0].is_writable = false;
+    assert_eq!(
+        adapter::validate_account_frame_v2(AdapterActionV2::Split, 2, &split),
+        Err(Error::InvalidAccountFrame)
+    );
+
+    let inline = adapter::measured_action_envelope_v2(AdapterActionV2::InlineOrdinary, 2)?;
+    assert_eq!(inline.instruction_accounts, 17);
+    assert_eq!(inline.total_account_locks, 19);
+    assert_eq!(inline.serialized_transaction_bytes, 995);
+    let split16 = adapter::measured_action_envelope_v2(AdapterActionV2::Split, 16)?;
+    assert_eq!(split16.total_account_locks, 108);
+    assert_eq!(split16.serialized_transaction_bytes, 617);
+    let cancel_through = adapter::measured_action_envelope_v2(AdapterActionV2::CancelThrough, 1)?;
+    assert_eq!(cancel_through.serialized_transaction_bytes, 501);
+    assert_eq!(cancel_through.total_account_locks, 6);
+    Ok(())
+}
+
+#[test]
+fn maker_cancel_through_is_o1_and_permissionless_unwind_preserves_assets() -> Result<()> {
+    let sell0 = intent(1, Side::Sell, 0, 0, PRICE_SCALE, 5, 0)?;
+    let first = register(sell0, root(1)?, [5, 0])?;
+    let sell1 = intent(1, Side::Sell, 1, 1, PRICE_SCALE, 5, 0)?;
+    let second = register(sell1, first.replay_root, [0, 5])?;
+    assert_eq!(second.replay_root.live_intent_count(), 2);
+
+    assert_eq!(
+        close_invalidated_intent_v1(InvalidatedCloseInputV1 {
+            replay_root: second.replay_root,
+            record: first.record,
+            phase: adapter::MarketPhaseV2::Open,
+            accounts: accounts(sell0),
+            collateral_mint: None,
+            escrow_authority: None,
+            position: first.position,
+        }),
+        Err(Error::IntentNotInvalidated)
+    );
+
+    let message = CancelThroughV1::new(second.replay_root, 2)?;
+    let instruction = adapter::encode_cancel_through_instruction_v1(message);
+    assert_eq!(
+        adapter::decode_cancel_through_instruction_v1(&instruction)?,
+        message
+    );
+    let signed = message.signed_preimage();
+    assert_eq!(
+        cancel_through_v1(
+            second.replay_root,
+            message,
+            authorization(key(2), &signed, &instruction, 16)?,
+            adapter::MarketPhaseV2::Open,
+        ),
+        Err(Error::SignatureSignerMismatch)
+    );
+    let invalidated = cancel_through_v1(
+        second.replay_root,
+        message,
+        authorization(key(1), &signed, &instruction, 16)?,
+        adapter::MarketPhaseV2::Open,
+    )?;
+    assert_eq!(invalidated.minimum_live_nonce(), 2);
+    assert_eq!(invalidated.live_intent_count(), 2);
+    assert_eq!(
+        cancel_through_v1(
+            invalidated,
+            message,
+            authorization(key(1), &signed, &instruction, 16)?,
+            adapter::MarketPhaseV2::Open,
+        ),
+        Err(Error::InvalidCancelThrough)
+    );
+    assert_eq!(
+        CancelThroughV1::new(invalidated, 3),
+        Err(Error::InvalidCancelThrough)
+    );
+
+    let bid = intent(2, Side::Buy, 0, 0, PRICE_SCALE, 5, 0)?;
+    let buyer = register(bid, root(2)?, [0, 0])?;
+    assert_eq!(
+        settle_ordinary_v2(OrdinaryMatchV2 {
+            phase: adapter::MarketPhaseV2::Open,
+            slot: 12,
+            seller_replay_root: invalidated,
+            buyer_replay_root: buyer.replay_root,
+            seller_record: first.record,
+            buyer_record: buyer.record,
+            seller_accounts: accounts(sell0),
+            buyer_accounts: accounts(bid),
+            seller_position: first.position,
+            buyer_position: buyer.position,
+            collateral_mint: key(6),
+            buyer_escrow_authority: escrow_authority(bid),
+            fill: 5,
+            execution_price: PRICE_SCALE,
+            fee_policy: policy(0)?,
+            fee_recipient_account: key(99),
+        }),
+        Err(Error::IntentInvalidated)
+    );
+
+    let closed0 = close_invalidated_intent_v1(InvalidatedCloseInputV1 {
+        replay_root: invalidated,
+        record: first.record,
+        phase: adapter::MarketPhaseV2::Resolved,
+        accounts: accounts(sell0),
+        collateral_mint: None,
+        escrow_authority: None,
+        position: first.position,
+    })?;
+    let close_sell_instruction = adapter::encode_close_invalidated_instruction_v1(Side::Sell);
+    adapter::decode_close_invalidated_instruction_v1(&close_sell_instruction, Side::Sell)?;
+    assert_eq!(
+        adapter::decode_close_invalidated_instruction_v1(&close_sell_instruction, Side::Buy),
+        Err(Error::UnknownAdapterAction)
+    );
+    assert_eq!(closed0.close.claim_refund, 5);
+    assert_eq!(closed0.position.balances(), &[5, 0]);
+    let closed1 = close_invalidated_intent_v1(InvalidatedCloseInputV1 {
+        replay_root: closed0.replay_root,
+        record: second.record,
+        phase: adapter::MarketPhaseV2::Retiring,
+        accounts: accounts(sell1),
+        collateral_mint: None,
+        escrow_authority: None,
+        position: second.position,
+    })?;
+    assert_eq!(closed1.close.claim_refund, 5);
+    assert_eq!(closed1.position.balances(), &[0, 5]);
+    assert_eq!(closed1.replay_root.live_intent_count(), 0);
+
+    let buy = intent(3, Side::Buy, 0, 0, PRICE_SCALE, 1, 0)?;
+    let registered_buy = register(buy, root(3)?, [0, 0])?;
+    let buy_message = CancelThroughV1::new(registered_buy.replay_root, 1)?;
+    let buy_instruction = adapter::encode_cancel_through_instruction_v1(buy_message);
+    let buy_signed = buy_message.signed_preimage();
+    let buy_root = cancel_through_v1(
+        registered_buy.replay_root,
+        buy_message,
+        authorization(key(3), &buy_signed, &buy_instruction, 16)?,
+        adapter::MarketPhaseV2::Resolved,
+    )?;
+    let closed_buy = close_invalidated_intent_v1(InvalidatedCloseInputV1 {
+        replay_root: buy_root,
+        record: registered_buy.record,
+        phase: adapter::MarketPhaseV2::Resolved,
+        accounts: accounts(buy),
+        collateral_mint: Some(key(6)),
+        escrow_authority: Some(escrow_authority(buy)),
+        position: registered_buy.position,
+    })?;
+    assert_eq!(closed_buy.close.collateral_refund, 1);
+    assert_eq!(closed_buy.close.rent_refund_payer, key(233));
     Ok(())
 }
