@@ -581,7 +581,7 @@ pub const DIRECT_MARKET_ROOT_ACCOUNT_BYTES: usize = 1_726;
 /// Current General-V4/Product-V3 Direct root account version.
 pub const DIRECT_MARKET_ROOT_ACCOUNT_VERSION_V3: u8 = 3;
 /// Exact current Direct root frame bytes.
-pub const DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3: usize = 2_502;
+pub const DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3: usize = 2_534;
 /// Current Direct exact-selection owner discriminator.
 pub const DIRECT_SELECTION_ACCOUNT_TAG: u8 = 0xb2;
 /// Current Direct exact-selection account version.

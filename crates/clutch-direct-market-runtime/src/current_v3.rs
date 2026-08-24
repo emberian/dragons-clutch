@@ -39,6 +39,9 @@ pub struct DirectCurrentProductAuthorityV3 {
     pub product_family_admission_receipt_id: [u8; 32],
     pub family_admission_sequence: u32,
     pub series_link_account: [u8; 32],
+    /// Exact Product-owned SeriesPlanV5 identity used to authenticate the
+    /// canonical `0xad/v3` PDA without trusting caller material.
+    pub series_plan_v5_id: [u8; 32],
     /// Exact immutable `SeriesMarketLinkBindingV3::id()`. This commits the
     /// entire SeriesPlanV5/ordinal/Market/Source/FundingV5 tuple without
     /// persisting a detachable copy of those Product-owned facts or a mutable
@@ -54,8 +57,7 @@ pub struct DirectCurrentProductAuthorityV3 {
     pub claim_mint_founding_plan_id: [u8; 32],
     pub claim_issuance_binding_id: [u8; 32],
     pub general_founding_capability_v3_id: [u8; 32],
-    /// LinkV3's exact Direct-obligation admission receipt.
-    pub direct_obligation_admission_receipt_id: [u8; 32],
+    pub product_preauthorization_id: [u8; 32],
     pub product_direct_global_liveness_account: [u8; 32],
     pub product_direct_global_liveness_binding_id: [u8; 32],
     pub product_direct_global_liveness_activation_id: [u8; 32],
@@ -95,6 +97,7 @@ impl DirectCurrentProductAuthorityV3 {
             &self.product_family_admission_receipt_id,
             &self.family_admission_sequence.to_le_bytes(),
             &self.series_link_account,
+            &self.series_plan_v5_id,
             &self.series_link_binding_v3_id,
             &self.series_ordinal.to_le_bytes(),
             &self.compiler_bundle_v7_id,
@@ -106,7 +109,7 @@ impl DirectCurrentProductAuthorityV3 {
             &self.claim_mint_founding_plan_id,
             &self.claim_issuance_binding_id,
             &self.general_founding_capability_v3_id,
-            &self.direct_obligation_admission_receipt_id,
+            &self.product_preauthorization_id,
             &self.product_direct_global_liveness_account,
             &self.product_direct_global_liveness_binding_id,
             &self.product_direct_global_liveness_activation_id,
@@ -117,7 +120,7 @@ impl DirectCurrentProductAuthorityV3 {
         Ok(id)
     }
 
-    pub(crate) fn ids(&self) -> [[u8; 32]; 22] {
+    pub(crate) fn ids(&self) -> [[u8; 32]; 23] {
         [
             self.product_root_account,
             self.product_market_binding_v3_id,
@@ -125,6 +128,7 @@ impl DirectCurrentProductAuthorityV3 {
             self.product_family_poststate_id,
             self.product_family_admission_receipt_id,
             self.series_link_account,
+            self.series_plan_v5_id,
             self.series_link_binding_v3_id,
             self.compiler_bundle_v7_id,
             self.funding_quote_v6_id,
@@ -135,7 +139,7 @@ impl DirectCurrentProductAuthorityV3 {
             self.claim_mint_founding_plan_id,
             self.claim_issuance_binding_id,
             self.general_founding_capability_v3_id,
-            self.direct_obligation_admission_receipt_id,
+            self.product_preauthorization_id,
             self.product_direct_global_liveness_account,
             self.product_direct_global_liveness_binding_id,
             self.product_direct_global_liveness_activation_id,
@@ -457,8 +461,7 @@ impl DirectMarketBindingV3 {
             product_root_account: self.product.product_root_account,
             product_market_binding_id: self.product.product_market_binding_v3_id,
             product_family_prestate_id: self.product.product_family_prestate_id,
-            general_product_preauthorization_id:
-                self.product.direct_obligation_admission_receipt_id,
+            general_product_preauthorization_id: self.product.product_preauthorization_id,
             family_admission_sequence: self.product.family_admission_sequence,
             founder_series_link_account: self.product.series_link_account,
             founder_series_link_binding_id: self.product.series_link_binding_v3_id,

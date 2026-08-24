@@ -109,7 +109,7 @@ pub struct DirectFoundationReceiptV3 {
 /// Compact current b1/v3+b3 transition authority for actions 2..13.
 ///
 /// The root token retains only the private injective arithmetic projection and
-/// current V2 semantic IDs; no 2.5KiB current root is copied into this state.
+/// current V3 semantic IDs; no 2.5KiB current root is copied into this state.
 #[derive(Debug, Eq, PartialEq)]
 pub struct DirectRootReplayTransitionV2 {
     root: AuthenticatedDirectRootTransitionV3,

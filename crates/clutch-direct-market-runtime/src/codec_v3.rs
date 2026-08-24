@@ -18,9 +18,9 @@ use crate::{
 };
 
 /// Exact current b1/v3 semantic-body width.
-pub const DIRECT_MARKET_ROOT_BODY_BYTES_V3: usize = 2_498;
+pub const DIRECT_MARKET_ROOT_BODY_BYTES_V3: usize = 2_530;
 /// Exact immutable binding prefix inside the current root body.
-pub const DIRECT_MARKET_BINDING_BODY_BYTES_V3: usize = 2_245;
+pub const DIRECT_MARKET_BINDING_BODY_BYTES_V3: usize = 2_277;
 
 /// Compact authenticated current root used at the SBF transition boundary.
 ///
@@ -33,6 +33,7 @@ pub struct AuthenticatedDirectRootTransitionV3 {
     fee_policy: crate::fee_v2::DirectFeePolicyV2,
     current_general: DirectCurrentGeneralAuthorityV2,
     product_global_liveness_account: [u8; 32],
+    series_plan_v5_id: [u8; 32],
     terminal_product_ids: [[u8; 32]; 7],
     binding_semantic_id: [u8; 32],
     binding_body_id: [u8; 32],
@@ -84,6 +85,18 @@ impl AuthenticatedDirectRootTransitionV3 {
     }
     pub const fn series_link_account(&self) -> [u8; 32] {
         self.projected_root.binding.founder_series_link_account
+    }
+    /// Product-owned SeriesPlanV5 identity used for exact LinkV3 PDA auth.
+    pub const fn series_plan_v5_id(&self) -> [u8; 32] {
+        self.series_plan_v5_id
+    }
+    /// Product-owned immutable LinkV3 binding identity retained by b1/v3.
+    pub const fn series_link_binding_v3_id(&self) -> [u8; 32] {
+        self.terminal_product_ids[1]
+    }
+    /// Exact Product Series ordinal retained by b1/v3.
+    pub const fn series_ordinal(&self) -> u32 {
+        self.projected_root.binding.founder_series_ordinal
     }
     /// Complete current Product authority identity retained by b1/v3.
     pub const fn current_product_authority_id(&self) -> [u8; 32] {
@@ -399,8 +412,7 @@ pub fn authenticate_direct_root_transition_body_v3<B: DirectHashBackendV1>(
         product_root_account: product.product_root_account,
         product_market_binding_id: product.product_market_binding_v3_id,
         product_family_prestate_id: product.product_family_prestate_id,
-        general_product_preauthorization_id:
-            product.direct_obligation_admission_receipt_id,
+        general_product_preauthorization_id: product.product_preauthorization_id,
         family_admission_sequence: product.family_admission_sequence,
         founder_series_link_account: product.series_link_account,
         founder_series_link_binding_id: product.series_link_binding_v3_id,
@@ -435,6 +447,7 @@ pub fn authenticate_direct_root_transition_body_v3<B: DirectHashBackendV1>(
         product.direct_work_quote_id,
     ];
     let product_global_liveness_account = product.product_direct_global_liveness_account;
+    let series_plan_v5_id = product.series_plan_v5_id;
     drop(product);
     let schedule = read_schedule(&mut reader)?;
     let root_rent = read_rent(&mut reader)?;
@@ -485,6 +498,7 @@ pub fn authenticate_direct_root_transition_body_v3<B: DirectHashBackendV1>(
         fee_policy,
         current_general: general,
         product_global_liveness_account,
+        series_plan_v5_id,
         terminal_product_ids,
         binding_semantic_id,
         binding_body_id,
@@ -991,6 +1005,7 @@ fn write_product(
     writer.id(value.product_family_admission_receipt_id)?;
     writer.u32(value.family_admission_sequence)?;
     writer.id(value.series_link_account)?;
+    writer.id(value.series_plan_v5_id)?;
     writer.id(value.series_link_binding_v3_id)?;
     writer.u32(value.series_ordinal)?;
     for id in [
@@ -1003,7 +1018,7 @@ fn write_product(
         value.claim_mint_founding_plan_id,
         value.claim_issuance_binding_id,
         value.general_founding_capability_v3_id,
-        value.direct_obligation_admission_receipt_id,
+        value.product_preauthorization_id,
         value.product_direct_global_liveness_account,
         value.product_direct_global_liveness_binding_id,
         value.product_direct_global_liveness_activation_id,
@@ -1027,6 +1042,7 @@ fn read_product(
         product_family_admission_receipt_id: reader.id()?,
         family_admission_sequence: reader.u32()?,
         series_link_account: reader.id()?,
+        series_plan_v5_id: reader.id()?,
         series_link_binding_v3_id: reader.id()?,
         series_ordinal: reader.u32()?,
         compiler_bundle_v7_id: reader.id()?,
@@ -1038,7 +1054,7 @@ fn read_product(
         claim_mint_founding_plan_id: reader.id()?,
         claim_issuance_binding_id: reader.id()?,
         general_founding_capability_v3_id: reader.id()?,
-        direct_obligation_admission_receipt_id: reader.id()?,
+        product_preauthorization_id: reader.id()?,
         product_direct_global_liveness_account: reader.id()?,
         product_direct_global_liveness_binding_id: reader.id()?,
         product_direct_global_liveness_activation_id: reader.id()?,
@@ -1292,7 +1308,7 @@ impl<'a> BodyReader<'a> {
     }
 }
 
-const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V3 == 2_498);
+const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V3 == 2_530);
 const _: () = assert!(DIRECT_MARKET_BINDING_BODY_BYTES_V3 + 253
     == DIRECT_MARKET_ROOT_BODY_BYTES_V3);
 const _: () = assert!(core::mem::size_of::<AuthenticatedDirectRootTransitionV3>() <= 2_304);

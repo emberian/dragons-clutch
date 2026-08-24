@@ -67,7 +67,7 @@ pub fn encode_direct_market_root_account_v3(
     Ok(())
 }
 
-const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V3 == 2_498);
+const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V3 == 2_530);
 
 #[cfg(test)]
 mod tests {

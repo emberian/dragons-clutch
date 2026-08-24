@@ -144,7 +144,7 @@ const DIRECT_ACTION13_CANDIDATE_POSTWRITE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/direct/action13-candidate-postwrite/v2\0";
 
 const _: () = assert!(DIRECT_MARKET_ROOT_BODY_BYTES_V3 == RUNTIME_ROOT_BODY_BYTES_V2);
-const _: () = assert!(DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3 == 2_502);
+const _: () = assert!(DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3 == 2_534);
 const _: () = assert!(DIRECT_SELECTION_ACCOUNT_BYTES == 1_629);
 const _: () = assert!(DIRECT_ACTION_REPLAY_ACCOUNT_BYTES == 394);
 const _: () = assert!(DIRECT_RESERVATION_ACCOUNT_BYTES == 473);
@@ -4805,7 +4805,7 @@ mod tests {
 
     #[test]
     fn current_action_group_has_exact_frame_bounds() {
-        assert_eq!(DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3, 2_502);
+        assert_eq!(DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V3, 2_534);
         assert_eq!(DIRECT_SELECTION_ACCOUNT_BYTES, 1_629);
         assert_eq!(DIRECT_ACTION_REPLAY_ACCOUNT_BYTES, 394);
         assert_eq!(DIRECT_RESERVATION_ACCOUNT_BYTES, 473);
