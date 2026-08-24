@@ -13,13 +13,15 @@ use crate::loader_state::{
 use crate::seeds;
 use clutch_product_series::{
     CompiledProductSeriesBundleV1, CompiledProductSeriesBundleV2, CompiledProductSeriesBundleV3,
-    CompiledProductSeriesBundleV4, CompiledProductSeriesBundleV5, ContentId,
+    CompiledProductSeriesBundleV4, CompiledProductSeriesBundleV5,
+    CompiledProductSeriesBundleV6, ContentId,
     EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2, MarketInstancePreimageV2,
     NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4, RegistryCapabilityProfileV2,
     RegistryCapabilityProfileV3, RegistryCapabilityProfileV4, RegistryCapabilityProjectionV2,
     RegistryProgramReleaseV1, RegistryProgramReleaseV2, RegistryReleaseLocusV2,
-    SeriesAttachmentPlanV1, SeriesAttachmentPlanV2, SeriesAttachmentPlanV3, SeriesAttachmentPlanV4,
-    SeriesFundingQuoteV1, SeriesFundingQuoteV2, SeriesFundingQuoteV3, SeriesFundingQuoteV4,
+    SeriesAttachmentPlanV1, SeriesAttachmentPlanV2, SeriesAttachmentPlanV3,
+    SeriesAttachmentPlanV4, SeriesAttachmentPlanV5, SeriesFundingQuoteV1,
+    SeriesFundingQuoteV2, SeriesFundingQuoteV3, SeriesFundingQuoteV4, SeriesFundingQuoteV5,
     SeriesFundingTermsV2, SeriesPlanV5, SeriesPlanV5Id,
 };
 use clutch_solana_layout::artifact::ArtifactKind;
@@ -88,6 +90,9 @@ product_artifact_type!(SeriesFundingQuoteV4, SeriesFundingQuoteV4);
 product_artifact_type!(CompiledProductSeriesBundleV4, CompiledProductSeriesBundleV4);
 product_artifact_type!(CompiledProductSeriesBundleV5, CompiledProductSeriesBundleV5);
 product_artifact_type!(SeriesAttachmentPlanV4, SeriesAttachmentPlanV4);
+product_artifact_type!(SeriesFundingQuoteV5, SeriesFundingQuoteV5);
+product_artifact_type!(SeriesAttachmentPlanV5, SeriesAttachmentPlanV5);
+product_artifact_type!(CompiledProductSeriesBundleV6, CompiledProductSeriesBundleV6);
 
 impl ProductArtifactTypeV1 for NativeClaimBasisV1 {
     const KIND: ArtifactKind = ArtifactKind::NativeClaimBasisV1;

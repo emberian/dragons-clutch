@@ -21,17 +21,22 @@ use crate::seeds;
 #[cfg(target_os = "solana")]
 use clutch_product_series::{
     CompiledProductSeriesBundleV2, CompiledProductSeriesBundleV3, CompiledProductSeriesBundleV4,
-    CompiledProductSeriesBundleV5, FixedCodec as RegistryFixedCodec, RegistryCapabilityProfileV2,
+    CompiledProductSeriesBundleV5, CompiledProductSeriesBundleV6,
+    FixedCodec as RegistryFixedCodec, RegistryCapabilityProfileV2,
     RegistryCapabilityProfileV3, RegistryCapabilityProfileV4, RegistryProgramReleaseV1,
     RegistryProgramReleaseV2, SeriesAttachmentPlanV2, SeriesAttachmentPlanV3,
-    SeriesAttachmentPlanV4, SeriesFundingQuoteV2, SeriesFundingQuoteV3, SeriesFundingQuoteV4,
+    SeriesAttachmentPlanV4, SeriesAttachmentPlanV5, SeriesFundingQuoteV2,
+    SeriesFundingQuoteV3, SeriesFundingQuoteV4, SeriesFundingQuoteV5,
     COMPILED_PRODUCT_SERIES_BUNDLE_V2_DOMAIN, COMPILED_PRODUCT_SERIES_BUNDLE_V3_DOMAIN,
     COMPILED_PRODUCT_SERIES_BUNDLE_V4_DOMAIN, COMPILED_PRODUCT_SERIES_BUNDLE_V5_DOMAIN,
+    COMPILED_PRODUCT_SERIES_BUNDLE_V6_DOMAIN,
     REGISTRY_CAPABILITY_PROFILE_V2_DOMAIN, REGISTRY_CAPABILITY_PROFILE_V3_DOMAIN,
     REGISTRY_CAPABILITY_PROFILE_V4_DOMAIN, REGISTRY_PROGRAM_RELEASE_V1_DOMAIN,
     REGISTRY_PROGRAM_RELEASE_V2_DOMAIN, SERIES_ATTACHMENT_PLAN_V2_DOMAIN,
     SERIES_ATTACHMENT_PLAN_V3_DOMAIN, SERIES_ATTACHMENT_PLAN_V4_DOMAIN,
-    SERIES_FUNDING_QUOTE_V2_DOMAIN, SERIES_FUNDING_QUOTE_V3_DOMAIN, SERIES_FUNDING_QUOTE_V4_DOMAIN,
+    SERIES_ATTACHMENT_PLAN_V5_DOMAIN, SERIES_FUNDING_QUOTE_V2_DOMAIN,
+    SERIES_FUNDING_QUOTE_V3_DOMAIN, SERIES_FUNDING_QUOTE_V4_DOMAIN,
+    SERIES_FUNDING_QUOTE_V5_DOMAIN,
 };
 use clutch_solana_layout::artifact::{
     self, ArtifactBinding, ArtifactKind, ArtifactStageHeader, ARTIFACT_CHUNK_BYTES,
@@ -455,7 +460,10 @@ fn expected_final_pda(program_id: &Pubkey, binding: ArtifactBinding) -> (Pubkey,
         }
         kind @ (ArtifactKind::RegistryProgramReleaseV2
         | ArtifactKind::RegistryCapabilityProfileV4
-        | ArtifactKind::CompiledProductSeriesBundleV5) => {
+        | ArtifactKind::CompiledProductSeriesBundleV5
+        | ArtifactKind::SeriesFundingQuoteV5
+        | ArtifactKind::SeriesAttachmentPlanV5
+        | ArtifactKind::CompiledProductSeriesBundleV6) => {
             seeds::product_artifact_pda(program_id, kind.byte(), &digest)
         }
     }
@@ -494,6 +502,9 @@ fn validate_for_runtime(binding: ArtifactBinding, body: &[u8]) -> Outcome<u8> {
             | ArtifactKind::RegistryProgramReleaseV2
             | ArtifactKind::RegistryCapabilityProfileV4
             | ArtifactKind::CompiledProductSeriesBundleV5
+            | ArtifactKind::SeriesFundingQuoteV5
+            | ArtifactKind::SeriesAttachmentPlanV5
+            | ArtifactKind::CompiledProductSeriesBundleV6
     ) {
         binding.validate()?;
         require(
@@ -575,6 +586,21 @@ fn validate_for_runtime(binding: ArtifactBinding, body: &[u8]) -> Outcome<u8> {
                 CompiledProductSeriesBundleV5::decode(body)
                     .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?;
                 COMPILED_PRODUCT_SERIES_BUNDLE_V5_DOMAIN
+            }
+            ArtifactKind::SeriesFundingQuoteV5 => {
+                SeriesFundingQuoteV5::decode(body)
+                    .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?;
+                SERIES_FUNDING_QUOTE_V5_DOMAIN
+            }
+            ArtifactKind::SeriesAttachmentPlanV5 => {
+                SeriesAttachmentPlanV5::decode(body)
+                    .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?;
+                SERIES_ATTACHMENT_PLAN_V5_DOMAIN
+            }
+            ArtifactKind::CompiledProductSeriesBundleV6 => {
+                CompiledProductSeriesBundleV6::decode(body)
+                    .map_err(|_| Refusal::Codec(CodecError::MismatchedBinding))?;
+                COMPILED_PRODUCT_SERIES_BUNDLE_V6_DOMAIN
             }
             _ => return Err(ClutchError::MismatchedState.into()),
         };
@@ -850,7 +876,10 @@ fn create_final<'a>(
         }
         kind @ (ArtifactKind::RegistryProgramReleaseV2
         | ArtifactKind::RegistryCapabilityProfileV4
-        | ArtifactKind::CompiledProductSeriesBundleV5) => {
+        | ArtifactKind::CompiledProductSeriesBundleV5
+        | ArtifactKind::SeriesFundingQuoteV5
+        | ArtifactKind::SeriesAttachmentPlanV5
+        | ArtifactKind::CompiledProductSeriesBundleV6) => {
             let kind_byte = [kind.byte()];
             create_artifact_pda(
                 program_id,
