@@ -159,7 +159,7 @@ pub fn freeze_epoch_v5(
         program_id,
         &accounts[IX_FREEZE_V5_BINDING],
         false,
-        contract::MARKET_BINDING_ACCOUNT_BYTES,
+        contract::MARKET_BINDING_ACCOUNT_BYTES_V4,
     )?;
     require_writable_destination(&accounts[IX_FREEZE_V5_KEEPER])?;
     for page in &accounts[IX_FREEZE_V5_PAGES..] {
@@ -171,7 +171,13 @@ pub fn freeze_epoch_v5(
     let domain = decode_domain(&accounts[IX_FREEZE_V5_DOMAIN])?;
     let window = decode_window(&accounts[IX_FREEZE_V5_WINDOW])?;
     let budget = decode_budget(&accounts[IX_FREEZE_V5_BUDGET])?;
-    let binding = decode_binding(&accounts[IX_FREEZE_V5_BINDING])?;
+    let current_binding = decode_binding(&accounts[IX_FREEZE_V5_BINDING])?;
+    require_compartment_balance(
+        &accounts[IX_FREEZE_V5_BINDING],
+        current_binding.rent(),
+        &[],
+    )?;
+    let binding = Box::new(current_binding.relation_projection());
 
     authenticate_root_pdas(
         program_id,
@@ -292,8 +298,8 @@ fn decode_budget(account: &AccountInfo) -> Outcome<Box<contract::EpochBudgetV2Ac
 }
 
 #[inline(never)]
-fn decode_binding(account: &AccountInfo) -> Outcome<Box<contract::MarketBindingV1>> {
-    Ok(Box::new(contract::MarketBindingV1::decode(
+fn decode_binding(account: &AccountInfo) -> Outcome<Box<contract::MarketBindingV4>> {
+    Ok(Box::new(contract::MarketBindingV4::decode(
         &borrow_data(account)?,
     )?))
 }

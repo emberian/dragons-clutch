@@ -2,7 +2,7 @@
 //!
 //! The exact account order is:
 //! 0 writable SettlementRoot, 1 retained Feed, 2 writable ReceiptV5,
-//! 3 MarketBindingV2, 4 MarketRuntimeV3, 5 Realm, 6 ProfileV2,
+//! 3 MarketBindingV4, 4 MarketRuntimeV3, 5 Realm, 6 ProfileV2,
 //! 7 collateral policy, 8 Token-2022 program, 9 MarketInstanceV2 artifact,
 //! 10 MarketGenesisProfileV2 artifact, 11 Rent sysvar, 12 cash pot,
 //! 13 finalized OwnerSettlementV5, 14 frozen OrderPageV5,
@@ -68,7 +68,7 @@ pub const IX_ROOT: usize = 0;
 pub const IX_FEED: usize = 1;
 /// Writable rent-owned ReceiptV5.
 pub const IX_RECEIPT: usize = 2;
-/// Immutable MarketBindingV2.
+/// Immutable current MarketBindingV4.
 pub const IX_MARKET_BINDING: usize = 3;
 /// Immutable MarketRuntimeV3.
 pub const IX_MARKET_RUNTIME: usize = 4;
