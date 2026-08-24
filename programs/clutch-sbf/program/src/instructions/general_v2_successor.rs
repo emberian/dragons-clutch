@@ -51,6 +51,7 @@ pub(crate) fn process<'info>(
         | GeneralV2Action::ClosePot
         | GeneralV2Action::CloseOwnerSettlementRow
         | GeneralV2Action::CloseOwnerFeeFinalization
+        | GeneralV2Action::AdvanceFeeRetirement
         | GeneralV2Action::BeginSettlementRetirement => {
             general_v2_settlement_retirement_v1::process(
                 program_id, accounts, sequence, action, payload,
