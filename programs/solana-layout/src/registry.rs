@@ -221,11 +221,13 @@ pub const SOURCE_SERIES_REGISTRY_ACCOUNT_TAG: u8 = 0x7f;
 pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V1: u8 = 1;
 /// Historical Source/Series registry account version retaining BundleV5.
 pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V2: u8 = 2;
-/// Current Source/Series registry account version retaining BundleV6.
+/// Historical Source/Series registry account version retaining BundleV6.
 pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V3: u8 = 3;
+/// Current Source/Series registry account version retaining BundleV7.
+pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V4: u8 = 4;
 /// Historical decoder coordinate retained for untrusted index clients only.
-/// Runtime authority must use [`SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V3`].
-#[deprecated(note = "V1 is withdrawn; use SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V3")]
+/// Runtime authority must use [`SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V4`].
+#[deprecated(note = "V1 is withdrawn; use SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V4")]
 pub const SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION: u8 =
     SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V1;
 /// Source/Series present-funding account discriminator.
@@ -236,10 +238,12 @@ pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V1: u8 = 1;
 pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V2: u8 = 2;
 /// Historical cyclic BundleV6/QuoteV5 Series funding account version.
 pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V3: u8 = 3;
-/// Current acyclic pre-Source reservation Series funding account version.
+/// Historical acyclic BundleV6/QuoteV5 Series funding account version.
 pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V4: u8 = 4;
+/// Current acyclic BundleV7/QuoteV6 Series funding account version.
+pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V5: u8 = 5;
 /// Historical decoder coordinate retained for untrusted index clients only.
-#[deprecated(note = "V1 is withdrawn; use SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V4")]
+#[deprecated(note = "V1 is withdrawn; use SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V5")]
 pub const SOURCE_SERIES_FUNDING_ACCOUNT_VERSION: u8 =
     SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V1;
 /// General V2 owner-aggregated settlement account discriminator.
@@ -1279,8 +1283,17 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
             version: SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V3,
         },
+        status: AllocationStatus::Withdrawn,
+        name: "withdrawn-source-series-registry-v3-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
+            version: SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V4,
+        },
         status: AllocationStatus::ReservedDisabled,
-        name: "source-series-registry-v3-account",
+        name: "source-series-registry-v4-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -1315,8 +1328,17 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
             tag: SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
             version: SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V4,
         },
+        status: AllocationStatus::Withdrawn,
+        name: "withdrawn-source-series-funding-v4-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
+            version: SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V5,
+        },
         status: AllocationStatus::ReservedDisabled,
-        name: "source-series-funding-v4-account",
+        name: "source-series-funding-v5-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
@@ -3418,11 +3440,11 @@ mod tests {
             (DEALER_POLICY_ACCOUNT_TAG, DEALER_POLICY_ACCOUNT_VERSION),
             (
                 SOURCE_SERIES_REGISTRY_ACCOUNT_TAG,
-                SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V3,
+                SOURCE_SERIES_REGISTRY_ACCOUNT_VERSION_V4,
             ),
             (
                 SOURCE_SERIES_FUNDING_ACCOUNT_TAG,
-                SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V4,
+                SOURCE_SERIES_FUNDING_ACCOUNT_VERSION_V5,
             ),
             (
                 GENERAL_V2_OWNER_SETTLEMENT_ACCOUNT_TAG,
