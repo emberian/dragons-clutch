@@ -942,6 +942,10 @@ pub enum CanonicalActionCoordinate {
     },
     Series(RecurringSeriesAction),
     StructuredClaim(StructuredClaimActionV1),
+    DealerFacility {
+        action: clutch_solana_layout::registry::DealerFacilityAction,
+        payload_discriminator: u8,
+    },
 }
 
 /// Account absence observed by an untrusted reader. It can drive construction,
@@ -2381,6 +2385,9 @@ fn construct(
         CanonicalActionCoordinate::StructuredClaim(action) => {
             let _ = action;
             return Err(WorkflowGraphError::InvalidCanonicalPayload);
+        }
+        CanonicalActionCoordinate::DealerFacility { .. } => {
+            return Err(WorkflowGraphError::UnsupportedAction)
         }
         CanonicalActionCoordinate::SourceTransition {
             registry,
