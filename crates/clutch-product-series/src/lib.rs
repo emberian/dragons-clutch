@@ -232,7 +232,8 @@ pub use registry::{
 };
 pub use source_series::{
     compile_source_occurrence_v3, compile_source_occurrence_v4,
-    compile_source_semantic_inputs_v1, AuthenticatedSourceSeriesAuthorityV3,
+    compile_source_semantic_inputs_v1, compile_source_semantic_inputs_v2,
+    AuthenticatedSourceSeriesAuthorityV3,
     CompiledSourceOccurrenceV3, CompiledSourceSemanticInputsV1, SOURCE_OCCURRENCE_RECORD_BYTES,
     SOURCE_OCCURRENCE_RECORD_DOMAIN,
 };

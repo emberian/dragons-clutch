@@ -7,11 +7,11 @@ use clutch_source_plane_v3::{
 
 use crate::codec::{Reader, Writer};
 use crate::{
-    compile_ordinal_v2, compile_ordinal_v5, content_id, ContentId, Error,
+    compile_ordinal_v2, compile_ordinal_v5, compile_ordinal_v6, content_id, ContentId, Error,
     EvidenceOnlyRecoveryPolicyV1, FixedCodec, MarketGenesisProfileV2, MarketInstanceV2Id,
     NativeClaimBasisV1, PriceMeasurePolicyV1, ProductTemplateV4, RegistryCapabilityProjectionV2,
-    Result, SeriesAttachmentPlanId, SeriesAttachmentPlanV1, SeriesAttachmentPlanV4, SeriesPlanV5,
-    SeriesPlanV5Id, SourceOccurrenceV1Id,
+    Result, SeriesAttachmentPlanId, SeriesAttachmentPlanV1, SeriesAttachmentPlanV4,
+    SeriesAttachmentPlanV5, SeriesPlanV5, SeriesPlanV5Id, SourceOccurrenceV1Id,
 };
 
 const SOURCE_OCCURRENCE_RECORD_MAGIC: [u8; 8] = *b"DCSOCCV1";
@@ -352,6 +352,94 @@ pub fn compile_source_semantic_inputs_v1<A: AuthenticatedSourceSeriesAuthorityV3
     )?;
 
     let compiled = compile_ordinal_v5(
+        series,
+        template,
+        basis,
+        recovery,
+        price_policy,
+        genesis,
+        attachment,
+        registry,
+        ordinal,
+    )?;
+    let window = WindowSpecV3 {
+        source_spec_id: clutch_source_plane_v3::ContentId::from_bytes(
+            template.source_spec_id.bytes(),
+        ),
+        source_plane_program_id: source_plane.id().map_err(source_error)?,
+        start_bucket: compiled.schedule.start_bucket,
+        end_bucket_exclusive: compiled.schedule.end_bucket_exclusive,
+        maturity_bucket_exclusive: compiled.schedule.primary_maturity_bucket_exclusive,
+        repair_generation: template.base_repair_generation,
+        coverage_policy_id,
+        coverage_policy_parameter: template.coverage_policy_parameter,
+    };
+    window.validate().map_err(source_error)?;
+    let statistic_key = StatisticKeyV3 {
+        window_id: window.id().map_err(source_error)?,
+        summary_program_id: summary.id().map_err(source_error)?,
+        statistic,
+    };
+    statistic_key.validate().map_err(source_error)?;
+    let occurrence = CompiledSourceOccurrenceV3 {
+        series_plan_id: compiled.series_plan_id,
+        ordinal,
+        market_instance_id: compiled.market_instance_id,
+        attachment_plan_id: compiled.attachment_plan_id,
+        source_window_id: local_id(window.id().map_err(source_error)?),
+        statistic_key_id: local_id(statistic_key.id().map_err(source_error)?),
+    };
+    occurrence.validate_shape()?;
+    Ok(CompiledSourceSemanticInputsV1 {
+        occurrence,
+        window,
+        statistic_key,
+        summary_program: summary,
+    })
+}
+
+/// Compile one current QuoteV5/AttachmentV5 occurrence and all immutable
+/// Source semantic inputs after exact ProfileV4/BundleV6 authority checks.
+#[allow(clippy::too_many_arguments)]
+pub fn compile_source_semantic_inputs_v2<A: AuthenticatedSourceSeriesAuthorityV3 + ?Sized>(
+    authority: &A,
+    series: &SeriesPlanV5,
+    template: &ProductTemplateV4,
+    basis: &NativeClaimBasisV1,
+    recovery: &EvidenceOnlyRecoveryPolicyV1,
+    price_policy: &PriceMeasurePolicyV1,
+    genesis: &MarketGenesisProfileV2,
+    attachment: &SeriesAttachmentPlanV5,
+    registry: &RegistryCapabilityProjectionV2,
+    ordinal: u32,
+) -> Result<CompiledSourceSemanticInputsV1> {
+    authority.authenticate_registry_projection(registry)?;
+    authority.authenticate_source_spec(template.source_spec_id)?;
+
+    let source_plane = authority.authenticated_source_plane(template.source_plane_contract_id)?;
+    source_plane.validate().map_err(source_error)?;
+    if local_id(source_plane.id().map_err(source_error)?) != template.source_plane_contract_id {
+        return Err(Error::MismatchedArtifact);
+    }
+    let summary = authority.authenticated_summary_program(template.summary_program_id)?;
+    summary.validate().map_err(source_error)?;
+    if local_id(summary.id().map_err(source_error)?) != template.summary_program_id {
+        return Err(Error::MismatchedArtifact);
+    }
+    let statistic = authority.resolve_statistic(
+        registry.registry_release_id,
+        registry.capability_profile_id,
+        template.statistic_registry_value,
+    )?;
+    if !summary.supports(statistic) {
+        return Err(Error::UnsupportedCapability);
+    }
+    let coverage_policy_id = authority.resolve_coverage_policy(
+        registry.registry_release_id,
+        registry.capability_profile_id,
+        template.coverage_policy_registry_value,
+    )?;
+    let compiled = compile_ordinal_v6(
         series,
         template,
         basis,

@@ -165,6 +165,8 @@ pub(crate) mod product_market_foundation_init;
 /// independently capability-gated, including in source-empty releases.
 pub mod product_series;
 pub(crate) mod product_series_current;
+/// Current Product V3/V5/V6 to Source occurrence publication authority.
+pub(crate) mod product_source_current;
 #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod resolution_work;
 pub mod series_failure_funding;
