@@ -30,11 +30,13 @@ Each has a distinct owner/Position, shares one fill, and uses prices summing
 exactly to `PRICE_SCALE`. The checker credits each indexed outcome and requires
 gross buyer debits to equal the fill; the adapter must atomically put that exact
 amount in the Market collateral vault. Fees are separate buyer debits and
-transfers. Complementary sells have exactly N Sell intents in the same
-canonical order from one owner and atomically debit that owner's complete set;
-the Market vault debits exactly `fill`, seller receives `fill - fee`, and the
-venue receives the fee. There is no Hoard, reserve, future-fee funding,
-candidate account, or General-style workflow.
+transfers. Complementary sells have exactly N Sell intents in canonical outcome
+order from distinct owners and Positions. The checker atomically debits each
+seller's indexed outcome, requires their exact gross credits to sum to `fill`,
+debits the Market vault by exactly `fill`, and emits every seller gross credit,
+fee debit, and net credit. The venue receives the aggregate fee. There is no
+Hoard, reserve, future-fee funding, candidate account, or General-style
+workflow.
 
 ## Arithmetic and bounds
 

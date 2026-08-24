@@ -449,14 +449,18 @@ pub struct ComplementaryBuyMatch<const N: usize> {
 /// Exact output from an exhaustive complementary-sell complete-set merge.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MergeSettlement<const N: usize> {
-    /// Seller replacement Position after the complete-set debit.
-    pub seller_position: PositionV1<N>,
+    /// Seller replacement Positions after their indexed-outcome debits.
+    pub seller_positions: [PositionV1<N>; N],
     /// Replacement replay states in canonical outcome order.
     pub seller_states: [IntentStateV1; N],
     /// Exact collateral debit from the Market vault.
     pub market_vault_collateral_debit: u64,
-    /// Exact collateral credit released to seller after the fee.
-    pub seller_collateral_credit: u64,
+    /// Exact gross collateral credits released to sellers, canonical outcome order.
+    pub seller_gross_collateral_credits: [u64; N],
+    /// Exact fee debits retained from each seller's gross credit, canonical outcome order.
+    pub seller_fee_debits: [u64; N],
+    /// Exact net collateral credits released to sellers, canonical outcome order.
+    pub seller_net_collateral_credits: [u64; N],
     /// Exact local venue fee transfer.
     pub venue_fee_transfer: u64,
 }
@@ -466,14 +470,14 @@ pub struct MergeSettlement<const N: usize> {
 pub struct ComplementarySellMatch<const N: usize> {
     /// Current adapter-provided slot.
     pub slot: u64,
-    /// Sell intents in canonical outcome order from one owner.
+    /// Sell intents in canonical outcome order from distinct owners.
     pub seller_intents: [DirectIntentV1; N],
     /// Matching replay states in canonical outcome order.
     pub seller_states: [IntentStateV1; N],
     /// Matching adapter authorizations in canonical outcome order.
     pub seller_authorizations: [OwnerAuthorization; N],
-    /// One seller Position holding the complete set.
-    pub seller_position: PositionV1<N>,
+    /// Seller Positions, canonical outcome order and distinct owners.
+    pub seller_positions: [PositionV1<N>; N],
     /// Common matcher-selected fill.
     pub fill: u64,
     /// Scaled prices summing to PRICE_SCALE and meeting each sell limit.
@@ -484,30 +488,36 @@ pub struct ComplementarySellMatch<const N: usize> {
     pub venue_authorization: MarketVenueAuthorization,
 }
 
-/// Check an atomic complete-set merge and return exact seller, vault, fee, and replay effects.
+/// Check an atomic multi-owner complete-set merge and return exact effects.
 pub fn settle_merge<const N: usize>(input: ComplementarySellMatch<N>) -> Result<MergeSettlement<N>> {
     width(N)?; if input.fill == 0 { return Err(Error::ZeroQuantity); }
     let first = *input.seller_intents.first().ok_or(Error::InvalidOutcomeWidth)?;
-    let mut states = input.seller_states; let mut price_sum = 0_u64;
-    let mut nonces = [0_u64; N]; let mut nonce_count = 0usize;
-    for (index, (((intent, state), authorization), price)) in input.seller_intents.iter().zip(states.iter_mut()).zip(input.seller_authorizations.iter()).zip(input.execution_prices.iter()).enumerate() {
+    let mut states = input.seller_states; let mut positions = input.seller_positions;
+    let mut gross = [0_u64; N]; let mut fees = [0_u64; N]; let mut net = [0_u64; N];
+    let mut price_sum = 0_u64; let mut fee_sum = 0_u64;
+    let mut makers = [[0_u8; 32]; N]; let mut maker_count = 0usize;
+    for (index, ((((((intent, state), authorization), position), price), gross_slot), fee_slot)) in input.seller_intents.iter().zip(states.iter_mut()).zip(input.seller_authorizations.iter()).zip(positions.iter_mut()).zip(input.execution_prices.iter()).zip(gross.iter_mut()).zip(fees.iter_mut()).enumerate() {
         let expected = u8::try_from(index).map_err(|_| Error::InvalidOutcome)?;
-        if intent.side != Side::Sell || intent.market != first.market || intent.generation != first.generation || intent.maker != first.maker || intent.outcome != expected { return Err(Error::NonCanonicalComplement); }
-        if nonces.iter().take(nonce_count).any(|nonce| nonce == &intent.nonce) { return Err(Error::Alias); }
-        if let Some(slot) = nonces.get_mut(nonce_count) { *slot = intent.nonce; } else { return Err(Error::ArithmeticOverflow); }
-        nonce_count = nonce_count.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
-        authorized(*intent, *authorization)?; position_matches(input.seller_position, *intent)?;
+        if intent.side != Side::Sell || intent.market != first.market || intent.generation != first.generation || intent.outcome != expected { return Err(Error::NonCanonicalComplement); }
+        if makers.iter().take(maker_count).any(|maker| maker == &intent.maker) { return Err(Error::Alias); }
+        if let Some(slot) = makers.get_mut(maker_count) { *slot = intent.maker; } else { return Err(Error::ArithmeticOverflow); }
+        maker_count = maker_count.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        authorized(*intent, *authorization)?; position_matches(*position, *intent)?;
         venue_authorized(*intent, input.fee_policy, input.venue_authorization)?;
         if *price < intent.limit { return Err(Error::PriceIncompatible); }
         price_sum = price_sum.checked_add(*price).ok_or(Error::ArithmeticOverflow)?;
         *state = state.consume(*intent, input.slot, input.fill)?;
+        *gross_slot = quote(input.fill, *price)?;
+        *fee_slot = fee(*gross_slot, input.fee_policy)?;
+        let net_slot = net.get_mut(index).ok_or(Error::ArithmeticOverflow)?;
+        *net_slot = gross_slot.checked_sub(*fee_slot).ok_or(Error::ArithmeticOverflow)?;
+        position.debit_outcome(index, input.fill).map_err(position_error)?;
+        fee_sum = fee_sum.checked_add(*fee_slot).ok_or(Error::ArithmeticOverflow)?;
     }
     if price_sum != PRICE_SCALE { return Err(Error::SplitFundingMismatch); }
-    let mut seller_position = input.seller_position;
-    seller_position.debit_complete_set(input.fill).map_err(position_error)?;
-    let venue_fee_transfer = fee(input.fill, input.fee_policy)?;
-    let seller_collateral_credit = input.fill.checked_sub(venue_fee_transfer).ok_or(Error::ArithmeticOverflow)?;
-    Ok(MergeSettlement { seller_position, seller_states: states, market_vault_collateral_debit: input.fill, seller_collateral_credit, venue_fee_transfer })
+    let mut gross_sum = 0_u64; for credit in gross { gross_sum = gross_sum.checked_add(credit).ok_or(Error::ArithmeticOverflow)?; }
+    if gross_sum != input.fill { return Err(Error::SplitFundingMismatch); }
+    Ok(MergeSettlement { seller_positions: positions, seller_states: states, seller_gross_collateral_credits: gross, seller_fee_debits: fees, seller_net_collateral_credits: net, market_vault_collateral_debit: input.fill, venue_fee_transfer: fee_sum })
 }
 
 /// Check an atomic complete-set split and return exact buyer, vault, fee, and replay effects.
@@ -611,9 +621,20 @@ mod tests {
     }
     #[test]
     fn canonical_complementary_sells_merge_and_release_only_vault_collateral() -> Result<()> {
-        let a = order_fee(1, Side::Sell, 0, 500_000, 1, 1_000)?; let b = order_fee(1, Side::Sell, 1, 500_000, 2, 1_000)?;
-        let out = settle_merge(ComplementarySellMatch { slot: 12, seller_intents: [a, b], seller_states: [IntentStateV1::open(a), IntentStateV1::open(b)], seller_authorizations: [auth(1), auth(1)], seller_position: position(1, [10, 10])?, fill: 10, execution_prices: [500_000, 500_000], fee_policy: policy(1_000)?, venue_authorization: venue() })?;
-        assert_eq!(out.seller_position.balances(), &[0, 0]); assert_eq!(out.market_vault_collateral_debit, 10); assert_eq!(out.seller_collateral_credit, 9); assert_eq!(out.venue_fee_transfer, 1); Ok(())
+        let a = order_fee(1, Side::Sell, 0, PRICE_SCALE, 1, 1_000)?; let b = order_fee(2, Side::Sell, 1, 0, 2, 1_000)?;
+        let out = settle_merge(ComplementarySellMatch { slot: 12, seller_intents: [a, b], seller_states: [IntentStateV1::open(a), IntentStateV1::open(b)], seller_authorizations: [auth(1), auth(2)], seller_positions: [position(1, [10, 0])?, position(2, [0, 10])?], fill: 10, execution_prices: [PRICE_SCALE, 0], fee_policy: policy(1_000)?, venue_authorization: venue() })?;
+        assert_eq!(out.seller_positions[0].balances(), &[0, 0]); assert_eq!(out.seller_positions[1].balances(), &[0, 0]);
+        assert_eq!(out.seller_gross_collateral_credits, [10, 0]); assert_eq!(out.seller_fee_debits, [1, 0]); assert_eq!(out.seller_net_collateral_credits, [9, 0]);
+        assert_eq!(out.market_vault_collateral_debit, 10); assert_eq!(out.venue_fee_transfer, 1); Ok(())
+    }
+    #[test]
+    fn merge_refuses_aliased_seller_or_underfunded_outcome_position() -> Result<()> {
+        let a = order(1, Side::Sell, 0, 500_000, 1)?; let b = order(1, Side::Sell, 1, 500_000, 2)?;
+        let base = ComplementarySellMatch { slot: 12, seller_intents: [a, b], seller_states: [IntentStateV1::open(a), IntentStateV1::open(b)], seller_authorizations: [auth(1), auth(1)], seller_positions: [position(1, [10, 0])?, position(1, [0, 10])?], fill: 10, execution_prices: [500_000, 500_000], fee_policy: policy(0)?, venue_authorization: venue() };
+        assert_eq!(settle_merge(base), Err(Error::Alias));
+        let c = order(2, Side::Sell, 1, 500_000, 2)?;
+        let insufficient = ComplementarySellMatch { seller_intents: [a, c], seller_states: [IntentStateV1::open(a), IntentStateV1::open(c)], seller_authorizations: [auth(1), auth(2)], seller_positions: [position(1, [10, 0])?, position(2, [0, 9])?], ..base };
+        assert_eq!(settle_merge(insufficient), Err(Error::InsufficientPositionBalance)); Ok(())
     }
     #[test]
     fn venue_config_must_be_signed_and_adapter_authenticated() -> Result<()> {
