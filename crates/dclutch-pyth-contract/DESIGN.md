@@ -6,82 +6,91 @@ lamports. Those remain explicit adapter boundaries.
 
 ## Resolution Fund authority
 
-`ResolutionFundV1` is the physical one-shot funding child for exactly one
-Market identity and generation. Its sponsor identity is the only destination
-for physical excess after the committed obligations are paid. The Fund embeds
-the canonical `dclutch-capability-contract::FundingStateV1` by value. It does
-not persist parallel provider-fee or bounty fields.
+The physical Pyth Resolution Fund is exactly the canonical
+`dclutch-capability-contract::FundingStateV1`. The Pyth crate adds no wrapper
+header and persists no second copy of Market key, Market generation, sponsor
+refund identity, provider reimbursement, or bounty.
+
+Those omitted occurrence facts remain authenticated without Fund duplication:
+
+- the Fund PDA and its owner bind it to the authenticated Market occurrence;
+- the Market root owns the current generation and manifest content identity;
+- the Market root's immutable `rent_refund` owns physical excess routing; and
+- the manifest entry's funding quote solely owns rent, provider, and bounty.
 
 The adapter authenticates the immutable capability manifest and its content
 identity, selects the unique `RequiredAtFounding` entry whose config is the
 Market's resolution-policy identity, and computes exact rent for
-`FUNDING_BYTES`. Construction validates the current specialized profile:
+`FUNDING_BYTES`. `construct_required_resolution_funding` validates the current
+specialized profile:
 
 - quoted rent equals exact Fund rent;
 - bounty principal is positive;
 - creation, work, liquidity, and service principal are zero; and
 - provider principal is the exact committed provider reimbursement.
 
-Construction first creates an exactly prepaid Pending `FundingStateV1`, then
-models its RequiredAtFounding activation in the same transition. Rent is moved
-to `released.rent_principal`, representing the physical Fund account's rent.
-Creation is exactly zero. Provider and bounty remain the only non-rent
-principal held by the Fund. The adapter must create and fund the physical
-account atomically with persistence; a semantic return is not evidence that a
-transfer occurred.
+Construction first creates an exactly prepaid Pending state and then models
+its RequiredAtFounding activation in the same transition. Rent moves to
+`released.rent_principal`, representing physical account rent. Creation is
+exactly zero. Provider and bounty remain the only held non-rent principal. The
+adapter must create and fund the physical account atomically with persistence;
+a semantic return is not evidence that a transfer occurred.
 
-The resulting width is exactly 280 bytes:
+The exact physical width is 192 bytes, identical to `FundingStateV1`:
 
-| Component | Bytes |
+| Geometry | Bytes |
 | --- | ---: |
-| Fund header | 16 |
-| Market identity | 32 |
-| generation | 8 |
-| sponsor refund identity | 32 |
-| canonical `FundingStateV1` | 192 |
+| Obsolete specialized record before canonical composition | 112 |
+| Rejected outer wrapper around canonical state | 280 |
+| Raw canonical Fund | 192 |
 
-This replaces the old 112-byte record, a 168-byte increase. The increase is
-deliberate: the record now carries one complete manifest binding, entry index,
-activation fact, and per-compartment conservation ledger instead of a second
-specialized funding truth. Actual lamport rent must be measured from the
-cluster's Rent sysvar for 280 bytes; this document does not hard-code or claim
-a stable chain cost.
+The correction removes 88 bytes from the rejected wrapper. Relative to the
+old 112-byte specialized record, canonical authority costs 80 bytes rather
+than 168. Actual lamport rent must be calculated from the cluster's current
+Rent sysvar; this document does not hard-code a chain cost.
 
 ## Physical balance and release seam
 
-`minimum_balance()` derives the minimum solely from the embedded ledger:
+`required_resolution_minimum_balance` derives the minimum solely from the raw
+ledger:
 
 ```text
 released rent + remaining provider + remaining bounty
 ```
 
-`classify_balance()` refuses underfunding and binds any excess to the immutable
-sponsor. Before relying on either result, the adapter calls `validate_against`
-with the authenticated manifest content identity, manifest bytes, freshly
-calculated exact rent, and the physically observed held non-rent principal.
+Before using that minimum, the adapter calls
+`validate_required_resolution_funding` with the authenticated manifest content
+identity, manifest bytes, unique entry selected from the Market's resolution
+policy, freshly calculated exact rent, and physically observed held non-rent
+principal. It refuses wrong bindings, selection, activation status, rent,
+compartments, conservation, and observations.
 
-Provider reimbursement and bounty release must use `FundingStateV1::release`
-and execute the exact lamport transfers atomically with the updated Fund or its
-terminal close. A later SBF route must not read an instruction-authored amount,
-reconstruct a parallel funding DTO, or treat sponsor excess, Market Hoard
-principal, or expected future fees as an obligation source.
+The adapter refuses a physical balance below the minimum. It routes any excess
+to the authenticated Market root's `rent_refund`; there is deliberately no
+Fund-local refund fact or Pyth balance-classification DTO.
+
+Provider reimbursement and bounty release use `FundingStateV1::release` and
+execute the exact lamport transfers atomically with the state mutation or
+terminal account close. A composing route must not read an
+instruction-authored amount, reconstruct a parallel funding DTO, or treat
+sponsor excess, Market Hoard principal, or expected future fees as an
+obligation source.
 
 ## Bounds and lifting
 
-All widths here are **schema bounds**: exact fixed-layout facts of release V1.
-The `u64` amount and slot widths are **chain-derived representation choices**
-aligned with Solana lamports and slots. Every sum is checked and every decoder
-requires exact length and canonical reserved bytes.
+The 192-byte width is an exact **schema bound** of canonical
+`FundingStateV1`. Its `u64` amount and slot widths are **chain-derived
+representation choices** aligned with Solana lamports and slots. Every sum is
+checked and its one decoder requires exact length and canonical reserved bytes.
 
-The categorical outcome bounds used by the other Pyth contracts are their
-current **provisional artifact-profile bounds**, not a limitation imposed by
-Fund funding. Lifting them requires a newly identified wider policy/ledger
-profile and corresponding exact child layouts. It does not require adding
-outcome arrays to `ResolutionFundV1`, whose funding ledger is outcome-agnostic.
+The categorical outcome bounds used by the other Pyth contracts are current
+**provisional artifact-profile bounds**, not limitations imposed by funding.
+Lifting them requires a newly identified wider policy/ledger profile and exact
+child layouts. It does not require outcome arrays in the Fund, whose canonical
+funding state is outcome-agnostic.
 
 Rent and compute effects are **unmeasured** until the real SBF adapter is built
-and exercised against a pinned local Solana toolchain. The lifting plan for
-the 192-byte generic funding ledger is schema composition or child-account
-separation only if measurement shows material value; duplicating provider and
-bounty fields is not an acceptable rent optimization because it reinstates a
-second semantic authority.
+and exercised against a pinned local Solana toolchain. If measurement later
+justifies a different physical funding layout, its lifting path is a new
+canonical capability-funding schema. Reintroducing duplicate Pyth provider,
+bounty, occurrence, or refund facts is not an acceptable rent optimization.

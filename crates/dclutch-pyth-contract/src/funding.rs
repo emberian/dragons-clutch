@@ -1,282 +1,151 @@
-//! Canonical prepaid Pyth-resolution funding layout.
+//! Pyth specialization of the canonical capability funding ledger.
 
+pub use dclutch_capability_contract::FundingStateV1;
 use dclutch_capability_contract::{
-    CapabilityManifestV1, ContentId, FUNDING_STATE_BYTES, FundingAmountsV1, FundingStateV1,
-    FundingStatus, RequiredFoundingEntryV1,
+    CapabilityManifestV1, ContentId, FUNDING_STATE_BYTES, FundingStatus, RequiredFoundingEntryV1,
 };
 
-use crate::{Error, Result, array, nonzero, zero};
+use crate::{Error, Result};
 
-/// Exact byte width of [`ResolutionFundV1`].
-pub const FUNDING_BYTES: usize = 88 + FUNDING_STATE_BYTES;
-/// Funding-account magic.
-pub const FUNDING_MAGIC: [u8; 8] = *b"DCLTFND1";
-/// Implemented funding schema.
-pub const FUNDING_SCHEMA_VERSION: u16 = 1;
-
-const FUNDING_STATE_OFFSET: usize = 88;
-
-/// Immutable identity plus the canonical activated capability-funding ledger.
+/// Exact physical byte width of a Pyth Resolution Fund.
 ///
-/// Provider reimbursement and success bounty are not duplicated here. They
-/// remain compartments of `funding_state`, whose manifest entry is their sole
-/// immutable authority.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ResolutionFundV1 {
-    market: [u8; 32],
-    generation: u64,
-    sponsor_refund: [u8; 32],
-    funding_state: FundingStateV1,
-}
+/// The physical account is exactly [`FundingStateV1`]; there is no outer Pyth
+/// header or duplicate Market, generation, refund, provider, or bounty fact.
+pub const FUNDING_BYTES: usize = FUNDING_STATE_BYTES;
 
-impl ResolutionFundV1 {
-    /// Construct the one-shot Fund from an authenticated manifest selection.
-    ///
-    /// The adapter authenticates `manifest_content_id` as the content hash of
-    /// `manifest`, computes `exact_fund_rent` from [`FUNDING_BYTES`] and the
-    /// current Rent sysvar, and creates/funds the physical account atomically.
-    /// This method first models exactly prepaid pending funding, then models
-    /// required-at-founding activation. Rent is released into account rent;
-    /// provider reimbursement and positive bounty remain the only held
-    /// non-rent principal.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        market: [u8; 32],
-        generation: u64,
-        sponsor_refund: [u8; 32],
-        manifest_content_id: ContentId,
-        manifest: CapabilityManifestV1<'_>,
-        selected: RequiredFoundingEntryV1,
-        exact_fund_rent: u64,
-        current_slot: u64,
-    ) -> Result<Self> {
-        if !nonzero(&market) || !nonzero(&sponsor_refund) {
-            return Err(Error::ZeroIdentifier);
-        }
-        let canonical = manifest
-            .required_founding_entry_for_config(selected.entry().config_id())
-            .map_err(capability_error)?;
-        if canonical != selected {
-            return Err(Error::FundingSelectionMismatch);
-        }
-        let quote = selected
-            .validate_one_shot_resolution_fund_quote(exact_fund_rent)
-            .map_err(capability_error)?;
-        let mut funding_state = FundingStateV1::new(
+/// Construct canonical required-at-founding funding for one Pyth resolution child.
+///
+/// The adapter authenticates `manifest_content_id` as the content hash of
+/// `manifest`, derives `selected` uniquely from the Market's immutable
+/// resolution-policy identity, computes `exact_fund_rent` for
+/// [`FUNDING_BYTES`], and creates/funds the physical account atomically. This
+/// function models an exactly prepaid Pending state followed immediately by
+/// required-at-founding activation. Rent is released into physical account
+/// rent; provider reimbursement and positive bounty remain the only held
+/// non-rent principal.
+pub fn construct_required_resolution_funding(
+    manifest_content_id: ContentId,
+    manifest: CapabilityManifestV1<'_>,
+    selected: RequiredFoundingEntryV1,
+    exact_fund_rent: u64,
+    current_slot: u64,
+) -> Result<FundingStateV1> {
+    let canonical = manifest
+        .required_founding_entry_for_config(selected.entry().config_id())
+        .map_err(capability_error)?;
+    if canonical != selected {
+        return Err(Error::FundingSelectionMismatch);
+    }
+    let quote = selected
+        .validate_one_shot_resolution_fund_quote(exact_fund_rent)
+        .map_err(capability_error)?;
+    let mut funding = FundingStateV1::new(
+        manifest_content_id,
+        manifest,
+        selected.index(),
+        quote.total_principal(),
+    )
+    .map_err(capability_error)?;
+    let debit = funding
+        .activate(
             manifest_content_id,
             manifest,
-            selected.index(),
             quote.total_principal(),
+            current_slot,
         )
         .map_err(capability_error)?;
-        let debit = funding_state
-            .activate(
-                manifest_content_id,
-                manifest,
-                quote.total_principal(),
-                current_slot,
-            )
-            .map_err(capability_error)?;
-        if debit.rent_principal() != exact_fund_rent || debit.creation_principal() != 0 {
-            return Err(Error::InvalidResolutionFundShape);
-        }
-        let result = Self {
-            market,
-            generation,
-            sponsor_refund,
-            funding_state,
-        };
-        result.validate_against(
-            manifest_content_id,
-            manifest,
-            exact_fund_rent,
-            funding_state.remaining().total_principal(),
-        )?;
-        Ok(result)
+    if debit.rent_principal() != exact_fund_rent || debit.creation_principal() != 0 {
+        return Err(Error::InvalidResolutionFundShape);
     }
+    validate_required_resolution_funding(
+        funding,
+        manifest_content_id,
+        manifest,
+        selected,
+        exact_fund_rent,
+        funding.remaining().total_principal(),
+    )?;
+    Ok(funding)
+}
 
-    /// Decode the exact canonical funding layout.
-    ///
-    /// Decoding validates canonical bytes and the specialized local shape.
-    /// Call [`Self::validate_against`] before use to authenticate the manifest
-    /// binding and exact immutable quote.
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != FUNDING_BYTES {
-            return Err(Error::InvalidLength);
-        }
-        if array::<8>(bytes, 0)? != FUNDING_MAGIC {
-            return Err(Error::InvalidMagic);
-        }
-        if u16::from_le_bytes(array::<2>(bytes, 8)?) != FUNDING_SCHEMA_VERSION {
-            return Err(Error::UnsupportedSchema);
-        }
-        if !zero(bytes.get(10..16).ok_or(Error::InvalidLength)?) {
-            return Err(Error::NonCanonicalReservedBytes);
-        }
-        let funding_bytes = bytes
-            .get(FUNDING_STATE_OFFSET..FUNDING_BYTES)
-            .ok_or(Error::InvalidLength)?;
-        let result = Self {
-            market: array(bytes, 16)?,
-            generation: u64::from_le_bytes(array(bytes, 48)?),
-            sponsor_refund: array(bytes, 56)?,
-            funding_state: FundingStateV1::decode(funding_bytes).map_err(capability_error)?,
-        };
-        if !nonzero(&result.market) || !nonzero(&result.sponsor_refund) {
-            return Err(Error::ZeroIdentifier);
-        }
-        result.validate_local_shape()?;
-        Ok(result)
+/// Validate one raw canonical funding state as the current Pyth Fund profile.
+///
+/// The adapter supplies the authenticated manifest identity and bytes, the
+/// unique `selected` entry derived from the Market resolution-policy identity,
+/// freshly calculated rent for [`FUNDING_BYTES`], and physically observed held
+/// non-rent principal. Market occurrence, generation, PDA derivation, account
+/// owner, and refund authority are authenticated outside this function and are
+/// deliberately not persisted again in the Fund.
+pub fn validate_required_resolution_funding(
+    funding: FundingStateV1,
+    manifest_content_id: ContentId,
+    manifest: CapabilityManifestV1<'_>,
+    selected: RequiredFoundingEntryV1,
+    exact_fund_rent: u64,
+    observed_non_rent_principal: u64,
+) -> Result<()> {
+    validate_local_shape(funding)?;
+    let canonical = manifest
+        .required_founding_entry_for_config(selected.entry().config_id())
+        .map_err(capability_error)?;
+    if canonical != selected || selected.index() != funding.entry_index() {
+        return Err(Error::FundingSelectionMismatch);
     }
+    let quote = selected
+        .validate_one_shot_resolution_fund_quote(exact_fund_rent)
+        .map_err(capability_error)?;
+    funding
+        .validate_against(manifest_content_id, manifest, observed_non_rent_principal)
+        .map_err(capability_error)?;
+    let remaining = funding.remaining();
+    let released = funding.released();
+    if remaining.provider_principal() != quote.provider_principal()
+        || remaining.bounty_principal() != quote.bounty_principal()
+        || released.rent_principal() != exact_fund_rent
+    {
+        return Err(Error::InvalidResolutionFundShape);
+    }
+    Ok(())
+}
 
-    /// Encode this value into its exact canonical fixed-width bytes.
-    pub fn to_bytes(self) -> [u8; FUNDING_BYTES] {
-        let mut out = [0; FUNDING_BYTES];
-        out[..8].copy_from_slice(&FUNDING_MAGIC);
-        out[8..10].copy_from_slice(&FUNDING_SCHEMA_VERSION.to_le_bytes());
-        out[16..48].copy_from_slice(&self.market);
-        out[48..56].copy_from_slice(&self.generation.to_le_bytes());
-        out[56..88].copy_from_slice(&self.sponsor_refund);
-        out[FUNDING_STATE_OFFSET..FUNDING_BYTES].copy_from_slice(&self.funding_state.to_bytes());
-        out
-    }
+/// Return raw Fund rent plus its exact still-held provider and bounty principal.
+///
+/// Call [`validate_required_resolution_funding`] first. The adapter refuses an
+/// account below this minimum and routes any excess using the authenticated
+/// Market root's refund identity, not data duplicated in the Fund.
+pub fn required_resolution_minimum_balance(funding: FundingStateV1) -> Result<u64> {
+    validate_local_shape(funding)?;
+    funding
+        .released()
+        .rent_principal()
+        .checked_add(funding.remaining().total_principal())
+        .ok_or(Error::ArithmeticOverflow)
+}
 
-    /// Encode into an exact-width caller buffer without changing it on refusal.
-    pub fn encode(&self, output: &mut [u8]) -> Result<()> {
-        if output.len() != FUNDING_BYTES {
-            return Err(Error::OutputLength);
-        }
-        output.copy_from_slice(&self.to_bytes());
-        Ok(())
+fn validate_local_shape(funding: FundingStateV1) -> Result<()> {
+    let remaining = funding.remaining();
+    let released = funding.released();
+    if funding.status() != FundingStatus::Active
+        || remaining.rent_principal() != 0
+        || remaining.creation_principal() != 0
+        || remaining.work_principal() != 0
+        || remaining.bounty_principal() == 0
+        || remaining.liquidity_principal() != 0
+        || remaining.service_principal() != 0
+        || released.creation_principal() != 0
+        || released.work_principal() != 0
+        || released.provider_principal() != 0
+        || released.bounty_principal() != 0
+        || released.liquidity_principal() != 0
+        || released.service_principal() != 0
+    {
+        return Err(Error::InvalidResolutionFundShape);
     }
-
-    /// Return the Market identifier.
-    pub const fn market(&self) -> &[u8; 32] {
-        &self.market
-    }
-    /// Return the immutable Market generation.
-    pub const fn generation(&self) -> u64 {
-        self.generation
-    }
-    /// Return the immutable recipient of any sponsor refund excess.
-    pub const fn sponsor_refund(&self) -> &[u8; 32] {
-        &self.sponsor_refund
-    }
-    /// Return the sole canonical funding ledger embedded by value.
-    pub const fn funding_state(&self) -> FundingStateV1 {
-        self.funding_state
-    }
-    /// Return exact non-rent principal still held for provider and bounty.
-    pub const fn remaining(&self) -> FundingAmountsV1 {
-        self.funding_state.remaining()
-    }
-
-    /// Validate manifest authority, unique selection, exact rent, specialized
-    /// compartments, conservation, activation, and observed held principal.
-    pub fn validate_against(
-        &self,
-        manifest_content_id: ContentId,
-        manifest: CapabilityManifestV1<'_>,
-        exact_fund_rent: u64,
-        observed_non_rent_principal: u64,
-    ) -> Result<()> {
-        self.validate_local_shape()?;
-        let entry = manifest
-            .entry(self.funding_state.entry_index())
-            .map_err(capability_error)?;
-        let selected = manifest
-            .required_founding_entry_for_config(entry.config_id())
-            .map_err(capability_error)?;
-        if selected.index() != self.funding_state.entry_index() || selected.entry() != entry {
-            return Err(Error::FundingSelectionMismatch);
-        }
-        let quote = selected
-            .validate_one_shot_resolution_fund_quote(exact_fund_rent)
-            .map_err(capability_error)?;
-        self.funding_state
-            .validate_against(manifest_content_id, manifest, observed_non_rent_principal)
-            .map_err(capability_error)?;
-        let remaining = self.funding_state.remaining();
-        let released = self.funding_state.released();
-        if remaining.provider_principal() != quote.provider_principal()
-            || remaining.bounty_principal() != quote.bounty_principal()
-            || released.rent_principal() != exact_fund_rent
-        {
-            return Err(Error::InvalidResolutionFundShape);
-        }
-        Ok(())
-    }
-
-    /// Return the exact physical minimum committed by the activated funding
-    /// state: released account rent plus still-held non-rent principal.
-    pub fn minimum_balance(&self) -> Result<u64> {
-        self.funding_state
-            .released()
-            .rent_principal()
-            .checked_add(self.funding_state.remaining().total_principal())
-            .ok_or(Error::ArithmeticOverflow)
-    }
-
-    /// Classify a balance without inventing a second funding quote. Any
-    /// physical excess remains bound to the immutable sponsor-refund recipient.
-    pub fn classify_balance(&self, actual: u64) -> Result<BalanceClassification> {
-        let minimum = self.minimum_balance()?;
-        let sponsor_refund_excess = actual.checked_sub(minimum).ok_or(Error::Underfunded)?;
-        Ok(BalanceClassification {
-            sponsor_refund_recipient: self.sponsor_refund,
-            minimum,
-            sponsor_refund_excess,
-        })
-    }
-
-    fn validate_local_shape(&self) -> Result<()> {
-        let remaining = self.funding_state.remaining();
-        let released = self.funding_state.released();
-        if self.funding_state.status() != FundingStatus::Active
-            || remaining.rent_principal() != 0
-            || remaining.creation_principal() != 0
-            || remaining.work_principal() != 0
-            || remaining.bounty_principal() == 0
-            || remaining.liquidity_principal() != 0
-            || remaining.service_principal() != 0
-            || released.creation_principal() != 0
-            || released.work_principal() != 0
-            || released.provider_principal() != 0
-            || released.bounty_principal() != 0
-            || released.liquidity_principal() != 0
-            || released.service_principal() != 0
-        {
-            return Err(Error::InvalidResolutionFundShape);
-        }
-        Ok(())
-    }
+    Ok(())
 }
 
 fn capability_error(error: dclutch_capability_contract::Error) -> Error {
     Error::InvalidCapabilityFunding { error }
-}
-
-/// Exact funding classification, including the only recipient of excess.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BalanceClassification {
-    sponsor_refund_recipient: [u8; 32],
-    minimum: u64,
-    sponsor_refund_excess: u64,
-}
-
-impl BalanceClassification {
-    /// Return the immutable sponsor-refund recipient for the classified excess.
-    pub const fn sponsor_refund_recipient(&self) -> &[u8; 32] {
-        &self.sponsor_refund_recipient
-    }
-    /// Return the exact required rent, reimbursement, and bounty minimum.
-    pub const fn minimum(&self) -> u64 {
-        self.minimum
-    }
-    /// Return the exact excess payable only to the refund recipient.
-    pub const fn sponsor_refund_excess(&self) -> u64 {
-        self.sponsor_refund_excess
-    }
 }
 
 #[cfg(test)]
@@ -291,17 +160,15 @@ mod tests {
 
     const MANIFEST_BYTES_1: usize = MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES;
     const MANIFEST_BYTES_2: usize = MANIFEST_HEADER_BYTES + 2 * CAPABILITY_ENTRY_BYTES;
-    const STATE_STATUS_IN_FUND: usize = FUNDING_STATE_OFFSET + 10;
-    const STATE_ENTRY_INDEX_IN_FUND: usize = FUNDING_STATE_OFFSET + 48;
-    const STATE_REMAINING_PROVIDER_IN_FUND: usize = FUNDING_STATE_OFFSET + 64 + 24;
-    const STATE_REMAINING_TOTAL_IN_FUND: usize = FUNDING_STATE_OFFSET + 64 + 56;
+    const STATE_STATUS: usize = 10;
+    const STATE_ENTRY_INDEX: usize = 48;
+    const STATE_REMAINING_PROVIDER: usize = 64 + 24;
+    const STATE_REMAINING_TOTAL: usize = 64 + 56;
+    const STATE_RELEASED_RENT: usize = 128;
+    const STATE_RELEASED_TOTAL: usize = 128 + 56;
 
-    fn id(value: u8) -> [u8; 32] {
-        [value; 32]
-    }
-
-    fn content_id(value: u8) -> ContentId {
-        ContentId::new(id(value)).expect("nonzero content id")
+    fn id(value: u8) -> ContentId {
+        ContentId::new([value; 32]).expect("nonzero content id")
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -320,12 +187,12 @@ mod tests {
 
     fn entry(kind: u8, config: u8, funding_quote: FundingQuoteV1) -> CapabilityEntryV1 {
         CapabilityEntryV1::new(
-            content_id(kind),
-            content_id(21),
-            content_id(config),
-            content_id(23),
-            content_id(24),
-            content_id(25),
+            id(kind),
+            id(21),
+            id(config),
+            id(23),
+            id(24),
+            id(25),
             ActivationPolicy::RequiredAtFounding,
             0,
             0,
@@ -335,27 +202,24 @@ mod tests {
         .expect("valid entry")
     }
 
-    fn fund<'a>(
+    fn funding<'a>(
         storage: &'a mut [u8; MANIFEST_BYTES_1],
         rent: u64,
-    ) -> (CapabilityManifestV1<'a>, ResolutionFundV1) {
+    ) -> (CapabilityManifestV1<'a>, FundingStateV1) {
         let entries = [entry(11, 31, quote(rent, 0, 0, 7, 11, 0, 0))];
         let manifest = CapabilityManifestV1::encode_into(&entries, storage).expect("manifest");
         let selected = manifest
-            .required_founding_entry_for_config(content_id(31))
+            .required_founding_entry_for_config(id(31))
             .expect("unique founding entry");
-        let result = ResolutionFundV1::new(
-            id(1),
-            9,
-            id(2),
-            content_id(99),
-            manifest,
-            selected,
-            rent,
-            44,
-        )
-        .expect("resolution fund");
+        let result = construct_required_resolution_funding(id(99), manifest, selected, rent, 44)
+            .expect("resolution funding");
         (manifest, result)
+    }
+
+    fn selected(manifest: CapabilityManifestV1<'_>) -> RequiredFoundingEntryV1 {
+        manifest
+            .required_founding_entry_for_config(id(31))
+            .expect("unique founding entry")
     }
 
     fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
@@ -364,113 +228,87 @@ mod tests {
     }
 
     #[test]
-    fn construction_activates_canonical_funding_and_round_trips() {
+    fn construction_activates_the_raw_canonical_ledger() {
         let mut storage = [0u8; MANIFEST_BYTES_1];
-        let (manifest, funding) = fund(&mut storage, 100);
-        assert_eq!(FUNDING_BYTES, 280);
-        assert_eq!(funding.market(), &id(1));
-        assert_eq!(funding.generation(), 9);
-        assert_eq!(funding.sponsor_refund(), &id(2));
-        assert_eq!(funding.funding_state().status(), FundingStatus::Active);
-        assert_eq!(funding.funding_state().activation_slot(), 44);
-        assert_eq!(
-            funding.funding_state().manifest_content_id(),
-            content_id(99)
-        );
-        assert_eq!(funding.funding_state().entry_index(), 0);
+        let (manifest, funding) = funding(&mut storage, 100);
+        assert_eq!(FUNDING_BYTES, FUNDING_STATE_BYTES);
+        assert_eq!(FUNDING_BYTES, 192);
+        assert_eq!(funding.status(), FundingStatus::Active);
+        assert_eq!(funding.activation_slot(), 44);
+        assert_eq!(funding.manifest_content_id(), id(99));
+        assert_eq!(funding.entry_index(), 0);
         assert_eq!(funding.remaining().provider_principal(), 7);
         assert_eq!(funding.remaining().bounty_principal(), 11);
         assert_eq!(funding.remaining().total_principal(), 18);
-        assert_eq!(funding.funding_state().released().rent_principal(), 100);
-        assert_eq!(funding.minimum_balance(), Ok(118));
+        assert_eq!(funding.released().rent_principal(), 100);
+        assert_eq!(required_resolution_minimum_balance(funding), Ok(118));
         assert_eq!(
-            funding.validate_against(content_id(99), manifest, 100, 18),
-            Ok(())
-        );
-        assert_eq!(ResolutionFundV1::decode(&funding.to_bytes()), Ok(funding));
-
-        let classified = funding.classify_balance(125).expect("funded");
-        assert_eq!(classified.sponsor_refund_recipient(), &id(2));
-        assert_eq!(classified.minimum(), 118);
-        assert_eq!(classified.sponsor_refund_excess(), 7);
-        assert_eq!(funding.classify_balance(117), Err(Error::Underfunded));
-    }
-
-    #[test]
-    fn one_shot_release_uses_only_the_embedded_canonical_ledger() {
-        let mut storage = [0u8; MANIFEST_BYTES_1];
-        let (manifest, funding) = fund(&mut storage, 100);
-        let mut state = funding.funding_state();
-        assert_eq!(
-            state.release(
-                content_id(99),
+            validate_required_resolution_funding(
+                funding,
+                id(99),
                 manifest,
+                selected(manifest),
+                100,
                 18,
-                FundingCompartment::Provider,
-                7,
             ),
             Ok(())
         );
-        assert_eq!(state.remaining().total_principal(), 11);
-        assert_eq!(
-            state.release(content_id(99), manifest, 11, FundingCompartment::Bounty, 11,),
-            Ok(())
-        );
-        assert_eq!(state.validate_against(content_id(99), manifest, 0), Ok(()));
-        assert_eq!(state.remaining().total_principal(), 0);
-        assert_eq!(state.released().rent_principal(), 100);
-        assert_eq!(state.released().provider_principal(), 7);
-        assert_eq!(state.released().bounty_principal(), 11);
-        assert_eq!(
-            state.release(content_id(99), manifest, 0, FundingCompartment::Bounty, 1,),
-            Err(CapabilityError::InsufficientCompartmentPrincipal)
-        );
+        let bytes = funding.to_bytes();
+        assert_eq!(bytes.len(), FUNDING_BYTES);
+        assert_eq!(FundingStateV1::decode(&bytes), Ok(funding));
     }
 
     #[test]
-    fn hostile_exact_layouts_refuse_without_output_mutation() {
+    fn raw_physical_bytes_have_one_exact_hostile_decoder() {
         let mut storage = [0u8; MANIFEST_BYTES_1];
-        let (_, funding) = fund(&mut storage, 100);
+        let (_, funding) = funding(&mut storage, 100);
         let bytes = funding.to_bytes();
         for length in 0..FUNDING_BYTES {
             assert_eq!(
-                ResolutionFundV1::decode(bytes.get(..length).expect("prefix")),
-                Err(Error::InvalidLength)
+                FundingStateV1::decode(bytes.get(..length).expect("prefix")),
+                Err(CapabilityError::InvalidLength)
             );
         }
         let mut trailing = [0u8; FUNDING_BYTES + 1];
         trailing[..FUNDING_BYTES].copy_from_slice(&bytes);
         assert_eq!(
-            ResolutionFundV1::decode(&trailing),
-            Err(Error::InvalidLength)
+            FundingStateV1::decode(&trailing),
+            Err(CapabilityError::InvalidLength)
         );
 
         let mut changed = bytes;
         changed[0] = 0;
-        assert_eq!(ResolutionFundV1::decode(&changed), Err(Error::InvalidMagic));
+        assert_eq!(
+            FundingStateV1::decode(&changed),
+            Err(CapabilityError::InvalidMagic)
+        );
         let mut changed = bytes;
         changed[8] = 2;
         assert_eq!(
-            ResolutionFundV1::decode(&changed),
-            Err(Error::UnsupportedSchema)
+            FundingStateV1::decode(&changed),
+            Err(CapabilityError::UnsupportedSchema)
         );
         let mut changed = bytes;
-        changed[10] = 1;
+        changed[11] = 1;
         assert_eq!(
-            ResolutionFundV1::decode(&changed),
-            Err(Error::NonCanonicalReservedBytes)
+            FundingStateV1::decode(&changed),
+            Err(CapabilityError::NonCanonicalReservedBytes)
         );
-        let mut output = [0xa5; FUNDING_BYTES - 1];
-        assert_eq!(funding.encode(&mut output), Err(Error::OutputLength));
-        assert_eq!(output, [0xa5; FUNDING_BYTES - 1]);
     }
 
     #[test]
     fn wrong_manifest_index_status_and_conservation_refuse() {
         let mut storage = [0u8; MANIFEST_BYTES_1];
-        let (manifest, funding) = fund(&mut storage, 100);
+        let (manifest, funding) = funding(&mut storage, 100);
         assert_eq!(
-            funding.validate_against(content_id(98), manifest, 100, 18),
+            validate_required_resolution_funding(
+                funding,
+                id(98),
+                manifest,
+                selected(manifest),
+                100,
+                18,
+            ),
             Err(Error::InvalidCapabilityFunding {
                 error: CapabilityError::FundingBindingMismatch,
             })
@@ -481,44 +319,65 @@ mod tests {
         let wrong_manifest = CapabilityManifestV1::encode_into(&wrong_entries, &mut wrong_storage)
             .expect("wrong manifest");
         assert_eq!(
-            funding.validate_against(content_id(99), wrong_manifest, 100, 18),
+            validate_required_resolution_funding(
+                funding,
+                id(99),
+                wrong_manifest,
+                selected(manifest),
+                100,
+                18,
+            ),
+            Err(Error::FundingSelectionMismatch)
+        );
+
+        let mut changed = funding.to_bytes();
+        changed[STATE_ENTRY_INDEX..STATE_ENTRY_INDEX + 2].copy_from_slice(&1u16.to_le_bytes());
+        let wrong_index = FundingStateV1::decode(&changed).expect("structural state");
+        assert_eq!(
+            validate_required_resolution_funding(
+                wrong_index,
+                id(99),
+                manifest,
+                selected(manifest),
+                100,
+                18,
+            ),
+            Err(Error::FundingSelectionMismatch)
+        );
+
+        let mut changed = funding.to_bytes();
+        changed[STATE_STATUS] = 0;
+        assert_eq!(
+            FundingStateV1::decode(&changed),
+            Err(CapabilityError::InvalidFundingStatus)
+        );
+
+        let mut changed = funding.to_bytes();
+        put_u64(&mut changed, STATE_REMAINING_PROVIDER, 8);
+        put_u64(&mut changed, STATE_REMAINING_TOTAL, 19);
+        let unconserved = FundingStateV1::decode(&changed).expect("structural state");
+        assert_eq!(
+            validate_required_resolution_funding(
+                unconserved,
+                id(99),
+                manifest,
+                selected(manifest),
+                100,
+                19,
+            ),
             Err(Error::InvalidCapabilityFunding {
                 error: CapabilityError::FundingConservationMismatch,
             })
         );
-
-        let mut changed = funding.to_bytes();
-        changed[STATE_ENTRY_INDEX_IN_FUND..STATE_ENTRY_INDEX_IN_FUND + 2]
-            .copy_from_slice(&1u16.to_le_bytes());
-        let wrong_index = ResolutionFundV1::decode(&changed).expect("structural state");
         assert_eq!(
-            wrong_index.validate_against(content_id(99), manifest, 100, 18),
-            Err(Error::InvalidCapabilityFunding {
-                error: CapabilityError::InvalidDependency,
-            })
-        );
-
-        let mut changed = funding.to_bytes();
-        changed[STATE_STATUS_IN_FUND] = 0;
-        assert_eq!(
-            ResolutionFundV1::decode(&changed),
-            Err(Error::InvalidCapabilityFunding {
-                error: CapabilityError::InvalidFundingStatus,
-            })
-        );
-
-        let mut changed = funding.to_bytes();
-        put_u64(&mut changed, STATE_REMAINING_PROVIDER_IN_FUND, 8);
-        put_u64(&mut changed, STATE_REMAINING_TOTAL_IN_FUND, 19);
-        let unconserved = ResolutionFundV1::decode(&changed).expect("structural state");
-        assert_eq!(
-            unconserved.validate_against(content_id(99), manifest, 100, 19),
-            Err(Error::InvalidCapabilityFunding {
-                error: CapabilityError::FundingConservationMismatch,
-            })
-        );
-        assert_eq!(
-            funding.validate_against(content_id(99), manifest, 100, 19),
+            validate_required_resolution_funding(
+                funding,
+                id(99),
+                manifest,
+                selected(manifest),
+                100,
+                19,
+            ),
             Err(Error::InvalidCapabilityFunding {
                 error: CapabilityError::PresentPrincipalMismatch,
             })
@@ -528,9 +387,16 @@ mod tests {
     #[test]
     fn rent_and_extra_compartments_are_manifest_refusals() {
         let mut storage = [0u8; MANIFEST_BYTES_1];
-        let (manifest, funding) = fund(&mut storage, 100);
+        let (manifest, funding) = funding(&mut storage, 100);
         assert_eq!(
-            funding.validate_against(content_id(99), manifest, 99, 18),
+            validate_required_resolution_funding(
+                funding,
+                id(99),
+                manifest,
+                selected(manifest),
+                99,
+                18,
+            ),
             Err(Error::InvalidCapabilityFunding {
                 error: CapabilityError::ResolutionFundRentMismatch,
             })
@@ -547,19 +413,10 @@ mod tests {
             let extra_manifest = CapabilityManifestV1::encode_into(&entries, &mut extra_storage)
                 .expect("extra manifest");
             let selected = extra_manifest
-                .required_founding_entry_for_config(content_id(31))
+                .required_founding_entry_for_config(id(31))
                 .expect("selected");
             assert_eq!(
-                ResolutionFundV1::new(
-                    id(1),
-                    9,
-                    id(2),
-                    content_id(99),
-                    extra_manifest,
-                    selected,
-                    100,
-                    44,
-                ),
+                construct_required_resolution_funding(id(99), extra_manifest, selected, 100, 44,),
                 Err(Error::InvalidCapabilityFunding {
                     error: CapabilityError::ExtraneousResolutionFundPrincipal,
                 })
@@ -572,19 +429,10 @@ mod tests {
             CapabilityManifestV1::encode_into(&entries, &mut zero_bounty_storage)
                 .expect("zero bounty manifest");
         let selected = zero_bounty_manifest
-            .required_founding_entry_for_config(content_id(31))
+            .required_founding_entry_for_config(id(31))
             .expect("selected");
         assert_eq!(
-            ResolutionFundV1::new(
-                id(1),
-                9,
-                id(2),
-                content_id(99),
-                zero_bounty_manifest,
-                selected,
-                100,
-                44,
-            ),
+            construct_required_resolution_funding(id(99), zero_bounty_manifest, selected, 100, 44,),
             Err(Error::InvalidCapabilityFunding {
                 error: CapabilityError::MissingResolutionFundBounty,
             })
@@ -592,13 +440,13 @@ mod tests {
     }
 
     #[test]
-    fn a_selection_from_another_manifest_cannot_authorize_funding() {
+    fn selection_from_another_manifest_cannot_bypass_uniqueness() {
         let first_entries = [entry(11, 31, quote(100, 0, 0, 7, 11, 0, 0))];
         let mut first_storage = [0u8; MANIFEST_BYTES_1];
         let first = CapabilityManifestV1::encode_into(&first_entries, &mut first_storage)
             .expect("first manifest");
         let selected = first
-            .required_founding_entry_for_config(content_id(31))
+            .required_founding_entry_for_config(id(31))
             .expect("first selection");
 
         let ambiguous_entries = [
@@ -610,16 +458,7 @@ mod tests {
             CapabilityManifestV1::encode_into(&ambiguous_entries, &mut ambiguous_storage)
                 .expect("ambiguous manifest");
         assert_eq!(
-            ResolutionFundV1::new(
-                id(1),
-                9,
-                id(2),
-                content_id(99),
-                ambiguous,
-                selected,
-                100,
-                44,
-            ),
+            construct_required_resolution_funding(id(99), ambiguous, selected, 100, 44),
             Err(Error::InvalidCapabilityFunding {
                 error: CapabilityError::RequiredFoundingConfigAmbiguous,
             })
@@ -627,43 +466,46 @@ mod tests {
     }
 
     #[test]
-    fn identity_and_arithmetic_boundaries_refuse() {
+    fn one_shot_release_uses_only_the_returned_canonical_ledger() {
+        let mut storage = [0u8; MANIFEST_BYTES_1];
+        let (manifest, funding) = funding(&mut storage, 100);
+        let mut state = funding;
+        assert_eq!(
+            state.release(id(99), manifest, 18, FundingCompartment::Provider, 7,),
+            Ok(())
+        );
+        assert_eq!(state.remaining().total_principal(), 11);
+        assert_eq!(
+            state.release(id(99), manifest, 11, FundingCompartment::Bounty, 11,),
+            Ok(())
+        );
+        assert_eq!(state.validate_against(id(99), manifest, 0), Ok(()));
+        assert_eq!(state.remaining().total_principal(), 0);
+        assert_eq!(state.released().rent_principal(), 100);
+        assert_eq!(state.released().provider_principal(), 7);
+        assert_eq!(state.released().bounty_principal(), 11);
+        assert_eq!(
+            state.release(id(99), manifest, 0, FundingCompartment::Bounty, 1,),
+            Err(CapabilityError::InsufficientCompartmentPrincipal)
+        );
+    }
+
+    #[test]
+    fn arithmetic_boundaries_refuse() {
         assert_eq!(
             FundingQuoteV1::new(u64::MAX, 0, 0, 0, 1, 0, 0),
             Err(CapabilityError::ArithmeticOverflow)
         );
 
-        let entries = [entry(11, 31, quote(100, 0, 0, 7, 11, 0, 0))];
         let mut storage = [0u8; MANIFEST_BYTES_1];
-        let manifest = CapabilityManifestV1::encode_into(&entries, &mut storage).expect("manifest");
-        let selected = manifest
-            .required_founding_entry_for_config(content_id(31))
-            .expect("selected");
+        let (_, funding) = funding(&mut storage, 100);
+        let mut changed = funding.to_bytes();
+        put_u64(&mut changed, STATE_RELEASED_RENT, u64::MAX);
+        put_u64(&mut changed, STATE_RELEASED_TOTAL, u64::MAX);
+        let overflowing = FundingStateV1::decode(&changed).expect("structural state");
         assert_eq!(
-            ResolutionFundV1::new(
-                [0; 32],
-                9,
-                id(2),
-                content_id(99),
-                manifest,
-                selected,
-                100,
-                44,
-            ),
-            Err(Error::ZeroIdentifier)
-        );
-        assert_eq!(
-            ResolutionFundV1::new(
-                id(1),
-                9,
-                [0; 32],
-                content_id(99),
-                manifest,
-                selected,
-                100,
-                44,
-            ),
-            Err(Error::ZeroIdentifier)
+            required_resolution_minimum_balance(overflowing),
+            Err(Error::ArithmeticOverflow)
         );
     }
 }

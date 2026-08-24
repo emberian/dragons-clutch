@@ -43,8 +43,6 @@ pub enum Error {
     IdenticalAssetSemanticIdentifiers,
     /// An exact checked arithmetic operation overflowed.
     ArithmeticOverflow,
-    /// The actual funding balance cannot meet its immutable minimum.
-    Underfunded,
     /// Canonical capability funding validation refused the composition.
     InvalidCapabilityFunding {
         /// Exact capability-contract refusal.
