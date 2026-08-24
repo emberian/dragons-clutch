@@ -5,11 +5,11 @@
 //! its vault PDA as a signer and must atomically perform the matching
 //! Token-2022 mint or burn. This program never claims that wrapper supply moved.
 //!
-//! Canonical routes write the two Position V3 bodies and their purpose-owned
-//! Replay envelopes. Full-vector routes additionally write Hoard V2 and
-//! ClaimLedger V3 complete-set reclassification successors. Position rent
-//! owner, refundable principal, and donation floor are copied byte-exactly;
-//! no lamports move and no prefunding becomes an economic asset.
+//! Full-vector routes write both Position V3 bodies, their purpose-owned Replay
+//! envelopes, and the Hoard V2/ClaimLedger V3 complete-set reclassification
+//! successors. Compaction additionally owns its exact Hoard-surplus disposition;
+//! retirement owns typed principal refunds and donation sinks. Historical
+//! canonical actions 2/4 have no endpoint in this module.
 
 use clutch_product_series::{
     CompiledProductSeriesBundleV5, CompiledProductSeriesBundleV5Id, ContentId, FixedCodec,
@@ -40,8 +40,7 @@ use clutch_solana_layout::product_series::SeriesMarketLinkAccountV1;
 use clutch_structured_claim::DeploymentBinding;
 use clutch_structured_claim_adapter::runtime_contract::{
     authenticate_wrapper_recipe_membership_v1, structured_descriptor_admission_receipt_v1,
-    structured_owner_release_id_v2, DescriptorBasisV1, PositionAssetTransferPayloadV1,
-    StructuredClaimActionV1,
+    structured_owner_release_id_v2, DescriptorBasisV1, StructuredClaimActionV1,
     StructuredClaimDescriptorV2, StructuredClaimPayloadV1, StructuredClaimReplayExtensionV1,
     StructuredClaimRuntimeAddressesV1, StructuredMarketRootBindingV1, StructuredMarketRootV1,
     StructuredProductLineageV1, WrapperQuantityPayloadV1, WrapperRecipeHashV1, WrapperRecipeV1,
@@ -68,11 +67,8 @@ use clutch_structured_claim_adapter::{
     CurrentStructuredLiabilitiesV1, CurrentStructuredQuantityAccountsV1,
     CurrentStructuredVaultAccountsV1,
     Error as StructuredAdapterError, PdaVerifierV1, RawAccountV1, RuntimeDeploymentsV1,
-    StructuredCustodyPdaVerifierV1, STRUCTURED_CUSTODY_ACCOUNT_COUNT,
-    STRUCTURED_CUSTODY_DESCRIPTOR_BODY_DOMAIN_V1,
-    STRUCTURED_BASE_CAPABILITY_MANIFEST_ID_V1,
-    STRUCTURED_TOKEN_2022_CAPABILITY_MANIFEST_ID_V1,
-    STRUCTURED_WRAPPER_CAPABILITY_MANIFEST_ID_V1,
+    STRUCTURED_CUSTODY_ACCOUNT_COUNT,
+    STRUCTURED_CUSTODY_DESCRIPTOR_BODY_DOMAIN_V1, STRUCTURED_CURRENT_RELEASE_CONTRACT_V1,
 };
 use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
@@ -143,18 +139,22 @@ const IX_RESOLUTION_V5: usize = 32;
 const STRUCTURED_FULL_VECTOR_CORE_ACCOUNT_COUNT: usize = 29;
 /// Exact account count for current full-vector wrap and unwind, including
 /// three disjoint loader-release artifacts.
-pub const STRUCTURED_FULL_VECTOR_ACCOUNT_COUNT: usize = 32;
+pub const STRUCTURED_FULL_VECTOR_ACCOUNT_COUNT: usize =
+    clutch_structured_claim_adapter::STRUCTURED_FULL_VECTOR_ACCOUNT_COUNT_V1;
 /// Exact account count for current terminal wrapper redemption.
-pub const STRUCTURED_TERMINAL_REDEMPTION_ACCOUNT_COUNT: usize = 33;
+pub const STRUCTURED_TERMINAL_REDEMPTION_ACCOUNT_COUNT: usize =
+    clutch_structured_claim_adapter::STRUCTURED_TERMINAL_REDEMPTION_ACCOUNT_COUNT_V1;
 
 /// Exact account count for beneficiary-free single-vault compaction. The five
 /// Product/collateral authority roles are distinct from the original 27-frame:
 /// Hoard authority, neutral token, Structured root, Product link, FundingTerms.
-pub const STRUCTURED_COMPACTION_ACCOUNT_COUNT: usize = 32;
+pub const STRUCTURED_COMPACTION_ACCOUNT_COUNT: usize =
+    clutch_structured_claim_adapter::STRUCTURED_COMPACTION_ACCOUNT_COUNT_V1;
 /// Exact action-8 frame. Hoard and ClaimLedger are current read-only semantic
 /// owners; the descriptor, mint, Position/Replay, root, and optional Product
 /// link terminal successor are mutated atomically.
-pub const STRUCTURED_DESCRIPTOR_RETIREMENT_ACCOUNT_COUNT: usize = 31;
+pub const STRUCTURED_DESCRIPTOR_RETIREMENT_ACCOUNT_COUNT: usize =
+    clutch_structured_claim_adapter::STRUCTURED_DESCRIPTOR_RETIREMENT_ACCOUNT_COUNT_V1;
 const _: () = assert!(
     clutch_solana_layout::registry::STRUCTURED_MARKET_ROOT_ACCOUNT_TAG
         == clutch_structured_claim_adapter::runtime_contract::STRUCTURED_MARKET_ROOT_ACCOUNT_TAG
@@ -272,7 +272,8 @@ const ACCOUNT_INDICES: [usize; STRUCTURED_CUSTODY_ACCOUNT_COUNT] = [
     0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
 ];
 
-const STRUCTURED_VAULT_CREATE_ACCOUNT_COUNT: usize = 34;
+const STRUCTURED_VAULT_CREATE_ACCOUNT_COUNT: usize =
+    clutch_structured_claim_adapter::STRUCTURED_CREATE_ACCOUNT_COUNT_V1;
 const STRUCTURED_ROOT_SEED_V1: &[u8] = b"dc:structured-root:v1";
 const STRUCTURED_COMPACTION_PRODUCT_AUTHORITY_DOMAIN_V1: &[u8] =
     b"dragons-clutch/structured-claim/compaction-product-authority/v1\0";
@@ -1494,8 +1495,8 @@ pub fn process_compact_donation(
 
 /// Retire one exact descriptor after the wrapper has atomically revoked its
 /// zero-supply mint authority and persisted the descriptor tombstone. This is
-/// the sole current action-8 base route: it never consults MarketLedger, and it
-/// consumes Product's private Wrapper terminal writer only for the final live
+/// the sole current action-8 base route: it consumes current owners plus
+/// Product's private Wrapper terminal writer only for the final live
 /// descriptor in the Structured root.
 pub fn process_retire_descriptor(
     program_id: &Pubkey,
@@ -3496,13 +3497,20 @@ fn authenticate_structured_release_set_v2(
     release_artifacts: [&AccountInfo<'_>; 3],
 ) -> Outcome<AuthenticatedStructuredDeploymentsV2> {
     require(
-        STRUCTURED_BASE_CAPABILITY_MANIFEST_ID_V1 == crate::capabilities::PROFILE_ID,
+        STRUCTURED_CURRENT_RELEASE_CONTRACT_V1.base_capability_manifest_id
+            == crate::capabilities::PROFILE_ID,
         ClutchError::AuthorizationUnavailable,
     )?;
     let manifests = [
-        ContentId::from_bytes(STRUCTURED_WRAPPER_CAPABILITY_MANIFEST_ID_V1),
-        ContentId::from_bytes(STRUCTURED_BASE_CAPABILITY_MANIFEST_ID_V1),
-        ContentId::from_bytes(STRUCTURED_TOKEN_2022_CAPABILITY_MANIFEST_ID_V1),
+        ContentId::from_bytes(
+            STRUCTURED_CURRENT_RELEASE_CONTRACT_V1.wrapper_capability_manifest_id,
+        ),
+        ContentId::from_bytes(
+            STRUCTURED_CURRENT_RELEASE_CONTRACT_V1.base_capability_manifest_id,
+        ),
+        ContentId::from_bytes(
+            STRUCTURED_CURRENT_RELEASE_CONTRACT_V1.token_2022_capability_manifest_id,
+        ),
     ];
     let wrapper = authenticate_structured_program_release_v2(
         artifact_owner,
@@ -3698,70 +3706,6 @@ fn derive_runtime_addresses(
     })
 }
 
-fn verify_rent_and_exact_transfer(
-    accounts: &[AccountInfo<'_>],
-    poststate: clutch_structured_claim_adapter::StructuredCustodyPoststateV1,
-    transfer: PositionAssetTransferPayloadV1,
-) -> Outcome<()> {
-    let source_data = accounts[IX_SOURCE_POSITION]
-        .try_borrow_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let destination_data = accounts[IX_DESTINATION_POSITION]
-        .try_borrow_data()
-        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    let source_before = PositionAccountV3::decode(&source_data)
-        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
-    let destination_before = PositionAccountV3::decode(&destination_data)
-        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
-    let source_after = PositionAccountV3::decode(&poststate.source_position.body)
-        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
-    let destination_after = PositionAccountV3::decode(&poststate.destination_position.body)
-        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
-    verify_exact_transfer_closure(
-        source_before,
-        destination_before,
-        source_after,
-        destination_after,
-        transfer,
-    )
-}
-
-fn verify_exact_transfer_closure(
-    source_before: PositionAccountV3,
-    destination_before: PositionAccountV3,
-    source_after: PositionAccountV3,
-    destination_after: PositionAccountV3,
-    transfer: PositionAssetTransferPayloadV1,
-) -> Outcome<()> {
-    require(
-        source_before.rent() == source_after.rent()
-            && destination_before.rent() == destination_after.rent()
-            && source_before.cash_atoms().checked_sub(source_after.cash_atoms())
-                == Some(transfer.cash_atoms)
-            && destination_after
-                .cash_atoms()
-                .checked_sub(destination_before.cash_atoms())
-                == Some(transfer.cash_atoms),
-        ClutchError::AggregateClosureMismatch,
-    )?;
-    let source_eggs = source_before.native_eggs();
-    let source_eggs_after = source_after.native_eggs();
-    let destination_eggs = destination_before.native_eggs();
-    let destination_eggs_after = destination_after.native_eggs();
-    let mut outcome = 0_usize;
-    while outcome < source_eggs.len() {
-        require(
-            source_eggs[outcome].checked_sub(source_eggs_after[outcome])
-                == Some(transfer.internal[outcome])
-                && destination_eggs_after[outcome].checked_sub(destination_eggs[outcome])
-                    == Some(transfer.internal[outcome]),
-            ClutchError::AggregateClosureMismatch,
-        )?;
-        outcome += 1;
-    }
-    Ok(())
-}
-
 #[derive(Clone, Copy, Debug, Default)]
 struct RuntimeStructuredPdaVerifierV1;
 
@@ -3821,163 +3765,6 @@ impl BasePositionPdaVerifierV1 for RuntimeStructuredPdaVerifierV1 {
     }
 }
 
-impl StructuredCustodyPdaVerifierV1 for RuntimeStructuredPdaVerifierV1 {
-    fn verify_realm(
-        &self,
-        base_program: [u8; 32],
-        address: [u8; 32],
-        realm_id: [u8; 32],
-        stored_bump: u8,
-    ) -> bool {
-        let derived = seeds::realm_pda(&Pubkey::new_from_array(base_program), &realm_id);
-        derived.0.to_bytes() == address && derived.1 == stored_bump
-    }
-
-    fn verify_profile(
-        &self,
-        base_program: [u8; 32],
-        address: [u8; 32],
-        realm_id: [u8; 32],
-        profile_id: [u8; 32],
-    ) -> bool {
-        seeds::profile_pda(
-            &Pubkey::new_from_array(base_program),
-            &realm_id,
-            &profile_id,
-        )
-        .0
-        .to_bytes()
-            == address
-    }
-
-    fn verify_collateral_policy(
-        &self,
-        base_program: [u8; 32],
-        address: [u8; 32],
-        profile_id: [u8; 32],
-        policy_id: [u8; 32],
-    ) -> bool {
-        seeds::policy_pda(
-            &Pubkey::new_from_array(base_program),
-            &profile_id,
-            &policy_id,
-        )
-        .0
-        .to_bytes()
-            == address
-    }
-
-    fn verify_upgradeable_deployment(
-        &self,
-        upgradeable_loader: [u8; 32],
-        program: &RawAccountV1<'_>,
-        program_data: &RawAccountV1<'_>,
-        expected_deployment_slot: u64,
-    ) -> bool {
-        if upgradeable_loader != UPGRADEABLE_LOADER_ID {
-            return false;
-        }
-        decode_loader_pair_v1(
-            LoaderAccountViewV1::new(program.key, program.owner, program.executable, program.data),
-            LoaderAccountViewV1::new(
-                program_data.key,
-                program_data.owner,
-                program_data.executable,
-                program_data.data,
-            ),
-        )
-        .map(|pair| pair.state.deployment_slot == expected_deployment_slot)
-        .unwrap_or(false)
-    }
-
-    fn verify_market_binding(
-        &self,
-        base_program: [u8; 32],
-        address: [u8; 32],
-        market_instance_id: [u8; 32],
-        stored_bump: u8,
-    ) -> bool {
-        let derived = seeds::general_v2_market_binding_pda(
-            &Pubkey::new_from_array(base_program),
-            &market_instance_id,
-        );
-        derived.0.to_bytes() == address && derived.1 == stored_bump
-    }
-
-    fn verify_market_runtime(
-        &self,
-        base_program: [u8; 32],
-        address: [u8; 32],
-        market_binding: [u8; 32],
-        stored_bump: u8,
-    ) -> bool {
-        let derived = seeds::general_v2_market_runtime_pda(
-            &Pubkey::new_from_array(base_program),
-            &market_binding,
-        );
-        derived.0.to_bytes() == address && derived.1 == stored_bump
-    }
-
-    fn verify_hoard_v2(
-        &self,
-        base_program: [u8; 32],
-        address: [u8; 32],
-        market_instance_id: [u8; 32],
-        stored_bump: u8,
-    ) -> bool {
-        let derived =
-            seeds::hoard_v2_pda(&Pubkey::new_from_array(base_program), &market_instance_id);
-        derived.0.to_bytes() == address && derived.1 == stored_bump
-    }
-
-    fn verify_claim_ledger_v3(
-        &self,
-        base_program: [u8; 32],
-        address: [u8; 32],
-        market_instance_id: [u8; 32],
-        stored_bump: u8,
-    ) -> bool {
-        let derived = seeds::claim_ledger_v3_pda(
-            &Pubkey::new_from_array(base_program),
-            &market_instance_id,
-        );
-        derived.0.to_bytes() == address && derived.1 == stored_bump
-    }
-
-    fn verify_product_artifact(
-        &self,
-        base_program: [u8; 32],
-        address: [u8; 32],
-        artifact_kind: u8,
-        content_id: [u8; 32],
-    ) -> bool {
-        seeds::product_artifact_pda(
-            &Pubkey::new_from_array(base_program),
-            artifact_kind,
-            &content_id,
-        )
-        .0
-        .to_bytes()
-            == address
-    }
-
-    fn verify_market_instance_artifact(
-        &self,
-        base_program: [u8; 32],
-        address: [u8; 32],
-        market_instance_id: [u8; 32],
-    ) -> bool {
-        seeds::product_artifact_pda(
-            &Pubkey::new_from_array(base_program),
-            ArtifactKind::MarketInstancePreimageV2.byte(),
-            &market_instance_id,
-        )
-        .0
-        .to_bytes()
-            == address
-    }
-}
-
 fn map_adapter_error(error: StructuredAdapterError) -> Refusal {
     let mapped = match error {
         StructuredAdapterError::InvalidInstruction
@@ -4020,58 +3807,6 @@ fn map_adapter_error(error: StructuredAdapterError) -> Refusal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clutch_retirement::{
-        Identity32V1, PositionLifecycleV3, PositionV3Fields, RentSplitV2, MAX_OUTCOMES,
-    };
-
-    fn identity(byte: u8) -> Identity32V1 {
-        Identity32V1::new([byte; 32]).unwrap()
-    }
-
-    fn position(cash_atoms: u64, egg_atoms: u64, rent: RentSplitV2) -> PositionAccountV3 {
-        let mut native_eggs = [0; MAX_OUTCOMES];
-        native_eggs[0] = egg_atoms;
-        PositionAccountV3::new(PositionV3Fields {
-            purpose: PositionPurposeV3::General,
-            lifecycle: PositionLifecycleV3::Open,
-            outcome_count: 1,
-            stored_bump: 1,
-            generation: 1,
-            market_instance_id: identity(1),
-            realm_id: identity(2),
-            collateral_policy_id: identity(3),
-            collateral_release_id: identity(4),
-            owner: identity(5),
-            controller: identity(6),
-            replay_account: identity(7),
-            purpose_binding_id: identity(8),
-            cash_atoms,
-            reserved_cash_atoms: 0,
-            native_eggs,
-            outstanding_reservations: 0,
-            rent,
-        })
-        .unwrap()
-    }
-
-    fn exact_transfer(cash_atoms: u64, egg_atoms: u64) -> PositionAssetTransferPayloadV1 {
-        let mut internal = [0; clutch_structured_claim_adapter::runtime_contract::MAX_OUTCOMES];
-        internal[0] = egg_atoms;
-        PositionAssetTransferPayloadV1 {
-            market: [1; 32],
-            source_owner: [2; 32],
-            destination_owner: [3; 32],
-            source_generation: 1,
-            destination_generation: 1,
-            source_replay_sequence: 0,
-            destination_replay_sequence: 0,
-            cash_atoms,
-            internal,
-            phase_policy: clutch_structured_claim_adapter::runtime_contract::AssetTransferPhasePolicyV1::ActiveOnly,
-            authority_kind: clutch_structured_claim_adapter::runtime_contract::PositionAssetTransferAuthorityKindV1::StructuredCustody,
-            authority_id: [9; 32],
-        }
-    }
 
     #[test]
     fn staged_profile_refuses_every_structured_action() {
@@ -4161,48 +3896,4 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn exact_transfer_closure_refuses_off_by_one_and_rent_compartment_changes() {
-        let rent = RentSplitV2 {
-            payer: identity(10),
-            refundable_live_principal: 100,
-            permanent_tombstone_principal: 20,
-            donation_floor: 7,
-        };
-        let transfer = exact_transfer(5, 3);
-        let source_before = position(20, 10, rent);
-        let destination_before = position(4, 1, rent);
-        let source_after = position(15, 7, rent);
-        let destination_after = position(9, 4, rent);
-        assert!(verify_exact_transfer_closure(
-            source_before,
-            destination_before,
-            source_after,
-            destination_after,
-            transfer,
-        )
-        .is_ok());
-
-        assert!(verify_exact_transfer_closure(
-            source_before,
-            destination_before,
-            position(14, 7, rent),
-            destination_after,
-            transfer,
-        )
-        .is_err());
-
-        let changed_rent = RentSplitV2 {
-            donation_floor: 8,
-            ..rent
-        };
-        assert!(verify_exact_transfer_closure(
-            source_before,
-            destination_before,
-            position(15, 7, changed_rent),
-            destination_after,
-            transfer,
-        )
-        .is_err());
-    }
 }

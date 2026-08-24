@@ -317,6 +317,26 @@ impl SharedIndexApi {
             if method == "GET" && target == "/v1/acquisition" {
                 return Some(acquisition_response(&engine, before));
             }
+            if method == "GET" && target == "/v1/session" {
+                let status = engine.status();
+                if !status.bootstrap_complete
+                    || status.remaining_scans != 0
+                    || status.pending_accounts != 0
+                    || status.pending_account_bytes != 0
+                {
+                    return Some(JsonReadResponse {
+                        status: 409,
+                        body: json!({
+                            "schema": "dragons-clutch/operator-read-only-session-unavailable/v1",
+                            "status": "unavailable",
+                            "reason": "the finalized release-bracketed bootstrap is incomplete",
+                            "remainingScans": status.remaining_scans.to_string(),
+                            "pendingAccounts": status.pending_accounts.to_string(),
+                            "pendingAccountBytes": status.pending_account_bytes.to_string()
+                        }),
+                    });
+                }
+            }
             let processed_query = target
                 .split_once('?')
                 .is_some_and(|(_, query)| query == "commitment=processed");
