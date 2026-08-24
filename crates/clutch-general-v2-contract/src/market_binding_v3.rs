@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Product-family-authorized, rent-owned MarketBinding successor.
+//! Historical Product-family-authorized, rent-owned MarketBinding schema.
 //!
 //! V3 retains the complete V2 market/policy body and adds only immutable facts
 //! authenticated by Product before the General account write. The Product
 //! preauthorization commits the exact writable `0xaa` and `0xad` prestates;
 //! this account deliberately does not persist the later Product admission
 //! projection, avoiding a cyclic identity between the General and Product
-//! postwrites.
+//! postwrites. Its BundleV5/AttachmentV4 coordinates are decode-only after the
+//! current Product graph advanced; V4 is the only live successor authority.
 
 use crate::{
     CodecError, DeletableRentOwnerV1, Id32, MarketBindingV2,

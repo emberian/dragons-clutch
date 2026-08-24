@@ -35,6 +35,10 @@ const SELECTION_TRAVERSAL_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/selection-traversal/v1\0";
 const SELECTED_TRAVERSAL_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/selected-traversal/v1\0";
+const CANDIDATE_SUBMISSION_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/direct/candidate-submission/v1\0";
+const CANDIDATE_BOND_REFUND_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/direct/candidate-bond-refund/v1\0";
 
 const _: () = assert!(MAX_DIRECT_RESERVATIONS_V1 == 2);
 const _: () = assert!(MAX_DIRECT_CANDIDATES_V1 == 3);
@@ -172,6 +176,104 @@ pub struct NoDirectSelectionFreezeAuthorityV1;
 
 impl AuthenticatedDirectSelectionFreezeV1 for NoDirectSelectionFreezeAuthorityV1 {}
 
+/// One refundable retained-candidate principal owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectCandidateBondRefundV1 {
+    /// Exact candidate submitter and principal refund owner.
+    pub recipient: [u8; 32],
+    /// Coalesced exact principal, never a donation or work payment.
+    pub lamports: u64,
+}
+
+/// Canonical complete refund vector released at selection or lapse.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectCandidateBondRefundPlanV1 {
+    /// Sorted, unique active prefix followed by `None` padding.
+    pub refunds: [Option<DirectCandidateBondRefundV1>; CANDIDATE_CAPACITY_V1],
+    /// Active refund prefix width.
+    pub refund_count: u8,
+    /// Exact total principal released from the Selection account.
+    pub total_lamports: u64,
+    /// Receipt binding the vector to one action transcript.
+    pub receipt_id: [u8; 32],
+}
+
+impl DirectCandidateBondRefundPlanV1 {
+    /// Fixed transcript committed by selection/family terminal receipts.
+    pub fn canonical_transcript(self) -> [u8; 121] {
+        let mut output = [0u8; 121];
+        output[0] = self.refund_count;
+        let mut at = 1usize;
+        let mut index = 0usize;
+        while index < CANDIDATE_CAPACITY_V1 {
+            if let Some(refund) = self.refunds[index] {
+                output[at..at + 32].copy_from_slice(&refund.recipient);
+                output[at + 32..at + 40].copy_from_slice(&refund.lamports.to_le_bytes());
+            }
+            at += 40;
+            index += 1;
+        }
+        output
+    }
+}
+
+/// Exact atomic b2 principal movement for one retained submission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectCandidateBondMovementV1 {
+    /// Incoming submitter, also the refund owner while retained.
+    pub incoming_payer: [u8; 32],
+    /// Exact nonzero incoming principal for a retained candidate.
+    pub incoming_lamports: u64,
+    /// Evicted submitter receiving its principal, or zero padding.
+    pub evicted_refund_recipient: [u8; 32],
+    /// Exact evicted principal, zero unless a full top-three set replaced one.
+    pub evicted_refund_lamports: u64,
+    /// Selection-owned principal before the action.
+    pub principal_before_lamports: u64,
+    /// Selection-owned principal after the action.
+    pub principal_after_lamports: u64,
+}
+
+impl DirectCandidateBondMovementV1 {
+    fn validate(self) -> Result<(), DirectMarketErrorV1> {
+        require_live(self.incoming_payer)?;
+        if self.incoming_lamports == 0 {
+            return Err(DirectMarketErrorV1::InvalidCount);
+        }
+        if (self.evicted_refund_lamports == 0)
+            != (self.evicted_refund_recipient == [0; 32])
+        {
+            return Err(DirectMarketErrorV1::InvalidCount);
+        }
+        if self.evicted_refund_lamports != 0 {
+            require_live(self.evicted_refund_recipient)?;
+        }
+        let left = self
+            .principal_before_lamports
+            .checked_add(self.incoming_lamports)
+            .ok_or(DirectMarketErrorV1::Arithmetic)?;
+        let right = self
+            .principal_after_lamports
+            .checked_add(self.evicted_refund_lamports)
+            .ok_or(DirectMarketErrorV1::Arithmetic)?;
+        if left != right {
+            return Err(DirectMarketErrorV1::InvalidCount);
+        }
+        Ok(())
+    }
+
+    fn canonical_transcript(self) -> [u8; 96] {
+        let mut output = [0u8; 96];
+        output[..32].copy_from_slice(&self.incoming_payer);
+        output[32..40].copy_from_slice(&self.incoming_lamports.to_le_bytes());
+        output[40..72].copy_from_slice(&self.evicted_refund_recipient);
+        output[72..80].copy_from_slice(&self.evicted_refund_lamports.to_le_bytes());
+        output[80..88].copy_from_slice(&self.principal_before_lamports.to_le_bytes());
+        output[88..96].copy_from_slice(&self.principal_after_lamports.to_le_bytes());
+        output
+    }
+}
+
 /// Sole persisted owner of the frozen Direct book and selected traversal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DirectSelectionV1 {
@@ -187,6 +289,7 @@ pub struct DirectSelectionV1 {
     pub(crate) price: PricePreconditionV2,
     pub(crate) candidates: [DirectEconomicCandidateV1; CANDIDATE_CAPACITY_V1],
     pub(crate) candidate_digests: [[u8; 32]; CANDIDATE_CAPACITY_V1],
+    pub(crate) candidate_submitters: [[u8; 32]; CANDIDATE_CAPACITY_V1],
     pub(crate) candidate_count: u8,
     pub(crate) verification_cursor: u8,
     pub(crate) verified_mask: u8,
@@ -194,6 +297,7 @@ pub struct DirectSelectionV1 {
     pub(crate) selected_candidate_index: Option<u8>,
     pub(crate) selected_pair: Option<SelectedDirectPairV1>,
     pub(crate) terminal_receipt_id: [u8; 32],
+    pub(crate) candidate_bond_refund_receipt_id: [u8; 32],
     pub(crate) rent: DirectRentOwnerV1,
     pub(crate) phase: DirectSelectionPhaseV1,
 }
@@ -211,6 +315,31 @@ impl DirectSelectionV1 {
     pub const fn price(&self) -> &PricePreconditionV2 { &self.price }
     /// Number of retained valid submissions.
     pub const fn candidate_count(self) -> u8 { self.candidate_count }
+    /// Exact retained-candidate refund owner at one active coordinate.
+    pub fn candidate_submitter(self, index: u8) -> Result<[u8; 32], DirectMarketErrorV1> {
+        let at = usize::from(index);
+        if at >= usize::from(self.candidate_count) {
+            return Err(DirectMarketErrorV1::InvalidCount);
+        }
+        Ok(self.candidate_submitters[at])
+    }
+    /// Receipt proving all retained bond principals left b2; zero while bonded.
+    pub const fn candidate_bond_refund_receipt_id(self) -> [u8; 32] {
+        self.candidate_bond_refund_receipt_id
+    }
+    /// Exact bond principal which must remain in the physical Selection account.
+    pub fn outstanding_candidate_bond_lamports(
+        self,
+        root: DirectMarketRootV1,
+    ) -> Result<u64, DirectMarketErrorV1> {
+        self.validate_against(root)?;
+        if self.candidate_bond_refund_receipt_id != [0; 32] {
+            return Ok(0);
+        }
+        u64::from(self.candidate_count)
+            .checked_mul(root.binding().candidate_liveness.work_schedule.retained_candidate_bond_lamports)
+            .ok_or(DirectMarketErrorV1::Arithmetic)
+    }
     /// Next canonical verification coordinate.
     pub const fn verification_cursor(self) -> u8 { self.verification_cursor }
     /// Current lifecycle.
@@ -294,6 +423,24 @@ impl DirectSelectionV1 {
         index = 0;
         while index < CANDIDATE_CAPACITY_V1 {
             if index < usize::from(self.candidate_count) {
+                require_live(self.candidate_submitters[index])?;
+                let binding = root.binding();
+                for forbidden in [
+                    self.selection_account,
+                    binding.direct_root_account,
+                    binding.action_replay_account,
+                    binding.product_root_account,
+                    binding.general_market_binding,
+                    binding.general_market_runtime,
+                    binding.resolution_account,
+                    binding.neutral_lamport_sink,
+                    binding.candidate_liveness.policy_account,
+                    binding.candidate_liveness.candidate_account,
+                ] {
+                    if self.candidate_submitters[index] == forbidden {
+                        return Err(DirectMarketErrorV1::IdentityAlias);
+                    }
+                }
                 let economics = settlement_valid_economics_v1(
                     &self,
                     self.candidates[index],
@@ -325,6 +472,7 @@ impl DirectSelectionV1 {
                 }
             } else if self.candidates[index] != DirectEconomicCandidateV1::EMPTY
                 || self.candidate_digests[index] != [0; 32]
+                || self.candidate_submitters[index] != [0; 32]
             {
                 return Err(DirectMarketErrorV1::InvalidCount);
             }
@@ -341,28 +489,40 @@ impl DirectSelectionV1 {
                     && self.verification_cursor == 0
                     && self.selected_pair.is_none()
                     && self.selected_candidate_index.is_none()
+                    && self.candidate_bond_refund_receipt_id == [0; 32]
                     && self.terminal_receipt_id == [0; 32] => {}
             (DirectSelectionPhaseV1::SubmissionOpen, DirectRootPhaseV1::SubmissionOpen)
                 if self.reservation_count == MAX_DIRECT_RESERVATIONS_V1
                     && self.verification_cursor == 0
                     && self.selected_pair.is_none()
                     && self.selected_candidate_index.is_none()
+                    && self.candidate_bond_refund_receipt_id == [0; 32]
                     && self.terminal_receipt_id == [0; 32] => {}
             (DirectSelectionPhaseV1::Verifying, DirectRootPhaseV1::Verifying)
                 if self.selected_pair.is_none()
                     && self.selected_candidate_index.is_none()
+                    && self.candidate_bond_refund_receipt_id == [0; 32]
                     && self.terminal_receipt_id == [0; 32] => {}
             (DirectSelectionPhaseV1::Selected, DirectRootPhaseV1::Selected)
                 if self.candidate_count != 0
                     && self.verification_cursor == self.candidate_count
                     && self.selected_pair.is_some()
                     && self.selected_candidate_index.is_some()
+                    && self.candidate_bond_refund_receipt_id != [0; 32]
                     && self.terminal_receipt_id == [0; 32] => {
+                        require_live(self.candidate_bond_refund_receipt_id)?;
                         self.validate_selected_pair()?;
                     }
             (DirectSelectionPhaseV1::Terminal, DirectRootPhaseV1::Terminal)
                 if self.terminal_receipt_id != [0; 32] => {
                     require_live(self.terminal_receipt_id)?;
+                    if self.candidate_count == 0 {
+                        if self.candidate_bond_refund_receipt_id != [0; 32] {
+                            return Err(DirectMarketErrorV1::InvalidCount);
+                        }
+                    } else {
+                        require_live(self.candidate_bond_refund_receipt_id)?;
+                    }
                     self.validate_terminal_partition(root)?;
                 }
             _ => return Err(DirectMarketErrorV1::WrongPhase),
@@ -408,12 +568,16 @@ impl DirectSelectionV1 {
             &self.candidate_digests[0],
             &self.candidate_digests[1],
             &self.candidate_digests[2],
+            &self.candidate_submitters[0],
+            &self.candidate_submitters[1],
+            &self.candidate_submitters[2],
             &[self.verification_cursor],
             &[self.verified_mask],
             &self.traversal_transcript_id,
             &[selected_index],
             &selected_transcript,
             &self.terminal_receipt_id,
+            &self.candidate_bond_refund_receipt_id,
             &self.rent.payer,
             &self.rent.principal_lamports.to_le_bytes(),
             &self.rent.donation_floor_lamports.to_le_bytes(),
@@ -481,6 +645,18 @@ impl DirectSelectionV1 {
         Ok(())
     }
 
+    pub(crate) fn mark_candidate_bonds_refunded(
+        mut self,
+        receipt_id: [u8; 32],
+    ) -> Result<Self, DirectMarketErrorV1> {
+        if self.candidate_count == 0 || self.candidate_bond_refund_receipt_id != [0; 32] {
+            return Err(DirectMarketErrorV1::WrongPhase);
+        }
+        require_live(receipt_id)?;
+        self.candidate_bond_refund_receipt_id = receipt_id;
+        Ok(self)
+    }
+
     pub(crate) fn terminalize(
         mut self,
         root_post: DirectMarketRootV1,
@@ -504,6 +680,10 @@ pub struct DirectSelectionFreezePlanV1 {
     pub state: DirectRootReplayPostV1,
     /// Fresh Selection owning the complete frozen prefix.
     pub selection: DirectSelectionV1,
+    /// Atomic retained-principal movement, present only for a retained action 5.
+    pub candidate_bond_movement: Option<DirectCandidateBondMovementV1>,
+    /// Complete bond refund vector, present only at action 8 finalization.
+    pub candidate_bond_refunds: Option<DirectCandidateBondRefundPlanV1>,
 }
 
 /// Build the complete canonical Reservation prefix and freeze action 4.
@@ -542,7 +722,12 @@ pub fn prepare_direct_selection_freeze_v1<
         selection_poststate_id,
         backend,
     )?;
-    Ok(DirectSelectionFreezePlanV1 { state, selection })
+    Ok(DirectSelectionFreezePlanV1 {
+        state,
+        selection,
+        candidate_bond_movement: None,
+        candidate_bond_refunds: None,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -627,6 +812,7 @@ pub(crate) fn build_direct_selection_v1<
         price,
         candidates: [DirectEconomicCandidateV1::EMPTY; CANDIDATE_CAPACITY_V1],
         candidate_digests: [[0; 32]; CANDIDATE_CAPACITY_V1],
+        candidate_submitters: [[0; 32]; CANDIDATE_CAPACITY_V1],
         candidate_count: 0,
         verification_cursor: 0,
         verified_mask: 0,
@@ -634,6 +820,7 @@ pub(crate) fn build_direct_selection_v1<
         selected_candidate_index: None,
         selected_pair: None,
         terminal_receipt_id: [0; 32],
+        candidate_bond_refund_receipt_id: [0; 32],
         rent,
         phase,
     };
@@ -660,11 +847,31 @@ pub fn submit_direct_candidate_v1<B: DirectHashBackendV1>(
     consumed_sequence: u64,
     observed_slot: u64,
     candidate: DirectEconomicCandidateV1,
+    submitter: [u8; 32],
     backend: &B,
 ) -> Result<DirectSelectionFreezePlanV1, DirectMarketErrorV1> {
     selection.validate_against(state.root)?;
     if selection.phase != DirectSelectionPhaseV1::SubmissionOpen {
         return Err(DirectMarketErrorV1::WrongPhase);
+    }
+    let selection_prestate_id = selection.semantic_id(state.root, backend)?;
+    require_live(submitter)?;
+    let binding = state.root.binding();
+    for forbidden in [
+        selection.selection_account,
+        binding.direct_root_account,
+        binding.action_replay_account,
+        binding.product_root_account,
+        binding.general_market_binding,
+        binding.general_market_runtime,
+        binding.resolution_account,
+        binding.neutral_lamport_sink,
+        binding.candidate_liveness.policy_account,
+        binding.candidate_liveness.candidate_account,
+    ] {
+        if submitter == forbidden {
+            return Err(DirectMarketErrorV1::IdentityAlias);
+        }
     }
     let economics = settlement_valid_economics_v1(&selection, candidate)?;
     let mut index = 0usize;
@@ -675,6 +882,15 @@ pub fn submit_direct_candidate_v1<B: DirectHashBackendV1>(
         index += 1;
     }
     let count = usize::from(selection.candidate_count);
+    let bond_lamports = state
+        .root
+        .binding()
+        .candidate_liveness
+        .work_schedule
+        .retained_candidate_bond_lamports;
+    let principal_before_lamports = u64::from(selection.candidate_count)
+        .checked_mul(bond_lamports)
+        .ok_or(DirectMarketErrorV1::Arithmetic)?;
     let mut insertion = count;
     index = 0;
     while index < count {
@@ -694,31 +910,78 @@ pub fn submit_direct_candidate_v1<B: DirectHashBackendV1>(
         }
         index += 1;
     }
-    if insertion < CANDIDATE_CAPACITY_V1 {
+    let candidate_bond_movement = if insertion < CANDIDATE_CAPACITY_V1 {
         let successor_count = if count < CANDIDATE_CAPACITY_V1 {
             count.checked_add(1).ok_or(DirectMarketErrorV1::Arithmetic)?
         } else {
             count
         };
+        let evicted_refund_recipient = if count == CANDIDATE_CAPACITY_V1 {
+            selection.candidate_submitters[CANDIDATE_CAPACITY_V1 - 1]
+        } else {
+            [0; 32]
+        };
         let mut shift = successor_count;
         while shift > insertion + 1 {
             selection.candidates[shift - 1] = selection.candidates[shift - 2];
             selection.candidate_digests[shift - 1] = selection.candidate_digests[shift - 2];
+            selection.candidate_submitters[shift - 1] =
+                selection.candidate_submitters[shift - 2];
             shift -= 1;
         }
         selection.candidates[insertion] = candidate;
         selection.candidate_digests[insertion] = economics.economic_candidate_digest;
+        selection.candidate_submitters[insertion] = submitter;
         selection.candidate_count =
             u8::try_from(successor_count).map_err(|_| DirectMarketErrorV1::Arithmetic)?;
-    }
+        let principal_after_lamports = u64::from(selection.candidate_count)
+            .checked_mul(bond_lamports)
+            .ok_or(DirectMarketErrorV1::Arithmetic)?;
+        let movement = DirectCandidateBondMovementV1 {
+            incoming_payer: submitter,
+            incoming_lamports: bond_lamports,
+            evicted_refund_recipient,
+            evicted_refund_lamports: if count == CANDIDATE_CAPACITY_V1 {
+                bond_lamports
+            } else {
+                0
+            },
+            principal_before_lamports,
+            principal_after_lamports,
+        };
+        movement.validate()?;
+        Some(movement)
+    } else {
+        None
+    };
     let selection_poststate_id = selection.semantic_id(state.root, backend)?;
+    let movement_transcript = candidate_bond_movement
+        .map_or([0u8; 96], DirectCandidateBondMovementV1::canonical_transcript);
+    let submission_evidence_id = backend.sha256_parts(&[
+        CANDIDATE_SUBMISSION_DOMAIN_V1,
+        &selection.market_instance_id,
+        &selection.selection_account,
+        &selection_prestate_id,
+        &selection_poststate_id,
+        &economics.economic_candidate_digest,
+        &submitter,
+        &movement_transcript,
+        &consumed_sequence.to_le_bytes(),
+        &observed_slot.to_le_bytes(),
+    ]);
+    require_live(submission_evidence_id)?;
     let state = state.record_submission(
         consumed_sequence,
         observed_slot,
-        selection_poststate_id,
+        submission_evidence_id,
         backend,
     )?;
-    Ok(DirectSelectionFreezePlanV1 { state, selection })
+    Ok(DirectSelectionFreezePlanV1 {
+        state,
+        selection,
+        candidate_bond_movement,
+        candidate_bond_refunds: None,
+    })
 }
 
 fn compare_candidate_priority_v1(
@@ -768,6 +1031,98 @@ fn settlement_valid_economics_v1(
     Ok(economics)
 }
 
+pub(crate) fn candidate_bond_refunds_v1(
+    selection: DirectSelectionV1,
+    root: DirectMarketRootV1,
+    receipt_id: [u8; 32],
+) -> Result<Option<DirectCandidateBondRefundPlanV1>, DirectMarketErrorV1> {
+    selection.validate_against(root)?;
+    if selection.candidate_count == 0 {
+        if selection.candidate_bond_refund_receipt_id != [0; 32] {
+            return Err(DirectMarketErrorV1::InvalidCount);
+        }
+        return Ok(None);
+    }
+    if selection.candidate_bond_refund_receipt_id != [0; 32] {
+        return Ok(None);
+    }
+    let bond = root
+        .binding()
+        .candidate_liveness
+        .work_schedule
+        .retained_candidate_bond_lamports;
+    let mut recipients = [[0u8; 32]; CANDIDATE_CAPACITY_V1];
+    let mut amounts = [0u64; CANDIDATE_CAPACITY_V1];
+    let mut refund_count = 0usize;
+    let mut index = 0usize;
+    while index < usize::from(selection.candidate_count) {
+        let recipient = selection.candidate_submitters[index];
+        let mut found = None;
+        let mut scan = 0usize;
+        while scan < refund_count {
+            if recipients[scan] == recipient {
+                found = Some(scan);
+                break;
+            }
+            scan += 1;
+        }
+        if let Some(at) = found {
+            amounts[at] = amounts[at]
+                .checked_add(bond)
+                .ok_or(DirectMarketErrorV1::Arithmetic)?;
+        } else {
+            let mut insertion = refund_count;
+            scan = 0;
+            while scan < refund_count {
+                if recipient < recipients[scan] {
+                    insertion = scan;
+                    break;
+                }
+                scan += 1;
+            }
+            let mut shift = refund_count;
+            while shift > insertion {
+                recipients[shift] = recipients[shift - 1];
+                amounts[shift] = amounts[shift - 1];
+                shift -= 1;
+            }
+            recipients[insertion] = recipient;
+            amounts[insertion] = bond;
+            refund_count = refund_count
+                .checked_add(1)
+                .ok_or(DirectMarketErrorV1::Arithmetic)?;
+        }
+        index += 1;
+    }
+    require_live(receipt_id)?;
+    let mut refunds = [None; CANDIDATE_CAPACITY_V1];
+    let mut total_lamports = 0u64;
+    index = 0;
+    while index < refund_count {
+        total_lamports = total_lamports
+            .checked_add(amounts[index])
+            .ok_or(DirectMarketErrorV1::Arithmetic)?;
+        refunds[index] = Some(DirectCandidateBondRefundV1 {
+            recipient: recipients[index],
+            lamports: amounts[index],
+        });
+        index += 1;
+    }
+    let expected_total = u64::from(selection.candidate_count)
+        .checked_mul(bond)
+        .ok_or(DirectMarketErrorV1::Arithmetic)?;
+    if total_lamports != expected_total {
+        return Err(DirectMarketErrorV1::InvalidCount);
+    }
+    Ok(Some(DirectCandidateBondRefundPlanV1 {
+        refunds,
+        refund_count: u8::try_from(refund_count)
+            .map_err(|_| DirectMarketErrorV1::Arithmetic)?,
+        total_lamports,
+        receipt_id,
+    }))
+}
+
 /// Begin action 6's exhaustive submission-order traversal.
 pub fn begin_direct_candidate_verification_v1<B: DirectHashBackendV1>(
     state: DirectRootReplayPostV1,
@@ -790,7 +1145,12 @@ pub fn begin_direct_candidate_verification_v1<B: DirectHashBackendV1>(
         selection_poststate_id,
         backend,
     )?;
-    Ok(DirectSelectionFreezePlanV1 { state, selection })
+    Ok(DirectSelectionFreezePlanV1 {
+        state,
+        selection,
+        candidate_bond_movement: None,
+        candidate_bond_refunds: None,
+    })
 }
 
 /// Reverify exactly the next retained candidate under action 7.
@@ -838,7 +1198,12 @@ pub fn verify_next_direct_candidate_v1<B: DirectHashBackendV1>(
         selection_poststate_id,
         backend,
     )?;
-    Ok(DirectSelectionFreezePlanV1 { state, selection })
+    Ok(DirectSelectionFreezePlanV1 {
+        state,
+        selection,
+        candidate_bond_movement: None,
+        candidate_bond_refunds: None,
+    })
 }
 
 /// Finalize action 8 and mint the private exact selected-pair capability.
@@ -856,6 +1221,31 @@ pub fn finalize_direct_selection_v1<B: DirectHashBackendV1>(
     {
         return Err(DirectMarketErrorV1::WrongPhase);
     }
+    let selection_pre_id = selection.semantic_id(state.root, backend)?;
+    let provisional_refunds = candidate_bond_refunds_v1(
+        selection,
+        state.root,
+        selection.traversal_transcript_id,
+    )?
+    .ok_or(DirectMarketErrorV1::InvalidCount)?;
+    let refund_transcript = provisional_refunds.canonical_transcript();
+    let candidate_bond_refund_receipt_id = backend.sha256_parts(&[
+        CANDIDATE_BOND_REFUND_DOMAIN_V1,
+        &selection.market_instance_id,
+        &selection.selection_account,
+        &selection_pre_id,
+        &consumed_sequence.to_le_bytes(),
+        &observed_slot.to_le_bytes(),
+        &refund_transcript,
+        &selection.traversal_transcript_id,
+    ]);
+    require_live(candidate_bond_refund_receipt_id)?;
+    let candidate_bond_refunds = candidate_bond_refunds_v1(
+        selection,
+        state.root,
+        candidate_bond_refund_receipt_id,
+    )?
+    .ok_or(DirectMarketErrorV1::InvalidCount)?;
     let mut best_index = 0usize;
     let mut best_economics = settlement_valid_economics_v1(
         &selection,
@@ -894,6 +1284,7 @@ pub fn finalize_direct_selection_v1<B: DirectHashBackendV1>(
         &selection.traversal_transcript_id,
         &[selected_index],
         &selection.candidate_digests[usize::from(selected_index)],
+        &candidate_bond_refund_receipt_id,
     ]);
     require_live(selected_traversal_id)?;
     let authority = FrozenSelectionAuthorityV1 {
@@ -909,6 +1300,7 @@ pub fn finalize_direct_selection_v1<B: DirectHashBackendV1>(
         &selection.price,
         selected,
     )?;
+    selection = selection.mark_candidate_bonds_refunded(candidate_bond_refund_receipt_id)?;
     selection.traversal_transcript_id = selected_traversal_id;
     selection.selected_candidate_index = Some(selected_index);
     selection.selected_pair = Some(pair);
@@ -920,7 +1312,12 @@ pub fn finalize_direct_selection_v1<B: DirectHashBackendV1>(
         backend,
     )?;
     selection.validate_against(state.root)?;
-    Ok(DirectSelectionFreezePlanV1 { state, selection })
+    Ok(DirectSelectionFreezePlanV1 {
+        state,
+        selection,
+        candidate_bond_movement: None,
+        candidate_bond_refunds: Some(candidate_bond_refunds),
+    })
 }
 
 #[derive(Clone, Copy, Debug)]

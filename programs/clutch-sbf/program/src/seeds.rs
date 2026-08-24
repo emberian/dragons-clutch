@@ -218,6 +218,8 @@ pub const SEED_DIRECT_RECEIPT_V3: &[u8] = b"dc:direct-receipt:v3";
 pub const SEED_DIRECT_POT_V3: &[u8] = b"dc:direct-pot:v3";
 /// Current `0xb1/1` Direct Market root; disjoint from every legacy window.
 pub const SEED_DIRECT_MARKET_ROOT_V1: &[u8] = b"dc:direct-market-root:v1";
+/// Current General-V4/Product-V2 Direct root domain.
+pub const SEED_DIRECT_MARKET_ROOT_V2: &[u8] = b"dc:direct-market-root:v2";
 /// Current permanent `0xb3/1` Direct action replay/receipt.
 pub const SEED_DIRECT_ACTION_REPLAY_V1: &[u8] = b"dc:direct-action-replay:v1";
 /// Current `0xb2/1` exact Selection owner.
@@ -1515,6 +1517,25 @@ pub fn direct_market_root_v1_pda(
     )
 }
 
+/// Canonical current Direct `0xb1/2` root address.
+///
+/// The fresh domain prevents a historical V1 root at the same Market and
+/// generation from being reinterpreted as current authority.
+pub fn direct_market_root_v2_pda(
+    program_id: &Pubkey,
+    market_instance_id: &[u8; 32],
+    generation: u64,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_DIRECT_MARKET_ROOT_V2,
+            market_instance_id,
+            &generation.to_le_bytes(),
+        ],
+    )
+}
+
 /// Canonical permanent `0xb3/1` Direct action replay/receipt address.
 pub fn direct_action_replay_v1_pda(
     program_id: &Pubkey,
@@ -1687,6 +1708,27 @@ pub fn general_funding_pda(program_id: &Pubkey, target: &Pubkey) -> (Pubkey, u8)
 /// and its absence is the zero-take state.
 pub fn revenue_policy_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
     find(program_id, &[SEED_REVENUE_POLICY, realm])
+}
+
+/// Treasury-service-ledger seed domain.  Its account tag `0xbb` occupies the
+/// account namespace; this seed has no relationship to intent family `81`.
+pub const SEED_TREASURY_SERVICE_LEDGER_V1: &[u8] = b"treasury-service-v1";
+
+/// Canonical counted service-ledger address for one Market-scoped ordinary
+/// treasury Position.
+pub fn treasury_service_ledger_v1_pda(
+    program_id: &Pubkey,
+    market_instance_v2_id: &[u8; 32],
+    treasury_position_account: &Pubkey,
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[
+            SEED_TREASURY_SERVICE_LEDGER_V1,
+            market_instance_v2_id,
+            &treasury_position_account.to_bytes(),
+        ],
+    )
 }
 
 /* ------------------------------------------------------------------------ */

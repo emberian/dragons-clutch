@@ -159,31 +159,13 @@ impl DirectFeePolicyV1 {
         price_scale: u64,
     ) -> Result<u64, DirectMarketErrorV1> {
         self.validate()?;
-        if quantity == 0 || !(2..=MAX_OUTCOMES).contains(&usize::from(outcome_count)) {
-            return Err(DirectMarketErrorV1::InvalidCount);
-        }
-        if !self.fee_bearing() {
-            return Ok(0);
-        }
-        let mut payoffs = [0u64; MAX_OUTCOMES];
-        payoffs[0] = quantity;
-        let mut prices = [0u64; MAX_OUTCOMES];
-        let left = price_scale / 2;
-        prices[0] = left;
-        prices[1] = price_scale
-            .checked_sub(left)
-            .ok_or(DirectMarketErrorV1::Arithmetic)?;
-        let quote = composite_fee_quote(
-            &payoffs,
-            &prices,
-            usize::from(outcome_count),
+        maximum_buyer_fee_atoms_core(
+            quantity,
+            outcome_count,
             price_scale,
             self.dispersion_bps,
             self.floor_range_bps,
-            0,
         )
-        .map_err(|_| DirectMarketErrorV1::MismatchedBinding)?;
-        u64::try_from(quote.terminal_ceil_atoms).map_err(|_| DirectMarketErrorV1::Arithmetic)
     }
 
     /// Assess and split one complete selected Direct buyer payoff.
@@ -227,74 +209,163 @@ impl DirectFeePolicyV1 {
         {
             return Err(DirectMarketErrorV1::MismatchedBinding);
         }
-        let mut payoffs = [0u64; MAX_OUTCOMES];
-        payoffs[usize::from(outcome)] = quantity;
-        let quote = composite_fee_quote(
-            &payoffs,
-            &price.prices,
-            usize::from(outcome_count),
+        let charged_fee_atoms = terminal_buyer_fee_atoms_core(
+            quantity,
+            outcome,
+            outcome_count,
             price_scale,
+            price,
             self.dispersion_bps,
             self.floor_range_bps,
-            0,
-        )
-        .map_err(|_| DirectMarketErrorV1::MismatchedBinding)?;
-        let charged_fee_atoms = u64::try_from(quote.terminal_ceil_atoms)
-            .map_err(|_| DirectMarketErrorV1::Arithmetic)?;
-        if charged_fee_atoms > maximum_fee_atoms {
-            return Err(DirectMarketErrorV1::MismatchedBinding);
-        }
+        )?;
         let split = revenue
             .allocate_split(charged_fee_atoms)
             .map_err(|_| DirectMarketErrorV1::MismatchedBinding)?;
         if split.executor_atoms != 0 {
             return Err(DirectMarketErrorV1::MismatchedBinding);
         }
-        let buyer_floor = split.maker_rebate_atoms / 2;
-        let seller_floor = split.maker_rebate_atoms / 2;
-        let dust = split
-            .maker_rebate_atoms
-            .checked_sub(
-                buyer_floor
-                    .checked_add(seller_floor)
-                    .ok_or(DirectMarketErrorV1::Arithmetic)?,
-            )
-            .ok_or(DirectMarketErrorV1::Arithmetic)?;
-        let (buyer_rebate_atoms, seller_rebate_atoms) = if dust == 0 {
-            (buyer_floor, seller_floor)
-        } else if buyer_position <= seller_position {
-            (
-                buyer_floor
-                    .checked_add(dust)
-                    .ok_or(DirectMarketErrorV1::Arithmetic)?,
-                seller_floor,
-            )
-        } else {
-            (
-                buyer_floor,
-                seller_floor
-                    .checked_add(dust)
-                    .ok_or(DirectMarketErrorV1::Arithmetic)?,
-            )
-        };
-        let distributed = buyer_rebate_atoms
-            .checked_add(seller_rebate_atoms)
-            .and_then(|value| value.checked_add(split.treasury_atoms))
-            .ok_or(DirectMarketErrorV1::Arithmetic)?;
-        if distributed != charged_fee_atoms {
-            return Err(DirectMarketErrorV1::MismatchedBinding);
-        }
-        Ok(DirectFeeTerminalV1 {
+        allocate_bilateral_terminal_fee_core(
             charged_fee_atoms,
-            buyer_rebate_atoms,
-            seller_rebate_atoms,
-            treasury_atoms: split.treasury_atoms,
-            refunded_headroom_atoms: maximum_fee_atoms
-                .checked_sub(charged_fee_atoms)
-                .ok_or(DirectMarketErrorV1::Arithmetic)?,
-            boundary: DirectFeeBoundaryV1::TerminalCeil,
-        })
+            maximum_fee_atoms,
+            split.maker_rebate_atoms,
+            split.treasury_atoms,
+            buyer_position,
+            seller_position,
+        )
     }
+}
+
+/// Shared exact maximum-fee arithmetic for historical and current policy
+/// projections. Policy authentication remains owned by the caller.
+pub(crate) fn maximum_buyer_fee_atoms_core(
+    quantity: u64,
+    outcome_count: u8,
+    price_scale: u64,
+    dispersion_bps: u32,
+    floor_range_bps: u32,
+) -> Result<u64, DirectMarketErrorV1> {
+    if quantity == 0
+        || !(2..=MAX_OUTCOMES).contains(&usize::from(outcome_count))
+        || price_scale == 0
+    {
+        return Err(DirectMarketErrorV1::InvalidCount);
+    }
+    if dispersion_bps == 0 && floor_range_bps == 0 {
+        return Ok(0);
+    }
+    let mut payoffs = [0u64; MAX_OUTCOMES];
+    payoffs[0] = quantity;
+    let mut prices = [0u64; MAX_OUTCOMES];
+    let left = price_scale / 2;
+    prices[0] = left;
+    prices[1] = price_scale
+        .checked_sub(left)
+        .ok_or(DirectMarketErrorV1::Arithmetic)?;
+    let quote = composite_fee_quote(
+        &payoffs,
+        &prices,
+        usize::from(outcome_count),
+        price_scale,
+        dispersion_bps,
+        floor_range_bps,
+        0,
+    )
+    .map_err(|_| DirectMarketErrorV1::MismatchedBinding)?;
+    u64::try_from(quote.terminal_ceil_atoms).map_err(|_| DirectMarketErrorV1::Arithmetic)
+}
+
+/// Shared one-shot composite-fee quote at the named terminal-ceil boundary.
+pub(crate) fn terminal_buyer_fee_atoms_core(
+    quantity: u64,
+    outcome: u8,
+    outcome_count: u8,
+    price_scale: u64,
+    price: &PricePreconditionV2,
+    dispersion_bps: u32,
+    floor_range_bps: u32,
+) -> Result<u64, DirectMarketErrorV1> {
+    if quantity == 0
+        || usize::from(outcome) >= usize::from(outcome_count)
+        || !(2..=MAX_OUTCOMES).contains(&usize::from(outcome_count))
+        || price_scale == 0
+    {
+        return Err(DirectMarketErrorV1::InvalidCount);
+    }
+    let mut payoffs = [0u64; MAX_OUTCOMES];
+    payoffs[usize::from(outcome)] = quantity;
+    let quote = composite_fee_quote(
+        &payoffs,
+        &price.prices,
+        usize::from(outcome_count),
+        price_scale,
+        dispersion_bps,
+        floor_range_bps,
+        0,
+    )
+    .map_err(|_| DirectMarketErrorV1::MismatchedBinding)?;
+    u64::try_from(quote.terminal_ceil_atoms).map_err(|_| DirectMarketErrorV1::Arithmetic)
+}
+
+/// Allocate the maker pool by equal authenticated bilateral composite
+/// numerators and apply the sole Hamilton remainder at Position ordering.
+/// The Direct pair proves equal quantity, outcome, and price for the two rows,
+/// so the two owner-netted numerator weights are equal and nonzero.
+pub(crate) fn allocate_bilateral_terminal_fee_core(
+    charged_fee_atoms: u64,
+    maximum_fee_atoms: u64,
+    maker_rebate_atoms: u64,
+    treasury_atoms: u64,
+    buyer_position: [u8; 32],
+    seller_position: [u8; 32],
+) -> Result<DirectFeeTerminalV1, DirectMarketErrorV1> {
+    require_live(buyer_position)?;
+    require_live(seller_position)?;
+    if buyer_position == seller_position || charged_fee_atoms > maximum_fee_atoms {
+        return Err(DirectMarketErrorV1::MismatchedBinding);
+    }
+    let buyer_floor = maker_rebate_atoms / 2;
+    let seller_floor = maker_rebate_atoms / 2;
+    let dust = maker_rebate_atoms
+        .checked_sub(
+            buyer_floor
+                .checked_add(seller_floor)
+                .ok_or(DirectMarketErrorV1::Arithmetic)?,
+        )
+        .ok_or(DirectMarketErrorV1::Arithmetic)?;
+    let (buyer_rebate_atoms, seller_rebate_atoms) = if dust == 0 {
+        (buyer_floor, seller_floor)
+    } else if buyer_position < seller_position {
+        (
+            buyer_floor
+                .checked_add(dust)
+                .ok_or(DirectMarketErrorV1::Arithmetic)?,
+            seller_floor,
+        )
+    } else {
+        (
+            buyer_floor,
+            seller_floor
+                .checked_add(dust)
+                .ok_or(DirectMarketErrorV1::Arithmetic)?,
+        )
+    };
+    let distributed = buyer_rebate_atoms
+        .checked_add(seller_rebate_atoms)
+        .and_then(|value| value.checked_add(treasury_atoms))
+        .ok_or(DirectMarketErrorV1::Arithmetic)?;
+    if distributed != charged_fee_atoms {
+        return Err(DirectMarketErrorV1::MismatchedBinding);
+    }
+    Ok(DirectFeeTerminalV1 {
+        charged_fee_atoms,
+        buyer_rebate_atoms,
+        seller_rebate_atoms,
+        treasury_atoms,
+        refunded_headroom_atoms: maximum_fee_atoms
+            .checked_sub(charged_fee_atoms)
+            .ok_or(DirectMarketErrorV1::Arithmetic)?,
+        boundary: DirectFeeBoundaryV1::TerminalCeil,
+    })
 }
 
 /// The only Direct fee-rounding boundary.

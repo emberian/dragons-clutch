@@ -9,6 +9,10 @@ use crate::reservation_v1::{
     prepare_direct_reservation_admission_v1, AuthenticatedDirectReservationAdmissionV1,
     DirectReservationPhaseV1,
 };
+use crate::liveness_v1::{
+    prepare_direct_candidate_work_batch_v1, DirectCandidateWorkDispositionV1,
+    DirectCandidateWorkRoleV1,
+};
 use crate::selection_v1::{
     begin_direct_candidate_verification_v1, finalize_direct_selection_v1,
     prepare_direct_selection_freeze_v1, submit_direct_candidate_v1,
@@ -190,6 +194,34 @@ fn state() -> DirectRootReplayPostV1 {
         fee_split_den: fee_policy.split_den,
         candidate_lifecycle_policy_id: id(36),
         candidate_liveness_policy_id: id(37),
+        candidate_liveness: crate::liveness_v1::DirectCandidateLivenessBindingV1 {
+            policy_account: id(40),
+            policy_data_id: id(41),
+            global_lifecycle_id: id(42),
+            global_bundle_binding_id: id(43),
+            global_capitalization_receipt_id: id(44),
+            global_bundle_commitment_id: id(45),
+            candidate_account: id(46),
+            candidate_data_id: id(47),
+            candidate_semantic_owner: id(48),
+            candidate_quote_schedule_id: id(49),
+            candidate_receipt_program_id: id(50),
+            candidate_generation: 1,
+            first_call_ordinal: 1,
+            reserved_calls: crate::liveness_v1::DIRECT_CANDIDATE_RESERVED_CALLS_V1,
+            reserved_work_lamports: 8,
+            allocation_receipt_id: id(51),
+            work_schedule: crate::liveness_v1::DirectCandidateWorkScheduleV1 {
+                freeze_book_lamports: 1,
+                begin_verification_lamports: 1,
+                verify_candidate_lamports: 1,
+                finalize_selection_lamports: 1,
+                economic_terminal_lamports: 1,
+                retire_terminal_lamports: 1,
+                retained_candidate_bond_lamports: 5,
+            },
+            work_schedule_id: [0; 32],
+        },
         direct_schedule_policy_id: [0; 32],
         product_root_account: id(9),
         product_market_binding_id: id(38),
@@ -210,6 +242,19 @@ fn state() -> DirectRootReplayPostV1 {
         price_policy_id: id(15),
         price_scale: 1_000,
     };
+    binding.candidate_liveness.work_schedule_id = binding
+        .candidate_liveness
+        .work_schedule
+        .semantic_id(
+            binding.market_instance_id,
+            binding.generation,
+            binding.direct_root_account,
+            binding.family_admission_sequence,
+            binding.candidate_lifecycle_policy_id,
+            binding.candidate_liveness_policy_id,
+            &Sha,
+        )
+        .unwrap();
     binding.direct_schedule_policy_id = direct_schedule_policy_id_v1(binding, &Sha).unwrap();
     binding.direct_epoch_semantics_id =
         direct_epoch_semantics_id_v1(binding, schedule, &Sha).unwrap();
@@ -239,6 +284,10 @@ fn state() -> DirectRootReplayPostV1 {
         foundation_receipt_id: DirectHashBackendV1::sha256_parts(&Sha, &[b"foundation"]),
         economic_terminal_receipt_id: [0; 32],
         family_terminal_receipt_id: [0; 32],
+        candidate_liveness_completed_calls: 0,
+        candidate_liveness_last_receipt_id: [0; 32],
+        candidate_liveness_batch_receipt_id: [0; 32],
+        candidate_liveness_pending: false,
     };
     replay.validate_against(root).unwrap();
     DirectRootReplayPostV1 { root, replay }
@@ -537,6 +586,54 @@ fn direct_fee_projection_supports_zero_and_authenticated_nonzero_rates() {
     };
     assert_eq!(
         rated.binds_policies(&wrong_batch, &rated_revenue),
+        Err(DirectMarketErrorV1::MismatchedBinding),
+    );
+
+    // A fee-bearing policy still has a positive worst-case reservation
+    // envelope, while an exact zero-dispersion selected coordinate assesses
+    // zero and releases the whole headroom. This is not an inexact conversion
+    // and does not authorize a synthetic zero-value treasury transition.
+    let zero_at_coordinate_batch = clutch_batch::relation_v1::FrozenPolicyV1 {
+        fee_base: FeeBaseV1::CompositeDispersionFloor {
+            dispersion_bps: 100,
+            floor_range_bps: 0,
+        },
+        ..GENERAL_CLEARING_FEE_SHAPE_V1
+    };
+    let zero_at_coordinate = crate::fee_v1::DirectFeePolicyV1::from_policies(
+        &zero_at_coordinate_batch,
+        &rated_revenue,
+    )
+    .unwrap();
+    let zero_envelope = zero_at_coordinate
+        .maximum_buyer_fee_atoms(10_000, 2, 10_000)
+        .unwrap();
+    assert!(zero_envelope > 0);
+    let zero_terminal = zero_at_coordinate
+        .assess_terminal_buyer(
+            10_000,
+            0,
+            2,
+            10_000,
+            &price,
+            id(43),
+            id(44),
+            zero_envelope,
+            &rated_revenue,
+        )
+        .unwrap();
+    assert_eq!(zero_terminal.charged_fee_atoms, 0);
+    assert_eq!(zero_terminal.buyer_rebate_atoms, 0);
+    assert_eq!(zero_terminal.seller_rebate_atoms, 0);
+    assert_eq!(zero_terminal.treasury_atoms, 0);
+    assert_eq!(zero_terminal.refunded_headroom_atoms, zero_envelope);
+
+    let wrong_revenue = RevenuePolicyV1 {
+        treasury: id(45),
+        ..rated_revenue
+    };
+    assert_eq!(
+        rated.binds_policies(&rated_batch, &wrong_revenue),
         Err(DirectMarketErrorV1::MismatchedBinding),
     );
 }
@@ -1187,6 +1284,318 @@ fn empty_action8_and_missed_verification_deadline_are_total_no_trade_paths() {
 }
 
 #[test]
+fn candidate_liveness_elides_only_unreachable_roles_and_binds_b3() {
+    let (frozen, endpoints) = submission_open_pair_with_endpoints();
+    let binding = frozen.state.root.binding().candidate_liveness;
+    let freeze_batch = prepare_direct_candidate_work_batch_v1(
+        frozen.state,
+        Some(&frozen.selection),
+        DirectMarketActionV1::FreezeBook,
+        0,
+        [0; 32],
+        id(90),
+        id(91),
+        &Sha,
+    )
+    .unwrap();
+    let freeze_receipt = freeze_batch.receipt(0, binding, &Sha).unwrap();
+    assert_eq!(freeze_batch.receipt_count(), 1);
+    assert_eq!(freeze_receipt.role(), DirectCandidateWorkRoleV1::FreezeBook);
+    assert_eq!(freeze_receipt.disposition(), DirectCandidateWorkDispositionV1::Executed);
+    assert_eq!(freeze_receipt.call_ordinal(), binding.first_call_ordinal);
+    assert_eq!(freeze_receipt.call_ceiling_lamports(), 1);
+    assert_eq!(freeze_receipt.keeper_payment_lamports(), 1);
+    let frozen_state = DirectRootReplayPostV1 {
+        root: frozen.state.root,
+        replay: frozen
+            .state
+            .replay
+            .bind_candidate_liveness_batch(frozen.state.root, freeze_batch, &Sha)
+            .unwrap(),
+    };
+    assert_eq!(frozen_state.replay.candidate_liveness_completed_calls(), 1);
+
+    let begun = begin_direct_candidate_verification_v1(
+        frozen_state,
+        frozen.selection,
+        4,
+        30,
+        &Sha,
+    )
+    .unwrap();
+    let begin_batch = prepare_direct_candidate_work_batch_v1(
+        begun.state,
+        Some(&begun.selection),
+        DirectMarketActionV1::BeginVerification,
+        1,
+        freeze_receipt.receipt_id(),
+        id(92),
+        id(91),
+        &Sha,
+    )
+    .unwrap();
+    let begin_receipt = begin_batch.receipt(0, binding, &Sha).unwrap();
+    let begun_state = DirectRootReplayPostV1 {
+        root: begun.state.root,
+        replay: begun
+            .state
+            .replay
+            .bind_candidate_liveness_batch(begun.state.root, begin_batch, &Sha)
+            .unwrap(),
+    };
+    assert_eq!(begun_state.replay.candidate_liveness_completed_calls(), 2);
+
+    let terminal = prepare_direct_economic_terminal_v1(
+        &AllowEconomicTerminal,
+        begun_state,
+        begun.selection,
+        endpoints,
+        None,
+        None,
+        DirectTerminalReasonV1::NoCandidate,
+        5,
+        31,
+        &Sha,
+    )
+    .unwrap();
+    let terminal_batch = prepare_direct_candidate_work_batch_v1(
+        terminal.state,
+        Some(&terminal.selection),
+        DirectMarketActionV1::FinalizeSelection,
+        2,
+        begin_receipt.receipt_id(),
+        id(93),
+        id(91),
+        &Sha,
+    )
+    .unwrap();
+    assert_eq!(terminal_batch.receipt_count(), 5);
+    assert_eq!(terminal_batch.total_call_ceiling_lamports(), 5);
+    assert_eq!(terminal_batch.total_keeper_payment_lamports(), 2);
+    assert_eq!(terminal_batch.total_payer_refund_lamports(), 3);
+    assert_eq!(
+        terminal_batch.receipt(0, binding, &Sha).unwrap().disposition(),
+        DirectCandidateWorkDispositionV1::TerminallyElided,
+    );
+    assert_eq!(
+        terminal_batch.receipt(3, binding, &Sha).unwrap().role(),
+        DirectCandidateWorkRoleV1::FinalizeSelection,
+    );
+    assert_eq!(
+        terminal_batch.receipt(4, binding, &Sha).unwrap().role(),
+        DirectCandidateWorkRoleV1::EconomicTerminal,
+    );
+    let terminal_replay = terminal
+        .state
+        .replay
+        .bind_candidate_liveness_batch(terminal.state.root, terminal_batch, &Sha)
+        .unwrap();
+    assert_eq!(terminal_replay.candidate_liveness_completed_calls(), 7);
+    assert_eq!(
+        terminal_replay.candidate_liveness_last_receipt_id(),
+        terminal_batch.last_receipt_id(),
+    );
+    let encoded = encode_direct_action_replay_body_v1(terminal_replay, terminal.state.root)
+        .unwrap();
+    assert_eq!(
+        decode_direct_action_replay_body_v1(&encoded, terminal.state.root),
+        Ok(terminal_replay),
+    );
+    let mut pending = terminal_replay;
+    pending.candidate_liveness_pending = true;
+    assert_eq!(
+        encode_direct_action_replay_body_v1(pending, terminal.state.root),
+        Err(DirectMarketErrorV1::UnauthenticatedAuthority),
+    );
+}
+
+#[test]
+fn family_terminal_seal_refuses_pre_liveness_or_substituted_replay() {
+    let mut terminal = state();
+    terminal.root.phase = DirectRootPhaseV1::Terminal;
+    terminal.root.terminal_reason = Some(DirectTerminalReasonV1::Settled);
+    terminal.root.selection_account = id(60);
+    terminal.replay.economic_terminal_receipt_id = id(61);
+    terminal.replay.candidate_liveness_completed_calls = 7;
+    terminal.replay.candidate_liveness_last_receipt_id = id(62);
+    terminal.replay.candidate_liveness_batch_receipt_id = id(63);
+    terminal.replay.validate_against(terminal.root).unwrap();
+
+    let retirement = build_direct_retirement_transfer_v1(
+        [
+            Some(DirectRetirementSourceV1 {
+                account: id(70),
+                rent: rent(71, 10, 2),
+                observed_lamports: 15,
+            }),
+            None,
+            None,
+            None,
+            None,
+        ],
+        id(72),
+    )
+    .unwrap();
+    let mut provisional = terminal.replay;
+    provisional.phase = DirectReplayPhaseV1::Terminal;
+    provisional.next_action_sequence += 1;
+    provisional.action_transcript_id = id(73);
+    provisional.family_terminal_receipt_id = id(74);
+    provisional.candidate_liveness_pending = true;
+    provisional.validate_against(terminal.root).unwrap();
+    let preparation = DirectFamilyTerminalPreparationV1 {
+        root_semantic_id: terminal.root.semantic_id(&Sha).unwrap(),
+        replay_pre_semantic_id: terminal.replay.semantic_id(terminal.root, &Sha).unwrap(),
+        retirement_transfer_id: retirement.semantic_id(&Sha).unwrap(),
+        final_resolution_account: id(75),
+        final_resolution_semantic_id: id(76),
+        final_resolution_data_id: id(77),
+        replay_post: provisional,
+        provisional_terminal_receipt_id: ContentId::from_bytes(id(74)),
+        aggregator_prestate_id: ContentId::from_bytes(id(78)),
+        family_root_id: ContentId::from_bytes(terminal.root.binding.direct_root_account),
+        family_terminal_sequence: 1,
+    };
+    assert_eq!(
+        seal_direct_family_terminal_liveness_v1(
+            preparation,
+            &terminal.root,
+            &retirement,
+            DirectFinalResolutionV1 {
+                account: id(75),
+                semantic_id: id(76),
+                data_id: id(77),
+            },
+            provisional,
+            &Sha,
+        ),
+        Err(DirectMarketErrorV1::UnauthenticatedAuthority),
+    );
+
+    let mut bound = provisional;
+    bound.candidate_liveness_completed_calls = 8;
+    bound.candidate_liveness_last_receipt_id = id(79);
+    bound.candidate_liveness_batch_receipt_id = id(80);
+    bound.candidate_liveness_pending = false;
+    bound.action_transcript_id = DirectHashBackendV1::sha256_parts(
+        &Sha,
+        &[
+            REPLAY_LIVENESS_BATCH_DOMAIN_V1,
+            &provisional.market_instance_id,
+            &provisional.direct_root_account,
+            &provisional.action_transcript_id,
+            &8u32.to_le_bytes(),
+            &bound.candidate_liveness_last_receipt_id,
+            &bound.candidate_liveness_batch_receipt_id,
+        ],
+    );
+    let plan = seal_direct_family_terminal_liveness_v1(
+        preparation,
+        &terminal.root,
+        &retirement,
+        DirectFinalResolutionV1 {
+            account: id(75),
+            semantic_id: id(76),
+            data_id: id(77),
+        },
+        bound,
+        &Sha,
+    )
+    .unwrap();
+    assert_ne!(plan.terminal_receipt_id.bytes(), id(74));
+    assert_eq!(
+        plan.replay_post.family_terminal_receipt_id(),
+        plan.terminal_receipt_id.bytes(),
+    );
+
+    assert_eq!(
+        seal_direct_family_terminal_liveness_v1(
+            preparation,
+            &terminal.root,
+            &retirement,
+            DirectFinalResolutionV1 {
+                account: id(75),
+                semantic_id: id(76),
+                data_id: id(82),
+            },
+            bound,
+            &Sha,
+        ),
+        Err(DirectMarketErrorV1::UnauthenticatedAuthority),
+    );
+
+    let mut substituted = bound;
+    substituted.foundation_receipt_id = id(81);
+    assert_eq!(
+        seal_direct_family_terminal_liveness_v1(
+            preparation,
+            &terminal.root,
+            &retirement,
+            DirectFinalResolutionV1 {
+                account: id(75),
+                semantic_id: id(76),
+                data_id: id(77),
+            },
+            substituted,
+            &Sha,
+        ),
+        Err(DirectMarketErrorV1::UnauthenticatedAuthority),
+    );
+}
+
+#[test]
+fn unselected_lapse_refunds_complete_retained_bond_principal_once() {
+    let (frozen, endpoints) = submission_open_pair_with_endpoints();
+    let submitted = submit_direct_candidate_v1(
+        frozen.state,
+        frozen.selection,
+        4,
+        21,
+        candidate(10),
+        id(81),
+        &Sha,
+    )
+    .unwrap();
+    assert_eq!(
+        submitted
+            .selection
+            .outstanding_candidate_bond_lamports(submitted.state.root),
+        Ok(5),
+    );
+    let terminal = prepare_direct_economic_terminal_v1(
+        &AllowEconomicTerminal,
+        submitted.state,
+        submitted.selection,
+        endpoints,
+        None,
+        None,
+        DirectTerminalReasonV1::UnselectedLapse,
+        5,
+        40,
+        &Sha,
+    )
+    .unwrap();
+    let refunds = terminal.candidate_bond_refunds.unwrap();
+    assert_eq!(refunds.refund_count, 1);
+    assert_eq!(refunds.total_lamports, 5);
+    assert_eq!(refunds.refunds[0].unwrap().recipient, id(81));
+    assert_eq!(refunds.refunds[0].unwrap().lamports, 5);
+    assert_eq!(refunds.receipt_id, terminal.transition_id);
+    assert_eq!(
+        terminal
+            .selection
+            .candidate_bond_refund_receipt_id(),
+        terminal.transition_id,
+    );
+    assert_eq!(
+        terminal
+            .selection
+            .outstanding_candidate_bond_lamports(terminal.state.root),
+        Ok(0),
+    );
+}
+
+#[test]
 fn complete_selection_reverifies_and_ranks_exact_zero_price_pair() {
     let initial = state();
     let buyer = prepare_direct_reservation_admission_v1(
@@ -1254,19 +1663,71 @@ fn complete_selection_reverifies_and_ranks_exact_zero_price_pair() {
     assert_eq!(frozen.selection.phase(), DirectSelectionPhaseV1::SubmissionOpen);
     assert_eq!(frozen.selection.reservation_account(0).unwrap(), id(50));
 
-    let first = submit_direct_candidate_v1(frozen.state, frozen.selection, 4, 21, candidate(5), &Sha).unwrap();
-    let second = submit_direct_candidate_v1(first.state, first.selection, 5, 22, candidate(10), &Sha).unwrap();
-    let third = submit_direct_candidate_v1(second.state, second.selection, 6, 23, candidate(8), &Sha).unwrap();
-    let fourth = submit_direct_candidate_v1(third.state, third.selection, 7, 24, candidate(6), &Sha).unwrap();
+    let first = submit_direct_candidate_v1(
+        frozen.state, frozen.selection, 4, 21, candidate(5), id(81), &Sha,
+    ).unwrap();
+    let second = submit_direct_candidate_v1(
+        first.state, first.selection, 5, 22, candidate(10), id(82), &Sha,
+    ).unwrap();
+    let third = submit_direct_candidate_v1(
+        second.state, second.selection, 6, 23, candidate(8), id(82), &Sha,
+    ).unwrap();
+    let fourth = submit_direct_candidate_v1(
+        third.state, third.selection, 7, 24, candidate(6), id(84), &Sha,
+    ).unwrap();
     assert_eq!(fourth.selection.candidate_count(), 3);
     assert_eq!(fourth.selection.candidate(0).unwrap(), candidate(10));
     assert_eq!(fourth.selection.candidate(1).unwrap(), candidate(8));
     assert_eq!(fourth.selection.candidate(2).unwrap(), candidate(6));
-    let begun = begin_direct_candidate_verification_v1(fourth.state, fourth.selection, 8, 30, &Sha).unwrap();
-    let verified_first = verify_next_direct_candidate_v1(begun.state, begun.selection, 9, 31, &Sha).unwrap();
-    let verified_second = verify_next_direct_candidate_v1(verified_first.state, verified_first.selection, 10, 32, &Sha).unwrap();
-    let verified_third = verify_next_direct_candidate_v1(verified_second.state, verified_second.selection, 11, 33, &Sha).unwrap();
-    let selected = finalize_direct_selection_v1(verified_third.state, verified_third.selection, 12, 34, &Sha).unwrap();
+    let replacement = fourth.candidate_bond_movement.unwrap();
+    assert_eq!(replacement.incoming_payer, id(84));
+    assert_eq!(replacement.incoming_lamports, 5);
+    assert_eq!(replacement.evicted_refund_recipient, id(81));
+    assert_eq!(replacement.evicted_refund_lamports, 5);
+    assert_eq!(replacement.principal_before_lamports, 15);
+    assert_eq!(replacement.principal_after_lamports, 15);
+    let nonretained = submit_direct_candidate_v1(
+        fourth.state, fourth.selection, 8, 25, candidate(1), id(85), &Sha,
+    ).unwrap();
+    let alternate_nonretained = submit_direct_candidate_v1(
+        fourth.state, fourth.selection, 8, 25, candidate(2), id(85), &Sha,
+    ).unwrap();
+    assert_eq!(nonretained.candidate_bond_movement, None);
+    assert_eq!(nonretained.selection, fourth.selection);
+    assert_eq!(alternate_nonretained.selection, fourth.selection);
+    assert_ne!(
+        nonretained.state.replay.action_transcript_id(),
+        alternate_nonretained.state.replay.action_transcript_id(),
+    );
+    let begun = begin_direct_candidate_verification_v1(
+        nonretained.state, nonretained.selection, 9, 30, &Sha,
+    ).unwrap();
+    let verified_first = verify_next_direct_candidate_v1(
+        begun.state, begun.selection, 10, 31, &Sha,
+    ).unwrap();
+    let verified_second = verify_next_direct_candidate_v1(
+        verified_first.state, verified_first.selection, 11, 32, &Sha,
+    ).unwrap();
+    let verified_third = verify_next_direct_candidate_v1(
+        verified_second.state, verified_second.selection, 12, 33, &Sha,
+    ).unwrap();
+    let selected = finalize_direct_selection_v1(
+        verified_third.state, verified_third.selection, 13, 34, &Sha,
+    ).unwrap();
+    let bond_refunds = selected.candidate_bond_refunds.unwrap();
+    assert_eq!(bond_refunds.refund_count, 2);
+    assert_eq!(bond_refunds.total_lamports, 15);
+    assert_eq!(bond_refunds.refunds[0].unwrap().recipient, id(82));
+    assert_eq!(bond_refunds.refunds[0].unwrap().lamports, 10);
+    assert_eq!(bond_refunds.refunds[1].unwrap().recipient, id(84));
+    assert_eq!(bond_refunds.refunds[1].unwrap().lamports, 5);
+    assert_eq!(bond_refunds.refunds[2], None);
+    assert_eq!(
+        selected
+            .selection
+            .outstanding_candidate_bond_lamports(selected.state.root),
+        Ok(0),
+    );
     let pair = selected.selection.selected_pair().unwrap();
     assert_eq!(pair.quantity(), 10);
     assert_eq!(pair.consideration_cash_atoms(), 0);
@@ -1274,6 +1735,18 @@ fn complete_selection_reverifies_and_ranks_exact_zero_price_pair() {
     assert_eq!(
         decode_direct_selection_body_v1(&body, selected.state.root),
         Ok(selected.selection)
+    );
+    let mut missing_submitter = selected.selection;
+    missing_submitter.candidate_submitters[0] = [0; 32];
+    assert_eq!(
+        encode_direct_selection_body_v1(missing_submitter, selected.state.root),
+        Err(DirectMarketErrorV1::ZeroIdentity),
+    );
+    let mut missing_refund_receipt = selected.selection;
+    missing_refund_receipt.candidate_bond_refund_receipt_id = [0; 32];
+    assert_eq!(
+        encode_direct_selection_body_v1(missing_refund_receipt, selected.state.root),
+        Err(DirectMarketErrorV1::WrongPhase),
     );
 }
 
@@ -1332,11 +1805,11 @@ fn selection_refuses_missing_extra_duplicate_and_partial_traversal() {
         [Some(buyer.reservation), Some(seller.reservation)], domain, price, &Sha,
     ).unwrap();
     let submitted = submit_direct_candidate_v1(
-        frozen.state, frozen.selection, 4, 21, candidate(10), &Sha,
+        frozen.state, frozen.selection, 4, 21, candidate(10), id(81), &Sha,
     ).unwrap();
     assert_eq!(
         submit_direct_candidate_v1(
-            submitted.state, submitted.selection, 5, 22, candidate(10), &Sha,
+            submitted.state, submitted.selection, 5, 22, candidate(10), id(82), &Sha,
         ),
         Err(DirectMarketErrorV1::IdentityAlias)
     );
@@ -1691,6 +2164,7 @@ fn selected_pair_moves_exact_cash_and_eggs_and_releases_full_reserves() {
             4,
             21,
             candidate(5),
+            id(81),
             &Sha,
         ),
         Err(DirectMarketErrorV1::DirectPair(
@@ -1703,6 +2177,7 @@ fn selected_pair_moves_exact_cash_and_eggs_and_releases_full_reserves() {
         4,
         21,
         candidate(10),
+        id(81),
         &Sha,
     )
     .unwrap();

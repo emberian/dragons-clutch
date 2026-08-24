@@ -1,8 +1,9 @@
-//! Fixed-capacity client construction for the allocated Direct `80/1` family.
+//! Fixed-capacity client construction for the current Direct `80/1` family.
 //!
 //! These values prove only canonical wire construction. They do not promote a
-//! disabled capability, choose accounts, authenticate Product state, or claim
-//! that a deployed release executes the action.
+//! capability, choose accounts, authenticate Product state, or claim that a
+//! deployed release executes the action; release admission remains a separate
+//! checked operator/onchain boundary.
 
 use clutch_solana_layout::direct_market_v1::{
     DirectAdmitOrderPayloadV1,

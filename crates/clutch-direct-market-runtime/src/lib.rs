@@ -21,7 +21,12 @@ use clutch_product_series::{
 pub mod selection_v1;
 pub mod settlement_v1;
 pub mod codec_v1;
+pub mod codec_v2;
+pub mod current_v2;
 pub mod fee_v1;
+pub mod fee_v2;
+pub mod liveness_v1;
+pub mod lifecycle_v2;
 
 /// Maximum funded Reservations ever admitted by one minimal Direct root.
 pub const MAX_DIRECT_RESERVATIONS_V1: u8 = 2;
@@ -46,9 +51,13 @@ const DIRECT_EPOCH_SEMANTICS_DOMAIN_V1: &[u8] =
 const DIRECT_SCHEDULE_POLICY_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/schedule-policy/v1\0";
 const ACTION_TRANSCRIPT_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/action-transcript/v1\0";
+pub(crate) const REPLAY_LIVENESS_BATCH_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/direct/replay-liveness-batch/v1\0";
 const ROOT_STATE_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/root-state/v1\0";
 const REPLAY_STATE_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/replay-state/v1\0";
 const TERMINAL_RECEIPT_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/terminal-receipt/v1\0";
+const TERMINAL_LIVENESS_SEAL_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/direct/terminal-liveness-seal/v1\0";
 const RETIREMENT_TRANSFER_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/retirement-transfer/v1\0";
 
 /// Allocation-free SHA-256 boundary for Direct semantic identities.
@@ -88,6 +97,8 @@ pub enum DirectMarketErrorV1 {
     DirectPair(clutch_batch::direct_pair_v1::DirectPairErrorV1),
     /// General PositionV3/GEN1 structural projection refused.
     GeneralContract(clutch_general_v2_contract::CodecError),
+    /// The shared, present-funded runtime-liveness owner refused the join.
+    Liveness(clutch_liveness::runtime_v1::RuntimeLivenessErrorV1),
 }
 
 impl From<clutch_batch::relation_v2::EconomicErrorV2> for DirectMarketErrorV1 {
@@ -105,6 +116,12 @@ impl From<clutch_batch::direct_pair_v1::DirectPairErrorV1> for DirectMarketError
 impl From<clutch_general_v2_contract::CodecError> for DirectMarketErrorV1 {
     fn from(value: clutch_general_v2_contract::CodecError) -> Self {
         Self::GeneralContract(value)
+    }
+}
+
+impl From<clutch_liveness::runtime_v1::RuntimeLivenessErrorV1> for DirectMarketErrorV1 {
+    fn from(value: clutch_liveness::runtime_v1::RuntimeLivenessErrorV1) -> Self {
+        Self::Liveness(value)
     }
 }
 
@@ -450,6 +467,8 @@ pub struct DirectMarketBindingV1 {
     pub candidate_lifecycle_policy_id: [u8; 32],
     /// Product-selected present-funded candidate liveness policy.
     pub candidate_liveness_policy_id: [u8; 32],
+    /// Product-authenticated allocation from the complete global liveness bundle.
+    pub candidate_liveness: liveness_v1::DirectCandidateLivenessBindingV1,
     /// Direct release-owned timing projection over those two Product owners.
     pub direct_schedule_policy_id: [u8; 32],
     /// Product MarketLifecycleRoot account.
@@ -529,6 +548,7 @@ impl DirectMarketBindingV1 {
             index += 1;
         }
         self.fee_policy().validate()?;
+        self.candidate_liveness.validate()?;
         require_distinct(&[
             self.resolution_account,
             self.product_root_account,
@@ -538,6 +558,8 @@ impl DirectMarketBindingV1 {
             self.general_market_binding,
             self.general_market_runtime,
             self.neutral_lamport_sink,
+            self.candidate_liveness.policy_account,
+            self.candidate_liveness.candidate_account,
         ])
     }
 
@@ -684,6 +706,11 @@ pub fn direct_epoch_semantics_id_v1<B: DirectHashBackendV1>(
         &binding.family_admission_sequence.to_le_bytes(),
         &binding.general_market_binding,
         &binding.general_market_runtime,
+        &binding.candidate_liveness.global_lifecycle_id,
+        &binding.candidate_liveness.global_bundle_binding_id,
+        &binding.candidate_liveness.global_capitalization_receipt_id,
+        &binding.candidate_liveness.allocation_receipt_id,
+        &binding.candidate_liveness.work_schedule_id,
         &schedule.admission_opens_slot.to_le_bytes(),
         &schedule.admission_closes_slot.to_le_bytes(),
         &schedule.submission_closes_slot.to_le_bytes(),
@@ -703,6 +730,8 @@ pub fn direct_schedule_policy_id_v1<B: DirectHashBackendV1>(
         DIRECT_SCHEDULE_POLICY_DOMAIN_V1,
         &binding.candidate_lifecycle_policy_id,
         &binding.candidate_liveness_policy_id,
+        &binding.candidate_liveness.work_schedule_id,
+        &binding.candidate_liveness.allocation_receipt_id,
         &DIRECT_ADMISSION_SPAN_SLOTS_V1.to_le_bytes(),
         &DIRECT_SUBMISSION_SPAN_SLOTS_V1.to_le_bytes(),
         &DIRECT_VERIFICATION_SPAN_SLOTS_V1.to_le_bytes(),
@@ -972,6 +1001,30 @@ impl DirectMarketRootV1 {
             &self.binding.fee_split_den.to_le_bytes(),
             &self.binding.candidate_lifecycle_policy_id,
             &self.binding.candidate_liveness_policy_id,
+            &self.binding.candidate_liveness.policy_account,
+            &self.binding.candidate_liveness.policy_data_id,
+            &self.binding.candidate_liveness.global_lifecycle_id,
+            &self.binding.candidate_liveness.global_bundle_binding_id,
+            &self.binding.candidate_liveness.global_capitalization_receipt_id,
+            &self.binding.candidate_liveness.global_bundle_commitment_id,
+            &self.binding.candidate_liveness.candidate_account,
+            &self.binding.candidate_liveness.candidate_data_id,
+            &self.binding.candidate_liveness.candidate_semantic_owner,
+            &self.binding.candidate_liveness.candidate_quote_schedule_id,
+            &self.binding.candidate_liveness.candidate_receipt_program_id,
+            &self.binding.candidate_liveness.candidate_generation.to_le_bytes(),
+            &self.binding.candidate_liveness.first_call_ordinal.to_le_bytes(),
+            &self.binding.candidate_liveness.reserved_calls.to_le_bytes(),
+            &self.binding.candidate_liveness.reserved_work_lamports.to_le_bytes(),
+            &self.binding.candidate_liveness.allocation_receipt_id,
+            &self.binding.candidate_liveness.work_schedule.freeze_book_lamports.to_le_bytes(),
+            &self.binding.candidate_liveness.work_schedule.begin_verification_lamports.to_le_bytes(),
+            &self.binding.candidate_liveness.work_schedule.verify_candidate_lamports.to_le_bytes(),
+            &self.binding.candidate_liveness.work_schedule.finalize_selection_lamports.to_le_bytes(),
+            &self.binding.candidate_liveness.work_schedule.economic_terminal_lamports.to_le_bytes(),
+            &self.binding.candidate_liveness.work_schedule.retire_terminal_lamports.to_le_bytes(),
+            &self.binding.candidate_liveness.work_schedule.retained_candidate_bond_lamports.to_le_bytes(),
+            &self.binding.candidate_liveness.work_schedule_id,
             &self.binding.direct_schedule_policy_id,
             &self.binding.product_root_account, &self.binding.product_market_binding_id,
             &self.binding.product_family_prestate_id,
@@ -1035,6 +1088,10 @@ pub struct DirectActionReplayV1 {
     foundation_receipt_id: [u8; 32],
     economic_terminal_receipt_id: [u8; 32],
     family_terminal_receipt_id: [u8; 32],
+    candidate_liveness_completed_calls: u32,
+    candidate_liveness_last_receipt_id: [u8; 32],
+    candidate_liveness_batch_receipt_id: [u8; 32],
+    candidate_liveness_pending: bool,
 }
 
 impl DirectActionReplayV1 {
@@ -1056,6 +1113,22 @@ impl DirectActionReplayV1 {
     pub const fn family_terminal_receipt_id(self) -> [u8; 32] {
         self.family_terminal_receipt_id
     }
+    /// Number of this occurrence's exact eight Candidate roles already consumed.
+    pub const fn candidate_liveness_completed_calls(self) -> u32 {
+        self.candidate_liveness_completed_calls
+    }
+    /// Last shared Candidate work receipt emitted by this occurrence.
+    pub const fn candidate_liveness_last_receipt_id(self) -> [u8; 32] {
+        self.candidate_liveness_last_receipt_id
+    }
+    /// Complete latest per-action Candidate receipt-batch commitment.
+    pub const fn candidate_liveness_batch_receipt_id(self) -> [u8; 32] {
+        self.candidate_liveness_batch_receipt_id
+    }
+    /// True only in a pure transient plan awaiting the atomic liveness join.
+    pub const fn candidate_liveness_pending(self) -> bool {
+        self.candidate_liveness_pending
+    }
 
     /// Validate permanent replay facts against the exact current root.
     pub fn validate_against(self, root: DirectMarketRootV1) -> Result<(), DirectMarketErrorV1> {
@@ -1076,6 +1149,46 @@ impl DirectActionReplayV1 {
             || self.replay_account != binding.action_replay_account
         {
             return Err(DirectMarketErrorV1::MismatchedBinding);
+        }
+        if self.candidate_liveness_completed_calls
+            > liveness_v1::DIRECT_CANDIDATE_RESERVED_CALLS_V1
+            || (self.candidate_liveness_completed_calls == 0)
+                != (self.candidate_liveness_last_receipt_id == [0; 32])
+            || (self.candidate_liveness_completed_calls == 0)
+                != (self.candidate_liveness_batch_receipt_id == [0; 32])
+        {
+            return Err(DirectMarketErrorV1::Replay);
+        }
+        if self.candidate_liveness_completed_calls != 0 {
+            require_live(self.candidate_liveness_last_receipt_id)?;
+            require_live(self.candidate_liveness_batch_receipt_id)?;
+        }
+        if !self.candidate_liveness_pending {
+            let progress_matches = match (root.phase, self.phase) {
+                (DirectRootPhaseV1::Open, DirectReplayPhaseV1::Active) => {
+                    self.candidate_liveness_completed_calls == 0
+                }
+                (
+                    DirectRootPhaseV1::FrozenEmpty | DirectRootPhaseV1::SubmissionOpen,
+                    DirectReplayPhaseV1::Active,
+                ) => self.candidate_liveness_completed_calls == 1,
+                (DirectRootPhaseV1::Verifying, DirectReplayPhaseV1::Active) => {
+                    (2..=5).contains(&self.candidate_liveness_completed_calls)
+                }
+                (DirectRootPhaseV1::Selected, DirectReplayPhaseV1::Active) => {
+                    self.candidate_liveness_completed_calls == 6
+                }
+                (DirectRootPhaseV1::Terminal, DirectReplayPhaseV1::Active) => {
+                    self.candidate_liveness_completed_calls == 7
+                }
+                (DirectRootPhaseV1::Terminal, DirectReplayPhaseV1::Terminal) => {
+                    self.candidate_liveness_completed_calls == 8
+                }
+                _ => false,
+            };
+            if !progress_matches {
+                return Err(DirectMarketErrorV1::Replay);
+            }
         }
         match (root.phase, self.phase) {
             (DirectRootPhaseV1::Terminal, DirectReplayPhaseV1::Active) => {
@@ -1116,12 +1229,16 @@ impl DirectActionReplayV1 {
             &self.next_action_sequence.to_le_bytes(), &self.action_transcript_id,
             &self.foundation_receipt_id, &self.economic_terminal_receipt_id,
             &self.family_terminal_receipt_id,
+            &self.candidate_liveness_completed_calls.to_le_bytes(),
+            &self.candidate_liveness_last_receipt_id,
+            &self.candidate_liveness_batch_receipt_id,
+            &[u8::from(self.candidate_liveness_pending)],
         ]);
         require_live(id)?;
         Ok(id)
     }
 
-    fn require_action(
+    pub(crate) fn require_action(
         self,
         root: DirectMarketRootV1,
         consumed_sequence: u64,
@@ -1135,7 +1252,7 @@ impl DirectActionReplayV1 {
         Ok(())
     }
 
-    fn advance<B: DirectHashBackendV1>(
+    pub(crate) fn advance<B: DirectHashBackendV1>(
         mut self,
         root_pre_id: [u8; 32],
         root_post_id: [u8; 32],
@@ -1155,6 +1272,43 @@ impl DirectActionReplayV1 {
             &observed_slot.to_le_bytes(), &evidence_id, &self.action_transcript_id,
         ]);
         require_live(self.action_transcript_id)?;
+        self.candidate_liveness_pending = self.candidate_liveness_pending
+            || action.requires_candidate_liveness();
+        Ok(self)
+    }
+
+    pub(crate) fn bind_candidate_liveness_batch<B: DirectHashBackendV1>(
+        mut self,
+        root: DirectMarketRootV1,
+        batch: liveness_v1::DirectCandidateWorkBatchV1,
+        backend: &B,
+    ) -> Result<Self, DirectMarketErrorV1> {
+        self.validate_against(root)?;
+        if !self.candidate_liveness_pending
+            || batch.completed_calls_before() != self.candidate_liveness_completed_calls
+            || (self.candidate_liveness_completed_calls != 0
+                && batch.predecessor_receipt_id()
+                    != self.candidate_liveness_last_receipt_id)
+        {
+            return Err(DirectMarketErrorV1::Replay);
+        }
+        batch.validate_replay_binding(self, root)?;
+        let prior_action_transcript = self.action_transcript_id;
+        self.candidate_liveness_completed_calls = batch.completed_calls_after();
+        self.candidate_liveness_last_receipt_id = batch.last_receipt_id();
+        self.candidate_liveness_batch_receipt_id = batch.batch_receipt_id();
+        self.candidate_liveness_pending = false;
+        self.action_transcript_id = backend.sha256_parts(&[
+            REPLAY_LIVENESS_BATCH_DOMAIN_V1,
+            &self.market_instance_id,
+            &self.direct_root_account,
+            &prior_action_transcript,
+            &self.candidate_liveness_completed_calls.to_le_bytes(),
+            &self.candidate_liveness_last_receipt_id,
+            &self.candidate_liveness_batch_receipt_id,
+        ]);
+        require_live(self.action_transcript_id)?;
+        self.validate_against(root)?;
         Ok(self)
     }
 }
@@ -1200,6 +1354,22 @@ impl DirectMarketActionV1 {
             Self::LapseEmpty => 10, Self::LapseUnselected => 11,
             Self::LapseSelected => 12, Self::RetireTerminal => 13,
         }
+    }
+
+    /// Whether this action must join one or more exact Candidate work roles.
+    pub const fn requires_candidate_liveness(self) -> bool {
+        matches!(
+            self,
+            Self::FreezeBook
+                | Self::BeginVerification
+                | Self::VerifyCandidate
+                | Self::FinalizeSelection
+                | Self::SettlePair
+                | Self::LapseEmpty
+                | Self::LapseUnselected
+                | Self::LapseSelected
+                | Self::RetireTerminal
+        )
     }
 }
 
@@ -1525,6 +1695,7 @@ pub trait AuthenticatedDirectFoundationV1 {
         _founder_link: &SeriesMarketLinkV1,
         _compiler_bundle: &CompiledProductSeriesBundleV5,
         _fee_policy: fee_v1::DirectFeePolicyV1,
+        _candidate_liveness: liveness_v1::AuthenticatedDirectCandidateLivenessV1,
         _binding: DirectMarketBindingV1,
         _schedule: DirectScheduleV1, _foundation_slot: u64,
         _root_rent: DirectRentOwnerV1,
@@ -1574,6 +1745,8 @@ pub struct DirectFoundationPlanV1 {
     pub product_authority: DirectProductAdmissionAuthorityV1,
     /// Direct-owned admission receipt consumed by Product.
     pub admission_receipt_id: ContentId,
+    /// Product-owned allocation receipt consumed by this exact occurrence.
+    pub candidate_liveness_allocation_receipt_id: [u8; 32],
 }
 
 /// Prepare the unique Product-attached Direct root and permanent replay.
@@ -1585,11 +1758,14 @@ pub fn prepare_direct_foundation_v1<
     founder_link: &SeriesMarketLinkV1,
     compiler_bundle: &CompiledProductSeriesBundleV5,
     fee_policy: fee_v1::DirectFeePolicyV1,
+    candidate_liveness: Option<liveness_v1::AuthenticatedDirectCandidateLivenessV1>,
     binding: DirectMarketBindingV1,
     schedule: DirectScheduleV1, foundation_slot: u64,
     root_rent: DirectRentOwnerV1,
     action_replay_rent: DirectRentOwnerV1, family_admission_sequence: u32, backend: &B,
 ) -> Result<DirectFoundationPlanV1, DirectMarketErrorV1> {
+    let candidate_liveness = candidate_liveness
+        .ok_or(DirectMarketErrorV1::UnauthenticatedAuthority)?;
     binding.validate()?;
     schedule.validate()?;
     if schedule != DirectScheduleV1::canonical_from_foundation_slot(foundation_slot)? {
@@ -1645,6 +1821,17 @@ pub fn prepare_direct_foundation_v1<
     }
     fee_policy.validate()?;
     if binding.fee_policy() != fee_policy
+        || binding.candidate_liveness != candidate_liveness.binding()
+        || binding.candidate_liveness.work_schedule_id
+            != binding.candidate_liveness.work_schedule.semantic_id(
+                binding.market_instance_id,
+                binding.generation,
+                binding.direct_root_account,
+                binding.family_admission_sequence,
+                binding.candidate_lifecycle_policy_id,
+                binding.candidate_liveness_policy_id,
+                backend,
+            )?
         || binding.direct_fee_shape_id != fee_policy.semantic_id(backend)?
         || binding.direct_schedule_policy_id != direct_schedule_policy_id_v1(binding, backend)?
         || binding.direct_epoch_semantics_id
@@ -1657,6 +1844,7 @@ pub fn prepare_direct_foundation_v1<
         founder_link,
         compiler_bundle,
         fee_policy,
+        candidate_liveness,
         binding,
         schedule,
         foundation_slot,
@@ -1678,6 +1866,23 @@ pub fn prepare_direct_foundation_v1<
         &binding.fee_treasury_num.to_le_bytes(),
         &binding.fee_split_den.to_le_bytes(),
         &binding.candidate_lifecycle_policy_id, &binding.candidate_liveness_policy_id,
+        &binding.candidate_liveness.policy_account,
+        &binding.candidate_liveness.policy_data_id,
+        &binding.candidate_liveness.global_lifecycle_id,
+        &binding.candidate_liveness.global_bundle_binding_id,
+        &binding.candidate_liveness.global_capitalization_receipt_id,
+        &binding.candidate_liveness.global_bundle_commitment_id,
+        &binding.candidate_liveness.candidate_account,
+        &binding.candidate_liveness.candidate_data_id,
+        &binding.candidate_liveness.candidate_semantic_owner,
+        &binding.candidate_liveness.candidate_quote_schedule_id,
+        &binding.candidate_liveness.candidate_receipt_program_id,
+        &binding.candidate_liveness.candidate_generation.to_le_bytes(),
+        &binding.candidate_liveness.first_call_ordinal.to_le_bytes(),
+        &binding.candidate_liveness.reserved_calls.to_le_bytes(),
+        &binding.candidate_liveness.reserved_work_lamports.to_le_bytes(),
+        &binding.candidate_liveness.allocation_receipt_id,
+        &binding.candidate_liveness.work_schedule_id,
         &binding.direct_schedule_policy_id,
         &binding.product_root_account, &binding.product_market_binding_id,
         &binding.product_family_prestate_id,
@@ -1723,6 +1928,10 @@ pub fn prepare_direct_foundation_v1<
         phase: DirectReplayPhaseV1::Active, next_action_sequence: 1,
         action_transcript_id: initial_transcript, foundation_receipt_id: receipt_bytes,
         economic_terminal_receipt_id: [0; 32], family_terminal_receipt_id: [0; 32],
+        candidate_liveness_completed_calls: 0,
+        candidate_liveness_last_receipt_id: [0; 32],
+        candidate_liveness_batch_receipt_id: [0; 32],
+        candidate_liveness_pending: false,
     };
     replay.validate_against(root)?;
     let admission_receipt_id = ContentId::from_bytes(receipt_bytes);
@@ -1734,6 +1943,8 @@ pub fn prepare_direct_foundation_v1<
             family_admission_sequence, admission_receipt_id,
         },
         admission_receipt_id,
+        candidate_liveness_allocation_receipt_id:
+            binding.candidate_liveness.allocation_receipt_id,
     })
 }
 
@@ -1802,13 +2013,50 @@ pub struct DirectFamilyTerminalPlanV1 {
     pub retirement_transfer_id: [u8; 32],
     /// Exact finalized Resolution V5 joined only at family retirement.
     pub final_resolution: DirectFinalResolutionV1,
-    /// Terminal replay/receipt successor used to derive the Product receipt
-    /// before the owning replay account is closed in the same transition.
+    /// Terminal replay successor after the exact eighth Candidate work batch.
+    /// Its family receipt is the only Direct terminal accepted by Product
+    /// before the owning replay account closes in the same transition.
     pub replay_post: DirectActionReplayV1,
     /// Direct-owned terminal receipt consumed by Product.
     pub terminal_receipt_id: ContentId,
     /// Private Product Direct-family authority.
     pub product_authority: DirectProductTerminalAuthorityV1,
+}
+
+/// Action-13 semantic preparation awaiting the eighth Candidate work receipt.
+///
+/// Its provisional receipt is never persisted or accepted by Product. It is a
+/// lineage commitment used only to prove that the final receipt sealed the
+/// exact same retirement after the shared Candidate owner consumed its final
+/// prepaid call.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectFamilyTerminalPreparationV1 {
+    root_semantic_id: [u8; 32],
+    replay_pre_semantic_id: [u8; 32],
+    retirement_transfer_id: [u8; 32],
+    final_resolution_account: [u8; 32],
+    final_resolution_semantic_id: [u8; 32],
+    final_resolution_data_id: [u8; 32],
+    replay_post: DirectActionReplayV1,
+    provisional_terminal_receipt_id: ContentId,
+    aggregator_prestate_id: ContentId,
+    family_root_id: ContentId,
+    family_terminal_sequence: u32,
+}
+
+impl DirectFamilyTerminalPreparationV1 {
+    /// Root/replay poststate whose replay still requires the final work bind.
+    pub const fn prepared_state(self, root: DirectMarketRootV1) -> DirectRootReplayPostV1 {
+        DirectRootReplayPostV1 {
+            root,
+            replay: self.replay_post,
+        }
+    }
+
+    /// Provisional replay used only as input to the final Candidate work bind.
+    pub const fn prepared_replay(&self) -> &DirectActionReplayV1 {
+        &self.replay_post
+    }
 }
 
 /// Prepare atomic action 13 after economic terminality.
@@ -1829,7 +2077,7 @@ pub fn prepare_direct_family_terminal_v1<
     final_resolution: DirectFinalResolutionV1,
     retirement: &DirectRetirementTransferV1, consumed_sequence: u64,
     observed_slot: u64, family_terminal_sequence: u32, backend: &B,
-) -> Result<DirectFamilyTerminalPlanV1, DirectMarketErrorV1> {
+) -> Result<DirectFamilyTerminalPreparationV1, DirectMarketErrorV1> {
     state.replay.require_action(state.root, consumed_sequence)?;
     selection.validate_against(state.root)?;
     retirement.validate()?;
@@ -1944,19 +2192,107 @@ pub fn prepare_direct_family_terminal_v1<
     replay_post.family_terminal_receipt_id = terminal_bytes;
     replay_post.validate_against(state.root)?;
     let terminal_receipt_id = ContentId::from_bytes(terminal_bytes);
+    Ok(DirectFamilyTerminalPreparationV1 {
+        root_semantic_id, replay_pre_semantic_id, retirement_transfer_id,
+        final_resolution_account: final_resolution.account,
+        final_resolution_semantic_id: final_resolution.semantic_id,
+        final_resolution_data_id: final_resolution.data_id,
+        replay_post,
+        provisional_terminal_receipt_id: terminal_receipt_id,
+        aggregator_prestate_id,
+        family_root_id: ContentId::from_bytes(binding.direct_root_account),
+        family_terminal_sequence,
+    })
+}
+
+/// Seal action 13 only after the exact eighth Candidate work receipt is bound.
+///
+/// `bound_replay` cannot be a caller DTO: all of its fields are private and
+/// the only public current constructor is the checked Candidate batch binder.
+/// This function nevertheless recomputes the one allowed transcript successor
+/// and requires every non-liveness replay field to remain byte-identical.
+pub fn seal_direct_family_terminal_liveness_v1<B: DirectHashBackendV1>(
+    preparation: DirectFamilyTerminalPreparationV1,
+    root: &DirectMarketRootV1,
+    retirement: &DirectRetirementTransferV1,
+    final_resolution: DirectFinalResolutionV1,
+    bound_replay: DirectActionReplayV1,
+    backend: &B,
+) -> Result<DirectFamilyTerminalPlanV1, DirectMarketErrorV1> {
+    let provisional = preparation.replay_post;
+    if root.semantic_id(backend)? != preparation.root_semantic_id
+        || retirement.semantic_id(backend)? != preparation.retirement_transfer_id
+        || final_resolution.account != preparation.final_resolution_account
+        || final_resolution.semantic_id != preparation.final_resolution_semantic_id
+        || final_resolution.data_id != preparation.final_resolution_data_id
+        || !provisional.candidate_liveness_pending
+        || bound_replay.candidate_liveness_pending
+        || provisional.market_instance_id != bound_replay.market_instance_id
+        || provisional.generation != bound_replay.generation
+        || provisional.direct_epoch_semantics_id != bound_replay.direct_epoch_semantics_id
+        || provisional.direct_root_account != bound_replay.direct_root_account
+        || provisional.replay_account != bound_replay.replay_account
+        || provisional.rent != bound_replay.rent
+        || provisional.phase != bound_replay.phase
+        || provisional.next_action_sequence != bound_replay.next_action_sequence
+        || provisional.foundation_receipt_id != bound_replay.foundation_receipt_id
+        || provisional.economic_terminal_receipt_id
+            != bound_replay.economic_terminal_receipt_id
+        || provisional.family_terminal_receipt_id
+            != bound_replay.family_terminal_receipt_id
+        || provisional.family_terminal_receipt_id
+            != preparation.provisional_terminal_receipt_id.bytes()
+        || provisional.candidate_liveness_completed_calls != 7
+        || bound_replay.candidate_liveness_completed_calls != 8
+        || bound_replay.candidate_liveness_last_receipt_id == [0; 32]
+        || bound_replay.candidate_liveness_batch_receipt_id == [0; 32]
+    {
+        return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+    }
+    let expected_transcript = backend.sha256_parts(&[
+        REPLAY_LIVENESS_BATCH_DOMAIN_V1,
+        &provisional.market_instance_id,
+        &provisional.direct_root_account,
+        &provisional.action_transcript_id,
+        &bound_replay.candidate_liveness_completed_calls.to_le_bytes(),
+        &bound_replay.candidate_liveness_last_receipt_id,
+        &bound_replay.candidate_liveness_batch_receipt_id,
+    ]);
+    if bound_replay.action_transcript_id != expected_transcript {
+        return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+    }
+    bound_replay.validate_against(*root)?;
+    let final_receipt_bytes = backend.sha256_parts(&[
+        TERMINAL_LIVENESS_SEAL_DOMAIN_V1,
+        &preparation.provisional_terminal_receipt_id.bytes(),
+        &bound_replay.action_transcript_id,
+        &bound_replay.candidate_liveness_completed_calls.to_le_bytes(),
+        &bound_replay.candidate_liveness_last_receipt_id,
+        &bound_replay.candidate_liveness_batch_receipt_id,
+    ]);
+    require_live(final_receipt_bytes)?;
+    let terminal_receipt_id = ContentId::from_bytes(final_receipt_bytes);
+    let mut replay_post = bound_replay;
+    replay_post.family_terminal_receipt_id = final_receipt_bytes;
+    replay_post.validate_against(*root)?;
     Ok(DirectFamilyTerminalPlanV1 {
-        root_semantic_id, replay_pre_semantic_id, retirement: *retirement,
-        retirement_transfer_id, final_resolution,
-        replay_post, terminal_receipt_id,
+        root_semantic_id: preparation.root_semantic_id,
+        replay_pre_semantic_id: preparation.replay_pre_semantic_id,
+        retirement: *retirement,
+        retirement_transfer_id: preparation.retirement_transfer_id,
+        final_resolution,
+        replay_post,
+        terminal_receipt_id,
         product_authority: DirectProductTerminalAuthorityV1 {
-            aggregator_prestate_id,
-            family_root_id: ContentId::from_bytes(binding.direct_root_account),
-            family_terminal_sequence, terminal_receipt_id,
+            aggregator_prestate_id: preparation.aggregator_prestate_id,
+            family_root_id: preparation.family_root_id,
+            family_terminal_sequence: preparation.family_terminal_sequence,
+            terminal_receipt_id,
         },
     })
 }
 
-fn require_terminal_retirement_source_v1(
+pub(crate) fn require_terminal_retirement_source_v1(
     retirement: &DirectRetirementTransferV1,
     required_account: [u8; 32],
     required_rent: DirectRentOwnerV1,
@@ -1976,7 +2312,7 @@ fn require_terminal_retirement_source_v1(
     Err(DirectMarketErrorV1::MismatchedBinding)
 }
 
-fn canonical_terminal_reservation_archives<B: DirectHashBackendV1>(
+pub(crate) fn canonical_terminal_reservation_archives<B: DirectHashBackendV1>(
     root: &DirectMarketRootV1,
     selection: &crate::selection_v1::DirectSelectionV1,
     supplied: &[Option<crate::reservation_v1::DirectReservationV1>; 2],

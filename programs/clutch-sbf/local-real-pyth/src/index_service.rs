@@ -8,13 +8,28 @@
 use crate::account_index::{
     AccountIndexError, CanonicalAccountIndex, CanonicalDecoderContext, IndexCapacity,
 };
+use crate::action_material::CanonicalActionMaterialErrorV1;
+use crate::direct_action8_material::{
+    enumerate_direct_action8_material_v2, join_direct_action8_finalized_snapshots_v2,
+    plan_direct_action8_context_snapshot_v2, DirectAction8OperatorBatchV2,
+};
+use crate::collateral_release_catalog::CurrentCollateralReleaseCatalogV1;
+use crate::collateral_release_catalog::AuthenticatedCurrentCollateralReleaseV1;
+use crate::dealer_terminal_material::{
+    enumerate_dealer_terminal_material_v1, join_dealer_terminal_snapshots_v1,
+    plan_dealer_terminal_snapshot_v1, DealerTerminalOperatorBatchV1,
+};
 use crate::rpc_index::{
-    decode_block_notification, decode_program_notification, decode_program_scan_result,
-    decode_response_result, decode_root_notification, decode_slot_update_notification,
+    decode_block_notification, decode_finalized_exact_account_snapshot_v1,
+    decode_program_notification, decode_program_scan_snapshot_v1, decode_response_result,
+    decode_root_notification, decode_slot_update_notification,
     decode_subscription_registration, notification_subscription_id, program_scan_context_slot,
-    ObservedRpcAccount, ObservedRpcProgramUpdate, ObservedSlotUpdateKind, PlannedRpcRequest,
+    FinalizedAccountSnapshotV1, FinalizedExactAccountSnapshotRequestV1, ObservedRpcAccount,
+    ObservedRpcProgramUpdate, ObservedSlotUpdateKind, PlannedRpcRequest,
     RpcAccountRemovalKind, RpcIndexError, RpcIndexPlan, RpcRequestPurpose,
 };
+use crate::transaction_builder::ProtocolTransactionBuilder;
+use crate::workflow_graph::ExplicitOperatorReleaseManifest;
 use serde_json::Value;
 use solana_address::Address;
 use std::collections::{BTreeMap, BTreeSet};
@@ -25,6 +40,7 @@ pub type Result<T> = core::result::Result<T, RpcIndexEngineError>;
 pub enum RpcIndexEngineError {
     Rpc(RpcIndexError),
     Account(AccountIndexError),
+    DirectActionMaterial(CanonicalActionMaterialErrorV1),
     UnknownRequest,
     DuplicateResponse,
     UnknownSubscription,
@@ -38,6 +54,9 @@ impl core::fmt::Display for RpcIndexEngineError {
         match self {
             Self::Rpc(error) => write!(formatter, "RPC index refused input: {error}"),
             Self::Account(error) => write!(formatter, "account index refused input: {error}"),
+            Self::DirectActionMaterial(error) => {
+                write!(formatter, "Direct action material refused input: {error}")
+            }
             Self::UnknownRequest => formatter.write_str("RPC response has no planned request"),
             Self::DuplicateResponse => {
                 formatter.write_str("RPC request already has an admitted response")
@@ -70,11 +89,22 @@ impl From<AccountIndexError> for RpcIndexEngineError {
     }
 }
 
+impl From<CanonicalActionMaterialErrorV1> for RpcIndexEngineError {
+    fn from(value: CanonicalActionMaterialErrorV1) -> Self {
+        Self::DirectActionMaterial(value)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RpcIndexEngineEvent {
     FinalizedScanAdmitted {
         release_key: String,
         account_count: usize,
+    },
+    FinalizedExactSnapshotAdmitted {
+        request_id: u64,
+        account_count: usize,
+        slot: u64,
     },
     SubscriptionBound {
         request_id: u64,
@@ -147,6 +177,9 @@ pub struct RpcIndexEngine {
     scan_requests: BTreeMap<u64, PlannedRpcRequest>,
     subscription_requests: BTreeMap<u64, PlannedRpcRequest>,
     completed_scans: BTreeSet<u64>,
+    finalized_scan_snapshots: BTreeMap<String, FinalizedAccountSnapshotV1>,
+    exact_snapshot_requests: BTreeMap<u64, FinalizedExactAccountSnapshotRequestV1>,
+    exact_snapshots: BTreeMap<u64, FinalizedAccountSnapshotV1>,
     registered_requests: BTreeSet<u64>,
     active_subscriptions: BTreeMap<u64, PlannedRpcRequest>,
     pending_accounts: BTreeMap<u64, Vec<ObservedRpcProgramUpdate>>,
@@ -177,6 +210,9 @@ impl RpcIndexEngine {
             scan_requests,
             subscription_requests,
             completed_scans: BTreeSet::new(),
+            finalized_scan_snapshots: BTreeMap::new(),
+            exact_snapshot_requests: BTreeMap::new(),
+            exact_snapshots: BTreeMap::new(),
             registered_requests: BTreeSet::new(),
             active_subscriptions: BTreeMap::new(),
             pending_accounts: BTreeMap::new(),
@@ -190,6 +226,204 @@ impl RpcIndexEngine {
     #[must_use]
     pub const fn index(&self) -> &CanonicalAccountIndex {
         &self.index
+    }
+
+    /// Transport-decoded finalized owner snapshot retained for semantic
+    /// planners that need exact cross-owner follow-up reads.
+    #[must_use]
+    pub fn finalized_scan_snapshot(
+        &self,
+        release_key: &str,
+    ) -> Option<&FinalizedAccountSnapshotV1> {
+        self.finalized_scan_snapshots.get(release_key)
+    }
+
+    /// Register one opaque semantic-planner request with the transport engine.
+    pub fn register_exact_snapshot_request(
+        &mut self,
+        request: FinalizedExactAccountSnapshotRequestV1,
+    ) -> Result<()> {
+        let request_id = request.request().request_id;
+        if self.exact_snapshot_requests.contains_key(&request_id)
+            || self.exact_snapshots.contains_key(&request_id)
+            || self.scan_requests.contains_key(&request_id)
+            || self.subscription_requests.contains_key(&request_id)
+        {
+            return Err(RpcIndexEngineError::DuplicateResponse);
+        }
+        self.exact_snapshot_requests.insert(request_id, request);
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn exact_snapshot_requests(&self) -> Vec<&FinalizedExactAccountSnapshotRequestV1> {
+        self.exact_snapshot_requests.values().collect()
+    }
+
+    #[must_use]
+    pub fn exact_snapshot(&self, request_id: u64) -> Option<&FinalizedAccountSnapshotV1> {
+        self.exact_snapshots.get(&request_id)
+    }
+
+    /// Start one autonomous current Direct action-8 material cycle from the
+    /// retained finalized Clutch owner scan. The emitted exact request is
+    /// registered atomically with this engine before transport sees it.
+    pub fn plan_direct_action8_cycle(
+        &mut self,
+        collateral_catalog: &CurrentCollateralReleaseCatalogV1<'_>,
+        manifest: &ExplicitOperatorReleaseManifest,
+        builder: &ProtocolTransactionBuilder,
+        request_id: u64,
+    ) -> Result<Option<u64>> {
+        let release = self
+            .index
+            .acquisition_plan()
+            .releases
+            .iter()
+            .find(|release| {
+                release.program_id == manifest.clutch.program_id
+                    && release.program_data == manifest.clutch.program_data
+                    && release.elf_sha256 == manifest.clutch.elf_sha256
+                    && release.deployment_slot == manifest.clutch.deployment_slot
+            })
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let snapshot = self
+            .finalized_scan_snapshots
+            .get(&release.key())
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let request = plan_direct_action8_context_snapshot_v2(
+            self.index.acquisition_plan(),
+            &self.index.acquisition_plan().releases,
+            collateral_catalog,
+            manifest,
+            builder,
+            snapshot,
+            request_id,
+        )?;
+        let Some(request) = request else { return Ok(None); };
+        let registered_id = request.request().request_id;
+        self.register_exact_snapshot_request(request)?;
+        Ok(Some(registered_id))
+    }
+
+    /// Join the retained discovery/exact receipts and exhaustively materialize
+    /// the typed batch consumed by `OperatorJsonApi`.
+    pub fn materialize_direct_action8_batch(
+        &self,
+        collateral_catalog: &CurrentCollateralReleaseCatalogV1<'_>,
+        manifest: &ExplicitOperatorReleaseManifest,
+        builder: &ProtocolTransactionBuilder,
+        exact_request_id: Option<u64>,
+    ) -> Result<DirectAction8OperatorBatchV2> {
+        let release = self
+            .index
+            .acquisition_plan()
+            .releases
+            .iter()
+            .find(|release| {
+                release.program_id == manifest.clutch.program_id
+                    && release.program_data == manifest.clutch.program_data
+                    && release.elf_sha256 == manifest.clutch.elf_sha256
+                    && release.deployment_slot == manifest.clutch.deployment_slot
+            })
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let discovery = self
+            .finalized_scan_snapshots
+            .get(&release.key())
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let exact = exact_request_id
+            .map(|request_id| {
+                self.exact_snapshots
+                    .get(&request_id)
+                    .ok_or(RpcIndexEngineError::UnknownRequest)
+            })
+            .transpose()?;
+        let snapshot = join_direct_action8_finalized_snapshots_v2(discovery, exact)?;
+        enumerate_direct_action8_material_v2(
+            &self.index.acquisition_plan().releases,
+            collateral_catalog,
+            manifest,
+            builder,
+            &snapshot,
+        )
+        .map_err(Into::into)
+    }
+
+    /// Start one exhaustive Dealer action-25 target-8/9 acquisition cycle.
+    /// The retained owner scan selects every Retiring facility; callers cannot
+    /// supply a facility, target discriminator, or semantic identifier.
+    pub fn plan_dealer_terminal_cycle(
+        &mut self,
+        collateral: &AuthenticatedCurrentCollateralReleaseV1<'_>,
+        builder: &ProtocolTransactionBuilder,
+        lookup_table: Address,
+        request_id: u64,
+    ) -> Result<Option<u64>> {
+        let release = self
+            .index
+            .acquisition_plan()
+            .releases
+            .iter()
+            .find(|release| {
+                release.program_id == builder.clutch_program()
+                    && release.elf_sha256 == builder.clutch_release_sha256()
+            })
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let snapshot = self
+            .finalized_scan_snapshots
+            .get(&release.key())
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let request = plan_dealer_terminal_snapshot_v1(
+            self.index.acquisition_plan(),
+            release,
+            collateral,
+            builder,
+            snapshot,
+            lookup_table,
+            request_id,
+        )?;
+        let Some(request) = request else { return Ok(None); };
+        let registered_id = request.request().request_id;
+        self.register_exact_snapshot_request(request)?;
+        Ok(Some(registered_id))
+    }
+
+    /// Join the exact same-slot reread and materialize the complete target-8/9
+    /// batch consumed by capability discovery and the operator API.
+    pub fn materialize_dealer_terminal_batch(
+        &self,
+        collateral: AuthenticatedCurrentCollateralReleaseV1<'_>,
+        builder: &ProtocolTransactionBuilder,
+        lookup_table: Address,
+        exact_request_id: u64,
+    ) -> Result<DealerTerminalOperatorBatchV1> {
+        let release = self
+            .index
+            .acquisition_plan()
+            .releases
+            .iter()
+            .find(|release| {
+                release.program_id == builder.clutch_program()
+                    && release.elf_sha256 == builder.clutch_release_sha256()
+            })
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let discovery = self
+            .finalized_scan_snapshots
+            .get(&release.key())
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let exact = self
+            .exact_snapshots
+            .get(&exact_request_id)
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let snapshot = join_dealer_terminal_snapshots_v1(discovery, exact)?;
+        enumerate_dealer_terminal_material_v1(
+            release,
+            collateral,
+            builder,
+            &snapshot,
+            lookup_table,
+        )
+        .map_err(Into::into)
     }
 
     #[must_use]
@@ -222,6 +456,9 @@ impl RpcIndexEngine {
             return Err(RpcIndexEngineError::DuplicateResponse);
         }
         self.completed_scans.clear();
+        self.finalized_scan_snapshots.clear();
+        self.exact_snapshot_requests.clear();
+        self.exact_snapshots.clear();
         Ok(())
     }
 
@@ -271,12 +508,14 @@ impl RpcIndexEngine {
         }
         let result = decode_response_result(self.index.acquisition_plan(), request, response)?;
         let scan_slot = program_scan_context_slot(result)?;
-        let accounts = decode_program_scan_result(
+        let snapshot = decode_program_scan_snapshot_v1(
             self.index.acquisition_plan(),
             request,
             result,
             self.next_receive_sequence,
         )?;
+        let accounts = snapshot.accounts();
+        let account_count = accounts.len();
         let sequence_advance = u64::try_from(accounts.len().max(1))
             .map_err(|_| RpcIndexEngineError::SequenceExhausted)?;
         let next_sequence = self
@@ -295,11 +534,13 @@ impl RpcIndexEngine {
             &seen,
         )?;
         self.index = next_index;
+        self.finalized_scan_snapshots
+            .insert(request.release_key.clone(), snapshot);
         self.next_receive_sequence = next_sequence;
         self.completed_scans.insert(request_id);
         Ok(RpcIndexEngineEvent::FinalizedScanAdmitted {
             release_key: request.release_key.clone(),
-            account_count: accounts.len(),
+            account_count,
         })
     }
 
@@ -326,6 +567,43 @@ impl RpcIndexEngine {
         Ok(RpcIndexEngineEvent::SubscriptionBound {
             request_id,
             subscription_id,
+        })
+    }
+
+    pub fn admit_exact_snapshot_response(
+        &mut self,
+        request_id: u64,
+        response: &Value,
+    ) -> Result<RpcIndexEngineEvent> {
+        let request = self
+            .exact_snapshot_requests
+            .get(&request_id)
+            .ok_or(RpcIndexEngineError::UnknownRequest)?;
+        let result = decode_response_result(
+            self.index.acquisition_plan(),
+            request.request(),
+            response,
+        )?;
+        let snapshot = decode_finalized_exact_account_snapshot_v1(
+            self.index.acquisition_plan(),
+            request,
+            result,
+            self.next_receive_sequence,
+        )?;
+        let account_count = snapshot.accounts().len();
+        let sequence_advance = u64::try_from(account_count.max(1))
+            .map_err(|_| RpcIndexEngineError::SequenceExhausted)?;
+        self.next_receive_sequence = self
+            .next_receive_sequence
+            .checked_add(sequence_advance)
+            .ok_or(RpcIndexEngineError::SequenceExhausted)?;
+        let slot = snapshot.receipt().slot();
+        self.exact_snapshots.insert(request_id, snapshot);
+        self.exact_snapshot_requests.remove(&request_id);
+        Ok(RpcIndexEngineEvent::FinalizedExactSnapshotAdmitted {
+            request_id,
+            account_count,
+            slot,
         })
     }
 
@@ -434,7 +712,9 @@ impl RpcIndexEngine {
                     events
                 }
             }
-            RpcRequestPurpose::ProgramScan => return Err(RpcIndexEngineError::UnknownRequest),
+            RpcRequestPurpose::ProgramScan | RpcRequestPurpose::ExactAccountSnapshot => {
+                return Err(RpcIndexEngineError::UnknownRequest)
+            }
         };
         self.next_receive_sequence = next_sequence;
         Ok(events)

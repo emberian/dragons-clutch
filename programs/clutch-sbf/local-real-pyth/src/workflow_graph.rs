@@ -46,7 +46,8 @@ use clutch_solana_layout::product_series::{
     REGISTER_SERIES_PAYLOAD_BYTES_V1,
 };
 use clutch_solana_layout::registry::{
-    ExtensionAction, GeneralV2Action, RecurringSeriesAction, SourceSeriesAction,
+    DirectMarketAction, ExtensionAction, GeneralV2Action, RecurringSeriesAction,
+    SourceSeriesAction,
 };
 use clutch_solana_layout::source_series::{
     account_contract_v2, validate_account_metas_v2, ObservedSourceAccountMetaV2,
@@ -938,6 +939,7 @@ pub struct PlannedWorkflowNode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CanonicalActionCoordinate {
     General(GeneralV2Action),
+    Direct(DirectMarketAction),
     SourceRegistry(SourceSeriesAction),
     SourceTransition {
         registry: SourceSeriesAction,
@@ -946,6 +948,10 @@ pub enum CanonicalActionCoordinate {
     Series(RecurringSeriesAction),
     StructuredClaim(StructuredClaimActionV1),
     FractionalRedemption(FractionalRedemptionActionV1),
+    DealerFacility {
+        action: clutch_solana_layout::registry::DealerFacilityAction,
+        payload_discriminator: u8,
+    },
 }
 
 /// Account absence observed by an untrusted reader. It can drive construction,
@@ -2355,6 +2361,11 @@ fn construct(
             // inspection, but do not turn any of them into transaction bytes.
             return Err(WorkflowGraphError::NotReady);
         }
+        CanonicalActionCoordinate::Direct(_) => {
+            // Direct uses the release-bound action-material constructor, which
+            // owns its variable exact account grammar and outer replay codec.
+            return Err(WorkflowGraphError::NotReady);
+        }
         CanonicalActionCoordinate::Series(action) => {
             validate_series_payload(action, &material.payload)?;
             OwnedInstructionDraft::allocated_successor(
@@ -2389,6 +2400,9 @@ fn construct(
         CanonicalActionCoordinate::FractionalRedemption(action) => {
             let _ = action;
             return Err(WorkflowGraphError::InvalidCanonicalPayload);
+        }
+        CanonicalActionCoordinate::DealerFacility { .. } => {
+            return Err(WorkflowGraphError::UnsupportedAction)
         }
         CanonicalActionCoordinate::SourceTransition {
             registry,
