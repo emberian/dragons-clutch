@@ -51,6 +51,7 @@ impl SourceFundingCustodyTerminalDispositionV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SourceFundingCustodyLifecycleTerminalFactsV1 {
     pub(crate) disposition: SourceFundingCustodyTerminalDispositionV1,
+    pub(crate) capitalization_authority_id: ContentId,
     pub(crate) capitalization_receipt_id: ContentId,
     pub(crate) pre_root_source_occurrence_id: ContentId,
     pub(crate) source_terminal_postwrite_id: ContentId,
@@ -81,6 +82,7 @@ impl SourceFundingCustodyLifecycleTerminalFactsV1 {
             solana_sha256_hasher::hashv(&[
                 SOURCE_FUNDING_CUSTODY_LIFECYCLE_TERMINAL_DOMAIN_V1,
                 &[self.disposition.wire_byte()],
+                &self.capitalization_authority_id.bytes(),
                 &self.capitalization_receipt_id.bytes(),
                 &self.pre_root_source_occurrence_id.bytes(),
                 &self.source_terminal_postwrite_id.bytes(),
@@ -109,6 +111,25 @@ impl SourceFundingCustodyLifecycleTerminalFactsV1 {
     }
 }
 
+/// Exact founder/custody facts derived only from the hostile live 0xbd ledger
+/// and its authenticated route/schedule. Failure consumes this private value
+/// while returning the rest of the final branch tuple; callers never supply
+/// either side.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SourceFundingCustodyLiveFounderFactsV1 {
+    pub(crate) capitalization_authority_id: ContentId,
+    pub(crate) capitalization_receipt_id: ContentId,
+    pub(crate) source_release_manifest_id: ContentId,
+    pub(crate) source_release_authentication_id: ContentId,
+    pub(crate) source_route_id: ContentId,
+    pub(crate) source_work_schedule_id: ContentId,
+    pub(crate) source_lifecycle_id: ContentId,
+    pub(crate) source_generation: u64,
+    pub(crate) source_funding_custody: RuntimeKey,
+    pub(crate) lamport_principal_refund: RuntimeKey,
+    pub(crate) neutral_lamport_sink: RuntimeKey,
+}
+
 /// Default-refusing boundary implemented only by Failure's exact final
 /// successful or SourceAbsent/SourceRefused postwrite.
 pub(crate) trait AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1 {
@@ -117,6 +138,7 @@ pub(crate) trait AuthenticatedSourceFundingCustodyLifecycleTerminalAuthorityV1 {
     /// identities.
     fn source_funding_custody_lifecycle_terminal_facts_v1(
         &self,
+        _founder: SourceFundingCustodyLiveFounderFactsV1,
     ) -> Outcome<SourceFundingCustodyLifecycleTerminalFactsV1> {
         Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
     }
@@ -149,8 +171,36 @@ pub(crate) fn authenticate_source_funding_custody_lifecycle_terminal_v1<
     schedule: SourceWorkScheduleBindingV1,
     custody: AuthenticatedSourceFundingCustodyV1,
 ) -> Outcome<AuthenticatedSourceFundingCustodyLifecycleTerminalV1> {
-    let expected = authority.source_funding_custody_lifecycle_terminal_facts_v1()?;
+    let ledger = custody.ledger();
+    let founder = SourceFundingCustodyLiveFounderFactsV1 {
+        capitalization_authority_id: ledger.capitalization_authority_id,
+        capitalization_receipt_id: ledger.capitalization_receipt_id,
+        source_release_manifest_id: route.release_manifest_id(),
+        source_release_authentication_id: route.release_authentication_id(),
+        source_route_id: route.route_id(),
+        source_work_schedule_id: schedule.source_work_schedule_id(),
+        source_lifecycle_id: schedule.lifecycle_id(),
+        source_generation: schedule.generation(),
+        source_funding_custody: custody.account(),
+        lamport_principal_refund: ledger.principal_refund,
+        neutral_lamport_sink: ledger.neutral_sink,
+    };
+    require(
+        ledger.is_live()
+            && !founder.capitalization_authority_id.is_zero()
+            && !founder.capitalization_receipt_id.is_zero()
+            && founder.capitalization_authority_id != founder.capitalization_receipt_id
+            && ledger.release_manifest_id == route.release_manifest_id()
+            && ledger.route_id == route.route_id()
+            && ledger.source_work_schedule_id == schedule.source_work_schedule_id()
+            && ledger.lifecycle_id == schedule.lifecycle_id()
+            && ledger.custody_account == custody.account()
+            && ledger.neutral_sink == route.neutral_sink(),
+        ClutchError::MismatchedState,
+    )?;
+    let expected = authority.source_funding_custody_lifecycle_terminal_facts_v1(founder)?;
     let ids = [
+        expected.capitalization_authority_id,
         expected.capitalization_receipt_id,
         expected.pre_root_source_occurrence_id,
         expected.source_terminal_postwrite_id,
@@ -171,18 +221,19 @@ pub(crate) fn authenticate_source_funding_custody_lifecycle_terminal_v1<
         ids.iter().all(|id| !id.is_zero())
             && all_distinct_ids(&ids)
             && custody.ledger().is_live()
+            && expected.capitalization_authority_id == founder.capitalization_authority_id
             && expected.capitalization_receipt_id
-                == custody.ledger().capitalization_receipt_id
+                == founder.capitalization_receipt_id
             && expected.source_release_manifest_id == route.release_manifest_id()
-            && expected.source_release_manifest_id == custody.ledger().release_manifest_id
+            && expected.source_release_manifest_id == ledger.release_manifest_id
             && expected.source_release_authentication_id == route.release_authentication_id()
             && expected.source_route_id == route.route_id()
             && expected.source_work_schedule_id == schedule.source_work_schedule_id()
             && expected.source_lifecycle_id == schedule.lifecycle_id()
             && expected.source_generation == schedule.generation()
             && expected.source_funding_custody == custody.account()
-            && expected.lamport_principal_refund == custody.ledger().principal_refund
-            && expected.neutral_lamport_sink == custody.ledger().neutral_sink
+            && expected.lamport_principal_refund == ledger.principal_refund
+            && expected.neutral_lamport_sink == ledger.neutral_sink
             && expected.neutral_lamport_sink == route.neutral_sink()
             && expected.source_funding_custody != expected.lamport_principal_refund
             && expected.source_funding_custody != expected.neutral_lamport_sink
@@ -353,7 +404,9 @@ pub(crate) fn retire_source_funding_custody_v2<
                 .iter()
                 .all(|id| *id != ledger_before.capitalization_receipt_id)
             && lifecycle_terminal_facts.capitalization_receipt_id
-                == ledger_before.capitalization_receipt_id,
+                == ledger_before.capitalization_receipt_id
+            && lifecycle_terminal_facts.capitalization_authority_id
+                == ledger_before.capitalization_authority_id,
         ClutchError::MismatchedState,
     )?;
     if ledger_before != custody.ledger() {
@@ -470,6 +523,7 @@ pub(crate) fn retire_source_funding_custody_v2<
             SOURCE_FUNDING_CUSTODY_RETIREMENT_DOMAIN_V2,
             &product_retirement_authority_id.bytes(),
             &accounting.funding_terms_id.bytes(),
+            &ledger_before.capitalization_authority_id.bytes(),
             &ledger_before.capitalization_receipt_id.bytes(),
             &lifecycle_terminal.id().bytes(),
             &lifecycle_terminal_facts.pre_root_source_occurrence_id.bytes(),
@@ -563,7 +617,7 @@ mod adversarial_tests {
             })
             .expect("bounded lifecycle terminal authentication");
         assert!(authenticate.contains(
-            "authority.source_funding_custody_lifecycle_terminal_facts_v1()?"
+            "authority.source_funding_custody_lifecycle_terminal_facts_v1(founder)?"
         ));
         assert!(!authenticate.contains(
             "expected: SourceFundingCustodyLifecycleTerminalFactsV1"
