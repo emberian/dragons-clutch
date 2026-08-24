@@ -1748,12 +1748,15 @@ fn decode_failure(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
             FAILURE_LIVENESS_POLICY_BODY_BYTES_V1,
         )
         .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        let _ = RuntimeLivenessPolicyV1::decode(framed.body)
+        let value = RuntimeLivenessPolicyV1::decode(framed.body)
             .map_err(|_| AccountIndexError::CanonicalDecodeRefused)?;
-        Ok(Some(CanonicalAccountProjection::canonical(
+        let mut projection = CanonicalAccountProjection::canonical(
             CanonicalFamily::Failure,
             CanonicalAccountKind::FailureLivenessPolicy,
-        )))
+        );
+        projection.primary_binding = Some(value.policy_id.bytes());
+        projection.secondary_binding = Some(value.realm_id.bytes());
+        Ok(Some(projection))
     } else if tag_version(
         data,
         registry::FAILURE_EXTERNAL_RECOVERY_ACCOUNT_TAG,
@@ -1774,6 +1777,8 @@ fn decode_failure(data: &[u8]) -> Result<Option<CanonicalAccountProjection>> {
             CanonicalAccountKind::FailureRecoveryCompartment,
         );
         projection.generation = Some(value.identity.generation);
+        projection.primary_binding = Some(value.identity.lifecycle_id.bytes());
+        projection.secondary_binding = Some(value.identity.policy_id.bytes());
         projection.keeper_hint = (value.phase == RuntimeCompartmentPhaseV1::Active
             && value.remaining_calls > 0)
             .then_some(KeeperHint {

@@ -73,6 +73,56 @@ use solana_instruction::AccountMeta;
 pub const FAILURE_ACTION11_VALIDITY_SLOTS_V1: u64 = 32;
 pub const FAILURE_ACTION11_ACCOUNT_COUNT_V1: usize = 42;
 pub const FAILURE_ACTION11_LOCAL_ACTION_V1: u8 = 11;
+pub const FAILURE_ACTION11_ROLE_LABELS_V1: [&str; FAILURE_ACTION11_ACCOUNT_COUNT_V1] = [
+    "market-lifecycle-root",
+    "series-market-link",
+    "failure-admission-root",
+    "failure-runtime-root",
+    "failure-interval-cell",
+    "failure-interval-history",
+    "series-registry-v3",
+    "registry-program",
+    "registry-program-data",
+    "registry-release-v2",
+    "capability-profile-v4",
+    "compiler-bundle-v6",
+    "funding-quote-v5",
+    "series-plan-v5",
+    "product-template-v4",
+    "native-claim-basis-v1",
+    "recovery-policy-v1",
+    "price-measure-policy-v1",
+    "market-genesis-v2",
+    "attachment-plan-v5",
+    "market-instance-v2",
+    "source-release-v2",
+    "source-adapter-program",
+    "source-adapter-program-data",
+    "source-parser-program",
+    "source-parser-program-data",
+    "source-parser-config",
+    "source-spec",
+    "source-work-schedule",
+    "source-occurrence",
+    "source-window",
+    "source-statistic-key",
+    "source-summary",
+    "source-window-seal",
+    "source-statistic-result",
+    "source-result-lineage",
+    "source-handoff-receipt",
+    "source-work-receipt",
+    "failure-liveness-policy",
+    "failure-recovery-compartment",
+    "keeper",
+    "recovery-refund-owner",
+];
+pub const FAILURE_ACTION11_ROLE_WRITABLE_V1: [bool; FAILURE_ACTION11_ACCOUNT_COUNT_V1] = [
+    false, false, false, true, true, false, false, false, false, false, false, false, false,
+    false, false, false, false, false, false, false, false, false, false, false, false, false,
+    false, false, false, false, false, false, false, false, false, false, false, false, false,
+    true, true, false,
+];
 
 const OWNER_PACKAGE: &str =
     "clutch-failure-policy-runtime+clutch-product-series+clutch-source-plane-v3-runtime";
@@ -1163,12 +1213,6 @@ fn authenticate_recovery(
 fn ordered_action11_metas(
     accounts: &[&ObservedRpcAccount; FAILURE_ACTION11_ACCOUNT_COUNT_V1],
 ) -> Result<Vec<AccountMeta>> {
-    const WRITABLE: [bool; FAILURE_ACTION11_ACCOUNT_COUNT_V1] = [
-        false, false, false, true, true, false, false, false, false, false, false, false,
-        false, false, false, false, false, false, false, false, false, false, false, false,
-        false, false, false, false, false, false, false, false, false, false, false, false,
-        false, false, false, true, true, false,
-    ];
     let keeper_refund_alias = accounts[40].address == accounts[41].address;
     Ok(accounts
         .iter()
@@ -1176,7 +1220,8 @@ fn ordered_action11_metas(
         .map(|(index, account)| AccountMeta {
             pubkey: account.address,
             is_signer: false,
-            is_writable: WRITABLE[index] || keeper_refund_alias && index == 41,
+            is_writable: FAILURE_ACTION11_ROLE_WRITABLE_V1[index]
+                || keeper_refund_alias && index == 41,
         })
         .collect())
 }

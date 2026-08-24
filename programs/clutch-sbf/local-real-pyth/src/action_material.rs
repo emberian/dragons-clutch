@@ -8,6 +8,7 @@
 use crate::account_index::{FinalizedAccountAbsence, IndexedBranch};
 use crate::failure_action11_material::{
     ChainDerivedFailureAction11MaterialV1, FAILURE_ACTION11_VALIDITY_SLOTS_V1,
+    FAILURE_ACTION11_ROLE_LABELS_V1,
 };
 use crate::rpc_index::{
     CanonicalIntentCoordinate, CanonicalIntentVariantV1, IndexedProgramRelease,
@@ -702,50 +703,6 @@ pub fn construct_failure_action11_action_material_v1(
     selection: &KeeperActionSelection,
     material: &ChainDerivedFailureAction11MaterialV1,
 ) -> Result<CanonicalActionMaterialV1> {
-    const LABELS: [&str; 42] = [
-        "market-lifecycle-root",
-        "series-market-link",
-        "failure-admission-root",
-        "failure-runtime-root",
-        "failure-interval-cell",
-        "failure-interval-history",
-        "series-registry-v3",
-        "registry-program",
-        "registry-program-data",
-        "registry-release-v2",
-        "capability-profile-v4",
-        "compiler-bundle-v6",
-        "funding-quote-v5",
-        "series-plan-v5",
-        "product-template-v4",
-        "native-claim-basis-v1",
-        "recovery-policy-v1",
-        "price-measure-policy-v1",
-        "market-genesis-v2",
-        "attachment-plan-v5",
-        "market-instance-v2",
-        "source-release-v2",
-        "source-adapter-program",
-        "source-adapter-program-data",
-        "source-parser-program",
-        "source-parser-program-data",
-        "source-parser-config",
-        "source-spec",
-        "source-work-schedule",
-        "source-occurrence",
-        "source-window",
-        "source-statistic-key",
-        "source-summary",
-        "source-window-seal",
-        "source-statistic-result",
-        "source-result-lineage",
-        "source-handoff-receipt",
-        "source-work-receipt",
-        "failure-liveness-policy",
-        "failure-recovery-compartment",
-        "keeper",
-        "recovery-refund-owner",
-    ];
     let coordinate = CanonicalIntentCoordinate {
         family_tag: clutch_solana_layout::registry::RECOVERY_FAMILY_TAG,
         family_version: clutch_solana_layout::registry::RECOVERY_FAMILY_VERSION,
@@ -795,12 +752,12 @@ pub fn construct_failure_action11_action_material_v1(
         return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
     }
     let metas = material.account_metas();
-    if metas.len() != LABELS.len() {
+    if metas.len() != FAILURE_ACTION11_ROLE_LABELS_V1.len() {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
     let account_roles = metas
         .iter()
-        .zip(LABELS)
+        .zip(FAILURE_ACTION11_ROLE_LABELS_V1)
         .map(|(meta, label)| CanonicalAccountRoleV1 {
             label,
             address: meta.pubkey,

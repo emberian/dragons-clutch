@@ -13,6 +13,9 @@ use crate::action_material::{
     structured_action_from_selection, structured_selection_action,
     CanonicalActionMaterialV1,
 };
+use crate::failure_action11_material::{
+    FAILURE_ACTION11_ROLE_LABELS_V1, FAILURE_ACTION11_ROLE_WRITABLE_V1,
+};
 use crate::rpc_index::{
     public_rpc_endpoint_binding, CanonicalIntentCoordinate, CanonicalIntentVariantV1,
     IndexedProgramRelease, RpcCommitment,
@@ -20,6 +23,10 @@ use crate::rpc_index::{
 use crate::workflow_graph::{ResumableWorkflowCursor, WorkflowLane, WorkflowPosition};
 use crate::transaction_builder::{
     IntegerUnit, ProtocolFlow, RuntimeAdmission, TransactionMessageVersionV1,
+};
+use clutch_failure_policy_runtime::market_policy_v1::FailureMarketAdmissionStateV1;
+use clutch_solana_layout::failure_recovery::{
+    FailureMarketRootAccountV3, FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3,
 };
 use clutch_solana_layout::registry::{
     GeneralV2Action, RecurringSeriesAction, RecoveryAction, SourceSeriesAction,
@@ -183,6 +190,9 @@ fn dependency_versions<'a>(
             if source_dependency(accounts, driver, candidate) {
                 return true;
             }
+            if failure_action11_dependency(accounts, driver, candidate) {
+                return true;
+            }
             match driver.projection.kind {
                 CanonicalAccountKind::GeneralMarketRuntime => false,
                 CanonicalAccountKind::PositionV3 => {
@@ -200,6 +210,63 @@ fn dependency_versions<'a>(
             }
         })
         .collect()
+}
+
+fn failure_action11_dependency(
+    accounts: &[&IndexedAccountVersion],
+    driver: &IndexedAccountVersion,
+    candidate: &IndexedAccountVersion,
+) -> bool {
+    if driver.projection.kind != CanonicalAccountKind::FailureIntervalConsensusWork {
+        return false;
+    }
+    let Some(market_instance_id) = driver.projection.primary_binding else {
+        return false;
+    };
+    let Some(failure_policy_binding_id) = driver.projection.secondary_binding else {
+        return false;
+    };
+    let Some(root) = accounts.iter().copied().find(|version| {
+        version.projection.kind == CanonicalAccountKind::FailureMarketRootV3
+            && version.projection.primary_binding == Some(market_instance_id)
+            && version.projection.secondary_binding == Some(failure_policy_binding_id)
+    }) else {
+        return false;
+    };
+    let Ok(bytes) = <&[u8; FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3]>::try_from(
+        root.account.data.as_slice(),
+    ) else {
+        return false;
+    };
+    let Ok(record) = FailureMarketRootAccountV3::decode(bytes) else {
+        return false;
+    };
+    let Ok(state) = FailureMarketAdmissionStateV1::decode(&record.admission_body) else {
+        return false;
+    };
+    let facts = state.binding().facts();
+    match candidate.projection.kind {
+        CanonicalAccountKind::FailureMarketRootV3 => {
+            candidate.account.address == root.account.address
+        }
+        CanonicalAccountKind::FailureMarketRuntimeV1 => {
+            candidate.projection.primary_binding == Some(failure_policy_binding_id)
+        }
+        CanonicalAccountKind::FailureIntervalConsensusWork
+        | CanonicalAccountKind::FailureIntervalConsensusReplay => {
+            candidate.projection.primary_binding == Some(market_instance_id)
+                && candidate.projection.secondary_binding == Some(failure_policy_binding_id)
+        }
+        CanonicalAccountKind::FailureLivenessPolicy => {
+            candidate.projection.primary_binding == Some(facts.liveness_policy_id.bytes())
+        }
+        CanonicalAccountKind::FailureRecoveryCompartment => {
+            candidate.projection.primary_binding == Some(facts.liveness_lifecycle_id.bytes())
+                && candidate.projection.secondary_binding
+                    == Some(facts.liveness_policy_id.bytes())
+        }
+        _ => false,
+    }
 }
 
 fn source_dependency(
@@ -773,7 +840,27 @@ fn action_verdict_json(
         .iter()
         .find(|cursor| action_coordinate(cursor.action) == Some(coordinate));
     let (family, action, semantic_builder) = coordinate_description(coordinate);
-    let unresolved_roles = source_action(coordinate)
+    let unresolved_roles = if coordinate.family_tag == RECOVERY_FAMILY_TAG
+        && coordinate.family_version == RECOVERY_FAMILY_VERSION
+        && coordinate.local_action == RecoveryAction::AdvanceIntervalConsensus.tag()
+    {
+        FAILURE_ACTION11_ROLE_LABELS_V1
+            .iter()
+            .zip(FAILURE_ACTION11_ROLE_WRITABLE_V1)
+            .enumerate()
+            .map(|(index, (role, writable))| {
+                json!({
+                    "index": index.to_string(),
+                    "role": role,
+                    "writable": writable,
+                    "signer": false,
+                    "address": null,
+                    "identityDisposition": "unresolved-until-semantic-owner-construction"
+                })
+            })
+            .collect::<Vec<_>>()
+    } else {
+        source_action(coordinate)
         .map(|action| {
             let contract = account_contract_v2(action);
             (0..contract.len())
@@ -790,7 +877,8 @@ fn action_verdict_json(
                 })
                 .collect::<Vec<_>>()
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+    };
     let matching_materials = cursor
         .map(|selection| {
             action_materials
