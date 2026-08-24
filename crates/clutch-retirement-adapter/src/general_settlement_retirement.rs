@@ -4,7 +4,7 @@
 //!
 //! This module authenticates existing semantic owners and emits only
 //! private-field terminal capabilities. It deliberately does not move
-//! lamports or delete accounts. The counted `0xa9/1` SettlementRoot now owns
+//! lamports or delete accounts. The indexed counted `0xa9/2` SettlementRoot owns
 //! the exhaustive candidate-scoped Receipt/owner-row/Reservation/fee/pot and
 //! Dealer-child graph. Its exact terminal account may be promoted here, but
 //! whole-Epoch and whole-Market close authority still requires the separate
@@ -16,9 +16,10 @@ use clutch_general_v2_contract::{
     FinalPotAdapterBindingV1, FinalPotRetirementProjectionV1, FinalPotV1AccountV1,
     GeneralEpochPhaseV1, GeneralEpochV6AccountV1, GeneralFeeTerminalProjectionV1,
     GeneralOwnerFeeFinalizationProjectionV2, Id32, OwnerFeeFinalizationOutcomeV2,
+    IndexedSettlementRootTerminalProjectionV1, IndexedSettlementRootV1AccountV1,
     OwnerFeeFinalizationV2AccountV1, OwnerFinalizedRowDataHashV2, OwnerSettlementExpectationV2,
-    OwnerSettlementV2AccountV1, SelectedCandidateV1AccountV1, SettlementRootTerminalProjectionV1,
-    SettlementRootV1AccountV1, Sha256BackendV1, FEE_CLOSURE_MANIFEST_V1_BYTES,
+    OwnerSettlementV2AccountV1, SelectedCandidateV1AccountV1, Sha256BackendV1,
+    FEE_CLOSURE_MANIFEST_V1_BYTES,
     FEE_TERMINAL_RECEIPT_V1_BYTES,
 };
 use clutch_retirement::{Identity32V1, RetirementErrorV2};
@@ -28,8 +29,8 @@ use crate::{
     authenticate_general_owner_fee_finalization_v2_exact,
     authenticate_general_owner_settlement_v2_exact,
     authenticate_general_selected_candidate_v1_exact,
-    authenticate_general_settlement_root_v1_exact, AccountAccessV2, AccountViewV2, CanonicalPdaV1,
-    RetirementAdapterErrorV2,
+    authenticate_general_indexed_settlement_root_v1_exact, AccountAccessV2, AccountViewV2,
+    CanonicalPdaV1, RetirementAdapterErrorV2,
 };
 
 fn identity(value: Id32) -> Result<Identity32V1, RetirementAdapterErrorV2> {
@@ -532,7 +533,7 @@ pub fn authenticate_general_epoch_terminal_counts_v1(
 pub struct AuthenticatedGeneralSettlementRootTerminalV1 {
     root_account: Identity32V1,
     program_id: Identity32V1,
-    projection: SettlementRootTerminalProjectionV1,
+    projection: IndexedSettlementRootTerminalProjectionV1,
 }
 
 impl AuthenticatedGeneralSettlementRootTerminalV1 {
@@ -547,7 +548,7 @@ impl AuthenticatedGeneralSettlementRootTerminalV1 {
     }
 
     /// Exhaustive candidate-scoped terminal projection.
-    pub const fn projection(self) -> SettlementRootTerminalProjectionV1 {
+    pub const fn projection(self) -> IndexedSettlementRootTerminalProjectionV1 {
         self.projection
     }
 
@@ -567,25 +568,26 @@ impl AuthenticatedGeneralSettlementRootTerminalV1 {
     }
 }
 
-/// Authenticate the exact terminal SettlementRoot PDA, General program owner,
-/// writable role, frozen 980-byte body, stored bump, and semantic zero-count
-/// projection before promoting it into candidate-scoped terminal authority.
+/// Authenticate the exact terminal indexed SettlementRoot PDA, General program
+/// owner, writable role, 1,228-byte body, stored bump, retired exact-index
+/// children, and semantic zero-count projection before promoting it into
+/// candidate-scoped terminal authority.
 pub fn authenticate_general_settlement_root_terminal_v1<B: Sha256BackendV1>(
     root_view: AccountViewV2<'_>,
     root_pda: CanonicalPdaV1,
     program_id: Identity32V1,
     hash_backend: &B,
 ) -> Result<AuthenticatedGeneralSettlementRootTerminalV1, RetirementAdapterErrorV2> {
-    let authenticated = authenticate_general_settlement_root_v1_exact(
+    let authenticated = authenticate_general_indexed_settlement_root_v1_exact(
         root_view,
         program_id,
         root_pda,
         AccountAccessV2::Writable,
     )?;
-    let root = SettlementRootV1AccountV1::decode(authenticated.data())?;
+    let root = IndexedSettlementRootV1AccountV1::decode(authenticated.data())?;
     let projection =
         root.terminal_projection(hash_backend, general_id(authenticated.address())?)?;
-    if projection.root_account().bytes() != authenticated.address().bytes() {
+    if projection.base().root_account().bytes() != authenticated.address().bytes() {
         return Err(RetirementErrorV2::WrongParent.into());
     }
     Ok(AuthenticatedGeneralSettlementRootTerminalV1 {

@@ -32,8 +32,9 @@ use clutch_general_v2_contract::{
     SELECTED_CANDIDATE_ACCOUNT_VERSION, SELECTED_FEE_RECORD_ACCOUNT_BYTES,
     SELECTED_FEE_RECORD_ACCOUNT_TAG, SELECTED_FEE_RECORD_ACCOUNT_VERSION,
     SETTLEMENT_CASH_POT_ACCOUNT_BYTES, SETTLEMENT_CASH_POT_ACCOUNT_TAG,
-    SETTLEMENT_CASH_POT_ACCOUNT_VERSION, SETTLEMENT_ROOT_ACCOUNT_BYTES,
-    SETTLEMENT_ROOT_ACCOUNT_TAG, SETTLEMENT_ROOT_ACCOUNT_VERSION,
+    SETTLEMENT_CASH_POT_ACCOUNT_VERSION, INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION,
+    INDEXED_SETTLEMENT_ROOT_BYTES_V1, SETTLEMENT_ROOT_ACCOUNT_BYTES,
+    SETTLEMENT_ROOT_ACCOUNT_TAG,
 };
 
 const POSITION_STORED_BUMP_OFFSET: usize = 218;
@@ -61,7 +62,11 @@ const GENERAL_V2_SETTLEMENT_CASH_POT_STORED_BUMP_OFFSET: usize =
 const GENERAL_V2_OWNER_FEE_FINALIZATION_STORED_BUMP_OFFSET: usize =
     OWNER_FEE_FINALIZATION_ACCOUNT_BYTES - 2;
 const GENERAL_V2_FINAL_POT_STORED_BUMP_OFFSET: usize = FINAL_POT_ACCOUNT_BYTES - 2;
-const GENERAL_V2_SETTLEMENT_ROOT_STORED_BUMP_OFFSET: usize = SETTLEMENT_ROOT_ACCOUNT_BYTES - 4;
+const GENERAL_V2_INDEXED_SETTLEMENT_ROOT_STORED_BUMP_OFFSET: usize =
+    16 + SETTLEMENT_ROOT_ACCOUNT_BYTES - 4;
+const _: () = assert!(GENERAL_V2_INDEXED_SETTLEMENT_ROOT_STORED_BUMP_OFFSET == 992);
+const _: () = assert!(GENERAL_V2_INDEXED_SETTLEMENT_ROOT_STORED_BUMP_OFFSET
+    < INDEXED_SETTLEMENT_ROOT_BYTES_V1);
 
 /// Runtime facts read from one Solana account before any state mutation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -599,9 +604,9 @@ pub fn authenticate_general_final_pot_v1_exact<'a>(
     )
 }
 
-/// Authenticate the exact counted General settlement root under an exact
+/// Authenticate the exact indexed counted General settlement root under an exact
 /// read-only or writable runtime role.
-pub fn authenticate_general_settlement_root_v1_exact<'a>(
+pub fn authenticate_general_indexed_settlement_root_v1_exact<'a>(
     view: AccountViewV2<'a>,
     program_id: Identity32V1,
     canonical_pda: CanonicalPdaV1,
@@ -613,9 +618,9 @@ pub fn authenticate_general_settlement_root_v1_exact<'a>(
         canonical_pda,
         ExpectedAccountV1 {
             tag: SETTLEMENT_ROOT_ACCOUNT_TAG,
-            version: SETTLEMENT_ROOT_ACCOUNT_VERSION,
-            len: SETTLEMENT_ROOT_ACCOUNT_BYTES,
-            bump_offset: GENERAL_V2_SETTLEMENT_ROOT_STORED_BUMP_OFFSET,
+            version: INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION,
+            len: INDEXED_SETTLEMENT_ROOT_BYTES_V1,
+            bump_offset: GENERAL_V2_INDEXED_SETTLEMENT_ROOT_STORED_BUMP_OFFSET,
         },
         access,
     )

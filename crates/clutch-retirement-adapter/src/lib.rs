@@ -34,7 +34,7 @@ pub use account_auth::{
     authenticate_general_reservation_v5, authenticate_general_reservation_v7,
     authenticate_general_selected_candidate_v1_exact,
     authenticate_general_selected_fee_record_v1_exact,
-    authenticate_general_settlement_root_v1_exact,
+    authenticate_general_indexed_settlement_root_v1_exact,
     authenticate_general_settlement_cash_pot_v1_exact,
     authenticate_market_v2, authenticate_market_v2_exact, authenticate_position_tombstone_v1,
     authenticate_position_tombstone_v1_exact, authenticate_position_tombstone_v2_exact,

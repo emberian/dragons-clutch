@@ -9,6 +9,7 @@ use clutch_retirement_adapter::{
     authenticate_counted_child, authenticate_direct_epoch_v4, authenticate_direct_reservation_v6,
     authenticate_direct_reservation_v8, authenticate_general_epoch_tombstone_v1,
     authenticate_general_epoch_v5, authenticate_general_epoch_v5_exact,
+    authenticate_general_indexed_settlement_root_v1_exact,
     authenticate_general_reservation_v5, authenticate_general_reservation_v7,
     authenticate_market_v2, authenticate_market_v2_exact, authenticate_position_tombstone_v1,
     authenticate_position_v2, authenticate_position_v2_exact,
@@ -16,6 +17,10 @@ use clutch_retirement_adapter::{
     project_authenticated_direct_epoch_v4, project_authenticated_position_v2,
     project_authenticated_replay_successor_v1, AccountAccessV2, AccountViewV1, AccountViewV2,
     CanonicalPdaV1, CountedChildSchemaV1, RetirementAdapterErrorV1, RetirementAdapterErrorV2,
+};
+use clutch_general_v2_contract::{
+    INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION, INDEXED_SETTLEMENT_ROOT_BYTES_V1,
+    SETTLEMENT_ROOT_ACCOUNT_BYTES, SETTLEMENT_ROOT_ACCOUNT_TAG,
 };
 use clutch_solana_layout::direct_selection_v3::DIRECT_EPOCH_V4_BYTES;
 use clutch_solana_layout::registry::{
@@ -156,6 +161,61 @@ fn successor_authentication_is_exact_about_access_and_executable_state() {
     assert_eq!(
         authenticate_runtime_executable_v2(program, common::id(112)),
         Err(RetirementAdapterErrorV2::WrongProgramAddress)
+    );
+}
+
+#[test]
+fn indexed_settlement_root_authentication_refuses_legacy_geometry() {
+    let mut indexed = [0u8; INDEXED_SETTLEMENT_ROOT_BYTES_V1];
+    indexed[0] = SETTLEMENT_ROOT_ACCOUNT_TAG;
+    indexed[1] = INDEXED_SETTLEMENT_ROOT_ACCOUNT_VERSION;
+    let bump_offset = 16 + SETTLEMENT_ROOT_ACCOUNT_BYTES - 4;
+    indexed[bump_offset] = 19;
+    let (indexed_view, indexed_pda) = view_v2(&indexed, 19);
+    assert!(authenticate_general_indexed_settlement_root_v1_exact(
+        indexed_view,
+        common::id(100),
+        indexed_pda,
+        AccountAccessV2::Writable,
+    )
+    .is_ok());
+
+    let mut legacy_version = indexed;
+    legacy_version[1] = 1;
+    let (legacy_view, legacy_pda) = view_v2(&legacy_version, 19);
+    assert_eq!(
+        authenticate_general_indexed_settlement_root_v1_exact(
+            legacy_view,
+            common::id(100),
+            legacy_pda,
+            AccountAccessV2::Writable,
+        ),
+        Err(RetirementAdapterErrorV2::Retirement(
+            RetirementErrorV2::WrongVersion,
+        )),
+    );
+
+    let (short_view, short_pda) = view_v2(&indexed[..SETTLEMENT_ROOT_ACCOUNT_BYTES], 19);
+    assert_eq!(
+        authenticate_general_indexed_settlement_root_v1_exact(
+            short_view,
+            common::id(100),
+            short_pda,
+            AccountAccessV2::Writable,
+        ),
+        Err(RetirementAdapterErrorV2::Retirement(
+            RetirementErrorV2::Truncated,
+        )),
+    );
+
+    assert_eq!(
+        authenticate_general_indexed_settlement_root_v1_exact(
+            indexed_view,
+            common::id(100),
+            CanonicalPdaV1::after_derivation(indexed_view.address, 18),
+            AccountAccessV2::Writable,
+        ),
+        Err(RetirementAdapterErrorV2::WrongBump),
     );
 }
 
