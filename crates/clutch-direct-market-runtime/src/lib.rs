@@ -51,7 +51,7 @@ const DIRECT_EPOCH_SEMANTICS_DOMAIN_V1: &[u8] =
 const DIRECT_SCHEDULE_POLICY_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/schedule-policy/v1\0";
 const ACTION_TRANSCRIPT_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/action-transcript/v1\0";
-const REPLAY_LIVENESS_BATCH_DOMAIN_V1: &[u8] =
+pub(crate) const REPLAY_LIVENESS_BATCH_DOMAIN_V1: &[u8] =
     b"dragons-clutch/direct/replay-liveness-batch/v1\0";
 const ROOT_STATE_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/root-state/v1\0";
 const REPLAY_STATE_DOMAIN_V1: &[u8] = b"dragons-clutch/direct/replay-state/v1\0";
@@ -1238,7 +1238,7 @@ impl DirectActionReplayV1 {
         Ok(id)
     }
 
-    fn require_action(
+    pub(crate) fn require_action(
         self,
         root: DirectMarketRootV1,
         consumed_sequence: u64,
@@ -1252,7 +1252,7 @@ impl DirectActionReplayV1 {
         Ok(())
     }
 
-    fn advance<B: DirectHashBackendV1>(
+    pub(crate) fn advance<B: DirectHashBackendV1>(
         mut self,
         root_pre_id: [u8; 32],
         root_post_id: [u8; 32],
@@ -2292,7 +2292,7 @@ pub fn seal_direct_family_terminal_liveness_v1<B: DirectHashBackendV1>(
     })
 }
 
-fn require_terminal_retirement_source_v1(
+pub(crate) fn require_terminal_retirement_source_v1(
     retirement: &DirectRetirementTransferV1,
     required_account: [u8; 32],
     required_rent: DirectRentOwnerV1,
@@ -2312,7 +2312,7 @@ fn require_terminal_retirement_source_v1(
     Err(DirectMarketErrorV1::MismatchedBinding)
 }
 
-fn canonical_terminal_reservation_archives<B: DirectHashBackendV1>(
+pub(crate) fn canonical_terminal_reservation_archives<B: DirectHashBackendV1>(
     root: &DirectMarketRootV1,
     selection: &crate::selection_v1::DirectSelectionV1,
     supplied: &[Option<crate::reservation_v1::DirectReservationV1>; 2],

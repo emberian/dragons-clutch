@@ -17,9 +17,15 @@ use clutch_batch_policy_identity::revenue_policy_v2::RevenuePolicyV2;
 use clutch_general_v2_contract::GeneralPositionReplayPrestateV1;
 use clutch_owner_settlement::{AuthenticatedPositionV3, PositionSettlementPoststateV3};
 
-use crate::current_v2::DirectRootReplayPostV2;
+use crate::current_v2::{
+    DirectMarketBindingV2, DirectMarketRootV2, DirectRootReplayPostV2,
+};
 use crate::fee_v1::DirectFeeTerminalV1;
 use crate::fee_v2::DirectFeePolicyV2;
+use crate::liveness_v1::{
+    bind_direct_candidate_work_batch_v1, prepare_direct_candidate_work_batch_v1,
+    DirectCandidateWorkBatchV1,
+};
 use crate::reservation_v1::{
     AuthenticatedDirectReservationAdmissionV1, DirectReservationV1,
 };
@@ -40,10 +46,205 @@ use crate::settlement_v1::{
     DirectSettlementHashBackendV1,
 };
 use crate::{
-    DirectHashBackendV1, DirectMarketErrorV1, DirectRentOwnerV1,
-    DirectRetirementTransferV1, DirectRootReplayPostV1,
+    DirectActionReplayV1, DirectHashBackendV1, DirectMarketActionV1,
+    DirectMarketErrorV1, DirectRentOwnerV1, DirectReplayPhaseV1,
+    DirectRetirementTransferV1, DirectRootReplayPostV1, DirectScheduleV1,
     DirectTerminalReasonV1,
 };
+
+const FOUNDATION_RECEIPT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/direct/foundation-receipt/v2\0";
+const ACTION_TRANSCRIPT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/direct/action-transcript/v2\0";
+const TERMINAL_RECEIPT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/direct/terminal-receipt/v2\0";
+const TERMINAL_LIVENESS_SEAL_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/direct/terminal-liveness-seal/v2\0";
+
+/// Default-deny current action-1 authority.
+pub trait AuthenticatedDirectFoundationV2 {
+    /// Authenticate the absent b1/v2 and b3 accounts, exact current Product
+    /// family admission, General V4/Revenue authority, 0xba/v2 allocation,
+    /// rent funding, schedule policy, and observed Clock slot.
+    fn authenticate_foundation_v2(
+        &self,
+        _binding: &DirectMarketBindingV2,
+        _schedule: DirectScheduleV1,
+        _root_rent: DirectRentOwnerV1,
+        _action_replay_rent: DirectRentOwnerV1,
+        _observed_slot: u64,
+    ) -> Result<(), DirectMarketErrorV1> {
+        Err(DirectMarketErrorV1::UnauthenticatedAuthority)
+    }
+}
+
+/// Explicit refusing current action-1 authority.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoDirectFoundationAuthorityV2;
+
+impl AuthenticatedDirectFoundationV2 for NoDirectFoundationAuthorityV2 {}
+
+/// Current action-1 result. Product admission and 0xba/v2 allocation facts
+/// remain committed by the private binding rather than a downgraded Product DTO.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectFoundationPlanV2 {
+    /// Fresh b1/v2 root and permanent b3 replay.
+    pub state: DirectRootReplayPostV2,
+    /// Sole current Direct foundation receipt.
+    pub admission_receipt_id: [u8; 32],
+    /// Product family successor authenticated during the same outer call.
+    pub product_family_poststate_id: [u8; 32],
+    /// Product family admission receipt authenticated during the same outer call.
+    pub product_family_admission_receipt_id: [u8; 32],
+    /// Exact 0xba/v2 Candidate allocation receipt.
+    pub candidate_liveness_allocation_receipt_id: [u8; 32],
+}
+
+/// Prepare fresh current action 1.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_direct_foundation_v2<
+    A: AuthenticatedDirectFoundationV2 + ?Sized,
+    B: DirectHashBackendV1,
+>(
+    authority: &A,
+    binding: DirectMarketBindingV2,
+    schedule: DirectScheduleV1,
+    root_rent: DirectRentOwnerV1,
+    action_replay_rent: DirectRentOwnerV1,
+    observed_slot: u64,
+    backend: &B,
+) -> Result<DirectFoundationPlanV2, DirectMarketErrorV1> {
+    binding.validate()?;
+    schedule.validate()?;
+    root_rent.validate()?;
+    action_replay_rent.validate()?;
+    if schedule != DirectScheduleV1::canonical_from_foundation_slot(observed_slot)?
+        || binding.expected_direct_epoch_semantics_id(schedule, backend)?
+            != binding.direct_epoch_semantics_id
+    {
+        return Err(DirectMarketErrorV1::MismatchedBinding);
+    }
+    authority.authenticate_foundation_v2(
+        &binding,
+        schedule,
+        root_rent,
+        action_replay_rent,
+        observed_slot,
+    )?;
+    let root = DirectMarketRootV2::new_open(binding.clone(), schedule, root_rent)?;
+    let binding_id = binding.semantic_id(backend)?;
+    let root_id = root.semantic_id(backend)?;
+    let admission_receipt_id = backend.sha256_parts(&[
+        FOUNDATION_RECEIPT_DOMAIN_V2,
+        &binding_id,
+        &root_id,
+        &binding.product.product_family_prestate_id,
+        &binding.product.product_family_poststate_id,
+        &binding.product.product_family_admission_receipt_id,
+        &binding.product.family_admission_sequence.to_le_bytes(),
+        &binding.product.product_direct_global_liveness_binding_id,
+        &binding.product.product_direct_global_liveness_activation_id,
+        &binding.product.activated_product_market_binding_id,
+        &binding.product.direct_work_quote_id,
+        &binding.candidate_liveness.allocation_receipt_id,
+        &binding.general.general_market_binding_v4_data_id,
+        &binding.general.general_market_runtime_data_id,
+        &binding.general.revenue_policy_record_v2_id,
+        &binding.general.treasury_position_derivation_policy_v2_id,
+        &observed_slot.to_le_bytes(),
+        &root_rent.payer,
+        &root_rent.principal_lamports.to_le_bytes(),
+        &root_rent.donation_floor_lamports.to_le_bytes(),
+        &action_replay_rent.payer,
+        &action_replay_rent.principal_lamports.to_le_bytes(),
+        &action_replay_rent.donation_floor_lamports.to_le_bytes(),
+    ]);
+    crate::require_live(admission_receipt_id)?;
+    let initial_transcript = backend.sha256_parts(&[
+        ACTION_TRANSCRIPT_DOMAIN_V2,
+        &binding.market_instance_id,
+        &binding.direct_root_account,
+        &root_id,
+        &0u64.to_le_bytes(),
+        &[DirectMarketActionV1::InitializeMarket.byte()],
+        &[0; 32],
+        &[0; 32],
+        &observed_slot.to_le_bytes(),
+        &admission_receipt_id,
+        &[0; 32],
+    ]);
+    crate::require_live(initial_transcript)?;
+    let replay = DirectActionReplayV1 {
+        market_instance_id: binding.market_instance_id,
+        generation: binding.generation,
+        direct_epoch_semantics_id: binding.direct_epoch_semantics_id,
+        direct_root_account: binding.direct_root_account,
+        replay_account: binding.action_replay_account,
+        rent: action_replay_rent,
+        phase: DirectReplayPhaseV1::Active,
+        next_action_sequence: 1,
+        action_transcript_id: initial_transcript,
+        foundation_receipt_id: admission_receipt_id,
+        economic_terminal_receipt_id: [0; 32],
+        family_terminal_receipt_id: [0; 32],
+        candidate_liveness_completed_calls: 0,
+        candidate_liveness_last_receipt_id: [0; 32],
+        candidate_liveness_batch_receipt_id: [0; 32],
+        candidate_liveness_pending: false,
+    };
+    let state = DirectRootReplayPostV2 { root, replay };
+    state.validate(backend)?;
+    Ok(DirectFoundationPlanV2 {
+        state,
+        admission_receipt_id,
+        product_family_poststate_id: binding.product.product_family_poststate_id,
+        product_family_admission_receipt_id:
+            binding.product.product_family_admission_receipt_id,
+        candidate_liveness_allocation_receipt_id:
+            binding.candidate_liveness.allocation_receipt_id,
+    })
+}
+
+/// Derive one exact Candidate work batch from current b1/v2 state.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_direct_candidate_work_batch_v2<B: DirectHashBackendV1>(
+    state: &DirectRootReplayPostV2,
+    selection: Option<&DirectSelectionV1>,
+    action: DirectMarketActionV1,
+    candidate_completed_calls: u32,
+    candidate_last_receipt_id: [u8; 32],
+    candidate_pre_data_id: [u8; 32],
+    keeper: [u8; 32],
+    backend: &B,
+) -> Result<DirectCandidateWorkBatchV1, DirectMarketErrorV1> {
+    prepare_direct_candidate_work_batch_v1(
+        state.transition_projection(backend)?,
+        selection,
+        action,
+        candidate_completed_calls,
+        candidate_last_receipt_id,
+        candidate_pre_data_id,
+        keeper,
+        backend,
+    )
+}
+
+/// Bind one hostile-reopened Candidate batch and return only current state.
+pub fn bind_direct_candidate_work_batch_v2<B: DirectHashBackendV1>(
+    state: DirectRootReplayPostV2,
+    batch: DirectCandidateWorkBatchV1,
+    backend: &B,
+) -> Result<DirectRootReplayPostV2, DirectMarketErrorV1> {
+    let projection = state.transition_projection(backend)?;
+    let replay = bind_direct_candidate_work_batch_v1(&projection, batch, backend)?;
+    replay.validate_against(projection.root)?;
+    let value = DirectRootReplayPostV2 {
+        root: state.root,
+        replay,
+    };
+    value.validate(backend)?;
+    Ok(value)
+}
 
 /// Default-deny current action-2 account authority.
 pub trait AuthenticatedDirectReservationAdmissionV2 {
@@ -800,5 +1001,328 @@ fn convert_economic_plan_v2<B: DirectHashBackendV1>(
         transition_id: plan.transition_id,
         economic_terminal_receipt_id: plan.economic_terminal_receipt_id,
         candidate_bond_refunds: plan.candidate_bond_refunds,
+    })
+}
+
+/// Default-deny current action-13 Product/archive authority.
+pub trait AuthenticatedDirectTerminalV2 {
+    /// Authenticate the complete current Product RootV2/LinkV2/family
+    /// prestate, finalized Resolution, b1/v2/b2/b3/b4 deletion set, transfer
+    /// vector, and exact Product family successor identities.
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_terminal_v2(
+        &self,
+        _state: &DirectRootReplayPostV2,
+        _root_semantic_id: [u8; 32],
+        _replay_semantic_id: [u8; 32],
+        _selection: &DirectSelectionV1,
+        _reservations: &[Option<DirectReservationV1>; 2],
+        _final_resolution: crate::DirectFinalResolutionV1,
+        _retirement: &DirectRetirementTransferV1,
+        _retirement_transfer_id: [u8; 32],
+        _product_family_prestate_id: [u8; 32],
+        _product_family_poststate_id: [u8; 32],
+        _consumed_sequence: u64,
+        _observed_slot: u64,
+        _family_terminal_sequence: u32,
+    ) -> Result<(), DirectMarketErrorV1> {
+        Err(DirectMarketErrorV1::UnauthenticatedAuthority)
+    }
+}
+
+/// Explicit refusing current action-13 authority.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoDirectTerminalAuthorityV2;
+
+impl AuthenticatedDirectTerminalV2 for NoDirectTerminalAuthorityV2 {}
+
+/// Provisional current action-13 transition awaiting the exact eighth
+/// Candidate work receipt. It is never accepted by Product or persisted.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectFamilyTerminalPreparationV2 {
+    root_semantic_id: [u8; 32],
+    replay_pre_semantic_id: [u8; 32],
+    retirement_transfer_id: [u8; 32],
+    final_resolution: crate::DirectFinalResolutionV1,
+    replay_post: DirectActionReplayV1,
+    provisional_terminal_receipt_id: [u8; 32],
+    product_family_prestate_id: [u8; 32],
+    product_family_poststate_id: [u8; 32],
+    family_terminal_sequence: u32,
+}
+
+impl DirectFamilyTerminalPreparationV2 {
+    /// Current provisional state used only by the exact Candidate work binder.
+    pub fn prepared_state(&self, root: DirectMarketRootV2) -> DirectRootReplayPostV2 {
+        DirectRootReplayPostV2 {
+            root,
+            replay: self.replay_post,
+        }
+    }
+
+    /// Provisional replay used only as input to the final Candidate batch.
+    pub const fn prepared_replay(&self) -> &DirectActionReplayV1 {
+        &self.replay_post
+    }
+}
+
+/// Final sealed current Direct terminal facts consumed by Product and 0xba/v2.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectFamilyTerminalPlanV2 {
+    /// Exact b1/v2 root identity before deletion.
+    pub root_semantic_id: [u8; 32],
+    /// Permanent b3 identity before action 13.
+    pub replay_pre_semantic_id: [u8; 32],
+    /// Canonical complete source/refund/surplus vector.
+    pub retirement: DirectRetirementTransferV1,
+    /// Identity of the complete transfer vector.
+    pub retirement_transfer_id: [u8; 32],
+    /// Exact finalized current Resolution joined only at family retirement.
+    pub final_resolution: crate::DirectFinalResolutionV1,
+    /// Terminal replay after the exact eighth Candidate work batch.
+    pub replay_post: DirectActionReplayV1,
+    /// Sole current terminal receipt consumed by Product.
+    pub terminal_receipt_id: [u8; 32],
+    /// Authenticated Product family prestate identity.
+    pub product_family_prestate_id: [u8; 32],
+    /// Exact Product family successor identity.
+    pub product_family_poststate_id: [u8; 32],
+    /// Zero-based terminal occurrence coordinate.
+    pub family_terminal_sequence: u32,
+}
+
+/// Prepare current action 13 before its final Candidate work batch.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_direct_family_terminal_v2<
+    A: AuthenticatedDirectTerminalV2 + ?Sized,
+    B: DirectHashBackendV1,
+>(
+    authority: &A,
+    state: &DirectRootReplayPostV2,
+    selection: &DirectSelectionV1,
+    reservations: &[Option<DirectReservationV1>; 2],
+    final_resolution: crate::DirectFinalResolutionV1,
+    retirement: &DirectRetirementTransferV1,
+    product_family_prestate_id: [u8; 32],
+    product_family_poststate_id: [u8; 32],
+    consumed_sequence: u64,
+    observed_slot: u64,
+    family_terminal_sequence: u32,
+    backend: &B,
+) -> Result<DirectFamilyTerminalPreparationV2, DirectMarketErrorV1> {
+    state.validate(backend)?;
+    let projection = state.transition_projection(backend)?;
+    state.replay.require_action(projection.root, consumed_sequence)?;
+    selection.validate_against(projection.root)?;
+    retirement.validate()?;
+    for id in [
+        final_resolution.account,
+        final_resolution.semantic_id,
+        final_resolution.data_id,
+        product_family_prestate_id,
+        product_family_poststate_id,
+    ] {
+        crate::require_live(id)?;
+    }
+    if state.root.phase() != crate::DirectRootPhaseV1::Terminal
+        || final_resolution.account != state.root.binding().resolution_account
+        || product_family_prestate_id == product_family_poststate_id
+    {
+        return Err(DirectMarketErrorV1::MismatchedBinding);
+    }
+    let expected_sources = usize::from(state.root.live_reservations())
+        .checked_add(3)
+        .ok_or(DirectMarketErrorV1::Arithmetic)?;
+    let ordered_reservations = crate::canonical_terminal_reservation_archives(
+        &projection.root,
+        selection,
+        reservations,
+        backend,
+    )?;
+    if retirement.neutral_lamport_sink != state.root.binding().neutral_lamport_sink
+        || usize::from(retirement.source_count) != expected_sources
+    {
+        return Err(DirectMarketErrorV1::MismatchedBinding);
+    }
+    crate::require_terminal_retirement_source_v1(
+        retirement,
+        state.root.binding().direct_root_account,
+        state.root.root_rent(),
+    )?;
+    crate::require_terminal_retirement_source_v1(
+        retirement,
+        state.root.binding().action_replay_account,
+        state.replay.rent(),
+    )?;
+    crate::require_terminal_retirement_source_v1(
+        retirement,
+        state.root.selection_account(),
+        selection.rent(),
+    )?;
+    let mut reservation_ids = [[0; 32]; 2];
+    let mut index = 0usize;
+    while index < usize::from(state.root.live_reservations()) {
+        let reservation = ordered_reservations[index]
+            .ok_or(DirectMarketErrorV1::InvalidCount)?;
+        crate::require_terminal_retirement_source_v1(
+            retirement,
+            reservation.account(),
+            reservation.rent(),
+        )?;
+        reservation_ids[index] = reservation.semantic_id(backend)?;
+        index += 1;
+    }
+    let root_semantic_id = state.root.semantic_id(backend)?;
+    let replay_pre_semantic_id = state.replay.semantic_id(projection.root, backend)?;
+    let selection_semantic_id = selection.semantic_id(projection.root, backend)?;
+    let retirement_transfer_id = retirement.semantic_id(backend)?;
+    authority.authenticate_terminal_v2(
+        state,
+        root_semantic_id,
+        replay_pre_semantic_id,
+        selection,
+        &ordered_reservations,
+        final_resolution,
+        retirement,
+        retirement_transfer_id,
+        product_family_prestate_id,
+        product_family_poststate_id,
+        consumed_sequence,
+        observed_slot,
+        family_terminal_sequence,
+    )?;
+    let replay_with_action = state.replay.advance(
+        root_semantic_id,
+        root_semantic_id,
+        DirectMarketActionV1::RetireTerminal,
+        observed_slot,
+        retirement_transfer_id,
+        backend,
+    )?;
+    let provisional_terminal_receipt_id = backend.sha256_parts(&[
+        TERMINAL_RECEIPT_DOMAIN_V2,
+        &product_family_prestate_id,
+        &product_family_poststate_id,
+        &state.root.binding().market_instance_id,
+        &state.root.binding().generation.to_le_bytes(),
+        &state.root.binding().direct_root_account,
+        &state.root.binding().action_replay_account,
+        &root_semantic_id,
+        &state.root.binding().product.product_market_binding_id,
+        &state.root.binding().product.series_link_v2_id,
+        &state.root.binding().product.compiler_bundle_v6_id,
+        &state.root.binding().product.attachment_plan_v5_id,
+        &state.root.binding().product.product_direct_global_liveness_binding_id,
+        &state.root.binding().product.product_direct_global_liveness_activation_id,
+        &state.root.binding().product.direct_work_quote_id,
+        &final_resolution.account,
+        &final_resolution.semantic_id,
+        &final_resolution.data_id,
+        &selection_semantic_id,
+        &reservation_ids[0],
+        &reservation_ids[1],
+        &replay_pre_semantic_id,
+        &replay_with_action.action_transcript_id(),
+        &state.replay.economic_terminal_receipt_id(),
+        &retirement_transfer_id,
+        &consumed_sequence.to_le_bytes(),
+        &observed_slot.to_le_bytes(),
+        &family_terminal_sequence.to_le_bytes(),
+    ]);
+    crate::require_live(provisional_terminal_receipt_id)?;
+    let mut replay_post = replay_with_action;
+    replay_post.phase = DirectReplayPhaseV1::Terminal;
+    replay_post.family_terminal_receipt_id = provisional_terminal_receipt_id;
+    replay_post.validate_against(projection.root)?;
+    Ok(DirectFamilyTerminalPreparationV2 {
+        root_semantic_id,
+        replay_pre_semantic_id,
+        retirement_transfer_id,
+        final_resolution,
+        replay_post,
+        provisional_terminal_receipt_id,
+        product_family_prestate_id,
+        product_family_poststate_id,
+        family_terminal_sequence,
+    })
+}
+
+/// Seal action 13 only after the exact eighth Candidate work receipt is bound.
+pub fn seal_direct_family_terminal_liveness_v2<B: DirectHashBackendV1>(
+    preparation: DirectFamilyTerminalPreparationV2,
+    root: &DirectMarketRootV2,
+    retirement: &DirectRetirementTransferV1,
+    final_resolution: crate::DirectFinalResolutionV1,
+    bound_replay: DirectActionReplayV1,
+    backend: &B,
+) -> Result<DirectFamilyTerminalPlanV2, DirectMarketErrorV1> {
+    let projected_root = root.transition_projection(backend)?;
+    let provisional = preparation.replay_post;
+    if root.semantic_id(backend)? != preparation.root_semantic_id
+        || retirement.semantic_id(backend)? != preparation.retirement_transfer_id
+        || final_resolution != preparation.final_resolution
+        || !provisional.candidate_liveness_pending()
+        || bound_replay.candidate_liveness_pending()
+        || provisional.market_instance_id != bound_replay.market_instance_id
+        || provisional.generation != bound_replay.generation
+        || provisional.direct_epoch_semantics_id
+            != bound_replay.direct_epoch_semantics_id
+        || provisional.direct_root_account != bound_replay.direct_root_account
+        || provisional.replay_account != bound_replay.replay_account
+        || provisional.rent() != bound_replay.rent()
+        || provisional.phase() != bound_replay.phase()
+        || provisional.next_action_sequence() != bound_replay.next_action_sequence()
+        || provisional.foundation_receipt_id() != bound_replay.foundation_receipt_id()
+        || provisional.economic_terminal_receipt_id()
+            != bound_replay.economic_terminal_receipt_id()
+        || provisional.family_terminal_receipt_id()
+            != bound_replay.family_terminal_receipt_id()
+        || provisional.family_terminal_receipt_id()
+            != preparation.provisional_terminal_receipt_id
+        || provisional.candidate_liveness_completed_calls() != 7
+        || bound_replay.candidate_liveness_completed_calls() != 8
+        || bound_replay.candidate_liveness_last_receipt_id() == [0; 32]
+        || bound_replay.candidate_liveness_batch_receipt_id() == [0; 32]
+    {
+        return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+    }
+    let expected_transcript = backend.sha256_parts(&[
+        crate::REPLAY_LIVENESS_BATCH_DOMAIN_V1,
+        &provisional.market_instance_id,
+        &provisional.direct_root_account,
+        &provisional.action_transcript_id(),
+        &bound_replay.candidate_liveness_completed_calls().to_le_bytes(),
+        &bound_replay.candidate_liveness_last_receipt_id(),
+        &bound_replay.candidate_liveness_batch_receipt_id(),
+    ]);
+    if bound_replay.action_transcript_id() != expected_transcript {
+        return Err(DirectMarketErrorV1::UnauthenticatedAuthority);
+    }
+    bound_replay.validate_against(projected_root)?;
+    let terminal_receipt_id = backend.sha256_parts(&[
+        TERMINAL_LIVENESS_SEAL_DOMAIN_V2,
+        &preparation.provisional_terminal_receipt_id,
+        &preparation.product_family_prestate_id,
+        &preparation.product_family_poststate_id,
+        &bound_replay.action_transcript_id(),
+        &bound_replay.candidate_liveness_completed_calls().to_le_bytes(),
+        &bound_replay.candidate_liveness_last_receipt_id(),
+        &bound_replay.candidate_liveness_batch_receipt_id(),
+    ]);
+    crate::require_live(terminal_receipt_id)?;
+    let mut replay_post = bound_replay;
+    replay_post.family_terminal_receipt_id = terminal_receipt_id;
+    replay_post.validate_against(projected_root)?;
+    Ok(DirectFamilyTerminalPlanV2 {
+        root_semantic_id: preparation.root_semantic_id,
+        replay_pre_semantic_id: preparation.replay_pre_semantic_id,
+        retirement: *retirement,
+        retirement_transfer_id: preparation.retirement_transfer_id,
+        final_resolution,
+        replay_post,
+        terminal_receipt_id,
+        product_family_prestate_id: preparation.product_family_prestate_id,
+        product_family_poststate_id: preparation.product_family_poststate_id,
+        family_terminal_sequence: preparation.family_terminal_sequence,
     })
 }
