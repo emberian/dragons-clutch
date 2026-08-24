@@ -16,13 +16,13 @@ use clutch_product_series::{
 use sha2::{Digest, Sha256};
 
 use crate::market_interval_cell_v2::{
-    FailureMarketIntervalCellPhaseV2, FailureMarketIntervalCellStateIdV2,
-    FailureMarketIntervalCellV2,
+    FailureMarketIntervalCellPhaseV2, FailureMarketIntervalCellSourceFailureReceiptV2,
+    FailureMarketIntervalCellStateIdV2, FailureMarketIntervalCellV2,
 };
 use crate::market_interval_history_v2::{
     FailureMarketIntervalFundingReceiptV2, FailureMarketIntervalHistoryAppendReceiptV2,
     FailureMarketIntervalHistoryRootV2, FailureMarketIntervalHistoryStateIdV2,
-    FailureMarketIntervalHistoryV2,
+    FailureMarketIntervalHistoryV2, FailureMarketIntervalTerminalDispositionV2,
 };
 use crate::market_policy_v1::{
     FailureMarketAccountIdV1, FailureMarketAdmissionStateIdV1, FailureMarketAdmissionStateV1,
@@ -42,6 +42,8 @@ const SESSION_BEGIN_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-session-b
 const SESSION_ADVANCE_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-session-advance/v1";
 const SESSION_RESOLVE_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-session-resolve/v1";
 const SESSION_CLOSE_DOMAIN_V1: &[u8] = b"dragons-clutch/failure-market-session-close/v1";
+const SESSION_SOURCE_FAILURE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/failure-market-session-source-failure/v2";
 const RECOVERY_CLOSE_DOMAIN_V2: &[u8] = b"dragons-clutch/failure-market-recovery-close/v2";
 const FAMILY_TERMINAL_DOMAIN_V2: &[u8] = b"dragons-clutch/failure-market-family-terminal/v2";
 const MAGIC_V1: [u8; 8] = *b"DCFMRUN1";
@@ -102,6 +104,10 @@ runtime_id!(
 runtime_id!(
     FailureMarketSessionTransitionReceiptIdV1,
     "Typed identity of one authenticated subordinate session transition."
+);
+runtime_id!(
+    FailureMarketSourceFailureTransitionReceiptIdV2,
+    "Typed identity of one atomic Source-failure pin, archive, release, and runtime fold."
 );
 runtime_id!(
     FailureMarketRecoveryCloseReceiptIdV2,
@@ -515,6 +521,8 @@ pub enum FailureMarketRuntimePhaseV1 {
     RecoveryClosed = 5,
     /// Durable market-level Failure terminal receipt persisted.
     FamilyTerminal = 6,
+    /// Finite evidence-only attempts ended without fabricating a resolution.
+    RecoveryDormant = 7,
 }
 
 impl FailureMarketRuntimePhaseV1 {
@@ -526,6 +534,7 @@ impl FailureMarketRuntimePhaseV1 {
             Self::IntervalArchived => 4,
             Self::RecoveryClosed => 5,
             Self::FamilyTerminal => 6,
+            Self::RecoveryDormant => 7,
         }
     }
 
@@ -537,6 +546,7 @@ impl FailureMarketRuntimePhaseV1 {
             4 => Ok(Self::IntervalArchived),
             5 => Ok(Self::RecoveryClosed),
             6 => Ok(Self::FamilyTerminal),
+            7 => Ok(Self::RecoveryDormant),
             _ => Err(Error::WrongPhase),
         }
     }
@@ -943,6 +953,18 @@ impl FailureMarketRuntimeV1 {
                     return Err(Error::WrongPhase);
                 }
             }
+            FailureMarketRuntimePhaseV1::RecoveryDormant => {
+                if self.transition_sequence == 0
+                    || active_pin
+                    || !(series_link && session_state && session_resolution && interval_terminal)
+                    || !session_history
+                    || interval_funding
+                    || recovery_terminal
+                    || family_terminal
+                {
+                    return Err(Error::WrongPhase);
+                }
+            }
             FailureMarketRuntimePhaseV1::RecoveryClosed => {
                 if self.transition_sequence == 0
                     || active_pin
@@ -1035,6 +1057,258 @@ impl FailureMarketSessionTransitionPlanV1 {
     }
 }
 
+/// Expected atomic direct Source-failure archive authority.
+///
+/// This joins the pre-pin Product link, exact Source terminal cell, permanent
+/// history append, canonical Idle reset, released link, and final Market
+/// runtime transcript. It never contains Product work or a liveness payment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketSourceFailureTransitionFactsV2 {
+    /// Shared runtime prestate.
+    pub runtime_before: FailureMarketRuntimeStateCommitmentV1,
+    /// Exact unpinned Product link prestate.
+    pub series_link_before: SeriesMarketLinkV1Id,
+    /// Predicted pinned Product link state.
+    pub series_link_pinned: SeriesMarketLinkV1Id,
+    /// Released Product link poststate.
+    pub series_link_after: SeriesMarketLinkV1Id,
+    /// Noncircular exact Product/Failure preauthorization used for the pin.
+    pub begin_preauthorization_id: ProductContentId,
+    /// Product post-pin transcript retained by the terminal and archive.
+    pub session_binding_id: ProductContentId,
+    /// Exact zero-payout Source failure cell receipt.
+    pub source_failure_receipt_id:
+        crate::market_interval_cell_v2::FailureMarketIntervalCellSourceFailureReceiptIdV2,
+    /// Exact Source-owned physical terminal postwrite committed by that receipt.
+    pub source_terminal_postwrite_id: ProductContentId,
+    /// Exact terminal cell state folded by history.
+    pub terminal_cell_state_id: FailureMarketIntervalCellStateIdV2,
+    /// Exact canonical Idle poststate written after append.
+    pub idle_cell_state_id: ProductContentId,
+    /// Exact history prestate.
+    pub history_before: FailureMarketIntervalHistoryStateIdV2,
+    /// Exact history poststate.
+    pub history_after: FailureMarketIntervalHistoryStateIdV2,
+    /// Exact append receipt.
+    pub history_append_receipt_id:
+        crate::market_interval_history_v2::FailureMarketIntervalHistoryAppendReceiptIdV2,
+    /// Prior append-only root.
+    pub previous_session_history: FailureMarketIntervalHistoryRootV2,
+    /// Resulting append-only root.
+    pub resulting_session_history: FailureMarketIntervalHistoryRootV2,
+    /// Resulting one-based finite attempt count.
+    pub completed_session_count: u64,
+    /// Whether the exact finite schedule has no remaining attempt.
+    pub recovery_dormant: bool,
+    /// Exact compound transition identity.
+    pub transition_receipt_id: FailureMarketSourceFailureTransitionReceiptIdV2,
+}
+
+/// Private authority for the sole zero-payout Source-failure compound path.
+pub trait AuthenticatedFailureMarketSourceFailureTransitionV2 {
+    /// Authenticate every pre/post state and atomic Product/Source join.
+    fn authenticate_failure_market_source_failure_transition(
+        &self,
+        _expected: FailureMarketSourceFailureTransitionFactsV2,
+    ) -> Result<()> {
+        Err(Error::BindingMismatch)
+    }
+}
+
+/// Atomic shared-runtime and Product-link plan for one Source failure attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FailureMarketSourceFailureTransitionPlanV2 {
+    before: FailureMarketRuntimeV1,
+    after: FailureMarketRuntimeV1,
+    series_link_before: SeriesMarketLinkV1,
+    series_link_pinned: SeriesMarketLinkV1,
+    series_link_after: SeriesMarketLinkV1,
+    receipt_id: FailureMarketSourceFailureTransitionReceiptIdV2,
+}
+
+impl FailureMarketSourceFailureTransitionPlanV2 {
+    /// Resulting IntervalArchived or RecoveryDormant shared runtime.
+    pub const fn resulting_runtime(self) -> FailureMarketRuntimeV1 {
+        self.after
+    }
+
+    /// Exact unpinned link prestate.
+    pub const fn series_link_before(self) -> SeriesMarketLinkV1 {
+        self.series_link_before
+    }
+
+    /// Exact predicted pinned link intermediate state.
+    pub const fn series_link_pinned(self) -> SeriesMarketLinkV1 {
+        self.series_link_pinned
+    }
+
+    /// Exact released link poststate.
+    pub const fn series_link_after(self) -> SeriesMarketLinkV1 {
+        self.series_link_after
+    }
+
+    /// Compound transition identity.
+    pub const fn receipt_id(self) -> FailureMarketSourceFailureTransitionReceiptIdV2 {
+        self.receipt_id
+    }
+}
+
+/// Atomically consume one mature Source absence or stable refusal as a finite,
+/// zero-payout attempt. This plan cannot fabricate Product work, consume a
+/// liveness call, close shared Recovery, or terminalize the Product Market.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_archive_failure_market_source_failure_v2<
+    A: AuthenticatedFailureMarketSourceFailureTransitionV2 + ?Sized,
+>(
+    authority: &A,
+    runtime: FailureMarketRuntimeV1,
+    admission: FailureMarketAdmissionStateV1,
+    series_link: SeriesMarketLinkV1,
+    begin_preauthorization_id: ProductContentId,
+    session: FailureMarketSessionDescriptorV1,
+    interval_funding: FailureMarketIntervalFundingReceiptV2,
+    interval_history: FailureMarketIntervalHistoryV2,
+    quote: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+    source_failure: FailureMarketIntervalCellSourceFailureReceiptV2,
+    history_append: FailureMarketIntervalHistoryAppendReceiptV2,
+) -> Result<FailureMarketSourceFailureTransitionPlanV2> {
+    runtime.validate_against_admission(admission)?;
+    if runtime.phase != FailureMarketRuntimePhaseV1::Ready
+        && runtime.phase != FailureMarketRuntimePhaseV1::IntervalArchived
+    {
+        return Err(Error::WrongPhase);
+    }
+    require_live(begin_preauthorization_id.bytes())?;
+    validate_session_descriptor(
+        runtime,
+        admission,
+        series_link,
+        session,
+        interval_funding,
+        interval_history,
+    )?;
+    let source_facts = source_failure.facts();
+    let source_terminal_receipt_id = ProductContentId::from_bytes(source_failure.id().bytes());
+    let terminal_cell_state_id = source_failure.cell_after();
+    let source_occurrence_id = SourceOccurrenceV1Id::from_bytes(source_facts.source_occurrence_id.bytes());
+    let expected_next_count = runtime
+        .completed_session_count
+        .checked_add(1)
+        .ok_or(Error::BindingMismatch)?;
+    let attempt_count = u64::from(quote.schedule().attempt_count);
+    if expected_next_count > attempt_count
+        || session.source_occurrence_id != source_occurrence_id
+        || session.schedule_id.bytes() != source_facts.session_schedule_id.bytes()
+        || session.session_state_commitment.bytes() != terminal_cell_state_id.bytes()
+        || source_facts.attempt_index
+            != u8::try_from(runtime.completed_session_count).map_err(|_| Error::BindingMismatch)?
+        || history_append.failure_policy_binding_id() != runtime.policy_binding_id
+        || history_append.market_instance_id() != admission.binding().facts().market_instance_id
+        || history_append.generation() != admission.binding().facts().generation
+        || history_append.funding_receipt_id() != interval_funding.id()
+        || history_append.history_before() != interval_history.id()?
+        || history_append.previous_root() != runtime.session_history_commitment()
+        || history_append.session_terminal_receipt_id() != source_terminal_receipt_id
+        || history_append.terminal_state_commitment().bytes() != terminal_cell_state_id.bytes()
+        || history_append.disposition() != FailureMarketIntervalTerminalDispositionV2::Refused
+        || history_append.completed_session_count() != expected_next_count
+    {
+        return Err(Error::BindingMismatch);
+    }
+    let series_link_before = series_link.semantic_id()?;
+    let pinned_link = series_link.pin_failure_session(begin_preauthorization_id)?;
+    let series_link_pinned = pinned_link.semantic_id()?;
+    let session_binding_id = pinned_link.failure_session_transcript_id();
+    if session_binding_id.bytes() != source_facts.session_binding_id.bytes()
+        || history_append.session_binding_id() != session_binding_id
+    {
+        return Err(Error::BindingMismatch);
+    }
+    let released_link = pinned_link.release_failure_session(source_terminal_receipt_id)?;
+    let series_link_after = released_link.semantic_id()?;
+    let runtime_before = runtime.commitment()?;
+    let next_sequence = runtime
+        .transition_sequence
+        .checked_add(1)
+        .ok_or(Error::BindingMismatch)?;
+    let recovery_dormant = expected_next_count == attempt_count;
+    let mut hasher = Sha256::new();
+    hasher.update(SESSION_SOURCE_FAILURE_DOMAIN_V2);
+    hash_runtime_transition_prefix(&mut hasher, runtime, runtime_before, next_sequence);
+    hasher.update(series_link_before.bytes());
+    hasher.update(series_link_pinned.bytes());
+    hasher.update(series_link_after.bytes());
+    hasher.update(begin_preauthorization_id.bytes());
+    hasher.update(session_binding_id.bytes());
+    hash_session_descriptor(&mut hasher, session);
+    hasher.update(source_failure.id().bytes());
+    hasher.update(source_facts.source_terminal_postwrite_id.bytes());
+    hasher.update(terminal_cell_state_id.bytes());
+    hasher.update(history_append.id().bytes());
+    hasher.update(history_append.history_before().bytes());
+    hasher.update(history_append.history_after().bytes());
+    hasher.update(history_append.previous_root().bytes());
+    hasher.update(history_append.resulting_root().bytes());
+    hasher.update(history_append.idle_state_commitment().bytes());
+    hasher.update(expected_next_count.to_le_bytes());
+    hasher.update([if recovery_dormant { 1 } else { 0 }]);
+    let transition_receipt_id =
+        FailureMarketSourceFailureTransitionReceiptIdV2::from_bytes(hasher.finalize().into());
+    require_live(transition_receipt_id.bytes())?;
+    let facts = FailureMarketSourceFailureTransitionFactsV2 {
+        runtime_before,
+        series_link_before,
+        series_link_pinned,
+        series_link_after,
+        begin_preauthorization_id,
+        session_binding_id,
+        source_failure_receipt_id: source_failure.id(),
+        source_terminal_postwrite_id: ProductContentId::from_bytes(
+            source_facts.source_terminal_postwrite_id.bytes(),
+        ),
+        terminal_cell_state_id,
+        idle_cell_state_id: history_append.idle_state_commitment(),
+        history_before: history_append.history_before(),
+        history_after: history_append.history_after(),
+        history_append_receipt_id: history_append.id(),
+        previous_session_history: history_append.previous_root(),
+        resulting_session_history: history_append.resulting_root(),
+        completed_session_count: expected_next_count,
+        recovery_dormant,
+        transition_receipt_id,
+    };
+    authority.authenticate_failure_market_source_failure_transition(facts)?;
+    let mut after = runtime;
+    after.phase = if recovery_dormant {
+        FailureMarketRuntimePhaseV1::RecoveryDormant
+    } else {
+        FailureMarketRuntimePhaseV1::IntervalArchived
+    };
+    after.transition_sequence = next_sequence;
+    after.completed_session_count = expected_next_count;
+    after.session_ids[ACTIVE_SESSION_PIN_INDEX_V1] = ProductContentId::ZERO;
+    after.session_ids[SERIES_LINK_AUTHENTICATION_INDEX_V1] =
+        ProductContentId::from_bytes(series_link_after.bytes());
+    after.session_ids[SESSION_STATE_COMMITMENT_INDEX_V1] =
+        history_append.idle_state_commitment();
+    after.session_ids[SESSION_RESOLUTION_RECEIPT_INDEX_V1] = source_terminal_receipt_id;
+    after.session_ids[INTERVAL_TERMINAL_RECEIPT_INDEX_V1] = source_terminal_receipt_id;
+    after.session_ids[RECOVERY_TERMINAL_RECEIPT_INDEX_V1] = ProductContentId::ZERO;
+    after.session_ids[FAMILY_TERMINAL_RECEIPT_INDEX_V1] = ProductContentId::ZERO;
+    after.session_ids[INTERVAL_HISTORY_ROOT_INDEX_V1] =
+        ProductContentId::from_bytes(history_append.resulting_root().bytes());
+    after.session_ids[ACTIVE_INTERVAL_FUNDING_RECEIPT_INDEX_V1] = ProductContentId::ZERO;
+    after.validate_against_admission(admission)?;
+    Ok(FailureMarketSourceFailureTransitionPlanV2 {
+        before: runtime,
+        after,
+        series_link_before: series_link,
+        series_link_pinned: pinned_link,
+        series_link_after: released_link,
+        receipt_id: transition_receipt_id,
+    })
+}
+
 /// One stale-checked shared-runtime terminal transition.
 ///
 /// It never mutates a Product Series link: terminalization is Market-scoped
@@ -1053,6 +1327,20 @@ impl FailureMarketRuntimeTerminalPlanV2 {
 }
 
 impl FailureMarketRuntimeV1 {
+    /// Commit one exact zero-payout Source failure compound transition.
+    pub fn commit_source_failure_plan(
+        &mut self,
+        plan: FailureMarketSourceFailureTransitionPlanV2,
+    ) -> Result<()> {
+        self.validate()?;
+        if *self != plan.before {
+            return Err(Error::StalePlan);
+        }
+        plan.after.validate()?;
+        *self = plan.after;
+        Ok(())
+    }
+
     /// Commit one exact Recovery-close or family-terminal transition.
     pub fn commit_terminal_plan(&mut self, plan: FailureMarketRuntimeTerminalPlanV2) -> Result<()> {
         self.validate()?;
@@ -1377,7 +1665,13 @@ pub fn plan_close_failure_market_session_v1<A: AuthenticatedFailureMarketSession
     };
     authority.authenticate_failure_market_session_close(facts)?;
     let mut after = runtime;
-    after.phase = FailureMarketRuntimePhaseV1::IntervalArchived;
+    after.phase = if history_append.disposition()
+        == FailureMarketIntervalTerminalDispositionV2::Exhausted
+    {
+        FailureMarketRuntimePhaseV1::RecoveryDormant
+    } else {
+        FailureMarketRuntimePhaseV1::IntervalArchived
+    };
     after.transition_sequence = next_sequence;
     after.completed_session_count = history_append.completed_session_count();
     after.session_ids[ACTIVE_SESSION_PIN_INDEX_V1] = ProductContentId::ZERO;
@@ -2575,5 +2869,42 @@ mod tests {
         original.update(b"final");
         hash_family_terminal_facts(&mut original, facts);
         assert_ne!(original.finalize(), third.finalize());
+    }
+
+    #[test]
+    fn dormant_runtime_is_recoverable_but_cannot_rebegin_or_claim_terminality() {
+        let admission = admission();
+        let mut dormant = admitted_runtime(admission);
+        dormant.phase = FailureMarketRuntimePhaseV1::RecoveryDormant;
+        dormant.transition_sequence = 1;
+        dormant.completed_session_count = 1;
+        dormant.session_ids[SERIES_LINK_AUTHENTICATION_INDEX_V1] =
+            ProductContentId::from_bytes([131; 32]);
+        dormant.session_ids[SESSION_STATE_COMMITMENT_INDEX_V1] =
+            ProductContentId::from_bytes([132; 32]);
+        dormant.session_ids[SESSION_RESOLUTION_RECEIPT_INDEX_V1] =
+            ProductContentId::from_bytes([133; 32]);
+        dormant.session_ids[INTERVAL_TERMINAL_RECEIPT_INDEX_V1] =
+            ProductContentId::from_bytes([133; 32]);
+        dormant.session_ids[INTERVAL_HISTORY_ROOT_INDEX_V1] =
+            ProductContentId::from_bytes([134; 32]);
+        assert_eq!(dormant.validate_against_admission(admission), Ok(()));
+        assert!(dormant.recovery_terminal_receipt_id().is_zero());
+        assert!(dormant.family_terminal_receipt_id().is_zero());
+
+        let (funding, history) = runtime_test_fixture(admission);
+        assert_eq!(
+            plan_begin_failure_market_session_v1(
+                &AcceptingSession,
+                dormant,
+                admission,
+                active_series_link(),
+                ProductContentId::from_bytes([135; 32]),
+                session(136, funding.id()),
+                funding,
+                history,
+            ),
+            Err(Error::WrongPhase)
+        );
     }
 }

@@ -571,6 +571,7 @@ pub struct FailureMarketIntervalHistoryAppendReceiptV2 {
     session_terminal_receipt_id: ProductContentId,
     terminal_state_commitment: ProductContentId,
     idle_state_commitment: ProductContentId,
+    disposition: FailureMarketIntervalTerminalDispositionV2,
     completed_session_count: u64,
 }
 
@@ -648,6 +649,11 @@ impl FailureMarketIntervalHistoryAppendReceiptV2 {
     /// Canonical Idle reusable-cell postimage written by this append/reset.
     pub const fn idle_state_commitment(self) -> ProductContentId {
         self.idle_state_commitment
+    }
+
+    /// Canonical terminal class committed into the append-only root.
+    pub const fn disposition(self) -> FailureMarketIntervalTerminalDispositionV2 {
+        self.disposition
     }
 
     /// Resulting one-based completed-session count.
@@ -845,6 +851,7 @@ pub fn plan_append_failure_market_interval_history_v2<
             session_terminal_receipt_id: terminal.session_terminal_receipt_id,
             terminal_state_commitment: terminal.terminal_state_commitment,
             idle_state_commitment: terminal.idle_state_commitment,
+            disposition: terminal.disposition,
             completed_session_count: next_count,
         },
     ))
@@ -1358,6 +1365,7 @@ pub(crate) fn runtime_test_append(
         session_terminal_receipt_id,
         terminal_state_commitment,
         idle_state_commitment,
+        disposition: FailureMarketIntervalTerminalDispositionV2::Resolved,
         completed_session_count: after.completed_session_count,
     };
     (after, receipt)
