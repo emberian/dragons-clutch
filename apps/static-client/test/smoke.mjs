@@ -156,20 +156,43 @@ test("source_and_structured_action_material_use_disjoint_current_transport_contr
     let refused = false;
     try { GlassChainClient.validateActionCapabilities(structured.raw, structured.configuration, structured.session); } catch (_) { refused = true; }
     const dealerVariant = { familyTag: "76", familyVersion: "1", localAction: "25", payloadDiscriminator: "8", name: "dealer-retire-active-facility-credit" };
-    const dealerConfiguration = { release: { releaseKey: source.configuration.release.releaseKey, releaseManifestSha256: manifest, capabilityProfileId: profile, enabledIntents: [], enabledIntentVariants: [dealerVariant] } };
+    const dealerConfiguration = { release: { releaseKey: source.configuration.release.releaseKey, releaseManifestSha256: manifest, capabilityProfileId: profile, elfSha256: ownerRelease, enabledIntents: [], enabledIntentVariants: [dealerVariant] } };
     const dealerSession = { sessionId, release: { releaseKey: dealerConfiguration.release.releaseKey }, restart: { cursors: [] } };
     const dealerRaw = { schema: "dragons-clutch/operator-action-capability-set/v1", status: "ready", commitment: "finalized", projectionAuthority: "untrusted-release-and-canonical-codec-projection", signing: false, submission: false, sessionId, releaseKey: dealerConfiguration.release.releaseKey, capabilityProfileId: profile, freshness: { recentBlockhash: "absent-by-contract", feePayer: "must-be-explicit-in-server-constructed-draft", validBeforeSlot: "must-be-derived-from-a-fresh-clock-observation", beforeSigning: "reload", afterSubmission: "discard" }, actions: [{ coordinate: { familyTag: "76", familyVersion: "1", localAction: "25", family: "dealer", action: "retire" }, payloadVariant: { discriminator: "8", name: dealerVariant.name }, releaseAdmission: { enabled: true, scope: "payload-discriminator-only", coarseCoordinateEnabled: false, releaseKey: dealerConfiguration.release.releaseKey, capabilityProfileId: profile }, stateSelection: null, semanticOwnerConstructor: "chain-derived-dealer-terminal-v1", accountRoles: [], callable: false, verdict: "unavailable", reason: "exact frame absent", transactionDraft: null, signerRequirements: [], freshnessDisposition: "no draft" }] };
     const dealerOutput = GlassChainClient.validateActionCapabilities(dealerRaw, dealerConfiguration, dealerSession);
     dealerConfiguration.release.enabledIntents = [{ familyTag: "76", familyVersion: "1", localAction: "25" }];
     let coarseRefused = false;
     try { GlassChainClient.validateActionCapabilities(dealerRaw, dealerConfiguration, dealerSession); } catch (_) { coarseRefused = true; }
-    return { sourceFlow: sourceOutput.actions[0].transactionDraft.flows[0], structuredFlow: structuredOutput.actions[0].transactionDraft.flows[0], refused, dealerDiscriminator: dealerOutput.actions[0].payloadVariant.payloadDiscriminator, coarseRefused };
+    dealerConfiguration.release.enabledIntents = [];
+    const dealerLabels = ["actor","policy","state-v3","facility-position-v3","facility-replay-v3","funded-dependencies-v2","dealer-liveness-schedule-v1","liveness-policy","liveness-source","liveness-candidate","liveness-clearing","liveness-settlement","liveness-resolution","liveness-retirement","liveness-recovery","liveness-receipt","liveness-payer","position-rent-payer","replay-rent-payer","obligation-rent-payer","neutral-lamport-sink","clock-sysvar","rent-sysvar","system-program","dealer-series-obligation-v2","product-market-root-v2","series-registry-v3","current-program","current-programdata","registry-release-v2","capability-profile-v4","series-market-link-v2","compiler-bundle-v6","attachment-v5","realm","collateral-profile-v2","collateral-policy-v2","collateral-token-program","collateral-token-programdata","market-binding-v2","market-runtime-v3","market-instance-v2","hoard-v2","claim-ledger-v3","dealer-future-credit-funding-v1"];
+    const dealerWritable = new Set([0,2,3,4,13,15,16,17,18,19,20,24,31,40,44]);
+    const dealerAddresses = dealerLabels.map((_, index) => GlassChainClient.encodeBase58(new Uint8Array(32).fill(index + 1)));
+    dealerRaw.actions[0] = {
+      ...dealerRaw.actions[0],
+      payloadVariant: { discriminator: "9", name: "dealer-retire-unused-future-credit" },
+      accountRoles: dealerLabels.map((role, index) => ({ index: String(index), role, writable: dealerWritable.has(index), signer: index === 0, address: dealerAddresses[index], identityDisposition: "semantic-owner-derived-and-bound-to-draft" })),
+      callable: true,
+      verdict: "callable-unsigned-draft",
+      reason: "exact target-9 frame",
+      observationSet: { schema: "dragons-clutch/operator/dealer-terminal-observation-set/v1", payloadDiscriminator: "9", authorityStateSha256: "15".repeat(32), chainStateSha256: "11".repeat(32), collateralCatalogReceiptId: "12".repeat(32), lookupTableStateSha256: "16".repeat(32), accounts: dealerAddresses.map((address, index) => index === 15 ? { index: String(index), address, observedSlot: "100", disposition: "finalized-absent", owner: null, lamports: null, executable: null, rentEpoch: null, dataSha256: null, releaseKey: null } : { index: String(index), address, observedSlot: "100", disposition: "finalized-present", owner: dealerAddresses[0], lamports: "1", executable: false, rentEpoch: "0", dataSha256: "13".repeat(32), releaseKey: dealerConfiguration.release.releaseKey }) },
+      transactionDraft: { schema: "dragons-clutch/operator-canonical-action-material/v1", draftId: "14".repeat(32), constructionSchema: "dragons-clutch/operator/unsigned-protocol-transaction/v3", driverAccount: dealerAddresses[2], driverAccountSlot: "100", driverReleaseKey: dealerConfiguration.release.releaseKey, executionReleaseKey: dealerConfiguration.release.releaseKey, authorityStateSha256: "15".repeat(32), releaseManifestSha256: manifest, capabilityProfileId: profile, feePayer: dealerAddresses[0], messageVersion: "v0", addressLookupTables: [{ account: GlassChainClient.encodeBase58(new Uint8Array(32).fill(60)), observedSlot: "100", stateSha256: "16".repeat(32), writableAddresses: "1", readonlyAddresses: "1" }], recentBlockhash: null, hasRecentBlockhash: false, serializedTransactionHex: "00", serializedBytes: "1", actions: ["dealer-retire-unused-future-credit"], flows: ["dealer-facility-terminal"], semanticOwners: [{ package: "clutch-dealer-runtime-contract", schema: "dragons-clutch/dealer-terminal-retire/action25/targets8-9/v1", releaseSha256: ownerRelease }], registryBindings: [{ familyTag: "76", familyVersion: "1", localAction: "25", allocationStatus: "frozen", centralAction: "25" }], runtimeAdmissions: ["payload-variant-release-bound-enabled"], exactEquations: [{ name: "keeper payment", unit: { kind: "lamports" }, left: "1", right: "1" }], signed: false, submitted: false, reloadAuthoritativeAccounts: true },
+      signerRequirements: [{ address: dealerAddresses[0], semanticRoles: ["actor", "transaction-fee-payer"], signaturePresent: false, keyAccess: false }],
+      freshnessDisposition: { observedSlot: "100", validBeforeSlot: "110", maximumValiditySlots: "10", recentBlockhash: "absent; a launcher must reacquire state before adding one", beforeSigning: "reload", afterSubmission: "discard" }
+    };
+    dealerConfiguration.release.enabledIntentVariants = [{ ...dealerVariant, payloadDiscriminator: "9", name: "dealer-retire-unused-future-credit" }];
+    const callableDealer = GlassChainClient.validateActionCapabilities(dealerRaw, dealerConfiguration, dealerSession);
+    dealerRaw.actions[0].observationSet.accounts.pop();
+    let dealerTupleRefused = false;
+    try { GlassChainClient.validateActionCapabilities(dealerRaw, dealerConfiguration, dealerSession); } catch (_) { dealerTupleRefused = true; }
+    return { sourceFlow: sourceOutput.actions[0].transactionDraft.flows[0], structuredFlow: structuredOutput.actions[0].transactionDraft.flows[0], refused, dealerDiscriminator: dealerOutput.actions[0].payloadVariant.payloadDiscriminator, coarseRefused, dealerCallable: callableDealer.actions[0].callable, dealerTupleRefused };
   })()`, context);
   assert.equal(result.sourceFlow, "source-plane-v3");
   assert.equal(result.structuredFlow, "structured-claim");
   assert.equal(result.refused, true);
   assert.equal(result.dealerDiscriminator, "8");
   assert.equal(result.coarseRefused, true);
+  assert.equal(result.dealerCallable, true);
+  assert.equal(result.dealerTupleRefused, true);
 });
 
 test("compiler_boundary_names_rust_owner_and_does_not_reimplement_payoff_math", () => {

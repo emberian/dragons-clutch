@@ -139,10 +139,14 @@ Dealer retirement variants are a separate release surface. Glass recognizes
 only the closed `76/1/25/8` active-facility-credit and `76/1/25/9`
 unused-future-credit variants, requires the coarse `76/1/25` tuple to remain
 absent, and joins the exact discriminator set across acquisition, release,
-session, and action projections. Their current daemon draft shape is displayed
-as a refused payload-variant verdict until a complete browser-side Dealer
-account-tuple contract lands; variant visibility never promotes the coarse
-coordinate or makes its bytes selectable.
+session, and action projections. Target 8 is selectable only with its exact
+48-role finalized observation set; target 9 requires its distinct exact
+45-role set. Both require the frozen role names/privileges, one v0 lookup
+table, the target-specific semantic owner and runtime admission, exact signer
+roles and integer equations, the state-v3 driver observation, and an unexpired
+freshness boundary. The liveness-receipt creation target is the sole required
+finalized absence. Targets 1–7, a coarse action-25 tuple, incomplete role
+frames, or stale observations remain refused.
 
 Product/Series registration and Owner/Position V3 lifecycle appear as separate
 `not-authenticated` capability cards. This avoids treating Product compiler

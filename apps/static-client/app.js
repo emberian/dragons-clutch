@@ -238,7 +238,7 @@
       const facts = create("dl", "compact-facts");
       facts.append(
         definition("Disposition", action.inspection.kind),
-        definition("Finalized driver", action.stateSelection ? `${action.stateSelection.account} @ ${action.stateSelection.accountSlot}` : "missing"),
+        definition("Finalized driver", action.stateSelection ? `${action.stateSelection.account} @ ${action.stateSelection.accountSlot}` : action.transactionDraft ? `${action.transactionDraft.driverAccount} @ ${action.transactionDraft.driverAccountSlot}` : "missing"),
         definition("Observed tuple accounts", action.inspection.observedAccounts),
         definition("Stale tuple accounts", action.inspection.staleAccounts),
         definition("Canonical unsigned material", action.transactionDraft ? `${action.transactionDraft.flows[0]} · ${action.transactionDraft.messageVersion} · ${action.transactionDraft.serializedBytes} bytes` : "unavailable"),
