@@ -447,8 +447,8 @@ pub const fn fractional_account_contract_v1(
 ) -> FractionalAccountContractV1 {
     match action {
         FractionalRedemptionActionV1::Initialize => FractionalAccountContractV1 {
-            account_count: 31,
-            foundation_core_accounts: 14,
+            account_count: 32,
+            foundation_core_accounts: 15,
             foundation_aux_accounts: 17,
             foundation_outcome_pair_suffix: true,
             foundation_aux_writable_mask: 0,
@@ -596,8 +596,8 @@ pub const fn fractional_account_contract_v1(
             external_writable_mask: 0b1001_0000_0000,
         },
         FractionalRedemptionActionV1::CloseEmptyLedger => FractionalAccountContractV1 {
-            account_count: 31,
-            foundation_core_accounts: 14,
+            account_count: 32,
+            foundation_core_accounts: 15,
             foundation_aux_accounts: 17,
             foundation_outcome_pair_suffix: true,
             foundation_aux_writable_mask: (1 << 15) | (1 << 16),

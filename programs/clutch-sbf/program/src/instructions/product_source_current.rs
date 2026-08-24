@@ -7,9 +7,7 @@
 
 use crate::accounts::{require, require_count, Outcome};
 use crate::error::{ClutchError, Refusal};
-use crate::instructions::product_artifact::{
-    authenticate_product_artifact_v1,
-};
+use crate::instructions::product_artifact::authenticate_product_artifact_v1;
 use crate::instructions::product_series_current::AuthenticatedRegistryCapabilityV4;
 use crate::instructions::product_series::{
     IX_SERIES_ARTIFACT_ATTACHMENT, IX_SERIES_ARTIFACT_BASIS,
@@ -203,7 +201,6 @@ impl AuthenticatedSourceSeriesAuthorityV3 for AuthenticatedProductSourceAuthorit
         Ok(self.resolved_coverage_policy_value)
     }
 }
-
 /// Exact nine-account QuoteV5/AttachmentV5 artifact graph.
 #[derive(Debug)]
 pub(crate) struct AuthenticatedSeriesSourceArtifactsV5 {
@@ -571,6 +568,20 @@ pub(crate) fn authenticate_compiled_product_series_bundle_v6(
     let expected_id = expected
         .id()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        artifacts
+            .series
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            == registry.series_plan_id()
+            && artifacts
+                .funding_terms
+                .id()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                == registry.funding_terms_id()
+            && expected_id == registry.compiler_bundle_id(),
+        ClutchError::MismatchedState,
+    )?;
     let decoded = authenticate_product_artifact_v1::<CompiledProductSeriesBundleV6>(
         program_id,
         bundle_account,
@@ -975,5 +986,6 @@ mod adversarial_tests {
         assert!(!production.contains("SeriesAttachmentPlanV4"));
         assert!(!production.contains("AuthenticatedRegistryCapabilityV3"));
         assert!(!production.contains("AuthenticatedProductSourceAuthorityV1"));
+        assert!(production.contains("expected_id == registry.compiler_bundle_id()"));
     }
 }

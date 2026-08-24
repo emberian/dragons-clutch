@@ -464,13 +464,12 @@ this integration tranche. Family 79/v1 stays `ReservedDisabled` until the
 unified complete-profile switch joins every family and positive checked
 collateral/claim release row.
 
-The current action-1/action-10 outer is an integration checkpoint over the
-historical 46-slot `MarketFoundationAccountGraphV2` (14 fixed core accounts,
-then one mint/custody pair per active outcome). Product/Collateral has since
-required a fresh 47-slot successor with an explicit `HoardCollateralVault`.
-That successor's exact typed graph, account coordinates, and founder producer
-are an explicit dependency; the current V2 geometry must not be frozen into a
-callable profile.
+The action-1/action-10 outer now consumes the current 47-slot
+`MarketFoundationAccountGraphV3`: 15 fixed core accounts including the exact
+`HoardCollateralVault`, then one mint/custody pair per active outcome. It joins
+`MarketLifecycleRootV2`, `SeriesMarketLinkV2`, `SeriesFundingQuoteV5`, and
+read-only `SeriesRegistryV3`; the complete Product founder/terminal producer
+chain remains an explicit callability dependency.
 
 ## 7. Evidence and intentionally deferred validation
 

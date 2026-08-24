@@ -655,7 +655,10 @@ impl EnabledSourceActionAccountsV2 {
         }
     }
 
-    const fn keeper(self) -> Address {
+    /// Public keeper identity selected by the semantic account contract. This
+    /// is an address requirement only; it carries no signing capability.
+    #[must_use]
+    pub const fn keeper_address(self) -> Address {
         match self {
             Self::InitializeHead(accounts) => accounts.keeper,
             Self::OpenRawPage(accounts) => accounts.keeper,
@@ -663,7 +666,10 @@ impl EnabledSourceActionAccountsV2 {
         }
     }
 
-    const fn payer(self) -> Address {
+    /// Public payer identity selected by the semantic account contract. The
+    /// outer builder must use this exact address as its fee payer.
+    #[must_use]
+    pub const fn payer_address(self) -> Address {
         match self {
             Self::InitializeHead(accounts) => accounts.payer,
             Self::OpenRawPage(accounts) => accounts.payer,
@@ -734,7 +740,7 @@ impl EnabledSourceActionAccountsV2 {
             || route.parser_program_data.to_bytes() != release.base.parser.programdata.bytes()
             || route.parser_config.to_bytes() != release.base.parser_config.bytes()
             || route.source_spec.to_bytes() != release.base.source_spec_account.bytes()
-            || self.payer().to_bytes() != schedule.payer().bytes()
+            || self.payer_address().to_bytes() != schedule.payer().bytes()
             || self.source_compartment().to_bytes() != schedule.source_compartment_account().bytes()
             || self.system_program().to_bytes() != release.base.system_program.bytes()
         {
@@ -1459,7 +1465,7 @@ pub fn plan_source_crank(
     if material.call_ordinal == 0
         || material.call_ordinal > observation.schedule.maximum_calls()
         || material.accounts.action() != registry
-        || material.submitter.bytes() != material.accounts.keeper().to_bytes()
+        || material.submitter.bytes() != material.accounts.keeper_address().to_bytes()
     {
         return Err(WorkflowGraphError::ActionStateMismatch);
     }

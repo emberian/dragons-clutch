@@ -10,10 +10,11 @@ use crate::{
     STRUCTURED_CURRENT_RELEASE_CONTRACT_V1,
 };
 
-/// All family-local actions allocated by the canonical runtime contract.
-pub const RESERVED_STRUCTURED_CLAIM_ACTION_MASK: u16 =
-    ((1_u16 << (StructuredClaimActionV1::LAST_TAG + 1)) - 1)
-        & !((1_u16 << StructuredClaimActionV1::FIRST_TAG) - 1);
+/// All family-local coordinates reserved by the central collision ledger.
+///
+/// Reservation is not decoding authority: current action parsing recognizes
+/// only the six actions in [`IMPLEMENTED_CURRENT_STRUCTURED_ACTION_MASK_V1`].
+pub const RESERVED_STRUCTURED_CLAIM_ACTION_MASK: u16 = 0x01fe;
 
 /// Runtime actions admitted by this adapter artifact.
 ///
@@ -26,7 +27,6 @@ pub const ENABLED_STRUCTURED_CLAIM_ACTION_MASK: u16 = 0;
 pub const ENABLED_STRUCTURED_CLAIM_ACTION_MASK: u16 =
     STRUCTURED_CURRENT_RELEASE_CONTRACT_V1.admitted_action_mask;
 
-const _: () = assert!(StructuredClaimActionV1::LAST_TAG < 16);
 const _: () = assert!(
     STRUCTURED_CLAIM_FAMILY_TAG == clutch_solana_layout::registry::STRUCTURED_CLAIM_FAMILY_TAG
 );

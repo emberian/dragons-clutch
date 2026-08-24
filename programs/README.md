@@ -7,8 +7,8 @@ claimed none existed. `CURRENT_TRUTH.md` supersedes any status claim here.)
   the only workspace permitted Anza SDK dependencies. Its own tree holds
   the real-bank test suites (`svm-tests/`, separate workspace and
   toolchain pin), the fixture/transaction `harness/` (a library + thin
-  CLI; signs nothing), the loopback `operatord/` daemon behind
-  `apps/operator`, the permissionless `keeper/` cranker, the
+  CLI; signs nothing), the release-bound `operatord/` daemon behind
+  `apps/static-client`, the permissionless `keeper/` cranker, the
   committed-walk runner (`committed-harness/`), and the artifact audit
   under `audit/`. Sealed identities live in
   `research/liveness-policy-profile/artifacts/`.

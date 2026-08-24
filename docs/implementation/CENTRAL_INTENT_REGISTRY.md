@@ -1,12 +1,12 @@
 # Central intent registry
 
-Status: one `profile-successor-chain-attached-dev` product is being assembled.
-Its in-flight identity is deliberately capability-empty. A separately frozen
-complete identity admits only the exact all-family and observed-release closure;
-no partially callable successor set may reuse either identity.
+Status: one permanently identified `profile-successor-chain-attached-dev`
+product is being assembled. Runtime capability tuples advance only when their
+exact callable dependencies land; the offline release checker still requires
+the complete all-family and observed-release closure before release.
 
-The complete identity also depends on Product's fresh 47-slot Foundation graph
-with an explicit `HoardCollateralVault`. Historical
+The current Product schema is the 47-slot Foundation graph with an explicit
+`HoardCollateralVault`. Historical
 `MarketFoundationAccountGraphV2`/`SeriesFundingQuoteV4` 46-slot geometry is not
 an acceptance contract and no family tuple may be enabled from it.
 
@@ -137,10 +137,11 @@ StructuredClaim `75/1` reserves actions 1 through 8:
 8. `RetireDescriptor`
 
 Current source/account contracts exist only for actions 1/3/5/6/7/8, with
-exact outer/base counts 34/32/32/32/33/31 respectively. Actions 2 and 4 are
+exact outer/base counts 34/32/32/32/33/33 respectively. Actions 2 and 4 are
 withdrawn execution routes. The checked Structured wrapper/base/Token-2022
-release contract admits an exact zero action mask, so allocation and compiled
-source do not activate any Structured tuple.
+release join admits exactly mask `0x01ea` under the frozen base profile
+identity, while the central tuple registry still keeps every Structured action
+absent until the unified successor closure is callable.
 
 SourceSeries `77/2` reserves disjoint owner ranges. SourcePlane V3 owns actions
 1 through 12:
@@ -185,15 +186,13 @@ value-bearing action stays disabled until its exact source, collateral,
 liveness, and failure receipts are authenticated.
 
 Dealer owns `0x7d/1` for its staged policy and `0x7e/1` for its immutable
-policy. The Source/Series account namespace withdraws `0x7f/1` and reserves
-the disjoint `0x7f/2` for the current 172-byte BundleV5-retaining Series
-registration/replay anchor. The QuoteV1-shaped `0x80/1` funding wrapper is
-historical and has no current mutation route. Current `0x80/2` is a 716-byte
-BundleV5/QuoteV4 six-compartment owner with an explicit pending ordinal. The
-historical 376-byte codec adds tag/version/bump/flags, exact
-refundable account-rent principal, and five release-selected collateral-vault
-rent principals around the pure 324-byte `SeriesFundingStateV1`; it does not
-copy its cursor or component-balance facts.
+policy. The Source/Series account namespace withdraws `0x7f/1` and `0x7f/2`;
+current `0x7f/3` is the 172-byte BundleV6-bound Series registry. The
+QuoteV1-shaped `0x80/1` and BundleV5/QuoteV4 `0x80/2` funding wrappers are
+historical and have no current mutation route. Current `0x80/3` is the
+716-byte BundleV6/QuoteV5 six-compartment owner with an explicit pending
+ordinal and five separately persisted release-selected collateral-vault rent
+principals; it does not copy its cursor or component-balance facts.
 
 Recovery 78/v1 reserves these local actions, all disabled:
 
@@ -227,9 +226,9 @@ consumes Product's private family admission. Actions 2/3 are the exact internal
 and bearer routes; actions 4/5 are their credited routes; actions 6/7 transfer
 and merge exact credits; action 8 closes a zero credit; action 9 seals exhausted
 claims; and action 10 performs the terminal join and close. Implemented does
-not mean currently callable: the in-flight central profile keeps all ten
-tuples absent, while its frozen complete identity admits all ten together only
-with the rest of the successor and observed-release closure.
+not mean currently callable: the permanent central dev profile keeps all ten
+tuples absent until it can admit them together with the rest of the successor
+and observed-release closure.
 
 There is deliberately no `79/v1` action 11 allocation for Dealer resolution.
 The canonical Fractional `DealerFacilityVectorTransitionV1` is a private

@@ -578,6 +578,7 @@ fn dealer_vector_divides_once_and_retains_the_exact_remainder() {
     assert_eq!(plan.ledger_after().aggregate_credit_numerator, 0);
     assert_eq!(plan.ledger_after().active_credit_accounts, 1);
     assert_eq!(plan.facility_position_after().cash_atoms(), 5);
+    assert_eq!(plan.facility_position_after().generation(), 10);
     assert_eq!(plan.facility_position_after().native_eggs()[0], 6);
     assert_eq!(plan.facility_position_after().native_eggs()[1], 6);
 
@@ -673,6 +674,23 @@ fn dealer_vector_request_and_binding_refuse_hostile_tail_or_generation() {
             },
         ),
         Err(Error::MismatchedBinding)
+    );
+
+    let exhausted = dealer_vector_prestate(context, internal_supply, u64::MAX, 12).unwrap();
+    let mut exhausted_request = request;
+    exhausted_request.expected_position_generation = u64::MAX;
+    assert_eq!(
+        prepare_dealer_facility_vector_transition_v1(
+            context,
+            exhausted_request,
+            exhausted,
+            CreditCreationV1::Fresh {
+                claimant: exhausted.facility_id(),
+                stored_bump: 11,
+                rent: split_rent(60),
+            },
+        ),
+        Err(Error::Arithmetic)
     );
 }
 
@@ -1743,8 +1761,8 @@ fn disabled_adapter_refuses_before_payload_or_account_inspection() {
 #[test]
 fn live_successor_account_contracts_name_dynamic_bearer_mints_and_terminal_writes() {
     let initialize = fractional_account_contract_v1(FractionalRedemptionActionV1::Initialize);
-    assert_eq!(initialize.account_count, 31);
-    assert_eq!(initialize.foundation_core_accounts, 14);
+    assert_eq!(initialize.account_count, 32);
+    assert_eq!(initialize.foundation_core_accounts, 15);
     assert_eq!(initialize.foundation_aux_accounts, 17);
     assert!(initialize.foundation_outcome_pair_suffix);
     assert_eq!(initialize.foundation_aux_writable_mask, 0);
@@ -1814,8 +1832,8 @@ fn live_successor_account_contracts_name_dynamic_bearer_mints_and_terminal_write
 
     let terminal =
         fractional_account_contract_v1(FractionalRedemptionActionV1::CloseEmptyLedger);
-    assert_eq!(terminal.account_count, 31);
-    assert_eq!(terminal.foundation_core_accounts, 14);
+    assert_eq!(terminal.account_count, 32);
+    assert_eq!(terminal.foundation_core_accounts, 15);
     assert_eq!(terminal.foundation_aux_accounts, 17);
     assert!(terminal.foundation_outcome_pair_suffix);
     assert_eq!(terminal.foundation_aux_writable_mask, 0x18000);

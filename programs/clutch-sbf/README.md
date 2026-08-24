@@ -42,11 +42,10 @@ A refusal reads no account, writes no byte, and reports no success.
   shadow/supply reconciliation. It carries its own 1.93.1 toolchain pin because
   the Agave runtime cannot be built by this repository's 1.89.0 host pin; see
   its README and `docs/implementation/TOKEN2022_PLAN.md` §1.2.
-- `scripts/run_bringup.sh` — the gate: builds the ELF twice, compares hashes,
-  runs a loopback `solana-test-validator`, and diffs the SVM post-state against
-  the reference post-state. All external-validator launchers default to the
-  repository's provenance-checked patched Agave binary and retain exact-PID
-  listener probes before and after protocol traffic; stock Agave is refused.
+- `scripts/run_local_real_pyth.sh` and `scripts/run_pyth_devnet_clone.sh` —
+  real-provider local campaigns behind the repository's provenance-checked
+  patched Agave runtime and exact-PID listener gates. The former mock-source
+  launchers and mock devnet-paces driver are withdrawn.
 - `vendor/` — one verbatim third-party crate, present only because this host has
   its source but not its `.crate` archive. See `vendor/PROVENANCE.md`.
 - `source-profiles/` — provisional, machine-readable source observations and an
@@ -109,5 +108,5 @@ profile.
 tools/agave-loopback-validator/fetch-source.sh
 tools/agave-loopback-validator/build.sh --allow-network
 
-programs/clutch-sbf/scripts/run_bringup.sh
+programs/clutch-sbf/scripts/run_local_real_pyth.sh
 ```

@@ -17,13 +17,14 @@ use clutch_fractional_redemption_runtime::{
     FRACTIONAL_LEDGER_ACCOUNT_BYTES, FRACTIONAL_POLICY_ACCOUNT_BYTES,
 };
 use clutch_product_series::{
-    ContentId, MarketFoundationAccountGraphV2, MarketFoundationScheduleV2,
-    MarketFoundationSlotV2, SeriesFundingQuoteV4, MARKET_FOUNDATION_CORE_SLOT_COUNT_V2,
-    MARKET_FOUNDATION_MAX_OUTCOMES_V2, MARKET_FOUNDATION_SLOT_COUNT_V2,
+    ContentId, MarketFoundationAccountGraphV3, MarketFoundationScheduleV3,
+    MarketFoundationSlotV3, MarketLifecycleRootV2, SeriesFundingQuoteV5,
+    MARKET_FOUNDATION_CORE_SLOT_COUNT_V3, MARKET_FOUNDATION_MAX_OUTCOMES_V3,
+    MARKET_FOUNDATION_SLOT_COUNT_V3,
 };
 use clutch_retirement::{DeletableRentOwnerV1, Identity32V1};
 use clutch_solana_layout::product_series::{
-    MarketLifecycleRootAccountV1, SeriesMarketLinkAccountV1,
+    MarketLifecycleRootAccountV2, SeriesMarketLinkAccountV2,
 };
 use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
@@ -37,20 +38,18 @@ use super::fractional_redemption::{
     authenticate_fractional_family_admission_postwrite_v1,
     authenticate_fractional_family_terminal_postwrite_v1,
     authenticate_fractional_runtime_release_v1,
-    consume_fractional_family_admission_postwrite_v1,
-    consume_fractional_family_terminal_postwrite_v1,
+    consume_fractional_family_admission_postwrite_v2,
+    consume_fractional_family_terminal_postwrite_v2,
 };
 use super::genesis::{
     allocate_data, assign_data, read_rent, require_creatable, require_system_program,
     SYSTEM_PROGRAM_ID,
 };
-use super::product_artifact::{
-    authenticate_product_artifact_v1, authenticate_registry_capability_v3,
-    authenticate_series_registry_capability_refs_v2,
-};
-use super::product_market::{
-    authenticate_market_foundation_preallocation_v2, authenticate_market_lifecycle_root_v1,
-    authenticate_series_market_link_v1,
+use super::product_artifact::authenticate_product_artifact_v1;
+use super::product_series_current::{
+    authenticate_market_foundation_preallocation_v3, authenticate_market_lifecycle_root_v2,
+    authenticate_registry_capability_v4, authenticate_series_market_link_v2,
+    authenticate_series_registry_account_v3, AuthenticatedMarketLifecycleRootV2,
 };
 
 const ROOT: usize = 0;
@@ -61,7 +60,7 @@ const CLAIM_LEDGER: usize = 4;
 const RESOLUTION: usize = 10;
 const POLICY: usize = 11;
 const LEDGER: usize = 12;
-const FIRST_OUTCOME_MINT: usize = MARKET_FOUNDATION_CORE_SLOT_COUNT_V2;
+const FIRST_OUTCOME_MINT: usize = MARKET_FOUNDATION_CORE_SLOT_COUNT_V3;
 
 const INITIALIZE_AUX_ACCOUNTS: usize = 17;
 const TERMINAL_AUX_ACCOUNTS: usize = 17;
@@ -128,17 +127,17 @@ fn identity(bytes: [u8; 32]) -> Outcome<Identity32V1> {
 fn graph_account_count(outcome_count: u8) -> Outcome<usize> {
     let outcomes = usize::from(outcome_count);
     require(
-        outcomes != 0 && outcomes <= MARKET_FOUNDATION_MAX_OUTCOMES_V2,
+        outcomes != 0 && outcomes <= MARKET_FOUNDATION_MAX_OUTCOMES_V3,
         ClutchError::NonCanonical,
     )?;
-    MARKET_FOUNDATION_CORE_SLOT_COUNT_V2
+    MARKET_FOUNDATION_CORE_SLOT_COUNT_V3
         .checked_add(outcomes.checked_mul(2).ok_or(ClutchError::Arithmetic)?)
         .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))
 }
 
-fn decode_root_probe(accounts: &[AccountInfo<'_>]) -> Outcome<Box<MarketLifecycleRootAccountV1>> {
+fn decode_root_probe(accounts: &[AccountInfo<'_>]) -> Outcome<Box<MarketLifecycleRootAccountV2>> {
     require(
-        accounts.len() >= MARKET_FOUNDATION_CORE_SLOT_COUNT_V2,
+        accounts.len() >= MARKET_FOUNDATION_CORE_SLOT_COUNT_V3,
         ClutchError::AccountCount,
     )?;
     let account = &accounts[ROOT];
@@ -147,14 +146,14 @@ fn decode_root_probe(accounts: &[AccountInfo<'_>]) -> Outcome<Box<MarketLifecycl
             && !account.is_signer
             && !account.executable
             && account.data_len()
-                == clutch_solana_layout::product_series::MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V1,
+                == clutch_solana_layout::product_series::MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V2,
         ClutchError::MismatchedState,
     )?;
-    let mut output = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
+    let mut output = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
     let data = account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    MarketLifecycleRootAccountV1::decode_into(&data, &mut output)?;
+    MarketLifecycleRootAccountV2::decode_into(&data, &mut output)?;
     drop(data);
     Ok(output)
 }
@@ -226,24 +225,24 @@ fn require_outer_contract(
 
 fn build_graph(
     accounts: &[AccountInfo<'_>],
-    schedule: &MarketFoundationScheduleV2,
+    schedule: &MarketFoundationScheduleV3,
     market: clutch_product_series::MarketInstanceV2Id,
     generation: u64,
     outcome_count: u8,
-) -> Outcome<MarketFoundationAccountGraphV2> {
+) -> Outcome<MarketFoundationAccountGraphV3> {
     let outcomes = usize::from(outcome_count);
-    let mut account_ids = [ContentId::ZERO; MARKET_FOUNDATION_SLOT_COUNT_V2];
+    let mut account_ids = [ContentId::ZERO; MARKET_FOUNDATION_SLOT_COUNT_V3];
     let mut core = 0usize;
-    while core < MARKET_FOUNDATION_CORE_SLOT_COUNT_V2 {
+    while core < MARKET_FOUNDATION_CORE_SLOT_COUNT_V3 {
         account_ids[core] = ContentId::from_bytes(accounts[core].key.to_bytes());
         core += 1;
     }
     let mut outcome = 0usize;
     while outcome < outcomes {
-        account_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V2 + outcome] =
+        account_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V3 + outcome] =
             ContentId::from_bytes(accounts[FIRST_OUTCOME_MINT + outcome].key.to_bytes());
-        account_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V2
-            + MARKET_FOUNDATION_MAX_OUTCOMES_V2
+        account_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V3
+            + MARKET_FOUNDATION_MAX_OUTCOMES_V3
             + outcome] = ContentId::from_bytes(
             accounts[FIRST_OUTCOME_MINT + outcomes + outcome]
                 .key
@@ -251,7 +250,7 @@ fn build_graph(
         );
         outcome += 1;
     }
-    let graph = MarketFoundationAccountGraphV2 {
+    let graph = MarketFoundationAccountGraphV3 {
         market_instance_id: market,
         generation,
         foundation_schedule_id: schedule
@@ -268,18 +267,23 @@ fn build_graph(
 #[allow(clippy::too_many_arguments)]
 fn authenticate_schedule_and_series(
     program_id: &Pubkey,
-    root: super::product_market::AuthenticatedMarketLifecycleRootV1<'_>,
+    root: AuthenticatedMarketLifecycleRootV2<'_>,
     founder_link_account: &AccountInfo<'_>,
     funding_quote_account: &AccountInfo<'_>,
-) -> Outcome<(MarketFoundationScheduleV2, clutch_product_series::SeriesPlanV5Id)> {
-    let mut link_body = Box::new(SeriesMarketLinkAccountV1::decode_buffer());
+) -> Outcome<(
+    MarketFoundationScheduleV3,
+    clutch_product_series::SeriesPlanV5Id,
+    clutch_product_series::SeriesFundingTermsV2Id,
+    clutch_product_series::CompiledProductSeriesBundleV6Id,
+)> {
+    let mut link_body = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
     let data = founder_link_account
         .try_borrow_data()
         .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
-    SeriesMarketLinkAccountV1::decode_into(&data, &mut link_body)?;
+    SeriesMarketLinkAccountV2::decode_into(&data, &mut link_body)?;
     drop(data);
     let link_binding = link_body.state.binding();
-    let authenticated = authenticate_series_market_link_v1(
+    let authenticated = authenticate_series_market_link_v2(
         program_id,
         founder_link_account,
         link_binding.series_plan_id,
@@ -302,12 +306,17 @@ fn authenticate_schedule_and_series(
             && link_binding.neutral_lamport_sink == root.state().capital().neutral_lamport_sink,
         ClutchError::MismatchedState,
     )?;
-    let quote = authenticate_product_artifact_v1::<SeriesFundingQuoteV4>(
+    let quote = authenticate_product_artifact_v1::<SeriesFundingQuoteV5>(
         program_id,
         funding_quote_account,
         link_binding.funding_quote_id.content_id(),
     )?;
-    Ok((quote.value().foundation, link_binding.series_plan_id))
+    Ok((
+        quote.value().foundation,
+        link_binding.series_plan_id,
+        link_binding.funding_terms_id,
+        link_binding.compiler_bundle_id,
+    ))
 }
 
 fn allocate_prefunded_pda<'a>(
@@ -388,7 +397,7 @@ pub(super) fn process_initialize(
             && binding.outcome_count == liabilities.claim_ledger.outcome_count,
         ClutchError::MismatchedState,
     )?;
-    let root = authenticate_market_lifecycle_root_v1(
+    let root = authenticate_market_lifecycle_root_v2(
         program_id,
         &accounts[ROOT],
         binding.market_instance_id,
@@ -396,12 +405,13 @@ pub(super) fn process_initialize(
         true,
         &mut root_before,
     )?;
-    let (schedule, series_plan_id) = authenticate_schedule_and_series(
-        program_id,
-        root,
-        &accounts[aux + init_aux::FOUNDER_LINK],
-        &accounts[aux + init_aux::FUNDING_QUOTE],
-    )?;
+    let (schedule, series_plan_id, funding_terms_id, compiler_bundle_id) =
+        authenticate_schedule_and_series(
+            program_id,
+            root,
+            &accounts[aux + init_aux::FOUNDER_LINK],
+            &accounts[aux + init_aux::FUNDING_QUOTE],
+        )?;
     let graph = build_graph(
         accounts,
         &schedule,
@@ -415,19 +425,19 @@ pub(super) fn process_initialize(
             == binding.foundation_account_graph_id,
         ClutchError::MismatchedState,
     )?;
-    let policy_funding = authenticate_market_foundation_preallocation_v2(
+    let policy_funding = authenticate_market_foundation_preallocation_v3(
         root,
         &accounts[POLICY],
         &schedule,
         &graph,
-        MarketFoundationSlotV2::FractionalPolicy,
+        MarketFoundationSlotV3::FractionalPolicy,
     )?;
-    let ledger_funding = authenticate_market_foundation_preallocation_v2(
+    let ledger_funding = authenticate_market_foundation_preallocation_v3(
         root,
         &accounts[LEDGER],
         &schedule,
         &graph,
-        MarketFoundationSlotV2::FractionalLedger,
+        MarketFoundationSlotV3::FractionalLedger,
     )?;
     require(
         policy_funding.rent_refund_owner() == ledger_funding.rent_refund_owner()
@@ -439,22 +449,28 @@ pub(super) fn process_initialize(
         ClutchError::MismatchedState,
     )?;
 
-    let registry_refs = authenticate_series_registry_capability_refs_v2(
+    let registry_account = authenticate_series_registry_account_v3(
         program_id,
         &accounts[aux + init_aux::SERIES_REGISTRY],
         series_plan_id,
+        false,
     )?;
-    let registry = authenticate_registry_capability_v3(
+    let registry = authenticate_registry_capability_v4(
         program_id,
-        registry_refs,
+        registry_account,
         &accounts[aux + init_aux::PROGRAM],
         &accounts[aux + init_aux::PROGRAMDATA],
         &accounts[aux + init_aux::RELEASE_ARTIFACT],
         &accounts[aux + init_aux::PROFILE_ARTIFACT],
     )?;
+    require(
+        registry.funding_terms_id() == funding_terms_id
+            && registry.compiler_bundle_id() == compiler_bundle_id,
+        ClutchError::MismatchedState,
+    )?;
     let runtime_release = authenticate_fractional_runtime_release_v1(
         program_id,
-        registry,
+        &registry,
         FractionalRedemptionActionV1::Initialize,
     )?;
     let claim_release = authenticate_claim_issuance_release_with_programdata_v1(
@@ -596,15 +612,17 @@ pub(super) fn process_initialize(
         &accounts[LEDGER],
         &accounts[CLAIM_LEDGER],
     )?;
-    let mut product_before = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
-    let mut product_after = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
-    let accepted = consume_fractional_family_admission_postwrite_v1(
+    let mut product_before = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
+    let mut product_successor = Box::new(MarketLifecycleRootV2::decode_buffer());
+    let mut product_after = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
+    let accepted = consume_fractional_family_admission_postwrite_v2(
         program_id,
         &accounts[ROOT],
         postwrite,
         &schedule,
         &graph,
         &mut product_before,
+        &mut product_successor,
         &mut product_after,
     )?;
     require(accepted.id() != ContentId::ZERO, ClutchError::MismatchedState)
@@ -659,7 +677,7 @@ pub(super) fn process_close_empty_ledger(
         ClutchError::AuthorizationUnavailable,
     )?;
     let resolution = authenticate_resolution_v5(program_id, &accounts[RESOLUTION], liabilities)?;
-    let root = authenticate_market_lifecycle_root_v1(
+    let root = authenticate_market_lifecycle_root_v2(
         program_id,
         &accounts[ROOT],
         binding.market_instance_id,
@@ -667,12 +685,13 @@ pub(super) fn process_close_empty_ledger(
         true,
         &mut root_before,
     )?;
-    let (schedule, series_plan_id) = authenticate_schedule_and_series(
-        program_id,
-        root,
-        &accounts[aux + terminal_aux::FOUNDER_LINK],
-        &accounts[aux + terminal_aux::FUNDING_QUOTE],
-    )?;
+    let (schedule, series_plan_id, funding_terms_id, compiler_bundle_id) =
+        authenticate_schedule_and_series(
+            program_id,
+            root,
+            &accounts[aux + terminal_aux::FOUNDER_LINK],
+            &accounts[aux + terminal_aux::FUNDING_QUOTE],
+        )?;
     let graph = build_graph(
         accounts,
         &schedule,
@@ -686,22 +705,28 @@ pub(super) fn process_close_empty_ledger(
             == binding.foundation_account_graph_id,
         ClutchError::MismatchedState,
     )?;
-    let registry_refs = authenticate_series_registry_capability_refs_v2(
+    let registry_account = authenticate_series_registry_account_v3(
         program_id,
         &accounts[aux + terminal_aux::SERIES_REGISTRY],
         series_plan_id,
+        false,
     )?;
-    let registry = authenticate_registry_capability_v3(
+    let registry = authenticate_registry_capability_v4(
         program_id,
-        registry_refs,
+        registry_account,
         &accounts[aux + terminal_aux::PROGRAM],
         &accounts[aux + terminal_aux::PROGRAMDATA],
         &accounts[aux + terminal_aux::RELEASE_ARTIFACT],
         &accounts[aux + terminal_aux::PROFILE_ARTIFACT],
     )?;
+    require(
+        registry.funding_terms_id() == funding_terms_id
+            && registry.compiler_bundle_id() == compiler_bundle_id,
+        ClutchError::MismatchedState,
+    )?;
     let runtime_release = authenticate_fractional_runtime_release_v1(
         program_id,
-        registry,
+        &registry,
         FractionalRedemptionActionV1::CloseEmptyLedger,
     )?;
     require(
@@ -813,15 +838,17 @@ pub(super) fn process_close_empty_ledger(
         &accounts[LEDGER],
         &accounts[CLAIM_LEDGER],
     )?;
-    let mut product_before = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
-    let mut product_after = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
-    let accepted = consume_fractional_family_terminal_postwrite_v1(
+    let mut product_before = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
+    let mut product_successor = Box::new(MarketLifecycleRootV2::decode_buffer());
+    let mut product_after = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
+    let accepted = consume_fractional_family_terminal_postwrite_v2(
         program_id,
         &accounts[ROOT],
         postwrite,
         &schedule,
         &graph,
         &mut product_before,
+        &mut product_successor,
         &mut product_after,
     )?;
     require(accepted.id() != ContentId::ZERO, ClutchError::MismatchedState)?;
@@ -883,8 +910,8 @@ mod adversarial_tests {
 
     #[test]
     fn outer_geometry_is_exact_and_bounded() {
-        assert_eq!(graph_account_count(1), Ok(16));
-        assert_eq!(graph_account_count(16), Ok(46));
+        assert_eq!(graph_account_count(1), Ok(17));
+        assert_eq!(graph_account_count(16), Ok(47));
         assert!(graph_account_count(0).is_err());
         assert!(graph_account_count(17).is_err());
     }
@@ -903,7 +930,7 @@ mod adversarial_tests {
 
     #[test]
     fn action_ten_permits_only_correlated_claim_loader_alias_roles() {
-        let graph = 16;
+        let graph = 17;
         assert!(permitted_claim_loader_alias(
             false,
             graph,

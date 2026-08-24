@@ -1,8 +1,8 @@
 use clutch_structured_claim::DeploymentBinding;
 use clutch_structured_claim_adapter::runtime_contract::{
     decode_historical_descriptor_v1, DescriptorBasisV1, DescriptorStateV1,
-    StructuredClaimDescriptorV2, StructuredClaimPayloadV1,
-    StructuredClaimRuntimeAddressesV1, WrapperQuantityPayloadV1, DESCRIPTOR_ACCOUNT_BYTES,
+    StructuredClaimDescriptorV2, StructuredClaimRuntimeAddressesV1,
+    WrapperQuantityPayloadV1, DESCRIPTOR_ACCOUNT_BYTES,
     DESCRIPTOR_ACCOUNT_TAG, STRUCTURED_CLAIM_FAMILY_TAG, STRUCTURED_CLAIM_FAMILY_VERSION,
     WRAPPER_QUANTITY_PAYLOAD_BYTES,
 };
@@ -130,10 +130,7 @@ fn family_payload_uses_the_runtime_contract_and_withdrawn_route_refuses() {
     instruction[1] = STRUCTURED_CLAIM_FAMILY_VERSION;
     instruction[2] = 2;
     instruction[3..].copy_from_slice(&body);
-    assert_eq!(
-        decode_instruction_v1(&instruction),
-        Ok(StructuredClaimPayloadV1::WrapCanonical(payload))
-    );
+    assert_eq!(decode_instruction_v1(&instruction), Err(Error::UnknownAction));
     #[cfg(not(feature = "profile-successor-chain-attached-dev"))]
     assert_eq!(ENABLED_STRUCTURED_CLAIM_ACTION_MASK, 0);
     #[cfg(feature = "profile-successor-chain-attached-dev")]
