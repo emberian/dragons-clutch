@@ -676,6 +676,7 @@ pub struct IndexedSettlementRootTerminalProjectionV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IndexedSettlementRootCloseProjectionV1 {
     terminal: IndexedSettlementRootTerminalProjectionV1,
+    fee_record: Id32,
     root_rent: DeletableRentOwnerV1,
     market_binding: Id32,
     stored_bump: u8,
@@ -685,6 +686,14 @@ impl IndexedSettlementRootCloseProjectionV1 {
     /// Exact terminal receipt and Product occurrence handoff.
     pub const fn terminal(&self) -> &IndexedSettlementRootTerminalProjectionV1 {
         &self.terminal
+    }
+    /// Canonical selected-fee coordinate that names the durable closure pair.
+    ///
+    /// This is retained only by the close projection so the final SBF action
+    /// can authenticate `0xb9/v2` and `0xb9/v3` before deleting the root. It
+    /// does not add a second fee semantic owner to the terminal handoff.
+    pub const fn fee_record(&self) -> Id32 {
+        self.fee_record
     }
     /// Immutable root rent principal and payer.
     pub const fn root_rent(&self) -> DeletableRentOwnerV1 {
@@ -806,6 +815,7 @@ impl IndexedSettlementRootV1AccountV1 {
         };
         Ok(IndexedSettlementRootCloseProjectionV1 {
             terminal,
+            fee_record: value.base.fee_record(),
             root_rent: value.base.root_rent(),
             market_binding: value.base.market_binding(),
             stored_bump: value.base.stored_bump(),
@@ -2035,6 +2045,7 @@ mod tests {
             &terminal.terminal_projection(&Sha2Backend, root_account).unwrap(),
         );
         assert_eq!(close.root_rent(), terminal.base().root_rent());
+        assert_eq!(close.fee_record(), terminal.base().fee_record());
         assert_eq!(close.market_binding(), terminal.base().market_binding());
         assert_eq!(close.stored_bump(), terminal.base().stored_bump());
         let epoch_account = terminal.base().epoch();
