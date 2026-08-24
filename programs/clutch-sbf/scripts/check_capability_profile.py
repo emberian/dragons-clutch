@@ -87,6 +87,12 @@ SOURCE_IDENTITY_FEATURE: dict[str, str | None] = {
     "non-production-mock-source-lab": "non-production-mock-source",
     "non-production-real-pyth-lab": "non-production-real-pyth-lab",
 }
+COLLATERAL_RELEASE_IDENTITY_FEATURE: dict[str, str | None] = {
+    "production-inert": None,
+    "observed-positive-collateral-and-claim-release": (
+        "observed-positive-collateral-release-manifest"
+    ),
+}
 
 HEX_32 = re.compile(r"[0-9a-f]{64}\Z")
 GIT_OBJECT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
@@ -103,6 +109,9 @@ SYSCALL_NAME = re.compile(r"(?:abort|sol_[a-z0-9_]+)\Z")
 LINKED_MEASUREMENT_CODE_INPUTS: tuple[tuple[str, str], ...] = (
     ("checker", "programs/clutch-sbf/scripts/check_capability_profile.py"),
     ("producer", "programs/clutch-sbf/scripts/measure_capability_profiles.py"),
+)
+OBSERVED_RELEASE_MANIFEST_PATH = Path(
+    "programs/clutch-sbf/program/src/observed_collateral_release_manifest_v2.rs"
 )
 
 
@@ -168,6 +177,44 @@ def load_json(path: Path) -> Any:
             return json.load(source, object_pairs_hook=reject_duplicate_keys)
     except (OSError, json.JSONDecodeError) as exc:
         raise ProfileError(f"{path}: cannot read canonical JSON: {exc}") from exc
+
+
+def require_populated_observed_release_manifest(repo: Path) -> None:
+    """Refuse the observed-positive selector until both release planes exist."""
+
+    path = repo / OBSERVED_RELEASE_MANIFEST_PATH
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ProfileError(f"{path}: cannot read observed release manifest: {exc}") from exc
+    releases = re.search(
+        r"OBSERVED_COLLATERAL_RELEASES_V2\s*:\s*\[AdapterReleaseV2;\s*([0-9]+)\s*\]",
+        source,
+    )
+    manifests = re.search(
+        r"OBSERVED_COLLATERAL_RELEASE_MANIFESTS_V2\s*:\s*"
+        r"\[CompiledCollateralReleaseManifestV2;\s*([0-9]+)\s*\]",
+        source,
+    )
+    claim = re.search(
+        r"OBSERVED_CLAIM_ISSUANCE_RELEASE_V1\s*:\s*"
+        r"Option<CompiledClaimIssuanceReleaseV1>\s*=\s*Some\s*\(",
+        source,
+    )
+    require(
+        releases is not None and manifests is not None,
+        "build_contract: observed-positive collateral manifest declarations are not canonical",
+    )
+    release_count = int(releases.group(1))
+    manifest_count = int(manifests.group(1))
+    require(
+        release_count > 0 and release_count == manifest_count,
+        "build_contract: observed-positive collateral release rows are absent or mismatched",
+    )
+    require(
+        claim is not None,
+        "build_contract: observed-positive claim release row is absent",
+    )
 
 
 def canonical_json_sha256(value: Any) -> str:
@@ -628,6 +675,7 @@ def validate_build_contract(value: Any) -> dict[str, Any]:
         {
             "cargo_profile_feature",
             "source_identity",
+            "collateral_release_identity",
             "expected_undefined_dynamic_symbols",
         },
         "build_contract",
@@ -645,6 +693,14 @@ def validate_build_contract(value: Any) -> dict[str, Any]:
     require(
         source_identity in SOURCE_IDENTITY_FEATURE,
         "build_contract.source_identity: unknown class",
+    )
+    collateral_release_identity = require_string(
+        value["collateral_release_identity"],
+        "build_contract.collateral_release_identity",
+    )
+    require(
+        collateral_release_identity in COLLATERAL_RELEASE_IDENTITY_FEATURE,
+        "build_contract.collateral_release_identity: unknown class",
     )
     symbols = value["expected_undefined_dynamic_symbols"]
     require(
@@ -672,6 +728,7 @@ def validate_build_contract(value: Any) -> dict[str, Any]:
     return {
         "cargo_profile_feature": feature,
         "source_identity": source_identity,
+        "collateral_release_identity": collateral_release_identity,
         "expected_undefined_dynamic_symbols": parsed_symbols,
     }
 
@@ -691,6 +748,11 @@ def cargo_features(build_contract: dict[str, Any]) -> list[str]:
     source_feature = SOURCE_IDENTITY_FEATURE[str(build_contract["source_identity"])]
     if source_feature is not None:
         features.append(source_feature)
+    collateral_feature = COLLATERAL_RELEASE_IDENTITY_FEATURE[
+        str(build_contract["collateral_release_identity"])
+    ]
+    if collateral_feature is not None:
+        features.append(collateral_feature)
     return features
 
 
@@ -1453,6 +1515,7 @@ def extract_linked_measurement(
             "name",
             "label",
             "source_identity",
+            "collateral_release_identity",
             "cargo_features",
             "capability_profile_identity_sha256",
             "identity_manifest_sha256",
@@ -1471,6 +1534,11 @@ def extract_linked_measurement(
     require(
         profile["source_identity"] == build_contract["source_identity"],
         "measurement evidence: source/lab identity mismatch",
+    )
+    require(
+        profile["collateral_release_identity"]
+        == build_contract["collateral_release_identity"],
+        "measurement evidence: collateral-release identity mismatch",
     )
     require(
         profile["cargo_features"] == cargo_features(build_contract),
@@ -1562,6 +1630,7 @@ def extract_linked_measurement(
     needs_default_equivalence = (
         build_contract["cargo_profile_feature"] == "profile-full"
         and build_contract["source_identity"] == "production-inert"
+        and build_contract["collateral_release_identity"] == "production-inert"
     )
     if needs_default_equivalence:
         require(
@@ -1683,6 +1752,11 @@ def validate_manifest(
         "profile.classification: unknown state",
     )
     build_contract = validate_build_contract(data["build_contract"])
+    if (
+        build_contract["collateral_release_identity"]
+        == "observed-positive-collateral-and-claim-release"
+    ):
+        require_populated_observed_release_manifest(repo)
     if classification == "deployable":
         require(
             build_contract["source_identity"]
@@ -1705,6 +1779,17 @@ def validate_manifest(
         )
     capabilities = validate_capabilities(data["capabilities"])
     central_registry = validate_registry(data["central_registry"], capabilities)
+    enabled_fractional = [
+        triple
+        for triple in central_registry["enabled_intent_triples"]
+        if triple[0] == 79
+    ]
+    if enabled_fractional:
+        require(
+            build_contract["collateral_release_identity"]
+            == "observed-positive-collateral-and-claim-release",
+            "profile: enabled Fractional family requires observed-positive collateral and claim releases",
+        )
     wire_surface = validate_wire_surface(
         data["wire_surface"],
         build_contract=build_contract,
@@ -1811,6 +1896,9 @@ def validate_manifest(
         "profile_identity_sha256": computed_identity,
         "classification": classification,
         "source_identity": build_contract["source_identity"],
+        "collateral_release_identity": build_contract[
+            "collateral_release_identity"
+        ],
         "cargo_features": cargo_features(build_contract),
         "capabilities": capabilities,
         "central_registry": central_registry,
