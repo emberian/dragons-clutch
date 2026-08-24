@@ -84,7 +84,8 @@ test("browser_refuses_caller_shaped_transaction_truth", () => {
   assert.match(app, /Browser-authored protocol material is forbidden/);
   assert.match(app, /canonical unsigned draft joined to a fresh finalized exact tuple/);
   assert.match(chain, /Fractional internal-credit material is not one exact live\/fresh\/reopen role shape/);
-  assert.match(chain, /Fractional lifecycle material does not have the exact 32\+2\*N Product-foundation geometry/);
+  assert.match(chain, /Fractional lifecycle material does not have the exact 35\+2\*N Product-foundation geometry/);
+  assert.match(chain, /foundation-treasury/);
   assert.match(chain, /Fractional lifecycle selection does not carry its exact scheduler lane, phase, and sequence/);
   assert.match(chain, /complete canonical Product-foundation dependency index/);
   assert.match(chain, /fractional-redemption\/79\/1\/1\/initialize/);

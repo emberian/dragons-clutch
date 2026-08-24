@@ -1154,14 +1154,15 @@
     let derivedFacts = null;
     let payerIndex = null;
     if (coordinate.localAction === "1" || coordinate.localAction === "10") {
-      const variableRoles = accountRoles.length - 32;
-      if (variableRoles < 4 || variableRoles > 32 || variableRoles % 2 !== 0) throw new Error("Fractional lifecycle material does not have the exact 32+2*N Product-foundation geometry.");
+      const variableRoles = accountRoles.length - 35;
+      if (variableRoles < 4 || variableRoles > 32 || variableRoles % 2 !== 0) throw new Error("Fractional lifecycle material does not have the exact 35+2*N Product-foundation geometry.");
       const outcomeCount = variableRoles / 2;
       const core = Array.from({ length: 15 }, (_, index) => ["foundation-core", false, index === 0 || index === 4 || index === 11 || index === 12]);
       const outcomes = Array.from({ length: 2 * outcomeCount }, () => ["foundation-outcome", false, false]);
+      const treasury = Array.from({ length: 3 }, () => ["foundation-treasury", false, false]);
       const auxiliary = Array.from({ length: 17 }, (_, index) => ["lifecycle-authority", false, coordinate.localAction === "10" && (index === 15 || index === 16)]);
-      expected = [...core, ...outcomes, ...auxiliary];
-      geometry = `${coordinate.localAction === "1" ? "initialize" : "close-empty-ledger"}-foundation-32+2*${outcomeCount}-${accountRoles.length}-roles`;
+      expected = [...core, ...outcomes, ...treasury, ...auxiliary];
+      geometry = `${coordinate.localAction === "1" ? "initialize" : "close-empty-ledger"}-foundation-35+2*${outcomeCount}-${accountRoles.length}-roles`;
       requirePlain(transactionDraft.exactEquations[0].unit, "Fractional lifecycle outcome-width unit");
       const equationOutcome = decimal(transactionDraft.exactEquations[0].unit.outcome, "Fractional lifecycle equation outcome", 15n);
       const equationWidth = decimal(transactionDraft.exactEquations[0].left, "Fractional lifecycle outcome width", 16n);
@@ -1172,7 +1173,7 @@
       derivedFacts = Object.freeze({
         kind: "fractional-lifecycle",
         outcomeCount: String(outcomeCount),
-        driver: coordinate.localAction === "1" ? "market-lifecycle-root-v2" : "fractional-ledger-v1",
+        driver: coordinate.localAction === "1" ? "market-lifecycle-root-v3" : "fractional-ledger-v1",
         sequence: stateSelection.cursor.item,
         authority: "complete-finalized-product-foundation-and-release-join"
       });
@@ -1403,7 +1404,7 @@
         if (!enabledVariants.has(variantKey) || seenVariants.has(variantKey) || enabled.has(key)) throw new Error("Dealer payload-variant verdict is absent from its exact enabled variant set or promotes the coarse coordinate.");
         seenVariants.add(variantKey);
       }
-      if (!Array.isArray(row.accountRoles) || row.accountRoles.length > 64 || !Array.isArray(row.signerRequirements)) throw new Error("action role/signer projection is invalid.");
+      if (!Array.isArray(row.accountRoles) || row.accountRoles.length > 128 || !Array.isArray(row.signerRequirements)) throw new Error("action role/signer projection is invalid.");
       const accountRoles = Object.freeze(row.accountRoles.map((role, roleIndex) => {
         requirePlain(role, `actions[${index}].accountRoles[${roleIndex}]`);
         if (decimal(role.index, `actions[${index}].accountRoles[${roleIndex}].index`).toString() !== String(roleIndex)) throw new Error("action account roles are not in exact semantic-owner order.");
