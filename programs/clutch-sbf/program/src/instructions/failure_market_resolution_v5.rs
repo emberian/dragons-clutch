@@ -62,10 +62,11 @@ use clutch_collateral_adapter_v2::{
     ResolutionV5, CLAIM_LEDGER_V3_BYTES, HOARD_V2_BYTES, RESOLUTION_V5_BYTES,
 };
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
-    plan_reset_failure_market_interval_cell_v2,
+    plan_reset_failure_market_interval_cell_v2, plan_resolve_failure_market_interval_cell_v2,
     project_failure_market_interval_terminal_history_facts_v2,
-    FailureMarketIntervalCellDispositionV2, FailureMarketIntervalCellPlanV2,
-    FailureMarketIntervalCellResetReceiptV2, FailureMarketIntervalCellResolutionPlanV2,
+    AuthenticatedFailureMarketIntervalCellResolutionV2, FailureMarketIntervalCellDispositionV2,
+    FailureMarketIntervalCellPlanV2, FailureMarketIntervalCellResetReceiptV2,
+    FailureMarketIntervalCellResolutionFactsV2, FailureMarketIntervalCellResolutionPlanV2,
     FailureMarketIntervalCellResolutionReceiptV2,
 };
 use clutch_failure_policy_runtime::market_interval_history_v2::{
@@ -79,8 +80,10 @@ use clutch_failure_policy_runtime::market_runtime_v1::{
     FailureMarketSessionResolutionFactsV1,
 };
 use clutch_product_series::{
-    CompiledProductSeriesBundleV5, ContentId, MarketFoundationSlotV2, MarketLifecyclePhaseV1,
-    MarketResolutionActivationV1, SeriesAttachmentPlanV4Id, SeriesFundingQuoteV4Id,
+    AuthenticatedQuantizedIntervalConsensusHistoryV1, CompiledProductSeriesBundleV5, ContentId,
+    MarketFoundationSlotV2, MarketLifecyclePhaseV1, MarketResolutionActivationV1,
+    QuantizedIntervalConsensusCertificateV1, QuantizedIntervalConsensusContextV1,
+    QuantizedIntervalConsensusRestorationV1, SeriesAttachmentPlanV4Id, SeriesFundingQuoteV4Id,
     SeriesFundingTermsV2Id, SeriesMarketLinkPhaseV1,
 };
 use clutch_retirement::{DeletableRentOwnerV1, Identity32V1};
@@ -89,6 +92,7 @@ use clutch_solana_layout::product_series::{
 };
 use clutch_source_plane_v3_runtime::{
     AuthenticatedReopenLineageV1, AuthenticatedSourceRouteV1, SourceWorkScheduleBindingV1,
+    SuccessfulEvaluationHandoffV1,
 };
 use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
@@ -361,6 +365,109 @@ impl AuthenticatedFailureMarketSessionV1 for FailureMarketRuntimeResolutionAutho
         }
         Ok(())
     }
+}
+
+/// Private restoration owner minted only from the hostile-authenticated
+/// complete `0xab/v2` prestate and its exact Source successful handoff.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FailureMarketIntervalResolutionHistoryAuthorityV5 {
+    restoration: QuantizedIntervalConsensusRestorationV1,
+    cell_before:
+        clutch_failure_policy_runtime::market_interval_cell_v2::FailureMarketIntervalCellStateIdV2,
+    market_instance_id: clutch_product_series::MarketInstanceV2Id,
+    generation: u64,
+    session_binding_id: clutch_source_plane_v3_runtime::ContentId,
+    source_handoff_id: clutch_source_plane_v3_runtime::ContentId,
+    completed_work_calls: u64,
+    exact_reward_lamports: u64,
+}
+
+impl AuthenticatedQuantizedIntervalConsensusHistoryV1
+    for FailureMarketIntervalResolutionHistoryAuthorityV5
+{
+    fn authenticate_complete_history(
+        &self,
+        expected: QuantizedIntervalConsensusRestorationV1,
+    ) -> clutch_product_series::Result<()> {
+        if expected != self.restoration {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+}
+
+impl AuthenticatedFailureMarketIntervalCellResolutionV2
+    for FailureMarketIntervalResolutionHistoryAuthorityV5
+{
+    fn authenticate_failure_market_interval_cell_resolution(
+        &self,
+        expected: FailureMarketIntervalCellResolutionFactsV2,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        if expected.cell_before != self.cell_before
+            || expected.cell_after == self.cell_before
+            || expected.cell_after.bytes() == [0; 32]
+            || expected.market_instance_id != self.market_instance_id
+            || expected.generation != self.generation
+            || expected.session_binding_id != self.session_binding_id
+            || expected.source_handoff_id != self.source_handoff_id
+            || expected.terminal_work_id != self.restoration.work_id
+            || expected.product_certificate_id != self.restoration.certificate_id
+            || expected.completed_work_calls != self.completed_work_calls
+            || expected.exact_reward_lamports != self.exact_reward_lamports
+        {
+            return Err(clutch_failure_policy_runtime::Error::BindingMismatch);
+        }
+        Ok(())
+    }
+}
+
+fn plan_authenticated_failure_market_resolution_v5(
+    admission: AuthenticatedFailureMarketRootV2,
+    interval: AuthenticatedFailureMarketIntervalAccountsV2,
+    source_success: SuccessfulEvaluationHandoffV1,
+    context: QuantizedIntervalConsensusContextV1<'_>,
+) -> Outcome<FailureMarketIntervalCellResolutionPlanV2> {
+    let cell = interval.cell();
+    let work = cell
+        .product_work()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let certificate = QuantizedIntervalConsensusCertificateV1::from_complete_work(work)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let restoration = QuantizedIntervalConsensusRestorationV1 {
+        work_id: work
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        certificate_id: certificate
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
+        market_instance_id: work.market_instance_id(),
+        source_interval_id: work.source_interval_id(),
+        interval_profile_id: work.interval_profile_id(),
+        checked_coordinates: work.checked_coordinates(),
+        transcript: work.transcript(),
+    };
+    let authority = FailureMarketIntervalResolutionHistoryAuthorityV5 {
+        restoration,
+        cell_before: interval.cell_state_id(),
+        market_instance_id: cell.market_instance_id(),
+        generation: cell.generation(),
+        session_binding_id: cell.session_binding_id(),
+        source_handoff_id: cell.source_handoff_id(),
+        completed_work_calls: cell.completed_work_calls(),
+        exact_reward_lamports: cell.exact_reward_lamports(),
+    };
+    plan_resolve_failure_market_interval_cell_v2(
+        &authority,
+        cell,
+        admission.state(),
+        interval.funding(),
+        interval.history(),
+        interval.quote(),
+        source_success,
+        context,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
 }
 
 /// Runtime write authority minted only after Product, collateral, and cell writes.
@@ -1155,11 +1262,12 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
     bundle: AuthenticatedProductArtifactV1<CompiledProductSeriesBundleV5>,
     slot10: AuthenticatedMarketFoundationPreallocationV2,
     liabilities: GeneralMarketLiabilityAuthorityV2,
-    resolution: FailureMarketIntervalCellResolutionPlanV2,
     source_route: AuthenticatedSourceRouteV1,
     source_schedule: SourceWorkScheduleBindingV1,
+    source_success: SuccessfulEvaluationHandoffV1,
     source_input: AuthenticatedSourceResolutionInputV3,
     source_lineage: AuthenticatedReopenLineageV1,
+    context: QuantizedIntervalConsensusContextV1<'_>,
     root_decode_before: &'root mut MarketLifecycleRootAccountV1,
     link_decode_before: &'link mut SeriesMarketLinkAccountV1,
     root_decode_after: &'post mut MarketLifecycleRootAccountV1,
@@ -1210,6 +1318,12 @@ pub(crate) fn resolve_failure_market_interval_and_source_v5<'a, 'root, 'link, 'p
         series_link_account,
         root_before,
         link_decode_before,
+    )?;
+    let resolution = plan_authenticated_failure_market_resolution_v5(
+        admission,
+        interval_before,
+        source_success,
+        context,
     )?;
     let (postwrite, interval_after, runtime_after) = resolve_failure_market_interval_v5(
         program_id,
