@@ -48,6 +48,10 @@ pub const DEALER_ROOT_TOMBSTONE_PDA_DOMAIN_V2: &[u8] = b"dc-dealer-root-v2";
 pub const DEALER_ACTION_RECEIPT_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-action-receipt-v1";
 /// Canonical selection attachment addressed by counted Epoch and final candidate.
 pub const DEALER_COVERED_SELECTION_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-covered-v1";
+/// Facility-lifetime Product Series-obligation binding.
+pub const DEALER_SERIES_OBLIGATION_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-series-obligation-v1";
+/// One-shot future Fractional-credit funding owner.
+pub const DEALER_FUTURE_CREDIT_FUNDING_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-future-credit-v1";
 /// Canonical PDA seed prefix for segregated fee budgets.
 pub const FEE_BUDGET_PDA_DOMAIN_V1: &[u8] = b"dc-dealer-fee-v1";
 /// Canonical PDA seed prefix for segregated liveness budgets.
@@ -106,6 +110,10 @@ pub enum DealerPdaFamilyV1 {
     ActionReceiptV1 = 23,
     /// Counted CoveredDealer selection attachment.
     CoveredDealerSelectionV1 = 24,
+    /// Counted facility-lifetime Product Series obligation.
+    SeriesObligationV1 = 25,
+    /// One-shot future Fractional-credit funding owner.
+    FutureCreditFundingV1 = 26,
     /// Singleton fee budget addressed by facility.
     FeeBudget = 5,
     /// Singleton liveness budget addressed by facility.
@@ -243,6 +251,16 @@ impl DealerPdaPreimageV1 {
         )
     }
 
+    /// Future-credit funding: `[b"dc-dealer-future-credit-v1", facility_id]`.
+    pub fn future_credit_funding_v1(facility_id: Id) -> Result<Self> {
+        facility_id.validate_live()?;
+        Self::two(
+            DealerPdaFamilyV1::FutureCreditFundingV1,
+            DEALER_FUTURE_CREDIT_FUNDING_PDA_DOMAIN_V1,
+            &facility_id.bytes(),
+        )
+    }
+
     /// Mutable state: `[b"dc-dealer-state-v1", facility_id]`.
     pub fn state(facility_id: Id) -> Result<Self> {
         facility_id.validate_live()?;
@@ -355,6 +373,16 @@ impl DealerPdaPreimageV1 {
             DEALER_COVERED_SELECTION_PDA_DOMAIN_V1,
             &epoch_account_id.bytes(),
             &candidate_id.bytes(),
+        )
+    }
+
+    /// Facility Product obligation: `[b"dc-dealer-series-obligation-v1", facility_id]`.
+    pub fn series_obligation_v1(facility_id: Id) -> Result<Self> {
+        facility_id.validate_live()?;
+        Self::two(
+            DealerPdaFamilyV1::SeriesObligationV1,
+            DEALER_SERIES_OBLIGATION_PDA_DOMAIN_V1,
+            &facility_id.bytes(),
         )
     }
 
@@ -488,6 +516,9 @@ impl DealerPdaPreimageV1 {
             DealerPdaFamilyV1::FundedDependenciesV2 => {
                 (DEALER_FUNDED_DEPENDENCIES_PDA_DOMAIN_V2, 2usize, 0usize)
             }
+            DealerPdaFamilyV1::FutureCreditFundingV1 => {
+                (DEALER_FUTURE_CREDIT_FUNDING_PDA_DOMAIN_V1, 2usize, 0usize)
+            }
             DealerPdaFamilyV1::State => (DEALER_STATE_PDA_DOMAIN_V1, 2usize, 0usize),
             DealerPdaFamilyV1::StateV2 => (DEALER_STATE_PDA_DOMAIN_V2, 2usize, 0usize),
             DealerPdaFamilyV1::LpPage => (LP_PAGE_PDA_DOMAIN_V1, 3usize, 4usize),
@@ -512,6 +543,12 @@ impl DealerPdaPreimageV1 {
             }
             DealerPdaFamilyV1::ActionReceiptV1 => {
                 (DEALER_ACTION_RECEIPT_PDA_DOMAIN_V1, 2usize, 0usize)
+            }
+            DealerPdaFamilyV1::CoveredDealerSelectionV1 => {
+                (DEALER_COVERED_SELECTION_PDA_DOMAIN_V1, 3usize, crate::ID_BYTES)
+            }
+            DealerPdaFamilyV1::SeriesObligationV1 => {
+                (DEALER_SERIES_OBLIGATION_PDA_DOMAIN_V1, 2usize, 0usize)
             }
             DealerPdaFamilyV1::RootTombstoneV2 => {
                 (DEALER_ROOT_TOMBSTONE_PDA_DOMAIN_V2, 2usize, 0usize)
@@ -579,6 +616,7 @@ const _: () = assert!(DEALER_FACILITY_REPLAY_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(DEALER_LIVENESS_SCHEDULE_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(DEALER_FUNDED_DEPENDENCIES_PDA_DOMAIN_V2.len() <= 32);
+const _: () = assert!(DEALER_FUTURE_CREDIT_FUNDING_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(DEALER_STATE_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(DEALER_STATE_PDA_DOMAIN_V2.len() <= 32);
 const _: () = assert!(LP_PAGE_PDA_DOMAIN_V1.len() <= 32);
@@ -592,5 +630,7 @@ const _: () = assert!(DEALER_TERMINAL_ALLOCATION_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(DEALER_CLAIM_WORK_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(DEALER_EXIT_TICKET_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(DEALER_ROOT_TOMBSTONE_PDA_DOMAIN_V2.len() <= 32);
+const _: () = assert!(DEALER_COVERED_SELECTION_PDA_DOMAIN_V1.len() <= 32);
+const _: () = assert!(DEALER_SERIES_OBLIGATION_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(FEE_BUDGET_PDA_DOMAIN_V1.len() <= 32);
 const _: () = assert!(LIVENESS_BUDGET_PDA_DOMAIN_V1.len() <= 32);

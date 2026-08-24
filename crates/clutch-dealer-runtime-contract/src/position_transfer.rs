@@ -12,6 +12,9 @@ use clutch_retirement::{
     DealerPositionProjectionV3, GeneralPositionProjectionV3, PositionAccountV3,
     PositionLifecycleV3, PositionV3Fields, PositionV3Sha256Backend,
 };
+use clutch_general_v2_contract::{
+    GeneralReplayTransitionKindV1, GeneralReplayTransitionPlanV1,
+};
 use sha2::{Digest, Sha256};
 
 use crate::codec::{Reader, Writer, HEADER_BYTES};
@@ -21,16 +24,20 @@ use crate::{
     Result, MAX_OUTCOMES,
 };
 
-/// Local magic for an exact single-transfer bundle.
-pub const DEALER_ASSET_TRANSFER_BUNDLE_MAGIC_V1: [u8; 8] = *b"DCDATB01";
+/// Local magic for an exact current-deployment-bound transfer bundle.
+pub const DEALER_ASSET_TRANSFER_BUNDLE_MAGIC_V2: [u8; 8] = *b"DCDATB02";
 /// Exact local transfer-bundle version.
-pub const DEALER_ASSET_TRANSFER_BUNDLE_VERSION_V1: u16 = 1;
+pub const DEALER_ASSET_TRANSFER_BUNDLE_VERSION_V2: u16 = 2;
 /// Exact bytes in a single-transfer bundle.
-pub const DEALER_ASSET_TRANSFER_BUNDLE_BYTES_V1: usize =
-    HEADER_BYTES + (10 * 32) + (3 * 8) + (MAX_OUTCOMES * 8) + 8;
+pub const DEALER_ASSET_TRANSFER_BUNDLE_BYTES_V2: usize =
+    HEADER_BYTES + (11 * 32) + (3 * 8) + (MAX_OUTCOMES * 8) + 8;
 /// Content domain for an exact transfer bundle.
-pub const DEALER_ASSET_TRANSFER_BUNDLE_CONTENT_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/dealer-asset-transfer-bundle/v1\0";
+pub const DEALER_ASSET_TRANSFER_BUNDLE_CONTENT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/dealer-asset-transfer-bundle/v2\0";
+/// Facility-Replay commitment to one internal transfer and the ordinary
+/// Position's canonical General Replay successor.
+pub const DEALER_GENERAL_POSITION_TRANSFER_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/dealer-general-position-transfer/v3\0";
 
 /// Local magic for an action's canonical empty transfer bundle.
 pub const DEALER_EMPTY_ASSET_TRANSFER_MAGIC_V1: [u8; 8] = *b"DCDAEMPTY";
@@ -42,9 +49,9 @@ pub const DEALER_EMPTY_ASSET_TRANSFER_BYTES_V1: usize = HEADER_BYTES + 8;
 pub const DEALER_EMPTY_ASSET_TRANSFER_CONTENT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/dealer-empty-asset-transfer/v1\0";
 
-const _: () = assert!(DEALER_ASSET_TRANSFER_BUNDLE_BYTES_V1 == 492);
+const _: () = assert!(DEALER_ASSET_TRANSFER_BUNDLE_BYTES_V2 == 524);
 const _: () = assert!(DEALER_EMPTY_ASSET_TRANSFER_BYTES_V1 == 20);
-const _: () = assert!(DEALER_ASSET_TRANSFER_BUNDLE_BYTES_V1 <= crate::MAX_SEMANTIC_BODY_BYTES);
+const _: () = assert!(DEALER_ASSET_TRANSFER_BUNDLE_BYTES_V2 <= crate::MAX_SEMANTIC_BODY_BYTES);
 
 /// Semantic owner of one endpoint in an internal Dealer transfer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,7 +78,7 @@ impl DealerAssetEndpointKindV1 {
 
 /// Exact Realm-selected collateral identity shared by both endpoints.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DealerPositionMarketJoinV1 {
+pub struct DealerPositionMarketJoinV2 {
     /// Full MarketInstanceV2 identity.
     pub market_instance_v2_id: Id,
     /// Immutable Realm identity.
@@ -80,17 +87,24 @@ pub struct DealerPositionMarketJoinV1 {
     pub collateral_policy_id: Id,
     /// Exact compiled collateral-adapter release identity.
     pub collateral_release_id: Id,
+    /// Same-instruction Realm/Profile/ProgramData/Hoard authority receipt.
+    ///
+    /// Dealer movements stay internal liability reclassifications. This
+    /// receipt authenticates the immutable deployment and unchanged Hoard and
+    /// ClaimLedger owners; it does not authorize a token CPI.
+    pub collateral_value_receipt_id: Id,
     /// Exact authenticated Market outcome width.
     pub outcome_count: u8,
 }
 
-impl DealerPositionMarketJoinV1 {
+impl DealerPositionMarketJoinV2 {
     fn validate(self) -> Result<()> {
         for identity in [
             self.market_instance_v2_id,
             self.realm_id,
             self.collateral_policy_id,
             self.collateral_release_id,
+            self.collateral_value_receipt_id,
         ] {
             identity.validate_live()?;
         }
@@ -136,7 +150,7 @@ impl DealerAssetTransferAmountsV1 {
 
 /// Canonical content-addressed bundle bound by one Dealer Replay intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DealerAssetTransferBundleV1 {
+pub struct DealerAssetTransferBundleV2 {
     /// Exact Dealer action whose ownership direction this transfer implements.
     pub action: DealerRuntimeActionV1,
     /// Source semantic-owner kind.
@@ -144,7 +158,7 @@ pub struct DealerAssetTransferBundleV1 {
     /// Destination semantic-owner kind.
     pub destination_kind: DealerAssetEndpointKindV1,
     /// Exact common Market/Realm collateral join.
-    pub market: DealerPositionMarketJoinV1,
+    pub market: DealerPositionMarketJoinV2,
     /// Exact source runtime account.
     pub source_account_id: Id,
     /// Exact destination runtime account.
@@ -161,7 +175,7 @@ pub struct DealerAssetTransferBundleV1 {
     pub amounts: DealerAssetTransferAmountsV1,
 }
 
-impl DealerAssetTransferBundleV1 {
+impl DealerAssetTransferBundleV2 {
     /// Validate identities, direction, outcome padding, and reservation rules.
     pub fn validate(&self) -> Result<()> {
         self.market.validate()?;
@@ -234,27 +248,28 @@ impl DealerAssetTransferBundleV1 {
 
     /// Canonical transfer-bundle identity stored in the Replay intent.
     pub fn bundle_id(&self) -> Result<Id> {
-        let id = self.content_id(DEALER_ASSET_TRANSFER_BUNDLE_CONTENT_DOMAIN_V1)?;
+        let id = self.content_id(DEALER_ASSET_TRANSFER_BUNDLE_CONTENT_DOMAIN_V2)?;
         id.validate_live()?;
         Ok(id)
     }
 }
 
-impl FixedCodec for DealerAssetTransferBundleV1 {
-    const ENCODED_LEN: usize = DEALER_ASSET_TRANSFER_BUNDLE_BYTES_V1;
+impl FixedCodec for DealerAssetTransferBundleV2 {
+    const ENCODED_LEN: usize = DEALER_ASSET_TRANSFER_BUNDLE_BYTES_V2;
 
     fn encode_into(&self, output: &mut [u8]) -> Result<()> {
         self.validate()?;
         let mut writer = Writer::new(output, Self::ENCODED_LEN)?;
         writer.header(
-            &DEALER_ASSET_TRANSFER_BUNDLE_MAGIC_V1,
-            DEALER_ASSET_TRANSFER_BUNDLE_VERSION_V1,
+            &DEALER_ASSET_TRANSFER_BUNDLE_MAGIC_V2,
+            DEALER_ASSET_TRANSFER_BUNDLE_VERSION_V2,
         );
         for identity in [
             self.market.market_instance_v2_id,
             self.market.realm_id,
             self.market.collateral_policy_id,
             self.market.collateral_release_id,
+            self.market.collateral_value_receipt_id,
             self.source_account_id,
             self.destination_account_id,
             self.source_pre_semantic_id,
@@ -281,13 +296,14 @@ impl FixedCodec for DealerAssetTransferBundleV1 {
     fn decode(input: &[u8]) -> Result<Self> {
         let mut reader = Reader::new(input, Self::ENCODED_LEN)?;
         reader.header(
-            &DEALER_ASSET_TRANSFER_BUNDLE_MAGIC_V1,
-            DEALER_ASSET_TRANSFER_BUNDLE_VERSION_V1,
+            &DEALER_ASSET_TRANSFER_BUNDLE_MAGIC_V2,
+            DEALER_ASSET_TRANSFER_BUNDLE_VERSION_V2,
         )?;
         let market_instance_v2_id = reader.id();
         let realm_id = reader.id();
         let collateral_policy_id = reader.id();
         let collateral_release_id = reader.id();
+        let collateral_value_receipt_id = reader.id();
         let source_account_id = reader.id();
         let destination_account_id = reader.id();
         let source_pre_semantic_id = reader.id();
@@ -313,11 +329,12 @@ impl FixedCodec for DealerAssetTransferBundleV1 {
             action,
             source_kind,
             destination_kind,
-            market: DealerPositionMarketJoinV1 {
+            market: DealerPositionMarketJoinV2 {
                 market_instance_v2_id,
                 realm_id,
                 collateral_policy_id,
                 collateral_release_id,
+                collateral_value_receipt_id,
                 outcome_count,
             },
             source_account_id,
@@ -412,7 +429,7 @@ pub enum DealerTransferPositionV3 {
 }
 
 impl DealerTransferPositionV3 {
-    fn validate(self, market: DealerPositionMarketJoinV1) -> Result<()> {
+    fn validate(self, market: DealerPositionMarketJoinV2) -> Result<()> {
         market.validate()?;
         self.account_id().validate_live()?;
         let position = self.position();
@@ -485,7 +502,7 @@ pub struct DealerPotCustodyTransitionV1 {
 }
 
 impl DealerPotCustodyTransitionV1 {
-    fn validate(self, market: DealerPositionMarketJoinV1) -> Result<()> {
+    fn validate(self, market: DealerPositionMarketJoinV2) -> Result<()> {
         for identity in [
             self.pot_account_id,
             self.pot_pre_semantic_id,
@@ -505,15 +522,136 @@ impl DealerPotCustodyTransitionV1 {
 
 /// Exact result prepared before atomic Position↔Position mutation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreparedDealerPositionPairTransferV1 {
-    bundle: DealerAssetTransferBundleV1,
+pub struct PreparedDealerPositionPairTransferV2 {
+    bundle: DealerAssetTransferBundleV2,
     source_post: PositionAccountV3,
     destination_post: PositionAccountV3,
 }
 
-impl PreparedDealerPositionPairTransferV1 {
+/// Exact pair transfer after the General endpoint's purpose-owned Replay has
+/// been structurally advanced over the base transfer bundle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedDealerGeneralPositionTransferV3 {
+    transfer: PreparedDealerPositionPairTransferV2,
+    general_replay_account_id: Id,
+    general_replay_pre_semantic_id: Id,
+    general_replay_post_semantic_id: Id,
+    general_replay_delta_id: Id,
+    commitment_id: Id,
+}
+
+impl PreparedDealerGeneralPositionTransferV3 {
+    /// Exact Position pair postimages and base economic transfer.
+    pub const fn transfer(self) -> PreparedDealerPositionPairTransferV2 {
+        self.transfer
+    }
+
+    /// Canonical ordinary-Position Replay account.
+    pub const fn general_replay_account_id(self) -> Id {
+        self.general_replay_account_id
+    }
+
+    /// Exact General Replay semantic preidentity.
+    pub const fn general_replay_pre_semantic_id(self) -> Id {
+        self.general_replay_pre_semantic_id
+    }
+
+    /// Exact General Replay semantic successor identity.
+    pub const fn general_replay_post_semantic_id(self) -> Id {
+        self.general_replay_post_semantic_id
+    }
+
+    /// General-owned delta identity binding action, Position, and evidence.
+    pub const fn general_replay_delta_id(self) -> Id {
+        self.general_replay_delta_id
+    }
+
+    /// Indivisible identity consumed by facility Replay.
+    pub const fn commitment_id(self) -> Id {
+        self.commitment_id
+    }
+}
+
+/// Bind the only General endpoint of a Dealer Position-pair transfer to its
+/// canonical purpose-owned Replay transition.
+pub fn bind_dealer_general_position_transfer_v3(
+    transfer: PreparedDealerPositionPairTransferV2,
+    replay: &GeneralReplayTransitionPlanV1,
+) -> Result<PreparedDealerGeneralPositionTransferV3> {
+    let bundle = transfer.bundle();
+    bundle.validate()?;
+    let expected_kind = match bundle.action {
+        DealerRuntimeActionV1::Initialize => GeneralReplayTransitionKindV1::DealerSponsorFunding,
+        DealerRuntimeActionV1::Contribute => GeneralReplayTransitionKindV1::DealerLpContribute,
+        DealerRuntimeActionV1::WithdrawFunding => GeneralReplayTransitionKindV1::DealerLpWithdraw,
+        DealerRuntimeActionV1::RefundCancelledSponsor => {
+            GeneralReplayTransitionKindV1::DealerSponsorRefund
+        }
+        DealerRuntimeActionV1::Claim => GeneralReplayTransitionKindV1::DealerLpClaim,
+        _ => return Err(Error::MismatchedBinding),
+    };
+    let (position_account_id, position_pre_semantic_id, position_post_semantic_id) =
+        match (bundle.source_kind, bundle.destination_kind) {
+            (DealerAssetEndpointKindV1::GeneralPosition, _) => (
+                bundle.source_account_id,
+                bundle.source_pre_semantic_id,
+                bundle.source_post_semantic_id,
+            ),
+            (_, DealerAssetEndpointKindV1::GeneralPosition) => (
+                bundle.destination_account_id,
+                bundle.destination_pre_semantic_id,
+                bundle.destination_post_semantic_id,
+            ),
+            _ => return Err(Error::MismatchedBinding),
+        };
+    let base_bundle_id = bundle.bundle_id()?;
+    let general_replay_account_id = Id::from_bytes(replay.replay_account().bytes());
+    let general_replay_pre_semantic_id =
+        Id::from_bytes(replay.replay_prestate_semantic_id().bytes());
+    let general_replay_post_semantic_id =
+        Id::from_bytes(replay.replay_poststate_semantic_id().bytes());
+    let general_replay_delta_id = Id::from_bytes(replay.delta_id().bytes());
+    for identity in [
+        general_replay_account_id,
+        general_replay_pre_semantic_id,
+        general_replay_post_semantic_id,
+        general_replay_delta_id,
+    ] {
+        identity.validate_live()?;
+    }
+    if replay.kind() != expected_kind
+        || replay.position_account().bytes() != position_account_id.bytes()
+        || replay.position_prestate_semantic_id().bytes() != position_pre_semantic_id.bytes()
+        || replay.position_poststate_semantic_id().bytes() != position_post_semantic_id.bytes()
+        || replay.transition_id().bytes() != base_bundle_id.bytes()
+        || replay.transition_evidence_id().is_zero()
+        || general_replay_pre_semantic_id == general_replay_post_semantic_id
+    {
+        return Err(Error::MismatchedBinding);
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(DEALER_GENERAL_POSITION_TRANSFER_DOMAIN_V3);
+    hasher.update(base_bundle_id.bytes());
+    hasher.update(general_replay_account_id.bytes());
+    hasher.update(general_replay_pre_semantic_id.bytes());
+    hasher.update(general_replay_post_semantic_id.bytes());
+    hasher.update(general_replay_delta_id.bytes());
+    hasher.update(replay.transition_evidence_id().bytes());
+    let commitment_id = Id::from_bytes(hasher.finalize().into());
+    commitment_id.validate_live()?;
+    Ok(PreparedDealerGeneralPositionTransferV3 {
+        transfer,
+        general_replay_account_id,
+        general_replay_pre_semantic_id,
+        general_replay_post_semantic_id,
+        general_replay_delta_id,
+        commitment_id,
+    })
+}
+
+impl PreparedDealerPositionPairTransferV2 {
     /// Canonical bundle whose identity enters Replay.
-    pub const fn bundle(self) -> DealerAssetTransferBundleV1 {
+    pub const fn bundle(self) -> DealerAssetTransferBundleV2 {
         self.bundle
     }
 
@@ -530,13 +668,13 @@ impl PreparedDealerPositionPairTransferV1 {
 
 /// Prepare sponsor initialization, LP contribution, pre-activation withdrawal,
 /// or sponsor refund.
-pub(crate) fn prepare_dealer_position_pair_transfer_v1(
+pub(crate) fn prepare_dealer_position_pair_transfer_v2(
     action: DealerRuntimeActionV1,
-    market: DealerPositionMarketJoinV1,
+    market: DealerPositionMarketJoinV2,
     source: DealerTransferPositionV3,
     destination: DealerTransferPositionV3,
     amounts: DealerAssetTransferAmountsV1,
-) -> Result<PreparedDealerPositionPairTransferV1> {
+) -> Result<PreparedDealerPositionPairTransferV2> {
     market.validate()?;
     source.validate(market)?;
     destination.validate(market)?;
@@ -567,7 +705,7 @@ pub(crate) fn prepare_dealer_position_pair_transfer_v1(
     };
     let source_post_id = position_semantic_id(source_post)?;
     let destination_post_id = position_semantic_id(destination_post)?;
-    let bundle = DealerAssetTransferBundleV1 {
+    let bundle = DealerAssetTransferBundleV2 {
         action,
         source_kind: source.kind(),
         destination_kind: destination.kind(),
@@ -581,7 +719,7 @@ pub(crate) fn prepare_dealer_position_pair_transfer_v1(
         amounts,
     };
     bundle.validate()?;
-    Ok(PreparedDealerPositionPairTransferV1 {
+    Ok(PreparedDealerPositionPairTransferV2 {
         bundle,
         source_post,
         destination_post,
@@ -593,16 +731,16 @@ pub(crate) fn prepare_dealer_position_pair_transfer_v1(
 /// `sponsor_capital_atoms` must be projected from the authoritative Dealer
 /// State initialization transition. Sponsor funding never transfers Eggs or
 /// reserved cash and never crosses the Realm Hoard token boundary.
-pub fn prepare_dealer_sponsor_funding_transfer_v1(
-    market: DealerPositionMarketJoinV1,
+pub fn prepare_dealer_sponsor_funding_transfer_v2(
+    market: DealerPositionMarketJoinV2,
     sponsor_owner: Id,
     sponsor_capital_atoms: u64,
     sponsor_position: DealerTransferPositionV3,
     facility_position: DealerTransferPositionV3,
-) -> Result<PreparedDealerPositionPairTransferV1> {
+) -> Result<PreparedDealerPositionPairTransferV2> {
     require_general_owner(sponsor_position, sponsor_owner)?;
     let amounts = sponsor_capital_amounts(sponsor_capital_atoms)?;
-    prepare_dealer_position_pair_transfer_v1(
+    prepare_dealer_position_pair_transfer_v2(
         DealerRuntimeActionV1::Initialize,
         market,
         sponsor_position,
@@ -617,15 +755,15 @@ pub fn prepare_dealer_sponsor_funding_transfer_v1(
 /// the exact share delta. The caller cannot supply an independent cash/Egg
 /// vector or silently round a capital unit.
 #[allow(clippy::too_many_arguments)]
-pub fn prepare_dealer_lp_share_transfer_v1(
+pub fn prepare_dealer_lp_share_transfer_v2(
     action: DealerRuntimeActionV1,
     policy: &crate::DealerPolicyV1,
-    market: DealerPositionMarketJoinV1,
+    market: DealerPositionMarketJoinV2,
     lp_owner: Id,
     share_delta: u64,
     lp_position: DealerTransferPositionV3,
     facility_position: DealerTransferPositionV3,
-) -> Result<PreparedDealerPositionPairTransferV1> {
+) -> Result<PreparedDealerPositionPairTransferV2> {
     policy.validate()?;
     require_general_owner(lp_position, lp_owner)?;
     if market.market_instance_v2_id != policy.market_instance_v2_id
@@ -635,14 +773,14 @@ pub fn prepare_dealer_lp_share_transfer_v1(
     }
     let amounts = lp_share_amounts(policy, share_delta)?;
     match action {
-        DealerRuntimeActionV1::Contribute => prepare_dealer_position_pair_transfer_v1(
+        DealerRuntimeActionV1::Contribute => prepare_dealer_position_pair_transfer_v2(
             action,
             market,
             lp_position,
             facility_position,
             amounts,
         ),
-        DealerRuntimeActionV1::WithdrawFunding => prepare_dealer_position_pair_transfer_v1(
+        DealerRuntimeActionV1::WithdrawFunding => prepare_dealer_position_pair_transfer_v2(
             action,
             market,
             facility_position,
@@ -658,16 +796,16 @@ pub fn prepare_dealer_lp_share_transfer_v1(
 /// The State transition supplies both the immutable refund owner and the
 /// original sponsor principal; donation, fee, rent, and liveness balances are
 /// not admitted to this internal cash movement.
-pub fn prepare_dealer_sponsor_refund_transfer_v1(
-    market: DealerPositionMarketJoinV1,
+pub fn prepare_dealer_sponsor_refund_transfer_v2(
+    market: DealerPositionMarketJoinV2,
     sponsor_refund_owner: Id,
     sponsor_capital_atoms: u64,
     facility_position: DealerTransferPositionV3,
     refund_position: DealerTransferPositionV3,
-) -> Result<PreparedDealerPositionPairTransferV1> {
+) -> Result<PreparedDealerPositionPairTransferV2> {
     require_general_owner(refund_position, sponsor_refund_owner)?;
     let amounts = sponsor_capital_amounts(sponsor_capital_atoms)?;
-    prepare_dealer_position_pair_transfer_v1(
+    prepare_dealer_position_pair_transfer_v2(
         DealerRuntimeActionV1::RefundCancelledSponsor,
         market,
         facility_position,
@@ -678,8 +816,8 @@ pub fn prepare_dealer_sponsor_refund_transfer_v1(
 
 /// Exact result prepared before atomic Position↔Pot mutation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreparedDealerPositionPotTransferV1 {
-    bundle: DealerAssetTransferBundleV1,
+pub struct PreparedDealerPositionPotTransferV2 {
+    bundle: DealerAssetTransferBundleV2,
     position_post: PositionAccountV3,
 }
 
@@ -710,7 +848,7 @@ impl DealerCoveredPositionProjectionV1 {
 /// the same leased postimage against the actual Pot.
 pub fn project_covered_dealer_position_v1(
     selection: &CoveredDealerSelectionV1,
-    market: DealerPositionMarketJoinV1,
+    market: DealerPositionMarketJoinV2,
     facility_position: DealerTransferPositionV3,
 ) -> Result<DealerCoveredPositionProjectionV1> {
     selection.validate()?;
@@ -750,9 +888,9 @@ pub fn project_covered_dealer_position_v1(
     Ok(DealerCoveredPositionProjectionV1 { leased, terminal })
 }
 
-impl PreparedDealerPositionPotTransferV1 {
+impl PreparedDealerPositionPotTransferV2 {
     /// Canonical bundle whose identity enters Replay.
-    pub const fn bundle(self) -> DealerAssetTransferBundleV1 {
+    pub const fn bundle(self) -> DealerAssetTransferBundleV2 {
         self.bundle
     }
 
@@ -763,13 +901,13 @@ impl PreparedDealerPositionPotTransferV1 {
 }
 
 /// Prepare Begin/Collect Position→Pot or Deliver/Finalize/Abort Pot→Position.
-pub fn prepare_dealer_position_pot_transfer_v1(
+pub fn prepare_dealer_position_pot_transfer_v2(
     action: DealerRuntimeActionV1,
-    market: DealerPositionMarketJoinV1,
+    market: DealerPositionMarketJoinV2,
     position: DealerTransferPositionV3,
     pot: DealerPotCustodyTransitionV1,
     amounts: DealerAssetTransferAmountsV1,
-) -> Result<PreparedDealerPositionPotTransferV1> {
+) -> Result<PreparedDealerPositionPotTransferV2> {
     market.validate()?;
     position.validate(market)?;
     pot.validate(market)?;
@@ -843,7 +981,7 @@ pub fn prepare_dealer_position_pot_transfer_v1(
             position_post_id,
         )
     };
-    let bundle = DealerAssetTransferBundleV1 {
+    let bundle = DealerAssetTransferBundleV2 {
         action,
         source_kind,
         destination_kind,
@@ -857,7 +995,7 @@ pub fn prepare_dealer_position_pot_transfer_v1(
         amounts,
     };
     bundle.validate()?;
-    Ok(PreparedDealerPositionPotTransferV1 {
+    Ok(PreparedDealerPositionPotTransferV2 {
         bundle,
         position_post,
     })
@@ -865,7 +1003,7 @@ pub fn prepare_dealer_position_pot_transfer_v1(
 
 /// Reloaded semantic identities after an internal asset movement.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DealerAssetTransferPostObservationV1 {
+pub struct DealerAssetTransferPostObservationV2 {
     /// Exact runtime source account.
     pub source_account_id: Id,
     /// Exact runtime destination account.
@@ -877,9 +1015,9 @@ pub struct DealerAssetTransferPostObservationV1 {
 }
 
 /// Accept an exact internal transfer only after both semantic owners reload.
-pub fn accept_dealer_asset_transfer_v1(
-    bundle: DealerAssetTransferBundleV1,
-    observed: DealerAssetTransferPostObservationV1,
+pub fn accept_dealer_asset_transfer_v2(
+    bundle: DealerAssetTransferBundleV2,
+    observed: DealerAssetTransferPostObservationV2,
 ) -> Result<Id> {
     bundle.validate()?;
     if observed.source_account_id != bundle.source_account_id
@@ -1137,5 +1275,59 @@ impl PositionV3Sha256Backend for DealerPositionSha256V1 {
         hasher.update(domain);
         hasher.update(body);
         hasher.finalize().into()
+    }
+}
+
+#[cfg(test)]
+mod current_collateral_receipt_adversarial_tests {
+    use super::*;
+
+    fn id(byte: u8) -> Id {
+        Id::from_bytes([byte; 32])
+    }
+
+    fn bundle(collateral_value_receipt_id: Id) -> DealerAssetTransferBundleV2 {
+        DealerAssetTransferBundleV2 {
+            action: DealerRuntimeActionV1::Initialize,
+            source_kind: DealerAssetEndpointKindV1::GeneralPosition,
+            destination_kind: DealerAssetEndpointKindV1::FacilityPosition,
+            market: DealerPositionMarketJoinV2 {
+                market_instance_v2_id: id(1),
+                realm_id: id(2),
+                collateral_policy_id: id(3),
+                collateral_release_id: id(4),
+                collateral_value_receipt_id,
+                outcome_count: 2,
+            },
+            source_account_id: id(6),
+            destination_account_id: id(7),
+            source_pre_semantic_id: id(8),
+            source_post_semantic_id: id(9),
+            destination_pre_semantic_id: id(10),
+            destination_post_semantic_id: id(11),
+            amounts: DealerAssetTransferAmountsV1 {
+                cash_atoms: 13,
+                source_reserved_cash_atoms: 0,
+                destination_reserved_cash_atoms: 0,
+                native_eggs: [0; MAX_OUTCOMES],
+            },
+        }
+    }
+
+    #[test]
+    fn zero_current_deployment_receipt_refuses() {
+        assert!(bundle(Id::ZERO).validate().is_err());
+    }
+
+    #[test]
+    fn current_deployment_receipt_changes_the_replay_bound_bundle() {
+        let first = bundle(id(5));
+        let second = bundle(id(12));
+        assert!(first.validate().is_ok());
+        assert!(second.validate().is_ok());
+        assert_ne!(first.bundle_id().unwrap(), second.bundle_id().unwrap());
+        let mut encoded = [0u8; DEALER_ASSET_TRANSFER_BUNDLE_BYTES_V2];
+        first.encode_into(&mut encoded).unwrap();
+        assert_eq!(DealerAssetTransferBundleV2::decode(&encoded).unwrap(), first);
     }
 }
