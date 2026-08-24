@@ -1,0 +1,16 @@
+[package]
+name = "dclutch-web-fixture-generator"
+version = "0.0.0"
+edition = "2024"
+publish = false
+rust-version = "1.89"
+
+[workspace]
+
+[dependencies]
+dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
+dclutch-market-contract = { path = "../../../../crates/dclutch-market-contract" }
+dclutch-realm-contract = { path = "../../../../crates/dclutch-realm-contract" }
+dclutch-record-contract = { path = "../../../../crates/dclutch-record-contract" }
+dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
+solana-program = "=3.0.0"

@@ -1,0 +1,14 @@
+{
+  "format": "dclutch-web/rust-fixture-provenance/v1",
+  "repositoryCommitAtGeneration": "c1eb7d53925addce5b46f8126358096605917cf7",
+  "generator": "fixtures/rust/src/main.rs",
+  "command": "cargo run --quiet --locked --manifest-path apps/dclutch-web/fixtures/rust/Cargo.toml",
+  "note": "Every byte vector and PDA in canonical-accounts.json is emitted by canonical Rust encoders and Solana's pinned PDA implementation. The commit is provenance, not an assertion that unrelated repository files remained unchanged.",
+  "sources": [
+    { "path": "crates/dclutch-core-contract/src/lib.rs", "sha256": "6c719678953fecee567b736b7079347db4cc485eec15e6ee314fc894c1e62fff" },
+    { "path": "crates/dclutch-market-contract/src/market.rs", "sha256": "88b5ff1b24a2e31ffb00ebefeb82406824abc4575861e61970d29038b9f597e3" },
+    { "path": "crates/dclutch-realm-contract/src/lib.rs", "sha256": "48523d48f3989eb48a41a51c614ff5ea1a2cccfd4ae8f86990fe543faf3b6f86" },
+    { "path": "crates/dclutch-rent-contract/src/lib.rs", "sha256": "1cf8cdc70bdacb373e81e0b0c8eb031b56410e810ab54426c4ac4ad15d6c755e" },
+    { "path": "crates/dclutch-record-contract/src/lib.rs", "sha256": "4bdc0a36e5b5d4abfa00d0ee66e7b61bdfabf85c8eb08508f553de27f03d58d4" }
+  ]
+}
