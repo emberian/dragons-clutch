@@ -95,6 +95,8 @@ use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 use clutch_retirement::{DeletableRentOwnerV1, Identity32V1};
 
+pub(crate) mod retirement_v5;
+
 const SERIES_REGISTRY_AUTHENTICATION_DOMAIN_V3: &[u8] =
     b"dragons-clutch/series-registry-account-authentication/v3\0";
 const SERIES_REGISTRY_CAPABILITY_REFS_DOMAIN_V3: &[u8] =
