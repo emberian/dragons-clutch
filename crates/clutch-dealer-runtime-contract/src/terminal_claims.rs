@@ -576,7 +576,10 @@ pub(crate) fn begin_terminal_resolution_v1(
                 .checked_add(1)
                 .ok_or(Error::ArithmeticOverflow)?
         || after.lifecycle() != PositionLifecycleV3::Open
-        || Id::from_bytes(after.replay_account().bytes()) == state.facility_replay_account_id
+        // Fractional owns the sole Position successor and increments its
+        // generation exactly once. Resolve advances the same purpose-owned
+        // Replay to that generation; it never rotates to a second Replay.
+        || Id::from_bytes(after.replay_account().bytes()) != state.facility_replay_account_id
         || resolve.action != DealerRuntimeActionV1::Resolve
         || resolve.owner != state_account_id
         || resolve.lifecycle_id != state.facility_id

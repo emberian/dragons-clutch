@@ -459,7 +459,8 @@ pub struct DealerTransitionIntentV1 {
     /// Position generation expected after the transition.
     ///
     /// It is equal to the pre-generation for ordinary steps and exactly one
-    /// greater for a generation-consuming Lapse, Finalize, Abort, or terminal step.
+    /// greater for a generation-consuming Lapse, Finalize, Abort, Resolve, or
+    /// terminal step.
     pub position_generation_after: u64,
     /// Ordinal consumed from Replay.
     pub expected_ordinal: u64,
@@ -530,6 +531,7 @@ impl DealerTransitionIntentV1 {
             DealerRuntimeActionV1::LapseEpoch
                 | DealerRuntimeActionV1::FinalizeSettlement
                 | DealerRuntimeActionV1::AbortBeforeCollection
+                | DealerRuntimeActionV1::Resolve
         );
         if consumes_generation
             != (self.position_generation_after != self.position_generation_before)
@@ -791,5 +793,44 @@ pub(crate) fn decode_action(value: u8) -> Result<DealerRuntimeActionV1> {
         20 => Ok(DealerRuntimeActionV1::Claim),
         21 => Ok(DealerRuntimeActionV1::Retire),
         _ => Err(Error::InvalidParameter),
+    }
+}
+
+#[cfg(test)]
+mod generation_consumption_tests {
+    use super::*;
+
+    fn id(byte: u8) -> Id {
+        Id::from_bytes([byte; 32])
+    }
+
+    fn resolve_intent(before: u64, after: u64) -> DealerTransitionIntentV1 {
+        DealerTransitionIntentV1 {
+            replay_account_id: id(1),
+            replay_pre_id: id(2),
+            state_pre_content_id: id(3),
+            state_post_content_id: id(4),
+            position_pre_semantic_id: id(5),
+            position_post_semantic_id: id(6),
+            liveness_receipt_semantic_id: id(7),
+            fee_evidence_id: Id::ZERO,
+            asset_transfer_bundle_id: id(8),
+            position_generation_before: before,
+            position_generation_after: after,
+            expected_ordinal: 9,
+            action: DealerRuntimeActionV1::Resolve,
+            liveness_mode: DealerTransitionLivenessModeV1::ExternalReceipt,
+        }
+    }
+
+    #[test]
+    fn resolve_requires_exactly_one_position_generation_advance() {
+        assert!(resolve_intent(4, 5).validate().is_ok());
+        assert_eq!(resolve_intent(4, 4).validate(), Err(Error::MismatchedBinding));
+        assert_eq!(resolve_intent(4, 6).validate(), Err(Error::MismatchedBinding));
+        assert_eq!(
+            resolve_intent(u64::MAX, u64::MAX).validate(),
+            Err(Error::MismatchedBinding)
+        );
     }
 }
