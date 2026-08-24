@@ -1564,12 +1564,19 @@ name = "dclutch-pyth-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-contract",
- "dclutch-core-contract",
  "dclutch-kernel",
 ]
 
 [[package]]
 name = "dclutch-realm-contract"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-record-contract"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-rent-contract"
 version = "0.1.0"
 
 [[package]]
@@ -1584,6 +1591,9 @@ dependencies = [
  "dclutch-product-contract",
  "dclutch-pyth-contract",
  "dclutch-realm-contract",
+ "dclutch-record-contract",
+ "dclutch-rent-contract",
+ "dclutch-terminal-contract",
  "dclutch-token-svm",
  "solana-account 4.3.2",
  "solana-program",
@@ -1592,6 +1602,14 @@ dependencies = [
  "solana-sdk-ids",
  "solana-transaction 4.1.6",
  "tokio",
+]
+
+[[package]]
+name = "dclutch-terminal-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-market-contract",
 ]
 
 [[package]]

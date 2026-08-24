@@ -16,8 +16,11 @@ dclutch-kernel = { path = "../dclutch-kernel" }
 dclutch-market-contract = { path = "../dclutch-market-contract" }
 dclutch-pyth-contract = { path = "../dclutch-pyth-contract" }
 dclutch-realm-contract = { path = "../dclutch-realm-contract" }
+dclutch-record-contract = { path = "../dclutch-record-contract" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
 dclutch-product-contract = { path = "../dclutch-product-contract" }
+dclutch-rent-contract = { path = "../dclutch-rent-contract" }
+dclutch-terminal-contract = { path = "../dclutch-terminal-contract" }
 solana-program = "=3.0.0"
 solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
 solana-account = "=4.3.2"

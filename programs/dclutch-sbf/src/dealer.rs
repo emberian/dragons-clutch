@@ -768,7 +768,7 @@ fn create_lp_position<const N: usize, const B: usize>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn change_liquidity<const N: usize, const B: usize, R: Copy>(
+fn change_liquidity<const N: usize, const B: usize, R>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     lp_id: [u8; 32],
@@ -776,7 +776,7 @@ fn change_liquidity<const N: usize, const B: usize, R: Copy>(
     is_add: bool,
 ) -> Result<(), ProgramError>
 where
-    R: LiquidityRequest<N, B>,
+    R: Copy + LiquidityRequest<N, B>,
 {
     let actor = account(accounts, 0)?;
     let realm_account = account(accounts, 1)?;
