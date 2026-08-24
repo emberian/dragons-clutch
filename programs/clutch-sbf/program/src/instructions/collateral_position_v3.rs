@@ -144,7 +144,7 @@ pub(crate) struct GeneralMarketValueAuthorityV2 {
 /// Private SBF proof that canonical liability state and Hoard custody were
 /// founded under the exact current Profile-selected token deployment and
 /// exact persisted rent balances.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedMarketLiabilityFoundingPostwriteV3 {
     accepted: AcceptedMarketLiabilityFoundingV3,
     deployment: crate::collateral_release::AuthenticatedCollateralReleaseDeploymentV2,
@@ -154,25 +154,31 @@ pub(crate) struct AuthenticatedMarketLiabilityFoundingPostwriteV3 {
 }
 
 impl AuthenticatedMarketLiabilityFoundingPostwriteV3 {
+    /// Exact hostile accepted pure receipt retained by the current Product
+    /// foundation cursor.
+    pub(crate) const fn accepted(&self) -> AcceptedMarketLiabilityFoundingV3 {
+        self.accepted
+    }
+
     /// Exact current collateral token deployment observed in this instruction.
     pub(crate) const fn deployment(
-        self,
+        &self,
     ) -> crate::collateral_release::AuthenticatedCollateralReleaseDeploymentV2 {
         self.deployment
     }
 
     /// Exact admitted HoardV2 lamport balance.
-    pub(crate) const fn hoard_lamports(self) -> u64 {
+    pub(crate) const fn hoard_lamports(&self) -> u64 {
         self.hoard_lamports
     }
 
     /// Exact admitted ClaimLedgerV3 lamport balance.
-    pub(crate) const fn claim_ledger_lamports(self) -> u64 {
+    pub(crate) const fn claim_ledger_lamports(&self) -> u64 {
         self.claim_ledger_lamports
     }
 
     /// Product-consumable exact runtime postwrite receipt.
-    pub(crate) const fn receipt_id(self) -> CollateralId {
+    pub(crate) const fn receipt_id(&self) -> CollateralId {
         self.receipt_id
     }
 }
