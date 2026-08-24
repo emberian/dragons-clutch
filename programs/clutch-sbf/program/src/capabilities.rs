@@ -216,14 +216,14 @@ pub const fn extension_intent_action_allocated(
 }
 
 /// Number of successor actions in the complete unified closure.
-pub const SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTION_COUNT: usize = 117;
+pub const SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTION_COUNT: usize = 126;
 
 const fn complete_successor_actions(
 ) -> [(u8, u8, u8); SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTION_COUNT] {
     let mut rows = [(0, 0, 0); SUCCESSOR_CHAIN_ATTACHED_DEV_COMPLETE_ACTION_COUNT];
     let mut cursor = 0usize;
     let mut action = 1u8;
-    while action <= 42 {
+    while action <= 51 {
         if action != 35 {
             rows[cursor] = (74, 1, action);
             cursor += 1;
@@ -293,6 +293,7 @@ const _: () = assert!(
 /// consumes the private whole-lifecycle funding-custody retirement transition.
 #[cfg(feature = "profile-successor-chain-attached-dev")]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
+    (74, 1, 39),
     (75, 1, 1),
     (75, 1, 3),
     (75, 1, 5),
@@ -589,7 +590,14 @@ mod tests {
                             ..=clutch_solana_layout::registry::DealerPolicyAction::LAST_TAG)
                             .contains(&local_action)
                             || matches!(local_action, 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12));
-                    let general_enabled = false;
+                    let general_enabled = SUCCESSOR_CHAIN_ATTACHED_DEV
+                        && family_tag
+                            == clutch_solana_layout::registry::GENERAL_V2_FAMILY_TAG
+                        && family_version
+                            == clutch_solana_layout::registry::GENERAL_V2_FAMILY_VERSION
+                        && local_action
+                            == clutch_solana_layout::registry::GeneralV2Action::InitializeSettlementRoot
+                                .tag();
                     let source_runtime_enabled = cfg!(feature = "profile-full")
                         && !SUCCESSOR_CHAIN_ATTACHED_DEV
                         && !DEALER_POLICY_CATALOG_LAB

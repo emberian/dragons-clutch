@@ -132,7 +132,10 @@ pub mod general_v2_merge_payment_v5;
 pub mod general_v2_unfilled_release_v1;
 #[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
 pub mod general_v2_fee_v5;
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub(crate) mod general_v2_fee_creation_v6;
 /// Hostile reader for the durable b9/v2+b9/v3 terminal evidence. This owner
 /// is reusable by current retirement composition even when action50 routing
@@ -168,13 +171,19 @@ pub mod general_v2_receipt_v5;
         feature = "profile-full",
         not(feature = "profile-non-production-dealer-policy-catalog-lab")
     ),
-    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
 ))]
 pub mod general_v2_settlement_root;
-/// Staged action-39 producer; the route remains capability-disabled until
-/// action-24 materialization is reachable under the same profile.
-#[cfg(feature = "profile-non-production-general-v2-empty-book-identity-lab")]
+/// Current action-39 producer and exact V5 Product/Revenue account contract.
+#[cfg(any(
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
+))]
 pub mod general_v2_settlement_producer_v5;
+/// Sole checked current General V5 action router.
+#[cfg(feature = "profile-successor-chain-attached-dev")]
+pub(crate) mod general_v2_current;
 #[cfg(feature = "profile-successor-chain-attached-dev")]
 pub(crate) mod general_market_foundation_v4;
 /// Reusable hostile current General V5/Product V3/Revenue V2 read authority.
@@ -188,7 +197,8 @@ pub(crate) mod general_v2_exact_index_retirement_v1;
         feature = "profile-full",
         not(feature = "profile-non-production-dealer-policy-catalog-lab")
     ),
-    feature = "profile-non-production-general-v2-empty-book-identity-lab"
+    feature = "profile-non-production-general-v2-empty-book-identity-lab",
+    feature = "profile-successor-chain-attached-dev"
 ))]
 pub mod general_v2_settlement_traversal_v5;
 pub mod genesis;
