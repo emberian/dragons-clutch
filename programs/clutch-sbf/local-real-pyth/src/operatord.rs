@@ -254,7 +254,7 @@ fn direct_candidate_dependency_v2(
         || address == binding.candidate_account
 }
 
-/// Derive the current action-5..12 frontier from exact b1/v3+b2+b3 state.
+/// Derive the current action-5..13 frontier from exact b1/v3+b2+b3 state.
 /// A missed-freeze action 10 is the only partition with no existing b2. The
 /// index never treats its hint as execution authority; the action-specific
 /// material constructor hostile-reopens the same bytes and Clock again.
@@ -424,6 +424,15 @@ fn current_direct_candidate_hint_v2(
                 && selection.phase() == DirectSelectionPhaseV1::Selected =>
         {
             ("lapse-selected-direct-market", DirectMarketAction::LapseSelected.tag())
+        }
+        DirectRootPhaseV1::Terminal
+            if state.replay().phase()
+                == clutch_direct_market_runtime::DirectReplayPhaseV1::Active
+                && state.replay().candidate_liveness_completed_calls() == 7
+                && !state.replay().candidate_liveness_pending()
+                && state.replay().family_terminal_receipt_id() == [0; 32] =>
+        {
+            ("retire-direct-terminal", DirectMarketAction::RetireTerminal.tag())
         }
         _ => return Ok(None),
     };

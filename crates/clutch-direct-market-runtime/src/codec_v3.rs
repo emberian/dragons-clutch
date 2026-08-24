@@ -114,6 +114,18 @@ impl AuthenticatedDirectRootTransitionV3 {
     pub const fn product_global_liveness_account(&self) -> [u8; 32] {
         self.product_global_liveness_account
     }
+    /// Product-owned immutable `0xba/v2` binding retained by b1/v3.
+    pub const fn product_global_liveness_binding_id(&self) -> [u8; 32] {
+        self.terminal_product_ids[4]
+    }
+    /// Exact Product activation receipt for the live `0xba/v2` allocation.
+    pub const fn product_global_liveness_activation_id(&self) -> [u8; 32] {
+        self.terminal_product_ids[5]
+    }
+    /// Exact Product-owned Direct work quote retained by b1/v3.
+    pub const fn direct_work_quote_id(&self) -> [u8; 32] {
+        self.terminal_product_ids[6]
+    }
     /// Complete current General V4/Revenue authority identity retained by b1/v3.
     pub const fn current_general_authority_id(&self) -> [u8; 32] {
         self.projected_root.binding.founder_series_plan_id

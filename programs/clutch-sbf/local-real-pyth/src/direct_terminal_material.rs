@@ -1,4 +1,4 @@
-//! Chain-derived unsigned material for current Direct actions 9 through 12.
+//! Chain-derived unsigned material for current Direct actions 9 through 13.
 //!
 //! Every account suffix is derived from one finalized b1/v3 root, its b3
 //! replay, and either its authenticated b2 Selection or the unique fresh b2
@@ -40,8 +40,9 @@ use clutch_direct_market_runtime::lifecycle_v2::{
 use clutch_direct_market_runtime::reservation_v1::DirectReservationV1;
 use clutch_direct_market_runtime::selection_v1::DirectSelectionV1;
 use clutch_direct_market_runtime::{
-    DirectActionReplayV1, DirectHashBackendV1, DirectRootPhaseV1,
-    DirectTerminalReasonV1,
+    build_direct_retirement_transfer_v1, DirectActionReplayV1, DirectHashBackendV1,
+    DirectReplayPhaseV1, DirectRetirementSourceV1,
+    DirectRetirementTransferV1, DirectRootPhaseV1, DirectTerminalReasonV1,
 };
 use clutch_general_v2_contract::{
     project_general_position_replay_prestate_v1, Id32, MarketBindingV4,
@@ -54,7 +55,9 @@ use clutch_liveness::{
     RUNTIME_LIVENESS_ACCOUNT_BYTES_V1, RUNTIME_LIVENESS_POLICY_BYTES_V1,
 };
 use clutch_product_series::{
-    ContentId, FixedCodec, MarketGenesisProfileV2, MarketInstancePreimageV2,
+    ContentId, DirectGlobalLivenessPhaseV2, FixedCodec, MarketFamilyV1,
+    MarketGenesisProfileV2, MarketInstancePreimageV2, MarketLifecyclePhaseV3,
+    SeriesMarketLinkPhaseV3,
 };
 use clutch_retirement::{
     project_general_position_v3, AdapterPositionMarketBindingV3,
@@ -64,6 +67,10 @@ use clutch_retirement::{
 use clutch_solana_layout::artifact::ArtifactKind;
 use clutch_solana_layout::collateral::{verify_collateral_binding, TOKEN_2022_PROGRAM};
 use clutch_solana_layout::direct_market_v1::DirectReservationAccountV1;
+use clutch_solana_layout::product_series::{
+    MarketLifecycleRootAccountV3, ProductDirectGlobalLivenessAccountV2,
+    SeriesMarketLinkAccountV3, PRODUCT_DIRECT_GLOBAL_LIVENESS_PDA_PREFIX_V2,
+};
 use clutch_solana_layout::registry::{
     DirectMarketAction, DIRECT_ACTION_REPLAY_ACCOUNT_BYTES,
     DIRECT_RESERVATION_ACCOUNT_BYTES, DIRECT_SELECTION_ACCOUNT_BYTES,
@@ -234,6 +241,65 @@ pub struct DirectTerminalActionMaterialV2 {
     economics: DirectTerminalEconomicsV2,
 }
 
+/// Finalized current observations for action 13. Every optional prefix is
+/// cardinality-checked against hostile-decoded b1/v3 and b2 state.
+#[derive(Clone, Copy, Debug)]
+pub struct DirectFamilyRetirementSnapshotV3<'a> {
+    pub product_root_v3: &'a ObservedRpcAccount,
+    pub series_link_v3: &'a ObservedRpcAccount,
+    pub root: &'a ObservedRpcAccount,
+    pub action_replay: &'a ObservedRpcAccount,
+    pub selection: &'a ObservedRpcAccount,
+    pub resolution_v5: &'a ObservedRpcAccount,
+    pub clock: &'a ObservedRpcAccount,
+    pub neutral_sink: &'a ObservedRpcAccount,
+    pub reservations: [Option<&'a ObservedRpcAccount>; 2],
+    pub rent_refund_owners: [Option<&'a ObservedRpcAccount>; 5],
+    pub product_direct_global_liveness_v2: &'a ObservedRpcAccount,
+    pub liveness: DirectTerminalLivenessSnapshotV2<'a>,
+}
+
+/// Exact source/refund/surplus facts committed by the action-13 draft.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectFamilyRetirementEconomicsV3 {
+    source_count: u8,
+    refund_count: u8,
+    refundable_principal_lamports: u64,
+    surplus_lamports: u64,
+    retirement_transfer_id: [u8; 32],
+    product_family_terminal_sequence: u32,
+}
+
+impl DirectFamilyRetirementEconomicsV3 {
+    pub const fn source_count(self) -> u8 { self.source_count }
+    pub const fn refund_count(self) -> u8 { self.refund_count }
+    pub const fn refundable_principal_lamports(self) -> u64 {
+        self.refundable_principal_lamports
+    }
+    pub const fn surplus_lamports(self) -> u64 { self.surplus_lamports }
+    pub const fn retirement_transfer_id(self) -> [u8; 32] {
+        self.retirement_transfer_id
+    }
+    pub const fn product_family_terminal_sequence(self) -> u32 {
+        self.product_family_terminal_sequence
+    }
+}
+
+/// Release-bound action-13 material. Product RootV3 and LinkV3 are derived
+/// from the Direct authority and never supplied as browser-selectable facts.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectFamilyRetirementActionMaterialV3 {
+    canonical: CanonicalActionMaterialV1,
+    economics: DirectFamilyRetirementEconomicsV3,
+}
+
+impl DirectFamilyRetirementActionMaterialV3 {
+    pub const fn canonical(&self) -> &CanonicalActionMaterialV1 { &self.canonical }
+    pub const fn economics(&self) -> DirectFamilyRetirementEconomicsV3 {
+        self.economics
+    }
+}
+
 impl DirectTerminalActionMaterialV2 {
     pub const fn canonical(&self) -> &CanonicalActionMaterialV1 { &self.canonical }
     pub const fn economics(&self) -> DirectTerminalEconomicsV2 { self.economics }
@@ -258,6 +324,185 @@ pub fn construct_next_direct_terminal_material_v2(
             release, manifest, builder, operator_selection, freshness, value,
         ),
     }
+}
+
+/// Construct action 13 only from the exact current Product/Direct archive.
+/// The resulting account order matches the SBF composer: Product RootV3,
+/// LinkV3, b1, b3, b2, ResolutionV5, Clock, neutral sink, the b2-ordered b4
+/// prefix, sorted/coalesced rent owners, `0xba/v2`, and the Candidate suffix.
+#[allow(clippy::too_many_arguments)]
+pub fn construct_direct_family_retirement_material_v3(
+    release: &IndexedProgramRelease,
+    manifest: &ExplicitOperatorReleaseManifest,
+    builder: &ProtocolTransactionBuilder,
+    operator_selection: &KeeperActionSelection,
+    freshness: ActionFreshnessBoundaryV1,
+    snapshot: DirectFamilyRetirementSnapshotV3<'_>,
+) -> Result<DirectFamilyRetirementActionMaterialV3, CanonicalActionMaterialErrorV1> {
+    authenticate_family_retirement_observations(release, freshness, snapshot)?;
+    let decoded = decode_direct_state(
+        release,
+        snapshot.root,
+        snapshot.action_replay,
+        snapshot.selection,
+    )?;
+    let root = decoded.state.root();
+    let replay = decoded.state.replay();
+    let sequence = replay.next_action_sequence();
+    let _observed_slot = decode_clock(snapshot.clock)?;
+    if root.phase() != DirectRootPhaseV1::Terminal
+        || root.terminal_reason().is_none()
+        || replay.phase() != DirectReplayPhaseV1::Active
+        || replay.candidate_liveness_completed_calls() != 7
+        || replay.candidate_liveness_pending()
+        || replay.family_terminal_receipt_id() != [0; 32]
+        || decoded.selection.reservation_count() != root.live_reservations()
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+    }
+    let family_terminal_sequence = authenticate_product_family_preterminal_v3(
+        release,
+        root,
+        snapshot.product_root_v3,
+        snapshot.series_link_v3,
+    )?;
+    authenticate_resolution_v5(release, root, snapshot.resolution_v5)?;
+    let reservations = authenticate_terminal_reservation_archives(
+        release,
+        root,
+        &decoded.selection,
+        snapshot.root,
+        snapshot.reservations,
+    )?;
+    let retirement = derive_family_retirement_transfer(
+        root,
+        replay,
+        &decoded.selection,
+        snapshot,
+        reservations,
+    )?;
+    authenticate_family_refund_owners(snapshot.rent_refund_owners, retirement)?;
+    let candidate_balance = authenticate_liveness(
+        release,
+        root,
+        replay,
+        snapshot.liveness,
+    )?;
+    authenticate_product_direct_manifest_preterminal_v2(
+        release,
+        root,
+        family_terminal_sequence,
+        snapshot.product_direct_global_liveness_v2,
+        snapshot.liveness.candidate,
+    )?;
+    authenticate_terminal_cursor(
+        release,
+        operator_selection,
+        freshness,
+        root,
+        sequence,
+        DirectMarketAction::RetireTerminal,
+    )?;
+    authenticate_family_retirement_aliases(snapshot, retirement)?;
+
+    let mut accounts = Vec::with_capacity(20);
+    let mut roles = Vec::with_capacity(20);
+    for (account, label, writable) in [
+        (snapshot.product_root_v3, "product-root-v3", true),
+        (snapshot.series_link_v3, "series-market-link-v3", false),
+        (snapshot.root, "direct-root", true),
+        (snapshot.action_replay, "direct-replay", true),
+        (snapshot.selection, "direct-selection", true),
+        (snapshot.resolution_v5, "direct-resolution-v5", false),
+        (snapshot.clock, "clock-sysvar", false),
+        (snapshot.neutral_sink, "neutral-sink", true),
+    ] {
+        push(&mut accounts, &mut roles, account, label, writable, false);
+    }
+    for reservation in snapshot
+        .reservations
+        .into_iter()
+        .take(usize::from(root.live_reservations()))
+    {
+        push(
+            &mut accounts,
+            &mut roles,
+            reservation.ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?,
+            "direct-reservation",
+            true,
+            false,
+        );
+    }
+    for refund in snapshot
+        .rent_refund_owners
+        .into_iter()
+        .take(usize::from(retirement.refund_count))
+    {
+        push(
+            &mut accounts,
+            &mut roles,
+            refund.ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?,
+            "rent-refund-owner",
+            true,
+            false,
+        );
+    }
+    push(
+        &mut accounts,
+        &mut roles,
+        snapshot.product_direct_global_liveness_v2,
+        "product-direct-global-liveness-v2",
+        true,
+        false,
+    );
+    push_liveness(&mut accounts, &mut roles, snapshot.liveness);
+
+    let source_lamports = retirement_source_lamports(retirement)?;
+    let refundable_principal_lamports = retirement_refund_lamports(retirement)?;
+    let equations = vec![
+        ExactEquation {
+            name: "Direct archive lamport conservation".into(),
+            unit: IntegerUnit::Lamports,
+            left: u128::from(source_lamports),
+            right: u128::from(refundable_principal_lamports)
+                + u128::from(retirement.surplus_lamports),
+        },
+        ExactEquation {
+            name: "Candidate compartment exact prestate balance".into(),
+            unit: IntegerUnit::Lamports,
+            left: u128::from(snapshot.liveness.candidate.lamports),
+            right: u128::from(candidate_balance),
+        },
+    ];
+    let canonical = finish_chain_derived_direct_material_v2(
+        release,
+        manifest,
+        builder,
+        operator_selection,
+        freshness,
+        DirectMarketAction::RetireTerminal,
+        sequence,
+        accounts,
+        vec![snapshot.liveness.keeper.address],
+        roles,
+        equations,
+        DirectMarketClientPayloadV1::empty(DirectMarketAction::RetireTerminal)
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?,
+    )?;
+    let retirement_transfer_id = retirement
+        .semantic_id(&OperatorSha256V1)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    Ok(DirectFamilyRetirementActionMaterialV3 {
+        canonical,
+        economics: DirectFamilyRetirementEconomicsV3 {
+            source_count: retirement.source_count,
+            refund_count: retirement.refund_count,
+            refundable_principal_lamports,
+            surplus_lamports: retirement.surplus_lamports,
+            retirement_transfer_id,
+            product_family_terminal_sequence: family_terminal_sequence,
+        },
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1936,6 +2181,402 @@ impl ProductContentIdentityV2 for clutch_product_series::PriceMeasurePolicyV1 {
         self.id().map(|value| value.content_id().bytes())
             .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)
     }
+}
+
+fn authenticate_family_retirement_observations(
+    release: &IndexedProgramRelease,
+    freshness: ActionFreshnessBoundaryV1,
+    snapshot: DirectFamilyRetirementSnapshotV3<'_>,
+) -> Result<(), CanonicalActionMaterialErrorV1> {
+    let mut accounts = vec![
+        snapshot.product_root_v3,
+        snapshot.series_link_v3,
+        snapshot.root,
+        snapshot.action_replay,
+        snapshot.selection,
+        snapshot.resolution_v5,
+        snapshot.clock,
+        snapshot.neutral_sink,
+        snapshot.product_direct_global_liveness_v2,
+        snapshot.liveness.policy,
+        snapshot.liveness.candidate,
+        snapshot.liveness.keeper,
+        snapshot.liveness.immutable_payer,
+    ];
+    accounts.extend(snapshot.reservations.into_iter().flatten());
+    accounts.extend(snapshot.rent_refund_owners.into_iter().flatten());
+    authenticate_snapshot_set(release, freshness, &accounts)
+}
+
+fn authenticate_product_family_preterminal_v3(
+    release: &IndexedProgramRelease,
+    direct: &AuthenticatedDirectRootTransitionV3,
+    product_root_account: &ObservedRpcAccount,
+    series_link_account: &ObservedRpcAccount,
+) -> Result<u32, CanonicalActionMaterialErrorV1> {
+    require_program_account(release, product_root_account)?;
+    require_program_account(release, series_link_account)?;
+    let product = MarketLifecycleRootAccountV3::decode(&product_root_account.data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let link = SeriesMarketLinkAccountV3::decode(&series_link_account.data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let market = direct.market_instance_id();
+    let generation = direct.generation();
+    let product_pda = pda(
+        release.program_id,
+        &[b"dc:market-lifecycle-root:v1", &market, &generation.to_le_bytes()],
+    );
+    let series_plan = direct.series_plan_v5_id();
+    let ordinal = direct.series_ordinal();
+    let link_pda = pda(
+        release.program_id,
+        &[b"dc:series-market-link:v1", &series_plan, &ordinal.to_le_bytes()],
+    );
+    let product_binding = product.state.binding_ref();
+    let link_binding = link.state.binding_ref();
+    let family = product.state.product_families().family(MarketFamilyV1::Direct);
+    let counts = family.counts();
+    let link_accounted = link
+        .state
+        .rent_principal_lamports()
+        .checked_add(link.state.current_donation_lamports())
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    if product_root_account.address != product_pda.0
+        || product.stored_bump != product_pda.1
+        || product_root_account.address.to_bytes() != direct.product_root_account()
+        || product_root_account.lamports < product.rent_principal_lamports
+        || product_binding.market_instance_id.bytes() != market
+        || product_binding.generation != generation
+        || product_binding
+            .id()
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?
+            .bytes()
+            != direct.product_market_binding_v3_id()
+        || !matches!(
+            product.state.phase(),
+            MarketLifecyclePhaseV3::Active | MarketLifecyclePhaseV3::Retiring
+        )
+        || series_link_account.address != link_pda.0
+        || link.stored_bump != link_pda.1
+        || series_link_account.address.to_bytes() != direct.series_link_account()
+        || series_link_account.lamports < link_accounted
+        || link_binding.series_plan_id.bytes() != series_plan
+        || link_binding.ordinal != ordinal
+        || link_binding.market_instance_id.bytes() != market
+        || link_binding.generation != generation
+        || link_binding.market_root_account_id.bytes() != product_root_account.address.to_bytes()
+        || link_binding.market_binding_id.bytes() != direct.product_market_binding_v3_id()
+        || link_binding
+            .id()
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?
+            .bytes()
+            != direct.series_link_binding_v3_id()
+        || !matches!(
+            link.state.phase(),
+            SeriesMarketLinkPhaseV3::Active | SeriesMarketLinkPhaseV3::Retiring
+        )
+        || counts.live == 0
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+    }
+    Ok(counts.terminal)
+}
+
+fn authenticate_resolution_v5(
+    release: &IndexedProgramRelease,
+    root: &AuthenticatedDirectRootTransitionV3,
+    account: &ObservedRpcAccount,
+) -> Result<(), CanonicalActionMaterialErrorV1> {
+    use clutch_collateral_adapter_v2::{Id as CollateralId, ResolutionStateV5, ResolutionV5};
+    require_program_account(release, account)?;
+    let resolution = ResolutionV5::decode(&account.data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let expected = pda(
+        release.program_id,
+        &[b"dc:resolution:v5", &root.market_instance_id()],
+    );
+    let minimum = resolution
+        .rent
+        .refundable_principal()
+        .checked_add(resolution.rent.donation_floor())
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let account_id = CollateralId::from_bytes(account.address.to_bytes());
+    resolution
+        .semantic_id(&OperatorSha256V1)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    resolution
+        .data_id(account_id)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    if account.address != expected.0
+        || resolution.stored_bump != expected.1
+        || account.address.to_bytes() != root.resolution_account()
+        || account.lamports < minimum
+        || resolution.state != ResolutionStateV5::Finalized
+        || resolution.facts.market_instance_id.bytes() != root.market_instance_id()
+        || resolution.facts.generation != root.generation()
+        || resolution.facts.outcome_count != root.outcome_count()
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+    }
+    Ok(())
+}
+
+fn authenticate_terminal_reservation_archives(
+    release: &IndexedProgramRelease,
+    root: &AuthenticatedDirectRootTransitionV3,
+    selection: &DirectSelectionV1,
+    root_account: &ObservedRpcAccount,
+    supplied: [Option<&ObservedRpcAccount>; 2],
+) -> Result<[Option<DirectReservationV1>; 2], CanonicalActionMaterialErrorV1> {
+    let count = usize::from(root.live_reservations());
+    let mut output = [None; 2];
+    for index in 0..2usize {
+        match (index < count, supplied[index]) {
+            (true, Some(account)) => {
+                require_program_account(release, account)?;
+                let bytes: &[u8; DIRECT_RESERVATION_ACCOUNT_BYTES] = account
+                    .data
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+                let frame = DirectReservationAccountV1::decode(bytes)
+                    .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+                let reservation = decode_direct_reservation_body_for_transition_v3(
+                    frame.semantic_body(),
+                    root,
+                )
+                .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+                let expected = pda(
+                    release.program_id,
+                    &[
+                        DIRECT_RESERVATION_SEED_V1,
+                        root_account.address.as_ref(),
+                        &reservation.order_id(),
+                    ],
+                );
+                let bounded = u8::try_from(index)
+                    .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+                if account.address != expected.0
+                    || frame.bump() != expected.1
+                    || reservation.account() != account.address.to_bytes()
+                    || reservation.account()
+                        != selection
+                            .reservation_account(bounded)
+                            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?
+                    || root
+                        .child_reservation_semantic_id(reservation, &OperatorSha256V1)
+                        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?
+                        != selection
+                            .reservation_semantic_id(bounded)
+                            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?
+                    || reservation.terminal_receipt_id() != selection.terminal_receipt_id()
+                {
+                    return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+                }
+                require_rent(reservation.rent(), account.lamports)?;
+                output[index] = Some(reservation);
+            }
+            (false, None) => {}
+            _ => return Err(CanonicalActionMaterialErrorV1::InvalidPlan),
+        }
+    }
+    Ok(output)
+}
+
+fn derive_family_retirement_transfer(
+    root: &AuthenticatedDirectRootTransitionV3,
+    replay: DirectActionReplayV1,
+    selection: &DirectSelectionV1,
+    snapshot: DirectFamilyRetirementSnapshotV3<'_>,
+    reservations: [Option<DirectReservationV1>; 2],
+) -> Result<DirectRetirementTransferV1, CanonicalActionMaterialErrorV1> {
+    let mut sources = [None; 5];
+    sources[0] = Some(DirectRetirementSourceV1 {
+        account: snapshot.root.address.to_bytes(),
+        rent: root.root_rent(),
+        observed_lamports: snapshot.root.lamports,
+    });
+    sources[1] = Some(DirectRetirementSourceV1 {
+        account: snapshot.action_replay.address.to_bytes(),
+        rent: replay.rent(),
+        observed_lamports: snapshot.action_replay.lamports,
+    });
+    sources[2] = Some(DirectRetirementSourceV1 {
+        account: snapshot.selection.address.to_bytes(),
+        rent: selection.rent(),
+        observed_lamports: snapshot.selection.lamports,
+    });
+    for index in 0..usize::from(root.live_reservations()) {
+        let reservation = reservations[index]
+            .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
+        let account = snapshot.reservations[index]
+            .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
+        sources[3 + index] = Some(DirectRetirementSourceV1 {
+            account: account.address.to_bytes(),
+            rent: reservation.rent(),
+            observed_lamports: account.lamports,
+        });
+    }
+    build_direct_retirement_transfer_v1(sources, snapshot.neutral_sink.address.to_bytes())
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)
+}
+
+fn authenticate_family_refund_owners(
+    supplied: [Option<&ObservedRpcAccount>; 5],
+    retirement: DirectRetirementTransferV1,
+) -> Result<(), CanonicalActionMaterialErrorV1> {
+    for index in 0..5usize {
+        match (index < usize::from(retirement.refund_count), supplied[index]) {
+            (true, Some(account)) => {
+                let refund = retirement.refunds[index]
+                    .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
+                if account.executable || account.address.to_bytes() != refund.recipient {
+                    return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+                }
+            }
+            (false, None) => {}
+            _ => return Err(CanonicalActionMaterialErrorV1::InvalidPlan),
+        }
+    }
+    Ok(())
+}
+
+fn authenticate_product_direct_manifest_preterminal_v2(
+    release: &IndexedProgramRelease,
+    root: &AuthenticatedDirectRootTransitionV3,
+    family_terminal_sequence: u32,
+    account: &ObservedRpcAccount,
+    candidate: &ObservedRpcAccount,
+) -> Result<(), CanonicalActionMaterialErrorV1> {
+    require_program_account(release, account)?;
+    let manifest = ProductDirectGlobalLivenessAccountV2::decode(&account.data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let state = &manifest.state;
+    let market = root.market_instance_id();
+    let generation = root.generation();
+    let expected = pda(
+        release.program_id,
+        &[
+            PRODUCT_DIRECT_GLOBAL_LIVENESS_PDA_PREFIX_V2,
+            &market,
+            &generation.to_le_bytes(),
+        ],
+    );
+    let minimum = manifest
+        .rent_principal_lamports
+        .checked_add(state.manifest_initial_donation_lamports())
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let candidate_id = state
+        .compartment_account(RuntimeCompartmentKindV1::Candidate.index())
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    if account.address != expected.0
+        || manifest.stored_bump != expected.1
+        || account.address.to_bytes() != root.product_global_liveness_account()
+        || account.lamports < minimum
+        || state.phase() != DirectGlobalLivenessPhaseV2::Active
+        || state.account_id().bytes() != account.address.to_bytes()
+        || state.market_instance_id().bytes() != market
+        || state.generation() != generation
+        || state.lifecycle_root_account().bytes() != root.product_root_account()
+        || state.activated_market_binding_id().bytes() != root.product_market_binding_v3_id()
+        || state.global_bundle_binding_id().bytes()
+            != root.product_global_liveness_binding_id()
+        || state
+            .work_quote_id()
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?
+            .bytes()
+            != root.direct_work_quote_id()
+        || state.live_allocations() != 1
+        || state.retired_allocations() != family_terminal_sequence
+        || candidate_id.bytes() != candidate.address.to_bytes()
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+    }
+    Ok(())
+}
+
+fn authenticate_family_retirement_aliases(
+    snapshot: DirectFamilyRetirementSnapshotV3<'_>,
+    retirement: DirectRetirementTransferV1,
+) -> Result<(), CanonicalActionMaterialErrorV1> {
+    let mut fixed = vec![
+        snapshot.product_root_v3.address,
+        snapshot.series_link_v3.address,
+        snapshot.root.address,
+        snapshot.action_replay.address,
+        snapshot.selection.address,
+        snapshot.resolution_v5.address,
+        snapshot.clock.address,
+        snapshot.neutral_sink.address,
+        snapshot.product_direct_global_liveness_v2.address,
+        snapshot.liveness.policy.address,
+        snapshot.liveness.candidate.address,
+    ];
+    fixed.extend(
+        snapshot
+            .reservations
+            .into_iter()
+            .take(usize::from(retirement.source_count.saturating_sub(3)))
+            .flatten()
+            .map(|account| account.address),
+    );
+    require_pairwise_distinct(&fixed)?;
+    for refund in snapshot
+        .rent_refund_owners
+        .into_iter()
+        .take(usize::from(retirement.refund_count))
+        .flatten()
+    {
+        if fixed.contains(&refund.address) {
+            return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+        }
+    }
+    for account in [snapshot.liveness.keeper, snapshot.liveness.immutable_payer] {
+        if fixed.contains(&account.address) {
+            return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+        }
+    }
+    Ok(())
+}
+
+fn retirement_source_lamports(
+    retirement: DirectRetirementTransferV1,
+) -> Result<u64, CanonicalActionMaterialErrorV1> {
+    let mut total = 0u64;
+    for source in retirement
+        .sources
+        .into_iter()
+        .take(usize::from(retirement.source_count))
+    {
+        total = total
+            .checked_add(
+                source
+                    .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?
+                    .observed_lamports,
+            )
+            .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    }
+    Ok(total)
+}
+
+fn retirement_refund_lamports(
+    retirement: DirectRetirementTransferV1,
+) -> Result<u64, CanonicalActionMaterialErrorV1> {
+    let mut total = 0u64;
+    for refund in retirement
+        .refunds
+        .into_iter()
+        .take(usize::from(retirement.refund_count))
+    {
+        total = total
+            .checked_add(
+                refund
+                    .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?
+                    .lamports,
+            )
+            .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    }
+    Ok(total)
 }
 
 fn pda(program: Address, seeds: &[&[u8]]) -> (Address, u8) {

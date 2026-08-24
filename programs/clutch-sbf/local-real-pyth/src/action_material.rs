@@ -598,7 +598,7 @@ pub fn construct_direct_action_material_v1(
             | DirectMarketAction::LapseSelected
             | DirectMarketAction::RetireTerminal
     ) {
-        // These actions consume current b1/v2+b2+b3 and exact descendants.
+        // These actions consume current b1/v3+b2+b3 and exact descendants.
         // Their deadlines, terminal reason, RevenuePolicyV2 suffix, refund
         // owners, liveness payer, and postimages are derived only by the
         // action-specific hostile-chain constructors. This older caller-shaped
@@ -761,8 +761,8 @@ pub(crate) fn finish_chain_derived_direct_material_v2(
     }
     let action_name = direct_selection_action(action);
     let root = account_roles
-        .first()
-        .filter(|role| role.label == "direct-root")
+        .iter()
+        .find(|role| role.label == "direct-root")
         .map(|role| role.address)
         .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
     if selection.release_key != release.key()
@@ -949,9 +949,9 @@ fn validate_direct_account_roles_v1(
         }
         DirectMarketAction::RetireTerminal => {
             let mut index = require_direct_roles_v1(accounts, 0, &[
-                Role::ProductRoot, Role::FounderSeriesLink, Role::CompilerBundle,
-                Role::DirectRoot, Role::DirectReplay, Role::Selection,
-                Role::DirectResolution, Role::ClockSysvar, Role::NeutralSink,
+                Role::ProductRoot, Role::FounderSeriesLink, Role::DirectRoot,
+                Role::DirectReplay, Role::Selection, Role::DirectResolution,
+                Role::ClockSysvar, Role::NeutralSink,
             ])?;
             index = consume_direct_roles_v1(
                 accounts,
@@ -1476,10 +1476,10 @@ pub(crate) const fn source_role_label_v2(
 pub(crate) const fn direct_role_label_v1(role: DirectAccountRoleV1) -> &'static str {
     use DirectAccountRoleV1 as Role;
     match role {
-        Role::ProductRoot => "product-root",
+        Role::ProductRoot => "product-root-v3",
         Role::ProductDirectGlobalLiveness => "product-direct-global-liveness-v2",
-        Role::FounderSeriesLink => "founder-series-link",
-        Role::CompilerBundle => "compiler-bundle",
+        Role::FounderSeriesLink => "series-market-link-v3",
+        Role::CompilerBundle => "compiler-bundle-v7",
         Role::DirectRoot => "direct-root",
         Role::DirectReplay => "direct-replay",
         Role::FreshReservation => "fresh-direct-reservation",
@@ -1495,7 +1495,7 @@ pub(crate) const fn direct_role_label_v1(role: DirectAccountRoleV1) -> &'static 
         Role::CollateralProfile => "collateral-profile",
         Role::CollateralPolicy => "collateral-policy",
         Role::TokenProgram => "token-2022-program",
-        Role::GeneralMarketBinding => "historical-general-market-binding-v3",
+        Role::GeneralMarketBinding => "general-market-binding-v4",
         Role::GeneralMarketRuntime => "general-market-runtime-v3",
         Role::MarketInstance => "market-instance-v2",
         Role::MarketGenesis => "market-genesis-v2",
@@ -1692,7 +1692,6 @@ mod tests {
         let roles = [
             Role::ProductRoot,
             Role::FounderSeriesLink,
-            Role::CompilerBundle,
             Role::DirectRoot,
             Role::DirectReplay,
             Role::Selection,
@@ -1714,7 +1713,7 @@ mod tests {
         )
         .is_ok());
         let mut missing_global = roles.to_vec();
-        missing_global.remove(12);
+        missing_global.remove(11);
         assert_eq!(
             DirectActionAccountsV1::new(
                 DirectMarketAction::RetireTerminal,
@@ -1723,7 +1722,7 @@ mod tests {
             Err(CanonicalActionMaterialErrorV1::InvalidPlan),
         );
         let mut substituted = roles;
-        substituted[12] = Role::ProductRoot;
+        substituted[11] = Role::ProductRoot;
         assert_eq!(
             DirectActionAccountsV1::new(
                 DirectMarketAction::RetireTerminal,
