@@ -156,7 +156,7 @@ struct AuthenticatedProductSeriesLinkRetirementV4 {
 /// Terminal ReplayV2 postwrite; the physical FundingV4 disposer must consume
 /// it by value before any receipt can escape the instruction.
 #[derive(Debug)]
-struct AuthenticatedProductSeriesLifecycleTerminalV4 {
+pub(crate) struct AuthenticatedProductSeriesLifecycleTerminalV4 {
     id: ContentId,
     terminal_authority_id: ContentId,
     link_retirement: AuthenticatedProductSeriesLinkRetirementV4,
@@ -175,6 +175,64 @@ struct AuthenticatedProductSeriesLifecycleTerminalV4 {
     replay_state_after: ContentId,
     replay_terminal_projection: SeriesLifecycleTerminalProjectionV2,
     replay: AuthenticatedSeriesLifecycleReplayV2,
+}
+
+impl AuthenticatedProductSeriesLifecycleTerminalV4 {
+    /// Exact pure terminal amounts authorized by the Product replay seal.
+    pub(crate) const fn funding_terminal_projection(
+        &self,
+    ) -> SeriesFundingTerminalProjectionV4 {
+        self.funding_terminal_projection
+    }
+
+    /// Require the physical layer to be operating on the same freshly reopened
+    /// current Registry/Funding graph and terminal projection. No ID-only
+    /// physical constructor can satisfy this boundary.
+    pub(crate) fn authenticate_physical_preflight_v4(
+        &self,
+        registry: &AuthenticatedRegistryCapabilityV4,
+        funding: &AuthenticatedSeriesFundingAccountV4,
+        projection: SeriesFundingTerminalProjectionV4,
+    ) -> Outcome<ContentId> {
+        let projection_id = projection
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        require(
+            self.id != ContentId::ZERO
+                && self.terminal_authority_id == projection.terminal_receipt_id
+                && self.funding_terminal_projection == projection
+                && self.funding_terminal_projection_id == projection_id
+                && &self.funding == funding
+                && registry.activation_consumed()
+                && registry.series_registry_account()
+                    == self.link_retirement.registry_account
+                && registry.series_registry_authentication_id()
+                    == self.registry_authentication_id
+                && registry.registry_release_id()
+                    == self.link_retirement.registry_release_id
+                && registry.capability_profile_id()
+                    == self.link_retirement.capability_profile_id
+                && funding.account() == self.link_retirement.funding_account
+                && funding.data_id() == self.link_retirement.funding_data_id
+                && funding.authentication_id()
+                    == self.link_retirement.funding_authentication_id
+                && funding.state().id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                    == self.link_retirement.funding_state_id
+                && self.replay.state().phase() == SeriesLifecycleReplayPhaseV2::Terminal
+                && self.replay.account() == self.replay_account
+                && self.replay.authentication_id() == self.replay_authentication_after
+                && self.replay.data_id() == self.replay_data_after
+                && self.replay.state().id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                    .content_id()
+                    == self.replay_state_after
+                && self.replay_terminal_projection.id().content_id()
+                    == self.replay.state().terminal_projection_id(),
+            ClutchError::MismatchedState,
+        )?;
+        Ok(self.id)
+    }
 }
 
 /// Close-only pure authority bound to the exact hostile Closed FundingV4
