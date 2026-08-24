@@ -9454,12 +9454,12 @@ fn derive_dealer_terminal_v1(
     })
 }
 
-/// Construct one Source material artifact through the sole typed Source graph.
-/// The caller supplies decoded semantic-owner values and physical identities;
-/// it cannot supply instruction bytes, account metas, signer vectors, or the
-/// final transaction.
+/// Internal semantic projection shared by the raw finalized-chain Source
+/// constructors. This is deliberately not a public operator boundary: its
+/// decoded bodies and physical identities have not themselves crossed the
+/// hostile RPC/account authentication boundary.
 #[allow(clippy::too_many_arguments)]
-pub fn construct_source_action_material_v1(
+pub(crate) fn construct_source_action_material_v1(
     release: &IndexedProgramRelease,
     manifest: &ExplicitOperatorReleaseManifest,
     builder: &ProtocolTransactionBuilder,
