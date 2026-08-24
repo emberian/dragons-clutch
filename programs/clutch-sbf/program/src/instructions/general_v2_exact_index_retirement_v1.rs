@@ -17,7 +17,7 @@ use clutch_general_v2_runtime::{
     close_counted_exact_root_v1, stream_retire_counted_exact_feed_v1,
     stream_retire_counted_exact_index_root_v1, AuthenticateCountedExactIndexReadInputV1,
     CloseCountedExactRootInputV1, CloseExactIndexPlaneInputV1,
-    ExactIndexCloseAccountInputV1, ExactIndexCloseCreditV1, ExactIndexReadAccountInputV1,
+    ExactIndexCloseAccountInputV1, ExactIndexReadAccountInputV1,
     RetireCountedExactFeedInputV1,
 };
 use clutch_solana_layout::registry::GeneralV2Action;
@@ -30,9 +30,16 @@ use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
 use crate::seeds;
 
+use super::general_v2_fee_terminal_pair_v1::{
+    authenticate_fee_terminal_pair_v1, AuthenticatedFeeTerminalPairV1,
+    FeeTerminalPairExpectationV1,
+};
+
 pub const RETIRE_INDEX_CHILDREN_ACCOUNT_COUNT_V1: usize = 7;
 pub const RETIRE_RETAINED_FEED_ACCOUNT_COUNT_V1: usize = 6;
-pub const CLOSE_INDEXED_ROOT_ACCOUNT_COUNT_V1: usize = 6;
+/// Exact non-Product account prefix for action 47. The final Product terminal
+/// authority appends its own frozen account frame.
+pub const CLOSE_INDEXED_ROOT_NON_PRODUCT_PREFIX_ACCOUNTS_V1: usize = 10;
 
 const IX_ROOT: usize = 0;
 const IX_LOCATOR: usize = 1;
@@ -53,8 +60,24 @@ const IX_CLOSE_ROOT: usize = 0;
 const IX_CLOSE_EPOCH: usize = 1;
 const IX_CLOSE_WINDOW: usize = 2;
 const IX_CLOSE_BINDING: usize = 3;
-const IX_CLOSE_PAYER: usize = 4;
-const IX_CLOSE_SINK: usize = 5;
+const IX_CLOSE_FEE_MANIFEST: usize = 4;
+const IX_CLOSE_FEE_TERMINAL: usize = 5;
+const IX_CLOSE_ROOT_PAYER: usize = 6;
+const IX_CLOSE_MANIFEST_PAYER: usize = 7;
+const IX_CLOSE_TERMINAL_PAYER: usize = 8;
+const IX_CLOSE_SINK: usize = 9;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CoalescedCloseCreditV1 {
+    recipient: Id32,
+    amount: u64,
+}
+
+impl CoalescedCloseCreditV1 {
+    const fn new(recipient: Id32, amount: u64) -> Self {
+        Self { recipient, amount }
+    }
+}
 
 fn id(key: &Pubkey) -> Id32 {
     Id32::from_bytes(key.to_bytes())
@@ -162,13 +185,13 @@ fn decode_binding(
 
 fn checked_credit_total(
     recipient: Id32,
-    credits: &[ExactIndexCloseCreditV1],
+    credits: &[CoalescedCloseCreditV1],
 ) -> Outcome<u64> {
     let mut total = 0u64;
     for credit in credits {
-        if credit.recipient() == recipient {
+        if credit.recipient == recipient {
             total = total
-                .checked_add(credit.amount())
+                .checked_add(credit.amount)
                 .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
         }
     }
@@ -210,6 +233,22 @@ fn preflight_writes(accounts: &[&AccountInfo<'_>]) -> Outcome<()> {
         drop(lamports);
     }
     Ok(())
+}
+
+/// Default-refusing seam for Product's final non-Copy whole-Market authority.
+///
+/// The Product owner will replace this body with its hostile RootV2/LinkV2
+/// terminal authenticator. No caller can manufacture an interim receipt, and
+/// no General state or native lamport moves while this seam refuses.
+fn authenticate_product_whole_market_terminal_v1(
+    product_accounts: &[AccountInfo<'_>],
+    terminal: &contract::IndexedSettlementRootCloseProjectionV1,
+    fee_pair: &AuthenticatedFeeTerminalPairV1,
+) -> Outcome<()> {
+    let _ = product_accounts;
+    let _ = terminal;
+    let _ = fee_pair;
+    Err(Refusal::Adapter(ClutchError::UnsupportedInstruction))
 }
 
 #[inline(never)]
@@ -342,10 +381,22 @@ fn retire_index_children(
         ClutchError::MismatchedState,
     )?;
     let credits = [
-        close.locator_principal_credit(),
-        close.adjacency_principal_credit(),
-        close.locator_donation_credit(),
-        close.adjacency_donation_credit(),
+        CoalescedCloseCreditV1::new(
+            close.locator_principal_credit().recipient(),
+            close.locator_principal_credit().amount(),
+        ),
+        CoalescedCloseCreditV1::new(
+            close.adjacency_principal_credit().recipient(),
+            close.adjacency_principal_credit().amount(),
+        ),
+        CoalescedCloseCreditV1::new(
+            close.locator_donation_credit().recipient(),
+            close.locator_donation_credit().amount(),
+        ),
+        CoalescedCloseCreditV1::new(
+            close.adjacency_donation_credit().recipient(),
+            close.adjacency_donation_credit().amount(),
+        ),
     ];
     preflight_coalesced_credits(
         &[&accounts[IX_CHILD_PAYER], &accounts[IX_CHILD_SINK]],
@@ -373,13 +424,13 @@ fn retire_index_children(
 
 fn preflight_coalesced_credits(
     destinations: &[&AccountInfo<'_>],
-    credits: &[ExactIndexCloseCreditV1],
+    credits: &[CoalescedCloseCreditV1],
 ) -> Outcome<()> {
     for credit in credits {
         require(
             destinations
                 .iter()
-                .any(|destination| id(destination.key) == credit.recipient()),
+                .any(|destination| id(destination.key) == credit.recipient),
             ClutchError::MismatchedState,
         )?;
     }
@@ -403,7 +454,7 @@ fn preflight_coalesced_credits(
 
 fn apply_coalesced_credits(
     destinations: &[&AccountInfo<'_>],
-    credits: &[ExactIndexCloseCreditV1],
+    credits: &[CoalescedCloseCreditV1],
 ) -> Outcome<()> {
     let mut index = 0usize;
     while index < destinations.len() {
@@ -499,14 +550,23 @@ fn retire_retained_feed(
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let credits = [
-        result.feed_principal_credit(),
-        result.feed_donation_credit(),
-        result.feed_keeper_reward_credit(),
+        CoalescedCloseCreditV1::new(
+            result.feed_principal_credit().recipient(),
+            result.feed_principal_credit().amount(),
+        ),
+        CoalescedCloseCreditV1::new(
+            result.feed_donation_credit().recipient(),
+            result.feed_donation_credit().amount(),
+        ),
+        CoalescedCloseCreditV1::new(
+            result.feed_keeper_reward_credit().recipient(),
+            result.feed_keeper_reward_credit().amount(),
+        ),
     ];
     require(
-        credits[0].recipient() == id(accounts[IX_FEED_RETIRE_PAYER].key)
-            && credits[1].recipient() == id(accounts[IX_FEED_RETIRE_SINK].key)
-            && credits[2].recipient() == id(accounts[IX_FEED_RETIRE_KEEPER].key),
+        credits[0].recipient == id(accounts[IX_FEED_RETIRE_PAYER].key)
+            && credits[1].recipient == id(accounts[IX_FEED_RETIRE_SINK].key)
+            && credits[2].recipient == id(accounts[IX_FEED_RETIRE_KEEPER].key),
         ClutchError::MismatchedState,
     )?;
     preflight_coalesced_credits(
@@ -544,7 +604,10 @@ fn close_indexed_root(
     accounts: &[AccountInfo<'_>],
     selector: contract::CountedSettlementRootSelectorV1,
 ) -> Outcome<()> {
-    require_count(accounts, CLOSE_INDEXED_ROOT_ACCOUNT_COUNT_V1)?;
+    require(
+        accounts.len() >= CLOSE_INDEXED_ROOT_NON_PRODUCT_PREFIX_ACCOUNTS_V1,
+        ClutchError::WrongAccountCount,
+    )?;
     require_program_account(
         program_id,
         &accounts[IX_CLOSE_ROOT],
@@ -563,8 +626,22 @@ fn close_indexed_root(
         false,
         Some(contract::WINDOW_ACCOUNT_BYTES),
     )?;
+    require_program_account(
+        program_id,
+        &accounts[IX_CLOSE_FEE_MANIFEST],
+        true,
+        Some(contract::FEE_RETIREMENT_ACCOUNT_BYTES_V2),
+    )?;
+    require_program_account(
+        program_id,
+        &accounts[IX_CLOSE_FEE_TERMINAL],
+        true,
+        Some(contract::FEE_RETIREMENT_ACCOUNT_BYTES_V3),
+    )?;
     let binding = decode_binding(program_id, &accounts[IX_CLOSE_BINDING])?;
-    require_destination(&accounts[IX_CLOSE_PAYER])?;
+    require_destination(&accounts[IX_CLOSE_ROOT_PAYER])?;
+    require_destination(&accounts[IX_CLOSE_MANIFEST_PAYER])?;
+    require_destination(&accounts[IX_CLOSE_TERMINAL_PAYER])?;
     require_destination(&accounts[IX_CLOSE_SINK])?;
     require_destinations_disjoint_from_state(
         &[
@@ -572,8 +649,15 @@ fn close_indexed_root(
             &accounts[IX_CLOSE_EPOCH],
             &accounts[IX_CLOSE_WINDOW],
             &accounts[IX_CLOSE_BINDING],
+            &accounts[IX_CLOSE_FEE_MANIFEST],
+            &accounts[IX_CLOSE_FEE_TERMINAL],
         ],
-        &[&accounts[IX_CLOSE_PAYER], &accounts[IX_CLOSE_SINK]],
+        &[
+            &accounts[IX_CLOSE_ROOT_PAYER],
+            &accounts[IX_CLOSE_MANIFEST_PAYER],
+            &accounts[IX_CLOSE_TERMINAL_PAYER],
+            &accounts[IX_CLOSE_SINK],
+        ],
     )?;
     require(
         selector.epoch == id(accounts[IX_CLOSE_EPOCH].key)
@@ -634,31 +718,112 @@ fn close_indexed_root(
     require(
         *accounts[IX_CLOSE_ROOT].key == root_pda.0
             && terminal.stored_bump() == root_pda.1
-            && result.root_principal_credit().recipient() == id(accounts[IX_CLOSE_PAYER].key)
+            && result.root_principal_credit().recipient()
+                == id(accounts[IX_CLOSE_ROOT_PAYER].key)
             && result.root_donation_credit().recipient() == id(accounts[IX_CLOSE_SINK].key),
         ClutchError::WrongPda,
     )?;
+    let fee_pair = authenticate_fee_terminal_pair_v1(
+        program_id,
+        &accounts[IX_CLOSE_FEE_MANIFEST],
+        &accounts[IX_CLOSE_FEE_TERMINAL],
+        FeeTerminalPairExpectationV1 {
+            fee_record: terminal.fee_record(),
+            settlement_root: terminal.terminal().base().root_account(),
+            selected_feed_data_id: terminal.terminal().selected_feed_data_id(),
+            market: terminal.terminal().base().market(),
+            epoch: terminal.terminal().base().epoch(),
+            settlement_candidate: terminal.terminal().base().settlement_candidate_id(),
+        },
+        true,
+    )?;
+    let manifest_rent = fee_pair.manifest_rent();
+    let terminal_rent = fee_pair.terminal_rent();
+    require(
+        terminal.fee_record() != Id32::ZERO
+            && manifest_rent.payer == id(accounts[IX_CLOSE_MANIFEST_PAYER].key)
+            && terminal_rent.payer == id(accounts[IX_CLOSE_TERMINAL_PAYER].key),
+        ClutchError::MismatchedState,
+    )?;
+    let manifest_donation = fee_pair
+        .manifest_observed_balance_lamports()
+        .checked_sub(manifest_rent.refundable_principal)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let terminal_donation = fee_pair
+        .terminal_observed_balance_lamports()
+        .checked_sub(terminal_rent.refundable_principal)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        manifest_donation >= manifest_rent.donation_floor
+            && terminal_donation >= terminal_rent.donation_floor,
+        ClutchError::MismatchedState,
+    )?;
     let credits = [
-        result.root_principal_credit(),
-        result.root_donation_credit(),
+        CoalescedCloseCreditV1::new(
+            result.root_principal_credit().recipient(),
+            result.root_principal_credit().amount(),
+        ),
+        CoalescedCloseCreditV1::new(
+            result.root_donation_credit().recipient(),
+            result.root_donation_credit().amount(),
+        ),
+        CoalescedCloseCreditV1::new(
+            manifest_rent.payer,
+            manifest_rent.refundable_principal,
+        ),
+        CoalescedCloseCreditV1::new(
+            id(accounts[IX_CLOSE_SINK].key),
+            manifest_donation,
+        ),
+        CoalescedCloseCreditV1::new(
+            terminal_rent.payer,
+            terminal_rent.refundable_principal,
+        ),
+        CoalescedCloseCreditV1::new(
+            id(accounts[IX_CLOSE_SINK].key),
+            terminal_donation,
+        ),
     ];
     preflight_coalesced_credits(
-        &[&accounts[IX_CLOSE_PAYER], &accounts[IX_CLOSE_SINK]],
+        &[
+            &accounts[IX_CLOSE_ROOT_PAYER],
+            &accounts[IX_CLOSE_MANIFEST_PAYER],
+            &accounts[IX_CLOSE_TERMINAL_PAYER],
+            &accounts[IX_CLOSE_SINK],
+        ],
         &credits,
     )?;
+
+    authenticate_product_whole_market_terminal_v1(
+        &accounts[CLOSE_INDEXED_ROOT_NON_PRODUCT_PREFIX_ACCOUNTS_V1..],
+        terminal,
+        &fee_pair,
+    )?;
+
     drop(window_body);
     drop(root_body);
     drop(epoch_body);
     preflight_writes(&[
         &accounts[IX_CLOSE_ROOT],
         &accounts[IX_CLOSE_EPOCH],
-        &accounts[IX_CLOSE_PAYER],
+        &accounts[IX_CLOSE_FEE_MANIFEST],
+        &accounts[IX_CLOSE_FEE_TERMINAL],
+        &accounts[IX_CLOSE_ROOT_PAYER],
+        &accounts[IX_CLOSE_MANIFEST_PAYER],
+        &accounts[IX_CLOSE_TERMINAL_PAYER],
         &accounts[IX_CLOSE_SINK],
     ])?;
     borrow_mut_data(&accounts[IX_CLOSE_EPOCH])?.copy_from_slice(&epoch_output);
+    close_program_account(&accounts[IX_CLOSE_FEE_MANIFEST])?;
+    close_program_account(&accounts[IX_CLOSE_FEE_TERMINAL])?;
     close_program_account(&accounts[IX_CLOSE_ROOT])?;
     apply_coalesced_credits(
-        &[&accounts[IX_CLOSE_PAYER], &accounts[IX_CLOSE_SINK]],
+        &[
+            &accounts[IX_CLOSE_ROOT_PAYER],
+            &accounts[IX_CLOSE_MANIFEST_PAYER],
+            &accounts[IX_CLOSE_TERMINAL_PAYER],
+            &accounts[IX_CLOSE_SINK],
+        ],
         &credits,
     )
 }
@@ -710,6 +875,6 @@ mod tests {
     fn indexed_terminal_frames_are_frozen() {
         assert_eq!(RETIRE_INDEX_CHILDREN_ACCOUNT_COUNT_V1, 7);
         assert_eq!(RETIRE_RETAINED_FEED_ACCOUNT_COUNT_V1, 6);
-        assert_eq!(CLOSE_INDEXED_ROOT_ACCOUNT_COUNT_V1, 6);
+        assert_eq!(CLOSE_INDEXED_ROOT_NON_PRODUCT_PREFIX_ACCOUNTS_V1, 10);
     }
 }
