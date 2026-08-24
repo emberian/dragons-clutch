@@ -63,6 +63,33 @@ pub(crate) const GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5: usize =
     GENERAL_MARKET_CURRENT_FIXED_ACCOUNT_COUNT_V5
         + GENERAL_MARKET_CURRENT_ARTIFACT_ACCOUNT_COUNT_V5;
 
+/// Canonical contiguous account order used by every current General action.
+///
+/// Action-specific mutable accounts follow this prefix. Keeping the hostile
+/// Product/Source/Revenue join in one fixed order lets operator material be
+/// derived from chain state without inventing a second DTO or allowing an
+/// action-local V4 projection.
+pub(crate) const CURRENT_V5_IX_MARKET_BINDING: usize = 0;
+pub(crate) const CURRENT_V5_IX_MARKET_RUNTIME: usize = 1;
+pub(crate) const CURRENT_V5_IX_PRODUCT_ROOT: usize = 2;
+pub(crate) const CURRENT_V5_IX_SERIES_LINK: usize = 3;
+pub(crate) const CURRENT_V5_IX_SERIES_FUNDING: usize = 4;
+pub(crate) const CURRENT_V5_IX_SERIES_REGISTRY: usize = 5;
+pub(crate) const CURRENT_V5_IX_REGISTRY_PROGRAM: usize = 6;
+pub(crate) const CURRENT_V5_IX_REGISTRY_PROGRAMDATA: usize = 7;
+pub(crate) const CURRENT_V5_IX_REGISTRY_RELEASE: usize = 8;
+pub(crate) const CURRENT_V5_IX_CAPABILITY_PROFILE: usize = 9;
+pub(crate) const CURRENT_V5_IX_SOURCE_RELEASE: usize = 10;
+pub(crate) const CURRENT_V5_IX_COMPILER_BUNDLE: usize = 11;
+pub(crate) const CURRENT_V5_IX_MARKET_INSTANCE: usize = 12;
+pub(crate) const CURRENT_V5_IX_REALM: usize = 13;
+pub(crate) const CURRENT_V5_IX_REVENUE_RECORD: usize = 14;
+pub(crate) const CURRENT_V5_IX_REVENUE_PREIMAGE: usize = 15;
+pub(crate) const CURRENT_V5_IX_ARTIFACTS_START: usize = 16;
+pub(crate) const CURRENT_V5_IX_ARTIFACTS_END: usize =
+    CURRENT_V5_IX_ARTIFACTS_START + GENERAL_MARKET_CURRENT_ARTIFACT_ACCOUNT_COUNT_V5;
+const _: () = assert!(CURRENT_V5_IX_ARTIFACTS_END == GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5);
+
 /// Named account frame.  It carries physical accounts only; no caller-created
 /// semantic ID, generation, ordinal, or graph projection is accepted.
 pub(crate) struct GeneralMarketCurrentAccountFrameV5<'frame, 'info> {
@@ -319,6 +346,44 @@ fn require_distinct_frame(frame: &GeneralMarketCurrentAccountFrameV5<'_, '_>) ->
         left += 1;
     }
     Ok(())
+}
+
+/// Hostile-authenticate the canonical contiguous current-General prefix.
+///
+/// The prefix is deliberately a physical account slice rather than a caller
+/// supplied projection. Product RootV3 and LinkV3 are decoded into heap-owned
+/// buffers in this bounded frame, and every action receives the same move-only
+/// V5 authority receipt before it observes action-local state.
+#[inline(never)]
+pub(crate) fn authenticate_general_market_current_prefix_v5(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+) -> Outcome<AuthenticatedGeneralMarketCurrentV5> {
+    if accounts.len() < GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5 {
+        return Err(Refusal::Adapter(ClutchError::AccountCount));
+    }
+    let frame = GeneralMarketCurrentAccountFrameV5 {
+        market_binding: &accounts[CURRENT_V5_IX_MARKET_BINDING],
+        market_runtime: &accounts[CURRENT_V5_IX_MARKET_RUNTIME],
+        product_root: &accounts[CURRENT_V5_IX_PRODUCT_ROOT],
+        series_link: &accounts[CURRENT_V5_IX_SERIES_LINK],
+        series_funding: &accounts[CURRENT_V5_IX_SERIES_FUNDING],
+        series_registry: &accounts[CURRENT_V5_IX_SERIES_REGISTRY],
+        registry_program: &accounts[CURRENT_V5_IX_REGISTRY_PROGRAM],
+        registry_programdata: &accounts[CURRENT_V5_IX_REGISTRY_PROGRAMDATA],
+        registry_release_artifact: &accounts[CURRENT_V5_IX_REGISTRY_RELEASE],
+        capability_profile_artifact: &accounts[CURRENT_V5_IX_CAPABILITY_PROFILE],
+        source_release: &accounts[CURRENT_V5_IX_SOURCE_RELEASE],
+        compiler_bundle: &accounts[CURRENT_V5_IX_COMPILER_BUNDLE],
+        market_instance: &accounts[CURRENT_V5_IX_MARKET_INSTANCE],
+        realm: &accounts[CURRENT_V5_IX_REALM],
+        revenue_record: &accounts[CURRENT_V5_IX_REVENUE_RECORD],
+        revenue_policy_preimage: &accounts[CURRENT_V5_IX_REVENUE_PREIMAGE],
+        artifacts: &accounts[CURRENT_V5_IX_ARTIFACTS_START..CURRENT_V5_IX_ARTIFACTS_END],
+    };
+    let mut root = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let mut link = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    authenticate_general_market_current_v5(program_id, &frame, &mut root, &mut link)
 }
 
 /// Authenticate the complete current General/Product/Revenue read graph.

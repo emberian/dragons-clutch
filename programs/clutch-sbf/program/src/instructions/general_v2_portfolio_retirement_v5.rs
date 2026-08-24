@@ -12,6 +12,11 @@
 use core::cell::Ref;
 use std::boxed::Box;
 
+use clutch_collateral_adapter_v2::{
+    refine_market_collateral_v2, BoundCollateralProfileV2, Id as CollateralId,
+    MarketCollateralBindingV2,
+};
+
 use clutch_general_v2_contract as contract;
 use clutch_general_v2_contract::{
     decode_portfolio_settlement_payload_v1, GeneralPositionReplayPrestateV1, Id32,
@@ -25,8 +30,8 @@ use clutch_general_v2_runtime::{
 };
 use clutch_owner_settlement::AuthenticatedPositionV3;
 use clutch_retirement::{
-    Identity32V1, PositionAccountV3, PositionLifecycleV3, PositionPurposeV3,
-    PositionV3Sha256Backend, ReplayV3Envelope, ReplayV3HashBackend, POSITION_V3_BYTES,
+    PositionLifecycleV3, PositionPurposeV3, PositionV3Sha256Backend, ReplayV3HashBackend,
+    POSITION_V3_BYTES,
 };
 use clutch_solana_layout::registry::GeneralV2Action;
 use clutch_solana_layout::reservation_v9::{ReservationAccountV9, RESERVATION_ACCOUNT_BYTES_V9};
@@ -41,12 +46,39 @@ use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
 use crate::seeds;
 
+use super::general_market_current_v5::{
+    authenticate_general_market_current_prefix_v5, AuthenticatedGeneralMarketCurrentV5,
+    CURRENT_V5_IX_MARKET_BINDING, CURRENT_V5_IX_MARKET_RUNTIME, CURRENT_V5_IX_REALM,
+    GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5,
+};
+use super::general_v2_position_replay::authenticate_current_general_position_replay_v5;
+use super::general_v2_settlement_root::{
+    authenticate_writable_general_settlement_root_epoch_v1,
+    AuthenticatedGeneralSettlementRootV1,
+};
+
 /// Fixed accounts before committed Receipt and refund-owner suffixes.
 pub const PORTFOLIO_ARCHIVE_FIXED_ACCOUNTS_V2: usize = 10;
 /// Minimum frame: fixed accounts, one Receipt, and one refund owner.
 pub const PORTFOLIO_ARCHIVE_MIN_ACCOUNTS_V2: usize = 12;
 /// Maximum frozen frame: ten fixed, sixteen Receipts, eighteen refund owners.
 pub const PORTFOLIO_ARCHIVE_MAX_ACCOUNTS_V2: usize = 44;
+
+/// Current V5 prefix plus Realm collateral Profile/Policy/Token and nine
+/// unique archive roles before the variable Receipt/refund suffix.
+pub const PORTFOLIO_ARCHIVE_CURRENT_FIXED_ACCOUNTS_V5: usize =
+    GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5 + 3 + 9;
+pub const PORTFOLIO_ARCHIVE_CURRENT_MIN_ACCOUNTS_V5: usize =
+    PORTFOLIO_ARCHIVE_CURRENT_FIXED_ACCOUNTS_V5 + 2;
+/// Solana messages expose at most 64 account indices to one instruction. The
+/// independent receipt/refund maxima remain 16/18, while their exact combined
+/// width is bounded by this physical transaction ceiling.
+pub const PORTFOLIO_ARCHIVE_CURRENT_MAX_ACCOUNTS_V5: usize = 64;
+
+const CURRENT_IX_PROFILE: usize = GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5;
+const CURRENT_IX_COLLATERAL_POLICY: usize = CURRENT_IX_PROFILE + 1;
+const CURRENT_IX_TOKEN_PROGRAM: usize = CURRENT_IX_COLLATERAL_POLICY + 1;
+const CURRENT_IX_ARCHIVE_SUFFIX: usize = CURRENT_IX_TOKEN_PROGRAM + 1;
 
 pub const IX_SETTLEMENT_ROOT: usize = 0;
 pub const IX_RETAINED_FEED: usize = 1;
@@ -152,76 +184,115 @@ fn account_frame(
 
 fn authenticate_position_replay(
     program_id: &Pubkey,
+    current: &AuthenticatedGeneralMarketCurrentV5,
+    bound: BoundCollateralProfileV2,
     root: contract::SettlementRootV1AccountV1,
     owner: [u8; 32],
+    binding_account: &AccountInfo<'_>,
+    runtime_account: &AccountInfo<'_>,
     position_account: &AccountInfo<'_>,
     replay_account: &AccountInfo<'_>,
 ) -> Outcome<(AuthenticatedPositionV3, GeneralPositionReplayPrestateV1)> {
-    let position = PositionAccountV3::decode(&borrow_data(position_account)?)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let fields = position.fields();
-    let purpose_binding = Identity32V1::new(root.market().bytes())
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let expected_position = seeds::position_v3_pda(
+    let authority = authenticate_current_general_position_replay_v5(
         program_id,
-        &root.market_instance_v2_id().bytes(),
-        &owner,
-        PositionPurposeV3::General,
-        &purpose_binding.bytes(),
-    );
-    let expected_replay = seeds::purpose_replay_v3_pda(
-        program_id,
-        &position_account.key.to_bytes(),
-        PositionPurposeV3::General,
-        &purpose_binding.bytes(),
-    );
+        current,
+        bound,
+        binding_account,
+        runtime_account,
+        position_account,
+        replay_account,
+        owner,
+    )?;
     require(
-        *position_account.key == expected_position.0
-            && position.stored_bump() == expected_position.1
-            && *replay_account.key == expected_replay.0
-            && fields.purpose == PositionPurposeV3::General
-            && fields.lifecycle == PositionLifecycleV3::Open
-            && fields.market_instance_id.bytes() == root.market_instance_v2_id().bytes()
-            && fields.owner.bytes() == owner
-            && fields.controller.bytes() == owner
-            && fields.purpose_binding_id == purpose_binding
-            && fields.replay_account.bytes() == replay_account.key.to_bytes()
-            && fields.outcome_count == root.outcome_count(),
+        authority.market_binding == *current.binding()
+            && authority.market_runtime == *current.runtime()
+            && authority.position.semantic.fields().market_instance_id.bytes()
+                == root.market_instance_v2_id().bytes()
+            && authority.position.semantic.fields().purpose == PositionPurposeV3::General
+            && authority.position.semantic.fields().lifecycle == PositionLifecycleV3::Open
+            && authority.position.semantic.fields().outcome_count == root.outcome_count(),
         ClutchError::MismatchedState,
     )?;
-    let semantic_id = position
-        .semantic_id(&RuntimeSha256)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-        .bytes();
-    let authenticated = AuthenticatedPositionV3 {
-        account: position_account.key.to_bytes(),
-        general_market_runtime: root.market().bytes(),
-        semantic: position,
-        semantic_id,
-        account_authenticated: true,
-        semantic_id_authenticated: true,
-        market_binding_authenticated: true,
-        writable: true,
-    };
-    authenticated
-        .validate_writable()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let replay_data = borrow_data(replay_account)?;
-    let envelope = ReplayV3Envelope::decode(&replay_data, &RuntimeSha256)
-        .map_err(|_| Refusal::Adapter(ClutchError::Replay))?;
-    let replay = contract::project_general_position_replay_prestate_v1(
-        id(replay_account.key),
-        expected_replay.1,
-        envelope.header().next_sequence(),
-        &replay_data,
-        authenticated,
-        &RuntimeSha256,
-    )
-    .map_err(|_| Refusal::Adapter(ClutchError::Replay))?;
-    Ok((authenticated, replay))
+    Ok((authority.position, authority.replay))
 }
 
-/// Disabled-until-registered action-44 entrypoint.
+fn authenticate_current_collateral(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    current: &AuthenticatedGeneralMarketCurrentV5,
+) -> Outcome<BoundCollateralProfileV2> {
+    let realm = crate::collateral_release::authenticate_realm_collateral_v2(
+        program_id,
+        &accounts[CURRENT_V5_IX_REALM],
+        &accounts[CURRENT_IX_PROFILE],
+        &accounts[CURRENT_IX_COLLATERAL_POLICY],
+        &accounts[CURRENT_IX_TOKEN_PROGRAM],
+    )?;
+    let base = current.binding().base();
+    let instance = current.market_instance();
+    require(
+        current.binding_account() == *accounts[CURRENT_V5_IX_MARKET_BINDING].key
+            && current.runtime_account() == *accounts[CURRENT_V5_IX_MARKET_RUNTIME].key
+            && current.revenue().realm().bytes() == realm.realm().realm.bytes()
+            && current.collateral_profile_id().bytes() == realm.realm().profile.bytes()
+            && current.runtime().market_instance_v2_id == base.base().market_instance_v2_id,
+        ClutchError::MismatchedState,
+    )?;
+    let market = base.base().market_instance_v2_id.bytes();
+    refine_market_collateral_v2(
+        realm,
+        MarketCollateralBindingV2 {
+            market: CollateralId::from_bytes(market),
+            realm: CollateralId::from_bytes(realm.realm().realm.bytes()),
+            profile: CollateralId::from_bytes(realm.realm().profile.bytes()),
+            collateral_cap_atoms: instance.collateral_cap,
+            hoard_authority: CollateralId::from_bytes(
+                seeds::hoard_authority_v2_pda(program_id, &market).0.to_bytes(),
+            ),
+            hoard_token_account: CollateralId::from_bytes(
+                seeds::hoard_token_v2_pda(program_id, &market).0.to_bytes(),
+            ),
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+}
+
+fn current_account_frame(
+    accounts: &[AccountInfo<'_>],
+    receipt_count: u8,
+    refund_owner_count: u8,
+) -> Outcome<()> {
+    let variable = usize::from(receipt_count)
+        .checked_add(usize::from(refund_owner_count))
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        (1..=PORTFOLIO_ARCHIVE_MAX_RECEIPTS_V2).contains(&usize::from(receipt_count))
+            && (1..=PORTFOLIO_ARCHIVE_MAX_REFUND_OWNERS_V2)
+                .contains(&usize::from(refund_owner_count))
+            && variable <= PORTFOLIO_ARCHIVE_CURRENT_MAX_ACCOUNTS_V5
+                - PORTFOLIO_ARCHIVE_CURRENT_FIXED_ACCOUNTS_V5
+            && accounts.len()
+                == PORTFOLIO_ARCHIVE_CURRENT_FIXED_ACCOUNTS_V5
+                    .checked_add(variable)
+                    .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+        ClutchError::AccountCount,
+    )
+}
+
+fn local_archive_accounts<'info>(
+    accounts: &[AccountInfo<'info>],
+) -> std::vec::Vec<AccountInfo<'info>> {
+    let mut local = std::vec::Vec::with_capacity(
+        accounts.len() - PORTFOLIO_ARCHIVE_CURRENT_FIXED_ACCOUNTS_V5
+            + PORTFOLIO_ARCHIVE_FIXED_ACCOUNTS_V2,
+    );
+    local.extend_from_slice(&accounts[CURRENT_IX_ARCHIVE_SUFFIX..CURRENT_IX_ARCHIVE_SUFFIX + 2]);
+    local.push(accounts[CURRENT_V5_IX_MARKET_BINDING].clone());
+    local.extend_from_slice(&accounts[CURRENT_IX_ARCHIVE_SUFFIX + 2..]);
+    local
+}
+
+/// Current action-44 entrypoint.
 pub fn process(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -230,16 +301,29 @@ pub fn process(
     payload: &[u8],
 ) -> Outcome<()> {
     require(sequence == 0, ClutchError::Replay)?;
-    // The central enum intentionally remains capped at 42 until action 43 is
-    // allocated. This numeric comparison becomes reachable only after the
-    // shared registry adds the already-frozen action-44 variant.
-    require(action.tag() == 44, ClutchError::UnsupportedInstruction)?;
+    require(
+        action == GeneralV2Action::RetirePortfolioPairArchives
+            && crate::capabilities::extension_intent_action_enabled(74, 1, action.tag()),
+        ClutchError::UnsupportedInstruction,
+    )?;
     let PortfolioSettlementPayloadV1::RetirePortfolioPairArchives(request) =
         decode_portfolio_settlement_payload_v1(action.tag(), payload)?
     else {
         return Err(Refusal::Adapter(ClutchError::UnsupportedInstruction));
     };
-    compose_and_apply(program_id, accounts, request).map(|_| ())
+    current_account_frame(accounts, request.receipt_count, request.refund_owner_count)?;
+    let current = authenticate_general_market_current_prefix_v5(program_id, accounts)?;
+    let bound = authenticate_current_collateral(program_id, accounts, &current)?;
+    let local = local_archive_accounts(accounts);
+    compose_and_apply(
+        program_id,
+        &local,
+        request,
+        &current,
+        bound,
+        &accounts[CURRENT_V5_IX_MARKET_RUNTIME],
+    )
+    .map(|_| ())
 }
 
 /// Compose, apply, and return the private terminal receipt inside one rollback
@@ -250,6 +334,9 @@ pub(crate) fn compose_and_apply(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: RetirePortfolioPairArchivesPayloadV1,
+    current: &AuthenticatedGeneralMarketCurrentV5,
+    bound: BoundCollateralProfileV2,
+    runtime_account: &AccountInfo<'_>,
 ) -> Outcome<PortfolioPairArchiveTerminalReceiptV2> {
     let (receipt_count, refund_owner_count, first_refund_owner) = account_frame(
         accounts.len(),
@@ -262,14 +349,14 @@ pub(crate) fn compose_and_apply(
         program_id,
         &accounts[IX_SETTLEMENT_ROOT],
         true,
-        Some(contract::SETTLEMENT_ROOT_ACCOUNT_BYTES),
+        Some(contract::INDEXED_SETTLEMENT_ROOT_BYTES_V1),
     )?;
     require_program_account(program_id, &accounts[IX_RETAINED_FEED], false, None)?;
     require_program_account(
         program_id,
         &accounts[IX_MARKET_BINDING],
         false,
-        Some(contract::MARKET_BINDING_ACCOUNT_BYTES_V2),
+        Some(contract::MARKET_BINDING_ACCOUNT_BYTES_V5),
     )?;
     require_credit_account(&accounts[IX_NEUTRAL_SINK])?;
     for index in [
@@ -311,9 +398,13 @@ pub(crate) fn compose_and_apply(
     }
 
     let root_account = id(accounts[IX_SETTLEMENT_ROOT].key);
-    let root = contract::SettlementRootV1AccountV1::decode(&borrow_data(
-        &accounts[IX_SETTLEMENT_ROOT],
-    )?)?;
+    let authenticated_root = authenticate_writable_general_settlement_root_epoch_v1(
+        program_id,
+        core::slice::from_ref(&accounts[IX_SETTLEMENT_ROOT]),
+        request.epoch,
+    )?;
+    require(authenticated_root.is_indexed(), ClutchError::MismatchedState)?;
+    let root = *authenticated_root.root();
     let root_pda = seeds::general_v2_settlement_root_pda(
         program_id,
         &root.epoch().bytes(),
@@ -339,15 +430,14 @@ pub(crate) fn compose_and_apply(
     )?;
 
     let market_binding_account = id(accounts[IX_MARKET_BINDING].key);
-    let market_binding = contract::MarketBindingV2::decode(&borrow_data(
-        &accounts[IX_MARKET_BINDING],
-    )?)?;
+    let market_binding = *current.binding().base();
     let binding_pda = seeds::general_v2_market_binding_pda(
         program_id,
         &market_binding.base().market_instance_v2_id.bytes(),
     );
     require(
         market_binding_account == root.market_binding()
+            && *accounts[IX_MARKET_BINDING].key == current.binding_account()
             && *accounts[IX_MARKET_BINDING].key == binding_pda.0
             && market_binding.base().stored_bump == binding_pda.1
             && id(accounts[IX_NEUTRAL_SINK].key) == market_binding.base().neutral_sink,
@@ -372,15 +462,23 @@ pub(crate) fn compose_and_apply(
     )?;
     let (buyer_position, buyer_replay) = authenticate_position_replay(
         program_id,
+        current,
+        bound,
         root,
         buyer_reservation.body().owner.bytes(),
+        &accounts[IX_MARKET_BINDING],
+        runtime_account,
         &accounts[IX_BUYER_POSITION_V3],
         &accounts[IX_BUYER_REPLAY_GEN1],
     )?;
     let (seller_position, seller_replay) = authenticate_position_replay(
         program_id,
+        current,
+        bound,
         root,
         seller_reservation.body().owner.bytes(),
+        &accounts[IX_MARKET_BINDING],
+        runtime_account,
         &accounts[IX_SELLER_POSITION_V3],
         &accounts[IX_SELLER_REPLAY_GEN1],
     )?;
@@ -464,6 +562,7 @@ pub(crate) fn compose_and_apply(
         first_refund_owner,
         receipt_count,
         refund_owner_count,
+        &authenticated_root,
         &plan,
     )?;
     Ok(terminal)
@@ -490,6 +589,7 @@ fn apply_plan(
     first_refund_owner: usize,
     receipt_count: usize,
     refund_owner_count: usize,
+    authenticated_root: &AuthenticatedGeneralSettlementRootV1,
     plan: &clutch_general_v2_runtime::RetirePortfolioPairArchivesPlanV2,
 ) -> Outcome<()> {
     let receipt_count_u8 = u8::try_from(receipt_count)
@@ -503,8 +603,12 @@ fn apply_plan(
                 == id(accounts[IX_NEUTRAL_SINK].key),
         ClutchError::MismatchedState,
     )?;
-    let mut root_body = std::vec![0u8; contract::SETTLEMENT_ROOT_ACCOUNT_BYTES];
-    plan.settlement_root_poststate().encode(&mut root_body)?;
+    let mut root_body = std::vec![0u8; authenticated_root.account_bytes()];
+    authenticated_root.encode_portfolio_retirement_successor(
+        plan.settlement_root_poststate(),
+        receipt_count_u8,
+        &mut root_body,
+    )?;
     let buyer_position_body = plan.buyer_position_poststate()
         .semantic
         .encode()
@@ -607,7 +711,19 @@ fn apply_plan(
         &accounts[IX_NEUTRAL_SINK],
         plan.neutral_sink_balance_after(),
     )?;
-    Ok(())
+    require(
+        &*borrow_data(&accounts[IX_SETTLEMENT_ROOT])? == root_body.as_slice()
+            && &*borrow_data(&accounts[IX_BUYER_POSITION_V3])?
+                == buyer_position_body.as_slice()
+            && &*borrow_data(&accounts[IX_SELLER_POSITION_V3])?
+                == seller_position_body.as_slice()
+            && &*borrow_data(&accounts[IX_BUYER_REPLAY_GEN1])?
+                == plan.buyer_replay_poststate().replay_poststate_body()
+            && &*borrow_data(&accounts[IX_SELLER_REPLAY_GEN1])?
+                == plan.seller_replay_poststate().replay_poststate_body()
+            && accounts[IX_NEUTRAL_SINK].lamports() == plan.neutral_sink_balance_after(),
+        ClutchError::MismatchedState,
+    )
 }
 
 fn write_exact(account: &AccountInfo<'_>, body: &[u8]) -> Outcome<()> {

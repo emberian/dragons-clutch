@@ -11,7 +11,7 @@ use clutch_fee_runtime_contract::{Id as FeeId, OwnerFeeFinalizationOutcomeV2};
 use clutch_general_v2_contract as contract;
 use clutch_general_v2_contract::{
     decode_settlement_retirement_payload_v1, CountedSettlementRootSelectorV1,
-    DeletableRentOwnerV1, Id32, MarketBindingV2, SettlementChildRetirementPayloadV1,
+    DeletableRentOwnerV1, Id32, MarketBindingV5, SettlementChildRetirementPayloadV1,
     SettlementRetirementPayloadKindV1,
 };
 use clutch_solana_layout::registry::GeneralV2Action;
@@ -38,6 +38,10 @@ use super::general_v2_settlement_root::{
     authenticate_writable_general_settlement_root_epoch_v1,
     AuthenticatedGeneralSettlementRootV1,
 };
+use super::general_market_current_v5::{
+    authenticate_general_market_current_prefix_v5, CURRENT_V5_IX_MARKET_BINDING,
+    GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5,
+};
 
 /// Root, child, MarketBinding, principal payer, and neutral sink.
 pub const SETTLEMENT_CHILD_CLOSE_ACCOUNT_COUNT_V1: usize = 5;
@@ -45,6 +49,12 @@ pub const SETTLEMENT_CHILD_CLOSE_ACCOUNT_COUNT_V1: usize = 5;
 pub const FEE_RECORD_RETIREMENT_ACCOUNT_COUNT_V1: usize = 3;
 /// Writable root and immutable MarketBinding.
 pub const BEGIN_RETIRING_ACCOUNT_COUNT_V1: usize = 2;
+/// Exact actions48/49 frame: hostile current prefix plus root, child, payer, sink.
+pub const CURRENT_SETTLEMENT_CHILD_CLOSE_ACCOUNT_COUNT_V5: usize =
+    GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5 + 4;
+/// Exact action51 frame: hostile current prefix plus the writable indexed root.
+pub const CURRENT_BEGIN_RETIRING_ACCOUNT_COUNT_V5: usize =
+    GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5 + 1;
 
 const IX_ROOT: usize = 0;
 const IX_CHILD: usize = 1;
@@ -96,20 +106,20 @@ fn require_destination(account: &AccountInfo<'_>) -> Outcome<()> {
     require(!account.executable, ClutchError::ExecutableAccount)
 }
 
-fn decode_binding(program_id: &Pubkey, account: &AccountInfo<'_>) -> Outcome<MarketBindingV2> {
+fn decode_binding(program_id: &Pubkey, account: &AccountInfo<'_>) -> Outcome<MarketBindingV5> {
     require_program_state(
         program_id,
         account,
         false,
-        Some(contract::MARKET_BINDING_ACCOUNT_BYTES_V2),
+        Some(contract::MARKET_BINDING_ACCOUNT_BYTES_V5),
     )?;
-    let binding = MarketBindingV2::decode(&borrow_data(account)?)?;
+    let binding = MarketBindingV5::decode(&borrow_data(account)?)?;
     let canonical = seeds::general_v2_market_binding_pda(
         program_id,
-        &binding.base().market_instance_v2_id.bytes(),
+        &binding.base().base().market_instance_v2_id.bytes(),
     );
     require(
-        *account.key == canonical.0 && binding.base().stored_bump == canonical.1,
+        *account.key == canonical.0 && binding.base().base().stored_bump == canonical.1,
         ClutchError::WrongPda,
     )?;
     Ok(binding)
@@ -121,24 +131,26 @@ fn authenticate_root(
     selector: CountedSettlementRootSelectorV1,
 ) -> Outcome<AuthenticatedGeneralSettlementRootV1> {
     require(selector.settlement_root == id(account.key), ClutchError::MismatchedState)?;
-    authenticate_writable_general_settlement_root_epoch_v1(
+    let root = authenticate_writable_general_settlement_root_epoch_v1(
         program_id,
         core::slice::from_ref(account),
         selector.epoch,
-    )
+    )?;
+    require(root.is_indexed(), ClutchError::MismatchedState)?;
+    Ok(root)
 }
 
 fn require_root_binding(
     root: &AuthenticatedGeneralSettlementRootV1,
     binding_account: &AccountInfo<'_>,
-    binding: &MarketBindingV2,
+    binding: &MarketBindingV5,
 ) -> Outcome<()> {
     let value = root.root();
     require(
         value.market_binding() == id(binding_account.key)
-            && value.market() == binding.base().market
-            && value.market_instance_v2_id() == binding.base().market_instance_v2_id
-            && value.batch_policy_id() == binding.batch_policy_id(),
+            && value.market() == binding.base().base().market
+            && value.market_instance_v2_id() == binding.base().base().market_instance_v2_id
+            && value.batch_policy_id() == binding.base().batch_policy_id(),
         ClutchError::MismatchedState,
     )
 }
@@ -155,7 +167,6 @@ fn checked_close_balances(
     require(
         source.key != payer.key
             && source.key != sink.key
-            && payer.key != sink.key
             && rent.payer == id(payer.key),
         ClutchError::AccountAlias,
     )?;
@@ -168,14 +179,25 @@ fn checked_close_balances(
         .lamports()
         .checked_sub(rent.refundable_principal)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    let payer_after = payer
-        .lamports()
-        .checked_add(rent.refundable_principal)
-        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
-    let sink_after = sink
-        .lamports()
-        .checked_add(donation)
-        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+    let (payer_after, sink_after) = if payer.key == sink.key {
+        let after = payer
+            .lamports()
+            .checked_add(rent.refundable_principal)
+            .and_then(|value| value.checked_add(donation))
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        (after, after)
+    } else {
+        (
+            payer
+                .lamports()
+                .checked_add(rent.refundable_principal)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+            sink
+                .lamports()
+                .checked_add(donation)
+                .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+        )
+    };
     Ok((payer_after, sink_after))
 }
 
@@ -233,7 +255,20 @@ fn apply_child_close(
     borrow_mut_data(root_account)?.copy_from_slice(root_output);
     close_program_account(child)?;
     set_lamports(payer, payer_after)?;
-    set_lamports(sink, sink_after)
+    if payer.key == sink.key {
+        require(payer_after == sink_after, ClutchError::MismatchedState)?;
+    } else {
+        set_lamports(sink, sink_after)?;
+    }
+    require(
+        &*borrow_data(root_account)? == root_output
+            && child.data_len() == 0
+            && child.lamports() == 0
+            && *child.owner == SYSTEM_PROGRAM_ID
+            && payer.lamports() == payer_after
+            && sink.lamports() == sink_after,
+        ClutchError::MismatchedState,
+    )
 }
 
 fn prepare_child_frame(
@@ -241,7 +276,7 @@ fn prepare_child_frame(
     accounts: &[AccountInfo<'_>],
     selector: SettlementChildRetirementPayloadV1,
     exact_child_len: usize,
-) -> Outcome<(AuthenticatedGeneralSettlementRootV1, MarketBindingV2)> {
+) -> Outcome<(AuthenticatedGeneralSettlementRootV1, MarketBindingV5)> {
     require_count(accounts, SETTLEMENT_CHILD_CLOSE_ACCOUNT_COUNT_V1)?;
     require(selector.child == id(accounts[IX_CHILD].key), ClutchError::MismatchedState)?;
     require_program_state(program_id, &accounts[IX_CHILD], true, Some(exact_child_len))?;
@@ -264,7 +299,7 @@ fn prepare_child_frame(
     let binding = decode_binding(program_id, &accounts[IX_BINDING])?;
     require_root_binding(&root, &accounts[IX_BINDING], &binding)?;
     require(
-        binding.base().neutral_sink == id(accounts[IX_SINK].key),
+        binding.base().base().neutral_sink == id(accounts[IX_SINK].key),
         ClutchError::MismatchedState,
     )?;
     Ok((root, binding))
@@ -499,7 +534,7 @@ fn close_pot(
         return Err(Refusal::Adapter(ClutchError::MismatchedState));
     };
     require(
-        binding.base().neutral_sink == id(accounts[IX_SINK].key),
+        binding.base().base().neutral_sink == id(accounts[IX_SINK].key),
         ClutchError::MismatchedState,
     )?;
     let (payer_after, sink_after) = checked_close_balances(
@@ -562,46 +597,6 @@ fn close_fee_finalization(
 }
 
 #[inline(never)]
-fn retire_fee_record(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-    selector: SettlementChildRetirementPayloadV1,
-) -> Outcome<()> {
-    require_count(accounts, FEE_RECORD_RETIREMENT_ACCOUNT_COUNT_V1)?;
-    let root = authenticate_root(
-        program_id,
-        &accounts[IX_ROOT],
-        CountedSettlementRootSelectorV1 {
-            epoch: selector.epoch,
-            settlement_root: selector.settlement_root,
-        },
-    )?;
-    let binding = decode_binding(program_id, &accounts[IX_BINDING])?;
-    require_root_binding(&root, &accounts[IX_BINDING], &binding)?;
-    let record = &accounts[IX_CHILD];
-    let canonical = seeds::general_v2_selected_fee_record_pda(
-        program_id,
-        &root.root().settlement_candidate_id().bytes(),
-    );
-    require(
-        selector.child == root.root().fee_record()
-            && selector.child == id(record.key)
-            && *record.key == canonical.0
-            && *record.owner == SYSTEM_PROGRAM_ID
-            && record.data_len() == 0
-            && record.lamports() == 0
-            && !record.is_writable
-            && !record.is_signer
-            && !record.executable,
-        ClutchError::MismatchedState,
-    )?;
-    let mut root_output = std::vec![0u8; root.account_bytes()];
-    root.encode_fee_record_retirement_successor(&mut root_output)?;
-    borrow_mut_data(&accounts[IX_ROOT])?.copy_from_slice(&root_output);
-    Ok(())
-}
-
-#[inline(never)]
 fn begin_retiring(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -615,12 +610,64 @@ fn begin_retiring(
     let mut root_output = std::vec![0u8; root.account_bytes()];
     root.encode_begin_retiring_successor(&mut root_output)?;
     borrow_mut_data(&accounts[IX_ROOT])?.copy_from_slice(&root_output);
-    Ok(())
+    require(
+        &*borrow_data(&accounts[IX_ROOT])? == root_output.as_slice(),
+        ClutchError::MismatchedState,
+    )
 }
 
-/// Dispatch-compatible entrypoint for counted settlement child retirement.
+/// Dispatch-compatible entrypoint for current actions 48, 49, and 51.
 #[inline(never)]
 pub fn process(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    action: GeneralV2Action,
+    payload: &[u8],
+) -> Outcome<()> {
+    require(sequence == 0, ClutchError::Replay)?;
+    require(
+        matches!(
+            action,
+            GeneralV2Action::CloseOwnerSettlementRow
+                | GeneralV2Action::CloseOwnerFeeFinalization
+                | GeneralV2Action::BeginSettlementRetirement
+        ) && capabilities::extension_intent_action_enabled(74, 1, action.tag()),
+        ClutchError::UnsupportedInstruction,
+    )?;
+    let current = authenticate_general_market_current_prefix_v5(program_id, accounts)?;
+    require(
+        current.binding_account() == *accounts[CURRENT_V5_IX_MARKET_BINDING].key,
+        ClutchError::MismatchedState,
+    )?;
+    let suffix = GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5;
+    match action {
+        GeneralV2Action::CloseOwnerSettlementRow
+        | GeneralV2Action::CloseOwnerFeeFinalization => {
+            require_count(accounts, CURRENT_SETTLEMENT_CHILD_CLOSE_ACCOUNT_COUNT_V5)?;
+            let local = [
+                accounts[suffix].clone(),
+                accounts[suffix + 1].clone(),
+                accounts[CURRENT_V5_IX_MARKET_BINDING].clone(),
+                accounts[suffix + 2].clone(),
+                accounts[suffix + 3].clone(),
+            ];
+            process_local(program_id, &local, sequence, action, payload)
+        }
+        GeneralV2Action::BeginSettlementRetirement => {
+            require_count(accounts, CURRENT_BEGIN_RETIRING_ACCOUNT_COUNT_V5)?;
+            let local = [
+                accounts[suffix].clone(),
+                accounts[CURRENT_V5_IX_MARKET_BINDING].clone(),
+            ];
+            process_local(program_id, &local, sequence, action, payload)
+        }
+        _ => Err(Refusal::Adapter(ClutchError::UnsupportedInstruction)),
+    }
+}
+
+#[inline(never)]
+fn process_local(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
@@ -659,13 +706,6 @@ pub fn process(
             )?;
             close_fee_finalization(program_id, accounts, value)
         }
-        SettlementRetirementPayloadKindV1::RetireFeeRecord(value) => {
-            require(
-                action == GeneralV2Action::RetireSelectedFeeRecord,
-                ClutchError::UnsupportedInstruction,
-            )?;
-            retire_fee_record(program_id, accounts, value)
-        }
         SettlementRetirementPayloadKindV1::BeginRetiring(value) => {
             require(
                 action == GeneralV2Action::BeginSettlementRetirement,
@@ -685,5 +725,7 @@ mod tests {
         assert_eq!(SETTLEMENT_CHILD_CLOSE_ACCOUNT_COUNT_V1, 5);
         assert_eq!(FEE_RECORD_RETIREMENT_ACCOUNT_COUNT_V1, 3);
         assert_eq!(BEGIN_RETIRING_ACCOUNT_COUNT_V1, 2);
+        assert_eq!(CURRENT_SETTLEMENT_CHILD_CLOSE_ACCOUNT_COUNT_V5, 29);
+        assert_eq!(CURRENT_BEGIN_RETIRING_ACCOUNT_COUNT_V5, 26);
     }
 }

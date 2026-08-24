@@ -21,19 +21,19 @@ use crate::instructions::artifact::read_clock_slot;
 use crate::seeds;
 use clutch_general_v2_contract as contract;
 use clutch_general_v2_contract::{DeletableRentOwnerV1, Id32, Sha256BackendV1};
-use clutch_product_series::{
-    ContentId, MarketGenesisProfileV2, MarketInstancePreimageV2, NativeClaimBasisV1,
-    PriceMeasurePolicyV1, ProductTemplateV4, QuantizedEdgePolicyV1,
-};
 use clutch_solana_layout::order_page_v5::{
     freeze_page_set_prestate_v5, seal_page_v5, FreezePageSetContextV5, ORDER_PAGE_V5_BYTES,
 };
 use clutch_solana_layout::projection::OwnerInterner;
+use clutch_solana_layout::registry::GeneralV2Action;
 use clutch_solana_layout::{account_len, Hash32, PriceGridAccount};
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
-use super::product_artifact::authenticate_product_artifact_v1;
+use super::general_market_current_v5::{
+    authenticate_general_market_current_prefix_v5, AuthenticatedGeneralMarketCurrentV5,
+    CURRENT_V5_IX_MARKET_BINDING, GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5,
+};
 
 const SBF_FRAME_LIMIT_BYTES: usize = 4_096;
 const _: () = assert!(core::mem::size_of::<OwnerInterner>() < SBF_FRAME_LIMIT_BYTES);
@@ -44,44 +44,32 @@ const _: () = assert!(
 const _: () = assert!(
     core::mem::size_of::<contract::FreezeEpochPoststateV1>() < SBF_FRAME_LIMIT_BYTES
 );
-const _: () = assert!(core::mem::size_of::<NativeClaimBasisV1>() < SBF_FRAME_LIMIT_BYTES);
 const _: () = assert!(ORDER_PAGE_V5_BYTES > SBF_FRAME_LIMIT_BYTES);
 
 /// Exact action-43 payload width: one authenticated Epoch-semantics identity.
 pub const FREEZE_EPOCH_V5_PAYLOAD_BYTES: usize = contract::FREEZE_EPOCH_PAYLOAD_BYTES;
 /// Fixed root and immutable authority accounts before the canonical V5 page set.
-pub const FREEZE_EPOCH_V5_FIXED_ACCOUNT_COUNT: usize = 13;
-/// Minimum action-43 account count: thirteen fixed roles and one nonempty V5 page.
+pub const FREEZE_EPOCH_V5_FIXED_ACCOUNT_COUNT: usize =
+    GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5 + 7;
+/// Minimum action-43 account count: current authority, seven fixed roles, and one page.
 pub const FREEZE_EPOCH_V5_MIN_ACCOUNT_COUNT: usize = FREEZE_EPOCH_V5_FIXED_ACCOUNT_COUNT + 1;
-/// Maximum action-43 account count: thirteen fixed roles and four V5 pages.
+/// Maximum action-43 account count: current authority, seven roles, and four pages.
 pub const FREEZE_EPOCH_V5_MAX_ACCOUNT_COUNT: usize = FREEZE_EPOCH_V5_FIXED_ACCOUNT_COUNT + 4;
 
 /// Writable counted General Epoch root.
-pub const IX_FREEZE_V5_EPOCH: usize = 0;
+pub const IX_FREEZE_V5_EPOCH: usize = GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5;
 /// Read-only immutable EconomicDomainV2 artifact.
-pub const IX_FREEZE_V5_DOMAIN: usize = 1;
+pub const IX_FREEZE_V5_DOMAIN: usize = IX_FREEZE_V5_EPOCH + 1;
 /// Writable candidate Window.
-pub const IX_FREEZE_V5_WINDOW: usize = 2;
+pub const IX_FREEZE_V5_WINDOW: usize = IX_FREEZE_V5_DOMAIN + 1;
 /// Writable present-funded Epoch Budget.
-pub const IX_FREEZE_V5_BUDGET: usize = 3;
-/// Read-only immutable MarketBinding.
-pub const IX_FREEZE_V5_BINDING: usize = 4;
-/// Read-only content-addressed MarketInstancePreimageV2 authority.
-pub const IX_FREEZE_V5_MARKET_INSTANCE: usize = 5;
-/// Read-only content-addressed MarketGenesisProfileV2 authority.
-pub const IX_FREEZE_V5_MARKET_GENESIS: usize = 6;
-/// Read-only content-addressed ProductTemplateV4 authority.
-pub const IX_FREEZE_V5_PRODUCT_TEMPLATE: usize = 7;
-/// Read-only content-addressed NativeClaimBasisV1 authority.
-pub const IX_FREEZE_V5_NATIVE_BASIS: usize = 8;
-/// Read-only content-addressed PriceMeasurePolicyV1 authority.
-pub const IX_FREEZE_V5_PRICE_POLICY: usize = 9;
+pub const IX_FREEZE_V5_BUDGET: usize = IX_FREEZE_V5_WINDOW + 1;
 /// Read-only canonical PriceGrid account selected by Genesis V2.
-pub const IX_FREEZE_V5_PRICE_GRID: usize = 10;
+pub const IX_FREEZE_V5_PRICE_GRID: usize = IX_FREEZE_V5_BUDGET + 1;
 /// Read-only Clock sysvar.
-pub const IX_FREEZE_V5_CLOCK: usize = 11;
+pub const IX_FREEZE_V5_CLOCK: usize = IX_FREEZE_V5_PRICE_GRID + 1;
 /// Writable keeper reward destination.
-pub const IX_FREEZE_V5_KEEPER: usize = 12;
+pub const IX_FREEZE_V5_KEEPER: usize = IX_FREEZE_V5_CLOCK + 1;
 /// First writable canonical OrderPage V5; the complete set follows in order.
 pub const IX_FREEZE_V5_PAGES: usize = FREEZE_EPOCH_V5_FIXED_ACCOUNT_COUNT;
 
@@ -93,6 +81,28 @@ impl Sha256BackendV1 for RuntimeSha256 {
     fn sha256(&self, parts: &[&[u8]]) -> [u8; contract::ID_BYTES] {
         solana_sha256_hasher::hashv(parts).to_bytes()
     }
+}
+
+/// Dispatch-compatible action-43 entrypoint.
+#[inline(never)]
+pub fn process(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    sequence: u64,
+    action: GeneralV2Action,
+    payload: &[u8],
+) -> Outcome<()> {
+    require(sequence == 0, ClutchError::Replay)?;
+    require(
+        action == GeneralV2Action::FreezeEpochV5
+            && capabilities::extension_intent_action_enabled(74, 1, action.tag()),
+        ClutchError::UnsupportedInstruction,
+    )?;
+    freeze_epoch_v5(
+        program_id,
+        accounts,
+        contract::FreezeEpochPayloadV1::decode(payload)?,
+    )
 }
 
 /// Execute fresh General local action 43 over one exact nonempty V5 book.
@@ -108,6 +118,7 @@ pub fn freeze_epoch_v5(
         ClutchError::AccountCount,
     )?;
     require_distinct(accounts)?;
+    let current = authenticate_general_market_current_prefix_v5(program_id, accounts)?;
     require_role(
         program_id,
         &accounts[IX_FREEZE_V5_EPOCH],
@@ -132,12 +143,6 @@ pub fn freeze_epoch_v5(
         true,
         contract::EPOCH_BUDGET_ACCOUNT_BYTES,
     )?;
-    require_role(
-        program_id,
-        &accounts[IX_FREEZE_V5_BINDING],
-        false,
-        contract::MARKET_BINDING_ACCOUNT_BYTES,
-    )?;
     require_writable_destination(&accounts[IX_FREEZE_V5_KEEPER])?;
     for page in &accounts[IX_FREEZE_V5_PAGES..] {
         require_role(program_id, page, true, ORDER_PAGE_V5_BYTES)?;
@@ -148,7 +153,7 @@ pub fn freeze_epoch_v5(
     let domain = decode_domain(&accounts[IX_FREEZE_V5_DOMAIN])?;
     let window = decode_window(&accounts[IX_FREEZE_V5_WINDOW])?;
     let budget = decode_budget(&accounts[IX_FREEZE_V5_BUDGET])?;
-    let binding = decode_binding(&accounts[IX_FREEZE_V5_BINDING])?;
+    let binding = *current.binding().base().base();
 
     authenticate_root_pdas(
         program_id,
@@ -170,7 +175,7 @@ pub fn freeze_epoch_v5(
             budget.selected_rent_remaining,
         ],
     )?;
-    authenticate_product_authority(program_id, accounts, &binding, &domain)?;
+    authenticate_product_authority(program_id, accounts, &current, &domain)?;
 
     let context = FreezePageSetContextV5::new(
         Hash32::from_bytes(epoch.market_runtime.bytes()),
@@ -234,7 +239,13 @@ pub fn freeze_epoch_v5(
     })?;
     encode_account(&accounts[IX_FREEZE_V5_BUDGET], |out| {
         post.budget.encode(out)
-    })
+    })?;
+    require(
+        decode_epoch(&accounts[IX_FREEZE_V5_EPOCH])?.as_ref() == &post.epoch
+            && decode_window(&accounts[IX_FREEZE_V5_WINDOW])?.as_ref() == &post.window
+            && decode_budget(&accounts[IX_FREEZE_V5_BUDGET])?.as_ref() == &post.budget,
+        ClutchError::MismatchedState,
+    )
 }
 
 // Each hostile root decode owns a separate, non-inlined sub-4-KiB frame and
@@ -264,13 +275,6 @@ fn decode_window(account: &AccountInfo) -> Outcome<Box<contract::CandidateWindow
 #[inline(never)]
 fn decode_budget(account: &AccountInfo) -> Outcome<Box<contract::EpochBudgetV2AccountV1>> {
     Ok(Box::new(contract::EpochBudgetV2AccountV1::decode(
-        &borrow_data(account)?,
-    )?))
-}
-
-#[inline(never)]
-fn decode_binding(account: &AccountInfo) -> Outcome<Box<contract::MarketBindingV1>> {
-    Ok(Box::new(contract::MarketBindingV1::decode(
         &borrow_data(account)?,
     )?))
 }
@@ -312,7 +316,7 @@ fn derive_freeze_poststate(
         &RuntimeSha256,
         contract::FreezeEpochTransitionV1 {
             epoch_id: id(accounts[IX_FREEZE_V5_EPOCH].key),
-            market_binding_id: id(accounts[IX_FREEZE_V5_BINDING].key),
+            market_binding_id: id(accounts[CURRENT_V5_IX_MARKET_BINDING].key),
             market_runtime_id: epoch.market_runtime,
             current_slot: slot,
             payload: request,
@@ -339,54 +343,15 @@ fn derive_freeze_poststate(
 fn authenticate_product_authority(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
-    binding: &contract::MarketBindingV1,
+    current: &AuthenticatedGeneralMarketCurrentV5,
     domain: &contract::EconomicDomainV2AccountV1,
 ) -> Outcome<()> {
+    let binding = current.binding().base().base();
+    let market = current.market_instance();
+    let genesis = current.market_genesis();
     let expected_relation = clutch_general_v2_runtime::quantized_relation_v2_policy_id_v2()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let expected_score = clutch_general_v2_runtime::score_v2_q_policy_id_v1()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let market = authenticate_product_artifact_v1::<MarketInstancePreimageV2>(
-        program_id,
-        &accounts[IX_FREEZE_V5_MARKET_INSTANCE],
-        ContentId::from_bytes(binding.market_instance_v2_id.bytes()),
-    )?;
-    let genesis = authenticate_product_artifact_v1::<MarketGenesisProfileV2>(
-        program_id,
-        &accounts[IX_FREEZE_V5_MARKET_GENESIS],
-        ContentId::from_bytes(binding.market_genesis_profile_v2_id.bytes()),
-    )?;
-    let template = authenticate_product_artifact_v1::<ProductTemplateV4>(
-        program_id,
-        &accounts[IX_FREEZE_V5_PRODUCT_TEMPLATE],
-        market.value().product_template_id.content_id(),
-    )?;
-    let basis = authenticate_product_artifact_v1::<NativeClaimBasisV1>(
-        program_id,
-        &accounts[IX_FREEZE_V5_NATIVE_BASIS],
-        ContentId::from_bytes(binding.native_claim_basis_id.bytes()),
-    )?;
-    let price_policy = authenticate_product_artifact_v1::<PriceMeasurePolicyV1>(
-        program_id,
-        &accounts[IX_FREEZE_V5_PRICE_POLICY],
-        ContentId::from_bytes(binding.price_measure_policy_v1_id.bytes()),
-    )?;
-    market
-        .value()
-        .validate_bindings(
-            template.value(),
-            basis.value(),
-            price_policy.value(),
-            genesis.value(),
-        )
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    genesis
-        .value()
-        .validate_partition_bindings(
-            basis.value(),
-            price_policy.value(),
-            QuantizedEdgePolicyV1::Clamp,
-        )
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
 
     require_role(
@@ -408,27 +373,24 @@ fn authenticate_product_authority(
     require(
         binding.relation_policy_id == expected_relation
             && binding.score_policy_id == expected_score
-            && market.value().market_genesis_profile_id.content_id().bytes()
+            && current.binding_account() == *accounts[CURRENT_V5_IX_MARKET_BINDING].key
+            && current.runtime_account().to_bytes() == binding.market.bytes()
+            && market.market_genesis_profile_id.content_id().bytes()
                 == binding.market_genesis_profile_v2_id.bytes()
-            && genesis.value().relation_policy_id.bytes() == binding.relation_policy_id.bytes()
-            && genesis.value().score_policy_id.bytes() == binding.score_policy_id.bytes()
-            && genesis.value().capability_profile_id.bytes() == capabilities::PROFILE_ID
-            && basis.value().basis_degree == binding.basis_degree
-            && (2..=3).contains(&basis.value().basis_degree)
-            && basis.value().outcome_count == binding.outcome_count
-            && basis.value().denominator == binding.price_scale
-            && basis.value().edge_policy_registry_value == 1
-            && binding.price_scale <= price_policy.value().maximum_price_scale
+            && genesis.relation_policy_id.bytes() == binding.relation_policy_id.bytes()
+            && genesis.score_policy_id.bytes() == binding.score_policy_id.bytes()
+            && genesis.capability_profile_id.bytes() == capabilities::PROFILE_ID
+            && (2..=3).contains(&binding.basis_degree)
             && transcript.market_instance_v2_id == binding.market_instance_v2_id
             && transcript.relation_policy_id == binding.relation_policy_id
             && transcript.price_measure_policy_v1_id == binding.price_measure_policy_v1_id
             && transcript.native_claim_basis_id == binding.native_claim_basis_id
             && transcript.outcome_count == binding.outcome_count
             && transcript.price_scale == binding.price_scale
-            && transcript.coordinate_domain_min == genesis.value().coordinate_domain_min
-            && transcript.coordinate_domain_max == genesis.value().coordinate_domain_max
-            && grid.grid.bytes() == genesis.value().price_grid_id.bytes()
-            && grid.realm.bytes() == genesis.value().realm_id.bytes()
+            && transcript.coordinate_domain_min == genesis.coordinate_domain_min
+            && transcript.coordinate_domain_max == genesis.coordinate_domain_max
+            && grid.grid.bytes() == genesis.price_grid_id.bytes()
+            && grid.realm.bytes() == genesis.realm_id.bytes()
             && grid.price_scale == binding.price_scale,
         ClutchError::MismatchedState,
     )
@@ -448,7 +410,7 @@ fn authenticate_root_pdas(
         seeds::general_v2_market_binding_pda(program_id, &binding.market_instance_v2_id.bytes());
     let epoch_pda = seeds::general_v2_epoch_pda(
         program_id,
-        &accounts[IX_FREEZE_V5_BINDING].key.to_bytes(),
+        &accounts[CURRENT_V5_IX_MARKET_BINDING].key.to_bytes(),
         epoch.epoch_index,
     );
     let domain_pda =
@@ -456,7 +418,7 @@ fn authenticate_root_pdas(
     let window_pda = seeds::general_v2_window_pda(program_id, &epoch_pda.0.to_bytes());
     let budget_pda = seeds::general_v2_budget_pda(program_id, &epoch_pda.0.to_bytes());
     require(
-        *accounts[IX_FREEZE_V5_BINDING].key == binding_pda.0
+        *accounts[CURRENT_V5_IX_MARKET_BINDING].key == binding_pda.0
             && binding.stored_bump == binding_pda.1
             && *accounts[IX_FREEZE_V5_EPOCH].key == epoch_pda.0
             && epoch.stored_bump == epoch_pda.1

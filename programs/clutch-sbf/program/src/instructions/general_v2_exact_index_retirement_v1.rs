@@ -36,8 +36,18 @@ use super::general_v2_fee_terminal_pair_v1::{
     AuthenticatedFinalMarketFeeTerminalV1, FeeTerminalPairExpectationV1,
 };
 use super::general_market_current_v5::AuthenticatedGeneralMarketCurrentV5;
+use super::general_market_current_v5::{
+    authenticate_general_market_current_prefix_v5, CURRENT_V5_IX_MARKET_BINDING,
+    GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5,
+};
 pub const RETIRE_INDEX_CHILDREN_ACCOUNT_COUNT_V1: usize = 7;
 pub const RETIRE_RETAINED_FEED_ACCOUNT_COUNT_V1: usize = 6;
+/// Exact current action-45 frame: hostile V5 prefix plus six unique local roles.
+pub const RETIRE_INDEX_CHILDREN_CURRENT_ACCOUNT_COUNT_V1: usize =
+    GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5 + 6;
+/// Exact current action-46 frame: hostile V5 prefix plus five unique local roles.
+pub const RETIRE_RETAINED_FEED_CURRENT_ACCOUNT_COUNT_V1: usize =
+    GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5 + 5;
 /// Exact General account frame consumed after Product's move-only terminal.
 pub const CLOSE_INDEXED_ROOT_ACCOUNT_COUNT_V1: usize = 10;
 
@@ -971,14 +981,45 @@ pub fn process(
                 action == GeneralV2Action::RetireExactIndexChildren,
                 ClutchError::UnsupportedInstruction,
             )?;
-            retire_index_children(program_id, accounts, selector)
+            require_count(accounts, RETIRE_INDEX_CHILDREN_CURRENT_ACCOUNT_COUNT_V1)?;
+            let current = authenticate_general_market_current_prefix_v5(program_id, accounts)?;
+            require(
+                current.binding_account() == *accounts[CURRENT_V5_IX_MARKET_BINDING].key,
+                ClutchError::MismatchedState,
+            )?;
+            let suffix = GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5;
+            let local = [
+                accounts[suffix].clone(),
+                accounts[suffix + 1].clone(),
+                accounts[suffix + 2].clone(),
+                accounts[suffix + 3].clone(),
+                accounts[CURRENT_V5_IX_MARKET_BINDING].clone(),
+                accounts[suffix + 4].clone(),
+                accounts[suffix + 5].clone(),
+            ];
+            retire_index_children(program_id, &local, selector)
         }
         ExactIndexLifecyclePayloadKindV1::RetireRetainedFeed(selector) => {
             require(
                 action == GeneralV2Action::RetireRetainedFeed,
                 ClutchError::UnsupportedInstruction,
             )?;
-            retire_retained_feed(program_id, accounts, selector)
+            require_count(accounts, RETIRE_RETAINED_FEED_CURRENT_ACCOUNT_COUNT_V1)?;
+            let current = authenticate_general_market_current_prefix_v5(program_id, accounts)?;
+            require(
+                current.binding_account() == *accounts[CURRENT_V5_IX_MARKET_BINDING].key,
+                ClutchError::MismatchedState,
+            )?;
+            let suffix = GENERAL_MARKET_CURRENT_ACCOUNT_COUNT_V5;
+            let local = [
+                accounts[suffix].clone(),
+                accounts[suffix + 1].clone(),
+                accounts[CURRENT_V5_IX_MARKET_BINDING].clone(),
+                accounts[suffix + 2].clone(),
+                accounts[suffix + 3].clone(),
+                accounts[suffix + 4].clone(),
+            ];
+            retire_retained_feed(program_id, &local, selector)
         }
         ExactIndexLifecyclePayloadKindV1::CloseIndexedRoot(selector) => {
             require(
@@ -1001,6 +1042,8 @@ mod tests {
     fn indexed_terminal_frames_are_frozen() {
         assert_eq!(RETIRE_INDEX_CHILDREN_ACCOUNT_COUNT_V1, 7);
         assert_eq!(RETIRE_RETAINED_FEED_ACCOUNT_COUNT_V1, 6);
+        assert_eq!(RETIRE_INDEX_CHILDREN_CURRENT_ACCOUNT_COUNT_V1, 31);
+        assert_eq!(RETIRE_RETAINED_FEED_CURRENT_ACCOUNT_COUNT_V1, 30);
         assert_eq!(CLOSE_INDEXED_ROOT_ACCOUNT_COUNT_V1, 10);
     }
 
