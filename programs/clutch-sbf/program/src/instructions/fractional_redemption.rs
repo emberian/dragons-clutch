@@ -50,15 +50,14 @@ use clutch_fractional_redemption_runtime::{
     FRACTIONAL_REDEMPTION_FAMILY_TAG, FRACTIONAL_REDEMPTION_FAMILY_VERSION,
 };
 use clutch_product_series::{
-    ContentId, MarketFoundationAccountGraphV2, MarketFoundationScheduleV2,
+    ContentId, MarketFoundationAccountGraphV3, MarketFoundationScheduleV3,
+    MarketLifecycleRootV2,
 };
 use clutch_retirement::{
     admit_initial_rent_split, admit_reopen_rent_split, Identity32V1, RentSplitAdmissionPlanV2,
     PositionAccountV3, PositionV3Sha256Backend, POSITION_V3_BYTES,
 };
-use clutch_solana_layout::product_series::{
-    MarketLifecycleRootAccountV1, MarketLifecycleRootAccountV2,
-};
+use clutch_solana_layout::product_series::MarketLifecycleRootAccountV2;
 use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
 use solana_instruction::{AccountMeta, Instruction};
@@ -72,9 +71,9 @@ use super::external_redemption_v3::{
     accept_zero_claim_collateral_payout, bearer_claim_observation_v3,
     invoke_claim_collateral_payout, observe_outcome_mints_for_bearer_v3, runtime_account_view,
 };
-use super::product_artifact::AuthenticatedRegistryCapabilityV3;
-use super::product_market::authenticate_market_lifecycle_root_v1;
-use super::product_series_current::authenticate_market_lifecycle_root_v2;
+use super::product_series_current::{
+    authenticate_market_lifecycle_root_v2, AuthenticatedRegistryCapabilityV4,
+};
 use super::genesis::{
     allocate_data, assign_data, read_rent, require_creatable, require_system_program,
     transfer_data, SYSTEM_PROGRAM_ID,
@@ -920,12 +919,12 @@ impl AuthenticatedFractionalRuntimeReleaseV1 {
 
 /// Narrow a Series-bound loader/artifact capability into one Fractional action.
 ///
-/// The in-flight profile refuses every Fractional action. The complete profile
-/// admits the whole 79/v1 action range together; merely possessing allocated
-/// wire coordinates is never accepted as a runtime release.
+/// The checked complete profile admits the whole 79/v1 action range together;
+/// merely possessing allocated wire coordinates is never accepted as a
+/// runtime release.
 pub(crate) fn authenticate_fractional_runtime_release_v1(
     program_id: &Pubkey,
-    capability: AuthenticatedRegistryCapabilityV3,
+    capability: &AuthenticatedRegistryCapabilityV4,
     action: FractionalRedemptionActionV1,
 ) -> Outcome<AuthenticatedFractionalRuntimeReleaseV1> {
     require(
@@ -1162,22 +1161,24 @@ pub(crate) fn authenticate_fractional_family_admission_postwrite_v1(
 /// and before returning success; transaction rollback then keeps all four
 /// accounts atomic on any Product refusal.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn consume_fractional_family_admission_postwrite_v1(
+pub(crate) fn consume_fractional_family_admission_postwrite_v2(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
     postwrite: AuthenticatedFractionalFamilyAdmissionPostwriteV1,
-    schedule: &MarketFoundationScheduleV2,
-    graph: &MarketFoundationAccountGraphV2,
-    root_before_output: &mut MarketLifecycleRootAccountV1,
-    root_after_output: &mut MarketLifecycleRootAccountV1,
-) -> Outcome<super::fractional_product_consumer::AuthenticatedProductFractionalAdmissionV1> {
-    super::fractional_product_consumer::consume_fractional_admission_v1(
+    schedule: &MarketFoundationScheduleV3,
+    graph: &MarketFoundationAccountGraphV3,
+    root_before_output: &mut MarketLifecycleRootAccountV2,
+    root_successor_output: &mut MarketLifecycleRootV2,
+    root_after_output: &mut MarketLifecycleRootAccountV2,
+) -> Outcome<super::product_series_current::AuthenticatedProductFractionalFamilyAdmissionV2> {
+    super::fractional_product_consumer::consume_fractional_admission_v2(
         program_id,
         root_account,
         postwrite,
         schedule,
         graph,
         root_before_output,
+        root_successor_output,
         root_after_output,
     )
 }
@@ -1362,22 +1363,24 @@ pub(crate) fn authenticate_fractional_family_terminal_postwrite_v1(
 /// Atomically consume an exact hostile-authenticated Fractional terminal
 /// postwrite into Product before action 10 deletes a4/a5 or applies rent.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn consume_fractional_family_terminal_postwrite_v1(
+pub(crate) fn consume_fractional_family_terminal_postwrite_v2(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
     postwrite: AuthenticatedFractionalFamilyTerminalPostwriteV1,
-    schedule: &MarketFoundationScheduleV2,
-    graph: &MarketFoundationAccountGraphV2,
-    root_before_output: &mut MarketLifecycleRootAccountV1,
-    root_after_output: &mut MarketLifecycleRootAccountV1,
-) -> Outcome<super::fractional_product_consumer::AuthenticatedProductFractionalTerminalV1> {
-    super::fractional_product_consumer::consume_fractional_terminal_v1(
+    schedule: &MarketFoundationScheduleV3,
+    graph: &MarketFoundationAccountGraphV3,
+    root_before_output: &mut MarketLifecycleRootAccountV2,
+    root_successor_output: &mut MarketLifecycleRootV2,
+    root_after_output: &mut MarketLifecycleRootAccountV2,
+) -> Outcome<super::product_series_current::AuthenticatedProductFractionalFamilyTerminalV2> {
+    super::fractional_product_consumer::consume_fractional_terminal_v2(
         program_id,
         root_account,
         postwrite,
         schedule,
         graph,
         root_before_output,
+        root_successor_output,
         root_after_output,
     )
 }

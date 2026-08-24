@@ -870,6 +870,7 @@ pub(crate) trait AuthenticatedProductFractionalFamilyTerminalOwnerV2 {
         _claim_ledger_post_state_id: ContentId,
         _claim_ledger_transition_id: ContentId,
         _fractional_release_id: ContentId,
+        _capability_profile_id: ContentId,
         _claim_release_receipt_id: ContentId,
         _rent_disposition_id: ContentId,
         _resolution_account: Pubkey,
@@ -1257,7 +1258,8 @@ where
         Pubkey::new_from_array(policy_account.bytes()), policy_terminal_state_id,
         Pubkey::new_from_array(ledger_account.bytes()), ledger_terminal_state_id,
         Pubkey::new_from_array(claim_ledger_account.bytes()), claim_ledger_post_state_id,
-        claim_ledger_transition_id, fractional_release_id, claim_release_receipt_id,
+        claim_ledger_transition_id, fractional_release_id, binding.capability_profile_id,
+        claim_release_receipt_id,
         rent_disposition_id, Pubkey::new_from_array(resolution_account.bytes()),
         current.resolution_semantic_id(), current.resolution_data_id(),
         binding.native_claim_basis_id, terminal_receipt_id, verification_id,
@@ -2612,6 +2614,7 @@ mod source_contract_tests {
         assert!(source.contains("owner.authenticate_product_fractional_family_terminal_owner_v2("));
         assert!(source.contains("claim_ledger_before_id != claim_ledger_after_id"));
         assert!(source.contains("fractional_release_id == binding.registry_release_id"));
+        assert!(source.contains("claim_ledger_transition_id, fractional_release_id, binding.capability_profile_id"));
         assert!(!source.contains("pub(crate) fn write_market_lifecycle_root_v2<'next>("));
     }
 }

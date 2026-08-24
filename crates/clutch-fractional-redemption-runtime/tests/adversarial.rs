@@ -1761,8 +1761,8 @@ fn disabled_adapter_refuses_before_payload_or_account_inspection() {
 #[test]
 fn live_successor_account_contracts_name_dynamic_bearer_mints_and_terminal_writes() {
     let initialize = fractional_account_contract_v1(FractionalRedemptionActionV1::Initialize);
-    assert_eq!(initialize.account_count, 31);
-    assert_eq!(initialize.foundation_core_accounts, 14);
+    assert_eq!(initialize.account_count, 32);
+    assert_eq!(initialize.foundation_core_accounts, 15);
     assert_eq!(initialize.foundation_aux_accounts, 17);
     assert!(initialize.foundation_outcome_pair_suffix);
     assert_eq!(initialize.foundation_aux_writable_mask, 0);
@@ -1832,8 +1832,8 @@ fn live_successor_account_contracts_name_dynamic_bearer_mints_and_terminal_write
 
     let terminal =
         fractional_account_contract_v1(FractionalRedemptionActionV1::CloseEmptyLedger);
-    assert_eq!(terminal.account_count, 31);
-    assert_eq!(terminal.foundation_core_accounts, 14);
+    assert_eq!(terminal.account_count, 32);
+    assert_eq!(terminal.foundation_core_accounts, 15);
     assert_eq!(terminal.foundation_aux_accounts, 17);
     assert!(terminal.foundation_outcome_pair_suffix);
     assert_eq!(terminal.foundation_aux_writable_mask, 0x18000);

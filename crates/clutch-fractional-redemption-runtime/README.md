@@ -141,21 +141,21 @@ by the one exact linked capability profile.
 
 The always-compiled, currently capability-refused account order is:
 
-The present SBF checkpoint consumes the historical 46-slot
-`MarketFoundationAccountGraphV2`, whose active projection has 14 fixed core
-accounts plus two accounts per outcome. This is not the acceptance graph:
-Product/Collateral has identified a required 47th fixed
-`HoardCollateralVault` slot. Fractional must migrate both lifecycle outers to
-that typed successor before 79/v1 becomes callable; the current counts below
-describe the checked-in checkpoint exactly and are not frozen for release.
+The SBF lifecycle outers consume the current 47-slot
+`MarketFoundationAccountGraphV3`, whose active projection has 15 fixed core
+accounts, including the exact release-selected `HoardCollateralVault`, plus
+two accounts per outcome. They authenticate the current Product `0xaa/v2`
+root, `0xad/v2` founder link, `SeriesFundingQuoteV5`, and read-only
+`SeriesRegistryV3`; Product's narrow, default-refusing writer remains the sole
+owner of the root successor.
 
-- `Initialize`: the 14 Product Foundation core accounts in slot order, the
+- `Initialize`: the 15 Product Foundation core accounts in slot order, the
   active OutcomeMint prefix, the active OutcomeCustody prefix, then Realm,
   Profile, collateral policy/program/ProgramData, claim program/ProgramData,
-  MarketInstance artifact, founder Series link, FundingQuoteV4 artifact,
-  SeriesRegistryV2, this Program/ProgramData, ReleaseV2/ProfileV4 artifacts,
+  MarketInstance artifact, founder Series link, FundingQuoteV5 artifact,
+  SeriesRegistryV3, this Program/ProgramData, ReleaseV2/ProfileV4 artifacts,
   System Program, and Rent. For `N` active outcomes the exact count is
-  `14 + 2*N + 17 = 31 + 2*N`. No signer or second Foundation debit exists.
+  `15 + 2*N + 17 = 32 + 2*N`. No signer or second Foundation debit exists.
 - Exact internal redeem: owner; Realm; collateral Profile/policy/program;
   MarketBinding; MarketRuntime; MarketInstance artifact; Hoard V2; ClaimLedger
   V3; Resolution V5; fractional policy; aggregate ledger; Position V3; GEN1
@@ -192,9 +192,9 @@ describe the checked-in checkpoint exactly and are not frozen for release.
 - Terminal close: the same Foundation core/mint/custody graph, then Realm,
   Profile, collateral policy/program/ProgramData, the independent Token-2022
   claim program/ProgramData, MarketInstance artifact, founder Series link,
-  FundingQuoteV4, SeriesRegistryV2, this
+  FundingQuoteV5, SeriesRegistryV3, this
   Program/ProgramData, ReleaseV2/ProfileV4, writable shared rent refund owner,
-  and writable neutral sink. Its exact count is also `31 + 2*N`. It consumes
+  and writable neutral sink. Its exact count is also `32 + 2*N`. It consumes
   Product terminality before deleting
   `0xa4` and `0xa5`, refunds only both stored principals, sends every surplus
   lamport to the exact System-owned neutral sink, and advances ClaimLedger to
