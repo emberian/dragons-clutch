@@ -4044,11 +4044,7 @@ mod tests {
                     epoch,
                     page_index: 0,
                 }),
-                if crate::capabilities::GENERAL_CLEARING {
-                    ClutchError::AccountCount
-                } else {
-                    ClutchError::UnsupportedInstruction
-                },
+                ClutchError::UnsupportedInstruction,
             ),
             (
                 Action::Layout(Intent::PlaceOrder {
@@ -4076,11 +4072,7 @@ mod tests {
                     order_id: canonical_order_id(1),
                     generation: 7,
                 }),
-                if crate::capabilities::GENERAL_CLEARING {
-                    ClutchError::AccountCount
-                } else {
-                    ClutchError::UnsupportedInstruction
-                },
+                ClutchError::UnsupportedInstruction,
             ),
             (
                 Action::Layout(Intent::SubmitDirectPage {
