@@ -9,20 +9,28 @@
 //! founder consumes the private plan and returns an authenticated postwrite to
 //! Product; no public field tuple can stand in for that authority.
 
-use crate::accounts::{require, Outcome};
+use crate::accounts::{require, require_signer, Outcome};
 use crate::error::{ClutchError, Refusal};
+use crate::instructions::genesis::{require_creatable, require_system_program, RentParameters};
 use crate::seeds;
 use clutch_general_v2_contract::{
-    CurrentMarketAuthorityV4, GeneralFoundingPolicyV1, Id32, MarketBindingV2,
-    MarketBindingV4, MarketRuntimeV3AccountV1, Sha256BackendV1,
+    CurrentMarketAuthorityV4, GeneralFoundingPolicyV1, Id32,
+    MarketBindingV2, MarketBindingV4, MarketRuntimeV3AccountV1, Sha256BackendV1,
+    GENERAL_REPLAY_ACCOUNT_V1_BYTES, MARKET_BINDING_ACCOUNT_BYTES_V4,
+    MARKET_RUNTIME_ACCOUNT_BYTES,
 };
 use clutch_product_series::ContentId;
+use clutch_retirement::POSITION_V3_BYTES;
+use clutch_solana_layout::revenue::TREASURY_SERVICE_LEDGER_V1_BYTES;
+use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
 use super::revenue_policy_v2::{
-    derive_revenue_market_treasury_v1, AuthenticatedRevenuePolicyRecordV2,
-    AuthenticatedTreasuryMarketFactsV1, RevenueMarketTreasuryDerivationV1,
+    derive_revenue_market_treasury_v1, found_revenue_market_treasury_v1,
+    AuthenticatedRevenuePolicyRecordV2, AuthenticatedTreasuryMarketFactsV1,
+    RevenueMarketTreasuryDerivationV1, RevenueMarketTreasuryFoundationV1,
 };
+use super::general_v2_settlement_producer_v5::{create_from_payer, rent_owner};
 
 const GENERAL_CURRENT_FOUNDING_JOIN_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/general/current-founding-join/v4\0";
@@ -115,6 +123,48 @@ impl AuthenticatedGeneralMarketFoundingPlanV4 {
     pub(crate) const fn id(&self) -> ContentId { self.join_id }
 }
 
+/// Exact writable accounts created by the current Product-to-General founder.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GeneralMarketFoundationAccountFrameV4<'a, 'info> {
+    /// Explicit signer and principal owner for MarketBindingV4 and RuntimeV3.
+    pub(crate) general_rent_payer: &'a AccountInfo<'info>,
+    /// Separately named signer and principal owner for Position/Replay/0xbb.
+    pub(crate) treasury_rent_payer: &'a AccountInfo<'info>,
+    /// Fresh canonical MarketBinding `0x79/v4` PDA.
+    pub(crate) market_binding: &'a AccountInfo<'info>,
+    /// Fresh canonical General MarketRuntime PDA.
+    pub(crate) market_runtime: &'a AccountInfo<'info>,
+    /// Fresh Market-scoped ordinary treasury PositionV3.
+    pub(crate) treasury_position: &'a AccountInfo<'info>,
+    /// Fresh mandatory GEN1 ReplayV3 for the treasury Position.
+    pub(crate) treasury_replay: &'a AccountInfo<'info>,
+    /// Fresh counted treasury-service ledger `0xbb/v1`.
+    pub(crate) treasury_service_ledger: &'a AccountInfo<'info>,
+    /// Canonical System program.
+    pub(crate) system_program: &'a AccountInfo<'info>,
+}
+
+/// Private authenticated postwrite for the complete current General market
+/// state and its separately funded treasury custody graph.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AuthenticatedGeneralMarketFoundingPostwriteV4 {
+    binding_account: Pubkey,
+    binding: MarketBindingV4,
+    runtime_account: Pubkey,
+    runtime: MarketRuntimeV3AccountV1,
+    treasury: RevenueMarketTreasuryFoundationV1,
+    join_id: ContentId,
+}
+
+impl AuthenticatedGeneralMarketFoundingPostwriteV4 {
+    pub(crate) const fn binding_account(self) -> Pubkey { self.binding_account }
+    pub(crate) const fn binding(self) -> MarketBindingV4 { self.binding }
+    pub(crate) const fn runtime_account(self) -> Pubkey { self.runtime_account }
+    pub(crate) const fn runtime(self) -> MarketRuntimeV3AccountV1 { self.runtime }
+    pub(crate) const fn treasury(self) -> RevenueMarketTreasuryFoundationV1 { self.treasury }
+    pub(crate) const fn join_id(self) -> ContentId { self.join_id }
+}
+
 /// Derive and authenticate the complete current General founding graph.
 pub(crate) fn prepare_general_market_founding_v4<P>(
     program_id: &Pubkey,
@@ -124,7 +174,7 @@ pub(crate) fn prepare_general_market_founding_v4<P>(
     revenue: AuthenticatedRevenuePolicyRecordV2,
 ) -> Outcome<AuthenticatedGeneralMarketFoundingPlanV4>
 where
-    P: AuthenticatedCurrentProductGeneralFoundingV4 + ?Sized,
+    P: AuthenticatedCurrentProductGeneralFoundingV4,
 {
     let founding_policy = GeneralFoundingPolicyV1::decode(founding_policy_bytes)?;
     let founding_policy_id = founding_policy.semantic_id(&RuntimeSha256)?;
@@ -222,15 +272,208 @@ where
     })
 }
 
-/// Private proof returned only after every General/treasury account was
-/// hostile-reauthenticated from its exact postwrite.
-pub(crate) trait AuthenticatedGeneralMarketFoundingPostwriteV4 {
-    fn authenticate_general_market_founding_postwrite_v4(
-        &self,
-        _plan: &AuthenticatedGeneralMarketFoundingPlanV4,
-        _binding: &MarketBindingV4,
-        _runtime: &MarketRuntimeV3AccountV1,
-    ) -> Outcome<()> {
-        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+fn require_foundation_accounts_distinct(
+    frame: GeneralMarketFoundationAccountFrameV4<'_, '_>,
+) -> Outcome<()> {
+    let accounts = [
+        frame.market_binding,
+        frame.market_runtime,
+        frame.treasury_position,
+        frame.treasury_replay,
+        frame.treasury_service_ledger,
+        frame.system_program,
+    ];
+    let mut left = 0usize;
+    while left < accounts.len() {
+        let mut right = left + 1;
+        while right < accounts.len() {
+            require(accounts[left].key != accounts[right].key, ClutchError::AccountAlias)?;
+            right += 1;
+        }
+        left += 1;
     }
+    for payer in [frame.general_rent_payer, frame.treasury_rent_payer] {
+        for target in accounts {
+            require(payer.key != target.key, ClutchError::AccountAlias)?;
+        }
+    }
+    Ok(())
+}
+
+fn require_aggregate_principal(
+    frame: GeneralMarketFoundationAccountFrameV4<'_, '_>,
+    rent: &RentParameters,
+) -> Outcome<()> {
+    let general = rent
+        .minimum_balance(MARKET_BINDING_ACCOUNT_BYTES_V4)?
+        .checked_add(rent.minimum_balance(MARKET_RUNTIME_ACCOUNT_BYTES)?)
+        .ok_or(ClutchError::Arithmetic)?;
+    let service_ledger_principal = rent.minimum_balance(TREASURY_SERVICE_LEDGER_V1_BYTES)?;
+    let treasury = rent
+        .minimum_balance(POSITION_V3_BYTES)?
+        .checked_add(rent.minimum_balance(GENERAL_REPLAY_ACCOUNT_V1_BYTES)?)
+        .and_then(|value| value.checked_add(service_ledger_principal))
+        .ok_or(ClutchError::Arithmetic)?;
+    if frame.general_rent_payer.key == frame.treasury_rent_payer.key {
+        require(
+            frame.general_rent_payer.lamports()
+                >= general.checked_add(treasury).ok_or(ClutchError::Arithmetic)?,
+            ClutchError::AccountCreationFailed,
+        )
+    } else {
+        require(
+            frame.general_rent_payer.lamports() >= general
+                && frame.treasury_rent_payer.lamports() >= treasury,
+            ClutchError::AccountCreationFailed,
+        )
+    }
+}
+
+/// Atomically create and hostile-reauthenticate MarketBindingV4, RuntimeV3,
+/// the ordinary treasury Position, mandatory Replay, and counted `0xbb`.
+/// Both named payers transfer full rent principal; hostile prefunds remain
+/// account-owned donation floors and never discount either payer.
+#[inline(never)]
+pub(crate) fn found_general_market_v4<P>(
+    program_id: &Pubkey,
+    frame: GeneralMarketFoundationAccountFrameV4<'_, '_>,
+    rent: &RentParameters,
+    plan: AuthenticatedGeneralMarketFoundingPlanV4,
+    product: &P,
+) -> Outcome<AuthenticatedGeneralMarketFoundingPostwriteV4>
+where
+    P: AuthenticatedCurrentProductGeneralFoundingV4,
+{
+    require_signer(frame.general_rent_payer)?;
+    require_signer(frame.treasury_rent_payer)?;
+    require_system_program(frame.system_program)?;
+    require_foundation_accounts_distinct(frame)?;
+    require_aggregate_principal(frame, rent)?;
+    for account in [
+        frame.market_binding,
+        frame.market_runtime,
+        frame.treasury_position,
+        frame.treasury_replay,
+        frame.treasury_service_ledger,
+    ] {
+        require_creatable(account)?;
+    }
+    require(
+        *frame.market_binding.key == plan.market_binding_account
+            && *frame.market_runtime.key == plan.market_runtime_account
+            && *frame.treasury_position.key == plan.treasury.treasury_position_account()
+            && *frame.treasury_replay.key == plan.treasury.treasury_replay_account()
+            && *frame.treasury_service_ledger.key
+                == plan.treasury.treasury_service_ledger_account(),
+        ClutchError::WrongPda,
+    )?;
+    let binding_rent = rent_owner(
+        frame.general_rent_payer,
+        frame.market_binding,
+        rent,
+        MARKET_BINDING_ACCOUNT_BYTES_V4,
+    )?;
+    let runtime_rent = rent_owner(
+        frame.general_rent_payer,
+        frame.market_runtime,
+        rent,
+        MARKET_RUNTIME_ACCOUNT_BYTES,
+    )?;
+    let binding = MarketBindingV4::new(plan.base, plan.authority, binding_rent)?;
+    let runtime = MarketRuntimeV3AccountV1 {
+        market_binding: Id32::from_bytes(frame.market_binding.key.to_bytes()),
+        market_instance_v2_id: plan.base.base().market_instance_v2_id,
+        next_epoch_index: 0,
+        next_epoch_generation: 1,
+        created_epoch_count: 0,
+        retired_epoch_count: 0,
+        rent: runtime_rent,
+        stored_bump: plan.market_runtime_bump,
+        flags: 0,
+    };
+    runtime.validate()?;
+    create_from_payer(
+        program_id,
+        frame.general_rent_payer,
+        frame.market_binding,
+        frame.system_program,
+        rent,
+        MARKET_BINDING_ACCOUNT_BYTES_V4,
+        binding_rent,
+        &[
+            seeds::SEED_GENERAL_V2_MARKET_BINDING,
+            &plan.base.base().market_instance_v2_id.bytes(),
+            &[plan.market_binding_bump],
+        ],
+    )?;
+    create_from_payer(
+        program_id,
+        frame.general_rent_payer,
+        frame.market_runtime,
+        frame.system_program,
+        rent,
+        MARKET_RUNTIME_ACCOUNT_BYTES,
+        runtime_rent,
+        &[
+            seeds::SEED_GENERAL_V2_MARKET_RUNTIME,
+            &frame.market_binding.key.to_bytes(),
+            &[plan.market_runtime_bump],
+        ],
+    )?;
+    {
+        let mut output = frame
+            .market_binding
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        binding.encode(&mut output)?;
+    }
+    {
+        let mut output = frame
+            .market_runtime
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        runtime.encode(&mut output)?;
+    }
+    let treasury = found_revenue_market_treasury_v1(
+        program_id,
+        frame.treasury_rent_payer,
+        frame.treasury_position,
+        frame.treasury_replay,
+        frame.treasury_service_ledger,
+        frame.system_program,
+        rent,
+        plan.treasury,
+        product,
+    )?;
+    let persisted_binding = MarketBindingV4::decode(&frame.market_binding.data.borrow())?;
+    let persisted_runtime = MarketRuntimeV3AccountV1::decode(&frame.market_runtime.data.borrow())?;
+    require(
+        persisted_binding == binding
+            && persisted_runtime == runtime
+            && treasury.revenue_policy_record_account()
+                == plan.revenue.record_account()
+            && treasury.revenue_policy_record_v2_id().bytes()
+                == plan.revenue.record_semantic_id().bytes()
+            && treasury.revenue_policy_v2_digest().bytes()
+                == plan.revenue.policy_digest().bytes()
+            && treasury.treasury_owner().bytes() == plan.revenue.treasury_owner().bytes()
+            && treasury.treasury_position_derivation_policy_v2_id().bytes()
+                == plan
+                    .revenue
+                    .treasury_position_derivation_policy_id()
+                    .bytes()
+            && treasury.treasury_position_account()
+                == plan.treasury.treasury_position_account()
+            && treasury.treasury_service_ledger_account()
+                == plan.treasury.treasury_service_ledger_account(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(AuthenticatedGeneralMarketFoundingPostwriteV4 {
+        binding_account: *frame.market_binding.key,
+        binding,
+        runtime_account: *frame.market_runtime.key,
+        runtime,
+        treasury,
+        join_id: plan.join_id,
+    })
 }
