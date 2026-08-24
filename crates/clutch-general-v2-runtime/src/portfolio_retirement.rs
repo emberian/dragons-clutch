@@ -117,17 +117,17 @@ pub struct RetirePortfolioPairArchivesInputV2<'a> {
     pub receipts: &'a [Option<PortfolioArchiveReceiptInputV2>;
         PORTFOLIO_ARCHIVE_MAX_RECEIPTS_V2],
     /// Buyer consumed Reservation V9.
-    pub buyer_reservation: PortfolioArchiveReservationInputV2,
+    pub buyer_reservation: &'a PortfolioArchiveReservationInputV2,
     /// Seller consumed Reservation V9.
-    pub seller_reservation: PortfolioArchiveReservationInputV2,
+    pub seller_reservation: &'a PortfolioArchiveReservationInputV2,
     /// Buyer Position authenticated by the outer owner/PDA adapter.
-    pub buyer_position: AuthenticatedPositionV3,
+    pub buyer_position: &'a AuthenticatedPositionV3,
     /// Seller Position authenticated by the outer owner/PDA adapter.
-    pub seller_position: AuthenticatedPositionV3,
+    pub seller_position: &'a AuthenticatedPositionV3,
     /// Buyer GEN1 prestate authenticated against the exact Position.
-    pub buyer_replay: GeneralPositionReplayPrestateV1,
+    pub buyer_replay: &'a GeneralPositionReplayPrestateV1,
     /// Seller GEN1 prestate authenticated against the exact Position.
-    pub seller_replay: GeneralPositionReplayPrestateV1,
+    pub seller_replay: &'a GeneralPositionReplayPrestateV1,
     /// Sorted unique active refund-owner prefix and canonical zero tail.
     pub refund_owners: &'a [PortfolioArchiveRefundOwnerInputV2;
         PORTFOLIO_ARCHIVE_MAX_REFUND_OWNERS_V2],
@@ -336,7 +336,7 @@ pub enum PortfolioArchiveRetirementErrorV2 {
 
 /// Prepare the sole exhaustive portfolio-pair archive retirement transition.
 pub fn prepare_retire_portfolio_pair_archives_v2<B>(
-    input: RetirePortfolioPairArchivesInputV2<'_>,
+    input: &RetirePortfolioPairArchivesInputV2<'_>,
     backend: &B,
 ) -> Result<RetirePortfolioPairArchivesPlanV2, PortfolioArchiveRetirementErrorV2>
 where
@@ -577,16 +577,16 @@ where
     let action42_receipt_set_digest = nonzero_digest(pending_set_hash)?;
 
     let buyer_close = validate_reservation(
-        input.buyer_reservation,
+        *input.buyer_reservation,
         root,
-        input.buyer_position,
+        *input.buyer_position,
         entry_buy_order,
         0,
     )?;
     let seller_close = validate_reservation(
-        input.seller_reservation,
+        *input.seller_reservation,
         root,
-        input.seller_position,
+        *input.seller_position,
         entry_sell_order,
         1,
     )?;
@@ -632,7 +632,7 @@ where
         return Err(PortfolioArchiveRetirementErrorV2::ReservationMismatch);
     }
     let buyer_prior_position_id = action42_prior_position_id(
-        input.buyer_position,
+        *input.buyer_position,
         true,
         consideration_atoms,
         buyer_reservation_body.initial_cash_atoms,
@@ -640,7 +640,7 @@ where
         backend,
     )?;
     let seller_prior_position_id = action42_prior_position_id(
-        input.seller_position,
+        *input.seller_position,
         false,
         consideration_atoms,
         0,
@@ -648,8 +648,8 @@ where
         backend,
     )?;
     require_immediate_portfolio_replay(
-        input.buyer_replay,
-        input.buyer_position,
+        *input.buyer_replay,
+        *input.buyer_position,
         GeneralReplayTransitionKindV1::PortfolioPairBuyer,
         entry_delivery_transition,
         buyer_prior_position_id,
@@ -657,8 +657,8 @@ where
         backend,
     )?;
     require_immediate_portfolio_replay(
-        input.seller_replay,
-        input.seller_position,
+        *input.seller_replay,
+        *input.seller_position,
         GeneralReplayTransitionKindV1::PortfolioPairSeller,
         entry_delivery_transition,
         seller_prior_position_id,
@@ -757,7 +757,7 @@ where
         neutral_sink_balance_after,
     )?;
     let buyer_replay_poststate = project_general_replay_transition_v1(
-        input.buyer_replay,
+        *input.buyer_replay,
         buyer_position_poststate,
         GeneralReplayTransitionKindV1::RetirePortfolioPairBuyerArchive,
         transition_id,
@@ -766,7 +766,7 @@ where
     )
     .map_err(|_| PortfolioArchiveRetirementErrorV2::ReplayMismatch)?;
     let seller_replay_poststate = project_general_replay_transition_v1(
-        input.seller_replay,
+        *input.seller_replay,
         seller_position_poststate,
         GeneralReplayTransitionKindV1::RetirePortfolioPairSellerArchive,
         transition_id,
@@ -1154,8 +1154,8 @@ fn transition_id(
     for close in reservation_closes {
         hash_close(&mut hash, *close);
     }
-    hash_endpoint_pre(&mut hash, input.buyer_position, input.buyer_replay);
-    hash_endpoint_pre(&mut hash, input.seller_position, input.seller_replay);
+    hash_endpoint_pre(&mut hash, *input.buyer_position, *input.buyer_replay);
+    hash_endpoint_pre(&mut hash, *input.seller_position, *input.seller_replay);
     nonzero_digest(hash)
 }
 
@@ -1250,10 +1250,10 @@ fn terminal_receipt_id(
     for close in reservation_closes {
         hash_close(&mut hash, *close);
     }
-    hash_position_transition(&mut hash, input.buyer_position, buyer_position_post_id);
-    hash_position_transition(&mut hash, input.seller_position, seller_position_post_id);
-    hash_replay_transition(&mut hash, input.buyer_replay, buyer_replay_post);
-    hash_replay_transition(&mut hash, input.seller_replay, seller_replay_post);
+    hash_position_transition(&mut hash, *input.buyer_position, buyer_position_post_id);
+    hash_position_transition(&mut hash, *input.seller_position, seller_position_post_id);
+    hash_replay_transition(&mut hash, *input.buyer_replay, buyer_replay_post);
+    hash_replay_transition(&mut hash, *input.seller_replay, seller_replay_post);
     hash_refunds(&mut hash, input.payload.refund_owner_count, refunds);
     hash.update(input.neutral_sink_account.bytes());
     hash.update(input.neutral_sink_balance_lamports.to_le_bytes());

@@ -85,6 +85,12 @@ impl ReplayV3HashBackend for RuntimeSha256 {
     }
 }
 
+#[derive(Debug)]
+struct PortfolioArchiveEndpointV2 {
+    position: AuthenticatedPositionV3,
+    replay: GeneralPositionReplayPrestateV1,
+}
+
 fn id(key: &Pubkey) -> Id32 { Id32::from_bytes(key.to_bytes()) }
 
 fn borrow_data<'a, 'b>(account: &'a AccountInfo<'b>) -> Outcome<Ref<'a, [u8]>> {
@@ -160,7 +166,7 @@ fn authenticate_position_replay(
     owner: [u8; 32],
     position_account: &AccountInfo<'_>,
     replay_account: &AccountInfo<'_>,
-) -> Outcome<(AuthenticatedPositionV3, GeneralPositionReplayPrestateV1)> {
+) -> Outcome<Box<PortfolioArchiveEndpointV2>> {
     let position = PositionAccountV3::decode(&borrow_data(position_account)?)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let fields = position.fields();
@@ -222,7 +228,10 @@ fn authenticate_position_replay(
         &RuntimeSha256,
     )
     .map_err(|_| Refusal::Adapter(ClutchError::Replay))?;
-    Ok((authenticated, replay))
+    Ok(Box::new(PortfolioArchiveEndpointV2 {
+        position: authenticated,
+        replay,
+    }))
 }
 
 /// Disabled-until-registered action-44 entrypoint.
@@ -320,7 +329,7 @@ pub(crate) fn compose_and_apply(
 
     let feed_account = id(accounts[IX_RETAINED_FEED].key);
     let feed_data = borrow_data(&accounts[IX_RETAINED_FEED])?;
-    let (feed, _) = contract::complete_candidate_feed_v2(&feed_data, true)?;
+    let feed = Box::new(contract::complete_candidate_feed_v2(&feed_data, true)?.0);
     let root_authority = authenticate_writable_general_settlement_root_v1(
         program_id,
         core::slice::from_ref(&accounts[IX_SETTLEMENT_ROOT]),
@@ -342,9 +351,9 @@ pub(crate) fn compose_and_apply(
     )?;
 
     let market_binding_account = id(accounts[IX_MARKET_BINDING].key);
-    let market_binding = contract::MarketBindingV4::decode(&borrow_data(
+    let market_binding = Box::new(contract::MarketBindingV4::decode(&borrow_data(
         &accounts[IX_MARKET_BINDING],
-    )?)?;
+    )?)?);
     let binding_pda = seeds::general_v2_market_binding_pda(
         program_id,
         &market_binding.base().base().market_instance_v2_id.bytes(),
@@ -357,30 +366,30 @@ pub(crate) fn compose_and_apply(
         ClutchError::MismatchedState,
     )?;
 
-    let buyer_reservation = ReservationAccountV9::decode(&borrow_data(
+    let buyer_reservation = Box::new(ReservationAccountV9::decode(&borrow_data(
         &accounts[IX_BUYER_RESERVATION_V9],
-    )?)?;
-    let seller_reservation = ReservationAccountV9::decode(&borrow_data(
+    )?)?);
+    let seller_reservation = Box::new(ReservationAccountV9::decode(&borrow_data(
         &accounts[IX_SELLER_RESERVATION_V9],
-    )?)?;
+    )?)?);
     authenticate_reservation_pda(
         program_id,
         &accounts[IX_BUYER_RESERVATION_V9],
-        buyer_reservation,
+        *buyer_reservation,
     )?;
     authenticate_reservation_pda(
         program_id,
         &accounts[IX_SELLER_RESERVATION_V9],
-        seller_reservation,
+        *seller_reservation,
     )?;
-    let (buyer_position, buyer_replay) = authenticate_position_replay(
+    let buyer_endpoint = authenticate_position_replay(
         program_id,
         root,
         buyer_reservation.body().owner.bytes(),
         &accounts[IX_BUYER_POSITION_V3],
         &accounts[IX_BUYER_REPLAY_GEN1],
     )?;
-    let (seller_position, seller_replay) = authenticate_position_replay(
+    let seller_endpoint = authenticate_position_replay(
         program_id,
         root,
         seller_reservation.body().owner.bytes(),
@@ -427,37 +436,37 @@ pub(crate) fn compose_and_apply(
         refund_index += 1;
     }
 
+    let buyer_reservation_input = Box::new(PortfolioArchiveReservationInputV2 {
+        account: id(accounts[IX_BUYER_RESERVATION_V9].key),
+        reservation: *buyer_reservation,
+        balance_lamports: accounts[IX_BUYER_RESERVATION_V9].lamports(),
+    });
+    let seller_reservation_input = Box::new(PortfolioArchiveReservationInputV2 {
+        account: id(accounts[IX_SELLER_RESERVATION_V9].key),
+        reservation: *seller_reservation,
+        balance_lamports: accounts[IX_SELLER_RESERVATION_V9].lamports(),
+    });
+    let planner_input = RetirePortfolioPairArchivesInputV2 {
+        payload: request,
+        settlement_root_account: root_account,
+        settlement_root: root,
+        retained_feed_account: feed_account,
+        retained_feed_body: &feed_data,
+        market_binding_account,
+        market_binding: market_binding.base(),
+        receipts: &receipt_inputs,
+        buyer_reservation: &buyer_reservation_input,
+        seller_reservation: &seller_reservation_input,
+        buyer_position: &buyer_endpoint.position,
+        seller_position: &seller_endpoint.position,
+        buyer_replay: &buyer_endpoint.replay,
+        seller_replay: &seller_endpoint.replay,
+        refund_owners: &refund_owners,
+        neutral_sink_account: id(accounts[IX_NEUTRAL_SINK].key),
+        neutral_sink_balance_lamports: accounts[IX_NEUTRAL_SINK].lamports(),
+    };
     let plan = Box::new(
-        prepare_retire_portfolio_pair_archives_v2(
-            RetirePortfolioPairArchivesInputV2 {
-                payload: request,
-                settlement_root_account: root_account,
-                settlement_root: root,
-                retained_feed_account: feed_account,
-                retained_feed_body: &feed_data,
-                market_binding_account,
-                market_binding: &market_binding,
-                receipts: &receipt_inputs,
-                buyer_reservation: PortfolioArchiveReservationInputV2 {
-                    account: id(accounts[IX_BUYER_RESERVATION_V9].key),
-                    reservation: buyer_reservation,
-                    balance_lamports: accounts[IX_BUYER_RESERVATION_V9].lamports(),
-                },
-                seller_reservation: PortfolioArchiveReservationInputV2 {
-                    account: id(accounts[IX_SELLER_RESERVATION_V9].key),
-                    reservation: seller_reservation,
-                    balance_lamports: accounts[IX_SELLER_RESERVATION_V9].lamports(),
-                },
-                buyer_position,
-                seller_position,
-                buyer_replay,
-                seller_replay,
-                refund_owners: &refund_owners,
-                neutral_sink_account: id(accounts[IX_NEUTRAL_SINK].key),
-                neutral_sink_balance_lamports: accounts[IX_NEUTRAL_SINK].lamports(),
-            },
-            &RuntimeSha256,
-        )
+        prepare_retire_portfolio_pair_archives_v2(&planner_input, &RuntimeSha256)
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
     );
     drop(feed_data);
