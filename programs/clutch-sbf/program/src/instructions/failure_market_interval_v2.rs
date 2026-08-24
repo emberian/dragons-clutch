@@ -34,10 +34,11 @@ use crate::instructions::product_market::{
 use crate::instructions::product_series_current::{
     AuthenticatedMarketLifecycleRootV2,
     AuthenticatedMarketFoundationPreallocationV3,
-    AuthenticatedRegistryCapabilityV4,
+    AuthenticatedRegistryCapabilityV4, AuthenticatedRegistryCapabilityV5,
     AuthenticatedSeriesFailureArchivePostwriteV3,
     FailureSessionReleaseDispositionV3,
 };
+use crate::instructions::product_market_lifecycle_v3_current::AuthenticatedMarketLifecycleRootV3;
 use crate::instructions::product_failure_begin_current::AuthenticatedProductFailureBeginQuoteV2;
 use crate::instructions::source_failure_product_release_v1::{
     AuthenticatedSourceFailureProductReleaseAuthorityV1,
@@ -141,6 +142,10 @@ const CURRENT_RECOVERY_QUOTE_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/failure-market-current-recovery-quote-authentication/v2";
 const CURRENT_RECOVERY_ATTEMPT_QUOTE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/failure-market-current-recovery-attempt-quote/v2";
+const CURRENT_RECOVERY_QUOTE_AUTHENTICATION_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/failure-market-current-recovery-quote-authentication/v3";
+const CURRENT_RECOVERY_ATTEMPT_QUOTE_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/failure-market-current-recovery-attempt-quote/v3";
 
 /// Private current RootV2/RegistryV4/liveness-policy authentication of the
 /// sole Failure reward schedule preimage.
@@ -199,6 +204,51 @@ impl AuthenticatedProductFailureBeginQuoteV2 for AuthenticatedFailureMarketRecov
             ClutchError::MismatchedState,
         )?;
         self.attempt_authorization_id(attempt_index, source_repair_generation)
+    }
+}
+
+/// Move-only RootV3/RegistryV5 authentication of the sole Failure schedule.
+///
+/// This is the current quote owner. It deliberately does not implement the
+/// superseded Product V2 begin-quote trait; the incoming Product V3 begin
+/// writer must consume it through a fresh typed authority.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedFailureMarketRecoveryQuoteV3 {
+    id: ProductContentId,
+    receipt: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+}
+
+impl AuthenticatedFailureMarketRecoveryQuoteV3 {
+    pub(crate) const fn id(&self) -> ProductContentId { self.id }
+    pub(crate) const fn receipt(&self) -> FailureMarketRecoveryQuoteAdmissionReceiptV1 {
+        self.receipt
+    }
+
+    pub(crate) fn attempt_authorization_id(
+        &self,
+        attempt_index: u8,
+        source_repair_generation: u64,
+    ) -> Outcome<ProductContentId> {
+        let schedule = self.receipt.schedule();
+        require(
+            usize::from(attempt_index) < usize::from(schedule.attempt_count)
+                && source_repair_generation != 0,
+            ClutchError::MismatchedState,
+        )?;
+        let id = ProductContentId::from_bytes(
+            solana_sha256_hasher::hashv(&[
+                CURRENT_RECOVERY_ATTEMPT_QUOTE_DOMAIN_V3,
+                &self.id.bytes(),
+                &self.receipt.id().bytes(),
+                &self.receipt.facts().quote_schedule_id.bytes(),
+                &[schedule.attempt_count],
+                &[attempt_index],
+                &source_repair_generation.to_le_bytes(),
+            ])
+            .to_bytes(),
+        );
+        require_live_data_id(id)?;
+        Ok(id)
     }
 }
 
@@ -905,6 +955,189 @@ fn authenticate_failure_market_recovery_quote_with_root_access_v2(
     );
     require_live_data_id(id)?;
     Ok(AuthenticatedFailureMarketRecoveryQuoteV2 { id, receipt })
+}
+
+/// Authenticate the content-addressed Failure quote against current RootV3,
+/// RegistryV5, and the full immutable liveness-policy account.
+pub(crate) fn authenticate_failure_market_recovery_quote_v3(
+    program_id: &Pubkey,
+    admission: AuthenticatedFailureMarketRootV2,
+    root: &AuthenticatedMarketLifecycleRootV3<'_>,
+    registry: &AuthenticatedRegistryCapabilityV5,
+    liveness_policy_account: &AccountInfo<'_>,
+    body: &[u8],
+) -> Outcome<AuthenticatedFailureMarketRecoveryQuoteV3> {
+    authenticate_failure_market_recovery_quote_with_root_access_v3(
+        program_id,
+        admission,
+        root,
+        registry,
+        liveness_policy_account,
+        body,
+        false,
+    )
+}
+
+/// Resolution-only current quote authentication against the exact writable,
+/// unresolved RootV3 that the same atomic composer will activate.
+pub(crate) fn authenticate_failure_market_recovery_quote_for_resolution_v3(
+    program_id: &Pubkey,
+    admission: AuthenticatedFailureMarketRootV2,
+    root: &AuthenticatedMarketLifecycleRootV3<'_>,
+    registry: &AuthenticatedRegistryCapabilityV5,
+    liveness_policy_account: &AccountInfo<'_>,
+    body: &[u8],
+) -> Outcome<AuthenticatedFailureMarketRecoveryQuoteV3> {
+    authenticate_failure_market_recovery_quote_with_root_access_v3(
+        program_id,
+        admission,
+        root,
+        registry,
+        liveness_policy_account,
+        body,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_failure_market_recovery_quote_with_root_access_v3(
+    program_id: &Pubkey,
+    admission: AuthenticatedFailureMarketRootV2,
+    root: &AuthenticatedMarketLifecycleRootV3<'_>,
+    registry: &AuthenticatedRegistryCapabilityV5,
+    liveness_policy_account: &AccountInfo<'_>,
+    body: &[u8],
+    expected_root_writable: bool,
+) -> Outcome<AuthenticatedFailureMarketRecoveryQuoteV3> {
+    require(
+        root.is_writable() == expected_root_writable
+            && liveness_policy_account.owner == program_id
+            && !liveness_policy_account.is_writable
+            && !liveness_policy_account.is_signer
+            && !liveness_policy_account.executable
+            && liveness_policy_account.data_len() == FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1,
+        ClutchError::MismatchedState,
+    )?;
+    let body: &[u8; FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1] = body
+        .try_into()
+        .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+    let schedule = FailureMarketRecoveryQuoteScheduleV1::decode(body)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let schedule_id = schedule
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let policy_data = liveness_policy_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let policy_frame = decode_failure_account_body_v1(
+        &policy_data,
+        registry::FAILURE_LIVENESS_POLICY_ACCOUNT_TAG,
+        registry::FAILURE_LIVENESS_POLICY_ACCOUNT_VERSION,
+        FAILURE_LIVENESS_POLICY_BODY_BYTES_V1,
+    )?;
+    let policy = decode_runtime_policy_account_v1(
+        liveness_id(program_id),
+        liveness_id(liveness_policy_account.key),
+        RuntimePersistedAccountViewV1 {
+            account_id: liveness_id(liveness_policy_account.key),
+            owner_program_id: liveness_id(liveness_policy_account.owner),
+            lamports: liveness_policy_account.lamports(),
+            data: policy_frame.body,
+            writable: false,
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let policy_data_id = ProductContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[policy_data.as_ref()]).to_bytes(),
+    );
+    let stored_bump = policy_frame.stored_bump;
+    drop(policy_data);
+    expect_pda(
+        liveness_policy_account.key,
+        seeds::failure_liveness_policy_pda(program_id, &policy.policy_id.bytes()),
+        Some(stored_bump),
+    )?;
+    let recovery = policy.compartments[RuntimeCompartmentKindV1::Recovery.index()];
+    let root_binding = root.binding();
+    let admission_policy = admission.state().binding().facts();
+    let funding = admission.state().recovery_funding().facts();
+    let projection = registry.projection();
+    let maximum_lamports_per_call = schedule
+        .maximum_lamports_per_call()
+        .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let work_principal_lamports = schedule
+        .work_principal_lamports()
+        .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        root.state().phase() == clutch_product_series::MarketLifecyclePhaseV3::Active
+            && root_binding.market_instance_id == admission_policy.market_instance_id
+            && root_binding.generation == admission_policy.generation
+            && root_binding.market_failure_policy_binding_id.bytes()
+                == admission.state().binding().id().bytes()
+            && root_binding.registry_release_id.bytes()
+                == admission_policy.registry_release_id.bytes()
+            && root_binding.capability_profile_id.bytes()
+                == admission_policy.capability_profile_id.bytes()
+            && root_binding.failure_liveness_policy_id.bytes()
+                == admission_policy.liveness_policy_id.bytes()
+            && root_binding.failure_liveness_quote_schedule_id.bytes() == schedule_id.bytes()
+            && registry.registry_release_id() == root_binding.registry_release_id
+            && registry.capability_profile_id() == root_binding.capability_profile_id
+            && registry.compiler_bundle_id().bytes() != registry.funding_terms_id().bytes()
+            && projection.maximum_recovery_progress_units_per_call
+                == schedule.maximum_progress_units_per_call
+            && policy.policy_id == admission_policy.liveness_policy_id
+            && policy.neutral_sink == admission_policy.neutral_sink
+            && recovery.quote_schedule_id.bytes() == schedule_id.bytes()
+            && recovery.receipt_program_id == admission_policy.recovery_receipt_program_id
+            && recovery.maximum_calls == schedule.maximum_calls
+            && recovery.maximum_lamports_per_call == maximum_lamports_per_call
+            && recovery.work_capital_lamports == work_principal_lamports
+            && funding.recovery_quote_schedule_id.bytes() == schedule_id.bytes()
+            && funding.maximum_calls == schedule.maximum_calls
+            && funding.maximum_lamports_per_call == maximum_lamports_per_call
+            && funding.work_principal_lamports == work_principal_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    let expected = FailureMarketRecoveryQuoteAdmissionFactsV1 {
+        failure_policy_binding_id: admission.state().binding().id(),
+        quote_schedule_id: schedule_id,
+        maximum_calls: schedule.maximum_calls,
+        maximum_progress_units_per_call: schedule.maximum_progress_units_per_call,
+        maximum_lamports_per_call,
+        work_principal_lamports,
+    };
+    let authority = ProductFailureMarketRecoveryQuoteAuthorityV1 { expected };
+    let receipt = admit_failure_market_recovery_quote_v1(
+        &authority,
+        admission.state().binding(),
+        admission.state().recovery_funding(),
+        schedule,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let id = ProductContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            CURRENT_RECOVERY_QUOTE_AUTHENTICATION_DOMAIN_V3,
+            program_id.as_ref(),
+            root.account().as_ref(),
+            &root.data_id().bytes(),
+            &root.semantic_id().bytes(),
+            &root.binding_id().bytes(),
+            &root.authentication_id().bytes(),
+            admission.account().as_ref(),
+            &admission.state().binding().id().bytes(),
+            liveness_policy_account.key.as_ref(),
+            &policy_data_id.bytes(),
+            &registry.id().bytes(),
+            &registry.series_registry_authentication_id().bytes(),
+            &registry.compiler_bundle_id().bytes(),
+            &receipt.id().bytes(),
+            &schedule_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_data_id(id)?;
+    Ok(AuthenticatedFailureMarketRecoveryQuoteV3 { id, receipt })
 }
 
 /// Exact content preimage needed to reopen the Product-authenticated interval
@@ -3594,6 +3827,59 @@ fn require_live_data_id(id: ProductContentId) -> Outcome<()> {
 #[cfg(test)]
 mod adversarial_account_tests {
     use super::*;
+
+    #[test]
+    fn current_quote_uses_root_v3_registry_v5_and_fresh_domains() {
+        let source = include_str!("failure_market_interval_v2.rs");
+        let current = source
+            .split("pub(crate) fn authenticate_failure_market_recovery_quote_v3")
+            .nth(1)
+            .and_then(|value| {
+                value
+                    .split("/// Exact content preimage needed to reopen")
+                    .next()
+            })
+            .expect("current quote owner");
+        for predicate in [
+            "root: &AuthenticatedMarketLifecycleRootV3",
+            "registry: &AuthenticatedRegistryCapabilityV5",
+            "MarketLifecyclePhaseV3::Active",
+            "root_binding.market_failure_policy_binding_id.bytes()",
+            "root_binding.failure_liveness_policy_id.bytes()",
+            "root_binding.failure_liveness_quote_schedule_id.bytes()",
+            "registry.compiler_bundle_id().bytes() != registry.funding_terms_id().bytes()",
+            "root.data_id().bytes()",
+            "root.semantic_id().bytes()",
+            "root.binding_id().bytes()",
+            "root.authentication_id().bytes()",
+            "registry.series_registry_authentication_id().bytes()",
+            "registry.compiler_bundle_id().bytes()",
+            "CURRENT_RECOVERY_QUOTE_AUTHENTICATION_DOMAIN_V3",
+        ] {
+            assert!(current.contains(predicate), "missing V5 quote guard {predicate}");
+        }
+        assert!(!current.contains("AuthenticatedMarketLifecycleRootV2"));
+        assert!(!current.contains("AuthenticatedRegistryCapabilityV4"));
+        assert!(!current.contains("CURRENT_RECOVERY_QUOTE_AUTHENTICATION_DOMAIN_V2"));
+    }
+
+    #[test]
+    fn current_quote_receipt_is_move_only_and_not_a_v2_begin_authority() {
+        let source = include_str!("failure_market_interval_v2.rs");
+        let receipt = source
+            .split("pub(crate) struct AuthenticatedFailureMarketRecoveryQuoteV3")
+            .nth(1)
+            .and_then(|value| {
+                value
+                    .split("impl AuthenticatedFailureMarketRecoveryQuoteV1")
+                    .next()
+            })
+            .expect("move-only V3 quote");
+        assert!(!receipt.contains("derive(Clone"));
+        assert!(!receipt.contains("derive(Copy"));
+        assert!(!receipt.contains("AuthenticatedProductFailureBeginQuoteV2 for"));
+        assert!(receipt.contains("CURRENT_RECOVERY_ATTEMPT_QUOTE_DOMAIN_V3"));
+    }
 
     struct Cell {
         key: Pubkey,
