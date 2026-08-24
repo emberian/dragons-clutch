@@ -94,7 +94,8 @@ use clutch_owner_settlement::{AuthenticatedPositionV3, PositionSettlementPoststa
 use clutch_price_measure::PriceVectorV3;
 use clutch_product_series::{
     CompiledProductSeriesBundleV7, ContentId, MarketGenesisProfileV2,
-    MarketInstancePreimageV2, NativeClaimBasisV1, PriceMeasurePolicyV1,
+    MarketFamilyV1, MarketInstancePreimageV2, NativeClaimBasisV1,
+    PriceMeasurePolicyV1,
 };
 use clutch_retirement::{PositionPurposeV3, PositionV3Sha256Backend, ReplayV3HashBackend};
 use clutch_solana_layout::direct_market_v1::{
@@ -120,6 +121,11 @@ use solana_pubkey::Pubkey;
 use super::collateral_position_v3::authenticate_general_market_v4_with_data_ids;
 use super::general_v2_position_replay::authenticate_current_general_position_replay_v4;
 use super::product_artifact::authenticate_product_artifact_v1;
+use super::product_market_family_admission_v3_current::{
+    AuthenticatedProductFamilyAdmissionOwnerV3,
+    AuthenticatedProductFamilyAdmissionPlanV3,
+    AuthenticatedProductFamilyAdmissionPostwriteV3,
+};
 use super::product_direct_global_liveness::
     retire_product_direct_candidate_allocation_v2,
     AuthenticatedDirectCandidateTerminalPostwriteV2,
@@ -185,23 +191,10 @@ impl ReplayV3HashBackend for DirectRuntimeSha256V2 {
 /// Product, General, Revenue, FundingV5, and liveness allocation authority as
 /// one exact Direct binding. Direct owns only the physical b1/v3+b3 write.
 pub(crate) trait AuthenticatedProductDirectFoundationV3:
-    AuthenticatedDirectFoundationV3
+    AuthenticatedDirectFoundationV3 + AuthenticatedProductFamilyAdmissionOwnerV3
 {
     /// Exact current binding which will be persisted in fresh b1/v3.
     fn direct_market_binding_v3(&self) -> Outcome<&DirectMarketBindingV3> {
-        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
-    }
-
-    /// Consume the hostile-reopened Direct physical postwrite and persist the
-    /// prepared Product RootV3 family successor last. No raw receipt-ID path
-    /// is accepted by this seam.
-    fn consume_direct_foundation_postwrite_v3(
-        self,
-        _postwrite: AuthenticatedDirectFoundationPostwriteV3,
-    ) -> Outcome<()>
-    where
-        Self: Sized,
-    {
         Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
     }
 }
@@ -213,6 +206,19 @@ pub(crate) trait AuthenticatedProductDirectFoundationV3:
 pub(crate) struct AuthenticatedDirectFoundationPostwriteV3 {
     id: ContentId,
     receipt: DirectFoundationReceiptV3,
+    product_family_plan_id: ContentId,
+    product_root_account: Pubkey,
+    product_root_binding_id: ContentId,
+    product_root_semantic_before_id: ContentId,
+    product_root_semantic_after_id: ContentId,
+    product_root_transition_sequence_before: u64,
+    product_root_transition_sequence_after: u64,
+    product_family_namespace_anchor_id: ContentId,
+    product_family_prestate_id: ContentId,
+    product_family_poststate_id: ContentId,
+    product_family_admission_sequence: u32,
+    product_family_admission_receipt_id: ContentId,
+    owner_prewrite_id: ContentId,
     root_account: Pubkey,
     root_data_id: ContentId,
     root_binding_semantic_id: ContentId,
@@ -244,6 +250,57 @@ impl AuthenticatedDirectFoundationPostwriteV3 {
     }
 }
 
+impl AuthenticatedProductFamilyAdmissionPostwriteV3
+    for AuthenticatedDirectFoundationPostwriteV3
+{
+    fn consume_product_family_admission_postwrite_v3(
+        self,
+        plan_id: ContentId,
+        root_account: Pubkey,
+        root_binding_id: ContentId,
+        root_semantic_before_id: ContentId,
+        root_semantic_after_id: ContentId,
+        root_transition_sequence_before: u64,
+        root_transition_sequence_after: u64,
+        family: MarketFamilyV1,
+        family_namespace_anchor_id: ContentId,
+        family_prestate_id: ContentId,
+        family_poststate_id: ContentId,
+        family_admission_sequence: u32,
+        family_admission_receipt_id: ContentId,
+        child_account: Pubkey,
+        owner_prewrite_id: ContentId,
+    ) -> Outcome<ContentId> {
+        require(
+            plan_id == self.product_family_plan_id
+                && root_account == self.product_root_account
+                && root_binding_id == self.product_root_binding_id
+                && root_semantic_before_id == self.product_root_semantic_before_id
+                && root_semantic_after_id == self.product_root_semantic_after_id
+                && root_transition_sequence_before
+                    == self.product_root_transition_sequence_before
+                && root_transition_sequence_after
+                    == self.product_root_transition_sequence_after
+                && family == MarketFamilyV1::Direct
+                && family_namespace_anchor_id
+                    == self.product_family_namespace_anchor_id
+                && family_prestate_id == self.product_family_prestate_id
+                && family_poststate_id == self.product_family_poststate_id
+                && family_admission_sequence == self.product_family_admission_sequence
+                && family_admission_receipt_id
+                    == self.product_family_admission_receipt_id
+                && child_account == self.root_account
+                && owner_prewrite_id == self.owner_prewrite_id
+                && self.receipt.product_family_poststate_id
+                    == family_poststate_id.bytes()
+                && self.receipt.product_family_admission_receipt_id
+                    == family_admission_receipt_id.bytes(),
+            ClutchError::MismatchedState,
+        )?;
+        Ok(self.id)
+    }
+}
+
 /// Create the physical Direct action-1 suffix and immediately return its
 /// move-only postwrite to Product's prepared RootV3 consumer.
 ///
@@ -254,13 +311,14 @@ impl AuthenticatedDirectFoundationPostwriteV3 {
 #[inline(never)]
 pub(crate) fn create_direct_foundation_physical_v3<P>(
     program_id: &Pubkey,
-    product: P,
+    product: &P,
+    family_plan: &AuthenticatedProductFamilyAdmissionPlanV3,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
     payload: &[u8],
-) -> Outcome<()>
+) -> Outcome<AuthenticatedDirectFoundationPostwriteV3>
 where
-    P: AuthenticatedProductDirectFoundationV3,
+    P: AuthenticatedProductDirectFoundationV3 + ?Sized,
 {
     const ACCOUNT_COUNT: usize = 6;
     const ROOT: usize = 0;
@@ -285,7 +343,25 @@ where
     require(
         accounts[PAYER].key.to_bytes() != binding.neutral_lamport_sink
             && accounts[ROOT].key.to_bytes() == binding.direct_root_account
-            && accounts[REPLAY].key.to_bytes() == binding.action_replay_account,
+            && accounts[REPLAY].key.to_bytes() == binding.action_replay_account
+            && family_plan.family() == MarketFamilyV1::Direct
+            && family_plan.child_account() == *accounts[ROOT].key
+            && family_plan.market_instance_id().bytes() == binding.market_instance_id
+            && family_plan.generation() == binding.generation
+            && family_plan.root_account().to_bytes()
+                == binding.product.product_root_account
+            && family_plan.root_binding_id().bytes()
+                == binding.product.product_market_binding_v3_id
+            && family_plan.family_prestate_id().bytes()
+                == binding.product.product_family_prestate_id
+            && family_plan.family_poststate_id().bytes()
+                == binding.product.product_family_poststate_id
+            && family_plan.family_admission_sequence()
+                == binding.product.family_admission_sequence
+            && family_plan.family_admission_receipt_id().bytes()
+                == binding.product.product_family_admission_receipt_id
+            && family_plan.owner_prewrite_id().bytes()
+                == binding.product.product_preauthorization_id,
         ClutchError::MismatchedState,
     )?;
 
@@ -376,7 +452,7 @@ where
             .try_into()
             .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
         prepare_direct_foundation_into_v3(
-            &product,
+            product,
             binding,
             schedule,
             root_rent,
@@ -436,21 +512,37 @@ where
         &receipt.candidate_liveness_allocation_receipt_id,
     ]).to_bytes());
     require(!id.is_zero(), ClutchError::MismatchedState)?;
-    product.consume_direct_foundation_postwrite_v3(
-        AuthenticatedDirectFoundationPostwriteV3 {
-            id,
-            receipt,
-            root_account: *accounts[ROOT].key,
-            root_data_id,
-            root_binding_semantic_id,
-            root_semantic_id,
-            root_observed_lamports: root.observed_lamports(),
-            replay_account: *accounts[REPLAY].key,
-            replay_data_id,
-            replay_semantic_id,
-            replay_observed_lamports: replay.observed_lamports,
-        },
-    )
+    Ok(AuthenticatedDirectFoundationPostwriteV3 {
+        id,
+        receipt,
+        product_family_plan_id: family_plan.id(),
+        product_root_account: family_plan.root_account(),
+        product_root_binding_id: family_plan.root_binding_id(),
+        product_root_semantic_before_id: family_plan.root_semantic_before_id(),
+        product_root_semantic_after_id: family_plan.root_semantic_after_id(),
+        product_root_transition_sequence_before:
+            family_plan.root_transition_sequence_before(),
+        product_root_transition_sequence_after:
+            family_plan.root_transition_sequence_after(),
+        product_family_namespace_anchor_id:
+            family_plan.family_namespace_anchor_id(),
+        product_family_prestate_id: family_plan.family_prestate_id(),
+        product_family_poststate_id: family_plan.family_poststate_id(),
+        product_family_admission_sequence:
+            family_plan.family_admission_sequence(),
+        product_family_admission_receipt_id:
+            family_plan.family_admission_receipt_id(),
+        owner_prewrite_id: family_plan.owner_prewrite_id(),
+        root_account: *accounts[ROOT].key,
+        root_data_id,
+        root_binding_semantic_id,
+        root_semantic_id,
+        root_observed_lamports: root.observed_lamports(),
+        replay_account: *accounts[REPLAY].key,
+        replay_data_id,
+        replay_semantic_id,
+        replay_observed_lamports: replay.observed_lamports,
+    })
 }
 
 /// Current family dispatcher. Unsupported actions refuse before reading any
