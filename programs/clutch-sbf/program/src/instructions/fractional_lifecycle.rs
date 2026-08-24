@@ -1,9 +1,10 @@
 //! Atomic Product-owned admission and retirement of the Fractional family.
 //!
 //! These handlers are compiled so the complete account/CPI boundary can be
-//! reviewed, but the central capability table continues to refuse actions 1
-//! and 10.  Neither function can be reached through checked dispatch until all
-//! ten Fractional actions are enabled as one coherent lifecycle.
+//! reviewed, but the central capability table continues to refuse every action
+//! from 1 through 10. Neither lifecycle function can be reached through checked
+//! dispatch until all ten Fractional actions are enabled as one coherent
+//! lifecycle.
 
 use crate::accounts::{require, Outcome};
 use crate::claim_release::authenticate_claim_issuance_release_with_programdata_v1;
