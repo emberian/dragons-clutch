@@ -204,37 +204,40 @@ impl DealerFutureCreditFundingV1 {
         })
     }
 
-    /// Close unused future-credit capital only at complete Dealer retirement.
+    /// Close unused future-credit capital after Dealer Position/Replay terminalization.
+    ///
+    /// Product terminality is deliberately not an input. This value owner
+    /// closes its own unused custody first and emits a Dealer-owned receipt
+    /// which a later atomic Product composer may consume.
     pub fn prepare_unused_close(
         &self,
         dealer_state_account_id: Id,
         state: &DealerStateV3,
-        terminal_obligation: &DealerSeriesObligationBindingV2,
+        live_obligation: &DealerSeriesObligationBindingV2,
         observed_balance_lamports: u64,
     ) -> Result<DealerFutureCreditUnusedCloseV1> {
         self.validate()?;
         state.validate()?;
-        terminal_obligation.validate()?;
+        live_obligation.validate()?;
         dealer_state_account_id.validate_live()?;
         let terminal_state_receipt_id = state.base.terminal_state_receipt_id;
         terminal_state_receipt_id.validate_live()?;
-        let terminal_obligation_binding_id = terminal_obligation.binding_id()?;
+        let dealer_obligation_presemantic_id = live_obligation.binding_id()?;
         let state_pre_semantic_id = state.state_id()?;
         if state.base.phase != DealerPhaseV2::Retiring
             || state.base.children.facility_positions != 0
             || state.base.children.facility_replays != 0
             || state.series_obligation_children != 1
             || state.series_obligation_binding_account_id
-                != terminal_obligation.key.binding_account_id
-            || state.series_obligation_binding_id != terminal_obligation_binding_id
-            || terminal_obligation.phase != DealerSeriesObligationPhaseV1::Terminal
-            || terminal_obligation.terminal_state_receipt_id != terminal_state_receipt_id
-            || terminal_obligation.key.dealer_state_account_id != dealer_state_account_id
-            || terminal_obligation.key.policy_id != state.base.policy_id
-            || terminal_obligation.key.facility_id != state.base.facility_id
-            || terminal_obligation.key.facility_position_binding_id
+                != live_obligation.key.binding_account_id
+            || state.series_obligation_binding_id != dealer_obligation_presemantic_id
+            || live_obligation.phase != DealerSeriesObligationPhaseV1::Live
+            || live_obligation.key.dealer_state_account_id != dealer_state_account_id
+            || live_obligation.key.policy_id != state.base.policy_id
+            || live_obligation.key.facility_id != state.base.facility_id
+            || live_obligation.key.facility_position_binding_id
                 != state.base.facility_position_binding_id
-            || terminal_obligation.key.market_instance_v2_id != self.market_instance_v2_id
+            || live_obligation.key.market_instance_v2_id != self.market_instance_v2_id
             || self.dealer_state_account_id != dealer_state_account_id
             || self.policy_id != state.base.policy_id
             || self.facility_id != state.base.facility_id
@@ -242,7 +245,7 @@ impl DealerFutureCreditFundingV1 {
             || self.facility_position_binding_id != state.base.facility_position_binding_id
             || self.dealer_replay_account_id != state.base.facility_replay_account_id
             || self.neutral_sink != state.base.rent.neutral_sink
-            || self.neutral_sink != terminal_obligation.rent.neutral_sink
+            || self.neutral_sink != live_obligation.rent.neutral_sink
             || state.base.generation < self.founding_generation
         {
             return Err(Error::MismatchedBinding);
@@ -262,8 +265,7 @@ impl DealerFutureCreditFundingV1 {
             funding_receipt_id,
             state_pre_semantic_id,
             terminal_state_receipt_id,
-            terminal_obligation_binding_id,
-            terminal_obligation,
+            dealer_obligation_presemantic_id,
             observed_balance_lamports,
             self,
         )?;
@@ -273,12 +275,7 @@ impl DealerFutureCreditFundingV1 {
             terminal_receipt_id,
             state_pre_semantic_id,
             terminal_state_receipt_id,
-            terminal_obligation_binding_id,
-            terminal_product_projection_id: terminal_obligation.terminal_projection_id,
-            terminal_link_post_semantic_id: terminal_obligation
-                .terminal_link_post_semantic_id,
-            terminal_link_transition_sequence: terminal_obligation
-                .terminal_link_transition_sequence,
+            dealer_obligation_presemantic_id,
             refund_owner: self.refund_owner,
             neutral_sink: self.neutral_sink,
             refundable_principal_lamports,
@@ -332,14 +329,8 @@ pub struct DealerFutureCreditUnusedCloseV1 {
     pub state_pre_semantic_id: Id,
     /// Dealer terminal receipt authorizing the unused close.
     pub terminal_state_receipt_id: Id,
-    /// Exact terminal 0xaf/v2 binding identity retained by State V3.
-    pub terminal_obligation_binding_id: Id,
-    /// Exact Product LinkV2 terminal projection accepted by Dealer.
-    pub terminal_product_projection_id: Id,
-    /// Exact Product LinkV2 semantic identity after terminal consumption.
-    pub terminal_link_post_semantic_id: Id,
-    /// Monotone Product LinkV2 sequence after terminal consumption.
-    pub terminal_link_transition_sequence: u64,
+    /// Exact live Dealer obligation body consumed as the terminal prestate.
+    pub dealer_obligation_presemantic_id: Id,
     /// Recipient of both unused principal compartments.
     pub refund_owner: Id,
     /// Recipient of hostile prefund and later surplus.
@@ -465,8 +456,7 @@ fn unused_close_receipt_id(
     funding_receipt_id: Id,
     state_pre_semantic_id: Id,
     terminal_state_receipt_id: Id,
-    terminal_obligation_binding_id: Id,
-    terminal_obligation: &DealerSeriesObligationBindingV2,
+    dealer_obligation_presemantic_id: Id,
     observed_balance_lamports: u64,
     funding: &DealerFutureCreditFundingV1,
 ) -> Result<Id> {
@@ -474,9 +464,7 @@ fn unused_close_receipt_id(
         funding_receipt_id,
         state_pre_semantic_id,
         terminal_state_receipt_id,
-        terminal_obligation_binding_id,
-        terminal_obligation.terminal_projection_id,
-        terminal_obligation.terminal_link_post_semantic_id,
+        dealer_obligation_presemantic_id,
     ] {
         identity.validate_live()?;
     }
@@ -485,11 +473,7 @@ fn unused_close_receipt_id(
     hasher.update(funding_receipt_id.bytes());
     hasher.update(state_pre_semantic_id.bytes());
     hasher.update(terminal_state_receipt_id.bytes());
-    hasher.update(terminal_obligation_binding_id.bytes());
-    hasher.update(terminal_obligation.terminal_projection_id.bytes());
-    hasher.update(terminal_obligation.terminal_link_pre_semantic_id.bytes());
-    hasher.update(terminal_obligation.terminal_link_post_semantic_id.bytes());
-    hasher.update(terminal_obligation.terminal_link_transition_sequence.to_le_bytes());
+    hasher.update(dealer_obligation_presemantic_id.bytes());
     hasher.update(observed_balance_lamports.to_le_bytes());
     hasher.update(funding.funding_account_id.bytes());
     hasher.update(funding.refund_owner.bytes());
@@ -646,6 +630,20 @@ mod tests {
         (state, terminal)
     }
 
+    fn value_terminal_graph() -> (DealerStateV3, DealerSeriesObligationBindingV2) {
+        let (mut state, mut live) = terminal_graph();
+        live.phase = DealerSeriesObligationPhaseV1::Live;
+        live.terminal_owner_receipt_id = Id::ZERO;
+        live.terminal_projection_id = Id::ZERO;
+        live.terminal_link_pre_semantic_id = Id::ZERO;
+        live.terminal_link_post_semantic_id = Id::ZERO;
+        live.terminal_state_receipt_id = Id::ZERO;
+        live.terminal_link_transition_sequence = 0;
+        state.series_obligation_binding_id = live.binding_id().unwrap();
+        state.validate().unwrap();
+        (state, live)
+    }
+
     #[test]
     fn codec_and_consumption_preserve_both_principal_compartments() {
         let value = funding();
@@ -682,37 +680,30 @@ mod tests {
     #[test]
     fn unused_close_refunds_both_principals_and_neutralizes_donation() {
         let value = funding();
-        let (state, terminal) = terminal_graph();
+        let (state, live) = value_terminal_graph();
         let plan = value
-            .prepare_unused_close(id(9), &state, &terminal, 217)
+            .prepare_unused_close(id(9), &state, &live, 217)
             .unwrap();
         assert_eq!(plan.refundable_principal_lamports, 200);
         assert_eq!(plan.neutral_sink_credit_lamports, 17);
         assert_eq!(plan.terminal_state_receipt_id, id(26));
-        assert_eq!(plan.terminal_obligation_binding_id, terminal.binding_id().unwrap());
+        assert_eq!(plan.dealer_obligation_presemantic_id, live.binding_id().unwrap());
         assert_ne!(plan.terminal_receipt_id, plan.funding_receipt_id);
     }
 
     #[test]
-    fn unused_close_refuses_live_product_or_substituted_terminal_state() {
+    fn unused_close_refuses_terminal_product_or_substituted_terminal_state() {
         let value = funding();
         let (state, terminal) = terminal_graph();
-        let mut live = terminal;
-        live.phase = DealerSeriesObligationPhaseV1::Live;
-        live.terminal_owner_receipt_id = Id::ZERO;
-        live.terminal_projection_id = Id::ZERO;
-        live.terminal_link_pre_semantic_id = Id::ZERO;
-        live.terminal_link_post_semantic_id = Id::ZERO;
-        live.terminal_state_receipt_id = Id::ZERO;
-        live.terminal_link_transition_sequence = 0;
         assert_eq!(
-            value.prepare_unused_close(id(9), &state, &live, 217),
+            value.prepare_unused_close(id(9), &state, &terminal, 217),
             Err(Error::MismatchedBinding)
         );
+        let (state, live) = value_terminal_graph();
         let mut substituted = state;
         substituted.base.terminal_state_receipt_id = id(56);
         assert_eq!(
-            value.prepare_unused_close(id(9), &substituted, &terminal, 217),
+            value.prepare_unused_close(id(9), &substituted, &live, 217),
             Err(Error::MismatchedBinding)
         );
     }
@@ -734,6 +725,45 @@ mod tests {
         assert_eq!(
             crate::prepare_dealer_series_obligation_close_v2(state, &substituted, 13),
             Err(Error::MismatchedBinding)
+        );
+    }
+
+    #[test]
+    fn value_receipt_closes_only_the_exact_live_current_obligation() {
+        let (state, live) = value_terminal_graph();
+        let value_receipt = id(61);
+        let close = crate::prepare_dealer_series_obligation_value_close_v3(
+            state,
+            &live,
+            value_receipt,
+            13,
+        )
+        .unwrap();
+        assert_eq!(close.state_after.series_obligation_children, 0);
+        assert_eq!(close.live_binding_id, live.binding_id().unwrap());
+        assert_eq!(close.dealer_value_terminal_receipt_id, value_receipt);
+        assert_ne!(close.close_receipt_id, value_receipt);
+        assert_eq!(close.rent_payer_credit_lamports, 9);
+        assert_eq!(close.neutral_sink_credit_lamports, 4);
+
+        let (_, terminal) = terminal_graph();
+        assert_eq!(
+            crate::prepare_dealer_series_obligation_value_close_v3(
+                state,
+                &terminal,
+                value_receipt,
+                13,
+            ),
+            Err(Error::InvalidPhase)
+        );
+        assert_eq!(
+            crate::prepare_dealer_series_obligation_value_close_v3(
+                state,
+                &live,
+                Id::ZERO,
+                13,
+            ),
+            Err(Error::ZeroIdentity)
         );
     }
 }

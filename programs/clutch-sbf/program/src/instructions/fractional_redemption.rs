@@ -773,12 +773,11 @@ pub(crate) struct DealerFacilityCreditTerminalAccountsV1<'a, 'info> {
     pub(crate) fractional_ledger: &'a AccountInfo<'info>,
     pub(crate) facility_credit: &'a AccountInfo<'info>,
     pub(crate) stored_payer: &'a AccountInfo<'info>,
-    pub(crate) market_lifecycle_root: &'a AccountInfo<'info>,
     pub(crate) neutral_sink: &'a AccountInfo<'info>,
     pub(crate) rent_sysvar: &'a AccountInfo<'info>,
 }
 
-/// Exact Dealer/Product terminal prestate retained by one non-Copy authority.
+/// Exact Dealer terminal prestate retained by one non-Copy authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct DealerFacilityCreditTerminalPrestateV1 {
     authorization_id: Identity32V1,
@@ -794,15 +793,14 @@ pub(crate) struct DealerFacilityCreditTerminalPrestateV1 {
     dealer_replay_account: Identity32V1,
     dealer_replay_semantic_id: Identity32V1,
     dealer_replay_ordinal: u64,
-    product_obligation_account: Identity32V1,
-    product_obligation_semantic_id: Identity32V1,
+    dealer_obligation_account: Identity32V1,
+    dealer_obligation_semantic_id: Identity32V1,
     dealer_terminal_state_receipt_id: Identity32V1,
-    product_terminal_receipt_id: Identity32V1,
 }
 
 impl DealerFacilityCreditTerminalPrestateV1 {
     /// Construct only after Dealer has hostile-reopened its exact terminal
-    /// State/Replay/Product-obligation tuple.
+    /// State/Replay/Dealer-obligation tuple.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         facility_id: Identity32V1,
@@ -817,17 +815,16 @@ impl DealerFacilityCreditTerminalPrestateV1 {
         dealer_replay_account: Identity32V1,
         dealer_replay_semantic_id: Identity32V1,
         dealer_replay_ordinal: u64,
-        product_obligation_account: Identity32V1,
-        product_obligation_semantic_id: Identity32V1,
+        dealer_obligation_account: Identity32V1,
+        dealer_obligation_semantic_id: Identity32V1,
         dealer_terminal_state_receipt_id: Identity32V1,
-        product_terminal_receipt_id: Identity32V1,
     ) -> Outcome<Self> {
         let bound_accounts = [
             facility_id,
             facility_credit_account,
             dealer_state_account,
             dealer_replay_account,
-            product_obligation_account,
+            dealer_obligation_account,
         ];
         let mut left = 0usize;
         while left < bound_accounts.len() {
@@ -846,8 +843,7 @@ impl DealerFacilityCreditTerminalPrestateV1 {
                 && expected_ledger_sequence != 0
                 && expected_credit_sequence != 0
                 && dealer_state_generation != 0
-                && dealer_replay_ordinal != 0
-                && dealer_terminal_state_receipt_id != product_terminal_receipt_id,
+                && dealer_replay_ordinal != 0,
             ClutchError::MismatchedState,
         )?;
         let authorization_id = identity32(
@@ -865,10 +861,9 @@ impl DealerFacilityCreditTerminalPrestateV1 {
                 &dealer_replay_account.bytes(),
                 &dealer_replay_semantic_id.bytes(),
                 &dealer_replay_ordinal.to_le_bytes(),
-                &product_obligation_account.bytes(),
-                &product_obligation_semantic_id.bytes(),
+                &dealer_obligation_account.bytes(),
+                &dealer_obligation_semantic_id.bytes(),
                 &dealer_terminal_state_receipt_id.bytes(),
-                &product_terminal_receipt_id.bytes(),
             ])
             .to_bytes(),
         )?;
@@ -886,10 +881,9 @@ impl DealerFacilityCreditTerminalPrestateV1 {
             dealer_replay_account,
             dealer_replay_semantic_id,
             dealer_replay_ordinal,
-            product_obligation_account,
-            product_obligation_semantic_id,
+            dealer_obligation_account,
+            dealer_obligation_semantic_id,
             dealer_terminal_state_receipt_id,
-            product_terminal_receipt_id,
         })
     }
 
@@ -916,21 +910,18 @@ impl DealerFacilityCreditTerminalPrestateV1 {
         self.dealer_replay_semantic_id
     }
     pub(crate) const fn dealer_replay_ordinal(self) -> u64 { self.dealer_replay_ordinal }
-    pub(crate) const fn product_obligation_account(self) -> Identity32V1 {
-        self.product_obligation_account
+    pub(crate) const fn dealer_obligation_account(self) -> Identity32V1 {
+        self.dealer_obligation_account
     }
-    pub(crate) const fn product_obligation_semantic_id(self) -> Identity32V1 {
-        self.product_obligation_semantic_id
+    pub(crate) const fn dealer_obligation_semantic_id(self) -> Identity32V1 {
+        self.dealer_obligation_semantic_id
     }
     pub(crate) const fn dealer_terminal_state_receipt_id(self) -> Identity32V1 {
         self.dealer_terminal_state_receipt_id
     }
-    pub(crate) const fn product_terminal_receipt_id(self) -> Identity32V1 {
-        self.product_terminal_receipt_id
-    }
 }
 
-/// Complete locally observed Fractional/Product facts consumed before writes.
+/// Complete locally observed Dealer/Fractional facts consumed before writes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct DealerFacilityCreditTerminalObservationV1 {
     pub(crate) authorization_id: Identity32V1,
@@ -941,14 +932,11 @@ pub(crate) struct DealerFacilityCreditTerminalObservationV1 {
     pub(crate) credit_before_id: Identity32V1,
     pub(crate) fractional_ledger_account: Identity32V1,
     pub(crate) fractional_ledger_before_id: Identity32V1,
-    pub(crate) market_root_account: Identity32V1,
-    pub(crate) market_root_authentication_id: Identity32V1,
     pub(crate) resolution_semantic_id: Identity32V1,
     pub(crate) resolution_data_id: Identity32V1,
     pub(crate) stored_payer: Identity32V1,
     pub(crate) neutral_sink: Identity32V1,
     pub(crate) dealer_terminal_state_receipt_id: Identity32V1,
-    pub(crate) product_terminal_receipt_id: Identity32V1,
 }
 
 /// Dealer-private, non-Copy terminal authority consumed before Fractional writes.
@@ -980,7 +968,6 @@ pub(crate) struct AcceptedDealerFacilityCreditTerminalV1 {
     resolution_semantic_id: Identity32V1,
     resolution_data_id: Identity32V1,
     dealer_terminal_state_receipt_id: Identity32V1,
-    product_terminal_receipt_id: Identity32V1,
     stored_payer_delta_lamports: u64,
     neutral_sink_delta_lamports: u64,
     credit_close_transition_id: Identity32V1,
@@ -1011,9 +998,6 @@ impl AcceptedDealerFacilityCreditTerminalV1 {
     pub(crate) const fn dealer_terminal_state_receipt_id(&self) -> Identity32V1 {
         self.dealer_terminal_state_receipt_id
     }
-    pub(crate) const fn product_terminal_receipt_id(&self) -> Identity32V1 {
-        self.product_terminal_receipt_id
-    }
     pub(crate) const fn stored_payer_delta_lamports(&self) -> u64 {
         self.stored_payer_delta_lamports
     }
@@ -1031,7 +1015,7 @@ impl AcceptedDealerFacilityCreditTerminalV1 {
 /// Apply Fractional's complete portion of Dealer action 25.
 ///
 /// This path accepts no signer authority. The by-value Dealer authority binds
-/// the exact terminal State/Replay/Product-obligation prestates and is consumed
+/// the exact terminal State/Replay/Dealer-obligation prestates and is consumed
 /// before the first a5/ClaimLedger/a6 mutation.
 #[inline(never)]
 #[allow(clippy::too_many_lines)]
@@ -1043,12 +1027,6 @@ pub(crate) fn apply_dealer_facility_credit_terminal_v1<A>(
 where
     A: AuthenticatedDealerFacilityCreditTerminalAuthorityV1,
 {
-    require(
-        capabilities::dealer_terminal_retire_target_enabled(
-            crate::instructions::dealer_runtime::DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1,
-        ),
-        ClutchError::UnsupportedInstruction,
-    )?;
     let all_accounts = [
         accounts.realm,
         accounts.profile,
@@ -1065,7 +1043,6 @@ where
         accounts.fractional_ledger,
         accounts.facility_credit,
         accounts.stored_payer,
-        accounts.market_lifecycle_root,
         accounts.neutral_sink,
         accounts.rent_sysvar,
     ];
@@ -1171,16 +1148,7 @@ where
             && ledger.claim_ledger_account == claim_ledger_account,
         ClutchError::MismatchedState,
     )?;
-    let mut root_body = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
-    let root = authenticate_market_lifecycle_root_v2(
-        program_id,
-        accounts.market_lifecycle_root,
-        liabilities.market_binding.base().market_instance_v2_id,
-        policy.domain_generation,
-        false,
-        &mut root_body,
-    )?;
-    let neutral_sink = identity32(root.state().capital().neutral_lamport_sink.bytes())?;
+    let neutral_sink = identity32(liabilities.market_binding.base().neutral_sink.bytes())?;
     require(
         neutral_sink.bytes() == accounts.neutral_sink.key.to_bytes(),
         ClutchError::MismatchedState,
@@ -1251,14 +1219,11 @@ where
         credit_before_id: plan.credit_before_id,
         fractional_ledger_account: ledger_account,
         fractional_ledger_before_id: ledger_before_id,
-        market_root_account: identity32(root.account().to_bytes())?,
-        market_root_authentication_id: identity32(root.authentication_id().bytes())?,
         resolution_semantic_id: identity32(resolution.semantic_id.bytes())?,
         resolution_data_id: identity32(resolution.data_id.bytes())?,
         stored_payer: plan.funding.payer,
         neutral_sink: plan.funding.neutral_sink,
         dealer_terminal_state_receipt_id: prestate.dealer_terminal_state_receipt_id(),
-        product_terminal_receipt_id: prestate.product_terminal_receipt_id(),
     };
     authority.consume_dealer_facility_credit_terminal_authority_v1(observation)?;
 
@@ -1353,7 +1318,6 @@ where
             &prestate.authorization_id().bytes(),
             &value_authority.receipt_id.bytes(),
             &value_authority.deployment.receipt_id().bytes(),
-            &root.authentication_id().bytes(),
             &plan.transition_id.bytes(),
             &ledger_before_id.bytes(),
             &ledger_after_id.bytes(),
@@ -1366,7 +1330,6 @@ where
             &neutral_before.to_le_bytes(),
             &neutral_after.to_le_bytes(),
             &prestate.dealer_terminal_state_receipt_id().bytes(),
-            &prestate.product_terminal_receipt_id().bytes(),
         ])
         .to_bytes(),
     )?;
@@ -1382,7 +1345,6 @@ where
         resolution_semantic_id: identity32(resolution.semantic_id.bytes())?,
         resolution_data_id: identity32(resolution.data_id.bytes())?,
         dealer_terminal_state_receipt_id: prestate.dealer_terminal_state_receipt_id(),
-        product_terminal_receipt_id: prestate.product_terminal_receipt_id(),
         stored_payer_delta_lamports: plan.funding.payer_refund_lamports,
         neutral_sink_delta_lamports: plan.funding.neutral_lamports,
         credit_close_transition_id: plan.transition_id,
@@ -2472,7 +2434,6 @@ mod loader_alias_tests {
             identity32([10; 32])?,
             identity32([11; 32])?,
             identity32([12; 32])?,
-            identity32([13; 32])?,
         )
     }
 
@@ -2502,7 +2463,7 @@ mod loader_alias_tests {
             .find("try_borrow_mut_data")
             .expect("Fractional successor write");
         assert!(consume < first_write);
-        assert!(body.contains("dealer_terminal_retire_target_enabled"));
+        assert!(!body.contains("dealer_terminal_retire_target_enabled"));
         assert!(body.contains("DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1"));
         assert!(body.contains("authenticate_general_market_value_authority_v2"));
         assert!(body.contains("require_program_state(\n        program_id,\n        accounts.fractional_policy"));

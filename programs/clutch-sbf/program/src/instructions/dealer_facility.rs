@@ -21,7 +21,7 @@ use clutch_dealer_runtime_contract::{
     prepare_begin_covered_lease_pot_v4, prepare_bind_epoch_v3,
     prepare_dealer_sponsor_funding_transfer_v2,
     prepare_activate_dealer_v3, prepare_cancel_stale_funding_v3,
-    prepare_dealer_series_obligation_close_v2, prepare_dealer_terminal_replay_v2,
+    prepare_dealer_series_obligation_value_close_v3, prepare_dealer_terminal_replay_v2,
     prepare_dealer_lp_share_transfer_v2, prepare_dealer_sponsor_refund_transfer_v2,
     prepare_dealer_terminal_claim_replay_v2, prepare_dealer_terminal_claim_v2,
     begin_terminal_resolution_v1,
@@ -51,7 +51,8 @@ use clutch_dealer_runtime_contract::{
     DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1, DealerSelectedFeeRecordBindingV1,
     DealerSeriesObligationBindingV1, DealerSeriesObligationKeyV1,
     DealerSeriesObligationBindingV2, DealerSeriesObligationKeyV2,
-    DealerSeriesObligationPhaseV1, DealerStateV2, DealerStateV3,
+    DealerSeriesObligationPhaseV1, DealerSeriesObligationValueClosePlanV3,
+    DealerStateV2, DealerStateV3,
     DealerTransferPositionV3, DealerLeasePotCloseRentV3, DealerLeaseV2,
     DeletableRentOwnerV1,
     FacilityPositionBindingV2, FixedCodec, Id, LpPageV2, RootRentOwnerV1,
@@ -193,7 +194,8 @@ use solana_pubkey::Pubkey;
 use super::artifact::read_clock_slot;
 use super::collateral_position_v3::{
     authenticate_general_market_value_authority_v2, authenticate_general_position_replay_v2,
-    GeneralMarketValueAuthorityV2, GeneralPositionReplayAuthorityV2, RuntimeSha256,
+    authenticate_resolution_v5, GeneralMarketValueAuthorityV2,
+    GeneralPositionReplayAuthorityV2, RuntimeSha256,
 };
 use super::dealer_policy::{
     authenticate_catalog_policy, create_exact_payer_debit_pda, create_full_principal_pda,
@@ -222,12 +224,11 @@ use super::product_series_current::{
     admit_series_dealer_obligation_v2, authenticate_market_lifecycle_root_v2,
     authenticate_live_series_dealer_obligation_v2, authenticate_registry_capability_v4,
     authenticate_series_market_link_v2,
-    authenticate_series_registry_account_v3, terminalize_series_dealer_obligation_v2,
-    AuthenticatedSeriesDealerAdmissionOwnerV2, AuthenticatedSeriesDealerTerminalOwnerV2,
+    authenticate_series_registry_account_v3,
+    AuthenticatedSeriesDealerAdmissionOwnerV2,
     AuthenticatedSeriesDealerTerminalV2, AuthenticatedLiveSeriesDealerObligationV2,
     AuthenticatedMarketLifecycleRootV2, AuthenticatedRegistryCapabilityV4,
-    AuthenticatedSeriesMarketLinkV2, SeriesDealerTerminalAccountsV2,
-    SeriesDealerTerminalObservationV2,
+    AuthenticatedSeriesMarketLinkV2,
 };
 use super::genesis::{
     allocate_data, assign_data, read_rent, require_creatable, require_system_program,
@@ -266,14 +267,12 @@ const QUEUE_EXIT_EXTERNAL_ACCOUNT_COUNT: usize = 22;
 const SELECT_LEASE_BEGIN_FIXED_ACCOUNT_COUNT: usize = 58;
 const COLLECT_DELIVER_FIXED_ACCOUNT_COUNT: usize = 43;
 const FINALIZE_ABORT_ACCOUNT_COUNT: usize = 30 + DEALER_COLLATERAL_AUTHORITY_ACCOUNT_COUNT;
-const RETIRE_ACTIVE_FACILITY_CREDIT_ACCOUNT_COUNT: usize = 48;
-const RETIRE_UNUSED_FUTURE_CREDIT_ACCOUNT_COUNT: usize = 45;
+pub(crate) const DEALER_FAMILY_TERMINAL_ACTIVE_ACCOUNT_COUNT_V1: usize = 39;
+pub(crate) const DEALER_FAMILY_TERMINAL_UNUSED_ACCOUNT_COUNT_V1: usize = 36;
 const DEALER_GENERAL_REPLAY_VALUE_EVIDENCE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/dealer-general-replay-value-evidence/v2\0";
 const DEALER_SERIES_ADMISSION_PREWRITE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/dealer-series-admission-prewrite/v1\0";
-const DEALER_SERIES_TERMINAL_PREWRITE_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/sbf/dealer-series-terminal-prewrite/v2\0";
 const DEALER_POSITION_REPLAY_CLOSE_POSTWRITE_DOMAIN_V3: &[u8] =
     b"dragons-clutch/sbf/dealer-position-replay-close-postwrite/v3\0";
 const DEALER_PRODUCT_RESOLUTION_AUTHENTICATION_DOMAIN_V2: &[u8] =
@@ -282,6 +281,8 @@ const DEALER_FUTURE_CREDIT_POSTWRITE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/dealer-future-credit-postwrite/v1\0";
 const DEALER_FUTURE_CREDIT_UNUSED_CLOSE_POSTWRITE_DOMAIN_V1: &[u8] =
     b"dragons-clutch/sbf/dealer-future-credit-unused-close-postwrite/v1\0";
+const DEALER_FAMILY_TERMINAL_RECEIPT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/sbf/dealer-family-terminal-receipt/v1\0";
 const _: () = assert!(
     DEALER_FUTURE_CREDIT_FUNDING_ACCOUNT_BYTES
         == 8 + clutch_dealer_runtime_contract::DEALER_FUTURE_CREDIT_FUNDING_BYTES_V1
@@ -375,47 +376,21 @@ struct AuthenticatedDealerFacilityVectorAuthoritySbfV1<'a, 'info> {
 /// Dealer-owned half of the active-credit action25 terminal cut.
 ///
 /// This non-Copy value is constructible only after the same outer has prepared
-/// the terminal Dealer Replay and accepted Product's exact LinkV2 terminal
-/// postwrite. Fractional consumes it by value before touching a5,
-/// ClaimLedgerV3, or a6/v2.
+/// the terminal Dealer Replay and hostile-decoded the finalized General
+/// Resolution. Fractional consumes it by value before touching a5,
+/// ClaimLedgerV3, or a6/v2; no Product receipt participates.
 struct AuthenticatedDealerFacilityCreditTerminalAuthoritySbfV1 {
     prestate: DealerFacilityCreditTerminalPrestateV1,
     fractional_ledger_account: Id,
     fractional_ledger_before_id: Id,
-    product_root_account: Id,
-    product_root_authentication_id: Id,
     resolution_semantic_id: Id,
     resolution_data_id: Id,
     stored_payer: Id,
     neutral_sink: Id,
 }
 
-/// Dealer's non-detachable input to Product's sole current LinkV2 terminal writer.
-///
-/// This retains the exact hostile-authenticated live Product receipt, current
-/// StateV3/Replay/Position cut, and live `0xaf/v2`. Product must consume this
-/// value before Dealer can persist the terminal `0xaf` successor or release
-/// any value-bearing child.
-pub(crate) struct AuthenticatedDealerSeriesTerminalPrewriteV2 {
-    authentication_id: ContentId,
-    resolved_product: AuthenticatedDealerProductResolutionV2,
-    obligation: DealerSeriesObligationBindingV2,
-    obligation_account: Pubkey,
-    obligation_presemantic_id: ContentId,
-    state_account: Pubkey,
-    state_presemantic_id: ContentId,
-    terminal_state_receipt: DealerTerminalStateReceiptV2,
-    terminal_state_receipt_id: ContentId,
-    replay_presemantic_id: ContentId,
-    replay_pre_ordinal: u64,
-    owner_terminal_receipt_id: ContentId,
-    expected_link_transition_sequence: u64,
-    rent_refund_owner: Pubkey,
-    neutral_lamport_sink: Pubkey,
-}
-
 /// Exact prospective PositionV3 tombstone and Replay deletion retained until
-/// the same outer has accepted Product's LinkV2 terminal postwrite.
+/// the same outer has accepted Dealer's complete value-terminal postwrite.
 struct PreparedDealerPositionReplayCloseV3 {
     plan: PreparedPositionReplayCloseV3,
     terminal_replay: DealerFacilityReplayV1,
@@ -425,136 +400,10 @@ struct PreparedDealerPositionReplayCloseV3 {
     close_receipt_id: ContentId,
 }
 
-impl AuthenticatedDealerSeriesTerminalPrewriteV2 {
-    pub(crate) const fn id(&self) -> ContentId { self.authentication_id }
-    pub(crate) const fn dealer_obligation_account(&self) -> Pubkey {
-        self.obligation_account
-    }
-    pub(crate) const fn dealer_obligation_presemantic_id(&self) -> ContentId {
-        self.obligation_presemantic_id
-    }
-    pub(crate) const fn dealer_state_account(&self) -> Pubkey { self.state_account }
-    pub(crate) const fn dealer_state_presemantic_id(&self) -> ContentId {
-        self.state_presemantic_id
-    }
-    pub(crate) const fn terminal_state_receipt(&self) -> DealerTerminalStateReceiptV2 {
-        self.terminal_state_receipt
-    }
-    pub(crate) const fn terminal_state_receipt_id(&self) -> ContentId {
-        self.terminal_state_receipt_id
-    }
-    pub(crate) const fn replay_presemantic_id(&self) -> ContentId {
-        self.replay_presemantic_id
-    }
-    pub(crate) const fn replay_pre_ordinal(&self) -> u64 { self.replay_pre_ordinal }
-    pub(crate) const fn owner_terminal_receipt_id(&self) -> ContentId {
-        self.owner_terminal_receipt_id
-    }
-    pub(crate) const fn expected_link_transition_sequence(&self) -> u64 {
-        self.expected_link_transition_sequence
-    }
-    pub(crate) const fn rent_refund_owner(&self) -> Pubkey { self.rent_refund_owner }
-    pub(crate) const fn neutral_lamport_sink(&self) -> Pubkey { self.neutral_lamport_sink }
-}
-
-impl AuthenticatedSeriesDealerTerminalOwnerV2
-    for AuthenticatedDealerSeriesTerminalPrewriteV2
-{
-    fn owner_authentication_id(&self) -> Outcome<ContentId> { Ok(self.authentication_id) }
-
-    fn dealer_obligation_account(&self) -> Outcome<Pubkey> { Ok(self.obligation_account) }
-
-    fn dealer_obligation_presemantic_id(&self) -> Outcome<ContentId> {
-        Ok(self.obligation_presemantic_id)
-    }
-
-    fn dealer_state_account(&self) -> Outcome<Pubkey> { Ok(self.state_account) }
-
-    fn dealer_state_presemantic_id(&self) -> Outcome<ContentId> {
-        Ok(self.state_presemantic_id)
-    }
-
-    fn terminal_state_receipt_id(&self) -> Outcome<ContentId> {
-        Ok(self.terminal_state_receipt_id)
-    }
-
-    fn replay_presemantic_id(&self) -> Outcome<ContentId> { Ok(self.replay_presemantic_id) }
-
-    fn replay_pre_ordinal(&self) -> Outcome<u64> { Ok(self.replay_pre_ordinal) }
-
-    fn owner_terminal_receipt_id(&self) -> Outcome<ContentId> {
-        Ok(self.owner_terminal_receipt_id)
-    }
-
-    fn expected_link_transition_sequence(&self) -> Outcome<u64> {
-        Ok(self.expected_link_transition_sequence)
-    }
-
-    fn rent_refund_owner(&self) -> Outcome<Pubkey> { Ok(self.rent_refund_owner) }
-
-    fn neutral_lamport_sink(&self) -> Outcome<Pubkey> { Ok(self.neutral_lamport_sink) }
-
-    fn consume_series_dealer_terminal_owner_v2(
-        self,
-        observed: SeriesDealerTerminalObservationV2,
-    ) -> Outcome<()> {
-        let product = self.resolved_product;
-        let obligation = self.obligation;
-        require(
-            observed.owner_authentication_id() == self.authentication_id
-                && observed.dealer_obligation_account() == self.obligation_account
-                && observed.dealer_obligation_presemantic_id()
-                    == self.obligation_presemantic_id
-                && observed.dealer_state_account() == self.state_account
-                && observed.dealer_state_presemantic_id() == self.state_presemantic_id
-                && observed.terminal_state_receipt_id() == self.terminal_state_receipt_id
-                && observed.replay_presemantic_id() == self.replay_presemantic_id
-                && observed.replay_pre_ordinal() == self.replay_pre_ordinal
-                && observed.owner_terminal_receipt_id() == self.owner_terminal_receipt_id
-                && observed.link_transition_sequence_after()
-                    == self.expected_link_transition_sequence
-                && observed.rent_refund_owner() == self.rent_refund_owner
-                && observed.neutral_lamport_sink() == self.neutral_lamport_sink
-                && id(&observed.root_account()) == product.root_account_id
-                && id_from_content(observed.root_authentication_id())
-                    == product.root_authentication_id
-                && id_from_content(observed.root_data_id()) == product.root_data_id
-                && id_from_content(observed.root_semantic_id()) == product.root_semantic_id
-                && id_from_content(observed.root_binding_id()) == product.root_binding_id
-                && id_from_content(observed.resolution_semantic_id())
-                    == product.resolution_semantic_id
-                && id_from_content(observed.resolution_data_id()) == product.resolution_data_id
-                && id_from_content(observed.resolution_activation_receipt_id())
-                    == product.resolution_activation_receipt_id
-                && id(&observed.link_account()) == product.link_account_id
-                && id_from_content(observed.link_binding_id()) == product.link_binding_id
-                && id_from_content(observed.link_authentication_before())
-                    == product.link_authentication_id
-                && id_from_content(observed.link_data_before()) == product.link_data_id
-                && id_from_content(observed.link_semantic_before()) == product.link_semantic_id
-                && observed.link_transition_sequence_before()
-                    == product.link_transition_sequence
-                && id_from_content(observed.dealer_admission_receipt_id())
-                    == product.dealer_admission_receipt_id
-                && id_from_content(observed.compiler_bundle_id())
-                    == obligation.key.compiler_bundle_v6_id
-                && id_from_content(observed.attachment_plan_id())
-                    == obligation.key.attachment_plan_v5_id
-                && id_from_content(observed.liquidity_facility_plan_id())
-                    == obligation.key.policy_id
-                && observed.registry_capability_id() != ContentId::ZERO
-                && observed.registry_authentication_id() != ContentId::ZERO
-                && observed.registry_programdata_sha256() != ContentId::ZERO
-                && observed.compiler_bundle_semantic_id() != ContentId::ZERO
-                && observed.attachment_semantic_id() != ContentId::ZERO,
-            ClutchError::AuthorizationUnavailable,
-        )
-    }
-}
-
 /// Non-detachable physical receipt proving the unused `0xbc/v1` owner was
-/// deleted only after the exact current Product obligation reached Terminal.
+/// deleted from the exact live Dealer obligation and terminal State cut.
 /// It retains the pure terminal plan plus every observed lamport poststate.
+#[derive(Debug)]
 struct AuthenticatedDealerFutureCreditUnusedCloseV1 {
     plan: DealerFutureCreditUnusedCloseV1,
     postwrite_receipt_id: Id,
@@ -566,6 +415,209 @@ impl AuthenticatedDealerFutureCreditUnusedCloseV1 {
     const fn receipt_id(&self) -> Id {
         self.postwrite_receipt_id
     }
+}
+
+/// One of the two disjoint physical value-terminal postimages for a Dealer
+/// family. Both variants are non-Copy and are consumed by the family sealer.
+#[derive(Debug)]
+enum AuthenticatedDealerTerminalValueV1 {
+    ActiveFacilityCredit(AcceptedDealerFacilityCreditTerminalV1),
+    UnusedFutureCredit(AuthenticatedDealerFutureCreditUnusedCloseV1),
+}
+
+/// Move-only proof that Dealer terminalized and deleted its complete local
+/// family before Product mutates RootV3/LinkV3.
+///
+/// This receipt is intentionally not persisted and has no signer-shaped or
+/// Product-supplied authority fields. Product's successor outer must consume
+/// it in the same Solana instruction so any later refusal rolls every physical
+/// custody, rent, State, Replay, and liveness write back atomically.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedDealerFamilyTerminalReceiptV1 {
+    receipt_id: ContentId,
+    policy_id: ContentId,
+    facility_id: ContentId,
+    market_instance_id: ContentId,
+    dealer_state_account: Pubkey,
+    dealer_state_after_id: ContentId,
+    dealer_obligation_account: Pubkey,
+    dealer_obligation_live_id: ContentId,
+    dealer_obligation_close_receipt_id: ContentId,
+    terminal_state_receipt_id: ContentId,
+    terminal_replay_semantic_id: ContentId,
+    terminal_replay_ordinal: u64,
+    product_market_root_account: Pubkey,
+    product_market_binding_id: ContentId,
+    series_market_link_account: Pubkey,
+    series_plan_id: ContentId,
+    compiler_bundle_id: ContentId,
+    attachment_plan_id: ContentId,
+    product_generation: u64,
+    series_ordinal: u32,
+    value_kind: u8,
+    value_terminal_receipt_id: ContentId,
+    resolution_semantic_id: ContentId,
+    resolution_data_id: ContentId,
+    action_receipt_semantic_id: ContentId,
+}
+
+impl AuthenticatedDealerFamilyTerminalReceiptV1 {
+    pub(crate) const fn id(&self) -> ContentId { self.receipt_id }
+    pub(crate) const fn policy_id(&self) -> ContentId { self.policy_id }
+    pub(crate) const fn facility_id(&self) -> ContentId { self.facility_id }
+    pub(crate) const fn market_instance_id(&self) -> ContentId { self.market_instance_id }
+    pub(crate) const fn dealer_state_account(&self) -> Pubkey { self.dealer_state_account }
+    pub(crate) const fn dealer_state_after_id(&self) -> ContentId {
+        self.dealer_state_after_id
+    }
+    pub(crate) const fn dealer_obligation_account(&self) -> Pubkey {
+        self.dealer_obligation_account
+    }
+    pub(crate) const fn dealer_obligation_live_id(&self) -> ContentId {
+        self.dealer_obligation_live_id
+    }
+    pub(crate) const fn dealer_obligation_close_receipt_id(&self) -> ContentId {
+        self.dealer_obligation_close_receipt_id
+    }
+    pub(crate) const fn terminal_state_receipt_id(&self) -> ContentId {
+        self.terminal_state_receipt_id
+    }
+    pub(crate) const fn terminal_replay_semantic_id(&self) -> ContentId {
+        self.terminal_replay_semantic_id
+    }
+    pub(crate) const fn terminal_replay_ordinal(&self) -> u64 {
+        self.terminal_replay_ordinal
+    }
+    pub(crate) const fn product_market_root_account(&self) -> Pubkey {
+        self.product_market_root_account
+    }
+    pub(crate) const fn product_market_binding_id(&self) -> ContentId {
+        self.product_market_binding_id
+    }
+    pub(crate) const fn series_market_link_account(&self) -> Pubkey {
+        self.series_market_link_account
+    }
+    pub(crate) const fn series_plan_id(&self) -> ContentId { self.series_plan_id }
+    pub(crate) const fn compiler_bundle_id(&self) -> ContentId { self.compiler_bundle_id }
+    pub(crate) const fn attachment_plan_id(&self) -> ContentId { self.attachment_plan_id }
+    pub(crate) const fn product_generation(&self) -> u64 { self.product_generation }
+    pub(crate) const fn series_ordinal(&self) -> u32 { self.series_ordinal }
+    pub(crate) const fn value_kind(&self) -> u8 { self.value_kind }
+    pub(crate) const fn value_terminal_receipt_id(&self) -> ContentId {
+        self.value_terminal_receipt_id
+    }
+    pub(crate) const fn resolution_semantic_id(&self) -> ContentId {
+        self.resolution_semantic_id
+    }
+    pub(crate) const fn resolution_data_id(&self) -> ContentId { self.resolution_data_id }
+    pub(crate) const fn action_receipt_semantic_id(&self) -> ContentId {
+        self.action_receipt_semantic_id
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn seal_dealer_family_terminal_receipt_v1(
+    program_id: &Pubkey,
+    obligation: DealerSeriesObligationBindingV2,
+    state_account: &AccountInfo<'_>,
+    state_after: DealerStateV3,
+    close: DealerSeriesObligationValueClosePlanV3,
+    terminal_state_receipt_id: ContentId,
+    terminal_replay_semantic_id: ContentId,
+    terminal_replay_ordinal: u64,
+    action_receipt_semantic_id: ContentId,
+    value: AuthenticatedDealerTerminalValueV1,
+) -> Outcome<AuthenticatedDealerFamilyTerminalReceiptV1> {
+    let (value_kind, value_terminal_receipt_id, resolution_semantic_id, resolution_data_id) =
+        match value {
+            AuthenticatedDealerTerminalValueV1::ActiveFacilityCredit(receipt) => (
+                1u8,
+                ContentId::from_bytes(receipt.execution_receipt_id().bytes()),
+                ContentId::from_bytes(receipt.resolution_semantic_id().bytes()),
+                ContentId::from_bytes(receipt.resolution_data_id().bytes()),
+            ),
+            AuthenticatedDealerTerminalValueV1::UnusedFutureCredit(receipt) => {
+                (2u8, ContentId::from_bytes(receipt.receipt_id().bytes()), ContentId::ZERO, ContentId::ZERO)
+            }
+        };
+    let state_after_id = state_after.state_id().map_err(dealer_fault)?;
+    let key = obligation.key;
+    require(
+        close.state_after == state_after
+            && close.binding_account_id == key.binding_account_id
+            && close.live_binding_id == obligation.binding_id().map_err(dealer_fault)?
+            && close.dealer_value_terminal_receipt_id.bytes()
+                == value_terminal_receipt_id.bytes()
+            && state_after.series_obligation_children == 0
+            && state_after.base.children.facility_positions == 0
+            && state_after.base.children.facility_replays == 0
+            && state_after.base.terminal_state_receipt_id.bytes()
+                == terminal_state_receipt_id.bytes()
+            && id(state_account.key) == key.dealer_state_account_id
+            && value_terminal_receipt_id != ContentId::ZERO
+            && terminal_replay_semantic_id != ContentId::ZERO
+            && action_receipt_semantic_id != ContentId::ZERO,
+        ClutchError::MismatchedState,
+    )?;
+    let receipt_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            DEALER_FAMILY_TERMINAL_RECEIPT_DOMAIN_V1,
+            program_id.as_ref(),
+            &key.policy_id.bytes(),
+            &key.facility_id.bytes(),
+            &key.market_instance_v2_id.bytes(),
+            state_account.key.as_ref(),
+            &state_after_id.bytes(),
+            &key.binding_account_id.bytes(),
+            &close.live_binding_id.bytes(),
+            &close.close_receipt_id.bytes(),
+            &terminal_state_receipt_id.bytes(),
+            &terminal_replay_semantic_id.bytes(),
+            &terminal_replay_ordinal.to_le_bytes(),
+            &key.product_market_root_account_id.bytes(),
+            &key.product_market_binding_id.bytes(),
+            &key.series_market_link_account_id.bytes(),
+            &key.series_plan_v5_id.bytes(),
+            &key.compiler_bundle_v6_id.bytes(),
+            &key.attachment_plan_v5_id.bytes(),
+            &key.product_generation.to_le_bytes(),
+            &key.series_ordinal.to_le_bytes(),
+            &[value_kind],
+            &value_terminal_receipt_id.bytes(),
+            &resolution_semantic_id.bytes(),
+            &resolution_data_id.bytes(),
+            &action_receipt_semantic_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(receipt_id != ContentId::ZERO, ClutchError::AuthorizationUnavailable)?;
+    Ok(AuthenticatedDealerFamilyTerminalReceiptV1 {
+        receipt_id,
+        policy_id: ContentId::from_bytes(key.policy_id.bytes()),
+        facility_id: ContentId::from_bytes(key.facility_id.bytes()),
+        market_instance_id: ContentId::from_bytes(key.market_instance_v2_id.bytes()),
+        dealer_state_account: *state_account.key,
+        dealer_state_after_id: ContentId::from_bytes(state_after_id.bytes()),
+        dealer_obligation_account: Pubkey::new_from_array(key.binding_account_id.bytes()),
+        dealer_obligation_live_id: ContentId::from_bytes(close.live_binding_id.bytes()),
+        dealer_obligation_close_receipt_id: ContentId::from_bytes(close.close_receipt_id.bytes()),
+        terminal_state_receipt_id,
+        terminal_replay_semantic_id,
+        terminal_replay_ordinal,
+        product_market_root_account: Pubkey::new_from_array(key.product_market_root_account_id.bytes()),
+        product_market_binding_id: ContentId::from_bytes(key.product_market_binding_id.bytes()),
+        series_market_link_account: Pubkey::new_from_array(key.series_market_link_account_id.bytes()),
+        series_plan_id: ContentId::from_bytes(key.series_plan_v5_id.bytes()),
+        compiler_bundle_id: ContentId::from_bytes(key.compiler_bundle_v6_id.bytes()),
+        attachment_plan_id: ContentId::from_bytes(key.attachment_plan_v5_id.bytes()),
+        product_generation: key.product_generation,
+        series_ordinal: key.series_ordinal,
+        value_kind,
+        value_terminal_receipt_id,
+        resolution_semantic_id,
+        resolution_data_id,
+        action_receipt_semantic_id,
+    })
 }
 
 /// Exact already-live Product obligation retained across later Dealer leases.
@@ -1078,163 +1130,6 @@ fn authenticate_existing_dealer_series_admission_v2(
         state,
         obligation,
         product,
-    })
-}
-
-/// Freeze Dealer's exact current terminal cut for Product's sole LinkV2 writer.
-///
-/// No Product bytes are mutated here. The returned non-Copy value is useful
-/// only to the Product-owned writer that will hostile-reopen the same RootV2,
-/// LinkV2, RegistryCapabilityV4, BundleV6, and AttachmentV5 immediately before
-/// changing Dealer's obligation status from Live to Terminal.
-#[inline(never)]
-fn authenticate_dealer_series_terminal_prewrite_v2(
-    program_id: &Pubkey,
-    state: DealerStateV3,
-    obligation: DealerSeriesObligationBindingV2,
-    product: AuthenticatedDealerProductResolutionV2,
-    state_account: &AccountInfo<'_>,
-    obligation_account: &AccountInfo<'_>,
-    replay: &DealerFacilityReplayV1,
-    terminal_state_receipt: DealerTerminalStateReceiptV2,
-) -> Outcome<AuthenticatedDealerSeriesTerminalPrewriteV2> {
-    state.validate().map_err(dealer_fault)?;
-    obligation.validate().map_err(dealer_fault)?;
-    replay.validate().map_err(dealer_fault)?;
-    terminal_state_receipt.validate().map_err(dealer_fault)?;
-
-    let state_presemantic_id = state.state_id().map_err(dealer_fault)?;
-    let state_base_presemantic_id = state.base.state_content_id().map_err(dealer_fault)?;
-    let obligation_presemantic_id = obligation.binding_id().map_err(dealer_fault)?;
-    let replay_presemantic_id = replay.replay_id().map_err(dealer_fault)?;
-    let terminal_state_receipt_id = terminal_state_receipt
-        .receipt_id()
-        .map_err(dealer_fault)?;
-    let expected_link_transition_sequence = product
-        .link_transition_sequence
-        .checked_add(1)
-        .ok_or(ClutchError::Arithmetic)?;
-    let owner_terminal_receipt_id = obligation
-        .terminal_owner_receipt_id(
-            terminal_state_receipt_id,
-            product.link_semantic_id,
-            expected_link_transition_sequence,
-        )
-        .map_err(dealer_fault)?;
-    let rent_floor = obligation
-        .rent
-        .refundable_principal
-        .checked_add(obligation.rent.donation_floor)
-        .ok_or(ClutchError::Arithmetic)?;
-
-    require(
-        product.authentication_id != Id::ZERO
-            && product.root_authentication_id != Id::ZERO
-            && product.link_authentication_id != Id::ZERO
-            && product.root_data_id != Id::ZERO
-            && product.link_data_id != Id::ZERO
-            && product.resolution_semantic_id != Id::ZERO
-            && product.resolution_data_id != Id::ZERO
-            && product.resolution_activation_receipt_id != Id::ZERO
-            && state_account.owner == program_id
-            && state_account.is_writable
-            && !state_account.is_signer
-            && !state_account.executable
-            && state_account.data_len() == DEALER_STATE_V3_ACCOUNT_BYTES
-            && id(state_account.key) == terminal_state_receipt.dealer_state_account_id
-            && id(state_account.key) == obligation.key.dealer_state_account_id
-            && obligation_account.owner == program_id
-            && obligation_account.is_writable
-            && !obligation_account.is_signer
-            && !obligation_account.executable
-            && obligation_account.data_len() == DEALER_SERIES_OBLIGATION_ACCOUNT_BYTES_V2
-            && id(obligation_account.key) == obligation.key.binding_account_id
-            && obligation_account.lamports() >= rent_floor
-            && state.base.phase == DealerPhaseV2::Retiring
-            && state.series_obligation_children == 1
-            && state.series_obligation_binding_account_id == obligation.key.binding_account_id
-            && state.series_obligation_binding_id == obligation_presemantic_id
-            && obligation.phase == DealerSeriesObligationPhaseV1::Live
-            && obligation.admission_projection_id
-                == product.dealer_admission_receipt_id
-            && obligation.key.product_market_root_account_id == product.root_account_id
-            && obligation.key.product_market_binding_id == product.root_binding_id
-            && obligation.key.series_market_link_account_id == product.link_account_id
-            && obligation.key.product_market_binding_id == product.root_binding_id
-            && obligation.rent.neutral_sink == state.base.rent.neutral_sink
-            && terminal_state_receipt.policy_id == state.base.policy_id
-            && terminal_state_receipt.facility_id == state.base.facility_id
-            && terminal_state_receipt.facility_position_binding_id
-                == state.base.facility_position_binding_id
-            && terminal_state_receipt.terminal_state_content_id == state_base_presemantic_id
-            && terminal_state_receipt.terminal_position_semantic_id
-                == state.base.facility_position_id
-            && terminal_state_receipt.replay_account_id == state.base.facility_replay_account_id
-            && terminal_state_receipt.terminal_generation == state.base.generation
-            && terminal_state_receipt.terminal_child_sequence == state.base.child_sequence
-            && replay.replay_account_id() == state.base.facility_replay_account_id
-            && replay.position_generation() == state.base.generation
-            && replay.lifecycle() == clutch_retirement::ReplayV3Lifecycle::Live
-            && replay.next_transition_ordinal() != 0
-            && product.link_transition_sequence
-                >= obligation.admission_link_transition_sequence
-            && expected_link_transition_sequence > obligation.admission_link_transition_sequence,
-        ClutchError::AuthorizationUnavailable,
-    )?;
-
-    let authentication_id = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[
-            DEALER_SERIES_TERMINAL_PREWRITE_DOMAIN_V2,
-            program_id.as_ref(),
-            &product.authentication_id.bytes(),
-            &product.root_authentication_id.bytes(),
-            &product.root_data_id.bytes(),
-            &product.root_semantic_id.bytes(),
-            &product.root_binding_id.bytes(),
-            &product.link_authentication_id.bytes(),
-            &product.link_data_id.bytes(),
-            &product.link_semantic_id.bytes(),
-            &product.link_binding_id.bytes(),
-            &product.link_transition_sequence.to_le_bytes(),
-            &product.dealer_admission_receipt_id.bytes(),
-            &product.resolution_semantic_id.bytes(),
-            &product.resolution_data_id.bytes(),
-            &product.resolution_activation_receipt_id.bytes(),
-            &product.collateral_profile_id.bytes(),
-            &product.collateral_release_id.bytes(),
-            state_account.key.as_ref(),
-            &state_presemantic_id.bytes(),
-            obligation_account.key.as_ref(),
-            &obligation_presemantic_id.bytes(),
-            &terminal_state_receipt_id.bytes(),
-            &replay_presemantic_id.bytes(),
-            &replay.next_transition_ordinal().to_le_bytes(),
-            &owner_terminal_receipt_id.bytes(),
-            &expected_link_transition_sequence.to_le_bytes(),
-            &obligation.rent.refundable_principal.to_le_bytes(),
-            &obligation.rent.donation_floor.to_le_bytes(),
-            &obligation.rent.payer.bytes(),
-            &obligation.rent.neutral_sink.bytes(),
-        ])
-        .to_bytes(),
-    );
-    require(authentication_id != ContentId::ZERO, ClutchError::AuthorizationUnavailable)?;
-    Ok(AuthenticatedDealerSeriesTerminalPrewriteV2 {
-        authentication_id,
-        resolved_product: product,
-        obligation,
-        obligation_account: *obligation_account.key,
-        obligation_presemantic_id: ContentId::from_bytes(obligation_presemantic_id.bytes()),
-        state_account: *state_account.key,
-        state_presemantic_id: ContentId::from_bytes(state_presemantic_id.bytes()),
-        terminal_state_receipt,
-        terminal_state_receipt_id: ContentId::from_bytes(terminal_state_receipt_id.bytes()),
-        replay_presemantic_id: ContentId::from_bytes(replay_presemantic_id.bytes()),
-        replay_pre_ordinal: replay.next_transition_ordinal(),
-        owner_terminal_receipt_id: ContentId::from_bytes(owner_terminal_receipt_id.bytes()),
-        expected_link_transition_sequence,
-        rent_refund_owner: Pubkey::new_from_array(obligation.rent.payer.bytes()),
-        neutral_lamport_sink: Pubkey::new_from_array(obligation.rent.neutral_sink.bytes()),
     })
 }
 
@@ -1966,22 +1861,22 @@ fn authenticate_future_credit_funding(
 /// Delete the unused future-credit funding owner and partition its balance.
 ///
 /// This helper is intentionally private and has no raw-plan caller. The final
-/// action25 outer must first persist Product's LinkV2 terminal successor and
-/// then pass the hostile-reopened terminal `0xaf/v2` and Retiring StateV3.
+/// action25 passes the hostile-reopened live `0xaf/v2` and exact
+/// post-Position/Replay Retiring StateV3 before any Product terminal write.
 /// The alternative live-a6 path is owned by Fractional and cannot call this
 /// function after action23 has deleted `0xbc/v1`.
 #[inline(never)]
 fn close_unused_future_credit_funding_v1(
     program_id: &Pubkey,
     state_account: &AccountInfo<'_>,
-    terminal_obligation_account: &AccountInfo<'_>,
+    live_obligation_account: &AccountInfo<'_>,
     funding_account: &AccountInfo<'_>,
     refund_owner: &AccountInfo<'_>,
     neutral_sink: &AccountInfo<'_>,
 ) -> Outcome<AuthenticatedDealerFutureCreditUnusedCloseV1> {
     let authenticated_state = authenticate_dealer_state_v3(program_id, state_account, true)?;
     let authenticated_obligation =
-        authenticate_dealer_series_obligation_v2(program_id, terminal_obligation_account, true)?;
+        authenticate_dealer_series_obligation_v2(program_id, live_obligation_account, true)?;
     let (_, funding) = authenticate_future_credit_funding(program_id, funding_account, true)?;
     require(
         refund_owner.is_writable
@@ -2010,7 +1905,7 @@ fn close_unused_future_credit_funding_v1(
         plan.funding_account_id == id(funding_account.key)
             && plan.refund_owner == id(refund_owner.key)
             && plan.neutral_sink == id(neutral_sink.key)
-            && plan.terminal_obligation_binding_id
+            && plan.dealer_obligation_presemantic_id
                 == authenticated_obligation.binding().binding_id().map_err(dealer_fault)?,
         ClutchError::MismatchedState,
     )?;
@@ -2041,10 +1936,7 @@ fn close_unused_future_credit_funding_v1(
             &plan.terminal_receipt_id.bytes(),
             &plan.state_pre_semantic_id.bytes(),
             &plan.terminal_state_receipt_id.bytes(),
-            &plan.terminal_obligation_binding_id.bytes(),
-            &plan.terminal_product_projection_id.bytes(),
-            &plan.terminal_link_post_semantic_id.bytes(),
-            &plan.terminal_link_transition_sequence.to_le_bytes(),
+            &plan.dealer_obligation_presemantic_id.bytes(),
             funding_account.key.as_ref(),
             refund_owner.key.as_ref(),
             neutral_sink.key.as_ref(),
@@ -2313,10 +2205,6 @@ impl AuthenticatedDealerFacilityCreditTerminalAuthorityV1
                     == self.fractional_ledger_account
                 && Id::from_bytes(observed.fractional_ledger_before_id.bytes())
                     == self.fractional_ledger_before_id
-                && Id::from_bytes(observed.market_root_account.bytes())
-                    == self.product_root_account
-                && Id::from_bytes(observed.market_root_authentication_id.bytes())
-                    == self.product_root_authentication_id
                 && Id::from_bytes(observed.resolution_semantic_id.bytes())
                     == self.resolution_semantic_id
                 && Id::from_bytes(observed.resolution_data_id.bytes())
@@ -2324,9 +2212,7 @@ impl AuthenticatedDealerFacilityCreditTerminalAuthorityV1
                 && Id::from_bytes(observed.stored_payer.bytes()) == self.stored_payer
                 && Id::from_bytes(observed.neutral_sink.bytes()) == self.neutral_sink
                 && observed.dealer_terminal_state_receipt_id
-                    == self.prestate.dealer_terminal_state_receipt_id()
-                && observed.product_terminal_receipt_id
-                    == self.prestate.product_terminal_receipt_id(),
+                    == self.prestate.dealer_terminal_state_receipt_id(),
             ClutchError::MismatchedState,
         )
     }
@@ -6002,6 +5888,12 @@ fn funded_unwind(
             .ok_or(ClutchError::Arithmetic)?
     };
     require_count(accounts, expected_count)?;
+    authenticate_dealer_meta_contract_v1(
+        program_id,
+        accounts,
+        DealerFacilityAction::Retire,
+        payload,
+    )?;
     require(
         sequence == payload.expected_replay_ordinal,
         ClutchError::Replay,
@@ -6766,30 +6658,29 @@ fn resolve_facility_vector(
     )
 }
 
-/// Seal the current Dealer Replay, consume Product's sole LinkV2 terminal
-/// writer, retire PositionV3/Replay, settle exactly one of the disjoint
-/// facility-credit owners, and close the counted `0xaf/v2` child.
+/// Physically terminalize Dealer's complete local family for Product RootV3.
 ///
-/// Every pure plan is prepared before its corresponding mutation. Product's
-/// non-Copy receipt is accepted before Dealer persists a Terminal obligation;
-/// Fractional's by-value authority is consumed before a5/ClaimLedger/a6
-/// writes. Solana rollback is the only failure boundary for the full outer.
+/// This internal primitive has no direct instruction dispatch. It closes the
+/// Position/Replay pair, exactly one disjoint value owner, the live Dealer
+/// obligation, its rent, State, action receipt, and liveness postimage before
+/// returning one non-Copy receipt. The Product RootV3 outer must consume that
+/// receipt in the same instruction; it cannot be persisted or dropped safely.
 #[inline(never)]
 #[allow(clippy::too_many_lines)]
-fn retire_current_facility_credit(
+pub(crate) fn terminalize_dealer_family_for_product_v3(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
     payload_bytes: &[u8],
-) -> Outcome<()> {
+) -> Outcome<AuthenticatedDealerFamilyTerminalReceiptV1> {
     let payload = DealerRuntimePayloadV1::decode(DealerFacilityAction::Retire, payload_bytes)
         .map_err(dealer_fault)?;
     let active_credit = payload.retire_target
         == super::dealer_runtime::DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1;
     let expected_count = if active_credit {
-        RETIRE_ACTIVE_FACILITY_CREDIT_ACCOUNT_COUNT
+        DEALER_FAMILY_TERMINAL_ACTIVE_ACCOUNT_COUNT_V1
     } else {
-        RETIRE_UNUSED_FUTURE_CREDIT_ACCOUNT_COUNT
+        DEALER_FAMILY_TERMINAL_UNUSED_ACCOUNT_COUNT_V1
     };
     require_count(accounts, expected_count)?;
     require(
@@ -6801,6 +6692,8 @@ fn retire_current_facility_credit(
             ),
         ClutchError::Replay,
     )?;
+    require_signer(&accounts[0])?;
+    require(accounts[0].is_writable, ClutchError::NotWritable)?;
 
     let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[1])?;
     let authenticated_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
@@ -6816,7 +6709,6 @@ fn retire_current_facility_credit(
     )?;
     let authenticated_obligation =
         authenticate_dealer_series_obligation_v2(program_id, &accounts[24], true)?;
-    let obligation_bump = authenticated_obligation.bump();
     let obligation = *authenticated_obligation.binding();
     let obligation_presemantic_id = obligation.binding_id().map_err(dealer_fault)?;
     require(
@@ -6946,30 +6838,28 @@ fn retire_current_facility_credit(
 
     let value_authority = authenticate_general_market_value_authority_v2(
         program_id,
+        &accounts[25],
+        &accounts[26],
+        &accounts[27],
+        &accounts[28],
+        &accounts[29],
+        &accounts[30],
+        &accounts[31],
+        &accounts[32],
+        &accounts[33],
         &accounts[34],
-        &accounts[35],
-        &accounts[36],
-        &accounts[37],
-        &accounts[38],
-        &accounts[39],
-        &accounts[40],
-        &accounts[41],
-        &accounts[42],
-        &accounts[43],
         false,
         active_credit,
     )?;
-    let product_resolution = authenticate_current_product_resolution_v2(
-        program_id,
-        &accounts[25],
-        &accounts[31],
-        &obligation,
-        &accounts[2],
-        &state_v3,
-        &policy,
-        value_authority,
-        true,
-    )?;
+    let active_resolution = if active_credit {
+        Some(authenticate_resolution_v5(
+            program_id,
+            &accounts[35],
+            value_authority.liabilities,
+        )?)
+    } else {
+        None
+    };
     let state_pre_id = state.state_content_id().map_err(dealer_fault)?;
     let replay_pre_id = replay.replay_id().map_err(dealer_fault)?;
     let empty_transfer_id = DealerEmptyAssetTransferBundleV1 {
@@ -7028,81 +6918,6 @@ fn retire_current_facility_credit(
         &accounts[18],
         &accounts[20],
     )?;
-    let product_prewrite = authenticate_dealer_series_terminal_prewrite_v2(
-        program_id,
-        state_v3,
-        obligation,
-        product_resolution,
-        &accounts[2],
-        &accounts[24],
-        &replay,
-        terminal_state_receipt,
-    )?;
-    let mut product_root = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
-    let mut product_link_pre = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
-    let mut product_link_post = Box::new(SeriesMarketLinkAccountV2::decode_buffer());
-    let product_terminal = terminalize_series_dealer_obligation_v2(
-        program_id,
-        SeriesDealerTerminalAccountsV2 {
-            market_lifecycle_root: &accounts[25],
-            series_registry: &accounts[26],
-            registry_program: &accounts[27],
-            registry_programdata: &accounts[28],
-            registry_release: &accounts[29],
-            capability_profile: &accounts[30],
-            series_market_link: &accounts[31],
-            compiler_bundle: &accounts[32],
-            attachment: &accounts[33],
-        },
-        product_prewrite,
-        &mut product_root,
-        &mut product_link_pre,
-        &mut product_link_post,
-    )?;
-    require(
-        product_terminal.dealer_obligation_account() == *accounts[24].key
-            && product_terminal.dealer_obligation_presemantic_id().bytes()
-                == obligation_presemantic_id.bytes()
-            && product_terminal.dealer_state_account() == *accounts[2].key
-            && product_terminal.terminal_state_receipt_id().bytes()
-                == terminal_state_receipt_id.bytes()
-            && product_terminal.replay_presemantic_id().bytes() == replay_pre_id.bytes()
-            && product_terminal.replay_pre_ordinal() == payload.expected_replay_ordinal
-            && product_terminal.root_account() == *accounts[25].key
-            && product_terminal.link_account() == *accounts[31].key
-            && product_terminal.link_semantic_before().bytes()
-                == product_resolution.link_semantic_id.bytes()
-            && product_terminal.resolution_semantic_id().bytes()
-                == product_resolution.resolution_semantic_id.bytes()
-            && product_terminal.resolution_data_id().bytes()
-                == product_resolution.resolution_data_id.bytes(),
-        ClutchError::MismatchedState,
-    )?;
-
-    let terminal_obligation = obligation
-        .terminalized(
-            Id::from_bytes(product_terminal.owner_terminal_receipt_id().bytes()),
-            Id::from_bytes(product_terminal.terminal_projection_id().bytes()),
-            Id::from_bytes(product_terminal.link_semantic_before().bytes()),
-            Id::from_bytes(product_terminal.link_semantic_after().bytes()),
-            terminal_state_receipt_id,
-            product_terminal.link_transition_sequence_after(),
-        )
-        .map_err(dealer_fault)?;
-    write_dealer_body(
-        &accounts[24],
-        DEALER_SERIES_OBLIGATION_ACCOUNT_TAG,
-        DEALER_SERIES_OBLIGATION_ACCOUNT_VERSION_V2,
-        obligation_bump,
-        &terminal_obligation,
-    )?;
-    let observed_terminal_obligation =
-        authenticate_dealer_series_obligation_v2(program_id, &accounts[24], true)?;
-    require(
-        observed_terminal_obligation.binding() == &terminal_obligation,
-        ClutchError::MismatchedState,
-    )?;
-
     terminal_replay
         .encode_into(&mut accounts[4].data.borrow_mut())
         .map_err(dealer_fault)?;
@@ -7134,35 +6949,33 @@ fn retire_current_facility_credit(
         terminal_replay_semantic_id,
     )
     .map_err(dealer_fault)?;
-    let state_after_terminal_children = state_v3
-        .with_base(state_after_position)
-        .and_then(|next| next.observe_current_terminal_binding(&terminal_obligation))
-        .map_err(dealer_fault)?;
+    let state_after_position_live = state_v3.with_base(state_after_position).map_err(dealer_fault)?;
     write_dealer_body(
         &accounts[2],
         DEALER_STATE_V3_ACCOUNT_TAG,
         DEALER_STATE_V3_ACCOUNT_VERSION,
         state_bump,
-        &state_after_terminal_children,
+        &state_after_position_live,
     )?;
     let observed_intermediate_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
     require(
-        observed_intermediate_state.state() == &state_after_terminal_children
+        observed_intermediate_state.state() == &state_after_position_live
             && accounts[4].owner == &SYSTEM_PROGRAM_ID
             && accounts[4].data_is_empty()
             && accounts[4].lamports() == 0,
         ClutchError::MismatchedState,
     )?;
 
-    if active_credit {
+    let terminal_value = if active_credit {
+        let resolution = active_resolution.ok_or(ClutchError::MismatchedState)?;
         let fractional_ledger = FractionalLedgerV1::decode(
-            &accounts[46]
+            &accounts[37]
                 .try_borrow_data()
                 .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
         )
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
         let facility_credit = FractionalCreditV2::decode(
-            &accounts[47]
+            &accounts[38]
                 .try_borrow_data()
                 .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?,
         )
@@ -7170,15 +6983,14 @@ fn retire_current_facility_credit(
         let ledger_before_id = fractional_ledger
             .state_id()
             .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-        let terminal_obligation_id = terminal_obligation.binding_id().map_err(dealer_fault)?;
-        let intermediate_state_id = state_after_terminal_children
+        let intermediate_state_id = state_after_position_live
             .state_id()
             .map_err(dealer_fault)?;
         let prestate = DealerFacilityCreditTerminalPrestateV1::new(
             retirement_id(state.facility_id)?,
             retirement_id(policy.market_instance_v2_id)?,
             obligation.key.product_generation,
-            retirement_id(id(accounts[47].key))?,
+            retirement_id(id(accounts[38].key))?,
             fractional_ledger.next_sequence,
             facility_credit.next_sequence,
             retirement_id(id(accounts[2].key))?,
@@ -7188,97 +7000,91 @@ fn retire_current_facility_credit(
             retirement_id(terminal_replay_semantic_id)?,
             terminal_replay.next_transition_ordinal(),
             retirement_id(id(accounts[24].key))?,
-            retirement_id(terminal_obligation_id)?,
+            retirement_id(obligation_presemantic_id)?,
             retirement_id(terminal_state_receipt_id)?,
-            retirement_id(id_from_content(product_terminal.id()))?,
         )?;
         let fractional_terminal = apply_dealer_facility_credit_terminal_v1(
             program_id,
             DealerFacilityCreditTerminalAccountsV1 {
-                realm: &accounts[34],
-                profile: &accounts[35],
-                collateral_policy: &accounts[36],
-                collateral_token_program: &accounts[37],
-                collateral_token_programdata: &accounts[38],
-                market_binding: &accounts[39],
-                market_runtime: &accounts[40],
-                market_instance: &accounts[41],
-                hoard: &accounts[42],
-                claim_ledger: &accounts[43],
-                resolution: &accounts[44],
-                fractional_policy: &accounts[45],
-                fractional_ledger: &accounts[46],
-                facility_credit: &accounts[47],
+                realm: &accounts[25],
+                profile: &accounts[26],
+                collateral_policy: &accounts[27],
+                collateral_token_program: &accounts[28],
+                collateral_token_programdata: &accounts[29],
+                market_binding: &accounts[30],
+                market_runtime: &accounts[31],
+                market_instance: &accounts[32],
+                hoard: &accounts[33],
+                claim_ledger: &accounts[34],
+                resolution: &accounts[35],
+                fractional_policy: &accounts[36],
+                fractional_ledger: &accounts[37],
+                facility_credit: &accounts[38],
                 stored_payer: &accounts[19],
-                market_lifecycle_root: &accounts[25],
                 neutral_sink: &accounts[20],
                 rent_sysvar: &accounts[22],
             },
             AuthenticatedDealerFacilityCreditTerminalAuthoritySbfV1 {
                 prestate,
-                fractional_ledger_account: id(accounts[46].key),
+                fractional_ledger_account: id(accounts[37].key),
                 fractional_ledger_before_id: Id::from_bytes(ledger_before_id.bytes()),
-                product_root_account: id(accounts[25].key),
-                product_root_authentication_id: Id::from_bytes(
-                    product_terminal.root_authentication_id().bytes(),
-                ),
-                resolution_semantic_id: Id::from_bytes(
-                    product_terminal.resolution_semantic_id().bytes(),
-                ),
-                resolution_data_id: Id::from_bytes(
-                    product_terminal.resolution_data_id().bytes(),
-                ),
+                resolution_semantic_id: Id::from_bytes(resolution.semantic_id.bytes()),
+                resolution_data_id: Id::from_bytes(resolution.data_id.bytes()),
                 stored_payer: id(accounts[19].key),
                 neutral_sink: id(accounts[20].key),
             },
         )?;
         require(
-            fractional_terminal.facility_id().bytes() == state.facility_id.bytes()
+                fractional_terminal.facility_id().bytes() == state.facility_id.bytes()
                 && fractional_terminal.facility_credit_account().bytes()
-                    == accounts[47].key.to_bytes()
+                    == accounts[38].key.to_bytes()
                 && fractional_terminal.ledger_before_id() == ledger_before_id
-                && fractional_terminal.resolution_semantic_id().bytes()
-                    == product_terminal.resolution_semantic_id().bytes()
-                && fractional_terminal.resolution_data_id().bytes()
-                    == product_terminal.resolution_data_id().bytes()
                 && fractional_terminal.dealer_terminal_state_receipt_id().bytes()
                     == terminal_state_receipt_id.bytes()
-                && fractional_terminal.product_terminal_receipt_id().bytes()
-                    == product_terminal.id().bytes(),
+                && fractional_terminal.execution_receipt_id().bytes() != [0; 32],
             ClutchError::MismatchedState,
         )?;
+        AuthenticatedDealerTerminalValueV1::ActiveFacilityCredit(fractional_terminal)
     } else {
         let unused = close_unused_future_credit_funding_v1(
             program_id,
             &accounts[2],
             &accounts[24],
-            &accounts[44],
+            &accounts[35],
             &accounts[19],
             &accounts[20],
         )?;
         require(
             unused.postwrite_receipt_id != Id::ZERO
                 && unused.plan.terminal_state_receipt_id == terminal_state_receipt_id
-                && unused.plan.terminal_obligation_binding_id
-                    == terminal_obligation.binding_id().map_err(dealer_fault)?
-                && unused.plan.terminal_product_projection_id
-                    == Id::from_bytes(product_terminal.terminal_projection_id().bytes())
+                && unused.plan.dealer_obligation_presemantic_id == obligation_presemantic_id
                 && unused.refund_owner_lamports_after == accounts[19].lamports()
                 && unused.neutral_sink_lamports_after == accounts[20].lamports(),
             ClutchError::MismatchedState,
         )?;
-    }
+        AuthenticatedDealerTerminalValueV1::UnusedFutureCredit(unused)
+    };
 
-    let obligation_close = prepare_dealer_series_obligation_close_v2(
-        state_after_terminal_children,
-        &terminal_obligation,
+    let value_terminal_receipt_id = match &terminal_value {
+        AuthenticatedDealerTerminalValueV1::ActiveFacilityCredit(receipt) => {
+            Id::from_bytes(receipt.execution_receipt_id().bytes())
+        }
+        AuthenticatedDealerTerminalValueV1::UnusedFutureCredit(receipt) => receipt.receipt_id(),
+    };
+
+    let obligation_close = prepare_dealer_series_obligation_value_close_v3(
+        state_after_position_live,
+        &obligation,
+        value_terminal_receipt_id,
         accounts[24].lamports(),
     )
     .map_err(dealer_fault)?;
     require(
         obligation_close.binding_account_id == id(accounts[24].key)
-            && obligation_close.terminal_binding_id
-                == terminal_obligation.binding_id().map_err(dealer_fault)?
+            && obligation_close.live_binding_id == obligation_presemantic_id
+            && obligation_close.dealer_value_terminal_receipt_id
+                == value_terminal_receipt_id
+            && obligation_close.close_receipt_id != Id::ZERO
             && obligation_close.rent_payer == id(accounts[19].key)
             && obligation_close.neutral_sink == id(accounts[20].key),
         ClutchError::MismatchedState,
@@ -7347,6 +7153,20 @@ fn retire_current_facility_credit(
             && accounts[13].lamports() == liveness_transition.account_balance_after
             && retirement_data.as_ref() == liveness_transition.post_account_data.as_slice(),
         ClutchError::MismatchedState,
+    )?;
+    drop(retirement_data);
+    let action_receipt_semantic_id = receipt.semantic_receipt_id().map_err(dealer_fault)?;
+    seal_dealer_family_terminal_receipt_v1(
+        program_id,
+        obligation,
+        &accounts[2],
+        obligation_close.state_after,
+        obligation_close,
+        ContentId::from_bytes(terminal_state_receipt_id.bytes()),
+        ContentId::from_bytes(terminal_replay_semantic_id.bytes()),
+        terminal_replay.next_transition_ordinal(),
+        ContentId::from_bytes(action_receipt_semantic_id.bytes()),
+        terminal_value,
     )
 }
 
@@ -11869,16 +11689,6 @@ pub fn process(
     action: DealerFacilityAction,
     payload: &[u8],
 ) -> Outcome<()> {
-    let retire_current_credit = if action == DealerFacilityAction::Retire {
-        let decoded = DealerRuntimePayloadV1::decode(action, payload).map_err(dealer_fault)?;
-        matches!(
-            decoded.retire_target,
-            super::dealer_runtime::DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1
-                | super::dealer_runtime::DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1
-        )
-    } else {
-        false
-    };
     let implemented = matches!(
         action,
         DealerFacilityAction::Initialize
@@ -11900,7 +11710,7 @@ pub fn process(
             | DealerFacilityAction::EnterUnwind
             | DealerFacilityAction::TimedClose
             | DealerFacilityAction::Claim
-    ) || retire_current_credit;
+    );
     if !implemented {
         return super::dealer_runtime::process_reserved_disabled(action);
     }
@@ -11960,9 +11770,6 @@ pub fn process(
         }
         DealerFacilityAction::Claim => {
             claim_terminal_allocation(program_id, accounts, sequence, payload)
-        }
-        DealerFacilityAction::Retire if retire_current_credit => {
-            retire_current_facility_credit(program_id, accounts, sequence, payload)
         }
         _ => Err(ClutchError::UnsupportedInstruction.into()),
     }
@@ -12607,8 +12414,8 @@ mod timed_close_adversarial_tests {
 mod current_terminal_cut_adversarial_tests {
     use super::{
         checked_terminal_retirement_sequence_v3, DealerRuntimePayloadV1,
-        RETIRE_ACTIVE_FACILITY_CREDIT_ACCOUNT_COUNT,
-        RETIRE_UNUSED_FUTURE_CREDIT_ACCOUNT_COUNT,
+        DEALER_FAMILY_TERMINAL_ACTIVE_ACCOUNT_COUNT_V1,
+        DEALER_FAMILY_TERMINAL_UNUSED_ACCOUNT_COUNT_V1,
     };
     use crate::instructions::dealer_runtime::{
         meta_contract_v1, DealerMetaOwnerV1, DealerMetaRoleV1,
@@ -12637,26 +12444,28 @@ mod current_terminal_cut_adversarial_tests {
         )
         .unwrap();
         let active = meta_contract_v1(DealerFacilityAction::Retire, active).unwrap();
-        assert_eq!(active.len(), RETIRE_ACTIVE_FACILITY_CREDIT_ACCOUNT_COUNT);
+        assert_eq!(active.len(), DEALER_FAMILY_TERMINAL_ACTIVE_ACCOUNT_COUNT_V1);
         assert!(active[0].writable);
         assert_eq!(active[15].role, DealerMetaRoleV1::LivenessReceipt);
         assert_eq!(active[15].owner, DealerMetaOwnerV1::System);
         assert!(active[15].writable);
         assert_eq!(active[24].role, DealerMetaRoleV1::SeriesObligation);
         assert!(active[24].writable);
-        assert_eq!(active[25].role, DealerMetaRoleV1::ProductMarketRoot);
+        assert_eq!(active[25].role, DealerMetaRoleV1::Realm);
         assert!(!active[25].writable);
-        assert_eq!(active[31].role, DealerMetaRoleV1::SeriesMarketLink);
-        assert!(active[31].writable);
-        assert_eq!(active[38].role, DealerMetaRoleV1::CollateralTokenProgramData);
-        assert!(!active[38].writable);
-        assert_eq!(active[43].role, DealerMetaRoleV1::ClaimLedger);
-        assert!(active[43].writable);
-        assert_eq!(active[46].role, DealerMetaRoleV1::FractionalLedger);
-        assert!(active[46].writable);
-        assert_eq!(active[47].role, DealerMetaRoleV1::FacilityCredit);
-        assert_eq!(active[47].owner, DealerMetaOwnerV1::SelfProgram);
-        assert!(active[47].writable);
+        assert_eq!(active[29].role, DealerMetaRoleV1::CollateralTokenProgramData);
+        assert!(!active[29].writable);
+        assert_eq!(active[34].role, DealerMetaRoleV1::ClaimLedger);
+        assert!(active[34].writable);
+        assert_eq!(active[37].role, DealerMetaRoleV1::FractionalLedger);
+        assert!(active[37].writable);
+        assert_eq!(active[38].role, DealerMetaRoleV1::FacilityCredit);
+        assert_eq!(active[38].owner, DealerMetaOwnerV1::SelfProgram);
+        assert!(active[38].writable);
+        assert!(!active.iter().any(|meta| matches!(
+            meta.role,
+            DealerMetaRoleV1::ProductMarketRoot | DealerMetaRoleV1::SeriesMarketLink
+        )));
         assert!(!active
             .iter()
             .any(|meta| meta.role == DealerMetaRoleV1::FutureCreditFunding));
@@ -12667,12 +12476,12 @@ mod current_terminal_cut_adversarial_tests {
         )
         .unwrap();
         let unused = meta_contract_v1(DealerFacilityAction::Retire, unused).unwrap();
-        assert_eq!(unused.len(), RETIRE_UNUSED_FUTURE_CREDIT_ACCOUNT_COUNT);
-        assert_eq!(unused[43].role, DealerMetaRoleV1::ClaimLedger);
-        assert!(!unused[43].writable);
-        assert_eq!(unused[44].role, DealerMetaRoleV1::FutureCreditFunding);
-        assert_eq!(unused[44].owner, DealerMetaOwnerV1::SelfProgram);
-        assert!(unused[44].writable);
+        assert_eq!(unused.len(), DEALER_FAMILY_TERMINAL_UNUSED_ACCOUNT_COUNT_V1);
+        assert_eq!(unused[34].role, DealerMetaRoleV1::ClaimLedger);
+        assert!(!unused[34].writable);
+        assert_eq!(unused[35].role, DealerMetaRoleV1::FutureCreditFunding);
+        assert_eq!(unused[35].owner, DealerMetaOwnerV1::SelfProgram);
+        assert!(unused[35].writable);
         assert!(!unused
             .iter()
             .any(|meta| meta.role == DealerMetaRoleV1::FacilityCredit));
@@ -12727,16 +12536,16 @@ mod current_terminal_cut_adversarial_tests {
     }
 
     #[test]
-    fn terminal_cut_is_payload_admitted_without_opening_the_coarse_action_tuple() {
+    fn terminal_cut_has_no_direct_dealer_dispatch() {
         assert!(!crate::capabilities::extension_intent_action_enabled(
             DEALER_FAMILY_TAG,
             DEALER_FAMILY_VERSION,
             DealerFacilityAction::Retire.tag(),
         ));
-        assert!(crate::capabilities::dealer_terminal_retire_target_enabled(
+        assert!(!crate::capabilities::dealer_terminal_retire_target_enabled(
             DEALER_RETIRE_ACTIVE_FACILITY_CREDIT_V1,
         ));
-        assert!(crate::capabilities::dealer_terminal_retire_target_enabled(
+        assert!(!crate::capabilities::dealer_terminal_retire_target_enabled(
             DEALER_RETIRE_UNUSED_FUTURE_CREDIT_V1,
         ));
         assert!(!crate::capabilities::dealer_terminal_retire_target_enabled(
@@ -12748,80 +12557,55 @@ mod current_terminal_cut_adversarial_tests {
             .nth(1)
             .and_then(|value| value.split("#[cfg(test)]").next())
             .expect("Dealer implementation mask");
-        assert!(dispatcher.contains("retire_current_credit"));
-        assert!(dispatcher.contains("retire_current_facility_credit"));
+        assert!(!dispatcher.contains("terminalize_dealer_family_for_product_v3"));
     }
 
     #[test]
-    fn product_terminal_prewrite_binds_the_exact_live_dealer_cut() {
+    fn dealer_family_receipt_has_no_product_supplied_authority() {
         let source = include_str!("dealer_facility.rs");
-        let prewrite = source
-            .split("fn authenticate_dealer_series_terminal_prewrite_v2")
+        let receipt = source
+            .split("fn seal_dealer_family_terminal_receipt_v1")
             .nth(1)
-            .and_then(|value| value.split("fn authenticate_dealer_collateral_value_v2").next())
-            .expect("current Dealer terminal prewrite");
+            .and_then(|value| value.split("struct AuthenticatedExistingDealerSeriesAdmissionV1").next())
+            .expect("Dealer family receipt sealer");
         for guard in [
-            "product.root_authentication_id",
-            "product.link_authentication_id",
-            "product.resolution_activation_receipt_id",
-            "state.state_id()",
+            "state_after.state_id()",
             "obligation.binding_id()",
-            "replay.replay_id()",
-            "terminal_state_receipt.receipt_id()",
-            "terminal_owner_receipt_id",
-            "product.link_transition_sequence",
-            "obligation.admission_projection_id",
-            "product.dealer_admission_receipt_id",
-            "obligation.key.compiler_bundle_v6_id",
-            "obligation.key.attachment_plan_v5_id",
-            "obligation.rent.refundable_principal",
-            "obligation.rent.donation_floor",
-            "DEALER_SERIES_TERMINAL_PREWRITE_DOMAIN_V2",
+            "close.close_receipt_id",
+            "value_terminal_receipt_id",
+            "action_receipt_semantic_id",
+            "DEALER_FAMILY_TERMINAL_RECEIPT_DOMAIN_V1",
         ] {
-            assert!(prewrite.contains(guard), "missing terminal prewrite guard {guard}");
+            assert!(receipt.contains(guard), "missing family receipt guard {guard}");
         }
+        assert!(!receipt.contains("AuthenticatedDealerProductResolutionV2"));
+        assert!(!receipt.contains("AuthenticatedSeriesDealerTerminalV2"));
     }
 
     #[test]
-    fn action25_has_one_non_detachable_product_position_credit_and_obligation_outer() {
+    fn dealer_terminalizer_closes_value_before_live_obligation_and_emits_receipt() {
         let source = include_str!("dealer_facility.rs");
         let handler = source
-            .split("fn retire_current_facility_credit")
+            .split("fn terminalize_dealer_family_for_product_v3")
             .nth(1)
             .and_then(|value| value.split("fn claim_terminal_allocation").next())
-            .expect("current action25 outer");
+            .expect("Dealer family terminalizer");
         for guard in [
-            "authenticate_current_product_resolution_v2",
             "prepare_dealer_terminal_replay_v2",
-            "terminalize_series_dealer_obligation_v2",
-            ".terminalized(",
             "apply_dealer_position_replay_close_v3",
             "close_dealer_position_replay_v2",
             "apply_dealer_facility_credit_terminal_v1",
             "close_unused_future_credit_funding_v1",
-            "prepare_dealer_series_obligation_close_v2",
+            "prepare_dealer_series_obligation_value_close_v3",
             "release_dealer_account(&accounts[24])",
             "apply_liveness_transition",
+            "seal_dealer_family_terminal_receipt_v1",
             "series_obligation_children == 0",
         ] {
-            assert!(handler.contains(guard), "missing action25 join {guard}");
+            assert!(handler.contains(guard), "missing terminal join {guard}");
         }
-        for current_product_account in [
-            "registry_programdata: &accounts[28]",
-            "registry_release: &accounts[29]",
-            "capability_profile: &accounts[30]",
-            "compiler_bundle: &accounts[32]",
-            "attachment: &accounts[33]",
-        ] {
-            assert!(
-                handler.contains(current_product_account),
-                "missing current Product authority {current_product_account}",
-            );
-        }
-        assert!(!handler.contains("AuthenticatedExistingDealerSeriesAdmissionV2"));
-        let product = handler
-            .find("terminalize_series_dealer_obligation_v2")
-            .expect("Product terminal writer");
+        assert!(!handler.contains("authenticate_current_product_resolution_v2"));
+        assert!(!handler.contains("terminalize_series_dealer_obligation_v2"));
         let position = handler
             .find("apply_dealer_position_replay_close_v3")
             .expect("Position/Replay close");
@@ -12829,9 +12613,12 @@ mod current_terminal_cut_adversarial_tests {
             .find("apply_dealer_facility_credit_terminal_v1")
             .expect("Fractional active-credit close");
         let obligation = handler
-            .find("prepare_dealer_series_obligation_close_v2")
+            .find("prepare_dealer_series_obligation_value_close_v3")
             .expect("Dealer obligation close");
-        assert!(product < position && position < fractional && fractional < obligation);
+        let receipt = handler
+            .find("seal_dealer_family_terminal_receipt_v1")
+            .expect("Dealer family receipt");
+        assert!(position < fractional && fractional < obligation && obligation < receipt);
     }
 
     #[test]
