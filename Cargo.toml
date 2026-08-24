@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/dclutch-kernel"]
+members = ["crates/dclutch-core-contract", "crates/dclutch-kernel"]
 resolver = "2"
 
 [workspace.package]
