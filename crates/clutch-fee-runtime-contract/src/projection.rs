@@ -404,6 +404,75 @@ pub struct CertifiedRecipientAllocationV2 {
     owner_count: u16,
 }
 
+/// Allocation-free access to one constructor-certified recipient snapshot.
+/// Implementations must validate canonical rows, padding, totals, and the
+/// complete-book certificate before exposing this interface.
+pub trait CertifiedRecipientAllocationAccessV2 {
+    fn fee_record(&self) -> Id;
+    fn maker_len(&self) -> u8;
+    fn maker_position(&self, index: u8) -> Result<Id>;
+    fn maker_rebate_atoms(&self, index: u8) -> Result<u64>;
+    fn maker_rebate_total(&self) -> u64;
+    fn executor_atoms(&self) -> u64;
+    fn treasury_atoms(&self) -> u64;
+    fn collected_fee_atoms(&self) -> u64;
+    fn owner_fee_book_data_id(&self) -> Id;
+    fn owner_order_set_digest(&self) -> Id;
+    fn owner_count(&self) -> u16;
+}
+
+impl CertifiedRecipientAllocationAccessV2 for CertifiedRecipientAllocationV2 {
+    fn fee_record(&self) -> Id {
+        self.allocation.fee_record()
+    }
+
+    fn maker_len(&self) -> u8 {
+        self.allocation.maker_len()
+    }
+
+    fn maker_position(&self, index: u8) -> Result<Id> {
+        if index >= self.allocation.maker_len() {
+            return Err(Error::InvalidWidth);
+        }
+        Ok(self.allocation.maker_positions()[usize::from(index)])
+    }
+
+    fn maker_rebate_atoms(&self, index: u8) -> Result<u64> {
+        if index >= self.allocation.maker_len() {
+            return Err(Error::InvalidWidth);
+        }
+        Ok(self.allocation.maker_rebate_atoms()[usize::from(index)])
+    }
+
+    fn maker_rebate_total(&self) -> u64 {
+        self.allocation.maker_rebate_total()
+    }
+
+    fn executor_atoms(&self) -> u64 {
+        self.allocation.executor_atoms()
+    }
+
+    fn treasury_atoms(&self) -> u64 {
+        self.allocation.treasury_atoms()
+    }
+
+    fn collected_fee_atoms(&self) -> u64 {
+        self.allocation.collected_fee_atoms()
+    }
+
+    fn owner_fee_book_data_id(&self) -> Id {
+        self.owner_fee_book_data_id
+    }
+
+    fn owner_order_set_digest(&self) -> Id {
+        self.owner_order_set_digest
+    }
+
+    fn owner_count(&self) -> u16 {
+        self.owner_count
+    }
+}
+
 impl CertifiedRecipientAllocationV2 {
     /// Exact recipient allocation and collected total.
     pub const fn allocation(&self) -> RecipientAllocationV1 {

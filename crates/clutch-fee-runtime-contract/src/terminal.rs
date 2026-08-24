@@ -1775,25 +1775,27 @@ pub fn build_aborted_fee_terminal_receipt_v1(
 /// close, and all three global closes. It is therefore not interchangeable
 /// with a caller-supplied count or aggregate amount.
 #[allow(clippy::too_many_arguments)]
-pub fn build_settled_fee_terminal_from_accumulator_v1(
+pub fn build_settled_fee_terminal_from_accumulator_v1<C>(
     terminal_receipt: Id,
     closure_manifest_receipt: Id,
     selected: &SelectedCompositeFeeV1,
-    certified: &crate::projection::CertifiedRecipientAllocationV2,
+    certified: &C,
     settlement: &CandidateFeeSettlementV1,
     recipient_intent: &RecipientAllocationIntentV1,
     treasury: &TreasuryLedgerV1,
     completed: CompletedFeeRetirementV1,
-) -> Result<FeeTerminalReceiptBundleV1> {
+) -> Result<FeeTerminalReceiptBundleV1>
+where
+    C: crate::projection::CertifiedRecipientAllocationAccessV2,
+{
     let accumulator = completed.accumulator();
-    let recipients = certified.allocation();
     if accumulator.fee_record() != selected.fee_record()
         || accumulator.settlement_candidate() != selected.selected_candidate()
         || accumulator.owner_fee_book_data_id() != certified.owner_fee_book_data_id()
         || accumulator.owner_order_set_digest() != certified.owner_order_set_digest()
         || u16::from(accumulator.expected_owner_count()) != certified.owner_count()
         || accumulator.expected_fee_atoms()
-            != u128::from(recipients.collected_fee_atoms())
+            != u128::from(certified.collected_fee_atoms())
         || recipient_intent.fee_record().identity() != selected.fee_record()
         || recipient_intent.recipient_allocation().identity()
             != accumulator.recipient_allocation()
@@ -1804,19 +1806,19 @@ pub fn build_settled_fee_terminal_from_accumulator_v1(
         || settlement.fee_record != selected.fee_record()
         || settlement.hoard_collateral_before != settlement.hoard_collateral_after
         || settlement.selected_fee_debit_atoms != accumulator.expected_fee_atoms()
-        || settlement.maker_rebate_atoms != recipients.maker_rebate_total()
-        || settlement.executor_atoms != recipients.executor_atoms()
-        || settlement.treasury_credit_atoms != recipients.treasury_atoms()
+        || settlement.maker_rebate_atoms != certified.maker_rebate_total()
+        || settlement.executor_atoms != certified.executor_atoms()
+        || settlement.treasury_credit_atoms != certified.treasury_atoms()
         || treasury.fee_record() != selected.fee_record()
         || treasury.treasury_position() != selected.treasury_position()
         || treasury.outstanding_epochs() != 0
-        || treasury.credited_atoms() != recipients.treasury_atoms()
+        || treasury.credited_atoms() != certified.treasury_atoms()
         || treasury.withdrawn_atoms() != 0
-        || treasury.available_atoms() != recipients.treasury_atoms()
+        || treasury.available_atoms() != certified.treasury_atoms()
         || treasury.is_closed()
         || u128::from(add(
-            add(recipients.maker_rebate_total(), recipients.executor_atoms())?,
-            recipients.treasury_atoms(),
+            add(certified.maker_rebate_total(), certified.executor_atoms())?,
+            certified.treasury_atoms(),
         )?) != accumulator.expected_fee_atoms()
     {
         return Err(Error::InvalidTerminalDisposition);
@@ -1834,9 +1836,9 @@ pub fn build_settled_fee_terminal_from_accumulator_v1(
         accumulator.expected_owner_count(),
         accumulator.expected_fee_atoms(),
         0,
-        recipients.maker_rebate_total(),
-        recipients.executor_atoms(),
-        recipients.treasury_atoms(),
+        certified.maker_rebate_total(),
+        certified.executor_atoms(),
+        certified.treasury_atoms(),
         completed.payer_refund_lamports(),
         completed.neutral_credit_lamports(),
     )
