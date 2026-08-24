@@ -94,7 +94,8 @@ fn require_protocol_distinct_with_external_aliases(
 /// Begin one recurring shared-Market Failure interval from exact Product and
 /// persisted Source authority, then atomically pin the initiating Series link.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn process_begin_failure_market_session_v2(
+#[allow(dead_code)]
+fn withdrawn_root_v1_begin_failure_market_session_v2(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     sequence: u64,
@@ -853,25 +854,27 @@ mod adversarial_action_tests {
 
     #[test]
     fn begin_reconstructs_source_and_compiler_authority_before_atomic_pin() {
-        let source = include_str!("failure_market_actions_v2.rs");
+        let source = include_str!("failure_market_action10_current.rs");
         let handler = source
             .split("fn process_begin_failure_market_session_v2")
             .nth(1)
-            .and_then(|value| value.split("fn process_advance_failure_market_session_v2").next())
+            .and_then(|value| value.split("fn compose_current_successful_failure_begin_v2").next())
             .expect("action10 handler");
         for owner in [
             "require_distinct(accounts)",
-            "authenticate_failure_market_execution_v2",
-            "execution.require_next_sequence(sequence)",
-            "authenticate_failure_market_source_route_v2",
-            "authenticate_successful_source_handoff_from_accounts_v1",
-            "authenticate_product_failure_begin_schedule_v1",
-            "begin_failure_market_interval_session_v2",
+            "authenticate_market_lifecycle_root_v2",
+            "authenticate_series_market_link_v2",
+            "authenticate_registry_capability_v4",
+            "authenticate_product_failure_begin_schedule_v2",
+            "reconstruct_exact_action10_source",
+            "compose_failure_market_source_failure_attempt_v3",
+            "compose_current_successful_failure_begin_v2",
         ] {
             assert!(handler.contains(owner));
         }
         require_every_contract_role_is_consumed(handler, BEGIN_FAILURE_MARKET_SESSION_METAS_V2);
         assert!(!handler.contains("ExternalRecoveryStateV1"));
+        assert!(!handler.contains("MarketLifecycleRootAccountV1"));
     }
 
     #[test]

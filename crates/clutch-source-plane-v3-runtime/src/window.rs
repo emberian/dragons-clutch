@@ -608,7 +608,37 @@ pub struct AuthenticatedStatisticResultAbsenceV1 {
     statistic_key_id: ContentId,
     result_account: RuntimeKey,
     lineage_id: ContentId,
+    access: StatisticResultAbsenceAccessV1,
     absence_id: ContentId,
+}
+
+/// Exact privilege accepted while authenticating a never-created result slot.
+///
+/// The absence identity is privilege-independent so the durable action-10 join
+/// remains stable. The retained access prevents a later terminal consumer from
+/// silently treating a read-only lineage receipt as mutable authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StatisticResultAbsenceAccessV1 {
+    /// Ordinary Failure trigger authentication.
+    ExistingReadOnly,
+    /// Same-call terminal tombstone mutation of the never-created lineage.
+    TerminalMutable,
+}
+
+impl StatisticResultAbsenceAccessV1 {
+    const fn lineage_access(self) -> LineageAccessV1 {
+        match self {
+            Self::ExistingReadOnly => LineageAccessV1::ReadOnly,
+            Self::TerminalMutable => LineageAccessV1::Mutable,
+        }
+    }
+
+    const fn result_writable(self) -> bool {
+        match self {
+            Self::ExistingReadOnly => false,
+            Self::TerminalMutable => true,
+        }
+    }
 }
 
 /// Runtime-authenticated persisted immutable StatisticResult generation.
@@ -705,6 +735,11 @@ impl AuthenticatedStatisticResultAbsenceV1 {
         self.lineage_id
     }
 
+    /// Exact lineage privilege authenticated for this absence.
+    pub const fn access(self) -> StatisticResultAbsenceAccessV1 {
+        self.access
+    }
+
     /// Complete runtime absence receipt.
     pub const fn id(self) -> ContentId {
         self.absence_id
@@ -719,8 +754,49 @@ pub fn authenticate_statistic_result_absence(
     derived_pda: RuntimeDerivedPdaV1,
     authenticated_lineage: AuthenticatedReopenLineageV1,
 ) -> Result<AuthenticatedStatisticResultAbsenceV1> {
+    authenticate_statistic_result_absence_inner(
+        route,
+        key,
+        account,
+        derived_pda,
+        authenticated_lineage,
+        StatisticResultAbsenceAccessV1::ExistingReadOnly,
+    )
+}
+
+/// Authenticate the exact never-created result slot under the sole terminal
+/// privilege union. The never-created Result slot is writable solely because
+/// the same instruction contract also admits the refused-Result close branch;
+/// it remains System-owned, zero-lamport, zero-data and is never mutated. The
+/// lineage is writable so this branch can persist its permanent tombstone.
+pub fn authenticate_statistic_result_absence_for_terminal(
+    route: AuthenticatedSourceRouteV1,
+    key: &StatisticKeyV3,
+    account: RuntimeAccountViewV1<'_>,
+    derived_pda: RuntimeDerivedPdaV1,
+    authenticated_lineage: AuthenticatedReopenLineageV1,
+) -> Result<AuthenticatedStatisticResultAbsenceV1> {
+    authenticate_statistic_result_absence_inner(
+        route,
+        key,
+        account,
+        derived_pda,
+        authenticated_lineage,
+        StatisticResultAbsenceAccessV1::TerminalMutable,
+    )
+}
+
+fn authenticate_statistic_result_absence_inner(
+    route: AuthenticatedSourceRouteV1,
+    key: &StatisticKeyV3,
+    account: RuntimeAccountViewV1<'_>,
+    derived_pda: RuntimeDerivedPdaV1,
+    authenticated_lineage: AuthenticatedReopenLineageV1,
+    access: StatisticResultAbsenceAccessV1,
+) -> Result<AuthenticatedStatisticResultAbsenceV1> {
     key.validate()?;
-    if authenticated_lineage.access() != LineageAccessV1::ReadOnly {
+    let expected_lineage_access = access.lineage_access();
+    if authenticated_lineage.access() != expected_lineage_access {
         return Err(Error::WrongPrivilege);
     }
     let lineage = authenticated_lineage.lineage();
@@ -733,13 +809,16 @@ pub fn authenticate_statistic_result_absence(
         account.key,
         derived_pda.bump,
     )?;
-    if account.owner != route.system_program()
-        || account.lamports != 0
-        || !account.data.is_empty()
-        || account.executable
-        || account.signer
-        || account.writable
-    {
+    if !exact_absent_result_account_shape(
+        route.system_program(),
+        account.owner,
+        account.lamports,
+        account.data.is_empty(),
+        account.executable,
+        account.signer,
+        account.writable,
+        access,
+    ) {
         return Err(Error::MismatchedBinding);
     }
     if lineage.adapter_program != route.adapter_program()
@@ -747,6 +826,7 @@ pub fn authenticate_statistic_result_absence(
         || lineage.semantic_binding_id != key_id
         || lineage.latest_generation != 0
         || lineage.is_open
+        || !lineage.last_close_receipt_id.is_zero()
         || lineage.source_work_schedule_id != route.source_work_schedule_id()
         || lineage.neutral_sink != route.neutral_sink()
     {
@@ -764,8 +844,28 @@ pub fn authenticate_statistic_result_absence(
         statistic_key_id: key_id,
         result_account: account.key,
         lineage_id,
+        access,
         absence_id: domain_id(RESULT_ABSENCE_DOMAIN, &bytes),
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn exact_absent_result_account_shape(
+    system_program: RuntimeKey,
+    owner: RuntimeKey,
+    lamports: u64,
+    data_empty: bool,
+    executable: bool,
+    signer: bool,
+    writable: bool,
+    access: StatisticResultAbsenceAccessV1,
+) -> bool {
+    owner == system_program
+        && lamports == 0
+        && data_empty
+        && !executable
+        && !signer
+        && writable == access.result_writable()
 }
 
 impl AuthenticatedEvaluationV1 {
@@ -2514,6 +2614,46 @@ mod tests {
             coverage_policy_id: COVERAGE_COMPLETE_REQUIRED,
             coverage_policy_parameter: 0,
         }
+    }
+
+    #[test]
+    fn result_absence_privilege_partition_is_exhaustive_and_disjoint() {
+        assert_eq!(
+            StatisticResultAbsenceAccessV1::ExistingReadOnly.lineage_access(),
+            LineageAccessV1::ReadOnly
+        );
+        assert_eq!(
+            StatisticResultAbsenceAccessV1::TerminalMutable.lineage_access(),
+            LineageAccessV1::Mutable
+        );
+        assert_ne!(
+            StatisticResultAbsenceAccessV1::ExistingReadOnly.lineage_access(),
+            StatisticResultAbsenceAccessV1::TerminalMutable.lineage_access()
+        );
+        assert!(!StatisticResultAbsenceAccessV1::ExistingReadOnly.result_writable());
+        assert!(StatisticResultAbsenceAccessV1::TerminalMutable.result_writable());
+    }
+
+    #[test]
+    fn terminal_absence_requires_writable_unchanged_system_slot() {
+        let system = RuntimeKey::from_bytes([1; 32]);
+        let other = RuntimeKey::from_bytes([2; 32]);
+        let access = StatisticResultAbsenceAccessV1::TerminalMutable;
+        assert!(exact_absent_result_account_shape(
+            system, system, 0, true, false, false, true, access,
+        ));
+        assert!(!exact_absent_result_account_shape(
+            system, system, 0, true, false, false, false, access,
+        ));
+        assert!(!exact_absent_result_account_shape(
+            system, other, 0, true, false, false, true, access,
+        ));
+        assert!(!exact_absent_result_account_shape(
+            system, system, 1, true, false, false, true, access,
+        ));
+        assert!(!exact_absent_result_account_shape(
+            system, system, 0, false, false, false, true, access,
+        ));
     }
 
     fn seal(window: &WindowSpecV3) -> WindowSealV3 {

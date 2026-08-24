@@ -20,6 +20,8 @@
 
 mod account;
 mod auth;
+mod custody;
+mod failure_terminal;
 mod funding;
 mod ingest;
 mod lineage;
@@ -45,6 +47,16 @@ pub use auth::{
     SOURCE_RELEASE_ACCOUNT_TAG, SOURCE_RELEASE_ACCOUNT_VERSION, SOURCE_RELEASE_MANIFEST_BYTES,
     SOURCE_RELEASE_MANIFEST_V1_BYTES,
 };
+pub use custody::{
+    SourceFundingCustodyLedgerV1, SourceFundingCustodyPhaseV1,
+    SOURCE_FUNDING_CUSTODY_ACCOUNT_BYTES,
+    SOURCE_FUNDING_CUSTODY_ACCOUNT_TAG, SOURCE_FUNDING_CUSTODY_ACCOUNT_VERSION,
+};
+pub use failure_terminal::{
+    authenticate_source_failure_terminal, AuthenticatedSourceFailureTerminalV1,
+    SourceFailureTerminalAccessV1, SourceFailureTerminalDispositionV1,
+    SourceFailureTerminalV1, SOURCE_FAILURE_TERMINAL_BYTES,
+};
 pub use funding::{
     authenticate_source_work_receipt_account, plan_runtime_account_close_from_header,
     plan_source_account_close, plan_source_account_creation, AccountCloseFundingV1,
@@ -67,7 +79,8 @@ pub use ingest::{
 pub use lineage::{
     advance_lineage_state, authenticate_reopen_lineage_account, authorize_reopen,
     close_lineage_generation, open_lineage_generation, AuthenticatedReopenLineageV1,
-    LineageAccessV1, LineageFamilyV1, ReopenAuthorizationV1, ReopenLineageV1, ReopenLineageV2,
+    retire_never_created_lineage, LineageAccessV1, LineageFamilyV1,
+    ReopenAuthorizationV1, ReopenLineageV1, ReopenLineageV2,
     REOPEN_LINEAGE_ACCOUNT_TAG, REOPEN_LINEAGE_ACCOUNT_VERSION, REOPEN_LINEAGE_BYTES,
     REOPEN_LINEAGE_V2_BYTES,
 };
@@ -90,7 +103,7 @@ pub use window::{
     authenticate_persisted_statistic_result_account,
     authenticate_persisted_statistic_result_account_for_resolution,
     authenticate_statistic_result,
-    authenticate_statistic_result_absence,
+    authenticate_statistic_result_absence, authenticate_statistic_result_absence_for_terminal,
     authenticate_statistic_result_account, authenticate_window_seal_account,
     authenticate_window_work_account, fold_authenticated_pages, join_source_occurrence,
     join_source_occurrence_window, seal_authenticated_window, source_occurrence_record_id,
@@ -102,7 +115,8 @@ pub use window::{
     EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1, FoldPagesOutputV1,
     OccurrenceDispositionV1, OccurrenceSourceReceiptV1, OccurrenceWindowReceiptV1,
     SourceFailureKindV1, SourcePolicyHandoffAccessV1, SourcePolicyHandoffAccountV1,
-    SourcePolicyHandoffJoinV1, StatisticResultAccountAccessV1,
+    SourcePolicyHandoffJoinV1, StatisticResultAbsenceAccessV1,
+    StatisticResultAccountAccessV1,
     SuccessfulEvaluationHandoffV1, MAX_PAGES_PER_FOLD,
     SOURCE_OCCURRENCE_RECORD_BYTES, SOURCE_POLICY_HANDOFF_ACCOUNT_BYTES,
 };

@@ -64,6 +64,9 @@ pub mod external_exit;
 pub mod external_redemption_v3;
 /// Capability-disabled reusable Market interval account seam.
 pub(crate) mod failure_market_interval_v2;
+pub(crate) mod failure_market_source_failure_current;
+/// Sole current action-10 Product/Source/Failure branch owner.
+pub(crate) mod failure_market_action10_current;
 /// Concrete checked owners for current Market Failure actions 10-13.
 pub(crate) mod failure_market_actions_v2;
 /// Capability-disabled atomic paid Failure interval advance.
@@ -200,6 +203,12 @@ pub(crate) mod source_occurrence_foundation_v1;
 /// Private Product-retirement consumer for the prepaid Source lifecycle
 /// custody. It is always compiled and has no caller-facing dispatcher.
 pub(crate) mod source_funding_custody_retirement_v1;
+/// Private post-Product-pin Source terminal owner for exact absence/refusal.
+/// Failure consumes its postwrite; no caller-facing dispatcher enters here.
+pub(crate) mod source_failure_terminal_v1;
+/// Post-release bridge from Source absence/refusal to Product's exact current
+/// LinkV2 release receipt. Failure owns the default-refusing join.
+pub(crate) mod source_failure_product_release_v1;
 /// Unrouted private Source terminal composer. It is always compiled so the
 /// current final Failure postwrite can implement its default-refusing bridge;
 /// no checked capability tuple enters it until the complete chain is admitted.
