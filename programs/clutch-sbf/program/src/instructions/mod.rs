@@ -147,6 +147,7 @@ pub(crate) mod general_market_foundation_v3;
 pub mod market_init;
 #[cfg(test)]
 pub mod merge_materialize;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod observe_resolve;
 pub mod orders_batch;
 pub mod product_artifact;
@@ -157,13 +158,22 @@ pub mod product_market;
 /// Capability-disabled Product FoundationVault/Recovery/founder compositor.
 pub(crate) mod product_market_foundation_init;
 /// Always-compiled Product/Series semantic owner; executable routes remain
-/// independently capability-disabled.
+/// independently capability-gated, including in source-empty releases.
 pub mod product_series;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod resolution_work;
 pub mod series_failure_funding;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod source_ingest;
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod source_ingest_v2;
 pub mod source_series;
+pub mod source_series_successor;
+pub(crate) mod source_occurrence_foundation_v1;
+/// Unrouted private Source terminal composer. It is always compiled so the
+/// current final Failure postwrite can implement its default-refusing bridge;
+/// no checked capability tuple enters it until the complete chain is admitted.
+pub(crate) mod source_terminal_resolution_v5;
 pub mod split;
 /// Wrapper-signed Structured custody and current full-vector lifecycle.
 #[cfg(feature = "non-production-structured-custody-lab")]

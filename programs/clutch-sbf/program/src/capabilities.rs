@@ -14,7 +14,7 @@
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/full/v9-source-ingest-current-collateral-legacy-general-founder-clearing-withdrawn";
+    "dragons-clutch/capability-profile/full/v7-source-v3-release-legacy-source-lab-gated-general-v5-staged-disabled";
 /// Explicit local-only artifact catalog containing successor Product/Series kinds.
 #[cfg(all(
     feature = "profile-full",
@@ -22,17 +22,19 @@ pub const PROFILE_LABEL: &str =
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v9-source-ingest-current-collateral-legacy-general-founder-clearing-withdrawn";
-/// Direct V3, Source V2, and archive-direct exact-point d1-d3 resolution product.
+    "dragons-clutch/capability-profile/non-production-product-series-artifact-catalog-lab/v7-source-v3-release-legacy-source-lab-gated-general-v5-staged-disabled";
+/// Direct V3 exact-point product with legacy Source authority disabled.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/direct-v3-source-v2-point/v3-current-collateral-legacy-general-founder-withdrawn";
-/// Source V2 and archive-direct exact-point d1-d3 resolution product. The
-/// withdrawn General V3 request family is not resident in this successor
-/// identity.
+    "dragons-clutch/capability-profile/direct-v3-source-disabled-point/v2";
+/// General clearing product with legacy Source authority disabled.
 #[cfg(feature = "profile-general-source-v2-point")]
 pub const PROFILE_LABEL: &str =
-    "dragons-clutch/capability-profile/general-source-v2-point/v4-current-collateral-legacy-general-founder-placement-withdrawn";
+    "dragons-clutch/capability-profile/general-source-disabled-point/v2";
+/// Current chain-attached successor with no legacy Source or laboratory plane.
+#[cfg(feature = "profile-successor-chain-attached-v1")]
+pub const PROFILE_LABEL: &str =
+    "dragons-clutch/capability-profile/successor-chain-attached/v3-current-collateral-direct-source-lifecycle-disabled-no-legacy-source-labs";
 /// Dealer facility binding laboratory. This identity is non-production and
 /// contains no legacy intent capability.
 #[cfg(all(
@@ -55,8 +57,8 @@ pub const PROFILE_LABEL: &str =
     not(feature = "non-production-product-series-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0x34, 0x45, 0xfb, 0x16, 0x50, 0x0e, 0xdc, 0x79, 0xd7, 0x9e, 0xb3, 0x32, 0x2b, 0x50, 0x97, 0xe8,
-    0xf1, 0xc9, 0xda, 0x9a, 0x09, 0xb7, 0x41, 0xda, 0x53, 0x7a, 0xd7, 0xfd, 0x2b, 0x86, 0xca, 0xc3,
+    0xbf, 0x5c, 0x48, 0x9a, 0x5a, 0x1c, 0xcd, 0x6a, 0x48, 0xc3, 0x77, 0x84, 0x4c, 0x58, 0xe1, 0xcd,
+    0xec, 0x68, 0x91, 0x38, 0x6c, 0x58, 0xa8, 0x54, 0xb8, 0x0e, 0xf9, 0x61, 0x40, 0x94, 0xa5, 0x26,
 ];
 /// SHA-256 of the local-only Product/Series artifact catalog profile label.
 #[cfg(all(
@@ -65,20 +67,26 @@ pub const PROFILE_ID: [u8; 32] = [
     not(feature = "profile-non-production-dealer-policy-catalog-lab")
 ))]
 pub const PROFILE_ID: [u8; 32] = [
-    0x81, 0x9d, 0x26, 0xd9, 0x6a, 0x7f, 0x8c, 0x4c, 0x96, 0x2b, 0xfe, 0x30, 0xb0, 0x3a, 0x05, 0x69,
-    0xa7, 0x02, 0x2f, 0x22, 0x2a, 0xd4, 0x54, 0xa6, 0x4f, 0x22, 0x97, 0x3b, 0x5c, 0x1c, 0x84, 0xe3,
+    0xb8, 0x48, 0xe9, 0xc9, 0xd1, 0xf4, 0x70, 0xd9, 0xe3, 0x13, 0x00, 0x41, 0x6c, 0x55, 0xbe, 0xbf,
+    0xc5, 0x46, 0xa9, 0xf9, 0x8d, 0xca, 0x97, 0x9d, 0x72, 0x4b, 0xe7, 0xbf, 0x5c, 0xd4, 0xd4, 0x1e,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-direct-v3-source-v2-point")]
 pub const PROFILE_ID: [u8; 32] = [
-    0x4e, 0x9c, 0x85, 0xd7, 0xe9, 0xe8, 0x8b, 0x59, 0xeb, 0xf3, 0xb9, 0x8f, 0xd5, 0x19, 0x77, 0x32,
-    0x7a, 0x49, 0xf9, 0xea, 0xad, 0xdd, 0x55, 0xfc, 0x70, 0x8f, 0xa4, 0xd4, 0xf1, 0xdf, 0x20, 0x91,
+    0x5e, 0x7c, 0x05, 0x29, 0xdd, 0x07, 0x92, 0x83, 0xd1, 0x2c, 0x77, 0x84, 0x62, 0x74, 0xeb, 0x27,
+    0xbd, 0x82, 0xae, 0x8b, 0xb3, 0xbd, 0x6b, 0x7e, 0x23, 0x0d, 0x22, 0xa8, 0x43, 0xa0, 0x1d, 0x2d,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into release metadata.
 #[cfg(feature = "profile-general-source-v2-point")]
 pub const PROFILE_ID: [u8; 32] = [
-    0x32, 0x6d, 0x46, 0xb2, 0xab, 0x1b, 0x4b, 0xc7, 0xb7, 0xcf, 0xd9, 0x45, 0x66, 0x1f, 0x65, 0xd6,
-    0x3c, 0xcf, 0x31, 0x93, 0xf0, 0xe3, 0x6c, 0x36, 0x8a, 0xf1, 0x65, 0x8c, 0xe0, 0x6c, 0xb3, 0x60,
+    0xd3, 0x39, 0x83, 0xa3, 0x0f, 0x4e, 0xfa, 0x57, 0x7e, 0x54, 0x09, 0x38, 0x1d, 0xb1, 0x8f, 0xe4,
+    0x39, 0x4d, 0x45, 0xf5, 0x60, 0xbc, 0x2e, 0x06, 0x3a, 0x51, 0xee, 0x78, 0x42, 0x0c, 0x1d, 0xef,
+];
+/// SHA-256 of the chain-attached successor profile label.
+#[cfg(feature = "profile-successor-chain-attached-v1")]
+pub const PROFILE_ID: [u8; 32] = [
+    0x3e, 0x4f, 0x6d, 0xf2, 0xf8, 0x2a, 0x2b, 0x91, 0xfc, 0x5c, 0x6b, 0x65, 0xc7, 0x90, 0x7d, 0x6d,
+    0x07, 0x1c, 0x9e, 0x75, 0xb2, 0xfb, 0x95, 0xd9, 0x0b, 0xca, 0x9a, 0x05, 0x51, 0x18, 0xf4, 0xa2,
 ];
 /// SHA-256 of [`PROFILE_LABEL`], frozen into the laboratory artifact identity.
 #[cfg(all(
@@ -104,16 +112,31 @@ pub const GENERAL_V2_IDENTITY_LAB: bool =
 pub const DEALER_POLICY_CATALOG_LAB: bool =
     cfg!(feature = "profile-non-production-dealer-policy-catalog-lab");
 
-/// Whether the profile contains legacy Source V1 ingestion and resolution.
-pub const SOURCE_V1: bool = cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB;
-/// Whether the profile contains Source V2 ingestion and resolution.
-pub const SOURCE_V2: bool = !DEALER_POLICY_CATALOG_LAB && !GENERAL_V2_IDENTITY_LAB;
+/// Whether this artifact was explicitly compiled as a non-production Source lab.
+///
+/// Checked deployable profiles reject both features. Keeping the laboratory
+/// gate here lets historical fixtures remain test inputs without leaving their
+/// V1/V2 dispatch coordinates reachable in a release artifact.
+pub const LEGACY_SOURCE_LAB: bool = cfg!(any(
+    feature = "non-production-mock-source",
+    feature = "non-production-real-pyth-lab"
+));
+/// Whether the non-production laboratory contains legacy Source V1 ingestion.
+pub const SOURCE_V1: bool =
+    LEGACY_SOURCE_LAB && cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB;
+/// Whether the non-production laboratory contains Source V2 ingestion.
+pub const SOURCE_V2: bool =
+    LEGACY_SOURCE_LAB
+        && !DEALER_POLICY_CATALOG_LAB
+        && !GENERAL_V2_IDENTITY_LAB
+        && !cfg!(feature = "profile-successor-chain-attached-v1");
 /// Whether the profile contains legacy Direct V2 clearing.
 pub const DIRECT_V2: bool = cfg!(feature = "profile-full") && !DEALER_POLICY_CATALOG_LAB;
 /// Whether the profile contains Direct V3 clearing.
 pub const DIRECT_V3: bool = cfg!(any(
     feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point"
+    feature = "profile-direct-v3-source-v2-point",
+    feature = "profile-successor-chain-attached-v1"
 )) && !DEALER_POLICY_CATALOG_LAB;
 /// Whether the profile contains the withdrawn legacy General clearing family.
 /// No checked release does; current General successors remain allocated but
@@ -132,11 +155,18 @@ pub const fn legacy_intent_tag_enabled(tag: u8) -> bool {
         return false;
     }
     match tag {
-        // Current full-width collateral/value, Realm/Profile, artifact,
-        // revenue-record, and Source V2 planes.
-        2..=5 | 10..=11 | 15..=21 | 68 | 70..=73 => !GENERAL_V2_IDENTITY_LAB,
-        // The old feed buffer, direct-page settlement and Source V1 families.
-        6 | 22..=31 => cfg!(feature = "profile-full"),
+        // Current full-width collateral/value, Realm/Profile, artifact, and
+        // revenue-record planes. Withdrawn General coordinates are split out
+        // below rather than inheriting this range.
+        2..=5 | 10..=11 | 15..=21 | 68 => !GENERAL_V2_IDENTITY_LAB,
+        // Historical Source V2 is laboratory-only. A checked release cannot
+        // reach its ingest/archive intent tags 70 through 73.
+        70..=73 => SOURCE_V2,
+        // The old feed buffer and direct-page settlement families.
+        6 | 22 | 27..=31 => cfg!(feature = "profile-full"),
+        // Historical Source V1 is laboratory-only. Tags 23 through 26 are
+        // never admitted merely because a deployable profile is full-width.
+        23..=26 => SOURCE_V1,
         // Resumable occupation work.
         32..=35 => cfg!(feature = "profile-full"),
         // Withdrawn General construction, clearing, settlement, and close
@@ -196,10 +226,9 @@ pub const fn extension_intent_action_allocated(
 
 /// Exact extension actions executable by this product.
 ///
-/// Full profiles execute artifact-authenticated Source release registration
-/// plus release-bound atomic SourceHead/OpenRawPage creation and receiver-
-/// authenticated parser ingestion. Actions 5 through 12 remain independently
-/// disabled.
+/// The historical full profile retains its Source V3 laboratory slice.
+/// Checked successor admission is defined separately below so an incomplete
+/// Source lifecycle can never inherit these actions.
 #[cfg(all(
     feature = "profile-full",
     not(any(
@@ -210,6 +239,13 @@ pub const fn extension_intent_action_allocated(
 ))]
 pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] =
     &[(77, 2, 1), (77, 2, 2), (77, 2, 3), (77, 2, 4)];
+
+/// The checked successor admits no SourceSeries action until release
+/// publication, actions 1 through 12, the exact Failure/ResolutionV5
+/// authority, terminal reopen, and physical close are one reachable family.
+/// In particular, action 2 cannot consume an unfounded generation request.
+#[cfg(feature = "profile-successor-chain-attached-v1")]
+pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[];
 
 /// Structured laboratory build seam. Actions 1/3/5/6/7/8 have one closed
 /// current account contract, but runtime tuples remain empty because the checked
@@ -233,6 +269,7 @@ pub const ENABLED_EXTENSION_ACTIONS: &[(u8, u8, u8)] = &[
 /// Narrow non-laboratory profiles have not yet admitted Source execution.
 #[cfg(all(
     not(feature = "profile-full"),
+    not(feature = "profile-successor-chain-attached-v1"),
     not(any(
         feature = "profile-non-production-dealer-policy-catalog-lab",
         feature = "profile-non-production-general-v2-empty-book-identity-lab"
@@ -289,10 +326,7 @@ mod tests {
             PROFILE_ID
         );
         assert!(!legacy_intent_tag_enabled(1));
-        assert_eq!(
-            legacy_intent_tag_enabled(70),
-            !DEALER_POLICY_CATALOG_LAB && !GENERAL_V2_IDENTITY_LAB
-        );
+        assert_eq!(legacy_intent_tag_enabled(70), SOURCE_V2);
         assert!(!legacy_intent_tag_enabled(0));
         assert!(!legacy_intent_tag_enabled(74));
         assert_eq!(direct_v3_tag_enabled(36), DIRECT_V3);
@@ -314,6 +348,42 @@ mod tests {
         assert_eq!(legacy_intent_tag_enabled(7), DIRECT_V3 && !GENERAL_V2_IDENTITY_LAB);
         assert_eq!(legacy_intent_tag_enabled(23), SOURCE_V1);
         assert_eq!(legacy_intent_tag_enabled(27), DIRECT_V2);
+    }
+
+    #[test]
+    fn legacy_source_tags_require_an_explicit_nonproduction_lab() {
+        for tag in [23_u8, 24, 25, 26] {
+            assert_eq!(legacy_intent_tag_enabled(tag), SOURCE_V1, "tag {tag}");
+        }
+        for tag in [70_u8, 71, 72, 73] {
+            assert_eq!(legacy_intent_tag_enabled(tag), SOURCE_V2, "tag {tag}");
+        }
+        if !LEGACY_SOURCE_LAB {
+            assert!(!SOURCE_V1);
+            assert!(!SOURCE_V2);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "profile-successor-chain-attached-v1")]
+    fn chain_attached_successor_membership_is_exact() {
+        for tag in u8::MIN..=u8::MAX {
+            let expected = matches!(
+                tag,
+                2..=5 | 7 | 10..=11 | 14..=21 | 36..=46 | 68
+            );
+            assert_eq!(
+                legacy_intent_tag_enabled(tag) || direct_v3_tag_enabled(tag),
+                expected,
+                "successor tag {tag}"
+            );
+        }
+        for action in 1..=12 {
+            assert!(
+                !extension_intent_action_enabled(77, 2, action),
+                "SourceSeries action {action}",
+            );
+        }
     }
 
     #[test]

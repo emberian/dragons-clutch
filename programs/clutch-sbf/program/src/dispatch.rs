@@ -45,7 +45,8 @@ use crate::instructions::dealer_facility;
 use crate::instructions::dealer_policy;
 #[cfg(any(
     feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point"
+    feature = "profile-direct-v3-source-v2-point",
+    feature = "profile-successor-chain-attached-v1"
 ))]
 use crate::instructions::direct_selection_v3;
 #[cfg(feature = "non-production-product-series-lab")]
@@ -53,16 +54,19 @@ use crate::instructions::product_series;
 #[cfg(feature = "non-production-structured-custody-lab")]
 use crate::instructions::structured_custody;
 use crate::instructions::{
-    artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3, external_redemption_v3,
-    fractional_redemption, genesis, observe_resolve, orders_batch, source_ingest_v2,
+    artifact, claim_representation_v3, collateral_cash_v3, complete_set_v3,
+    external_redemption_v3, fractional_redemption, genesis, orders_batch,
 };
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
+use crate::instructions::{observe_resolve, source_ingest_v2};
 #[cfg(feature = "profile-full")]
 use crate::instructions::{direct_selection, resolution_work, source_ingest};
 use clutch_solana_layout::registry::ExtensionAction;
 use clutch_solana_layout::Intent;
 #[cfg(any(
     feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point"
+    feature = "profile-direct-v3-source-v2-point",
+    feature = "profile-successor-chain-attached-v1"
 ))]
 use clutch_solana_reference::DirectV3Request;
 use clutch_solana_reference::{Action, ExtensionRequest, Request};
@@ -81,6 +85,7 @@ use solana_pubkey::Pubkey;
 enum Route {
     Split,
     MergeMaterialize,
+    #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
     ObserveResolve,
     ExternalExit,
     CashExit,
@@ -90,12 +95,14 @@ enum Route {
     FractionalRedemption,
     #[cfg(feature = "profile-full")]
     SourceIngest,
+    #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
     SourceIngestV2,
     #[cfg(feature = "profile-full")]
     DirectSelection,
     #[cfg(any(
         feature = "profile-full",
-        feature = "profile-direct-v3-source-v2-point"
+        feature = "profile-direct-v3-source-v2-point",
+        feature = "profile-successor-chain-attached-v1"
     ))]
     DirectSelectionV3,
     #[cfg(feature = "profile-full")]
@@ -249,6 +256,7 @@ fn route_hint(instruction_data: &[u8]) -> Route {
              * The two never share a frame: V1's append holds three provider
              * account views and v2's holds six, and the pull authentication
              * join below it is the deepest call in either family. */
+            #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
             Some(
                 INTENT_INIT_SOURCE_SPEC_V2_HINT
                 | INTENT_INIT_SOURCE_ARCHIVE_V2_HINT
@@ -275,13 +283,15 @@ fn route_hint(instruction_data: &[u8]) -> Route {
             // and its handler match is exhaustive with no unimplemented arm.
             #[cfg(any(
                 feature = "profile-full",
-                feature = "profile-direct-v3-source-v2-point"
+                feature = "profile-direct-v3-source-v2-point",
+                feature = "profile-successor-chain-attached-v1"
             ))]
             Some(INTENT_INIT_DIRECT_EPOCH_V4_HINT..=INTENT_LAPSE_SELECTED_DIRECT_V3_HINT) => {
                 Route::DirectSelectionV3
             }
             _ => Route::DecodeOnly,
         },
+        #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
         Some(ACTION_RESOLVE_HINT | ACTION_REDEEM_INTERNAL_HINT) => Route::ObserveResolve,
         _ => Route::DecodeOnly,
     }
@@ -323,6 +333,7 @@ pub fn process(
         Route::MergeMaterialize => {
             process_merge_materialize(program_id, accounts, instruction_data)
         }
+        #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
         Route::ObserveResolve => process_observe_resolve(program_id, accounts, instruction_data),
         Route::ExternalExit => process_external_exit(program_id, accounts, instruction_data),
         Route::CashExit => process_cash_exit(program_id, accounts, instruction_data),
@@ -334,12 +345,14 @@ pub fn process(
         }
         #[cfg(feature = "profile-full")]
         Route::SourceIngest => process_source_ingest(program_id, accounts, instruction_data),
+        #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
         Route::SourceIngestV2 => process_source_ingest_v2(program_id, accounts, instruction_data),
         #[cfg(feature = "profile-full")]
         Route::DirectSelection => process_direct_selection(program_id, accounts, instruction_data),
         #[cfg(any(
             feature = "profile-full",
-            feature = "profile-direct-v3-source-v2-point"
+            feature = "profile-direct-v3-source-v2-point",
+            feature = "profile-successor-chain-attached-v1"
         ))]
         Route::DirectSelectionV3 => {
             process_direct_selection_v3(program_id, accounts, instruction_data)
@@ -675,6 +688,7 @@ fn process_merge_materialize(
 }
 
 #[inline(never)]
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 fn process_observe_resolve(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -804,6 +818,7 @@ fn process_source_ingest(
 }
 
 #[inline(never)]
+#[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 fn process_source_ingest_v2(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -849,7 +864,8 @@ fn process_direct_selection(
 #[inline(never)]
 #[cfg(any(
     feature = "profile-full",
-    feature = "profile-direct-v3-source-v2-point"
+    feature = "profile-direct-v3-source-v2-point",
+    feature = "profile-successor-chain-attached-v1"
 ))]
 fn process_direct_selection_v3(
     program_id: &Pubkey,
@@ -1798,6 +1814,20 @@ mod profile_tests {
         bytes
     }
 
+    #[cfg(feature = "profile-successor-chain-attached-v1")]
+    fn successor_layout_request(intent: Intent) -> Vec<u8> {
+        let mut intent_bytes = [0_u8; clutch_solana_layout::MAX_INTENT_BYTES];
+        let intent_len = intent.encode(&mut intent_bytes).unwrap();
+        let mut bytes = vec![0_u8; 13 + intent_len];
+        bytes[0] = 0xd1;
+        bytes[1] = 1;
+        bytes[2..10].copy_from_slice(&1_u64.to_le_bytes());
+        bytes[10] = ACTION_LAYOUT_HINT;
+        bytes[11..13].copy_from_slice(&(intent_len as u16).to_le_bytes());
+        bytes[13..].copy_from_slice(&intent_bytes[..intent_len]);
+        bytes
+    }
+
     #[test]
     fn every_disabled_canonical_coordinate_refuses_before_accounts() {
         let mut disabled = 0usize;
@@ -1876,6 +1906,59 @@ mod profile_tests {
         assert!(!disabled_canonical_tag(&bytes));
         assert!(!disabled_canonical_tag(&bytes[..13]));
     }
+
+    #[test]
+    #[cfg(feature = "profile-successor-chain-attached-v1")]
+    fn successor_outer_resolve_actions_reach_only_the_predecode_refusal_shell() {
+        let mut resolve = [0_u8; 12];
+        resolve[0] = 0xd1;
+        resolve[1] = 1;
+        resolve[2..10].copy_from_slice(&7_u64.to_le_bytes());
+        resolve[10] = ACTION_RESOLVE_HINT;
+        assert!(Request::decode(&resolve).is_ok());
+        assert_eq!(route_hint(&resolve), Route::DecodeOnly);
+        assert_eq!(
+            process(&Pubkey::new_from_array([9; 32]), &[], &resolve)
+                .map_err(ProgramError::from),
+            Err(ProgramError::Custom(ClutchError::UnsupportedInstruction as u32))
+        );
+
+        let mut redeem = [0_u8; 20];
+        redeem[0] = 0xd1;
+        redeem[1] = 1;
+        redeem[2..10].copy_from_slice(&8_u64.to_le_bytes());
+        redeem[10] = ACTION_REDEEM_INTERNAL_HINT;
+        redeem[12..20].copy_from_slice(&5_u64.to_le_bytes());
+        assert!(Request::decode(&redeem).is_ok());
+        assert_eq!(route_hint(&redeem), Route::DecodeOnly);
+        assert_eq!(
+            process(&Pubkey::new_from_array([9; 32]), &[], &redeem)
+                .map_err(ProgramError::from),
+            Err(ProgramError::Custom(ClutchError::UnsupportedInstruction as u32))
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "profile-successor-chain-attached-v1")]
+    fn successor_endow_has_only_the_full_width_collateral_owner() {
+        let bytes = successor_layout_request(Intent::Endow {
+            market: clutch_solana_layout::Hash32::from_bytes([1; 32]),
+            owner: clutch_solana_layout::Hash32::from_bytes([2; 32]),
+            amount: 3,
+        });
+        let request = Request::decode(&bytes).unwrap();
+        assert_eq!(route_hint(&bytes), Route::Genesis);
+        assert_eq!(
+            genesis::process(&Pubkey::new_from_array([9; 32]), &[], &request)
+                .map_err(ProgramError::from),
+            Err(ProgramError::Custom(ClutchError::UnsupportedInstruction as u32)),
+        );
+        assert_eq!(
+            process(&Pubkey::new_from_array([9; 32]), &[], &bytes)
+                .map_err(ProgramError::from),
+            Err(ProgramError::Custom(ClutchError::AccountCount as u32)),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1942,15 +2025,31 @@ mod extension_registry_tests {
                 clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION,
                 local_action,
             );
-            assert!(
-                disabled_canonical_tag(&bytes),
-                "source action {local_action}"
+            let enabled = capabilities::extension_intent_action_enabled(
+                clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_TAG,
+                clutch_solana_layout::registry::SOURCE_SERIES_FAMILY_VERSION,
+                local_action,
             );
             assert_eq!(
-                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from),
-                Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                disabled_canonical_tag(&bytes),
+                !enabled,
                 "source action {local_action}"
             );
+            let actual =
+                process(&Pubkey::new_from_array([9; 32]), &[], &bytes).map_err(ProgramError::from);
+            if enabled {
+                assert_ne!(
+                    actual,
+                    Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                    "enabled source action {local_action} must reach its strict payload decoder"
+                );
+            } else {
+                assert_eq!(
+                    actual,
+                    Err(ProgramError::from(ClutchError::UnsupportedInstruction)),
+                    "disabled source action {local_action}"
+                );
+            }
         }
         for local_action in clutch_solana_layout::registry::RecurringSeriesAction::FIRST_TAG
             ..=clutch_solana_layout::registry::RecurringSeriesAction::LAST_TAG
