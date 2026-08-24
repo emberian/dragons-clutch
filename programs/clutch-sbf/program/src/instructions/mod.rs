@@ -157,6 +157,8 @@ pub mod product_artifact;
 pub(crate) mod product_general_family;
 /// Private full-payer capitalization and authentication of Product `0xba/v2`.
 pub(crate) mod product_direct_global_liveness;
+/// Private 47-slot Product founder authority; no standalone route is exposed.
+pub(crate) mod product_market_foundation_init;
 /// Always-compiled Product Market/link account authentication; routes remain capability-gated.
 pub mod product_market;
 #[cfg(feature = "non-production-product-series-lab")]
