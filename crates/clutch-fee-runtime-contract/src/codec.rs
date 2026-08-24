@@ -16,7 +16,10 @@ use crate::selected::{
     OwnerFeeAssessmentV1, OwnerFeeCarryV1, SelectedCompositeFeeAccess,
     SelectedCompositeFeeV1, SelectedCompositeFeeV2,
 };
-use crate::projection::{CertifiedRecipientAllocationV2, CertifiedRecipientAllocationV3};
+use crate::projection::{
+    CertifiedRecipientAllocationAccessV2, CertifiedRecipientAllocationV2,
+    CertifiedRecipientAllocationV3,
+};
 use crate::treasury::TreasuryLedgerV1;
 use crate::{add, live, Error, Id, Result, MAX_FEE_ROWS_V1};
 
@@ -43,6 +46,20 @@ pub struct BorrowedRecipientAllocationRowV1 {
 }
 
 impl BorrowedRecipientAllocationRowV1 {
+    /// Construct one structural row for a streaming authenticated writer.
+    ///
+    /// This does not confer allocation authority. It only prevents private
+    /// adapters from manufacturing this crate's fields directly; the V3
+    /// streaming encoder still rechecks live Position identity, strict order,
+    /// cardinality, zero tail, and full conservation.
+    pub fn structural(position: Id, rebate_atoms: u64) -> Result<Self> {
+        live(position)?;
+        Ok(Self {
+            position,
+            rebate_atoms,
+        })
+    }
+
     /// Canonical ordinary Position account identity.
     pub const fn position(self) -> Id { self.position }
     /// Hamilton-assigned final collateral atoms for this Position.
@@ -499,7 +516,7 @@ pub fn encode_payer_allocation_v1(
     put(&mut output, &mut cursor, &allocation.fee_record().0)?;
     put(&mut output, &mut cursor, &allocation.owner().0)?;
     put(&mut output, &mut cursor, &[allocation.len()])?;
-    put(&mut output, &mut cursor, &[allocation.boundary() as u8])?;
+    put(&mut output, &mut cursor, &[allocation.boundary().byte()])?;
     put(&mut output, &mut cursor, &[0; 2])?;
     put(
         &mut output,
@@ -836,13 +853,12 @@ where
     live(weight_transcript_id)?;
     live(owner_order_set_digest)?;
     if weight_policy_id != crate::weight_v2::COMPOSITE_FEE_WEIGHT_POLICY_V2.id()?
-        || row_count == 0
         || usize::from(row_count) > MAX_FEE_ROWS_V1
         || traversed_owner_count == 0
         || usize::from(traversed_owner_count) > MAX_FEE_ROWS_V1
         || nonzero_weight_row_count != row_count
         || u16::from(nonzero_weight_row_count) > traversed_owner_count
-        || certified.collected_fee_atoms() == 0
+        || (row_count == 0) != (certified.collected_fee_atoms() == 0)
     {
         return Err(Error::InvalidAccountData);
     }
@@ -973,10 +989,9 @@ pub fn decode_borrowed_certified_recipient_allocation_v3(
     if weight_policy_id != crate::weight_v2::COMPOSITE_FEE_WEIGHT_POLICY_V2.id()?
         || traversed_owner_count == 0
         || usize::from(traversed_owner_count) > MAX_FEE_ROWS_V1
-        || nonzero_weight_row_count == 0
         || nonzero_weight_row_count != maker_len
         || u16::from(nonzero_weight_row_count) > traversed_owner_count
-        || collected_fee_atoms == 0
+        || (nonzero_weight_row_count == 0) != (collected_fee_atoms == 0)
     {
         return Err(Error::InvalidAccountData);
     }
