@@ -214,6 +214,7 @@ pub(crate) mod product_market_lifecycle_v3_current;
 pub(crate) mod product_failure_link_v3_current;
 pub(crate) mod product_market_family_admission_v3_current;
 pub(crate) mod product_link_obligation_admission_v3_current;
+pub(crate) mod product_market_activation_v3_current;
 /// Persistent current ProductReplayAnchor generation and stage owner.
 pub(crate) mod product_market_replay_current;
 /// Sole current FundingV5 Active-to-Pending reservation postwrite.

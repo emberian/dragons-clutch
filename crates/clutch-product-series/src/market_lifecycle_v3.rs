@@ -95,7 +95,8 @@ pub enum MarketLifecyclePhaseV3 {
 }
 
 impl MarketLifecyclePhaseV3 {
-    const fn byte(self) -> u8 {
+    /// Stable exact encoded byte used by current Product adapter receipts.
+    pub const fn byte(self) -> u8 {
         match self {
             Self::Founding => 1,
             Self::Active => 2,
