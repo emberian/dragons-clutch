@@ -9,8 +9,8 @@ use clutch_batch_policy_identity::revenue_policy_v1::RevenuePolicyV1;
 use clutch_batch_policy_identity::revenue_policy_v2::RevenuePolicyV2;
 
 use crate::allocation::{
-    allocate_payer_debit, allocate_recipients, FeeEnvelopeV1, PayerAllocationV1,
-    RecipientAllocationV1, StandingMakerRowV1,
+    allocate_payer_debit, allocate_recipients, CertifiedRecipientAllocationHeaderV2,
+    FeeEnvelopeV1, PayerAllocationV1, RecipientAllocationV1, StandingMakerRowV1,
 };
 use crate::selected::{
     OwnerFeeAssessmentV1, OwnerFeeCarryV1, SelectedCompositeFeeAccess,
@@ -709,6 +709,79 @@ impl CertifiedRecipientAllocationAccessV2 for CertifiedRecipientAllocationViewV2
     }
 }
 
+/// Incremental canonical encoder for the certified recipient body. The
+/// adapter can stream rows directly from its borrow-bound traversal without a
+/// 64-row temporary value on the SBF stack.
+pub struct CertifiedRecipientAllocationEncoderV2<'a> {
+    output: &'a mut [u8],
+    header: CertifiedRecipientAllocationHeaderV2,
+    next_maker: u8,
+    maker_sum: u64,
+    prior_position: Id,
+}
+
+impl<'a> CertifiedRecipientAllocationEncoderV2<'a> {
+    pub fn begin(
+        output: &'a mut [u8],
+        header: CertifiedRecipientAllocationHeaderV2,
+    ) -> Result<Self> {
+        exact_len(output, CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES)?;
+        output.fill(0);
+        output[..8].copy_from_slice(&RECIPIENT_ALLOCATION_MAGIC_V1);
+        output[8..10].copy_from_slice(&CODEC_VERSION_V1.to_le_bytes());
+        output[10..12].copy_from_slice(&CODEC_FLAGS_V1.to_le_bytes());
+        output[12..44].copy_from_slice(&header.fee_record().0);
+        output[44] = header.maker_len();
+        output[48..56].copy_from_slice(&header.maker_rebate_total().to_le_bytes());
+        output[56..64].copy_from_slice(&header.executor_atoms().to_le_bytes());
+        output[64..72].copy_from_slice(&header.treasury_atoms().to_le_bytes());
+        output[72..80].copy_from_slice(&header.collected_fee_atoms().to_le_bytes());
+        Ok(Self {
+            output,
+            header,
+            next_maker: 0,
+            maker_sum: 0,
+            prior_position: Id([0; 32]),
+        })
+    }
+
+    pub fn push_maker(&mut self, position: Id, rebate_atoms: u64) -> Result<()> {
+        live(position)?;
+        if self.next_maker >= self.header.maker_len()
+            || (!self.prior_position.is_zero() && position <= self.prior_position)
+        {
+            return Err(Error::NonCanonicalOrder);
+        }
+        let offset = CertifiedRecipientAllocationViewV2::row_offset(self.next_maker)?;
+        self.output[offset..offset + 32].copy_from_slice(&position.0);
+        self.output[offset + 32..offset + 40].copy_from_slice(&rebate_atoms.to_le_bytes());
+        self.maker_sum = add(self.maker_sum, rebate_atoms)?;
+        self.prior_position = position;
+        self.next_maker = self
+            .next_maker
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        Ok(())
+    }
+
+    pub fn complete(self) -> Result<CertifiedRecipientAllocationViewV2<'a>> {
+        if self.next_maker != self.header.maker_len()
+            || self.maker_sum != self.header.maker_rebate_total()
+        {
+            return Err(Error::ConservationFailure);
+        }
+        let mut at = RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES;
+        self.output[at..at + 32]
+            .copy_from_slice(&self.header.owner_fee_book_data_id().0);
+        at += 32;
+        self.output[at..at + 32]
+            .copy_from_slice(&self.header.owner_order_set_digest().0);
+        at += 32;
+        self.output[at..at + 2].copy_from_slice(&self.header.owner_count().to_le_bytes());
+        CertifiedRecipientAllocationViewV2::decode(self.output)
+    }
+}
+
 pub fn encode_treasury_ledger_v1(
     ledger: &TreasuryLedgerV1,
 ) -> Result<[u8; TREASURY_LEDGER_ACCOUNT_V1_BYTES]> {
@@ -907,6 +980,12 @@ fn read_u128(input: &[u8], cursor: &mut usize) -> Result<u128> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clutch_batch::relation_v1::{
+        AllocationPolicyV1, AonPolicyV1, FeeBaseV1, PairingWitnessPolicyV1,
+        PortfolioLotPolicyV1, ResidualSettlementV1, RoundingBoundaryV1,
+        ScorePolicyV1, SelfCrossPolicyV1, TransferPhaseV1,
+    };
+    use clutch_batch::DustPolicy;
 
     fn id(byte: u8) -> Id {
         Id([byte; 32])
@@ -941,6 +1020,52 @@ mod tests {
         }
     }
 
+    fn batch() -> FrozenPolicyV1 {
+        FrozenPolicyV1 {
+            allocation: AllocationPolicyV1::PricePriorityMarginalProRata,
+            self_cross: SelfCrossPolicyV1::RefuseOverlap,
+            aon: AonPolicyV1::RefuseAdmission,
+            rounding: RoundingBoundaryV1::TerminalOwnerFloor,
+            residual_settlement: ResidualSettlementV1::UniqueSliceReceipts,
+            transfer_phase: TransferPhaseV1::ActiveOrResolved,
+            portfolio_lots: PortfolioLotPolicyV1::StrictWholeOrder,
+            pairing_witness: PairingWitnessPolicyV1::ExplicitSlices,
+            dust: DustPolicy::AssignCanonical,
+            score: ScorePolicyV1::LexicographicDispersionV1,
+            fee_base: FeeBaseV1::CompositeDispersionFloor {
+                dispersion_bps: 40,
+                floor_range_bps: 10,
+            },
+        }
+    }
+
+    fn streaming_header() -> CertifiedRecipientAllocationHeaderV2 {
+        let revenue = RevenuePolicyV2::successor_development([9; 32]);
+        let selected = SelectedCompositeFeeV2::select(
+            id(1),
+            id(10),
+            id(11),
+            id(12),
+            id(13),
+            id(14),
+            10_000,
+            2,
+            &batch(),
+            &revenue,
+        )
+        .unwrap();
+        CertifiedRecipientAllocationHeaderV2::admit(
+            &selected,
+            &revenue,
+            20,
+            2,
+            id(4),
+            id(5),
+            2,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn borrowed_certified_recipient_view_matches_owning_decode() {
         let bytes = certified_bytes();
@@ -959,6 +1084,36 @@ mod tests {
         assert_eq!(view.owner_order_set_digest(), owning.owner_order_set_digest());
         assert_eq!(view.owner_count(), owning.owner_count());
         assert_eq!(view.maker_position(2), Err(Error::InvalidWidth));
+    }
+
+    #[test]
+    fn streaming_encoder_matches_canonical_owning_codec() {
+        let mut bytes = [0u8; CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES];
+        let mut encoder =
+            CertifiedRecipientAllocationEncoderV2::begin(&mut bytes, streaming_header())
+                .unwrap();
+        encoder.push_maker(id(2), 5).unwrap();
+        encoder.push_maker(id(3), 7).unwrap();
+        let view = encoder.complete().unwrap();
+        assert_eq!(view.maker_rebate_total(), 12);
+        assert_eq!(bytes, certified_bytes());
+    }
+
+    #[test]
+    fn streaming_encoder_refuses_wrong_order_and_incomplete_sum() {
+        let mut bytes = [0u8; CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES];
+        let mut encoder =
+            CertifiedRecipientAllocationEncoderV2::begin(&mut bytes, streaming_header())
+                .unwrap();
+        encoder.push_maker(id(3), 5).unwrap();
+        assert_eq!(encoder.push_maker(id(2), 7), Err(Error::NonCanonicalOrder));
+
+        let mut incomplete = [0u8; CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES];
+        let mut encoder =
+            CertifiedRecipientAllocationEncoderV2::begin(&mut incomplete, streaming_header())
+                .unwrap();
+        encoder.push_maker(id(2), 5).unwrap();
+        assert_eq!(encoder.complete(), Err(Error::ConservationFailure));
     }
 
     #[test]
