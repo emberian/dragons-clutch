@@ -18,6 +18,7 @@
 //! order identity. Fees are carried and summed separately; they never enter the
 //! dealer receipt conservation equation.
 
+use crate::exact_integer::{exact_mul_div_rem, ExactIntegerError};
 use crate::relation_v1::MAX_OUTCOMES;
 use crate::relation_v2::{
     derive_unbalanced_economics_v2, EconomicBookV2, EconomicCandidateV2, EconomicDomainV2,
@@ -1020,7 +1021,11 @@ fn hamilton_allocate(
     let mut assigned = 0u128;
     row = 0;
     while row < count {
-        let (quotient, remainder) = exact_mul_div_rem(total, weights[row], weight_total)?;
+        let (quotient, remainder) = exact_mul_div_rem(total, weights[row], weight_total)
+            .map_err(|error| match error {
+                ExactIntegerError::ZeroDenominator => DealerErrorV2::ZeroAllocationWeight,
+                ExactIntegerError::QuotientOverflow => DealerErrorV2::ArithmeticOverflow,
+            })?;
         result[row] = quotient;
         remainders[row] = remainder;
         assigned = assigned
@@ -1063,61 +1068,6 @@ fn hamilton_allocate(
             .ok_or(DealerErrorV2::ArithmeticOverflow)?;
     }
     Ok(result)
-}
-
-/// Compute `(multiplicand * multiplier) / denominator` and its remainder
-/// without requiring a double-width product.
-///
-/// Modular doubling keeps intermediate remainders below `denominator`, even
-/// for hostile `u128` inputs. The result refuses only if the mathematical
-/// quotient itself cannot fit `u128` or the denominator is zero.
-pub(crate) fn exact_mul_div_rem(
-    multiplicand: u128,
-    multiplier: u128,
-    denominator: u128,
-) -> Result<(u128, u128), DealerErrorV2> {
-    if denominator == 0 {
-        return Err(DealerErrorV2::ZeroAllocationWeight);
-    }
-    let mut quotient = 0u128;
-    let mut remainder = 0u128;
-    let multiplicand_quotient = multiplicand / denominator;
-    let multiplicand_remainder = multiplicand % denominator;
-    let mut bit = 1u128 << 127;
-    loop {
-        quotient = quotient
-            .checked_mul(2)
-            .ok_or(DealerErrorV2::ArithmeticOverflow)?;
-        let double_complement = denominator - remainder;
-        let (mut carry, mut next_remainder) = if remainder >= double_complement {
-            (1u128, remainder - double_complement)
-        } else {
-            (0u128, remainder + remainder)
-        };
-        if multiplier & bit != 0 {
-            carry = carry
-                .checked_add(multiplicand_quotient)
-                .ok_or(DealerErrorV2::ArithmeticOverflow)?;
-            let add_complement = denominator - next_remainder;
-            if multiplicand_remainder >= add_complement {
-                carry = carry
-                    .checked_add(1)
-                    .ok_or(DealerErrorV2::ArithmeticOverflow)?;
-                next_remainder = multiplicand_remainder - add_complement;
-            } else {
-                next_remainder += multiplicand_remainder;
-            }
-        }
-        quotient = quotient
-            .checked_add(carry)
-            .ok_or(DealerErrorV2::ArithmeticOverflow)?;
-        remainder = next_remainder;
-        if bit == 1 {
-            break;
-        }
-        bit >>= 1;
-    }
-    Ok((quotient, remainder))
 }
 
 fn dealer_economic_digest(

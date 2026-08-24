@@ -16,15 +16,19 @@ use clutch_fee_runtime_contract::allocation::{
     FeeEnvelopeV1, PayerAllocationV1, RecipientAllocationV1, StandingMakerRowV1,
 };
 use clutch_fee_runtime_contract::codec::{
+    decode_borrowed_certified_recipient_allocation_v3,
     decode_fee_record_v1, decode_fee_record_v2, decode_owner_fee_carry_v1,
     decode_payer_allocation_v1,
     decode_persisted_certified_recipient_allocation_v2,
     decode_persisted_payer_allocation_v1, decode_recipient_allocation_v1,
     decode_treasury_ledger_v1, encode_fee_record_v1, encode_fee_record_v2,
-    encode_owner_fee_carry_v1,
-    encode_certified_recipient_allocation_v2, encode_payer_allocation_v1,
-    encode_recipient_allocation_v1, encode_treasury_ledger_v1,
-    CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES, FEE_RECORD_ACCOUNT_V1_BYTES,
+    encode_owner_fee_carry_v1, encode_certified_recipient_allocation_v2,
+    encode_payer_allocation_v1, encode_recipient_allocation_v1,
+    encode_certified_recipient_allocation_v3_from_access_into,
+    BorrowedCertifiedRecipientAllocationV3, CertifiedRecipientAllocationAccessV3,
+    encode_treasury_ledger_v1,
+    CERTIFIED_RECIPIENT_ALLOCATION_V2_BYTES, CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES,
+    FEE_RECORD_ACCOUNT_V1_BYTES,
     OWNER_FEE_CARRY_ACCOUNT_V1_BYTES,
     PAYER_ALLOCATION_ACCOUNT_V1_BYTES, RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES,
     TREASURY_LEDGER_ACCOUNT_V1_BYTES,
@@ -34,11 +38,16 @@ use clutch_fee_runtime_contract::selected::{
     SelectedCompositeFeeV2,
 };
 use clutch_fee_runtime_contract::projection::CertifiedRecipientAllocationV2;
+use clutch_fee_runtime_contract::retirement::{
+    FeeRetirementAccumulatorV1, FEE_RETIREMENT_ACCUMULATOR_BODY_V1_BYTES,
+};
 pub use clutch_fee_runtime_contract::terminal::{
-    AuthenticatedOwnerFeeFinalizationV1, FeeClosureManifestReceiptV1, FeeRecordTerminalReceiptV1,
-    FeeTerminalOutcomeV1, FeeTerminalReceiptBundleV1, GeneralFeeTerminalProjectionV1,
+    AuthenticatedOwnerFeeFinalizationV1, FeeClosureManifestReceiptV1,
+    FeeClosureManifestReceiptV2, FeeRecordTerminalReceiptV1, FeeTerminalOutcomeV1,
+    FeeTerminalReceiptBundleV1, FeeTerminalReceiptBundleV2, GeneralFeeTerminalProjectionV1,
     GeneralOwnerFeeFinalizationProjectionV2, OwnerFeeFinalizationOutcomeV2,
     OwnerFeeFinalizationReceiptV1, FEE_CLOSURE_MANIFEST_V1_BYTES,
+    FEE_CLOSURE_MANIFEST_V2_BYTES,
     FEE_TERMINAL_RECEIPT_V1_BYTES, OWNER_FEE_FINALIZATION_BODY_V2_BYTES,
 };
 use clutch_fee_runtime_contract::treasury::TreasuryLedgerV1;
@@ -56,13 +65,19 @@ use crate::{
     PAYER_ALLOCATION_ACCOUNT_TAG, PAYER_ALLOCATION_ACCOUNT_VERSION,
     PAYER_ALLOCATION_ACCOUNT_VERSION_V2,
     RECIPIENT_ALLOCATION_ACCOUNT_BYTES, RECIPIENT_ALLOCATION_ACCOUNT_TAG,
-    RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2, RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
-    RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2, SELECTED_FEE_RECORD_ACCOUNT_BYTES,
+    RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2, RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V3,
+    RECIPIENT_ALLOCATION_ACCOUNT_VERSION, RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2,
+    RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V3, SELECTED_FEE_RECORD_ACCOUNT_BYTES,
     SELECTED_FEE_RECORD_ACCOUNT_BYTES_V2, SELECTED_FEE_RECORD_ACCOUNT_TAG,
     SELECTED_FEE_RECORD_ACCOUNT_VERSION, SELECTED_FEE_RECORD_ACCOUNT_VERSION_V2,
     TREASURY_LEDGER_ACCOUNT_BYTES, TREASURY_LEDGER_ACCOUNT_BYTES_V2,
     TREASURY_LEDGER_ACCOUNT_TAG, TREASURY_LEDGER_ACCOUNT_VERSION,
-    TREASURY_LEDGER_ACCOUNT_VERSION_V2,
+    TREASURY_LEDGER_ACCOUNT_VERSION_V2, FEE_RETIREMENT_ACCOUNT_BYTES_V1,
+    FEE_RETIREMENT_ACCOUNT_BYTES_V2, FEE_RETIREMENT_ACCOUNT_BYTES_V3,
+    FEE_RETIREMENT_ACCOUNT_TAG,
+    FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_VERSION,
+    FEE_RETIREMENT_CLOSURE_MANIFEST_ACCOUNT_VERSION,
+    FEE_RETIREMENT_TERMINAL_ACCOUNT_VERSION,
 };
 
 const OUTER_FEE_ACCOUNT_BYTES: usize = 2 + 2;
@@ -272,7 +287,6 @@ impl SelectedFeeRecordV2AccountV1 {
             stored_bump,
         })
     }
-
     pub fn data_id<B: Sha256BackendV1>(
         &self,
         backend: &B,
@@ -603,7 +617,7 @@ impl PayerAllocationV2AccountV1 {
     }
 }
 
-/// Temporary candidate-wide recipient snapshot outer envelope.
+/// Historical candidate-wide recipient snapshot outer envelope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RecipientAllocationV1AccountV1 {
     /// Constructor-authenticated allocation semantics.
@@ -613,19 +627,7 @@ pub struct RecipientAllocationV1AccountV1 {
 }
 
 impl RecipientAllocationV1AccountV1 {
-    /// Encode the exact canonical outer account.
-    pub fn encode(&self, output: &mut [u8]) -> Result<(), CodecError> {
-        let body = map_fee_error(encode_recipient_allocation_v1(&self.semantic))?;
-        encode_outer(
-            RECIPIENT_ALLOCATION_ACCOUNT_TAG,
-            RECIPIENT_ALLOCATION_ACCOUNT_VERSION,
-            &body,
-            self.stored_bump,
-            output,
-        )
-    }
-
-    /// Decode only from selected policy and authenticated standing-maker rows.
+    /// Historical decode from selected policy and standing-maker rows.
     pub fn decode(
         input: &[u8],
         selected: &SelectedCompositeFeeV1,
@@ -646,7 +648,7 @@ impl RecipientAllocationV1AccountV1 {
     }
 }
 
-/// Sole future rent-owned recipient allocation certified by a complete book.
+/// Historical rent-owned recipient allocation certified by a complete book.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RecipientAllocationV2AccountV1 {
     /// Exact allocation plus complete selected-owner fee-book certificate.
@@ -657,25 +659,112 @@ pub struct RecipientAllocationV2AccountV1 {
     pub stored_bump: u8,
 }
 
-impl RecipientAllocationV2AccountV1 {
-    /// Encode the exact current certified recipient account.
-    pub fn encode(&self, output: &mut [u8]) -> Result<(), CodecError> {
-        let body = map_fee_error(encode_certified_recipient_allocation_v2(&self.semantic))?;
-        encode_rent_owned_outer(
-            RECIPIENT_ALLOCATION_ACCOUNT_TAG,
-            RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2,
-            &body,
-            self.rent,
-            self.stored_bump,
-            output,
-        )
+/// Borrowed hostile-byte-authenticated current 0x85/v3 outer.
+///
+/// The maximum-width Position/rebate arrays remain in account storage. Live
+/// consumers receive only the checked streaming semantic view, compact rent
+/// owner, and bump.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BorrowedRecipientAllocationV3AccountV1<'a> {
+    semantic: BorrowedCertifiedRecipientAllocationV3<'a>,
+    rent: DeletableRentOwnerV1,
+    stored_bump: u8,
+}
+
+impl<'a> BorrowedRecipientAllocationV3AccountV1<'a> {
+    /// Borrowed current semantic projection.
+    pub const fn semantic(&self) -> BorrowedCertifiedRecipientAllocationV3<'a> {
+        self.semantic
     }
 
+    /// Exact payer-owned principal and donation floor.
+    pub const fn rent(&self) -> DeletableRentOwnerV1 { self.rent }
+
+    /// Stored PDA bump.
+    pub const fn stored_bump(&self) -> u8 { self.stored_bump }
+}
+
+/// Stream one exact current 0x85/v3 outer into caller-owned account storage.
+///
+/// `semantic` must be a private projection of the authenticated portfolio
+/// fee-weight stream and exact Hamilton result. This codec validates the
+/// complete current semantic shape but does not grant creation authority.
+#[inline(never)]
+pub fn encode_recipient_allocation_v3_account_from_access<A>(
+    semantic: &A,
+    rent: DeletableRentOwnerV1,
+    stored_bump: u8,
+    output: &mut [u8],
+) -> Result<(), CodecError>
+where
+    A: CertifiedRecipientAllocationAccessV3 + ?Sized,
+{
+    if output.len() != RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V3 {
+        return Err(CodecError::WrongLength);
+    }
+    rent.validate()?;
+    output[0] = RECIPIENT_ALLOCATION_ACCOUNT_TAG;
+    output[1] = RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V3;
+    map_fee_error(encode_certified_recipient_allocation_v3_from_access_into(
+        semantic,
+        &mut output[2..2 + CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES],
+    ))?;
+    let mut writer = Writer::exact(
+        &mut output[2 + CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES..],
+        DELETABLE_RENT_OWNER_BYTES + 2,
+    )?;
+    writer.bytes(&rent.payer.bytes())?;
+    writer.u64(rent.refundable_principal)?;
+    writer.u64(rent.donation_floor)?;
+    writer.u8(stored_bump)?;
+    writer.u8(0)?;
+    writer.finish()
+}
+
+/// Strictly decode the current 0x85/v3 outer without copying allocation arrays.
+pub fn decode_borrowed_recipient_allocation_v3_account(
+    input: &[u8],
+) -> Result<BorrowedRecipientAllocationV3AccountV1<'_>, CodecError> {
+    if input.len() != RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V3 {
+        return Err(CodecError::WrongLength);
+    }
+    if input[0] != RECIPIENT_ALLOCATION_ACCOUNT_TAG {
+        return Err(CodecError::WrongTag);
+    }
+    if input[1] != RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V3 {
+        return Err(CodecError::WrongVersion);
+    }
+    let semantic = map_fee_error(decode_borrowed_certified_recipient_allocation_v3(
+        &input[2..2 + CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES],
+    ))?;
+    let mut reader = Reader::exact(
+        &input[2 + CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES..],
+        DELETABLE_RENT_OWNER_BYTES + 2,
+    )?;
+    let rent = DeletableRentOwnerV1 {
+        payer: Id32::new(reader.array()?)?,
+        refundable_principal: reader.u64()?,
+        donation_floor: reader.u64()?,
+    };
+    rent.validate()?;
+    let stored_bump = reader.u8()?;
+    if reader.u8()? != 0 {
+        return Err(CodecError::NonCanonicalPadding);
+    }
+    reader.finish()?;
+    Ok(BorrowedRecipientAllocationV3AccountV1 {
+        semantic,
+        rent,
+        stored_bump,
+    })
+}
+
+impl RecipientAllocationV2AccountV1 {
     /// Structurally decode the immutable program-owned persisted certificate.
     ///
     /// The adapter must additionally authenticate the canonical PDA and prove
-    /// that no route can create this version without the complete fee book and
-    /// exhaustive traversal digest/count.
+    /// that no route can create this historical version. No current writer
+    /// emits V2.
     pub fn decode_persisted(input: &[u8]) -> Result<Self, CodecError> {
         let (body, rent, stored_bump) = decode_rent_owned_outer(
             RECIPIENT_ALLOCATION_ACCOUNT_TAG,
@@ -753,9 +842,132 @@ impl TreasuryLedgerV2AccountV1 {
                 TREASURY_LEDGER_ACCOUNT_TAG,
                 TREASURY_LEDGER_ACCOUNT_VERSION_V2,
                 input,
-            )?;
+        )?;
         Ok(Self {
             semantic: map_fee_error(decode_treasury_ledger_v1(&body, selected))?,
+            rent,
+            stored_bump,
+        })
+    }
+}
+
+/// Rent-owned compact streaming owner-finalization accumulator (`0xb9/v1`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FeeRetirementAccumulatorV1AccountV1 {
+    /// Fee-runtime-owned streaming semantic state.
+    pub semantic: FeeRetirementAccumulatorV1,
+    /// Exact refundable principal and immutable creation donation floor.
+    pub rent: DeletableRentOwnerV1,
+    /// Stored canonical PDA bump.
+    pub stored_bump: u8,
+}
+
+impl FeeRetirementAccumulatorV1AccountV1 {
+    /// Encode the exact canonical rent-owned outer account.
+    pub fn encode(&self, output: &mut [u8]) -> Result<(), CodecError> {
+        let body = map_fee_error(self.semantic.encode())?;
+        encode_rent_owned_outer(
+            FEE_RETIREMENT_ACCOUNT_TAG,
+            FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_VERSION,
+            &body,
+            self.rent,
+            self.stored_bump,
+            output,
+        )
+    }
+
+    /// Decode hostile bytes only through the fee semantic owner's decoder.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let (body, rent, stored_bump) =
+            decode_rent_owned_outer::<FEE_RETIREMENT_ACCUMULATOR_BODY_V1_BYTES>(
+                FEE_RETIREMENT_ACCOUNT_TAG,
+                FEE_RETIREMENT_ACCUMULATOR_ACCOUNT_VERSION,
+                input,
+        )?;
+        Ok(Self {
+            semantic: map_fee_error(FeeRetirementAccumulatorV1::decode(&body))?,
+            rent,
+            stored_bump,
+        })
+    }
+}
+
+/// Durable rent-owned fee-closure manifest (`0xb9/v2`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FeeClosureManifestV2AccountV1 {
+    /// Canonical fee-runtime manifest body.
+    pub semantic: FeeClosureManifestReceiptV2,
+    /// Exact refundable principal and immutable creation donation floor.
+    pub rent: DeletableRentOwnerV1,
+    /// Stored canonical PDA bump.
+    pub stored_bump: u8,
+}
+
+impl FeeClosureManifestV2AccountV1 {
+    /// Encode the durable canonical outer account.
+    pub fn encode(&self, output: &mut [u8]) -> Result<(), CodecError> {
+        let body = map_fee_error(self.semantic.encode())?;
+        encode_rent_owned_outer(
+            FEE_RETIREMENT_ACCOUNT_TAG,
+            FEE_RETIREMENT_CLOSURE_MANIFEST_ACCOUNT_VERSION,
+            &body,
+            self.rent,
+            self.stored_bump,
+            output,
+        )
+    }
+
+    /// Decode hostile bytes through the semantic manifest decoder.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let (body, rent, stored_bump) =
+            decode_rent_owned_outer::<FEE_CLOSURE_MANIFEST_V2_BYTES>(
+                FEE_RETIREMENT_ACCOUNT_TAG,
+                FEE_RETIREMENT_CLOSURE_MANIFEST_ACCOUNT_VERSION,
+                input,
+        )?;
+        Ok(Self {
+            semantic: map_fee_error(FeeClosureManifestReceiptV2::decode(&body))?,
+            rent,
+            stored_bump,
+        })
+    }
+}
+
+/// Durable rent-owned fee-record terminal receipt (`0xb9/v3`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FeeRecordTerminalV3AccountV1 {
+    /// Canonical fee-runtime terminal body.
+    pub semantic: FeeRecordTerminalReceiptV1,
+    /// Exact refundable principal and immutable creation donation floor.
+    pub rent: DeletableRentOwnerV1,
+    /// Stored canonical PDA bump.
+    pub stored_bump: u8,
+}
+
+impl FeeRecordTerminalV3AccountV1 {
+    /// Encode the durable canonical outer account.
+    pub fn encode(&self, output: &mut [u8]) -> Result<(), CodecError> {
+        let body = map_fee_error(self.semantic.encode())?;
+        encode_rent_owned_outer(
+            FEE_RETIREMENT_ACCOUNT_TAG,
+            FEE_RETIREMENT_TERMINAL_ACCOUNT_VERSION,
+            &body,
+            self.rent,
+            self.stored_bump,
+            output,
+        )
+    }
+
+    /// Decode hostile bytes through the semantic terminal decoder.
+    pub fn decode(input: &[u8]) -> Result<Self, CodecError> {
+        let (body, rent, stored_bump) =
+            decode_rent_owned_outer::<FEE_TERMINAL_RECEIPT_V1_BYTES>(
+                FEE_RETIREMENT_ACCOUNT_TAG,
+                FEE_RETIREMENT_TERMINAL_ACCOUNT_VERSION,
+                input,
+            )?;
+        Ok(Self {
+            semantic: map_fee_error(FeeRecordTerminalReceiptV1::decode(&body))?,
             rent,
             stored_bump,
         })
@@ -808,11 +1020,43 @@ const _: () = assert!(
             + OUTER_FEE_ACCOUNT_BYTES
 );
 const _: () = assert!(
+    CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES
+        == RECIPIENT_ALLOCATION_ACCOUNT_V1_BYTES + 32 + 32 + 32 + 2 + 1 + 5
+);
+const _: () = assert!(CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES == 2_744);
+const _: () = assert!(DELETABLE_RENT_OWNER_BYTES + OUTER_FEE_ACCOUNT_BYTES == 52);
+const _: () = assert!(
+    RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V3
+        == CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES
+            + DELETABLE_RENT_OWNER_BYTES
+            + OUTER_FEE_ACCOUNT_BYTES
+);
+const _: () = assert!(RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V3 == 2_796);
+const _: () = assert!(core::mem::size_of::<BorrowedRecipientAllocationV3AccountV1<'static>>() <= 256);
+const _: () = assert!(
     TREASURY_LEDGER_ACCOUNT_BYTES == TREASURY_LEDGER_ACCOUNT_V1_BYTES + OUTER_FEE_ACCOUNT_BYTES
 );
 const _: () = assert!(
     TREASURY_LEDGER_ACCOUNT_BYTES_V2
         == TREASURY_LEDGER_ACCOUNT_V1_BYTES + DELETABLE_RENT_OWNER_BYTES + OUTER_FEE_ACCOUNT_BYTES
+);
+const _: () = assert!(
+    FEE_RETIREMENT_ACCOUNT_BYTES_V1
+        == FEE_RETIREMENT_ACCUMULATOR_BODY_V1_BYTES
+            + DELETABLE_RENT_OWNER_BYTES
+            + OUTER_FEE_ACCOUNT_BYTES
+);
+const _: () = assert!(
+    FEE_RETIREMENT_ACCOUNT_BYTES_V2
+        == FEE_CLOSURE_MANIFEST_V2_BYTES
+            + DELETABLE_RENT_OWNER_BYTES
+            + OUTER_FEE_ACCOUNT_BYTES
+);
+const _: () = assert!(
+    FEE_RETIREMENT_ACCOUNT_BYTES_V3
+        == FEE_TERMINAL_RECEIPT_V1_BYTES
+            + DELETABLE_RENT_OWNER_BYTES
+            + OUTER_FEE_ACCOUNT_BYTES
 );
 
 #[cfg(test)]
@@ -847,6 +1091,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(decoded, (body, rent(), 44));
+    }
+
+    #[test]
+    fn recipient_v3_width_and_version_do_not_admit_historical_outers() {
+        assert_eq!(CERTIFIED_RECIPIENT_ALLOCATION_V3_BYTES, 2_744);
+        assert_eq!(RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V3, 2_796);
+        let mut v3_width_v2_tag = [0u8; RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V3];
+        v3_width_v2_tag[0] = RECIPIENT_ALLOCATION_ACCOUNT_TAG;
+        v3_width_v2_tag[1] = RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V2;
+        assert_eq!(
+            decode_borrowed_recipient_allocation_v3_account(&v3_width_v2_tag),
+            Err(CodecError::WrongVersion)
+        );
+
+        let mut v2_width_v3_tag = [0u8; RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2];
+        v2_width_v3_tag[0] = RECIPIENT_ALLOCATION_ACCOUNT_TAG;
+        v2_width_v3_tag[1] = RECIPIENT_ALLOCATION_ACCOUNT_VERSION_V3;
+        assert_eq!(
+            RecipientAllocationV2AccountV1::decode_persisted(&v2_width_v3_tag),
+            Err(CodecError::WrongVersion)
+        );
     }
 
     #[test]

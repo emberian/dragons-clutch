@@ -1,7 +1,7 @@
 //! Sole current Product/Source/Failure composition for a zero-payout attempt.
 //!
-//! The only admitted order is Product LinkV2 pin, Source physical terminal,
-//! Failure terminal-cell write, history append and Idle reset, Product LinkV2
+//! The only admitted order is Product LinkV3 pin, Source physical terminal,
+//! Failure terminal-cell write, history append and Idle reset, Product LinkV3
 //! release, one-way Source post-release persistence, and shared Failure
 //! runtime write.
 //! Any refusal rolls every earlier mutation back under SVM instruction
@@ -16,29 +16,31 @@ use crate::instructions::failure_market_interval_v2::{
     write_failure_market_interval_archive_v3,
     write_failure_market_interval_source_failure_plan_v2,
     AuthenticatedFailureMarketIntervalAccountsV2,
-    AuthenticatedFailureMarketRecoveryQuoteV2,
+    AuthenticatedFailureMarketRecoveryQuoteV3,
     AuthenticatedFailureMarketSourceFailurePostwriteV2,
     FailureMarketIntervalArchivePostwriteV3,
 };
 use crate::instructions::failure_market_runtime::{
-    write_failure_market_runtime_source_failure_plan_v3,
+    write_failure_market_runtime_source_failure_plan_v4,
     AuthenticatedFailureMarketRuntimeRootV1,
-    AuthenticatedFailureMarketRuntimeSourceFailurePostwriteV3,
-    AuthenticatedFailureMarketRuntimeSourceFailureWriteV3,
-    FailureMarketRuntimeSourceFailureWriteFactsV3,
+    AuthenticatedFailureMarketRuntimeSourceFailurePostwriteV4,
+    AuthenticatedFailureMarketRuntimeSourceFailureWriteV4,
+    FailureMarketRuntimeSourceFailureWriteFactsV4,
 };
-use crate::instructions::product_failure_begin_current::AuthenticatedProductFailureBeginScheduleV2;
-use crate::instructions::product_series_current::{
-    authenticate_writable_failure_source_absent_link_v3,
-    authenticate_writable_failure_source_refused_link_v3,
-    pin_series_market_link_failure_v2,
-    release_series_market_link_failure_v3,
-    AuthenticatedMarketLifecycleRootV2,
-    AuthenticatedSeriesFailureSessionBeginV3,
-    AuthenticatedSeriesFailureSessionPinV2,
-    AuthenticatedSeriesFailureSessionReleaseV3,
-    AuthenticatedSeriesMarketLinkV2,
-    FailureSessionReleaseDispositionV3,
+use crate::instructions::product_failure_begin_v3_current::AuthenticatedProductFailureScheduleV3;
+use crate::instructions::product_failure_link_v3_current::{
+    authenticate_writable_failure_source_absent_link_v4,
+    authenticate_writable_failure_source_refused_link_v4,
+    pin_series_market_link_failure_v3,
+    release_series_market_link_failure_v4,
+    AuthenticatedSeriesFailureSessionBeginV4,
+    AuthenticatedSeriesFailureSessionPinV3,
+    AuthenticatedSeriesFailureSessionReleaseV4,
+    FailureSessionReleaseDispositionV4,
+};
+use crate::instructions::product_market_lifecycle_v3_current::{
+    authenticate_market_lifecycle_root_v3, AuthenticatedMarketLifecycleRootV3,
+    AuthenticatedSeriesMarketLinkV3,
 };
 use crate::instructions::source_failure_product_release_v1::{
     bind_persisted_source_failure_product_release_v3,
@@ -54,11 +56,11 @@ use crate::instructions::source_failure_terminal_v1::{
 };
 use clutch_failure_policy_runtime::market_interval_cell_v2::FailureMarketIntervalCellSourceFailureReceiptV2;
 use clutch_failure_policy_runtime::market_runtime_v1::{
-    plan_archive_failure_market_source_failure_v3,
-    AuthenticatedFailureMarketSourceFailureTransitionV3,
+    plan_archive_failure_market_source_failure_v4,
+    AuthenticatedFailureMarketSourceFailureTransitionV4,
     FailureMarketSessionDescriptorV1,
     FailureMarketSessionScheduleIdV1,
-    FailureMarketSourceFailureTransitionFactsV3,
+    FailureMarketSourceFailureTransitionFactsV4,
 };
 use clutch_product_series::ContentId as ProductContentId;
 use clutch_source_plane_v3::ContentId as SourceContentId;
@@ -70,8 +72,8 @@ use clutch_source_plane_v3_runtime::{
     SourceWorkScheduleBindingV1,
 };
 use clutch_solana_layout::product_series::{
-    MarketLifecycleRootAccountV2,
-    SeriesMarketLinkAccountV2,
+    MarketLifecycleRootAccountV3,
+    SeriesMarketLinkAccountV3,
 };
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
@@ -88,8 +90,12 @@ struct FailureMarketSourceAttemptBeginPreauthorizationV2 {
     id: ProductContentId,
     root_account: Pubkey,
     root_authentication_id: ProductContentId,
+    root_semantic_id: ProductContentId,
+    root_binding_id: ProductContentId,
     link_account: Pubkey,
     link_authentication_id: ProductContentId,
+    link_semantic_id: clutch_product_series::SeriesMarketLinkV3Id,
+    link_binding_id: ProductContentId,
     series_plan_id: clutch_product_series::SeriesPlanV5Id,
     ordinal: u32,
     market_instance_id: clutch_product_series::MarketInstanceV2Id,
@@ -97,15 +103,19 @@ struct FailureMarketSourceAttemptBeginPreauthorizationV2 {
     source_occurrence_id: clutch_product_series::SourceOccurrenceV1Id,
 }
 
-impl AuthenticatedSeriesFailureSessionBeginV3
+impl AuthenticatedSeriesFailureSessionBeginV4
     for FailureMarketSourceAttemptBeginPreauthorizationV2
 {
-    fn authenticate_series_failure_session_begin_v3(
+    fn authenticate_series_failure_session_begin_v4(
         &self,
         root_account: Pubkey,
         root_authentication_id: ProductContentId,
+        root_semantic_id: ProductContentId,
+        root_binding_id: ProductContentId,
         link_account: Pubkey,
         link_authentication_id: ProductContentId,
+        link_semantic_id: clutch_product_series::SeriesMarketLinkV3Id,
+        link_binding_id: ProductContentId,
         series_plan_id: clutch_product_series::SeriesPlanV5Id,
         ordinal: u32,
         market_instance_id: clutch_product_series::MarketInstanceV2Id,
@@ -117,8 +127,12 @@ impl AuthenticatedSeriesFailureSessionBeginV3
             begin_admission_receipt_id == self.id
                 && root_account == self.root_account
                 && root_authentication_id == self.root_authentication_id
+                && root_semantic_id == self.root_semantic_id
+                && root_binding_id == self.root_binding_id
                 && link_account == self.link_account
                 && link_authentication_id == self.link_authentication_id
+                && link_semantic_id == self.link_semantic_id
+                && link_binding_id == self.link_binding_id
                 && series_plan_id == self.series_plan_id
                 && ordinal == self.ordinal
                 && market_instance_id == self.market_instance_id
@@ -202,19 +216,19 @@ impl AuthenticatedFailureMarketSourceFailurePostwriteV2
 
 struct FailureMarketSourceTransitionAuthorityV3<'a> {
     begin: FailureMarketSourceAttemptBeginPreauthorizationV2,
-    pin: &'a AuthenticatedSeriesFailureSessionPinV2,
-    release: &'a AuthenticatedSeriesFailureSessionReleaseV3,
+    pin: &'a AuthenticatedSeriesFailureSessionPinV3,
+    release: &'a AuthenticatedSeriesFailureSessionReleaseV4,
     source_terminal: AuthenticatedSourceFailureTerminalPostwriteV1,
     source_product_release: &'a AuthenticatedPersistedSourceFailureProductReleaseV3,
     archive: FailureMarketIntervalArchivePostwriteV3,
 }
 
-impl AuthenticatedFailureMarketSourceFailureTransitionV3
+impl AuthenticatedFailureMarketSourceFailureTransitionV4
     for FailureMarketSourceTransitionAuthorityV3<'_>
 {
-    fn authenticate_failure_market_source_failure_transition_v3(
+    fn authenticate_failure_market_source_failure_transition_v4(
         &self,
-        expected: FailureMarketSourceFailureTransitionFactsV3,
+        expected: FailureMarketSourceFailureTransitionFactsV4,
     ) -> clutch_failure_policy_runtime::Result<()> {
         let valid = expected.series_link_before == self.pin.link_semantic_before()
             && expected.series_link_pinned == self.pin.link_semantic_after()
@@ -247,15 +261,15 @@ impl AuthenticatedFailureMarketSourceFailureTransitionV3
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FailureMarketSourceRuntimeWriteAuthorityV3 {
-    expected: FailureMarketRuntimeSourceFailureWriteFactsV3,
+    expected: FailureMarketRuntimeSourceFailureWriteFactsV4,
 }
 
-impl AuthenticatedFailureMarketRuntimeSourceFailureWriteV3
+impl AuthenticatedFailureMarketRuntimeSourceFailureWriteV4
     for FailureMarketSourceRuntimeWriteAuthorityV3
 {
-    fn authenticate_failure_market_runtime_source_failure_write_v3(
+    fn authenticate_failure_market_runtime_source_failure_write_v4(
         &self,
-        expected: FailureMarketRuntimeSourceFailureWriteFactsV3,
+        expected: FailureMarketRuntimeSourceFailureWriteFactsV4,
     ) -> clutch_failure_policy_runtime::Result<()> {
         if expected == self.expected {
             Ok(())
@@ -268,19 +282,19 @@ impl AuthenticatedFailureMarketRuntimeSourceFailureWriteV3
 #[derive(Debug)]
 pub(crate) struct AuthenticatedFailureMarketSourceFailurePostwriteV3<'link> {
     id: ProductContentId,
-    link: AuthenticatedSeriesMarketLinkV2<'link>,
-    release: AuthenticatedSeriesFailureSessionReleaseV3,
+    link: AuthenticatedSeriesMarketLinkV3<'link>,
+    release: AuthenticatedSeriesFailureSessionReleaseV4,
     source_terminal: AuthenticatedSourceFailureTerminalPostwriteV1,
     source_failure_receipt: FailureMarketIntervalCellSourceFailureReceiptV2,
     archive: FailureMarketIntervalArchivePostwriteV3,
     source_release: AuthenticatedPersistedSourceFailureProductReleaseV3,
-    runtime: AuthenticatedFailureMarketRuntimeSourceFailurePostwriteV3,
+    runtime: AuthenticatedFailureMarketRuntimeSourceFailurePostwriteV4,
 }
 
 impl AuthenticatedFailureMarketSourceFailurePostwriteV3<'_> {
     pub(crate) const fn id(&self) -> ProductContentId { self.id }
-    pub(crate) const fn link(&self) -> &AuthenticatedSeriesMarketLinkV2<'_> { &self.link }
-    pub(crate) const fn release(&self) -> &AuthenticatedSeriesFailureSessionReleaseV3 {
+    pub(crate) const fn link(&self) -> &AuthenticatedSeriesMarketLinkV3<'_> { &self.link }
+    pub(crate) const fn release(&self) -> &AuthenticatedSeriesFailureSessionReleaseV4 {
         &self.release
     }
     pub(crate) const fn source_terminal(&self) -> AuthenticatedSourceFailureTerminalPostwriteV1 {
@@ -299,7 +313,7 @@ impl AuthenticatedFailureMarketSourceFailurePostwriteV3<'_> {
     ) -> &AuthenticatedPersistedSourceFailureProductReleaseV3 {
         &self.source_release
     }
-    pub(crate) const fn runtime(&self) -> AuthenticatedFailureMarketRuntimeSourceFailurePostwriteV3 {
+    pub(crate) const fn runtime(&self) -> AuthenticatedFailureMarketRuntimeSourceFailurePostwriteV4 {
         self.runtime
     }
 }
@@ -313,13 +327,13 @@ pub(crate) fn compose_failure_market_source_failure_attempt_v3<'root, 'link, 're
     runtime_root_account: &AccountInfo<'_>,
     cell_account: &AccountInfo<'_>,
     history_account: &AccountInfo<'_>,
-    root_before: AuthenticatedMarketLifecycleRootV2<'root>,
-    link_before: AuthenticatedSeriesMarketLinkV2<'link>,
+    root_before: AuthenticatedMarketLifecycleRootV3<'root>,
+    link_before: AuthenticatedSeriesMarketLinkV3<'link>,
     admission: AuthenticatedFailureMarketRootV2,
     runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
     interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
-    quote: AuthenticatedFailureMarketRecoveryQuoteV2,
-    product_schedule: &AuthenticatedProductFailureBeginScheduleV2,
+    quote: AuthenticatedFailureMarketRecoveryQuoteV3,
+    product_schedule: &AuthenticatedProductFailureScheduleV3,
     source_route: AuthenticatedSourceRouteV1,
     source_schedule: SourceWorkScheduleBindingV1,
     source: AuthenticatedSourceFailureHandoffV1,
@@ -333,11 +347,12 @@ pub(crate) fn compose_failure_market_source_failure_attempt_v3<'root, 'link, 're
     neutral_sink: &AccountInfo<'_>,
     system_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
-    pin_root_output: &mut MarketLifecycleRootAccountV2,
-    pin_link_output: &mut SeriesMarketLinkAccountV2,
-    release_root_output: &mut MarketLifecycleRootAccountV2,
-    release_link_output: &mut SeriesMarketLinkAccountV2,
-    released_link_output: &'released mut SeriesMarketLinkAccountV2,
+    pin_root_output: &mut MarketLifecycleRootAccountV3,
+    pin_link_output: &mut SeriesMarketLinkAccountV3,
+    pre_release_root_output: &mut MarketLifecycleRootAccountV3,
+    release_root_output: &mut MarketLifecycleRootAccountV3,
+    release_link_output: &mut SeriesMarketLinkAccountV3,
+    released_link_output: &'released mut SeriesMarketLinkAccountV3,
 ) -> Outcome<AuthenticatedFailureMarketSourceFailurePostwriteV3<'released>> {
     require_distinct(&[
         market_root_account.clone(),
@@ -357,8 +372,8 @@ pub(crate) fn compose_failure_market_source_failure_attempt_v3<'root, 'link, 're
         system_program.clone(),
         rent_sysvar.clone(),
     ])?;
-    let link_binding = link_before.state().binding();
-    let root_binding = root_before.state().binding();
+    let link_binding = *link_before.binding();
+    let root_binding = *root_before.binding();
     let source_facts = source.authority_facts(
         source_route,
         source_schedule,
@@ -435,15 +450,20 @@ pub(crate) fn compose_failure_market_source_failure_attempt_v3<'root, 'link, 're
         id: begin_id,
         root_account: root_before.account(),
         root_authentication_id: root_before.authentication_id(),
+        root_semantic_id: root_before.semantic_id(),
+        root_binding_id: root_before.binding_id(),
         link_account: link_before.account(),
         link_authentication_id: link_before.authentication_id(),
+        link_semantic_id: link_before.semantic_id(),
+        link_binding_id: link_before.binding_id(),
         series_plan_id: link_binding.series_plan_id,
         ordinal: link_binding.ordinal,
         market_instance_id: link_binding.market_instance_id,
         generation: link_binding.generation,
         source_occurrence_id: link_binding.source_occurrence_id,
     };
-    let (link_pinned, pin) = pin_series_market_link_failure_v2(
+    let link_before_state = *link_before.state();
+    let (link_pinned, pin) = pin_series_market_link_failure_v3(
         program_id,
         market_root_account,
         root_before,
@@ -454,22 +474,31 @@ pub(crate) fn compose_failure_market_source_failure_attempt_v3<'root, 'link, 're
         pin_root_output,
         pin_link_output,
     )?;
+    let link_pinned_state = *link_pinned.state();
+    let release_cached_root = authenticate_market_lifecycle_root_v3(
+        program_id,
+        market_root_account,
+        root_binding.market_instance_id,
+        root_binding.generation,
+        false,
+        pre_release_root_output,
+    )?;
     let release_preauthorization = match source.source_failure_kind() {
         SourceFailureKindV1::PrimaryMaturityWithoutAcceptedResolution => {
-            authenticate_writable_failure_source_absent_link_v3(
+            authenticate_writable_failure_source_absent_link_v4(
                 program_id,
                 market_root_account,
-                root_before,
+                release_cached_root,
                 series_link_account,
                 release_root_output,
                 release_link_output,
             )?
         }
         SourceFailureKindV1::SourceEvaluationRefused => {
-            authenticate_writable_failure_source_refused_link_v3(
+            authenticate_writable_failure_source_refused_link_v4(
                 program_id,
                 market_root_account,
-                root_before,
+                release_cached_root,
                 series_link_account,
                 release_root_output,
                 release_link_output,
@@ -541,6 +570,18 @@ pub(crate) fn compose_failure_market_source_failure_attempt_v3<'root, 'link, 're
         source_failure_receipt,
     )?;
     let release_disposition = release_preauthorization.disposition();
+    let archive_release_disposition = match release_disposition {
+        FailureSessionReleaseDispositionV4::SourceAbsent => {
+            crate::instructions::product_series_current::FailureSessionReleaseDispositionV3::SourceAbsent
+        }
+        FailureSessionReleaseDispositionV4::SourceRefused => {
+            crate::instructions::product_series_current::FailureSessionReleaseDispositionV3::SourceRefused
+        }
+        FailureSessionReleaseDispositionV4::Resolved
+        | FailureSessionReleaseDispositionV4::Exhausted => {
+            return Err(Refusal::Adapter(ClutchError::MismatchedState));
+        }
+    };
     let archive = write_failure_market_interval_archive_v3(
         program_id,
         cell_account,
@@ -554,14 +595,14 @@ pub(crate) fn compose_failure_market_source_failure_attempt_v3<'root, 'link, 're
         source_failure_receipt,
         source_terminal,
         release_preauthorization.id(),
-        release_disposition,
+        archive_release_disposition,
     )?;
-    let (link_released, release) = release_series_market_link_failure_v3(
+    let (link_released, release) = release_series_market_link_failure_v4(
         program_id,
         series_link_account,
         link_pinned,
-        &release_preauthorization,
-        &archive,
+        release_preauthorization,
+        archive,
         released_link_output,
     )?;
     let source_product_release = bind_source_failure_product_release_v1(
@@ -595,11 +636,11 @@ pub(crate) fn compose_failure_market_source_failure_attempt_v3<'root, 'link, 're
         source_product_release: &persisted_source_product_release,
         archive,
     };
-    let transition_plan = plan_archive_failure_market_source_failure_v3(
+    let transition_plan = plan_archive_failure_market_source_failure_v4(
         &transition_authority,
         runtime_before.state(),
         admission.state(),
-        *link_before.state(),
+        link_before_state,
         begin.id,
         pin.id(),
         release.id(),
@@ -613,13 +654,13 @@ pub(crate) fn compose_failure_market_source_failure_attempt_v3<'root, 'link, 're
     )
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     require(
-        transition_plan.series_link_pinned() == *link_pinned.state()
+        transition_plan.series_link_pinned() == link_pinned_state
             && transition_plan.series_link_after() == *link_released.state()
             && transition_plan.resulting_runtime().interval_terminal_receipt_id().bytes()
                 == source_failure_receipt.id().bytes(),
         ClutchError::MismatchedState,
     )?;
-    let runtime_write_facts = FailureMarketRuntimeSourceFailureWriteFactsV3 {
+    let runtime_write_facts = FailureMarketRuntimeSourceFailureWriteFactsV4 {
         runtime_before: runtime_before.state_commitment(),
         runtime_after: transition_plan
             .resulting_runtime()
@@ -630,7 +671,7 @@ pub(crate) fn compose_failure_market_source_failure_attempt_v3<'root, 'link, 're
     let runtime_authority = FailureMarketSourceRuntimeWriteAuthorityV3 {
         expected: runtime_write_facts,
     };
-    let runtime = write_failure_market_runtime_source_failure_plan_v3(
+    let runtime = write_failure_market_runtime_source_failure_plan_v4(
         program_id,
         admission_root_account,
         runtime_root_account,
@@ -688,19 +729,19 @@ mod adversarial_source_contract_tests {
             .split("pub(crate) fn compose_failure_market_source_failure_attempt_v3")
             .nth(1)
             .expect("sole current source-failure outer");
-        let pin = compose.find("pin_series_market_link_failure_v2(").unwrap();
+        let pin = compose.find("pin_series_market_link_failure_v3(").unwrap();
         let source_terminal = compose.find("compose_source_failure_terminal_v1(").unwrap();
         let cell = compose
             .find("write_failure_market_interval_source_failure_plan_v2(")
             .unwrap();
         let archive = compose.find("write_failure_market_interval_archive_v3(").unwrap();
-        let release = compose.find("release_series_market_link_failure_v3(").unwrap();
+        let release = compose.find("release_series_market_link_failure_v4(").unwrap();
         let source_release = compose.find("bind_source_failure_product_release_v1(").unwrap();
         let persisted_source_release = compose
             .find("bind_persisted_source_failure_product_release_v3(")
             .unwrap();
         let runtime = compose
-            .find("write_failure_market_runtime_source_failure_plan_v3(")
+            .find("write_failure_market_runtime_source_failure_plan_v4(")
             .unwrap();
         assert!(pin < source_terminal);
         assert!(source_terminal < cell);
@@ -716,9 +757,9 @@ mod adversarial_source_contract_tests {
     #[test]
     fn source_failure_dispositions_are_exhaustive_and_never_resolution() {
         let source = include_str!("failure_market_source_failure_current.rs");
-        assert!(source.contains("authenticate_writable_failure_source_absent_link_v3"));
-        assert!(source.contains("authenticate_writable_failure_source_refused_link_v3"));
-        assert!(!source.contains("authenticate_writable_failure_resolution_link_v3"));
-        assert!(!source.contains("authenticate_writable_failure_exhausted_link_v3"));
+        assert!(source.contains("authenticate_writable_failure_source_absent_link_v4"));
+        assert!(source.contains("authenticate_writable_failure_source_refused_link_v4"));
+        assert!(!source.contains("authenticate_writable_failure_resolution_link_v4"));
+        assert!(!source.contains("authenticate_writable_failure_exhausted_link_v4"));
     }
 }

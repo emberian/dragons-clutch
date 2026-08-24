@@ -39,6 +39,9 @@ use crate::instructions::product_series_current::{
     FailureSessionReleaseDispositionV3,
 };
 use crate::instructions::product_market_lifecycle_v3_current::AuthenticatedMarketLifecycleRootV3;
+use crate::instructions::product_failure_link_v3_current::{
+    AuthenticatedSeriesFailureArchivePostwriteV4, FailureSessionReleaseDispositionV4,
+};
 use crate::instructions::product_failure_begin_current::AuthenticatedProductFailureBeginQuoteV2;
 use crate::instructions::source_failure_product_release_v1::{
     AuthenticatedSourceFailureProductReleaseAuthorityV1,
@@ -249,6 +252,26 @@ impl AuthenticatedFailureMarketRecoveryQuoteV3 {
         );
         require_live_data_id(id)?;
         Ok(id)
+    }
+}
+
+impl crate::instructions::product_failure_begin_v3_current::AuthenticatedProductFailureBeginQuoteV3
+    for AuthenticatedFailureMarketRecoveryQuoteV3
+{
+    fn authenticate_product_failure_begin_quote_v3(
+        &self,
+        expected_quote_schedule_id: ProductContentId,
+        expected_attempt_count: u8,
+        attempt_index: u8,
+        source_repair_generation: u64,
+    ) -> Outcome<ProductContentId> {
+        let schedule = self.receipt.schedule();
+        require(
+            expected_quote_schedule_id.bytes() == self.receipt.facts().quote_schedule_id.bytes()
+                && expected_attempt_count == schedule.attempt_count,
+            ClutchError::MismatchedState,
+        )?;
+        self.attempt_authorization_id(attempt_index, source_repair_generation)
     }
 }
 
@@ -1380,7 +1403,7 @@ pub(crate) struct FailureMarketIntervalArchivePostwriteV2 {
     release_disposition: FailureSessionReleaseDispositionV2,
 }
 
-/// Current LinkV2 paired append/reset postwrite.
+/// Current LinkV3 paired append/reset postwrite.
 ///
 /// This fresh receipt never lowers a four-way current Product disposition
 /// into the historical two-way V2 release contract.
@@ -1395,6 +1418,17 @@ pub(super) struct FailureMarketIntervalArchivePostwriteV3 {
     release_disposition: FailureSessionReleaseDispositionV3,
     source_failure_receipt: FailureMarketIntervalCellSourceFailureReceiptV2,
     source_terminal: AuthenticatedSourceFailureTerminalPostwriteV1,
+}
+
+const fn current_release_disposition_v4(
+    value: FailureSessionReleaseDispositionV3,
+) -> FailureSessionReleaseDispositionV4 {
+    match value {
+        FailureSessionReleaseDispositionV3::Resolved => FailureSessionReleaseDispositionV4::Resolved,
+        FailureSessionReleaseDispositionV3::Exhausted => FailureSessionReleaseDispositionV4::Exhausted,
+        FailureSessionReleaseDispositionV3::SourceAbsent => FailureSessionReleaseDispositionV4::SourceAbsent,
+        FailureSessionReleaseDispositionV3::SourceRefused => FailureSessionReleaseDispositionV4::SourceRefused,
+    }
 }
 
 impl AuthenticatedSourceFailureProductReleaseAuthorityV1
@@ -1424,7 +1458,8 @@ impl AuthenticatedSourceFailureProductReleaseAuthorityV1
                     == self.append.session_terminal_receipt_id().bytes()
                 && expected.product_release_preauthorization_id
                     == self.release_link_preauthorization_id
-                && expected.product_release_disposition == self.release_disposition
+                && expected.product_release_disposition
+                    == current_release_disposition_v4(self.release_disposition)
                 && expected.product_session_transcript_before.bytes()
                     == self.append.session_binding_id().bytes()
                 && source_failure.facts().source_terminal_postwrite_id == source.id(),
@@ -1503,6 +1538,66 @@ impl AuthenticatedSeriesFailureArchivePostwriteV3 for FailureMarketIntervalArchi
                 && session_terminal_receipt_id.bytes()
                     == self.append.session_terminal_receipt_id().bytes()
                 && disposition == self.release_disposition
+                && release_link_preauthorization_id == self.release_link_preauthorization_id,
+            ClutchError::MismatchedState,
+        )
+    }
+}
+
+impl AuthenticatedSeriesFailureArchivePostwriteV4 for FailureMarketIntervalArchivePostwriteV3 {
+    fn archive_postwrite_id(&self) -> Outcome<ProductContentId> { Ok(self.id) }
+    fn append_receipt_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(self.append.id().bytes()))
+    }
+    fn reset_receipt_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(self.reset.id().bytes()))
+    }
+    fn market_instance_id(&self) -> Outcome<clutch_product_series::MarketInstanceV2Id> {
+        Ok(self.append.market_instance_id())
+    }
+    fn generation(&self) -> Outcome<u64> { Ok(self.append.generation()) }
+    fn source_occurrence_id(&self) -> Outcome<SourceOccurrenceV1Id> {
+        Ok(self.source_occurrence_id)
+    }
+    fn session_binding_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(self.append.session_binding_id().bytes()))
+    }
+    fn session_terminal_receipt_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(
+            self.append.session_terminal_receipt_id().bytes(),
+        ))
+    }
+    fn release_link_preauthorization_id(&self) -> Outcome<ProductContentId> {
+        Ok(self.release_link_preauthorization_id)
+    }
+    fn release_disposition(&self) -> Outcome<FailureSessionReleaseDispositionV4> {
+        Ok(current_release_disposition_v4(self.release_disposition))
+    }
+    fn authenticate_series_failure_archive_release_postwrite_v4(
+        &self,
+        archive_postwrite_id: ProductContentId,
+        append_receipt_id: ProductContentId,
+        reset_receipt_id: ProductContentId,
+        market_instance_id: clutch_product_series::MarketInstanceV2Id,
+        generation: u64,
+        source_occurrence_id: SourceOccurrenceV1Id,
+        session_binding_id: ProductContentId,
+        session_terminal_receipt_id: ProductContentId,
+        disposition: FailureSessionReleaseDispositionV4,
+        release_link_preauthorization_id: ProductContentId,
+    ) -> Outcome<()> {
+        require(
+            archive_postwrite_id == self.id
+                && append_receipt_id.bytes() == self.append.id().bytes()
+                && reset_receipt_id.bytes() == self.reset.id().bytes()
+                && market_instance_id == self.append.market_instance_id()
+                && generation == self.append.generation()
+                && source_occurrence_id == self.source_occurrence_id
+                && session_binding_id.bytes() == self.append.session_binding_id().bytes()
+                && session_terminal_receipt_id.bytes()
+                    == self.append.session_terminal_receipt_id().bytes()
+                && disposition
+                    == <Self as AuthenticatedSeriesFailureArchivePostwriteV4>::release_disposition(self)?
                 && release_link_preauthorization_id == self.release_link_preauthorization_id,
             ClutchError::MismatchedState,
         )
