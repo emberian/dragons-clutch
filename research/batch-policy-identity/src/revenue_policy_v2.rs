@@ -197,8 +197,6 @@ pub enum RevenuePolicyErrorV2 {
     /// V2 has no authenticated executor identity and therefore refuses a
     /// nonzero executor share.
     ExecutorIdentityAbsent,
-    /// The treasury share is below the 25 percent envelope floor.
-    TreasuryBelowEnvelope,
     /// Treasury owner is the all-zero key.
     UnownedTreasury,
     /// Treasury owner is the V1 deferred sentinel.
@@ -286,15 +284,6 @@ impl RevenuePolicyV2 {
         }
         if self.executor_num != 0 {
             return Err(RevenuePolicyErrorV2::ExecutorIdentityAbsent);
-        }
-        if u128::from(self.treasury_num)
-            .checked_mul(100)
-            .ok_or(RevenuePolicyErrorV2::Arithmetic)?
-            < u128::from(self.split_den)
-                .checked_mul(25)
-                .ok_or(RevenuePolicyErrorV2::Arithmetic)?
-        {
-            return Err(RevenuePolicyErrorV2::TreasuryBelowEnvelope);
         }
         Ok(())
     }
@@ -543,11 +532,17 @@ mod tests {
             (RevenuePolicyV2 { split_den: 0, ..valid }, RevenuePolicyErrorV2::ZeroDenominator),
             (RevenuePolicyV2 { maker_rebate_num: 61, ..valid }, RevenuePolicyErrorV2::SplitSumMismatch),
             (RevenuePolicyV2 { maker_rebate_num: 59, executor_num: 1, ..valid }, RevenuePolicyErrorV2::ExecutorIdentityAbsent),
-            (RevenuePolicyV2 { maker_rebate_num: 76, treasury_num: 24, ..valid }, RevenuePolicyErrorV2::TreasuryBelowEnvelope),
         ];
         for (candidate, expected) in cases {
             assert_eq!(candidate.validate(), Err(expected));
         }
+        assert!(RevenuePolicyV2 {
+            maker_rebate_num: 90,
+            treasury_num: 10,
+            ..valid
+        }
+        .validate()
+        .is_ok());
     }
 
     #[test]
