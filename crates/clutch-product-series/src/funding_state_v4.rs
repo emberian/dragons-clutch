@@ -491,7 +491,7 @@ pub struct SeriesFundingStateV4 {
     pub pending_market_instance_id: ContentId,
     /// Exact pending compiled Source occurrence, or zero outside Pending.
     pub pending_source_occurrence_id: ContentId,
-    /// Exact pending 0xad semantic state, or zero outside Pending.
+    /// Exact acyclic pre-Source reservation binding, or zero outside Pending.
     pub pending_pre_source_reservation_binding_id: ContentId,
     /// Exact pending ordinal; zero outside Pending.
     pub pending_ordinal: u32,

@@ -25,7 +25,7 @@ use clutch_product_series::{
     AuthenticatedMarketFamilyAuthorityV1, MarketFamilyAggregatorV1, MarketFamilyStatusV1,
     MarketFamilyV1,
     MarketLifecyclePhaseV2, MarketLifecycleRootV2, MarketResolutionActivationV2,
-    SeriesFundingStateV3,
+    SeriesFundingStateV3, SeriesFundingStateV4,
     AuthenticatedSeriesFundingAuthorityV3, SeriesFundingComponentV2,
     SeriesFundingPhaseV3, SeriesFundingQuoteV5, SeriesFundingTermsV2Id,
     RegistryCapabilityProjectionV2,
@@ -41,9 +41,11 @@ use clutch_product_series::{
 };
 use clutch_solana_layout::product_series::{
     series_market_link_authentication_id_v2, MarketLifecycleRootAccountV2,
-    SeriesFundingAccountV3, SeriesLifecycleReplayAccountV2, SeriesMarketLinkAccountV2,
+    SeriesFundingAccountV3, SeriesFundingAccountV4, SeriesLifecycleReplayAccountV2,
+    SeriesMarketLinkAccountV2,
     SeriesRegistryAccountV3, MARKET_LIFECYCLE_ROOT_ACCOUNT_BYTES_V2,
-    SERIES_FUNDING_ACCOUNT_BYTES_V3, SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2,
+    SERIES_FUNDING_ACCOUNT_BYTES_V3, SERIES_FUNDING_ACCOUNT_BYTES_V4,
+    SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V2,
     SERIES_MARKET_LINK_ACCOUNT_BYTES_V2, SERIES_REGISTRY_ACCOUNT_BYTES_V3,
 };
 use solana_account_info::AccountInfo;
@@ -57,6 +59,8 @@ const REGISTRY_CAPABILITY_AUTHENTICATION_DOMAIN_V4: &[u8] =
     b"dragons-clutch/registry-capability-authentication/v4\0";
 const SERIES_FUNDING_AUTHENTICATION_DOMAIN_V3: &[u8] =
     b"dragons-clutch/series-funding-account-authentication/v3\0";
+const SERIES_FUNDING_AUTHENTICATION_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/series-funding-account-authentication/v4\0";
 const SERIES_LIFECYCLE_REPLAY_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-lifecycle-replay-authentication/v2\0";
 const MARKET_LIFECYCLE_AUTHENTICATION_DOMAIN_V2: &[u8] =
@@ -269,6 +273,30 @@ impl AuthenticatedSeriesFundingAccountV3 {
     pub(crate) const fn is_writable(self) -> bool { self.writable }
     pub(crate) const fn data_id(self) -> ContentId { self.data_id }
     pub(crate) const fn authentication_id(self) -> ContentId { self.authentication_id }
+}
+
+/// Exact current 0x80/version4 acyclic funding authentication.
+///
+/// The receipt is non-Copy; downstream code borrows the decoded body so the
+/// 756-byte account is moved exactly once across each transition boundary.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSeriesFundingAccountV4 {
+    account: Pubkey,
+    value: SeriesFundingAccountV4,
+    observed_lamports: u64,
+    writable: bool,
+    data_id: ContentId,
+    authentication_id: ContentId,
+}
+
+impl AuthenticatedSeriesFundingAccountV4 {
+    pub(crate) const fn account(&self) -> Pubkey { self.account }
+    pub(crate) const fn value(&self) -> &SeriesFundingAccountV4 { &self.value }
+    pub(crate) const fn state(&self) -> &SeriesFundingStateV4 { &self.value.state }
+    pub(crate) const fn observed_lamports(&self) -> u64 { self.observed_lamports }
+    pub(crate) const fn is_writable(&self) -> bool { self.writable }
+    pub(crate) const fn data_id(&self) -> ContentId { self.data_id }
+    pub(crate) const fn authentication_id(&self) -> ContentId { self.authentication_id }
 }
 
 /// Exact current permanent 0xb8/version2 replay authentication.
@@ -2075,6 +2103,74 @@ pub(crate) fn authenticate_series_funding_account_v3(
         writable: account.is_writable, data_id, authentication_id })
 }
 
+/// Hostile-authenticate only the exact acyclic FundingV4 account coordinate.
+/// Historical FundingV1-V3 bytes are refused by exact length/version decode.
+pub(crate) fn authenticate_series_funding_account_v4(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected_series_plan_id: SeriesPlanV5Id,
+    require_writable: bool,
+) -> Outcome<AuthenticatedSeriesFundingAccountV4> {
+    require(
+        !account.is_signer
+            && !account.executable
+            && account.is_writable == require_writable
+            && account.owner == program_id
+            && account.data_len() == SERIES_FUNDING_ACCOUNT_BYTES_V4,
+        ClutchError::MismatchedState,
+    )?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let value = SeriesFundingAccountV4::decode(&data)?;
+    require(
+        value.state.series_plan_id == expected_series_plan_id,
+        ClutchError::MismatchedState,
+    )?;
+    let (expected, bump) = seeds::series_funding_pda(program_id, &expected_series_plan_id.bytes());
+    expect_pda(account.key, (expected, bump), Some(value.stored_bump))?;
+    let data_id = hash_data(&data);
+    drop(data);
+    let state_id = value
+        .state
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let observed_lamports = account.lamports();
+    require(
+        observed_lamports >= value.rent_principal_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    let mut vault_rent = [0u8; 40];
+    for (index, principal) in value
+        .collateral_vault_rent_principal_lamports
+        .iter()
+        .enumerate()
+    {
+        let at = index.checked_mul(8).ok_or(ClutchError::Arithmetic)?;
+        vault_rent[at..at + 8].copy_from_slice(&principal.to_le_bytes());
+    }
+    let authentication_id = hashv(&[
+        SERIES_FUNDING_AUTHENTICATION_DOMAIN_V4,
+        account.key.as_ref(),
+        program_id.as_ref(),
+        &data_id.bytes(),
+        &state_id.bytes(),
+        &value.rent_principal_lamports.to_le_bytes(),
+        &vault_rent,
+        &observed_lamports.to_le_bytes(),
+        &[value.stored_bump],
+    ]);
+    require_live(authentication_id)?;
+    Ok(AuthenticatedSeriesFundingAccountV4 {
+        account: *account.key,
+        value,
+        observed_lamports,
+        writable: account.is_writable,
+        data_id,
+        authentication_id,
+    })
+}
+
 pub(crate) fn authenticate_series_lifecycle_replay_v2(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
@@ -2169,6 +2265,66 @@ fn write_series_funding_state_v3(
             && rebound.observed_lamports() == authenticated.observed_lamports()
             && rebound.authentication_id() != authenticated.authentication_id()
             && rebound.data_id() != authenticated.data_id(),
+        ClutchError::MismatchedState,
+    )?;
+    Ok(rebound)
+}
+
+/// Private raw FundingV4 writer. Only the sole reservation/completion/abort
+/// compositors in this module may turn an authenticated body into a successor.
+fn write_series_funding_state_v4(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    authenticated: AuthenticatedSeriesFundingAccountV4,
+    successor: SeriesFundingStateV4,
+) -> Outcome<AuthenticatedSeriesFundingAccountV4> {
+    let before = authenticated.value();
+    require(
+        account.is_writable
+            && *account.key == authenticated.account()
+            && account.owner == program_id
+            && successor.series_plan_id == before.state.series_plan_id
+            && successor.funding_terms_id == before.state.funding_terms_id
+            && successor.funding_quote_id == before.state.funding_quote_id
+            && successor.attachment_plan_id == before.state.attachment_plan_id
+            && successor.compiler_bundle_id == before.state.compiler_bundle_id
+            && successor.instance_count == before.state.instance_count,
+        ClutchError::MismatchedState,
+    )?;
+    let live = authenticate_series_funding_account_v4(
+        program_id,
+        account,
+        before.state.series_plan_id,
+        true,
+    )?;
+    require(live == authenticated, ClutchError::MismatchedState)?;
+    let successor_account = SeriesFundingAccountV4 {
+        state: successor,
+        rent_principal_lamports: before.rent_principal_lamports,
+        collateral_vault_rent_principal_lamports: before
+            .collateral_vault_rent_principal_lamports,
+        stored_bump: before.stored_bump,
+    };
+    let observed_lamports_before = authenticated.observed_lamports();
+    let authentication_before = authenticated.authentication_id();
+    let data_before = authenticated.data_id();
+    {
+        let mut data = account
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        successor_account.encode(&mut data)?;
+    }
+    let rebound = authenticate_series_funding_account_v4(
+        program_id,
+        account,
+        successor_account.state.series_plan_id,
+        true,
+    )?;
+    require(
+        rebound.value() == &successor_account
+            && rebound.observed_lamports() == observed_lamports_before
+            && rebound.authentication_id() != authentication_before
+            && rebound.data_id() != data_before,
         ClutchError::MismatchedState,
     )?;
     Ok(rebound)
@@ -4148,6 +4304,18 @@ mod source_contract_tests {
         assert!(source.contains("funding.pending_series_market_link_id == link_semantic_before.content_id()"));
         assert!(source.contains("funding.pending_reservation_receipt_id == link_binding.funding_debit_receipt_id"));
         assert!(source.contains(".record_admission(admission)"));
+    }
+
+    #[test]
+    fn funding_v4_authentication_is_fresh_and_raw_writer_is_private() {
+        let source = include_str!("product_series_current.rs");
+        assert!(source.contains("SERIES_FUNDING_AUTHENTICATION_DOMAIN_V4"));
+        assert!(source.contains("SeriesFundingAccountV4::decode(&data)"));
+        assert!(source.contains("account.data_len() == SERIES_FUNDING_ACCOUNT_BYTES_V4"));
+        assert!(source.contains("fn write_series_funding_state_v4("));
+        assert!(!source.contains("pub(crate) fn write_series_funding_state_v4("));
+        assert!(source.contains("rebound.authentication_id() != authentication_before"));
+        assert!(source.contains("rebound.data_id() != data_before"));
     }
 
     #[test]
