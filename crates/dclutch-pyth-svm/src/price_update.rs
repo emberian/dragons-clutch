@@ -314,4 +314,20 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn captured_upgraded_provider_account_matches_the_pinned_synthetic_message()
+    -> PriceUpdateV2Result<()> {
+        let bytes =
+            include_bytes!("../../../fixtures/pyth/local-upgraded-2026-08-22/price-update.account");
+        let parsed = FullPriceUpdateV2::parse(bytes)?;
+        assert_eq!(parsed.feed_id(), [0x2a; 32]);
+        assert_eq!(parsed.price(), 100_000_000);
+        assert_eq!(parsed.confidence(), 6_357);
+        assert_eq!(parsed.exponent(), -8);
+        assert_eq!(parsed.publish_time(), 1_787_431_680);
+        assert_eq!(parsed.prev_publish_time(), 1_787_431_679);
+        assert_eq!(parsed.posted_slot(), 287);
+        Ok(())
+    }
 }
