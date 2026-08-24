@@ -192,13 +192,10 @@ version = "0.1.0"
 dependencies = [
  "clutch-collateral-adapter-v2",
  "clutch-general-v2-contract",
- "clutch-kernel",
  "clutch-owner-settlement",
- "clutch-product-series",
  "clutch-retirement",
  "clutch-retirement-adapter",
  "clutch-solana-layout",
- "clutch-solana-reference",
  "clutch-structured-claim",
  "clutch-structured-claim-runtime-contract",
  "sha2",
