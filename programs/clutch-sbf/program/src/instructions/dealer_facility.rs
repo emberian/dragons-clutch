@@ -26,6 +26,7 @@ use clutch_dealer_runtime_contract::{
     prepare_lapse_epoch_v3, project_covered_dealer_position_v1,
     prepare_lp_contribution_v2, prepare_lp_withdrawal_v2, prepare_next_lp_page_v2,
     prepare_refund_cancelled_sponsor_v3, prepare_sponsor_halt_dealer_v3,
+    prepare_increase_exit_ticket_v1, prepare_new_exit_ticket_v1,
     prepare_timed_close_dealer_v3,
     CoveredDealerSelectionContextV1,
     CoveredDealerRowAssetTransitionV2, CoveredDealerSelectionV1, CoveredDealerTerminalV2,
@@ -35,7 +36,8 @@ use clutch_dealer_runtime_contract::{
     DealerEpochCloseCreditsV2, DealerEpochCloseRentV2,
     DealerEpochBindingV2, DealerFacilityGenesisV1, DealerFacilityReplayV1,
     DealerFundedBudgetDependenciesV1, DealerFundedDependenciesV2, DealerGeneralEpochEvidenceV3,
-    DealerLivenessCompartmentV1, DealerLivenessScheduleV1, DealerPhaseV2,
+    DealerExitTicketV1, DealerLivenessCompartmentV1, DealerLivenessScheduleV1,
+    DealerPhaseV2, DealerQueueExitLivenessV1,
     DealerPositionMarketJoinV2, DealerPositionObservationV3, DealerReplayAccountBindingV1,
     DealerRuntimeActionV1, DealerRuntimeLivenessBindingV1, DealerSelectedFeeRecordBindingV1,
     DealerSeriesObligationBindingV1, DealerSeriesObligationKeyV1,
@@ -119,6 +121,8 @@ use clutch_solana_layout::registry::{
     DEALER_EPOCH_BINDING_V2_ACCOUNT_TAG, DEALER_EPOCH_BINDING_V2_ACCOUNT_VERSION,
     DEALER_COVERED_SELECTION_ACCOUNT_BYTES, DEALER_COVERED_SELECTION_ACCOUNT_TAG,
     DEALER_COVERED_SELECTION_ACCOUNT_VERSION, DEALER_COVERED_TERMINAL_ACCOUNT_VERSION,
+    DEALER_EXIT_TICKET_ACCOUNT_BYTES, DEALER_EXIT_TICKET_ACCOUNT_TAG,
+    DEALER_EXIT_TICKET_ACCOUNT_VERSION,
     DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_BYTES, DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_TAG,
     DEALER_FUNDED_DEPENDENCIES_V2_ACCOUNT_VERSION, DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES,
     DEALER_LIVENESS_SCHEDULE_ACCOUNT_TAG, DEALER_LIVENESS_SCHEDULE_ACCOUNT_VERSION,
@@ -191,6 +195,9 @@ const REFUND_CANCELLED_SPONSOR_ACCOUNT_COUNT: usize =
 const BIND_EPOCH_ACCOUNT_COUNT: usize = 24;
 const LAPSE_EPOCH_ACCOUNT_COUNT: usize = 25;
 const TIMED_CLOSE_ACCOUNT_COUNT: usize = 21;
+const QUEUE_EXIT_CALLER_NEW_ACCOUNT_COUNT: usize = 10;
+const QUEUE_EXIT_CALLER_EXISTING_ACCOUNT_COUNT: usize = 8;
+const QUEUE_EXIT_EXTERNAL_ACCOUNT_COUNT: usize = 22;
 const SELECT_LEASE_BEGIN_FIXED_ACCOUNT_COUNT: usize = 58;
 const COLLECT_DELIVER_FIXED_ACCOUNT_COUNT: usize = 43;
 const FINALIZE_ABORT_ACCOUNT_COUNT: usize = 30 + DEALER_COLLATERAL_AUTHORITY_ACCOUNT_COUNT;
@@ -886,14 +893,15 @@ fn authenticate_schedule(
     Ok(schedule)
 }
 
-fn authenticate_lp_page(
+fn authenticate_lp_page_with_access(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
+    writable: bool,
 ) -> Outcome<LpPageV2> {
     let (bump, page) = dealer_body::<LpPageV2>(
         program_id,
         account,
-        true,
+        writable,
         DEALER_LP_PAGE_V2_ACCOUNT_TAG,
         DEALER_LP_PAGE_V2_ACCOUNT_VERSION,
         DEALER_LP_PAGE_V2_ACCOUNT_BYTES,
@@ -913,6 +921,46 @@ fn authenticate_lp_page(
         ClutchError::DealerPolicyRentMismatch,
     )?;
     Ok(page)
+}
+
+fn authenticate_lp_page(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+) -> Outcome<LpPageV2> {
+    authenticate_lp_page_with_access(program_id, account, true)
+}
+
+fn authenticate_exit_ticket(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+) -> Outcome<(u8, DealerExitTicketV1)> {
+    let (bump, ticket) = dealer_body::<DealerExitTicketV1>(
+        program_id,
+        account,
+        true,
+        DEALER_EXIT_TICKET_ACCOUNT_TAG,
+        DEALER_EXIT_TICKET_ACCOUNT_VERSION,
+        DEALER_EXIT_TICKET_ACCOUNT_BYTES,
+    )?;
+    expect_pda(
+        account.key,
+        seeds::dealer_exit_ticket_pda(
+            program_id,
+            &ticket.facility_id.bytes(),
+            &ticket.owner.bytes(),
+        ),
+        Some(bump),
+    )?;
+    let floor = ticket
+        .rent
+        .refundable_principal
+        .checked_add(ticket.rent.donation_floor)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(
+        account.lamports() >= floor,
+        ClutchError::DealerPolicyRentMismatch,
+    )?;
+    Ok((bump, ticket))
 }
 
 fn authenticate_epoch_binding_with_access(
@@ -3920,6 +3968,383 @@ fn timed_close(
             && retirement_data.as_ref() == liveness_transition.post_account_data.as_slice(),
         ClutchError::MismatchedState,
     )
+}
+
+/// Queue an immutable LP owner's exit without mutating its sealed page.
+/// Caller-funded and optional Retirement-funded maintenance share one exact
+/// StateV3/Position/Replay/Product-obligation boundary. New ticket rent is
+/// always supplied by the owner; Hoard collateral and fee state are absent.
+#[inline(never)]
+fn queue_exit(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    sequence: u64,
+    payload_bytes: &[u8],
+) -> Outcome<()> {
+    let payload = DealerRuntimePayloadV1::decode(DealerFacilityAction::QueueExit, payload_bytes)
+        .map_err(dealer_fault)?;
+    let expected_count = if payload.external_liveness {
+        QUEUE_EXIT_EXTERNAL_ACCOUNT_COUNT
+    } else if payload.existing_ticket {
+        QUEUE_EXIT_CALLER_EXISTING_ACCOUNT_COUNT
+    } else {
+        QUEUE_EXIT_CALLER_NEW_ACCOUNT_COUNT
+    };
+    require_count(accounts, expected_count)?;
+    require(
+        sequence == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    require_signer(&accounts[0])?;
+    if !payload.existing_ticket || payload.external_liveness {
+        require(accounts[0].is_writable, ClutchError::NotWritable)?;
+    }
+    if payload.external_liveness {
+        require_aliases(accounts, (0, 18))?;
+    }
+
+    let (policy_id, policy) = authenticate_catalog_policy(program_id, &accounts[1])?;
+    let authenticated_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
+    let state_v3 = *authenticated_state.state();
+    let state = state_v3.base;
+    require(
+        state.policy_id.bytes() == policy_id && state.generation == payload.expected_generation,
+        ClutchError::MismatchedState,
+    )?;
+    let obligation_index = if payload.external_liveness { 21 } else { 7 };
+    let obligation = authenticate_live_series_obligation_for_state_v3(
+        program_id,
+        &accounts[obligation_index],
+        &accounts[2],
+        &state_v3,
+    )?;
+    let (position_binding, position, replay, replay_binding) =
+        authenticate_position_and_replay(
+            program_id,
+            &accounts[2],
+            &accounts[3],
+            &accounts[4],
+            &policy,
+            &state,
+            false,
+        )?;
+    require(
+        replay.next_transition_ordinal() == payload.expected_replay_ordinal,
+        ClutchError::Replay,
+    )?;
+    let page = authenticate_lp_page_with_access(program_id, &accounts[5], false)?;
+    require(
+        page.page_ordinal == payload.page_ordinal
+            && usize::from(payload.entry_index) < usize::from(page.entry_count)
+            && page.entries[usize::from(payload.entry_index)].owner == id(accounts[0].key),
+        ClutchError::MismatchedState,
+    )?;
+    let (expected_ticket, expected_ticket_bump) = seeds::dealer_exit_ticket_pda(
+        program_id,
+        &state.facility_id.bytes(),
+        &accounts[0].key.to_bytes(),
+    );
+    expect_pda(accounts[6].key, (expected_ticket, expected_ticket_bump), None)?;
+
+    let rent = if payload.external_liveness {
+        Some(read_rent(&accounts[19])?)
+    } else if !payload.existing_ticket {
+        Some(read_rent(&accounts[8])?)
+    } else {
+        None
+    };
+    let ticket_principal = if payload.existing_ticket {
+        0
+    } else {
+        let rent = rent.as_ref().ok_or(ClutchError::MismatchedState)?;
+        require_creatable(&accounts[6])?;
+        let principal = rent.minimum_balance(DEALER_EXIT_TICKET_ACCOUNT_BYTES)?;
+        require(principal != 0, ClutchError::DealerPolicyRentMismatch)?;
+        principal
+    };
+    let ticket_donation = if payload.existing_ticket {
+        0
+    } else {
+        accounts[6].lamports()
+    };
+    let existing_ticket = if payload.existing_ticket {
+        let (stored_bump, ticket) = authenticate_exit_ticket(program_id, &accounts[6])?;
+        require(
+            stored_bump == expected_ticket_bump
+                && ticket.owner == id(accounts[0].key)
+                && ticket.page_ordinal == payload.page_ordinal
+                && ticket.entry_index == payload.entry_index,
+            ClutchError::MismatchedState,
+        )?;
+        Some(ticket)
+    } else {
+        None
+    };
+
+    let mut liveness_transition = None;
+    let mut receipt_postwrite = None;
+    let liveness = if payload.external_liveness {
+        require_system_program(&accounts[20])?;
+        let dependency = authenticate_dependency(program_id, &accounts[7], state.facility_id)?;
+        let schedule = authenticate_schedule(program_id, &accounts[8])?;
+        let (runtime_policy, runtime_states, runtime_binding) = authenticate_runtime_bundle(
+            program_id,
+            &dependency,
+            &accounts[9],
+            &accounts[10..17],
+            DealerLivenessCompartmentV1::Retirement.index(),
+        )?;
+        validate_runtime_dependency_join(
+            program_id,
+            &accounts[2],
+            &policy,
+            &state,
+            &position_binding,
+            &dependency,
+            &schedule,
+            runtime_policy,
+            runtime_binding,
+        )?;
+        let retirement = runtime_states[DealerLivenessCompartmentV1::Retirement.index()];
+        require(
+            retirement.identity.payer.bytes() == accounts[18].key.to_bytes()
+                && accounts[8].lamports()
+                    >= rent
+                        .as_ref()
+                        .ok_or(ClutchError::MismatchedState)?
+                        .minimum_balance(DEALER_LIVENESS_SCHEDULE_ACCOUNT_BYTES)?,
+            ClutchError::MismatchedState,
+        )?;
+        require_creatable(&accounts[17])?;
+        let receipt_principal = rent
+            .as_ref()
+            .ok_or(ClutchError::MismatchedState)?
+            .minimum_balance(DEALER_ACTION_RECEIPT_ACCOUNT_BYTES)?;
+        let action_index =
+            DealerLivenessScheduleV1::action_index(DealerRuntimeActionV1::QueueExit);
+        let receipt = DealerActionReceiptV1 {
+            policy_id: state.policy_id,
+            facility_id: state.facility_id,
+            dealer_state_account_id: id(accounts[2].key),
+            liveness_schedule_id: schedule.schedule_id().map_err(dealer_fault)?.untyped(),
+            runtime_policy_id: runtime_binding.runtime_policy_id(),
+            runtime_account_id: runtime_binding
+                .account_id(DealerLivenessCompartmentV1::Retirement),
+            runtime_owner: runtime_binding.owner(DealerLivenessCompartmentV1::Retirement),
+            quote_schedule_id: runtime_binding
+                .quote_schedule_id(DealerLivenessCompartmentV1::Retirement),
+            receipt_account_id: id(accounts[17].key),
+            receipt_program_id: id(program_id),
+            keeper: id(accounts[0].key),
+            replay_account_id: id(accounts[4].key),
+            action: DealerRuntimeActionV1::QueueExit,
+            compartment: DealerLivenessCompartmentV1::Retirement,
+            runtime_generation: runtime_binding
+                .generation(DealerLivenessCompartmentV1::Retirement),
+            facility_generation: state.generation,
+            call_ordinal: payload.liveness_call_ordinal,
+            call_ceiling_lamports: schedule.reward_lamports[action_index],
+            keeper_payment_lamports: payload.keeper_payment_lamports,
+            expected_replay_ordinal: payload.expected_replay_ordinal,
+            rent: DeletableRentOwnerV1 {
+                payer: id(accounts[0].key),
+                neutral_sink: policy.neutral_sink,
+                refundable_principal: receipt_principal,
+                donation_floor: accounts[17].lamports(),
+            },
+        };
+        let receipt_slot = receipt.receipt_slot_id().map_err(dealer_fault)?;
+        let (receipt_address, receipt_bump) =
+            seeds::dealer_action_receipt_pda(program_id, &receipt_slot.bytes());
+        expect_pda(accounts[17].key, (receipt_address, receipt_bump), None)?;
+        receipt
+            .validate_against(&schedule, &runtime_binding)
+            .map_err(dealer_fault)?;
+        let authorization = receipt
+            .authorization(&schedule, &runtime_binding, &retirement)
+            .map_err(dealer_fault)?;
+        let transition = plan_liveness_spend_absorbing_donation(
+            program_id,
+            &accounts[9],
+            &accounts[15],
+            retirement,
+            receipt.runtime_transition_intent().map_err(dealer_fault)?,
+            receipt
+                .runtime_receipt_observation()
+                .map_err(dealer_fault)?,
+        )?;
+        let checked = DealerQueueExitLivenessV1::external(
+            &schedule,
+            &runtime_binding,
+            &authorization,
+            &state,
+            id(accounts[2].key),
+        )
+        .map_err(dealer_fault)?;
+        liveness_transition = Some(transition);
+        receipt_postwrite = Some((receipt, receipt_bump, receipt_principal));
+        checked
+    } else {
+        DealerQueueExitLivenessV1::caller_funded()
+    };
+
+    let (ticket_after, state_after_base, replay_after) = if let Some(ticket) = existing_ticket {
+        let prepared = prepare_increase_exit_ticket_v1(
+            &policy,
+            &state,
+            id(accounts[2].key),
+            id(accounts[5].key),
+            &page,
+            &ticket,
+            payload.share_delta,
+            liveness,
+            &replay,
+            replay_binding,
+        )
+        .map_err(dealer_fault)?;
+        (
+            prepared.ticket_after,
+            prepared.state_after,
+            prepared.replay,
+        )
+    } else {
+        let prepared = prepare_new_exit_ticket_v1(
+            &policy,
+            &state,
+            id(accounts[2].key),
+            id(accounts[5].key),
+            &page,
+            payload.entry_index,
+            id(accounts[0].key),
+            payload.share_delta,
+            DeletableRentOwnerV1 {
+                payer: id(accounts[0].key),
+                neutral_sink: policy.neutral_sink,
+                refundable_principal: ticket_principal,
+                donation_floor: ticket_donation,
+            },
+            liveness,
+            &replay,
+            replay_binding,
+        )
+        .map_err(dealer_fault)?;
+        (prepared.ticket, prepared.state_after, prepared.replay)
+    };
+    let state_after = state_v3.with_base(state_after_base).map_err(dealer_fault)?;
+
+    if !payload.existing_ticket {
+        let rent = rent.as_ref().ok_or(ClutchError::MismatchedState)?;
+        let system_index = if payload.external_liveness { 20 } else { 9 };
+        let (observed_principal, observed_donation) = create_full_principal_pda(
+            program_id,
+            &accounts[0],
+            &accounts[6],
+            &accounts[system_index],
+            rent,
+            DEALER_EXIT_TICKET_ACCOUNT_BYTES,
+            &[
+                seeds::SEED_DEALER_EXIT_TICKET,
+                &state.facility_id.bytes(),
+                &accounts[0].key.to_bytes(),
+                &[expected_ticket_bump],
+            ],
+        )?;
+        require(
+            observed_principal == ticket_principal && observed_donation == ticket_donation,
+            ClutchError::DealerPolicyRentMismatch,
+        )?;
+    }
+    if let Some((receipt, receipt_bump, receipt_principal)) = receipt_postwrite {
+        let rent = rent.as_ref().ok_or(ClutchError::MismatchedState)?;
+        let (observed_principal, observed_donation) = create_full_principal_pda(
+            program_id,
+            &accounts[0],
+            &accounts[17],
+            &accounts[20],
+            rent,
+            DEALER_ACTION_RECEIPT_ACCOUNT_BYTES,
+            &[
+                seeds::SEED_DEALER_ACTION_RECEIPT,
+                &receipt.receipt_slot_id().map_err(dealer_fault)?.bytes(),
+                &[receipt_bump],
+            ],
+        )?;
+        require(
+            observed_principal == receipt_principal
+                && observed_donation == receipt.rent().donation_floor,
+            ClutchError::DealerPolicyRentMismatch,
+        )?;
+        apply_liveness_transition(
+            &accounts[15],
+            &accounts[0],
+            &accounts[18],
+            &liveness_transition.ok_or(ClutchError::MismatchedState)?,
+        )?;
+        write_dealer_body(
+            &accounts[17],
+            DEALER_ACTION_RECEIPT_ACCOUNT_TAG,
+            DEALER_ACTION_RECEIPT_ACCOUNT_VERSION,
+            receipt_bump,
+            &receipt,
+        )?;
+    }
+    write_dealer_body(
+        &accounts[6],
+        DEALER_EXIT_TICKET_ACCOUNT_TAG,
+        DEALER_EXIT_TICKET_ACCOUNT_VERSION,
+        expected_ticket_bump,
+        &ticket_after,
+    )?;
+    write_dealer_body(
+        &accounts[2],
+        DEALER_STATE_V3_ACCOUNT_TAG,
+        DEALER_STATE_V3_ACCOUNT_VERSION,
+        authenticated_state.bump(),
+        &state_after,
+    )?;
+    replay_after
+        .replay_post()
+        .encode_into(&mut accounts[4].data.borrow_mut())
+        .map_err(dealer_fault)?;
+
+    let observed_state = authenticate_dealer_state_v3(program_id, &accounts[2], true)?;
+    let observed_obligation = authenticate_dealer_series_obligation_v1(
+        program_id,
+        &accounts[obligation_index],
+        false,
+    )?;
+    let (_, observed_ticket) = authenticate_exit_ticket(program_id, &accounts[6])?;
+    let (_, observed_position, observed_replay, _) = authenticate_position_and_replay(
+        program_id,
+        &accounts[2],
+        &accounts[3],
+        &accounts[4],
+        &policy,
+        &state_after_base,
+        false,
+    )?;
+    require(
+        observed_state.state() == &state_after
+            && observed_obligation.binding() == &obligation
+            && observed_ticket == ticket_after
+            && observed_position == position
+            && observed_replay == replay_after.replay_post(),
+        ClutchError::MismatchedState,
+    )?;
+    if let Some((receipt, _, _)) = receipt_postwrite {
+        let (_, observed_receipt) = authenticate_action_receipt(program_id, &accounts[17])?;
+        let transition = liveness_transition.ok_or(ClutchError::MismatchedState)?;
+        let retirement_data = accounts[15]
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        require(
+            observed_receipt == receipt
+                && accounts[15].lamports() == transition.account_balance_after
+                && retirement_data.as_ref() == transition.post_account_data.as_slice(),
+            ClutchError::MismatchedState,
+        )?;
+    }
+    Ok(())
 }
 
 #[inline(never)]
@@ -7439,6 +7864,7 @@ pub fn process(
             | DealerFacilityAction::Deliver
             | DealerFacilityAction::FinalizeSettlement
             | DealerFacilityAction::AbortBeforeCollection
+            | DealerFacilityAction::QueueExit
             | DealerFacilityAction::SponsorHalt
             | DealerFacilityAction::TimedClose
     );
@@ -7483,6 +7909,9 @@ pub fn process(
         DealerFacilityAction::FinalizeSettlement
         | DealerFacilityAction::AbortBeforeCollection => {
             finalize_or_abort_lease_pot(program_id, accounts, sequence, action, payload)
+        }
+        DealerFacilityAction::QueueExit => {
+            queue_exit(program_id, accounts, sequence, payload)
         }
         DealerFacilityAction::SponsorHalt => {
             sponsor_halt(program_id, accounts, sequence, payload)
@@ -7771,6 +8200,128 @@ mod timed_close_adversarial_tests {
             DEALER_FAMILY_TAG,
             DEALER_FAMILY_VERSION,
             DealerFacilityAction::TimedClose.tag(),
+        ));
+    }
+}
+
+#[cfg(test)]
+mod queue_exit_adversarial_tests {
+    use super::{
+        DealerRuntimePayloadV1, QUEUE_EXIT_CALLER_EXISTING_ACCOUNT_COUNT,
+        QUEUE_EXIT_CALLER_NEW_ACCOUNT_COUNT, QUEUE_EXIT_EXTERNAL_ACCOUNT_COUNT,
+    };
+    use crate::instructions::dealer_runtime::{meta_contract_v1, DealerMetaOwnerV1, DealerMetaRoleV1};
+    use clutch_solana_layout::registry::{
+        DealerFacilityAction, DEALER_FAMILY_TAG, DEALER_FAMILY_VERSION,
+    };
+
+    fn payload(existing: bool, external: bool) -> [u8; 48] {
+        let mut payload = [0u8; 48];
+        payload[0..8].copy_from_slice(&1u64.to_le_bytes());
+        payload[8..16].copy_from_slice(&2u64.to_le_bytes());
+        payload[16..20].copy_from_slice(&3u32.to_le_bytes());
+        payload[20] = 4;
+        payload[21] = u8::from(existing);
+        payload[22] = u8::from(external);
+        payload[24..32].copy_from_slice(&5u64.to_le_bytes());
+        if external {
+            payload[32..36].copy_from_slice(&6u32.to_le_bytes());
+            payload[40..48].copy_from_slice(&7u64.to_le_bytes());
+        }
+        payload
+    }
+
+    #[test]
+    fn queue_contracts_separate_new_existing_and_external_funding() {
+        let cases = [
+            (false, false, QUEUE_EXIT_CALLER_NEW_ACCOUNT_COUNT),
+            (true, false, QUEUE_EXIT_CALLER_EXISTING_ACCOUNT_COUNT),
+            (false, true, QUEUE_EXIT_EXTERNAL_ACCOUNT_COUNT),
+            (true, true, QUEUE_EXIT_EXTERNAL_ACCOUNT_COUNT),
+        ];
+        for (existing, external, expected_count) in cases {
+            let decoded = DealerRuntimePayloadV1::decode(
+                DealerFacilityAction::QueueExit,
+                &payload(existing, external),
+            )
+            .unwrap();
+            let metas = meta_contract_v1(DealerFacilityAction::QueueExit, decoded).unwrap();
+            assert_eq!(metas.len(), expected_count);
+            assert_eq!(metas[6].role, DealerMetaRoleV1::ExitTicket);
+            assert_eq!(
+                metas[6].owner,
+                if existing {
+                    DealerMetaOwnerV1::SelfProgram
+                } else {
+                    DealerMetaOwnerV1::System
+                },
+            );
+            assert!(metas[6].writable);
+            let obligation = if external { 21 } else { 7 };
+            assert_eq!(metas[obligation].role, DealerMetaRoleV1::SeriesObligation);
+            assert!(!metas[obligation].writable);
+            if external {
+                assert_eq!(metas[9].role, DealerMetaRoleV1::LivenessPolicy);
+                assert_eq!(metas[15].role, DealerMetaRoleV1::LivenessRetirement);
+                assert!(metas[15].writable);
+                assert_eq!(metas[17].owner, DealerMetaOwnerV1::System);
+                assert!(metas[17].writable);
+            }
+        }
+    }
+
+    #[test]
+    fn queue_payload_refuses_detached_or_ambiguous_liveness_fields() {
+        let mut missing = payload(false, true);
+        missing[32..36].copy_from_slice(&0u32.to_le_bytes());
+        assert!(DealerRuntimePayloadV1::decode(DealerFacilityAction::QueueExit, &missing).is_err());
+
+        let mut caller_with_payment = payload(false, false);
+        caller_with_payment[40..48].copy_from_slice(&1u64.to_le_bytes());
+        assert!(DealerRuntimePayloadV1::decode(
+            DealerFacilityAction::QueueExit,
+            &caller_with_payment,
+        )
+        .is_err());
+
+        let mut padding = payload(false, true);
+        padding[36] = 1;
+        assert!(DealerRuntimePayloadV1::decode(DealerFacilityAction::QueueExit, &padding).is_err());
+    }
+
+    #[test]
+    fn queue_handler_retains_owner_ticket_rent_replay_and_product_child() {
+        let source = include_str!("dealer_facility.rs");
+        let handler = source
+            .split("fn queue_exit")
+            .nth(1)
+            .and_then(|value| value.split("fn bind_epoch").next())
+            .expect("QueueExit handler");
+        for guard in [
+            "authenticate_dealer_state_v3",
+            "authenticate_live_series_obligation_for_state_v3",
+            "page.entries[usize::from(payload.entry_index)].owner == id(accounts[0].key)",
+            "seeds::dealer_exit_ticket_pda",
+            "authenticate_exit_ticket",
+            "DealerQueueExitLivenessV1::external",
+            "DealerQueueExitLivenessV1::caller_funded",
+            "prepare_new_exit_ticket_v1",
+            "prepare_increase_exit_ticket_v1",
+            "create_full_principal_pda",
+            "DEALER_EXIT_TICKET_ACCOUNT_VERSION",
+            "observed_obligation.binding() == &obligation",
+            "observed_position == position",
+        ] {
+            assert!(handler.contains(guard), "missing QueueExit guard {guard}");
+        }
+    }
+
+    #[test]
+    fn queue_exit_remains_disabled_until_the_complete_dealer_family_closes() {
+        assert!(!crate::capabilities::extension_intent_action_enabled(
+            DEALER_FAMILY_TAG,
+            DEALER_FAMILY_VERSION,
+            DealerFacilityAction::QueueExit.tag(),
         ));
     }
 }
