@@ -618,6 +618,22 @@ enum IndexedSettlementBaseTransitionV1 {
     },
     /// Complete one exact merge payment latch.
     CompleteMergePayment,
+    /// Retire one exact terminal Receipt.
+    RetireOneReceipt,
+    /// Retire one exact finalized owner row.
+    RetireOneOwnerRow,
+    /// Retire one exact terminal filled Reservation.
+    RetireOneReservation,
+    /// Retire one exact fee-finalization child.
+    RetireOneFeeFinalization,
+    /// Begin singleton retirement after all settlement children are accounted.
+    BeginRetiring,
+    /// Retire the exact settlement cash pot.
+    RetireCashPot,
+    /// Retire the exact Split/Merge FinalPot.
+    RetireFinalPot,
+    /// Retire the exact selected fee record.
+    RetireFeeRecord,
     /// Retire the complete archive set for one portfolio pair.
     RetirePortfolioPairArchives {
         /// Entire admitted/live receipt count, bounded by the base root.
@@ -1032,6 +1048,24 @@ impl IndexedSettlementRootV1AccountV1 {
             IndexedSettlementBaseTransitionV1::CompleteMergePayment => {
                 self.base.complete_merge_payment()?
             }
+            IndexedSettlementBaseTransitionV1::RetireOneReceipt => {
+                self.base.retire_one_receipt()?
+            }
+            IndexedSettlementBaseTransitionV1::RetireOneOwnerRow => {
+                self.base.retire_one_owner_row()?
+            }
+            IndexedSettlementBaseTransitionV1::RetireOneReservation => {
+                self.base.retire_one_reservation()?
+            }
+            IndexedSettlementBaseTransitionV1::RetireOneFeeFinalization => {
+                self.base.retire_one_fee_finalization()?
+            }
+            IndexedSettlementBaseTransitionV1::BeginRetiring => self.base.begin_retiring()?,
+            IndexedSettlementBaseTransitionV1::RetireCashPot => self.base.retire_cash_pot()?,
+            IndexedSettlementBaseTransitionV1::RetireFinalPot => self.base.retire_final_pot()?,
+            IndexedSettlementBaseTransitionV1::RetireFeeRecord => {
+                self.base.retire_fee_record()?
+            }
             IndexedSettlementBaseTransitionV1::RetirePortfolioPairArchives {
                 receipt_count,
             } => self.base.retire_portfolio_pair_archives(receipt_count)?,
@@ -1085,6 +1119,46 @@ impl IndexedSettlementRootV1AccountV1 {
     /// Count one authenticated merge-payment latch completion.
     pub fn complete_merge_payment(&self) -> Result<Self, CodecError> {
         self.apply_base_transition(IndexedSettlementBaseTransitionV1::CompleteMergePayment)
+    }
+
+    /// Count one exact terminal Receipt close without changing index identity.
+    pub fn retire_one_receipt(&self) -> Result<Self, CodecError> {
+        self.apply_base_transition(IndexedSettlementBaseTransitionV1::RetireOneReceipt)
+    }
+
+    /// Count one exact finalized owner-row close without changing index identity.
+    pub fn retire_one_owner_row(&self) -> Result<Self, CodecError> {
+        self.apply_base_transition(IndexedSettlementBaseTransitionV1::RetireOneOwnerRow)
+    }
+
+    /// Count one exact terminal Reservation close without changing index identity.
+    pub fn retire_one_reservation(&self) -> Result<Self, CodecError> {
+        self.apply_base_transition(IndexedSettlementBaseTransitionV1::RetireOneReservation)
+    }
+
+    /// Count one exact fee-finalization child close without changing index identity.
+    pub fn retire_one_fee_finalization(&self) -> Result<Self, CodecError> {
+        self.apply_base_transition(IndexedSettlementBaseTransitionV1::RetireOneFeeFinalization)
+    }
+
+    /// Enter dependency-ordered singleton retirement without changing index identity.
+    pub fn begin_retiring(&self) -> Result<Self, CodecError> {
+        self.apply_base_transition(IndexedSettlementBaseTransitionV1::BeginRetiring)
+    }
+
+    /// Retire the exact settlement cash pot without changing index identity.
+    pub fn retire_cash_pot(&self) -> Result<Self, CodecError> {
+        self.apply_base_transition(IndexedSettlementBaseTransitionV1::RetireCashPot)
+    }
+
+    /// Retire the exact Split/Merge FinalPot without changing index identity.
+    pub fn retire_final_pot(&self) -> Result<Self, CodecError> {
+        self.apply_base_transition(IndexedSettlementBaseTransitionV1::RetireFinalPot)
+    }
+
+    /// Retire the exact selected fee record without changing index identity.
+    pub fn retire_fee_record(&self) -> Result<Self, CodecError> {
+        self.apply_base_transition(IndexedSettlementBaseTransitionV1::RetireFeeRecord)
     }
 
     /// Count the complete authenticated receipt archive set for one portfolio pair.
@@ -1500,6 +1574,7 @@ impl IndexedSettlementRootV1AccountV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clutch_owner_settlement::VirtualCashDirectionV1;
     use sha2::{Digest, Sha256};
 
     struct Sha2Backend;
@@ -1530,6 +1605,53 @@ mod tests {
             id(27),
         )
         .unwrap()
+    }
+
+    fn indexed_with_base(
+        base: SettlementRootV1AccountV1,
+    ) -> IndexedSettlementRootV1AccountV1 {
+        let mut value = live_indexed_root();
+        value.base = base;
+        value.validate().unwrap();
+        value
+    }
+
+    fn assert_suffix_preserved(
+        before: &IndexedSettlementRootV1AccountV1,
+        after: &IndexedSettlementRootV1AccountV1,
+    ) {
+        assert_eq!(after.locator_account(), before.locator_account());
+        assert_eq!(after.adjacency_account(), before.adjacency_account());
+        assert_eq!(after.plane_id(), before.plane_id());
+        assert_eq!(after.locator_data_id(), before.locator_data_id());
+        assert_eq!(after.adjacency_data_id(), before.adjacency_data_id());
+        assert_eq!(after.selected_feed_data_id(), before.selected_feed_data_id());
+        assert_eq!(after.capability_profile_id(), before.capability_profile_id());
+        assert_eq!(after.index_counts(), before.index_counts());
+        assert_eq!(after.index_state(), before.index_state());
+    }
+
+    fn close_two_scalar_children(
+        value: IndexedSettlementRootV1AccountV1,
+    ) -> IndexedSettlementRootV1AccountV1 {
+        let next = value.retire_one_receipt().unwrap();
+        assert_suffix_preserved(&value, &next);
+        let value = next;
+        let next = value.retire_one_receipt().unwrap();
+        assert_suffix_preserved(&value, &next);
+        let value = next;
+        let next = value.retire_one_reservation().unwrap();
+        assert_suffix_preserved(&value, &next);
+        let value = next;
+        let next = value.retire_one_reservation().unwrap();
+        assert_suffix_preserved(&value, &next);
+        let value = next;
+        let next = value.retire_one_owner_row().unwrap();
+        assert_suffix_preserved(&value, &next);
+        let value = next;
+        let next = value.retire_one_owner_row().unwrap();
+        assert_suffix_preserved(&value, &next);
+        next
     }
 
     #[test]
@@ -1784,6 +1906,64 @@ mod tests {
         assert_eq!(second.base(), &expected_second);
         assert_eq!(second.index_counts(), indexed.index_counts());
         assert_eq!(second.index_state(), ExactIndexChildrenStateV1::Live);
+    }
+
+    #[test]
+    fn indexed_retirement_wrappers_preserve_suffix_across_every_root_family() {
+        let scalar = close_two_scalar_children(indexed_with_base(
+            crate::settlement_root::tests::portfolio_settling_root(),
+        ));
+        let retiring = scalar.begin_retiring().unwrap();
+        assert_suffix_preserved(&scalar, &retiring);
+        let cash_retired = retiring.retire_cash_pot().unwrap();
+        assert_suffix_preserved(&retiring, &cash_retired);
+        assert!(cash_retired.base().at_retained_feed_retirement_frontier());
+
+        let fee = close_two_scalar_children(indexed_with_base(
+            crate::settlement_root::tests::fee_settling_root(),
+        ));
+        let next = fee.retire_one_fee_finalization().unwrap();
+        assert_suffix_preserved(&fee, &next);
+        let fee = next.retire_one_fee_finalization().unwrap();
+        assert_suffix_preserved(&next, &fee);
+        let next = fee.begin_retiring().unwrap();
+        assert_suffix_preserved(&fee, &next);
+        let fee = next.retire_cash_pot().unwrap();
+        assert_suffix_preserved(&next, &fee);
+        let next = fee.retire_fee_record().unwrap();
+        assert_suffix_preserved(&fee, &next);
+        assert!(next.base().at_retained_feed_retirement_frontier());
+
+        for direction in [VirtualCashDirectionV1::Split, VirtualCashDirectionV1::Merge] {
+            let virtual_root = close_two_scalar_children(indexed_with_base(
+                crate::settlement_root::tests::virtual_root(direction),
+            ));
+            let next = virtual_root.begin_retiring().unwrap();
+            assert_suffix_preserved(&virtual_root, &next);
+            let virtual_root = next.retire_cash_pot().unwrap();
+            assert_suffix_preserved(&next, &virtual_root);
+            let next = virtual_root.retire_final_pot().unwrap();
+            assert_suffix_preserved(&virtual_root, &next);
+            assert!(next.base().at_retained_feed_retirement_frontier());
+        }
+
+        let dealer = close_two_scalar_children(indexed_with_base(
+            crate::settlement_root::tests::dealer_settling_root(),
+        ));
+        let next = dealer.begin_retiring().unwrap();
+        assert_suffix_preserved(&dealer, &next);
+        let dealer = next.retire_cash_pot().unwrap();
+        assert_suffix_preserved(&next, &dealer);
+        let next = dealer.retire_dealer_child().unwrap();
+        assert_suffix_preserved(&dealer, &next);
+        assert!(next.base().at_retained_feed_retirement_frontier());
+
+        let portfolio = indexed_with_base(
+            crate::settlement_root::tests::portfolio_settling_root(),
+        );
+        let next = portfolio.retire_portfolio_pair_archives(2).unwrap();
+        assert_suffix_preserved(&portfolio, &next);
+        assert_eq!(next.base().phase(), SettlementRootPhaseV1::Settling);
     }
 
     #[test]

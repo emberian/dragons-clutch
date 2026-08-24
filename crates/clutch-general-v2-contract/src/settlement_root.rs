@@ -685,7 +685,23 @@ impl SettlementRootV1AccountV1 {
                     return Err(CodecError::InvalidState);
                 }
             }
-            SettlementRootPhaseV1::Retiring => {}
+            SettlementRootPhaseV1::Retiring => {
+                if !self.settlement_children_fully_accounted()
+                    || self.retained_feed_state != SettlementRootChildStateV1::Live
+                    || !matches!(
+                        self.cash_pot_state,
+                        SettlementRootChildStateV1::Live | SettlementRootChildStateV1::Retired
+                    )
+                    || !matches!(
+                        self.fee_record_state,
+                        SettlementRootChildStateV1::Absent
+                            | SettlementRootChildStateV1::Live
+                            | SettlementRootChildStateV1::Retired
+                    )
+                {
+                    return Err(CodecError::InvalidState);
+                }
+            }
             SettlementRootPhaseV1::Terminal => {
                 if !self.counts.terminal()
                     || self.cash_pot_state != SettlementRootChildStateV1::Retired
@@ -720,6 +736,23 @@ impl SettlementRootV1AccountV1 {
             && self.counts.released_unfilled_reservations == expected_unfilled
             && self.counts.admitted_dealer_children == self.counts.expected_dealer_children
             && self.counts.admitted_merge_payments == self.counts.expected_merge_payments
+    }
+
+    /// Stable aggregate facts established before any singleton retirement.
+    ///
+    /// The live adapter remains responsible for authenticating the terminal
+    /// semantic state of each exact Receipt, owner row, Reservation, and fee
+    /// finalization child before invoking its narrow close transition. Once
+    /// every such close has been counted, these facts remain invariant for the
+    /// whole `Retiring` phase.
+    fn settlement_children_fully_accounted(&self) -> bool {
+        self.materialization_complete()
+            && self.counts.live_receipts == 0
+            && self.counts.live_owner_rows == 0
+            && self.counts.live_reservations == 0
+            && self.counts.completed_owner_finalizations == self.counts.expected_owner_rows
+            && self.counts.live_fee_finalizations == 0
+            && self.counts.completed_merge_payments == self.counts.expected_merge_payments
     }
 
     /// Admit the unique opaque Dealer attachment selected by a CoveredDealer
@@ -1039,6 +1072,173 @@ impl SettlementRootV1AccountV1 {
         Ok(next)
     }
 
+    /// Count exactly one terminal Receipt account closed by its authenticated
+    /// settlement route.
+    ///
+    /// This transition proves no Receipt semantics or rent movement by itself.
+    /// The adapter must authenticate one exact fully accounted and delivered
+    /// Receipt and compose its close atomically with this successor write.
+    pub fn retire_one_receipt(&self) -> Result<Self, CodecError> {
+        self.validate()?;
+        if self.phase != SettlementRootPhaseV1::Settling || self.counts.live_receipts == 0 {
+            return Err(CodecError::InvalidState);
+        }
+        let mut next = *self;
+        next.counts.live_receipts = next
+            .counts
+            .live_receipts
+            .checked_sub(1)
+            .ok_or(CodecError::InvalidCount)?;
+        next.validate()?;
+        Ok(next)
+    }
+
+    /// Count exactly one finalized owner-row account closed by its
+    /// authenticated owner-finalization route.
+    ///
+    /// The number of retired rows can never overtake the number of completed
+    /// owner finalizations, even if an adapter presents closures out of order.
+    pub fn retire_one_owner_row(&self) -> Result<Self, CodecError> {
+        self.validate()?;
+        let retired = self
+            .counts
+            .admitted_owner_rows
+            .checked_sub(self.counts.live_owner_rows)
+            .ok_or(CodecError::InvalidCount)?;
+        if self.phase != SettlementRootPhaseV1::Settling
+            || self.counts.live_owner_rows == 0
+            || retired >= self.counts.completed_owner_finalizations
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let mut next = *self;
+        next.counts.live_owner_rows = next
+            .counts
+            .live_owner_rows
+            .checked_sub(1)
+            .ok_or(CodecError::InvalidCount)?;
+        next.validate()?;
+        Ok(next)
+    }
+
+    /// Count exactly one filled Reservation closed after its authenticated
+    /// route proves the Reservation terminal.
+    pub fn retire_one_reservation(&self) -> Result<Self, CodecError> {
+        self.validate()?;
+        if self.phase != SettlementRootPhaseV1::Settling || self.counts.live_reservations == 0 {
+            return Err(CodecError::InvalidState);
+        }
+        let mut next = *self;
+        next.counts.live_reservations = next
+            .counts
+            .live_reservations
+            .checked_sub(1)
+            .ok_or(CodecError::InvalidCount)?;
+        next.validate()?;
+        Ok(next)
+    }
+
+    /// Count exactly one rent-owned fee-finalization child consumed by its
+    /// authenticated fee route.
+    ///
+    /// Zero-fee roots never acquire these children and therefore cannot invoke
+    /// this transition.
+    pub fn retire_one_fee_finalization(&self) -> Result<Self, CodecError> {
+        self.validate()?;
+        if self.phase != SettlementRootPhaseV1::Settling
+            || self.fee_record_state != SettlementRootChildStateV1::Live
+            || self.counts.live_fee_finalizations == 0
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let mut next = *self;
+        next.counts.live_fee_finalizations = next
+            .counts
+            .live_fee_finalizations
+            .checked_sub(1)
+            .ok_or(CodecError::InvalidCount)?;
+        next.validate()?;
+        Ok(next)
+    }
+
+    /// Begin dependency-ordered singleton retirement after every settlement
+    /// child has been fully delivered, accounted, finalized, and closed.
+    ///
+    /// No caller-selected count delta enters this transition. Dealer children
+    /// and the singleton cash/final/fee records remain live so their exact
+    /// terminal accounts can be authenticated and retired afterward.
+    pub fn begin_retiring(&self) -> Result<Self, CodecError> {
+        self.validate()?;
+        if self.phase != SettlementRootPhaseV1::Settling
+            || !self.settlement_children_fully_accounted()
+            || self.counts.live_dealer_children != self.counts.admitted_dealer_children
+            || self.cash_pot_state != SettlementRootChildStateV1::Live
+            || self.retained_feed_state != SettlementRootChildStateV1::Live
+            || !matches!(
+                self.final_pot_state,
+                SettlementRootChildStateV1::Absent | SettlementRootChildStateV1::Live
+            )
+            || !matches!(
+                self.fee_record_state,
+                SettlementRootChildStateV1::Absent | SettlementRootChildStateV1::Live
+            )
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let mut next = *self;
+        next.phase = SettlementRootPhaseV1::Retiring;
+        next.validate()?;
+        Ok(next)
+    }
+
+    /// Retire the authenticated settlement cash pot after settlement enters
+    /// its dependency-ordered retirement phase.
+    pub fn retire_cash_pot(&self) -> Result<Self, CodecError> {
+        self.validate()?;
+        if self.phase != SettlementRootPhaseV1::Retiring
+            || self.cash_pot_state != SettlementRootChildStateV1::Live
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let mut next = *self;
+        next.cash_pot_state = SettlementRootChildStateV1::Retired;
+        next.validate()?;
+        Ok(next)
+    }
+
+    /// Retire the authenticated FinalPot for exactly one Split or Merge root.
+    /// Nonvirtual roots have no FinalPot and cannot invoke this transition.
+    pub fn retire_final_pot(&self) -> Result<Self, CodecError> {
+        self.validate()?;
+        if self.phase != SettlementRootPhaseV1::Retiring
+            || self.virtual_cash_direction == VirtualCashDirectionV1::None
+            || self.final_pot_state != SettlementRootChildStateV1::Live
+            || self.final_pot_rent.get()?.is_none()
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let mut next = *self;
+        next.final_pot_state = SettlementRootChildStateV1::Retired;
+        next.validate()?;
+        Ok(next)
+    }
+
+    /// Retire the authenticated selected fee record after every per-owner fee
+    /// finalization child has already been consumed.
+    pub fn retire_fee_record(&self) -> Result<Self, CodecError> {
+        self.validate()?;
+        if self.phase != SettlementRootPhaseV1::Retiring
+            || self.fee_record_state != SettlementRootChildStateV1::Live
+            || self.counts.live_fee_finalizations != 0
+        {
+            return Err(CodecError::InvalidState);
+        }
+        let mut next = *self;
+        next.fee_record_state = SettlementRootChildStateV1::Retired;
+        next.validate()?;
+        Ok(next)
+    }
+
     /// Retire one exact coefficient-portfolio pair's complete archive set.
     ///
     /// This is the sole aggregate count transition for action 44. The caller
@@ -1049,11 +1249,11 @@ impl SettlementRootV1AccountV1 {
     /// accounts, both Position/GEN1 child decrements, and every exact rent
     /// transfer before writing this successor.
     ///
-    /// This transition deliberately leaves owner rows, the cash pot, and the
-    /// retained Feed live. Their separately typed retirement transitions must
-    /// close them before [`Self::terminal_projection`] can exist; the private
-    /// portfolio terminal receipt is never authority to skip that dependency
-    /// order or promote this successor directly to `Terminal`.
+    /// This transition deliberately remains `Settling` and leaves owner rows,
+    /// the cash pot, and the retained Feed live. Exact owner-row closes must
+    /// finish before [`Self::begin_retiring`]; the private portfolio terminal
+    /// receipt is never authority to skip that dependency order or promote
+    /// this successor directly to `Retiring` or `Terminal`.
     pub fn retire_portfolio_pair_archives(
         &self,
         receipt_count: u8,
@@ -1091,7 +1291,6 @@ impl SettlementRootV1AccountV1 {
             .live_reservations
             .checked_sub(2)
             .ok_or(CodecError::InvalidCount)?;
-        next.phase = SettlementRootPhaseV1::Retiring;
         next.validate()?;
         Ok(next)
     }
@@ -2052,12 +2251,13 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn pre_feed_terminal_frontier_root() -> SettlementRootV1AccountV1 {
-        let mut root = portfolio_settling_root();
-        root.counts.live_receipts = 0;
-        root.counts.live_owner_rows = 0;
-        root.counts.live_reservations = 0;
-        root.cash_pot_state = SettlementRootChildStateV1::Retired;
-        root.phase = SettlementRootPhaseV1::Retiring;
+        let root = portfolio_settling_root()
+            .retire_portfolio_pair_archives(2)
+            .unwrap();
+        let root = root.retire_one_owner_row().unwrap();
+        let root = root.retire_one_owner_row().unwrap();
+        let root = root.begin_retiring().unwrap();
+        let root = root.retire_cash_pot().unwrap();
         root.validate().unwrap();
         root
     }
@@ -2218,12 +2418,173 @@ pub(crate) mod tests {
             Err(CodecError::InvalidState)
         );
         let post = root.retire_portfolio_pair_archives(2).unwrap();
-        assert_eq!(post.phase(), SettlementRootPhaseV1::Retiring);
+        assert_eq!(post.phase(), SettlementRootPhaseV1::Settling);
         assert_eq!(post.counts().live_receipts, 0);
         assert_eq!(post.counts().live_reservations, 0);
+        assert_eq!(post.begin_retiring(), Err(CodecError::InvalidState));
         assert_eq!(
             post.retire_portfolio_pair_archives(2),
             Err(CodecError::InvalidState)
         );
+        let post = post.retire_one_owner_row().unwrap();
+        let post = post.retire_one_owner_row().unwrap();
+        let post = post.begin_retiring().unwrap();
+        assert_eq!(post.phase(), SettlementRootPhaseV1::Retiring);
+    }
+
+    #[test]
+    fn narrow_scalar_closes_are_exact_and_begin_retiring_is_a_hard_gate() {
+        let mut incomplete = portfolio_settling_root();
+        incomplete.counts.completed_owner_finalizations = 0;
+        incomplete.validate().unwrap();
+        assert_eq!(
+            incomplete.retire_one_owner_row(),
+            Err(CodecError::InvalidState)
+        );
+
+        let root = portfolio_settling_root();
+        assert_eq!(root.begin_retiring(), Err(CodecError::InvalidState));
+        let mut forged = root;
+        forged.phase = SettlementRootPhaseV1::Retiring;
+        assert_eq!(forged.validate(), Err(CodecError::InvalidState));
+        let root = root.retire_one_receipt().unwrap();
+        let root = root.retire_one_receipt().unwrap();
+        assert_eq!(
+            root.retire_one_receipt(),
+            Err(CodecError::InvalidState)
+        );
+        let root = root.retire_one_reservation().unwrap();
+        let root = root.retire_one_reservation().unwrap();
+        assert_eq!(
+            root.retire_one_reservation(),
+            Err(CodecError::InvalidState)
+        );
+        let root = root.retire_one_owner_row().unwrap();
+        assert_eq!(root.begin_retiring(), Err(CodecError::InvalidState));
+        let root = root.retire_one_owner_row().unwrap();
+        let root = root.begin_retiring().unwrap();
+        assert_eq!(root.begin_retiring(), Err(CodecError::InvalidState));
+        assert_eq!(root.retire_final_pot(), Err(CodecError::InvalidState));
+        assert_eq!(root.retire_fee_record(), Err(CodecError::InvalidState));
+        let root = root.retire_cash_pot().unwrap();
+        assert!(root.at_retained_feed_retirement_frontier());
+        assert_eq!(root.retire_cash_pot(), Err(CodecError::InvalidState));
+    }
+
+    #[test]
+    fn fee_children_must_close_before_phase_change_and_fee_record_afterward() {
+        let root = fee_settling_root();
+        let root = root.retire_one_receipt().unwrap();
+        let root = root.retire_one_receipt().unwrap();
+        let root = root.retire_one_reservation().unwrap();
+        let root = root.retire_one_reservation().unwrap();
+        let root = root.retire_one_owner_row().unwrap();
+        let root = root.retire_one_owner_row().unwrap();
+        assert_eq!(root.begin_retiring(), Err(CodecError::InvalidState));
+        assert_eq!(root.retire_fee_record(), Err(CodecError::InvalidState));
+        let root = root.retire_one_fee_finalization().unwrap();
+        let root = root.retire_one_fee_finalization().unwrap();
+        assert_eq!(
+            root.retire_one_fee_finalization(),
+            Err(CodecError::InvalidState)
+        );
+        let root = root.begin_retiring().unwrap();
+        assert_eq!(
+            root.retire_one_fee_finalization(),
+            Err(CodecError::InvalidState)
+        );
+        let root = root.retire_cash_pot().unwrap();
+        assert!(!root.at_retained_feed_retirement_frontier());
+        let root = root.retire_fee_record().unwrap();
+        assert!(root.at_retained_feed_retirement_frontier());
+    }
+
+    fn close_two_scalar_children(
+        root: SettlementRootV1AccountV1,
+    ) -> SettlementRootV1AccountV1 {
+        let root = root.retire_one_receipt().unwrap();
+        let root = root.retire_one_receipt().unwrap();
+        let root = root.retire_one_reservation().unwrap();
+        let root = root.retire_one_reservation().unwrap();
+        let root = root.retire_one_owner_row().unwrap();
+        root.retire_one_owner_row().unwrap()
+    }
+
+    pub(crate) fn fee_settling_root() -> SettlementRootV1AccountV1 {
+        let mut root = portfolio_settling_root();
+        root.fee_record = id(20);
+        root.selected_fee_atoms = 1;
+        root.fee_record_state = SettlementRootChildStateV1::Live;
+        root.counts.live_fee_finalizations = 2;
+        root.validate().unwrap();
+        root
+    }
+
+    pub(crate) fn virtual_root(
+        direction: VirtualCashDirectionV1,
+    ) -> SettlementRootV1AccountV1 {
+        let mut root = portfolio_settling_root();
+        root.virtual_cash_direction = direction;
+        root.virtual_cash_atoms = 1;
+        root.final_pot = id(20);
+        root.final_pot_state = SettlementRootChildStateV1::Live;
+        root.final_pot_rent = OptionalSettlementRentV1::present(DeletableRentOwnerV1 {
+            payer: id(30),
+            refundable_principal: 100,
+            donation_floor: 0,
+        })
+        .unwrap();
+        match direction {
+            VirtualCashDirectionV1::Split => root.seller_credit_atoms = 9,
+            VirtualCashDirectionV1::Merge => {
+                root.seller_credit_atoms = 11;
+                root.counts.expected_merge_payments = 2;
+                root.counts.admitted_merge_payments = 2;
+                root.counts.completed_merge_payments = 2;
+            }
+            VirtualCashDirectionV1::None => unreachable!(),
+        }
+        root.validate().unwrap();
+        root
+    }
+
+    pub(crate) fn dealer_settling_root() -> SettlementRootV1AccountV1 {
+        let mut root = portfolio_settling_root();
+        root.counts.expected_dealer_children = 1;
+        root.counts.admitted_dealer_children = 1;
+        root.counts.live_dealer_children = 1;
+        root.validate().unwrap();
+        root
+    }
+
+    #[test]
+    fn split_and_merge_require_their_final_pot_and_completed_merge_latches() {
+        for direction in [VirtualCashDirectionV1::Split, VirtualCashDirectionV1::Merge] {
+            let root = close_two_scalar_children(virtual_root(direction));
+            if direction == VirtualCashDirectionV1::Merge {
+                let mut incomplete = root;
+                incomplete.counts.completed_merge_payments = 1;
+                incomplete.validate().unwrap();
+                assert_eq!(incomplete.begin_retiring(), Err(CodecError::InvalidState));
+            }
+            let root = root.begin_retiring().unwrap();
+            let root = root.retire_cash_pot().unwrap();
+            assert!(!root.at_retained_feed_retirement_frontier());
+            let root = root.retire_final_pot().unwrap();
+            assert!(root.at_retained_feed_retirement_frontier());
+            assert_eq!(root.retire_final_pot(), Err(CodecError::InvalidState));
+        }
+    }
+
+    #[test]
+    fn dealer_child_retires_only_after_the_hard_phase_gate() {
+        let root = dealer_settling_root();
+        assert_eq!(root.retire_dealer_child(), Err(CodecError::InvalidState));
+        let root = close_two_scalar_children(root);
+        let root = root.begin_retiring().unwrap();
+        let root = root.retire_cash_pot().unwrap();
+        assert!(!root.at_retained_feed_retirement_frontier());
+        let root = root.retire_dealer_child().unwrap();
+        assert!(root.at_retained_feed_retirement_frontier());
     }
 }
