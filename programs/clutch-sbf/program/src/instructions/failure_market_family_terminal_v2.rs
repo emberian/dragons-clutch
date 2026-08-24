@@ -16,13 +16,15 @@ use crate::instructions::failure_market_admission::{
     authenticate_failure_market_root_v3, AuthenticatedFailureMarketRootV3,
 };
 use crate::instructions::failure_market_interval_v2::{
-    authenticate_failure_market_interval_accounts_v2, write_failure_market_interval_family_seal_v2,
-    AuthenticatedFailureMarketIntervalAccountsV2,
+    authenticate_failure_market_interval_accounts_v2,
+    authenticate_failure_market_recovery_quote_for_resolution_v3,
+    reopen_failure_market_interval_accounts_v2, write_failure_market_interval_family_seal_v2,
+    AuthenticatedFailureMarketIntervalAccountsV2, FailureMarketIntervalFundingPreimageV2,
 };
 use crate::instructions::failure_market_recovery_terminal_v2::AuthenticatedFailureMarketRecoveryClosePostwriteV2;
 use crate::instructions::failure_market_replay_v2::{
-    authenticate_failure_market_replay_v2, write_failure_market_replay_terminal_v2,
-    AuthenticatedFailureMarketReplayV2,
+    authenticate_failure_market_replay_v2, reopen_failure_market_replay_from_chain_v2,
+    write_failure_market_replay_terminal_v2, AuthenticatedFailureMarketReplayV2,
 };
 use crate::instructions::failure_market_runtime::{
     authenticate_failure_market_runtime_root_v1, write_failure_market_runtime_terminal_plan_v2,
@@ -35,7 +37,11 @@ use crate::instructions::product_market_lifecycle_v3_current::{
     authenticate_market_lifecycle_root_v3, AuthenticatedMarketLifecycleRootV3,
     AuthenticatedSeriesMarketLinkV3,
 };
-use crate::instructions::product_series_current::AuthenticatedSeriesFundingAccountV5;
+use crate::instructions::product_series_current::{
+    AuthenticatedRegistryCapabilityV5, AuthenticatedSeriesFundingAccountV5,
+};
+use crate::instructions::product_series_current::retirement_v5::
+    ProductFailureRetirementInputsV5;
 use crate::instructions::source_failure_product_release_v1::{
     authenticate_persisted_source_failure_product_release_v3,
     AuthenticatedPersistedSourceFailureProductReleaseV3,
@@ -1215,6 +1221,103 @@ fn authenticate_failure_market_family_terminal_for_close_v3(
         true,
         false,
     )
+}
+
+/// Hostile-reconstruct the complete Failure-family terminal for the atomic
+/// Product/Source retirement frame from persisted chain state only.
+///
+/// The four physically closable Failure accounts are writable because the
+/// later Product finalizer closes them in this same Solana instruction. The
+/// permanent replay and immutable liveness policy remain read-only. Neither a
+/// replay-funding preimage nor any terminal identifier is accepted from the
+/// instruction payload.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_failure_market_family_terminal_for_product_source_retirement_v3(
+    program_id: &Pubkey,
+    admission_root_account: &AccountInfo<'_>,
+    runtime_root_account: &AccountInfo<'_>,
+    interval_cell_account: &AccountInfo<'_>,
+    interval_history_account: &AccountInfo<'_>,
+    replay_account: &AccountInfo<'_>,
+    liveness_policy_account: &AccountInfo<'_>,
+    product_root_account: &AccountInfo<'_>,
+    registry: &AuthenticatedRegistryCapabilityV5,
+) -> Outcome<(
+    AuthenticatedFailureMarketFamilyTerminalReceiptV3,
+    ProductFailureRetirementInputsV5,
+)> {
+    require_distinct(&[
+        admission_root_account.clone(),
+        runtime_root_account.clone(),
+        interval_cell_account.clone(),
+        interval_history_account.clone(),
+        replay_account.clone(),
+        liveness_policy_account.clone(),
+        product_root_account.clone(),
+    ])?;
+    let admission = authenticate_failure_market_root_v3(
+        program_id,
+        admission_root_account,
+        true,
+    )?;
+    let policy = admission.state().binding().facts();
+    let mut product_root_decode = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let product_root = authenticate_market_lifecycle_root_v3(
+        program_id,
+        product_root_account,
+        policy.market_instance_id,
+        policy.generation,
+        true,
+        &mut product_root_decode,
+    )?;
+    let quote = authenticate_failure_market_recovery_quote_for_resolution_v3(
+        program_id,
+        admission,
+        &product_root,
+        registry,
+        liveness_policy_account,
+    )?;
+    let interval_funding = FailureMarketIntervalFundingPreimageV2::decode(
+        &admission.interval_funding_preimage(),
+    )?;
+    let interval = reopen_failure_market_interval_accounts_v2(
+        program_id,
+        interval_cell_account,
+        interval_history_account,
+        admission,
+        quote.receipt(),
+        interval_funding,
+        true,
+        true,
+    )?;
+    let replay = reopen_failure_market_replay_from_chain_v2(
+        program_id,
+        replay_account,
+        admission,
+        false,
+    )?;
+    let failure_inputs = ProductFailureRetirementInputsV5::new(
+        admission,
+        interval.funding(),
+        quote.receipt(),
+        replay.funding(),
+    );
+    let owner = authenticate_failure_market_family_terminal_for_close_v3(
+        program_id,
+        admission_root_account,
+        runtime_root_account,
+        interval_cell_account,
+        interval_history_account,
+        replay_account,
+        admission,
+        interval.funding(),
+        quote.receipt(),
+        replay.funding(),
+    )?;
+    Ok((
+        AuthenticatedFailureMarketFamilyTerminalReceiptV3::from_owner(owner)?,
+        failure_inputs,
+    ))
 }
 
 /// Reopen the durable terminal tuple read-only for Source custody retirement.
