@@ -20,6 +20,8 @@ use super::super::failure_market_family_terminal_v2::{
 };
 use super::super::fractional_product_consumer::consume_fractional_terminal_v2;
 use super::super::fractional_redemption::AuthenticatedFractionalFamilyPhysicalTerminalV2;
+use super::super::general_treasury_position_terminal_v5::
+    AuthenticatedProductPositionPhysicalTerminalV5;
 use super::super::dealer_facility::AuthenticatedDealerFamilyTerminalReceiptV3;
 use super::super::direct_market_v2::{
     AuthenticatedDirectFamilyTerminalV3, AuthenticatedProductDirectFamilyPreterminalV3,
@@ -175,7 +177,7 @@ fn liquidity_absence_projection_v5(
     })
 }
 
-fn write_market_lifecycle_root_v3(
+pub(crate) fn write_market_lifecycle_root_v3(
     account: &AccountInfo<'_>,
     before: &MarketLifecycleRootAccountV3,
     after: &clutch_product_series::MarketLifecycleRootV3,
@@ -3011,6 +3013,7 @@ fn physical_retirement_receipt_transcript_v5(
 fn physically_retire_current_product_series_v5<'a>(
     program_id: &Pubkey,
     terminal: AuthenticatedProductSeriesReplayTerminalV5,
+    position: &AuthenticatedProductPositionPhysicalTerminalV5,
     root_account: &AccountInfo<'a>,
     link_account: &AccountInfo<'a>,
     registry_account: &AccountInfo<'a>,
@@ -3062,18 +3065,38 @@ fn physically_retire_current_product_series_v5<'a>(
         true,
         &mut link_value,
     )?;
+    let expected_position_sequence = position
+        .root_transition_sequence_before()
+        .checked_add(1)
+        .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
     require(
         root.state().phase() == MarketLifecyclePhaseV3::Retiring
             && root.binding_id() == source_facts.root_binding_id
             && root.account() == source.root_account()
-            && root.data_id() == source.root_data_after_id
-            && root.authentication_id() == source.root_authentication_after_id()
-            && root.semantic_id() == source.root_semantic_after_id()
-            && root.state().transition_sequence() == source.root_transition_sequence_after()
+            && position.market_instance_id() == market_instance_id
+            && position.generation() == source_facts.generation
+            && position.root_account() == *root_account.key
+            && position.root_binding_id() == source_facts.root_binding_id
+            && position.root_data_before_id() == source.root_data_after_id
+            && position.root_authentication_before_id()
+                == source.root_authentication_after_id()
+            && position.root_semantic_before_id() == source.root_semantic_after_id()
+            && position.root_transition_sequence_before()
+                == source.root_transition_sequence_after()
+            && position.root_transition_sequence_after() == expected_position_sequence
+            && root.data_id() == position.root_data_after_id()
+            && root.authentication_id() == position.root_authentication_after_id()
+            && root.semantic_id() == position.root_semantic_after_id()
+            && root.state().transition_sequence()
+                == position.root_transition_sequence_after()
             && root
                 .state()
                 .shared_core_terminal_receipt(MarketSharedCoreV3::Source)
                 == source.source_shared_core_projection_id()
+            && root
+                .state()
+                .shared_core_terminal_receipt(MarketSharedCoreV3::Position)
+                == position.shared_core_projection_id()
             && link.account() == source.link_account()
             && link.state().phase() == SeriesMarketLinkPhaseV3::Retired
             && link.data_id() == source.link_data_after_id
@@ -3202,6 +3225,7 @@ fn physically_retire_current_product_series_v5<'a>(
 #[derive(Debug)]
 pub(crate) struct AuthenticatedProductSeriesRetirementV5 {
     id: ContentId,
+    position: AuthenticatedProductPositionPhysicalTerminalV5,
     physical: AuthenticatedProductSeriesPhysicalRetirementPostwriteV5,
     failure: AuthenticatedProductFailurePhysicalTerminalV5,
     market_terminal_projection: clutch_product_series::MarketInstanceTerminalProjectionV3,
@@ -3267,6 +3291,7 @@ impl AuthenticatedProductSeriesRetirementV5 {
 fn retire_current_product_series_v5<'a, 'failure>(
     program_id: &Pubkey,
     terminal: AuthenticatedProductSeriesLifecycleTerminalV5,
+    position: AuthenticatedProductPositionPhysicalTerminalV5,
     failure_terminal: AuthenticatedFailureMarketPhysicalTerminalV3<'failure>,
     root_account: &AccountInfo<'a>,
     link_account: &AccountInfo<'a>,
@@ -3283,6 +3308,7 @@ fn retire_current_product_series_v5<'a, 'failure>(
     let physical = physically_retire_current_product_series_v5(
         program_id,
         terminal,
+        &position,
         root_account,
         link_account,
         registry_account,
@@ -3370,6 +3396,9 @@ fn retire_current_product_series_v5<'a, 'failure>(
     let id = hashv(&[
         PRODUCT_MARKET_TERMINAL_POSTWRITE_DOMAIN_V5,
         program_id.as_ref(),
+        &position.id().bytes(),
+        &position.physical_terminal_id().bytes(),
+        &position.shared_core_projection_id().bytes(),
         &physical.id.bytes(),
         &physical.physical.id().bytes(),
         &physical.physical_receipt_transcript_id.bytes(),
@@ -3394,6 +3423,7 @@ fn retire_current_product_series_v5<'a, 'failure>(
     require_live(id)?;
     Ok(AuthenticatedProductSeriesRetirementV5 {
         id,
+        position,
         physical,
         failure,
         market_terminal_projection,

@@ -28,6 +28,11 @@ pub const GENERAL_REPLAY_ACCOUNT_V1_BYTES: usize =
     clutch_retirement::PURPOSE_REPLAY_V3_PREFIX_BYTES + GENERAL_REPLAY_EXTENSION_V1_BYTES;
 /// Domain for one exact General Position pre/post delta.
 pub const GENERAL_REPLAY_DELTA_DOMAIN_V1: &[u8] = b"dragons-clutch/general-replay/delta/v1\0";
+/// Domain for the permissionless terminal cut of the canonical Market
+/// treasury Position.  The live adapter supplies the exact durable fee and
+/// service-terminal authority; no caller transition identity is accepted.
+pub const GENERAL_TREASURY_POSITION_TERMINAL_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/general-treasury-position-terminal/v1\0";
 
 /// Canonical founding generation for a fresh ordinary General Position.
 pub const GENERAL_POSITION_FOUNDING_GENERATION_V1: u64 = 1;
@@ -82,6 +87,8 @@ pub enum GeneralReplayTransitionKindV1 {
     FinalizeOwnerSettlement,
     /// Action 50 exact maker or treasury trading-fee Position credit.
     DistributeTradingFee,
+    /// Action 34 terminal cut of the canonical Market treasury Position.
+    CloseTreasuryPosition,
     /// Action 26 buyer Position endpoint.
     DirectBuyer,
     /// Action 26 seller Position endpoint.
@@ -207,6 +214,12 @@ impl GeneralReplayTransitionKindV1 {
                 TRANSITION_VERSION_V1,
                 50,
                 FEE_DISTRIBUTION_RECIPIENT_ROLE,
+            ),
+            Self::CloseTreasuryPosition => (
+                COLLATERAL_CASH_FAMILY,
+                TRANSITION_VERSION_V1,
+                34,
+                GENERAL_COLLATERAL_POSITION_ROLE,
             ),
             Self::DirectBuyer => (
                 SETTLEMENT_FAMILY,
@@ -453,6 +466,12 @@ impl GeneralReplayTransitionKindV1 {
                 50,
                 FEE_DISTRIBUTION_RECIPIENT_ROLE,
             ) => Ok(Self::DistributeTradingFee),
+            (
+                COLLATERAL_CASH_FAMILY,
+                TRANSITION_VERSION_V1,
+                34,
+                GENERAL_COLLATERAL_POSITION_ROLE,
+            ) => Ok(Self::CloseTreasuryPosition),
             (SETTLEMENT_FAMILY, TRANSITION_VERSION_V1, 26, DIRECT_BUYER_ROLE) => {
                 Ok(Self::DirectBuyer)
             }
@@ -1439,6 +1458,174 @@ where
         delta_id,
         consumed_sequence,
         next_sequence: replay_header.next_sequence(),
+    })
+}
+
+/// Exact pure postimages for the canonical Market treasury Position cut.
+///
+/// This structural plan does not authenticate the fee terminal, service
+/// ledger, Product Root, account owner, or PDA.  Its SBF caller must derive
+/// `terminal_authority_id` from those hostile current semantic owners and
+/// commit both postimages before physically retiring the pair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralTreasuryPositionTerminalPlanV1 {
+    position_prestate_semantic_id: Id32,
+    position_terminal_semantic_id: Id32,
+    replay_prestate_semantic_id: Id32,
+    replay_terminal_semantic_id: Id32,
+    terminal_authority_id: Id32,
+    transition_id: Id32,
+    delta_id: Id32,
+    terminal_sequence: u64,
+    position_terminal_body: [u8; clutch_retirement::POSITION_V3_BYTES],
+    replay_terminal_body: [u8; GENERAL_REPLAY_ACCOUNT_V1_BYTES],
+}
+
+impl GeneralTreasuryPositionTerminalPlanV1 {
+    pub const fn position_prestate_semantic_id(&self) -> Id32 {
+        self.position_prestate_semantic_id
+    }
+    pub const fn position_terminal_semantic_id(&self) -> Id32 {
+        self.position_terminal_semantic_id
+    }
+    pub const fn replay_prestate_semantic_id(&self) -> Id32 {
+        self.replay_prestate_semantic_id
+    }
+    pub const fn replay_terminal_semantic_id(&self) -> Id32 {
+        self.replay_terminal_semantic_id
+    }
+    pub const fn terminal_authority_id(&self) -> Id32 { self.terminal_authority_id }
+    pub const fn transition_id(&self) -> Id32 { self.transition_id }
+    pub const fn delta_id(&self) -> Id32 { self.delta_id }
+    pub const fn terminal_sequence(&self) -> u64 { self.terminal_sequence }
+    pub const fn position_terminal_body(
+        &self,
+    ) -> &[u8; clutch_retirement::POSITION_V3_BYTES] {
+        &self.position_terminal_body
+    }
+    pub const fn replay_terminal_body(&self) -> &[u8; GENERAL_REPLAY_ACCOUNT_V1_BYTES] {
+        &self.replay_terminal_body
+    }
+}
+
+/// Seal an economically empty current General Position/Replay pair.
+///
+/// The Position moves `Open -> CloseRequested`; the GEN1 extension commits an
+/// action-34 terminal delta and the common Replay envelope moves `Live ->
+/// Terminal` at exactly its chain-derived next sequence.  All identities,
+/// generation, rent ownership, and immutable Position fields are preserved.
+pub fn prepare_general_treasury_position_terminal_v1<B>(
+    prestate: GeneralPositionReplayPrestateV1,
+    terminal_authority_id: Id32,
+    backend: &B,
+) -> Result<GeneralTreasuryPositionTerminalPlanV1, CodecError>
+where
+    B: PositionV3Sha256Backend + ReplayV3HashBackend,
+{
+    if terminal_authority_id.is_zero() {
+        return Err(CodecError::ZeroIdentity);
+    }
+    let before = prestate.position;
+    before
+        .validate_writable()
+        .map_err(|_| CodecError::MismatchedBinding)?;
+    let fields = before.semantic.fields();
+    if fields.cash_atoms != 0
+        || fields.reserved_cash_atoms != 0
+        || fields.native_eggs != [0; MAX_OUTCOMES]
+        || fields.outstanding_reservations != 0
+        || prestate.replay_header.lifecycle() != ReplayV3Lifecycle::Live
+    {
+        return Err(CodecError::InvalidState);
+    }
+    let terminal_position = PositionAccountV3::new(PositionV3Fields {
+        lifecycle: PositionLifecycleV3::CloseRequested,
+        ..fields
+    })
+    .map_err(|_| CodecError::InvalidState)?;
+    let position_prestate_semantic_id = Id32::new(before.semantic_id)?;
+    let position_terminal_semantic_id = Id32::new(
+        terminal_position
+            .semantic_id(backend)
+            .map_err(|_| CodecError::InvalidState)?
+            .bytes(),
+    )?;
+    if position_prestate_semantic_id == position_terminal_semantic_id {
+        return Err(CodecError::InvalidState);
+    }
+    let consumed_sequence = prestate.replay_header.next_sequence();
+    let kind = GeneralReplayTransitionKindV1::CloseTreasuryPosition;
+    let (family, version, action, role) = kind.coordinates();
+    let transition_id = Id32::new(backend.sha256_parts(&[
+        GENERAL_TREASURY_POSITION_TERMINAL_DOMAIN_V1,
+        &terminal_authority_id.bytes(),
+        &before.account,
+        &prestate.replay_account.bytes(),
+        &position_prestate_semantic_id.bytes(),
+        &position_terminal_semantic_id.bytes(),
+        &prestate.replay_semantic_id.bytes(),
+        &consumed_sequence.to_le_bytes(),
+        &fields.generation.to_le_bytes(),
+    ]))?;
+    let delta_id = Id32::new(backend.sha256_parts(&[
+        GENERAL_REPLAY_DELTA_DOMAIN_V1,
+        &[family],
+        &[version],
+        &[action],
+        &[role],
+        &consumed_sequence.to_le_bytes(),
+        &transition_id.bytes(),
+        &terminal_authority_id.bytes(),
+        &before.account,
+        &position_prestate_semantic_id.bytes(),
+        &position_terminal_semantic_id.bytes(),
+        &fields.generation.to_le_bytes(),
+        &fields.generation.to_le_bytes(),
+    ]))?;
+    let terminal_extension = prestate.extension.advanced(
+        kind,
+        transition_id,
+        delta_id,
+        position_terminal_semantic_id,
+    )?;
+    let terminal_extension_body = terminal_extension.encode()?;
+    let terminal_header = prestate
+        .replay_header
+        .terminalized(fields.generation, &terminal_extension_body, backend)
+        .map_err(|_| CodecError::InvalidState)?;
+    let terminal_envelope = ReplayV3Envelope::from_header(
+        terminal_header,
+        &terminal_extension_body,
+        backend,
+    )
+    .map_err(|_| CodecError::InvalidState)?;
+    let replay_terminal_semantic_id = Id32::new(
+        terminal_envelope
+            .semantic_id(backend)
+            .map_err(|_| CodecError::InvalidState)?
+            .bytes(),
+    )?;
+    let mut position_terminal_body = [0u8; clutch_retirement::POSITION_V3_BYTES];
+    position_terminal_body.copy_from_slice(
+        &terminal_position
+            .encode()
+            .map_err(|_| CodecError::InvalidState)?,
+    );
+    let mut replay_terminal_body = [0u8; GENERAL_REPLAY_ACCOUNT_V1_BYTES];
+    terminal_envelope
+        .encode_into(&mut replay_terminal_body, backend)
+        .map_err(|_| CodecError::InvalidState)?;
+    Ok(GeneralTreasuryPositionTerminalPlanV1 {
+        position_prestate_semantic_id,
+        position_terminal_semantic_id,
+        replay_prestate_semantic_id: prestate.replay_semantic_id,
+        replay_terminal_semantic_id,
+        terminal_authority_id,
+        transition_id,
+        delta_id,
+        terminal_sequence: terminal_header.next_sequence(),
+        position_terminal_body,
+        replay_terminal_body,
     })
 }
 

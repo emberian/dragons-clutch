@@ -82,6 +82,8 @@ pub(crate) struct AuthenticatedFeeTerminalPairV1 {
     treasury_position: Id32,
     general: GeneralFeeTerminalProjectionV1,
     dealer: DealerFeeTerminalProjectionV1,
+    revenue_policy: Id32,
+    treasury_position: Id32,
 }
 
 impl AuthenticatedFeeTerminalPairV1 {
@@ -135,6 +137,10 @@ impl AuthenticatedFeeTerminalPairV1 {
     pub(crate) const fn dealer(&self) -> DealerFeeTerminalProjectionV1 {
         self.dealer
     }
+
+    pub(crate) const fn revenue_policy(&self) -> Id32 { self.revenue_policy }
+
+    pub(crate) const fn treasury_position(&self) -> Id32 { self.treasury_position }
 }
 
 /// Move-only preauthorization proving that the exact durable fee pair is
@@ -443,6 +449,8 @@ pub(crate) fn authenticate_fee_terminal_pair_v1(
         treasury_position,
         general,
         dealer,
+        revenue_policy,
+        treasury_position,
     })
 }
 
