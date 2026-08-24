@@ -9,7 +9,7 @@
 use clutch_fee_runtime_contract::{
     codec::CertifiedRecipientAllocationSummaryV3,
     projection::{CertifiedRecipientAllocationV2, SelectedOwnerFeeBookV1},
-    selected::SelectedCompositeFeeV1,
+    selected::{SelectedCompositeFeeV1, SelectedCompositeFeeV2},
 };
 use clutch_owner_settlement::{
     owner_credit_atoms, owner_debit_atoms, owner_rounding_residue_price_units,
@@ -148,13 +148,12 @@ pub fn derive_zero_fee_settlement_root_expectation_v1(
 /// historical selected-owner fee-book content ID entirely.
 pub fn derive_settlement_root_expectation_from_certified_fee_v3(
     traversal: &SettlementTraversalProjectionV5,
-    selected: &SelectedCompositeFeeV1,
+    selected: &SelectedCompositeFeeV2,
     certified: CertifiedRecipientAllocationSummaryV3,
 ) -> Result<SettlementRootExpectationProjectionV1, SettlementAdapterErrorV1> {
     let feed = traversal.feed();
     let selected_fee_atoms = certified.collected_fee_atoms();
-    if selected_fee_atoms == 0
-        || certified.fee_record() != selected.fee_record()
+    if certified.fee_record() != selected.fee_record()
         || certified.owner_order_set_digest().0
             != traversal.owner_order_set_digest().bytes()
         || certified.traversed_owner_count() != traversal.expected_owner_count()
@@ -167,9 +166,14 @@ pub fn derive_settlement_root_expectation_from_certified_fee_v3(
     {
         return Err(SettlementAdapterErrorV1::FeeOwnerMismatch);
     }
+    let cash_fee_record = if selected_fee_atoms == 0 {
+        [0; 32]
+    } else {
+        selected.fee_record().0
+    };
     derive_settlement_root_expectation_from_fee_total_v1(
         traversal,
-        selected.fee_record().0,
+        cash_fee_record,
         selected_fee_atoms,
     )
 }
