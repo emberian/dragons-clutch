@@ -76,17 +76,22 @@ use clutch_product_series::{
     SERIES_FUNDING_COMPONENT_COUNT_V2,
 };
 use clutch_solana_layout::product_series::{
-    validate_activate_series_funding_account_metas_v2, ActivateSeriesFundingAccountRoleV2,
+    validate_activate_series_funding_account_metas_v2,
+    validate_close_series_funding_account_metas_v2, ActivateSeriesFundingAccountRoleV2,
     ActivateSeriesFundingIntentV1, AdvanceSeriesOccurrenceIntentV1, CloseSeriesFundingIntentV1,
+    CloseSeriesFundingAccountRoleV2,
     LapseSeriesOccurrenceIntentV1, ObserveSeriesDonationIntentV2,
-    ObservedActivateSeriesFundingAccountMetaV2, RegisterSeriesIntentV1, SeriesFundingAccountV1,
+    ObservedActivateSeriesFundingAccountMetaV2, ObservedCloseSeriesFundingAccountMetaV2,
+    RegisterSeriesIntentV1, SeriesFundingAccountV1,
     SeriesFundingAccountV2, SeriesFundingAssetV1, SeriesLifecycleReplayAccountV1,
     MarketLifecycleRootAccountV1, SeriesMarketLinkAccountV1, SeriesRegistryAccountV1,
-    SeriesRegistryAccountV2,
-    ACTIVATE_SERIES_ARTIFACT_END_V2,
+    SeriesRegistryAccountV2, ACTIVATE_SERIES_ARTIFACT_END_V2,
     ACTIVATE_SERIES_ARTIFACT_START_V2, ACTIVATE_SERIES_COLLATERAL_VAULT_END_V2,
     ACTIVATE_SERIES_COLLATERAL_VAULT_START_V2, ACTIVATE_SERIES_LAMPORT_VAULT_END_V2,
     ACTIVATE_SERIES_LAMPORT_VAULT_START_V2, SERIES_FUNDING_ACCOUNT_BYTES_V1,
+    CLOSE_SERIES_ARTIFACT_END_V2, CLOSE_SERIES_ARTIFACT_START_V2,
+    CLOSE_SERIES_COLLATERAL_VAULT_END_V2, CLOSE_SERIES_COLLATERAL_VAULT_START_V2,
+    CLOSE_SERIES_LAMPORT_VAULT_END_V2, CLOSE_SERIES_LAMPORT_VAULT_START_V2,
     SERIES_FUNDING_ACCOUNT_BYTES_V2, SERIES_REGISTRY_ACCOUNT_BYTES_V1,
     SERIES_LIFECYCLE_REPLAY_ACCOUNT_BYTES_V1, SERIES_REGISTRY_ACCOUNT_BYTES_V2,
 };
@@ -151,10 +156,14 @@ const SERIES_COLLATERAL_ACTIVATION_POSTWRITE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-collateral-activation-postwrite/v2\0";
 const SERIES_COLLATERAL_ACTIVATION_FUNDING_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-collateral-activation-funding/v2\0";
+const SERIES_COLLATERAL_TERMINAL_FUNDING_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-collateral-terminal-funding/v2\0";
 const SERIES_COLLATERAL_VAULT_POSTSTATE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-collateral-vault-poststate/v2\0";
 const SERIES_COLLATERAL_TRANSFER_POSTSTATE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-collateral-transfer-poststate/v2\0";
+const SERIES_COLLATERAL_TERMINAL_TRANSFER_POSTSTATE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-collateral-terminal-transfer-poststate/v2\0";
 const SERIES_COLLATERAL_SOURCE_PRESTATE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-collateral-source-prestate/v2\0";
 const SERIES_COLLATERAL_SOURCE_POSTSTATE_DOMAIN_V2: &[u8] =
@@ -163,6 +172,14 @@ const SERIES_COLLATERAL_PRINCIPAL_REFUND_STATE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-collateral-principal-refund-state/v2\0";
 const SERIES_NEUTRAL_COLLATERAL_DISPOSITION_STATE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-neutral-collateral-disposition-state/v2\0";
+const SERIES_PHYSICAL_RETIREMENT_RECEIPT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-physical-retirement-receipt/v2\0";
+const SERIES_LAMPORT_RETIREMENT_RECEIPT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-lamport-retirement-receipt/v2\0";
+const SERIES_COLLATERAL_RENT_RETIREMENT_RECEIPT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-collateral-rent-retirement-receipt/v2\0";
+const SERIES_FUNDING_ACCOUNT_RETIREMENT_RECEIPT_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-funding-account-retirement-receipt/v2\0";
 const SERIES_LAMPORT_ACTIVATION_AUTHORITY_DOMAIN_V2: &[u8] =
     b"dragons-clutch/series-lamport-activation-authority/v2\0";
 
@@ -430,7 +447,7 @@ fn process_activate_funding(
         compiler_bundle.bundle_id() == registry.value().compiler_bundle_id,
         ClutchError::MismatchedState,
     )?;
-    let _ = deploy_and_activate_series_funding_v2(
+    let (activated_registry, activated_funding) = deploy_and_activate_series_funding_v2(
         program_id,
         registry_account,
         funding_account,
@@ -456,6 +473,20 @@ fn process_activate_funding(
         registry,
         &artifacts,
         compiler_bundle,
+    )?;
+    let _ = initialize_series_lifecycle_replay_v1(
+        program_id,
+        account(ActivateSeriesFundingAccountRoleV2::Payer),
+        account(ActivateSeriesFundingAccountRoleV2::SeriesLifecycleReplay),
+        account(ActivateSeriesFundingAccountRoleV2::NeutralLamportSink),
+        account(ActivateSeriesFundingAccountRoleV2::SystemProgram),
+        registry_account,
+        funding_account,
+        activated_registry,
+        activated_funding,
+        &artifacts,
+        compiler_bundle,
+        &rent,
     )?;
     Ok(())
 }
@@ -698,13 +729,168 @@ fn process_close_funding(
     accounts: &[AccountInfo<'_>],
     request: CloseSeriesFundingIntentV1,
 ) -> Outcome<()> {
-    authenticate_current_series_authority_stack(
+    validate_close_series_funding_account_metas_v2(accounts.len(), |index| {
+        accounts
+            .get(index)
+            .map(|account| ObservedCloseSeriesFundingAccountMetaV2 {
+                key: account.key.to_bytes(),
+                signer: account.is_signer,
+                writable: account.is_writable,
+                executable: account.executable,
+            })
+    })
+    .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let account = |role: CloseSeriesFundingAccountRoleV2| &accounts[role.index()];
+    let registry_account = account(CloseSeriesFundingAccountRoleV2::Registry);
+    let funding_account = account(CloseSeriesFundingAccountRoleV2::Funding);
+    let lifecycle_replay_account =
+        account(CloseSeriesFundingAccountRoleV2::SeriesLifecycleReplay);
+    let rent_account = account(CloseSeriesFundingAccountRoleV2::RentSysvar);
+    let rent = read_rent(rent_account)?;
+    let registry = read_series_registry_account_v2_with_role(
         program_id,
-        accounts,
+        registry_account,
+        request.series_plan_id,
+        &rent,
+        false,
+    )?;
+    let artifacts = authenticate_series_artifact_accounts_v4(
+        program_id,
+        &accounts[CLOSE_SERIES_ARTIFACT_START_V2..CLOSE_SERIES_ARTIFACT_END_V2],
+        request.series_plan_id,
+        registry.value().funding_terms_id,
+    )?;
+    let registry_refs = authenticate_series_registry_capability_refs_v2(
+        program_id,
+        registry_account,
+        request.series_plan_id,
+    )?;
+    let registry_capability = authenticate_registry_capability_v3(
+        program_id,
+        registry_refs,
+        account(CloseSeriesFundingAccountRoleV2::ExecutingProgram),
+        account(CloseSeriesFundingAccountRoleV2::ExecutingProgramData),
+        account(CloseSeriesFundingAccountRoleV2::RegistryRelease),
+        account(CloseSeriesFundingAccountRoleV2::CapabilityProfile),
+    )?;
+    artifacts.validate_registry_projection(&registry_capability.projection())?;
+    let source_release = crate::source_plane_v3::authenticate_release(
+        program_id,
+        account(CloseSeriesFundingAccountRoleV2::SourceRelease),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let compiler_bundle = authenticate_compiled_product_series_bundle_v5(
+        program_id,
+        account(CloseSeriesFundingAccountRoleV2::CompilerBundle),
+        registry_capability,
+        source_release,
+        &artifacts,
+    )?;
+    let funding = read_series_funding_account_v2(
+        program_id,
+        funding_account,
+        registry,
+        &artifacts,
+        &rent,
+    )?;
+    let preflight = authenticate_series_physical_retirement_preflight_v2(
+        program_id,
+        registry,
+        funding,
+        &artifacts,
+        compiler_bundle,
+        account(CloseSeriesFundingAccountRoleV2::Realm),
+        account(CloseSeriesFundingAccountRoleV2::Profile),
+        account(CloseSeriesFundingAccountRoleV2::CollateralPolicy),
+        account(CloseSeriesFundingAccountRoleV2::CollateralMint),
+        account(CloseSeriesFundingAccountRoleV2::CollateralTokenProgram),
+        account(CloseSeriesFundingAccountRoleV2::CollateralTokenProgramData),
+        account(CloseSeriesFundingAccountRoleV2::CollateralPrincipalRefund),
+        account(CloseSeriesFundingAccountRoleV2::NeutralCollateralDisposition),
+        account(CloseSeriesFundingAccountRoleV2::LamportPrincipalRefund),
+        account(CloseSeriesFundingAccountRoleV2::NeutralLamportSink),
+        account(CloseSeriesFundingAccountRoleV2::CollateralAuthority),
+        &accounts[CLOSE_SERIES_COLLATERAL_VAULT_START_V2
+            ..CLOSE_SERIES_COLLATERAL_VAULT_END_V2],
+        &accounts[CLOSE_SERIES_LAMPORT_VAULT_START_V2..CLOSE_SERIES_LAMPORT_VAULT_END_V2],
+        rent_account,
+        rent,
+    )?;
+    let lifecycle_replay = authenticate_series_lifecycle_replay_v1(
+        program_id,
+        lifecycle_replay_account,
         request.series_plan_id,
         true,
+        &rent,
     )?;
-    Err(ClutchError::AuthorizationUnavailable.into())
+    let lifecycle_terminal = terminalize_series_lifecycle_replay_v1(
+        program_id,
+        registry_account,
+        registry,
+        funding_account,
+        funding,
+        lifecycle_replay_account,
+        lifecycle_replay,
+        &artifacts,
+        compiler_bundle,
+        &rent,
+    )?;
+    let lifecycle_replay_terminal = authenticate_series_lifecycle_replay_v1(
+        program_id,
+        lifecycle_replay_account,
+        request.series_plan_id,
+        true,
+        &rent,
+    )?;
+    let terminal_registry = read_series_registry_account_v2_with_role(
+        program_id,
+        registry_account,
+        request.series_plan_id,
+        &rent,
+        false,
+    )?;
+    let terminal_funding = read_series_funding_account_v2(
+        program_id,
+        funding_account,
+        terminal_registry,
+        &artifacts,
+        &rent,
+    )?;
+    require(
+        terminal_registry == preflight.registry
+            && terminal_funding == preflight.funding
+            && terminal_funding.value().state.phase
+                == clutch_product_series::SeriesFundingPhaseV2::Closed,
+        ClutchError::MismatchedState,
+    )?;
+    let terminal = authenticate_product_series_terminal_retirement_v2(
+        program_id,
+        &preflight,
+        lifecycle_terminal,
+        lifecycle_replay_terminal,
+        registry_account,
+        funding_account,
+    )?;
+    let _ = retire_series_funding_physical_v2(
+        program_id,
+        preflight,
+        terminal,
+        registry_account,
+        funding_account,
+        account(CloseSeriesFundingAccountRoleV2::CollateralMint),
+        &accounts[CLOSE_SERIES_COLLATERAL_VAULT_START_V2
+            ..CLOSE_SERIES_COLLATERAL_VAULT_END_V2],
+        &accounts[CLOSE_SERIES_LAMPORT_VAULT_START_V2..CLOSE_SERIES_LAMPORT_VAULT_END_V2],
+        account(CloseSeriesFundingAccountRoleV2::CollateralPrincipalRefund),
+        account(CloseSeriesFundingAccountRoleV2::NeutralCollateralDisposition),
+        account(CloseSeriesFundingAccountRoleV2::CollateralAuthority),
+        account(CloseSeriesFundingAccountRoleV2::LamportPrincipalRefund),
+        account(CloseSeriesFundingAccountRoleV2::NeutralLamportSink),
+        account(CloseSeriesFundingAccountRoleV2::CollateralTokenProgram),
+        account(CloseSeriesFundingAccountRoleV2::SystemProgram),
+        rent_account,
+    )?;
+    Ok(())
 }
 
 /// Exact decoded immutable bodies selected by one registered Series.
@@ -1320,7 +1506,7 @@ struct SeriesLifecycleTerminalPreauthorizationV1 {
 /// may consume this only after the exact `0xb8/v1` Terminal postimage has been
 /// written and hostile-reopened in the same atomic instruction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedSeriesLifecycleTerminalPostwriteV1 {
+struct AuthenticatedSeriesLifecycleTerminalPostwriteV1 {
     id: ContentId,
     replay_account: Pubkey,
     binding_id: SeriesLifecycleReplayBindingV1Id,
@@ -1342,75 +1528,75 @@ pub(crate) struct AuthenticatedSeriesLifecycleTerminalPostwriteV1 {
 }
 
 impl AuthenticatedSeriesLifecycleTerminalPostwriteV1 {
-    pub(crate) const fn id(self) -> ContentId {
+    const fn id(self) -> ContentId {
         self.id
     }
 
-    pub(crate) const fn replay_account(self) -> Pubkey {
+    const fn replay_account(self) -> Pubkey {
         self.replay_account
     }
 
-    pub(crate) const fn binding_id(self) -> SeriesLifecycleReplayBindingV1Id {
+    const fn binding_id(self) -> SeriesLifecycleReplayBindingV1Id {
         self.binding_id
     }
 
-    pub(crate) const fn projection(self) -> SeriesLifecycleTerminalProjectionV1 {
+    const fn projection(self) -> SeriesLifecycleTerminalProjectionV1 {
         self.projection
     }
 
-    pub(crate) const fn replay_state_before_id(self) -> ContentId {
+    const fn replay_state_before_id(self) -> ContentId {
         self.replay_state_before_id
     }
 
-    pub(crate) const fn replay_state_after_id(self) -> ContentId {
+    const fn replay_state_after_id(self) -> ContentId {
         self.replay_state_after_id
     }
 
-    pub(crate) const fn replay_data_before_id(self) -> ContentId {
+    const fn replay_data_before_id(self) -> ContentId {
         self.replay_data_before_id
     }
 
-    pub(crate) const fn replay_data_after_id(self) -> ContentId {
+    const fn replay_data_after_id(self) -> ContentId {
         self.replay_data_after_id
     }
 
-    pub(crate) const fn replay_authentication_before_id(self) -> ContentId {
+    const fn replay_authentication_before_id(self) -> ContentId {
         self.replay_authentication_before_id
     }
 
-    pub(crate) const fn replay_authentication_after_id(self) -> ContentId {
+    const fn replay_authentication_after_id(self) -> ContentId {
         self.replay_authentication_after_id
     }
 
-    pub(crate) const fn registry_account(self) -> Pubkey {
+    const fn registry_account(self) -> Pubkey {
         self.registry_account
     }
 
-    pub(crate) const fn registry_data_id(self) -> ContentId {
+    const fn registry_data_id(self) -> ContentId {
         self.registry_data_id
     }
 
-    pub(crate) const fn registry_authentication_id(self) -> ContentId {
+    const fn registry_authentication_id(self) -> ContentId {
         self.registry_authentication_id
     }
 
-    pub(crate) const fn funding_account(self) -> Pubkey {
+    const fn funding_account(self) -> Pubkey {
         self.funding_account
     }
 
-    pub(crate) const fn funding_state_id(self) -> ContentId {
+    const fn funding_state_id(self) -> ContentId {
         self.funding_state_id
     }
 
-    pub(crate) const fn funding_data_id(self) -> ContentId {
+    const fn funding_data_id(self) -> ContentId {
         self.funding_data_id
     }
 
-    pub(crate) const fn funding_authentication_id(self) -> ContentId {
+    const fn funding_authentication_id(self) -> ContentId {
         self.funding_authentication_id
     }
 
-    pub(crate) const fn funding_terminal_projection(self) -> SeriesFundingTerminalProjectionV2 {
+    const fn funding_terminal_projection(self) -> SeriesFundingTerminalProjectionV2 {
         self.funding_terminal_projection
     }
 }
@@ -1485,6 +1671,51 @@ impl AuthenticatedSeriesCollateralActivationPostwriteV2 {
     const fn receipt_id(&self) -> ContentId {
         self.receipt_id
     }
+}
+
+/// Complete hostile-decoded physical prestate for current Series retirement.
+///
+/// Construction is private and occurs only after the route-owned exact account
+/// contract, immutable artifact graph, current Registry/Funding bodies,
+/// Profile-selected loader deployment, destinations, and all eleven custody
+/// balances have been authenticated. It authorizes no movement until refined
+/// by Product's one-shot terminal authority.
+#[derive(Debug)]
+struct AuthenticatedSeriesPhysicalRetirementPreflightV2 {
+    bound: BoundRealmCollateralV2,
+    deployment: crate::collateral_release::AuthenticatedCollateralReleaseDeploymentV2,
+    registry: AuthenticatedSeriesRegistryAccountV2,
+    funding: AuthenticatedSeriesFundingAccountV2,
+    compiler_bundle_id: CompiledProductSeriesBundleV5Id,
+    funding_join: SeriesCollateralFundingJoinV2,
+    collateral_vaults: [Pubkey; SERIES_COLLATERAL_VAULT_COUNT_V2],
+    lamport_vaults: [Pubkey; SERIES_FUNDING_COMPONENT_COUNT_V2],
+    collateral_principal_refund_state_id: ContentId,
+    neutral_collateral_disposition_state_id: ContentId,
+    rent_sysvar: Pubkey,
+    rent: RentParameters,
+}
+
+/// Product-owned one-shot proof that every Series ordinal/link/foundation
+/// obligation is terminal and the exact FundingV2 state may be disposed.
+///
+/// Construction consumes Product's non-detachable hostile-postwrite receipt;
+/// neither a caller-supplied projection nor a Closed Funding phase can mint
+/// this authority.
+#[derive(Debug)]
+struct AuthenticatedProductSeriesTerminalRetirementV2 {
+    projection: SeriesFundingTerminalProjectionV2,
+    terminal_receipt_id: ContentId,
+    product_terminal_evidence_id: ContentId,
+}
+
+/// Opaque proof that every physical custody account was emptied/closed, the
+/// Funding PDA was deleted with exact rent ownership, and RegistryV2 remained
+/// the unchanged permanent replay anchor.
+#[derive(Debug)]
+struct AuthenticatedSeriesPhysicalRetirementV2 {
+    terminal_receipt_id: ContentId,
+    receipt_id: ContentId,
 }
 
 impl AuthenticatedSeriesFundingAccountV2 {
@@ -2992,7 +3223,8 @@ fn series_collateral_account_state_id_v2(
     Ok(value)
 }
 
-fn series_collateral_funding_commitment_v2(
+fn series_collateral_funding_commitment_with_domain_v2(
+    domain: &[u8],
     principal: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
     donations: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
 ) -> Outcome<ContentId> {
@@ -3023,24 +3255,60 @@ fn series_collateral_funding_commitment_v2(
         encoded[fourth..end].copy_from_slice(&donations[index].collateral_atoms.to_le_bytes());
         index += 1;
     }
-    let value = ContentId::from_bytes(
-        solana_sha256_hasher::hashv(&[SERIES_COLLATERAL_ACTIVATION_FUNDING_DOMAIN_V2, &encoded])
-            .to_bytes(),
-    );
+    let value = ContentId::from_bytes(solana_sha256_hasher::hashv(&[domain, &encoded]).to_bytes());
     require(!value.is_zero(), ClutchError::MismatchedState)?;
     Ok(value)
 }
 
-fn series_collateral_transfer_poststate_id_v2(
+fn series_collateral_funding_commitment_v2(
+    principal: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+    donations: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+) -> Outcome<ContentId> {
+    series_collateral_funding_commitment_with_domain_v2(
+        SERIES_COLLATERAL_ACTIVATION_FUNDING_DOMAIN_V2,
+        principal,
+        donations,
+    )
+}
+
+fn series_terminal_funding_commitment_v2(
+    principal: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+    donations: &[ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2],
+) -> Outcome<ContentId> {
+    series_collateral_funding_commitment_with_domain_v2(
+        SERIES_COLLATERAL_TERMINAL_FUNDING_DOMAIN_V2,
+        principal,
+        donations,
+    )
+}
+
+const fn custody_transfer_kind_byte_v2(kind: CustodyTransferKindV2) -> u8 {
+    match kind {
+        CustodyTransferKindV2::HolderDeposit => 1,
+        CustodyTransferKindV2::HolderWithdrawal => 2,
+        CustodyTransferKindV2::SegregatedFunding => 3,
+        CustodyTransferKindV2::OccurrenceDisbursement => 4,
+        CustodyTransferKindV2::PrincipalRefund => 5,
+        CustodyTransferKindV2::DonationDisposition => 6,
+        CustodyTransferKindV2::ClaimRedemption => 7,
+        CustodyTransferKindV2::HoardSurplusDisposition => 8,
+    }
+}
+
+fn series_collateral_transfer_poststate_id_with_kind_v2(
+    domain: &[u8],
     accepted: AcceptedCollateralTransferV2,
+    expected_kind: CustodyTransferKindV2,
 ) -> Outcome<ContentId> {
     require(
-        accepted.kind == CustodyTransferKindV2::SegregatedFunding,
+        accepted.kind == expected_kind,
         ClutchError::MismatchedState,
     )?;
+    let kind = [custody_transfer_kind_byte_v2(accepted.kind)];
     let value = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
-            SERIES_COLLATERAL_TRANSFER_POSTSTATE_DOMAIN_V2,
+            domain,
+            &kind,
             &accepted.amount_atoms.to_le_bytes(),
             &accepted.source_semantic_owner.bytes(),
             &accepted.source_compartment.to_le_bytes(),
@@ -3054,6 +3322,40 @@ fn series_collateral_transfer_poststate_id_v2(
     );
     require(!value.is_zero(), ClutchError::MismatchedState)?;
     Ok(value)
+}
+
+fn series_collateral_transfer_poststate_id_v2(
+    accepted: AcceptedCollateralTransferV2,
+) -> Outcome<ContentId> {
+    series_collateral_transfer_poststate_id_with_kind_v2(
+        SERIES_COLLATERAL_TRANSFER_POSTSTATE_DOMAIN_V2,
+        accepted,
+        CustodyTransferKindV2::SegregatedFunding,
+    )
+}
+
+fn series_terminal_collateral_transfer_poststate_id_v2(
+    accepted: AcceptedCollateralTransferV2,
+    expected_kind: CustodyTransferKindV2,
+) -> Outcome<ContentId> {
+    require_series_terminal_transfer_kind_v2(accepted.kind, expected_kind)?;
+    series_collateral_transfer_poststate_id_with_kind_v2(
+        SERIES_COLLATERAL_TERMINAL_TRANSFER_POSTSTATE_DOMAIN_V2,
+        accepted,
+        expected_kind,
+    )
+}
+
+fn require_series_terminal_transfer_kind_v2(
+    actual_kind: CustodyTransferKindV2,
+    expected_kind: CustodyTransferKindV2,
+) -> Outcome<()> {
+    require(
+        actual_kind == expected_kind
+            && (expected_kind == CustodyTransferKindV2::PrincipalRefund
+                || expected_kind == CustodyTransferKindV2::DonationDisposition),
+        ClutchError::MismatchedState,
+    )
 }
 
 fn flatten_series_collateral_ids_v2(
@@ -4015,6 +4317,1239 @@ fn deploy_series_collateral_activation_v2<'a>(
         collateral_principal_refund_state_id,
         neutral_collateral_disposition_state_id,
         vault_rent,
+        receipt_id,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_series_physical_retirement_preflight_v2<'a>(
+    program_id: &Pubkey,
+    registry: AuthenticatedSeriesRegistryAccountV2,
+    funding: AuthenticatedSeriesFundingAccountV2,
+    artifacts: &AuthenticatedSeriesArtifactsV4,
+    compiler_bundle: AuthenticatedCompiledProductSeriesBundleV5,
+    realm_account: &AccountInfo<'a>,
+    profile_account: &AccountInfo<'a>,
+    policy_account: &AccountInfo<'a>,
+    mint: &AccountInfo<'a>,
+    token_program: &AccountInfo<'a>,
+    token_programdata: &AccountInfo<'a>,
+    collateral_principal_refund: &AccountInfo<'a>,
+    neutral_collateral_disposition: &AccountInfo<'a>,
+    lamport_principal_refund: &AccountInfo<'a>,
+    neutral_lamport_sink: &AccountInfo<'a>,
+    collateral_authority: &AccountInfo<'a>,
+    collateral_vaults: &[AccountInfo<'a>],
+    lamport_vaults: &[AccountInfo<'a>],
+    rent_sysvar: &AccountInfo<'a>,
+    rent: RentParameters,
+) -> Outcome<AuthenticatedSeriesPhysicalRetirementPreflightV2> {
+    require(
+        collateral_vaults.len() == SERIES_COLLATERAL_VAULT_COUNT_V2
+            && lamport_vaults.len() == SERIES_FUNDING_COMPONENT_COUNT_V2
+            && registry.activation_consumed()
+            && registry.value().series_plan_id == funding.value().state.series_plan_id
+            && registry.value().funding_terms_id == funding.value().state.funding_terms_id
+            && registry.value().compiler_bundle_id == funding.value().state.compiler_bundle_id
+            && registry.value().compiler_bundle_id == compiler_bundle.bundle_id(),
+        ClutchError::MismatchedState,
+    )?;
+    let series_plan_id = artifacts
+        .series
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding_terms_id = artifacts
+        .funding_terms
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let funding_quote_id = artifacts
+        .quote
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        funding.value().state.series_plan_id == series_plan_id
+            && funding.value().state.funding_terms_id == funding_terms_id
+            && funding.value().state.funding_quote_id == funding_quote_id
+            && compiler_bundle.bundle().series_plan_id == series_plan_id
+            && compiler_bundle.bundle().funding_terms_id == funding_terms_id
+            && artifacts.funding_terms.collateral_mint.bytes() == mint.key.to_bytes()
+            && artifacts.funding_terms.token_program.bytes() == token_program.key.to_bytes()
+            && artifacts
+                .funding_terms
+                .collateral_principal_refund_token_account
+                .bytes()
+                == collateral_principal_refund.key.to_bytes()
+            && artifacts
+                .funding_terms
+                .neutral_collateral_disposition_token_account
+                .bytes()
+                == neutral_collateral_disposition.key.to_bytes()
+            && artifacts.funding_terms.lamport_principal_refund.bytes()
+                == lamport_principal_refund.key.to_bytes()
+            && artifacts.funding_terms.neutral_lamport_sink.bytes()
+                == neutral_lamport_sink.key.to_bytes()
+            && *rent_sysvar.key == crate::instructions_sysvar::RENT_SYSVAR_ID,
+        ClutchError::MismatchedState,
+    )?;
+    require_system_lamport_destination(
+        lamport_principal_refund,
+        artifacts.funding_terms.lamport_principal_refund,
+    )?;
+    require_system_lamport_destination(
+        neutral_lamport_sink,
+        artifacts.funding_terms.neutral_lamport_sink,
+    )?;
+
+    let bound = crate::collateral_release::authenticate_realm_collateral_v2(
+        program_id,
+        realm_account,
+        profile_account,
+        policy_account,
+        token_program,
+    )?;
+    let deployment = crate::collateral_release::authenticate_collateral_release_deployment_v2(
+        bound.release(),
+        token_program,
+        token_programdata,
+    )?;
+    require_collateral_program(token_program, bound)?;
+    require_series_collateral_authority(program_id, series_plan_id, collateral_authority)?;
+    let realm = bound.realm();
+    require(
+        realm.realm == collateral_content_id(artifacts.genesis.realm_id)
+            && realm.profile == collateral_content_id(artifacts.genesis.profile_id)
+            && bound.policy().mint == collateral_id(mint.key)
+            && bound.policy().token_program == collateral_id(token_program.key)
+            && deployment.release() == bound.release()
+            && deployment.release_id()
+                == bound
+                    .release()
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::AuthorizationUnavailable))?,
+        ClutchError::MismatchedState,
+    )?;
+
+    let mint_data = mint
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    admit_realm_collateral_mint_v2(bound, runtime_account_view(mint, &mint_data))
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(mint_data);
+    let collateral_principal_refund_data = collateral_principal_refund
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    admit_realm_collateral_account_v2(
+        bound,
+        runtime_account_view(
+            collateral_principal_refund,
+            &collateral_principal_refund_data,
+        ),
+        TokenAccountRoleV2::ReceiveOnly {
+            account: collateral_id(collateral_principal_refund.key),
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let collateral_principal_refund_state_id = series_collateral_account_state_id_v2(
+        SERIES_COLLATERAL_PRINCIPAL_REFUND_STATE_DOMAIN_V2,
+        collateral_principal_refund,
+        &collateral_principal_refund_data,
+    )?;
+    drop(collateral_principal_refund_data);
+    let neutral_collateral_disposition_data = neutral_collateral_disposition
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    admit_realm_collateral_account_v2(
+        bound,
+        runtime_account_view(
+            neutral_collateral_disposition,
+            &neutral_collateral_disposition_data,
+        ),
+        TokenAccountRoleV2::ReceiveOnly {
+            account: collateral_id(neutral_collateral_disposition.key),
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let neutral_collateral_disposition_state_id = series_collateral_account_state_id_v2(
+        SERIES_NEUTRAL_COLLATERAL_DISPOSITION_STATE_DOMAIN_V2,
+        neutral_collateral_disposition,
+        &neutral_collateral_disposition_data,
+    )?;
+    drop(neutral_collateral_disposition_data);
+
+    let funding_join = SeriesCollateralFundingJoinV2 {
+        realm: realm.realm,
+        profile: realm.profile,
+        series_plan: CollateralId::from_bytes(series_plan_id.bytes()),
+        funding_terms: CollateralId::from_bytes(funding_terms_id.bytes()),
+        funding_state_account: collateral_id(&funding.account()),
+        quote: CollateralId::from_bytes(funding_quote_id.bytes()),
+        funding_authority: collateral_id(collateral_authority.key),
+        collateral_principal_refund_token_account: collateral_id(
+            collateral_principal_refund.key,
+        ),
+        neutral_collateral_disposition_token_account: collateral_id(
+            neutral_collateral_disposition.key,
+        ),
+        payer_lamport_refund: collateral_id(lamport_principal_refund.key),
+        neutral_lamport_sink: collateral_id(neutral_lamport_sink.key),
+    };
+    funding_join
+        .validate(bound)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+
+    let mut authenticated_collateral_vaults =
+        [Pubkey::new_from_array([0u8; 32]); SERIES_COLLATERAL_VAULT_COUNT_V2];
+    let mut index = 0usize;
+    while index < SERIES_COLLATERAL_VAULT_COUNT_V2 {
+        let coordinate = series_collateral_vault_coordinate_v2(index)?;
+        let binding = series_collateral_binding_v2(
+            program_id,
+            bound,
+            series_plan_id,
+            coordinate,
+            &collateral_vaults[index],
+            collateral_authority,
+        )?;
+        let data = collateral_vaults[index]
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let observation = admit_realm_collateral_account_v2(
+            bound,
+            runtime_account_view(&collateral_vaults[index], &data),
+            TokenAccountRoleV2::SegregatedVault(binding),
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+        let component = funding.value().state.components[coordinate.component.index()];
+        let expected_atoms = add(
+            component.remaining_principal.collateral_atoms,
+            component.donations.collateral_atoms,
+        )?;
+        let stored_rent = funding.value().collateral_vault_rent_principal_lamports[index];
+        let current_rent = rent.minimum_balance(data.len())?;
+        require(
+            observation.amount_atoms == expected_atoms
+                && stored_rent != 0
+                && collateral_vaults[index].lamports() >= stored_rent
+                && collateral_vaults[index].lamports() >= current_rent,
+            ClutchError::SeriesCustodyDeltaMismatch,
+        )?;
+        drop(data);
+        authenticated_collateral_vaults[index] = *collateral_vaults[index].key;
+        index += 1;
+    }
+    require(
+        funding.value().state.components[SeriesFundingComponentV2::SeriesAdmission.index()]
+            .remaining_principal
+            .collateral_atoms
+            == 0
+            && funding.value().state.components
+                [SeriesFundingComponentV2::SeriesAdmission.index()]
+                .donations
+                .collateral_atoms
+                == 0,
+        ClutchError::MismatchedState,
+    )?;
+
+    let mut authenticated_lamport_vaults =
+        [Pubkey::new_from_array([0u8; 32]); SERIES_FUNDING_COMPONENT_COUNT_V2];
+    index = 0;
+    while index < SERIES_FUNDING_COMPONENT_COUNT_V2 {
+        let component = series_funding_component_v2(index)?;
+        require_lamport_vault_metadata_v2(
+            program_id,
+            series_plan_id,
+            component,
+            &lamport_vaults[index],
+        )?;
+        let capital = funding.value().state.components[index];
+        require(
+            lamport_vaults[index].lamports()
+                == add(
+                    capital.remaining_principal.lamports,
+                    capital.donations.lamports,
+                )?,
+            ClutchError::SeriesCustodyDeltaMismatch,
+        )?;
+        authenticated_lamport_vaults[index] = *lamport_vaults[index].key;
+        index += 1;
+    }
+
+    Ok(AuthenticatedSeriesPhysicalRetirementPreflightV2 {
+        bound,
+        deployment,
+        registry,
+        funding,
+        compiler_bundle_id: compiler_bundle.bundle_id(),
+        funding_join,
+        collateral_vaults: authenticated_collateral_vaults,
+        lamport_vaults: authenticated_lamport_vaults,
+        collateral_principal_refund_state_id,
+        neutral_collateral_disposition_state_id,
+        rent_sysvar: *rent_sysvar.key,
+        rent,
+    })
+}
+
+fn require_series_lifecycle_funding_binding_v2(
+    binding: SeriesLifecycleReplayBindingV1,
+    funding: SeriesFundingStateV2,
+) -> Outcome<()> {
+    require(
+        binding.series_plan_id == funding.series_plan_id
+            && binding.funding_terms_id == funding.funding_terms_id
+            && binding.funding_quote_id == funding.funding_quote_id
+            && binding.attachment_plan_id == funding.attachment_plan_id
+            && binding.compiler_bundle_id == funding.compiler_bundle_id
+            && binding.instance_count == funding.instance_count,
+        ClutchError::MismatchedState,
+    )
+}
+
+fn authenticate_product_series_terminal_retirement_v2(
+    program_id: &Pubkey,
+    preflight: &AuthenticatedSeriesPhysicalRetirementPreflightV2,
+    terminal: AuthenticatedSeriesLifecycleTerminalPostwriteV1,
+    replay: AuthenticatedSeriesLifecycleReplayV1,
+    registry_account: &AccountInfo<'_>,
+    funding_account: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedProductSeriesTerminalRetirementV2> {
+    let funding_state = preflight.funding.value().state;
+    let funding_state_id = funding_state
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let funding_projection = terminal.funding_terminal_projection();
+    let funding_projection_id = funding_projection
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let lifecycle_projection = terminal.projection();
+    let replay_state = replay.state();
+    let replay_state_id = replay_state
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let replay_binding = replay_state.binding();
+    let replay_binding_id = replay_binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let registry_authentication = authenticate_series_terminal_account_bytes_v1(
+        SERIES_REGISTRY_TERMINAL_AUTHENTICATION_DOMAIN_V2,
+        program_id,
+        registry_account,
+        preflight.registry.value().rent_principal_lamports,
+    )?;
+    let funding_authentication = authenticate_series_terminal_account_bytes_v1(
+        SERIES_FUNDING_TERMINAL_AUTHENTICATION_DOMAIN_V2,
+        program_id,
+        funding_account,
+        preflight.funding.value().rent_principal_lamports,
+    )?;
+    require_series_lifecycle_funding_binding_v2(replay_binding, funding_state)?;
+
+    require(
+        replay.is_writable()
+            && replay.state().phase()
+                == clutch_product_series::SeriesLifecycleReplayPhaseV1::Terminal
+            && replay.account() == terminal.replay_account()
+            && replay.account() == Pubkey::new_from_array(
+                replay_binding.lifecycle_replay_account_id.bytes(),
+            )
+            && replay_binding_id == terminal.binding_id()
+            && replay_binding_id == lifecycle_projection.binding_id()
+            && replay_binding.registry_account_id.bytes()
+                == preflight.registry.account().to_bytes()
+            && replay_binding.funding_account_id.bytes()
+                == preflight.funding.account().to_bytes()
+            && replay_state.terminal_projection_id()
+                == lifecycle_projection.id().content_id()
+            && replay_state_id == terminal.replay_state_after_id()
+            && terminal.replay_state_before_id()
+                == lifecycle_projection.pre_terminal_state_id().content_id()
+            && replay.data_id() == terminal.replay_data_after_id()
+            && replay.authentication_id() == terminal.replay_authentication_after_id()
+            && replay_state.transition_sequence()
+                == lifecycle_projection.terminal_transition_sequence()
+            && replay_state.transition_transcript_id()
+                == lifecycle_projection.terminal_transcript_id()
+            && replay_state.processed_ordinals() == lifecycle_projection.processed_ordinals()
+            && replay_state.admitted_links() == lifecycle_projection.admitted_links()
+            && replay_state.retired_links() == lifecycle_projection.retired_links()
+            && replay_state.live_links() == 0
+            && replay_state.lapsed_ordinals() == lifecycle_projection.lapsed_ordinals()
+            && terminal.replay_state_before_id() != terminal.replay_state_after_id()
+            && terminal.replay_data_before_id() != terminal.replay_data_after_id()
+            && terminal.replay_authentication_before_id()
+                != terminal.replay_authentication_after_id()
+            && terminal.registry_account() == preflight.registry.account()
+            && terminal.registry_account() == *registry_account.key
+            && terminal.registry_data_id() == registry_authentication.data_id
+            && terminal.registry_authentication_id()
+                == registry_authentication.authentication_id
+            && terminal.funding_account() == preflight.funding.account()
+            && terminal.funding_account() == *funding_account.key
+            && terminal.funding_state_id() == funding_state_id
+            && terminal.funding_data_id() == funding_authentication.data_id
+            && terminal.funding_authentication_id()
+                == funding_authentication.authentication_id
+            && lifecycle_projection.series_plan_id() == funding_state.series_plan_id
+            && lifecycle_projection.lifecycle_replay_account_id().bytes()
+                == replay.account().to_bytes()
+            && lifecycle_projection.funding_account_id().bytes()
+                == preflight.funding.account().to_bytes()
+            && lifecycle_projection.funding_state_id() == funding_state_id
+            && lifecycle_projection.funding_terminal_projection_id()
+                == funding_projection_id
+            && lifecycle_projection.registry_account_id().bytes()
+                == preflight.registry.account().to_bytes()
+            && lifecycle_projection.registry_authentication_id()
+                == terminal.registry_authentication_id()
+            && lifecycle_projection.terminal_authority_receipt_id()
+                == funding_projection.terminal_receipt_id
+            && !terminal.id().is_zero()
+            && !terminal.replay_data_before_id().is_zero()
+            && !terminal.replay_authentication_before_id().is_zero(),
+        ClutchError::MismatchedState,
+    )?;
+    authenticate_series_terminal_join_v2(
+        preflight,
+        &AuthenticatedProductSeriesTerminalRetirementV2 {
+            projection: funding_projection,
+            terminal_receipt_id: funding_projection.terminal_receipt_id,
+            product_terminal_evidence_id: terminal.id(),
+        },
+    )?;
+    Ok(AuthenticatedProductSeriesTerminalRetirementV2 {
+        projection: funding_projection,
+        terminal_receipt_id: funding_projection.terminal_receipt_id,
+        product_terminal_evidence_id: terminal.id(),
+    })
+}
+
+fn authenticate_series_terminal_join_v2(
+    preflight: &AuthenticatedSeriesPhysicalRetirementPreflightV2,
+    terminal: &AuthenticatedProductSeriesTerminalRetirementV2,
+) -> Outcome<SeriesCollateralTerminalJoinV2> {
+    let state = preflight.funding.value().state;
+    let projection = terminal.projection;
+    require(
+        !terminal.terminal_receipt_id.is_zero()
+            && !terminal.product_terminal_evidence_id.is_zero()
+            && terminal.terminal_receipt_id == projection.terminal_receipt_id
+            && projection.series_plan_id == state.series_plan_id
+            && projection.funding_terms_id == state.funding_terms_id
+            && projection.compiler_bundle_id == state.compiler_bundle_id
+            && projection.compiler_bundle_id == preflight.compiler_bundle_id
+            && projection.transition_sequence == state.transition_sequence,
+        ClutchError::MismatchedState,
+    )?;
+    let mut index = 0usize;
+    while index < SERIES_FUNDING_COMPONENT_COUNT_V2 {
+        require(
+            projection.refundable_principal[index]
+                == state.components[index].remaining_principal
+                && projection.donation_residue[index] == state.components[index].donations,
+            ClutchError::MismatchedState,
+        )?;
+        index += 1;
+    }
+    let join = SeriesCollateralTerminalJoinV2 {
+        funding: preflight.funding_join,
+        terminal_receipt: CollateralId::from_bytes(terminal.terminal_receipt_id.bytes()),
+    };
+    join.validate(preflight.bound)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    Ok(join)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SeriesTerminalCollateralMovementV2 {
+    PrincipalRefund,
+    DonationDisposition,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn transfer_series_terminal_collateral_v2<'a>(
+    program_id: &Pubkey,
+    preflight: &AuthenticatedSeriesPhysicalRetirementPreflightV2,
+    terminal_join: SeriesCollateralTerminalJoinV2,
+    projection: SeriesFundingTerminalProjectionV2,
+    coordinate: SeriesCollateralVaultCoordinateV2,
+    movement: SeriesTerminalCollateralMovementV2,
+    mint: &AccountInfo<'a>,
+    vault: &AccountInfo<'a>,
+    destination: &AccountInfo<'a>,
+    authority: &AccountInfo<'a>,
+    token_program: &AccountInfo<'a>,
+) -> Outcome<ContentId> {
+    let component_index = coordinate.component.index();
+    let amount_atoms = match movement {
+        SeriesTerminalCollateralMovementV2::PrincipalRefund => {
+            projection.refundable_principal[component_index].collateral_atoms
+        }
+        SeriesTerminalCollateralMovementV2::DonationDisposition => {
+            projection.donation_residue[component_index].collateral_atoms
+        }
+    };
+    if amount_atoms == 0 {
+        return Ok(ContentId::ZERO);
+    }
+    let binding = series_collateral_binding_v2(
+        program_id,
+        preflight.bound,
+        projection.series_plan_id,
+        coordinate,
+        vault,
+        authority,
+    )?;
+    let transfer_authority = TransferAuthorityV2 {
+        address: collateral_id(authority.key),
+        kind: TransferAuthorityKindV2::ProgramDerived,
+        is_transaction_signer: authority.is_signer,
+        program_address_authenticated: true,
+        is_writable: authority.is_writable,
+        executable: authority.executable,
+        data_is_empty: authority.data_is_empty(),
+    };
+    let request = match movement {
+        SeriesTerminalCollateralMovementV2::PrincipalRefund => series_principal_refund_request_v2(
+            preflight.bound,
+            terminal_join,
+            coordinate.compartment,
+            binding,
+            transfer_authority,
+            amount_atoms,
+        ),
+        SeriesTerminalCollateralMovementV2::DonationDisposition => {
+            series_donation_disposition_request_v2(
+                preflight.bound,
+                terminal_join,
+                coordinate.compartment,
+                binding,
+                transfer_authority,
+                amount_atoms,
+            )
+        }
+    }
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let mint_data = mint
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let source_data = vault
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let destination_data = destination
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let prepared = prepare_realm_collateral_transfer_v2(
+        preflight.bound,
+        request,
+        runtime_account_view(mint, &mint_data),
+        runtime_account_view(vault, &source_data),
+        runtime_account_view(destination, &destination_data),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(mint_data);
+    drop(source_data);
+    drop(destination_data);
+    let series_seed = projection.series_plan_id.bytes();
+    let (_, bump) = seeds::series_collateral_authority_pda(program_id, &series_seed);
+    let bump_seed = [bump];
+    let signer_seeds: &[&[u8]] = &[
+        seeds::SEED_SERIES_COLLATERAL_AUTHORITY_V1,
+        &series_seed,
+        &bump_seed,
+    ];
+    let accepted = invoke_series_collateral_transfer(
+        prepared,
+        mint,
+        vault,
+        destination,
+        authority,
+        token_program,
+        Some(signer_seeds),
+    )?;
+    let expected_kind = match movement {
+        SeriesTerminalCollateralMovementV2::PrincipalRefund => {
+            CustodyTransferKindV2::PrincipalRefund
+        }
+        SeriesTerminalCollateralMovementV2::DonationDisposition => {
+            CustodyTransferKindV2::DonationDisposition
+        }
+    };
+    require(
+        accepted.kind == expected_kind
+            && accepted.amount_atoms == amount_atoms
+            && accepted.source_semantic_owner
+                == CollateralId::from_bytes(projection.series_plan_id.bytes())
+            && accepted.source_compartment == coordinate.compartment
+            && accepted.destination_semantic_owner
+                == CollateralId::from_bytes(projection.funding_terms_id.bytes())
+            && accepted.destination_compartment == 0,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+    series_terminal_collateral_transfer_poststate_id_v2(accepted, expected_kind)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn close_series_collateral_vault_v2<'a>(
+    program_id: &Pubkey,
+    preflight: &AuthenticatedSeriesPhysicalRetirementPreflightV2,
+    terminal_join: SeriesCollateralTerminalJoinV2,
+    coordinate: SeriesCollateralVaultCoordinateV2,
+    vault_index: usize,
+    vault: &AccountInfo<'a>,
+    component_lamport_vault: &AccountInfo<'a>,
+    authority: &AccountInfo<'a>,
+    payer_lamport_refund: &AccountInfo<'a>,
+    neutral_lamport_sink: &AccountInfo<'a>,
+    token_program: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+) -> Outcome<ContentId> {
+    let binding = series_collateral_binding_v2(
+        program_id,
+        preflight.bound,
+        preflight.funding.value().state.series_plan_id,
+        coordinate,
+        vault,
+        authority,
+    )?;
+    require_lamport_vault_metadata_v2(
+        program_id,
+        preflight.funding.value().state.series_plan_id,
+        coordinate.component,
+        component_lamport_vault,
+    )?;
+    let close_authority = TransferAuthorityV2 {
+        address: collateral_id(authority.key),
+        kind: TransferAuthorityKindV2::ProgramDerived,
+        is_transaction_signer: authority.is_signer,
+        program_address_authenticated: true,
+        is_writable: authority.is_writable,
+        executable: authority.executable,
+        data_is_empty: authority.data_is_empty(),
+    };
+    let request = SeriesCollateralVaultCloseRequestV2 {
+        terminal: terminal_join,
+        component: coordinate.compartment,
+        vault: binding,
+        component_lamport_vault: collateral_id(component_lamport_vault.key),
+        stored_vault_rent_principal_lamports: preflight
+            .funding
+            .value()
+            .collateral_vault_rent_principal_lamports[vault_index],
+        authority: close_authority,
+    };
+    let vault_before_data = vault
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let component_before_data = component_lamport_vault
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let prepared_close = prepare_series_collateral_vault_close_v2(
+        preflight.bound,
+        request,
+        runtime_lamport_account_view(vault, &vault_before_data),
+        runtime_lamport_account_view(component_lamport_vault, &component_before_data),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(vault_before_data);
+    drop(component_before_data);
+    let cpi = prepared_close.cpi();
+    require(
+        cpi.token_program == collateral_id(token_program.key)
+            && cpi.accounts[0].address == collateral_id(vault.key)
+            && cpi.accounts[1].address == collateral_id(component_lamport_vault.key)
+            && cpi.accounts[2].address == collateral_id(authority.key)
+            && cpi.program_signed,
+        ClutchError::MismatchedState,
+    )?;
+    let instruction = Instruction::new_with_bytes(
+        *token_program.key,
+        &cpi.data,
+        cpi.accounts.into_iter().map(cpi_account_meta).collect(),
+    );
+    let series_seed = preflight.funding.value().state.series_plan_id.bytes();
+    let (_, bump) = seeds::series_collateral_authority_pda(program_id, &series_seed);
+    let bump_seed = [bump];
+    invoke_signed(
+        &instruction,
+        &[
+            vault.clone(),
+            component_lamport_vault.clone(),
+            authority.clone(),
+            token_program.clone(),
+        ],
+        &[&[
+            seeds::SEED_SERIES_COLLATERAL_AUTHORITY_V1,
+            &series_seed,
+            &bump_seed,
+        ]],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+    let vault_after_data = vault
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let component_after_close_data = component_lamport_vault
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let closed = accept_series_collateral_vault_close_v2(
+        prepared_close,
+        runtime_lamport_account_view(vault, &vault_after_data),
+        runtime_lamport_account_view(component_lamport_vault, &component_after_close_data),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+    drop(vault_after_data);
+    drop(component_after_close_data);
+    let component_before_split_data = component_lamport_vault
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let refund_before_data = payer_lamport_refund
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let neutral_before_data = neutral_lamport_sink
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let prepared_disposition = prepare_series_vault_rent_disposition_v2(
+        closed,
+        runtime_lamport_account_view(component_lamport_vault, &component_before_split_data),
+        runtime_lamport_account_view(payer_lamport_refund, &refund_before_data),
+        runtime_lamport_account_view(neutral_lamport_sink, &neutral_before_data),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(component_before_split_data);
+    drop(refund_before_data);
+    drop(neutral_before_data);
+    let credits = prepared_disposition.credits();
+    transfer_from_lamport_custody_v2(
+        program_id,
+        preflight.funding.value().state.series_plan_id,
+        coordinate.component,
+        component_lamport_vault,
+        payer_lamport_refund,
+        system_program,
+        credits[0].lamports,
+    )?;
+    transfer_from_lamport_custody_v2(
+        program_id,
+        preflight.funding.value().state.series_plan_id,
+        coordinate.component,
+        component_lamport_vault,
+        neutral_lamport_sink,
+        system_program,
+        credits[1].lamports,
+    )?;
+    let component_final_data = component_lamport_vault
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let refund_final_data = payer_lamport_refund
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let neutral_final_data = neutral_lamport_sink
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let accepted = accept_series_vault_rent_disposition_v2(
+        prepared_disposition,
+        runtime_lamport_account_view(component_lamport_vault, &component_final_data),
+        runtime_lamport_account_view(payer_lamport_refund, &refund_final_data),
+        runtime_lamport_account_view(neutral_lamport_sink, &neutral_final_data),
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+    drop(component_final_data);
+    drop(refund_final_data);
+    drop(neutral_final_data);
+    let value = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SERIES_COLLATERAL_RENT_RETIREMENT_RECEIPT_DOMAIN_V2,
+            &accepted.terminal_receipt.bytes(),
+            &accepted.series_plan.bytes(),
+            &accepted.component.to_le_bytes(),
+            &accepted.closed_vault.bytes(),
+            &accepted.component_lamports_after.to_le_bytes(),
+            &accepted.refunded_rent_principal_lamports.to_le_bytes(),
+            &accepted.neutral_surplus_lamports.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!value.is_zero(), ClutchError::MismatchedState)?;
+    Ok(value)
+}
+
+fn series_funding_component_seed_v2(component: SeriesFundingComponentV2) -> u8 {
+    match component {
+        SeriesFundingComponentV2::MarketCore => 0,
+        SeriesFundingComponentV2::SeriesAdmission => 1,
+        SeriesFundingComponentV2::RecoveryReserve => 2,
+        SeriesFundingComponentV2::SourceWork => 3,
+        SeriesFundingComponentV2::LiquidityFacility => 4,
+        SeriesFundingComponentV2::WrapperSet => 5,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn transfer_from_lamport_custody_v2<'a>(
+    program_id: &Pubkey,
+    series: SeriesPlanV5Id,
+    component: SeriesFundingComponentV2,
+    vault: &AccountInfo<'a>,
+    destination: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    amount: u64,
+) -> Outcome<()> {
+    require_lamport_vault_metadata_v2(program_id, series, component, vault)?;
+    require_system_program(system_program)?;
+    require(
+        destination.is_writable
+            && !destination.executable
+            && vault.key != destination.key
+            && *destination.owner == SYSTEM_PROGRAM_ID
+            && destination.data_is_empty(),
+        ClutchError::MismatchedState,
+    )?;
+    let source_before = vault.lamports();
+    let destination_before = destination.lamports();
+    let source_after = sub(source_before, amount)?;
+    let destination_after = add(destination_before, amount)?;
+    if amount != 0 {
+        let transfer = Instruction::new_with_bytes(
+            SYSTEM_PROGRAM_ID,
+            &transfer_data(amount),
+            vec![
+                AccountMeta::new(*vault.key, true),
+                AccountMeta::new(*destination.key, false),
+            ],
+        );
+        let component_seed = [series_funding_component_seed_v2(component)];
+        let (_, bump) = seeds::series_lamport_vault_pda(
+            program_id,
+            &series.bytes(),
+            component_seed[0],
+        );
+        let series_seed = series.bytes();
+        let bump_seed = [bump];
+        invoke_signed(
+            &transfer,
+            &[vault.clone(), destination.clone(), system_program.clone()],
+            &[&[
+                seeds::SEED_SERIES_LAMPORT_VAULT_V1,
+                &series_seed,
+                &component_seed,
+                &bump_seed,
+            ]],
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+    }
+    require(
+        vault.lamports() == source_after && destination.lamports() == destination_after,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn settle_series_lamport_component_v2<'a>(
+    program_id: &Pubkey,
+    terminal_receipt_id: ContentId,
+    projection: SeriesFundingTerminalProjectionV2,
+    component: SeriesFundingComponentV2,
+    vault: &AccountInfo<'a>,
+    payer_refund: &AccountInfo<'a>,
+    neutral_sink: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+) -> Outcome<ContentId> {
+    let index = component.index();
+    let principal = projection.refundable_principal[index].lamports;
+    let donation = projection.donation_residue[index].lamports;
+    let vault_before = vault.lamports();
+    let refund_before = payer_refund.lamports();
+    let neutral_before = neutral_sink.lamports();
+    require(
+        vault_before == add(principal, donation)?,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+    transfer_from_lamport_custody_v2(
+        program_id,
+        projection.series_plan_id,
+        component,
+        vault,
+        payer_refund,
+        system_program,
+        principal,
+    )?;
+    transfer_from_lamport_custody_v2(
+        program_id,
+        projection.series_plan_id,
+        component,
+        vault,
+        neutral_sink,
+        system_program,
+        donation,
+    )?;
+    require(
+        vault.lamports() == 0
+            && *vault.owner == SYSTEM_PROGRAM_ID
+            && vault.data_is_empty()
+            && payer_refund.lamports() == add(refund_before, principal)?
+            && neutral_sink.lamports() == add(neutral_before, donation)?,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+    let component_byte = [series_funding_component_seed_v2(component)];
+    let value = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SERIES_LAMPORT_RETIREMENT_RECEIPT_DOMAIN_V2,
+            &terminal_receipt_id.bytes(),
+            &projection.series_plan_id.bytes(),
+            &component_byte,
+            vault.key.as_ref(),
+            payer_refund.key.as_ref(),
+            neutral_sink.key.as_ref(),
+            &vault_before.to_le_bytes(),
+            &principal.to_le_bytes(),
+            &donation.to_le_bytes(),
+            &refund_before.to_le_bytes(),
+            &payer_refund.lamports().to_le_bytes(),
+            &neutral_before.to_le_bytes(),
+            &neutral_sink.lamports().to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!value.is_zero(), ClutchError::MismatchedState)?;
+    Ok(value)
+}
+
+fn close_series_funding_program_account_v2(
+    program_id: &Pubkey,
+    terminal_receipt_id: ContentId,
+    funding: AuthenticatedSeriesFundingAccountV2,
+    account: &AccountInfo<'_>,
+    payer_refund: &AccountInfo<'_>,
+    neutral_sink: &AccountInfo<'_>,
+) -> Outcome<ContentId> {
+    require(
+        funding.account() == *account.key
+            && account.owner == program_id
+            && account.is_writable
+            && !account.executable
+            && payer_refund.is_writable
+            && neutral_sink.is_writable
+            && account.key != payer_refund.key
+            && account.key != neutral_sink.key
+            && payer_refund.key != neutral_sink.key,
+        ClutchError::MismatchedState,
+    )?;
+    let held = account.lamports();
+    let principal = funding.value().rent_principal_lamports;
+    let donation = sub(held, principal)?;
+    let refund_before = payer_refund.lamports();
+    let neutral_before = neutral_sink.lamports();
+    credit_lamports(payer_refund, principal)?;
+    credit_lamports(neutral_sink, donation)?;
+    debit_lamports(account, held)?;
+    account
+        .resize(0)
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    account.assign(&SYSTEM_PROGRAM_ID);
+    require(
+        account.lamports() == 0
+            && account.data_len() == 0
+            && *account.owner == SYSTEM_PROGRAM_ID
+            && payer_refund.lamports() == add(refund_before, principal)?
+            && neutral_sink.lamports() == add(neutral_before, donation)?,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+    let value = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SERIES_FUNDING_ACCOUNT_RETIREMENT_RECEIPT_DOMAIN_V2,
+            &terminal_receipt_id.bytes(),
+            account.key.as_ref(),
+            payer_refund.key.as_ref(),
+            neutral_sink.key.as_ref(),
+            &held.to_le_bytes(),
+            &principal.to_le_bytes(),
+            &donation.to_le_bytes(),
+            &refund_before.to_le_bytes(),
+            &payer_refund.lamports().to_le_bytes(),
+            &neutral_before.to_le_bytes(),
+            &neutral_sink.lamports().to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!value.is_zero(), ClutchError::MismatchedState)?;
+    Ok(value)
+}
+
+fn flatten_series_component_receipt_ids_v2(
+    values: &[ContentId; SERIES_FUNDING_COMPONENT_COUNT_V2],
+) -> Outcome<[u8; 32 * SERIES_FUNDING_COMPONENT_COUNT_V2]> {
+    let mut encoded = [0u8; 32 * SERIES_FUNDING_COMPONENT_COUNT_V2];
+    let mut index = 0usize;
+    while index < SERIES_FUNDING_COMPONENT_COUNT_V2 {
+        let offset = index
+            .checked_mul(32)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        let end = offset
+            .checked_add(32)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
+        encoded[offset..end].copy_from_slice(&values[index].bytes());
+        index += 1;
+    }
+    Ok(encoded)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn retire_series_funding_physical_v2<'a>(
+    program_id: &Pubkey,
+    preflight: AuthenticatedSeriesPhysicalRetirementPreflightV2,
+    terminal: AuthenticatedProductSeriesTerminalRetirementV2,
+    registry_account: &AccountInfo<'a>,
+    funding_account: &AccountInfo<'a>,
+    mint: &AccountInfo<'a>,
+    collateral_vaults: &[AccountInfo<'a>],
+    lamport_vaults: &[AccountInfo<'a>],
+    collateral_principal_refund: &AccountInfo<'a>,
+    neutral_collateral_disposition: &AccountInfo<'a>,
+    collateral_authority: &AccountInfo<'a>,
+    payer_lamport_refund: &AccountInfo<'a>,
+    neutral_lamport_sink: &AccountInfo<'a>,
+    token_program: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    rent_sysvar: &AccountInfo<'a>,
+) -> Outcome<AuthenticatedSeriesPhysicalRetirementV2> {
+    require(
+        collateral_vaults.len() == SERIES_COLLATERAL_VAULT_COUNT_V2
+            && lamport_vaults.len() == SERIES_FUNDING_COMPONENT_COUNT_V2
+            && preflight.registry.account() == *registry_account.key
+            && preflight.funding.account() == *funding_account.key
+            && preflight.funding_join.collateral_principal_refund_token_account
+                == collateral_id(collateral_principal_refund.key)
+            && preflight
+                .funding_join
+                .neutral_collateral_disposition_token_account
+                == collateral_id(neutral_collateral_disposition.key)
+            && preflight.funding_join.payer_lamport_refund
+                == collateral_id(payer_lamport_refund.key)
+            && preflight.funding_join.neutral_lamport_sink
+                == collateral_id(neutral_lamport_sink.key)
+            && preflight.funding_join.funding_authority
+                == collateral_id(collateral_authority.key)
+            && preflight.rent_sysvar == *rent_sysvar.key
+            && read_rent(rent_sysvar)? == preflight.rent
+            && preflight.deployment.release() == preflight.bound.release()
+            && !preflight.deployment.receipt_id().is_zero(),
+        ClutchError::MismatchedState,
+    )?;
+    require_system_program(system_program)?;
+    require_collateral_program(token_program, preflight.bound)?;
+    let terminal_join = authenticate_series_terminal_join_v2(&preflight, &terminal)?;
+    let projection = terminal.projection;
+    let registry_before = preflight.registry;
+    let registry_lamports_before = registry_account.lamports();
+    let mut principal_transfer_ids = [ContentId::ZERO; SERIES_COLLATERAL_VAULT_COUNT_V2];
+    let mut donation_transfer_ids = [ContentId::ZERO; SERIES_COLLATERAL_VAULT_COUNT_V2];
+    let mut collateral_close_ids = [ContentId::ZERO; SERIES_COLLATERAL_VAULT_COUNT_V2];
+
+    let mut index = 0usize;
+    while index < SERIES_COLLATERAL_VAULT_COUNT_V2 {
+        require(
+            preflight.collateral_vaults[index] == *collateral_vaults[index].key,
+            ClutchError::MismatchedState,
+        )?;
+        let coordinate = series_collateral_vault_coordinate_v2(index)?;
+        principal_transfer_ids[index] = transfer_series_terminal_collateral_v2(
+            program_id,
+            &preflight,
+            terminal_join,
+            projection,
+            coordinate,
+            SeriesTerminalCollateralMovementV2::PrincipalRefund,
+            mint,
+            &collateral_vaults[index],
+            collateral_principal_refund,
+            collateral_authority,
+            token_program,
+        )?;
+        donation_transfer_ids[index] = transfer_series_terminal_collateral_v2(
+            program_id,
+            &preflight,
+            terminal_join,
+            projection,
+            coordinate,
+            SeriesTerminalCollateralMovementV2::DonationDisposition,
+            mint,
+            &collateral_vaults[index],
+            neutral_collateral_disposition,
+            collateral_authority,
+            token_program,
+        )?;
+        let vault_data = collateral_vaults[index]
+            .try_borrow_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        let binding = series_collateral_binding_v2(
+            program_id,
+            preflight.bound,
+            projection.series_plan_id,
+            coordinate,
+            &collateral_vaults[index],
+            collateral_authority,
+        )?;
+        let emptied = admit_realm_collateral_account_v2(
+            preflight.bound,
+            runtime_account_view(&collateral_vaults[index], &vault_data),
+            TokenAccountRoleV2::SegregatedVault(binding),
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+        require(
+            emptied.amount_atoms == 0
+                && principal_transfer_ids[index].is_zero()
+                    == (projection.refundable_principal[coordinate.component.index()]
+                        .collateral_atoms
+                        == 0)
+                && donation_transfer_ids[index].is_zero()
+                    == (projection.donation_residue[coordinate.component.index()]
+                        .collateral_atoms
+                        == 0),
+            ClutchError::SeriesCustodyDeltaMismatch,
+        )?;
+        drop(vault_data);
+        collateral_close_ids[index] = close_series_collateral_vault_v2(
+            program_id,
+            &preflight,
+            terminal_join,
+            coordinate,
+            index,
+            &collateral_vaults[index],
+            &lamport_vaults[coordinate.component.index()],
+            collateral_authority,
+            payer_lamport_refund,
+            neutral_lamport_sink,
+            token_program,
+            system_program,
+        )?;
+        index += 1;
+    }
+
+    let mut lamport_retirement_ids = [ContentId::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2];
+    index = 0;
+    while index < SERIES_FUNDING_COMPONENT_COUNT_V2 {
+        require(
+            preflight.lamport_vaults[index] == *lamport_vaults[index].key,
+            ClutchError::MismatchedState,
+        )?;
+        let component = series_funding_component_v2(index)?;
+        lamport_retirement_ids[index] = settle_series_lamport_component_v2(
+            program_id,
+            terminal.terminal_receipt_id,
+            projection,
+            component,
+            &lamport_vaults[index],
+            payer_lamport_refund,
+            neutral_lamport_sink,
+            system_program,
+        )?;
+        index += 1;
+    }
+
+    let funding_close_id = close_series_funding_program_account_v2(
+        program_id,
+        terminal.terminal_receipt_id,
+        preflight.funding,
+        funding_account,
+        payer_lamport_refund,
+        neutral_lamport_sink,
+    )?;
+    let registry_after = read_series_registry_account_v2_with_role(
+        program_id,
+        registry_account,
+        projection.series_plan_id,
+        &preflight.rent,
+        false,
+    )?;
+    require(
+        registry_after == registry_before
+            && registry_after.activation_consumed()
+            && registry_account.lamports() == registry_lamports_before,
+        ClutchError::Replay,
+    )?;
+    let mint_data = mint
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    admit_realm_collateral_mint_v2(preflight.bound, runtime_account_view(mint, &mint_data))
+        .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+    drop(mint_data);
+    let collateral_refund_data = collateral_principal_refund
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    admit_realm_collateral_account_v2(
+        preflight.bound,
+        runtime_account_view(collateral_principal_refund, &collateral_refund_data),
+        TokenAccountRoleV2::ReceiveOnly {
+            account: collateral_id(collateral_principal_refund.key),
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+    let collateral_refund_after_id = series_collateral_account_state_id_v2(
+        SERIES_COLLATERAL_PRINCIPAL_REFUND_STATE_DOMAIN_V2,
+        collateral_principal_refund,
+        &collateral_refund_data,
+    )?;
+    drop(collateral_refund_data);
+    let neutral_collateral_data = neutral_collateral_disposition
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    admit_realm_collateral_account_v2(
+        preflight.bound,
+        runtime_account_view(neutral_collateral_disposition, &neutral_collateral_data),
+        TokenAccountRoleV2::ReceiveOnly {
+            account: collateral_id(neutral_collateral_disposition.key),
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+    let neutral_collateral_after_id = series_collateral_account_state_id_v2(
+        SERIES_NEUTRAL_COLLATERAL_DISPOSITION_STATE_DOMAIN_V2,
+        neutral_collateral_disposition,
+        &neutral_collateral_data,
+    )?;
+    drop(neutral_collateral_data);
+
+    let funding_commitment_id = series_terminal_funding_commitment_v2(
+        &projection.refundable_principal,
+        &projection.donation_residue,
+    )?;
+    let principal_transfers = flatten_series_collateral_ids_v2(&principal_transfer_ids)?;
+    let donation_transfers = flatten_series_collateral_ids_v2(&donation_transfer_ids)?;
+    let collateral_closes = flatten_series_collateral_ids_v2(&collateral_close_ids)?;
+    let lamport_retirements =
+        flatten_series_component_receipt_ids_v2(&lamport_retirement_ids)?;
+    let registry_body = registry_after.value();
+    let mut registry_bytes = [0u8; SERIES_REGISTRY_ACCOUNT_BYTES_V2];
+    registry_body.encode(&mut registry_bytes)?;
+    let receipt_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SERIES_PHYSICAL_RETIREMENT_RECEIPT_DOMAIN_V2,
+            &terminal.terminal_receipt_id.bytes(),
+            &terminal.product_terminal_evidence_id.bytes(),
+            &projection.series_plan_id.bytes(),
+            &projection.funding_terms_id.bytes(),
+            &projection.compiler_bundle_id.bytes(),
+            &projection.transition_sequence.to_le_bytes(),
+            &funding_commitment_id.bytes(),
+            &preflight.deployment.receipt_id().bytes(),
+            &preflight.collateral_principal_refund_state_id.bytes(),
+            &collateral_refund_after_id.bytes(),
+            &preflight.neutral_collateral_disposition_state_id.bytes(),
+            &neutral_collateral_after_id.bytes(),
+            &principal_transfers,
+            &donation_transfers,
+            &collateral_closes,
+            &lamport_retirements,
+            &funding_close_id.bytes(),
+            registry_account.key.as_ref(),
+            &registry_bytes,
+            &registry_lamports_before.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!receipt_id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(AuthenticatedSeriesPhysicalRetirementV2 {
+        terminal_receipt_id: terminal.terminal_receipt_id,
         receipt_id,
     })
 }
@@ -5652,7 +7187,7 @@ fn activate_series_funding_with_collateral_v2<'a>(
 /// Dispatch remains capability-disabled until its full account contract is
 /// frozen.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn deploy_and_activate_series_funding_v2<'a>(
+fn deploy_and_activate_series_funding_v2<'a>(
     program_id: &Pubkey,
     registry_account: &AccountInfo<'a>,
     funding_account: &AccountInfo<'a>,
@@ -6406,7 +7941,7 @@ fn derive_series_lifecycle_replay_binding_v1(
 /// activation. Predictable-address prefunding is swept to the authenticated
 /// neutral sink; the current payer supplies the full permanent Rent minimum.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn initialize_series_lifecycle_replay_v1<'a>(
+fn initialize_series_lifecycle_replay_v1<'a>(
     program_id: &Pubkey,
     payer: &AccountInfo<'a>,
     lifecycle_replay_account: &AccountInfo<'a>,
@@ -6420,6 +7955,10 @@ pub(crate) fn initialize_series_lifecycle_replay_v1<'a>(
     compiler_bundle: AuthenticatedCompiledProductSeriesBundleV5,
     rent: &RentParameters,
 ) -> Outcome<AuthenticatedSeriesLifecycleReplayV1> {
+    require_system_lamport_destination(
+        neutral_lamport_sink,
+        artifacts.funding_terms.neutral_lamport_sink,
+    )?;
     let series_plan_id = artifacts
         .series
         .id()
@@ -7141,7 +8680,7 @@ impl AuthenticatedSeriesFundingAuthorityV2 for SeriesLifecycleTerminalFundingAut
 /// and Closed FundingV2 have been reauthenticated. The returned private value
 /// is the only authority the physical collateral/Funding close may consume.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn terminalize_series_lifecycle_replay_v1(
+fn terminalize_series_lifecycle_replay_v1(
     program_id: &Pubkey,
     registry_account: &AccountInfo<'_>,
     registry: AuthenticatedSeriesRegistryAccountV2,
@@ -7759,7 +9298,7 @@ pub fn observe_series_donation_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Si
 }
 
 /// Derive the exact current terminal principal/donation projection.
-pub(crate) fn close_series_funding_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
+fn close_series_funding_v2<A: AuthenticatedSeriesFundingAuthorityV2 + ?Sized>(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     current: AuthenticatedSeriesFundingAccountV2,
@@ -9077,6 +10616,21 @@ mod collateral_activation_v2_adversarial_tests {
         ));
     }
 
+    #[test]
+    fn disabled_retirement_refuses_before_payload_or_accounts() {
+        let program_id = Pubkey::new_from_array([0x42; 32]);
+        assert!(matches!(
+            process(
+                &program_id,
+                &[],
+                0,
+                RecurringSeriesAction::CloseFunding,
+                &[],
+            ),
+            Err(Refusal::Adapter(ClutchError::UnsupportedInstruction))
+        ));
+    }
+
     fn debits() -> [ComponentDebitV1; SERIES_FUNDING_COMPONENT_COUNT_V2] {
         [
             ComponentDebitV1 {
@@ -9163,6 +10717,60 @@ mod collateral_activation_v2_adversarial_tests {
             .unwrap(),
             expected
         );
+    }
+
+    #[test]
+    fn terminal_funding_commitment_is_domain_separated_and_binds_each_unit() {
+        let principal = debits();
+        let donations = [ComponentDebitV1::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2];
+        let terminal = series_terminal_funding_commitment_v2(&principal, &donations).unwrap();
+        assert_ne!(
+            terminal,
+            series_collateral_funding_commitment_v2(&principal, &donations).unwrap()
+        );
+
+        let mut changed_principal = principal;
+        changed_principal[SeriesFundingComponentV2::MarketCore.index()].lamports += 1;
+        assert_ne!(
+            terminal,
+            series_terminal_funding_commitment_v2(&changed_principal, &donations).unwrap()
+        );
+
+        let mut changed_donation = donations;
+        changed_donation[SeriesFundingComponentV2::RecoveryReserve.index()].collateral_atoms = 1;
+        assert_ne!(
+            terminal,
+            series_terminal_funding_commitment_v2(&principal, &changed_donation).unwrap()
+        );
+    }
+
+    #[test]
+    fn terminal_transfer_receipt_refuses_activation_and_cross_kind_substitution() {
+        assert!(require_series_terminal_transfer_kind_v2(
+            CustodyTransferKindV2::PrincipalRefund,
+            CustodyTransferKindV2::PrincipalRefund,
+        )
+        .is_ok());
+        assert!(require_series_terminal_transfer_kind_v2(
+            CustodyTransferKindV2::DonationDisposition,
+            CustodyTransferKindV2::DonationDisposition,
+        )
+        .is_ok());
+        assert!(require_series_terminal_transfer_kind_v2(
+            CustodyTransferKindV2::SegregatedFunding,
+            CustodyTransferKindV2::PrincipalRefund,
+        )
+        .is_err());
+        assert!(require_series_terminal_transfer_kind_v2(
+            CustodyTransferKindV2::PrincipalRefund,
+            CustodyTransferKindV2::DonationDisposition,
+        )
+        .is_err());
+        assert!(require_series_terminal_transfer_kind_v2(
+            CustodyTransferKindV2::PrincipalRefund,
+            CustodyTransferKindV2::SegregatedFunding,
+        )
+        .is_err());
     }
 
     #[test]
@@ -9559,6 +11167,52 @@ mod series_lifecycle_terminal_postwrite_v1_adversarial_tests {
         )
     }
 
+    fn terminal_funding_state() -> SeriesFundingStateV2 {
+        SeriesFundingStateV2 {
+            series_plan_id: SeriesPlanV5Id::from_bytes([21; 32]),
+            funding_terms_id: SeriesFundingTermsV2Id::from_bytes([22; 32]),
+            funding_quote_id: clutch_product_series::SeriesFundingQuoteV4Id::from_bytes([
+                23; 32
+            ]),
+            attachment_plan_id: clutch_product_series::SeriesAttachmentPlanV4Id::from_bytes([
+                24; 32
+            ]),
+            compiler_bundle_id: CompiledProductSeriesBundleV5Id::from_bytes([25; 32]),
+            instance_count: 1,
+            next_ordinal: 1,
+            lapsed_count: 1,
+            transition_sequence: 1,
+            phase: clutch_product_series::SeriesFundingPhaseV2::Closed,
+            pending_disposition: None,
+            pending_market_instance_id: ContentId::ZERO,
+            pending_source_occurrence_id: ContentId::ZERO,
+            pending_series_market_link_id: ContentId::ZERO,
+            pending_ordinal: 0,
+            pending_reservation_receipt_id: ContentId::ZERO,
+            pending_debits: [ComponentDebitV1::ZERO; SERIES_FUNDING_COMPONENT_COUNT_V2],
+            components: [clutch_product_series::SeriesComponentCapitalV2::ZERO;
+                SERIES_FUNDING_COMPONENT_COUNT_V2],
+        }
+    }
+
+    fn lifecycle_binding(state: SeriesFundingStateV2) -> SeriesLifecycleReplayBindingV1 {
+        SeriesLifecycleReplayBindingV1 {
+            series_plan_id: state.series_plan_id,
+            funding_terms_id: state.funding_terms_id,
+            funding_quote_id: state.funding_quote_id,
+            attachment_plan_id: state.attachment_plan_id,
+            compiler_bundle_id: state.compiler_bundle_id,
+            registry_release_id: RegistryProgramReleaseV2Id::from_bytes([26; 32]),
+            capability_profile_id: RegistryCapabilityProfileV4Id::from_bytes([27; 32]),
+            registry_account_id: id(28),
+            funding_account_id: id(29),
+            lifecycle_replay_account_id: id(30),
+            permanent_rent_funder: id(31),
+            neutral_lamport_sink: id(32),
+            instance_count: state.instance_count,
+        }
+    }
+
     #[test]
     fn terminal_preauthorization_refuses_aliases_and_binds_stale_substitutions() {
         let registry = Pubkey::new_from_array([10; 32]);
@@ -9672,7 +11326,7 @@ mod series_lifecycle_terminal_postwrite_v1_adversarial_tests {
             .next()
             .expect("production before terminal source cases");
         let outer = production
-            .split("pub(crate) fn terminalize_series_lifecycle_replay_v1")
+            .split("fn terminalize_series_lifecycle_replay_v1")
             .nth(1)
             .expect("single terminal outer");
         let registry = outer
@@ -9702,5 +11356,17 @@ mod series_lifecycle_terminal_postwrite_v1_adversarial_tests {
         let signature = outer.split(") -> Outcome").next().expect("signature");
         assert!(!signature.contains("SeriesLifecycleTerminalProjectionV1"));
         assert!(!signature.contains("SeriesFundingTerminalProjectionV2"));
+    }
+
+    #[test]
+    fn terminal_consumer_refuses_attachment_substitution() {
+        let state = terminal_funding_state();
+        let binding = lifecycle_binding(state);
+        assert!(require_series_lifecycle_funding_binding_v2(binding, state).is_ok());
+
+        let mut substituted = binding;
+        substituted.attachment_plan_id =
+            clutch_product_series::SeriesAttachmentPlanV4Id::from_bytes([33; 32]);
+        assert!(require_series_lifecycle_funding_binding_v2(substituted, state).is_err());
     }
 }
