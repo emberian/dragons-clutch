@@ -147,44 +147,53 @@ never mutates its input cursor or caller-owned raw bytes.
 `prepare_finalize_v1` requires complete cursor geometry and passes the entire
 raw account to the adapter's exact hash and schema validator. Finalize is
 permissionless, including before expiry. After validation, the adapter retains
-the headerless raw record, returns the complete staging-account balance
-(cursor rent, unused cleanup bounty, and any surplus) to the immutable sponsor,
-and closes the staging account. The returned authentication receipt is valid
-only in that instruction.
+the headerless raw record, credits the complete staging-account balance
+(cursor rent, unused cleanup bounty, and any surplus) to the immutable
+sponsor's canonical permanent RentCredit, and closes the staging account. The
+returned authentication receipt is valid only in that instruction.
 
-Before expiry, Abort requires the immutable sponsor as an SVM signer and sends
-the complete balances of both raw and cursor accounts back to that sponsor. At
-or after expiry, any caller may clean an incomplete or poisoned staging pair.
-The exact prepaid bounty goes to the cleanup recipient; the complete raw
-balance and every remaining staging lamport go to the immutable sponsor. The
-contract checked-subtracts and rechecks the staging split, so cleanup cannot
-redirect rent or surplus. Repeated squatting therefore repeatedly prepays and
-forfeits the authenticated minimum bounty.
+Before expiry, Abort requires the immutable sponsor as an SVM signer and
+credits the complete balances of both raw and cursor accounts to that
+authority's canonical permanent RentCredit. At or after expiry, any caller may
+clean an incomplete or poisoned staging pair. The exact prepaid bounty goes to
+the cleanup recipient; the complete raw balance and every remaining staging
+lamport credit the same RentCredit. The contract checked-subtracts and rechecks
+the staging split, so cleanup cannot redirect rent or surplus. Repeated
+squatting therefore repeatedly prepays and forfeits the authenticated minimum
+bounty.
 
 Finalize and Abort consume the same live writable cursor and are mutually
 exclusive under SVM account locking. After either closes it, stale cursor bytes
 are not an admissible live account observation; Abort-after-Finalize therefore
 has no cursor authority.
 
-## Next SBF seam
+## SBF adapter and remaining integration seam
 
-The next implementation owner should add one small record instruction adapter
-with these exact account contracts:
+The selected V1 SBF adapter implements these exact account contracts. Shared
+top-level routing and composition into Found consumers remain separately owned
+integration seams:
 
 - Begin: sponsor signer/writable, vacant canonical raw PDA, vacant canonical
-  cursor PDA, authenticated clock/rent/system accounts and release-selected
+  cursor PDA, the sponsor authority's read-only pre-existing rent-backed
+  RentCredit, authenticated clock/rent/system accounts, and release-selected
   liveness/page policies.
-- Append: writable raw PDA and cursor PDA; decode both before any write; apply
-  the returned page write and next cursor atomically.
-- Finalize: read-only complete raw PDA, writable cursor PDA, sponsor refund,
-  clock if the adapter records its observation, selected hash implementation,
-  and schema-release validator dispatch; return all cursor lamports and close.
-- Abort: writable raw/cursor PDAs, immutable sponsor refund, authenticated
-  clock, and cleanup recipient; require sponsor signature before expiry or
-  apply the exact expired bounty/remainder plan afterward.
-- Consumer authentication: read-only raw PDA plus an authenticated vacancy
-  observation for the derived cursor PDA, followed by exact hash and semantic
-  validation before minting any protocol authority.
+- Append: immutable cursor sponsor readonly signer, writable raw PDA, and
+  writable cursor PDA; authenticate the signer against the cursor before any
+  write, then apply the returned page write and next cursor atomically. The
+  pure transition remains authority-neutral, but an SVM adapter must not expose
+  permissionless page writes because a whole-record digest cannot authenticate
+  an individual in-progress page.
+- Finalize: read-only complete raw PDA, writable cursor PDA, and writable
+  canonical RentCredit; apply the selected full-content hash and schema-release
+  validator, credit all cursor lamports, and close the cursor.
+- Abort: actor signer, writable raw/cursor PDAs, writable canonical RentCredit,
+  and authenticated Clock. Before expiry the actor must be the immutable
+  sponsor but can remain read-only; after expiry it must be writable to receive
+  the exact bounty while the raw balance and cursor remainder credit RentCredit.
+- Consumer authentication: read-only raw PDA, read-only authenticated vacancy
+  observation for the derived cursor PDA, and read-only authenticated Rent
+  sysvar, followed by exact hash and semantic validation before minting any
+  protocol authority.
 
 The SBF layer must hostile-decode account owner, length, rent, signer,
 writability, clock, and PDA derivations. This crate's adapter callbacks and
