@@ -393,7 +393,10 @@ fn select_operator_release<'a>(
         keys.extend(
             releases
                 .iter()
-                .filter(|release| !release.enabled_intents.is_empty())
+                .filter(|release| {
+                    !release.enabled_intents.is_empty()
+                        || !release.enabled_intent_variants.is_empty()
+                })
                 .map(IndexedProgramRelease::key),
         );
     }
