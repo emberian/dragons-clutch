@@ -8,6 +8,10 @@
 use crate::account_index::{FinalizedAccountAbsence, IndexedBranch};
 use crate::collateral_release_catalog::CurrentCollateralExecutableAccountViewV1;
 pub use crate::collateral_release_catalog::AuthenticatedCurrentCollateralReleaseV1 as StructuredCollateralCatalogEntryV1;
+use crate::failure_action11_material::{
+    ChainDerivedFailureAction11MaterialV1, FAILURE_ACTION11_ROLE_LABELS_V1,
+    FAILURE_ACTION11_VALIDITY_SLOTS_V1,
+};
 use crate::rpc_index::{
     CanonicalIntentCoordinate, CanonicalIntentVariantV1, IndexedProgramRelease,
     ObservedRpcAccount, RpcCommitment,
@@ -522,6 +526,12 @@ impl StructuredAddressLookupTableV1 {
     pub const fn state_sha256(&self) -> [u8; 32] {
         self.state_sha256
     }
+
+    /// Exact decoded table for a sibling semantic-owner constructor which has
+    /// independently bound the same finalized observation.
+    pub(crate) fn table(&self) -> AddressLookupTableAccount {
+        self.table.clone()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -847,6 +857,122 @@ impl CanonicalActionMaterialV1 {
             && !self.planned.unsigned_transaction.signed
             && !self.planned.unsigned_transaction.submitted
     }
+}
+
+/// Join the current Failure semantic-owner material to the exact finalized
+/// cell cursor selected by the daemon. This boundary adds only the fee payer
+/// and opaque API envelope; all roles and wire bytes remain chain-derived.
+pub fn construct_failure_action11_action_material_v1(
+    release: &IndexedProgramRelease,
+    builder: &ProtocolTransactionBuilder,
+    selection: &KeeperActionSelection,
+    material: &ChainDerivedFailureAction11MaterialV1,
+) -> Result<CanonicalActionMaterialV1> {
+    let coordinate = CanonicalIntentCoordinate {
+        family_tag: clutch_solana_layout::registry::RECOVERY_FAMILY_TAG,
+        family_version: clutch_solana_layout::registry::RECOVERY_FAMILY_VERSION,
+        local_action: clutch_solana_layout::registry::RecoveryAction::AdvanceIntervalConsensus
+            .tag(),
+    };
+    let freshness = ActionFreshnessBoundaryV1 {
+        observed_slot: material.observed_slot(),
+        valid_before_slot: material.valid_before_slot(),
+        maximum_validity_slots: FAILURE_ACTION11_VALIDITY_SLOTS_V1,
+    };
+    freshness.validate()?;
+    if selection.action != "advance-failure-interval-consensus"
+        || selection.account != material.driver_account()
+        || selection.account_slot != material.observed_slot()
+        || selection.release_key != release.key()
+        || selection.observed_commitment != RpcCommitment::Finalized
+        || selection.effective_commitment != RpcCommitment::Finalized
+        || selection.cursor.lane != WorkflowLane::FailureRecovery
+        || selection.cursor.generation != material.generation()
+        || selection.cursor.position
+            != (WorkflowPosition {
+                phase: 1,
+                item: material.transition_nonce(),
+            })
+        || selection.cursor.observed_state_sha256 == [0; 32]
+        || builder.clutch_program() != release.program_id
+        || builder.clutch_release_sha256() != release.release_manifest_sha256
+    {
+        return Err(CanonicalActionMaterialErrorV1::WrongSelection);
+    }
+    let transaction = material
+        .build_unsigned_transaction(release, builder)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    if transaction.flows != [ProtocolFlow::FailureRecovery]
+        || transaction.actions.len() != 1
+        || transaction.actions[0] != "advance-failure-interval-consensus-v1"
+        || transaction.runtime_admissions != [RuntimeAdmission::ReleaseBoundEnabled]
+        || transaction.required_signers != [builder.payer()]
+        || transaction.message_version != TransactionMessageVersionV1::V0
+        || transaction.address_lookup_tables.len() != 1
+        || transaction.has_recent_blockhash
+        || transaction.signed
+        || transaction.submitted
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+    }
+    let metas = material.account_metas();
+    if metas.len() != FAILURE_ACTION11_ROLE_LABELS_V1.len() {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    let account_roles = metas
+        .iter()
+        .zip(FAILURE_ACTION11_ROLE_LABELS_V1)
+        .map(|(meta, label)| CanonicalAccountRoleV1 {
+            label,
+            address: meta.pubkey,
+            writable: meta.is_writable,
+            signer: meta.is_signer,
+        })
+        .collect::<Vec<_>>();
+    let cursor = selection.cursor;
+    let planned = PlannedWorkflowNode {
+        manifest_sha256: release.release_manifest_sha256,
+        cursor,
+        coordinate: CanonicalActionCoordinate::Recovery(
+            clutch_solana_layout::registry::RecoveryAction::AdvanceIntervalConsensus,
+        ),
+        unsigned_transaction: transaction,
+        reload_authoritative_accounts: true,
+    };
+    let release_key = release.key();
+    let authority_state_sha256 = material.state_sha256();
+    let draft_id = action_material_id(
+        &release_key,
+        &release_key,
+        release.release_manifest_sha256,
+        release.capability_profile_id,
+        coordinate,
+        selection.account,
+        selection.account_slot,
+        cursor,
+        authority_state_sha256,
+        freshness,
+        builder.payer(),
+        &account_roles,
+        &planned.unsigned_transaction,
+    );
+    Ok(CanonicalActionMaterialV1 {
+        release_key: release_key.clone(),
+        driver_release_key: release_key,
+        release_manifest_sha256: release.release_manifest_sha256,
+        capability_profile_id: release.capability_profile_id,
+        coordinate,
+        variant: None,
+        driver_account: selection.account,
+        driver_account_slot: selection.account_slot,
+        cursor,
+        authority_state_sha256,
+        freshness,
+        fee_payer: builder.payer(),
+        account_roles,
+        planned,
+        draft_id,
+    })
 }
 
 /// Construct one callable Structured wrapper draft from one exact finalized
@@ -8579,6 +8705,8 @@ const fn workflow_lane_byte(lane: crate::workflow_graph::WorkflowLane) -> u8 {
         crate::workflow_graph::WorkflowLane::KeeperReceipts => 3,
         crate::workflow_graph::WorkflowLane::RecoveryRetirement => 4,
         crate::workflow_graph::WorkflowLane::StructuredLifecycle => 5,
+        crate::workflow_graph::WorkflowLane::FractionalRedemption => 6,
+        crate::workflow_graph::WorkflowLane::FailureRecovery => 7,
     }
 }
 

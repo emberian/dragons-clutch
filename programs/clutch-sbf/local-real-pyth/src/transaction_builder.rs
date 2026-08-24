@@ -99,6 +99,8 @@ pub enum ProtocolFlow {
     CollateralCustodyV3,
     MarketEpochCreation,
     SourcePlaneV3,
+    /// Current release-bound Failure Recovery family.
+    FailureRecovery,
     GeneralV2Candidate,
     GeneralV2Settlement,
     GeneralV2Fees,
@@ -243,6 +245,12 @@ pub enum OwnedWireContract {
     /// SourceSeries successor envelope. The sequence is the Source work-call
     /// ordinal and therefore cannot be silently supplied by a launcher.
     MainSuccessorRequest {
+        binding: SuccessorRegistryBinding,
+        sequence: u64,
+    },
+    /// Exact current Failure action-11 request, including both immutable
+    /// preimages recovered from the finalized `0xa0/v4` semantic owner.
+    MainFailureRequestV1 {
         binding: SuccessorRegistryBinding,
         sequence: u64,
     },
@@ -417,6 +425,89 @@ pub struct OwnedInstructionDraft {
 }
 
 impl OwnedInstructionDraft {
+    /// Assemble current Failure action 11 only from a checked release and the
+    /// complete hostile-decoded `0xa0/v4` preimages. The constructor owns the
+    /// exact 44-role ABI and does not accept caller-shaped payload bytes.
+    #[cfg(feature = "operator")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn checked_release_failure_action11_v1(
+        release: &crate::rpc_index::IndexedProgramRelease,
+        semantic_owner: SemanticOwner,
+        accounts: Vec<AccountMeta>,
+        equations: Vec<ExactEquation>,
+        sequence: u64,
+        requested_coordinates: u16,
+        recovery_quote_schedule: &[u8; clutch_failure_policy_runtime::market_quote_v1::FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1],
+        interval_funding_preimage: &[u8; clutch_solana_layout::failure_recovery::FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1],
+    ) -> Result<Self> {
+        use crate::rpc_index::{CanonicalFamily, CanonicalIntentCoordinate};
+        use clutch_solana_layout::registry::RecoveryAction;
+
+        const ACTION: RecoveryAction = RecoveryAction::AdvanceIntervalConsensus;
+        let central_action = ExtensionAction::Recovery(ACTION);
+        let family = central_action.family();
+        let coordinate = CanonicalIntentCoordinate {
+            family_tag: family.tag(),
+            family_version: family.version(),
+            local_action: central_action.local_tag(),
+        };
+        release
+            .validate()
+            .map_err(|_| ConstructionError::UnallocatedRegistryCoordinate)?;
+        if sequence == 0
+            || requested_coordinates == 0
+            || semantic_owner.release_sha256 != release.release_manifest_sha256
+            || !release.families.contains(&CanonicalFamily::Failure)
+            || release.enabled_intents.binary_search(&coordinate).is_err()
+        {
+            return Err(ConstructionError::UnallocatedRegistryCoordinate);
+        }
+        clutch_failure_policy_runtime::market_quote_v1::FailureMarketRecoveryQuoteScheduleV1::decode(
+            recovery_quote_schedule,
+        )
+        .map_err(|_| ConstructionError::InvalidAccountContract)?;
+        validate_failure_interval_funding_preimage_v1(interval_funding_preimage)?;
+        validate_failure_action11_metas_v1(&accounts)?;
+        let binding = registry_binding(family, central_action.local_tag(), Some(central_action))?;
+        let mut payload = vec![
+            0u8;
+            8 + clutch_failure_policy_runtime::market_quote_v1::FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1
+                + clutch_solana_layout::failure_recovery::FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1
+        ];
+        payload[..2].copy_from_slice(&requested_coordinates.to_le_bytes());
+        let quote_end = 8 + recovery_quote_schedule.len();
+        payload[8..quote_end].copy_from_slice(recovery_quote_schedule);
+        payload[quote_end..].copy_from_slice(interval_funding_preimage);
+        let request = ExtensionRequest {
+            sequence,
+            envelope: ExtensionEnvelope {
+                family,
+                action: central_action,
+                payload: &payload,
+            },
+        };
+        let mut data = vec![0; 13 + EXTENSION_ENVELOPE_BYTES + payload.len()];
+        let exact = request
+            .encode(&mut data)
+            .map_err(|_| ConstructionError::WrongWireLength)?;
+        data.truncate(exact);
+        let value = Self {
+            flow: ProtocolFlow::FailureRecovery,
+            action_name: "advance-failure-interval-consensus-v1".into(),
+            semantic_owner,
+            program_id: release.program_id,
+            accounts,
+            required_signers: Vec::new(),
+            equations,
+            registry_binding: Some(binding),
+            runtime_admission: RuntimeAdmission::ReleaseBoundEnabled,
+            wire: OwnedWireContract::MainFailureRequestV1 { binding, sequence },
+            data,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
     /// Admit an enabled full-width collateral instruction after decoding the
     /// exact request variant and validating every account role. The first
     /// role is the authenticated owner/claimant signer and is retained as a
@@ -1767,6 +1858,7 @@ impl OwnedInstructionDraft {
             OwnedWireContract::MainSuccessorRequest { binding, .. }
                 if binding.family == ExtensionFamily::SourceSeries
         );
+        let failure_request = matches!(self.wire, OwnedWireContract::MainFailureRequestV1 { .. });
         let collateral_request = matches!(
             self.wire,
             OwnedWireContract::CollateralReplayRequestV3 { .. }
@@ -1784,6 +1876,7 @@ impl OwnedInstructionDraft {
         let structured_wrapper = matches!(self.wire, OwnedWireContract::StructuredWrapperV1 { .. });
         let dealer_terminal = matches!(self.wire, OwnedWireContract::DealerTerminalRetireV1 { .. });
         if !source_request
+            && !failure_request
             && !collateral_request
             && !direct_request
             && !fractional_request
@@ -1858,6 +1951,7 @@ impl OwnedInstructionDraft {
                     ProtocolFlow::ProductSeries | ProtocolFlow::SourcePlaneV3 => {
                         family == ExtensionFamily::SourceSeries
                     }
+                    ProtocolFlow::FailureRecovery => family == ExtensionFamily::Recovery,
                     ProtocolFlow::FractionalRedemption => {
                         family == ExtensionFamily::FractionalRedemption
                     }
@@ -1913,6 +2007,45 @@ impl OwnedInstructionDraft {
                     .collect::<Vec<_>>();
                 validate_account_metas_v2(action, &observed)
                     .map_err(|_| ConstructionError::InvalidAccountContract)?;
+            }
+            OwnedWireContract::MainFailureRequestV1 { binding, sequence } => {
+                use clutch_solana_layout::registry::RecoveryAction;
+
+                let request = ExtensionRequest::decode(&self.data)
+                    .map_err(|_| ConstructionError::WrongWirePrefix)?;
+                let expected = ExtensionAction::Recovery(
+                    RecoveryAction::AdvanceIntervalConsensus,
+                );
+                let expected_payload = 8
+                    + clutch_failure_policy_runtime::market_quote_v1::FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1
+                    + clutch_solana_layout::failure_recovery::FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1;
+                if sequence == 0
+                    || request.sequence != sequence
+                    || request.envelope.family != ExtensionFamily::Recovery
+                    || request.envelope.family != binding.family
+                    || request.envelope.action != expected
+                    || binding.local_action != expected.local_tag()
+                    || binding.central_action != Some(expected)
+                    || binding.family_status != AllocationStatus::Frozen
+                    || self.registry_binding != Some(binding)
+                    || self.flow != ProtocolFlow::FailureRecovery
+                    || self.runtime_admission != RuntimeAdmission::ReleaseBoundEnabled
+                    || request.envelope.payload.len() != expected_payload
+                    || request.envelope.payload[..2] == [0, 0]
+                    || request.envelope.payload[2..8] != [0; 6]
+                {
+                    return Err(ConstructionError::UnallocatedRegistryCoordinate);
+                }
+                let quote: &[u8; clutch_failure_policy_runtime::market_quote_v1::FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1] = request.envelope.payload[8..8 + clutch_failure_policy_runtime::market_quote_v1::FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1]
+                    .try_into()
+                    .map_err(|_| ConstructionError::WrongWireLength)?;
+                clutch_failure_policy_runtime::market_quote_v1::FailureMarketRecoveryQuoteScheduleV1::decode(quote)
+                    .map_err(|_| ConstructionError::InvalidAccountContract)?;
+                let preimage: &[u8; clutch_solana_layout::failure_recovery::FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1] = request.envelope.payload[8 + clutch_failure_policy_runtime::market_quote_v1::FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1..]
+                    .try_into()
+                    .map_err(|_| ConstructionError::WrongWireLength)?;
+                validate_failure_interval_funding_preimage_v1(preimage)?;
+                validate_failure_action11_metas_v1(&self.accounts)?;
             }
             OwnedWireContract::FractionalRedemptionRequestV1 {
                 binding,
@@ -2589,6 +2722,70 @@ impl OwnedInstructionDraft {
     }
 }
 
+/// Mirror the exact current Failure action-11 account ABI at the release-bound
+/// host construction boundary. The only admitted alias is Keeper/refund owner;
+/// its Solana writable privilege is the union of both roles.
+fn validate_failure_action11_metas_v1(accounts: &[AccountMeta]) -> Result<()> {
+    const ACCOUNT_COUNT: usize = 44;
+    const KEEPER_INDEX: usize = 42;
+    const REFUND_OWNER_INDEX: usize = 43;
+    const WRITABLE: [bool; ACCOUNT_COUNT] = [
+        false, false, false, false, true, true, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false, false, false, false, false,
+        false, false, false, false, false, true, true, false,
+    ];
+    if accounts.len() != ACCOUNT_COUNT {
+        return Err(ConstructionError::InvalidAccountContract);
+    }
+    let mut left = 0usize;
+    while left < accounts.len() {
+        if accounts[left].pubkey == Address::default() || accounts[left].is_signer {
+            return Err(ConstructionError::InvalidAccountContract);
+        }
+        let mut expected_writable = WRITABLE[left];
+        let mut right = 0usize;
+        while right < accounts.len() {
+            if left != right && accounts[left].pubkey == accounts[right].pubkey {
+                if !((left == KEEPER_INDEX && right == REFUND_OWNER_INDEX)
+                    || (left == REFUND_OWNER_INDEX && right == KEEPER_INDEX))
+                {
+                    return Err(ConstructionError::DuplicateAccount);
+                }
+                expected_writable |= WRITABLE[right];
+            }
+            right += 1;
+        }
+        if accounts[left].is_writable != expected_writable {
+            return Err(ConstructionError::InvalidAccountContract);
+        }
+        left += 1;
+    }
+    Ok(())
+}
+
+/// Recheck the exact private initializer shape consumed by the current SBF
+/// funding reopen. It contains five live IDs followed by two exact lamport
+/// donation floors; the first two preallocation receipts must be distinct.
+fn validate_failure_interval_funding_preimage_v1(
+    input: &[u8; clutch_solana_layout::failure_recovery::FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1],
+) -> Result<()> {
+    let mut first = [0u8; 32];
+    first.copy_from_slice(&input[..32]);
+    let mut second = [0u8; 32];
+    second.copy_from_slice(&input[32..64]);
+    if first == [0; 32]
+        || second == [0; 32]
+        || first == second
+        || input[64..96].iter().all(|byte| *byte == 0)
+        || input[96..128].iter().all(|byte| *byte == 0)
+        || input[128..160].iter().all(|byte| *byte == 0)
+    {
+        return Err(ConstructionError::InvalidAccountContract);
+    }
+    Ok(())
+}
+
 /// Explicit transport bounds. They are deployment/session configuration, not
 /// protocol invariants, so alternate local infrastructure can raise them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2724,6 +2921,7 @@ impl ProtocolTransactionBuilder {
                 draft.wire,
                 OwnedWireContract::StructuredWrapperV1 { .. }
                     | OwnedWireContract::DealerTerminalRetireV1 { .. }
+                    | OwnedWireContract::MainFailureRequestV1 { .. }
             )
         }) {
             return Err(ConstructionError::MissingLookupTable);
@@ -2743,6 +2941,7 @@ impl ProtocolTransactionBuilder {
                 draft.wire,
                 OwnedWireContract::MainSuccessor { .. }
                     | OwnedWireContract::MainSuccessorRequest { .. }
+                    | OwnedWireContract::MainFailureRequestV1 { .. }
                     | OwnedWireContract::FractionalRedemptionRequestV1 { .. }
                     | OwnedWireContract::DisabledDirectMarketRequestV1 { .. }
                     | OwnedWireContract::EnabledDirectMarketRequestV1 { .. }
@@ -2774,6 +2973,16 @@ impl ProtocolTransactionBuilder {
                 .iter()
                 .any(|account| account.pubkey == self.payer && !account.is_writable)
             {
+                return Err(ConstructionError::InvalidAccountContract);
+            }
+            if matches!(draft.wire, OwnedWireContract::MainFailureRequestV1 { .. })
+                && draft
+                    .accounts
+                    .iter()
+                    .any(|account| account.pubkey == self.payer)
+            {
+                // Action 11 has no signer role and several read-only roles;
+                // transaction-payer privilege union would widen its exact ABI.
                 return Err(ConstructionError::InvalidAccountContract);
             }
             if matches!(
@@ -2837,7 +3046,8 @@ impl ProtocolTransactionBuilder {
         })
     }
 
-    /// Compile exactly one current wide Structured or Dealer instruction as a
+    /// Compile exactly one current wide Structured, Dealer, or Failure
+    /// instruction as a
     /// v0 message. This crate-private seam is reachable only after the
     /// operator material constructor has hostile-decoded the finalized
     /// lookup-table account and proved complete role coverage.
@@ -2852,11 +3062,14 @@ impl ProtocolTransactionBuilder {
             draft.wire,
             OwnedWireContract::StructuredWrapperV1 { .. }
                 | OwnedWireContract::DealerTerminalRetireV1 { .. }
+                | OwnedWireContract::MainFailureRequestV1 { .. }
         );
         if !supported
             || !matches!(
                 draft.flow,
-                ProtocolFlow::StructuredClaim | ProtocolFlow::DealerFacilityTerminal
+                ProtocolFlow::StructuredClaim
+                    | ProtocolFlow::DealerFacilityTerminal
+                    | ProtocolFlow::FailureRecovery
             )
             || lookup_table.key == Address::default()
             || lookup_table.addresses.is_empty()
