@@ -78,6 +78,55 @@ const PRODUCT_DIRECT_FOUNDER_ACTIVATION_PLAN_DOMAIN_V3: &[u8] =
 const PRODUCT_DIRECT_FOUNDER_ACTIVATION_POSTWRITE_DOMAIN_V3: &[u8] =
     b"dragons-clutch/sbf/product-direct-founder-activation-postwrite/v3\0";
 
+/// Narrow Product founder authority shared by the historical atomic founder
+/// and the current action14 bootstrap. Direct never needs either concrete
+/// Product receipt type; it needs these exact, privately authenticated facts.
+pub(crate) trait AuthenticatedProductDirectGlobalLivenessFounderV2 {
+    fn id(&self) -> ContentId;
+    fn market_instance_id(&self) -> MarketInstanceV2Id;
+    fn generation(&self) -> u64;
+    fn lifecycle_root_account(&self) -> Pubkey;
+    fn founder_link_account(&self) -> Pubkey;
+    fn lifecycle_replay_account(&self) -> Pubkey;
+    fn failure_liveness_policy_account(&self) -> Pubkey;
+    fn failure_liveness_policy_id(&self) -> ContentId;
+    fn failure_recovery_quote_schedule_id(&self) -> ContentId;
+    fn liveness_realm_id(&self) -> ContentId;
+    fn neutral_lamport_sink(&self) -> Pubkey;
+    fn principal_refund_owner(&self) -> Pubkey;
+    fn candidate_lifecycle_policy_id(&self) -> ContentId;
+    fn candidate_liveness_policy_id(&self) -> ContentId;
+}
+
+impl AuthenticatedProductDirectGlobalLivenessFounderV2
+    for AuthenticatedProductMarketFounderFoundationPreauthorizationV3
+{
+    fn id(&self) -> ContentId { self.id() }
+    fn market_instance_id(&self) -> MarketInstanceV2Id { self.market_instance_id() }
+    fn generation(&self) -> u64 { self.generation() }
+    fn lifecycle_root_account(&self) -> Pubkey { self.lifecycle_root_account() }
+    fn founder_link_account(&self) -> Pubkey { self.founder_link_account() }
+    fn lifecycle_replay_account(&self) -> Pubkey { self.lifecycle_replay_account() }
+    fn failure_liveness_policy_account(&self) -> Pubkey {
+        self.failure_liveness_policy_account()
+    }
+    fn failure_liveness_policy_id(&self) -> ContentId {
+        self.failure_liveness_policy_id()
+    }
+    fn failure_recovery_quote_schedule_id(&self) -> ContentId {
+        self.failure_recovery_quote_schedule_id()
+    }
+    fn liveness_realm_id(&self) -> ContentId { self.liveness_realm_id() }
+    fn neutral_lamport_sink(&self) -> Pubkey { self.neutral_lamport_sink() }
+    fn principal_refund_owner(&self) -> Pubkey { self.principal_refund_owner() }
+    fn candidate_lifecycle_policy_id(&self) -> ContentId {
+        self.candidate_lifecycle_policy_id()
+    }
+    fn candidate_liveness_policy_id(&self) -> ContentId {
+        self.candidate_liveness_policy_id()
+    }
+}
+
 /// One small row result retained while seven accounts are created serially.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RowCapitalizationFactsV1 {
@@ -1217,9 +1266,9 @@ fn require_direct_work_quote_authority_v1(
 /// and no route calls it except the eventual atomic Product founder outer.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-pub(super) fn capitalize_product_direct_global_liveness_v2<'a>(
+pub(super) fn capitalize_product_direct_global_liveness_v2<'a, F>(
     program_id: &Pubkey,
-    founder: &AuthenticatedProductMarketFounderFoundationPreauthorizationV3,
+    founder: &F,
     work_quote_bytes: &[u8],
     policy_account: &AccountInfo<'a>,
     manifest_account: &AccountInfo<'a>,
@@ -1228,7 +1277,10 @@ pub(super) fn capitalize_product_direct_global_liveness_v2<'a>(
     compartments: &[AccountInfo<'a>],
     system_program: &AccountInfo<'a>,
     rent_sysvar: &AccountInfo<'a>,
-) -> Outcome<AuthenticatedProductDirectGlobalLivenessCapitalizationV2> {
+) -> Outcome<AuthenticatedProductDirectGlobalLivenessCapitalizationV2>
+where
+    F: AuthenticatedProductDirectGlobalLivenessFounderV2 + ?Sized,
+{
     require(
         compartments.len() == RUNTIME_COMPARTMENT_COUNT_V1,
         ClutchError::AccountCount,
@@ -1652,12 +1704,15 @@ pub(super) fn activate_product_direct_global_liveness_from_current_founder_v2(
 }
 
 #[inline(never)]
-fn authenticate_policy_v1(
+fn authenticate_policy_v1<F>(
     program_id: &Pubkey,
-    founder: &AuthenticatedProductMarketFounderFoundationPreauthorizationV3,
+    founder: &F,
     policy_account: &AccountInfo<'_>,
     rent: &RentParameters,
-) -> Outcome<AuthenticatedRuntimeLivenessPolicyFactsV1> {
+) -> Outcome<AuthenticatedRuntimeLivenessPolicyFactsV1>
+where
+    F: AuthenticatedProductDirectGlobalLivenessFounderV2 + ?Sized,
+{
     require(
         policy_account.owner == program_id
             && !policy_account.is_writable
@@ -1852,9 +1907,9 @@ fn capitalize_row_v1<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn authenticate_fixed_roles_v1(
+fn authenticate_fixed_roles_v1<F>(
     program_id: &Pubkey,
-    founder: &AuthenticatedProductMarketFounderFoundationPreauthorizationV3,
+    founder: &F,
     policy_account: &AccountInfo<'_>,
     manifest_account: &AccountInfo<'_>,
     payer: &AccountInfo<'_>,
@@ -1862,7 +1917,10 @@ fn authenticate_fixed_roles_v1(
     compartments: &[AccountInfo<'_>],
     system_program: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
-) -> Outcome<()> {
+) -> Outcome<()>
+where
+    F: AuthenticatedProductDirectGlobalLivenessFounderV2 + ?Sized,
+{
     require_distinct(compartments)?;
     require(
         payer.key.to_bytes() == founder.principal_refund_owner().to_bytes()
