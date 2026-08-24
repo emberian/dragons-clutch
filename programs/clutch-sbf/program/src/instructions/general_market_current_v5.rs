@@ -839,7 +839,7 @@ fn authenticate_general_market_current_v5_with_product_access(
             frame.revenue_record.key.as_ref(),
             &revenue_record_id.bytes(),
             &revenue_digest.bytes(),
-            &authority.series_physical_founder_v5_id().bytes(),
+            &authority.physical_capitalization_receipt_id().bytes(),
             &authority.product_preauthorization_id().bytes(),
         ])
         .to_bytes(),

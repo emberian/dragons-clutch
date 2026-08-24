@@ -58,6 +58,7 @@ use super::product_market_lifecycle_v3_current::{
 };
 use super::product_market_replay_current::{
     activate_current_product_market_replay_v3, authenticate_market_lifecycle_replay_v2,
+    AuthenticatedMarketLifecycleReplayV2,
 };
 use clutch_solana_layout::product_series::{
     MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV3,
@@ -293,6 +294,7 @@ pub(crate) fn bind_product_direct_foundation_owner_v3(
     program_id: &Pubkey,
     root: &AuthenticatedMarketLifecycleRootV3<'_>,
     link: &AuthenticatedSeriesMarketLinkV3<'_>,
+    replay: &AuthenticatedMarketLifecycleReplayV2,
     general: &AuthenticatedGeneralMarketCurrentV5,
     preauthorization: AuthenticatedProductDirectFoundationPreauthorizationV3,
     plan: &AuthenticatedProductFamilyAdmissionPlanV3,
@@ -304,6 +306,7 @@ pub(crate) fn bind_product_direct_foundation_owner_v3(
     let current = general.binding().authority();
     let root_binding = root.binding();
     let link_binding = link.binding();
+    let replay_binding = replay.state().binding();
     let candidate = allocation.candidate_binding();
     let revenue = general.revenue();
     let revenue_policy = revenue.policy();
@@ -461,7 +464,8 @@ pub(crate) fn bind_product_direct_foundation_owner_v3(
             && general.product_link_binding_id() == link.binding_id()
             && current.product_preauthorization_id().bytes()
                 == allocation.product_preauthorization_id().bytes()
-            && current.series_physical_founder_v5_id().bytes() != [0; 32]
+            && current.physical_capitalization_receipt_id().bytes()
+                == replay_binding.physical_capitalization_receipt_id.bytes()
             && relation.market_instance_v2_id.bytes()
                 == root_binding.market_instance_id.bytes()
             && relation.outcome_count == root_binding.outcome_count
@@ -594,6 +598,7 @@ pub(crate) fn compose_product_direct_initialize_market_v3(
         program_id,
         &root_before,
         &link_before,
+        &replay_before,
         &general,
         preauthorization,
         &family_plan,

@@ -303,7 +303,7 @@ pub(crate) trait AuthenticatedCurrentProductGeneralFoundingV5 {
     fn foundation_schedule_v4_id(&self) -> Id32;
     fn foundation_account_graph_v4_id(&self) -> Id32;
     fn series_funding_v5_account(&self) -> Id32;
-    fn series_physical_founder_v5_id(&self) -> Id32;
+    fn physical_capitalization_receipt_id(&self) -> Id32;
     fn market_liability_founding_id(&self) -> Id32;
     fn claim_mint_founding_plan_id(&self) -> Id32;
     fn claim_issuance_binding_id(&self) -> Id32;
@@ -424,7 +424,7 @@ where
         Id32::from_bytes(treasury.treasury_position_account().to_bytes()),
         Id32::from_bytes(treasury.treasury_service_ledger_account().to_bytes()),
         product.series_funding_v5_account(),
-        product.series_physical_founder_v5_id(),
+        product.physical_capitalization_receipt_id(),
     )?;
     let join_id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
@@ -434,7 +434,7 @@ where
             market_runtime_account.as_ref(),
             &product.product_market_binding_v3_id().bytes(),
             &product.series_market_link_v3_id().bytes(),
-            &product.series_physical_founder_v5_id().bytes(),
+            &product.physical_capitalization_receipt_id().bytes(),
             &product.product_preauthorization_id().bytes(),
             &revenue.record_semantic_id().bytes(),
             treasury.treasury_position_account().as_ref(),
