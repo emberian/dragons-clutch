@@ -14,27 +14,27 @@ use crate::{Error, Result};
 const SOURCE_FAILURE_TERMINAL_MAGIC: [u8; 8] = *b"DCSPFT01";
 const SOURCE_FAILURE_TERMINAL_DOMAIN: &[u8] =
     b"dragons-clutch/source-failure-terminal/v1";
-const SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_MAGIC: [u8; 8] = *b"DCSPFB02";
-const SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_DOMAIN: &[u8] =
-    b"dragons-clutch/source-failure-terminal-product-release/v2";
-const SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_AUTH_DOMAIN: &[u8] =
-    b"dragons-clutch/authenticated-source-failure-terminal-product-release/v2";
+const SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_MAGIC: [u8; 8] = *b"DCSPFB03";
+const SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_DOMAIN: &[u8] =
+    b"dragons-clutch/source-failure-terminal-product-release/v3";
+const SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_AUTH_DOMAIN: &[u8] =
+    b"dragons-clutch/authenticated-source-failure-terminal-product-release/v3";
 
 /// Exact fixed width of one Source failure-terminal record.
 pub const SOURCE_FAILURE_TERMINAL_BYTES: usize = 672;
 /// Exact fixed width of the current per-occurrence terminal/release owner.
-pub const SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_BYTES: usize = 1184;
+pub const SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_BYTES: usize = 1248;
 
 /// One-way post-terminal Product-release binding phase.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SourceFailureTerminalProductReleasePhaseV2 {
+pub enum SourceFailureTerminalProductReleasePhaseV3 {
     /// Source terminal exists, but Product has not released the pinned Link.
     PendingProductRelease,
     /// Exact Source/Product release bridge is durably bound once.
     BoundProductRelease,
 }
 
-impl SourceFailureTerminalProductReleasePhaseV2 {
+impl SourceFailureTerminalProductReleasePhaseV3 {
     const fn wire_byte(self) -> u8 {
         match self {
             Self::PendingProductRelease => 1,
@@ -53,14 +53,14 @@ impl SourceFailureTerminalProductReleasePhaseV2 {
 
 /// Source-owned exhaustive Product release disposition for a failed attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SourceFailureProductReleaseDispositionV2 {
+pub enum SourceFailureProductReleaseDispositionV3 {
     /// Product released the pinned link because no accepted Result existed.
     SourceAbsent,
     /// Product released the pinned link because the persisted Result refused.
     SourceRefused,
 }
 
-impl SourceFailureProductReleaseDispositionV2 {
+impl SourceFailureProductReleaseDispositionV3 {
     const fn wire_byte(self) -> u8 {
         match self {
             Self::SourceAbsent => 1,
@@ -486,10 +486,12 @@ impl FixedCodec for SourceFailureTerminalV1 {
 /// Current per-occurrence Source terminal owner. The inner terminal remains
 /// immutable while the exact post-Product-release evidence is bound once.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SourceFailureTerminalAccountV2 {
-    phase: SourceFailureTerminalProductReleasePhaseV2,
-    disposition: Option<SourceFailureProductReleaseDispositionV2>,
+pub struct SourceFailureTerminalAccountV3 {
+    phase: SourceFailureTerminalProductReleasePhaseV3,
+    disposition: Option<SourceFailureProductReleaseDispositionV3>,
     terminal: SourceFailureTerminalV1,
+    source_terminal_postwrite_id: ContentId,
+    source_physical_disposition_id: ContentId,
     product_release_binding_id: ContentId,
     product_release_facts_id: ContentId,
     product_release_id: ContentId,
@@ -509,14 +511,16 @@ pub struct SourceFailureTerminalAccountV2 {
     product_release_preauthorization_id: ContentId,
 }
 
-impl SourceFailureTerminalAccountV2 {
+impl SourceFailureTerminalAccountV3 {
     /// Create the exact prefunded pending body before Product can release.
     pub fn new_pending(terminal: SourceFailureTerminalV1) -> Result<Self> {
         terminal.validate_shape()?;
         let value = Self {
-            phase: SourceFailureTerminalProductReleasePhaseV2::PendingProductRelease,
+            phase: SourceFailureTerminalProductReleasePhaseV3::PendingProductRelease,
             disposition: None,
             terminal,
+            source_terminal_postwrite_id: ContentId::ZERO,
+            source_physical_disposition_id: ContentId::ZERO,
             product_release_binding_id: ContentId::ZERO,
             product_release_facts_id: ContentId::ZERO,
             product_release_id: ContentId::ZERO,
@@ -544,7 +548,9 @@ impl SourceFailureTerminalAccountV2 {
     #[allow(clippy::too_many_arguments)]
     pub fn bind_product_release(
         self,
-        disposition: SourceFailureProductReleaseDispositionV2,
+        disposition: SourceFailureProductReleaseDispositionV3,
+        source_terminal_postwrite_id: ContentId,
+        source_physical_disposition_id: ContentId,
         product_release_binding_id: ContentId,
         product_release_facts_id: ContentId,
         product_release_id: ContentId,
@@ -564,8 +570,10 @@ impl SourceFailureTerminalAccountV2 {
         product_release_preauthorization_id: ContentId,
     ) -> Result<Self> {
         self.validate_shape()?;
-        if self.phase != SourceFailureTerminalProductReleasePhaseV2::PendingProductRelease
+        if self.phase != SourceFailureTerminalProductReleasePhaseV3::PendingProductRelease
             || self.disposition.is_some()
+            || !self.source_terminal_postwrite_id.is_zero()
+            || !self.source_physical_disposition_id.is_zero()
             || !self.product_release_binding_id.is_zero()
             || !self.product_release_facts_id.is_zero()
             || !self.product_release_id.is_zero()
@@ -588,18 +596,20 @@ impl SourceFailureTerminalAccountV2 {
         }
         let expected = match self.terminal.source_failure_kind() {
             SourceFailureKindV1::PrimaryMaturityWithoutAcceptedResolution => {
-                SourceFailureProductReleaseDispositionV2::SourceAbsent
+                SourceFailureProductReleaseDispositionV3::SourceAbsent
             }
             SourceFailureKindV1::SourceEvaluationRefused => {
-                SourceFailureProductReleaseDispositionV2::SourceRefused
+                SourceFailureProductReleaseDispositionV3::SourceRefused
             }
         };
         if disposition != expected {
             return Err(Error::MismatchedBinding);
         }
         let value = Self {
-            phase: SourceFailureTerminalProductReleasePhaseV2::BoundProductRelease,
+            phase: SourceFailureTerminalProductReleasePhaseV3::BoundProductRelease,
             disposition: Some(disposition),
+            source_terminal_postwrite_id,
+            source_physical_disposition_id,
             product_release_binding_id,
             product_release_facts_id,
             product_release_id,
@@ -627,10 +637,12 @@ impl SourceFailureTerminalAccountV2 {
         self.terminal.validate_shape()?;
         match (self.phase, self.disposition) {
             (
-                SourceFailureTerminalProductReleasePhaseV2::PendingProductRelease,
+                SourceFailureTerminalProductReleasePhaseV3::PendingProductRelease,
                 None,
             ) => {
-                if !self.product_release_binding_id.is_zero()
+                if !self.source_terminal_postwrite_id.is_zero()
+                    || !self.source_physical_disposition_id.is_zero()
+                    || !self.product_release_binding_id.is_zero()
                     || !self.product_release_facts_id.is_zero()
                     || !self.product_release_id.is_zero()
                     || !self.product_link_account.is_zero()
@@ -652,15 +664,15 @@ impl SourceFailureTerminalAccountV2 {
                 }
             }
             (
-                SourceFailureTerminalProductReleasePhaseV2::BoundProductRelease,
+                SourceFailureTerminalProductReleasePhaseV3::BoundProductRelease,
                 Some(disposition),
             ) => {
                 let expected = match self.terminal.source_failure_kind() {
                     SourceFailureKindV1::PrimaryMaturityWithoutAcceptedResolution => {
-                        SourceFailureProductReleaseDispositionV2::SourceAbsent
+                        SourceFailureProductReleaseDispositionV3::SourceAbsent
                     }
                     SourceFailureKindV1::SourceEvaluationRefused => {
-                        SourceFailureProductReleaseDispositionV2::SourceRefused
+                        SourceFailureProductReleaseDispositionV3::SourceRefused
                     }
                 };
                 if disposition != expected {
@@ -668,6 +680,8 @@ impl SourceFailureTerminalAccountV2 {
                 }
                 self.product_link_account.validate()?;
                 let ids = [
+                    self.source_terminal_postwrite_id,
+                    self.source_physical_disposition_id,
                     self.product_release_binding_id,
                     self.product_release_facts_id,
                     self.product_release_id,
@@ -719,7 +733,7 @@ impl SourceFailureTerminalAccountV2 {
     }
 
     /// One-way binding phase.
-    pub const fn phase(self) -> SourceFailureTerminalProductReleasePhaseV2 {
+    pub const fn phase(self) -> SourceFailureTerminalProductReleasePhaseV3 {
         self.phase
     }
 
@@ -729,8 +743,18 @@ impl SourceFailureTerminalAccountV2 {
     }
 
     /// Exhaustive bound release disposition, or none only while pending.
-    pub const fn disposition(self) -> Option<SourceFailureProductReleaseDispositionV2> {
+    pub const fn disposition(self) -> Option<SourceFailureProductReleaseDispositionV3> {
         self.disposition
+    }
+
+    /// Exact completed Source terminal postwrite bound before Product release.
+    pub const fn source_terminal_postwrite_id(self) -> ContentId {
+        self.source_terminal_postwrite_id
+    }
+
+    /// Exact Source absence-lineage or refused-Result physical disposition.
+    pub const fn source_physical_disposition_id(self) -> ContentId {
+        self.source_physical_disposition_id
     }
 
     /// Source/Product release bridge identity.
@@ -820,14 +844,14 @@ impl SourceFailureTerminalAccountV2 {
 
     /// Identity of the complete pending or bound account body.
     pub fn id(&self) -> Result<ContentId> {
-        let mut bytes = [0_u8; SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_BYTES];
+        let mut bytes = [0_u8; SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_BYTES];
         self.encode_into(&mut bytes).map_err(Error::Core)?;
-        Ok(domain_id(SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_DOMAIN, &bytes))
+        Ok(domain_id(SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_DOMAIN, &bytes))
     }
 }
 
-impl FixedCodec for SourceFailureTerminalAccountV2 {
-    const ENCODED_LEN: usize = SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_BYTES;
+impl FixedCodec for SourceFailureTerminalAccountV3 {
+    const ENCODED_LEN: usize = SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_BYTES;
 
     fn encode_into(
         &self,
@@ -842,12 +866,14 @@ impl FixedCodec for SourceFailureTerminalAccountV2 {
         self.validate_shape()
             .map_err(|_| clutch_source_plane_v3::Error::MismatchedArtifact)?;
         output.fill(0);
-        output[..8].copy_from_slice(&SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_MAGIC);
+        output[..8].copy_from_slice(&SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_MAGIC);
         output[8] = self.phase.wire_byte();
         output[9] = self.disposition.map_or(0, |value| value.wire_byte());
-        output[10..12].copy_from_slice(&2_u16.to_le_bytes());
+        output[10..12].copy_from_slice(&3_u16.to_le_bytes());
         self.terminal.encode_into(&mut output[16..688])?;
         let ids = [
+            self.source_terminal_postwrite_id,
+            self.source_physical_disposition_id,
             self.product_release_binding_id,
             self.product_release_facts_id,
             self.product_release_id,
@@ -869,8 +895,8 @@ impl FixedCodec for SourceFailureTerminalAccountV2 {
             output[at..at + 32].copy_from_slice(&id.bytes());
             at += 32;
         }
-        output[1168..1176].copy_from_slice(&self.product_transition_sequence_before.to_le_bytes());
-        output[1176..1184].copy_from_slice(&self.product_transition_sequence_after.to_le_bytes());
+        output[1232..1240].copy_from_slice(&self.product_transition_sequence_before.to_le_bytes());
+        output[1240..1248].copy_from_slice(&self.product_transition_sequence_after.to_le_bytes());
         Ok(())
     }
 
@@ -881,10 +907,10 @@ impl FixedCodec for SourceFailureTerminalAccountV2 {
         if input.len() > Self::ENCODED_LEN {
             return Err(clutch_source_plane_v3::Error::TrailingBytes);
         }
-        if input[..8] != SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_MAGIC {
+        if input[..8] != SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_MAGIC {
             return Err(clutch_source_plane_v3::Error::BadMagic);
         }
-        if input[10..12] != 2_u16.to_le_bytes() {
+        if input[10..12] != 3_u16.to_le_bytes() {
             return Err(clutch_source_plane_v3::Error::BadVersion);
         }
         if input[12..16].iter().any(|byte| *byte != 0) {
@@ -895,12 +921,12 @@ impl FixedCodec for SourceFailureTerminalAccountV2 {
             value.copy_from_slice(&input[at..at + 32]);
             value
         };
-        let phase = SourceFailureTerminalProductReleasePhaseV2::decode(input[8])
+        let phase = SourceFailureTerminalProductReleasePhaseV3::decode(input[8])
             .map_err(|_| clutch_source_plane_v3::Error::MismatchedArtifact)?;
         let disposition = match input[9] {
             0 => None,
             value => Some(
-                SourceFailureProductReleaseDispositionV2::decode(value)
+                SourceFailureProductReleaseDispositionV3::decode(value)
                     .map_err(|_| clutch_source_plane_v3::Error::MismatchedArtifact)?,
             ),
         };
@@ -913,23 +939,25 @@ impl FixedCodec for SourceFailureTerminalAccountV2 {
             phase,
             disposition,
             terminal: SourceFailureTerminalV1::decode(&input[16..688])?,
-            product_release_binding_id: ContentId::from_bytes(read_32(688)),
-            product_release_facts_id: ContentId::from_bytes(read_32(720)),
-            product_release_id: ContentId::from_bytes(read_32(752)),
-            product_link_account: RuntimeKey::from_bytes(read_32(784)),
-            product_link_authentication_before: ContentId::from_bytes(read_32(816)),
-            product_link_authentication_after: ContentId::from_bytes(read_32(848)),
-            product_link_semantic_before: ContentId::from_bytes(read_32(880)),
-            product_link_semantic_after: ContentId::from_bytes(read_32(912)),
-            product_session_transcript_before: ContentId::from_bytes(read_32(944)),
-            product_session_transcript_after: ContentId::from_bytes(read_32(976)),
-            product_session_terminal_receipt_id: ContentId::from_bytes(read_32(1008)),
-            product_archive_postwrite_id: ContentId::from_bytes(read_32(1040)),
-            product_append_receipt_id: ContentId::from_bytes(read_32(1072)),
-            product_reset_receipt_id: ContentId::from_bytes(read_32(1104)),
-            product_release_preauthorization_id: ContentId::from_bytes(read_32(1136)),
-            product_transition_sequence_before: read_u64(1168),
-            product_transition_sequence_after: read_u64(1176),
+            source_terminal_postwrite_id: ContentId::from_bytes(read_32(688)),
+            source_physical_disposition_id: ContentId::from_bytes(read_32(720)),
+            product_release_binding_id: ContentId::from_bytes(read_32(752)),
+            product_release_facts_id: ContentId::from_bytes(read_32(784)),
+            product_release_id: ContentId::from_bytes(read_32(816)),
+            product_link_account: RuntimeKey::from_bytes(read_32(848)),
+            product_link_authentication_before: ContentId::from_bytes(read_32(880)),
+            product_link_authentication_after: ContentId::from_bytes(read_32(912)),
+            product_link_semantic_before: ContentId::from_bytes(read_32(944)),
+            product_link_semantic_after: ContentId::from_bytes(read_32(976)),
+            product_session_transcript_before: ContentId::from_bytes(read_32(1008)),
+            product_session_transcript_after: ContentId::from_bytes(read_32(1040)),
+            product_session_terminal_receipt_id: ContentId::from_bytes(read_32(1072)),
+            product_archive_postwrite_id: ContentId::from_bytes(read_32(1104)),
+            product_append_receipt_id: ContentId::from_bytes(read_32(1136)),
+            product_reset_receipt_id: ContentId::from_bytes(read_32(1168)),
+            product_release_preauthorization_id: ContentId::from_bytes(read_32(1200)),
+            product_transition_sequence_before: read_u64(1232),
+            product_transition_sequence_after: read_u64(1240),
         };
         value
             .validate_shape()
@@ -940,7 +968,7 @@ impl FixedCodec for SourceFailureTerminalAccountV2 {
 
 /// Exact privilege/phase accepted by the current terminal account parser.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SourceFailureTerminalAccountAccessV2 {
+pub enum SourceFailureTerminalAccountAccessV3 {
     /// Pending body created earlier in the current atomic action.
     CreatedPendingMutable,
     /// Bound post-release body written later in the current atomic action.
@@ -951,14 +979,14 @@ pub enum SourceFailureTerminalAccountAccessV2 {
 
 /// Hostile owner/PDA/body authentication of the current terminal account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedSourceFailureTerminalAccountV2 {
+pub struct AuthenticatedSourceFailureTerminalAccountV3 {
     account: RuntimeKey,
     account_data_id: ContentId,
-    value: SourceFailureTerminalAccountV2,
+    value: SourceFailureTerminalAccountV3,
     authentication_id: ContentId,
 }
 
-impl AuthenticatedSourceFailureTerminalAccountV2 {
+impl AuthenticatedSourceFailureTerminalAccountV3 {
     /// Physical per-occurrence Source terminal account.
     pub const fn account(self) -> RuntimeKey {
         self.account
@@ -970,7 +998,7 @@ impl AuthenticatedSourceFailureTerminalAccountV2 {
     }
 
     /// Exact hostile-decoded pending or bound value.
-    pub const fn value(self) -> SourceFailureTerminalAccountV2 {
+    pub const fn value(self) -> SourceFailureTerminalAccountV3 {
         self.value
     }
 
@@ -981,23 +1009,23 @@ impl AuthenticatedSourceFailureTerminalAccountV2 {
 }
 
 /// Authenticate one exact pending or bound current Source failure terminal.
-pub fn authenticate_source_failure_terminal_account_v2(
+pub fn authenticate_source_failure_terminal_account_v3(
     route: AuthenticatedSourceRouteV1,
     account: RuntimeAccountViewV1<'_>,
     derived_pda: RuntimeDerivedPdaV1,
-    access: SourceFailureTerminalAccountAccessV2,
-) -> Result<AuthenticatedSourceFailureTerminalAccountV2> {
+    access: SourceFailureTerminalAccountAccessV3,
+) -> Result<AuthenticatedSourceFailureTerminalAccountV3> {
     let (expected_phase, writable) = match access {
-        SourceFailureTerminalAccountAccessV2::CreatedPendingMutable => (
-            SourceFailureTerminalProductReleasePhaseV2::PendingProductRelease,
+        SourceFailureTerminalAccountAccessV3::CreatedPendingMutable => (
+            SourceFailureTerminalProductReleasePhaseV3::PendingProductRelease,
             true,
         ),
-        SourceFailureTerminalAccountAccessV2::BoundMutable => (
-            SourceFailureTerminalProductReleasePhaseV2::BoundProductRelease,
+        SourceFailureTerminalAccountAccessV3::BoundMutable => (
+            SourceFailureTerminalProductReleasePhaseV3::BoundProductRelease,
             true,
         ),
-        SourceFailureTerminalAccountAccessV2::ExistingBoundReadOnly => (
-            SourceFailureTerminalProductReleasePhaseV2::BoundProductRelease,
+        SourceFailureTerminalAccountAccessV3::ExistingBoundReadOnly => (
+            SourceFailureTerminalProductReleasePhaseV3::BoundProductRelease,
             false,
         ),
     };
@@ -1008,7 +1036,7 @@ pub fn authenticate_source_failure_terminal_account_v2(
     {
         return Err(Error::WrongPrivilege);
     }
-    let value = SourceFailureTerminalAccountV2::decode(account.data).map_err(Error::Core)?;
+    let value = SourceFailureTerminalAccountV3::decode(account.data).map_err(Error::Core)?;
     let terminal = value.terminal();
     if value.phase() != expected_phase
         || terminal.source_release_manifest_id != route.release_manifest_id()
@@ -1037,11 +1065,11 @@ pub fn authenticate_source_failure_terminal_account_v2(
     bytes[96..128].copy_from_slice(&terminal_id.bytes());
     bytes[128..160].copy_from_slice(&value_id.bytes());
     bytes[160] = value.phase().wire_byte();
-    Ok(AuthenticatedSourceFailureTerminalAccountV2 {
+    Ok(AuthenticatedSourceFailureTerminalAccountV3 {
         account: account.key,
         account_data_id,
         value,
-        authentication_id: domain_id(SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_AUTH_DOMAIN, &bytes),
+        authentication_id: domain_id(SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_AUTH_DOMAIN, &bytes),
     })
 }
 
@@ -1105,27 +1133,29 @@ mod adversarial_tests {
     }
 
     fn bind_absence(
-        pending: SourceFailureTerminalAccountV2,
-    ) -> Result<SourceFailureTerminalAccountV2> {
+        pending: SourceFailureTerminalAccountV3,
+    ) -> Result<SourceFailureTerminalAccountV3> {
         pending.bind_product_release(
-            SourceFailureProductReleaseDispositionV2::SourceAbsent,
+            SourceFailureProductReleaseDispositionV3::SourceAbsent,
             id(31),
             id(32),
             id(33),
-            key(34),
+            id(34),
             id(35),
-            id(36),
+            key(36),
             id(37),
             id(38),
-            9,
-            10,
             id(39),
             id(40),
+            9,
+            10,
             id(41),
             id(42),
             id(43),
             id(44),
             id(45),
+            id(46),
+            id(47),
         )
     }
 
@@ -1170,22 +1200,24 @@ mod adversarial_tests {
     #[test]
     fn pending_to_bound_roundtrip_preserves_inner_terminal() {
         let terminal = absence_terminal();
-        let pending = SourceFailureTerminalAccountV2::new_pending(terminal)
+        let pending = SourceFailureTerminalAccountV3::new_pending(terminal)
             .expect("valid pending wrapper");
-        let mut pending_bytes = [0_u8; SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_BYTES];
+        let mut pending_bytes = [0_u8; SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_BYTES];
         pending
             .encode_into(&mut pending_bytes)
             .expect("encode pending");
         assert_eq!(
-            SourceFailureTerminalAccountV2::decode(&pending_bytes).expect("decode pending"),
+            SourceFailureTerminalAccountV3::decode(&pending_bytes).expect("decode pending"),
             pending
         );
         let bound = bind_absence(pending).expect("one exact bind");
         assert_eq!(bound.terminal(), terminal);
-        let mut bound_bytes = [0_u8; SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_BYTES];
+        assert_eq!(bound.source_terminal_postwrite_id(), id(31));
+        assert_eq!(bound.source_physical_disposition_id(), id(32));
+        let mut bound_bytes = [0_u8; SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_BYTES];
         bound.encode_into(&mut bound_bytes).expect("encode bound");
         assert_eq!(
-            SourceFailureTerminalAccountV2::decode(&bound_bytes).expect("decode bound"),
+            SourceFailureTerminalAccountV3::decode(&bound_bytes).expect("decode bound"),
             bound
         );
     }
@@ -1208,13 +1240,14 @@ mod adversarial_tests {
 
     #[test]
     fn duplicate_or_wrong_disposition_binding_refuses() {
-        let pending = SourceFailureTerminalAccountV2::new_pending(absence_terminal())
+        let pending = SourceFailureTerminalAccountV3::new_pending(absence_terminal())
             .expect("valid pending wrapper");
         assert!(pending
             .bind_product_release(
-                SourceFailureProductReleaseDispositionV2::SourceRefused,
-                id(31), id(32), id(33), key(34), id(35), id(36), id(37), id(38),
-                9, 10, id(39), id(40), id(41), id(42), id(43), id(44), id(45),
+                SourceFailureProductReleaseDispositionV3::SourceRefused,
+                id(31), id(32), id(33), id(34), id(35), key(36), id(37), id(38),
+                id(39), id(40), 9, 10, id(41), id(42), id(43), id(44), id(45),
+                id(46), id(47),
             )
             .is_err());
         let bound = bind_absence(pending).expect("one exact bind");
@@ -1223,20 +1256,37 @@ mod adversarial_tests {
 
     #[test]
     fn noncanonical_or_reordered_transition_evidence_refuses() {
-        let pending = SourceFailureTerminalAccountV2::new_pending(absence_terminal())
+        let pending = SourceFailureTerminalAccountV3::new_pending(absence_terminal())
             .expect("valid pending wrapper");
         assert!(pending
             .bind_product_release(
-                SourceFailureProductReleaseDispositionV2::SourceAbsent,
-                id(31), id(32), id(33), key(34), id(35), id(36), id(37), id(38),
-                10, 9, id(39), id(40), id(41), id(42), id(43), id(44), id(45),
+                SourceFailureProductReleaseDispositionV3::SourceAbsent,
+                id(31), id(32), id(33), id(34), id(35), key(36), id(37), id(38),
+                id(39), id(40), 10, 9, id(41), id(42), id(43), id(44), id(45),
+                id(46), id(47),
             )
             .is_err());
-        let pending = SourceFailureTerminalAccountV2::new_pending(absence_terminal())
+        let pending = SourceFailureTerminalAccountV3::new_pending(absence_terminal())
             .expect("valid pending wrapper");
-        let mut bytes = [0_u8; SOURCE_FAILURE_TERMINAL_ACCOUNT_V2_BYTES];
+        let mut bytes = [0_u8; SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_BYTES];
         pending.encode_into(&mut bytes).expect("encode pending");
         bytes[10] = 1;
-        assert!(SourceFailureTerminalAccountV2::decode(&bytes).is_err());
+        assert!(SourceFailureTerminalAccountV3::decode(&bytes).is_err());
+    }
+
+    #[test]
+    fn historical_v2_width_magic_and_version_never_decode_as_current_v3() {
+        let mut historical = [0_u8; 1184];
+        historical[..8].copy_from_slice(b"DCSPFB02");
+        historical[10..12].copy_from_slice(&2_u16.to_le_bytes());
+        assert!(SourceFailureTerminalAccountV3::decode(&historical).is_err());
+
+        let pending = SourceFailureTerminalAccountV3::new_pending(absence_terminal())
+            .expect("valid pending wrapper");
+        let mut current = [0_u8; SOURCE_FAILURE_TERMINAL_ACCOUNT_V3_BYTES];
+        pending.encode_into(&mut current).expect("encode current");
+        current[..8].copy_from_slice(b"DCSPFB02");
+        current[10..12].copy_from_slice(&2_u16.to_le_bytes());
+        assert!(SourceFailureTerminalAccountV3::decode(&current).is_err());
     }
 }
