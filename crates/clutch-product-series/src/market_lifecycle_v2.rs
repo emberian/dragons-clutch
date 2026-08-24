@@ -576,7 +576,8 @@ pub enum SeriesLinkObligationDispositionV2 {
 }
 
 impl SeriesLinkObligationDispositionV2 {
-    const fn byte(self) -> u8 {
+    /// Stable exhaustive wire byte used by current private adapter receipts.
+    pub const fn wire_byte(self) -> u8 {
         match self {
             Self::Terminal => 1,
             Self::Absent => 2,
@@ -599,7 +600,8 @@ pub enum SeriesLinkObligationStatusV2 {
 }
 
 impl SeriesLinkObligationStatusV2 {
-    const fn byte(self) -> u8 {
+    /// Stable exhaustive wire byte used by current private adapter receipts.
+    pub const fn wire_byte(self) -> u8 {
         match self {
             Self::CapabilityDisabled => 0,
             Self::EnabledNeverFounded => 1,
@@ -659,7 +661,7 @@ impl SeriesLinkObligationConfigurationV2 {
         body[32..64].copy_from_slice(&self.attachment_plan_id.bytes());
         let mut index = 0_usize;
         while index < SERIES_LINK_OBLIGATION_COUNT_V2 {
-            body[64 + index] = self.initial_statuses[index].byte();
+            body[64 + index] = self.initial_statuses[index].wire_byte();
             index += 1;
         }
         Ok(SeriesLinkObligationConfigurationV2Id(content_id(
@@ -937,7 +939,7 @@ impl SeriesLinkObligationTerminalProjectionV2 {
         }
         let mut body = [0u8; 74];
         body[0] = self.obligation.byte();
-        body[1] = self.disposition.byte();
+        body[1] = self.disposition.wire_byte();
         body[2..34].copy_from_slice(&self.link_semantic_id.bytes());
         body[34..42].copy_from_slice(&self.link_transition_sequence.to_le_bytes());
         body[42..74].copy_from_slice(&self.owner_terminal_receipt_id.bytes());
@@ -1833,6 +1835,35 @@ mod successor_tests {
         attachment.attachment_plan_id = SeriesAttachmentPlanV5Id::from_bytes([201; 32]);
         assert_ne!(attachment.id().unwrap(), original);
     }
+
+    #[test]
+    fn obligation_wire_partitions_are_exhaustive_and_disjoint() {
+        assert_eq!(SeriesLinkObligationStatusV2::CapabilityDisabled.wire_byte(), 0);
+        assert_eq!(SeriesLinkObligationStatusV2::EnabledNeverFounded.wire_byte(), 1);
+        assert_eq!(SeriesLinkObligationStatusV2::Live.wire_byte(), 2);
+        assert_eq!(SeriesLinkObligationStatusV2::Terminal.wire_byte(), 3);
+        assert_eq!(SeriesLinkObligationDispositionV2::Terminal.wire_byte(), 1);
+        assert_eq!(SeriesLinkObligationDispositionV2::Absent.wire_byte(), 2);
+    }
+
+    #[test]
+    fn wrapper_terminal_projection_refuses_owner_and_link_substitution() {
+        let semantic = SeriesMarketLinkV2Id::from_bytes([211; 32]);
+        let projection = SeriesLinkObligationTerminalProjectionV2 {
+            link_semantic_id: semantic,
+            obligation: SeriesLinkObligationV2::Wrapper,
+            disposition: SeriesLinkObligationDispositionV2::Terminal,
+            link_transition_sequence: 17,
+            owner_terminal_receipt_id: ContentId::from_bytes([212; 32]),
+        };
+        let original = projection.id().unwrap();
+        let mut owner_splice = projection;
+        owner_splice.owner_terminal_receipt_id = ContentId::from_bytes([213; 32]);
+        assert_ne!(owner_splice.id().unwrap(), original);
+        let mut semantic_splice = projection;
+        semantic_splice.link_semantic_id = SeriesMarketLinkV2Id::from_bytes([214; 32]);
+        assert_ne!(semantic_splice.id().unwrap(), original);
+    }
 }
 
 /// Pure terminal output; SBF must reauthenticate the exact persisted root.
@@ -2084,7 +2115,7 @@ impl FixedCodec for SeriesMarketLinkV2 {
         writer.u64(self.donation_floor_lamports);
         writer.u64(self.current_donation_lamports);
         for status in self.obligation_statuses {
-            writer.u8(status.byte());
+            writer.u8(status.wire_byte());
         }
         writer.reserved(4);
         for receipt in self.admission_receipts {
@@ -3306,6 +3337,28 @@ impl MarketLifecycleRootV2 {
         family_admission_sequence: u32,
         admission_receipt_id: ContentId,
     ) -> Result<Self> {
+        let mut output = Self::decode_buffer();
+        self.admit_product_family_child_into(
+            authority,
+            family,
+            family_admission_sequence,
+            admission_receipt_id,
+            &mut output,
+        )?;
+        Ok(output)
+    }
+
+    /// Frame-bounded family admission into caller-owned RootV2 storage.
+    pub fn admit_product_family_child_into<
+        A: AuthenticatedMarketFamilyAuthorityV1 + ?Sized,
+    >(
+        &self,
+        authority: &A,
+        family: MarketFamilyV1,
+        family_admission_sequence: u32,
+        admission_receipt_id: ContentId,
+        output: &mut Self,
+    ) -> Result<()> {
         self.validate()?;
         if !matches!(
             self.phase,
@@ -3319,16 +3372,13 @@ impl MarketLifecycleRootV2 {
             family_admission_sequence,
             admission_receipt_id,
         )?;
-        let next = Self {
-            transition_sequence: self
+        *output = *self;
+        output.transition_sequence = self
                 .transition_sequence
                 .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow)?,
-            product_families,
-            ..self
-        };
-        next.validate()?;
-        Ok(next)
+                .ok_or(Error::ArithmeticOverflow)?;
+        output.product_families = product_families;
+        output.validate()
     }
 
     /// Delegate one authenticated product-family child terminal transition.
@@ -3374,6 +3424,30 @@ impl MarketLifecycleRootV2 {
         fractional_policy_terminal_state_id: ContentId,
         fractional_ledger_terminal_state_id: ContentId,
     ) -> Result<Self> {
+        let mut output = Self::decode_buffer();
+        self.terminalize_fractional_family_into(
+            authority,
+            family_terminal_sequence,
+            terminal_receipt_id,
+            fractional_policy_terminal_state_id,
+            fractional_ledger_terminal_state_id,
+            &mut output,
+        )?;
+        Ok(output)
+    }
+
+    /// Frame-bounded Fractional terminal transition into caller-owned RootV2 storage.
+    pub fn terminalize_fractional_family_into<
+        A: AuthenticatedMarketFamilyAuthorityV1 + ?Sized,
+    >(
+        &self,
+        authority: &A,
+        family_terminal_sequence: u32,
+        terminal_receipt_id: ContentId,
+        fractional_policy_terminal_state_id: ContentId,
+        fractional_ledger_terminal_state_id: ContentId,
+        output: &mut Self,
+    ) -> Result<()> {
         self.validate()?;
         if !matches!(
             self.phase,
@@ -3395,20 +3469,17 @@ impl MarketLifecycleRootV2 {
             family_terminal_sequence,
             terminal_receipt_id,
         )?;
-        let next = Self {
-            transition_sequence: self
+        *output = *self;
+        output.transition_sequence = self
                 .transition_sequence
                 .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow)?,
-            product_families,
-            fractional_terminal_state_ids: [
-                fractional_policy_terminal_state_id,
-                fractional_ledger_terminal_state_id,
-            ],
-            ..self
-        };
-        next.validate()?;
-        Ok(next)
+                .ok_or(Error::ArithmeticOverflow)?;
+        output.product_families = product_families;
+        output.fractional_terminal_state_ids = [
+            fractional_policy_terminal_state_id,
+            fractional_ledger_terminal_state_id,
+        ];
+        output.validate()
     }
 
     /// Activate trading only after every shared slot is accepted and founder link admitted.

@@ -25,6 +25,8 @@ mod compiler_output_v3;
 mod compiler_output_v4;
 mod compiler_output_v5;
 mod compiler_output_v6;
+mod direct_global_liveness;
+mod failure_begin_schedule_v2;
 mod foundation_funding;
 mod foundation_funding_v3;
 mod funding;
@@ -89,6 +91,24 @@ pub use compiler_output_v6::{
     assemble_compiled_product_series_bundle_v6, CompiledProductSeriesBundleV6,
     ProductSeriesBundleInputsV6, COMPILED_PRODUCT_SERIES_BUNDLE_V6_BYTES,
     COMPILED_PRODUCT_SERIES_BUNDLE_V6_DOMAIN,
+};
+pub use direct_global_liveness::{
+    DirectGlobalLivenessAllocationV1, DirectGlobalLivenessCapitalizationV1,
+    DirectGlobalLivenessPhaseV1, DirectGlobalLivenessTerminalAccountingV1,
+    DirectGlobalLivenessTerminalProjectionV1, DirectGlobalLivenessV1,
+    ProductDirectGlobalLivenessAuthorityV1, DIRECT_GLOBAL_LIVENESS_ALLOCATION_DOMAIN_V1,
+    DIRECT_GLOBAL_LIVENESS_ALLOCATION_CALL_WIDTH_V1,
+    DIRECT_GLOBAL_LIVENESS_BINDING_DOMAIN_V1, DIRECT_GLOBAL_LIVENESS_BYTES_V1,
+    DIRECT_GLOBAL_LIVENESS_CAPITALIZATION_DOMAIN_V1,
+    DIRECT_GLOBAL_LIVENESS_COUNT_V1, DIRECT_GLOBAL_LIVENESS_DOMAIN_V1,
+    DIRECT_GLOBAL_LIVENESS_TERMINAL_DOMAIN_V1,
+};
+pub use failure_begin_schedule_v2::{
+    derive_product_failure_begin_schedule_projection_v2,
+    ProductFailureBeginCompilerProvenanceV2,
+    PRODUCT_FAILURE_BEGIN_COMPILER_PROVENANCE_BYTES_V2,
+    PRODUCT_FAILURE_BEGIN_SCHEDULE_BODY_BYTES_V2,
+    PRODUCT_FAILURE_BEGIN_SCHEDULE_PROJECTION_DOMAIN_V2,
 };
 pub use foundation_funding::{
     MarketFoundationScheduleV1, MarketFoundationScheduleV2, SeriesAttachmentPlanV2,
@@ -545,6 +565,10 @@ typed_id!(
 typed_id!(
     ProductFailureBeginScheduleProjectionV1Id,
     "Typed identity of one exact current Product-compiled Failure Begin schedule and provenance."
+);
+typed_id!(
+    ProductFailureBeginScheduleProjectionV2Id,
+    "Typed identity of one current BundleV6/QuoteV5 Failure begin schedule projection."
 );
 
 /// A deterministic refusal from a fixed codec or pure projection.
