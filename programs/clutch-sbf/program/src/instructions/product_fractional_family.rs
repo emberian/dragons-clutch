@@ -186,6 +186,7 @@ pub(crate) struct AuthenticatedProductFractionalFamilyTerminalV1 {
     ledger_terminal_state_id: ContentId,
     claim_ledger_post_state_id: ContentId,
     claim_ledger_transition_id: ContentId,
+    claim_release_receipt_id: ContentId,
     rent_disposition_id: ContentId,
 }
 
@@ -240,6 +241,10 @@ impl AuthenticatedProductFractionalFamilyTerminalV1 {
 
     pub(crate) const fn claim_ledger_transition_id(self) -> ContentId {
         self.claim_ledger_transition_id
+    }
+
+    pub(crate) const fn claim_release_receipt_id(self) -> ContentId {
+        self.claim_release_receipt_id
     }
 
     pub(crate) const fn rent_disposition_id(self) -> ContentId {
@@ -310,6 +315,7 @@ struct FractionalTerminalRootAuthorityV1 {
     ledger_terminal_state_id: ContentId,
     verification_id: ContentId,
     postwrite_authentication_id: ContentId,
+    claim_release_receipt_id: ContentId,
 }
 
 impl AuthenticatedFractionalFamilyTerminalRootWriteV1 for FractionalTerminalRootAuthorityV1 {
@@ -329,6 +335,7 @@ impl AuthenticatedFractionalFamilyTerminalRootWriteV1 for FractionalTerminalRoot
         fractional_ledger_terminal_state_id: ContentId,
         fractional_verification_id: ContentId,
         fractional_postwrite_authentication_id: ContentId,
+        claim_release_receipt_id: ContentId,
     ) -> Outcome<()> {
         require(
             root_account == self.root_account
@@ -343,7 +350,8 @@ impl AuthenticatedFractionalFamilyTerminalRootWriteV1 for FractionalTerminalRoot
                 && fractional_policy_terminal_state_id == self.policy_terminal_state_id
                 && fractional_ledger_terminal_state_id == self.ledger_terminal_state_id
                 && fractional_verification_id == self.verification_id
-                && fractional_postwrite_authentication_id == self.postwrite_authentication_id,
+                && fractional_postwrite_authentication_id == self.postwrite_authentication_id
+                && claim_release_receipt_id == self.claim_release_receipt_id,
             ClutchError::MismatchedState,
         )
     }
@@ -634,6 +642,7 @@ pub(crate) fn consume_fractional_family_terminal_postwrite_v1(
     let runtime_release = postwrite.runtime_release();
     let verification_id = content(postwrite.verification_id());
     let postwrite_authentication_id = content(postwrite.authentication_id());
+    let claim_release_receipt_id = content(postwrite.claim_release_receipt_id());
     let terminal_receipt_id = content(terminal.receipt_id());
     let policy_account = content(terminal.policy_account());
     let ledger_account = content(terminal.ledger_account());
@@ -666,6 +675,7 @@ pub(crate) fn consume_fractional_family_terminal_postwrite_v1(
     for id in [
         verification_id,
         postwrite_authentication_id,
+        claim_release_receipt_id,
         terminal_receipt_id,
         policy_terminal_state_id,
         ledger_terminal_state_id,
@@ -715,7 +725,10 @@ pub(crate) fn consume_fractional_family_terminal_postwrite_v1(
             && policy_terminal_state_id != ledger_terminal_state_id
             && terminal_receipt_id != verification_id
             && terminal_receipt_id != postwrite_authentication_id
-            && verification_id != postwrite_authentication_id,
+            && verification_id != postwrite_authentication_id
+            && claim_release_receipt_id != terminal_receipt_id
+            && claim_release_receipt_id != verification_id
+            && claim_release_receipt_id != postwrite_authentication_id,
         ClutchError::MismatchedState,
     )?;
     let family_terminal_sequence = fractional.counts().terminal;
@@ -733,6 +746,7 @@ pub(crate) fn consume_fractional_family_terminal_postwrite_v1(
         ledger_terminal_state_id,
         verification_id,
         postwrite_authentication_id,
+        claim_release_receipt_id,
     };
     let root_after = write_authenticated_fractional_family_terminal_root_v1(
         program_id,
@@ -744,6 +758,7 @@ pub(crate) fn consume_fractional_family_terminal_postwrite_v1(
         ledger_terminal_state_id,
         verification_id,
         postwrite_authentication_id,
+        claim_release_receipt_id,
         &authority,
         root_after_output,
     )?;
@@ -773,6 +788,7 @@ pub(crate) fn consume_fractional_family_terminal_postwrite_v1(
             &terminal_receipt_id.bytes(),
             &verification_id.bytes(),
             &postwrite_authentication_id.bytes(),
+            &claim_release_receipt_id.bytes(),
             &policy_terminal_state_id.bytes(),
             &ledger_terminal_state_id.bytes(),
             &claim_ledger_post_state_id.bytes(),
@@ -798,6 +814,7 @@ pub(crate) fn consume_fractional_family_terminal_postwrite_v1(
         ledger_terminal_state_id,
         claim_ledger_post_state_id,
         claim_ledger_transition_id,
+        claim_release_receipt_id,
         rent_disposition_id,
     })
 }
@@ -825,6 +842,7 @@ mod adversarial_tests {
             ledger_terminal_state_id: id(10),
             verification_id: id(11),
             postwrite_authentication_id: id(12),
+            claim_release_receipt_id: id(13),
         }
     }
 
@@ -912,6 +930,7 @@ mod adversarial_tests {
                 authority.ledger_terminal_state_id,
                 authority.verification_id,
                 authority.postwrite_authentication_id,
+                authority.claim_release_receipt_id,
             )
             .is_ok());
         assert!(authority
@@ -924,11 +943,12 @@ mod adversarial_tests {
                 authority.generation,
                 authority.fractional_root_id,
                 authority.family_terminal_sequence,
-                id(13),
+                id(14),
                 authority.policy_terminal_state_id,
                 authority.ledger_terminal_state_id,
                 authority.verification_id,
                 authority.postwrite_authentication_id,
+                authority.claim_release_receipt_id,
             )
             .is_err());
         assert!(authority
@@ -946,6 +966,25 @@ mod adversarial_tests {
                 authority.policy_terminal_state_id,
                 authority.verification_id,
                 authority.postwrite_authentication_id,
+                authority.claim_release_receipt_id,
+            )
+            .is_err());
+        assert!(authority
+            .authenticate_fractional_family_terminal_root_write_v1(
+                authority.root_account,
+                authority.root_semantic_before,
+                authority.root_data_before,
+                authority.root_authentication_before,
+                authority.market_instance_id,
+                authority.generation,
+                authority.fractional_root_id,
+                authority.family_terminal_sequence,
+                authority.terminal_receipt_id,
+                authority.policy_terminal_state_id,
+                authority.ledger_terminal_state_id,
+                authority.verification_id,
+                authority.postwrite_authentication_id,
+                id(15),
             )
             .is_err());
     }

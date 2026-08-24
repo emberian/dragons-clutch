@@ -219,8 +219,11 @@ outcome-mint vector, accepts the exact independent Token-2022 burn before
 exposing the Realm collateral request, and atomically writes
 Hoard/ClaimLedger/`0xa5`, while action 9 advances only ClaimLedger and `0xa5`
 after canonical supply is exactly zero. Action 10 consumes Product's exact
-terminal child transition before deleting `0xa4/v3` and `0xa5/v1` and applying
-their rent-only dispositions. A whole-family release review, a new exact
+terminal child transition before deleting `0xa4/v3` and `0xa5/v1`; before its
+complete mint-supply read or any terminal write it authenticates the current
+independent Token-2022 claim Program/ProgramData and binds that release receipt
+through the private Product terminal authority. It then applies only the two
+rent dispositions. A whole-family release review, a new exact
 capability-profile identity, and linked artifact evidence remain required
 before any tuple can be enabled.
 
@@ -238,11 +241,11 @@ accounts copy none of those mutable facts; ClaimLedger and `0xa5` advance one
 sequence and exact cross-account semantic-ID receipt atomically.
 
 The earlier `0xa4/1`, `0xa6/1`, and `0xa7/1` allocations are withdrawn, not
-aliases. Their identity slots meant payout-vector digests; the current V2
-schemas instead commit the PDA-bound Resolution V5 data identity. No current
-decoder accepts V1, no migration is defined, and the policy/credit PDA and
-policy-state identity domains advance to V2. `0xa5/1` is unchanged because it
-never owned either identity and remains the sole aggregate-credit owner.
+aliases. Their identity slots meant payout-vector digests; the current
+successors instead commit the PDA-bound Resolution V5 data identity. No current
+decoder accepts V1, no migration is defined, the policy PDA/state domain is V3,
+and the credit PDA/state domain is V2. `0xa5/1` is unchanged because it never
+owned either identity and remains the sole aggregate-credit owner.
 
 The only admitted terminal policy in the runtime contract is
 `RetainUntilExactAggregation`: a sub-atom remainder keeps its credits and claim

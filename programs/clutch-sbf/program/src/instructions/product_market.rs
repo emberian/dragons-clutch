@@ -4015,6 +4015,7 @@ pub(crate) trait AuthenticatedFractionalFamilyTerminalRootWriteV1 {
         _fractional_ledger_terminal_state_id: ContentId,
         _fractional_verification_id: ContentId,
         _fractional_postwrite_authentication_id: ContentId,
+        _claim_release_receipt_id: ContentId,
     ) -> Outcome<()> {
         Err(Refusal::Adapter(ClutchError::MismatchedState))
     }
@@ -4152,6 +4153,7 @@ pub(crate) fn write_authenticated_fractional_family_terminal_root_v1<
     fractional_ledger_terminal_state_id: ContentId,
     fractional_verification_id: ContentId,
     fractional_postwrite_authentication_id: ContentId,
+    claim_release_receipt_id: ContentId,
     authority: &A,
     rebound_output: &'next mut MarketLifecycleRootAccountV1,
 ) -> Outcome<AuthenticatedMarketLifecycleRootV1<'next>> {
@@ -4178,6 +4180,7 @@ pub(crate) fn write_authenticated_fractional_family_terminal_root_v1<
         fractional_ledger_terminal_state_id,
         fractional_verification_id,
         fractional_postwrite_authentication_id,
+        claim_release_receipt_id,
     )?;
     let exact = ExactFractionalFamilyAuthorityV1 {
         market_instance_id: binding.market_instance_id,

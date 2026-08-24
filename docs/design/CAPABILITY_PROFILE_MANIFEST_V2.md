@@ -141,7 +141,10 @@ and a nonempty independent claim release. The selected Rust module repeats
 those conditions as compile-time assertions, so the empty repository template
 cannot produce an apparently live ELF. Any profile enabling one Fractional
 action must select this observed-positive collateral-and-claim identity; the
-separate whole-family invariant then requires all ten actions.
+separate whole-family invariant then requires all ten actions. In particular,
+action 10's terminal supply proof authenticates the exact current claim
+ProgramData and binds its release receipt into the private Product terminal
+authority; the profile cannot enable that action under `production-inert`.
 
 The successor's complete legacy intent projection is version 3 of tags
 `2..=5`, `7`, `10`, `11`, `14..=21`, and `68`. This is the current Collateral

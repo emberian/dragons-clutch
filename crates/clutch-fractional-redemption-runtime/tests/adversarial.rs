@@ -1615,11 +1615,11 @@ fn live_successor_account_contracts_name_dynamic_bearer_mints_and_terminal_write
 
     let terminal =
         fractional_account_contract_v1(FractionalRedemptionActionV1::CloseEmptyLedger);
-    assert_eq!(terminal.account_count, 29);
+    assert_eq!(terminal.account_count, 31);
     assert_eq!(terminal.foundation_core_accounts, 14);
-    assert_eq!(terminal.foundation_aux_accounts, 15);
+    assert_eq!(terminal.foundation_aux_accounts, 17);
     assert!(terminal.foundation_outcome_pair_suffix);
-    assert_eq!(terminal.foundation_aux_writable_mask, 0x6000);
+    assert_eq!(terminal.foundation_aux_writable_mask, 0x18000);
     assert_eq!(terminal.writable_mask, 0x1811);
     assert_eq!(terminal.signer_mask, 0);
 }

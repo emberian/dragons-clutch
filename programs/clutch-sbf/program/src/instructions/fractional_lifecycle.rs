@@ -66,7 +66,7 @@ const LEDGER: usize = 12;
 const FIRST_OUTCOME_MINT: usize = MARKET_FOUNDATION_CORE_SLOT_COUNT_V2;
 
 const INITIALIZE_AUX_ACCOUNTS: usize = 17;
-const TERMINAL_AUX_ACCOUNTS: usize = 15;
+const TERMINAL_AUX_ACCOUNTS: usize = 17;
 
 mod init_aux {
     pub const REALM: usize = 0;
@@ -94,16 +94,18 @@ mod terminal_aux {
     pub const COLLATERAL_POLICY: usize = 2;
     pub const COLLATERAL_TOKEN_PROGRAM: usize = 3;
     pub const COLLATERAL_TOKEN_PROGRAMDATA: usize = 4;
-    pub const MARKET_INSTANCE: usize = 5;
-    pub const FOUNDER_LINK: usize = 6;
-    pub const FUNDING_QUOTE: usize = 7;
-    pub const SERIES_REGISTRY: usize = 8;
-    pub const PROGRAM: usize = 9;
-    pub const PROGRAMDATA: usize = 10;
-    pub const RELEASE_ARTIFACT: usize = 11;
-    pub const PROFILE_ARTIFACT: usize = 12;
-    pub const REFUND_OWNER: usize = 13;
-    pub const NEUTRAL_SINK: usize = 14;
+    pub const CLAIM_TOKEN_PROGRAM: usize = 5;
+    pub const CLAIM_TOKEN_PROGRAMDATA: usize = 6;
+    pub const MARKET_INSTANCE: usize = 7;
+    pub const FOUNDER_LINK: usize = 8;
+    pub const FUNDING_QUOTE: usize = 9;
+    pub const SERIES_REGISTRY: usize = 10;
+    pub const PROGRAM: usize = 11;
+    pub const PROGRAMDATA: usize = 12;
+    pub const RELEASE_ARTIFACT: usize = 13;
+    pub const PROFILE_ARTIFACT: usize = 14;
+    pub const REFUND_OWNER: usize = 15;
+    pub const NEUTRAL_SINK: usize = 16;
 }
 
 fn map_fractional(error: FractionalError) -> Refusal {
@@ -159,6 +161,25 @@ fn decode_root_probe(accounts: &[AccountInfo<'_>]) -> Outcome<Box<MarketLifecycl
     Ok(output)
 }
 
+fn permitted_claim_loader_alias(
+    initialize: bool,
+    graph_count: usize,
+    first: usize,
+    second: usize,
+) -> bool {
+    if initialize {
+        (first == graph_count + init_aux::COLLATERAL_TOKEN_PROGRAM
+            && second == graph_count + init_aux::CLAIM_TOKEN_PROGRAM)
+            || (first == graph_count + init_aux::COLLATERAL_TOKEN_PROGRAMDATA
+                && second == graph_count + init_aux::CLAIM_TOKEN_PROGRAMDATA)
+    } else {
+        (first == graph_count + terminal_aux::COLLATERAL_TOKEN_PROGRAM
+            && second == graph_count + terminal_aux::CLAIM_TOKEN_PROGRAM)
+            || (first == graph_count + terminal_aux::COLLATERAL_TOKEN_PROGRAMDATA
+                && second == graph_count + terminal_aux::CLAIM_TOKEN_PROGRAMDATA)
+    }
+}
+
 fn require_outer_contract(
     accounts: &[AccountInfo<'_>],
     graph_count: usize,
@@ -193,11 +214,8 @@ fn require_outer_contract(
         }
         let mut other = index + 1;
         while other < accounts.len() {
-            let claim_program_alias = initialize
-                && ((index == aux + init_aux::COLLATERAL_TOKEN_PROGRAM
-                    && other == aux + init_aux::CLAIM_TOKEN_PROGRAM)
-                    || (index == aux + init_aux::COLLATERAL_TOKEN_PROGRAMDATA
-                        && other == aux + init_aux::CLAIM_TOKEN_PROGRAMDATA));
+            let claim_program_alias =
+                permitted_claim_loader_alias(initialize, aux, index, other);
             if !claim_program_alias {
                 require(accounts[index].key != accounts[other].key, ClutchError::AccountAlias)?;
             }
@@ -634,6 +652,15 @@ pub(super) fn process_close_empty_ledger(
         true,
     )?;
     let liabilities = value.liabilities;
+    let claim_release = authenticate_claim_issuance_release_with_programdata_v1(
+        liabilities.bound,
+        &accounts[aux + terminal_aux::CLAIM_TOKEN_PROGRAM],
+        &accounts[aux + terminal_aux::CLAIM_TOKEN_PROGRAMDATA],
+    )?;
+    require(
+        claim_release.bound().binding_id().bytes() == binding.claim_issuance_binding_id.bytes(),
+        ClutchError::AuthorizationUnavailable,
+    )?;
     let resolution = authenticate_resolution_v5(program_id, &accounts[RESOLUTION], liabilities)?;
     let root = authenticate_market_lifecycle_root_v1(
         program_id,
@@ -715,6 +742,8 @@ pub(super) fn process_close_empty_ledger(
             && policy.market_instance.bytes() == binding.market_instance_id.bytes()
             && policy.resolution_account.bytes() == accounts[RESOLUTION].key.to_bytes()
             && policy.resolution_data_id.bytes() == resolution.data_id.bytes()
+            && policy.claim_issuance_binding.bytes()
+                == claim_release.bound().binding_id().bytes()
             && ledger.claim_ledger_account.bytes() == accounts[CLAIM_LEDGER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
@@ -781,6 +810,7 @@ pub(super) fn process_close_empty_ledger(
     let postwrite = authenticate_fractional_family_terminal_postwrite_v1(
         program_id,
         runtime_release,
+        identity(claim_release.receipt_id().bytes())?,
         close,
         &accounts[POLICY],
         &accounts[LEDGER],
@@ -865,7 +895,41 @@ mod adversarial_tests {
     #[test]
     fn action_one_and_ten_have_distinct_exact_auxiliary_surfaces() {
         assert_eq!(INITIALIZE_AUX_ACCOUNTS, 17);
-        assert_eq!(TERMINAL_AUX_ACCOUNTS, 15);
-        assert_ne!(init_aux::CLAIM_TOKEN_PROGRAM, terminal_aux::REFUND_OWNER);
+        assert_eq!(TERMINAL_AUX_ACCOUNTS, 17);
+        assert_eq!(init_aux::CLAIM_TOKEN_PROGRAM, terminal_aux::CLAIM_TOKEN_PROGRAM);
+        assert_eq!(
+            init_aux::CLAIM_TOKEN_PROGRAMDATA,
+            terminal_aux::CLAIM_TOKEN_PROGRAMDATA
+        );
+        assert_ne!(terminal_aux::CLAIM_TOKEN_PROGRAM, terminal_aux::REFUND_OWNER);
+    }
+
+    #[test]
+    fn action_ten_permits_only_correlated_claim_loader_alias_roles() {
+        let graph = 16;
+        assert!(permitted_claim_loader_alias(
+            false,
+            graph,
+            graph + terminal_aux::COLLATERAL_TOKEN_PROGRAM,
+            graph + terminal_aux::CLAIM_TOKEN_PROGRAM,
+        ));
+        assert!(permitted_claim_loader_alias(
+            false,
+            graph,
+            graph + terminal_aux::COLLATERAL_TOKEN_PROGRAMDATA,
+            graph + terminal_aux::CLAIM_TOKEN_PROGRAMDATA,
+        ));
+        assert!(!permitted_claim_loader_alias(
+            false,
+            graph,
+            graph + terminal_aux::COLLATERAL_TOKEN_PROGRAM,
+            graph + terminal_aux::CLAIM_TOKEN_PROGRAMDATA,
+        ));
+        assert!(!permitted_claim_loader_alias(
+            false,
+            graph,
+            graph + terminal_aux::COLLATERAL_TOKEN_PROGRAMDATA,
+            graph + terminal_aux::CLAIM_TOKEN_PROGRAM,
+        ));
     }
 }

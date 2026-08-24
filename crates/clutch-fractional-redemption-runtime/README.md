@@ -102,9 +102,11 @@ invent a reserve, or silently forfeit a claimant numerator.
 
 The Fractional-owned terminal receipt commits the full a4/a5 and ClaimLedger
 terminal tuple, both exact rent splits, and a separately adapter-authenticated
-Fractional runtime/capability release ID. Product consumes that receipt; it may
-not invent the release, substitute the Realm collateral release, or turn the
-pure close plan into authority. Fractional now exposes only crate-private SBF
+Fractional runtime/capability release ID. Action 10 also authenticates the
+current independent Token-2022 claim Program/ProgramData release before reading
+mint supplies and binds that release receipt into Product's private terminal
+authority. Product may not invent either release, substitute the Realm
+collateral release, or turn the pure close plan into authority. Fractional now exposes only crate-private SBF
 postwrite capabilities: the admission capability authenticates the exact
 writable a4/a5/ClaimLedger founding bodies and PDAs, while the terminal
 capability authenticates the exact Retiring ClaimLedger body, both live
@@ -160,8 +162,9 @@ The executable-but-capability-disabled account order is:
   MarketRuntime; MarketInstance artifact; Hoard V2; writable ClaimLedger V3;
   Resolution V5; policy; writable aggregate ledger.
 - Terminal close: the same Foundation core/mint/custody graph, then Realm,
-  Profile, collateral policy/program/ProgramData, MarketInstance artifact,
-  founder Series link, FundingQuoteV4, SeriesRegistryV2, this
+  Profile, collateral policy/program/ProgramData, the independent Token-2022
+  claim program/ProgramData, MarketInstance artifact, founder Series link,
+  FundingQuoteV4, SeriesRegistryV2, this
   Program/ProgramData, ReleaseV2/ProfileV4, writable shared rent refund owner,
   and writable neutral sink. It consumes Product terminality before deleting
   `0xa4` and `0xa5`, refunds only both stored principals, sends every surplus
@@ -171,7 +174,9 @@ The executable-but-capability-disabled account order is:
 Disabled tuples refuse before parsing payloads or inspecting accounts. All ten
 handlers perform their typed authentication, external-effect ordering where
 applicable, and atomic writeback. Action 2 remains independent of bearer
-claim-release availability. Slots 11 and 12
+claim-release availability, and action 9 remains independent because it reads
+no mint and performs no claim CPI. Action 10 authenticates the current claim
+release before its complete supply observation or any terminal write. Slots 11 and 12
 are Product-prefunded, zero-data, System-owned writable PDAs before action 1;
 Fractional will allocate, assign, and write those exact prestates without
 debiting or refunding them again. Product remains the sole owner of the

@@ -399,13 +399,19 @@ Each account refunds only its own stored rent payer; hostile or unsolicited
 lamports go to the frozen neutral sink. Fractional projects the terminal
 receipt, committing both physical accounts and terminal state IDs, the
 ClaimLedger post/transition IDs, both exact payer/neutral rent splits, and a
-separately adapter-authenticated Fractional runtime/capability release ID. Its
+separately adapter-authenticated Fractional runtime/capability release ID.
+Before reading the complete outcome-mint supply vector, action 10 also
+authenticates the exact current independent Token-2022 claim Program and
+ProgramData release. That claim-release receipt is bound into the private
+terminal postwrite, Product root-write authority, and Product acceptance
+identity. Its
 crate-private SBF postwrite capability hostile-decodes the exact writable
 a4/a5/ClaimLedger bodies, authenticates all three PDAs, rechecks both observed
 rent balances, and derives the release only from a loader-authenticated
 registry capability narrowed to action 10. Product consumes that private value;
-it cannot construct a substitute receipt, invent a release, or reuse the Realm
-collateral release retained by the policy. Product's stable atomic
+it cannot construct a substitute receipt, invent either release, or reuse the Realm
+collateral release retained by the policy. Action 9 remains claim-release
+independent because it reads no mint and performs no claim CPI. Product's stable atomic
 aggregator/root consumer is present, but the executable route remains disabled
 pending the whole-family release review, exact capability-profile admission,
 and linked artifact evidence described below.

@@ -667,6 +667,7 @@ pub(crate) fn consume_fractional_family_admission_postwrite_v1(
 pub(crate) struct AuthenticatedFractionalFamilyTerminalPostwriteV1 {
     verified: VerifiedFractionalFamilyTerminalPostwriteV1,
     runtime_release: AuthenticatedFractionalRuntimeReleaseV1,
+    claim_release_receipt_id: Identity32V1,
     authentication_id: Identity32V1,
 }
 
@@ -703,6 +704,10 @@ impl AuthenticatedFractionalFamilyTerminalPostwriteV1 {
         self.runtime_release
     }
 
+    pub(crate) const fn claim_release_receipt_id(self) -> Identity32V1 {
+        self.claim_release_receipt_id
+    }
+
     pub(crate) const fn authentication_id(self) -> Identity32V1 {
         self.authentication_id
     }
@@ -714,6 +719,7 @@ impl AuthenticatedFractionalFamilyTerminalPostwriteV1 {
 pub(crate) fn authenticate_fractional_family_terminal_postwrite_v1(
     program_id: &Pubkey,
     runtime_release: AuthenticatedFractionalRuntimeReleaseV1,
+    claim_release_receipt_id: Identity32V1,
     close: EmptyLedgerClosePlanV1,
     policy_account: &AccountInfo<'_>,
     ledger_account: &AccountInfo<'_>,
@@ -811,6 +817,7 @@ pub(crate) fn authenticate_fractional_family_terminal_postwrite_v1(
             FRACTIONAL_TERMINAL_POSTWRITE_AUTHENTICATION_DOMAIN_V1,
             program_id.as_ref(),
             &runtime_release.authentication_id.bytes(),
+            &claim_release_receipt_id.bytes(),
             &verified.verification_id().bytes(),
             policy_account.key.as_ref(),
             &policy_data_id,
@@ -827,6 +834,7 @@ pub(crate) fn authenticate_fractional_family_terminal_postwrite_v1(
     Ok(AuthenticatedFractionalFamilyTerminalPostwriteV1 {
         verified,
         runtime_release,
+        claim_release_receipt_id,
         authentication_id,
     })
 }
