@@ -63,7 +63,8 @@ pub const SETTLEMENT_CHILD_RETIREMENT_PAYLOAD_BYTES: usize = 96;
 /// Exact action-50 maker-distribution selector width.
 pub const FEE_MAKER_DISTRIBUTION_PAYLOAD_BYTES_V1: usize = 200;
 /// Exact action-50 final treasury/global retirement selector width.
-pub const FEE_FINALIZE_GLOBALS_PAYLOAD_BYTES_V1: usize = 296;
+pub const FEE_FINALIZE_GLOBALS_PAYLOAD_BYTES_V1: usize = 296 + REVENUE_POLICY_V2_BYTES;
+const _: () = assert!(FEE_FINALIZE_GLOBALS_PAYLOAD_BYTES_V1 <= MAX_GENERAL_V2_ACTION_PAYLOAD_BYTES);
 
 /// Action-2 `InitEpoch` payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1087,6 +1088,9 @@ pub struct FeeFinalizeGlobalsPayloadV1 {
     pub settlement_cash_pot: Id32,
     pub terminal_receipt: Id32,
     pub closure_manifest: Id32,
+    /// Exact untrusted RevenuePolicyV2 preimage reauthenticated against the
+    /// immutable Realm record and MarketBindingV4 before 0xbb settlement.
+    pub revenue_policy: RevenuePolicyV2,
 }
 
 impl FeeFinalizeGlobalsPayloadV1 {
@@ -1107,6 +1111,11 @@ impl FeeFinalizeGlobalsPayloadV1 {
             settlement_cash_pot: live_id(&mut reader)?,
             terminal_receipt: live_id(&mut reader)?,
             closure_manifest: live_id(&mut reader)?,
+            revenue_policy: {
+                let policy_bytes: [u8; REVENUE_POLICY_V2_BYTES] = reader.array()?;
+                decode_revenue_policy_v2(&policy_bytes)
+                    .map_err(|_| CodecError::MismatchedBinding)?
+            },
         };
         let reserved: [u8; 6] = reader.array()?;
         reader.finish()?;
@@ -1818,13 +1827,29 @@ mod tests {
             terminal[start..start + ID_BYTES]
                 .copy_from_slice(&live((index + 1) as u8));
         }
+        let policy = RevenuePolicyV2::successor_development(live(20));
+        let mut policy_bytes = [0u8; REVENUE_POLICY_V2_BYTES];
+        clutch_batch_policy_identity::revenue_policy_v2::encode_revenue_policy_v2(
+            &policy,
+            &mut policy_bytes,
+        )
+        .unwrap();
+        terminal[2 + 9 * ID_BYTES..2 + 9 * ID_BYTES + REVENUE_POLICY_V2_BYTES]
+            .copy_from_slice(&policy_bytes);
         assert!(matches!(
             decode_fee_retirement_payload_v1(50, &terminal),
-            Ok(FeeRetirementPayloadV1::FinalizeTreasuryAndGlobals(_))
+            Ok(FeeRetirementPayloadV1::FinalizeTreasuryAndGlobals(value))
+                if value.revenue_policy == policy
         ));
         assert_eq!(
             decode_fee_retirement_payload_v1(50, &terminal[..terminal.len() - 1]),
             Err(CodecError::WrongLength)
+        );
+        let mut corrupt_policy = terminal;
+        corrupt_policy[2 + 9 * ID_BYTES] ^= 0xff;
+        assert_eq!(
+            decode_fee_retirement_payload_v1(50, &corrupt_policy),
+            Err(CodecError::MismatchedBinding)
         );
         terminal[2 + 8 * ID_BYTES..2 + 9 * ID_BYTES]
             .copy_from_slice(&live(1));
