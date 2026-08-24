@@ -20,8 +20,9 @@ use clutch_product_series::{
     ContentId, MarketFoundationScheduleV4, MarketFoundationSlotV4,
     MarketFoundationStepProjectionV4, MarketInstanceV2Id,
     MarketLifecycleBindingV3, MarketLifecyclePhaseV3, MarketLifecycleReplayPhaseV2,
-    MarketLifecycleRootV3,
+    MarketLifecycleRootV3, MarketResolutionActivationV3, SeriesFundingPhaseV5,
     SeriesMarketLinkBindingV3, SeriesMarketLinkV3, SeriesMarketLinkV3Id, SeriesPlanV5Id,
+    SeriesMarketLinkPhaseV3,
     MARKET_FOUNDATION_SLOT_COUNT_V4,
     MARKET_LIFECYCLE_ROOT_DOMAIN_V3, SERIES_MARKET_LINK_DOMAIN_V3,
 };
@@ -45,6 +46,8 @@ const PRODUCT_MARKET_FOUNDATION_DEBIT_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/product-market-foundation-debit/v4\0";
 const PRODUCT_MARKET_FOUNDATION_POSTWRITE_DOMAIN_V4: &[u8] =
     b"dragons-clutch/sbf/product-market-foundation-postwrite/v4\0";
+const PRODUCT_MARKET_RESOLUTION_ACTIVATION_POSTWRITE_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/product-market-resolution-activation-postwrite/v3\0";
 
 /// Move-only authentication of one exact current `0xaa/v3` account.
 #[derive(Debug)]
@@ -104,6 +107,237 @@ impl<'state> AuthenticatedSeriesMarketLinkV3<'state> {
     pub(crate) const fn semantic_id(&self) -> SeriesMarketLinkV3Id { self.semantic_id }
     pub(crate) const fn binding_id(&self) -> ContentId { self.binding_id }
     pub(crate) const fn authentication_id(&self) -> ContentId { self.authentication_id }
+}
+
+/// Default-refusing physical Resolution authority consumed by the sole
+/// current RootV3 activation writer. Implementations must retain the hostile
+/// inactive prestate and finalized Resolution/Hoard/ClaimLedger postwrite;
+/// copied IDs cannot implement this boundary on their own.
+pub(crate) trait AuthenticatedCurrentMarketResolutionWriteV3 {
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_current_market_resolution_write_v3(
+        &self,
+        _root_account: Pubkey,
+        _root_authentication_before: ContentId,
+        _root_semantic_before: ContentId,
+        _root_data_before: ContentId,
+        _link_account: Pubkey,
+        _link_authentication_id: ContentId,
+        _link_semantic_id: SeriesMarketLinkV3Id,
+        _funding_account: Pubkey,
+        _funding_authentication_id: ContentId,
+        _funding_data_id: ContentId,
+        _resolution_account: Pubkey,
+        _inactive_resolution_authentication_id: ContentId,
+        _resolution_physical_postwrite_id: ContentId,
+        _activation: MarketResolutionActivationV3,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+}
+
+/// Move-only hostile RootV3 postwrite for one exact finalized Resolution V5.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedCurrentMarketResolutionActivationPostwriteV3<'state> {
+    id: ContentId,
+    activation: MarketResolutionActivationV3,
+    resolution_account: Pubkey,
+    inactive_resolution_authentication_id: ContentId,
+    resolution_physical_postwrite_id: ContentId,
+    link_account: Pubkey,
+    link_authentication_id: ContentId,
+    link_semantic_id: SeriesMarketLinkV3Id,
+    funding_account: Pubkey,
+    funding_authentication_id: ContentId,
+    funding_data_id: ContentId,
+    root_authentication_before: ContentId,
+    root_semantic_before: ContentId,
+    root_data_before: ContentId,
+    root_after: AuthenticatedMarketLifecycleRootV3<'state>,
+}
+
+impl<'state> AuthenticatedCurrentMarketResolutionActivationPostwriteV3<'state> {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn activation(&self) -> MarketResolutionActivationV3 { self.activation }
+    pub(crate) const fn resolution_account(&self) -> Pubkey { self.resolution_account }
+    pub(crate) const fn inactive_resolution_authentication_id(&self) -> ContentId {
+        self.inactive_resolution_authentication_id
+    }
+    pub(crate) const fn resolution_physical_postwrite_id(&self) -> ContentId {
+        self.resolution_physical_postwrite_id
+    }
+    pub(crate) const fn link_account(&self) -> Pubkey { self.link_account }
+    pub(crate) const fn link_authentication_id(&self) -> ContentId {
+        self.link_authentication_id
+    }
+    pub(crate) const fn link_semantic_id(&self) -> SeriesMarketLinkV3Id {
+        self.link_semantic_id
+    }
+    pub(crate) const fn funding_account(&self) -> Pubkey { self.funding_account }
+    pub(crate) const fn funding_authentication_id(&self) -> ContentId {
+        self.funding_authentication_id
+    }
+    pub(crate) const fn funding_data_id(&self) -> ContentId { self.funding_data_id }
+    pub(crate) const fn root_authentication_before(&self) -> ContentId {
+        self.root_authentication_before
+    }
+    pub(crate) const fn root_semantic_before(&self) -> ContentId {
+        self.root_semantic_before
+    }
+    pub(crate) const fn root_data_before(&self) -> ContentId { self.root_data_before }
+    pub(crate) const fn root_after(&self) -> &AuthenticatedMarketLifecycleRootV3<'state> {
+        &self.root_after
+    }
+}
+
+/// Persist one finalized Resolution into the current Product RootV3.
+///
+/// The Resolution account is already program-owned and physically initialized
+/// by action15. This boundary performs no allocation and accepts no caller
+/// graph, quote, funding, or semantic IDs. The exact LinkV3 and FundingV5
+/// bodies are retained inputs, and a private physical writer must authenticate
+/// the inactive-to-finalized Resolution transition before RootV3 changes.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub(crate) fn record_current_market_resolution_activation_v3<'state, A>(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    root_before: AuthenticatedMarketLifecycleRootV3<'_>,
+    link: &AuthenticatedSeriesMarketLinkV3<'_>,
+    funding: &crate::instructions::product_series_current::AuthenticatedSeriesFundingAccountV5,
+    resolution_account: &AccountInfo<'_>,
+    inactive_resolution_authentication_id: ContentId,
+    resolution_physical_postwrite_id: ContentId,
+    activation: MarketResolutionActivationV3,
+    authority: &A,
+    root_after_decode: &'state mut MarketLifecycleRootAccountV3,
+) -> Outcome<AuthenticatedCurrentMarketResolutionActivationPostwriteV3<'state>>
+where
+    A: AuthenticatedCurrentMarketResolutionWriteV3 + ?Sized,
+{
+    let root = root_before.state();
+    let binding = root_before.binding();
+    let link_binding = link.binding();
+    let funding_state = funding.state();
+    require(
+        root_before.account() == *root_account.key
+            && root_before.owner_program() == *program_id
+            && root_before.is_writable()
+            && root.phase() == MarketLifecyclePhaseV3::Active
+            && root.resolution_semantic_id().is_zero()
+            && root.resolution_data_id().is_zero()
+            && root.resolution_activation_receipt_id().is_zero()
+            && binding.resolution_account_id.bytes() == resolution_account.key.to_bytes()
+            && activation.market_binding_id() == root_before.binding_id()
+            && activation.market_instance_id() == binding.market_instance_id
+            && activation.generation() == binding.generation
+            && activation.resolution_account_id() == binding.resolution_account_id
+            && link.owner_program() == *program_id
+            && !link.is_writable()
+            && link.state().phase() == SeriesMarketLinkPhaseV3::Active
+            && link.state().active_failure_sessions() == 1
+            && link_binding.market_root_account_id.bytes() == root_account.key.to_bytes()
+            && link_binding.market_binding_id == root_before.binding_id()
+            && link_binding.market_instance_id == binding.market_instance_id
+            && link_binding.generation == binding.generation
+            && funding.account().to_bytes() == link_binding.funding_state_account_id.bytes()
+            && !funding.is_writable()
+            && funding_state.series_plan_id == link_binding.series_plan_id
+            && funding_state.funding_terms_id == link_binding.funding_terms_id
+            && funding_state.funding_quote_id == link_binding.funding_quote_id
+            && funding_state.attachment_plan_id == link_binding.attachment_plan_id
+            && funding_state.compiler_bundle_id == link_binding.compiler_bundle_id
+            && funding_state.phase != SeriesFundingPhaseV5::Pending
+            && resolution_account.owner == program_id
+            && resolution_account.is_writable
+            && !resolution_account.is_signer
+            && !resolution_account.executable
+            && !inactive_resolution_authentication_id.is_zero()
+            && !resolution_physical_postwrite_id.is_zero(),
+        ClutchError::MismatchedState,
+    )?;
+    authority.authenticate_current_market_resolution_write_v3(
+        root_before.account(),
+        root_before.authentication_id(),
+        root_before.semantic_id(),
+        root_before.data_id(),
+        link.account(),
+        link.authentication_id(),
+        link.semantic_id(),
+        funding.account(),
+        funding.authentication_id(),
+        funding.data_id(),
+        *resolution_account.key,
+        inactive_resolution_authentication_id,
+        resolution_physical_postwrite_id,
+        activation,
+    )?;
+    root.record_resolution_activation_into(activation, &mut root_after_decode.state)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    root_after_decode.rent_principal_lamports = root_before.value().rent_principal_lamports;
+    root_after_decode.stored_bump = root_before.value().stored_bump;
+    {
+        let mut data = root_account
+            .try_borrow_mut_data()
+            .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+        MarketLifecycleRootAccountV3::encode_parts(
+            &root_after_decode.state,
+            root_after_decode.rent_principal_lamports,
+            root_after_decode.stored_bump,
+            &mut data,
+        )?;
+    }
+    let root_after = authenticate_market_lifecycle_root_v3(
+        program_id,
+        root_account,
+        binding.market_instance_id,
+        binding.generation,
+        true,
+        root_after_decode,
+    )?;
+    require(
+        root_after.state().transition_sequence()
+                == root.transition_sequence().checked_add(1).ok_or(ClutchError::Arithmetic)?
+            && root_after.state().resolution_semantic_id() == activation.resolution_semantic_id()
+            && root_after.state().resolution_data_id() == activation.resolution_data_id()
+            && root_after.state().resolution_activation_receipt_id() == activation.id()
+            && root_after.binding_id() == root_before.binding_id()
+            && root_after.observed_lamports() == root_before.observed_lamports(),
+        ClutchError::MismatchedState,
+    )?;
+    let id = hashv(&[
+        PRODUCT_MARKET_RESOLUTION_ACTIVATION_POSTWRITE_DOMAIN_V3,
+        program_id.as_ref(),
+        root_account.key.as_ref(),
+        &root_before.authentication_id().bytes(),
+        &root_after.authentication_id().bytes(),
+        link.account().as_ref(),
+        &link.authentication_id().bytes(),
+        funding.account().as_ref(),
+        &funding.authentication_id().bytes(),
+        resolution_account.key.as_ref(),
+        &inactive_resolution_authentication_id.bytes(),
+        &resolution_physical_postwrite_id.bytes(),
+        &activation.id().bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedCurrentMarketResolutionActivationPostwriteV3 {
+        id,
+        activation,
+        resolution_account: *resolution_account.key,
+        inactive_resolution_authentication_id,
+        resolution_physical_postwrite_id,
+        link_account: link.account(),
+        link_authentication_id: link.authentication_id(),
+        link_semantic_id: link.semantic_id(),
+        funding_account: funding.account(),
+        funding_authentication_id: funding.authentication_id(),
+        funding_data_id: funding.data_id(),
+        root_authentication_before: root_before.authentication_id(),
+        root_semantic_before: root_before.semantic_id(),
+        root_data_before: root_before.data_id(),
+        root_after,
+    })
 }
 
 /// Move-only proof that Product spent one exact ScheduleV4 principal from the
