@@ -587,6 +587,19 @@ pub fn construct_direct_action_material_v1(
         return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
     }
     let action = material.accounts.action();
+    if matches!(
+        action,
+        DirectMarketAction::SubmitCandidate
+            | DirectMarketAction::BeginVerification
+            | DirectMarketAction::VerifyCandidate
+    ) {
+        // These actions consume current b1/v2+b2+b3 and, for verification,
+        // the shared Candidate compartment. Their payloads, refund suffix,
+        // liveness payer, and postimages are derived only by the hostile-chain
+        // constructor in `direct_candidate_material`; this older caller-shaped
+        // account grammar is intentionally withdrawn for those coordinates.
+        return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+    }
     if material.payload.action() != action
         || material.valid_before_slot != freshness.valid_before_slot
         || material.sequence == 0
@@ -683,6 +696,160 @@ pub fn construct_direct_action_material_v1(
         planned,
         draft_id,
     })
+}
+
+/// Finish one current Direct action whose payload, accounts, equations, and
+/// postimages were already derived from one hostile finalized chain snapshot.
+///
+/// This boundary is crate-private so no browser/API caller can replace the
+/// dedicated `direct_candidate_material` semantic owner with a generic account
+/// or payload DTO.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn finish_chain_derived_direct_material_v2(
+    release: &IndexedProgramRelease,
+    manifest: &ExplicitOperatorReleaseManifest,
+    builder: &ProtocolTransactionBuilder,
+    selection: &KeeperActionSelection,
+    freshness: ActionFreshnessBoundaryV1,
+    action: DirectMarketAction,
+    sequence: u64,
+    accounts: Vec<AccountMeta>,
+    required_signers: Vec<Address>,
+    account_roles: Vec<CanonicalAccountRoleV1>,
+    equations: Vec<ExactEquation>,
+    payload: clutch_client_contract::direct_market::DirectMarketClientPayloadV1,
+) -> Result<CanonicalActionMaterialV1> {
+    release
+        .validate()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    manifest
+        .validate()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    freshness.validate()?;
+    if !matches!(
+        action,
+        DirectMarketAction::SubmitCandidate
+            | DirectMarketAction::BeginVerification
+            | DirectMarketAction::VerifyCandidate
+    ) || payload.action() != action
+        || sequence == 0
+        || release.program_id != manifest.clutch.program_id
+        || release.program_data != manifest.clutch.program_data
+        || release.deployment_slot != manifest.clutch.deployment_slot
+        || release.elf_sha256 != manifest.clutch.elf_sha256
+        || release.release_manifest_sha256 != manifest.manifest_sha256
+    {
+        return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
+    }
+    let coordinate = CanonicalIntentCoordinate {
+        family_tag: DIRECT_MARKET_FAMILY_TAG,
+        family_version: DIRECT_MARKET_FAMILY_VERSION,
+        local_action: action.tag(),
+    };
+    if release.enabled_intents.binary_search(&coordinate).is_err() {
+        return Err(CanonicalActionMaterialErrorV1::CoordinateDisabled);
+    }
+    let action_name = direct_selection_action(action);
+    let root = account_roles
+        .first()
+        .filter(|role| role.label == "direct-root")
+        .map(|role| role.address)
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    if selection.release_key != release.key()
+        || selection.observed_commitment != crate::rpc_index::RpcCommitment::Finalized
+        || selection.effective_commitment != crate::rpc_index::RpcCommitment::Finalized
+        || selection.action != action_name
+        || selection.account != root
+        || freshness.observed_slot != selection.account_slot
+    {
+        return Err(CanonicalActionMaterialErrorV1::WrongSelection);
+    }
+    let semantic_owner = manifest
+        .semantic_releases
+        .iter()
+        .find(|owner| {
+            owner.package == "clutch-direct-market-runtime"
+                && owner.schema == "current-v1"
+        })
+        .cloned()
+        .ok_or(CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    manifest
+        .admits_owner(&semantic_owner)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidRelease)?;
+    let fee_payer = required_signers
+        .first()
+        .copied()
+        .ok_or(CanonicalActionMaterialErrorV1::FeePayerMismatch)?;
+    if builder.clutch_program() != release.program_id
+        || builder.clutch_release_sha256() != release.elf_sha256
+        || builder.payer() != fee_payer
+    {
+        return Err(CanonicalActionMaterialErrorV1::FeePayerMismatch);
+    }
+    let draft = OwnedInstructionDraft::enabled_direct_market_request_v1(
+        action_name,
+        semantic_owner,
+        release.program_id,
+        accounts,
+        required_signers,
+        equations,
+        sequence,
+        &payload,
+    )
+    .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let unsigned_transaction = builder
+        .build_atomic(&[draft])
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidPlan)?;
+    let planned = PlannedWorkflowNode {
+        manifest_sha256: manifest.manifest_sha256,
+        cursor: selection.cursor,
+        coordinate: CanonicalActionCoordinate::Direct(action),
+        unsigned_transaction,
+        reload_authoritative_accounts: true,
+    };
+    validate_unsigned_direct_plan(coordinate, fee_payer, &account_roles, &planned)?;
+    let release_key = release.key();
+    let draft_id = action_material_id(
+        &release_key,
+        release.release_manifest_sha256,
+        release.capability_profile_id,
+        coordinate,
+        selection.account,
+        selection.account_slot,
+        selection.cursor,
+        freshness,
+        fee_payer,
+        &account_roles,
+        &planned.unsigned_transaction,
+    );
+    Ok(CanonicalActionMaterialV1 {
+        release_key,
+        release_manifest_sha256: release.release_manifest_sha256,
+        capability_profile_id: release.capability_profile_id,
+        coordinate,
+        driver_account: selection.account,
+        driver_account_slot: selection.account_slot,
+        cursor: selection.cursor,
+        freshness,
+        fee_payer,
+        account_roles,
+        planned,
+        draft_id,
+    })
+}
+
+pub(crate) const fn chain_derived_direct_role_v2(
+    label: &'static str,
+    address: Address,
+    writable: bool,
+    signer: bool,
+) -> CanonicalAccountRoleV1 {
+    CanonicalAccountRoleV1 {
+        label,
+        address,
+        writable,
+        signer,
+    }
 }
 
 fn validate_direct_account_roles_v1(
