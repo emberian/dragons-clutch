@@ -1336,6 +1336,12 @@ pub struct FailureMarketSourceFailureTransitionFactsV3 {
     pub series_link_after: SeriesMarketLinkV2Id,
     /// Product-owned begin preauthorization consumed by the pin.
     pub begin_preauthorization_id: ProductContentId,
+    /// Exact Product current pin postwrite.
+    pub product_pin_receipt_id: ProductContentId,
+    /// Exact Product current release postwrite.
+    pub product_release_receipt_id: ProductContentId,
+    /// Source-owned bridge proving the terminal reached that Product release.
+    pub source_product_release_id: ProductContentId,
     /// Product post-pin transcript retained by terminal evidence.
     pub session_binding_id: ProductContentId,
     /// Exact zero-payout Failure cell receipt.
@@ -1428,6 +1434,9 @@ pub fn plan_archive_failure_market_source_failure_v3<
     admission: FailureMarketAdmissionStateV1,
     series_link: SeriesMarketLinkV2,
     begin_preauthorization_id: ProductContentId,
+    product_pin_receipt_id: ProductContentId,
+    product_release_receipt_id: ProductContentId,
+    source_product_release_id: ProductContentId,
     session: FailureMarketSessionDescriptorV1,
     interval_funding: FailureMarketIntervalFundingReceiptV2,
     interval_history: FailureMarketIntervalHistoryV2,
@@ -1441,7 +1450,14 @@ pub fn plan_archive_failure_market_source_failure_v3<
     {
         return Err(Error::WrongPhase);
     }
-    require_live(begin_preauthorization_id.bytes())?;
+    for id in [
+        begin_preauthorization_id,
+        product_pin_receipt_id,
+        product_release_receipt_id,
+        source_product_release_id,
+    ] {
+        require_live(id.bytes())?;
+    }
     validate_session_descriptor_v2(
         runtime,
         admission,
@@ -1511,6 +1527,9 @@ pub fn plan_archive_failure_market_source_failure_v3<
     hasher.update(series_link_pinned.bytes());
     hasher.update(series_link_after.bytes());
     hasher.update(begin_preauthorization_id.bytes());
+    hasher.update(product_pin_receipt_id.bytes());
+    hasher.update(product_release_receipt_id.bytes());
+    hasher.update(source_product_release_id.bytes());
     hasher.update(session_binding_id.bytes());
     hash_session_descriptor(&mut hasher, session);
     hasher.update(source_failure.id().bytes());
@@ -1533,6 +1552,9 @@ pub fn plan_archive_failure_market_source_failure_v3<
         series_link_pinned,
         series_link_after,
         begin_preauthorization_id,
+        product_pin_receipt_id,
+        product_release_receipt_id,
+        source_product_release_id,
         session_binding_id,
         source_failure_receipt_id: source_failure.id(),
         source_terminal_postwrite_id: ProductContentId::from_bytes(
@@ -1603,6 +1625,20 @@ impl FailureMarketRuntimeV1 {
     pub fn commit_source_failure_plan(
         &mut self,
         plan: FailureMarketSourceFailureTransitionPlanV2,
+    ) -> Result<()> {
+        self.validate()?;
+        if *self != plan.before {
+            return Err(Error::StalePlan);
+        }
+        plan.after.validate()?;
+        *self = plan.after;
+        Ok(())
+    }
+
+    /// Commit one exact current LinkV2 zero-payout Source failure transition.
+    pub fn commit_source_failure_plan_v3(
+        &mut self,
+        plan: FailureMarketSourceFailureTransitionPlanV3,
     ) -> Result<()> {
         self.validate()?;
         if *self != plan.before {

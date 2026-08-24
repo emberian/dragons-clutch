@@ -31,7 +31,19 @@ use crate::instructions::product_market::{
     AuthenticatedSeriesFailureSessionReleaseV2, AuthenticatedSeriesMarketLinkV1,
     AuthenticatedWritableFailureSessionReleaseLinkV2, FailureSessionReleaseDispositionV2,
 };
-use crate::instructions::product_series_current::AuthenticatedMarketFoundationPreallocationV3;
+use crate::instructions::product_series_current::{
+    AuthenticatedMarketLifecycleRootV2,
+    AuthenticatedMarketFoundationPreallocationV3,
+    AuthenticatedRegistryCapabilityV4,
+    AuthenticatedSeriesFailureArchivePostwriteV3,
+    FailureSessionReleaseDispositionV3,
+};
+use crate::instructions::product_failure_begin_current::AuthenticatedProductFailureBeginQuoteV2;
+use crate::instructions::source_failure_product_release_v1::{
+    AuthenticatedSourceFailureProductReleaseAuthorityV1,
+    SourceFailureProductReleaseFactsV1,
+};
+use crate::instructions::source_failure_terminal_v1::AuthenticatedSourceFailureTerminalPostwriteV1;
 use crate::seeds;
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
     initialize_failure_market_interval_cell_v2, plan_exhaust_failure_market_interval_cell_v2,
@@ -117,10 +129,77 @@ const CLOSE_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/failure-market-interval-physical-close/v2";
 const ARCHIVE_POSTWRITE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/failure-market-interval-archive-postwrite/v2";
+const ARCHIVE_POSTWRITE_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/failure-market-interval-archive-postwrite/v3";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ProductFailureMarketRecoveryQuoteAuthorityV1 {
     expected: FailureMarketRecoveryQuoteAdmissionFactsV1,
+}
+
+const CURRENT_RECOVERY_QUOTE_AUTHENTICATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/failure-market-current-recovery-quote-authentication/v2";
+const CURRENT_RECOVERY_ATTEMPT_QUOTE_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/failure-market-current-recovery-attempt-quote/v2";
+
+/// Private current RootV2/RegistryV4/liveness-policy authentication of the
+/// sole Failure reward schedule preimage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedFailureMarketRecoveryQuoteV2 {
+    id: ProductContentId,
+    receipt: FailureMarketRecoveryQuoteAdmissionReceiptV1,
+}
+
+impl AuthenticatedFailureMarketRecoveryQuoteV2 {
+    pub(crate) const fn id(self) -> ProductContentId { self.id }
+    pub(crate) const fn receipt(self) -> FailureMarketRecoveryQuoteAdmissionReceiptV1 {
+        self.receipt
+    }
+
+    pub(crate) fn attempt_authorization_id(
+        self,
+        attempt_index: u8,
+        source_repair_generation: u64,
+    ) -> Outcome<ProductContentId> {
+        let schedule = self.receipt.schedule();
+        require(
+            usize::from(attempt_index) < usize::from(schedule.attempt_count)
+                && source_repair_generation != 0,
+            ClutchError::MismatchedState,
+        )?;
+        let id = ProductContentId::from_bytes(
+            solana_sha256_hasher::hashv(&[
+                CURRENT_RECOVERY_ATTEMPT_QUOTE_DOMAIN_V2,
+                &self.id.bytes(),
+                &self.receipt.id().bytes(),
+                &self.receipt.facts().quote_schedule_id.bytes(),
+                &[schedule.attempt_count],
+                &[attempt_index],
+                &source_repair_generation.to_le_bytes(),
+            ])
+            .to_bytes(),
+        );
+        require_live_data_id(id)?;
+        Ok(id)
+    }
+}
+
+impl AuthenticatedProductFailureBeginQuoteV2 for AuthenticatedFailureMarketRecoveryQuoteV2 {
+    fn authenticate_product_failure_begin_quote_v2(
+        &self,
+        expected_quote_schedule_id: ProductContentId,
+        expected_attempt_count: u8,
+        attempt_index: u8,
+        source_repair_generation: u64,
+    ) -> Outcome<ProductContentId> {
+        let schedule = self.receipt.schedule();
+        require(
+            expected_quote_schedule_id.bytes() == self.receipt.facts().quote_schedule_id.bytes()
+                && expected_attempt_count == schedule.attempt_count,
+            ClutchError::MismatchedState,
+        )?;
+        self.attempt_authorization_id(attempt_index, source_repair_generation)
+    }
 }
 
 impl AuthenticatedFailureMarketRecoveryQuoteV1 for ProductFailureMarketRecoveryQuoteAuthorityV1 {
@@ -649,6 +728,142 @@ pub(crate) fn authenticate_failure_market_recovery_quote_v1(
     .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
 }
 
+/// Authenticate the same content-addressed Failure quote against the current
+/// RootV2 and RegistryV4 semantic owners plus the full immutable liveness
+/// policy body. No historical RootV1/BundleV5 receipt is accepted here.
+pub(crate) fn authenticate_failure_market_recovery_quote_v2(
+    program_id: &Pubkey,
+    admission: AuthenticatedFailureMarketRootV2,
+    root: AuthenticatedMarketLifecycleRootV2<'_>,
+    registry: &AuthenticatedRegistryCapabilityV4,
+    liveness_policy_account: &AccountInfo<'_>,
+    body: &[u8],
+) -> Outcome<AuthenticatedFailureMarketRecoveryQuoteV2> {
+    require(
+        !root.is_writable()
+            && liveness_policy_account.owner == program_id
+            && !liveness_policy_account.is_writable
+            && !liveness_policy_account.is_signer
+            && !liveness_policy_account.executable
+            && liveness_policy_account.data_len() == FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1,
+        ClutchError::MismatchedState,
+    )?;
+    let body: &[u8; FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1] = body
+        .try_into()
+        .map_err(|_| Refusal::Adapter(ClutchError::WrongDataLength))?;
+    let schedule = FailureMarketRecoveryQuoteScheduleV1::decode(body)
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let schedule_id = schedule
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let policy_data = liveness_policy_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let policy_frame = decode_failure_account_body_v1(
+        &policy_data,
+        registry::FAILURE_LIVENESS_POLICY_ACCOUNT_TAG,
+        registry::FAILURE_LIVENESS_POLICY_ACCOUNT_VERSION,
+        FAILURE_LIVENESS_POLICY_BODY_BYTES_V1,
+    )?;
+    let policy = decode_runtime_policy_account_v1(
+        liveness_id(program_id),
+        liveness_id(liveness_policy_account.key),
+        RuntimePersistedAccountViewV1 {
+            account_id: liveness_id(liveness_policy_account.key),
+            owner_program_id: liveness_id(liveness_policy_account.owner),
+            lamports: liveness_policy_account.lamports(),
+            data: policy_frame.body,
+            writable: false,
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let policy_data_id = ProductContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[policy_data.as_ref()]).to_bytes(),
+    );
+    let stored_bump = policy_frame.stored_bump;
+    drop(policy_data);
+    expect_pda(
+        liveness_policy_account.key,
+        seeds::failure_liveness_policy_pda(program_id, &policy.policy_id.bytes()),
+        Some(stored_bump),
+    )?;
+    let recovery = policy.compartments[RuntimeCompartmentKindV1::Recovery.index()];
+    let root_binding = root.state().binding();
+    let admission_policy = admission.state().binding().facts();
+    let funding = admission.state().recovery_funding().facts();
+    let projection = registry.projection();
+    let maximum_lamports_per_call = schedule
+        .maximum_lamports_per_call()
+        .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let work_principal_lamports = schedule
+        .work_principal_lamports()
+        .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        root.state().phase() == clutch_product_series::MarketLifecyclePhaseV2::Active
+            && root_binding.market_instance_id == admission_policy.market_instance_id
+            && root_binding.generation == admission_policy.generation
+            && root_binding.market_failure_policy_binding_id.bytes()
+                == admission.state().binding().id().bytes()
+            && root_binding.registry_release_id.bytes()
+                == admission_policy.registry_release_id.bytes()
+            && root_binding.capability_profile_id.bytes()
+                == admission_policy.capability_profile_id.bytes()
+            && root_binding.failure_liveness_policy_id.bytes()
+                == admission_policy.liveness_policy_id.bytes()
+            && root_binding.failure_liveness_quote_schedule_id.bytes() == schedule_id.bytes()
+            && registry.registry_release_id() == root_binding.registry_release_id
+            && registry.capability_profile_id() == root_binding.capability_profile_id
+            && projection.maximum_recovery_progress_units_per_call
+                == schedule.maximum_progress_units_per_call
+            && policy.policy_id == admission_policy.liveness_policy_id
+            && policy.neutral_sink == admission_policy.neutral_sink
+            && recovery.quote_schedule_id.bytes() == schedule_id.bytes()
+            && recovery.receipt_program_id == admission_policy.recovery_receipt_program_id
+            && recovery.maximum_calls == schedule.maximum_calls
+            && recovery.maximum_lamports_per_call == maximum_lamports_per_call
+            && recovery.work_capital_lamports == work_principal_lamports
+            && funding.recovery_quote_schedule_id.bytes() == schedule_id.bytes()
+            && funding.maximum_calls == schedule.maximum_calls
+            && funding.maximum_lamports_per_call == maximum_lamports_per_call
+            && funding.work_principal_lamports == work_principal_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    let expected = FailureMarketRecoveryQuoteAdmissionFactsV1 {
+        failure_policy_binding_id: admission.state().binding().id(),
+        quote_schedule_id: schedule_id,
+        maximum_calls: schedule.maximum_calls,
+        maximum_progress_units_per_call: schedule.maximum_progress_units_per_call,
+        maximum_lamports_per_call,
+        work_principal_lamports,
+    };
+    let authority = ProductFailureMarketRecoveryQuoteAuthorityV1 { expected };
+    let receipt = admit_failure_market_recovery_quote_v1(
+        &authority,
+        admission.state().binding(),
+        admission.state().recovery_funding(),
+        schedule,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let id = ProductContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            CURRENT_RECOVERY_QUOTE_AUTHENTICATION_DOMAIN_V2,
+            program_id.as_ref(),
+            root.account().as_ref(),
+            &root.authentication_id().bytes(),
+            admission.account().as_ref(),
+            &admission.state().binding().id().bytes(),
+            liveness_policy_account.key.as_ref(),
+            &policy_data_id.bytes(),
+            &registry.id().bytes(),
+            &receipt.id().bytes(),
+            &schedule_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_data_id(id)?;
+    Ok(AuthenticatedFailureMarketRecoveryQuoteV2 { id, receipt })
+}
+
 /// Exact content preimage needed to reopen the Product-authenticated interval
 /// capitalization receipt after the retained accounts have been allocated.
 /// The permanent history account stores the domain-separated receipt ID, so
@@ -887,6 +1102,133 @@ pub(crate) struct FailureMarketIntervalArchivePostwriteV2 {
     source_occurrence_id: SourceOccurrenceV1Id,
     release_link_preauthorization_id: ProductContentId,
     release_disposition: FailureSessionReleaseDispositionV2,
+}
+
+/// Current LinkV2 paired append/reset postwrite.
+///
+/// This fresh receipt never lowers a four-way current Product disposition
+/// into the historical two-way V2 release contract.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct FailureMarketIntervalArchivePostwriteV3 {
+    id: ProductContentId,
+    accounts: AuthenticatedFailureMarketIntervalAccountsV2,
+    append: FailureMarketIntervalHistoryAppendReceiptV2,
+    reset: FailureMarketIntervalCellResetReceiptV2,
+    source_occurrence_id: SourceOccurrenceV1Id,
+    release_link_preauthorization_id: ProductContentId,
+    release_disposition: FailureSessionReleaseDispositionV3,
+    source_failure_receipt: FailureMarketIntervalCellSourceFailureReceiptV2,
+    source_terminal: AuthenticatedSourceFailureTerminalPostwriteV1,
+}
+
+impl AuthenticatedSourceFailureProductReleaseAuthorityV1
+    for FailureMarketIntervalArchivePostwriteV3
+{
+    fn authenticate_source_failure_product_release_v1(
+        &self,
+        expected: SourceFailureProductReleaseFactsV1,
+    ) -> Outcome<()> {
+        let source = self.source_terminal;
+        let source_failure = self.source_failure_receipt;
+        require(
+            expected.source_terminal_postwrite_id == source.id()
+                && expected.source_terminal_authority_facts == source.authority_facts()
+                && expected.source_terminal_receipt_id == source.terminal_receipt_id()
+                && expected.source_terminal_receipt_authentication_id
+                    == source.terminal_receipt_authentication_id()
+                && expected.source_physical_disposition_id == source.physical_disposition_id()
+                && expected.product_archive_postwrite_id.bytes() == self.id.bytes()
+                && expected.product_append_receipt_id.bytes() == self.append.id().bytes()
+                && expected.product_reset_receipt_id.bytes() == self.reset.id().bytes()
+                && expected.product_session_terminal_receipt_id.bytes()
+                    == source_failure.id().bytes()
+                && expected.product_session_terminal_receipt_id.bytes()
+                    == self.append.session_terminal_receipt_id().bytes()
+                && expected.product_release_preauthorization_id
+                    == self.release_link_preauthorization_id
+                && expected.product_release_disposition == self.release_disposition
+                && expected.product_session_transcript_before.bytes()
+                    == self.append.session_binding_id().bytes()
+                && source_failure.facts().source_terminal_postwrite_id == source.id(),
+            ClutchError::MismatchedState,
+        )
+    }
+}
+
+impl FailureMarketIntervalArchivePostwriteV3 {
+    pub(super) const fn id(self) -> ProductContentId { self.id }
+    pub(super) const fn accounts(self) -> AuthenticatedFailureMarketIntervalAccountsV2 {
+        self.accounts
+    }
+    pub(super) const fn append(self) -> FailureMarketIntervalHistoryAppendReceiptV2 {
+        self.append
+    }
+    pub(super) const fn reset(self) -> FailureMarketIntervalCellResetReceiptV2 { self.reset }
+    pub(super) const fn release_disposition(self) -> FailureSessionReleaseDispositionV3 {
+        self.release_disposition
+    }
+    pub(super) const fn release_link_preauthorization_id(self) -> ProductContentId {
+        self.release_link_preauthorization_id
+    }
+}
+
+impl AuthenticatedSeriesFailureArchivePostwriteV3 for FailureMarketIntervalArchivePostwriteV3 {
+    fn archive_postwrite_id(&self) -> Outcome<ProductContentId> { Ok(self.id) }
+    fn append_receipt_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(self.append.id().bytes()))
+    }
+    fn reset_receipt_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(self.reset.id().bytes()))
+    }
+    fn market_instance_id(&self) -> Outcome<clutch_product_series::MarketInstanceV2Id> {
+        Ok(self.append.market_instance_id())
+    }
+    fn generation(&self) -> Outcome<u64> { Ok(self.append.generation()) }
+    fn source_occurrence_id(&self) -> Outcome<SourceOccurrenceV1Id> {
+        Ok(self.source_occurrence_id)
+    }
+    fn session_binding_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(self.append.session_binding_id().bytes()))
+    }
+    fn session_terminal_receipt_id(&self) -> Outcome<ProductContentId> {
+        Ok(ProductContentId::from_bytes(
+            self.append.session_terminal_receipt_id().bytes(),
+        ))
+    }
+    fn release_link_preauthorization_id(&self) -> Outcome<ProductContentId> {
+        Ok(self.release_link_preauthorization_id)
+    }
+    fn release_disposition(&self) -> Outcome<FailureSessionReleaseDispositionV3> {
+        Ok(self.release_disposition)
+    }
+    fn authenticate_series_failure_archive_release_postwrite_v3(
+        &self,
+        archive_postwrite_id: ProductContentId,
+        append_receipt_id: ProductContentId,
+        reset_receipt_id: ProductContentId,
+        market_instance_id: clutch_product_series::MarketInstanceV2Id,
+        generation: u64,
+        source_occurrence_id: SourceOccurrenceV1Id,
+        session_binding_id: ProductContentId,
+        session_terminal_receipt_id: ProductContentId,
+        disposition: FailureSessionReleaseDispositionV3,
+        release_link_preauthorization_id: ProductContentId,
+    ) -> Outcome<()> {
+        require(
+            archive_postwrite_id == self.id
+                && append_receipt_id.bytes() == self.append.id().bytes()
+                && reset_receipt_id.bytes() == self.reset.id().bytes()
+                && market_instance_id == self.append.market_instance_id()
+                && generation == self.append.generation()
+                && source_occurrence_id == self.source_occurrence_id
+                && session_binding_id.bytes() == self.append.session_binding_id().bytes()
+                && session_terminal_receipt_id.bytes()
+                    == self.append.session_terminal_receipt_id().bytes()
+                && disposition == self.release_disposition
+                && release_link_preauthorization_id == self.release_link_preauthorization_id,
+            ClutchError::MismatchedState,
+        )
+    }
 }
 
 impl FailureMarketIntervalArchivePostwriteV2 {
@@ -2083,6 +2425,186 @@ fn write_failure_market_interval_archive_v2<'a>(
     })
 }
 
+/// Current four-disposition LinkV2 append/reset writer. Visibility is limited
+/// to the instruction-composer module tree; callers cannot detach this write
+/// from Product release and the final runtime transcript.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn write_failure_market_interval_archive_v3<'a>(
+    program_id: &Pubkey,
+    cell_account: &AccountInfo<'a>,
+    history_account: &AccountInfo<'a>,
+    authenticated: AuthenticatedFailureMarketIntervalAccountsV2,
+    history_plan: FailureMarketIntervalHistoryPlanV2,
+    append: FailureMarketIntervalHistoryAppendReceiptV2,
+    cell_plan: FailureMarketIntervalCellPlanV2,
+    reset: FailureMarketIntervalCellResetReceiptV2,
+    source_occurrence_id: SourceOccurrenceV1Id,
+    source_failure_receipt: FailureMarketIntervalCellSourceFailureReceiptV2,
+    source_terminal: AuthenticatedSourceFailureTerminalPostwriteV1,
+    release_link_preauthorization_id: ProductContentId,
+    release_disposition: FailureSessionReleaseDispositionV3,
+) -> Outcome<FailureMarketIntervalArchivePostwriteV3> {
+    require_live_data_id(release_link_preauthorization_id)?;
+    require(
+        matches!(
+            release_disposition,
+            FailureSessionReleaseDispositionV3::SourceAbsent
+                | FailureSessionReleaseDispositionV3::SourceRefused
+        ),
+        ClutchError::MismatchedState,
+    )?;
+    let expected_cell_disposition = match release_disposition {
+        FailureSessionReleaseDispositionV3::SourceAbsent => {
+            FailureMarketIntervalCellDispositionV2::SourceAbsent
+        }
+        FailureSessionReleaseDispositionV3::SourceRefused => {
+            FailureMarketIntervalCellDispositionV2::SourceRefused
+        }
+        FailureSessionReleaseDispositionV3::Resolved
+        | FailureSessionReleaseDispositionV3::Exhausted => {
+            return Err(Refusal::Adapter(ClutchError::MismatchedState));
+        }
+    };
+    require(
+        authenticated.cell.phase() == FailureMarketIntervalCellPhaseV2::Resolved
+            && authenticated.cell.disposition() == expected_cell_disposition
+            && authenticated
+                .cell
+                .product_work()
+                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+                .is_none(),
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        source_failure_receipt.cell_after() == authenticated.cell_state_id
+            && source_failure_receipt.facts().source_terminal_postwrite_id
+                == source_terminal.id()
+            && source_terminal.source_failure_kind()
+                == source_failure_receipt.facts().source_kind,
+        ClutchError::MismatchedState,
+    )?;
+    let mut next_history = authenticated.history;
+    next_history
+        .commit_plan(history_plan)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let mut next_cell = authenticated.cell;
+    next_cell
+        .commit_plan(cell_plan)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let next_history_id = next_history
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    let next_cell_id = next_cell
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?;
+    require(
+        append.history_before() == authenticated.history_state_id
+            && append.history_after() == next_history_id
+            && reset.terminal_cell() == authenticated.cell_state_id
+            && reset.idle_cell() == next_cell_id
+            && reset.append_receipt_id() == append.id(),
+        ClutchError::MismatchedState,
+    )?;
+    let encoded_history = encode_history(authenticated.history_bump, next_history)?;
+    let encoded_cell = encode_cell(authenticated.cell_bump, next_cell)?;
+    authenticate_write_prestate(
+        program_id,
+        history_account,
+        authenticated.history_account,
+        authenticated.history_data_id,
+        authenticated.history_observed_lamports,
+        &encoded_history,
+    )?;
+    authenticate_write_prestate(
+        program_id,
+        cell_account,
+        authenticated.cell_account,
+        authenticated.cell_data_id,
+        authenticated.cell_observed_lamports,
+        &encoded_cell,
+    )?;
+    let mut history_data = history_account
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let mut cell_data = cell_account
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    history_data.copy_from_slice(&encoded_history);
+    cell_data.copy_from_slice(&encoded_cell);
+    drop(cell_data);
+    drop(history_data);
+    let cell_data_id = framed_data_id(&encoded_cell);
+    let history_data_id = framed_data_id(&encoded_history);
+    let cell_authentication_id = account_authentication_id(
+        CELL_AUTHENTICATION_DOMAIN_V2,
+        cell_account,
+        cell_data_id,
+        next_cell_id.bytes(),
+        authenticated.admission_state_id.bytes(),
+    );
+    let history_authentication_id = account_authentication_id(
+        HISTORY_AUTHENTICATION_DOMAIN_V2,
+        history_account,
+        history_data_id,
+        next_history_id.bytes(),
+        authenticated.admission_state_id.bytes(),
+    );
+    require_live_data_id(cell_authentication_id)?;
+    require_live_data_id(history_authentication_id)?;
+    let accounts = AuthenticatedFailureMarketIntervalAccountsV2 {
+        cell: next_cell,
+        cell_state_id: next_cell_id,
+        cell_data_id,
+        cell_authentication_id,
+        history: next_history,
+        history_state_id: next_history_id,
+        history_data_id,
+        history_authentication_id,
+        ..authenticated
+    };
+    let id = ProductContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            ARCHIVE_POSTWRITE_DOMAIN_V3,
+            cell_account.key.as_ref(),
+            history_account.key.as_ref(),
+            &authenticated.cell_authentication_id.bytes(),
+            &accounts.cell_authentication_id.bytes(),
+            &authenticated.history_authentication_id.bytes(),
+            &accounts.history_authentication_id.bytes(),
+            &append.id().bytes(),
+            &reset.id().bytes(),
+            &append.session_binding_id().bytes(),
+            &append.session_terminal_receipt_id().bytes(),
+            &append.terminal_state_commitment().bytes(),
+            &append.idle_state_commitment().bytes(),
+            &append.previous_root().bytes(),
+            &append.resulting_root().bytes(),
+            &append.completed_session_count().to_le_bytes(),
+            &append.market_instance_id().bytes(),
+            &append.generation().to_le_bytes(),
+            &source_occurrence_id.bytes(),
+            &source_terminal.id().bytes(),
+            &source_terminal.terminal_receipt_authentication_id().bytes(),
+            &source_terminal.physical_disposition_id().bytes(),
+            &[release_disposition.wire_byte()],
+            &release_link_preauthorization_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_data_id(id)?;
+    Ok(FailureMarketIntervalArchivePostwriteV3 {
+        id,
+        accounts,
+        append,
+        reset,
+        source_occurrence_id,
+        release_link_preauthorization_id,
+        release_disposition,
+        source_failure_receipt,
+        source_terminal,
+    })
+}
+
 const fn failure_release_disposition_byte_v2(
     disposition: FailureSessionReleaseDispositionV2,
 ) -> u8 {
@@ -2787,6 +3309,10 @@ fn account_authentication_id(
 
 fn framed_data_id(data: &[u8]) -> ProductContentId {
     ProductContentId::from_bytes(solana_sha256_hasher::hashv(&[data]).to_bytes())
+}
+
+fn liveness_id(key: &Pubkey) -> LivenessId {
+    LivenessId::from_bytes(key.to_bytes())
 }
 
 fn require_live_data_id(id: ProductContentId) -> Outcome<()> {
