@@ -12,6 +12,7 @@ use super::super::failure_market_family_terminal_v2::{
     AuthenticatedFailureMarketFamilyTerminalReceiptV3,
     FailureMarketFamilyTerminalConsumerFactsV3,
 };
+use super::super::dealer_facility::AuthenticatedDealerFamilyTerminalReceiptV1;
 use super::super::product_market_lifecycle_v3_current::{
     authenticate_market_lifecycle_root_v3, authenticate_series_market_link_v3,
 };
@@ -284,15 +285,16 @@ pub(crate) fn consume_failure_family_terminal_v5(
     })
 }
 
-struct ExactStructuredFamilyTerminalAuthorityV5 {
+struct ExactFamilyTerminalAuthorityV5 {
     market_instance_id: MarketInstanceV2Id,
     generation: u64,
+    family: MarketFamilyV1,
     family_root_id: ContentId,
     terminal_sequence: u32,
     terminal_receipt_id: ContentId,
 }
 
-impl AuthenticatedMarketFamilyAuthorityV1 for ExactStructuredFamilyTerminalAuthorityV5 {
+impl AuthenticatedMarketFamilyAuthorityV1 for ExactFamilyTerminalAuthorityV5 {
     fn authenticate_terminal(
         &self,
         current: &MarketFamilyAggregatorV1,
@@ -301,7 +303,7 @@ impl AuthenticatedMarketFamilyAuthorityV1 for ExactStructuredFamilyTerminalAutho
         family_terminal_sequence: u32,
         terminal_receipt_id: ContentId,
     ) -> clutch_product_series::Result<()> {
-        if family != MarketFamilyV1::Structured
+        if family != self.family
             || current.binding().market_instance_id != self.market_instance_id
             || current.binding().generation != self.generation
             || family_root_id != self.family_root_id
@@ -428,9 +430,10 @@ pub(crate) fn consume_structured_family_terminal_v5(
 
     let family = root.state().product_families().family(MarketFamilyV1::Structured);
     let terminal_sequence = family.counts().terminal;
-    let authority = ExactStructuredFamilyTerminalAuthorityV5 {
+    let authority = ExactFamilyTerminalAuthorityV5 {
         market_instance_id: terminal.market_instance_id(),
         generation: terminal.generation(),
+        family: MarketFamilyV1::Structured,
         family_root_id: root
             .state()
             .product_families()
@@ -574,5 +577,243 @@ pub(crate) fn consume_structured_family_terminal_v5(
         link_transition_sequence_after: reopened_link.state().transition_sequence(),
         structured_obligation_projection_id: structured_projection_id,
         wrapper_obligation_projection_id: wrapper_projection_id,
+    })
+}
+
+/// Move-only postwrite proving that Dealer's complete physical terminal was
+/// consumed into both the Dealer family counter and this Series' Dealer
+/// obligation.  The Dealer receipt remains owned here and cannot authorize a
+/// second RootV3 or LinkV3 transition.
+#[derive(Debug)]
+pub(crate) struct AuthenticatedProductDealerFamilyTerminalV5 {
+    id: ContentId,
+    terminal: AuthenticatedDealerFamilyTerminalReceiptV1,
+    root_account: Pubkey,
+    root_authentication_before_id: ContentId,
+    root_authentication_after_id: ContentId,
+    root_semantic_before_id: ContentId,
+    root_semantic_after_id: ContentId,
+    root_transition_sequence_before: u64,
+    root_transition_sequence_after: u64,
+    link_account: Pubkey,
+    link_authentication_before_id: ContentId,
+    link_authentication_after_id: ContentId,
+    link_data_before_id: ContentId,
+    link_data_after_id: ContentId,
+    link_semantic_before_id: SeriesMarketLinkV3Id,
+    link_semantic_after_id: SeriesMarketLinkV3Id,
+    link_transition_sequence_before: u64,
+    link_transition_sequence_after: u64,
+    dealer_obligation_projection_id: ContentId,
+}
+
+impl AuthenticatedProductDealerFamilyTerminalV5 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn terminal_id(&self) -> ContentId { self.terminal.id() }
+    pub(crate) const fn root_account(&self) -> Pubkey { self.root_account }
+    pub(crate) const fn root_authentication_after_id(&self) -> ContentId {
+        self.root_authentication_after_id
+    }
+    pub(crate) const fn root_semantic_after_id(&self) -> ContentId {
+        self.root_semantic_after_id
+    }
+    pub(crate) const fn root_transition_sequence_after(&self) -> u64 {
+        self.root_transition_sequence_after
+    }
+    pub(crate) const fn link_account(&self) -> Pubkey { self.link_account }
+    pub(crate) const fn link_authentication_after_id(&self) -> ContentId {
+        self.link_authentication_after_id
+    }
+    pub(crate) const fn link_data_after_id(&self) -> ContentId { self.link_data_after_id }
+    pub(crate) const fn link_semantic_after_id(&self) -> SeriesMarketLinkV3Id {
+        self.link_semantic_after_id
+    }
+    pub(crate) const fn link_transition_sequence_after(&self) -> u64 {
+        self.link_transition_sequence_after
+    }
+    pub(crate) const fn dealer_obligation_projection_id(&self) -> ContentId {
+        self.dealer_obligation_projection_id
+    }
+}
+
+/// Consume Dealer's same-instruction physical terminal into current Product
+/// state.  Every immutable Product coordinate retained by Dealer is compared
+/// to the hostile RootV3/LinkV3 graph before either postwrite occurs.
+#[inline(never)]
+pub(crate) fn consume_dealer_family_terminal_v5(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    link_account: &AccountInfo<'_>,
+    terminal: AuthenticatedDealerFamilyTerminalReceiptV1,
+) -> Outcome<AuthenticatedProductDealerFamilyTerminalV5> {
+    require(
+        root_account.key != link_account.key
+            && terminal.product_market_root_account() == *root_account.key
+            && terminal.series_market_link_account() == *link_account.key,
+        ClutchError::AccountAlias,
+    )?;
+    let market_instance_id = MarketInstanceV2Id::from_bytes(terminal.market_instance_id().bytes());
+    let series_plan_id = SeriesPlanV5Id::from_bytes(terminal.series_plan_id().bytes());
+    let mut root_value = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let root = authenticate_market_lifecycle_root_v3(
+        program_id,
+        root_account,
+        market_instance_id,
+        terminal.product_generation(),
+        true,
+        &mut root_value,
+    )?;
+    let root_binding_id = root
+        .binding()
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let mut link_value = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    let link = authenticate_series_market_link_v3(
+        program_id,
+        link_account,
+        series_plan_id,
+        terminal.series_ordinal(),
+        market_instance_id,
+        terminal.product_generation(),
+        *root_account.key,
+        true,
+        &mut link_value,
+    )?;
+    let link_binding = link.binding();
+    require(
+        root_binding_id == terminal.product_market_binding_id()
+            && link_binding.market_binding_id == root_binding_id
+            && link_binding.compiler_bundle_id.content_id() == terminal.compiler_bundle_id()
+            && link_binding.attachment_plan_id.content_id() == terminal.attachment_plan_id()
+            && root.state().resolution_semantic_id() == terminal.resolution_semantic_id()
+            && root.state().resolution_data_id() == terminal.resolution_data_id()
+            && link.state().phase() == SeriesMarketLinkPhaseV3::Active,
+        ClutchError::MismatchedState,
+    )?;
+
+    let family_slot = root.state().product_families().family(MarketFamilyV1::Dealer);
+    let terminal_sequence = family_slot.counts().terminal;
+    let authority = ExactFamilyTerminalAuthorityV5 {
+        market_instance_id,
+        generation: terminal.product_generation(),
+        family: MarketFamilyV1::Dealer,
+        family_root_id: root
+            .state()
+            .product_families()
+            .binding()
+            .family_root_id(MarketFamilyV1::Dealer),
+        terminal_sequence,
+        terminal_receipt_id: terminal.id(),
+    };
+    let root_next = (*root.state())
+        .terminalize_product_family_child(
+            &authority,
+            MarketFamilyV1::Dealer,
+            terminal_sequence,
+            terminal.id(),
+        )
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let dealer_projection = SeriesLinkObligationTerminalProjectionV3 {
+        link_semantic_id: link.semantic_id(),
+        obligation: SeriesLinkObligationV3::Dealer,
+        disposition: SeriesLinkObligationDispositionV3::Terminal,
+        link_transition_sequence: link
+            .state()
+            .transition_sequence()
+            .checked_add(1)
+            .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?,
+        owner_terminal_receipt_id: terminal.dealer_obligation_close_receipt_id(),
+    };
+    let link_next = (*link.state())
+        .consume_obligation(dealer_projection)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_authentication_before_id = root.authentication_id();
+    let root_semantic_before_id = root.semantic_id();
+    let root_transition_sequence_before = root.state().transition_sequence();
+    let link_authentication_before_id = link.authentication_id();
+    let link_data_before_id = link.data_id();
+    let link_semantic_before_id = link.semantic_id();
+    let link_transition_sequence_before = link.state().transition_sequence();
+    drop(link);
+    drop(root);
+    write_market_lifecycle_root_v3(root_account, &root_value, &root_next)?;
+    write_series_market_link_v3(link_account, &link_value, &link_next)?;
+
+    let mut reopened_root_value = Box::new(MarketLifecycleRootAccountV3::decode_buffer());
+    let reopened_root = authenticate_market_lifecycle_root_v3(
+        program_id,
+        root_account,
+        market_instance_id,
+        terminal.product_generation(),
+        true,
+        &mut reopened_root_value,
+    )?;
+    let mut reopened_link_value = Box::new(SeriesMarketLinkAccountV3::decode_buffer());
+    let reopened_link = authenticate_series_market_link_v3(
+        program_id,
+        link_account,
+        series_plan_id,
+        terminal.series_ordinal(),
+        market_instance_id,
+        terminal.product_generation(),
+        *root_account.key,
+        true,
+        &mut reopened_link_value,
+    )?;
+    let dealer_projection_id = dealer_projection
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        reopened_root.state() == &root_next
+            && reopened_link.state() == &link_next
+            && reopened_link
+                .state()
+                .obligation_terminal_receipt_id(SeriesLinkObligationV3::Dealer)
+                == dealer_projection_id,
+        ClutchError::MismatchedState,
+    )?;
+    let id = hashv(&[
+        b"dragons-clutch/sbf/product-dealer-family-terminal-postwrite/v5\0",
+        program_id.as_ref(),
+        &terminal.id().bytes(),
+        root_account.key.as_ref(),
+        &root_authentication_before_id.bytes(),
+        &reopened_root.authentication_id().bytes(),
+        &root_semantic_before_id.bytes(),
+        &reopened_root.semantic_id().bytes(),
+        &root_transition_sequence_before.to_le_bytes(),
+        &reopened_root.state().transition_sequence().to_le_bytes(),
+        link_account.key.as_ref(),
+        &link_authentication_before_id.bytes(),
+        &reopened_link.authentication_id().bytes(),
+        &link_data_before_id.bytes(),
+        &reopened_link.data_id().bytes(),
+        &link_semantic_before_id.bytes(),
+        &reopened_link.semantic_id().bytes(),
+        &link_transition_sequence_before.to_le_bytes(),
+        &reopened_link.state().transition_sequence().to_le_bytes(),
+        &dealer_projection_id.bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedProductDealerFamilyTerminalV5 {
+        id,
+        terminal,
+        root_account: *root_account.key,
+        root_authentication_before_id,
+        root_authentication_after_id: reopened_root.authentication_id(),
+        root_semantic_before_id,
+        root_semantic_after_id: reopened_root.semantic_id(),
+        root_transition_sequence_before,
+        root_transition_sequence_after: reopened_root.state().transition_sequence(),
+        link_account: *link_account.key,
+        link_authentication_before_id,
+        link_authentication_after_id: reopened_link.authentication_id(),
+        link_data_before_id,
+        link_data_after_id: reopened_link.data_id(),
+        link_semantic_before_id,
+        link_semantic_after_id: reopened_link.semantic_id(),
+        link_transition_sequence_before,
+        link_transition_sequence_after: reopened_link.state().transition_sequence(),
+        dealer_obligation_projection_id: dealer_projection_id,
     })
 }
