@@ -23,7 +23,10 @@ use crate::projection::{
     AuthenticatedSelectedOwnerFeeV2, AuthenticatedSelectedOwnerFeeV4, SelectedOwnerFeeBookV1,
 };
 use crate::retirement::{CompletedFeeRetirementV1, FeeRetirementHashV1};
-use crate::selected::{OwnerFeeCarryV1, SelectedCompositeFeeV1, SelectedCompositeFeeV2};
+use crate::selected::{
+    OwnerFeeCarryV1, SelectedCompositeFeeAccess, SelectedCompositeFeeV1,
+    SelectedCompositeFeeV2,
+};
 use crate::treasury::TreasuryLedgerV1;
 use crate::{add, independent, live, Error, Id, Result, MAX_FEE_ROWS_V1};
 
@@ -318,8 +321,8 @@ impl OwnerFeeFinalizationReceiptV1 {
     /// V5 row poststate data ID, Position semantic ID, Replay successor, pot
     /// data ID, and persisted rent transition carried in `bindings`.
     #[allow(clippy::too_many_arguments)]
-    pub fn settle_delivery_complete_v4(
-        selected: &SelectedCompositeFeeV1,
+    pub fn settle_delivery_complete_v4<S: SelectedCompositeFeeAccess + ?Sized>(
+        selected: &S,
         projection: &AuthenticatedSelectedOwnerFeeV4,
         carry: &OwnerFeeCarryV1,
         bindings: OwnerFeeFinalizationBindingsV2,

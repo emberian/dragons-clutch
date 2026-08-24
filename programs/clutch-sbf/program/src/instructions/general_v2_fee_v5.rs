@@ -19,6 +19,9 @@ use clutch_batch::relation_v1::FrozenPolicyV1;
 use clutch_batch_policy_identity::revenue_policy_v1::{
     decode_revenue_policy, revenue_policy_digest, RevenuePolicyV1, REVENUE_POLICY_BYTES,
 };
+use clutch_batch_policy_identity::revenue_policy_v2::{
+    RevenuePolicyV2, REVENUE_POLICY_V2_BYTES,
+};
 use clutch_batch_policy_identity::{
     batch_policy_digest, decode_batch_policy, Identity32V1, BATCH_POLICY_BYTES,
 };
@@ -31,27 +34,29 @@ use clutch_fee_runtime_contract::projection::{
     AuthenticatedSelectedOwnerFeeV4, CertifiedRecipientAllocationV2,
 };
 use clutch_fee_runtime_contract::Id as FeeId;
-use clutch_fee_runtime_contract::selected::SelectedCompositeFeeV1;
+use clutch_fee_runtime_contract::selected::{SelectedCompositeFeeV1, SelectedCompositeFeeV2};
 use clutch_fee_runtime_contract::terminal::{
     CandidateFeeAccountRoleV1, ExternalFeeAccountClosureV1, FeeTerminalOutcomeV1,
     OwnerFeeFinalizationBindingsV2, OwnerFeeFinalizationReceiptV1,
 };
 use clutch_general_v2_contract::{
-    fee_runtime_semantic_release_id_v1, payer_allocation_account_data_id_v1,
+    fee_runtime_semantic_release_id_v1, fee_runtime_semantic_release_id_v2,
+    payer_allocation_account_data_id_v1,
     prepare_owner_fee_rent_transition_v3, project_general_replay_transition_v1,
     recipient_allocation_account_data_id_v2,
     FeeLamportTransferV2,
-    GeneralPositionReplayPrestateV1, GeneralReplayTransitionKindV1,
+    CurrentMarketAuthorityV4, GeneralPositionReplayPrestateV1, GeneralReplayTransitionKindV1,
     GeneralReplayTransitionPlanV1, Id32, MarketBindingV4, OwnerFeeCarryV3AccountV1,
     OwnerFeeFinalizationV4AccountV1, OwnerFeeRentTransitionAccountsV3,
     OwnerFeeRentTransitionPlanV3, DeletableRentOwnerV1, OwnerSettlementSeedTupleV5,
     OwnerSettlementV5AccountV1, PayerAllocationV2AccountV1, SelectedFeeRecordV1AccountV1,
+    SelectedFeeRecordV2AccountV1,
     RecipientAllocationV2AccountV1, SettlementRootChildStateV1, SettlementRootPhaseV1,
     SettlementRootV1AccountV1,
     Sha256BackendV1, MARKET_BINDING_ACCOUNT_BYTES_V4, OWNER_FEE_CARRY_ACCOUNT_BYTES_V3,
     OWNER_FEE_FINALIZATION_ACCOUNT_BYTES_V4, OWNER_SETTLEMENT_ACCOUNT_BYTES_V5,
     PAYER_ALLOCATION_ACCOUNT_BYTES_V2, RECIPIENT_ALLOCATION_ACCOUNT_BYTES_V2,
-    SELECTED_FEE_RECORD_ACCOUNT_BYTES,
+    SELECTED_FEE_RECORD_ACCOUNT_BYTES, SELECTED_FEE_RECORD_ACCOUNT_BYTES_V2,
 };
 use clutch_general_v2_runtime::{
     derive_root_owner_basis_v4, derive_settlement_root_expectation_from_certified_fee_v2,
@@ -74,6 +79,10 @@ use crate::accounts::{expect_pda, require, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::general_v2_settlement_root::AuthenticatedGeneralSettlementRootV1;
 use crate::seeds;
+
+use super::revenue_policy_v2::{
+    authenticate_revenue_policy_record_v2, AuthenticatedRevenuePolicyRecordV2,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimeSha256;
@@ -101,7 +110,7 @@ impl ReplayV3HashBackend for RuntimeSha256 {
 /// The struct deliberately defines no positional ABI.  The eventual General
 /// handler must select these roles from its own frozen action account list.
 #[derive(Clone, Copy, Debug)]
-pub struct OwnerFeeSnapshotAccountFrameV5<'a, 'info> {
+pub(crate) struct OwnerFeeSnapshotAccountFrameV5<'a, 'info> {
     /// Fresh or existing canonical rent-owned owner-row successor.
     pub owner_row: &'a AccountInfo<'info>,
     /// Immutable candidate-wide selected composite-fee record.
@@ -114,12 +123,16 @@ pub struct OwnerFeeSnapshotAccountFrameV5<'a, 'info> {
     pub batch_policy: &'a AccountInfo<'info>,
     /// Realm-owned immutable revenue-policy record.
     pub revenue_policy_record: &'a AccountInfo<'info>,
+    /// Exact Realm account that owns the immutable policy record.
+    pub realm: &'a AccountInfo<'info>,
+    /// Untrusted carrier of the exact RevenuePolicyV2 preimage.
+    pub revenue_policy_preimage: &'a AccountInfo<'info>,
 }
 
 /// Named native-rent accounts used only by fee-bearing action 38.
 #[derive(Clone, Copy, Debug)]
-pub struct OwnerFeeRentAccountFrameV5<'a, 'info> {
-    /// Exact immutable MarketBinding V2 that owns the neutral sink.
+pub(crate) struct OwnerFeeRentAccountFrameV5<'a, 'info> {
+    /// Exact immutable MarketBinding V4 that owns the neutral sink.
     pub market_binding: &'a AccountInfo<'info>,
     /// Persisted carry rent payer and sole possible realloc top-up signer.
     pub carry_rent_payer: &'a AccountInfo<'info>,
@@ -131,7 +144,7 @@ pub struct OwnerFeeRentAccountFrameV5<'a, 'info> {
 
 /// Presence-explicit action-38 rent input.
 #[derive(Clone, Copy, Debug)]
-pub enum OwnerFeeTerminalRentInputV5<'a, 'info> {
+pub(crate) enum OwnerFeeTerminalRentInputV5<'a, 'info> {
     /// Exact native-rent graph and authenticated 548-byte rent minimum.
     CandidateFee {
         /// Named current fee-rent accounts.
@@ -145,7 +158,7 @@ pub enum OwnerFeeTerminalRentInputV5<'a, 'info> {
 
 /// Named immutable fee accounts for the action-39 complete-book join.
 #[derive(Clone, Copy, Debug)]
-pub struct CandidateFeeCollectionAccountFrameV5<'a, 'info> {
+struct CandidateFeeCollectionAccountFrameV5<'a, 'info> {
     /// Immutable selected composite-fee record.
     pub selected_fee_record: &'a AccountInfo<'info>,
     /// Immutable rent-owned certified recipient allocation.
@@ -161,7 +174,7 @@ pub struct CandidateFeeCollectionAccountFrameV5<'a, 'info> {
 /// This is deliberately smaller than the recipient-allocation frame: weight
 /// construction precedes that account, so requiring it here would be circular.
 #[derive(Clone, Copy, Debug)]
-pub struct SelectedFeeWeightAccountFrameV5<'a, 'info> {
+struct SelectedFeeWeightAccountFrameV5<'a, 'info> {
     /// Immutable selected composite-fee record.
     pub selected_fee_record: &'a AccountInfo<'info>,
     /// Exact immutable batch-policy artifact bytes.
@@ -174,7 +187,7 @@ pub struct SelectedFeeWeightAccountFrameV5<'a, 'info> {
 
 /// Traversal-owned facts expected by the selected-fee weight authenticator.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SelectedFeeWeightExpectationV2 {
+struct SelectedFeeWeightExpectationV2 {
     realm: Id32,
     market: Id32,
     epoch: Id32,
@@ -225,7 +238,7 @@ impl SelectedFeeWeightExpectationV2 {
 /// fee-weight authority. This capability moves no value and does not certify
 /// any recipient allocation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedSelectedFeeWeightV2 {
+struct AuthenticatedSelectedFeeWeightV2 {
     selected_fee_account: Id32,
     selected_fee_data_id: Id32,
     selected: SelectedCompositeFeeV1,
@@ -251,7 +264,7 @@ const _: () = assert!(core::mem::size_of::<AuthenticatedSelectedFeeWeightV2>() <
 /// The recipient account itself must be writable in this frame because the
 /// terminal handler deletes it after applying both exact lamport transfers.
 #[derive(Clone, Copy, Debug)]
-pub struct CandidateFeeCollectionClosureAccountFrameV5<'a, 'info> {
+struct CandidateFeeCollectionClosureAccountFrameV5<'a, 'info> {
     /// Same exact action-39 account graph, with the recipient role writable.
     pub collection: CandidateFeeCollectionAccountFrameV5<'a, 'info>,
     /// Counted-root-selected immutable MarketBinding V2.
@@ -268,7 +281,7 @@ pub struct CandidateFeeCollectionClosureAccountFrameV5<'a, 'info> {
 /// from the candidate-wide fee terminal composer that simultaneously persists
 /// the closure manifest and terminal receipt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CandidateFeeCollectionClosureExpectationV5 {
+struct CandidateFeeCollectionClosureExpectationV5 {
     market_binding: Id32,
     recipient_account_data_id: Id32,
     runtime_release: Id32,
@@ -310,7 +323,7 @@ impl CandidateFeeCollectionClosureExpectationV5 {
 
 /// Independently authenticated action-39 facts expected from General.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CandidateFeeCollectionExpectationV5 {
+struct CandidateFeeCollectionExpectationV5 {
     realm: Id32,
     market: Id32,
     epoch: Id32,
@@ -369,7 +382,7 @@ impl CandidateFeeCollectionExpectationV5 {
 
 /// O(1) immutable candidate-wide fee fact for General action 39.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreparedCandidateFeeCollectionV5 {
+struct PreparedCandidateFeeCollectionV5 {
     selected: SelectedCompositeFeeV1,
     certified: CertifiedRecipientAllocationV2,
     recipient_account: Id32,
@@ -440,7 +453,7 @@ impl PreparedCandidateFeeCollectionV5 {
 /// This value only pairs its exhaustive structural expectation with the O(1)
 /// authenticated complete-book fee certificate that supplied the fee total.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreparedCandidateFeeCollectionAction39V5 {
+struct PreparedCandidateFeeCollectionAction39V5 {
     collection: PreparedCandidateFeeCollectionV5,
     root_expectation: SettlementRootExpectationProjectionV1,
 }
@@ -459,7 +472,7 @@ impl PreparedCandidateFeeCollectionAction39V5 {
 
 /// Exact rent-only disposition staged for the 0x85/v2 terminal close.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreparedCandidateFeeCollectionClosureV5 {
+struct PreparedCandidateFeeCollectionClosureV5 {
     collection: PreparedCandidateFeeCollectionV5,
     closure: ExternalFeeAccountClosureV1,
     principal_refund: FeeLamportTransferV2,
@@ -490,14 +503,12 @@ impl PreparedCandidateFeeCollectionClosureV5 {
 
 /// Presence-explicit fee account input selected only from the counted root.
 #[derive(Clone, Copy, Debug)]
-pub enum OwnerFeeAccountInputV5<'a, 'info> {
+pub(crate) enum OwnerFeeAccountInputV5<'a, 'info> {
     /// A live root fee record requires the complete real account graph and its
     /// registered revenue-policy preimage.
     CandidateFee {
         /// Exact named fee account frame; no remaining-account tail.
         frame: OwnerFeeSnapshotAccountFrameV5<'a, 'info>,
-        /// Registered immutable policy preimage whose digest is rederived.
-        revenue_policy: &'a RevenuePolicyV1,
     },
     /// An absent root fee record carries no placeholder accounts.
     NoFeeRecord,
@@ -525,6 +536,7 @@ pub(crate) struct RootDerivedOwnerFeeContextV5<'a> {
     realm: Id32,
     owner_row: Id32,
     basis: OwnerSettlementExpectationBasisV4,
+    current_market_authority: CurrentMarketAuthorityV4,
 }
 
 impl<'a> RootDerivedOwnerFeeContextV5<'a> {
@@ -534,6 +546,7 @@ impl<'a> RootDerivedOwnerFeeContextV5<'a> {
         realm: Id32,
         owner_row: Id32,
         basis: OwnerSettlementExpectationBasisV4,
+        current_market_authority: CurrentMarketAuthorityV4,
     ) -> Outcome<Self> {
         require(
             !root_account.is_zero()
@@ -552,16 +565,17 @@ impl<'a> RootDerivedOwnerFeeContextV5<'a> {
             realm,
             owner_row,
             basis,
+            current_market_authority,
         })
     }
 }
 
 /// Private-construction fee evidence ready for one General atomic composer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreparedOwnerFeeSnapshotV5 {
+pub(crate) struct PreparedOwnerFeeSnapshotV5 {
     root_account: Id32,
     owner_row: Id32,
-    selected: SelectedCompositeFeeV1,
+    selected: SelectedCompositeFeeV2,
     carry: clutch_fee_runtime_contract::selected::OwnerFeeCarryV1,
     carry_rent: DeletableRentOwnerV1,
     payer_rent: DeletableRentOwnerV1,
@@ -571,7 +585,7 @@ pub struct PreparedOwnerFeeSnapshotV5 {
 
 /// Exact canonical absence proof for one zero-fee owner row.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreparedNoFeeOwnerV5 {
+pub(crate) struct PreparedNoFeeOwnerV5 {
     root_account: Id32,
     owner_row: Id32,
     expectation: OwnerSettlementExpectationV4,
@@ -596,7 +610,7 @@ impl PreparedNoFeeOwnerV5 {
 
 /// Disjoint fee-bearing or canonical no-fee evidence for one owner row.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PreparedOwnerFeeEvidenceV5 {
+pub(crate) enum PreparedOwnerFeeEvidenceV5 {
     /// A real selected fee record and all three owner/candidate fee accounts exist.
     CandidateFee(PreparedOwnerFeeSnapshotV5),
     /// The counted root says the candidate has no fee record; no phantom fee
@@ -606,7 +620,7 @@ pub enum PreparedOwnerFeeEvidenceV5 {
 
 /// Root-bound allocation-only result for one action-24 V5 row creation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreparedOwnerFeeAction24V5 {
+pub(crate) struct PreparedOwnerFeeAction24V5 {
     owner_row_seed: OwnerSettlementSeedTupleV5,
     owner_row_bump: u8,
     evidence: PreparedOwnerFeeEvidenceV5,
@@ -614,7 +628,7 @@ pub struct PreparedOwnerFeeAction24V5 {
 
 /// Root-bound authenticated V5 owner-row/fee prestate for action 38.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreparedOwnerFeeAction38V5 {
+pub(crate) struct PreparedOwnerFeeAction38V5 {
     owner_row: OwnerSettlementAccountProjectionV5,
     evidence: PreparedOwnerFeeEvidenceV5,
 }
@@ -664,7 +678,7 @@ impl PreparedOwnerFeeAction38V5 {
 /// row, Position, pot, Replay, and counted-root successors; it cannot be
 /// constructed from a caller balance summary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreparedOwnerSettlementAction38V5 {
+pub(crate) struct PreparedOwnerSettlementAction38V5 {
     fee: PreparedOwnerFeeAction38V5,
     realization: OwnerCashRealizationPlanV5,
     transition_evidence_id: Id32,
@@ -674,7 +688,7 @@ pub struct PreparedOwnerSettlementAction38V5 {
 
 /// Exact fee-bearing terminal receipt plus present-funded native-rent plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreparedOwnerFeeFinalizationV5 {
+pub(crate) struct PreparedOwnerFeeFinalizationV5 {
     terminal: OwnerFeeFinalizationV4AccountV1,
     rent: OwnerFeeRentTransitionPlanV3,
 }
@@ -823,7 +837,7 @@ impl PreparedOwnerFeeSnapshotV5 {
     }
 
     /// Exact selected composite-fee semantic record.
-    pub const fn selected(&self) -> SelectedCompositeFeeV1 {
+    pub const fn selected(&self) -> SelectedCompositeFeeV2 {
         self.selected
     }
 
@@ -895,7 +909,7 @@ fn require_snapshot_state(
     require(account.data_len() == exact_len, ClutchError::WrongDataLength)
 }
 
-fn require_distinct_keys(keys: &[[u8; 32]; 7]) -> Outcome<()> {
+fn require_distinct_keys(keys: &[[u8; 32]; 9]) -> Outcome<()> {
     let mut left = 0usize;
     while left < keys.len() {
         let mut right = left + 1;
@@ -933,6 +947,8 @@ fn require_distinct_frame(
         frame.payer_allocation.key.to_bytes(),
         frame.batch_policy.key.to_bytes(),
         frame.revenue_policy_record.key.to_bytes(),
+        frame.realm.key.to_bytes(),
+        frame.revenue_policy_preimage.key.to_bytes(),
     ])
 }
 
@@ -968,10 +984,35 @@ fn prepare_no_fee_owner_v5(
 }
 
 fn require_selected_fee_binding_v5(
-    selected: &SelectedCompositeFeeV1,
-    revenue_record: &RevenuePolicyRecordV1,
+    selected: &SelectedCompositeFeeV2,
+    revenue_record: AuthenticatedRevenuePolicyRecordV2,
+    current: CurrentMarketAuthorityV4,
     expected: ExpectedSelectedFeeBindingV5,
 ) -> Outcome<()> {
+    require_exact_current_revenue_join_v5(
+        [
+            expected.realm,
+            current.revenue_policy_record_account(),
+            current.revenue_policy_record_v2_id(),
+            current.revenue_policy_v2_digest(),
+            current.treasury_owner(),
+            current.treasury_position_derivation_policy_v2_id(),
+            current.treasury_position_account(),
+        ],
+        [
+            Id32::from_bytes(revenue_record.realm().bytes()),
+            id(&revenue_record.record_account()),
+            Id32::from_bytes(revenue_record.record_semantic_id().bytes()),
+            Id32::from_bytes(revenue_record.policy_digest().bytes()),
+            Id32::from_bytes(revenue_record.treasury_owner().bytes()),
+            Id32::from_bytes(
+                revenue_record
+                    .treasury_position_derivation_policy_id()
+                    .bytes(),
+            ),
+            Id32::from_bytes(selected.treasury_position().0),
+        ],
+    )?;
     require(
         selected.fee_record().0 == expected.fee_record.bytes()
             && selected.realm().0 == expected.realm.bytes()
@@ -982,11 +1023,18 @@ fn require_selected_fee_binding_v5(
             && selected.revenue_policy().0 == expected.revenue_policy.bytes()
             && selected.price_scale() == expected.price_scale
             && selected.outcome_count() == expected.outcome_count
-            && revenue_record.realm.bytes() == expected.realm.bytes()
-            && revenue_record.policy_digest.bytes() == expected.revenue_policy.bytes()
-            && revenue_record.treasury.bytes() == selected.treasury_owner().0,
+            && revenue_record.policy_digest().bytes() == expected.revenue_policy.bytes()
+            && revenue_record.treasury_owner().bytes() == selected.treasury_owner().0
+            && selected.revenue_policy().0 == current.revenue_policy_v2_digest().bytes(),
         ClutchError::MismatchedState,
     )
+}
+
+fn require_exact_current_revenue_join_v5(
+    canonical: [Id32; 7],
+    observed: [Id32; 7],
+) -> Outcome<()> {
+    require(canonical == observed, ClutchError::MismatchedState)
 }
 
 fn require_owner_row_rent_v5(
@@ -1043,12 +1091,36 @@ fn recipient_close_lamports_v5(
     Ok((rent.refundable_principal, donation))
 }
 
+/// Historical V1 fee-chain binder retained only inside the sealed decoder
+/// below. No current General action can reach this authority.
+fn require_legacy_selected_fee_binding_v5(
+    selected: &SelectedCompositeFeeV1,
+    revenue_record: &RevenuePolicyRecordV1,
+    expected: ExpectedSelectedFeeBindingV5,
+) -> Outcome<()> {
+    require(
+        selected.fee_record().0 == expected.fee_record.bytes()
+            && selected.realm().0 == expected.realm.bytes()
+            && selected.market().0 == expected.market.bytes()
+            && selected.epoch().0 == expected.epoch.bytes()
+            && selected.selected_candidate().0 == expected.candidate.bytes()
+            && selected.batch_policy().0 == expected.batch_policy.bytes()
+            && selected.revenue_policy().0 == expected.revenue_policy.bytes()
+            && selected.price_scale() == expected.price_scale
+            && selected.outcome_count() == expected.outcome_count
+            && revenue_record.realm.bytes() == expected.realm.bytes()
+            && revenue_record.policy_digest.bytes() == expected.revenue_policy.bytes()
+            && revenue_record.treasury.bytes() == selected.treasury_owner().0,
+        ClutchError::MismatchedState,
+    )
+}
+
 /// Authenticate the selected-fee semantic needed before recipient allocation.
 ///
 /// The exact batch and revenue preimages are rejoined to their persisted
 /// program-owned pins and to the selected-fee outer. No caller semantic,
 /// recipient row, or amount enters the returned private capability.
-pub fn authenticate_selected_fee_weight_v2(
+fn authenticate_selected_fee_weight_v2(
     program_id: &Pubkey,
     expected: SelectedFeeWeightExpectationV2,
     frame: SelectedFeeWeightAccountFrameV5<'_, '_>,
@@ -1128,7 +1200,7 @@ pub fn authenticate_selected_fee_weight_v2(
         seeds::general_v2_selected_fee_record_pda(program_id, &expected.candidate.bytes()),
         Some(selected.stored_bump),
     )?;
-    require_selected_fee_binding_v5(
+    require_legacy_selected_fee_binding_v5(
         &selected.semantic,
         &revenue_record,
         ExpectedSelectedFeeBindingV5 {
@@ -1156,7 +1228,7 @@ pub fn authenticate_selected_fee_weight_v2(
 /// This is O(1) only because 0x85/v2 is a fresh immutable program-owned
 /// version whose sole creation contract consumes the complete canonical
 /// `SelectedOwnerFeeBookV1`. Historical 0x85/v1 bytes are never admitted here.
-pub fn prepare_candidate_fee_collection_action39_v5(
+fn prepare_candidate_fee_collection_action39_v5(
     program_id: &Pubkey,
     expected: CandidateFeeCollectionExpectationV5,
     frame: CandidateFeeCollectionAccountFrameV5<'_, '_>,
@@ -1178,7 +1250,7 @@ pub fn prepare_candidate_fee_collection_action39_v5(
 /// exhaustive retained-feed/page traversal without rereading owner fee rows
 /// or accepting a caller-supplied aggregate. It does not create the
 /// SettlementRoot or mutate any root counter.
-pub fn compose_candidate_fee_collection_action39_v5(
+fn compose_candidate_fee_collection_action39_v5(
     program_id: &Pubkey,
     expected: CandidateFeeCollectionExpectationV5,
     frame: CandidateFeeCollectionAccountFrameV5<'_, '_>,
@@ -1281,7 +1353,7 @@ fn authenticate_candidate_fee_collection_v5(
         id(frame.selected_fee_record.key) == expected.fee_record,
         ClutchError::MismatchedState,
     )?;
-    require_selected_fee_binding_v5(
+    require_legacy_selected_fee_binding_v5(
         &selected.semantic,
         &revenue_record,
         ExpectedSelectedFeeBindingV5 {
@@ -1351,7 +1423,7 @@ fn authenticate_candidate_fee_collection_v5(
 /// fee value: its exact economic allocation remains ordinary Position-ledger
 /// accounting. Consequently only persisted native rent principal is refunded;
 /// every other lamport is a donation to the authenticated MarketBinding sink.
-pub fn prepare_candidate_fee_collection_terminal_close_v5(
+fn prepare_candidate_fee_collection_terminal_close_v5(
     program_id: &Pubkey,
     expected: CandidateFeeCollectionExpectationV5,
     authority: CandidateFeeCollectionClosureExpectationV5,
@@ -1454,10 +1526,16 @@ fn authenticate_owner_fee_snapshot_v5(
     program_id: &Pubkey,
     context: RootDerivedOwnerFeeContextV5<'_>,
     frame: OwnerFeeSnapshotAccountFrameV5<'_, '_>,
-    revenue_policy: &RevenuePolicyV1,
     usage: OwnerFeeSnapshotUseV5,
 ) -> Outcome<PreparedOwnerFeeSnapshotV5> {
     require_distinct_frame(context.root_account, &frame)?;
+    require(
+        !frame.revenue_policy_preimage.is_writable
+            && !frame.revenue_policy_preimage.is_signer
+            && !frame.revenue_policy_preimage.executable
+            && frame.revenue_policy_preimage.data_len() == REVENUE_POLICY_V2_BYTES,
+        ClutchError::MismatchedState,
+    )?;
     require(!frame.owner_row.executable, ClutchError::ExecutableAccount)?;
     require(frame.owner_row.is_writable, ClutchError::NotWritable)?;
     require(
@@ -1468,14 +1546,9 @@ fn authenticate_owner_fee_snapshot_v5(
     require_read_only_program_state(
         program_id,
         frame.selected_fee_record,
-        SELECTED_FEE_RECORD_ACCOUNT_BYTES,
+        SELECTED_FEE_RECORD_ACCOUNT_BYTES_V2,
     )?;
     require_read_only_program_state(program_id, frame.batch_policy, BATCH_POLICY_BYTES)?;
-    require_read_only_program_state(
-        program_id,
-        frame.revenue_policy_record,
-        REVENUE_POLICY_RECORD_BYTES,
-    )?;
     let snapshot_writable = usage == OwnerFeeSnapshotUseV5::Finalize;
     require_snapshot_state(
         program_id,
@@ -1504,21 +1577,29 @@ fn authenticate_owner_fee_snapshot_v5(
         None,
     )?;
 
-    let revenue_digest = revenue_policy_digest(revenue_policy)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let revenue_record = RevenuePolicyRecordV1::decode(&borrow_data(frame.revenue_policy_record)?)?;
-    expect_pda(
-        frame.revenue_policy_record.key,
-        seeds::revenue_policy_pda(program_id, &revenue_record.realm.bytes()),
-        Some(revenue_record.stored_bump),
+    let revenue_preimage = borrow_data(frame.revenue_policy_preimage)?;
+    let revenue_record = authenticate_revenue_policy_record_v2(
+        program_id,
+        frame.realm,
+        frame.revenue_policy_record,
+        &revenue_preimage,
     )?;
+    drop(revenue_preimage);
+    let revenue_policy: RevenuePolicyV2 = revenue_record.policy();
+    let revenue_digest = revenue_record.policy_digest();
 
-    let selected_account = SelectedFeeRecordV1AccountV1::decode(
+    let selected_account = SelectedFeeRecordV2AccountV1::decode(
         &borrow_data(frame.selected_fee_record)?,
         &batch,
-        revenue_policy,
+        &revenue_policy,
     )?;
     let selected = selected_account.semantic;
+    require_fee_account_rent_v5(
+        selected_account.rent,
+        id(frame.selected_fee_record.key),
+        context.root_account,
+        frame.selected_fee_record.lamports(),
+    )?;
     expect_pda(
         frame.selected_fee_record.key,
         seeds::general_v2_selected_fee_record_pda(
@@ -1538,13 +1619,14 @@ fn authenticate_owner_fee_snapshot_v5(
             && context.root.fee_record().bytes() == frame.selected_fee_record.key.to_bytes()
             && selected.batch_policy() == batch_id
             && selected.batch_policy().0 == context.root.batch_policy_id().bytes()
-            && selected.revenue_policy() == revenue_digest
+            && selected.revenue_policy().0 == revenue_digest.bytes()
             && cash_expectation.fee_record == frame.selected_fee_record.key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
     require_selected_fee_binding_v5(
         &selected,
-        &revenue_record,
+        revenue_record,
+        context.current_market_authority,
         ExpectedSelectedFeeBindingV5 {
             fee_record: id(frame.selected_fee_record.key),
             realm: context.realm,
@@ -1552,7 +1634,7 @@ fn authenticate_owner_fee_snapshot_v5(
             epoch: context.root.epoch(),
             candidate: context.root.settlement_candidate_id(),
             batch_policy: context.root.batch_policy_id(),
-            revenue_policy: Id32::from_bytes(revenue_digest.0),
+            revenue_policy: Id32::from_bytes(revenue_digest.bytes()),
             price_scale: cash_expectation.price_scale,
             outcome_count: context.root.outcome_count(),
         },
@@ -1656,15 +1738,11 @@ fn prepare_root_owner_fee_evidence_v5(
     usage: OwnerFeeSnapshotUseV5,
 ) -> Outcome<PreparedOwnerFeeEvidenceV5> {
     match accounts {
-        OwnerFeeAccountInputV5::CandidateFee {
-            frame,
-            revenue_policy,
-        } => Ok(PreparedOwnerFeeEvidenceV5::CandidateFee(
+        OwnerFeeAccountInputV5::CandidateFee { frame } => Ok(PreparedOwnerFeeEvidenceV5::CandidateFee(
             authenticate_owner_fee_snapshot_v5(
                 program_id,
                 context,
                 frame,
-                revenue_policy,
                 usage,
             )?,
         )),
@@ -1679,9 +1757,10 @@ fn prepare_root_owner_fee_evidence_v5(
 /// its exact root prestate.  This function derives the V5 row PDA itself and
 /// returns no SettlementRoot counter successor; the General action-24
 /// composer remains the sole owner of that atomic write.
-pub fn prepare_owner_fee_action24_v5(
+pub(crate) fn prepare_owner_fee_action24_v5(
     program_id: &Pubkey,
     authenticated_root: &AuthenticatedGeneralSettlementRootV1,
+    current_market_authority: CurrentMarketAuthorityV4,
     entitlement: &CandidateEntitlementProjectionV5<'_>,
     owner: Id32,
     owner_row: &AccountInfo<'_>,
@@ -1723,6 +1802,7 @@ pub fn prepare_owner_fee_action24_v5(
         Id32::from_bytes(entitlement.position_market_binding().realm_id.bytes()),
         id(owner_row.key),
         basis,
+        current_market_authority,
     )?;
     let evidence = prepare_root_owner_fee_evidence_v5(
         program_id,
@@ -1745,9 +1825,10 @@ pub fn prepare_owner_fee_action24_v5(
 /// latch, but it does not inspect or mutate Position, Replay, cash pot, fee
 /// finalization, or root counters.  The General composer must atomically join
 /// those semantic owners before any write or close.
-pub fn prepare_owner_fee_action38_v5(
+pub(crate) fn prepare_owner_fee_action38_v5(
     program_id: &Pubkey,
     authenticated_root: &AuthenticatedGeneralSettlementRootV1,
+    current_market_authority: CurrentMarketAuthorityV4,
     traversal: &dyn SettlementTraversalAccessV5,
     owner_row: &AccountInfo<'_>,
     owner_row_rent_minimum: u64,
@@ -1831,6 +1912,7 @@ pub fn prepare_owner_fee_action38_v5(
         Id32::from_bytes(traversal.projection().position_market_binding().realm_id.bytes()),
         id(owner_row.key),
         basis,
+        current_market_authority,
     )?;
     let evidence = prepare_root_owner_fee_evidence_v5(
         program_id,
@@ -1985,9 +2067,10 @@ fn prepare_owner_fee_finalization_v5(
 /// branch. It creates no zero-fee carry or payer identity and performs no
 /// write, close, transfer, or SettlementRoot counter mutation on its own.
 #[allow(clippy::too_many_arguments)]
-pub fn compose_owner_settlement_action38_v5(
+pub(crate) fn compose_owner_settlement_action38_v5(
     program_id: &Pubkey,
     authenticated_root: &AuthenticatedGeneralSettlementRootV1,
+    current_market_authority: CurrentMarketAuthorityV4,
     traversal: &dyn SettlementTraversalAccessV5,
     owner_row: &AccountInfo<'_>,
     owner_row_rent_minimum: u64,
@@ -2000,6 +2083,7 @@ pub fn compose_owner_settlement_action38_v5(
     let fee = prepare_owner_fee_action38_v5(
         program_id,
         authenticated_root,
+        current_market_authority,
         traversal,
         owner_row,
         owner_row_rent_minimum,
@@ -2067,175 +2151,38 @@ pub fn compose_owner_settlement_action38_v5(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clutch_batch::relation_v1::{
-        AllocationPolicyV1, AonPolicyV1, FeeBaseV1, FrozenPolicyV1,
-        PairingWitnessPolicyV1, PortfolioLotPolicyV1, ResidualSettlementV1,
-        RoundingBoundaryV1, ScorePolicyV1, SelfCrossPolicyV1, TransferPhaseV1,
-    };
-    use clutch_batch::DustPolicy;
-    use clutch_batch_policy_identity::revenue_policy_v1::{
-        LamportSinkV1, RevenueResidualV1, StandingMakerV1, REVENUE_POLICY_SCHEMA_V1,
-    };
-    use clutch_solana_layout::Hash32;
 
-    fn fee_id(byte: u8) -> FeeId {
-        Identity32V1([byte; 32])
-    }
-
-    fn rated_policy() -> FrozenPolicyV1 {
-        FrozenPolicyV1 {
-            allocation: AllocationPolicyV1::PricePriorityMarginalProRata,
-            self_cross: SelfCrossPolicyV1::RefuseOverlap,
-            aon: AonPolicyV1::RefuseAdmission,
-            rounding: RoundingBoundaryV1::TerminalOwnerFloor,
-            residual_settlement: ResidualSettlementV1::UniqueSliceReceipts,
-            transfer_phase: TransferPhaseV1::ActiveOrResolved,
-            portfolio_lots: PortfolioLotPolicyV1::StrictWholeOrder,
-            pairing_witness: PairingWitnessPolicyV1::ExplicitSlices,
-            dust: DustPolicy::AssignCanonical,
-            score: ScorePolicyV1::LexicographicDispersionV1,
-            fee_base: FeeBaseV1::CompositeDispersionFloor {
-                dispersion_bps: 25,
-                floor_range_bps: 10,
-            },
+    #[test]
+    fn every_current_revenue_authority_coordinate_is_exact() {
+        let canonical = [
+            Id32::from_bytes([1; 32]),
+            Id32::from_bytes([2; 32]),
+            Id32::from_bytes([3; 32]),
+            Id32::from_bytes([4; 32]),
+            Id32::from_bytes([5; 32]),
+            Id32::from_bytes([6; 32]),
+            Id32::from_bytes([7; 32]),
+        ];
+        assert_eq!(require_exact_current_revenue_join_v5(canonical, canonical), Ok(()));
+        let mut substituted = canonical;
+        let mut index = 0usize;
+        while index < substituted.len() {
+            substituted[index] = Id32::from_bytes([99; 32]);
+            assert_eq!(
+                require_exact_current_revenue_join_v5(canonical, substituted),
+                Err(Refusal::Adapter(ClutchError::MismatchedState))
+            );
+            substituted[index] = canonical[index];
+            index += 1;
         }
-    }
-
-    fn revenue_policy() -> RevenuePolicyV1 {
-        RevenuePolicyV1 {
-            version: u32::from(REVENUE_POLICY_SCHEMA_V1),
-            treasury: [9; 32],
-            maker_rebate_num: 60,
-            executor_num: 0,
-            treasury_num: 40,
-            split_den: 100,
-            residual: RevenueResidualV1::Treasury,
-            standing_maker: StandingMakerV1::AllRestingMakers,
-            lamport_sink: LamportSinkV1::None,
-        }
-    }
-
-    fn selected_and_binding() -> (
-        SelectedCompositeFeeV1,
-        RevenuePolicyRecordV1,
-        ExpectedSelectedFeeBindingV5,
-    ) {
-        let batch = rated_policy();
-        let revenue = revenue_policy();
-        let selected = SelectedCompositeFeeV1::select(
-            fee_id(1),
-            fee_id(2),
-            fee_id(3),
-            fee_id(4),
-            fee_id(5),
-            fee_id(6),
-            10_000,
-            2,
-            &batch,
-            &revenue,
-        )
-        .unwrap();
-        let revenue_id = revenue_policy_digest(&revenue).unwrap();
-        let record = RevenuePolicyRecordV1 {
-            realm: Hash32::from_bytes([2; 32]),
-            policy_digest: Hash32::from_bytes(revenue_id.0),
-            treasury: Hash32::from_bytes([9; 32]),
-            terminal_payer: Hash32::from_bytes([10; 32]),
-            terminal_payer_principal: 1,
-            terminal_donation_floor: 0,
-            terminal_generation: 1,
-            stored_bump: 7,
-            flags: 0,
-        };
-        let expected = ExpectedSelectedFeeBindingV5 {
-            fee_record: Id32::from_bytes([1; 32]),
-            realm: Id32::from_bytes([2; 32]),
-            market: Id32::from_bytes([3; 32]),
-            epoch: Id32::from_bytes([4; 32]),
-            candidate: Id32::from_bytes([5; 32]),
-            batch_policy: Id32::from_bytes(batch_policy_digest(&batch).unwrap().0),
-            revenue_policy: Id32::from_bytes(revenue_id.0),
-            price_scale: 10_000,
-            outcome_count: 2,
-        };
-        (selected, record, expected)
-    }
-
-    #[test]
-    fn exact_selected_policy_chain_is_accepted() {
-        let (selected, record, expected) = selected_and_binding();
-        assert_eq!(
-            require_selected_fee_binding_v5(&selected, &record, expected),
-            Ok(())
-        );
-    }
-
-    #[test]
-    fn fee_weight_expectation_refuses_zero_or_inactive_width_facts() {
-        let live = Id32::from_bytes([1; 32]);
-        assert!(SelectedFeeWeightExpectationV2::new(
-            live, live, live, live, live, 10_000, 16,
-        ).is_ok());
-        assert_eq!(
-            SelectedFeeWeightExpectationV2::new(
-                Id32::ZERO, live, live, live, live, 10_000, 16,
-            ),
-            Err(Refusal::Adapter(ClutchError::MismatchedState))
-        );
-        assert_eq!(
-            SelectedFeeWeightExpectationV2::new(
-                live, live, live, live, live, 10_000, 1,
-            ),
-            Err(Refusal::Adapter(ClutchError::MismatchedState))
-        );
-        assert_eq!(
-            SelectedFeeWeightExpectationV2::new(
-                live, live, live, live, live, 0, 16,
-            ),
-            Err(Refusal::Adapter(ClutchError::MismatchedState))
-        );
-    }
-
-    #[test]
-    fn fee_weight_account_roles_refuse_every_alias() {
-        let distinct = [[1; 32], [2; 32], [3; 32], [4; 32]];
-        assert_eq!(require_distinct_fee_weight_keys(&distinct), Ok(()));
-        let mut alias = distinct;
-        alias[3] = alias[1];
-        assert_eq!(
-            require_distinct_fee_weight_keys(&alias),
-            Err(Refusal::Adapter(ClutchError::AccountAlias))
-        );
-    }
-
-    #[test]
-    fn substituted_batch_realm_or_treasury_is_refused() {
-        let (selected, record, expected) = selected_and_binding();
-        let mut wrong_batch = expected;
-        wrong_batch.batch_policy = Id32::from_bytes([21; 32]);
-        assert_eq!(
-            require_selected_fee_binding_v5(&selected, &record, wrong_batch),
-            Err(Refusal::Adapter(ClutchError::MismatchedState))
-        );
-        let mut wrong_realm = expected;
-        wrong_realm.realm = Id32::from_bytes([22; 32]);
-        assert_eq!(
-            require_selected_fee_binding_v5(&selected, &record, wrong_realm),
-            Err(Refusal::Adapter(ClutchError::MismatchedState))
-        );
-        let hostile_record = RevenuePolicyRecordV1 {
-            treasury: Hash32::from_bytes([23; 32]),
-            ..record
-        };
-        assert_eq!(
-            require_selected_fee_binding_v5(&selected, &hostile_record, expected),
-            Err(Refusal::Adapter(ClutchError::MismatchedState))
-        );
     }
 
     #[test]
     fn fee_snapshot_roles_cannot_alias_root_row_or_policy() {
-        let distinct = [[1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32], [7; 32]];
+        let distinct = [
+            [1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32], [7; 32],
+            [8; 32], [9; 32],
+        ];
         assert_eq!(require_distinct_keys(&distinct), Ok(()));
         let mut root_alias = distinct;
         root_alias[1] = root_alias[0];
@@ -2244,7 +2191,7 @@ mod tests {
             Err(Refusal::Adapter(ClutchError::AccountAlias))
         );
         let mut policy_alias = distinct;
-        policy_alias[6] = policy_alias[3];
+        policy_alias[8] = policy_alias[3];
         assert_eq!(
             require_distinct_keys(&policy_alias),
             Err(Refusal::Adapter(ClutchError::AccountAlias))
@@ -2276,42 +2223,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn candidate_certificate_close_never_turns_surplus_into_refund() {
-        let rent = DeletableRentOwnerV1 {
-            payer: Id32::from_bytes([41; 32]),
-            refundable_principal: 1_000,
-            donation_floor: 40,
-        };
-        assert_eq!(recipient_close_lamports_v5(rent, 1_075), Ok((1_000, 75)));
-        assert_eq!(recipient_close_lamports_v5(rent, 1_039), Err(
-            Refusal::Adapter(ClutchError::MismatchedState)
-        ));
-        assert_eq!(recipient_close_lamports_v5(rent, 999), Err(
-            Refusal::Adapter(ClutchError::Arithmetic)
-        ));
-    }
-
-    #[test]
-    fn candidate_certificate_close_authority_ids_are_disjoint() {
-        let outcome = FeeTerminalOutcomeV1::Settled;
-        assert!(CandidateFeeCollectionClosureExpectationV5::new(
-            Id32::from_bytes([51; 32]),
-            Id32::from_bytes([52; 32]),
-            Id32::from_bytes([53; 32]),
-            Id32::from_bytes([54; 32]),
-            outcome,
-        )
-        .is_ok());
-        assert_eq!(
-            CandidateFeeCollectionClosureExpectationV5::new(
-                Id32::from_bytes([51; 32]),
-                Id32::from_bytes([52; 32]),
-                Id32::from_bytes([53; 32]),
-                Id32::from_bytes([51; 32]),
-                outcome,
-            ),
-            Err(Refusal::Adapter(ClutchError::MismatchedState))
-        );
-    }
 }

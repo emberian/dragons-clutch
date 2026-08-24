@@ -35,8 +35,6 @@ use clutch_general_v2_runtime::{
     bind_settlement_root_traversal_v5, derive_settlement_traversal_projection_v5,
     project_owner_blind_book_stream_costed_v1, read_authenticated_feed_fill_v5,
     read_authenticated_feed_slice_v5,
-    AuthenticatedSettlementPositionBookV3, CompositeFeeWeightRowV2,
-    CompositeFeeWeightTranscriptV2, DerivedPortfolioFeeWeightStreamV2,
     GeneralOrderPageInputV5, SettlementAdapterErrorV1, SettlementOrderBookBindingV5,
     SettlementTraversalAccessV5, SettlementTraversalProjectionV5, StreamedOwnerBlindOrderV5,
 };
@@ -62,7 +60,6 @@ use super::general_v2_settlement_root::{
     authenticate_readonly_general_settlement_root_v1,
     authenticate_writable_general_settlement_root_v1, AuthenticatedGeneralSettlementRootV1,
 };
-use super::general_v2_fee_v5::AuthenticatedSelectedFeeWeightV2;
 use super::product_artifact::authenticate_product_artifact_v1;
 
 /// Named immutable account frame shared by settlement-root creation and every
@@ -107,70 +104,6 @@ pub struct AuthenticatedSettlementTraversalV5<'info> {
     frame_accounts: [Id32; 11],
     page_semantic_ids: [Id32; MAX_ORDER_PAGES],
     projection: SettlementTraversalProjectionV5,
-}
-
-/// Private capability proving one complete selected-execution fee-weight
-/// stream from the hostile-authenticated retained Feed, page set, MarketBinding
-/// V2, and ordinary Position V3 set.
-///
-/// The exact `u128` row numerator remains owned by the existing composite-fee
-/// quote. This wrapper adds only account provenance; it does not authorize a
-/// fee debit, recipient credit, or persisted allocation by itself. It retains
-/// borrowed authorities rather than copying a maximum-width row book.
-#[derive(Clone, Copy, Debug)]
-pub struct AuthenticatedPortfolioFeeWeightStreamV2<'a> {
-    derived: DerivedPortfolioFeeWeightStreamV2<'a>,
-    selected_fee_account: Id32,
-    selected_fee_data_id: Id32,
-}
-
-const _: () = assert!(
-    core::mem::size_of::<AuthenticatedPortfolioFeeWeightStreamV2<'static>>() <= 512
-);
-
-impl AuthenticatedPortfolioFeeWeightStreamV2<'_> {
-    /// Compact commitment to the complete Position-sorted, zero-omitting stream.
-    pub const fn transcript(&self) -> CompositeFeeWeightTranscriptV2 {
-        self.derived.transcript()
-    }
-
-    /// Exact immutable selected-fee PDA that owns rates and denominator.
-    pub const fn selected_fee_account(&self) -> Id32 { self.selected_fee_account }
-
-    /// Canonical full-data commitment of that selected-fee outer.
-    pub const fn selected_fee_data_id(&self) -> Id32 { self.selected_fee_data_id }
-
-    /// Reproduce one canonical row without accepting a caller weight or owner.
-    pub fn row(&self, index: u8) -> Outcome<Option<CompositeFeeWeightRowV2>> {
-        self.derived
-            .row(index)
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
-    }
-
-    /// Reproduce one row's final Hamilton atom allocation.
-    ///
-    /// This remains non-value-moving until an action-specific composer binds
-    /// `total_atoms` to the authenticated fee recipient pool.
-    pub fn hamilton_atoms(&self, index: u8, total_atoms: u64) -> Outcome<Option<u64>> {
-        self.derived
-            .hamilton_atoms(index, total_atoms)
-            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))
-    }
-
-    /// Exact selected settlement candidate.
-    pub const fn settlement_candidate(&self) -> Id32 {
-        self.derived.settlement_candidate()
-    }
-
-    /// Complete immutable owner/order-set digest.
-    pub const fn owner_order_set_digest(&self) -> Id32 {
-        self.derived.owner_order_set_digest()
-    }
-
-    /// Authenticated MarketBinding V2 batch-policy identity.
-    pub const fn batch_policy_id(&self) -> Id32 {
-        self.derived.batch_policy_id()
-    }
 }
 
 impl AuthenticatedSettlementTraversalV5<'_> {
@@ -225,26 +158,6 @@ impl AuthenticatedSettlementTraversalV5<'_> {
             page_semantic_id,
         })
     }
-}
-
-/// Certify exact selected-execution fee weights from one already-authenticated
-/// V5 traversal and its complete ordinary Position V3 book.
-///
-/// Rates and the common denominator are rebound through the selected fee
-/// semantic's batch-policy identity. The authenticated MarketBinding V2 is
-/// the sole source of that policy identity; the caller supplies no weight,
-/// consideration, posted-size, owner, Position, or row count.
-pub fn authenticate_portfolio_fee_weight_stream_v2<'a, 'info>(
-    traversal: &'a AuthenticatedSettlementTraversalV5<'info>,
-    positions: &'a AuthenticatedSettlementPositionBookV3,
-    selected_fee: &'a AuthenticatedSelectedFeeWeightV2,
-) -> Outcome<AuthenticatedPortfolioFeeWeightStreamV2<'a>> {
-    // The predecessor capability authenticates the decode-only V1 selected
-    // fee outer. It cannot be promoted into the current V2 weight stream.
-    // General action 39 must replace this bridge atomically with its hostile
-    // RevenuePolicyV2/SelectedCompositeFeeV2 authenticator and V3 writer.
-    let _ = (traversal, positions, selected_fee);
-    Err(Refusal::Adapter(ClutchError::MismatchedState))
 }
 
 impl SettlementTraversalAccessV5 for AuthenticatedSettlementTraversalV5<'_> {

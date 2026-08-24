@@ -11,12 +11,10 @@ use core::cell::Ref;
 use clutch_batch::portfolio_execution_v2::{
     AuthenticatedPortfolioReceiptSiblingSetV2, PORTFOLIO_PAIR_MAX_RECEIPTS_V2,
 };
-use clutch_batch_policy_identity::revenue_policy_v1::{
-    decode_revenue_policy, RevenuePolicyV1, REVENUE_POLICY_BYTES,
-};
 use clutch_general_v2_contract as contract;
 use clutch_general_v2_contract::{
-    FreezeEntitlementPayloadV1, Id32, OwnerSettlementSeedTupleV5, SettlementRootChildStateV1,
+    CurrentMarketAuthorityV4, FreezeEntitlementPayloadV1, Id32, OwnerSettlementSeedTupleV5,
+    SettlementRootChildStateV1,
 };
 use clutch_general_v2_runtime::{
     derive_candidate_entitlement_projection_v5, prepare_materialize_entitlement_slice_v5,
@@ -368,6 +366,7 @@ fn prepare_owner_fee_evidence(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     root: &super::general_v2_settlement_root::AuthenticatedGeneralSettlementRootV1,
+    current_market_authority: CurrentMarketAuthorityV4,
     entitlement: &CandidateEntitlementProjectionV5<'_>,
     order_indices: [u8; 2],
     endpoint_count: usize,
@@ -391,6 +390,7 @@ fn prepare_owner_fee_evidence(
                 out[ordinal] = Some(prepare_owner_fee_action24_v5(
                     program_id,
                     root,
+                    current_market_authority,
                     entitlement,
                     Id32::new(membership.owner)?,
                     &accounts[endpoint_base(ordinal)?],
@@ -409,16 +409,6 @@ fn prepare_owner_fee_evidence(
         .checked_add(ACTION24_FEE_COMMON_ACCOUNTS)
         .ok_or(Refusal::Adapter(ClutchError::Arithmetic))?;
     require(common_end <= accounts.len(), ClutchError::WrongAccountCount)?;
-    let revenue_preimage = &accounts[fee_at + 3];
-    require(
-        !revenue_preimage.is_writable
-            && !revenue_preimage.is_signer
-            && !revenue_preimage.executable
-            && revenue_preimage.data_len() == REVENUE_POLICY_BYTES,
-        ClutchError::MismatchedState,
-    )?;
-    let revenue: RevenuePolicyV1 = decode_revenue_policy(&borrow_data(revenue_preimage)?)
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
     let mut owner_fee_at = common_end;
     let mut ordinal = 0usize;
     while ordinal < endpoint_count {
@@ -437,6 +427,7 @@ fn prepare_owner_fee_evidence(
             out[ordinal] = Some(prepare_owner_fee_action24_v5(
                 program_id,
                 root,
+                current_market_authority,
                 entitlement,
                 Id32::new(membership.owner)?,
                 &accounts[endpoint_base(ordinal)?],
@@ -448,8 +439,9 @@ fn prepare_owner_fee_evidence(
                         payer_allocation: &accounts[owner_fee_at + 1],
                         batch_policy: &accounts[fee_at + 1],
                         revenue_policy_record: &accounts[fee_at + 2],
+                        realm: &accounts[IX_REALM],
+                        revenue_policy_preimage: &accounts[fee_at + 3],
                     },
-                    revenue_policy: &revenue,
                 },
             )?);
             owner_fee_at = owner_fee_end;
@@ -566,6 +558,7 @@ fn prepare_generic_plan(
         program_id,
         accounts,
         root,
+        root_traversal.traversal().market().authority(),
         &entitlement,
         order_indices,
         endpoint_count,
@@ -712,6 +705,7 @@ fn prepare_portfolio_plan(
         program_id,
         accounts,
         root,
+        root_traversal.traversal().market().authority(),
         &entitlement,
         order_indices,
         2,

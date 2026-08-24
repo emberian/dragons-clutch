@@ -9,9 +9,6 @@
 use core::cell::{Ref, RefMut};
 use std::boxed::Box;
 
-use clutch_batch_policy_identity::revenue_policy_v1::{
-    decode_revenue_policy, RevenuePolicyV1, REVENUE_POLICY_BYTES,
-};
 use clutch_general_v2_contract as contract;
 use clutch_general_v2_contract::{
     decode_owner_settlement_payload_v1, Id32, OwnerSettlementPayloadV1,
@@ -464,24 +461,8 @@ pub fn process<'info>(
         ClutchError::MismatchedState,
     )?;
 
-    let revenue: Option<RevenuePolicyV1> = if fee_bearing {
-        let preimage = &accounts[suffix_at + REL_REVENUE_PREIMAGE];
-        require(
-            !preimage.executable
-                && !preimage.is_writable
-                && !preimage.is_signer
-                && preimage.data_len() == REVENUE_POLICY_BYTES,
-            ClutchError::MismatchedState,
-        )?;
-        Some(
-            decode_revenue_policy(&borrow_data(preimage)?)
-                .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?,
-        )
-    } else {
-        None
-    };
-    let fee_accounts = match revenue.as_ref() {
-        Some(policy) => OwnerFeeAccountInputV5::CandidateFee {
+    let fee_accounts = if fee_bearing {
+        OwnerFeeAccountInputV5::CandidateFee {
             frame: OwnerFeeSnapshotAccountFrameV5 {
                 owner_row: owner_row_account,
                 selected_fee_record: &accounts[suffix_at + REL_SELECTED_FEE],
@@ -489,10 +470,12 @@ pub fn process<'info>(
                 payer_allocation: &accounts[suffix_at + REL_PAYER_ALLOCATION],
                 batch_policy: &accounts[suffix_at + REL_BATCH_POLICY],
                 revenue_policy_record: &accounts[suffix_at + REL_REVENUE_RECORD],
+                realm: &accounts[IX_REALM],
+                revenue_policy_preimage: &accounts[suffix_at + REL_REVENUE_PREIMAGE],
             },
-            revenue_policy: policy,
-        },
-        None => OwnerFeeAccountInputV5::NoFeeRecord,
+        }
+    } else {
+        OwnerFeeAccountInputV5::NoFeeRecord
     };
     let fee_rent = if fee_bearing {
         OwnerFeeTerminalRentInputV5::CandidateFee {
@@ -511,6 +494,7 @@ pub fn process<'info>(
     let plan = Box::new(compose_owner_settlement_action38_v5(
         program_id,
         root,
+        traversal.market().authority(),
         traversal.traversal(),
         owner_row_account,
         rent.minimum_balance(contract::OWNER_SETTLEMENT_ACCOUNT_BYTES_V5)?,
