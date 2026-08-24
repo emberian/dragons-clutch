@@ -1395,20 +1395,10 @@ pub struct TreasuryServiceLedger {
 impl TreasuryServiceLedger {
     /// Open the ledger for one treasury Position identity.
     pub fn admit(treasury_position: Id) -> Result<Self, Error> {
-        Self::admit_counted(treasury_position, 0)
-    }
-
-    /// Reconstruct one authenticated live counted ledger from persisted state.
-    ///
-    /// Account ownership, exact bytes, PDA derivation, and lifecycle generation
-    /// remain adapter obligations.  This constructor is the single pure owner
-    /// of the counter state used by those adapters; it never grants account
-    /// mutation authority by itself.
-    pub fn admit_counted(treasury_position: Id, outstanding: u64) -> Result<Self, Error> {
         live_id(treasury_position)?;
         Ok(Self {
             treasury_position,
-            outstanding,
+            outstanding: 0,
             closed: false,
         })
     }

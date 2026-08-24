@@ -273,9 +273,6 @@ pub const SEED_GENERAL_V2_RECIPIENT_ALLOCATION: &[u8] =
 /// Disabled selected-record treasury-ledger seed prefix.
 pub const SEED_GENERAL_V2_TREASURY_LEDGER: &[u8] =
     clutch_general_v2_contract::TREASURY_LEDGER_SEED_DOMAIN_V1;
-/// Revenue-owned Market-scoped treasury service-ledger seed prefix.
-pub const SEED_REVENUE_TREASURY_SERVICE_LEDGER: &[u8] =
-    clutch_general_v2_contract::TREASURY_SERVICE_LEDGER_SEED_DOMAIN_V1;
 /// Disabled buyer-first candidate settlement cash-pot seed prefix.
 pub const SEED_GENERAL_V2_SETTLEMENT_CASH_POT: &[u8] =
     clutch_general_v2_contract::SETTLEMENT_CASH_POT_SEED_DOMAIN_V1;
@@ -667,17 +664,6 @@ pub fn general_v2_market_runtime_pda(
     find(
         program_id,
         &[SEED_GENERAL_V2_MARKET_RUNTIME, market_binding],
-    )
-}
-
-/// Canonical counted close-grief ledger for one immutable MarketBinding V4.
-pub fn revenue_treasury_service_ledger_pda(
-    program_id: &Pubkey,
-    market_binding: &[u8; 32],
-) -> (Pubkey, u8) {
-    find(
-        program_id,
-        &[SEED_REVENUE_TREASURY_SERVICE_LEDGER, market_binding],
     )
 }
 
