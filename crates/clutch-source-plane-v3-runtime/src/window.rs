@@ -608,7 +608,30 @@ pub struct AuthenticatedStatisticResultAbsenceV1 {
     statistic_key_id: ContentId,
     result_account: RuntimeKey,
     lineage_id: ContentId,
+    access: StatisticResultAbsenceAccessV1,
     absence_id: ContentId,
+}
+
+/// Exact privilege accepted while authenticating a never-created result slot.
+///
+/// The absence identity is privilege-independent so the durable action-10 join
+/// remains stable. The retained access prevents a later terminal consumer from
+/// silently treating a read-only lineage receipt as mutable authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StatisticResultAbsenceAccessV1 {
+    /// Ordinary Failure trigger authentication.
+    ExistingReadOnly,
+    /// Same-call terminal tombstone mutation of the never-created lineage.
+    TerminalMutable,
+}
+
+impl StatisticResultAbsenceAccessV1 {
+    const fn lineage_access(self) -> LineageAccessV1 {
+        match self {
+            Self::ExistingReadOnly => LineageAccessV1::ReadOnly,
+            Self::TerminalMutable => LineageAccessV1::Mutable,
+        }
+    }
 }
 
 /// Runtime-authenticated persisted immutable StatisticResult generation.
@@ -705,6 +728,11 @@ impl AuthenticatedStatisticResultAbsenceV1 {
         self.lineage_id
     }
 
+    /// Exact lineage privilege authenticated for this absence.
+    pub const fn access(self) -> StatisticResultAbsenceAccessV1 {
+        self.access
+    }
+
     /// Complete runtime absence receipt.
     pub const fn id(self) -> ContentId {
         self.absence_id
@@ -719,8 +747,48 @@ pub fn authenticate_statistic_result_absence(
     derived_pda: RuntimeDerivedPdaV1,
     authenticated_lineage: AuthenticatedReopenLineageV1,
 ) -> Result<AuthenticatedStatisticResultAbsenceV1> {
+    authenticate_statistic_result_absence_inner(
+        route,
+        key,
+        account,
+        derived_pda,
+        authenticated_lineage,
+        StatisticResultAbsenceAccessV1::ExistingReadOnly,
+    )
+}
+
+/// Authenticate the exact never-created result slot under the sole terminal
+/// privilege union. The lineage is writable only so the same instruction can
+/// persist its permanent no-reopen tombstone; no result account exists to
+/// close on this branch.
+pub fn authenticate_statistic_result_absence_for_terminal(
+    route: AuthenticatedSourceRouteV1,
+    key: &StatisticKeyV3,
+    account: RuntimeAccountViewV1<'_>,
+    derived_pda: RuntimeDerivedPdaV1,
+    authenticated_lineage: AuthenticatedReopenLineageV1,
+) -> Result<AuthenticatedStatisticResultAbsenceV1> {
+    authenticate_statistic_result_absence_inner(
+        route,
+        key,
+        account,
+        derived_pda,
+        authenticated_lineage,
+        StatisticResultAbsenceAccessV1::TerminalMutable,
+    )
+}
+
+fn authenticate_statistic_result_absence_inner(
+    route: AuthenticatedSourceRouteV1,
+    key: &StatisticKeyV3,
+    account: RuntimeAccountViewV1<'_>,
+    derived_pda: RuntimeDerivedPdaV1,
+    authenticated_lineage: AuthenticatedReopenLineageV1,
+    access: StatisticResultAbsenceAccessV1,
+) -> Result<AuthenticatedStatisticResultAbsenceV1> {
     key.validate()?;
-    if authenticated_lineage.access() != LineageAccessV1::ReadOnly {
+    let expected_lineage_access = access.lineage_access();
+    if authenticated_lineage.access() != expected_lineage_access {
         return Err(Error::WrongPrivilege);
     }
     let lineage = authenticated_lineage.lineage();
@@ -764,6 +832,7 @@ pub fn authenticate_statistic_result_absence(
         statistic_key_id: key_id,
         result_account: account.key,
         lineage_id,
+        access,
         absence_id: domain_id(RESULT_ABSENCE_DOMAIN, &bytes),
     })
 }
@@ -2514,6 +2583,22 @@ mod tests {
             coverage_policy_id: COVERAGE_COMPLETE_REQUIRED,
             coverage_policy_parameter: 0,
         }
+    }
+
+    #[test]
+    fn result_absence_privilege_partition_is_exhaustive_and_disjoint() {
+        assert_eq!(
+            StatisticResultAbsenceAccessV1::ExistingReadOnly.lineage_access(),
+            LineageAccessV1::ReadOnly
+        );
+        assert_eq!(
+            StatisticResultAbsenceAccessV1::TerminalMutable.lineage_access(),
+            LineageAccessV1::Mutable
+        );
+        assert_ne!(
+            StatisticResultAbsenceAccessV1::ExistingReadOnly.lineage_access(),
+            StatisticResultAbsenceAccessV1::TerminalMutable.lineage_access()
+        );
     }
 
     fn seal(window: &WindowSpecV3) -> WindowSealV3 {

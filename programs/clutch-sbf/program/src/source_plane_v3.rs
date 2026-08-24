@@ -43,7 +43,8 @@ use clutch_source_plane_v3_runtime::{
     authenticate_source_release_account, authenticate_source_route,
     authenticate_source_policy_handoff_record,
     authenticate_source_work_receipt_account, authenticate_statistic_result,
-    authenticate_statistic_result_absence, authenticate_statistic_result_account,
+    authenticate_statistic_result_absence, authenticate_statistic_result_absence_for_terminal,
+    authenticate_statistic_result_account,
     authenticate_window_seal_account, authenticate_window_work_account, decode_runtime_account,
     join_source_occurrence, join_source_occurrence_window, AdapterInvocationV1,
     AuthenticatedBoundaryV1,
@@ -925,6 +926,31 @@ pub fn authenticate_result_absence(
     .map_err(Into::into)
 }
 
+/// Authenticate an unallocated StatisticResult slot while retaining the sole
+/// mutable lineage authority needed by the same-call Failure terminal path.
+/// The System-owned absent slot itself remains exact read-only and zero-lamport.
+pub(crate) fn authenticate_result_absence_for_terminal_v1(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    result_account: &AccountInfo<'_>,
+    key: &StatisticKeyV3,
+    lineage: AuthenticatedReopenLineageV1,
+) -> SourceV3SbfResult<AuthenticatedStatisticResultAbsenceV1> {
+    let data = result_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let recipe = PdaRecipeV3::statistic_result(key.id()?)?;
+    let derived = derive_runtime_pda(program_id, &recipe)?;
+    authenticate_statistic_result_absence_for_terminal(
+        route,
+        key,
+        runtime_account_view(result_account, &data),
+        derived,
+        lineage,
+    )
+    .map_err(Into::into)
+}
+
 /// Authenticate the exact predictable WindowSeal slot as still unallocated.
 ///
 /// The mature result-absence branch cannot accept a caller-selected evidence
@@ -1300,6 +1326,669 @@ pub fn authenticate_work_receipt(
         SourceWorkReceiptAccessV1::ExistingReadOnly,
     )
     .map_err(Into::into)
+}
+
+/// Private exact interval facts for a mature StatisticResult absence.
+///
+/// There is intentionally no fabricated WindowSeal or StatisticResult body on
+/// this branch. The two authenticated absence receipts retain the predictable
+/// physical slots and the exact never-created lineage instead.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSourceAbsenceContextV1 {
+    occurrence: CompiledSourceOccurrenceV3,
+    window: WindowSpecV3,
+    statistic_key: StatisticKeyV3,
+    summary_program: SummaryProgramV3,
+    window_seal_absence_id: ContentId,
+    result_absence: AuthenticatedStatisticResultAbsenceV1,
+    authentication_id: ContentId,
+}
+
+impl AuthenticatedSourceAbsenceContextV1 {
+    pub(crate) const fn occurrence(self) -> CompiledSourceOccurrenceV3 {
+        self.occurrence
+    }
+
+    pub(crate) const fn window(self) -> WindowSpecV3 {
+        self.window
+    }
+
+    pub(crate) const fn statistic_key(self) -> StatisticKeyV3 {
+        self.statistic_key
+    }
+
+    pub(crate) const fn summary_program(self) -> SummaryProgramV3 {
+        self.summary_program
+    }
+
+    pub(crate) const fn window_seal_absence_id(self) -> ContentId {
+        self.window_seal_absence_id
+    }
+
+    pub(crate) const fn result_absence(self) -> AuthenticatedStatisticResultAbsenceV1 {
+        self.result_absence
+    }
+
+    pub(crate) const fn id(self) -> ContentId {
+        self.authentication_id
+    }
+}
+
+/// Hostile reconstruction of action 10's mature-absence branch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedFailureAbsenceSourceHandoffV1 {
+    record: AuthenticatedSourcePolicyHandoffRecordV1,
+    handoff: FailurePolicySourceHandoffV1,
+    join: SourcePolicyHandoffJoinV1,
+    persisted: clutch_source_plane_v3_runtime::AuthenticatedPersistedSourcePolicyHandoffV1,
+    lineage: AuthenticatedReopenLineageV1,
+    work: AuthenticatedSourceWorkReceiptV1,
+    schedule: SourceWorkScheduleBindingV1,
+    absence: AuthenticatedSourceAbsenceContextV1,
+}
+
+impl AuthenticatedFailureAbsenceSourceHandoffV1 {
+    pub(crate) const fn handoff(self) -> FailurePolicySourceHandoffV1 {
+        self.handoff
+    }
+
+    pub(crate) const fn join(self) -> SourcePolicyHandoffJoinV1 {
+        self.join
+    }
+
+    pub(crate) const fn persisted(
+        self,
+    ) -> clutch_source_plane_v3_runtime::AuthenticatedPersistedSourcePolicyHandoffV1 {
+        self.persisted
+    }
+
+    pub(crate) const fn lineage(self) -> AuthenticatedReopenLineageV1 {
+        self.lineage
+    }
+
+    pub(crate) const fn work(self) -> AuthenticatedSourceWorkReceiptV1 {
+        self.work
+    }
+
+    pub(crate) const fn schedule(self) -> SourceWorkScheduleBindingV1 {
+        self.schedule
+    }
+
+    pub(crate) const fn absence(self) -> AuthenticatedSourceAbsenceContextV1 {
+        self.absence
+    }
+
+    pub(crate) const fn result_or_absence_account(self) -> RuntimeKey {
+        self.join.result_or_absence_account()
+    }
+
+    pub(crate) fn id(self) -> ContentId {
+        ContentId::from_bytes(
+            solana_sha256_hasher::hashv(&[
+                b"dragons-clutch/sbf/reconstructed-failure-absence-source-handoff/v1",
+                &self.record.id().bytes(),
+                &self.handoff.id().bytes(),
+                &self.join.id().bytes(),
+                &self.persisted.id().bytes(),
+                &self.lineage.id().bytes(),
+                &self.lineage.account_data_id().bytes(),
+                &self.work.id().bytes(),
+                &self.schedule.source_work_schedule_id().bytes(),
+                &self.absence.id().bytes(),
+            ])
+            .to_bytes(),
+        )
+    }
+}
+
+/// Hostile reconstruction of action 10's stable evaluator-refusal branch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedFailureResultSourceHandoffV1 {
+    record: AuthenticatedSourcePolicyHandoffRecordV1,
+    handoff: FailurePolicySourceHandoffV1,
+    join: SourcePolicyHandoffJoinV1,
+    persisted: clutch_source_plane_v3_runtime::AuthenticatedPersistedSourcePolicyHandoffV1,
+    lineage: AuthenticatedReopenLineageV1,
+    result: AuthenticatedStatisticResultAccountV1,
+    work: AuthenticatedSourceWorkReceiptV1,
+    schedule: SourceWorkScheduleBindingV1,
+    interval: AuthenticatedSourceIntervalContextV1,
+}
+
+impl AuthenticatedFailureResultSourceHandoffV1 {
+    pub(crate) const fn handoff(self) -> FailurePolicySourceHandoffV1 {
+        self.handoff
+    }
+
+    pub(crate) const fn join(self) -> SourcePolicyHandoffJoinV1 {
+        self.join
+    }
+
+    pub(crate) const fn persisted(
+        self,
+    ) -> clutch_source_plane_v3_runtime::AuthenticatedPersistedSourcePolicyHandoffV1 {
+        self.persisted
+    }
+
+    pub(crate) const fn lineage(self) -> AuthenticatedReopenLineageV1 {
+        self.lineage
+    }
+
+    pub(crate) const fn result(self) -> AuthenticatedStatisticResultAccountV1 {
+        self.result
+    }
+
+    pub(crate) const fn work(self) -> AuthenticatedSourceWorkReceiptV1 {
+        self.work
+    }
+
+    pub(crate) const fn schedule(self) -> SourceWorkScheduleBindingV1 {
+        self.schedule
+    }
+
+    pub(crate) const fn interval(self) -> AuthenticatedSourceIntervalContextV1 {
+        self.interval
+    }
+
+    pub(crate) const fn result_or_absence_account(self) -> RuntimeKey {
+        self.join.result_or_absence_account()
+    }
+
+    pub(crate) fn id(self) -> ContentId {
+        ContentId::from_bytes(
+            solana_sha256_hasher::hashv(&[
+                b"dragons-clutch/sbf/reconstructed-failure-result-source-handoff/v1",
+                &self.record.id().bytes(),
+                &self.handoff.id().bytes(),
+                &self.join.id().bytes(),
+                &self.persisted.id().bytes(),
+                &self.lineage.id().bytes(),
+                &self.lineage.account_data_id().bytes(),
+                &self.result.id().bytes(),
+                &self.work.id().bytes(),
+                &self.schedule.source_work_schedule_id().bytes(),
+                &self.interval.id().bytes(),
+            ])
+            .to_bytes(),
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FailureSourceHandoffAccessV1 {
+    ExistingReadOnly,
+    TerminalMutable,
+}
+
+impl FailureSourceHandoffAccessV1 {
+    const fn byte(self) -> u8 {
+        match self {
+            Self::ExistingReadOnly => 1,
+            Self::TerminalMutable => 2,
+        }
+    }
+}
+
+/// Reconstruct a persisted mature-absence handoff for Failure trigger policy.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_failure_absence_source_handoff_from_accounts_v1(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    schedule: SourceWorkScheduleBindingV1,
+    occurrence_account: &AccountInfo<'_>,
+    window_account: &AccountInfo<'_>,
+    statistic_key_account: &AccountInfo<'_>,
+    summary_program_account: &AccountInfo<'_>,
+    window_seal_account: &AccountInfo<'_>,
+    result_account: &AccountInfo<'_>,
+    result_lineage_account: &AccountInfo<'_>,
+    handoff_account: &AccountInfo<'_>,
+    work_receipt_account: &AccountInfo<'_>,
+) -> SourceV3SbfResult<AuthenticatedFailureAbsenceSourceHandoffV1> {
+    authenticate_failure_absence_source_handoff_from_accounts_inner_v1(
+        program_id,
+        route,
+        schedule,
+        occurrence_account,
+        window_account,
+        statistic_key_account,
+        summary_program_account,
+        window_seal_account,
+        result_account,
+        result_lineage_account,
+        handoff_account,
+        work_receipt_account,
+        FailureSourceHandoffAccessV1::ExistingReadOnly,
+    )
+}
+
+/// Reconstruct a mature absence with the exact mutable lineage used by the
+/// same-call no-reopen tombstone. The absent Result PDA remains read-only.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_failure_absence_source_handoff_for_terminal_v1(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    schedule: SourceWorkScheduleBindingV1,
+    occurrence_account: &AccountInfo<'_>,
+    window_account: &AccountInfo<'_>,
+    statistic_key_account: &AccountInfo<'_>,
+    summary_program_account: &AccountInfo<'_>,
+    window_seal_account: &AccountInfo<'_>,
+    result_account: &AccountInfo<'_>,
+    result_lineage_account: &AccountInfo<'_>,
+    handoff_account: &AccountInfo<'_>,
+    work_receipt_account: &AccountInfo<'_>,
+) -> SourceV3SbfResult<AuthenticatedFailureAbsenceSourceHandoffV1> {
+    authenticate_failure_absence_source_handoff_from_accounts_inner_v1(
+        program_id,
+        route,
+        schedule,
+        occurrence_account,
+        window_account,
+        statistic_key_account,
+        summary_program_account,
+        window_seal_account,
+        result_account,
+        result_lineage_account,
+        handoff_account,
+        work_receipt_account,
+        FailureSourceHandoffAccessV1::TerminalMutable,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_failure_absence_source_handoff_from_accounts_inner_v1(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    schedule: SourceWorkScheduleBindingV1,
+    occurrence_account: &AccountInfo<'_>,
+    window_account: &AccountInfo<'_>,
+    statistic_key_account: &AccountInfo<'_>,
+    summary_program_account: &AccountInfo<'_>,
+    window_seal_account: &AccountInfo<'_>,
+    result_account: &AccountInfo<'_>,
+    result_lineage_account: &AccountInfo<'_>,
+    handoff_account: &AccountInfo<'_>,
+    work_receipt_account: &AccountInfo<'_>,
+    access: FailureSourceHandoffAccessV1,
+) -> SourceV3SbfResult<AuthenticatedFailureAbsenceSourceHandoffV1> {
+    let handoff_data = handoff_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let handoff_body = SourcePolicyHandoffAccountV1::decode(&handoff_data)?;
+    let handoff_recipe =
+        PdaRecipeV3::source_policy_handoff(handoff_body.source_policy_handoff_join_id())?;
+    let handoff_derived = derive_runtime_pda(program_id, &handoff_recipe)?;
+    let record = authenticate_source_policy_handoff_record(
+        route,
+        runtime_account_view(handoff_account, &handoff_data),
+        handoff_derived,
+    )?;
+    if record.occurrence_account() != runtime_key(occurrence_account.key)
+        || record.result_account() != runtime_key(result_account.key)
+        || record.work_receipt_account() != runtime_key(work_receipt_account.key)
+    {
+        return Err(clutch_source_plane_v3_runtime::Error::MismatchedBinding.into());
+    }
+    let window = authenticate_window_spec_input(program_id, route, window_account)?;
+    let summary = authenticate_summary_program_input(program_id, route, summary_program_account)?;
+    let key = authenticate_statistic_key_input(
+        program_id,
+        route,
+        statistic_key_account,
+        window,
+        summary,
+    )?;
+    if record.window_id() != window.window().id()?
+        || record.statistic_key_id() != key.key().id()?
+    {
+        return Err(clutch_source_plane_v3_runtime::Error::MismatchedBinding.into());
+    }
+    let occurrence = authenticate_occurrence(
+        program_id,
+        route,
+        occurrence_account,
+        OccurrenceDispositionV1::ExactExisting,
+        &window.window(),
+        &key.key(),
+    )?;
+    let occurrence_data = occurrence_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let occurrence_body = CompiledSourceOccurrenceV3::decode(&occurrence_data).map_err(|_| {
+        SourceV3SbfError::Runtime(clutch_source_plane_v3_runtime::Error::InvalidCodec)
+    })?;
+    drop(occurrence_data);
+    let clock = AuthenticatedClockBucketV1::from_snapshot(&route.clock_policy(), record.clock())?;
+    let seal_absence_id =
+        authenticate_window_seal_absence(program_id, route, window_seal_account, &window.window())?;
+    let lineage_access = match access {
+        FailureSourceHandoffAccessV1::ExistingReadOnly => LineageAccessV1::ReadOnly,
+        FailureSourceHandoffAccessV1::TerminalMutable => LineageAccessV1::Mutable,
+    };
+    let lineage = authenticate_lineage(program_id, route, result_lineage_account, lineage_access)?;
+    let result_absence = match access {
+        FailureSourceHandoffAccessV1::ExistingReadOnly => {
+            authenticate_result_absence(program_id, route, result_account, &key.key(), lineage)?
+        }
+        FailureSourceHandoffAccessV1::TerminalMutable => {
+            authenticate_result_absence_for_terminal_v1(
+                program_id,
+                route,
+                result_account,
+                &key.key(),
+                lineage,
+            )?
+        }
+    };
+    let handoff = primary_maturity_handoff(
+        route,
+        record.failure_policy_binding_id(),
+        occurrence,
+        clock,
+        &window.window(),
+        result_absence,
+    )?;
+    let work = authenticate_work_receipt(program_id, route, schedule, work_receipt_account)?;
+    let join = SourcePolicyHandoffJoinV1::failure_absence(route, handoff, result_absence, work)?;
+    if join.id() != record.source_policy_handoff_join_id()
+        || handoff.id() != record.handoff_id()
+        || join.generation() != record.generation()
+    {
+        return Err(clutch_source_plane_v3_runtime::Error::MismatchedBinding.into());
+    }
+    let persisted = authenticate_persisted_source_policy_handoff(
+        route,
+        join,
+        runtime_account_view(handoff_account, &handoff_data),
+        handoff_derived,
+        SourcePolicyHandoffAccessV1::ExistingReadOnly,
+    )?;
+    drop(handoff_data);
+    let context_authentication_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            b"dragons-clutch/sbf/authenticated-source-absence-context/v1",
+            &occurrence.occurrence_record_id().bytes(),
+            &occurrence.id().bytes(),
+            &window.id().bytes(),
+            &key.id().bytes(),
+            &summary.id().bytes(),
+            &seal_absence_id.bytes(),
+            &result_absence.id().bytes(),
+            &lineage.id().bytes(),
+            &[access.byte()],
+        ])
+        .to_bytes(),
+    );
+    if context_authentication_id.is_zero() {
+        return Err(clutch_source_plane_v3_runtime::Error::MismatchedBinding.into());
+    }
+    let absence = AuthenticatedSourceAbsenceContextV1 {
+        occurrence: occurrence_body,
+        window: window.window(),
+        statistic_key: key.key(),
+        summary_program: summary.summary(),
+        window_seal_absence_id: seal_absence_id,
+        result_absence,
+        authentication_id: context_authentication_id,
+    };
+    let value = AuthenticatedFailureAbsenceSourceHandoffV1 {
+        record,
+        handoff,
+        join,
+        persisted,
+        lineage,
+        work,
+        schedule,
+        absence,
+    };
+    if value.id().is_zero() {
+        return Err(clutch_source_plane_v3_runtime::Error::MismatchedBinding.into());
+    }
+    Ok(value)
+}
+
+/// Reconstruct a stable-refusal handoff for Failure trigger policy.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_failure_result_source_handoff_from_accounts_v1(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    schedule: SourceWorkScheduleBindingV1,
+    occurrence_account: &AccountInfo<'_>,
+    window_account: &AccountInfo<'_>,
+    statistic_key_account: &AccountInfo<'_>,
+    summary_program_account: &AccountInfo<'_>,
+    window_seal_account: &AccountInfo<'_>,
+    result_account: &AccountInfo<'_>,
+    result_lineage_account: &AccountInfo<'_>,
+    handoff_account: &AccountInfo<'_>,
+    work_receipt_account: &AccountInfo<'_>,
+) -> SourceV3SbfResult<AuthenticatedFailureResultSourceHandoffV1> {
+    authenticate_failure_result_source_handoff_from_accounts_inner_v1(
+        program_id,
+        route,
+        schedule,
+        occurrence_account,
+        window_account,
+        statistic_key_account,
+        summary_program_account,
+        window_seal_account,
+        result_account,
+        result_lineage_account,
+        handoff_account,
+        work_receipt_account,
+        FailureSourceHandoffAccessV1::ExistingReadOnly,
+    )
+}
+
+/// Reconstruct a stable refusal with writable Result and lineage for the sole
+/// same-call no-reopen close path.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_failure_result_source_handoff_for_terminal_v1(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    schedule: SourceWorkScheduleBindingV1,
+    occurrence_account: &AccountInfo<'_>,
+    window_account: &AccountInfo<'_>,
+    statistic_key_account: &AccountInfo<'_>,
+    summary_program_account: &AccountInfo<'_>,
+    window_seal_account: &AccountInfo<'_>,
+    result_account: &AccountInfo<'_>,
+    result_lineage_account: &AccountInfo<'_>,
+    handoff_account: &AccountInfo<'_>,
+    work_receipt_account: &AccountInfo<'_>,
+) -> SourceV3SbfResult<AuthenticatedFailureResultSourceHandoffV1> {
+    authenticate_failure_result_source_handoff_from_accounts_inner_v1(
+        program_id,
+        route,
+        schedule,
+        occurrence_account,
+        window_account,
+        statistic_key_account,
+        summary_program_account,
+        window_seal_account,
+        result_account,
+        result_lineage_account,
+        handoff_account,
+        work_receipt_account,
+        FailureSourceHandoffAccessV1::TerminalMutable,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_failure_result_source_handoff_from_accounts_inner_v1(
+    program_id: &Pubkey,
+    route: AuthenticatedSourceRouteV1,
+    schedule: SourceWorkScheduleBindingV1,
+    occurrence_account: &AccountInfo<'_>,
+    window_account: &AccountInfo<'_>,
+    statistic_key_account: &AccountInfo<'_>,
+    summary_program_account: &AccountInfo<'_>,
+    window_seal_account: &AccountInfo<'_>,
+    result_account: &AccountInfo<'_>,
+    result_lineage_account: &AccountInfo<'_>,
+    handoff_account: &AccountInfo<'_>,
+    work_receipt_account: &AccountInfo<'_>,
+    access: FailureSourceHandoffAccessV1,
+) -> SourceV3SbfResult<AuthenticatedFailureResultSourceHandoffV1> {
+    let handoff_data = handoff_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let handoff_body = SourcePolicyHandoffAccountV1::decode(&handoff_data)?;
+    let handoff_recipe =
+        PdaRecipeV3::source_policy_handoff(handoff_body.source_policy_handoff_join_id())?;
+    let handoff_derived = derive_runtime_pda(program_id, &handoff_recipe)?;
+    let record = authenticate_source_policy_handoff_record(
+        route,
+        runtime_account_view(handoff_account, &handoff_data),
+        handoff_derived,
+    )?;
+    if record.occurrence_account() != runtime_key(occurrence_account.key)
+        || record.result_account() != runtime_key(result_account.key)
+        || record.work_receipt_account() != runtime_key(work_receipt_account.key)
+    {
+        return Err(clutch_source_plane_v3_runtime::Error::MismatchedBinding.into());
+    }
+    let window = authenticate_window_spec_input(program_id, route, window_account)?;
+    let summary = authenticate_summary_program_input(program_id, route, summary_program_account)?;
+    let key = authenticate_statistic_key_input(
+        program_id,
+        route,
+        statistic_key_account,
+        window,
+        summary,
+    )?;
+    if record.window_id() != window.window().id()?
+        || record.statistic_key_id() != key.key().id()?
+    {
+        return Err(clutch_source_plane_v3_runtime::Error::MismatchedBinding.into());
+    }
+    let occurrence = authenticate_occurrence(
+        program_id,
+        route,
+        occurrence_account,
+        OccurrenceDispositionV1::ExactExisting,
+        &window.window(),
+        &key.key(),
+    )?;
+    let occurrence_data = occurrence_account
+        .try_borrow_data()
+        .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+    let occurrence_body = CompiledSourceOccurrenceV3::decode(&occurrence_data).map_err(|_| {
+        SourceV3SbfError::Runtime(clutch_source_plane_v3_runtime::Error::InvalidCodec)
+    })?;
+    drop(occurrence_data);
+    let clock = AuthenticatedClockBucketV1::from_snapshot(&route.clock_policy(), record.clock())?;
+    let evidence = authenticate_persisted_window_evidence_account(
+        program_id,
+        route,
+        window_seal_account,
+        clock,
+        &window.window(),
+    )?;
+    let lineage_access = match access {
+        FailureSourceHandoffAccessV1::ExistingReadOnly => LineageAccessV1::ReadOnly,
+        FailureSourceHandoffAccessV1::TerminalMutable => LineageAccessV1::Mutable,
+    };
+    let lineage = authenticate_lineage(program_id, route, result_lineage_account, lineage_access)?;
+    let result = match access {
+        FailureSourceHandoffAccessV1::ExistingReadOnly => authenticate_result_account(
+            program_id,
+            route,
+            result_account,
+            &window.window(),
+            &key.key(),
+            &summary.summary(),
+            evidence,
+            lineage,
+        )?,
+        FailureSourceHandoffAccessV1::TerminalMutable => {
+            let result_data = result_account
+                .try_borrow_data()
+                .map_err(|_| SourceV3SbfError::AccountBorrow)?;
+            let recipe = PdaRecipeV3::statistic_result(key.key().id()?)?;
+            let derived = derive_runtime_pda(program_id, &recipe)?;
+            let authenticated = authenticate_persisted_statistic_result_account_for_resolution(
+                route,
+                runtime_account_view(result_account, &result_data),
+                derived,
+                &window.window(),
+                &key.key(),
+                summary.summary().id()?,
+                evidence,
+                lineage,
+            )?;
+            drop(result_data);
+            authenticated
+        }
+    };
+    let handoff = source_refusal_handoff(
+        route,
+        record.failure_policy_binding_id(),
+        occurrence,
+        clock,
+        &window.window(),
+        evidence,
+        result,
+    )?;
+    let work = authenticate_work_receipt(program_id, route, schedule, work_receipt_account)?;
+    let join = SourcePolicyHandoffJoinV1::failure_result(route, handoff, result, work)?;
+    if join.id() != record.source_policy_handoff_join_id()
+        || handoff.id() != record.handoff_id()
+        || join.generation() != record.generation()
+    {
+        return Err(clutch_source_plane_v3_runtime::Error::MismatchedBinding.into());
+    }
+    let persisted = authenticate_persisted_source_policy_handoff(
+        route,
+        join,
+        runtime_account_view(handoff_account, &handoff_data),
+        handoff_derived,
+        SourcePolicyHandoffAccessV1::ExistingReadOnly,
+    )?;
+    drop(handoff_data);
+    let interval_authentication_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            b"dragons-clutch/sbf/authenticated-source-failure-result-context/v1",
+            &occurrence.occurrence_record_id().bytes(),
+            &occurrence.id().bytes(),
+            &window.id().bytes(),
+            &key.id().bytes(),
+            &summary.id().bytes(),
+            &evidence.id().bytes(),
+            &result.id().bytes(),
+            &lineage.id().bytes(),
+            &[access.byte()],
+        ])
+        .to_bytes(),
+    );
+    if interval_authentication_id.is_zero() {
+        return Err(clutch_source_plane_v3_runtime::Error::MismatchedBinding.into());
+    }
+    let interval = AuthenticatedSourceIntervalContextV1 {
+        occurrence: occurrence_body,
+        window: window.window(),
+        statistic_key: key.key(),
+        summary_program: summary.summary(),
+        window_seal: evidence.seal(),
+        statistic_result: result.result(),
+        authentication_id: interval_authentication_id,
+    };
+    let value = AuthenticatedFailureResultSourceHandoffV1 {
+        record,
+        handoff,
+        join,
+        persisted,
+        lineage,
+        result,
+        work,
+        schedule,
+        interval,
+    };
+    if value.id().is_zero() {
+        return Err(clutch_source_plane_v3_runtime::Error::MismatchedBinding.into());
+    }
+    Ok(value)
 }
 
 /// Fully reconstructed successful action-10 handoff from persisted Source

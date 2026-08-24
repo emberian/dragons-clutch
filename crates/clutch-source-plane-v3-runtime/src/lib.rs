@@ -90,7 +90,7 @@ pub use window::{
     authenticate_persisted_statistic_result_account,
     authenticate_persisted_statistic_result_account_for_resolution,
     authenticate_statistic_result,
-    authenticate_statistic_result_absence,
+    authenticate_statistic_result_absence, authenticate_statistic_result_absence_for_terminal,
     authenticate_statistic_result_account, authenticate_window_seal_account,
     authenticate_window_work_account, fold_authenticated_pages, join_source_occurrence,
     join_source_occurrence_window, seal_authenticated_window, source_occurrence_record_id,
@@ -102,7 +102,8 @@ pub use window::{
     EvaluationReleaseBindingV1, FailurePolicySourceHandoffV1, FoldPagesOutputV1,
     OccurrenceDispositionV1, OccurrenceSourceReceiptV1, OccurrenceWindowReceiptV1,
     SourceFailureKindV1, SourcePolicyHandoffAccessV1, SourcePolicyHandoffAccountV1,
-    SourcePolicyHandoffJoinV1, StatisticResultAccountAccessV1,
+    SourcePolicyHandoffJoinV1, StatisticResultAbsenceAccessV1,
+    StatisticResultAccountAccessV1,
     SuccessfulEvaluationHandoffV1, MAX_PAGES_PER_FOLD,
     SOURCE_OCCURRENCE_RECORD_BYTES, SOURCE_POLICY_HANDOFF_ACCOUNT_BYTES,
 };
