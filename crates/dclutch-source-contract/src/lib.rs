@@ -37,12 +37,10 @@ pub const RESULT_MAPPING_BYTES: usize = 144;
 pub const RESOLUTION_POLICY_BYTES: usize = 224;
 /// Maximum attempts in the V1 recovery artifact profile.
 pub const MAX_RECOVERY_ATTEMPTS: usize = 4;
-/// Exact width of one immutable source-funding quote reference.
-pub const FUNDING_QUOTE_REF_BYTES: usize = 96;
 /// Exact width of one fixed recovery-attempt slot.
-pub const RECOVERY_ATTEMPT_BYTES: usize = 176;
+pub const RECOVERY_ATTEMPT_BYTES: usize = 112;
 /// Exact width of a recovery-policy preimage.
-pub const RECOVERY_POLICY_BYTES: usize = 800;
+pub const RECOVERY_POLICY_BYTES: usize = 528;
 
 /// Canonical provider-release magic.
 pub const PROVIDER_RELEASE_MAGIC: [u8; 8] = *b"DCLTPRV1";
@@ -104,16 +102,10 @@ pub enum Error {
     InvalidObservationSchedule,
     /// A threshold statistic did not receive a valid exact threshold.
     InvalidThreshold,
-    /// A byte did not name a defined funding quote representation.
-    UnknownFundingQuote,
-    /// Exact funding compartments did not sum to their encoded total.
-    FundingTotalMismatch,
     /// A recovery policy exceeded its capacity profile's fixed attempt bound.
     RecoveryExceedsCapacity,
     /// Recovery attempts were not in strictly increasing deadline order.
     NonCanonicalRecoveryOrder,
-    /// A recovery attempt omitted a prepaid funding reference.
-    MissingPrepaidFunding,
     /// Linked preimages did not bind the same occurrence or dependency ID.
     LinkageMismatch,
     /// A recovery status transition was not admitted.
@@ -1021,156 +1013,28 @@ impl ResolutionPolicyV1 {
     }
 }
 
-/// A reference to either a content-addressed capability funding quote or exact compatible compartments.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FundingQuoteRefV1 {
-    /// Opaque identity of a separately authenticated dclutch capability quote.
-    ContentAddressed(ContentId),
-    /// Exact compatible present-principal compartments, never Hoard or future fees.
-    ExactCompartments {
-        /// Rent principal.
-        rent_principal: u64,
-        /// Creation principal.
-        creation_principal: u64,
-        /// Work principal.
-        work_principal: u64,
-        /// Provider principal.
-        provider_principal: u64,
-        /// Bounty principal.
-        bounty_principal: u64,
-        /// Liquidity principal.
-        liquidity_principal: u64,
-        /// Service principal.
-        service_principal: u64,
-        /// Canonical compartment sum.
-        total_principal: u64,
-    },
-}
-
-impl FundingQuoteRefV1 {
-    /// Construct and check exact compatible present-principal compartments.
-    #[allow(clippy::too_many_arguments)]
-    pub fn compartments(
-        rent_principal: u64,
-        creation_principal: u64,
-        work_principal: u64,
-        provider_principal: u64,
-        bounty_principal: u64,
-        liquidity_principal: u64,
-        service_principal: u64,
-    ) -> Result<Self> {
-        let total_principal = sum_u64([
-            rent_principal,
-            creation_principal,
-            work_principal,
-            provider_principal,
-            bounty_principal,
-            liquidity_principal,
-            service_principal,
-        ])?;
-        if total_principal == 0 {
-            return Err(Error::MissingPrepaidFunding);
-        }
-        Ok(Self::ExactCompartments {
-            rent_principal,
-            creation_principal,
-            work_principal,
-            provider_principal,
-            bounty_principal,
-            liquidity_principal,
-            service_principal,
-            total_principal,
-        })
-    }
-    /// Decode one exact canonical quote reference.
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != FUNDING_QUOTE_REF_BYTES {
-            return Err(Error::InvalidLength);
-        }
-        match one(bytes, 0)? {
-            1 => {
-                zero(bytes, 1, 31)?;
-                zero(bytes, 64, 32)?;
-                Ok(Self::ContentAddressed(content(bytes, 32)?))
-            }
-            2 => {
-                zero(bytes, 1, 31)?;
-                let result = Self::compartments(
-                    read_u64(bytes, 32)?,
-                    read_u64(bytes, 40)?,
-                    read_u64(bytes, 48)?,
-                    read_u64(bytes, 56)?,
-                    read_u64(bytes, 64)?,
-                    read_u64(bytes, 72)?,
-                    read_u64(bytes, 80)?,
-                )?;
-                if let Self::ExactCompartments {
-                    total_principal, ..
-                } = result
-                    && total_principal != read_u64(bytes, 88)?
-                {
-                    return Err(Error::FundingTotalMismatch);
-                }
-                Ok(result)
-            }
-            _ => Err(Error::UnknownFundingQuote),
-        }
-    }
-    /// Encode exact canonical funding quote reference bytes.
-    pub fn to_bytes(self) -> [u8; FUNDING_QUOTE_REF_BYTES] {
-        let mut out = [0u8; FUNDING_QUOTE_REF_BYTES];
-        match self {
-            Self::ContentAddressed(id) => {
-                put(&mut out, 0, &[1]);
-                put(&mut out, 32, id.as_bytes());
-            }
-            Self::ExactCompartments {
-                rent_principal,
-                creation_principal,
-                work_principal,
-                provider_principal,
-                bounty_principal,
-                liquidity_principal,
-                service_principal,
-                total_principal,
-            } => {
-                put(&mut out, 0, &[2]);
-                put(&mut out, 32, &rent_principal.to_le_bytes());
-                put(&mut out, 40, &creation_principal.to_le_bytes());
-                put(&mut out, 48, &work_principal.to_le_bytes());
-                put(&mut out, 56, &provider_principal.to_le_bytes());
-                put(&mut out, 64, &bounty_principal.to_le_bytes());
-                put(&mut out, 72, &liquidity_principal.to_le_bytes());
-                put(&mut out, 80, &service_principal.to_le_bytes());
-                put(&mut out, 88, &total_principal.to_le_bytes());
-            }
-        }
-        out
-    }
-}
-
 /// Immutable one-attempt recovery record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RecoveryAttemptV1 {
     source_spec_id: ContentId,
     provider_release_id: ContentId,
     deadline_unix_seconds: i64,
-    funding_quote: FundingQuoteRefV1,
+    funding_allocation_id: ContentId,
 }
 
 impl RecoveryAttemptV1 {
-    /// Construct a prepaid attempt.  The quote is immutable and segregated.
+    /// Construct a prepaid attempt bound to one immutable funding allocation.
     pub const fn new(
         source_spec_id: ContentId,
         provider_release_id: ContentId,
         deadline_unix_seconds: i64,
-        funding_quote: FundingQuoteRefV1,
+        funding_allocation_id: ContentId,
     ) -> Self {
         Self {
             source_spec_id,
             provider_release_id,
             deadline_unix_seconds,
-            funding_quote,
+            funding_allocation_id,
         }
     }
     fn decode_slot(bytes: &[u8]) -> Result<Self> {
@@ -1182,7 +1046,7 @@ impl RecoveryAttemptV1 {
             content(bytes, 0)?,
             content(bytes, 32)?,
             i64::from_le_bytes(read_array(bytes, 64)?),
-            FundingQuoteRefV1::decode(bytes.get(80..176).ok_or(Error::InvalidLength)?)?,
+            content(bytes, 80)?,
         ))
     }
     fn to_slot_bytes(self) -> [u8; RECOVERY_ATTEMPT_BYTES] {
@@ -1190,7 +1054,7 @@ impl RecoveryAttemptV1 {
         put(&mut out, 0, self.source_spec_id.as_bytes());
         put(&mut out, 32, self.provider_release_id.as_bytes());
         put(&mut out, 64, &self.deadline_unix_seconds.to_le_bytes());
-        put(&mut out, 80, &self.funding_quote.to_bytes());
+        put(&mut out, 80, self.funding_allocation_id.as_bytes());
         out
     }
 }
@@ -1233,7 +1097,6 @@ impl RecoveryPolicyV1 {
         header(bytes, RECOVERY_POLICY_BYTES, RECOVERY_POLICY_MAGIC)?;
         let count = one(bytes, 10)?;
         zero(bytes, 11, 5)?;
-        zero(bytes, 784, 16)?;
         let mut attempts = [None; MAX_RECOVERY_ATTEMPTS];
         let mut index = 0usize;
         while index < MAX_RECOVERY_ATTEMPTS {
@@ -1427,17 +1290,6 @@ fn put(output: &mut [u8], offset: usize, input: &[u8]) {
         dest.copy_from_slice(input);
     }
 }
-fn read_u64(bytes: &[u8], offset: usize) -> Result<u64> {
-    Ok(u64::from_le_bytes(read_array(bytes, offset)?))
-}
-fn sum_u64(values: [u64; 7]) -> Result<u64> {
-    let mut total = 0u64;
-    for value in values {
-        total = total.checked_add(value).ok_or(Error::ArithmeticOverflow)?;
-    }
-    Ok(total)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1567,10 +1419,20 @@ mod tests {
 
     #[test]
     fn recovery_is_ordered_prepaid_and_cannot_fail_early() {
-        let quote = FundingQuoteRefV1::compartments(1, 2, 3, 4, 5, 6, 7).expect("sum");
+        let funding_allocation_id = id(11);
         let attempts = [
-            Some(RecoveryAttemptV1::new(id(7), id(8), 30, quote)),
-            Some(RecoveryAttemptV1::new(id(7), id(8), 40, quote)),
+            Some(RecoveryAttemptV1::new(
+                id(7),
+                id(8),
+                30,
+                funding_allocation_id,
+            )),
+            Some(RecoveryAttemptV1::new(
+                id(7),
+                id(8),
+                40,
+                funding_allocation_id,
+            )),
             None,
             None,
         ];
@@ -1588,8 +1450,18 @@ mod tests {
         let final_state = first.exhaust_next(recovery).expect("last");
         assert_eq!(final_state.terminal_failure(), Ok(()));
         let unordered = [
-            Some(RecoveryAttemptV1::new(id(7), id(8), 40, quote)),
-            Some(RecoveryAttemptV1::new(id(7), id(8), 30, quote)),
+            Some(RecoveryAttemptV1::new(
+                id(7),
+                id(8),
+                40,
+                funding_allocation_id,
+            )),
+            Some(RecoveryAttemptV1::new(
+                id(7),
+                id(8),
+                30,
+                funding_allocation_id,
+            )),
             None,
             None,
         ];
@@ -1600,20 +1472,20 @@ mod tests {
     }
 
     #[test]
-    fn quotes_are_canonical_and_policy_binds_every_link() {
-        let quote = FundingQuoteRefV1::compartments(1, 2, 3, 4, 5, 6, 7).expect("quote");
-        assert_eq!(FundingQuoteRefV1::decode(&quote.to_bytes()), Ok(quote));
-        let mut altered = quote.to_bytes();
-        if let Some(slot) = altered.get_mut(88) {
-            *slot ^= 1;
-        };
+    fn recovery_funding_is_one_content_identity_and_policy_binds_every_link() {
+        let attempt = RecoveryAttemptV1::new(id(7), id(8), 30, id(11));
         assert_eq!(
-            FundingQuoteRefV1::decode(&altered),
-            Err(Error::FundingTotalMismatch)
+            RecoveryAttemptV1::decode_slot(&attempt.to_slot_bytes()),
+            Ok(attempt)
         );
+        let mut missing_funding = attempt.to_slot_bytes();
+        missing_funding
+            .get_mut(80..112)
+            .expect("funding ID")
+            .fill(0);
         assert_eq!(
-            FundingQuoteRefV1::compartments(0, 0, 0, 0, 0, 0, 0),
-            Err(Error::MissingPrepaidFunding)
+            RecoveryAttemptV1::decode_slot(&missing_funding),
+            Err(Error::ZeroContentId)
         );
         let policy = ResolutionPolicyV1::new(id(1), id(2), id(3), id(4), id(5), id(6), None);
         assert_eq!(

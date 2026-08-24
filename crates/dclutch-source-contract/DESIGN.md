@@ -51,11 +51,11 @@ old bounded semantics.
 ## Funding and recovery
 
 Each recovery attempt has a nonzero source, provider release, deadline, and
-prepaid funding reference. The reference is either a content ID for an
-authenticated capability-funding quote or the exact seven present-principal
-compartments used by dclutch capability funding: rent, creation, work, provider,
-bounty, liquidity, and service. The representation contains neither Hoard
-principal nor future fee revenue.
+prepaid funding-allocation identity. The composing adapter authenticates that
+identity against the capability contract, which remains the sole owner of the
+seven present-principal compartments and their mutable conservation. Source
+records do not duplicate those amounts. The representation contains neither
+Hoard principal nor future fee revenue.
 
 Recovery attempt deadlines are strictly increasing. `RecoveryState` reaches
 `Exhausted` only after the final committed attempt; terminal failure is refused
