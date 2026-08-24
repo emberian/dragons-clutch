@@ -13,13 +13,22 @@ use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::{
     allocate_data, assign_data, read_rent, require_system_program, SYSTEM_PROGRAM_ID,
 };
+use crate::instructions::failure_market_foundation_v4::{
+    authenticate_prefunded_failure_destination_v4, finish_failure_foundation_postwrite_v4,
+    AuthenticatedFailureFoundationPostwriteV4,
+};
+use crate::instructions::product_market_lifecycle_v3_current::{
+    AuthenticatedMarketLifecycleRootV3, AuthenticatedProductMarketFoundationDebitV4,
+};
 use crate::seeds;
 use clutch_failure_policy_runtime::market_policy_v1::{
-    admit_failure_market_recovery_funding_v1, project_initial_market_recovery_funding_v1,
+    admit_failure_market_recovery_funding_v1, admit_failure_market_root_funding_v1,
+    project_initial_market_recovery_funding_v1,
     AuthenticatedFailureMarketRecoveryFundingV1, FailureMarketAdmissionStateV1,
     FailureMarketPolicyBindingV1, FailureMarketPrepaidDebitReceiptIdV1,
     FailureMarketRecoveryFundingFactsV1, FailureMarketRecoveryFundingReceiptV1,
-    FailureMarketRootBalanceDispositionV1, FailureMarketRootFundingReceiptV1,
+    AuthenticatedFailureMarketRootFundingV1, FailureMarketRootBalanceDispositionV1,
+    FailureMarketRootFundingFactsV1, FailureMarketRootFundingReceiptV1,
     FAILURE_MARKET_ADMISSION_STATE_BYTES_V1,
 };
 use clutch_failure_policy_runtime::market_quote_v1::{
@@ -38,6 +47,7 @@ use clutch_solana_layout::failure_recovery::{
     FAILURE_MARKET_RECOVERY_QUOTE_BODY_BYTES_V1, FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3,
 };
 use clutch_solana_layout::registry;
+use clutch_product_series::{ContentId, MarketFoundationSlotV4};
 use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
 use solana_instruction::{AccountMeta, Instruction};
@@ -49,6 +59,28 @@ const _: () = assert!(
     FAILURE_MARKET_RECOVERY_QUOTE_BODY_BYTES_V1
         == FAILURE_MARKET_RECOVERY_QUOTE_SCHEDULE_BYTES_V1
 );
+const FAILURE_INTERVAL_FOUNDATION_MARKER_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/sbf/failure-interval-foundation-marker/v4\0";
+const FAILURE_ADMISSION_FOUNDATION_AUTHENTICATION_DOMAIN_V4: &[u8] =
+    b"dragons-clutch/sbf/failure-admission-foundation-authentication/v4\0";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProductFailureMarketRootFundingV4 {
+    expected: FailureMarketRootFundingFactsV1,
+}
+
+impl AuthenticatedFailureMarketRootFundingV1 for ProductFailureMarketRootFundingV4 {
+    fn authenticate_failure_market_root_funding(
+        &self,
+        expected: FailureMarketRootFundingFactsV1,
+    ) -> clutch_failure_policy_runtime::Result<()> {
+        if expected == self.expected {
+            Ok(())
+        } else {
+            Err(clutch_failure_policy_runtime::Error::BindingMismatch)
+        }
+    }
+}
 
 /// Private full-body authentication of one initial Recovery custody.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -501,6 +533,193 @@ pub(crate) fn initialize_failure_market_admission_v3<'a>(
         liveness,
         recovery_funding,
     })
+}
+
+fn pending_interval_foundation_marker_v4(
+    program_id: &Pubkey,
+    root_before: &AuthenticatedMarketLifecycleRootV3<'_>,
+    debit: &AuthenticatedProductMarketFoundationDebitV4,
+    binding: FailureMarketPolicyBindingV1,
+) -> [u8; FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1] {
+    let policy = binding.facts();
+    let work = seeds::failure_market_interval_cell_v2_pda(
+        program_id,
+        &policy.market_instance_id.bytes(),
+        policy.generation,
+    )
+    .0;
+    let history = seeds::failure_market_interval_history_v2_pda(
+        program_id,
+        &policy.market_instance_id.bytes(),
+        policy.generation,
+    )
+    .0;
+    let marker_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            FAILURE_INTERVAL_FOUNDATION_MARKER_DOMAIN_V4,
+            program_id.as_ref(),
+            root_before.account().as_ref(),
+            &root_before.authentication_id().bytes(),
+            &root_before.binding_id().bytes(),
+            &debit.id().bytes(),
+            &debit.foundation_steps_id().bytes(),
+            &debit.foundation_schedule_id().bytes(),
+            &debit.foundation_graph_id().bytes(),
+            &binding.id().bytes(),
+            work.as_ref(),
+            history.as_ref(),
+            debit.rent_refund_owner().as_ref(),
+            debit.neutral_lamport_sink().as_ref(),
+        ])
+        .to_bytes(),
+    );
+    let mut output = [0u8; FAILURE_MARKET_INTERVAL_FUNDING_PREIMAGE_BODY_BYTES_V1];
+    output[..32].copy_from_slice(&marker_id.bytes());
+    output[32..64].copy_from_slice(&debit.foundation_steps_id().bytes());
+    output[64..96].copy_from_slice(&debit.foundation_schedule_id().bytes());
+    output[96..128].copy_from_slice(&debit.foundation_graph_id().bytes());
+    output[128..160].copy_from_slice(&binding.id().bytes());
+    output[160..168].copy_from_slice(&debit.root_transition_sequence_after().to_le_bytes());
+    output[168..176].copy_from_slice(&debit.generation().to_le_bytes());
+    output
+}
+
+/// Consume Product's current slot-5 debit, mint the exact Failure root-funding
+/// receipt, and create the real admission/quote owner. The interval tail is a
+/// domain-separated foundation marker until slot 9 atomically installs the
+/// two actual debit preimages; no caller supplies either representation.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+pub(crate) fn create_failure_market_admission_from_product_foundation_debit_v4<'a>(
+    program_id: &Pubkey,
+    root_before: &AuthenticatedMarketLifecycleRootV3<'_>,
+    debit: AuthenticatedProductMarketFoundationDebitV4,
+    failure_root: &AccountInfo<'a>,
+    liveness_policy_account: &AccountInfo<'a>,
+    recovery_account: &AccountInfo<'a>,
+    rent_sysvar: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    binding: FailureMarketPolicyBindingV1,
+    recovery_prepaid_debit_receipt_id: FailureMarketPrepaidDebitReceiptIdV1,
+    recovery_quote: FailureMarketRecoveryQuoteScheduleV1,
+) -> Outcome<AuthenticatedFailureFoundationPostwriteV4> {
+    let policy = binding.facts();
+    let rent = read_rent(rent_sysvar)?;
+    let expected_failure_root = seeds::failure_market_root_v2_pda(
+        program_id,
+        &policy.market_instance_id.bytes(),
+        policy.generation,
+    )
+    .0;
+    require(
+        root_before.state().phase()
+            == clutch_product_series::MarketLifecyclePhaseV3::Founding
+            && root_before.binding().market_failure_policy_binding_id.bytes()
+                == binding.id().bytes()
+            && root_before.binding().market_instance_id == policy.market_instance_id
+            && root_before.binding().generation == policy.generation
+            && root_before.binding_id() == debit.market_binding_id()
+            && root_before.binding().foundation_schedule_id.content_id()
+                == debit.foundation_schedule_id()
+            && root_before.binding().foundation_account_graph_id.content_id()
+                == debit.foundation_graph_id()
+            && root_before.state().capital().neutral_lamport_sink.bytes()
+                == debit.neutral_lamport_sink().to_bytes(),
+        ClutchError::MismatchedState,
+    )?;
+    authenticate_prefunded_failure_destination_v4(
+        &debit,
+        failure_root,
+        system_program,
+        &rent,
+        MarketFoundationSlotV4::FailureAdmissionRoot,
+        expected_failure_root,
+        FAILURE_MARKET_ROOT_ACCOUNT_BYTES_V3,
+        policy.market_instance_id,
+        policy.generation,
+        debit.neutral_lamport_sink(),
+    )?;
+    let root_funding_facts = FailureMarketRootFundingFactsV1 {
+        failure_policy_binding_id: binding.id(),
+        prepaid_debit_receipt_id: FailureMarketPrepaidDebitReceiptIdV1::from_bytes(
+            debit.id().bytes(),
+        ),
+        root_account_id:
+            clutch_failure_policy_runtime::market_policy_v1::FailureMarketAccountIdV1::from_bytes(
+                failure_root.key.to_bytes(),
+            ),
+        rent_payer:
+            clutch_failure_policy_runtime::market_policy_v1::FailureMarketAccountIdV1::from_bytes(
+                debit.rent_refund_owner().to_bytes(),
+            ),
+        rent_principal_lamports: debit.principal_lamports(),
+        donation_floor_lamports: debit.destination_donation_floor_lamports(),
+        observed_balance_lamports: debit.destination_balance_after_lamports(),
+    };
+    let root_funding = admit_failure_market_root_funding_v1(
+        &ProductFailureMarketRootFundingV4 {
+            expected: root_funding_facts,
+        },
+        binding,
+        root_funding_facts,
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let interval_marker =
+        pending_interval_foundation_marker_v4(program_id, root_before, &debit, binding);
+    let postimage = initialize_failure_market_admission_v3(
+        program_id,
+        failure_root,
+        liveness_policy_account,
+        recovery_account,
+        rent_sysvar,
+        system_program,
+        binding,
+        root_funding,
+        recovery_prepaid_debit_receipt_id,
+        recovery_quote,
+        interval_marker,
+    )?;
+    let reopened = authenticate_failure_market_root_v3(program_id, failure_root, true)?;
+    require(
+        reopened == postimage.root()
+            && reopened.interval_funding_preimage() == interval_marker
+            && reopened.state().root_funding() == root_funding,
+        ClutchError::MismatchedState,
+    )?;
+    let data = failure_root
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let data_id = ContentId::from_bytes(solana_sha256_hasher::hashv(&[&data]).to_bytes());
+    drop(data);
+    let semantic_id = ContentId::from_bytes(
+        reopened
+            .state()
+            .id()
+            .map_err(|_| Refusal::Adapter(ClutchError::NonCanonical))?
+            .bytes(),
+    );
+    let authentication_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            FAILURE_ADMISSION_FOUNDATION_AUTHENTICATION_DOMAIN_V4,
+            program_id.as_ref(),
+            failure_root.key.as_ref(),
+            &data_id.bytes(),
+            &semantic_id.bytes(),
+            &failure_root.lamports().to_le_bytes(),
+            &debit.id().bytes(),
+            &debit.foundation_graph_id().bytes(),
+            &debit.foundation_schedule_id().bytes(),
+        ])
+        .to_bytes(),
+    );
+    finish_failure_foundation_postwrite_v4(
+        program_id,
+        debit,
+        failure_root,
+        MarketFoundationSlotV4::FailureAdmissionRoot,
+        data_id,
+        authentication_id,
+    )
 }
 
 /// Authenticate an existing shared-Market policy/funding root.
