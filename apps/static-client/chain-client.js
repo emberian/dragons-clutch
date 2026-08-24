@@ -1154,28 +1154,26 @@
     let derivedFacts = null;
     let payerIndex = null;
     if (coordinate.localAction === "1" || coordinate.localAction === "10") {
-      const variableRoles = accountRoles.length - 35;
-      if (variableRoles < 4 || variableRoles > 32 || variableRoles % 2 !== 0) throw new Error("Fractional lifecycle material does not have the exact 35+2*N Product-foundation geometry.");
-      const outcomeCount = variableRoles / 2;
+      const outcomeCount = accountRoles.length - 32;
+      if (outcomeCount < 2 || outcomeCount > 16) throw new Error("Fractional lifecycle material does not have the exact 32+N reduced Product-foundation geometry.");
       const core = Array.from({ length: 15 }, (_, index) => ["foundation-core", false, index === 0 || index === 4 || index === 11 || index === 12]);
-      const outcomes = Array.from({ length: 2 * outcomeCount }, () => ["foundation-outcome", false, false]);
-      const treasury = Array.from({ length: 3 }, () => ["foundation-treasury", false, false]);
+      const outcomes = Array.from({ length: outcomeCount }, () => ["foundation-outcome-mint", false, false]);
       const auxiliary = Array.from({ length: 17 }, (_, index) => ["lifecycle-authority", false, coordinate.localAction === "10" && (index === 15 || index === 16)]);
-      expected = [...core, ...outcomes, ...treasury, ...auxiliary];
-      geometry = `${coordinate.localAction === "1" ? "initialize" : "close-empty-ledger"}-foundation-35+2*${outcomeCount}-${accountRoles.length}-roles`;
+      expected = [...core, ...outcomes, ...auxiliary];
+      geometry = `${coordinate.localAction === "1" ? "initialize" : "close-empty-ledger"}-reduced-foundation-32+N(${outcomeCount})-${accountRoles.length}-roles`;
       requirePlain(transactionDraft.exactEquations[0].unit, "Fractional lifecycle outcome-width unit");
       const equationOutcome = decimal(transactionDraft.exactEquations[0].unit.outcome, "Fractional lifecycle equation outcome", 15n);
       const equationWidth = decimal(transactionDraft.exactEquations[0].left, "Fractional lifecycle outcome width", 16n);
       if (transactionDraft.exactEquations[0].unit.kind !== "egg-atoms" || equationOutcome !== 0n || equationWidth !== BigInt(outcomeCount)) throw new Error("Fractional lifecycle material does not bind its chain-derived Product outcome width.");
       if (stateSelection.cursor.lane !== FRACTIONAL_COORDINATE.flow || stateSelection.cursor.phase !== coordinate.localAction || (coordinate.localAction === "1" ? stateSelection.cursor.item !== "0" : BigInt(stateSelection.cursor.item) === 0n)) throw new Error("Fractional lifecycle selection does not carry its exact scheduler lane, phase, and sequence.");
       const dependencies = [...new Set(accountRoles.map((role) => role.address).filter((identity) => identity !== accountRoles[contract.driverRole].address))].sort(compareAddressBytes);
-      if (dependencies.length !== stateSelection.dependencies.length || dependencies.some((identity, index) => identity !== stateSelection.dependencies[index])) throw new Error("Fractional lifecycle restart cursor differs from the complete canonical Product-foundation dependency index.");
+      if (dependencies.length !== stateSelection.dependencies.length || dependencies.some((identity, index) => identity !== stateSelection.dependencies[index])) throw new Error("Fractional lifecycle restart cursor differs from the complete reduced-frame dependency index.");
       derivedFacts = Object.freeze({
         kind: "fractional-lifecycle",
         outcomeCount: String(outcomeCount),
         driver: coordinate.localAction === "1" ? "market-lifecycle-root-v3" : "fractional-ledger-v1",
         sequence: stateSelection.cursor.item,
-        authority: "complete-finalized-product-foundation-and-release-join"
+        authority: "reduced-finalized-frame-derived-complete-product-foundation-graph-and-release-join"
       });
     } else if (coordinate.localAction === "2") {
       expected = [["claimant", true, false], ...common, ["position-v3", false, true], ["general-replay-v3", false, true]];

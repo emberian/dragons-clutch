@@ -148,21 +148,25 @@ by the one exact linked capability profile.
 
 The always-compiled, currently capability-refused account order is:
 
-The SBF lifecycle outers consume the current 47-slot
-`MarketFoundationAccountGraphV3`, whose active projection has 15 fixed core
-accounts, including the exact release-selected `HoardCollateralVault`, plus
-two accounts per outcome. They authenticate the current Product `0xaa/v2`
-root, `0xad/v2` founder link, `SeriesFundingQuoteV5`, and read-only
-`SeriesRegistryV3`; Product's narrow, default-refusing writer remains the sole
-owner of the root successor.
+The SBF lifecycle outers authenticate the current 50-slot
+`MarketFoundationAccountGraphV4` while carrying only the accounts they
+observe: 15 fixed core accounts, including the exact release-selected
+`HoardCollateralVault`, plus one OutcomeMint per active outcome. The omitted
+OutcomeCustody and General treasury roles are reconstructed from their
+canonical PDAs and the authenticated RootV3/current General revenue binding;
+their absence from the instruction is not an alternate graph truth. They
+authenticate the current Product `0xaa/v3` root, `0xad/v3` founder link,
+`SeriesFundingQuoteV6`, and read-only `SeriesRegistryV4`; Product's narrow,
+default-refusing writer remains the sole owner of the root successor.
 
 - `Initialize`: the 15 Product Foundation core accounts in slot order, the
-  active OutcomeMint prefix, the active OutcomeCustody prefix, then Realm,
+  active OutcomeMint prefix, then Realm,
   Profile, collateral policy/program/ProgramData, claim program/ProgramData,
-  MarketInstance artifact, founder Series link, FundingQuoteV5 artifact,
-  SeriesRegistryV3, this Program/ProgramData, ReleaseV2/ProfileV4 artifacts,
+  MarketInstance artifact, founder Series link, FundingQuoteV6 artifact,
+  SeriesRegistryV4, this Program/ProgramData, ReleaseV2/ProfileV4 artifacts,
   System Program, and Rent. For `N` active outcomes the exact count is
-  `15 + 2*N + 17 = 32 + 2*N`. No signer or second Foundation debit exists.
+  `15 + N + 17 = 32 + N`, at most 48 metas for 16 outcomes. No signer or
+  second Foundation debit exists.
 - Exact internal redeem: owner; Realm; collateral Profile/policy/program;
   MarketBinding; MarketRuntime; MarketInstance artifact; Hoard V2; ClaimLedger
   V3; Resolution V5; fractional policy; aggregate ledger; Position V3; GEN1
@@ -196,16 +200,16 @@ owner of the root successor.
 - Terminal seal: Realm; collateral Profile/policy/token program; MarketBinding;
   MarketRuntime; MarketInstance artifact; Hoard V2; writable ClaimLedger V3;
   Resolution V5; policy; writable aggregate ledger.
-- Terminal close: the same Foundation core/mint/custody graph, then Realm,
+- Terminal close: the same Foundation core and active-mint frame, then Realm,
   Profile, collateral policy/program/ProgramData, the independent Token-2022
   claim program/ProgramData, MarketInstance artifact, founder Series link,
-  FundingQuoteV5, SeriesRegistryV3, this
+  FundingQuoteV6, SeriesRegistryV4, this
   Program/ProgramData, ReleaseV2/ProfileV4, writable shared rent refund owner,
-  and writable neutral sink. Its exact count is also `32 + 2*N`. It consumes
-  Product terminality before deleting
-  `0xa4` and `0xa5`, refunds only both stored principals, sends every surplus
-  lamport to the exact System-owned neutral sink, and advances ClaimLedger to
-  Retiring. Any later refusal rolls the whole instruction back.
+  and writable neutral sink. Its exact count is also `32 + N`. It physically
+  terminalizes `0xa4` and `0xa5` first, refunds only both stored principals,
+  sends every surplus lamport to the exact System-owned neutral sink, advances
+  ClaimLedger to Retiring, and then passes the move-only terminal receipt to
+  Product. Any later refusal rolls the whole instruction back.
 
 Disabled tuples refuse before parsing payloads or inspecting accounts. All ten
 handlers perform their typed authentication, external-effect ordering where

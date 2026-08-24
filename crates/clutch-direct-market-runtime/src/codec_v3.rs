@@ -5,7 +5,7 @@
 //! root array on its stack.
 
 use crate::current_v3::{
-    DirectCurrentGeneralAuthorityV2, DirectCurrentProductAuthorityV3,
+    DirectCurrentGeneralAuthorityV2, DirectCurrentProductAuthorityV4,
     DirectMarketBindingV3, DirectMarketRootV3,
 };
 use crate::liveness_v1::{DirectCandidateLivenessBindingV1, DirectCandidateWorkScheduleV1};
@@ -118,8 +118,10 @@ impl AuthenticatedDirectRootTransitionV3 {
     pub const fn product_global_liveness_binding_id(&self) -> [u8; 32] {
         self.terminal_product_ids[4]
     }
-    /// Exact Product activation receipt for the live `0xba/v2` allocation.
-    pub const fn product_global_liveness_activation_id(&self) -> [u8; 32] {
+    /// Hostile `0xba/v2` authentication after the live Candidate allocation.
+    pub const fn product_global_liveness_allocation_authentication_id(
+        &self,
+    ) -> [u8; 32] {
         self.terminal_product_ids[5]
     }
     /// Exact Product-owned Direct work quote retained by b1/v3.
@@ -455,7 +457,7 @@ pub fn authenticate_direct_root_transition_body_v3<B: DirectHashBackendV1>(
         product.compiler_bundle_v7_id,
         product.attachment_plan_v6_id,
         product.product_direct_global_liveness_binding_id,
-        product.product_direct_global_liveness_activation_id,
+        product.product_direct_global_liveness_allocation_authentication_id,
         product.direct_work_quote_id,
     ];
     let product_global_liveness_account = product.product_direct_global_liveness_account;
@@ -1007,7 +1009,7 @@ fn read_binding(reader: &mut BodyReader<'_>) -> Result<DirectMarketBindingV3, Di
 
 fn write_product(
     writer: &mut BodyWriter<'_>,
-    value: &DirectCurrentProductAuthorityV3,
+    value: &DirectCurrentProductAuthorityV4,
 ) -> Result<(), DirectMarketErrorV1> {
     writer.id(value.product_root_account)?;
     writer.id(value.product_market_binding_v3_id)?;
@@ -1033,7 +1035,7 @@ fn write_product(
         value.product_preauthorization_id,
         value.product_direct_global_liveness_account,
         value.product_direct_global_liveness_binding_id,
-        value.product_direct_global_liveness_activation_id,
+        value.product_direct_global_liveness_allocation_authentication_id,
         value.activated_product_market_binding_id,
         value.direct_work_quote_id,
     ] {
@@ -1044,8 +1046,8 @@ fn write_product(
 
 fn read_product(
     reader: &mut BodyReader<'_>,
-) -> Result<DirectCurrentProductAuthorityV3, DirectMarketErrorV1> {
-    Ok(DirectCurrentProductAuthorityV3 {
+) -> Result<DirectCurrentProductAuthorityV4, DirectMarketErrorV1> {
+    Ok(DirectCurrentProductAuthorityV4 {
         product_root_account: reader.id()?,
         product_market_binding_v3_id: reader.id()?,
         product_generation: reader.u64()?,
@@ -1069,7 +1071,7 @@ fn read_product(
         product_preauthorization_id: reader.id()?,
         product_direct_global_liveness_account: reader.id()?,
         product_direct_global_liveness_binding_id: reader.id()?,
-        product_direct_global_liveness_activation_id: reader.id()?,
+        product_direct_global_liveness_allocation_authentication_id: reader.id()?,
         activated_product_market_binding_id: reader.id()?,
         direct_work_quote_id: reader.id()?,
     })

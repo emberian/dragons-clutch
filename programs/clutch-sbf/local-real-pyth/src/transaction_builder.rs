@@ -960,6 +960,9 @@ impl OwnedInstructionDraft {
             return Err(ConstructionError::InvalidAccountContract);
         }
         let contract = fractional_account_contract_v1(action);
+        if !contract.foundation_outcome_mint_suffix || contract.post_mint_accounts != 0 {
+            return Err(ConstructionError::InvalidAccountContract);
+        }
         let fixed = usize::from(contract.foundation_core_accounts)
             .checked_add(usize::from(contract.foundation_aux_accounts))
             .and_then(|count| count.checked_add(usize::from(contract.post_mint_accounts)))
@@ -967,11 +970,10 @@ impl OwnedInstructionDraft {
         let outcome_count = accounts
             .len()
             .checked_sub(fixed)
-            .and_then(|extra| (extra % 2 == 0).then_some(extra / 2))
             .ok_or(ConstructionError::InvalidAccountContract)?;
         if !(2..=clutch_product_series::MARKET_FOUNDATION_MAX_OUTCOMES_V4)
             .contains(&outcome_count)
-            || accounts.len() != fixed + 2 * outcome_count
+            || accounts.len() != fixed + outcome_count
         {
             return Err(ConstructionError::InvalidAccountContract);
         }
@@ -993,7 +995,7 @@ impl OwnedInstructionDraft {
             _ => return Err(ConstructionError::InvalidAccountContract),
         }
         let aux = usize::from(contract.foundation_core_accounts)
-            + 2 * outcome_count
+            + outcome_count
             + usize::from(contract.post_mint_accounts);
         let mut identities = BTreeSet::new();
         for (index, account) in accounts.iter().enumerate() {
@@ -1023,7 +1025,7 @@ impl OwnedInstructionDraft {
                 }
             }
         }
-        if accounts[aux + 11].pubkey != program_id {
+        if identities.len() > 64 || accounts[aux + 11].pubkey != program_id {
             return Err(ConstructionError::InvalidAccountContract);
         }
         let central_action = ExtensionAction::FractionalRedemption(action);
@@ -1984,14 +1986,20 @@ impl OwnedInstructionDraft {
                 match action {
                     FractionalRedemptionActionV1::Initialize
                     | FractionalRedemptionActionV1::CloseEmptyLedger => {
+                        if !contract.foundation_outcome_mint_suffix
+                            || contract.post_mint_accounts != 0
+                        {
+                            return Err(ConstructionError::InvalidAccountContract);
+                        }
                         let fixed = usize::from(contract.foundation_core_accounts)
                             .checked_add(usize::from(contract.foundation_aux_accounts))
                             .and_then(|count| count.checked_add(usize::from(contract.post_mint_accounts)))
                             .ok_or(ConstructionError::InvalidAccountContract)?;
                         let outcomes = self.accounts.len().checked_sub(fixed)
-                            .and_then(|extra| (extra % 2 == 0).then_some(extra / 2))
                             .ok_or(ConstructionError::InvalidAccountContract)?;
-                        if !(1..=16).contains(&outcomes) {
+                        if !(2..=clutch_product_series::MARKET_FOUNDATION_MAX_OUTCOMES_V4)
+                            .contains(&outcomes)
+                        {
                             return Err(ConstructionError::InvalidAccountContract);
                         }
                         if action == FractionalRedemptionActionV1::Initialize {
@@ -2012,7 +2020,7 @@ impl OwnedInstructionDraft {
                             }
                         }
                         let aux = usize::from(contract.foundation_core_accounts)
-                            + 2 * outcomes
+                            + outcomes
                             + usize::from(contract.post_mint_accounts);
                         if self.accounts[aux + 11].pubkey != self.program_id {
                             return Err(ConstructionError::InvalidAccountContract);
@@ -2311,8 +2319,8 @@ impl OwnedInstructionDraft {
                             FractionalRedemptionActionV1::Initialize
                                 | FractionalRedemptionActionV1::CloseEmptyLedger
                         ) {
-                            let outcomes = (self.accounts.len() - 35) / 2;
-                            let aux = 18 + 2 * outcomes;
+                            let outcomes = self.accounts.len().saturating_sub(32);
+                            let aux = 15 + outcomes;
                             matches!((index, other), (i, j) if i == aux + 3 && j == aux + 5)
                                 || matches!((index, other), (i, j) if i == aux + 4 && j == aux + 6)
                         } else {
@@ -3120,6 +3128,18 @@ mod tests {
     use clutch_solana_layout::registry::{GeneralV2Action, SourceSeriesAction};
     use clutch_solana_layout::source_series::account_contract_v2;
     use clutch_solana_layout::{Hash32, Intent};
+
+    #[test]
+    fn fractional_lifecycle_builder_uses_one_meta_per_outcome() {
+        let source = include_str!("transaction_builder.rs");
+        let start = source
+            .find("pub(crate) fn enabled_fractional_lifecycle_v1(")
+            .unwrap();
+        let body = &source[start..];
+        assert!(body.contains("accounts.len() != fixed + outcome_count"));
+        assert!(body.contains("+ outcome_count"));
+        assert!(!body.contains("fixed + 2 * outcome_count"));
+    }
 
     fn owner() -> SemanticOwner {
         SemanticOwner {

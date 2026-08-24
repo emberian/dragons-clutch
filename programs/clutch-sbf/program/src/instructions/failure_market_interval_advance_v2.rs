@@ -15,19 +15,18 @@ use crate::instructions::failure_market_interval_v2::{
     AuthenticatedFailureMarketIntervalPaidAdvanceV2,
 };
 use crate::instructions::failure_market_runtime::{
-    write_failure_market_runtime_session_plan_v2, AuthenticatedFailureMarketRuntimeRootV1,
-    AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
-    AuthenticatedFailureMarketRuntimeSessionWriteV1, FailureMarketRuntimeSessionWriteFactsV1,
+    write_failure_market_runtime_session_plan_v3, AuthenticatedFailureMarketRuntimeRootV1,
+    AuthenticatedFailureMarketRuntimeSessionPostwriteV3,
+    AuthenticatedFailureMarketRuntimeSessionWriteV3, FailureMarketRuntimeSessionWriteFactsV3,
 };
 use crate::instructions::genesis::SYSTEM_PROGRAM_ID;
-use crate::instructions::failure_market_action10_current::require_exact_successful_source_join_current_v2;
 use crate::instructions::product_failure_begin::require_exact_resolved_edge_policy_v1;
-use crate::instructions::product_failure_begin_current::AuthenticatedProductFailureBeginScheduleV2;
-use crate::instructions::product_series_current::{
-    authenticate_market_lifecycle_root_v2, authenticate_series_market_link_v2,
-    AuthenticatedMarketLifecycleRootV2, AuthenticatedRegistryCapabilityV4,
-    AuthenticatedSeriesMarketLinkV2,
+use crate::instructions::product_failure_begin_v3_current::AuthenticatedProductFailureScheduleV3;
+use crate::instructions::product_market_lifecycle_v3_current::{
+    authenticate_market_lifecycle_root_v3, authenticate_series_market_link_v3,
+    AuthenticatedMarketLifecycleRootV3, AuthenticatedSeriesMarketLinkV3,
 };
+use crate::instructions::product_series_current::AuthenticatedRegistryCapabilityV5;
 use crate::seeds;
 use crate::source_plane_v3_actions::SourcePolicyHandoffJoinV1;
 use clutch_failure_policy_runtime::market_interval_cell_v2::{
@@ -35,8 +34,8 @@ use clutch_failure_policy_runtime::market_interval_cell_v2::{
     FailureMarketIntervalCellAdvanceFactsV2, FailureMarketIntervalCellAdvanceReceiptV2,
 };
 use clutch_failure_policy_runtime::market_runtime_v1::{
-    plan_advance_failure_market_session_v2, AuthenticatedFailureMarketSessionV2,
-    FailureMarketSessionAdvanceFactsV2,
+    plan_advance_failure_market_session_v3, AuthenticatedFailureMarketSessionV3,
+    FailureMarketSessionAdvanceFactsV3,
 };
 use clutch_liveness::runtime_adapter_v1::{
     decode_runtime_policy_account_v1, plan_runtime_transition_v1, RuntimeAtomicTransitionV1,
@@ -48,8 +47,8 @@ use clutch_liveness::runtime_v1::{
 };
 use clutch_liveness::Id as LivenessId;
 use clutch_product_series::{
-    ContentId, MarketLifecyclePhaseV2, QuantizedIntervalConsensusContextV1,
-    SeriesMarketLinkPhaseV2,
+    ContentId, MarketLifecyclePhaseV3, QuantizedIntervalConsensusContextV1,
+    SeriesMarketLinkPhaseV3,
 };
 use clutch_solana_layout::failure_recovery::{
     decode_failure_account_body_v1, FAILURE_ACCOUNT_HEADER_BYTES_V1,
@@ -57,19 +56,19 @@ use clutch_solana_layout::failure_recovery::{
     FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1, FAILURE_LIVENESS_POLICY_BODY_BYTES_V1,
 };
 use clutch_solana_layout::product_series::{
-    MarketLifecycleRootAccountV2, SeriesMarketLinkAccountV2,
+    MarketLifecycleRootAccountV3, SeriesMarketLinkAccountV3,
 };
 use clutch_solana_layout::registry;
 use clutch_source_plane_v3_runtime::SuccessfulEvaluationHandoffV1;
 use solana_account_info::AccountInfo;
 use solana_pubkey::Pubkey;
 
-const FAILURE_MARKET_PAID_ADVANCE_PREAUTHORIZATION_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/sbf/failure-market-paid-advance-preauthorization/v2\0";
+const FAILURE_MARKET_PAID_ADVANCE_PREAUTHORIZATION_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/failure-market-paid-advance-preauthorization/v3\0";
 const FAILURE_MARKET_PAID_ADVANCE_RUNTIME_POSTWRITE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/failure-market-paid-advance-runtime-postwrite/v2\0";
-const FAILURE_MARKET_PAID_ADVANCE_POSTWRITE_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/sbf/failure-market-paid-advance-postwrite/v2\0";
+const FAILURE_MARKET_PAID_ADVANCE_POSTWRITE_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/failure-market-paid-advance-postwrite/v3\0";
 
 /// Private exact Recovery prestate admitted to the pure Failure plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -159,16 +158,16 @@ struct FailureMarketPaidAdvanceCellWriteV2 {
 struct FailureMarketRuntimePaidAdvanceAuthorityV2 {
     runtime_before:
         clutch_failure_policy_runtime::market_runtime_v1::FailureMarketRuntimeStateCommitmentV1,
-    series_link_state_id: clutch_product_series::SeriesMarketLinkV2Id,
+    series_link_state_id: clutch_product_series::SeriesMarketLinkV3Id,
     session_before: ContentId,
     session_after: ContentId,
     liveness_work_receipt_id: ContentId,
 }
 
-impl AuthenticatedFailureMarketSessionV2 for FailureMarketRuntimePaidAdvanceAuthorityV2 {
-    fn authenticate_failure_market_session_advance_v2(
+impl AuthenticatedFailureMarketSessionV3 for FailureMarketRuntimePaidAdvanceAuthorityV2 {
+    fn authenticate_failure_market_session_advance_v3(
         &self,
-        expected: FailureMarketSessionAdvanceFactsV2,
+        expected: FailureMarketSessionAdvanceFactsV3,
     ) -> clutch_failure_policy_runtime::Result<()> {
         if expected.runtime_before != self.runtime_before
             || expected.series_link_state_id != self.series_link_state_id
@@ -186,19 +185,19 @@ impl AuthenticatedFailureMarketSessionV2 for FailureMarketRuntimePaidAdvanceAuth
 /// Physical runtime write admitted only after Recovery and cell postwrites.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct FailureMarketRuntimePaidAdvanceWriteV2 {
-    expected: FailureMarketRuntimeSessionWriteFactsV1,
+    expected: FailureMarketRuntimeSessionWriteFactsV3,
     cell_state_after: ContentId,
     runtime_session_state_after: ContentId,
-    live_link_state_id: clutch_product_series::SeriesMarketLinkV2Id,
-    planned_link_state_id: clutch_product_series::SeriesMarketLinkV2Id,
+    live_link_state_id: clutch_product_series::SeriesMarketLinkV3Id,
+    planned_link_state_id: clutch_product_series::SeriesMarketLinkV3Id,
     liveness_receipt_id: ContentId,
     advance_liveness_receipt_id: ContentId,
 }
 
-impl AuthenticatedFailureMarketRuntimeSessionWriteV1 for FailureMarketRuntimePaidAdvanceWriteV2 {
-    fn authenticate_failure_market_runtime_session_write_v1(
+impl AuthenticatedFailureMarketRuntimeSessionWriteV3 for FailureMarketRuntimePaidAdvanceWriteV2 {
+    fn authenticate_failure_market_runtime_session_write_v3(
         &self,
-        expected: FailureMarketRuntimeSessionWriteFactsV1,
+        expected: FailureMarketRuntimeSessionWriteFactsV3,
     ) -> clutch_failure_policy_runtime::Result<()> {
         if expected != self.expected
             || self.cell_state_after != self.runtime_session_state_after
@@ -282,7 +281,7 @@ impl AuthenticatedFailureMarketPaidAdvancePostwriteV2 {
 
 /// Apply one exact priced Product advance through the sole Recovery custody.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
+pub(crate) fn advance_failure_market_interval_paid_v3<'root, 'link>(
     program_id: &Pubkey,
     root_account: &AccountInfo<'_>,
     link_account: &AccountInfo<'_>,
@@ -294,10 +293,10 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
     recovery_account: &AccountInfo<'_>,
     keeper: &AccountInfo<'_>,
     payer_refund: &AccountInfo<'_>,
-    registry: &AuthenticatedRegistryCapabilityV4,
-    product_schedule: &AuthenticatedProductFailureBeginScheduleV2,
-    root_before: AuthenticatedMarketLifecycleRootV2<'_>,
-    link_before: AuthenticatedSeriesMarketLinkV2<'_>,
+    registry: &AuthenticatedRegistryCapabilityV5,
+    product_schedule: &AuthenticatedProductFailureScheduleV3,
+    root_before: AuthenticatedMarketLifecycleRootV3<'_>,
+    link_before: AuthenticatedSeriesMarketLinkV3<'_>,
     admission: AuthenticatedFailureMarketRootV2,
     runtime_before: AuthenticatedFailureMarketRuntimeRootV1,
     interval_before: AuthenticatedFailureMarketIntervalAccountsV2,
@@ -305,12 +304,12 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
     source_success: SuccessfulEvaluationHandoffV1,
     context: QuantizedIntervalConsensusContextV1<'_>,
     requested_coordinates: u16,
-    root_decode: &'root mut MarketLifecycleRootAccountV2,
-    link_decode: &'link mut SeriesMarketLinkAccountV2,
+    root_decode: &'root mut MarketLifecycleRootAccountV3,
+    link_decode: &'link mut SeriesMarketLinkAccountV3,
 ) -> Outcome<(
     AuthenticatedFailureMarketPaidAdvancePostwriteV2,
     AuthenticatedFailureMarketIntervalAccountsV2,
-    AuthenticatedFailureMarketRuntimeSessionPostwriteV1,
+    AuthenticatedFailureMarketRuntimeSessionPostwriteV3,
 )> {
     require_distinct_paid_advance_accounts_v2(
         root_account,
@@ -326,9 +325,9 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
         admission,
         source_join,
     )?;
-    let root_binding = root_before.state().binding();
-    let link_binding = link_before.state().binding();
-    let live_root = authenticate_market_lifecycle_root_v2(
+    let root_binding = root_before.binding();
+    let link_binding = link_before.binding();
+    let live_root = authenticate_market_lifecycle_root_v3(
         program_id,
         root_account,
         root_binding.market_instance_id,
@@ -336,7 +335,7 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
         false,
         root_decode,
     )?;
-    let live_link = authenticate_series_market_link_v2(
+    let live_link = authenticate_series_market_link_v3(
         program_id,
         link_account,
         link_binding.series_plan_id,
@@ -363,9 +362,7 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
         ClutchError::MismatchedState,
     )?;
     let policy = admission.state().binding().facts();
-    let root_binding_id = root_binding
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_binding_id = root_before.binding_id();
     require(
         !root_account.is_writable
             && !link_account.is_writable
@@ -374,11 +371,11 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
             && *cell_account.key == interval_before.cell_account()
             && *history_account.key == interval_before.history_account()
             && interval_before.admission_root_account() == admission.account()
-            && live_root.state().phase() == MarketLifecyclePhaseV2::Active
+            && live_root.state().phase() == MarketLifecyclePhaseV3::Active
             && live_root.state().resolution_semantic_id() == ContentId::ZERO
             && live_root.state().resolution_data_id() == ContentId::ZERO
             && live_root.state().resolution_activation_receipt_id() == ContentId::ZERO
-            && live_link.state().phase() == SeriesMarketLinkPhaseV2::Active
+            && live_link.state().phase() == SeriesMarketLinkPhaseV3::Active
             && live_link.state().active_failure_sessions() == 1
             && live_link.state().failure_session_transcript_id().bytes()
                 == interval_before.cell().session_binding_id().bytes()
@@ -394,7 +391,7 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
                 == root_binding.market_failure_policy_binding_id.bytes(),
         ClutchError::MismatchedState,
     )?;
-    require_exact_successful_source_join_current_v2(
+    require_exact_successful_source_join_current_v3(
         source_join,
         source_success,
         link_binding,
@@ -446,7 +443,7 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
         .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
     let preauthorization_id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
-            FAILURE_MARKET_PAID_ADVANCE_PREAUTHORIZATION_DOMAIN_V2,
+            FAILURE_MARKET_PAID_ADVANCE_PREAUTHORIZATION_DOMAIN_V3,
             &root_before.authentication_id().bytes(),
             &link_before.authentication_id().bytes(),
             &interval_before.cell_authentication_id().bytes(),
@@ -516,7 +513,7 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
             advance_facts.runtime_work_receipt_id.bytes(),
         ),
     };
-    let runtime_plan = plan_advance_failure_market_session_v2(
+    let runtime_plan = plan_advance_failure_market_session_v3(
         &runtime_advance_authority,
         runtime_before.state(),
         admission.state(),
@@ -560,7 +557,7 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
         .resulting_runtime()
         .commitment()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let runtime_postwrite = write_failure_market_runtime_session_plan_v2(
+    let runtime_postwrite = write_failure_market_runtime_session_plan_v3(
         program_id,
         admission_root_account,
         runtime_root_account,
@@ -568,7 +565,7 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
         runtime_before,
         runtime_plan,
         &FailureMarketRuntimePaidAdvanceWriteV2 {
-            expected: FailureMarketRuntimeSessionWriteFactsV1 {
+            expected: FailureMarketRuntimeSessionWriteFactsV3 {
                 runtime_before: runtime_before.state_commitment(),
                 runtime_after: runtime_after_commitment,
                 transition_receipt_id: runtime_plan.receipt_id(),
@@ -592,7 +589,7 @@ pub(crate) fn advance_failure_market_interval_paid_v2<'root, 'link>(
     )?;
     let id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
-            FAILURE_MARKET_PAID_ADVANCE_POSTWRITE_DOMAIN_V2,
+            FAILURE_MARKET_PAID_ADVANCE_POSTWRITE_DOMAIN_V3,
             &preauthorization_id.bytes(),
             &advance_receipt.id().bytes(),
             &runtime.id.bytes(),
@@ -1123,6 +1120,64 @@ fn liveness_id(key: &Pubkey) -> LivenessId {
     LivenessId::from_bytes(key.to_bytes())
 }
 
+fn require_exact_successful_source_join_current_v3(
+    source_join: SourcePolicyHandoffJoinV1,
+    source_success: SuccessfulEvaluationHandoffV1,
+    link: &clutch_product_series::SeriesMarketLinkBindingV3,
+    root: &clutch_product_series::MarketLifecycleBindingV3,
+    policy: clutch_failure_policy_runtime::market_policy_v1::FailureMarketPolicyFactsV1,
+) -> Outcome<()> {
+    let occurrence = source_success.occurrence();
+    let statistic_result_id = source_success
+        .statistic_result_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        source_join.handoff_id() == source_success.id()
+            && source_join.failure_policy_binding_id()
+                == source_success.failure_policy_binding_id()
+            && source_join.failure_policy_binding_id().bytes()
+                == root.market_failure_policy_binding_id.bytes()
+            && source_join.release_authentication_id().bytes()
+                == policy.source_release_authentication_id.bytes()
+            && source_join.route_id() == occurrence.route_id()
+            && source_join.route_id().bytes() == root.source_route_id.bytes()
+            && source_join.occurrence_account().bytes()
+                == occurrence.occurrence_account().bytes()
+            && source_join.occurrence_account().bytes()
+                == link.source_occurrence_account_id.bytes()
+            && source_join.source_fact_authentication_id()
+                == source_success.result_account_authentication_id()
+            && source_join.clock_policy_id() == source_success.clock_policy_id()
+            && source_join.clock_policy_id() == occurrence.clock_policy_id()
+            && source_join.clock_policy_id().bytes() == root.clock_policy_id.bytes()
+            && source_join.clock() == source_success.clock()
+            && source_join.source_spec_id() == occurrence.source_spec_id()
+            && source_join.source_spec_id().bytes() == root.source_spec_id.bytes()
+            && source_join.window_id() == occurrence.window_id()
+            && source_join.statistic_key_id() == occurrence.statistic_key_id()
+            && occurrence.occurrence_record_id().bytes() == link.source_occurrence_id.bytes()
+            && occurrence.occurrence_account_authentication_id().bytes()
+                == link.source_occurrence_account_authentication_id.bytes()
+            && occurrence.series_plan_id().bytes() == link.series_plan_id.bytes()
+            && occurrence.ordinal() == link.ordinal
+            && occurrence.market_instance_id().bytes() == link.market_instance_id.bytes()
+            && occurrence.attachment_plan_id().bytes() == link.attachment_plan_id.bytes()
+            && occurrence.source_plane_contract_id().bytes()
+                == root.source_plane_contract_id.bytes()
+            && occurrence.source_spec_id().bytes() == root.source_spec_id.bytes()
+            && statistic_result_id
+                == source_success
+                    .result()
+                    .id()
+                    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            && source_join.work_receipt_account().bytes() != [0; 32]
+            && source_join.work_receipt_authentication_id()
+                != clutch_source_plane_v3::ContentId::ZERO
+            && source_join.id() != clutch_source_plane_v3::ContentId::ZERO,
+        ClutchError::MismatchedState,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1191,7 +1246,7 @@ mod tests {
     fn sole_outer_paid_advance_orders_recovery_cell_and_market_runtime_atomically() {
         let source = include_str!("failure_market_interval_advance_v2.rs");
         let outer = source
-            .find("pub(crate) fn advance_failure_market_interval_paid_v2")
+            .find("pub(crate) fn advance_failure_market_interval_paid_v3")
             .unwrap();
         let runtime_write = source[outer..]
             .find("let runtime = apply_failure_recovery_paid_advance_v2")
@@ -1200,12 +1255,12 @@ mod tests {
             .find("let interval_after = write_failure_market_interval_paid_advance_v2")
             .unwrap();
         let market_runtime_write = source[outer..]
-            .find("let runtime_postwrite = write_failure_market_runtime_session_plan_v2")
+            .find("let runtime_postwrite = write_failure_market_runtime_session_plan_v3")
             .unwrap();
         assert!(runtime_write < cell_write && cell_write < market_runtime_write);
         assert_eq!(
             source
-                .matches("pub(crate) fn advance_failure_market_interval_paid_v2")
+                .matches("pub(crate) fn advance_failure_market_interval_paid_v3")
                 .count(),
             1
         );
@@ -1345,8 +1400,8 @@ mod tests {
     fn stale_prestates_and_final_refusal_are_structurally_atomic() {
         let source = include_str!("failure_market_interval_advance_v2.rs");
         let cell_source = include_str!("failure_market_interval_v2.rs");
-        assert!(source.contains("authenticate_market_lifecycle_root_v2"));
-        assert!(source.contains("authenticate_series_market_link_v2"));
+        assert!(source.contains("authenticate_market_lifecycle_root_v3"));
+        assert!(source.contains("authenticate_series_market_link_v3"));
         assert!(source.contains("== authenticated.recovery_data_id"));
         assert!(cell_source.contains("authenticate_unchanged_account_prestate"));
         assert!(cell_source.contains("authenticate_write_prestate"));

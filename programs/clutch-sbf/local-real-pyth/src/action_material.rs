@@ -68,14 +68,16 @@ use clutch_general_v2_contract::{
 };
 use clutch_product_series::{
     CompiledProductSeriesBundleV6, CompiledProductSeriesBundleV7, ContentId, FixedCodec,
-    MarketFoundationAccountGraphV4, MarketFoundationSlotV4, MarketInstancePreimageV2,
-    MarketLifecyclePhaseV2, MarketLifecyclePhaseV3, NativeClaimBasisV1,
+    MarketFamilyStatusV1, MarketFamilyV1, MarketFoundationAccountGraphV4,
+    MarketFoundationSlotV4, MarketInstancePreimageV2, MarketLifecyclePhaseV2,
+    MarketLifecyclePhaseV3, NativeClaimBasisV1,
     RegistryCapabilityProfileV4, RegistryProgramReleaseV2, RegistryReleaseLocusV2,
     SeriesAttachmentPlanV5, SeriesAttachmentPlanV6, SeriesFundingQuoteV6,
     SeriesFundingTermsV2, SeriesLinkObligationStatusV2, SeriesLinkObligationStatusV3,
     SeriesLinkObligationV2, SeriesLinkObligationV3, SeriesMarketLinkPhaseV2,
-    SeriesMarketLinkPhaseV3, MARKET_FOUNDATION_CORE_SLOT_COUNT_V4,
-    MARKET_FOUNDATION_MAX_OUTCOMES_V4, MARKET_FOUNDATION_SLOT_COUNT_V4,
+    SeriesMarketLinkBindingV3, SeriesMarketLinkPhaseV3,
+    MARKET_FOUNDATION_CORE_SLOT_COUNT_V4, MARKET_FOUNDATION_MAX_OUTCOMES_V4,
+    MARKET_FOUNDATION_SLOT_COUNT_V4,
 };
 use clutch_liveness::{
     RuntimeCompartmentKindV1, RuntimeCompartmentPhaseV1, RuntimeCompartmentV1,
@@ -115,6 +117,9 @@ use std::collections::BTreeSet;
 
 pub const CANONICAL_ACTION_MATERIAL_SCHEMA_V1: &str =
     "dragons-clutch/operator-canonical-action-material/v1";
+
+const OUTCOME_CUSTODY_PDA_DOMAIN_V1: &[u8] = b"dc:outcome-custody:v1";
+const TREASURY_SERVICE_LEDGER_PDA_DOMAIN_V1: &[u8] = b"treasury-service-v1";
 
 pub type Result<T> = core::result::Result<T, CanonicalActionMaterialErrorV1>;
 
@@ -1988,7 +1993,7 @@ fn detect_structured_schedule_v1(
     accounts: &[StructuredChainAccountV1<'_>],
 ) -> Result<DetectedStructuredScheduleV1> {
     let action = match accounts.len() {
-        35 => StructuredClaimActionV1::CreateDescriptor,
+        36 => StructuredClaimActionV1::CreateDescriptor,
         32 => {
             let compact = accounts
                 .get(10)
@@ -2005,20 +2010,17 @@ fn detect_structured_schedule_v1(
             }
         }
         33 => {
-            let retire = accounts
-                .get(10)
-                .and_then(|account| account.data().ok())
-                .is_some_and(|body| StructuredClaimDescriptorV2::decode(body).is_ok());
             let redeem = accounts
                 .get(13)
                 .and_then(|account| account.data().ok())
                 .is_some_and(|body| StructuredClaimDescriptorV2::decode(body).is_ok());
-            match (retire, redeem) {
-                (true, false) => StructuredClaimActionV1::RetireDescriptor,
-                (false, true) => detect_full_vector_direction_v1(accounts, true)?,
-                _ => return Err(CanonicalActionMaterialErrorV1::InvalidChainState),
+            if redeem {
+                detect_full_vector_direction_v1(accounts, true)?
+            } else {
+                return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
             }
         }
+        34 => StructuredClaimActionV1::RetireDescriptor,
         _ => return Err(CanonicalActionMaterialErrorV1::InvalidChainState),
     };
     let (driver_index, generation, item) = if action
@@ -2667,6 +2669,11 @@ fn derive_structured_create_v1(
     if accounts[26].address != link_pda.0 || link.stored_bump != link_pda.1 {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
+    let product_root = validate_structured_product_root_v3(
+        releases.base.program_id,
+        accounts[35],
+        &link_binding,
+    )?;
     let bundle = CompiledProductSeriesBundleV7::decode(accounts[27].data()?)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let bundle_id = bundle
@@ -2766,6 +2773,9 @@ fn derive_structured_create_v1(
         || profile.registry_release_id().content_id() != base_release_id
         || profile_id.content_id() != link_binding.capability_profile_id
         || bundle.registry_release_id != base_release_id
+        || product_root.state.binding_ref().registry_release_id != bundle.registry_release_id
+        || product_root.state.binding_ref().capability_profile_id
+            != link_binding.capability_profile_id
     {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
@@ -2920,10 +2930,23 @@ fn derive_structured_create_v1(
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
     let product_link_writable = accounts[25].present.is_none();
+    let structured_status = link
+        .state
+        .obligation_status(SeriesLinkObligationV3::Structured);
     let wrapper_status = link.state.obligation_status(SeriesLinkObligationV3::Wrapper);
+    let product_family_status = product_root
+        .state
+        .product_families()
+        .family(MarketFamilyV1::Structured)
+        .status();
     if (product_link_writable
-        && wrapper_status != SeriesLinkObligationStatusV3::EnabledNeverFounded)
-        || (!product_link_writable && wrapper_status != SeriesLinkObligationStatusV3::Live)
+        && (structured_status != SeriesLinkObligationStatusV3::EnabledNeverFounded
+            || wrapper_status != SeriesLinkObligationStatusV3::EnabledNeverFounded
+            || product_family_status != MarketFamilyStatusV1::EnabledNeverFounded))
+        || (!product_link_writable
+            && (structured_status != SeriesLinkObligationStatusV3::Live
+                || wrapper_status != SeriesLinkObligationStatusV3::Live
+                || product_family_status != MarketFamilyStatusV1::Live))
     {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
@@ -3903,19 +3926,61 @@ fn observed_lamports(account: StructuredChainAccountV1<'_>) -> u64 {
     account.present.map_or(0, |value| value.lamports)
 }
 
+fn validate_structured_product_root_v3(
+    base_program: Address,
+    account: StructuredChainAccountV1<'_>,
+    link_binding: &SeriesMarketLinkBindingV3,
+) -> Result<MarketLifecycleRootAccountV3> {
+    let root = MarketLifecycleRootAccountV3::decode(account.data()?)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let binding = root.state.binding_ref();
+    let binding_id = binding
+        .id()
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+    let root_pda = Address::find_program_address(
+        &[
+            PRODUCT_MARKET_LIFECYCLE_ROOT_PDA_DOMAIN_V1,
+            &binding.market_instance_id.bytes(),
+            &binding.generation.to_le_bytes(),
+        ],
+        &base_program,
+    );
+    if account.owner()? != base_program
+        || account.executable()
+        || account.address != root_pda.0
+        || root.stored_bump != root_pda.1
+        || observed_lamports(account) < root.rent_principal_lamports
+        || !matches!(
+            root.state.phase(),
+            MarketLifecyclePhaseV3::Active | MarketLifecyclePhaseV3::Retiring
+        )
+        || account.address.to_bytes() != link_binding.market_root_account_id.bytes()
+        || binding_id != link_binding.market_binding_id
+        || binding.market_instance_id != link_binding.market_instance_id
+        || binding.generation != link_binding.generation
+        || binding.capability_profile_id != link_binding.capability_profile_id
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
+    Ok(root)
+}
+
 fn validate_current_product_join(
     accounts: &[StructuredChainAccountV1<'_>],
     action: StructuredClaimActionV1,
     root: StructuredMarketRootV1,
 ) -> Result<()> {
-    let (link_index, bundle_index, attachment_index) = match action {
-        StructuredClaimActionV1::CompactDonation => (27, None, None),
-        StructuredClaimActionV1::RetireDescriptor => (24, Some(25), Some(26)),
+    let (link_index, bundle_index, attachment_index, product_root_index) = match action {
+        StructuredClaimActionV1::CompactDonation => (27, None, None, None),
+        StructuredClaimActionV1::RetireDescriptor => (24, Some(25), Some(26), Some(33)),
         _ => return Err(CanonicalActionMaterialErrorV1::InvalidPlan),
     };
     let link = SeriesMarketLinkAccountV3::decode(accounts[link_index].data()?)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let binding = link.state.binding();
+    let product_root = product_root_index
+        .map(|index| validate_structured_product_root_v3(accounts[13].address, accounts[index], &binding))
+        .transpose()?;
     let link_pda = Address::find_program_address(
         &[
             b"dc:series-market-link:v1",
@@ -3929,6 +3994,8 @@ fn validate_current_product_join(
         || accounts[link_index].address != link_pda.0
         || link.stored_bump != link_pda.1
         || link.state.phase() != SeriesMarketLinkPhaseV3::Active
+        || link.state.obligation_status(SeriesLinkObligationV3::Structured)
+            != SeriesLinkObligationStatusV3::Live
         || link.state.obligation_status(SeriesLinkObligationV3::Wrapper)
             != SeriesLinkObligationStatusV3::Live
         || binding.series_plan_id != root.binding.series_plan_id
@@ -3964,6 +4031,19 @@ fn validate_current_product_join(
             ArtifactKind::SeriesAttachmentPlanV6,
             attachment_id.bytes(),
         )?;
+        let invalid_product_root = match product_root.as_ref() {
+            Some(product_root) => {
+                product_root.state.binding_ref().registry_release_id
+                    != bundle.registry_release_id
+                    || product_root
+                        .state
+                        .product_families()
+                        .family(MarketFamilyV1::Structured)
+                        .status()
+                        != MarketFamilyStatusV1::Live
+            }
+            None => true,
+        };
         if bundle_id != binding.compiler_bundle_id
             || attachment_id != binding.attachment_plan_id
             || bundle.series_plan_id != binding.series_plan_id
@@ -3973,6 +4053,7 @@ fn validate_current_product_join(
             || bundle.capability_profile_id.content_id() != binding.capability_profile_id
             || attachment.funding_quote_id != binding.funding_quote_id
             || attachment.wrapper_recipe_set_id != root.binding.wrapper_recipe_set_id
+            || invalid_product_root
         {
             return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
         }
@@ -4329,7 +4410,7 @@ pub fn construct_fractional_lifecycle_material_v1(
     if workflow_id == [0; 32]
         || builder.clutch_program() != releases.base.program_id
         || builder.clutch_release_sha256() != releases.base.elf_sha256
-        || frame.accounts.len() < 39
+        || frame.accounts.len() < 34
     {
         return Err(CanonicalActionMaterialErrorV1::ReleaseMismatch);
     }
@@ -4339,11 +4420,11 @@ pub fn construct_fractional_lifecycle_material_v1(
     let binding = root.state.binding();
     let outcomes = usize::from(binding.outcome_count);
     if !(2..=MARKET_FOUNDATION_MAX_OUTCOMES_V4).contains(&outcomes)
-        || frame.accounts.len() != 35 + 2 * outcomes
+        || frame.accounts.len() != 32 + outcomes
     {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
     }
-    let aux = MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + 2 * outcomes + 3;
+    let aux = MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + outcomes;
     let cluster = &frame.accounts[0].provenance.cluster_key;
     let release_key = releases.base.key();
     let mut addresses = BTreeSet::new();
@@ -4363,7 +4444,8 @@ pub fn construct_fractional_lifecycle_material_v1(
             return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
         }
     }
-    if frame.accounts[aux + 3].address == frame.accounts[aux + 5].address
+    if addresses.len() > 64
+        || frame.accounts[aux + 3].address == frame.accounts[aux + 5].address
         != (frame.accounts[aux + 4].address == frame.accounts[aux + 6].address)
     {
         return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
@@ -4393,6 +4475,8 @@ pub fn construct_fractional_lifecycle_material_v1(
         ArtifactKind::SeriesFundingQuoteV6,
         quote_id.content_id().bytes(),
     )?;
+    let market_binding = MarketBindingV4::decode(&frame.accounts[1].data)
+        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let mut graph_ids = [ContentId::ZERO; MARKET_FOUNDATION_SLOT_COUNT_V4];
     for index in 0..MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 {
         graph_ids[index] = ContentId::from_bytes(frame.accounts[index].address.to_bytes());
@@ -4400,19 +4484,68 @@ pub fn construct_fractional_lifecycle_material_v1(
     for index in 0..outcomes {
         graph_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + index] =
             ContentId::from_bytes(frame.accounts[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + index].address.to_bytes());
+        let outcome_index = u8::try_from(index)
+            .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
+        let generation = binding.generation.to_le_bytes();
+        let custody = Address::find_program_address(
+            &[
+                OUTCOME_CUSTODY_PDA_DOMAIN_V1,
+                &binding.market_instance_id.bytes(),
+                &generation,
+                &[outcome_index],
+            ],
+            &program,
+        )
+        .0;
         graph_ids[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + MARKET_FOUNDATION_MAX_OUTCOMES_V4 + index] =
-            ContentId::from_bytes(frame.accounts[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + outcomes + index].address.to_bytes());
+            ContentId::from_bytes(custody.to_bytes());
     }
-    let treasury = MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + 2 * outcomes;
+    let revenue = market_binding.authority();
+    let purpose = [u8::from(PositionPurposeV3::General)];
+    let treasury_position = Address::find_program_address(
+        &[
+            POSITION_V3_PDA_PREFIX,
+            &binding.market_instance_id.bytes(),
+            &revenue.treasury_owner().bytes(),
+            &purpose,
+            &frame.accounts[2].address.to_bytes(),
+        ],
+        &program,
+    )
+    .0;
+    let treasury_replay = Address::find_program_address(
+        &[
+            PURPOSE_REPLAY_V3_PDA_PREFIX,
+            &treasury_position.to_bytes(),
+            &purpose,
+            &frame.accounts[2].address.to_bytes(),
+        ],
+        &program,
+    )
+    .0;
+    let treasury_service = Address::find_program_address(
+        &[
+            TREASURY_SERVICE_LEDGER_PDA_DOMAIN_V1,
+            &binding.market_instance_id.bytes(),
+            &treasury_position.to_bytes(),
+        ],
+        &program,
+    )
+    .0;
+    if revenue.treasury_position_account().bytes() != treasury_position.to_bytes()
+        || revenue.treasury_service_ledger_account().bytes() != treasury_service.to_bytes()
+    {
+        return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
+    }
     graph_ids[MarketFoundationSlotV4::GeneralTreasuryPosition.index()
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?] =
-        ContentId::from_bytes(frame.accounts[treasury].address.to_bytes());
+        ContentId::from_bytes(treasury_position.to_bytes());
     graph_ids[MarketFoundationSlotV4::GeneralTreasuryReplay.index()
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?] =
-        ContentId::from_bytes(frame.accounts[treasury + 1].address.to_bytes());
+        ContentId::from_bytes(treasury_replay.to_bytes());
     graph_ids[MarketFoundationSlotV4::TreasuryServiceLedger.index()
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?] =
-        ContentId::from_bytes(frame.accounts[treasury + 2].address.to_bytes());
+        ContentId::from_bytes(treasury_service.to_bytes());
     let graph = MarketFoundationAccountGraphV4 {
         market_instance_id: binding.market_instance_id,
         generation: binding.generation,
@@ -4495,8 +4628,6 @@ pub fn construct_fractional_lifecycle_material_v1(
     let market_instance = MarketInstancePreimageV2::decode(&frame.accounts[aux + 7].data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let market_id = market_instance.id().map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
-    let market_binding = MarketBindingV4::decode(&frame.accounts[1].data)
-        .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let market_runtime = MarketRuntimeV3AccountV1::decode(&frame.accounts[2].data)
         .map_err(|_| CanonicalActionMaterialErrorV1::InvalidChainState)?;
     let hoard = HoardV2::decode(&frame.accounts[3].data)
@@ -4581,11 +4712,6 @@ pub fn construct_fractional_lifecycle_material_v1(
             return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
         }
     }
-    for index in treasury..treasury + 3 {
-        if frame.accounts[index].owner != program || frame.accounts[index].executable {
-            return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
-        }
-    }
     for index in [aux, aux + 1, aux + 2, aux + 7, aux + 8, aux + 9, aux + 10, aux + 13, aux + 14] {
         if frame.accounts[index].owner != program || frame.accounts[index].executable {
             return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
@@ -4598,11 +4724,8 @@ pub fn construct_fractional_lifecycle_material_v1(
     }
     for index in 0..outcomes {
         let mint = frame.accounts[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + index];
-        let custody = frame.accounts[MARKET_FOUNDATION_CORE_SLOT_COUNT_V4 + outcomes + index];
         if mint.owner != frame.accounts[aux + 5].address
-            || custody.owner != frame.accounts[aux + 5].address
             || mint.executable
-            || custody.executable
         {
             return Err(CanonicalActionMaterialErrorV1::InvalidChainState);
         }
@@ -4705,6 +4828,9 @@ pub fn construct_fractional_lifecycle_material_v1(
         return Err(CanonicalActionMaterialErrorV1::CoordinateDisabled);
     }
     let contract = clutch_fractional_redemption_runtime::fractional_account_contract_v1(action);
+    if !contract.foundation_outcome_mint_suffix || contract.post_mint_accounts != 0 {
+        return Err(CanonicalActionMaterialErrorV1::InvalidPlan);
+    }
     let mut metas = Vec::with_capacity(frame.accounts.len());
     let mut roles = Vec::with_capacity(frame.accounts.len());
     for (index, account) in frame.accounts.iter().copied().enumerate() {
@@ -4720,10 +4846,8 @@ pub fn construct_fractional_lifecycle_material_v1(
         roles.push(CanonicalAccountRoleV1 {
             label: if index < 15 {
                 "foundation-core"
-            } else if index < 15 + 2 * outcomes {
-                "foundation-outcome"
-            } else if index < aux {
-                "foundation-treasury"
+            } else if index < 15 + outcomes {
+                "foundation-outcome-mint"
             } else {
                 "lifecycle-authority"
             },
@@ -9564,6 +9688,24 @@ mod tests {
     use clutch_solana_layout::source_series::SourceAccountRoleV2;
 
     #[test]
+    fn fractional_lifecycle_material_derives_omitted_graph_accounts() {
+        let source = include_str!("action_material.rs");
+        let start = source
+            .find("pub fn construct_fractional_lifecycle_material_v1(")
+            .unwrap();
+        let end = source[start..]
+            .find("pub fn construct_fractional_bearer_material_v1(")
+            .unwrap()
+            + start;
+        let body = &source[start..end];
+        assert!(body.contains("frame.accounts.len() != 32 + outcomes"));
+        assert!(body.contains("OUTCOME_CUSTODY_PDA_DOMAIN_V1"));
+        assert!(body.contains("revenue.treasury_position_account()"));
+        assert!(body.contains("PURPOSE_REPLAY_V3_PDA_PREFIX"));
+        assert!(!body.contains("foundation-treasury"));
+    }
+
+    #[test]
     fn structured_operator_material_uses_only_current_product_lineage() {
         let source = include_str!("action_material.rs");
         let create_start = source.find("fn derive_structured_create_v1(").unwrap();
@@ -9581,6 +9723,7 @@ mod tests {
         for body in [create, current_join] {
             assert!(body.contains("SeriesMarketLinkAccountV3"));
             assert!(body.contains("SeriesMarketLinkPhaseV3"));
+            assert!(body.contains("validate_structured_product_root_v3("));
             assert!(!body.contains("SeriesMarketLinkAccountV2"));
             assert!(!body.contains("SeriesMarketLinkPhaseV2"));
         }
