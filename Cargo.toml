@@ -4,6 +4,7 @@ members = [
     "crates/dclutch-kernel",
     "crates/dclutch-pyth-svm",
     "crates/dclutch-pyth-contract",
+    "programs/dclutch-sbf",
 ]
 resolver = "2"
 
@@ -15,6 +16,7 @@ rust-version = "1.89"
 [workspace.lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(target_os, values("solana"))'] }
 
 [workspace.lints.clippy]
 cast_possible_truncation = "deny"
