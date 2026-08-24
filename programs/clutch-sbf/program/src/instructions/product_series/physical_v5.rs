@@ -544,6 +544,10 @@ impl AuthenticatedSeriesPhysicalCapitalizationV5 {
         self.lamport_principal_refund
     }
 
+    pub(crate) const fn payer(&self) -> Pubkey {
+        self.payer
+    }
+
     pub(crate) const fn neutral_lamport_sink(&self) -> Pubkey {
         self.neutral_lamport_sink
     }
