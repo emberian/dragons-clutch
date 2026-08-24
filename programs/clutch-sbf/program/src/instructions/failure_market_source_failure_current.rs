@@ -41,9 +41,9 @@ use crate::instructions::product_series_current::{
     FailureSessionReleaseDispositionV3,
 };
 use crate::instructions::source_failure_product_release_v1::{
-    bind_persisted_source_failure_product_release_v2,
+    bind_persisted_source_failure_product_release_v3,
     bind_source_failure_product_release_v1,
-    AuthenticatedPersistedSourceFailureProductReleaseV2,
+    AuthenticatedPersistedSourceFailureProductReleaseV3,
 };
 use crate::instructions::source_failure_terminal_v1::{
     compose_source_failure_terminal_v1,
@@ -205,7 +205,7 @@ struct FailureMarketSourceTransitionAuthorityV3<'a> {
     pin: &'a AuthenticatedSeriesFailureSessionPinV2,
     release: &'a AuthenticatedSeriesFailureSessionReleaseV3,
     source_terminal: AuthenticatedSourceFailureTerminalPostwriteV1,
-    source_product_release: &'a AuthenticatedPersistedSourceFailureProductReleaseV2,
+    source_product_release: &'a AuthenticatedPersistedSourceFailureProductReleaseV3,
     archive: FailureMarketIntervalArchivePostwriteV3,
 }
 
@@ -273,7 +273,7 @@ pub(crate) struct AuthenticatedFailureMarketSourceFailurePostwriteV3<'link> {
     source_terminal: AuthenticatedSourceFailureTerminalPostwriteV1,
     source_failure_receipt: FailureMarketIntervalCellSourceFailureReceiptV2,
     archive: FailureMarketIntervalArchivePostwriteV3,
-    source_release: AuthenticatedPersistedSourceFailureProductReleaseV2,
+    source_release: AuthenticatedPersistedSourceFailureProductReleaseV3,
     runtime: AuthenticatedFailureMarketRuntimeSourceFailurePostwriteV3,
 }
 
@@ -296,7 +296,7 @@ impl AuthenticatedFailureMarketSourceFailurePostwriteV3<'_> {
     }
     pub(crate) const fn source_release(
         &self,
-    ) -> &AuthenticatedPersistedSourceFailureProductReleaseV2 {
+    ) -> &AuthenticatedPersistedSourceFailureProductReleaseV3 {
         &self.source_release
     }
     pub(crate) const fn runtime(&self) -> AuthenticatedFailureMarketRuntimeSourceFailurePostwriteV3 {
@@ -569,7 +569,7 @@ pub(crate) fn compose_failure_market_source_failure_attempt_v3<'root, 'link, 're
         &release,
         &archive,
     )?;
-    let persisted_source_product_release = bind_persisted_source_failure_product_release_v2(
+    let persisted_source_product_release = bind_persisted_source_failure_product_release_v3(
         program_id,
         source_route,
         source_product_release,
@@ -697,7 +697,7 @@ mod adversarial_source_contract_tests {
         let release = compose.find("release_series_market_link_failure_v3(").unwrap();
         let source_release = compose.find("bind_source_failure_product_release_v1(").unwrap();
         let persisted_source_release = compose
-            .find("bind_persisted_source_failure_product_release_v2(")
+            .find("bind_persisted_source_failure_product_release_v3(")
             .unwrap();
         let runtime = compose
             .find("write_failure_market_runtime_source_failure_plan_v3(")
