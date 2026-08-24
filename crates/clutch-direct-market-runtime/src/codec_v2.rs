@@ -32,6 +32,7 @@ pub struct AuthenticatedDirectRootTransitionV2 {
     projected_root: DirectMarketRootV1,
     fee_policy: crate::fee_v2::DirectFeePolicyV2,
     current_general: DirectCurrentGeneralAuthorityV2,
+    product_global_liveness_account: [u8; 32],
     terminal_product_ids: [[u8; 32]; 7],
     binding_semantic_id: [u8; 32],
     binding_body_id: [u8; 32],
@@ -95,6 +96,10 @@ impl AuthenticatedDirectRootTransitionV2 {
     /// Product RootV2 immutable MarketLifecycleBindingV2 identity.
     pub const fn product_market_binding_id(&self) -> [u8; 32] {
         self.terminal_product_ids[0]
+    }
+    /// Exact Product-owned `0xba/v2` manifest retained by b1/v2.
+    pub const fn product_global_liveness_account(&self) -> [u8; 32] {
+        self.product_global_liveness_account
     }
     /// Complete current General V4/Revenue authority identity retained by b1/v2.
     pub const fn current_general_authority_id(&self) -> [u8; 32] {
@@ -427,6 +432,7 @@ pub fn authenticate_direct_root_transition_body_v2<B: DirectHashBackendV1>(
         product.product_direct_global_liveness_activation_id,
         product.direct_work_quote_id,
     ];
+    let product_global_liveness_account = product.product_direct_global_liveness_account;
     drop(product);
     let schedule = read_schedule(&mut reader)?;
     let root_rent = read_rent(&mut reader)?;
@@ -476,6 +482,7 @@ pub fn authenticate_direct_root_transition_body_v2<B: DirectHashBackendV1>(
         projected_root,
         fee_policy,
         current_general: general,
+        product_global_liveness_account,
         terminal_product_ids,
         binding_semantic_id,
         binding_body_id,

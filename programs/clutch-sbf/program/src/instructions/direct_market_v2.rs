@@ -4,7 +4,7 @@
 //! physical frames are interpreted only after that root has authenticated, so
 //! their historical arithmetic shape cannot become a persisted V1 authority.
 //! Action 1 and action 13 refuse before account inspection until their sole
-//! Product FundingV4 and Product RootV2/0xba-v2 writers are available.
+//! Product FundingV5 and Product RootV3/LinkV3 writers are available.
 
 use crate::accounts::{
     expect_pda, require, require_count, require_distinct, require_signer, Outcome,
@@ -90,9 +90,7 @@ use clutch_owner_settlement::{AuthenticatedPositionV3, PositionSettlementPoststa
 use clutch_price_measure::PriceVectorV3;
 use clutch_product_series::{
     CompiledProductSeriesBundleV6, ContentId, MarketGenesisProfileV2,
-    MarketFamilyStatusV1, MarketFamilyV1, MarketInstancePreimageV2,
-    MarketLifecyclePhaseV2, MarketLifecycleRootV2, NativeClaimBasisV1,
-    PriceMeasurePolicyV1,
+    MarketInstancePreimageV2, NativeClaimBasisV1, PriceMeasurePolicyV1,
 };
 use clutch_retirement::{PositionPurposeV3, PositionV3Sha256Backend, ReplayV3HashBackend};
 use clutch_solana_layout::direct_market_v1::{
@@ -101,7 +99,6 @@ use clutch_solana_layout::direct_market_v1::{
 use clutch_solana_layout::direct_market_v2::{
     DirectMarketRootAccountV2, DIRECT_MARKET_ROOT_BODY_BYTES_V2,
 };
-use clutch_solana_layout::product_series::MarketLifecycleRootAccountV2;
 use clutch_solana_layout::registry::{
     DirectMarketAction, DIRECT_ACTION_REPLAY_ACCOUNT_BYTES,
     DIRECT_ACTION_REPLAY_ACCOUNT_TAG, DIRECT_ACTION_REPLAY_ACCOUNT_VERSION,
@@ -121,12 +118,8 @@ use super::general_v2_position_replay::authenticate_current_general_position_rep
 use super::product_artifact::authenticate_product_artifact_v1;
 use super::product_direct_global_liveness::
     retire_product_direct_candidate_allocation_v2,
-    AuthenticatedDirectCandidateTerminalPostwriteV2;
-use super::product_series_current::{
-    consume_direct_family_terminal_postwrite_v2,
-    AuthenticatedMarketLifecycleRootV2, AuthenticatedProductDirectFamilyTerminalV2,
-};
-use super::product_series_current::retirement_v4::AuthenticatedProductSeriesRetirementV4;
+    AuthenticatedDirectCandidateTerminalPostwriteV2,
+    AuthenticatedProductDirectCandidateRetirementV2;
 use super::revenue_policy_v2::{
     accept_treasury_service_transition_v1, authenticate_revenue_policy_record_v2,
     authenticate_treasury_service_ledger_v1, derive_revenue_market_treasury_v1,
@@ -143,8 +136,10 @@ const DIRECT_FREEZE_BOOK_FIXED_ACCOUNTS_V2: usize = 12;
 
 const DIRECT_PRICE_AUTHENTICATION_DOMAIN_V2: &[u8] =
     b"dragons-clutch/direct/price-authentication/v2\0";
-const DIRECT_ACTION13_ARCHIVE_CLOSE_DOMAIN_V2: &[u8] =
-    b"dragons-clutch/sbf/direct/action13-archive-close/v2\0";
+const DIRECT_ACTION13_ARCHIVE_CLOSE_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/direct/action13-archive-close/v3\0";
+const DIRECT_FAMILY_TERMINAL_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/sbf/direct/family-terminal/v3\0";
 const DIRECT_ACTION13_CANDIDATE_POSTWRITE_DOMAIN_V2: &[u8] =
     b"dragons-clutch/sbf/direct/action13-candidate-postwrite/v2\0";
 
@@ -3385,33 +3380,122 @@ fn authenticate_direct_candidate_terminal_postwrite_v2(
     })
 }
 
-/// Exact result of the first three action-13 successors. The sealed Direct
-/// plan and Product family postwrite remain move-only; the sole whole-Series
-/// composer consumes the rebound RootV2 next.
-#[derive(Debug)]
-pub(crate) struct AuthenticatedDirectAction13ProductPredecessorV2 {
-    sealed: DirectFamilyTerminalPlanV2,
-    product_family_terminal: AuthenticatedProductDirectFamilyTerminalV2,
-}
-
-impl AuthenticatedDirectAction13ProductPredecessorV2 {
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        DirectFamilyTerminalPlanV2,
-        AuthenticatedProductDirectFamilyTerminalV2,
-    ) {
-        (self.sealed, self.product_family_terminal)
+/// Product RootV3's default-refusing preterminal projection. It authenticates
+/// the exact live Direct family prestate without mutating Product; the sole
+/// RootV3 writer later consumes `AuthenticatedDirectFamilyTerminalV3`.
+pub(crate) trait AuthenticatedProductDirectFamilyPreterminalV3 {
+    fn product_family_prestate_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+    fn family_terminal_sequence(&self) -> Outcome<u32> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_direct_family_preterminal_v3(
+        &self,
+        _market_instance_id: ContentId,
+        _generation: u64,
+        _product_root_account: ContentId,
+        _product_market_binding_id: ContentId,
+        _current_product_authority_id: ContentId,
+        _direct_root_account: ContentId,
+        _product_family_prestate_id: ContentId,
+        _family_terminal_sequence: u32,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
     }
 }
 
-/// Execute the one-way action-13 predecessor chain:
-/// sealed Direct terminal -> hostile b3/Candidate postwrite -> `0xba/v2`
-/// allocation retirement -> Product RootV2 Direct-family terminal.
+/// Sole move-only Direct terminal consumed by Product RootV3/LinkV3. All
+/// Direct archives are already physically closed; Product never authorizes
+/// those closes and cannot mark Direct retired before this receipt exists.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedDirectFamilyTerminalV3 {
+    id: ContentId,
+    market_instance_id: ContentId,
+    generation: u64,
+    product_root_account: ContentId,
+    product_market_binding_id: ContentId,
+    current_product_authority_id: ContentId,
+    product_family_prestate_id: ContentId,
+    family_terminal_sequence: u32,
+    direct_root_account: ContentId,
+    direct_root_semantic_id: ContentId,
+    direct_replay_account: ContentId,
+    direct_replay_terminal_semantic_id: ContentId,
+    direct_terminal_receipt_id: ContentId,
+    retirement_transfer_id: ContentId,
+    manifest_retirement_id: ContentId,
+    manifest_account: Pubkey,
+    manifest_state_before: ContentId,
+    manifest_state_after: ContentId,
+    archive_close_id: ContentId,
+    source_count: u8,
+    refund_count: u8,
+}
+
+impl AuthenticatedDirectFamilyTerminalV3 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn market_instance_id(&self) -> ContentId {
+        self.market_instance_id
+    }
+    pub(crate) const fn generation(&self) -> u64 { self.generation }
+    pub(crate) const fn product_root_account(&self) -> ContentId {
+        self.product_root_account
+    }
+    pub(crate) const fn product_market_binding_id(&self) -> ContentId {
+        self.product_market_binding_id
+    }
+    pub(crate) const fn current_product_authority_id(&self) -> ContentId {
+        self.current_product_authority_id
+    }
+    pub(crate) const fn product_family_prestate_id(&self) -> ContentId {
+        self.product_family_prestate_id
+    }
+    pub(crate) const fn family_terminal_sequence(&self) -> u32 {
+        self.family_terminal_sequence
+    }
+    pub(crate) const fn direct_root_account(&self) -> ContentId {
+        self.direct_root_account
+    }
+    pub(crate) const fn direct_root_semantic_id(&self) -> ContentId {
+        self.direct_root_semantic_id
+    }
+    pub(crate) const fn direct_replay_account(&self) -> ContentId {
+        self.direct_replay_account
+    }
+    pub(crate) const fn direct_replay_terminal_semantic_id(&self) -> ContentId {
+        self.direct_replay_terminal_semantic_id
+    }
+    pub(crate) const fn direct_terminal_receipt_id(&self) -> ContentId {
+        self.direct_terminal_receipt_id
+    }
+    pub(crate) const fn retirement_transfer_id(&self) -> ContentId {
+        self.retirement_transfer_id
+    }
+    pub(crate) const fn manifest_retirement_id(&self) -> ContentId {
+        self.manifest_retirement_id
+    }
+    pub(crate) const fn manifest_account(&self) -> Pubkey { self.manifest_account }
+    pub(crate) const fn manifest_state_before(&self) -> ContentId {
+        self.manifest_state_before
+    }
+    pub(crate) const fn manifest_state_after(&self) -> ContentId {
+        self.manifest_state_after
+    }
+    pub(crate) const fn archive_close_id(&self) -> ContentId { self.archive_close_id }
+    pub(crate) const fn source_count(&self) -> u8 { self.source_count }
+    pub(crate) const fn refund_count(&self) -> u8 { self.refund_count }
+}
+
+/// Seal and close one current Direct family before Product changes RootV3.
+/// Account order is fixed by arguments; no caller source/refund amounts or
+/// Product poststate enter the transition.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-pub(crate) fn prepare_direct_action13_product_predecessor_v2<'next>(
+pub(crate) fn retire_direct_family_archives_v3<A>(
     program_id: &Pubkey,
+    product: &A,
     direct_root_account: &AccountInfo<'_>,
     direct_replay_account: &AccountInfo<'_>,
     selection_account: &AccountInfo<'_>,
@@ -3422,15 +3506,11 @@ pub(crate) fn prepare_direct_action13_product_predecessor_v2<'next>(
     refund_accounts: &[AccountInfo<'_>],
     manifest_account: &AccountInfo<'_>,
     liveness_accounts: &[AccountInfo<'_>],
-    product_root_account: &AccountInfo<'_>,
-    product_root: AuthenticatedMarketLifecycleRootV2<'_>,
     sequence: u64,
-    product_successor_output: &mut MarketLifecycleRootV2,
-    product_rebound_output: &'next mut MarketLifecycleRootAccountV2,
-) -> Outcome<(
-    AuthenticatedMarketLifecycleRootV2<'next>,
-    AuthenticatedDirectAction13ProductPredecessorV2,
-)> {
+) -> Outcome<AuthenticatedDirectFamilyTerminalV3>
+where
+    A: AuthenticatedProductDirectFamilyPreterminalV3 + ?Sized,
+{
     require(
         reservation_accounts.len() <= 2
             && liveness_accounts.len() == DIRECT_CANDIDATE_LIVENESS_ACCOUNT_COUNT_V2,
@@ -3463,17 +3543,61 @@ pub(crate) fn prepare_direct_action13_product_predecessor_v2<'next>(
             && neutral_sink.key.to_bytes() == root.transition().neutral_lamport_sink()
             && manifest_account.is_writable
             && !manifest_account.is_signer
-            && !manifest_account.executable,
+            && !manifest_account.executable
+            && manifest_account.key.to_bytes()
+                == root.transition().product_global_liveness_account(),
         ClutchError::MismatchedState,
     )?;
-    let mut archive_infos = [
+    let archive_infos = [
         Some(direct_root_account.clone()),
         Some(direct_replay_account.clone()),
         Some(selection_account.clone()),
-        None,
-        None,
+        reservation_accounts.first().cloned(),
+        reservation_accounts.get(1).cloned(),
     ];
-    let mut authenticated_reservations = [None; 2];
+    let archive_count = 3usize
+        .checked_add(reservation_count)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let mut outer = 0usize;
+    while outer < archive_count {
+        let account = archive_infos[outer]
+            .as_ref()
+            .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
+        require(
+            account.key != manifest_account.key
+                && account.key != neutral_sink.key
+                && account.key != liveness_accounts[0].key
+                && account.key != liveness_accounts[1].key
+                && account.key != liveness_accounts[2].key
+                && account.key != liveness_accounts[3].key,
+            ClutchError::AccountAlias,
+        )?;
+        let mut inner = outer + 1;
+        while inner < archive_count {
+            require(
+                account.key
+                    != archive_infos[inner]
+                        .as_ref()
+                        .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?
+                        .key,
+                ClutchError::AccountAlias,
+            )?;
+            inner += 1;
+        }
+        outer += 1;
+    }
+    require(
+        manifest_account.key != neutral_sink.key
+            && manifest_account.key != liveness_accounts[0].key
+            && manifest_account.key != liveness_accounts[1].key
+            && manifest_account.key != liveness_accounts[2].key
+            && manifest_account.key != liveness_accounts[3].key
+            && neutral_sink.key != liveness_accounts[0].key
+            && neutral_sink.key != liveness_accounts[1].key
+            && neutral_sink.key != liveness_accounts[2].key
+            && neutral_sink.key != liveness_accounts[3].key,
+        ClutchError::AccountAlias,
+    )?;
     let mut reservations = [None; 2];
     let mut sources: [Option<DirectRetirementSourceV1>; 5] = [None; 5];
     sources[0] = Some(DirectRetirementSourceV1 {
@@ -3511,8 +3635,6 @@ pub(crate) fn prepare_direct_action13_product_predecessor_v2<'next>(
                     == selection.value().terminal_receipt_id(),
             ClutchError::MismatchedState,
         )?;
-        archive_infos[3 + index] = Some(reservation_accounts[index].clone());
-        authenticated_reservations[index] = Some(reservation);
         reservations[index] = Some(reservation.value());
         sources[3 + index] = Some(DirectRetirementSourceV1 {
             account: reservation.account().to_bytes(),
@@ -3554,41 +3676,39 @@ pub(crate) fn prepare_direct_action13_product_predecessor_v2<'next>(
             )?;
             source += 1;
         }
+        require(
+            refund_accounts[index].key != neutral_sink.key
+                && refund_accounts[index].key != manifest_account.key
+                && refund_accounts[index].key != liveness_accounts[0].key
+                && refund_accounts[index].key != liveness_accounts[1].key,
+            ClutchError::AccountAlias,
+        )?;
         index += 1;
     }
 
-    let product_state = product_root.state();
-    let product_binding = product_state.binding();
-    let product_binding_id = product_binding
-        .id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
-    let families = product_state.product_families();
-    let direct_family = families.family(MarketFamilyV1::Direct);
-    let product_family_prestate_id = families
-        .semantic_id()
-        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
-        .content_id();
-    require(
-        product_root.is_writable()
-            && product_root_account.is_writable
-            && product_root.account() == *product_root_account.key
-            && product_root_account.key.to_bytes() == root.transition().product_root_account()
-            && product_state.phase() == MarketLifecyclePhaseV2::Retiring
-            && product_binding.market_instance_id.bytes()
-                == root.transition().market_instance_id()
-            && product_binding.generation == root.transition().generation()
-            && product_binding_id.bytes() == root.transition().product_market_binding_id()
-            && families.binding().family_root_id(MarketFamilyV1::Direct).bytes()
-                == root.account().to_bytes()
-            && direct_family.status() == MarketFamilyStatusV1::Live
-            && direct_family.counts().admitted == 1
-            && direct_family.counts().live == 1,
-        ClutchError::MismatchedState,
+    let market_instance_id = ContentId::from_bytes(root.transition().market_instance_id());
+    let product_root_account = ContentId::from_bytes(root.transition().product_root_account());
+    let product_market_binding_id =
+        ContentId::from_bytes(root.transition().product_market_binding_id());
+    let current_product_authority_id =
+        ContentId::from_bytes(root.transition().current_product_authority_id());
+    let direct_root_id = ContentId::from_bytes(root.account().to_bytes());
+    let product_family_prestate_id = product.product_family_prestate_id()?;
+    let family_terminal_sequence = product.family_terminal_sequence()?;
+    product.authenticate_direct_family_preterminal_v3(
+        market_instance_id,
+        root.transition().generation(),
+        product_root_account,
+        product_market_binding_id,
+        current_product_authority_id,
+        direct_root_id,
+        product_family_prestate_id,
+        family_terminal_sequence,
     )?;
-    let family_terminal_sequence = direct_family.counts().terminal;
     let retirement_transfer_id = retirement
         .semantic_id(&DirectRuntimeSha256V2)
         .map_err(map_direct_error_v2)?;
+    let root_bump = root.bump();
     let replay_bump = replay.bump();
     let mut state = DirectRootReplayTransitionV2::authenticate(
         root.into_transition(),
@@ -3644,19 +3764,24 @@ pub(crate) fn prepare_direct_action13_product_predecessor_v2<'next>(
         state.replay(),
         &DirectRuntimeSha256V2,
     ).map_err(map_direct_error_v2)?;
+    write_direct_market_root_v2(
+        direct_root_account,
+        root_bump,
+        state.root(),
+    )?;
     write_direct_action_replay_v2(
         direct_replay_account,
         replay_bump,
         sealed.replay_post,
         state.root(),
     )?;
-    let rebound_direct_root = authenticate_direct_market_root_writable_v2(
+    let rebound_root = authenticate_direct_market_root_writable_v2(
         program_id,
         direct_root_account,
     )?;
     let physical_postwrite = authenticate_direct_candidate_terminal_postwrite_v2(
         program_id,
-        &rebound_direct_root,
+        &rebound_root,
         direct_replay_account,
         &liveness_accounts[1],
         &sealed,
@@ -3667,258 +3792,50 @@ pub(crate) fn prepare_direct_action13_product_predecessor_v2<'next>(
         &sealed,
         &physical_postwrite,
     )?;
-    let (rebound_product_root, product_family_terminal) =
-        consume_direct_family_terminal_postwrite_v2(
-            program_id,
-            product_root_account,
-            product_root,
-            rebound_direct_root.account(),
-            manifest_retirement,
-            &sealed,
-            product_successor_output,
-            product_rebound_output,
-        )?;
-    Ok((
-        rebound_product_root,
-        AuthenticatedDirectAction13ProductPredecessorV2 {
-            sealed,
-            product_family_terminal,
-        },
-    ))
-}
-
-/// Move-only completion receipt for the exact current action-13 archive set.
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedDirectAction13ArchiveCloseV2 {
-    id: ContentId,
-    direct_terminal_receipt_id: ContentId,
-    product_family_terminal_id: ContentId,
-    product_series_retirement_id: ContentId,
-    retirement_transfer_id: ContentId,
-}
-
-impl AuthenticatedDirectAction13ArchiveCloseV2 {
-    pub(crate) const fn id(&self) -> ContentId { self.id }
-    pub(crate) const fn direct_terminal_receipt_id(&self) -> ContentId {
-        self.direct_terminal_receipt_id
-    }
-    pub(crate) const fn product_family_terminal_id(&self) -> ContentId {
-        self.product_family_terminal_id
-    }
-    pub(crate) const fn product_series_retirement_id(&self) -> ContentId {
-        self.product_series_retirement_id
-    }
-    pub(crate) const fn retirement_transfer_id(&self) -> ContentId {
-        self.retirement_transfer_id
-    }
-}
-
-/// Consume Product's final whole-Series receipt and only then dispose the
-/// exact persisted Direct b1/b2/b3/b4 principals and donations. The archive
-/// slice is unordered but exact; the canonical source order comes only from
-/// `sealed` and every physical account must match it exactly once.
-#[allow(clippy::too_many_arguments)]
-#[inline(never)]
-pub(crate) fn consume_direct_action13_archives_v2<'a>(
-    program_id: &Pubkey,
-    sealed: DirectFamilyTerminalPlanV2,
-    product_family_terminal: AuthenticatedProductDirectFamilyTerminalV2,
-    product_series_retirement: AuthenticatedProductSeriesRetirementV4,
-    root: &AuthenticatedDirectMarketRootV2,
-    replay: AuthenticatedDirectActionReplayV2,
-    selection: &AuthenticatedDirectSelectionV2,
-    reservations: &[Option<AuthenticatedDirectReservationV2>; 2],
-    archive_accounts: &[Option<AccountInfo<'a>>; 5],
-    refund_accounts: &[AccountInfo<'a>],
-    neutral_sink: &AccountInfo<'a>,
-) -> Outcome<AuthenticatedDirectAction13ArchiveCloseV2> {
-    let source_count = usize::from(sealed.retirement.source_count);
-    let refund_count = usize::from(sealed.retirement.refund_count);
     require(
-        refund_accounts.len() == refund_count
-            && source_count == usize::from(root.transition().live_reservations()) + 3
-            && neutral_sink.is_writable
-            && !neutral_sink.is_signer
-            && !neutral_sink.executable
-            && neutral_sink.key.to_bytes() == root.transition().neutral_lamport_sink(),
-        ClutchError::MismatchedState,
-    )?;
-    let mut archive = 0usize;
-    while archive < archive_accounts.len() {
-        require(
-            (archive < source_count) == archive_accounts[archive].is_some(),
-            ClutchError::MismatchedState,
-        )?;
-        if archive < source_count {
-            let account = archive_accounts[archive]
-                .as_ref()
-                .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
-            let mut prior = 0usize;
-            while prior < archive {
-                require(
-                    account.key
-                        != archive_accounts[prior]
-                            .as_ref()
-                            .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?
-                            .key,
-                    ClutchError::AccountAlias,
-                )?;
-                prior += 1;
-            }
-        }
-        archive += 1;
-    }
-    let direct_terminal_receipt_id = ContentId::from_bytes(sealed.terminal_receipt_id);
-    let product_family_terminal_id = product_family_terminal.id();
-    let product_series_retirement_id = product_series_retirement.id();
-    let retirement_transfer_id = ContentId::from_bytes(sealed.retirement_transfer_id);
-    require(
-        sealed.root_semantic_id == root.transition().root_semantic_id()
-            && sealed.replay_pre_semantic_id == replay.semantic_id
-            && sealed.replay_post.family_terminal_receipt_id() == sealed.terminal_receipt_id
-            && !sealed.replay_post.candidate_liveness_pending()
-            && sealed.replay_post.candidate_liveness_completed_calls() == 8
-            && product_family_terminal.terminal_receipt_id()
-                == direct_terminal_receipt_id
-            && product_family_terminal.family_terminal_sequence()
-                == sealed.family_terminal_sequence
-            && product_family_terminal.root_account()
-                == product_series_retirement.root_account()
-            && product_family_terminal.root_authentication_after()
-                == product_series_retirement.root_authentication_before()
-            && product_family_terminal.root_semantic_after()
-                == product_series_retirement.root_semantic_before()
-            && product_series_retirement.root_account().to_bytes()
-                == root.transition().product_root_account()
-            && product_series_retirement.compiler_bundle_id().bytes()
-                == root.transition().compiler_bundle_v6_id()
-            && product_series_retirement.root_authentication_before()
-                != product_series_retirement.root_authentication_after()
-            && product_series_retirement.root_semantic_before()
-                != product_series_retirement.root_semantic_after(),
+        manifest_retirement.account() == *manifest_account.key
+            && manifest_retirement.lifecycle_root_account() == product_root_account
+            && manifest_retirement.activated_market_binding_id()
+                == product_market_binding_id
+            && manifest_retirement.direct_terminal_receipt_id()
+                == ContentId::from_bytes(sealed.terminal_receipt_id)
+            && manifest_retirement.family_terminal_sequence()
+                == family_terminal_sequence,
         ClutchError::MismatchedState,
     )?;
 
-    let mut expected_sources: [Option<DirectRetirementSourceV1>; 5] = [None; 5];
-    expected_sources[0] = Some(DirectRetirementSourceV1 {
-        account: root.account().to_bytes(),
-        rent: root.transition().root_rent(),
-        observed_lamports: root.observed_lamports(),
-    });
-    expected_sources[1] = Some(DirectRetirementSourceV1 {
-        account: root.transition().action_replay_account(),
-        rent: replay.value.rent(),
-        observed_lamports: replay.observed_lamports,
-    });
-    expected_sources[2] = Some(DirectRetirementSourceV1 {
-        account: selection.value().account(),
-        rent: selection.value().rent(),
-        observed_lamports: selection.observed_lamports(),
-    });
-    let mut expected_count = 3usize;
-    let mut index = 0usize;
-    while index < reservations.len() {
-        if let Some(reservation) = reservations[index] {
-            expected_sources[3 + index] = Some(DirectRetirementSourceV1 {
-                account: reservation.account().to_bytes(),
-                rent: reservation.value().rent(),
-                observed_lamports: reservation.observed_lamports,
-            });
-            expected_count = expected_count
-                .checked_add(1)
-                .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
-        }
-        index += 1;
-    }
-    require(expected_count == source_count, ClutchError::MismatchedState)?;
-    index = 0;
-    while index < source_count {
-        let planned = sealed.retirement.sources[index]
-            .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
-        let mut matched = false;
-        let mut physical_matched = false;
-        let mut candidate = 0usize;
-        while candidate < expected_sources.len() {
-            if expected_sources[candidate] == Some(planned) {
-                require(!matched, ClutchError::AccountAlias)?;
-                matched = true;
-            }
-            candidate += 1;
-        }
-        candidate = 0;
-        while candidate < source_count {
-            let account = archive_accounts[candidate]
-                .as_ref()
-                .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
-            if account.key.to_bytes() == planned.account {
-                require(!physical_matched, ClutchError::AccountAlias)?;
-                physical_matched = true;
-                require(
-                    account.lamports() == planned.observed_lamports,
-                    ClutchError::MismatchedState,
-                )?;
-            }
-            candidate += 1;
-        }
-        require(
-            matched && physical_matched,
-            ClutchError::MismatchedState,
-        )?;
-        index += 1;
-    }
+    let generation = rebound_root.transition().generation();
+    let direct_root_semantic_id = ContentId::from_bytes(sealed.root_semantic_id);
+    let direct_replay_account_id = ContentId::from_bytes(sealed.replay_post.replay_account());
+    let direct_replay_terminal_semantic_id = ContentId::from_bytes(
+        rebound_root.transition().action_replay_semantic_id(
+            sealed.replay_post,
+            &DirectRuntimeSha256V2,
+        ).map_err(map_direct_error_v2)?,
+    );
 
     index = 0;
-    while index < refund_count {
-        let refund = sealed.retirement.refunds[index]
-            .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
-        require(
-            refund_accounts[index].is_writable
-                && !refund_accounts[index].executable
-                && refund_accounts[index].key.to_bytes() == refund.recipient
-                && (index == 0
-                    || refund_accounts[index - 1].key.to_bytes()
-                        < refund_accounts[index].key.to_bytes()),
-            ClutchError::MismatchedState,
-        )?;
-        let mut source = 0usize;
-        while source < source_count {
-            let source_account = archive_accounts[source]
-                .as_ref()
-                .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
-            require(
-                refund_accounts[index].key != source_account.key,
-                ClutchError::AccountAlias,
-            )?;
-            source += 1;
-        }
-        require(refund_accounts[index].key != neutral_sink.key, ClutchError::AccountAlias)?;
-        index += 1;
-    }
-
-    index = 0;
-    while index < refund_count {
-        let refund = sealed.retirement.refunds[index]
+    while index < refund_accounts.len() {
+        let refund = retirement.refunds[index]
             .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
         credit_lamports_v2(&refund_accounts[index], refund.lamports)?;
         index += 1;
     }
-    credit_lamports_v2(neutral_sink, sealed.retirement.surplus_lamports)?;
+    credit_lamports_v2(neutral_sink, retirement.surplus_lamports)?;
+    let source_count = usize::from(retirement.source_count);
     index = 0;
     while index < source_count {
-        let planned = sealed.retirement.sources[index]
+        let planned = retirement.sources[index]
             .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
         let mut physical = 0usize;
         let mut closed = false;
         while physical < source_count {
-            let account = archive_accounts[physical]
+            let account = archive_infos[physical]
                 .as_ref()
                 .ok_or_else(|| Refusal::Adapter(ClutchError::MismatchedState))?;
             if account.key.to_bytes() == planned.account {
                 require(!closed, ClutchError::AccountAlias)?;
-                close_direct_program_account_v2(
-                    account,
-                    planned.observed_lamports,
-                )?;
+                close_direct_program_account_v2(account, planned.observed_lamports)?;
                 closed = true;
             }
             physical += 1;
@@ -3927,110 +3844,59 @@ pub(crate) fn consume_direct_action13_archives_v2<'a>(
         index += 1;
     }
 
-    let id = ContentId::from_bytes(solana_sha256_hasher::hashv(&[
-        DIRECT_ACTION13_ARCHIVE_CLOSE_DOMAIN_V2,
+    let direct_terminal_receipt_id = ContentId::from_bytes(sealed.terminal_receipt_id);
+    let archive_close_id = ContentId::from_bytes(solana_sha256_hasher::hashv(&[
+        DIRECT_ACTION13_ARCHIVE_CLOSE_DOMAIN_V3,
         program_id.as_ref(),
+        &direct_root_id.bytes(),
+        &direct_root_semantic_id.bytes(),
+        &direct_replay_account_id.bytes(),
+        &direct_replay_terminal_semantic_id.bytes(),
         &direct_terminal_receipt_id.bytes(),
-        &product_family_terminal_id.bytes(),
-        &product_series_retirement_id.bytes(),
         &retirement_transfer_id.bytes(),
-        &product_series_retirement.root_semantic_after().bytes(),
-        &sealed.retirement.surplus_lamports.to_le_bytes(),
-        &[sealed.retirement.source_count, sealed.retirement.refund_count],
+        &manifest_retirement.id().bytes(),
+        &manifest_retirement.state_before().bytes(),
+        &manifest_retirement.state_after().bytes(),
+        &[retirement.source_count, retirement.refund_count],
     ]).to_bytes());
-    require(!id.is_zero(), ClutchError::MismatchedState)?;
-    Ok(AuthenticatedDirectAction13ArchiveCloseV2 {
+    require(!archive_close_id.is_zero(), ClutchError::MismatchedState)?;
+    let id = ContentId::from_bytes(solana_sha256_hasher::hashv(&[
+        DIRECT_FAMILY_TERMINAL_DOMAIN_V3,
+        &archive_close_id.bytes(),
+        &market_instance_id.bytes(),
+        &generation.to_le_bytes(),
+        &product_root_account.bytes(),
+        &product_market_binding_id.bytes(),
+        &current_product_authority_id.bytes(),
+        &product_family_prestate_id.bytes(),
+        &family_terminal_sequence.to_le_bytes(),
+        &direct_terminal_receipt_id.bytes(),
+        &manifest_retirement.id().bytes(),
+    ]).to_bytes());
+    require(!id.is_zero() && id != archive_close_id, ClutchError::MismatchedState)?;
+    Ok(AuthenticatedDirectFamilyTerminalV3 {
         id,
+        market_instance_id,
+        generation,
+        product_root_account,
+        product_market_binding_id,
+        current_product_authority_id,
+        product_family_prestate_id,
+        family_terminal_sequence,
+        direct_root_account: direct_root_id,
+        direct_root_semantic_id,
+        direct_replay_account: direct_replay_account_id,
+        direct_replay_terminal_semantic_id,
         direct_terminal_receipt_id,
-        product_family_terminal_id,
-        product_series_retirement_id,
         retirement_transfer_id,
+        manifest_retirement_id: manifest_retirement.id(),
+        manifest_account: manifest_retirement.account(),
+        manifest_state_before: manifest_retirement.state_before(),
+        manifest_state_after: manifest_retirement.state_after(),
+        archive_close_id,
+        source_count: retirement.source_count,
+        refund_count: retirement.refund_count,
     })
-}
-
-/// Final half of the same action-13 outer. Product passes its move-only
-/// whole-Series receipt directly; Direct hostile-reopens every still-live
-/// archive and then performs the exact close/refund vector.
-#[allow(clippy::too_many_arguments)]
-#[inline(never)]
-pub(crate) fn complete_direct_action13_after_product_retirement_v2<'a>(
-    program_id: &Pubkey,
-    predecessor: AuthenticatedDirectAction13ProductPredecessorV2,
-    product_series_retirement: AuthenticatedProductSeriesRetirementV4,
-    direct_root_account: &AccountInfo<'a>,
-    direct_replay_account: &AccountInfo<'a>,
-    selection_account: &AccountInfo<'a>,
-    reservation_accounts: &[AccountInfo<'a>],
-    refund_accounts: &[AccountInfo<'a>],
-    neutral_sink: &AccountInfo<'a>,
-) -> Outcome<AuthenticatedDirectAction13ArchiveCloseV2> {
-    let (sealed, product_family_terminal) = predecessor.into_parts();
-    let root = authenticate_direct_market_root_writable_v2(program_id, direct_root_account)?;
-    let replay = authenticate_direct_action_replay_writable_v2(
-        program_id,
-        direct_replay_account,
-        &root,
-    )?;
-    let selection = authenticate_direct_selection_writable_v2(
-        program_id,
-        selection_account,
-        &root,
-    )?;
-    require(
-        replay.value() == sealed.replay_post
-            && reservation_accounts.len()
-                == usize::from(selection.value().reservation_count())
-            && reservation_accounts.len()
-                == usize::from(root.transition().live_reservations()),
-        ClutchError::MismatchedState,
-    )?;
-    let mut reservations = [None; 2];
-    let mut index = 0usize;
-    while index < reservation_accounts.len() {
-        let reservation = authenticate_direct_reservation_writable_v2(
-            program_id,
-            &reservation_accounts[index],
-            &root,
-        )?;
-        let bounded = u8::try_from(index)
-            .map_err(|_| Refusal::Adapter(ClutchError::Arithmetic))?;
-        require(
-            selection.value().reservation_account(bounded)
-                .map_err(map_direct_error_v2)?
-                == reservation.account().to_bytes()
-                && selection.value().reservation_semantic_id(bounded)
-                    .map_err(map_direct_error_v2)?
-                    == reservation.semantic_id(),
-            ClutchError::MismatchedState,
-        )?;
-        reservations[index] = Some(reservation);
-        index += 1;
-    }
-    let mut archives = [
-        Some(direct_root_account.clone()),
-        Some(direct_replay_account.clone()),
-        Some(selection_account.clone()),
-        None,
-        None,
-    ];
-    index = 0;
-    while index < reservation_accounts.len() {
-        archives[3 + index] = Some(reservation_accounts[index].clone());
-        index += 1;
-    }
-    consume_direct_action13_archives_v2(
-        program_id,
-        sealed,
-        product_family_terminal,
-        product_series_retirement,
-        &root,
-        replay,
-        &selection,
-        &reservations,
-        &archives,
-        refund_accounts,
-        neutral_sink,
-    )
 }
 
 fn require_direct_candidate_liveness_aliases_v2(
@@ -5038,5 +4904,34 @@ mod tests {
         assert!(matches!(direct_endpoint_first_from_v2(12, 1), Ok(15)));
         assert!(direct_endpoint_first_from_v2(usize::MAX, 1).is_err());
         assert!(direct_endpoint_first_from_v2(12, usize::MAX).is_err());
+    }
+
+    #[test]
+    fn action13_closes_direct_before_minting_the_product_consumable_receipt() {
+        let source = include_str!("direct_market_v2.rs");
+        let body = source
+            .split("pub(crate) fn retire_direct_family_archives_v3")
+            .nth(1)
+            .expect("action13 Direct terminal composer")
+            .split("fn require_direct_candidate_liveness_aliases_v2")
+            .next()
+            .expect("bounded composer body");
+        let root_postwrite = body
+            .find("write_direct_market_root_v2")
+            .expect("terminal root postwrite");
+        let manifest_retirement = body
+            .find("retire_product_direct_candidate_allocation_v2")
+            .expect("Candidate allocation retirement");
+        let archive_close = body
+            .find("close_direct_program_account_v2")
+            .expect("physical b1/b2/b3/b4 close");
+        let receipt = body
+            .find("Ok(AuthenticatedDirectFamilyTerminalV3")
+            .expect("move-only Direct terminal receipt");
+        assert!(root_postwrite < manifest_retirement);
+        assert!(manifest_retirement < archive_close);
+        assert!(archive_close < receipt);
+        assert!(!body.contains("AuthenticatedProductSeriesRetirement"));
+        assert!(!body.contains("consume_direct_family_terminal_postwrite"));
     }
 }
