@@ -30,7 +30,7 @@
 <main class="screen">
   <section class="card">
     <h2>Attach to an explicit operatord</h2>
-    <p class="muted">This page performs one bounded GET to <code>/v1/session</code>. It has no validator RPC client, fixture source, mock-mode selection, wallet, transaction builder, signer, or restart truth of its own. No fixture or default source is available.</p>
+    <p class="muted">This page brackets <code>/v1/actions</code> with two bounded reads of <code>/v1/session</code>. It has no validator RPC client, fixture source, mock-mode selection, wallet, transaction builder, signer, or restart truth of its own. No fixture or default source is available.</p>
     <form id="attach-form" class="attach-form">
       <label for="operator-url">operatord base URL</label>
       <input id="operator-url" type="url" autocomplete="off" placeholder="http://127.0.0.1:PORT" required>
@@ -51,8 +51,8 @@
   </section>
 
   <section id="cursors-card" class="card" hidden>
-    <div class="card-heading"><h2>Restart cursors</h2><span id="cursor-count" class="count"></span></div>
-    <p class="muted">These are onchain-derived scheduling hints, never execution authority. Every action is disabled in this frontend.</p>
+    <div class="card-heading"><h2>Release-authenticated action verdicts</h2><span id="cursor-count" class="count"></span></div>
+    <p class="muted">A release-enabled coordinate is only the first gate. A control becomes available only when operatord also supplies canonical semantic-owner bytes, exact ordered account identities and privileges, explicit signer roles, a blockhash-free transaction, and a fresh-state reacquisition boundary.</p>
     <div id="cursor-rows"></div>
   </section>
 </main>

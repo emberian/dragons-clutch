@@ -4,14 +4,15 @@ const HASH32 = /^[0-9a-f]{64}$/;
 const ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const DECIMAL = /^(0|[1-9][0-9]*)$/;
-const DECODER_SET = "dragons-clutch/canonical-account-decoders/v3-general-no-keeper-no-selected-candidate";
+const HEX_BYTES = /^(?:[0-9a-f]{2})+$/;
+const DECODER_SET = "dragons-clutch/canonical-account-decoders/v4-source-work-schedule";
 const $ = (id) => document.getElementById(id);
 const plain = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const requiredText = (value, name, pattern, maximum = 512) => {
   if (typeof value !== "string" || value.length === 0 || value.length > maximum || (pattern && !pattern.test(value))) throw new Error(`${name} is invalid.`);
   return value;
 };
-const decimal = (value, name) => requiredText(value, name, DECIMAL, 24);
+const decimal = (value, name) => requiredText(value, name, DECIMAL, 40);
 const hash = (value, name) => requiredText(value, name, HASH32, 64);
 const addressBytes = (value, name) => {
   requiredText(value, name, ADDRESS, 44);
@@ -85,6 +86,19 @@ const validateManifest = (raw) => {
     decoderSet: requiredText(raw.release.decoderSet, "session.release.decoderSet", null, 160)
   });
   if (release.decoderSet !== DECODER_SET) throw new Error("session release names an unsupported canonical decoder set.");
+  if (!Array.isArray(raw.release.enabledIntents) || raw.release.enabledIntents.length > 256) throw new Error("session release enabled-intent set is invalid.");
+  const enabledIntents = Object.freeze(raw.release.enabledIntents.map((intent, index) => {
+    object(intent, `session.release.enabledIntents[${index}]`);
+    const coordinate = Object.freeze({ familyTag: decimal(intent.familyTag, "enabled family tag"), familyVersion: decimal(intent.familyVersion, "enabled family version"), localAction: decimal(intent.localAction, "enabled local action") });
+    if (index > 0) {
+      const previous = raw.release.enabledIntents[index - 1];
+      const before = [BigInt(previous.familyTag), BigInt(previous.familyVersion), BigInt(previous.localAction)];
+      const after = [BigInt(coordinate.familyTag), BigInt(coordinate.familyVersion), BigInt(coordinate.localAction)];
+      const ordered = before[0] < after[0] || (before[0] === after[0] && (before[1] < after[1] || (before[1] === after[1] && before[2] < after[2])));
+      if (!ordered) throw new Error("session release enabled-intent coordinates are not strictly ordered.");
+    }
+    return coordinate;
+  }));
   if (release.programId === release.programData) throw new Error("Program and ProgramData identities alias.");
   const expectedReleaseKey = `${release.programId}:${release.deploymentSlot}:${release.elfSha256}:${release.releaseManifestSha256}`;
   if (release.releaseKey !== expectedReleaseKey) throw new Error("session release key does not bind its exact checked coordinates.");
@@ -140,7 +154,83 @@ const validateManifest = (raw) => {
     if (!seen.has(cursor.account) || cursor.dependencies.some((dependency) => !seen.has(dependency)) || new Set(cursor.dependencies).size !== cursor.dependencies.length) throw new Error("restart cursor refers to a noncanonical or repeated account identity.");
     return cursor;
   }));
-  return Object.freeze({ sessionId: hash(raw.sessionId, "session.sessionId"), transport, release, accounts, cursors });
+  return Object.freeze({ sessionId: hash(raw.sessionId, "session.sessionId"), transport, release: Object.freeze({ ...release, enabledIntents }), accounts, cursors });
+};
+
+const validateActions = (raw, manifest) => {
+  object(raw, "action capability set");
+  if (raw.schema !== "dragons-clutch/operator-action-capability-set/v1" || raw.status !== "ready" || raw.commitment !== "finalized" || raw.projectionAuthority !== "untrusted-release-and-canonical-codec-projection" || raw.signing !== false || raw.submission !== false) throw new Error("operatord did not return the canonical action capability contract.");
+  if (hash(raw.sessionId, "actions.sessionId") !== manifest.sessionId || requiredText(raw.releaseKey, "actions.releaseKey", null, 320) !== manifest.release.releaseKey || hash(raw.capabilityProfileId, "actions.capabilityProfileId") !== manifest.release.capabilityProfileId) throw new Error("action verdicts do not belong to the attached session and checked release.");
+  object(raw.freshness, "actions.freshness");
+  if (raw.freshness.recentBlockhash !== "absent-by-contract" || raw.freshness.feePayer !== "must-be-explicit-in-server-constructed-draft" || raw.freshness.validBeforeSlot !== "must-be-derived-from-a-fresh-clock-observation" || typeof raw.freshness.beforeSigning !== "string" || typeof raw.freshness.afterSubmission !== "string") throw new Error("action freshness contract is incomplete.");
+  if (!Array.isArray(raw.actions) || raw.actions.length > 256) throw new Error("action capability set exceeds the browser bound.");
+  const coordinates = new Set();
+  const enabled = new Set(manifest.release.enabledIntents.map((coordinate) => `${coordinate.familyTag}/${coordinate.familyVersion}/${coordinate.localAction}`));
+  const actions = Object.freeze(raw.actions.map((row, index) => {
+    object(row, `actions[${index}]`); object(row.coordinate, `actions[${index}].coordinate`); object(row.releaseAdmission, `actions[${index}].releaseAdmission`);
+    const coordinate = Object.freeze({
+      familyTag: decimal(row.coordinate.familyTag, `actions[${index}].coordinate.familyTag`),
+      familyVersion: decimal(row.coordinate.familyVersion, `actions[${index}].coordinate.familyVersion`),
+      localAction: decimal(row.coordinate.localAction, `actions[${index}].coordinate.localAction`),
+      family: requiredText(row.coordinate.family, `actions[${index}].coordinate.family`, null, 32),
+      action: requiredText(row.coordinate.action, `actions[${index}].coordinate.action`, null, 96)
+    });
+    const coordinateKey = `${coordinate.familyTag}/${coordinate.familyVersion}/${coordinate.localAction}`;
+    if (!enabled.has(coordinateKey) || coordinates.has(coordinateKey)) throw new Error("action capability set contains a disabled or repeated exact coordinate.");
+    coordinates.add(coordinateKey);
+    if (row.releaseAdmission.enabled !== true || row.releaseAdmission.releaseKey !== manifest.release.releaseKey || row.releaseAdmission.capabilityProfileId !== manifest.release.capabilityProfileId) throw new Error("action verdict is not admitted by the attached checked release.");
+    if (!Array.isArray(row.accountRoles) || row.accountRoles.length > 64 || !Array.isArray(row.signerRequirements)) throw new Error("action role or signer projection is invalid.");
+    const roles = Object.freeze(row.accountRoles.map((role, roleIndex) => {
+      object(role, `actions[${index}].accountRoles[${roleIndex}]`);
+      if (decimal(role.index, `actions[${index}].accountRoles[${roleIndex}].index`) !== String(roleIndex) || typeof role.writable !== "boolean" || typeof role.signer !== "boolean") throw new Error("action roles are not in exact semantic-owner order.");
+      return Object.freeze({ role: requiredText(role.role, "account role", null, 64), writable: role.writable, signer: role.signer, address: role.address === null ? null : address(role.address, "account role address"), identityDisposition: requiredText(role.identityDisposition, "account role disposition", null, 128) });
+    }));
+    if (row.callable === false) {
+      if (row.verdict !== "unavailable" || row.transactionDraft !== null || row.signerRequirements.length !== 0 || typeof row.reason !== "string") throw new Error("an unavailable action carries executable-looking transaction material.");
+      return Object.freeze({ coordinate, roles, callable: false, reason: requiredText(row.reason, "action reason", null, 512), cursor: row.stateSelection, transactionDraft: null, signerRequirements: Object.freeze([]) });
+    }
+    if (row.callable !== true || row.verdict !== "callable-unsigned-draft" || row.stateSelection === null) throw new Error("a callable action lacks an exact canonical state selection.");
+    const selection = object(row.stateSelection, `actions[${index}].stateSelection`);
+    const cursor = object(selection.cursor, `actions[${index}].stateSelection.cursor`);
+    const restart = manifest.cursors.find((candidate) => candidate.account === selection.account && candidate.action === selection.action && candidate.workflowId === cursor.workflowId && candidate.generation === cursor.generation && candidate.phase === cursor.phase && candidate.item === cursor.item && candidate.observedStateSha256 === cursor.observedStateSha256);
+    object(selection.branch, `actions[${index}].stateSelection.branch`);
+    if (!Array.isArray(selection.dependencies) || !restart || selection.releaseKey !== manifest.release.releaseKey || selection.observedCommitment !== "finalized" || selection.effectiveCommitment !== "finalized" || selection.branch.kind !== "finalized-scan" || selection.dependencies.length !== restart.dependencies.length || selection.dependencies.some((dependency, dependencyIndex) => dependency !== restart.dependencies[dependencyIndex])) throw new Error("callable action state selection is not the attached finalized restart cursor.");
+    const accountSlot = BigInt(decimal(selection.accountSlot, "callable state-selection account slot"));
+    if (roles.length === 0 || roles.some((role) => role.address === null || role.identityDisposition !== "semantic-owner-derived-and-bound-to-draft")) throw new Error("callable action has unresolved or noncanonical account roles.");
+    const signerRequirements = Object.freeze(row.signerRequirements.map((requirement, signerIndex) => {
+      object(requirement, `actions[${index}].signerRequirements[${signerIndex}]`);
+      if (!Array.isArray(requirement.semanticRoles) || requirement.semanticRoles.length === 0 || requirement.signaturePresent !== false || requirement.keyAccess !== false) throw new Error("callable signer requirement implies key or signature access.");
+      return Object.freeze({ address: address(requirement.address, "signer address"), semanticRoles: Object.freeze(requirement.semanticRoles.map((role) => requiredText(role, "signer semantic role", null, 64))), signaturePresent: false, keyAccess: false });
+    }));
+    if (new Set(signerRequirements.map((requirement) => requirement.address)).size !== signerRequirements.length) throw new Error("callable signer requirements repeat an identity.");
+    const requiredByRoles = new Set(roles.filter((role) => role.signer).map((role) => role.address));
+    if (signerRequirements.some((requirement) => !requiredByRoles.has(requirement.address)) || [...requiredByRoles].some((signer) => !signerRequirements.some((requirement) => requirement.address === signer))) throw new Error("callable signer requirements differ from exact signer account roles.");
+    const draft = validateTransactionDraft(row.transactionDraft, manifest, coordinate, selection, roles, signerRequirements, index);
+    object(row.freshnessDisposition, `actions[${index}].freshnessDisposition`);
+    const observedSlot = BigInt(decimal(row.freshnessDisposition.observedSlot, "draft observed slot"));
+    const validBeforeSlot = BigInt(decimal(row.freshnessDisposition.validBeforeSlot, "draft valid-before slot"));
+    const maximumValiditySlots = BigInt(decimal(row.freshnessDisposition.maximumValiditySlots, "draft maximum validity slots"));
+    if (observedSlot === 0n || observedSlot < accountSlot || validBeforeSlot <= observedSlot || validBeforeSlot - observedSlot > maximumValiditySlots || row.freshnessDisposition.recentBlockhash !== "absent; a launcher must reacquire state before adding one" || typeof row.freshnessDisposition.beforeSigning !== "string" || typeof row.freshnessDisposition.afterSubmission !== "string") throw new Error("callable action freshness boundary is invalid.");
+    return Object.freeze({ coordinate, roles, callable: true, reason: requiredText(row.reason, "action reason", null, 512), cursor: selection, transactionDraft: draft, signerRequirements });
+  }));
+  if (coordinates.size !== enabled.size) throw new Error("operatord omitted a checked release-enabled coordinate.");
+  return actions;
+};
+
+const validateTransactionDraft = (raw, manifest, coordinate, selection, roles, signers, actionIndex) => {
+  object(raw, `actions[${actionIndex}].transactionDraft`);
+  if (raw.schema !== "dragons-clutch/operator-canonical-action-material/v1" || raw.constructionSchema !== "dragons-clutch/operator/unsigned-protocol-transaction/v3" || raw.releaseManifestSha256 !== manifest.release.releaseManifestSha256 || raw.capabilityProfileId !== manifest.release.capabilityProfileId || raw.driverAccount !== selection.account || decimal(raw.driverAccountSlot, "draft driver account slot") !== selection.accountSlot || raw.recentBlockhash !== null || raw.hasRecentBlockhash !== false || raw.signed !== false || raw.submitted !== false || raw.reloadAuthoritativeAccounts !== true) throw new Error("callable transaction draft violates its construction/release boundary.");
+  const feePayer = address(raw.feePayer, "transaction fee payer");
+  if (!signers.some((requirement) => requirement.address === feePayer && requirement.semanticRoles.includes("transaction-fee-payer")) || !roles.some((role) => role.address === feePayer && role.signer)) throw new Error("transaction fee payer is not the exact signer role.");
+  hash(raw.draftId, "transaction draft ID");
+  const bytes = requiredText(raw.serializedTransactionHex, "serialized transaction", HEX_BYTES, 2464);
+  if (decimal(raw.serializedBytes, "serialized transaction bytes") !== String(bytes.length / 2)) throw new Error("serialized transaction byte count is inconsistent.");
+  if (!Array.isArray(raw.actions) || raw.actions.length !== 1 || !Array.isArray(raw.flows) || raw.flows.length !== 1 || raw.flows[0] !== "source-plane-v3" || !Array.isArray(raw.semanticOwners) || raw.semanticOwners.length !== 1 || !Array.isArray(raw.registryBindings) || raw.registryBindings.length !== 1 || !Array.isArray(raw.runtimeAdmissions) || raw.runtimeAdmissions.length !== 1 || raw.runtimeAdmissions[0] !== "release-bound-enabled" || !Array.isArray(raw.exactEquations) || raw.exactEquations.length === 0) throw new Error("callable transaction draft is not one exact admitted Source action.");
+  const binding = object(raw.registryBindings[0], "transaction registry binding");
+  if (binding.familyTag !== coordinate.familyTag || binding.familyVersion !== coordinate.familyVersion || binding.localAction !== coordinate.localAction || binding.allocationStatus !== "frozen") throw new Error("transaction registry binding differs from the release-enabled coordinate.");
+  raw.semanticOwners.forEach((owner, ownerIndex) => { object(owner, `semanticOwners[${ownerIndex}]`); requiredText(owner.package, "semantic owner package", null, 160); requiredText(owner.schema, "semantic owner schema", null, 160); hash(owner.releaseSha256, "semantic owner release"); });
+  raw.exactEquations.forEach((equation, equationIndex) => { object(equation, `exactEquations[${equationIndex}]`); object(equation.unit, `exactEquations[${equationIndex}].unit`); requiredText(equation.name, "exact equation name", null, 200); if (decimal(equation.left, "exact equation left") !== decimal(equation.right, "exact equation right")) throw new Error("transaction exact-integer equation is unbalanced."); });
+  return Object.freeze({ ...raw, draftId: raw.draftId, feePayer, serializedTransactionHex: bytes });
 };
 
 const field = (term, value) => {
@@ -150,7 +240,7 @@ const field = (term, value) => {
   wrapper.append(dt, dd); return wrapper;
 };
 
-const render = (manifest) => {
+const render = (manifest, actions) => {
   $("session-state").textContent = "CANONICAL FINALIZED SESSION ATTACHED";
   $("session-id").textContent = manifest.sessionId;
   $("status").replaceChildren(Object.assign(document.createElement("span"), { className: "live", textContent: "attached" }), Object.assign(document.createElement("span"), { textContent: "read-only" }));
@@ -172,13 +262,17 @@ const render = (manifest) => {
     return row;
   }));
   $("accounts-card").hidden = false;
-  $("cursor-count").textContent = `${manifest.cursors.length} hints · all disabled`;
-  const empty = Object.assign(document.createElement("p"), { className: "muted", textContent: "No finalized onchain-owned restart cursor is presently available." });
-  $("cursor-rows").replaceChildren(...(manifest.cursors.length ? manifest.cursors.map((cursor) => {
+  const callable = actions.filter((action) => action.callable);
+  $("cursor-count").textContent = `${actions.length} release-enabled · ${callable.length} callable`;
+  const empty = Object.assign(document.createElement("p"), { className: "muted", textContent: "The checked release enables no successor action coordinates." });
+  $("cursor-rows").replaceChildren(...(actions.length ? actions.map((action) => {
     const row = document.createElement("div"); row.className = "callout";
-    const label = document.createElement("code"); label.textContent = `${cursor.lane} / ${cursor.action} / generation ${cursor.generation} / ${cursor.phase}:${cursor.item}`;
-    const disabled = document.createElement("button"); disabled.type = "button"; disabled.disabled = true; disabled.textContent = "Execution unavailable";
-    row.append(label, disabled); return row;
+    const label = document.createElement("code"); label.textContent = `${action.coordinate.familyTag}/${action.coordinate.familyVersion}/${action.coordinate.localAction} · ${action.coordinate.family}/${action.coordinate.action}`;
+    const reason = document.createElement("span"); reason.className = "muted"; reason.textContent = action.reason;
+    const control = document.createElement("button"); control.type = "button"; control.disabled = !action.callable; control.textContent = action.callable ? "Inspect canonical draft" : "Unavailable";
+    const detail = document.createElement("pre"); detail.className = "mono"; detail.hidden = true;
+    if (action.callable) control.addEventListener("click", () => { detail.textContent = JSON.stringify({ transactionDraft: action.transactionDraft, signerRequirements: action.signerRequirements }, null, 2); detail.hidden = !detail.hidden; });
+    row.append(label, reason, control, detail); return row;
   }) : [empty]));
   $("cursors-card").hidden = false;
   $("attach-error").textContent = "Attached. This remains an untrusted projection; restart requires fresh canonical decoding.";
@@ -193,12 +287,19 @@ $("attach-form").addEventListener("submit", async (event) => {
     const base = boundedUrl($("operator-url").value.trim());
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10000);
-    let response;
-    try { response = await fetch(`${base}/v1/session`, { method: "GET", mode: "cors", credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", headers: { Accept: "application/json" }, signal: controller.signal }); } finally { clearTimeout(timer); }
-    if (!response.ok) throw new Error(`/v1/session is unavailable (HTTP ${response.status}).`);
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength === 0 || bytes.byteLength > 2_097_152) throw new Error("session response violates the 2 MiB browser bound.");
-    render(validateManifest(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))));
+    let startResponse; let actionsResponse; let endResponse;
+    try {
+      startResponse = await fetch(`${base}/v1/session`, { method: "GET", mode: "cors", credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", headers: { Accept: "application/json" }, signal: controller.signal });
+      actionsResponse = await fetch(`${base}/v1/actions`, { method: "GET", mode: "cors", credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", headers: { Accept: "application/json" }, signal: controller.signal });
+      endResponse = await fetch(`${base}/v1/session`, { method: "GET", mode: "cors", credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", headers: { Accept: "application/json" }, signal: controller.signal });
+    } finally { clearTimeout(timer); }
+    if (!startResponse.ok || !actionsResponse.ok || !endResponse.ok) throw new Error(`canonical session/action bracket is unavailable (HTTP ${startResponse.status}/${actionsResponse.status}/${endResponse.status}).`);
+    const decodeResponse = async (response, name) => { const bytes = new Uint8Array(await response.arrayBuffer()); if (bytes.byteLength === 0 || bytes.byteLength > 2_097_152) throw new Error(`${name} response violates the 2 MiB browser bound.`); return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); };
+    const start = validateManifest(await decodeResponse(startResponse, "start session"));
+    const actions = validateActions(await decodeResponse(actionsResponse, "actions"), start);
+    const end = validateManifest(await decodeResponse(endResponse, "end session"));
+    if (start.sessionId !== end.sessionId) throw new Error("canonical session changed while action verdicts were acquired; reacquire from the beginning.");
+    render(start, actions);
   } catch (error) {
     $("session-state").textContent = "NO CANONICAL SESSION ATTACHED";
     $("status").replaceChildren(Object.assign(document.createElement("span"), { className: "dead", textContent: "detached" }), Object.assign(document.createElement("span"), { textContent: "unavailable" }));
@@ -207,4 +308,4 @@ $("attach-form").addEventListener("submit", async (event) => {
   }
 });
 
-export { validateManifest };
+export { validateActions, validateManifest };

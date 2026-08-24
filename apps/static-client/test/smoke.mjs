@@ -9,7 +9,6 @@ const read = (name) => fs.readFileSync(path.join(root, name), "utf8");
 const html = read("index.html");
 const app = read("app.js");
 const chain = read("chain-client.js");
-const builder = read("successor-builder.js");
 const compiler = read("compiler-proposal.js");
 
 const browserRealm = (...scripts) => {
@@ -39,7 +38,7 @@ test("operatord_transport_is_bounded_get_only_and_rpc_urls_are_daemon_projection
   assert.doesNotMatch(chain, /configuration\.(?:rpcHttpUrl|rpcWebsocketUrl)/);
   assert.match(chain, /transportBinding must expose exactly one composed release/);
   assert.match(chain, /release key does not bind its exact coordinates and manifest/);
-  assert.match(chain, /canonical-account-decoders\/v3-general-no-keeper-no-selected-candidate/);
+  assert.match(chain, /canonical-account-decoders\/v4-source-work-schedule/);
   assert.doesNotMatch(chain, /general-selected-candidate/);
 });
 
@@ -55,9 +54,8 @@ test("canonical session brackets acquisition and admits only onchain-owned resta
 });
 
 test("browser_target_contains_only_operatord_commitment_and_local_bounds", () => {
-  const context = browserRealm("successor-builder.js", "chain-client.js");
+  const context = browserRealm("chain-client.js");
   const output = vm.runInContext(`(() => {
-    const bytes = (fill) => GlassSuccessorBuilder.encodeBase58(new Uint8Array(32).fill(fill));
     return GlassChainClient.validateConfiguration({
       operatorUrl: "http://127.0.0.1:9898",
       commitment: "processed",
@@ -72,38 +70,19 @@ test("browser_target_contains_only_operatord_commitment_and_local_bounds", () =>
   assert.equal("rpcHttpUrl" in output, false);
 });
 
-test("outer_builder_emits_zero_signature_blockhash_free_capability_unverified_transaction", () => {
-  const context = browserRealm("successor-builder.js");
-  const output = vm.runInContext(`(() => {
-    const bytes = (fill) => GlassSuccessorBuilder.encodeBase58(new Uint8Array(32).fill(fill));
-    const programId = bytes(2);
-    return GlassSuccessorBuilder.build({
-      payer: bytes(1),
-      instructions: [{
-        flow: "market-epoch-creation", family: "general", familyTag: "74", familyVersion: "1", localAction: "1", actionName: "CreateMarket",
-        payloadHex: "aabb", semanticOwner: { package: "clutch-market", schema: "create-market/v1", releaseSha256: "09".repeat(32) },
-        accounts: [], requiredSigners: [], equations: [{ name: "exact conservation", unit: { kind: "collateral-atoms", mint: bytes(7) }, left: "340282366920938463463374607431768211455", right: "340282366920938463463374607431768211455" }]
-      }]
-    }, {
-      clusterKey: "private:genesis", release: { programId, programData: bytes(3), deploymentSlot: "7", elfSha256: "01".repeat(32), releaseManifestSha256: "02".repeat(32), sourceCommit: "03".repeat(20), capabilityProfileId: "04".repeat(32) }
-    }, "1232");
-  })()`, context);
-  assert.equal(output.schema, "dragons-clutch/operator/unsigned-protocol-transaction/v4");
-  assert.equal(output.message.recentBlockhash, "11111111111111111111111111111111");
-  assert.equal(output.hasRecentBlockhash, false);
-  assert.equal(output.signed, false);
-  assert.equal(output.submitted, false);
-  assert.equal(output.runtimeCapability, "not-authenticated");
-  assert.equal(output.instructionCoordinates[0].source, "explicit-semantic-owner-draft; not runtime capability admission");
-  assert.match(output.serializedTransactionHex, /^01(?:00){64}010001/);
-  assert.equal(output.exactEquations[0].left, "340282366920938463463374607431768211455");
-});
-
-test("outer_builder_refuses_unbalanced_or_caller_enabled_material", () => {
-  assert.doesNotMatch(builder, /runtimeAdmission\s*=|raw\.runtimeAdmission|enabled\s*:\s*raw/);
-  assert.match(builder, /Unbalanced exact equation/);
-  assert.match(builder, /No release-authenticated runtime capability verdict/);
-  assert.match(app, /disabled capabilities are non-actionable/);
+test("browser_refuses_caller_shaped_transaction_truth", () => {
+  assert.equal(fs.existsSync(path.join(root, "successor-builder.js")), false);
+  assert.doesNotMatch(html, /draft-json|payloadHex|requiredSigners|packet-limit/);
+  assert.doesNotMatch(app, /GlassSuccessorBuilder|\.build\(draft|JSON\.parse\(\$\("draft-json"\)/);
+  assert.match(chain, /operator-action-capability-set\/v1/);
+  assert.match(chain, /action verdict is absent from, or duplicated within, the checked release enabled-intent set/);
+  assert.match(chain, /unavailable action carries executable-looking transaction or signer material/);
+  assert.match(chain, /operator-canonical-action-material\/v1/);
+  assert.match(chain, /callable signer requirements differ from exact signer roles/);
+  assert.match(chain, /serialized transaction encoding or byte count is invalid/);
+  assert.match(chain, /discard this draft regardless of outcome|freshnessDisposition/);
+  assert.match(app, /Browser-authored protocol material is forbidden/);
+  assert.match(app, /canonical unsigned draft available for inspection/);
 });
 
 test("compiler_boundary_names_rust_owner_and_does_not_reimplement_payoff_math", () => {
@@ -178,7 +157,7 @@ test("compiler_transport_joins_definition_class_terms_bytes_and_sixteen_bundle_i
 });
 
 test("no_shipped_script_contains_wallet_sign_or_submit_capability", () => {
-  for (const [name, source] of [["app.js", app], ["chain-client.js", chain], ["successor-builder.js", builder], ["compiler-proposal.js", compiler]]) {
+  for (const [name, source] of [["app.js", app], ["chain-client.js", chain], ["compiler-proposal.js", compiler]]) {
     assert.doesNotMatch(source, /window\.(?:solana|phantom)|signTransaction|signAllTransactions|sendRawTransaction|sendTransaction|@solana\//, name);
     assert.doesNotMatch(source, /new\s+WebSocket|XMLHttpRequest|EventSource|navigator\.sendBeacon|serviceWorker/, name);
   }

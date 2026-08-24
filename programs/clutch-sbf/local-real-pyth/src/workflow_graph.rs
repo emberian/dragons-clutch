@@ -117,7 +117,6 @@ impl ReleasedProgram {
         if self.program_id == Address::default()
             || self.program_data == Address::default()
             || self.program_id == self.program_data
-            || self.deployment_slot == 0
             || self.elf_sha256 == [0; 32]
         {
             Err(WorkflowGraphError::ZeroIdentity)
@@ -136,8 +135,6 @@ pub struct ExplicitOperatorReleaseManifest {
     pub pyth_parser: ReleasedProgram,
     /// Exact captured Pyth receiver release admitted by the Source release.
     pub pyth_receiver: ReleasedProgram,
-    /// Exact captured Pyth router release used to authenticate VAA transport.
-    pub pyth_router: ReleasedProgram,
     pub semantic_releases: Vec<SemanticOwner>,
 }
 
@@ -149,18 +146,15 @@ impl ExplicitOperatorReleaseManifest {
         self.clutch.validate()?;
         self.pyth_parser.validate()?;
         self.pyth_receiver.validate()?;
-        self.pyth_router.validate()?;
         let programs = [
             self.clutch.program_id,
             self.pyth_parser.program_id,
             self.pyth_receiver.program_id,
-            self.pyth_router.program_id,
         ];
         let programdata = [
             self.clutch.program_data,
             self.pyth_parser.program_data,
             self.pyth_receiver.program_data,
-            self.pyth_router.program_data,
         ];
         if programs.iter().enumerate().any(|(index, identity)| {
             programs[..index]
@@ -404,7 +398,10 @@ impl EnabledSourceActionAccountsV2 {
         }
     }
 
-    const fn keeper(self) -> Address {
+    /// Public keeper identity selected by the semantic account contract. This
+    /// is an address requirement only; it carries no signing capability.
+    #[must_use]
+    pub const fn keeper_address(self) -> Address {
         match self {
             Self::InitializeHead(accounts) => accounts.keeper,
             Self::OpenRawPage(accounts) => accounts.keeper,
@@ -412,7 +409,10 @@ impl EnabledSourceActionAccountsV2 {
         }
     }
 
-    const fn payer(self) -> Address {
+    /// Public payer identity selected by the semantic account contract. The
+    /// outer builder must use this exact address as its fee payer.
+    #[must_use]
+    pub const fn payer_address(self) -> Address {
         match self {
             Self::InitializeHead(accounts) => accounts.payer,
             Self::OpenRawPage(accounts) => accounts.payer,
@@ -483,7 +483,7 @@ impl EnabledSourceActionAccountsV2 {
             || route.parser_program_data.to_bytes() != release.base.parser.programdata.bytes()
             || route.parser_config.to_bytes() != release.base.parser_config.bytes()
             || route.source_spec.to_bytes() != release.base.source_spec_account.bytes()
-            || self.payer().to_bytes() != schedule.payer().bytes()
+            || self.payer_address().to_bytes() != schedule.payer().bytes()
             || self.source_compartment().to_bytes() != schedule.source_compartment_account().bytes()
             || self.system_program().to_bytes() != release.base.system_program.bytes()
         {
@@ -1159,7 +1159,7 @@ pub fn plan_source_crank(
     if material.call_ordinal == 0
         || material.call_ordinal > observation.schedule.maximum_calls()
         || material.accounts.action() != registry
-        || material.submitter.bytes() != material.accounts.keeper().to_bytes()
+        || material.submitter.bytes() != material.accounts.keeper_address().to_bytes()
     {
         return Err(WorkflowGraphError::ActionStateMismatch);
     }

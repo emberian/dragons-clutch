@@ -9,12 +9,14 @@
 (function (root) {
   "use strict";
 
-  const BUILDER = root.GlassSuccessorBuilder;
   const UINT = /^(0|[1-9][0-9]*)$/;
   const HASH32 = /^[0-9a-f]{64}$/;
+  const HEX_BYTES = /^(?:[0-9a-f]{2})+$/;
   const COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
   const U64_MAX = (1n << 64n) - 1n;
-  const DECODER_SET = "dragons-clutch/canonical-account-decoders/v3-general-no-keeper-no-selected-candidate";
+  const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  const BASE58_INDEX = Object.freeze(Object.fromEntries(Array.from(BASE58_ALPHABET, (character, index) => [character, index])));
+  const DECODER_SET = "dragons-clutch/canonical-account-decoders/v4-source-work-schedule";
   const GROUP_ORDER = Object.freeze(["market", "product", "collateral", "source", "series", "candidate", "settlement", "liquidity", "recovery", "other"]);
   const GROUP_LABELS = Object.freeze({
     market: "Market",
@@ -130,14 +132,36 @@
     if (typeof value !== "string" || !HASH32.test(value) || /^0+$/.test(value)) throw new Error(`${name} must be a nonzero lowercase SHA-256/32-byte hexadecimal identity.`);
     return value;
   };
+  const encodeBase58 = (bytes) => {
+    let value = 0n;
+    for (const byte of bytes) value = value * 256n + BigInt(byte);
+    let encoded = "";
+    while (value > 0n) { encoded = BASE58_ALPHABET[Number(value % 58n)] + encoded; value /= 58n; }
+    let leading = 0;
+    while (leading < bytes.length && bytes[leading] === 0) leading += 1;
+    return "1".repeat(leading) + (encoded || (leading === 0 ? "1" : ""));
+  };
+  const decodeBase58 = (value, name) => {
+    if (typeof value !== "string" || value.length < 32 || value.length > 44) throw new Error(`${name} must be a canonical base58 Solana address.`);
+    let decoded = 0n;
+    for (const character of value) {
+      const digit = BASE58_INDEX[character];
+      if (digit === undefined) throw new Error(`${name} contains a non-base58 character.`);
+      decoded = decoded * 58n + BigInt(digit);
+    }
+    const output = new Uint8Array(32);
+    for (let index = 31; index >= 0; index -= 1) { output[index] = Number(decoded & 255n); decoded >>= 8n; }
+    if (decoded !== 0n || encodeBase58(output) !== value) throw new Error(`${name} is not a canonical 32-byte base58 address.`);
+    return output;
+  };
   const address = (value, name) => {
     text(value, name, 44);
-    BUILDER.decodeBase58(value, name);
+    decodeBase58(value, name);
     return value;
   };
   const nonzeroAddress = (value, name) => {
     const canonical = address(value, name);
-    const decoded = BUILDER.decodeBase58(canonical, name);
+    const decoded = decodeBase58(canonical, name);
     if (decoded.every((byte) => byte === 0)) throw new Error(`${name} must be a nonzero 32-byte base58 identity.`);
     return canonical;
   };
@@ -463,8 +487,8 @@
   };
 
   const compareAddressBytes = (left, right) => {
-    const leftBytes = BUILDER.decodeBase58(left, "canonical account address");
-    const rightBytes = BUILDER.decodeBase58(right, "canonical account address");
+    const leftBytes = decodeBase58(left, "canonical account address");
+    const rightBytes = decodeBase58(right, "canonical account address");
     for (let index = 0; index < 32; index += 1) {
       if (leftBytes[index] !== rightBytes[index]) return leftBytes[index] - rightBytes[index];
     }
@@ -549,6 +573,12 @@
         || hash32(release.capabilityProfileId, "session.release.capabilityProfileId") !== configuration.release.capabilityProfileId
         || text(release.sourceCommit, "session.release.sourceCommit", 64) !== configuration.release.sourceCommit
         || text(release.decoderSet, "session.release.decoderSet", 128) !== configuration.decoderSet) throw new Error("session checked release/profile identity differs from acquisition.");
+    if (!Array.isArray(release.enabledIntents) || release.enabledIntents.length !== configuration.release.enabledIntents.length) throw new Error("session checked release enabled-intent set differs from acquisition.");
+    release.enabledIntents.forEach((intent, index) => {
+      requirePlain(intent, `session.release.enabledIntents[${index}]`);
+      const expected = configuration.release.enabledIntents[index];
+      if (positiveDecimal(intent.familyTag, "session enabled family tag", 255n).toString() !== expected.familyTag || positiveDecimal(intent.familyVersion, "session enabled family version", 255n).toString() !== expected.familyVersion || positiveDecimal(intent.localAction, "session enabled local action", 255n).toString() !== expected.localAction) throw new Error("session checked release enabled-intent coordinate differs from acquisition.");
+    });
     if (!Array.isArray(raw.canonicalAccounts) || BigInt(raw.canonicalAccounts.length) > BigInt(configuration.bounds.maximumAccounts)) throw new Error("session canonical account identities exceed the explicit browser bound.");
     const canonicalAccounts = Object.freeze(raw.canonicalAccounts.map((accountValue, index) => validateSessionAccount(accountValue, index, configuration)));
     if (new Set(canonicalAccounts.map((accountValue) => accountValue.address)).size !== canonicalAccounts.length) throw new Error("session canonical account identities contain duplicate addresses.");
@@ -704,6 +734,133 @@
     return Object.freeze(actions);
   };
 
+  const validateActionCapabilities = (raw, configuration, session) => {
+    requirePlain(raw, "action capabilities");
+    if (raw.schema !== "dragons-clutch/operator-action-capability-set/v1"
+        || raw.status !== "ready"
+        || raw.commitment !== "finalized"
+        || raw.projectionAuthority !== "untrusted-release-and-canonical-codec-projection"
+        || raw.signing !== false
+        || raw.submission !== false
+        || hash32(raw.sessionId, "actions.sessionId") !== session.sessionId
+        || text(raw.releaseKey, "actions.releaseKey", 320) !== configuration.release.releaseKey
+        || hash32(raw.capabilityProfileId, "actions.capabilityProfileId") !== configuration.release.capabilityProfileId) {
+      throw new Error("action capabilities do not bind the finalized canonical session and checked release.");
+    }
+    requirePlain(raw.freshness, "actions.freshness");
+    if (raw.freshness.recentBlockhash !== "absent-by-contract"
+        || raw.freshness.feePayer !== "must-be-explicit-in-server-constructed-draft"
+        || raw.freshness.validBeforeSlot !== "must-be-derived-from-a-fresh-clock-observation"
+        || typeof raw.freshness.beforeSigning !== "string"
+        || typeof raw.freshness.afterSubmission !== "string") {
+      throw new Error("action capability freshness/reacquisition contract is incomplete.");
+    }
+    if (!Array.isArray(raw.actions) || raw.actions.length > 256) throw new Error("action capability set exceeds the browser bound.");
+    const enabled = new Set(configuration.release.enabledIntents.map((intent) => `${intent.familyTag}:${intent.familyVersion}:${intent.localAction}`));
+    const seen = new Set();
+    const actions = raw.actions.map((row, index) => {
+      requirePlain(row, `actions[${index}]`);
+      requirePlain(row.coordinate, `actions[${index}].coordinate`);
+      requirePlain(row.releaseAdmission, `actions[${index}].releaseAdmission`);
+      const coordinate = Object.freeze({
+        familyTag: positiveDecimal(row.coordinate.familyTag, `actions[${index}].coordinate.familyTag`, 255n).toString(),
+        familyVersion: positiveDecimal(row.coordinate.familyVersion, `actions[${index}].coordinate.familyVersion`, 255n).toString(),
+        localAction: positiveDecimal(row.coordinate.localAction, `actions[${index}].coordinate.localAction`, 255n).toString(),
+        family: text(row.coordinate.family, `actions[${index}].coordinate.family`, 32),
+        action: text(row.coordinate.action, `actions[${index}].coordinate.action`, 96)
+      });
+      const key = `${coordinate.familyTag}:${coordinate.familyVersion}:${coordinate.localAction}`;
+      if (!enabled.has(key) || seen.has(key)) throw new Error("action verdict is absent from, or duplicated within, the checked release enabled-intent set.");
+      seen.add(key);
+      if (row.releaseAdmission.enabled !== true || row.releaseAdmission.releaseKey !== configuration.release.releaseKey || row.releaseAdmission.capabilityProfileId !== configuration.release.capabilityProfileId) throw new Error("action release admission differs from the checked release.");
+      if (!Array.isArray(row.accountRoles) || row.accountRoles.length > 64 || !Array.isArray(row.signerRequirements)) throw new Error("action role/signer projection is invalid.");
+      const accountRoles = Object.freeze(row.accountRoles.map((role, roleIndex) => {
+        requirePlain(role, `actions[${index}].accountRoles[${roleIndex}]`);
+        if (decimal(role.index, `actions[${index}].accountRoles[${roleIndex}].index`).toString() !== String(roleIndex)) throw new Error("action account roles are not in exact semantic-owner order.");
+        return Object.freeze({
+          index: String(roleIndex),
+          role: text(role.role, `actions[${index}].accountRoles[${roleIndex}].role`, 64),
+          writable: bool(role.writable, `actions[${index}].accountRoles[${roleIndex}].writable`),
+          signer: bool(role.signer, `actions[${index}].accountRoles[${roleIndex}].signer`),
+          address: role.address === null ? null : nonzeroAddress(role.address, `actions[${index}].accountRoles[${roleIndex}].address`),
+          identityDisposition: text(role.identityDisposition, `actions[${index}].accountRoles[${roleIndex}].identityDisposition`, 160)
+        });
+      }));
+      const callable = bool(row.callable, `actions[${index}].callable`);
+      if (!callable && (row.verdict !== "unavailable" || row.transactionDraft !== null || row.signerRequirements.length !== 0)) throw new Error("unavailable action carries executable-looking transaction or signer material.");
+      if (!callable) return Object.freeze({ coordinate, accountRoles, callable: false, verdict: row.verdict, reason: text(row.reason, `actions[${index}].reason`, 512), stateSelection: row.stateSelection, transactionDraft: null, signerRequirements: Object.freeze([]) });
+      if (row.verdict !== "callable-unsigned-draft" || row.stateSelection === null) throw new Error("callable action lacks an exact finalized state selection.");
+      const stateSelection = validateCallableStateSelection(row.stateSelection, session, index);
+      if (accountRoles.length === 0 || accountRoles.some((role) => role.address === null || role.identityDisposition !== "semantic-owner-derived-and-bound-to-draft")) throw new Error("callable action has unresolved account-role identity.");
+      const signerRequirements = Object.freeze(row.signerRequirements.map((requirement, signerIndex) => {
+        requirePlain(requirement, `actions[${index}].signerRequirements[${signerIndex}]`);
+        if (!Array.isArray(requirement.semanticRoles) || requirement.semanticRoles.length === 0 || requirement.signaturePresent !== false || requirement.keyAccess !== false) throw new Error("callable signer requirement implies signature or key access.");
+        return Object.freeze({
+          address: nonzeroAddress(requirement.address, `actions[${index}].signerRequirements[${signerIndex}].address`),
+          semanticRoles: Object.freeze(requirement.semanticRoles.map((role, roleIndex) => text(role, `actions[${index}].signerRequirements[${signerIndex}].semanticRoles[${roleIndex}]`, 64))),
+          signaturePresent: false,
+          keyAccess: false
+        });
+      }));
+      if (new Set(signerRequirements.map((requirement) => requirement.address)).size !== signerRequirements.length) throw new Error("callable signer requirements repeat an identity.");
+      const roleSigners = new Set(accountRoles.filter((role) => role.signer).map((role) => role.address));
+      if (signerRequirements.some((requirement) => !roleSigners.has(requirement.address)) || [...roleSigners].some((signer) => !signerRequirements.some((requirement) => requirement.address === signer))) throw new Error("callable signer requirements differ from exact signer roles.");
+      const transactionDraft = validateCanonicalTransactionDraft(row.transactionDraft, configuration, coordinate, stateSelection, accountRoles, signerRequirements, index);
+      requirePlain(row.freshnessDisposition, `actions[${index}].freshnessDisposition`);
+      const observedSlot = positiveDecimal(row.freshnessDisposition.observedSlot, `actions[${index}].freshnessDisposition.observedSlot`);
+      const validBeforeSlot = positiveDecimal(row.freshnessDisposition.validBeforeSlot, `actions[${index}].freshnessDisposition.validBeforeSlot`);
+      const maximumValiditySlots = positiveDecimal(row.freshnessDisposition.maximumValiditySlots, `actions[${index}].freshnessDisposition.maximumValiditySlots`);
+      if (validBeforeSlot <= observedSlot || validBeforeSlot - observedSlot > maximumValiditySlots || observedSlot < BigInt(stateSelection.accountSlot) || row.freshnessDisposition.recentBlockhash !== "absent; a launcher must reacquire state before adding one" || typeof row.freshnessDisposition.beforeSigning !== "string" || typeof row.freshnessDisposition.afterSubmission !== "string") throw new Error("callable action freshness boundary is invalid.");
+      return Object.freeze({ coordinate, accountRoles, callable: true, verdict: row.verdict, reason: text(row.reason, `actions[${index}].reason`, 512), stateSelection, transactionDraft, signerRequirements, freshnessDisposition: Object.freeze({ observedSlot: observedSlot.toString(), validBeforeSlot: validBeforeSlot.toString(), maximumValiditySlots: maximumValiditySlots.toString() }) });
+    });
+    if (seen.size !== enabled.size) throw new Error("operatord omitted a checked release-enabled coordinate from its action verdict set.");
+    return Object.freeze({ schema: raw.schema, sessionId: session.sessionId, actions: Object.freeze(actions), freshness: Object.freeze({ ...raw.freshness }) });
+  };
+
+  const validateCallableStateSelection = (raw, session, index) => {
+    requirePlain(raw, `actions[${index}].stateSelection`);
+    requirePlain(raw.cursor, `actions[${index}].stateSelection.cursor`);
+    if (!Array.isArray(raw.dependencies) || raw.dependencies.length > 128 || raw.releaseKey !== session.release.releaseKey || raw.observedCommitment !== "finalized" || raw.effectiveCommitment !== "finalized") throw new Error("callable state selection is not finalized and release-bound.");
+    const value = Object.freeze({
+      account: nonzeroAddress(raw.account, `actions[${index}].stateSelection.account`),
+      releaseKey: raw.releaseKey,
+      action: text(raw.action, `actions[${index}].stateSelection.action`, 80),
+      accountSlot: decimal(raw.accountSlot, `actions[${index}].stateSelection.accountSlot`).toString(),
+      observedCommitment: "finalized",
+      effectiveCommitment: "finalized",
+      branch: validateBranch(raw.branch, `actions[${index}].stateSelection.branch`),
+      dependencies: Object.freeze(raw.dependencies.map((dependency, dependencyIndex) => nonzeroAddress(dependency, `actions[${index}].stateSelection.dependencies[${dependencyIndex}]`))),
+      cursor: Object.freeze({
+        workflowId: hash32(raw.cursor.workflowId, `actions[${index}].stateSelection.cursor.workflowId`),
+        lane: text(raw.cursor.lane, `actions[${index}].stateSelection.cursor.lane`, 48),
+        generation: positiveDecimal(raw.cursor.generation, `actions[${index}].stateSelection.cursor.generation`).toString(),
+        phase: decimal(raw.cursor.phase, `actions[${index}].stateSelection.cursor.phase`, 65535n).toString(),
+        item: decimal(raw.cursor.item, `actions[${index}].stateSelection.cursor.item`).toString(),
+        observedStateSha256: hash32(raw.cursor.observedStateSha256, `actions[${index}].stateSelection.cursor.observedStateSha256`)
+      })
+    });
+    if (value.branch.kind !== "finalized-scan" || new Set(value.dependencies).size !== value.dependencies.length) throw new Error("callable state selection is forked or repeats a dependency.");
+    const restart = session.restart.cursors.find((candidate) => candidate.account === value.account && candidate.action === value.action && candidate.cursor.workflowId === value.cursor.workflowId && candidate.cursor.lane === value.cursor.lane && candidate.cursor.generation === value.cursor.generation && candidate.cursor.phase === value.cursor.phase && candidate.cursor.item === value.cursor.item && candidate.cursor.observedStateSha256 === value.cursor.observedStateSha256);
+    if (!restart || restart.dependencies.length !== value.dependencies.length || restart.dependencies.some((dependency, dependencyIndex) => dependency !== value.dependencies[dependencyIndex])) throw new Error("callable state selection differs from the attached onchain-derived restart cursor.");
+    return value;
+  };
+
+  const validateCanonicalTransactionDraft = (raw, configuration, coordinate, selection, roles, signers, index) => {
+    requirePlain(raw, `actions[${index}].transactionDraft`);
+    if (raw.schema !== "dragons-clutch/operator-canonical-action-material/v1" || raw.constructionSchema !== "dragons-clutch/operator/unsigned-protocol-transaction/v3" || hash32(raw.releaseManifestSha256, "draft release manifest") !== configuration.release.releaseManifestSha256 || hash32(raw.capabilityProfileId, "draft capability profile") !== configuration.release.capabilityProfileId || nonzeroAddress(raw.driverAccount, "draft driver account") !== selection.account || decimal(raw.driverAccountSlot, "draft driver account slot").toString() !== selection.accountSlot || raw.recentBlockhash !== null || raw.hasRecentBlockhash !== false || raw.signed !== false || raw.submitted !== false || raw.reloadAuthoritativeAccounts !== true) throw new Error("callable transaction draft violates its release/construction boundary.");
+    const feePayer = nonzeroAddress(raw.feePayer, "draft fee payer");
+    if (!signers.some((requirement) => requirement.address === feePayer && requirement.semanticRoles.includes("transaction-fee-payer")) || !roles.some((role) => role.address === feePayer && role.signer)) throw new Error("draft fee payer is not the exact signer role.");
+    const transactionHex = text(raw.serializedTransactionHex, "serialized transaction", 2464);
+    if (!HEX_BYTES.test(transactionHex) || decimal(raw.serializedBytes, "serialized transaction bytes", 1232n).toString() !== String(transactionHex.length / 2)) throw new Error("serialized transaction encoding or byte count is invalid.");
+    if (!Array.isArray(raw.actions) || raw.actions.length !== 1 || !Array.isArray(raw.flows) || raw.flows.length !== 1 || raw.flows[0] !== "source-plane-v3" || !Array.isArray(raw.semanticOwners) || raw.semanticOwners.length !== 1 || !Array.isArray(raw.registryBindings) || raw.registryBindings.length !== 1 || !Array.isArray(raw.runtimeAdmissions) || raw.runtimeAdmissions.length !== 1 || raw.runtimeAdmissions[0] !== "release-bound-enabled" || !Array.isArray(raw.exactEquations) || raw.exactEquations.length === 0) throw new Error("callable draft is not one exact admitted Source action.");
+    const binding = raw.registryBindings[0];
+    requirePlain(binding, "draft registry binding");
+    if (positiveDecimal(binding.familyTag, "draft binding family tag", 255n).toString() !== coordinate.familyTag || positiveDecimal(binding.familyVersion, "draft binding family version", 255n).toString() !== coordinate.familyVersion || positiveDecimal(binding.localAction, "draft binding local action", 255n).toString() !== coordinate.localAction || binding.allocationStatus !== "frozen") throw new Error("draft registry binding differs from the checked coordinate.");
+    raw.semanticOwners.forEach((owner, ownerIndex) => { requirePlain(owner, `draft.semanticOwners[${ownerIndex}]`); text(owner.package, "semantic owner package", 160); text(owner.schema, "semantic owner schema", 160); hash32(owner.releaseSha256, "semantic owner release"); });
+    raw.exactEquations.forEach((equation, equationIndex) => { requirePlain(equation, `draft.exactEquations[${equationIndex}]`); requirePlain(equation.unit, `draft.exactEquations[${equationIndex}].unit`); text(equation.name, "exact equation name", 200); const left = decimal(equation.left, "exact equation left"); const right = decimal(equation.right, "exact equation right"); if (left !== right) throw new Error("draft exact-integer equation is unbalanced."); });
+    return Object.freeze({ ...raw, draftId: hash32(raw.draftId, "draft ID"), feePayer, serializedTransactionHex: transactionHex });
+  };
+
   const maximumSlot = (values) => values.reduce((maximum, value) => value > maximum ? value : maximum, 0n);
   const accountGroup = (kind) => {
     if (KIND_GROUPS[kind]) return KIND_GROUPS[kind];
@@ -713,7 +870,7 @@
     return "other";
   };
 
-  const deriveSnapshot = (configuration, session, health, acquisition, releases, accountResponse, keeperActions, forks, remainingResponseBytes) => {
+  const deriveSnapshot = (configuration, session, actionCapabilities, health, acquisition, releases, accountResponse, keeperActions, forks, remainingResponseBytes) => {
     const accounts = accountResponse.selected;
     const candidateSlots = forks.nodes.map((node) => BigInt(node.slot)).concat(accounts.map((accountValue) => BigInt(accountValue.slot)));
     if (forks.finalizedRoot) candidateSlots.push(BigInt(forks.finalizedRoot.slot));
@@ -733,21 +890,15 @@
     });
     const groups = Object.freeze(Object.fromEntries(GROUP_ORDER.map((name) => [name, Object.freeze(annotated.filter((accountValue) => accountValue.group === name))])));
     const familySet = new Set(releases.selected.families);
-    const familyTags = Object.freeze({ general: "74", "structured-claim": "75", dealer: "76", source: "77", series: "77", failure: "78", fractional: "79" });
-    const successorCapabilities = releases.selected.families.map((familyName) => {
-      const coordinates = configuration.release.enabledIntents.filter((intent) => intent.familyTag === familyTags[familyName]);
-      return Object.freeze({
-        surface: "successor-family",
-        family: familyName,
-        label: familyName,
-        indexedByRelease: true,
-        allocationStatus: coordinates.length === 0 ? "no enabled coordinate" : "registered coordinate; runtime unproven",
-        enabled: false,
-        reason: coordinates.length === 0
-          ? "The checked release exposes this current decoder family but no enabled central-registry action coordinate. It is non-actionable."
-          : `The checked release exposes ${coordinates.length} enabled coordinate(s), but this projection has no authoritative current-account runtime admission verdict. Execution remains disabled; only an explicitly labeled unsigned proposal can be constructed.`
-      });
-    });
+    const successorCapabilities = actionCapabilities.actions.map((action) => Object.freeze({
+      surface: "successor-action",
+      family: action.coordinate.family,
+      label: `${action.coordinate.familyTag}/${action.coordinate.familyVersion}/${action.coordinate.localAction} · ${action.coordinate.action}`,
+      indexedByRelease: action.stateSelection !== null,
+      allocationStatus: action.callable ? "callable" : "unavailable",
+      enabled: action.callable,
+      reason: action.reason
+    }));
     const productIndexed = familySet.has("series") || annotated.some((accountValue) => accountValue.group === "product" || accountValue.group === "series");
     const ownerV3Indexed = familySet.has("position-v3") || familySet.has("replay-v3") || annotated.some((accountValue) => accountValue.kind === "position-v3" || accountValue.kind === "replay-v3" || accountValue.kind.startsWith("general-owner-settlement"));
     const capabilities = Object.freeze([
@@ -810,6 +961,7 @@
       groups,
       groupLabels: GROUP_LABELS,
       keeperActions,
+      actionCapabilities,
       capabilities,
       forks
     };
@@ -822,6 +974,7 @@
     const acquisition = validateAcquisition(await reader.get("/v1/acquisition"), target);
     const configuration = acquisition.configuration;
     const session = validateSession(await reader.get("/v1/session"), configuration);
+    const actionCapabilities = validateActionCapabilities(await reader.get("/v1/actions"), configuration, session);
     const healthRaw = await reader.get("/v1/health");
     const health = validateHealth(healthRaw, configuration);
     const releases = validateReleaseResponse(await reader.get("/v1/releases"), configuration);
@@ -845,8 +998,9 @@
       throw new Error("Processed transport generation or rollback epoch changed during acquisition; reacquire a coherent non-final projection.");
     }
     if (endSession.sessionId !== session.sessionId) throw new Error("Finalized canonical session identity changed during acquisition; reacquire instead of persisting a mixed restart view.");
-    return deriveSnapshot(configuration, endSession, health, endAcquisition, releases, accounts, keeper, forks, reader.remaining.toString());
+    if (actionCapabilities.sessionId !== endSession.sessionId) throw new Error("Action capability set belongs to a stale finalized session; reacquire from the beginning.");
+    return deriveSnapshot(configuration, endSession, actionCapabilities, health, endAcquisition, releases, accounts, keeper, forks, reader.remaining.toString());
   };
 
-  root.GlassChainClient = Object.freeze({ validateConfiguration, redactedConfiguration, validateSession, acquire, deriveSnapshot, groupOrder: GROUP_ORDER, groupLabels: GROUP_LABELS });
+  root.GlassChainClient = Object.freeze({ validateConfiguration, redactedConfiguration, validateSession, validateActionCapabilities, acquire, deriveSnapshot, decodeBase58, encodeBase58, groupOrder: GROUP_ORDER, groupLabels: GROUP_LABELS });
 })(typeof globalThis === "object" ? globalThis : this);

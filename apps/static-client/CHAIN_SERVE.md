@@ -156,6 +156,26 @@ that the HTTP and WebSocket services share an operator, authenticate the RPC,
 or make its observations authoritative. All WebSocket observations remain
 untrusted and onchain execution must independently reload authority.
 
+## Action material and freshness
+
+`/v1/actions` enumerates the exact enabled-intent set from the checked release;
+it never infers capabilities from the presence of a decoded account. A row is
+callable only when one opaque typed semantic-owner constructor joins the same
+release, capability profile, finalized restart cursor, ordered account-role
+contract, fee payer, signer set, exact-integer equations, and deterministic
+blockhash-free transaction bytes. Duplicate material for one cursor fails
+closed.
+
+Action material is ephemeral and is not restart state. The daemon may retain it
+only in memory and rejoins it to the current release and cursor on every read.
+The browser validates all projected roles, signers, release coordinates,
+decimal integers, and transaction bounds before enabling inspection. It still
+cannot add a recent blockhash, read a key, sign, or submit. A future launcher
+must reacquire the complete named prestate and current slot before adding a
+blockhash, and must discard the draft and reacquire `/v1/session` plus
+`/v1/actions` after any submission attempt rather than advancing from an
+expected poststate.
+
 The RPC plan accepts HTTPS/WSS endpoints or canonical loopback
 `http://127.0.0.1:PORT` and `ws://127.0.0.1:PORT` pairs. Public reads remain
 subject to configured response, account, timeout, index, notification-buffer,
