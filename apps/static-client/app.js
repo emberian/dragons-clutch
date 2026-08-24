@@ -237,7 +237,9 @@
           ? `${holderChoice.kind}: outcome ${holderChoice.outcome}, quantity ${holderChoice.quantity}; claimant ${holderChoice.claimant}; Position ${holderChoice.position}; funding payer ${holderChoice.fundingPayer || "none"}`
         : `${holderChoice.kind}: source claimant ${holderChoice.sourceClaimant}; source credit ${holderChoice.sourceCredit}; destination claimant ${holderChoice.destinationClaimant}; numerator ${holderChoice.numerator || "entire chain-derived source balance"}; payout ${holderChoice.payout.kind} to ${holderChoice.payout.target}; funding payer ${holderChoice.fundingPayer || "none"}`;
       const fractionalDerivedFacts = action.fractionalContract && action.fractionalContract.derivedFacts
-        ? `credit ${action.fractionalContract.derivedFacts.credit}; ${action.fractionalContract.derivedFacts.creditAdmission}; payout ${action.fractionalContract.derivedFacts.wholeCollateralPayout} collateral atoms; retained numerator ${action.fractionalContract.derivedFacts.retainedPayoutNumerator}`
+        ? action.fractionalContract.derivedFacts.kind === "fractional-lifecycle"
+          ? `${action.fractionalContract.derivedFacts.outcomeCount} chain-derived outcomes; ${action.fractionalContract.derivedFacts.driver} driver at sequence ${action.fractionalContract.derivedFacts.sequence}; ${action.fractionalContract.derivedFacts.authority}`
+          : `credit ${action.fractionalContract.derivedFacts.credit}; ${action.fractionalContract.derivedFacts.creditAdmission}; payout ${action.fractionalContract.derivedFacts.wholeCollateralPayout} collateral atoms; retained numerator ${action.fractionalContract.derivedFacts.retainedPayoutNumerator}`
         : "contained in exact balanced equations";
       const label = `${action.coordinate.familyTag}/${action.coordinate.familyVersion}/${action.coordinate.localAction}${action.payloadVariant ? `/${action.payloadVariant.payloadDiscriminator}` : ""} · ${action.payloadVariant ? action.payloadVariant.name : action.coordinate.action}`;
       const card = create("article", `action-verdict ${action.inspection.eligible ? "eligible" : "refused"}`);
