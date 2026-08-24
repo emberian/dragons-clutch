@@ -17,7 +17,8 @@
 use crate::accounts::{expect_pda, require, require_distinct, Outcome};
 use crate::error::{ClutchError, Refusal};
 use crate::instructions::genesis::{
-    read_rent, require_system_program, transfer_data, SYSTEM_PROGRAM_ID,
+    allocate_data, assign_data, read_rent, require_system_program, transfer_data,
+    SYSTEM_PROGRAM_ID,
 };
 use crate::instructions::product_artifact::{
     authenticate_product_artifact_v1, AuthenticatedRegistryCapabilityV3,
@@ -26,6 +27,14 @@ use crate::instructions::product_series::{
     AuthenticatedCompiledProductSeriesBundleV5, AuthenticatedSeriesFundingAccountV2,
 };
 use crate::seeds;
+use clutch_liveness::runtime_adapter_v1::{
+    decode_runtime_policy_account_v1, RuntimePersistedAccountViewV1,
+};
+use clutch_liveness::runtime_v1::{
+    PresentFundingSourceV1, PresentFundingV1, RuntimeCompartmentAdmissionV1,
+    RuntimeCompartmentIdentityV1, RuntimeCompartmentKindV1, RuntimeCompartmentV1,
+};
+use clutch_liveness::Id as LivenessId;
 use clutch_product_series::{
     ComponentDebitV1, ContentId, MarketFoundationAccountGraphV2,
     MarketFoundationAccountGraphV2Id, MarketFoundationScheduleV2, MarketFoundationScheduleV2Id,
@@ -33,9 +42,16 @@ use clutch_product_series::{
     SeriesFundingQuoteV4, SeriesFundingTermsV2, SeriesMarketDispositionV1, SeriesMarketLinkV1Id,
     SeriesPlanV5Id, SERIES_FUNDING_COMPONENT_COUNT_V2,
 };
+use clutch_solana_layout::failure_recovery::{
+    decode_failure_account_body_v1, encode_failure_account_header_v1,
+    FAILURE_ACCOUNT_HEADER_BYTES_V1, FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1,
+    FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1, FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1,
+    FAILURE_LIVENESS_POLICY_BODY_BYTES_V1,
+};
 use clutch_solana_layout::product_series::{
     SeriesFundingAccountV2, SERIES_FUNDING_ACCOUNT_BYTES_V2,
 };
+use clutch_solana_layout::registry;
 use solana_account_info::AccountInfo;
 use solana_cpi::invoke_signed;
 use solana_instruction::{AccountMeta, Instruction};
@@ -45,7 +61,10 @@ const FOUNDATION_VAULT_INIT_RECEIPT_DOMAIN_V1: &[u8] =
     b"dragons-clutch/product-foundation-vault-init-receipt/v1";
 const FOUNDATION_FUNDING_ACCOUNT_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/product-foundation-funding-account-authentication/v1";
+const RECOVERY_RESERVE_CAPITALIZATION_RECEIPT_DOMAIN_V1: &[u8] =
+    b"dragons-clutch/product-recovery-reserve-capitalization-receipt/v1";
 const MARKET_CORE_COMPONENT_SEED_V2: u8 = 0;
+const RECOVERY_RESERVE_COMPONENT_SEED_V2: u8 = 2;
 
 /// Product-owned coordinates which a future root/link creator must authorize.
 ///
@@ -60,6 +79,8 @@ pub(crate) struct FoundationVaultInitCoordinatesV1 {
     pub(crate) founder_link_account: Pubkey,
     pub(crate) lifecycle_replay_account: Pubkey,
     pub(crate) foundation_account_graph_id: MarketFoundationAccountGraphV2Id,
+    /// Exact lifecycle shared by the existing liveness policy and Recovery custody.
+    pub(crate) liveness_lifecycle_id: ContentId,
 }
 
 /// Exact immutable facts offered to the future atomic founder authority.
@@ -174,6 +195,140 @@ impl AuthenticatedFoundationVaultInitV1 {
     pub(crate) const fn foundation_vault_balance_after(self) -> u64 {
         self.facts.foundation_vault_balance_after
     }
+}
+
+/// Exact present-funding and physical-account facts for the sole Recovery custody.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RecoveryReserveCapitalizationFactsV1 {
+    pub(crate) foundation_init_receipt_id: ContentId,
+    pub(crate) series_plan_id: SeriesPlanV5Id,
+    pub(crate) market_instance_id: MarketInstanceV2Id,
+    pub(crate) generation: u64,
+    pub(crate) funding_account: Pubkey,
+    pub(crate) funding_state_id: ContentId,
+    pub(crate) funding_transition_sequence: u64,
+    pub(crate) funding_reservation_receipt_id: ContentId,
+    pub(crate) recovery_reserve_vault: Pubkey,
+    pub(crate) recovery_account: Pubkey,
+    pub(crate) liveness_policy_account: Pubkey,
+    pub(crate) liveness_policy_id: ContentId,
+    pub(crate) liveness_lifecycle_id: ContentId,
+    pub(crate) quote_schedule_id: ContentId,
+    pub(crate) payer: Pubkey,
+    pub(crate) neutral_lamport_sink: Pubkey,
+    pub(crate) work_principal_lamports: u64,
+    pub(crate) rent_principal_lamports: u64,
+    pub(crate) payer_debit_lamports: u64,
+    pub(crate) source_donation_lamports: u64,
+    pub(crate) recovery_donation_lamports: u64,
+    pub(crate) source_balance_before: u64,
+    pub(crate) source_balance_after: u64,
+    pub(crate) recovery_balance_before: u64,
+    pub(crate) recovery_balance_after: u64,
+}
+
+/// Private proof that Product moved the complete pending RecoveryReserve debit.
+///
+/// The receipt is minted only after the framed liveness body is written and
+/// hostile-decoded from the canonical Recovery PDA. Failure consumes this
+/// receipt as the sole custody fact; it must not move a second reward reserve.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedRecoveryReserveCapitalizationV1 {
+    id: ContentId,
+    facts: RecoveryReserveCapitalizationFactsV1,
+    recovery_state: RuntimeCompartmentV1,
+    recovery_data_id: ContentId,
+}
+
+impl AuthenticatedRecoveryReserveCapitalizationV1 {
+    pub(crate) const fn id(self) -> ContentId {
+        self.id
+    }
+
+    pub(crate) const fn facts(self) -> RecoveryReserveCapitalizationFactsV1 {
+        self.facts
+    }
+
+    pub(crate) const fn recovery_state(self) -> RuntimeCompartmentV1 {
+        self.recovery_state
+    }
+
+    pub(crate) const fn recovery_data_id(self) -> ContentId {
+        self.recovery_data_id
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RecoveryReserveFundingPlanV1 {
+    work_principal_lamports: u64,
+    rent_principal_lamports: u64,
+    payer_debit_lamports: u64,
+    source_donation_lamports: u64,
+    recovery_donation_lamports: u64,
+    source_balance_before: u64,
+    source_balance_after: u64,
+    recovery_balance_before: u64,
+    recovery_balance_after: u64,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plan_recovery_reserve_funding_v1(
+    quoted: ComponentDebitV1,
+    pending: ComponentDebitV1,
+    remaining: ComponentDebitV1,
+    source_donations: ComponentDebitV1,
+    work_principal_lamports: u64,
+    rent_principal_lamports: u64,
+    source_balance_before: u64,
+    recovery_balance_before: u64,
+) -> Outcome<RecoveryReserveFundingPlanV1> {
+    let payer_debit_lamports = work_principal_lamports
+        .checked_add(rent_principal_lamports)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        quoted.collateral_atoms == 0
+            && pending == quoted
+            && remaining.collateral_atoms == 0
+            && source_donations.collateral_atoms == 0
+            && work_principal_lamports != 0
+            && rent_principal_lamports != 0
+            && quoted.lamports == payer_debit_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    let accounted_source_before = remaining
+        .lamports
+        .checked_add(source_donations.lamports)
+        .and_then(|value| value.checked_add(pending.lamports))
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        source_balance_before == accounted_source_before,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+    let source_balance_after = source_balance_before
+        .checked_sub(payer_debit_lamports)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    let expected_source_after = remaining
+        .lamports
+        .checked_add(source_donations.lamports)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    require(
+        source_balance_after == expected_source_after,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+    let recovery_balance_after = recovery_balance_before
+        .checked_add(payer_debit_lamports)
+        .ok_or_else(|| Refusal::Adapter(ClutchError::Arithmetic))?;
+    Ok(RecoveryReserveFundingPlanV1 {
+        work_principal_lamports,
+        rent_principal_lamports,
+        payer_debit_lamports,
+        source_donation_lamports: source_donations.lamports,
+        recovery_donation_lamports: recovery_balance_before,
+        source_balance_before,
+        source_balance_after,
+        recovery_balance_before,
+        recovery_balance_after,
+    })
 }
 
 fn flatten_component_debits_v1(
@@ -475,6 +630,10 @@ pub(crate) fn fund_product_foundation_vault_v1<
         .founder_link_id
         .validate()
         .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    coordinates
+        .liveness_lifecycle_id
+        .validate()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
 
     let (expected_market_core_vault, market_core_bump) = seeds::series_lamport_vault_pda(
         program_id,
@@ -700,6 +859,7 @@ pub(crate) fn fund_product_foundation_vault_v1<
             facts.coordinates.founder_link_account.as_ref(),
             facts.coordinates.lifecycle_replay_account.as_ref(),
             &facts.coordinates.foundation_account_graph_id.bytes(),
+            &facts.coordinates.liveness_lifecycle_id.bytes(),
             facts.funding_state_account.as_ref(),
             &facts.funding_state_id.bytes(),
             &facts.funding_account_data_id.bytes(),
@@ -759,6 +919,457 @@ pub(crate) fn fund_product_foundation_vault_v1<
         rent_exemption_threshold_bits: rent_threshold_bits,
         funding_account_rent_principal_lamports: observed_funding.rent_principal_lamports,
         funding_account_observed_lamports: funding_account.lamports(),
+    })
+}
+
+const fn liveness_id_from_content(id: ContentId) -> LivenessId {
+    LivenessId::from_bytes(id.bytes())
+}
+
+fn liveness_id_from_pubkey(key: &Pubkey) -> LivenessId {
+    LivenessId::from_bytes(key.to_bytes())
+}
+
+/// Move the exact founder-only RecoveryReserve debit into its sole custody.
+///
+/// The Series component vault is the only physical source. Existing lamports
+/// at the predictable Recovery PDA are preserved in the runtime body as
+/// donations, while the Series payer still supplies the complete work plus
+/// rent principal. The policy, FundingV2 state, QuoteV4, rent sysvar, PDA, and
+/// postimage are all hostile-reopened in this call.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn capitalize_product_recovery_reserve_v1<'a>(
+    program_id: &Pubkey,
+    foundation_init: AuthenticatedFoundationVaultInitV1,
+    funding: AuthenticatedSeriesFundingAccountV2,
+    funding_account: &AccountInfo<'a>,
+    funding_quote_account: &AccountInfo<'a>,
+    liveness_policy_account: &AccountInfo<'a>,
+    recovery_reserve_vault: &AccountInfo<'a>,
+    recovery_account: &AccountInfo<'a>,
+    principal_refund_owner: &AccountInfo<'a>,
+    neutral_lamport_sink: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    rent_sysvar: &AccountInfo<'a>,
+) -> Outcome<AuthenticatedRecoveryReserveCapitalizationV1> {
+    require_system_program(system_program)?;
+    let rent = read_rent(rent_sysvar)?;
+    require_distinct(&[
+        funding_account.clone(),
+        funding_quote_account.clone(),
+        liveness_policy_account.clone(),
+        recovery_reserve_vault.clone(),
+        recovery_account.clone(),
+        principal_refund_owner.clone(),
+        neutral_lamport_sink.clone(),
+        system_program.clone(),
+        rent_sysvar.clone(),
+    ])?;
+
+    let init = foundation_init.facts;
+    require(
+        foundation_init.executing_program == *program_id
+            && foundation_init.rent_sysvar == *rent_sysvar.key
+            && foundation_init.rent_lamports_per_byte_year == rent.lamports_per_byte_year
+            && foundation_init.rent_exemption_threshold_bits == rent.exemption_threshold.to_bits()
+            && foundation_init.funding_quote_artifact_account == *funding_quote_account.key
+            && init.funding_state_account == *funding_account.key
+            && init.principal_refund_owner == *principal_refund_owner.key
+            && init.neutral_lamport_sink == *neutral_lamport_sink.key,
+        ClutchError::MismatchedState,
+    )?;
+    require(
+        principal_refund_owner.key.to_bytes() == init.principal_refund_owner.to_bytes()
+            && !principal_refund_owner.is_signer
+            && !principal_refund_owner.executable
+            && principal_refund_owner.owner.to_bytes() == SYSTEM_PROGRAM_ID
+            && principal_refund_owner.data_len() == 0
+            && neutral_lamport_sink.key.to_bytes() == init.neutral_lamport_sink.to_bytes()
+            && neutral_lamport_sink.is_writable
+            && !neutral_lamport_sink.is_signer
+            && !neutral_lamport_sink.executable
+            && neutral_lamport_sink.owner.to_bytes() == SYSTEM_PROGRAM_ID
+            && neutral_lamport_sink.data_len() == 0,
+        ClutchError::MismatchedState,
+    )?;
+
+    require(
+        funding_account.owner == program_id
+            && funding_account.is_writable
+            && !funding_account.is_signer
+            && !funding_account.executable
+            && funding_account.data_len() == SERIES_FUNDING_ACCOUNT_BYTES_V2,
+        ClutchError::MismatchedState,
+    )?;
+    let funding_data = funding_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let funding_data_id =
+        ContentId::from_bytes(solana_sha256_hasher::hashv(&[&funding_data[..]]).to_bytes());
+    let observed_funding = SeriesFundingAccountV2::decode(&funding_data)?;
+    drop(funding_data);
+    let funding_state_id = observed_funding
+        .state
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+        .content_id();
+    let funding_authentication_id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            FOUNDATION_FUNDING_ACCOUNT_AUTHENTICATION_DOMAIN_V1,
+            funding_account.key.as_ref(),
+            program_id.as_ref(),
+            &funding_data_id.bytes(),
+            &funding_state_id.bytes(),
+            &[observed_funding.stored_bump],
+            &observed_funding.rent_principal_lamports.to_le_bytes(),
+            &funding_account.lamports().to_le_bytes(),
+            &observed_funding.state.transition_sequence.to_le_bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(
+        funding.account() == *funding_account.key
+            && funding.value() == observed_funding
+            && funding_state_id == init.funding_state_id
+            && funding_data_id == init.funding_account_data_id
+            && funding_authentication_id == init.funding_account_authentication_id
+            && funding_account.lamports() == foundation_init.funding_account_observed_lamports
+            && observed_funding.state.phase == SeriesFundingPhaseV2::Pending
+            && observed_funding.state.series_plan_id == init.series_plan_id
+            && observed_funding.state.pending_ordinal == init.ordinal
+            && observed_funding.state.pending_debits == init.pending_debits
+            && observed_funding.state.pending_reservation_receipt_id
+                == init.funding_reservation_receipt_id
+            && observed_funding.state.transition_sequence == init.funding_transition_sequence,
+        ClutchError::MismatchedState,
+    )?;
+    expect_pda(
+        funding_account.key,
+        seeds::series_funding_pda(program_id, &init.series_plan_id.bytes()),
+        Some(observed_funding.stored_bump),
+    )?;
+    require(
+        observed_funding.rent_principal_lamports
+            == foundation_init.funding_account_rent_principal_lamports
+            && observed_funding.rent_principal_lamports
+                >= rent.minimum_balance(SERIES_FUNDING_ACCOUNT_BYTES_V2)?,
+        ClutchError::MismatchedState,
+    )?;
+
+    let quote_artifact = authenticate_product_artifact_v1::<SeriesFundingQuoteV4>(
+        program_id,
+        funding_quote_account,
+        init.funding_quote_id,
+    )?;
+    let quote = *quote_artifact.value();
+    let quote_id = quote
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        quote_id.content_id() == init.funding_quote_id,
+        ClutchError::MismatchedState,
+    )?;
+
+    require(
+        liveness_policy_account.owner == program_id
+            && !liveness_policy_account.is_writable
+            && !liveness_policy_account.is_signer
+            && !liveness_policy_account.executable
+            && liveness_policy_account.data_len() == FAILURE_LIVENESS_POLICY_ACCOUNT_BYTES_V1,
+        ClutchError::MismatchedState,
+    )?;
+    let policy_data = liveness_policy_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    let policy_frame = decode_failure_account_body_v1(
+        &policy_data,
+        registry::FAILURE_LIVENESS_POLICY_ACCOUNT_TAG,
+        registry::FAILURE_LIVENESS_POLICY_ACCOUNT_VERSION,
+        FAILURE_LIVENESS_POLICY_BODY_BYTES_V1,
+    )?;
+    let policy = decode_runtime_policy_account_v1(
+        liveness_id_from_pubkey(program_id),
+        liveness_id_from_pubkey(liveness_policy_account.key),
+        RuntimePersistedAccountViewV1 {
+            account_id: liveness_id_from_pubkey(liveness_policy_account.key),
+            owner_program_id: liveness_id_from_pubkey(liveness_policy_account.owner),
+            lamports: liveness_policy_account.lamports(),
+            data: policy_frame.body,
+            writable: false,
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let policy_bump = policy_frame.stored_bump;
+    drop(policy_data);
+    expect_pda(
+        liveness_policy_account.key,
+        seeds::failure_liveness_policy_pda(program_id, &quote.failure_liveness_policy_id.bytes()),
+        Some(policy_bump),
+    )?;
+    let recovery_policy = policy.compartments[RuntimeCompartmentKindV1::Recovery.index()];
+    require(
+        policy.policy_id == liveness_id_from_content(quote.failure_liveness_policy_id)
+            && policy.neutral_sink == liveness_id_from_pubkey(neutral_lamport_sink.key)
+            && recovery_policy.kind == RuntimeCompartmentKindV1::Recovery
+            && recovery_policy.quote_schedule_id
+                == liveness_id_from_content(quote.failure_recovery_quote_schedule_id)
+            && recovery_policy.receipt_program_id == liveness_id_from_pubkey(program_id)
+            && recovery_policy.account_rent_principal_lamports
+                == quote.recovery_rent_principal_lamports,
+        ClutchError::MismatchedState,
+    )?;
+
+    let recovery_index = SeriesFundingComponentV2::RecoveryReserve.index();
+    let (expected_reserve, reserve_bump) = seeds::series_lamport_vault_pda(
+        program_id,
+        &init.series_plan_id.bytes(),
+        RECOVERY_RESERVE_COMPONENT_SEED_V2,
+    );
+    expect_pda(
+        recovery_reserve_vault.key,
+        (expected_reserve, reserve_bump),
+        None,
+    )?;
+    let lifecycle_id = liveness_id_from_content(init.coordinates.liveness_lifecycle_id);
+    let (expected_recovery, recovery_bump) = seeds::failure_external_recovery_pda(
+        program_id,
+        &lifecycle_id.bytes(),
+        init.coordinates.generation,
+    );
+    expect_pda(
+        recovery_account.key,
+        (expected_recovery, recovery_bump),
+        None,
+    )?;
+    for account in [recovery_reserve_vault, recovery_account] {
+        require(
+            account.is_writable
+                && !account.is_signer
+                && !account.executable
+                && account.owner.to_bytes() == SYSTEM_PROGRAM_ID
+                && account.data_len() == 0,
+            ClutchError::MismatchedState,
+        )?;
+    }
+    require(
+        rent.minimum_balance(FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1)?
+            == quote.recovery_rent_principal_lamports,
+        ClutchError::MismatchedState,
+    )?;
+    let plan = plan_recovery_reserve_funding_v1(
+        quote.components[recovery_index],
+        observed_funding.state.pending_debits[recovery_index],
+        observed_funding.state.components[recovery_index].remaining_principal,
+        observed_funding.state.components[recovery_index].donations,
+        recovery_policy.work_capital_lamports,
+        recovery_policy.account_rent_principal_lamports,
+        recovery_reserve_vault.lamports(),
+        recovery_account.lamports(),
+    )?;
+    let recovery_state = RuntimeCompartmentV1::admit(
+        policy,
+        RuntimeCompartmentAdmissionV1 {
+            kind: RuntimeCompartmentKindV1::Recovery,
+            identity: RuntimeCompartmentIdentityV1 {
+                policy_id: policy.policy_id,
+                lifecycle_id,
+                account_id: liveness_id_from_pubkey(recovery_account.key),
+                owner: liveness_id_from_pubkey(program_id),
+                payer: liveness_id_from_pubkey(principal_refund_owner.key),
+                neutral_sink: liveness_id_from_pubkey(neutral_lamport_sink.key),
+                generation: init.coordinates.generation,
+            },
+            funding: PresentFundingV1 {
+                payer: liveness_id_from_pubkey(principal_refund_owner.key),
+                source: PresentFundingSourceV1::PrecapitalizedLivenessEndowment,
+                payer_debit_lamports: plan.payer_debit_lamports,
+                account_balance_before: plan.recovery_balance_before,
+                account_balance_after: plan.recovery_balance_after,
+            },
+        },
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(
+        recovery_state
+            .expected_account_balance_lamports()
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?
+            == plan.recovery_balance_after,
+        ClutchError::MismatchedState,
+    )?;
+    let mut recovery_body = [0u8; FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1];
+    recovery_state
+        .encode(&mut recovery_body)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+
+    let series = init.series_plan_id.bytes();
+    let reserve_component = [RECOVERY_RESERVE_COMPONENT_SEED_V2];
+    let reserve_bump_seed = [reserve_bump];
+    let transfer = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &transfer_data(plan.payer_debit_lamports),
+        vec![
+            AccountMeta::new(*recovery_reserve_vault.key, true),
+            AccountMeta::new(*recovery_account.key, false),
+        ],
+    );
+    invoke_signed(
+        &transfer,
+        &[
+            recovery_reserve_vault.clone(),
+            recovery_account.clone(),
+            system_program.clone(),
+        ],
+        &[&[
+            seeds::SEED_SERIES_LAMPORT_VAULT_V1,
+            &series,
+            &reserve_component,
+            &reserve_bump_seed,
+        ]],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::SeriesCustodyDeltaMismatch))?;
+    require(
+        recovery_reserve_vault.lamports() == plan.source_balance_after
+            && recovery_account.lamports() == plan.recovery_balance_after,
+        ClutchError::SeriesCustodyDeltaMismatch,
+    )?;
+
+    let lifecycle = init.coordinates.liveness_lifecycle_id.bytes();
+    let generation = init.coordinates.generation.to_le_bytes();
+    let recovery_bump_seed = [recovery_bump];
+    let recovery_signer = &[
+        seeds::SEED_FAILURE_EXTERNAL_RECOVERY,
+        &lifecycle,
+        &generation,
+        &recovery_bump_seed,
+    ];
+    let allocate = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &allocate_data(FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1),
+        vec![AccountMeta::new(*recovery_account.key, true)],
+    );
+    invoke_signed(
+        &allocate,
+        &[recovery_account.clone(), system_program.clone()],
+        &[recovery_signer],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    let assign = Instruction::new_with_bytes(
+        SYSTEM_PROGRAM_ID,
+        &assign_data(program_id),
+        vec![AccountMeta::new(*recovery_account.key, true)],
+    );
+    invoke_signed(
+        &assign,
+        &[recovery_account.clone(), system_program.clone()],
+        &[recovery_signer],
+    )
+    .map_err(|_| Refusal::Adapter(ClutchError::AccountCreationFailed))?;
+    require(
+        recovery_account.owner == program_id
+            && recovery_account.data_len() == FAILURE_EXTERNAL_RECOVERY_ACCOUNT_BYTES_V1
+            && recovery_account.lamports() == plan.recovery_balance_after,
+        ClutchError::MismatchedState,
+    )?;
+    let mut recovery_data = recovery_account
+        .try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    require(
+        recovery_data.iter().all(|byte| *byte == 0),
+        ClutchError::AlreadyInitialized,
+    )?;
+    encode_failure_account_header_v1(
+        &mut recovery_data,
+        registry::FAILURE_EXTERNAL_RECOVERY_ACCOUNT_TAG,
+        registry::FAILURE_EXTERNAL_RECOVERY_ACCOUNT_VERSION,
+        recovery_bump,
+        FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1,
+    )?;
+    recovery_data[FAILURE_ACCOUNT_HEADER_BYTES_V1..].copy_from_slice(&recovery_body);
+    let recovery_data_id =
+        ContentId::from_bytes(solana_sha256_hasher::hashv(&[&recovery_data[..]]).to_bytes());
+    let rebound_frame = decode_failure_account_body_v1(
+        &recovery_data,
+        registry::FAILURE_EXTERNAL_RECOVERY_ACCOUNT_TAG,
+        registry::FAILURE_EXTERNAL_RECOVERY_ACCOUNT_VERSION,
+        FAILURE_EXTERNAL_RECOVERY_BODY_BYTES_V1,
+    )?;
+    let rebound_stored_bump = rebound_frame.stored_bump;
+    let rebound = RuntimeCompartmentV1::decode(rebound_frame.body)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    drop(recovery_data);
+    require(
+        rebound == recovery_state
+            && rebound_stored_bump == recovery_bump
+            && recovery_account.lamports() == plan.recovery_balance_after,
+        ClutchError::MismatchedState,
+    )?;
+
+    let facts = RecoveryReserveCapitalizationFactsV1 {
+        foundation_init_receipt_id: foundation_init.id,
+        series_plan_id: init.series_plan_id,
+        market_instance_id: init.coordinates.market_instance_id,
+        generation: init.coordinates.generation,
+        funding_account: *funding_account.key,
+        funding_state_id,
+        funding_transition_sequence: init.funding_transition_sequence,
+        funding_reservation_receipt_id: init.funding_reservation_receipt_id,
+        recovery_reserve_vault: *recovery_reserve_vault.key,
+        recovery_account: *recovery_account.key,
+        liveness_policy_account: *liveness_policy_account.key,
+        liveness_policy_id: quote.failure_liveness_policy_id,
+        liveness_lifecycle_id: init.coordinates.liveness_lifecycle_id,
+        quote_schedule_id: quote.failure_recovery_quote_schedule_id,
+        payer: *principal_refund_owner.key,
+        neutral_lamport_sink: *neutral_lamport_sink.key,
+        work_principal_lamports: plan.work_principal_lamports,
+        rent_principal_lamports: plan.rent_principal_lamports,
+        payer_debit_lamports: plan.payer_debit_lamports,
+        source_donation_lamports: plan.source_donation_lamports,
+        recovery_donation_lamports: plan.recovery_donation_lamports,
+        source_balance_before: plan.source_balance_before,
+        source_balance_after: plan.source_balance_after,
+        recovery_balance_before: plan.recovery_balance_before,
+        recovery_balance_after: plan.recovery_balance_after,
+    };
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            RECOVERY_RESERVE_CAPITALIZATION_RECEIPT_DOMAIN_V1,
+            program_id.as_ref(),
+            &foundation_init.id.bytes(),
+            &facts.series_plan_id.bytes(),
+            &facts.market_instance_id.bytes(),
+            &facts.generation.to_le_bytes(),
+            facts.funding_account.as_ref(),
+            &facts.funding_state_id.bytes(),
+            &facts.funding_transition_sequence.to_le_bytes(),
+            &facts.funding_reservation_receipt_id.bytes(),
+            facts.recovery_reserve_vault.as_ref(),
+            facts.recovery_account.as_ref(),
+            facts.liveness_policy_account.as_ref(),
+            &facts.liveness_policy_id.bytes(),
+            &facts.liveness_lifecycle_id.bytes(),
+            &facts.quote_schedule_id.bytes(),
+            facts.payer.as_ref(),
+            facts.neutral_lamport_sink.as_ref(),
+            &facts.work_principal_lamports.to_le_bytes(),
+            &facts.rent_principal_lamports.to_le_bytes(),
+            &facts.payer_debit_lamports.to_le_bytes(),
+            &facts.source_donation_lamports.to_le_bytes(),
+            &facts.recovery_donation_lamports.to_le_bytes(),
+            &facts.source_balance_before.to_le_bytes(),
+            &facts.source_balance_after.to_le_bytes(),
+            &facts.recovery_balance_before.to_le_bytes(),
+            &facts.recovery_balance_after.to_le_bytes(),
+            &recovery_data_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require(!id.is_zero(), ClutchError::MismatchedState)?;
+    Ok(AuthenticatedRecoveryReserveCapitalizationV1 {
+        id,
+        facts,
+        recovery_state: rebound,
+        recovery_data_id,
     })
 }
 
@@ -842,6 +1453,62 @@ mod tests {
         assert!(plan_foundation_vault_funding_v1(overflow).is_err());
     }
 
+    #[test]
+    fn recovery_prefund_remains_donation_and_full_principal_moves() {
+        let plan = plan_recovery_reserve_funding_v1(
+            debit(700, 0),
+            debit(700, 0),
+            debit(900, 0),
+            debit(13, 0),
+            500,
+            200,
+            1_613,
+            29,
+        )
+        .unwrap();
+        assert_eq!(plan.payer_debit_lamports, 700);
+        assert_eq!(plan.source_balance_after, 913);
+        assert_eq!(plan.recovery_donation_lamports, 29);
+        assert_eq!(plan.recovery_balance_after, 729);
+    }
+
+    #[test]
+    fn recovery_refuses_shortfall_collateral_or_rent_reclassification() {
+        assert!(plan_recovery_reserve_funding_v1(
+            debit(700, 0),
+            debit(700, 0),
+            debit(900, 0),
+            debit(13, 0),
+            500,
+            200,
+            1_612,
+            29,
+        )
+        .is_err());
+        assert!(plan_recovery_reserve_funding_v1(
+            debit(700, 1),
+            debit(700, 1),
+            debit(900, 0),
+            debit(13, 0),
+            500,
+            200,
+            1_613,
+            29,
+        )
+        .is_err());
+        assert!(plan_recovery_reserve_funding_v1(
+            debit(700, 0),
+            debit(700, 0),
+            debit(900, 0),
+            debit(13, 0),
+            501,
+            200,
+            1_613,
+            29,
+        )
+        .is_err());
+    }
+
     fn valid_capability_join() -> FoundationCapabilityBundleJoinV1 {
         FoundationCapabilityBundleJoinV1 {
             expected_program: Pubkey::new_from_array([31; 32]),
@@ -899,6 +1566,7 @@ mod tests {
                 founder_link_account: Pubkey::new_from_array([19; 32]),
                 lifecycle_replay_account: Pubkey::new_from_array([20; 32]),
                 foundation_account_graph_id: MarketFoundationAccountGraphV2Id::from_bytes([4; 32]),
+                liveness_lifecycle_id: ContentId::from_bytes([42; 32]),
             },
             series_plan_id: SeriesPlanV5Id::from_bytes([5; 32]),
             ordinal: 0,

@@ -157,15 +157,12 @@ pub(crate) mod product_fractional_family;
 pub(crate) mod product_general_family;
 /// Always-compiled Product Market/link account authentication; routes remain capability-gated.
 pub mod product_market;
-/// Staged-disabled Product founder custody transfer.  No dispatch or capability
-/// row reaches this module until the root/link creator consumes its receipt.
-/// Integration gate: before a deployable founder route is added, move its two
-/// Product/Series authentication receipts into an always-compiled owner and
-/// remove this module's laboratory cfg in the same commit.  Route disablement
-/// must not be implemented by omitting the final deployable semantic seam.
-#[cfg(feature = "non-production-product-series-lab")]
+/// Always-compiled Product founder custody and atomic root/link seam. No
+/// dispatch or capability row reaches it until the complete founder chain is
+/// integrated; route disablement is not implemented by omitting its owner.
 pub(crate) mod product_market_foundation_init;
-#[cfg(feature = "non-production-product-series-lab")]
+/// Always-compiled Product/Series semantic owner; executable routes remain
+/// independently capability-disabled.
 pub mod product_series;
 pub mod resolution_work;
 pub mod series_failure_funding;
