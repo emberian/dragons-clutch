@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Private successful-Source binding to Product's current LinkV2 release.
+//! Private successful-Source binding to Product's current LinkV3 release.
 //!
 //! The Source terminal necessarily precedes Product release, so the bridge is
 //! minted only after the exact Resolved release/archive postwrite. It accepts
@@ -26,7 +26,7 @@ fn source_id(value: clutch_product_series::ContentId) -> ContentId {
     ContentId::from_bytes(value.bytes())
 }
 
-/// Exact successful Source, ResolutionV5, and Product LinkV2 release facts.
+/// Exact successful Source, ResolutionV5, and Product LinkV3 release facts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SourceResolutionProductReleaseFactsV1 {
     pub(crate) source_resolution_input_id: ContentId,
@@ -51,8 +51,8 @@ pub(crate) struct SourceResolutionProductReleaseFactsV1 {
     pub(crate) product_link_account: Pubkey,
     pub(crate) product_link_authentication_before: ContentId,
     pub(crate) product_link_authentication_after: ContentId,
-    pub(crate) product_link_semantic_before: clutch_product_series::SeriesMarketLinkV2Id,
-    pub(crate) product_link_semantic_after: clutch_product_series::SeriesMarketLinkV2Id,
+    pub(crate) product_link_semantic_before: clutch_product_series::SeriesMarketLinkV3Id,
+    pub(crate) product_link_semantic_after: clutch_product_series::SeriesMarketLinkV3Id,
     pub(crate) product_transition_sequence_before: u64,
     pub(crate) product_transition_sequence_after: u64,
     pub(crate) product_session_transcript_before: ContentId,
