@@ -56,7 +56,9 @@ use clutch_retirement::{
     admit_initial_rent_split, admit_reopen_rent_split, Identity32V1, RentSplitAdmissionPlanV2,
     PositionAccountV3, PositionV3Sha256Backend, POSITION_V3_BYTES,
 };
-use clutch_solana_layout::product_series::MarketLifecycleRootAccountV1;
+use clutch_solana_layout::product_series::{
+    MarketLifecycleRootAccountV1, MarketLifecycleRootAccountV2,
+};
 use solana_account_info::AccountInfo;
 use solana_cpi::{invoke, invoke_signed};
 use solana_instruction::{AccountMeta, Instruction};
@@ -72,6 +74,7 @@ use super::external_redemption_v3::{
 };
 use super::product_artifact::AuthenticatedRegistryCapabilityV3;
 use super::product_market::authenticate_market_lifecycle_root_v1;
+use super::product_series_current::authenticate_market_lifecycle_root_v2;
 use super::genesis::{
     allocate_data, assign_data, read_rent, require_creatable, require_system_program,
     transfer_data, SYSTEM_PROGRAM_ID,
@@ -2125,8 +2128,8 @@ fn process_redeem_internal_credit(
             && ledger.claim_ledger_account.bytes() == accounts[IX_CLAIM_LEDGER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
-    let mut root_body = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
-    let root = authenticate_market_lifecycle_root_v1(
+    let mut root_body = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
+    let root = authenticate_market_lifecycle_root_v2(
         program_id,
         &accounts[IX_MARKET_LIFECYCLE_ROOT],
         liabilities.market_binding.base().market_instance_v2_id,
@@ -2700,8 +2703,8 @@ fn process_redeem_bearer_credit(
                 == accounts[bearer_ix::CLAIM_LEDGER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
-    let mut root_body = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
-    let root = authenticate_market_lifecycle_root_v1(
+    let mut root_body = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
+    let root = authenticate_market_lifecycle_root_v2(
         program_id,
         &accounts[root_index],
         liabilities.market_binding.base().market_instance_v2_id,
@@ -3103,8 +3106,8 @@ fn process_credit_move(
                 == accounts[move_ix::CLAIM_LEDGER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
-    let mut root_body = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
-    let root = authenticate_market_lifecycle_root_v1(
+    let mut root_body = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
+    let root = authenticate_market_lifecycle_root_v2(
         program_id,
         &accounts[geometry.root],
         liabilities.market_binding.base().market_instance_v2_id,
@@ -3520,8 +3523,8 @@ fn process_close_zero_credit(
                 == accounts[close_credit_ix::CLAIM_LEDGER].key.to_bytes(),
         ClutchError::MismatchedState,
     )?;
-    let mut root_body = Box::new(MarketLifecycleRootAccountV1::decode_buffer());
-    let root = authenticate_market_lifecycle_root_v1(
+    let mut root_body = Box::new(MarketLifecycleRootAccountV2::decode_buffer());
+    let root = authenticate_market_lifecycle_root_v2(
         program_id,
         &accounts[close_credit_ix::MARKET_ROOT],
         liabilities.market_binding.base().market_instance_v2_id,
