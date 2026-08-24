@@ -10,7 +10,7 @@
 
 use clutch_batch::Side;
 use clutch_general_v2_contract::{
-    candidate_bundle_digest_v1, complete_candidate_feed_v2, DeletableRentOwnerV1,
+    complete_candidate_feed_v2, DeletableRentOwnerV1,
     AuthenticatedIndexedSettlementRootRentV1, ExactIndexChildrenStateV1, Id32,
     IndexedSettlementRootV1AccountV1, MarketBindingV2, SettlementRootV1AccountV1,
     SettlementSliceLegKindV1, SettlementSliceV1, INDEXED_SETTLEMENT_ROOT_ACCOUNT_TAG,
@@ -55,9 +55,6 @@ pub const FROZEN_ORDER_LOCATOR_DATA_ID_DOMAIN_V1: &[u8] =
     b"dragons-clutch/general-v2/compact-order-locator-data/v1\0";
 pub const CANDIDATE_ORDER_SLICE_INDEX_DATA_ID_DOMAIN_V1: &[u8] =
     b"dragons-clutch/general-v2/compact-order-slice-index-data/v1\0";
-pub const SEALED_FEED_FULL_DATA_ID_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/general-v2/sealed-feed-full-data/v1\0";
-
 const ENVELOPE_BYTES: usize = 16;
 const COMPACT_IDS_BYTES: usize = 6 * 32;
 const COMPACT_COUNTER_BYTES: usize = 16;
@@ -106,7 +103,6 @@ pub enum ExactIndexPlaneErrorV1 {
     WrongLength,
     InvalidLocator,
     InvalidAdjacency,
-    AggregateMismatch,
     InvalidCreateAccount,
     InvalidRent,
     NonTerminalRoot,
@@ -221,7 +217,6 @@ impl ExactIndexCreateAccountInputV1 {
 #[derive(Clone, Copy, Debug)]
 pub struct ConstructExactIndexStreamingInputV1<'a> {
     pub traversal: &'a dyn SettlementTraversalAccessV5,
-    pub feed_full_data: AuthenticatedFeedFullDataIdV1,
     pub settlement_root_account: Id32,
     pub settlement_root: &'a SettlementRootV1AccountV1,
     pub capability_profile_id: Id32,
@@ -229,42 +224,6 @@ pub struct ConstructExactIndexStreamingInputV1<'a> {
     pub adjacency_create: ExactIndexCreateAccountInputV1,
 }
 
-/// Exact sealed-Feed account identity authenticated against one traversal.
-///
-/// This is distinct from `candidate_bundle_digest`: the full data ID commits
-/// the envelope, account coordinates, rent/reward fields, bump, and every
-/// other exact byte as well as the semantic candidate body.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthenticatedFeedFullDataIdV1 {
-    account: Id32,
-    candidate_bundle_digest: Id32,
-    full_data_id: Id32,
-    _private: (),
-}
-
-pub fn authenticate_feed_full_data_id_v1(
-    traversal: &dyn SettlementTraversalAccessV5,
-    feed_account: Id32,
-    feed_body: &[u8],
-) -> Result<AuthenticatedFeedFullDataIdV1, ExactIndexPlaneErrorV1> {
-    let candidate_bundle_digest = candidate_bundle_digest_v1(&CanonicalSha256, feed_body, true)
-        .map_err(|_| ExactIndexPlaneErrorV1::CandidateTraversal)?;
-    let projection = traversal.projection();
-    let feed_view = authenticate_settlement_feed_view_v5(feed_account, feed_body)
-        .map_err(|_| ExactIndexPlaneErrorV1::CandidateTraversal)?;
-    if feed_account != projection.selected_feed_account()
-        || candidate_bundle_digest != projection.candidate_bundle_digest()
-        || feed_view.data_id() != projection.feed_data_id()
-    {
-        return Err(ExactIndexPlaneErrorV1::CandidateTraversal);
-    }
-    Ok(AuthenticatedFeedFullDataIdV1 {
-        account: feed_account,
-        candidate_bundle_digest,
-        full_data_id: hash_id(SEALED_FEED_FULL_DATA_ID_DOMAIN_V1, feed_body)?,
-        _private: (),
-    })
-}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CountedExactIndexRootStreamResultV1 {
     indexed_root_data_id: Id32, locator_data_id: Id32, adjacency_data_id: Id32, plane_id: Id32,
@@ -276,26 +235,6 @@ impl CountedExactIndexRootStreamResultV1 {
     pub const fn plane_id(&self) -> Id32 { self.plane_id }
 }
 
-pub fn exact_index_slice_reference_count_v1(traversal: &dyn SettlementTraversalAccessV5)
-    -> Result<u16, ExactIndexPlaneErrorV1>
-{
-    let feed = traversal.feed();
-    let mut count = 0u16;
-    let mut slice = 0u16;
-    while slice < feed.slice_count {
-        let value = traversal.settlement_slice(slice)
-            .map_err(|_| ExactIndexPlaneErrorV1::CandidateTraversal)?;
-        let increment = match (value.buy(), value.sell(), value.route()) {
-            (SettlementLegV1::Order(_), SettlementLegV1::Order(_), SettlementRouteV1::Direct) => 2,
-            (SettlementLegV1::Order(_), SettlementLegV1::Split, SettlementRouteV1::SplitToBuy)
-            | (SettlementLegV1::Merge, SettlementLegV1::Order(_), SettlementRouteV1::SellToMerge) => 1,
-            _ => return Err(ExactIndexPlaneErrorV1::CandidateTraversal),
-        };
-        count = count.checked_add(increment).ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
-        slice = slice.checked_add(1).ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
-    }
-    Ok(count)
-}
 pub fn locator_data_len_v1(order_count: u8) -> Result<usize, ExactIndexPlaneErrorV1> {
     if order_count == 0 || usize::from(order_count) > MAX_ORDERS { return Err(ExactIndexPlaneErrorV1::InvalidCount); }
     EXACT_INDEX_COMMON_HEADER_BYTES_V1.checked_add(usize::from(order_count) * FROZEN_ORDER_LOCATOR_ROW_BYTES_V1)
@@ -324,12 +263,17 @@ pub fn stream_counted_exact_index_root_v1(
         || root_rent.base_before() != input.settlement_root || input.capability_profile_id.is_zero()
         || projection.selected_feed_account() != input.settlement_root.retained_feed()
         || projection.candidate_bundle_digest() != input.settlement_root.candidate_bundle_digest()
-        || input.feed_full_data.account != projection.selected_feed_account()
-        || input.feed_full_data.candidate_bundle_digest
-            != projection.candidate_bundle_digest()
+        || projection.feed_data_id().is_zero()
     { return Err(ExactIndexPlaneErrorV1::RootBinding); }
     let feed = projection.feed();
-    let references = exact_index_slice_reference_count_v1(input.traversal)?;
+    let references = projection.exact_slice_reference_count();
+    let maximum_references = feed
+        .slice_count
+        .checked_mul(2)
+        .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
+    if references < feed.slice_count || references > maximum_references {
+        return Err(ExactIndexPlaneErrorV1::InvalidCount);
+    }
     let locator_len = locator_data_len_v1(feed.order_count)?;
     let adjacency_len = adjacency_data_len_v1(feed.order_count, references)?;
     if root_output.len() != INDEXED_SETTLEMENT_ROOT_BYTES_V1 || locator_output.len() != locator_len
@@ -358,7 +302,8 @@ pub fn stream_counted_exact_index_root_v1(
 
     locator_output.fill(0); adjacency_output.fill(0);
     let physical_slot_counts = projection.page_physical_slot_counts();
-    let mut totals = [0u64; MAX_ORDERS];
+    let mut next = 0u16;
+    let mut cursors = [0u16; MAX_ORDERS];
     let mut order = 0usize;
     while order < usize::from(feed.order_count) {
         let index = u8::try_from(order).map_err(|_| ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
@@ -386,62 +331,41 @@ pub fn stream_counted_exact_index_root_v1(
         let side = match order_row.economic_order().side {
             Side::Buy => ExactIndexOrderSideV1::Buy, Side::Sell => ExactIndexOrderSideV1::Sell,
         };
+        let slice_ref_count = projection
+            .order_slice_reference_count(index)
+            .ok_or(ExactIndexPlaneErrorV1::InvalidAdjacency)?;
         write_directory(adjacency_output, order, CandidateOrderDirectoryRowV1 {
-            first_slice_ref: 0, slice_ref_count: 0, side,
+            first_slice_ref: next, slice_ref_count, side,
         })?;
+        cursors[order] = next;
+        next = next
+            .checked_add(slice_ref_count)
+            .ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
         order += 1;
+    }
+    if next != references {
+        return Err(ExactIndexPlaneErrorV1::InvalidAdjacency);
     }
     let mut slice = 0u16;
     while slice < feed.slice_count {
         let value = input.traversal.settlement_slice(slice)
             .map_err(|_| ExactIndexPlaneErrorV1::CandidateTraversal)?;
-        match (value.buy(), value.sell(), value.route()) {
-            (SettlementLegV1::Order(buy), SettlementLegV1::Order(sell), SettlementRouteV1::Direct) => {
-                add_count(adjacency_output, &mut totals, feed.order_count, buy,
-                    ExactIndexOrderSideV1::Buy, value.quantity())?;
-                add_count(adjacency_output, &mut totals, feed.order_count, sell,
-                    ExactIndexOrderSideV1::Sell, value.quantity())?;
-            }
-            (SettlementLegV1::Order(buy), SettlementLegV1::Split, SettlementRouteV1::SplitToBuy) =>
-                add_count(adjacency_output, &mut totals, feed.order_count, buy,
-                    ExactIndexOrderSideV1::Buy, value.quantity())?,
-            (SettlementLegV1::Merge, SettlementLegV1::Order(sell), SettlementRouteV1::SellToMerge) =>
-                add_count(adjacency_output, &mut totals, feed.order_count, sell,
-                    ExactIndexOrderSideV1::Sell, value.quantity())?,
-            _ => return Err(ExactIndexPlaneErrorV1::CandidateTraversal),
+        if value.quantity() == 0 {
+            return Err(ExactIndexPlaneErrorV1::CandidateTraversal);
         }
-        slice = slice.checked_add(1).ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
-    }
-    let mut next = 0u16;
-    let mut cursors = [0u16; MAX_ORDERS];
-    order = 0;
-    while order < usize::from(feed.order_count) {
-        let mut row = read_directory(adjacency_output, order)?;
-        let index = u8::try_from(order).map_err(|_| ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
-        let entitled = input.traversal.settlement_membership(index)
-            .map_err(|_| ExactIndexPlaneErrorV1::CandidateTraversal)?
-            .map_or(0, |m| m.entitled_units);
-        if totals[order] != entitled { return Err(ExactIndexPlaneErrorV1::AggregateMismatch); }
-        row.first_slice_ref = next;
-        next = next.checked_add(row.slice_ref_count).ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
-        cursors[order] = row.first_slice_ref;
-        write_directory(adjacency_output, order, row)?;
-        order += 1;
-    }
-    if next != references { return Err(ExactIndexPlaneErrorV1::InvalidAdjacency); }
-    slice = 0;
-    while slice < feed.slice_count {
-        let value = input.traversal.settlement_slice(slice)
-            .map_err(|_| ExactIndexPlaneErrorV1::CandidateTraversal)?;
         match (value.buy(), value.sell(), value.route()) {
             (SettlementLegV1::Order(buy), SettlementLegV1::Order(sell), SettlementRouteV1::Direct) => {
-                write_reference(adjacency_output, feed.order_count, &mut cursors, buy, slice)?;
-                write_reference(adjacency_output, feed.order_count, &mut cursors, sell, slice)?;
+                write_reference_for_side(adjacency_output, feed.order_count, &mut cursors, buy,
+                    ExactIndexOrderSideV1::Buy, slice)?;
+                write_reference_for_side(adjacency_output, feed.order_count, &mut cursors, sell,
+                    ExactIndexOrderSideV1::Sell, slice)?;
             }
             (SettlementLegV1::Order(buy), SettlementLegV1::Split, SettlementRouteV1::SplitToBuy) =>
-                write_reference(adjacency_output, feed.order_count, &mut cursors, buy, slice)?,
+                write_reference_for_side(adjacency_output, feed.order_count, &mut cursors, buy,
+                    ExactIndexOrderSideV1::Buy, slice)?,
             (SettlementLegV1::Merge, SettlementLegV1::Order(sell), SettlementRouteV1::SellToMerge) =>
-                write_reference(adjacency_output, feed.order_count, &mut cursors, sell, slice)?,
+                write_reference_for_side(adjacency_output, feed.order_count, &mut cursors, sell,
+                    ExactIndexOrderSideV1::Sell, slice)?,
             _ => return Err(ExactIndexPlaneErrorV1::CandidateTraversal),
         }
         slice = slice.checked_add(1).ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
@@ -455,7 +379,7 @@ pub fn stream_counted_exact_index_root_v1(
         order += 1;
     }
     let plane_id = derive_plane_id(input.settlement_root, input.settlement_root_account,
-        projection.selected_feed_account(), input.feed_full_data.full_data_id,
+        projection.selected_feed_account(), projection.feed_data_id(),
         projection.owner_order_set_digest(), input.locator_create.account,
         input.adjacency_create.account, locator_rent, adjacency_rent, feed.order_count,
         references, &locator_output[EXACT_INDEX_COMMON_HEADER_BYTES_V1..],
@@ -464,7 +388,7 @@ pub fn stream_counted_exact_index_root_v1(
         settlement_root_account: input.settlement_root_account,
         sibling_account: input.adjacency_create.account, plane_id,
         selected_feed_account: projection.selected_feed_account(),
-        selected_feed_data_id: input.feed_full_data.full_data_id,
+        selected_feed_data_id: projection.feed_data_id(),
         traversal_binding_id: projection.owner_order_set_digest(), order_count: feed.order_count,
         outcome_count: feed.outcome_count, slice_count: feed.slice_count,
         slice_reference_count: references, page_count: projection.page_count(),
@@ -492,26 +416,17 @@ pub fn stream_counted_exact_index_root_v1(
         adjacency_data_id, plane_id })
 }
 
-fn add_count(body: &mut [u8], totals: &mut [u64; MAX_ORDERS], order_count: u8,
-    order: u8, expected_side: ExactIndexOrderSideV1, quantity: u64)
-    -> Result<(), ExactIndexPlaneErrorV1>
-{
-    let index = usize::from(order);
-    if order >= order_count || index >= MAX_ORDERS || quantity == 0 {
-        return Err(ExactIndexPlaneErrorV1::InvalidAdjacency);
-    }
-    let mut row = read_directory(body, index)?;
-    if row.side != expected_side { return Err(ExactIndexPlaneErrorV1::InvalidAdjacency); }
-    row.slice_ref_count = row.slice_ref_count.checked_add(1).ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
-    totals[index] = totals[index].checked_add(quantity).ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
-    write_directory(body, index, row)
-}
-fn write_reference(body: &mut [u8], order_count: u8, cursors: &mut [u16; MAX_ORDERS],
-    order: u8, slice: u16) -> Result<(), ExactIndexPlaneErrorV1>
+fn write_reference_for_side(
+    body: &mut [u8], order_count: u8, cursors: &mut [u16; MAX_ORDERS],
+    order: u8, expected_side: ExactIndexOrderSideV1, slice: u16,
+) -> Result<(), ExactIndexPlaneErrorV1>
 {
     let index = usize::from(order);
     if order >= order_count { return Err(ExactIndexPlaneErrorV1::InvalidAdjacency); }
     let row = read_directory(body, index)?;
+    if row.side != expected_side {
+        return Err(ExactIndexPlaneErrorV1::InvalidAdjacency);
+    }
     let cursor = cursors[index];
     let end = row.first_slice_ref.checked_add(row.slice_ref_count).ok_or(ExactIndexPlaneErrorV1::ArithmeticOverflow)?;
     if cursor < row.first_slice_ref || cursor >= end { return Err(ExactIndexPlaneErrorV1::InvalidAdjacency); }
@@ -623,9 +538,10 @@ fn authenticate_join<'a>(input: AuthenticateCountedExactIndexReadInputV1<'a>, ro
     { return Err(ExactIndexPlaneErrorV1::RootBinding); }
     let locator = decode_common(input.locator.body, FROZEN_ORDER_LOCATOR_MAGIC_V1)?;
     let adjacency = decode_common(input.adjacency.body, CANDIDATE_ORDER_SLICE_INDEX_MAGIC_V1)?;
-    let feed_bundle_id = candidate_bundle_digest_v1(&CanonicalSha256, input.feed.body, true)
+    let feed_view = authenticate_settlement_feed_view_v5(input.feed.account, input.feed.body)
         .map_err(|_| ExactIndexPlaneErrorV1::CandidateTraversal)?;
-    let feed_full_data_id = hash_id(SEALED_FEED_FULL_DATA_ID_DOMAIN_V1, input.feed.body)?;
+    let feed_bundle_id = feed_view.candidate_bundle_digest();
+    let feed_full_data_id = feed_view.data_id();
     if !locator.semantic_eq(&adjacency) || locator.sibling_account != input.adjacency.account
         || adjacency.sibling_account != input.locator.account
         || locator.stored_bump != input.locator.canonical_bump
@@ -870,13 +786,6 @@ pub fn sealed_locator_data_id_from_raw_v1(body: &[u8]) -> Result<Id32, ExactInde
     let common = decode_common(body, FROZEN_ORDER_LOCATOR_MAGIC_V1)?;
     if body.len() != locator_data_len_v1(common.order_count)? { return Err(ExactIndexPlaneErrorV1::WrongLength); }
     hash_id(FROZEN_ORDER_LOCATOR_DATA_ID_DOMAIN_V1, body)
-}
-pub fn sealed_feed_full_data_id_from_raw_v1(body: &[u8])
-    -> Result<Id32, ExactIndexPlaneErrorV1>
-{
-    complete_candidate_feed_v2(body, true)
-        .map_err(|_| ExactIndexPlaneErrorV1::CandidateTraversal)?;
-    hash_id(SEALED_FEED_FULL_DATA_ID_DOMAIN_V1, body)
 }
 pub fn sealed_adjacency_data_id_from_raw_v1(body: &[u8]) -> Result<Id32, ExactIndexPlaneErrorV1> {
     let common = decode_common(body, CANDIDATE_ORDER_SLICE_INDEX_MAGIC_V1)?;

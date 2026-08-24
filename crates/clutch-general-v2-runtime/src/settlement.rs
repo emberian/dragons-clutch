@@ -1831,6 +1831,8 @@ pub struct SettlementTraversalProjectionV5 {
     expected_reservation_count: u16,
     expected_filled_reservation_count: u16,
     expected_merge_payment_count: u16,
+    exact_slice_reference_count: u16,
+    order_slice_reference_counts: [u16; MAX_ORDERS],
     consideration_debit_atoms: u64,
     seller_credit_atoms: u64,
     rounding_pot_price_units: u128,
@@ -1935,6 +1937,20 @@ impl SettlementTraversalProjectionV5 {
     /// Merge receipts requiring the later action-40 payment latch.
     pub const fn expected_merge_payment_count(&self) -> u16 {
         self.expected_merge_payment_count
+    }
+
+    /// Exact number of compact-index references: one per real slice leg.
+    pub const fn exact_slice_reference_count(&self) -> u16 {
+        self.exact_slice_reference_count
+    }
+
+    /// Exact compact-index reference width for one dense live order.
+    pub fn order_slice_reference_count(&self, order_index: u8) -> Option<u16> {
+        if order_index < self.feed.order_count {
+            Some(self.order_slice_reference_counts[usize::from(order_index)])
+        } else {
+            None
+        }
     }
 
     /// Exact aggregate debit atoms after the sole division boundary.
@@ -2677,6 +2693,8 @@ pub fn derive_settlement_traversal_projection_v5<B: SettlementOrderBookAccessV5 
         expected_reservation_count: u16::from(feed.order_count),
         expected_filled_reservation_count: 0,
         expected_merge_payment_count: 0,
+        exact_slice_reference_count: 0,
+        order_slice_reference_counts: [0; MAX_ORDERS],
         consideration_debit_atoms: 0,
         seller_credit_atoms: 0,
         rounding_pot_price_units: 0,
@@ -2691,6 +2709,8 @@ pub fn derive_settlement_traversal_projection_v5<B: SettlementOrderBookAccessV5 
     };
     let mut split_by_outcome = [0u64; MAX_OUTCOMES];
     let mut merge_by_outcome = [0u64; MAX_OUTCOMES];
+    let mut exact_slice_reference_count = 0u16;
+    let mut order_slice_reference_counts = [0u16; MAX_ORDERS];
     let mut slice_index = 0u16;
     while slice_index < feed.slice_count {
         let slice = access.settlement_slice(slice_index)?;
@@ -2705,6 +2725,12 @@ pub fn derive_settlement_traversal_projection_v5<B: SettlementOrderBookAccessV5 
                 if row.economic_order().side != Side::Buy {
                     return Err(SettlementAdapterErrorV1::BindingMismatch);
                 }
+                record_exact_slice_reference_v5(
+                    index,
+                    feed.order_count,
+                    &mut exact_slice_reference_count,
+                    &mut order_slice_reference_counts,
+                )?;
             }
             SettlementLegV1::Split => {
                 return Err(SettlementAdapterErrorV1::BindingMismatch)
@@ -2724,6 +2750,12 @@ pub fn derive_settlement_traversal_projection_v5<B: SettlementOrderBookAccessV5 
                 if row.economic_order().side != Side::Sell {
                     return Err(SettlementAdapterErrorV1::BindingMismatch);
                 }
+                record_exact_slice_reference_v5(
+                    index,
+                    feed.order_count,
+                    &mut exact_slice_reference_count,
+                    &mut order_slice_reference_counts,
+                )?;
                 if let SettlementLegV1::Order(buy_index) = slice.buy {
                     let buyer = access
                         .order(buy_index)?
@@ -2746,6 +2778,15 @@ pub fn derive_settlement_traversal_projection_v5<B: SettlementOrderBookAccessV5 
         slice_index = slice_index
             .checked_add(1)
             .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    }
+    let maximum_exact_references = feed
+        .slice_count
+        .checked_mul(2)
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    if exact_slice_reference_count < feed.slice_count
+        || exact_slice_reference_count > maximum_exact_references
+    {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
     }
     outcome = 0;
     while outcome < feed.outcome_count {
@@ -2775,10 +2816,35 @@ pub fn derive_settlement_traversal_projection_v5<B: SettlementOrderBookAccessV5 
     projection.expected_owner_count = owner_summary.owner_count();
     projection.expected_filled_reservation_count = owner_summary.filled_order_count();
     projection.expected_merge_payment_count = owner_summary.expected_merge_delivery_count();
+    projection.exact_slice_reference_count = exact_slice_reference_count;
+    projection.order_slice_reference_counts = order_slice_reference_counts;
     projection.consideration_debit_atoms = owner_summary.consideration_debit_atoms();
     projection.seller_credit_atoms = owner_summary.seller_credit_atoms();
     projection.rounding_pot_price_units = owner_summary.rounding_pot_price_units();
     Ok(projection)
+}
+
+fn record_exact_slice_reference_v5(
+    order_index: u8,
+    order_count: u8,
+    total: &mut u16,
+    per_order: &mut [u16; MAX_ORDERS],
+) -> Result<(), SettlementAdapterErrorV1> {
+    if order_index >= order_count || usize::from(order_count) > MAX_ORDERS {
+        return Err(SettlementAdapterErrorV1::BindingMismatch);
+    }
+    let slot = per_order
+        .get_mut(usize::from(order_index))
+        .ok_or(SettlementAdapterErrorV1::BindingMismatch)?;
+    let next_slot = slot
+        .checked_add(1)
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    let next_total = total
+        .checked_add(1)
+        .ok_or(SettlementAdapterErrorV1::ArithmeticOverflow)?;
+    *slot = next_slot;
+    *total = next_total;
+    Ok(())
 }
 
 /// Bind the exhaustive traversal to the counted post-action-39 root and derive
@@ -8119,6 +8185,27 @@ mod scalable_receipt_end_tests {
         value[..5].copy_from_slice(&[buy_kind, buy, sell_kind, sell, 1]);
         value[5..].copy_from_slice(&quantity.to_le_bytes());
         value
+    }
+
+    #[test]
+    fn compact_reference_widths_are_exact_per_dense_order_and_checked() {
+        let mut total = 0u16;
+        let mut per_order = [0u16; MAX_ORDERS];
+        record_exact_slice_reference_v5(0, 2, &mut total, &mut per_order).unwrap();
+        record_exact_slice_reference_v5(1, 2, &mut total, &mut per_order).unwrap();
+        record_exact_slice_reference_v5(0, 2, &mut total, &mut per_order).unwrap();
+        assert_eq!(total, 3);
+        assert_eq!(&per_order[..2], &[2, 1]);
+        assert_eq!(
+            record_exact_slice_reference_v5(2, 2, &mut total, &mut per_order),
+            Err(SettlementAdapterErrorV1::BindingMismatch),
+        );
+
+        total = u16::MAX;
+        assert_eq!(
+            record_exact_slice_reference_v5(0, 2, &mut total, &mut per_order),
+            Err(SettlementAdapterErrorV1::ArithmeticOverflow),
+        );
     }
 
     #[test]

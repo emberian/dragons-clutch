@@ -21,12 +21,13 @@ submitted candidate already selected by the counted root.
 
 ## Construction authority
 
-Action 39 must authenticate the complete hostile OrderPage V5 set, the sealed
-CandidateFeed V2 body, the owner-blind order projection, and the immutable
-Market/Realm/collateral/Genesis joins exactly once. The compact constructor
-accepts only that private authenticated traversal authority. No payload or
-public raw writer supplies a locator row, directory, slice reference, count,
-digest, or candidate identity.
+Action 39 authenticates the complete hostile OrderPage V5 set, the sealed
+CandidateFeed V2 body, the owner-blind order stream, and the immutable
+Market/Realm/collateral/Genesis joins once. Its private borrow-bound authority
+retains the exact Feed and page accounts and exposes only bounded reads joined
+to a compact projection. The compact constructor accepts only that authority; no
+payload supplies a locator row, directory, slice reference, count, digest, or
+candidate identity.
 
 Construction writes directly into caller-owned account buffers. For every
 dense live order it derives one unique physical page location. Tombstones are
@@ -40,21 +41,26 @@ full body ID, traversal binding, both child accounts and rent owners, every
 locator row, directory, and slice reference. Each child also has a
 domain-separated full-body ID held by the indexed root.
 
-The current upstream traversal implementation still materializes large
-fixed-capacity settlement facts before boxing them. Promotion therefore
-requires the pending streaming or heap-initialized traversal authority; merely
-keeping the compact index itself below the SBF frame limit is insufficient.
-The compact noncopyable rent preparation persists only source/poststate IDs, the updated
-rent compartment, balances, and its exact projector transcript; it does not
-carry two 980-byte Root values. Authentication consumes the preparation, joins
-one borrowed source Root, and mints a noncopyable authority consumed by the pure builder. The builder borrows
-its construction input, streams the 1,196-byte indexed root directly into
-caller-owned account memory, and hashes that encoded buffer without constructing
-an indexed-root value or a second base scratch array. Upgrade preparation and
-authority consumption may each transiently construct one post-rent base value,
-so the compiled frame must still be measured with the compact traversal and
-final action-specific SBF adapter before promotion. Source account widths are
-not frame measurements.
+The traversal no longer materializes `[416]` slices or a fixed-capacity book:
+it streams one exact Feed slice or one page-local order at a time from the
+accounts retained by its private authority. During the same authenticated Feed
+pass that validates slice geometry it records only the total and per-order
+reference widths. The exact-index constructor then emits every locator row and
+directory once and streams the Feed slices once into their pre-sized groups; it
+does not repeat membership/entitlement derivation.
+
+The compact noncopyable rent preparation persists only source/poststate IDs,
+the updated rent compartment, balances, and its exact projector transcript; it
+does not carry two 980-byte Root values. Authentication consumes the
+preparation, joins one borrowed source Root, and mints a noncopyable authority
+consumed by the builder. The builder borrows its construction input, streams
+the 1,196-byte indexed root directly into caller-owned account memory, and
+hashes that encoded buffer without constructing an indexed-root value or a
+second base scratch array. The disabled action-39 composer preauthenticates the
+single payer's aggregate principal for the root, both compact children, and
+the direction-dependent cash pots before any CPI. Compiled end-to-end frame
+measurement is still required before promotion: source account widths are not
+frame measurements.
 
 ## Compact active geometry
 
@@ -128,6 +134,6 @@ at most Solana's 32-byte seed limit.
 
 `EXACT_INDEX_PLANE_LIVE_ENABLED_V1` remains false. No deployable capability
 profile admits action 39 through this implementation. Promotion additionally
-requires the compact upstream traversal, action-specific migration of every
-root reader/writer, the authenticated Feed-retirement successor, and an
-independent review of the complete capability unit.
+requires action-specific migration of every root reader/writer, the
+authenticated Feed-retirement and root-close successors, compiled frame/CU
+measurement, and an independent review of the complete capability unit.
