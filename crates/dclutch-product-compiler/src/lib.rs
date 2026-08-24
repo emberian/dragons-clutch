@@ -1,25 +1,23 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-//! Deterministic construction of bounded, exact dClutch Product artifacts.
+//! Deterministic construction of categorical dClutch Product recipes.
 //!
-//! The compiler is deliberately a host-side constructor, not a payout VM. It
-//! accepts only a small family of named univariate payoff shapes and emits the
-//! fixed records defined by `dclutch-product-contract`. All coordinates and
-//! payouts are rational scaled integers; no floating-point conversion occurs.
+//! This host compiler emits an exhaustive ordered partition, the elementary
+//! [`CategoricalUnitV1`] liability basis over its cells, and one exact-width
+//! [`PortfolioTemplateV1`] user recipe. The portfolio is not another native
+//! liability basis: its `N` rational coefficients are quantities of the `N`
+//! categorical claims in canonical partition order.
 //!
-//! The emitted partition is a finite, ordered partition of one closed bounded
-//! coordinate domain. Cells are `[lower, upper)` except the final cell, which
-//! is `[lower, upper]`. Coefficients are cell-major and degree-ascending and
-//! are evaluated against the *scaled coordinate numerator*. Thus a coefficient
-//! row `(a0, a1)` denotes `(a0 + a1 * coordinate_numerator) / denominator`.
+//! V1 supports only payoffs constant within every partition cell. Graded ramps
+//! and tents are refused explicitly. There is no evaluator identity,
+//! coefficient artifact, polynomial approximation, or rounding authority.
 
 use core::fmt;
 
-use dclutch_product_contract::capacity::{CapacityProfileId, CapacityProfileV1, ExactWordWidth};
-use dclutch_product_contract::claim::{
-    ClaimBasisProfileV1, CoefficientDegree, FiniteExactV1, FiniteExactV1Input, RedemptionRounding,
-};
+use dclutch_product_contract::capacity::{CapacityProfileId, CapacityProfileV1};
+use dclutch_product_contract::claim::{CategoricalUnitV1, CategoricalUnitV1Input};
+use dclutch_product_contract::portfolio::PortfolioTemplateV1;
 use dclutch_product_contract::product::{
     InstanceV1, InstanceV1Input, OccurrenceV1, OccurrenceV1Input, TermsV1, TermsV1Input,
 };
@@ -34,10 +32,17 @@ const CERTIFICATE_VERSION: u16 = 1;
 /// An exact nonnegative payout amount represented as `numerator / denominator`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExactAmount {
-    /// Signed numerator. The compiler rejects negative payout numerators.
-    pub numerator: i128,
+    /// Nonnegative numerator.
+    pub numerator: u64,
     /// Positive explicit denominator.
     pub denominator: u64,
+}
+
+impl ExactAmount {
+    const ZERO: Self = Self {
+        numerator: 0,
+        denominator: 1,
+    };
 }
 
 /// A finite closed coordinate domain, in units of `numerator / denominator`.
@@ -51,7 +56,7 @@ pub struct ScaledDomain {
     pub denominator: u64,
 }
 
-/// The only product shapes accepted by this exact V1 compiler.
+/// Named payoff recipes understood by this categorical V1 compiler.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProductShape {
     /// Pays `payout` when the coordinate is at least `threshold`.
@@ -62,23 +67,20 @@ pub enum ProductShape {
         payout: ExactAmount,
     },
     /// Pays one fixed amount in each ordered range bucket.
-    ///
-    /// `cut_points` must be strictly increasing interior domain points and
-    /// `payouts.len()` must be exactly `cut_points.len() + 1`.
     OrderedRangeBuckets {
-        /// Interior bucket boundaries.
+        /// Strictly increasing interior bucket boundaries.
         cut_points: Vec<i128>,
         /// Payout for every bucket in canonical order.
         payouts: Vec<ExactAmount>,
     },
-    /// Pays `payout` in the lower crash tail through `trigger`, inclusively.
+    /// Pays `payout` in the lower tail and zero from `trigger` onward.
     CrashTail {
-        /// Last coordinate numerator covered by the tail.
+        /// First coordinate numerator outside the crash tail.
         trigger: i128,
         /// Fixed tail payout.
         payout: ExactAmount,
     },
-    /// Zero below `start`, linear to `cap` at `end`, then capped at `cap`.
+    /// A within-cell graded shape, unsupported by categorical V1.
     CappedRamp {
         /// First coordinate numerator of the ramp.
         start: i128,
@@ -87,7 +89,7 @@ pub enum ProductShape {
         /// Capped payout.
         cap: ExactAmount,
     },
-    /// Zero outside the interval, rising to `cap` at `peak`, then falling.
+    /// A within-cell graded shape, unsupported by categorical V1.
     Tent {
         /// First coordinate numerator of the tent.
         start: i128,
@@ -100,44 +102,27 @@ pub enum ProductShape {
     },
 }
 
-/// Explicit policy at the one redemption rounding boundary.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RoundingPolicy {
-    /// Refuse a non-integral redemption.
-    ExactOnly,
-    /// Round toward zero at redemption.
-    FloorAtRedemption,
-    /// Persist the remainder under this nonzero policy identity.
-    CreditRemainder(ContentId),
-}
-
-/// Release identities and opaque occurrence bytes supplied by the caller.
+/// Authenticated Product context supplied by the caller.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompilationContext {
-    /// Authenticated immutable capacity profile and its content identity.
+    /// Authenticated immutable capacity profile.
     pub capacity_profile: CapacityProfileV1,
-    /// Content identity of `capacity_profile` established at the caller's hash boundary.
+    /// Content identity of `capacity_profile` established at the hash boundary.
     pub capacity_profile_id: CapacityProfileId,
     /// Release defining the named Terms semantics.
     pub terms_semantic_release_id: ContentId,
-    /// Release defining finite exact payout evaluation.
-    pub evaluator_release_id: ContentId,
-    /// Release/profile defining signed coefficient word semantics.
-    pub coefficient_profile_id: ContentId,
     /// Canonical occurrence-specific semantic bytes; must be nonempty.
     pub occurrence_artifact: Vec<u8>,
-    /// The sole named redemption rounding boundary.
-    pub rounding: RoundingPolicy,
 }
 
-/// A complete compiler request.
+/// A complete compiler request for exactly `N` categorical outcomes.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CompileRequest {
+pub struct CompileRequest<const N: usize> {
     /// One finite scaled coordinate domain.
     pub domain: ScaledDomain,
-    /// One supported named payoff shape.
+    /// One named payoff recipe.
     pub shape: ProductShape,
-    /// Contract identities, capacity profile, occurrence bytes, and rounding.
+    /// Contract identities, capacity profile, and occurrence bytes.
     pub context: CompilationContext,
 }
 
@@ -170,7 +155,7 @@ impl CanonicalPartition {
         Ok(Self { domain, cuts })
     }
 
-    /// Return the underlying scaled coordinate domain.
+    /// Return the scaled coordinate domain.
     pub const fn domain(&self) -> ScaledDomain {
         self.domain
     }
@@ -260,20 +245,7 @@ impl CanonicalPartition {
     }
 }
 
-/// Cell-major degree-ascending signed exact coefficient artifact.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CoefficientArtifact {
-    /// Polynomial degree selected by the compiler.
-    pub degree: CoefficientDegree,
-    /// Positive common denominator of all entries.
-    pub denominator: u64,
-    /// Signed exact entries, cell-major then ascending degree.
-    pub entries: Vec<i128>,
-    /// Exact little-endian coefficient words emitted to the contract artifact.
-    pub bytes: Vec<u8>,
-}
-
-/// A deterministic certificate binding source request and emitted artifacts.
+/// Certificate binding one source request and every emitted preimage.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompilerCertificate {
     /// Certificate schema version.
@@ -282,40 +254,42 @@ pub struct CompilerCertificate {
     pub shape_commitment: ContentId,
     /// Digest of the canonical partition artifact.
     pub partition_id: ContentId,
-    /// Digest of the exact coefficient artifact.
-    pub coefficient_artifact_id: ContentId,
+    /// Digest of the normalized exact-width portfolio template.
+    pub portfolio_template_id: ContentId,
     /// Digest of the Terms preimage.
     pub terms_id: ContentId,
     /// Digest of the Occurrence preimage.
     pub occurrence_id: ContentId,
-    /// Digest of the finite claim-basis preimage.
+    /// Digest of the categorical-unit basis preimage.
     pub claim_basis_id: ContentId,
     /// Digest of the Instance preimage.
     pub instance_id: ContentId,
 }
 
-/// All deterministic output artifacts and contract preimages from one request.
+/// Deterministic outputs for an exact `N`-outcome Product recipe.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CompiledProduct {
+pub struct CompiledProduct<const N: usize> {
     /// Canonical partition object.
     pub partition: CanonicalPartition,
     /// Canonical partition artifact bytes.
     pub partition_bytes: Vec<u8>,
-    /// Exact finite coefficient artifact.
-    pub coefficients: CoefficientArtifact,
+    /// Elementary one-hot native claim basis.
+    pub claim_basis: CategoricalUnitV1,
+    /// Normalized rational portfolio recipe over the native claims.
+    pub portfolio_template: PortfolioTemplateV1<N>,
+    /// Exact encoded portfolio-template content preimage.
+    pub portfolio_template_bytes: Vec<u8>,
     /// Terms preimage referring to the partition artifact.
     pub terms: TermsV1,
     /// Occurrence preimage referring to caller-provided occurrence bytes.
     pub occurrence: OccurrenceV1,
-    /// Finite exact claim-basis preimage.
-    pub claim_basis: FiniteExactV1,
-    /// Product Instance preimage binding all three records.
+    /// Product Instance preimage binding the categorical basis.
     pub instance: InstanceV1,
     /// Independently recheckable compiler certificate.
     pub certificate: CompilerCertificate,
 }
 
-/// A precise refusal from exact construction or independent rechecking.
+/// A precise refusal from categorical construction or independent rechecking.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CompileError {
     /// A scaled-coordinate denominator was zero.
@@ -328,26 +302,26 @@ pub enum CompileError {
     NonCanonicalPartition,
     /// A payoff denominator was zero.
     ZeroPayoutDenominator,
-    /// A payout numerator was negative.
-    NegativePayout,
     /// Bucket count and range-boundary count disagree.
     BucketCountMismatch,
-    /// A named trigger or knot was not an appropriate interior coordinate.
+    /// A named trigger was not an interior coordinate.
     InvalidKnot,
-    /// An exact integer intermediate or capacity count overflowed.
+    /// A ramp or tent needs within-cell graded claims unavailable in V1.
+    UnsupportedWithinCellGradedShape,
+    /// Runtime partition width did not equal the exact compile-time width `N`.
+    OutcomeCountMismatch,
+    /// An exact integer intermediate overflowed.
     ArithmeticOverflow,
     /// A collection length cannot be represented in the target contract.
     CountOverflow,
-    /// A coefficient does not fit the selected contract word width.
-    UnrepresentableCoefficient,
-    /// The selected rounding policy is not valid for the exact denominator.
-    InvalidRoundingPolicy,
-    /// The caller omitted the required canonical occurrence bytes.
+    /// A normalized portfolio coefficient cannot be represented as `u64`.
+    UnrepresentablePortfolioCoefficient,
+    /// The caller omitted required canonical occurrence bytes.
     EmptyOccurrenceArtifact,
     /// A partition artifact was malformed or noncanonical.
     InvalidPartitionArtifact,
-    /// A coefficient artifact was malformed or did not match its declaration.
-    InvalidCoefficientArtifact,
+    /// A portfolio-template artifact was malformed or noncanonical.
+    InvalidPortfolioTemplate,
     /// A certificate field or artifact content identity did not match.
     CertificateMismatch,
     /// A certificate release is unsupported.
@@ -358,7 +332,10 @@ pub enum CompileError {
 
 impl fmt::Display for CompileError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "exact Product compilation refused: {self:?}")
+        write!(
+            formatter,
+            "categorical Product compilation refused: {self:?}"
+        )
     }
 }
 
@@ -370,24 +347,22 @@ impl From<ContractError> for CompileError {
     }
 }
 
-/// Compile one supported exact Product shape into bounded contract artifacts.
-pub fn compile(request: &CompileRequest) -> Result<CompiledProduct, CompileError> {
+/// Compile one exact-width categorical Product and portfolio recipe.
+pub fn compile<const N: usize>(
+    request: &CompileRequest<N>,
+) -> Result<CompiledProduct<N>, CompileError> {
     if request.context.occurrence_artifact.is_empty() {
         return Err(CompileError::EmptyOccurrenceArtifact);
     }
-    let (partition, degree, denominator, entries) = derive_shape(&request.domain, &request.shape)?;
-    let partition_bytes = partition.to_bytes()?;
+    let derived = derive_shape::<N>(&request.domain, &request.shape)?;
+    let cell_count = derived.partition.cell_count()?;
+    require_width::<N>(cell_count)?;
+
+    let partition_bytes = derived.partition.to_bytes()?;
     let partition_id = content_id(b"dclutch.partition.v1", &partition_bytes)?;
     let partition_evidence_id = content_id(b"dclutch.partition-evidence.v1", &partition_bytes)?;
-    let coefficient_bytes =
-        encode_coefficients(&entries, request.context.capacity_profile.word_width())?;
-    let coefficient_artifact_id = content_id(b"dclutch.coefficients.v1", &coefficient_bytes)?;
-    let cell_count = partition.cell_count()?;
-    let entry_count = u32::try_from(entries.len()).map_err(|_| CompileError::CountOverflow)?;
     let partition_size =
         u32::try_from(partition_bytes.len()).map_err(|_| CompileError::CountOverflow)?;
-    let coefficient_size =
-        u32::try_from(coefficient_bytes.len()).map_err(|_| CompileError::CountOverflow)?;
     let terms = TermsV1::new(
         TermsV1Input {
             capacity_profile_id: request.context.capacity_profile_id,
@@ -404,6 +379,7 @@ pub fn compile(request: &CompileRequest) -> Result<CompiledProduct, CompileError
         request.context.capacity_profile,
     )?;
     let terms_id = content_id(b"dclutch.terms.v1", &terms.to_bytes())?;
+
     let occurrence_size = u32::try_from(request.context.occurrence_artifact.len())
         .map_err(|_| CompileError::CountOverflow)?;
     let occurrence = OccurrenceV1::new(
@@ -423,29 +399,22 @@ pub fn compile(request: &CompileRequest) -> Result<CompiledProduct, CompileError
         request.context.capacity_profile,
     )?;
     let occurrence_id = content_id(b"dclutch.occurrence.v1", &occurrence.to_bytes())?;
-    let (rounding, fractional_credit_policy_id) =
-        contract_rounding(request.context.rounding, denominator)?;
-    let claim_basis = FiniteExactV1::new(
-        FiniteExactV1Input {
+
+    let claim_basis = CategoricalUnitV1::new(
+        CategoricalUnitV1Input {
             capacity_profile_id: request.context.capacity_profile_id,
-            payout_artifact_id: coefficient_artifact_id,
-            evaluator_release_id: request.context.evaluator_release_id,
-            coefficient_profile_id: request.context.coefficient_profile_id,
-            fractional_credit_policy_id,
-            payout_denominator: denominator,
-            coefficient_degree: degree,
-            rounding,
-            partition_cell_count: cell_count,
-            coefficient_entry_count: entry_count,
-            artifact_bytes: coefficient_size,
-            page_count: pages(
-                coefficient_size,
-                request.context.capacity_profile.page_payload_bytes(),
-            )?,
+            outcome_count: cell_count,
         },
         request.context.capacity_profile,
     )?;
     let claim_basis_id = content_id(b"dclutch.claim-basis.v1", &claim_basis.to_bytes())?;
+    let portfolio_template =
+        PortfolioTemplateV1::new(claim_basis_id, derived.coefficients, derived.denominator)?;
+    let mut portfolio_template_bytes = vec![0; PortfolioTemplateV1::<N>::encoded_len()?];
+    portfolio_template.encode(&mut portfolio_template_bytes)?;
+    let portfolio_template_id =
+        content_id(b"dclutch.portfolio-template.v1", &portfolio_template_bytes)?;
+
     let instance = InstanceV1::new(InstanceV1Input {
         terms_id,
         occurrence_id,
@@ -458,24 +427,20 @@ pub fn compile(request: &CompileRequest) -> Result<CompiledProduct, CompileError
         version: CERTIFICATE_VERSION,
         shape_commitment: shape_commitment(&request.domain, &request.shape)?,
         partition_id,
-        coefficient_artifact_id,
+        portfolio_template_id,
         terms_id,
         occurrence_id,
         claim_basis_id,
         instance_id,
     };
     let output = CompiledProduct {
-        partition,
+        partition: derived.partition,
         partition_bytes,
-        coefficients: CoefficientArtifact {
-            degree,
-            denominator,
-            entries,
-            bytes: coefficient_bytes,
-        },
+        claim_basis,
+        portfolio_template,
+        portfolio_template_bytes,
         terms,
         occurrence,
-        claim_basis,
         instance,
         certificate,
     };
@@ -485,78 +450,84 @@ pub fn compile(request: &CompileRequest) -> Result<CompiledProduct, CompileError
 
 /// Independently parse and recheck every emitted artifact and record binding.
 ///
-/// This routine does not call [`compile`]. It reconstructs the expected named
-/// shape, parses bytes, validates contract capacity/link rules, and compares
-/// all content identities in the certificate.
-pub fn recheck(request: &CompileRequest, output: &CompiledProduct) -> Result<(), CompileError> {
+/// This does not call [`compile`]. It regenerates the requested categorical
+/// recipe, parses every persisted preimage, validates capacity and record
+/// links, rechecks normalization and materialization, and compares every ID.
+pub fn recheck<const N: usize>(
+    request: &CompileRequest<N>,
+    output: &CompiledProduct<N>,
+) -> Result<(), CompileError> {
     if request.context.occurrence_artifact.is_empty() {
         return Err(CompileError::EmptyOccurrenceArtifact);
     }
-    if output.certificate.version != CERTIFICATE_VERSION
-        || output.certificate.shape_commitment != shape_commitment(&request.domain, &request.shape)?
-    {
+    if output.certificate.version != CERTIFICATE_VERSION {
         return Err(CompileError::UnsupportedCertificate);
     }
+    if output.certificate.shape_commitment != shape_commitment(&request.domain, &request.shape)? {
+        return Err(CompileError::CertificateMismatch);
+    }
+
     let parsed_partition = CanonicalPartition::decode(&output.partition_bytes)?;
-    if parsed_partition != output.partition {
+    let expected = derive_shape::<N>(&request.domain, &request.shape)?;
+    if parsed_partition != output.partition || parsed_partition != expected.partition {
         return Err(CompileError::CertificateMismatch);
     }
-    let (expected_partition, expected_degree, expected_denominator, expected_entries) =
-        derive_shape(&request.domain, &request.shape)?;
-    if parsed_partition != expected_partition
-        || output.coefficients.degree != expected_degree
-        || output.coefficients.denominator != expected_denominator
-        || output.coefficients.entries != expected_entries
-    {
-        return Err(CompileError::CertificateMismatch);
-    }
-    let parsed_entries = decode_coefficients(
-        &output.coefficients.bytes,
-        request.context.capacity_profile.word_width(),
-    )?;
-    if parsed_entries != expected_entries
-        || encode_coefficients(
-            &parsed_entries,
-            request.context.capacity_profile.word_width(),
-        )? != output.coefficients.bytes
-    {
-        return Err(CompileError::InvalidCoefficientArtifact);
-    }
+    let cell_count = parsed_partition.cell_count()?;
+    require_width::<N>(cell_count)?;
+
     let partition_id = content_id(b"dclutch.partition.v1", &output.partition_bytes)?;
     let partition_evidence_id =
         content_id(b"dclutch.partition-evidence.v1", &output.partition_bytes)?;
-    let coefficient_artifact_id =
-        content_id(b"dclutch.coefficients.v1", &output.coefficients.bytes)?;
     let occurrence_artifact_id = content_id(
         b"dclutch.occurrence-artifact.v1",
         &request.context.occurrence_artifact,
     )?;
     let terms = TermsV1::decode(&output.terms.to_bytes())?;
     let occurrence = OccurrenceV1::decode(&output.occurrence.to_bytes())?;
-    let claim_basis = FiniteExactV1::decode(&output.claim_basis.to_bytes())?;
+    let claim_basis = CategoricalUnitV1::decode(&output.claim_basis.to_bytes())?;
     let instance = InstanceV1::decode(&output.instance.to_bytes())?;
+    let portfolio_template = PortfolioTemplateV1::<N>::decode(&output.portfolio_template_bytes)
+        .map_err(portfolio_decode_error)?;
+
     terms.validate_capacity(request.context.capacity_profile)?;
     occurrence.validate_capacity(request.context.capacity_profile)?;
     claim_basis.validate_capacity(request.context.capacity_profile)?;
     let terms_id = content_id(b"dclutch.terms.v1", &terms.to_bytes())?;
     let occurrence_id = content_id(b"dclutch.occurrence.v1", &occurrence.to_bytes())?;
     let claim_basis_id = content_id(b"dclutch.claim-basis.v1", &claim_basis.to_bytes())?;
-    let instance_id = content_id(b"dclutch.instance.v1", &instance.to_bytes())?;
-    instance.validate_occurrence(terms_id, terms, occurrence_id, occurrence)?;
-    instance.validate_claim_basis(
-        claim_basis_id,
-        ClaimBasisProfileV1::FiniteExact(claim_basis),
+    let portfolio_template_id = content_id(
+        b"dclutch.portfolio-template.v1",
+        &output.portfolio_template_bytes,
     )?;
+    let instance_id = content_id(b"dclutch.instance.v1", &instance.to_bytes())?;
+
+    instance.validate_occurrence(terms_id, terms, occurrence_id, occurrence)?;
+    instance.validate_claim_basis(claim_basis_id, claim_basis)?;
+    portfolio_template.validate_claim_basis(claim_basis_id, claim_basis)?;
+    if portfolio_template != output.portfolio_template
+        || portfolio_template.claim_basis_id() != claim_basis_id
+        || portfolio_template.denominator() != expected.denominator
+        || portfolio_template.coefficients() != &expected.coefficients
+        || claim_basis.outcome_count() != cell_count
+        || normalization_divisor(&expected.coefficients, expected.denominator) != 1
+    {
+        return Err(CompileError::CertificateMismatch);
+    }
+    let mut materialized = [0; N];
+    portfolio_template.materialize(expected.denominator, &mut materialized)?;
+    if materialized != expected.coefficients {
+        return Err(CompileError::InvalidPortfolioTemplate);
+    }
+
     if output.certificate.partition_id != partition_id
-        || output.certificate.coefficient_artifact_id != coefficient_artifact_id
+        || output.certificate.portfolio_template_id != portfolio_template_id
         || output.certificate.terms_id != terms_id
         || output.certificate.occurrence_id != occurrence_id
         || output.certificate.claim_basis_id != claim_basis_id
         || output.certificate.instance_id != instance_id
         || terms.artifact_id() != partition_id
         || terms.partition_evidence_id() != partition_evidence_id
-        || claim_basis.payout_denominator() != expected_denominator
-        || claim_basis.partition_cell_count() != parsed_partition.cell_count()?
+        || terms.partition_cell_count() != cell_count
         || occurrence.terms_id() != terms_id
         || occurrence.to_bytes().get(80..112) != Some(occurrence_artifact_id.as_bytes().as_slice())
     {
@@ -565,21 +536,23 @@ pub fn recheck(request: &CompileRequest, output: &CompiledProduct) -> Result<(),
     Ok(())
 }
 
-fn derive_shape(
+struct DerivedShape<const N: usize> {
+    partition: CanonicalPartition,
+    coefficients: [u64; N],
+    denominator: u64,
+}
+
+fn derive_shape<const N: usize>(
     domain: &ScaledDomain,
     shape: &ProductShape,
-) -> Result<(CanonicalPartition, CoefficientDegree, u64, Vec<i128>), CompileError> {
-    match shape {
+) -> Result<DerivedShape<N>, CompileError> {
+    let (partition, payouts) = match shape {
         ProductShape::BinaryThreshold { threshold, payout } => {
             interior(domain, *threshold)?;
-            let partition = CanonicalPartition::new(*domain, vec![*threshold])?;
-            let denominator = payout_denominator(&[*payout])?;
-            Ok((
-                partition,
-                CoefficientDegree::Zero,
-                denominator,
-                vec![0, scaled(*payout, denominator)?],
-            ))
+            (
+                CanonicalPartition::new(*domain, vec![*threshold])?,
+                vec![ExactAmount::ZERO, *payout],
+            )
         }
         ProductShape::OrderedRangeBuckets {
             cut_points,
@@ -592,159 +565,86 @@ fn derive_shape(
             if payouts.len() != expected {
                 return Err(CompileError::BucketCountMismatch);
             }
-            let partition = CanonicalPartition::new(*domain, cut_points.clone())?;
-            let denominator = payout_denominator(payouts)?;
-            let mut entries = Vec::with_capacity(payouts.len());
-            for payout in payouts {
-                entries.push(scaled(*payout, denominator)?);
-            }
-            Ok((partition, CoefficientDegree::Zero, denominator, entries))
+            (
+                CanonicalPartition::new(*domain, cut_points.clone())?,
+                payouts.clone(),
+            )
         }
         ProductShape::CrashTail { trigger, payout } => {
             interior(domain, *trigger)?;
-            let partition = CanonicalPartition::new(*domain, vec![*trigger])?;
-            let denominator = payout_denominator(&[*payout])?;
-            Ok((
-                partition,
-                CoefficientDegree::Zero,
-                denominator,
-                vec![scaled(*payout, denominator)?, 0],
-            ))
+            (
+                CanonicalPartition::new(*domain, vec![*trigger])?,
+                vec![*payout, ExactAmount::ZERO],
+            )
         }
-        ProductShape::CappedRamp { start, end, cap } => {
-            ordered_knots(domain, &[*start, *end])?;
-            validate_amount(*cap)?;
-            let span = end
-                .checked_sub(*start)
-                .ok_or(CompileError::ArithmeticOverflow)?;
-            let denominator = multiply_u64(
-                cap.denominator,
-                u64::try_from(span).map_err(|_| CompileError::ArithmeticOverflow)?,
-            )?;
-            let partition = CanonicalPartition::new(*domain, vec![*start, *end])?;
-            let cap_constant = cap
-                .numerator
-                .checked_mul(span)
-                .ok_or(CompileError::ArithmeticOverflow)?;
-            let ramp_constant = cap
-                .numerator
-                .checked_mul(
-                    start
-                        .checked_neg()
-                        .ok_or(CompileError::ArithmeticOverflow)?,
-                )
-                .ok_or(CompileError::ArithmeticOverflow)?;
-            Ok((
-                partition,
-                CoefficientDegree::One,
-                denominator,
-                vec![0, 0, ramp_constant, cap.numerator, cap_constant, 0],
-            ))
+        ProductShape::CappedRamp { .. } | ProductShape::Tent { .. } => {
+            return Err(CompileError::UnsupportedWithinCellGradedShape);
         }
-        ProductShape::Tent {
-            start,
-            peak,
-            end,
-            cap,
-        } => {
-            ordered_knots(domain, &[*start, *peak, *end])?;
-            validate_amount(*cap)?;
-            let left = peak
-                .checked_sub(*start)
-                .ok_or(CompileError::ArithmeticOverflow)?;
-            let right = end
-                .checked_sub(*peak)
-                .ok_or(CompileError::ArithmeticOverflow)?;
-            let left_denominator = multiply_u64(
-                cap.denominator,
-                u64::try_from(left).map_err(|_| CompileError::ArithmeticOverflow)?,
-            )?;
-            let right_denominator = multiply_u64(
-                cap.denominator,
-                u64::try_from(right).map_err(|_| CompileError::ArithmeticOverflow)?,
-            )?;
-            let denominator = lcm(left_denominator, right_denominator)?;
-            let left_scale = i128::from(
-                denominator
-                    .checked_div(left_denominator)
-                    .ok_or(CompileError::ArithmeticOverflow)?,
-            );
-            let right_scale = i128::from(
-                denominator
-                    .checked_div(right_denominator)
-                    .ok_or(CompileError::ArithmeticOverflow)?,
-            );
-            let left_slope = cap
-                .numerator
-                .checked_mul(left_scale)
-                .ok_or(CompileError::ArithmeticOverflow)?;
-            let right_slope = cap
-                .numerator
-                .checked_mul(right_scale)
-                .ok_or(CompileError::ArithmeticOverflow)?;
-            let left_constant = left_slope
-                .checked_mul(
-                    start
-                        .checked_neg()
-                        .ok_or(CompileError::ArithmeticOverflow)?,
-                )
-                .ok_or(CompileError::ArithmeticOverflow)?;
-            let right_constant = right_slope
-                .checked_mul(*end)
-                .ok_or(CompileError::ArithmeticOverflow)?;
-            let partition = CanonicalPartition::new(*domain, vec![*start, *peak, *end])?;
-            Ok((
-                partition,
-                CoefficientDegree::One,
-                denominator,
-                vec![
-                    0,
-                    0,
-                    left_constant,
-                    left_slope,
-                    right_constant,
-                    right_slope
-                        .checked_neg()
-                        .ok_or(CompileError::ArithmeticOverflow)?,
-                    0,
-                    0,
-                ],
-            ))
-        }
+    };
+    let cell_count = partition.cell_count()?;
+    if payouts.len() != N {
+        return Err(CompileError::OutcomeCountMismatch);
     }
+    require_width::<N>(cell_count)?;
+    let (coefficients, denominator) = normalize_payouts::<N>(&payouts)?;
+    Ok(DerivedShape {
+        partition,
+        coefficients,
+        denominator,
+    })
 }
 
-fn validate_amount(amount: ExactAmount) -> Result<(), CompileError> {
-    if amount.denominator == 0 {
-        return Err(CompileError::ZeroPayoutDenominator);
+fn normalize_payouts<const N: usize>(
+    payouts: &[ExactAmount],
+) -> Result<([u64; N], u64), CompileError> {
+    if payouts.len() != N {
+        return Err(CompileError::OutcomeCountMismatch);
     }
-    if amount.numerator < 0 {
-        return Err(CompileError::NegativePayout);
+    let mut denominator = 1;
+    for payout in payouts {
+        if payout.denominator == 0 {
+            return Err(CompileError::ZeroPayoutDenominator);
+        }
+        let reduced_denominator = payout.denominator / gcd(payout.numerator, payout.denominator);
+        denominator = lcm(denominator, reduced_denominator)?;
+    }
+    let mut coefficients = [0; N];
+    for (index, payout) in payouts.iter().enumerate() {
+        let divisor = gcd(payout.numerator, payout.denominator);
+        let numerator = payout.numerator / divisor;
+        let reduced_denominator = payout.denominator / divisor;
+        let multiplier = denominator
+            .checked_div(reduced_denominator)
+            .ok_or(CompileError::ArithmeticOverflow)?;
+        *coefficients
+            .get_mut(index)
+            .ok_or(CompileError::OutcomeCountMismatch)? = numerator
+            .checked_mul(multiplier)
+            .ok_or(CompileError::UnrepresentablePortfolioCoefficient)?;
+    }
+    let common = normalization_divisor(&coefficients, denominator);
+    if common > 1 {
+        denominator /= common;
+        for coefficient in &mut coefficients {
+            *coefficient /= common;
+        }
+    }
+    Ok((coefficients, denominator))
+}
+
+fn require_width<const N: usize>(cell_count: u32) -> Result<(), CompileError> {
+    if usize::try_from(cell_count).map_err(|_| CompileError::CountOverflow)? != N {
+        return Err(CompileError::OutcomeCountMismatch);
     }
     Ok(())
 }
 
-fn payout_denominator(amounts: &[ExactAmount]) -> Result<u64, CompileError> {
-    if amounts.is_empty() {
-        return Err(CompileError::PartitionTooSmall);
+fn normalization_divisor<const N: usize>(coefficients: &[u64; N], denominator: u64) -> u64 {
+    let mut divisor = denominator;
+    for coefficient in coefficients {
+        divisor = gcd(divisor, *coefficient);
     }
-    let mut denominator = 1;
-    for amount in amounts {
-        validate_amount(*amount)?;
-        denominator = lcm(denominator, amount.denominator)?;
-    }
-    Ok(denominator)
-}
-
-fn scaled(amount: ExactAmount, denominator: u64) -> Result<i128, CompileError> {
-    validate_amount(amount)?;
-    let multiplier = denominator
-        .checked_div(amount.denominator)
-        .ok_or(CompileError::ArithmeticOverflow)?;
-    amount
-        .numerator
-        .checked_mul(i128::from(multiplier))
-        .ok_or(CompileError::ArithmeticOverflow)
+    divisor
 }
 
 fn interior(domain: &ScaledDomain, knot: i128) -> Result<(), CompileError> {
@@ -758,23 +658,6 @@ fn interior(domain: &ScaledDomain, knot: i128) -> Result<(), CompileError> {
         return Err(CompileError::InvalidKnot);
     }
     Ok(())
-}
-
-fn ordered_knots(domain: &ScaledDomain, knots: &[i128]) -> Result<(), CompileError> {
-    let mut prior = domain.lower;
-    for knot in knots {
-        interior(domain, *knot)?;
-        if *knot <= prior {
-            return Err(CompileError::InvalidKnot);
-        }
-        prior = *knot;
-    }
-    Ok(())
-}
-
-fn multiply_u64(left: u64, right: u64) -> Result<u64, CompileError> {
-    left.checked_mul(right)
-        .ok_or(CompileError::ArithmeticOverflow)
 }
 
 fn gcd(mut left: u64, mut right: u64) -> u64 {
@@ -804,66 +687,6 @@ fn pages(bytes: u32, payload: u32) -> Result<u32, CompileError> {
         .ok_or(CompileError::ArithmeticOverflow)?
         .checked_add(1)
         .ok_or(CompileError::ArithmeticOverflow)
-}
-
-fn encode_coefficients(entries: &[i128], width: ExactWordWidth) -> Result<Vec<u8>, CompileError> {
-    let word_bytes = usize::try_from(width.bytes()).map_err(|_| CompileError::CountOverflow)?;
-    let capacity = entries
-        .len()
-        .checked_mul(word_bytes)
-        .ok_or(CompileError::CountOverflow)?;
-    let mut bytes = Vec::with_capacity(capacity);
-    for entry in entries {
-        match width {
-            ExactWordWidth::Eight => bytes.extend_from_slice(
-                &i64::try_from(*entry)
-                    .map_err(|_| CompileError::UnrepresentableCoefficient)?
-                    .to_le_bytes(),
-            ),
-            ExactWordWidth::Sixteen => bytes.extend_from_slice(&entry.to_le_bytes()),
-        }
-    }
-    Ok(bytes)
-}
-
-fn decode_coefficients(bytes: &[u8], width: ExactWordWidth) -> Result<Vec<i128>, CompileError> {
-    let word_bytes = usize::try_from(width.bytes()).map_err(|_| CompileError::CountOverflow)?;
-    if bytes.is_empty() || !bytes.len().is_multiple_of(word_bytes) {
-        return Err(CompileError::InvalidCoefficientArtifact);
-    }
-    let mut entries = Vec::with_capacity(bytes.len() / word_bytes);
-    for word in bytes.chunks_exact(word_bytes) {
-        let value = match width {
-            ExactWordWidth::Eight => i128::from(i64::from_le_bytes(
-                word.try_into()
-                    .map_err(|_| CompileError::InvalidCoefficientArtifact)?,
-            )),
-            ExactWordWidth::Sixteen => i128::from_le_bytes(
-                word.try_into()
-                    .map_err(|_| CompileError::InvalidCoefficientArtifact)?,
-            ),
-        };
-        entries.push(value);
-    }
-    Ok(entries)
-}
-
-fn contract_rounding(
-    policy: RoundingPolicy,
-    denominator: u64,
-) -> Result<(RedemptionRounding, Option<ContentId>), CompileError> {
-    let pair = match policy {
-        RoundingPolicy::ExactOnly => (RedemptionRounding::ExactOnly, None),
-        RoundingPolicy::FloorAtRedemption => (RedemptionRounding::FloorAtRedemption, None),
-        RoundingPolicy::CreditRemainder(id) => (RedemptionRounding::CreditRemainder, Some(id)),
-    };
-    if denominator == 0
-        || (denominator == 1 && pair.0 != RedemptionRounding::ExactOnly)
-        || (pair.0 == RedemptionRounding::CreditRemainder && pair.1.is_none())
-    {
-        return Err(CompileError::InvalidRoundingPolicy);
-    }
-    Ok(pair)
 }
 
 fn shape_commitment(
@@ -942,6 +765,20 @@ fn content_id(domain: &[u8], bytes: &[u8]) -> Result<ContentId, CompileError> {
     ContentId::new(hasher.finalize().into()).map_err(CompileError::from)
 }
 
+fn portfolio_decode_error(error: ContractError) -> CompileError {
+    match error {
+        ContractError::InvalidLength
+        | ContractError::InvalidMagic
+        | ContractError::UnsupportedSchema
+        | ContractError::NonCanonicalReservedBytes
+        | ContractError::UnsupportedPortfolioWidth
+        | ContractError::ZeroPortfolioDenominator
+        | ContractError::EmptyPortfolioTemplate
+        | ContractError::NonCanonicalPortfolioTemplate => CompileError::InvalidPortfolioTemplate,
+        other => CompileError::Contract(other),
+    }
+}
+
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, CompileError> {
     Ok(u32::from_le_bytes(read_array(bytes, offset)?))
 }
@@ -974,31 +811,26 @@ mod tests {
         ContentId::new([fill; 32]).expect("nonzero fixture")
     }
 
-    fn context(width: ExactWordWidth) -> CompilationContext {
+    fn context() -> CompilationContext {
         let profile = CapacityProfileV1::new(CapacityProfileV1Input {
             envelope: CapacityEnvelope::Measured,
-            word_width: width,
             verifier_release_id: id(1),
             envelope_basis_id: id(2),
             max_artifact_bytes: 4_096,
             page_payload_bytes: 128,
             max_pages: 32,
             max_partition_cells: 16,
-            max_coefficient_entries: 64,
         })
         .expect("valid fixture profile");
         CompilationContext {
             capacity_profile: profile,
             capacity_profile_id: CapacityProfileId::new(id(3)),
             terms_semantic_release_id: id(4),
-            evaluator_release_id: id(5),
-            coefficient_profile_id: id(6),
             occurrence_artifact: b"occurrence-v1: fixture".to_vec(),
-            rounding: RoundingPolicy::ExactOnly,
         }
     }
 
-    fn request(shape: ProductShape) -> CompileRequest {
+    fn request<const N: usize>(shape: ProductShape) -> CompileRequest<N> {
         CompileRequest {
             domain: ScaledDomain {
                 lower: 0,
@@ -1006,179 +838,286 @@ mod tests {
                 denominator: 100,
             },
             shape,
-            context: context(ExactWordWidth::Sixteen),
+            context: context(),
         }
     }
 
     #[test]
-    fn golden_binary_threshold_is_canonical_and_recheckable() {
-        let compiled = compile(&request(ProductShape::BinaryThreshold {
+    fn binary_emits_basis_and_normalized_exact_two_template() {
+        let request = request::<2>(ProductShape::BinaryThreshold {
             threshold: 60,
             payout: ExactAmount {
-                numerator: 7,
-                denominator: 3,
+                numerator: 14,
+                denominator: 6,
             },
-        }))
-        .expect("compile binary");
+        });
+        let compiled = compile::<2>(&request).expect("compile binary");
         assert_eq!(compiled.partition.cuts(), &[60]);
-        assert_eq!(compiled.coefficients.entries, vec![0, 7]);
-        assert_eq!(compiled.coefficients.denominator, 3);
         assert_eq!(compiled.partition_bytes.len(), 80);
-        assert_eq!(compiled.coefficients.bytes.len(), 32);
-        assert_eq!(compiled.terms.partition_cell_count(), 2);
-        recheck(
-            &request(ProductShape::BinaryThreshold {
-                threshold: 60,
-                payout: ExactAmount {
-                    numerator: 7,
-                    denominator: 3,
-                },
-            }),
-            &compiled,
-        )
-        .expect("independent recheck");
+        assert_eq!(compiled.claim_basis.outcome_count(), 2);
+        assert_eq!(compiled.portfolio_template.denominator(), 3);
+        assert_eq!(compiled.portfolio_template.coefficients(), &[0, 7]);
+        let mut materialized = [0; 2];
+        compiled
+            .portfolio_template
+            .materialize(3, &mut materialized)
+            .expect("exact materialization");
+        assert_eq!(materialized, [0, 7]);
+        recheck(&request, &compiled).expect("independent recheck");
     }
 
     #[test]
-    fn golden_ramp_and_tent_have_exact_degree_one_coefficients() {
-        let ramp = compile(&request(ProductShape::CappedRamp {
-            start: 20,
-            end: 60,
-            cap: ExactAmount {
-                numerator: 9,
-                denominator: 2,
-            },
-        }))
-        .expect("ramp");
-        assert_eq!(ramp.coefficients.denominator, 80);
-        assert_eq!(ramp.coefficients.entries, vec![0, 0, -180, 9, 360, 0]);
-        let tent = compile(&request(ProductShape::Tent {
-            start: 20,
-            peak: 50,
-            end: 80,
-            cap: ExactAmount {
-                numerator: 3,
-                denominator: 2,
-            },
-        }))
-        .expect("tent");
-        assert_eq!(tent.coefficients.denominator, 60);
-        assert_eq!(tent.coefficients.entries, vec![0, 0, -60, 3, 240, -3, 0, 0]);
-    }
-
-    #[test]
-    fn ordered_buckets_and_crash_tail_compile_without_approximation() {
-        let buckets = compile(&request(ProductShape::OrderedRangeBuckets {
+    fn buckets_and_crash_tail_preserve_exact_rational_recipes() {
+        let bucket_request = request::<3>(ProductShape::OrderedRangeBuckets {
             cut_points: vec![25, 75],
             payouts: vec![
                 ExactAmount {
                     numerator: 0,
-                    denominator: 1,
+                    denominator: 9,
                 },
                 ExactAmount {
-                    numerator: 1,
-                    denominator: 2,
+                    numerator: 2,
+                    denominator: 4,
                 },
                 ExactAmount {
                     numerator: 3,
                     denominator: 4,
                 },
             ],
-        }))
-        .expect("buckets");
-        assert_eq!(buckets.coefficients.denominator, 4);
-        assert_eq!(buckets.coefficients.entries, vec![0, 2, 3]);
-        let tail = compile(&request(ProductShape::CrashTail {
+        });
+        let buckets = compile::<3>(&bucket_request).expect("buckets");
+        assert_eq!(buckets.portfolio_template.denominator(), 4);
+        assert_eq!(buckets.portfolio_template.coefficients(), &[0, 2, 3]);
+
+        let tail_request = request::<2>(ProductShape::CrashTail {
             trigger: 30,
             payout: ExactAmount {
-                numerator: 5,
-                denominator: 1,
+                numerator: 10,
+                denominator: 2,
             },
-        }))
-        .expect("tail");
-        assert_eq!(tail.coefficients.entries, vec![5, 0]);
+        });
+        let tail = compile::<2>(&tail_request).expect("tail");
+        assert_eq!(tail.partition.cuts(), &[30]);
+        assert_eq!(tail.portfolio_template.denominator(), 1);
+        assert_eq!(tail.portfolio_template.coefficients(), &[5, 0]);
     }
 
     #[test]
-    fn rejects_overlap_missing_buckets_unrepresentable_and_invalid_rounding() {
+    fn empty_and_graded_recipes_refuse_without_approximation() {
+        let empty = request::<2>(ProductShape::OrderedRangeBuckets {
+            cut_points: vec![50],
+            payouts: vec![ExactAmount::ZERO, ExactAmount::ZERO],
+        });
         assert_eq!(
-            compile(&request(ProductShape::OrderedRangeBuckets {
+            compile::<2>(&empty),
+            Err(CompileError::Contract(
+                ContractError::EmptyPortfolioTemplate
+            ))
+        );
+        let cap = ExactAmount {
+            numerator: 9,
+            denominator: 2,
+        };
+        assert_eq!(
+            compile::<3>(&request(ProductShape::CappedRamp {
+                start: 20,
+                end: 60,
+                cap,
+            })),
+            Err(CompileError::UnsupportedWithinCellGradedShape)
+        );
+        assert_eq!(
+            compile::<4>(&request(ProductShape::Tent {
+                start: 20,
+                peak: 50,
+                end: 80,
+                cap,
+            })),
+            Err(CompileError::UnsupportedWithinCellGradedShape)
+        );
+    }
+
+    #[test]
+    fn width_bucket_and_denominator_refusals_are_explicit() {
+        assert_eq!(
+            compile::<3>(&request(ProductShape::BinaryThreshold {
+                threshold: 60,
+                payout: ExactAmount {
+                    numerator: 1,
+                    denominator: 1,
+                },
+            })),
+            Err(CompileError::OutcomeCountMismatch)
+        );
+        assert_eq!(
+            compile::<2>(&request(ProductShape::OrderedRangeBuckets {
+                cut_points: vec![60],
+                payouts: vec![ExactAmount {
+                    numerator: 1,
+                    denominator: 1,
+                }],
+            })),
+            Err(CompileError::BucketCountMismatch)
+        );
+        assert_eq!(
+            compile::<2>(&request(ProductShape::CrashTail {
+                trigger: 30,
+                payout: ExactAmount {
+                    numerator: 1,
+                    denominator: 0,
+                },
+            })),
+            Err(CompileError::ZeroPayoutDenominator)
+        );
+    }
+
+    #[test]
+    fn noncanonical_partitions_and_exact_arithmetic_overflow_refuse() {
+        assert_eq!(
+            compile::<3>(&request(ProductShape::OrderedRangeBuckets {
                 cut_points: vec![60, 60],
                 payouts: vec![
                     ExactAmount {
                         numerator: 1,
-                        denominator: 1
+                        denominator: 1,
                     };
                     3
                 ],
-            }))
-            .expect_err("duplicate cuts"),
-            CompileError::NonCanonicalPartition
+            })),
+            Err(CompileError::NonCanonicalPartition)
         );
         assert_eq!(
-            compile(&request(ProductShape::OrderedRangeBuckets {
-                cut_points: vec![60],
-                payouts: vec![ExactAmount {
-                    numerator: 1,
-                    denominator: 1
-                }],
-            }))
-            .expect_err("missing bucket"),
-            CompileError::BucketCountMismatch
+            compile::<2>(&request(ProductShape::OrderedRangeBuckets {
+                cut_points: vec![50],
+                payouts: vec![
+                    ExactAmount {
+                        numerator: 1,
+                        denominator: u64::MAX,
+                    },
+                    ExactAmount {
+                        numerator: 1,
+                        denominator: u64::MAX - 1,
+                    },
+                ],
+            })),
+            Err(CompileError::ArithmeticOverflow)
         );
-        let oversized = CompileRequest {
-            context: context(ExactWordWidth::Eight),
-            ..request(ProductShape::CappedRamp {
-                start: 1,
-                end: 2,
-                cap: ExactAmount {
-                    numerator: i128::from(i64::MAX) + 1,
-                    denominator: 1,
-                },
-            })
-        };
         assert_eq!(
-            compile(&oversized).expect_err("i64 coefficient overflow"),
-            CompileError::UnrepresentableCoefficient
-        );
-        let mut invalid_rounding = request(ProductShape::CrashTail {
-            trigger: 30,
-            payout: ExactAmount {
-                numerator: 5,
-                denominator: 1,
-            },
-        });
-        invalid_rounding.context.rounding = RoundingPolicy::FloorAtRedemption;
-        assert_eq!(
-            compile(&invalid_rounding).expect_err("denominator one floor"),
-            CompileError::InvalidRoundingPolicy
+            compile::<2>(&request(ProductShape::OrderedRangeBuckets {
+                cut_points: vec![50],
+                payouts: vec![
+                    ExactAmount {
+                        numerator: u64::MAX,
+                        denominator: 1,
+                    },
+                    ExactAmount {
+                        numerator: 1,
+                        denominator: 2,
+                    },
+                ],
+            })),
+            Err(CompileError::UnrepresentablePortfolioCoefficient)
         );
     }
 
     #[test]
-    fn recheck_detects_artifact_and_certificate_substitution() {
-        let request = request(ProductShape::BinaryThreshold {
+    fn recheck_detects_partition_template_basis_and_certificate_substitution() {
+        let request = request::<2>(ProductShape::BinaryThreshold {
             threshold: 60,
             payout: ExactAmount {
                 numerator: 7,
                 denominator: 3,
             },
         });
-        let mut compiled = compile(&request).expect("compile");
-        *compiled
-            .coefficients
-            .bytes
-            .get_mut(0)
-            .expect("nonempty coefficient fixture") = 1;
+        let mut changed = compile::<2>(&request).expect("compile");
+        *changed.partition_bytes.last_mut().expect("partition cut") ^= 1;
+        assert!(recheck(&request, &changed).is_err());
+
+        let mut changed = compile::<2>(&request).expect("compile");
+        *changed
+            .portfolio_template_bytes
+            .last_mut()
+            .expect("template coefficient") ^= 1;
+        assert!(recheck(&request, &changed).is_err());
+
+        let mut changed = compile::<2>(&request).expect("compile");
+        changed
+            .portfolio_template_bytes
+            .get_mut(48..56)
+            .expect("denominator word")
+            .copy_from_slice(&6u64.to_le_bytes());
+        changed
+            .portfolio_template_bytes
+            .get_mut(64..72)
+            .expect("winning coefficient word")
+            .copy_from_slice(&14u64.to_le_bytes());
         assert_eq!(
-            recheck(&request, &compiled),
-            Err(CompileError::InvalidCoefficientArtifact)
+            recheck(&request, &changed),
+            Err(CompileError::InvalidPortfolioTemplate)
         );
-        let mut compiled = compile(&request).expect("compile");
-        compiled.certificate.terms_id = id(99);
+
+        let mut changed = compile::<2>(&request).expect("compile");
+        changed.portfolio_template =
+            PortfolioTemplateV1::new(id(88), [0, 7], 3).expect("foreign template");
+        changed
+            .portfolio_template
+            .encode(&mut changed.portfolio_template_bytes)
+            .expect("foreign encoding");
         assert_eq!(
-            recheck(&request, &compiled),
+            recheck(&request, &changed),
+            Err(CompileError::Contract(ContractError::IdentityMismatch))
+        );
+
+        let mut changed = compile::<2>(&request).expect("compile");
+        changed.claim_basis = CategoricalUnitV1::new(
+            CategoricalUnitV1Input {
+                capacity_profile_id: CapacityProfileId::new(id(99)),
+                outcome_count: 2,
+            },
+            request.context.capacity_profile,
+        )
+        .expect("alternate basis");
+        assert_eq!(
+            recheck(&request, &changed),
+            Err(CompileError::Contract(ContractError::IdentityMismatch))
+        );
+
+        let mut changed = compile::<2>(&request).expect("compile");
+        changed.certificate.portfolio_template_id = id(98);
+        assert_eq!(
+            recheck(&request, &changed),
             Err(CompileError::CertificateMismatch)
+        );
+    }
+
+    #[test]
+    fn partition_decoder_refuses_noncanonical_bytes_and_trailing_data() {
+        let partition = CanonicalPartition::new(
+            ScaledDomain {
+                lower: 0,
+                upper: 10,
+                denominator: 1,
+            },
+            vec![5],
+        )
+        .expect("partition");
+        let bytes = partition.to_bytes().expect("encode");
+        for length in 0..bytes.len() {
+            assert!(
+                CanonicalPartition::decode(bytes.get(..length).expect("in-bounds prefix")).is_err()
+            );
+        }
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert_eq!(
+            CanonicalPartition::decode(&trailing),
+            Err(CompileError::InvalidPartitionArtifact)
+        );
+        let mut reserved = bytes;
+        *reserved.get_mut(10).expect("reserved byte") = 1;
+        assert_eq!(
+            CanonicalPartition::decode(&reserved),
+            Err(CompileError::InvalidPartitionArtifact)
         );
     }
 }

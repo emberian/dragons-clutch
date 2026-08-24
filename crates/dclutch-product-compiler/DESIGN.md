@@ -1,60 +1,65 @@
-# Exact Product compiler V1
+# Categorical Product compiler V1
 
-This host-only crate constructs the bounded records in
-`dclutch-product-contract`; it is not an evaluator, an arbitrary bytecode VM,
-or an oracle adapter. Its only V1 input axis is one rational coordinate
-`n / coordinate_denominator`, but affine coefficient evaluation always uses
-the integer numerator `n`. A cell coefficient row `(a0, a1)` therefore means
-`(a0 + a1*n) / payout_denominator` exactly.
+This host-only crate constructs Product records from named exact recipes. It is
+not an evaluator, payout VM, oracle adapter, or second source of native
+liabilities. Every compiled Product has one elementary categorical-unit basis:
+one native claim for each exhaustive ordered partition cell. A user-facing
+payoff is a separate `PortfolioTemplateV1<N>` recipe over those native claims.
 
-## Canonical artifacts
+## Exact-N artifacts
 
-The partition artifact starts with `DCLTPAR1`, a version, coordinate
-denominator, cell count, closed domain endpoints, then strictly increasing
-interior cuts. Its unique semantic interpretation is `[lower, cut_0)`, ...,
-`[last_cut, upper]`; this is exhaustive, pairwise disjoint, ordered, and
-canonical. The compiler refuses a one-cell partition, non-interior cuts,
-duplicates, reversals, empty/reversed domains, and zero denominators.
+`CompileRequest<N>`, `CompiledProduct<N>`, and `PortfolioTemplateV1<N>` share
+the same compile-time width. Compilation also checks that the runtime partition
+has exactly `N` cells. The record therefore encodes exactly `N` coefficients;
+it neither max-allocates a 16-entry DTO nor leaves unused coefficient slots.
 
-Coefficient words are exactly the capacity profile's signed eight- or
-sixteen-byte little-endian integer words. They are cell-major and
-degree-ascending. Every rational payout is normalized to one checked LCM
-denominator. There is no rounding while compiling; the only rounding selection
-is the finite claim-basis redemption policy, and the contract record rechecks
-its allowed combinations.
+The partition artifact begins with `DCLTPAR1`, followed by its version,
+coordinate denominator, cell count, closed domain endpoints, and strictly
+increasing interior cuts. Its interpretation is `[lower, cut_0)`, ...,
+`[last_cut, upper]`. Construction and decoding both refuse empty or reversed
+domains, zero coordinate denominators, one-cell partitions, repeated or
+unordered cuts, non-interior cuts, trailing bytes, and nonzero reserved bytes.
 
-Artifact and preimage identities use domain-separated SHA-256. The caller owns
-the authenticated hash boundary for supplied release/profile identities and
-occurrence bytes. SHA-256 here gives deterministic content addressing; it is
-not a claim that a host compiler is a trusted oracle or on-chain verifier.
+Binary thresholds and crash tails emit two cells. Ordered range buckets emit
+one more cell than cut. The compiler reduces each rational payout, computes a
+checked common denominator, converts every value to an exact `u64` coefficient,
+and gcd-normalizes the entire vector with its denominator. No rounding occurs.
+An all-zero recipe is not a portfolio and is refused by the contract.
 
-## Current exact shapes
+`CappedRamp` and `Tent` are explicit
+`UnsupportedWithinCellGradedShape` refusals. Representing either as polynomial
+coefficients would reintroduce a parallel payout evaluator and make a
+user-selected recipe look like native Product liability. A caller may instead
+choose a categorical discretization as an explicit ordered-bucket product; a
+future genuinely graded native claim family requires a separately reviewed
+contract rather than an approximation hidden in this compiler.
 
-* Binary threshold and crash tail compile to degree-zero two-cell profiles.
-* Ordered buckets compile to degree-zero profiles.
-* Capped ramps and tents compile to degree-one profiles, where all slopes and
-  intercepts fit the selected signed word width.
+## Authority and identities
 
-The compiler rejects instead of approximating when LCM construction,
-intermediate arithmetic, output capacity, or signed word conversion fails.
-Approximate products require a different explicit error-bound certificate type;
-V1 does not define one.
+`CompilationContext` contains only the authenticated capacity profile and ID,
+the Terms semantic release ID, and canonical occurrence bytes. Evaluator,
+coefficient-profile, and rounding-policy identities do not exist in this
+ontology. The 56-byte categorical basis binds the capacity profile and outcome
+count. The portfolio template binds the resulting claim-basis content ID.
 
-## Rechecking
+Partition, partition evidence, Terms, occurrence artifact, Occurrence,
+categorical basis, portfolio template, Instance, and shape commitment use
+domain-separated SHA-256 content identities. SHA-256 here is deterministic
+content addressing, not evidence that the host compiler or its inputs are an
+authenticated oracle. The caller still owns that authentication boundary.
 
-`recheck` does not invoke `compile`. It decodes the partition and coefficient
-artifacts, independently regenerates the expected named shape, revalidates
-capacity, parses all Terms/Occurrence/ClaimBasis/Instance preimages, verifies
-their links, and compares all domain-separated identities in the certificate.
+## Independent recheck
 
-## Generalization
+`recheck` does not call `compile`. It parses the partition, categorical basis,
+portfolio template, Terms, Occurrence, and Instance preimages; regenerates the
+named constant-per-cell recipe; verifies exact-N width and capacity; checks the
+partition/basis/Instance/template links; verifies gcd-normalized coefficients
+and denominator; materializes the template at its denominator to recover the
+exact coefficient vector without rounding; and recomputes every certificate
+identity. Artifact, basis, template, or certificate substitution is refused.
 
-Degree two and three need a new product-shape set plus explicit basis-variable
-semantics and range proofs before selecting the existing contract degrees.
-The artifact ordering can extend naturally to `(cell, degree 0..d)`, but no
-new curve should silently reuse an affine evaluator release. Multivariate
-products require a separately versioned canonical partition encoding (for
-example, a lexicographic finite cell complex), explicit axis units, exhaustive
-disjointness evidence, a specified monomial ordering, and capacity profiles
-whose bounds cover the cross-product cells. They must not be smuggled into
-the current univariate bytes.
+The capacity profile limits partition and content-artifact work only. It has no
+coefficient word width or maximum coefficient count: those were artifacts of
+the removed evaluator model. The current contract's two-through-sixteen
+portfolio width is a provisional profile bound with an explicit future lifting
+path, not a mathematical Product restriction.
