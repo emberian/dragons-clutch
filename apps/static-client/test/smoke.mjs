@@ -195,6 +195,61 @@ test("source_and_structured_action_material_use_disjoint_current_transport_contr
   assert.equal(result.dealerTupleRefused, true);
 });
 
+test("direct_actions_accept_only_exact_current_chain_material", () => {
+  const context = browserRealm("chain-client.js");
+  const result = vm.runInContext(`(() => {
+    const address = (value) => GlassChainClient.encodeBase58(new Uint8Array(32).fill(value));
+    const addresses = Array.from({ length: 7 }, (_, index) => address(index + 1));
+    const manifest = "21".repeat(32);
+    const profile = "22".repeat(32);
+    const ownerRelease = "23".repeat(32);
+    const state = "24".repeat(32);
+    const releaseKey = addresses[0] + ":1:" + ownerRelease + ":" + manifest;
+    const coordinate = { familyTag: "80", familyVersion: "1", localAction: "5", family: "direct", action: "submit-direct-candidate" };
+    const cursor = { workflowId: "25".repeat(32), lane: "candidate", generation: "1", phase: "1", item: "0", observedStateSha256: state };
+    const selection = { account: addresses[0], releaseKey, action: coordinate.action, accountSlot: "100", observedCommitment: "finalized", effectiveCommitment: "finalized", branch: { kind: "finalized-scan" }, dependencies: [], cursor };
+    const configuration = { release: { releaseKey, releaseManifestSha256: manifest, capabilityProfileId: profile, enabledIntents: [{ familyTag: "80", familyVersion: "1", localAction: "5" }], enabledIntentVariants: [] } };
+    const session = { sessionId: "26".repeat(32), release: { releaseKey }, restart: { cursors: [selection] } };
+    const roleContract = [
+      ["direct-root", false, true], ["direct-replay", false, true], ["direct-selection", false, true],
+      ["clock-sysvar", false, false], ["candidate-submitter", true, true], ["system-program", false, false]
+    ];
+    const row = {
+      coordinate,
+      releaseAdmission: { enabled: true, scope: "single-release-execution-and-driver-v1", releaseKey, executionReleaseKey: releaseKey, driverReleaseKey: releaseKey, executionReleaseManifestSha256: manifest, capabilityProfileId: profile },
+      stateSelection: selection,
+      semanticOwnerConstructor: "clutch-direct-market-runtime/current-v1",
+      accountRoles: roleContract.map(([role, signer, writable], index) => ({ index: String(index), role, signer, writable, address: addresses[index], identityDisposition: "semantic-owner-derived-and-bound-to-draft" })),
+      callable: true,
+      verdict: "callable-unsigned-draft",
+      reason: "current chain-derived submit material",
+      transactionDraft: {
+        schema: "dragons-clutch/operator-canonical-action-material/v1", draftId: "27".repeat(32), constructionSchema: "dragons-clutch/operator/unsigned-protocol-transaction/v3",
+        driverAccount: addresses[0], driverAccountSlot: "100", driverReleaseKey: releaseKey, executionReleaseKey: releaseKey, authorityStateSha256: state,
+        releaseManifestSha256: manifest, capabilityProfileId: profile, feePayer: addresses[4], messageVersion: "legacy", addressLookupTables: [],
+        recentBlockhash: null, hasRecentBlockhash: false, signed: false, submitted: false, serializedTransactionHex: "00", serializedBytes: "1",
+        actions: [coordinate.action], flows: ["direct-market-v1"], semanticOwners: [{ package: "clutch-direct-market-runtime", schema: "current-v1", releaseSha256: ownerRelease }],
+        registryBindings: [{ familyTag: "80", familyVersion: "1", localAction: "5", allocationStatus: "frozen", centralAction: "5" }], runtimeAdmissions: ["release-bound-enabled"],
+        exactEquations: [{ name: "selection retained-bond principal conservation", unit: { kind: "lamports" }, left: "1", right: "1" }], reloadAuthoritativeAccounts: true
+      },
+      symbolicPostcondition: null,
+      signerRequirements: [{ address: addresses[4], semanticRoles: ["candidate-submitter", "transaction-fee-payer"], signaturePresent: false, keyAccess: false }],
+      freshnessDisposition: { observedSlot: "100", validBeforeSlot: "110", maximumValiditySlots: "10", recentBlockhash: "absent; a launcher must reacquire state before adding one", beforeSigning: "reload", afterSubmission: "discard" }
+    };
+    const raw = { schema: "dragons-clutch/operator-action-capability-set/v1", status: "ready", commitment: "finalized", projectionAuthority: "untrusted-release-and-canonical-codec-projection", signing: false, submission: false, sessionId: session.sessionId, releaseKey, capabilityProfileId: profile, freshness: { recentBlockhash: "absent-by-contract", feePayer: "must-be-explicit-in-server-constructed-draft", validBeforeSlot: "must-be-derived-from-a-fresh-clock-observation", beforeSigning: "reload", afterSubmission: "discard" }, actions: [row] };
+    const accepted = GlassChainClient.validateActionCapabilities(raw, configuration, session);
+    row.coordinate.action = "finalize-direct-selection";
+    row.transactionDraft.actions = [row.coordinate.action];
+    row.stateSelection.action = row.coordinate.action;
+    session.restart.cursors[0].action = row.coordinate.action;
+    let legacyRefused = false;
+    try { GlassChainClient.validateActionCapabilities(raw, configuration, session); } catch (_) { legacyRefused = true; }
+    return { branch: accepted.actions[0].directContract.branch, legacyRefused };
+  })()`, context);
+  assert.equal(result.branch, "submit-without-eviction");
+  assert.equal(result.legacyRefused, true);
+});
+
 test("compiler_boundary_names_rust_owner_and_does_not_reimplement_payoff_math", () => {
   assert.match(html, /compile_production_payoff_v1/);
   assert.match(html, /current BundleV6 assembler/);
