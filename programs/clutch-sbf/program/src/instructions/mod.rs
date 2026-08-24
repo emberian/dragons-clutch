@@ -66,6 +66,8 @@ pub mod external_redemption_v3;
 pub(crate) mod failure_market_interval_v2;
 /// Sole current Product/Source/Failure zero-payout attempt composer.
 pub(crate) mod failure_market_source_failure_current;
+/// Sole current action-10 Product/Source/Failure branch owner.
+pub(crate) mod failure_market_action10_current;
 /// Concrete checked owners for current Market Failure actions 10-13.
 pub(crate) mod failure_market_actions_v2;
 /// Capability-disabled atomic paid Failure interval advance.

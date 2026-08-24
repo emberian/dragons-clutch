@@ -1573,8 +1573,10 @@ pub(crate) fn authenticate_failure_absence_source_handoff_from_accounts_v1(
     )
 }
 
-/// Reconstruct a mature absence with the exact mutable lineage used by the
-/// same-call no-reopen tombstone. The absent Result PDA remains read-only.
+/// Reconstruct a mature absence with the exact writable Result slot and
+/// mutable lineage used by the same-call no-reopen tombstone. The absent
+/// Result remains System-owned, zero-lamport and zero-data and is never
+/// mutated despite the branch-union writable privilege.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn authenticate_failure_absence_source_handoff_for_terminal_v1(
     program_id: &Pubkey,
