@@ -318,6 +318,9 @@ pub const SEED_PRODUCT_MARKET_FOUNDATION_VAULT: &[u8] = b"dc:market-foundation-v
 pub const SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY: &[u8] = b"dc:market-lifecycle-replay:v1";
 /// Per-Series/ordinal Product Market-admission link.
 pub const SEED_PRODUCT_SERIES_MARKET_LINK: &[u8] = b"dc:series-market-link:v1";
+/// Permanent counted Product Series-lifecycle replay.
+pub const SEED_PRODUCT_SERIES_LIFECYCLE_REPLAY: &[u8] =
+    clutch_solana_layout::product_series::SERIES_LIFECYCLE_REPLAY_PDA_PREFIX_V1;
 
 /// Canonical Realm address and bump.
 pub fn realm_pda(program_id: &Pubkey, realm: &[u8; 32]) -> (Pubkey, u8) {
@@ -536,6 +539,17 @@ pub fn product_series_market_link_pda(
             series_plan_v5_id,
             &ordinal.to_le_bytes(),
         ],
+    )
+}
+
+/// Derive the permanent counted lifecycle replay for one Series.
+pub fn product_series_lifecycle_replay_pda(
+    program_id: &Pubkey,
+    series_plan_v5_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    find(
+        program_id,
+        &[SEED_PRODUCT_SERIES_LIFECYCLE_REPLAY, series_plan_v5_id],
     )
 }
 
@@ -1993,6 +2007,7 @@ mod tests {
             SEED_PRODUCT_MARKET_FOUNDATION_VAULT,
             SEED_PRODUCT_MARKET_LIFECYCLE_REPLAY,
             SEED_PRODUCT_SERIES_MARKET_LINK,
+            SEED_PRODUCT_SERIES_LIFECYCLE_REPLAY,
             SEED_FAILURE_MARKET_ROOT_V2,
             SEED_FAILURE_EXTERNAL_ROOT,
             SEED_FAILURE_REPLAY_TOMBSTONE,

@@ -143,6 +143,8 @@ pub mod general_v2_settlement_producer_v5;
 ))]
 pub mod general_v2_settlement_traversal_v5;
 pub mod genesis;
+/// Private pre-root Product/Collateral join for the current General V3 founder.
+pub(crate) mod general_market_foundation_v3;
 #[cfg(test)]
 pub mod market_init;
 #[cfg(test)]
@@ -157,9 +159,12 @@ pub(crate) mod product_general_family;
 pub(crate) mod product_fractional_family;
 /// Always-compiled Product Market/link account authentication; routes remain capability-gated.
 pub mod product_market;
-/// Always-compiled current Product/Series authority. Dispatcher tuples remain
-/// separately capability-gated, including in source-empty releases.
+/// Capability-disabled Product FoundationVault/Recovery/founder compositor.
+pub(crate) mod product_market_foundation_init;
+/// Always-compiled Product/Series semantic owner; executable routes remain
+/// independently capability-gated, including in source-empty releases.
 pub mod product_series;
+pub(crate) mod product_series_current;
 #[cfg(not(feature = "profile-successor-chain-attached-v1"))]
 pub mod resolution_work;
 pub mod series_failure_funding;
