@@ -12,6 +12,8 @@
 //! registry, failure, liveness, and occurrence adapters instead of accepting
 //! caller-shaped authentication facts.
 
+pub(crate) mod physical_v4;
+
 use core::cell::Cell;
 
 use crate::accounts::{expect_pda, require, require_count, require_signer, Outcome};
