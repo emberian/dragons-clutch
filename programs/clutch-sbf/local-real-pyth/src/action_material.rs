@@ -596,6 +596,7 @@ pub fn construct_direct_action_material_v1(
             | DirectMarketAction::LapseEmpty
             | DirectMarketAction::LapseUnselected
             | DirectMarketAction::LapseSelected
+            | DirectMarketAction::RetireTerminal
     ) {
         // These actions consume current b1/v2+b2+b3 and exact descendants.
         // Their deadlines, terminal reason, RevenuePolicyV2 suffix, refund
@@ -739,6 +740,7 @@ pub(crate) fn finish_chain_derived_direct_material_v2(
             | DirectMarketAction::LapseEmpty
             | DirectMarketAction::LapseUnselected
             | DirectMarketAction::LapseSelected
+            | DirectMarketAction::RetireTerminal
     ) || payload.action() != action
         || sequence == 0
         || release.program_id != manifest.clutch.program_id

@@ -1181,7 +1181,7 @@ fn convert_economic_plan_v2<B: DirectHashBackendV1>(
 
 /// Default-deny current action-13 Product/archive authority.
 pub trait AuthenticatedDirectTerminalV2 {
-    /// Authenticate the complete current Product RootV2/LinkV2/family
+    /// Authenticate the complete current Product RootV3/LinkV3 family
     /// prestate, finalized Resolution, b1/v2/b2/b3/b4 deletion set, and
     /// transfer vector. Product derives the successor only after this receipt
     /// is sealed, avoiding a receipt/poststate hash cycle.
@@ -1232,7 +1232,8 @@ impl DirectFamilyTerminalPreparationV2 {
     }
 }
 
-/// Final sealed current Direct terminal facts consumed by Product and 0xba/v2.
+/// Final sealed Direct facts used to retire `0xba/v2` and close the Direct
+/// archive before the move-only family terminal is handed to Product RootV3.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectFamilyTerminalPlanV2 {
     /// Exact b1/v2 root identity before deletion.
@@ -1247,7 +1248,7 @@ pub struct DirectFamilyTerminalPlanV2 {
     pub final_resolution: crate::DirectFinalResolutionV1,
     /// Terminal replay after the exact eighth Candidate work batch.
     pub replay_post: DirectActionReplayV1,
-    /// Sole current terminal receipt consumed by Product.
+    /// Sole Direct terminal identity later embedded in the family receipt.
     pub terminal_receipt_id: [u8; 32],
     /// Authenticated Product family prestate identity.
     pub product_family_prestate_id: [u8; 32],

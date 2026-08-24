@@ -3380,9 +3380,10 @@ fn authenticate_direct_candidate_terminal_postwrite_v2(
     })
 }
 
-/// Product RootV3's default-refusing preterminal projection. It authenticates
-/// the exact live Direct family prestate without mutating Product; the sole
-/// RootV3 writer later consumes `AuthenticatedDirectFamilyTerminalV3`.
+/// Product RootV3's default-refusing, move-only preterminal projection. It
+/// authenticates the exact live Direct family prestate without mutating
+/// Product; the sole RootV3 writer later consumes
+/// `AuthenticatedDirectFamilyTerminalV3`.
 pub(crate) trait AuthenticatedProductDirectFamilyPreterminalV3 {
     fn product_family_prestate_id(&self) -> Outcome<ContentId> {
         Err(Refusal::Adapter(ClutchError::AuthorizationUnavailable))
@@ -3488,14 +3489,15 @@ impl AuthenticatedDirectFamilyTerminalV3 {
     pub(crate) const fn refund_count(&self) -> u8 { self.refund_count }
 }
 
-/// Seal and close one current Direct family before Product changes RootV3.
+/// Consume Product's preterminal authority, seal and close one current Direct
+/// family, then return the only receipt Product RootV3/LinkV3 may consume.
 /// Account order is fixed by arguments; no caller source/refund amounts or
 /// Product poststate enter the transition.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 pub(crate) fn retire_direct_family_archives_v3<A>(
     program_id: &Pubkey,
-    product: &A,
+    product: A,
     direct_root_account: &AccountInfo<'_>,
     direct_replay_account: &AccountInfo<'_>,
     selection_account: &AccountInfo<'_>,
@@ -3509,7 +3511,7 @@ pub(crate) fn retire_direct_family_archives_v3<A>(
     sequence: u64,
 ) -> Outcome<AuthenticatedDirectFamilyTerminalV3>
 where
-    A: AuthenticatedProductDirectFamilyPreterminalV3 + ?Sized,
+    A: AuthenticatedProductDirectFamilyPreterminalV3,
 {
     require(
         reservation_accounts.len() <= 2
