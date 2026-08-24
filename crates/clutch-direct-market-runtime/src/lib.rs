@@ -21,6 +21,8 @@ use clutch_product_series::{
 pub mod selection_v1;
 pub mod settlement_v1;
 pub mod codec_v1;
+pub mod codec_v2;
+pub mod current_v2;
 pub mod fee_v1;
 pub mod liveness_v1;
 

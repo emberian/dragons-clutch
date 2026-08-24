@@ -505,10 +505,14 @@ pub const PRODUCT_SERIES_MARKET_LINK_ACCOUNT_VERSION: u8 = 1;
 pub const DEALER_COVERED_SELECTION_ACCOUNT_TAG: u8 = 0xae;
 /// Current Direct root and lifecycle-count owner discriminator.
 pub const DIRECT_MARKET_ROOT_ACCOUNT_TAG: u8 = 0xb1;
-/// Current Direct root account version.
+/// Historical Direct V3/BundleV5 root account version.
 pub const DIRECT_MARKET_ROOT_ACCOUNT_VERSION: u8 = 1;
-/// Exact current Direct root frame bytes.
+/// Exact historical Direct root frame bytes.
 pub const DIRECT_MARKET_ROOT_ACCOUNT_BYTES: usize = 1_726;
+/// Current General-V4/Product-V2 Direct root account version.
+pub const DIRECT_MARKET_ROOT_ACCOUNT_VERSION_V2: u8 = 2;
+/// Exact current Direct root frame bytes.
+pub const DIRECT_MARKET_ROOT_ACCOUNT_BYTES_V2: usize = 2_502;
 /// Current Direct exact-selection owner discriminator.
 pub const DIRECT_SELECTION_ACCOUNT_TAG: u8 = 0xb2;
 /// Current Direct exact-selection account version.
@@ -818,6 +822,15 @@ pub const CENTRAL_COLLISION_LEDGER: &[CollisionLedgerEntry] = &[
         },
         status: AllocationStatus::ReservedDisabled,
         name: "direct-market-root-v1-account",
+    },
+    CollisionLedgerEntry {
+        coordinates: AllocationCoordinates::Exact {
+            namespace: WireNamespace::MainAccount,
+            tag: DIRECT_MARKET_ROOT_ACCOUNT_TAG,
+            version: DIRECT_MARKET_ROOT_ACCOUNT_VERSION_V2,
+        },
+        status: AllocationStatus::ReservedDisabled,
+        name: "direct-market-root-v2-account",
     },
     CollisionLedgerEntry {
         coordinates: AllocationCoordinates::Exact {
