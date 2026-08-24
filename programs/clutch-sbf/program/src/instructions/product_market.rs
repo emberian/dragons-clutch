@@ -69,14 +69,16 @@ const SERIES_WRAPPER_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-wrapper-authentication/v1";
 const SERIES_WRAPPER_TERMINAL_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-wrapper-terminal-authentication/v1";
-const SERIES_FAILURE_RELEASE_AUTHENTICATION_DOMAIN_V1: &[u8] =
-    b"dragons-clutch/series-failure-release-authentication/v1";
+const SERIES_FAILURE_RELEASE_AUTHENTICATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-failure-release-authentication/v2";
 const SERIES_FAILURE_RESOLUTION_LINK_PREAUTHORIZATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-failure-resolution-link-preauthorization/v1";
 const SERIES_MARKET_LINK_RETIREMENT_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-market-link-retirement-authentication/v1";
 const SERIES_MARKET_LINK_CLOSE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/series-market-link-close-authentication/v1";
+const SERIES_FAILURE_EXHAUSTED_LINK_PREAUTHORIZATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/series-failure-exhausted-link-preauthorization/v2";
 const MARKET_RECOVERY_SCHEDULE_AUTHENTICATION_DOMAIN_V1: &[u8] =
     b"dragons-clutch/market-recovery-schedule-authentication/v1";
 const MARKET_FOUNDATION_DEBIT_AUTHENTICATION_DOMAIN_V1: &[u8] =
@@ -1667,6 +1669,18 @@ pub(crate) trait AuthenticatedSeriesFailureArchivePostwriteV2 {
         Err(Refusal::Adapter(ClutchError::MismatchedState))
     }
 
+    /// Exact Product link preauthorization under the typed release disposition.
+    /// Existing Resolution owners inherit the historical getter; Exhausted
+    /// owners must override this method directly.
+    fn release_link_preauthorization_id(&self) -> Outcome<ContentId> {
+        self.resolution_link_preauthorization_id()
+    }
+
+    /// Disjoint release path. Existing owners remain Resolution-only.
+    fn release_disposition(&self) -> Outcome<FailureSessionReleaseDispositionV2> {
+        Ok(FailureSessionReleaseDispositionV2::Resolved)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn authenticate_series_failure_archive_postwrite_v2(
         &self,
@@ -1681,6 +1695,38 @@ pub(crate) trait AuthenticatedSeriesFailureArchivePostwriteV2 {
         _resolution_link_preauthorization_id: ContentId,
     ) -> Outcome<()> {
         Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+
+    /// Authenticate the same archive under the exhaustive typed release seam.
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_series_failure_archive_release_postwrite_v2(
+        &self,
+        archive_postwrite_id: ContentId,
+        append_receipt_id: ContentId,
+        reset_receipt_id: ContentId,
+        market_instance_id: MarketInstanceV2Id,
+        generation: u64,
+        source_occurrence_id: SourceOccurrenceV1Id,
+        session_binding_id: ContentId,
+        session_terminal_receipt_id: ContentId,
+        disposition: FailureSessionReleaseDispositionV2,
+        release_link_preauthorization_id: ContentId,
+    ) -> Outcome<()> {
+        require(
+            disposition == FailureSessionReleaseDispositionV2::Resolved,
+            ClutchError::MismatchedState,
+        )?;
+        self.authenticate_series_failure_archive_postwrite_v2(
+            archive_postwrite_id,
+            append_receipt_id,
+            reset_receipt_id,
+            market_instance_id,
+            generation,
+            source_occurrence_id,
+            session_binding_id,
+            session_terminal_receipt_id,
+            release_link_preauthorization_id,
+        )
     }
 }
 
@@ -1700,7 +1746,6 @@ pub(crate) struct AuthenticatedWritableFailureResolutionLinkV1 {
     data_id: ContentId,
     authentication_id: ContentId,
     semantic_id: SeriesMarketLinkV1Id,
-    state: SeriesMarketLinkV1,
     market_root_account: Pubkey,
     market_binding_id: ContentId,
     series_plan_id: SeriesPlanV5Id,
@@ -1710,6 +1755,7 @@ pub(crate) struct AuthenticatedWritableFailureResolutionLinkV1 {
     source_occurrence_id: SourceOccurrenceV1Id,
     transition_sequence: u64,
     failure_sessions_started: u32,
+    active_failure_sessions: u32,
     failure_session_transcript_id: ContentId,
 }
 
@@ -1740,10 +1786,6 @@ impl AuthenticatedWritableFailureResolutionLinkV1 {
 
     pub(crate) const fn semantic_id(&self) -> SeriesMarketLinkV1Id {
         self.semantic_id
-    }
-
-    pub(crate) const fn state(&self) -> SeriesMarketLinkV1 {
-        self.state
     }
 
     pub(crate) const fn market_root_account(&self) -> Pubkey {
@@ -1811,10 +1853,204 @@ fn writable_failure_resolution_link_preauthorization_id_v1(
             &value.transition_sequence.to_le_bytes(),
             &value.failure_sessions_started.to_le_bytes(),
             &value.failure_session_transcript_id.bytes(),
-            &value.state.active_failure_sessions().to_le_bytes(),
+            &value.active_failure_sessions.to_le_bytes(),
         ])
         .to_bytes(),
     )
+}
+
+/// Exhaustive reason one pinned Failure session may release its Product link.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FailureSessionReleaseDispositionV2 {
+    /// Resolution was atomically persisted before archive/reset/release.
+    Resolved,
+    /// The finite unresolved session exhausted its authenticated schedule.
+    Exhausted,
+}
+
+impl FailureSessionReleaseDispositionV2 {
+    const fn wire_byte(self) -> u8 {
+        match self {
+            Self::Resolved => 1,
+            Self::Exhausted => 2,
+        }
+    }
+}
+
+fn require_failure_session_release_disposition_v2(
+    authenticated: FailureSessionReleaseDispositionV2,
+    archived: FailureSessionReleaseDispositionV2,
+) -> Outcome<()> {
+    require(authenticated == archived, ClutchError::MismatchedState)
+}
+
+/// Product-authenticated writable pinned link for the unresolved exhausted path.
+///
+/// Unlike Resolution, the shared root remains read-only and its resolution
+/// triple must stay canonical zero throughout action13. The exact root and
+/// root prestate is committed by the private ID and the exact link facts are
+/// retained so an archive receipt cannot be spliced across Markets, sessions,
+/// or a later root transition.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedWritableFailureExhaustedLinkV2 {
+    id: ContentId,
+    root_account: Pubkey,
+    link_account: Pubkey,
+    owner_program: Pubkey,
+    observed_lamports: u64,
+    data_id: ContentId,
+    authentication_id: ContentId,
+    semantic_id: SeriesMarketLinkV1Id,
+    market_binding_id: ContentId,
+    series_plan_id: SeriesPlanV5Id,
+    ordinal: u32,
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    source_occurrence_id: SourceOccurrenceV1Id,
+    transition_sequence: u64,
+    failure_sessions_started: u32,
+    failure_session_transcript_id: ContentId,
+}
+
+/// Exact Product release preauthorization under a disjoint typed disposition.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum AuthenticatedWritableFailureSessionReleaseLinkV2 {
+    Resolved(AuthenticatedWritableFailureResolutionLinkV1),
+    Exhausted(AuthenticatedWritableFailureExhaustedLinkV2),
+}
+
+impl AuthenticatedWritableFailureSessionReleaseLinkV2 {
+    pub(crate) const fn resolved(
+        value: AuthenticatedWritableFailureResolutionLinkV1,
+    ) -> Self {
+        Self::Resolved(value)
+    }
+
+    pub(crate) const fn disposition(&self) -> FailureSessionReleaseDispositionV2 {
+        match self {
+            Self::Resolved(_) => FailureSessionReleaseDispositionV2::Resolved,
+            Self::Exhausted(_) => FailureSessionReleaseDispositionV2::Exhausted,
+        }
+    }
+
+    pub(crate) const fn id(&self) -> ContentId {
+        match self {
+            Self::Resolved(value) => value.id(),
+            Self::Exhausted(value) => value.id,
+        }
+    }
+
+    pub(crate) const fn link_account(&self) -> Pubkey {
+        match self {
+            Self::Resolved(value) => value.link_account(),
+            Self::Exhausted(value) => value.link_account,
+        }
+    }
+
+    pub(crate) const fn owner_program(&self) -> Pubkey {
+        match self {
+            Self::Resolved(value) => value.owner_program(),
+            Self::Exhausted(value) => value.owner_program,
+        }
+    }
+
+    pub(crate) const fn observed_lamports(&self) -> u64 {
+        match self {
+            Self::Resolved(value) => value.observed_lamports(),
+            Self::Exhausted(value) => value.observed_lamports,
+        }
+    }
+
+    pub(crate) const fn data_id(&self) -> ContentId {
+        match self {
+            Self::Resolved(value) => value.data_id(),
+            Self::Exhausted(value) => value.data_id,
+        }
+    }
+
+    pub(crate) const fn authentication_id(&self) -> ContentId {
+        match self {
+            Self::Resolved(value) => value.authentication_id(),
+            Self::Exhausted(value) => value.authentication_id,
+        }
+    }
+
+    pub(crate) const fn semantic_id(&self) -> SeriesMarketLinkV1Id {
+        match self {
+            Self::Resolved(value) => value.semantic_id(),
+            Self::Exhausted(value) => value.semantic_id,
+        }
+    }
+
+    pub(crate) const fn market_root_account(&self) -> Pubkey {
+        match self {
+            Self::Resolved(value) => value.market_root_account(),
+            Self::Exhausted(value) => value.root_account,
+        }
+    }
+
+    pub(crate) const fn market_binding_id(&self) -> ContentId {
+        match self {
+            Self::Resolved(value) => value.market_binding_id(),
+            Self::Exhausted(value) => value.market_binding_id,
+        }
+    }
+
+    pub(crate) const fn series_plan_id(&self) -> SeriesPlanV5Id {
+        match self {
+            Self::Resolved(value) => value.series_plan_id(),
+            Self::Exhausted(value) => value.series_plan_id,
+        }
+    }
+
+    pub(crate) const fn ordinal(&self) -> u32 {
+        match self {
+            Self::Resolved(value) => value.ordinal(),
+            Self::Exhausted(value) => value.ordinal,
+        }
+    }
+
+    pub(crate) const fn market_instance_id(&self) -> MarketInstanceV2Id {
+        match self {
+            Self::Resolved(value) => value.market_instance_id(),
+            Self::Exhausted(value) => value.market_instance_id,
+        }
+    }
+
+    pub(crate) const fn generation(&self) -> u64 {
+        match self {
+            Self::Resolved(value) => value.generation(),
+            Self::Exhausted(value) => value.generation,
+        }
+    }
+
+    pub(crate) const fn source_occurrence_id(&self) -> SourceOccurrenceV1Id {
+        match self {
+            Self::Resolved(value) => value.source_occurrence_id(),
+            Self::Exhausted(value) => value.source_occurrence_id,
+        }
+    }
+
+    pub(crate) const fn transition_sequence(&self) -> u64 {
+        match self {
+            Self::Resolved(value) => value.transition_sequence(),
+            Self::Exhausted(value) => value.transition_sequence,
+        }
+    }
+
+    pub(crate) const fn failure_sessions_started(&self) -> u32 {
+        match self {
+            Self::Resolved(value) => value.failure_sessions_started(),
+            Self::Exhausted(value) => value.failure_sessions_started,
+        }
+    }
+
+    pub(crate) const fn failure_session_transcript_id(&self) -> ContentId {
+        match self {
+            Self::Resolved(value) => value.failure_session_transcript_id(),
+            Self::Exhausted(value) => value.failure_session_transcript_id,
+        }
+    }
 }
 
 /// Default-refusing Failure Begin owner for the sole exclusive link pin.
@@ -1838,8 +2074,8 @@ pub(crate) trait AuthenticatedSeriesFailureSessionBeginV2 {
 }
 
 /// Private Product postwrite proving one exact Failure session pin was released.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct AuthenticatedSeriesFailureSessionReleaseV1 {
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSeriesFailureSessionReleaseV2 {
     id: ContentId,
     link_account: Pubkey,
     link_authentication_before: ContentId,
@@ -1854,68 +2090,73 @@ pub(crate) struct AuthenticatedSeriesFailureSessionReleaseV1 {
     archive_postwrite_id: ContentId,
     append_receipt_id: ContentId,
     reset_receipt_id: ContentId,
-    resolution_link_preauthorization_id: ContentId,
+    release_link_preauthorization_id: ContentId,
+    release_disposition: FailureSessionReleaseDispositionV2,
 }
 
-impl AuthenticatedSeriesFailureSessionReleaseV1 {
-    pub(crate) const fn id(self) -> ContentId {
+impl AuthenticatedSeriesFailureSessionReleaseV2 {
+    pub(crate) const fn id(&self) -> ContentId {
         self.id
     }
 
-    pub(crate) const fn link_account(self) -> Pubkey {
+    pub(crate) const fn link_account(&self) -> Pubkey {
         self.link_account
     }
 
-    pub(crate) const fn link_authentication_before(self) -> ContentId {
+    pub(crate) const fn link_authentication_before(&self) -> ContentId {
         self.link_authentication_before
     }
 
-    pub(crate) const fn link_authentication_after(self) -> ContentId {
+    pub(crate) const fn link_authentication_after(&self) -> ContentId {
         self.link_authentication_after
     }
 
-    pub(crate) const fn link_semantic_before(self) -> ContentId {
+    pub(crate) const fn link_semantic_before(&self) -> ContentId {
         self.link_semantic_before
     }
 
-    pub(crate) const fn link_semantic_after(self) -> ContentId {
+    pub(crate) const fn link_semantic_after(&self) -> ContentId {
         self.link_semantic_after
     }
 
-    pub(crate) const fn transition_sequence_before(self) -> u64 {
+    pub(crate) const fn transition_sequence_before(&self) -> u64 {
         self.transition_sequence_before
     }
 
-    pub(crate) const fn transition_sequence_after(self) -> u64 {
+    pub(crate) const fn transition_sequence_after(&self) -> u64 {
         self.transition_sequence_after
     }
 
-    pub(crate) const fn failure_session_transcript_before(self) -> ContentId {
+    pub(crate) const fn failure_session_transcript_before(&self) -> ContentId {
         self.failure_session_transcript_before
     }
 
-    pub(crate) const fn failure_session_transcript_after(self) -> ContentId {
+    pub(crate) const fn failure_session_transcript_after(&self) -> ContentId {
         self.failure_session_transcript_after
     }
 
-    pub(crate) const fn session_terminal_receipt_id(self) -> ContentId {
+    pub(crate) const fn session_terminal_receipt_id(&self) -> ContentId {
         self.session_terminal_receipt_id
     }
 
-    pub(crate) const fn archive_postwrite_id(self) -> ContentId {
+    pub(crate) const fn archive_postwrite_id(&self) -> ContentId {
         self.archive_postwrite_id
     }
 
-    pub(crate) const fn append_receipt_id(self) -> ContentId {
+    pub(crate) const fn append_receipt_id(&self) -> ContentId {
         self.append_receipt_id
     }
 
-    pub(crate) const fn reset_receipt_id(self) -> ContentId {
+    pub(crate) const fn reset_receipt_id(&self) -> ContentId {
         self.reset_receipt_id
     }
 
-    pub(crate) const fn resolution_link_preauthorization_id(self) -> ContentId {
-        self.resolution_link_preauthorization_id
+    pub(crate) const fn release_link_preauthorization_id(&self) -> ContentId {
+        self.release_link_preauthorization_id
+    }
+
+    pub(crate) const fn release_disposition(&self) -> FailureSessionReleaseDispositionV2 {
+        self.release_disposition
     }
 }
 
@@ -6343,9 +6584,10 @@ fn require_unresolved_market_resolution_v1(
 
 /// Hostile-authenticate the exact pinned `0xad` prestate for an atomic
 /// Resolution/archive/release outer which necessarily receives the account as
-/// writable. The returned value contains a copied pure read projection and no
-/// writer; only [`release_series_market_link_failure_v1`] may later consume it
-/// to prove that the same prestate was released.
+/// writable. The compact returned value commits the exact hostile data,
+/// authentication, semantic, binding, and session facts but contains no writer;
+/// only [`release_series_market_link_failure_v2`] may later consume it to prove
+/// that the same prestate was released.
 pub(crate) fn authenticate_writable_failure_resolution_link_v1(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
@@ -6413,7 +6655,6 @@ pub(crate) fn authenticate_writable_failure_resolution_link_v1(
         data_id: live.data_id(),
         authentication_id: live.authentication_id(),
         semantic_id,
-        state,
         market_root_account: Pubkey::new_from_array(binding.market_root_account_id.bytes()),
         market_binding_id,
         series_plan_id: binding.series_plan_id,
@@ -6423,6 +6664,7 @@ pub(crate) fn authenticate_writable_failure_resolution_link_v1(
         source_occurrence_id: binding.source_occurrence_id,
         transition_sequence: state.transition_sequence(),
         failure_sessions_started: state.failure_sessions_started(),
+        active_failure_sessions: state.active_failure_sessions(),
         failure_session_transcript_id,
     };
     authenticated.id =
@@ -6431,18 +6673,153 @@ pub(crate) fn authenticate_writable_failure_resolution_link_v1(
     Ok(authenticated)
 }
 
+/// Hostile-authenticate the exact unresolved read-only root and writable
+/// pinned link for the finite exhausted-session archive path.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_writable_failure_exhausted_link_v2(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    root: AuthenticatedMarketLifecycleRootV1<'_>,
+    link_account: &AccountInfo<'_>,
+    root_output: &mut MarketLifecycleRootAccountV1,
+    link_output: &mut SeriesMarketLinkAccountV1,
+) -> Outcome<AuthenticatedWritableFailureSessionReleaseLinkV2> {
+    let cached_binding = root.state().binding();
+    let live_root = authenticate_market_lifecycle_root_v1(
+        program_id,
+        root_account,
+        cached_binding.market_instance_id,
+        cached_binding.generation,
+        false,
+        root_output,
+    )?;
+    let root_binding = live_root.state().binding();
+    let root_binding_id = root_binding
+        .id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let root_semantic_id = live_root
+        .state()
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require_unresolved_market_resolution_v1(
+        live_root.state().resolution_semantic_id(),
+        live_root.state().resolution_data_id(),
+        live_root.state().resolution_activation_receipt_id(),
+    )?;
+    require(
+        !root.is_writable()
+            && !live_root.is_writable()
+            && live_root.account() == root.account()
+            && live_root.owner_program() == root.owner_program()
+            && live_root.state() == root.state()
+            && live_root.observed_lamports() == root.observed_lamports()
+            && live_root.data_id() == root.data_id()
+            && live_root.authentication_id() == root.authentication_id()
+            && live_root.state().phase() == MarketLifecyclePhaseV1::Active
+            && root_account.key != link_account.key,
+        ClutchError::MismatchedState,
+    )?;
+
+    let data = link_account
+        .try_borrow_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    SeriesMarketLinkAccountV1::decode_into(&data, link_output)?;
+    let decoded_binding = link_output.state.binding();
+    drop(data);
+    let link = authenticate_series_market_link_v1(
+        program_id,
+        link_account,
+        decoded_binding.series_plan_id,
+        decoded_binding.ordinal,
+        root_binding.market_instance_id,
+        root_binding.generation,
+        live_root.account(),
+        true,
+        link_output,
+    )?;
+    let state = *link.state();
+    let binding = state.binding();
+    let semantic_id = state
+        .semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let failure_session_transcript_id = state.failure_session_transcript_id();
+    require(
+        link.is_writable()
+            && state.phase() == SeriesMarketLinkPhaseV1::Active
+            && state.active_failure_sessions() == 1
+            && state.failure_sessions_started() != 0
+            && !failure_session_transcript_id.is_zero()
+            && binding.market_root_account_id.bytes() == live_root.account().to_bytes()
+            && binding.market_binding_id == root_binding_id
+            && binding.market_instance_id == root_binding.market_instance_id
+            && binding.generation == root_binding.generation,
+        ClutchError::MismatchedState,
+    )?;
+    let id = ContentId::from_bytes(
+        solana_sha256_hasher::hashv(&[
+            SERIES_FAILURE_EXHAUSTED_LINK_PREAUTHORIZATION_DOMAIN_V2,
+            &[FailureSessionReleaseDispositionV2::Exhausted.wire_byte()],
+            program_id.as_ref(),
+            live_root.account().as_ref(),
+            &live_root.owner_program().to_bytes(),
+            &live_root.observed_lamports().to_le_bytes(),
+            &live_root.data_id().bytes(),
+            &live_root.authentication_id().bytes(),
+            &root_semantic_id.bytes(),
+            link.account().as_ref(),
+            &link.owner_program().to_bytes(),
+            &link.observed_lamports().to_le_bytes(),
+            &link.data_id().bytes(),
+            &link.authentication_id().bytes(),
+            &semantic_id.bytes(),
+            &root_binding_id.bytes(),
+            &binding.series_plan_id.bytes(),
+            &binding.ordinal.to_le_bytes(),
+            &binding.market_instance_id.bytes(),
+            &binding.generation.to_le_bytes(),
+            &binding.source_occurrence_id.bytes(),
+            &state.transition_sequence().to_le_bytes(),
+            &state.failure_sessions_started().to_le_bytes(),
+            &failure_session_transcript_id.bytes(),
+        ])
+        .to_bytes(),
+    );
+    require_live_content_id(id)?;
+    Ok(AuthenticatedWritableFailureSessionReleaseLinkV2::Exhausted(
+        AuthenticatedWritableFailureExhaustedLinkV2 {
+            id,
+            root_account: live_root.account(),
+            link_account: link.account(),
+            owner_program: link.owner_program(),
+            observed_lamports: link.observed_lamports(),
+            data_id: link.data_id(),
+            authentication_id: link.authentication_id(),
+            semantic_id,
+            market_binding_id: root_binding_id,
+            series_plan_id: binding.series_plan_id,
+            ordinal: binding.ordinal,
+            market_instance_id: binding.market_instance_id,
+            generation: binding.generation,
+            source_occurrence_id: binding.source_occurrence_id,
+            transition_sequence: state.transition_sequence(),
+            failure_sessions_started: state.failure_sessions_started(),
+            failure_session_transcript_id,
+        },
+    ))
+}
+
 /// Release one exact subordinate Failure session only after its terminal cell
 /// was appended to durable market history and reset to canonical Idle.
-pub(crate) fn release_series_market_link_failure_v1<
+pub(crate) fn release_series_market_link_failure_v2<
     A: AuthenticatedSeriesFailureArchivePostwriteV2 + ?Sized,
 >(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     authenticated: AuthenticatedSeriesMarketLinkV1<'_>,
-    resolution_link: AuthenticatedWritableFailureResolutionLinkV1,
+    release_link: &AuthenticatedWritableFailureSessionReleaseLinkV2,
     archive: &A,
     rebound_output: &mut SeriesMarketLinkAccountV1,
-) -> Outcome<AuthenticatedSeriesFailureSessionReleaseV1> {
+) -> Outcome<AuthenticatedSeriesFailureSessionReleaseV2> {
     let binding = authenticated.state().binding();
     let semantic_before = authenticated
         .state()
@@ -6462,15 +6839,19 @@ pub(crate) fn release_series_market_link_failure_v1<
     let source_occurrence_id = archive.source_occurrence_id()?;
     let session_binding_id = archive.session_binding_id()?;
     let session_terminal_receipt_id = archive.session_terminal_receipt_id()?;
-    let resolution_link_preauthorization_id =
-        archive.resolution_link_preauthorization_id()?;
+    let release_disposition = archive.release_disposition()?;
+    let release_link_preauthorization_id = archive.release_link_preauthorization_id()?;
+    require_failure_session_release_disposition_v2(
+        release_link.disposition(),
+        release_disposition,
+    )?;
     for receipt in [
         archive_postwrite_id,
         append_receipt_id,
         reset_receipt_id,
         session_binding_id,
         session_terminal_receipt_id,
-        resolution_link_preauthorization_id,
+        release_link_preauthorization_id,
     ] {
         require_live_content_id(receipt)?;
     }
@@ -6478,25 +6859,24 @@ pub(crate) fn release_series_market_link_failure_v1<
         authenticated.is_writable()
             && authenticated.state().phase() == SeriesMarketLinkPhaseV1::Active
             && authenticated.state().active_failure_sessions() == 1
-            && resolution_link.id() == resolution_link_preauthorization_id
-            && resolution_link.link_account() == *account.key
-            && resolution_link.owner_program() == *program_id
-            && resolution_link.observed_lamports() == authenticated.observed_lamports()
-            && resolution_link.data_id() == authenticated.data_id()
-            && resolution_link.authentication_id() == authentication_before
-            && resolution_link.semantic_id().content_id() == semantic_before
-            && resolution_link.state() == *authenticated.state()
-            && resolution_link.market_root_account()
+            && release_link.id() == release_link_preauthorization_id
+            && release_link.link_account() == *account.key
+            && release_link.owner_program() == *program_id
+            && release_link.observed_lamports() == authenticated.observed_lamports()
+            && release_link.data_id() == authenticated.data_id()
+            && release_link.authentication_id() == authentication_before
+            && release_link.semantic_id().content_id() == semantic_before
+            && release_link.market_root_account()
                 == Pubkey::new_from_array(binding.market_root_account_id.bytes())
-            && resolution_link.market_binding_id() == binding.market_binding_id
-            && resolution_link.series_plan_id() == binding.series_plan_id
-            && resolution_link.ordinal() == binding.ordinal
-            && resolution_link.market_instance_id() == binding.market_instance_id
-            && resolution_link.generation() == binding.generation
-            && resolution_link.source_occurrence_id() == binding.source_occurrence_id
-            && resolution_link.transition_sequence() == transition_sequence_before
-            && resolution_link.failure_sessions_started() == failure_sessions_started_before
-            && resolution_link.failure_session_transcript_id()
+            && release_link.market_binding_id() == binding.market_binding_id
+            && release_link.series_plan_id() == binding.series_plan_id
+            && release_link.ordinal() == binding.ordinal
+            && release_link.market_instance_id() == binding.market_instance_id
+            && release_link.generation() == binding.generation
+            && release_link.source_occurrence_id() == binding.source_occurrence_id
+            && release_link.transition_sequence() == transition_sequence_before
+            && release_link.failure_sessions_started() == failure_sessions_started_before
+            && release_link.failure_session_transcript_id()
                 == failure_session_transcript_before
             && failure_session_transcript_before == session_binding_id
             && binding.market_instance_id == market_instance_id
@@ -6508,7 +6888,7 @@ pub(crate) fn release_series_market_link_failure_v1<
             && session_terminal_receipt_id != session_binding_id,
         ClutchError::MismatchedState,
     )?;
-    archive.authenticate_series_failure_archive_postwrite_v2(
+    archive.authenticate_series_failure_archive_release_postwrite_v2(
         archive_postwrite_id,
         append_receipt_id,
         reset_receipt_id,
@@ -6517,7 +6897,8 @@ pub(crate) fn release_series_market_link_failure_v1<
         source_occurrence_id,
         session_binding_id,
         session_terminal_receipt_id,
-        resolution_link_preauthorization_id,
+        release_disposition,
+        release_link_preauthorization_id,
     )?;
     let successor = authenticated
         .state()
@@ -6550,7 +6931,7 @@ pub(crate) fn release_series_market_link_failure_v1<
     )?;
     let id = ContentId::from_bytes(
         solana_sha256_hasher::hashv(&[
-            SERIES_FAILURE_RELEASE_AUTHENTICATION_DOMAIN_V1,
+            SERIES_FAILURE_RELEASE_AUTHENTICATION_DOMAIN_V2,
             account.key.as_ref(),
             &authentication_before.bytes(),
             &rebound.authentication_id().bytes(),
@@ -6564,7 +6945,8 @@ pub(crate) fn release_series_market_link_failure_v1<
             &archive_postwrite_id.bytes(),
             &append_receipt_id.bytes(),
             &reset_receipt_id.bytes(),
-            &resolution_link_preauthorization_id.bytes(),
+            &[release_disposition.wire_byte()],
+            &release_link_preauthorization_id.bytes(),
             &binding.series_plan_id.bytes(),
             &binding.ordinal.to_le_bytes(),
             &binding.market_instance_id.bytes(),
@@ -6574,7 +6956,7 @@ pub(crate) fn release_series_market_link_failure_v1<
         .to_bytes(),
     );
     require_live_content_id(id)?;
-    Ok(AuthenticatedSeriesFailureSessionReleaseV1 {
+    Ok(AuthenticatedSeriesFailureSessionReleaseV2 {
         id,
         link_account: *account.key,
         link_authentication_before: authentication_before,
@@ -6589,7 +6971,8 @@ pub(crate) fn release_series_market_link_failure_v1<
         archive_postwrite_id,
         append_receipt_id,
         reset_receipt_id,
-        resolution_link_preauthorization_id,
+        release_link_preauthorization_id,
+        release_disposition,
     })
 }
 
@@ -6627,7 +7010,6 @@ mod adversarial_resolution_repin_tests {
             data_id: id(43),
             authentication_id: id(44),
             semantic_id: SeriesMarketLinkV1Id::from_bytes([45; 32]),
-            state: SeriesMarketLinkV1::decode_buffer(),
             market_root_account: Pubkey::new_from_array([46; 32]),
             market_binding_id: id(47),
             series_plan_id: SeriesPlanV5Id::from_bytes([48; 32]),
@@ -6637,6 +7019,7 @@ mod adversarial_resolution_repin_tests {
             source_occurrence_id: SourceOccurrenceV1Id::from_bytes([52; 32]),
             transition_sequence: 53,
             failure_sessions_started: 54,
+            active_failure_sessions: 1,
             failure_session_transcript_id: id(55),
         }
     }
@@ -6847,7 +7230,7 @@ mod adversarial_resolution_repin_tests {
         let preauth = source
             .split("pub(crate) fn authenticate_writable_failure_resolution_link_v1")
             .nth(1)
-            .and_then(|value| value.split("/// Release one exact subordinate").next())
+            .and_then(|value| value.split("/// Hostile-authenticate the exact unresolved").next())
             .expect("scoped writable preauthorization");
         for guard in [
             "root.is_writable()",
@@ -6862,22 +7245,23 @@ mod adversarial_resolution_repin_tests {
             assert!(preauth.contains(guard), "missing preauth guard {guard}");
         }
         let release = source
-            .split("pub(crate) fn release_series_market_link_failure_v1")
+            .split("pub(crate) fn release_series_market_link_failure_v2")
             .nth(1)
             .and_then(|value| value.split("fn require_live_content_id").next())
             .expect("sole Product release");
         for guard in [
-            "archive.resolution_link_preauthorization_id()?",
-            "resolution_link.id() == resolution_link_preauthorization_id",
-            "resolution_link.authentication_id() == authentication_before",
-            "resolution_link.state() == *authenticated.state()",
-            "resolution_link.failure_session_transcript_id()",
+            "archive.release_link_preauthorization_id()?",
+            "release_link.id() == release_link_preauthorization_id",
+            "release_link.authentication_id() == authentication_before",
+            "release_link.failure_session_transcript_id()",
+            "archive.authenticate_series_failure_archive_release_postwrite_v2",
+            "SERIES_FAILURE_RELEASE_AUTHENTICATION_DOMAIN_V2",
+            "release_disposition.wire_byte()",
             "write_series_market_link_v1",
         ] {
             assert!(release.contains(guard), "missing release guard {guard}");
         }
     }
-
     #[test]
     fn founder_activation_has_one_non_detachable_current_outer() {
         let source = include_str!("product_market.rs");
@@ -7048,6 +7432,52 @@ mod adversarial_series_link_retirement_tests {
         let mut aliased = exact;
         aliased.neutral_lamport_sink = aliased.rent_refund_owner;
         assert!(aliased.validate().is_err());
+    }
+
+}
+
+#[cfg(test)]
+mod adversarial_failure_exhausted_release_tests {
+    use super::*;
+
+    #[test]
+    fn exhausted_release_is_disjoint_and_requires_unresolved_root_and_exact_link() {
+        assert_eq!(FailureSessionReleaseDispositionV2::Resolved.wire_byte(), 1);
+        assert_eq!(FailureSessionReleaseDispositionV2::Exhausted.wire_byte(), 2);
+        assert!(require_failure_session_release_disposition_v2(
+            FailureSessionReleaseDispositionV2::Resolved,
+            FailureSessionReleaseDispositionV2::Resolved,
+        )
+        .is_ok());
+        assert!(require_failure_session_release_disposition_v2(
+            FailureSessionReleaseDispositionV2::Exhausted,
+            FailureSessionReleaseDispositionV2::Exhausted,
+        )
+        .is_ok());
+        assert!(require_failure_session_release_disposition_v2(
+            FailureSessionReleaseDispositionV2::Resolved,
+            FailureSessionReleaseDispositionV2::Exhausted,
+        )
+        .is_err());
+
+        let source = include_str!("product_market.rs");
+        let exhausted = source
+            .split("pub(crate) fn authenticate_writable_failure_exhausted_link_v2")
+            .nth(1)
+            .and_then(|value| value.split("/// Release one exact subordinate").next())
+            .expect("typed exhausted preauthorization");
+        for guard in [
+            "!root.is_writable()",
+            "!live_root.is_writable()",
+            "require_unresolved_market_resolution_v1",
+            "live_root.authentication_id() == root.authentication_id()",
+            "SeriesMarketLinkAccountV1::decode_into(&data, link_output)?",
+            "state.active_failure_sessions() == 1",
+            "binding.market_binding_id == root_binding_id",
+            "FailureSessionReleaseDispositionV2::Exhausted.wire_byte()",
+        ] {
+            assert!(exhausted.contains(guard), "missing exhausted guard {guard}");
+        }
     }
 
 }
