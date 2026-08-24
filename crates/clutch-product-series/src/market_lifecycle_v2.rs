@@ -3337,6 +3337,28 @@ impl MarketLifecycleRootV2 {
         family_admission_sequence: u32,
         admission_receipt_id: ContentId,
     ) -> Result<Self> {
+        let mut output = Self::decode_buffer();
+        self.admit_product_family_child_into(
+            authority,
+            family,
+            family_admission_sequence,
+            admission_receipt_id,
+            &mut output,
+        )?;
+        Ok(output)
+    }
+
+    /// Frame-bounded family admission into caller-owned RootV2 storage.
+    pub fn admit_product_family_child_into<
+        A: AuthenticatedMarketFamilyAuthorityV1 + ?Sized,
+    >(
+        &self,
+        authority: &A,
+        family: MarketFamilyV1,
+        family_admission_sequence: u32,
+        admission_receipt_id: ContentId,
+        output: &mut Self,
+    ) -> Result<()> {
         self.validate()?;
         if !matches!(
             self.phase,
@@ -3350,16 +3372,13 @@ impl MarketLifecycleRootV2 {
             family_admission_sequence,
             admission_receipt_id,
         )?;
-        let next = Self {
-            transition_sequence: self
+        *output = *self;
+        output.transition_sequence = self
                 .transition_sequence
                 .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow)?,
-            product_families,
-            ..self
-        };
-        next.validate()?;
-        Ok(next)
+                .ok_or(Error::ArithmeticOverflow)?;
+        output.product_families = product_families;
+        output.validate()
     }
 
     /// Delegate one authenticated product-family child terminal transition.
@@ -3405,6 +3424,30 @@ impl MarketLifecycleRootV2 {
         fractional_policy_terminal_state_id: ContentId,
         fractional_ledger_terminal_state_id: ContentId,
     ) -> Result<Self> {
+        let mut output = Self::decode_buffer();
+        self.terminalize_fractional_family_into(
+            authority,
+            family_terminal_sequence,
+            terminal_receipt_id,
+            fractional_policy_terminal_state_id,
+            fractional_ledger_terminal_state_id,
+            &mut output,
+        )?;
+        Ok(output)
+    }
+
+    /// Frame-bounded Fractional terminal transition into caller-owned RootV2 storage.
+    pub fn terminalize_fractional_family_into<
+        A: AuthenticatedMarketFamilyAuthorityV1 + ?Sized,
+    >(
+        &self,
+        authority: &A,
+        family_terminal_sequence: u32,
+        terminal_receipt_id: ContentId,
+        fractional_policy_terminal_state_id: ContentId,
+        fractional_ledger_terminal_state_id: ContentId,
+        output: &mut Self,
+    ) -> Result<()> {
         self.validate()?;
         if !matches!(
             self.phase,
@@ -3426,20 +3469,17 @@ impl MarketLifecycleRootV2 {
             family_terminal_sequence,
             terminal_receipt_id,
         )?;
-        let next = Self {
-            transition_sequence: self
+        *output = *self;
+        output.transition_sequence = self
                 .transition_sequence
                 .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow)?,
-            product_families,
-            fractional_terminal_state_ids: [
-                fractional_policy_terminal_state_id,
-                fractional_ledger_terminal_state_id,
-            ],
-            ..self
-        };
-        next.validate()?;
-        Ok(next)
+                .ok_or(Error::ArithmeticOverflow)?;
+        output.product_families = product_families;
+        output.fractional_terminal_state_ids = [
+            fractional_policy_terminal_state_id,
+            fractional_ledger_terminal_state_id,
+        ];
+        output.validate()
     }
 
     /// Activate trading only after every shared slot is accepted and founder link admitted.

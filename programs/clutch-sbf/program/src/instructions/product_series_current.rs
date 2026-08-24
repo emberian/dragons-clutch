@@ -17,7 +17,10 @@ use clutch_product_series::{
     authenticate_market_foundation_account_graph_bytes_v3,
     AuthenticatedMarketFoundationAccountGraphBytesV3, CompiledProductSeriesBundleV6, ContentId,
     FixedCodec,
-    MarketFoundationScheduleV3, MarketFoundationSlotV3, MarketInstanceV2Id,
+    MarketFoundationAccountGraphV3, MarketFoundationScheduleV3, MarketFoundationSlotV3,
+    MarketInstanceV2Id,
+    AuthenticatedMarketFamilyAuthorityV1, MarketFamilyAggregatorV1, MarketFamilyStatusV1,
+    MarketFamilyV1,
     MarketLifecyclePhaseV2, MarketLifecycleRootV2, SeriesFundingStateV3,
     RegistryCapabilityProjectionV2,
     SeriesAttachmentPlanV5, SeriesAttachmentPlanV5Id, SeriesLifecycleReplayBindingV2Id,
@@ -39,6 +42,8 @@ use solana_pubkey::Pubkey;
 
 const SERIES_REGISTRY_AUTHENTICATION_DOMAIN_V3: &[u8] =
     b"dragons-clutch/series-registry-account-authentication/v3\0";
+const SERIES_REGISTRY_CAPABILITY_REFS_DOMAIN_V3: &[u8] =
+    b"dragons-clutch/series-registry-capability-refs/v3\0";
 const REGISTRY_CAPABILITY_AUTHENTICATION_DOMAIN_V4: &[u8] =
     b"dragons-clutch/registry-capability-authentication/v4\0";
 const SERIES_FUNDING_AUTHENTICATION_DOMAIN_V3: &[u8] =
@@ -61,6 +66,10 @@ const SERIES_FAILURE_RELEASE_PREAUTHENTICATION_DOMAIN_V3: &[u8] =
     b"dragons-clutch/series-failure-release-preauthentication/v3\0";
 const SERIES_FAILURE_RELEASE_AUTHENTICATION_DOMAIN_V3: &[u8] =
     b"dragons-clutch/series-failure-release-authentication/v3\0";
+const PRODUCT_FRACTIONAL_ADMISSION_AUTHENTICATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/product-fractional-admission/v2\0";
+const PRODUCT_FRACTIONAL_TERMINAL_AUTHENTICATION_DOMAIN_V2: &[u8] =
+    b"dragons-clutch/sbf/product-fractional-terminal/v2\0";
 
 /// Exact current 0x7f/version3 registry authentication.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -82,6 +91,44 @@ impl AuthenticatedSeriesRegistryAccountV3 {
     pub(crate) const fn authentication_id(self) -> ContentId { self.authentication_id }
 }
 
+/// Private exact capability references projected only from hostile RegistryV3.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedSeriesRegistryCapabilityRefsV3 {
+    id: ContentId,
+    series_registry_account: Pubkey,
+    series_registry_authentication_id: ContentId,
+    series_plan_id: SeriesPlanV5Id,
+    funding_terms_id: clutch_product_series::SeriesFundingTermsV2Id,
+    registry_release_id: ContentId,
+    capability_profile_id: ContentId,
+    compiler_bundle_id: clutch_product_series::CompiledProductSeriesBundleV6Id,
+}
+
+impl AuthenticatedSeriesRegistryCapabilityRefsV3 {
+    pub(crate) const fn id(self) -> ContentId { self.id }
+    pub(crate) const fn series_registry_account(self) -> Pubkey {
+        self.series_registry_account
+    }
+    pub(crate) const fn series_registry_authentication_id(self) -> ContentId {
+        self.series_registry_authentication_id
+    }
+    pub(crate) const fn series_plan_id(self) -> SeriesPlanV5Id { self.series_plan_id }
+    pub(crate) const fn funding_terms_id(
+        self,
+    ) -> clutch_product_series::SeriesFundingTermsV2Id {
+        self.funding_terms_id
+    }
+    pub(crate) const fn registry_release_id(self) -> ContentId { self.registry_release_id }
+    pub(crate) const fn capability_profile_id(self) -> ContentId {
+        self.capability_profile_id
+    }
+    pub(crate) const fn compiler_bundle_id(
+        self,
+    ) -> clutch_product_series::CompiledProductSeriesBundleV6Id {
+        self.compiler_bundle_id
+    }
+}
+
 /// Exact RegistryV3-bound ReleaseV2/ProfileV4 loader authority.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedRegistryCapabilityV4 {
@@ -95,6 +142,8 @@ pub(crate) struct AuthenticatedRegistryCapabilityV4 {
     programdata_account: Pubkey,
     release_artifact_account: Pubkey,
     profile_artifact_account: Pubkey,
+    release: clutch_product_series::RegistryProgramReleaseV2,
+    profile: clutch_product_series::RegistryCapabilityProfileV4,
     projection: RegistryCapabilityProjectionV2,
     programdata_sha256: ContentId,
 }
@@ -126,6 +175,12 @@ impl AuthenticatedRegistryCapabilityV4 {
     pub(crate) const fn profile_artifact_account(&self) -> Pubkey {
         self.profile_artifact_account
     }
+    pub(crate) const fn release(&self) -> clutch_product_series::RegistryProgramReleaseV2 {
+        self.release
+    }
+    pub(crate) const fn profile(&self) -> clutch_product_series::RegistryCapabilityProfileV4 {
+        self.profile
+    }
     pub(crate) const fn registry_release_id(&self) -> ContentId {
         self.projection.registry_release_id
     }
@@ -136,6 +191,38 @@ impl AuthenticatedRegistryCapabilityV4 {
         self.projection
     }
     pub(crate) const fn programdata_sha256(&self) -> ContentId { self.programdata_sha256 }
+    pub(crate) const fn semantic_owners(
+        &self,
+    ) -> clutch_product_series::CapabilitySemanticOwnersV2 {
+        self.profile.rules.semantic_owners
+    }
+    pub(crate) const fn realm_collateral(
+        &self,
+    ) -> clutch_product_series::RealmCollateralProjectionV1 {
+        self.profile.rules.realm_collateral
+    }
+    pub(crate) const fn statistic_registry_value(&self) -> u16 {
+        self.profile.rules.statistic_registry_value
+    }
+    pub(crate) const fn resolved_statistic(
+        &self,
+    ) -> clutch_source_plane_v3::StatisticKindV3 {
+        self.profile.rules.resolved_statistic
+    }
+    pub(crate) const fn coverage_policy_registry_value(&self) -> u16 {
+        self.profile.rules.coverage_policy_registry_value
+    }
+    pub(crate) const fn ambiguity_policy_registry_value(&self) -> u8 {
+        self.profile.rules.ambiguity_policy_registry_value
+    }
+    pub(crate) const fn edge_policy_registry_value(&self) -> u8 {
+        self.profile.rules.edge_policy_registry_value
+    }
+    pub(crate) const fn resolved_edge_policy(
+        &self,
+    ) -> clutch_product_series::QuantizedEdgePolicyV1 {
+        self.profile.rules.resolved_edge_policy
+    }
 }
 
 /// Exact current 0x80/version3 funding authentication.
@@ -716,6 +803,580 @@ impl AuthenticatedSeriesFailureSessionReleaseV3 {
     }
 }
 
+/// Default-refusing current Fractional founding postwrite owner.
+pub(crate) trait AuthenticatedProductFractionalFamilyAdmissionOwnerV2 {
+    fn admission_receipt_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    fn verification_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    fn postwrite_authentication_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    fn policy_state_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    fn ledger_state_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    fn claim_ledger_before_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    fn claim_ledger_after_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    fn claim_ledger_latch_transition_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_product_fractional_family_admission_owner_v2(
+        &self,
+        _market_instance_id: MarketInstanceV2Id,
+        _generation: u64,
+        _policy_account: Pubkey,
+        _policy_state_id: ContentId,
+        _ledger_account: Pubkey,
+        _ledger_state_id: ContentId,
+        _claim_ledger_account: Pubkey,
+        _claim_ledger_before_id: ContentId,
+        _claim_ledger_after_id: ContentId,
+        _claim_ledger_latch_transition_id: ContentId,
+        _claim_issuance_binding_id: ContentId,
+        _runtime_release_id: ContentId,
+        _capability_profile_id: ContentId,
+        _resolution_account: Pubkey,
+        _resolution_semantic_id: ContentId,
+        _resolution_data_id: ContentId,
+        _native_claim_basis_id: ContentId,
+        _admission_receipt_id: ContentId,
+        _verification_id: ContentId,
+        _postwrite_authentication_id: ContentId,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+}
+
+/// Default-refusing current Fractional terminal postwrite owner.
+pub(crate) trait AuthenticatedProductFractionalFamilyTerminalOwnerV2 {
+    fn terminal_receipt_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    fn verification_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    fn postwrite_authentication_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    fn policy_terminal_state_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    fn ledger_terminal_state_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    fn claim_ledger_post_state_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    fn claim_ledger_transition_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    fn fractional_release_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    fn claim_release_receipt_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    fn rent_disposition_id(&self) -> Outcome<ContentId> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_product_fractional_family_terminal_owner_v2(
+        &self,
+        _market_instance_id: MarketInstanceV2Id,
+        _generation: u64,
+        _policy_account: Pubkey,
+        _policy_terminal_state_id: ContentId,
+        _ledger_account: Pubkey,
+        _ledger_terminal_state_id: ContentId,
+        _claim_ledger_account: Pubkey,
+        _claim_ledger_post_state_id: ContentId,
+        _claim_ledger_transition_id: ContentId,
+        _fractional_release_id: ContentId,
+        _claim_release_receipt_id: ContentId,
+        _rent_disposition_id: ContentId,
+        _resolution_account: Pubkey,
+        _resolution_semantic_id: ContentId,
+        _resolution_data_id: ContentId,
+        _native_claim_basis_id: ContentId,
+        _terminal_receipt_id: ContentId,
+        _verification_id: ContentId,
+        _postwrite_authentication_id: ContentId,
+    ) -> Outcome<()> {
+        Err(Refusal::Adapter(ClutchError::MismatchedState))
+    }
+}
+
+/// Hostile root postwrite for the sole current Fractional admission.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedProductFractionalFamilyAdmissionV2 {
+    id: ContentId,
+    root_account: Pubkey,
+    root_authentication_before: ContentId,
+    root_authentication_after: ContentId,
+    root_semantic_before: ContentId,
+    root_semantic_after: ContentId,
+    admission_receipt_id: ContentId,
+    verification_id: ContentId,
+    postwrite_authentication_id: ContentId,
+    policy_state_id: ContentId,
+    ledger_state_id: ContentId,
+    claim_ledger_before_id: ContentId,
+    claim_ledger_after_id: ContentId,
+    claim_ledger_latch_transition_id: ContentId,
+}
+
+impl AuthenticatedProductFractionalFamilyAdmissionV2 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn root_account(&self) -> Pubkey { self.root_account }
+    pub(crate) const fn root_authentication_before(&self) -> ContentId {
+        self.root_authentication_before
+    }
+    pub(crate) const fn root_authentication_after(&self) -> ContentId {
+        self.root_authentication_after
+    }
+    pub(crate) const fn root_semantic_before(&self) -> ContentId {
+        self.root_semantic_before
+    }
+    pub(crate) const fn root_semantic_after(&self) -> ContentId {
+        self.root_semantic_after
+    }
+    pub(crate) const fn admission_receipt_id(&self) -> ContentId {
+        self.admission_receipt_id
+    }
+    pub(crate) const fn verification_id(&self) -> ContentId { self.verification_id }
+    pub(crate) const fn postwrite_authentication_id(&self) -> ContentId {
+        self.postwrite_authentication_id
+    }
+    pub(crate) const fn policy_state_id(&self) -> ContentId { self.policy_state_id }
+    pub(crate) const fn ledger_state_id(&self) -> ContentId { self.ledger_state_id }
+    pub(crate) const fn claim_ledger_before_id(&self) -> ContentId {
+        self.claim_ledger_before_id
+    }
+    pub(crate) const fn claim_ledger_after_id(&self) -> ContentId {
+        self.claim_ledger_after_id
+    }
+    pub(crate) const fn claim_ledger_latch_transition_id(&self) -> ContentId {
+        self.claim_ledger_latch_transition_id
+    }
+}
+
+/// Hostile root postwrite for the sole current Fractional terminal.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct AuthenticatedProductFractionalFamilyTerminalV2 {
+    id: ContentId,
+    root_account: Pubkey,
+    root_authentication_before: ContentId,
+    root_authentication_after: ContentId,
+    root_semantic_before: ContentId,
+    root_semantic_after: ContentId,
+    terminal_receipt_id: ContentId,
+    verification_id: ContentId,
+    postwrite_authentication_id: ContentId,
+    policy_terminal_state_id: ContentId,
+    ledger_terminal_state_id: ContentId,
+    claim_ledger_post_state_id: ContentId,
+    claim_ledger_transition_id: ContentId,
+    fractional_release_id: ContentId,
+    claim_release_receipt_id: ContentId,
+    rent_disposition_id: ContentId,
+}
+
+impl AuthenticatedProductFractionalFamilyTerminalV2 {
+    pub(crate) const fn id(&self) -> ContentId { self.id }
+    pub(crate) const fn root_account(&self) -> Pubkey { self.root_account }
+    pub(crate) const fn root_authentication_before(&self) -> ContentId {
+        self.root_authentication_before
+    }
+    pub(crate) const fn root_authentication_after(&self) -> ContentId {
+        self.root_authentication_after
+    }
+    pub(crate) const fn root_semantic_before(&self) -> ContentId {
+        self.root_semantic_before
+    }
+    pub(crate) const fn root_semantic_after(&self) -> ContentId {
+        self.root_semantic_after
+    }
+    pub(crate) const fn terminal_receipt_id(&self) -> ContentId {
+        self.terminal_receipt_id
+    }
+    pub(crate) const fn verification_id(&self) -> ContentId { self.verification_id }
+    pub(crate) const fn postwrite_authentication_id(&self) -> ContentId {
+        self.postwrite_authentication_id
+    }
+    pub(crate) const fn policy_terminal_state_id(&self) -> ContentId {
+        self.policy_terminal_state_id
+    }
+    pub(crate) const fn ledger_terminal_state_id(&self) -> ContentId {
+        self.ledger_terminal_state_id
+    }
+    pub(crate) const fn claim_ledger_post_state_id(&self) -> ContentId {
+        self.claim_ledger_post_state_id
+    }
+    pub(crate) const fn claim_ledger_transition_id(&self) -> ContentId {
+        self.claim_ledger_transition_id
+    }
+    pub(crate) const fn fractional_release_id(&self) -> ContentId {
+        self.fractional_release_id
+    }
+    pub(crate) const fn claim_release_receipt_id(&self) -> ContentId {
+        self.claim_release_receipt_id
+    }
+    pub(crate) const fn rent_disposition_id(&self) -> ContentId { self.rent_disposition_id }
+}
+
+struct ExactFractionalFamilyAuthorityV2 {
+    market_instance_id: MarketInstanceV2Id,
+    generation: u64,
+    fractional_root_id: ContentId,
+    sequence: u32,
+    receipt_id: ContentId,
+    terminal: bool,
+}
+
+impl AuthenticatedMarketFamilyAuthorityV1 for ExactFractionalFamilyAuthorityV2 {
+    fn authenticate_admission(
+        &self,
+        current: &MarketFamilyAggregatorV1,
+        family: MarketFamilyV1,
+        family_root_id: ContentId,
+        family_admission_sequence: u32,
+        admission_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        if self.terminal
+            || family != MarketFamilyV1::Fractional
+            || current.binding().market_instance_id != self.market_instance_id
+            || current.binding().generation != self.generation
+            || family_root_id != self.fractional_root_id
+            || family_admission_sequence != self.sequence
+            || admission_receipt_id != self.receipt_id
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+
+    fn authenticate_terminal(
+        &self,
+        current: &MarketFamilyAggregatorV1,
+        family: MarketFamilyV1,
+        family_root_id: ContentId,
+        family_terminal_sequence: u32,
+        terminal_receipt_id: ContentId,
+    ) -> clutch_product_series::Result<()> {
+        if !self.terminal
+            || family != MarketFamilyV1::Fractional
+            || current.binding().market_instance_id != self.market_instance_id
+            || current.binding().generation != self.generation
+            || family_root_id != self.fractional_root_id
+            || family_terminal_sequence != self.sequence
+            || terminal_receipt_id != self.receipt_id
+        {
+            return Err(clutch_product_series::Error::UnauthenticatedAuthority);
+        }
+        Ok(())
+    }
+}
+
+/// Consume the exact current a4/a5/ClaimLedger postwrite and admit Fractional
+/// in RootV2. No raw root successor or caller-shaped family receipt is exposed.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn consume_fractional_family_admission_postwrite_v2<'next, A>(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    authenticated: AuthenticatedMarketLifecycleRootV2<'_>,
+    owner: &A,
+    schedule: &MarketFoundationScheduleV3,
+    graph: &MarketFoundationAccountGraphV3,
+    successor_output: &mut MarketLifecycleRootV2,
+    rebound_output: &'next mut MarketLifecycleRootAccountV2,
+) -> Outcome<(
+    AuthenticatedMarketLifecycleRootV2<'next>,
+    AuthenticatedProductFractionalFamilyAdmissionV2,
+)>
+where
+    A: AuthenticatedProductFractionalFamilyAdmissionOwnerV2 + ?Sized,
+{
+    let current = authenticated.state();
+    let binding = current.binding();
+    let family = current.product_families().family(MarketFamilyV1::Fractional);
+    let fractional_root_id = current.product_families().binding()
+        .family_root_id(MarketFamilyV1::Fractional);
+    let schedule_id = schedule.id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let graph_id = graph.id(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let policy_account = graph.account(MarketFoundationSlotV3::FractionalPolicy)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let ledger_account = graph.account(MarketFoundationSlotV3::FractionalLedger)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let claim_ledger_account = graph.account(MarketFoundationSlotV3::ClaimLedger)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let resolution_account = graph.account(MarketFoundationSlotV3::ResolutionV5)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let admission_receipt_id = owner.admission_receipt_id()?;
+    let verification_id = owner.verification_id()?;
+    let postwrite_authentication_id = owner.postwrite_authentication_id()?;
+    let policy_state_id = owner.policy_state_id()?;
+    let ledger_state_id = owner.ledger_state_id()?;
+    let claim_ledger_before_id = owner.claim_ledger_before_id()?;
+    let claim_ledger_after_id = owner.claim_ledger_after_id()?;
+    let claim_ledger_latch_transition_id = owner.claim_ledger_latch_transition_id()?;
+    for id in [admission_receipt_id, verification_id, postwrite_authentication_id,
+        policy_state_id, ledger_state_id, claim_ledger_before_id, claim_ledger_after_id,
+        claim_ledger_latch_transition_id, current.resolution_semantic_id(),
+        current.resolution_data_id(), current.resolution_activation_receipt_id()] {
+        require_live(id)?;
+    }
+    require(authenticated.is_writable() && root_account.is_writable
+        && current.phase() == MarketLifecyclePhaseV2::Active
+        && binding.foundation_schedule_id == schedule_id
+        && binding.foundation_account_graph_id == graph_id
+        && graph.market_instance_id == binding.market_instance_id
+        && graph.generation == binding.generation
+        && fractional_root_id == policy_account
+        && binding.resolution_account_id == resolution_account
+        && family.status() == MarketFamilyStatusV1::EnabledNeverFounded
+        && family.counts().admitted == 0 && family.counts().live == 0
+        && family.counts().terminal == 0
+        && policy_account != ledger_account && policy_account != claim_ledger_account
+        && ledger_account != claim_ledger_account
+        && policy_state_id != ledger_state_id
+        && claim_ledger_before_id != claim_ledger_after_id
+        && admission_receipt_id != verification_id
+        && admission_receipt_id != postwrite_authentication_id
+        && verification_id != postwrite_authentication_id,
+        ClutchError::MismatchedState)?;
+    owner.authenticate_product_fractional_family_admission_owner_v2(
+        binding.market_instance_id, binding.generation,
+        Pubkey::new_from_array(policy_account.bytes()), policy_state_id,
+        Pubkey::new_from_array(ledger_account.bytes()), ledger_state_id,
+        Pubkey::new_from_array(claim_ledger_account.bytes()), claim_ledger_before_id,
+        claim_ledger_after_id, claim_ledger_latch_transition_id,
+        binding.claim_issuance_binding_id, binding.registry_release_id,
+        binding.capability_profile_id, Pubkey::new_from_array(resolution_account.bytes()),
+        current.resolution_semantic_id(), current.resolution_data_id(),
+        binding.native_claim_basis_id, admission_receipt_id, verification_id,
+        postwrite_authentication_id)?;
+    let semantic_before = current.semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let authentication_before = authenticated.authentication_id();
+    let sequence = family.counts().admitted;
+    let authority = ExactFractionalFamilyAuthorityV2 {
+        market_instance_id: binding.market_instance_id, generation: binding.generation,
+        fractional_root_id, sequence, receipt_id: admission_receipt_id, terminal: false,
+    };
+    current.admit_product_family_child_into(
+        &authority, MarketFamilyV1::Fractional, sequence, admission_receipt_id,
+        successor_output)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let rebound = write_market_lifecycle_root_v2(
+        program_id, root_account, authenticated, successor_output, rebound_output)?;
+    let semantic_after = rebound.state().semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let after = rebound.state().product_families().family(MarketFamilyV1::Fractional);
+    require(after.status() == MarketFamilyStatusV1::Live
+        && after.counts().admitted == 1 && after.counts().live == 1
+        && after.counts().terminal == 0,
+        ClutchError::MismatchedState)?;
+    let id = hashv(&[
+        PRODUCT_FRACTIONAL_ADMISSION_AUTHENTICATION_DOMAIN_V2, program_id.as_ref(),
+        root_account.key.as_ref(), &authentication_before.bytes(),
+        &rebound.authentication_id().bytes(), &semantic_before.bytes(),
+        &semantic_after.bytes(), &admission_receipt_id.bytes(), &verification_id.bytes(),
+        &postwrite_authentication_id.bytes(), &policy_state_id.bytes(),
+        &ledger_state_id.bytes(), &claim_ledger_before_id.bytes(),
+        &claim_ledger_after_id.bytes(), &claim_ledger_latch_transition_id.bytes(),
+        &binding.market_instance_id.bytes(), &binding.generation.to_le_bytes(),
+        &schedule_id.bytes(), &graph_id.bytes(),
+    ]);
+    require_live(id)?;
+    Ok((rebound, AuthenticatedProductFractionalFamilyAdmissionV2 {
+        id, root_account: *root_account.key, root_authentication_before: authentication_before,
+        root_authentication_after: rebound.authentication_id(), root_semantic_before: semantic_before,
+        root_semantic_after: semantic_after, admission_receipt_id, verification_id,
+        postwrite_authentication_id, policy_state_id, ledger_state_id, claim_ledger_before_id,
+        claim_ledger_after_id, claim_ledger_latch_transition_id,
+    }))
+}
+
+/// Consume the exact current a4/a5/ClaimLedger terminal postwrite and latch the
+/// Fractional terminal states in RootV2 before any family rent is disposed.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn consume_fractional_family_terminal_postwrite_v2<'next, A>(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'_>,
+    authenticated: AuthenticatedMarketLifecycleRootV2<'_>,
+    owner: &A,
+    schedule: &MarketFoundationScheduleV3,
+    graph: &MarketFoundationAccountGraphV3,
+    successor_output: &mut MarketLifecycleRootV2,
+    rebound_output: &'next mut MarketLifecycleRootAccountV2,
+) -> Outcome<(
+    AuthenticatedMarketLifecycleRootV2<'next>,
+    AuthenticatedProductFractionalFamilyTerminalV2,
+)>
+where
+    A: AuthenticatedProductFractionalFamilyTerminalOwnerV2 + ?Sized,
+{
+    let current = authenticated.state();
+    let binding = current.binding();
+    let family = current.product_families().family(MarketFamilyV1::Fractional);
+    let fractional_root_id = current.product_families().binding()
+        .family_root_id(MarketFamilyV1::Fractional);
+    let schedule_id = schedule.id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let graph_id = graph.id(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let policy_account = graph.account(MarketFoundationSlotV3::FractionalPolicy)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let ledger_account = graph.account(MarketFoundationSlotV3::FractionalLedger)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let claim_ledger_account = graph.account(MarketFoundationSlotV3::ClaimLedger)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let resolution_account = graph.account(MarketFoundationSlotV3::ResolutionV5)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let terminal_receipt_id = owner.terminal_receipt_id()?;
+    let verification_id = owner.verification_id()?;
+    let postwrite_authentication_id = owner.postwrite_authentication_id()?;
+    let policy_terminal_state_id = owner.policy_terminal_state_id()?;
+    let ledger_terminal_state_id = owner.ledger_terminal_state_id()?;
+    let claim_ledger_post_state_id = owner.claim_ledger_post_state_id()?;
+    let claim_ledger_transition_id = owner.claim_ledger_transition_id()?;
+    let fractional_release_id = owner.fractional_release_id()?;
+    let claim_release_receipt_id = owner.claim_release_receipt_id()?;
+    let rent_disposition_id = owner.rent_disposition_id()?;
+    for id in [terminal_receipt_id, verification_id, postwrite_authentication_id,
+        policy_terminal_state_id, ledger_terminal_state_id, claim_ledger_post_state_id,
+        claim_ledger_transition_id, fractional_release_id, claim_release_receipt_id,
+        rent_disposition_id, current.resolution_semantic_id(), current.resolution_data_id(),
+        current.resolution_activation_receipt_id()] {
+        require_live(id)?;
+    }
+    require(authenticated.is_writable() && root_account.is_writable
+        && matches!(current.phase(), MarketLifecyclePhaseV2::Active | MarketLifecyclePhaseV2::Retiring)
+        && binding.foundation_schedule_id == schedule_id
+        && binding.foundation_account_graph_id == graph_id
+        && graph.market_instance_id == binding.market_instance_id
+        && graph.generation == binding.generation
+        && fractional_root_id == policy_account
+        && binding.resolution_account_id == resolution_account
+        && fractional_release_id == binding.registry_release_id
+        && family.status() == MarketFamilyStatusV1::Live
+        && family.counts().admitted == 1 && family.counts().live == 1
+        && family.counts().terminal == 0
+        && policy_account != ledger_account && policy_account != claim_ledger_account
+        && ledger_account != claim_ledger_account
+        && policy_terminal_state_id != ledger_terminal_state_id
+        && terminal_receipt_id != verification_id
+        && terminal_receipt_id != postwrite_authentication_id
+        && terminal_receipt_id != claim_release_receipt_id
+        && verification_id != postwrite_authentication_id
+        && verification_id != claim_release_receipt_id
+        && postwrite_authentication_id != claim_release_receipt_id,
+        ClutchError::MismatchedState)?;
+    owner.authenticate_product_fractional_family_terminal_owner_v2(
+        binding.market_instance_id, binding.generation,
+        Pubkey::new_from_array(policy_account.bytes()), policy_terminal_state_id,
+        Pubkey::new_from_array(ledger_account.bytes()), ledger_terminal_state_id,
+        Pubkey::new_from_array(claim_ledger_account.bytes()), claim_ledger_post_state_id,
+        claim_ledger_transition_id, fractional_release_id, claim_release_receipt_id,
+        rent_disposition_id, Pubkey::new_from_array(resolution_account.bytes()),
+        current.resolution_semantic_id(), current.resolution_data_id(),
+        binding.native_claim_basis_id, terminal_receipt_id, verification_id,
+        postwrite_authentication_id)?;
+    let semantic_before = current.semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let authentication_before = authenticated.authentication_id();
+    let sequence = family.counts().terminal;
+    let authority = ExactFractionalFamilyAuthorityV2 {
+        market_instance_id: binding.market_instance_id, generation: binding.generation,
+        fractional_root_id, sequence, receipt_id: terminal_receipt_id, terminal: true,
+    };
+    current.terminalize_fractional_family_into(
+        &authority, sequence, terminal_receipt_id,
+        policy_terminal_state_id, ledger_terminal_state_id, successor_output)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let rebound = write_market_lifecycle_root_v2(
+        program_id, root_account, authenticated, successor_output, rebound_output)?;
+    let semantic_after = rebound.state().semantic_id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let after = rebound.state().product_families().family(MarketFamilyV1::Fractional);
+    require(after.counts().admitted == 1 && after.counts().live == 0
+        && after.counts().terminal == 1,
+        ClutchError::MismatchedState)?;
+    let id = hashv(&[
+        PRODUCT_FRACTIONAL_TERMINAL_AUTHENTICATION_DOMAIN_V2, program_id.as_ref(),
+        root_account.key.as_ref(), &authentication_before.bytes(),
+        &rebound.authentication_id().bytes(), &semantic_before.bytes(),
+        &semantic_after.bytes(), &terminal_receipt_id.bytes(), &verification_id.bytes(),
+        &postwrite_authentication_id.bytes(), &policy_terminal_state_id.bytes(),
+        &ledger_terminal_state_id.bytes(), &claim_ledger_post_state_id.bytes(),
+        &claim_ledger_transition_id.bytes(), &fractional_release_id.bytes(),
+        &claim_release_receipt_id.bytes(), &rent_disposition_id.bytes(),
+        &binding.market_instance_id.bytes(), &binding.generation.to_le_bytes(),
+        &schedule_id.bytes(), &graph_id.bytes(),
+    ]);
+    require_live(id)?;
+    Ok((rebound, AuthenticatedProductFractionalFamilyTerminalV2 {
+        id, root_account: *root_account.key, root_authentication_before: authentication_before,
+        root_authentication_after: rebound.authentication_id(), root_semantic_before: semantic_before,
+        root_semantic_after: semantic_after, terminal_receipt_id, verification_id,
+        postwrite_authentication_id, policy_terminal_state_id, ledger_terminal_state_id,
+        claim_ledger_post_state_id, claim_ledger_transition_id, fractional_release_id,
+        claim_release_receipt_id, rent_disposition_id,
+    }))
+}
+
+/// Private raw RootV2 writer. All crate-visible callers derive one exact legal
+/// successor and hostile-reauthenticate the complete current and postwrite frames.
+fn write_market_lifecycle_root_v2<'next>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    authenticated: AuthenticatedMarketLifecycleRootV2<'_>,
+    successor: &MarketLifecycleRootV2,
+    rebound_output: &'next mut MarketLifecycleRootAccountV2,
+) -> Outcome<AuthenticatedMarketLifecycleRootV2<'next>> {
+    let binding = authenticated.state().binding();
+    require(account.is_writable && *account.key == authenticated.account()
+        && account.owner == program_id && successor.binding() == binding,
+        ClutchError::MismatchedState)?;
+    let live = authenticate_market_lifecycle_root_v2(
+        program_id, account, binding.market_instance_id, binding.generation, true,
+        rebound_output)?;
+    require(live.account() == authenticated.account()
+        && live.owner_program() == authenticated.owner_program()
+        && live.value() == authenticated.value()
+        && live.observed_lamports() == authenticated.observed_lamports()
+        && live.data_id() == authenticated.data_id()
+        && live.authentication_id() == authenticated.authentication_id(),
+        ClutchError::MismatchedState)?;
+    let rent_principal_lamports = authenticated.value().rent_principal_lamports;
+    let stored_bump = authenticated.value().stored_bump;
+    let mut data = account.try_borrow_mut_data()
+        .map_err(|_| Refusal::Adapter(ClutchError::AccountBorrowFailed))?;
+    MarketLifecycleRootAccountV2::encode_parts(
+        successor, rent_principal_lamports, stored_bump, &mut data)?;
+    drop(data);
+    let rebound = authenticate_market_lifecycle_root_v2(
+        program_id, account, binding.market_instance_id, binding.generation, true,
+        rebound_output)?;
+    require(rebound.state() == successor
+        && rebound.value().rent_principal_lamports == rent_principal_lamports
+        && rebound.value().stored_bump == stored_bump,
+        ClutchError::MismatchedState)?;
+    Ok(rebound)
+}
+
 /// Exact retained zero-data preallocation under the 47-slot owner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AuthenticatedMarketFoundationPreallocationV3 {
@@ -787,6 +1448,30 @@ pub(crate) fn authenticate_series_registry_account_v3(
         writable: account.is_writable, data_id, authentication_id })
 }
 
+/// Project the exact capability references from one already hostile-authenticated
+/// RegistryV3. This is the only current replacement for the withdrawn V2 refs.
+pub(crate) fn authenticate_series_registry_capability_refs_v3(
+    registry: AuthenticatedSeriesRegistryAccountV3,
+) -> Outcome<AuthenticatedSeriesRegistryCapabilityRefsV3> {
+    require(!registry.is_writable(), ClutchError::UnexpectedWritable)?;
+    let value = registry.value();
+    let id = hashv(&[
+        SERIES_REGISTRY_CAPABILITY_REFS_DOMAIN_V3, registry.account().as_ref(),
+        &registry.authentication_id().bytes(), &value.series_plan_id.bytes(),
+        &value.funding_terms_id.bytes(), &value.registry_release_id.bytes(),
+        &value.capability_profile_id.bytes(), &value.compiler_bundle_id.bytes(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedSeriesRegistryCapabilityRefsV3 {
+        id, series_registry_account: registry.account(),
+        series_registry_authentication_id: registry.authentication_id(),
+        series_plan_id: value.series_plan_id, funding_terms_id: value.funding_terms_id,
+        registry_release_id: value.registry_release_id,
+        capability_profile_id: value.capability_profile_id,
+        compiler_bundle_id: value.compiler_bundle_id,
+    })
+}
+
 /// Join exact RegistryV3 bytes to the live loader and immutable Release/Profile.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn authenticate_registry_capability_v4(
@@ -797,37 +1482,53 @@ pub(crate) fn authenticate_registry_capability_v4(
     release_artifact: &AccountInfo<'_>,
     profile_artifact: &AccountInfo<'_>,
 ) -> Outcome<AuthenticatedRegistryCapabilityV4> {
-    let value = registry.value();
+    let refs = authenticate_series_registry_capability_refs_v3(registry)?;
+    authenticate_registry_capability_from_refs_v4(
+        program_id, refs, program_account, programdata_account, release_artifact,
+        profile_artifact)
+}
+
+/// Join exact RegistryV3 references to the current loader and ReleaseV2/ProfileV4.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_registry_capability_from_refs_v4(
+    program_id: &Pubkey,
+    refs: AuthenticatedSeriesRegistryCapabilityRefsV3,
+    program_account: &AccountInfo<'_>,
+    programdata_account: &AccountInfo<'_>,
+    release_artifact: &AccountInfo<'_>,
+    profile_artifact: &AccountInfo<'_>,
+) -> Outcome<AuthenticatedRegistryCapabilityV4> {
     let release = authenticate_registry_capability_for_registration_v3(
-        program_id, release_artifact, profile_artifact, value.registry_release_id,
-        value.capability_profile_id, program_account, programdata_account)?;
+        program_id, release_artifact, profile_artifact, refs.registry_release_id,
+        refs.capability_profile_id, program_account, programdata_account)?;
     let projection = release.projection();
-    require(projection.registry_release_id == value.registry_release_id
-        && projection.capability_profile_id == value.capability_profile_id
-        && value.compiler_bundle_id.content_id() != value.funding_terms_id.content_id()
-        && registry.account() != release.program_account()
-        && registry.account() != release.programdata_account()
-        && registry.account() != release.release_artifact_account()
-        && registry.account() != release.profile_artifact_account(),
+    require(projection.registry_release_id == refs.registry_release_id
+        && projection.capability_profile_id == refs.capability_profile_id
+        && refs.compiler_bundle_id.content_id() != refs.funding_terms_id.content_id()
+        && refs.series_registry_account != release.program_account()
+        && refs.series_registry_account != release.programdata_account()
+        && refs.series_registry_account != release.release_artifact_account()
+        && refs.series_registry_account != release.profile_artifact_account(),
         ClutchError::MismatchedState)?;
     let id = hashv(&[
         REGISTRY_CAPABILITY_AUTHENTICATION_DOMAIN_V4, program_id.as_ref(),
-        registry.account().as_ref(), &registry.authentication_id().bytes(),
-        &value.series_plan_id.bytes(), &value.funding_terms_id.bytes(),
-        &value.compiler_bundle_id.bytes(), &value.registry_release_id.bytes(),
-        &value.capability_profile_id.bytes(), release.program_account().as_ref(),
+        refs.series_registry_account.as_ref(), &refs.series_registry_authentication_id.bytes(),
+        &refs.id.bytes(), &refs.series_plan_id.bytes(), &refs.funding_terms_id.bytes(),
+        &refs.compiler_bundle_id.bytes(), &refs.registry_release_id.bytes(),
+        &refs.capability_profile_id.bytes(), release.program_account().as_ref(),
         release.programdata_account().as_ref(), release.release_artifact_account().as_ref(),
         release.profile_artifact_account().as_ref(), &release.programdata_sha256().bytes(),
     ]);
     require_live(id)?;
     Ok(AuthenticatedRegistryCapabilityV4 {
-        id, series_registry_account: registry.account(),
-        series_registry_authentication_id: registry.authentication_id(),
-        series_plan_id: value.series_plan_id, funding_terms_id: value.funding_terms_id,
-        compiler_bundle_id: value.compiler_bundle_id, program_account: release.program_account(),
+        id, series_registry_account: refs.series_registry_account,
+        series_registry_authentication_id: refs.series_registry_authentication_id,
+        series_plan_id: refs.series_plan_id, funding_terms_id: refs.funding_terms_id,
+        compiler_bundle_id: refs.compiler_bundle_id, program_account: release.program_account(),
         programdata_account: release.programdata_account(),
         release_artifact_account: release.release_artifact_account(),
-        profile_artifact_account: release.profile_artifact_account(), projection,
+        profile_artifact_account: release.profile_artifact_account(),
+        release: release.release(), profile: release.profile(), projection,
         programdata_sha256: release.programdata_sha256(),
     })
 }
@@ -1683,6 +2384,84 @@ pub(crate) fn authenticate_market_foundation_preallocation_from_bytes_v3(
         observed_balance_lamports, rent_refund_owner, neutral_lamport_sink })
 }
 
+/// Authenticate one retained slot from a fully reconstructed typed GraphV3.
+///
+/// This overload exists for fixed account frames which reconstruct all 47
+/// roles from their canonical accounts. It derives the same private receipt as
+/// the hostile byte-preimage path and accepts no caller-supplied graph digest.
+pub(crate) fn authenticate_market_foundation_preallocation_v3(
+    root: AuthenticatedMarketLifecycleRootV2<'_>,
+    account: &AccountInfo<'_>,
+    schedule: &MarketFoundationScheduleV3,
+    graph: &MarketFoundationAccountGraphV3,
+    slot: MarketFoundationSlotV3,
+) -> Outcome<AuthenticatedMarketFoundationPreallocationV3> {
+    graph.validate(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require_canonical_market_foundation_graph_v3(root.owner_program(), root.account(), graph)?;
+    let index = slot.index().map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let bit = 1u64.checked_shl(u32::try_from(index).map_err(|_| ClutchError::Arithmetic)?)
+        .ok_or(ClutchError::Arithmetic)?;
+    require(matches!(slot,
+        MarketFoundationSlotV3::FailureReplay
+            | MarketFoundationSlotV3::FailureIntervalWork
+            | MarketFoundationSlotV3::FailureIntervalHistory
+            | MarketFoundationSlotV3::ResolutionV5
+            | MarketFoundationSlotV3::FractionalPolicy
+            | MarketFoundationSlotV3::FractionalLedger
+            | MarketFoundationSlotV3::ProductReplayAnchor)
+        && (matches!(root.state().phase(), MarketLifecyclePhaseV2::Active | MarketLifecyclePhaseV2::Retiring)
+            || (slot == MarketFoundationSlotV3::ProductReplayAnchor
+                && root.state().phase() == MarketLifecyclePhaseV2::Terminal))
+        && root.state().foundation().initialized_bitmap & bit != 0,
+        ClutchError::MismatchedState)?;
+    let binding = root.state().binding();
+    let capital = root.state().capital();
+    let schedule_id = schedule.id()
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let graph_id = graph.id(schedule)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let graph_account = graph.account(slot)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    require(schedule_id == binding.foundation_schedule_id
+        && graph_id == binding.foundation_account_graph_id
+        && graph.market_instance_id == binding.market_instance_id
+        && graph.generation == binding.generation
+        && graph_account.bytes() == account.key.to_bytes()
+        && account.is_writable && !account.is_signer && !account.executable
+        && account.owner.to_bytes() == SYSTEM_PROGRAM_ID && account.data_len() == 0,
+        ClutchError::MismatchedState)?;
+    let principal_lamports = schedule.slot_principal_lamports[index];
+    let observed_balance_lamports = account.lamports();
+    let donation_lamports = observed_balance_lamports.checked_sub(principal_lamports)
+        .ok_or(ClutchError::MismatchedState)?;
+    let rent_refund_owner = Pubkey::new_from_array(capital.rent_refund_owner.bytes());
+    let neutral_lamport_sink = Pubkey::new_from_array(capital.neutral_lamport_sink.bytes());
+    require(principal_lamports != 0 && account.key != &root.account()
+        && account.key != &rent_refund_owner && account.key != &neutral_lamport_sink,
+        ClutchError::AccountAlias)?;
+    let foundation_transcript_id = root.state().foundation().transcript_id;
+    let slot_index = u64::try_from(index).map_err(|_| ClutchError::Arithmetic)?;
+    let id = hashv(&[
+        MARKET_FOUNDATION_PREALLOCATION_AUTHENTICATION_DOMAIN_V3, root.account().as_ref(),
+        &root.authentication_id().bytes(), &binding.market_instance_id.bytes(),
+        &binding.generation.to_le_bytes(), &slot_index.to_le_bytes(), account.key.as_ref(),
+        &schedule_id.bytes(), &graph_id.bytes(), &foundation_transcript_id.bytes(),
+        &principal_lamports.to_le_bytes(), &donation_lamports.to_le_bytes(),
+        &observed_balance_lamports.to_le_bytes(), rent_refund_owner.as_ref(),
+        neutral_lamport_sink.as_ref(),
+    ]);
+    require_live(id)?;
+    Ok(AuthenticatedMarketFoundationPreallocationV3 {
+        id, root_account: root.account(), root_authentication_id: root.authentication_id(),
+        market_instance_id: binding.market_instance_id, generation: binding.generation,
+        slot, account: *account.key, foundation_schedule_id: schedule_id.content_id(),
+        foundation_account_graph_id: graph_id.content_id(), foundation_transcript_id,
+        principal_lamports, donation_lamports, observed_balance_lamports,
+        rent_refund_owner, neutral_lamport_sink,
+    })
+}
+
 fn require_canonical_market_foundation_core_v3(
     program_id: &Pubkey,
     root_account: Pubkey,
@@ -1701,6 +2480,52 @@ fn require_canonical_market_foundation_core_v3(
             seeds::general_v2_market_runtime_pda(program_id, &market_binding.bytes()).0),
         (MarketFoundationSlotV3::Hoard, seeds::hoard_v2_pda(program_id, &market).0),
         (MarketFoundationSlotV3::ClaimLedger, seeds::claim_ledger_v3_pda(program_id, &market).0),
+        (MarketFoundationSlotV3::FailureAdmissionRoot,
+            seeds::failure_market_root_v2_pda(program_id, &market, generation).0),
+        (MarketFoundationSlotV3::FailureRuntimeRoot,
+            seeds::failure_external_root_pda(program_id, &market, generation).0),
+        (MarketFoundationSlotV3::FailureReplay,
+            seeds::failure_market_replay_v2_pda(program_id, &market, generation).0),
+        (MarketFoundationSlotV3::FailureIntervalWork,
+            seeds::failure_market_interval_cell_v2_pda(program_id, &market, generation).0),
+        (MarketFoundationSlotV3::FailureIntervalHistory,
+            seeds::failure_market_interval_history_v2_pda(program_id, &market, generation).0),
+        (MarketFoundationSlotV3::ResolutionV5, seeds::resolution_v5_pda(program_id, &market).0),
+        (MarketFoundationSlotV3::ProductReplayAnchor,
+            seeds::product_market_lifecycle_replay_pda(program_id, &market, generation).0),
+        (MarketFoundationSlotV3::HoardCollateralVault,
+            seeds::hoard_token_v2_pda(program_id, &market).0),
+    ];
+    require(graph.account(MarketFoundationSlotV3::LifecycleRoot)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?.bytes()
+        == root_account.to_bytes(), ClutchError::MismatchedState)?;
+    for (slot, expected) in fixed {
+        require(graph.account(slot)
+            .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?.bytes()
+            == expected.to_bytes(), ClutchError::MismatchedState)?;
+    }
+    Ok(())
+}
+
+fn require_canonical_market_foundation_graph_v3(
+    program_id: &Pubkey,
+    root_account: Pubkey,
+    graph: &MarketFoundationAccountGraphV3,
+) -> Outcome<()> {
+    let market = graph.market_instance_id.bytes();
+    let generation = graph.generation;
+    let market_binding = graph.account(MarketFoundationSlotV3::MarketBinding)
+        .map_err(|_| Refusal::Adapter(ClutchError::MismatchedState))?;
+    let fixed = [
+        (MarketFoundationSlotV3::LifecycleRoot,
+            seeds::product_market_lifecycle_root_pda(program_id, &market, generation).0),
+        (MarketFoundationSlotV3::MarketBinding,
+            seeds::general_v2_market_binding_pda(program_id, &market).0),
+        (MarketFoundationSlotV3::MarketRuntime,
+            seeds::general_v2_market_runtime_pda(program_id, &market_binding.bytes()).0),
+        (MarketFoundationSlotV3::Hoard, seeds::hoard_v2_pda(program_id, &market).0),
+        (MarketFoundationSlotV3::ClaimLedger,
+            seeds::claim_ledger_v3_pda(program_id, &market).0),
         (MarketFoundationSlotV3::FailureAdmissionRoot,
             seeds::failure_market_root_v2_pda(program_id, &market, generation).0),
         (MarketFoundationSlotV3::FailureRuntimeRoot,
@@ -1787,5 +2612,38 @@ mod source_contract_tests {
         assert!(source.contains("session_binding_id == transcript_before"));
         assert!(source.contains("archive.authenticate_series_failure_archive_release_postwrite_v3("));
         assert!(!source.contains("pub(crate) fn write_series_market_link_v2<'next>("));
+    }
+
+    #[test]
+    fn typed_graph_preallocation_rederives_the_full_current_identity() {
+        let source = include_str!("product_series_current.rs");
+        assert!(source.contains("graph.validate(schedule)"));
+        assert!(source.contains("require_canonical_market_foundation_graph_v3("));
+        assert!(source.contains("let graph_id = graph.id(schedule)"));
+        assert!(source.contains("graph_account.bytes() == account.key.to_bytes()"));
+        assert!(!source.contains("_caller_foundation_account_graph_id"));
+    }
+
+    #[test]
+    fn current_registry_refs_are_minted_only_from_hostile_v3_authentication() {
+        let source = include_str!("product_series_current.rs");
+        assert!(source.contains(
+            "refs = authenticate_series_registry_capability_refs_v3(registry)?"
+        ));
+        assert!(source.contains("&refs.id.bytes()"));
+        assert!(source.contains("refs.compiler_bundle_id.content_id() != refs.funding_terms_id.content_id()"));
+        assert!(!source.contains("SeriesRegistryAccountV2::decode"));
+    }
+
+    #[test]
+    fn fractional_root_mutations_are_current_exact_and_narrow() {
+        let source = include_str!("product_series_current.rs");
+        assert!(source.contains("current.admit_product_family_child_into("));
+        assert!(source.contains("current.terminalize_fractional_family_into("));
+        assert!(source.contains("owner.authenticate_product_fractional_family_admission_owner_v2("));
+        assert!(source.contains("owner.authenticate_product_fractional_family_terminal_owner_v2("));
+        assert!(source.contains("claim_ledger_before_id != claim_ledger_after_id"));
+        assert!(source.contains("fractional_release_id == binding.registry_release_id"));
+        assert!(!source.contains("pub(crate) fn write_market_lifecycle_root_v2<'next>("));
     }
 }

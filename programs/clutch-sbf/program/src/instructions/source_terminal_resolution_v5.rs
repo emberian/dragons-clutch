@@ -841,6 +841,10 @@ mod tests {
     fn source_input_identity_retains_exact_result_preimage() {
         let source = include_str!("product_source_current.rs");
         let terminal = include_str!("source_terminal_resolution_v5.rs");
+        let terminal_production = terminal
+            .split("#[cfg(test)]")
+            .next()
+            .expect("Source terminal production module");
         let input = source
             .split("pub(crate) fn authenticate_source_resolution_input_v4")
             .nth(1)
@@ -850,7 +854,7 @@ mod tests {
         assert!(input.contains(
             "result_account_data_id: ContentId::from_bytes(handoff.result_account_data_id().bytes())"
         ));
-        assert!(terminal.contains("AuthenticatedSourceResolutionInputV4"));
-        assert!(!terminal.contains("AuthenticatedSourceResolutionInputV3"));
+        assert!(terminal_production.contains("AuthenticatedSourceResolutionInputV4"));
+        assert!(!terminal_production.contains("AuthenticatedSourceResolutionInputV3"));
     }
 }
