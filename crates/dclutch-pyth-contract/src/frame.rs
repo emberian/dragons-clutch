@@ -366,9 +366,9 @@ pub const fn resolution_frame_v1(kind: ResolutionFrameKindV1) -> ResolutionFrame
 
 /// Validate one exact price-resolution account list.
 ///
-/// The resolver and sponsor are the only allowed key alias. Their signer
-/// privilege may be unioned by the runtime only when those two roles alias;
-/// all writable and executable privileges remain exact.
+/// The resolver and sponsor are the only allowed key alias. Payout accounts
+/// may independently be transaction signers or fee payers without becoming
+/// protocol authorities; all writable and executable privileges remain exact.
 pub fn validate_price_resolution_frame_v1(
     accounts: &[ResolutionAccountPrivilegeV1],
 ) -> ResolutionFrameResultV1<()> {
@@ -407,34 +407,23 @@ fn validate_frame(
             return Err(ResolutionFrameErrorV1::InvalidExecutablePrivilege);
         }
     }
-    validate_signer_privileges(kind, accounts, frame.roles())?;
+    validate_signer_privileges(accounts, frame.roles())?;
     validate_aliases(kind, accounts)
 }
 
 fn validate_signer_privileges(
-    kind: ResolutionFrameKindV1,
     accounts: &[ResolutionAccountPrivilegeV1],
     roles: &[ResolutionAccountRoleV1],
 ) -> ResolutionFrameResultV1<()> {
-    for (index, (actual, required)) in accounts.iter().zip(roles).enumerate() {
-        if actual.is_signer && !required.is_signer() && !safe_signer_union(kind, index, accounts) {
+    for (actual, required) in accounts.iter().zip(roles) {
+        if actual.is_signer
+            && !required.is_signer()
+            && required.class() != ResolutionAccountClassV1::PayoutAccount
+        {
             return Err(ResolutionFrameErrorV1::UnexpectedPrivilege);
         }
     }
     Ok(())
-}
-
-fn safe_signer_union(
-    kind: ResolutionFrameKindV1,
-    index: usize,
-    accounts: &[ResolutionAccountPrivilegeV1],
-) -> bool {
-    if kind != ResolutionFrameKindV1::Price || index != 6 {
-        return false;
-    }
-    let resolver = accounts.first();
-    let sponsor = accounts.get(6);
-    matches!((resolver, sponsor), (Some(left), Some(right)) if left.key == right.key)
 }
 
 fn validate_aliases(
@@ -574,6 +563,18 @@ mod tests {
             validate_price_resolution_frame_v1(&missing_writable),
             Err(ResolutionFrameErrorV1::InsufficientPrivilege)
         );
+
+        for index in [2, 4, 7] {
+            let mut unexpected_signer = price;
+            let account = unexpected_signer
+                .get_mut(index)
+                .expect("state, immutable, and provider indices exist");
+            account.is_signer = true;
+            assert_eq!(
+                validate_price_resolution_frame_v1(&unexpected_signer),
+                Err(ResolutionFrameErrorV1::UnexpectedPrivilege)
+            );
+        }
     }
 
     #[test]
@@ -619,6 +620,15 @@ mod tests {
             Err(ResolutionFrameErrorV1::UnsafeAlias)
         );
 
+        let mut independent_price_payout = accounts(ResolutionFrameKindV1::Price);
+        let sponsor = independent_price_payout.get_mut(6).expect("sponsor exists");
+        sponsor.is_signer = true;
+        assert_eq!(
+            validate_price_resolution_frame_v1(&independent_price_payout),
+            Ok(()),
+            "a separately signed payout recipient gains no resolver authority"
+        );
+
         let mut failure = accounts(ResolutionFrameKindV1::Failure);
         let bounty_key = failure.first().expect("bounty recipient exists").key;
         let sponsor = failure.get_mut(5).expect("sponsor exists");
@@ -630,6 +640,21 @@ mod tests {
         assert_eq!(
             validate_failure_resolution_frame_v1(&failure[..6]),
             Err(ResolutionFrameErrorV1::UnsafeAlias)
+        );
+
+        let mut independent_failure_payouts = accounts(ResolutionFrameKindV1::Failure);
+        let bounty = independent_failure_payouts
+            .get_mut(0)
+            .expect("bounty recipient exists");
+        bounty.is_signer = true;
+        let sponsor = independent_failure_payouts
+            .get_mut(5)
+            .expect("sponsor exists");
+        sponsor.is_signer = true;
+        assert_eq!(
+            validate_failure_resolution_frame_v1(&independent_failure_payouts[..6]),
+            Ok(()),
+            "permissionless failure remains valid when either payout role pays fees"
         );
     }
 }
