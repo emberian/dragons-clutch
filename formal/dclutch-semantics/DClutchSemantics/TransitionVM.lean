@@ -14,8 +14,8 @@ namespace DClutch.TransitionVM
 /-- Abstract registers. Identity values support equality only; the physical
 adapter refines them to exact 32-byte public keys. -/
 structure State where
-  scalars : List Nat
-  identities : List Nat
+  scalars : Array Nat
+  identities : Array Nat
   deriving DecidableEq, Repr
 
 /-- Fixed transition instruction vocabulary. -/
@@ -35,18 +35,13 @@ inductive Op where
   | addFitsU64 (left right : Nat)
   deriving DecidableEq, Repr
 
-def replaceAt : List Nat → Nat → Nat → Option (List Nat)
-  | [], _, _ => none
-  | _ :: rest, 0, value => some (value :: rest)
-  | head :: rest, index + 1, value =>
-      (replaceAt rest index value).map (head :: ·)
-
 def scalar (state : State) (index : Nat) : Option Nat := state.scalars[index]?
 def identity (state : State) (index : Nat) : Option Nat := state.identities[index]?
 
-def setScalar (state : State) (index value : Nat) : Option State := do
-  let scalars ← replaceAt state.scalars index value
-  some { state with scalars }
+def setScalar (state : State) (index value : Nat) : Option State :=
+  if index < state.scalars.size then
+    some { state with scalars := state.scalars.setIfInBounds index value }
+  else none
 
 def require (condition : Bool) (state : State) : Option State :=
   if condition then some state else none
@@ -96,6 +91,19 @@ def step (operation : Op) (state : State) : Option State := do
 def run : List Op → State → Option State
   | [], state => some state
   | operation :: rest, state => (step operation state).bind (run rest)
+
+theorem run_append (first second : List Op) (state : State) :
+    run (first ++ second) state = (run first state).bind (run second) := by
+  induction first generalizing state with
+  | nil => rfl
+  | cons operation rest induction =>
+      simp only [List.cons_append, run]
+      cases stepped : step operation state <;> simp [induction]
+
+theorem run_append_fn (first second : List Op) :
+    run (first ++ second) = fun state => (run first state).bind (run second) := by
+  funext state
+  exact run_append first second state
 
 namespace Codec
 
