@@ -291,10 +291,15 @@ per exact page execution `E`:
 - CloseGeneral: `[Market(w), C, V, Root(w), GeneralFunding(w),
   RentCredit(w), Rent]`.
 
-Signer/writable/executable bits are exact. All accounts in one frame are
-pairwise distinct; there is one shared readonly Rent sysvar, and each generic
-raw record has its own readonly system-vacant staging cursor. No alias-based
-deduplication or caller-authored status account is accepted.
+Signer/writable/executable bits are exact. Accounts in one frame are pairwise
+distinct except that repeated executions may name the same `OwnerPosition`
+and/or the same `QuoteDestination`; those are the two physical destinations
+canonically selected by the signed order owner, and the adapter accumulates
+their page effects before proving the final account state. Cross-role aliases
+and aliases among replay, custody, escrow, page, parent, record, vacancy, and
+sysvar roles are refused. There is one shared readonly Rent sysvar, and each
+generic raw record has its own readonly system-vacant staging cursor. No
+caller-authored status account is accepted.
 
 Page-consuming instructions carry only `{candidate_id, page_id}` after the
 16-byte family header: 80 bytes exact. `CreateCandidatePage` alone carries the
