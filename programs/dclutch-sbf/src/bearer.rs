@@ -677,18 +677,18 @@ fn native_value<const N: usize>(
         token_program,
         realm,
         holder,
-        plan.amount,
-        matches!(
+        plan.amount(),
+        if matches!(
             plan.direction(),
             dclutch_bearer_contract::transition::CollateralDirectionV1::WithdrawFromHoard
-        )
-        .then(|| {
-            Ok((
+        ) {
+            Some((
                 market_account,
                 market_signer(program_id, market_account, market.root())?,
             ))
-        })
-        .transpose()?,
+        } else {
+            None
+        },
     )?;
     if authenticate_vault(
         program_id,
@@ -816,14 +816,14 @@ fn bearer_complete_set<const N: usize>(
         realm,
         holder,
         collateral.amount(),
-        (!split)
-            .then(|| {
-                Ok((
-                    market_account,
-                    market_signer(program_id, market_account, market.root())?,
-                ))
-            })
-            .transpose()?,
+        if split {
+            None
+        } else {
+            Some((
+                market_account,
+                market_signer(program_id, market_account, market.root())?,
+            ))
+        },
     )?;
     for index in 0..N {
         let mint = account(accounts, 10 + 2 * index)?;
