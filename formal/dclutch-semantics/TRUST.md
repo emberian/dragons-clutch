@@ -43,6 +43,18 @@ selected by any admitted frame whose outcome coordinate fits the physical V1
 Lean owns the compact intent and controller-instruction data structures and
 proves their encodings are exactly 136 and 304 bytes.
 
+For the Source successor model, Lean checks that the Product-owned ordered
+rational domain exhausts the ordinary line, assigns each result one selector,
+and derives a distinct final failure selector. The pure transition bind-checks
+normalized observations to the selected provider release, admits only the next
+recovery leg, refuses failure before explicit exhaustion, preserves the exact
+capability-owned work-capital partition, and emits a receipt agreeing with the
+post-payment funding state. Source effects retain the shared eight-byte header
+and sixteen-byte record geometry under a disjoint V2 role/resource profile;
+their exact decoder round trip and five-effect transition bound are checked.
+The certificate schema is data-derived, pairwise disjoint, and exactly 312
+bytes.
+
 `cumulativeFee_monotone` proves monotonicity of the concrete floor-fee function,
 and `cumulative_floor_fee_fragmentation_independent` combines it with the
 telescoping subtraction theorem. Matcher-selected fragmentation therefore
@@ -66,6 +78,10 @@ cannot change a resting order's final cumulative fee in the semantic model.
   CPI, sysvars, Token/Token-2022 semantics, rent, and transaction rollback
   (the exact claim, controller, custody, and official SPL Token ELFs now provide
   adversarial real-SVM evidence for the first account/PDA/CPI/rollback slice);
+- a proof that the Source provider adapter actually performed the selected CPI,
+  Program/ProgramData, account, parser, Clock, and normalized-evidence checks;
+- a refinement from the Source V2 Effect profile and 312-byte certificate to a
+  physical shared executor, account-role frame, hash, or SBF artifact;
 - a machine-checked refinement from the Lean effect interpreter to the Rust
   microkernel (`dclutch-effect-kernel` currently supplies cross-language vector,
   round-trip, execution, hostile-parser, late-rollback, and one concrete

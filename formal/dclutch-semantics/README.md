@@ -21,6 +21,18 @@ Rust implementation. It currently provides:
 - a reproducible 120-byte Lean-emitted vector; and
 - executable admitted and hostile fixtures.
 
+The first Source successor specialization is also Lean-owned. It authenticates
+normalized provider observations against every immutable release coordinate,
+uses Product's ordered exact-rational result partition and derived final failure
+outcome, advances only the next finite recovery leg, and consumes only
+capability-owned prepaid work. Successful transitions emit at most five
+fixed-width V2 Effect records plus one cursor-specialized 312-byte certificate.
+Lean checks mapping boundedness/disjointness, ordinary/failure separation,
+determinism, early-failure refusal, immediate recovery ordering, funding
+conservation, exact receipt accounting, and rollback projection. Provider CPI,
+Solana account/Clock authentication, physical execution, and certificate
+identity hashing remain unverified adapter boundaries.
+
 The successor physical plan now derives a four-effect replay/claim program and
 two indivisible Realm-collateral transfers from that same admitted frame. Lean
 checks each child plan, custody conservation, exact recomposition to the Direct

@@ -14,6 +14,8 @@ import DClutchSemantics.CompiledPhysical
 import DClutchSemantics.DirectControllerCodec
 import DClutchSemantics.EconomicKernel
 import DClutchSemantics.EconomicExamples
+import DClutchSemantics.SourceResolution
+import DClutchSemantics.SourceResolutionAbi
 
 /-!
 Fresh Lean-owned semantics for dClutch's compact protocol specializer.
