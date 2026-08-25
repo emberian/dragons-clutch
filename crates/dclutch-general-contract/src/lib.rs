@@ -1895,11 +1895,7 @@ fn require_general_account_alias_policy(
     accounts: &[GeneralAccountMetaV1],
 ) -> Result<()> {
     for (index, account) in accounts.iter().enumerate() {
-        for (other_index, other) in accounts
-            .iter()
-            .enumerate()
-            .skip(index.saturating_add(1))
-        {
+        for (other_index, other) in accounts.iter().enumerate().skip(index.saturating_add(1)) {
             if other.key != account.key {
                 continue;
             }
@@ -1907,11 +1903,13 @@ fn require_general_account_alias_policy(
             let other_role = general_frame_role(tag, execution_count, other_index)?;
             let repeatable = matches!(
                 (role, other_role),
-                (GeneralAccountRoleV1::OwnerPosition, GeneralAccountRoleV1::OwnerPosition)
-                    | (
-                        GeneralAccountRoleV1::QuoteDestination,
-                        GeneralAccountRoleV1::QuoteDestination
-                    )
+                (
+                    GeneralAccountRoleV1::OwnerPosition,
+                    GeneralAccountRoleV1::OwnerPosition
+                ) | (
+                    GeneralAccountRoleV1::QuoteDestination,
+                    GeneralAccountRoleV1::QuoteDestination
+                )
             );
             if !repeatable {
                 return Err(Error::AccountAlias);
@@ -5684,7 +5682,15 @@ impl<const N: usize> SettlementCursorV1<N> {
         candidate.validate_capitalization(capitalization)?;
         self.require_active(candidate, batch, SettlementPhaseV1::CollectingInputs)?;
         self.authenticate_inventory(claim_inventory_before, quote_inventory_before, config)?;
-        let replay = replay_page(&self.collection, page_id, page, candidate, root, config, batch)?;
+        let replay = replay_page(
+            &self.collection,
+            page_id,
+            page,
+            candidate,
+            root,
+            config,
+            batch,
+        )?;
         let mut quote_outputs_remaining = self.quote_outputs_remaining;
         let mut claim_outputs_remaining = self.claim_outputs_remaining;
         for index in 0..usize::from(page.execution_count) {
@@ -5835,7 +5841,15 @@ impl<const N: usize> SettlementCursorV1<N> {
         candidate.validate_capitalization(capitalization)?;
         self.require_active(candidate, batch, SettlementPhaseV1::DistributingOutputs)?;
         self.authenticate_inventory(claim_inventory_before, quote_inventory_before, config)?;
-        let replay = replay_page(&self.distribution, page_id, page, candidate, root, config, batch)?;
+        let replay = replay_page(
+            &self.distribution,
+            page_id,
+            page,
+            candidate,
+            root,
+            config,
+            batch,
+        )?;
         let mut quote_outputs_remaining = self.quote_outputs_remaining;
         let mut claim_outputs_remaining = self.claim_outputs_remaining;
         for index in 0..usize::from(page.execution_count) {

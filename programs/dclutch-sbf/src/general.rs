@@ -23,10 +23,10 @@ use dclutch_general_contract::{
     GeneralFundingPdaSeedsV1, GeneralFundingV1, GeneralInstructionTagV1, GeneralInstructionV1,
     GeneralOrderCustodyPdaSeedsV1, GeneralOrderCustodyV1, GeneralOrderStatePdaSeedsV1,
     GeneralQuoteEscrowPdaSeedsV1, GeneralRootPdaSeedsV1, GeneralRootV1,
-    GeneralSettlementCursorPdaSeedsV1, GeneralSettlementEscrowPdaSeedsV1, ORDER_STATE_BYTES,
-    OrderStateV1, PortfolioOrderV1, SettlementCursorV1, SettlementMaterializationActionV1,
-    SettlementCloseObservationV1, SettlementRentObservationV1,
-    MAX_EXECUTIONS_PER_PAGE_V1, activate_general_v1, open_general_batch_v1,
+    GeneralSettlementCursorPdaSeedsV1, GeneralSettlementEscrowPdaSeedsV1,
+    MAX_EXECUTIONS_PER_PAGE_V1, ORDER_STATE_BYTES, OrderStateV1, PortfolioOrderV1,
+    SettlementCloseObservationV1, SettlementCursorV1, SettlementMaterializationActionV1,
+    SettlementRentObservationV1, activate_general_v1, open_general_batch_v1,
 };
 use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome_count};
 use dclutch_product_contract::claim::CategoricalUnitV1;
@@ -100,13 +100,15 @@ fn dispatch_width<const N: usize>(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
-    let instruction = GeneralInstructionV1::<N>::decode(instruction_data)
-        .map_err(|_| AdapterError::InvalidInstruction)?;
+    let instruction = Box::new(
+        GeneralInstructionV1::<N>::decode(instruction_data)
+            .map_err(|_| AdapterError::InvalidInstruction)?,
+    );
     let tag = instruction.tag();
     validate_contract_frame(tag, accounts)?;
-    match instruction {
+    match instruction.as_ref() {
         GeneralInstructionV1::Activate(instruction) => {
-            process_activate::<N>(program_id, accounts, instruction)
+            process_activate::<N>(program_id, accounts, *instruction)
         }
         GeneralInstructionV1::OpenBatch(replay) => process_open_batch::<N>(
             program_id,
@@ -134,55 +136,55 @@ fn dispatch_width<const N: usize>(
             process_create_candidate_page(program_id, accounts, instruction)
         }
         GeneralInstructionV1::VerifyCandidatePage(reference) => {
-            process_verify_candidate_page::<N>(program_id, accounts, reference)
+            process_verify_candidate_page::<N>(program_id, accounts, *reference)
         }
         GeneralInstructionV1::FinishCandidate(candidate_id) => {
-            process_finish_candidate::<N>(program_id, accounts, candidate_id)
+            process_finish_candidate::<N>(program_id, accounts, *candidate_id)
         }
         GeneralInstructionV1::ConsiderCandidate(candidate_id) => {
-            process_consider_candidate::<N>(program_id, accounts, candidate_id)
+            process_consider_candidate::<N>(program_id, accounts, *candidate_id)
         }
         GeneralInstructionV1::LockSelection(replay) => {
-            process_lock_selection(program_id, accounts, replay)
+            process_lock_selection(program_id, accounts, *replay)
         }
         GeneralInstructionV1::CloseCandidatePage(reference) => {
-            process_close_candidate_page::<N>(program_id, accounts, reference)
+            process_close_candidate_page::<N>(program_id, accounts, *reference)
         }
         GeneralInstructionV1::RejectCandidate(candidate_id) => {
-            process_reject_candidate::<N>(program_id, accounts, candidate_id)
+            process_reject_candidate::<N>(program_id, accounts, *candidate_id)
         }
         GeneralInstructionV1::ExpireSettlement(candidate_id) => {
-            process_expire_settlement::<N>(program_id, accounts, candidate_id)
+            process_expire_settlement::<N>(program_id, accounts, *candidate_id)
         }
         GeneralInstructionV1::CloseCandidate(candidate_id) => {
-            process_close_candidate::<N>(program_id, accounts, candidate_id)
+            process_close_candidate::<N>(program_id, accounts, *candidate_id)
         }
         GeneralInstructionV1::CloseBatch(replay) => {
-            process_close_batch(program_id, accounts, replay)
+            process_close_batch(program_id, accounts, *replay)
         }
         GeneralInstructionV1::BeginSettlement(candidate_id) => {
-            process_begin_settlement::<N>(program_id, accounts, candidate_id)
+            process_begin_settlement::<N>(program_id, accounts, *candidate_id)
         }
         GeneralInstructionV1::CollectSettlementPage(reference) => {
-            process_collect_settlement_page::<N>(program_id, accounts, reference)
+            process_collect_settlement_page::<N>(program_id, accounts, *reference)
         }
         GeneralInstructionV1::MaterializeSettlement(candidate_id) => {
-            process_materialize_settlement::<N>(program_id, accounts, candidate_id)
+            process_materialize_settlement::<N>(program_id, accounts, *candidate_id)
         }
         GeneralInstructionV1::DistributeSettlementPage(reference) => {
-            process_distribute_settlement_page::<N>(program_id, accounts, reference)
+            process_distribute_settlement_page::<N>(program_id, accounts, *reference)
         }
         GeneralInstructionV1::FinishSettlement(candidate_id) => {
-            process_finish_settlement::<N>(program_id, accounts, candidate_id)
+            process_finish_settlement::<N>(program_id, accounts, *candidate_id)
         }
         GeneralInstructionV1::CloseSettlement(candidate_id) => {
-            process_close_settlement::<N>(program_id, accounts, candidate_id)
+            process_close_settlement::<N>(program_id, accounts, *candidate_id)
         }
         GeneralInstructionV1::Quiesce(generation) => {
-            process_quiesce(program_id, accounts, generation)
+            process_quiesce(program_id, accounts, *generation)
         }
         GeneralInstructionV1::CloseGeneral(generation) => {
-            process_close_general::<N>(program_id, accounts, generation)
+            process_close_general::<N>(program_id, accounts, *generation)
         }
     }
 }
@@ -786,7 +788,7 @@ fn process_lock_batch(
 fn process_submit_candidate<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    instruction: dclutch_general_contract::SubmitGeneralCandidateV1<N>,
+    instruction: &dclutch_general_contract::SubmitGeneralCandidateV1<N>,
 ) -> Result<(), ProgramError> {
     let submitter = account(accounts, 0)?;
     let config_account = account(accounts, 1)?;
@@ -912,7 +914,7 @@ fn process_submit_candidate<const N: usize>(
 fn process_create_candidate_page<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    instruction: dclutch_general_contract::CreateGeneralCandidatePageV1<N>,
+    instruction: &dclutch_general_contract::CreateGeneralCandidatePageV1<N>,
 ) -> Result<(), ProgramError> {
     let actor = account(accounts, 0)?;
     let config_account = account(accounts, 1)?;
@@ -1522,12 +1524,8 @@ fn process_begin_settlement<const N: usize>(
         token_program,
         market.root().identity().realm_id().to_bytes(),
     )?;
-    let mut candidate = authenticate_candidate::<N>(
-        program_id,
-        candidate_account,
-        batch_account,
-        candidate_id,
-    )?;
+    let mut candidate =
+        authenticate_candidate::<N>(program_id, candidate_account, batch_account, candidate_id)?;
     let mut batch = authenticate_batch(
         program_id,
         batch_account,
@@ -1605,7 +1603,9 @@ fn process_begin_settlement<const N: usize>(
     let top_ups = begin.temporary_top_up_lamports();
     let actor_reimbursement = top_ups
         .iter()
-        .try_fold(begin.reward_lamports(), |total, amount| total.checked_add(*amount))
+        .try_fold(begin.reward_lamports(), |total, amount| {
+            total.checked_add(*amount)
+        })
         .ok_or(AdapterError::Arithmetic)?;
     let settlement_position = PositionV1::<N>::empty(
         market_account.key.to_bytes(),
@@ -2015,11 +2015,7 @@ fn process_collect_settlement_page<const N: usize>(
     if settlement_position.balances() != &result.claim_inventory_after {
         return Err(AdapterError::PositionPostcondition.into());
     }
-    transfer_owned_lamports(
-        candidate_account,
-        actor,
-        result.settlement_reward_lamports,
-    )?;
+    transfer_owned_lamports(candidate_account, actor, result.settlement_reward_lamports)?;
     write_candidate(candidate_account, candidate)?;
     write_settlement_cursor(cursor_account, cursor)?;
     write_position(settlement_position_account, settlement_position)?;
@@ -2094,12 +2090,8 @@ fn process_materialize_settlement<const N: usize>(
         token_program,
         market.root().identity().realm_id().to_bytes(),
     )?;
-    let mut candidate = authenticate_candidate::<N>(
-        program_id,
-        candidate_account,
-        batch_account,
-        candidate_id,
-    )?;
+    let mut candidate =
+        authenticate_candidate::<N>(program_id, candidate_account, batch_account, candidate_id)?;
     let batch = authenticate_batch(
         program_id,
         batch_account,
@@ -2221,7 +2213,11 @@ fn process_materialize_settlement<const N: usize>(
                 program_id,
             );
             let bump_seed = [bump];
-            let signer = [MARKET_SEED, identity_digest.as_slice(), bump_seed.as_slice()];
+            let signer = [
+                MARKET_SEED,
+                identity_digest.as_slice(),
+                bump_seed.as_slice(),
+            ];
             let transfer = token_transfer_instruction(
                 realm.release,
                 *vault.key,
@@ -2245,11 +2241,7 @@ fn process_materialize_settlement<const N: usize>(
             .map_err(|_| AdapterError::CollateralTransferCpi)?;
         }
     }
-    transfer_owned_lamports(
-        candidate_account,
-        actor,
-        materialization.reward_lamports(),
-    )?;
+    transfer_owned_lamports(candidate_account, actor, materialization.reward_lamports())?;
     write_market(market_account, market_after)?;
     write_candidate(candidate_account, candidate)?;
     write_settlement_cursor(cursor_account, cursor)?;
@@ -2448,7 +2440,9 @@ fn process_distribute_settlement_page<const N: usize>(
             },
         )
         .map_err(|_| AdapterError::MarketTransition)?;
-    let page_close = result.page_close.ok_or(AdapterError::PositionPostcondition)?;
+    let page_close = result
+        .page_close
+        .ok_or(AdapterError::PositionPostcondition)?;
     if usize::from(result.execution_count) != execution_count
         || page_close.rent_credit_lamports != page_account.lamports()
         || page_close.rent_beneficiary.to_bytes() != candidate.submitter().to_bytes()
@@ -2659,12 +2653,8 @@ fn process_finish_settlement<const N: usize>(
         token_program,
         market.root().identity().realm_id().to_bytes(),
     )?;
-    let mut candidate = authenticate_candidate::<N>(
-        program_id,
-        candidate_account,
-        batch_account,
-        candidate_id,
-    )?;
+    let mut candidate =
+        authenticate_candidate::<N>(program_id, candidate_account, batch_account, candidate_id)?;
     let mut batch = authenticate_batch(
         program_id,
         batch_account,
@@ -2796,12 +2786,8 @@ fn process_close_settlement<const N: usize>(
         token_program,
         market.root().identity().realm_id().to_bytes(),
     )?;
-    let mut candidate = authenticate_candidate::<N>(
-        program_id,
-        candidate_account,
-        batch_account,
-        candidate_id,
-    )?;
+    let mut candidate =
+        authenticate_candidate::<N>(program_id, candidate_account, batch_account, candidate_id)?;
     let mut batch = authenticate_batch(
         program_id,
         batch_account,
@@ -2840,9 +2826,7 @@ fn process_close_settlement<const N: usize>(
         rent.minimum_balance(
             SettlementCursorV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?,
         ),
-        rent.minimum_balance(
-            PositionV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?,
-        ),
+        rent.minimum_balance(PositionV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?),
         rent.minimum_balance(ACCOUNT_BYTES),
     ];
     let close = cursor
@@ -2886,11 +2870,7 @@ fn process_close_settlement<const N: usize>(
         settlement_quote_escrow,
         rent_credit,
     ])?;
-    transfer_owned_lamports(
-        candidate_account,
-        actor,
-        close.continuation_reward_lamports,
-    )?;
+    transfer_owned_lamports(candidate_account, actor, close.continuation_reward_lamports)?;
     write_batch(batch_account, batch)?;
     write_candidate(candidate_account, candidate)?;
     let cursor_seeds = GeneralSettlementCursorPdaSeedsV1::new(candidate_account.key.to_bytes())
@@ -2979,13 +2959,8 @@ fn process_close_general<const N: usize>(
     }
     let market = authenticate_market::<N>(program_id, market_account, root.market())?;
     authenticate_market_config(market, config, root, root.config_id())?;
-    let mut funding = authenticate_general_funding(
-        program_id,
-        funding_account,
-        root,
-        root.config_id(),
-        config,
-    )?;
+    let mut funding =
+        authenticate_general_funding(program_id, funding_account, root, root.config_id(), config)?;
     let rent_credit_state =
         authenticate_rent_credit_key(program_id, rent_credit, root.rent_beneficiary())?;
     let rent_credit_before = rent_credit.lamports();
@@ -3028,12 +3003,7 @@ fn process_close_general<const N: usize>(
         market.settlement(),
     )
     .map_err(|_| AdapterError::MarketTransition)?;
-    preflight_mutable(&[
-        market_account,
-        root_account,
-        funding_account,
-        rent_credit,
-    ])?;
+    preflight_mutable(&[market_account, root_account, funding_account, rent_credit])?;
     transfer_owned_lamports(funding_account, rent_credit, refund_total)?;
     write_market(market_account, market_after)?;
     close_program_account(funding_account, rent_credit)?;
@@ -3161,7 +3131,7 @@ struct AdmissionPlan<const N: usize> {
 fn process_admit_order<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    order: PortfolioOrderV1<N>,
+    order: &PortfolioOrderV1<N>,
 ) -> Result<(), ProgramError> {
     let owner = account(accounts, 0)?;
     let market_account = account(accounts, 1)?;
@@ -3234,7 +3204,7 @@ fn process_admit_order<const N: usize>(
     {
         return Err(AdapterError::ReplayMismatch.into());
     }
-    authenticate_order_id(order)?;
+    authenticate_order_id(*order)?;
     let rent_credit_state = authenticate_rent_credit(program_id, rent_credit, owner.key)?;
     let mut position = authenticate_position::<N>(
         program_id,
@@ -3244,7 +3214,7 @@ fn process_admit_order<const N: usize>(
         config.generation(),
     )?;
 
-    let state_seeds = GeneralOrderStatePdaSeedsV1::new(market_account.key.to_bytes(), order)
+    let state_seeds = GeneralOrderStatePdaSeedsV1::new(market_account.key.to_bytes(), *order)
         .map_err(|_| AdapterError::PositionAuthentication)?;
     let (expected_state, state_bump) =
         Pubkey::find_program_address(&state_seeds.seed_components(), program_id);
@@ -3267,7 +3237,7 @@ fn process_admit_order<const N: usize>(
     }
 
     let admission = GeneralOrderCustodyV1::admit(
-        order,
+        *order,
         root,
         config,
         rent_credit.key.to_bytes(),
@@ -3338,7 +3308,7 @@ fn process_admit_order<const N: usize>(
         rent_credit,
         token_program,
         system,
-        order,
+        *order,
         plan,
     )?;
     initialize_and_fund_escrow(
@@ -3542,7 +3512,7 @@ struct ReleasePlan<const N: usize> {
 fn process_release_order<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    order: PortfolioOrderV1<N>,
+    order: &PortfolioOrderV1<N>,
     cancellation: bool,
 ) -> Result<(), ProgramError> {
     let owner = if cancellation {
@@ -3584,7 +3554,7 @@ fn process_release_order<const N: usize>(
         config_id.to_bytes(),
         |config, _| Ok(config),
     )?;
-    authenticate_order_id(order)?;
+    authenticate_order_id(*order)?;
     let market = authenticate_market::<N>(program_id, market_account, root.market())?;
     authenticate_market_config(market, config, root, config_id)?;
     let claim = authenticate_claim_basis(
@@ -3611,7 +3581,7 @@ fn process_release_order<const N: usize>(
         order.batch_sequence(),
         config_id,
     )?;
-    let state_seeds = GeneralOrderStatePdaSeedsV1::new(market_account.key.to_bytes(), order)
+    let state_seeds = GeneralOrderStatePdaSeedsV1::new(market_account.key.to_bytes(), *order)
         .map_err(|_| AdapterError::PositionAuthentication)?;
     let (expected_state, _) =
         Pubkey::find_program_address(&state_seeds.seed_components(), program_id);
@@ -3655,7 +3625,7 @@ fn process_release_order<const N: usize>(
         custody
             .cancel_and_release(
                 &mut state,
-                order,
+                *order,
                 order.owner(),
                 slot,
                 batch.collection_close(),
@@ -3665,7 +3635,7 @@ fn process_release_order<const N: usize>(
             .map_err(|_| AdapterError::MarketTransition)?
     } else {
         custody
-            .close_after_batch(&mut state, order, batch, root, config)
+            .close_after_batch(&mut state, *order, batch, root, config)
             .map_err(|_| AdapterError::MarketTransition)?
     };
     for (index, amount) in release.claim_atoms.iter().enumerate() {
