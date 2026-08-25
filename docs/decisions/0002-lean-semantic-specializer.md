@@ -82,12 +82,20 @@ semantic-to-bytecode theorem; it does not prove reverse acceptance
 completeness, physical register/account decoding, the safe Rust interpreter,
 an SBF ELF, or the Solana runtime.
 
+Commit `1d62b03e15516133d7337d04c166dfcaa1869c72` closes the next
+abstract composition gap. `CompiledPhysical.compilePhysicalPlan` builds the
+four claim/replay effects and two custody transfers only after successful
+program execution, using its derived successor nonces, gross quote, and fee.
+`admitted_compilation_refines_physical_transition` proves that this selects the
+canonical plans, both child interpreters reach their named projections, and
+their abstract atomic join equals the one high-level Direct post-state.
+
 This evidence strongly favors continuing the experiment, but does not accept a
 successor. The controller now derives its child plans from authenticated signed
-intents and the Market/Realm/release graph, but the abstract transition-program
-theorem is not yet composed with the physical claim/custody plans, extended to
-reverse refusal coverage, or joined to interpreter and artifact theorems for
-the controller and custody.
+intents and the Market/Realm/release graph, and the abstract program-to-physical
+composition is now checked. Reverse refusal coverage, physical account/register
+decoding, the Rust interpreter, and artifact theorems for the controller and
+custody remain open.
 The exact semantic release is manifest-selected, but a checked-release manifest
 must still bind the built ELF and Loader state. The experiment therefore does
 not yet satisfy the full integrated or deployed-refinement gates.

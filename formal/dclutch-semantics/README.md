@@ -41,6 +41,13 @@ and zero-fill fixtures remain regression checks. Reverse acceptance/refusal
 completeness, physical-register decoding, and Rust-interpreter refinement
 remain open.
 
+`CompiledPhysical.compilePhysicalPlan` then constructs the claim and custody
+plans from successful program outputs instead of caller-supplied gross, fee, or
+successor nonces. `admitted_compilation_refines_physical_transition` proves
+that every admitted compilation selects the canonical plans, both plan
+interpreters produce their named projections, and their abstract atomic join is
+the one semantic Direct post-state.
+
 Lean also owns the exact data structures and encodings for the 136-byte compact
 intent and 304-byte controller instruction. Their exact lengths are theorems. A
 maker key is deliberately not duplicated in the signed intent: the native

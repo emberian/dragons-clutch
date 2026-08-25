@@ -181,6 +181,18 @@ successor nonces are derived by the program rather than trusted as caller
 registers. The proof factors the unchanged program into setup, admission,
 replay, pricing, and balance stages and composes their execution theorems.
 
+Commit `1d62b03e15516133d7337d04c166dfcaa1869c72` composes that result
+with the multiprogram physical semantics. The new
+`DClutch.Direct.CompiledPhysical.compilePhysicalPlan` materializes child plans
+only after successful transition-program execution. It takes successor nonces,
+gross, and fee from the output registers; only fill and selected outcome remain
+frame inputs. The theorem
+`admitted_compilation_refines_physical_transition` proves that every admitted
+compilation yields the existing canonical four-effect claim plan and
+two-transfer custody plan, both abstract child interpreters reach their specified
+projections, and `atomicCommit` rejoins them to the high-level Direct
+`postState`.
+
 The source builds with Lean 4.30.0. Regeneration still produces exactly 568
 bytes with SHA-256
 `72cc0faa6a9768b766a3003c8ff6f38889f564f49005ce68b2187c98349bff5c`,
@@ -188,13 +200,14 @@ and `lake exe emit-direct-program-rust` still reproduces the checked-in Rust
 array byte-for-byte. The independent safe Rust VM's four vector, boundary,
 hostile-program, hostile-frame, and rollback tests pass.
 
-This theorem is high-level admission-to-abstract-VM evidence. It is not a
+These theorems are high-level admission-to-abstract-VM evidence. They are not a
 machine-checked refinement of physical account/register decoding, native
 signature verification, the Rust VM, the controller or child SBF ELFs, CPI, or
 Solana runtime behavior. It also does not prove the reverse implication that
 every accepted abstract register frame came from the full `Admissible`
-predicate, nor does it yet compose the output registers into the unique
-physical claim and custody plans.
+predicate. The physical composition theorem models typed plans and an abstract
+atomic envelope, not concrete plan-byte parsing, account ownership, CPI, or
+runtime rollback.
 
 This addendum supersedes the execution-profile architecture and current
 controller measurements below. Earlier tables remain evidence for their named

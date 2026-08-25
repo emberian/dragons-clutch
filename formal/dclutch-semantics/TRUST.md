@@ -31,6 +31,10 @@ shape, 568-byte encoding, and zero-fill refusal. For every high-level
 `DirectProgram.admitted_program_refines` proves that the abstract transition VM
 accepts and derives exactly the semantic successor nonces, gross quote, and
 named floor fee.
+`CompiledPhysical.admitted_compilation_refines_physical_transition` proves that
+those outputs select the canonical claim/custody plans, both
+abstract child interpreters reach their named projections, and their atomic
+join equals the high-level Direct post-state.
 Lean owns the compact intent and controller-instruction data structures and
 proves their encodings are exactly 136 and 304 bytes.
 
@@ -44,8 +48,7 @@ cannot change a resting order's final cumulative fee in the semantic model.
 - machine-checked refinement theorems for the safe Rust and TypeScript codecs
   (both have exact cross-language vector, round-trip, and hostile-parser tests);
 - a reverse theorem that transition-program acceptance implies the semantic
-  `Admissible` predicate, plus composition from the derived output registers to
-  the unique physical claim and custody plans;
+  `Admissible` predicate;
 - a machine-checked refinement from Lean's transition VM to the safe Rust
   `dclutch-transition-vm` interpreter (cross-language exact-vector, hostile-
   bytecode, hostile-frame, rollback, and integer-boundary tests exist);
