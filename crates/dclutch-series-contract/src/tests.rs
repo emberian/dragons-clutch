@@ -1,4 +1,9 @@
 use super::*;
+use dclutch_capability_contract::{
+    ActivationPolicy, CAPABILITY_TEMPLATE_ENTRY_BYTES, CapabilityConfigProjectionV1,
+    CapabilityTemplateEntryV1, CapabilityTemplateV1, CompartmentFundingV1, FundingAmountsV1,
+    FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+};
 use dclutch_product_contract::result_domain::FiniteResultDomainV1;
 use dclutch_source_contract::{
     CapacityEnvelope as SourceCapacityEnvelope, MAX_RECOVERY_ATTEMPTS,
@@ -25,6 +30,54 @@ fn vacant(lamports: u64) -> VacantAccountFactsV1 {
 
 fn source_id(bytes: [u8; 32]) -> dclutch_source_contract::ContentId {
     dclutch_source_contract::ContentId::new(bytes).expect("nonzero Source identity")
+}
+
+fn capability_id(bytes: [u8; 32]) -> dclutch_capability_contract::ContentId {
+    dclutch_capability_contract::ContentId::new(bytes).expect("nonzero Capability identity")
+}
+
+fn capability_template_bytes() -> [u8; MANIFEST_HEADER_BYTES + CAPABILITY_TEMPLATE_ENTRY_BYTES] {
+    let amounts = FundingAmountsV1::new(
+        CompartmentFundingV1::native_lamports(5).expect("Fund rent"),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::native_lamports(7).expect("success bounty"),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+    )
+    .expect("exact resolution funding");
+    let quote = FundingQuoteV1::new(amounts, None).expect("native funding quote");
+    let entry = CapabilityTemplateEntryV1::new(
+        capability_id([71; 32]),
+        capability_id(PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1),
+        CapabilityConfigProjectionV1::OccurrenceResolutionMaterial,
+        capability_id([72; 32]),
+        capability_id([73; 32]),
+        capability_id([74; 32]),
+        ActivationPolicy::RequiredAtFounding,
+        0,
+        0,
+        [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+        quote,
+    )
+    .expect("resolution capability template entry");
+    let mut output = [0; MANIFEST_HEADER_BYTES + CAPABILITY_TEMPLATE_ENTRY_BYTES];
+    CapabilityTemplateV1::encode_into(core::slice::from_ref(&entry), &mut output)
+        .expect("canonical capability template");
+    output
+}
+
+fn capability_template_id() -> IdentityV1 {
+    content_identity(&capability_template_bytes()).expect("capability-template identity")
+}
+
+fn series_capability_template() -> SeriesCapabilityTemplateV1 {
+    authenticate_series_capability_template_v1(
+        capability_template_id(),
+        &capability_template_bytes(),
+    )
+    .expect("Series capability template")
 }
 
 fn result_domain() -> FiniteResultDomainV1 {
@@ -271,6 +324,36 @@ fn occurrence_source_material(recipe_id: IdentityV1, index: u64) -> OccurrenceSo
         .expect("authenticated occurrence Source material")
 }
 
+fn capability_manifest_for_source(
+    source_material: OccurrenceSourceMaterialV1,
+) -> OccurrenceCapabilityManifestV1 {
+    let template_bytes = capability_template_bytes();
+    let template = CapabilityTemplateV1::decode(&template_bytes).expect("capability template");
+    let projection = template
+        .project_for_resolution_material(capability_id(source_material.material_id().to_bytes()))
+        .expect("manifest projection");
+    let mut manifest_bytes = [0; MANIFEST_HEADER_BYTES + CAPABILITY_TEMPLATE_ENTRY_BYTES];
+    projection
+        .encode_into(&mut manifest_bytes)
+        .expect("occurrence manifest");
+    let manifest_id = content_identity(&manifest_bytes).expect("manifest identity");
+    authenticate_occurrence_capability_manifest_v1(
+        capability_template_id(),
+        &template_bytes,
+        source_material.material_id(),
+        manifest_id,
+        &manifest_bytes,
+    )
+    .expect("authenticated occurrence capability manifest")
+}
+
+fn occurrence_capability_manifest(
+    recipe_id: IdentityV1,
+    index: u64,
+) -> OccurrenceCapabilityManifestV1 {
+    capability_manifest_for_source(occurrence_source_material(recipe_id, index))
+}
+
 fn recipe() -> SeriesRecipeV1 {
     SeriesRecipeV1 {
         realm_id: id(1),
@@ -283,7 +366,7 @@ fn recipe() -> SeriesRecipeV1 {
         occurrence_schedule_id: id(6),
         source_schedule_id: source_schedule_identity_v1(&template_source_material())
             .expect("Source schedule identity"),
-        capability_template_id: id(8),
+        capability_template_id: capability_template_id(),
         occurrence_derivation_release_id: IdentityV1::new(OCCURRENCE_DERIVATION_RELEASE_ID_V1)
             .expect("release identity"),
         source_derivation_release_id: IdentityV1::new(SOURCE_DERIVATION_RELEASE_ID_V1)
@@ -340,6 +423,7 @@ fn derived(recipe_id: IdentityV1, index: u64) -> DerivedOccurrenceV1 {
         index,
         &capitalization(recipe_id, index),
         occurrence_source_material(recipe_id, index),
+        occurrence_capability_manifest(recipe_id, index),
     )
     .expect("fixture derivation")
 }
@@ -364,6 +448,7 @@ fn created() -> (
         recipe_id,
         aggregate_id,
         &recipe(),
+        series_capability_template(),
         &aggregate(recipe_id),
         CreateSeriesV1 {
             refund_authority: id(203),
@@ -416,6 +501,7 @@ fn instantiate(
         derived_id(&occurrence),
         &occurrence,
         occurrence_source_material(recipe_id, index),
+        occurrence_capability_manifest(recipe_id, index),
         occurrence.capitalization_id,
         &cap,
         InstantiateNextV1 {
@@ -632,6 +718,18 @@ fn release_set_is_closed_and_pinned_to_its_exact_preimages() {
         substituted.validate(),
         Err(Error::DerivationReleaseUnavailable)
     );
+    substituted = recipe();
+    substituted.capability_derivation_release_id = IdentityV1::new([
+        0x0b, 0x93, 0x01, 0x4b, 0xd4, 0xb4, 0x85, 0x44, 0xed, 0x77, 0x83, 0x43, 0x09, 0x38, 0xf6,
+        0xa2, 0x1d, 0x3c, 0x5f, 0x88, 0xac, 0x45, 0xaf, 0x10, 0x30, 0x1c, 0x72, 0xdf, 0xaf, 0x9d,
+        0xa1, 0x89,
+    ])
+    .expect("obsolete static-manifest release");
+    assert_eq!(
+        substituted.validate(),
+        Err(Error::DerivationReleaseUnavailable),
+        "the cyclic static-manifest release is not a compatibility path"
+    );
 }
 
 #[test]
@@ -699,6 +797,7 @@ fn source_schedule_projection_breaks_the_cycle_without_weakening_material_identi
             1,
             &capitalization(recipe_id, 1),
             authenticated,
+            capability_manifest_for_source(authenticated),
         ),
         Err(Error::SourceProductMismatch),
         "same-schedule material for a different Product instance is refused"
@@ -725,6 +824,78 @@ fn source_schedule_projection_breaks_the_cycle_without_weakening_material_identi
 }
 
 #[test]
+fn capability_template_projects_the_exact_occurrence_manifest_without_a_cycle() {
+    let recipe_id = id(201);
+    let first_source = occurrence_source_material(recipe_id, 0);
+    let second_source = occurrence_source_material(recipe_id, 1);
+    let first = capability_manifest_for_source(first_source);
+    let second = capability_manifest_for_source(second_source);
+    assert_eq!(first.template_id(), recipe().capability_template_id);
+    assert_ne!(
+        first.resolution_material_id(),
+        second.resolution_material_id()
+    );
+    assert_ne!(first.manifest_id(), second.manifest_id());
+    assert_ne!(first.manifest_id(), first.template_id());
+    assert_eq!(
+        first.founding_release_id(),
+        first_source.provider_extension_release_id()
+    );
+
+    assert_eq!(
+        authenticate_series_capability_template_v1(
+            capability_template_id(),
+            &capability_template_bytes(),
+        )
+        .expect("Series template")
+        .template_id(),
+        capability_template_id()
+    );
+    assert_eq!(
+        authenticate_series_capability_template_v1(id(8), &capability_template_bytes()),
+        Err(Error::InvalidCapabilityTemplate)
+    );
+
+    let source_id = first_source.material_id();
+    let template_bytes = capability_template_bytes();
+    let template = CapabilityTemplateV1::decode(&template_bytes).expect("template");
+    let projection = template
+        .project_for_resolution_material(capability_id(source_id.to_bytes()))
+        .expect("projection");
+    let mut manifest_bytes = [0; MANIFEST_HEADER_BYTES + CAPABILITY_TEMPLATE_ENTRY_BYTES];
+    projection
+        .encode_into(&mut manifest_bytes)
+        .expect("manifest");
+    let mut substituted_manifest = manifest_bytes;
+    *substituted_manifest
+        .get_mut(MANIFEST_HEADER_BYTES + 64)
+        .expect("manifest config byte") ^= 1;
+    let substituted_id =
+        content_identity(&substituted_manifest).expect("substituted manifest identity");
+    assert_eq!(
+        authenticate_occurrence_capability_manifest_v1(
+            capability_template_id(),
+            &template_bytes,
+            source_id,
+            substituted_id,
+            &substituted_manifest,
+        ),
+        Err(Error::CapabilityProjectionMismatch)
+    );
+    assert_eq!(
+        authenticate_occurrence_capability_manifest_v1(
+            content_identity(&manifest_bytes).expect("legacy manifest-as-template ID"),
+            &manifest_bytes,
+            source_id,
+            content_identity(&manifest_bytes).expect("manifest ID"),
+            &manifest_bytes,
+        ),
+        Err(Error::InvalidCapabilityTemplate),
+        "legacy manifest bytes cannot masquerade as the distinct template schema"
+    );
+}
+
+#[test]
 fn derivation_recomputes_product_market_and_funding_identities() {
     let recipe_id = id(201);
     let cap = capitalization(recipe_id, 0);
@@ -734,6 +905,7 @@ fn derivation_recomputes_product_market_and_funding_identities() {
         0,
         &cap,
         occurrence_source_material(recipe_id, 0),
+        occurrence_capability_manifest(recipe_id, 0),
     )
     .expect("exact derivation");
     assert_eq!(exact.occurrence_time, recipe().first_occurrence_time);
@@ -748,9 +920,13 @@ fn derivation_recomputes_product_market_and_funding_identities() {
         exact.resolution_policy_id,
         occurrence_source_material(recipe_id, 0).material_id()
     );
-    assert_eq!(
+    assert_ne!(
         exact.capability_manifest_id,
         recipe().capability_template_id
+    );
+    assert_eq!(
+        exact.capability_manifest_id,
+        occurrence_capability_manifest(recipe_id, 0).manifest_id()
     );
     let canonical_instance = InstanceV1::new(InstanceV1Input {
         terms_id: product_content_id(recipe().terms_id).expect("Product Terms ID"),
@@ -784,6 +960,7 @@ fn derivation_recomputes_product_market_and_funding_identities() {
             0,
             &cap,
             occurrence_source_material(recipe_id, 0),
+            occurrence_capability_manifest(recipe_id, 0),
         ),
         Err(Error::SourceProductMismatch)
     );
@@ -794,6 +971,7 @@ fn derivation_recomputes_product_market_and_funding_identities() {
         1,
         &capitalization(recipe_id, 1),
         occurrence_source_material(recipe_id, 1),
+        occurrence_capability_manifest(recipe_id, 1),
     )
     .expect("next derivation");
     assert_ne!(exact.occurrence_artifact_id, next.occurrence_artifact_id);
@@ -811,6 +989,7 @@ fn derivation_recomputes_product_market_and_funding_identities() {
         0,
         &wrong_funding,
         occurrence_source_material(recipe_id, 0),
+        occurrence_capability_manifest(recipe_id, 0),
     )
     .expect("alternative valid funding preimage");
     assert_eq!(changed.product_instance_id, exact.product_instance_id);
@@ -834,6 +1013,7 @@ fn derivation_recomputes_product_market_and_funding_identities() {
             derived_id(&wrong_derived),
             &wrong_derived,
             occurrence_source_material(recipe_id, 0),
+            occurrence_capability_manifest(recipe_id, 0),
             wrong_derived.capitalization_id,
             &cap,
             InstantiateNextV1 {
@@ -867,6 +1047,7 @@ fn ticket_dust_is_a_top_up_not_a_public_liveness_veto() {
         derived_id(&occurrence),
         &occurrence,
         occurrence_source_material(recipe_id, 0),
+        occurrence_capability_manifest(recipe_id, 0),
         occurrence.capitalization_id,
         &cap,
         InstantiateNextV1 {
@@ -904,6 +1085,7 @@ fn ticket_dust_is_a_top_up_not_a_public_liveness_veto() {
             derived_id(&occurrence),
             &occurrence,
             occurrence_source_material(recipe_id, 0),
+            occurrence_capability_manifest(recipe_id, 0),
             occurrence.capitalization_id,
             &cap,
             InstantiateNextV1 {
@@ -944,6 +1126,7 @@ fn capitalization_chain_rejects_substitution_premature_end_and_stranded_final() 
         0,
         &substituted,
         occurrence_source_material(recipe_id, 0),
+        occurrence_capability_manifest(recipe_id, 0),
     )
     .expect("valid local item");
     assert_eq!(
@@ -958,6 +1141,7 @@ fn capitalization_chain_rejects_substitution_premature_end_and_stranded_final() 
             derived_id(&substituted_derived),
             &substituted_derived,
             occurrence_source_material(recipe_id, 0),
+            occurrence_capability_manifest(recipe_id, 0),
             substituted_id,
             &substituted,
             instruction,
@@ -979,6 +1163,7 @@ fn capitalization_chain_rejects_substitution_premature_end_and_stranded_final() 
         0,
         &premature_end,
         occurrence_source_material(recipe_id, 0),
+        occurrence_capability_manifest(recipe_id, 0),
     )
     .expect("locally valid premature item");
     assert_eq!(
@@ -993,6 +1178,7 @@ fn capitalization_chain_rejects_substitution_premature_end_and_stranded_final() 
             derived_id(&premature_derived),
             &premature_derived,
             occurrence_source_material(recipe_id, 0),
+            occurrence_capability_manifest(recipe_id, 0),
             premature_id,
             &premature_end,
             instruction,
@@ -1024,6 +1210,7 @@ fn capitalization_chain_rejects_substitution_premature_end_and_stranded_final() 
         2,
         &stranded,
         occurrence_source_material(recipe_id, 2),
+        occurrence_capability_manifest(recipe_id, 2),
     )
     .expect("valid local item");
     let hostile_root = SeriesRootV1 {
@@ -1043,6 +1230,7 @@ fn capitalization_chain_rejects_substitution_premature_end_and_stranded_final() 
             derived_id(&stranded_derived),
             &stranded_derived,
             occurrence_source_material(recipe_id, 2),
+            occurrence_capability_manifest(recipe_id, 2),
             stranded_id,
             &stranded,
             InstantiateNextV1 {
@@ -1108,6 +1296,7 @@ fn instantiation_is_gap_free_conservative_and_exhaustive() {
             derived_id(&occurrence),
             &occurrence,
             occurrence_source_material(recipe_id, 2),
+            occurrence_capability_manifest(recipe_id, 2),
             occurrence.capitalization_id,
             &capitalization(recipe_id, 2),
             InstantiateNextV1 {
@@ -1142,6 +1331,7 @@ fn stale_gap_time_derivation_and_funding_substitutions_refuse_without_mutation()
             derived_id(derived_value),
             derived_value,
             occurrence_source_material(recipe_id, 0),
+            occurrence_capability_manifest(recipe_id, 0),
             occurrence.capitalization_id,
             &cap_value,
             instruction,
@@ -1248,6 +1438,7 @@ fn successful_release_cannot_be_replayed_after_root_advances() {
             first.derived_occurrence_id,
             &occurrence,
             occurrence_source_material(recipe_id, 0),
+            occurrence_capability_manifest(recipe_id, 0),
             occurrence.capitalization_id,
             &cap,
             InstantiateNextV1 {
@@ -1288,6 +1479,7 @@ fn ticket_consumption_routes_market_principal_and_all_surplus_to_rent_credit() {
             first.ticket.derived_occurrence_id,
             &occurrence,
             occurrence_source_material(recipe_id, 0),
+            occurrence_capability_manifest(recipe_id, 0),
             occurrence.capitalization_id,
             &capitalization,
             wrong_ticket,
@@ -1312,6 +1504,7 @@ fn ticket_consumption_routes_market_principal_and_all_surplus_to_rent_credit() {
             first.ticket.derived_occurrence_id,
             &occurrence,
             occurrence_source_material(recipe_id, 0),
+            occurrence_capability_manifest(recipe_id, 0),
             occurrence.capitalization_id,
             &capitalization,
             wrong_refund,
@@ -1332,6 +1525,7 @@ fn ticket_consumption_routes_market_principal_and_all_surplus_to_rent_credit() {
         first.ticket.derived_occurrence_id,
         &occurrence,
         occurrence_source_material(recipe_id, 0),
+        occurrence_capability_manifest(recipe_id, 0),
         occurrence.capitalization_id,
         &capitalization,
         first.ticket,
@@ -1375,6 +1569,7 @@ fn ticket_consumption_routes_market_principal_and_all_surplus_to_rent_credit() {
             first.ticket.derived_occurrence_id,
             &occurrence,
             occurrence_source_material(recipe_id, 0),
+            occurrence_capability_manifest(recipe_id, 0),
             occurrence.capitalization_id,
             &capitalization,
             first.ticket,
@@ -1452,6 +1647,7 @@ fn close_requires_exhaustion_zero_principal_and_zero_tickets() {
             ticket.derived_occurrence_id,
             &occurrence,
             occurrence_source_material(recipe_id, index),
+            occurrence_capability_manifest(recipe_id, index),
             occurrence.capitalization_id,
             &capitalization(recipe_id, index),
             ticket,
@@ -1621,6 +1817,7 @@ fn permanent_guard_blocks_root_resurrection_after_close() {
             recipe_id,
             aggregate_id,
             &recipe(),
+            series_capability_template(),
             &aggregate(recipe_id),
             instruction,
             1_000,
@@ -1644,6 +1841,7 @@ fn permanent_guard_blocks_root_resurrection_after_close() {
         recipe_id,
         aggregate_id,
         &recipe(),
+        series_capability_template(),
         &aggregate(recipe_id),
         instruction,
         1_000,
@@ -1688,6 +1886,7 @@ fn future_release_and_insufficient_current_ticket_rent_refuse() {
             derived_id(&occurrence),
             &occurrence,
             occurrence_source_material(recipe_id, 0),
+            occurrence_capability_manifest(recipe_id, 0),
             occurrence.capitalization_id,
             &cap,
             instruction,
@@ -1711,6 +1910,7 @@ fn future_release_and_insufficient_current_ticket_rent_refuse() {
             derived_id(&occurrence),
             &occurrence,
             occurrence_source_material(recipe_id, 0),
+            occurrence_capability_manifest(recipe_id, 0),
             occurrence.capitalization_id,
             &cap,
             instruction,

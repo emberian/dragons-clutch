@@ -11,6 +11,35 @@ There is deliberately no global capability enum or permanent bit position.
 Entries are strictly ordered by kind identity, so one manifest cannot select
 two competing releases for the same kind.
 
+## Reusable templates
+
+`CapabilityTemplateV1` is a distinct `DCLTCTP1` content preimage, never a
+Market manifest and never capability authority. It preserves the exact
+profile-1 entry width and every manifest fact, but byte 194—reserved zero in a
+realized manifest—selects how configuration is obtained. Static entries carry
+their ordinary nonzero config ID and selector zero. An occurrence-resolution
+entry carries selector one and a canonical all-zero config slot. Bytes 195–199
+remain zero. Manifest bytes cannot decode as a template, and template bytes
+cannot decode as a manifest.
+
+Projection substitutes one authenticated occurrence Source-material ID into
+the selected config slot, clears the template selector with the manifest's
+ordinary reserved bytes, and preserves entry count, indices, kind ordering,
+dependencies, releases, capacity, child derivation, activation, deadlines,
+and funding byte-for-byte. The result is an ordinary canonical `DCLTCAP1`
+manifest. Projection requires exactly one occurrence-resolution selector and
+requires it to be `RequiredAtFounding`; missing, repeated, lazy, static-ID
+collision, and substituted realized manifests refuse. Encoding prevalidates
+the complete order and dependency DAG before mutating caller storage.
+
+The capability crate owns exact projection but deliberately owns no hash
+algorithm. A composing Series release streams the canonical 16-byte realized
+manifest header and each projected 528-byte entry, in index order, into its
+named content-hash boundary. For Source-material identity `s`, the resulting
+manifest identity `m`—not the reusable template identity—is placed in the
+Market identity. Found then authenticates the actual manifest bytes under `m`
+and selects the unique founding entry with config `s`.
+
 ## Provisional artifact profile
 
 Artifact profile 1 admits at most 16 entries and at most 16 dependencies per

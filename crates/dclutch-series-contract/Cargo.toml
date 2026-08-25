@@ -9,6 +9,7 @@ rust-version.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+dclutch-capability-contract = { path = "../dclutch-capability-contract" }
 dclutch-product-contract = { path = "../dclutch-product-contract" }
 dclutch-source-contract = { path = "../dclutch-source-contract" }
 sha2 = { version = "=0.10.9", default-features = false }

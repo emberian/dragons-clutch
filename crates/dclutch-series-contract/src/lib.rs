@@ -9,6 +9,9 @@
 //! releases; one mutable root owns only gap-free progress and conservation.
 
 use core::convert::{TryFrom, TryInto};
+use dclutch_capability_contract::{
+    CapabilityManifestV1, CapabilityTemplateV1, ContentId as CapabilityContentId,
+};
 use dclutch_product_contract::{
     ContentId,
     capacity::CapacityProfileId,
@@ -100,13 +103,13 @@ pub const SOURCE_DERIVATION_RELEASE_ID_V1: [u8; 32] = [
 /// It is a schedule/template identity, never a provisional Source-material ID.
 pub const SOURCE_SCHEDULE_PROJECTION_DOMAIN_V1: &[u8] =
     b"dclutch/series-source-schedule-projection/source-material-v1";
-/// Exact release label for V1's immutable shared capability-manifest selection.
+/// Exact release label for occurrence-specific manifest projection.
 pub const CAPABILITY_DERIVATION_RELEASE_PREIMAGE_V1: &[u8] =
-    b"dclutch/series-capability-derivation/static-manifest-v1";
+    b"dclutch/series-capability-derivation/template-resolution-material-projection-v2";
 /// SHA-256 identity of [`CAPABILITY_DERIVATION_RELEASE_PREIMAGE_V1`].
 pub const CAPABILITY_DERIVATION_RELEASE_ID_V1: [u8; 32] = [
-    0x0b, 0x93, 0x01, 0x4b, 0xd4, 0xb4, 0x85, 0x44, 0xed, 0x77, 0x83, 0x43, 0x09, 0x38, 0xf6, 0xa2,
-    0x1d, 0x3c, 0x5f, 0x88, 0xac, 0x45, 0xaf, 0x10, 0x30, 0x1c, 0x72, 0xdf, 0xaf, 0x9d, 0xa1, 0x89,
+    0x04, 0x66, 0x76, 0xa2, 0xc9, 0x98, 0x91, 0xa5, 0x03, 0xb5, 0x03, 0x27, 0x53, 0xd2, 0x30, 0x83,
+    0x83, 0x34, 0x79, 0x73, 0xe7, 0xa7, 0x9c, 0x49, 0x53, 0xda, 0x95, 0x02, 0x12, 0x69, 0x1d, 0x8a,
 ];
 /// Exact release label for V1's canonical Market-identity derivation.
 pub const MARKET_DERIVATION_RELEASE_PREIMAGE_V1: &[u8] =
@@ -195,6 +198,10 @@ pub enum Error {
     SourceScheduleMismatch,
     /// Source material did not bind the exact derived Product instance/domain.
     SourceProductMismatch,
+    /// A capability template or its exact content identity was invalid.
+    InvalidCapabilityTemplate,
+    /// A projected capability manifest did not bind the recipe template/material.
+    CapabilityProjectionMismatch,
     /// The recipe selected a derivation release combination absent from V1.
     DerivationReleaseUnavailable,
     /// Root conservation or phase invariants were false.
@@ -578,6 +585,7 @@ pub struct OccurrenceSourceMaterialV1 {
     source_window_id: IdentityV1,
     statistic_id: IdentityV1,
     result_domain_id: IdentityV1,
+    provider_extension_release_id: IdentityV1,
 }
 
 impl OccurrenceSourceMaterialV1 {
@@ -595,6 +603,170 @@ impl OccurrenceSourceMaterialV1 {
     pub const fn product_instance_id(self) -> IdentityV1 {
         self.product_instance_id
     }
+
+    /// Return the primary provider extension release required at Found.
+    pub const fn provider_extension_release_id(self) -> IdentityV1 {
+        self.provider_extension_release_id
+    }
+}
+
+/// Authenticated compact facts for one occurrence-specific capability manifest.
+///
+/// Fields are private so this value can only result from hashing and hostile
+/// decoding the recipe-selected reusable template under the closed V1
+/// projection release. It contains no caller-authored manifest identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OccurrenceCapabilityManifestV1 {
+    template_id: IdentityV1,
+    resolution_material_id: IdentityV1,
+    manifest_id: IdentityV1,
+    founding_release_id: IdentityV1,
+}
+
+/// Authenticated reusable capability-template facts required before Create.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesCapabilityTemplateV1 {
+    template_id: IdentityV1,
+}
+
+impl SeriesCapabilityTemplateV1 {
+    /// Return the exact reusable template content identity.
+    pub const fn template_id(self) -> IdentityV1 {
+        self.template_id
+    }
+}
+
+/// Authenticate the narrow Series V1 capability-template profile.
+///
+/// Series V1 capitalizes and atomically creates exactly one resolution Fund,
+/// so admitting additional entries or dependencies would strand a Market in
+/// Founding without prepaid activation custody. A later measured release may
+/// lift this profile together with complete multi-capability capitalization.
+pub fn authenticate_series_capability_template_v1(
+    template_id: IdentityV1,
+    template_bytes: &[u8],
+) -> Result<SeriesCapabilityTemplateV1> {
+    if content_identity(template_bytes)? != template_id {
+        return Err(Error::InvalidCapabilityTemplate);
+    }
+    let template = CapabilityTemplateV1::decode(template_bytes)
+        .map_err(|_| Error::InvalidCapabilityTemplate)?;
+    let founding_index = template
+        .required_resolution_material_projection_index()
+        .map_err(|_| Error::InvalidCapabilityTemplate)?;
+    if template.entry_count() != 1
+        || founding_index != 0
+        || template
+            .entry(founding_index)
+            .map_err(|_| Error::InvalidCapabilityTemplate)?
+            .dependency_count()
+            != 0
+    {
+        return Err(Error::InvalidCapabilityTemplate);
+    }
+    Ok(SeriesCapabilityTemplateV1 { template_id })
+}
+
+impl OccurrenceCapabilityManifestV1 {
+    /// Return the authenticated reusable template identity.
+    pub const fn template_id(self) -> IdentityV1 {
+        self.template_id
+    }
+
+    /// Return the occurrence Source-material identity substituted as config.
+    pub const fn resolution_material_id(self) -> IdentityV1 {
+        self.resolution_material_id
+    }
+
+    /// Return the exact occurrence-specific realized manifest identity.
+    pub const fn manifest_id(self) -> IdentityV1 {
+        self.manifest_id
+    }
+
+    /// Return the projected founding entry's implementation release.
+    pub const fn founding_release_id(self) -> IdentityV1 {
+        self.founding_release_id
+    }
+}
+
+/// Authenticate a reusable template and derive one occurrence manifest ID.
+///
+/// The realized manifest is never allocated. Its exact canonical header and
+/// entries are streamed into SHA-256 through the capability contract's sole
+/// projection owner. The template must contain exactly one founding-required
+/// occurrence-resolution projection, and legacy manifest bytes cannot decode
+/// as the distinct template schema.
+fn derive_occurrence_capability_manifest_v1(
+    template_id: IdentityV1,
+    template_bytes: &[u8],
+    resolution_material_id: IdentityV1,
+) -> Result<OccurrenceCapabilityManifestV1> {
+    authenticate_series_capability_template_v1(template_id, template_bytes)?;
+    let template = CapabilityTemplateV1::decode(template_bytes)
+        .map_err(|_| Error::InvalidCapabilityTemplate)?;
+    let projection = template
+        .project_for_resolution_material(capability_content_id(resolution_material_id)?)
+        .map_err(|_| Error::InvalidCapabilityTemplate)?;
+    let founding_index = template
+        .required_resolution_material_projection_index()
+        .map_err(|_| Error::InvalidCapabilityTemplate)?;
+    let founding_release_id = IdentityV1::new(
+        projection
+            .entry(founding_index)
+            .map_err(|_| Error::InvalidCapabilityTemplate)?
+            .release_id()
+            .to_bytes(),
+    )
+    .map_err(|_| Error::InvalidCapabilityTemplate)?;
+    let mut hasher = Sha256::new();
+    hasher.update(projection.manifest_header_bytes());
+    let mut index = 0u16;
+    while index < projection.entry_count() {
+        hasher.update(
+            projection
+                .entry(index)
+                .map_err(|_| Error::InvalidCapabilityTemplate)?
+                .to_bytes(),
+        );
+        index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+    }
+    let manifest_id =
+        IdentityV1::new(hasher.finalize().into()).map_err(|_| Error::InvalidCapabilityTemplate)?;
+    Ok(OccurrenceCapabilityManifestV1 {
+        template_id,
+        resolution_material_id,
+        manifest_id,
+        founding_release_id,
+    })
+}
+
+/// Authenticate supplied manifest bytes against the exact template projection.
+pub fn authenticate_occurrence_capability_manifest_v1(
+    template_id: IdentityV1,
+    template_bytes: &[u8],
+    resolution_material_id: IdentityV1,
+    manifest_id: IdentityV1,
+    manifest_bytes: &[u8],
+) -> Result<OccurrenceCapabilityManifestV1> {
+    let expected = derive_occurrence_capability_manifest_v1(
+        template_id,
+        template_bytes,
+        resolution_material_id,
+    )?;
+    if expected.manifest_id != manifest_id || content_identity(manifest_bytes)? != manifest_id {
+        return Err(Error::CapabilityProjectionMismatch);
+    }
+    let template = CapabilityTemplateV1::decode(template_bytes)
+        .map_err(|_| Error::InvalidCapabilityTemplate)?;
+    let projection = template
+        .project_for_resolution_material(capability_content_id(resolution_material_id)?)
+        .map_err(|_| Error::InvalidCapabilityTemplate)?;
+    let manifest = CapabilityManifestV1::decode(manifest_bytes)
+        .map_err(|_| Error::CapabilityProjectionMismatch)?;
+    projection
+        .validate_manifest(manifest)
+        .map_err(|_| Error::CapabilityProjectionMismatch)?;
+    Ok(expected)
 }
 
 /// Derive the reusable, occurrence-independent Source schedule identity.
@@ -658,6 +830,9 @@ pub fn authenticate_occurrence_source_material_v1(
     let policy = material
         .policy()
         .map_err(|_| Error::InvalidSourceMaterial)?;
+    let (_, primary_provider_release) = material
+        .primary_provider_release()
+        .map_err(|_| Error::InvalidSourceMaterial)?;
     let product_instance_id = source_identity(
         material
             .product_instance_id()
@@ -687,6 +862,9 @@ pub fn authenticate_occurrence_source_material_v1(
         source_window_id: source_identity(policy.window_spec_id())?,
         statistic_id: source_identity(policy.statistic_spec_id())?,
         result_domain_id,
+        provider_extension_release_id: source_identity(
+            primary_provider_release.adapter_release_id(),
+        )?,
     })
 }
 
@@ -881,6 +1059,7 @@ pub fn derive_occurrence_v1(
     occurrence_index: u64,
     capitalization: &OccurrenceCapitalizationV1,
     source_material: OccurrenceSourceMaterialV1,
+    capability_manifest: OccurrenceCapabilityManifestV1,
 ) -> Result<DerivedOccurrenceV1> {
     recipe.validate()?;
     capitalization.validate()?;
@@ -899,12 +1078,18 @@ pub fn derive_occurrence_v1(
     {
         return Err(Error::SourceProductMismatch);
     }
+    if capability_manifest.template_id != recipe.capability_template_id
+        || capability_manifest.resolution_material_id != source_material.material_id
+        || capability_manifest.founding_release_id != source_material.provider_extension_release_id
+    {
+        return Err(Error::CapabilityProjectionMismatch);
+    }
 
     let source_spec_id = source_material.source_spec_id;
     let source_window_id = source_material.source_window_id;
     let statistic_id = source_material.statistic_id;
     let resolution_policy_id = source_material.material_id;
-    let capability_manifest_id = recipe.capability_template_id;
+    let capability_manifest_id = capability_manifest.manifest_id;
 
     // Canonical dclutch-core-contract MarketIdentity bytes.
     let mut market = [0u8; MARKET_IDENTITY_BYTES_V1];
@@ -941,6 +1126,10 @@ pub fn content_identity(bytes: &[u8]) -> Result<IdentityV1> {
 
 fn product_content_id(identity: IdentityV1) -> Result<ContentId> {
     ContentId::new(identity.to_bytes()).map_err(|_| Error::DerivationMismatch)
+}
+
+fn capability_content_id(identity: IdentityV1) -> Result<CapabilityContentId> {
+    CapabilityContentId::new(identity.to_bytes()).map_err(|_| Error::CapabilityProjectionMismatch)
 }
 
 /// Immutable aggregate proving how much finite Series principal exists now.
@@ -1953,6 +2142,7 @@ pub fn plan_create_series_v1(
     recipe_id: IdentityV1,
     aggregate_id: IdentityV1,
     recipe: &SeriesRecipeV1,
+    capability_template: SeriesCapabilityTemplateV1,
     aggregate: &CapitalizationAggregateV1,
     instruction: CreateSeriesV1,
     payer_before: u64,
@@ -1963,6 +2153,9 @@ pub fn plan_create_series_v1(
     escrow_rent: u64,
     replay_guard_rent: u64,
 ) -> Result<CreateSeriesPlanV1> {
+    if capability_template.template_id != recipe.capability_template_id {
+        return Err(Error::InvalidCapabilityTemplate);
+    }
     root_before.validate()?;
     escrow_before.validate()?;
     replay_guard_before.validate()?;
@@ -2064,6 +2257,7 @@ pub fn plan_instantiate_next_v1(
     derived_occurrence_id: IdentityV1,
     derived: &DerivedOccurrenceV1,
     source_material: OccurrenceSourceMaterialV1,
+    capability_manifest: OccurrenceCapabilityManifestV1,
     capitalization_id: IdentityV1,
     capitalization: &OccurrenceCapitalizationV1,
     instruction: InstantiateNextV1,
@@ -2105,6 +2299,7 @@ pub fn plan_instantiate_next_v1(
         root.next_occurrence_index,
         capitalization,
         source_material,
+        capability_manifest,
     )?;
     let expected_derived_id = content_identity(&expected_derived.to_bytes())?;
     if *derived != expected_derived || derived_occurrence_id != expected_derived_id {
@@ -2285,6 +2480,7 @@ pub fn plan_consume_ticket_v1(
     derived_occurrence_id: IdentityV1,
     derived: &DerivedOccurrenceV1,
     source_material: OccurrenceSourceMaterialV1,
+    capability_manifest: OccurrenceCapabilityManifestV1,
     capitalization_id: IdentityV1,
     capitalization: &OccurrenceCapitalizationV1,
     ticket: OccurrenceTicketV1,
@@ -2301,6 +2497,7 @@ pub fn plan_consume_ticket_v1(
         instruction.expected_index,
         capitalization,
         source_material,
+        capability_manifest,
     )?;
     if *derived != expected_derived
         || derived_occurrence_id != content_identity(&expected_derived.to_bytes())?

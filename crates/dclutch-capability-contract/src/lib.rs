@@ -18,8 +18,11 @@ pub mod funding;
 pub mod readiness_frame;
 /// Exact readiness instruction wires without SVM dependencies.
 pub mod readiness_instruction;
+/// Reusable capability templates and exact occurrence-manifest projection.
+pub mod template;
 
 pub use funding::*;
+pub use template::*;
 
 pub use dclutch_core_contract::ContentId;
 
@@ -199,6 +202,16 @@ pub enum Error {
     RequiredFoundingConfigMissing,
     /// More than one founding-required entry matched the requested config.
     RequiredFoundingConfigAmbiguous,
+    /// A capability-template configuration projection selector was unknown.
+    UnknownConfigProjection,
+    /// A template encoded a static or occurrence-bound configuration noncanonically.
+    NonCanonicalConfigProjection,
+    /// No unique founding-required entry projected the occurrence resolution material.
+    RequiredOccurrenceProjectionMissing,
+    /// More than one founding-required entry projected the occurrence resolution material.
+    RequiredOccurrenceProjectionAmbiguous,
+    /// A supplied manifest was not the exact projection of its authenticated template.
+    ProjectedManifestMismatch,
     /// Resolution-Fund rent did not equal the adapter's exact rent calculation.
     ResolutionFundRentMismatch,
     /// A one-shot resolution Fund omitted its positive success bounty.

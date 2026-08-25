@@ -28,9 +28,9 @@ The recipe commits:
 Every content identity is nonzero. V1 admits exactly one pinned Product compiler
 and four pinned derivation release IDs: a fixed occurrence-artifact/Product
 derivation, the V2 Source-material template projection, a shared immutable
-capability manifest, and canonical Market-identity derivation. Any mixed or
-unknown release set refuses. The superseded static-policy release is not a
-compatibility path. The contract recomputes the complete
+capability-template projection, and canonical Market-identity derivation. Any
+mixed or unknown release set refuses. The superseded static-policy and static-
+manifest releases are not compatibility paths. The contract recomputes the complete
 `DerivedOccurrenceV1` and its content identity; caller-authored derived fields
 are never authority.
 
@@ -51,7 +51,11 @@ source, provider, adapter configuration, window, statistic, result domain, and
 ordered recovery slots. The final Market `resolution_policy_id` is always the
 SHA-256 content ID of the complete occurrence-specific `SourceMaterialV1`
 bytes, never the template projection. Capability continues to use the immutable
-`capability_template_id` directly.
+`capability_template_id` only as reusable template authority. Series projects
+the Source-material ID into its founding-required config and hashes the exact
+ordinary `DCLTCAP1` result. Market identity commits that occurrence manifest
+ID, never the template ID. The projected founding release must also equal the
+Source material's primary provider-extension release.
 
 The fixed-point-free construction order is exact:
 
@@ -64,14 +68,23 @@ The fixed-point-free construction order is exact:
 4. construct and finalize the occurrence Source material against that exact
    Product instance and compute its distinct full content ID;
 5. authenticate the material bytes with
-   `authenticate_occurrence_source_material_v1`, then derive and finalize the
-   occurrence record and its Market identity.
+   `authenticate_occurrence_source_material_v1`;
+6. project its final ID through the recipe-selected capability template,
+   finalize the exact occurrence manifest, and authenticate both template and
+   manifest with `authenticate_occurrence_capability_manifest_v1`;
+7. derive and finalize the occurrence record and its Market identity.
 
 Changing only the template material's Product coordinates cannot change the
 schedule projection. Submitting such a material for another occurrence still
 refuses because the occurrence transition requires equality with the exact
 Product instance derived from the final recipe ID. There is no provisional
 digest, caller-authored fact bundle, or second Product authority.
+
+Series V1 admits one dependency-free, founding-required resolution entry. This
+is a **measured adapter boundary**, not a permanent capability limit: the
+current ticket/Found composition capitalizes and creates only that Fund.
+Lifting it requires exact per-entry capitalization, custody, atomic Found
+composition, and opening-readiness evidence for every additional entry.
 
 Before accepting Create, and again before instantiation, the SBF release
 authenticates the recipe-selected CapacityProfile and proves that the fixed
@@ -131,11 +144,12 @@ have reached that time. The authenticated derivation record must
 bind the same recipe, index, time, generation, occurrence, source, resolution,
 capability-manifest, Market-identity, and capitalization identities. The
 capitalization item must bind the same recipe, schedule, and index. The adapter
-also authenticates the final occurrence SourceMaterial record and staging
-cursor, recomputes its full digest and reusable projection, and proves its
+also authenticates the final occurrence SourceMaterial and projected
+CapabilityManifest records and staging cursors, recomputes their full digests
+and reusable projections, and proves the Source material's
 embedded Product instance and Product-owned result domain equal the exact
-recipe derivation. The action-2 physical frame has 18 accounts; SourceMaterial
-and its cursor are roles 14 and 15, immediately before System and Rent.
+recipe derivation. The successor physical frame must be remeasured before its
+account order is frozen; the former 18-account frame is obsolete.
 
 Success atomically:
 
