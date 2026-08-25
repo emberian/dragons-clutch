@@ -18,6 +18,7 @@ sha256_file() {
   cd "$repository_dir/formal/dclutch-semantics"
   lake build
   lake env lean --run EmitDirectTranslationCorpus.lean > "$corpus"
+  lake env lean --run EmitRegisteredCreationTranslationCorpus.lean >> "$corpus"
 )
 
 cargo run --quiet --manifest-path "$validator_dir/Cargo.toml" -- "$corpus"
@@ -36,12 +37,16 @@ printf 'lean_terminal_physical_sha256=%s\n' \
   "$(sha256_file "$repository_dir/formal/dclutch-semantics/DClutchSemantics/RegisteredPhysical.lean")"
 printf 'lean_direct_lifecycle_sha256=%s\n' \
   "$(sha256_file "$repository_dir/formal/dclutch-semantics/DClutchSemantics/DirectLifecycle.lean")"
+printf 'lean_creation_corpus_emitter_sha256=%s\n' \
+  "$(sha256_file "$repository_dir/formal/dclutch-semantics/EmitRegisteredCreationTranslationCorpus.lean")"
 printf 'rust_codec_sha256=%s\n' \
   "$(sha256_file "$repository_dir/crates/dclutch-direct-codec/src/lib.rs")"
 printf 'rust_vm_sha256=%s\n' \
   "$(sha256_file "$repository_dir/crates/dclutch-transition-vm/src/lib.rs")"
 printf 'rust_terminal_validator_sha256=%s\n' \
   "$(sha256_file "$validator_dir/src/terminal.rs")"
+printf 'rust_registration_validator_sha256=%s\n' \
+  "$(sha256_file "$validator_dir/src/registration.rs")"
 printf 'program_include_sha256=%s\n' \
   "$(sha256_file "$repository_dir/programs/dclutch-controller-proof-sbf/src/generated_direct_program.rs")"
 rustc -Vv
