@@ -5,6 +5,10 @@
 
 use std::{env, path::PathBuf};
 
+use dclutch_direct_codec::{
+    COMPACT_INTENT_BYTES, CompactIntentV1, ControllerInstructionV1, MARKET_PROFILE_BYTES,
+    MarketProfileV1,
+};
 use dclutch_token_svm::LEGACY_TOKEN_PROGRAM_ID;
 use solana_account::Account;
 use solana_program::{
@@ -28,9 +32,6 @@ const POSITION_STATE_BYTES: usize = 56;
 const JOURNAL_BYTES: usize = 16;
 const TOKEN_ACCOUNT_BYTES: usize = 165;
 const MINT_BYTES: usize = 82;
-const PROFILE_BYTES: usize = 136;
-const INTENT_BYTES: usize = 136;
-const CONTROLLER_BYTES: usize = 304;
 const GENERATION: u64 = 3;
 const FILL: u64 = 2_000;
 const PRICE: u64 = 500_000;
@@ -128,64 +129,53 @@ fn journal(counter: u64) -> Vec<u8> {
 }
 
 fn market_profile(mint: Pubkey, venue: Pubkey) -> Vec<u8> {
-    let mut bytes = vec![0_u8; PROFILE_BYTES];
-    bytes[0..8].copy_from_slice(b"DCLTPRF1");
-    put_u16(&mut bytes, 8, 1);
-    bytes[10] = 1;
-    bytes[11] = 2;
-    put_u64(&mut bytes, 16, GENERATION);
-    put_u64(&mut bytes, 24, PRICE_SCALE);
-    put_u16(&mut bytes, 32, FEE_BPS);
-    bytes[40..72].copy_from_slice(token_program_id().as_ref());
-    bytes[72..104].copy_from_slice(mint.as_ref());
-    bytes[104..136].copy_from_slice(venue.as_ref());
-    bytes
+    MarketProfileV1 {
+        phase: 1,
+        outcome_count: 2,
+        generation: GENERATION,
+        price_scale: PRICE_SCALE,
+        fee_basis_points: FEE_BPS,
+        token_program: token_program_id().to_bytes(),
+        collateral_mint: mint.to_bytes(),
+        fee_recipient: venue.to_bytes(),
+    }
+    .encode()
+    .expect("fixed Market profile")
+    .to_vec()
 }
 
-fn compact_intent(market: Pubkey, collateral: Pubkey, side: u8, nonce: u64) -> [u8; INTENT_BYTES] {
-    let mut bytes = [0_u8; INTENT_BYTES];
-    bytes[0..8].copy_from_slice(b"DCLTDIR3");
-    put_u16(&mut bytes, 8, 1);
-    bytes[10] = side;
-    bytes[11] = 1;
-    bytes[12] = 0;
-    bytes[16..48].copy_from_slice(market.as_ref());
-    put_u64(&mut bytes, 48, GENERATION);
-    put_u64(&mut bytes, 56, nonce);
-    put_u64(&mut bytes, 64, 0);
-    put_u64(&mut bytes, 72, u64::MAX);
-    put_u64(&mut bytes, 80, FILL);
-    put_u64(&mut bytes, 88, if side == 0 { 400_000 } else { 600_000 });
-    put_u16(&mut bytes, 96, FEE_BPS);
-    bytes[104..136].copy_from_slice(collateral.as_ref());
-    bytes
+fn compact_intent(market: Pubkey, collateral: Pubkey, side: u8, nonce: u64) -> CompactIntentV1 {
+    CompactIntentV1 {
+        side,
+        outcome: 1,
+        lifecycle: 0,
+        execution_profile: market.to_bytes(),
+        generation: GENERATION,
+        nonce,
+        valid_from: 0,
+        valid_through: u64::MAX,
+        maximum_fill: FILL,
+        limit_price: if side == 0 { 400_000 } else { 600_000 },
+        fee_basis_points: FEE_BPS,
+        collateral_account: collateral.to_bytes(),
+    }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn controller_data(controller_bump: u8, fixture: MarketFixture, nonce: u64) -> Vec<u8> {
-    let mut bytes = vec![0_u8; CONTROLLER_BYTES];
-    bytes[0..8].copy_from_slice(b"DCLTCTL1");
-    put_u16(&mut bytes, 8, 1);
-    bytes[10] = controller_bump;
-    bytes[11] = fixture.seller_bump;
-    bytes[12] = fixture.buyer_bump;
-    bytes[13] = fixture.seller_position_bump;
-    bytes[14] = fixture.buyer_position_bump;
-    put_u64(&mut bytes, 16, FILL);
-    put_u64(&mut bytes, 24, PRICE);
-    bytes[32..168].copy_from_slice(&compact_intent(
-        fixture.profile,
-        fixture.tokens.seller,
-        0,
-        nonce,
-    ));
-    bytes[168..304].copy_from_slice(&compact_intent(
-        fixture.profile,
-        fixture.tokens.source,
-        1,
-        nonce,
-    ));
-    bytes
+    ControllerInstructionV1 {
+        controller_bump,
+        seller_replay_bump: fixture.seller_bump,
+        buyer_replay_bump: fixture.buyer_bump,
+        seller_position_bump: fixture.seller_position_bump,
+        buyer_position_bump: fixture.buyer_position_bump,
+        fill: FILL,
+        execution_price: PRICE,
+        seller: compact_intent(fixture.profile, fixture.tokens.seller, 0, nonce),
+        buyer: compact_intent(fixture.profile, fixture.tokens.source, 1, nonce),
+    }
+    .encode()
+    .expect("fixed controller instruction")
+    .to_vec()
 }
 
 fn signed_ed25519_batch(seller: &Keypair, buyer: &Keypair, controller_data: &[u8]) -> Instruction {
@@ -219,11 +209,11 @@ fn signed_ed25519_batch(seller: &Keypair, buyer: &Keypair, controller_data: &[u8
         put_u16(
             &mut data,
             descriptor + 10,
-            u16::try_from(INTENT_BYTES).expect("message length"),
+            u16::try_from(COMPACT_INTENT_BYTES).expect("message length"),
         );
         put_u16(&mut data, descriptor + 12, 1);
         data[public_key_offset..public_key_offset + 32].copy_from_slice(maker.pubkey().as_ref());
-        let message = &controller_data[message_offset..message_offset + INTENT_BYTES];
+        let message = &controller_data[message_offset..message_offset + COMPACT_INTENT_BYTES];
         data[signature_offset..signature_offset + 64]
             .copy_from_slice(maker.sign_message(message).as_ref());
     }
@@ -494,7 +484,7 @@ async fn signed_intents_compile_to_claims_and_real_token_transfers_atomically() 
         test.add_account(
             fixture.profile,
             Account {
-                lamports: Rent::default().minimum_balance(PROFILE_BYTES),
+                lamports: Rent::default().minimum_balance(MARKET_PROFILE_BYTES),
                 data: market_profile(mint_key, fixture.tokens.venue),
                 owner: CONTROLLER_PROGRAM_ID,
                 executable: false,

@@ -38,7 +38,8 @@ cannot change a resting order's final cumulative fee in the semantic model.
 
 ## Not yet connected
 
-- generated safe-Rust and TypeScript clients;
+- a generated TypeScript client (the safe Rust codec has exact cross-language
+  vector, round-trip, and hostile-parser tests but no refinement theorem);
 - a general proof that the emitted Direct transition program accepts exactly
   the semantic `Admissible` frames and derives their unique physical plans;
 - a machine-checked refinement from Lean's transition VM to the safe Rust

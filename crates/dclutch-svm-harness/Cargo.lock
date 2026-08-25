@@ -1543,6 +1543,10 @@ name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-direct-codec"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-direct-contract"
 version = "0.1.0"
 dependencies = [
@@ -1611,6 +1615,7 @@ dependencies = [
  "dclutch-capability-contract",
  "dclutch-collateral-contract",
  "dclutch-core-contract",
+ "dclutch-direct-codec",
  "dclutch-direct-contract",
  "dclutch-kernel",
  "dclutch-market-contract",

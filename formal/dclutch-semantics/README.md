@@ -41,8 +41,10 @@ open.
 Lean also owns the exact data structures and encodings for the 136-byte compact
 intent, 304-byte controller instruction, and 136-byte Market execution profile.
 Their exact lengths are theorems. A maker key is deliberately not duplicated in
-the signed intent: the native Ed25519 public key is its semantic owner. Generated
-client codecs and a parser-refinement theorem are the next ABI boundary.
+the signed intent: the native Ed25519 public key is its semantic owner. Lean also
+emits four exact ABI vectors; the safe, `no_std`, `no_alloc` Rust codec matches
+them byte-for-byte and is shared by the controller and SVM harness. A generated
+TypeScript codec and parser-refinement theorem remain open.
 
 `dclutch-effect-kernel` is the first physical refinement target. It is safe
 Rust, `no_std`, `no_alloc`, fixed-capacity, and transactionally applies the

@@ -8,6 +8,10 @@ extern crate std;
 
 mod generated_direct_program;
 
+use dclutch_direct_codec::{
+    COMPACT_INTENT_BYTES, CONTROLLER_INSTRUCTION_BYTES, CompactIntentV1, ControllerInstructionV1,
+    MarketProfileV1,
+};
 use dclutch_token_svm::{ACCOUNT_BYTES, COption, ExactTransferProfileV1, LEGACY_TOKEN_PROGRAM_ID};
 use dclutch_transition_vm::Registers;
 use generated_direct_program::DIRECT_PROGRAM;
@@ -36,18 +40,7 @@ pub const CLAIM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([81_u8; 32]);
 pub const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([75_u8; 32]);
 /// Bytes in the canonical controller journal.
 pub const JOURNAL_BYTES: usize = 16;
-/// Bytes in one compact independently signed Direct intent.
-pub const SIGNED_INTENT_BYTES: usize = 136;
-/// Bytes in the exact successor controller instruction.
-pub const CONTROLLER_INSTRUCTION_BYTES: usize = 304;
-/// Bytes in one read-only experimental Market execution profile.
-pub const MARKET_PROFILE_BYTES: usize = 136;
-
 const JOURNAL_MAGIC: &[u8; 4] = b"DCCJ";
-const CONTROLLER_MAGIC: &[u8; 8] = b"DCLTCTL1";
-const INTENT_MAGIC: &[u8; 8] = b"DCLTDIR3";
-const PROFILE_MAGIC: &[u8; 8] = b"DCLTPRF1";
-const SCHEMA_VERSION: u16 = 1;
 const CLAIM_PLAN_BYTES: usize = 72;
 const CUSTODY_PLAN_BYTES: usize = 40;
 const REPLAY_STATE_BYTES: usize = 48;
@@ -56,7 +49,7 @@ const ED25519_DESCRIPTOR_BYTES: usize = 14;
 const ED25519_PAYLOAD_START: usize = 2 + 2 * ED25519_DESCRIPTOR_BYTES;
 const ED25519_INSTRUCTION_BYTES: usize = ED25519_PAYLOAD_START + 2 * 96;
 const SELLER_INTENT_OFFSET: usize = 32;
-const BUYER_INTENT_OFFSET: usize = SELLER_INTENT_OFFSET + SIGNED_INTENT_BYTES;
+const BUYER_INTENT_OFFSET: usize = SELLER_INTENT_OFFSET + COMPACT_INTENT_BYTES;
 
 /// Stable controller experiment refusal.
 #[repr(u32)]
@@ -101,45 +94,6 @@ impl From<ControllerError> for ProgramError {
 }
 
 #[derive(Clone, Copy)]
-struct SignedIntent {
-    side: u8,
-    outcome: u8,
-    lifecycle: u8,
-    market: [u8; 32],
-    generation: u64,
-    nonce: u64,
-    valid_from: u64,
-    valid_through: u64,
-    maximum: u64,
-    limit: u64,
-    fee_basis_points: u16,
-    collateral_account: [u8; 32],
-}
-
-#[derive(Clone, Copy)]
-struct MarketProfile {
-    phase: u8,
-    outcome_count: u8,
-    generation: u64,
-    price_scale: u64,
-    fee_basis_points: u16,
-    token_program: [u8; 32],
-    collateral_mint: [u8; 32],
-    fee_recipient: [u8; 32],
-}
-
-#[derive(Clone, Copy)]
-struct ControllerHeader {
-    controller_bump: u8,
-    seller_replay_bump: u8,
-    buyer_replay_bump: u8,
-    seller_position_bump: u8,
-    buyer_position_bump: u8,
-    fill: u64,
-    execution_price: u64,
-}
-
-#[derive(Clone, Copy)]
 struct ReplayState {
     nonce: u64,
 }
@@ -174,17 +128,10 @@ pub fn process_instruction(
     if accounts.len() != 15 || instruction_data.len() != CONTROLLER_INSTRUCTION_BYTES {
         return Err(ControllerError::AccountFrame.into());
     }
-    let header = decode_controller_header(instruction_data)?;
-    let seller_intent = decode_intent(read_slice(
-        instruction_data,
-        SELLER_INTENT_OFFSET,
-        SIGNED_INTENT_BYTES,
-    )?)?;
-    let buyer_intent = decode_intent(read_slice(
-        instruction_data,
-        BUYER_INTENT_OFFSET,
-        SIGNED_INTENT_BYTES,
-    )?)?;
+    let instruction = ControllerInstructionV1::decode(instruction_data)
+        .map_err(|_| ControllerError::Instruction)?;
+    let seller_intent = instruction.seller;
+    let buyer_intent = instruction.buyer;
 
     let mut iterator = accounts.iter();
     let controller = next(&mut iterator)?;
@@ -221,13 +168,14 @@ pub fn process_instruction(
         token_program,
         instructions,
     )?;
-    let profile = decode_market_profile(
+    let profile = MarketProfileV1::decode(
         &market_profile
             .try_borrow_data()
             .map_err(|_| ControllerError::MarketProfile)?,
-    )?;
-    if seller_intent.market != market_profile.key.to_bytes()
-        || buyer_intent.market != market_profile.key.to_bytes()
+    )
+    .map_err(|_| ControllerError::MarketProfile)?;
+    if seller_intent.execution_profile != market_profile.key.to_bytes()
+        || buyer_intent.execution_profile != market_profile.key.to_bytes()
         || seller_intent.generation != profile.generation
         || buyer_intent.generation != profile.generation
         || seller_intent.collateral_account != seller.key.to_bytes()
@@ -240,7 +188,7 @@ pub fn process_instruction(
     }
 
     let makers = authenticate_ed25519_batch(program_id, accounts, instruction_data, instructions)?;
-    let controller_bump_seed = [header.controller_bump];
+    let controller_bump_seed = [instruction.controller_bump];
     let controller_seeds: [&[u8]; 2] = [CONTROLLER_SEED, &controller_bump_seed];
     let expected_controller = Pubkey::create_program_address(&controller_seeds, program_id)
         .map_err(|_| ControllerError::ControllerPda)?;
@@ -248,7 +196,7 @@ pub fn process_instruction(
         return Err(ControllerError::ControllerPda.into());
     }
     let generation = profile.generation.to_le_bytes();
-    let seller_bump_seed = [header.seller_replay_bump];
+    let seller_bump_seed = [instruction.seller_replay_bump];
     let seller_seeds: [&[u8]; 5] = [
         REPLAY_SEED,
         market_profile.key.as_ref(),
@@ -256,7 +204,7 @@ pub fn process_instruction(
         makers[0].as_ref(),
         &seller_bump_seed,
     ];
-    let buyer_bump_seed = [header.buyer_replay_bump];
+    let buyer_bump_seed = [instruction.buyer_replay_bump];
     let buyer_seeds: [&[u8]; 5] = [
         REPLAY_SEED,
         market_profile.key.as_ref(),
@@ -276,8 +224,8 @@ pub fn process_instruction(
 
     let seller_outcome_seed = [seller_intent.outcome];
     let buyer_outcome_seed = [buyer_intent.outcome];
-    let seller_position_bump_seed = [header.seller_position_bump];
-    let buyer_position_bump_seed = [header.buyer_position_bump];
+    let seller_position_bump_seed = [instruction.seller_position_bump];
+    let buyer_position_bump_seed = [instruction.buyer_position_bump];
     let seller_position_seeds: [&[u8]; 5] = [
         POSITION_SEED,
         market_profile.key.as_ref(),
@@ -334,8 +282,8 @@ pub fn process_instruction(
         makers,
         claim_state,
         token_state,
-        header.fill,
-        header.execution_price,
+        instruction.fill,
+        instruction.execution_price,
         Clock::get().map_err(|_| ControllerError::Instruction)?.slot,
     )?;
     dclutch_transition_vm::execute(&DIRECT_PROGRAM, &mut registers)
@@ -367,70 +315,6 @@ pub fn process_instruction(
         &buyer_seeds,
         custody_plan,
     )
-}
-
-fn decode_controller_header(input: &[u8]) -> Result<ControllerHeader, ControllerError> {
-    if input.get(..8) != Some(CONTROLLER_MAGIC.as_slice())
-        || read_u16(input, 8)? != SCHEMA_VERSION
-        || read_byte(input, 15)? != 0
-    {
-        return Err(ControllerError::Instruction);
-    }
-    Ok(ControllerHeader {
-        controller_bump: read_byte(input, 10)?,
-        seller_replay_bump: read_byte(input, 11)?,
-        buyer_replay_bump: read_byte(input, 12)?,
-        seller_position_bump: read_byte(input, 13)?,
-        buyer_position_bump: read_byte(input, 14)?,
-        fill: read_u64(input, 16)?,
-        execution_price: read_u64(input, 24)?,
-    })
-}
-
-fn decode_intent(input: &[u8]) -> Result<SignedIntent, ControllerError> {
-    if input.len() != SIGNED_INTENT_BYTES
-        || input.get(..8) != Some(INTENT_MAGIC.as_slice())
-        || read_u16(input, 8)? != SCHEMA_VERSION
-        || read_slice(input, 13, 3)?.iter().any(|byte| *byte != 0)
-        || read_slice(input, 98, 6)?.iter().any(|byte| *byte != 0)
-    {
-        return Err(ControllerError::Intent);
-    }
-    Ok(SignedIntent {
-        side: read_byte(input, 10)?,
-        outcome: read_byte(input, 11)?,
-        lifecycle: read_byte(input, 12)?,
-        market: read_array(input, 16)?,
-        generation: read_u64(input, 48)?,
-        nonce: read_u64(input, 56)?,
-        valid_from: read_u64(input, 64)?,
-        valid_through: read_u64(input, 72)?,
-        maximum: read_u64(input, 80)?,
-        limit: read_u64(input, 88)?,
-        fee_basis_points: read_u16(input, 96)?,
-        collateral_account: read_array(input, 104)?,
-    })
-}
-
-fn decode_market_profile(input: &[u8]) -> Result<MarketProfile, ControllerError> {
-    if input.len() != MARKET_PROFILE_BYTES
-        || input.get(..8) != Some(PROFILE_MAGIC.as_slice())
-        || read_u16(input, 8)? != SCHEMA_VERSION
-        || read_slice(input, 12, 4)?.iter().any(|byte| *byte != 0)
-        || read_slice(input, 34, 6)?.iter().any(|byte| *byte != 0)
-    {
-        return Err(ControllerError::MarketProfile);
-    }
-    Ok(MarketProfile {
-        phase: read_byte(input, 10)?,
-        outcome_count: read_byte(input, 11)?,
-        generation: read_u64(input, 16)?,
-        price_scale: read_u64(input, 24)?,
-        fee_basis_points: read_u16(input, 32)?,
-        token_program: read_array(input, 40)?,
-        collateral_mint: read_array(input, 72)?,
-        fee_recipient: read_array(input, 104)?,
-    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -581,7 +465,7 @@ fn authenticate_ed25519_batch(
             || usize::from(read_u16(&preceding.data, descriptor + 4)?) != public_key_offset
             || read_u16(&preceding.data, descriptor + 6)? != u16::MAX
             || usize::from(read_u16(&preceding.data, descriptor + 8)?) != message_offset
-            || usize::from(read_u16(&preceding.data, descriptor + 10)?) != SIGNED_INTENT_BYTES
+            || usize::from(read_u16(&preceding.data, descriptor + 10)?) != COMPACT_INTENT_BYTES
             || read_u16(&preceding.data, descriptor + 12)? != current
             || read_slice(&preceding.data, signature_offset, 64)?
                 .iter()
@@ -640,7 +524,7 @@ fn decode_position_state(
 
 #[allow(clippy::too_many_arguments)]
 fn authenticate_token_state(
-    profile: MarketProfile,
+    profile: MarketProfileV1,
     buyer: Pubkey,
     buyer_replay: &AccountInfo<'_>,
     mint: &AccountInfo<'_>,
@@ -702,9 +586,9 @@ fn legacy_destination_projection(
 
 #[allow(clippy::too_many_arguments)]
 fn build_registers(
-    profile: MarketProfile,
-    seller: SignedIntent,
-    buyer: SignedIntent,
+    profile: MarketProfileV1,
+    seller: CompactIntentV1,
+    buyer: CompactIntentV1,
     makers: [Pubkey; 2],
     claims: ClaimState,
     token: [u64; 3],
@@ -728,16 +612,16 @@ fn build_registers(
         buyer.outcome as u64,
         profile.outcome_count as u64,
         seller.lifecycle as u64,
-        seller.maximum,
+        seller.maximum_fill,
         buyer.lifecycle as u64,
-        buyer.maximum,
+        buyer.maximum_fill,
         seller.nonce,
         buyer.nonce,
         claims.seller_nonce,
         claims.buyer_nonce,
-        seller.limit,
+        seller.limit_price,
         execution_price,
-        buyer.limit,
+        buyer.limit_price,
         profile.price_scale,
         seller.fee_basis_points as u64,
         buyer.fee_basis_points as u64,
@@ -755,8 +639,8 @@ fn build_registers(
             .map_err(|_| ControllerError::Transition)?;
     }
     for (index, identity) in [
-        seller.market,
-        buyer.market,
+        seller.execution_profile,
+        buyer.execution_profile,
         makers[0].to_bytes(),
         makers[1].to_bytes(),
     ]
@@ -953,13 +837,6 @@ fn next<'a, 'info>(
     iterator: &mut core::slice::Iter<'a, AccountInfo<'info>>,
 ) -> Result<&'a AccountInfo<'info>, ControllerError> {
     next_account_info(iterator).map_err(|_| ControllerError::AccountFrame)
-}
-
-fn read_byte(input: &[u8], offset: usize) -> Result<u8, ControllerError> {
-    input
-        .get(offset)
-        .copied()
-        .ok_or(ControllerError::Instruction)
 }
 
 fn read_slice(input: &[u8], offset: usize, width: usize) -> Result<&[u8], ControllerError> {

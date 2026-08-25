@@ -139,4 +139,70 @@ theorem encodeMarketProfileV1_length (profile : MarketProfileV1) :
   simp [encodeMarketProfileV1, profileMagic, marketProfileBytes,
     encodeLE_length, encodeBytes32_length, zeros]
 
+namespace Examples
+
+def bytes32 (byte : UInt8) : Bytes32 := fun _ => byte
+
+def sellerIntent : CompactIntentV1 := {
+  side := 0
+  outcome := 1
+  lifecycle := 0
+  executionProfile := bytes32 4
+  generation := 3
+  nonce := 0
+  validFrom := 0
+  validThrough := 18446744073709551615
+  maximumFill := 2000
+  limitPrice := 400000
+  feeBasisPoints := 25
+  collateralAccount := bytes32 5
+}
+
+def buyerIntent : CompactIntentV1 := {
+  side := 1
+  outcome := 1
+  lifecycle := 0
+  executionProfile := bytes32 4
+  generation := 3
+  nonce := 0
+  validFrom := 0
+  validThrough := 18446744073709551615
+  maximumFill := 2000
+  limitPrice := 600000
+  feeBasisPoints := 25
+  collateralAccount := bytes32 6
+}
+
+def controllerInstruction : ControllerInstructionV1 := {
+  controllerBump := 1
+  sellerReplayBump := 2
+  buyerReplayBump := 3
+  sellerPositionBump := 4
+  buyerPositionBump := 5
+  fill := 2000
+  executionPrice := 500000
+  seller := sellerIntent
+  buyer := buyerIntent
+}
+
+def marketProfile : MarketProfileV1 := {
+  phase := 1
+  outcomeCount := 2
+  generation := 3
+  priceScale := 1000000
+  feeBasisPoints := 25
+  tokenProgram := bytes32 7
+  collateralMint := bytes32 8
+  feeRecipient := bytes32 9
+}
+
+theorem concrete_lengths :
+    (encodeCompactIntentV1 sellerIntent).length = 136 ∧
+    (encodeCompactIntentV1 buyerIntent).length = 136 ∧
+    (encodeControllerInstructionV1 controllerInstruction).length = 304 ∧
+    (encodeMarketProfileV1 marketProfile).length = 136 := by
+  native_decide
+
+end Examples
+
 end DClutch.DirectControllerCodec

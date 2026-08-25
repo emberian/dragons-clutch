@@ -322,6 +322,7 @@ dependencies = [
 name = "dclutch-controller-proof-sbf"
 version = "0.1.0"
 dependencies = [
+ "dclutch-direct-codec",
  "dclutch-token-svm",
  "dclutch-transition-vm",
  "solana-instructions-sysvar",
@@ -350,6 +351,10 @@ dependencies = [
  "dclutch-realm-contract",
  "dclutch-record-contract",
 ]
+
+[[package]]
+name = "dclutch-direct-codec"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-direct-contract"

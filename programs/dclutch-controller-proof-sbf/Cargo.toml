@@ -17,6 +17,7 @@ custom-heap = []
 custom-panic = []
 
 [dependencies]
+dclutch-direct-codec = { path = "../../crates/dclutch-direct-codec" }
 dclutch-token-svm = { path = "../../crates/dclutch-token-svm" }
 dclutch-transition-vm = { path = "../../crates/dclutch-transition-vm" }
 solana-program = { version = "=3.0.0", default-features = false }

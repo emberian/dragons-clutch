@@ -28,3 +28,7 @@ root = "EmitDirectProgram"
 [[lean_exe]]
 name = "emit-direct-program-rust"
 root = "EmitDirectProgramRust"
+
+[[lean_exe]]
+name = "emit-direct-controller-vectors"
+root = "EmitDirectControllerVectors"

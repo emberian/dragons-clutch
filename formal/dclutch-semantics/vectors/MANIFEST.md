@@ -41,3 +41,12 @@ it derives exact quote divisibility, the quotient, and the named floor fee into
 output registers after checking the Direct admission relations. Native
 signature evidence and the refinement from abstract identity equality to exact
 32-byte public keys remain adapter obligations.
+
+## Direct controller ABI
+
+`direct-controller-v1.txt` contains the seller intent, buyer intent, complete
+controller instruction, and experimental execution profile emitted by
+`lake exe emit-direct-controller-vectors`. The safe, `no_std`, `no_alloc`
+`dclutch-direct-codec` encoders must equal all four vectors byte-for-byte, then
+strictly decode them back to the same fixed data structures. The controller and
+real-SVM harness consume that crate instead of maintaining local layouts.

@@ -1,0 +1,12 @@
+[package]
+name = "dclutch-direct-codec"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Fixed-layout codecs for Lean-owned compiled Direct data"
+
+[dependencies]
+
+[lints]
+workspace = true
