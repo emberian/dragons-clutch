@@ -1541,15 +1541,15 @@ fn process_begin_settlement<const N: usize>(
     require_prefunded_vacant(settlement_position_account)?;
     require_prefunded_vacant(settlement_quote_escrow)?;
     let root = authenticate_root(program_id, root_account)?;
-    let config = authenticate_finalized_config(
+    let config = authenticate_finalized_config_boxed(
         program_id,
         config_account,
         config_cursor,
         rent_sysvar,
         root.config_id().to_bytes(),
     )?;
-    let market = authenticate_market::<N>(program_id, market_account, root.market())?;
-    authenticate_market_config(market, config, root, root.config_id())?;
+    let market = authenticate_market_boxed::<N>(program_id, market_account, root.market())?;
+    authenticate_market_config(*market, *config, root, root.config_id())?;
     let claim = authenticate_claim_basis(
         program_id,
         claim_account,
@@ -1557,7 +1557,7 @@ fn process_begin_settlement<const N: usize>(
         rent_sysvar,
         config.claim_basis_id().to_bytes(),
     )?;
-    authenticate_claim_basis_config::<N>(claim, config)?;
+    authenticate_claim_basis_config::<N>(claim, *config)?;
     let realm = authenticate_realm(
         program_id,
         realm_account,
@@ -1635,7 +1635,7 @@ fn process_begin_settlement<const N: usize>(
         candidate.as_mut(),
         &mut batch,
         root,
-        config,
+        *config,
         CandidateCapitalizationV1 {
             account_lamports: candidate_before,
             exact_state_rent_lamports: candidate_rent,
@@ -3250,6 +3250,23 @@ fn decode_capability_funding_boxed(
     account: &AccountInfo<'_>,
 ) -> Result<Box<FundingStateV1>, ProgramError> {
     Ok(Box::new(decode_capability_funding(account)?))
+}
+
+#[inline(never)]
+fn authenticate_finalized_config_boxed<'info>(
+    program_id: &Pubkey,
+    raw: &AccountInfo<'info>,
+    cursor: &AccountInfo<'info>,
+    rent: &AccountInfo<'info>,
+    expected_digest: [u8; 32],
+) -> Result<Box<GeneralConfigV1>, ProgramError> {
+    Ok(Box::new(authenticate_finalized_config(
+        program_id,
+        raw,
+        cursor,
+        rent,
+        expected_digest,
+    )?))
 }
 
 #[inline(never)]
