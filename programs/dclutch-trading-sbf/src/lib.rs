@@ -19,6 +19,10 @@ use solana_program::{
 
 /// Manifest-, root-, release-, and descriptor-authenticated generic dispatch.
 pub mod dispatch;
+/// General family projection behind the common data-defined Trading boundary.
+pub mod general;
+/// Series family projection behind the common data-defined Trading boundary.
+pub mod series;
 
 /// Stable refusal from the canonical Trading SBF boundary.
 #[repr(u32)]

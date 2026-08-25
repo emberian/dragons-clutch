@@ -798,6 +798,7 @@ dependencies = [
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-core-contract",
+ "dclutch-general-config-contract",
  "dclutch-market-core-codec",
  "dclutch-record-contract",
  "dclutch-registry-svm",
