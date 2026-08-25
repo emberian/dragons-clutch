@@ -11,8 +11,8 @@ use dclutch_capability_contract::{
 use dclutch_core_contract::{MARKET_ROOT_BYTES, MarketRoot, Phase};
 use dclutch_direct_codec::{
     CompactIntentV1, REGISTERED_INTENT_STATE_BYTES, RegisteredCreateInstructionV1,
-    RegisteredFillInstructionV1, RegisteredIntentStateV1, RegisteredTerminalAction,
-    RegisteredTerminalInstructionV1,
+    RegisteredFillInstructionV1, RegisteredIntentStateV1, RegisteredRetireInstructionV1,
+    RegisteredTerminalAction, RegisteredTerminalInstructionV1,
 };
 use dclutch_direct_contract::{
     DIRECT_CAPABILITY_KIND_ID_V2, FEE_BASIS_POINTS_DENOMINATOR, PRICE_SCALE,
@@ -24,7 +24,8 @@ use dclutch_realm_contract::{
 };
 use dclutch_record_contract::RAW_RECORD_PDA_SEED_V1;
 use dclutch_token_svm::{
-    COption, ExactTransferProfileV1, LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES,
+    AccountState, COption, ExactTransferProfileV1, LEGACY_TOKEN_PROGRAM_ID,
+    PRODUCTION_ADAPTER_RELEASES, TokenAccount,
 };
 use solana_hash::Hash;
 use solana_message::{VersionedMessage, v0};
@@ -46,6 +47,10 @@ pub const REGISTERED_SEED: &[u8] = b"dclutch/direct-registered/v1";
 pub const REGISTERED_CREATE_ACCOUNT_COUNT: usize = 15;
 /// Exact instruction count for one prepaid buyer registration transaction.
 pub const REGISTERED_CREATE_INSTRUCTION_COUNT: usize = 2;
+/// Exact account count for permissionless terminal seller retirement.
+pub const REGISTERED_SELLER_RETIRE_ACCOUNT_COUNT: usize = 4;
+/// Exact account count for maker-authorized terminal buyer retirement.
+pub const REGISTERED_BUYER_RETIRE_ACCOUNT_COUNT: usize = 6;
 /// Exact account count for a registered residual fill.
 pub const REGISTERED_FILL_ACCOUNT_COUNT: usize = 17;
 /// Exact account count for a maker-authorized registered cancellation.
@@ -163,6 +168,40 @@ pub struct RegisteredDirectCreationState {
     pub rent_sysvar: ObservedAccount,
 }
 
+/// Same-finalized state for permissionless terminal seller retirement.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegisteredDirectSellerRetirementState {
+    /// Executable controller program selected for this route.
+    pub controller_program: ObservedAccount,
+    /// Global controller PDA observation.
+    pub controller: ObservedAccount,
+    /// Terminal seller registration whose rent will be returned.
+    pub registration: ObservedAccount,
+    /// Persisted maker account receiving the entire registration balance.
+    pub maker: ObservedAccount,
+    /// Pinned executable claim child.
+    pub claim_program: ObservedAccount,
+}
+
+/// Same-finalized state for maker-authorized terminal buyer retirement.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegisteredDirectBuyerRetirementState {
+    /// Executable controller program selected for this route.
+    pub controller_program: ObservedAccount,
+    /// Global controller PDA observation.
+    pub controller: ObservedAccount,
+    /// Terminal buyer registration whose rent will be returned.
+    pub registration: ObservedAccount,
+    /// Persisted maker signer and sole rent-refund recipient.
+    pub maker: ObservedAccount,
+    /// Pinned executable claim child.
+    pub claim_program: ObservedAccount,
+    /// Persisted buyer collateral account, writable for controller CPI revoke.
+    pub collateral: ObservedAccount,
+    /// Pinned executable legacy SPL Token program.
+    pub token_program: ObservedAccount,
+}
+
 /// Chain-derived registered residual-fill instruction.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RegisteredDirectFillReport {
@@ -225,6 +264,45 @@ pub struct RegisteredDirectCreationPacket {
     pub wire_bytes: usize,
 }
 
+/// Token-delegation boundary selected by terminal retirement state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegisteredDirectRetirementBoundary {
+    /// Seller registrations never grant a token delegation.
+    SellerNoDelegation,
+    /// Buyer token state is already delegate-free and needs no CPI revoke.
+    BuyerAlreadyClear,
+    /// The controller must revoke and verify clearance before closing.
+    BuyerControllerRevokeRequired,
+}
+
+/// Chain-derived terminal registration-retirement instruction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegisteredDirectRetirementReport {
+    /// Exact unsigned 4- or 6-account controller instruction.
+    pub instruction: Instruction,
+    /// Shared finalized observation selecting every input account.
+    pub observation: Observation,
+    /// Persisted maker and sole registration-rent recipient.
+    pub maker: Pubkey,
+    /// Whether retirement requires the persisted maker's transaction signature.
+    pub maker_signature_required: bool,
+    /// Exact registration lamports returned to the persisted maker.
+    pub rent_refund_lamports: u64,
+    /// Explicit controller-side delegation boundary before claim-account close.
+    pub boundary: RegisteredDirectRetirementBoundary,
+}
+
+/// Exact unsigned retirement v0 message, signer keys, and packet geometry.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegisteredDirectRetirementPacket {
+    /// Unsigned v0 message containing the retirement instruction.
+    pub message: VersionedMessage,
+    /// Exact signer keys in message signature-slot order.
+    pub required_signers: Vec<Pubkey>,
+    /// Fully signed serialized transaction bytes.
+    pub wire_bytes: usize,
+}
+
 /// Refusal from hostile registered Direct state or frame derivation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -260,6 +338,10 @@ pub enum Error {
     InvalidRent,
     /// The payer could not cover the exact missing account rent.
     InsufficientPayer,
+    /// Registration state was not terminal and internally coherent.
+    InvalidRetirement,
+    /// Registration rent could not be credited to the persisted maker.
+    InvalidRefund,
     /// A codec-owned request could not be encoded.
     Encoding,
 }
@@ -427,6 +509,186 @@ pub fn compile_registered_direct_creation_packet(
     Ok(RegisteredDirectCreationPacket {
         message,
         required_signatures,
+        wire_bytes,
+    })
+}
+
+/// Build one permissionless terminal seller retirement.
+///
+/// The maker is recovered from persisted registration state, is writable only
+/// as the rent recipient, and is deliberately not a required signer.
+pub fn build_registered_direct_seller_retirement(
+    controller_program: Pubkey,
+    state: &RegisteredDirectSellerRetirementState,
+) -> Result<RegisteredDirectRetirementReport, Error> {
+    let observation = same_observation(&[
+        &state.controller_program,
+        &state.controller,
+        &state.registration,
+        &state.maker,
+        &state.claim_program,
+    ])?;
+    let (registration, controller_bump, registration_bump) = authenticate_retirement_core(
+        controller_program,
+        &state.controller_program,
+        &state.controller,
+        &state.registration,
+        &state.maker,
+        &state.claim_program,
+        0,
+    )?;
+    let data = RegisteredRetireInstructionV1 {
+        controller_bump,
+        registration_bump,
+    }
+    .encode()
+    .map_err(|_| Error::Encoding)?;
+    let maker = Pubkey::new_from_array(registration.maker);
+    let accounts = vec![
+        AccountMeta::new_readonly(state.controller.key, false),
+        AccountMeta::new(state.registration.key, false),
+        AccountMeta::new(maker, false),
+        AccountMeta::new_readonly(CLAIM_PROGRAM_ID, false),
+    ];
+    debug_assert_eq!(accounts.len(), REGISTERED_SELLER_RETIRE_ACCOUNT_COUNT);
+    Ok(RegisteredDirectRetirementReport {
+        instruction: Instruction {
+            program_id: controller_program,
+            accounts,
+            data: data.to_vec(),
+        },
+        observation,
+        maker,
+        maker_signature_required: false,
+        rent_refund_lamports: state.registration.lamports,
+        boundary: RegisteredDirectRetirementBoundary::SellerNoDelegation,
+    })
+}
+
+/// Build one maker-authorized terminal buyer retirement.
+///
+/// If the finalized token account still delegates to the exact registration,
+/// the returned boundary records that the controller must complete and verify
+/// its official SPL Token `Revoke` CPI before invoking the claim-account close.
+pub fn build_registered_direct_buyer_retirement(
+    controller_program: Pubkey,
+    state: &RegisteredDirectBuyerRetirementState,
+) -> Result<RegisteredDirectRetirementReport, Error> {
+    let observation = same_observation(&[
+        &state.controller_program,
+        &state.controller,
+        &state.registration,
+        &state.maker,
+        &state.claim_program,
+        &state.collateral,
+        &state.token_program,
+    ])?;
+    let (registration, controller_bump, registration_bump) = authenticate_retirement_core(
+        controller_program,
+        &state.controller_program,
+        &state.controller,
+        &state.registration,
+        &state.maker,
+        &state.claim_program,
+        1,
+    )?;
+    require_distinct(&[
+        state.controller_program.key,
+        state.controller.key,
+        state.registration.key,
+        state.maker.key,
+        state.claim_program.key,
+        state.collateral.key,
+        state.token_program.key,
+    ])?;
+    if state.token_program.key.to_bytes() != LEGACY_TOKEN_PROGRAM_ID
+        || !state.token_program.executable
+        || state.collateral.owner != state.token_program.key
+        || state.collateral.executable
+        || state.collateral.key.to_bytes() != registration.intent.collateral_account
+    {
+        return Err(Error::InvalidAccount);
+    }
+    let token = TokenAccount::parse(&state.collateral.data).map_err(|_| Error::InvalidToken)?;
+    if token.owner != registration.maker
+        || token.native_reserve != COption::None
+        || token.state == AccountState::Uninitialized
+    {
+        return Err(Error::InvalidToken);
+    }
+    let boundary = match token.delegate {
+        COption::None if token.delegated_amount == 0 => {
+            RegisteredDirectRetirementBoundary::BuyerAlreadyClear
+        }
+        COption::Some(delegate) if delegate == state.registration.key.to_bytes() => {
+            RegisteredDirectRetirementBoundary::BuyerControllerRevokeRequired
+        }
+        COption::None | COption::Some(_) => return Err(Error::InvalidToken),
+    };
+    let data = RegisteredRetireInstructionV1 {
+        controller_bump,
+        registration_bump,
+    }
+    .encode()
+    .map_err(|_| Error::Encoding)?;
+    let maker = Pubkey::new_from_array(registration.maker);
+    let accounts = vec![
+        AccountMeta::new_readonly(state.controller.key, false),
+        AccountMeta::new(state.registration.key, false),
+        AccountMeta::new(maker, true),
+        AccountMeta::new_readonly(CLAIM_PROGRAM_ID, false),
+        AccountMeta::new(state.collateral.key, false),
+        AccountMeta::new_readonly(state.token_program.key, false),
+    ];
+    debug_assert_eq!(accounts.len(), REGISTERED_BUYER_RETIRE_ACCOUNT_COUNT);
+    Ok(RegisteredDirectRetirementReport {
+        instruction: Instruction {
+            program_id: controller_program,
+            accounts,
+            data: data.to_vec(),
+        },
+        observation,
+        maker,
+        maker_signature_required: true,
+        rent_refund_lamports: state.registration.lamports,
+        boundary,
+    })
+}
+
+/// Compile one exact retirement request into an unsigned packet-safe v0
+/// message and expose every required signature key in slot order.
+pub fn compile_registered_direct_retirement_packet(
+    report: &RegisteredDirectRetirementReport,
+    payer: Pubkey,
+    recent_blockhash: Hash,
+) -> Result<RegisteredDirectRetirementPacket, Error> {
+    if payer == Pubkey::default() {
+        return Err(Error::InvalidAccount);
+    }
+    let message = v0::Message::try_compile(
+        &payer,
+        core::slice::from_ref(&report.instruction),
+        &[],
+        recent_blockhash,
+    )
+    .map_err(|_| Error::Encoding)?;
+    let signature_count = usize::from(message.header.num_required_signatures);
+    let required_signers = message
+        .account_keys
+        .get(..signature_count)
+        .ok_or(Error::Encoding)?
+        .to_vec();
+    let message = VersionedMessage::V0(message);
+    let wire_bytes = short_vec_prefix_bytes(signature_count)
+        .checked_add(signature_count.checked_mul(64).ok_or(Error::Encoding)?)
+        .and_then(|value| value.checked_add(message.serialize().len()))
+        .ok_or(Error::Encoding)?;
+    if wire_bytes > PACKET_DATA_BYTES {
+        return Err(Error::PacketTooLarge);
+    }
+    Ok(RegisteredDirectRetirementPacket {
+        message,
+        required_signers,
         wire_bytes,
     })
 }
@@ -644,6 +906,67 @@ fn build_terminal(
         maker,
         expected_sequence,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_retirement_core(
+    controller_program: Pubkey,
+    controller_program_account: &ObservedAccount,
+    controller_account: &ObservedAccount,
+    registration_account: &ObservedAccount,
+    maker_account: &ObservedAccount,
+    claim_program: &ObservedAccount,
+    expected_side: u8,
+) -> Result<(RegisteredIntentStateV1, u8, u8), Error> {
+    require_distinct(&[
+        controller_program_account.key,
+        controller_account.key,
+        registration_account.key,
+        maker_account.key,
+        claim_program.key,
+    ])?;
+    if controller_program_account.key != controller_program
+        || !controller_program_account.executable
+        || controller_account.executable
+        || registration_account.owner != CLAIM_PROGRAM_ID
+        || registration_account.executable
+        || registration_account.lamports == 0
+        || maker_account.executable
+        || claim_program.key != CLAIM_PROGRAM_ID
+        || !claim_program.executable
+    {
+        return Err(Error::InvalidAccount);
+    }
+    maker_account
+        .lamports
+        .checked_add(registration_account.lamports)
+        .ok_or(Error::InvalidRefund)?;
+    let (controller, controller_bump) =
+        Pubkey::find_program_address(&[CONTROLLER_SEED], &controller_program);
+    if controller_account.key != controller {
+        return Err(Error::PdaMismatch);
+    }
+    let registration = decode_registration(registration_account, controller)?;
+    if registration.maker != maker_account.key.to_bytes() {
+        return Err(Error::RegistrationBinding);
+    }
+    if registration.intent.side != expected_side
+        || registration.intent.lifecycle > 2
+        || registration.intent.valid_from > registration.intent.valid_through
+        || registration.intent.maximum_fill == 0
+        || registration.remaining > registration.intent.maximum_fill
+        || registration.phase == 0
+        || registration.phase > 3
+        || (registration.phase == 1 && registration.remaining != 0)
+    {
+        return Err(Error::InvalidRetirement);
+    }
+    let (registration_key, registration_bump) =
+        registration_address(controller_program, registration)?;
+    if registration_key != registration_account.key {
+        return Err(Error::PdaMismatch);
+    }
+    Ok((registration, controller_bump, registration_bump))
 }
 
 fn creation_observation(state: &RegisteredDirectCreationState) -> Result<Observation, Error> {
@@ -1344,6 +1667,21 @@ mod tests {
         bytes
     }
 
+    fn set_token_delegate(data: &mut [u8], delegate: Option<(Pubkey, u64)>) {
+        match delegate {
+            Some((delegate, amount)) => {
+                data[72..76].copy_from_slice(&1_u32.to_le_bytes());
+                data[76..108].copy_from_slice(delegate.as_ref());
+                data[121..129].copy_from_slice(&amount.to_le_bytes());
+            }
+            None => {
+                data[72..76].copy_from_slice(&0_u32.to_le_bytes());
+                data[76..108].fill(0);
+                data[121..129].copy_from_slice(&0_u64.to_le_bytes());
+            }
+        }
+    }
+
     fn replay_bytes(controller: Pubkey, nonce: u64) -> Vec<u8> {
         let mut bytes = vec![0_u8; REPLAY_STATE_BYTES];
         bytes[..8].copy_from_slice(REPLAY_STATE_MAGIC);
@@ -1671,6 +2009,57 @@ mod tests {
         intent.nonce = nonce;
     }
 
+    fn terminalize_registration(account: &mut ObservedAccount, phase: u8, remaining: u64) {
+        let mut registration =
+            RegisteredIntentStateV1::decode(&account.data).expect("registration state");
+        registration.phase = phase;
+        registration.remaining = remaining;
+        account.data = registration
+            .encode()
+            .expect("terminal registration")
+            .to_vec();
+    }
+
+    fn retirement_fixtures() -> (
+        Pubkey,
+        RegisteredDirectSellerRetirementState,
+        RegisteredDirectBuyerRetirementState,
+    ) {
+        let (program, fill) = fixture();
+        let snapshot = fill.controller.observation;
+        let controller_program = observed(snapshot, program, native_loader::ID, true, Vec::new());
+        let mut seller_registration = fill.seller_registration.clone();
+        terminalize_registration(&mut seller_registration, 2, 1_500);
+        seller_registration.lamports = 2_000_000;
+        let mut buyer_registration = fill.buyer_registration.clone();
+        terminalize_registration(&mut buyer_registration, 3, 1_500);
+        buyer_registration.lamports = 2_100_000;
+        let seller_maker = observed(snapshot, key(1), system_program::ID, false, Vec::new());
+        let buyer_maker = observed(snapshot, key(2), system_program::ID, false, Vec::new());
+        let mut collateral = fill.buyer_source.clone();
+        collateral.data = token_account_bytes(fill.mint.key, key(2), 5_000);
+        set_token_delegate(&mut collateral.data, Some((buyer_registration.key, 1_203)));
+        (
+            program,
+            RegisteredDirectSellerRetirementState {
+                controller_program: controller_program.clone(),
+                controller: fill.controller.clone(),
+                registration: seller_registration,
+                maker: seller_maker,
+                claim_program: fill.claim_program.clone(),
+            },
+            RegisteredDirectBuyerRetirementState {
+                controller_program,
+                controller: fill.controller,
+                registration: buyer_registration,
+                maker: buyer_maker,
+                claim_program: fill.claim_program,
+                collateral,
+                token_program: fill.token_program,
+            },
+        )
+    }
+
     fn terminal_state(fill: &RegisteredDirectFillState) -> RegisteredDirectTerminalState {
         RegisteredDirectTerminalState {
             controller: fill.controller.clone(),
@@ -1684,6 +2073,279 @@ mod tests {
         state.controller.observation = snapshot;
         state.registration.observation = snapshot;
         state.claim_program.observation = snapshot;
+    }
+
+    #[test]
+    fn terminal_seller_retirement_is_permissionless_and_refunds_only_persisted_maker() {
+        let (program, seller, _) = retirement_fixtures();
+        let report =
+            build_registered_direct_seller_retirement(program, &seller).expect("seller retirement");
+        assert_eq!(report.observation, observation(55));
+        assert_eq!(report.maker, key(1));
+        assert!(!report.maker_signature_required);
+        assert_eq!(report.rent_refund_lamports, 2_000_000);
+        assert_eq!(
+            report.boundary,
+            RegisteredDirectRetirementBoundary::SellerNoDelegation
+        );
+        assert_eq!(
+            report.instruction.accounts,
+            vec![
+                AccountMeta::new_readonly(seller.controller.key, false),
+                AccountMeta::new(seller.registration.key, false),
+                AccountMeta::new(seller.maker.key, false),
+                AccountMeta::new_readonly(CLAIM_PROGRAM_ID, false),
+            ]
+        );
+        let request = RegisteredRetireInstructionV1::decode(&report.instruction.data)
+            .expect("codec retirement request");
+        assert_eq!(
+            Pubkey::create_program_address(
+                &[CONTROLLER_SEED, &[request.controller_bump]],
+                &program,
+            ),
+            Ok(seller.controller.key)
+        );
+        let payer = key(88);
+        let packet = compile_registered_direct_retirement_packet(
+            &report,
+            payer,
+            Hash::new_from_array([91; 32]),
+        )
+        .expect("seller retirement packet");
+        assert_eq!(packet.required_signers, vec![payer]);
+        assert_eq!(packet.wire_bytes, 319);
+        assert!(packet.wire_bytes <= PACKET_DATA_BYTES);
+        assert_eq!(
+            compile_registered_direct_retirement_packet(
+                &report,
+                Pubkey::default(),
+                Hash::new_from_array([91; 32]),
+            ),
+            Err(Error::InvalidAccount)
+        );
+    }
+
+    #[test]
+    fn terminal_buyer_retirement_requires_maker_and_records_controller_revoke_boundary() {
+        let (program, _, buyer) = retirement_fixtures();
+        let report =
+            build_registered_direct_buyer_retirement(program, &buyer).expect("buyer retirement");
+        assert_eq!(report.maker, key(2));
+        assert!(report.maker_signature_required);
+        assert_eq!(report.rent_refund_lamports, 2_100_000);
+        assert_eq!(
+            report.boundary,
+            RegisteredDirectRetirementBoundary::BuyerControllerRevokeRequired
+        );
+        assert_eq!(
+            report.instruction.accounts,
+            vec![
+                AccountMeta::new_readonly(buyer.controller.key, false),
+                AccountMeta::new(buyer.registration.key, false),
+                AccountMeta::new(buyer.maker.key, true),
+                AccountMeta::new_readonly(CLAIM_PROGRAM_ID, false),
+                AccountMeta::new(buyer.collateral.key, false),
+                AccountMeta::new_readonly(buyer.token_program.key, false),
+            ]
+        );
+        let request = RegisteredRetireInstructionV1::decode(&report.instruction.data)
+            .expect("codec retirement request");
+        let registration =
+            RegisteredIntentStateV1::decode(&buyer.registration.data).expect("buyer registration");
+        assert_eq!(
+            Pubkey::create_program_address(
+                &[
+                    REGISTERED_SEED,
+                    &registration.intent.market,
+                    &registration.intent.generation.to_le_bytes(),
+                    buyer.maker.key.as_ref(),
+                    &registration.intent.nonce.to_le_bytes(),
+                    &[request.registration_bump],
+                ],
+                &program,
+            ),
+            Ok(buyer.registration.key)
+        );
+        let payer = key(88);
+        let packet = compile_registered_direct_retirement_packet(
+            &report,
+            payer,
+            Hash::new_from_array([91; 32]),
+        )
+        .expect("buyer retirement packet");
+        assert_eq!(packet.required_signers, vec![payer, buyer.maker.key]);
+        assert_eq!(packet.wire_bytes, 449);
+        assert!(packet.wire_bytes <= PACKET_DATA_BYTES);
+        let maker_paid = compile_registered_direct_retirement_packet(
+            &report,
+            buyer.maker.key,
+            Hash::new_from_array([91; 32]),
+        )
+        .expect("maker-paid buyer retirement packet");
+        assert_eq!(maker_paid.required_signers, vec![buyer.maker.key]);
+        assert!(maker_paid.wire_bytes < packet.wire_bytes);
+
+        let mut already_clear = buyer.clone();
+        set_token_delegate(&mut already_clear.collateral.data, None);
+        let clear = build_registered_direct_buyer_retirement(program, &already_clear)
+            .expect("already clear buyer retirement");
+        assert_eq!(
+            clear.boundary,
+            RegisteredDirectRetirementBoundary::BuyerAlreadyClear
+        );
+    }
+
+    #[test]
+    fn terminal_retirement_refuses_open_incoherent_substituted_or_unfunded_state() {
+        let (program, seller, buyer) = retirement_fixtures();
+        let mut mixed = seller.clone();
+        mixed.maker.observation.slot += 1;
+        assert_eq!(
+            build_registered_direct_seller_retirement(program, &mixed),
+            Err(Error::ObservationMismatch)
+        );
+
+        let mut open = seller.clone();
+        terminalize_registration(&mut open.registration, 0, 1_500);
+        assert_eq!(
+            build_registered_direct_seller_retirement(program, &open),
+            Err(Error::InvalidRetirement)
+        );
+
+        let mut impossible_fill = seller.clone();
+        terminalize_registration(&mut impossible_fill.registration, 1, 1);
+        assert_eq!(
+            build_registered_direct_seller_retirement(program, &impossible_fill),
+            Err(Error::InvalidRetirement)
+        );
+
+        let mut wrong_owner = seller.clone();
+        wrong_owner.registration.owner = system_program::ID;
+        assert_eq!(
+            build_registered_direct_seller_retirement(program, &wrong_owner),
+            Err(Error::InvalidAccount)
+        );
+
+        let mut wrong_pda = seller.clone();
+        wrong_pda.registration.key = key(96);
+        assert_eq!(
+            build_registered_direct_seller_retirement(program, &wrong_pda),
+            Err(Error::PdaMismatch)
+        );
+
+        let mut wrong_refund = seller.clone();
+        wrong_refund.maker.key = key(95);
+        assert_eq!(
+            build_registered_direct_seller_retirement(program, &wrong_refund),
+            Err(Error::RegistrationBinding)
+        );
+
+        let mut alias = seller.clone();
+        alias.maker.key = alias.claim_program.key;
+        assert_eq!(
+            build_registered_direct_seller_retirement(program, &alias),
+            Err(Error::InvalidAccount)
+        );
+
+        let mut drained = seller.clone();
+        drained.registration.lamports = 0;
+        assert_eq!(
+            build_registered_direct_seller_retirement(program, &drained),
+            Err(Error::InvalidAccount)
+        );
+
+        let mut overflow = seller.clone();
+        overflow.maker.lamports = u64::MAX;
+        assert_eq!(
+            build_registered_direct_seller_retirement(program, &overflow),
+            Err(Error::InvalidRefund)
+        );
+
+        assert_eq!(
+            build_registered_direct_seller_retirement(
+                program,
+                &RegisteredDirectSellerRetirementState {
+                    controller_program: buyer.controller_program,
+                    controller: buyer.controller,
+                    registration: buyer.registration,
+                    maker: buyer.maker,
+                    claim_program: buyer.claim_program,
+                },
+            ),
+            Err(Error::InvalidRetirement)
+        );
+    }
+
+    #[test]
+    fn terminal_buyer_retirement_refuses_hostile_token_and_delegate_state() {
+        let (program, _, buyer) = retirement_fixtures();
+        let mut wrong_collateral = buyer.clone();
+        wrong_collateral.collateral.key = key(94);
+        assert_eq!(
+            build_registered_direct_buyer_retirement(program, &wrong_collateral),
+            Err(Error::InvalidAccount)
+        );
+
+        let mut wrong_physical_owner = buyer.clone();
+        wrong_physical_owner.collateral.owner = system_program::ID;
+        assert_eq!(
+            build_registered_direct_buyer_retirement(program, &wrong_physical_owner),
+            Err(Error::InvalidAccount)
+        );
+
+        let mut malformed = buyer.clone();
+        malformed.collateral.data.pop();
+        assert_eq!(
+            build_registered_direct_buyer_retirement(program, &malformed),
+            Err(Error::InvalidToken)
+        );
+
+        let mut wrong_token_owner = buyer.clone();
+        wrong_token_owner.collateral.data[32..64].copy_from_slice(key(93).as_ref());
+        assert_eq!(
+            build_registered_direct_buyer_retirement(program, &wrong_token_owner),
+            Err(Error::InvalidToken)
+        );
+
+        let mut foreign_delegate = buyer.clone();
+        set_token_delegate(&mut foreign_delegate.collateral.data, Some((key(92), 1)));
+        assert_eq!(
+            build_registered_direct_buyer_retirement(program, &foreign_delegate),
+            Err(Error::InvalidToken)
+        );
+
+        let mut inconsistent_clear = buyer.clone();
+        set_token_delegate(&mut inconsistent_clear.collateral.data, None);
+        inconsistent_clear.collateral.data[121..129].copy_from_slice(&1_u64.to_le_bytes());
+        assert_eq!(
+            build_registered_direct_buyer_retirement(program, &inconsistent_clear),
+            Err(Error::InvalidToken)
+        );
+
+        let mut native = buyer.clone();
+        native.collateral.data[109..113].copy_from_slice(&1_u32.to_le_bytes());
+        native.collateral.data[113..121].copy_from_slice(&1_u64.to_le_bytes());
+        assert_eq!(
+            build_registered_direct_buyer_retirement(program, &native),
+            Err(Error::InvalidToken)
+        );
+
+        let mut uninitialized = buyer.clone();
+        uninitialized.collateral.data[108] = 0;
+        assert_eq!(
+            build_registered_direct_buyer_retirement(program, &uninitialized),
+            Err(Error::InvalidToken)
+        );
+
+        let mut frozen = buyer.clone();
+        frozen.collateral.data[108] = 2;
+        assert_eq!(
+            build_registered_direct_buyer_retirement(program, &frozen)
+                .expect("controller-admitted frozen revoke")
+                .boundary,
+            RegisteredDirectRetirementBoundary::BuyerControllerRevokeRequired
+        );
     }
 
     #[test]
