@@ -573,11 +573,12 @@ pub(crate) fn selected_release(
     }
     #[cfg(feature = "non-production-real-pyth-lab")]
     {
-        let release = crate::synthetic_release::release()?;
-        if hash(&release.to_bytes()).to_bytes() == release_id
-            && clock_time >= release.activation_time()
-        {
-            return Ok(release);
+        for release in crate::synthetic_release::releases()? {
+            if hash(&release.to_bytes()).to_bytes() == release_id
+                && clock_time >= release.activation_time()
+            {
+                return Ok(release);
+            }
         }
     }
     Err(AdapterError::ReleaseUnavailable.into())

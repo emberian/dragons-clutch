@@ -37,4 +37,7 @@ pub use release::{
     SyntheticLocalReleaseV1Input,
 };
 #[cfg(feature = "synthetic-local-fixture")]
-pub use synthetic_fixture::{SYNTHETIC_LOCAL_LABEL_V1, synthetic_local_release_v1};
+pub use synthetic_fixture::{
+    LOCAL_VALIDATOR_LABEL_V1, SYNTHETIC_LOCAL_LABEL_V1, local_validator_release_v1,
+    synthetic_local_release_v1,
+};
