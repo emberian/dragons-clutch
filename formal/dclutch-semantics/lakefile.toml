@@ -1,0 +1,6 @@
+name = "dclutch-semantics"
+version = "0.1.0"
+defaultTargets = ["DClutchSemantics"]
+
+[[lean_lib]]
+name = "DClutchSemantics"
