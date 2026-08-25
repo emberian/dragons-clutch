@@ -13,8 +13,10 @@ use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     ProgramIdentityV1,
 };
-use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey, rent::Rent};
-use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
+use solana_program::{
+    account_info::AccountInfo, hash::hash, pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize,
+};
+use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
 
 use super::{
     RegistryError, RoleFrame, activate_and_write_role, authenticate_release_set_record,
@@ -251,7 +253,7 @@ impl Fixture {
         ActivatedExecutionReleaseSetV1::decode(&output).expect("complete physical activation cache")
     }
 
-    fn cache_account(&self) -> AccountInfo<'static> {
+    fn cache_account_with_writability(&self, writable: bool) -> AccountInfo<'static> {
         let activated = self.activated();
         let key = Pubkey::find_program_address(
             &[
@@ -265,12 +267,65 @@ impl Fixture {
         account(
             key,
             false,
-            false,
+            writable,
             self.rent.minimum_balance(data.len()),
             data,
             self.registry,
             false,
         )
+    }
+
+    fn cache_account(&self) -> AccountInfo<'static> {
+        self.cache_account_with_writability(false)
+    }
+
+    fn activation_accounts(&self) -> Vec<AccountInfo<'static>> {
+        let payer = account(
+            Pubkey::new_from_array(bytes(98)),
+            true,
+            true,
+            1,
+            Vec::new(),
+            system_program::ID,
+            false,
+        );
+        let system = account(
+            system_program::ID,
+            false,
+            false,
+            1,
+            Vec::new(),
+            native_loader::ID,
+            true,
+        );
+        let mut rent = account(
+            sysvar::rent::ID,
+            false,
+            false,
+            1,
+            vec![0; Rent::size_of()],
+            sysvar::ID,
+            false,
+        );
+        assert_eq!(Rent::default().to_account_info(&mut rent), Some(()));
+
+        let mut accounts = vec![
+            payer,
+            self.cache_account_with_writability(true),
+            self.release_set_raw.clone(),
+            self.release_set_staging.clone(),
+        ];
+        for _ in 0..5 {
+            accounts.extend([
+                self.artifact_raw.clone(),
+                self.artifact_staging.clone(),
+                self.program.clone(),
+                self.programdata.clone(),
+            ]);
+        }
+        accounts.extend([system, rent]);
+        assert_eq!(accounts.len(), super::ACTIVATE_ACCOUNT_COUNT_V1);
+        accounts
     }
 }
 
@@ -454,4 +509,34 @@ fn finalized_record_refuses_substituted_owner_or_live_staging() {
         ),
         Err(RegistryError::FinalizedRecord.into())
     );
+}
+
+#[test]
+fn repeated_existing_activation_is_byte_identical_and_does_not_panic() {
+    let fixture = Fixture::new();
+    let accounts = fixture.activation_accounts();
+    let before = accounts
+        .get(1)
+        .expect("activation cache account")
+        .try_borrow_data()
+        .expect("cache before repeat activation")
+        .to_vec();
+
+    for _ in 0..2 {
+        process_instruction(
+            &fixture.registry,
+            &accounts,
+            &RegistryInstructionV1::Activate.to_bytes(),
+        )
+        .expect("existing activation remains idempotent");
+        assert_eq!(
+            accounts
+                .get(1)
+                .expect("activation cache account")
+                .try_borrow_data()
+                .expect("cache after repeat activation")
+                .as_ref(),
+            before.as_slice()
+        );
+    }
 }

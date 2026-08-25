@@ -142,14 +142,17 @@ fn process_activate(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> Progra
     let core_program =
         ProgramIdentityV1::new(program_id.to_bytes()).map_err(|_| RegistryError::Release)?;
     let frames = [core, claims, trading, resolution, custody];
+    if !created {
+        let existing = cache.try_borrow_data().map_err(|_| RegistryError::Borrow)?;
+        authenticate_existing_cache(program_id, cache, &existing, release_set_id, &release_set)?;
+        drop(existing);
+    }
     let mut output = cache
         .try_borrow_mut_data()
         .map_err(|_| RegistryError::Borrow)?;
     if created {
         initialize_activation_cache_v1(&mut output, core_program, release_set_id, &release_set)
             .map_err(|_| RegistryError::ActivationCache)?;
-    } else {
-        authenticate_existing_cache(program_id, cache, &output, release_set_id, &release_set)?;
     }
     activate_and_write_role(
         program_id,
