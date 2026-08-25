@@ -7,9 +7,11 @@ or an SBF adapter yet.
 `DClutchSemantics.MarketCoreAbi` owns the canonical field order, widths, and
 offsets. `EmitMarketCoreRust.lean` emits both those constants and the safe Rust
 interpreter. The fixed Market header is 1,416 bytes and the request is 72 bytes.
-Claim vectors are exact-length borrowed slices whose length must equal the
-Product's runtime `outcome_count`; the ABI imposes no width-specialized Market
-semantics or provisional maximum N.
+Claim vectors are one exact borrowed account-data tail of `7 * N * 8` bytes,
+with canonical little-endian `u64` values and `N` equal to the Product's runtime
+`outcome_count`; the ABI imposes no width-specialized Market semantics or
+provisional maximum N. This representation requires neither alignment casts nor
+an adapter heap.
 
 The interpreter validates all inputs before applying a transition. It separates
 rent, unclassified donation, Source work funding, deferred custody rent, and

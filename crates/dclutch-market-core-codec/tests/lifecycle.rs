@@ -2,11 +2,11 @@
 
 use dclutch_market_core_codec::{
     AccountCreation, Action, Admission, Binding, CollateralObservation, CoreCoordinates, CoreState,
-    EconomicView, Error, FoundingAccounts, FoundingFrame, FoundingQuote, FundingState, Holder,
-    Identity, MarketIdentity, Phase, Product, REQUEST_BYTES, Readiness, Realm, ReleaseReceipt,
-    ReleaseSet, Representation, Request, Role, STATE_BYTES, TerminalReceipt, VacantAccount,
-    activate_fund, admit_terminal, begin_retiring, found, open_market, redeem_terminal, retire,
-    split_complete_set,
+    EconomicTail, EconomicVector, Error, FoundingAccounts, FoundingFrame, FoundingQuote,
+    FundingState, Holder, Identity, MarketIdentity, Phase, Product, REQUEST_BYTES, Readiness,
+    Realm, ReleaseReceipt, ReleaseSet, Representation, Request, Role, STATE_BYTES, TerminalReceipt,
+    VacantAccount, activate_fund, admit_terminal, begin_retiring, found, open_market,
+    redeem_terminal, retire, split_complete_set,
 };
 
 fn id(byte: u8) -> Identity {
@@ -170,38 +170,55 @@ fn ready_open_state(outcome_count: u32) -> CoreState {
 }
 
 struct Vectors {
-    supply: Vec<u64>,
-    native: Vec<u64>,
-    materialized: Vec<u64>,
-    source_native: Vec<u64>,
-    source_materialized: Vec<u64>,
-    destination_native: Vec<u64>,
-    destination_materialized: Vec<u64>,
+    bytes: Vec<u8>,
+    outcome_count: u32,
 }
 
 impl Vectors {
     fn zero(width: usize) -> Self {
+        let outcome_count = u32::try_from(width).expect("fixture width fits u32");
         Self {
-            supply: vec![0; width],
-            native: vec![0; width],
-            materialized: vec![0; width],
-            source_native: vec![0; width],
-            source_materialized: vec![0; width],
-            destination_native: vec![0; width],
-            destination_materialized: vec![0; width],
+            bytes: vec![0; EconomicTail::byte_len(outcome_count).expect("fixture tail width")],
+            outcome_count,
         }
     }
 
-    fn view(&mut self) -> EconomicView<'_> {
-        EconomicView {
-            supply: &mut self.supply,
-            native_supply: &mut self.native,
-            materialized_supply: &mut self.materialized,
-            source_native: &mut self.source_native,
-            source_materialized: &mut self.source_materialized,
-            destination_native: &mut self.destination_native,
-            destination_materialized: &mut self.destination_materialized,
+    fn view(&mut self) -> EconomicTail<'_> {
+        EconomicTail::new(&mut self.bytes, self.outcome_count).expect("fixture tail validates")
+    }
+
+    fn all_equal(&mut self, vector: EconomicVector, expected: u64) -> bool {
+        let outcome_count = self.outcome_count;
+        let view = self.view();
+        (0..outcome_count).all(|outcome| {
+            view.value(vector, outcome)
+                .is_ok_and(|value| value == expected)
+        })
+    }
+
+    fn value_count(&self) -> usize {
+        usize::try_from(self.outcome_count).expect("fixture width fits usize")
+    }
+
+    fn snapshot(&self) -> Vec<u8> {
+        self.bytes.clone()
+    }
+
+    fn is_zero(&mut self) -> bool {
+        for vector in [
+            EconomicVector::Supply,
+            EconomicVector::NativeSupply,
+            EconomicVector::MaterializedSupply,
+            EconomicVector::SourceNative,
+            EconomicVector::SourceMaterialized,
+            EconomicVector::DestinationNative,
+            EconomicVector::DestinationMaterialized,
+        ] {
+            if !self.all_equal(vector, 0) {
+                return false;
+            }
         }
+        true
     }
 }
 
@@ -259,9 +276,9 @@ fn funded_lifecycle_preserves_every_compartment_and_round_trips() {
         admission(Role::Custody),
     )
     .expect("complete set splits");
-    assert!(vectors.supply.iter().all(|value| *value == 10));
-    assert!(vectors.native.iter().all(|value| *value == 10));
-    assert!(vectors.source_native.iter().all(|value| *value == 10));
+    assert!(vectors.all_equal(EconomicVector::Supply, 10));
+    assert!(vectors.all_equal(EconomicVector::NativeSupply, 10));
+    assert!(vectors.all_equal(EconomicVector::SourceNative, 10));
     assert_eq!(result.state.hoard_principal, 10);
 
     let receipt = TerminalReceipt {
@@ -312,7 +329,7 @@ fn funded_lifecycle_preserves_every_compartment_and_round_trips() {
         assert_eq!(payout, u64::from(outcome == 1) * 10);
     }
     assert_eq!(result.state.hoard_principal, 0);
-    assert!(vectors.supply.iter().all(|value| *value == 0));
+    assert!(vectors.is_zero());
 
     let funding = FundingState {
         allocation_id: result.state.funding.allocation_id,
@@ -356,15 +373,10 @@ fn runtime_product_width_has_no_width_specialized_branch() {
         admission(Role::Custody),
     )
     .expect("runtime width executes");
-    assert_eq!(vectors.supply.len(), 17);
-    assert!(vectors.supply.iter().all(|value| *value == 3));
-    assert!(vectors.materialized.iter().all(|value| *value == 3));
-    assert!(
-        vectors
-            .destination_materialized
-            .iter()
-            .all(|value| *value == 3)
-    );
+    assert_eq!(vectors.value_count(), 17);
+    assert!(vectors.all_equal(EconomicVector::Supply, 3));
+    assert!(vectors.all_equal(EconomicVector::MaterializedSupply, 3));
+    assert!(vectors.all_equal(EconomicVector::DestinationMaterialized, 3));
 }
 
 #[test]
@@ -457,15 +469,21 @@ fn failed_transitions_are_atomic() {
     let mut state = ready_open_state(4);
     let state_before = state;
     let mut vectors = Vectors::zero(4);
-    vectors.supply.fill(990);
-    vectors.native.fill(990);
-    vectors.source_native.fill(990);
-    state.hoard_principal = 990;
-    let vectors_before = (
-        vectors.supply.clone(),
-        vectors.native.clone(),
-        vectors.source_native.clone(),
-    );
+    split_complete_set(
+        Request::split(
+            Holder::Source,
+            Representation::Native,
+            990,
+            state.identity.generation,
+            state.identity.market_id,
+        ),
+        &mut state,
+        &mut vectors.view(),
+        admission(Role::Claims),
+        admission(Role::Custody),
+    )
+    .expect("large valid split seeds overflow boundary");
+    let vectors_before = vectors.snapshot();
     let error = split_complete_set(
         Request::split(
             Holder::Source,
@@ -482,14 +500,10 @@ fn failed_transitions_are_atomic() {
     assert_eq!(error, Err(Error::ArithmeticOverflow));
     assert_eq!(state.hoard_principal, 990);
     assert_eq!(state.phase, state_before.phase);
-    assert_eq!(vectors.supply, vectors_before.0);
-    assert_eq!(vectors.native, vectors_before.1);
-    assert_eq!(vectors.source_native, vectors_before.2);
+    assert_eq!(vectors.snapshot(), vectors_before);
 
-    vectors.supply.fill(0);
-    vectors.native.fill(0);
-    vectors.source_native.fill(0);
-    state.hoard_principal = 0;
+    state = ready_open_state(4);
+    vectors = Vectors::zero(4);
     let state_before_receipt = state;
     let bad_receipt = TerminalReceipt {
         receipt_id: id(60),

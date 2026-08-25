@@ -18,6 +18,10 @@ def interpreter : String := r#"
 pub const IDENTITY_BYTES: usize = 32;
 /// Number of immutable execution roles.
 pub const ROLE_COUNT: usize = 5;
+/// Number of exact economic vectors stored behind the fixed Core header.
+pub const ECONOMIC_VECTOR_COUNT: usize = 7;
+/// Little-endian bytes stored for one vector value.
+pub const ECONOMIC_VALUE_BYTES: usize = 8;
 
 /// Strict physical or semantic refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -717,15 +721,113 @@ pub struct TerminalReceipt {
     pub authenticated: bool,
 }
 
-/// Seven exact mutable vectors. Their length is the runtime Product width.
-pub struct EconomicView<'a> {
-    pub supply: &'a mut [u64],
-    pub native_supply: &'a mut [u64],
-    pub materialized_supply: &'a mut [u64],
-    pub source_native: &'a mut [u64],
-    pub source_materialized: &'a mut [u64],
-    pub destination_native: &'a mut [u64],
-    pub destination_materialized: &'a mut [u64],
+/// One exact vector in the canonical economic tail.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EconomicVector {
+    Supply,
+    NativeSupply,
+    MaterializedSupply,
+    SourceNative,
+    SourceMaterialized,
+    DestinationNative,
+    DestinationMaterialized,
+}
+
+impl EconomicVector {
+    const fn index(self) -> usize {
+        match self {
+            Self::Supply => 0,
+            Self::NativeSupply => 1,
+            Self::MaterializedSupply => 2,
+            Self::SourceNative => 3,
+            Self::SourceMaterialized => 4,
+            Self::DestinationNative => 5,
+            Self::DestinationMaterialized => 6,
+        }
+    }
+}
+
+/// Exact mutable account-data tail for all runtime-width economic vectors.
+pub struct EconomicTail<'a> {
+    bytes: &'a mut [u8],
+    outcome_count: u32,
+    vector_bytes: usize,
+}
+
+impl<'a> EconomicTail<'a> {
+    /// Hostile-validate and borrow one exact canonical account-data tail.
+    pub fn new(bytes: &'a mut [u8], outcome_count: u32) -> Result<Self, Error> {
+        let width = usize::try_from(outcome_count).map_err(|_| Error::InvalidOutcomeWidth)?;
+        let vector_bytes = width
+            .checked_mul(ECONOMIC_VALUE_BYTES)
+            .ok_or(Error::InvalidOutcomeWidth)?;
+        let expected = vector_bytes
+            .checked_mul(ECONOMIC_VECTOR_COUNT)
+            .ok_or(Error::InvalidOutcomeWidth)?;
+        if outcome_count < 2 || bytes.len() != expected {
+            return Err(Error::InvalidOutcomeWidth);
+        }
+        Ok(Self {
+            bytes,
+            outcome_count,
+            vector_bytes,
+        })
+    }
+
+    /// Return the exact required tail width for one runtime Product width.
+    pub fn byte_len(outcome_count: u32) -> Result<usize, Error> {
+        usize::try_from(outcome_count)
+            .map_err(|_| Error::InvalidOutcomeWidth)?
+            .checked_mul(ECONOMIC_VALUE_BYTES)
+            .and_then(|value| value.checked_mul(ECONOMIC_VECTOR_COUNT))
+            .ok_or(Error::InvalidOutcomeWidth)
+    }
+
+    /// Read one exact little-endian vector value.
+    pub fn value(&self, vector: EconomicVector, outcome: u32) -> Result<u64, Error> {
+        if outcome >= self.outcome_count {
+            return Err(Error::InvalidOutcomeWidth);
+        }
+        let outcome = usize::try_from(outcome).map_err(|_| Error::InvalidOutcomeWidth)?;
+        let offset = vector
+            .index()
+            .checked_mul(self.vector_bytes)
+            .and_then(|value| {
+                outcome
+                    .checked_mul(ECONOMIC_VALUE_BYTES)
+                    .and_then(|outcome_offset| value.checked_add(outcome_offset))
+            })
+            .ok_or(Error::InvalidOutcomeWidth)?;
+        read_u64(self.bytes, offset)
+    }
+
+    fn vectors(&self) -> Result<EconomicVectors<'_>, Error> {
+        split_vectors(self.bytes, self.vector_bytes)
+    }
+
+    fn vectors_mut(&mut self) -> Result<EconomicVectorsMut<'_>, Error> {
+        split_vectors_mut(self.bytes, self.vector_bytes)
+    }
+}
+
+struct EconomicVectors<'a> {
+    supply: &'a [u8],
+    native_supply: &'a [u8],
+    materialized_supply: &'a [u8],
+    source_native: &'a [u8],
+    source_materialized: &'a [u8],
+    destination_native: &'a [u8],
+    destination_materialized: &'a [u8],
+}
+
+struct EconomicVectorsMut<'a> {
+    supply: &'a mut [u8],
+    native_supply: &'a mut [u8],
+    materialized_supply: &'a mut [u8],
+    source_native: &'a mut [u8],
+    source_materialized: &'a mut [u8],
+    destination_native: &'a mut [u8],
+    destination_materialized: &'a mut [u8],
 }
 
 /// Execute funded Found without mutating external state.
@@ -934,7 +1036,7 @@ pub fn open_market(
 pub fn split_complete_set(
     request: Request,
     state: &mut CoreState,
-    economic: &mut EconomicView<'_>,
+    economic: &mut EconomicTail<'_>,
     claims_admission: Admission,
     custody_admission: Admission,
 ) -> Result<(), Error> {
@@ -953,20 +1055,22 @@ pub fn split_complete_set(
         .checked_add(quantity)
         .filter(|value| *value < state.product.scalar_limit)
         .ok_or(Error::ArithmeticOverflow)?;
+    let vectors = economic.vectors()?;
     for values in [
-        economic.supply,
-        representation_slice(economic, representation),
-        holder_slice(economic, holder, representation),
+        vectors.supply,
+        representation_slice(&vectors, representation),
+        holder_slice(&vectors, holder, representation),
     ] {
-        if values.iter().any(|value| {
+        if words(values).any(|value| {
             value.checked_add(quantity).is_none_or(|after| after >= state.product.scalar_limit)
         }) {
             return Err(Error::ArithmeticOverflow);
         }
     }
-    add_all(economic.supply, quantity);
-    add_all(representation_slice_mut(economic, representation), quantity);
-    add_all(holder_slice_mut(economic, holder, representation), quantity);
+    let mut vectors = economic.vectors_mut()?;
+    add_all(vectors.supply, quantity);
+    add_all(representation_slice_mut(&mut vectors, representation), quantity);
+    add_all(holder_slice_mut(&mut vectors, holder, representation), quantity);
     state.hoard_principal = hoard_after;
     Ok(())
 }
@@ -977,7 +1081,7 @@ pub fn admit_terminal(
     state: &mut CoreState,
     admission: Admission,
     receipt: TerminalReceipt,
-    economic: &EconomicView<'_>,
+    economic: &EconomicTail<'_>,
 ) -> Result<(), Error> {
     require_request(request, Action::AdmitTerminal, state.identity.market_id, state.identity.generation)?;
     if state.phase != Phase::Open {
@@ -996,12 +1100,7 @@ pub fn admit_terminal(
     {
         return Err(Error::InvalidTerminalReceipt);
     }
-    let winner = usize::try_from(receipt.selector).map_err(|_| Error::InvalidOutcomeWidth)?;
-    let winning_supply = economic
-        .supply
-        .get(winner)
-        .copied()
-        .ok_or(Error::InvalidOutcomeWidth)?;
+    let winning_supply = economic.value(EconomicVector::Supply, receipt.selector)?;
     if winning_supply > state.hoard_principal {
         return Err(Error::InvalidEconomicState);
     }
@@ -1041,7 +1140,7 @@ pub fn begin_retiring(
 pub fn redeem_terminal(
     request: Request,
     state: &mut CoreState,
-    economic: &mut EconomicView<'_>,
+    economic: &mut EconomicTail<'_>,
     claims_admission: Admission,
     custody_admission: Admission,
 ) -> Result<u64, Error> {
@@ -1056,15 +1155,11 @@ pub fn redeem_terminal(
     let representation = request.representation.ok_or(Error::InvalidTag)?;
     let outcome = usize::try_from(request.outcome).map_err(|_| Error::InvalidOutcomeWidth)?;
     let quantity = request.quantity;
-    let aggregate = economic.supply.get(outcome).copied().ok_or(Error::InvalidOutcomeWidth)?;
-    let represented = representation_slice(economic, representation)
-        .get(outcome)
-        .copied()
-        .ok_or(Error::InvalidOutcomeWidth)?;
-    let held = holder_slice(economic, holder, representation)
-        .get(outcome)
-        .copied()
-        .ok_or(Error::InvalidOutcomeWidth)?;
+    let outcome_u32 = request.outcome;
+    let vectors = economic.vectors()?;
+    let aggregate = value_at(vectors.supply, outcome)?;
+    let represented = value_at(representation_slice(&vectors, representation), outcome)?;
+    let held = value_at(holder_slice(&vectors, holder, representation), outcome)?;
     if aggregate < quantity || represented < quantity || held < quantity {
         return Err(Error::InsufficientBalance);
     }
@@ -1077,9 +1172,13 @@ pub fn redeem_terminal(
         .hoard_principal
         .checked_sub(payout)
         .ok_or(Error::InsufficientBalance)?;
-    sub_at(economic.supply, outcome, quantity);
-    sub_at(representation_slice_mut(economic, representation), outcome, quantity);
-    sub_at(holder_slice_mut(economic, holder, representation), outcome, quantity);
+    if outcome_u32 >= economic.outcome_count {
+        return Err(Error::InvalidOutcomeWidth);
+    }
+    let mut vectors = economic.vectors_mut()?;
+    sub_at(vectors.supply, outcome, quantity);
+    sub_at(representation_slice_mut(&mut vectors, representation), outcome, quantity);
+    sub_at(holder_slice_mut(&mut vectors, holder, representation), outcome, quantity);
     state.hoard_principal = hoard_after;
     Ok(payout)
 }
@@ -1089,7 +1188,7 @@ pub fn redeem_terminal(
 pub fn retire(
     request: Request,
     state: &mut CoreState,
-    economic: &EconomicView<'_>,
+    economic: &EconomicTail<'_>,
     core_admission: Admission,
     custody_admission: Admission,
     funding: FundingState,
@@ -1101,7 +1200,7 @@ pub fn retire(
         return Err(Error::InvalidPhase);
     }
     validate_economic(*state, economic)?;
-    if state.hoard_principal != 0 || economic_vectors(economic).iter().any(|values| !all_zero(values)) {
+    if state.hoard_principal != 0 || !economic_all_zero(economic)? {
         return Err(Error::InvalidEconomicState);
     }
     if funding.allocation_id != state.funding.allocation_id
@@ -1208,56 +1307,66 @@ fn capital_cleared(capital: Capital) -> bool {
         && capital.deferred_custody_rent == 0
 }
 
-fn validate_economic(state: CoreState, view: &EconomicView<'_>) -> Result<(), Error> {
-    let width = usize::try_from(state.product.outcome_count).map_err(|_| Error::InvalidOutcomeWidth)?;
-    let vectors = economic_vectors(view);
-    if vectors.iter().any(|values| values.len() != width) {
+fn validate_economic(state: CoreState, view: &EconomicTail<'_>) -> Result<(), Error> {
+    if view.outcome_count != state.product.outcome_count {
         return Err(Error::InvalidOutcomeWidth);
     }
-    if vectors
+    let vectors = view.vectors()?;
+    let all = [
+        vectors.supply,
+        vectors.native_supply,
+        vectors.materialized_supply,
+        vectors.source_native,
+        vectors.source_materialized,
+        vectors.destination_native,
+        vectors.destination_materialized,
+    ];
+    if all
         .iter()
-        .flat_map(|values| values.iter())
-        .any(|value| *value >= state.product.scalar_limit)
+        .any(|values| words(values).any(|value| value >= state.product.scalar_limit))
     {
         return Err(Error::InvalidEconomicState);
     }
     for (((aggregate, native), materialized), ((source_native, destination_native), (source_materialized, destination_materialized))) in view
+        .vectors()?
         .supply
-        .iter()
-        .zip(view.native_supply.iter())
-        .zip(view.materialized_supply.iter())
+        .chunks_exact(ECONOMIC_VALUE_BYTES)
+        .map(word)
+        .zip(words(vectors.native_supply))
+        .zip(words(vectors.materialized_supply))
         .zip(
-            view.source_native
-                .iter()
-                .zip(view.destination_native.iter())
-                .zip(view.source_materialized.iter().zip(view.destination_materialized.iter())),
+            words(vectors.source_native)
+                .zip(words(vectors.destination_native))
+                .zip(words(vectors.source_materialized).zip(words(vectors.destination_materialized))),
         )
     {
-        if native.checked_add(*materialized) != Some(*aggregate)
+        if native.checked_add(materialized) != Some(aggregate)
             || source_native
-                .checked_add(*destination_native)
-                .is_none_or(|total| total > *native)
+                .checked_add(destination_native)
+                .is_none_or(|total| total > native)
             || source_materialized
-                .checked_add(*destination_materialized)
-                .is_none_or(|total| total > *materialized)
+                .checked_add(destination_materialized)
+                .is_none_or(|total| total > materialized)
         {
             return Err(Error::InvalidEconomicState);
         }
     }
     match state.phase {
         Phase::Founding | Phase::Open => {
-            if view.supply.iter().any(|value| *value > state.hoard_principal) {
+            if words(vectors.supply).any(|value| value > state.hoard_principal) {
                 return Err(Error::InvalidEconomicState);
             }
         }
         Phase::Terminal | Phase::Retiring => {
             let winner = usize::try_from(state.terminal_winner).map_err(|_| Error::InvalidOutcomeWidth)?;
-            if view.supply.get(winner).is_none_or(|value| *value > state.hoard_principal) {
+            if value_at(vectors.supply, winner)? > state.hoard_principal {
                 return Err(Error::InvalidEconomicState);
             }
         }
         Phase::Retired => {
-            if state.hoard_principal != 0 || vectors.iter().any(|values| !all_zero(values)) {
+            if state.hoard_principal != 0
+                || all.iter().any(|values| words(values).any(|value| value != 0))
+            {
                 return Err(Error::InvalidEconomicState);
             }
         }
@@ -1265,80 +1374,150 @@ fn validate_economic(state: CoreState, view: &EconomicView<'_>) -> Result<(), Er
     Ok(())
 }
 
-fn economic_vectors<'a>(view: &'a EconomicView<'_>) -> [&'a [u64]; 7] {
-    [
-        view.supply,
-        view.native_supply,
-        view.materialized_supply,
-        view.source_native,
-        view.source_materialized,
-        view.destination_native,
-        view.destination_materialized,
-    ]
-}
-
 fn representation_slice<'a>(
-    view: &'a EconomicView<'_>,
+    vectors: &'a EconomicVectors<'_>,
     representation: Representation,
-) -> &'a [u64] {
+) -> &'a [u8] {
     match representation {
-        Representation::Native => view.native_supply,
-        Representation::Materialized => view.materialized_supply,
+        Representation::Native => vectors.native_supply,
+        Representation::Materialized => vectors.materialized_supply,
     }
 }
 
 fn representation_slice_mut<'a>(
-    view: &'a mut EconomicView<'_>,
+    vectors: &'a mut EconomicVectorsMut<'_>,
     representation: Representation,
-) -> &'a mut [u64] {
+) -> &'a mut [u8] {
     match representation {
-        Representation::Native => view.native_supply,
-        Representation::Materialized => view.materialized_supply,
+        Representation::Native => vectors.native_supply,
+        Representation::Materialized => vectors.materialized_supply,
     }
 }
 
 fn holder_slice<'a>(
-    view: &'a EconomicView<'_>,
+    vectors: &'a EconomicVectors<'_>,
     holder: Holder,
     representation: Representation,
-) -> &'a [u64] {
+) -> &'a [u8] {
     match (holder, representation) {
-        (Holder::Source, Representation::Native) => view.source_native,
-        (Holder::Source, Representation::Materialized) => view.source_materialized,
-        (Holder::Destination, Representation::Native) => view.destination_native,
-        (Holder::Destination, Representation::Materialized) => view.destination_materialized,
+        (Holder::Source, Representation::Native) => vectors.source_native,
+        (Holder::Source, Representation::Materialized) => vectors.source_materialized,
+        (Holder::Destination, Representation::Native) => vectors.destination_native,
+        (Holder::Destination, Representation::Materialized) => vectors.destination_materialized,
     }
 }
 
 fn holder_slice_mut<'a>(
-    view: &'a mut EconomicView<'_>,
+    vectors: &'a mut EconomicVectorsMut<'_>,
     holder: Holder,
     representation: Representation,
-) -> &'a mut [u64] {
+) -> &'a mut [u8] {
     match (holder, representation) {
-        (Holder::Source, Representation::Native) => view.source_native,
-        (Holder::Source, Representation::Materialized) => view.source_materialized,
-        (Holder::Destination, Representation::Native) => view.destination_native,
-        (Holder::Destination, Representation::Materialized) => view.destination_materialized,
+        (Holder::Source, Representation::Native) => vectors.source_native,
+        (Holder::Source, Representation::Materialized) => vectors.source_materialized,
+        (Holder::Destination, Representation::Native) => vectors.destination_native,
+        (Holder::Destination, Representation::Materialized) => vectors.destination_materialized,
     }
 }
 
-fn add_all(values: &mut [u64], quantity: u64) {
-    for value in values {
-        *value = value.saturating_add(quantity);
-    }
-}
-
-fn sub_at(values: &mut [u64], outcome: usize, quantity: u64) {
-    for (index, value) in values.iter_mut().enumerate() {
-        if index == outcome {
-            *value = value.saturating_sub(quantity);
+fn add_all(values: &mut [u8], quantity: u64) {
+    for value in values.chunks_exact_mut(ECONOMIC_VALUE_BYTES) {
+        let after = word(value).saturating_add(quantity).to_le_bytes();
+        for (destination, source) in value.iter_mut().zip(after) {
+            *destination = source;
         }
     }
 }
 
-fn all_zero(values: &[u64]) -> bool {
-    values.iter().all(|value| *value == 0)
+fn sub_at(values: &mut [u8], outcome: usize, quantity: u64) {
+    for (index, value) in values.chunks_exact_mut(ECONOMIC_VALUE_BYTES).enumerate() {
+        if index == outcome {
+            let after = word(value).saturating_sub(quantity).to_le_bytes();
+            for (destination, source) in value.iter_mut().zip(after) {
+                *destination = source;
+            }
+        }
+    }
+}
+
+fn economic_all_zero(view: &EconomicTail<'_>) -> Result<bool, Error> {
+    let vectors = view.vectors()?;
+    Ok([
+        vectors.supply,
+        vectors.native_supply,
+        vectors.materialized_supply,
+        vectors.source_native,
+        vectors.source_materialized,
+        vectors.destination_native,
+        vectors.destination_materialized,
+    ]
+    .iter()
+    .all(|values| words(values).all(|value| value == 0)))
+}
+
+fn value_at(values: &[u8], outcome: usize) -> Result<u64, Error> {
+    let offset = outcome
+        .checked_mul(ECONOMIC_VALUE_BYTES)
+        .ok_or(Error::InvalidOutcomeWidth)?;
+    read_u64(values, offset)
+}
+
+fn words(values: &[u8]) -> impl Iterator<Item = u64> + '_ {
+    values.chunks_exact(ECONOMIC_VALUE_BYTES).map(word)
+}
+
+fn word(bytes: &[u8]) -> u64 {
+    let mut value = [0_u8; ECONOMIC_VALUE_BYTES];
+    for (destination, source) in value.iter_mut().zip(bytes.iter().copied()) {
+        *destination = source;
+    }
+    u64::from_le_bytes(value)
+}
+
+fn split_vectors(bytes: &[u8], width: usize) -> Result<EconomicVectors<'_>, Error> {
+    let (supply, rest) = bytes.split_at_checked(width).ok_or(Error::InvalidOutcomeWidth)?;
+    let (native_supply, rest) = rest.split_at_checked(width).ok_or(Error::InvalidOutcomeWidth)?;
+    let (materialized_supply, rest) = rest.split_at_checked(width).ok_or(Error::InvalidOutcomeWidth)?;
+    let (source_native, rest) = rest.split_at_checked(width).ok_or(Error::InvalidOutcomeWidth)?;
+    let (source_materialized, rest) = rest.split_at_checked(width).ok_or(Error::InvalidOutcomeWidth)?;
+    let (destination_native, destination_materialized) =
+        rest.split_at_checked(width).ok_or(Error::InvalidOutcomeWidth)?;
+    if destination_materialized.len() != width {
+        return Err(Error::InvalidOutcomeWidth);
+    }
+    Ok(EconomicVectors {
+        supply,
+        native_supply,
+        materialized_supply,
+        source_native,
+        source_materialized,
+        destination_native,
+        destination_materialized,
+    })
+}
+
+fn split_vectors_mut(bytes: &mut [u8], width: usize) -> Result<EconomicVectorsMut<'_>, Error> {
+    let (supply, rest) = bytes.split_at_mut_checked(width).ok_or(Error::InvalidOutcomeWidth)?;
+    let (native_supply, rest) = rest.split_at_mut_checked(width).ok_or(Error::InvalidOutcomeWidth)?;
+    let (materialized_supply, rest) =
+        rest.split_at_mut_checked(width).ok_or(Error::InvalidOutcomeWidth)?;
+    let (source_native, rest) = rest.split_at_mut_checked(width).ok_or(Error::InvalidOutcomeWidth)?;
+    let (source_materialized, rest) =
+        rest.split_at_mut_checked(width).ok_or(Error::InvalidOutcomeWidth)?;
+    let (destination_native, destination_materialized) =
+        rest.split_at_mut_checked(width).ok_or(Error::InvalidOutcomeWidth)?;
+    if destination_materialized.len() != width {
+        return Err(Error::InvalidOutcomeWidth);
+    }
+    Ok(EconomicVectorsMut {
+        supply,
+        native_supply,
+        materialized_supply,
+        source_native,
+        source_materialized,
+        destination_native,
+        destination_materialized,
+    })
 }
 
 fn retirement_refund(capital: Capital, funding_remaining: u64) -> Result<u64, Error> {
