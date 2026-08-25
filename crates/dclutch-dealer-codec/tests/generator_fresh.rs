@@ -8,7 +8,7 @@ fn checked_in_rust_is_exact_lean_generator_output() {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let formal = manifest.join("../../formal/dclutch-semantics");
     let build = Command::new("lake")
-        .args(["build", "DClutchSemantics"])
+        .args(["build", "DClutchSemantics.DealerLiquidityAbi"])
         .current_dir(&formal)
         .output()
         .expect("build imported Lean semantic library");
