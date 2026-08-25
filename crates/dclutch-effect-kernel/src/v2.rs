@@ -12,6 +12,13 @@ use core::convert::TryInto;
 
 /// Canonical runtime-width effect-program magic.
 pub const MAGIC: [u8; 4] = *b"DCE2";
+/// Finalized-record schema label for runtime-width effect programs.
+pub const SCHEMA_RELEASE_PREIMAGE: &[u8] = b"dclutch/schema/effect-program-v2";
+/// SHA-256 of [`SCHEMA_RELEASE_PREIMAGE`].
+pub const SCHEMA_RELEASE_ID: [u8; 32] = [
+    0x02, 0x42, 0x7a, 0x3e, 0x7e, 0x1f, 0x2e, 0x5b, 0xdb, 0x74, 0x2d, 0x48, 0x1d, 0x80, 0xf8, 0xe5,
+    0x4a, 0x6b, 0x3a, 0x28, 0xcd, 0x05, 0xef, 0x17, 0x03, 0xdb, 0xdf, 0x32, 0xf1, 0x41, 0xfc, 0x1f,
+];
 /// Canonical runtime-width effect-program version.
 pub const VERSION: u8 = 2;
 /// Exact effect-program header width.
@@ -46,6 +53,10 @@ const OP_INVOKE_ROLE_IF_NONZERO: u8 = 7;
 /// Stable hostile-decode or projection refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
+    /// The selected or authenticated effect-program identity was all zero.
+    ZeroProgramIdentity,
+    /// The authenticated effect-program content was not descriptor-selected.
+    ProgramIdentityMismatch,
     /// Bytes did not have the exact count-derived width.
     InvalidLength,
     /// Magic selected another program family.
@@ -144,6 +155,27 @@ pub struct ProgramV2<'a> {
 }
 
 impl<'a> ProgramV2<'a> {
+    /// Decode one effect program after joining descriptor selection to an
+    /// adapter-authenticated finalized-record content identity.
+    ///
+    /// The outer adapter remains responsible for authenticating the record
+    /// bytes and deriving `authenticated_program_id`. Keeping the equality
+    /// check here prevents a caller from treating a schema release identity as
+    /// the authority for arbitrary effect bytes under that schema.
+    pub fn decode_selected(
+        selected_program_id: [u8; 32],
+        authenticated_program_id: [u8; 32],
+        bytes: &'a [u8],
+    ) -> Result<Self> {
+        if selected_program_id == [0; 32] || authenticated_program_id == [0; 32] {
+            return Err(Error::ZeroProgramIdentity);
+        }
+        if selected_program_id != authenticated_program_id {
+            return Err(Error::ProgramIdentityMismatch);
+        }
+        Self::decode(bytes)
+    }
+
     /// Decode, canonicalize, and cross-check one exact effect program.
     pub fn decode(bytes: &'a [u8]) -> Result<Self> {
         if bytes.len() < HEADER_BYTES {
@@ -1166,6 +1198,26 @@ mod tests {
         assert_eq!(
             ProgramV2::decode(&overlapping),
             Err(Error::OverlappingWrites)
+        );
+    }
+
+    #[test]
+    fn descriptor_selected_effect_identity_is_exact() {
+        let bytes = fixture_program();
+        let exact = [9; 32];
+        assert_eq!(
+            ProgramV2::decode_selected(exact, exact, &bytes)
+                .expect("exact authenticated effect program")
+                .bytes(),
+            bytes
+        );
+        assert_eq!(
+            ProgramV2::decode_selected([0; 32], exact, &bytes),
+            Err(Error::ZeroProgramIdentity)
+        );
+        assert_eq!(
+            ProgramV2::decode_selected(exact, [8; 32], &bytes),
+            Err(Error::ProgramIdentityMismatch)
         );
     }
 
