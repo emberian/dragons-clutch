@@ -806,6 +806,87 @@ fn frame_enforces_exact_privileges_and_aliases() -> Result<()> {
 }
 
 #[test]
+fn canonical_zero_system_program_is_the_only_zero_identifier() -> Result<()> {
+    let mut activate = [AccountMetaV1 {
+        key: [0; 32],
+        is_signer: false,
+        is_writable: false,
+        is_executable: false,
+    }; 12];
+    for (index, account) in activate.iter_mut().enumerate() {
+        let byte = u8::try_from(index).map_err(|_| Error::ArithmeticOverflow)?;
+        account.key = [byte.saturating_add(1); 32];
+    }
+    for index in [0usize, 1, 4, 6, 10, 11] {
+        activate
+            .get_mut(index)
+            .ok_or(Error::InvalidAccountFrame)?
+            .is_writable = true;
+    }
+    activate[6].is_signer = true;
+    activate[7].is_executable = true;
+    activate[8].key = [0; 32];
+    activate[8].is_executable = true;
+    assert_eq!(
+        validate_account_frame::<2>(ActionV1::Activate, &activate),
+        Ok(())
+    );
+    for index in 0..activate.len() {
+        if index == 8 {
+            continue;
+        }
+        let mut hostile = activate;
+        hostile
+            .get_mut(index)
+            .ok_or(Error::InvalidAccountFrame)?
+            .key = [0; 32];
+        assert_eq!(
+            validate_account_frame::<2>(ActionV1::Activate, &hostile),
+            Err(Error::ZeroIdentifier)
+        );
+    }
+
+    let mut retire = [AccountMetaV1 {
+        key: [0; 32],
+        is_signer: false,
+        is_writable: false,
+        is_executable: false,
+    }; 10];
+    for (index, account) in retire.iter_mut().enumerate() {
+        let byte = u8::try_from(index).map_err(|_| Error::ArithmeticOverflow)?;
+        account.key = [byte.saturating_add(1); 32];
+    }
+    for index in [0usize, 1, 4, 8, 9] {
+        retire
+            .get_mut(index)
+            .ok_or(Error::InvalidAccountFrame)?
+            .is_writable = true;
+    }
+    retire[5].is_executable = true;
+    retire[6].key = [0; 32];
+    retire[6].is_executable = true;
+    assert_eq!(
+        validate_account_frame::<2>(ActionV1::Retire, &retire),
+        Ok(())
+    );
+    for index in 0..retire.len() {
+        if index == 6 {
+            continue;
+        }
+        let mut hostile = retire;
+        hostile
+            .get_mut(index)
+            .ok_or(Error::InvalidAccountFrame)?
+            .key = [0; 32];
+        assert_eq!(
+            validate_account_frame::<2>(ActionV1::Retire, &hostile),
+            Err(Error::ZeroIdentifier)
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn retirement_refund_is_writable_for_token_close_and_root_refund() -> Result<()> {
     let mut accounts = [AccountMetaV1 {
         key: [0; 32],

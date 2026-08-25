@@ -167,7 +167,11 @@ pub fn account_role<const N: usize>(action: ActionV1, index: usize) -> Result<Ac
     Ok(role)
 }
 
-/// Validate exact role privileges, count, nonzero keys, and alias policy.
+/// Validate exact role privileges, count, canonical identifiers, and alias policy.
+///
+/// Solana's canonical native System Program identifier is all zero bytes. That
+/// value is admitted only for the [`AccountRoleV1::SystemProgram`] role; every
+/// other account role still requires a nonzero identifier.
 ///
 /// Extra signer or writable privilege is refused. The only admitted alias is
 /// between the claim Token-2022 program and the Realm collateral program when
@@ -180,8 +184,10 @@ pub fn validate_account_frame<const N: usize>(
         return Err(Error::InvalidAccountFrame);
     }
     for (index, account) in accounts.iter().enumerate() {
-        require_nonzero(&account.key)?;
         let role = account_role::<N>(action, index)?;
+        if role != AccountRoleV1::SystemProgram {
+            require_nonzero(&account.key)?;
+        }
         let (signer, writable, executable) = exact_privileges(action, role);
         if account.is_signer != signer
             || account.is_writable != writable
