@@ -42,6 +42,10 @@ const scalars = [
   ['REGISTERED_TERMINAL_REGISTRATION_BUMP_OFFSET', controller], ['REGISTERED_TERMINAL_RESERVED_OFFSET', controller],
   ['REGISTERED_TERMINAL_EXPECTED_SEQUENCE_OFFSET', controller], ['REGISTERED_TERMINAL_CANCEL', controller],
   ['REGISTERED_TERMINAL_EXPIRE', controller],
+  ['REGISTERED_RETIRE_BYTES_VALUE', controller], ['REGISTERED_RETIRE_ABI_VERSION', controller],
+  ['REGISTERED_RETIRE_MAGIC_OFFSET', controller], ['REGISTERED_RETIRE_VERSION_OFFSET', controller],
+  ['REGISTERED_RETIRE_CONTROLLER_BUMP_OFFSET', controller], ['REGISTERED_RETIRE_REGISTRATION_BUMP_OFFSET', controller],
+  ['REGISTERED_RETIRE_RESERVED_OFFSET', controller],
 ];
 
 const arrays = [
@@ -50,10 +54,11 @@ const arrays = [
   ['REGISTERED_CREATE_MAGIC_BYTES', controller], ['REGISTERED_CREATE_EXAMPLE', controller],
   ['REGISTERED_TERMINAL_MAGIC_BYTES', controller], ['REGISTERED_TERMINAL_CANCEL_EXAMPLE', controller],
   ['REGISTERED_TERMINAL_EXPIRE_EXAMPLE', controller],
+  ['REGISTERED_RETIRE_MAGIC_BYTES', controller], ['REGISTERED_RETIRE_EXAMPLE', controller],
 ];
 
 let generated = '// @generated from dclutch-direct-codec Lean-emitted Rust ABI; do not edit.\n';
-generated += '// Registered fill/terminal ABI baseline: git 7220fb7; creation: git 192f5ba.\n';
+generated += '// Registered fill/terminal ABI baseline: git 7220fb7; creation: git 192f5ba; retirement: git 6962437.\n';
 generated += '// Regenerate with: npm run abi:registered\n\n';
 for (const [name, source] of scalars) generated += `export const ${name} = ${scalar(source, name)} as const;\n`;
 generated += '\n';

@@ -10,6 +10,7 @@ import {
   REPLAY_STATE_BYTES,
   buildRegisteredCreateTransaction,
   buildRegisteredFillTransaction,
+  buildRegisteredRetireTransaction,
   buildRegisteredTerminalTransaction,
   decodeLegacyTokenObservationV1,
   decodeMakerReplayObservationV1,
@@ -17,6 +18,7 @@ import {
   encodeRegisteredIntentStateV1,
   observeRegisteredDirectState,
   projectRegisteredDirectState,
+  registeredRetirementDelegation,
   registeredPhase,
   scanRegisteredDirectStates,
   type RegisteredDirectSnapshot,
@@ -52,6 +54,13 @@ type CreateArtifact = Artifact & Readonly<{
   payerLamports: string;
   approval: string;
   delegation: string;
+}>;
+type RetireArtifact = Artifact & Readonly<{
+  address: string;
+  phase: string;
+  rentDestination: string;
+  rentLamports: string;
+  tokenAction: string;
 }>;
 
 function errorMessage(error: unknown): string {
@@ -124,11 +133,16 @@ export default function RegisteredOrdersWorkspace({ endpoint, protocolProgram, c
   const [routeText, setRouteText] = useState(routePlaceholder);
   const [actionStatus, setActionStatus] = useState('');
   const [artifact, setArtifact] = useState<Artifact | null>(null);
+  const [retireAddress, setRetireAddress] = useState('');
+  const [retirePayer, setRetirePayer] = useState('');
+  const [retireStatus, setRetireStatus] = useState('');
+  const [retireArtifact, setRetireArtifact] = useState<RetireArtifact | null>(null);
 
   const states = useMemo(() => scan.kind === 'ready' ? scan.snapshot.states : [], [scan]);
   const openStates = useMemo(() => states.filter((state) => state.state.phase === 0), [states]);
   const sellers = useMemo(() => openStates.filter((state) => state.state.intent.side === 0), [openStates]);
   const buyers = useMemo(() => openStates.filter((state) => state.state.intent.side === 1), [openStates]);
+  const terminalStates = useMemo(() => states.filter((state) => state.state.phase !== 0), [states]);
 
   async function buildCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -201,6 +215,7 @@ export default function RegisteredOrdersWorkspace({ endpoint, protocolProgram, c
       if (requiredAccount(market.mint, 'collateral mint').owner !== market.tokenProgram) throw new Error('Realm collateral mint has the wrong token-program owner');
       const token = decodeLegacyTokenObservationV1(requiredAccount(createCollateral, 'collateral token account'));
       if (token.mint !== market.mint) throw new Error('collateral token account has the wrong Realm mint');
+      if (token.frozen) throw new Error('collateral token account is frozen');
       if (side === 1 && token.owner !== createMaker) throw new Error('buyer collateral is not owned by the required maker signer');
       if (preliminary.approvalAmount !== null && token.amount < preliminary.approvalAmount) throw new Error(`buyer collateral ${token.amount} is below the exact ${preliminary.approvalAmount} worst-case reserve`);
       if (accounts.get(preliminary.derived.registration.toBase58()) !== null) throw new Error('next registration PDA already exists; replay nonce and state are inconsistent');
@@ -242,9 +257,66 @@ export default function RegisteredOrdersWorkspace({ endpoint, protocolProgram, c
       setSellerAddress(snapshot.states.find((state) => state.state.phase === 0 && state.state.intent.side === 0)?.address ?? '');
       setBuyerAddress(snapshot.states.find((state) => state.state.phase === 0 && state.state.intent.side === 1)?.address ?? '');
       setTerminalAddress(snapshot.states.find((state) => state.state.phase === 0)?.address ?? '');
+      setRetireAddress(snapshot.states.find((state) => state.state.phase !== 0)?.address ?? '');
       setScan({ kind: 'ready', snapshot });
     } catch (error) {
       setScan({ kind: 'error', message: errorMessage(error) });
+    }
+  }
+
+  async function buildRetirement() {
+    if (scan.kind !== 'ready') return;
+    setRetireArtifact(null);
+    setRetireStatus('Reacquiring the terminal registration, rent destination, delegation, programs, payer, and blockhash…');
+    try {
+      const client = new SolanaRpcClient(endpoint);
+      const floor = await client.finalizedSlot();
+      const state = await observeRegisteredDirectState(client, controllerProgram, retireAddress, floor);
+      const preliminary = buildRegisteredRetireTransaction({
+        controllerProgram, payer: retirePayer, recentBlockhash: '11111111111111111111111111111111', state,
+      });
+      const addresses = [...new Set([controllerProgram, retirePayer, ...preliminary.instruction.keys.map((meta) => meta.pubkey.toBase58())])];
+      const observation = await client.multipleAccounts(addresses, state.observedSlot);
+      const accounts = new Map(observation.accounts.map((entry) => [entry.address, entry.account]));
+      const program = accounts.get(controllerProgram);
+      const payerAccount = accounts.get(retirePayer);
+      const controller = accounts.get(preliminary.instruction.keys[0].pubkey.toBase58());
+      const registration = accounts.get(state.address);
+      const claim = accounts.get(CLAIM_PROGRAM_ID.toBase58());
+      const exactState = encodeRegisteredIntentStateV1(state.state);
+      if (program === undefined || program === null || !program.executable || payerAccount === undefined || payerAccount === null || payerAccount.executable
+          || controller === undefined || controller === null || controller.executable || registration === undefined || registration === null
+          || registration.owner !== CLAIM_PROGRAM_ID.toBase58() || registration.executable || registration.data.length !== exactState.length
+          || !registration.data.every((byte, index) => byte === exactState[index]) || claim === undefined || claim === null || !claim.executable) {
+        throw new Error('retirement route changed exact state, owner, or executable facts during one-context reacquisition');
+      }
+      let tokenAction = 'seller: no token delegation exists; close is permissionless';
+      if (state.state.intent.side === 1) {
+        const collateralAddress = new PublicKey(state.state.intent.collateralAccount).toBase58();
+        const collateralAccount = accounts.get(collateralAddress);
+        const tokenProgram = accounts.get(LEGACY_TOKEN_PROGRAM_ID.toBase58());
+        if (collateralAccount === undefined || collateralAccount === null || tokenProgram === undefined || tokenProgram === null || !tokenProgram.executable) {
+          throw new Error('buyer collateral or legacy-token program is absent');
+        }
+        const token = decodeLegacyTokenObservationV1(collateralAccount);
+        const delegation = registeredRetirementDelegation(state, token);
+        if (delegation === 'revoke-registration') {
+          tokenAction = `controller will revoke ${token.delegatedAmount} atoms delegated to this registration before close`;
+        } else {
+          tokenAction = 'delegation is already canonically revoked; controller admits direct close';
+        }
+      }
+      const blockhash = await client.latestBlockhash(observation.slot);
+      const plan = buildRegisteredRetireTransaction({ controllerProgram, payer: retirePayer, recentBlockhash: blockhash.blockhash, state });
+      setRetireArtifact({
+        action: state.state.intent.side === 0 ? 'Permissionless seller retirement' : 'Maker-authorized buyer retirement',
+        address: state.address, phase: registeredPhase(state.state.phase), rentDestination: plan.rentDestination,
+        rentLamports: registration.lamports, tokenAction, base64: base64(plan.wireBytes), wireBytes: plan.wireBytes.length,
+        signers: plan.requiredSignerKeys, blockhashSlot: blockhash.slot, lastValidBlockHeight: blockhash.lastValidBlockHeight,
+      });
+      setRetireStatus('Exact unsigned retirement transaction constructed. Nothing was signed, revoked, closed, or submitted.');
+    } catch (error) {
+      setRetireStatus(`Refused: ${errorMessage(error)}`);
     }
   }
 
@@ -377,6 +449,14 @@ export default function RegisteredOrdersWorkspace({ endpoint, protocolProgram, c
     {scan.kind === 'ready' && <>
       {scan.snapshot.states.length === 0 ? <p className="direct-refusal">No canonical registered state was found. This workspace does not synthesize one.</p> : <div className="registered-state-grid">{scan.snapshot.states.map((state) => <StateCard key={state.address} observation={state} />)}</div>}
       {scan.snapshot.refused.length > 0 && <details className="registered-refusals"><summary>{scan.snapshot.refused.length} candidate account(s) refused</summary>{scan.snapshot.refused.map((state) => <p key={state.address}>{compact(state.address)} · {state.reason}</p>)}</details>}
+      {terminalStates.length > 0 && <div className="registered-action">
+        <div className="direct-card-heading"><span>R</span><div><h2>Retire one terminal registration</h2><p>Seller accounts close permissionlessly. Buyer accounts require the persisted maker; the controller atomically revokes its own surviving delegation—or admits an already-revoked account—before returning all registration rent to that maker.</p></div></div>
+        <div className="direct-form-grid"><label><span>Terminal registered state</span><select value={retireAddress} onChange={(event) => setRetireAddress(event.target.value)}>{terminalStates.map((state) => <option key={state.address} value={state.address}>{compact(state.address)} · {state.state.intent.side === 0 ? 'seller · permissionless' : 'buyer · maker required'} · {registeredPhase(state.state.phase)}</option>)}</select></label><label><span>Transaction fee payer</span><input required value={retirePayer} onChange={(event) => setRetirePayer(event.target.value.trim())} /></label></div>
+        <div className="registered-facts creation-boundary"><p><strong>Rent destination</strong> The registration’s persisted maker receives every lamport held by the closed claim-owned account.</p><p><strong>Buyer delegation</strong> Only this registration PDA or canonical absence is admitted. A third-party delegate is refused.</p><p><strong>External boundary</strong> Maker signing for buyers and payer signing for all routes happen outside this page.</p></div>
+        <button type="button" onClick={buildRetirement}>Reacquire & build unsigned retirement</button>
+        <p className="direct-status" aria-live="polite">{retireStatus || 'No terminal state or delegation has been reacquired for retirement.'}</p>
+        {retireArtifact && <div className="direct-output registered-artifact"><dl><div><dt>Action</dt><dd>{retireArtifact.action}</dd></div><div><dt>Registration</dt><dd>{retireArtifact.address} · {retireArtifact.phase}</dd></div><div><dt>Rent return</dt><dd>{retireArtifact.rentLamports} lamports → {retireArtifact.rentDestination}</dd></div><div><dt>Token action</dt><dd>{retireArtifact.tokenAction}</dd></div><div><dt>Wire profile</dt><dd>{retireArtifact.wireBytes} / 1232 bytes</dd></div><div><dt>Required external signers</dt><dd>{retireArtifact.signers.join(' · ')}</dd></div><div><dt>Blockhash lifetime</dt><dd>slot {retireArtifact.blockhashSlot} · height {retireArtifact.lastValidBlockHeight}</dd></div></dl><label><span>Unsigned v0 transaction · base64</span><textarea readOnly value={retireArtifact.base64} /></label><p className="direct-refusal">All signature slots are zero. The browser did not revoke delegation, close the account, sign, or submit.</p></div>}
+      </div>}
       {openStates.length > 0 && <>
         <label><span>Fee payer public key</span><input required value={payer} onChange={(event) => setPayer(event.target.value.trim())} /></label>
         <form className="registered-action" onSubmit={buildFill}>

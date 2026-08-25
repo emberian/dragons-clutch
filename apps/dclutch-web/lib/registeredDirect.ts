@@ -31,6 +31,14 @@ import {
   REGISTERED_CREATE_REPLAY_BUMP_OFFSET,
   REGISTERED_CREATE_RESERVED_OFFSET,
   REGISTERED_CREATE_VERSION_OFFSET,
+  REGISTERED_RETIRE_ABI_VERSION,
+  REGISTERED_RETIRE_BYTES_VALUE,
+  REGISTERED_RETIRE_CONTROLLER_BUMP_OFFSET,
+  REGISTERED_RETIRE_MAGIC_BYTES,
+  REGISTERED_RETIRE_MAGIC_OFFSET,
+  REGISTERED_RETIRE_REGISTRATION_BUMP_OFFSET,
+  REGISTERED_RETIRE_RESERVED_OFFSET,
+  REGISTERED_RETIRE_VERSION_OFFSET,
   REGISTERED_SELLER_POSITION_BUMP_OFFSET,
   REGISTERED_SELLER_REGISTRATION_BUMP_OFFSET,
   REGISTERED_STATE_ABI_VERSION,
@@ -170,7 +178,10 @@ export type LegacyTokenObservationV1 = Readonly<{
   amount: bigint;
   delegate: string | null;
   delegatedAmount: bigint;
+  frozen: boolean;
 }>;
+
+export type RegisteredRetirementDelegationV1 = 'seller-not-applicable' | 'revoke-registration' | 'already-revoked';
 
 export type RegisteredCreateInputV1 = Readonly<{
   controllerProgram: string;
@@ -190,6 +201,22 @@ export type RegisteredCreateTransactionPlanV1 = Readonly<{
   requiredSignerKeys: ReadonlyArray<string>;
   derived: RegisteredCreateAddressesV1;
   approvalAmount: bigint | null;
+}>;
+
+export type RegisteredRetireInputV1 = Readonly<{
+  controllerProgram: string;
+  payer: string;
+  recentBlockhash: string;
+  state: RegisteredDirectStateObservation;
+}>;
+
+export type RegisteredRetireTransactionPlanV1 = Readonly<{
+  instruction: TransactionInstruction;
+  transaction: VersionedTransaction;
+  wireBytes: Uint8Array;
+  requiredSignerKeys: ReadonlyArray<string>;
+  rentDestination: string;
+  tokenAction: 'none' | 'revoke-or-confirm-absent';
 }>;
 
 function canonicalKey(value: string, field: string): PublicKey {
@@ -247,18 +274,22 @@ export function decodeLegacyTokenObservationV1(account: RpcAccount): LegacyToken
   if (account.owner !== LEGACY_TOKEN_PROGRAM_ID.toBase58() || account.executable || account.data.length !== TOKEN_ACCOUNT_BYTES) {
     throw new Error('collateral must be one exact initialized legacy SPL-token account');
   }
-  if (account.data[108] !== 1) throw new Error('collateral token account is not initialized and unfrozen');
+  if (account.data[108] !== 1 && account.data[108] !== 2) throw new Error('collateral token account state is uninitialized or undefined');
   const delegateTag = u32At(account.data, 72);
   if (delegateTag > 1) throw new Error('collateral token delegate option is noncanonical');
   const delegate = delegateTag === 0 ? null : new PublicKey(slice(account.data, 76, 32)).toBase58();
   const delegatedAmount = u64(account.data, 121);
   if (delegate === null && delegatedAmount !== 0n) throw new Error('collateral has a delegated amount without a delegate');
+  const nativeTag = u32At(account.data, 109);
+  if (nativeTag > 1) throw new Error('collateral native-reserve option is noncanonical');
+  if (nativeTag !== 0) throw new Error('native-wrapped collateral is not admitted by registered retirement');
   return Object.freeze({
     mint: new PublicKey(slice(account.data, 0, 32)).toBase58(),
     owner: new PublicKey(slice(account.data, 32, 32)).toBase58(),
     amount: u64(account.data, 64),
     delegate,
     delegatedAmount,
+    frozen: account.data[108] === 2,
   });
 }
 
@@ -271,6 +302,24 @@ export function registeredBuyerReserve(maximumFill: bigint, limitPrice: bigint, 
   if (reserve > 18_446_744_073_709_551_615n) throw new Error('buyer approval reserve exceeds u64');
   if (reserve === 0n) throw new Error('buyer order has zero worst-case collateral reserve');
   return reserve;
+}
+
+export function registeredRetirementDelegation(
+  state: RegisteredDirectStateObservation,
+  token: LegacyTokenObservationV1 | null,
+): RegisteredRetirementDelegationV1 {
+  if (state.state.intent.side === 0) {
+    if (token !== null) throw new Error('seller retirement must not acquire a token-delegation route');
+    return 'seller-not-applicable';
+  }
+  if (state.state.intent.side !== 1 || token === null) throw new Error('buyer retirement requires its exact collateral token state');
+  if (token.owner !== state.state.maker) throw new Error('buyer collateral owner is not the persisted maker');
+  if (token.delegate === state.address) {
+    if (token.frozen) throw new Error('buyer collateral is frozen, so SPL Token would refuse delegation revoke');
+    return 'revoke-registration';
+  }
+  if (token.delegate === null && token.delegatedAmount === 0n) return 'already-revoked';
+  throw new Error('buyer collateral delegation names a substituted authority');
 }
 
 export function deriveRegisteredCreateAddresses(
@@ -458,6 +507,16 @@ export function encodeLegacyApproveInstructionV1(amount: bigint): Uint8Array {
   return output;
 }
 
+export function encodeRegisteredRetireInstructionV1(controllerBump: number, registrationBump: number): Uint8Array {
+  const output = new Uint8Array(REGISTERED_RETIRE_BYTES_VALUE);
+  output.set(REGISTERED_RETIRE_MAGIC_BYTES, REGISTERED_RETIRE_MAGIC_OFFSET);
+  putU16(output, REGISTERED_RETIRE_VERSION_OFFSET, REGISTERED_RETIRE_ABI_VERSION);
+  output[REGISTERED_RETIRE_CONTROLLER_BUMP_OFFSET] = controllerBump;
+  output[REGISTERED_RETIRE_REGISTRATION_BUMP_OFFSET] = registrationBump;
+  requireZero(output, REGISTERED_RETIRE_RESERVED_OFFSET, REGISTERED_RETIRE_BYTES_VALUE - REGISTERED_RETIRE_RESERVED_OFFSET, 'registered retirement tail');
+  return output;
+}
+
 export function encodeRegisteredTerminal(action: 'cancel' | 'expire', controllerBump: number, registrationBump: number, sequence: bigint): Uint8Array {
   const output = new Uint8Array(REGISTERED_TERMINAL_BYTES_VALUE);
   output.set(REGISTERED_TERMINAL_MAGIC_BYTES, REGISTERED_TERMINAL_MAGIC_OFFSET);
@@ -558,6 +617,58 @@ export function buildRegisteredCreateTransaction(input: RegisteredCreateInputV1)
     instructions: Object.freeze(instructions), transaction, wireBytes,
     requiredSignerKeys: Object.freeze(message.staticAccountKeys.slice(0, message.header.numRequiredSignatures).map((key) => key.toBase58())),
     derived, approvalAmount,
+  });
+}
+
+export function buildRegisteredRetireTransaction(input: RegisteredRetireInputV1): RegisteredRetireTransactionPlanV1 {
+  const controllerProgram = canonicalKey(input.controllerProgram, 'controller program');
+  const payer = canonicalKey(input.payer, 'payer');
+  canonicalKey(input.recentBlockhash, 'recent blockhash');
+  const state = input.state.state;
+  if (state.phase === 0 || state.phase > 3) throw new Error('registered retirement requires a canonical terminal phase');
+  if (state.phase === 1 && state.remaining !== 0n) throw new Error('filled registration retains a nonzero residual');
+  if (state.remaining > state.intent.maximumFill || state.intent.maximumFill === 0n || state.intent.validFrom > state.intent.validThrough) {
+    throw new Error('registered terminal state has invalid residual, capacity, or validity facts');
+  }
+  const maker = canonicalKey(state.maker, 'persisted maker');
+  const [controller, controllerBump] = PublicKey.findProgramAddressSync([CONTROLLER_SEED], controllerProgram);
+  if (state.controller !== controller.toBase58()) throw new Error('terminal registration names a noncanonical controller authority');
+  const registration = deriveRegisteredAddress(input.controllerProgram, state);
+  if (registration.address.toBase58() !== input.state.address || registration.bump !== input.state.bump) throw new Error('terminal registration address no longer matches exact PDA coordinates');
+  const fixed = [controller, registration.address, maker, CLAIM_PROGRAM_ID];
+  if (new Set(fixed.map((key) => key.toBase58())).size !== fixed.length) throw new Error('registered retirement aliases two exact account roles');
+  if (!payer.equals(maker) && fixed.some((key) => key.equals(payer))) throw new Error('fee payer aliases a non-maker retirement role');
+  const keys = [
+    { pubkey: controller, isSigner: false, isWritable: false },
+    { pubkey: registration.address, isSigner: false, isWritable: true },
+    { pubkey: maker, isSigner: state.intent.side === 1, isWritable: true },
+    { pubkey: CLAIM_PROGRAM_ID, isSigner: false, isWritable: false },
+  ];
+  let tokenAction: 'none' | 'revoke-or-confirm-absent' = 'none';
+  if (state.intent.side === 1) {
+    const collateral = new PublicKey(state.intent.collateralAccount);
+    if ([controller, registration.address, maker, CLAIM_PROGRAM_ID, LEGACY_TOKEN_PROGRAM_ID].some((key) => key.equals(collateral))) {
+      throw new Error('buyer collateral aliases a retirement account role');
+    }
+    keys.push({ pubkey: collateral, isSigner: false, isWritable: true });
+    keys.push({ pubkey: LEGACY_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false });
+    tokenAction = 'revoke-or-confirm-absent';
+  } else if (state.intent.side !== 0) {
+    throw new Error('registered retirement side is undefined');
+  }
+  const instruction = new TransactionInstruction({
+    programId: controllerProgram,
+    keys,
+    data: encodeRegisteredRetireInstructionV1(controllerBump, registration.bump) as Buffer,
+  });
+  const message = new TransactionMessage({ payerKey: payer, recentBlockhash: input.recentBlockhash, instructions: [instruction] }).compileToV0Message();
+  const transaction = new VersionedTransaction(message);
+  const wireBytes = transaction.serialize();
+  if (wireBytes.length > PACKET_DATA_SIZE) throw new Error(`registered retirement transaction is ${wireBytes.length} bytes, above the ${PACKET_DATA_SIZE}-byte packet bound`);
+  return Object.freeze({
+    instruction, transaction, wireBytes,
+    requiredSignerKeys: Object.freeze(message.staticAccountKeys.slice(0, message.header.numRequiredSignatures).map((key) => key.toBase58())),
+    rentDestination: maker.toBase58(), tokenAction,
   });
 }
 

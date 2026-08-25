@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   REGISTERED_CONTROLLER_EXAMPLE,
   REGISTERED_CREATE_EXAMPLE,
+  REGISTERED_RETIRE_EXAMPLE,
   REGISTERED_STATE_EXAMPLE,
   REGISTERED_TERMINAL_CANCEL_EXAMPLE,
   REGISTERED_TERMINAL_EXPIRE_EXAMPLE,
@@ -12,6 +13,7 @@ import { decodeCompactIntentV1 } from './directCodec';
 import {
   LEGACY_TOKEN_PROGRAM_ID,
   buildRegisteredCreateTransaction,
+  buildRegisteredRetireTransaction,
   buildRegisteredFillTransaction,
   buildRegisteredTerminalTransaction,
   decodeRegisteredIntentStateV1,
@@ -20,9 +22,11 @@ import {
   deriveRegisteredAddress,
   encodeRegisteredFillInstructionV1,
   encodeRegisteredCreateInstructionV1,
+  encodeRegisteredRetireInstructionV1,
   encodeRegisteredIntentStateV1,
   encodeRegisteredTerminal,
   registeredBuyerReserve,
+  registeredRetirementDelegation,
   scanRegisteredDirectStates,
   type RegisteredDirectStateObservation,
 } from './registeredDirect';
@@ -84,6 +88,10 @@ describe('Lean-emitted registered Direct browser ABI', () => {
     const next = deriveRegisteredCreateAddresses(key(67).toBase58(), key(4).toBase58(), 3n, key(5).toBase58(), 1n);
     expect(first.replay).toEqual(next.replay);
     expect(first.registration).not.toEqual(next.registration);
+  });
+
+  it('matches the exact generated terminal-retirement request', () => {
+    expect(encodeRegisteredRetireInstructionV1(2, 3)).toEqual(REGISTERED_RETIRE_EXAMPLE);
   });
 
   it('constructs buyer approval plus creation with honest maker/payer signatures and bounded reserve', () => {
@@ -160,6 +168,44 @@ describe('Lean-emitted registered Direct browser ABI', () => {
     });
     expect(expire.instruction.keys).toHaveLength(3);
     expect(expire.requiredSignerKeys).toEqual([key(90).toBase58()]);
+  });
+
+  it('constructs permissionless seller and maker-authorized buyer retirement account sets', () => {
+    const controllerProgram = key(67);
+    const sellerOpen = observed(controllerProgram, 0, 8, 5);
+    const buyerOpen = observed(controllerProgram, 1, 9, 6);
+    const seller = { ...sellerOpen, state: { ...sellerOpen.state, phase: 2 } };
+    const buyer = { ...buyerOpen, state: { ...buyerOpen.state, phase: 3 } };
+    const payer = key(90);
+    const blockhash = key(91).toBase58();
+    const sellerPlan = buildRegisteredRetireTransaction({ controllerProgram: controllerProgram.toBase58(), payer: payer.toBase58(), recentBlockhash: blockhash, state: seller });
+    expect(sellerPlan.instruction.keys).toHaveLength(4);
+    expect(sellerPlan.requiredSignerKeys).toEqual([payer.toBase58()]);
+    expect(sellerPlan.rentDestination).toBe(seller.state.maker);
+    expect(sellerPlan.tokenAction).toBe('none');
+    const buyerPlan = buildRegisteredRetireTransaction({ controllerProgram: controllerProgram.toBase58(), payer: payer.toBase58(), recentBlockhash: blockhash, state: buyer });
+    expect(buyerPlan.instruction.keys).toHaveLength(6);
+    expect(buyerPlan.instruction.keys[2]).toMatchObject({ isSigner: true, isWritable: true });
+    expect(buyerPlan.instruction.keys[4].pubkey.toBase58()).toBe(new PublicKey(buyer.state.intent.collateralAccount).toBase58());
+    expect(buyerPlan.instruction.keys[5].pubkey).toEqual(LEGACY_TOKEN_PROGRAM_ID);
+    expect(buyerPlan.requiredSignerKeys).toEqual([payer.toBase58(), buyer.state.maker]);
+    expect(buyerPlan.wireBytes.length).toBeLessThanOrEqual(1_232);
+    expect(() => buildRegisteredRetireTransaction({ controllerProgram: controllerProgram.toBase58(), payer: payer.toBase58(), recentBlockhash: blockhash, state: sellerOpen })).toThrow(/terminal phase/);
+    expect(() => buildRegisteredRetireTransaction({ controllerProgram: controllerProgram.toBase58(), payer: payer.toBase58(), recentBlockhash: blockhash, state: { ...seller, address: key(99).toBase58() } })).toThrow(/PDA coordinates/);
+    expect(() => buildRegisteredRetireTransaction({ controllerProgram: controllerProgram.toBase58(), payer: payer.toBase58(), recentBlockhash: blockhash, state: { ...seller, state: { ...seller.state, phase: 1 } } })).toThrow(/nonzero residual/);
+  });
+
+  it('admits exact buyer delegation or canonical prior revocation and refuses substitution', () => {
+    const controllerProgram = key(67);
+    const buyerOpen = observed(controllerProgram, 1, 9, 6);
+    const buyer = { ...buyerOpen, state: { ...buyerOpen.state, phase: 3 } };
+    const base = { mint: key(14).toBase58(), owner: buyer.state.maker, amount: 2_000n, delegatedAmount: 802n, frozen: false };
+    expect(registeredRetirementDelegation(buyer, { ...base, delegate: buyer.address })).toBe('revoke-registration');
+    expect(registeredRetirementDelegation(buyer, { ...base, delegate: null, delegatedAmount: 0n })).toBe('already-revoked');
+    expect(() => registeredRetirementDelegation(buyer, { ...base, delegate: key(99).toBase58() })).toThrow(/substituted authority/);
+    expect(() => registeredRetirementDelegation(buyer, { ...base, owner: key(98).toBase58(), delegate: buyer.address })).toThrow(/persisted maker/);
+    expect(() => registeredRetirementDelegation(buyer, { ...base, delegate: buyer.address, frozen: true })).toThrow(/refuse delegation revoke/);
+    expect(registeredRetirementDelegation(buyer, { ...base, delegate: null, delegatedAmount: 0n, frozen: true })).toBe('already-revoked');
   });
 
   it('discovers only reacquired exact claim-owned state instead of trusting sliced headers', async () => {

@@ -1,5 +1,5 @@
 // @generated from dclutch-direct-codec Lean-emitted Rust ABI; do not edit.
-// Registered fill/terminal ABI baseline: git 7220fb7; creation: git 192f5ba.
+// Registered fill/terminal ABI baseline: git 7220fb7; creation: git 192f5ba; retirement: git 6962437.
 // Regenerate with: npm run abi:registered
 
 export const REGISTERED_STATE_BYTES_VALUE = 232 as const;
@@ -45,6 +45,13 @@ export const REGISTERED_TERMINAL_RESERVED_OFFSET = 13 as const;
 export const REGISTERED_TERMINAL_EXPECTED_SEQUENCE_OFFSET = 16 as const;
 export const REGISTERED_TERMINAL_CANCEL = 0 as const;
 export const REGISTERED_TERMINAL_EXPIRE = 1 as const;
+export const REGISTERED_RETIRE_BYTES_VALUE = 16 as const;
+export const REGISTERED_RETIRE_ABI_VERSION = 1 as const;
+export const REGISTERED_RETIRE_MAGIC_OFFSET = 0 as const;
+export const REGISTERED_RETIRE_VERSION_OFFSET = 8 as const;
+export const REGISTERED_RETIRE_CONTROLLER_BUMP_OFFSET = 10 as const;
+export const REGISTERED_RETIRE_REGISTRATION_BUMP_OFFSET = 11 as const;
+export const REGISTERED_RETIRE_RESERVED_OFFSET = 12 as const;
 
 export const REGISTERED_STATE_MAGIC_BYTES = Uint8Array.from([
   0x44, 0x43, 0x4c, 0x54, 0x52, 0x47, 0x49, 0x31,
@@ -98,4 +105,10 @@ export const REGISTERED_TERMINAL_CANCEL_EXAMPLE = Uint8Array.from([
 export const REGISTERED_TERMINAL_EXPIRE_EXAMPLE = Uint8Array.from([
   0x44, 0x43, 0x4c, 0x54, 0x52, 0x47, 0x54, 0x31, 0x01, 0x00, 0x01, 0x02, 0x03, 0x00, 0x00, 0x00,
   0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+]);
+export const REGISTERED_RETIRE_MAGIC_BYTES = Uint8Array.from([
+  0x44, 0x43, 0x4c, 0x54, 0x52, 0x47, 0x58, 0x31,
+]);
+export const REGISTERED_RETIRE_EXAMPLE = Uint8Array.from([
+  0x44, 0x43, 0x4c, 0x54, 0x52, 0x47, 0x58, 0x31, 0x01, 0x00, 0x02, 0x03, 0x00, 0x00, 0x00, 0x00,
 ]);
