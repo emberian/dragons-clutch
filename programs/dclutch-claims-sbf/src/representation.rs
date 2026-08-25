@@ -5,18 +5,26 @@ use dclutch_claims_representation_codec::{
     StateV1, prepare,
 };
 use dclutch_claims_svm::ClaimsPositionSeedsV1;
+use dclutch_core_contract::ContentId;
+use dclutch_custody_contract::{
+    CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1,
+    CustodyAuthoritySeedsV1, CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1,
+    CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
+};
 use dclutch_economic_slice_kernel::{
     BasketAction, BasketFrame, Phase, execute_basket, market_identity, market_outcome_count,
     market_phase, market_registry_program, market_release_set_id, market_revision,
     position_market_id, position_materialized, position_native, position_owner, position_revision,
 };
-use dclutch_release_set_contract::ExecutionRoleV1;
+use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_token_svm::{
     COption, ExactTransferProfileV1, MINT_BYTES, Mint, TOKEN_2022_PROGRAM_ID, TokenAccount,
 };
 use solana_program::{
     account_info::AccountInfo,
-    program::{invoke_signed, set_return_data},
+    hash::{hash, hashv},
+    instruction::{AccountMeta, Instruction},
+    program::{get_return_data, invoke_signed, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
 };
@@ -26,8 +34,14 @@ use spl_token_2022_interface::{
 };
 
 use super::{
-    ClaimsSbfError, REPRESENTATION_ACCOUNT_COUNT, REPRESENTATION_STATE_SEED_V1,
-    RepresentationAccounts, authenticate_core_market, phases_join, reauthenticate,
+    ClaimsSbfError, REPRESENTATION_ACCOUNT_COUNT, REPRESENTATION_COLLATERAL_MINT_ACCOUNT,
+    REPRESENTATION_COLLATERAL_RECIPIENT_ACCOUNT, REPRESENTATION_COLLATERAL_TOKEN_PROGRAM_ACCOUNT,
+    REPRESENTATION_CUSTODY_CALLER_AUTHORITY_ACCOUNT, REPRESENTATION_CUSTODY_PROGRAM_ACCOUNT,
+    REPRESENTATION_CUSTODY_PROGRAMDATA_ACCOUNT, REPRESENTATION_CUSTODY_REPLAY_ACCOUNT,
+    REPRESENTATION_CUSTODY_TRANSFER_AUTHORITY_ACCOUNT, REPRESENTATION_HOARD_VAULT_ACCOUNT,
+    REPRESENTATION_REALM_ACCOUNT, REPRESENTATION_STATE_SEED_V1,
+    REPRESENTATION_TERMINAL_ACCOUNT_COUNT, RepresentationAccounts, authenticate_core_market,
+    phases_join, reauthenticate,
 };
 
 const MINT_PADDING_START: usize = MINT_BYTES;
@@ -47,8 +61,12 @@ pub(super) fn process(
     program_id: &Pubkey,
     account_infos: &[AccountInfo<'_>],
     action: ActionV1,
+    action_bytes: &[u8],
+    custody_request_bytes: Option<&[u8]>,
 ) -> Result<(), ProgramError> {
-    if account_infos.len() != REPRESENTATION_ACCOUNT_COUNT {
+    if account_infos.len() != REPRESENTATION_ACCOUNT_COUNT
+        && account_infos.len() != REPRESENTATION_TERMINAL_ACCOUNT_COUNT
+    {
         return Err(ClaimsSbfError::Accounts.into());
     }
     let accounts = RepresentationAccounts::parse(account_infos)?;
@@ -69,7 +87,7 @@ pub(super) fn process(
     let state = StateV1::decode(&state_data).map_err(|_| ClaimsSbfError::Representation)?;
     drop(state_data);
 
-    let (phase, market_revision_before, claimant_revision_before, wrapper_revision_before) =
+    let (core, phase, market_revision_before, claimant_revision_before, wrapper_revision_before) =
         authenticate_economic_state(program_id, &accounts, descriptor, state)?;
     let release = reauthenticate(
         accounts.registry,
@@ -114,7 +132,27 @@ pub(super) fn process(
     let terminal = prepared
         .economic_intents()
         .any(|intent| matches!(intent, EconomicIntent::RedeemTerminal { .. }));
-    execute_economics(
+    let expected_payout = if terminal {
+        descriptor
+            .claim_atoms_per_lot(core.terminal_winner)
+            .map_err(|_| ClaimsSbfError::Representation)?
+            .checked_mul(action.lots)
+            .ok_or(ClaimsSbfError::Representation)?
+    } else {
+        0
+    };
+    authenticate_terminal_custody(
+        program_id,
+        account_infos,
+        descriptor,
+        action,
+        action_bytes,
+        core,
+        terminal,
+        expected_payout,
+        custody_request_bytes,
+    )?;
+    let actual_payout = execute_economics(
         &accounts,
         descriptor,
         prepared.adapter_mutation(),
@@ -124,11 +162,21 @@ pub(super) fn process(
         wrapper_revision_before,
         action.lots,
     )?;
+    if actual_payout != expected_payout {
+        return Err(ClaimsSbfError::Economic.into());
+    }
     execute_token_mutation(
         &accounts,
         prepared.adapter_mutation(),
         &state_seeds.as_signer_seeds(),
     )?;
+    if terminal && expected_payout > 0 {
+        invoke_terminal_custody(
+            program_id,
+            account_infos,
+            custody_request_bytes.ok_or(ClaimsSbfError::CustodyRequired)?,
+        )?;
+    }
 
     authenticate_postconditions(
         &accounts,
@@ -153,6 +201,457 @@ pub(super) fn process(
     drop(output);
     set_return_data(&encoded);
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct TerminalCustodyAccounts<'accounts, 'info> {
+    caller_authority: &'accounts AccountInfo<'info>,
+    custody_program: &'accounts AccountInfo<'info>,
+    realm: &'accounts AccountInfo<'info>,
+    replay: &'accounts AccountInfo<'info>,
+    collateral_mint: &'accounts AccountInfo<'info>,
+    hoard: &'accounts AccountInfo<'info>,
+    recipient: &'accounts AccountInfo<'info>,
+    custody_authority: &'accounts AccountInfo<'info>,
+    token_program: &'accounts AccountInfo<'info>,
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn authenticate_terminal_custody<'accounts, 'info>(
+    program_id: &Pubkey,
+    account_infos: &'accounts [AccountInfo<'info>],
+    descriptor: DescriptorV1<'_>,
+    action: ActionV1,
+    action_bytes: &[u8],
+    core: dclutch_market_core_codec::CoreState,
+    terminal: bool,
+    expected_payout: u64,
+    custody_request_bytes: Option<&[u8]>,
+) -> Result<(), ProgramError> {
+    if !terminal || expected_payout == 0 {
+        if custody_request_bytes.is_some() || account_infos.len() != REPRESENTATION_ACCOUNT_COUNT {
+            return Err(ClaimsSbfError::Accounts.into());
+        }
+        return Ok(());
+    }
+    if account_infos.len() != REPRESENTATION_TERMINAL_ACCOUNT_COUNT {
+        return Err(ClaimsSbfError::Accounts.into());
+    }
+    let request =
+        CustodyRequestV1::decode(custody_request_bytes.ok_or(ClaimsSbfError::CustodyRequired)?)
+            .map_err(|_| ClaimsSbfError::Instruction)?;
+    let caller_authority = terminal_account(
+        account_infos,
+        REPRESENTATION_CUSTODY_CALLER_AUTHORITY_ACCOUNT,
+    )?;
+    let custody_program = terminal_account(account_infos, REPRESENTATION_CUSTODY_PROGRAM_ACCOUNT)?;
+    let custody_programdata =
+        terminal_account(account_infos, REPRESENTATION_CUSTODY_PROGRAMDATA_ACCOUNT)?;
+    let realm = terminal_account(account_infos, REPRESENTATION_REALM_ACCOUNT)?;
+    let replay = terminal_account(account_infos, REPRESENTATION_CUSTODY_REPLAY_ACCOUNT)?;
+    let collateral_mint = terminal_account(account_infos, REPRESENTATION_COLLATERAL_MINT_ACCOUNT)?;
+    let hoard = terminal_account(account_infos, REPRESENTATION_HOARD_VAULT_ACCOUNT)?;
+    let recipient = terminal_account(account_infos, REPRESENTATION_COLLATERAL_RECIPIENT_ACCOUNT)?;
+    let custody_authority = terminal_account(
+        account_infos,
+        REPRESENTATION_CUSTODY_TRANSFER_AUTHORITY_ACCOUNT,
+    )?;
+    let token_program = terminal_account(
+        account_infos,
+        REPRESENTATION_COLLATERAL_TOKEN_PROGRAM_ACCOUNT,
+    )?;
+    authenticate_terminal_privileges(
+        caller_authority,
+        custody_program,
+        custody_programdata,
+        realm,
+        replay,
+        collateral_mint,
+        hoard,
+        recipient,
+        custody_authority,
+        token_program,
+    )?;
+    let base = RepresentationAccounts::parse(account_infos)?;
+    let custody_release = reauthenticate(
+        base.registry,
+        base.cache,
+        ExecutionRoleV1::Custody,
+        custody_program,
+        custody_programdata,
+    )?;
+    if custody_release.execution_release_set_id().as_bytes() != &descriptor.release_set_id() {
+        return Err(ClaimsSbfError::Release.into());
+    }
+    require_canonical_terminal_request(
+        program_id,
+        descriptor,
+        action,
+        action_bytes,
+        core,
+        hoard.key.to_bytes(),
+        recipient.key.to_bytes(),
+        collateral_mint.key.to_bytes(),
+        token_program.key.to_bytes(),
+        expected_payout,
+        request,
+    )?;
+    let request_digest =
+        hash(custody_request_bytes.ok_or(ClaimsSbfError::CustodyRequired)?).to_bytes();
+    authenticate_terminal_identities(
+        program_id,
+        caller_authority,
+        custody_program,
+        replay,
+        hoard,
+        custody_authority,
+        request,
+        request_digest,
+    )?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn require_canonical_terminal_request(
+    program_id: &Pubkey,
+    descriptor: DescriptorV1<'_>,
+    action: ActionV1,
+    action_bytes: &[u8],
+    core: dclutch_market_core_codec::CoreState,
+    hoard: [u8; 32],
+    recipient: [u8; 32],
+    collateral_mint: [u8; 32],
+    token_program: [u8; 32],
+    amount: u64,
+    request: CustodyRequestV1,
+) -> Result<(), ProgramError> {
+    if request.operation != OperationV1::Transfer
+        || request.caller_role != CallerRoleV1::Claims
+        || request.source_compartment != CompartmentV1::HoardPrincipal
+        || request.destination_compartment != CompartmentV1::External
+        || request.release_set != descriptor.release_set_id()
+        || request.market != descriptor.market_id()
+        || request.realm != core.identity.realm_id.to_bytes()
+        || request.context != descriptor.descriptor_id()
+        || request.caller_program != program_id.to_bytes()
+        || request.semantic
+            != (ContextV1 {
+                candidate: [0; 32],
+                actor: action.claimant,
+                order: [0; 32],
+                parent_request_digest: hash(action_bytes).to_bytes(),
+                order_nonce: action.expected_next_nonce,
+                generation: core.identity.generation,
+                page_index: 0,
+                execution_index: 0,
+                transfer_index: 0,
+            })
+        || request.source != hoard
+        || request.destination != recipient
+        || request.source_vault_context != descriptor.market_id()
+        || request.destination_vault_context != [0; 32]
+        || request.mint != collateral_mint
+        || request.token_program != token_program
+        || request.payer != [0; 32]
+        || request.rent_refund != [0; 32]
+        || request.amount != amount
+        || request.rent_lamports != 0
+    {
+        return Err(ClaimsSbfError::Identity.into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn canonical_terminal_request(
+    program_id: &Pubkey,
+    descriptor: DescriptorV1<'_>,
+    action: ActionV1,
+    action_bytes: &[u8],
+    core: dclutch_market_core_codec::CoreState,
+    hoard: [u8; 32],
+    recipient: [u8; 32],
+    collateral_mint: [u8; 32],
+    token_program: [u8; 32],
+    amount: u64,
+    expected_revision: u64,
+    resulting_revision: u64,
+) -> CustodyRequestV1 {
+    CustodyRequestV1 {
+        operation: OperationV1::Transfer,
+        caller_role: CallerRoleV1::Claims,
+        source_compartment: CompartmentV1::HoardPrincipal,
+        destination_compartment: CompartmentV1::External,
+        release_set: descriptor.release_set_id(),
+        market: descriptor.market_id(),
+        realm: core.identity.realm_id.to_bytes(),
+        context: descriptor.descriptor_id(),
+        caller_program: program_id.to_bytes(),
+        semantic: ContextV1 {
+            candidate: [0; 32],
+            actor: action.claimant,
+            order: [0; 32],
+            parent_request_digest: hash(action_bytes).to_bytes(),
+            order_nonce: action.expected_next_nonce,
+            generation: core.identity.generation,
+            page_index: 0,
+            execution_index: 0,
+            transfer_index: 0,
+        },
+        source: hoard,
+        destination: recipient,
+        source_vault_context: descriptor.market_id(),
+        destination_vault_context: [0; 32],
+        mint: collateral_mint,
+        token_program,
+        payer: [0; 32],
+        rent_refund: [0; 32],
+        expected_revision,
+        resulting_revision,
+        amount,
+        rent_lamports: 0,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_terminal_privileges(
+    caller_authority: &AccountInfo<'_>,
+    custody_program: &AccountInfo<'_>,
+    custody_programdata: &AccountInfo<'_>,
+    realm: &AccountInfo<'_>,
+    replay: &AccountInfo<'_>,
+    collateral_mint: &AccountInfo<'_>,
+    hoard: &AccountInfo<'_>,
+    recipient: &AccountInfo<'_>,
+    custody_authority: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+) -> Result<(), ProgramError> {
+    if caller_authority.is_signer
+        || caller_authority.is_writable
+        || caller_authority.executable
+        || !custody_program.executable
+        || custody_program.is_signer
+        || custody_program.is_writable
+        || custody_programdata.executable
+        || custody_programdata.is_signer
+        || custody_programdata.is_writable
+        || realm.executable
+        || realm.is_signer
+        || realm.is_writable
+        || replay.executable
+        || replay.is_signer
+        || !replay.is_writable
+        || collateral_mint.executable
+        || collateral_mint.is_signer
+        || collateral_mint.is_writable
+        || hoard.executable
+        || hoard.is_signer
+        || !hoard.is_writable
+        || recipient.executable
+        || recipient.is_signer
+        || !recipient.is_writable
+        || custody_authority.executable
+        || custody_authority.is_signer
+        || custody_authority.is_writable
+        || !token_program.executable
+        || token_program.is_signer
+        || token_program.is_writable
+    {
+        return Err(ClaimsSbfError::Accounts.into());
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_terminal_identities(
+    program_id: &Pubkey,
+    caller_authority: &AccountInfo<'_>,
+    custody_program: &AccountInfo<'_>,
+    replay: &AccountInfo<'_>,
+    hoard: &AccountInfo<'_>,
+    custody_authority: &AccountInfo<'_>,
+    request: CustodyRequestV1,
+    request_digest: [u8; 32],
+) -> Result<(), ProgramError> {
+    let caller_seeds = CallerAuthoritySeedsV1::new(
+        ContentId::new(request.release_set).map_err(|_| ClaimsSbfError::Identity)?,
+        request.market,
+        ExecutionRoleV1::Claims,
+        request.context,
+        request_digest,
+    )
+    .map_err(|_| ClaimsSbfError::Authority)?;
+    if caller_authority.key
+        != &Pubkey::find_program_address(&caller_seeds.as_slices(), program_id).0
+    {
+        return Err(ClaimsSbfError::Authority.into());
+    }
+    let replay_seeds = CustodyReplaySeedsV1::from_request(request);
+    if replay.key != &Pubkey::find_program_address(&replay_seeds.as_slices(), custody_program.key).0
+        || replay.owner != custody_program.key
+        || replay.data_len() != CUSTODY_REPLAY_BYTES_V1
+    {
+        return Err(ClaimsSbfError::Identity.into());
+    }
+    let replay_data = replay
+        .try_borrow_data()
+        .map_err(|_| ClaimsSbfError::Accounts)?;
+    let replay_state =
+        CustodyReplayV1::decode(&replay_data).map_err(|_| ClaimsSbfError::Identity)?;
+    drop(replay_data);
+    if !terminal_replay_matches(replay_state, request) {
+        return Err(ClaimsSbfError::Identity.into());
+    }
+    let vault_seeds = CustodyVaultSeedsV1::from_request(request, true);
+    if hoard.key != &Pubkey::find_program_address(&vault_seeds.as_slices(), custody_program.key).0 {
+        return Err(ClaimsSbfError::Identity.into());
+    }
+    let authority_seeds = CustodyAuthoritySeedsV1::from_request(request);
+    if custody_authority.key
+        != &Pubkey::find_program_address(&authority_seeds.as_slices(), custody_program.key).0
+    {
+        return Err(ClaimsSbfError::Identity.into());
+    }
+    Ok(())
+}
+
+fn terminal_replay_matches(replay: CustodyReplayV1, request: CustodyRequestV1) -> bool {
+    replay.caller_role == CallerRoleV1::Claims
+        && replay.release_set == request.release_set
+        && replay.market == request.market
+        && replay.realm == request.realm
+        && replay.context == request.context
+        && replay.caller_program == request.caller_program
+        && replay.next_revision == request.expected_revision
+        && replay.generation == request.semantic.generation
+}
+
+#[inline(never)]
+fn invoke_terminal_custody<'info>(
+    program_id: &Pubkey,
+    account_infos: &[AccountInfo<'info>],
+    request_bytes: &[u8],
+) -> Result<(), ProgramError> {
+    let base = RepresentationAccounts::parse(account_infos)?;
+    let terminal = terminal_accounts(account_infos)?;
+    let request =
+        CustodyRequestV1::decode(request_bytes).map_err(|_| ClaimsSbfError::Instruction)?;
+    let request_digest = hash(request_bytes).to_bytes();
+    let instruction = Instruction {
+        program_id: *terminal.custody_program.key,
+        accounts: Vec::from([
+            AccountMeta::new_readonly(*terminal.caller_authority.key, true),
+            AccountMeta::new_readonly(*base.cache.key, false),
+            AccountMeta::new_readonly(*base.registry.key, false),
+            AccountMeta::new_readonly(*base.claims_program.key, false),
+            AccountMeta::new_readonly(*base.claims_programdata.key, false),
+            AccountMeta::new_readonly(*terminal.realm.key, false),
+            AccountMeta::new(*terminal.replay.key, false),
+            AccountMeta::new_readonly(*terminal.collateral_mint.key, false),
+            AccountMeta::new(*terminal.hoard.key, false),
+            AccountMeta::new(*terminal.recipient.key, false),
+            AccountMeta::new_readonly(*terminal.custody_authority.key, false),
+            AccountMeta::new_readonly(*terminal.token_program.key, false),
+        ]),
+        data: request_bytes.to_vec(),
+    };
+    let caller_seeds = CallerAuthoritySeedsV1::new(
+        ContentId::new(request.release_set).map_err(|_| ClaimsSbfError::Identity)?,
+        request.market,
+        ExecutionRoleV1::Claims,
+        request.context,
+        request_digest,
+    )
+    .map_err(|_| ClaimsSbfError::Authority)?;
+    let bump = Pubkey::find_program_address(&caller_seeds.as_slices(), program_id).1;
+    let bump_seed = [bump];
+    let [domain, release, market, role, context, request_digest_seed] = caller_seeds.as_slices();
+    invoke_signed(
+        &instruction,
+        &[
+            terminal.caller_authority.clone(),
+            base.cache.clone(),
+            base.registry.clone(),
+            base.claims_program.clone(),
+            base.claims_programdata.clone(),
+            terminal.realm.clone(),
+            terminal.replay.clone(),
+            terminal.collateral_mint.clone(),
+            terminal.hoard.clone(),
+            terminal.recipient.clone(),
+            terminal.custody_authority.clone(),
+            terminal.token_program.clone(),
+            terminal.custody_program.clone(),
+        ],
+        &[&[
+            domain,
+            release,
+            market,
+            role,
+            context,
+            request_digest_seed,
+            &bump_seed,
+        ]],
+    )
+    .map_err(|_| ClaimsSbfError::CustodyRequired)?;
+    verify_terminal_custody_receipt(terminal, request, request_digest)
+}
+
+fn verify_terminal_custody_receipt(
+    terminal: TerminalCustodyAccounts<'_, '_>,
+    request: CustodyRequestV1,
+    request_digest: [u8; 32],
+) -> Result<(), ProgramError> {
+    let (producer, bytes) = get_return_data().ok_or(ClaimsSbfError::Receipt)?;
+    if producer != *terminal.custody_program.key || bytes.len() != CUSTODY_RECEIPT_BYTES_V1 {
+        return Err(ClaimsSbfError::Receipt.into());
+    }
+    let receipt = CustodyReceiptV1::decode(&bytes).map_err(|_| ClaimsSbfError::Receipt)?;
+    let replay_data = terminal
+        .replay
+        .try_borrow_data()
+        .map_err(|_| ClaimsSbfError::Accounts)?;
+    let replay_digest = hashv(&[&replay_data]).to_bytes();
+    drop(replay_data);
+    receipt
+        .verify_for(request, request_digest, replay_digest)
+        .map_err(|_| ClaimsSbfError::Receipt.into())
+}
+
+fn terminal_accounts<'accounts, 'info>(
+    account_infos: &'accounts [AccountInfo<'info>],
+) -> Result<TerminalCustodyAccounts<'accounts, 'info>, ProgramError> {
+    Ok(TerminalCustodyAccounts {
+        caller_authority: terminal_account(
+            account_infos,
+            REPRESENTATION_CUSTODY_CALLER_AUTHORITY_ACCOUNT,
+        )?,
+        custody_program: terminal_account(account_infos, REPRESENTATION_CUSTODY_PROGRAM_ACCOUNT)?,
+        realm: terminal_account(account_infos, REPRESENTATION_REALM_ACCOUNT)?,
+        replay: terminal_account(account_infos, REPRESENTATION_CUSTODY_REPLAY_ACCOUNT)?,
+        collateral_mint: terminal_account(account_infos, REPRESENTATION_COLLATERAL_MINT_ACCOUNT)?,
+        hoard: terminal_account(account_infos, REPRESENTATION_HOARD_VAULT_ACCOUNT)?,
+        recipient: terminal_account(account_infos, REPRESENTATION_COLLATERAL_RECIPIENT_ACCOUNT)?,
+        custody_authority: terminal_account(
+            account_infos,
+            REPRESENTATION_CUSTODY_TRANSFER_AUTHORITY_ACCOUNT,
+        )?,
+        token_program: terminal_account(
+            account_infos,
+            REPRESENTATION_COLLATERAL_TOKEN_PROGRAM_ACCOUNT,
+        )?,
+    })
+}
+
+fn terminal_account<'accounts, 'info>(
+    account_infos: &'accounts [AccountInfo<'info>],
+    index: usize,
+) -> Result<&'accounts AccountInfo<'info>, ProgramError> {
+    account_infos
+        .get(index)
+        .ok_or_else(|| ClaimsSbfError::Accounts.into())
 }
 
 fn authenticate_privileges(
@@ -261,7 +760,7 @@ fn authenticate_economic_state(
     accounts: &RepresentationAccounts<'_, '_>,
     descriptor: DescriptorV1<'_>,
     state: StateV1,
-) -> Result<(Phase, u64, u64, u64), ProgramError> {
+) -> Result<(dclutch_market_core_codec::CoreState, Phase, u64, u64, u64), ProgramError> {
     let core = authenticate_core_market(
         program_id,
         accounts.core_market,
@@ -309,7 +808,13 @@ fn authenticate_economic_state(
         accounts.state.key.to_bytes(),
     )?;
     authenticate_wrapper_projection(accounts, descriptor, state.issued_lots)?;
-    Ok((phase, market_revision, claimant_revision, wrapper_revision))
+    Ok((
+        core,
+        phase,
+        market_revision,
+        claimant_revision,
+        wrapper_revision,
+    ))
 }
 
 fn authenticate_position(
@@ -394,12 +899,12 @@ fn execute_economics(
     claimant_revision: u64,
     wrapper_revision: u64,
     lots: u64,
-) -> Result<(), ProgramError> {
+) -> Result<u64, ProgramError> {
     let action = match mutation {
         AdapterMutation::Mint { .. } => BasketAction::Materialize,
         AdapterMutation::Burn { .. } if !terminal => BasketAction::Dematerialize,
-        AdapterMutation::Burn { .. } => return Err(ClaimsSbfError::CustodyRequired.into()),
-        AdapterMutation::Retire => return Ok(()),
+        AdapterMutation::Burn { .. } => BasketAction::RedeemMaterializedTerminal,
+        AdapterMutation::Retire => return Ok(0),
     };
     let (source, destination, expected_source, expected_destination) = match action {
         BasketAction::Materialize => (
@@ -434,7 +939,7 @@ fn execute_economics(
         quantities: descriptor.claim_atoms_bytes(),
         quantity_multiplier: lots,
     };
-    if let Some(destination) = destination {
+    let payout = if let Some(destination) = destination {
         let mut destination_data = destination
             .try_borrow_mut_data()
             .map_err(|_| ClaimsSbfError::Accounts)?;
@@ -448,7 +953,7 @@ fn execute_economics(
         execute_basket(&mut market, Some(&mut source_data), None, frame)
     }
     .map_err(|_| ClaimsSbfError::Economic)?;
-    Ok(())
+    Ok(payout.amount)
 }
 
 fn parse_mint(
@@ -704,6 +1209,65 @@ mod tests {
 
     use super::*;
 
+    fn identity(byte: u8) -> dclutch_market_core_codec::Identity {
+        dclutch_market_core_codec::Identity::new([byte; 32]).expect("nonzero identity")
+    }
+
+    fn terminal_core() -> dclutch_market_core_codec::CoreState {
+        dclutch_market_core_codec::CoreState {
+            phase: dclutch_market_core_codec::Phase::Terminal,
+            readiness: dclutch_market_core_codec::Readiness::Consumed,
+            terminal_winner: 1,
+            identity: dclutch_market_core_codec::MarketIdentity {
+                market_id: identity(2),
+                realm_id: identity(12),
+                product_id: identity(3),
+                result_domain: identity(4),
+                resolution_policy: identity(13),
+                capability_manifest: identity(14),
+                selected_release_set: identity(6),
+                generation: 19,
+            },
+            outstanding_capabilities: 1,
+            rent_beneficiary: identity(15),
+            terminal_receipt: Some(identity(16)),
+        }
+    }
+
+    fn terminal_action(descriptor: DescriptorV1<'_>) -> ActionV1 {
+        ActionV1 {
+            tag: 3,
+            descriptor_id: descriptor.descriptor_id(),
+            expected_release_set_id: descriptor.release_set_id(),
+            claimant: [7; 32],
+            expected_next_nonce: 4,
+            expected_issued_lots: 2,
+            lots: 1,
+        }
+    }
+
+    fn require_fixture_terminal_request(
+        program: &Pubkey,
+        descriptor: DescriptorV1<'_>,
+        action: ActionV1,
+        action_bytes: &[u8],
+        request: CustodyRequestV1,
+    ) -> Result<(), ProgramError> {
+        require_canonical_terminal_request(
+            program,
+            descriptor,
+            action,
+            action_bytes,
+            terminal_core(),
+            [17; 32],
+            [18; 32],
+            [19; 32],
+            [20; 32],
+            3,
+            request,
+        )
+    }
+
     fn account(key: Pubkey, owner: Pubkey, data: Vec<u8>) -> AccountInfo<'static> {
         AccountInfo::new(
             Box::leak(Box::new(key)),
@@ -858,6 +1422,164 @@ mod tests {
             retired: false,
         };
         assert_eq!(empty.issued_lots, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn terminal_custody_request_binds_every_cross_owner_coordinate() -> Result<(), ProgramError> {
+        let descriptor_wire = descriptor_bytes();
+        let descriptor =
+            DescriptorV1::decode(&descriptor_wire).map_err(|_| ClaimsSbfError::Representation)?;
+        let program = Pubkey::new_from_array([9; 32]);
+        let action = terminal_action(descriptor);
+        let action_bytes = action
+            .encode()
+            .map_err(|_| ClaimsSbfError::Representation)?;
+        let expected = canonical_terminal_request(
+            &program,
+            descriptor,
+            action,
+            &action_bytes,
+            terminal_core(),
+            [17; 32],
+            [18; 32],
+            [19; 32],
+            [20; 32],
+            3,
+            8,
+            9,
+        );
+        assert_eq!(expected.source_vault_context, descriptor.market_id());
+        assert_eq!(expected.context, descriptor.descriptor_id());
+        assert_eq!(
+            expected.semantic.parent_request_digest,
+            hash(&action_bytes).to_bytes()
+        );
+        assert_eq!(expected.semantic.generation, 19);
+        assert_eq!(expected.amount, 3);
+        assert_eq!(
+            require_fixture_terminal_request(&program, descriptor, action, &action_bytes, expected,),
+            Ok(())
+        );
+
+        let mut substituted = expected;
+        substituted.realm = [21; 32];
+        assert_eq!(
+            require_fixture_terminal_request(
+                &program,
+                descriptor,
+                action,
+                &action_bytes,
+                substituted,
+            ),
+            Err(ClaimsSbfError::Identity.into())
+        );
+        substituted = expected;
+        substituted.semantic.generation = 20;
+        assert_eq!(
+            require_fixture_terminal_request(
+                &program,
+                descriptor,
+                action,
+                &action_bytes,
+                substituted,
+            ),
+            Err(ClaimsSbfError::Identity.into())
+        );
+        substituted = expected;
+        substituted.semantic.parent_request_digest = [22; 32];
+        assert_eq!(
+            require_fixture_terminal_request(
+                &program,
+                descriptor,
+                action,
+                &action_bytes,
+                substituted,
+            ),
+            Err(ClaimsSbfError::Identity.into())
+        );
+        substituted = expected;
+        substituted.amount = 4;
+        assert_eq!(
+            require_fixture_terminal_request(
+                &program,
+                descriptor,
+                action,
+                &action_bytes,
+                substituted,
+            ),
+            Err(ClaimsSbfError::Identity.into())
+        );
+        substituted = expected;
+        substituted.source_vault_context = descriptor.descriptor_id();
+        assert_eq!(
+            require_fixture_terminal_request(
+                &program,
+                descriptor,
+                action,
+                &action_bytes,
+                substituted,
+            ),
+            Err(ClaimsSbfError::Identity.into())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn terminal_custody_replay_refuses_stale_or_transplanted_cursor() -> Result<(), ProgramError> {
+        let descriptor_wire = descriptor_bytes();
+        let descriptor =
+            DescriptorV1::decode(&descriptor_wire).map_err(|_| ClaimsSbfError::Representation)?;
+        let action = terminal_action(descriptor);
+        let action_bytes = action
+            .encode()
+            .map_err(|_| ClaimsSbfError::Representation)?;
+        let request = canonical_terminal_request(
+            &Pubkey::new_from_array([9; 32]),
+            descriptor,
+            action,
+            &action_bytes,
+            terminal_core(),
+            [17; 32],
+            [18; 32],
+            [19; 32],
+            [20; 32],
+            3,
+            8,
+            9,
+        );
+        let replay = CustodyReplayV1 {
+            caller_role: CallerRoleV1::Claims,
+            release_set: request.release_set,
+            market: request.market,
+            realm: request.realm,
+            context: request.context,
+            caller_program: request.caller_program,
+            rent_refund: [23; 32],
+            next_revision: request.expected_revision,
+            generation: request.semantic.generation,
+            last_request_digest: [24; 32],
+            last_poststate_commitment: [25; 32],
+        };
+        assert!(terminal_replay_matches(replay, request));
+        let mut hostile = replay;
+        hostile.next_revision = hostile
+            .next_revision
+            .checked_sub(1)
+            .ok_or(ClaimsSbfError::Representation)?;
+        assert!(!terminal_replay_matches(hostile, request));
+        hostile = replay;
+        hostile.context = [26; 32];
+        assert!(!terminal_replay_matches(hostile, request));
+        hostile = replay;
+        hostile.generation = hostile
+            .generation
+            .checked_add(1)
+            .ok_or(ClaimsSbfError::Representation)?;
+        assert!(!terminal_replay_matches(hostile, request));
+        hostile = replay;
+        hostile.caller_program = [27; 32];
+        assert!(!terminal_replay_matches(hostile, request));
         Ok(())
     }
 }

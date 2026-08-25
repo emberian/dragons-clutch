@@ -109,6 +109,9 @@ mod generated {
 
 use generated::*;
 
+/// Exact canonical representation action wire width.
+pub const ACTION_WIRE_BYTES_V1: usize = ACTION_BYTES;
+
 /// Economic lifecycle projected by the EconomicKernel owner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EconomicPhase {
@@ -741,15 +744,7 @@ fn validate_products(descriptor: DescriptorV1<'_>, lots: u64) -> Result<()> {
 }
 
 fn rule(tag: u8) -> Result<ActionRule> {
-    let mut index = 0_usize;
-    while index < ACTION_RULES.len() {
-        let candidate = ACTION_RULES.get(index).ok_or(Error::UnknownAction)?;
-        if candidate.tag == tag {
-            return Ok(*candidate);
-        }
-        index = index.checked_add(1).ok_or(Error::UnknownAction)?;
-    }
-    Err(Error::UnknownAction)
+    generated_rule(tag).ok_or(Error::UnknownAction)
 }
 
 fn exact_width(input: &[u8], expected: usize) -> Result<()> {

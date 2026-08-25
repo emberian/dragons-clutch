@@ -46,40 +46,44 @@ pub const PHASE_OPEN: u8 = 1;
 pub const PHASE_TERMINAL: u8 = 2;
 pub const PHASE_RETIRING: u8 = 4;
 pub const PHASE_RETIRED: u8 = 8;
-pub const ACTION_RULES: [ActionRule; 4] = [
-    ActionRule {
-        tag: 1,
-        allowed_phases: 1,
-        lot_effect: LotEffect::Add,
-        requires_positive_lots: true,
-        economic_style: EconomicStyle::Materialize,
-        adapter_style: AdapterStyle::Mint,
-    },
-    ActionRule {
-        tag: 2,
-        allowed_phases: 7,
-        lot_effect: LotEffect::Subtract,
-        requires_positive_lots: true,
-        economic_style: EconomicStyle::Dematerialize,
-        adapter_style: AdapterStyle::Burn,
-    },
-    ActionRule {
-        tag: 3,
-        allowed_phases: 6,
-        lot_effect: LotEffect::Subtract,
-        requires_positive_lots: true,
-        economic_style: EconomicStyle::Terminal,
-        adapter_style: AdapterStyle::Burn,
-    },
-    ActionRule {
-        tag: 4,
-        allowed_phases: 14,
-        lot_effect: LotEffect::Retire,
-        requires_positive_lots: false,
-        economic_style: EconomicStyle::None,
-        adapter_style: AdapterStyle::Retire,
-    },
-];
+#[inline(always)]
+pub const fn generated_rule(tag: u8) -> Option<ActionRule> {
+    match tag {
+        1 => Some(ActionRule {
+            tag: 1,
+            allowed_phases: 1,
+            lot_effect: LotEffect::Add,
+            requires_positive_lots: true,
+            economic_style: EconomicStyle::Materialize,
+            adapter_style: AdapterStyle::Mint,
+        }),
+        2 => Some(ActionRule {
+            tag: 2,
+            allowed_phases: 7,
+            lot_effect: LotEffect::Subtract,
+            requires_positive_lots: true,
+            economic_style: EconomicStyle::Dematerialize,
+            adapter_style: AdapterStyle::Burn,
+        }),
+        3 => Some(ActionRule {
+            tag: 3,
+            allowed_phases: 6,
+            lot_effect: LotEffect::Subtract,
+            requires_positive_lots: true,
+            economic_style: EconomicStyle::Terminal,
+            adapter_style: AdapterStyle::Burn,
+        }),
+        4 => Some(ActionRule {
+            tag: 4,
+            allowed_phases: 14,
+            lot_effect: LotEffect::Retire,
+            requires_positive_lots: false,
+            economic_style: EconomicStyle::None,
+            adapter_style: AdapterStyle::Retire,
+        }),
+        _ => None,
+    }
+}
 #[cfg(test)]
 pub const EXAMPLE_DESCRIPTOR: [u8; 248] = [
     0x44, 0x43, 0x4c, 0x57, 0x52, 0x50, 0x44, 0x31, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,

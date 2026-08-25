@@ -4,14 +4,16 @@
 
 //! Authenticated SBF adapter for the one canonical Claims economic owner.
 
-use dclutch_claims_representation_codec::ActionV1;
+use dclutch_claims_representation_codec::{ACTION_WIRE_BYTES_V1, ActionV1};
 use dclutch_claims_svm::{
     CallerRole, ClaimsAction, ClaimsAggregateSeedsV1, ClaimsPlanV1, ClaimsPositionSeedsV1,
     ClaimsReceiptV1, NO_POSITION_REVISION,
 };
 use dclutch_core_contract::ContentId;
+use dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1;
 use dclutch_economic_slice_kernel::{
-    BasketAction, BasketFrame, Phase as EconomicPhase, execute_basket, market_identity,
+    BasketAction, BasketFrame, MARKET_HEADER_BYTES, POSITION_HEADER_BYTES, Phase as EconomicPhase,
+    SCALAR_BYTES, execute_basket, initialize_market, initialize_position, market_identity,
     market_outcome_count, market_phase, market_registry_program, market_release_set_id,
     market_revision, position_market_id, position_owner, position_revision,
 };
@@ -28,10 +30,14 @@ use solana_program::{
     entrypoint::ProgramResult,
     hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
-    program::{get_return_data, invoke, set_return_data},
+    program::{get_return_data, invoke, invoke_signed, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
+    rent::Rent,
+    sysvar::SysvarSerialize,
 };
+use solana_sdk_ids::{system_program, sysvar};
+use solana_system_interface::instruction::{allocate, assign};
 
 mod representation;
 
@@ -65,6 +71,12 @@ pub const CORE_PROGRAM_ACCOUNT: usize = 11;
 pub const CORE_PROGRAMDATA_ACCOUNT: usize = 12;
 /// Exact generic Claims child account count.
 pub const GENERIC_ACCOUNT_COUNT: usize = 13;
+/// Foundational Split account index: Rent sysvar.
+pub const FOUNDATIONAL_RENT_ACCOUNT: usize = 13;
+/// Foundational Split account index: System program.
+pub const FOUNDATIONAL_SYSTEM_ACCOUNT: usize = 14;
+/// Exact foundational Split Claims child account count.
+pub const FOUNDATIONAL_ACCOUNT_COUNT: usize = 15;
 
 /// Unified representation state PDA seed prefix.
 pub const REPRESENTATION_STATE_SEED_V1: &[u8] = b"dclutch:representation:v1";
@@ -104,6 +116,28 @@ pub const REPRESENTATION_CORE_PROGRAM_ACCOUNT: usize = 14;
 pub const REPRESENTATION_CORE_PROGRAMDATA_ACCOUNT: usize = 15;
 /// Exact unified representation account count before terminal Custody composition.
 pub const REPRESENTATION_ACCOUNT_COUNT: usize = 16;
+/// Terminal representation account index: Claims release-pinned Custody caller authority.
+pub const REPRESENTATION_CUSTODY_CALLER_AUTHORITY_ACCOUNT: usize = 16;
+/// Terminal representation account index: current Custody program.
+pub const REPRESENTATION_CUSTODY_PROGRAM_ACCOUNT: usize = 17;
+/// Terminal representation account index: current Custody ProgramData.
+pub const REPRESENTATION_CUSTODY_PROGRAMDATA_ACCOUNT: usize = 18;
+/// Terminal representation account index: finalized immutable Realm record.
+pub const REPRESENTATION_REALM_ACCOUNT: usize = 19;
+/// Terminal representation account index: canonical per-descriptor Custody replay.
+pub const REPRESENTATION_CUSTODY_REPLAY_ACCOUNT: usize = 20;
+/// Terminal representation account index: Realm-selected collateral Mint.
+pub const REPRESENTATION_COLLATERAL_MINT_ACCOUNT: usize = 21;
+/// Terminal representation account index: canonical Market Hoard vault.
+pub const REPRESENTATION_HOARD_VAULT_ACCOUNT: usize = 22;
+/// Terminal representation account index: claimant's external collateral account.
+pub const REPRESENTATION_COLLATERAL_RECIPIENT_ACCOUNT: usize = 23;
+/// Terminal representation account index: canonical Custody transfer authority.
+pub const REPRESENTATION_CUSTODY_TRANSFER_AUTHORITY_ACCOUNT: usize = 24;
+/// Terminal representation account index: Realm-selected collateral token program.
+pub const REPRESENTATION_COLLATERAL_TOKEN_PROGRAM_ACCOUNT: usize = 25;
+/// Exact unified representation account count with terminal Custody composition.
+pub const REPRESENTATION_TERMINAL_ACCOUNT_COUNT: usize = 26;
 
 struct GenericAccounts<'accounts, 'info> {
     authority: &'accounts AccountInfo<'info>,
@@ -131,6 +165,9 @@ struct AppliedClaims {
 
 impl<'accounts, 'info> GenericAccounts<'accounts, 'info> {
     fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, ProgramError> {
+        let accounts = accounts
+            .get(..GENERIC_ACCOUNT_COUNT)
+            .ok_or(ClaimsSbfError::Accounts)?;
         let [
             authority,
             market,
@@ -188,6 +225,9 @@ struct RepresentationAccounts<'accounts, 'info> {
 
 impl<'accounts, 'info> RepresentationAccounts<'accounts, 'info> {
     fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, ProgramError> {
+        let accounts = accounts
+            .get(..REPRESENTATION_ACCOUNT_COUNT)
+            .ok_or(ClaimsSbfError::Accounts)?;
         let [
             claimant,
             descriptor,
@@ -274,8 +314,25 @@ pub fn process_instruction(
     if let Ok(plan) = ClaimsPlanV1::decode(instruction_data) {
         return process_generic_plan(program_id, accounts, instruction_data, plan);
     }
-    let action = ActionV1::decode(instruction_data).map_err(|_| ClaimsSbfError::Instruction)?;
-    representation::process(program_id, accounts, action)
+    if instruction_data.len() == ACTION_WIRE_BYTES_V1 {
+        let action = ActionV1::decode(instruction_data).map_err(|_| ClaimsSbfError::Instruction)?;
+        return representation::process(program_id, accounts, action, instruction_data, None);
+    }
+    let terminal_wire_bytes = ACTION_WIRE_BYTES_V1
+        .checked_add(CUSTODY_REQUEST_BYTES_V1)
+        .ok_or(ClaimsSbfError::Instruction)?;
+    if instruction_data.len() != terminal_wire_bytes {
+        return Err(ClaimsSbfError::Instruction.into());
+    }
+    let (action_bytes, custody_bytes) = instruction_data.split_at(ACTION_WIRE_BYTES_V1);
+    let action = ActionV1::decode(action_bytes).map_err(|_| ClaimsSbfError::Instruction)?;
+    representation::process(
+        program_id,
+        accounts,
+        action,
+        action_bytes,
+        Some(custody_bytes),
+    )
 }
 
 fn process_generic_plan(
@@ -284,12 +341,15 @@ fn process_generic_plan(
     instruction_data: &[u8],
     plan: ClaimsPlanV1<'_>,
 ) -> ProgramResult {
+    if accounts.len() != GENERIC_ACCOUNT_COUNT {
+        return Err(ClaimsSbfError::Accounts.into());
+    }
     let accounts = GenericAccounts::parse(accounts)?;
     authenticate_generic_privileges(program_id, &accounts, plan)?;
     let packet_digest = hash(instruction_data).to_bytes();
     authenticate_authority(&accounts, plan, packet_digest)?;
     authenticate_releases(&accounts, plan)?;
-    authenticate_economic_accounts(program_id, &accounts, plan)?;
+    authenticate_economic_accounts(program_id, &accounts, plan, false)?;
     let basket_action = match plan.action() {
         ClaimsAction::TransferNative => BasketAction::TransferNative,
         ClaimsAction::Materialize => BasketAction::Materialize,
@@ -298,6 +358,7 @@ fn process_generic_plan(
         ClaimsAction::RedeemMaterializedTerminal => BasketAction::RedeemMaterializedTerminal,
         ClaimsAction::MintCompleteSet => BasketAction::MintCompleteSet,
         ClaimsAction::MergeCompleteSet => BasketAction::MergeCompleteSet,
+        ClaimsAction::InitializeCompleteSet => return Err(ClaimsSbfError::Instruction.into()),
     };
     let applied = execute_plan_economics(&accounts, plan, basket_action)?;
     let receipt = ClaimsReceiptV1::new(
@@ -353,6 +414,12 @@ fn process_core_effect(
         return Err(ClaimsSbfError::Identity.into());
     }
     let basket_action = match (envelope.action(), plan.action()) {
+        (CoreEffectActionV1::InitializeClaims, ClaimsAction::InitializeCompleteSet) => {
+            if envelope.expected_resource_b_revision() != plan.expected_destination_revision() {
+                return Err(ClaimsSbfError::Identity.into());
+            }
+            BasketAction::MintCompleteSet
+        }
         (CoreEffectActionV1::SplitClaims, ClaimsAction::MintCompleteSet) => {
             if envelope.expected_resource_b_revision() != plan.expected_destination_revision() {
                 return Err(ClaimsSbfError::Identity.into());
@@ -367,11 +434,31 @@ fn process_core_effect(
         }
         _ => return Err(ClaimsSbfError::Instruction.into()),
     };
+    let foundational = matches!(
+        (envelope.action(), plan.action()),
+        (
+            CoreEffectActionV1::InitializeClaims,
+            ClaimsAction::InitializeCompleteSet
+        )
+    );
+    let expected_account_count = if foundational {
+        FOUNDATIONAL_ACCOUNT_COUNT
+    } else {
+        GENERIC_ACCOUNT_COUNT
+    };
+    if account_infos.len() != expected_account_count {
+        return Err(ClaimsSbfError::Accounts.into());
+    }
     let accounts = GenericAccounts::parse(account_infos)?;
     authenticate_generic_privileges(program_id, &accounts, plan)?;
     authenticate_core_authority(&accounts, envelope)?;
     authenticate_releases(&accounts, plan)?;
-    authenticate_economic_accounts(program_id, &accounts, plan)?;
+    if foundational {
+        let creation =
+            prepare_foundational_split(program_id, account_infos, &accounts, envelope, plan)?;
+        apply_foundational_split(program_id, account_infos, &accounts, plan, creation)?;
+    }
+    authenticate_economic_accounts(program_id, &accounts, plan, foundational)?;
     let applied = execute_plan_economics(&accounts, plan, basket_action)?;
     let envelope_length = u32::try_from(envelope_bytes.len())
         .map_err(|_| ClaimsSbfError::Instruction)?
@@ -390,7 +477,9 @@ fn process_core_effect(
         .to_bytes(),
     )?;
     let post_holder_revision = match envelope.action() {
-        CoreEffectActionV1::SplitClaims => applied.post_destination_revision,
+        CoreEffectActionV1::InitializeClaims | CoreEffectActionV1::SplitClaims => {
+            applied.post_destination_revision
+        }
         CoreEffectActionV1::RedeemClaims => applied.post_source_revision,
         _ => return Err(ClaimsSbfError::Instruction.into()),
     };
@@ -445,6 +534,237 @@ fn authenticate_core_authority(
 
 fn content_id(bytes: [u8; 32]) -> Result<ContentId, ProgramError> {
     ContentId::new(bytes).map_err(|_| ClaimsSbfError::Identity.into())
+}
+
+#[derive(Clone, Copy)]
+struct FoundationalCreation {
+    aggregate_width: usize,
+    position_width: usize,
+}
+
+fn prepare_foundational_split(
+    program_id: &Pubkey,
+    account_infos: &[AccountInfo<'_>],
+    accounts: &GenericAccounts<'_, '_>,
+    envelope: CoreEffectEnvelopeV1,
+    plan: ClaimsPlanV1<'_>,
+) -> Result<FoundationalCreation, ProgramError> {
+    if envelope.action() != CoreEffectActionV1::InitializeClaims
+        || plan.action() != ClaimsAction::InitializeCompleteSet
+        || plan.caller_role() != CallerRole::Core
+        || plan.expected_market_revision() != 0
+        || plan.expected_source_revision() != NO_POSITION_REVISION
+        || plan.expected_destination_revision() != 0
+    {
+        return Err(ClaimsSbfError::Instruction.into());
+    }
+    let core = authenticate_core_market(
+        program_id,
+        accounts.core_market,
+        accounts.core_program,
+        accounts.market,
+        plan.market(),
+        plan.release_set_id(),
+    )?;
+    if core.phase != CorePhase::Founding
+        || core.identity.generation != envelope.generation()
+        || envelope.context().to_bytes() != plan.request_id()
+    {
+        return Err(ClaimsSbfError::Identity.into());
+    }
+    let rent = account_infos
+        .get(FOUNDATIONAL_RENT_ACCOUNT)
+        .ok_or(ClaimsSbfError::Accounts)?;
+    let system = account_infos
+        .get(FOUNDATIONAL_SYSTEM_ACCOUNT)
+        .ok_or(ClaimsSbfError::Accounts)?;
+    if rent.key != &sysvar::rent::ID
+        || rent.is_signer
+        || rent.is_writable
+        || rent.executable
+        || system.key != &system_program::ID
+        || system.is_signer
+        || system.is_writable
+        || !system.executable
+    {
+        return Err(ClaimsSbfError::Accounts.into());
+    }
+    let aggregate_width = runtime_account_width(MARKET_HEADER_BYTES, plan.outcome_count(), 3)?;
+    let position_width = runtime_account_width(POSITION_HEADER_BYTES, plan.outcome_count(), 2)?;
+    let rent_value = Rent::from_account_info(rent).map_err(|_| ClaimsSbfError::Accounts)?;
+    authenticate_vacant_prepaid(accounts.market, rent_value.minimum_balance(aggregate_width))?;
+    authenticate_vacant_prepaid(
+        accounts.destination,
+        rent_value.minimum_balance(position_width),
+    )?;
+    let destination_seeds = ClaimsPositionSeedsV1::new(plan.market(), plan.destination_owner())
+        .map_err(|_| ClaimsSbfError::Identity)?;
+    if accounts.destination.key
+        != &Pubkey::find_program_address(&destination_seeds.as_slices(), program_id).0
+    {
+        return Err(ClaimsSbfError::Identity.into());
+    }
+    Ok(FoundationalCreation {
+        aggregate_width,
+        position_width,
+    })
+}
+
+fn apply_foundational_split<'info>(
+    program_id: &Pubkey,
+    account_infos: &[AccountInfo<'info>],
+    accounts: &GenericAccounts<'_, 'info>,
+    plan: ClaimsPlanV1<'_>,
+    creation: FoundationalCreation,
+) -> ProgramResult {
+    let system = account_infos
+        .get(FOUNDATIONAL_SYSTEM_ACCOUNT)
+        .ok_or(ClaimsSbfError::Accounts)?;
+    allocate_aggregate(
+        program_id,
+        accounts.market,
+        system,
+        plan.market(),
+        creation.aggregate_width,
+    )?;
+    allocate_position(
+        program_id,
+        accounts.destination,
+        system,
+        plan.market(),
+        plan.destination_owner(),
+        creation.position_width,
+    )?;
+    {
+        let mut aggregate = accounts
+            .market
+            .try_borrow_mut_data()
+            .map_err(|_| ClaimsSbfError::Accounts)?;
+        if aggregate.len() != creation.aggregate_width || aggregate.iter().any(|byte| *byte != 0) {
+            return Err(ClaimsSbfError::Accounts.into());
+        }
+        initialize_market(
+            &mut aggregate,
+            plan.market(),
+            plan.release_set_id(),
+            accounts.registry.key.to_bytes(),
+            plan.outcome_count(),
+            EconomicPhase::Open,
+            0,
+        )
+        .map_err(|_| ClaimsSbfError::Economic)?;
+    }
+    {
+        let mut destination = accounts
+            .destination
+            .try_borrow_mut_data()
+            .map_err(|_| ClaimsSbfError::Accounts)?;
+        if destination.len() != creation.position_width || destination.iter().any(|byte| *byte != 0)
+        {
+            return Err(ClaimsSbfError::Accounts.into());
+        }
+        initialize_position(
+            &mut destination,
+            plan.market(),
+            plan.destination_owner(),
+            plan.outcome_count(),
+        )
+        .map_err(|_| ClaimsSbfError::Economic)?;
+    }
+    Ok(())
+}
+
+fn authenticate_vacant_prepaid(account: &AccountInfo<'_>, minimum_lamports: u64) -> ProgramResult {
+    if account.owner != &system_program::ID
+        || account.data_len() != 0
+        || account.lamports() < minimum_lamports
+        || account.is_signer
+        || !account.is_writable
+        || account.executable
+    {
+        return Err(ClaimsSbfError::Accounts.into());
+    }
+    Ok(())
+}
+
+fn runtime_account_width(
+    header: usize,
+    outcome_count: u32,
+    vector_count: usize,
+) -> Result<usize, ProgramError> {
+    usize::try_from(outcome_count)
+        .ok()
+        .and_then(|count| count.checked_mul(vector_count))
+        .and_then(|count| count.checked_mul(SCALAR_BYTES))
+        .and_then(|tail| header.checked_add(tail))
+        .ok_or_else(|| ClaimsSbfError::Accounts.into())
+}
+
+fn allocate_aggregate<'info>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'info>,
+    system: &AccountInfo<'info>,
+    market: [u8; 32],
+    width: usize,
+) -> ProgramResult {
+    let seeds = ClaimsAggregateSeedsV1::new(market).map_err(|_| ClaimsSbfError::Identity)?;
+    let [domain, market_seed] = seeds.as_slices();
+    let bump = Pubkey::find_program_address(&seeds.as_slices(), program_id).1;
+    let bump_seed = [bump];
+    allocate_and_assign(
+        program_id,
+        account,
+        system,
+        width,
+        &[domain, market_seed, &bump_seed],
+    )
+}
+
+fn allocate_position<'info>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'info>,
+    system: &AccountInfo<'info>,
+    market: [u8; 32],
+    owner: [u8; 32],
+    width: usize,
+) -> ProgramResult {
+    let seeds = ClaimsPositionSeedsV1::new(market, owner).map_err(|_| ClaimsSbfError::Identity)?;
+    let [domain, market_seed, owner_seed] = seeds.as_slices();
+    let bump = Pubkey::find_program_address(&seeds.as_slices(), program_id).1;
+    let bump_seed = [bump];
+    allocate_and_assign(
+        program_id,
+        account,
+        system,
+        width,
+        &[domain, market_seed, owner_seed, &bump_seed],
+    )
+}
+
+fn allocate_and_assign<'info>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'info>,
+    system: &AccountInfo<'info>,
+    width: usize,
+    signer_seeds: &[&[u8]],
+) -> ProgramResult {
+    let space = u64::try_from(width).map_err(|_| ClaimsSbfError::Accounts)?;
+    invoke_signed(
+        &allocate(account.key, space),
+        &[account.clone(), system.clone()],
+        &[signer_seeds],
+    )
+    .map_err(|_| ClaimsSbfError::Accounts)?;
+    invoke_signed(
+        &assign(account.key, program_id),
+        &[account.clone(), system.clone()],
+        &[signer_seeds],
+    )
+    .map_err(|_| ClaimsSbfError::Accounts)?;
+    if account.owner != program_id || account.data_len() != width {
+        return Err(ClaimsSbfError::Accounts.into());
+    }
+    Ok(())
 }
 
 fn execute_plan_economics(
@@ -719,6 +1039,7 @@ fn authenticate_economic_accounts(
     program_id: &Pubkey,
     accounts: &GenericAccounts<'_, '_>,
     plan: ClaimsPlanV1<'_>,
+    foundational: bool,
 ) -> ProgramResult {
     let market = accounts.market;
     let core = authenticate_core_market(
@@ -735,6 +1056,12 @@ fn authenticate_economic_accounts(
     let market_data = market
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
+    let economic_phase = market_phase(&market_data).map_err(|_| ClaimsSbfError::Identity)?;
+    let lifecycle_joined = if foundational {
+        core.phase == CorePhase::Founding && economic_phase == EconomicPhase::Open
+    } else {
+        phases_join(core.phase, core.terminal_winner, economic_phase)
+    };
     if market_identity(&market_data).map_err(|_| ClaimsSbfError::Identity)? != plan.market()
         || market_release_set_id(&market_data).map_err(|_| ClaimsSbfError::Identity)?
             != plan.release_set_id()
@@ -744,11 +1071,7 @@ fn authenticate_economic_accounts(
             != plan.outcome_count()
         || market_revision(&market_data).map_err(|_| ClaimsSbfError::Identity)?
             != plan.expected_market_revision()
-        || !phases_join(
-            core.phase,
-            core.terminal_winner,
-            market_phase(&market_data).map_err(|_| ClaimsSbfError::Identity)?,
-        )
+        || !lifecycle_joined
     {
         return Err(ClaimsSbfError::Identity.into());
     }
@@ -912,11 +1235,23 @@ mod tests {
         writable: bool,
         executable: bool,
     ) -> AccountInfo<'static> {
+        account_with_lamports(key, data, owner, signer, writable, executable, 1)
+    }
+
+    fn account_with_lamports(
+        key: Pubkey,
+        data: Vec<u8>,
+        owner: Pubkey,
+        signer: bool,
+        writable: bool,
+        executable: bool,
+        lamports: u64,
+    ) -> AccountInfo<'static> {
         AccountInfo::new(
             Box::leak(Box::new(key)),
             signer,
             writable,
-            Box::leak(Box::new(1)),
+            Box::leak(Box::new(lamports)),
             Box::leak(data.into_boxed_slice()),
             Box::leak(Box::new(owner)),
             executable,
@@ -1264,6 +1599,77 @@ mod tests {
                 [1; 32],
             ),
             Err(ClaimsSbfError::Identity.into())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn foundational_creation_accepts_dust_but_refuses_implicit_authority() {
+        let minimum = 100;
+        let vacant_with_dust = account_with_lamports(
+            Pubkey::new_unique(),
+            Vec::new(),
+            system_program::ID,
+            false,
+            true,
+            false,
+            minimum + 7,
+        );
+        assert_eq!(
+            authenticate_vacant_prepaid(&vacant_with_dust, minimum),
+            Ok(())
+        );
+
+        let underfunded = account_with_lamports(
+            Pubkey::new_unique(),
+            Vec::new(),
+            system_program::ID,
+            false,
+            true,
+            false,
+            minimum - 1,
+        );
+        assert_eq!(
+            authenticate_vacant_prepaid(&underfunded, minimum),
+            Err(ClaimsSbfError::Accounts.into())
+        );
+        let caller_signer = account_with_lamports(
+            Pubkey::new_unique(),
+            Vec::new(),
+            system_program::ID,
+            true,
+            true,
+            false,
+            minimum,
+        );
+        assert_eq!(
+            authenticate_vacant_prepaid(&caller_signer, minimum),
+            Err(ClaimsSbfError::Accounts.into())
+        );
+        let preinitialized = account_with_lamports(
+            Pubkey::new_unique(),
+            vec![0],
+            system_program::ID,
+            false,
+            true,
+            false,
+            minimum,
+        );
+        assert_eq!(
+            authenticate_vacant_prepaid(&preinitialized, minimum),
+            Err(ClaimsSbfError::Accounts.into())
+        );
+    }
+
+    #[test]
+    fn runtime_width_is_derived_from_the_product_outcome_count() -> Result<(), ProgramError> {
+        assert_eq!(
+            runtime_account_width(MARKET_HEADER_BYTES, 3, 3)?,
+            MARKET_HEADER_BYTES + 3 * 3 * SCALAR_BYTES
+        );
+        assert_eq!(
+            runtime_account_width(POSITION_HEADER_BYTES, 3, 2)?,
+            POSITION_HEADER_BYTES + 3 * 2 * SCALAR_BYTES
         );
         Ok(())
     }

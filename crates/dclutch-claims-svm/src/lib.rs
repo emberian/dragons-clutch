@@ -163,6 +163,8 @@ pub enum ClaimsAction {
     MintCompleteSet = 5,
     /// Merge equal complete sets from a source Position.
     MergeCompleteSet = 6,
+    /// Initialize vacant canonical Claims accounts and mint the founding complete set.
+    InitializeCompleteSet = 7,
 }
 
 impl ClaimsAction {
@@ -175,6 +177,7 @@ impl ClaimsAction {
             4 => Ok(Self::RedeemMaterializedTerminal),
             5 => Ok(Self::MintCompleteSet),
             6 => Ok(Self::MergeCompleteSet),
+            7 => Ok(Self::InitializeCompleteSet),
             _ => Err(Error::UnknownTag),
         }
     }
@@ -413,7 +416,7 @@ impl<'a> ClaimsPlanV1<'a> {
             | ClaimsAction::MergeCompleteSet => {
                 source && !destination && source_revision && !destination_revision
             }
-            ClaimsAction::MintCompleteSet => {
+            ClaimsAction::MintCompleteSet | ClaimsAction::InitializeCompleteSet => {
                 !source && destination && !source_revision && destination_revision
             }
         };
@@ -429,7 +432,9 @@ impl<'a> ClaimsPlanV1<'a> {
         let first = self.quantity(0)?;
         let complete_set = matches!(
             self.action,
-            ClaimsAction::MintCompleteSet | ClaimsAction::MergeCompleteSet
+            ClaimsAction::MintCompleteSet
+                | ClaimsAction::MergeCompleteSet
+                | ClaimsAction::InitializeCompleteSet
         );
         let mut any_positive = false;
         let mut outcome = 0_u32;
@@ -553,7 +558,7 @@ impl ClaimsReceiptV1 {
             ClaimsAction::RedeemNativeTerminal
             | ClaimsAction::RedeemMaterializedTerminal
             | ClaimsAction::MergeCompleteSet => (true, false),
-            ClaimsAction::MintCompleteSet => (false, true),
+            ClaimsAction::MintCompleteSet | ClaimsAction::InitializeCompleteSet => (false, true),
         };
         validate_post_revision_presence(value.post_source_revision, source_present)?;
         validate_post_revision_presence(value.post_destination_revision, destination_present)?;
@@ -894,6 +899,31 @@ mod tests {
             ),
             Err(Error::InvalidRevisionShape)
         );
+    }
+
+    #[test]
+    fn foundational_complete_set_has_a_nonaliasing_action_tag() -> Result<()> {
+        let equal = quantities(&[5, 5, 5]);
+        let plan = ClaimsPlanV1::new(
+            ClaimsAction::InitializeCompleteSet,
+            CallerRole::Core,
+            [1; 32],
+            [2; 32],
+            [3; 32],
+            [0; 32],
+            [5; 32],
+            0,
+            NO_POSITION_REVISION,
+            0,
+            3,
+            &equal,
+        )?;
+        let mut encoded = vec![0_u8; CLAIMS_PLAN_HEADER_BYTES_V1 + equal.len()];
+        plan.encode_into(&mut encoded)?;
+        assert_eq!(encoded.get(PLAN_KIND_OFFSET), Some(&7));
+        assert_eq!(ClaimsPlanV1::decode(&encoded), Ok(plan));
+        assert_ne!(plan.action(), ClaimsAction::MintCompleteSet);
+        Ok(())
     }
 
     #[test]
