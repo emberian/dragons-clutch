@@ -95,6 +95,13 @@ pub enum Phase {
 /// Runtime-width dynamic-holder command.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Command {
+    /// Move native claims between two dynamic holder Positions.
+    TransferNative {
+        /// Product-owned outcome selector.
+        outcome: u32,
+        /// Exact claim atoms.
+        quantity: u64,
+    },
     /// Convert source-native claims into destination materialized claims.
     Materialize {
         /// Product-owned outcome selector.
@@ -266,6 +273,11 @@ pub fn execute(
     let mut destination_materialized = u64_at(destination, destination_offsets.materialized)?;
     let mut hoard = market_meta.hoard;
     let payout = match frame.command {
+        Command::TransferNative { .. } => {
+            source_native = debit(source_native, quantity)?;
+            destination_native = credit(destination_native, quantity)?;
+            0
+        }
         Command::Materialize { .. } => {
             native = debit(native, quantity)?;
             source_native = debit(source_native, quantity)?;
@@ -391,7 +403,8 @@ fn checked_outcome_index(outcome_count: u32, outcome: u32) -> Result<usize> {
 
 fn command_coordinates(command: Command) -> (u32, u64) {
     match command {
-        Command::Materialize { outcome, quantity }
+        Command::TransferNative { outcome, quantity }
+        | Command::Materialize { outcome, quantity }
         | Command::Dematerialize { outcome, quantity }
         | Command::RedeemTerminal { outcome, quantity } => (outcome, quantity),
     }
@@ -399,7 +412,12 @@ fn command_coordinates(command: Command) -> (u32, u64) {
 
 fn admit_phase(phase: Phase, command: Command) -> Result<()> {
     match (phase, command) {
-        (Phase::Open, Command::Materialize { .. } | Command::Dematerialize { .. })
+        (
+            Phase::Open,
+            Command::TransferNative { .. }
+            | Command::Materialize { .. }
+            | Command::Dematerialize { .. },
+        )
         | (
             Phase::Terminal(_) | Phase::Retiring(_),
             Command::Dematerialize { .. } | Command::RedeemTerminal { .. },
@@ -827,6 +845,42 @@ mod tests {
         assert_eq!(market_outcome_count(&market), Ok(count));
         assert_eq!(position_owner(&source, count), Ok([3; 32]));
         assert_eq!(position_owner(&destination, count), Ok([4; 32]));
+    }
+
+    #[test]
+    fn native_transfer_changes_positions_without_forking_aggregate_supply() -> Result<()> {
+        let count = 3;
+        let (mut market, mut source, mut destination) = fixture(count);
+        let market_offsets = vector_offsets(count, 2)?;
+        let position_offsets = position_offsets(count, 2)?;
+        set_claim(&mut market, market_offsets.supply, 9);
+        set_claim(&mut market, market_offsets.native, 9);
+        set_claim(&mut source, position_offsets.native, 9);
+        assert_eq!(
+            execute(
+                &mut market,
+                &mut source,
+                &mut destination,
+                Frame {
+                    expected_market_revision: 0,
+                    expected_source_revision: 0,
+                    expected_destination_revision: 0,
+                    command: Command::TransferNative {
+                        outcome: 2,
+                        quantity: 4,
+                    },
+                },
+            ),
+            Ok(Payout {
+                recipient: [3; 32],
+                amount: 0,
+            })
+        );
+        assert_eq!(position_native(&source, count, 2), Ok(5));
+        assert_eq!(position_native(&destination, count, 2), Ok(4));
+        assert_eq!(u64_at(&market, market_offsets.supply), Ok(9));
+        assert_eq!(u64_at(&market, market_offsets.native), Ok(9));
+        Ok(())
     }
 
     #[test]
