@@ -342,6 +342,14 @@ name = "dclutch-effect-kernel"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-effect-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-effect-kernel",
+ "solana-program",
+]
+
+[[package]]
 name = "dclutch-general-contract"
 version = "0.1.0"
 dependencies = [
