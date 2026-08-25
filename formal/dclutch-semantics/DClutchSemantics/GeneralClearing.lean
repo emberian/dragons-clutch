@@ -148,20 +148,39 @@ def weightedValue
 Net claim receipt is debit-rounded upward; net claim delivery is
 credit-rounded downward. Therefore per-fill rounding cannot spend collateral
 which was not collected. -/
-def roundedQuote (prices : PriceVector) (execution : Execution) : Nat × Nat :=
-  let received := weightedValue prices execution.order.receivePerLot execution.lots
-  let delivered := weightedValue prices execution.order.deliverPerLot execution.lots
+def roundedQuoteFor (prices : PriceVector) (order : Order) (lots : Nat) : Nat × Nat :=
+  let received := weightedValue prices order.receivePerLot lots
+  let delivered := weightedValue prices order.deliverPerLot lots
   if delivered ≤ received then
     ((received - delivered + prices.scale - 1) / prices.scale, 0)
   else
     (0, (delivered - received) / prices.scale)
 
+def roundedQuote (prices : PriceVector) (execution : Execution) : Nat × Nat :=
+  roundedQuoteFor prices execution.order execution.lots
+
 def executionValid (candidate : Candidate) (execution : Execution) : Bool :=
   execution.order.validFor candidate.outcomeCount && 0 < execution.lots &&
-    candidate.filledLots execution.order.orderId ≤ execution.order.maxLots &&
-    roundedQuote candidate.prices execution =
-      (execution.quoteDebit, execution.quoteCredit) &&
-    execution.quoteDebit ≤ execution.order.maxQuoteDebitPerLot * execution.lots
+    candidate.filledLots execution.order.orderId ≤ execution.order.maxLots
+
+def Candidate.quoteDebitFor (candidate : Candidate) (orderId : Nat) : Nat :=
+  (candidate.executions.filter fun execution => execution.order.orderId = orderId)
+    |>.map Execution.quoteDebit |>.sum
+
+def Candidate.quoteCreditFor (candidate : Candidate) (orderId : Nat) : Nat :=
+  (candidate.executions.filter fun execution => execution.order.orderId = orderId)
+    |>.map Execution.quoteCredit |>.sum
+
+/-- Quote rounding is candidate-wide per signed order, not per execution or
+page. A submitter may fragment physical work without changing the trader's
+aggregate debit, credit, or limit. -/
+def Candidate.quotesCanonical (candidate : Candidate) : Bool :=
+  candidate.executions.all fun execution =>
+    let orderId := execution.order.orderId
+    let lots := candidate.filledLots orderId
+    roundedQuoteFor candidate.prices execution.order lots =
+      (candidate.quoteDebitFor orderId, candidate.quoteCreditFor orderId) &&
+    candidate.quoteDebitFor orderId ≤ execution.order.maxQuoteDebitPerLot * lots
 
 def claimInputs (candidate : Candidate) : List Nat :=
   (List.range candidate.outcomeCount).map fun outcome =>
@@ -225,6 +244,7 @@ def Candidate.valid (candidate : Candidate) : Bool :=
     candidate.pages.all (fun page => !page.executions.isEmpty) &&
     candidate.identitiesCanonical &&
     candidate.executions.all (executionValid candidate) &&
+    candidate.quotesCanonical &&
     candidate.claimsBalance && candidate.quoteBalances
 
 /-! ## Deterministic best-valid-submitted selection -/

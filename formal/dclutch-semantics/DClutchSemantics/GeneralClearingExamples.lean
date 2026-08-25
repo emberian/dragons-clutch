@@ -118,4 +118,37 @@ example :
     ({ closed := false, best := some mintCandidate } : Selection).run .freeze =
       { closed := true, best := some mintCandidate } := by native_decide
 
+/-! Fragmentation does not create another rounding boundary. Each order is
+split across two executions, but the aggregate half-atom receipts round once:
+one quote atom per order, not one atom per fragment. -/
+
+def receiveTwoOutcomeZero : Order := {
+  receiveOutcomeZero with orderId := 103, maxLots := 2
+}
+
+def receiveTwoOutcomeOne : Order := {
+  receiveOutcomeOne with orderId := 104, maxLots := 2
+}
+
+def fragmentedCandidate : Candidate := {
+  mintCandidate with
+  candidateId := 203
+  pages := [
+    { executions := [
+      { order := receiveTwoOutcomeZero, lots := 1, quoteDebit := 1, quoteCredit := 0 },
+      { order := receiveTwoOutcomeOne, lots := 1, quoteDebit := 1, quoteCredit := 0 }
+    ] },
+    { executions := [
+      { order := receiveTwoOutcomeZero, lots := 1, quoteDebit := 0, quoteCredit := 0 },
+      { order := receiveTwoOutcomeOne, lots := 1, quoteDebit := 0, quoteCredit := 0 }
+    ] }
+  ]
+}
+
+example : fragmentedCandidate.valid = true := by native_decide
+example : fragmentedCandidate.completeSetMove = .mint 2 := by native_decide
+example : quoteInputs fragmentedCandidate = 2 := by native_decide
+example : fragmentedCandidate.quoteDebitFor 103 = 1 := by native_decide
+example : fragmentedCandidate.quoteDebitFor 104 = 1 := by native_decide
+
 end DClutch.General.Examples
