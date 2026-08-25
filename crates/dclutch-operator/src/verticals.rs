@@ -437,6 +437,8 @@ pub struct DirectCloseReplayRegistrationReport {
 
 mod bearer;
 pub use bearer::*;
+mod dealer;
+pub use dealer::*;
 
 /// Construct Direct's exact permissionless registration-close frame.
 pub fn build_direct_close_replay_registration_v2(
