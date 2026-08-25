@@ -1138,7 +1138,6 @@ pub(crate) fn authenticate_finalized_record(
         || cursor.key != expected_cursor
         || cursor.owner != system_program::ID
         || cursor.executable
-        || cursor.lamports != 0
         || !cursor.data.is_empty()
     {
         return Err(FoundationError::AddressMismatch);

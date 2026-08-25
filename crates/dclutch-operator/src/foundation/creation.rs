@@ -21,10 +21,11 @@ use dclutch_realm_contract::RealmV1;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_rent_contract::RENT_CREDIT_PDA_DOMAIN_V1;
 use dclutch_source_contract::{
-    ContentId as SourceContentId, MAX_RECOVERY_ATTEMPTS, ProviderReleaseV1, PythAdapterConfigV1,
-    ResolutionPolicyV1, RoundingBoundary, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
-    SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialV1, SourceMaterialViewV1,
+    ContentId as SourceContentId, ProviderReleaseV1, PythAdapterConfigV1, ResolutionPolicyV1,
+    RoundingBoundary, SOURCE_MATERIAL_BYTES, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
+    SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialInputV1, SourceMaterialViewV1,
     SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
+    encode_source_material_into_v1,
 };
 use solana_program::{
     hash::{hash, hashv},
@@ -85,9 +86,6 @@ pub enum CreationBuilderGapV1 {
     /// The SBF atomic ConsumeTicket+Found action exists, but this operator has
     /// no exact transaction builder for its composed frame yet.
     SeriesConsumeAndFound,
-    /// Current Series derivation does not construct the occurrence-specific
-    /// Product-bound SourceMaterial bytes required by Found authentication.
-    SeriesSourceMaterialDerivation,
 }
 
 /// Honest availability of one creation workflow stage.
@@ -152,8 +150,11 @@ pub struct ReleaseBoundCreationInputV1 {
     pub claim_basis: CategoricalUnitV1,
     /// Canonical occurrence-specific Product Instance.
     pub product_instance: InstanceV1,
-    /// Canonical provider-neutral SourceMaterial graph.
-    pub source_material: SourceMaterialV1,
+    /// Exact canonical provider-neutral SourceMaterial bytes.
+    ///
+    /// The borrowed [`SourceMaterialViewV1`] remains the sole decoded runtime
+    /// representation; this host input merely owns its canonical preimage.
+    pub source_material: Vec<u8>,
     /// Exact canonical capability-manifest bytes.
     pub capability_manifest: Vec<u8>,
     /// Planning Rent schedule; Found must later re-authenticate it on chain.
@@ -214,8 +215,8 @@ pub struct TerminalPythCreationPlanV1 {
     pub claim_basis: CategoricalUnitV1,
     /// Derived occurrence-specific Product Instance.
     pub product_instance: InstanceV1,
-    /// Derived Product-bound provider-neutral SourceMaterial authority.
-    pub source_material: SourceMaterialV1,
+    /// Derived canonical Product-bound SourceMaterial bytes.
+    pub source_material: Vec<u8>,
     /// Complete release-bound direct Found preparation.
     pub found: ReleaseBoundCreationPlanV1,
 }
@@ -342,24 +343,27 @@ pub fn compile_terminal_pyth_creation_v1(
         source_id(domain_id_bytes)?,
         None,
     );
-    let source_material = SourceMaterialV1::new(
-        policy,
-        source_capacity_id,
-        input.source_capacity_profile,
-        primary_source_id,
-        primary_source,
-        provider_id,
-        input.provider_release,
-        input.pyth_adapter_config,
-        window_id,
-        window,
-        statistic_id,
-        statistic,
-        product_instance_id,
-        product_instance,
-        input.result_domain,
-        None,
-        [None; MAX_RECOVERY_ATTEMPTS],
+    let mut source_material = vec![0; SOURCE_MATERIAL_BYTES];
+    encode_source_material_into_v1(
+        &mut source_material,
+        SourceMaterialInputV1 {
+            policy: &policy,
+            capacity_profile_id: source_capacity_id,
+            capacity_profile: &input.source_capacity_profile,
+            primary_source_id,
+            primary_source: &primary_source,
+            primary_provider_release_id: provider_id,
+            primary_provider_release: &input.provider_release,
+            primary_adapter_config: &input.pyth_adapter_config,
+            window_id,
+            window: &window,
+            statistic_id,
+            statistic: &statistic,
+            product_instance_id,
+            product_instance: &product_instance,
+            result_domain: &input.result_domain,
+            recovery: None,
+        },
     )
     .map_err(|_| FoundationError::ContentLinkMismatch)?;
     let found = compile_release_bound_creation_v1(&ReleaseBoundCreationInputV1 {
@@ -369,7 +373,7 @@ pub fn compile_terminal_pyth_creation_v1(
         product_capacity_profile: input.product_capacity_profile,
         claim_basis,
         product_instance,
-        source_material,
+        source_material: source_material.clone(),
         capability_manifest: input.capability_manifest.clone(),
         rent: input.rent.clone(),
         current_slot: input.current_slot,
@@ -426,9 +430,9 @@ pub fn compile_release_bound_creation_v1(
     }
     let instance_bytes = input.product_instance.to_bytes();
     let instance_id = hash(&instance_bytes).to_bytes();
-    let source_bytes = input.source_material.to_bytes();
+    let source_bytes = input.source_material.as_slice();
     let source =
-        SourceMaterialViewV1::decode(&source_bytes).map_err(|_| FoundationError::InvalidRecord)?;
+        SourceMaterialViewV1::decode(source_bytes).map_err(|_| FoundationError::InvalidRecord)?;
     let policy = source
         .policy()
         .map_err(|_| FoundationError::InvalidRecord)?;
@@ -457,7 +461,7 @@ pub fn compile_release_bound_creation_v1(
     let (_, provider) = source
         .primary_provider_release()
         .map_err(|_| FoundationError::InvalidRecord)?;
-    let source_id = hash(&source_bytes).to_bytes();
+    let source_id = hash(source_bytes).to_bytes();
     let manifest = CapabilityManifestV1::decode(&input.capability_manifest)
         .map_err(|_| FoundationError::InvalidRecord)?;
     let manifest_id = hash(manifest.as_bytes()).to_bytes();
@@ -604,9 +608,7 @@ pub fn compile_release_bound_creation_v1(
         },
         CreationStageReportV1 {
             stage: CreationStageV1::InstantiateSeriesOccurrence,
-            status: CreationStageStatusV1::BuilderUnavailable(
-                CreationBuilderGapV1::SeriesSourceMaterialDerivation,
-            ),
+            status: CreationStageStatusV1::FinalizedObservationRequired,
         },
         CreationStageReportV1 {
             stage: CreationStageV1::ConsumeSeriesTicketAndFound,

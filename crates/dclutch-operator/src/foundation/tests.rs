@@ -14,10 +14,11 @@ use dclutch_product_contract::{
 use dclutch_pyth_contract::funding::construct_required_resolution_funding;
 use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1};
 use dclutch_source_contract::{
-    CapacityEnvelope as SourceCapacityEnvelope, MAX_RECOVERY_ATTEMPTS,
-    PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1, ProviderReleaseV1, PythAdapterConfigV1,
-    ResolutionPolicyV1, RoundingBoundary, SourceAccessProfile, SourceCapacityProfileV1,
-    SourceMaterialV1, SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
+    CapacityEnvelope as SourceCapacityEnvelope, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
+    ProviderReleaseV1, PythAdapterConfigV1, ResolutionPolicyV1, RoundingBoundary,
+    SOURCE_MATERIAL_BYTES, SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialInputV1,
+    SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
+    encode_source_material_into_v1,
 };
 use solana_program::sysvar::SysvarSerialize;
 
@@ -274,7 +275,7 @@ fn source_material(
     instance: InstanceV1,
     instance_id: [u8; 32],
     domain: FiniteResultDomainV1,
-) -> SourceMaterialV1 {
+) -> Vec<u8> {
     let capacity = SourceCapacityProfileV1::new(
         SourceCapacityEnvelope::Measured,
         1,
@@ -347,26 +348,30 @@ fn source_material(
         domain_id,
         None,
     );
-    SourceMaterialV1::new(
-        policy,
-        capacity_id,
-        capacity,
-        primary_source_id,
-        source,
-        provider_id,
-        provider,
-        adapter,
-        window_id,
-        window,
-        statistic_id,
-        statistic,
-        source_id(instance_id),
-        instance,
-        domain,
-        None,
-        [None; MAX_RECOVERY_ATTEMPTS],
+    let mut material = vec![0; SOURCE_MATERIAL_BYTES];
+    encode_source_material_into_v1(
+        &mut material,
+        SourceMaterialInputV1 {
+            policy: &policy,
+            capacity_profile_id: capacity_id,
+            capacity_profile: &capacity,
+            primary_source_id,
+            primary_source: &source,
+            primary_provider_release_id: provider_id,
+            primary_provider_release: &provider,
+            primary_adapter_config: &adapter,
+            window_id,
+            window: &window,
+            statistic_id,
+            statistic: &statistic,
+            product_instance_id: source_id(instance_id),
+            product_instance: &instance,
+            result_domain: &domain,
+            recovery: None,
+        },
     )
-    .expect("canonical Source material")
+    .expect("canonical Source material");
+    material
 }
 
 fn resolution_manifest(
@@ -470,7 +475,7 @@ impl FoundFixture {
         );
 
         let material = source_material(instance, hash(&instance_data).to_bytes(), result_domain);
-        let material_data = material.to_bytes().to_vec();
+        let material_data = material;
         let (resolution_material, resolution_material_finalization) = finalized_record(
             program_id,
             SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
@@ -584,8 +589,7 @@ fn creation_input(fixture: &FoundFixture) -> ReleaseBoundCreationInputV1 {
             .expect("claim basis"),
         product_instance: InstanceV1::decode(&fixture.state.product_instance.data)
             .expect("Product Instance"),
-        source_material: SourceMaterialV1::decode(&fixture.state.resolution_material.data)
-            .expect("SourceMaterial"),
+        source_material: fixture.state.resolution_material.data.clone(),
         capability_manifest: fixture.state.capability_manifest.data.clone(),
         rent: Rent::default(),
         current_slot: observation().slot,
@@ -608,38 +612,29 @@ fn release_bound_creation_compiles_exact_found_admission_and_honest_gaps() {
     assert_eq!(plan.resolution_funding, found.resolution_funding);
     assert_eq!(plan.debit, found.debit);
     assert_eq!(plan.records.len(), 6);
-    for (obligation, observed, proof) in [
+    for (obligation, (observed, proof)) in plan.records.iter().zip([
+        (&fixture.state.realm, &fixture.state.realm_finalization),
         (
-            &plan.records[0],
-            &fixture.state.realm,
-            &fixture.state.realm_finalization,
-        ),
-        (
-            &plan.records[1],
             &fixture.state.product_instance,
             &fixture.state.product_instance_finalization,
         ),
         (
-            &plan.records[2],
             &fixture.state.claim_basis,
             &fixture.state.claim_basis_finalization,
         ),
         (
-            &plan.records[3],
             &fixture.state.capacity_profile,
             &fixture.state.capacity_profile_finalization,
         ),
         (
-            &plan.records[4],
             &fixture.state.resolution_material,
             &fixture.state.resolution_material_finalization,
         ),
         (
-            &plan.records[5],
             &fixture.state.capability_manifest,
             &fixture.state.capability_manifest_finalization,
         ),
-    ] {
+    ]) {
         assert_eq!(obligation.content, observed.data);
         assert_eq!(obligation.content_id, hash(&observed.data).to_bytes());
         assert_eq!(obligation.raw_record, observed.key);
@@ -706,9 +701,7 @@ fn release_bound_creation_compiles_exact_found_admission_and_honest_gaps() {
             },
             CreationStageReportV1 {
                 stage: CreationStageV1::InstantiateSeriesOccurrence,
-                status: CreationStageStatusV1::BuilderUnavailable(
-                    CreationBuilderGapV1::SeriesSourceMaterialDerivation,
-                ),
+                status: CreationStageStatusV1::FinalizedObservationRequired,
             },
             CreationStageReportV1 {
                 stage: CreationStageV1::ConsumeSeriesTicketAndFound,
@@ -728,11 +721,14 @@ fn release_bound_creation_compiles_exact_found_admission_and_honest_gaps() {
 fn terminal_pyth_user_inputs_compile_the_canonical_product_and_source_records() {
     let fixture = FoundFixture::new(5, 16);
     let expected = creation_input(&fixture);
-    let material = expected.source_material;
-    let (_, source_capacity_profile) = material.capacity_profile();
-    let (_, provider_release) = material.primary_provider_release();
-    let window = material.window();
-    let statistic = material.statistic();
+    let material =
+        SourceMaterialViewV1::decode(&expected.source_material).expect("canonical SourceMaterial");
+    let (_, source_capacity_profile) = material.capacity_profile().expect("Source capacity");
+    let (_, provider_release) = material
+        .primary_provider_release()
+        .expect("provider release");
+    let window = material.window().expect("Source window");
+    let statistic = material.statistic().expect("Source statistic");
     let input = TerminalPythCreationInputV1 {
         program_id: fixture.program_id,
         sponsor: fixture.state.sponsor.key,
@@ -740,10 +736,12 @@ fn terminal_pyth_user_inputs_compile_the_canonical_product_and_source_records() 
         product_capacity_profile: expected.product_capacity_profile,
         terms_id: expected.product_instance.terms_id(),
         occurrence_id: expected.product_instance.occurrence_id(),
-        result_domain: material.result_domain(),
+        result_domain: material.result_domain().expect("result domain"),
         source_capacity_profile,
         provider_release,
-        pyth_adapter_config: material.primary_adapter_config(),
+        pyth_adapter_config: material
+            .primary_adapter_config()
+            .expect("Pyth adapter config"),
         target_unix_seconds: window.start_unix_seconds(),
         max_age_seconds: window.max_age_seconds(),
         max_future_skew_seconds: window.max_future_skew_seconds(),
@@ -756,11 +754,15 @@ fn terminal_pyth_user_inputs_compile_the_canonical_product_and_source_records() 
     let compiled = compile_terminal_pyth_creation_v1(&input).expect("terminal Pyth plan");
     assert_eq!(compiled.claim_basis, expected.claim_basis);
     assert_eq!(compiled.product_instance, expected.product_instance);
-    assert_eq!(compiled.source_material, material);
+    assert_eq!(compiled.source_material, expected.source_material);
     assert_eq!(compiled.found.identity, fixture.identity);
     assert_eq!(
-        compiled.found.records[4].schema_release_id,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1
+        compiled
+            .found
+            .records
+            .get(4)
+            .map(|record| record.schema_release_id),
+        Some(SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1)
     );
 
     let mut unsupported_provider = input.clone();
@@ -814,7 +816,10 @@ fn creation_preflight_refuses_product_source_and_manifest_substitution() {
         partition_cell_count: input.product_instance.partition_cell_count(),
     })
     .expect("other Product");
-    let domain = input.source_material.result_domain();
+    let domain = SourceMaterialViewV1::decode(&input.source_material)
+        .expect("Source material")
+        .result_domain()
+        .expect("result domain");
     wrong_source.source_material = source_material(
         other_instance,
         hash(&other_instance.to_bytes()).to_bytes(),
@@ -1172,9 +1177,10 @@ fn found_refuses_canonical_source_substitution_and_wrong_record_release() {
         partition_cell_count: instance.partition_cell_count(),
     })
     .expect("other instance");
-    let domain = SourceMaterialV1::decode(&fixture.state.resolution_material.data)
+    let domain = SourceMaterialViewV1::decode(&fixture.state.resolution_material.data)
         .expect("material")
-        .result_domain();
+        .result_domain()
+        .expect("result domain");
     let substituted = source_material(
         other_instance,
         hash(&other_instance.to_bytes()).to_bytes(),
@@ -1185,7 +1191,7 @@ fn found_refuses_canonical_source_substitution_and_wrong_record_release() {
         fixture.program_id,
         &mut wrong_source.resolution_material,
         &mut wrong_source.resolution_material_finalization,
-        substituted.to_bytes().to_vec(),
+        substituted,
     );
     assert_eq!(
         build_found_market_and_fund_v1(fixture.program_id, &wrong_source),
@@ -1273,6 +1279,37 @@ fn rent_funding_finality_and_observation_mismatch_refuse() {
     assert_eq!(
         build_found_market_and_fund_v1(fixture.program_id, &underfunded_record),
         Err(FoundationError::AccountNotRentExempt)
+    );
+
+    // Finalization closes each staging cursor to an empty System account. A
+    // third party may transfer lamports to that address afterward; the SBF
+    // record authenticator deliberately treats that dust as irrelevant to the
+    // finalized content identity, so the operator must do the same.
+    let mut dusted_finalization_cursors = fixture.state.clone();
+    for cursor in [
+        &mut dusted_finalization_cursors
+            .realm_finalization
+            .staging_cursor,
+        &mut dusted_finalization_cursors
+            .product_instance_finalization
+            .staging_cursor,
+        &mut dusted_finalization_cursors
+            .claim_basis_finalization
+            .staging_cursor,
+        &mut dusted_finalization_cursors
+            .capacity_profile_finalization
+            .staging_cursor,
+        &mut dusted_finalization_cursors
+            .resolution_material_finalization
+            .staging_cursor,
+        &mut dusted_finalization_cursors
+            .capability_manifest_finalization
+            .staging_cursor,
+    ] {
+        cursor.lamports = 1;
+    }
+    assert!(
+        build_found_market_and_fund_v1(fixture.program_id, &dusted_finalization_cursors).is_ok()
     );
 
     let mut nonfinal = fixture.state.clone();

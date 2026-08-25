@@ -962,9 +962,10 @@ mod tests {
     use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
     use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1};
     use dclutch_source_contract::{
-        CapacityEnvelope as SourceCapacityEnvelope, MAX_RECOVERY_ATTEMPTS, ProviderReleaseV1,
-        PythAdapterConfigV1, ResolutionPolicyV1, RoundingBoundary, SourceCapacityProfileV1,
-        SourceMaterialV1, SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
+        CapacityEnvelope as SourceCapacityEnvelope, ProviderReleaseV1, PythAdapterConfigV1,
+        ResolutionPolicyV1, RoundingBoundary, SOURCE_MATERIAL_BYTES, SourceCapacityProfileV1,
+        SourceMaterialInputV1, SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind,
+        WindowSpecV1, encode_source_material_into_v1,
     };
     use solana_program::{account_info::AccountInfo, rent::Rent, sysvar::SysvarSerialize};
 
@@ -1083,7 +1084,7 @@ mod tests {
         instance: InstanceV1,
         instance_id: [u8; 32],
         domain: FiniteResultDomainV1,
-    ) -> SourceMaterialV1 {
+    ) -> Vec<u8> {
         source_material_with_access(
             instance,
             instance_id,
@@ -1097,7 +1098,7 @@ mod tests {
         instance_id: [u8; 32],
         domain: FiniteResultDomainV1,
         access: SourceAccessProfile,
-    ) -> SourceMaterialV1 {
+    ) -> Vec<u8> {
         let capacity = SourceCapacityProfileV1::new(
             SourceCapacityEnvelope::Measured,
             1,
@@ -1170,26 +1171,30 @@ mod tests {
             domain_id,
             None,
         );
-        SourceMaterialV1::new(
-            policy,
-            capacity_id,
-            capacity,
-            primary_source_id,
-            source,
-            provider_id,
-            provider,
-            adapter,
-            window_id,
-            window,
-            statistic_id,
-            statistic,
-            source_id(instance_id),
-            instance,
-            domain,
-            None,
-            [None; MAX_RECOVERY_ATTEMPTS],
+        let mut material = vec![0; SOURCE_MATERIAL_BYTES];
+        encode_source_material_into_v1(
+            &mut material,
+            SourceMaterialInputV1 {
+                policy: &policy,
+                capacity_profile_id: capacity_id,
+                capacity_profile: &capacity,
+                primary_source_id,
+                primary_source: &source,
+                primary_provider_release_id: provider_id,
+                primary_provider_release: &provider,
+                primary_adapter_config: &adapter,
+                window_id,
+                window: &window,
+                statistic_id,
+                statistic: &statistic,
+                product_instance_id: source_id(instance_id),
+                product_instance: &instance,
+                result_domain: &domain,
+                recovery: None,
+            },
         )
-        .expect("canonical Source material")
+        .expect("canonical Source material");
+        material
     }
 
     fn rent_account() -> ObservedAccount {
@@ -1231,7 +1236,7 @@ mod tests {
         let sponsor = Pubkey::new_from_array([41; 32]);
         let (instance, instance_id, domain) = product_material();
         let material = source_material(instance, instance_id, domain);
-        let material_id = hash(&material.to_bytes()).to_bytes();
+        let material_id = hash(&material).to_bytes();
         let quote = native_resolution_quote(100, 7, 11);
         let entry = CapabilityEntryV1::new(
             CapabilityContentId::new([11; 32]).expect("kind"),
@@ -1301,11 +1306,8 @@ mod tests {
         let authority = RefundAuthority::new(sponsor.to_bytes()).expect("authority");
         let (rent_credit_key, rent_credit_bump) =
             Pubkey::find_program_address(&[RENT_CREDIT_PDA_DOMAIN_V1, sponsor.as_ref()], &program);
-        let (resolution_material, resolution_material_finalization) = finalized_record(
-            program,
-            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
-            material.to_bytes().to_vec(),
-        );
+        let (resolution_material, resolution_material_finalization) =
+            finalized_record(program, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, material);
         let (capability_manifest, capability_manifest_finalization) = finalized_record(
             program,
             hash(b"dclutch/schema/capability-manifest-profile-1-v1").to_bytes(),
@@ -1440,9 +1442,9 @@ mod tests {
         );
         let mut facts =
             market_facts(program, state.market.key, &state.market.data).expect("Market facts");
-        facts.resolution_material_id = hash(&shared.to_bytes()).to_bytes();
+        facts.resolution_material_id = hash(&shared).to_bytes();
         assert_eq!(
-            source_material_facts(&shared.to_bytes(), facts).err(),
+            source_material_facts(&shared, facts).err(),
             Some(Error::SourceUnavailable)
         );
         assert_eq!(

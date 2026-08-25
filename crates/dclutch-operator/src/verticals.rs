@@ -5,6 +5,9 @@
 //! selects an instruction field, recompute all relevant PDAs, and emit the
 //! exact SBF account order and privileges.  They neither sign nor submit.
 
+use dclutch_capability_contract::{
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CAPABILITY_TEMPLATE_SCHEMA_RELEASE_ID_V1,
+};
 use dclutch_core_contract::Phase;
 use dclutch_dealer_contract::{
     LiquidityConfigV1, PoolState,
@@ -23,23 +26,24 @@ use dclutch_direct_contract::{
     close_replay_registration_v2, prepare_replay_root_close_v2,
 };
 use dclutch_general_contract::{
-    BATCH_ROOT_BYTES, GENERAL_CONFIG_SCHEMA_ID_V1, GENERAL_FUNDING_BYTES, GENERAL_ROOT_BYTES,
+    BATCH_ROOT_BYTES, BatchRentObservationV1, GENERAL_CONFIG_SCHEMA_ID_V1, GENERAL_ROOT_BYTES,
     GeneralAccountFrameV1, GeneralAccountMetaV1, GeneralBatchPdaSeedsV1, GeneralBatchReplayV1,
-    GeneralConfigV1, GeneralFundingCustodyObservationV1, GeneralFundingPdaSeedsV1,
-    GeneralFundingV1, GeneralInstructionTagV1, GeneralInstructionV1, GeneralRootPdaSeedsV1,
+    GeneralConfigV1, GeneralInstructionTagV1, GeneralInstructionV1, GeneralRootPdaSeedsV1,
     GeneralRootV1, open_general_batch_v1,
 };
 use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome_count};
 use dclutch_product_contract::capacity::CapacityProfileV1;
+use dclutch_rent_contract::RentCreditV1;
 use dclutch_series_contract::{
     CapitalizationAggregateV1, DerivedOccurrenceV1, IdentityV1, InstantiateNextV1,
     OccurrenceCapitalizationV1, SERIES_ESCROW_PDA_DOMAIN_V1, SERIES_ROOT_PDA_DOMAIN_V1,
     SERIES_TICKET_PDA_DOMAIN_V1, SeriesEscrowV1, SeriesRecipeV1, SeriesRootV1,
-    VacantAccountFactsV1, plan_instantiate_next_v1,
+    VacantAccountFactsV1, authenticate_occurrence_capability_manifest_v1,
+    authenticate_occurrence_source_material_v1, plan_instantiate_next_v1,
 };
 use dclutch_source_contract::{
-    RetireInstructionV1, SourceAccountPrivilegeV1, SourceActionV1, SourceFrameKindV1,
-    SourceResolutionStateV1, validate_source_frame_v1,
+    RetireInstructionV1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SourceAccountPrivilegeV1,
+    SourceActionV1, SourceFrameKindV1, SourceResolutionStateV1, validate_source_frame_v1,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -62,9 +66,9 @@ pub const SERIES_CAPACITY_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
     0xbe, 0x6d, 0xd9, 0x81, 0x24, 0x47, 0x57, 0x49, 0x94, 0x69, 0xbb, 0x99, 0xba, 0x55, 0x36, 0x50,
 ];
 /// The Series recipe schema selected by the current SBF V1 ABI.
-pub const SERIES_RECIPE_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
-    0x25, 0xd2, 0x2f, 0x56, 0x52, 0x55, 0x02, 0x03, 0x77, 0x15, 0xb0, 0x74, 0xfe, 0xd8, 0xcf, 0x37,
-    0x31, 0x8c, 0xdc, 0x40, 0x75, 0xfa, 0xb0, 0x86, 0x8a, 0x1e, 0x2f, 0x11, 0x85, 0x91, 0x97, 0xf6,
+pub const SERIES_RECIPE_SCHEMA_RELEASE_ID_V3: [u8; 32] = [
+    0xbe, 0x66, 0x5a, 0xb8, 0xa6, 0xb9, 0x79, 0xca, 0x75, 0x31, 0x7a, 0xe3, 0x8f, 0x62, 0x60, 0xe1,
+    0x69, 0x7a, 0x84, 0xe0, 0xdf, 0xb2, 0xd0, 0xe2, 0xd3, 0x8b, 0x4c, 0x55, 0xe5, 0x1f, 0x2d, 0xf7,
 ];
 /// The Series aggregate schema selected by the current SBF V1 ABI.
 pub const SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
@@ -138,6 +142,18 @@ pub struct SeriesInstantiateState {
     pub capitalization: ObservedAccount,
     /// Finalization proof for `capitalization`.
     pub capitalization_finalization: FinalizedRecordProof,
+    /// Finalized occurrence-specific Source material.
+    pub resolution_material: ObservedAccount,
+    /// Finalization proof for `resolution_material`.
+    pub resolution_material_finalization: FinalizedRecordProof,
+    /// Finalized reusable capability template selected by the recipe.
+    pub capability_template: ObservedAccount,
+    /// Finalization proof for `capability_template`.
+    pub capability_template_finalization: FinalizedRecordProof,
+    /// Finalized occurrence-specific realized capability manifest.
+    pub capability_manifest: ObservedAccount,
+    /// Finalization proof for `capability_manifest`.
+    pub capability_manifest_finalization: FinalizedRecordProof,
     /// Canonical System Program observation.
     pub system_program: ObservedAccount,
     /// Canonical Rent sysvar observation.
@@ -157,7 +173,7 @@ pub struct SeriesInstantiateReport {
     pub occurrence_index: u64,
 }
 
-/// Construct the canonical 16-account V1 instantiate-next frame.
+/// Construct the canonical 22-account V1 instantiate-next frame.
 pub fn build_series_instantiate_next_v1(
     program_id: Pubkey,
     state: &SeriesInstantiateState,
@@ -172,6 +188,9 @@ pub fn build_series_instantiate_next_v1(
         &state.capacity_profile,
         &state.derived,
         &state.capitalization,
+        &state.resolution_material,
+        &state.capability_template,
+        &state.capability_manifest,
         &state.system_program,
         &state.rent_sysvar,
     ])?;
@@ -184,7 +203,7 @@ pub fn build_series_instantiate_next_v1(
         &rent,
         &state.recipe,
         &state.recipe_finalization,
-        SERIES_RECIPE_SCHEMA_RELEASE_ID_V1,
+        SERIES_RECIPE_SCHEMA_RELEASE_ID_V3,
         SeriesRecipeV1::decode,
     )?;
     let aggregate = finalized(
@@ -219,6 +238,42 @@ pub fn build_series_instantiate_next_v1(
         SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1,
         OccurrenceCapitalizationV1::decode,
     )?;
+    authenticate_finalized_bytes(
+        program_id,
+        &rent,
+        &state.resolution_material,
+        &state.resolution_material_finalization,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
+    )?;
+    authenticate_finalized_bytes(
+        program_id,
+        &rent,
+        &state.capability_template,
+        &state.capability_template_finalization,
+        CAPABILITY_TEMPLATE_SCHEMA_RELEASE_ID_V1,
+    )?;
+    authenticate_finalized_bytes(
+        program_id,
+        &rent,
+        &state.capability_manifest,
+        &state.capability_manifest_finalization,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+    )?;
+    let source_material_id = identity(&state.resolution_material.data)?;
+    let source_material = authenticate_occurrence_source_material_v1(
+        source_material_id,
+        &state.resolution_material.data,
+    )
+    .map_err(|_| VerticalError::ContentMismatch)?;
+    let capability_manifest_id = identity(&state.capability_manifest.data)?;
+    let capability_manifest = authenticate_occurrence_capability_manifest_v1(
+        recipe.capability_template_id,
+        &state.capability_template.data,
+        source_material.material_id(),
+        capability_manifest_id,
+        &state.capability_manifest.data,
+    )
+    .map_err(|_| VerticalError::ContentMismatch)?;
     if state.capacity_profile.data != capacity.to_bytes()
         || hash(&capacity.to_bytes()).to_bytes() != recipe.capacity_profile_id.to_bytes()
     {
@@ -293,6 +348,8 @@ pub fn build_series_instantiate_next_v1(
         &aggregate,
         identity(&state.derived.data)?,
         &derived,
+        source_material,
+        capability_manifest,
         identity(&state.capitalization.data)?,
         &capitalization,
         wire,
@@ -313,36 +370,52 @@ pub fn build_series_instantiate_next_v1(
     Ok(SeriesInstantiateReport {
         instruction: Instruction {
             program_id,
-            accounts: vec![
-                AccountMeta::new(state.actor.key, true),
-                AccountMeta::new(state.root.key, false),
-                AccountMeta::new_readonly(state.recipe.key, false),
-                AccountMeta::new_readonly(state.aggregate.key, false),
-                AccountMeta::new_readonly(state.capacity_profile.key, false),
-                AccountMeta::new_readonly(state.derived.key, false),
-                AccountMeta::new_readonly(state.capitalization.key, false),
-                AccountMeta::new(state.escrow.key, false),
-                AccountMeta::new(state.ticket.key, false),
-                AccountMeta::new_readonly(state.recipe_finalization.staging_cursor.key, false),
-                AccountMeta::new_readonly(state.aggregate_finalization.staging_cursor.key, false),
-                AccountMeta::new_readonly(
-                    state.capacity_profile_finalization.staging_cursor.key,
-                    false,
-                ),
-                AccountMeta::new_readonly(state.derived_finalization.staging_cursor.key, false),
-                AccountMeta::new_readonly(
-                    state.capitalization_finalization.staging_cursor.key,
-                    false,
-                ),
-                AccountMeta::new_readonly(state.system_program.key, false),
-                AccountMeta::new_readonly(state.rent_sysvar.key, false),
-            ],
+            accounts: series_instantiate_accounts(state),
             data,
         },
         observation,
         ticket,
         occurrence_index: index,
     })
+}
+
+fn series_instantiate_accounts(state: &SeriesInstantiateState) -> Vec<AccountMeta> {
+    vec![
+        AccountMeta::new_readonly(state.actor.key, true),
+        AccountMeta::new(state.root.key, false),
+        AccountMeta::new_readonly(state.recipe.key, false),
+        AccountMeta::new_readonly(state.aggregate.key, false),
+        AccountMeta::new_readonly(state.capacity_profile.key, false),
+        AccountMeta::new_readonly(state.derived.key, false),
+        AccountMeta::new_readonly(state.capitalization.key, false),
+        AccountMeta::new(state.escrow.key, false),
+        AccountMeta::new(state.ticket.key, false),
+        AccountMeta::new_readonly(state.recipe_finalization.staging_cursor.key, false),
+        AccountMeta::new_readonly(state.aggregate_finalization.staging_cursor.key, false),
+        AccountMeta::new_readonly(
+            state.capacity_profile_finalization.staging_cursor.key,
+            false,
+        ),
+        AccountMeta::new_readonly(state.derived_finalization.staging_cursor.key, false),
+        AccountMeta::new_readonly(state.capitalization_finalization.staging_cursor.key, false),
+        AccountMeta::new_readonly(state.resolution_material.key, false),
+        AccountMeta::new_readonly(
+            state.resolution_material_finalization.staging_cursor.key,
+            false,
+        ),
+        AccountMeta::new_readonly(state.capability_template.key, false),
+        AccountMeta::new_readonly(
+            state.capability_template_finalization.staging_cursor.key,
+            false,
+        ),
+        AccountMeta::new_readonly(state.capability_manifest.key, false),
+        AccountMeta::new_readonly(
+            state.capability_manifest_finalization.staging_cursor.key,
+            false,
+        ),
+        AccountMeta::new_readonly(state.system_program.key, false),
+        AccountMeta::new_readonly(state.rent_sysvar.key, false),
+    ]
 }
 
 /// Finalized state required to construct the fixed Dealer reset-ladder frame.
@@ -615,7 +688,7 @@ pub struct SourceRetireResolutionReport {
 /// Finalized state required to permissionlessly open the next General batch.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GeneralOpenBatchState {
-    /// Permissionless System actor reimbursed only from typed liveness funding.
+    /// Permissionless System actor capitalizing this finite batch.
     pub actor: ObservedAccount,
     /// Canonical Market bound to the General root and config.
     pub market: ObservedAccount,
@@ -623,8 +696,6 @@ pub struct GeneralOpenBatchState {
     pub config: ObservedAccount,
     /// Mutable canonical General root.
     pub root: ObservedAccount,
-    /// Mutable segregated General native funding ledger.
-    pub funding: ObservedAccount,
     /// Prefunded vacant PDA destination for the derived batch.
     pub batch: ObservedAccount,
     /// Permanent RentCredit selected by the persisted General root.
@@ -642,7 +713,7 @@ pub struct GeneralOpenBatchState {
 /// Exact next-batch General instruction derived from finalized chain state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GeneralOpenBatchReport {
-    /// Exact unsigned eleven-account General instruction.
+    /// Exact unsigned ten-account General instruction.
     pub instruction: Instruction,
     /// Finalized observation which selected every replay field.
     pub observation: Observation,
@@ -653,7 +724,7 @@ pub struct GeneralOpenBatchReport {
 }
 
 /// Construct the exact General V1 `OpenBatch` frame without caller-selected
-/// generation, sequence, config, funding compartment, or rent destination.
+/// generation, sequence, config, batch rent, or rent destination.
 pub fn build_general_open_batch_v1(
     program_id: Pubkey,
     state: &GeneralOpenBatchState,
@@ -663,7 +734,6 @@ pub fn build_general_open_batch_v1(
         &state.market,
         &state.config,
         &state.root,
-        &state.funding,
         &state.batch,
         &state.rent_credit,
         &state.config_finalization.staging_cursor,
@@ -709,38 +779,10 @@ pub fn build_general_open_batch_v1(
     let market = source_market(program_id, &state.market)?;
     if root.market() != state.market.key.to_bytes()
         || market.generation != config.generation()
-        || market.identity_id != config.market_identity_id().to_bytes()
         || market.claim_basis_id != config.claim_basis_id().to_bytes()
     {
         return Err(VerticalError::ContentMismatch);
     }
-    let funding = decode_owned(&state.funding, program_id, GeneralFundingV1::decode)?;
-    let mut funding_bytes = [0; GENERAL_FUNDING_BYTES];
-    funding
-        .encode(&mut funding_bytes)
-        .map_err(|_| VerticalError::InvalidState)?;
-    if state.funding.data != funding_bytes {
-        return Err(VerticalError::InvalidState);
-    }
-    let funding_seeds = GeneralFundingPdaSeedsV1::new(
-        root.market(),
-        root.generation(),
-        config_id,
-        funding.capability_release_id(),
-    )
-    .map_err(|_| VerticalError::PdaMismatch)?;
-    let (expected_funding, _) =
-        Pubkey::find_program_address(&funding_seeds.seed_components(), &program_id);
-    if state.funding.key != expected_funding
-        || funding.capability_release_id() != config.capability_release_id()
-    {
-        return Err(VerticalError::PdaMismatch);
-    }
-    let custody = GeneralFundingCustodyObservationV1::new(
-        state.funding.lamports,
-        rent.minimum_balance(GENERAL_FUNDING_BYTES),
-    )
-    .map_err(|_| VerticalError::InvalidState)?;
     let sequence = root.next_batch_sequence();
     let batch_seeds = GeneralBatchPdaSeedsV1::new(state.root.key.to_bytes(), sequence)
         .map_err(|_| VerticalError::PdaMismatch)?;
@@ -752,20 +794,14 @@ pub fn build_general_open_batch_v1(
     {
         return Err(VerticalError::PdaMismatch);
     }
-    authenticate_rent_credit(
-        program_id,
-        &state.rent_credit,
-        Pubkey::new_from_array(root.rent_beneficiary()),
-    )
-    .map_err(|_| VerticalError::ContentMismatch)?;
+    authenticate_rent_credit_at_key(program_id, &state.rent_credit, root.rent_beneficiary())
+        .map_err(|_| VerticalError::ContentMismatch)?;
     let args = (
         program_id,
         state,
         config_id,
         config,
         root,
-        funding,
-        custody,
         rent.minimum_balance(BATCH_ROOT_BYTES),
         clock.slot,
         sequence,
@@ -775,63 +811,48 @@ pub fn build_general_open_batch_v1(
     match config.outcome_count() {
         2 => general_open_batch_instruction::<2>(
             args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
-            args.10, args.11,
         ),
         3 => general_open_batch_instruction::<3>(
             args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
-            args.10, args.11,
         ),
         4 => general_open_batch_instruction::<4>(
             args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
-            args.10, args.11,
         ),
         5 => general_open_batch_instruction::<5>(
             args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
-            args.10, args.11,
         ),
         6 => general_open_batch_instruction::<6>(
             args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
-            args.10, args.11,
         ),
         7 => general_open_batch_instruction::<7>(
             args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
-            args.10, args.11,
         ),
         8 => general_open_batch_instruction::<8>(
             args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
-            args.10, args.11,
         ),
         9 => general_open_batch_instruction::<9>(
             args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
-            args.10, args.11,
         ),
         10 => general_open_batch_instruction::<10>(
             args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
-            args.10, args.11,
         ),
         11 => general_open_batch_instruction::<11>(
             args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
-            args.10, args.11,
         ),
         12 => general_open_batch_instruction::<12>(
             args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
-            args.10, args.11,
         ),
         13 => general_open_batch_instruction::<13>(
             args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
-            args.10, args.11,
         ),
         14 => general_open_batch_instruction::<14>(
             args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
-            args.10, args.11,
         ),
         15 => general_open_batch_instruction::<15>(
             args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
-            args.10, args.11,
         ),
         16 => general_open_batch_instruction::<16>(
             args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
-            args.10, args.11,
         ),
         _ => Err(VerticalError::InvalidState),
     }
@@ -844,8 +865,6 @@ fn general_open_batch_instruction<const N: usize>(
     config_id: dclutch_general_contract::ContentId,
     config: GeneralConfigV1,
     root: GeneralRootV1,
-    funding: GeneralFundingV1,
-    custody: GeneralFundingCustodyObservationV1,
     batch_rent: u64,
     slot: u64,
     sequence: u64,
@@ -858,13 +877,12 @@ fn general_open_batch_instruction<const N: usize>(
     };
     let metas = [
         general_meta(&state.actor, true, true),
-        general_meta(&state.market, false, true),
+        general_meta(&state.market, false, false),
         general_meta(&state.config, false, false),
+        general_meta(&state.config_finalization.staging_cursor, false, false),
         general_meta(&state.root, false, true),
-        general_meta(&state.funding, false, true),
         general_meta(&state.batch, false, true),
         general_meta(&state.rent_credit, false, true),
-        general_meta(&state.config_finalization.staging_cursor, false, false),
         general_meta(&state.system_program, false, false),
         general_meta(&state.rent_sysvar, false, false),
         general_meta(&state.clock_sysvar, false, false),
@@ -872,7 +890,16 @@ fn general_open_batch_instruction<const N: usize>(
     let frame = GeneralAccountFrameV1::new(GeneralInstructionTagV1::OpenBatch, 0, &metas)
         .map_err(|_| VerticalError::InvalidState)?;
     open_general_batch_v1(
-        frame, replay, config_id, config, root, funding, custody, batch_rent, slot,
+        frame,
+        replay,
+        config_id,
+        config,
+        root,
+        BatchRentObservationV1 {
+            exact_batch_rent_lamports: batch_rent,
+            precreation_lamports: state.batch.lamports,
+        },
+        slot,
     )
     .map_err(|_| VerticalError::InvalidPhase)?;
     let wire = GeneralInstructionV1::<N>::OpenBatch(replay);
@@ -1025,7 +1052,6 @@ struct SourceMarketFacts {
     phase: Phase,
     child_count: u64,
     resolution_policy_id: [u8; 32],
-    identity_id: [u8; 32],
     claim_basis_id: [u8; 32],
 }
 
@@ -1078,7 +1104,6 @@ fn source_market_width<const N: usize>(
         phase: market.root().phase(),
         child_count: market.root().outstanding_children(),
         resolution_policy_id: market.root().identity().resolution_policy_id().to_bytes(),
-        identity_id: hash(&market.root().identity().to_bytes()).to_bytes(),
         claim_basis_id: market.root().identity().claim_basis_id().to_bytes(),
     })
 }
@@ -1242,7 +1267,6 @@ pub fn build_dealer_reset_ladder_v1(
     if cursor.observation != observation
         || cursor.owner != system_program::ID
         || cursor.executable
-        || cursor.lamports != 0
         || !cursor.data.is_empty()
     {
         return Err(VerticalError::FinalizationMismatch);
@@ -1436,6 +1460,20 @@ fn finalized<T, E>(
     Ok(value)
 }
 
+fn authenticate_finalized_bytes(
+    program_id: Pubkey,
+    rent: &solana_program::rent::Rent,
+    account: &ObservedAccount,
+    proof: &FinalizedRecordProof,
+    schema: [u8; 32],
+) -> Result<(), VerticalError> {
+    if proof.schema_release_id != schema {
+        return Err(VerticalError::FinalizationMismatch);
+    }
+    foundation::authenticate_finalized_record(program_id, rent, account, proof)
+        .map_err(|_| VerticalError::FinalizationMismatch)
+}
+
 fn decode_owned<T, E>(
     account: &ObservedAccount,
     program_id: Pubkey,
@@ -1445,6 +1483,28 @@ fn decode_owned<T, E>(
         return Err(VerticalError::InvalidOwner);
     }
     decode(&account.data).map_err(|_| VerticalError::InvalidState)
+}
+
+fn authenticate_rent_credit_at_key(
+    program_id: Pubkey,
+    account: &ObservedAccount,
+    expected_key: [u8; 32],
+) -> Result<RentCreditV1, VerticalError> {
+    if account.key.to_bytes() != expected_key || account.owner != program_id || account.executable {
+        return Err(VerticalError::ContentMismatch);
+    }
+    let credit = RentCreditV1::decode(&account.data).map_err(|_| VerticalError::InvalidState)?;
+    let seeds = credit.pda_seeds();
+    let authority = seeds.refund_authority().to_bytes();
+    let (derived, bump) =
+        Pubkey::find_program_address(&[seeds.domain(), authority.as_slice()], &program_id);
+    if account.key != derived
+        || credit.pda_bump() != bump
+        || credit.to_bytes().as_slice() != account.data.as_slice()
+    {
+        return Err(VerticalError::ContentMismatch);
+    }
+    Ok(credit)
 }
 
 fn identity(bytes: &[u8]) -> Result<IdentityV1, VerticalError> {
@@ -1512,7 +1572,11 @@ fn decode_clock(account: &ObservedAccount) -> Result<Clock, VerticalError> {
 mod tests {
     use super::*;
     use dclutch_core_contract::{ContentId, MarketIdentity, MarketRoot};
+    use dclutch_general_contract::{GENERAL_CAPABILITY_RELEASE_ID_V1, GeneralConfigV1Input};
     use dclutch_market_contract::market::CategoricalSettlementSummaryV1;
+    use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+    use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority};
+    use solana_program::{rent::Rent, sysvar::SysvarSerialize};
 
     fn account(slot: u64, finality: Finality) -> ObservedAccount {
         ObservedAccount {
@@ -1529,6 +1593,246 @@ mod tests {
         }
     }
 
+    fn observed(
+        observation: Observation,
+        key: Pubkey,
+        owner: Pubkey,
+        lamports: u64,
+        executable: bool,
+        data: Vec<u8>,
+    ) -> ObservedAccount {
+        ObservedAccount {
+            observation,
+            key,
+            owner,
+            lamports,
+            executable,
+            data,
+        }
+    }
+
+    fn rent_account(observation: Observation) -> ObservedAccount {
+        let rent = Rent::default();
+        let mut data = vec![0; Rent::size_of()];
+        let mut lamports = 1;
+        let mut info = AccountInfo::new(
+            &sysvar::rent::ID,
+            false,
+            false,
+            &mut lamports,
+            &mut data,
+            &sysvar::ID,
+            false,
+        );
+        rent.to_account_info(&mut info).expect("serialize Rent");
+        drop(info);
+        observed(observation, sysvar::rent::ID, sysvar::ID, 1, false, data)
+    }
+
+    fn clock_account(observation: Observation) -> ObservedAccount {
+        let clock = Clock {
+            slot: observation.slot,
+            unix_timestamp: observation.unix_timestamp,
+            ..Clock::default()
+        };
+        let mut data = vec![0; Clock::size_of()];
+        let mut lamports = 1;
+        let mut info = AccountInfo::new(
+            &sysvar::clock::ID,
+            false,
+            false,
+            &mut lamports,
+            &mut data,
+            &sysvar::ID,
+            false,
+        );
+        clock.to_account_info(&mut info).expect("serialize Clock");
+        drop(info);
+        observed(observation, sysvar::clock::ID, sysvar::ID, 1, false, data)
+    }
+
+    fn finalized_record(
+        program_id: Pubkey,
+        observation: Observation,
+        schema: [u8; 32],
+        data: Vec<u8>,
+        cursor_dust: u64,
+    ) -> (ObservedAccount, FinalizedRecordProof) {
+        let digest = hash(&data).to_bytes();
+        let (raw, _) = Pubkey::find_program_address(
+            &[RAW_RECORD_PDA_SEED_V1, schema.as_slice(), digest.as_slice()],
+            &program_id,
+        );
+        let (cursor, _) = Pubkey::find_program_address(
+            &[
+                STAGING_CURSOR_PDA_SEED_V1,
+                schema.as_slice(),
+                digest.as_slice(),
+            ],
+            &program_id,
+        );
+        (
+            observed(observation, raw, program_id, u64::MAX, false, data),
+            FinalizedRecordProof {
+                schema_release_id: schema,
+                staging_cursor: observed(
+                    observation,
+                    cursor,
+                    system_program::ID,
+                    cursor_dust,
+                    false,
+                    Vec::new(),
+                ),
+            },
+        )
+    }
+
+    fn general_open_fixture(batch_dust: u64) -> (Pubkey, GeneralOpenBatchState) {
+        let program_id = Pubkey::new_from_array([70; 32]);
+        let observation = Observation {
+            slot: 41,
+            unix_timestamp: 1_800_000_000,
+            finality: Finality::Finalized,
+        };
+        let beneficiary = RefundAuthority::new([71; 32]).expect("beneficiary");
+        let (rent_credit_key, rent_credit_bump) = Pubkey::find_program_address(
+            &[RENT_CREDIT_PDA_DOMAIN_V1, beneficiary.to_bytes().as_slice()],
+            &program_id,
+        );
+        let rent_credit = RentCreditV1::new(beneficiary, rent_credit_bump);
+        let claim_id = ContentId::new([72; 32]).expect("claim ID");
+        let generation = 7;
+        let identity = MarketIdentity::new(
+            ContentId::new([73; 32]).expect("Realm ID"),
+            ContentId::new([74; 32]).expect("Product ID"),
+            claim_id,
+            ContentId::new([75; 32]).expect("Source ID"),
+            ContentId::new([76; 32]).expect("manifest ID"),
+            generation,
+        );
+        let identity_digest = hash(&identity.to_bytes()).to_bytes();
+        let (market_key, _) =
+            Pubkey::find_program_address(&[crate::MARKET_SEED, &identity_digest], &program_id);
+        let mut market_root =
+            MarketRoot::founding(identity, rent_credit_key.to_bytes()).expect("Market root");
+        market_root
+            .transition_phase(generation, Phase::Open)
+            .expect("open Market");
+        market_root
+            .register_child(generation, 0)
+            .expect("General child");
+        let market = CategoricalMarketV1::<2>::new(
+            market_root,
+            0,
+            [0; 2],
+            CategoricalSettlementSummaryV1::empty(),
+        )
+        .expect("Market");
+        let mut market_data =
+            vec![0; CategoricalMarketV1::<2>::encoded_len().expect("Market width")];
+        market.encode(&mut market_data).expect("encode Market");
+        let config = GeneralConfigV1::new(GeneralConfigV1Input {
+            capacity_profile_id: dclutch_general_contract::ContentId::new([77; 32])
+                .expect("capacity ID"),
+            claim_basis_id: dclutch_general_contract::ContentId::new(claim_id.to_bytes())
+                .expect("claim ID"),
+            capability_release_id: GENERAL_CAPABILITY_RELEASE_ID_V1,
+            generation,
+            price_scale: 1_000_000,
+            collection_slots: 10,
+            selection_slots: 10,
+            settlement_slots: 10,
+            max_orders_per_candidate: 1,
+            max_pages_per_candidate: 1,
+            continuation_reward_lamports: 1,
+            outcome_count: 2,
+        })
+        .expect("General config");
+        let config_bytes = config.to_bytes().to_vec();
+        let config_id = dclutch_general_contract::ContentId::new(hash(&config_bytes).to_bytes())
+            .expect("config ID");
+        let (config_account, config_finalization) = finalized_record(
+            program_id,
+            observation,
+            GENERAL_CONFIG_SCHEMA_ID_V1.to_bytes(),
+            config_bytes,
+            3,
+        );
+        let root = GeneralRootV1::founding(
+            market_key.to_bytes(),
+            config_id,
+            generation,
+            rent_credit_key.to_bytes(),
+        )
+        .expect("General root");
+        let root_seeds = GeneralRootPdaSeedsV1::new(market_key.to_bytes(), generation, config_id)
+            .expect("root seeds");
+        let (root_key, _) =
+            Pubkey::find_program_address(&root_seeds.seed_components(), &program_id);
+        let mut root_data = vec![0; GENERAL_ROOT_BYTES];
+        root.encode(&mut root_data).expect("encode General root");
+        let batch_seeds = GeneralBatchPdaSeedsV1::new(root_key.to_bytes(), 0).expect("batch seeds");
+        let (batch_key, _) =
+            Pubkey::find_program_address(&batch_seeds.seed_components(), &program_id);
+        (
+            program_id,
+            GeneralOpenBatchState {
+                actor: observed(
+                    observation,
+                    Pubkey::new_from_array([78; 32]),
+                    system_program::ID,
+                    u64::MAX,
+                    false,
+                    Vec::new(),
+                ),
+                market: observed(
+                    observation,
+                    market_key,
+                    program_id,
+                    u64::MAX,
+                    false,
+                    market_data,
+                ),
+                config: config_account,
+                root: observed(
+                    observation,
+                    root_key,
+                    program_id,
+                    u64::MAX,
+                    false,
+                    root_data,
+                ),
+                batch: observed(
+                    observation,
+                    batch_key,
+                    system_program::ID,
+                    batch_dust,
+                    false,
+                    Vec::new(),
+                ),
+                rent_credit: observed(
+                    observation,
+                    rent_credit_key,
+                    program_id,
+                    u64::MAX,
+                    false,
+                    rent_credit.to_bytes().to_vec(),
+                ),
+                config_finalization,
+                system_program: observed(
+                    observation,
+                    system_program::ID,
+                    native_loader::ID,
+                    1,
+                    true,
+                    Vec::new(),
+                ),
+                rent_sysvar: rent_account(observation),
+                clock_sysvar: clock_account(observation),
+            },
+        )
+    }
+
     #[test]
     fn vertical_builders_refuse_nonfinal_or_mixed_snapshots() {
         let finalized = account(9, Finality::Finalized);
@@ -1540,6 +1844,151 @@ mod tests {
         );
         assert_eq!(
             observation(&[&finalized, &later]),
+            Err(VerticalError::ObservationMismatch)
+        );
+    }
+
+    #[test]
+    fn general_open_uses_successor_frame_and_accepts_safe_dust() {
+        let (program_id, state) = general_open_fixture(5);
+        let report = build_general_open_batch_v1(program_id, &state)
+            .expect("successor General batch opens from caller capitalization");
+        assert_eq!(report.sequence, 0);
+        assert_eq!(report.batch, state.batch.key);
+        assert_eq!(report.instruction.accounts.len(), 10);
+        assert_eq!(
+            report.instruction.accounts,
+            vec![
+                AccountMeta::new(state.actor.key, true),
+                AccountMeta::new_readonly(state.market.key, false),
+                AccountMeta::new_readonly(state.config.key, false),
+                AccountMeta::new_readonly(state.config_finalization.staging_cursor.key, false),
+                AccountMeta::new(state.root.key, false),
+                AccountMeta::new(state.batch.key, false),
+                AccountMeta::new(state.rent_credit.key, false),
+                AccountMeta::new_readonly(state.system_program.key, false),
+                AccountMeta::new_readonly(state.rent_sysvar.key, false),
+                AccountMeta::new_readonly(state.clock_sysvar.key, false),
+            ]
+        );
+        assert_eq!(state.config_finalization.staging_cursor.lamports, 3);
+        assert_eq!(state.batch.lamports, 5);
+    }
+
+    #[test]
+    fn general_open_refuses_credit_and_finalization_substitution() {
+        let (program_id, state) = general_open_fixture(0);
+
+        let mut wrong_credit = state.clone();
+        wrong_credit.rent_credit.key = Pubkey::new_from_array([79; 32]);
+        assert_eq!(
+            build_general_open_batch_v1(program_id, &wrong_credit),
+            Err(VerticalError::ContentMismatch)
+        );
+
+        let mut live_cursor = state;
+        live_cursor.config_finalization.staging_cursor.data.push(1);
+        assert_eq!(
+            build_general_open_batch_v1(program_id, &live_cursor),
+            Err(VerticalError::FinalizationMismatch)
+        );
+    }
+
+    #[test]
+    fn series_successor_occurrence_authorities_share_one_snapshot() {
+        let observation = Observation {
+            slot: 51,
+            unix_timestamp: 1_800_000_000,
+            finality: Finality::Finalized,
+        };
+        let raw = |byte| {
+            observed(
+                observation,
+                Pubkey::new_from_array([byte; 32]),
+                Pubkey::new_from_array([90; 32]),
+                1,
+                false,
+                vec![1],
+            )
+        };
+        let proof = |byte| FinalizedRecordProof {
+            schema_release_id: [byte; 32],
+            staging_cursor: observed(
+                observation,
+                Pubkey::new_from_array([byte.wrapping_add(30); 32]),
+                system_program::ID,
+                1,
+                false,
+                Vec::new(),
+            ),
+        };
+        let state = SeriesInstantiateState {
+            actor: raw(1),
+            root: raw(2),
+            escrow: raw(3),
+            ticket: raw(4),
+            recipe: raw(5),
+            recipe_finalization: proof(5),
+            aggregate: raw(6),
+            aggregate_finalization: proof(6),
+            capacity_profile: raw(7),
+            capacity_profile_finalization: proof(7),
+            derived: raw(8),
+            derived_finalization: proof(8),
+            capitalization: raw(9),
+            capitalization_finalization: proof(9),
+            resolution_material: raw(10),
+            resolution_material_finalization: proof(10),
+            capability_template: raw(11),
+            capability_template_finalization: proof(11),
+            capability_manifest: raw(12),
+            capability_manifest_finalization: proof(12),
+            system_program: raw(13),
+            rent_sysvar: raw(14),
+        };
+        let metas = series_instantiate_accounts(&state);
+        assert_eq!(metas.len(), 22);
+        let actor_meta = metas.first().expect("actor meta");
+        assert!(actor_meta.is_signer);
+        assert!(!actor_meta.is_writable);
+        assert_eq!(
+            metas.get(14).map(|meta| meta.pubkey),
+            Some(state.resolution_material.key)
+        );
+        assert_eq!(
+            metas.get(16).map(|meta| meta.pubkey),
+            Some(state.capability_template.key)
+        );
+        assert_eq!(
+            metas.get(18).map(|meta| meta.pubkey),
+            Some(state.capability_manifest.key)
+        );
+        assert!(metas.iter().skip(14).take(6).all(|meta| !meta.is_writable));
+        let mut material_substitution = state.clone();
+        material_substitution.resolution_material.observation.slot += 1;
+        assert_eq!(
+            build_series_instantiate_next_v1(
+                Pubkey::new_from_array([90; 32]),
+                &material_substitution,
+            ),
+            Err(VerticalError::ObservationMismatch)
+        );
+        let mut template_substitution = state.clone();
+        template_substitution.capability_template.observation.slot += 1;
+        assert_eq!(
+            build_series_instantiate_next_v1(
+                Pubkey::new_from_array([90; 32]),
+                &template_substitution,
+            ),
+            Err(VerticalError::ObservationMismatch)
+        );
+        let mut manifest_substitution = state;
+        manifest_substitution.capability_manifest.observation.slot += 1;
+        assert_eq!(
+            build_series_instantiate_next_v1(
+                Pubkey::new_from_array([90; 32]),
+                &manifest_substitution,
+            ),
             Err(VerticalError::ObservationMismatch)
         );
     }
