@@ -30,7 +30,7 @@ The real-SVM campaign checks these runtime properties for the pinned artifacts:
 This remains an experiment, not a release. The Market execution profile is
 controller-owned but does not yet have immutable release-artifact admission.
 The controller codec has a Lean semantic owner, exact length theorems, and four
-Lean-emitted vectors matched byte-for-byte by the shared safe Rust codec. A
-generated TypeScript codec and a refinement theorem for the Rust parser remain
-open. Realm selection, release authorization, account-creation funding, and the
-remaining Direct lifecycle routes also remain successor gates.
+Lean-emitted vectors matched byte-for-byte by the shared safe Rust and frontend
+TypeScript codecs. Refinement theorems for both parsers remain open. Realm
+selection, release authorization, account-creation funding, and the remaining
+Direct lifecycle routes also remain successor gates.

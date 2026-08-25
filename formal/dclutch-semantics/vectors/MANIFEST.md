@@ -47,6 +47,7 @@ signature evidence and the refinement from abstract identity equality to exact
 `direct-controller-v1.txt` contains the seller intent, buyer intent, complete
 controller instruction, and experimental execution profile emitted by
 `lake exe emit-direct-controller-vectors`. The safe, `no_std`, `no_alloc`
-`dclutch-direct-codec` encoders must equal all four vectors byte-for-byte, then
-strictly decode them back to the same fixed data structures. The controller and
-real-SVM harness consume that crate instead of maintaining local layouts.
+`dclutch-direct-codec` and frontend TypeScript encoders must equal all four
+vectors byte-for-byte, then strictly decode them back to the same fixed data
+structures. The controller and real-SVM harness consume the Rust crate instead
+of maintaining local layouts.
