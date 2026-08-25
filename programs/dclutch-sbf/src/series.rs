@@ -1167,6 +1167,7 @@ fn authenticate_close(
     Ok((plan, rent_credit))
 }
 
+#[inline(never)]
 fn authenticate_recipe<'info>(
     program_id: &Pubkey,
     account: &AccountInfo<'info>,
@@ -1188,6 +1189,7 @@ fn authenticate_recipe<'info>(
     )
 }
 
+#[inline(never)]
 fn authenticate_aggregate<'info>(
     program_id: &Pubkey,
     account: &AccountInfo<'info>,
@@ -1209,6 +1211,7 @@ fn authenticate_aggregate<'info>(
     )
 }
 
+#[inline(never)]
 fn authenticate_capacity_profile<'info>(
     program_id: &Pubkey,
     account: &AccountInfo<'info>,
@@ -1239,6 +1242,7 @@ fn authenticate_capacity_profile<'info>(
     Ok(profile)
 }
 
+#[inline(never)]
 fn authenticate_derived<'info>(
     program_id: &Pubkey,
     account: &AccountInfo<'info>,
@@ -1260,6 +1264,7 @@ fn authenticate_derived<'info>(
     )
 }
 
+#[inline(never)]
 fn authenticate_series_source_material<'info>(
     program_id: &Pubkey,
     account: &AccountInfo<'info>,
@@ -1281,6 +1286,7 @@ fn authenticate_series_source_material<'info>(
     )
 }
 
+#[inline(never)]
 fn authenticate_series_template<'info>(
     program_id: &Pubkey,
     account: &AccountInfo<'info>,
@@ -1303,6 +1309,7 @@ fn authenticate_series_template<'info>(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn authenticate_series_capability_manifest<'info>(
     program_id: &Pubkey,
     template: &AccountInfo<'info>,
@@ -1344,6 +1351,7 @@ fn authenticate_series_capability_manifest<'info>(
     )
 }
 
+#[inline(never)]
 fn authenticate_capitalization<'info>(
     program_id: &Pubkey,
     account: &AccountInfo<'info>,
