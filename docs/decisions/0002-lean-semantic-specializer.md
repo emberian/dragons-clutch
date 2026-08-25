@@ -73,11 +73,21 @@ lookup-table program creates, extends, activates, resolves the signed v0 fill,
 deactivates, cools down for 512 slots, and closes successfully in the real-SVM
 campaign.
 
+Commit `a4509f649884b96f4aec1d99203e4f5d193803a3` adds the general
+`DirectProgram.admitted_program_refines` theorem. For every high-level frame
+satisfying the named `Admissible` predicate, the exact 35-operation abstract
+transition program accepts and derives its semantic successor nonces, gross
+quote, and floor fee. Its 568 emitted bytes are unchanged. This is the forward
+semantic-to-bytecode theorem; it does not prove reverse acceptance
+completeness, physical register/account decoding, the safe Rust interpreter,
+an SBF ELF, or the Solana runtime.
+
 This evidence strongly favors continuing the experiment, but does not accept a
 successor. The controller now derives its child plans from authenticated signed
-intents and the Market/Realm/release graph, but the claim path theorem is not yet
-composed with the high-level Direct refinement theorem, extended to complete
-path coverage, or joined to artifact theorems for the controller and custody.
+intents and the Market/Realm/release graph, but the abstract transition-program
+theorem is not yet composed with the physical claim/custody plans, extended to
+reverse refusal coverage, or joined to interpreter and artifact theorems for
+the controller and custody.
 The exact semantic release is manifest-selected, but a checked-release manifest
 must still bind the built ELF and Loader state. The experiment therefore does
 not yet satisfy the full integrated or deployed-refinement gates.

@@ -161,6 +161,41 @@ This is local validator transport and execution evidence. Genesis-imported
 fixture accounts are not evidence for account-creation workflows, a checked
 deployment, devnet behavior, mainnet behavior, or a complete Direct lifecycle.
 
+## Admitted-frame refinement addendum
+
+Commit `a4509f649884b96f4aec1d99203e4f5d193803a3` proves the Lean
+theorem `DClutch.DirectProgram.admitted_program_refines`. For every `FillFrame`
+with a witness of `DClutch.Direct.Admissible frame`, executing the generated
+35-operation program in Lean's `DClutch.TransitionVM` succeeds and returns
+exactly:
+
+- the seller's next nonce plus one;
+- the buyer's next nonce plus one;
+- the frame's exact gross quote; and
+- the frame's named floor fee.
+
+`Admissible` supplies the phase, slot, side, Market/generation/outcome,
+lifecycle, replay, price, fee-rate, exact-integer quote, balance, and `u64`
+bounds used by the theorem. The output slots begin at zero; gross, fee, and
+successor nonces are derived by the program rather than trusted as caller
+registers. The proof factors the unchanged program into setup, admission,
+replay, pricing, and balance stages and composes their execution theorems.
+
+The source builds with Lean 4.30.0. Regeneration still produces exactly 568
+bytes with SHA-256
+`72cc0faa6a9768b766a3003c8ff6f38889f564f49005ce68b2187c98349bff5c`,
+and `lake exe emit-direct-program-rust` still reproduces the checked-in Rust
+array byte-for-byte. The independent safe Rust VM's four vector, boundary,
+hostile-program, hostile-frame, and rollback tests pass.
+
+This theorem is high-level admission-to-abstract-VM evidence. It is not a
+machine-checked refinement of physical account/register decoding, native
+signature verification, the Rust VM, the controller or child SBF ELFs, CPI, or
+Solana runtime behavior. It also does not prove the reverse implication that
+every accepted abstract register frame came from the full `Admissible`
+predicate, nor does it yet compose the output registers into the unique
+physical claim and custody plans.
+
 This addendum supersedes the execution-profile architecture and current
 controller measurements below. Earlier tables remain evidence for their named
 historical artifacts.
@@ -172,8 +207,8 @@ Lean 4.30.0 owns:
 - the Direct admission relation, exact quote equation, cumulative floor-fee
   boundary, replay progression, limits, lifecycle, and conservation theorems;
 - the 35-instruction, 568-byte `DCTV` admission/derivation program;
-- the exact 136-byte signed intent, 304-byte controller instruction, and
-  136-byte experimental execution-profile encodings and length theorems; and
+- the exact 136-byte signed intent and 304-byte controller-instruction
+  encodings and length theorems; and
 - the loader-v1 offsets, roles, state tags, and ordered effects for the
   five-account claim child.
 
@@ -183,10 +218,11 @@ The transition-program bytes have SHA-256
 and `lake exe emit-claim-sbf-profile` exactly reproduces the claim child's Rust
 profile constants.
 
-The immutable execution-profile identity is the sole selector for its fee
-policy. Both makers still sign the exact accepted fee rate. Removing the
-duplicated fee-policy identifier reduced the program from 37 instructions / 600
-bytes to 35 instructions / 568 bytes without weakening fee-rate admission.
+The canonical Market identity binds the manifest-selected Direct semantic
+release and finalized fee policy. Both makers also sign the exact accepted fee
+rate. Removing the duplicated fee-policy identifier reduced the program from
+37 instructions / 600 bytes to 35 instructions / 568 bytes without weakening
+fee-rate admission.
 
 ## Build and artifacts
 

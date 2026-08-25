@@ -23,13 +23,16 @@ the named loader-v1 serialization formula.
 Lean also checks that the multiprogram physical plan's four replay/claim effects
 and two indivisible custody transfers execute to projections that join to the
 same Direct post-state, and that the custody projection conserves collateral.
-The semantic intent binds the exact maker-accepted fee rate. The immutable
-execution-profile identity owns fee-policy selection rather than duplicating
-another identifier in every intent. Lean
-checks the transition program's 35-instruction shape, 568-byte encoding,
-admitted example outputs, and zero-fill refusal.
-Lean owns the compact intent, controller-instruction, and Market-profile data
-structures and proves their encodings are exactly 136, 304, and 136 bytes.
+The semantic intent binds the canonical Market and exact maker-accepted fee
+rate; the authenticated Market/manifest graph owns semantic-release and
+fee-policy selection. Lean checks the transition program's 35-instruction
+shape, 568-byte encoding, and zero-fill refusal. For every high-level
+`Admissible` frame,
+`DirectProgram.admitted_program_refines` proves that the abstract transition VM
+accepts and derives exactly the semantic successor nonces, gross quote, and
+named floor fee.
+Lean owns the compact intent and controller-instruction data structures and
+proves their encodings are exactly 136 and 304 bytes.
 
 `cumulativeFee_monotone` proves monotonicity of the concrete floor-fee function,
 and `cumulative_floor_fee_fragmentation_independent` combines it with the
@@ -40,8 +43,9 @@ cannot change a resting order's final cumulative fee in the semantic model.
 
 - machine-checked refinement theorems for the safe Rust and TypeScript codecs
   (both have exact cross-language vector, round-trip, and hostile-parser tests);
-- a general proof that the emitted Direct transition program accepts exactly
-  the semantic `Admissible` frames and derives their unique physical plans;
+- a reverse theorem that transition-program acceptance implies the semantic
+  `Admissible` predicate, plus composition from the derived output registers to
+  the unique physical claim and custody plans;
 - a machine-checked refinement from Lean's transition VM to the safe Rust
   `dclutch-transition-vm` interpreter (cross-language exact-vector, hostile-
   bytecode, hostile-frame, rollback, and integer-boundary tests exist);

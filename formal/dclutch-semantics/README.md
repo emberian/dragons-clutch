@@ -34,9 +34,12 @@ identity registers. The program checks the admission relations and derives the
 gross quote, floor fee, and successor nonces rather than accepting those outputs
 as caller assertions. `dclutch-transition-vm` is the safe, `no_std`, `no_alloc`,
 fixed-memory Rust interpreter for that bytecode. Lean currently checks the
-program's exact encoding, the admitted example, and a zero-fill refusal; the
-general compiler-correctness and Rust-interpreter refinement theorems remain
-open.
+program's exact encoding and proves `admitted_program_refines`: every
+high-level `Admissible` frame executes successfully and derives exactly its
+semantic successor nonces, gross quote, and named floor fee. Concrete admitted
+and zero-fill fixtures remain regression checks. Reverse acceptance/refusal
+completeness, physical-register decoding, and Rust-interpreter refinement
+remain open.
 
 Lean also owns the exact data structures and encodings for the 136-byte compact
 intent and 304-byte controller instruction. Their exact lengths are theorems. A
