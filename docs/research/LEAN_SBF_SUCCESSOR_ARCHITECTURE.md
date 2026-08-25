@@ -28,9 +28,9 @@ are absent. It does show that deployment, semantic, and repository units need
 not be the same object.
 
 The active successor is materially further along than those historical
-measurements. Its canonical-authority controller is 79,680 bytes; together with
+measurements. Its canonical-authority controller is 79,520 bytes; together with
 the 3,432-byte claim executor and 24,800-byte custody adapter, the three
-first-party programs require 0.758104080 SOL of equivalent Loader V3
+first-party programs require 0.756990480 SOL of equivalent Loader V3
 capitalization under the local default Rent profile. The larger controller now
 authenticates two native signatures and the Market, Realm, manifest, semantic
 release, finalized fee policy, mint, and custody graph. Its exact 990-byte v0
@@ -52,9 +52,12 @@ whose expansion alone owns array order. Lean also generates complete physical
 claim/custody wire templates plus bounded, pairwise-disjoint dynamic patch
 spans. The controller consequently owns neither register ordering,
 output-register numbers, nor child-plan wire geometry. This change deliberately
-preserves the 568-byte program, 79,680-byte controller footprint, and measured
-CU; its value is one semantic ABI owner and a smaller adapter boundary, not
-benchmark theater.
+preserved the 568-byte program, 79,680-byte controller footprint, and measured
+CU at that checkpoint; its value was one semantic ABI owner and a smaller
+adapter boundary, not benchmark theater. Applying the same generation to the
+signed intent/controller layout subsequently removes another parallel offset
+table, trims the controller to 79,520 bytes, and saves 30 CU on every
+controller-executed route without changing signed or transaction bytes.
 
 The template route is general rather than fixture-scoped: Lean proves every
 named dynamic-span replacement, composes the exact Rust patch order, and shows
@@ -233,9 +236,10 @@ No current Rust route is deleted until one complete vertical slice has:
     ProgramData identities, and theorem digests.
 
 The canonical Direct slice now passes gates 1, 4, 5, 8, and 9 for its named
-route. Gate 2 has advanced through generated register metadata, transition
-bytecode, and physical-plan templates, but Product, Frame, account, and client
-codecs remain incomplete. Gate 3 remains partial because differential
+route. Gate 2 has advanced through generated signed-ABI layout, register
+metadata, transition bytecode, and physical-plan templates, but Product,
+account, complete parser implementation, and client codecs remain incomplete.
+Gate 3 remains partial because differential
 property-space coverage is incomplete. Gates 6 and 7 remain partial because
 only a superseded claim executor's successful path reaches qedsvm, not the
 canonical controller/custody path family. Gate 10 remains open. The controller

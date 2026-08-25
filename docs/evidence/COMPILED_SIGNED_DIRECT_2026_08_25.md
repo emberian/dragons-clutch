@@ -270,6 +270,25 @@ CU for late rollback, with every named hostile refusal still passing. The same
 `solana-test-validator` 4.0.2 JSON-RPC process. The result removes semantic
 duplication; it does not claim a size or execution-cost reduction.
 
+Commit `cb96ae2700a928cab4d07cd963d19aaec88b577c` applies the same
+scheme to the signed external ABI. Typed Lean `IntentField` and
+`ControllerField` schemas own all dynamic offsets and widths; Lean proves their
+spans are bounded, pairwise disjoint, and have unique generated Rust names.
+The generator also emits both domain-separating magics, version, total widths,
+and every reserved span. The shared safe-Rust codec consumes those constants
+for hostile decoding and encoding rather than maintaining a second layout
+table.
+
+The 136-byte intent, 304-byte controller instruction, 568-byte transition
+program, and 990-byte v0 transaction remain unchanged. The rebuilt controller
+shrinks from 79,680 to 79,520 bytes with SHA-256
+`fc96b90929281f129d5e465f9323ea107f59d2b50e363f0b5a68779d5c6baf5f`.
+Equivalent Loader V3 capitalization falls by 0.001113600 SOL to 0.555804720
+SOL; the three first-party programs total 0.756990480 SOL. Every
+controller-executed route consumes 30 fewer CU: success is 59,037 CU and late
+rollback is 58,076 CU. All hostile cases, the full ProgramTest ALT lifecycle,
+and the separate local-validator JSON-RPC transaction pass on the new artifact.
+
 This addendum supersedes the execution-profile architecture and current
 controller measurements below. Earlier tables remain evidence for their named
 historical artifacts.
