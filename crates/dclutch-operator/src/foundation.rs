@@ -4,10 +4,12 @@
 //! key access, signing, submission, or account mutation. Every semantic content
 //! identity is recomputed from a hostile-decoded canonical record.
 
+pub(crate) use dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1;
 use dclutch_capability_contract::{
-    CapabilityFundingDerivationV1, CapabilityManifestV1, ContentId as CapabilityContentId,
-    FundingAssetClassV1, FundingQuoteV1, MARKET_OPENING_READINESS_BYTES,
-    MARKET_OPENING_READINESS_PDA_DOMAIN, MarketOpeningReadinessV1, RequiredFoundingEntryV1,
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingDerivationV1, CapabilityManifestV1,
+    ContentId as CapabilityContentId, FundingAssetClassV1, FundingQuoteV1,
+    MARKET_OPENING_READINESS_BYTES, MARKET_OPENING_READINESS_PDA_DOMAIN, MarketOpeningReadinessV1,
+    RequiredFoundingEntryV1,
 };
 use dclutch_collateral_contract::{
     COLLATERAL_CUSTODY_BYTES, COLLATERAL_CUSTODY_PDA_DOMAIN, COLLATERAL_VAULT_PDA_DOMAIN,
@@ -23,13 +25,22 @@ use dclutch_market_contract::market::{
     CategoricalMarketV1, CategoricalSettlementSummaryV1, decode_market_outcome_count,
 };
 use dclutch_product_contract::{
-    ContentId as ProductContentId, capacity::CapacityProfileV1, claim::CategoricalUnitV1,
-    product::InstanceV1, result_domain::FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
+    ContentId as ProductContentId,
+    capacity::{CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1, CapacityProfileV1},
+    claim::{CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1, CategoricalUnitV1},
+    product::{InstanceV1, PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1},
+    result_domain::FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
+};
+pub(crate) use dclutch_product_contract::{
+    capacity::CAPACITY_PROFILE_SCHEMA_RELEASE_PREIMAGE_V1 as PRODUCT_CAPACITY_SCHEMA_RELEASE_PREIMAGE_V1,
+    claim::CATEGORICAL_CLAIM_SCHEMA_RELEASE_PREIMAGE_V1,
+    product::PRODUCT_INSTANCE_SCHEMA_RELEASE_PREIMAGE_V1,
 };
 use dclutch_pyth_contract::funding::FUNDING_BYTES;
+pub(crate) use dclutch_realm_contract::REALM_SCHEMA_RELEASE_PREIMAGE_V1;
 use dclutch_realm_contract::{
-    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_PDA_DOMAIN, RealmV1,
-    RealmV1Input,
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_PDA_DOMAIN,
+    REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
 use dclutch_record_contract::{
     ContentDigest, RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1, SchemaReleaseId,
@@ -52,16 +63,6 @@ mod publication;
 
 pub use creation::*;
 pub use publication::*;
-
-pub(crate) const REALM_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] = b"dclutch/schema/realm-v1";
-pub(crate) const PRODUCT_INSTANCE_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
-    b"dclutch/schema/product-instance-v1";
-pub(crate) const CATEGORICAL_CLAIM_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
-    b"dclutch/schema/categorical-unit-claim-v1";
-pub(crate) const PRODUCT_CAPACITY_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
-    b"dclutch/schema/product-capacity-profile-v1";
-pub(crate) const CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
-    b"dclutch/schema/capability-manifest-profile-1-v1";
 
 /// Initial Market generation created by this foundation workflow.
 ///
@@ -533,22 +534,22 @@ pub(crate) fn build_found_market_and_fund_with_sponsor_credit_v1(
         (
             &state.realm,
             &state.realm_finalization,
-            hash(REALM_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            REALM_SCHEMA_RELEASE_ID_V1,
         ),
         (
             &state.product_instance,
             &state.product_instance_finalization,
-            hash(PRODUCT_INSTANCE_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
         ),
         (
             &state.claim_basis,
             &state.claim_basis_finalization,
-            hash(CATEGORICAL_CLAIM_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1,
         ),
         (
             &state.capacity_profile,
             &state.capacity_profile_finalization,
-            hash(PRODUCT_CAPACITY_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1,
         ),
         (
             &state.resolution_material,
@@ -558,7 +559,7 @@ pub(crate) fn build_found_market_and_fund_with_sponsor_credit_v1(
         (
             &state.capability_manifest,
             &state.capability_manifest_finalization,
-            hash(CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         ),
     ] {
         if proof.schema_release_id != schema_release_id {
@@ -827,9 +828,8 @@ pub fn build_open_collateral_vault_v1(
         state.rent_sysvar.key,
     ])?;
     if state.capability_manifest_finalization.schema_release_id
-        != hash(CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes()
-        || state.realm_finalization.schema_release_id
-            != hash(REALM_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes()
+        != CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1
+        || state.realm_finalization.schema_release_id != REALM_SCHEMA_RELEASE_ID_V1
     {
         return Err(FoundationError::AddressMismatch);
     }

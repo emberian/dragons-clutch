@@ -60,6 +60,9 @@ pub const MANIFEST_SCHEMA_VERSION: u16 = 1;
 /// The SVM adapter and offchain operators share this semantic owner when they
 /// derive finalized raw-record addresses. It is not a deployed-program or ELF
 /// identity.
+pub const CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/schema/capability-manifest-profile-1-v1";
+/// SHA-256 identity of [`CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1`].
 pub const CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
     0x6b, 0xce, 0xf7, 0xb2, 0x83, 0x67, 0xcb, 0x8d, 0x08, 0x97, 0x10, 0xba, 0x58, 0xe6, 0x84, 0x31,
     0x2f, 0x43, 0x4c, 0x4b, 0xc4, 0x20, 0xee, 0xfd, 0x0f, 0x7a, 0x15, 0x0a, 0x90, 0x82, 0x88, 0xdf,

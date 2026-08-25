@@ -25,6 +25,14 @@ pub const FINITE_RESULT_DOMAIN_BYTES: usize = 352;
 pub const FINITE_RESULT_DOMAIN_MAGIC: [u8; 8] = *b"DCLTRDV1";
 /// Implemented result-domain schema version.
 pub const FINITE_RESULT_DOMAIN_SCHEMA_VERSION: u16 = 1;
+/// Canonical finalized-record schema label for [`FiniteResultDomainV1`].
+pub const FINITE_RESULT_DOMAIN_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/schema/product-finite-result-domain-v1";
+/// SHA-256 identity of [`FINITE_RESULT_DOMAIN_SCHEMA_RELEASE_PREIMAGE_V1`].
+pub const FINITE_RESULT_DOMAIN_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
+    0x37, 0x3d, 0x8d, 0xf3, 0x60, 0x73, 0xe8, 0x45, 0x54, 0xed, 0xa9, 0x89, 0x11, 0xb8, 0x3a, 0x9c,
+    0x13, 0xcb, 0x07, 0x74, 0x54, 0x8f, 0x68, 0x0c, 0xba, 0x66, 0x29, 0x13, 0xdd, 0x66, 0x0e, 0x14,
+];
 /// Canonical content-identity byte domain for a finite result-domain preimage.
 ///
 /// Hash derivation is an adapter concern; this Product-owned value names the

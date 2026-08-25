@@ -9,6 +9,14 @@ pub const CATEGORICAL_UNIT_BYTES: usize = 56;
 pub const CATEGORICAL_UNIT_MAGIC: [u8; 8] = *b"DCLTCBU1";
 /// Implemented native claim-basis schema version.
 pub const CLAIM_BASIS_SCHEMA_VERSION: u16 = 1;
+/// Canonical finalized-record schema label for [`CategoricalUnitV1`].
+pub const CATEGORICAL_CLAIM_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/schema/categorical-unit-claim-v1";
+/// SHA-256 identity of [`CATEGORICAL_CLAIM_SCHEMA_RELEASE_PREIMAGE_V1`].
+pub const CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
+    0xd3, 0x86, 0x0a, 0x71, 0x29, 0x03, 0x33, 0xab, 0x8d, 0x15, 0x43, 0x11, 0x75, 0x29, 0x30, 0x4f,
+    0x1d, 0xcd, 0x2a, 0xe1, 0x42, 0xff, 0xdb, 0xd6, 0x0c, 0xc7, 0x15, 0xb8, 0x62, 0x58, 0xcc, 0x6d,
+];
 
 const CAPACITY_PROFILE_ID_OFFSET: usize = 16;
 const OUTCOME_COUNT_OFFSET: usize = 48;

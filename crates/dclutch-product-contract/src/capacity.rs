@@ -10,6 +10,14 @@ pub const CAPACITY_PROFILE_BYTES: usize = 96;
 pub const CAPACITY_PROFILE_MAGIC: [u8; 8] = *b"DCLTPCP1";
 /// Implemented capacity-profile schema version.
 pub const CAPACITY_PROFILE_SCHEMA_VERSION: u16 = 1;
+/// Canonical finalized-record schema label for [`CapacityProfileV1`].
+pub const CAPACITY_PROFILE_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/schema/product-capacity-profile-v1";
+/// SHA-256 identity of [`CAPACITY_PROFILE_SCHEMA_RELEASE_PREIMAGE_V1`].
+pub const CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
+    0xed, 0x25, 0x2a, 0x2a, 0xc5, 0x55, 0xf0, 0xe3, 0x4f, 0xfc, 0x23, 0xac, 0x91, 0xd8, 0x6c, 0x61,
+    0xbe, 0x6d, 0xd9, 0x81, 0x24, 0x47, 0x57, 0x49, 0x94, 0x69, 0xbb, 0x99, 0xba, 0x55, 0x36, 0x50,
+];
 
 /// Mathematical lower bound for a liability-bearing state partition.
 ///

@@ -29,9 +29,12 @@ pub const EXECUTION_RELEASE_SET_MAGIC_V1: [u8; 8] = *b"DCLTRLS1";
 pub const EXECUTION_RELEASE_SET_SCHEMA_VERSION_V1: u16 = 1;
 /// Implemented fixed-layout artifact profile.
 pub const EXECUTION_RELEASE_SET_ARTIFACT_PROFILE_V1: u16 = 1;
+/// Canonical finalized-record schema label for [`ExecutionReleaseSetV1`].
+pub const EXECUTION_RELEASE_SET_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/schema/execution-release-set-v1";
 /// Schema and validator release identity for profile 1.
 ///
-/// This is SHA-256 of `dclutch/schema/execution-release-set-v1`.
+/// This is SHA-256 of [`EXECUTION_RELEASE_SET_SCHEMA_RELEASE_PREIMAGE_V1`].
 pub const EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1: [u8; IDENTITY_BYTES] = [
     0x8b, 0xa3, 0xbc, 0x19, 0x7f, 0xea, 0xa1, 0x87, 0xa0, 0xa3, 0x92, 0x7b, 0x16, 0xb2, 0x5d, 0x83,
     0x79, 0x2c, 0x5f, 0x33, 0x5a, 0xf2, 0x43, 0x39, 0xa5, 0x4c, 0x38, 0xcc, 0x07, 0x23, 0x03, 0x58,

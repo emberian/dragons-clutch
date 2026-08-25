@@ -42,9 +42,12 @@ pub const VENUE_FEE_POLICY_MAGIC_V3: [u8; 8] = *b"DCLTFEE3";
 pub const VENUE_FEE_POLICY_SCHEMA_VERSION_V3: u16 = 3;
 /// Exact venue-fee-policy width.
 pub const VENUE_FEE_POLICY_BYTES_V3: usize = 48;
+/// Canonical finalized-record schema label for [`VenueFeePolicyV3`].
+pub const VENUE_FEE_POLICY_SCHEMA_RELEASE_PREIMAGE_V3: &[u8] =
+    b"dclutch/schema/direct-venue-fee-policy-v3";
 /// Immutable-record schema/release identity for one Direct V3 venue policy.
 ///
-/// This is SHA-256 of `dclutch/schema/direct-venue-fee-policy-v3`. The SBF
+/// This is SHA-256 of [`VENUE_FEE_POLICY_SCHEMA_RELEASE_PREIMAGE_V3`]. The SBF
 /// adapter derives the raw-record PDA from this identity and the SHA-256 digest
 /// of the exact 48 policy bytes. The policy deliberately excludes the Market
 /// address: the authenticated Market manifest selects this digest, while the

@@ -31,6 +31,13 @@ pub const MAX_OUTCOMES: usize = 16;
 pub const REALM_MAGIC: [u8; 8] = *b"DCLTRLM1";
 /// Implemented Realm schema version.
 pub const REALM_SCHEMA_VERSION: u16 = 1;
+/// Canonical finalized-record schema label for [`RealmV1`].
+pub const REALM_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] = b"dclutch/schema/realm-v1";
+/// SHA-256 identity of [`REALM_SCHEMA_RELEASE_PREIMAGE_V1`].
+pub const REALM_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
+    0x94, 0xfe, 0x1f, 0xd6, 0xd7, 0x25, 0x9f, 0x47, 0x50, 0x3d, 0x6a, 0xc5, 0x7e, 0xc7, 0xda, 0x78,
+    0xdc, 0x38, 0x06, 0xa5, 0xed, 0x49, 0x8f, 0xea, 0xe4, 0x3e, 0xd3, 0x78, 0x5b, 0x5d, 0x0c, 0x69,
+];
 /// Domain seed preceding a Realm content identity in its SVM PDA derivation.
 pub const REALM_PDA_DOMAIN: &[u8] = b"dclutch/realm/v1";
 
