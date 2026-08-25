@@ -59,6 +59,7 @@ structure Intent where
   maxFill : Nat
   limitPrice : Nat
   feePolicyId : Nat
+  feeBasisPoints : Nat
   deriving DecidableEq, Repr
 
 /-- The exact mutable state projection touched by an ordinary fill. -/
@@ -143,6 +144,8 @@ structure Admissible (frame : FillFrame) : Prop where
   priceInScale : frame.executionPrice ≤ frame.product.priceScale
   sellerFeePolicy : frame.sellerIntent.feePolicyId = frame.feePolicyId
   buyerFeePolicy : frame.buyerIntent.feePolicyId = frame.feePolicyId
+  sellerFeeRate : frame.sellerIntent.feeBasisPoints = frame.feePolicy.basisPoints
+  buyerFeeRate : frame.buyerIntent.feeBasisPoints = frame.feePolicy.basisPoints
   exactQuote : frame.fill * frame.executionPrice = frame.gross * frame.product.priceScale
   exactFloorFee : frame.fee = frame.gross * frame.feePolicy.basisPoints / feeDenominator
   fillU64 : frame.fill < u64Limit
@@ -183,6 +186,8 @@ def accepts (frame : FillFrame) : Bool :=
   decide (frame.executionPrice ≤ frame.product.priceScale) &&
   decide (frame.sellerIntent.feePolicyId = frame.feePolicyId) &&
   decide (frame.buyerIntent.feePolicyId = frame.feePolicyId) &&
+  decide (frame.sellerIntent.feeBasisPoints = frame.feePolicy.basisPoints) &&
+  decide (frame.buyerIntent.feeBasisPoints = frame.feePolicy.basisPoints) &&
   decide (frame.fill * frame.executionPrice = frame.gross * frame.product.priceScale) &&
   decide (frame.fee = frame.gross * frame.feePolicy.basisPoints / feeDenominator) &&
   decide (frame.fill < u64Limit) &&
@@ -210,6 +215,8 @@ theorem accepts_iff (frame : FillFrame) : accepts frame = true ↔ Admissible fr
     rcases evidence with ⟨evidence, fillU64⟩
     rcases evidence with ⟨evidence, exactFloorFee⟩
     rcases evidence with ⟨evidence, exactQuote⟩
+    rcases evidence with ⟨evidence, buyerFeeRate⟩
+    rcases evidence with ⟨evidence, sellerFeeRate⟩
     rcases evidence with ⟨evidence, buyerFeePolicy⟩
     rcases evidence with ⟨evidence, sellerFeePolicy⟩
     rcases evidence with ⟨evidence, priceInScale⟩
@@ -240,7 +247,8 @@ theorem accepts_iff (frame : FillFrame) : accepts frame = true ↔ Admissible fr
       sameGeneration, sameOutcome, distinctMakers, outcomeInDomain, sellerLifecycle,
       buyerLifecycle, sellerNonce, buyerNonce, sellerNonceCanAdvance,
       buyerNonceCanAdvance, sellerPrice, buyerPrice, priceInScale, sellerFeePolicy,
-      buyerFeePolicy, exactQuote, exactFloorFee, fillU64, priceU64, grossU64, feeU64,
+      buyerFeePolicy, sellerFeeRate, buyerFeeRate, exactQuote, exactFloorFee,
+      fillU64, priceU64, grossU64, feeU64,
       sellerHasClaims, buyerHasCollateral, buyerClaimCreditFits,
       sellerCollateralCreditFits, venueCreditFits
     }
@@ -256,6 +264,8 @@ theorem accepts_iff (frame : FillFrame) : accepts frame = true ↔ Admissible fr
     apply And.intro ?_ admitted.fillU64
     apply And.intro ?_ admitted.exactFloorFee
     apply And.intro ?_ admitted.exactQuote
+    apply And.intro ?_ admitted.buyerFeeRate
+    apply And.intro ?_ admitted.sellerFeeRate
     apply And.intro ?_ admitted.buyerFeePolicy
     apply And.intro ?_ admitted.sellerFeePolicy
     apply And.intro ?_ admitted.priceInScale

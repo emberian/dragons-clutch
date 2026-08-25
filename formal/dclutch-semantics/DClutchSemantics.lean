@@ -6,6 +6,8 @@ import DClutchSemantics.Examples
 import DClutchSemantics.SbfProfile
 import DClutchSemantics.Physical
 import DClutchSemantics.ClaimSbfProfile
+import DClutchSemantics.TransitionVM
+import DClutchSemantics.DirectProgram
 
 /-!
 Fresh Lean-owned semantics for dClutch's compact protocol specializer.

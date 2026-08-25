@@ -37,6 +37,7 @@ def sellerIntent : Intent := {
   maxFill := 2000
   limitPrice := 400000
   feePolicyId := 77
+  feeBasisPoints := 25
 }
 
 def buyerIntent : Intent := {
@@ -52,6 +53,7 @@ def buyerIntent : Intent := {
   maxFill := 2000
   limitPrice := 600000
   feePolicyId := 77
+  feeBasisPoints := 25
 }
 
 def frame : FillFrame := {

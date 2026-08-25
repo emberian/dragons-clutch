@@ -30,3 +30,14 @@ an eight-byte header, and two fixed sixteen-byte records. One custody record is
 source party, destination party, six zero reserved bytes, then a little-endian
 `u64` amount. The two plans recombine to the exact high-level Direct post-state;
 the corresponding Lean theorems are in `DClutchSemantics.Physical`.
+
+## Compiled transition program
+
+`direct-inline-ordinary-program-v1.hex` is the 600-byte output of
+`lake exe emit-direct-program`. `DClutchSemantics.DirectProgram.program`
+contains 37 fixed sixteen-byte instructions over 41 scalar registers and seven
+abstract identity registers. It does not accept gross or fee as caller facts:
+it derives exact quote divisibility, the quotient, and the named floor fee into
+output registers after checking the Direct admission relations. Native
+signature evidence and the refinement from abstract identity equality to exact
+32-byte public keys remain adapter obligations.

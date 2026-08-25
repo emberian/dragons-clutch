@@ -23,6 +23,9 @@ the named loader-v1 serialization formula.
 Lean also checks that the multiprogram physical plan's four replay/claim effects
 and two indivisible custody transfers execute to projections that join to the
 same Direct post-state, and that the custody projection conserves collateral.
+The semantic intent now binds both fee-policy identity and the exact maker-
+accepted fee rate. Lean checks the transition program's 37-instruction shape,
+600-byte encoding, admitted example outputs, and zero-fill refusal.
 
 `cumulativeFee_monotone` proves monotonicity of the concrete floor-fee function,
 and `cumulative_floor_fee_fragmentation_independent` combines it with the
@@ -32,11 +35,16 @@ cannot change a resting order's final cumulative fee in the semantic model.
 ## Not yet connected
 
 - generated safe-Rust and TypeScript clients;
+- a general proof that the emitted Direct transition program accepts exactly
+  the semantic `Admissible` frames and derives their unique physical plans;
+- a machine-checked refinement from Lean's transition VM to the safe Rust
+  `dclutch-transition-vm` interpreter (cross-language exact-vector, hostile-
+  bytecode, hostile-frame, rollback, and integer-boundary tests exist);
 - Ed25519 instruction authenticity;
 - a proof of Solana account ownership, signer/writable flags, PDA derivation,
   CPI, sysvars, Token/Token-2022 semantics, rent, and transaction rollback
-  (the exact claim ELF and controller-PDA relay now provide adversarial
-  real-SVM evidence for the first account/PDA/CPI/rollback slice only);
+  (the exact claim, controller, custody, and official SPL Token ELFs now provide
+  adversarial real-SVM evidence for the first account/PDA/CPI/rollback slice);
 - a machine-checked refinement from the Lean effect interpreter to the Rust
   microkernel (`dclutch-effect-kernel` currently supplies cross-language vector,
   round-trip, execution, hostile-parser, late-rollback, and one concrete
@@ -49,9 +57,9 @@ cannot change a resting order's final cumulative fee in the semantic model.
 - whole-CFG artifact coverage (qedsvm v0.11.0 emits and Lean checks one
   successful-path Hoare triple for the generated four-effect claim
   target; the general Rust/SDK executor remains outside its alias model);
-- compute-unit, stack, ELF-size, and rent measurements for a complete
-  controller-plus-custody successor (claim plus experimental controller are now
-  measured together; custody and release-authentication costs remain absent);
+- compute-unit, stack, ELF-size, and rent measurements for a complete successor
+  (claim, experimental controller, and custody are measured together; signed
+  admission, Realm selection, and release-authentication costs remain absent);
 - all Direct routes other than inline ordinary execution; and
 - all other protocol families.
 

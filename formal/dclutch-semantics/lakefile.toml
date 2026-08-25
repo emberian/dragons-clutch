@@ -20,3 +20,7 @@ root = "EmitClaimVector"
 [[lean_exe]]
 name = "emit-custody-vector"
 root = "EmitCustodyVector"
+
+[[lean_exe]]
+name = "emit-direct-program"
+root = "EmitDirectProgram"
