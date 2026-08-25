@@ -274,6 +274,7 @@ def sideTag : Side → Nat
 def lifecycleTag : Lifecycle → Nat
   | .fillOrKill => 0
   | .immediateOrCancel => 1
+  | .goodTillCancelled => 2
 
 private def registerState
     (frame : FillFrame) (one denominator gross fee sellerNonce buyerNonce : Nat) : State := {

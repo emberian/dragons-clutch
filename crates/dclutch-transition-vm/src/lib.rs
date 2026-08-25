@@ -40,7 +40,7 @@ pub enum Error {
     InvalidRegister,
     /// A checked admission relation was false.
     CheckFailed,
-    /// A lifecycle tag was not FOK or IOC.
+    /// A lifecycle tag was not FOK, IOC, or GTC.
     UnknownLifecycle,
     /// Checked scalar arithmetic overflowed.
     ArithmeticOverflow,
@@ -207,6 +207,7 @@ fn execute_instruction(
             match registers.scalar(a)? {
                 0 => require(fill == maximum),
                 1 => require(fill <= maximum),
+                2 => require(fill <= maximum),
                 _ => Err(Error::UnknownLifecycle),
             }
         }
@@ -235,6 +236,37 @@ fn execute_instruction(
             canonical([c, d, 0], immediate, false)?;
             let sum = u128::from(registers.scalar(a)?) + u128::from(registers.scalar(b)?);
             require(sum <= u128::from(u64::MAX))
+        }
+        13 => {
+            canonical([d, 0, 0], immediate, false)?;
+            let difference = registers
+                .scalar(a)?
+                .checked_sub(registers.scalar(b)?)
+                .ok_or(Error::CheckFailed)?;
+            registers.set_scalar(c, difference)
+        }
+        14 => {
+            canonical([0, 0, 0], immediate, false)?;
+            let left = registers.scalar(a)?;
+            let right = registers.scalar(b)?;
+            let selected = registers.scalar(c)?;
+            let _destination = registers.scalar(d)?;
+            if left == right {
+                registers.set_scalar(d, selected)
+            } else {
+                Ok(())
+            }
+        }
+        15 => {
+            canonical([d, 0, 0], immediate, false)?;
+            let source = registers.scalar(a)?;
+            let selected = registers.scalar(b)?;
+            let _destination = registers.scalar(c)?;
+            if source == 0 {
+                registers.set_scalar(c, selected)
+            } else {
+                Ok(())
+            }
         }
         _ => Err(Error::UnknownOpcode),
     }
@@ -326,6 +358,54 @@ mod tests {
             .collect()
     }
 
+    fn instruction(opcode: u8, a: u8, b: u8, c: u8, d: u8, immediate: u64) -> [u8; 16] {
+        let mut encoded = [0_u8; 16];
+        encoded[0] = opcode;
+        encoded[1] = a;
+        encoded[2] = b;
+        encoded[3] = c;
+        encoded[4] = d;
+        encoded[8..].copy_from_slice(&immediate.to_le_bytes());
+        encoded
+    }
+
+    fn encoded_program(instructions: &[[u8; 16]]) -> Vec<u8> {
+        let mut encoded = Vec::with_capacity(HEADER_BYTES + instructions.len() * INSTRUCTION_BYTES);
+        encoded.extend_from_slice(&MAGIC);
+        encoded.push(VERSION);
+        encoded.push(u8::try_from(instructions.len()).expect("test program count fits"));
+        encoded.extend_from_slice(&[0, 0]);
+        for operation in instructions {
+            encoded.extend_from_slice(operation);
+        }
+        encoded
+    }
+
+    fn lifecycle_program() -> Vec<u8> {
+        encoded_program(&[
+            instruction(0, 4, 0, 0, 0, 0),
+            instruction(0, 5, 0, 0, 0, 1),
+            instruction(0, 6, 0, 0, 0, 2),
+            instruction(0, 9, 0, 0, 0, 2),
+            instruction(6, 2, 0, 0, 0, 0),
+            instruction(7, 0, 1, 2, 0, 0),
+            instruction(8, 3, 8, 0, 0, 0),
+            instruction(13, 1, 2, 7, 0, 0),
+            instruction(14, 0, 6, 4, 9, 0),
+            instruction(15, 7, 5, 9, 0, 0),
+        ])
+    }
+
+    fn lifecycle_registers(lifecycle: u64, remaining: u64, fill: u64) -> Registers {
+        let mut registers = Registers::zeroed();
+        for (index, value) in [lifecycle, remaining, fill, 4].into_iter().enumerate() {
+            registers
+                .set_scalar(index, value)
+                .expect("lifecycle scalar register");
+        }
+        registers
+    }
+
     fn example() -> Registers {
         let mut registers = Registers::zeroed();
         let values = [
@@ -405,6 +485,93 @@ mod tests {
         execute(&bytes, &mut registers).expect("u64 maximum is in range");
         assert_eq!(registers.scalar(39), Ok(u64::MAX));
         assert_eq!(registers.scalar(40), Ok(u64::MAX));
+    }
+
+    #[test]
+    fn registered_gtc_residual_is_reusable_and_final_fill_closes() {
+        let bytes = lifecycle_program();
+        assert_eq!(bytes.len(), 168);
+
+        let mut partial = lifecycle_registers(2, 100, 35);
+        execute(&bytes, &mut partial).expect("GTC partial fill");
+        assert_eq!(partial.scalar(7), Ok(65));
+        assert_eq!(partial.scalar(8), Ok(5));
+        assert_eq!(partial.scalar(9), Ok(0));
+
+        let mut final_fill = lifecycle_registers(2, 100, 100);
+        execute(&bytes, &mut final_fill).expect("GTC final fill");
+        assert_eq!(final_fill.scalar(7), Ok(0));
+        assert_eq!(final_fill.scalar(8), Ok(5));
+        assert_eq!(final_fill.scalar(9), Ok(1));
+    }
+
+    #[test]
+    fn one_shot_lifecycles_close_or_refuse_residuals() {
+        let bytes = lifecycle_program();
+
+        let mut ioc = lifecycle_registers(1, 100, 35);
+        execute(&bytes, &mut ioc).expect("IOC partial fill");
+        assert_eq!(ioc.scalar(7), Ok(65));
+        assert_eq!(ioc.scalar(8), Ok(5));
+        assert_eq!(ioc.scalar(9), Ok(2));
+
+        for mut refused in [
+            lifecycle_registers(0, 100, 35),
+            lifecycle_registers(2, 100, 101),
+            lifecycle_registers(3, 100, 35),
+        ] {
+            let before = refused;
+            assert!(execute(&bytes, &mut refused).is_err());
+            assert_eq!(refused, before);
+        }
+    }
+
+    #[test]
+    fn registered_sequence_overflow_refuses_transactionally() {
+        let bytes = lifecycle_program();
+        let mut registers = lifecycle_registers(2, 100, 35);
+        registers
+            .set_scalar(3, u64::MAX)
+            .expect("sequence register");
+        let before = registers;
+        assert_eq!(
+            execute(&bytes, &mut registers),
+            Err(Error::ArithmeticOverflow)
+        );
+        assert_eq!(registers, before);
+    }
+
+    #[test]
+    fn new_opcodes_refuse_noncanonical_or_out_of_range_operands() {
+        let canonical = lifecycle_program();
+        let mut cases = Vec::new();
+
+        let mut subtraction_unused = canonical.clone();
+        *subtraction_unused
+            .get_mut(HEADER_BYTES + 7 * INSTRUCTION_BYTES + 4)
+            .expect("subtraction unused argument") = 1;
+        cases.push(subtraction_unused);
+
+        let mut selection_immediate = canonical.clone();
+        *selection_immediate
+            .get_mut(HEADER_BYTES + 8 * INSTRUCTION_BYTES + 8)
+            .expect("selection immediate") = 1;
+        cases.push(selection_immediate);
+
+        let mut zero_selection_unused = canonical.clone();
+        *zero_selection_unused
+            .get_mut(HEADER_BYTES + 9 * INSTRUCTION_BYTES + 4)
+            .expect("zero selection unused argument") = 1;
+        cases.push(zero_selection_unused);
+
+        cases.push(encoded_program(&[instruction(14, 0, 1, 2, 64, 0)]));
+
+        for bytes in cases {
+            let mut registers = lifecycle_registers(2, 100, 35);
+            let before = registers;
+            assert!(execute(&bytes, &mut registers).is_err());
+            assert_eq!(registers, before);
+        }
     }
 
     #[test]

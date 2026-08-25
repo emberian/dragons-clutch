@@ -33,6 +33,9 @@ inductive Op where
   | mulDivFloor (left right denominator destination : Nat)
   | addLe (left right limit : Nat)
   | addFitsU64 (left right : Nat)
+  | subInto (minuend subtrahend destination : Nat)
+  | selectEq (left right ifEqual destination : Nat)
+  | selectZero (source ifZero destination : Nat)
   deriving DecidableEq, Repr
 
 def scalar (state : State) (index : Nat) : Option Nat := state.scalars[index]?
@@ -64,6 +67,7 @@ def step (operation : Op) (state : State) : Option State := do
       match lifecycle with
       | 0 => require (fill = maximum) state
       | 1 => require (fill ≤ maximum) state
+      | 2 => require (fill ≤ maximum) state
       | _ => none
   | .incrementInto source destination =>
       let value ← scalar state source
@@ -87,6 +91,21 @@ def step (operation : Op) (state : State) : Option State := do
       require ((← scalar state left) + (← scalar state right) ≤ (← scalar state limit)) state
   | .addFitsU64 left right =>
       require ((← scalar state left) + (← scalar state right) < DClutch.Direct.u64Limit) state
+  | .subInto minuend subtrahend destination =>
+      let left ← scalar state minuend
+      let right ← scalar state subtrahend
+      if right ≤ left then setScalar state destination (left - right) else none
+  | .selectEq left right ifEqual destination =>
+      let leftValue ← scalar state left
+      let rightValue ← scalar state right
+      let selected ← scalar state ifEqual
+      let _ ← scalar state destination
+      if leftValue = rightValue then setScalar state destination selected else some state
+  | .selectZero source ifZero destination =>
+      let sourceValue ← scalar state source
+      let selected ← scalar state ifZero
+      let _ ← scalar state destination
+      if sourceValue = 0 then setScalar state destination selected else some state
 
 def run : List Op → State → Option State
   | [], state => some state
@@ -126,6 +145,9 @@ def opcode : Op → UInt8
   | .mulDivFloor .. => 10
   | .addLe .. => 11
   | .addFitsU64 .. => 12
+  | .subInto .. => 13
+  | .selectEq .. => 14
+  | .selectZero .. => 15
 
 def arguments : Op → List Nat
   | .loadConst destination _ => [destination]
@@ -143,6 +165,9 @@ def arguments : Op → List Nat
       [left, right, denominator, destination]
   | .addLe left right limit => [left, right, limit]
   | .addFitsU64 left right => [left, right]
+  | .subInto minuend subtrahend destination => [minuend, subtrahend, destination]
+  | .selectEq left right ifEqual destination => [left, right, ifEqual, destination]
+  | .selectZero source ifZero destination => [source, ifZero, destination]
 
 def immediate : Op → Nat
   | .loadConst _ value => value
