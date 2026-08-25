@@ -46,6 +46,8 @@ pub mod compiled_direct;
 pub mod foundation;
 /// Chain-derived registered Direct execution and terminal workflows.
 pub mod registered_direct;
+/// Chain-derived unsigned Registry activation and reauthentication workflows.
+pub mod registry;
 /// Chain-derived address-table lifecycle and versioned-message construction.
 pub mod versioned;
 /// Chain-derived unsigned Series and Dealer workflows.

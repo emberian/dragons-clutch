@@ -466,11 +466,15 @@ dependencies = [
  "dclutch-pyth-svm",
  "dclutch-realm-contract",
  "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
  "dclutch-rent-contract",
  "dclutch-series-contract",
  "dclutch-source-contract",
  "dclutch-token-svm",
  "solana-address-lookup-table-interface",
+ "solana-compute-budget-interface",
  "solana-hash 4.6.0",
  "solana-message",
  "solana-program",
@@ -1383,6 +1387,16 @@ dependencies = [
  "solana-sdk-ids",
  "solana-sdk-macro",
  "solana-sysvar-id",
+]
+
+[[package]]
+name = "solana-compute-budget-interface"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8292c436b269ad23cecc8b24f7da3ab07ca111661e25e00ce0e1d22771951ab9"
+dependencies = [
+ "solana-instruction",
+ "solana-sdk-ids",
 ]
 
 [[package]]
