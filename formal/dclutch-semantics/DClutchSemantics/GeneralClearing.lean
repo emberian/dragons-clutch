@@ -321,30 +321,65 @@ def Candidate.objective (candidate : Candidate) : Objective := {
   candidateId := candidate.candidateId
 }
 
-/-- Higher filled volume wins; then lower surplus; then lower content identity.
-This is deterministic best-submitted selection, not an optimality claim. -/
-def Objective.better (left right : Objective) : Bool :=
-  left.filledLots > right.filledLots ||
-    (left.filledLots = right.filledLots &&
-      (left.quoteSurplus < right.quoteSurplus ||
-        (left.quoteSurplus = right.quoteSurplus && left.candidateId < right.candidateId)))
+/-- Data-interpreted lexicographic criterion. New reviewed criteria extend this
+interpreter without generating another family of width-specialized routes. -/
+inductive SelectionCriterion where
+  | maximizeFilledLots
+  | minimizeQuoteSurplus
+  | minimizeCandidateId
+  deriving DecidableEq, Repr
+
+/-- Immutable capability-selected objective policy. Candidate identity must be
+the final criterion, making comparison deterministic even when every economic
+criterion ties. -/
+structure SelectionPolicy where
+  policyId : Nat
+  criteria : List SelectionCriterion
+  deriving DecidableEq, Repr
+
+def SelectionPolicy.valid (policy : SelectionPolicy) : Bool :=
+  policy.policyId != 0 && !policy.criteria.isEmpty &&
+    policy.criteria.getLast? = some .minimizeCandidateId
+
+def betterBy
+    (criteria : List SelectionCriterion) (left right : Objective) : Bool :=
+  match criteria with
+  | [] => false
+  | criterion :: rest => match criterion with
+      | .maximizeFilledLots =>
+          if left.filledLots = right.filledLots then betterBy rest left right
+          else left.filledLots > right.filledLots
+      | .minimizeQuoteSurplus =>
+          if left.quoteSurplus = right.quoteSurplus then betterBy rest left right
+          else left.quoteSurplus < right.quoteSurplus
+      | .minimizeCandidateId =>
+          if left.candidateId = right.candidateId then betterBy rest left right
+          else left.candidateId < right.candidateId
+
+/-- Deterministic best-submitted comparison under immutable policy data. This
+does not assert global optimality or constrain which solver produced a valid
+candidate. -/
+def SelectionPolicy.better
+    (policy : SelectionPolicy) (left right : Candidate) : Bool :=
+  betterBy policy.criteria left.objective right.objective
 
 structure Selection where
+  policy : SelectionPolicy
   closed : Bool
   best : Option Candidate
   deriving DecidableEq, Repr
 
 def Selection.valid (selection : Selection) : Bool :=
-  match selection.best with
-  | none => true
-  | some candidate => candidate.valid
+  selection.policy.valid && match selection.best with
+    | none => true
+    | some candidate => candidate.valid
 
 def Selection.consider (selection : Selection) (candidate : Candidate) : Selection :=
   if selection.closed || !candidate.valid then selection
   else match selection.best with
     | none => { selection with best := some candidate }
     | some incumbent =>
-        if candidate.objective.better incumbent.objective
+        if selection.policy.better candidate incumbent
         then { selection with best := some candidate }
         else selection
 

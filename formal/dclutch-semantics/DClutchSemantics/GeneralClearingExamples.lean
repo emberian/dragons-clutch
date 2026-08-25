@@ -139,21 +139,37 @@ def malformedCandidate : Candidate := {
 
 example : malformedCandidate.valid = false := by native_decide
 
-example :
-    ({ closed := false, best := some mintCandidate } : Selection).consider malformedCandidate =
-      { closed := false, best := some mintCandidate } := by native_decide
+def defaultSelectionPolicy : SelectionPolicy := {
+  policyId := 501
+  criteria := [.maximizeFilledLots, .minimizeQuoteSurplus, .minimizeCandidateId]
+}
+
+example : defaultSelectionPolicy.valid = true := by native_decide
+
+def emptySelection : Selection := {
+  policy := defaultSelectionPolicy
+  closed := false
+  best := none
+}
+
+def selectedMintCandidate : Selection := {
+  policy := defaultSelectionPolicy
+  closed := false
+  best := some mintCandidate
+}
 
 example :
-    ({ closed := false, best := none } : Selection).run (.consider mintCandidate) =
-      { closed := false, best := some mintCandidate } := by native_decide
+    selectedMintCandidate.consider malformedCandidate = selectedMintCandidate := by native_decide
 
 example :
-    ({ closed := false, best := none } : Selection).run .freeze =
-      { closed := false, best := none } := by native_decide
+    emptySelection.run (.consider mintCandidate) = selectedMintCandidate := by native_decide
 
 example :
-    ({ closed := false, best := some mintCandidate } : Selection).run .freeze =
-      { closed := true, best := some mintCandidate } := by native_decide
+    emptySelection.run .freeze = emptySelection := by native_decide
+
+example :
+    selectedMintCandidate.run .freeze =
+      { selectedMintCandidate with closed := true } := by native_decide
 
 /-! Fragmentation does not create another rounding boundary. Each order is
 split across two executions, but the aggregate half-atom receipts round once:
