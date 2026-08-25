@@ -1911,23 +1911,6 @@ pub struct PythProviderAdapterObligationV1 {
 }
 
 impl PythProviderAdapterObligationV1 {
-    /// Select the closed Pyth extension from one embedded material source.
-    pub fn from_material(material: SourceMaterialV1, source_spec_id: ContentId) -> Result<Self> {
-        let (source, provider_release_id, provider_release) = material.source(source_spec_id)?;
-        let adapter_config = material.adapter_config(source_spec_id)?;
-        if provider_release.adapter_release_id().to_bytes() != PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1
-        {
-            return Err(Error::UnsupportedProviderExtension);
-        }
-        Ok(Self {
-            source_spec_id,
-            source,
-            provider_release_id,
-            provider_release,
-            adapter_config,
-        })
-    }
-
     /// Select the closed Pyth extension from a borrowed runtime material view.
     pub fn from_material_view(
         material: SourceMaterialViewV1<'_>,
@@ -2245,404 +2228,185 @@ impl RecoveryMaterialSlotV1 {
     }
 }
 
-/// The single canonical immutable Source authority preimage.
-///
-/// A Market's `resolution_policy_id` names the content digest of these exact
-/// bytes. All policy, canonical Product instance/domain, capacity, source,
-/// provider, window, statistic, and ordered-recovery semantics are embedded by
-/// value; no operation accepts those components as separately authenticated
-/// records.
+/// Borrowed ordered-recovery portion of one Source-material encoding request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SourceMaterialV1 {
-    policy: ResolutionPolicyV1,
-    capacity_profile_id: ContentId,
-    capacity_profile: SourceCapacityProfileV1,
-    primary_source_id: ContentId,
-    primary_source: SourceSpecV1,
-    primary_provider_release_id: ContentId,
-    primary_provider_release: ProviderReleaseV1,
-    primary_adapter_config: PythAdapterConfigV1,
-    window_id: ContentId,
-    window: WindowSpecV1,
-    statistic_id: ContentId,
-    statistic: StatisticSpecV1,
-    product_instance_id: ContentId,
-    result_domain: FiniteResultDomainV1,
-    recovery: Option<(ContentId, RecoveryPolicyV1)>,
-    recovery_slots: [Option<RecoveryMaterialSlotV1>; MAX_RECOVERY_ATTEMPTS],
+pub struct SourceRecoveryMaterialInputV1<'a> {
+    /// Content identity selected by the resolution policy.
+    pub recovery_policy_id: ContentId,
+    /// Exact ordered recovery policy to embed.
+    pub recovery_policy: &'a RecoveryPolicyV1,
+    /// Exact active slots, one per ordered attempt and with no inactive tail.
+    pub slots: &'a [RecoveryMaterialSlotV1],
 }
 
-impl SourceMaterialV1 {
-    /// Construct and cross-validate the one immutable Source material graph.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        policy: ResolutionPolicyV1,
-        capacity_profile_id: ContentId,
-        capacity_profile: SourceCapacityProfileV1,
-        primary_source_id: ContentId,
-        primary_source: SourceSpecV1,
-        primary_provider_release_id: ContentId,
-        primary_provider_release: ProviderReleaseV1,
-        primary_adapter_config: PythAdapterConfigV1,
-        window_id: ContentId,
-        window: WindowSpecV1,
-        statistic_id: ContentId,
-        statistic: StatisticSpecV1,
-        product_instance_id: ContentId,
-        product_instance: InstanceV1,
-        result_domain: FiniteResultDomainV1,
-        recovery: Option<(ContentId, RecoveryPolicyV1)>,
-        recovery_slots: [Option<RecoveryMaterialSlotV1>; MAX_RECOVERY_ATTEMPTS],
-    ) -> Result<Self> {
-        policy.validate_material(
-            product_instance_id,
-            product_instance,
-            primary_source_id,
-            primary_source,
-            window_id,
-            window,
-            statistic_id,
-            statistic,
-            result_domain,
-        )?;
-        statistic.validate_capacity(capacity_profile_id, capacity_profile)?;
-        if policy.capacity_profile_id != capacity_profile_id
-            || primary_source.provider_release_id() != primary_provider_release_id
-            || primary_provider_release.adapter_release_id().to_bytes()
-                != PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1
-            || result_domain.coordinate_domain_id().to_bytes()
-                != primary_source.domain_id().to_bytes()
-            || result_domain.result_unit_id().to_bytes() != statistic.result_unit_id().to_bytes()
-        {
-            return Err(Error::LinkageMismatch);
+/// Borrowed input for encoding the one canonical Source-material authority.
+///
+/// This is not persisted state. Every semantic component remains owned by its
+/// canonical subtype while the caller owns the 4,176-byte output buffer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceMaterialInputV1<'a> {
+    /// Product occurrence resolution policy.
+    pub policy: &'a ResolutionPolicyV1,
+    /// Content identity of the embedded capacity profile.
+    pub capacity_profile_id: ContentId,
+    /// Embedded capacity profile.
+    pub capacity_profile: &'a SourceCapacityProfileV1,
+    /// Content identity of the primary source.
+    pub primary_source_id: ContentId,
+    /// Embedded primary source.
+    pub primary_source: &'a SourceSpecV1,
+    /// Content identity of the primary provider release.
+    pub primary_provider_release_id: ContentId,
+    /// Embedded primary provider release.
+    pub primary_provider_release: &'a ProviderReleaseV1,
+    /// Embedded primary Pyth adapter configuration.
+    pub primary_adapter_config: &'a PythAdapterConfigV1,
+    /// Content identity of the source window.
+    pub window_id: ContentId,
+    /// Embedded source window.
+    pub window: &'a WindowSpecV1,
+    /// Content identity of the statistic.
+    pub statistic_id: ContentId,
+    /// Embedded statistic.
+    pub statistic: &'a StatisticSpecV1,
+    /// Canonical external Product-instance content identity.
+    pub product_instance_id: ContentId,
+    /// Authenticated Product instance used to validate the material linkage.
+    pub product_instance: &'a InstanceV1,
+    /// Sole Product-owned finite result-domain authority.
+    pub result_domain: &'a FiniteResultDomainV1,
+    /// Optional exact ordered recovery material.
+    pub recovery: Option<SourceRecoveryMaterialInputV1<'a>>,
+}
+
+/// Validate and encode one canonical Source-material preimage into caller-owned
+/// bytes.
+///
+/// All fallible validation finishes before `output` changes. Refusal therefore
+/// preserves every caller byte exactly.
+#[inline(never)]
+pub fn encode_source_material_into_v1(
+    output: &mut [u8],
+    input: SourceMaterialInputV1<'_>,
+) -> Result<()> {
+    if output.len() != SOURCE_MATERIAL_BYTES {
+        return Err(Error::InvalidLength);
+    }
+    validate_source_material_input_v1(input)?;
+
+    output.fill(0);
+    put(output, 0, &SOURCE_MATERIAL_MAGIC);
+    put(output, 8, &SCHEMA_VERSION.to_le_bytes());
+    put(output, 16, &input.policy.to_bytes());
+    put(output, 256, input.capacity_profile_id.as_bytes());
+    put(output, 288, &input.capacity_profile.to_bytes());
+    put(output, 400, input.primary_source_id.as_bytes());
+    put(output, 432, &input.primary_source.to_bytes());
+    put(output, 624, input.window_id.as_bytes());
+    put(output, 656, &input.window.to_bytes());
+    put(output, 768, input.statistic_id.as_bytes());
+    put(output, 800, &input.statistic.to_bytes());
+    put(output, 976, input.product_instance_id.as_bytes());
+    put(output, 1008, &input.result_domain.to_bytes());
+    put(output, 1360, input.primary_provider_release_id.as_bytes());
+    put(output, 1392, &input.primary_provider_release.to_bytes());
+    put(output, 1568, &input.primary_adapter_config.to_bytes());
+    if let Some(recovery) = input.recovery {
+        put(output, 1632, recovery.recovery_policy_id.as_bytes());
+        put(output, 1664, &recovery.recovery_policy.to_bytes());
+        for (index, slot) in recovery.slots.iter().copied().enumerate() {
+            let source_offset = 2192 + index * 224;
+            let provider_offset = 3088 + index * 208;
+            let config_offset = 3920 + index * PYTH_ADAPTER_CONFIG_BYTES;
+            put(output, source_offset, slot.source_spec_id().as_bytes());
+            put(output, source_offset + 32, &slot.source().to_bytes());
+            put(
+                output,
+                provider_offset,
+                slot.provider_release_id().as_bytes(),
+            );
+            put(
+                output,
+                provider_offset + 32,
+                &slot.provider_release().to_bytes(),
+            );
+            put(output, config_offset, &slot.adapter_config().to_bytes());
         }
-        result_domain
-            .validate()
-            .map_err(|_| Error::InvalidResultMap)?;
-        match (policy.recovery_policy_id(), recovery) {
-            (None, None) => {
-                if recovery_slots.iter().any(Option::is_some) {
-                    return Err(Error::NonCanonicalSourceMaterial);
-                }
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn validate_source_material_input_v1(input: SourceMaterialInputV1<'_>) -> Result<()> {
+    input.policy.validate_material(
+        input.product_instance_id,
+        *input.product_instance,
+        input.primary_source_id,
+        *input.primary_source,
+        input.window_id,
+        *input.window,
+        input.statistic_id,
+        *input.statistic,
+        *input.result_domain,
+    )?;
+    input
+        .statistic
+        .validate_capacity(input.capacity_profile_id, *input.capacity_profile)?;
+    if input.policy.capacity_profile_id() != input.capacity_profile_id
+        || input.primary_source.provider_release_id() != input.primary_provider_release_id
+        || input
+            .primary_provider_release
+            .adapter_release_id()
+            .to_bytes()
+            != PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1
+        || input.result_domain.coordinate_domain_id().to_bytes()
+            != input.primary_source.domain_id().to_bytes()
+        || input.result_domain.result_unit_id().to_bytes()
+            != input.statistic.result_unit_id().to_bytes()
+    {
+        return Err(Error::LinkageMismatch);
+    }
+    input
+        .result_domain
+        .validate()
+        .map_err(|_| Error::InvalidResultMap)?;
+    if input.primary_source.access_profile() == SourceAccessProfile::SharedObservationChild
+        && usize::from(input.statistic.required_samples()) > MAX_SHARED_OBSERVATIONS
+    {
+        return Err(Error::StatisticExceedsCapacity);
+    }
+
+    match (input.policy.recovery_policy_id(), input.recovery) {
+        (None, None) => Ok(()),
+        (Some(expected_id), Some(recovery)) => {
+            if expected_id != recovery.recovery_policy_id {
+                return Err(Error::LinkageMismatch);
             }
-            (Some(expected_id), Some((actual_id, recovery_policy))) => {
-                if expected_id != actual_id {
+            recovery.recovery_policy.validate_capacity(
+                input.capacity_profile_id,
+                input.product_instance_id,
+                *input.capacity_profile,
+            )?;
+            let active = usize::from(recovery.recovery_policy.attempt_count());
+            if recovery.slots.len() != active {
+                return Err(Error::NonCanonicalSourceMaterial);
+            }
+            for (index, slot) in recovery.slots.iter().copied().enumerate() {
+                let attempt = recovery
+                    .recovery_policy
+                    .attempt(u8::try_from(index).map_err(|_| Error::ArithmeticOverflow)?)?;
+                if slot.source_spec_id() != attempt.source_spec_id()
+                    || slot.provider_release_id() != attempt.provider_release_id()
+                {
                     return Err(Error::LinkageMismatch);
                 }
-                recovery_policy.validate_capacity(
-                    capacity_profile_id,
-                    product_instance_id,
-                    capacity_profile,
-                )?;
-                let active = usize::from(recovery_policy.attempt_count());
-                let mut index = 0usize;
-                while index < MAX_RECOVERY_ATTEMPTS {
-                    let slot = recovery_slots.get(index).copied().flatten();
-                    match (index < active, slot) {
-                        (true, Some(slot)) => {
-                            let attempt = recovery_policy.attempt(
-                                u8::try_from(index).map_err(|_| Error::ArithmeticOverflow)?,
-                            )?;
-                            if slot.source_spec_id != attempt.source_spec_id()
-                                || slot.provider_release_id != attempt.provider_release_id()
-                            {
-                                return Err(Error::LinkageMismatch);
-                            }
-                            slot.source.validate_dependencies(
-                                slot.provider_release_id,
-                                capacity_profile_id,
-                            )?;
-                            validate_recovery_source(primary_source, slot.source)?;
-                        }
-                        (false, None) => {}
-                        _ => return Err(Error::NonCanonicalSourceMaterial),
-                    }
-                    index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
-                }
+                slot.source()
+                    .validate_dependencies(slot.provider_release_id(), input.capacity_profile_id)?;
+                validate_recovery_source(*input.primary_source, slot.source())?;
             }
-            _ => return Err(Error::LinkageMismatch),
+            Ok(())
         }
-        let value = Self {
-            policy,
-            capacity_profile_id,
-            capacity_profile,
-            primary_source_id,
-            primary_source,
-            primary_provider_release_id,
-            primary_provider_release,
-            primary_adapter_config,
-            window_id,
-            window,
-            statistic_id,
-            statistic,
-            product_instance_id,
-            result_domain,
-            recovery,
-            recovery_slots,
-        };
-        if value.primary_source.access_profile() == SourceAccessProfile::SharedObservationChild
-            && usize::from(value.statistic.required_samples()) > MAX_SHARED_OBSERVATIONS
-        {
-            return Err(Error::StatisticExceedsCapacity);
-        }
-        Ok(value)
-    }
-
-    /// Decode one exact hostile Source-material preimage.
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        validate_source_material_bytes_v1(bytes)?;
-        let policy = ResolutionPolicyV1::decode(slice(bytes, 16, RESOLUTION_POLICY_BYTES)?)?;
-        let capacity_profile_id = content(bytes, 256)?;
-        let capacity_profile =
-            SourceCapacityProfileV1::decode(slice(bytes, 288, SOURCE_CAPACITY_PROFILE_BYTES)?)?;
-        let primary_source_id = content(bytes, 400)?;
-        let primary_source = SourceSpecV1::decode(slice(bytes, 432, SOURCE_SPEC_BYTES)?)?;
-        let window_id = content(bytes, 624)?;
-        let window = WindowSpecV1::decode(slice(bytes, 656, WINDOW_SPEC_BYTES)?)?;
-        let statistic_id = content(bytes, 768)?;
-        let statistic = StatisticSpecV1::decode(slice(bytes, 800, STATISTIC_SPEC_BYTES)?)?;
-        let product_instance_id = content(bytes, 976)?;
-        let result_domain =
-            FiniteResultDomainV1::decode(slice(bytes, 1008, FINITE_RESULT_DOMAIN_BYTES)?)
-                .map_err(|_| Error::InvalidResultMap)?;
-        let primary_provider_release_id = content(bytes, 1360)?;
-        let primary_provider_release =
-            ProviderReleaseV1::decode(slice(bytes, 1392, PROVIDER_RELEASE_BYTES)?)?;
-        let primary_adapter_config =
-            PythAdapterConfigV1::decode(slice(bytes, 1568, PYTH_ADAPTER_CONFIG_BYTES)?)?;
-        let recovery_id = read_optional_content(bytes, 1632)?;
-        let recovery = match recovery_id {
-            Some(id) => Some((
-                id,
-                RecoveryPolicyV1::decode(slice(bytes, 1664, RECOVERY_POLICY_BYTES)?)?,
-            )),
-            None => {
-                zero(bytes, 1664, RECOVERY_POLICY_BYTES)?;
-                None
-            }
-        };
-        let mut recovery_slots = [None; MAX_RECOVERY_ATTEMPTS];
-        let active = recovery.map_or(0, |(_, value)| usize::from(value.attempt_count()));
-        let mut index = 0usize;
-        while index < MAX_RECOVERY_ATTEMPTS {
-            let source_offset = 2192usize
-                .checked_add(index.checked_mul(224).ok_or(Error::ArithmeticOverflow)?)
-                .ok_or(Error::ArithmeticOverflow)?;
-            let provider_offset = 3088usize
-                .checked_add(index.checked_mul(208).ok_or(Error::ArithmeticOverflow)?)
-                .ok_or(Error::ArithmeticOverflow)?;
-            let config_offset = 3920usize
-                .checked_add(
-                    index
-                        .checked_mul(PYTH_ADAPTER_CONFIG_BYTES)
-                        .ok_or(Error::ArithmeticOverflow)?,
-                )
-                .ok_or(Error::ArithmeticOverflow)?;
-            if index < active {
-                let slot = recovery_slots
-                    .get_mut(index)
-                    .ok_or(Error::ArithmeticOverflow)?;
-                *slot = Some(RecoveryMaterialSlotV1::new(
-                    content(bytes, source_offset)?,
-                    SourceSpecV1::decode(slice(bytes, source_offset + 32, SOURCE_SPEC_BYTES)?)?,
-                    content(bytes, provider_offset)?,
-                    ProviderReleaseV1::decode(slice(
-                        bytes,
-                        provider_offset + 32,
-                        PROVIDER_RELEASE_BYTES,
-                    )?)?,
-                    PythAdapterConfigV1::decode(slice(
-                        bytes,
-                        config_offset,
-                        PYTH_ADAPTER_CONFIG_BYTES,
-                    )?)?,
-                )?);
-            } else {
-                zero(bytes, source_offset, 224)?;
-                zero(bytes, provider_offset, 208)?;
-                zero(bytes, config_offset, PYTH_ADAPTER_CONFIG_BYTES)?;
-            }
-            index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
-        }
-        Ok(Self {
-            policy,
-            capacity_profile_id,
-            capacity_profile,
-            primary_source_id,
-            primary_source,
-            primary_provider_release_id,
-            primary_provider_release,
-            primary_adapter_config,
-            window_id,
-            window,
-            statistic_id,
-            statistic,
-            product_instance_id,
-            result_domain,
-            recovery,
-            recovery_slots,
-        })
-    }
-
-    /// Encode the one exact canonical Source-material preimage.
-    pub fn to_bytes(self) -> [u8; SOURCE_MATERIAL_BYTES] {
-        let mut out = base::<SOURCE_MATERIAL_BYTES>(SOURCE_MATERIAL_MAGIC);
-        put(&mut out, 16, &self.policy.to_bytes());
-        put(&mut out, 256, self.capacity_profile_id.as_bytes());
-        put(&mut out, 288, &self.capacity_profile.to_bytes());
-        put(&mut out, 400, self.primary_source_id.as_bytes());
-        put(&mut out, 432, &self.primary_source.to_bytes());
-        put(&mut out, 624, self.window_id.as_bytes());
-        put(&mut out, 656, &self.window.to_bytes());
-        put(&mut out, 768, self.statistic_id.as_bytes());
-        put(&mut out, 800, &self.statistic.to_bytes());
-        put(&mut out, 976, self.product_instance_id.as_bytes());
-        put(&mut out, 1008, &self.result_domain.to_bytes());
-        put(&mut out, 1360, self.primary_provider_release_id.as_bytes());
-        put(&mut out, 1392, &self.primary_provider_release.to_bytes());
-        put(&mut out, 1568, &self.primary_adapter_config.to_bytes());
-        if let Some((id, recovery)) = self.recovery {
-            put(&mut out, 1632, id.as_bytes());
-            put(&mut out, 1664, &recovery.to_bytes());
-        }
-        let mut index = 0usize;
-        while index < MAX_RECOVERY_ATTEMPTS {
-            if let Some(slot) = self.recovery_slots.get(index).copied().flatten() {
-                let source_offset = 2192 + index * 224;
-                let provider_offset = 3088 + index * 208;
-                let config_offset = 3920 + index * PYTH_ADAPTER_CONFIG_BYTES;
-                put(&mut out, source_offset, slot.source_spec_id.as_bytes());
-                put(&mut out, source_offset + 32, &slot.source.to_bytes());
-                put(
-                    &mut out,
-                    provider_offset,
-                    slot.provider_release_id.as_bytes(),
-                );
-                put(
-                    &mut out,
-                    provider_offset + 32,
-                    &slot.provider_release.to_bytes(),
-                );
-                put(&mut out, config_offset, &slot.adapter_config.to_bytes());
-            }
-            index += 1;
-        }
-        out
-    }
-
-    /// Return the immutable policy.
-    pub const fn policy(self) -> ResolutionPolicyV1 {
-        self.policy
-    }
-
-    /// Return the primary source identity.
-    pub const fn primary_source_id(self) -> ContentId {
-        self.primary_source_id
-    }
-
-    /// Return the primary source.
-    pub const fn primary_source(self) -> SourceSpecV1 {
-        self.primary_source
-    }
-
-    /// Return the primary provider release and its embedded identity.
-    pub const fn primary_provider_release(self) -> (ContentId, ProviderReleaseV1) {
-        (
-            self.primary_provider_release_id,
-            self.primary_provider_release,
-        )
-    }
-
-    /// Return the embedded primary Pyth adapter configuration.
-    pub const fn primary_adapter_config(self) -> PythAdapterConfigV1 {
-        self.primary_adapter_config
-    }
-
-    /// Return the source-capacity identity and profile.
-    pub const fn capacity_profile(self) -> (ContentId, SourceCapacityProfileV1) {
-        (self.capacity_profile_id, self.capacity_profile)
-    }
-
-    /// Return the window identity and specification.
-    pub const fn window_spec(self) -> (ContentId, WindowSpecV1) {
-        (self.window_id, self.window)
-    }
-
-    /// Return the immutable window.
-    pub const fn window(self) -> WindowSpecV1 {
-        self.window
-    }
-
-    /// Return the immutable statistic.
-    pub const fn statistic(self) -> StatisticSpecV1 {
-        self.statistic
-    }
-
-    /// Return the canonical external Product-instance content identity.
-    pub const fn product_instance_id(self) -> ContentId {
-        self.product_instance_id
-    }
-
-    /// Return the sole Product-owned finite result-domain authority.
-    pub const fn result_domain(self) -> FiniteResultDomainV1 {
-        self.result_domain
-    }
-
-    /// Return the optional ordered recovery policy by value.
-    pub const fn recovery_policy(self) -> Option<(ContentId, RecoveryPolicyV1)> {
-        self.recovery
-    }
-
-    /// Return one exact active recovery material slot.
-    pub fn recovery_slot(self, index: u8) -> Result<RecoveryMaterialSlotV1> {
-        let (_, recovery) = self.recovery.ok_or(Error::LinkageMismatch)?;
-        recovery.attempt(index)?;
-        self.recovery_slots
-            .get(usize::from(index))
-            .copied()
-            .flatten()
-            .ok_or(Error::NonCanonicalSourceMaterial)
-    }
-
-    /// Select one embedded source and provider release by exact source ID.
-    pub fn source(
-        self,
-        source_spec_id: ContentId,
-    ) -> Result<(SourceSpecV1, ContentId, ProviderReleaseV1)> {
-        if source_spec_id == self.primary_source_id {
-            return Ok((
-                self.primary_source,
-                self.primary_provider_release_id,
-                self.primary_provider_release,
-            ));
-        }
-        let mut index = 0usize;
-        while index < MAX_RECOVERY_ATTEMPTS {
-            if let Some(slot) = self.recovery_slots.get(index).copied().flatten()
-                && slot.source_spec_id == source_spec_id
-            {
-                return Ok((slot.source, slot.provider_release_id, slot.provider_release));
-            }
-            index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
-        }
-        Err(Error::LinkageMismatch)
-    }
-
-    /// Select the embedded Pyth adapter configuration for one exact source.
-    pub fn adapter_config(self, source_spec_id: ContentId) -> Result<PythAdapterConfigV1> {
-        if source_spec_id == self.primary_source_id {
-            return Ok(self.primary_adapter_config);
-        }
-        let mut index = 0usize;
-        while index < MAX_RECOVERY_ATTEMPTS {
-            if let Some(slot) = self.recovery_slots.get(index).copied().flatten()
-                && slot.source_spec_id == source_spec_id
-            {
-                return Ok(slot.adapter_config);
-            }
-            index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
-        }
-        Err(Error::LinkageMismatch)
+        _ => Err(Error::LinkageMismatch),
     }
 }
 
@@ -2650,8 +2414,8 @@ impl SourceMaterialV1 {
 ///
 /// The view keeps the 4,176-byte authority in caller-owned account memory and
 /// decodes only one bounded component at a time. It is the executable runtime
-/// representation; [`SourceMaterialV1`] remains the convenient by-value
-/// construction representation for offline tooling and host tests.
+/// representation. Construction uses [`encode_source_material_into_v1`] so
+/// the same bounded code is used by offline tooling, tests, and SVM adapters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SourceMaterialViewV1<'a> {
     bytes: &'a [u8],
@@ -3286,222 +3050,6 @@ impl SourceResolutionStateV1 {
         put(&mut out, 192, &self.resolved_at_unix_seconds.to_le_bytes());
         put(&mut out, 200, &self.retired_at_unix_seconds.to_le_bytes());
         out
-    }
-
-    /// Move from the expired primary/current recovery leg to exactly the next attempt.
-    ///
-    /// `authenticated_funding_allocation_id` is the narrow adapter seam. The
-    /// adapter obtains it only after authenticating the actual capability
-    /// `FundingStateV1` and its present principal; this contract never stores amounts.
-    pub fn fail_next(
-        &mut self,
-        material_id: ContentId,
-        material: SourceMaterialV1,
-        authenticated_funding_allocation_id: ContentId,
-        expected_generation: u64,
-        current_unix_seconds: i64,
-    ) -> Result<()> {
-        self.validate_material_binding(material_id)?;
-        self.require_generation(expected_generation)?;
-        let (_, recovery) = material.recovery.ok_or(Error::LinkageMismatch)?;
-        let next_index = match self.phase {
-            SourceResolutionPhaseV1::Primary => {
-                require_after(current_unix_seconds, primary_deadline(material.window)?)?;
-                0
-            }
-            SourceResolutionPhaseV1::Recovery => {
-                let current = recovery.attempt(self.active_attempt)?;
-                require_after(current_unix_seconds, current.deadline_unix_seconds)?;
-                let next = self
-                    .active_attempt
-                    .checked_add(1)
-                    .ok_or(Error::ArithmeticOverflow)?;
-                if next >= recovery.attempt_count {
-                    return Err(Error::RecoveryNotExhausted);
-                }
-                next
-            }
-            _ => return Err(Error::InvalidRecoveryTransition),
-        };
-        let attempt = recovery.attempt(next_index)?;
-        if attempt.funding_allocation_id != authenticated_funding_allocation_id {
-            return Err(Error::LinkageMismatch);
-        }
-        self.phase = SourceResolutionPhaseV1::Recovery;
-        self.active_attempt = next_index;
-        Ok(())
-    }
-
-    /// Commit explicit exhaustion only after the no-recovery primary or final attempt expires.
-    pub fn exhaust(
-        &mut self,
-        material_id: ContentId,
-        material: SourceMaterialV1,
-        expected_generation: u64,
-        current_unix_seconds: i64,
-    ) -> Result<()> {
-        self.validate_material_binding(material_id)?;
-        self.require_generation(expected_generation)?;
-        match (self.phase, material.recovery) {
-            (SourceResolutionPhaseV1::Primary, None) => {
-                require_after(current_unix_seconds, primary_deadline(material.window)?)?;
-            }
-            (SourceResolutionPhaseV1::Recovery, Some((_, policy))) => {
-                if self.active_attempt.checked_add(1) != Some(policy.attempt_count) {
-                    return Err(Error::RecoveryNotExhausted);
-                }
-                let attempt = policy.attempt(self.active_attempt)?;
-                require_after(current_unix_seconds, attempt.deadline_unix_seconds)?;
-            }
-            _ => return Err(Error::RecoveryNotExhausted),
-        }
-        self.phase = SourceResolutionPhaseV1::Exhausted;
-        self.active_attempt = 0;
-        Ok(())
-    }
-
-    /// Apply accepted provider evidence and commit its mapped primary or recovery result.
-    #[allow(clippy::too_many_arguments)]
-    pub fn accept_provider_output(
-        &mut self,
-        material_id: ContentId,
-        material: SourceMaterialV1,
-        resolution_evidence_id: ContentId,
-        evidence: &[NormalizedProviderEvidenceV1],
-        shared_observation: Option<SharedObservationStateV1>,
-        authenticated_funding_allocation_id: Option<ContentId>,
-        expected_generation: u64,
-        current_unix_seconds: i64,
-        terminal_sequence: u64,
-    ) -> Result<SourceResolutionDecisionV1> {
-        self.validate_material_binding(material_id)?;
-        self.require_generation(expected_generation)?;
-        let (route, source_spec_id, source, provider_release_id, provider_release) =
-            match self.phase {
-                SourceResolutionPhaseV1::Primary => {
-                    if authenticated_funding_allocation_id.is_some() {
-                        return Err(Error::LinkageMismatch);
-                    }
-                    require_not_after(current_unix_seconds, primary_deadline(material.window)?)?;
-                    (
-                        SourceResolutionRouteV1::Primary,
-                        material.primary_source_id,
-                        material.primary_source,
-                        material.primary_provider_release_id,
-                        material.primary_provider_release,
-                    )
-                }
-                SourceResolutionPhaseV1::Recovery => {
-                    let (_, recovery_policy) = material.recovery.ok_or(Error::LinkageMismatch)?;
-                    let attempt = recovery_policy.attempt(self.active_attempt)?;
-                    let slot = material.recovery_slot(self.active_attempt)?;
-                    let Some(funding_id) = authenticated_funding_allocation_id else {
-                        return Err(Error::LinkageMismatch);
-                    };
-                    if attempt.funding_allocation_id != funding_id {
-                        return Err(Error::LinkageMismatch);
-                    }
-                    require_not_after(current_unix_seconds, attempt.deadline_unix_seconds)?;
-                    (
-                        SourceResolutionRouteV1::Recovery,
-                        slot.source_spec_id,
-                        slot.source,
-                        slot.provider_release_id,
-                        slot.provider_release,
-                    )
-                }
-                _ => return Err(Error::InvalidRecoveryTransition),
-            };
-        match (source.access_profile, shared_observation) {
-            (SourceAccessProfile::PythTerminalOneTransaction, None) => {
-                if evidence.len() != 1
-                    || evidence.first().map(|item| item.provider_evidence_id())
-                        != Some(resolution_evidence_id)
-                {
-                    return Err(Error::StateBindingMismatch);
-                }
-            }
-            (SourceAccessProfile::SharedObservationChild, Some(child)) => {
-                child.validate_for_resolution(
-                    self.market,
-                    self.generation,
-                    material_id,
-                    source_spec_id,
-                    material.window_id,
-                    resolution_evidence_id,
-                    evidence,
-                )?;
-            }
-            _ => return Err(Error::WrongSourceAccessProfile),
-        }
-        source.validate_dependencies(provider_release_id, material.capacity_profile_id)?;
-        validate_evidence_capacity(material.capacity_profile, evidence)?;
-        let statistic_value = evaluate_normalized_evidence(
-            material.statistic,
-            material.window,
-            source_spec_id,
-            source,
-            provider_release_id,
-            provider_release,
-            evidence,
-            current_unix_seconds,
-        )?;
-        let (numerator, denominator) = statistic_rational(statistic_value);
-        let selector = material
-            .result_domain
-            .map(numerator, denominator)
-            .map_err(|_| Error::InvalidResultMap)?;
-        let decision = SourceResolutionDecisionV1::new(
-            route,
-            selector,
-            material.result_domain.outcome_count(),
-            resolution_evidence_id,
-            terminal_sequence,
-        )?;
-        if current_unix_seconds <= 0 {
-            return Err(Error::NonCanonicalState);
-        }
-        self.phase = SourceResolutionPhaseV1::Resolved;
-        self.active_attempt = 0;
-        self.terminal_route = Some(route);
-        self.result_selector = selector;
-        self.resolution_evidence_id = Some(resolution_evidence_id);
-        self.terminal_sequence = terminal_sequence;
-        self.resolved_at_unix_seconds = current_unix_seconds;
-        Ok(decision)
-    }
-
-    /// Commit the Product-owned failure result after explicit exhaustion.
-    pub fn commit_failure(
-        &mut self,
-        material_id: ContentId,
-        material: SourceMaterialV1,
-        expected_generation: u64,
-        current_unix_seconds: i64,
-        terminal_sequence: u64,
-    ) -> Result<SourceResolutionDecisionV1> {
-        self.validate_material_binding(material_id)?;
-        self.require_generation(expected_generation)?;
-        if self.phase != SourceResolutionPhaseV1::Exhausted {
-            return Err(Error::RecoveryNotExhausted);
-        }
-        if current_unix_seconds <= 0 {
-            return Err(Error::NonCanonicalState);
-        }
-        let decision = SourceResolutionDecisionV1::new(
-            SourceResolutionRouteV1::Failure,
-            material.result_domain.failure_selector(),
-            material.result_domain.outcome_count(),
-            material_id,
-            terminal_sequence,
-        )?;
-        self.phase = SourceResolutionPhaseV1::FailureCommitted;
-        self.terminal_route = Some(SourceResolutionRouteV1::Failure);
-        self.result_selector = decision.selector;
-        self.resolution_evidence_id = Some(material_id);
-        self.terminal_sequence = terminal_sequence;
-        self.resolved_at_unix_seconds = current_unix_seconds;
-        Ok(decision)
     }
 
     /// Enter the next recovery attempt using bounded borrowed material.
@@ -4217,446 +3765,6 @@ impl SharedObservationPdaSeedsV1 {
     /// Return the PDA bump.
     pub const fn bump(self) -> u8 {
         self.bump
-    }
-}
-
-/// Exact reusable observation child admitted only by `SharedObservationChild`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SharedObservationStateV1 {
-    phase: SharedObservationPhaseV1,
-    pda_bump: u8,
-    observation_count: u16,
-    expected_observation_count: u16,
-    market: [u8; 32],
-    generation: u64,
-    material_id: ContentId,
-    source_spec_id: ContentId,
-    provider_release_id: ContentId,
-    window_spec_id: ContentId,
-    rent_beneficiary: [u8; 32],
-    evidence_id: Option<ContentId>,
-    accepted_sequence: u64,
-    created_at_unix_seconds: i64,
-    retired_at_unix_seconds: i64,
-    observations: [Option<NormalizedProviderEvidenceV1>; MAX_SHARED_OBSERVATIONS],
-}
-
-/// Joined result of creating one shared child and registering it on the Market.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SharedObservationCreationPlanV1 {
-    state: SharedObservationStateV1,
-    market_delta: MarketChildDeltaV1,
-}
-
-impl SharedObservationCreationPlanV1 {
-    /// Return the exact new shared child to persist.
-    pub const fn state(self) -> SharedObservationStateV1 {
-        self.state
-    }
-
-    /// Return the exactly-one Market registration to apply atomically.
-    pub const fn market_delta(self) -> MarketChildDeltaV1 {
-        self.market_delta
-    }
-}
-
-impl SharedObservationStateV1 {
-    /// Create a child only for the explicitly selected shared access profile.
-    #[allow(clippy::too_many_arguments)]
-    pub fn create(
-        market: [u8; 32],
-        generation: u64,
-        material_id: ContentId,
-        material: SourceMaterialV1,
-        source_spec_id: ContentId,
-        observed_shared_children: u32,
-        window_spec_id: ContentId,
-        rent_beneficiary: [u8; 32],
-        pda_bump: u8,
-        current_unix_seconds: i64,
-        expected_market_child_count: u64,
-        authenticated_market_child_count: u64,
-    ) -> Result<SharedObservationCreationPlanV1> {
-        nonzero_identifier(&market)?;
-        nonzero_identifier(&rent_beneficiary)?;
-        let (source, provider_release_id, _) = material.source(source_spec_id)?;
-        if source.access_profile != SourceAccessProfile::SharedObservationChild {
-            return Err(Error::WrongSourceAccessProfile);
-        }
-        if source.capacity_profile_id != material.capacity_profile_id
-            || window_spec_id != material.window_id
-        {
-            return Err(Error::LinkageMismatch);
-        }
-        if observed_shared_children >= material.capacity_profile.max_shared_children {
-            return Err(Error::SharedChildrenExceedCapacity);
-        }
-        material.window.validate_source(source_spec_id)?;
-        let expected_observation_count = material.statistic.required_samples;
-        if expected_observation_count == 0
-            || usize::from(expected_observation_count) > MAX_SHARED_OBSERVATIONS
-        {
-            return Err(Error::StatisticExceedsCapacity);
-        }
-        if current_unix_seconds <= 0 {
-            return Err(Error::NonCanonicalState);
-        }
-        let state = Self {
-            phase: SharedObservationPhaseV1::Open,
-            pda_bump,
-            observation_count: 0,
-            expected_observation_count,
-            market,
-            generation,
-            material_id,
-            source_spec_id,
-            provider_release_id,
-            window_spec_id,
-            rent_beneficiary,
-            evidence_id: None,
-            accepted_sequence: 0,
-            created_at_unix_seconds: current_unix_seconds,
-            retired_at_unix_seconds: 0,
-            observations: [None; MAX_SHARED_OBSERVATIONS],
-        };
-        Ok(SharedObservationCreationPlanV1 {
-            state,
-            market_delta: MarketChildDeltaV1::register(
-                expected_market_child_count,
-                authenticated_market_child_count,
-            )?,
-        })
-    }
-
-    /// Decode one exact hostile child state.
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        header(
-            bytes,
-            SHARED_OBSERVATION_STATE_BYTES,
-            SHARED_OBSERVATION_STATE_MAGIC,
-        )?;
-        zero(bytes, 272, 16)?;
-        let observation_count = u16::from_le_bytes(read_array(bytes, 12)?);
-        let expected_observation_count = u16::from_le_bytes(read_array(bytes, 14)?);
-        let mut observations = [None; MAX_SHARED_OBSERVATIONS];
-        let mut index = 0usize;
-        while index < MAX_SHARED_OBSERVATIONS {
-            let offset = 288usize
-                .checked_add(
-                    index
-                        .checked_mul(NORMALIZED_EVIDENCE_BYTES)
-                        .ok_or(Error::ArithmeticOverflow)?,
-                )
-                .ok_or(Error::ArithmeticOverflow)?;
-            if index < usize::from(observation_count) {
-                let observation = observations
-                    .get_mut(index)
-                    .ok_or(Error::ArithmeticOverflow)?;
-                *observation = Some(NormalizedProviderEvidenceV1::decode(slice(
-                    bytes,
-                    offset,
-                    NORMALIZED_EVIDENCE_BYTES,
-                )?)?);
-            } else {
-                zero(bytes, offset, NORMALIZED_EVIDENCE_BYTES)?;
-            }
-            index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
-        }
-        let value = Self {
-            phase: SharedObservationPhaseV1::decode(one(bytes, 10)?)?,
-            pda_bump: one(bytes, 11)?,
-            observation_count,
-            expected_observation_count,
-            market: read_array(bytes, 16)?,
-            generation: u64::from_le_bytes(read_array(bytes, 48)?),
-            material_id: content(bytes, 56)?,
-            source_spec_id: content(bytes, 88)?,
-            provider_release_id: content(bytes, 120)?,
-            window_spec_id: content(bytes, 152)?,
-            rent_beneficiary: read_array(bytes, 184)?,
-            evidence_id: read_optional_content(bytes, 216)?,
-            accepted_sequence: u64::from_le_bytes(read_array(bytes, 248)?),
-            created_at_unix_seconds: i64::from_le_bytes(read_array(bytes, 256)?),
-            retired_at_unix_seconds: i64::from_le_bytes(read_array(bytes, 264)?),
-            observations,
-        };
-        value.validate_shape()?;
-        Ok(value)
-    }
-
-    /// Encode exact canonical shared-child bytes.
-    pub fn to_bytes(self) -> [u8; SHARED_OBSERVATION_STATE_BYTES] {
-        let mut out = base::<SHARED_OBSERVATION_STATE_BYTES>(SHARED_OBSERVATION_STATE_MAGIC);
-        put(&mut out, 10, &[self.phase.byte(), self.pda_bump]);
-        put(&mut out, 12, &self.observation_count.to_le_bytes());
-        put(&mut out, 14, &self.expected_observation_count.to_le_bytes());
-        put(&mut out, 16, &self.market);
-        put(&mut out, 48, &self.generation.to_le_bytes());
-        put(&mut out, 56, self.material_id.as_bytes());
-        put(&mut out, 88, self.source_spec_id.as_bytes());
-        put(&mut out, 120, self.provider_release_id.as_bytes());
-        put(&mut out, 152, self.window_spec_id.as_bytes());
-        put(&mut out, 184, &self.rent_beneficiary);
-        if let Some(id) = self.evidence_id {
-            put(&mut out, 216, id.as_bytes());
-        }
-        put(&mut out, 248, &self.accepted_sequence.to_le_bytes());
-        put(&mut out, 256, &self.created_at_unix_seconds.to_le_bytes());
-        put(&mut out, 264, &self.retired_at_unix_seconds.to_le_bytes());
-        let mut index = 0usize;
-        while index < usize::from(self.observation_count) {
-            if let Some(observation) = self.observations.get(index).copied().flatten() {
-                put(
-                    &mut out,
-                    288 + index * NORMALIZED_EVIDENCE_BYTES,
-                    &observation.to_bytes(),
-                );
-            }
-            index += 1;
-        }
-        out
-    }
-
-    /// Append exactly the next normalized output of the selected provider adapter.
-    #[allow(clippy::too_many_arguments)]
-    pub fn accept_provider_output(
-        &mut self,
-        material_id: ContentId,
-        material: SourceMaterialV1,
-        completed_evidence_id: Option<ContentId>,
-        evidence: NormalizedProviderEvidenceV1,
-        accepted_sequence: u64,
-        expected_generation: u64,
-        current_unix_seconds: i64,
-    ) -> Result<()> {
-        let mut candidate = *self;
-        if !matches!(
-            candidate.phase,
-            SharedObservationPhaseV1::Open | SharedObservationPhaseV1::Collecting
-        ) {
-            return Err(Error::InvalidSharedObservation);
-        }
-        let (source, provider_release_id, provider_release) =
-            material.source(candidate.source_spec_id)?;
-        if candidate.material_id != material_id
-            || candidate.provider_release_id != provider_release_id
-            || candidate.window_spec_id != material.window_id
-            || candidate.generation != expected_generation
-            || source.access_profile != SourceAccessProfile::SharedObservationChild
-            || accepted_sequence == 0
-            || accepted_sequence <= candidate.accepted_sequence
-        {
-            return Err(Error::StateBindingMismatch);
-        }
-        source.validate_dependencies(provider_release_id, material.capacity_profile_id)?;
-        evidence.validate(
-            candidate.source_spec_id,
-            source,
-            provider_release_id,
-            provider_release,
-            material.window,
-            candidate.observation_count,
-            current_unix_seconds,
-        )?;
-        let index = usize::from(candidate.observation_count);
-        let observation = candidate
-            .observations
-            .get_mut(index)
-            .ok_or(Error::StatisticExceedsCapacity)?;
-        if observation.is_some() {
-            return Err(Error::StatisticExceedsCapacity);
-        }
-        *observation = Some(evidence);
-        candidate.observation_count = candidate
-            .observation_count
-            .checked_add(1)
-            .ok_or(Error::ArithmeticOverflow)?;
-        candidate.accepted_sequence = accepted_sequence;
-        if candidate.observation_count == candidate.expected_observation_count {
-            candidate.evidence_id = Some(completed_evidence_id.ok_or(Error::StateBindingMismatch)?);
-            candidate.phase = SharedObservationPhaseV1::Accepted;
-        } else {
-            if completed_evidence_id.is_some() {
-                return Err(Error::StateBindingMismatch);
-            }
-            candidate.phase = SharedObservationPhaseV1::Collecting;
-        }
-        candidate.validate_shape()?;
-        *self = candidate;
-        Ok(())
-    }
-
-    /// Validate one accepted child before reusing its immutable evidence set.
-    #[allow(clippy::too_many_arguments)]
-    pub fn validate_for_resolution(
-        self,
-        market: [u8; 32],
-        generation: u64,
-        material_id: ContentId,
-        source_spec_id: ContentId,
-        window_spec_id: ContentId,
-        evidence_id: ContentId,
-        evidence: &[NormalizedProviderEvidenceV1],
-    ) -> Result<()> {
-        if self.phase != SharedObservationPhaseV1::Accepted
-            || self.market != market
-            || self.generation != generation
-            || self.material_id != material_id
-            || self.source_spec_id != source_spec_id
-            || self.window_spec_id != window_spec_id
-            || self.evidence_id != Some(evidence_id)
-            || evidence.len() != usize::from(self.observation_count)
-        {
-            return Err(Error::InvalidSharedObservation);
-        }
-        for (index, supplied) in evidence.iter().enumerate() {
-            if self.observations.get(index).copied().flatten() != Some(*supplied) {
-                return Err(Error::InvalidSharedObservation);
-            }
-        }
-        Ok(())
-    }
-
-    /// Retire this selected child; no universal archive is created.
-    pub fn retire(
-        &mut self,
-        generation: u64,
-        current_unix_seconds: i64,
-        expected_market_child_count: u64,
-        authenticated_market_child_count: u64,
-    ) -> Result<MarketChildDeltaV1> {
-        if self.generation != generation
-            || self.phase == SharedObservationPhaseV1::Retired
-            || current_unix_seconds < self.created_at_unix_seconds
-        {
-            return Err(Error::InvalidSharedObservation);
-        }
-        let delta = MarketChildDeltaV1::retire(
-            expected_market_child_count,
-            authenticated_market_child_count,
-        )?;
-        let mut candidate = *self;
-        candidate.phase = SharedObservationPhaseV1::Retired;
-        candidate.retired_at_unix_seconds = current_unix_seconds;
-        candidate.validate_shape()?;
-        *self = candidate;
-        Ok(delta)
-    }
-
-    /// Return exact PDA seed material.
-    pub const fn pda_seeds(self) -> SharedObservationPdaSeedsV1 {
-        SharedObservationPdaSeedsV1 {
-            market: self.market,
-            generation_le: self.generation.to_le_bytes(),
-            source_spec_id: self.source_spec_id,
-            window_spec_id: self.window_spec_id,
-            bump: self.pda_bump,
-        }
-    }
-
-    /// Return the persisted child phase.
-    pub const fn phase(self) -> SharedObservationPhaseV1 {
-        self.phase
-    }
-
-    /// Return the immutable rent beneficiary authority.
-    pub const fn rent_beneficiary(self) -> [u8; 32] {
-        self.rent_beneficiary
-    }
-
-    /// Return the immutable Source-material identity selected at creation.
-    pub const fn material_id(self) -> ContentId {
-        self.material_id
-    }
-
-    /// Return the accepted evidence identity, when present.
-    pub const fn evidence_id(self) -> Option<ContentId> {
-        self.evidence_id
-    }
-
-    /// Return the exact number of provider-authenticated observations retained.
-    pub const fn observation_count(self) -> u16 {
-        self.observation_count
-    }
-
-    /// Return one exact retained observation by schedule index.
-    pub fn observation(self, index: u16) -> Result<NormalizedProviderEvidenceV1> {
-        if index >= self.observation_count {
-            return Err(Error::InvalidObservationSchedule);
-        }
-        self.observations
-            .get(usize::from(index))
-            .copied()
-            .flatten()
-            .ok_or(Error::NonCanonicalState)
-    }
-
-    fn validate_shape(self) -> Result<()> {
-        nonzero_identifier(&self.market)?;
-        nonzero_identifier(&self.rent_beneficiary)?;
-        if self.created_at_unix_seconds <= 0 {
-            return Err(Error::NonCanonicalState);
-        }
-        if self.expected_observation_count == 0
-            || usize::from(self.expected_observation_count) > MAX_SHARED_OBSERVATIONS
-            || self.observation_count > self.expected_observation_count
-        {
-            return Err(Error::NonCanonicalState);
-        }
-        match self.phase {
-            SharedObservationPhaseV1::Open => {
-                if self.observation_count != 0
-                    || self.evidence_id.is_some()
-                    || self.accepted_sequence != 0
-                    || self.retired_at_unix_seconds != 0
-                {
-                    return Err(Error::NonCanonicalState);
-                }
-            }
-            SharedObservationPhaseV1::Collecting => {
-                if self.observation_count == 0
-                    || self.observation_count >= self.expected_observation_count
-                    || self.evidence_id.is_some()
-                    || self.accepted_sequence == 0
-                    || self.retired_at_unix_seconds != 0
-                {
-                    return Err(Error::NonCanonicalState);
-                }
-            }
-            SharedObservationPhaseV1::Accepted => {
-                if self.observation_count != self.expected_observation_count
-                    || self.evidence_id.is_none()
-                    || self.accepted_sequence == 0
-                    || self.retired_at_unix_seconds != 0
-                {
-                    return Err(Error::NonCanonicalState);
-                }
-            }
-            SharedObservationPhaseV1::Retired => {
-                let accepted_fields_match = (self.observation_count
-                    == self.expected_observation_count
-                    && self.evidence_id.is_some()
-                    && self.accepted_sequence != 0)
-                    || (self.observation_count < self.expected_observation_count
-                        && self.evidence_id.is_none()
-                        && ((self.observation_count == 0 && self.accepted_sequence == 0)
-                            || (self.observation_count > 0 && self.accepted_sequence > 0)));
-                if !accepted_fields_match
-                    || self.retired_at_unix_seconds < self.created_at_unix_seconds
-                {
-                    return Err(Error::NonCanonicalState);
-                }
-            }
-        }
-        let mut index = 0usize;
-        while index < MAX_SHARED_OBSERVATIONS {
-            let is_present = self.observations.get(index).copied().flatten().is_some();
-            if (index < usize::from(self.observation_count)) != is_present {
-                return Err(Error::NonCanonicalState);
-            }
-            index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
-        }
-        Ok(())
     }
 }
 
@@ -6667,7 +5775,7 @@ mod tests {
     fn runtime_material(
         recovery: Option<(ContentId, RecoveryPolicyV1)>,
         access: SourceAccessProfile,
-    ) -> (SourceMaterialV1, SourceSpecV1, ProviderReleaseV1) {
+    ) -> ([u8; SOURCE_MATERIAL_BYTES], SourceSpecV1, ProviderReleaseV1) {
         let capacity = profile();
         let source = SourceSpecV1::new(id(11), id(10), id(9), access, id(12), id(1));
         let provider = ProviderReleaseV1::new(
@@ -6702,37 +5810,43 @@ mod tests {
             id(15),
             recovery.map(|(content_id, _)| content_id),
         );
-        let mut recovery_slots = [None; MAX_RECOVERY_ATTEMPTS];
-        if let Some((_, recovery_policy)) = recovery {
-            let mut index = 0u8;
-            while index < recovery_policy.attempt_count() {
-                *recovery_slots
-                    .get_mut(usize::from(index))
-                    .expect("bounded recovery slot") = Some(
-                    RecoveryMaterialSlotV1::new(id(3), source, id(9), provider, adapter_config)
-                        .expect("recovery material"),
-                );
-                index = index.checked_add(1).expect("bounded attempts");
-            }
-        }
-        let material = SourceMaterialV1::new(
-            policy,
-            id(1),
-            capacity,
-            id(3),
-            source,
-            id(9),
-            provider,
-            adapter_config,
-            id(4),
-            window,
-            id(5),
-            statistic,
-            id(2),
-            product_instance(15),
-            finite_domain(),
-            recovery,
-            recovery_slots,
+        let slot = RecoveryMaterialSlotV1::new(id(3), source, id(9), provider, adapter_config)
+            .expect("recovery material");
+        let recovery_slots = [slot; MAX_RECOVERY_ATTEMPTS];
+        let recovery_input = recovery
+            .as_ref()
+            .map(
+                |(recovery_policy_id, recovery_policy)| SourceRecoveryMaterialInputV1 {
+                    recovery_policy_id: *recovery_policy_id,
+                    recovery_policy,
+                    slots: recovery_slots
+                        .get(..usize::from(recovery_policy.attempt_count()))
+                        .expect("bounded recovery attempts"),
+                },
+            );
+        let instance = product_instance(15);
+        let domain = finite_domain();
+        let mut material = [0; SOURCE_MATERIAL_BYTES];
+        encode_source_material_into_v1(
+            &mut material,
+            SourceMaterialInputV1 {
+                policy: &policy,
+                capacity_profile_id: id(1),
+                capacity_profile: &capacity,
+                primary_source_id: id(3),
+                primary_source: &source,
+                primary_provider_release_id: id(9),
+                primary_provider_release: &provider,
+                primary_adapter_config: &adapter_config,
+                window_id: id(4),
+                window: &window,
+                statistic_id: id(5),
+                statistic: &statistic,
+                product_instance_id: id(2),
+                product_instance: &instance,
+                result_domain: &domain,
+                recovery: recovery_input,
+            },
         )
         .expect("linked material");
         (material, source, provider)
@@ -6752,7 +5866,7 @@ mod tests {
         )
     }
 
-    fn shared_median_material() -> SourceMaterialV1 {
+    fn shared_median_material() -> [u8; SOURCE_MATERIAL_BYTES] {
         let capacity = SourceCapacityProfileV1::new(
             CapacityEnvelope::Provisional,
             8,
@@ -6802,26 +5916,33 @@ mod tests {
             capacity,
         )
         .expect("shared median");
-        SourceMaterialV1::new(
-            ResolutionPolicyV1::new(id(1), id(2), id(3), id(4), id(5), id(15), None),
-            id(1),
-            capacity,
-            id(3),
-            source,
-            id(9),
-            provider,
-            adapter_config,
-            id(4),
-            window,
-            id(5),
-            statistic,
-            id(2),
-            product_instance(15),
-            finite_domain(),
-            None,
-            [None; MAX_RECOVERY_ATTEMPTS],
+        let policy = ResolutionPolicyV1::new(id(1), id(2), id(3), id(4), id(5), id(15), None);
+        let instance = product_instance(15);
+        let domain = finite_domain();
+        let mut material = [0; SOURCE_MATERIAL_BYTES];
+        encode_source_material_into_v1(
+            &mut material,
+            SourceMaterialInputV1 {
+                policy: &policy,
+                capacity_profile_id: id(1),
+                capacity_profile: &capacity,
+                primary_source_id: id(3),
+                primary_source: &source,
+                primary_provider_release_id: id(9),
+                primary_provider_release: &provider,
+                primary_adapter_config: &adapter_config,
+                window_id: id(4),
+                window: &window,
+                statistic_id: id(5),
+                statistic: &statistic,
+                product_instance_id: id(2),
+                product_instance: &instance,
+                result_domain: &domain,
+                recovery: None,
+            },
         )
-        .expect("shared median material")
+        .expect("shared median material");
+        material
     }
 
     fn scheduled_normalized(
@@ -6864,73 +5985,74 @@ mod tests {
     }
 
     #[test]
-    fn borrowed_material_matches_by_value_and_refuses_product_aliases() {
-        let (material, _, _) =
-            runtime_material(None, SourceAccessProfile::PythTerminalOneTransaction);
-        let bytes = material.to_bytes();
+    fn borrowed_material_encoder_is_exact_and_atomic() {
+        let (bytes, _, _) = runtime_material(None, SourceAccessProfile::PythTerminalOneTransaction);
         let view = SourceMaterialViewV1::decode(&bytes).expect("borrowed material");
         assert_eq!(view.as_bytes(), bytes.as_slice());
-        assert_eq!(view.policy(), Ok(material.policy()));
+        assert_eq!(view.product_instance_id(), Ok(id(2)));
+        assert_eq!(view.primary_source().map(|value| value.0), Ok(id(3)));
         assert_eq!(
-            view.product_instance_id(),
-            Ok(material.product_instance_id())
+            view.primary_provider_release().map(|value| value.0),
+            Ok(id(9))
         );
-        assert_eq!(
-            view.primary_source(),
-            Ok((id(3), material.primary_source()))
-        );
-        assert_eq!(
-            view.primary_provider_release(),
-            Ok(material.primary_provider_release())
-        );
-        assert_eq!(
-            view.primary_adapter_config(),
-            Ok(material.primary_adapter_config())
-        );
-        assert_eq!(view.capacity_profile(), Ok(material.capacity_profile()));
-        assert_eq!(view.window_spec(), Ok(material.window_spec()));
-        assert_eq!(view.statistic(), Ok(material.statistic()));
-        assert_eq!(view.result_domain(), Ok(material.result_domain()));
         assert_eq!(view.recovery_policy(), Ok(None));
+        PythProviderAdapterObligationV1::from_material_view(view, id(3))
+            .expect("bounded Pyth obligation");
+
+        let policy = view.policy().expect("policy");
+        let (capacity_profile_id, capacity_profile) = view.capacity_profile().expect("capacity");
+        let (primary_source_id, primary_source) = view.primary_source().expect("source");
+        let (primary_provider_release_id, primary_provider_release) =
+            view.primary_provider_release().expect("provider");
+        let primary_adapter_config = view.primary_adapter_config().expect("adapter config");
+        let (window_id, window) = view.window_spec().expect("window");
+        let statistic = view.statistic().expect("statistic");
+        let result_domain = view.result_domain().expect("result domain");
+        let instance = product_instance(15);
+        let input = SourceMaterialInputV1 {
+            policy: &policy,
+            capacity_profile_id,
+            capacity_profile: &capacity_profile,
+            primary_source_id,
+            primary_source: &primary_source,
+            primary_provider_release_id,
+            primary_provider_release: &primary_provider_release,
+            primary_adapter_config: &primary_adapter_config,
+            window_id,
+            window: &window,
+            statistic_id: id(5),
+            statistic: &statistic,
+            product_instance_id: id(2),
+            product_instance: &instance,
+            result_domain: &result_domain,
+            recovery: None,
+        };
+        let mut reencoded = [0xa5; SOURCE_MATERIAL_BYTES];
+        encode_source_material_into_v1(&mut reencoded, input).expect("exact reencode");
+        assert_eq!(reencoded, bytes);
+
+        let wrong_instance = product_instance(16);
+        let mut refused = [0x5a; SOURCE_MATERIAL_BYTES];
+        let before = refused;
         assert_eq!(
-            PythProviderAdapterObligationV1::from_material_view(view, id(3)),
-            PythProviderAdapterObligationV1::from_material(material, id(3))
+            encode_source_material_into_v1(
+                &mut refused,
+                SourceMaterialInputV1 {
+                    product_instance: &wrong_instance,
+                    ..input
+                },
+            ),
+            Err(Error::LinkageMismatch)
         );
+        assert_eq!(refused, before);
 
         let mut dirty_domain = bytes;
         dirty_domain[1008 + 121] = 1;
         assert!(SourceMaterialViewV1::decode(&dirty_domain).is_err());
-
-        let policy = material.policy();
-        let (capacity_id, capacity) = material.capacity_profile();
-        let (window_id, window) = material.window_spec();
-        let (provider_id, provider) = material.primary_provider_release();
-        assert_eq!(
-            SourceMaterialV1::new(
-                policy,
-                capacity_id,
-                capacity,
-                id(3),
-                material.primary_source(),
-                provider_id,
-                provider,
-                material.primary_adapter_config(),
-                window_id,
-                window,
-                id(5),
-                material.statistic(),
-                material.product_instance_id(),
-                product_instance(16),
-                material.result_domain(),
-                None,
-                [None; MAX_RECOVERY_ATTEMPTS],
-            ),
-            Err(Error::LinkageMismatch)
-        );
     }
 
     #[test]
-    fn borrowed_resolution_transitions_are_byte_equivalent() {
+    fn borrowed_resolution_transitions_preserve_atomic_rollback() {
         let recovery = RecoveryPolicyV1::new(
             id(1),
             id(2),
@@ -6948,51 +6070,66 @@ mod tests {
             Some((id(8), recovery)),
             SourceAccessProfile::PythTerminalOneTransaction,
         );
-        let material_bytes = material.to_bytes();
-        let view = SourceMaterialViewV1::decode(&material_bytes).expect("borrowed material");
-        let original = SourceResolutionStateV1::fresh([30; 32], 7, id(22), [31; 32], 1, 0, 0)
+        let view = SourceMaterialViewV1::decode(&material).expect("borrowed material");
+        let mut state = SourceResolutionStateV1::fresh([30; 32], 7, id(22), [31; 32], 1, 0, 0)
             .expect("state")
             .state();
-        let mut by_value = original;
-        let mut borrowed = original;
+        let before = state.to_bytes();
         assert_eq!(
-            by_value.fail_next(id(22), material, id(20), 7, 111),
-            borrowed.fail_next_view(id(22), view, id(20), 7, 111)
+            state.fail_next_view(id(22), view, id(20), 8, 111),
+            Err(Error::StateBindingMismatch)
         );
-        assert_eq!(borrowed, by_value);
+        assert_eq!(state.to_bytes(), before);
+        state
+            .fail_next_view(id(22), view, id(20), 7, 111)
+            .expect("ordered recovery");
+        let before = state.to_bytes();
         assert_eq!(
-            by_value.exhaust(id(22), material, 7, 121),
-            borrowed.exhaust_view(id(22), view, 7, 121)
+            state.exhaust_view(id(22), view, 7, 120),
+            Err(Error::DeadlineNotReached)
         );
-        assert_eq!(borrowed, by_value);
+        assert_eq!(state.to_bytes(), before);
+        state
+            .exhaust_view(id(22), view, 7, 121)
+            .expect("explicit exhaustion");
+        state
+            .commit_failure_view(id(22), view, 7, 122, 9)
+            .expect("failure decision");
         assert_eq!(
-            by_value.commit_failure(id(22), material, 7, 122, 9),
-            borrowed.commit_failure_view(id(22), view, 7, 122, 9)
+            SourceResolutionStateV1::decode(&state.to_bytes()),
+            Ok(state)
         );
-        assert_eq!(borrowed.to_bytes(), by_value.to_bytes());
     }
 
     #[test]
-    fn shared_in_place_transitions_are_equivalent_and_atomic() {
+    fn shared_in_place_transitions_are_canonical_and_atomic() {
+        let (single_material, _, _) =
+            runtime_material(None, SourceAccessProfile::SharedObservationChild);
+        let single_view = SourceMaterialViewV1::decode(&single_material).expect("shared material");
+        let mut capacity_refusal = [0x33; SHARED_OBSERVATION_STATE_BYTES];
+        let before_capacity_refusal = capacity_refusal;
+        assert_eq!(
+            create_shared_observation_state_into_v1(
+                &mut capacity_refusal,
+                [30; 32],
+                7,
+                id(22),
+                single_view,
+                id(3),
+                4,
+                id(4),
+                [31; 32],
+                9,
+                90,
+                0,
+                0,
+            ),
+            Err(Error::SharedChildrenExceedCapacity)
+        );
+        assert_eq!(capacity_refusal, before_capacity_refusal);
+
         let material = shared_median_material();
-        let material_bytes = material.to_bytes();
-        let material_view =
-            SourceMaterialViewV1::decode(&material_bytes).expect("borrowed material");
-        let reference_creation = SharedObservationStateV1::create(
-            [30; 32],
-            7,
-            id(24),
-            material,
-            id(3),
-            0,
-            id(4),
-            [31; 32],
-            8,
-            90,
-            3,
-            3,
-        )
-        .expect("reference creation");
+        let material_view = SourceMaterialViewV1::decode(&material).expect("borrowed material");
         let mut bytes = [0xa5; SHARED_OBSERVATION_STATE_BYTES];
         let delta = create_shared_observation_state_into_v1(
             &mut bytes,
@@ -7010,8 +6147,12 @@ mod tests {
             3,
         )
         .expect("in-place creation");
-        assert_eq!(delta, reference_creation.market_delta());
-        assert_eq!(bytes, reference_creation.state().to_bytes());
+        assert_eq!(delta.before(), 3);
+        assert_eq!(delta.after(), 4);
+        let created = SharedObservationStateViewV1::decode(&bytes).expect("created child");
+        assert_eq!(created.phase(), Ok(SharedObservationPhaseV1::Open));
+        assert_eq!(created.material_id(), Ok(id(24)));
+        assert_eq!(created.expected_observation_count(), Ok(3));
 
         let mut refused_output = [0x5a; SHARED_OBSERVATION_STATE_BYTES];
         let before_refused_output = refused_output;
@@ -7040,7 +6181,6 @@ mod tests {
             scheduled_normalized(1, 110, -9),
             scheduled_normalized(2, 120, i128::MIN),
         ];
-        let mut reference = reference_creation.state();
         let before_early_completion = bytes;
         assert_eq!(
             accept_shared_provider_output_in_place_v1(
@@ -7060,17 +6200,6 @@ mod tests {
         for (index, observation) in observations.iter().copied().enumerate() {
             let sequence = u64::try_from(index + 1).expect("bounded sequence");
             let completed = (index == observations.len() - 1).then(|| id(28));
-            reference
-                .accept_provider_output(
-                    id(24),
-                    material,
-                    completed,
-                    observation,
-                    sequence,
-                    7,
-                    observation.observation_unix_seconds(),
-                )
-                .expect("reference append");
             accept_shared_provider_output_in_place_v1(
                 &mut bytes,
                 id(24),
@@ -7082,18 +6211,14 @@ mod tests {
                 observation.observation_unix_seconds(),
             )
             .expect("in-place append");
-            assert_eq!(bytes, reference.to_bytes());
+            SharedObservationStateViewV1::decode(&bytes).expect("canonical intermediate child");
         }
-        let accepted_view =
-            SharedObservationStateViewV1::decode(&bytes).expect("accepted borrowed child");
-        accepted_view
+        let accepted = SharedObservationStateViewV1::decode(&bytes).expect("accepted child");
+        accepted
             .validate_for_resolution([30; 32], 7, id(24), id(3), id(4), id(28), &observations)
             .expect("exact retained set");
-        assert_eq!(accepted_view.pda_seeds(), Ok(reference.pda_seeds()));
-        assert_eq!(
-            accepted_view.rent_beneficiary(),
-            Ok(reference.rent_beneficiary())
-        );
+        assert_eq!(accepted.observation(1), Ok(observations[1]));
+        assert_eq!(accepted.rent_beneficiary(), Ok([31; 32]));
 
         let before_refused_retire = bytes;
         assert_eq!(
@@ -7101,11 +6226,39 @@ mod tests {
             Err(Error::MarketChildCountMismatch)
         );
         assert_eq!(bytes, before_refused_retire);
-        let reference_delta = reference.retire(7, 121, 4, 4).expect("reference retire");
-        let raw_delta = retire_shared_observation_in_place_v1(&mut bytes, 7, 121, 4, 4)
+        let retire_delta = retire_shared_observation_in_place_v1(&mut bytes, 7, 121, 4, 4)
             .expect("in-place retire");
-        assert_eq!(raw_delta, reference_delta);
-        assert_eq!(bytes, reference.to_bytes());
+        assert_eq!(retire_delta.before(), 4);
+        assert_eq!(retire_delta.after(), 3);
+        assert_eq!(
+            SharedObservationStateViewV1::decode(&bytes).and_then(|view| view.phase()),
+            Ok(SharedObservationPhaseV1::Retired)
+        );
+
+        let (inline_material, _, _) =
+            runtime_material(None, SourceAccessProfile::PythTerminalOneTransaction);
+        let inline_view = SourceMaterialViewV1::decode(&inline_material).expect("inline material");
+        let mut wrong_profile = [0x44; SHARED_OBSERVATION_STATE_BYTES];
+        let before_wrong_profile = wrong_profile;
+        assert_eq!(
+            create_shared_observation_state_into_v1(
+                &mut wrong_profile,
+                [30; 32],
+                7,
+                id(22),
+                inline_view,
+                id(3),
+                0,
+                id(4),
+                [31; 32],
+                1,
+                90,
+                0,
+                0,
+            ),
+            Err(Error::WrongSourceAccessProfile)
+        );
+        assert_eq!(wrong_profile, before_wrong_profile);
     }
 
     #[test]
@@ -7128,25 +6281,25 @@ mod tests {
             Some((recovery_id, recovery)),
             SourceAccessProfile::PythTerminalOneTransaction,
         );
-        let obligation = PythProviderAdapterObligationV1::from_material(material, id(3))
+        let material_view = SourceMaterialViewV1::decode(&material).expect("material");
+        let obligation = PythProviderAdapterObligationV1::from_material_view(material_view, id(3))
             .expect("Pyth obligation");
         assert_eq!(obligation.adapter_config_id(), id(12));
         assert_eq!(
             provider_extension_roles_v1(id(99)),
             Err(Error::UnsupportedProviderExtension)
         );
-        let material_bytes = material.to_bytes();
-        assert_eq!(SourceMaterialV1::decode(&material_bytes), Ok(material));
+        assert_eq!(material_view.as_bytes(), material.as_slice());
         for length in 0..SOURCE_MATERIAL_BYTES {
             assert_eq!(
-                SourceMaterialV1::decode(material_bytes.get(..length).expect("material prefix")),
+                SourceMaterialViewV1::decode(material.get(..length).expect("material prefix")),
                 Err(Error::InvalidLength)
             );
         }
-        let mut dirty_material = material.to_bytes();
+        let mut dirty_material = material;
         dirty_material[2192 + 2 * 224] = 1;
         assert_eq!(
-            SourceMaterialV1::decode(&dirty_material),
+            SourceMaterialViewV1::decode(&dirty_material),
             Err(Error::NonCanonicalReservedBytes)
         );
         let creation = SourceResolutionStateV1::fresh([30; 32], 7, id(22), [31; 32], 254, 0, 0)
@@ -7167,43 +6320,43 @@ mod tests {
             Ok(state)
         );
         assert_eq!(
-            state.fail_next(id(22), material, id(20), 8, 111),
+            state.fail_next_view(id(22), material_view, id(20), 8, 111),
             Err(Error::StateBindingMismatch)
         );
         assert_eq!(
-            state.commit_failure(id(22), material, 7, 111, 1),
+            state.commit_failure_view(id(22), material_view, 7, 111, 1),
             Err(Error::RecoveryNotExhausted)
         );
         assert_eq!(
-            state.fail_next(id(22), material, id(20), 7, 110),
+            state.fail_next_view(id(22), material_view, id(20), 7, 110),
             Err(Error::DeadlineNotReached)
         );
         assert_eq!(
-            state.fail_next(id(22), material, id(99), 7, 111),
+            state.fail_next_view(id(22), material_view, id(99), 7, 111),
             Err(Error::LinkageMismatch)
         );
         state
-            .fail_next(id(22), material, id(20), 7, 111)
+            .fail_next_view(id(22), material_view, id(20), 7, 111)
             .expect("attempt zero");
         assert_eq!(state.active_recovery_attempt(), Some(0));
         assert_eq!(
-            state.exhaust(id(22), material, 7, 121),
+            state.exhaust_view(id(22), material_view, 7, 121),
             Err(Error::RecoveryNotExhausted)
         );
         state
-            .fail_next(id(22), material, id(21), 7, 121)
+            .fail_next_view(id(22), material_view, id(21), 7, 121)
             .expect("attempt one");
         assert_eq!(state.active_recovery_attempt(), Some(1));
         assert_eq!(
-            state.exhaust(id(22), material, 7, 130),
+            state.exhaust_view(id(22), material_view, 7, 130),
             Err(Error::DeadlineNotReached)
         );
         state
-            .exhaust(id(22), material, 7, 131)
+            .exhaust_view(id(22), material_view, 7, 131)
             .expect("explicit exhaustion");
         assert_eq!(state.phase(), SourceResolutionPhaseV1::Exhausted);
         let decision = state
-            .commit_failure(id(22), material, 7, 132, 9)
+            .commit_failure_view(id(22), material_view, 7, 132, 9)
             .expect("failure mapping");
         assert_eq!(decision.route(), SourceResolutionRouteV1::Failure);
         assert_eq!(decision.selector(), finite_domain().failure_selector());
@@ -7244,11 +6397,12 @@ mod tests {
             Some((recovery_id, recovery)),
             SourceAccessProfile::PythTerminalOneTransaction,
         );
+        let material_view = SourceMaterialViewV1::decode(&material).expect("material");
         let mut state = SourceResolutionStateV1::fresh([30; 32], 7, id(22), [31; 32], 1, 0, 0)
             .expect("state")
             .state();
         state
-            .fail_next(id(22), material, id(20), 7, 111)
+            .fail_next_view(id(22), material_view, id(20), 7, 111)
             .expect("recovery");
         let evidence = [normalized(5, 115)];
         assert_eq!(
@@ -7256,9 +6410,9 @@ mod tests {
             Ok(evidence[0])
         );
         let decision = state
-            .accept_provider_output(
+            .accept_provider_output_view(
                 id(22),
-                material,
+                material_view,
                 id(23),
                 &evidence,
                 None,
@@ -7272,9 +6426,9 @@ mod tests {
         assert_eq!(decision.selector(), 1);
         assert_eq!(state.phase(), SourceResolutionPhaseV1::Resolved);
         assert_eq!(
-            state.accept_provider_output(
+            state.accept_provider_output_view(
                 id(22),
-                material,
+                material_view,
                 id(23),
                 &evidence,
                 None,
@@ -7291,7 +6445,8 @@ mod tests {
     fn pyth_normalization_uses_authenticated_update_and_shared_digest_is_canonical() {
         let (material, _, _) =
             runtime_material(None, SourceAccessProfile::PythTerminalOneTransaction);
-        let obligation = PythProviderAdapterObligationV1::from_material(material, id(3))
+        let material_view = SourceMaterialViewV1::decode(&material).expect("material");
+        let obligation = PythProviderAdapterObligationV1::from_material_view(material_view, id(3))
             .expect("Pyth obligation");
         let accepted = obligation
             .normalize_authenticated_update(id(23), id(13), 0, [42; 32], -1_000_000, 5_000, -8, 100)
@@ -7358,165 +6513,6 @@ mod tests {
         assert_eq!(
             shared_evidence_set_preimage_len_v1(0),
             Err(Error::InvalidSharedObservation)
-        );
-    }
-
-    #[test]
-    fn shared_observation_exists_only_for_selected_profile_and_is_replay_safe() {
-        let (material, _, _) = runtime_material(None, SourceAccessProfile::SharedObservationChild);
-        assert_eq!(
-            SharedObservationStateV1::create(
-                [30; 32],
-                7,
-                id(22),
-                material,
-                id(3),
-                4,
-                id(4),
-                [31; 32],
-                9,
-                90,
-                0,
-                0,
-            ),
-            Err(Error::SharedChildrenExceedCapacity)
-        );
-        let mut child = SharedObservationStateV1::create(
-            [30; 32],
-            7,
-            id(22),
-            material,
-            id(3),
-            0,
-            id(4),
-            [31; 32],
-            9,
-            90,
-            0,
-            0,
-        )
-        .expect("child")
-        .state();
-        assert_eq!(
-            SharedObservationStateV1::decode(&child.to_bytes()),
-            Ok(child)
-        );
-        let evidence = [normalized(5, 105)];
-        child
-            .accept_provider_output(id(22), material, Some(id(23)), evidence[0], 1, 7, 105)
-            .expect("accept child");
-        assert_eq!(
-            child.accept_provider_output(id(22), material, Some(id(23)), evidence[0], 2, 7, 105,),
-            Err(Error::InvalidSharedObservation)
-        );
-        child
-            .validate_for_resolution([30; 32], 7, id(22), id(3), id(4), id(23), &evidence)
-            .expect("reusable accepted child");
-        assert_eq!(
-            child.validate_for_resolution([30; 32], 7, id(24), id(3), id(4), id(23), &evidence,),
-            Err(Error::InvalidSharedObservation)
-        );
-        child.retire(7, 106, 1, 1).expect("retire child");
-        assert_eq!(child.phase(), SharedObservationPhaseV1::Retired);
-
-        let median_material = shared_median_material();
-        let median_creation = SharedObservationStateV1::create(
-            [30; 32],
-            7,
-            id(24),
-            median_material,
-            id(3),
-            0,
-            id(4),
-            [31; 32],
-            8,
-            90,
-            3,
-            3,
-        )
-        .expect("progressive child");
-        assert_eq!(median_creation.market_delta().before(), 3);
-        assert_eq!(median_creation.market_delta().after(), 4);
-        let mut median_child = median_creation.state();
-        let observations = [
-            scheduled_normalized(0, 100, i128::MAX),
-            scheduled_normalized(1, 110, -9),
-            scheduled_normalized(2, 120, i128::MIN),
-        ];
-        assert_eq!(
-            median_child.accept_provider_output(
-                id(24),
-                median_material,
-                Some(id(28)),
-                observations[0],
-                1,
-                7,
-                100,
-            ),
-            Err(Error::StateBindingMismatch)
-        );
-        assert_eq!(median_child.observation_count(), 0);
-        median_child
-            .accept_provider_output(id(24), median_material, None, observations[0], 1, 7, 100)
-            .expect("first append");
-        assert_eq!(median_child.phase(), SharedObservationPhaseV1::Collecting);
-        assert_eq!(
-            median_child.accept_provider_output(
-                id(24),
-                median_material,
-                None,
-                observations[0],
-                2,
-                7,
-                110,
-            ),
-            Err(Error::LinkageMismatch)
-        );
-        median_child
-            .accept_provider_output(id(24), median_material, None, observations[1], 2, 7, 110)
-            .expect("second append");
-        median_child
-            .accept_provider_output(
-                id(24),
-                median_material,
-                Some(id(28)),
-                observations[2],
-                3,
-                7,
-                120,
-            )
-            .expect("completing append");
-        assert_eq!(median_child.phase(), SharedObservationPhaseV1::Accepted);
-        assert_eq!(median_child.observation(1), Ok(observations[1]));
-        median_child
-            .validate_for_resolution([30; 32], 7, id(24), id(3), id(4), id(28), &observations)
-            .expect("exact progressive observations");
-        assert_eq!(
-            SharedObservationStateV1::decode(&median_child.to_bytes()),
-            Ok(median_child)
-        );
-        let median_delta = median_child.retire(7, 121, 4, 4).expect("median retire");
-        assert_eq!(median_delta.before(), 4);
-        assert_eq!(median_delta.after(), 3);
-
-        let (inline_material, _, _) =
-            runtime_material(None, SourceAccessProfile::PythTerminalOneTransaction);
-        assert_eq!(
-            SharedObservationStateV1::create(
-                [30; 32],
-                7,
-                id(22),
-                inline_material,
-                id(3),
-                0,
-                id(4),
-                [31; 32],
-                1,
-                90,
-                0,
-                0,
-            ),
-            Err(Error::WrongSourceAccessProfile)
         );
     }
 
