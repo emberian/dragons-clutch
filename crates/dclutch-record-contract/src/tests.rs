@@ -30,6 +30,50 @@ fn liveness_policy() -> StagingLivenessPolicyV1 {
     StagingLivenessPolicyV1::new(schema(5), 100, 10).expect("valid liveness policy")
 }
 
+#[test]
+fn canonical_deployment_profile_derives_and_refuses_noncanonical_begin_coordinates() {
+    let profile = CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1;
+    assert_eq!(profile.page_bytes(), CANONICAL_RECORD_PAGE_BYTES_V1);
+    assert_eq!(
+        profile.maximum_staging_lifetime_slots(),
+        CANONICAL_RECORD_MAX_STAGING_LIFETIME_SLOTS_V1
+    );
+
+    let envelope = profile.page_envelope().expect("canonical envelope");
+    assert!(profile.validates_page_envelope(envelope));
+    let wrong_page_bytes = PageEnvelopeV1::new(
+        envelope.kind(),
+        envelope.page_bytes() - 1,
+        envelope.basis_id(),
+    )
+    .expect("hostile width remains structurally valid");
+    assert!(!profile.validates_page_envelope(wrong_page_bytes));
+    let wrong_page_release = PageEnvelopeV1::new(envelope.kind(), envelope.page_bytes(), schema(9))
+        .expect("hostile release remains structurally valid");
+    assert!(!profile.validates_page_envelope(wrong_page_release));
+
+    let liveness = profile
+        .staging_liveness_policy(10)
+        .expect("canonical liveness");
+    assert!(profile.validates_staging_liveness_policy(liveness, 10));
+    let wrong_lifetime = StagingLivenessPolicyV1::new(
+        liveness.policy_id(),
+        liveness.maximum_lifetime_slots() - 1,
+        10,
+    )
+    .expect("hostile lifetime remains structurally valid");
+    assert!(!profile.validates_staging_liveness_policy(wrong_lifetime, 10));
+    let wrong_liveness_release =
+        StagingLivenessPolicyV1::new(schema(10), liveness.maximum_lifetime_slots(), 10)
+            .expect("hostile release remains structurally valid");
+    assert!(!profile.validates_staging_liveness_policy(wrong_liveness_release, 10));
+    assert!(!profile.validates_staging_liveness_policy(liveness, 11));
+    assert_eq!(
+        profile.staging_liveness_policy(0),
+        Err(Error::InsufficientCleanupBounty)
+    );
+}
+
 #[derive(Clone, Copy)]
 struct TestAdapter {
     staging_vacant: bool,

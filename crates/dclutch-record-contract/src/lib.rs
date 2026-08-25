@@ -31,6 +31,26 @@ pub const RAW_RECORD_PDA_SEED_V1: &[u8] = b"dclutch-raw-record-v1";
 /// PDA seed domain for the one temporary cursor paired with a raw account.
 pub const STAGING_CURSOR_PDA_SEED_V1: &[u8] = b"dclutch-record-stage-v1";
 
+/// Exact provisional Append payload width selected for canonical V1 record deployment.
+///
+/// This is a measured-profile coordinate, not a protocol-time conversion.
+pub const CANONICAL_RECORD_PAGE_BYTES_V1: u32 = 768;
+/// Maximum admitted staging lifetime selected for canonical V1 record deployment.
+///
+/// This is a measured-profile coordinate. A successor release must define a
+/// new profile instead of silently changing an in-progress cursor's bound.
+pub const CANONICAL_RECORD_MAX_STAGING_LIFETIME_SLOTS_V1: u64 = 216_000;
+/// Release identity for the canonical V1 provisional page-envelope evidence.
+pub const CANONICAL_RECORD_PAGE_ENVELOPE_RELEASE_ID_V1: [u8; ID_BYTES] = [
+    0x58, 0x8d, 0x8c, 0x5c, 0x3e, 0x18, 0x13, 0x26, 0xbf, 0x43, 0x44, 0xf5, 0x7d, 0x7b, 0xd7, 0xe3,
+    0x14, 0x17, 0xad, 0x80, 0x59, 0x5e, 0xfc, 0x2c, 0x8e, 0x9a, 0x41, 0x53, 0x30, 0xed, 0xf3, 0x49,
+];
+/// Release identity for the canonical V1 staging-liveness policy.
+pub const CANONICAL_RECORD_STAGING_LIVENESS_RELEASE_ID_V1: [u8; ID_BYTES] = [
+    0xd8, 0x98, 0x6b, 0x24, 0x77, 0x61, 0xf9, 0x90, 0x4e, 0xe6, 0x1b, 0x4f, 0x90, 0x8f, 0xca, 0x23,
+    0xce, 0x68, 0x34, 0x58, 0x2c, 0xb4, 0x83, 0xf8, 0x7b, 0xf9, 0x18, 0x07, 0x27, 0xcb, 0x76, 0x56,
+];
+
 /// Canonical staging-cursor magic.
 pub const STAGING_CURSOR_MAGIC_V1: [u8; 8] = *b"DCLTRCR1";
 /// Canonical record-instruction magic.
@@ -417,6 +437,77 @@ impl StagingLivenessPolicyV1 {
     /// Return the minimum separately prepaid cleanup bounty.
     pub const fn minimum_cleanup_bounty_lamports(self) -> u64 {
         self.minimum_cleanup_bounty_lamports
+    }
+}
+
+/// The sole canonical V1 deployment profile for externally constructed record Begins.
+///
+/// The private field intentionally prevents callers from minting a parallel
+/// profile with superficially similar coordinates. The cleanup bounty remains
+/// chain-derived from the trusted cursor Rent floor, while the envelope and
+/// maximum lifetime are fixed by this profile.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CanonicalRecordDeploymentProfileV1 {
+    private: (),
+}
+
+/// Canonical V1 immutable-record deployment profile.
+pub const CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1: CanonicalRecordDeploymentProfileV1 =
+    CanonicalRecordDeploymentProfileV1 { private: () };
+
+impl CanonicalRecordDeploymentProfileV1 {
+    /// Return the exact maximum semantic bytes admitted in one Append page.
+    pub const fn page_bytes(self) -> u32 {
+        CANONICAL_RECORD_PAGE_BYTES_V1
+    }
+
+    /// Return the exact maximum staging lifetime admitted at Begin.
+    pub const fn maximum_staging_lifetime_slots(self) -> u64 {
+        CANONICAL_RECORD_MAX_STAGING_LIFETIME_SLOTS_V1
+    }
+
+    /// Construct the exact page envelope committed by a canonical V1 Begin.
+    pub fn page_envelope(self) -> Result<PageEnvelopeV1> {
+        PageEnvelopeV1::new(
+            PageEnvelopeKindV1::Provisional,
+            self.page_bytes(),
+            SchemaReleaseId::new(CANONICAL_RECORD_PAGE_ENVELOPE_RELEASE_ID_V1)?,
+        )
+    }
+
+    /// Construct the exact liveness policy committed by a canonical V1 Begin.
+    ///
+    /// `minimum_cleanup_bounty_lamports` must be the trusted current cursor
+    /// Rent floor; a zero or caller-invented bounty is refused by the existing
+    /// typed policy constructor and by profile validation.
+    pub fn staging_liveness_policy(
+        self,
+        minimum_cleanup_bounty_lamports: u64,
+    ) -> Result<StagingLivenessPolicyV1> {
+        StagingLivenessPolicyV1::new(
+            SchemaReleaseId::new(CANONICAL_RECORD_STAGING_LIVENESS_RELEASE_ID_V1)?,
+            self.maximum_staging_lifetime_slots(),
+            minimum_cleanup_bounty_lamports,
+        )
+    }
+
+    /// Return whether an externally supplied Begin envelope is exactly canonical.
+    pub fn validates_page_envelope(self, envelope: PageEnvelopeV1) -> bool {
+        envelope.kind() == PageEnvelopeKindV1::Provisional
+            && envelope.page_bytes() == self.page_bytes()
+            && envelope.basis_id().to_bytes() == CANONICAL_RECORD_PAGE_ENVELOPE_RELEASE_ID_V1
+    }
+
+    /// Return whether an externally supplied Begin liveness policy is exactly canonical.
+    pub fn validates_staging_liveness_policy(
+        self,
+        policy: StagingLivenessPolicyV1,
+        minimum_cleanup_bounty_lamports: u64,
+    ) -> bool {
+        policy.policy_id().to_bytes() == CANONICAL_RECORD_STAGING_LIVENESS_RELEASE_ID_V1
+            && policy.maximum_lifetime_slots() == self.maximum_staging_lifetime_slots()
+            && minimum_cleanup_bounty_lamports > 0
+            && policy.minimum_cleanup_bounty_lamports() == minimum_cleanup_bounty_lamports
     }
 }
 

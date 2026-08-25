@@ -36,12 +36,13 @@ use dclutch_product_contract::{
 use dclutch_realm_contract::{REALM_BYTES, RealmV1};
 use dclutch_record_contract::{
     AbortObservationV1, AbortRecordV1, AbortTransitionV1, AccountCloseV1, AccountId,
-    AddressDerivationObligationV1, AppendPageV1, BeginRecordV1, ContentDigest, FinalizeRecordV1,
-    PageEnvelopeKindV1, PageEnvelopeV1, RAW_RECORD_PDA_SEED_V1, RawRecordValidationModeV1,
-    RawRecordValidationObligationV1, RecordAdapterV1, RecordKeyV1, STAGING_CURSOR_BYTES_V1,
-    STAGING_CURSOR_PDA_SEED_V1, SchemaReleaseId, StagingCursorV1, StagingLamportCloseV1,
-    StagingLivenessPolicyV1, authenticate_finalized_raw_record_v1, prepare_abort_v1,
-    prepare_append_page_v1, prepare_begin_v1, prepare_finalize_v1,
+    AddressDerivationObligationV1, AppendPageV1, BeginRecordV1,
+    CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1, ContentDigest, FinalizeRecordV1, PageEnvelopeV1,
+    RAW_RECORD_PDA_SEED_V1, RawRecordValidationModeV1, RawRecordValidationObligationV1,
+    RecordAdapterV1, RecordKeyV1, STAGING_CURSOR_BYTES_V1, STAGING_CURSOR_PDA_SEED_V1,
+    SchemaReleaseId, StagingCursorV1, StagingLamportCloseV1, StagingLivenessPolicyV1,
+    authenticate_finalized_raw_record_v1, prepare_abort_v1, prepare_append_page_v1,
+    prepare_begin_v1, prepare_finalize_v1,
 };
 use dclutch_rent_contract::{
     RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1,
@@ -75,22 +76,6 @@ const APPEND_ACCOUNTS_V1: usize = 3;
 const FINALIZE_ACCOUNTS_V1: usize = 3;
 const ABORT_ACCOUNTS_V1: usize = 5;
 
-/// Provisional transaction-envelope width selected by this SBF release.
-const PAGE_BYTES_V1: u32 = 768;
-/// Maximum staging lifetime selected by this SBF release.
-///
-/// This is a release/profile bound, not a protocol-time conversion. A later
-/// measured release can change it without changing any finalized raw PDA.
-const MAX_STAGING_LIFETIME_SLOTS_V1: u64 = 216_000;
-
-const PAGE_ENVELOPE_RELEASE_ID_V1: [u8; 32] = [
-    0x58, 0x8d, 0x8c, 0x5c, 0x3e, 0x18, 0x13, 0x26, 0xbf, 0x43, 0x44, 0xf5, 0x7d, 0x7b, 0xd7, 0xe3,
-    0x14, 0x17, 0xad, 0x80, 0x59, 0x5e, 0xfc, 0x2c, 0x8e, 0x9a, 0x41, 0x53, 0x30, 0xed, 0xf3, 0x49,
-];
-const STAGING_LIVENESS_RELEASE_ID_V1: [u8; 32] = [
-    0xd8, 0x98, 0x6b, 0x24, 0x77, 0x61, 0xf9, 0x90, 0x4e, 0xe6, 0x1b, 0x4f, 0x90, 0x8f, 0xca, 0x23,
-    0xce, 0x68, 0x34, 0x58, 0x2c, 0xb4, 0x83, 0xf8, 0x7b, 0xf9, 0x18, 0x07, 0x27, 0xcb, 0x76, 0x56,
-];
 pub(crate) const REALM_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
     0x94, 0xfe, 0x1f, 0xd6, 0xd7, 0x25, 0x9f, 0x47, 0x50, 0x3d, 0x6a, 0xc5, 0x7e, 0xc7, 0xda, 0x78,
     0xdc, 0x38, 0x06, 0xa5, 0xed, 0x49, 0x8f, 0xea, 0xe4, 0x3e, 0xd3, 0x78, 0x5b, 0x5d, 0x0c, 0x69,
@@ -125,15 +110,7 @@ pub(crate) const SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
 ];
 
 #[cfg(test)]
-const RELEASE_LABELS_AND_IDS_V1: [(&[u8], [u8; 32]); 16] = [
-    (
-        b"dclutch/sbf-record-page-envelope/provisional-v1",
-        PAGE_ENVELOPE_RELEASE_ID_V1,
-    ),
-    (
-        b"dclutch/sbf-record-staging-liveness/v1",
-        STAGING_LIVENESS_RELEASE_ID_V1,
-    ),
+const RELEASE_LABELS_AND_IDS_V1: [(&[u8], [u8; 32]); 14] = [
     (b"dclutch/schema/realm-v1", REALM_SCHEMA_RELEASE_ID_V1),
     (
         b"dclutch/schema/product-instance-v1",
@@ -490,12 +467,9 @@ fn authenticate_begin(
     ) {
         return Err(AdapterError::AccountData.into());
     }
-    let liveness = StagingLivenessPolicyV1::new(
-        SchemaReleaseId::new(STAGING_LIVENESS_RELEASE_ID_V1).map_err(map_record_error)?,
-        MAX_STAGING_LIFETIME_SLOTS_V1,
-        cursor_rent,
-    )
-    .map_err(map_record_error)?;
+    let liveness = CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1
+        .staging_liveness_policy(cursor_rent)
+        .map_err(map_record_error)?;
     let transition = prepare_begin_v1(
         &adapter,
         instruction,
@@ -880,17 +854,14 @@ impl<'a, 'info> SbfRecordAdapter<'a, 'info> {
 
 impl RecordAdapterV1 for SbfRecordAdapter<'_, '_> {
     fn validate_page_envelope(&self, envelope: &PageEnvelopeV1) -> bool {
-        envelope.kind() == PageEnvelopeKindV1::Provisional
-            && envelope.page_bytes() == PAGE_BYTES_V1
-            && envelope.basis_id().to_bytes() == PAGE_ENVELOPE_RELEASE_ID_V1
+        CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1.validates_page_envelope(*envelope)
     }
 
     fn validate_staging_liveness_policy(&self, policy: &StagingLivenessPolicyV1) -> bool {
         self.lifecycle == AdapterLifecycle::Begin
-            && policy.policy_id().to_bytes() == STAGING_LIVENESS_RELEASE_ID_V1
-            && policy.maximum_lifetime_slots() == MAX_STAGING_LIFETIME_SLOTS_V1
             && self.cursor_rent > 0
-            && policy.minimum_cleanup_bounty_lamports() == self.cursor_rent
+            && CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1
+                .validates_staging_liveness_policy(*policy, self.cursor_rent)
     }
 
     fn validate_canonical_addresses(&self, obligation: &AddressDerivationObligationV1) -> bool {
@@ -1917,31 +1888,25 @@ mod tests {
             false,
         );
         let adapter = SbfRecordAdapter::begin(&program_id, &raw, &cursor, 41);
-        let selected_page = PageEnvelopeV1::new(
-            PageEnvelopeKindV1::Provisional,
-            PAGE_BYTES_V1,
-            SchemaReleaseId::new(PAGE_ENVELOPE_RELEASE_ID_V1).expect("page release"),
-        )
-        .expect("page envelope");
+        let selected_page = CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1
+            .page_envelope()
+            .expect("page envelope");
         assert!(adapter.validate_page_envelope(&selected_page));
         let hostile_page = PageEnvelopeV1::new(
-            PageEnvelopeKindV1::Provisional,
-            PAGE_BYTES_V1 - 1,
-            SchemaReleaseId::new(PAGE_ENVELOPE_RELEASE_ID_V1).expect("page release"),
+            selected_page.kind(),
+            selected_page.page_bytes() - 1,
+            selected_page.basis_id(),
         )
         .expect("hostile envelope");
         assert!(!adapter.validate_page_envelope(&hostile_page));
 
-        let selected_liveness = StagingLivenessPolicyV1::new(
-            SchemaReleaseId::new(STAGING_LIVENESS_RELEASE_ID_V1).expect("liveness release"),
-            MAX_STAGING_LIFETIME_SLOTS_V1,
-            41,
-        )
-        .expect("liveness policy");
+        let selected_liveness = CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1
+            .staging_liveness_policy(41)
+            .expect("liveness policy");
         assert!(adapter.validate_staging_liveness_policy(&selected_liveness));
         let hostile_liveness = StagingLivenessPolicyV1::new(
-            SchemaReleaseId::new(STAGING_LIVENESS_RELEASE_ID_V1).expect("liveness release"),
-            MAX_STAGING_LIFETIME_SLOTS_V1 + 1,
+            selected_liveness.policy_id(),
+            selected_liveness.maximum_lifetime_slots() + 1,
             41,
         )
         .expect("hostile policy");
@@ -2419,18 +2384,12 @@ mod tests {
             program_id,
             false,
         );
-        let page_envelope = PageEnvelopeV1::new(
-            PageEnvelopeKindV1::Provisional,
-            PAGE_BYTES_V1,
-            SchemaReleaseId::new(PAGE_ENVELOPE_RELEASE_ID_V1).expect("page release"),
-        )
-        .expect("page envelope");
-        let liveness = StagingLivenessPolicyV1::new(
-            SchemaReleaseId::new(STAGING_LIVENESS_RELEASE_ID_V1).expect("liveness release"),
-            MAX_STAGING_LIFETIME_SLOTS_V1,
-            41,
-        )
-        .expect("liveness");
+        let page_envelope = CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1
+            .page_envelope()
+            .expect("page envelope");
+        let liveness = CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1
+            .staging_liveness_policy(41)
+            .expect("liveness");
         let request = BeginRecordV1::new(
             key,
             u64::try_from(REALM_BYTES).expect("bounded length"),
@@ -2556,18 +2515,12 @@ mod tests {
             program_id,
             false,
         );
-        let page_envelope = PageEnvelopeV1::new(
-            PageEnvelopeKindV1::Provisional,
-            PAGE_BYTES_V1,
-            SchemaReleaseId::new(PAGE_ENVELOPE_RELEASE_ID_V1).expect("page release"),
-        )
-        .expect("page envelope");
-        let liveness = StagingLivenessPolicyV1::new(
-            SchemaReleaseId::new(STAGING_LIVENESS_RELEASE_ID_V1).expect("liveness release"),
-            MAX_STAGING_LIFETIME_SLOTS_V1,
-            41,
-        )
-        .expect("liveness");
+        let page_envelope = CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1
+            .page_envelope()
+            .expect("page envelope");
+        let liveness = CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1
+            .staging_liveness_policy(41)
+            .expect("liveness");
         let request = BeginRecordV1::new(
             key,
             u64::try_from(content.len()).expect("bounded content"),
