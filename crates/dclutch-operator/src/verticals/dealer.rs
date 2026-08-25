@@ -18,7 +18,7 @@ use dclutch_dealer_contract::{
     },
     runtime::{
         LiquidityConfigViewV1, LiquidityProfileV1, PoolViewV1, add_liquidity, close_position,
-        execute, remove_liquidity,
+        create_position, execute, remove_liquidity,
     },
 };
 use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome_count};
@@ -393,6 +393,25 @@ pub fn build_dealer_create_lp_position_v1(
     if state.payer.lamports < rent_debit_lamports {
         return Err(VerticalError::InvalidState);
     }
+    let config =
+        LiquidityConfigViewV1::new(facts.config_id, facts.profile, &state.pool.config.data)
+            .map_err(|_| VerticalError::InvalidState)?;
+    let mut pool_bytes = state.pool.pool.data.clone();
+    create_position(
+        &mut pool_bytes,
+        facts.profile,
+        state.pool.pool.key.to_bytes(),
+        config,
+        facts.pool_sequence,
+        state.lp_position.key.to_bytes(),
+        state.owner.key.to_bytes(),
+        dclutch_dealer_contract::RentCreditTerms::new(
+            state.owner.key.to_bytes(),
+            rent_debit_lamports,
+        )
+        .map_err(|_| VerticalError::InvalidState)?,
+    )
+    .map_err(|_| VerticalError::InvalidState)?;
     let request = CreateLpPositionV1::new(facts.pool_sequence, lp_id)
         .map_err(|_| VerticalError::InvalidState)?;
     let wire = DealerInstructionV1::<2>::CreateLpPosition(request);
@@ -574,12 +593,11 @@ fn liquidity_width<const N: usize>(
             .realized_fee_collateral()
             .map_err(|_| VerticalError::InvalidState)?,
     )?;
-    let owner_token = authenticate_user_vault(
+    let owner_token = authenticate_transfer_account(
         &state.owner_collateral,
         &state.collateral_mint,
         &state.token_program,
         realm,
-        state.owner.key,
     )?;
     let limits = amounts::<N>(choice)?;
     let position_sequence = lp.next_sequence();
@@ -625,10 +643,17 @@ fn liquidity_width<const N: usize>(
         let collateral = principal
             .checked_add(fees)
             .ok_or(VerticalError::InvalidState)?;
-        if owner_token.amount < collateral {
-            return Err(VerticalError::InvalidState);
-        }
+        require_token_authority(owner_token, state.owner.key, collateral)?;
+        principal_token
+            .amount
+            .checked_add(principal)
+            .ok_or(VerticalError::InvalidState)?;
+        fee_token
+            .amount
+            .checked_add(fees)
+            .ok_or(VerticalError::InvalidState)?;
         require_position_debits(&owner_position, &moved.claim_reserves())?;
+        require_position_credits(&pool_position, &moved.claim_reserves())?;
     } else {
         principal_token
             .amount
@@ -644,6 +669,7 @@ fn liquidity_width<const N: usize>(
             .and_then(|v| v.checked_add(fees))
             .ok_or(VerticalError::InvalidState)?;
         require_position_debits(&pool_position, &moved.claim_reserves())?;
+        require_position_credits(&owner_position, &moved.claim_reserves())?;
     }
     let instruction = if add {
         let request = AddLiquidityV1::new(
@@ -818,12 +844,11 @@ fn trade_width<const N: usize>(
             .realized_fee_collateral()
             .map_err(|_| VerticalError::InvalidState)?,
     )?;
-    let trader_token = authenticate_user_vault(
+    let trader_token = authenticate_transfer_account(
         &state.trader_collateral,
         &state.collateral_mint,
         &state.token_program,
         realm,
-        state.trader.key,
     )?;
     let claim_index = usize::from(choice.claim_index);
     let request = TradeRequest::new(
@@ -846,27 +871,41 @@ fn trade_width<const N: usize>(
     .map_err(|_| VerticalError::InvalidState)?;
     match choice.side {
         TradeSide::BuyClaimFromPool => {
-            if trader_token.amount
-                < receipt
-                    .notional_collateral()
-                    .checked_add(receipt.trader_fee_collateral())
-                    .ok_or(VerticalError::InvalidState)?
-            {
-                return Err(VerticalError::InvalidState);
-            }
+            let debit = receipt
+                .notional_collateral()
+                .checked_add(receipt.trader_fee_collateral())
+                .ok_or(VerticalError::InvalidState)?;
+            require_token_authority(trader_token, state.trader.key, debit)?;
+            principal_token
+                .amount
+                .checked_add(receipt.notional_collateral())
+                .ok_or(VerticalError::InvalidState)?;
+            fee_token
+                .amount
+                .checked_add(receipt.trader_fee_collateral())
+                .ok_or(VerticalError::InvalidState)?;
             require_position_debit(&pool_position, claim_index, choice.quantity)?;
+            require_position_credit(&trader_position, claim_index, choice.quantity)?;
         }
         TradeSide::SellClaimToPool => {
-            if trader_token.amount < receipt.trader_fee_collateral()
-                || principal_token.amount < receipt.notional_collateral()
-            {
+            require_token_authority(
+                trader_token,
+                state.trader.key,
+                receipt.trader_fee_collateral(),
+            )?;
+            if principal_token.amount < receipt.notional_collateral() {
                 return Err(VerticalError::InvalidState);
             }
             fee_token
                 .amount
                 .checked_add(receipt.trader_fee_collateral())
                 .ok_or(VerticalError::InvalidState)?;
+            trader_token
+                .amount
+                .checked_add(receipt.notional_collateral())
+                .ok_or(VerticalError::InvalidState)?;
             require_position_debit(&trader_position, claim_index, choice.quantity)?;
+            require_position_credit(&pool_position, claim_index, choice.quantity)?;
         }
     }
     let data = encode_instruction(DealerInstructionV1::<N>::Trade(request))?;
@@ -1122,7 +1161,7 @@ fn retire_width<const N: usize>(
         pool.service_funding()
             .map_err(|_| VerticalError::InvalidState)?,
     )?;
-    let refund = authenticate_user_vault(
+    let refund = authenticate_destination_custody(
         &state.service_refund_vault,
         &state.collateral_mint,
         &state.token_program,
@@ -1516,12 +1555,11 @@ fn authenticate_pool_vault(
     Ok(token)
 }
 
-fn authenticate_user_vault(
+fn authenticate_transfer_account(
     account: &ObservedAccount,
     mint: &ObservedAccount,
     token_program: &ObservedAccount,
     realm: RealmFacts,
-    authority: Pubkey,
 ) -> Result<TokenAccount, VerticalError> {
     if account.owner != token_program.key || account.executable {
         return Err(VerticalError::InvalidOwner);
@@ -1531,10 +1569,53 @@ fn authenticate_user_vault(
         .profile()
         .check_transfer_account(token_program.key.to_bytes(), &account.data)
         .map_err(|_| VerticalError::InvalidState)?;
-    if token.mint != mint.key.to_bytes() || token.owner != authority.to_bytes() {
+    if token.mint != mint.key.to_bytes() {
         return Err(VerticalError::ContentMismatch);
     }
     Ok(token)
+}
+
+fn authenticate_destination_custody(
+    account: &ObservedAccount,
+    mint: &ObservedAccount,
+    token_program: &ObservedAccount,
+    realm: RealmFacts,
+    authority: Pubkey,
+) -> Result<TokenAccount, VerticalError> {
+    if account.owner != token_program.key || account.executable {
+        return Err(VerticalError::InvalidOwner);
+    }
+    realm
+        .release
+        .profile()
+        .check_custody_account(
+            token_program.key.to_bytes(),
+            &account.data,
+            mint.key.to_bytes(),
+            authority.to_bytes(),
+        )
+        .map_err(|_| VerticalError::InvalidState)
+}
+
+fn require_token_authority(
+    token: TokenAccount,
+    authority: Pubkey,
+    amount: u64,
+) -> Result<(), VerticalError> {
+    if token.amount < amount {
+        return Err(VerticalError::InvalidState);
+    }
+    if token.owner == authority.to_bytes() {
+        return Ok(());
+    }
+    match token.delegate {
+        COption::Some(delegate)
+            if delegate == authority.to_bytes() && token.delegated_amount >= amount =>
+        {
+            Ok(())
+        }
+        COption::None | COption::Some(_) => Err(VerticalError::InvalidAuthority),
+    }
 }
 
 fn require_claim_coverage<const N: usize>(
@@ -1569,6 +1650,18 @@ fn require_position_debits<const N: usize>(
     }
 }
 
+fn require_position_credits<const N: usize>(
+    position: &PositionV1<N>,
+    amounts: &[u64; N],
+) -> Result<(), VerticalError> {
+    for (balance, credit) in position.balances().iter().zip(amounts) {
+        balance
+            .checked_add(*credit)
+            .ok_or(VerticalError::InvalidState)?;
+    }
+    Ok(())
+}
+
 fn require_position_debit<const N: usize>(
     position: &PositionV1<N>,
     outcome: usize,
@@ -1585,6 +1678,21 @@ fn require_position_debit<const N: usize>(
     } else {
         Ok(())
     }
+}
+
+fn require_position_credit<const N: usize>(
+    position: &PositionV1<N>,
+    outcome: usize,
+    amount: u64,
+) -> Result<(), VerticalError> {
+    position
+        .balances()
+        .get(outcome)
+        .copied()
+        .ok_or(VerticalError::InvalidState)?
+        .checked_add(amount)
+        .ok_or(VerticalError::InvalidState)?;
+    Ok(())
 }
 
 fn amounts<const N: usize>(
