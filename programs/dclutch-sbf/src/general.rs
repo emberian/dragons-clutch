@@ -467,9 +467,9 @@ fn process_activate<const N: usize>(
 
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
-fn build_activation_plan_boxed<'manifest, 'info, const N: usize>(
+fn build_activation_plan_boxed<'info, const N: usize>(
     program_id: &Pubkey,
-    manifest_bytes: &'manifest [u8],
+    manifest_bytes: &[u8],
     config_account: &AccountInfo<'info>,
     config_cursor: &AccountInfo<'info>,
     rent_sysvar: &AccountInfo<'info>,
@@ -2206,7 +2206,12 @@ fn collect_settlement_execution<'info, const N: usize>(
     index: usize,
     settlement_position: &mut PositionV1<N>,
 ) -> Result<(), ProgramError> {
-    let execution = page.executions[index].ok_or(AdapterError::ReplayMismatch)?;
+    let execution = page
+        .executions
+        .get(index)
+        .copied()
+        .flatten()
+        .ok_or(AdapterError::ReplayMismatch)?;
     authenticate_order_id(execution.order)?;
     let state_seeds =
         GeneralOrderStatePdaSeedsV1::new(market_account.key.to_bytes(), execution.order)
@@ -2971,7 +2976,12 @@ fn distribute_settlement_execution<'info, const N: usize>(
     index: usize,
     settlement_position: &mut PositionV1<N>,
 ) -> Result<(), ProgramError> {
-    let execution = page.executions[index].ok_or(AdapterError::ReplayMismatch)?;
+    let execution = page
+        .executions
+        .get(index)
+        .copied()
+        .flatten()
+        .ok_or(AdapterError::ReplayMismatch)?;
     authenticate_order_id(execution.order)?;
     let execution_plan = cursor_before
         .execution_plan(page_id, page, candidate, root, config, batch, index)
@@ -3606,6 +3616,7 @@ fn process_close_general<const N: usize>(
     require_unchanged_rent_credit(program_id, rent_credit, rent_credit_state)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn authenticate_candidate_transition<'info, const N: usize>(
     program_id: &Pubkey,
     root_account: &AccountInfo<'info>,
