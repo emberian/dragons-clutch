@@ -543,6 +543,14 @@ impl StructuredDescriptorV1 {
     }
 }
 
+/// Marker naming the sole rational-to-native conversion boundary.
+///
+/// The boundary multiplies by Product's canonical denominator and admits only
+/// exact integer materialization. It performs no floor, ceiling, nearest-value,
+/// or remainder-credit rounding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExactDenominatorMaterializationV1;
+
 /// Exact Product-derived integral backing for one structured receipt atom.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BackingRecipeV1<const N: usize> {
@@ -570,6 +578,11 @@ impl<const N: usize> BackingRecipeV1<N> {
     /// Return the least positive Product scale represented by one receipt atom.
     pub const fn minimum_realization_lot(self) -> u64 {
         self.minimum_realization_lot
+    }
+
+    /// Return the one named exact conversion boundary used by this recipe.
+    pub const fn realization_boundary(self) -> ExactDenominatorMaterializationV1 {
+        ExactDenominatorMaterializationV1
     }
 
     /// Borrow actual native claims backing one receipt atom.

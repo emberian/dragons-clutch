@@ -9,6 +9,13 @@ offered dClutch capability. The receipt is useful only because ordinary
 Token-2022 transfer and venue custody can move it independently of Structured
 instructions.
 
+The repository's current external SBF adapter implements Activate, Wrap,
+Unwrap, and Retire, but deliberately refuses RedeemTerminal until its Realm
+collateral-vault payout slice is integrated. That refusal is correct: burning
+the receipt and persisting Market claim debits without moving winner
+collateral would counterfeit settlement. Consequently, pure-contract terminal
+completeness is not yet physical lifecycle completeness.
+
 The capability remains deferred from release manifests, operator creation
 flows, and UI claims until the required SBF adapter has:
 
@@ -46,6 +53,18 @@ decimal or an independently configurable conversion rate.
 This is the honest successor to “Fractional”: rational recipes first
 materialize at their exact denominator into integer backing, so the runtime
 never creates fractional collateral liabilities or remainder credits.
+
+### Named rounding boundary
+
+Structured introduces **no rounding boundary**. Its one accepted conversion
+boundary is `ExactDenominatorMaterializationV1`: multiply the Product rational
+recipe by its canonical denominator and require every native claim quantity to
+divide exactly. A remainder is a refusal, never a floor, ceiling, nearest-value
+choice, or credit record. If the portfolio came from a graded Product, the one
+system rounding/projection boundary remains Product Compiler's authenticated
+`GradedRoundingBoundaryV1`, upstream of the finalized result domain and
+PortfolioTemplate. Structured consumes that committed Product result and may
+not round it again.
 
 Let `T` be the observed Token-2022 Mint supply and `C[i]` the descriptor-owned
 custody Position balance. The complete backing invariant is:
@@ -234,8 +253,8 @@ an extension mechanism.
 
 ## Adapter completion plan
 
-The next vertical is a small SBF adapter, not more state in this crate. For
-each action it must:
+The remaining adapter vertical is small SBF boundary work, not more state in
+this crate. Existing actions and the missing RedeemTerminal route must:
 
 - parse exact descriptor/config/Product/Market/Position records and shared
   Bearer Mint/Account observations from hostile account bytes;
@@ -262,6 +281,8 @@ Direct and General need not acquire a new Structured-specific settlement path.
 The pure tests cover:
 
 - every release/preimage digest and the Product-owned template namespace;
+- exact release admission, including kind/config/capacity/schema/derivation,
+  dependency, and typed-funding substitutions;
 - exact config, descriptor, and instruction round trips plus every truncated
   prefix, trailing bytes, bad header/profile, dirty reserved byte, and zero
   identity;
@@ -274,6 +295,10 @@ The pure tests cover:
   unwrap and terminal redemption;
 - winner and loser claim consumption, winner-only payout, zero-supply/empty-
   custody retirement, and refusal while either remains live; and
+- complete Activate/Wrap/resolve/RedeemTerminal/Retire execution at every
+  admitted exact width `N=2..=16`, plus refusal at `N=1` and `N=17`;
+- stale activation, wrap, terminal-redemption, and retirement replay refusal
+  with every pure Market/Position candidate unchanged; and
 - fixed-copy layouts without allocation or unsafe code.
 
 These are pure observation tests. They are not evidence that the Token-2022

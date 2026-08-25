@@ -2,6 +2,10 @@ use dclutch_bearer_contract::state::{
     BEARER_MINT_BYTES, BEARER_SEMANTIC_RELEASE_ID, BEARER_TOKEN_ACCOUNT_BYTES, MintObservationV1,
     TokenAccountObservationV1, TokenAccountStateV1,
 };
+use dclutch_capability_contract::{
+    ActivationPolicy, CapabilityEntryV1, CompartmentFundingV1, FundingAmountsV1, FundingQuoteV1,
+    MAX_DEPENDENCIES_PER_CAPABILITY,
+};
 use dclutch_core_contract::{ContentId as CoreContentId, MarketIdentity, MarketRoot, Phase};
 use dclutch_market_contract::market::{CategoricalMarketV1, CategoricalSettlementSummaryV1};
 use dclutch_product_contract::{
@@ -95,8 +99,8 @@ fn config() -> StructuredConfigV1 {
     .expect("structured config")
 }
 
-fn descriptor<const N: usize>() -> StructuredDescriptorV1 {
-    StructuredDescriptorV1::new::<N>(StructuredDescriptorInputV1 {
+fn descriptor_input() -> StructuredDescriptorInputV1 {
+    StructuredDescriptorInputV1 {
         market: MARKET_KEY,
         generation: GENERATION,
         manifest_entry_index: 4,
@@ -109,8 +113,67 @@ fn descriptor<const N: usize>() -> StructuredDescriptorV1 {
         custody_position: CUSTODY_POSITION,
         custody_owner: CUSTODY_OWNER,
         rent_credit: RENT_CREDIT,
-    })
-    .expect("structured descriptor")
+    }
+}
+
+fn descriptor<const N: usize>() -> StructuredDescriptorV1 {
+    StructuredDescriptorV1::new::<N>(descriptor_input()).expect("structured descriptor")
+}
+
+fn structured_entry(
+    coordinate: [[u8; 32]; 6],
+    dependency_count: u8,
+    work: CompartmentFundingV1,
+) -> CapabilityEntryV1 {
+    let not_applicable = CompartmentFundingV1::not_applicable();
+    let amounts = FundingAmountsV1::new(
+        CompartmentFundingV1::native_lamports(101).expect("rent quote"),
+        CompartmentFundingV1::native_lamports(202).expect("creation quote"),
+        work,
+        not_applicable,
+        not_applicable,
+        not_applicable,
+        not_applicable,
+    )
+    .expect("funding amounts");
+    let quote = FundingQuoteV1::new(amounts, None).expect("native-only quote");
+    let mut dependencies = [0; MAX_DEPENDENCIES_PER_CAPABILITY];
+    if dependency_count != 0 {
+        dependencies[0] = 0;
+    }
+    CapabilityEntryV1::new(
+        core_id_from_bytes(coordinate[0]),
+        core_id_from_bytes(coordinate[1]),
+        core_id_from_bytes(coordinate[2]),
+        core_id_from_bytes(coordinate[3]),
+        core_id_from_bytes(coordinate[4]),
+        core_id_from_bytes(coordinate[5]),
+        ActivationPolicy::RequiredAtFounding,
+        0,
+        dependency_count,
+        dependencies,
+        quote,
+    )
+    .expect("capability entry")
+}
+
+fn canonical_structured_entry() -> CapabilityEntryV1 {
+    structured_entry(
+        [
+            STRUCTURED_CAPABILITY_KIND_ID_V1,
+            STRUCTURED_SEMANTIC_RELEASE_ID_V1,
+            CONFIG_ID,
+            STRUCTURED_CAPACITY_ID_V1,
+            STRUCTURED_CHILD_SCHEMA_ID_V1,
+            STRUCTURED_CHILD_DERIVATION_ID_V1,
+        ],
+        0,
+        CompartmentFundingV1::not_applicable(),
+    )
+}
+
+fn core_id_from_bytes(bytes: [u8; 32]) -> CoreContentId {
+    CoreContentId::new(bytes).expect("nonzero capability coordinate")
 }
 
 fn context<const N: usize>(
@@ -220,6 +283,64 @@ fn release_id_preimages_and_product_namespace_are_exact() {
 }
 
 #[test]
+fn release_admission_accepts_only_the_exact_coordinate_and_typed_creation_quote() {
+    let canonical = canonical_structured_entry();
+    assert_eq!(
+        validate_structured_capability_entry_v1(canonical, CONFIG_ID),
+        Ok(())
+    );
+
+    let coordinate = [
+        STRUCTURED_CAPABILITY_KIND_ID_V1,
+        STRUCTURED_SEMANTIC_RELEASE_ID_V1,
+        CONFIG_ID,
+        STRUCTURED_CAPACITY_ID_V1,
+        STRUCTURED_CHILD_SCHEMA_ID_V1,
+        STRUCTURED_CHILD_DERIVATION_ID_V1,
+    ];
+    for (index, fill) in [71, 72, 73, 74, 75, 76].iter().copied().enumerate() {
+        let mut substituted = coordinate;
+        *substituted.get_mut(index).expect("coordinate index") = [fill; 32];
+        let foreign = structured_entry(substituted, 0, CompartmentFundingV1::not_applicable());
+        assert_eq!(
+            validate_structured_capability_entry_v1(foreign, CONFIG_ID),
+            Err(Error::CapabilitySelectionMismatch)
+        );
+    }
+    for foreign in [
+        structured_entry(coordinate, 1, CompartmentFundingV1::not_applicable()),
+        structured_entry(
+            coordinate,
+            0,
+            CompartmentFundingV1::native_lamports(1).expect("forbidden work quote"),
+        ),
+    ] {
+        assert_eq!(
+            validate_structured_capability_entry_v1(foreign, CONFIG_ID),
+            Err(Error::CapabilitySelectionMismatch)
+        );
+    }
+    assert_eq!(
+        validate_structured_capability_entry_v1(canonical, [77; 32]),
+        Err(Error::CapabilitySelectionMismatch)
+    );
+}
+
+#[test]
+fn profile_bound_is_an_exact_admission_coordinate() {
+    assert_eq!(
+        StructuredDescriptorV1::new::<1>(descriptor_input()),
+        Err(Error::InvalidOutcomeCount)
+    );
+    assert_eq!(
+        StructuredDescriptorV1::new::<17>(descriptor_input()),
+        Err(Error::InvalidOutcomeCount)
+    );
+    assert_eq!(descriptor::<2>().outcome_count(), 2);
+    assert_eq!(descriptor::<16>().outcome_count(), 16);
+}
+
+#[test]
 fn config_and_descriptor_exact_codecs_refuse_hostile_bytes() {
     let config = config();
     let config_bytes = config.to_bytes();
@@ -326,6 +447,10 @@ fn instruction_codec_is_exact_and_quantity_refusing() {
 #[test]
 fn canonical_denominator_is_the_minimum_integral_lot() {
     let binding = product([2, 3, 0], 6);
+    assert_eq!(
+        binding.recipe().realization_boundary(),
+        ExactDenominatorMaterializationV1
+    );
     assert_eq!(binding.recipe().minimum_realization_lot(), 6);
     assert_eq!(binding.recipe().coefficients(), &[2, 3, 0]);
 
@@ -738,6 +863,194 @@ fn retirement_refuses_any_mint_supply_or_native_custody() {
         Err(Error::OutstandingStructuredBacking)
     );
     assert_eq!(market, market_before);
+}
+
+fn assert_complete_integral_lifecycle<const N: usize>() {
+    let product = product([1; N], 1);
+    let mut market = open_market([2; N], 2);
+    let context = context(&market, product);
+    let activation = activate(context, MARKET_KEY, &mut market, 0).expect("activate exact width");
+    let mut custody = activation.custody_position();
+    let mut owner_position =
+        PositionV1::new(MARKET_KEY, OWNER, GENERATION, [1; N]).expect("owner Position");
+    let wrap_plan = wrap(
+        context,
+        MARKET_KEY,
+        &market,
+        OWNER,
+        &mut owner_position,
+        CUSTODY_POSITION,
+        &mut custody,
+        mint(0),
+        token_account(OWNER_TOKEN_ACCOUNT, OWNER, 0),
+        1,
+    )
+    .expect("wrap one exact unit");
+    assert_eq!(wrap_plan.backing(), &[1; N]);
+    assert!(owner_position.is_empty());
+    assert_eq!(custody.balances(), &[1; N]);
+
+    let winner = N.checked_sub(1).expect("supported width is nonzero");
+    let settlement = CategoricalSettlementSummaryV1::resolved::<N>(
+        product_id(99),
+        ResolutionKind::Occurrence,
+        winner,
+        1,
+    )
+    .expect("settlement at exact width");
+    market
+        .resolve_with_summary(GENERATION, settlement)
+        .expect("resolve exact width");
+    let hoard_before = market.hoard_atoms();
+    let redeem_plan = redeem_terminal(
+        context,
+        MARKET_KEY,
+        &mut market,
+        OWNER,
+        CUSTODY_POSITION,
+        &mut custody,
+        mint(1),
+        token_account(OWNER_TOKEN_ACCOUNT, OWNER, 1),
+        1,
+    )
+    .expect("terminal redeem exact width");
+    assert_eq!(redeem_plan.backing(), &[1; N]);
+    assert_eq!(redeem_plan.collateral_payout_atoms(), 1);
+    assert_eq!(market.supply(), &[1; N]);
+    assert_eq!(market.hoard_atoms(), hoard_before - 1);
+    assert!(custody.is_empty());
+
+    market
+        .transition_phase(GENERATION, Phase::Retiring)
+        .expect("retiring exact width");
+    let retirement = retire(
+        context,
+        MARKET_KEY,
+        &mut market,
+        CUSTODY_POSITION,
+        &custody,
+        mint(0),
+        1,
+    )
+    .expect("retire exact width");
+    assert_eq!(retirement.market_child_count_after(), 0);
+}
+
+#[test]
+fn every_admitted_exact_width_completes_the_full_terminal_lifecycle() {
+    assert_complete_integral_lifecycle::<2>();
+    assert_complete_integral_lifecycle::<3>();
+    assert_complete_integral_lifecycle::<4>();
+    assert_complete_integral_lifecycle::<5>();
+    assert_complete_integral_lifecycle::<6>();
+    assert_complete_integral_lifecycle::<7>();
+    assert_complete_integral_lifecycle::<8>();
+    assert_complete_integral_lifecycle::<9>();
+    assert_complete_integral_lifecycle::<10>();
+    assert_complete_integral_lifecycle::<11>();
+    assert_complete_integral_lifecycle::<12>();
+    assert_complete_integral_lifecycle::<13>();
+    assert_complete_integral_lifecycle::<14>();
+    assert_complete_integral_lifecycle::<15>();
+    assert_complete_integral_lifecycle::<16>();
+}
+
+#[test]
+fn stale_replay_and_terminal_refusal_leave_every_pure_candidate_unchanged() {
+    let product = product([1, 2, 3], 4);
+    let mut market = open_market([3, 6, 9], 9);
+    let context = context(&market, product);
+    let activation = activate(context, MARKET_KEY, &mut market, 0).expect("activate");
+    let mut custody = activation.custody_position();
+
+    let market_after_activation = market;
+    assert!(activate(context, MARKET_KEY, &mut market, 0).is_err());
+    assert_eq!(market, market_after_activation);
+
+    let mut owner_position =
+        PositionV1::new(MARKET_KEY, OWNER, GENERATION, [1, 2, 3]).expect("owner Position");
+    wrap(
+        context,
+        MARKET_KEY,
+        &market,
+        OWNER,
+        &mut owner_position,
+        CUSTODY_POSITION,
+        &mut custody,
+        mint(0),
+        token_account(OWNER_TOKEN_ACCOUNT, OWNER, 0),
+        1,
+    )
+    .expect("first wrap");
+    let owner_after_wrap = owner_position;
+    let custody_after_wrap = custody;
+    assert!(
+        wrap(
+            context,
+            MARKET_KEY,
+            &market,
+            OWNER,
+            &mut owner_position,
+            CUSTODY_POSITION,
+            &mut custody,
+            mint(0),
+            token_account(OWNER_TOKEN_ACCOUNT, OWNER, 0),
+            1,
+        )
+        .is_err()
+    );
+    assert_eq!(owner_position, owner_after_wrap);
+    assert_eq!(custody, custody_after_wrap);
+
+    resolve_three(&mut market, 2);
+    let market_before_refused_redeem = market;
+    let custody_before_refused_redeem = custody;
+    assert!(
+        redeem_terminal(
+            context,
+            MARKET_KEY,
+            &mut market,
+            OWNER,
+            CUSTODY_POSITION,
+            &mut custody,
+            mint(1),
+            token_account(OWNER_TOKEN_ACCOUNT, OWNER, 0),
+            1,
+        )
+        .is_err()
+    );
+    assert_eq!(market, market_before_refused_redeem);
+    assert_eq!(custody, custody_before_refused_redeem);
+
+    redeem_terminal(
+        context,
+        MARKET_KEY,
+        &mut market,
+        OWNER,
+        CUSTODY_POSITION,
+        &mut custody,
+        mint(1),
+        token_account(OWNER_TOKEN_ACCOUNT, OWNER, 1),
+        1,
+    )
+    .expect("valid terminal redemption");
+    market
+        .transition_phase(GENERATION, Phase::Retiring)
+        .expect("retiring");
+    let market_before_stale_retire = market;
+    assert!(
+        retire(
+            context,
+            MARKET_KEY,
+            &mut market,
+            CUSTODY_POSITION,
+            &custody,
+            mint(0),
+            2,
+        )
+        .is_err()
+    );
+    assert_eq!(market, market_before_stale_retire);
 }
 
 #[test]
