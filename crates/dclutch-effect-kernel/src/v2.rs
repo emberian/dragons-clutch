@@ -24,20 +24,24 @@ const INSTRUCTION_COUNT_OFFSET: usize = 6;
 const ACCOUNT_COUNT_OFFSET: usize = 8;
 const SCALAR_COUNT_OFFSET: usize = 10;
 const IDENTITY_COUNT_OFFSET: usize = 12;
-const HEADER_RESERVED_OFFSET: usize = 14;
+const REQUEST_BYTES_OFFSET: usize = 14;
 
 const OPCODE_OFFSET: usize = 0;
-const INSTRUCTION_RESERVED_BYTE_OFFSET: usize = 1;
+const AUXILIARY_OFFSET: usize = 1;
 const ACCOUNT_A_OFFSET: usize = 2;
 const ACCOUNT_B_OFFSET: usize = 4;
 const REGISTER_OFFSET: usize = 6;
 const DATA_OFFSET: usize = 8;
-const INSTRUCTION_RESERVED_OFFSET: usize = 12;
+const EXTRA_OFFSET: usize = 12;
 
 const OP_TRANSFER_LAMPORTS: u8 = 0;
 const OP_WRITE_SCALAR: u8 = 1;
 const OP_WRITE_IDENTITY: u8 = 2;
 const OP_REQUIRE_LAMPORTS_EQ: u8 = 3;
+const OP_WRITE_REQUEST_SCALAR: u8 = 4;
+const OP_WRITE_REQUEST_IDENTITY: u8 = 5;
+const OP_INVOKE_ROLE: u8 = 6;
+const OP_INVOKE_ROLE_IF_NONZERO: u8 = 7;
 
 /// Stable hostile-decode or projection refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,6 +66,8 @@ pub enum Error {
     InvalidRegister,
     /// Caller-owned account, register, scratch, or output widths differed.
     WidthMismatch,
+    /// This effect program requires the typed role-request projection API.
+    RequestBufferRequired,
     /// The authenticated AccountProfile did not grant the required mutation.
     PermissionDenied,
     /// A projected fixed-width data write exceeded the authenticated account.
@@ -133,6 +139,7 @@ pub struct ProgramV2<'a> {
     account_count: u16,
     scalar_count: u16,
     identity_count: u16,
+    request_bytes: u16,
     bytes: &'a [u8],
 }
 
@@ -148,19 +155,14 @@ impl<'a> ProgramV2<'a> {
         if byte(bytes, 4)? != VERSION {
             return Err(Error::UnsupportedVersion);
         }
-        if byte(bytes, FLAGS_OFFSET)? != 0
-            || bytes
-                .get(HEADER_RESERVED_OFFSET..HEADER_BYTES)
-                .ok_or(Error::InvalidLength)?
-                .iter()
-                .any(|value| *value != 0)
-        {
+        if byte(bytes, FLAGS_OFFSET)? != 0 {
             return Err(Error::NonCanonicalHeader);
         }
         let instruction_count = read_u16(bytes, INSTRUCTION_COUNT_OFFSET)?;
         let account_count = read_u16(bytes, ACCOUNT_COUNT_OFFSET)?;
         let scalar_count = read_u16(bytes, SCALAR_COUNT_OFFSET)?;
         let identity_count = read_u16(bytes, IDENTITY_COUNT_OFFSET)?;
+        let request_bytes = read_u16(bytes, REQUEST_BYTES_OFFSET)?;
         if instruction_count == 0 || account_count == 0 {
             return Err(Error::EmptyProgram);
         }
@@ -176,6 +178,7 @@ impl<'a> ProgramV2<'a> {
             account_count,
             scalar_count,
             identity_count,
+            request_bytes,
             bytes,
         };
         let mut index = 0_u16;
@@ -205,6 +208,11 @@ impl<'a> ProgramV2<'a> {
     /// Exact identity-bank width consumed from TransitionVM V2 output.
     pub const fn identity_count(self) -> u16 {
         self.identity_count
+    }
+
+    /// Exact caller-owned byte buffer used to assemble typed role requests.
+    pub const fn request_bytes(self) -> u16 {
+        self.request_bytes
     }
 
     /// Borrow the complete canonical bytes.
@@ -266,7 +274,51 @@ impl<'a> ProgramV2<'a> {
             }
             left_index = left_index.checked_add(1).ok_or(Error::InvalidLength)?;
         }
+        let Some((right_start, right_width)) = right.request_write_range() else {
+            return Ok(());
+        };
+        let right_end = right_start
+            .checked_add(right_width)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let mut left_index = 0_u16;
+        while left_index < right_index {
+            let left = self.instruction(left_index)?;
+            if let Some((left_start, left_width)) = left.request_write_range() {
+                let left_end = left_start
+                    .checked_add(left_width)
+                    .ok_or(Error::ArithmeticOverflow)?;
+                if left_start < right_end && right_start < left_end {
+                    return Err(Error::OverlappingWrites);
+                }
+            }
+            left_index = left_index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
         Ok(())
+    }
+}
+
+/// One of the fixed state-owning roles that Trading may invoke.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FixedRole {
+    /// Canonical Market Core orchestration role.
+    Core,
+    /// Canonical Claims economic owner.
+    Claims,
+    /// Canonical Resolution/provider owner.
+    Resolution,
+    /// Canonical collateral Custody owner.
+    Custody,
+}
+
+impl FixedRole {
+    fn decode(value: u16) -> Result<Self> {
+        match value {
+            0 => Ok(Self::Core),
+            1 => Ok(Self::Claims),
+            3 => Ok(Self::Resolution),
+            4 => Ok(Self::Custody),
+            _ => Err(Error::NonCanonicalInstruction),
+        }
     }
 }
 
@@ -307,6 +359,35 @@ pub enum ResolvedEffect {
         /// Required balance.
         value: u64,
     },
+    /// Write one scalar into the caller-owned role-request buffer.
+    WriteRequestScalar {
+        /// Exact byte offset in the complete request buffer.
+        offset: u32,
+        /// Scalar value.
+        value: u64,
+    },
+    /// Write one identity into the caller-owned role-request buffer.
+    WriteRequestIdentity {
+        /// Exact byte offset in the complete request buffer.
+        offset: u32,
+        /// Identity value.
+        value: [u8; 32],
+    },
+    /// Invoke one fixed role with a bounded request and account subframe.
+    InvokeRole {
+        /// Exact state-owning role; Trading itself is never a child target.
+        role: FixedRole,
+        /// First authenticated account coordinate supplied to the child.
+        account_start: u16,
+        /// Exact child account count.
+        account_count: u16,
+        /// Byte offset of this child's request within the complete buffer.
+        request_offset: u32,
+        /// Exact request byte length.
+        request_len: u32,
+        /// Whether the adapter must emit this invocation.
+        enabled: bool,
+    },
 }
 
 /// Project the complete lamport result and validate every data effect atomically.
@@ -341,6 +422,58 @@ pub fn project_atomic(
         index = index.checked_add(1).ok_or(Error::InvalidLength)?;
     }
     output_lamports.copy_from_slice(scratch_lamports);
+    Ok(())
+}
+
+/// Project lamports, data-write bounds, and all typed fixed-role requests.
+///
+/// Both output slices remain unchanged on refusal. Scratch slices may contain
+/// a rejected candidate. The composing Trading adapter must reauthenticate
+/// the selected fixed role, invoke it with the exact resolved account subframe
+/// and request slice, check return-data producer/receipt/postconditions, and
+/// only then apply local writes and acknowledge Core.
+#[allow(clippy::too_many_arguments)]
+pub fn project_with_requests_atomic(
+    program: ProgramV2<'_>,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    accounts: &[AccountInput],
+    permissions: &[AccountPermission],
+    scratch_lamports: &mut [u64],
+    output_lamports: &mut [u64],
+    scratch_request: &mut [u8],
+    output_request: &mut [u8],
+) -> Result<()> {
+    program.require_register_widths(scalars, identities)?;
+    let account_count = usize::from(program.account_count);
+    let request_bytes = usize::from(program.request_bytes);
+    if accounts.len() != account_count
+        || permissions.len() != account_count
+        || scratch_lamports.len() != account_count
+        || output_lamports.len() != account_count
+        || scratch_request.len() != request_bytes
+        || output_request.len() != request_bytes
+    {
+        return Err(Error::WidthMismatch);
+    }
+    for (destination, account) in scratch_lamports.iter_mut().zip(accounts) {
+        *destination = account.lamports;
+    }
+    scratch_request.fill(0);
+    let mut index = 0_u16;
+    while index < program.instruction_count {
+        let effect = program.resolved_effect(index, scalars, identities)?;
+        project_effect_with_request(
+            effect,
+            accounts,
+            permissions,
+            scratch_lamports,
+            scratch_request,
+        )?;
+        index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+    }
+    output_lamports.copy_from_slice(scratch_lamports);
+    output_request.copy_from_slice(scratch_request);
     Ok(())
 }
 
@@ -401,8 +534,66 @@ fn project_effect(
                 return Err(Error::CheckFailed);
             }
         }
+        ResolvedEffect::WriteRequestScalar { .. }
+        | ResolvedEffect::WriteRequestIdentity { .. }
+        | ResolvedEffect::InvokeRole { .. } => return Err(Error::RequestBufferRequired),
     }
     Ok(())
+}
+
+fn project_effect_with_request(
+    effect: ResolvedEffect,
+    accounts: &[AccountInput],
+    permissions: &[AccountPermission],
+    lamports: &mut [u64],
+    request: &mut [u8],
+) -> Result<()> {
+    match effect {
+        ResolvedEffect::WriteRequestScalar { offset, value } => {
+            write_request(request, offset, &value.to_le_bytes())
+        }
+        ResolvedEffect::WriteRequestIdentity { offset, value } => {
+            write_request(request, offset, &value)
+        }
+        ResolvedEffect::InvokeRole {
+            account_start,
+            account_count,
+            request_offset,
+            request_len,
+            ..
+        } => {
+            checked_range(
+                usize::from(account_start),
+                usize::from(account_count),
+                accounts.len(),
+            )?;
+            let request_start =
+                usize::try_from(request_offset).map_err(|_| Error::DataOutOfBounds)?;
+            let request_width = usize::try_from(request_len).map_err(|_| Error::DataOutOfBounds)?;
+            checked_range(request_start, request_width, request.len())?;
+            Ok(())
+        }
+        local => project_effect(local, accounts, permissions, lamports),
+    }
+}
+
+fn write_request(request: &mut [u8], offset: u32, value: &[u8]) -> Result<()> {
+    let start = usize::try_from(offset).map_err(|_| Error::DataOutOfBounds)?;
+    let end = checked_range(start, value.len(), request.len())?;
+    request
+        .get_mut(start..end)
+        .ok_or(Error::DataOutOfBounds)?
+        .copy_from_slice(value);
+    Ok(())
+}
+
+fn checked_range(start: usize, width: usize, limit: usize) -> Result<usize> {
+    let end = start.checked_add(width).ok_or(Error::DataOutOfBounds)?;
+    if width == 0 || end > limit {
+        Err(Error::DataOutOfBounds)
+    } else {
+        Ok(end)
+    }
 }
 
 fn validate_write(
@@ -431,59 +622,111 @@ fn validate_write(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Instruction {
     opcode: u8,
+    auxiliary: u8,
     account_a: u16,
     account_b: u16,
     register: u16,
     data_offset: u32,
+    extra: u32,
 }
 
 impl Instruction {
     fn decode(bytes: &[u8], offset: usize) -> Result<Self> {
-        if byte(bytes, add(offset, INSTRUCTION_RESERVED_BYTE_OFFSET)?)? != 0
-            || bytes
-                .get(add(offset, INSTRUCTION_RESERVED_OFFSET)?..add(offset, INSTRUCTION_BYTES)?)
-                .ok_or(Error::InvalidLength)?
-                .iter()
-                .any(|value| *value != 0)
-        {
-            return Err(Error::NonCanonicalInstruction);
-        }
         Ok(Self {
             opcode: byte(bytes, add(offset, OPCODE_OFFSET)?)?,
+            auxiliary: byte(bytes, add(offset, AUXILIARY_OFFSET)?)?,
             account_a: read_u16(bytes, add(offset, ACCOUNT_A_OFFSET)?)?,
             account_b: read_u16(bytes, add(offset, ACCOUNT_B_OFFSET)?)?,
             register: read_u16(bytes, add(offset, REGISTER_OFFSET)?)?,
             data_offset: read_u32(bytes, add(offset, DATA_OFFSET)?)?,
+            extra: read_u32(bytes, add(offset, EXTRA_OFFSET)?)?,
         })
     }
 
     fn validate(self, program: ProgramV2<'_>) -> Result<()> {
-        require_account(self.account_a, program.account_count)?;
         match self.opcode {
             OP_TRANSFER_LAMPORTS => {
+                require_account(self.account_a, program.account_count)?;
                 require_account(self.account_b, program.account_count)?;
                 require_scalar(self.register, program.scalar_count)?;
-                if self.account_a == self.account_b || self.data_offset != 0 {
+                if self.auxiliary != 0 || self.data_offset != 0 || self.extra != 0 {
+                    return Err(Error::NonCanonicalInstruction);
+                }
+                if self.account_a == self.account_b {
                     return Err(Error::InvalidAccount);
                 }
             }
             OP_WRITE_SCALAR => {
+                require_account(self.account_a, program.account_count)?;
                 require_scalar(self.register, program.scalar_count)?;
-                if self.account_b != 0 {
+                if self.auxiliary != 0 || self.account_b != 0 || self.extra != 0 {
                     return Err(Error::NonCanonicalInstruction);
                 }
             }
             OP_WRITE_IDENTITY => {
+                require_account(self.account_a, program.account_count)?;
                 require_identity(self.register, program.identity_count)?;
-                if self.account_b != 0 {
+                if self.auxiliary != 0 || self.account_b != 0 || self.extra != 0 {
                     return Err(Error::NonCanonicalInstruction);
                 }
             }
             OP_REQUIRE_LAMPORTS_EQ => {
+                require_account(self.account_a, program.account_count)?;
                 require_scalar(self.register, program.scalar_count)?;
-                if self.account_b != 0 || self.data_offset != 0 {
+                if self.auxiliary != 0
+                    || self.account_b != 0
+                    || self.data_offset != 0
+                    || self.extra != 0
+                {
                     return Err(Error::NonCanonicalInstruction);
                 }
+            }
+            OP_WRITE_REQUEST_SCALAR => {
+                require_scalar(self.register, program.scalar_count)?;
+                if self.auxiliary != 0
+                    || self.account_a != 0
+                    || self.account_b != 0
+                    || self.extra != 0
+                {
+                    return Err(Error::NonCanonicalInstruction);
+                }
+                require_buffer_range(self.data_offset, 8, program.request_bytes)?;
+            }
+            OP_WRITE_REQUEST_IDENTITY => {
+                require_identity(self.register, program.identity_count)?;
+                if self.auxiliary != 0
+                    || self.account_a != 0
+                    || self.account_b != 0
+                    || self.extra != 0
+                {
+                    return Err(Error::NonCanonicalInstruction);
+                }
+                require_buffer_range(self.data_offset, 32, program.request_bytes)?;
+            }
+            OP_INVOKE_ROLE => {
+                FixedRole::decode(self.account_a)?;
+                if self.auxiliary == 0 || self.register != 0 || self.extra == 0 {
+                    return Err(Error::NonCanonicalInstruction);
+                }
+                require_account_range(
+                    self.account_b,
+                    u16::from(self.auxiliary),
+                    program.account_count,
+                )?;
+                require_buffer_range(self.data_offset, self.extra, program.request_bytes)?;
+            }
+            OP_INVOKE_ROLE_IF_NONZERO => {
+                FixedRole::decode(self.account_a)?;
+                require_scalar(self.register, program.scalar_count)?;
+                if self.auxiliary == 0 || self.extra == 0 {
+                    return Err(Error::NonCanonicalInstruction);
+                }
+                require_account_range(
+                    self.account_b,
+                    u16::from(self.auxiliary),
+                    program.account_count,
+                )?;
+                require_buffer_range(self.data_offset, self.extra, program.request_bytes)?;
             }
             _ => return Err(Error::UnknownOpcode),
         }
@@ -511,6 +754,30 @@ impl Instruction {
                 account: self.account_a,
                 value: scalar(scalars, self.register)?,
             }),
+            OP_WRITE_REQUEST_SCALAR => Ok(ResolvedEffect::WriteRequestScalar {
+                offset: self.data_offset,
+                value: scalar(scalars, self.register)?,
+            }),
+            OP_WRITE_REQUEST_IDENTITY => Ok(ResolvedEffect::WriteRequestIdentity {
+                offset: self.data_offset,
+                value: identity(identities, self.register)?,
+            }),
+            OP_INVOKE_ROLE => Ok(ResolvedEffect::InvokeRole {
+                role: FixedRole::decode(self.account_a)?,
+                account_start: self.account_b,
+                account_count: u16::from(self.auxiliary),
+                request_offset: self.data_offset,
+                request_len: self.extra,
+                enabled: true,
+            }),
+            OP_INVOKE_ROLE_IF_NONZERO => Ok(ResolvedEffect::InvokeRole {
+                role: FixedRole::decode(self.account_a)?,
+                account_start: self.account_b,
+                account_count: u16::from(self.auxiliary),
+                request_offset: self.data_offset,
+                request_len: self.extra,
+                enabled: scalar(scalars, self.register)? != 0,
+            }),
             _ => Err(Error::UnknownOpcode),
         }
     }
@@ -526,6 +793,33 @@ impl Instruction {
             usize::try_from(self.data_offset).ok()?,
             width,
         ))
+    }
+
+    fn request_write_range(self) -> Option<(usize, usize)> {
+        let width = match self.opcode {
+            OP_WRITE_REQUEST_SCALAR => 8,
+            OP_WRITE_REQUEST_IDENTITY => 32,
+            _ => return None,
+        };
+        Some((usize::try_from(self.data_offset).ok()?, width))
+    }
+}
+
+fn require_account_range(start: u16, count: u16, limit: u16) -> Result<()> {
+    let end = start.checked_add(count).ok_or(Error::InvalidAccount)?;
+    if count != 0 && end <= limit {
+        Ok(())
+    } else {
+        Err(Error::InvalidAccount)
+    }
+}
+
+fn require_buffer_range(start: u32, width: u32, limit: u16) -> Result<()> {
+    let end = start.checked_add(width).ok_or(Error::DataOutOfBounds)?;
+    if width != 0 && end <= u32::from(limit) {
+        Ok(())
+    } else {
+        Err(Error::DataOutOfBounds)
     }
 }
 
@@ -610,12 +904,26 @@ mod tests {
         register: u16,
         offset: u32,
     ) -> [u8; INSTRUCTION_BYTES] {
+        extended_instruction(opcode, 0, account_a, account_b, register, offset, 0)
+    }
+
+    fn extended_instruction(
+        opcode: u8,
+        auxiliary: u8,
+        account_a: u16,
+        account_b: u16,
+        register: u16,
+        offset: u32,
+        extra: u32,
+    ) -> [u8; INSTRUCTION_BYTES] {
         let mut bytes = [0_u8; INSTRUCTION_BYTES];
         bytes[0] = opcode;
+        bytes[1] = auxiliary;
         bytes[2..4].copy_from_slice(&account_a.to_le_bytes());
         bytes[4..6].copy_from_slice(&account_b.to_le_bytes());
         bytes[6..8].copy_from_slice(&register.to_le_bytes());
         bytes[8..12].copy_from_slice(&offset.to_le_bytes());
+        bytes[12..16].copy_from_slice(&extra.to_le_bytes());
         bytes
     }
 
@@ -876,5 +1184,119 @@ mod tests {
         assert_eq!(decoded.account_count(), 300);
         assert_eq!(decoded.scalar_count(), 258);
         assert_eq!(decoded.identity_count(), 257);
+    }
+
+    #[test]
+    fn fixed_role_requests_are_projected_and_conditionally_emitted() {
+        let mut bytes = program(
+            4,
+            2,
+            1,
+            &[
+                instruction(OP_WRITE_REQUEST_SCALAR, 0, 0, 0, 0),
+                instruction(OP_WRITE_REQUEST_IDENTITY, 0, 0, 0, 16),
+                extended_instruction(OP_INVOKE_ROLE_IF_NONZERO, 2, 1, 1, 1, 0, 48),
+            ],
+        );
+        bytes
+            .get_mut(REQUEST_BYTES_OFFSET..HEADER_BYTES)
+            .expect("request width destination")
+            .copy_from_slice(&48_u16.to_le_bytes());
+        let program = ProgramV2::decode(&bytes).expect("typed role effect program");
+        let accounts = [AccountInput {
+            lamports: 1,
+            data_len: 0,
+        }; 4];
+        let permissions = [AccountPermission::read_only(); 4];
+        let mut scratch_lamports = [0; 4];
+        let mut output_lamports = [9; 4];
+        let mut scratch_request = [0xa5; 48];
+        let mut output_request = [0xa5; 48];
+        project_with_requests_atomic(
+            program,
+            &[42, 0],
+            &[[7; 32]],
+            &accounts,
+            &permissions,
+            &mut scratch_lamports,
+            &mut output_lamports,
+            &mut scratch_request,
+            &mut output_request,
+        )
+        .expect("disabled request is still canonically projected");
+        assert_eq!(output_lamports, [1; 4]);
+        assert_eq!(
+            output_request.get(..8),
+            Some(42_u64.to_le_bytes().as_slice())
+        );
+        assert_eq!(output_request.get(8..16), Some([0; 8].as_slice()));
+        assert_eq!(output_request.get(16..48), Some([7; 32].as_slice()));
+        assert_eq!(
+            program.resolved_effect(2, &[42, 0], &[[7; 32]]),
+            Ok(ResolvedEffect::InvokeRole {
+                role: FixedRole::Claims,
+                account_start: 1,
+                account_count: 2,
+                request_offset: 0,
+                request_len: 48,
+                enabled: false,
+            })
+        );
+        assert_eq!(
+            program.resolved_effect(2, &[42, 1], &[[7; 32]]),
+            Ok(ResolvedEffect::InvokeRole {
+                role: FixedRole::Claims,
+                account_start: 1,
+                account_count: 2,
+                request_offset: 0,
+                request_len: 48,
+                enabled: true,
+            })
+        );
+
+        let mut ordinary_output = [9; 4];
+        assert_eq!(
+            project_atomic(
+                program,
+                &[42, 1],
+                &[[7; 32]],
+                &accounts,
+                &permissions,
+                &mut scratch_lamports,
+                &mut ordinary_output,
+            ),
+            Err(Error::RequestBufferRequired)
+        );
+        assert_eq!(ordinary_output, [9; 4]);
+    }
+
+    #[test]
+    fn request_routes_refuse_trading_targets_and_bad_ranges() {
+        let mut trading = program(
+            2,
+            1,
+            0,
+            &[extended_instruction(OP_INVOKE_ROLE, 1, 2, 0, 0, 0, 8)],
+        );
+        trading
+            .get_mut(REQUEST_BYTES_OFFSET..HEADER_BYTES)
+            .expect("request width destination")
+            .copy_from_slice(&8_u16.to_le_bytes());
+        assert_eq!(
+            ProgramV2::decode(&trading),
+            Err(Error::NonCanonicalInstruction)
+        );
+
+        let mut outside = program(
+            2,
+            1,
+            0,
+            &[extended_instruction(OP_INVOKE_ROLE, 2, 1, 1, 0, 4, 8)],
+        );
+        outside
+            .get_mut(REQUEST_BYTES_OFFSET..HEADER_BYTES)
+            .expect("request width destination")
+            .copy_from_slice(&8_u16.to_le_bytes());
+        assert_eq!(ProgramV2::decode(&outside), Err(Error::InvalidAccount));
     }
 }
