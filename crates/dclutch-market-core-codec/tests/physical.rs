@@ -169,6 +169,56 @@ fn generic_capability_envelopes_bind_one_non_core_target_role() {
 }
 
 #[test]
+fn initialize_claims_is_a_distinct_lean_owned_claims_effect() {
+    assert_eq!(
+        dclutch_market_core_codec::CORE_EFFECT_INITIALIZE_CLAIMS_ACTION_TAG_V1,
+        12
+    );
+    assert_eq!(
+        CoreEffectActionV1::InitializeClaims.fixed_target_role(),
+        Some(Role::Claims)
+    );
+    let value = CoreEffectEnvelopeV1::new(
+        CoreEffectActionV1::InitializeClaims,
+        Role::Claims,
+        id(1),
+        id(2),
+        id(3),
+        id(4),
+        id(5),
+        id(6),
+        id(7),
+        8,
+        0,
+        0,
+        416,
+    )
+    .expect("foundational Claims initialization");
+    assert_eq!(
+        CoreEffectEnvelopeV1::decode(&value.encode().expect("exact envelope")),
+        Ok(value)
+    );
+    assert_eq!(
+        CoreEffectEnvelopeV1::new(
+            CoreEffectActionV1::InitializeClaims,
+            Role::Trading,
+            id(1),
+            id(2),
+            id(3),
+            id(4),
+            id(5),
+            id(6),
+            id(7),
+            8,
+            0,
+            0,
+            416,
+        ),
+        Err(Error::InvalidCoordinates)
+    );
+}
+
+#[test]
 fn effect_envelope_hostile_bytes_are_refused() {
     let bytes = envelope().encode().expect("fixture encodes");
     let short = bytes

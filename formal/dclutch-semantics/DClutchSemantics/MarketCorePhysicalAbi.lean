@@ -34,6 +34,9 @@ theorem market_state_domain_fits_pda_seed : marketStateDomain.length ≤ 32 := b
 capability-manifest profile. Lifting the bound requires a new manifest and
 physical ABI profile; decoders never truncate an oversized list. -/
 def capabilityFundingMaxEntries : Nat := 16
+def initializeClaimsActionTag : Nat := 12
+
+theorem initialize_claims_action_tag_fits_u8 : initializeClaimsActionTag < 256 := by native_decide
 
 inductive CapabilityFundingHeaderField where
   | magic | version | count | reserved

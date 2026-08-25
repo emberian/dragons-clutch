@@ -6,6 +6,7 @@ pub const SERIES_CORE_REQUEST_BYTES_V1: usize = 336;
 pub const SERIES_CORE_ACK_BYTES_V1: usize = 264;
 pub const CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1: usize = 16;
 pub const CAPABILITY_FUNDING_MAX_ENTRIES_V1: usize = 16;
+pub const CORE_EFFECT_INITIALIZE_CLAIMS_ACTION_TAG_V1: u8 = 12;
 pub const CORE_EFFECT_MAGIC_V1: [u8; 8] = [
     0x44, 0x43, 0x4c, 0x54, 0x43, 0x45, 0x46, 0x31,
 ];
