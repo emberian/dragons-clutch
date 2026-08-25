@@ -323,6 +323,12 @@ impl<'a> DescriptorV1<'a> {
         self.receipt_units_per_lot
     }
 
+    /// Borrow the exact little-endian `u64[outcome_count]` atoms-per-lot tail.
+    #[must_use]
+    pub const fn claim_atoms_bytes(self) -> &'a [u8] {
+        self.claim_atoms
+    }
+
     /// Exact claim atoms for one outcome in one descriptor lot.
     pub fn claim_atoms_per_lot(self, outcome: u32) -> Result<u64> {
         if outcome >= self.outcome_count {
