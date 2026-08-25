@@ -5,7 +5,7 @@
 //! runs the pure transition before the first CPI/write, and then applies the
 //! exact token, Position, Market, replay, record, and RentCredit effects.
 
-use alloc::{boxed::Box, vec, vec::Vec};
+use alloc::{vec, vec::Vec};
 
 use dclutch_capability_contract::{ActivationPolicy, CapabilityManifestV1};
 use dclutch_collateral_contract::{
@@ -15,21 +15,22 @@ use dclutch_core_contract::{ContentId, MarketRoot, Phase};
 use dclutch_direct_contract::{
     DIRECT_INTENT_ESCROW_PDA_DOMAIN_V2, DIRECT_INTENT_RECORD_BYTES_V2,
     DIRECT_INTENT_RECORD_PDA_DOMAIN_V2, DirectCapabilitySelectionV2, DirectIntentRecordV2,
-    DirectIntentV2, DirectPositionV2, InlineComplementaryMatchV2, InlineParticipantAccountsV2,
-    LiveRecordCloseV2, MAKER_REPLAY_ROOT_BYTES_V2, MAKER_REPLAY_ROOT_PDA_DOMAIN_V2,
-    MakerReplayRootV2, ParticipantAccountsV2, RecordAfterFillV2, ReplayRootStateV2,
-    RuntimeComplementaryBuyMatchInPlaceV2, RuntimeComplementarySellMatchInPlaceV2,
-    RuntimeInlineOrdinaryMatchV2, RuntimeOrdinaryMatchV2, RuntimeRegistrationInputV2,
-    RuntimeUnwindInputV2, RuntimeUnwindKindV2, Side, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3,
-    VenueFeePolicyV3, adapter, cancel_through_v1, close_replay_registration_v2,
-    prepare_replay_root_close_v2, register_intent_runtime_v2, settle_inline_complementary_v2,
-    settle_inline_ordinary_runtime_v2, settle_merge_runtime_in_place_v2,
-    settle_ordinary_runtime_v2, settle_split_runtime_in_place_v2,
-    terminal_rent_credit_close_plan_v1, unwind_intent_runtime_v2,
+    DirectIntentV2, DirectPositionV2, InlineParticipantAccountsV2, LiveRecordCloseV2,
+    MAKER_REPLAY_ROOT_BYTES_V2, MAKER_REPLAY_ROOT_PDA_DOMAIN_V2, MakerReplayRootV2,
+    ParticipantAccountsV2, ReplayRootStateV2, RuntimeComplementaryBuyMatchInPlaceV2,
+    RuntimeComplementarySellMatchInPlaceV2, RuntimeInlineComplementaryMatchInPlaceV2,
+    RuntimeInlineOrdinaryMatchInPlaceV2, RuntimeOrdinaryMatchInPlaceV2,
+    RuntimeRegistrationInPlaceV2, RuntimeUnwindInPlaceV2, RuntimeUnwindKindV2, Side,
+    VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3, VenueFeePolicyV3, adapter, cancel_through_v1,
+    close_replay_registration_v2, prepare_replay_root_close_v2,
+    register_intent_runtime_in_place_v2, settle_inline_complementary_runtime_in_place_v2,
+    settle_inline_ordinary_runtime_in_place_v2, settle_merge_runtime_in_place_v2,
+    settle_ordinary_runtime_in_place_v2, settle_split_runtime_in_place_v2,
+    terminal_rent_credit_close_plan_v1, unwind_intent_runtime_in_place_v2,
     validate_direct_capability_selection_v2,
 };
 use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome_count};
-use dclutch_realm_contract::{POSITION_PDA_DOMAIN, PositionV1, REALM_PDA_DOMAIN, RealmV1};
+use dclutch_realm_contract::{POSITION_PDA_DOMAIN, REALM_PDA_DOMAIN, RealmV1};
 use dclutch_record_contract::{ContentDigest, RecordKeyV1, SchemaReleaseId};
 use dclutch_rent_contract::{
     RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1,
@@ -350,36 +351,50 @@ fn authenticate_current_instruction(
     Ok((current, preceding))
 }
 
-fn authorization<const N: usize>(
+fn authorization_runtime(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     data: &[u8],
     instructions: &AccountInfo<'_>,
-    expectations: [(u16, DirectIntentV2); N],
-) -> Result<[adapter::Ed25519AuthorizationV2; N], ProgramError> {
+    expectations: &[(u16, &DirectIntentV2)],
+) -> Result<Vec<adapter::Ed25519AuthorizationV2>, ProgramError> {
     let (current, preceding) =
         authenticate_current_instruction(program_id, accounts, data, instructions)?;
-    let mapped = expectations.map(|(message_offset, intent)| adapter::Ed25519ExpectationV2 {
-        message_offset,
-        signer: *intent.maker(),
-        message: data
-            .get(
-                usize::from(message_offset)
-                    ..usize::from(message_offset) + dclutch_direct_contract::DIRECT_INTENT_BYTES_V2,
-            )
-            .unwrap_or(&[]),
-    });
-    adapter::inspect_preceding_ed25519_batch_v2(
-        adapter::Ed25519InstructionViewV2 {
-            program_id: preceding.program_id.to_bytes(),
-            ed25519_data: &preceding.data,
-            preceding_index: current - 1,
-            current_index: current,
-            current_data: data,
-        },
-        mapped,
-    )
-    .map_err(|_| AdapterError::DirectAuthentication.into())
+    let mut mapped = Vec::new();
+    mapped
+        .try_reserve_exact(expectations.len())
+        .map_err(|_| AdapterError::Arithmetic)?;
+    for (message_offset, intent) in expectations {
+        let start = usize::from(*message_offset);
+        let end = start
+            .checked_add(dclutch_direct_contract::DIRECT_INTENT_BYTES_V2)
+            .ok_or(AdapterError::DirectAuthentication)?;
+        mapped.push(adapter::Ed25519ExpectationV2 {
+            message_offset: *message_offset,
+            signer: *intent.maker(),
+            message: data
+                .get(start..end)
+                .ok_or(AdapterError::DirectAuthentication)?,
+        });
+    }
+    let view = adapter::Ed25519InstructionViewV2 {
+        program_id: preceding.program_id.to_bytes(),
+        ed25519_data: &preceding.data,
+        preceding_index: current - 1,
+        current_index: current,
+        current_data: data,
+    };
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(mapped.len())
+        .map_err(|_| AdapterError::Arithmetic)?;
+    for index in 0..mapped.len() {
+        output.push(
+            adapter::inspect_preceding_ed25519_batch_item_v2(view, &mapped, index)
+                .map_err(|_| AdapterError::DirectAuthentication)?,
+        );
+    }
+    Ok(output)
 }
 
 fn message_authorization(
@@ -532,44 +547,6 @@ fn authenticate_position(
     Ok(position)
 }
 
-// Inline complementary execution is canonically restricted to N=2 by the
-// measured packet profile, so this single fixed-width projection does not
-// recreate the N=2..16 execution fan-out.
-fn authenticate_position_n2(
-    program_id: &Pubkey,
-    position_account: &AccountInfo<'_>,
-    market_account: &AccountInfo<'_>,
-    maker: &[u8; 32],
-    generation: u64,
-) -> Result<PositionV1<2>, ProgramError> {
-    authenticate_position(
-        program_id,
-        position_account,
-        market_account,
-        maker,
-        generation,
-        2,
-    )?;
-    let data = position_account
-        .try_borrow_data()
-        .map_err(|_| AdapterError::DirectAuthentication)?;
-    PositionV1::<2>::decode(&data).map_err(|_| AdapterError::DirectAuthentication.into())
-}
-
-fn authenticate_market_n2(
-    program_id: &Pubkey,
-    account: &AccountInfo<'_>,
-) -> Result<CategoricalMarketV1<2>, ProgramError> {
-    let facts = authenticate_market(program_id, account)?;
-    if facts.outcome_count != 2 {
-        return Err(AdapterError::DirectAuthentication.into());
-    }
-    let data = account
-        .try_borrow_data()
-        .map_err(|_| AdapterError::DirectAuthentication)?;
-    CategoricalMarketV1::<2>::decode(&data).map_err(|_| AdapterError::DirectAuthentication.into())
-}
-
 fn root_pda(
     program_id: &Pubkey,
     market: &Pubkey,
@@ -704,7 +681,7 @@ fn authenticate_record(
         .map_err(|_| AdapterError::DirectAuthentication)?;
     let record =
         DirectIntentRecordV2::decode(&data).map_err(|_| AdapterError::DirectAuthentication)?;
-    let intent = record.intent();
+    let intent = record.intent_ref();
     let (expected, bump) = record_pda(
         program_id,
         &Pubkey::new_from_array(*intent.market()),
@@ -1571,7 +1548,7 @@ fn close_program_to_credit(
     Ok(())
 }
 
-fn persist_root(account: &AccountInfo<'_>, root: MakerReplayRootV2) -> Result<(), ProgramError> {
+fn persist_root(account: &AccountInfo<'_>, root: &MakerReplayRootV2) -> Result<(), ProgramError> {
     let mut bytes = [0; MAKER_REPLAY_ROOT_BYTES_V2];
     root.encode(&mut bytes)
         .map_err(|_| AdapterError::DirectPostcondition)?;
@@ -1587,7 +1564,7 @@ fn persist_root(account: &AccountInfo<'_>, root: MakerReplayRootV2) -> Result<()
     let data = account
         .try_borrow_data()
         .map_err(|_| AdapterError::DirectPostcondition)?;
-    if MakerReplayRootV2::decode(&data) != Ok(root) || bytes.as_slice() != &data[..] {
+    if MakerReplayRootV2::decode(&data) != Ok(*root) || bytes.as_slice() != &data[..] {
         return Err(AdapterError::DirectPostcondition.into());
     }
     Ok(())
@@ -1595,7 +1572,7 @@ fn persist_root(account: &AccountInfo<'_>, root: MakerReplayRootV2) -> Result<()
 
 fn persist_record(
     account: &AccountInfo<'_>,
-    record: DirectIntentRecordV2,
+    record: &DirectIntentRecordV2,
 ) -> Result<(), ProgramError> {
     let mut bytes = [0; DIRECT_INTENT_RECORD_BYTES_V2];
     record
@@ -1613,7 +1590,7 @@ fn persist_record(
     let data = account
         .try_borrow_data()
         .map_err(|_| AdapterError::DirectPostcondition)?;
-    if DirectIntentRecordV2::decode(&data) != Ok(record) || bytes.as_slice() != &data[..] {
+    if DirectIntentRecordV2::decode(&data) != Ok(*record) || bytes.as_slice() != &data[..] {
         return Err(AdapterError::DirectPostcondition.into());
     }
     Ok(())
@@ -1621,7 +1598,7 @@ fn persist_record(
 
 fn persist_position(
     account: &AccountInfo<'_>,
-    position: DirectPositionV2,
+    position: &DirectPositionV2,
 ) -> Result<(), ProgramError> {
     {
         let mut data = account
@@ -1634,35 +1611,7 @@ fn persist_position(
     let data = account
         .try_borrow_data()
         .map_err(|_| AdapterError::DirectPostcondition)?;
-    if DirectPositionV2::decode(&data) != Ok(position) {
-        return Err(AdapterError::DirectPostcondition.into());
-    }
-    Ok(())
-}
-
-fn persist_position_n2(
-    account: &AccountInfo<'_>,
-    position: PositionV1<2>,
-) -> Result<(), ProgramError> {
-    let mut bytes = exact_zeroed(
-        PositionV1::<2>::encoded_len().map_err(|_| AdapterError::DirectPostcondition)?,
-    )?;
-    position
-        .encode(&mut bytes)
-        .map_err(|_| AdapterError::DirectPostcondition)?;
-    {
-        let mut data = account
-            .try_borrow_mut_data()
-            .map_err(|_| AdapterError::DirectPostcondition)?;
-        if data.len() != bytes.len() {
-            return Err(AdapterError::DirectPostcondition.into());
-        }
-        data.copy_from_slice(&bytes);
-    }
-    let data = account
-        .try_borrow_data()
-        .map_err(|_| AdapterError::DirectPostcondition)?;
-    if PositionV1::<2>::decode(&data) != Ok(position) || bytes.as_slice() != &data[..] {
+    if DirectPositionV2::decode(&data) != Ok(*position) {
         return Err(AdapterError::DirectPostcondition.into());
     }
     Ok(())
@@ -1708,6 +1657,13 @@ enum MarketOperation {
         quantity: u64,
     },
     Merge {
+        quantity: u64,
+    },
+    InlineComplementary {
+        generation: u64,
+        expected_prior_count: u64,
+        created: u8,
+        side: Side,
         quantity: u64,
     },
 }
@@ -1777,6 +1733,29 @@ fn mutate_market_width<const N: usize>(
         MarketOperation::Merge { quantity } => market
             .merge_complete_set(quantity)
             .map_err(|_| AdapterError::DirectTransition)?,
+        MarketOperation::InlineComplementary {
+            generation,
+            expected_prior_count,
+            created,
+            side,
+            quantity,
+        } => {
+            let mut index = 0u8;
+            while index < created {
+                let prior = expected_prior_count
+                    .checked_add(u64::from(index))
+                    .ok_or(AdapterError::Arithmetic)?;
+                market
+                    .register_child(generation, prior)
+                    .map_err(|_| AdapterError::DirectTransition)?;
+                index = index.checked_add(1).ok_or(AdapterError::Arithmetic)?;
+            }
+            match side {
+                Side::Buy => market.split_complete_set(quantity),
+                Side::Sell => market.merge_complete_set(quantity),
+            }
+            .map_err(|_| AdapterError::DirectTransition)?;
+        }
     }
     encode_market(&market)
 }
@@ -1810,7 +1789,7 @@ fn process_close_registration(
     let market_lamports = market_account.lamports();
     let root_lamports = root_account.lamports();
     preflight_mutable(&[market_account, root_account])?;
-    persist_root(root_account, next)?;
+    persist_root(root_account, &next)?;
     if snapshot_data(market_account)? != market_before
         || market_account.lamports() != market_lamports
         || root_account.lamports() != root_lamports
@@ -1861,7 +1840,7 @@ fn process_cancel_through(
     let market_lamports = market_account.lamports();
     let root_lamports = root_account.lamports();
     preflight_mutable(&[root_account])?;
-    persist_root(root_account, next)?;
+    persist_root(root_account, &next)?;
     if snapshot_data(market_account)? != market_before
         || market_account.lamports() != market_lamports
         || root_account.lamports() != root_lamports
@@ -1944,8 +1923,15 @@ fn process_register(
     data: &[u8],
     outcome_count: u8,
 ) -> Result<(), ProgramError> {
-    let intent = adapter::decode_register_instruction_v2(data)
-        .map_err(|_| AdapterError::InvalidInstruction)?;
+    let mut intents = Vec::new();
+    intents
+        .try_reserve_exact(1)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    intents.push(
+        adapter::decode_register_instruction_v2(data)
+            .map_err(|_| AdapterError::InvalidInstruction)?,
+    );
+    let intent = intents.first().ok_or(AdapterError::Arithmetic)?;
     let payer = account(accounts, 0)?;
     let credit = account(accounts, 1)?;
     let market_account = account(accounts, 2)?;
@@ -1987,13 +1973,14 @@ fn process_register(
         rent_account,
     )?;
     authenticate_rent_credit(program_id, credit, &payer.key.to_bytes())?;
-    let authorization = authorization(
+    let authorizations = authorization_runtime(
         program_id,
         accounts,
         data,
         account(accounts, instructions_index)?,
-        [(16, intent)],
-    )?[0];
+        &[(16, intent)],
+    )?;
+    let authorization = authorizations.first().ok_or(AdapterError::Arithmetic)?;
     let root_account = account(accounts, root_index)?;
     let root = authenticate_root_state(
         program_id,
@@ -2004,16 +1991,20 @@ fn process_register(
         true,
     )?;
     let record_account = account(accounts, record_index)?;
-    let record_bump = authenticate_new_record(program_id, record_account, intent)?;
+    let record_bump = authenticate_new_record(program_id, record_account, *intent)?;
     let position_account = account(accounts, position_index)?;
-    let position = authenticate_position(
+    let mut positions = Vec::new();
+    positions
+        .try_reserve_exact(1)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    positions.push(authenticate_position(
         program_id,
         position_account,
         market_account,
         intent.maker(),
         intent.generation(),
         outcome_count,
-    )?;
+    )?);
 
     let (participant, collateral_mint, debit, realm_facts, escrow_account) = match intent.side() {
         Side::Buy => {
@@ -2056,26 +2047,46 @@ fn process_register(
             None,
         ),
     };
-    let registration = Box::new(
-        register_intent_runtime_v2(RuntimeRegistrationInputV2 {
-            replay_root: root.state,
-            intent,
-            authorization,
-            phase: map_phase(market.root.phase()),
-            slot: current_slot()?,
-            accounts: participant,
-            system_payer: payer.key.to_bytes(),
-            collateral_mint,
-            buy_debit_authority: debit,
-            record_bump,
-            fee_policy: policy.policy,
-            fee_config_digest: policy.digest,
-            position,
-        })
-        .map_err(|_| AdapterError::DirectTransition)?,
-    );
+    let root_created = root.created;
+    let root_bump = root.bump;
+    let mut roots = Vec::new();
+    roots
+        .try_reserve_exact(1)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    roots.push(root.state);
+    let mut records = Vec::new();
+    records
+        .try_reserve_exact(1)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    records.push(None);
+    let registration = register_intent_runtime_in_place_v2(RuntimeRegistrationInPlaceV2 {
+        replay_root: roots.get_mut(0).ok_or(AdapterError::Arithmetic)?,
+        intent,
+        authorization,
+        phase: map_phase(market.root.phase()),
+        slot: current_slot()?,
+        accounts: &participant,
+        system_payer: payer.key.to_bytes(),
+        collateral_mint,
+        buy_debit_authority: debit.as_ref(),
+        record_bump,
+        fee_policy: policy.policy,
+        fee_config_digest: policy.digest,
+        position: positions.get_mut(0).ok_or(AdapterError::Arithmetic)?,
+        record: records.get_mut(0).ok_or(AdapterError::Arithmetic)?,
+    })
+    .map_err(|_| AdapterError::DirectTransition)?;
+    let registration_root = match roots.first().ok_or(AdapterError::Arithmetic)? {
+        ReplayRootStateV2::Existing(value) => value,
+        ReplayRootStateV2::Absent { .. } => return Err(AdapterError::DirectTransition.into()),
+    };
+    let registration_record = records
+        .first()
+        .ok_or(AdapterError::Arithmetic)?
+        .as_ref()
+        .ok_or(AdapterError::DirectTransition)?;
 
-    let root_rent = if root.created {
+    let root_rent = if root_created {
         rent.minimum_balance(MAKER_REPLAY_ROOT_BYTES_V2)
     } else {
         0
@@ -2086,7 +2097,7 @@ fn process_register(
     } else {
         0
     };
-    let root_top_up = if root.created {
+    let root_top_up = if root_created {
         creation_top_up(root_account, root_rent)?
     } else {
         0
@@ -2105,7 +2116,7 @@ fn process_register(
         .checked_sub(total_top_up)
         .ok_or(AdapterError::DirectAuthentication)?;
     let credit_lamports = credit.lamports();
-    let market_after = if root.created {
+    let market_after = if root_created {
         Some(mutate_market(
             market_account,
             outcome_count,
@@ -2122,9 +2133,9 @@ fn process_register(
         market_account.key,
         intent.generation(),
         intent.maker(),
-        root.bump,
+        root_bump,
     );
-    let record_bytes = OwnedRecordSeeds::new(intent, record_bump);
+    let record_bytes = OwnedRecordSeeds::new(*intent, record_bump);
     let mut mutable = Vec::new();
     mutable
         .try_reserve_exact(8)
@@ -2139,7 +2150,7 @@ fn process_register(
     }
     preflight_mutable(&mutable)?;
 
-    if root.created {
+    if root_created {
         create_pda(
             payer,
             root_account,
@@ -2188,12 +2199,12 @@ fn process_register(
             escrow,
             token_program,
             realm,
-            registration.record.reserved_collateral(),
+            registration_record.reserved_collateral(),
         )?;
         if escrow_facts.authority != record_account.key.to_bytes()
             || escrow_facts.token_account != escrow.key.to_bytes()
             || authenticate_token_account(escrow, token_program, realm)?.amount
-                != registration.record.reserved_collateral()
+                != registration_record.reserved_collateral()
         {
             return Err(AdapterError::DirectPostcondition.into());
         }
@@ -2201,10 +2212,13 @@ fn process_register(
     if let Some(market_after) = market_after {
         persist_market(program_id, market_account, &market_after)?;
     }
-    persist_root(root_account, registration.replay_root)?;
-    persist_record(record_account, registration.record)?;
+    persist_root(root_account, registration_root)?;
+    persist_record(record_account, registration_record)?;
     if intent.side() == Side::Sell {
-        persist_position(position_account, registration.position)?;
+        persist_position(
+            position_account,
+            positions.first().ok_or(AdapterError::Arithmetic)?,
+        )?;
     }
     if payer.lamports() != payer_after || credit.lamports() != credit_lamports {
         return Err(AdapterError::DirectPostcondition.into());
@@ -2283,8 +2297,13 @@ fn process_unwind(
         2
     };
     let record_account = account(accounts, record_index)?;
-    let record = authenticate_record(program_id, record_account)?;
-    let intent = record.intent();
+    let mut records = Vec::new();
+    records
+        .try_reserve_exact(1)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    records.push(authenticate_record(program_id, record_account)?);
+    let record = records.first().ok_or(AdapterError::Arithmetic)?;
+    let intent = record.intent_ref();
     let side = intent.side();
     match kind {
         UnwindKind::Cancel => adapter::decode_cancel_instruction_v2(data, side)
@@ -2378,7 +2397,9 @@ fn process_unwind(
         ),
     };
     let phase = map_phase(market.root.phase());
-    let (root_after, position_after, close) = match kind {
+    let mut root_after = root;
+    let mut position_after = position;
+    let close = match kind {
         UnwindKind::Cancel => {
             let message = adapter::decode_cancel_instruction_v2(data, side)
                 .map_err(|_| AdapterError::InvalidInstruction)?;
@@ -2395,69 +2416,44 @@ fn process_unwind(
                 *intent.maker(),
                 &signed,
             )?;
-            let transition = Box::new(
-                unwind_intent_runtime_v2(RuntimeUnwindInputV2 {
-                    replay_root: root,
-                    record,
-                    kind: RuntimeUnwindKindV2::Cancel {
-                        authorization: &authorization,
-                    },
-                    phase,
-                    accounts: participant,
-                    collateral_mint: mint_address,
-                    escrow_authority: escrow_facts,
-                    position,
-                })
-                .map_err(|_| AdapterError::DirectTransition)?,
-            );
-            (
-                transition.replay_root,
-                transition.position,
-                transition.close,
-            )
+            unwind_intent_runtime_in_place_v2(RuntimeUnwindInPlaceV2 {
+                replay_root: &mut root_after,
+                record,
+                kind: RuntimeUnwindKindV2::Cancel {
+                    authorization: &authorization,
+                },
+                phase,
+                accounts: &participant,
+                collateral_mint: mint_address,
+                escrow_authority: escrow_facts.as_ref(),
+                position: &mut position_after,
+            })
+            .map_err(|_| AdapterError::DirectTransition)?
         }
-        UnwindKind::Expire => {
-            let transition = Box::new(
-                unwind_intent_runtime_v2(RuntimeUnwindInputV2 {
-                    replay_root: root,
-                    record,
-                    kind: RuntimeUnwindKindV2::Expire {
-                        slot: current_slot()?,
-                    },
-                    phase,
-                    accounts: participant,
-                    collateral_mint: mint_address,
-                    escrow_authority: escrow_facts,
-                    position,
-                })
-                .map_err(|_| AdapterError::DirectTransition)?,
-            );
-            (
-                transition.replay_root,
-                transition.position,
-                transition.close,
-            )
-        }
-        UnwindKind::Invalidated => {
-            let transition = Box::new(
-                unwind_intent_runtime_v2(RuntimeUnwindInputV2 {
-                    replay_root: root,
-                    record,
-                    kind: RuntimeUnwindKindV2::Invalidated,
-                    phase,
-                    accounts: participant,
-                    collateral_mint: mint_address,
-                    escrow_authority: escrow_facts,
-                    position,
-                })
-                .map_err(|_| AdapterError::DirectTransition)?,
-            );
-            (
-                transition.replay_root,
-                transition.position,
-                transition.close,
-            )
-        }
+        UnwindKind::Expire => unwind_intent_runtime_in_place_v2(RuntimeUnwindInPlaceV2 {
+            replay_root: &mut root_after,
+            record,
+            kind: RuntimeUnwindKindV2::Expire {
+                slot: current_slot()?,
+            },
+            phase,
+            accounts: &participant,
+            collateral_mint: mint_address,
+            escrow_authority: escrow_facts.as_ref(),
+            position: &mut position_after,
+        })
+        .map_err(|_| AdapterError::DirectTransition)?,
+        UnwindKind::Invalidated => unwind_intent_runtime_in_place_v2(RuntimeUnwindInPlaceV2 {
+            replay_root: &mut root_after,
+            record,
+            kind: RuntimeUnwindKindV2::Invalidated,
+            phase,
+            accounts: &participant,
+            collateral_mint: mint_address,
+            escrow_authority: escrow_facts.as_ref(),
+            position: &mut position_after,
+        })
+        .map_err(|_| AdapterError::DirectTransition)?,
     };
     execute_unwind(
         program_id,
@@ -2469,9 +2465,9 @@ fn process_unwind(
         credit,
         &rent,
         intent,
-        root_after,
-        position_after,
-        close,
+        &root_after,
+        &position_after,
+        &close,
         realm_facts,
     )
 }
@@ -2486,10 +2482,10 @@ fn execute_unwind<'info>(
     position_account: &AccountInfo<'info>,
     credit: &AccountInfo<'info>,
     rent: &Rent,
-    intent: DirectIntentV2,
-    root_after: MakerReplayRootV2,
-    position_after: DirectPositionV2,
-    close: LiveRecordCloseV2,
+    intent: &DirectIntentV2,
+    root_after: &MakerReplayRootV2,
+    position_after: &DirectPositionV2,
+    close: &LiveRecordCloseV2,
     realm: Option<RealmFacts>,
 ) -> Result<(), ProgramError> {
     let market_before = snapshot_data(market_account)?;
@@ -2500,13 +2496,13 @@ fn execute_unwind<'info>(
         .checked_add(record_account.lamports())
         .ok_or(AdapterError::Arithmetic)?;
     let record_before = authenticate_record(program_id, record_account)?;
-    if record_before.intent() != intent
+    if record_before.intent() != *intent
         || close.collateral_refund != record_before.reserved_collateral()
         || close.claim_refund != record_before.reserved_claims()
     {
         return Err(AdapterError::DirectPostcondition.into());
     }
-    let record_seeds = OwnedRecordSeeds::new(intent, record_before.bump());
+    let record_seeds = OwnedRecordSeeds::new(*intent, record_before.bump());
     let mut mutable = vec![root_account, record_account, credit];
     if intent.side() == Side::Sell {
         mutable.push(position_account);
@@ -2626,49 +2622,63 @@ fn process_ordinary(
     let buyer_position_account = account(accounts, 18)?;
     let buyer_collateral = account(accounts, 19)?;
     let buyer_credit = account(accounts, 20)?;
-    let seller_record = authenticate_record(program_id, seller_record_account)?;
-    let buyer_record = authenticate_record(program_id, buyer_record_account)?;
-    let ask = seller_record.intent();
-    let bid = buyer_record.intent();
-    if market_account.key.to_bytes() != *ask.market()
-        || market_account.key.to_bytes() != *bid.market()
-        || market.root.identity().generation() != ask.generation()
-        || ask.generation() != bid.generation()
-        || seller_collateral.key.to_bytes() != *ask.collateral_account()
-        || buyer_collateral.key.to_bytes() != *bid.collateral_account()
+    let mut records = Vec::new();
+    records
+        .try_reserve_exact(2)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    records.push(authenticate_record(program_id, seller_record_account)?);
+    records.push(authenticate_record(program_id, buyer_record_account)?);
+    let mut roots = Vec::new();
+    roots
+        .try_reserve_exact(2)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    let mut positions = Vec::new();
+    positions
+        .try_reserve_exact(2)
+        .map_err(|_| AdapterError::Arithmetic)?;
     {
-        return Err(AdapterError::DirectAuthentication.into());
+        let ask = copied(&records, 0)?.intent();
+        let bid = copied(&records, 1)?.intent();
+        if market_account.key.to_bytes() != *ask.market()
+            || market_account.key.to_bytes() != *bid.market()
+            || market.root.identity().generation() != ask.generation()
+            || ask.generation() != bid.generation()
+            || seller_collateral.key.to_bytes() != *ask.collateral_account()
+            || buyer_collateral.key.to_bytes() != *bid.collateral_account()
+        {
+            return Err(AdapterError::DirectAuthentication.into());
+        }
+        roots.push(existing_root(
+            program_id,
+            seller_root_account,
+            market_account.key,
+            ask.generation(),
+            ask.maker(),
+        )?);
+        roots.push(existing_root(
+            program_id,
+            buyer_root_account,
+            market_account.key,
+            bid.generation(),
+            bid.maker(),
+        )?);
+        positions.push(authenticate_position(
+            program_id,
+            seller_position_account,
+            market_account,
+            ask.maker(),
+            ask.generation(),
+            outcome_count,
+        )?);
+        positions.push(authenticate_position(
+            program_id,
+            buyer_position_account,
+            market_account,
+            bid.maker(),
+            bid.generation(),
+            outcome_count,
+        )?);
     }
-    let seller_root = existing_root(
-        program_id,
-        seller_root_account,
-        market_account.key,
-        ask.generation(),
-        ask.maker(),
-    )?;
-    let buyer_root = existing_root(
-        program_id,
-        buyer_root_account,
-        market_account.key,
-        bid.generation(),
-        bid.maker(),
-    )?;
-    let seller_position = authenticate_position(
-        program_id,
-        seller_position_account,
-        market_account,
-        ask.maker(),
-        ask.generation(),
-        outcome_count,
-    )?;
-    let buyer_position = authenticate_position(
-        program_id,
-        buyer_position_account,
-        market_account,
-        bid.maker(),
-        bid.generation(),
-        outcome_count,
-    )?;
     authenticate_token_account(seller_collateral, account(accounts, 7)?, realm)?;
     authenticate_token_account(buyer_collateral, account(accounts, 7)?, realm)?;
     let (expected_escrow, _) = escrow_pda(program_id, buyer_record_account.key);
@@ -2679,57 +2689,90 @@ fn process_ordinary(
         buyer_escrow,
         account(accounts, 7)?,
         realm,
-        buyer_record.reserved_collateral(),
+        records
+            .get(1)
+            .ok_or(AdapterError::Arithmetic)?
+            .reserved_collateral(),
     )?;
     let buyer_escrow_donation = escrow_donation(
         buyer_escrow,
         account(accounts, 7)?,
         realm,
-        buyer_record.reserved_collateral(),
+        records
+            .get(1)
+            .ok_or(AdapterError::Arithmetic)?
+            .reserved_collateral(),
     )?;
-    authenticate_rent_credit(program_id, seller_credit, seller_record.rent_payer())?;
-    authenticate_rent_credit(program_id, buyer_credit, buyer_record.rent_payer())?;
-    let settlement = Box::new(
-        settle_ordinary_runtime_v2(RuntimeOrdinaryMatchV2 {
+    authenticate_rent_credit(
+        program_id,
+        seller_credit,
+        records
+            .first()
+            .ok_or(AdapterError::Arithmetic)?
+            .rent_payer(),
+    )?;
+    authenticate_rent_credit(
+        program_id,
+        buyer_credit,
+        records.get(1).ok_or(AdapterError::Arithmetic)?.rent_payer(),
+    )?;
+    let seller_accounts = participant_accounts(
+        seller_root_account,
+        Some(seller_record_account),
+        None,
+        seller_position_account,
+        seller_collateral,
+    );
+    let buyer_accounts = participant_accounts(
+        buyer_root_account,
+        Some(buyer_record_account),
+        Some(buyer_escrow),
+        buyer_position_account,
+        buyer_collateral,
+    );
+    let mut seller_close = None;
+    let mut buyer_close = None;
+    let settlement = {
+        let (seller_roots, buyer_roots) = roots.split_at_mut(1);
+        let seller_root = seller_roots.get_mut(0).ok_or(AdapterError::Arithmetic)?;
+        let buyer_root = buyer_roots.get_mut(0).ok_or(AdapterError::Arithmetic)?;
+        let (seller_records, buyer_records) = records.split_at_mut(1);
+        let seller_record = seller_records.get_mut(0).ok_or(AdapterError::Arithmetic)?;
+        let buyer_record = buyer_records.get_mut(0).ok_or(AdapterError::Arithmetic)?;
+        let (seller_positions, buyer_positions) = positions.split_at_mut(1);
+        let seller_position = seller_positions.first().ok_or(AdapterError::Arithmetic)?;
+        let buyer_position = buyer_positions.get_mut(0).ok_or(AdapterError::Arithmetic)?;
+        settle_ordinary_runtime_in_place_v2(RuntimeOrdinaryMatchInPlaceV2 {
             phase: map_phase(market.root.phase()),
             slot: current_slot()?,
             seller_replay_root: seller_root,
             buyer_replay_root: buyer_root,
             seller_record,
             buyer_record,
-            seller_accounts: participant_accounts(
-                seller_root_account,
-                Some(seller_record_account),
-                None,
-                seller_position_account,
-                seller_collateral,
-            ),
-            buyer_accounts: participant_accounts(
-                buyer_root_account,
-                Some(buyer_record_account),
-                Some(buyer_escrow),
-                buyer_position_account,
-                buyer_collateral,
-            ),
+            seller_close: &mut seller_close,
+            buyer_close: &mut buyer_close,
+            seller_accounts: &seller_accounts,
+            buyer_accounts: &buyer_accounts,
             seller_position,
             buyer_position,
             collateral_mint: account(accounts, 6)?.key.to_bytes(),
-            buyer_escrow_authority: escrow,
+            buyer_escrow_authority: &escrow,
             fill: instruction.fill,
             execution_price: instruction.execution_price,
             fee_policy: policy.policy,
             fee_config_digest: policy.digest,
             fee_recipient_account: fee_account.key.to_bytes(),
         })
-        .map_err(|_| AdapterError::DirectTransition)?,
-    );
+        .map_err(|_| AdapterError::DirectTransition)?
+    };
     let market_before = snapshot_data(market_account)?;
     let market_lamports = market_account.lamports();
     let seller_root_lamports = seller_root_account.lamports();
     let buyer_root_lamports = buyer_root_account.lamports();
     let mint = account(accounts, 6)?;
     let token_program = account(accounts, 7)?;
-    let buyer_seeds = OwnedRecordSeeds::new(bid, buyer_record.bump());
+    let buyer_record = records.get(1).ok_or(AdapterError::Arithmetic)?;
+    let buyer_seeds = OwnedRecordSeeds::new(buyer_record.intent(), buyer_record.bump());
     preflight_mutable(&[
         seller_root_account,
         seller_record_account,
@@ -2763,15 +2806,29 @@ fn process_ordinary(
         settlement.venue_fee_transfer,
         &buyer_seeds.refs(),
     )?;
-    persist_root(seller_root_account, settlement.seller_replay_root)?;
-    persist_root(buyer_root_account, settlement.buyer_replay_root)?;
-    persist_position(buyer_position_account, settlement.buyer_position)?;
+    persist_root(
+        seller_root_account,
+        roots.first().ok_or(AdapterError::Arithmetic)?,
+    )?;
+    persist_root(
+        buyer_root_account,
+        roots.get(1).ok_or(AdapterError::Arithmetic)?,
+    )?;
+    persist_position(
+        buyer_position_account,
+        positions.get(1).ok_or(AdapterError::Arithmetic)?,
+    )?;
     finish_record(
         program_id,
         seller_record_account,
         seller_credit,
         &rent,
-        settlement.seller_record,
+        if seller_close.is_none() {
+            Some(records.first().ok_or(AdapterError::Arithmetic)?)
+        } else {
+            None
+        },
+        seller_close.as_ref(),
         None,
     )?;
     finish_record(
@@ -2779,7 +2836,12 @@ fn process_ordinary(
         buyer_record_account,
         buyer_credit,
         &rent,
-        settlement.buyer_record,
+        if buyer_close.is_none() {
+            Some(records.get(1).ok_or(AdapterError::Arithmetic)?)
+        } else {
+            None
+        },
+        buyer_close.as_ref(),
         Some(BuyCloseAccounts {
             escrow: buyer_escrow,
             destination: buyer_collateral,
@@ -2813,11 +2875,12 @@ fn finish_record<'info>(
     record_account: &AccountInfo<'info>,
     credit: &AccountInfo<'info>,
     rent: &Rent,
-    after: RecordAfterFillV2,
+    live_record: Option<&DirectIntentRecordV2>,
+    close: Option<&LiveRecordCloseV2>,
     buy: Option<BuyCloseAccounts<'_, 'info>>,
 ) -> Result<(), ProgramError> {
-    if let Some(record) = after.live_record {
-        if after.close.is_some() {
+    if let Some(record) = live_record {
+        if close.is_some() {
             return Err(AdapterError::DirectPostcondition.into());
         }
         if let Some(accounts) = buy.as_ref() {
@@ -2836,7 +2899,7 @@ fn finish_record<'info>(
         }
         return persist_record(record_account, record);
     }
-    let close = after.close.ok_or(AdapterError::DirectPostcondition)?;
+    let close = close.ok_or(AdapterError::DirectPostcondition)?;
     let record = authenticate_record(program_id, record_account)?;
     let intent = record.intent();
     let seeds = OwnedRecordSeeds::new(intent, record.bump());
@@ -3167,23 +3230,26 @@ fn process_split<'info>(
             copied(&fee_debits, index)?,
             &seeds.refs(),
         )?;
-        persist_root(account(accounts, base)?, copied(&roots, index)?)?;
-        persist_position(account(accounts, base + 3)?, copied(&positions, index)?)?;
-        let close = copied(&record_closes, index)?;
-        let record_after = RecordAfterFillV2 {
-            live_record: if close.is_none() {
-                Some(copied(&records, index)?)
-            } else {
-                None
-            },
-            close,
-        };
+        persist_root(
+            account(accounts, base)?,
+            roots.get(index).ok_or(AdapterError::Arithmetic)?,
+        )?;
+        persist_position(
+            account(accounts, base + 3)?,
+            positions.get(index).ok_or(AdapterError::Arithmetic)?,
+        )?;
+        let close = record_closes.get(index).ok_or(AdapterError::Arithmetic)?;
         finish_record(
             program_id,
             record_account,
             account(accounts, base + 5)?,
             rent,
-            record_after,
+            if close.is_none() {
+                Some(records.get(index).ok_or(AdapterError::Arithmetic)?)
+            } else {
+                None
+            },
+            close.as_ref(),
             Some(BuyCloseAccounts {
                 escrow: account(accounts, base + 2)?,
                 destination: account(accounts, base + 4)?,
@@ -3366,22 +3432,22 @@ fn process_merge<'info>(
     )?;
     for index in 0..count {
         let base = SPLIT_BASE + index * 5;
-        persist_root(account(accounts, base)?, copied(&roots, index)?)?;
-        let close = copied(&record_closes, index)?;
-        let record_after = RecordAfterFillV2 {
-            live_record: if close.is_none() {
-                Some(copied(&records, index)?)
-            } else {
-                None
-            },
-            close,
-        };
+        persist_root(
+            account(accounts, base)?,
+            roots.get(index).ok_or(AdapterError::Arithmetic)?,
+        )?;
+        let close = record_closes.get(index).ok_or(AdapterError::Arithmetic)?;
         finish_record(
             program_id,
             account(accounts, base + 1)?,
             account(accounts, base + 4)?,
             rent,
-            record_after,
+            if close.is_none() {
+                Some(records.get(index).ok_or(AdapterError::Arithmetic)?)
+            } else {
+                None
+            },
+            close.as_ref(),
             None,
         )?;
     }
@@ -3398,8 +3464,22 @@ fn process_inline_ordinary(
     data: &[u8],
     outcome_count: u8,
 ) -> Result<(), ProgramError> {
-    let instruction = adapter::decode_inline_ordinary_instruction_v2(data)
+    let instruction = adapter::decode_inline_ordinary_instruction_view_v2(data)
         .map_err(|_| AdapterError::InvalidInstruction)?;
+    let mut intents = Vec::new();
+    intents
+        .try_reserve_exact(2)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    intents.push(
+        instruction
+            .seller_intent()
+            .map_err(|_| AdapterError::InvalidInstruction)?,
+    );
+    intents.push(
+        instruction
+            .buyer_intent()
+            .map_err(|_| AdapterError::InvalidInstruction)?,
+    );
     let payer = account(accounts, 0)?;
     let credit = account(accounts, 1)?;
     let market_account = account(accounts, 2)?;
@@ -3435,8 +3515,8 @@ fn process_inline_ordinary(
     let buyer_root_account = account(accounts, INLINE_ORDINARY_BASE + 3)?;
     let buyer_position_account = account(accounts, INLINE_ORDINARY_BASE + 4)?;
     let buyer_collateral = account(accounts, INLINE_ORDINARY_BASE + 5)?;
-    let ask = instruction.seller_intent;
-    let bid = instruction.buyer_intent;
+    let ask = intents.first().ok_or(AdapterError::Arithmetic)?;
+    let bid = intents.get(1).ok_or(AdapterError::Arithmetic)?;
     if market_account.key.to_bytes() != *ask.market()
         || market_account.key.to_bytes() != *bid.market()
         || market.root.identity().generation() != ask.generation()
@@ -3446,82 +3526,107 @@ fn process_inline_ordinary(
     {
         return Err(AdapterError::DirectAuthentication.into());
     }
-    let seller_root = authenticate_root_state(
+    let mut root_facts = Vec::new();
+    root_facts
+        .try_reserve_exact(2)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    root_facts.push(authenticate_root_state(
         program_id,
         seller_root_account,
         market_account.key,
         ask.generation(),
         ask.maker(),
         true,
-    )?;
-    let buyer_root = authenticate_root_state(
+    )?);
+    root_facts.push(authenticate_root_state(
         program_id,
         buyer_root_account,
         market_account.key,
         bid.generation(),
         bid.maker(),
         true,
-    )?;
-    let seller_position = authenticate_position(
+    )?);
+    let mut positions = Vec::new();
+    positions
+        .try_reserve_exact(2)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    positions.push(authenticate_position(
         program_id,
         seller_position_account,
         market_account,
         ask.maker(),
         ask.generation(),
         outcome_count,
-    )?;
-    let buyer_position = authenticate_position(
+    )?);
+    positions.push(authenticate_position(
         program_id,
         buyer_position_account,
         market_account,
         bid.maker(),
         bid.generation(),
         outcome_count,
-    )?;
+    )?);
     authenticate_token_account(seller_collateral, account(accounts, 9)?, realm)?;
     let debit = buy_debit_authority(buyer_collateral, account(accounts, 9)?, realm)?;
-    let authorizations = authorization(
+    let authorizations = authorization_runtime(
         program_id,
         accounts,
         data,
         account(accounts, 12)?,
-        [(34, ask), (266, bid)],
+        &[(34, ask), (266, bid)],
     )?;
-    let settlement = Box::new(
-        settle_inline_ordinary_runtime_v2(RuntimeInlineOrdinaryMatchV2 {
+    let seller_accounts = inline_accounts(
+        seller_root_account,
+        seller_position_account,
+        seller_collateral,
+    );
+    let buyer_accounts =
+        inline_accounts(buyer_root_account, buyer_position_account, buyer_collateral);
+    let mut roots = Vec::new();
+    roots
+        .try_reserve_exact(2)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    roots.push(root_facts.first().ok_or(AdapterError::Arithmetic)?.state);
+    roots.push(root_facts.get(1).ok_or(AdapterError::Arithmetic)?.state);
+    let settlement = {
+        let (seller_roots, buyer_roots) = roots.split_at_mut(1);
+        let (seller_positions, buyer_positions) = positions.split_at_mut(1);
+        settle_inline_ordinary_runtime_in_place_v2(RuntimeInlineOrdinaryMatchInPlaceV2 {
             phase: map_phase(market.root.phase()),
             slot: current_slot()?,
-            seller_replay_root: seller_root.state,
-            buyer_replay_root: buyer_root.state,
+            seller_replay_root: seller_roots.get_mut(0).ok_or(AdapterError::Arithmetic)?,
+            buyer_replay_root: buyer_roots.get_mut(0).ok_or(AdapterError::Arithmetic)?,
             root_creation_payer: payer.key.to_bytes(),
             seller_intent: ask,
             buyer_intent: bid,
-            seller_authorization: authorizations[0],
-            buyer_authorization: authorizations[1],
-            seller_accounts: inline_accounts(
-                seller_root_account,
-                seller_position_account,
-                seller_collateral,
-            ),
-            buyer_accounts: inline_accounts(
-                buyer_root_account,
-                buyer_position_account,
-                buyer_collateral,
-            ),
-            seller_position,
-            buyer_position,
+            seller_authorization: authorizations.first().ok_or(AdapterError::Arithmetic)?,
+            buyer_authorization: authorizations.get(1).ok_or(AdapterError::Arithmetic)?,
+            seller_accounts: &seller_accounts,
+            buyer_accounts: &buyer_accounts,
+            seller_position: seller_positions
+                .get_mut(0)
+                .ok_or(AdapterError::Arithmetic)?,
+            buyer_position: buyer_positions.get_mut(0).ok_or(AdapterError::Arithmetic)?,
             collateral_mint: account(accounts, 8)?.key.to_bytes(),
-            buyer_debit_authority: debit,
-            fill: instruction.fill,
-            execution_price: instruction.execution_price,
+            buyer_debit_authority: &debit,
+            fill: instruction.fill(),
+            execution_price: instruction.execution_price(),
             fee_policy: policy.policy,
             fee_config_digest: policy.digest,
             fee_recipient_account: fee_account.key.to_bytes(),
         })
-        .map_err(|_| AdapterError::DirectTransition)?,
-    );
+        .map_err(|_| AdapterError::DirectTransition)?
+    };
+    let seller_root_after = match roots.first().ok_or(AdapterError::Arithmetic)? {
+        ReplayRootStateV2::Existing(value) => value,
+        ReplayRootStateV2::Absent { .. } => return Err(AdapterError::DirectTransition.into()),
+    };
+    let buyer_root_after = match roots.get(1).ok_or(AdapterError::Arithmetic)? {
+        ReplayRootStateV2::Existing(value) => value,
+        ReplayRootStateV2::Absent { .. } => return Err(AdapterError::DirectTransition.into()),
+    };
     let mut created = 0_u64;
-    for root in [seller_root, buyer_root] {
+    for root in &root_facts {
         if root.created {
             created = created.checked_add(1).ok_or(AdapterError::Arithmetic)?;
         }
@@ -3540,12 +3645,12 @@ fn process_inline_ordinary(
         )?)
     };
     let root_rent = rent.minimum_balance(MAKER_REPLAY_ROOT_BYTES_V2);
-    let seller_top_up = if seller_root.created {
+    let seller_top_up = if root_facts.first().ok_or(AdapterError::Arithmetic)?.created {
         creation_top_up(seller_root_account, root_rent)?
     } else {
         0
     };
-    let buyer_top_up = if buyer_root.created {
+    let buyer_top_up = if root_facts.get(1).ok_or(AdapterError::Arithmetic)?.created {
         creation_top_up(buyer_root_account, root_rent)?
     } else {
         0
@@ -3562,13 +3667,13 @@ fn process_inline_ordinary(
         market_account.key,
         ask.generation(),
         ask.maker(),
-        seller_root.bump,
+        root_facts.first().ok_or(AdapterError::Arithmetic)?.bump,
     );
     let buyer_seeds = root_seed_parts(
         market_account.key,
         bid.generation(),
         bid.maker(),
-        buyer_root.bump,
+        root_facts.get(1).ok_or(AdapterError::Arithmetic)?.bump,
     );
     preflight_mutable(&[
         payer,
@@ -3581,7 +3686,7 @@ fn process_inline_ordinary(
         buyer_collateral,
         fee_account,
     ])?;
-    if seller_root.created {
+    if root_facts.first().ok_or(AdapterError::Arithmetic)?.created {
         create_pda(
             payer,
             seller_root_account,
@@ -3592,7 +3697,7 @@ fn process_inline_ordinary(
             &seller_seeds.refs(),
         )?;
     }
-    if buyer_root.created {
+    if root_facts.get(1).ok_or(AdapterError::Arithmetic)?.created {
         create_pda(
             payer,
             buyer_root_account,
@@ -3633,10 +3738,16 @@ fn process_inline_ordinary(
     if let Some(market_after) = market_after {
         persist_market(program_id, market_account, &market_after)?;
     }
-    persist_root(seller_root_account, settlement.seller_replay_root)?;
-    persist_root(buyer_root_account, settlement.buyer_replay_root)?;
-    persist_position(seller_position_account, settlement.seller_position)?;
-    persist_position(buyer_position_account, settlement.buyer_position)?;
+    persist_root(seller_root_account, seller_root_after)?;
+    persist_root(buyer_root_account, buyer_root_after)?;
+    persist_position(
+        seller_position_account,
+        positions.first().ok_or(AdapterError::Arithmetic)?,
+    )?;
+    persist_position(
+        buyer_position_account,
+        positions.get(1).ok_or(AdapterError::Arithmetic)?,
+    )?;
     if payer.lamports() != payer_after || credit.lamports() != credit_lamports {
         return Err(AdapterError::DirectPostcondition.into());
     }
@@ -3649,13 +3760,43 @@ fn process_inline_complementary(
     data: &[u8],
     action: adapter::AdapterActionV2,
 ) -> Result<(), ProgramError> {
-    let (instruction, intents) =
-        adapter::decode_inline_complementary_instruction_v2::<2>(data, action)
-            .map_err(|_| AdapterError::InvalidInstruction)?;
+    let instruction = adapter::decode_inline_complementary_instruction_view_v2(data, action)
+        .map_err(|_| AdapterError::InvalidInstruction)?;
+    let mut intents = Vec::new();
+    intents
+        .try_reserve_exact(2)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    intents.push(
+        instruction
+            .intent(0)
+            .map_err(|_| AdapterError::InvalidInstruction)?,
+    );
+    intents.push(
+        instruction
+            .intent(1)
+            .map_err(|_| AdapterError::InvalidInstruction)?,
+    );
+    let mut execution_prices = Vec::new();
+    execution_prices
+        .try_reserve_exact(2)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    execution_prices.push(
+        instruction
+            .execution_price(0)
+            .map_err(|_| AdapterError::InvalidInstruction)?,
+    );
+    execution_prices.push(
+        instruction
+            .execution_price(1)
+            .map_err(|_| AdapterError::InvalidInstruction)?,
+    );
     let payer = account(accounts, 0)?;
     let credit = account(accounts, 1)?;
     let market_account = account(accounts, 2)?;
-    let market = authenticate_market_n2(program_id, market_account)?;
+    let market = authenticate_market(program_id, market_account)?;
+    if market.outcome_count != 2 {
+        return Err(AdapterError::DirectAuthentication.into());
+    }
     let rent = require_system_and_rent(account(accounts, 12)?, account(accounts, 13)?)?;
     if payer.owner != &system_program::ID || !payer.data_is_empty() {
         return Err(AdapterError::DirectAuthentication.into());
@@ -3666,11 +3807,11 @@ fn process_inline_complementary(
         account(accounts, 3)?,
         account(accounts, 10)?,
         account(accounts, 11)?,
-        market.root(),
+        market.root,
     )?;
     let policy = authenticate_policy(
         program_id,
-        market.root(),
+        market.root,
         account(accounts, 4)?,
         account(accounts, 5)?,
         account(accounts, 6)?,
@@ -3681,7 +3822,7 @@ fn process_inline_complementary(
         program_id,
         market_account,
         account(accounts, 8)?,
-        market.root().identity().generation(),
+        market.root.identity().generation(),
     )?;
     let vault_facts = authenticate_vault(
         program_id,
@@ -3691,41 +3832,36 @@ fn process_inline_complementary(
         account(accounts, 11)?,
         realm,
     )?;
-    if vault_facts.amount < market.hoard_atoms() {
+    if vault_facts.amount < market.hoard_atoms {
         return Err(AdapterError::DirectAuthentication.into());
     }
     let fee_account = account(accounts, 9)?;
     authenticate_token_account(fee_account, account(accounts, 11)?, realm)?;
-    let seed_root = authenticate_root_state(
-        program_id,
-        account(accounts, INLINE_COMPLEMENT_BASE)?,
-        market_account.key,
-        intents[0].generation(),
-        intents[0].maker(),
-        true,
-    )?;
-    let seed_position = authenticate_position_n2(
-        program_id,
-        account(accounts, INLINE_COMPLEMENT_BASE + 1)?,
-        market_account,
-        intents[0].maker(),
-        intents[0].generation(),
-    )?;
-    let seed_accounts = inline_accounts(
-        account(accounts, INLINE_COMPLEMENT_BASE)?,
-        account(accounts, INLINE_COMPLEMENT_BASE + 1)?,
-        account(accounts, INLINE_COMPLEMENT_BASE + 2)?,
-    );
-    let mut roots = [seed_root.state; 2];
-    let mut root_facts = [seed_root; 2];
-    let mut positions = [seed_position; 2];
-    let mut participant_accounts_array = [seed_accounts; 2];
-    let mut debits = [None; 2];
+    let mut roots: Vec<ReplayRootStateV2> = Vec::new();
+    let mut root_facts: Vec<RootFacts> = Vec::new();
+    let mut positions: Vec<DirectPositionV2> = Vec::new();
+    let mut participant_accounts_array: Vec<InlineParticipantAccountsV2> = Vec::new();
+    let mut debits = Vec::new();
+    roots
+        .try_reserve_exact(2)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    root_facts
+        .try_reserve_exact(2)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    positions
+        .try_reserve_exact(2)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    participant_accounts_array
+        .try_reserve_exact(2)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    debits
+        .try_reserve_exact(2)
+        .map_err(|_| AdapterError::Arithmetic)?;
     for index in 0..2 {
         let base = INLINE_COMPLEMENT_BASE + index * 3;
         let intent = copied(&intents, index)?;
         if market_account.key.to_bytes() != *intent.market()
-            || market.root().identity().generation() != intent.generation()
+            || market.root.identity().generation() != intent.generation()
             || account(accounts, base + 2)?.key.to_bytes() != *intent.collateral_account()
         {
             return Err(AdapterError::DirectAuthentication.into());
@@ -3738,22 +3874,21 @@ fn process_inline_complementary(
             intent.maker(),
             true,
         )?;
-        replace(&mut root_facts, index, facts)?;
-        replace(&mut roots, index, facts.state)?;
-        let position = authenticate_position_n2(
+        root_facts.push(facts);
+        roots.push(facts.state);
+        positions.push(authenticate_position(
             program_id,
             account(accounts, base + 1)?,
             market_account,
             intent.maker(),
             intent.generation(),
-        )?;
-        replace(&mut positions, index, position)?;
-        let participant = inline_accounts(
+            2,
+        )?);
+        participant_accounts_array.push(inline_accounts(
             account(accounts, base)?,
             account(accounts, base + 1)?,
             account(accounts, base + 2)?,
-        );
-        replace(&mut participant_accounts_array, index, participant)?;
+        ));
         match action {
             adapter::AdapterActionV2::InlineSplit => {
                 let debit = buy_debit_authority(
@@ -3761,7 +3896,7 @@ fn process_inline_complementary(
                     account(accounts, 11)?,
                     realm,
                 )?;
-                replace(&mut debits, index, Some(debit))?;
+                debits.push(Some(debit));
             }
             adapter::AdapterActionV2::InlineMerge => {
                 authenticate_token_account(
@@ -3769,65 +3904,69 @@ fn process_inline_complementary(
                     account(accounts, 11)?,
                     realm,
                 )?;
+                debits.push(None);
             }
             _ => return Err(AdapterError::InvalidInstruction.into()),
         }
     }
-    let authorizations = authorization(
+    let authorizations = authorization_runtime(
         program_id,
         accounts,
         data,
         account(accounts, 14)?,
-        [(42, intents[0]), (274, intents[1])],
+        &[
+            (42, intents.first().ok_or(AdapterError::Arithmetic)?),
+            (274, intents.get(1).ok_or(AdapterError::Arithmetic)?),
+        ],
     )?;
     let side = if action == adapter::AdapterActionV2::InlineSplit {
         Side::Buy
     } else {
         Side::Sell
     };
-    let settlement = Box::new(
-        settle_inline_complementary_v2(InlineComplementaryMatchV2 {
-            phase: map_phase(market.root().phase()),
+    let mut gross_collateral = vec![0_u64; 2];
+    let mut fees = vec![0_u64; 2];
+    let mut net_seller_credits = vec![0_u64; 2];
+    let settlement =
+        settle_inline_complementary_runtime_in_place_v2(RuntimeInlineComplementaryMatchInPlaceV2 {
+            phase: map_phase(market.root.phase()),
             slot: current_slot()?,
             side,
-            replay_roots: roots,
+            replay_roots: &mut roots,
             root_creation_payer: payer.key.to_bytes(),
-            intents,
-            authorizations,
-            accounts: participant_accounts_array,
-            positions,
+            intents: &intents,
+            authorizations: &authorizations,
+            accounts: &participant_accounts_array,
+            positions: &mut positions,
             collateral_mint: account(accounts, 10)?.key.to_bytes(),
-            buy_debit_authorities: debits,
-            fill: instruction.fill,
-            execution_prices: instruction.execution_prices,
+            buy_debit_authorities: &debits,
+            fill: instruction.fill(),
+            execution_prices: &execution_prices,
             fee_policy: policy.policy,
             fee_config_digest: policy.digest,
             fee_recipient_account: fee_account.key.to_bytes(),
+            gross_collateral: &mut gross_collateral,
+            fees: &mut fees,
+            net_seller_credits: &mut net_seller_credits,
         })
-        .map_err(|_| AdapterError::DirectTransition)?,
-    );
-    let mut market_after = market;
+        .map_err(|_| AdapterError::DirectTransition)?;
     let mut created = 0_u64;
-    for facts in root_facts {
+    for facts in &root_facts {
         if facts.created {
-            market_after
-                .register_child(
-                    market.root().identity().generation(),
-                    market
-                        .root()
-                        .outstanding_children()
-                        .checked_add(created)
-                        .ok_or(AdapterError::Arithmetic)?,
-                )
-                .map_err(|_| AdapterError::DirectTransition)?;
             created = created.checked_add(1).ok_or(AdapterError::Arithmetic)?;
         }
     }
-    match side {
-        Side::Buy => market_after.split_complete_set(settlement.market_vault_transfer),
-        Side::Sell => market_after.merge_complete_set(settlement.market_vault_transfer),
-    }
-    .map_err(|_| AdapterError::DirectTransition)?;
+    let market_after = mutate_market(
+        market_account,
+        2,
+        MarketOperation::InlineComplementary {
+            generation: market.root.identity().generation(),
+            expected_prior_count: market.root.outstanding_children(),
+            created: u8::try_from(created).map_err(|_| AdapterError::Arithmetic)?,
+            side,
+            quantity: settlement.market_vault_transfer,
+        },
+    )?;
     let root_rent = rent.minimum_balance(MAKER_REPLAY_ROOT_BYTES_V2);
     let mut total_top_up = 0_u64;
     for (index, facts) in root_facts.iter().enumerate() {
@@ -3893,7 +4032,7 @@ fn process_inline_complementary(
                     account(accounts, 11)?,
                     account(accounts, base)?,
                     realm,
-                    copied(&settlement.gross_collateral, index)?,
+                    copied(&gross_collateral, index)?,
                     &seeds.refs(),
                 )?;
                 execute_transfer_signed(
@@ -3903,11 +4042,11 @@ fn process_inline_complementary(
                     account(accounts, 11)?,
                     account(accounts, base)?,
                     realm,
-                    copied(&settlement.fees, index)?,
+                    copied(&fees, index)?,
                     &seeds.refs(),
                 )?;
-                let consumed = copied(&settlement.gross_collateral, index)?
-                    .checked_add(copied(&settlement.fees, index)?)
+                let consumed = copied(&gross_collateral, index)?
+                    .checked_add(copied(&fees, index)?)
                     .ok_or(AdapterError::Arithmetic)?;
                 require_inline_buy_debit_residual(
                     account(accounts, base + 2)?,
@@ -3919,10 +4058,10 @@ fn process_inline_complementary(
             }
         }
         Side::Sell => {
-            let signer = market_signer(program_id, market_account, market.root())?;
+            let signer = market_signer(program_id, market_account, market.root)?;
             let bump = [signer.bump];
             let seeds = [MARKET_SEED, signer.digest.as_slice(), bump.as_slice()];
-            for (index, net_credit) in settlement.net_seller_credits.iter().copied().enumerate() {
+            for (index, net_credit) in net_seller_credits.iter().copied().enumerate() {
                 execute_transfer_signed(
                     vault,
                     account(accounts, INLINE_COMPLEMENT_BASE + index * 3 + 2)?,
@@ -3946,18 +4085,20 @@ fn process_inline_complementary(
             )?;
         }
     }
-    for (index, (root, position)) in settlement
-        .replay_roots
-        .iter()
-        .copied()
-        .zip(settlement.positions.iter().copied())
-        .enumerate()
-    {
+    for index in 0..2 {
         let base = INLINE_COMPLEMENT_BASE + index * 3;
+        let root = match roots.get(index).ok_or(AdapterError::Arithmetic)? {
+            ReplayRootStateV2::Existing(value) => value,
+            ReplayRootStateV2::Absent { .. } => {
+                return Err(AdapterError::DirectPostcondition.into());
+            }
+        };
         persist_root(account(accounts, base)?, root)?;
-        persist_position_n2(account(accounts, base + 1)?, position)?;
+        persist_position(
+            account(accounts, base + 1)?,
+            positions.get(index).ok_or(AdapterError::Arithmetic)?,
+        )?;
     }
-    let market_after = encode_market(&market_after)?;
     persist_market(program_id, market_account, &market_after)?;
     if payer.lamports() != payer_after || credit.lamports() != credit_lamports {
         return Err(AdapterError::DirectPostcondition.into());

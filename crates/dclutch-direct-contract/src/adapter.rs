@@ -97,11 +97,7 @@ pub fn inspect_preceding_ed25519_v2(
     view: Ed25519InstructionViewV2<'_>,
     expectation: Ed25519ExpectationV2<'_>,
 ) -> Result<Ed25519AuthorizationV2> {
-    let values = inspect_preceding_ed25519_batch_v2(view, [expectation])?;
-    values
-        .first()
-        .copied()
-        .ok_or(Error::InvalidSignatureInstruction)
+    inspect_preceding_ed25519_batch_item_v2(view, &[expectation], 0)
 }
 
 /// Inspect one exact immediately preceding native Ed25519 batch whose messages
@@ -116,20 +112,44 @@ pub fn inspect_preceding_ed25519_batch_v2<const N: usize>(
     view: Ed25519InstructionViewV2<'_>,
     expectations: [Ed25519ExpectationV2<'_>; N],
 ) -> Result<[Ed25519AuthorizationV2; N]> {
+    let empty = Ed25519AuthorizationV2 {
+        signer: [0; 32],
+        message: [0; MAX_AUTHORIZATION_MESSAGE_BYTES],
+        message_len: 0,
+    };
+    let mut output = [empty; N];
+    for (index, slot) in output.iter_mut().enumerate() {
+        *slot = inspect_preceding_ed25519_batch_item_v2(view, &expectations, index)?;
+    }
+    Ok(output)
+}
+
+/// Inspect one selected authorization from an exact hostile runtime-size batch.
+///
+/// The complete batch is validated, including every descriptor and every
+/// nonoverlapping message; `selected` only chooses which sealed authorization
+/// is returned to the caller.
+pub fn inspect_preceding_ed25519_batch_item_v2(
+    view: Ed25519InstructionViewV2<'_>,
+    expectations: &[Ed25519ExpectationV2<'_>],
+    selected: usize,
+) -> Result<Ed25519AuthorizationV2> {
     if view.program_id != ED25519_PROGRAM_ID_3_0 {
         return Err(Error::InvalidSignatureProgram);
     }
     if view.preceding_index.checked_add(1) != Some(view.current_index) {
         return Err(Error::InvalidSignatureInstructionOrder);
     }
-    if N == 0
+    if expectations.is_empty()
+        || selected >= expectations.len()
         || expectations
             .iter()
             .any(|value| value.message.len() > MAX_AUTHORIZATION_MESSAGE_BYTES)
     {
         return Err(Error::InvalidSignatureInstruction);
     }
-    let descriptor_bytes = N
+    let descriptor_bytes = expectations
+        .len()
         .checked_mul(ED25519_DESCRIPTOR_BYTES)
         .ok_or(Error::InvalidSignatureInstruction)?;
     let payload_start = 2usize
@@ -137,19 +157,18 @@ pub fn inspect_preceding_ed25519_batch_v2<const N: usize>(
         .ok_or(Error::InvalidSignatureInstruction)?;
     let expected_len = payload_start
         .checked_add(
-            N.checked_mul(ED25519_PUBLIC_KEY_BYTES + ED25519_SIGNATURE_BYTES)
+            expectations
+                .len()
+                .checked_mul(ED25519_PUBLIC_KEY_BYTES + ED25519_SIGNATURE_BYTES)
                 .ok_or(Error::InvalidSignatureInstruction)?,
         )
         .ok_or(Error::InvalidSignatureInstruction)?;
-    if view.ed25519_data.len() != expected_len || read_u16(view.ed25519_data, 0)? != u16_from(N)? {
+    if view.ed25519_data.len() != expected_len
+        || read_u16(view.ed25519_data, 0)? != u16_from(expectations.len())?
+    {
         return Err(Error::InvalidSignatureInstruction);
     }
-    let empty = Ed25519AuthorizationV2 {
-        signer: [0; 32],
-        message: [0; MAX_AUTHORIZATION_MESSAGE_BYTES],
-        message_len: 0,
-    };
-    let mut output = [empty; N];
+    let mut output = None;
     for (index, expectation) in expectations.iter().enumerate() {
         let descriptor = 2usize
             .checked_add(
@@ -216,16 +235,15 @@ pub fn inspect_preceding_ed25519_batch_v2<const N: usize>(
             .get_mut(..message.len())
             .ok_or(Error::InvalidSignatureInstruction)?
             .copy_from_slice(message);
-        let slot = output
-            .get_mut(index)
-            .ok_or(Error::InvalidSignatureInstruction)?;
-        *slot = Ed25519AuthorizationV2 {
-            signer,
-            message: copied,
-            message_len: u16_from(message.len())?,
-        };
+        if index == selected {
+            output = Some(Ed25519AuthorizationV2 {
+                signer,
+                message: copied,
+                message_len: u16_from(message.len())?,
+            });
+        }
     }
-    Ok(output)
+    output.ok_or(Error::InvalidSignatureInstruction)
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
@@ -447,6 +465,36 @@ pub struct InlineOrdinaryAdapterInstructionV2 {
     pub buyer_intent: DirectIntentV2,
 }
 
+/// Borrowed inline ordinary data without materializing both signed intents.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InlineOrdinaryAdapterInstructionViewV2<'a> {
+    fill: u64,
+    execution_price: u64,
+    bytes: &'a [u8],
+}
+
+impl InlineOrdinaryAdapterInstructionViewV2<'_> {
+    /// Return the common positive fill field.
+    pub const fn fill(self) -> u64 {
+        self.fill
+    }
+
+    /// Return the exact execution price field.
+    pub const fn execution_price(self) -> u64 {
+        self.execution_price
+    }
+
+    /// Decode the signed seller intent.
+    pub fn seller_intent(self) -> Result<DirectIntentV2> {
+        inline_ordinary_intent(self.bytes, 0)
+    }
+
+    /// Decode the signed buyer intent.
+    pub fn buyer_intent(self) -> Result<DirectIntentV2> {
+        inline_ordinary_intent(self.bytes, 1)
+    }
+}
+
 /// Decoded complementary adapter data.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ComplementaryAdapterInstructionV2<const N: usize> {
@@ -456,6 +504,39 @@ pub struct ComplementaryAdapterInstructionV2<const N: usize> {
     pub fill: u64,
     /// Prices in canonical outcome order.
     pub execution_prices: [u64; N],
+}
+
+/// Borrowed exact-N=2 inline complementary data and signed intents.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InlineComplementaryAdapterInstructionViewV2<'a> {
+    action: AdapterActionV2,
+    fill: u64,
+    bytes: &'a [u8],
+}
+
+impl InlineComplementaryAdapterInstructionViewV2<'_> {
+    /// Return the authenticated inline split or merge action.
+    pub const fn action(self) -> AdapterActionV2 {
+        self.action
+    }
+
+    /// Return the common positive fill field.
+    pub const fn fill(self) -> u64 {
+        self.fill
+    }
+
+    /// Decode one exact price in canonical outcome order.
+    pub fn execution_price(self, index: usize) -> Result<u64> {
+        if index >= 2 {
+            return Err(Error::InvalidOutcome);
+        }
+        Ok(u64::from_le_bytes(array(self.bytes, price_offset(index)?)?))
+    }
+
+    /// Decode one signed intent in canonical outcome order.
+    pub fn intent(self, index: usize) -> Result<DirectIntentV2> {
+        inline_complementary_intent(self.bytes, index)
+    }
 }
 
 /// Borrowed complementary data for one hostile runtime width.
@@ -734,9 +815,9 @@ pub fn encode_inline_ordinary_instruction_v2(
 }
 
 /// Decode inline ordinary data and its nonoverlapping signed preimages.
-pub fn decode_inline_ordinary_instruction_v2(
+pub fn decode_inline_ordinary_instruction_view_v2(
     bytes: &[u8],
-) -> Result<InlineOrdinaryAdapterInstructionV2> {
+) -> Result<InlineOrdinaryAdapterInstructionViewV2<'_>> {
     if bytes.len() != INLINE_ORDINARY_INSTRUCTION_BYTES_V2 {
         return Err(Error::InvalidLength);
     }
@@ -749,27 +830,44 @@ pub fn decode_inline_ordinary_instruction_v2(
             .ok_or(Error::InvalidLength)?,
         AuthorizationModeV2::Inline,
     )?;
-    let seller_intent = DirectIntentV2::decode_signed_preimage(
-        bytes
-            .get(
-                ORDINARY_INSTRUCTION_BYTES_V2
-                    ..ORDINARY_INSTRUCTION_BYTES_V2 + DIRECT_INTENT_BYTES_V2,
-            )
-            .ok_or(Error::InvalidLength)?,
-    )?;
-    let buyer_intent = DirectIntentV2::decode_signed_preimage(
-        bytes
-            .get(ORDINARY_INSTRUCTION_BYTES_V2 + DIRECT_INTENT_BYTES_V2..)
-            .ok_or(Error::InvalidLength)?,
-    )?;
-    require_inline(seller_intent)?;
-    require_inline(buyer_intent)?;
-    Ok(InlineOrdinaryAdapterInstructionV2 {
+    let view = InlineOrdinaryAdapterInstructionViewV2 {
         fill: u64::from_le_bytes(array(bytes, BODY_OFFSET)?),
         execution_price: u64::from_le_bytes(array(bytes, BODY_OFFSET + 8)?),
-        seller_intent,
-        buyer_intent,
+        bytes,
+    };
+    require_inline(view.seller_intent()?)?;
+    require_inline(view.buyer_intent()?)?;
+    Ok(view)
+}
+
+/// Decode inline ordinary data into an owned compatibility value.
+pub fn decode_inline_ordinary_instruction_v2(
+    bytes: &[u8],
+) -> Result<InlineOrdinaryAdapterInstructionV2> {
+    let view = decode_inline_ordinary_instruction_view_v2(bytes)?;
+    Ok(InlineOrdinaryAdapterInstructionV2 {
+        fill: view.fill(),
+        execution_price: view.execution_price(),
+        seller_intent: view.seller_intent()?,
+        buyer_intent: view.buyer_intent()?,
     })
+}
+
+fn inline_ordinary_intent(bytes: &[u8], index: usize) -> Result<DirectIntentV2> {
+    if index >= 2 {
+        return Err(Error::InvalidOutcome);
+    }
+    let start = ORDINARY_INSTRUCTION_BYTES_V2
+        .checked_add(
+            index
+                .checked_mul(DIRECT_INTENT_BYTES_V2)
+                .ok_or(Error::ArithmeticOverflow)?,
+        )
+        .ok_or(Error::ArithmeticOverflow)?;
+    let end = start
+        .checked_add(DIRECT_INTENT_BYTES_V2)
+        .ok_or(Error::ArithmeticOverflow)?;
+    DirectIntentV2::decode_signed_preimage(bytes.get(start..end).ok_or(Error::InvalidLength)?)
 }
 
 /// Encode complementary split or merge data.
@@ -927,6 +1025,39 @@ pub fn encode_inline_complementary_instruction_v2<const N: usize>(
 }
 
 /// Decode an inline N=2 complementary action with exact signed intents.
+pub fn decode_inline_complementary_instruction_view_v2(
+    bytes: &[u8],
+    expected_action: AdapterActionV2,
+) -> Result<InlineComplementaryAdapterInstructionViewV2<'_>> {
+    if expected_action != AdapterActionV2::InlineSplit
+        && expected_action != AdapterActionV2::InlineMerge
+    {
+        return Err(Error::UnknownAdapterAction);
+    }
+    if bytes.len() != inline_complementary_instruction_bytes_v2(2)? {
+        return Err(Error::InvalidLength);
+    }
+    if decode_common_header(bytes, 2)? != expected_action {
+        return Err(Error::UnknownAdapterAction);
+    }
+    let mode_offset = price_offset(2)?;
+    modes(
+        bytes
+            .get(mode_offset..mode_offset + 2)
+            .ok_or(Error::InvalidLength)?,
+        AuthorizationModeV2::Inline,
+    )?;
+    let view = InlineComplementaryAdapterInstructionViewV2 {
+        action: expected_action,
+        fill: u64::from_le_bytes(array(bytes, BODY_OFFSET)?),
+        bytes,
+    };
+    require_inline(view.intent(0)?)?;
+    require_inline(view.intent(1)?)?;
+    Ok(view)
+}
+
+/// Decode an inline N=2 complementary action into owned compatibility values.
 pub fn decode_inline_complementary_instruction_v2<const N: usize>(
     bytes: &[u8],
     expected_action: AdapterActionV2,
@@ -989,6 +1120,26 @@ pub fn decode_inline_complementary_instruction_v2<const N: usize>(
         },
         intents,
     ))
+}
+
+fn inline_complementary_intent(bytes: &[u8], index: usize) -> Result<DirectIntentV2> {
+    if index >= 2 {
+        return Err(Error::InvalidOutcome);
+    }
+    let intents_offset = price_offset(2)?
+        .checked_add(2)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let start = intents_offset
+        .checked_add(
+            index
+                .checked_mul(DIRECT_INTENT_BYTES_V2)
+                .ok_or(Error::ArithmeticOverflow)?,
+        )
+        .ok_or(Error::ArithmeticOverflow)?;
+    let end = start
+        .checked_add(DIRECT_INTENT_BYTES_V2)
+        .ok_or(Error::ArithmeticOverflow)?;
+    DirectIntentV2::decode_signed_preimage(bytes.get(start..end).ok_or(Error::InvalidLength)?)
 }
 
 fn require_inline(intent: DirectIntentV2) -> Result<()> {

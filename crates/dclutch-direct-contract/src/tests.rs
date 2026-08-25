@@ -9,13 +9,15 @@ use crate::adapter::{
     SOLANA_PACKET_DATA_SIZE_3_0, admit_settlement_packet_v2, canonical_ed25519_test_instruction,
     canonical_ed25519_test_instruction_len, decode_complementary_instruction_v2,
     decode_complementary_instruction_view_v2, decode_inline_complementary_instruction_v2,
-    decode_inline_ordinary_instruction_v2, decode_ordinary_instruction_v2,
+    decode_inline_complementary_instruction_view_v2, decode_inline_ordinary_instruction_v2,
+    decode_inline_ordinary_instruction_view_v2, decode_ordinary_instruction_v2,
     encode_cancel_instruction_v2, encode_complementary_instruction_v2,
     encode_inline_complementary_instruction_v2, encode_inline_ordinary_instruction_v2,
     encode_ordinary_instruction_v2, encode_register_instruction_v2,
-    inline_complementary_instruction_bytes_v2, inspect_preceding_ed25519_batch_v2,
-    inspect_preceding_ed25519_v2, measured_inline_complementary_reference_v2,
-    measured_settlement_envelope_v2, stateless_shared_message_ed25519_minimum_v2,
+    inline_complementary_instruction_bytes_v2, inspect_preceding_ed25519_batch_item_v2,
+    inspect_preceding_ed25519_batch_v2, inspect_preceding_ed25519_v2,
+    measured_inline_complementary_reference_v2, measured_settlement_envelope_v2,
+    stateless_shared_message_ed25519_minimum_v2,
 };
 
 fn runtime_position<const N: usize>(value: PositionV1<N>) -> Result<DirectPositionV2> {
@@ -1302,6 +1304,21 @@ fn inline_fok_ioc_consumes_same_nonce_without_live_rent_and_cross_mode_replay_re
         decode_inline_ordinary_instruction_v2(&instruction)?.buyer_intent,
         bid
     );
+    let borrowed = decode_inline_ordinary_instruction_view_v2(&instruction)?;
+    assert_eq!(borrowed.fill(), 5);
+    assert_eq!(borrowed.execution_price(), 600_000);
+    assert_eq!(borrowed.seller_intent()?, ask);
+    assert_eq!(borrowed.buyer_intent()?, bid);
+    let mut hostile_mode = instruction;
+    hostile_mode[32] = 0;
+    assert_eq!(
+        decode_inline_ordinary_instruction_view_v2(&hostile_mode),
+        Err(Error::MixedAuthorizationModes)
+    );
+    assert_eq!(
+        decode_inline_ordinary_instruction_view_v2(&instruction[..instruction.len() - 1]),
+        Err(Error::InvalidLength)
+    );
     let ed = canonical_ed25519_test_instruction([key(1), key(2)], [34, 266], [232, 232], 5);
     let authorizations = inspect_preceding_ed25519_batch_v2(
         Ed25519InstructionViewV2 {
@@ -1487,30 +1504,70 @@ fn inline_complementary_n2_fits_and_n3_is_physically_refused() -> Result<()> {
         AdapterActionV2::InlineSplit,
     )?;
     assert_eq!(decoded.1, [a, b]);
-    let ed = canonical_ed25519_test_instruction([key(1), key(2)], [42, 274], [232, 232], 5);
-    let authorizations = inspect_preceding_ed25519_batch_v2(
-        Ed25519InstructionViewV2 {
-            program_id: ED25519_PROGRAM_ID_3_0,
-            ed25519_data: ed
-                .get(..canonical_ed25519_test_instruction_len(2))
-                .ok_or(Error::InvalidSignatureInstruction)?,
-            preceding_index: 4,
-            current_index: 5,
-            current_data: &instruction,
-        },
-        [
-            Ed25519ExpectationV2 {
-                message_offset: 42,
-                signer: key(1),
-                message: &a.signed_preimage(),
-            },
-            Ed25519ExpectationV2 {
-                message_offset: 274,
-                signer: key(2),
-                message: &b.signed_preimage(),
-            },
-        ],
+    let borrowed = decode_inline_complementary_instruction_view_v2(
+        &instruction,
+        AdapterActionV2::InlineSplit,
     )?;
+    assert_eq!(borrowed.action(), AdapterActionV2::InlineSplit);
+    assert_eq!(borrowed.fill(), 10);
+    assert_eq!(borrowed.execution_price(0)?, 500_000);
+    assert_eq!(borrowed.execution_price(1)?, 500_000);
+    assert_eq!(borrowed.execution_price(2), Err(Error::InvalidOutcome));
+    assert_eq!(borrowed.intent(0)?, a);
+    assert_eq!(borrowed.intent(1)?, b);
+    let mut hostile_mode = instruction;
+    hostile_mode[40] = 0;
+    assert_eq!(
+        decode_inline_complementary_instruction_view_v2(
+            &hostile_mode,
+            AdapterActionV2::InlineSplit
+        ),
+        Err(Error::MixedAuthorizationModes)
+    );
+    assert_eq!(
+        decode_inline_complementary_instruction_view_v2(
+            &instruction[..instruction.len() - 1],
+            AdapterActionV2::InlineSplit
+        ),
+        Err(Error::InvalidLength)
+    );
+    let ed = canonical_ed25519_test_instruction([key(1), key(2)], [42, 274], [232, 232], 5);
+    let ed_view = Ed25519InstructionViewV2 {
+        program_id: ED25519_PROGRAM_ID_3_0,
+        ed25519_data: ed
+            .get(..canonical_ed25519_test_instruction_len(2))
+            .ok_or(Error::InvalidSignatureInstruction)?,
+        preceding_index: 4,
+        current_index: 5,
+        current_data: &instruction,
+    };
+    let a_message = a.signed_preimage();
+    let b_message = b.signed_preimage();
+    let expectations = [
+        Ed25519ExpectationV2 {
+            message_offset: 42,
+            signer: key(1),
+            message: &a_message,
+        },
+        Ed25519ExpectationV2 {
+            message_offset: 274,
+            signer: key(2),
+            message: &b_message,
+        },
+    ];
+    let authorizations = inspect_preceding_ed25519_batch_v2(ed_view, expectations)?;
+    assert_eq!(
+        inspect_preceding_ed25519_batch_item_v2(ed_view, &expectations, 0)?,
+        authorizations[0]
+    );
+    assert_eq!(
+        inspect_preceding_ed25519_batch_item_v2(ed_view, &expectations, 1)?,
+        authorizations[1]
+    );
+    assert_eq!(
+        inspect_preceding_ed25519_batch_item_v2(ed_view, &expectations, 2),
+        Err(Error::InvalidSignatureInstruction)
+    );
     let settled = settle_inline_complementary_v2(InlineComplementaryMatchV2 {
         phase: adapter::MarketPhaseV2::Open,
         slot: 12,
@@ -1532,6 +1589,110 @@ fn inline_complementary_n2_fits_and_n3_is_physically_refused() -> Result<()> {
     assert_eq!(settled.gross_collateral, [5, 5]);
     assert_eq!(settled.positions[0].balances(), &[10, 0]);
     assert_eq!(settled.positions[1].balances(), &[0, 10]);
+
+    let initial_roots = [ReplayRootStateV2::absent(1), ReplayRootStateV2::absent(2)];
+    let initial_positions = [
+        runtime_position(position(1, [0, 0])?)?,
+        runtime_position(position(2, [0, 0])?)?,
+    ];
+    let runtime_accounts = [inline_accounts(a), inline_accounts(b)];
+    let runtime_debits = [Some(buy_authority(a, 5)), Some(buy_authority(b, 5))];
+    let prices = [500_000, 500_000];
+    let mut runtime_roots = initial_roots;
+    let mut runtime_positions = initial_positions;
+    let mut runtime_gross = [u64::MAX; 2];
+    let mut runtime_fees = [u64::MAX; 2];
+    let mut runtime_net = [u64::MAX; 2];
+    let runtime_effects = settle_inline_complementary_runtime_in_place_v2(
+        RuntimeInlineComplementaryMatchInPlaceV2 {
+            phase: adapter::MarketPhaseV2::Open,
+            slot: 12,
+            side: Side::Buy,
+            replay_roots: &mut runtime_roots,
+            root_creation_payer: key(200),
+            intents: &[a, b],
+            authorizations: &authorizations,
+            accounts: &runtime_accounts,
+            positions: &mut runtime_positions,
+            collateral_mint: key(6),
+            buy_debit_authorities: &runtime_debits,
+            fill: 10,
+            execution_prices: &prices,
+            fee_policy: policy(0)?,
+            fee_config_digest: key(8),
+            fee_recipient_account: key(99),
+            gross_collateral: &mut runtime_gross,
+            fees: &mut runtime_fees,
+            net_seller_credits: &mut runtime_net,
+        },
+    )?;
+    assert_eq!(
+        runtime_effects.market_vault_transfer,
+        settled.market_vault_transfer
+    );
+    assert_eq!(
+        runtime_effects.venue_fee_transfer,
+        settled.venue_fee_transfer
+    );
+    assert_eq!(runtime_gross, settled.gross_collateral);
+    assert_eq!(runtime_fees, settled.fees);
+    assert_eq!(runtime_net, settled.net_seller_credits);
+    assert_eq!(runtime_positions[0].balance(0)?, 10);
+    assert_eq!(runtime_positions[1].balance(1)?, 10);
+    assert_eq!(
+        runtime_roots,
+        [
+            ReplayRootStateV2::existing(settled.replay_roots[0]),
+            ReplayRootStateV2::existing(settled.replay_roots[1]),
+        ]
+    );
+
+    let mut refused_roots = initial_roots;
+    let mut refused_positions = initial_positions;
+    let mut refused_gross = [91, 92];
+    let mut refused_fees = [93, 94];
+    let mut refused_net = [95, 96];
+    let refused_before = (
+        refused_roots,
+        refused_positions,
+        refused_gross,
+        refused_fees,
+        refused_net,
+    );
+    assert_eq!(
+        settle_inline_complementary_runtime_in_place_v2(RuntimeInlineComplementaryMatchInPlaceV2 {
+            phase: adapter::MarketPhaseV2::Open,
+            slot: 12,
+            side: Side::Buy,
+            replay_roots: &mut refused_roots,
+            root_creation_payer: key(200),
+            intents: &[a, b],
+            authorizations: &authorizations,
+            accounts: &runtime_accounts,
+            positions: &mut refused_positions,
+            collateral_mint: key(6),
+            buy_debit_authorities: &runtime_debits,
+            fill: 10,
+            execution_prices: &[500_001, 499_999],
+            fee_policy: policy(0)?,
+            fee_config_digest: key(8),
+            fee_recipient_account: key(99),
+            gross_collateral: &mut refused_gross,
+            fees: &mut refused_fees,
+            net_seller_credits: &mut refused_net,
+        },),
+        Err(Error::PriceIncompatible)
+    );
+    assert_eq!(
+        (
+            refused_roots,
+            refused_positions,
+            refused_gross,
+            refused_fees,
+            refused_net,
+        ),
+        refused_before
+    );
     assert_eq!(
         inline_complementary_instruction_bytes_v2(3),
         Err(Error::InvalidInlineWidth)

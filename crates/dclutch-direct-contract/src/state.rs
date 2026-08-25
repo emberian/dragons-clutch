@@ -894,6 +894,10 @@ impl DirectIntentRecordV2 {
     pub const fn intent(&self) -> DirectIntentV2 {
         self.intent
     }
+    /// Borrow the persisted semantic intent without materializing a runtime copy.
+    pub const fn intent_ref(&self) -> &DirectIntentV2 {
+        &self.intent
+    }
     /// Return aggregate fill.
     pub const fn filled(&self) -> u64 {
         self.filled
@@ -1335,6 +1339,79 @@ pub fn register_intent_runtime_v2(
         position,
         reserved_claim_debit: claims,
         reserved_collateral_debit: collateral,
+    })
+}
+
+/// Borrowed registration state for the bounded SBF adapter.
+pub struct RuntimeRegistrationInPlaceV2<'a> {
+    /// Replay state replaced with the registered live root on success.
+    pub replay_root: &'a mut ReplayRootStateV2,
+    /// Exact maker-signed intent.
+    pub intent: &'a DirectIntentV2,
+    /// Sealed preceding native authorization.
+    pub authorization: &'a adapter::Ed25519AuthorizationV2,
+    /// Canonical Market phase.
+    pub phase: adapter::MarketPhaseV2,
+    /// Trusted current slot.
+    pub slot: u64,
+    /// Exact physical account bindings.
+    pub accounts: &'a ParticipantAccountsV2,
+    /// Separate creation payer and rent beneficiary.
+    pub system_payer: [u8; 32],
+    /// Realm collateral mint for Buy, absent for Sell.
+    pub collateral_mint: Option<[u8; 32]>,
+    /// Authenticated Buy debit authority, absent for Sell.
+    pub buy_debit_authority: Option<&'a adapter::BuyDebitAuthorityV2>,
+    /// Canonical record bump.
+    pub record_bump: u8,
+    /// Canonical venue policy.
+    pub fee_policy: VenueFeePolicyV3,
+    /// Manifest-authenticated policy digest.
+    pub fee_config_digest: [u8; 32],
+    /// Position replaced only on success.
+    pub position: &'a mut DirectPositionV2,
+    /// New record slot, required to be empty and filled only on success.
+    pub record: &'a mut Option<DirectIntentRecordV2>,
+}
+
+/// Compact transfer effects of borrowed registration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeRegistrationEffectsV2 {
+    /// Exact claims reserved from the Position.
+    pub reserved_claim_debit: u64,
+    /// Exact collateral and maximum fee reserve.
+    pub reserved_collateral_debit: u64,
+}
+
+/// Register without placing the large runtime input and output values in the caller frame.
+#[inline(never)]
+pub fn register_intent_runtime_in_place_v2(
+    input: RuntimeRegistrationInPlaceV2<'_>,
+) -> Result<RuntimeRegistrationEffectsV2> {
+    if input.record.is_some() {
+        return Err(Error::IntentLifecycleMismatch);
+    }
+    let transition = register_intent_runtime_v2(RuntimeRegistrationInputV2 {
+        replay_root: *input.replay_root,
+        intent: *input.intent,
+        authorization: *input.authorization,
+        phase: input.phase,
+        slot: input.slot,
+        accounts: *input.accounts,
+        system_payer: input.system_payer,
+        collateral_mint: input.collateral_mint,
+        buy_debit_authority: input.buy_debit_authority.copied(),
+        record_bump: input.record_bump,
+        fee_policy: input.fee_policy,
+        fee_config_digest: input.fee_config_digest,
+        position: *input.position,
+    })?;
+    *input.replay_root = ReplayRootStateV2::Existing(transition.replay_root);
+    *input.position = transition.position;
+    *input.record = Some(transition.record);
+    Ok(RuntimeRegistrationEffectsV2 {
+        reserved_claim_debit: transition.reserved_claim_debit,
+        reserved_collateral_debit: transition.reserved_collateral_debit,
     })
 }
 
@@ -1896,6 +1973,46 @@ pub fn unwind_intent_runtime_v2(input: RuntimeUnwindInputV2<'_>) -> Result<Runti
         },
         position,
     })
+}
+
+/// Borrowed live-record unwind state for the bounded SBF adapter.
+pub struct RuntimeUnwindInPlaceV2<'a> {
+    /// Existing root replaced only on success.
+    pub replay_root: &'a mut MakerReplayRootV2,
+    /// Program-owned live record.
+    pub record: &'a DirectIntentRecordV2,
+    /// Selected unwind authorization or clock condition.
+    pub kind: RuntimeUnwindKindV2<'a>,
+    /// Canonical Market phase.
+    pub phase: adapter::MarketPhaseV2,
+    /// Exact participant bindings.
+    pub accounts: &'a ParticipantAccountsV2,
+    /// Realm collateral mint for Buy, absent for Sell.
+    pub collateral_mint: Option<[u8; 32]>,
+    /// Buy escrow authority, absent for Sell.
+    pub escrow_authority: Option<&'a adapter::EscrowAuthorityV2>,
+    /// Position replaced only on success.
+    pub position: &'a mut DirectPositionV2,
+}
+
+/// Unwind through borrowed state and return only compact close effects.
+#[inline(never)]
+pub fn unwind_intent_runtime_in_place_v2(
+    input: RuntimeUnwindInPlaceV2<'_>,
+) -> Result<LiveRecordCloseV2> {
+    let transition = unwind_intent_runtime_v2(RuntimeUnwindInputV2 {
+        replay_root: *input.replay_root,
+        record: *input.record,
+        kind: input.kind,
+        phase: input.phase,
+        accounts: *input.accounts,
+        collateral_mint: input.collateral_mint,
+        escrow_authority: input.escrow_authority.copied(),
+        position: *input.position,
+    })?;
+    *input.replay_root = transition.replay_root;
+    *input.position = transition.position;
+    Ok(transition.close)
 }
 
 /// Immutable market-independent fee policy read from a canonical record.
