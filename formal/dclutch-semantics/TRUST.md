@@ -16,7 +16,9 @@ For an `Admissible` inline ordinary Direct frame, Lean 4 checks that:
 
 Lean also checks the general encoded length equations for V1 headers, effect
 records, and plans, plus the exact 120-byte hexadecimal encoding of the Direct
-example.
+example. It also checks the concrete account offsets, privilege words, state
+tag, instruction length, and effect tags emitted for the exact-account SBF proof
+profile. That concrete check assumes the named loader-v1 serialization formula.
 
 `cumulativeFee_monotone` proves monotonicity of the concrete floor-fee function,
 and `cumulative_floor_fee_fragmentation_independent` combines it with the
@@ -33,9 +35,11 @@ cannot change a resting order's final cumulative fee in the semantic model.
   microkernel (`dclutch-effect-kernel` currently supplies cross-language vector,
   round-trip, execution, hostile-parser, late-rollback, and one concrete
   differential Direct-reference test only);
-- refinement from the executor's deployed ELF bytes to Lean's sBPF semantics
-  (qedsvm v0.11.0 executes the pinned ELF and agrees on CU, but its lifter
-  refuses the current Rust/SDK alias shape and emits no theorem);
+- a composition theorem from Direct's high-level `effectPlan_refines_transition`
+  through the projection codec to the exact machine theorem;
+- whole-CFG artifact coverage (qedsvm v0.11.0 emits and Lean checks one
+  successful-path Hoare triple for the generated exact-account target; the
+  general Rust/SDK executor remains outside its alias model);
 - compute-unit, stack, ELF-size, and rent measurements for a complete
   controller-plus-custody successor (the isolated executor measurements are
   recorded separately and do not close that boundary);

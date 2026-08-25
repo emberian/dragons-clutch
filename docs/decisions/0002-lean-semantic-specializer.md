@@ -48,19 +48,20 @@ Failure at a gate is evidence against succession, not a reason to weaken it.
 
 The first semantic slice, canonical codec, safe fixed-capacity executor,
 concrete differential Direct test, and isolated real-SVM execution are now
-implemented. The no-allocation, size-optimized executor ELF is 12,016 bytes and
-consumes 1,238 CU for the seven-effect fixture. The exact ELF also executes in
-qedsvm, but qedsvm v0.11.0 correctly refuses to emit a theorem because the
-Rust/SDK adapter's mixed-width and copied memory footprints exceed its current
-alias model. See
-`docs/evidence/LEAN_EFFECT_SBF_EXPERIMENT_2026_08_25.md` for exact source,
-artifact, toolchain, rent, stack, rollback, and limitation details.
+implemented. The no-allocation SDK executor is 12,016 bytes and consumes 1,238
+CU. A Lean-generated exact-account proof target is 2,232 bytes and consumes 155
+CU. qedsvm v0.11.0 emits a successful-path Hoare triple over its exact 164 SBF
+instructions, and Lean checks the stored theorem after a documented duplicate
+wrapper-rewrite workaround. See
+`docs/evidence/LEAN_EFFECT_PROOF_TARGET_2026_08_25.md` for exact source,
+artifact, toolchain, rent, rollback, theorem, and limitation details.
 
 This evidence strongly favors continuing the experiment, but does not accept a
-successor. The measured ELF deliberately omits semantic-controller
-authentication and real SPL custody, and the artifact-to-Lean refinement gate
-is still open. It therefore cannot satisfy the integrated size, CU, or deployed
-refinement gates yet.
+successor. The proof-target ELF deliberately omits semantic-controller
+authentication and real SPL custody. Its path theorem is not yet composed with
+the high-level Direct refinement theorem or extended to complete path coverage.
+It therefore cannot satisfy the integrated size, CU, or deployed refinement
+gates yet.
 
 ## Bounds
 

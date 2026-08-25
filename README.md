@@ -15,6 +15,13 @@ This repository is active greenfield development. It has no deployed program,
 official frontend, live market, wallet integration, production source profile,
 or release.
 
+An experimental Lean-owned semantic specializer now emits canonical Direct
+Effect bytes and an exact Solana ABI-v1 proof profile. Its isolated 2,232-byte
+SBF target executes the example plan in 155 CU, and one exact successful machine
+path has a qedsvm-generated, Lean-kernel-checked Hoare triple. This is not a
+production successor: controller-PDA authentication, real SPL custody,
+high-level-to-machine composition, and complete path coverage remain open.
+
 The implemented first-profile foundation includes exact categorical
 complete-set accounting, compact Market/Realm/Position contracts, funded
 release-bound Pyth price and permissionless-failure resolution, exact provider

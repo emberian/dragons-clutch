@@ -27,13 +27,14 @@ Lean-emitted vector. It does not reimplement Direct admission. The
 current authenticated inline-ordinary reference transition and compares replay,
 claims, gross collateral, and fee custody.
 
-The isolated SBF measurement adapter executes the plan in 1,238 CU from a
-12,016-byte no-allocation, size-optimized ELF. qedsvm v0.11.0 independently
-executes the exact artifact at the same CU count, but its lifter refuses the
-current Rust/SDK memory-alias shape; no artifact theorem is claimed. These
-results establish feasibility only. The adapter's semantic-authority,
-artifact-refinement, and real-custody gaps are explicit in
-`docs/evidence/LEAN_EFFECT_SBF_EXPERIMENT_2026_08_25.md`.
+The general SDK/no-allocation measurement adapter executes the plan in 1,238 CU
+from a 12,016-byte ELF. A second Lean-profile-generated, exact-account proof
+target executes it in 155 CU from a 2,232-byte ELF. qedsvm v0.11.0 lifts that
+target's 164-instruction successful path into a kernel-checked Lean Hoare triple
+after a documented duplicate-wrapper-rewrite workaround. This is one path
+theorem, not whole-CFG, high-level refinement, controller, or custody evidence.
+The exact hashes and boundaries are in
+`docs/evidence/LEAN_EFFECT_PROOF_TARGET_2026_08_25.md`.
 
 Run:
 

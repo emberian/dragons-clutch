@@ -10,11 +10,13 @@ default Rent profile. Repeated Rust control flow, width-specialized transitions,
 account adapters, provider handling, and every capability are linked into one
 artifact.
 
-The first Lean-owned Effect executor is 12,016 bytes, requires about 0.086 SOL
-of equivalent Loader V3 capitalization, and executes its seven-effect fixture
-in 1,238 CU. This is not a fair feature-for-feature comparison; it is evidence
-that the deployment unit, semantic unit, and repository crate should not be
-assumed to be the same object.
+The general SDK/no-allocation Effect executor is 12,016 bytes, requires about
+0.086 SOL of equivalent Loader V3 capitalization, and executes its seven-effect
+fixture in 1,238 CU. The generated exact-account proof target is 2,232 bytes,
+requires about 0.018 SOL, and executes in 155 CU. Neither is a fair
+feature-for-feature controller comparison; together they show that the
+deployment unit, semantic unit, and repository crate should not be assumed to
+be the same object.
 
 ## Proposed narrow waist
 
@@ -98,14 +100,14 @@ candidate source of reusable account and bounded-numeric abstractions after a
 separate API, proof, and provenance review. No neighboring local project is a
 dependency of this experiment.
 
-The first exercise is informative but incomplete. qedsvm executes the exact
-ELF and captures its 1,208-step successful PC path, then refuses to lift it because
-the SDK/Rust adapter creates overlapping mixed-width and copied memory
-footprints outside qedsvm v0.11.0's current H8 alias model. This is a proof-tool
-refusal, not a theorem and not an economic counterexample. It changes the
-compiler target: generate a purpose-built, exact-account, alias-simple SBPF
-adapter rather than accepting incidental general-Rust codegen as the object to
-verify.
+The first SDK/Rust exercise was informative but incomplete. qedsvm executed the
+exact 12,016-byte ELF and captured its successful path, then refused to lift its
+overlapping mixed-width and copied memory footprints under the v0.11.0 H8 alias
+model. The successor experiment generated a purpose-built exact-account,
+alias-simple target. qedsvm lifts its 164-instruction successful path, and Lean
+checks the emitted machine theorem after removing two duplicate rewrite calls
+from an optional convenience wrapper. This closes one artifact path, not the
+whole CFG or the high-level refinement chain.
 
 The desired theorem chain is:
 
@@ -123,14 +125,16 @@ fixture execution, or qedsvm execution mode is never described as verification.
 
 ## Known pressure points
 
-- The current executor has bounded loops for decode and application. qedsvm can
-  prove traced bounded paths but does not infer loop invariants or whole-path
-  coverage. We must either prove the bounded loop manually, emit straight-line
-  fixed-capacity code, or generate and cover the finite path family.
+- The SDK executor has bounded loops for decode and application. The generated
+  proof target is straight-line but still has many refusal branches. qedsvm
+  proves one selected path, so the specializer must generate and cover the
+  finite path family or establish a separate whole-CFG theorem.
 - Even the SDK's no-allocation entrypoint reserves a generic 64-account frame
   and emits account structures and copies irrelevant to this two-account
-  profile. The next specializer should emit the exact serialized-input parser,
-  canonical checks, and byte writes, with no general `AccountInfo` collection.
+  profile. The proof target removes that machinery with an exact serialized-
+  input parser, canonical checks, and byte writes. Controller and custody
+  profiles must preserve this exact-account property rather than regressing to
+  a general `AccountInfo` collection.
 - One successful Direct fixture is not property-space differential evidence.
   Generate admitted and hostile frames across quantities, prices, nonces,
   balances, fees, and arithmetic boundaries, then compare both implementations.
