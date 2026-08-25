@@ -409,7 +409,7 @@ fn process_activate<const N: usize>(
     let market_identity_id =
         dclutch_general_contract::ContentId::new(hash(&identity.to_bytes()).to_bytes())
             .map_err(|_| AdapterError::ContentIdentity)?;
-    let plan = Box::new(with_authenticated_finalized_record_v1(
+    let plan = with_authenticated_finalized_record_v1(
         program_id,
         manifest_account,
         manifest_cursor,
@@ -417,98 +417,34 @@ fn process_activate<const N: usize>(
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         identity.capability_manifest_id().to_bytes(),
         |record| {
-            let manifest = CapabilityManifestV1::decode(record.exact_content())
-                .map_err(|_| AdapterError::AccountData)?;
-            let entry = manifest
-                .entry(capability_funding.entry_index())
-                .map_err(|_| AdapterError::FoundingAuthentication)?;
-            let config_id = dclutch_general_contract::ContentId::new(entry.config_id().to_bytes())
-                .map_err(|_| AdapterError::ContentIdentity)?;
-            let config = authenticate_finalized_config(
+            build_activation_plan_boxed(
                 program_id,
+                record.exact_content(),
                 config_account,
                 config_cursor,
                 rent_sysvar,
-                entry.config_id().to_bytes(),
-            )?;
-            authenticate_claim_basis_config::<N>(claim, config)?;
-            let root_seeds = GeneralRootPdaSeedsV1::new(
-                market_account.key.to_bytes(),
-                config.generation(),
-                config_id,
-            )
-            .map_err(|_| AdapterError::FoundingAuthentication)?;
-            let (expected_root, root_bump) =
-                Pubkey::find_program_address(&root_seeds.seed_components(), program_id);
-            let funding_seeds = GeneralFundingPdaSeedsV1::new(
-                market_account.key.to_bytes(),
-                config.generation(),
-                config_id,
-                config.capability_release_id(),
-            )
-            .map_err(|_| AdapterError::FoundingAuthentication)?;
-            let (expected_general_funding, funding_bump) =
-                Pubkey::find_program_address(&funding_seeds.seed_components(), program_id);
-            if root_account.key != &expected_root
-                || general_funding_account.key != &expected_general_funding
-            {
-                return Err(AdapterError::AccountIdentity.into());
-            }
-            let contract_plan = activate_general_v1(
+                claim,
+                market.as_ref(),
+                capability_funding.as_ref(),
                 frame,
                 instruction,
-                market.root(),
-                config_id,
-                config,
                 market_identity_id,
                 manifest_id,
-                manifest,
-                *capability_funding,
                 capability_custody,
-                GeneralActivationCapitalizationV1::new(root_rent, funding_rent),
-                clock.slot,
-            )
-            .map_err(|_| AdapterError::FoundingAuthentication)?;
-            let capability_derivation = contract_plan.funding().capability_funding_derivation();
-            let (expected_capability_funding, _) =
-                Pubkey::find_program_address(&capability_derivation.seed_components(), program_id);
-            if capability_funding_account.key != &expected_capability_funding
-                || contract_plan.root_seeds() != root_seeds
-                || contract_plan.funding_seeds() != funding_seeds
-            {
-                return Err(AdapterError::AccountIdentity.into());
-            }
-            let market_after = CategoricalMarketV1::new(
-                contract_plan.market_root_after(),
-                market.hoard_atoms(),
-                *market.supply(),
-                market.settlement(),
-            )
-            .map_err(|_| AdapterError::MarketTransition)?;
-            Ok(ActivationPlan {
-                market_after,
-                capability_funding_after: contract_plan.funding().capability_funding_after(),
-                root: contract_plan.root(),
-                general_funding: contract_plan.funding().general_funding(),
-                root_seeds,
-                funding_seeds,
-                root_bump,
-                funding_bump,
                 root_rent,
                 funding_rent,
                 capability_state_rent,
-                creation_lamports: contract_plan.funding().creation_lamports(),
-                general_lamports: contract_plan.funding().general_lamports(),
-                activator_before: activator.lamports(),
-                market_lamports: market_account.lamports(),
-                capability_funding_before: capability_funding_account.lamports(),
-                root_before: root_account.lamports(),
-                funding_before: general_funding_account.lamports(),
+                clock.slot,
+                activator,
+                market_account,
+                capability_funding_account,
+                root_account,
+                general_funding_account,
                 rent_credit,
-                rent_credit_lamports: rent_credit_account.lamports(),
-            })
+                rent_credit_account,
+            )
         },
-    )?);
+    )?;
     preflight_mutable(&[
         activator,
         market_account,
@@ -528,6 +464,126 @@ fn process_activate<const N: usize>(
         system,
         plan.as_ref(),
     )
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn build_activation_plan_boxed<'manifest, 'info, const N: usize>(
+    program_id: &Pubkey,
+    manifest_bytes: &'manifest [u8],
+    config_account: &AccountInfo<'info>,
+    config_cursor: &AccountInfo<'info>,
+    rent_sysvar: &AccountInfo<'info>,
+    claim: CategoricalUnitV1,
+    market: &CategoricalMarketV1<N>,
+    capability_funding: &FundingStateV1,
+    frame: GeneralAccountFrameV1<'_>,
+    instruction: ActivateGeneralV1,
+    market_identity_id: dclutch_general_contract::ContentId,
+    manifest_id: dclutch_general_contract::ContentId,
+    capability_custody: FundingCustodyObservationV1,
+    root_rent: u64,
+    funding_rent: u64,
+    capability_state_rent: u64,
+    slot: u64,
+    activator: &AccountInfo<'info>,
+    market_account: &AccountInfo<'info>,
+    capability_funding_account: &AccountInfo<'info>,
+    root_account: &AccountInfo<'info>,
+    general_funding_account: &AccountInfo<'info>,
+    rent_credit: RentCreditV1,
+    rent_credit_account: &AccountInfo<'info>,
+) -> Result<Box<ActivationPlan<N>>, ProgramError> {
+    let manifest =
+        CapabilityManifestV1::decode(manifest_bytes).map_err(|_| AdapterError::AccountData)?;
+    let entry = manifest
+        .entry(capability_funding.entry_index())
+        .map_err(|_| AdapterError::FoundingAuthentication)?;
+    let config_id = dclutch_general_contract::ContentId::new(entry.config_id().to_bytes())
+        .map_err(|_| AdapterError::ContentIdentity)?;
+    let config = authenticate_finalized_config(
+        program_id,
+        config_account,
+        config_cursor,
+        rent_sysvar,
+        entry.config_id().to_bytes(),
+    )?;
+    authenticate_claim_basis_config::<N>(claim, config)?;
+    let root_seeds = GeneralRootPdaSeedsV1::new(
+        market_account.key.to_bytes(),
+        config.generation(),
+        config_id,
+    )
+    .map_err(|_| AdapterError::FoundingAuthentication)?;
+    let (expected_root, root_bump) =
+        Pubkey::find_program_address(&root_seeds.seed_components(), program_id);
+    let funding_seeds = GeneralFundingPdaSeedsV1::new(
+        market_account.key.to_bytes(),
+        config.generation(),
+        config_id,
+        config.capability_release_id(),
+    )
+    .map_err(|_| AdapterError::FoundingAuthentication)?;
+    let (expected_general_funding, funding_bump) =
+        Pubkey::find_program_address(&funding_seeds.seed_components(), program_id);
+    if root_account.key != &expected_root
+        || general_funding_account.key != &expected_general_funding
+    {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let contract_plan = activate_general_v1(
+        frame,
+        instruction,
+        market.root(),
+        config_id,
+        config,
+        market_identity_id,
+        manifest_id,
+        manifest,
+        *capability_funding,
+        capability_custody,
+        GeneralActivationCapitalizationV1::new(root_rent, funding_rent),
+        slot,
+    )
+    .map_err(|_| AdapterError::FoundingAuthentication)?;
+    let capability_derivation = contract_plan.funding().capability_funding_derivation();
+    let (expected_capability_funding, _) =
+        Pubkey::find_program_address(&capability_derivation.seed_components(), program_id);
+    if capability_funding_account.key != &expected_capability_funding
+        || contract_plan.root_seeds() != root_seeds
+        || contract_plan.funding_seeds() != funding_seeds
+    {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let market_after = CategoricalMarketV1::new(
+        contract_plan.market_root_after(),
+        market.hoard_atoms(),
+        *market.supply(),
+        market.settlement(),
+    )
+    .map_err(|_| AdapterError::MarketTransition)?;
+    Ok(Box::new(ActivationPlan {
+        market_after,
+        capability_funding_after: contract_plan.funding().capability_funding_after(),
+        root: contract_plan.root(),
+        general_funding: contract_plan.funding().general_funding(),
+        root_seeds,
+        funding_seeds,
+        root_bump,
+        funding_bump,
+        root_rent,
+        funding_rent,
+        capability_state_rent,
+        creation_lamports: contract_plan.funding().creation_lamports(),
+        general_lamports: contract_plan.funding().general_lamports(),
+        activator_before: activator.lamports(),
+        market_lamports: market_account.lamports(),
+        capability_funding_before: capability_funding_account.lamports(),
+        root_before: root_account.lamports(),
+        funding_before: general_funding_account.lamports(),
+        rent_credit,
+        rent_credit_lamports: rent_credit_account.lamports(),
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]
