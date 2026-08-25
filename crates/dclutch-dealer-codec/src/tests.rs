@@ -9,7 +9,6 @@ fn policy() -> Policy {
         market_id: id(1),
         release_set_id: id(2),
         dealer_id: id(3),
-        resolution_authority_id: id(4),
         fee_recipient_id: id(5),
         unwind_recipient_id: id(6),
         outcome_count: 2,
@@ -22,72 +21,80 @@ fn policy() -> Policy {
 }
 
 fn candidate(candidate_id: Identity, revision: u64, valid_from: u64) -> [u8; CANDIDATE_BYTES] {
+    let bids = [CurveBand {
+        capacity: 100,
+        price_numerator: 40,
+    }];
+    let asks = [CurveBand {
+        capacity: 100,
+        price_numerator: 60,
+    }];
+    let curves = [
+        CurveInput {
+            bids: &bids,
+            asks: &asks,
+        },
+        CurveInput {
+            bids: &bids,
+            asks: &asks,
+        },
+    ];
+    let minimum_inventory = [0, 0];
+    let maximum_inventory = [100, 100];
     let mut output = [0_u8; CANDIDATE_BYTES];
-    put_header(
+    encode_candidate(
         &mut output,
-        &generated::CANDIDATE_MAGIC,
-        generated::CANDIDATE_VERSION_OFFSET,
+        CandidateInput {
+            candidate_id,
+            revision,
+            valid_from,
+            expires_at: 2_000,
+            quote_reserve_floor: 100,
+            work_funding: 100,
+            work_reward: 2,
+            minimum_inventory: &minimum_inventory,
+            maximum_inventory: &maximum_inventory,
+            curves: &curves,
+        },
     )
     .unwrap();
-    put_byte(&mut output, generated::CANDIDATE_OUTCOME_COUNT_OFFSET, 2).unwrap();
-    put(
-        &mut output,
-        generated::CANDIDATE_CANDIDATE_ID_OFFSET,
-        &candidate_id,
-    )
-    .unwrap();
-    put_u64(&mut output, generated::CANDIDATE_REVISION_OFFSET, revision).unwrap();
-    put_u64(
-        &mut output,
-        generated::CANDIDATE_VALID_FROM_OFFSET,
-        valid_from,
-    )
-    .unwrap();
-    put_u64(&mut output, generated::CANDIDATE_EXPIRES_AT_OFFSET, 2_000).unwrap();
-    put_u64(
-        &mut output,
-        generated::CANDIDATE_QUOTE_RESERVE_FLOOR_OFFSET,
-        100,
-    )
-    .unwrap();
-    put_u64(&mut output, generated::CANDIDATE_WORK_FUNDING_OFFSET, 100).unwrap();
-    put_u64(&mut output, generated::CANDIDATE_WORK_REWARD_OFFSET, 2).unwrap();
-    for outcome in 0..2 {
-        put_u64(
-            &mut output,
-            generated::CANDIDATE_MAXIMUM_INVENTORY_OFFSET + outcome * 8,
-            100,
-        )
-        .unwrap();
-        let curve = curve_offset(outcome);
-        put_byte(&mut output, curve + generated::CURVE_BID_COUNT_OFFSET, 1).unwrap();
-        put_byte(&mut output, curve + generated::CURVE_ASK_COUNT_OFFSET, 1).unwrap();
-        put_u64(
-            &mut output,
-            curve + generated::CURVE_BIDS_OFFSET + generated::BAND_CAPACITY_OFFSET,
-            100,
-        )
-        .unwrap();
-        put_u64(
-            &mut output,
-            curve + generated::CURVE_BIDS_OFFSET + generated::BAND_PRICE_OFFSET,
-            40,
-        )
-        .unwrap();
-        put_u64(
-            &mut output,
-            curve + generated::CURVE_ASKS_OFFSET + generated::BAND_CAPACITY_OFFSET,
-            100,
-        )
-        .unwrap();
-        put_u64(
-            &mut output,
-            curve + generated::CURVE_ASKS_OFFSET + generated::BAND_PRICE_OFFSET,
-            60,
-        )
-        .unwrap();
-    }
     output
+}
+
+#[test]
+fn public_candidate_encoder_refuses_hostile_curves_before_mutation() {
+    let bids = [CurveBand {
+        capacity: 10,
+        price_numerator: 70,
+    }];
+    let asks = [CurveBand {
+        capacity: 10,
+        price_numerator: 60,
+    }];
+    let curves = [CurveInput {
+        bids: &bids,
+        asks: &asks,
+    }];
+    let minimum = [0];
+    let maximum = [10];
+    let input = CandidateInput {
+        candidate_id: id(1),
+        revision: 1,
+        valid_from: 1,
+        expires_at: 2,
+        quote_reserve_floor: 0,
+        work_funding: 10,
+        work_reward: 1,
+        minimum_inventory: &minimum,
+        maximum_inventory: &maximum,
+        curves: &curves,
+    };
+    let mut output = [0xa5; CANDIDATE_BYTES];
+    assert_eq!(
+        encode_candidate(&mut output, input),
+        Err(Error::InvalidCurve)
+    );
+    assert_eq!(output, [0xa5; CANDIDATE_BYTES]);
 }
 
 fn receipt() -> ReleaseReceipt {
@@ -169,7 +176,7 @@ fn execute(
 fn fixed_widths_and_round_trips_are_exact() {
     assert_eq!(
         (POLICY_BYTES, CANDIDATE_BYTES, STATE_BYTES),
-        (248, 4_576, 840)
+        (216, 4_576, 840)
     );
     assert_eq!((RECEIPT_BYTES, REQUEST_BYTES), (176, 144));
     assert_eq!(Policy::decode(&policy().to_bytes().unwrap()), Ok(policy()));
@@ -397,7 +404,7 @@ fn terminal_unwind_redeems_winner_burns_loser_and_closes_custody() {
     let terminal = execute(
         initial,
         Request {
-            actor_id: policy().resolution_authority_id,
+            actor_id: policy().market_id,
             outcome: 0,
             ..base_request(Action::EnterTerminal, initial)
         },
@@ -407,6 +414,20 @@ fn terminal_unwind_redeems_winner_burns_loser_and_closes_custody() {
     )
     .unwrap()
     .post;
+    assert_eq!(
+        execute(
+            initial,
+            Request {
+                actor_id: id(99),
+                outcome: 0,
+                ..base_request(Action::EnterTerminal, initial)
+            },
+            &active,
+            None,
+            None,
+        ),
+        Err(Error::InvalidPhase)
+    );
     let winner = execute(
         terminal,
         Request {

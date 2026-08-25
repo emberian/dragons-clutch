@@ -80,8 +80,6 @@ pub struct Policy {
     pub release_set_id: Identity,
     /// Dealer authority and work-funding owner.
     pub dealer_id: Identity,
-    /// Exact authority allowed to enter terminal state.
-    pub resolution_authority_id: Identity,
     /// Accumulated fee recipient.
     pub fee_recipient_id: Identity,
     /// Terminal quote-inventory recipient.
@@ -115,10 +113,6 @@ impl Policy {
             market_id: array_at(input, generated::POLICY_MARKET_ID_OFFSET)?,
             release_set_id: array_at(input, generated::POLICY_RELEASE_SET_ID_OFFSET)?,
             dealer_id: array_at(input, generated::POLICY_DEALER_ID_OFFSET)?,
-            resolution_authority_id: array_at(
-                input,
-                generated::POLICY_RESOLUTION_AUTHORITY_ID_OFFSET,
-            )?,
             fee_recipient_id: array_at(input, generated::POLICY_FEE_RECIPIENT_ID_OFFSET)?,
             unwind_recipient_id: array_at(input, generated::POLICY_UNWIND_RECIPIENT_ID_OFFSET)?,
             quote_scale: u64_at(input, generated::POLICY_QUOTE_SCALE_OFFSET)?,
@@ -159,11 +153,6 @@ impl Policy {
             &mut output,
             generated::POLICY_DEALER_ID_OFFSET,
             &self.dealer_id,
-        )?;
-        put(
-            &mut output,
-            generated::POLICY_RESOLUTION_AUTHORITY_ID_OFFSET,
-            &self.resolution_authority_id,
         )?;
         put(
             &mut output,
@@ -210,7 +199,6 @@ impl Policy {
         if is_zero(&self.market_id)
             || is_zero(&self.release_set_id)
             || is_zero(&self.dealer_id)
-            || is_zero(&self.resolution_authority_id)
             || is_zero(&self.fee_recipient_id)
             || is_zero(&self.unwind_recipient_id)
             || self.quote_scale == 0
@@ -225,6 +213,203 @@ impl Policy {
         }
         Ok(())
     }
+}
+
+/// One immutable constant-price band supplied to the canonical Candidate encoder.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CurveBand {
+    /// Positive capacity in claim atoms.
+    pub capacity: u64,
+    /// Positive price numerator under the Policy's sole quote scale.
+    pub price_numerator: u64,
+}
+
+/// Borrowed bid/ask curve supplied to the canonical Candidate encoder.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CurveInput<'a> {
+    /// Nonempty bids ordered by nonincreasing price.
+    pub bids: &'a [CurveBand],
+    /// Nonempty asks ordered by nondecreasing price.
+    pub asks: &'a [CurveBand],
+}
+
+/// Borrowed immutable Candidate construction data.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateInput<'a> {
+    /// Immutable content identity.
+    pub candidate_id: Identity,
+    /// Strictly ordered nonzero revision.
+    pub revision: u64,
+    /// Earliest permitted activation time.
+    pub valid_from: u64,
+    /// Exclusive fill expiry time.
+    pub expires_at: u64,
+    /// Minimum quote custody retained during open trading.
+    pub quote_reserve_floor: u64,
+    /// Present liveness capital deposited with this Candidate.
+    pub work_funding: u64,
+    /// Positive reward for each permissionless unit of work.
+    pub work_reward: u64,
+    /// Exact minimum inventory for every active Product outcome.
+    pub minimum_inventory: &'a [u64],
+    /// Exact maximum inventory for every active Product outcome.
+    pub maximum_inventory: &'a [u64],
+    /// Exact bid/ask curve for every active Product outcome.
+    pub curves: &'a [CurveInput<'a>],
+}
+
+/// Encode one canonical fixed-capacity Candidate from runtime-width borrowed data.
+///
+/// All hostile input is checked before `output` is modified. Inactive outcomes
+/// and bands are then deterministically zeroed, so callers never reproduce
+/// generated offsets or padding rules.
+pub fn encode_candidate(output: &mut [u8], input: CandidateInput<'_>) -> Result<()> {
+    validate_candidate_input(output.len(), input)?;
+    output.fill(0);
+    put_header(
+        output,
+        &generated::CANDIDATE_MAGIC,
+        generated::CANDIDATE_VERSION_OFFSET,
+    )?;
+    put_byte(
+        output,
+        generated::CANDIDATE_OUTCOME_COUNT_OFFSET,
+        u8::try_from(input.curves.len()).map_err(|_| Error::ZeroCoordinate)?,
+    )?;
+    put(
+        output,
+        generated::CANDIDATE_CANDIDATE_ID_OFFSET,
+        &input.candidate_id,
+    )?;
+    for (offset, value) in [
+        (generated::CANDIDATE_REVISION_OFFSET, input.revision),
+        (generated::CANDIDATE_VALID_FROM_OFFSET, input.valid_from),
+        (generated::CANDIDATE_EXPIRES_AT_OFFSET, input.expires_at),
+        (
+            generated::CANDIDATE_QUOTE_RESERVE_FLOOR_OFFSET,
+            input.quote_reserve_floor,
+        ),
+        (generated::CANDIDATE_WORK_FUNDING_OFFSET, input.work_funding),
+        (generated::CANDIDATE_WORK_REWARD_OFFSET, input.work_reward),
+    ] {
+        put_u64(output, offset, value)?;
+    }
+    for outcome in 0..input.curves.len() {
+        put_u64(
+            output,
+            generated::CANDIDATE_MINIMUM_INVENTORY_OFFSET + outcome * 8,
+            input.minimum_inventory[outcome],
+        )?;
+        put_u64(
+            output,
+            generated::CANDIDATE_MAXIMUM_INVENTORY_OFFSET + outcome * 8,
+            input.maximum_inventory[outcome],
+        )?;
+        encode_curve(output, outcome, input.curves[outcome])?;
+    }
+    Ok(())
+}
+
+fn validate_candidate_input(output_len: usize, input: CandidateInput<'_>) -> Result<()> {
+    let count = input.curves.len();
+    if output_len != CANDIDATE_BYTES {
+        return Err(Error::InvalidLength);
+    }
+    if count == 0
+        || count > MAX_OUTCOMES
+        || input.minimum_inventory.len() != count
+        || input.maximum_inventory.len() != count
+    {
+        return Err(Error::ZeroCoordinate);
+    }
+    if is_zero(&input.candidate_id)
+        || input.revision == 0
+        || input.valid_from >= input.expires_at
+        || input.work_funding == 0
+        || input.work_reward == 0
+        || input.work_reward > input.work_funding
+    {
+        return Err(Error::ZeroCoordinate);
+    }
+    for outcome in 0..count {
+        if input.minimum_inventory[outcome] > input.maximum_inventory[outcome] {
+            return Err(Error::InventoryRisk);
+        }
+        validate_curve_input(input.curves[outcome])?;
+    }
+    Ok(())
+}
+
+fn validate_curve_input(curve: CurveInput<'_>) -> Result<()> {
+    if curve.bids.is_empty()
+        || curve.asks.is_empty()
+        || curve.bids.len() > MAX_BANDS_PER_SIDE
+        || curve.asks.len() > MAX_BANDS_PER_SIDE
+        || curve
+            .bids
+            .iter()
+            .chain(curve.asks.iter())
+            .any(|band| band.capacity == 0 || band.price_numerator == 0)
+        || curve
+            .bids
+            .windows(2)
+            .any(|pair| pair[0].price_numerator < pair[1].price_numerator)
+        || curve
+            .asks
+            .windows(2)
+            .any(|pair| pair[0].price_numerator > pair[1].price_numerator)
+        || curve.bids.iter().any(|bid| {
+            curve
+                .asks
+                .iter()
+                .any(|ask| bid.price_numerator > ask.price_numerator)
+        })
+    {
+        return Err(Error::InvalidCurve);
+    }
+    Ok(())
+}
+
+fn encode_curve(output: &mut [u8], outcome: usize, curve: CurveInput<'_>) -> Result<()> {
+    let offset = curve_offset(outcome);
+    put_byte(
+        output,
+        offset + generated::CURVE_BID_COUNT_OFFSET,
+        u8::try_from(curve.bids.len()).map_err(|_| Error::InvalidCurve)?,
+    )?;
+    put_byte(
+        output,
+        offset + generated::CURVE_ASK_COUNT_OFFSET,
+        u8::try_from(curve.asks.len()).map_err(|_| Error::InvalidCurve)?,
+    )?;
+    for (index, band) in curve.bids.iter().enumerate() {
+        encode_band(
+            output,
+            offset + generated::CURVE_BIDS_OFFSET + index * generated::BAND_BYTES,
+            *band,
+        )?;
+    }
+    for (index, band) in curve.asks.iter().enumerate() {
+        encode_band(
+            output,
+            offset + generated::CURVE_ASKS_OFFSET + index * generated::BAND_BYTES,
+            *band,
+        )?;
+    }
+    Ok(())
+}
+
+fn encode_band(output: &mut [u8], offset: usize, band: CurveBand) -> Result<()> {
+    put_u64(
+        output,
+        offset + generated::BAND_CAPACITY_OFFSET,
+        band.capacity,
+    )?;
+    put_u64(
+        output,
+        offset + generated::BAND_PRICE_OFFSET,
+        band.price_numerator,
+    )
 }
 
 /// Borrowed canonical Candidate with runtime curve data.
@@ -779,7 +964,7 @@ pub enum Action {
     ActivateReplacement,
     /// Execute one bounded bid or ask fill.
     Fill,
-    /// Authenticated transition from open to terminal.
+    /// Permissionless transition from an adapter-authenticated Core terminal state.
     EnterTerminal,
     /// Redeem or burn one terminal inventory coordinate.
     Unwind,
@@ -855,7 +1040,8 @@ pub struct Request {
     pub quantity: u64,
     /// Exact active Candidate identity expected by the caller.
     pub expected_candidate_id: Identity,
-    /// Authenticated Dealer/resolution actor, or zero for permissionless actions.
+    /// Dealer signer for scheduling, canonical Core Market for terminal entry,
+    /// or zero for all other permissionless actions.
     pub actor_id: Identity,
     /// Proposed/pending Candidate identity for replacement actions.
     pub replacement_candidate_id: Identity,
@@ -1141,6 +1327,7 @@ pub struct Inputs<'a> {
 }
 
 /// Decode, join, and execute one Dealer transition without allocation.
+#[inline(never)]
 pub fn interpret(inputs: Inputs<'_>) -> Result<Transition> {
     let policy = Policy::decode(inputs.policy)?;
     let active = CandidateView::decode(inputs.active_candidate)?;
@@ -1522,7 +1709,7 @@ fn enter_terminal(
     request: Request,
 ) -> Result<Transition> {
     if state.phase != Phase::Open
-        || request.actor_id != policy.resolution_authority_id
+        || request.actor_id != policy.market_id
         || usize::from(request.outcome) >= usize::from(policy.outcome_count)
     {
         return Err(Error::InvalidPhase);

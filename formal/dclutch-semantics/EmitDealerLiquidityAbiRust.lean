@@ -38,7 +38,6 @@ def main : IO Unit := do
       ("VERSION", PolicyField.version), ("OUTCOME_COUNT", .outcomeCount),
       ("RESERVED", .reserved), ("MARKET_ID", .marketId),
       ("RELEASE_SET_ID", .releaseSetId), ("DEALER_ID", .dealerId),
-      ("RESOLUTION_AUTHORITY_ID", .resolutionAuthorityId),
       ("FEE_RECIPIENT_ID", .feeRecipientId),
       ("UNWIND_RECIPIENT_ID", .unwindRecipientId),
       ("QUOTE_SCALE", .quoteScale), ("FEE_NUMERATOR", .feeNumerator),

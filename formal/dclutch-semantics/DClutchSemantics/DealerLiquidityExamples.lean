@@ -18,7 +18,6 @@ def policy : Policy := {
   marketId := 1
   releaseSetId := 13
   dealerId := 7
-  resolutionAuthorityId := 9
   feeRecipientId := 11
   unwindRecipientId := 12
   outcomeCount := 2
@@ -277,7 +276,8 @@ theorem stale_or_unauthenticated_replacement_refuses :
   native_decide
 
 def enterTerminal : Resolution := {
-  authenticatedAuthorityId := 9
+  coreMarketId := 1
+  releaseSetId := 13
   winner := 0
 }
 
@@ -360,16 +360,25 @@ theorem terminal_retirement_closes_every_custody_compartment :
 
 def hostileEarlyRetirement : Command := .retire
 
-def hostileWrongResolver : Command := .enterTerminal {
-  authenticatedAuthorityId := 8
+def hostileWrongCoreMarket : Command := .enterTerminal {
+  coreMarketId := 8
+  releaseSetId := 13
   winner := 0
 }
 
-theorem hostile_terminal_authority_and_early_retirement_refuse :
+def hostileWrongTerminalRelease : Command := .enterTerminal {
+  coreMarketId := 1
+  releaseSetId := 14
+  winner := 0
+}
+
+theorem hostile_terminal_source_and_early_retirement_refuse :
     accepts policy initial (invoke hostileEarlyRetirement) = false ∧
     run policy initial (invoke hostileEarlyRetirement) = initial ∧
-    accepts policy initial (invoke hostileWrongResolver) = false ∧
-    run policy initial (invoke hostileWrongResolver) = initial := by
+    accepts policy initial (invoke hostileWrongCoreMarket) = false ∧
+    run policy initial (invoke hostileWrongCoreMarket) = initial ∧
+    accepts policy initial (invoke hostileWrongTerminalRelease) = false ∧
+    run policy initial (invoke hostileWrongTerminalRelease) = initial := by
   native_decide
 
 end DClutch.Dealer.Examples

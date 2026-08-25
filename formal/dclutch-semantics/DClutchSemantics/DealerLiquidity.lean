@@ -11,11 +11,13 @@ data.  One width-independent interpreter handles every finite Product width;
 there is no family of outcome-count-specialized routes.
 
 The module links every claim fill and terminal redemption to an admitted
-`Economic.Frame`.  It separately emits exact collateral transfers because SPL
-custody is an adapter boundary, not an integer hidden inside a claim program.
-Signature/CPI authentication, fixed-width arithmetic, account persistence,
-atomic cross-program rollback, and executable release identity remain explicit
-adapter obligations.
+`Economic.Frame`.  Terminal entry consumes the identity and result projected
+from the canonical Core Market; it never installs a parallel resolver signer.
+It separately emits exact collateral transfers because SPL custody is an
+adapter boundary, not an integer hidden inside a claim program. Signature/CPI
+authentication, canonical Core-account decoding, fixed-width arithmetic,
+account persistence, atomic cross-program rollback, and executable release
+identity remain explicit adapter obligations.
 -/
 
 namespace DClutch.Dealer
@@ -123,7 +125,6 @@ structure Policy where
   marketId : Nat
   releaseSetId : Nat
   dealerId : Nat
-  resolutionAuthorityId : Nat
   feeRecipientId : Nat
   unwindRecipientId : Nat
   outcomeCount : Nat
@@ -137,8 +138,8 @@ structure Policy where
 
 def Policy.valid (policy : Policy) : Bool :=
   policy.marketId != 0 && policy.releaseSetId != 0 && policy.dealerId != 0 &&
-    policy.resolutionAuthorityId != 0 && policy.feeRecipientId != 0 &&
-  policy.unwindRecipientId != 0 && 0 < policy.outcomeCount &&
+    policy.feeRecipientId != 0 && policy.unwindRecipientId != 0 &&
+    0 < policy.outcomeCount &&
     0 < policy.quoteScale && policy.quoteScale < policy.scalarLimit &&
     0 < policy.feeDenominator && policy.feeDenominator < policy.scalarLimit &&
     policy.feeNumerator ≤ policy.feeDenominator &&
@@ -338,7 +339,8 @@ structure Fill where
   deriving DecidableEq, Repr
 
 structure Resolution where
-  authenticatedAuthorityId : Nat
+  coreMarketId : Nat
+  releaseSetId : Nat
   winner : Nat
   deriving DecidableEq, Repr
 
@@ -487,7 +489,8 @@ def activationAccepts (policy : Policy) (state : State)
 def resolutionAccepts (policy : Policy) (state : State)
     (resolution : Resolution) : Bool :=
   state.phase = .open &&
-    resolution.authenticatedAuthorityId = policy.resolutionAuthorityId &&
+    resolution.coreMarketId = policy.marketId &&
+    resolution.releaseSetId = policy.releaseSetId &&
     resolution.winner < policy.outcomeCount
 
 def unwindEconomicAccepts (policy : Policy) (state : State)
@@ -733,6 +736,18 @@ theorem terminal_unwind_uses_shared_economic_kernel
     (policy : Policy) (state : State) (unwind : Unwind) :
     (physicalPlan policy state (.unwind unwind)).economic =
       some (DClutch.Economic.compile unwind.economic) := rfl
+
+/-- Dealer terminalization has no independently selected resolver authority:
+every admitted terminal observation is bound to the immutable logical Market
+and execution release selected by the Dealer policy. The adapter obligation is
+to derive this observation from the authenticated canonical Core account. -/
+theorem admitted_terminal_is_core_market_bound
+    (policy : Policy) (state : State) (resolution : Resolution)
+    (accepted : resolutionAccepts policy state resolution = true) :
+    resolution.coreMarketId = policy.marketId ∧
+      resolution.releaseSetId = policy.releaseSetId := by
+  simp only [resolutionAccepts, Bool.and_eq_true, decide_eq_true_eq] at accepted
+  exact ⟨accepted.1.1.2, accepted.1.2⟩
 
 theorem successful_replacement_resets_curve_coordinates
     (policy : Policy) (state : State) (activation : Activation)

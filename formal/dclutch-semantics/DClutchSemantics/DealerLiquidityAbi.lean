@@ -16,7 +16,7 @@ namespace DClutch.Dealer.Abi
 
 open DClutch DClutch.AbiSchema
 
-def abiVersion : Nat := 1
+def abiVersion : Nat := 2
 def maxOutcomes : Nat := 16
 def maxBandsPerSide : Nat := 8
 def bandBytes : Nat := 16
@@ -36,7 +36,7 @@ def requestMagic : List UInt8 :=
 
 inductive PolicyField where
   | magic | version | outcomeCount | reserved | marketId | releaseSetId
-  | dealerId | resolutionAuthorityId | feeRecipientId | unwindRecipientId
+  | dealerId | feeRecipientId | unwindRecipientId
   | quoteScale | feeNumerator | feeDenominator | minimumWorkFunding
   | replacementDelay
   deriving DecidableEq, Repr
@@ -45,8 +45,8 @@ def policySchema : List (FieldSpec PolicyField) := [
   ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.outcomeCount, .u8⟩,
   ⟨.reserved, .reserved 5⟩, ⟨.marketId, .bytes 32⟩,
   ⟨.releaseSetId, .bytes 32⟩, ⟨.dealerId, .bytes 32⟩,
-  ⟨.resolutionAuthorityId, .bytes 32⟩, ⟨.feeRecipientId, .bytes 32⟩,
-  ⟨.unwindRecipientId, .bytes 32⟩, ⟨.quoteScale, .u64⟩,
+  ⟨.feeRecipientId, .bytes 32⟩, ⟨.unwindRecipientId, .bytes 32⟩,
+  ⟨.quoteScale, .u64⟩,
   ⟨.feeNumerator, .u64⟩, ⟨.feeDenominator, .u64⟩,
   ⟨.minimumWorkFunding, .u64⟩, ⟨.replacementDelay, .u64⟩
 ]
@@ -134,8 +134,9 @@ def receiptBytes := schemaWidth receiptSchema
 def requestBytes := schemaWidth requestSchema
 
 theorem exact_physical_widths :
-    bandBytes = 16 ∧ outcomeCurveBytes = 264 ∧ policyBytes = 248 ∧
-    candidateBytes = 4576 ∧ stateBytes = 840 ∧ receiptBytes = 176 ∧
+    bandBytes = 16 ∧ outcomeCurveBytes = 264 ∧ policyBytes = 216 ∧
+    candidateBytes = 4576 ∧
+    stateBytes = 840 ∧ receiptBytes = 176 ∧
     requestBytes = 144 := by native_decide
 
 theorem schemas_well_formed :
@@ -158,11 +159,10 @@ theorem header_coordinates_are_canonical :
     coordinates policyLayout = [
       (.magic, 0, 8), (.version, 8, 2), (.outcomeCount, 10, 1),
       (.reserved, 11, 5), (.marketId, 16, 32), (.releaseSetId, 48, 32),
-      (.dealerId, 80, 32), (.resolutionAuthorityId, 112, 32),
-      (.feeRecipientId, 144, 32), (.unwindRecipientId, 176, 32),
-      (.quoteScale, 208, 8), (.feeNumerator, 216, 8),
-      (.feeDenominator, 224, 8), (.minimumWorkFunding, 232, 8),
-      (.replacementDelay, 240, 8)] ∧
+      (.dealerId, 80, 32), (.feeRecipientId, 112, 32),
+      (.unwindRecipientId, 144, 32), (.quoteScale, 176, 8),
+      (.feeNumerator, 184, 8), (.feeDenominator, 192, 8),
+      (.minimumWorkFunding, 200, 8), (.replacementDelay, 208, 8)] ∧
     coordinates candidateLayout = [
       (.magic, 0, 8), (.version, 8, 2), (.outcomeCount, 10, 1),
       (.reserved, 11, 5), (.candidateId, 16, 32), (.revision, 48, 8),
