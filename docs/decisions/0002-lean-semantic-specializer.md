@@ -68,7 +68,10 @@ monomorphizations: the measured controller shrinks from an experimental 120,552
 bytes to 79,680 bytes. The exact signed fill is 990 bytes with one reusable
 12-address Market table, 804 bytes with an exhaustive per-fill table, and 1,326
 bytes as an inadmissible legacy message. The operator constructs and validates
-the reusable table lifecycle without making it semantic authority.
+the reusable table lifecycle without making it semantic authority. The official
+lookup-table program creates, extends, activates, resolves the signed v0 fill,
+deactivates, cools down for 512 slots, and closes successfully in the real-SVM
+campaign.
 
 This evidence strongly favors continuing the experiment, but does not accept a
 successor. The controller now derives its child plans from authenticated signed

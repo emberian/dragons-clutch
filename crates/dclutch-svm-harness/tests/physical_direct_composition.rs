@@ -27,8 +27,15 @@ use dclutch_realm_contract::{
 use dclutch_record_contract::RAW_RECORD_PDA_SEED_V1;
 use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
 use solana_account::Account;
+use solana_address_lookup_table_interface::{
+    instruction::{
+        close_lookup_table, create_lookup_table, deactivate_lookup_table, extend_lookup_table,
+    },
+    state::estimate_last_valid_slot,
+};
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
 use solana_program::{
+    clock::Clock,
     hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
@@ -37,7 +44,7 @@ use solana_program::{
 use solana_program_test::{ProgramTest, ProgramTestContext};
 use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{ed25519_program, system_program, sysvar};
-use solana_transaction::Transaction;
+use solana_transaction::{Transaction, versioned::VersionedTransaction};
 
 const CONTROLLER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([67_u8; 32]);
 const CLAIM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([81_u8; 32]);
@@ -403,6 +410,17 @@ fn direct_claim_instruction(controller: Pubkey, fixture: MarketFixture) -> Instr
     }
 }
 
+fn reusable_market_lookup_addresses(instructions: &[Instruction]) -> Option<Vec<Pubkey>> {
+    let instruction = instructions.iter().find(|instruction| {
+        instruction.program_id == CONTROLLER_PROGRAM_ID && instruction.accounts.len() == 18
+    })?;
+    let mut addresses = Vec::with_capacity(12);
+    for index in [0_usize, 3, 6, 7, 8, 9, 10, 11, 12, 15, 16, 17] {
+        addresses.push(instruction.accounts.get(index)?.pubkey);
+    }
+    Some(addresses)
+}
+
 async fn submit(
     context: &mut ProgramTestContext,
     instructions: &[Instruction],
@@ -430,18 +448,8 @@ async fn submit(
             }
         }
     }
-    let market_lookup_addresses = instructions
-        .iter()
-        .find(|instruction| {
-            instruction.program_id == CONTROLLER_PROGRAM_ID && instruction.accounts.len() == 18
-        })
-        .map(|instruction| {
-            [0_usize, 3, 6, 7, 8, 9, 10, 11, 12, 15, 16, 17]
-                .into_iter()
-                .map(|index| instruction.accounts[index].pubkey)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_else(|| lookup_addresses.clone());
+    let market_lookup_addresses =
+        reusable_market_lookup_addresses(instructions).unwrap_or_else(|| lookup_addresses.clone());
     let v0_wire_bytes = versioned_wire_bytes(
         context.payer.pubkey(),
         instructions,
@@ -475,6 +483,175 @@ async fn submit(
         market_v0_wire_bytes,
         logs: metadata.log_messages,
     }
+}
+
+async fn process_legacy(context: &mut ProgramTestContext, instructions: &[Instruction]) -> u64 {
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let transaction = Transaction::new_signed_with_payer(
+        instructions,
+        Some(&context.payer.pubkey()),
+        &[&context.payer],
+        blockhash,
+    );
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("lookup-table lifecycle transaction");
+    assert!(
+        processed.result.is_ok(),
+        "lookup-table lifecycle transaction must commit"
+    );
+    processed
+        .metadata
+        .expect("lookup-table lifecycle metadata")
+        .compute_units_consumed
+}
+
+async fn create_reusable_market_lookup_table(
+    context: &mut ProgramTestContext,
+    instructions: &[Instruction],
+) -> (Pubkey, Vec<Pubkey>, [u64; 2]) {
+    let addresses = reusable_market_lookup_addresses(instructions)
+        .expect("compiled Direct Market lookup projection");
+    let clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("Clock sysvar");
+    context
+        .warp_to_slot(clock.slot + 1)
+        .expect("make the creation coordinate recent in SlotHashes");
+    let payer = context.payer.pubkey();
+    let (create, lookup_table) = create_lookup_table(payer, payer, clock.slot);
+    let create_cu = process_legacy(context, &[create]).await;
+    let extend = extend_lookup_table(lookup_table, payer, Some(payer), addresses.clone());
+    let extend_cu = process_legacy(context, &[extend]).await;
+    let extension_clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("post-extension Clock sysvar");
+    context
+        .warp_to_slot(extension_clock.slot + 1)
+        .expect("activate lookup-table additions in the next slot");
+    assert!(
+        context
+            .banks_client
+            .get_account(lookup_table)
+            .await
+            .expect("lookup-table query")
+            .is_some(),
+        "created lookup table must exist"
+    );
+    (lookup_table, addresses, [create_cu, extend_cu])
+}
+
+async fn submit_with_live_market_lookup_table(
+    context: &mut ProgramTestContext,
+    instructions: &[Instruction],
+    lookup_table: Pubkey,
+    market_lookup_addresses: Vec<Pubkey>,
+) -> TransactionResult {
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let legacy = Transaction::new_signed_with_payer(
+        instructions,
+        Some(&context.payer.pubkey()),
+        &[&context.payer],
+        blockhash,
+    );
+    let wire_bytes = 1_usize
+        .checked_add(legacy.signatures.len().saturating_mul(64))
+        .and_then(|prefix| prefix.checked_add(legacy.message_data().len()))
+        .expect("legacy transaction wire size");
+    let mut all_lookup_addresses = Vec::new();
+    for instruction in instructions {
+        for meta in &instruction.accounts {
+            if meta.pubkey != context.payer.pubkey() && !all_lookup_addresses.contains(&meta.pubkey)
+            {
+                all_lookup_addresses.push(meta.pubkey);
+            }
+        }
+    }
+    let v0_wire_bytes = versioned_wire_bytes(
+        context.payer.pubkey(),
+        instructions,
+        blockhash,
+        all_lookup_addresses,
+        91,
+    );
+    let lookup = AddressLookupTableAccount {
+        key: lookup_table,
+        addresses: market_lookup_addresses,
+    };
+    let v0_message =
+        v0::Message::try_compile(&context.payer.pubkey(), instructions, &[lookup], blockhash)
+            .expect("live-table v0 message");
+    let message = VersionedMessage::V0(v0_message);
+    let market_v0_wire_bytes = 1_usize
+        .checked_add(64)
+        .and_then(|prefix| prefix.checked_add(message.serialize().len()))
+        .expect("live-table v0 wire size");
+    assert!(market_v0_wire_bytes <= 1_232, "live v0 packet overflow");
+    let transaction = VersionedTransaction {
+        signatures: vec![context.payer.sign_message(&message.serialize())],
+        message,
+    };
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("banks processing");
+    let metadata = processed.metadata.expect("transaction metadata");
+    TransactionResult {
+        accepted: processed.result.is_ok(),
+        compute_units: metadata.compute_units_consumed,
+        wire_bytes,
+        v0_wire_bytes,
+        market_v0_wire_bytes,
+        logs: metadata.log_messages,
+    }
+}
+
+async fn retire_reusable_market_lookup_table(
+    context: &mut ProgramTestContext,
+    lookup_table: Pubkey,
+) -> [u64; 2] {
+    let payer = context.payer.pubkey();
+    let clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("Clock sysvar");
+    let deactivate_cu =
+        process_legacy(context, &[deactivate_lookup_table(lookup_table, payer)]).await;
+    let close_slot = estimate_last_valid_slot(clock.slot) + 1;
+    let mut next_slot = clock.slot + 1;
+    while next_slot <= close_slot {
+        context
+            .warp_to_slot(next_slot)
+            .expect("advance one lookup-table cooldown slot");
+        next_slot += 1;
+    }
+    let close_cu = process_legacy(context, &[close_lookup_table(lookup_table, payer, payer)]).await;
+    assert!(
+        context
+            .banks_client
+            .get_account(lookup_table)
+            .await
+            .expect("closed lookup-table query")
+            .is_none(),
+        "closed lookup table must be reclaimed"
+    );
+    [deactivate_cu, close_cu]
 }
 
 fn versioned_wire_bytes(
@@ -933,12 +1110,17 @@ async fn signed_intents_compile_to_claims_and_real_token_transfers_atomically() 
     );
 
     let success_data = controller_data(controller_bump, success, 0);
-    let success_result = submit(
+    let success_instructions = [
+        signed_ed25519_batch(&seller_maker, &buyer_maker, &success_data),
+        controller_instruction(controller, journal_key, success, mint_key, success_data),
+    ];
+    let (lookup_table, market_lookup_addresses, lookup_creation_cu) =
+        create_reusable_market_lookup_table(&mut context, &success_instructions).await;
+    let success_result = submit_with_live_market_lookup_table(
         &mut context,
-        &[
-            signed_ed25519_batch(&seller_maker, &buyer_maker, &success_data),
-            controller_instruction(controller, journal_key, success, mint_key, success_data),
-        ],
+        &success_instructions,
+        lookup_table,
+        market_lookup_addresses,
     )
     .await;
     assert!(
@@ -1007,9 +1189,11 @@ async fn signed_intents_compile_to_claims_and_real_token_transfers_atomically() 
         account(&mut context, refusal.tokens.venue).await,
         venue_before
     );
+    let lookup_retirement_cu =
+        retire_reusable_market_lookup_table(&mut context, lookup_table).await;
 
     eprintln!(
-        "compiled signed Direct CU: impersonation={}, wrong replay={}, wrong position={}, wrong authority={}, bad price={}, tamper={}, success={}, late rollback={}; success wire: legacy={} bytes, all-address v0={} bytes, reusable-Market v0={} bytes",
+        "compiled signed Direct CU: impersonation={}, wrong replay={}, wrong position={}, wrong authority={}, bad price={}, tamper={}, success={}, late rollback={}; success wire: legacy={} bytes, all-address v0={} bytes, reusable-Market v0={} bytes; live ALT CU: create={}, extend={}, deactivate={}, close={}",
         direct.compute_units,
         wrong_bump.compute_units,
         wrong_position.compute_units,
@@ -1021,5 +1205,9 @@ async fn signed_intents_compile_to_claims_and_real_token_transfers_atomically() 
         success_result.wire_bytes,
         success_result.v0_wire_bytes,
         success_result.market_v0_wire_bytes,
+        lookup_creation_cu[0],
+        lookup_creation_cu[1],
+        lookup_retirement_cu[0],
+        lookup_retirement_cu[1],
     );
 }

@@ -34,6 +34,9 @@ SBF_OUT_DIR=../../target/deploy \
   cargo test --test physical_direct_composition -- --nocapture
 ```
 
-That campaign uses no native processor or mock token implementation. It proves
-only the named runtime executions and rollback observations, not a complete
-Direct lifecycle or a Solana runtime theorem.
+That campaign uses no native protocol processor or mock token implementation.
+It also drives the official address lookup table program through create,
+extend, next-slot activation, an actual signed v0 physical fill, deactivate,
+the full SlotHashes cooldown, and close. It proves only the named runtime
+executions and rollback observations, not a complete Direct lifecycle, an
+external validator deployment, or a Solana runtime theorem.
