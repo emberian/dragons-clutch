@@ -484,6 +484,29 @@ name = "dclutch-product-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-product-payoff-codec"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-payoff-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-payoff-codec",
+ "dclutch-product-payoff-svm",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "solana-program",
+ "solana-sdk-ids",
+ "solana-system-interface",
+]
+
+[[package]]
+name = "dclutch-product-payoff-svm"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-pyth-contract"
 version = "0.1.0"
 dependencies = [

@@ -19,6 +19,8 @@ members = [
     "crates/dclutch-pyth-contract",
     "crates/dclutch-product-compiler",
     "crates/dclutch-product-contract",
+    "crates/dclutch-product-payoff-codec",
+    "crates/dclutch-product-payoff-svm",
     "crates/dclutch-record-contract",
     "crates/dclutch-registry-contract",
     "crates/dclutch-registry-svm",
@@ -40,6 +42,7 @@ members = [
     "programs/dclutch-economic-sbf",
     "programs/dclutch-resolution-proof-sbf",
     "programs/dclutch-registry-sbf",
+    "programs/dclutch-product-payoff-sbf",
     "programs/dclutch-sbf",
 ]
 resolver = "2"

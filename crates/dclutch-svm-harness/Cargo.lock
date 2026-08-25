@@ -1584,11 +1584,23 @@ name = "dclutch-product-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-product-payoff-svm"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-pyth-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-contract",
  "dclutch-kernel",
+]
+
+[[package]]
+name = "dclutch-registry-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
 ]
 
 [[package]]
@@ -1642,9 +1654,11 @@ dependencies = [
  "dclutch-kernel",
  "dclutch-market-contract",
  "dclutch-product-contract",
+ "dclutch-product-payoff-svm",
  "dclutch-pyth-contract",
  "dclutch-realm-contract",
  "dclutch-record-contract",
+ "dclutch-registry-contract",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
  "dclutch-series-contract",
