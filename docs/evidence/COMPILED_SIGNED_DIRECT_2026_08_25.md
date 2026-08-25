@@ -38,6 +38,67 @@ success, and 34,066 for late rollback; native signature tampering still refuses
 before controller execution. All other artifact hashes in the table below are
 unchanged.
 
+## Canonical-authority successor addendum
+
+Commit `88fb859840f9448e22472b600be91a3f6da1c61b` deletes the
+experimental execution-profile account and ABI. Each maker's unchanged
+136-byte intent now signs the canonical Market key. The 304-byte controller
+instruction remains unchanged in length.
+
+The controller now authenticates the actual authority graph used by founding:
+
+- the canonical, open Market PDA and its exact root identity;
+- the immutable Realm selected by that Market, including the collateral mint,
+  token program, adapter release, and mint/freeze-authority policies;
+- the finalized capability manifest selected by that Market;
+- the unique Direct capability entry and its semantic release, capacity,
+  child-schema, derivation, activation, dependency, and funding coordinates;
+  and
+- the finalized venue fee policy selected by that capability entry.
+
+Replay and Position PDAs are now namespaced by the Market key. A hostile case
+substituting a valid same-shaped manifest from another Market refuses without
+mutation. Product identity remains bound transitively through the immutable
+Market identity; the controller reads operational outcome width from the
+Market, whose owning protocol program remains responsible for full economic
+state validation. Static clients do not become authorities.
+
+An initial implementation decoded all 15 supported `CategoricalMarket<N>`
+types. Rust monomorphization grew the controller to 120,552 bytes. The accepted
+implementation instead validates the canonical Market header and exact encoded
+width, then decodes the width-independent `MarketRoot` slice. This removes the
+duplicated generic decoders without weakening the Market PDA, phase, Realm, or
+manifest bindings. The rebuilt controller is 79,680 bytes with SHA-256
+`acc6bcbf1078ec48aefa298a748632e004b485f501cc41f1f4a489d5b869da9c`.
+Equivalent Loader V3 capitalization is 0.556918320 SOL; the three first-party
+programs total 0.758104080 SOL. Removing the profile also removes its
+0.001837440 SOL mutable-state rent requirement. Market, Realm, manifest, and
+policy accounts are existing shared protocol records, not per-fill creations.
+
+The successor real-SVM measurements are:
+
+| Case | Result | CU |
+|---|---|---:|
+| direct controller-PDA impersonation | refused | 7 |
+| valid signatures, wrong replay bump | refused without mutation | 30,806 |
+| valid signatures, wrong Position bump | refused without mutation | 33,979 |
+| same-shaped manifest from another Market | refused without mutation | 22,191 |
+| matcher price below signed seller limit | refused without mutation | 36,545 |
+| signed fee-rate byte tampered after signing | native Ed25519 refusal before controller | 0 |
+| admitted compiled fill | committed | 59,067 |
+| frozen fee destination after first Token CPI | full rollback | 58,106 |
+
+The two-instruction signed fill serializes to 1,326 bytes as a legacy
+transaction, above Solana's 1,232-byte packet limit. Compiling the same message
+as a versioned transaction against one address lookup table produces 804 bytes.
+That is exact host serialization evidence, not execution through an activated
+onchain lookup table: creation, extension, activation, rotation, and closure of
+the production table remain operator and local-validator work.
+
+This addendum supersedes the execution-profile architecture and current
+controller measurements below. Earlier tables remain evidence for their named
+historical artifacts.
+
 ## Semantic and generated material
 
 Lean 4.30.0 owns:

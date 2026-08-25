@@ -58,13 +58,24 @@ claim, journal, and token mutations byte-for-byte. See
 `docs/evidence/PHYSICAL_DIRECT_COMPOSITION_2026_08_25.md` for exact source,
 artifact, toolchain, rent, rollback, theorem, and limitation details.
 
+The next vertical slice removes the experimental execution-profile account
+entirely. Lean's 136-byte intent signs the canonical Market key, and one shared
+codec feeds Rust, the operator, SBF controller, and TypeScript. The controller
+authenticates the Market/Realm/manifest/finalized-policy graph and rejects
+same-shaped authority substitution before executing generated transition
+bytecode. A width-generic Market-root view also avoids 15 Rust
+monomorphizations: the measured controller shrinks from an experimental 120,552
+bytes to 79,680 bytes. The exact signed fill is 804 bytes as a one-table v0
+message and 1,326 bytes as an inadmissible legacy message.
+
 This evidence strongly favors continuing the experiment, but does not accept a
-successor. The controller still accepts pre-derived plans rather than deriving
-them from authenticated signed intents, Product, Realm, and release state. The
-claim path theorem is not yet composed with the high-level Direct refinement
-theorem, extended to complete path coverage, or joined to an artifact theorem
-for custody. The experiment therefore does not yet satisfy the full integrated
-or deployed-refinement gates.
+successor. The controller now derives its child plans from authenticated signed
+intents and the Market/Realm/release graph, but the claim path theorem is not yet
+composed with the high-level Direct refinement theorem, extended to complete
+path coverage, or joined to artifact theorems for the controller and custody.
+The exact semantic release is manifest-selected, but a checked-release manifest
+must still bind the built ELF and Loader state. The experiment therefore does
+not yet satisfy the full integrated or deployed-refinement gates.
 
 ## Bounds
 

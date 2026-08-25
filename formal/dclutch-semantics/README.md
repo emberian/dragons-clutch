@@ -9,7 +9,7 @@ Rust implementation. It currently provides:
 
 - `ProductIR`, `FrameIR`, and typed `EffectPlan` data;
 - a width-independent Direct admission predicate;
-- a signed execution-profile identity and exact accepted fee rate;
+- a signed canonical Market identity and exact accepted fee rate;
 - exact integer quote and one named floor-fee boundary;
 - a seven-effect plan;
 - a total checked effect interpreter;
@@ -39,13 +39,14 @@ general compiler-correctness and Rust-interpreter refinement theorems remain
 open.
 
 Lean also owns the exact data structures and encodings for the 136-byte compact
-intent, 304-byte controller instruction, and 136-byte Market execution profile.
-Their exact lengths are theorems. A maker key is deliberately not duplicated in
-the signed intent: the native Ed25519 public key is its semantic owner. Lean also
-emits four exact ABI vectors; both the safe, `no_std`, `no_alloc` Rust codec and
-the frontend TypeScript codec match them byte-for-byte. The Rust codec is shared
-by the controller and SVM harness. Cross-language parser-refinement theorems
-remain open.
+intent and 304-byte controller instruction. Their exact lengths are theorems. A
+maker key is deliberately not duplicated in the signed intent: the native
+Ed25519 public key is its semantic owner. The signed identity is the canonical
+Market itself, so the obsolete 136-byte execution-profile ABI has been deleted.
+Lean emits three exact ABI vectors; both the safe, `no_std`, `no_alloc` Rust
+codec and the frontend TypeScript codec match them byte-for-byte. The Rust codec
+is shared by the controller, operator, and SVM harness. Cross-language
+parser-refinement theorems remain open.
 
 `dclutch-effect-kernel` is the first physical refinement target. It is safe
 Rust, `no_std`, `no_alloc`, fixed-capacity, and transactionally applies the
@@ -55,17 +56,20 @@ current authenticated inline-ordinary reference transition and compares replay,
 claims, gross collateral, and fee custody.
 
 The general SDK/no-allocation measurement adapter remains a seven-effect
-baseline: 1,238 CU from a 12,016-byte ELF. The active Lean-profile-generated
-claim executor assigns replay and claim facts to two canonical replay roots and
-two canonical maker/outcome Positions; it no longer uses the cheaper combined
+baseline: 1,238 CU from a 12,016-byte ELF. The active Lean-generated claim
+executor assigns replay and claim facts to two canonical replay roots and two
+canonical maker/outcome Positions; it no longer uses the cheaper combined
 pairwise projection. A real-SVM controller authenticates two native Ed25519
-signatures, runs the generated transition program, composes the claim child with
-a real custody adapter and official SPL Token 9.0.0, and checks transaction-wide
-rollback after the first Token CPI. The earlier 1,872-byte claim target has one
-qedsvm v0.11.0 successful-path Hoare triple, but that theorem does not cover the
-canonical-owner successor artifact. This remains runtime evidence plus
-high-level Lean theorems—not whole-CFG refinement, Realm selection, or release
-authentication. Current hashes and boundaries are in
+signatures, the canonical Market and Realm, the Market's exact capability
+manifest, the manifest-selected Direct semantic release, and its finalized fee
+policy. It then runs the generated transition program, composes the claim child
+with a real custody adapter and official SPL Token 9.0.0, and checks
+transaction-wide rollback after the first Token CPI. The earlier 1,872-byte
+claim target has one qedsvm v0.11.0 successful-path Hoare triple, but that
+theorem does not cover the canonical-owner successor artifact. This remains
+runtime evidence plus high-level Lean theorems—not whole-CFG refinement or a
+checked-release proof for the controller ELF. Current hashes and boundaries are
+in
 `docs/evidence/COMPILED_SIGNED_DIRECT_2026_08_25.md`; the earlier
 `LEAN_CLAIM_EXECUTOR_2026_08_25.md` and
 `PHYSICAL_DIRECT_COMPOSITION_2026_08_25.md` reports remain historical evidence
