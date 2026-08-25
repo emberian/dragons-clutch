@@ -1540,7 +1540,6 @@ version = "0.1.0"
 dependencies = [
  "dclutch-capability-contract",
  "dclutch-core-contract",
- "dclutch-general-config-contract",
  "dclutch-market-core-codec",
  "dclutch-product-contract",
  "dclutch-realm-contract",
@@ -1560,14 +1559,6 @@ dependencies = [
  "solana-system-interface 2.0.0",
  "solana-transaction 4.1.6",
  "tokio",
-]
-
-[[package]]
-name = "dclutch-general-config-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-capability-contract",
- "dclutch-core-contract",
 ]
 
 [[package]]

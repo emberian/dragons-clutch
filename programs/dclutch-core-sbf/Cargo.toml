@@ -33,7 +33,6 @@ solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 
 [dev-dependencies]
-dclutch-general-config-contract = { path = "../../crates/dclutch-general-config-contract" }
 solana-account = "=4.3.2"
 solana-hash = "=4.5.0"
 solana-message = { version = "=3.1.0", features = ["bincode"] }
