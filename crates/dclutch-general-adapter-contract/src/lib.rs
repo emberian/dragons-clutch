@@ -21,6 +21,7 @@ use dclutch_general_codec::{
     PageViewV1, Phase, SelectionCriterion, SelectionCursorV1, SelectionPolicyV1,
     SettlementCursorV1,
 };
+use sha2::{Digest, Sha256};
 
 /// Exact verified-candidate certificate width.
 pub const VERIFIED_CANDIDATE_BYTES_V1: usize = 416;
@@ -42,6 +43,10 @@ pub const GENERAL_CANDIDATE_PDA_DOMAIN_V1: &[u8] = b"dclutch:general-candidate:v
 pub const GENERAL_POLICY_PDA_DOMAIN_V1: &[u8] = b"dclutch:general-policy:v1";
 /// Immutable candidate page PDA domain.
 pub const GENERAL_PAGE_PDA_DOMAIN_V1: &[u8] = b"dclutch:general-page:v1";
+/// Canonical General-owned child-plan preimage header width.
+pub const GENERAL_CHILD_PLAN_HEADER_BYTES_V1: usize = 208;
+/// Canonical General-owned child-plan magic and digest domain.
+pub const GENERAL_CHILD_PLAN_MAGIC_V1: [u8; 8] = *b"DCGCHP01";
 
 const CERTIFICATE_MAGIC: [u8; 8] = *b"DCGVCER1";
 const VERIFICATION_CURSOR_MAGIC: [u8; 8] = *b"DCGVERF1";
@@ -84,6 +89,8 @@ pub enum Error {
     Inventory,
     /// Claims or Custody child execution refused the exact plan.
     ChildRefusal,
+    /// A General-owned canonical child plan had a hostile or noncanonical shape.
+    ChildPlan,
 }
 
 /// Result alias for General adapter operations.
@@ -99,6 +106,49 @@ pub enum CompleteSetMoveV1 {
     Mint = 1,
     /// Merge one uniform quantity of every outcome.
     Merge = 2,
+}
+
+/// Exact child effect selected by one General settlement transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum GeneralChildEffectV1 {
+    /// Move one row's delivered Claims into settlement.
+    CollectClaims = 0,
+    /// Move one row's quote debit from External custody into settlement.
+    CollectCollateral = 1,
+    /// Mint one complete set while moving its principal to the Hoard.
+    MintCompleteSet = 2,
+    /// Merge one complete set while releasing its Hoard principal.
+    MergeCompleteSet = 3,
+    /// Move one row's received Claims out of settlement.
+    DistributeClaims = 4,
+    /// Move one row's quote credit from settlement custody to External custody.
+    DistributeCollateral = 5,
+    /// Move the exact terminal quote surplus out of settlement custody.
+    PaySurplus = 6,
+}
+
+impl GeneralChildEffectV1 {
+    const fn is_row(self) -> bool {
+        matches!(
+            self,
+            Self::CollectClaims
+                | Self::CollectCollateral
+                | Self::DistributeClaims
+                | Self::DistributeCollateral
+        )
+    }
+
+    const fn is_scalar(self) -> bool {
+        matches!(
+            self,
+            Self::CollectCollateral | Self::DistributeCollateral | Self::PaySurplus
+        )
+    }
+
+    const fn is_complete_set(self) -> bool {
+        matches!(self, Self::MintCompleteSet | Self::MergeCompleteSet)
+    }
 }
 
 /// Candidate-wide, program-derived verification certificate.
@@ -841,6 +891,208 @@ impl AggregateReplayContextV1 {
     }
 }
 
+/// General-owned replay context encoded into one canonical child-plan digest.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GeneralChildContextV1 {
+    /// One exact execution row.
+    Row(RowReplayContextV1),
+    /// One exact candidate-wide operation.
+    Aggregate(AggregateReplayContextV1),
+}
+
+/// Borrowed canonical preimage shared by Claims `request_id` and Custody
+/// `parent_request_digest`.
+///
+/// The quantity tail has exactly `8 * outcome_count` bytes. This semantic
+/// format has no physical maximum outcome count; an SBF adapter may impose a
+/// separately labeled measured profile before constructing it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralChildPlanV1<'a> {
+    effect: GeneralChildEffectV1,
+    context: GeneralChildContextV1,
+    outcome_count: u32,
+    quantities: &'a [u8],
+}
+
+impl<'a> GeneralChildPlanV1<'a> {
+    /// Construct one exact row-scoped child plan.
+    pub fn new_row(
+        effect: GeneralChildEffectV1,
+        context: RowReplayContextV1,
+        outcome_count: u32,
+        quantities: &'a [u8],
+    ) -> Result<Self> {
+        let value = Self {
+            effect,
+            context: GeneralChildContextV1::Row(context),
+            outcome_count,
+            quantities,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Construct one exact candidate-wide child plan.
+    pub fn new_aggregate(
+        effect: GeneralChildEffectV1,
+        context: AggregateReplayContextV1,
+        outcome_count: u32,
+        quantities: &'a [u8],
+    ) -> Result<Self> {
+        let value = Self {
+            effect,
+            context: GeneralChildContextV1::Aggregate(context),
+            outcome_count,
+            quantities,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Exact encoded preimage width for this runtime outcome count.
+    pub fn encoded_len(self) -> Result<usize> {
+        GENERAL_CHILD_PLAN_HEADER_BYTES_V1
+            .checked_add(quantity_tail_len(self.outcome_count)?)
+            .ok_or(Error::ChildPlan)
+    }
+
+    /// Encode the exact canonical preimage without allocation.
+    pub fn encode_into(self, output: &mut [u8]) -> Result<()> {
+        self.validate()?;
+        if output.len() != self.encoded_len()? {
+            return Err(Error::ChildPlan);
+        }
+        output.fill(0);
+        self.encode_header(
+            output
+                .get_mut(..GENERAL_CHILD_PLAN_HEADER_BYTES_V1)
+                .ok_or(Error::ChildPlan)?,
+        );
+        output
+            .get_mut(GENERAL_CHILD_PLAN_HEADER_BYTES_V1..)
+            .ok_or(Error::ChildPlan)?
+            .copy_from_slice(self.quantities);
+        Ok(())
+    }
+
+    /// SHA-256 of the exact header plus runtime-length quantity tail.
+    pub fn digest(self) -> Result<[u8; 32]> {
+        self.validate()?;
+        let mut header = [0_u8; GENERAL_CHILD_PLAN_HEADER_BYTES_V1];
+        self.encode_header(&mut header);
+        let mut hasher = Sha256::new();
+        hasher.update(header);
+        hasher.update(self.quantities);
+        Ok(hasher.finalize().into())
+    }
+
+    /// Exact selected child effect.
+    #[must_use]
+    pub const fn effect(self) -> GeneralChildEffectV1 {
+        self.effect
+    }
+
+    /// Exact runtime outcome count committed by the tail.
+    #[must_use]
+    pub const fn outcome_count(self) -> u32 {
+        self.outcome_count
+    }
+
+    /// Exact little-endian `u64[outcome_count]` quantity tail.
+    #[must_use]
+    pub const fn quantities(self) -> &'a [u8] {
+        self.quantities
+    }
+
+    fn validate(self) -> Result<()> {
+        let row = match self.context {
+            GeneralChildContextV1::Row(context) => {
+                context.validate()?;
+                true
+            }
+            GeneralChildContextV1::Aggregate(context) => {
+                context.validate()?;
+                false
+            }
+        };
+        if self.effect.is_row() != row
+            || self.outcome_count == 0
+            || self.quantities.len() != quantity_tail_len(self.outcome_count)?
+        {
+            return Err(Error::ChildPlan);
+        }
+        let first = read_u64(self.quantities, 0)?;
+        if self.effect.is_scalar() && (self.outcome_count != 1 || first == 0) {
+            return Err(Error::ChildPlan);
+        }
+        let mut any_positive = false;
+        let mut outcome = 0_u32;
+        while outcome < self.outcome_count {
+            let index = usize::try_from(outcome).map_err(|_| Error::ChildPlan)?;
+            let quantity = read_u64(
+                self.quantities,
+                index.checked_mul(8).ok_or(Error::ChildPlan)?,
+            )?;
+            any_positive |= quantity != 0;
+            if self.effect.is_complete_set() && quantity != first {
+                return Err(Error::ChildPlan);
+            }
+            outcome = outcome.checked_add(1).ok_or(Error::ChildPlan)?;
+        }
+        if !any_positive {
+            return Err(Error::ChildPlan);
+        }
+        Ok(())
+    }
+
+    fn encode_header(self, header: &mut [u8]) {
+        let (execution, candidate, owner, order, revision, nonce, page, row) = match self.context {
+            GeneralChildContextV1::Row(context) => (
+                context.execution,
+                context.candidate_id,
+                context.owner_id,
+                context.order_id,
+                context.revision,
+                context.order_nonce,
+                context.page_index,
+                u32::from(context.execution_index),
+            ),
+            GeneralChildContextV1::Aggregate(context) => (
+                context.execution,
+                context.candidate_id,
+                [0; 32],
+                [0; 32],
+                context.revision,
+                0,
+                0,
+                0,
+            ),
+        };
+        infallible_put(header, 0, &GENERAL_CHILD_PLAN_MAGIC_V1);
+        infallible_put(header, 8, &VERSION.to_le_bytes());
+        if let Some(tag) = header.get_mut(10) {
+            *tag = self.effect as u8;
+        }
+        infallible_put(header, 16, &self.outcome_count.to_le_bytes());
+        infallible_put(header, 20, &page.to_le_bytes());
+        infallible_put(header, 24, &row.to_le_bytes());
+        infallible_put(header, 32, &revision.to_le_bytes());
+        infallible_put(header, 40, &nonce.to_le_bytes());
+        infallible_put(header, 48, &execution.release_set_id);
+        infallible_put(header, 80, &execution.market_id);
+        infallible_put(header, 112, &candidate);
+        infallible_put(header, 144, &owner);
+        infallible_put(header, 176, &order);
+    }
+}
+
+fn quantity_tail_len(outcome_count: u32) -> Result<usize> {
+    usize::try_from(outcome_count)
+        .ok()
+        .and_then(|count| count.checked_mul(8))
+        .ok_or(Error::ChildPlan)
+}
+
 /// Canonical Claims/Custody integration requirements without defining a child wire.
 ///
 /// Separate Claims and Custody role crates own serialization, account mutation,
@@ -1304,6 +1556,111 @@ mod tests {
         values[0] = first;
         values[1] = second;
         values
+    }
+
+    fn quantity_tail(values: &[u64]) -> std::vec::Vec<u8> {
+        values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect()
+    }
+
+    fn row_context() -> RowReplayContextV1 {
+        RowReplayContextV1 {
+            execution: ExecutionContextV1 {
+                market_id: id(1),
+                release_set_id: id(2),
+            },
+            candidate_id: id(3),
+            owner_id: id(4),
+            order_id: id(5),
+            revision: 6,
+            order_nonce: 7,
+            page_index: 8,
+            execution_index: 9,
+        }
+    }
+
+    #[test]
+    fn canonical_child_plan_digest_uses_only_the_runtime_quantity_tail() {
+        let tail = quantity_tail(&[10, 11]);
+        let plan = GeneralChildPlanV1::new_row(
+            GeneralChildEffectV1::CollectClaims,
+            row_context(),
+            2,
+            &tail,
+        )
+        .expect("row plan");
+        assert_eq!(plan.encoded_len(), Ok(224));
+        let mut encoded = [0_u8; 224];
+        plan.encode_into(&mut encoded).expect("encode");
+        assert_eq!(&encoded[..8], &GENERAL_CHILD_PLAN_MAGIC_V1);
+        assert_eq!(&encoded[208..], tail.as_slice());
+        assert_eq!(
+            plan.digest().expect("digest"),
+            [
+                0xdd, 0xdf, 0x41, 0xd6, 0xd9, 0x10, 0xc6, 0x40, 0xaa, 0x5c, 0x66, 0xd0, 0xda, 0x4b,
+                0x5d, 0x22, 0xbe, 0x7b, 0x7c, 0x0f, 0x21, 0x74, 0xdc, 0x15, 0x4f, 0xd9, 0x3b, 0x03,
+                0xb6, 0xe1, 0x18, 0x37,
+            ]
+        );
+
+        let padded = quantity_tail(&[10, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            GeneralChildPlanV1::new_row(
+                GeneralChildEffectV1::CollectClaims,
+                row_context(),
+                2,
+                &padded,
+            ),
+            Err(Error::ChildPlan)
+        );
+    }
+
+    #[test]
+    fn child_plan_refuses_context_effect_and_quantity_shape_substitution() {
+        let aggregate = AggregateReplayContextV1 {
+            execution: row_context().execution,
+            candidate_id: id(3),
+            revision: 6,
+        };
+        let uniform = quantity_tail(&[4, 4, 4]);
+        GeneralChildPlanV1::new_aggregate(
+            GeneralChildEffectV1::MintCompleteSet,
+            aggregate,
+            3,
+            &uniform,
+        )
+        .expect("uniform complete set");
+        let nonuniform = quantity_tail(&[4, 4, 3]);
+        assert_eq!(
+            GeneralChildPlanV1::new_aggregate(
+                GeneralChildEffectV1::MintCompleteSet,
+                aggregate,
+                3,
+                &nonuniform,
+            ),
+            Err(Error::ChildPlan)
+        );
+        let scalar = quantity_tail(&[4]);
+        assert_eq!(
+            GeneralChildPlanV1::new_aggregate(
+                GeneralChildEffectV1::PaySurplus,
+                aggregate,
+                2,
+                &scalar,
+            ),
+            Err(Error::ChildPlan)
+        );
+        assert_eq!(
+            GeneralChildPlanV1::new_aggregate(
+                GeneralChildEffectV1::CollectClaims,
+                aggregate,
+                1,
+                &scalar,
+            ),
+            Err(Error::ChildPlan)
+        );
     }
 
     fn execution(
