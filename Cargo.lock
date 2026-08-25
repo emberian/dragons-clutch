@@ -322,7 +322,13 @@ dependencies = [
 name = "dclutch-controller-proof-sbf"
 version = "0.1.0"
 dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-core-contract",
  "dclutch-direct-codec",
+ "dclutch-direct-contract",
+ "dclutch-market-contract",
+ "dclutch-realm-contract",
+ "dclutch-record-contract",
  "dclutch-token-svm",
  "dclutch-transition-vm",
  "solana-instructions-sysvar",

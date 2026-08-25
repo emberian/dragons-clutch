@@ -8,11 +8,28 @@ extern crate std;
 
 mod generated_direct_program;
 
-use dclutch_direct_codec::{
-    COMPACT_INTENT_BYTES, CONTROLLER_INSTRUCTION_BYTES, CompactIntentV1, ControllerInstructionV1,
-    MarketProfileV1,
+use dclutch_capability_contract::{
+    ActivationPolicy, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1,
 };
-use dclutch_token_svm::{ACCOUNT_BYTES, COption, ExactTransferProfileV1, LEGACY_TOKEN_PROGRAM_ID};
+use dclutch_core_contract::{MARKET_ROOT_BYTES, MarketRoot, Phase};
+use dclutch_direct_codec::{
+    COMPACT_INTENT_BYTES, COMPILED_DIRECT_CAPACITY_ID_V1, COMPILED_DIRECT_CHILD_SCHEMA_ID_V1,
+    COMPILED_DIRECT_DERIVATION_ID_V1, COMPILED_DIRECT_RELEASE_ID_V1, CONTROLLER_INSTRUCTION_BYTES,
+    CompactIntentV1, ControllerInstructionV1,
+};
+use dclutch_direct_contract::{
+    DIRECT_CAPABILITY_KIND_ID_V2, PRICE_SCALE, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3,
+    VenueFeePolicyV3,
+};
+use dclutch_market_contract::market::{MARKET_ROOT_OFFSET, decode_market_outcome_count};
+use dclutch_realm_contract::{
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_PDA_DOMAIN, RealmV1,
+};
+use dclutch_record_contract::RAW_RECORD_PDA_SEED_V1;
+use dclutch_token_svm::{
+    ACCOUNT_BYTES, COption, ExactTransferProfileV1, LEGACY_TOKEN_PROGRAM_ID,
+    PRODUCTION_ADAPTER_RELEASES,
+};
 use dclutch_transition_vm::Registers;
 use generated_direct_program::DIRECT_PROGRAM;
 use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
@@ -20,6 +37,7 @@ use solana_program::{
     account_info::{AccountInfo, next_account_info},
     clock::Clock,
     entrypoint::ProgramResult,
+    hash::hash,
     instruction::{AccountMeta, Instruction},
     program::invoke_signed,
     program_error::ProgramError,
@@ -34,6 +52,8 @@ pub const CONTROLLER_SEED: &[u8] = b"dclutch-controller-v1";
 pub const REPLAY_SEED: &[u8] = b"dclutch/direct-replay/v3";
 /// Canonical maker/outcome Position domain for the successor experiment.
 pub const POSITION_SEED: &[u8] = b"dclutch/position/v1";
+/// Canonical Market PDA domain shared with the protocol adapter.
+pub const MARKET_SEED: &[u8] = b"dclutch/market-root/v1";
 /// Exact-account claim proof-program identity used by this experiment.
 pub const CLAIM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([81_u8; 32]);
 /// Real custody proof-program identity used by this experiment.
@@ -75,8 +95,8 @@ pub enum ControllerError {
     Intent = 8,
     /// Native Ed25519 instruction evidence was not exact.
     Signature = 9,
-    /// Read-only Market execution profile was not exact.
-    MarketProfile = 10,
+    /// Market, Realm, capability manifest, or fee policy authority was invalid.
+    MarketAuthority = 10,
     /// Canonical replay or Position state bytes/binding were not exact.
     ClaimState = 11,
     /// Token account state did not match the signed/profile bindings.
@@ -112,20 +132,31 @@ struct ClaimState {
     buyer_claims: u64,
 }
 
+#[derive(Clone, Copy)]
+struct MarketAuthority {
+    phase: u8,
+    outcome_count: u8,
+    generation: u64,
+    fee_basis_points: u16,
+    collateral_mint: [u8; 32],
+    fee_recipient: [u8; 32],
+}
+
 #[cfg(not(feature = "no-entrypoint"))]
 solana_program::entrypoint_no_alloc!(process_instruction);
 
 /// Authenticate compact signed intents, run Lean bytecode, and invoke children.
 ///
 /// The instruction contains no claim or custody plan. Both are derived only
-/// after exact Ed25519, Market-profile, replay, Position, PDA, and token checks.
+/// after exact Ed25519, Market/Realm/capability/policy, replay, Position, PDA,
+/// and token checks.
 #[inline(never)]
 pub fn process_instruction(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    if accounts.len() != 15 || instruction_data.len() != CONTROLLER_INSTRUCTION_BYTES {
+    if accounts.len() != 18 || instruction_data.len() != CONTROLLER_INSTRUCTION_BYTES {
         return Err(ControllerError::AccountFrame.into());
     }
     let instruction = ControllerInstructionV1::decode(instruction_data)
@@ -142,7 +173,10 @@ pub fn process_instruction(
     let buyer_position = next(&mut iterator)?;
     let claim_program = next(&mut iterator)?;
     let custody_program = next(&mut iterator)?;
-    let market_profile = next(&mut iterator)?;
+    let market = next(&mut iterator)?;
+    let realm = next(&mut iterator)?;
+    let fee_policy = next(&mut iterator)?;
+    let capability_manifest = next(&mut iterator)?;
     let mint = next(&mut iterator)?;
     let source = next(&mut iterator)?;
     let seller = next(&mut iterator)?;
@@ -160,7 +194,10 @@ pub fn process_instruction(
         buyer_position,
         claim_program,
         custody_program,
-        market_profile,
+        market,
+        realm,
+        fee_policy,
+        capability_manifest,
         mint,
         source,
         seller,
@@ -168,23 +205,25 @@ pub fn process_instruction(
         token_program,
         instructions,
     )?;
-    let profile = MarketProfileV1::decode(
-        &market_profile
-            .try_borrow_data()
-            .map_err(|_| ControllerError::MarketProfile)?,
-    )
-    .map_err(|_| ControllerError::MarketProfile)?;
-    if seller_intent.execution_profile != market_profile.key.to_bytes()
-        || buyer_intent.execution_profile != market_profile.key.to_bytes()
-        || seller_intent.generation != profile.generation
-        || buyer_intent.generation != profile.generation
+    let authority = authenticate_market_authority(
+        market,
+        realm,
+        fee_policy,
+        capability_manifest,
+        mint,
+        venue,
+        token_program,
+    )?;
+    if seller_intent.market != market.key.to_bytes()
+        || buyer_intent.market != market.key.to_bytes()
+        || seller_intent.generation != authority.generation
+        || buyer_intent.generation != authority.generation
         || seller_intent.collateral_account != seller.key.to_bytes()
         || buyer_intent.collateral_account != source.key.to_bytes()
-        || profile.token_program != token_program.key.to_bytes()
-        || profile.collateral_mint != mint.key.to_bytes()
-        || profile.fee_recipient != venue.key.to_bytes()
+        || seller_intent.fee_basis_points != authority.fee_basis_points
+        || buyer_intent.fee_basis_points != authority.fee_basis_points
     {
-        return Err(ControllerError::MarketProfile.into());
+        return Err(ControllerError::MarketAuthority.into());
     }
 
     let makers = authenticate_ed25519_batch(program_id, accounts, instruction_data, instructions)?;
@@ -195,11 +234,11 @@ pub fn process_instruction(
     if controller.key != &expected_controller {
         return Err(ControllerError::ControllerPda.into());
     }
-    let generation = profile.generation.to_le_bytes();
+    let generation = authority.generation.to_le_bytes();
     let seller_bump_seed = [instruction.seller_replay_bump];
     let seller_seeds: [&[u8]; 5] = [
         REPLAY_SEED,
-        market_profile.key.as_ref(),
+        market.key.as_ref(),
         &generation,
         makers[0].as_ref(),
         &seller_bump_seed,
@@ -207,7 +246,7 @@ pub fn process_instruction(
     let buyer_bump_seed = [instruction.buyer_replay_bump];
     let buyer_seeds: [&[u8]; 5] = [
         REPLAY_SEED,
-        market_profile.key.as_ref(),
+        market.key.as_ref(),
         &generation,
         makers[1].as_ref(),
         &buyer_bump_seed,
@@ -228,14 +267,14 @@ pub fn process_instruction(
     let buyer_position_bump_seed = [instruction.buyer_position_bump];
     let seller_position_seeds: [&[u8]; 5] = [
         POSITION_SEED,
-        market_profile.key.as_ref(),
+        market.key.as_ref(),
         makers[0].as_ref(),
         &seller_outcome_seed,
         &seller_position_bump_seed,
     ];
     let buyer_position_seeds: [&[u8]; 5] = [
         POSITION_SEED,
-        market_profile.key.as_ref(),
+        market.key.as_ref(),
         makers[1].as_ref(),
         &buyer_outcome_seed,
         &buyer_position_bump_seed,
@@ -266,7 +305,7 @@ pub fn process_instruction(
         buyer_claims: buyer_position_state.claims,
     };
     let token_state = authenticate_token_state(
-        profile,
+        authority,
         makers[1],
         buyer_replay,
         mint,
@@ -276,7 +315,7 @@ pub fn process_instruction(
         token_program,
     )?;
     let mut registers = build_registers(
-        profile,
+        authority,
         seller_intent,
         buyer_intent,
         makers,
@@ -318,6 +357,7 @@ pub fn process_instruction(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn validate_account_frame(
     program_id: &Pubkey,
     controller: &AccountInfo<'_>,
@@ -328,7 +368,10 @@ fn validate_account_frame(
     buyer_position: &AccountInfo<'_>,
     claim_program: &AccountInfo<'_>,
     custody_program: &AccountInfo<'_>,
-    market_profile: &AccountInfo<'_>,
+    market: &AccountInfo<'_>,
+    realm: &AccountInfo<'_>,
+    fee_policy: &AccountInfo<'_>,
+    capability_manifest: &AccountInfo<'_>,
     mint: &AccountInfo<'_>,
     source: &AccountInfo<'_>,
     seller: &AccountInfo<'_>,
@@ -356,9 +399,10 @@ fn validate_account_frame(
         || buyer_position.executable
         || !readonly_executable(claim_program)
         || !readonly_executable(custody_program)
-        || market_profile.is_signer
-        || market_profile.is_writable
-        || market_profile.executable
+        || !readonly_data(market)
+        || !readonly_data(realm)
+        || !readonly_data(fee_policy)
+        || !readonly_data(capability_manifest)
         || mint.is_signer
         || mint.is_writable
         || mint.executable
@@ -379,7 +423,6 @@ fn validate_account_frame(
         return Err(ControllerError::AccountAuthority);
     }
     if journal.owner != program_id
-        || market_profile.owner != program_id
         || seller_replay.owner != &CLAIM_PROGRAM_ID
         || buyer_replay.owner != &CLAIM_PROGRAM_ID
         || seller_position.owner != &CLAIM_PROGRAM_ID
@@ -400,7 +443,10 @@ fn validate_account_frame(
         buyer_position.key,
         claim_program.key,
         custody_program.key,
-        market_profile.key,
+        market.key,
+        realm.key,
+        fee_policy.key,
+        capability_manifest.key,
         mint.key,
         source.key,
         seller.key,
@@ -414,6 +460,10 @@ fn validate_account_frame(
         }
     }
     Ok(())
+}
+
+fn readonly_data(account: &AccountInfo<'_>) -> bool {
+    !account.is_signer && !account.is_writable && !account.executable
 }
 
 fn authenticate_ed25519_batch(
@@ -523,8 +573,179 @@ fn decode_position_state(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn authenticate_market_authority(
+    market_account: &AccountInfo<'_>,
+    realm_account: &AccountInfo<'_>,
+    policy_account: &AccountInfo<'_>,
+    manifest_account: &AccountInfo<'_>,
+    mint: &AccountInfo<'_>,
+    venue: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+) -> Result<MarketAuthority, ControllerError> {
+    let protocol_program = market_account.owner;
+    if realm_account.owner != protocol_program
+        || policy_account.owner != protocol_program
+        || manifest_account.owner != protocol_program
+    {
+        return Err(ControllerError::MarketAuthority);
+    }
+
+    let market_data = market_account
+        .try_borrow_data()
+        .map_err(|_| ControllerError::MarketAuthority)?;
+    let outcome_count =
+        decode_market_outcome_count(&market_data).map_err(|_| ControllerError::MarketAuthority)?;
+    let root_end = MARKET_ROOT_OFFSET
+        .checked_add(MARKET_ROOT_BYTES)
+        .ok_or(ControllerError::Arithmetic)?;
+    let root = MarketRoot::decode(
+        market_data
+            .get(MARKET_ROOT_OFFSET..root_end)
+            .ok_or(ControllerError::MarketAuthority)?,
+    )
+    .map_err(|_| ControllerError::MarketAuthority)?;
+    if root.phase() != Phase::Open {
+        return Err(ControllerError::MarketAuthority);
+    }
+    let identity_digest = hash(&root.identity().to_bytes()).to_bytes();
+    let (expected_market, _) =
+        Pubkey::find_program_address(&[MARKET_SEED, &identity_digest], protocol_program);
+    if market_account.key != &expected_market {
+        return Err(ControllerError::MarketAuthority);
+    }
+
+    let realm_data = realm_account
+        .try_borrow_data()
+        .map_err(|_| ControllerError::MarketAuthority)?;
+    let realm = RealmV1::decode(&realm_data).map_err(|_| ControllerError::MarketAuthority)?;
+    let realm_digest = hash(&realm_data).to_bytes();
+    let (expected_realm, _) =
+        Pubkey::find_program_address(&[REALM_PDA_DOMAIN, &realm_digest], protocol_program);
+    if realm_account.key != &expected_realm
+        || root.identity().realm_id().to_bytes() != realm_digest
+        || realm.token_program() != token_program.key.as_ref()
+        || realm.collateral_mint() != mint.key.as_ref()
+        || token_program.key.to_bytes() != LEGACY_TOKEN_PROGRAM_ID
+    {
+        return Err(ControllerError::MarketAuthority);
+    }
+    let mut release = None;
+    for candidate in PRODUCTION_ADAPTER_RELEASES {
+        if hash(&candidate.to_bytes()).to_bytes() == *realm.collateral_adapter_release_id() {
+            release = Some(candidate);
+        }
+    }
+    let release = release.ok_or(ControllerError::MarketAuthority)?;
+    if release.token_program() != LEGACY_TOKEN_PROGRAM_ID
+        || release.profile() != ExactTransferProfileV1::LegacyExactTransferV1
+    {
+        return Err(ControllerError::MarketAuthority);
+    }
+    let mint_data = mint
+        .try_borrow_data()
+        .map_err(|_| ControllerError::MarketAuthority)?;
+    let checked_mint = release
+        .profile()
+        .check_mint(LEGACY_TOKEN_PROGRAM_ID, &mint_data)
+        .map_err(|_| ControllerError::MarketAuthority)?;
+    if (realm.mint_authority_policy() == MintAuthorityPolicy::RequireAbsent
+        && checked_mint.mint_authority != COption::None)
+        || (realm.freeze_authority_policy() == FreezeAuthorityPolicy::RequireAbsent
+            && checked_mint.freeze_authority != COption::None)
+    {
+        return Err(ControllerError::MarketAuthority);
+    }
+
+    let manifest_data = manifest_account
+        .try_borrow_data()
+        .map_err(|_| ControllerError::MarketAuthority)?;
+    let manifest = CapabilityManifestV1::decode(&manifest_data)
+        .map_err(|_| ControllerError::MarketAuthority)?;
+    let manifest_digest = hash(manifest.as_bytes()).to_bytes();
+    let expected_manifest = raw_record_address(
+        protocol_program,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        manifest_digest,
+    );
+    if manifest_account.key != &expected_manifest
+        || root.identity().capability_manifest_id().to_bytes() != manifest_digest
+    {
+        return Err(ControllerError::MarketAuthority);
+    }
+
+    let policy_data = policy_account
+        .try_borrow_data()
+        .map_err(|_| ControllerError::MarketAuthority)?;
+    let policy =
+        VenueFeePolicyV3::decode(&policy_data).map_err(|_| ControllerError::MarketAuthority)?;
+    let policy_digest = hash(&policy_data).to_bytes();
+    let expected_policy = raw_record_address(
+        protocol_program,
+        VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3,
+        policy_digest,
+    );
+    if policy_account.key != &expected_policy || policy.recipient() != venue.key.as_ref() {
+        return Err(ControllerError::MarketAuthority);
+    }
+
+    let mut selected = None;
+    let mut index = 0_u16;
+    while index < manifest.entry_count() {
+        let entry = manifest
+            .entry(index)
+            .map_err(|_| ControllerError::MarketAuthority)?;
+        if entry.kind_id().to_bytes() == DIRECT_CAPABILITY_KIND_ID_V2 {
+            if selected.is_some() {
+                return Err(ControllerError::MarketAuthority);
+            }
+            selected = Some(entry);
+        }
+        index = index.checked_add(1).ok_or(ControllerError::Arithmetic)?;
+    }
+    let entry = selected.ok_or(ControllerError::MarketAuthority)?;
+    let funding = entry.funding_quote();
+    if entry.release_id().to_bytes() != COMPILED_DIRECT_RELEASE_ID_V1
+        || entry.config_id().to_bytes() != policy_digest
+        || entry.capacity_profile_id().to_bytes() != COMPILED_DIRECT_CAPACITY_ID_V1
+        || entry.child_schema_id().to_bytes() != COMPILED_DIRECT_CHILD_SCHEMA_ID_V1
+        || entry.child_derivation_id().to_bytes() != COMPILED_DIRECT_DERIVATION_ID_V1
+        || entry.activation_policy() != ActivationPolicy::RequiredAtFounding
+        || entry.activation_deadline_slot() != 0
+        || entry.dependency_count() != 0
+        || funding.native_lamports_total() != 0
+        || funding.realm_collateral_total() != 0
+        || funding.realm_collateral().is_some()
+    {
+        return Err(ControllerError::MarketAuthority);
+    }
+
+    Ok(MarketAuthority {
+        phase: 1,
+        outcome_count,
+        generation: root.identity().generation(),
+        fee_basis_points: policy.fee_basis_points(),
+        collateral_mint: *realm.collateral_mint(),
+        fee_recipient: *policy.recipient(),
+    })
+}
+
+fn raw_record_address(
+    protocol_program: &Pubkey,
+    schema_release_id: [u8; 32],
+    digest: [u8; 32],
+) -> Pubkey {
+    Pubkey::find_program_address(
+        &[RAW_RECORD_PDA_SEED_V1, &schema_release_id, &digest],
+        protocol_program,
+    )
+    .0
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn authenticate_token_state(
-    profile: MarketProfileV1,
+    authority: MarketAuthority,
     buyer: Pubkey,
     buyer_replay: &AccountInfo<'_>,
     mint: &AccountInfo<'_>,
@@ -533,8 +754,7 @@ fn authenticate_token_state(
     venue: &AccountInfo<'_>,
     token_program: &AccountInfo<'_>,
 ) -> Result<[u64; 3], ControllerError> {
-    if profile.token_program != LEGACY_TOKEN_PROGRAM_ID
-        || token_program.key.to_bytes() != LEGACY_TOKEN_PROGRAM_ID
+    if token_program.key.to_bytes() != LEGACY_TOKEN_PROGRAM_ID
         || mint.owner != token_program.key
         || source.owner != token_program.key
         || seller.owner != token_program.key
@@ -561,9 +781,10 @@ fn authenticate_token_state(
         .map_err(|_| ControllerError::TokenState)?;
     let (seller_mint, seller_amount) = legacy_destination_projection(seller)?;
     let (venue_mint, venue_amount) = legacy_destination_projection(venue)?;
-    if source.mint != profile.collateral_mint
-        || seller_mint != profile.collateral_mint
-        || venue_mint != profile.collateral_mint
+    if source.mint != authority.collateral_mint
+        || seller_mint != authority.collateral_mint
+        || venue_mint != authority.collateral_mint
+        || venue.key.to_bytes() != authority.fee_recipient
         || source.owner != buyer.to_bytes()
         || source.delegate != COption::Some(buyer_replay.key.to_bytes())
     {
@@ -585,8 +806,9 @@ fn legacy_destination_projection(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn build_registers(
-    profile: MarketProfileV1,
+    authority: MarketAuthority,
     seller: CompactIntentV1,
     buyer: CompactIntentV1,
     makers: [Pubkey; 2],
@@ -598,7 +820,7 @@ fn build_registers(
 ) -> Result<Registers, ControllerError> {
     let mut registers = Registers::zeroed();
     let scalars = [
-        profile.phase as u64,
+        authority.phase as u64,
         slot,
         seller.valid_from,
         seller.valid_through,
@@ -610,7 +832,7 @@ fn build_registers(
         buyer.generation,
         seller.outcome as u64,
         buyer.outcome as u64,
-        profile.outcome_count as u64,
+        authority.outcome_count as u64,
         seller.lifecycle as u64,
         seller.maximum_fill,
         buyer.lifecycle as u64,
@@ -622,10 +844,10 @@ fn build_registers(
         seller.limit_price,
         execution_price,
         buyer.limit_price,
-        profile.price_scale,
+        PRICE_SCALE,
         seller.fee_basis_points as u64,
         buyer.fee_basis_points as u64,
-        profile.fee_basis_points as u64,
+        authority.fee_basis_points as u64,
         fill,
         claims.seller_claims,
         claims.buyer_claims,
@@ -639,8 +861,8 @@ fn build_registers(
             .map_err(|_| ControllerError::Transition)?;
     }
     for (index, identity) in [
-        seller.execution_profile,
-        buyer.execution_profile,
+        seller.market,
+        buyer.market,
         makers[0].to_bytes(),
         makers[1].to_bytes(),
     ]
@@ -654,6 +876,7 @@ fn build_registers(
     Ok(registers)
 }
 
+#[inline(never)]
 fn claim_plan(
     registers: &Registers,
     outcome: u8,
@@ -691,6 +914,7 @@ fn claim_plan(
     Ok(plan)
 }
 
+#[inline(never)]
 fn custody_plan(registers: &Registers) -> Result<[u8; CUSTODY_PLAN_BYTES], ControllerError> {
     let mut plan = [0_u8; CUSTODY_PLAN_BYTES];
     plan[..8].copy_from_slice(&[b'D', b'C', b'C', b'P', 1, 2, 0, 0]);

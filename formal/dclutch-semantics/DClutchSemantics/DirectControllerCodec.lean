@@ -6,8 +6,10 @@ import DClutchSemantics.Codec
 Lean owns the exact byte layout presented to the native Ed25519 precompile and
 the successor Direct controller.  A maker identity is deliberately absent from
 `CompactIntentV1`: the verified Ed25519 public key is its sole semantic owner.
-The signed immutable execution-profile key selects the fee policy; each maker
-also signs the exact accepted fee rate.
+The signed Market key commits the Product, Realm, capability manifest, and
+generation through the canonical Market identity. Each maker also signs the
+exact accepted fee rate. Runtime-owned Market/Realm/manifest/policy records,
+not a parallel execution-profile DTO, supply the remaining execution facts.
 -/
 
 namespace DClutch.DirectControllerCodec
@@ -31,13 +33,9 @@ def intentMagic : List UInt8 :=
 def controllerMagic : List UInt8 :=
   [0x44, 0x43, 0x4c, 0x54, 0x43, 0x54, 0x4c, 0x31] -- `DCLTCTL1`
 
-def profileMagic : List UInt8 :=
-  [0x44, 0x43, 0x4c, 0x54, 0x50, 0x52, 0x46, 0x31] -- `DCLTPRF1`
-
 def version : Nat := 1
 def compactIntentBytes : Nat := 136
 def controllerInstructionBytes : Nat := 304
-def marketProfileBytes : Nat := 136
 
 /-- One independently signed reusable limit intent.
 
@@ -49,7 +47,7 @@ structure CompactIntentV1 where
   side : UInt8
   outcome : UInt8
   lifecycle : UInt8
-  executionProfile : Bytes32
+  market : Bytes32
   generation : Nat
   nonce : Nat
   validFrom : Nat
@@ -64,7 +62,7 @@ def encodeCompactIntentV1 (intent : CompactIntentV1) : List UInt8 :=
   encodeLE 2 version ++
   [intent.side, intent.outcome, intent.lifecycle] ++
   zeros 3 ++
-  encodeBytes32 intent.executionProfile ++
+  encodeBytes32 intent.market ++
   encodeLE 8 intent.generation ++
   encodeLE 8 intent.nonce ++
   encodeLE 8 intent.validFrom ++
@@ -110,35 +108,6 @@ theorem encodeControllerInstructionV1_length (instruction : ControllerInstructio
     controllerInstructionBytes, compactIntentBytes, encodeLE_length,
     encodeCompactIntentV1_length, zeros]
 
-/-- Immutable capability-specific execution policy selected by both intents. -/
-structure MarketProfileV1 where
-  phase : UInt8
-  outcomeCount : UInt8
-  generation : Nat
-  priceScale : Nat
-  feeBasisPoints : Nat
-  tokenProgram : Bytes32
-  collateralMint : Bytes32
-  feeRecipient : Bytes32
-
-def encodeMarketProfileV1 (profile : MarketProfileV1) : List UInt8 :=
-  profileMagic ++
-  encodeLE 2 version ++
-  [profile.phase, profile.outcomeCount] ++
-  zeros 4 ++
-  encodeLE 8 profile.generation ++
-  encodeLE 8 profile.priceScale ++
-  encodeLE 2 profile.feeBasisPoints ++
-  zeros 6 ++
-  encodeBytes32 profile.tokenProgram ++
-  encodeBytes32 profile.collateralMint ++
-  encodeBytes32 profile.feeRecipient
-
-theorem encodeMarketProfileV1_length (profile : MarketProfileV1) :
-    (encodeMarketProfileV1 profile).length = marketProfileBytes := by
-  simp [encodeMarketProfileV1, profileMagic, marketProfileBytes,
-    encodeLE_length, encodeBytes32_length, zeros]
-
 namespace Examples
 
 def bytes32 (byte : UInt8) : Bytes32 := fun _ => byte
@@ -147,7 +116,7 @@ def sellerIntent : CompactIntentV1 := {
   side := 0
   outcome := 1
   lifecycle := 0
-  executionProfile := bytes32 4
+  market := bytes32 4
   generation := 3
   nonce := 0
   validFrom := 0
@@ -162,7 +131,7 @@ def buyerIntent : CompactIntentV1 := {
   side := 1
   outcome := 1
   lifecycle := 0
-  executionProfile := bytes32 4
+  market := bytes32 4
   generation := 3
   nonce := 0
   validFrom := 0
@@ -185,22 +154,10 @@ def controllerInstruction : ControllerInstructionV1 := {
   buyer := buyerIntent
 }
 
-def marketProfile : MarketProfileV1 := {
-  phase := 1
-  outcomeCount := 2
-  generation := 3
-  priceScale := 1000000
-  feeBasisPoints := 25
-  tokenProgram := bytes32 7
-  collateralMint := bytes32 8
-  feeRecipient := bytes32 9
-}
-
 theorem concrete_lengths :
     (encodeCompactIntentV1 sellerIntent).length = 136 ∧
     (encodeCompactIntentV1 buyerIntent).length = 136 ∧
-    (encodeControllerInstructionV1 controllerInstruction).length = 304 ∧
-    (encodeMarketProfileV1 marketProfile).length = 136 := by
+    (encodeControllerInstructionV1 controllerInstruction).length = 304 := by
   native_decide
 
 end Examples

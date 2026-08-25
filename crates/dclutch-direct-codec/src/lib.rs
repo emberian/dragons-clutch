@@ -8,14 +8,35 @@
 pub const COMPACT_INTENT_BYTES: usize = 136;
 /// Bytes in one controller instruction containing two compact intents.
 pub const CONTROLLER_INSTRUCTION_BYTES: usize = 304;
-/// Bytes in one experimental execution profile.
-pub const MARKET_PROFILE_BYTES: usize = 136;
 /// Current compiled Direct ABI version.
 pub const VERSION: u16 = 1;
+/// Semantic release selected by a Market for this compiled inline controller.
+///
+/// SHA-256 of `dclutch/release/direct-compiled-controller-v1`. A checked
+/// release manifest separately binds this semantic coordinate to exact ELF and
+/// Loader evidence; it is not itself an artifact digest.
+pub const COMPILED_DIRECT_RELEASE_ID_V1: [u8; 32] = [
+    0x79, 0xfa, 0xd2, 0xf0, 0x4f, 0x8d, 0x9c, 0xe0, 0x7d, 0x76, 0xc8, 0x09, 0xfe, 0x11, 0x6d, 0xb8,
+    0xef, 0x93, 0x74, 0xad, 0xbe, 0xb1, 0x5e, 0x62, 0xf6, 0x03, 0x23, 0x5c, 0x3a, 0x2b, 0x96, 0xb9,
+];
+/// Measured compiled inline capacity coordinate for `N = 2..=16`.
+pub const COMPILED_DIRECT_CAPACITY_ID_V1: [u8; 32] = [
+    0x2e, 0xaf, 0xb1, 0x44, 0x84, 0x0a, 0x9d, 0xc3, 0x1c, 0xed, 0x73, 0xac, 0x19, 0x9b, 0xa1, 0xcf,
+    0x49, 0x16, 0x15, 0x28, 0x47, 0x02, 0x05, 0x14, 0x37, 0xb1, 0xa5, 0x9d, 0xf5, 0xd2, 0x93, 0x7d,
+];
+/// Compiled replay/Position child-state schema coordinate.
+pub const COMPILED_DIRECT_CHILD_SCHEMA_ID_V1: [u8; 32] = [
+    0x97, 0x67, 0xa1, 0x54, 0x54, 0x9c, 0x1f, 0x06, 0xa1, 0xe0, 0xc7, 0x41, 0xc1, 0x84, 0xac, 0xc0,
+    0xd9, 0xbd, 0x18, 0xa4, 0x21, 0x19, 0xfa, 0xac, 0x14, 0x0c, 0x4d, 0xd7, 0xf1, 0x55, 0xfc, 0xe7,
+];
+/// Compiled replay/Position PDA-derivation coordinate.
+pub const COMPILED_DIRECT_DERIVATION_ID_V1: [u8; 32] = [
+    0x2d, 0x00, 0xc7, 0x72, 0x68, 0xf9, 0x0c, 0x56, 0xc2, 0xf4, 0x3d, 0xb5, 0x43, 0x74, 0x54, 0x92,
+    0xd0, 0x5e, 0x36, 0x9a, 0xef, 0xd5, 0xd3, 0x86, 0x9a, 0x6a, 0xa6, 0xae, 0xe7, 0xc9, 0xc5, 0x8d,
+];
 
 const INTENT_MAGIC: &[u8; 8] = b"DCLTDIR3";
 const CONTROLLER_MAGIC: &[u8; 8] = b"DCLTCTL1";
-const PROFILE_MAGIC: &[u8; 8] = b"DCLTPRF1";
 
 /// Strict codec refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,9 +62,9 @@ pub struct CompactIntentV1 {
     pub outcome: u8,
     /// Fill-or-kill `0` or immediate-or-cancel `1`.
     pub lifecycle: u8,
-    /// Immutable execution-profile account identity.
-    pub execution_profile: [u8; 32],
-    /// Replay generation selected by the execution profile.
+    /// Canonical Market account identity.
+    pub market: [u8; 32],
+    /// Replay generation selected by the immutable Market identity.
     pub generation: u64,
     /// Exact next maker replay nonce.
     pub nonce: u64,
@@ -73,7 +94,7 @@ impl CompactIntentV1 {
             side: byte(input, 10)?,
             outcome: byte(input, 11)?,
             lifecycle: byte(input, 12)?,
-            execution_profile: array(input, 16)?,
+            market: array(input, 16)?,
             generation: u64_at(input, 48)?,
             nonce: u64_at(input, 56)?,
             valid_from: u64_at(input, 64)?,
@@ -93,7 +114,7 @@ impl CompactIntentV1 {
         put_byte(&mut output, 10, self.side)?;
         put_byte(&mut output, 11, self.outcome)?;
         put_byte(&mut output, 12, self.lifecycle)?;
-        put(&mut output, 16, &self.execution_profile)?;
+        put(&mut output, 16, &self.market)?;
         put(&mut output, 48, &self.generation.to_le_bytes())?;
         put(&mut output, 56, &self.nonce.to_le_bytes())?;
         put(&mut output, 64, &self.valid_from.to_le_bytes())?;
@@ -163,64 +184,6 @@ impl ControllerInstructionV1 {
         put(&mut output, 24, &self.execution_price.to_le_bytes())?;
         put(&mut output, 32, &self.seller.encode()?)?;
         put(&mut output, 168, &self.buyer.encode()?)?;
-        Ok(output)
-    }
-}
-
-/// Read-only execution policy selected by both signed intents.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MarketProfileV1 {
-    /// Current Market phase tag.
-    pub phase: u8,
-    /// Product-owned outcome count.
-    pub outcome_count: u8,
-    /// Current replay generation.
-    pub generation: u64,
-    /// Exact Product-owned price scale.
-    pub price_scale: u64,
-    /// Exact cumulative floor-fee rate.
-    pub fee_basis_points: u16,
-    /// Realm-selected token-program identity.
-    pub token_program: [u8; 32],
-    /// Realm-selected collateral mint.
-    pub collateral_mint: [u8; 32],
-    /// Immutable fee-recipient token account.
-    pub fee_recipient: [u8; 32],
-}
-
-impl MarketProfileV1 {
-    /// Strictly decode one canonical execution profile.
-    pub fn decode(input: &[u8]) -> Result<Self, Error> {
-        exact_width(input, MARKET_PROFILE_BYTES)?;
-        exact_magic(input, PROFILE_MAGIC)?;
-        exact_version(input)?;
-        reserved(input, 12, 4)?;
-        reserved(input, 34, 6)?;
-        Ok(Self {
-            phase: byte(input, 10)?,
-            outcome_count: byte(input, 11)?,
-            generation: u64_at(input, 16)?,
-            price_scale: u64_at(input, 24)?,
-            fee_basis_points: u16_at(input, 32)?,
-            token_program: array(input, 40)?,
-            collateral_mint: array(input, 72)?,
-            fee_recipient: array(input, 104)?,
-        })
-    }
-
-    /// Encode one canonical execution profile.
-    pub fn encode(self) -> Result<[u8; MARKET_PROFILE_BYTES], Error> {
-        let mut output = [0_u8; MARKET_PROFILE_BYTES];
-        put(&mut output, 0, PROFILE_MAGIC)?;
-        put(&mut output, 8, &VERSION.to_le_bytes())?;
-        put_byte(&mut output, 10, self.phase)?;
-        put_byte(&mut output, 11, self.outcome_count)?;
-        put(&mut output, 16, &self.generation.to_le_bytes())?;
-        put(&mut output, 24, &self.price_scale.to_le_bytes())?;
-        put(&mut output, 32, &self.fee_basis_points.to_le_bytes())?;
-        put(&mut output, 40, &self.token_program)?;
-        put(&mut output, 72, &self.collateral_mint)?;
-        put(&mut output, 104, &self.fee_recipient)?;
         Ok(output)
     }
 }
@@ -311,7 +274,7 @@ mod tests {
             side,
             outcome: 1,
             lifecycle: 0,
-            execution_profile: [4; 32],
+            market: [4; 32],
             generation: 3,
             nonce: 0,
             valid_from: 0,
@@ -357,21 +320,10 @@ mod tests {
             seller,
             buyer,
         };
-        let profile = MarketProfileV1 {
-            phase: 1,
-            outcome_count: 2,
-            generation: 3,
-            price_scale: 1_000_000,
-            fee_basis_points: 25,
-            token_program: [7; 32],
-            collateral_mint: [8; 32],
-            fee_recipient: [9; 32],
-        };
         for (name, encoded) in [
             ("seller_intent", seller.encode().map(Vec::from)),
             ("buyer_intent", buyer.encode().map(Vec::from)),
             ("controller", controller.encode().map(Vec::from)),
-            ("market_profile", profile.encode().map(Vec::from)),
         ] {
             let encoded = encoded.expect("fixed encoder");
             assert_eq!(hex(&encoded), vector(name));
@@ -383,10 +335,6 @@ mod tests {
         assert_eq!(
             ControllerInstructionV1::decode(&controller.encode().expect("controller encoding")),
             Ok(controller)
-        );
-        assert_eq!(
-            MarketProfileV1::decode(&profile.encode().expect("profile encoding")),
-            Ok(profile)
         );
     }
 

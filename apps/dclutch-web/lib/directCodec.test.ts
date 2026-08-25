@@ -6,10 +6,8 @@ import { hex } from './bytes';
 import {
   decodeCompactIntentV1,
   decodeControllerInstructionV1,
-  decodeMarketProfileV1,
   encodeCompactIntentV1,
   encodeControllerInstructionV1,
-  encodeMarketProfileV1,
 } from './directCodec';
 
 const vectors = Object.fromEntries(
@@ -34,12 +32,10 @@ describe('Lean-owned compiled Direct ABI', () => {
     const seller = decodeCompactIntentV1(bytes('seller_intent'));
     const buyer = decodeCompactIntentV1(bytes('buyer_intent'));
     const controller = decodeControllerInstructionV1(bytes('controller'));
-    const profile = decodeMarketProfileV1(bytes('market_profile'));
 
     expect(hex(encodeCompactIntentV1(seller))).toBe(vectors.seller_intent);
     expect(hex(encodeCompactIntentV1(buyer))).toBe(vectors.buyer_intent);
     expect(hex(encodeControllerInstructionV1(controller))).toBe(vectors.controller);
-    expect(hex(encodeMarketProfileV1(profile))).toBe(vectors.market_profile);
     expect(controller.seller).toEqual(seller);
     expect(controller.buyer).toEqual(buyer);
   });
@@ -63,7 +59,7 @@ describe('Lean-owned compiled Direct ABI', () => {
 
   it('refuses non-32-byte keys and out-of-range exact integers', () => {
     const intent = decodeCompactIntentV1(bytes('seller_intent'));
-    expect(() => encodeCompactIntentV1({ ...intent, executionProfile: new Uint8Array(31) })).toThrow(/32 bytes/);
+    expect(() => encodeCompactIntentV1({ ...intent, market: new Uint8Array(31) })).toThrow(/32 bytes/);
     expect(() => encodeCompactIntentV1({ ...intent, feeBasisPoints: 65_536 })).toThrow(/u16/);
     expect(() => encodeCompactIntentV1({ ...intent, nonce: -1n })).toThrow(/u64/);
   });

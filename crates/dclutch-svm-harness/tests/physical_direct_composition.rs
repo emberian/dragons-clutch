@@ -5,13 +5,31 @@
 
 use std::{env, path::PathBuf};
 
-use dclutch_direct_codec::{
-    COMPACT_INTENT_BYTES, CompactIntentV1, ControllerInstructionV1, MARKET_PROFILE_BYTES,
-    MarketProfileV1,
+use dclutch_capability_contract::{
+    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+    CapabilityEntryV1, CapabilityManifestV1, CompartmentFundingV1, FundingAmountsV1,
+    FundingQuoteV1, MAX_DEPENDENCIES_PER_CAPABILITY,
 };
-use dclutch_token_svm::LEGACY_TOKEN_PROGRAM_ID;
+use dclutch_core_contract::{ContentId, MarketIdentity, MarketRoot, Phase};
+use dclutch_direct_codec::{
+    COMPACT_INTENT_BYTES, COMPILED_DIRECT_CAPACITY_ID_V1, COMPILED_DIRECT_CHILD_SCHEMA_ID_V1,
+    COMPILED_DIRECT_DERIVATION_ID_V1, COMPILED_DIRECT_RELEASE_ID_V1, CompactIntentV1,
+    ControllerInstructionV1,
+};
+use dclutch_direct_contract::{
+    DIRECT_CAPABILITY_KIND_ID_V2, VENUE_FEE_POLICY_BYTES_V3, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3,
+    VenueFeePolicyV3,
+};
+use dclutch_market_contract::market::{CategoricalMarketV1, CategoricalSettlementSummaryV1};
+use dclutch_realm_contract::{
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_PDA_DOMAIN, RealmV1, RealmV1Input,
+};
+use dclutch_record_contract::RAW_RECORD_PDA_SEED_V1;
+use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
 use solana_account::Account;
+use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
 use solana_program::{
+    hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     rent::Rent,
@@ -24,6 +42,7 @@ use solana_transaction::Transaction;
 const CONTROLLER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([67_u8; 32]);
 const CLAIM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([81_u8; 32]);
 const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([75_u8; 32]);
+const PROTOCOL_PROGRAM_ID: Pubkey = Pubkey::new_from_array([68_u8; 32]);
 const CONTROLLER_SEED: &[u8] = b"dclutch-controller-v1";
 const REPLAY_SEED: &[u8] = b"dclutch/direct-replay/v3";
 const POSITION_SEED: &[u8] = b"dclutch/position/v1";
@@ -35,12 +54,13 @@ const MINT_BYTES: usize = 82;
 const GENERATION: u64 = 3;
 const FILL: u64 = 2_000;
 const PRICE: u64 = 500_000;
-const PRICE_SCALE: u64 = 1_000_000;
 const FEE_BPS: u16 = 25;
 
 struct TransactionResult {
     accepted: bool,
     compute_units: u64,
+    wire_bytes: usize,
+    v0_wire_bytes: usize,
     logs: Vec<String>,
 }
 
@@ -53,7 +73,10 @@ struct TokenTriplet {
 
 #[derive(Clone, Copy)]
 struct MarketFixture {
-    profile: Pubkey,
+    market: Pubkey,
+    realm: Pubkey,
+    fee_policy: Pubkey,
+    capability_manifest: Pubkey,
     seller_replay: Pubkey,
     seller_bump: u8,
     buyer_replay: Pubkey,
@@ -128,20 +151,125 @@ fn journal(counter: u64) -> Vec<u8> {
     bytes
 }
 
-fn market_profile(mint: Pubkey, venue: Pubkey) -> Vec<u8> {
-    MarketProfileV1 {
-        phase: 1,
-        outcome_count: 2,
-        generation: GENERATION,
-        price_scale: PRICE_SCALE,
-        fee_basis_points: FEE_BPS,
+fn content(bytes: [u8; 32]) -> ContentId {
+    ContentId::new(bytes).expect("nonzero content ID")
+}
+
+fn zero_quote() -> FundingQuoteV1 {
+    FundingQuoteV1::new(
+        FundingAmountsV1::new(
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+        )
+        .expect("zero funding"),
+        None,
+    )
+    .expect("compiled Direct has no capability principal")
+}
+
+fn realm_record(mint: Pubkey) -> (Pubkey, [u8; 32], Vec<u8>) {
+    let adapter_release = hash(&PRODUCTION_ADAPTER_RELEASES[0].to_bytes()).to_bytes();
+    let realm = RealmV1::new(RealmV1Input {
         token_program: token_program_id().to_bytes(),
         collateral_mint: mint.to_bytes(),
-        fee_recipient: venue.to_bytes(),
-    }
-    .encode()
-    .expect("fixed Market profile")
-    .to_vec()
+        collateral_adapter_release_id: adapter_release,
+        mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
+        freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
+    })
+    .expect("canonical Realm");
+    let bytes = realm.to_bytes();
+    let digest = hash(&bytes).to_bytes();
+    let key = Pubkey::find_program_address(&[REALM_PDA_DOMAIN, &digest], &PROTOCOL_PROGRAM_ID).0;
+    (key, digest, bytes.to_vec())
+}
+
+fn raw_record(schema: [u8; 32], bytes: &[u8]) -> Pubkey {
+    let digest = hash(bytes).to_bytes();
+    Pubkey::find_program_address(
+        &[RAW_RECORD_PDA_SEED_V1, &schema, &digest],
+        &PROTOCOL_PROGRAM_ID,
+    )
+    .0
+}
+
+fn authority_records(
+    mint: Pubkey,
+    venue: Pubkey,
+) -> (MarketFixtureAuthority, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
+    let (realm, realm_digest, realm_bytes) = realm_record(mint);
+    let policy = VenueFeePolicyV3::new(venue.to_bytes(), FEE_BPS).expect("fee policy");
+    let mut policy_bytes = vec![0_u8; VENUE_FEE_POLICY_BYTES_V3];
+    policy.encode(&mut policy_bytes).expect("fee policy bytes");
+    let policy_digest = hash(&policy_bytes).to_bytes();
+    let fee_policy = raw_record(VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3, &policy_bytes);
+
+    let entry = CapabilityEntryV1::new(
+        content(DIRECT_CAPABILITY_KIND_ID_V2),
+        content(COMPILED_DIRECT_RELEASE_ID_V1),
+        content(policy_digest),
+        content(COMPILED_DIRECT_CAPACITY_ID_V1),
+        content(COMPILED_DIRECT_CHILD_SCHEMA_ID_V1),
+        content(COMPILED_DIRECT_DERIVATION_ID_V1),
+        ActivationPolicy::RequiredAtFounding,
+        0,
+        0,
+        [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+        zero_quote(),
+    )
+    .expect("compiled Direct manifest entry");
+    let mut manifest_bytes = vec![0_u8; 16 + CAPABILITY_ENTRY_BYTES];
+    CapabilityManifestV1::encode_into(&[entry], &mut manifest_bytes).expect("capability manifest");
+    let manifest_digest = hash(&manifest_bytes).to_bytes();
+    let capability_manifest = raw_record(CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, &manifest_bytes);
+
+    let identity = MarketIdentity::new(
+        content(realm_digest),
+        content([21; 32]),
+        content([22; 32]),
+        content([23; 32]),
+        content(manifest_digest),
+        GENERATION,
+    );
+    let mut root = MarketRoot::founding(identity, [24; 32]).expect("founding root");
+    root.transition_phase(GENERATION, Phase::Open)
+        .expect("open root");
+    let market =
+        CategoricalMarketV1::<2>::new(root, 0, [0; 2], CategoricalSettlementSummaryV1::empty())
+            .expect("open Market");
+    let mut market_bytes =
+        vec![0_u8; CategoricalMarketV1::<2>::encoded_len().expect("Market width")];
+    market.encode(&mut market_bytes).expect("Market bytes");
+    let identity_digest = hash(&identity.to_bytes()).to_bytes();
+    let market_key = Pubkey::find_program_address(
+        &[b"dclutch/market-root/v1", &identity_digest],
+        &PROTOCOL_PROGRAM_ID,
+    )
+    .0;
+    (
+        MarketFixtureAuthority {
+            market: market_key,
+            realm,
+            fee_policy,
+            capability_manifest,
+        },
+        market_bytes,
+        realm_bytes,
+        policy_bytes,
+        manifest_bytes,
+    )
+}
+
+#[derive(Clone, Copy)]
+struct MarketFixtureAuthority {
+    market: Pubkey,
+    realm: Pubkey,
+    fee_policy: Pubkey,
+    capability_manifest: Pubkey,
 }
 
 fn compact_intent(market: Pubkey, collateral: Pubkey, side: u8, nonce: u64) -> CompactIntentV1 {
@@ -149,7 +277,7 @@ fn compact_intent(market: Pubkey, collateral: Pubkey, side: u8, nonce: u64) -> C
         side,
         outcome: 1,
         lifecycle: 0,
-        execution_profile: market.to_bytes(),
+        market: market.to_bytes(),
         generation: GENERATION,
         nonce,
         valid_from: 0,
@@ -170,8 +298,8 @@ fn controller_data(controller_bump: u8, fixture: MarketFixture, nonce: u64) -> V
         buyer_position_bump: fixture.buyer_position_bump,
         fill: FILL,
         execution_price: PRICE,
-        seller: compact_intent(fixture.profile, fixture.tokens.seller, 0, nonce),
-        buyer: compact_intent(fixture.profile, fixture.tokens.source, 1, nonce),
+        seller: compact_intent(fixture.market, fixture.tokens.seller, 0, nonce),
+        buyer: compact_intent(fixture.market, fixture.tokens.source, 1, nonce),
     }
     .encode()
     .expect("fixed controller instruction")
@@ -243,7 +371,10 @@ fn controller_instruction(
             AccountMeta::new(fixture.buyer_position, false),
             AccountMeta::new_readonly(CLAIM_PROGRAM_ID, false),
             AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
-            AccountMeta::new_readonly(fixture.profile, false),
+            AccountMeta::new_readonly(fixture.market, false),
+            AccountMeta::new_readonly(fixture.realm, false),
+            AccountMeta::new_readonly(fixture.fee_policy, false),
+            AccountMeta::new_readonly(fixture.capability_manifest, false),
             AccountMeta::new_readonly(mint, false),
             AccountMeta::new(fixture.tokens.source, false),
             AccountMeta::new(fixture.tokens.seller, false),
@@ -286,6 +417,30 @@ async fn submit(
         &[&context.payer],
         blockhash,
     );
+    let wire_bytes = 1_usize
+        .checked_add(transaction.signatures.len().saturating_mul(64))
+        .and_then(|prefix| prefix.checked_add(transaction.message_data().len()))
+        .expect("legacy transaction wire size");
+    let mut lookup_addresses = Vec::new();
+    for instruction in instructions {
+        for meta in &instruction.accounts {
+            if meta.pubkey != context.payer.pubkey() && !lookup_addresses.contains(&meta.pubkey) {
+                lookup_addresses.push(meta.pubkey);
+            }
+        }
+    }
+    let lookup = AddressLookupTableAccount {
+        key: Pubkey::new_from_array([91; 32]),
+        addresses: lookup_addresses,
+    };
+    let v0_message =
+        v0::Message::try_compile(&context.payer.pubkey(), instructions, &[lookup], blockhash)
+            .expect("one-table v0 message");
+    let v0_wire_bytes = 1_usize
+        .checked_add(64)
+        .and_then(|prefix| prefix.checked_add(VersionedMessage::V0(v0_message).serialize().len()))
+        .expect("v0 transaction wire size");
+    assert!(v0_wire_bytes <= 1_232, "v0 transaction packet overflow");
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
@@ -295,6 +450,8 @@ async fn submit(
     TransactionResult {
         accepted: processed.result.is_ok(),
         compute_units: metadata.compute_units_consumed,
+        wire_bytes,
+        v0_wire_bytes,
         logs: metadata.log_messages,
     }
 }
@@ -378,32 +535,68 @@ fn add_token_account(test: &mut ProgramTest, key: Pubkey, data: Vec<u8>) {
     );
 }
 
+fn add_protocol_account(test: &mut ProgramTest, key: Pubkey, data: Vec<u8>) {
+    test.add_account(
+        key,
+        Account {
+            lamports: Rent::default().minimum_balance(data.len()),
+            data,
+            owner: PROTOCOL_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+}
+
 fn market_fixture(
-    market: Pubkey,
+    authority: MarketFixtureAuthority,
     seller: Pubkey,
     buyer: Pubkey,
     tokens: TokenTriplet,
 ) -> MarketFixture {
     let generation = GENERATION.to_le_bytes();
     let (seller_replay, seller_bump) = Pubkey::find_program_address(
-        &[REPLAY_SEED, market.as_ref(), &generation, seller.as_ref()],
+        &[
+            REPLAY_SEED,
+            authority.market.as_ref(),
+            &generation,
+            seller.as_ref(),
+        ],
         &CONTROLLER_PROGRAM_ID,
     );
     let (buyer_replay, buyer_bump) = Pubkey::find_program_address(
-        &[REPLAY_SEED, market.as_ref(), &generation, buyer.as_ref()],
+        &[
+            REPLAY_SEED,
+            authority.market.as_ref(),
+            &generation,
+            buyer.as_ref(),
+        ],
         &CONTROLLER_PROGRAM_ID,
     );
     let outcome = [1_u8];
     let (seller_position, seller_position_bump) = Pubkey::find_program_address(
-        &[POSITION_SEED, market.as_ref(), seller.as_ref(), &outcome],
+        &[
+            POSITION_SEED,
+            authority.market.as_ref(),
+            seller.as_ref(),
+            &outcome,
+        ],
         &CONTROLLER_PROGRAM_ID,
     );
     let (buyer_position, buyer_position_bump) = Pubkey::find_program_address(
-        &[POSITION_SEED, market.as_ref(), buyer.as_ref(), &outcome],
+        &[
+            POSITION_SEED,
+            authority.market.as_ref(),
+            buyer.as_ref(),
+            &outcome,
+        ],
         &CONTROLLER_PROGRAM_ID,
     );
     MarketFixture {
-        profile: market,
+        market: authority.market,
+        realm: authority.realm,
+        fee_policy: authority.fee_policy,
+        capability_manifest: authority.capability_manifest,
         seller_replay,
         seller_bump,
         buyer_replay,
@@ -425,25 +618,33 @@ async fn signed_intents_compile_to_claims_and_real_token_transfers_atomically() 
         Pubkey::find_program_address(&[CONTROLLER_SEED], &CONTROLLER_PROGRAM_ID);
     let journal_key = Pubkey::new_unique();
     let mint_key = Pubkey::new_unique();
+    let success_tokens = TokenTriplet {
+        source: Pubkey::new_unique(),
+        seller: Pubkey::new_unique(),
+        venue: Pubkey::new_unique(),
+    };
+    let refusal_tokens = TokenTriplet {
+        source: Pubkey::new_unique(),
+        seller: Pubkey::new_unique(),
+        venue: Pubkey::new_unique(),
+    };
+    let (success_authority, success_market, realm_bytes, success_policy, success_manifest) =
+        authority_records(mint_key, success_tokens.venue);
+    let (refusal_authority, refusal_market, refusal_realm, refusal_policy, refusal_manifest) =
+        authority_records(mint_key, refusal_tokens.venue);
+    assert_eq!(success_authority.realm, refusal_authority.realm);
+    assert_eq!(realm_bytes, refusal_realm);
     let success = market_fixture(
-        Pubkey::new_unique(),
+        success_authority,
         seller_maker.pubkey(),
         buyer_maker.pubkey(),
-        TokenTriplet {
-            source: Pubkey::new_unique(),
-            seller: Pubkey::new_unique(),
-            venue: Pubkey::new_unique(),
-        },
+        success_tokens,
     );
     let refusal = market_fixture(
-        Pubkey::new_unique(),
+        refusal_authority,
         seller_maker.pubkey(),
         buyer_maker.pubkey(),
-        TokenTriplet {
-            source: Pubkey::new_unique(),
-            seller: Pubkey::new_unique(),
-            venue: Pubkey::new_unique(),
-        },
+        refusal_tokens,
     );
 
     let mut test = ProgramTest::new("dclutch_controller_proof_sbf", CONTROLLER_PROGRAM_ID, None);
@@ -480,17 +681,24 @@ async fn signed_intents_compile_to_claims_and_real_token_transfers_atomically() 
             rent_epoch: 0,
         },
     );
-    for fixture in [success, refusal] {
-        test.add_account(
-            fixture.profile,
-            Account {
-                lamports: Rent::default().minimum_balance(MARKET_PROFILE_BYTES),
-                data: market_profile(mint_key, fixture.tokens.venue),
-                owner: CONTROLLER_PROGRAM_ID,
-                executable: false,
-                rent_epoch: 0,
-            },
-        );
+    add_protocol_account(&mut test, success_authority.realm, realm_bytes);
+    for (authority, market, policy, manifest) in [
+        (
+            success_authority,
+            success_market,
+            success_policy,
+            success_manifest,
+        ),
+        (
+            refusal_authority,
+            refusal_market,
+            refusal_policy,
+            refusal_manifest,
+        ),
+    ] {
+        add_protocol_account(&mut test, authority.market, market);
+        add_protocol_account(&mut test, authority.fee_policy, policy);
+        add_protocol_account(&mut test, authority.capability_manifest, manifest);
     }
     test.add_account(
         mint_key,
@@ -604,6 +812,35 @@ async fn signed_intents_compile_to_claims_and_real_token_transfers_atomically() 
         untouched_claims
     );
     assert_eq!(account(&mut context, journal_key).await, untouched_journal);
+
+    let substituted_authority = MarketFixture {
+        capability_manifest: refusal.capability_manifest,
+        ..success
+    };
+    let authority_data = controller_data(controller_bump, success, 0);
+    let wrong_authority = submit(
+        &mut context,
+        &[
+            signed_ed25519_batch(&seller_maker, &buyer_maker, &authority_data),
+            controller_instruction(
+                controller,
+                journal_key,
+                substituted_authority,
+                mint_key,
+                authority_data,
+            ),
+        ],
+    )
+    .await;
+    assert!(
+        !wrong_authority.accepted,
+        "same-shape manifest from another Market must refuse"
+    );
+    assert_eq!(account(&mut context, journal_key).await, untouched_journal);
+    assert_eq!(
+        claim_state_accounts(&mut context, success).await,
+        untouched_claims
+    );
 
     let mut bad_price_data = controller_data(controller_bump, success, 0);
     put_u64(&mut bad_price_data, 24, 399_999);
@@ -732,13 +969,16 @@ async fn signed_intents_compile_to_claims_and_real_token_transfers_atomically() 
     );
 
     eprintln!(
-        "compiled signed Direct CU: impersonation={}, wrong replay={}, wrong position={}, bad price={}, tamper={}, success={}, late rollback={}",
+        "compiled signed Direct CU: impersonation={}, wrong replay={}, wrong position={}, wrong authority={}, bad price={}, tamper={}, success={}, late rollback={}; success wire: legacy={} bytes, one-ALT v0={} bytes",
         direct.compute_units,
         wrong_bump.compute_units,
         wrong_position.compute_units,
+        wrong_authority.compute_units,
         bad_price.compute_units,
         tampered.compute_units,
         success_result.compute_units,
-        late_refusal.compute_units
+        late_refusal.compute_units,
+        success_result.wire_bytes,
+        success_result.v0_wire_bytes,
     );
 }

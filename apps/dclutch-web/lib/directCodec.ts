@@ -2,7 +2,6 @@ import { ascii, requireZero, slice, u16, u64 } from './bytes';
 
 export const COMPACT_INTENT_BYTES = 136;
 export const CONTROLLER_INSTRUCTION_BYTES = 304;
-export const MARKET_PROFILE_BYTES = 136;
 
 const VERSION = 1;
 
@@ -10,7 +9,7 @@ export interface CompactIntentV1 {
   side: number;
   outcome: number;
   lifecycle: number;
-  executionProfile: Uint8Array;
+  market: Uint8Array;
   generation: bigint;
   nonce: bigint;
   validFrom: bigint;
@@ -31,17 +30,6 @@ export interface ControllerInstructionV1 {
   executionPrice: bigint;
   seller: CompactIntentV1;
   buyer: CompactIntentV1;
-}
-
-export interface MarketProfileV1 {
-  phase: number;
-  outcomeCount: number;
-  generation: bigint;
-  priceScale: bigint;
-  feeBasisPoints: number;
-  tokenProgram: Uint8Array;
-  collateralMint: Uint8Array;
-  feeRecipient: Uint8Array;
 }
 
 function exact(bytes: Uint8Array, width: number, magic: string): void {
@@ -82,7 +70,7 @@ export function decodeCompactIntentV1(bytes: Uint8Array): CompactIntentV1 {
     side: bytes[10],
     outcome: bytes[11],
     lifecycle: bytes[12],
-    executionProfile: slice(bytes, 16, 32),
+    market: slice(bytes, 16, 32),
     generation: u64(bytes, 48),
     nonce: u64(bytes, 56),
     validFrom: u64(bytes, 64),
@@ -101,7 +89,7 @@ export function encodeCompactIntentV1(intent: CompactIntentV1): Uint8Array {
   output[10] = byte(intent.side, 'side');
   output[11] = byte(intent.outcome, 'outcome');
   output[12] = byte(intent.lifecycle, 'lifecycle');
-  output.set(key(intent.executionProfile, 'execution profile'), 16);
+  output.set(key(intent.market, 'Market'), 16);
   putU64(output, 48, intent.generation, 'generation');
   putU64(output, 56, intent.nonce, 'nonce');
   putU64(output, 64, intent.validFrom, 'valid from');
@@ -142,36 +130,5 @@ export function encodeControllerInstructionV1(instruction: ControllerInstruction
   putU64(output, 24, instruction.executionPrice, 'execution price');
   output.set(encodeCompactIntentV1(instruction.seller), 32);
   output.set(encodeCompactIntentV1(instruction.buyer), 168);
-  return output;
-}
-
-export function decodeMarketProfileV1(bytes: Uint8Array): MarketProfileV1 {
-  exact(bytes, MARKET_PROFILE_BYTES, 'DCLTPRF1');
-  requireZero(bytes, 12, 4, 'Market profile header');
-  requireZero(bytes, 34, 6, 'Market profile fee padding');
-  return Object.freeze({
-    phase: bytes[10],
-    outcomeCount: bytes[11],
-    generation: u64(bytes, 16),
-    priceScale: u64(bytes, 24),
-    feeBasisPoints: u16(bytes, 32),
-    tokenProgram: slice(bytes, 40, 32),
-    collateralMint: slice(bytes, 72, 32),
-    feeRecipient: slice(bytes, 104, 32),
-  });
-}
-
-export function encodeMarketProfileV1(profile: MarketProfileV1): Uint8Array {
-  const output = new Uint8Array(MARKET_PROFILE_BYTES);
-  output.set(new TextEncoder().encode('DCLTPRF1'), 0);
-  putU16(output, 8, VERSION);
-  output[10] = byte(profile.phase, 'phase');
-  output[11] = byte(profile.outcomeCount, 'outcome count');
-  putU64(output, 16, profile.generation, 'generation');
-  putU64(output, 24, profile.priceScale, 'price scale');
-  putU16(output, 32, word(profile.feeBasisPoints, 'fee basis points'));
-  output.set(key(profile.tokenProgram, 'token program'), 40);
-  output.set(key(profile.collateralMint, 'collateral mint'), 72);
-  output.set(key(profile.feeRecipient, 'fee recipient'), 104);
   return output;
 }
