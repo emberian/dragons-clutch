@@ -20,7 +20,7 @@ export default function CreateMarketPreview() {
           <span className="brand-mark" aria-hidden="true">dC</span><span>dClutch</span>
         </Link>
         <nav aria-label="Primary navigation">
-          <Link href="/">Markets</Link><Link className="active" href="/create">Create</Link><Link href="/explorer">Explorer</Link>
+          <Link href="/">Markets</Link><Link className="active" href="/create">Create</Link><Link href="/liquidity">Liquidity</Link><Link href="/explorer">Explorer</Link>
         </nav>
         <div className="preview-control"><span className="preview-dot" /> Interface preview</div>
       </header>

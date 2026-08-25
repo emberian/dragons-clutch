@@ -33,7 +33,7 @@ export default function TradingPreview() {
         <nav aria-label="Primary navigation">
           <Link className="active" href="/">Markets</Link>
           <a href="#positions">Portfolio</a>
-          <a href="#liquidity">Liquidity</a>
+          <Link href="/liquidity">Liquidity</Link>
           <Link href="/explorer">Explorer</Link>
         </nav>
         <div className="preview-control">
@@ -126,7 +126,7 @@ export default function TradingPreview() {
 
       <section className="product-lower" id="positions">
         <article><span className="panel-label">Your portfolio</span><h2>Positions will be derived from chain custody.</h2><p>No local balance cache will be treated as protocol authority.</p></article>
-        <article id="liquidity"><span className="panel-label">Liquidity</span><h2>Quote bounded inventory, not imaginary depth.</h2><p>Dealer inventory and LP custody will appear only after the executable route lands.</p></article>
+        <article id="liquidity"><span className="panel-label">Liquidity</span><h2>Quote bounded inventory, not imaginary depth.</h2><p>Preview the Dealer custody, outcome inventory, and separately accounted capital surface.</p><Link className="text-link" href="/liquidity">Open liquidity workspace →</Link></article>
       </section>
 
       <footer className="product-footer"><span>dClutch · greenfield protocol</span><span>Preview data is non-authoritative</span></footer>
