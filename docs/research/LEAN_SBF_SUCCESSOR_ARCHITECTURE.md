@@ -47,12 +47,14 @@ not Rust, ELF, CPI, or Solana-runtime refinement claims.
 
 The first metaprogramming layer has also landed. Typed Lean schemas now own
 Direct's 41 scalar and four identity registers and generate their Rust names
-and indices with canonical-order proofs. Lean also generates complete physical
+and indices with canonical-order proofs, as well as named input-frame macros
+whose expansion alone owns array order. Lean also generates complete physical
 claim/custody wire templates plus bounded, pairwise-disjoint dynamic patch
-spans. The controller consequently owns neither output-register numbers nor
-child-plan wire geometry. This change deliberately preserves the 568-byte
-program, 79,680-byte controller footprint, and measured CU; its value is one
-semantic ABI owner and a smaller adapter boundary, not benchmark theater.
+spans. The controller consequently owns neither register ordering,
+output-register numbers, nor child-plan wire geometry. This change deliberately
+preserves the 568-byte program, 79,680-byte controller footprint, and measured
+CU; its value is one semantic ABI owner and a smaller adapter boundary, not
+benchmark theater.
 
 ## Proposed narrow waist
 

@@ -230,6 +230,14 @@ controller consumes named output registers and ties its 34-value input prefix
 length to the first Lean-owned output slot, so a changed input/output partition
 cannot compile silently.
 
+Commit `c744110f4694441721a1550bb93fc3ef85b7784f` also generates the
+named scalar and identity input-frame macros from those schemas. The adapter
+now binds each runtime fact as `seller_limit`, `buyer_next_nonce`,
+`venue_collateral`, and so on; the generated macro alone owns their array
+order. Changing, inserting, or reordering a semantic input changes the macro
+contract and makes the handwritten adapter call fail compilation. Macro
+expansion rebuilds the exact same controller ELF.
+
 Commit `d07b0d732ba2f0686dc0cb9f60b7e68344500e2a` moves the physical
 child-wire constants into the same generated artifact. Lean encodes the
 complete 72-byte claim and 40-byte custody zero templates. Typed `ClaimPatch`
@@ -241,9 +249,9 @@ party, resource, reserved-byte, or record-layout literals.
 
 `example_materialization_matches_encoding` checks that applying the complete
 patch sequence to the canonical example equals the ordinary typed Lean
-encoders. This is not yet a general patch-materialization theorem, and the
-Rust patch function and the order of values in the input-register prefix
-remain adapter boundaries.
+encoders. This is not yet a general patch-materialization theorem. The Rust
+patch function and each adapter expression's correctness remain unverified
+boundaries, but register ordering is no longer a parallel Rust authority.
 
 The generated transition program remains exactly 568 bytes with SHA-256
 `72cc0faa6a9768b766a3003c8ff6f38889f564f49005ce68b2187c98349bff5c`.
