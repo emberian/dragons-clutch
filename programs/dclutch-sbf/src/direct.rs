@@ -5,7 +5,7 @@
 //! runs the pure transition before the first CPI/write, and then applies the
 //! exact token, Position, Market, replay, record, and RentCredit effects.
 
-use alloc::{vec, vec::Vec};
+use alloc::{boxed::Box, vec, vec::Vec};
 
 use dclutch_capability_contract::{ActivationPolicy, CapabilityManifestV1};
 use dclutch_collateral_contract::{
@@ -2056,22 +2056,24 @@ fn process_register(
             None,
         ),
     };
-    let registration = register_intent_runtime_v2(RuntimeRegistrationInputV2 {
-        replay_root: root.state,
-        intent,
-        authorization,
-        phase: map_phase(market.root.phase()),
-        slot: current_slot()?,
-        accounts: participant,
-        system_payer: payer.key.to_bytes(),
-        collateral_mint,
-        buy_debit_authority: debit,
-        record_bump,
-        fee_policy: policy.policy,
-        fee_config_digest: policy.digest,
-        position,
-    })
-    .map_err(|_| AdapterError::DirectTransition)?;
+    let registration = Box::new(
+        register_intent_runtime_v2(RuntimeRegistrationInputV2 {
+            replay_root: root.state,
+            intent,
+            authorization,
+            phase: map_phase(market.root.phase()),
+            slot: current_slot()?,
+            accounts: participant,
+            system_payer: payer.key.to_bytes(),
+            collateral_mint,
+            buy_debit_authority: debit,
+            record_bump,
+            fee_policy: policy.policy,
+            fee_config_digest: policy.digest,
+            position,
+        })
+        .map_err(|_| AdapterError::DirectTransition)?,
+    );
 
     let root_rent = if root.created {
         rent.minimum_balance(MAKER_REPLAY_ROOT_BYTES_V2)
@@ -2393,19 +2395,21 @@ fn process_unwind(
                 *intent.maker(),
                 &signed,
             )?;
-            let transition = unwind_intent_runtime_v2(RuntimeUnwindInputV2 {
-                replay_root: root,
-                record,
-                kind: RuntimeUnwindKindV2::Cancel {
-                    authorization: &authorization,
-                },
-                phase,
-                accounts: participant,
-                collateral_mint: mint_address,
-                escrow_authority: escrow_facts,
-                position,
-            })
-            .map_err(|_| AdapterError::DirectTransition)?;
+            let transition = Box::new(
+                unwind_intent_runtime_v2(RuntimeUnwindInputV2 {
+                    replay_root: root,
+                    record,
+                    kind: RuntimeUnwindKindV2::Cancel {
+                        authorization: &authorization,
+                    },
+                    phase,
+                    accounts: participant,
+                    collateral_mint: mint_address,
+                    escrow_authority: escrow_facts,
+                    position,
+                })
+                .map_err(|_| AdapterError::DirectTransition)?,
+            );
             (
                 transition.replay_root,
                 transition.position,
@@ -2413,19 +2417,21 @@ fn process_unwind(
             )
         }
         UnwindKind::Expire => {
-            let transition = unwind_intent_runtime_v2(RuntimeUnwindInputV2 {
-                replay_root: root,
-                record,
-                kind: RuntimeUnwindKindV2::Expire {
-                    slot: current_slot()?,
-                },
-                phase,
-                accounts: participant,
-                collateral_mint: mint_address,
-                escrow_authority: escrow_facts,
-                position,
-            })
-            .map_err(|_| AdapterError::DirectTransition)?;
+            let transition = Box::new(
+                unwind_intent_runtime_v2(RuntimeUnwindInputV2 {
+                    replay_root: root,
+                    record,
+                    kind: RuntimeUnwindKindV2::Expire {
+                        slot: current_slot()?,
+                    },
+                    phase,
+                    accounts: participant,
+                    collateral_mint: mint_address,
+                    escrow_authority: escrow_facts,
+                    position,
+                })
+                .map_err(|_| AdapterError::DirectTransition)?,
+            );
             (
                 transition.replay_root,
                 transition.position,
@@ -2433,17 +2439,19 @@ fn process_unwind(
             )
         }
         UnwindKind::Invalidated => {
-            let transition = unwind_intent_runtime_v2(RuntimeUnwindInputV2 {
-                replay_root: root,
-                record,
-                kind: RuntimeUnwindKindV2::Invalidated,
-                phase,
-                accounts: participant,
-                collateral_mint: mint_address,
-                escrow_authority: escrow_facts,
-                position,
-            })
-            .map_err(|_| AdapterError::DirectTransition)?;
+            let transition = Box::new(
+                unwind_intent_runtime_v2(RuntimeUnwindInputV2 {
+                    replay_root: root,
+                    record,
+                    kind: RuntimeUnwindKindV2::Invalidated,
+                    phase,
+                    accounts: participant,
+                    collateral_mint: mint_address,
+                    escrow_authority: escrow_facts,
+                    position,
+                })
+                .map_err(|_| AdapterError::DirectTransition)?,
+            );
             (
                 transition.replay_root,
                 transition.position,
@@ -2681,38 +2689,40 @@ fn process_ordinary(
     )?;
     authenticate_rent_credit(program_id, seller_credit, seller_record.rent_payer())?;
     authenticate_rent_credit(program_id, buyer_credit, buyer_record.rent_payer())?;
-    let settlement = settle_ordinary_runtime_v2(RuntimeOrdinaryMatchV2 {
-        phase: map_phase(market.root.phase()),
-        slot: current_slot()?,
-        seller_replay_root: seller_root,
-        buyer_replay_root: buyer_root,
-        seller_record,
-        buyer_record,
-        seller_accounts: participant_accounts(
-            seller_root_account,
-            Some(seller_record_account),
-            None,
-            seller_position_account,
-            seller_collateral,
-        ),
-        buyer_accounts: participant_accounts(
-            buyer_root_account,
-            Some(buyer_record_account),
-            Some(buyer_escrow),
-            buyer_position_account,
-            buyer_collateral,
-        ),
-        seller_position,
-        buyer_position,
-        collateral_mint: account(accounts, 6)?.key.to_bytes(),
-        buyer_escrow_authority: escrow,
-        fill: instruction.fill,
-        execution_price: instruction.execution_price,
-        fee_policy: policy.policy,
-        fee_config_digest: policy.digest,
-        fee_recipient_account: fee_account.key.to_bytes(),
-    })
-    .map_err(|_| AdapterError::DirectTransition)?;
+    let settlement = Box::new(
+        settle_ordinary_runtime_v2(RuntimeOrdinaryMatchV2 {
+            phase: map_phase(market.root.phase()),
+            slot: current_slot()?,
+            seller_replay_root: seller_root,
+            buyer_replay_root: buyer_root,
+            seller_record,
+            buyer_record,
+            seller_accounts: participant_accounts(
+                seller_root_account,
+                Some(seller_record_account),
+                None,
+                seller_position_account,
+                seller_collateral,
+            ),
+            buyer_accounts: participant_accounts(
+                buyer_root_account,
+                Some(buyer_record_account),
+                Some(buyer_escrow),
+                buyer_position_account,
+                buyer_collateral,
+            ),
+            seller_position,
+            buyer_position,
+            collateral_mint: account(accounts, 6)?.key.to_bytes(),
+            buyer_escrow_authority: escrow,
+            fill: instruction.fill,
+            execution_price: instruction.execution_price,
+            fee_policy: policy.policy,
+            fee_config_digest: policy.digest,
+            fee_recipient_account: fee_account.key.to_bytes(),
+        })
+        .map_err(|_| AdapterError::DirectTransition)?,
+    );
     let market_before = snapshot_data(market_account)?;
     let market_lamports = market_account.lamports();
     let seller_root_lamports = seller_root_account.lamports();
@@ -3477,37 +3487,39 @@ fn process_inline_ordinary(
         account(accounts, 12)?,
         [(34, ask), (266, bid)],
     )?;
-    let settlement = settle_inline_ordinary_runtime_v2(RuntimeInlineOrdinaryMatchV2 {
-        phase: map_phase(market.root.phase()),
-        slot: current_slot()?,
-        seller_replay_root: seller_root.state,
-        buyer_replay_root: buyer_root.state,
-        root_creation_payer: payer.key.to_bytes(),
-        seller_intent: ask,
-        buyer_intent: bid,
-        seller_authorization: authorizations[0],
-        buyer_authorization: authorizations[1],
-        seller_accounts: inline_accounts(
-            seller_root_account,
-            seller_position_account,
-            seller_collateral,
-        ),
-        buyer_accounts: inline_accounts(
-            buyer_root_account,
-            buyer_position_account,
-            buyer_collateral,
-        ),
-        seller_position,
-        buyer_position,
-        collateral_mint: account(accounts, 8)?.key.to_bytes(),
-        buyer_debit_authority: debit,
-        fill: instruction.fill,
-        execution_price: instruction.execution_price,
-        fee_policy: policy.policy,
-        fee_config_digest: policy.digest,
-        fee_recipient_account: fee_account.key.to_bytes(),
-    })
-    .map_err(|_| AdapterError::DirectTransition)?;
+    let settlement = Box::new(
+        settle_inline_ordinary_runtime_v2(RuntimeInlineOrdinaryMatchV2 {
+            phase: map_phase(market.root.phase()),
+            slot: current_slot()?,
+            seller_replay_root: seller_root.state,
+            buyer_replay_root: buyer_root.state,
+            root_creation_payer: payer.key.to_bytes(),
+            seller_intent: ask,
+            buyer_intent: bid,
+            seller_authorization: authorizations[0],
+            buyer_authorization: authorizations[1],
+            seller_accounts: inline_accounts(
+                seller_root_account,
+                seller_position_account,
+                seller_collateral,
+            ),
+            buyer_accounts: inline_accounts(
+                buyer_root_account,
+                buyer_position_account,
+                buyer_collateral,
+            ),
+            seller_position,
+            buyer_position,
+            collateral_mint: account(accounts, 8)?.key.to_bytes(),
+            buyer_debit_authority: debit,
+            fill: instruction.fill,
+            execution_price: instruction.execution_price,
+            fee_policy: policy.policy,
+            fee_config_digest: policy.digest,
+            fee_recipient_account: fee_account.key.to_bytes(),
+        })
+        .map_err(|_| AdapterError::DirectTransition)?,
+    );
     let mut created = 0_u64;
     for root in [seller_root, buyer_root] {
         if root.created {
@@ -3773,25 +3785,27 @@ fn process_inline_complementary(
     } else {
         Side::Sell
     };
-    let settlement = settle_inline_complementary_v2(InlineComplementaryMatchV2 {
-        phase: map_phase(market.root().phase()),
-        slot: current_slot()?,
-        side,
-        replay_roots: roots,
-        root_creation_payer: payer.key.to_bytes(),
-        intents,
-        authorizations,
-        accounts: participant_accounts_array,
-        positions,
-        collateral_mint: account(accounts, 10)?.key.to_bytes(),
-        buy_debit_authorities: debits,
-        fill: instruction.fill,
-        execution_prices: instruction.execution_prices,
-        fee_policy: policy.policy,
-        fee_config_digest: policy.digest,
-        fee_recipient_account: fee_account.key.to_bytes(),
-    })
-    .map_err(|_| AdapterError::DirectTransition)?;
+    let settlement = Box::new(
+        settle_inline_complementary_v2(InlineComplementaryMatchV2 {
+            phase: map_phase(market.root().phase()),
+            slot: current_slot()?,
+            side,
+            replay_roots: roots,
+            root_creation_payer: payer.key.to_bytes(),
+            intents,
+            authorizations,
+            accounts: participant_accounts_array,
+            positions,
+            collateral_mint: account(accounts, 10)?.key.to_bytes(),
+            buy_debit_authorities: debits,
+            fill: instruction.fill,
+            execution_prices: instruction.execution_prices,
+            fee_policy: policy.policy,
+            fee_config_digest: policy.digest,
+            fee_recipient_account: fee_account.key.to_bytes(),
+        })
+        .map_err(|_| AdapterError::DirectTransition)?,
+    );
     let mut market_after = market;
     let mut created = 0_u64;
     for facts in root_facts {

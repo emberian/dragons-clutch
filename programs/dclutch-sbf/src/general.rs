@@ -1938,6 +1938,17 @@ fn execute_begin_settlement<'info>(
     require_unchanged_rent_credit(program_id, rent_credit, plan.rent_credit_state)
 }
 
+struct CollectPageCompletionPlan {
+    candidate: Vec<u8>,
+    cursor: Vec<u8>,
+    position: Vec<u8>,
+    reward: u64,
+    actor_before: u64,
+    candidate_after: u64,
+    quote_after: u64,
+    realm: RealmFacts,
+}
+
 fn process_collect_settlement_page<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -2105,27 +2116,71 @@ fn process_collect_settlement_page<const N: usize>(
     if settlement_position.balances() != &result.claim_inventory_after {
         return Err(AdapterError::PositionPostcondition.into());
     }
-    transfer_owned_lamports(candidate_account, actor, result.settlement_reward_lamports)?;
-    write_candidate(candidate_account, *candidate)?;
-    write_settlement_cursor(cursor_account, *cursor)?;
-    write_position(settlement_position_account, *settlement_position)?;
-    let settlement_quote_after = authenticate_settlement_quote_escrow(
+    let plan = CollectPageCompletionPlan {
+        candidate: encode_candidate_bytes(candidate.as_ref())?,
+        cursor: encode_settlement_cursor_bytes(cursor.as_ref())?,
+        position: encode_position_bytes(settlement_position.as_ref())?,
+        reward: result.settlement_reward_lamports,
+        actor_before: actor.lamports(),
+        candidate_after: candidate_account
+            .lamports()
+            .checked_sub(result.settlement_reward_lamports)
+            .ok_or(AdapterError::Arithmetic)?,
+        quote_after: result.quote_inventory_after,
+        realm,
+    };
+    complete_collect_page(
+        program_id,
+        actor,
+        candidate_account,
+        cursor_account,
+        settlement_position_account,
+        settlement_quote_escrow,
+        mint,
+        token_program,
+        plan,
+    )
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn complete_collect_page<'info>(
+    program_id: &Pubkey,
+    actor: &AccountInfo<'info>,
+    candidate_account: &AccountInfo<'info>,
+    cursor_account: &AccountInfo<'info>,
+    settlement_position_account: &AccountInfo<'info>,
+    settlement_quote_escrow: &AccountInfo<'info>,
+    mint: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    plan: CollectPageCompletionPlan,
+) -> Result<(), ProgramError> {
+    transfer_owned_lamports(candidate_account, actor, plan.reward)?;
+    write_account_bytes(candidate_account, &plan.candidate)?;
+    write_account_bytes(cursor_account, &plan.cursor)?;
+    write_account_bytes(settlement_position_account, &plan.position)?;
+    let quote = authenticate_settlement_quote_escrow(
         program_id,
         settlement_quote_escrow,
         mint,
         token_program,
-        realm,
+        plan.realm,
         cursor_account.key,
     )?;
-    if settlement_quote_after.amount != result.quote_inventory_after {
+    if actor.lamports()
+        != plan
+            .actor_before
+            .checked_add(plan.reward)
+            .ok_or(AdapterError::Arithmetic)?
+        || candidate_account.lamports() != plan.candidate_after
+        || quote.amount != plan.quote_after
+        || !account_bytes_equal(candidate_account, &plan.candidate)?
+        || !account_bytes_equal(cursor_account, &plan.cursor)?
+        || !account_bytes_equal(settlement_position_account, &plan.position)?
+    {
         return Err(AdapterError::PositionPostcondition.into());
     }
-    candidate
-        .validate_capitalization(CandidateCapitalizationV1 {
-            account_lamports: candidate_account.lamports(),
-            exact_state_rent_lamports: candidate_rent,
-        })
-        .map_err(|_| AdapterError::PositionPostcondition.into())
+    Ok(())
 }
 
 #[inline(never)]
@@ -2616,6 +2671,20 @@ fn execute_materialization<'info>(
     Ok(())
 }
 
+struct DistributePageCompletionPlan {
+    candidate: Vec<u8>,
+    cursor: Vec<u8>,
+    position: Vec<u8>,
+    total_reward: u64,
+    actor_before: u64,
+    candidate_after: u64,
+    quote_after: u64,
+    page_rent: u64,
+    rent_credit_before: u64,
+    rent_credit_state: RentCreditV1,
+    realm: RealmFacts,
+}
+
 fn process_distribute_settlement_page<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -2798,36 +2867,85 @@ fn process_distribute_settlement_page<const N: usize>(
         .settlement_reward_lamports
         .checked_add(page_close.cleanup_reward_lamports)
         .ok_or(AdapterError::Arithmetic)?;
-    transfer_owned_lamports(candidate_account, actor, total_reward)?;
-    write_candidate(candidate_account, *candidate)?;
-    write_settlement_cursor(cursor_account, *cursor)?;
-    write_position(settlement_position_account, *settlement_position)?;
+    let plan = DistributePageCompletionPlan {
+        candidate: encode_candidate_bytes(candidate.as_ref())?,
+        cursor: encode_settlement_cursor_bytes(cursor.as_ref())?,
+        position: encode_position_bytes(settlement_position.as_ref())?,
+        total_reward,
+        actor_before: actor.lamports(),
+        candidate_after: candidate_account
+            .lamports()
+            .checked_sub(total_reward)
+            .ok_or(AdapterError::Arithmetic)?,
+        quote_after: result.quote_inventory_after,
+        page_rent: page_close.rent_credit_lamports,
+        rent_credit_before,
+        rent_credit_state,
+        realm,
+    };
+    complete_distribute_page(
+        program_id,
+        actor,
+        candidate_account,
+        cursor_account,
+        settlement_position_account,
+        settlement_quote_escrow,
+        page_account,
+        rent_credit,
+        mint,
+        token_program,
+        plan,
+    )
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn complete_distribute_page<'info>(
+    program_id: &Pubkey,
+    actor: &AccountInfo<'info>,
+    candidate_account: &AccountInfo<'info>,
+    cursor_account: &AccountInfo<'info>,
+    settlement_position_account: &AccountInfo<'info>,
+    settlement_quote_escrow: &AccountInfo<'info>,
+    page_account: &AccountInfo<'info>,
+    rent_credit: &AccountInfo<'info>,
+    mint: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    plan: DistributePageCompletionPlan,
+) -> Result<(), ProgramError> {
+    transfer_owned_lamports(candidate_account, actor, plan.total_reward)?;
+    write_account_bytes(candidate_account, &plan.candidate)?;
+    write_account_bytes(cursor_account, &plan.cursor)?;
+    write_account_bytes(settlement_position_account, &plan.position)?;
     close_program_account(page_account, rent_credit)?;
-    if rent_credit.lamports()
-        != rent_credit_before
-            .checked_add(page_close.rent_credit_lamports)
-            .ok_or(AdapterError::Arithmetic)?
-    {
-        return Err(AdapterError::PositionPostcondition.into());
-    }
-    require_unchanged_rent_credit(program_id, rent_credit, rent_credit_state)?;
-    let settlement_quote_after = authenticate_settlement_quote_escrow(
+    let quote = authenticate_settlement_quote_escrow(
         program_id,
         settlement_quote_escrow,
         mint,
         token_program,
-        realm,
+        plan.realm,
         cursor_account.key,
     )?;
-    if settlement_quote_after.amount != result.quote_inventory_after {
+    if actor.lamports()
+        != plan
+            .actor_before
+            .checked_add(plan.total_reward)
+            .ok_or(AdapterError::Arithmetic)?
+        || candidate_account.lamports() != plan.candidate_after
+        || page_account.lamports() != 0
+        || rent_credit.lamports()
+            != plan
+                .rent_credit_before
+                .checked_add(plan.page_rent)
+                .ok_or(AdapterError::Arithmetic)?
+        || quote.amount != plan.quote_after
+        || !account_bytes_equal(candidate_account, &plan.candidate)?
+        || !account_bytes_equal(cursor_account, &plan.cursor)?
+        || !account_bytes_equal(settlement_position_account, &plan.position)?
+    {
         return Err(AdapterError::PositionPostcondition.into());
     }
-    candidate
-        .validate_capitalization(CandidateCapitalizationV1 {
-            account_lamports: candidate_account.lamports(),
-            exact_state_rent_lamports: candidate_rent,
-        })
-        .map_err(|_| AdapterError::PositionPostcondition.into())
+    require_unchanged_rent_credit(program_id, rent_credit, plan.rent_credit_state)
 }
 
 #[inline(never)]
@@ -5326,22 +5444,6 @@ fn write_candidate_page<const N: usize>(
     Ok(())
 }
 
-fn write_settlement_cursor<const N: usize>(
-    account: &AccountInfo<'_>,
-    cursor: SettlementCursorV1<N>,
-) -> Result<(), ProgramError> {
-    let mut data = account
-        .try_borrow_mut_data()
-        .map_err(|_| AdapterError::PositionPostcondition)?;
-    cursor
-        .encode(&mut data)
-        .map_err(|_| AdapterError::PositionPostcondition)?;
-    if SettlementCursorV1::<N>::decode(&data) != Ok(cursor) {
-        return Err(AdapterError::PositionPostcondition.into());
-    }
-    Ok(())
-}
-
 fn authenticate_settlement_cursor<const N: usize>(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
@@ -5499,22 +5601,6 @@ fn write_order_state(account: &AccountInfo<'_>, state: OrderStateV1) -> Result<(
         .encode(&mut data)
         .map_err(|_| AdapterError::PositionPostcondition)?;
     if OrderStateV1::decode(&data) != Ok(state) {
-        return Err(AdapterError::PositionPostcondition.into());
-    }
-    Ok(())
-}
-
-fn write_position<const N: usize>(
-    account: &AccountInfo<'_>,
-    position: PositionV1<N>,
-) -> Result<(), ProgramError> {
-    let mut data = account
-        .try_borrow_mut_data()
-        .map_err(|_| AdapterError::PositionPostcondition)?;
-    position
-        .encode(&mut data)
-        .map_err(|_| AdapterError::PositionPostcondition)?;
-    if PositionV1::<N>::decode(&data) != Ok(position) {
         return Err(AdapterError::PositionPostcondition.into());
     }
     Ok(())
