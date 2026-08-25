@@ -21,14 +21,27 @@ def main : IO Unit := do
   emitRustBytes "pub(crate)" "REQUEST_MAGIC_BYTES" requestMagic
   for field in RequestField.all do
     IO.println s!"pub(crate) const {RequestField.rustName field}: usize = {RequestField.offset field};"
-  IO.println "pub(crate) const REQUEST_ACCEPT_PYTH_ACTION: u8 = 0;"
+  IO.println s!"pub(crate) const REQUEST_ACCEPT_PYTH_ACTION: u8 = {acceptPythAction.toNat};"
+  IO.println ""
+  IO.println s!"pub(crate) const FUNDED_REQUEST_BYTES_VALUE: usize = {fundedRequestBytes};"
+  IO.println s!"pub(crate) const FUNDED_REQUEST_ABI_VERSION: u16 = {fundedRequestVersion};"
+  emitRustBytes "pub(crate)" "FUNDED_REQUEST_MAGIC_BYTES" fundedRequestMagic
+  for field in FundedRequestField.all do
+    IO.println s!"pub(crate) const {FundedRequestField.rustName field}: usize = {FundedRequestField.offset field};"
+  IO.println s!"pub(crate) const FUNDED_REQUEST_FAIL_NEXT_ACTION: u8 = {FundedAction.failNext.tag.toNat};"
+  IO.println s!"pub(crate) const FUNDED_REQUEST_COMMIT_FAILURE_ACTION: u8 = {FundedAction.commitFailure.tag.toNat};"
   IO.println ""
   IO.println s!"pub(crate) const CERTIFICATE_BYTES_VALUE: usize = {certificateBytes};"
   IO.println "pub(crate) const CERTIFICATE_ABI_VERSION: u16 = 1;"
   emitRustBytes "pub(crate)" "CERTIFICATE_MAGIC_BYTES" certificateMagic
   for field in certificateFields do
     IO.println s!"pub(crate) const {certificateRustName field}: usize = {certificateOffset field};"
-  IO.println "pub(crate) const CERTIFICATE_RESOLUTION_SUCCESS_KIND: u8 = 0;"
+  IO.println s!"pub(crate) const CERTIFICATE_RESOLUTION_SUCCESS_KIND: u8 = {CertificateKind.tag .resolutionSuccess};"
+  IO.println s!"pub(crate) const CERTIFICATE_RECOVERY_ADVANCED_KIND: u8 = {CertificateKind.tag .recoveryAdvanced};"
+  IO.println s!"pub(crate) const CERTIFICATE_EXHAUSTED_KIND: u8 = {CertificateKind.tag .exhausted};"
+  IO.println s!"pub(crate) const CERTIFICATE_RESOLUTION_FAILURE_KIND: u8 = {CertificateKind.tag .resolutionFailure};"
   IO.println ""
   IO.println "#[cfg(test)]"
   emitRustBytes "pub(crate)" "REQUEST_EXAMPLE" (encodeRequest exampleRequest)
+  IO.println "#[cfg(test)]"
+  emitRustBytes "pub(crate)" "FUNDED_REQUEST_EXAMPLE" (encodeFundedRequest exampleFundedRequest)

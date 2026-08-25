@@ -3212,6 +3212,26 @@ impl SourceResolutionStateV1 {
             evidence,
             current_unix_seconds,
         )?;
+        self.finish_provider_resolution(
+            material,
+            route,
+            resolution_evidence_id,
+            statistic_value,
+            current_unix_seconds,
+            terminal_sequence,
+        )
+    }
+
+    #[inline(never)]
+    fn finish_provider_resolution(
+        &mut self,
+        material: SourceMaterialViewV1<'_>,
+        route: SourceResolutionRouteV1,
+        resolution_evidence_id: ContentId,
+        statistic_value: StatisticValue,
+        current_unix_seconds: i64,
+        terminal_sequence: u64,
+    ) -> Result<SourceResolutionDecisionV1> {
         let (numerator, denominator) = statistic_rational(statistic_value);
         let result_domain = material.result_domain()?;
         let selector = result_domain

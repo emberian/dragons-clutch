@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "Small Registry-bound Pyth Resolution controller for the dClutch successor"
 
 [lib]
-crate-type = ["cdylib", "lib"]
+crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [features]
@@ -17,6 +17,7 @@ custom-heap = []
 custom-panic = []
 
 [dependencies]
+dclutch-capability-contract = { path = "../../crates/dclutch-capability-contract" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-market-contract = { path = "../../crates/dclutch-market-contract" }
 dclutch-product-contract = { path = "../../crates/dclutch-product-contract" }

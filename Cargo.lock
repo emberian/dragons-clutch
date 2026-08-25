@@ -558,6 +558,7 @@ name = "dclutch-resolution-proof-sbf"
 version = "0.1.0"
 dependencies = [
  "bincode",
+ "dclutch-capability-contract",
  "dclutch-core-contract",
  "dclutch-market-contract",
  "dclutch-product-contract",

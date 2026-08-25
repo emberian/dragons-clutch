@@ -3,11 +3,13 @@ import DClutchSemantics.SourceResolutionAbi
 /-!
 # Physical Source Resolution controller ABI
 
-The first physical Resolution-role specialization admits one already-posted,
-fully verified Pyth terminal observation.  The request carries only optimistic
-concurrency coordinates.  Market, Source material, Product result-domain,
-provider release, observation, and Clock truth remain in authenticated
-accounts and are not copied into the request as caller-selected policy.
+The physical Resolution-role specialization admits one already-posted, fully
+verified Pyth terminal observation and the bounded funded liveness transitions
+which advance ordered recovery or commit Product-owned failure.  Requests
+carry only optimistic concurrency coordinates.  Market, Source material,
+Product result-domain, capability funding, provider release, observation, and
+Clock truth remain in authenticated accounts and are not copied into requests
+as caller-selected policy.
 
 The successful output is exactly the 312-byte certificate schema already
 owned by `SourceResolutionAbi`.  This module adds no second receipt layout; it
@@ -17,6 +19,7 @@ only exposes the existing cursor-derived coordinates to the Rust generator.
 namespace DClutch.SourceResolution.ControllerAbi
 
 open DClutch DClutch.AbiSchema
+open DClutch.SourceResolution
 open DClutch.SourceResolution.Abi
 
 def requestMagic : List UInt8 :=
@@ -157,6 +160,263 @@ theorem hostile_request_examples_refuse :
     decodeRequest (List.set (encodeRequest exampleRequest)
       (RequestField.offset .reserved) 1) = none := by
   native_decide
+
+/-! ## Funded liveness request -/
+
+def fundedRequestMagic : List UInt8 :=
+  [0x44, 0x43, 0x53, 0x52, 0x46, 0x4e, 0x44, 0x32] -- `DCSRFND2`
+
+def fundedRequestVersion : Nat := 2
+
+inductive FundedAction where
+  | failNext | commitFailure
+  deriving DecidableEq, Repr
+
+def FundedAction.tag : FundedAction → UInt8
+  | .failNext => 1
+  | .commitFailure => 2
+
+def decodeFundedAction : UInt8 → Option FundedAction
+  | 1 => some .failNext
+  | 2 => some .commitFailure
+  | _ => none
+
+inductive FundedRequestField where
+  | magic | version | action | reservedHeader | expectedGeneration
+  | expectedRecoveryIndex | reservedBody | expectedResultDomainId
+  | expectedFundingAllocationId
+  deriving DecidableEq, Repr
+
+def fundedRequestSchema : List (FieldSpec FundedRequestField) := [
+  ⟨.magic, .bytes 8⟩,
+  ⟨.version, .u16⟩,
+  ⟨.action, .u8⟩,
+  ⟨.reservedHeader, .reserved 5⟩,
+  ⟨.expectedGeneration, .u64⟩,
+  ⟨.expectedRecoveryIndex, .u32⟩,
+  ⟨.reservedBody, .reserved 4⟩,
+  ⟨.expectedResultDomainId, .bytes 32⟩,
+  ⟨.expectedFundingAllocationId, .bytes 32⟩
+]
+
+def fundedRequestLayout : List (PlacedField FundedRequestField) :=
+  DClutch.AbiSchema.specialize fundedRequestSchema
+def fundedRequestBytes : Nat := schemaWidth fundedRequestSchema
+
+namespace FundedRequestField
+
+def all : List FundedRequestField := [
+  .magic, .version, .action, .reservedHeader, .expectedGeneration,
+  .expectedRecoveryIndex, .reservedBody, .expectedResultDomainId,
+  .expectedFundingAllocationId
+]
+
+def coordinate (field : FundedRequestField) : Nat × Nat :=
+  (coordinate? field fundedRequestLayout).getD (0, 0)
+
+def offset (field : FundedRequestField) : Nat := (coordinate field).1
+def width (field : FundedRequestField) : Nat := (coordinate field).2
+
+def rustName : FundedRequestField → String
+  | .magic => "FUNDED_REQUEST_MAGIC_OFFSET"
+  | .version => "FUNDED_REQUEST_VERSION_OFFSET"
+  | .action => "FUNDED_REQUEST_ACTION_OFFSET"
+  | .reservedHeader => "FUNDED_REQUEST_RESERVED_HEADER_OFFSET"
+  | .expectedGeneration => "FUNDED_REQUEST_EXPECTED_GENERATION_OFFSET"
+  | .expectedRecoveryIndex => "FUNDED_REQUEST_EXPECTED_RECOVERY_INDEX_OFFSET"
+  | .reservedBody => "FUNDED_REQUEST_RESERVED_BODY_OFFSET"
+  | .expectedResultDomainId => "FUNDED_REQUEST_EXPECTED_RESULT_DOMAIN_ID_OFFSET"
+  | .expectedFundingAllocationId =>
+      "FUNDED_REQUEST_EXPECTED_FUNDING_ALLOCATION_ID_OFFSET"
+
+theorem all_fields_are_schema_order :
+    fundedRequestSchema.map (fun field => field.name) = all := by
+  native_decide
+
+theorem rust_names_are_unique : (all.map rustName).Nodup := by
+  native_decide
+
+end FundedRequestField
+
+theorem funded_request_width : fundedRequestBytes = 96 := by native_decide
+
+theorem funded_request_well_formed : WellFormed fundedRequestSchema := by
+  constructor
+  · native_decide
+  · intro field member
+    simp [fundedRequestSchema] at member
+    rcases member with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+      decide
+
+theorem funded_request_fields_disjoint :
+    fundedRequestLayout.Pairwise Before := by
+  exact specializeFrom_pairwise 0 fundedRequestSchema
+
+theorem funded_request_coordinates_are_canonical :
+    coordinates fundedRequestLayout = [
+      (.magic, 0, 8), (.version, 8, 2), (.action, 10, 1),
+      (.reservedHeader, 11, 5), (.expectedGeneration, 16, 8),
+      (.expectedRecoveryIndex, 24, 4), (.reservedBody, 28, 4),
+      (.expectedResultDomainId, 32, 32),
+      (.expectedFundingAllocationId, 64, 32)
+    ] := by
+  native_decide
+
+structure FundedTransitionRequestV2 where
+  action : FundedAction
+  expectedGeneration : Nat
+  expectedRecoveryIndex : Nat
+  expectedResultDomainId : Nat
+  expectedFundingAllocationId : Nat
+  deriving DecidableEq, Repr
+
+def encodeFundedRequest (request : FundedTransitionRequestV2) : List UInt8 :=
+  fundedRequestMagic ++ Codec.encodeLE 2 fundedRequestVersion ++
+  [request.action.tag] ++ List.replicate 5 0 ++
+  Codec.encodeLE 8 request.expectedGeneration ++
+  Codec.encodeLE 4 request.expectedRecoveryIndex ++ List.replicate 4 0 ++
+  Codec.encodeLE 32 request.expectedResultDomainId ++
+  Codec.encodeLE 32 request.expectedFundingAllocationId
+
+def decodeFundedRequest (input : List UInt8) : Option FundedTransitionRequestV2 := do
+  if input.length != fundedRequestBytes then none else
+  if input.take (FundedRequestField.offset .version) != fundedRequestMagic then none else
+  if Codec.decodeLE ((input.drop (FundedRequestField.offset .version)).take 2) !=
+      fundedRequestVersion then none else
+  let action ← decodeFundedAction
+    ((input[FundedRequestField.offset .action]?).getD 0)
+  if (input.drop (FundedRequestField.offset .reservedHeader)).take
+      (FundedRequestField.width .reservedHeader) != List.replicate 5 0 then none else
+  if (input.drop (FundedRequestField.offset .reservedBody)).take
+      (FundedRequestField.width .reservedBody) != List.replicate 4 0 then none else
+  some {
+    action
+    expectedGeneration := Codec.decodeLE
+      ((input.drop (FundedRequestField.offset .expectedGeneration)).take 8)
+    expectedRecoveryIndex := Codec.decodeLE
+      ((input.drop (FundedRequestField.offset .expectedRecoveryIndex)).take 4)
+    expectedResultDomainId := Codec.decodeLE
+      ((input.drop (FundedRequestField.offset .expectedResultDomainId)).take 32)
+    expectedFundingAllocationId := Codec.decodeLE
+      ((input.drop (FundedRequestField.offset .expectedFundingAllocationId)).take 32)
+  }
+
+def exampleFundedRequest : FundedTransitionRequestV2 := {
+  action := .failNext
+  expectedGeneration := 7
+  expectedRecoveryIndex := 0
+  expectedResultDomainId := 0x1122
+  expectedFundingAllocationId := 0x3344
+}
+
+theorem encode_funded_request_length (request : FundedTransitionRequestV2) :
+    (encodeFundedRequest request).length = fundedRequestBytes := by
+  simp [encodeFundedRequest, fundedRequestMagic, fundedRequestBytes,
+    fundedRequestSchema, Codec.encodeLE_length]
+  native_decide
+
+theorem example_funded_request_round_trip :
+    decodeFundedRequest (encodeFundedRequest exampleFundedRequest) =
+      some exampleFundedRequest := by
+  native_decide
+
+theorem hostile_funded_request_examples_refuse :
+    decodeFundedRequest [] = none ∧
+    decodeFundedRequest (encodeFundedRequest exampleFundedRequest |>.drop 1) = none ∧
+    decodeFundedRequest (List.set (encodeFundedRequest exampleFundedRequest)
+      (FundedRequestField.offset .magic) 0) = none ∧
+    decodeFundedRequest (List.set (encodeFundedRequest exampleFundedRequest)
+      (FundedRequestField.offset .action) 0xff) = none ∧
+    decodeFundedRequest (List.set (encodeFundedRequest exampleFundedRequest)
+      (FundedRequestField.offset .reservedBody) 1) = none := by
+  native_decide
+
+/-- Canonical funding/index coordinates are derived from Source/Config truth,
+not from request bytes.  The physical adapter first projects its authenticated
+Source material and manifest entry into this pair, then treats request fields
+only as optimistic equality checks. -/
+def canonicalFundedCoordinates? (config : Config) (state : State) :
+    FundedAction → Option (Nat × Nat)
+  | .failNext => do
+      let index := match state.phase with
+        | .primary => 0
+        | .recovery current => current + 1
+        | _ => config.recoveries.length
+      let attempt ← config.recoveries[index]?
+      some (index, attempt.entryFundingAllocationId)
+  | .commitFailure =>
+      if state.phase = .exhausted then
+        some (config.recoveries.length, config.failureFundingAllocationId)
+      else none
+
+def fundedCoordinatesMatch (config : Config) (state : State)
+    (request : FundedTransitionRequestV2) : Bool :=
+  request.expectedGeneration == state.generation &&
+  canonicalFundedCoordinates? config state request.action ==
+    some (request.expectedRecoveryIndex, request.expectedFundingAllocationId)
+
+#guard canonicalFundedCoordinates? exampleConfig exampleState .failNext == some (0, 43)
+#guard canonicalFundedCoordinates? exampleConfig exhaustedState .commitFailure == some (1, 45)
+#guard fundedCoordinatesMatch exampleConfig exampleState ({ exampleFundedRequest with
+  expectedGeneration := 1
+  expectedFundingAllocationId := 43
+})
+#guard !fundedCoordinatesMatch exampleConfig exampleState ({ exampleFundedRequest with
+  expectedGeneration := 1
+  expectedRecoveryIndex := 1
+  expectedFundingAllocationId := 43
+})
+
+theorem funded_actions_are_disjoint :
+    FundedAction.failNext ≠ FundedAction.commitFailure := by decide
+
+/-! The controller does not introduce a second state machine.  These bridge
+theorems expose the determinism, exact funding conservation, refusal atomicity,
+immediate recovery successor, and Product-owned failure facts of `specialize`
+at the physical ABI boundary. -/
+
+theorem funded_transition_deterministic
+    {config : Config} {state : State} {funding : FundingState} {command : Command}
+    {left right : Plan}
+    (hleft : specialize config state funding command = .ok left)
+    (hright : specialize config state funding command = .ok right) : left = right :=
+  specialize_deterministic hleft hright
+
+theorem funded_transition_refusal_is_atomic
+    {config : Config} {state : State} {funding : FundingState}
+    {command : Command} {error : Refusal}
+    (h : specialize config state funding command = .error error) :
+    executeProjection config state funding command = (state, funding, []) :=
+  refusal_is_atomic h
+
+theorem funded_transition_conserves_exact_charge
+    {config : Config} {state : State} {funding : FundingState}
+    {command : Command} {plan : Plan}
+    (h : specialize config state funding command = .ok plan) :
+    plan.certificate.fundingAllocationId = plan.fundingPost.allocationId ∧
+    plan.certificate.fundingRemaining = plan.fundingPost.remainingCapital ∧
+    plan.fundingPost.remainingCapital + plan.certificate.workPaid =
+      funding.remainingCapital :=
+  specialize_receipt_matches_funding h
+
+theorem funded_recovery_advances_immediate_successor
+    {config : Config} {state : State} {funding : FundingState}
+    {index now worker receiptAccountId : Nat} {plan : Plan}
+    (hphase : state.phase = .recovery index)
+    (h : specialize config state funding (.failNext now worker receiptAccountId) =
+      .ok plan) :
+    plan.sourcePost.phase = .recovery (index + 1) :=
+  failNext_from_recovery_advances_one hphase h
+
+theorem funded_failure_requires_exhaustion_and_product_selector
+    {config : Config} {state : State} {funding : FundingState}
+    {worker receiptAccountId : Nat} {plan : Plan}
+    (h : specialize config state funding (.commitFailure worker receiptAccountId) =
+      .ok plan) :
+    state.phase = .exhausted ∧
+    plan.certificate.selector = config.productDomain.failureSelector ∧
+    plan.sourcePost.phase = .failureCommitted := by
+  exact ⟨failure_commit_requires_exhaustion h, failure_commit_uses_product_selector h⟩
 
 def certificateFields : List CertificateField := [
   .magic, .version, .kind, .reservedHeader, .market, .route,

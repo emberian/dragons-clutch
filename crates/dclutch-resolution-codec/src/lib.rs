@@ -13,20 +13,23 @@ mod generated_source_resolution;
 
 /// Bytes in one fixed primary-Pyth admission request.
 pub const ACCEPT_PYTH_REQUEST_BYTES: usize = generated_source_resolution::REQUEST_BYTES_VALUE;
+/// Bytes in one fixed funded recovery/failure request.
+pub const FUNDED_TRANSITION_REQUEST_BYTES: usize =
+    generated_source_resolution::FUNDED_REQUEST_BYTES_VALUE;
 /// Bytes in one canonical Source Resolution certificate.
 pub const RESOLUTION_CERTIFICATE_BYTES: usize =
     generated_source_resolution::CERTIFICATE_BYTES_VALUE;
-/// PDA domain for one terminal certificate paired with a Source state.
-pub const RESOLUTION_CERTIFICATE_PDA_DOMAIN_V1: &[u8] = b"dclutch/resolution-cert/v1";
+/// PDA domain for a typed, ordered certificate paired with a Source state.
+pub const RESOLUTION_CERTIFICATE_PDA_DOMAIN_V2: &[u8] = b"dclutch/resolution-cert/v2";
 /// Domain separating the content identity of an authenticated Pyth update.
 pub const PYTH_EVIDENCE_CONTENT_DOMAIN_V1: &[u8] = b"dclutch/pyth-evidence/v1";
-/// Closed semantic release preimage for this primary-Pyth controller profile.
-pub const RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V1: &[u8] =
-    b"dclutch/release/source-resolution-primary-pyth-controller-v1";
-/// SHA-256 of [`RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V1`].
-pub const RESOLUTION_CONTROLLER_RELEASE_ID_V1: [u8; 32] = [
-    0x2e, 0x95, 0x88, 0x6a, 0xb8, 0xca, 0xa2, 0xb7, 0x76, 0xa0, 0x0b, 0xa0, 0x47, 0x46, 0x48, 0x8c,
-    0xf7, 0x66, 0xef, 0x1d, 0xb5, 0x6d, 0x79, 0x53, 0x5e, 0xae, 0xd3, 0x5d, 0xde, 0x49, 0xc1, 0x7d,
+/// Closed semantic release preimage for the funded controller profile.
+pub const RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V2: &[u8] =
+    b"dclutch/release/source-resolution-controller-funded-recovery-failure-v2";
+/// SHA-256 of [`RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V2`].
+pub const RESOLUTION_CONTROLLER_RELEASE_ID_V2: [u8; 32] = [
+    0x99, 0x21, 0xf1, 0x7b, 0x34, 0x1a, 0xbc, 0x4f, 0xde, 0xa0, 0xb0, 0xfc, 0xbe, 0xb6, 0x17, 0xd3,
+    0xeb, 0xf5, 0xae, 0x50, 0x69, 0xec, 0x89, 0x6b, 0x33, 0xf8, 0xc8, 0x06, 0xdc, 0xc0, 0x58, 0xa8,
 ];
 /// Schema identity used only to finalize a canonical Pyth-release record.
 pub const PYTH_RELEASE_RECORD_SCHEMA_ID_V1: [u8; 32] = [
@@ -41,9 +44,9 @@ pub enum Error {
     InvalidLength,
     /// Magic bytes did not identify the requested wire type.
     InvalidMagic,
-    /// The schema version was not the generated V1 version.
+    /// The schema version was not the generated version.
     UnsupportedVersion,
-    /// The action byte did not name primary-Pyth acceptance.
+    /// The action byte did not name a generated transition.
     UnknownAction,
     /// A reserved byte was nonzero.
     NonCanonicalReserved,
@@ -158,6 +161,157 @@ impl AcceptPythRequestV1 {
     }
 }
 
+/// Lean-owned funded liveness action tag.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FundedTransitionActionV2 {
+    /// Advance to the one immediate ordered recovery successor.
+    FailNext,
+    /// Commit Product's explicit failure selector after exhaustion.
+    CommitFailure,
+}
+
+impl FundedTransitionActionV2 {
+    fn decode(value: u8) -> Result<Self> {
+        match value {
+            generated_source_resolution::FUNDED_REQUEST_FAIL_NEXT_ACTION => Ok(Self::FailNext),
+            generated_source_resolution::FUNDED_REQUEST_COMMIT_FAILURE_ACTION => {
+                Ok(Self::CommitFailure)
+            }
+            _ => Err(Error::UnknownAction),
+        }
+    }
+
+    const fn byte(self) -> u8 {
+        match self {
+            Self::FailNext => generated_source_resolution::FUNDED_REQUEST_FAIL_NEXT_ACTION,
+            Self::CommitFailure => {
+                generated_source_resolution::FUNDED_REQUEST_COMMIT_FAILURE_ACTION
+            }
+        }
+    }
+}
+
+/// Optimistic coordinates for one canonically funded Source liveness step.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FundedTransitionRequestV2 {
+    /// Recovery advancement or explicit failure commitment.
+    pub action: FundedTransitionActionV2,
+    /// Exact immutable Market generation.
+    pub expected_generation: u64,
+    /// Zero-based next recovery index, or recovery count for failure.
+    pub expected_recovery_index: u32,
+    /// Product-owned domain-separated result-domain content identity.
+    pub expected_result_domain_id: [u8; 32],
+    /// Exact capability-entry configuration identity selected by Source.
+    pub expected_funding_allocation_id: [u8; 32],
+}
+
+impl FundedTransitionRequestV2 {
+    /// Decode one exact generated funded-transition request.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        exact_width(input, FUNDED_TRANSITION_REQUEST_BYTES)?;
+        exact(
+            input,
+            generated_source_resolution::FUNDED_REQUEST_MAGIC_OFFSET,
+            &generated_source_resolution::FUNDED_REQUEST_MAGIC_BYTES,
+            Error::InvalidMagic,
+        )?;
+        if u16_at(
+            input,
+            generated_source_resolution::FUNDED_REQUEST_VERSION_OFFSET,
+        )? != generated_source_resolution::FUNDED_REQUEST_ABI_VERSION
+        {
+            return Err(Error::UnsupportedVersion);
+        }
+        require_zero(
+            input,
+            generated_source_resolution::FUNDED_REQUEST_RESERVED_HEADER_OFFSET,
+            5,
+        )?;
+        require_zero(
+            input,
+            generated_source_resolution::FUNDED_REQUEST_RESERVED_BODY_OFFSET,
+            4,
+        )?;
+        let value = Self {
+            action: FundedTransitionActionV2::decode(byte_at(
+                input,
+                generated_source_resolution::FUNDED_REQUEST_ACTION_OFFSET,
+            )?)?,
+            expected_generation: u64_at(
+                input,
+                generated_source_resolution::FUNDED_REQUEST_EXPECTED_GENERATION_OFFSET,
+            )?,
+            expected_recovery_index: u32_at(
+                input,
+                generated_source_resolution::FUNDED_REQUEST_EXPECTED_RECOVERY_INDEX_OFFSET,
+            )?,
+            expected_result_domain_id: array_at(
+                input,
+                generated_source_resolution::FUNDED_REQUEST_EXPECTED_RESULT_DOMAIN_ID_OFFSET,
+            )?,
+            expected_funding_allocation_id: array_at(
+                input,
+                generated_source_resolution::FUNDED_REQUEST_EXPECTED_FUNDING_ALLOCATION_ID_OFFSET,
+            )?,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Encode one exact generated funded-transition request.
+    pub fn to_bytes(self) -> Result<[u8; FUNDED_TRANSITION_REQUEST_BYTES]> {
+        self.validate()?;
+        let mut output = [0_u8; FUNDED_TRANSITION_REQUEST_BYTES];
+        put(
+            &mut output,
+            generated_source_resolution::FUNDED_REQUEST_MAGIC_OFFSET,
+            &generated_source_resolution::FUNDED_REQUEST_MAGIC_BYTES,
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::FUNDED_REQUEST_VERSION_OFFSET,
+            &generated_source_resolution::FUNDED_REQUEST_ABI_VERSION.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::FUNDED_REQUEST_ACTION_OFFSET,
+            &[self.action.byte()],
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::FUNDED_REQUEST_EXPECTED_GENERATION_OFFSET,
+            &self.expected_generation.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::FUNDED_REQUEST_EXPECTED_RECOVERY_INDEX_OFFSET,
+            &self.expected_recovery_index.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::FUNDED_REQUEST_EXPECTED_RESULT_DOMAIN_ID_OFFSET,
+            &self.expected_result_domain_id,
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::FUNDED_REQUEST_EXPECTED_FUNDING_ALLOCATION_ID_OFFSET,
+            &self.expected_funding_allocation_id,
+        )?;
+        Ok(output)
+    }
+
+    fn validate(self) -> Result<()> {
+        if self.expected_generation == 0
+            || is_zero(&self.expected_result_domain_id)
+            || is_zero(&self.expected_funding_allocation_id)
+        {
+            return Err(Error::ZeroCoordinate);
+        }
+        Ok(())
+    }
+}
+
 /// Candidate binding for the Registry-owned Resolution execution role.
 ///
 /// This value is deliberately not accepted as runtime authority by the
@@ -184,20 +338,68 @@ impl ResolutionReleaseCandidateV1 {
     }
 }
 
-/// Canonical physical projection of one successful Source Resolution certificate.
+/// Lean-owned kind of one Source Resolution certificate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResolutionCertificateKindV1 {
+    /// Provider evidence resolved an ordinary Product result.
+    ResolutionSuccess,
+    /// Funding was consumed and the next ordered recovery became active.
+    RecoveryAdvanced,
+    /// Funding was consumed and the finite recovery sequence was exhausted.
+    Exhausted,
+    /// Funding was consumed and Product's explicit failure result was committed.
+    ResolutionFailure,
+}
+
+impl ResolutionCertificateKindV1 {
+    fn decode(value: u8) -> Result<Self> {
+        match value {
+            generated_source_resolution::CERTIFICATE_RESOLUTION_SUCCESS_KIND => {
+                Ok(Self::ResolutionSuccess)
+            }
+            generated_source_resolution::CERTIFICATE_RECOVERY_ADVANCED_KIND => {
+                Ok(Self::RecoveryAdvanced)
+            }
+            generated_source_resolution::CERTIFICATE_EXHAUSTED_KIND => Ok(Self::Exhausted),
+            generated_source_resolution::CERTIFICATE_RESOLUTION_FAILURE_KIND => {
+                Ok(Self::ResolutionFailure)
+            }
+            _ => Err(Error::UnknownAction),
+        }
+    }
+
+    const fn byte(self) -> u8 {
+        match self {
+            Self::ResolutionSuccess => {
+                generated_source_resolution::CERTIFICATE_RESOLUTION_SUCCESS_KIND
+            }
+            Self::RecoveryAdvanced => {
+                generated_source_resolution::CERTIFICATE_RECOVERY_ADVANCED_KIND
+            }
+            Self::Exhausted => generated_source_resolution::CERTIFICATE_EXHAUSTED_KIND,
+            Self::ResolutionFailure => {
+                generated_source_resolution::CERTIFICATE_RESOLUTION_FAILURE_KIND
+            }
+        }
+    }
+}
+
+/// Canonical physical projection of one Source Resolution certificate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResolutionCertificateV1 {
+    /// Exact Lean-owned certificate kind.
+    pub kind: ResolutionCertificateKindV1,
     /// Canonical Market account identity.
     pub market: [u8; 32],
-    /// Exact active Source-specification content identity.
+    /// Exact active Source/provider route; explicit failure uses all zeroes.
     pub route: [u8; 32],
     /// Canonical Source-material content identity.
     pub source_material: [u8; 32],
     /// Canonical Product-instance content identity.
     pub product: [u8; 32],
-    /// Domain-separated authenticated Pyth-evidence content identity.
+    /// Authenticated provider evidence; liveness transitions use all zeroes.
     pub provider_evidence: [u8; 32],
-    /// Optional funding-allocation identity; primary admission uses all zeroes.
+    /// Exact funding-allocation identity; the legacy hot primary uses zeroes.
     pub funding_allocation: [u8; 32],
     /// Canonical certificate account identity.
     pub receipt_account: [u8; 32],
@@ -215,14 +417,14 @@ pub struct ResolutionCertificateV1 {
     pub funding_remaining: u64,
     /// Exact signed normalized result numerator.
     pub result_numerator: i128,
-    /// Positive exact result denominator.
+    /// Positive exact result denominator for success; liveness uses zero.
     pub result_denominator: u64,
-    /// Positive provider publication timestamp.
+    /// Provider publication or recovery-transition time; failure uses zero.
     pub observed_at: u64,
 }
 
 impl ResolutionCertificateV1 {
-    /// Decode one exact canonical successful certificate.
+    /// Decode one exact canonical certificate.
     pub fn decode(input: &[u8]) -> Result<Self> {
         exact_width(input, RESOLUTION_CERTIFICATE_BYTES)?;
         exact(
@@ -238,11 +440,10 @@ impl ResolutionCertificateV1 {
         {
             return Err(Error::UnsupportedVersion);
         }
-        if byte_at(input, generated_source_resolution::CERTIFICATE_KIND_OFFSET)?
-            != generated_source_resolution::CERTIFICATE_RESOLUTION_SUCCESS_KIND
-        {
-            return Err(Error::UnknownAction);
-        }
+        let kind = ResolutionCertificateKindV1::decode(byte_at(
+            input,
+            generated_source_resolution::CERTIFICATE_KIND_OFFSET,
+        )?)?;
         require_zero(
             input,
             generated_source_resolution::CERTIFICATE_RESERVED_HEADER_OFFSET,
@@ -254,6 +455,7 @@ impl ResolutionCertificateV1 {
             4,
         )?;
         let value = Self {
+            kind,
             market: array_at(
                 input,
                 generated_source_resolution::CERTIFICATE_MARKET_OFFSET,
@@ -320,7 +522,7 @@ impl ResolutionCertificateV1 {
         Ok(value)
     }
 
-    /// Encode one exact canonical successful certificate.
+    /// Encode one exact canonical certificate.
     pub fn to_bytes(self) -> Result<[u8; RESOLUTION_CERTIFICATE_BYTES]> {
         self.validate()?;
         let mut output = [0_u8; RESOLUTION_CERTIFICATE_BYTES];
@@ -337,7 +539,7 @@ impl ResolutionCertificateV1 {
         put(
             &mut output,
             generated_source_resolution::CERTIFICATE_KIND_OFFSET,
-            &[generated_source_resolution::CERTIFICATE_RESOLUTION_SUCCESS_KIND],
+            &[self.kind.byte()],
         )?;
         put(
             &mut output,
@@ -424,19 +626,52 @@ impl ResolutionCertificateV1 {
 
     fn validate(self) -> Result<()> {
         if is_zero(&self.market)
-            || is_zero(&self.route)
             || is_zero(&self.source_material)
             || is_zero(&self.product)
-            || is_zero(&self.provider_evidence)
             || is_zero(&self.receipt_account)
             || self.generation == 0
-            || self.result_denominator == 0
-            || self.observed_at == 0
         {
             return Err(Error::ZeroCoordinate);
         }
         if self.selector > u32::from(u8::MAX) {
             return Err(Error::InvalidSelector);
+        }
+        match self.kind {
+            ResolutionCertificateKindV1::ResolutionSuccess => {
+                if is_zero(&self.route)
+                    || is_zero(&self.provider_evidence)
+                    || self.result_denominator == 0
+                    || self.observed_at == 0
+                {
+                    return Err(Error::ZeroCoordinate);
+                }
+            }
+            ResolutionCertificateKindV1::RecoveryAdvanced
+            | ResolutionCertificateKindV1::Exhausted => {
+                if is_zero(&self.route)
+                    || is_zero(&self.funding_allocation)
+                    || !is_zero(&self.provider_evidence)
+                    || self.work_paid == 0
+                    || self.result_numerator != 0
+                    || self.result_denominator != 0
+                    || self.observed_at == 0
+                {
+                    return Err(Error::ZeroCoordinate);
+                }
+            }
+            ResolutionCertificateKindV1::ResolutionFailure => {
+                if !is_zero(&self.route)
+                    || is_zero(&self.funding_allocation)
+                    || !is_zero(&self.provider_evidence)
+                    || self.work_paid == 0
+                    || self.schedule_index != 0
+                    || self.result_numerator != 0
+                    || self.result_denominator != 0
+                    || self.observed_at != 0
+                {
+                    return Err(Error::ZeroCoordinate);
+                }
+            }
         }
         Ok(())
     }
@@ -543,6 +778,7 @@ mod tests {
 
     fn certificate() -> ResolutionCertificateV1 {
         ResolutionCertificateV1 {
+            kind: ResolutionCertificateKindV1::ResolutionSuccess,
             market: [1; 32],
             route: [2; 32],
             source_material: [3; 32],
@@ -559,6 +795,26 @@ mod tests {
             result_numerator: -123_456_789,
             result_denominator: 1,
             observed_at: 1_700_000_000,
+        }
+    }
+
+    fn funded_request() -> FundedTransitionRequestV2 {
+        FundedTransitionRequestV2 {
+            action: FundedTransitionActionV2::FailNext,
+            expected_generation: 7,
+            expected_recovery_index: 0,
+            expected_result_domain_id: {
+                let mut value = [0_u8; 32];
+                value[0] = 0x22;
+                value[1] = 0x11;
+                value
+            },
+            expected_funding_allocation_id: {
+                let mut value = [0_u8; 32];
+                value[0] = 0x44;
+                value[1] = 0x33;
+                value
+            },
         }
     }
 
@@ -614,6 +870,39 @@ mod tests {
     }
 
     #[test]
+    fn generated_funded_request_vector_and_hostile_bytes_match() -> Result<()> {
+        let encoded = funded_request().to_bytes()?;
+        assert_eq!(encoded, generated_source_resolution::FUNDED_REQUEST_EXAMPLE);
+        assert_eq!(
+            FundedTransitionRequestV2::decode(&encoded),
+            Ok(funded_request())
+        );
+        for length in 0..FUNDED_TRANSITION_REQUEST_BYTES {
+            assert_eq!(
+                FundedTransitionRequestV2::decode(
+                    encoded.get(..length).ok_or(Error::InvalidLength)?,
+                ),
+                Err(Error::InvalidLength)
+            );
+        }
+        for (offset, error) in [
+            (
+                generated_source_resolution::FUNDED_REQUEST_ACTION_OFFSET,
+                Error::UnknownAction,
+            ),
+            (
+                generated_source_resolution::FUNDED_REQUEST_RESERVED_BODY_OFFSET,
+                Error::NonCanonicalReserved,
+            ),
+        ] {
+            let mut hostile = encoded;
+            *hostile.get_mut(offset).ok_or(Error::InvalidLength)? = 0xff;
+            assert_eq!(FundedTransitionRequestV2::decode(&hostile), Err(error));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn certificate_round_trip_is_exact_and_reserved_bytes_are_hostile() -> Result<()> {
         let value = certificate();
         let encoded = value.to_bytes()?;
@@ -628,6 +917,49 @@ mod tests {
             ResolutionCertificateV1::decode(&hostile),
             Err(Error::NonCanonicalReserved)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn liveness_certificate_kinds_partition_inactive_fields() -> Result<()> {
+        let recovery = ResolutionCertificateV1 {
+            kind: ResolutionCertificateKindV1::RecoveryAdvanced,
+            provider_evidence: [0; 32],
+            funding_allocation: [7; 32],
+            work_paid: 9,
+            result_numerator: 0,
+            result_denominator: 0,
+            observed_at: 101,
+            ..certificate()
+        };
+        assert_eq!(
+            ResolutionCertificateV1::decode(&recovery.to_bytes()?),
+            Ok(recovery)
+        );
+
+        let failure = ResolutionCertificateV1 {
+            kind: ResolutionCertificateKindV1::ResolutionFailure,
+            route: [0; 32],
+            provider_evidence: [0; 32],
+            funding_allocation: [8; 32],
+            schedule_index: 0,
+            work_paid: 11,
+            result_numerator: 0,
+            result_denominator: 0,
+            observed_at: 0,
+            ..certificate()
+        };
+        assert_eq!(
+            ResolutionCertificateV1::decode(&failure.to_bytes()?),
+            Ok(failure)
+        );
+
+        let mut hostile = recovery;
+        hostile.provider_evidence = [9; 32];
+        assert_eq!(hostile.to_bytes(), Err(Error::ZeroCoordinate));
+        let mut hostile = failure;
+        hostile.route = [9; 32];
+        assert_eq!(hostile.to_bytes(), Err(Error::ZeroCoordinate));
         Ok(())
     }
 

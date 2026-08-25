@@ -1,5 +1,11 @@
 use std::{boxed::Box, vec, vec::Vec};
 
+use dclutch_capability_contract::{
+    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+    CapabilityEntryV1, CapabilityFundingDerivationV1, CapabilityManifestV1, CompartmentFundingV1,
+    FUNDING_STATE_BYTES, FundingAmountsV1, FundingCustodyObservationV1, FundingQuoteV1,
+    FundingStateV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+};
 use dclutch_core_contract::{ContentId as CoreContentId, MarketIdentity, MarketRoot, Phase};
 use dclutch_market_contract::market::{CategoricalMarketV1, CategoricalSettlementSummaryV1};
 use dclutch_product_contract::{
@@ -24,16 +30,18 @@ use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ProgramIdentityV1,
 };
 use dclutch_resolution_codec::{
-    AcceptPythRequestV1, PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CERTIFICATE_BYTES,
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V1, RESOLUTION_CONTROLLER_RELEASE_ID_V1,
-    ResolutionCertificateV1,
+    ACCEPT_PYTH_REQUEST_BYTES, AcceptPythRequestV1, FUNDED_TRANSITION_REQUEST_BYTES,
+    FundedTransitionActionV2, FundedTransitionRequestV2, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
+    RESOLUTION_CERTIFICATE_BYTES, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V2,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V2, ResolutionCertificateKindV1, ResolutionCertificateV1,
 };
 use dclutch_source_contract::{
     CapacityEnvelope, ContentId as SourceContentId, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
-    ProviderReleaseV1, PythAdapterConfigV1, ResolutionPolicyV1, RoundingBoundary,
-    SOURCE_MATERIAL_BYTES, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
-    SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V1, SourceAccessProfile, SourceCapacityProfileV1,
-    SourceMaterialInputV1, SourceResolutionPhaseV1, SourceResolutionStateV1, SourceSpecV1,
+    ProviderReleaseV1, PythAdapterConfigV1, RecoveryAttemptV1, RecoveryMaterialSlotV1,
+    RecoveryPolicyV1, ResolutionPolicyV1, RoundingBoundary, SOURCE_MATERIAL_BYTES,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V1,
+    SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialInputV1,
+    SourceRecoveryMaterialInputV1, SourceResolutionPhaseV1, SourceResolutionStateV1, SourceSpecV1,
     StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1, encode_source_material_into_v1,
 };
 use solana_program::{
@@ -57,7 +65,12 @@ const FEED: [u8; 32] = [0x2a; 32];
 struct Fixture {
     program_id: Pubkey,
     accounts: [AccountInfo<'static>; 22],
-    request: [u8; 88],
+    request: [u8; ACCEPT_PYTH_REQUEST_BYTES],
+    capability_manifest: AccountInfo<'static>,
+    capability_manifest_staging: AccountInfo<'static>,
+    recovery_allocation_id: [u8; 32],
+    material_id: [u8; 32],
+    result_domain_id: [u8; 32],
 }
 
 fn key(seed: u8) -> Pubkey {
@@ -278,7 +291,7 @@ fn fixture() -> Fixture {
     let resolution_release = artifact(
         program_id,
         resolution_programdata,
-        RESOLUTION_CONTROLLER_RELEASE_ID_V1,
+        RESOLUTION_CONTROLLER_RELEASE_ID_V2,
         resolution_elf,
         73,
     );
@@ -306,11 +319,6 @@ fn fixture() -> Fixture {
         &activation_inputs,
     )
     .expect("activated release set");
-    let authority = ExecutionAuthorityManifestV1::new(core_id([0x81; 32]), release_set_id)
-        .expect("authority manifest");
-    let authority_bytes = authority.to_bytes();
-    let authority_id = hash(&authority_bytes).to_bytes();
-
     let receiver_program = key(0x56);
     let receiver_programdata =
         Pubkey::find_program_address(&[receiver_program.as_ref()], &bpf_loader_upgradeable::ID).0;
@@ -368,7 +376,7 @@ fn fixture() -> Fixture {
     let capacity = SourceCapacityProfileV1::new(
         CapacityEnvelope::Measured,
         1,
-        0,
+        1,
         source_id([0xb1; 32]),
         source_id([0xb2; 32]),
         256,
@@ -421,6 +429,35 @@ fn fixture() -> Fixture {
     .expect("terminal statistic");
     let statistic_id = source_id(hash(&statistic.to_bytes()).to_bytes());
     let source_product_id = source_id(product_instance_id);
+    let recovery_allocation_id = [0xd2; 32];
+    let recovery_policy = RecoveryPolicyV1::new(
+        capacity_id,
+        source_product_id,
+        [
+            Some(RecoveryAttemptV1::new(
+                source_spec_id,
+                provider_id,
+                120,
+                source_id(recovery_allocation_id),
+            )),
+            None,
+            None,
+            None,
+        ],
+        1,
+        capacity,
+    )
+    .expect("ordered recovery policy");
+    let recovery_policy_id = source_id(hash(&recovery_policy.to_bytes()).to_bytes());
+    let recovery_slot = RecoveryMaterialSlotV1::new(
+        source_spec_id,
+        source,
+        provider_id,
+        provider,
+        adapter_config,
+    )
+    .expect("recovery material slot");
+    let recovery_slots = [recovery_slot];
     let policy = ResolutionPolicyV1::new(
         capacity_id,
         source_product_id,
@@ -428,7 +465,7 @@ fn fixture() -> Fixture {
         window_id,
         statistic_id,
         source_id(domain_id),
-        None,
+        Some(recovery_policy_id),
     );
     let mut material_bytes = [0; SOURCE_MATERIAL_BYTES];
     encode_source_material_into_v1(
@@ -449,11 +486,70 @@ fn fixture() -> Fixture {
             product_instance_id: source_product_id,
             product_instance: &product_instance,
             result_domain: &domain,
-            recovery: None,
+            recovery: Some(SourceRecoveryMaterialInputV1 {
+                recovery_policy_id,
+                recovery_policy: &recovery_policy,
+                slots: &recovery_slots,
+            }),
         },
     )
     .expect("Source material");
     let material_id = hash(&material_bytes).to_bytes();
+
+    let exact_funding_rent = rent.minimum_balance(FUNDING_STATE_BYTES);
+    let funding_quote = FundingQuoteV1::new(
+        FundingAmountsV1::new(
+            CompartmentFundingV1::native_lamports(exact_funding_rent).expect("funding rent"),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::native_lamports(7).expect("positive bounty"),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+        )
+        .expect("typed funding amounts"),
+        None,
+    )
+    .expect("native funding quote");
+    let capability_entries = [
+        CapabilityEntryV1::new(
+            core_id([0xd3; 32]),
+            core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V2),
+            core_id(recovery_allocation_id),
+            core_id([0xd5; 32]),
+            core_id([0xd6; 32]),
+            core_id([0xd7; 32]),
+            ActivationPolicy::RequiredAtFounding,
+            0,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            funding_quote,
+        )
+        .expect("recovery funding entry"),
+        CapabilityEntryV1::new(
+            core_id([0xd4; 32]),
+            core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V2),
+            core_id(material_id),
+            core_id([0xd5; 32]),
+            core_id([0xd6; 32]),
+            core_id([0xd7; 32]),
+            ActivationPolicy::RequiredAtFounding,
+            0,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            funding_quote,
+        )
+        .expect("failure funding entry"),
+    ];
+    let mut capability_manifest_bytes = vec![0; MANIFEST_HEADER_BYTES + 2 * CAPABILITY_ENTRY_BYTES];
+    CapabilityManifestV1::encode_into(&capability_entries, &mut capability_manifest_bytes)
+        .expect("canonical capability manifest");
+    let capability_manifest_id = hash(&capability_manifest_bytes).to_bytes();
+    let authority =
+        ExecutionAuthorityManifestV1::new(core_id(capability_manifest_id), release_set_id)
+            .expect("authority manifest");
+    let authority_bytes = authority.to_bytes();
+    let authority_id = hash(&authority_bytes).to_bytes();
 
     let market_key = key(0x59);
     let identity = MarketIdentity::new(
@@ -492,8 +588,15 @@ fn fixture() -> Fixture {
     )
     .expect("fresh Source state")
     .state();
+    let certificate_kind = [1_u8];
+    let certificate_sequence = SLOT.to_le_bytes();
     let certificate_key = Pubkey::find_program_address(
-        &[RESOLUTION_CERTIFICATE_PDA_DOMAIN_V1, state_key.as_ref()],
+        &[
+            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V2,
+            state_key.as_ref(),
+            &certificate_kind,
+            &certificate_sequence,
+        ],
         &program_id,
     )
     .0;
@@ -511,6 +614,13 @@ fn fixture() -> Fixture {
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
         material_id,
         material_bytes.to_vec(),
+    );
+    let (capability_manifest, capability_manifest_staging) = record_pair(
+        core_program,
+        &rent,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        capability_manifest_id,
+        capability_manifest_bytes,
     );
     let domain_record_digest = hash(&domain_bytes).to_bytes();
     let (domain_raw, domain_staging) = record_pair(
@@ -667,7 +777,204 @@ fn fixture() -> Fixture {
         program_id,
         accounts,
         request,
+        capability_manifest,
+        capability_manifest_staging,
+        recovery_allocation_id,
+        material_id,
+        result_domain_id: domain_id,
     }
+}
+
+struct FundedFixture {
+    program_id: Pubkey,
+    accounts: [AccountInfo<'static>; 18],
+    request: [u8; FUNDED_TRANSITION_REQUEST_BYTES],
+    work_paid: u64,
+}
+
+fn funded_fixture(action: FundedTransitionActionV2, prepare_exhausted: bool) -> FundedFixture {
+    let base = fixture();
+    let rent = Rent::default();
+    let now = match action {
+        FundedTransitionActionV2::FailNext => 111,
+        FundedTransitionActionV2::CommitFailure => 121,
+    };
+    let clock = Clock {
+        slot: SLOT + 1,
+        epoch_start_timestamp: 0,
+        epoch: 0,
+        leader_schedule_epoch: 0,
+        unix_timestamp: now,
+    };
+
+    if prepare_exhausted {
+        let material_data = base.accounts[8]
+            .try_borrow_data()
+            .expect("Source material data");
+        let material = dclutch_source_contract::SourceMaterialViewV1::decode(&material_data)
+            .expect("Source material");
+        let mut state_data = base.accounts[0]
+            .try_borrow_mut_data()
+            .expect("Source state data");
+        let mut state = SourceResolutionStateV1::decode(&state_data).expect("Source state");
+        state
+            .fail_next_view(
+                source_id(base.material_id),
+                material,
+                source_id(base.recovery_allocation_id),
+                GENERATION,
+                111,
+            )
+            .expect("enter recovery fixture state");
+        state
+            .exhaust_view(source_id(base.material_id), material, GENERATION, 121)
+            .expect("exhaust recovery fixture state");
+        state_data.copy_from_slice(&state.to_bytes());
+    }
+
+    let manifest_data = base
+        .capability_manifest
+        .try_borrow_data()
+        .expect("capability manifest");
+    let manifest = CapabilityManifestV1::decode(&manifest_data).expect("canonical manifest");
+    let manifest_id = core_id(hash(&manifest_data).to_bytes());
+    let entry_index = match action {
+        FundedTransitionActionV2::FailNext => 0,
+        FundedTransitionActionV2::CommitFailure => 1,
+    };
+    let exact_rent = rent.minimum_balance(FUNDING_STATE_BYTES);
+    let custody = FundingCustodyObservationV1::native_only(
+        exact_rent
+            .checked_mul(2)
+            .and_then(|value| value.checked_add(7))
+            .expect("funding custody amount"),
+        exact_rent,
+    )
+    .expect("funding custody");
+    let mut funding =
+        FundingStateV1::new(manifest_id, manifest, entry_index, custody).expect("pending funding");
+    funding
+        .activate(manifest_id, manifest, custody, 1)
+        .expect("active funding");
+    let funding_derivation = CapabilityFundingDerivationV1::new(
+        base.accounts[2].key.to_bytes(),
+        GENERATION,
+        manifest_id,
+        manifest,
+        funding,
+    )
+    .expect("funding derivation");
+    let funding_key =
+        Pubkey::find_program_address(&funding_derivation.seed_components(), &base.program_id).0;
+    let expected_funding_allocation_id = match action {
+        FundedTransitionActionV2::FailNext => base.recovery_allocation_id,
+        FundedTransitionActionV2::CommitFailure => base.material_id,
+    };
+    let expected_recovery_index = match action {
+        FundedTransitionActionV2::FailNext => 0,
+        FundedTransitionActionV2::CommitFailure => 1,
+    };
+    let certificate_kind = [match action {
+        FundedTransitionActionV2::FailNext => 2,
+        FundedTransitionActionV2::CommitFailure => 4,
+    }];
+    let certificate_sequence = 1_u64.to_le_bytes();
+    let certificate_key = Pubkey::find_program_address(
+        &[
+            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V2,
+            base.accounts[0].key.as_ref(),
+            &certificate_kind,
+            &certificate_sequence,
+        ],
+        &base.program_id,
+    )
+    .0;
+    let request = FundedTransitionRequestV2 {
+        action,
+        expected_generation: GENERATION,
+        expected_recovery_index,
+        expected_result_domain_id: base.result_domain_id,
+        expected_funding_allocation_id,
+    }
+    .to_bytes()
+    .expect("funded request");
+    drop(manifest_data);
+
+    let accounts = [
+        base.accounts[0].clone(),
+        account(
+            certificate_key,
+            true,
+            1,
+            vec![0; RESOLUTION_CERTIFICATE_BYTES],
+            base.program_id,
+            false,
+        ),
+        account(
+            funding_key,
+            true,
+            exact_rent + 7,
+            funding.to_bytes().to_vec(),
+            base.program_id,
+            false,
+        ),
+        account(key(0xe1), true, 5, Vec::new(), system_program::ID, false),
+        base.accounts[2].clone(),
+        base.accounts[3].clone(),
+        base.accounts[4].clone(),
+        base.accounts[5].clone(),
+        base.accounts[6].clone(),
+        base.accounts[7].clone(),
+        base.accounts[8].clone(),
+        base.accounts[9].clone(),
+        base.accounts[10].clone(),
+        base.accounts[11].clone(),
+        base.capability_manifest.clone(),
+        base.capability_manifest_staging.clone(),
+        account(
+            sysvar::clock::ID,
+            false,
+            1,
+            bincode::serialize(&clock).expect("Clock bytes"),
+            sysvar::ID,
+            false,
+        ),
+        base.accounts[21].clone(),
+    ];
+    FundedFixture {
+        program_id: base.program_id,
+        accounts,
+        request,
+        work_paid: 7,
+    }
+}
+
+fn funded_output_snapshot(fixture: &FundedFixture) -> (Vec<u8>, Vec<u8>, Vec<u8>, u64, u64) {
+    (
+        fixture.accounts[0]
+            .try_borrow_data()
+            .expect("Source state")
+            .to_vec(),
+        fixture.accounts[1]
+            .try_borrow_data()
+            .expect("certificate")
+            .to_vec(),
+        fixture.accounts[2]
+            .try_borrow_data()
+            .expect("funding state")
+            .to_vec(),
+        fixture.accounts[2].lamports(),
+        fixture.accounts[3].lamports(),
+    )
+}
+
+fn assert_funded_refusal_atomic(fixture: &FundedFixture, expected: ResolutionError) {
+    let before = funded_output_snapshot(fixture);
+    assert_eq!(
+        process_instruction(&fixture.program_id, &fixture.accounts, &fixture.request),
+        Err(ProgramError::Custom(expected as u32))
+    );
+    assert_eq!(funded_output_snapshot(fixture), before);
 }
 
 fn output_snapshot(fixture: &Fixture) -> (Vec<u8>, Vec<u8>) {
@@ -717,6 +1024,10 @@ fn registry_bound_full_pyth_observation_emits_one_compact_certificate() {
         .try_borrow_data()
         .expect("certificate data");
     let certificate = ResolutionCertificateV1::decode(&certificate_data).expect("certificate");
+    assert_eq!(
+        certificate.kind,
+        ResolutionCertificateKindV1::ResolutionSuccess
+    );
     assert_eq!(certificate.generation, GENERATION);
     assert_eq!(certificate.selector, 1);
     assert_eq!(certificate.result_numerator, i128::from(PRICE));
@@ -728,6 +1039,118 @@ fn registry_bound_full_pyth_observation_emits_one_compact_certificate() {
     assert_eq!(certificate.funding_allocation, [0; 32]);
     assert_eq!(certificate.work_paid, 0);
     assert_eq!(certificate.funding_remaining, 0);
+}
+
+#[test]
+fn first_recovery_consumes_exact_bounty_and_emits_ordered_certificate() {
+    let fixture = funded_fixture(FundedTransitionActionV2::FailNext, false);
+    let funding_before = fixture.accounts[2].lamports();
+    let worker_before = fixture.accounts[3].lamports();
+    process_instruction(&fixture.program_id, &fixture.accounts, &fixture.request)
+        .expect("funded first recovery");
+
+    let state_data = fixture.accounts[0].try_borrow_data().expect("Source state");
+    let state = SourceResolutionStateV1::decode(&state_data).expect("recovery state");
+    assert_eq!(state.phase(), SourceResolutionPhaseV1::Recovery);
+    assert_eq!(state.active_recovery_attempt(), Some(0));
+
+    let funding_data = fixture.accounts[2]
+        .try_borrow_data()
+        .expect("funding state");
+    let funding = FundingStateV1::decode(&funding_data).expect("funding state");
+    assert_eq!(funding.remaining().bounty().amount(), 0);
+    assert_eq!(funding.released().bounty().amount(), fixture.work_paid);
+    assert_eq!(
+        fixture.accounts[2].lamports(),
+        funding_before - fixture.work_paid
+    );
+    assert_eq!(
+        fixture.accounts[3].lamports(),
+        worker_before + fixture.work_paid
+    );
+
+    let certificate_data = fixture.accounts[1]
+        .try_borrow_data()
+        .expect("recovery certificate");
+    let certificate =
+        ResolutionCertificateV1::decode(&certificate_data).expect("canonical recovery certificate");
+    assert_eq!(
+        certificate.kind,
+        ResolutionCertificateKindV1::RecoveryAdvanced
+    );
+    assert_eq!(certificate.attempt_index, 1);
+    assert_eq!(certificate.selector, 0);
+    assert_eq!(certificate.provider_evidence, [0; 32]);
+    assert_eq!(certificate.work_paid, fixture.work_paid);
+    assert_eq!(certificate.funding_remaining, 0);
+    assert_eq!(certificate.observed_at, 111);
+}
+
+#[test]
+fn explicit_failure_consumes_exact_bounty_and_uses_product_final_selector() {
+    let fixture = funded_fixture(FundedTransitionActionV2::CommitFailure, true);
+    process_instruction(&fixture.program_id, &fixture.accounts, &fixture.request)
+        .expect("funded explicit failure");
+    let state_data = fixture.accounts[0].try_borrow_data().expect("Source state");
+    let state = SourceResolutionStateV1::decode(&state_data).expect("failure state");
+    assert_eq!(state.phase(), SourceResolutionPhaseV1::FailureCommitted);
+
+    let certificate_data = fixture.accounts[1]
+        .try_borrow_data()
+        .expect("failure certificate");
+    let certificate =
+        ResolutionCertificateV1::decode(&certificate_data).expect("canonical failure certificate");
+    assert_eq!(
+        certificate.kind,
+        ResolutionCertificateKindV1::ResolutionFailure
+    );
+    assert_eq!(certificate.route, [0; 32]);
+    assert_eq!(certificate.attempt_index, 1);
+    assert_eq!(certificate.selector, 2);
+    assert_eq!(certificate.provider_evidence, [0; 32]);
+    assert_eq!(certificate.result_denominator, 0);
+    assert_eq!(certificate.observed_at, 0);
+    assert_eq!(certificate.work_paid, fixture.work_paid);
+}
+
+#[test]
+fn funded_recovery_hostile_coordinates_and_late_output_refuse_atomically() {
+    let mut wrong_allocation = funded_fixture(FundedTransitionActionV2::FailNext, false);
+    wrong_allocation.request[64] ^= 1;
+    assert_funded_refusal_atomic(&wrong_allocation, ResolutionError::Transition);
+
+    let mut skipped_index = funded_fixture(FundedTransitionActionV2::FailNext, false);
+    skipped_index.request[24] = 1;
+    assert_funded_refusal_atomic(&skipped_index, ResolutionError::Transition);
+
+    let early = funded_fixture(FundedTransitionActionV2::FailNext, false);
+    let early_clock = Clock {
+        slot: SLOT + 1,
+        epoch_start_timestamp: 0,
+        epoch: 0,
+        leader_schedule_epoch: 0,
+        unix_timestamp: 110,
+    };
+    early.accounts[16]
+        .try_borrow_mut_data()
+        .expect("Clock")
+        .copy_from_slice(&bincode::serialize(&early_clock).expect("Clock bytes"));
+    assert_funded_refusal_atomic(&early, ResolutionError::Transition);
+
+    let occupied = funded_fixture(FundedTransitionActionV2::FailNext, false);
+    occupied.accounts[1]
+        .try_borrow_mut_data()
+        .expect("certificate")
+        .first_mut()
+        .map(|byte| *byte = 1)
+        .expect("certificate byte");
+    assert_funded_refusal_atomic(&occupied, ResolutionError::OutputState);
+}
+
+#[test]
+fn failure_before_explicit_exhaustion_refuses_all_four_outputs_atomically() {
+    let fixture = funded_fixture(FundedTransitionActionV2::CommitFailure, false);
+    assert_funded_refusal_atomic(&fixture, ResolutionError::Transition);
 }
 
 #[test]

@@ -3,8 +3,8 @@
 use dclutch_core_contract::{ContentId, MarketIdentity};
 
 use crate::{
-    ActivatedExecutionReleaseSetV1, Error, IDENTITY_BYTES, Result, copy_infallible, put_u16,
-    read_array, read_u16, require_zero,
+    ActivatedExecutionReleaseSetV1, ActivatedExecutionReleaseSetViewV1, Error, IDENTITY_BYTES,
+    Result, copy_infallible, put_u16, read_array, read_u16, require_zero,
 };
 
 /// Exact bytes in one execution-authority manifest.
@@ -156,12 +156,40 @@ pub fn authenticate_market_execution_v1(
     authority_manifest: ExecutionAuthorityManifestV1,
     activated_release_set: ActivatedExecutionReleaseSetV1,
 ) -> Result<AuthenticatedMarketExecutionV1> {
+    authenticate_market_execution_id_v1(
+        market,
+        finalized_authority_manifest_id,
+        authority_manifest,
+        activated_release_set.execution_release_set_id(),
+    )
+}
+
+/// Authenticate the same Market authority chain from a borrowed activation
+/// cache, avoiding a five-artifact copy at bounded SBF call sites.
+pub fn authenticate_market_execution_view_v1(
+    market: MarketIdentity,
+    finalized_authority_manifest_id: ContentId,
+    authority_manifest: ExecutionAuthorityManifestV1,
+    activated_release_set: ActivatedExecutionReleaseSetViewV1<'_>,
+) -> Result<AuthenticatedMarketExecutionV1> {
+    authenticate_market_execution_id_v1(
+        market,
+        finalized_authority_manifest_id,
+        authority_manifest,
+        activated_release_set.execution_release_set_id()?,
+    )
+}
+
+fn authenticate_market_execution_id_v1(
+    market: MarketIdentity,
+    finalized_authority_manifest_id: ContentId,
+    authority_manifest: ExecutionAuthorityManifestV1,
+    activated_release_set_id: ContentId,
+) -> Result<AuthenticatedMarketExecutionV1> {
     if market.capability_manifest_id() != finalized_authority_manifest_id {
         return Err(Error::MarketAuthorityManifestMismatch);
     }
-    if authority_manifest.execution_release_set_id()
-        != activated_release_set.execution_release_set_id()
-    {
+    if authority_manifest.execution_release_set_id() != activated_release_set_id {
         return Err(Error::ReleaseSetSelectionMismatch);
     }
     Ok(AuthenticatedMarketExecutionV1 {
