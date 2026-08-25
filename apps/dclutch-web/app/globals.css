@@ -65,6 +65,13 @@ a { color: inherit; }
 .registered-refusals summary { cursor: pointer; }
 .registered-refusals p { overflow-wrap: anywhere; }
 .registered-artifact { margin-top: 3px; }
+.release-manifest-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; margin: 13px 0; }
+.release-manifest-grid textarea { min-height: 92px; }
+.release-output { margin-top: 18px; }
+.release-output .release-role-grid { margin: 18px 0; }
+.release-output .registered-state-card { padding: 14px; }
+.release-output .registered-state-card h3 { font-size: 13px; }
+.release-output .registered-state-card p { overflow-wrap: anywhere; }
 
 /* Product preview */
 .product-shell { width: min(1420px, calc(100% - 48px)); margin: 0 auto; padding-bottom: 60px; }
@@ -375,7 +382,7 @@ footer { display: flex; justify-content: space-between; gap: 20px; margin-top: 3
   .inventory-row { grid-template-columns: minmax(150px, 1fr) repeat(3, 48px); }
   .inventory-row > span { display: none; }
   .custody-ledger, .liquidity-proof { grid-template-columns: 1fr 1fr; }
-  .direct-form-grid, .direct-output dl, .registered-state-grid, .registered-facts, .creation-boundary { grid-template-columns: 1fr; }
+  .direct-form-grid, .direct-output dl, .registered-state-grid, .registered-facts, .creation-boundary, .release-manifest-grid { grid-template-columns: 1fr; }
   .custody-ledger article:nth-child(2) { border-right: 0; }
   .custody-ledger article { border-bottom: 1px solid var(--line); }
 }
