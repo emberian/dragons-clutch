@@ -35,6 +35,11 @@ named floor fee.
 those outputs select the canonical claim/custody plans, both
 abstract child interpreters reach their named projections, and their atomic
 join equals the high-level Direct post-state.
+The canonical Effect and custody-plan decoders have general bounded
+encode/decode round-trip theorems and concrete hostile refusal theorems.
+`CompiledPhysical.admitted_physical_wire_round_trip` applies them to the plans
+selected by any admitted frame whose outcome coordinate fits the physical V1
+`u32` field.
 Lean owns the compact intent and controller-instruction data structures and
 proves their encodings are exactly 136 and 304 bytes.
 
@@ -47,6 +52,8 @@ cannot change a resting order's final cumulative fee in the semantic model.
 
 - machine-checked refinement theorems for the safe Rust and TypeScript codecs
   (both have exact cross-language vector, round-trip, and hostile-parser tests);
+- a refinement theorem from the Lean Effect/custody decoders to the independent
+  safe Rust parsers and exact-account SBF parser;
 - a reverse theorem that transition-program acceptance implies the semantic
   `Admissible` predicate;
 - a machine-checked refinement from Lean's transition VM to the safe Rust

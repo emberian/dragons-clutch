@@ -160,7 +160,7 @@ The desired theorem chain is:
 Direct.admissible frame
   → generated TransitionVM program derives the unique economic outputs       [landed]
   → those outputs select physical claim/custody plans and Direct.post         [landed]
-  → canonical plan bytes decode to those exact physical plans                 [open]
+  → canonical plan bytes decode to those exact physical plans                 [landed]
   → exact executor ELF path refines the concrete projection update
   → concrete projection codec denotes Direct pre/post state
   → custody envelope + separately proved callee preserve real assets

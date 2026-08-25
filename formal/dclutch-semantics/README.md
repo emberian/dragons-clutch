@@ -46,7 +46,10 @@ plans from successful program outputs instead of caller-supplied gross, fee, or
 successor nonces. `admitted_compilation_refines_physical_transition` proves
 that every admitted compilation selects the canonical plans, both plan
 interpreters produce their named projections, and their abstract atomic join is
-the one semantic Direct post-state.
+the one semantic Direct post-state. Lean's hostile V1 decoders now satisfy
+general bounded encode/decode round-trip theorems for Effect and custody plans;
+`admitted_physical_wire_round_trip` instantiates them for every admitted Direct
+frame within the separately named physical `u32` outcome-coordinate profile.
 
 Lean also owns the exact data structures and encodings for the 136-byte compact
 intent and 304-byte controller instruction. Their exact lengths are theorems. A

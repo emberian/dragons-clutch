@@ -193,6 +193,14 @@ two-transfer custody plan, both abstract child interpreters reach their specifie
 projections, and `atomicCommit` rejoins them to the high-level Direct
 `postState`.
 
+Commit `a50df9065989074195b721d93b4ba4268914885f` adds hostile Lean V1
+decoders and general bounded round-trip theorems for Effect and custody plans.
+`admitted_physical_wire_round_trip` instantiates both on the plans selected by
+compiled Direct execution. Its additional premise names the physical V1 `u32`
+outcome-coordinate bound; the semantic Product remains width-unbounded. Lean
+also checks concrete refusals for truncation, excess count, reserved-byte
+corruption, and a noncanonical non-claim coordinate.
+
 The source builds with Lean 4.30.0. Regeneration still produces exactly 568
 bytes with SHA-256
 `72cc0faa6a9768b766a3003c8ff6f38889f564f49005ce68b2187c98349bff5c`,
@@ -203,11 +211,12 @@ hostile-program, hostile-frame, and rollback tests pass.
 These theorems are high-level admission-to-abstract-VM evidence. They are not a
 machine-checked refinement of physical account/register decoding, native
 signature verification, the Rust VM, the controller or child SBF ELFs, CPI, or
-Solana runtime behavior. It also does not prove the reverse implication that
+Solana runtime behavior. They also do not prove the reverse implication that
 every accepted abstract register frame came from the full `Admissible`
 predicate. The physical composition theorem models typed plans and an abstract
-atomic envelope, not concrete plan-byte parsing, account ownership, CPI, or
-runtime rollback.
+atomic envelope. The new Lean parsers close its canonical typed-plan byte
+round-trip, but do not prove refinement of the separate safe Rust or SBF
+parsers, account ownership, CPI, or runtime rollback.
 
 This addendum supersedes the execution-profile architecture and current
 controller measurements below. Earlier tables remain evidence for their named

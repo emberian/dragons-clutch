@@ -90,12 +90,21 @@ program execution, using its derived successor nonces, gross quote, and fee.
 canonical plans, both child interpreters reach their named projections, and
 their abstract atomic join equals the one high-level Direct post-state.
 
+Commit `a50df9065989074195b721d93b4ba4268914885f` makes the next ABI
+boundary executable and checked in Lean. Generic hostile V1 decoders for Effect
+and custody-plan bytes prove bounded encode/decode round trips, with explicit
+refusals for truncation, count overflow, reserved-byte corruption, and
+noncanonical coordinates. `admitted_physical_wire_round_trip` proves that the
+claim and custody plans selected by admitted compilation survive those exact
+wire encodings. The physical `u32` outcome field is an explicit profile premise,
+not a semantic Product-width limit.
+
 This evidence strongly favors continuing the experiment, but does not accept a
 successor. The controller now derives its child plans from authenticated signed
 intents and the Market/Realm/release graph, and the abstract program-to-physical
-composition is now checked. Reverse refusal coverage, physical account/register
-decoding, the Rust interpreter, and artifact theorems for the controller and
-custody remain open.
+composition and its typed-plan wire boundary are now checked. Reverse refusal
+coverage, Rust/parser refinement, physical account/register decoding, the Rust
+interpreter, and artifact theorems for the controller and custody remain open.
 The exact semantic release is manifest-selected, but a checked-release manifest
 must still bind the built ELF and Loader state. The experiment therefore does
 not yet satisfy the full integrated or deployed-refinement gates.
