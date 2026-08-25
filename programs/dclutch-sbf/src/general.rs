@@ -3617,6 +3617,7 @@ fn process_close_general<const N: usize>(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn authenticate_candidate_transition<'info, const N: usize>(
     program_id: &Pubkey,
     root_account: &AccountInfo<'info>,
@@ -3669,6 +3670,7 @@ fn authenticate_candidate_transition<'info, const N: usize>(
     Ok((root, config, batch, candidate, cap))
 }
 
+#[inline(never)]
 fn pay_candidate_reward<'info, const N: usize>(
     actor: &AccountInfo<'info>,
     candidate_account: &AccountInfo<'info>,
@@ -3680,6 +3682,7 @@ fn pay_candidate_reward<'info, const N: usize>(
     write_candidate(candidate_account, candidate)
 }
 
+#[inline(never)]
 fn canonical_page_bytes<const N: usize>(
     page: &CandidatePageV1<N>,
 ) -> Result<Vec<u8>, ProgramError> {
@@ -4580,6 +4583,7 @@ fn authenticate_claim_basis<'info>(
     )
 }
 
+#[inline(never)]
 fn authenticate_claim_basis_config<const N: usize>(
     claim: CategoricalUnitV1,
     config: GeneralConfigV1,
@@ -4702,6 +4706,7 @@ fn decode_batch(account: &AccountInfo<'_>) -> Result<BatchRootV1, ProgramError> 
     Ok(batch)
 }
 
+#[inline(never)]
 fn decode_candidate<const N: usize>(
     account: &AccountInfo<'_>,
 ) -> Result<CandidateStateV1<N>, ProgramError> {
@@ -4727,6 +4732,7 @@ fn decode_candidate<const N: usize>(
     Ok(candidate)
 }
 
+#[inline(never)]
 fn authenticate_candidate<const N: usize>(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
@@ -4850,6 +4856,7 @@ fn authenticate_batch_by_root_key(
     Ok(batch)
 }
 
+#[inline(never)]
 fn authenticate_market<const N: usize>(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
@@ -4875,6 +4882,7 @@ fn authenticate_market<const N: usize>(
     Ok(market)
 }
 
+#[inline(never)]
 fn authenticate_market_config<const N: usize>(
     market: CategoricalMarketV1<N>,
     config: GeneralConfigV1,
@@ -4952,6 +4960,7 @@ fn authenticate_live_realm(
     })
 }
 
+#[inline(never)]
 fn authenticate_order_id<const N: usize>(order: PortfolioOrderV1<N>) -> Result<(), ProgramError> {
     let mut preimage = Vec::new();
     preimage
@@ -4972,6 +4981,7 @@ fn authenticate_order_id<const N: usize>(order: PortfolioOrderV1<N>) -> Result<(
     Ok(())
 }
 
+#[inline(never)]
 fn authenticate_position<const N: usize>(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
@@ -5230,6 +5240,7 @@ fn decode_order_state(account: &AccountInfo<'_>) -> Result<OrderStateV1, Program
     OrderStateV1::decode(&data).map_err(|_| AdapterError::AccountData.into())
 }
 
+#[inline(never)]
 fn decode_custody<const N: usize>(
     account: &AccountInfo<'_>,
 ) -> Result<GeneralOrderCustodyV1<N>, ProgramError> {
@@ -5244,6 +5255,7 @@ fn decode_custody<const N: usize>(
     GeneralOrderCustodyV1::decode(&data).map_err(|_| AdapterError::AccountData.into())
 }
 
+#[inline(never)]
 fn encode_market_bytes<const N: usize>(
     market: &CategoricalMarketV1<N>,
 ) -> Result<Vec<u8>, ProgramError> {
@@ -5262,6 +5274,7 @@ fn encode_market_bytes<const N: usize>(
     Ok(bytes)
 }
 
+#[inline(never)]
 fn encode_custody_bytes<const N: usize>(
     custody: &GeneralOrderCustodyV1<N>,
 ) -> Result<Vec<u8>, ProgramError> {
@@ -5280,6 +5293,7 @@ fn encode_custody_bytes<const N: usize>(
     Ok(bytes)
 }
 
+#[inline(never)]
 fn encode_position_bytes<const N: usize>(
     position: &PositionV1<N>,
 ) -> Result<Vec<u8>, ProgramError> {
@@ -5298,6 +5312,7 @@ fn encode_position_bytes<const N: usize>(
     Ok(bytes)
 }
 
+#[inline(never)]
 fn encode_candidate_bytes<const N: usize>(
     candidate: &CandidateStateV1<N>,
 ) -> Result<Vec<u8>, ProgramError> {
@@ -5316,6 +5331,7 @@ fn encode_candidate_bytes<const N: usize>(
     Ok(bytes)
 }
 
+#[inline(never)]
 fn encode_settlement_cursor_bytes<const N: usize>(
     cursor: &SettlementCursorV1<N>,
 ) -> Result<Vec<u8>, ProgramError> {
@@ -5352,6 +5368,7 @@ fn account_bytes_equal(account: &AccountInfo<'_>, bytes: &[u8]) -> Result<bool, 
     Ok(&data[..] == bytes)
 }
 
+#[inline(never)]
 fn write_market<const N: usize>(
     account: &AccountInfo<'_>,
     market: CategoricalMarketV1<N>,
@@ -5424,6 +5441,7 @@ fn write_batch(account: &AccountInfo<'_>, batch: BatchRootV1) -> Result<(), Prog
     Ok(())
 }
 
+#[inline(never)]
 fn write_candidate<const N: usize>(
     account: &AccountInfo<'_>,
     candidate: CandidateStateV1<N>,
@@ -5440,6 +5458,7 @@ fn write_candidate<const N: usize>(
     Ok(())
 }
 
+#[inline(never)]
 fn write_candidate_page<const N: usize>(
     account: &AccountInfo<'_>,
     page: CandidatePageV1<N>,
@@ -5455,6 +5474,7 @@ fn write_candidate_page<const N: usize>(
     Ok(())
 }
 
+#[inline(never)]
 fn authenticate_settlement_cursor<const N: usize>(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
