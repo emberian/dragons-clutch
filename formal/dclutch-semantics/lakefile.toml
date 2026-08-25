@@ -12,3 +12,11 @@ root = "EmitVectors"
 [[lean_exe]]
 name = "emit-sbf-profile"
 root = "EmitSbfProfile"
+
+[[lean_exe]]
+name = "emit-claim-vector"
+root = "EmitClaimVector"
+
+[[lean_exe]]
+name = "emit-custody-vector"
+root = "EmitCustodyVector"

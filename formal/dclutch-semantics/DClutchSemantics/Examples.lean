@@ -1,5 +1,6 @@
 import DClutchSemantics.DirectProofs
 import DClutchSemantics.Codec
+import DClutchSemantics.Physical
 
 /-!
 # Executable examples
@@ -92,6 +93,17 @@ theorem frame_encoded_plan_length :
 theorem frame_encoded_plan_hex :
     Codec.hex (Codec.encodePlan (effectPlan frame)) =
       "444345460107000000000000000000000100000000000000000100000000000001000000000000000100010001000000d0070000000000000201010001000000d0070000000000000101020000000000ea030000000000000200020000000000e80300000000000002020200000000000200000000000000" := by
+  native_decide
+
+theorem frame_encoded_claim_plan_hex :
+    Codec.hex (Codec.encodePlan (Physical.physicalPlan frame).claimEffects) =
+      "444345460104000000000000000000000100000000000000000100000000000001000000000000000100010001000000d0070000000000000201010001000000d007000000000000" := by
+  native_decide
+
+theorem frame_encoded_custody_plan_hex :
+    Codec.hex (Physical.Codec.encodeCustodyPlan
+      (Physical.physicalPlan frame).custodyTransfers) =
+      "44434350010200000100000000000000e80300000000000001020000000000000200000000000000" := by
   native_decide
 
 theorem frame_post_state :

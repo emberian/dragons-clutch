@@ -19,6 +19,9 @@ records, and plans, plus the exact 120-byte hexadecimal encoding of the Direct
 example. It also checks the concrete account offsets, privilege words, state
 tag, instruction length, and effect tags emitted for the exact-account SBF proof
 profile. That concrete check assumes the named loader-v1 serialization formula.
+Lean also checks that the multiprogram physical plan's four replay/claim effects
+and two indivisible custody transfers execute to projections that join to the
+same Direct post-state, and that the custody projection conserves collateral.
 
 `cumulativeFee_monotone` proves monotonicity of the concrete floor-fee function,
 and `cumulative_floor_fee_fragmentation_independent` combines it with the
@@ -37,6 +40,9 @@ cannot change a resting order's final cumulative fee in the semantic model.
   differential Direct-reference test only);
 - a composition theorem from Direct's high-level `effectPlan_refines_transition`
   through the projection codec to the exact machine theorem;
+- an implementation-level proof that real Solana CPI sequencing has the
+  abstract `atomicCommit` behavior (transaction rollback is still a separately
+  tested runtime property);
 - whole-CFG artifact coverage (qedsvm v0.11.0 emits and Lean checks one
   successful-path Hoare triple for the generated exact-account target; the
   general Rust/SDK executor remains outside its alias model);

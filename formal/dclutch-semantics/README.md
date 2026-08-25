@@ -20,6 +20,13 @@ Rust implementation. It currently provides:
 - a reproducible 120-byte Lean-emitted vector; and
 - executable admitted and hostile fixtures.
 
+The successor physical plan now derives a four-effect replay/claim program and
+two indivisible Realm-collateral transfers from that same admitted frame. Lean
+checks each child plan, custody conservation, exact recomposition to the Direct
+post-state, and an abstract all-or-nothing commit envelope. The 72-byte claim
+and 40-byte custody vectors are generated from these definitions; they are not
+handwritten parallel transaction schemas.
+
 `dclutch-effect-kernel` is the first physical refinement target. It is safe
 Rust, `no_std`, `no_alloc`, fixed-capacity, and transactionally applies the
 Lean-emitted vector. It does not reimplement Direct admission. The

@@ -4,6 +4,7 @@ import DClutchSemantics.DirectProofs
 import DClutchSemantics.Codec
 import DClutchSemantics.Examples
 import DClutchSemantics.SbfProfile
+import DClutchSemantics.Physical
 
 /-!
 Fresh Lean-owned semantics for dClutch's compact protocol specializer.
