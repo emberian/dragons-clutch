@@ -1,0 +1,20 @@
+[package]
+name = "dclutch-bearer-contract"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dclutch-capability-contract = { path = "../dclutch-capability-contract" }
+dclutch-core-contract = { path = "../dclutch-core-contract" }
+dclutch-market-contract = { path = "../dclutch-market-contract" }
+dclutch-product-contract = { path = "../dclutch-product-contract" }
+dclutch-realm-contract = { path = "../dclutch-realm-contract" }
+dclutch-token-svm = { path = "../dclutch-token-svm" }
+
+[lints]
+workspace = true

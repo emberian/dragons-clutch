@@ -1,0 +1,16 @@
+[package]
+name = "dclutch-pyth-contract"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dclutch-capability-contract = { path = "../dclutch-capability-contract" }
+dclutch-kernel = { path = "../dclutch-kernel" }
+
+[lints]
+workspace = true

@@ -1,0 +1,19 @@
+[package]
+name = "dclutch-claims-proof-sbf"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+rust-version.workspace = true
+description = "Lean-generated exact-account SBF claim executor for dClutch Direct"
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+
+[lints.rust]
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(target_os, values("solana"))'] }

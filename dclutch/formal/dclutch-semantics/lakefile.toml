@@ -1,0 +1,38 @@
+name = "dclutch-semantics"
+version = "0.1.0"
+defaultTargets = ["DClutchSemantics"]
+
+[[lean_lib]]
+name = "DClutchSemantics"
+
+[[lean_exe]]
+name = "emit-vectors"
+root = "EmitVectors"
+
+[[lean_exe]]
+name = "emit-claim-sbf-profile"
+root = "EmitClaimSbfProfile"
+
+[[lean_exe]]
+name = "emit-claim-vector"
+root = "EmitClaimVector"
+
+[[lean_exe]]
+name = "emit-custody-vector"
+root = "EmitCustodyVector"
+
+[[lean_exe]]
+name = "emit-direct-program"
+root = "EmitDirectProgram"
+
+[[lean_exe]]
+name = "emit-direct-program-rust"
+root = "EmitDirectProgramRust"
+
+[[lean_exe]]
+name = "emit-direct-controller-vectors"
+root = "EmitDirectControllerVectors"
+
+[[lean_exe]]
+name = "emit-direct-codec-rust"
+root = "EmitDirectCodecRust"

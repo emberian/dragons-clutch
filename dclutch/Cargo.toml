@@ -1,0 +1,54 @@
+[workspace]
+members = [
+    "crates/dclutch-bearer-contract",
+    "crates/dclutch-capability-contract",
+    "crates/dclutch-collateral-contract",
+    "crates/dclutch-core-contract",
+    "crates/dclutch-dealer-contract",
+    "crates/dclutch-direct-contract",
+    "crates/dclutch-direct-codec",
+    "crates/dclutch-effect-kernel",
+    "crates/dclutch-general-contract",
+    "crates/dclutch-kernel",
+    "crates/dclutch-market-contract",
+    "crates/dclutch-operator",
+    "crates/dclutch-pyth-svm",
+    "crates/dclutch-pyth-contract",
+    "crates/dclutch-product-compiler",
+    "crates/dclutch-product-contract",
+    "crates/dclutch-record-contract",
+    "crates/dclutch-release-tool",
+    "crates/dclutch-realm-contract",
+    "crates/dclutch-rent-contract",
+    "crates/dclutch-series-contract",
+    "crates/dclutch-source-contract",
+    "crates/dclutch-structured-contract",
+    "crates/dclutch-terminal-contract",
+    "crates/dclutch-token-svm",
+    "crates/dclutch-transition-vm",
+    "programs/dclutch-effect-sbf",
+    "programs/dclutch-controller-proof-sbf",
+    "programs/dclutch-claims-proof-sbf",
+    "programs/dclutch-custody-proof-sbf",
+    "programs/dclutch-sbf",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.89"
+
+[workspace.lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(target_os, values("solana"))'] }
+
+[workspace.lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"

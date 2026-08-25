@@ -1,0 +1,123 @@
+# Decision 0002: test a Lean-owned semantic specializer
+
+Status: experimental; no successor accepted yet.
+
+## Decision
+
+dClutch will test whether protocol variability can move from width-specialized
+Rust control flow into canonical first-order Product, Frame, and Effect data
+whose semantics are owned and checked in Lean.
+
+The current Rust implementation remains the executable reference and is not
+deleted or described as superseded. The experiment begins with one inline
+ordinary Direct fill because it combines authorization-bound facts, exact quote
+arithmetic, floor fees, replay, claims, collateral, and atomic rollback without
+requiring a general clearing loop.
+
+## Intended narrow waist
+
+1. Lean declarations define admissibility and transition meaning.
+2. A checked specializer emits canonical IR bytes, layouts, clients, hostile
+   vectors, proof manifests, and bounded effect plans.
+3. Small SBF microprograms validate frames and apply effects. Rust, if retained,
+   owns only bounded decoding, memory safety, and Solana syscall/CPI adaptation.
+4. Artifact-level proofs or translation validation connect the exact executor
+   ELF to the Lean semantics.
+
+No layer may maintain a second authoritative transition implementation.
+
+## Acceptance gates
+
+The experiment earns architectural succession only if it demonstrates all of:
+
+- one semantic owner for Direct-fill meaning;
+- canonical, round-tripping wire data emitted from that owner;
+- a `no_std`, `no_alloc`, safe, fixed-layout, total executor;
+- exact agreement with the existing Direct reference over generated and hostile
+  cases;
+- explicit refusal with whole-state rollback;
+- checked conservation, replay, exact-quote, and fee theorems;
+- no width monomorphization in the executor;
+- a materially smaller integrated ELF and no worse practical CU envelope;
+- exact pinned source, artifact, toolchain, and trust manifests; and
+- an honest path from compiled ELF bytes to the theorem statements.
+
+Failure at a gate is evidence against succession, not a reason to weaken it.
+
+## Evidence to date
+
+The first semantic slice, canonical codecs, concrete differential Direct test,
+and isolated real-SVM execution are implemented. The specialized claim target
+is 1,872 bytes and consumes 110 CU; qedsvm v0.11.0 emits a successful-path
+Hoare triple over its exact ELF and Lean checks the stored theorem. A subsequent
+four-program campaign composes the claim executor, controller PDA, real custody
+adapter, and official SPL Token 9.0.0 ELF. The physical example commits in
+24,901 CU, and a refusal after one successful token CPI restores all earlier
+claim, journal, and token mutations byte-for-byte. See
+`docs/evidence/LEAN_CLAIM_EXECUTOR_2026_08_25.md` and
+`docs/evidence/PHYSICAL_DIRECT_COMPOSITION_2026_08_25.md` for exact source,
+artifact, toolchain, rent, rollback, theorem, and limitation details.
+
+The next vertical slice removes the experimental execution-profile account
+entirely. Lean's 136-byte intent signs the canonical Market key, and one shared
+codec feeds Rust, the operator, SBF controller, and TypeScript. The controller
+authenticates the Market/Realm/manifest/finalized-policy graph and rejects
+same-shaped authority substitution before executing generated transition
+bytecode. A width-generic Market-root view also avoids 15 Rust
+monomorphizations: the measured controller shrinks from an experimental 120,552
+bytes to 79,680 bytes. The exact signed fill is 990 bytes with one reusable
+12-address Market table, 804 bytes with an exhaustive per-fill table, and 1,326
+bytes as an inadmissible legacy message. The operator constructs and validates
+the reusable table lifecycle without making it semantic authority. The official
+lookup-table program creates, extends, activates, resolves the signed v0 fill,
+deactivates, cools down for 512 slots, and closes successfully in the real-SVM
+campaign.
+
+Commit `a4509f649884b96f4aec1d99203e4f5d193803a3` adds the general
+`DirectProgram.admitted_program_refines` theorem. For every high-level frame
+satisfying the named `Admissible` predicate, the exact 35-operation abstract
+transition program accepts and derives its semantic successor nonces, gross
+quote, and floor fee. Its 568 emitted bytes are unchanged. This is the forward
+semantic-to-bytecode theorem; it does not prove reverse acceptance
+completeness, physical register/account decoding, the safe Rust interpreter,
+an SBF ELF, or the Solana runtime.
+
+Commit `1d62b03e15516133d7337d04c166dfcaa1869c72` closes the next
+abstract composition gap. `CompiledPhysical.compilePhysicalPlan` builds the
+four claim/replay effects and two custody transfers only after successful
+program execution, using its derived successor nonces, gross quote, and fee.
+`admitted_compilation_refines_physical_transition` proves that this selects the
+canonical plans, both child interpreters reach their named projections, and
+their abstract atomic join equals the one high-level Direct post-state.
+
+Commit `a50df9065989074195b721d93b4ba4268914885f` makes the next ABI
+boundary executable and checked in Lean. Generic hostile V1 decoders for Effect
+and custody-plan bytes prove bounded encode/decode round trips, with explicit
+refusals for truncation, count overflow, reserved-byte corruption, and
+noncanonical coordinates. `admitted_physical_wire_round_trip` proves that the
+claim and custody plans selected by admitted compilation survive those exact
+wire encodings. The physical `u32` outcome field is an explicit profile premise,
+not a semantic Product-width limit.
+
+This evidence strongly favors continuing the experiment, but does not accept a
+successor. The controller now derives its child plans from authenticated signed
+intents and the Market/Realm/release graph, and the abstract program-to-physical
+composition and its typed-plan wire boundary are now checked. Reverse refusal
+coverage, Rust/parser refinement, physical account/register decoding, the Rust
+interpreter, and artifact theorems for the controller and custody remain open.
+The exact semantic release is manifest-selected, but a checked-release manifest
+must still bind the built ELF and Loader state. The experiment therefore does
+not yet satisfy the full integrated or deployed-refinement gates.
+
+## Bounds
+
+The semantic `ProductIR` has no N=16 restriction. Physical account, transaction,
+compute, and proof limits belong to a separately measured deployment profile.
+This prevents a temporary Solana profile from becoming a false mathematical
+restriction.
+
+## Provenance
+
+The experiment is freshly authored. Neighboring Lean repositories may inform a
+provenance-reviewed design comparison, but no code or dependency is imported
+without a separate explicit decision.

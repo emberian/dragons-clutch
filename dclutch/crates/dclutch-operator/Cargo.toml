@@ -1,0 +1,43 @@
+[package]
+name = "dclutch-operator"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+non-production-real-pyth-lab = ["dclutch-pyth-svm/synthetic-local-fixture"]
+
+[dependencies]
+dclutch-capability-contract = { path = "../dclutch-capability-contract" }
+dclutch-bearer-contract = { path = "../dclutch-bearer-contract" }
+dclutch-collateral-contract = { path = "../dclutch-collateral-contract" }
+dclutch-core-contract = { path = "../dclutch-core-contract" }
+dclutch-dealer-contract = { path = "../dclutch-dealer-contract" }
+dclutch-direct-contract = { path = "../dclutch-direct-contract" }
+dclutch-direct-codec = { path = "../dclutch-direct-codec" }
+dclutch-general-contract = { path = "../dclutch-general-contract" }
+dclutch-kernel = { path = "../dclutch-kernel" }
+dclutch-market-contract = { path = "../dclutch-market-contract" }
+dclutch-product-contract = { path = "../dclutch-product-contract" }
+dclutch-pyth-contract = { path = "../dclutch-pyth-contract" }
+dclutch-pyth-svm = { path = "../dclutch-pyth-svm" }
+dclutch-realm-contract = { path = "../dclutch-realm-contract" }
+dclutch-record-contract = { path = "../dclutch-record-contract" }
+dclutch-rent-contract = { path = "../dclutch-rent-contract" }
+dclutch-series-contract = { path = "../dclutch-series-contract" }
+dclutch-source-contract = { path = "../dclutch-source-contract" }
+dclutch-token-svm = { path = "../dclutch-token-svm" }
+solana-program = { version = "=3.0.0", default-features = false }
+solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode", "bytemuck"] }
+solana-hash = "=4.6.0"
+solana-message = { version = "=3.1.0", features = ["bincode"] }
+solana-sdk-ids = "=3.1.0"
+spl-token-2022-interface = { version = "=3.1.1", default-features = false }
+
+[lints]
+workspace = true

@@ -1,0 +1,544 @@
+extern crate std;
+
+use std::{vec, vec::Vec};
+
+use dclutch_capability_contract::{
+    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
+    CompartmentFundingV1, FundingAmountsV1, FundingCustodyObservationV1, FundingQuoteV1,
+    FundingStateV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+    RealmCollateralBindingV1, RealmCollateralCustodyV1, RealmCollateralVaultObservationV1,
+};
+use dclutch_core_contract::{ContentId, MarketIdentity, MarketRoot, Phase};
+
+use crate::{
+    DEALER_CAPABILITY_KIND_ID_V1, DEALER_CAPABILITY_RELEASE_ID_V1, LiquidityAttachment,
+    LiquidityConfigV1, RentCreditTerms,
+    activation::{ActivationError, activate_pool_into},
+    frame::{
+        ConfigPdaSeedsV1, DEALER_CONFIG_SCHEMA_RELEASE_ID_V1, DEALER_LP_PDA_DOMAIN_V1,
+        DEALER_POOL_PDA_DOMAIN_V1, DEALER_RENT_SYSVAR_ID, DEALER_SYSTEM_PROGRAM_ID,
+        DealerAccountMetaV1, DealerAccountRoleV1, DealerCollateralCompartmentV1,
+        DealerCollateralVaultPdaSeedsV1, DealerFrameV1, FrameError, LpPositionPdaSeedsV1,
+        PoolPdaSeedsV1, PoolPositionPdaSeedsV1, dealer_account_count, dealer_account_privileges,
+        dealer_account_role, validate_market_phase,
+    },
+    instruction::{
+        ActivatePoolV1, AddLiquidityV1, CloseLpPositionV1, CreateLpPositionV1, DealerActionV1,
+        DealerInstructionV1, InstructionError, RemoveLiquidityV1, instruction_len,
+    },
+    runtime::{LiquidityConfigViewV1, LiquidityProfileV1, PoolViewV1},
+};
+
+const MARKET_ADDRESS: [u8; 32] = [90; 32];
+const POOL_ADDRESS: [u8; 32] = [91; 32];
+const LP_ADDRESS: [u8; 32] = [92; 32];
+const OWNER: [u8; 32] = [93; 32];
+
+fn id(byte: u8) -> ContentId {
+    ContentId::new([byte; 32]).expect("nonzero content ID")
+}
+
+fn rent(amount: u64) -> RentCreditTerms {
+    RentCreditTerms::new(OWNER, amount).expect("rent")
+}
+
+fn config<const N: usize, const B: usize>() -> LiquidityConfigV1<N, B> {
+    let mut bids = [[0u64; B]; N];
+    let mut asks = [[0u64; B]; N];
+    let capacity = [[10_000u64; B]; N];
+    let count = u64::try_from(N).expect("bounded N");
+    for (bid_row, ask_row) in bids.iter_mut().zip(asks.iter_mut()) {
+        for (index, (bid, ask)) in bid_row.iter_mut().zip(ask_row.iter_mut()).enumerate() {
+            let step = u64::try_from(index).expect("bounded B");
+            *bid = 8_000 / count - step;
+            *ask = 12_000_u64.div_ceil(count) + step;
+        }
+    }
+    LiquidityConfigV1::new(
+        id(7),
+        OWNER,
+        10_000,
+        25,
+        1_000,
+        100,
+        bids,
+        asks,
+        capacity,
+        capacity,
+    )
+    .expect("config")
+}
+
+#[test]
+fn instruction_round_trips_and_refuses_hostile_envelopes() {
+    let limits = crate::LiquidityAmounts::new(1_000, 50, [700, 800]).expect("limits");
+    let add =
+        DealerInstructionV1::AddLiquidity(AddLiquidityV1::new(4, 8, 12, limits).expect("add"));
+    let mut bytes = vec![0u8; add.encoded_len().expect("width")];
+    add.encode_into(&mut bytes).expect("encode");
+    assert_eq!(DealerInstructionV1::<2>::decode(&bytes), Ok(add));
+    assert_eq!(bytes.len(), 72);
+    assert_eq!(instruction_len::<16>(DealerActionV1::AddLiquidity), Ok(184));
+    let mut obsolete_seeded = bytes.clone();
+    obsolete_seeded.resize(104, 0);
+    assert_eq!(
+        DealerInstructionV1::<2>::decode(&obsolete_seeded),
+        Err(InstructionError::InvalidLength)
+    );
+
+    let mut trailing = bytes.clone();
+    trailing.push(0);
+    assert_eq!(
+        DealerInstructionV1::<2>::decode(&trailing),
+        Err(InstructionError::InvalidLength)
+    );
+    let mut reserved = bytes.clone();
+    *reserved.get_mut(12).expect("header byte") = 1;
+    assert_eq!(
+        DealerInstructionV1::<2>::decode(&reserved),
+        Err(InstructionError::NonCanonicalReservedBytes)
+    );
+    let mut magic = bytes;
+    *magic.first_mut().expect("magic byte") ^= 1;
+    assert_eq!(
+        DealerInstructionV1::<2>::decode(&magic),
+        Err(InstructionError::InvalidMagic)
+    );
+
+    let trade = DealerInstructionV1::<2>::Trade(
+        crate::TradeRequest::new(2, 7, crate::TradeSide::BuyClaimFromPool, 1, 4, 99)
+            .expect("trade"),
+    );
+    let mut trade_bytes = [0u8; 56];
+    trade.encode_into(&mut trade_bytes).expect("trade encode");
+    assert_eq!(DealerInstructionV1::<2>::decode(&trade_bytes), Ok(trade));
+    trade_bytes[34] = 1;
+    assert_eq!(
+        DealerInstructionV1::<2>::decode(&trade_bytes),
+        Err(InstructionError::NonCanonicalReservedBytes)
+    );
+
+    let remove = DealerInstructionV1::RemoveLiquidity(
+        RemoveLiquidityV1::new(5, 9, 3, limits).expect("remove"),
+    );
+    let values = [
+        DealerInstructionV1::ActivatePool(
+            ActivatePoolV1::new(9, 2, [44; 32], 100, 50).expect("activate"),
+        ),
+        DealerInstructionV1::CreateLpPosition(
+            CreateLpPositionV1::new(4, [44; 32]).expect("create"),
+        ),
+        remove,
+        DealerInstructionV1::ResetLadder {
+            expected_pool_sequence: 11,
+        },
+        DealerInstructionV1::CloseLpPosition(CloseLpPositionV1::new(12, 3).expect("close")),
+        DealerInstructionV1::RetirePool {
+            expected_pool_sequence: 13,
+            expected_market_child_count: 1,
+        },
+    ];
+    for value in values {
+        let mut exact = vec![0u8; value.encoded_len().expect("action width")];
+        value.encode_into(&mut exact).expect("action encode");
+        assert_eq!(DealerInstructionV1::<2>::decode(&exact), Ok(value));
+    }
+    assert_eq!(
+        instruction_len::<16>(DealerActionV1::CloseLpPosition),
+        Ok(32)
+    );
+}
+
+fn frame<const N: usize>(action: DealerActionV1) -> Vec<DealerAccountMetaV1> {
+    let count = dealer_account_count::<N>(action).expect("count");
+    (0..count)
+        .map(|index| {
+            let role = dealer_account_role::<N>(action, index).expect("role");
+            let (is_signer, is_writable, is_executable) = dealer_account_privileges(action, role);
+            let key = match role {
+                DealerAccountRoleV1::SystemProgram => DEALER_SYSTEM_PROGRAM_ID,
+                DealerAccountRoleV1::RentSysvar => DEALER_RENT_SYSVAR_ID,
+                _ => [u8::try_from(index + 1).expect("bounded account count"); 32],
+            };
+            DealerAccountMetaV1 {
+                key,
+                is_signer,
+                is_writable,
+                is_executable,
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn exact_frames_enforce_counts_privileges_and_explicit_aliases() {
+    for action in [
+        DealerActionV1::ActivatePool,
+        DealerActionV1::CreateLpPosition,
+        DealerActionV1::AddLiquidity,
+        DealerActionV1::RemoveLiquidity,
+        DealerActionV1::Trade,
+        DealerActionV1::ResetLadder,
+        DealerActionV1::CloseLpPosition,
+        DealerActionV1::RetirePool,
+    ] {
+        let accounts = frame::<16>(action);
+        let result = DealerFrameV1::<16>::new(action, &accounts);
+        assert!(result.is_ok(), "frame failed for {action:?}: {result:?}");
+    }
+    assert_eq!(
+        dealer_account_count::<2>(DealerActionV1::ActivatePool),
+        Ok(24)
+    );
+    assert_eq!(
+        dealer_account_count::<16>(DealerActionV1::ActivatePool),
+        Ok(24)
+    );
+    assert_eq!(
+        dealer_account_count::<16>(DealerActionV1::AddLiquidity),
+        Ok(14)
+    );
+    assert_eq!(
+        dealer_account_count::<16>(DealerActionV1::RetirePool),
+        Ok(16)
+    );
+
+    let mut hostile = frame::<2>(DealerActionV1::Trade);
+    let market_key = hostile.get(2).expect("Market role").key;
+    hostile.get_mut(3).expect("Pool role").key = market_key;
+    assert_eq!(
+        DealerFrameV1::<2>::new(DealerActionV1::Trade, &hostile),
+        Err(FrameError::UnsafeAlias)
+    );
+    let mut privilege = frame::<2>(DealerActionV1::Trade);
+    privilege.get_mut(3).expect("Pool role").is_signer = true;
+    assert_eq!(
+        DealerFrameV1::<2>::new(DealerActionV1::Trade, &privilege),
+        Err(FrameError::InvalidPrivilege)
+    );
+
+    let mut safe = frame::<2>(DealerActionV1::ActivatePool);
+    let activator_key = safe.first().expect("activator role").key;
+    safe.get_mut(1).expect("LP owner role").key = activator_key;
+    // Pool/LP RentCredits may be the same permanent beneficiary credit.
+    let rent_credit_key = safe.get(18).expect("Pool RentCredit role").key;
+    safe.get_mut(19).expect("LP RentCredit role").key = rent_credit_key;
+    assert!(DealerFrameV1::<2>::new(DealerActionV1::ActivatePool, &safe).is_ok());
+}
+
+#[test]
+fn clock_is_not_a_meta_and_phase_contract_is_exact() {
+    assert_eq!(
+        dealer_account_count::<2>(DealerActionV1::ResetLadder),
+        Ok(4)
+    );
+    let reset = frame::<2>(DealerActionV1::ResetLadder);
+    assert_eq!(
+        reset
+            .iter()
+            .map(|account| account.key)
+            .collect::<Vec<_>>()
+            .len(),
+        4
+    );
+    assert_eq!(
+        validate_market_phase(DealerActionV1::Trade, Phase::Open),
+        Ok(())
+    );
+    assert_eq!(
+        validate_market_phase(DealerActionV1::Trade, Phase::Resolved),
+        Err(FrameError::InvalidMarketPhase)
+    );
+    assert_eq!(
+        validate_market_phase(DealerActionV1::RemoveLiquidity, Phase::Retiring),
+        Ok(())
+    );
+    assert_eq!(
+        validate_market_phase(DealerActionV1::RetirePool, Phase::Retiring),
+        Ok(())
+    );
+    assert_eq!(
+        validate_market_phase(DealerActionV1::RetirePool, Phase::Open),
+        Err(FrameError::InvalidMarketPhase)
+    );
+}
+
+fn short_vec_width(value: usize) -> usize {
+    if value < 128 {
+        1
+    } else if value < 16_384 {
+        2
+    } else {
+        3
+    }
+}
+
+fn legacy_single_instruction_bytes(accounts: usize, data: usize, frame_has_signer: bool) -> usize {
+    // One signature, one Dealer instruction, one Dealer program key, and a
+    // separate static fee payer only when the exact frame has no signer.
+    let separate_payer = usize::from(!frame_has_signer);
+    136 + 32 * separate_payer + 33 * accounts + short_vec_width(data) + data
+}
+
+#[test]
+fn exact_n16_account_and_legacy_packet_risk_is_locked() {
+    let activate_accounts =
+        dealer_account_count::<16>(DealerActionV1::ActivatePool).expect("Activate account count");
+    let add_accounts =
+        dealer_account_count::<16>(DealerActionV1::AddLiquidity).expect("Add account count");
+    let retire_accounts =
+        dealer_account_count::<16>(DealerActionV1::RetirePool).expect("Retire account count");
+    let activate_bytes = legacy_single_instruction_bytes(activate_accounts, 80, true);
+    let add_bytes = legacy_single_instruction_bytes(add_accounts, 184, true);
+    let retire_bytes = legacy_single_instruction_bytes(retire_accounts, 32, false);
+    assert_eq!(activate_bytes, 1_009);
+    assert_eq!(add_bytes, 784);
+    assert_eq!(retire_bytes, 729);
+    assert!(activate_bytes < crate::frame::SOLANA_PACKET_DATA_SIZE_V1);
+    assert!(add_bytes < crate::frame::SOLANA_PACKET_DATA_SIZE_V1);
+    assert!(retire_bytes < crate::frame::SOLANA_PACKET_DATA_SIZE_V1);
+    assert!(activate_accounts < crate::frame::SOLANA_ACCOUNT_LOCK_LIMIT_V1);
+}
+
+#[test]
+fn pda_preimages_are_domain_separated_and_substitution_sensitive() {
+    let pool = PoolPdaSeedsV1::new(MARKET_ADDRESS, 9, id(7)).expect("pool seeds");
+    let config = ConfigPdaSeedsV1::new(id(7));
+    let lp = LpPositionPdaSeedsV1::new(MARKET_ADDRESS, 9, id(7), [44; 32]).expect("LP seeds");
+    let pool_position =
+        PoolPositionPdaSeedsV1::new(MARKET_ADDRESS, POOL_ADDRESS).expect("Pool Position seeds");
+    let principal = DealerCollateralVaultPdaSeedsV1::new(
+        POOL_ADDRESS,
+        DealerCollateralCompartmentV1::Principal,
+    )
+    .expect("principal Vault seeds");
+    let fees = DealerCollateralVaultPdaSeedsV1::new(
+        POOL_ADDRESS,
+        DealerCollateralCompartmentV1::RealizedFees,
+    )
+    .expect("fee Vault seeds");
+    assert_eq!(pool.seed_components()[0], DEALER_POOL_PDA_DOMAIN_V1);
+    assert_eq!(
+        config.seed_components()[0],
+        dclutch_record_contract::RAW_RECORD_PDA_SEED_V1
+    );
+    assert_eq!(
+        config.seed_components()[1],
+        DEALER_CONFIG_SCHEMA_RELEASE_ID_V1
+    );
+    assert_eq!(config.seed_components()[2], id(7).as_bytes());
+    assert_eq!(lp.seed_components()[0], DEALER_LP_PDA_DOMAIN_V1);
+    assert_eq!(pool.seed_components()[1], MARKET_ADDRESS.as_slice());
+    assert_eq!(pool.seed_components()[2], 9u64.to_le_bytes().as_slice());
+    assert_eq!(pool.seed_components()[3], id(7).as_bytes());
+    assert_ne!(pool.seed_components()[0], config.seed_components()[0]);
+    assert_eq!(
+        pool_position.seed_components()[0],
+        dclutch_realm_contract::POSITION_PDA_DOMAIN
+    );
+    assert_eq!(pool_position.seed_components()[2], POOL_ADDRESS.as_slice());
+    assert_ne!(principal.seed_components(), fees.seed_components());
+    assert_ne!(
+        lp.seed_components(),
+        LpPositionPdaSeedsV1::new(MARKET_ADDRESS, 9, id(7), [45; 32])
+            .expect("substitution")
+            .seed_components()
+    );
+    assert_eq!(
+        PoolPdaSeedsV1::new([0; 32], 9, id(7)),
+        Err(FrameError::ZeroIdentity)
+    );
+}
+
+#[test]
+fn activation_uses_shared_funding_authority_and_chain_derived_amounts() {
+    let amounts = FundingAmountsV1::new(
+        CompartmentFundingV1::native_lamports(300).expect("rent"),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::not_applicable(),
+        CompartmentFundingV1::realm_collateral(100_000).expect("liquidity"),
+        CompartmentFundingV1::realm_collateral(5_000).expect("service"),
+    )
+    .expect("amounts");
+    let collateral_binding =
+        RealmCollateralBindingV1::new(id(1), id(31), [32; 32], [33; 32], OWNER).expect("binding");
+    let quote = FundingQuoteV1::new(amounts, Some(collateral_binding)).expect("quote");
+    let entry = CapabilityEntryV1::new(
+        ContentId::new(DEALER_CAPABILITY_KIND_ID_V1).expect("Dealer kind"),
+        ContentId::new(DEALER_CAPABILITY_RELEASE_ID_V1).expect("Dealer release"),
+        id(7),
+        id(23),
+        id(24),
+        id(25),
+        ActivationPolicy::RequiredAtFounding,
+        0,
+        0,
+        [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+        quote,
+    )
+    .expect("entry");
+    let mut manifest_storage = [0u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+    let manifest =
+        CapabilityManifestV1::encode_into(&[entry], &mut manifest_storage).expect("manifest");
+    let market_identity = MarketIdentity::new(id(1), id(2), id(3), id(4), id(5), 9);
+    let market = MarketRoot::founding(market_identity, OWNER).expect("market");
+    let funding_authority = [34; 32];
+    let funding_vault = [35; 32];
+    let collateral_observation = RealmCollateralVaultObservationV1::new(
+        funding_vault,
+        funding_authority,
+        [32; 32],
+        [33; 32],
+        105_000,
+        2_100_000,
+        2_039_280,
+    )
+    .expect("vault observation");
+    let collateral_custody = RealmCollateralCustodyV1::new(
+        id(1),
+        id(31),
+        funding_authority,
+        funding_vault,
+        collateral_observation,
+    )
+    .expect("collateral custody");
+    let funding_custody =
+        FundingCustodyObservationV1::with_realm_collateral(800, 500, collateral_custody)
+            .expect("funding custody");
+    let funding = FundingStateV1::new(id(5), manifest, 0, funding_custody).expect("funding");
+    let funding_state = [36; 32];
+    let attachment = LiquidityAttachment::new(
+        market_identity,
+        ContentId::new(DEALER_CAPABILITY_RELEASE_ID_V1).expect("Dealer release"),
+        id(7),
+        OWNER,
+    )
+    .expect("attachment");
+    let request = ActivatePoolV1::new(9, 0, [44; 32], 1_000, 1_000).expect("open wire");
+    let config = config::<2, 2>();
+    let profile = LiquidityProfileV1::new(2, 2).expect("profile");
+    let mut config_bytes = vec![0; LiquidityConfigV1::<2, 2>::encoded_len().expect("width")];
+    config
+        .encode_into(&mut config_bytes)
+        .expect("config encode");
+    let config_view = LiquidityConfigViewV1::new(config.content_id(), profile, &config_bytes)
+        .expect("config view");
+    let mut pool_bytes = vec![0; profile.pool_len().expect("Pool width")];
+    let plan = activate_pool_into::<2>(
+        market,
+        MARKET_ADDRESS,
+        manifest,
+        funding,
+        funding_state,
+        funding_authority,
+        funding_custody,
+        attachment,
+        config_view,
+        profile,
+        &mut pool_bytes,
+        POOL_ADDRESS,
+        LP_ADDRESS,
+        OWNER,
+        rent(100),
+        rent(100),
+        RentCreditTerms::new(POOL_ADDRESS, 100).expect("Pool Position rent"),
+        request,
+        50,
+    )
+    .expect("activation plan");
+    assert_eq!(plan.market().outstanding_children(), 1);
+    assert_eq!(plan.funding().remaining().native_lamports_total(), 0);
+    assert_eq!(plan.funding().remaining().realm_collateral_total(), 0);
+    assert_eq!(plan.funding_debit().liquidity().amount(), 100_000);
+    assert_eq!(
+        plan.funding_debit()
+            .service()
+            .expect("service release")
+            .amount(),
+        5_000
+    );
+    assert_eq!(
+        PoolViewV1::new(profile, &pool_bytes, POOL_ADDRESS, config_view)
+            .expect("Pool view")
+            .liquidity::<2>()
+            .expect("liquidity")
+            .claim_reserves(),
+        [1_000; 2]
+    );
+    assert_eq!(
+        activate_pool_into::<2>(
+            market,
+            MARKET_ADDRESS,
+            manifest,
+            funding,
+            funding_state,
+            funding_authority,
+            funding_custody,
+            attachment,
+            config_view,
+            profile,
+            &mut pool_bytes,
+            POOL_ADDRESS,
+            LP_ADDRESS,
+            [94; 32],
+            rent(100),
+            rent(100),
+            RentCreditTerms::new(POOL_ADDRESS, 100).expect("Pool Position rent"),
+            request,
+            50,
+        ),
+        Err(ActivationError::AuthorityMismatch)
+    );
+
+    let dealer_kind = ContentId::new(DEALER_CAPABILITY_KIND_ID_V1).expect("Dealer kind");
+    let dealer_release = ContentId::new(DEALER_CAPABILITY_RELEASE_ID_V1).expect("Dealer release");
+    for (kind, release) in [(id(6), dealer_release), (dealer_kind, id(21))] {
+        let hostile_entry = CapabilityEntryV1::new(
+            kind,
+            release,
+            id(7),
+            id(23),
+            id(24),
+            id(25),
+            ActivationPolicy::RequiredAtFounding,
+            0,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            quote,
+        )
+        .expect("hostile entry");
+        let mut hostile_storage = [0u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+        let hostile_manifest =
+            CapabilityManifestV1::encode_into(&[hostile_entry], &mut hostile_storage)
+                .expect("hostile manifest");
+        let hostile_funding = FundingStateV1::new(id(5), hostile_manifest, 0, funding_custody)
+            .expect("hostile funding");
+        let mut hostile_pool = vec![0; profile.pool_len().expect("Pool width")];
+        assert_eq!(
+            activate_pool_into::<2>(
+                market,
+                MARKET_ADDRESS,
+                hostile_manifest,
+                hostile_funding,
+                funding_state,
+                funding_authority,
+                funding_custody,
+                attachment,
+                config_view,
+                profile,
+                &mut hostile_pool,
+                POOL_ADDRESS,
+                LP_ADDRESS,
+                OWNER,
+                rent(100),
+                rent(100),
+                RentCreditTerms::new(POOL_ADDRESS, 100).expect("Pool Position rent"),
+                request,
+                50,
+            ),
+            Err(ActivationError::AuthorityMismatch)
+        );
+    }
+}
