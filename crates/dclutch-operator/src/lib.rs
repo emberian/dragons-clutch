@@ -14,6 +14,7 @@ use dclutch_capability_contract::{
 use dclutch_collateral_contract::{COMPACT_TERMINAL_MARKET_BYTES, CompactTerminalMarketV1};
 use dclutch_core_contract::Phase;
 use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome_count};
+use dclutch_product_contract::result_domain::FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1;
 use dclutch_pyth_contract::{
     funding::{
         FundingStateV1, required_resolution_minimum_balance, validate_required_resolution_funding,
@@ -22,15 +23,18 @@ use dclutch_pyth_contract::{
         RESOLVE_FAILURE_BYTES, RESOLVE_HEADER_BYTES, ResolveCategoricalFailureV1,
         ResolveCategoricalPythV1,
     },
-    resolution_material::CategoricalPythResolutionMaterialV1,
 };
 use dclutch_pyth_svm::{PRODUCTION_RELEASES, PostUpdateParamsView, PythReleaseV1};
 use dclutch_rent_contract::{
     CREATE_RENT_CREDIT_BYTES_V1, CreateRentCreditV1, RENT_CREDIT_BYTES_V1,
     RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1,
 };
+use dclutch_source_contract::{
+    PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
+    SourceAccessProfile, SourceMaterialViewV1,
+};
 use solana_program::{
-    hash::hash,
+    hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
@@ -101,7 +105,7 @@ pub struct ResolutionState {
     pub market: ObservedAccount,
     /// Raw canonical typed capability-funding state.
     pub fund: ObservedAccount,
-    /// Immutable Pyth policy plus feed-semantics material.
+    /// Canonical provider-neutral SourceMaterial authority.
     pub resolution_material: ObservedAccount,
     /// Finalization proof for the immutable material record.
     pub resolution_material_finalization: foundation::FinalizedRecordProof,
@@ -199,9 +203,11 @@ pub enum Error {
     MarketNotOpen,
     /// No catalog release selected the committed material release.
     ReleaseUnavailable,
-    /// Observation was outside the inclusive price window.
+    /// SourceMaterial selected a path this direct Pyth frame cannot execute.
+    SourceUnavailable,
+    /// Snapshot time cannot admit a provider publication in the committed window.
     PriceWindowClosed,
-    /// Failure was attempted before the price window elapsed.
+    /// Failure was attempted before the committed source window elapsed.
     FailureTooEarly,
     /// Release receiver configuration was not its canonical PDA.
     ConfigPdaMismatch,
@@ -253,7 +259,12 @@ pub fn build_price_resolution(
     {
         return Err(Error::PriceWindowClosed);
     }
-    let release = select_release(facts.release_id, observation.unix_timestamp)?;
+    let release = select_release(
+        facts.provider_deployment_release_id,
+        facts.decoding_rules_id,
+        facts.transport_profile_id,
+        observation.unix_timestamp,
+    )?;
     let post = PostUpdateParamsView::parse(&plumbing.post_update_body)
         .map_err(|_| Error::InvalidPostUpdateBody)?;
     let receiver = Pubkey::new_from_array(release.receiver_program());
@@ -316,7 +327,7 @@ pub fn build_failure_resolution(
 ) -> Result<ResolutionReport, Error> {
     let observation = state_observation(state)?;
     let facts = decode_state(program_id, state)?;
-    if observation.unix_timestamp <= facts.price_window_end {
+    if observation.unix_timestamp <= facts.failure_window_end {
         return Err(Error::FailureTooEarly);
     }
     let mut data = vec![0; RESOLVE_FAILURE_BYTES];
@@ -458,13 +469,29 @@ pub fn build_compact_terminal_market(
 struct Facts {
     generation: u64,
     child_count: u64,
-    policy_id: [u8; 32],
+    outcome_count: u8,
+    product_instance_id: [u8; 32],
+    resolution_material_id: [u8; 32],
     manifest_id: [u8; 32],
     rent_refund: [u8; 32],
-    release_id: [u8; 32],
+    provider_deployment_release_id: [u8; 32],
+    decoding_rules_id: [u8; 32],
+    transport_profile_id: [u8; 32],
     price_window_start: i64,
     price_window_end: i64,
+    failure_window_end: i64,
     funding: FundingReport,
+}
+
+#[derive(Clone, Copy)]
+struct SourceFacts {
+    provider_adapter_release_id: [u8; 32],
+    provider_deployment_release_id: [u8; 32],
+    decoding_rules_id: [u8; 32],
+    transport_profile_id: [u8; 32],
+    price_window_start: i64,
+    price_window_end: i64,
+    failure_window_end: i64,
 }
 
 fn encode_price(generation: u64, child_count: u64, body: &[u8]) -> Result<Vec<u8>, Error> {
@@ -525,6 +552,16 @@ fn decode_state(program_id: Pubkey, state: &ResolutionState) -> Result<Facts, Er
         return Err(Error::InvalidOwner);
     }
     let rent = foundation::decode_rent(&state.rent_sysvar).map_err(|_| Error::InvalidOwner)?;
+    if state.resolution_material_finalization.schema_release_id
+        != SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1
+    {
+        return Err(Error::InvalidMaterial);
+    }
+    if state.capability_manifest_finalization.schema_release_id
+        != hash(b"dclutch/schema/capability-manifest-profile-1-v1").to_bytes()
+    {
+        return Err(Error::InvalidManifest);
+    }
     foundation::authenticate_finalized_record(
         program_id,
         &rent,
@@ -540,15 +577,7 @@ fn decode_state(program_id: Pubkey, state: &ResolutionState) -> Result<Facts, Er
     )
     .map_err(|_| Error::InvalidManifest)?;
     let mut facts = market_facts(program_id, state.market.key, &state.market.data)?;
-    let material = CategoricalPythResolutionMaterialV1::decode(&state.resolution_material.data)
-        .map_err(|_| Error::InvalidMaterial)?;
-    if material.to_bytes().as_slice() != state.resolution_material.data.as_slice()
-        || hash(&material.policy().to_bytes()).to_bytes() != facts.policy_id
-        || hash(&material.feed_profile().to_bytes()).to_bytes()
-            != *material.policy().feed_profile_id()
-    {
-        return Err(Error::ContentIdentityMismatch);
-    }
+    let source = source_material_facts(&state.resolution_material.data, facts)?;
     let manifest = CapabilityManifestV1::decode(&state.capability_manifest.data)
         .map_err(|_| Error::InvalidManifest)?;
     if manifest.as_bytes() != state.capability_manifest.data.as_slice()
@@ -575,12 +604,12 @@ fn decode_state(program_id: Pubkey, state: &ResolutionState) -> Result<Facts, Er
     if state.fund.key != expected_fund {
         return Err(Error::FundPdaMismatch);
     }
-    let policy_id =
-        CapabilityContentId::new(facts.policy_id).map_err(|_| Error::ContentIdentityMismatch)?;
+    let material_id = CapabilityContentId::new(facts.resolution_material_id)
+        .map_err(|_| Error::ContentIdentityMismatch)?;
     let selected = manifest
-        .required_founding_entry_for_config(policy_id)
+        .required_founding_entry_for_config(material_id)
         .map_err(|_| Error::FundingSelectionMismatch)?;
-    if selected.entry().release_id().to_bytes() != *material.policy().release_id() {
+    if selected.entry().release_id().to_bytes() != source.provider_adapter_release_id {
         return Err(Error::ContentIdentityMismatch);
     }
     let custody =
@@ -607,16 +636,12 @@ fn decode_state(program_id: Pubkey, state: &ResolutionState) -> Result<Facts, Er
         &state.rent_credit,
         Pubkey::new_from_array(facts.rent_refund),
     )?;
-    let policy = material
-        .policy()
-        .to_kernel_policy()
-        .map_err(|_| Error::InvalidMaterial)?;
-    let (price_window_start, price_window_end) = policy
-        .resolution_window()
-        .map_err(|_| Error::InvalidMaterial)?;
-    facts.release_id = *material.policy().release_id();
-    facts.price_window_start = price_window_start;
-    facts.price_window_end = price_window_end;
+    facts.provider_deployment_release_id = source.provider_deployment_release_id;
+    facts.decoding_rules_id = source.decoding_rules_id;
+    facts.transport_profile_id = source.transport_profile_id;
+    facts.price_window_start = source.price_window_start;
+    facts.price_window_end = source.price_window_end;
+    facts.failure_window_end = source.failure_window_end;
     facts.funding = FundingReport {
         fund_rent_refund: state.fund_rent_minimum,
         provider_fee_reimbursement: funding.remaining().provider().amount(),
@@ -624,6 +649,79 @@ fn decode_state(program_id: Pubkey, state: &ResolutionState) -> Result<Facts, Er
         unclassified_credit_excess: sponsor_refund_excess,
     };
     Ok(facts)
+}
+
+fn source_material_facts(bytes: &[u8], market: Facts) -> Result<SourceFacts, Error> {
+    let material = SourceMaterialViewV1::decode(bytes).map_err(|_| Error::InvalidMaterial)?;
+    let policy = material.policy().map_err(|_| Error::InvalidMaterial)?;
+    let (capacity_id, capacity) = material
+        .capacity_profile()
+        .map_err(|_| Error::InvalidMaterial)?;
+    let (source_id, source) = material
+        .primary_source()
+        .map_err(|_| Error::InvalidMaterial)?;
+    let (window_id, window) = material.window_spec().map_err(|_| Error::InvalidMaterial)?;
+    let statistic = material.statistic().map_err(|_| Error::InvalidMaterial)?;
+    let (provider_release_id, provider) = material
+        .primary_provider_release()
+        .map_err(|_| Error::InvalidMaterial)?;
+    let adapter = material
+        .primary_adapter_config()
+        .map_err(|_| Error::InvalidMaterial)?;
+    let product_instance_id = material
+        .product_instance_id()
+        .map_err(|_| Error::InvalidMaterial)?;
+    let result_domain = material
+        .result_domain()
+        .map_err(|_| Error::InvalidMaterial)?;
+    let result_domain_bytes = result_domain.to_bytes();
+    let result_domain_id = hashv(&[
+        FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
+        &[0],
+        result_domain_bytes.as_slice(),
+    ])
+    .to_bytes();
+    if material.as_bytes() != bytes
+        || hash(material.as_bytes()).to_bytes() != market.resolution_material_id
+        || product_instance_id.to_bytes() != market.product_instance_id
+        || policy.product_instance_id().to_bytes() != market.product_instance_id
+        || policy.result_domain_id().to_bytes() != result_domain_id
+        || result_domain.outcome_count() != market.outcome_count
+        || hash(&capacity.to_bytes()).to_bytes() != capacity_id.to_bytes()
+        || hash(&source.to_bytes()).to_bytes() != source_id.to_bytes()
+        || hash(&window.to_bytes()).to_bytes() != window_id.to_bytes()
+        || hash(&statistic.to_bytes()).to_bytes() != policy.statistic_spec_id().to_bytes()
+        || hash(&provider.to_bytes()).to_bytes() != provider_release_id.to_bytes()
+        || hash(&adapter.to_bytes()).to_bytes() != source.adapter_config_id().to_bytes()
+    {
+        return Err(Error::ContentIdentityMismatch);
+    }
+    if source.access_profile() != SourceAccessProfile::PythTerminalOneTransaction
+        || provider.adapter_release_id().to_bytes() != PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1
+        || material
+            .recovery_policy()
+            .map_err(|_| Error::InvalidMaterial)?
+            .is_some()
+    {
+        return Err(Error::SourceUnavailable);
+    }
+    let price_window_start = window
+        .start_unix_seconds()
+        .checked_sub(i64::from(window.max_future_skew_seconds()))
+        .ok_or(Error::InvalidMaterial)?;
+    let price_window_end = window
+        .end_unix_seconds()
+        .checked_add(i64::from(window.max_age_seconds()))
+        .ok_or(Error::InvalidMaterial)?;
+    Ok(SourceFacts {
+        provider_adapter_release_id: provider.adapter_release_id().to_bytes(),
+        provider_deployment_release_id: provider.provider_deployment_release_id().to_bytes(),
+        decoding_rules_id: provider.decoding_rules_id().to_bytes(),
+        transport_profile_id: provider.transport_profile_id().to_bytes(),
+        price_window_start,
+        price_window_end,
+        failure_window_end: window.end_unix_seconds(),
+    })
 }
 
 fn require_distinct_keys(keys: &[Pubkey]) -> Result<(), Error> {
@@ -692,12 +790,17 @@ fn typed_market_facts<const N: usize>(
     Ok(Facts {
         generation: root.identity().generation(),
         child_count: root.outstanding_children(),
-        policy_id: root.identity().resolution_policy_id().to_bytes(),
+        outcome_count: u8::try_from(N).map_err(|_| Error::InvalidMarket)?,
+        product_instance_id: root.identity().product_instance_id().to_bytes(),
+        resolution_material_id: root.identity().resolution_policy_id().to_bytes(),
         manifest_id: root.identity().capability_manifest_id().to_bytes(),
         rent_refund: root.rent_refund(),
-        release_id: [0; 32],
+        provider_deployment_release_id: [0; 32],
+        decoding_rules_id: [0; 32],
+        transport_profile_id: [0; 32],
         price_window_start: 0,
         price_window_end: 0,
+        failure_window_end: 0,
         funding: FundingReport {
             fund_rent_refund: 0,
             provider_fee_reimbursement: 0,
@@ -786,12 +889,17 @@ fn typed_terminal_market_facts<const N: usize>(
     Ok(Facts {
         generation: root.identity().generation(),
         child_count: 0,
-        policy_id: [0; 32],
+        outcome_count: u8::try_from(N).map_err(|_| Error::InvalidMarket)?,
+        product_instance_id: [0; 32],
+        resolution_material_id: [0; 32],
         manifest_id: [0; 32],
         rent_refund: root.rent_refund(),
-        release_id: [0; 32],
+        provider_deployment_release_id: [0; 32],
+        decoding_rules_id: [0; 32],
+        transport_profile_id: [0; 32],
         price_window_start: 0,
         price_window_end: 0,
+        failure_window_end: 0,
         funding: FundingReport {
             fund_rent_refund: 0,
             provider_fee_reimbursement: 0,
@@ -801,10 +909,17 @@ fn typed_terminal_market_facts<const N: usize>(
     })
 }
 
-fn select_release(release_id: [u8; 32], observed_time: i64) -> Result<PythReleaseV1, Error> {
+fn select_release(
+    release_id: [u8; 32],
+    decoding_rules_id: [u8; 32],
+    transport_profile_id: [u8; 32],
+    observed_time: i64,
+) -> Result<PythReleaseV1, Error> {
     for release in &PRODUCTION_RELEASES {
         if hash(&release.to_bytes()).to_bytes() == release_id
             && observed_time >= release.activation_time()
+            && release.price_update_codec_id() == decoding_rules_id
+            && release.adapter_id() == transport_profile_id
         {
             return Ok(*release);
         }
@@ -816,6 +931,8 @@ fn select_release(release_id: [u8; 32], observed_time: i64) -> Result<PythReleas
         let release = *release.release();
         if hash(&release.to_bytes()).to_bytes() == release_id
             && observed_time >= release.activation_time()
+            && release.price_update_codec_id() == decoding_rules_id
+            && release.adapter_id() == transport_profile_id
         {
             return Ok(release);
         }
@@ -831,19 +948,24 @@ mod tests {
         FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
     };
     use dclutch_core_contract::{ContentId, MarketIdentity, MarketRoot};
-    use dclutch_kernel::resolution::categorical_pyth_v1::{
-        CategoricalPythV1PolicyInput, MAX_PRICE_CELLS,
-    };
     use dclutch_market_contract::market::CategoricalSettlementSummaryV1;
+    use dclutch_product_contract::{
+        ContentId as ProductContentId,
+        capacity::CapacityProfileId,
+        product::{InstanceV1, InstanceV1Input},
+        result_domain::FiniteResultDomainV1,
+    };
     use dclutch_pyth_contract::{
-        feed_profile::PythFeedProfileV1,
         funding::{FUNDING_BYTES, construct_required_resolution_funding},
         instruction::ResolveCategoricalFailureV1,
-        policy::CategoricalPythPolicyRecordV1,
-        resolution_material::CategoricalPythResolutionMaterialV1,
     };
     use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
     use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1};
+    use dclutch_source_contract::{
+        CapacityEnvelope as SourceCapacityEnvelope, MAX_RECOVERY_ATTEMPTS, ProviderReleaseV1,
+        PythAdapterConfigV1, ResolutionPolicyV1, RoundingBoundary, SourceCapacityProfileV1,
+        SourceMaterialV1, SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
+    };
     use solana_program::{account_info::AccountInfo, rent::Rent, sysvar::SysvarSerialize};
 
     fn observation() -> Observation {
@@ -896,10 +1018,9 @@ mod tests {
 
     fn finalized_record(
         program: Pubkey,
-        schema_byte: u8,
+        schema: [u8; 32],
         data: Vec<u8>,
     ) -> (ObservedAccount, foundation::FinalizedRecordProof) {
-        let schema = [schema_byte; 32];
         let digest = hash(&data).to_bytes();
         let (raw, _) = Pubkey::find_program_address(
             &[RAW_RECORD_PDA_SEED_V1, schema.as_slice(), digest.as_slice()],
@@ -924,6 +1045,151 @@ mod tests {
 
     fn id(byte: u8) -> ContentId {
         ContentId::new([byte; 32]).expect("nonzero ID")
+    }
+
+    fn product_id(bytes: [u8; 32]) -> ProductContentId {
+        ProductContentId::new(bytes).expect("nonzero Product ID")
+    }
+
+    fn source_id(bytes: [u8; 32]) -> dclutch_source_contract::ContentId {
+        dclutch_source_contract::ContentId::new(bytes).expect("nonzero Source ID")
+    }
+
+    fn product_material() -> (InstanceV1, [u8; 32], FiniteResultDomainV1) {
+        let domain = FiniteResultDomainV1::new(product_id([1; 32]), product_id([2; 32]), 1, &[])
+            .expect("binary result domain");
+        let domain_bytes = domain.to_bytes();
+        let domain_id = product_id(
+            hashv(&[
+                FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
+                &[0],
+                domain_bytes.as_slice(),
+            ])
+            .to_bytes(),
+        );
+        let instance = InstanceV1::new(InstanceV1Input {
+            terms_id: product_id([3; 32]),
+            occurrence_id: product_id([4; 32]),
+            claim_basis_id: product_id([5; 32]),
+            result_domain_id: domain_id,
+            capacity_profile_id: CapacityProfileId::new(product_id([6; 32])),
+            partition_cell_count: 2,
+        })
+        .expect("Product instance");
+        (instance, hash(&instance.to_bytes()).to_bytes(), domain)
+    }
+
+    fn source_material(
+        instance: InstanceV1,
+        instance_id: [u8; 32],
+        domain: FiniteResultDomainV1,
+    ) -> SourceMaterialV1 {
+        source_material_with_access(
+            instance,
+            instance_id,
+            domain,
+            SourceAccessProfile::PythTerminalOneTransaction,
+        )
+    }
+
+    fn source_material_with_access(
+        instance: InstanceV1,
+        instance_id: [u8; 32],
+        domain: FiniteResultDomainV1,
+        access: SourceAccessProfile,
+    ) -> SourceMaterialV1 {
+        let capacity = SourceCapacityProfileV1::new(
+            SourceCapacityEnvelope::Measured,
+            1,
+            0,
+            source_id([37; 32]),
+            source_id([38; 32]),
+            512,
+            1,
+        )
+        .expect("source capacity");
+        let capacity_id = source_id(hash(&capacity.to_bytes()).to_bytes());
+        let provider = ProviderReleaseV1::new(
+            source_id([31; 32]),
+            source_id(PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1),
+            source_id([9; 32]),
+            source_id([33; 32]),
+            source_id([34; 32]),
+        );
+        let provider_id = source_id(hash(&provider.to_bytes()).to_bytes());
+        let adapter = PythAdapterConfigV1::new([35; 32], -8, 10_000).expect("Pyth config");
+        let adapter_id = source_id(hash(&adapter.to_bytes()).to_bytes());
+        let source = SourceSpecV1::new(
+            source_id(domain.coordinate_domain_id().to_bytes()),
+            source_id(domain.result_unit_id().to_bytes()),
+            provider_id,
+            access,
+            adapter_id,
+            capacity_id,
+        );
+        let primary_source_id = source_id(hash(&source.to_bytes()).to_bytes());
+        let window = WindowSpecV1::new(
+            primary_source_id,
+            WindowKind::Terminal,
+            10,
+            10,
+            10,
+            2,
+            source_id([36; 32]),
+        )
+        .expect("terminal window");
+        let window_id = source_id(hash(&window.to_bytes()).to_bytes());
+        let statistic = StatisticSpecV1::new(
+            source_id(domain.result_unit_id().to_bytes()),
+            source_id(domain.result_unit_id().to_bytes()),
+            StatisticKind::TerminalSample,
+            RoundingBoundary::ExactRational,
+            1,
+            0,
+            capacity_id,
+            source_id([39; 32]),
+            capacity,
+        )
+        .expect("terminal statistic");
+        let statistic_id = source_id(hash(&statistic.to_bytes()).to_bytes());
+        let domain_bytes = domain.to_bytes();
+        let domain_id = source_id(
+            hashv(&[
+                FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
+                &[0],
+                domain_bytes.as_slice(),
+            ])
+            .to_bytes(),
+        );
+        let policy = ResolutionPolicyV1::new(
+            capacity_id,
+            source_id(instance_id),
+            primary_source_id,
+            window_id,
+            statistic_id,
+            domain_id,
+            None,
+        );
+        SourceMaterialV1::new(
+            policy,
+            capacity_id,
+            capacity,
+            primary_source_id,
+            source,
+            provider_id,
+            provider,
+            adapter,
+            window_id,
+            window,
+            statistic_id,
+            statistic,
+            source_id(instance_id),
+            instance,
+            domain,
+            None,
+            [None; MAX_RECOVERY_ATTEMPTS],
+        )
+        .expect("canonical Source material")
     }
 
     fn rent_account() -> ObservedAccount {
@@ -963,32 +1229,14 @@ mod tests {
     fn fixture() -> (Pubkey, ResolutionState) {
         let program = Pubkey::new_from_array([40; 32]);
         let sponsor = Pubkey::new_from_array([41; 32]);
-        let feed = PythFeedProfileV1::new([1; 32], [2; 32], [3; 32]).expect("feed");
-        let policy = CategoricalPythPolicyRecordV1::new(CategoricalPythV1PolicyInput {
-            pyth_release_id: [9; 32],
-            feed_profile_id: hash(&feed.to_bytes()).to_bytes(),
-            target_time: 10,
-            grace: 0,
-            window: 1,
-            max_crossing_lag: 1,
-            max_age: 1,
-            max_future_skew: 1,
-            confidence_multiplier: 1,
-            max_confidence_bps: 1,
-            max_normalized_confidence_atoms: 1,
-            normalized_decimals: 0,
-            price_cell_count: 1,
-            upper_edges: [0; MAX_PRICE_CELLS],
-            failure_outcome_index: 1,
-        })
-        .expect("policy");
-        let material = CategoricalPythResolutionMaterialV1::new(policy, feed).expect("material");
-        let policy_id = hash(&policy.to_bytes()).to_bytes();
+        let (instance, instance_id, domain) = product_material();
+        let material = source_material(instance, instance_id, domain);
+        let material_id = hash(&material.to_bytes()).to_bytes();
         let quote = native_resolution_quote(100, 7, 11);
         let entry = CapabilityEntryV1::new(
             CapabilityContentId::new([11; 32]).expect("kind"),
-            CapabilityContentId::new([9; 32]).expect("release"),
-            CapabilityContentId::new(policy_id).expect("policy ID"),
+            CapabilityContentId::new(PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1).expect("release"),
+            CapabilityContentId::new(material_id).expect("SourceMaterial ID"),
             CapabilityContentId::new([12; 32]).expect("capacity"),
             CapabilityContentId::new([13; 32]).expect("schema"),
             CapabilityContentId::new([14; 32]).expect("derivation"),
@@ -1005,9 +1253,9 @@ mod tests {
         let manifest_id = hash(manifest.as_bytes()).to_bytes();
         let identity = MarketIdentity::new(
             id(21),
-            id(22),
+            ContentId::new(instance_id).expect("Product instance ID"),
             id(23),
-            ContentId::new(policy_id).expect("policy"),
+            ContentId::new(material_id).expect("SourceMaterial"),
             ContentId::new(manifest_id).expect("manifest"),
             0,
         );
@@ -1025,7 +1273,7 @@ mod tests {
         );
         let selected = manifest
             .required_founding_entry_for_config(
-                CapabilityContentId::new(policy_id).expect("policy"),
+                CapabilityContentId::new(material_id).expect("SourceMaterial"),
             )
             .expect("selected");
         let funding = construct_required_resolution_funding(
@@ -1053,10 +1301,16 @@ mod tests {
         let authority = RefundAuthority::new(sponsor.to_bytes()).expect("authority");
         let (rent_credit_key, rent_credit_bump) =
             Pubkey::find_program_address(&[RENT_CREDIT_PDA_DOMAIN_V1, sponsor.as_ref()], &program);
-        let (resolution_material, resolution_material_finalization) =
-            finalized_record(program, 1, material.to_bytes().to_vec());
-        let (capability_manifest, capability_manifest_finalization) =
-            finalized_record(program, 2, manifest_data);
+        let (resolution_material, resolution_material_finalization) = finalized_record(
+            program,
+            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
+            material.to_bytes().to_vec(),
+        );
+        let (capability_manifest, capability_manifest_finalization) = finalized_record(
+            program,
+            hash(b"dclutch/schema/capability-manifest-profile-1-v1").to_bytes(),
+            manifest_data,
+        );
         (
             program,
             ResolutionState {
@@ -1122,6 +1376,87 @@ mod tests {
         assert_eq!(
             report.instruction.accounts.get(4).map(|meta| meta.pubkey),
             Some(state.capability_manifest.key)
+        );
+    }
+
+    #[test]
+    fn source_material_is_the_root_and_product_domain_identity_is_domain_separated() {
+        let (program, state) = fixture();
+        let mut facts =
+            market_facts(program, state.market.key, &state.market.data).expect("Market facts");
+        let decoded = source_material_facts(&state.resolution_material.data, facts)
+            .expect("canonical SourceMaterial");
+        assert_eq!(
+            decoded.provider_adapter_release_id,
+            PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1
+        );
+
+        let mut substituted_domain_identity = state.resolution_material.data.clone();
+        substituted_domain_identity
+            .get_mut(192..224)
+            .expect("policy result-domain ID")
+            .fill(88);
+        assert!(SourceMaterialViewV1::decode(&substituted_domain_identity).is_ok());
+        facts.resolution_material_id = hash(&substituted_domain_identity).to_bytes();
+        assert_eq!(
+            source_material_facts(&substituted_domain_identity, facts).err(),
+            Some(Error::ContentIdentityMismatch)
+        );
+
+        let mut substituted_product = facts;
+        substituted_product.product_instance_id = [89; 32];
+        substituted_product.resolution_material_id =
+            hash(&state.resolution_material.data).to_bytes();
+        assert_eq!(
+            source_material_facts(&state.resolution_material.data, substituted_product).err(),
+            Some(Error::ContentIdentityMismatch)
+        );
+    }
+
+    #[test]
+    fn unsupported_source_paths_and_wrong_record_schema_are_explicit() {
+        let (program, state) = fixture();
+        let mut wrong_schema = state.clone();
+        wrong_schema
+            .resolution_material_finalization
+            .schema_release_id = [90; 32];
+        assert_eq!(
+            build_failure_resolution(
+                program,
+                &wrong_schema,
+                FailurePlumbing {
+                    bounty_recipient: Pubkey::new_unique()
+                }
+            ),
+            Err(Error::InvalidMaterial)
+        );
+
+        let (instance, instance_id, domain) = product_material();
+        let shared = source_material_with_access(
+            instance,
+            instance_id,
+            domain,
+            SourceAccessProfile::SharedObservationChild,
+        );
+        let mut facts =
+            market_facts(program, state.market.key, &state.market.data).expect("Market facts");
+        facts.resolution_material_id = hash(&shared.to_bytes()).to_bytes();
+        assert_eq!(
+            source_material_facts(&shared.to_bytes(), facts).err(),
+            Some(Error::SourceUnavailable)
+        );
+        assert_eq!(
+            build_price_resolution(
+                program,
+                &state,
+                &PricePlumbing {
+                    resolver: Pubkey::new_unique(),
+                    update: Pubkey::new_unique(),
+                    encoded_vaa: Pubkey::new_unique(),
+                    post_update_body: Vec::new(),
+                }
+            ),
+            Err(Error::ReleaseUnavailable)
         );
     }
 
