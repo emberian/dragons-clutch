@@ -3,14 +3,22 @@
 //! Existing LP positions are selected by their observed physical account key.
 //! Only fresh activation/creation routes carry an irreducible LP seed choice.
 
+use dclutch_capability_contract::{
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingAuthorityDerivationV1,
+    CapabilityFundingDerivationV1, CapabilityFundingVaultDerivationV1, CapabilityManifestV1,
+    FUNDING_STATE_BYTES, FundingCustodyObservationV1, FundingStateV1, RealmCollateralCustodyV1,
+    RealmCollateralVaultObservationV1,
+};
 use dclutch_core_contract::{ContentId, Phase};
 use dclutch_dealer_contract::{
-    LP_POSITION_BYTES, LiquidityAmounts, LpPosition, TradeRequest, TradeSide,
-    activation::retire_pool_in_place,
+    DEALER_CAPABILITY_KIND_ID_V1, DEALER_CAPABILITY_RELEASE_ID_V1, LP_POSITION_BYTES,
+    LiquidityAmounts, LiquidityAttachment, LpPosition, RentCreditTerms, TradeRequest, TradeSide,
+    activation::{activate_pool_into, retire_pool_in_place},
     frame::{
         ConfigPdaSeedsV1, DEALER_CONFIG_SCHEMA_RELEASE_ID_V1, DealerAccountMetaV1,
         DealerCollateralCompartmentV1, DealerCollateralVaultPdaSeedsV1, DealerFrameV1,
-        LpPositionPdaSeedsV1, PoolPdaSeedsV1, dealer_account_privileges, validate_market_phase,
+        LpPositionPdaSeedsV1, PoolPdaSeedsV1, PoolPositionPdaSeedsV1, dealer_account_privileges,
+        validate_market_phase,
     },
     instruction::{
         AddLiquidityV1, CloseLpPositionV1, CreateLpPositionV1, DealerActionV1, DealerInstructionV1,
@@ -27,7 +35,7 @@ use dclutch_realm_contract::{
     RealmV1,
 };
 use dclutch_record_contract::STAGING_CURSOR_PDA_SEED_V1;
-use dclutch_token_svm::{COption, PRODUCTION_ADAPTER_RELEASES, TokenAccount};
+use dclutch_token_svm::{ACCOUNT_BYTES, COption, PRODUCTION_ADAPTER_RELEASES, TokenAccount};
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
@@ -35,7 +43,10 @@ use solana_program::{
 };
 use solana_sdk_ids::{bpf_loader, bpf_loader_upgradeable, system_program};
 
-use crate::{Observation, ObservedAccount, authenticate_rent_credit, foundation};
+use crate::{
+    Observation, ObservedAccount, authenticate_rent_credit,
+    foundation::{self, FinalizedRecordProof},
+};
 
 use super::{
     VerticalError, authenticate_system_actor, authenticate_system_program, decode_owned,
@@ -327,7 +338,62 @@ pub struct DealerRetirePoolReport {
     pub pool_position_rent_credit_lamports: u64,
 }
 
-/// Fresh activation choice retained for the public refusal boundary.
+/// Finalized accounts for atomic Dealer capability activation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DealerActivateState {
+    /// Permissionless transaction payer reimbursed from capability funding.
+    pub activator: ObservedAccount,
+    /// Immutable bootstrap liquidity owner selected by config.
+    pub owner: ObservedAccount,
+    /// Immutable Realm selected by Market.
+    pub realm: ObservedAccount,
+    /// Founding or Open Market.
+    pub market: ObservedAccount,
+    /// Finalized capability manifest raw record selected by Market identity.
+    pub capability_manifest: ObservedAccount,
+    /// Exact finalization proof for the manifest record.
+    pub capability_manifest_finalization: FinalizedRecordProof,
+    /// Pending segregated capability funding state.
+    pub funding_state: ObservedAccount,
+    /// Vacant canonical capability funding authority PDA.
+    pub funding_authority: ObservedAccount,
+    /// Realm-collateral funding Vault.
+    pub funding_collateral_vault: ObservedAccount,
+    /// Finalized Dealer config raw record.
+    pub config: ObservedAccount,
+    /// Drained staging cursor proving Dealer config finalization.
+    pub config_staging: ObservedAccount,
+    /// Vacant canonical Pool PDA.
+    pub pool: ObservedAccount,
+    /// Vacant canonical initial LP PDA.
+    pub lp_position: ObservedAccount,
+    /// Config owner's canonical native Position supplying a complete set.
+    pub owner_position: ObservedAccount,
+    /// Vacant canonical Pool native Position PDA.
+    pub pool_position: ObservedAccount,
+    /// Vacant canonical principal Vault PDA.
+    pub principal_vault: ObservedAccount,
+    /// Vacant canonical realized-fee Vault PDA.
+    pub fee_vault: ObservedAccount,
+    /// Vacant canonical service Vault PDA.
+    pub service_vault: ObservedAccount,
+    /// Pool-authority RentCredit for Pool Position rent.
+    pub pool_position_rent_credit: ObservedAccount,
+    /// Owner RentCredit for Pool bundle rent.
+    pub pool_rent_credit: ObservedAccount,
+    /// Owner RentCredit for initial LP rent; may alias `pool_rent_credit`.
+    pub lp_rent_credit: ObservedAccount,
+    /// Realm collateral Mint.
+    pub collateral_mint: ObservedAccount,
+    /// Realm-selected executable token program.
+    pub token_program: ObservedAccount,
+    /// Canonical executable System Program.
+    pub system_program: ObservedAccount,
+    /// Canonical Rent sysvar.
+    pub rent_sysvar: ObservedAccount,
+}
+
+/// Fresh irreducible activation choices.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DealerActivateChoice {
     /// Fresh nonzero LP PDA seed identity.
@@ -338,17 +404,434 @@ pub struct DealerActivateChoice {
     pub initial_shares: u64,
 }
 
-/// Refuse Dealer activation until its manifest-record derivation is public.
-///
-/// The SBF route authenticates a capability-manifest raw-record PDA with a
-/// schema/release identity that is private to the adapter. Accepting an account
-/// or copied constant here would create parallel semantic authority, so the
-/// operator deliberately cannot make activation selectable yet.
+/// Exact activation funding, creation-rent, and value effects.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DealerActivateReport {
+    /// Exact unsigned 24-account SBF instruction.
+    pub instruction: Instruction,
+    /// One finalized observation selecting every account and proof.
+    pub observation: Observation,
+    /// Required transaction signers in role order.
+    pub required_signers: Vec<Pubkey>,
+    /// Fresh canonical Pool PDA.
+    pub pool: Pubkey,
+    /// Fresh canonical initial LP PDA.
+    pub lp_position: Pubkey,
+    /// Exact capability-funding Rent debit.
+    pub rent_debit_lamports: u64,
+    /// Exact Realm collateral moved into principal custody.
+    pub principal_collateral: u64,
+    /// Exact segregated service funding moved into service custody.
+    pub service_collateral: u64,
+    /// Complete-set claims moved from owner Position to Pool Position.
+    pub claim_reserves: Vec<u64>,
+    /// Market direct-child count before registration.
+    pub market_child_count_before: u64,
+    /// Market direct-child count after registration.
+    pub market_child_count_after: u64,
+}
+
+/// Construct exact Dealer activation from finalized shared capability authority.
 pub fn build_dealer_activate_pool_v1(
-    _program_id: Pubkey,
-    _choice: DealerActivateChoice,
-) -> Result<Instruction, VerticalError> {
-    Err(VerticalError::AbiUnavailable)
+    program_id: Pubkey,
+    state: &DealerActivateState,
+    choice: DealerActivateChoice,
+) -> Result<DealerActivateReport, VerticalError> {
+    let observation = observation(&[
+        &state.activator,
+        &state.owner,
+        &state.realm,
+        &state.market,
+        &state.capability_manifest,
+        &state.capability_manifest_finalization.staging_cursor,
+        &state.funding_state,
+        &state.funding_authority,
+        &state.funding_collateral_vault,
+        &state.config,
+        &state.config_staging,
+        &state.pool,
+        &state.lp_position,
+        &state.owner_position,
+        &state.pool_position,
+        &state.principal_vault,
+        &state.fee_vault,
+        &state.service_vault,
+        &state.pool_position_rent_credit,
+        &state.pool_rent_credit,
+        &state.lp_rent_credit,
+        &state.collateral_mint,
+        &state.token_program,
+        &state.system_program,
+        &state.rent_sysvar,
+    ])?;
+    authenticate_system_actor(&state.activator)?;
+    authenticate_system_actor(&state.owner)?;
+    authenticate_system_program(&state.system_program)?;
+    let rent =
+        foundation::decode_rent(&state.rent_sysvar).map_err(|_| VerticalError::InvalidState)?;
+    let market = market_facts(program_id, &state.market)?;
+    validate_market_phase(DealerActionV1::ActivatePool, market.phase)
+        .map_err(|_| VerticalError::InvalidPhase)?;
+    match market.outcomes {
+        2 => activate_width::<2>(program_id, state, choice, observation, market, &rent),
+        3 => activate_width::<3>(program_id, state, choice, observation, market, &rent),
+        4 => activate_width::<4>(program_id, state, choice, observation, market, &rent),
+        5 => activate_width::<5>(program_id, state, choice, observation, market, &rent),
+        6 => activate_width::<6>(program_id, state, choice, observation, market, &rent),
+        7 => activate_width::<7>(program_id, state, choice, observation, market, &rent),
+        8 => activate_width::<8>(program_id, state, choice, observation, market, &rent),
+        9 => activate_width::<9>(program_id, state, choice, observation, market, &rent),
+        10 => activate_width::<10>(program_id, state, choice, observation, market, &rent),
+        11 => activate_width::<11>(program_id, state, choice, observation, market, &rent),
+        12 => activate_width::<12>(program_id, state, choice, observation, market, &rent),
+        13 => activate_width::<13>(program_id, state, choice, observation, market, &rent),
+        14 => activate_width::<14>(program_id, state, choice, observation, market, &rent),
+        15 => activate_width::<15>(program_id, state, choice, observation, market, &rent),
+        16 => activate_width::<16>(program_id, state, choice, observation, market, &rent),
+        _ => Err(VerticalError::AbiUnavailable),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn activate_width<const N: usize>(
+    program_id: Pubkey,
+    state: &DealerActivateState,
+    choice: DealerActivateChoice,
+    observation: Observation,
+    market: MarketFacts,
+    rent: &solana_program::rent::Rent,
+) -> Result<DealerActivateReport, VerticalError> {
+    if state.capability_manifest_finalization.schema_release_id
+        != CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1
+    {
+        return Err(VerticalError::FinalizationMismatch);
+    }
+    foundation::authenticate_finalized_record(
+        program_id,
+        rent,
+        &state.capability_manifest,
+        &state.capability_manifest_finalization,
+    )
+    .map_err(|_| VerticalError::FinalizationMismatch)?;
+    let manifest_id = ContentId::new(hash(&state.capability_manifest.data).to_bytes())
+        .map_err(|_| VerticalError::ContentMismatch)?;
+    if manifest_id != market.identity.capability_manifest_id() {
+        return Err(VerticalError::ContentMismatch);
+    }
+    let manifest = CapabilityManifestV1::decode(&state.capability_manifest.data)
+        .map_err(|_| VerticalError::InvalidState)?;
+    let (profile, config_id, config) =
+        authenticate_config(program_id, &state.config, &state.config_staging, N)?;
+    let funding = decode_owned(&state.funding_state, program_id, FundingStateV1::decode)?;
+    if funding.to_bytes().as_slice() != state.funding_state.data.as_slice() {
+        return Err(VerticalError::ContentMismatch);
+    }
+    let selected = manifest
+        .entry(funding.entry_index())
+        .map_err(|_| VerticalError::ContentMismatch)?;
+    if selected.kind_id().to_bytes() != DEALER_CAPABILITY_KIND_ID_V1
+        || selected.release_id().to_bytes() != DEALER_CAPABILITY_RELEASE_ID_V1
+        || selected.config_id() != config_id
+    {
+        return Err(VerticalError::ContentMismatch);
+    }
+    let realm = authenticate_realm(
+        program_id,
+        &state.realm,
+        &state.collateral_mint,
+        &state.token_program,
+        market.realm_id,
+    )?;
+    let binding = selected
+        .funding_quote()
+        .realm_collateral()
+        .ok_or(VerticalError::ContentMismatch)?;
+    if binding.realm_id().to_bytes() != market.realm_id
+        || binding.collateral_release_id().to_bytes() != hash(&realm.release.to_bytes()).to_bytes()
+        || binding.token_program() != state.token_program.key.to_bytes()
+        || binding.mint() != state.collateral_mint.key.to_bytes()
+    {
+        return Err(VerticalError::ContentMismatch);
+    }
+    let funding_seeds = CapabilityFundingDerivationV1::new(
+        state.market.key.to_bytes(),
+        market.generation,
+        manifest_id,
+        manifest,
+        funding,
+    )
+    .map_err(|_| VerticalError::PdaMismatch)?;
+    if state.funding_state.key
+        != Pubkey::find_program_address(&funding_seeds.seed_components(), &program_id).0
+    {
+        return Err(VerticalError::PdaMismatch);
+    }
+    let authority_seeds =
+        CapabilityFundingAuthorityDerivationV1::new(state.funding_state.key.to_bytes())
+            .map_err(|_| VerticalError::PdaMismatch)?;
+    if state.funding_authority.key
+        != Pubkey::find_program_address(&authority_seeds.seed_components(), &program_id).0
+    {
+        return Err(VerticalError::PdaMismatch);
+    }
+    require_vacant(&state.funding_authority)?;
+    let vault_seeds =
+        CapabilityFundingVaultDerivationV1::new(state.funding_authority.key.to_bytes(), binding)
+            .map_err(|_| VerticalError::PdaMismatch)?;
+    if state.funding_collateral_vault.key
+        != Pubkey::find_program_address(&vault_seeds.seed_components(), &program_id).0
+        || state.funding_collateral_vault.owner != state.token_program.key
+        || state.funding_collateral_vault.executable
+    {
+        return Err(VerticalError::PdaMismatch);
+    }
+    let funding_token = realm
+        .release
+        .profile()
+        .check_custody_account(
+            state.token_program.key.to_bytes(),
+            &state.funding_collateral_vault.data,
+            state.collateral_mint.key.to_bytes(),
+            state.funding_authority.key.to_bytes(),
+        )
+        .map_err(|_| VerticalError::InvalidState)?;
+    let state_rent = rent.minimum_balance(FUNDING_STATE_BYTES);
+    let token_rent = rent.minimum_balance(ACCOUNT_BYTES);
+    let vault_observation = RealmCollateralVaultObservationV1::new(
+        state.funding_collateral_vault.key.to_bytes(),
+        state.funding_authority.key.to_bytes(),
+        state.token_program.key.to_bytes(),
+        state.collateral_mint.key.to_bytes(),
+        funding_token.amount,
+        state.funding_collateral_vault.lamports,
+        token_rent,
+    )
+    .map_err(|_| VerticalError::InvalidState)?;
+    let collateral_custody = RealmCollateralCustodyV1::new(
+        binding.realm_id(),
+        binding.collateral_release_id(),
+        state.funding_authority.key.to_bytes(),
+        state.funding_collateral_vault.key.to_bytes(),
+        vault_observation,
+    )
+    .map_err(|_| VerticalError::ContentMismatch)?;
+    let custody = FundingCustodyObservationV1::with_realm_collateral(
+        state.funding_state.lamports,
+        state_rent,
+        collateral_custody,
+    )
+    .map_err(|_| VerticalError::InvalidState)?;
+    funding
+        .validate_against(manifest_id, manifest, custody)
+        .map_err(|_| VerticalError::ContentMismatch)?;
+
+    require_vacant(&state.pool)?;
+    require_vacant(&state.lp_position)?;
+    require_vacant(&state.pool_position)?;
+    require_vacant(&state.principal_vault)?;
+    require_vacant(&state.fee_vault)?;
+    require_vacant(&state.service_vault)?;
+    let pool_seeds = PoolPdaSeedsV1::new(state.market.key.to_bytes(), market.generation, config_id)
+        .map_err(|_| VerticalError::PdaMismatch)?;
+    if state.pool.key != Pubkey::find_program_address(&pool_seeds.seed_components(), &program_id).0
+    {
+        return Err(VerticalError::PdaMismatch);
+    }
+    let lp_seeds = LpPositionPdaSeedsV1::new(
+        state.market.key.to_bytes(),
+        market.generation,
+        config_id,
+        choice.initial_lp_id,
+    )
+    .map_err(|_| VerticalError::PdaMismatch)?;
+    if state.lp_position.key
+        != Pubkey::find_program_address(&lp_seeds.seed_components(), &program_id).0
+    {
+        return Err(VerticalError::PdaMismatch);
+    }
+    let position_seeds =
+        PoolPositionPdaSeedsV1::new(state.market.key.to_bytes(), state.pool.key.to_bytes())
+            .map_err(|_| VerticalError::PdaMismatch)?;
+    if state.pool_position.key
+        != Pubkey::find_program_address(&position_seeds.seed_components(), &program_id).0
+    {
+        return Err(VerticalError::PdaMismatch);
+    }
+    for (account, compartment) in [
+        (
+            &state.principal_vault,
+            DealerCollateralCompartmentV1::Principal,
+        ),
+        (
+            &state.fee_vault,
+            DealerCollateralCompartmentV1::RealizedFees,
+        ),
+        (&state.service_vault, DealerCollateralCompartmentV1::Service),
+    ] {
+        let seeds = DealerCollateralVaultPdaSeedsV1::new(state.pool.key.to_bytes(), compartment)
+            .map_err(|_| VerticalError::PdaMismatch)?;
+        if account.key != Pubkey::find_program_address(&seeds.seed_components(), &program_id).0 {
+            return Err(VerticalError::PdaMismatch);
+        }
+    }
+    if config
+        .liquidity_owner()
+        .map_err(|_| VerticalError::InvalidState)?
+        != state.owner.key.to_bytes()
+    {
+        return Err(VerticalError::ContentMismatch);
+    }
+    let owner_position = authenticate_position::<N>(
+        program_id,
+        &state.owner_position,
+        state.market.key,
+        state.owner.key,
+        market.generation,
+    )?;
+    for balance in owner_position.balances() {
+        if *balance < choice.initial_claim_quantity {
+            return Err(VerticalError::InvalidState);
+        }
+    }
+    authenticate_rent_credit(program_id, &state.pool_position_rent_credit, state.pool.key)
+        .map_err(|_| VerticalError::ContentMismatch)?;
+    authenticate_rent_credit(program_id, &state.pool_rent_credit, state.owner.key)
+        .map_err(|_| VerticalError::ContentMismatch)?;
+    authenticate_rent_credit(program_id, &state.lp_rent_credit, state.owner.key)
+        .map_err(|_| VerticalError::ContentMismatch)?;
+
+    let pool_account_rent = rent.minimum_balance(
+        profile
+            .pool_len()
+            .map_err(|_| VerticalError::InvalidState)?,
+    );
+    let lp_rent = rent.minimum_balance(LP_POSITION_BYTES);
+    let position_rent = rent
+        .minimum_balance(PositionV1::<N>::encoded_len().map_err(|_| VerticalError::InvalidState)?);
+    let pool_bundle_rent = pool_account_rent
+        .checked_add(
+            token_rent
+                .checked_mul(3)
+                .ok_or(VerticalError::InvalidState)?,
+        )
+        .ok_or(VerticalError::InvalidState)?;
+    let total_rent = pool_bundle_rent
+        .checked_add(lp_rent)
+        .and_then(|value| value.checked_add(position_rent))
+        .ok_or(VerticalError::InvalidState)?;
+    if state.activator.lamports < total_rent {
+        return Err(VerticalError::InvalidState);
+    }
+    let release_id = ContentId::new(DEALER_CAPABILITY_RELEASE_ID_V1)
+        .map_err(|_| VerticalError::ContentMismatch)?;
+    let attachment = LiquidityAttachment::new(
+        market.identity,
+        release_id,
+        config_id,
+        state.owner.key.to_bytes(),
+    )
+    .map_err(|_| VerticalError::ContentMismatch)?;
+    let request = ActivatePoolV1::new(
+        market.generation,
+        market.child_count,
+        choice.initial_lp_id,
+        choice.initial_claim_quantity,
+        choice.initial_shares,
+    )
+    .map_err(|_| VerticalError::InvalidState)?;
+    let mut pool_out = vec![
+        0;
+        profile
+            .pool_len()
+            .map_err(|_| VerticalError::InvalidState)?
+    ];
+    let plan = activate_pool_into::<N>(
+        market_root::<N>(program_id, &state.market)?,
+        state.market.key.to_bytes(),
+        manifest,
+        funding,
+        state.funding_state.key.to_bytes(),
+        state.funding_authority.key.to_bytes(),
+        custody,
+        attachment,
+        config,
+        profile,
+        &mut pool_out,
+        state.pool.key.to_bytes(),
+        state.lp_position.key.to_bytes(),
+        state.owner.key.to_bytes(),
+        RentCreditTerms::new(state.owner.key.to_bytes(), pool_bundle_rent)
+            .map_err(|_| VerticalError::InvalidState)?,
+        RentCreditTerms::new(state.owner.key.to_bytes(), lp_rent)
+            .map_err(|_| VerticalError::InvalidState)?,
+        RentCreditTerms::new(state.pool.key.to_bytes(), position_rent)
+            .map_err(|_| VerticalError::InvalidState)?,
+        request,
+        observation.slot,
+    )
+    .map_err(|_| VerticalError::InvalidState)?;
+    let debit = plan.funding_debit();
+    let principal_collateral = debit.liquidity().amount();
+    let service_collateral = debit.service().map_or(0, |release| release.amount());
+    if funding_token.amount
+        < principal_collateral
+            .checked_add(service_collateral)
+            .ok_or(VerticalError::InvalidState)?
+    {
+        return Err(VerticalError::InvalidState);
+    }
+    let data = encode_instruction(DealerInstructionV1::<N>::ActivatePool(request))?;
+    let instruction = account_frame::<N>(
+        program_id,
+        DealerActionV1::ActivatePool,
+        &[
+            &state.activator,
+            &state.owner,
+            &state.realm,
+            &state.market,
+            &state.capability_manifest,
+            &state.funding_state,
+            &state.funding_authority,
+            &state.funding_collateral_vault,
+            &state.config,
+            &state.config_staging,
+            &state.pool,
+            &state.lp_position,
+            &state.owner_position,
+            &state.pool_position,
+            &state.principal_vault,
+            &state.fee_vault,
+            &state.service_vault,
+            &state.pool_position_rent_credit,
+            &state.pool_rent_credit,
+            &state.lp_rent_credit,
+            &state.collateral_mint,
+            &state.token_program,
+            &state.system_program,
+            &state.rent_sysvar,
+        ],
+        data,
+    )?;
+    Ok(DealerActivateReport {
+        instruction,
+        observation,
+        required_signers: if state.activator.key == state.owner.key {
+            vec![state.activator.key]
+        } else {
+            vec![state.activator.key, state.owner.key]
+        },
+        pool: state.pool.key,
+        lp_position: state.lp_position.key,
+        rent_debit_lamports: debit.activation().rent_lamports(),
+        principal_collateral,
+        service_collateral,
+        claim_reserves: vec![choice.initial_claim_quantity; N],
+        market_child_count_before: market.child_count,
+        market_child_count_after: market
+            .child_count
+            .checked_add(1)
+            .ok_or(VerticalError::InvalidState)?,
+    })
 }
 
 /// Construct CreateLpPosition from a finalized Pool and one fresh seed choice.
@@ -1275,21 +1758,20 @@ struct PoolFacts {
     market_child_count: u64,
 }
 
-fn authenticate_pool(
+fn authenticate_config<'a>(
     program_id: Pubkey,
-    state: &DealerPoolState,
-    action: DealerActionV1,
-) -> Result<PoolFacts, VerticalError> {
-    let market = market_facts(program_id, &state.market)?;
-    validate_market_phase(action, market.phase).map_err(|_| VerticalError::InvalidPhase)?;
-    if state.config.owner != program_id || state.config.executable {
+    config_account: &'a ObservedAccount,
+    staging: &ObservedAccount,
+    outcomes: usize,
+) -> Result<(LiquidityProfileV1, ContentId, LiquidityConfigViewV1<'a>), VerticalError> {
+    if config_account.owner != program_id || config_account.executable {
         return Err(VerticalError::InvalidOwner);
     }
-    let config_digest = hash(&state.config.data).to_bytes();
-    let config_id = ContentId::new(config_digest).map_err(|_| VerticalError::InvalidState)?;
-    let profile = LiquidityProfileV1::from_config_len(market.outcomes, state.config.data.len())
+    let digest = hash(&config_account.data).to_bytes();
+    let config_id = ContentId::new(digest).map_err(|_| VerticalError::InvalidState)?;
+    let profile = LiquidityProfileV1::from_config_len(outcomes, config_account.data.len())
         .map_err(|_| VerticalError::InvalidState)?;
-    let config = LiquidityConfigViewV1::new(config_id, profile, &state.config.data)
+    let config = LiquidityConfigViewV1::new(config_id, profile, &config_account.data)
         .map_err(|_| VerticalError::InvalidState)?;
     let expected_config = Pubkey::find_program_address(
         &ConfigPdaSeedsV1::new(config_id).seed_components(),
@@ -1300,19 +1782,35 @@ fn authenticate_pool(
         &[
             STAGING_CURSOR_PDA_SEED_V1,
             &DEALER_CONFIG_SCHEMA_RELEASE_ID_V1,
-            &config_digest,
+            &digest,
         ],
         &program_id,
     )
     .0;
-    if state.config.key != expected_config
-        || state.config_staging.key != expected_staging
-        || state.config_staging.owner != system_program::ID
-        || state.config_staging.executable
-        || !state.config_staging.data.is_empty()
+    if config_account.key != expected_config
+        || staging.key != expected_staging
+        || staging.owner != system_program::ID
+        || staging.executable
+        || !staging.data.is_empty()
     {
         return Err(VerticalError::FinalizationMismatch);
     }
+    Ok((profile, config_id, config))
+}
+
+fn authenticate_pool(
+    program_id: Pubkey,
+    state: &DealerPoolState,
+    action: DealerActionV1,
+) -> Result<PoolFacts, VerticalError> {
+    let market = market_facts(program_id, &state.market)?;
+    validate_market_phase(action, market.phase).map_err(|_| VerticalError::InvalidPhase)?;
+    let (profile, config_id, config) = authenticate_config(
+        program_id,
+        &state.config,
+        &state.config_staging,
+        market.outcomes,
+    )?;
     let pool = PoolViewV1::new(profile, &state.pool.data, state.pool.key.to_bytes(), config)
         .map_err(|_| VerticalError::InvalidState)?;
     let attachment = pool.attachment().map_err(|_| VerticalError::InvalidState)?;
