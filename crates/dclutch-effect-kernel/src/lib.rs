@@ -7,6 +7,9 @@
 //! it hostile-decodes one canonical plan and applies supported effects to a
 //! caller-owned state projection, committing only after every effect succeeds.
 
+/// Runtime-width, account-profile-constrained physical effect projection.
+pub mod v2;
+
 /// Canonical wire magic (`DCEF`).
 pub const MAGIC: [u8; 4] = *b"DCEF";
 /// Canonical Effect IR wire version.
