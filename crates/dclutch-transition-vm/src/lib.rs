@@ -4,6 +4,9 @@
 
 //! Fixed-memory interpreter for Lean-owned dClutch transition programs.
 
+/// Runtime-width V2 codec and borrowed-register executor.
+pub mod v2;
+
 /// Canonical transition-program magic (`DCTV`).
 pub const MAGIC: [u8; 4] = *b"DCTV";
 /// Canonical transition-program version.

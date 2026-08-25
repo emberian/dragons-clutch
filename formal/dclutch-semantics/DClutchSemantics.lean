@@ -12,6 +12,7 @@ import DClutchSemantics.SbfProfile
 import DClutchSemantics.Physical
 import DClutchSemantics.ClaimSbfProfile
 import DClutchSemantics.TransitionVM
+import DClutchSemantics.TransitionVMV2
 import DClutchSemantics.DirectProgram
 import DClutchSemantics.CompiledPhysical
 import DClutchSemantics.DirectControllerCodec
