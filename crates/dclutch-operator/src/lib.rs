@@ -50,6 +50,8 @@ pub mod general_physical;
 pub mod registered_direct;
 /// Chain-derived unsigned Registry activation and reauthentication workflows.
 pub mod registry;
+/// Checked-release admission into unsigned Registry activation workflows.
+pub mod release_activation;
 /// Chain-derived address-table lifecycle and versioned-message construction.
 pub mod versioned;
 /// Chain-derived unsigned Series and Dealer workflows.

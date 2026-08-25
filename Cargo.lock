@@ -472,6 +472,7 @@ dependencies = [
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
+ "dclutch-release-tool",
  "dclutch-rent-contract",
  "dclutch-series-contract",
  "dclutch-source-contract",

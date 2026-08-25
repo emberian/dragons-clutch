@@ -33,6 +33,7 @@ dclutch-record-contract = { path = "../dclutch-record-contract" }
 dclutch-registry-contract = { path = "../dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../dclutch-registry-svm" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
+dclutch-release-tool = { path = "../dclutch-release-tool" }
 dclutch-rent-contract = { path = "../dclutch-rent-contract" }
 dclutch-series-contract = { path = "../dclutch-series-contract" }
 dclutch-source-contract = { path = "../dclutch-source-contract" }

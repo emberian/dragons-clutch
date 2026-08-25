@@ -75,6 +75,24 @@ and requires the entire set to rebuild byte-for-byte. The manifest is offline
 reproducibility evidence: the Registry activation cache remains the sole
 runtime authority, and this is neither deployment nor public-network evidence.
 
+### From checked evidence to Registry activation
+
+The host-only operator join accepts the verified
+`CheckedExecutionReleaseSetV1`, all five complete `CheckedReleaseV1` values,
+and one finalized snapshot of the canonical release-set record, artifact
+records, Loader V3 Program accounts, and ProgramData accounts. It rebuilds the
+checked set, delegates chain authentication to the existing Registry operator,
+and requires the resulting activated releases to equal the checked artifacts
+exactly before compiling the existing unsigned activation packet.
+
+Its deterministic text projection includes the checked-set identities, the
+finalized observation, activation-cache address and mode, complete ELF bytes
+hashed, packet geometry, compute budget, and a digest of the exact unsigned
+message. This projection is evidence, not another release DTO or runtime
+authority. The builder performs no RPC, signing, submission, deployment, or
+account mutation; execution by the Registry is still what creates the
+authoritative cache.
+
 ## Metadata V1
 
 The metadata input is canonical UTF-8 text. Lines must occur in this exact
