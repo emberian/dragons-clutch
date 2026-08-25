@@ -7,6 +7,10 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_pyth_svm::{FullPriceUpdateV2, PostUpdateParamsView};
+use dclutch_rent_contract::{
+    CreateRentCreditV1, RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority,
+    WithdrawRentCreditV1,
+};
 use reqwest::{Url, blocking::Client, redirect::Policy};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -28,11 +32,16 @@ const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
 const CLOCK_SYSVAR: &str = "SysvarC1ock11111111111111111111111111111111";
 const RENT_SYSVAR: &str = "SysvarRent111111111111111111111111111111111";
 const COMPUTE_BUDGET_PROGRAM: &str = "ComputeBudget111111111111111111111111111111";
+const TOKEN_PROGRAM: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const TOKEN_2022_PROGRAM: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+const DCLUTCH_PROGRAM: &str = "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC";
 const ENCODED_VAA_HEADER_BYTES: usize = 46;
 const FULL_PRICE_UPDATE_BYTES: usize = 134;
 const WRITE_CHUNK_BYTES: usize = 600;
 const FIXTURE_PUBLISH_TIME: i64 = 1_787_431_680;
 const AIRDROP_LAMPORTS: u64 = 10_000_000_000;
+const RENT_CREDIT_DEPOSIT_LAMPORTS: u64 = 1_000_000;
+const RENT_CREDIT_WITHDRAW_LAMPORTS: u64 = 400_000;
 
 const PROVENANCE: &[u8] =
     include_bytes!("../../../../fixtures/pyth/local-upgraded-2026-08-22/PROVENANCE.md");
@@ -77,6 +86,15 @@ struct Args {
     rpc_url: Url,
     evidence: Option<PathBuf>,
     reclaim: bool,
+    dclutch: Option<DclutchPin>,
+}
+
+#[derive(Debug)]
+struct DclutchPin {
+    program_id: Pubkey,
+    elf_sha256: String,
+    source_commit: String,
+    source_archive_sha256: String,
 }
 
 #[derive(Clone, Debug)]
@@ -108,6 +126,10 @@ struct Evidence {
     fixture: FixtureEvidence,
     loader_time_boundary: LoaderTimeBoundary,
     programs: Vec<ProgramEvidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dclutch_program: Option<RuntimeProgramEvidence>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    token_programs: Vec<RuntimeProgramEvidence>,
     provider_accounts: BTreeMap<String, AccountEvidence>,
     semantic_checks: SemanticEvidence,
     transactions: Vec<TransactionEvidence>,
@@ -115,9 +137,48 @@ struct Evidence {
     encoded_vaa: String,
     price_update: String,
     price_update_reclaimed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dclutch_lifecycle: Option<DclutchLifecycleEvidence>,
     provider_state_initialized: bool,
     captured_release_identity_claimed: bool,
+    dclutch_lifecycle_executed: bool,
     dclutch_resolution_executed: bool,
+}
+
+#[derive(Serialize)]
+struct RuntimeProgramEvidence {
+    name: &'static str,
+    program_id: String,
+    programdata_id: String,
+    canonical_programdata_pda: bool,
+    program: AccountEvidence,
+    programdata: AccountEvidence,
+    observed_deployment_slot: u64,
+    observed_upgrade_authority: Option<String>,
+    observed_upgrade_authority_effectively_disabled: bool,
+    elf_tail_sha256: String,
+    expected_elf_tail_sha256: Option<String>,
+    elf_tail_matches_expected: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct DclutchLifecycleEvidence {
+    source_commit: String,
+    source_archive_sha256: String,
+    lifecycle: &'static str,
+    authority: String,
+    rent_credit: String,
+    pda_bump: u8,
+    rent_floor_lamports: u64,
+    deposited_lamports: u64,
+    withdrawn_lamports: u64,
+    final_surplus_lamports: u64,
+    exact_state_matches_contract: bool,
+    after_create: AccountEvidence,
+    after_fund: AccountEvidence,
+    after_withdraw: AccountEvidence,
+    resolution_executed: bool,
+    resolution_boundary: &'static str,
 }
 
 #[derive(Serialize)]
@@ -471,6 +532,8 @@ fn run() -> AnyResult<()> {
     let clock = pubkey(CLOCK_SYSVAR)?;
     let rent = pubkey(RENT_SYSVAR)?;
     let compute_budget = pubkey(COMPUTE_BUDGET_PROGRAM)?;
+    let token = pubkey(TOKEN_PROGRAM)?;
+    let token_2022 = pubkey(TOKEN_2022_PROGRAM)?;
 
     let programs = vec![
         inspect_program(
@@ -500,6 +563,28 @@ fn run() -> AnyResult<()> {
             loader,
         )?,
     ];
+
+    let (dclutch_program, token_programs) = if let Some(pin) = args.dclutch.as_ref() {
+        if pin.program_id != pubkey(DCLUTCH_PROGRAM)? {
+            return fail(format!(
+                "integrated profile requires the committed dClutch program ID {DCLUTCH_PROGRAM}"
+            ));
+        }
+        let dclutch_program = inspect_runtime_program(
+            &mut rpc,
+            "dclutch",
+            pin.program_id,
+            loader,
+            Some(&pin.elf_sha256),
+        )?;
+        let token_programs = vec![
+            inspect_runtime_program(&mut rpc, "spl-token", token, loader, None)?,
+            inspect_runtime_program(&mut rpc, "spl-token-2022", token_2022, loader, None)?,
+        ];
+        (Some(dclutch_program), token_programs)
+    } else {
+        (None, Vec::new())
+    };
 
     let config = Pubkey::find_program_address(&[b"config"], &receiver).0;
     let guardian_set =
@@ -681,6 +766,14 @@ fn run() -> AnyResult<()> {
     );
     provider_accounts.insert("price_update_before_reclaim".into(), update_evidence);
 
+    let dclutch_lifecycle = args
+        .dclutch
+        .as_ref()
+        .map(|pin| {
+            execute_dclutch_lifecycle(&mut rpc, pin, &payer, system, rent, &mut transactions)
+        })
+        .transpose()?;
+
     let price_update_reclaimed = if args.reclaim {
         transactions.push(rpc.send_transaction(
             "reclaim_price_update_rent",
@@ -712,8 +805,16 @@ fn run() -> AnyResult<()> {
     let fixture_clock_delta = validator_clock.abs_diff(FIXTURE_PUBLISH_TIME);
 
     let evidence = Evidence {
-        schema: "dclutch-local-provider-bootstrap-evidence-v1",
-        evidence_class: "local-validator-real-provider-execution",
+        schema: if dclutch_lifecycle.is_some() {
+            "dclutch-integrated-local-bootstrap-evidence-v1"
+        } else {
+            "dclutch-local-provider-bootstrap-evidence-v1"
+        },
+        evidence_class: if dclutch_lifecycle.is_some() {
+            "local-validator-real-provider-and-dclutch-execution"
+        } else {
+            "local-validator-real-provider-execution"
+        },
         rpc_url: args.rpc_url.to_string(),
         genesis_hash,
         validator_version,
@@ -739,6 +840,8 @@ fn run() -> AnyResult<()> {
             reason: "test-validator regenerated Loader V3 headers/slots/authority and uses its current clock; exact ELF execution and provider state do not prove the captured release identity or dClutch freshness",
         },
         programs,
+        dclutch_program,
+        token_programs,
         provider_accounts,
         semantic_checks,
         transactions,
@@ -746,8 +849,10 @@ fn run() -> AnyResult<()> {
         encoded_vaa: encoded_vaa.pubkey().to_string(),
         price_update: update.pubkey().to_string(),
         price_update_reclaimed,
+        dclutch_lifecycle,
         provider_state_initialized: true,
         captured_release_identity_claimed: false,
+        dclutch_lifecycle_executed: args.dclutch.is_some(),
         dclutch_resolution_executed: false,
     };
     let output = serde_json::to_vec_pretty(&evidence)?;
@@ -770,6 +875,10 @@ fn parse_args(arguments: impl Iterator<Item = String>) -> AnyResult<Args> {
     let mut rpc_url = None;
     let mut evidence = None;
     let mut reclaim = false;
+    let mut dclutch_program_id = None;
+    let mut dclutch_elf_sha256 = None;
+    let mut dclutch_source_commit = None;
+    let mut dclutch_source_archive_sha256 = None;
     let mut values = arguments.peekable();
     while let Some(argument) = values.next() {
         match argument.as_str() {
@@ -796,20 +905,85 @@ fn parse_args(arguments: impl Iterator<Item = String>) -> AnyResult<Args> {
                 evidence = Some(path);
             }
             "--reclaim" => reclaim = true,
+            "--dclutch-program-id" => {
+                let value = values.next().ok_or_else(|| {
+                    BootstrapError("--dclutch-program-id requires a value".into())
+                })?;
+                if dclutch_program_id.is_some() {
+                    return fail("--dclutch-program-id may be supplied only once");
+                }
+                dclutch_program_id = Some(pubkey(&value)?);
+            }
+            "--dclutch-elf-sha256" => {
+                let value = values.next().ok_or_else(|| {
+                    BootstrapError("--dclutch-elf-sha256 requires a value".into())
+                })?;
+                require_lower_hex(&value, 64, "--dclutch-elf-sha256")?;
+                dclutch_elf_sha256 = Some(value);
+            }
+            "--dclutch-source-commit" => {
+                let value = values.next().ok_or_else(|| {
+                    BootstrapError("--dclutch-source-commit requires a value".into())
+                })?;
+                require_lower_hex(&value, 40, "--dclutch-source-commit")?;
+                dclutch_source_commit = Some(value);
+            }
+            "--dclutch-source-archive-sha256" => {
+                let value = values.next().ok_or_else(|| {
+                    BootstrapError("--dclutch-source-archive-sha256 requires a value".into())
+                })?;
+                require_lower_hex(&value, 64, "--dclutch-source-archive-sha256")?;
+                dclutch_source_archive_sha256 = Some(value);
+            }
             "-h" | "--help" => {
                 println!(
-                    "Usage: dclutch-local-provider-bootstrap --rpc-url LOOPBACK_HTTP_URL [--evidence ABSOLUTE_NEW_FILE] [--reclaim]"
+                    "Usage: dclutch-local-provider-bootstrap --rpc-url LOOPBACK_HTTP_URL [--evidence ABSOLUTE_NEW_FILE] [--reclaim] [--dclutch-program-id PUBKEY --dclutch-elf-sha256 SHA256 --dclutch-source-commit GIT_COMMIT --dclutch-source-archive-sha256 SHA256]"
                 );
                 std::process::exit(0);
             }
             _ => return fail(format!("unknown argument: {argument}")),
         }
     }
+    let dclutch = match (
+        dclutch_program_id,
+        dclutch_elf_sha256,
+        dclutch_source_commit,
+        dclutch_source_archive_sha256,
+    ) {
+        (None, None, None, None) => None,
+        (Some(program_id), Some(elf_sha256), Some(source_commit), Some(source_archive_sha256)) => {
+            Some(DclutchPin {
+                program_id,
+                elf_sha256,
+                source_commit,
+                source_archive_sha256,
+            })
+        }
+        _ => {
+            return fail(
+                "integrated dClutch mode requires all four --dclutch-* provenance arguments",
+            );
+        }
+    };
     Ok(Args {
         rpc_url: rpc_url.ok_or_else(|| BootstrapError("--rpc-url is required".into()))?,
         evidence,
         reclaim,
+        dclutch,
     })
+}
+
+fn require_lower_hex(value: &str, length: usize, label: &str) -> AnyResult<()> {
+    if value.len() != length
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return fail(format!(
+            "{label} must be exactly {length} lowercase hex characters"
+        ));
+    }
+    Ok(())
 }
 
 fn validate_rpc_url(value: &str) -> AnyResult<Url> {
@@ -997,6 +1171,209 @@ fn inspect_program(rpc: &mut Rpc, pin: ProgramPin, loader: Pubkey) -> AnyResult<
     })
 }
 
+fn inspect_runtime_program(
+    rpc: &mut Rpc,
+    name: &'static str,
+    program_id: Pubkey,
+    loader: Pubkey,
+    expected_elf_hash: Option<&str>,
+) -> AnyResult<RuntimeProgramEvidence> {
+    let canonical_programdata = Pubkey::find_program_address(&[program_id.as_ref()], &loader).0;
+    let program = rpc.required_account(program_id, name)?;
+    require_account(&program, loader, true, None, name)?;
+    if program.data.len() != 36 || u32_le(&program.data, 0, "Program tag")? != 2 {
+        return fail(format!("{name} has invalid Loader V3 Program body"));
+    }
+    let programdata_id = Pubkey::new_from_array(array_32(&program.data, 4, "ProgramData link")?);
+    if programdata_id != canonical_programdata {
+        return fail(format!("{name} ProgramData link is not its canonical PDA"));
+    }
+    let programdata = rpc.required_account(programdata_id, "ProgramData")?;
+    require_account(&programdata, loader, false, None, "ProgramData")?;
+    if programdata.data.len() < 49 || u32_le(&programdata.data, 0, "ProgramData tag")? != 3 {
+        return fail(format!("{name} has invalid Loader V3 ProgramData body"));
+    }
+    let deployment_slot = u64_le(&programdata.data, 4, "ProgramData slot")?;
+    let authority = match byte(&programdata.data, 12, "ProgramData authority tag")? {
+        0 => {
+            if programdata.data.get(13..45) != Some(&[0_u8; 32]) {
+                return fail(format!("{name} has noncanonical None authority padding"));
+            }
+            None
+        }
+        1 => Some(
+            Pubkey::new_from_array(array_32(&programdata.data, 13, "upgrade authority")?)
+                .to_string(),
+        ),
+        tag => return fail(format!("{name} has invalid upgrade authority tag {tag}")),
+    };
+    let authority_effectively_disabled = authority
+        .as_deref()
+        .is_none_or(|value| value == Pubkey::default().to_string());
+    if !authority_effectively_disabled {
+        return fail(format!(
+            "{name} unexpectedly has an effective local upgrade authority"
+        ));
+    }
+    let elf = programdata
+        .data
+        .get(45..)
+        .ok_or_else(|| BootstrapError(format!("{name} omitted ELF tail")))?;
+    if !elf.starts_with(b"\x7fELF") {
+        return fail(format!("{name} ProgramData tail is not an ELF"));
+    }
+    let elf_hash = sha256(elf);
+    let hash_match = expected_elf_hash.map(|expected| elf_hash == expected);
+    if hash_match == Some(false) {
+        return fail(format!(
+            "{name} ELF tail hash {elf_hash} differs from expected {}",
+            expected_elf_hash.unwrap_or_default()
+        ));
+    }
+    Ok(RuntimeProgramEvidence {
+        name,
+        program_id: program_id.to_string(),
+        programdata_id: programdata_id.to_string(),
+        canonical_programdata_pda: true,
+        program: account_evidence(program_id, &program),
+        programdata: account_evidence(programdata_id, &programdata),
+        observed_deployment_slot: deployment_slot,
+        observed_upgrade_authority: authority,
+        observed_upgrade_authority_effectively_disabled: authority_effectively_disabled,
+        elf_tail_sha256: elf_hash,
+        expected_elf_tail_sha256: expected_elf_hash.map(str::to_owned),
+        elf_tail_matches_expected: hash_match,
+    })
+}
+
+fn execute_dclutch_lifecycle(
+    rpc: &mut Rpc,
+    pin: &DclutchPin,
+    payer: &Keypair,
+    system: Pubkey,
+    rent: Pubkey,
+    transactions: &mut Vec<TransactionEvidence>,
+) -> AnyResult<DclutchLifecycleEvidence> {
+    let authority = RefundAuthority::new(payer.pubkey().to_bytes())
+        .map_err(|error| BootstrapError(format!("invalid ephemeral authority: {error:?}")))?;
+    let (credit, bump) = Pubkey::find_program_address(
+        &[RENT_CREDIT_PDA_DOMAIN_V1, payer.pubkey().as_ref()],
+        &pin.program_id,
+    );
+    if rpc.account(credit)?.is_some() {
+        return fail(format!(
+            "dClutch rent-credit {credit} already exists; integrated bootstrap requires fresh state"
+        ));
+    }
+    let create = CreateRentCreditV1::new(authority, bump);
+    transactions.push(rpc.send_transaction(
+        "dclutch_create_rent_credit",
+        &[Instruction {
+            program_id: pin.program_id,
+            accounts: vec![
+                AccountMeta::new(payer.pubkey(), true),
+                AccountMeta::new(credit, false),
+                AccountMeta::new_readonly(system, false),
+                AccountMeta::new_readonly(rent, false),
+            ],
+            data: create.to_bytes().to_vec(),
+        }],
+        payer,
+        &[],
+    )?);
+    let rent_floor = rpc.minimum_balance(RENT_CREDIT_BYTES_V1)?;
+    let created = rpc.required_account(credit, "created dClutch rent credit")?;
+    let expected_state = create.credit().to_bytes();
+    require_account(
+        &created,
+        pin.program_id,
+        false,
+        Some(&expected_state),
+        "created dClutch rent credit",
+    )?;
+    if created.lamports != rent_floor {
+        return fail(format!(
+            "created dClutch rent credit has {} lamports, expected current rent floor {rent_floor}",
+            created.lamports
+        ));
+    }
+    let after_create = account_evidence(credit, &created);
+
+    transactions.push(rpc.send_transaction(
+        "fund_dclutch_rent_credit_surplus",
+        &[system_transfer(
+            payer.pubkey(),
+            credit,
+            RENT_CREDIT_DEPOSIT_LAMPORTS,
+            system,
+        )],
+        payer,
+        &[],
+    )?);
+    let funded = rpc.required_account(credit, "funded dClutch rent credit")?;
+    let funded_balance = rent_floor
+        .checked_add(RENT_CREDIT_DEPOSIT_LAMPORTS)
+        .ok_or_else(|| BootstrapError("funded rent-credit balance overflow".into()))?;
+    if funded.data != expected_state
+        || funded.owner != pin.program_id
+        || funded.lamports != funded_balance
+    {
+        return fail("funding changed rent-credit state or produced the wrong exact balance");
+    }
+    let after_fund = account_evidence(credit, &funded);
+
+    let withdraw = WithdrawRentCreditV1::new(RENT_CREDIT_WITHDRAW_LAMPORTS)
+        .map_err(|error| BootstrapError(format!("invalid bounded withdrawal: {error:?}")))?;
+    transactions.push(rpc.send_transaction(
+        "dclutch_withdraw_rent_credit_surplus",
+        &[Instruction {
+            program_id: pin.program_id,
+            accounts: vec![
+                AccountMeta::new(credit, false),
+                AccountMeta::new(payer.pubkey(), true),
+                AccountMeta::new(payer.pubkey(), true),
+                AccountMeta::new_readonly(rent, false),
+            ],
+            data: withdraw.to_bytes().to_vec(),
+        }],
+        payer,
+        &[],
+    )?);
+    let withdrawn = rpc.required_account(credit, "withdrawn dClutch rent credit")?;
+    let final_surplus = RENT_CREDIT_DEPOSIT_LAMPORTS
+        .checked_sub(RENT_CREDIT_WITHDRAW_LAMPORTS)
+        .ok_or_else(|| BootstrapError("rent-credit fixture underflow".into()))?;
+    let withdrawn_balance = rent_floor
+        .checked_add(final_surplus)
+        .ok_or_else(|| BootstrapError("withdrawn rent-credit balance overflow".into()))?;
+    if withdrawn.data != expected_state
+        || withdrawn.owner != pin.program_id
+        || withdrawn.lamports != withdrawn_balance
+    {
+        return fail("withdrawal changed rent-credit state or produced the wrong exact balance");
+    }
+    let after_withdraw = account_evidence(credit, &withdrawn);
+
+    Ok(DclutchLifecycleEvidence {
+        source_commit: pin.source_commit.clone(),
+        source_archive_sha256: pin.source_archive_sha256.clone(),
+        lifecycle: "RentCredit Create -> System fund -> authority Withdraw",
+        authority: payer.pubkey().to_string(),
+        rent_credit: credit.to_string(),
+        pda_bump: bump,
+        rent_floor_lamports: rent_floor,
+        deposited_lamports: RENT_CREDIT_DEPOSIT_LAMPORTS,
+        withdrawn_lamports: RENT_CREDIT_WITHDRAW_LAMPORTS,
+        final_surplus_lamports: final_surplus,
+        exact_state_matches_contract: true,
+        after_create,
+        after_fund,
+        after_withdraw,
+        resolution_executed: false,
+        resolution_boundary: "The captured synthetic Pyth publish time intentionally differs from the validator wall clock, so this campaign proves real provider and independent dClutch lifecycle execution but does not claim a live-source dClutch resolution.",
+    })
+}
+
 fn verify_encoded_vaa(data: &[u8], authority: Pubkey) -> AnyResult<()> {
     if data.len() != ENCODED_VAA_HEADER_BYTES + SIGNED_VAA.len() {
         return fail(format!(
@@ -1129,6 +1506,25 @@ fn system_create_account(
         ],
         data,
     })
+}
+
+fn system_transfer(
+    source: Pubkey,
+    destination: Pubkey,
+    lamports: u64,
+    system_program: Pubkey,
+) -> Instruction {
+    let mut data = Vec::with_capacity(12);
+    data.extend_from_slice(&2_u32.to_le_bytes());
+    data.extend_from_slice(&lamports.to_le_bytes());
+    Instruction {
+        program_id: system_program,
+        accounts: vec![
+            AccountMeta::new(source, true),
+            AccountMeta::new(destination, false),
+        ],
+        data,
+    }
 }
 
 fn write_encoded_vaa(
@@ -1347,5 +1743,53 @@ mod tests {
         assert_eq!(&instruction.data[4..12], &7_u64.to_le_bytes());
         assert_eq!(&instruction.data[12..20], &1_044_u64.to_le_bytes());
         assert_eq!(&instruction.data[20..52], owner.as_ref());
+    }
+
+    #[test]
+    fn integrated_arguments_are_all_or_nothing_and_bind_canonical_id() {
+        let valid = [
+            "--rpc-url",
+            "http://127.0.0.1:19890",
+            "--dclutch-program-id",
+            DCLUTCH_PROGRAM,
+            "--dclutch-elf-sha256",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--dclutch-source-commit",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--dclutch-source-archive-sha256",
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        ]
+        .into_iter()
+        .map(str::to_owned);
+        let parsed = parse_args(valid).expect("complete integrated provenance");
+        let pin = parsed.dclutch.expect("integrated mode");
+        assert_eq!(pin.program_id, Pubkey::new_from_array([71; 32]));
+
+        let partial = [
+            "--rpc-url",
+            "http://127.0.0.1:19890",
+            "--dclutch-program-id",
+            DCLUTCH_PROGRAM,
+        ]
+        .into_iter()
+        .map(str::to_owned);
+        assert!(parse_args(partial).is_err());
+    }
+
+    #[test]
+    fn system_transfer_wire_is_exact() {
+        let source = Pubkey::new_from_array([1; 32]);
+        let destination = Pubkey::new_from_array([2; 32]);
+        let system = Pubkey::default();
+        let instruction = system_transfer(source, destination, 400_000, system);
+        assert_eq!(instruction.program_id, system);
+        assert_eq!(instruction.data.len(), 12);
+        assert_eq!(&instruction.data[..4], &2_u32.to_le_bytes());
+        assert_eq!(&instruction.data[4..], &400_000_u64.to_le_bytes());
+        assert_eq!(instruction.accounts.len(), 2);
+        assert!(instruction.accounts[0].is_signer);
+        assert!(instruction.accounts[0].is_writable);
+        assert!(!instruction.accounts[1].is_signer);
+        assert!(instruction.accounts[1].is_writable);
     }
 }

@@ -76,3 +76,40 @@ end-to-end provider campaign.
 `tests/test.sh` is an offline shell test. It validates fixture pins, validates
 the argument refusal path, and checks that the profile documents the loader
 boundary. It never compiles or requires a current dClutch ELF.
+
+## Integrated profile
+
+`dclutch-integrated-validator` creates a separate fresh profile on RPC `19890`
+(WebSocket `19891`), faucet `19892`, gossip `19893`, and dynamic range
+`19900-19931`. It loads the canonical dClutch program ID plus the same pinned
+real Pyth router and receiver ELFs. `solana-test-validator 4.0.2` supplies the
+real upgradeable SPL Token and Token-2022 genesis programs; the bootstrap client
+authenticates their canonical Program-to-ProgramData linkage and captures their
+ELF hashes before calling dClutch.
+
+The launcher requires an exact source commit, reproducible source-archive hash,
+and verifier-clean ELF hash. A build that merely emits an ELF while reporting
+SBF verifier errors is not admissible. The launcher preflights ELF magic and
+SHA-256 and requires a machine attestation bound to the source commit, archive
+hash, exact ELF path/hash, canonical `[71; 32]` program ID, tool versions, build
+command, and build-log hash. Its verifier status must be `clean` with zero
+diagnostics. Validator genesis acceptance plus the RPC health probe is a second
+gate: a loader/verifier diagnostic makes the validator exit and the launcher
+refuses to report the profile ready.
+
+```sh
+tools/local-validator/dclutch-integrated-validator start \
+  --ledger /absolute/new/scoped/integrated-ledger \
+  --dclutch-elf /absolute/path/to/verifier-clean/dclutch_sbf.so \
+  --dclutch-sha256 ELF_SHA256 \
+  --source-commit FULL_GIT_COMMIT \
+  --source-archive-sha256 ARCHIVE_SHA256 \
+  --sbf-attestation /absolute/path/to/elf-attestation.json
+
+tools/local-validator/dclutch-integrated-validator status \
+  --ledger /absolute/new/scoped/integrated-ledger
+```
+
+This profile runs in the background and writes no keys outside its scoped
+ledger. Stop is sentinel- and command-line-guarded; it never deletes the ledger.
+The client-side payer and action keys remain only in process memory.

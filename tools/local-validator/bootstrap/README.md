@@ -20,6 +20,23 @@ Add `--reclaim` to execute the real receiver's `ReclaimRent` instruction after
 the posted account has been observed and verified. The evidence path must not
 already exist. Without `--evidence`, the JSON record is printed to stdout.
 
+Against the separate integrated profile, supply all four artifact-provenance
+arguments. In addition to the complete provider sequence, this authenticates
+the loaded dClutch ELF, authenticates both real SPL Token program accounts, and
+submits a real dClutch RentCredit lifecycle: Create, System-funded surplus, and
+authority Withdraw. Every intermediate and final account body, owner, rent
+floor, and exact balance is checked and recorded.
+
+```sh
+cargo run --manifest-path tools/local-validator/bootstrap/Cargo.toml --locked -- \
+  --rpc-url http://127.0.0.1:19890 \
+  --evidence /absolute/new/path/integrated-bootstrap-evidence.json \
+  --dclutch-program-id 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC \
+  --dclutch-elf-sha256 ELF_SHA256 \
+  --dclutch-source-commit FULL_GIT_COMMIT \
+  --dclutch-source-archive-sha256 ARCHIVE_SHA256
+```
+
 For a provider-only campaign, the launcher still requires a third ELF in its
 dClutch argument position. The integration test used the committed router ELF
 again under the distinct dummy ID `11111111111111111111111111111112`, with
@@ -58,4 +75,5 @@ captured provider release identity. The fixture publish time also differs from
 the validator wall clock; receiver posting establishes real local provider
 execution but not dClutch freshness or resolution. Every evidence record fixes
 `captured_release_identity_claimed=false` and
-`dclutch_resolution_executed=false`.
+`dclutch_resolution_executed=false`. Integrated evidence separately records
+`dclutch_lifecycle_executed=true`; this must not be misread as price resolution.

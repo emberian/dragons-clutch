@@ -341,6 +341,7 @@ dependencies = [
  "base64",
  "bincode",
  "dclutch-pyth-svm",
+ "dclutch-rent-contract",
  "reqwest",
  "serde",
  "serde_json",
@@ -350,6 +351,10 @@ dependencies = [
 
 [[package]]
 name = "dclutch-pyth-svm"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-rent-contract"
 version = "0.1.0"
 
 [[package]]
