@@ -56,3 +56,7 @@ root = "EmitGeneralControllerAbiRust"
 [[lean_exe]]
 name = "emit-liability-basis-v2-rust"
 root = "EmitLiabilityBasisV2Rust"
+
+[[lean_exe]]
+name = "emit-transition-vm-v2-rust"
+root = "EmitTransitionVMV2Rust"

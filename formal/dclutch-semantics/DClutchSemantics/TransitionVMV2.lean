@@ -203,6 +203,21 @@ def version : UInt8 := 2
 def headerBytes : Nat := 16
 def instructionBytes : Nat := 24
 
+def versionOffset : Nat := 4
+def flagsOffset : Nat := 5
+def instructionCountOffset : Nat := 6
+def scalarCountOffset : Nat := 8
+def identityCountOffset : Nat := 10
+def headerReservedOffset : Nat := 12
+def opcodeOffset : Nat := 0
+def instructionReservedByteOffset : Nat := 1
+def argumentAOffset : Nat := 2
+def argumentBOffset : Nat := 4
+def argumentCOffset : Nat := 6
+def argumentDOffset : Nat := 8
+def instructionReservedOffset : Nat := 10
+def immediateOffset : Nat := 16
+
 def opcode : Op → UInt8
   | .loadConst .. => 0
   | .scalarEq .. => 1

@@ -8,29 +8,21 @@
 
 use core::convert::TryInto;
 
-/// Canonical V2 program magic.
-pub const MAGIC: [u8; 4] = *b"DCTV";
-/// Canonical runtime-width program version.
-pub const VERSION: u8 = 2;
-/// Exact V2 header width.
-pub const HEADER_BYTES: usize = 16;
-/// Exact V2 instruction width.
-pub const INSTRUCTION_BYTES: usize = 24;
+#[rustfmt::skip]
+#[allow(missing_docs)]
+mod generated;
 
-const FLAGS_OFFSET: usize = 5;
-const INSTRUCTION_COUNT_OFFSET: usize = 6;
-const SCALAR_COUNT_OFFSET: usize = 8;
-const IDENTITY_COUNT_OFFSET: usize = 10;
-const HEADER_RESERVED_OFFSET: usize = 12;
-
-const OPCODE_OFFSET: usize = 0;
-const INSTRUCTION_RESERVED_BYTE_OFFSET: usize = 1;
-const A_OFFSET: usize = 2;
-const B_OFFSET: usize = 4;
-const C_OFFSET: usize = 6;
-const D_OFFSET: usize = 8;
-const INSTRUCTION_RESERVED_OFFSET: usize = 10;
-const IMMEDIATE_OFFSET: usize = 16;
+use generated::{
+    A_OFFSET, B_OFFSET, C_OFFSET, D_OFFSET, FLAGS_OFFSET, HEADER_RESERVED_OFFSET,
+    IDENTITY_COUNT_OFFSET, IMMEDIATE_OFFSET, INSTRUCTION_COUNT_OFFSET,
+    INSTRUCTION_RESERVED_BYTE_OFFSET, INSTRUCTION_RESERVED_OFFSET, OP_ADD_FITS_U64, OP_ADD_LE,
+    OP_CHECKED_ADD_INTO, OP_CHECKED_MUL_INTO, OP_COPY_IDENTITY, OP_COPY_SCALAR, OP_IDENTITY_EQ,
+    OP_IDENTITY_NE, OP_INCREMENT_INTO, OP_LIFECYCLE_ACCEPTS, OP_LOAD_CONST, OP_MAX_INTO,
+    OP_MIN_INTO, OP_MUL_DIV_EXACT, OP_MUL_DIV_FLOOR, OP_NONZERO, OP_SCALAR_EQ, OP_SCALAR_LE,
+    OP_SCALAR_LT, OP_SELECT_EQ, OP_SELECT_ZERO, OP_SUB_INTO, OPCODE_OFFSET, SCALAR_COUNT_OFFSET,
+    VERSION_OFFSET,
+};
+pub use generated::{HEADER_BYTES, INSTRUCTION_BYTES, MAGIC, VERSION, WIDE_AGREEMENT_PROGRAM_V2};
 
 /// Stable hostile-decode or checked-execution refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -86,7 +78,7 @@ impl<'a> ProgramV2<'a> {
         if bytes.get(..MAGIC.len()) != Some(MAGIC.as_slice()) {
             return Err(Error::InvalidMagic);
         }
-        if byte(bytes, 4)? != VERSION {
+        if byte(bytes, VERSION_OFFSET)? != VERSION {
             return Err(Error::UnsupportedVersion);
         }
         if byte(bytes, FLAGS_OFFSET)? != 0
@@ -260,54 +252,54 @@ impl Instruction {
 
     fn validate(self, scalar_count: u16, identity_count: u16) -> Result<()> {
         match self.opcode {
-            0 => {
+            OP_LOAD_CONST => {
                 scalar(self.a, scalar_count)?;
                 self.canonical([self.b, self.c, self.d], true)
             }
-            1 | 4 | 5 | 12 => {
+            OP_SCALAR_EQ | OP_SCALAR_LT | OP_SCALAR_LE | OP_ADD_FITS_U64 => {
                 scalar(self.a, scalar_count)?;
                 scalar(self.b, scalar_count)?;
                 self.canonical([self.c, self.d, 0], false)
             }
-            2 | 3 => {
+            OP_IDENTITY_EQ | OP_IDENTITY_NE => {
                 identity(self.a, identity_count)?;
                 identity(self.b, identity_count)?;
                 self.canonical([self.c, self.d, 0], false)
             }
-            6 => {
+            OP_NONZERO => {
                 scalar(self.a, scalar_count)?;
                 self.canonical([self.b, self.c, self.d], false)
             }
-            7 | 11 | 13 | 15 => {
+            OP_LIFECYCLE_ACCEPTS | OP_ADD_LE | OP_SUB_INTO | OP_SELECT_ZERO => {
                 scalar(self.a, scalar_count)?;
                 scalar(self.b, scalar_count)?;
                 scalar(self.c, scalar_count)?;
                 self.canonical([self.d, 0, 0], false)
             }
-            8 => {
+            OP_INCREMENT_INTO => {
                 scalar(self.a, scalar_count)?;
                 scalar(self.b, scalar_count)?;
                 self.canonical([self.c, self.d, 0], false)
             }
-            9 | 10 | 14 => {
+            OP_MUL_DIV_EXACT | OP_MUL_DIV_FLOOR | OP_SELECT_EQ => {
                 scalar(self.a, scalar_count)?;
                 scalar(self.b, scalar_count)?;
                 scalar(self.c, scalar_count)?;
                 scalar(self.d, scalar_count)?;
                 self.canonical([0, 0, 0], false)
             }
-            16..=19 => {
+            OP_CHECKED_ADD_INTO | OP_CHECKED_MUL_INTO | OP_MIN_INTO | OP_MAX_INTO => {
                 scalar(self.a, scalar_count)?;
                 scalar(self.b, scalar_count)?;
                 scalar(self.c, scalar_count)?;
                 self.canonical([self.d, 0, 0], false)
             }
-            20 => {
+            OP_COPY_SCALAR => {
                 scalar(self.a, scalar_count)?;
                 scalar(self.b, scalar_count)?;
                 self.canonical([self.c, self.d, 0], false)
             }
-            21 => {
+            OP_COPY_IDENTITY => {
                 identity(self.a, identity_count)?;
                 identity(self.b, identity_count)?;
                 self.canonical([self.c, self.d, 0], false)
@@ -326,14 +318,18 @@ impl Instruction {
 
     fn execute(self, scalars: &mut [u64], identities: &mut [[u8; 32]]) -> Result<()> {
         match self.opcode {
-            0 => write_scalar(scalars, self.a, self.immediate),
-            1 => require(read_scalar(scalars, self.a)? == read_scalar(scalars, self.b)?),
-            2 => require(read_identity(identities, self.a)? == read_identity(identities, self.b)?),
-            3 => require(read_identity(identities, self.a)? != read_identity(identities, self.b)?),
-            4 => require(read_scalar(scalars, self.a)? < read_scalar(scalars, self.b)?),
-            5 => require(read_scalar(scalars, self.a)? <= read_scalar(scalars, self.b)?),
-            6 => require(read_scalar(scalars, self.a)? != 0),
-            7 => {
+            OP_LOAD_CONST => write_scalar(scalars, self.a, self.immediate),
+            OP_SCALAR_EQ => require(read_scalar(scalars, self.a)? == read_scalar(scalars, self.b)?),
+            OP_IDENTITY_EQ => {
+                require(read_identity(identities, self.a)? == read_identity(identities, self.b)?)
+            }
+            OP_IDENTITY_NE => {
+                require(read_identity(identities, self.a)? != read_identity(identities, self.b)?)
+            }
+            OP_SCALAR_LT => require(read_scalar(scalars, self.a)? < read_scalar(scalars, self.b)?),
+            OP_SCALAR_LE => require(read_scalar(scalars, self.a)? <= read_scalar(scalars, self.b)?),
+            OP_NONZERO => require(read_scalar(scalars, self.a)? != 0),
+            OP_LIFECYCLE_ACCEPTS => {
                 let lifecycle = read_scalar(scalars, self.a)?;
                 let maximum = read_scalar(scalars, self.b)?;
                 let fill = read_scalar(scalars, self.c)?;
@@ -343,30 +339,30 @@ impl Instruction {
                     _ => Err(Error::UnknownLifecycle),
                 }
             }
-            8 => {
+            OP_INCREMENT_INTO => {
                 let next = read_scalar(scalars, self.a)?
                     .checked_add(1)
                     .ok_or(Error::ArithmeticOverflow)?;
                 write_scalar(scalars, self.b, next)
             }
-            9 => mul_div(scalars, self.a, self.b, self.c, self.d, true),
-            10 => mul_div(scalars, self.a, self.b, self.c, self.d, false),
-            11 => {
+            OP_MUL_DIV_EXACT => mul_div(scalars, self.a, self.b, self.c, self.d, true),
+            OP_MUL_DIV_FLOOR => mul_div(scalars, self.a, self.b, self.c, self.d, false),
+            OP_ADD_LE => {
                 let sum = u128::from(read_scalar(scalars, self.a)?)
                     + u128::from(read_scalar(scalars, self.b)?);
                 require(sum <= u128::from(read_scalar(scalars, self.c)?))
             }
-            12 => read_scalar(scalars, self.a)?
+            OP_ADD_FITS_U64 => read_scalar(scalars, self.a)?
                 .checked_add(read_scalar(scalars, self.b)?)
                 .map(|_| ())
                 .ok_or(Error::ArithmeticOverflow),
-            13 => {
+            OP_SUB_INTO => {
                 let value = read_scalar(scalars, self.a)?
                     .checked_sub(read_scalar(scalars, self.b)?)
                     .ok_or(Error::CheckFailed)?;
                 write_scalar(scalars, self.c, value)
             }
-            14 => {
+            OP_SELECT_EQ => {
                 if read_scalar(scalars, self.a)? == read_scalar(scalars, self.b)? {
                     let value = read_scalar(scalars, self.c)?;
                     write_scalar(scalars, self.d, value)?;
@@ -375,7 +371,7 @@ impl Instruction {
                 }
                 Ok(())
             }
-            15 => {
+            OP_SELECT_ZERO => {
                 if read_scalar(scalars, self.a)? == 0 {
                     let value = read_scalar(scalars, self.b)?;
                     write_scalar(scalars, self.c, value)?;
@@ -384,21 +380,25 @@ impl Instruction {
                 }
                 Ok(())
             }
-            16 => checked_binary(scalars, self.a, self.b, self.c, u64::checked_add),
-            17 => checked_binary(scalars, self.a, self.b, self.c, u64::checked_mul),
-            18 => {
+            OP_CHECKED_ADD_INTO => {
+                checked_binary(scalars, self.a, self.b, self.c, u64::checked_add)
+            }
+            OP_CHECKED_MUL_INTO => {
+                checked_binary(scalars, self.a, self.b, self.c, u64::checked_mul)
+            }
+            OP_MIN_INTO => {
                 let value = read_scalar(scalars, self.a)?.min(read_scalar(scalars, self.b)?);
                 write_scalar(scalars, self.c, value)
             }
-            19 => {
+            OP_MAX_INTO => {
                 let value = read_scalar(scalars, self.a)?.max(read_scalar(scalars, self.b)?);
                 write_scalar(scalars, self.c, value)
             }
-            20 => {
+            OP_COPY_SCALAR => {
                 let value = read_scalar(scalars, self.a)?;
                 write_scalar(scalars, self.b, value)
             }
-            21 => {
+            OP_COPY_IDENTITY => {
                 let value = read_identity(identities, self.a)?;
                 write_identity(identities, self.b, value)
             }
@@ -594,6 +594,7 @@ mod tests {
                 instruction(21, 256, 255, 0, 0, 0),
             ],
         );
+        assert_eq!(bytes.as_slice(), WIDE_AGREEMENT_PROGRAM_V2.as_slice());
         let decoded = ProgramV2::decode(&bytes).expect("runtime-width program");
         assert_eq!(decoded.scalar_count(), 300);
         assert_eq!(decoded.identity_count(), 257);
