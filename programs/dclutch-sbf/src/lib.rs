@@ -24,15 +24,20 @@ use dclutch_collateral_contract::{
     MergeCompleteSetV1, OpenCollateralVaultV1, RedeemResolvedOutcomeV1, SplitCompleteSetV1,
     SweepSurplusV1, TransferClaimsV1, decode_instruction_tag,
 };
+use dclutch_general_contract::GENERAL_INSTRUCTION_MAGIC_V1;
 use dclutch_pyth_contract::instruction::ResolveCategoricalInstructionV1;
 use dclutch_record_contract::RECORD_INSTRUCTION_MAGIC_V1;
 use dclutch_rent_contract::RENT_CREDIT_INSTRUCTION_MAGIC_V1;
 use solana_program::{account_info::AccountInfo, entrypoint::ProgramResult, pubkey::Pubkey};
 
 mod authenticate;
+mod bearer;
 mod close_fund;
+mod dealer;
+mod direct;
 mod error;
 mod found_market;
+mod general;
 mod open_vault;
 mod position;
 mod provider;
@@ -41,6 +46,8 @@ mod realm;
 mod records;
 mod rent_credit;
 mod resolution;
+mod series;
+mod source;
 #[cfg(feature = "non-production-real-pyth-lab")]
 mod synthetic_release;
 mod terminal;
@@ -57,6 +64,34 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if instruction_data.get(..GENERAL_INSTRUCTION_MAGIC_V1.len())
+        == Some(&GENERAL_INSTRUCTION_MAGIC_V1)
+    {
+        return general::dispatch(program_id, accounts, instruction_data);
+    }
+    if instruction_data.get(..dclutch_bearer_contract::instruction::BEARER_INSTRUCTION_MAGIC.len())
+        == Some(&dclutch_bearer_contract::instruction::BEARER_INSTRUCTION_MAGIC)
+    {
+        return bearer::dispatch(program_id, accounts, instruction_data);
+    }
+    if instruction_data.get(..dclutch_source_contract::SOURCE_INSTRUCTION_MAGIC.len())
+        == Some(&dclutch_source_contract::SOURCE_INSTRUCTION_MAGIC)
+    {
+        return source::dispatch(program_id, accounts, instruction_data);
+    }
+    if series::is_routable_instruction(instruction_data) {
+        return series::dispatch(program_id, accounts, instruction_data);
+    }
+    if instruction_data.get(..dclutch_dealer_contract::instruction::DEALER_INSTRUCTION_MAGIC.len())
+        == Some(&dclutch_dealer_contract::instruction::DEALER_INSTRUCTION_MAGIC)
+    {
+        return dealer::dispatch(program_id, accounts, instruction_data);
+    }
+    if instruction_data.get(..dclutch_direct_contract::adapter::DIRECT_ADAPTER_MAGIC_V2.len())
+        == Some(&dclutch_direct_contract::adapter::DIRECT_ADAPTER_MAGIC_V2)
+    {
+        return direct::dispatch(program_id, accounts, instruction_data);
+    }
     if instruction_data.get(..RENT_CREDIT_INSTRUCTION_MAGIC_V1.len())
         == Some(&RENT_CREDIT_INSTRUCTION_MAGIC_V1)
     {

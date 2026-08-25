@@ -60,7 +60,7 @@ use crate::{
 /// so a direct caller cannot obtain a compatibility path.
 pub(crate) fn dispatch<'a>(
     program_id: &Pubkey,
-    accounts: &'a [AccountInfo<'a>],
+    accounts: &[AccountInfo<'a>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
     let instruction =
@@ -104,7 +104,7 @@ fn account_frame(accounts: &[AccountInfo<'_>]) -> Result<Vec<AccountMetaV1>, Pro
 
 fn process<'a, const N: usize>(
     program_id: &Pubkey,
-    accounts: &'a [AccountInfo<'a>],
+    accounts: &[AccountInfo<'a>],
     frame: &[AccountMetaV1],
     instruction: InstructionV1,
 ) -> Result<(), ProgramError> {
@@ -219,7 +219,7 @@ fn process<'a, const N: usize>(
 
 fn activate<'a, const N: usize>(
     program_id: &Pubkey,
-    accounts: &'a [AccountInfo<'a>],
+    accounts: &[AccountInfo<'a>],
     generation: u64,
     expected_prior_child_count: u64,
 ) -> Result<(), ProgramError> {

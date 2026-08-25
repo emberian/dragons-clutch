@@ -103,6 +103,28 @@ pub enum AdapterError {
     DirectPostcondition = 46,
     /// A Direct record or replay root could not close into its permanent RentCredit.
     DirectClose = 47,
+    /// A Series record, root, escrow, guard, ticket, RentCredit, or account fact failed.
+    SeriesAuthentication = 48,
+    /// The canonical Series semantic transition refused.
+    SeriesTransition = 49,
+    /// A System Program CPI required by Series refused.
+    SeriesCreateCpi = 50,
+    /// Series execution did not produce its exact account or balance post-state.
+    SeriesPostcondition = 51,
+    /// An exhausted Series root or escrow could not close into its permanent RentCredit.
+    SeriesClose = 52,
+    /// Bearer capability, Market, Position, Mint, claim, or account facts failed.
+    BearerAuthentication = 53,
+    /// The canonical bearer capability transition refused.
+    BearerTransition = 54,
+    /// A System Program CPI required by bearer execution refused.
+    BearerCreateCpi = 55,
+    /// A Token-2022 CPI required by bearer execution refused.
+    BearerTokenCpi = 56,
+    /// Bearer execution did not produce its exact account, supply, or balance post-state.
+    BearerPostcondition = 57,
+    /// An exhausted bearer account could not close to its immutable beneficiary.
+    BearerClose = 58,
 }
 
 impl From<AdapterError> for ProgramError {

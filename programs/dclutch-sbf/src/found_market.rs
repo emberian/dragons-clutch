@@ -852,11 +852,11 @@ mod tests {
     };
     use dclutch_record_contract::{ContentDigest, RecordKeyV1, SchemaReleaseId};
     use dclutch_source_contract::{
-        CapacityEnvelope as SourceCapacityEnvelope, MAX_RECOVERY_ATTEMPTS,
-        PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1, ProviderReleaseV1, PythAdapterConfigV1,
-        ResolutionPolicyV1, RoundingBoundary, SOURCE_MATERIAL_BYTES, SourceAccessProfile,
-        SourceCapacityProfileV1, SourceMaterialV1, SourceSpecV1, StatisticKind, StatisticSpecV1,
-        WindowKind, WindowSpecV1,
+        CapacityEnvelope as SourceCapacityEnvelope, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
+        ProviderReleaseV1, PythAdapterConfigV1, ResolutionPolicyV1, RoundingBoundary,
+        SOURCE_MATERIAL_BYTES, SourceAccessProfile, SourceCapacityProfileV1,
+        SourceMaterialInputV1, SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind,
+        WindowSpecV1, encode_source_material_into_v1,
     };
     use std::{boxed::Box, vec, vec::Vec};
 
@@ -933,13 +933,12 @@ mod tests {
             .expect("valid Product instance");
             let instance_bytes = instance.to_bytes();
 
-            let material = source_material(
-                capacity_id,
+            let material_bytes = source_material(
                 instance,
                 hash(&instance_bytes).to_bytes(),
                 domain,
+                [31; 32],
             );
-            let material_bytes = material.to_bytes();
             let policy_id = core_id(hash(&material_bytes).to_bytes());
             let fund_rent = Rent::default().minimum_balance(FUNDING_BYTES);
             let manifest_bytes = manifest_bytes(manifest_case, policy_id, fund_rent);
@@ -1346,11 +1345,11 @@ mod tests {
     }
 
     fn source_material(
-        _product_capacity_id: ProductContentId,
         instance: InstanceV1,
         instance_id: [u8; 32],
         domain: FiniteResultDomainV1,
-    ) -> SourceMaterialV1 {
+        provider_program_id: [u8; 32],
+    ) -> Vec<u8> {
         let capacity = SourceCapacityProfileV1::new(
             SourceCapacityEnvelope::Measured,
             1,
@@ -1363,7 +1362,7 @@ mod tests {
         .expect("source capacity");
         let capacity_id = source_id(hash(&capacity.to_bytes()).to_bytes());
         let provider = ProviderReleaseV1::new(
-            source_id([31; 32]),
+            source_id(provider_program_id),
             source_id(PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1),
             source_id([32; 32]),
             source_id([33; 32]),
@@ -1418,26 +1417,30 @@ mod tests {
             domain_id,
             None,
         );
-        SourceMaterialV1::new(
-            policy,
-            capacity_id,
-            capacity,
-            primary_source_id,
-            source,
-            provider_id,
-            provider,
-            adapter,
-            window_id,
-            window,
-            statistic_id,
-            statistic,
-            source_id(instance_id),
-            instance,
-            domain,
-            None,
-            [None; MAX_RECOVERY_ATTEMPTS],
+        let mut output = vec![0; SOURCE_MATERIAL_BYTES];
+        encode_source_material_into_v1(
+            &mut output,
+            SourceMaterialInputV1 {
+                policy: &policy,
+                capacity_profile_id: capacity_id,
+                capacity_profile: &capacity,
+                primary_source_id,
+                primary_source: &source,
+                primary_provider_release_id: provider_id,
+                primary_provider_release: &provider,
+                primary_adapter_config: &adapter,
+                window_id,
+                window: &window,
+                statistic_id,
+                statistic: &statistic,
+                product_instance_id: source_id(instance_id),
+                product_instance: &instance,
+                result_domain: &domain,
+                recovery: None,
+            },
         )
-        .expect("canonical Source material")
+        .expect("canonical Source material");
+        output
     }
 
     fn core_id(bytes: [u8; 32]) -> CoreContentId {
@@ -1585,18 +1588,29 @@ mod tests {
         // same adapter release cannot substitute for the Market-committed
         // resolution-policy preimage.
         let mut substituted_material = Fixture::new(2);
+        let instance_bytes = test_account(&substituted_material.accounts, 5)
+            .try_borrow_data()
+            .expect("Product instance data");
+        let instance = InstanceV1::decode(&instance_bytes).expect("canonical Product instance");
+        let instance_id = hash(&instance_bytes).to_bytes();
+        drop(instance_bytes);
+        let domain = FiniteResultDomainV1::new(product_id([21; 32]), product_id([22; 32]), 1, &[])
+            .expect("Product result domain");
+        let other_material = source_material(instance, instance_id, domain, [92; 32]);
+        SourceMaterialViewV1::decode(&other_material).expect("substitute material is canonical");
+        let other_digest = hash(&other_material).to_bytes();
         let (other_key, other_cursor) = record_pair(
             &substituted_material.program_id,
             SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
-            [91; 32],
+            other_digest,
         );
         let program_id = substituted_material.program_id;
         *test_account_mut(&mut substituted_material.accounts, 8) = leak_account(
             other_key,
             false,
             false,
-            Rent::default().minimum_balance(SOURCE_MATERIAL_BYTES),
-            vec![0; SOURCE_MATERIAL_BYTES],
+            Rent::default().minimum_balance(other_material.len()),
+            other_material,
             program_id,
             false,
         );
@@ -1611,7 +1625,7 @@ mod tests {
         );
         assert_eq!(
             substituted_material.authenticate().err(),
-            Some(ProgramError::from(AdapterError::FoundingAuthentication))
+            Some(ProgramError::from(AdapterError::AccountIdentity))
         );
 
         let mut trailing_manifest = Fixture::new(2);

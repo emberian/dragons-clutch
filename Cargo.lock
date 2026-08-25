@@ -465,7 +465,9 @@ dependencies = [
 name = "dclutch-series-contract"
 version = "0.1.0"
 dependencies = [
+ "dclutch-capability-contract",
  "dclutch-product-contract",
+ "dclutch-source-contract",
  "sha2",
 ]
 
