@@ -1235,34 +1235,55 @@ fn market_mutation_dispatch(
     let data = account
         .try_borrow_data()
         .map_err(|_| AdapterError::AccountData)?;
-    macro_rules! apply {
-        ($n:literal) => {{
-            let mut market =
-                CategoricalMarketV1::<$n>::decode(&data).map_err(|_| AdapterError::AccountData)?;
-            apply_market_operation(&mut market, generation, operation)?;
-            encode_market(market)
-        }};
-    }
-    match facts.outcome_count {
-        2 => apply!(2),
-        3 => apply!(3),
-        4 => apply!(4),
-        5 => apply!(5),
-        6 => apply!(6),
-        7 => apply!(7),
-        8 => apply!(8),
-        9 => apply!(9),
-        10 => apply!(10),
-        11 => apply!(11),
-        12 => apply!(12),
-        13 => apply!(13),
-        14 => apply!(14),
-        15 => apply!(15),
-        16 => apply!(16),
+    mutate_encoded_market(facts.outcome_count, &data, generation, operation)
+}
+
+// Keep width selection separate from every decoded Market value. The SBF
+// verifier charges an inlined match for the stack of all fifteen concrete
+// Market widths even though exactly one arm can execute.
+#[inline(never)]
+fn mutate_encoded_market(
+    outcome_count: u8,
+    data: &[u8],
+    generation: u64,
+    operation: MarketOperation,
+) -> Result<Vec<u8>, ProgramError> {
+    match outcome_count {
+        2 => mutate_encoded_market_width::<2>(data, generation, operation),
+        3 => mutate_encoded_market_width::<3>(data, generation, operation),
+        4 => mutate_encoded_market_width::<4>(data, generation, operation),
+        5 => mutate_encoded_market_width::<5>(data, generation, operation),
+        6 => mutate_encoded_market_width::<6>(data, generation, operation),
+        7 => mutate_encoded_market_width::<7>(data, generation, operation),
+        8 => mutate_encoded_market_width::<8>(data, generation, operation),
+        9 => mutate_encoded_market_width::<9>(data, generation, operation),
+        10 => mutate_encoded_market_width::<10>(data, generation, operation),
+        11 => mutate_encoded_market_width::<11>(data, generation, operation),
+        12 => mutate_encoded_market_width::<12>(data, generation, operation),
+        13 => mutate_encoded_market_width::<13>(data, generation, operation),
+        14 => mutate_encoded_market_width::<14>(data, generation, operation),
+        15 => mutate_encoded_market_width::<15>(data, generation, operation),
+        16 => mutate_encoded_market_width::<16>(data, generation, operation),
         _ => Err(AdapterError::AccountData.into()),
     }
 }
 
+// This is deliberately a non-inlined monomorph. It contains one decoded
+// Market, one transition candidate owned by the Market contract, and one heap
+// output. Encoding through a borrow avoids another by-value Market copy.
+#[inline(never)]
+fn mutate_encoded_market_width<const N: usize>(
+    data: &[u8],
+    generation: u64,
+    operation: MarketOperation,
+) -> Result<Vec<u8>, ProgramError> {
+    let mut market =
+        CategoricalMarketV1::<N>::decode(data).map_err(|_| AdapterError::AccountData)?;
+    apply_market_operation(&mut market, generation, operation)?;
+    encode_market(&market)
+}
+
+#[inline(never)]
 fn apply_market_operation<const N: usize>(
     market: &mut CategoricalMarketV1<N>,
     generation: u64,
@@ -1299,7 +1320,8 @@ fn apply_market_operation<const N: usize>(
     }
 }
 
-fn encode_market<const N: usize>(market: CategoricalMarketV1<N>) -> Result<Vec<u8>, ProgramError> {
+#[inline(never)]
+fn encode_market<const N: usize>(market: &CategoricalMarketV1<N>) -> Result<Vec<u8>, ProgramError> {
     let len = CategoricalMarketV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?;
     let mut output = Vec::new();
     output
@@ -2156,6 +2178,7 @@ fn account<'a, 'info>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_core_contract::{MarketIdentity, MarketRoot};
     use std::{boxed::Box, vec, vec::Vec};
 
     fn test_account(
@@ -2285,5 +2308,79 @@ mod tests {
             require_register_delta(creation.market_delta(), 5),
             Err(AdapterError::MarketTransition.into())
         );
+    }
+
+    #[test]
+    fn split_market_mutation_refuses_wrong_width_and_preserves_input_on_failure() {
+        let generation = 7;
+        let material_id = SourceContentId::new([4; 32]).expect("material");
+        let core_id = |fill| CoreContentId::new([fill; 32]).expect("content identity");
+        let identity = MarketIdentity::new(
+            core_id(1),
+            core_id(2),
+            core_id(3),
+            CoreContentId::new(material_id.to_bytes()).expect("material identity"),
+            core_id(5),
+            generation,
+        );
+        let mut root = MarketRoot::founding(identity, [6; 32]).expect("founding root");
+        root.transition_phase(generation, Phase::Open)
+            .expect("open root");
+        let market =
+            CategoricalMarketV1::<2>::new(root, 0, [0; 2], CategoricalSettlementSummaryV1::empty())
+                .expect("open market");
+        let mut encoded = vec![0; CategoricalMarketV1::<2>::encoded_len().expect("width")];
+        market.encode(&mut encoded).expect("encode market");
+        let before = encoded.clone();
+
+        assert_eq!(
+            mutate_encoded_market(
+                2,
+                &encoded,
+                generation,
+                MarketOperation::Register {
+                    expected_child_count: 1,
+                },
+            ),
+            Err(AdapterError::MarketTransition.into())
+        );
+        assert_eq!(encoded, before);
+        assert_eq!(
+            mutate_encoded_market(
+                3,
+                &encoded,
+                generation,
+                MarketOperation::Register {
+                    expected_child_count: 0,
+                },
+            ),
+            Err(AdapterError::AccountData.into())
+        );
+        assert_eq!(
+            mutate_encoded_market(
+                1,
+                &encoded,
+                generation,
+                MarketOperation::Register {
+                    expected_child_count: 0,
+                },
+            ),
+            Err(AdapterError::AccountData.into())
+        );
+        assert_eq!(encoded, before);
+
+        let changed = mutate_encoded_market(
+            2,
+            &encoded,
+            generation,
+            MarketOperation::Register {
+                expected_child_count: 0,
+            },
+        )
+        .expect("register one child");
+        let changed_market =
+            CategoricalMarketV1::<2>::decode(&changed).expect("decode changed market");
+        assert_eq!(changed_market.root().outstanding_children(), 1);
+        assert_eq!(encoded, before);
     }
 }
