@@ -646,8 +646,9 @@ pub fn admit_occurrence(
 pub fn require_market_pda(
     admitted: AdmittedOccurrenceV2,
     core_program: &Pubkey,
+    registry_program: &Pubkey,
 ) -> Result<(), SeriesV2Error> {
-    if *core_program == Pubkey::default() {
+    if *core_program == Pubkey::default() || *registry_program == Pubkey::default() {
         return Err(SeriesV2Error::Market);
     }
     let occurrence = admitted.occurrence;
@@ -659,6 +660,7 @@ pub fn require_market_pda(
         resolution_policy: core_identity(occurrence.resolution_policy)?,
         capability_manifest: core_identity(occurrence.capability_manifest)?,
         selected_release_set: core_identity(admitted.template.release_set)?,
+        registry_program: core_pubkey_identity(*registry_program)?,
         generation: u64::from(occurrence.occurrence) + 1,
     };
     let seeds = MarketCoreStateSeedsV1::new(identity);

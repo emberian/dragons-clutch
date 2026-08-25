@@ -601,6 +601,7 @@ pub struct MarketCoreStateSeedsV1 {
     resolution_policy: [u8; IDENTITY_BYTES],
     capability_manifest: [u8; IDENTITY_BYTES],
     release_set: [u8; IDENTITY_BYTES],
+    registry_program: [u8; IDENTITY_BYTES],
     generation: [u8; 8],
 }
 
@@ -615,13 +616,14 @@ impl MarketCoreStateSeedsV1 {
             resolution_policy: identity.resolution_policy.to_bytes(),
             capability_manifest: identity.capability_manifest.to_bytes(),
             release_set: identity.selected_release_set.to_bytes(),
+            registry_program: identity.registry_program.to_bytes(),
             generation: identity.generation.to_le_bytes(),
         }
     }
 
     /// Return the sole ordered PDA seed projection, excluding the bump.
     #[must_use]
-    pub fn as_slices(&self) -> [&[u8]; 8] {
+    pub fn as_slices(&self) -> [&[u8]; 9] {
         [
             crate::MARKET_CORE_STATE_PDA_DOMAIN_V1.as_slice(),
             &self.realm,
@@ -630,6 +632,7 @@ impl MarketCoreStateSeedsV1 {
             &self.resolution_policy,
             &self.capability_manifest,
             &self.release_set,
+            &self.registry_program,
             &self.generation,
         ]
     }

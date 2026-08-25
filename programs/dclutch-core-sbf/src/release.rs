@@ -21,9 +21,11 @@ pub(crate) fn authenticate_role<'info>(
     registry: &AccountInfo<'info>,
     role_program: &AccountInfo<'info>,
     role_programdata: &AccountInfo<'info>,
+    expected_registry: Identity,
     release_set_id: [u8; 32],
     role: Role,
 ) -> Result<Admission, CoreSbfError> {
+    require_expected_registry(registry.key, expected_registry)?;
     validate_release_accounts(cache, registry, role_program, role_programdata)?;
     let expected_cache =
         Pubkey::find_program_address(&[ACTIVATION_PDA_DOMAIN_V1, &release_set_id], registry.key).0;
@@ -86,6 +88,7 @@ pub(crate) fn authenticate_role<'info>(
         return Err(CoreSbfError::Release);
     }
     Ok(Admission {
+        market_registry_program: expected_registry,
         market_release_set_id: identity(release_set_id)?,
         selected,
         receipt: ReleaseReceipt {
@@ -97,6 +100,16 @@ pub(crate) fn authenticate_role<'info>(
             current_deployment_reauthenticated: true,
         },
     })
+}
+
+fn require_expected_registry(
+    registry: &Pubkey,
+    expected_registry: Identity,
+) -> Result<(), CoreSbfError> {
+    if registry.to_bytes() != expected_registry.to_bytes() {
+        return Err(CoreSbfError::Release);
+    }
+    Ok(())
 }
 
 fn validate_release_accounts(
@@ -178,4 +191,23 @@ fn selected_binding(selected: ReleaseSet, role: Role) -> Binding {
 
 pub(crate) fn identity(bytes: [u8; 32]) -> Result<Identity, CoreSbfError> {
     Identity::new(bytes).map_err(|_| CoreSbfError::Reference)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn substituted_registry_refuses_before_cpi() {
+        let expected = Identity::new([9; 32]).expect("nonzero Registry");
+        assert_eq!(
+            require_expected_registry(&Pubkey::new_from_array([9; 32]), expected),
+            Ok(()),
+        );
+        assert_eq!(
+            require_expected_registry(&Pubkey::new_from_array([11; 32]), expected),
+            Err(CoreSbfError::Release),
+            "the selected Core executable cannot substitute for the persisted Registry",
+        );
+    }
 }

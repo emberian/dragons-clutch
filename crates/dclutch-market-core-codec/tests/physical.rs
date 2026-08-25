@@ -497,6 +497,7 @@ fn market_state_pda_commits_every_immutable_coordinate() {
         resolution_policy: id(44),
         capability_manifest: id(48),
         selected_release_set: id(45),
+        registry_program: id(49),
         generation: 46,
     };
     let realm = id(41).to_bytes();
@@ -505,8 +506,9 @@ fn market_state_pda_commits_every_immutable_coordinate() {
     let resolution = id(44).to_bytes();
     let capability_manifest = id(48).to_bytes();
     let release_set = id(45).to_bytes();
+    let registry_program = id(49).to_bytes();
     let generation = 46_u64.to_le_bytes();
-    let expected: [&[u8]; 8] = [
+    let expected: [&[u8]; 9] = [
         MARKET_CORE_STATE_PDA_DOMAIN_V1.as_slice(),
         realm.as_slice(),
         product.as_slice(),
@@ -514,12 +516,19 @@ fn market_state_pda_commits_every_immutable_coordinate() {
         resolution.as_slice(),
         capability_manifest.as_slice(),
         release_set.as_slice(),
+        registry_program.as_slice(),
         generation.as_slice(),
     ];
     assert_eq!(MarketCoreStateSeedsV1::new(identity).as_slices(), expected);
 
     let mut substituted = identity;
     substituted.generation = 47;
+    assert_ne!(
+        MarketCoreStateSeedsV1::new(identity),
+        MarketCoreStateSeedsV1::new(substituted),
+    );
+    substituted = identity;
+    substituted.registry_program = id(50);
     assert_ne!(
         MarketCoreStateSeedsV1::new(identity),
         MarketCoreStateSeedsV1::new(substituted),
@@ -545,6 +554,7 @@ fn core_state_for_view() -> CoreState {
             resolution_policy: id(56),
             capability_manifest: id(67),
             selected_release_set: id(45),
+            registry_program: id(49),
             generation: 7,
         },
         outstanding_capabilities: 0,

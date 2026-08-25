@@ -5,9 +5,9 @@ This standalone crate is the generated, fixed-memory interpreter for
 yet an account-owning Solana adapter.
 
 `MarketCoreAbi.lean` owns the semantic wire layout. The V2 Market header is
-exactly 320 bytes and the request is 72 bytes. The header persists only:
+exactly 352 bytes and the request is 72 bytes. The header persists only:
 
-- immutable Market identity references and generation;
+- immutable Market identity references, Registry program, and generation;
 - lifecycle phase, readiness, and terminal winner/receipt;
 - the immutable RentCredit beneficiary; and
 - a checked count of outstanding manifest-selected optional capabilities.
@@ -49,7 +49,8 @@ never substituted for caller role Core.
 
 The Market PDA under the Registry-selected Core program uses
 `["dclutch/market-core/state/v1", realm, product, result_domain,
-resolution_policy, capability_manifest, release_set, generation_le]`.
+resolution_policy, capability_manifest, release_set, registry_program,
+generation_le]`.
 `MarketCoreStateSeedsV1` is the canonical projection.
 
 `CoreMarketViewV1::authenticate` is a pure semantic join over a decoded sparse

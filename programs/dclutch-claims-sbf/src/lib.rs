@@ -1438,6 +1438,7 @@ mod tests {
                 resolution_policy: semantic_id(14)?,
                 capability_manifest: semantic_id(15)?,
                 selected_release_set: semantic_id(1)?,
+                registry_program: semantic_id(8)?,
                 generation: 1,
             },
             outstanding_capabilities: 1,

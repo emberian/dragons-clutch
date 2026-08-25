@@ -87,9 +87,10 @@ structure Receipt where
   currentDeploymentReauthenticated : Bool
   deriving DecidableEq, Repr
 
-/-- A Market or capability supplies its immutable selection alongside the
-current normalized Registry receipt. -/
+/-- A Market or capability supplies its immutable Registry and release-set
+selection alongside the current normalized Registry receipt. -/
 structure Admission where
+  marketRegistryProgram : Identity
   marketReleaseSetId : Identity
   selected : ReleaseSet
   receipt : Receipt
@@ -98,8 +99,9 @@ structure Admission where
 /-- Propositional view used by named proofs. -/
 def Admissible (admission : Admission) (expectedRole : Role) : Prop :=
   releaseSetValid admission.selected = true /\
+  identityValid admission.marketRegistryProgram = true /\
   admission.marketReleaseSetId = admission.selected.releaseSetId /\
-  admission.receipt.registryProgram = admission.selected.core.program /\
+  admission.receipt.registryProgram = admission.marketRegistryProgram /\
   admission.receipt.releaseSetId = admission.selected.releaseSetId /\
   admission.receipt.role = expectedRole /\
   admission.receipt.observed = admission.selected.binding expectedRole /\
@@ -127,7 +129,7 @@ theorem admitted_binding_is_exact
     (accepted : admits admission expectedRole = true) :
     admission.receipt.observed = admission.selected.binding expectedRole := by
   rcases (admits_iff_admissible admission expectedRole).mp accepted with
-    ⟨_, _, _, _, _, observed, _, _⟩
+    ⟨_, _, _, _, _, _, observed, _, _⟩
   exact observed
 
 /-- Admission contains no mock or caller assertion: both authenticated cache
@@ -135,17 +137,27 @@ and current-deployment observations must be true. -/
 theorem admitted_only_through_current_registry_receipt
     (admission : Admission) (expectedRole : Role)
     (accepted : admits admission expectedRole = true) :
-    admission.receipt.registryProgram = admission.selected.core.program /\
+    admission.receipt.registryProgram = admission.marketRegistryProgram /\
     admission.receipt.activationCacheAuthenticated = true /\
     admission.receipt.currentDeploymentReauthenticated = true := by
   rcases (admits_iff_admissible admission expectedRole).mp accepted with
-    ⟨_, _, registry, _, _, _, cache, current⟩
+    ⟨_, _, _, registry, _, _, _, cache, current⟩
   exact ⟨registry, cache, current⟩
 
 /-- Substituting the Market's selected release-set identity is always refused. -/
 theorem substituted_market_selection_refuses
     (admission : Admission) (expectedRole : Role)
     (substituted : admission.marketReleaseSetId ≠ admission.selected.releaseSetId) :
+    admits admission expectedRole = false := by
+  simp [admits, Admissible, substituted]
+
+/-- A receipt produced by any Registry other than the Market's immutable
+Registry coordinate is refused, even if that producer equals the Core role
+Program. -/
+theorem substituted_market_registry_refuses
+    (admission : Admission) (expectedRole : Role)
+    (substituted :
+      admission.receipt.registryProgram ≠ admission.marketRegistryProgram) :
     admits admission expectedRole = false := by
   simp [admits, Admissible, substituted]
 

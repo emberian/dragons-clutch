@@ -47,6 +47,7 @@ struct Fixture {
     siblings: [[u8; 32]; 2],
     funding: [Pubkey; 2],
     core_program: Pubkey,
+    registry_program: Pubkey,
 }
 
 impl Fixture {
@@ -64,6 +65,7 @@ impl Fixture {
         );
 
         let core_program = key(60);
+        let registry_program = key(59);
         let occurrence_value = OccurrenceV2::decode(&occurrence).expect("occurrence before market");
         let template_value = TemplateV2::decode(&template).expect("template before root");
         let identity = MarketIdentity {
@@ -76,6 +78,7 @@ impl Fixture {
             capability_manifest: core_identity(occurrence_value.capability_manifest)
                 .expect("manifest"),
             selected_release_set: core_identity(template_value.release_set).expect("release"),
+            registry_program: core_pubkey_identity(registry_program).expect("Registry"),
             generation: u64::from(occurrence_value.occurrence) + 1,
         };
         let seeds = MarketCoreStateSeedsV1::new(identity);
@@ -124,6 +127,7 @@ impl Fixture {
             siblings,
             funding,
             core_program,
+            registry_program,
         }
     }
 
@@ -191,7 +195,8 @@ fn lean_vectors_hostile_decode_and_exact_admission() {
     );
     admitted.require_ticket(ticket).expect("exact ticket");
     require_funding_list(admitted.occurrence(), &fixture.funding).expect("exact funding");
-    require_market_pda(admitted, &fixture.core_program).expect("exact Market");
+    require_market_pda(admitted, &fixture.core_program, &fixture.registry_program)
+        .expect("exact Market");
 }
 
 #[test]
@@ -300,9 +305,14 @@ fn merkle_sibling_length_value_and_order_refuse() {
 fn market_pda_commits_every_core_identity_coordinate() {
     let fixture = Fixture::new();
     let admitted = fixture.admit();
-    require_market_pda(admitted, &fixture.core_program).expect("exact Market");
+    require_market_pda(admitted, &fixture.core_program, &fixture.registry_program)
+        .expect("exact Market");
     assert_eq!(
-        require_market_pda(admitted, &key(62)),
+        require_market_pda(admitted, &key(62), &fixture.registry_program),
+        Err(SeriesV2Error::Market)
+    );
+    assert_eq!(
+        require_market_pda(admitted, &fixture.core_program, &key(58)),
         Err(SeriesV2Error::Market)
     );
 
@@ -313,7 +323,11 @@ fn market_pda_commits_every_core_identity_coordinate() {
         .expect("Market byte") ^= 1;
     substituted.recommit_occurrence();
     assert_eq!(
-        require_market_pda(substituted.admit(), &substituted.core_program),
+        require_market_pda(
+            substituted.admit(),
+            &substituted.core_program,
+            &substituted.registry_program,
+        ),
         Err(SeriesV2Error::Market)
     );
 }

@@ -66,6 +66,7 @@ structure MarketIdentity where
   resolutionPolicyId : Identity
   capabilityManifestId : Identity
   executionReleaseSetId : Identity
+  registryProgramId : Identity
   generation : Nat
   deriving DecidableEq, Repr
 
@@ -73,7 +74,7 @@ def MarketIdentity.valid (identity : MarketIdentity) : Bool :=
   identity.marketId != 0 && identity.realmId != 0 &&
   identity.productId != 0 && identity.resultDomainId != 0 &&
   identity.resolutionPolicyId != 0 && identity.capabilityManifestId != 0 &&
-  identity.executionReleaseSetId != 0
+  identity.executionReleaseSetId != 0 && identity.registryProgramId != 0
 
 /-! ## Dust-tolerant exact account creation -/
 
@@ -180,6 +181,7 @@ def foundingAccepts (frame : FoundingFrame) : Bool :=
   frame.identity.productId == frame.product.productId &&
   frame.identity.resultDomainId == frame.product.resultDomainId &&
   frame.identity.executionReleaseSetId == frame.coreAdmission.selected.releaseSetId &&
+  frame.identity.registryProgramId == frame.coreAdmission.marketRegistryProgram &&
   frame.coreAdmission.marketReleaseSetId == frame.identity.executionReleaseSetId &&
   ExecutionRelease.admits frame.coreAdmission .core &&
   frame.quote.valid &&
@@ -284,6 +286,7 @@ def admissionMatches
     (state : State) (admission : ExecutionRelease.Admission)
     (role : ExecutionRelease.Role) : Bool :=
   admission.marketReleaseSetId == state.identity.executionReleaseSetId &&
+  admission.marketRegistryProgram == state.identity.registryProgramId &&
   admission.selected.releaseSetId == state.identity.executionReleaseSetId &&
   ExecutionRelease.admits admission role
 

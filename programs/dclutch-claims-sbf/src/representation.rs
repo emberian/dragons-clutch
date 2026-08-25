@@ -1226,6 +1226,7 @@ mod tests {
                 resolution_policy: identity(13),
                 capability_manifest: identity(14),
                 selected_release_set: identity(6),
+                registry_program: identity(17),
                 generation: 19,
             },
             outstanding_capabilities: 1,

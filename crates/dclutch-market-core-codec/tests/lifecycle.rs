@@ -50,10 +50,11 @@ fn selected_binding(selected: ReleaseSet, role: Role) -> Binding {
 fn admission(role: Role) -> Admission {
     let selected = release_set();
     Admission {
+        market_registry_program: id(9),
         market_release_set_id: selected.release_set_id,
         selected,
         receipt: ReleaseReceipt {
-            registry_program: selected_binding(selected, Role::Core).program,
+            registry_program: id(9),
             release_set_id: selected.release_set_id,
             role,
             observed: selected_binding(selected, role),
@@ -92,6 +93,7 @@ fn identity() -> MarketIdentity {
         resolution_policy: id(41),
         capability_manifest: id(42),
         selected_release_set: id(10),
+        registry_program: id(9),
         generation: 7,
     }
 }
@@ -229,7 +231,7 @@ fn terminal_state(outcome_count: u32, selector: u32) -> CoreState {
 
 #[test]
 fn sparse_state_and_request_schema_are_fresh_and_hostile_decodable() {
-    assert_eq!(STATE_BYTES, 320);
+    assert_eq!(STATE_BYTES, 352);
     assert_eq!(REQUEST_BYTES, 72);
     assert_eq!(ACTION_VERIFY_READINESS_TAG, 1);
     assert_eq!(ACTION_ACTIVATE_CAPABILITY_TAG, 8);
@@ -240,7 +242,7 @@ fn sparse_state_and_request_schema_are_fresh_and_hostile_decodable() {
     let encoded = state.encode().expect("state encodes");
     assert_eq!(CoreState::decode(&encoded), Ok(state));
     assert_eq!(
-        u64::from_le_bytes(encoded[248..256].try_into().expect("count slice")),
+        u64::from_le_bytes(encoded[280..288].try_into().expect("count slice")),
         9
     );
 
@@ -273,6 +275,47 @@ fn sparse_state_and_request_schema_are_fresh_and_hostile_decodable() {
     let mut unknown = bytes;
     unknown[10] = 10;
     assert_eq!(Request::decode(&unknown), Err(Error::InvalidTag));
+}
+
+#[test]
+fn admission_joins_the_immutable_market_registry_not_the_core_program() {
+    let state = found(
+        Request::administrative(Action::Found, 7, id(40)),
+        founding_frame(3, 0),
+    )
+    .expect("Found with a distinct Registry")
+    .state;
+
+    assert_ne!(
+        state.identity.registry_program,
+        selected_binding(release_set(), Role::Core).program,
+        "the Registry and selected Core executable are distinct authorities",
+    );
+    let mut exact = state;
+    verify_readiness(
+        admin(Action::VerifyReadiness, exact),
+        &mut exact,
+        admission(Role::Core),
+        true,
+        child(),
+    )
+    .expect("the exact persisted Registry admits a current Core receipt");
+
+    let mut substituted = admission(Role::Core);
+    substituted.receipt.registry_program = selected_binding(release_set(), Role::Core).program;
+    let mut candidate = state;
+    assert_eq!(
+        verify_readiness(
+            admin(Action::VerifyReadiness, candidate),
+            &mut candidate,
+            substituted,
+            true,
+            child(),
+        ),
+        Err(Error::InvalidRelease),
+        "substituting the Core executable as Registry must fail closed",
+    );
+    assert_eq!(candidate, state);
 }
 
 #[test]

@@ -29,11 +29,14 @@ def releases : ExecutionRelease.ReleaseSet := {
   custody := binding 14 114 214
 }
 
+def registryProgram : Nat := 9
+
 def admission (role : ExecutionRelease.Role) : ExecutionRelease.Admission := {
+  marketRegistryProgram := registryProgram
   marketReleaseSetId := releases.releaseSetId
   selected := releases
   receipt := {
-    registryProgram := releases.core.program
+    registryProgram
     releaseSetId := releases.releaseSetId
     role
     observed := releases.binding role
@@ -66,6 +69,7 @@ def identity : MarketIdentity := {
   resolutionPolicyId := 555
   capabilityManifestId := 556
   executionReleaseSetId := releases.releaseSetId
+  registryProgramId := registryProgram
   generation := 1
 }
 

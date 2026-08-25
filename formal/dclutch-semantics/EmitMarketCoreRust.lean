@@ -125,6 +125,7 @@ pub struct ReleaseReceipt {
 /// Immutable Market selection plus one current receipt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Admission {
+    pub market_registry_program: Identity,
     pub market_release_set_id: Identity,
     pub selected: ReleaseSet,
     pub receipt: ReleaseReceipt,
@@ -133,7 +134,7 @@ pub struct Admission {
 fn admission_valid(admission: Admission, role: Role) -> bool {
     admission.selected.valid()
         && admission.market_release_set_id == admission.selected.release_set_id
-        && admission.receipt.registry_program == admission.selected.binding(Role::Core).program
+        && admission.receipt.registry_program == admission.market_registry_program
         && admission.receipt.release_set_id == admission.selected.release_set_id
         && admission.receipt.role == role
         && admission.receipt.observed == admission.selected.binding(role)
@@ -177,6 +178,7 @@ pub struct MarketIdentity {
     pub resolution_policy: Identity,
     pub capability_manifest: Identity,
     pub selected_release_set: Identity,
+    pub registry_program: Identity,
     pub generation: u64,
 }
 
@@ -257,6 +259,7 @@ impl CoreState {
         put_identity(&mut output, STATE_RESOLUTION_POLICY_OFFSET, self.identity.resolution_policy)?;
         put_identity(&mut output, STATE_CAPABILITY_MANIFEST_OFFSET, self.identity.capability_manifest)?;
         put_identity(&mut output, STATE_SELECTED_RELEASE_SET_OFFSET, self.identity.selected_release_set)?;
+        put_identity(&mut output, STATE_REGISTRY_PROGRAM_OFFSET, self.identity.registry_program)?;
         put_u64(&mut output, STATE_GENERATION_OFFSET, self.identity.generation)?;
         put_u64(
             &mut output,
@@ -299,6 +302,7 @@ impl CoreState {
                 resolution_policy: read_identity(input, STATE_RESOLUTION_POLICY_OFFSET)?,
                 capability_manifest: read_identity(input, STATE_CAPABILITY_MANIFEST_OFFSET)?,
                 selected_release_set: read_identity(input, STATE_SELECTED_RELEASE_SET_OFFSET)?,
+                registry_program: read_identity(input, STATE_REGISTRY_PROGRAM_OFFSET)?,
                 generation: read_u64(input, STATE_GENERATION_OFFSET)?,
             },
             outstanding_capabilities: read_u64(input, STATE_OUTSTANDING_CAPABILITIES_OFFSET)?,
@@ -622,6 +626,7 @@ pub fn found(request: Request, frame: FoundingFrame) -> Result<FoundingResult, E
         || frame.identity.product_id != frame.product.product_id
         || frame.identity.result_domain != frame.product.result_domain
         || frame.identity.selected_release_set != frame.core_admission.selected.release_set_id
+        || frame.identity.registry_program != frame.core_admission.market_registry_program
         || !admission_valid(frame.core_admission, Role::Core)
         || frame.core_admission.market_release_set_id != frame.identity.selected_release_set
         || frame.quote.market_rent == 0
@@ -997,6 +1002,7 @@ fn require_request(
 
 fn require_admission(state: CoreState, admission: Admission, role: Role) -> Result<(), Error> {
     if admission.market_release_set_id != state.identity.selected_release_set
+        || admission.market_registry_program != state.identity.registry_program
         || admission.selected.release_set_id != state.identity.selected_release_set
         || !admission_valid(admission, role)
     {

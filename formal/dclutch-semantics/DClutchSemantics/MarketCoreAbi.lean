@@ -4,7 +4,7 @@ import DClutchSemantics.MarketCore
 /-!
 # Fixed Market Core physical ABI V2
 
-The fixed 320-byte header contains only lifecycle and immutable Market identity
+The fixed 352-byte header contains only lifecycle and immutable Market identity
 references. The Product-owned outcome count remains runtime data, while all
 mutable claim vectors and Hoard principal belong exclusively to the Claims
 aggregate deterministically derived by the selected Claims program. Source/Resolution exclusively owns
@@ -24,7 +24,7 @@ def version : Nat := 2
 inductive StateField where
   | magic | version | phase | readiness | terminalWinner
   | marketId | identityRealm | identityProduct | identityResultDomain
-  | resolutionPolicy | capabilityManifest | selectedReleaseSet | generation
+  | resolutionPolicy | capabilityManifest | selectedReleaseSet | registryProgram | generation
   | outstandingCapabilities
   | rentBeneficiary
   | terminalReceipt
@@ -37,7 +37,8 @@ def stateSchema : List (FieldSpec StateField) := [
   ⟨.identityProduct, .bytes 32⟩, ⟨.identityResultDomain, .bytes 32⟩,
   ⟨.resolutionPolicy, .bytes 32⟩,
   ⟨.capabilityManifest, .bytes 32⟩,
-  ⟨.selectedReleaseSet, .bytes 32⟩, ⟨.generation, .u64⟩,
+  ⟨.selectedReleaseSet, .bytes 32⟩, ⟨.registryProgram, .bytes 32⟩,
+  ⟨.generation, .u64⟩,
   ⟨.outstandingCapabilities, .u64⟩,
   ⟨.rentBeneficiary, .bytes 32⟩,
   ⟨.terminalReceipt, .bytes 32⟩
@@ -57,14 +58,15 @@ def rustName : StateField → String
   | .identityResultDomain => "STATE_IDENTITY_RESULT_DOMAIN_OFFSET"
   | .resolutionPolicy => "STATE_RESOLUTION_POLICY_OFFSET"
   | .capabilityManifest => "STATE_CAPABILITY_MANIFEST_OFFSET"
-  | .selectedReleaseSet => "STATE_SELECTED_RELEASE_SET_OFFSET" | .generation => "STATE_GENERATION_OFFSET"
+  | .selectedReleaseSet => "STATE_SELECTED_RELEASE_SET_OFFSET"
+  | .registryProgram => "STATE_REGISTRY_PROGRAM_OFFSET" | .generation => "STATE_GENERATION_OFFSET"
   | .outstandingCapabilities => "STATE_OUTSTANDING_CAPABILITIES_OFFSET"
   | .rentBeneficiary => "STATE_RENT_BENEFICIARY_OFFSET"
   | .terminalReceipt => "STATE_TERMINAL_RECEIPT_OFFSET"
 
 end StateField
 
-theorem state_schema_width : stateBytes = 320 := by native_decide
+theorem state_schema_width : stateBytes = 352 := by native_decide
 theorem state_schema_unique : (stateSchema.map fun field => field.name).Nodup := by native_decide
 theorem state_fields_disjoint : stateLayout.Pairwise Before := specializeFrom_pairwise 0 stateSchema
 theorem state_fields_bounded (placed : PlacedField StateField) (member : placed ∈ stateLayout) :

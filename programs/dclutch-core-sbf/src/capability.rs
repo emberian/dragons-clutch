@@ -52,6 +52,7 @@ const FUNDING_START: usize = 5;
 const ROUTE_FIXED_ACCOUNTS: usize = 9;
 
 struct Route<'accounts, 'info> {
+    market: &'accounts AccountInfo<'info>,
     funding: &'accounts [AccountInfo<'info>],
     manifest: &'accounts AccountInfo<'info>,
     root: &'accounts AccountInfo<'info>,
@@ -145,6 +146,7 @@ pub(crate) fn process(
         route.registry,
         route.core_program,
         route.core_programdata,
+        state.identity.registry_program,
         state.identity.selected_release_set.to_bytes(),
         Role::Core,
     )?;
@@ -156,6 +158,7 @@ pub(crate) fn process(
         route.registry,
         route.child_program,
         route.child_programdata,
+        state.identity.registry_program,
         state.identity.selected_release_set.to_bytes(),
         Role::Trading,
     )?;
@@ -240,6 +243,7 @@ impl<'accounts, 'info> Route<'accounts, 'info> {
             return Err(CoreSbfError::AccountFrame);
         }
         Ok(Self {
+            market: account(accounts, MARKET)?,
             funding: accounts
                 .get(FUNDING_START..funding_end)
                 .ok_or(CoreSbfError::AccountFrame)?,
@@ -666,7 +670,7 @@ fn invoke_child(
         .funding
         .len()
         .saturating_add(route.child_tail.len())
-        .saturating_add(3);
+        .saturating_add(4);
     let mut metas = Vec::with_capacity(account_capacity);
     metas.push(AccountMeta::new_readonly(*route.caller_authority.key, true));
     metas.push(AccountMeta::new(*route.root.key, false));
@@ -674,6 +678,7 @@ fn invoke_child(
         metas.push(AccountMeta::new(*funding.key, false));
     }
     metas.push(AccountMeta::new_readonly(*route.manifest.key, false));
+    metas.push(AccountMeta::new_readonly(*route.market.key, false));
     for value in route.child_tail {
         metas.push(if value.is_writable {
             AccountMeta::new(*value.key, false)
@@ -709,6 +714,7 @@ fn invoke_child(
     infos.push(route.root.clone());
     infos.extend(route.funding.iter().cloned());
     infos.push(route.manifest.clone());
+    infos.push(route.market.clone());
     infos.extend(route.child_tail.iter().cloned());
     infos.push(route.child_program.clone());
     invoke_signed(&instruction, &infos, &[&signer]).map_err(|_| CoreSbfError::ChildCpi.into())

@@ -480,6 +480,7 @@ fn core_market(
         resolution_policy: semantic_identity([0x71; 32]),
         capability_manifest: semantic_identity([0x72; 32]),
         selected_release_set: semantic_identity(release_set),
+        registry_program: semantic_identity(REGISTRY_PROGRAM_ID.to_bytes()),
         generation: GENERATION,
     };
     let market = Pubkey::find_program_address(

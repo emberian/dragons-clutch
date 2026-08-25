@@ -82,6 +82,7 @@ pub struct TradingActivationAccountsV1<'accounts, 'info> {
     child_root: &'accounts solana_program::account_info::AccountInfo<'info>,
     funding: &'accounts [solana_program::account_info::AccountInfo<'info>],
     manifest: &'accounts solana_program::account_info::AccountInfo<'info>,
+    market: &'accounts solana_program::account_info::AccountInfo<'info>,
     family_accounts: &'accounts [solana_program::account_info::AccountInfo<'info>],
 }
 
@@ -97,7 +98,10 @@ impl<'accounts, 'info> TradingActivationAccountsV1<'accounts, 'info> {
         let manifest_index = FUNDING_START
             .checked_add(usize::from(funding.funding_count()))
             .ok_or(TradingSbfError::Content)?;
-        let family_start = manifest_index
+        let market_index = manifest_index
+            .checked_add(1)
+            .ok_or(TradingSbfError::Content)?;
+        let family_start = market_index
             .checked_add(1)
             .ok_or(TradingSbfError::Content)?;
         let core_authority = accounts.get(AUTHORITY).ok_or(TradingSbfError::Content)?;
@@ -108,6 +112,7 @@ impl<'accounts, 'info> TradingActivationAccountsV1<'accounts, 'info> {
         let manifest = accounts
             .get(manifest_index)
             .ok_or(TradingSbfError::Content)?;
+        let market = accounts.get(market_index).ok_or(TradingSbfError::Content)?;
         let family_accounts = accounts
             .get(family_start..)
             .ok_or(TradingSbfError::Content)?;
@@ -120,6 +125,9 @@ impl<'accounts, 'info> TradingActivationAccountsV1<'accounts, 'info> {
             || manifest.is_signer
             || manifest.is_writable
             || manifest.executable
+            || market.is_signer
+            || market.is_writable
+            || market.executable
             || funding_accounts
                 .iter()
                 .any(|account| account.is_signer || !account.is_writable || account.executable)
@@ -133,6 +141,7 @@ impl<'accounts, 'info> TradingActivationAccountsV1<'accounts, 'info> {
             child_root,
             funding: funding_accounts,
             manifest,
+            market,
             family_accounts,
         })
     }
@@ -157,6 +166,11 @@ impl<'accounts, 'info> TradingActivationAccountsV1<'accounts, 'info> {
     /// Return the exact selected manifest raw-record account.
     pub const fn manifest(&self) -> &'accounts solana_program::account_info::AccountInfo<'info> {
         self.manifest
+    }
+
+    /// Return the authenticated Core Market forwarded read-only by Core.
+    pub const fn market(&self) -> &'accounts solana_program::account_info::AccountInfo<'info> {
+        self.market
     }
 
     /// Return the exact descriptor-account-profile-owned suffix.
@@ -807,7 +821,8 @@ mod tests {
             account(Pubkey::new_from_array([4; 32]), false, true),
             account(Pubkey::new_from_array([5; 32]), false, false),
             account(Pubkey::new_from_array([6; 32]), false, false),
-            account(Pubkey::new_from_array([6; 32]), false, false),
+            account(Pubkey::new_from_array([7; 32]), false, false),
+            account(Pubkey::new_from_array([7; 32]), false, false),
         ];
         let decoded =
             TradingActivationAccountsV1::parse(&accounts, funding).expect("account prefix");
@@ -815,6 +830,7 @@ mod tests {
         assert_eq!(decoded.child_root().key, accounts[1].key);
         assert_eq!(decoded.funding().len(), 2);
         assert_eq!(decoded.manifest().key, accounts[4].key);
+        assert_eq!(decoded.market().key, accounts[5].key);
         assert_eq!(decoded.family_accounts().len(), 2);
         assert_eq!(
             decoded.family_accounts().first().expect("suffix first").key,
@@ -827,6 +843,7 @@ mod tests {
             account(Pubkey::new_from_array([13; 32]), false, true),
             account(Pubkey::new_from_array([14; 32]), false, true),
             account(Pubkey::new_from_array([15; 32]), false, false),
+            account(Pubkey::new_from_array([16; 32]), false, false),
         ];
         assert!(TradingActivationAccountsV1::parse(&wrong_privilege, funding).is_err());
 
@@ -836,8 +853,30 @@ mod tests {
             account(Pubkey::new_from_array([23; 32]), false, true),
             account(Pubkey::new_from_array([23; 32]), false, true),
             account(Pubkey::new_from_array([25; 32]), false, false),
+            account(Pubkey::new_from_array([26; 32]), false, false),
         ];
         assert!(TradingActivationAccountsV1::parse(&duplicate, funding).is_err());
+
+        let writable_market = [
+            account(Pubkey::new_from_array([31; 32]), true, false),
+            account(Pubkey::new_from_array([32; 32]), false, true),
+            account(Pubkey::new_from_array([33; 32]), false, true),
+            account(Pubkey::new_from_array([34; 32]), false, true),
+            account(Pubkey::new_from_array([35; 32]), false, false),
+            account(Pubkey::new_from_array([36; 32]), false, true),
+        ];
+        assert!(TradingActivationAccountsV1::parse(&writable_market, funding).is_err());
+
+        let suffix_substitutes_market = [
+            account(Pubkey::new_from_array([41; 32]), true, false),
+            account(Pubkey::new_from_array([42; 32]), false, true),
+            account(Pubkey::new_from_array([43; 32]), false, true),
+            account(Pubkey::new_from_array([44; 32]), false, true),
+            account(Pubkey::new_from_array([45; 32]), false, false),
+            account(Pubkey::new_from_array([46; 32]), false, false),
+            account(Pubkey::new_from_array([46; 32]), false, false),
+        ];
+        assert!(TradingActivationAccountsV1::parse(&suffix_substitutes_market, funding).is_err());
     }
 
     #[test]

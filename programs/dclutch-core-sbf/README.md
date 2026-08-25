@@ -48,7 +48,9 @@ All accounts after the first two are read-only. Core authenticates every raw
 record, its dust-tolerant empty system-owned finalized cursor, all cross-record
 identities, the current Registry/Loader-backed Core artifact, the Market PDA,
 and the canonical RentCredit before transferring only the exact missing rent,
-allocating, assigning, and writing the 320-byte state.
+allocating, assigning, and writing the 352-byte state. The state and its PDA
+persist the exact Registry program used at Found; every later release
+reauthentication rejects a substituted Registry before CPI.
 
 ## Generic capability frame
 
@@ -88,7 +90,8 @@ selected Trading program with:
 
 ```text
 Core authority (signer), root (writable), n FundingStates (writable),
-authenticated manifest raw (read-only), family tail
+authenticated manifest raw (read-only), authenticated Market (read-only),
+family tail
 ```
 
 The child is the only writer and custody authority for every FundingState and

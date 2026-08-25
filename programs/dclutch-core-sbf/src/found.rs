@@ -78,6 +78,7 @@ pub(crate) fn process(
         frame.registry_program,
         frame.core_program,
         frame.core_programdata,
+        identity(frame.registry_program.key.to_bytes())?,
         references.release_set_id,
         Role::Core,
     )?;
@@ -111,6 +112,7 @@ fn plan_found(
         resolution_policy: identity(references.resolution_policy_id)?,
         capability_manifest: identity(references.manifest_id)?,
         selected_release_set: identity(references.release_set_id)?,
+        registry_program: identity(frame.registry_program.key.to_bytes())?,
         generation: request.generation,
     };
     if request.market != market_identity.market_id {
@@ -422,10 +424,11 @@ fn apply_creation(
         resolution,
         manifest,
         release,
+        registry,
         generation,
     ] = seeds;
     let bump_seed = [bump];
-    let signer: [&[u8]; 9] = [
+    let signer: [&[u8]; 10] = [
         domain,
         realm,
         product,
@@ -433,6 +436,7 @@ fn apply_creation(
         resolution,
         manifest,
         release,
+        registry,
         generation,
         &bump_seed,
     ];

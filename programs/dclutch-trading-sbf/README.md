@@ -41,7 +41,8 @@ Core's exact child-CPI account prefix is:
 1                         writable composite Trading root
 2 .. 2+funding_count      ordered writable FundingState accounts
 2+funding_count           selected manifest raw-record account
-3+funding_count ..        descriptor-account-profile-owned suffix
+3+funding_count           authenticated Core Market account, read-only
+4+funding_count ..        descriptor-account-profile-owned suffix
 ```
 
 `TradingActivationRequestV1` and `TradingActivationAccountsV1` decode these
@@ -53,7 +54,10 @@ General/Dealer/Direct/Series tag. The physical profile projector must validate
 its exact suffix length, order, privilege, owner, PDA, and content IDs before
 constructing `TradingFamilyContextV1` or TransitionVM registers.
 The generic prefix rejects aliases involving Core authority, composite root,
-any FundingState, or manifest. Aliasing wholly inside the suffix is neither
+any FundingState, manifest, or the Core-forwarded Market. Trading decodes that
+Market's immutable Registry, release set, Market identity, and generation and
+rejoins them to the Core caller-authority seeds; a family suffix cannot supply
+a competing Market. Aliasing wholly inside the suffix is neither
 universally accepted nor rejected here; the authenticated AccountProfile owns
 that decision.
 
