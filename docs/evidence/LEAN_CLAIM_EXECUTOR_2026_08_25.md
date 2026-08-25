@@ -1,5 +1,10 @@
 # Lean-generated claim executor and controller composition — 2026-08-25
 
+> Historical artifact evidence. Its combined pairwise projection and qedsvm
+> path theorem were superseded by the canonical replay/Position owner model in
+> [`COMPILED_SIGNED_DIRECT_2026_08_25.md`](COMPILED_SIGNED_DIRECT_2026_08_25.md).
+> The measurements below remain exact for their named source commit and bytes.
+
 ## Scope
 
 This evidence concerns the claim-only exact-account executor and experimental

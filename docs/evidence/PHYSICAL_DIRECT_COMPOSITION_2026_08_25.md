@@ -1,5 +1,10 @@
 # Physical Direct multiprogram composition — 2026-08-25
 
+> Historical artifact evidence. The active signed, compiled, canonical-owner
+> successor is pinned in
+> [`COMPILED_SIGNED_DIRECT_2026_08_25.md`](COMPILED_SIGNED_DIRECT_2026_08_25.md).
+> The measurements below remain exact for their named source commit and bytes.
+
 ## Scope
 
 This evidence concerns source commit

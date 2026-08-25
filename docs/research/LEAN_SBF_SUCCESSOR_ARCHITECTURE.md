@@ -1,5 +1,10 @@
 # Lean/SBF successor architecture
 
+> The initial size measurements in this note are historical. The active signed,
+> compiled Direct slice and its larger but non-fragmentable canonical state model
+> are pinned in
+> [`../evidence/COMPILED_SIGNED_DIRECT_2026_08_25.md`](../evidence/COMPILED_SIGNED_DIRECT_2026_08_25.md).
+
 Status: active experiment; not an accepted replacement.
 
 ## Why this direction exists

@@ -62,9 +62,11 @@ rollback after the first Token CPI. The earlier 1,872-byte claim target has one
 qedsvm v0.11.0 successful-path Hoare triple, but that theorem does not cover the
 canonical-owner successor artifact. This remains runtime evidence plus
 high-level Lean theorems—not whole-CFG refinement, Realm selection, or release
-authentication. Historical hashes and boundaries are in
-`docs/evidence/LEAN_CLAIM_EXECUTOR_2026_08_25.md` and
-`docs/evidence/PHYSICAL_DIRECT_COMPOSITION_2026_08_25.md`.
+authentication. Current hashes and boundaries are in
+`docs/evidence/COMPILED_SIGNED_DIRECT_2026_08_25.md`; the earlier
+`LEAN_CLAIM_EXECUTOR_2026_08_25.md` and
+`PHYSICAL_DIRECT_COMPOSITION_2026_08_25.md` reports remain historical evidence
+for their named artifacts.
 
 Run:
 
