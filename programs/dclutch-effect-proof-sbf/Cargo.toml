@@ -1,0 +1,19 @@
+[package]
+name = "dclutch-effect-proof-sbf"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+rust-version.workspace = true
+description = "Generated exact-account SBF proof target for dClutch Effect IR"
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+
+[lints.rust]
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(target_os, values("solana"))'] }

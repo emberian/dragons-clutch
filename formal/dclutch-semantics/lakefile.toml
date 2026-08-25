@@ -8,3 +8,7 @@ name = "DClutchSemantics"
 [[lean_exe]]
 name = "emit-vectors"
 root = "EmitVectors"
+
+[[lean_exe]]
+name = "emit-sbf-profile"
+root = "EmitSbfProfile"

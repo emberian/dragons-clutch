@@ -342,6 +342,10 @@ name = "dclutch-effect-kernel"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-effect-proof-sbf"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-effect-sbf"
 version = "0.1.0"
 dependencies = [
