@@ -3,8 +3,16 @@
 //! The native Ed25519 precompile plus exact controller, claim, custody, and
 //! official SPL Token ELFs execute. No native processor or mock token is used.
 
-use std::{env, path::PathBuf};
+use std::{
+    env, fs,
+    net::TcpListener,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     CapabilityEntryV1, CapabilityManifestV1, CompartmentFundingV1, FundingAmountsV1,
@@ -31,8 +39,9 @@ use solana_address_lookup_table_interface::{
     instruction::{
         close_lookup_table, create_lookup_table, deactivate_lookup_table, extend_lookup_table,
     },
-    state::estimate_last_valid_slot,
+    state::{AddressLookupTable as LookupTableState, estimate_last_valid_slot},
 };
+use solana_commitment_config::CommitmentConfig;
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
 use solana_program::{
     clock::Clock,
@@ -42,7 +51,8 @@ use solana_program::{
     rent::Rent,
 };
 use solana_program_test::{ProgramTest, ProgramTestContext};
-use solana_sdk::signature::{Keypair, Signer};
+use solana_rpc_client::rpc_client::RpcClient;
+use solana_sdk::signature::{Keypair, Signer, keypair_from_seed};
 use solana_sdk_ids::{ed25519_program, system_program, sysvar};
 use solana_transaction::{Transaction, versioned::VersionedTransaction};
 
@@ -824,6 +834,393 @@ fn market_fixture(
         buyer_position_bump,
         tokens,
     }
+}
+
+fn write_validator_account(
+    directory: &Path,
+    address: Pubkey,
+    owner: Pubkey,
+    data: &[u8],
+    lamports: u64,
+) {
+    let account = serde_json::json!({
+        "pubkey": address.to_string(),
+        "account": {
+            "lamports": lamports,
+            "data": [BASE64.encode(data), "base64"],
+            "owner": owner.to_string(),
+            "executable": false,
+            "rentEpoch": 0,
+            "space": data.len(),
+        }
+    });
+    let path = directory.join(format!("{address}.json"));
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(&account).expect("serialize validator account"),
+    )
+    .expect("write validator account");
+}
+
+fn local_port_block() -> u16 {
+    for base in (19_000_u16..29_000).step_by(128) {
+        let probes = [base, base + 1, base + 2, base + 3];
+        let listeners = probes
+            .into_iter()
+            .map(|port| TcpListener::bind(("127.0.0.1", port)))
+            .collect::<Result<Vec<_>, _>>();
+        if listeners.is_ok() {
+            return base;
+        }
+    }
+    panic!("no local validator port block is available");
+}
+
+struct ValidatorProcess {
+    child: Child,
+}
+
+impl Drop for ValidatorProcess {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn wait_until(label: &str, timeout: Duration, mut predicate: impl FnMut() -> bool) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if predicate() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    panic!("timed out waiting for {label}");
+}
+
+fn wait_for_validator(
+    validator: &mut ValidatorProcess,
+    rpc: &RpcClient,
+    log_path: &Path,
+    timeout: Duration,
+) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if rpc.get_health().is_ok() {
+            return;
+        }
+        if let Some(status) = validator
+            .child
+            .try_wait()
+            .expect("validator process status")
+        {
+            let log = fs::read_to_string(log_path).unwrap_or_else(|error| error.to_string());
+            panic!("local validator exited with {status}:\n{log}");
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    let log = fs::read_to_string(log_path).unwrap_or_else(|error| error.to_string());
+    panic!("timed out waiting for local validator RPC:\n{log}");
+}
+
+fn send_legacy_rpc(rpc: &RpcClient, payer: &Keypair, instructions: &[Instruction]) {
+    let blockhash = rpc.get_latest_blockhash().expect("RPC blockhash");
+    let transaction = Transaction::new_signed_with_payer(
+        instructions,
+        Some(&payer.pubkey()),
+        &[payer],
+        blockhash,
+    );
+    let signature = rpc
+        .send_transaction(&transaction)
+        .expect("submitted legacy RPC transaction");
+    wait_until(
+        "processed legacy RPC transaction",
+        Duration::from_secs(5),
+        || matches!(rpc.get_signature_status(&signature), Ok(Some(_))),
+    );
+    rpc.get_signature_status(&signature)
+        .expect("legacy RPC status query")
+        .expect("legacy RPC status")
+        .expect("successful legacy RPC transaction");
+}
+
+fn newest_slot_hash(rpc: &RpcClient) -> Option<u64> {
+    let data = rpc.get_account(&sysvar::slot_hashes::ID).ok()?.data;
+    if data.len() < 16 || read_u64(&data, 0) == 0 {
+        return None;
+    }
+    Some(read_u64(&data, 8))
+}
+
+#[test]
+#[ignore = "spawns solana-test-validator; run as the explicit transport campaign"]
+fn compiled_direct_crosses_the_local_validator_rpc_boundary() {
+    require_sbf();
+    let sbf_directory = PathBuf::from(env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR"));
+    let seller_maker = keypair_from_seed(&[41_u8; 32]).expect("deterministic seller fixture");
+    let buyer_maker = keypair_from_seed(&[42_u8; 32]).expect("deterministic buyer fixture");
+    let (controller, controller_bump) =
+        Pubkey::find_program_address(&[CONTROLLER_SEED], &CONTROLLER_PROGRAM_ID);
+    let journal_key = Pubkey::new_from_array([131_u8; 32]);
+    let mint_key = Pubkey::new_from_array([132_u8; 32]);
+    let tokens = TokenTriplet {
+        source: Pubkey::new_from_array([133_u8; 32]),
+        seller: Pubkey::new_from_array([134_u8; 32]),
+        venue: Pubkey::new_from_array([135_u8; 32]),
+    };
+    let (authority, market_bytes, realm_bytes, policy_bytes, manifest_bytes) =
+        authority_records(mint_key, tokens.venue);
+    let fixture = market_fixture(
+        authority,
+        seller_maker.pubkey(),
+        buyer_maker.pubkey(),
+        tokens,
+    );
+    let controller_bytes = controller_data(controller_bump, fixture, 0);
+    let direct_instructions = [
+        signed_ed25519_batch(&seller_maker, &buyer_maker, &controller_bytes),
+        controller_instruction(controller, journal_key, fixture, mint_key, controller_bytes),
+    ];
+    let lookup_addresses = reusable_market_lookup_addresses(&direct_instructions)
+        .expect("reusable Market address projection");
+
+    let payer = Keypair::new();
+    let temporary = tempfile::tempdir().expect("validator temporary directory");
+    let account_directory = temporary.path().join("accounts");
+    fs::create_dir(&account_directory).expect("validator account directory");
+    write_validator_account(
+        &account_directory,
+        controller,
+        system_program::ID,
+        &[],
+        1_000_000,
+    );
+    write_validator_account(
+        &account_directory,
+        payer.pubkey(),
+        system_program::ID,
+        &[],
+        10_000_000_000,
+    );
+    for (address, data) in [
+        (fixture.seller_replay, replay_state(controller, 0)),
+        (fixture.buyer_replay, replay_state(controller, 0)),
+        (
+            fixture.seller_position,
+            position_state(controller, 1, 5_000),
+        ),
+        (fixture.buyer_position, position_state(controller, 1, 200)),
+    ] {
+        write_validator_account(
+            &account_directory,
+            address,
+            CLAIM_PROGRAM_ID,
+            &data,
+            10_000_000,
+        );
+    }
+    write_validator_account(
+        &account_directory,
+        journal_key,
+        CONTROLLER_PROGRAM_ID,
+        &journal(0),
+        10_000_000,
+    );
+    for (address, data) in [
+        (authority.market, market_bytes),
+        (authority.realm, realm_bytes),
+        (authority.fee_policy, policy_bytes),
+        (authority.capability_manifest, manifest_bytes),
+    ] {
+        write_validator_account(
+            &account_directory,
+            address,
+            PROTOCOL_PROGRAM_ID,
+            &data,
+            10_000_000,
+        );
+    }
+    write_validator_account(
+        &account_directory,
+        mint_key,
+        token_program_id(),
+        &mint(40_000, 6),
+        10_000_000,
+    );
+    for (address, data) in [
+        (
+            tokens.source,
+            token_account(
+                mint_key,
+                buyer_maker.pubkey(),
+                2_000,
+                Some((fixture.buyer_replay, 1_002)),
+                false,
+            ),
+        ),
+        (
+            tokens.seller,
+            token_account(mint_key, seller_maker.pubkey(), 100, None, false),
+        ),
+        (
+            tokens.venue,
+            token_account(
+                mint_key,
+                Pubkey::new_from_array([136_u8; 32]),
+                20,
+                None,
+                false,
+            ),
+        ),
+    ] {
+        write_validator_account(
+            &account_directory,
+            address,
+            token_program_id(),
+            &data,
+            10_000_000,
+        );
+    }
+
+    let base_port = local_port_block();
+    let validator_binary =
+        env::var_os("SOLANA_TEST_VALIDATOR").unwrap_or_else(|| "solana-test-validator".into());
+    let log_path = temporary.path().join("validator.log");
+    let log = fs::File::create(&log_path).expect("validator log");
+    let child = Command::new(validator_binary)
+        .arg("--ledger")
+        .arg(temporary.path().join("ledger"))
+        .args(["--reset", "--quiet"])
+        .arg("--rpc-port")
+        .arg(base_port.to_string())
+        .arg("--faucet-port")
+        .arg((base_port + 2).to_string())
+        .arg("--gossip-port")
+        .arg((base_port + 3).to_string())
+        .arg("--dynamic-port-range")
+        .arg(format!("{}-{}", base_port + 10, base_port + 110))
+        .arg("--account-dir")
+        .arg(&account_directory)
+        .arg("--bpf-program")
+        .arg(CONTROLLER_PROGRAM_ID.to_string())
+        .arg(sbf_directory.join("dclutch_controller_proof_sbf.so"))
+        .arg("--bpf-program")
+        .arg(CLAIM_PROGRAM_ID.to_string())
+        .arg(sbf_directory.join("dclutch_claims_proof_sbf.so"))
+        .arg("--bpf-program")
+        .arg(CUSTODY_PROGRAM_ID.to_string())
+        .arg(sbf_directory.join("dclutch_custody_proof_sbf.so"))
+        .stdout(Stdio::from(log.try_clone().expect("clone validator log")))
+        .stderr(Stdio::from(log))
+        .spawn()
+        .expect("spawn solana-test-validator");
+    let mut validator = ValidatorProcess { child };
+    let rpc = RpcClient::new_with_commitment(
+        format!("http://127.0.0.1:{base_port}"),
+        CommitmentConfig::processed(),
+    );
+    wait_for_validator(&mut validator, &rpc, &log_path, Duration::from_secs(30));
+
+    assert_eq!(
+        rpc.get_balance(&payer.pubkey())
+            .expect("genesis payer balance"),
+        10_000_000_000
+    );
+
+    wait_until("first slot hash", Duration::from_secs(10), || {
+        newest_slot_hash(&rpc).is_some()
+    });
+    let recent_slot = newest_slot_hash(&rpc).expect("recent SlotHashes entry");
+    let (create, lookup_table) = create_lookup_table(payer.pubkey(), payer.pubkey(), recent_slot);
+    send_legacy_rpc(&rpc, &payer, &[create]);
+    send_legacy_rpc(
+        &rpc,
+        &payer,
+        &[extend_lookup_table(
+            lookup_table,
+            payer.pubkey(),
+            Some(payer.pubkey()),
+            lookup_addresses.clone(),
+        )],
+    );
+    let table_account = rpc
+        .get_account(&lookup_table)
+        .expect("created lookup-table account");
+    let table =
+        LookupTableState::deserialize(&table_account.data).expect("decode created lookup table");
+    assert_eq!(table.addresses.as_ref(), lookup_addresses.as_slice());
+    let extension_slot = table.meta.last_extended_slot;
+    wait_until(
+        "lookup-table activation slot",
+        Duration::from_secs(10),
+        || rpc.get_slot().unwrap_or_default() > extension_slot,
+    );
+
+    let blockhash = rpc.get_latest_blockhash().expect("Direct v0 blockhash");
+    let lookup = AddressLookupTableAccount {
+        key: lookup_table,
+        addresses: lookup_addresses,
+    };
+    let message = VersionedMessage::V0(
+        v0::Message::try_compile(&payer.pubkey(), &direct_instructions, &[lookup], blockhash)
+            .expect("compile external-validator Direct v0 message"),
+    );
+    let wire_bytes = 1_usize + 64 + message.serialize().len();
+    assert_eq!(wire_bytes, 990, "canonical Direct v0 wire size drift");
+    let transaction = VersionedTransaction {
+        signatures: vec![payer.sign_message(&message.serialize())],
+        message,
+    };
+    let direct_signature = rpc
+        .send_and_confirm_transaction(&transaction)
+        .expect("confirmed external-validator Direct v0 fill");
+
+    assert_eq!(read_u64(&rpc.get_account(&journal_key).unwrap().data, 8), 1);
+    assert_eq!(
+        read_u64(&rpc.get_account(&fixture.seller_replay).unwrap().data, 40),
+        1
+    );
+    assert_eq!(
+        read_u64(&rpc.get_account(&fixture.buyer_replay).unwrap().data, 40),
+        1
+    );
+    assert_eq!(
+        read_u64(&rpc.get_account(&fixture.seller_position).unwrap().data, 48),
+        3_000
+    );
+    assert_eq!(
+        read_u64(&rpc.get_account(&fixture.buyer_position).unwrap().data, 48),
+        2_200
+    );
+    assert_eq!(
+        read_u64(&rpc.get_account(&tokens.source).unwrap().data, 64),
+        998
+    );
+    assert_eq!(
+        read_u64(&rpc.get_account(&tokens.seller).unwrap().data, 64),
+        1_100
+    );
+    assert_eq!(
+        read_u64(&rpc.get_account(&tokens.venue).unwrap().data, 64),
+        22
+    );
+
+    send_legacy_rpc(
+        &rpc,
+        &payer,
+        &[deactivate_lookup_table(lookup_table, payer.pubkey())],
+    );
+    let table_account = rpc
+        .get_account(&lookup_table)
+        .expect("deactivating lookup-table account");
+    let table = LookupTableState::deserialize(&table_account.data)
+        .expect("decode deactivating lookup table");
+    assert_ne!(table.meta.deactivation_slot, u64::MAX);
+    eprintln!(
+        "external validator Direct: signature={direct_signature}, wire={wire_bytes}, ALT={lookup_table}, deactivation_slot={} (ledger removed on process exit; full 512-slot close is covered by ProgramTest)",
+        table.meta.deactivation_slot
+    );
 }
 
 #[tokio::test]

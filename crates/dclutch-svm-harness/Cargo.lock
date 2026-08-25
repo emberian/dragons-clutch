@@ -1612,6 +1612,7 @@ dependencies = [
 name = "dclutch-svm-harness"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "dclutch-capability-contract",
  "dclutch-collateral-contract",
  "dclutch-core-contract",
@@ -1628,14 +1629,18 @@ dependencies = [
  "dclutch-source-contract",
  "dclutch-terminal-contract",
  "dclutch-token-svm",
+ "serde_json",
  "solana-account 4.3.2",
  "solana-address-lookup-table-interface",
+ "solana-commitment-config",
  "solana-message 4.4.1",
  "solana-program",
  "solana-program-test",
+ "solana-rpc-client",
  "solana-sdk",
  "solana-sdk-ids",
  "solana-transaction 4.1.6",
+ "tempfile",
  "tokio",
 ]
 
