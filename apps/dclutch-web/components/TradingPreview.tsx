@@ -37,6 +37,7 @@ export default function TradingPreview() {
           <Link href="/liquidity">Liquidity</Link>
           <Link href="/product-v2">Product V2</Link>
           <Link href="/release">Release</Link>
+          <Link href="/local">Local chain</Link>
           <Link href="/explorer">Explorer</Link>
         </nav>
         <div className="preview-control">
