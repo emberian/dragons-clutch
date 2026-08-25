@@ -227,22 +227,37 @@ pub struct CustodyVaultSeedsV1 {
 }
 
 impl CustodyVaultSeedsV1 {
+    /// Construct the sole canonical Vault seed tuple from its semantic facts.
+    pub const fn new(
+        market: [u8; 32],
+        release_set: [u8; 32],
+        context: [u8; 32],
+        compartment: CompartmentV1,
+    ) -> Self {
+        Self {
+            market,
+            release_set,
+            context,
+            compartment: [compartment.tag()],
+        }
+    }
+
     /// Project source- or destination-side Vault seeds.
     pub const fn from_request(request: CustodyRequestV1, source: bool) -> Self {
-        Self {
-            market: request.market,
-            release_set: request.release_set,
-            context: if source {
+        Self::new(
+            request.market,
+            request.release_set,
+            if source {
                 request.source_vault_context
             } else {
                 request.destination_vault_context
             },
-            compartment: [if source {
-                request.source_compartment.tag()
+            if source {
+                request.source_compartment
             } else {
-                request.destination_compartment.tag()
-            }],
-        }
+                request.destination_compartment
+            },
+        )
     }
 
     /// Borrow the exact ordered SVM seed slices, excluding the bump.
@@ -1268,6 +1283,70 @@ mod tests {
             CustodyReceiptV1::new(request, id(42), hostile),
             Err(Error::BalanceArithmetic)
         );
+    }
+
+    #[test]
+    fn vault_seed_constructor_is_exact_and_is_the_only_request_projection() {
+        let request = transfer();
+        let source = CustodyVaultSeedsV1::new(
+            request.market,
+            request.release_set,
+            request.source_vault_context,
+            request.source_compartment,
+        );
+        let destination = CustodyVaultSeedsV1::new(
+            request.market,
+            request.release_set,
+            request.destination_vault_context,
+            request.destination_compartment,
+        );
+        assert_eq!(CustodyVaultSeedsV1::from_request(request, true), source);
+        assert_eq!(
+            CustodyVaultSeedsV1::from_request(request, false),
+            destination
+        );
+
+        let source_compartment = [request.source_compartment.tag()];
+        assert_eq!(
+            source.as_slices(),
+            [
+                CUSTODY_VAULT_PDA_DOMAIN_V1,
+                request.market.as_slice(),
+                request.release_set.as_slice(),
+                request.source_vault_context.as_slice(),
+                source_compartment.as_slice(),
+            ]
+        );
+
+        for hostile in [
+            CustodyVaultSeedsV1::new(
+                id(99),
+                request.release_set,
+                request.source_vault_context,
+                request.source_compartment,
+            ),
+            CustodyVaultSeedsV1::new(
+                request.market,
+                id(99),
+                request.source_vault_context,
+                request.source_compartment,
+            ),
+            CustodyVaultSeedsV1::new(
+                request.market,
+                request.release_set,
+                id(99),
+                request.source_compartment,
+            ),
+            CustodyVaultSeedsV1::new(
+                request.market,
+                request.release_set,
+                request.source_vault_context,
+                CompartmentV1::FeeVault,
+            ),
+        ] {
+            assert_ne!(hostile, source);
+            assert_ne!(hostile.as_slices(), source.as_slices());
+        }
     }
 
     #[test]
