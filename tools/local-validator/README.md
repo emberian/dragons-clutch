@@ -113,3 +113,12 @@ tools/local-validator/dclutch-integrated-validator status \
 This profile runs in the background and writes no keys outside its scoped
 ledger. Stop is sentinel- and command-line-guarded; it never deletes the ledger.
 The client-side payer and action keys remain only in process memory.
+
+Run the standalone [`bootstrap`](bootstrap/README.md) client after the
+integrated profile is healthy. With the same attested source and ELF pins, it
+initializes the real router/receiver, writes and verifies the signed VAA, and
+executes the complete local dClutch Realm/record/Found/Open/Source-resolution
+composition. This proves only the named local validator release and exact ELF
+execution. Regenerated Loader headers, deployment slots, and current wall clock
+remain outside captured-devnet release identity, and the evidence keeps that
+boundary machine-readable.

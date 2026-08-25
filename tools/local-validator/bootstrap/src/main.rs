@@ -23,6 +23,8 @@ use solana_sdk::{
     transaction::Transaction,
 };
 
+mod source;
+
 const RECEIVER_ID: &str = "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp";
 const ROUTER_ID: &str = "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL";
 const RECEIVER_PROGRAMDATA: &str = "3UV7w2yTaqVcUAbWm1KUXdcE1Ziw8CfyyCpZvhKFkPfX";
@@ -139,6 +141,8 @@ struct Evidence {
     price_update_reclaimed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     dclutch_lifecycle: Option<DclutchLifecycleEvidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dclutch_source: Option<source::SourceBootstrapEvidence>,
     provider_state_initialized: bool,
     captured_release_identity_claimed: bool,
     dclutch_lifecycle_executed: bool,
@@ -328,22 +332,70 @@ impl Rpc {
         let Some(value) = result.get("value").filter(|value| !value.is_null()) else {
             return Ok(None);
         };
-        let encoded = value
-            .get("data")
-            .and_then(Value::as_array)
-            .and_then(|values| values.first())
-            .and_then(Value::as_str)
-            .ok_or_else(|| BootstrapError("getAccountInfo returned non-base64 data".into()))?;
-        Ok(Some(RpcAccount {
-            lamports: json_u64(value, "lamports")?,
-            owner: Pubkey::from_str(json_str(value, "owner")?)?,
-            executable: value
-                .get("executable")
-                .and_then(Value::as_bool)
-                .ok_or_else(|| BootstrapError("account executable was not boolean".into()))?,
-            rent_epoch: json_u64(value, "rentEpoch")?,
-            data: BASE64.decode(encoded)?,
-        }))
+        decode_rpc_account(value).map(Some)
+    }
+
+    fn finalized_accounts(
+        &mut self,
+        addresses: &[Pubkey],
+        minimum_slot: u64,
+    ) -> AnyResult<(u64, Vec<Option<RpcAccount>>)> {
+        let keys = addresses
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        for _ in 0..150 {
+            match self.call(
+                "getMultipleAccounts",
+                json!([keys, {
+                    "encoding":"base64",
+                    "commitment":"finalized",
+                    "minContextSlot":minimum_slot
+                }]),
+            ) {
+                Ok(result) => {
+                    let slot = result
+                        .pointer("/context/slot")
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| {
+                            BootstrapError("getMultipleAccounts omitted context slot".into())
+                        })?;
+                    let values =
+                        result
+                            .get("value")
+                            .and_then(Value::as_array)
+                            .ok_or_else(|| {
+                                BootstrapError("getMultipleAccounts omitted value array".into())
+                            })?;
+                    if values.len() != addresses.len() {
+                        return fail("getMultipleAccounts returned the wrong account count");
+                    }
+                    let accounts = values
+                        .iter()
+                        .map(|value| {
+                            if value.is_null() {
+                                Ok(None)
+                            } else {
+                                decode_rpc_account(value).map(Some)
+                            }
+                        })
+                        .collect::<AnyResult<Vec<_>>>()?;
+                    return Ok((slot, accounts));
+                }
+                Err(error)
+                    if error
+                        .to_string()
+                        .to_ascii_lowercase()
+                        .contains("minimum context slot") =>
+                {
+                    thread::sleep(Duration::from_millis(100));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        fail(format!(
+            "finalized snapshot did not reach minimum slot {minimum_slot}"
+        ))
     }
 
     fn required_account(&mut self, address: Pubkey, label: &str) -> AnyResult<RpcAccount> {
@@ -774,6 +826,34 @@ fn run() -> AnyResult<()> {
         })
         .transpose()?;
 
+    let dclutch_source = args
+        .dclutch
+        .as_ref()
+        .map(|pin| {
+            source::execute_integrated_source(
+                &mut rpc,
+                pin.program_id,
+                &payer,
+                loader,
+                receiver,
+                receiver_programdata,
+                config,
+                encoded_vaa.pubkey(),
+                router,
+                router_programdata,
+                treasury,
+                token,
+                system,
+                rent,
+                clock,
+                compute_budget,
+                FIXTURE_PUBLISH_TIME,
+                &RECEIVER_POST_UPDATE[8..],
+                &mut transactions,
+            )
+        })
+        .transpose()?;
+
     let price_update_reclaimed = if args.reclaim {
         transactions.push(rpc.send_transaction(
             "reclaim_price_update_rent",
@@ -805,8 +885,8 @@ fn run() -> AnyResult<()> {
     let fixture_clock_delta = validator_clock.abs_diff(FIXTURE_PUBLISH_TIME);
 
     let evidence = Evidence {
-        schema: if dclutch_lifecycle.is_some() {
-            "dclutch-integrated-local-bootstrap-evidence-v1"
+        schema: if dclutch_source.is_some() {
+            "dclutch-integrated-local-source-bootstrap-evidence-v2"
         } else {
             "dclutch-local-provider-bootstrap-evidence-v1"
         },
@@ -837,7 +917,7 @@ fn run() -> AnyResult<()> {
             fixture_publish_time_matches_validator_clock: validator_clock == FIXTURE_PUBLISH_TIME,
             fixture_clock_delta_seconds: fixture_clock_delta,
             fixture_within_reference_60_second_window: fixture_clock_delta <= 60,
-            reason: "test-validator regenerated Loader V3 headers/slots/authority and uses its current clock; exact ELF execution and provider state do not prove the captured release identity or dClutch freshness",
+            reason: "test-validator regenerated Loader V3 headers/slots/authority and uses its current clock; exact ELF execution and provider state do not prove the captured release identity or captured-clock equivalence",
         },
         programs,
         dclutch_program,
@@ -850,10 +930,13 @@ fn run() -> AnyResult<()> {
         price_update: update.pubkey().to_string(),
         price_update_reclaimed,
         dclutch_lifecycle,
+        dclutch_resolution_executed: dclutch_source.as_ref().is_some_and(|evidence| {
+            evidence.market_resolved && evidence.source_terminal && evidence.source_update_reclaimed
+        }),
+        dclutch_source,
         provider_state_initialized: true,
         captured_release_identity_claimed: false,
         dclutch_lifecycle_executed: args.dclutch.is_some(),
-        dclutch_resolution_executed: false,
     };
     let output = serde_json::to_vec_pretty(&evidence)?;
     if let Some(path) = args.evidence {
@@ -1370,7 +1453,7 @@ fn execute_dclutch_lifecycle(
         after_fund,
         after_withdraw,
         resolution_executed: false,
-        resolution_boundary: "The captured synthetic Pyth publish time intentionally differs from the validator wall clock, so this campaign proves real provider and independent dClutch lifecycle execution but does not claim a live-source dClutch resolution.",
+        resolution_boundary: "This nested RentCredit probe does not itself perform resolution; integrated evidence records the separately checked real-provider Source composition under dclutch_source.",
     })
 }
 
@@ -1620,6 +1703,25 @@ fn json_str<'a>(value: &'a Value, field: &str) -> AnyResult<&'a str> {
         .get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| Box::new(BootstrapError(format!("JSON field {field} was not string"))) as _)
+}
+
+fn decode_rpc_account(value: &Value) -> AnyResult<RpcAccount> {
+    let encoded = value
+        .get("data")
+        .and_then(Value::as_array)
+        .and_then(|values| values.first())
+        .and_then(Value::as_str)
+        .ok_or_else(|| BootstrapError("RPC account returned non-base64 data".into()))?;
+    Ok(RpcAccount {
+        lamports: json_u64(value, "lamports")?,
+        owner: Pubkey::from_str(json_str(value, "owner")?)?,
+        executable: value
+            .get("executable")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| BootstrapError("account executable was not boolean".into()))?,
+        rent_epoch: json_u64(value, "rentEpoch")?,
+        data: BASE64.decode(encoded)?,
+    })
 }
 
 fn pubkey(text: &str) -> AnyResult<Pubkey> {

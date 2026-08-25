@@ -12,12 +12,24 @@ publish = false
 [dependencies]
 base64 = "=0.22.1"
 bincode = "=1.3.3"
-dclutch-pyth-svm = { path = "../../../crates/dclutch-pyth-svm" }
+dclutch-capability-contract = { path = "../../../crates/dclutch-capability-contract" }
+dclutch-collateral-contract = { path = "../../../crates/dclutch-collateral-contract" }
+dclutch-core-contract = { path = "../../../crates/dclutch-core-contract" }
+dclutch-market-contract = { path = "../../../crates/dclutch-market-contract" }
+dclutch-operator = { path = "../../../crates/dclutch-operator", features = ["non-production-real-pyth-lab"] }
+dclutch-product-contract = { path = "../../../crates/dclutch-product-contract" }
+dclutch-pyth-contract = { path = "../../../crates/dclutch-pyth-contract" }
+dclutch-pyth-svm = { path = "../../../crates/dclutch-pyth-svm", features = ["synthetic-local-fixture"] }
+dclutch-realm-contract = { path = "../../../crates/dclutch-realm-contract" }
+dclutch-record-contract = { path = "../../../crates/dclutch-record-contract" }
 dclutch-rent-contract = { path = "../../../crates/dclutch-rent-contract" }
+dclutch-source-contract = { path = "../../../crates/dclutch-source-contract" }
+dclutch-token-svm = { path = "../../../crates/dclutch-token-svm" }
 reqwest = { version = "=0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.149"
 sha2 = "=0.10.9"
+solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk = "=3.0.0"
 
 [lints.rust]
