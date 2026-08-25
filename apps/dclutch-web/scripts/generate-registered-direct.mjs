@@ -31,6 +31,11 @@ const scalars = [
   ['REGISTERED_BUYER_REGISTRATION_BUMP_OFFSET', controller], ['REGISTERED_SELLER_POSITION_BUMP_OFFSET', controller],
   ['REGISTERED_BUYER_POSITION_BUMP_OFFSET', controller], ['REGISTERED_CONTROLLER_RESERVED_OFFSET', controller],
   ['REGISTERED_CONTROLLER_FILL_OFFSET', controller], ['REGISTERED_CONTROLLER_EXECUTION_PRICE_OFFSET', controller],
+  ['REGISTERED_CREATE_BYTES_VALUE', controller], ['REGISTERED_CREATE_ABI_VERSION', controller],
+  ['REGISTERED_CREATE_MAGIC_OFFSET', controller], ['REGISTERED_CREATE_VERSION_OFFSET', controller],
+  ['REGISTERED_CREATE_CONTROLLER_BUMP_OFFSET', controller], ['REGISTERED_CREATE_REPLAY_BUMP_OFFSET', controller],
+  ['REGISTERED_CREATE_REGISTRATION_BUMP_OFFSET', controller], ['REGISTERED_CREATE_RESERVED_OFFSET', controller],
+  ['REGISTERED_CREATE_INTENT_OFFSET', controller],
   ['REGISTERED_TERMINAL_BYTES_VALUE', controller], ['REGISTERED_TERMINAL_ABI_VERSION', controller],
   ['REGISTERED_TERMINAL_MAGIC_OFFSET', controller], ['REGISTERED_TERMINAL_VERSION_OFFSET', controller],
   ['REGISTERED_TERMINAL_ACTION_OFFSET', controller], ['REGISTERED_TERMINAL_CONTROLLER_BUMP_OFFSET', controller],
@@ -42,12 +47,13 @@ const scalars = [
 const arrays = [
   ['REGISTERED_STATE_MAGIC_BYTES', lifecycle], ['REGISTERED_STATE_EXAMPLE', lifecycle],
   ['REGISTERED_CONTROLLER_MAGIC_BYTES', controller], ['REGISTERED_CONTROLLER_EXAMPLE', controller],
+  ['REGISTERED_CREATE_MAGIC_BYTES', controller], ['REGISTERED_CREATE_EXAMPLE', controller],
   ['REGISTERED_TERMINAL_MAGIC_BYTES', controller], ['REGISTERED_TERMINAL_CANCEL_EXAMPLE', controller],
   ['REGISTERED_TERMINAL_EXPIRE_EXAMPLE', controller],
 ];
 
 let generated = '// @generated from dclutch-direct-codec Lean-emitted Rust ABI; do not edit.\n';
-generated += '// Registered fill/terminal ABI baseline: git 7220fb7.\n';
+generated += '// Registered fill/terminal ABI baseline: git 7220fb7; creation: git 192f5ba.\n';
 generated += '// Regenerate with: npm run abi:registered\n\n';
 for (const [name, source] of scalars) generated += `export const ${name} = ${scalar(source, name)} as const;\n`;
 generated += '\n';

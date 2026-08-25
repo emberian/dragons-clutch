@@ -54,6 +54,18 @@ describe('bounded finalized RPC client', () => {
     });
   });
 
+  it('reports the finalized rent obligation for an exact account width', async () => {
+    const fetcher: typeof fetch = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as { method: string; params: unknown[] };
+      expect(request.method).toBe('getMinimumBalanceForRentExemption');
+      expect(request.params).toEqual([232, { commitment: 'finalized' }]);
+      return response(2_503_680);
+    };
+    await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher).minimumBalanceForRentExemption(232)).resolves.toEqual({
+      dataLength: 232, lamports: '2503680',
+    });
+  });
+
   it('acquires distinct accounts in one finalized RPC context', async () => {
     const addresses = ['11111111111111111111111111111111', 'SysvarC1ock11111111111111111111111111111111'];
     const fetcher: typeof fetch = async (_input, init) => {

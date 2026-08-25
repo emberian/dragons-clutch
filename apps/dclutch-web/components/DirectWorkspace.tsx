@@ -19,7 +19,7 @@ import {
   encodeIntentSigningPayload,
 } from '@/lib/directTransaction';
 import { scanProgram, SolanaRpcClient, type ConnectionFacts, type ProgramSnapshot } from '@/lib/rpc';
-import RegisteredOrdersWorkspace from '@/components/RegisteredOrdersWorkspace';
+import RegisteredOrdersWorkspace, { type RegisteredCreateMarketChoiceV1 } from '@/components/RegisteredOrdersWorkspace';
 
 type Ready = Readonly<{ facts: ConnectionFacts; snapshot: ProgramSnapshot }>;
 type Status = Readonly<{ kind: 'idle' | 'loading' | 'error'; message?: string }> | Readonly<{ kind: 'ready'; value: Ready }>;
@@ -79,6 +79,24 @@ function openMarkets(snapshot: ProgramSnapshot): DecodedProjection[] {
       && projection.bindings.every((check) => check.ok));
 }
 
+function registeredMarketChoices(snapshot: ProgramSnapshot, markets: ReadonlyArray<DecodedProjection>): RegisteredCreateMarketChoiceV1[] {
+  const decoded = snapshot.projections.filter((projection): projection is DecodedProjection => projection.status === 'decoded');
+  return markets.flatMap((market) => {
+    if (market.semantics.kind !== 'Market') return [];
+    const realm = decoded.find((candidate) => candidate.semantics.kind === 'Realm' && candidate.semantics.contentDigest === market.semantics.realmId);
+    if (realm === undefined || realm.semantics.kind !== 'Realm') return [];
+    const bytes = realm.semantics.canonicalBytes;
+    return [Object.freeze({
+      address: market.address,
+      generation: market.semantics.generation,
+      outcomeCount: market.semantics.outcomeCount,
+      realm: realm.address,
+      tokenProgram: new PublicKey(bytes.slice(16, 48)).toBase58(),
+      mint: new PublicKey(bytes.slice(48, 80)).toBase58(),
+    })];
+  });
+}
+
 function placeholderEnvelope(): string {
   return JSON.stringify({
     payer: '', lookupTable: '', fill: '0', executionPrice: '0',
@@ -113,6 +131,7 @@ export default function DirectWorkspace() {
 
   const ready = status.kind === 'ready' ? status.value : null;
   const markets = useMemo(() => ready === null ? [] : openMarkets(ready.snapshot), [ready]);
+  const registeredMarkets = useMemo(() => ready === null ? [] : registeredMarketChoices(ready.snapshot, markets), [ready, markets]);
   const selected = markets.find((market) => market.address === marketAddress) ?? null;
 
   async function connect(event: FormEvent<HTMLFormElement>) {
@@ -240,7 +259,7 @@ export default function DirectWorkspace() {
         <button type="submit">Acquire route & build unsigned v0 transaction</button><p className="direct-status">{transactionStatus}</p>
         {transaction && <div className="direct-output"><dl><div><dt>Wire profile</dt><dd>{transaction.wireBytes} / 1232 bytes · {transaction.lookupAddresses} lookup addresses</dd></div><div><dt>Blockhash lifetime</dt><dd>slot {transaction.blockhashSlot} · valid through height {transaction.lastValidBlockHeight}</dd></div></dl><label><span>Unsigned v0 transaction · base64</span><textarea readOnly value={transaction.base64} /></label><p className="direct-refusal">Zero signature slots remain in this artifact. This page never signs or submits it.</p></div>}
       </form>}
-      {ready !== null && <RegisteredOrdersWorkspace endpoint={endpoint} protocolProgram={protocolProgram} controllerProgram={controllerProgram} />}
+      {ready !== null && <RegisteredOrdersWorkspace endpoint={endpoint} protocolProgram={protocolProgram} controllerProgram={controllerProgram} scanSlot={ready.snapshot.scanSlot} markets={registeredMarkets} />}
       <footer className="product-footer"><span>Static clients are untrusted projections.</span><span>No wallet access · no signing · no submission</span></footer>
     </main>
   );

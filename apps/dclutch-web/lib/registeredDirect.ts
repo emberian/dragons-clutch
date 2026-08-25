@@ -1,5 +1,6 @@
 import {
   PublicKey,
+  SystemProgram,
   TransactionInstruction,
   TransactionMessage,
   VersionedTransaction,
@@ -7,7 +8,7 @@ import {
 
 import { ascii, isZero, requireZero, slice, u16, u64 } from './bytes';
 import { decodeCompactIntentV1, encodeCompactIntentV1, type CompactIntentV1 } from './directCodec';
-import { CLAIM_PROGRAM_ID, CONTROLLER_SEED, CUSTODY_PROGRAM_ID, PACKET_DATA_SIZE, POSITION_SEED } from './directTransaction';
+import { CLAIM_PROGRAM_ID, CONTROLLER_SEED, CUSTODY_PROGRAM_ID, PACKET_DATA_SIZE, POSITION_SEED, REPLAY_SEED } from './directTransaction';
 import {
   REGISTERED_BUYER_POSITION_BUMP_OFFSET,
   REGISTERED_BUYER_REGISTRATION_BUMP_OFFSET,
@@ -20,6 +21,16 @@ import {
   REGISTERED_CONTROLLER_MAGIC_OFFSET,
   REGISTERED_CONTROLLER_RESERVED_OFFSET,
   REGISTERED_CONTROLLER_VERSION_OFFSET,
+  REGISTERED_CREATE_ABI_VERSION,
+  REGISTERED_CREATE_BYTES_VALUE,
+  REGISTERED_CREATE_CONTROLLER_BUMP_OFFSET,
+  REGISTERED_CREATE_INTENT_OFFSET,
+  REGISTERED_CREATE_MAGIC_BYTES,
+  REGISTERED_CREATE_MAGIC_OFFSET,
+  REGISTERED_CREATE_REGISTRATION_BUMP_OFFSET,
+  REGISTERED_CREATE_REPLAY_BUMP_OFFSET,
+  REGISTERED_CREATE_RESERVED_OFFSET,
+  REGISTERED_CREATE_VERSION_OFFSET,
   REGISTERED_SELLER_POSITION_BUMP_OFFSET,
   REGISTERED_SELLER_REGISTRATION_BUMP_OFFSET,
   REGISTERED_STATE_ABI_VERSION,
@@ -50,7 +61,12 @@ import {
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 
 export const REGISTERED_SEED = new TextEncoder().encode('dclutch/direct-registered/v1');
+export const LEGACY_TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+export const REPLAY_STATE_BYTES = 48;
 const MAX_REGISTERED_STATES = 128;
+const TOKEN_ACCOUNT_BYTES = 165;
+const PRICE_SCALE = 1_000_000n;
+const FEE_SCALE = 10_000n;
 
 export type RegisteredPhase = 'open' | 'filled' | 'cancelled' | 'expired';
 
@@ -124,6 +140,58 @@ export type RegisteredTransactionPlanV1 = Readonly<{
   requiredSignerKeys: ReadonlyArray<string>;
 }>;
 
+export type RegisteredCreateRouteV1 = Readonly<{
+  realm: string;
+  feePolicy: string;
+  capabilityManifest: string;
+  mint: string;
+  collateral: string;
+  venue: string;
+  tokenProgram: string;
+}>;
+
+export type RegisteredCreateAddressesV1 = Readonly<{
+  controller: PublicKey;
+  controllerBump: number;
+  replay: PublicKey;
+  replayBump: number;
+  registration: PublicKey;
+  registrationBump: number;
+}>;
+
+export type MakerReplayObservationV1 = Readonly<{
+  exists: boolean;
+  nextNonce: bigint;
+}>;
+
+export type LegacyTokenObservationV1 = Readonly<{
+  mint: string;
+  owner: string;
+  amount: bigint;
+  delegate: string | null;
+  delegatedAmount: bigint;
+}>;
+
+export type RegisteredCreateInputV1 = Readonly<{
+  controllerProgram: string;
+  payer: string;
+  maker: string;
+  market: string;
+  recentBlockhash: string;
+  intent: CompactIntentV1;
+  expectedNonce: bigint;
+  route: RegisteredCreateRouteV1;
+}>;
+
+export type RegisteredCreateTransactionPlanV1 = Readonly<{
+  instructions: ReadonlyArray<TransactionInstruction>;
+  transaction: VersionedTransaction;
+  wireBytes: Uint8Array;
+  requiredSignerKeys: ReadonlyArray<string>;
+  derived: RegisteredCreateAddressesV1;
+  approvalAmount: bigint | null;
+}>;
+
 function canonicalKey(value: string, field: string): PublicKey {
   const key = new PublicKey(value);
   if (key.toBase58() !== value) throw new Error(`${field} must be canonical base58 text`);
@@ -147,6 +215,80 @@ function u64Bytes(value: bigint, field: string): Uint8Array {
   const output = new Uint8Array(8);
   putU64(output, 0, value, field);
   return output;
+}
+
+function u32At(bytes: Uint8Array, offset: number): number {
+  if (offset < 0 || offset + 4 > bytes.length) throw new Error('u32 field is truncated');
+  return new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0, true);
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+/** Strictly project the compact claim-owned replay high-water mark used by the controller. */
+export function decodeMakerReplayObservationV1(
+  account: RpcAccount | null,
+  controller: PublicKey,
+): MakerReplayObservationV1 {
+  if (account === null) return Object.freeze({ exists: false, nextNonce: 0n });
+  if (account.owner !== CLAIM_PROGRAM_ID.toBase58() || account.executable || account.data.length !== REPLAY_STATE_BYTES) {
+    throw new Error('maker replay root has the wrong physical owner, executable flag, or exact width');
+  }
+  const magic = Uint8Array.of(0x44, 0x43, 0x52, 0x50, 1, 0, 0, 0);
+  if (!sameBytes(slice(account.data, 0, 8), magic) || !sameBytes(slice(account.data, 8, 32), controller.toBytes())) {
+    throw new Error('maker replay root does not bind the canonical controller authority');
+  }
+  return Object.freeze({ exists: true, nextNonce: u64(account.data, 40) });
+}
+
+/** Project only the legacy SPL-token fields needed to make delegation visible. */
+export function decodeLegacyTokenObservationV1(account: RpcAccount): LegacyTokenObservationV1 {
+  if (account.owner !== LEGACY_TOKEN_PROGRAM_ID.toBase58() || account.executable || account.data.length !== TOKEN_ACCOUNT_BYTES) {
+    throw new Error('collateral must be one exact initialized legacy SPL-token account');
+  }
+  if (account.data[108] !== 1) throw new Error('collateral token account is not initialized and unfrozen');
+  const delegateTag = u32At(account.data, 72);
+  if (delegateTag > 1) throw new Error('collateral token delegate option is noncanonical');
+  const delegate = delegateTag === 0 ? null : new PublicKey(slice(account.data, 76, 32)).toBase58();
+  const delegatedAmount = u64(account.data, 121);
+  if (delegate === null && delegatedAmount !== 0n) throw new Error('collateral has a delegated amount without a delegate');
+  return Object.freeze({
+    mint: new PublicKey(slice(account.data, 0, 32)).toBase58(),
+    owner: new PublicKey(slice(account.data, 32, 32)).toBase58(),
+    amount: u64(account.data, 64),
+    delegate,
+    delegatedAmount,
+  });
+}
+
+export function registeredBuyerReserve(maximumFill: bigint, limitPrice: bigint, feeBasisPoints: number): bigint {
+  if (maximumFill <= 0n || maximumFill > 18_446_744_073_709_551_615n) throw new Error('maximum fill must be a positive u64');
+  if (limitPrice < 0n || limitPrice > PRICE_SCALE) throw new Error('limit price exceeds the exact 1e6 scale');
+  if (!Number.isInteger(feeBasisPoints) || feeBasisPoints < 0 || feeBasisPoints > 10_000) throw new Error('fee basis points exceed the exact denominator');
+  const gross = maximumFill * limitPrice / PRICE_SCALE;
+  const reserve = gross + gross * BigInt(feeBasisPoints) / FEE_SCALE;
+  if (reserve > 18_446_744_073_709_551_615n) throw new Error('buyer approval reserve exceeds u64');
+  if (reserve === 0n) throw new Error('buyer order has zero worst-case collateral reserve');
+  return reserve;
+}
+
+export function deriveRegisteredCreateAddresses(
+  controllerProgramText: string,
+  marketText: string,
+  generation: bigint,
+  makerText: string,
+  nonce: bigint,
+): RegisteredCreateAddressesV1 {
+  const controllerProgram = canonicalKey(controllerProgramText, 'controller program');
+  const market = canonicalKey(marketText, 'Market');
+  const maker = canonicalKey(makerText, 'maker');
+  const generationBytes = u64Bytes(generation, 'generation');
+  const nonceBytes = u64Bytes(nonce, 'nonce');
+  const [controller, controllerBump] = PublicKey.findProgramAddressSync([CONTROLLER_SEED], controllerProgram);
+  const [replay, replayBump] = PublicKey.findProgramAddressSync([REPLAY_SEED, market.toBytes(), generationBytes, maker.toBytes()], controllerProgram);
+  const [registration, registrationBump] = PublicKey.findProgramAddressSync([REGISTERED_SEED, market.toBytes(), generationBytes, maker.toBytes(), nonceBytes], controllerProgram);
+  return Object.freeze({ controller, controllerBump, replay, replayBump, registration, registrationBump });
 }
 
 export function registeredPhase(phase: number): RegisteredPhase {
@@ -292,6 +434,30 @@ export function encodeRegisteredFillInstructionV1(fill: bigint, executionPrice: 
   return output;
 }
 
+export function encodeRegisteredCreateInstructionV1(
+  intent: CompactIntentV1,
+  controllerBump: number,
+  replayBump: number,
+  registrationBump: number,
+): Uint8Array {
+  const output = new Uint8Array(REGISTERED_CREATE_BYTES_VALUE);
+  output.set(REGISTERED_CREATE_MAGIC_BYTES, REGISTERED_CREATE_MAGIC_OFFSET);
+  putU16(output, REGISTERED_CREATE_VERSION_OFFSET, REGISTERED_CREATE_ABI_VERSION);
+  output[REGISTERED_CREATE_CONTROLLER_BUMP_OFFSET] = controllerBump;
+  output[REGISTERED_CREATE_REPLAY_BUMP_OFFSET] = replayBump;
+  output[REGISTERED_CREATE_REGISTRATION_BUMP_OFFSET] = registrationBump;
+  requireZero(output, REGISTERED_CREATE_RESERVED_OFFSET, REGISTERED_CREATE_INTENT_OFFSET - REGISTERED_CREATE_RESERVED_OFFSET, 'registered creation header');
+  output.set(encodeCompactIntentV1(intent), REGISTERED_CREATE_INTENT_OFFSET);
+  return output;
+}
+
+export function encodeLegacyApproveInstructionV1(amount: bigint): Uint8Array {
+  const output = new Uint8Array(9);
+  output[0] = 4;
+  putU64(output, 1, amount, 'approval amount');
+  return output;
+}
+
 export function encodeRegisteredTerminal(action: 'cancel' | 'expire', controllerBump: number, registrationBump: number, sequence: bigint): Uint8Array {
   const output = new Uint8Array(REGISTERED_TERMINAL_BYTES_VALUE);
   output.set(REGISTERED_TERMINAL_MAGIC_BYTES, REGISTERED_TERMINAL_MAGIC_OFFSET);
@@ -315,6 +481,83 @@ function transactionPlan(instruction: TransactionInstruction, payer: PublicKey, 
     transaction,
     wireBytes,
     requiredSignerKeys: Object.freeze(message.staticAccountKeys.slice(0, message.header.numRequiredSignatures).map((key) => key.toBase58())),
+  });
+}
+
+export function buildRegisteredCreateTransaction(input: RegisteredCreateInputV1): RegisteredCreateTransactionPlanV1 {
+  const controllerProgram = canonicalKey(input.controllerProgram, 'controller program');
+  const payer = canonicalKey(input.payer, 'payer');
+  const maker = canonicalKey(input.maker, 'maker');
+  const market = canonicalKey(input.market, 'Market');
+  canonicalKey(input.recentBlockhash, 'recent blockhash');
+  const intent = input.intent;
+  if (!sameBytes(intent.market, market.toBytes())) throw new Error('registered intent substitutes the selected Market');
+  if (intent.lifecycle !== 2) throw new Error('registered creation requires lifecycle 2');
+  if (intent.nonce !== input.expectedNonce) throw new Error('registered intent nonce is stale relative to the reacquired replay root');
+  if (intent.side > 1) throw new Error('registered intent side is undefined');
+  if (intent.validFrom > intent.validThrough || intent.maximumFill === 0n) throw new Error('registered validity or maximum fill is invalid');
+  const derived = deriveRegisteredCreateAddresses(input.controllerProgram, input.market, intent.generation, input.maker, intent.nonce);
+  const route = input.route;
+  const keys = {
+    realm: canonicalKey(route.realm, 'Realm'),
+    feePolicy: canonicalKey(route.feePolicy, 'fee policy'),
+    capabilityManifest: canonicalKey(route.capabilityManifest, 'capability manifest'),
+    mint: canonicalKey(route.mint, 'mint'),
+    collateral: canonicalKey(route.collateral, 'collateral'),
+    venue: canonicalKey(route.venue, 'venue'),
+    tokenProgram: canonicalKey(route.tokenProgram, 'token program'),
+  };
+  if (!keys.tokenProgram.equals(LEGACY_TOKEN_PROGRAM_ID)) throw new Error('registered creation supports only the controller’s exact legacy-token profile');
+  const fixed = [
+    derived.controller, derived.replay, derived.registration, CLAIM_PROGRAM_ID, SystemProgram.programId,
+    market, keys.realm, keys.feePolicy, keys.capabilityManifest, keys.mint, keys.collateral, keys.venue, keys.tokenProgram,
+  ];
+  if (new Set(fixed.map((key) => key.toBase58())).size !== fixed.length) throw new Error('registered creation aliases two fixed account roles');
+  if (fixed.some((key) => key.equals(maker) || key.equals(payer))) throw new Error('maker or payer aliases a fixed registered-creation role');
+  const create = new TransactionInstruction({
+    programId: controllerProgram,
+    keys: [
+      { pubkey: derived.controller, isSigner: false, isWritable: false },
+      { pubkey: maker, isSigner: true, isWritable: false },
+      { pubkey: payer, isSigner: true, isWritable: true },
+      { pubkey: derived.replay, isSigner: false, isWritable: true },
+      { pubkey: derived.registration, isSigner: false, isWritable: true },
+      { pubkey: CLAIM_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: market, isSigner: false, isWritable: false },
+      { pubkey: keys.realm, isSigner: false, isWritable: false },
+      { pubkey: keys.feePolicy, isSigner: false, isWritable: false },
+      { pubkey: keys.capabilityManifest, isSigner: false, isWritable: false },
+      { pubkey: keys.mint, isSigner: false, isWritable: false },
+      { pubkey: keys.collateral, isSigner: false, isWritable: false },
+      { pubkey: keys.venue, isSigner: false, isWritable: false },
+      { pubkey: keys.tokenProgram, isSigner: false, isWritable: false },
+    ],
+    data: encodeRegisteredCreateInstructionV1(intent, derived.controllerBump, derived.replayBump, derived.registrationBump) as Buffer,
+  });
+  let approvalAmount: bigint | null = null;
+  const instructions: TransactionInstruction[] = [];
+  if (intent.side === 1) {
+    approvalAmount = registeredBuyerReserve(intent.maximumFill, intent.limitPrice, intent.feeBasisPoints);
+    instructions.push(new TransactionInstruction({
+      programId: LEGACY_TOKEN_PROGRAM_ID,
+      keys: [
+        { pubkey: keys.collateral, isSigner: false, isWritable: true },
+        { pubkey: derived.registration, isSigner: false, isWritable: false },
+        { pubkey: maker, isSigner: true, isWritable: false },
+      ],
+      data: encodeLegacyApproveInstructionV1(approvalAmount) as Buffer,
+    }));
+  }
+  instructions.push(create);
+  const message = new TransactionMessage({ payerKey: payer, recentBlockhash: input.recentBlockhash, instructions }).compileToV0Message();
+  const transaction = new VersionedTransaction(message);
+  const wireBytes = transaction.serialize();
+  if (wireBytes.length > PACKET_DATA_SIZE) throw new Error(`registered creation transaction is ${wireBytes.length} bytes, above the ${PACKET_DATA_SIZE}-byte packet bound`);
+  return Object.freeze({
+    instructions: Object.freeze(instructions), transaction, wireBytes,
+    requiredSignerKeys: Object.freeze(message.staticAccountKeys.slice(0, message.header.numRequiredSignatures).map((key) => key.toBase58())),
+    derived, approvalAmount,
   });
 }
 

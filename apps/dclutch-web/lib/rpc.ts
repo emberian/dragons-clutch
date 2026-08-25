@@ -52,6 +52,11 @@ export type LatestBlockhashObservation = Readonly<{
   lastValidBlockHeight: string;
 }>;
 
+export type RentExemptionObservation = Readonly<{
+  dataLength: number;
+  lamports: string;
+}>;
+
 export type ProgramSnapshot = Readonly<{
   programId: string;
   scanSlot: string;
@@ -233,6 +238,12 @@ export class SolanaRpcClient {
       blockhash,
       lastValidBlockHeight: String(exactUnsigned(raw.value.lastValidBlockHeight, 'last valid block height')),
     });
+  }
+
+  async minimumBalanceForRentExemption(dataLength: number): Promise<RentExemptionObservation> {
+    if (!Number.isSafeInteger(dataLength) || dataLength < 0 || dataLength > 10_485_760) throw new Error('rent data length is outside the bounded account profile');
+    const lamports = exactUnsigned(await this.request('getMinimumBalanceForRentExemption', [dataLength, { commitment: 'finalized' }]), 'rent-exempt lamports');
+    return Object.freeze({ dataLength, lamports: String(lamports) });
   }
 }
 

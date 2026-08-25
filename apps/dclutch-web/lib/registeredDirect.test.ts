@@ -3,18 +3,26 @@ import { describe, expect, it } from 'vitest';
 
 import {
   REGISTERED_CONTROLLER_EXAMPLE,
+  REGISTERED_CREATE_EXAMPLE,
   REGISTERED_STATE_EXAMPLE,
   REGISTERED_TERMINAL_CANCEL_EXAMPLE,
   REGISTERED_TERMINAL_EXPIRE_EXAMPLE,
 } from './generated/registeredDirect';
+import { decodeCompactIntentV1 } from './directCodec';
 import {
+  LEGACY_TOKEN_PROGRAM_ID,
+  buildRegisteredCreateTransaction,
   buildRegisteredFillTransaction,
   buildRegisteredTerminalTransaction,
   decodeRegisteredIntentStateV1,
+  decodeMakerReplayObservationV1,
+  deriveRegisteredCreateAddresses,
   deriveRegisteredAddress,
   encodeRegisteredFillInstructionV1,
+  encodeRegisteredCreateInstructionV1,
   encodeRegisteredIntentStateV1,
   encodeRegisteredTerminal,
+  registeredBuyerReserve,
   scanRegisteredDirectStates,
   type RegisteredDirectStateObservation,
 } from './registeredDirect';
@@ -67,6 +75,61 @@ describe('Lean-emitted registered Direct browser ABI', () => {
     expect(encodeRegisteredFillInstructionV1(2_000n, 500_000n, [1, 2, 3, 4, 5])).toEqual(REGISTERED_CONTROLLER_EXAMPLE);
     expect(encodeRegisteredTerminal('cancel', 2, 3, 7n)).toEqual(REGISTERED_TERMINAL_CANCEL_EXAMPLE);
     expect(encodeRegisteredTerminal('expire', 2, 3, 7n)).toEqual(REGISTERED_TERMINAL_EXPIRE_EXAMPLE);
+  });
+
+  it('matches the exact generated 152-byte creation example and derives gap-free addresses', () => {
+    const intent = decodeCompactIntentV1(REGISTERED_CREATE_EXAMPLE.slice(16));
+    expect(encodeRegisteredCreateInstructionV1(intent, 1, 2, 3)).toEqual(REGISTERED_CREATE_EXAMPLE);
+    const first = deriveRegisteredCreateAddresses(key(67).toBase58(), key(4).toBase58(), 3n, key(5).toBase58(), 0n);
+    const next = deriveRegisteredCreateAddresses(key(67).toBase58(), key(4).toBase58(), 3n, key(5).toBase58(), 1n);
+    expect(first.replay).toEqual(next.replay);
+    expect(first.registration).not.toEqual(next.registration);
+  });
+
+  it('constructs buyer approval plus creation with honest maker/payer signatures and bounded reserve', () => {
+    const controllerProgram = key(67);
+    const maker = key(5);
+    const payer = key(6);
+    const market = key(4);
+    const collateral = key(11);
+    const intent = {
+      side: 1, outcome: 1, lifecycle: 2, market: market.toBytes(), generation: 3n, nonce: 0n,
+      validFrom: 0n, validThrough: 100n, maximumFill: 2_000n, limitPrice: 400_000n,
+      feeBasisPoints: 25, collateralAccount: collateral.toBytes(),
+    };
+    const input = {
+      controllerProgram: controllerProgram.toBase58(), payer: payer.toBase58(), maker: maker.toBase58(),
+      market: market.toBase58(), recentBlockhash: key(91).toBase58(), intent, expectedNonce: 0n,
+      route: {
+        realm: key(7).toBase58(), feePolicy: key(8).toBase58(), capabilityManifest: key(9).toBase58(),
+        mint: key(10).toBase58(), collateral: collateral.toBase58(), venue: key(12).toBase58(),
+        tokenProgram: LEGACY_TOKEN_PROGRAM_ID.toBase58(),
+      },
+    };
+    const plan = buildRegisteredCreateTransaction(input);
+    expect(plan.instructions).toHaveLength(2);
+    expect(plan.instructions[0].programId).toEqual(LEGACY_TOKEN_PROGRAM_ID);
+    expect(plan.instructions[0].data).toEqual(Uint8Array.of(4, 34, 3, 0, 0, 0, 0, 0, 0));
+    expect(plan.instructions[1].keys).toHaveLength(15);
+    expect(plan.requiredSignerKeys).toEqual([payer.toBase58(), maker.toBase58()]);
+    expect(plan.approvalAmount).toBe(802n);
+    expect(plan.wireBytes.length).toBeLessThanOrEqual(1_232);
+    expect(() => buildRegisteredCreateTransaction({ ...input, expectedNonce: 1n })).toThrow(/nonce is stale/);
+    expect(() => buildRegisteredCreateTransaction({ ...input, route: { ...input.route, venue: input.route.mint } })).toThrow(/aliases two fixed/);
+  });
+
+  it('strictly projects absent/existing replay roots and refuses stale creation authority', () => {
+    const controllerProgram = key(67);
+    const addresses = deriveRegisteredCreateAddresses(controllerProgram.toBase58(), key(4).toBase58(), 3n, key(5).toBase58(), 0n);
+    expect(decodeMakerReplayObservationV1(null, addresses.controller)).toEqual({ exists: false, nextNonce: 0n });
+    const data = new Uint8Array(48);
+    data.set(Uint8Array.of(0x44, 0x43, 0x52, 0x50, 1, 0, 0, 0));
+    data.set(addresses.controller.toBytes(), 8);
+    new DataView(data.buffer).setBigUint64(40, 7n, true);
+    expect(decodeMakerReplayObservationV1({ data, executable: false, lamports: '1', owner: CLAIM_PROGRAM_ID.toBase58(), space: 48 }, addresses.controller)).toEqual({ exists: true, nextNonce: 7n });
+    data[8] ^= 1;
+    expect(() => decodeMakerReplayObservationV1({ data, executable: false, lamports: '1', owner: CLAIM_PROGRAM_ID.toBase58(), space: 48 }, addresses.controller)).toThrow(/canonical controller/);
+    expect(() => registeredBuyerReserve(2_000n, 1_000_001n, 25)).toThrow(/1e6 scale/);
   });
 
   it('constructs signer-honest fill, cancellation, and permissionless-expiry transactions', () => {
