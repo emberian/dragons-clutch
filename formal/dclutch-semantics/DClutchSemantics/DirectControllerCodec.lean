@@ -25,6 +25,22 @@ theorem encodeBytes32_length (bytes : Bytes32) :
     (encodeBytes32 bytes).length = 32 := by
   simp [encodeBytes32]
 
+/-- Hostile fixed-width decoder. The dependent length witness ensures every
+lookup is total without padding or truncation. -/
+def decodeBytes32 (bytes : List UInt8) : Option Bytes32 :=
+  if exact : bytes.length = 32 then
+    some fun index => bytes.get ⟨index.val, by omega⟩
+  else none
+
+theorem decodeBytes32_encodeBytes32 (bytes : Bytes32) :
+    decodeBytes32 (encodeBytes32 bytes) = some bytes := by
+  unfold decodeBytes32
+  rw [dif_pos (encodeBytes32_length bytes)]
+  congr
+  funext index
+  change (List.ofFn bytes)[index.val] = bytes index
+  rw [List.getElem_ofFn]
+
 def zeros (count : Nat) : List UInt8 := List.replicate count 0
 
 def intentMagic : List UInt8 :=
@@ -208,6 +224,87 @@ theorem encodeCompactIntentV1_length (intent : CompactIntentV1) :
   simp [encodeCompactIntentV1, intentMagic, compactIntentBytes,
     encodeLE_length, encodeBytes32_length, zeros]
 
+/-- Exact representability conditions for every integer in the signed intent.
+The byte-valued semantic tags and fixed coordinates are representable by
+construction. -/
+def IntentEncodable (intent : CompactIntentV1) : Prop :=
+  intent.generation < 256 ^ 8 ∧
+  intent.nonce < 256 ^ 8 ∧
+  intent.validFrom < 256 ^ 8 ∧
+  intent.validThrough < 256 ^ 8 ∧
+  intent.maximumFill < 256 ^ 8 ∧
+  intent.limitPrice < 256 ^ 8 ∧
+  intent.feeBasisPoints < 256 ^ 2
+
+/-- Hostile decoder for one independently signed intent. It accepts exactly
+one canonical 136-byte representation and refuses padding, truncation,
+alternate magic/version values, and nonzero reserved bytes. -/
+def decodeCompactIntentV1 (bytes : List UInt8) : Option CompactIntentV1 := do
+  if bytes.length != compactIntentBytes then none else
+  if bytes.take versionOffset != intentMagic then none else
+  let wireVersion := decodeLE ((bytes.drop versionOffset).take 2)
+  if wireVersion != version then none else
+  let side ← bytes[(IntentField.offset .side)]?
+  let outcome ← bytes[(IntentField.offset .outcome)]?
+  let lifecycle ← bytes[(IntentField.offset .lifecycle)]?
+  if (bytes.drop intentReservedAOffset).take intentReservedAWidth !=
+      zeros intentReservedAWidth then none else
+  let market ← decodeBytes32
+    ((bytes.drop (IntentField.offset .market)).take (IntentField.width .market))
+  let generation := decodeLE
+    ((bytes.drop (IntentField.offset .generation)).take (IntentField.width .generation))
+  let nonce := decodeLE
+    ((bytes.drop (IntentField.offset .nonce)).take (IntentField.width .nonce))
+  let validFrom := decodeLE
+    ((bytes.drop (IntentField.offset .validFrom)).take (IntentField.width .validFrom))
+  let validThrough := decodeLE
+    ((bytes.drop (IntentField.offset .validThrough)).take (IntentField.width .validThrough))
+  let maximumFill := decodeLE
+    ((bytes.drop (IntentField.offset .maximumFill)).take (IntentField.width .maximumFill))
+  let limitPrice := decodeLE
+    ((bytes.drop (IntentField.offset .limitPrice)).take (IntentField.width .limitPrice))
+  let feeBasisPoints := decodeLE
+    ((bytes.drop (IntentField.offset .feeBasisPoints)).take
+      (IntentField.width .feeBasisPoints))
+  if (bytes.drop intentReservedBOffset).take intentReservedBWidth !=
+      zeros intentReservedBWidth then none else
+  let collateralAccount ← decodeBytes32
+    ((bytes.drop (IntentField.offset .collateralAccount)).take
+      (IntentField.width .collateralAccount))
+  some {
+    side, outcome, lifecycle, market, generation, nonce, validFrom,
+    validThrough, maximumFill, limitPrice, feeBasisPoints, collateralAccount
+  }
+
+/-- Every representable semantic intent survives canonical serialization and
+hostile decoding exactly. -/
+theorem decodeCompactIntentV1_encode
+    (intent : CompactIntentV1) (encodable : IntentEncodable intent) :
+    decodeCompactIntentV1 (encodeCompactIntentV1 intent) = some intent := by
+  rcases encodable with
+    ⟨generationFits, nonceFits, validFromFits, validThroughFits,
+      maximumFillFits, limitPriceFits, feeBasisPointsFits⟩
+  have generationDecoded := decodeLE_encodeLE 8 intent.generation generationFits
+  have nonceDecoded := decodeLE_encodeLE 8 intent.nonce nonceFits
+  have validFromDecoded := decodeLE_encodeLE 8 intent.validFrom validFromFits
+  have validThroughDecoded := decodeLE_encodeLE 8 intent.validThrough validThroughFits
+  have maximumFillDecoded := decodeLE_encodeLE 8 intent.maximumFill maximumFillFits
+  have limitPriceDecoded := decodeLE_encodeLE 8 intent.limitPrice limitPriceFits
+  have feeBasisPointsDecoded :=
+    decodeLE_encodeLE 2 intent.feeBasisPoints feeBasisPointsFits
+  simp [decodeCompactIntentV1, encodeCompactIntentV1,
+    intentMagic, versionOffset, version,
+    compactIntentBytes, IntentField.offset, IntentField.width,
+    intentReservedAOffset, intentReservedAWidth,
+    intentReservedBOffset, intentReservedBWidth,
+    List.drop_append, List.take_append, List.drop_eq_nil_of_le,
+    List.take_of_length_le,
+    encodeLE_length, encodeBytes32_length, zeros,
+    decodeBytes32_encodeBytes32, generationDecoded, nonceDecoded,
+    validFromDecoded, validThroughDecoded, maximumFillDecoded,
+    limitPriceDecoded, feeBasisPointsDecoded]
+  native_decide
+
 /-- Matcher-selected coordinates surrounding two independently signed intents. -/
 structure ControllerInstructionV1 where
   controllerBump : UInt8
@@ -237,6 +334,65 @@ theorem encodeControllerInstructionV1_length (instruction : ControllerInstructio
   simp [encodeControllerInstructionV1, controllerMagic,
     controllerInstructionBytes, compactIntentBytes, encodeLE_length,
     encodeCompactIntentV1_length, zeros]
+
+/-- Exact representability conditions for the matcher envelope and its two
+independently signed child intents. -/
+def ControllerEncodable (instruction : ControllerInstructionV1) : Prop :=
+  instruction.fill < 256 ^ 8 ∧
+  instruction.executionPrice < 256 ^ 8 ∧
+  IntentEncodable instruction.seller ∧
+  IntentEncodable instruction.buyer
+
+/-- Hostile decoder for the exact matcher envelope. Nested intents are decoded
+by the same canonical decoder used for standalone signature payloads. -/
+def decodeControllerInstructionV1
+    (bytes : List UInt8) : Option ControllerInstructionV1 := do
+  if bytes.length != controllerInstructionBytes then none else
+  if bytes.take versionOffset != controllerMagic then none else
+  let wireVersion := decodeLE ((bytes.drop versionOffset).take 2)
+  if wireVersion != version then none else
+  let controllerBump ← bytes[(ControllerField.offset .controllerBump)]?
+  let sellerReplayBump ← bytes[(ControllerField.offset .sellerReplayBump)]?
+  let buyerReplayBump ← bytes[(ControllerField.offset .buyerReplayBump)]?
+  let sellerPositionBump ← bytes[(ControllerField.offset .sellerPositionBump)]?
+  let buyerPositionBump ← bytes[(ControllerField.offset .buyerPositionBump)]?
+  if (bytes.drop controllerReservedOffset).take controllerReservedWidth !=
+      zeros controllerReservedWidth then none else
+  let fill := decodeLE
+    ((bytes.drop (ControllerField.offset .fill)).take (ControllerField.width .fill))
+  let executionPrice := decodeLE
+    ((bytes.drop (ControllerField.offset .executionPrice)).take
+      (ControllerField.width .executionPrice))
+  let seller ← decodeCompactIntentV1
+    ((bytes.drop (ControllerField.offset .seller)).take (ControllerField.width .seller))
+  let buyer ← decodeCompactIntentV1
+    ((bytes.drop (ControllerField.offset .buyer)).take (ControllerField.width .buyer))
+  some {
+    controllerBump, sellerReplayBump, buyerReplayBump,
+    sellerPositionBump, buyerPositionBump, fill, executionPrice, seller, buyer
+  }
+
+/-- Every representable matcher envelope survives canonical serialization and
+hostile decoding exactly, including both independently signed child intents. -/
+theorem decodeControllerInstructionV1_encode
+    (instruction : ControllerInstructionV1)
+    (encodable : ControllerEncodable instruction) :
+    decodeControllerInstructionV1 (encodeControllerInstructionV1 instruction) =
+      some instruction := by
+  rcases encodable with ⟨fillFits, executionPriceFits, sellerFits, buyerFits⟩
+  have fillDecoded := decodeLE_encodeLE 8 instruction.fill fillFits
+  have executionPriceDecoded :=
+    decodeLE_encodeLE 8 instruction.executionPrice executionPriceFits
+  have sellerDecoded := decodeCompactIntentV1_encode instruction.seller sellerFits
+  have buyerDecoded := decodeCompactIntentV1_encode instruction.buyer buyerFits
+  simp [decodeControllerInstructionV1, encodeControllerInstructionV1,
+    controllerMagic, versionOffset, version, controllerInstructionBytes,
+    compactIntentBytes, ControllerField.offset, ControllerField.width,
+    controllerReservedOffset, controllerReservedWidth,
+    List.drop_append, List.take_append, List.drop_eq_nil_of_le,
+    List.take_of_length_le, encodeLE_length, encodeCompactIntentV1_length,
+    zeros, fillDecoded, executionPriceDecoded, sellerDecoded, buyerDecoded]
+  native_decide
 
 namespace Examples
 
@@ -289,6 +445,50 @@ theorem concrete_lengths :
     (encodeCompactIntentV1 buyerIntent).length = 136 ∧
     (encodeControllerInstructionV1 controllerInstruction).length = 304 := by
   native_decide
+
+theorem concrete_roundtrips :
+    decodeCompactIntentV1 (encodeCompactIntentV1 sellerIntent) = some sellerIntent ∧
+    decodeCompactIntentV1 (encodeCompactIntentV1 buyerIntent) = some buyerIntent ∧
+    decodeControllerInstructionV1
+        (encodeControllerInstructionV1 controllerInstruction) =
+      some controllerInstruction := by
+  exact ⟨
+    decodeCompactIntentV1_encode sellerIntent (by simp [IntentEncodable, sellerIntent]),
+    decodeCompactIntentV1_encode buyerIntent (by simp [IntentEncodable, buyerIntent]),
+    decodeControllerInstructionV1_encode controllerInstruction (by
+      simp [ControllerEncodable, IntentEncodable, controllerInstruction,
+        sellerIntent, buyerIntent])
+  ⟩
+
+/-- Executable hostile witnesses cover every canonical envelope guard. The
+general roundtrip theorems above establish acceptance independently. -/
+theorem hostile_intent_decodings_refuse :
+    decodeCompactIntentV1 [] = none ∧
+    decodeCompactIntentV1 (encodeCompactIntentV1 sellerIntent |>.drop 1) = none ∧
+    decodeCompactIntentV1
+        (List.set (encodeCompactIntentV1 sellerIntent) magicOffset 0) = none ∧
+    decodeCompactIntentV1
+        (List.set (encodeCompactIntentV1 sellerIntent) versionOffset 2) = none ∧
+    decodeCompactIntentV1
+        (List.set (encodeCompactIntentV1 sellerIntent) intentReservedAOffset 1) = none ∧
+    decodeCompactIntentV1
+        (List.set (encodeCompactIntentV1 sellerIntent) intentReservedBOffset 1) = none := by
+  set_option maxRecDepth 10000 in
+    exact ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
+
+theorem hostile_controller_decodings_refuse :
+    decodeControllerInstructionV1 [] = none ∧
+    decodeControllerInstructionV1
+        (encodeControllerInstructionV1 controllerInstruction |>.drop 1) = none ∧
+    decodeControllerInstructionV1
+        (List.set (encodeControllerInstructionV1 controllerInstruction) magicOffset 0) = none ∧
+    decodeControllerInstructionV1
+        (List.set (encodeControllerInstructionV1 controllerInstruction) versionOffset 2) = none ∧
+    decodeControllerInstructionV1
+        (List.set (encodeControllerInstructionV1 controllerInstruction)
+          controllerReservedOffset 1) = none := by
+  set_option maxRecDepth 10000 in
+    exact ⟨rfl, rfl, rfl, rfl, rfl⟩
 
 end Examples
 
