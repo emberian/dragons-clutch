@@ -12,6 +12,7 @@ publish = false
 dclutch-capability-contract = { path = "../dclutch-capability-contract" }
 dclutch-collateral-contract = { path = "../dclutch-collateral-contract" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
+dclutch-direct-contract = { path = "../dclutch-direct-contract" }
 dclutch-kernel = { path = "../dclutch-kernel" }
 dclutch-market-contract = { path = "../dclutch-market-contract" }
 dclutch-pyth-contract = { path = "../dclutch-pyth-contract" }
@@ -20,6 +21,8 @@ dclutch-record-contract = { path = "../dclutch-record-contract" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
 dclutch-product-contract = { path = "../dclutch-product-contract" }
 dclutch-rent-contract = { path = "../dclutch-rent-contract" }
+dclutch-series-contract = { path = "../dclutch-series-contract" }
+dclutch-source-contract = { path = "../dclutch-source-contract" }
 dclutch-terminal-contract = { path = "../dclutch-terminal-contract" }
 solana-program = "=3.0.0"
 solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }

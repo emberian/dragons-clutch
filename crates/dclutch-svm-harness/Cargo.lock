@@ -1543,6 +1543,14 @@ name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-direct-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-realm-contract",
+ "dclutch-rent-contract",
+]
+
+[[package]]
 name = "dclutch-kernel"
 version = "0.1.0"
 
@@ -1580,12 +1588,30 @@ name = "dclutch-rent-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-series-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-product-contract",
+ "dclutch-source-contract",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "dclutch-source-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-contract",
+]
+
+[[package]]
 name = "dclutch-svm-harness"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-contract",
  "dclutch-collateral-contract",
  "dclutch-core-contract",
+ "dclutch-direct-contract",
  "dclutch-kernel",
  "dclutch-market-contract",
  "dclutch-product-contract",
@@ -1593,6 +1619,8 @@ dependencies = [
  "dclutch-realm-contract",
  "dclutch-record-contract",
  "dclutch-rent-contract",
+ "dclutch-series-contract",
+ "dclutch-source-contract",
  "dclutch-terminal-contract",
  "dclutch-token-svm",
  "solana-account 4.3.2",
