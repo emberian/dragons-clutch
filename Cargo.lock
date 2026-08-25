@@ -415,6 +415,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-general-codec"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-general-contract"
 version = "0.1.0"
 dependencies = [
