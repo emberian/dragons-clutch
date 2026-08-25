@@ -19,6 +19,7 @@ dclutch-collateral-contract = { path = "../dclutch-collateral-contract" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-dealer-contract = { path = "../dclutch-dealer-contract" }
 dclutch-direct-contract = { path = "../dclutch-direct-contract" }
+dclutch-direct-codec = { path = "../dclutch-direct-codec" }
 dclutch-general-contract = { path = "../dclutch-general-contract" }
 dclutch-kernel = { path = "../dclutch-kernel" }
 dclutch-market-contract = { path = "../dclutch-market-contract" }

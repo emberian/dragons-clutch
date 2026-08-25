@@ -40,6 +40,8 @@ use solana_program::{
 };
 use solana_sdk_ids::system_program;
 
+/// Chain-derived compiled Direct transaction construction.
+pub mod compiled_direct;
 /// Chain-derived unsigned Realm and Market foundation workflows.
 pub mod foundation;
 /// Chain-derived unsigned Series and Dealer workflows.

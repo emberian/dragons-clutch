@@ -408,6 +408,7 @@ dependencies = [
  "dclutch-collateral-contract",
  "dclutch-core-contract",
  "dclutch-dealer-contract",
+ "dclutch-direct-codec",
  "dclutch-direct-contract",
  "dclutch-general-contract",
  "dclutch-kernel",
