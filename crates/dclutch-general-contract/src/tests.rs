@@ -382,6 +382,40 @@ fn selected_page_body_cannot_be_withheld_or_replaced_by_wire_bytes() {
 }
 
 #[test]
+fn page_frames_allow_only_semantically_repeatable_owner_destinations() {
+    let mut collect =
+        valid_frame_accounts(GeneralInstructionTagV1::CollectSettlementPage, 2);
+    collect[23].key = collect[19].key;
+    assert!(GeneralAccountFrameV1::new(
+        GeneralInstructionTagV1::CollectSettlementPage,
+        2,
+        &collect,
+    )
+    .is_ok());
+
+    let mut distribute =
+        valid_frame_accounts(GeneralInstructionTagV1::DistributeSettlementPage, 2);
+    distribute[20].key = distribute[18].key;
+    distribute[21].key = distribute[19].key;
+    assert!(GeneralAccountFrameV1::new(
+        GeneralInstructionTagV1::DistributeSettlementPage,
+        2,
+        &distribute,
+    )
+    .is_ok());
+
+    distribute[19].key = distribute[18].key;
+    assert_eq!(
+        GeneralAccountFrameV1::new(
+            GeneralInstructionTagV1::DistributeSettlementPage,
+            2,
+            &distribute,
+        ),
+        Err(Error::AccountAlias)
+    );
+}
+
+#[test]
 fn page_creation_is_dust_safe_with_exact_surplus_routing() {
     let stored_page = page();
     let submission = submission(page_id(stored_page));

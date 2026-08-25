@@ -1271,7 +1271,7 @@ impl<'a> GeneralAccountFrameV1<'a> {
             let role = general_frame_role(tag, execution_count, index)?;
             validate_general_account_role(role, *account)?;
         }
-        require_distinct_general_accounts(accounts)?;
+        require_general_account_alias_policy(tag, execution_count, accounts)?;
         Ok(Self {
             tag,
             execution_count,
@@ -1889,14 +1889,33 @@ fn require_page_count(count: u8) -> Result<()> {
     }
 }
 
-fn require_distinct_general_accounts(accounts: &[GeneralAccountMetaV1]) -> Result<()> {
+fn require_general_account_alias_policy(
+    tag: GeneralInstructionTagV1,
+    execution_count: u8,
+    accounts: &[GeneralAccountMetaV1],
+) -> Result<()> {
     for (index, account) in accounts.iter().enumerate() {
-        if accounts
+        for (other_index, other) in accounts
             .iter()
+            .enumerate()
             .skip(index.saturating_add(1))
-            .any(|other| other.key == account.key)
         {
-            return Err(Error::AccountAlias);
+            if other.key != account.key {
+                continue;
+            }
+            let role = general_frame_role(tag, execution_count, index)?;
+            let other_role = general_frame_role(tag, execution_count, other_index)?;
+            let repeatable = matches!(
+                (role, other_role),
+                (GeneralAccountRoleV1::OwnerPosition, GeneralAccountRoleV1::OwnerPosition)
+                    | (
+                        GeneralAccountRoleV1::QuoteDestination,
+                        GeneralAccountRoleV1::QuoteDestination
+                    )
+            );
+            if !repeatable {
+                return Err(Error::AccountAlias);
+            }
         }
     }
     Ok(())
