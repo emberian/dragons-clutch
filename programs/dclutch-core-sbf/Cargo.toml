@@ -1,0 +1,59 @@
+[package]
+name = "dclutch-core-sbf"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.89"
+description = "Thin authenticated SBF adapter for canonical dClutch Market Core"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+path = "src/lib.rs"
+
+[features]
+default = []
+no-entrypoint = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+dclutch-capability-contract = { path = "../../crates/dclutch-capability-contract" }
+dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
+dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
+dclutch-product-contract = { path = "../../crates/dclutch-product-contract" }
+dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
+dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
+dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
+dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
+dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
+dclutch-source-contract = { path = "../../crates/dclutch-source-contract" }
+solana-program = { version = "=3.0.0", default-features = false }
+solana-sdk-ids = "=3.1.0"
+solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
+
+[dev-dependencies]
+dclutch-general-config-contract = { path = "../../crates/dclutch-general-config-contract" }
+solana-account = "=4.3.2"
+solana-hash = "=4.5.0"
+solana-message = { version = "=3.1.0", features = ["bincode"] }
+solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
+solana-sdk = "=3.0.0"
+solana-transaction = "=4.1.6"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[workspace]
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(target_os, values("solana"))'] }
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"
