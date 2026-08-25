@@ -678,3 +678,324 @@ fn series_create_accounts(state: &SeriesCreateState) -> Vec<AccountMeta> {
         AccountMeta::new_readonly(state.rent_sysvar.key, false),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dclutch_capability_contract::{
+        ActivationPolicy, CAPABILITY_TEMPLATE_ENTRY_BYTES, CapabilityConfigProjectionV1,
+        CapabilityTemplateEntryV1, CapabilityTemplateV1, CompartmentFundingV1, ContentId,
+        FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+    };
+    use dclutch_product_contract::capacity::{CapacityEnvelope, CapacityProfileV1Input};
+    use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+    use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority};
+    use dclutch_series_contract::{
+        CAPABILITY_DERIVATION_RELEASE_ID_V1, MARKET_DERIVATION_RELEASE_ID_V1,
+        OCCURRENCE_DERIVATION_RELEASE_ID_V1, PRODUCT_COMPILER_RELEASE_ID_V1,
+        SOURCE_DERIVATION_RELEASE_ID_V1,
+    };
+    use dclutch_source_contract::PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1;
+    use solana_program::{account_info::AccountInfo, rent::Rent, sysvar::SysvarSerialize};
+    use solana_sdk_ids::{native_loader, sysvar};
+
+    fn observed(
+        observation: Observation,
+        key: Pubkey,
+        owner: Pubkey,
+        lamports: u64,
+        executable: bool,
+        data: Vec<u8>,
+    ) -> ObservedAccount {
+        ObservedAccount {
+            observation,
+            key,
+            owner,
+            lamports,
+            executable,
+            data,
+        }
+    }
+
+    fn finalized_record(
+        program_id: Pubkey,
+        observation: Observation,
+        schema: [u8; 32],
+        data: Vec<u8>,
+    ) -> (ObservedAccount, FinalizedRecordProof) {
+        let digest = hash(&data).to_bytes();
+        let (raw, _) = Pubkey::find_program_address(
+            &[RAW_RECORD_PDA_SEED_V1, schema.as_slice(), digest.as_slice()],
+            &program_id,
+        );
+        let (cursor, _) = Pubkey::find_program_address(
+            &[
+                STAGING_CURSOR_PDA_SEED_V1,
+                schema.as_slice(),
+                digest.as_slice(),
+            ],
+            &program_id,
+        );
+        (
+            observed(observation, raw, program_id, u64::MAX, false, data),
+            FinalizedRecordProof {
+                schema_release_id: schema,
+                staging_cursor: observed(
+                    observation,
+                    cursor,
+                    system_program::ID,
+                    3,
+                    false,
+                    Vec::new(),
+                ),
+            },
+        )
+    }
+
+    fn rent_account(observation: Observation) -> ObservedAccount {
+        let rent = Rent::default();
+        let mut data = vec![0; Rent::size_of()];
+        let mut lamports = 1;
+        let mut info = AccountInfo::new(
+            &sysvar::rent::ID,
+            false,
+            false,
+            &mut lamports,
+            &mut data,
+            &sysvar::ID,
+            false,
+        );
+        rent.to_account_info(&mut info).expect("serialize Rent");
+        drop(info);
+        observed(observation, sysvar::rent::ID, sysvar::ID, 1, false, data)
+    }
+
+    fn identity(byte: u8) -> IdentityV1 {
+        IdentityV1::new([byte; 32]).expect("nonzero identity")
+    }
+
+    fn capability_template() -> Vec<u8> {
+        let funding = FundingAmountsV1::new(
+            CompartmentFundingV1::native_lamports(5).expect("rent"),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::native_lamports(7).expect("bounty"),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+        )
+        .expect("funding amounts");
+        let quote = FundingQuoteV1::new(funding, None).expect("quote");
+        let entry = CapabilityTemplateEntryV1::new(
+            ContentId::new([70; 32]).expect("kind"),
+            ContentId::new(PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1).expect("release"),
+            CapabilityConfigProjectionV1::OccurrenceResolutionMaterial,
+            ContentId::new([71; 32]).expect("capacity"),
+            ContentId::new([72; 32]).expect("schema"),
+            ContentId::new([73; 32]).expect("derivation"),
+            ActivationPolicy::RequiredAtFounding,
+            0,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            quote,
+        )
+        .expect("template entry");
+        let mut bytes = vec![0; MANIFEST_HEADER_BYTES + CAPABILITY_TEMPLATE_ENTRY_BYTES];
+        CapabilityTemplateV1::encode_into(core::slice::from_ref(&entry), &mut bytes)
+            .expect("template");
+        bytes
+    }
+
+    fn create_fixture() -> (Pubkey, SeriesCreateState) {
+        let program_id = Pubkey::new_from_array([90; 32]);
+        let observation = Observation {
+            slot: 61,
+            unix_timestamp: 1_800_000_000,
+            finality: crate::Finality::Finalized,
+        };
+        let product_id =
+            |byte| dclutch_product_contract::ContentId::new([byte; 32]).expect("Product ID");
+        let capacity = CapacityProfileV1::new(CapacityProfileV1Input {
+            envelope: CapacityEnvelope::Measured,
+            verifier_release_id: product_id(1),
+            envelope_basis_id: product_id(2),
+            max_artifact_bytes: 256,
+            page_payload_bytes: 256,
+            max_pages: 1,
+            max_partition_cells: 16,
+        })
+        .expect("capacity");
+        let capacity_bytes = capacity.to_bytes().to_vec();
+        let template_bytes = capability_template();
+        let recipe = SeriesRecipeV1 {
+            realm_id: identity(3),
+            terms_id: identity(4),
+            claim_basis_id: identity(5),
+            result_domain_id: identity(6),
+            capacity_profile_id: IdentityV1::new(hash(&capacity_bytes).to_bytes())
+                .expect("capacity ID"),
+            compiler_release_id: IdentityV1::new(PRODUCT_COMPILER_RELEASE_ID_V1)
+                .expect("compiler release"),
+            occurrence_schedule_id: identity(7),
+            source_schedule_id: identity(8),
+            capability_template_id: IdentityV1::new(hash(&template_bytes).to_bytes())
+                .expect("template ID"),
+            occurrence_derivation_release_id: IdentityV1::new(OCCURRENCE_DERIVATION_RELEASE_ID_V1)
+                .expect("occurrence release"),
+            source_derivation_release_id: IdentityV1::new(SOURCE_DERIVATION_RELEASE_ID_V1)
+                .expect("Source release"),
+            capability_derivation_release_id: IdentityV1::new(CAPABILITY_DERIVATION_RELEASE_ID_V1)
+                .expect("capability release"),
+            market_derivation_release_id: IdentityV1::new(MARKET_DERIVATION_RELEASE_ID_V1)
+                .expect("Market release"),
+            capitalization_schedule_id: identity(9),
+            first_occurrence_time: 1_800_000_000,
+            cadence_seconds: 3_600,
+            occurrence_count: 3,
+            first_generation: 40,
+            outcome_count: 4,
+        };
+        let recipe_bytes = recipe.to_bytes().to_vec();
+        let recipe_id = IdentityV1::new(hash(&recipe_bytes).to_bytes()).expect("recipe ID");
+        let aggregate = CapitalizationAggregateV1 {
+            recipe_id,
+            capitalization_schedule_id: recipe.capitalization_schedule_id,
+            occurrence_count: recipe.occurrence_count,
+            total_principal: 60,
+            first_capitalization_id: identity(10),
+        };
+        let aggregate_bytes = aggregate.to_bytes().to_vec();
+        let aggregate_id =
+            IdentityV1::new(hash(&aggregate_bytes).to_bytes()).expect("aggregate ID");
+        let (recipe, recipe_finalization) = finalized_record(
+            program_id,
+            observation,
+            SERIES_RECIPE_SCHEMA_RELEASE_ID_V3,
+            recipe_bytes,
+        );
+        let (aggregate, aggregate_finalization) = finalized_record(
+            program_id,
+            observation,
+            SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1,
+            aggregate_bytes,
+        );
+        let (capacity_profile, capacity_profile_finalization) = finalized_record(
+            program_id,
+            observation,
+            SERIES_CAPACITY_SCHEMA_RELEASE_ID_V1,
+            capacity_bytes,
+        );
+        let (capability_template, capability_template_finalization) = finalized_record(
+            program_id,
+            observation,
+            CAPABILITY_TEMPLATE_SCHEMA_RELEASE_ID_V1,
+            template_bytes,
+        );
+        let authority = RefundAuthority::new([11; 32]).expect("refund authority");
+        let authority_bytes = authority.to_bytes();
+        let (credit_key, credit_bump) = Pubkey::find_program_address(
+            &[RENT_CREDIT_PDA_DOMAIN_V1, authority_bytes.as_slice()],
+            &program_id,
+        );
+        let refund = authority.to_bytes();
+        let recipe_id_bytes = recipe_id.to_bytes();
+        let aggregate_id_bytes = aggregate_id.to_bytes();
+        let (root, _) = Pubkey::find_program_address(
+            &[
+                SERIES_ROOT_PDA_DOMAIN_V1,
+                recipe_id_bytes.as_slice(),
+                aggregate_id_bytes.as_slice(),
+                refund.as_slice(),
+            ],
+            &program_id,
+        );
+        let (escrow, _) = Pubkey::find_program_address(
+            &[SERIES_ESCROW_PDA_DOMAIN_V1, root.as_ref()],
+            &program_id,
+        );
+        let (guard, _) = Pubkey::find_program_address(
+            &[SERIES_REPLAY_GUARD_PDA_DOMAIN_V1, root.as_ref()],
+            &program_id,
+        );
+        let vacant = |key, lamports| {
+            observed(
+                observation,
+                key,
+                system_program::ID,
+                lamports,
+                false,
+                Vec::new(),
+            )
+        };
+        (
+            program_id,
+            SeriesCreateState {
+                payer: vacant(Pubkey::new_from_array([12; 32]), u64::MAX),
+                recipe,
+                recipe_finalization,
+                aggregate,
+                aggregate_finalization,
+                capacity_profile,
+                capacity_profile_finalization,
+                root_destination: vacant(root, 3),
+                escrow_destination: vacant(escrow, 5),
+                replay_guard_destination: vacant(guard, 7),
+                rent_credit: observed(
+                    observation,
+                    credit_key,
+                    program_id,
+                    u64::MAX,
+                    false,
+                    RentCreditV1::new(authority, credit_bump)
+                        .to_bytes()
+                        .to_vec(),
+                ),
+                capability_template,
+                capability_template_finalization,
+                system_program: observed(
+                    observation,
+                    system_program::ID,
+                    native_loader::ID,
+                    1,
+                    true,
+                    Vec::new(),
+                ),
+                rent_sysvar: rent_account(observation),
+            },
+        )
+    }
+
+    #[test]
+    fn series_create_is_exact_dust_safe_and_hostile_to_substitution() {
+        let (program_id, state) = create_fixture();
+        let report = build_series_create_v1(program_id, &state).expect("Series Create");
+        assert_eq!(report.instruction.accounts.len(), 15);
+        assert_eq!(report.total_principal, 60);
+        assert!(report.payer_debit > report.total_principal);
+        assert_eq!(report.root, state.root_destination.key);
+        assert_eq!(report.escrow, state.escrow_destination.key);
+        assert_eq!(report.replay_guard, state.replay_guard_destination.key);
+        assert_eq!(
+            report.instruction.data.len(),
+            dclutch_series_contract::CREATE_SERIES_BYTES_V1
+        );
+
+        let mut wrong_template = state.clone();
+        *wrong_template
+            .capability_template
+            .data
+            .last_mut()
+            .expect("template tail") ^= 1;
+        assert!(matches!(
+            build_series_create_v1(program_id, &wrong_template),
+            Err(VerticalError::FinalizationMismatch) | Err(VerticalError::ContentMismatch)
+        ));
+
+        let mut stale = state;
+        stale.aggregate_finalization.staging_cursor.observation.slot += 1;
+        assert_eq!(
+            build_series_create_v1(program_id, &stale),
+            Err(VerticalError::ObservationMismatch)
+        );
+    }
+}
