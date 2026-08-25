@@ -29,6 +29,8 @@ pub const CALLER_AUTHORITY_PDA_DOMAIN_V1: &[u8] = b"dclutch:role-authority:v1";
 pub const CUSTODY_AUTHORITY_PDA_DOMAIN_V1: &[u8] = b"dclutch:custody-authority:v1";
 /// Exact per-context Custody replay PDA seed domain.
 pub const CUSTODY_REPLAY_PDA_DOMAIN_V1: &[u8] = b"dclutch:custody-replay:v1";
+/// Exact token-vault PDA seed domain.
+pub const CUSTODY_VAULT_PDA_DOMAIN_V1: &[u8] = b"dclutch:custody-vault:v1";
 /// Domain separating the adapter's token/replay poststate commitment.
 pub const CUSTODY_POSTSTATE_DOMAIN_V1: &[u8] = b"dclutch:custody-poststate:v1";
 
@@ -228,6 +230,10 @@ pub struct CustodyRequestV1 {
     pub source: [u8; 32],
     /// Exact destination token account, or zero for inactive operations.
     pub destination: [u8; 32],
+    /// PDA namespace of a Custody-owned source, or zero for External/inactive.
+    pub source_vault_context: [u8; 32],
+    /// PDA namespace of a Custody-owned destination, or zero for External/inactive.
+    pub destination_vault_context: [u8; 32],
     /// Exact Realm-selected collateral Mint.
     pub mint: [u8; 32],
     /// Exact Realm-selected Token or Token-2022 program.
@@ -285,6 +291,8 @@ impl CustodyRequestV1 {
             },
             source: read_array(input, REQUEST_SOURCE_OFFSET)?,
             destination: read_array(input, REQUEST_DESTINATION_OFFSET)?,
+            source_vault_context: read_array(input, REQUEST_SOURCE_VAULT_CONTEXT_OFFSET)?,
+            destination_vault_context: read_array(input, REQUEST_DESTINATION_VAULT_CONTEXT_OFFSET)?,
             mint: read_array(input, REQUEST_MINT_OFFSET)?,
             token_program: read_array(input, REQUEST_TOKEN_PROGRAM_OFFSET)?,
             payer: read_array(input, REQUEST_PAYER_OFFSET)?,
@@ -340,6 +348,14 @@ impl CustodyRequestV1 {
             ),
             (REQUEST_SOURCE_OFFSET, self.source),
             (REQUEST_DESTINATION_OFFSET, self.destination),
+            (
+                REQUEST_SOURCE_VAULT_CONTEXT_OFFSET,
+                self.source_vault_context,
+            ),
+            (
+                REQUEST_DESTINATION_VAULT_CONTEXT_OFFSET,
+                self.destination_vault_context,
+            ),
             (REQUEST_MINT_OFFSET, self.mint),
             (REQUEST_TOKEN_PROGRAM_OFFSET, self.token_program),
             (REQUEST_PAYER_OFFSET, self.payer),
@@ -393,6 +409,8 @@ impl CustodyRequestV1 {
                     || self.destination_compartment != CompartmentV1::None
                     || !is_zero(&self.source)
                     || !is_zero(&self.destination)
+                    || !is_zero(&self.source_vault_context)
+                    || !is_zero(&self.destination_vault_context)
                     || !is_zero(&self.mint)
                     || !is_zero(&self.token_program)
                     || is_zero(&self.payer)
@@ -406,8 +424,11 @@ impl CustodyRequestV1 {
             OperationV1::OpenVault => {
                 if self.source_compartment != CompartmentV1::None
                     || self.destination_compartment == CompartmentV1::None
+                    || self.destination_compartment == CompartmentV1::External
                     || !is_zero(&self.source)
                     || is_zero(&self.destination)
+                    || !is_zero(&self.source_vault_context)
+                    || is_zero(&self.destination_vault_context)
                     || is_zero(&self.mint)
                     || is_zero(&self.token_program)
                     || is_zero(&self.payer)
@@ -432,15 +453,25 @@ impl CustodyRequestV1 {
                 {
                     return Err(Error::InvalidOperationShape);
                 }
+                if (self.source_compartment == CompartmentV1::External)
+                    != is_zero(&self.source_vault_context)
+                    || (self.destination_compartment == CompartmentV1::External)
+                        != is_zero(&self.destination_vault_context)
+                {
+                    return Err(Error::InvalidOperationShape);
+                }
                 if self.source == self.destination {
                     return Err(Error::AliasedTransferAccounts);
                 }
             }
             OperationV1::CloseVault => {
                 if self.source_compartment == CompartmentV1::None
+                    || self.source_compartment == CompartmentV1::External
                     || self.destination_compartment != CompartmentV1::None
                     || is_zero(&self.source)
                     || !is_zero(&self.destination)
+                    || is_zero(&self.source_vault_context)
+                    || !is_zero(&self.destination_vault_context)
                     || is_zero(&self.mint)
                     || is_zero(&self.token_program)
                     || !is_zero(&self.payer)
@@ -991,6 +1022,8 @@ mod tests {
             semantic: semantic(),
             source: id(10),
             destination: id(11),
+            source_vault_context: id(14),
+            destination_vault_context: id(15),
             mint: id(12),
             token_program: id(13),
             payer: [0; 32],
@@ -1016,6 +1049,8 @@ mod tests {
             semantic: semantic(),
             source: [0; 32],
             destination: [0; 32],
+            source_vault_context: [0; 32],
+            destination_vault_context: [0; 32],
             mint: [0; 32],
             token_program: [0; 32],
             payer: id(20),
