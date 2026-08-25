@@ -427,11 +427,21 @@ name = "dclutch-general-codec"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-general-config-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-core-contract",
+ "sha2",
+]
+
+[[package]]
 name = "dclutch-general-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-contract",
  "dclutch-core-contract",
+ "dclutch-general-config-contract",
  "sha2",
 ]
 

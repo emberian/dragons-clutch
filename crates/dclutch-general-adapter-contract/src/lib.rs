@@ -43,10 +43,10 @@ pub const GENERAL_CANDIDATE_PDA_DOMAIN_V1: &[u8] = b"dclutch:general-candidate:v
 pub const GENERAL_POLICY_PDA_DOMAIN_V1: &[u8] = b"dclutch:general-policy:v1";
 /// Immutable candidate page PDA domain.
 pub const GENERAL_PAGE_PDA_DOMAIN_V1: &[u8] = b"dclutch:general-page:v1";
-/// Canonical General-owned child-plan preimage header width.
-pub const GENERAL_CHILD_PLAN_HEADER_BYTES_V1: usize = 208;
-/// Canonical General-owned child-plan magic and digest domain.
-pub const GENERAL_CHILD_PLAN_MAGIC_V1: [u8; 8] = *b"DCGCHP01";
+/// Canonical General-owned V2 child-plan preimage header width.
+pub const GENERAL_CHILD_PLAN_HEADER_BYTES_V2: usize = 272;
+/// Canonical General-owned V2 child-plan magic and digest domain.
+pub const GENERAL_CHILD_PLAN_MAGIC_V2: [u8; 8] = *b"DCGCHP02";
 
 const CERTIFICATE_MAGIC: [u8; 8] = *b"DCGVCER1";
 const VERIFICATION_CURSOR_MAGIC: [u8; 8] = *b"DCGVERF1";
@@ -274,6 +274,7 @@ struct OrderAccumulator {
 pub struct CandidateVerifierV1 {
     candidate: CandidateV1,
     next_page: u32,
+    order_count: u32,
     revision: u64,
     current_order: Option<OrderAccumulator>,
     filled_lots: u64,
@@ -290,6 +291,7 @@ impl CandidateVerifierV1 {
         Self {
             candidate,
             next_page: 0,
+            order_count: 0,
             revision: 0,
             current_order: None,
             filled_lots: 0,
@@ -334,6 +336,12 @@ impl CandidateVerifierV1 {
         self.next_page
     }
 
+    /// Number of distinct globally grouped order identities consumed so far.
+    #[must_use]
+    pub const fn order_count(&self) -> u32 {
+        self.order_count
+    }
+
     /// Return the optimistic-concurrency revision.
     #[must_use]
     pub const fn revision(&self) -> u64 {
@@ -360,6 +368,7 @@ impl CandidateVerifierV1 {
             &self.candidate.to_bytes().map_err(|_| Error::Codec)?,
         );
         infallible_put(&mut output, 272, &self.next_page.to_le_bytes());
+        infallible_put(&mut output, 276, &self.order_count.to_le_bytes());
         if let Some(current) = self.current_order {
             infallible_put(
                 &mut output,
@@ -389,7 +398,6 @@ impl CandidateVerifierV1 {
             || input.get(..8) != Some(VERIFICATION_CURSOR_MAGIC.as_slice())
             || read_u16(input, 8)? != VERSION
             || !zero(input, 11, 5)?
-            || !zero(input, 276, 4)?
         {
             return Err(Error::Certificate);
         }
@@ -420,6 +428,7 @@ impl CandidateVerifierV1 {
         let value = Self {
             candidate,
             next_page: read_u32(input, 272)?,
+            order_count: read_u32(input, 276)?,
             revision: read_u64(input, 952)?,
             current_order,
             filled_lots: read_u64(input, 672)?,
@@ -491,13 +500,15 @@ impl CandidateVerifierV1 {
         self.candidate.to_bytes().map_err(|_| Error::Codec)?;
         if self.next_page > self.candidate.page_count
             || self.revision != u64::from(self.next_page)
+            || self.current_order.is_some() != (self.order_count != 0)
             || self.claim_inputs[count..].iter().any(|value| *value != 0)
             || self.claim_outputs[count..].iter().any(|value| *value != 0)
             || (self.next_page == 0)
                 != (self.current_order.is_none()
                     && self.filled_lots == 0
                     && self.quote_inputs == 0
-                    && self.quote_outputs == 0)
+                    && self.quote_outputs == 0
+                    && self.order_count == 0)
         {
             return Err(Error::Certificate);
         }
@@ -511,7 +522,13 @@ impl CandidateVerifierV1 {
 
     fn ingest_execution(&mut self, execution: ExecutionV1) -> Result<()> {
         match self.current_order {
-            None => self.current_order = Some(new_accumulator(execution)),
+            None => {
+                self.order_count = self
+                    .order_count
+                    .checked_add(1)
+                    .ok_or(Error::ArithmeticOverflow)?;
+                self.current_order = Some(new_accumulator(execution));
+            }
             Some(current) if current.terms.order_id == execution.order_id => {
                 if !same_order_terms(&current.terms, &execution) {
                     return Err(Error::OrderSubstitution);
@@ -522,6 +539,10 @@ impl CandidateVerifierV1 {
                     return Err(Error::NonCanonicalOrder);
                 }
                 self.finalize_current_order()?;
+                self.order_count = self
+                    .order_count
+                    .checked_add(1)
+                    .ok_or(Error::ArithmeticOverflow)?;
                 self.current_order = Some(new_accumulator(execution));
             }
         }
@@ -900,6 +921,19 @@ pub enum GeneralChildContextV1 {
     Aggregate(AggregateReplayContextV1),
 }
 
+/// Operational routing bound only into the terminal quote-surplus child plan.
+///
+/// The destination account can be replaced for liveness, but the Claims/Custody
+/// boundary must parse it as a Realm-collateral token account owned by the
+/// immutable beneficiary from `GeneralConfigV2`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QuoteSurplusRouteV2 {
+    /// Operational Realm-collateral token account selected for this close.
+    pub destination_account: [u8; 32],
+    /// Immutable token-owner authority copied from authenticated config.
+    pub beneficiary: [u8; 32],
+}
+
 /// Borrowed canonical preimage shared by Claims `request_id` and Custody
 /// `parent_request_digest`.
 ///
@@ -907,14 +941,15 @@ pub enum GeneralChildContextV1 {
 /// format has no physical maximum outcome count; an SBF adapter may impose a
 /// separately labeled measured profile before constructing it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GeneralChildPlanV1<'a> {
+pub struct GeneralChildPlanV2<'a> {
     effect: GeneralChildEffectV1,
     context: GeneralChildContextV1,
     outcome_count: u32,
     quantities: &'a [u8],
+    surplus_route: Option<QuoteSurplusRouteV2>,
 }
 
-impl<'a> GeneralChildPlanV1<'a> {
+impl<'a> GeneralChildPlanV2<'a> {
     /// Construct one exact row-scoped child plan.
     pub fn new_row(
         effect: GeneralChildEffectV1,
@@ -927,6 +962,7 @@ impl<'a> GeneralChildPlanV1<'a> {
             context: GeneralChildContextV1::Row(context),
             outcome_count,
             quantities,
+            surplus_route: None,
         };
         value.validate()?;
         Ok(value)
@@ -944,6 +980,25 @@ impl<'a> GeneralChildPlanV1<'a> {
             context: GeneralChildContextV1::Aggregate(context),
             outcome_count,
             quantities,
+            surplus_route: None,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Construct the terminal quote-surplus plan with its replaceable token
+    /// account and immutable beneficiary both committed by the plan digest.
+    pub fn new_surplus(
+        context: AggregateReplayContextV1,
+        quantities: &'a [u8],
+        route: QuoteSurplusRouteV2,
+    ) -> Result<Self> {
+        let value = Self {
+            effect: GeneralChildEffectV1::PaySurplus,
+            context: GeneralChildContextV1::Aggregate(context),
+            outcome_count: 1,
+            quantities,
+            surplus_route: Some(route),
         };
         value.validate()?;
         Ok(value)
@@ -951,7 +1006,7 @@ impl<'a> GeneralChildPlanV1<'a> {
 
     /// Exact encoded preimage width for this runtime outcome count.
     pub fn encoded_len(self) -> Result<usize> {
-        GENERAL_CHILD_PLAN_HEADER_BYTES_V1
+        GENERAL_CHILD_PLAN_HEADER_BYTES_V2
             .checked_add(quantity_tail_len(self.outcome_count)?)
             .ok_or(Error::ChildPlan)
     }
@@ -965,11 +1020,11 @@ impl<'a> GeneralChildPlanV1<'a> {
         output.fill(0);
         self.encode_header(
             output
-                .get_mut(..GENERAL_CHILD_PLAN_HEADER_BYTES_V1)
+                .get_mut(..GENERAL_CHILD_PLAN_HEADER_BYTES_V2)
                 .ok_or(Error::ChildPlan)?,
         );
         output
-            .get_mut(GENERAL_CHILD_PLAN_HEADER_BYTES_V1..)
+            .get_mut(GENERAL_CHILD_PLAN_HEADER_BYTES_V2..)
             .ok_or(Error::ChildPlan)?
             .copy_from_slice(self.quantities);
         Ok(())
@@ -978,7 +1033,7 @@ impl<'a> GeneralChildPlanV1<'a> {
     /// SHA-256 of the exact header plus runtime-length quantity tail.
     pub fn digest(self) -> Result<[u8; 32]> {
         self.validate()?;
-        let mut header = [0_u8; GENERAL_CHILD_PLAN_HEADER_BYTES_V1];
+        let mut header = [0_u8; GENERAL_CHILD_PLAN_HEADER_BYTES_V2];
         self.encode_header(&mut header);
         let mut hasher = Sha256::new();
         hasher.update(header);
@@ -1004,6 +1059,12 @@ impl<'a> GeneralChildPlanV1<'a> {
         self.quantities
     }
 
+    /// Close-only operational account and immutable beneficiary commitment.
+    #[must_use]
+    pub const fn surplus_route(self) -> Option<QuoteSurplusRouteV2> {
+        self.surplus_route
+    }
+
     fn validate(self) -> Result<()> {
         let row = match self.context {
             GeneralChildContextV1::Row(context) => {
@@ -1020,6 +1081,14 @@ impl<'a> GeneralChildPlanV1<'a> {
             || self.quantities.len() != quantity_tail_len(self.outcome_count)?
         {
             return Err(Error::ChildPlan);
+        }
+        match (self.effect, self.surplus_route) {
+            (GeneralChildEffectV1::PaySurplus, Some(route))
+                if !is_zero(&route.destination_account) && !is_zero(&route.beneficiary) => {}
+            (GeneralChildEffectV1::PaySurplus, _) | (_, Some(_)) => {
+                return Err(Error::ChildPlan);
+            }
+            (_, None) => {}
         }
         let first = read_u64(self.quantities, 0)?;
         if self.effect.is_scalar() && (self.outcome_count != 1 || first == 0) {
@@ -1068,8 +1137,12 @@ impl<'a> GeneralChildPlanV1<'a> {
                 0,
             ),
         };
-        infallible_put(header, 0, &GENERAL_CHILD_PLAN_MAGIC_V1);
-        infallible_put(header, 8, &VERSION.to_le_bytes());
+        let (surplus_destination, surplus_beneficiary) =
+            self.surplus_route.map_or(([0; 32], [0; 32]), |route| {
+                (route.destination_account, route.beneficiary)
+            });
+        infallible_put(header, 0, &GENERAL_CHILD_PLAN_MAGIC_V2);
+        infallible_put(header, 8, &2_u16.to_le_bytes());
         if let Some(tag) = header.get_mut(10) {
             *tag = self.effect as u8;
         }
@@ -1083,6 +1156,8 @@ impl<'a> GeneralChildPlanV1<'a> {
         infallible_put(header, 112, &candidate);
         infallible_put(header, 144, &owner);
         infallible_put(header, 176, &order);
+        infallible_put(header, 208, &surplus_destination);
+        infallible_put(header, 240, &surplus_beneficiary);
     }
 }
 
@@ -1584,30 +1659,31 @@ mod tests {
     #[test]
     fn canonical_child_plan_digest_uses_only_the_runtime_quantity_tail() {
         let tail = quantity_tail(&[10, 11]);
-        let plan = GeneralChildPlanV1::new_row(
+        let plan = GeneralChildPlanV2::new_row(
             GeneralChildEffectV1::CollectClaims,
             row_context(),
             2,
             &tail,
         )
         .expect("row plan");
-        assert_eq!(plan.encoded_len(), Ok(224));
-        let mut encoded = [0_u8; 224];
+        assert_eq!(plan.encoded_len(), Ok(288));
+        let mut encoded = [0_u8; 288];
         plan.encode_into(&mut encoded).expect("encode");
-        assert_eq!(&encoded[..8], &GENERAL_CHILD_PLAN_MAGIC_V1);
-        assert_eq!(&encoded[208..], tail.as_slice());
+        assert_eq!(&encoded[..8], &GENERAL_CHILD_PLAN_MAGIC_V2);
+        assert!(encoded[208..272].iter().all(|byte| *byte == 0));
+        assert_eq!(&encoded[272..], tail.as_slice());
         assert_eq!(
             plan.digest().expect("digest"),
             [
-                0xdd, 0xdf, 0x41, 0xd6, 0xd9, 0x10, 0xc6, 0x40, 0xaa, 0x5c, 0x66, 0xd0, 0xda, 0x4b,
-                0x5d, 0x22, 0xbe, 0x7b, 0x7c, 0x0f, 0x21, 0x74, 0xdc, 0x15, 0x4f, 0xd9, 0x3b, 0x03,
-                0xb6, 0xe1, 0x18, 0x37,
+                0x31, 0xa1, 0xe2, 0xf0, 0x0b, 0x79, 0xed, 0xb7, 0x4c, 0x02, 0xca, 0xf3, 0xa4, 0xda,
+                0x3a, 0xc3, 0xe9, 0x4e, 0x4c, 0x12, 0xf2, 0x3b, 0x8f, 0xc0, 0x64, 0xfd, 0x0a, 0x90,
+                0x88, 0xe8, 0xa3, 0xb9,
             ]
         );
 
         let padded = quantity_tail(&[10, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            GeneralChildPlanV1::new_row(
+            GeneralChildPlanV2::new_row(
                 GeneralChildEffectV1::CollectClaims,
                 row_context(),
                 2,
@@ -1625,7 +1701,7 @@ mod tests {
             revision: 6,
         };
         let uniform = quantity_tail(&[4, 4, 4]);
-        GeneralChildPlanV1::new_aggregate(
+        GeneralChildPlanV2::new_aggregate(
             GeneralChildEffectV1::MintCompleteSet,
             aggregate,
             3,
@@ -1634,7 +1710,7 @@ mod tests {
         .expect("uniform complete set");
         let nonuniform = quantity_tail(&[4, 4, 3]);
         assert_eq!(
-            GeneralChildPlanV1::new_aggregate(
+            GeneralChildPlanV2::new_aggregate(
                 GeneralChildEffectV1::MintCompleteSet,
                 aggregate,
                 3,
@@ -1644,7 +1720,7 @@ mod tests {
         );
         let scalar = quantity_tail(&[4]);
         assert_eq!(
-            GeneralChildPlanV1::new_aggregate(
+            GeneralChildPlanV2::new_aggregate(
                 GeneralChildEffectV1::PaySurplus,
                 aggregate,
                 2,
@@ -1653,9 +1729,80 @@ mod tests {
             Err(Error::ChildPlan)
         );
         assert_eq!(
-            GeneralChildPlanV1::new_aggregate(
+            GeneralChildPlanV2::new_aggregate(
                 GeneralChildEffectV1::CollectClaims,
                 aggregate,
+                1,
+                &scalar,
+            ),
+            Err(Error::ChildPlan)
+        );
+    }
+
+    #[test]
+    fn surplus_child_digest_binds_replaceable_account_and_immutable_beneficiary() {
+        let context = AggregateReplayContextV1 {
+            execution: row_context().execution,
+            candidate_id: id(3),
+            revision: 6,
+        };
+        let scalar = quantity_tail(&[4]);
+        let route = QuoteSurplusRouteV2 {
+            destination_account: id(10),
+            beneficiary: id(11),
+        };
+        let plan = GeneralChildPlanV2::new_surplus(context, &scalar, route)
+            .expect("canonical surplus plan");
+        let digest = plan.digest().expect("canonical surplus digest");
+        assert_eq!(plan.surplus_route(), Some(route));
+        let mut encoded = [0_u8; 280];
+        plan.encode_into(&mut encoded).expect("encode surplus plan");
+        assert_eq!(&encoded[208..240], route.destination_account.as_slice());
+        assert_eq!(&encoded[240..272], route.beneficiary.as_slice());
+        assert_eq!(&encoded[272..], scalar.as_slice());
+        assert_ne!(
+            GeneralChildPlanV2::new_surplus(
+                context,
+                &scalar,
+                QuoteSurplusRouteV2 {
+                    destination_account: id(12),
+                    beneficiary: route.beneficiary,
+                },
+            )
+            .expect("replacement account is allowed")
+            .digest()
+            .expect("replacement account digest"),
+            digest
+        );
+        assert_ne!(
+            GeneralChildPlanV2::new_surplus(
+                context,
+                &scalar,
+                QuoteSurplusRouteV2 {
+                    destination_account: route.destination_account,
+                    beneficiary: id(12),
+                },
+            )
+            .expect("alternate nonzero authority has a distinct commitment")
+            .digest()
+            .expect("alternate authority digest"),
+            digest
+        );
+        assert_eq!(
+            GeneralChildPlanV2::new_surplus(
+                context,
+                &scalar,
+                QuoteSurplusRouteV2 {
+                    destination_account: [0; 32],
+                    beneficiary: route.beneficiary,
+                },
+            ),
+            Err(Error::ChildPlan)
+        );
+        assert_eq!(
+            GeneralChildPlanV2::new_aggregate(
+                GeneralChildEffectV1::PaySurplus,
+                context,
                 1,
                 &scalar,
             ),
@@ -1875,7 +2022,9 @@ mod tests {
         );
         let mut verifier = CandidateVerifierV1::begin(candidate_two);
         verifier.ingest_page(&first).expect("first page");
+        assert_eq!(verifier.order_count(), 1);
         verifier.ingest_page(&second).expect("second page");
+        assert_eq!(verifier.order_count(), 2);
         let verified = verifier.finish().expect("aggregate rounding");
         assert_eq!(verified.filled_lots, 4);
         assert_eq!(verified.quote_inputs, 2);
@@ -1893,6 +2042,7 @@ mod tests {
         verifier.ingest_page_at(&first, 0).expect("first page");
         assert_eq!(verifier.revision(), 1);
         assert_eq!(verifier.next_page(), 1);
+        assert_eq!(verifier.order_count(), 1);
         let bytes = verifier.to_bytes().expect("encode cursor");
         assert_eq!(CandidateVerifierV1::decode(&bytes), Ok(verifier));
 
@@ -1909,6 +2059,17 @@ mod tests {
             CandidateVerifierV1::decode(&hostile),
             Err(Error::Certificate)
         );
+        let mut hostile_count = bytes;
+        hostile_count[276..280].fill(0);
+        assert_eq!(
+            CandidateVerifierV1::decode(&hostile_count),
+            Err(Error::Certificate)
+        );
+
+        verifier
+            .ingest_page_at(&second, 1)
+            .expect("second distinct order page");
+        assert_eq!(verifier.order_count(), 2);
     }
 
     #[test]

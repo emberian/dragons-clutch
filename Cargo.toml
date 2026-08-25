@@ -11,6 +11,7 @@ members = [
     "crates/dclutch-economic-kernel",
     "crates/dclutch-effect-kernel",
     "crates/dclutch-general-contract",
+    "crates/dclutch-general-config-contract",
     "crates/dclutch-general-adapter-contract",
     "crates/dclutch-general-codec",
     "crates/dclutch-kernel",

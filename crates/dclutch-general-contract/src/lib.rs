@@ -22,6 +22,17 @@ use dclutch_capability_contract::{
 };
 use dclutch_core_contract::{MarketIdentity, MarketRoot, Phase as MarketPhase};
 
+/// Narrow successor-owned General configuration and root contracts.
+///
+/// This migration re-export does not make the broad V1 venue an authority for
+/// V2 bytes. New physical programs depend on `dclutch-general-config-contract`
+/// directly.
+pub use dclutch_general_config_contract as successor_config;
+/// Frequently used V2 successor types re-exported during migration.
+pub use dclutch_general_config_contract::{
+    GeneralConfigV2, GeneralConfigV2Input, GeneralLifecycleV2, GeneralRootV2,
+};
+
 /// Exact width of an opaque content identity.
 pub const CONTENT_ID_BYTES: usize = 32;
 /// Provisional program-profile bound on claim-basis cells.

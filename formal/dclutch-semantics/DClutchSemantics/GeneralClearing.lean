@@ -555,9 +555,12 @@ def distributePost
     claimInventory := subVectors state.claimInventory (page.claimOutputs candidate)
     quoteInventory := state.quoteInventory - page.quoteOutputs }
 
-/-- Closing routes the exact deterministic quote remainder to the capability's
-declared surplus beneficiary. It never leaves unowned collateral in the
-settlement cursor. -/
+/-- Closing routes the exact deterministic quote remainder to an operational
+collateral-token account whose parsed owner equals the immutable nonzero
+`GeneralConfigV2.quoteSurplusBeneficiary`. The destination account can be
+replaced for liveness; neither candidate nor submitter selects the beneficiary,
+and the beneficiary is unrelated to lamport RentCredit. Closing never leaves
+unowned collateral in the settlement cursor. -/
 def closePost (state : SettlementState) : SettlementState :=
   { state with
     phase := .terminal
