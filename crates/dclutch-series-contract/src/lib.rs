@@ -13,7 +13,9 @@ use dclutch_product_contract::{
     ContentId,
     capacity::CapacityProfileId,
     product::{InstanceV1, InstanceV1Input},
+    result_domain::FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
 };
+use dclutch_source_contract::{SOURCE_MATERIAL_BYTES, SourceMaterialViewV1};
 use sha2::{Digest, Sha256};
 
 /// Width of a content identity or Solana-compatible account key.
@@ -83,14 +85,21 @@ pub const OCCURRENCE_DERIVATION_RELEASE_ID_V1: [u8; 32] = [
     0xa2, 0x4a, 0x68, 0xe4, 0x1b, 0x4f, 0x00, 0x3a, 0xf2, 0xa5, 0x06, 0xca, 0xa0, 0xa6, 0x31, 0x61,
     0x7f, 0x9e, 0x78, 0x60, 0x35, 0xf7, 0xdc, 0xf9, 0x7b, 0xd5, 0x67, 0x2f, 0x5f, 0x2e, 0x3c, 0x4b,
 ];
-/// Exact release label for V1's immutable shared source-policy selection.
+/// Exact release label for the fixed-point-free Source-material projection.
 pub const SOURCE_DERIVATION_RELEASE_PREIMAGE_V1: &[u8] =
-    b"dclutch/series-source-derivation/static-policy-v1";
+    b"dclutch/series-source-derivation/material-template-projection-v2";
 /// SHA-256 identity of [`SOURCE_DERIVATION_RELEASE_PREIMAGE_V1`].
 pub const SOURCE_DERIVATION_RELEASE_ID_V1: [u8; 32] = [
-    0x93, 0x95, 0xcc, 0xf5, 0xf0, 0x49, 0xf9, 0xc3, 0xbb, 0xcb, 0xfa, 0xcb, 0x41, 0x85, 0x44, 0x0f,
-    0x45, 0x9e, 0x24, 0x0b, 0xa5, 0x99, 0xaa, 0x25, 0x4b, 0x0b, 0x33, 0x12, 0xda, 0x2e, 0xdf, 0x43,
+    0xbf, 0x63, 0xaa, 0x42, 0xf3, 0x7f, 0xea, 0xb3, 0xf4, 0x45, 0x22, 0x3a, 0x74, 0xdd, 0x49, 0xf1,
+    0x96, 0xa1, 0x61, 0x95, 0x18, 0x8c, 0xea, 0xad, 0xa2, 0x25, 0xa3, 0xc1, 0xa5, 0xda, 0x7f, 0x8c,
 ];
+/// Domain separator for the reusable Source schedule selected by a Series recipe.
+///
+/// The projection hashes the canonical reusable facts of a fully validated
+/// Source material while normalizing its occurrence-varying Product linkage.
+/// It is a schedule/template identity, never a provisional Source-material ID.
+pub const SOURCE_SCHEDULE_PROJECTION_DOMAIN_V1: &[u8] =
+    b"dclutch/series-source-schedule-projection/source-material-v1";
 /// Exact release label for V1's immutable shared capability-manifest selection.
 pub const CAPABILITY_DERIVATION_RELEASE_PREIMAGE_V1: &[u8] =
     b"dclutch/series-capability-derivation/static-manifest-v1";
@@ -180,6 +189,12 @@ pub enum Error {
     CapitalizationMismatch,
     /// A derived occurrence did not match the selected recipe/index.
     DerivationMismatch,
+    /// A hostile occurrence-specific Source material was not canonical.
+    InvalidSourceMaterial,
+    /// Source material did not match the recipe's exact reusable schedule.
+    SourceScheduleMismatch,
+    /// Source material did not bind the exact derived Product instance/domain.
+    SourceProductMismatch,
     /// The recipe selected a derivation release combination absent from V1.
     DerivationReleaseUnavailable,
     /// Root conservation or phase invariants were false.
@@ -526,6 +541,159 @@ impl SeriesRecipeV1 {
     }
 }
 
+/// Exact deterministic Product projection for one recipe occurrence.
+///
+/// This is not persisted Product authority. It exposes the Product-owned
+/// constructor result so an occurrence-specific Source material can be built
+/// after the recipe has its final content ID and before Series derives Market
+/// identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OccurrenceProductDerivationV1 {
+    /// Exact scheduled time.
+    pub occurrence_time: i64,
+    /// Exact Market generation.
+    pub generation: u64,
+    /// Canonical occurrence-artifact identity.
+    pub occurrence_artifact_id: IdentityV1,
+    /// Canonical Product occurrence identity.
+    pub occurrence_id: IdentityV1,
+    /// Canonical Product instance identity.
+    pub product_instance_id: IdentityV1,
+    /// Exact Product-owned instance preimage.
+    pub product_instance: InstanceV1,
+}
+
+/// Authenticated compact facts from one exact occurrence Source material.
+///
+/// Fields are deliberately private: this value can only be obtained by
+/// hostile-decoding and hashing the complete Source material. Runtime adapters
+/// must additionally authenticate those bytes through the finalized-record
+/// owner before passing the value to a Series transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OccurrenceSourceMaterialV1 {
+    material_id: IdentityV1,
+    schedule_id: IdentityV1,
+    product_instance_id: IdentityV1,
+    source_spec_id: IdentityV1,
+    source_window_id: IdentityV1,
+    statistic_id: IdentityV1,
+    result_domain_id: IdentityV1,
+}
+
+impl OccurrenceSourceMaterialV1 {
+    /// Return the exact occurrence-specific Source-material content identity.
+    pub const fn material_id(self) -> IdentityV1 {
+        self.material_id
+    }
+
+    /// Return the reusable schedule projection identity.
+    pub const fn schedule_id(self) -> IdentityV1 {
+        self.schedule_id
+    }
+
+    /// Return the exact Product instance embedded in Source material.
+    pub const fn product_instance_id(self) -> IdentityV1 {
+        self.product_instance_id
+    }
+}
+
+/// Derive the reusable, occurrence-independent Source schedule identity.
+///
+/// The input must be one fully canonical Source material. The projection has
+/// its own domain and omits exactly the occurrence Product instance in
+/// ResolutionPolicy, top-level SourceMaterial, and (when present)
+/// RecoveryPolicy, plus both copies of the recovery-policy content ID whose
+/// digest necessarily changes with that embedded Product coordinate.
+/// The normalized recovery-policy bytes themselves remain committed. Every
+/// provider, adapter, capacity, source, window, statistic, result-domain, and
+/// recovery fact therefore remains exact. The result is never accepted as a
+/// Market resolution-policy identity.
+pub fn source_schedule_identity_v1(source_material_bytes: &[u8]) -> Result<IdentityV1> {
+    SourceMaterialViewV1::decode(source_material_bytes)
+        .map_err(|_| Error::InvalidSourceMaterial)?;
+    let first = source_material_bytes
+        .get(..64)
+        .ok_or(Error::InvalidSourceMaterial)?;
+    let second = source_material_bytes
+        .get(96..224)
+        .ok_or(Error::InvalidSourceMaterial)?;
+    let third = source_material_bytes
+        .get(256..976)
+        .ok_or(Error::InvalidSourceMaterial)?;
+    let fourth = source_material_bytes
+        .get(1008..1632)
+        .ok_or(Error::InvalidSourceMaterial)?;
+    let fifth = source_material_bytes
+        .get(1664..1712)
+        .ok_or(Error::InvalidSourceMaterial)?;
+    let sixth = source_material_bytes
+        .get(1744..SOURCE_MATERIAL_BYTES)
+        .ok_or(Error::InvalidSourceMaterial)?;
+    let mut hasher = Sha256::new();
+    hasher.update(SOURCE_SCHEDULE_PROJECTION_DOMAIN_V1);
+    hasher.update([0]);
+    hasher.update(first);
+    hasher.update(second);
+    hasher.update(third);
+    hasher.update(fourth);
+    hasher.update(fifth);
+    hasher.update(sixth);
+    IdentityV1::new(hasher.finalize().into()).map_err(|_| Error::InvalidSourceMaterial)
+}
+
+/// Hostile-decode and content-authenticate one occurrence Source material.
+///
+/// This proves the exact final material digest and extracts only facts needed
+/// by Series. Recipe schedule and derived Product equality are checked later,
+/// once the deterministic occurrence Product is available.
+pub fn authenticate_occurrence_source_material_v1(
+    material_id: IdentityV1,
+    source_material_bytes: &[u8],
+) -> Result<OccurrenceSourceMaterialV1> {
+    if content_identity(source_material_bytes)? != material_id {
+        return Err(Error::InvalidSourceMaterial);
+    }
+    let material = SourceMaterialViewV1::decode(source_material_bytes)
+        .map_err(|_| Error::InvalidSourceMaterial)?;
+    let policy = material
+        .policy()
+        .map_err(|_| Error::InvalidSourceMaterial)?;
+    let product_instance_id = source_identity(
+        material
+            .product_instance_id()
+            .map_err(|_| Error::InvalidSourceMaterial)?,
+    )?;
+    if source_identity(policy.product_instance_id())? != product_instance_id {
+        return Err(Error::InvalidSourceMaterial);
+    }
+    let domain = material
+        .result_domain()
+        .map_err(|_| Error::InvalidSourceMaterial)?;
+    let domain_bytes = domain.to_bytes();
+    let mut domain_hasher = Sha256::new();
+    domain_hasher.update(FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1);
+    domain_hasher.update([0]);
+    domain_hasher.update(domain_bytes);
+    let result_domain_id = IdentityV1::new(domain_hasher.finalize().into())
+        .map_err(|_| Error::InvalidSourceMaterial)?;
+    if source_identity(policy.result_domain_id())? != result_domain_id {
+        return Err(Error::InvalidSourceMaterial);
+    }
+    Ok(OccurrenceSourceMaterialV1 {
+        material_id,
+        schedule_id: source_schedule_identity_v1(source_material_bytes)?,
+        product_instance_id,
+        source_spec_id: source_identity(policy.source_spec_id())?,
+        source_window_id: source_identity(policy.window_spec_id())?,
+        statistic_id: source_identity(policy.statistic_spec_id())?,
+        result_domain_id,
+    })
+}
+
+fn source_identity(identity: dclutch_source_contract::ContentId) -> Result<IdentityV1> {
+    IdentityV1::new(identity.to_bytes()).map_err(|_| Error::InvalidSourceMaterial)
+}
+
 /// Immutable output of the selected derivation releases for one occurrence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DerivedOccurrenceV1 {
@@ -636,28 +804,18 @@ impl DerivedOccurrenceV1 {
     }
 }
 
-/// Recompute the only V1 derivation output from authenticated immutable inputs.
+/// Derive the exact Product-owned instance for one final recipe occurrence.
 ///
-/// The fixed occurrence artifact is content-addressed. Its canonical Product
-/// occurrence and Product instance preimages are then content-addressed in
-/// order. V1 deliberately shares one immutable source-policy record and one
-/// immutable capability manifest across the finite Series. The canonical
-/// Market identity commits those results and the occurrence generation. The
-/// capitalization identity is the SHA-256 identity of the exact item bytes.
-pub fn derive_occurrence_v1(
+/// This function is the fixed-point-breaking construction boundary: the
+/// recipe and its content ID are final before the occurrence Product exists.
+/// A caller then builds Source material against this exact instance and passes
+/// its authenticated facts to [`derive_occurrence_v1`].
+pub fn derive_occurrence_product_v1(
     recipe_id: IdentityV1,
     recipe: &SeriesRecipeV1,
     occurrence_index: u64,
-    capitalization: &OccurrenceCapitalizationV1,
-) -> Result<DerivedOccurrenceV1> {
+) -> Result<OccurrenceProductDerivationV1> {
     recipe.validate()?;
-    capitalization.validate()?;
-    if capitalization.recipe_id != recipe_id
-        || capitalization.capitalization_schedule_id != recipe.capitalization_schedule_id
-        || capitalization.occurrence_index != occurrence_index
-    {
-        return Err(Error::CapitalizationMismatch);
-    }
     let occurrence_time = recipe.time_at(occurrence_index)?;
     let generation = recipe.generation_at(occurrence_index)?;
 
@@ -700,29 +858,71 @@ pub fn derive_occurrence_v1(
     .map_err(|_| Error::DerivationMismatch)?;
     let product_instance_id = content_identity(&product.to_bytes())?;
 
-    let source_spec_id = recipe.source_schedule_id;
-    let source_window_id = recipe.source_schedule_id;
-    let statistic_id = recipe.source_schedule_id;
-    let resolution_policy_id = recipe.source_schedule_id;
-    let capability_manifest_id = recipe.capability_template_id;
-
-    // Canonical dclutch-core-contract MarketIdentity bytes.
-    let mut market = [0u8; MARKET_IDENTITY_BYTES_V1];
-    put(&mut market, 0, &recipe.realm_id.to_bytes());
-    put(&mut market, 32, &product_instance_id.to_bytes());
-    put(&mut market, 64, &recipe.claim_basis_id.to_bytes());
-    put(&mut market, 96, &resolution_policy_id.to_bytes());
-    put(&mut market, 128, &capability_manifest_id.to_bytes());
-    put(&mut market, 160, &generation.to_le_bytes());
-
-    Ok(DerivedOccurrenceV1 {
-        recipe_id,
-        occurrence_index,
+    Ok(OccurrenceProductDerivationV1 {
         occurrence_time,
         generation,
         occurrence_artifact_id,
         occurrence_id,
         product_instance_id,
+        product_instance: product,
+    })
+}
+
+/// Recompute the only V1 derivation output from authenticated immutable inputs.
+///
+/// The recipe selects one reusable Source schedule projection, while the
+/// occurrence-specific Source material must bind the exact Product derived
+/// from the final recipe ID. Market identity names the actual Source-material
+/// digest, never the reusable schedule identity. The capitalization identity
+/// is the SHA-256 identity of the exact item bytes.
+pub fn derive_occurrence_v1(
+    recipe_id: IdentityV1,
+    recipe: &SeriesRecipeV1,
+    occurrence_index: u64,
+    capitalization: &OccurrenceCapitalizationV1,
+    source_material: OccurrenceSourceMaterialV1,
+) -> Result<DerivedOccurrenceV1> {
+    recipe.validate()?;
+    capitalization.validate()?;
+    if capitalization.recipe_id != recipe_id
+        || capitalization.capitalization_schedule_id != recipe.capitalization_schedule_id
+        || capitalization.occurrence_index != occurrence_index
+    {
+        return Err(Error::CapitalizationMismatch);
+    }
+    let product = derive_occurrence_product_v1(recipe_id, recipe, occurrence_index)?;
+    if source_material.schedule_id != recipe.source_schedule_id {
+        return Err(Error::SourceScheduleMismatch);
+    }
+    if source_material.product_instance_id != product.product_instance_id
+        || source_material.result_domain_id != recipe.result_domain_id
+    {
+        return Err(Error::SourceProductMismatch);
+    }
+
+    let source_spec_id = source_material.source_spec_id;
+    let source_window_id = source_material.source_window_id;
+    let statistic_id = source_material.statistic_id;
+    let resolution_policy_id = source_material.material_id;
+    let capability_manifest_id = recipe.capability_template_id;
+
+    // Canonical dclutch-core-contract MarketIdentity bytes.
+    let mut market = [0u8; MARKET_IDENTITY_BYTES_V1];
+    put(&mut market, 0, &recipe.realm_id.to_bytes());
+    put(&mut market, 32, &product.product_instance_id.to_bytes());
+    put(&mut market, 64, &recipe.claim_basis_id.to_bytes());
+    put(&mut market, 96, &resolution_policy_id.to_bytes());
+    put(&mut market, 128, &capability_manifest_id.to_bytes());
+    put(&mut market, 160, &product.generation.to_le_bytes());
+
+    Ok(DerivedOccurrenceV1 {
+        recipe_id,
+        occurrence_index,
+        occurrence_time: product.occurrence_time,
+        generation: product.generation,
+        occurrence_artifact_id: product.occurrence_artifact_id,
+        occurrence_id: product.occurrence_id,
+        product_instance_id: product.product_instance_id,
         source_spec_id,
         source_window_id,
         statistic_id,
@@ -1849,6 +2049,7 @@ pub fn plan_instantiate_next_v1(
     aggregate: &CapitalizationAggregateV1,
     derived_occurrence_id: IdentityV1,
     derived: &DerivedOccurrenceV1,
+    source_material: OccurrenceSourceMaterialV1,
     capitalization_id: IdentityV1,
     capitalization: &OccurrenceCapitalizationV1,
     instruction: InstantiateNextV1,
@@ -1889,6 +2090,7 @@ pub fn plan_instantiate_next_v1(
         recipe,
         root.next_occurrence_index,
         capitalization,
+        source_material,
     )?;
     let expected_derived_id = content_identity(&expected_derived.to_bytes())?;
     if *derived != expected_derived || derived_occurrence_id != expected_derived_id {
@@ -2068,6 +2270,7 @@ pub fn plan_consume_ticket_v1(
     aggregate: &CapitalizationAggregateV1,
     derived_occurrence_id: IdentityV1,
     derived: &DerivedOccurrenceV1,
+    source_material: OccurrenceSourceMaterialV1,
     capitalization_id: IdentityV1,
     capitalization: &OccurrenceCapitalizationV1,
     ticket: OccurrenceTicketV1,
@@ -2083,6 +2286,7 @@ pub fn plan_consume_ticket_v1(
         recipe,
         instruction.expected_index,
         capitalization,
+        source_material,
     )?;
     if *derived != expected_derived
         || derived_occurrence_id != content_identity(&expected_derived.to_bytes())?
