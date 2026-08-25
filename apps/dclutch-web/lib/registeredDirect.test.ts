@@ -1,0 +1,142 @@
+import { PublicKey } from '@solana/web3.js';
+import { describe, expect, it } from 'vitest';
+
+import {
+  REGISTERED_CONTROLLER_EXAMPLE,
+  REGISTERED_STATE_EXAMPLE,
+  REGISTERED_TERMINAL_CANCEL_EXAMPLE,
+  REGISTERED_TERMINAL_EXPIRE_EXAMPLE,
+} from './generated/registeredDirect';
+import {
+  buildRegisteredFillTransaction,
+  buildRegisteredTerminalTransaction,
+  decodeRegisteredIntentStateV1,
+  deriveRegisteredAddress,
+  encodeRegisteredFillInstructionV1,
+  encodeRegisteredIntentStateV1,
+  encodeRegisteredTerminal,
+  scanRegisteredDirectStates,
+  type RegisteredDirectStateObservation,
+} from './registeredDirect';
+import { CLAIM_PROGRAM_ID } from './directTransaction';
+import { SolanaRpcClient } from './rpc';
+
+function key(byte: number): PublicKey {
+  return new PublicKey(new Uint8Array(32).fill(byte));
+}
+
+function base64(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function response(result: unknown): Response {
+  return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result }), { status: 200 });
+}
+
+function observed(controllerProgram: PublicKey, side: number, makerByte: number, collateralByte: number): RegisteredDirectStateObservation {
+  const [controller] = PublicKey.findProgramAddressSync([new TextEncoder().encode('dclutch-controller-v1')], controllerProgram);
+  const state = {
+    phase: 0,
+    controller: controller.toBase58(),
+    maker: key(makerByte).toBase58(),
+    intent: {
+      side, outcome: 1, lifecycle: 2, market: key(4).toBytes(), generation: 3n, nonce: BigInt(makerByte),
+      validFrom: 0n, validThrough: 100n, maximumFill: 2_000n,
+      limitPrice: side === 0 ? 400_000n : 600_000n, feeBasisPoints: 25,
+      collateralAccount: key(collateralByte).toBytes(),
+    },
+    remaining: 2_000n,
+    sequence: 7n,
+  };
+  const derived = deriveRegisteredAddress(controllerProgram.toBase58(), state);
+  return Object.freeze({ status: 'accepted', address: derived.address.toBase58(), observedSlot: '55', lamports: '1', bump: derived.bump, state: Object.freeze(state) });
+}
+
+describe('Lean-emitted registered Direct browser ABI', () => {
+  it('strictly decodes and re-encodes the exact generated 232-byte example', () => {
+    const state = decodeRegisteredIntentStateV1(REGISTERED_STATE_EXAMPLE);
+    expect(encodeRegisteredIntentStateV1(state)).toEqual(REGISTERED_STATE_EXAMPLE);
+    expect(state.remaining).toBe(2_000n);
+    expect(state.sequence).toBe(0n);
+    expect(state.intent.outcome).toBe(1);
+  });
+
+  it('matches exact generated fill, cancel, and expiry examples byte-for-byte', () => {
+    expect(encodeRegisteredFillInstructionV1(2_000n, 500_000n, [1, 2, 3, 4, 5])).toEqual(REGISTERED_CONTROLLER_EXAMPLE);
+    expect(encodeRegisteredTerminal('cancel', 2, 3, 7n)).toEqual(REGISTERED_TERMINAL_CANCEL_EXAMPLE);
+    expect(encodeRegisteredTerminal('expire', 2, 3, 7n)).toEqual(REGISTERED_TERMINAL_EXPIRE_EXAMPLE);
+  });
+
+  it('constructs signer-honest fill, cancellation, and permissionless-expiry transactions', () => {
+    const controllerProgram = key(67);
+    const seller = observed(controllerProgram, 0, 8, 5);
+    const buyer = observed(controllerProgram, 1, 9, 6);
+    const route = {
+      journal: key(10).toBase58(), realm: key(11).toBase58(), feePolicy: key(12).toBase58(),
+      capabilityManifest: key(13).toBase58(), mint: key(14).toBase58(), source: key(6).toBase58(),
+      sellerDestination: key(5).toBase58(), feeDestination: key(15).toBase58(), tokenProgram: key(16).toBase58(),
+    };
+    const fill = buildRegisteredFillTransaction({
+      controllerProgram: controllerProgram.toBase58(), payer: key(90).toBase58(), recentBlockhash: key(91).toBase58(),
+      seller, buyer, fill: 500n, executionPrice: 500_000n, route,
+    });
+    expect(fill.instruction.keys).toHaveLength(17);
+    expect(fill.requiredSignerKeys).toEqual([key(90).toBase58()]);
+    expect(fill.wireBytes.length).toBeLessThanOrEqual(1_232);
+
+    const cancel = buildRegisteredTerminalTransaction({
+      controllerProgram: controllerProgram.toBase58(), payer: key(90).toBase58(), recentBlockhash: key(91).toBase58(), state: seller, action: 'cancel', finalizedSlot: 50n,
+    });
+    expect(cancel.instruction.keys).toHaveLength(4);
+    expect(cancel.requiredSignerKeys).toEqual([key(90).toBase58(), seller.state.maker]);
+
+    const expire = buildRegisteredTerminalTransaction({
+      controllerProgram: controllerProgram.toBase58(), payer: key(90).toBase58(), recentBlockhash: key(91).toBase58(), state: seller, action: 'expire', finalizedSlot: 101n,
+    });
+    expect(expire.instruction.keys).toHaveLength(3);
+    expect(expire.requiredSignerKeys).toEqual([key(90).toBase58()]);
+  });
+
+  it('discovers only reacquired exact claim-owned state instead of trusting sliced headers', async () => {
+    const controllerProgram = key(67);
+    const canonical = observed(controllerProgram, 0, 8, 5);
+    const bytes = encodeRegisteredIntentStateV1(canonical.state);
+    const client = new SolanaRpcClient('http://127.0.0.1:8899', async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as { method: string };
+      if (request.method === 'getProgramAccounts') return response({ context: { slot: 55 }, value: [{
+        pubkey: canonical.address,
+        account: { data: [base64(bytes.slice(0, 16)), 'base64'], executable: false, lamports: 1, owner: CLAIM_PROGRAM_ID.toBase58(), space: 232 },
+      }] });
+      if (request.method === 'getAccountInfo') return response({ context: { slot: 56 }, value: {
+        data: [base64(bytes), 'base64'], executable: false, lamports: 1, owner: CLAIM_PROGRAM_ID.toBase58(), space: 232,
+      } });
+      throw new Error(`unexpected RPC method ${request.method}`);
+    });
+    const snapshot = await scanRegisteredDirectStates(client, controllerProgram.toBase58());
+    expect(snapshot.states).toHaveLength(1);
+    expect(snapshot.states[0].address).toBe(canonical.address);
+    expect(snapshot.states[0].observedSlot).toBe('56');
+    expect(snapshot.refused).toHaveLength(0);
+  });
+
+  it('refuses hostile widths, reserved bytes, stale sequence state, early expiry, and cross-Market pairing', () => {
+    expect(() => decodeRegisteredIntentStateV1(REGISTERED_STATE_EXAMPLE.slice(0, -1))).toThrow(/exactly 232/);
+    const reserved = REGISTERED_STATE_EXAMPLE.slice();
+    reserved[11] = 1;
+    expect(() => decodeRegisteredIntentStateV1(reserved)).toThrow(/reserved/);
+    const controllerProgram = key(67);
+    const seller = observed(controllerProgram, 0, 8, 5);
+    expect(() => buildRegisteredTerminalTransaction({
+      controllerProgram: controllerProgram.toBase58(), payer: key(90).toBase58(), recentBlockhash: key(91).toBase58(), state: seller, action: 'expire', finalizedSlot: 100n,
+    })).toThrow(/not yet admitted/);
+    const buyer = observed(controllerProgram, 1, 9, 6);
+    const hostileBuyer = { ...buyer, state: { ...buyer.state, intent: { ...buyer.state.intent, market: key(99).toBytes() } } };
+    expect(() => buildRegisteredFillTransaction({
+      controllerProgram: controllerProgram.toBase58(), payer: key(90).toBase58(), recentBlockhash: key(91).toBase58(),
+      seller, buyer: hostileBuyer, fill: 500n, executionPrice: 500_000n,
+      route: { journal: key(10).toBase58(), realm: key(11).toBase58(), feePolicy: key(12).toBase58(), capabilityManifest: key(13).toBase58(), mint: key(14).toBase58(), source: key(6).toBase58(), sellerDestination: key(5).toBase58(), feeDestination: key(15).toBase58(), tokenProgram: key(16).toBase58() },
+    })).toThrow(/coordinates/);
+  });
+});

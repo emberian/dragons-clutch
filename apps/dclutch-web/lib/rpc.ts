@@ -13,6 +13,7 @@ import {
 const MAX_RPC_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_PROGRAM_ACCOUNTS = 256;
 const MAX_REACQUIRED_ACCOUNTS = 128;
+const MAX_MULTIPLE_ACCOUNTS = 32;
 const RPC_TIMEOUT_MS = 15_000;
 
 export type RpcAccount = Readonly<{
@@ -26,6 +27,11 @@ export type RpcAccount = Readonly<{
 export type AccountInfoObservation = Readonly<{
   slot: string;
   account: RpcAccount | null;
+}>;
+
+export type MultipleAccountObservation = Readonly<{
+  slot: string;
+  accounts: ReadonlyArray<Readonly<{ address: string; account: RpcAccount | null }>>;
 }>;
 
 type HeaderObservation = Readonly<{
@@ -192,6 +198,22 @@ export class SolanaRpcClient {
     return Object.freeze({
       slot: String(exactUnsigned(raw.context.slot, 'account observation slot')),
       account: raw.value === null ? null : parseAccount(raw.value, 'account observation'),
+    });
+  }
+
+  async multipleAccounts(addresses: ReadonlyArray<string>, minimumContextSlot?: string): Promise<MultipleAccountObservation> {
+    if (addresses.length === 0 || addresses.length > MAX_MULTIPLE_ACCOUNTS) throw new Error(`getMultipleAccounts requires 1..${MAX_MULTIPLE_ACCOUNTS} exact addresses`);
+    const canonical = addresses.map((address) => new PublicKey(address).toBase58());
+    if (canonical.some((address, index) => address !== addresses[index])) throw new Error('getMultipleAccounts addresses must be canonical base58 text');
+    if (new Set(canonical).size !== canonical.length) throw new Error('getMultipleAccounts addresses must be distinct');
+    const configuration: Record<string, unknown> = { commitment: 'finalized', encoding: 'base64' };
+    if (minimumContextSlot !== undefined) configuration.minContextSlot = exactUnsigned(Number(minimumContextSlot), 'minimum context slot');
+    const raw = await this.request('getMultipleAccounts', [canonical, configuration]);
+    if (!plain(raw) || !plain(raw.context) || !Array.isArray(raw.value) || raw.value.length !== canonical.length) throw new Error('getMultipleAccounts did not return one finalized value per address');
+    const slot = String(exactUnsigned(raw.context.slot, 'multiple-account observation slot'));
+    return Object.freeze({
+      slot,
+      accounts: Object.freeze(canonical.map((address, index) => Object.freeze({ address, account: raw.value[index] === null ? null : parseAccount(raw.value[index], `multiple account ${index}`) }))),
     });
   }
 

@@ -48,6 +48,20 @@ a { color: inherit; }
 .direct-output dl div { min-width: 0; }
 .direct-output dt { color: #6f8075; font: 9px var(--font-geist-mono); text-transform: uppercase; }
 .direct-output dd { margin: 5px 0 0; color: #b8c5bb; font: 10px/1.5 var(--font-geist-mono); overflow-wrap: anywhere; }
+.registered-workspace { margin-top: 30px; border-color: rgba(105,212,174,.24); }
+.registered-state-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.registered-state-card { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 13px; background: rgba(4,12,8,.55); }
+.registered-state-card h3 { margin: 13px 0 5px; font: 650 16px var(--font-geist-mono); }
+.registered-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; margin: 16px 0 0; background: var(--line); border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.registered-facts div { min-width: 0; padding: 10px; background: #0a1510; }
+.registered-facts dt { color: #6f8075; font: 8px var(--font-geist-mono); text-transform: uppercase; }
+.registered-facts dd { margin: 4px 0 0; color: #c0ccc2; font: 10px var(--font-geist-mono); overflow-wrap: anywhere; }
+.registered-action { display: grid; gap: 15px; margin-top: 8px; padding: 20px; border: 1px solid var(--line); border-radius: 13px; background: rgba(255,255,255,.018); }
+.registered-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.registered-refusals { padding: 12px 14px; border: 1px solid rgba(255,126,102,.18); border-radius: 9px; color: #cf9c93; font: 10px/1.5 var(--font-geist-mono); }
+.registered-refusals summary { cursor: pointer; }
+.registered-refusals p { overflow-wrap: anywhere; }
+.registered-artifact { margin-top: 3px; }
 
 /* Product preview */
 .product-shell { width: min(1420px, calc(100% - 48px)); margin: 0 auto; padding-bottom: 60px; }
@@ -358,7 +372,7 @@ footer { display: flex; justify-content: space-between; gap: 20px; margin-top: 3
   .inventory-row { grid-template-columns: minmax(150px, 1fr) repeat(3, 48px); }
   .inventory-row > span { display: none; }
   .custody-ledger, .liquidity-proof { grid-template-columns: 1fr 1fr; }
-  .direct-form-grid, .direct-output dl { grid-template-columns: 1fr; }
+  .direct-form-grid, .direct-output dl, .registered-state-grid, .registered-facts { grid-template-columns: 1fr; }
   .custody-ledger article:nth-child(2) { border-right: 0; }
   .custody-ledger article { border-bottom: 1px solid var(--line); }
 }

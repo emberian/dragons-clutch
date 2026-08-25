@@ -53,4 +53,17 @@ describe('bounded finalized RPC client', () => {
       slot: '45', blockhash, lastValidBlockHeight: '72',
     });
   });
+
+  it('acquires distinct accounts in one finalized RPC context', async () => {
+    const addresses = ['11111111111111111111111111111111', 'SysvarC1ock11111111111111111111111111111111'];
+    const fetcher: typeof fetch = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as { method: string; params: unknown[] };
+      expect(request.method).toBe('getMultipleAccounts');
+      expect(request.params).toEqual([addresses, { commitment: 'finalized', encoding: 'base64', minContextSlot: 44 }]);
+      return response({ context: { slot: 45 }, value: [null, { data: ['', 'base64'], executable: false, lamports: 1, owner: addresses[0], space: 0 }] });
+    };
+    await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher).multipleAccounts(addresses, '44')).resolves.toMatchObject({
+      slot: '45', accounts: [{ address: addresses[0], account: null }, { address: addresses[1], account: { lamports: '1' } }],
+    });
+  });
 });

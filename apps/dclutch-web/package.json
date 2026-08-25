@@ -11,6 +11,8 @@
     "start": "vinext start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "test": "vitest run --config vitest.config.ts",
+    "abi:registered": "node scripts/generate-registered-direct.mjs",
+    "abi:registered:verify": "node scripts/generate-registered-direct.mjs --check",
     "fixtures:verify": "node scripts/verify-fixtures.mjs"
   },
   "dependencies": {
