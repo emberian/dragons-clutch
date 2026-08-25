@@ -21,8 +21,10 @@ use dclutch_general_contract::{
     GeneralCandidatePagePdaSeedsV1, GeneralCandidatePdaSeedsV1, GeneralConfigV1,
     GeneralFundingPdaSeedsV1, GeneralFundingV1, GeneralInstructionTagV1, GeneralInstructionV1,
     GeneralOrderCustodyPdaSeedsV1, GeneralOrderCustodyV1, GeneralOrderStatePdaSeedsV1,
-    GeneralQuoteEscrowPdaSeedsV1, GeneralRootPdaSeedsV1, GeneralRootV1, ORDER_STATE_BYTES,
-    OrderStateV1, PortfolioOrderV1, activate_general_v1, open_general_batch_v1,
+    GeneralQuoteEscrowPdaSeedsV1, GeneralRootPdaSeedsV1, GeneralRootV1,
+    GeneralSettlementCursorPdaSeedsV1, GeneralSettlementEscrowPdaSeedsV1, ORDER_STATE_BYTES,
+    OrderStateV1, PortfolioOrderV1, SettlementCursorV1, SettlementRentObservationV1,
+    activate_general_v1, open_general_batch_v1,
 };
 use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome_count};
 use dclutch_product_contract::claim::CategoricalUnitV1;
@@ -118,6 +120,7 @@ fn dispatch_width<const N: usize>(
             | GeneralInstructionTagV1::ExpireSettlement
             | GeneralInstructionTagV1::CloseCandidate
             | GeneralInstructionTagV1::CloseBatch
+            | GeneralInstructionTagV1::BeginSettlement
     ) {
         return Err(AdapterError::InvalidInstruction.into());
     }
@@ -177,6 +180,9 @@ fn dispatch_width<const N: usize>(
         }
         GeneralInstructionV1::CloseBatch(replay) => {
             process_close_batch(program_id, accounts, replay)
+        }
+        GeneralInstructionV1::BeginSettlement(candidate_id) => {
+            process_begin_settlement::<N>(program_id, accounts, candidate_id)
         }
         // Candidate settlement and terminal routes land as separately bounded
         // executable slices; an unsupported tag never reports success.
@@ -1457,6 +1463,272 @@ fn process_close_batch(
     transfer_owned_lamports(batch_account, actor, close.continuation_reward_lamports)?;
     write_root(root_account, root)?;
     close_program_account(batch_account, rent_credit)?;
+    require_unchanged_rent_credit(program_id, rent_credit, rent_credit_state)
+}
+
+fn process_begin_settlement<const N: usize>(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    candidate_id: dclutch_general_contract::ContentId,
+) -> Result<(), ProgramError> {
+    let actor = account(accounts, 0)?;
+    let market_account = account(accounts, 1)?;
+    let realm_account = account(accounts, 2)?;
+    let claim_account = account(accounts, 3)?;
+    let config_account = account(accounts, 4)?;
+    let realm_cursor = account(accounts, 5)?;
+    let claim_cursor = account(accounts, 6)?;
+    let config_cursor = account(accounts, 7)?;
+    let mint = account(accounts, 8)?;
+    let token_program = account(accounts, 9)?;
+    let root_account = account(accounts, 10)?;
+    let batch_account = account(accounts, 11)?;
+    let candidate_account = account(accounts, 12)?;
+    let cursor_account = account(accounts, 13)?;
+    let settlement_position_account = account(accounts, 14)?;
+    let settlement_quote_escrow = account(accounts, 15)?;
+    let rent_credit = account(accounts, 16)?;
+    let system = account(accounts, 17)?;
+    let rent_sysvar = account(accounts, 18)?;
+    let clock_sysvar = account(accounts, 19)?;
+
+    authenticate_system_rent_clock(system, rent_sysvar, clock_sysvar)?;
+    require_system_wallet(actor)?;
+    require_prefunded_vacant(cursor_account)?;
+    require_prefunded_vacant(settlement_position_account)?;
+    require_prefunded_vacant(settlement_quote_escrow)?;
+    let root = authenticate_root(program_id, root_account)?;
+    let config = authenticate_finalized_config(
+        program_id,
+        config_account,
+        config_cursor,
+        rent_sysvar,
+        root.config_id().to_bytes(),
+        |config, _| Ok(config),
+    )?;
+    let market = authenticate_market::<N>(program_id, market_account, root.market())?;
+    authenticate_market_config(market, config, root, root.config_id())?;
+    let claim = authenticate_claim_basis(
+        program_id,
+        claim_account,
+        claim_cursor,
+        rent_sysvar,
+        config.claim_basis_id().to_bytes(),
+    )?;
+    authenticate_claim_basis_config::<N>(claim, config)?;
+    let realm = authenticate_realm(
+        program_id,
+        realm_account,
+        realm_cursor,
+        rent_sysvar,
+        mint,
+        token_program,
+        market.root().identity().realm_id().to_bytes(),
+    )?;
+    let mut candidate = authenticate_candidate::<N>(
+        program_id,
+        candidate_account,
+        batch_account,
+        candidate_id,
+    )?;
+    let mut batch = authenticate_batch(
+        program_id,
+        batch_account,
+        root_account,
+        candidate.batch_sequence(),
+        root.config_id(),
+    )?;
+    let rent_credit_state = authenticate_rent_credit(
+        program_id,
+        rent_credit,
+        &Pubkey::new_from_array(candidate.submitter().to_bytes()),
+    )?;
+
+    let cursor_seeds = GeneralSettlementCursorPdaSeedsV1::new(candidate_account.key.to_bytes())
+        .map_err(|_| AdapterError::PositionAuthentication)?;
+    let (expected_cursor, cursor_bump) =
+        Pubkey::find_program_address(&cursor_seeds.seed_components(), program_id);
+    if cursor_account.key != &expected_cursor {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let position_components = [
+        POSITION_PDA_DOMAIN,
+        market_account.key.as_ref(),
+        cursor_account.key.as_ref(),
+    ];
+    let (expected_position, position_bump) =
+        Pubkey::find_program_address(&position_components, program_id);
+    if settlement_position_account.key != &expected_position {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let escrow_seeds = GeneralSettlementEscrowPdaSeedsV1::new(cursor_account.key.to_bytes())
+        .map_err(|_| AdapterError::PositionAuthentication)?;
+    let (expected_escrow, escrow_bump) =
+        Pubkey::find_program_address(&escrow_seeds.seed_components(), program_id);
+    if settlement_quote_escrow.key != &expected_escrow {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+
+    let rent = Rent::from_account_info(rent_sysvar).map_err(|_| AdapterError::AccountData)?;
+    let cursor_bytes =
+        SettlementCursorV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?;
+    let position_bytes = PositionV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?;
+    let exact_rents = [
+        rent.minimum_balance(cursor_bytes),
+        rent.minimum_balance(position_bytes),
+        rent.minimum_balance(ACCOUNT_BYTES),
+    ];
+    let precreation = [
+        cursor_account.lamports(),
+        settlement_position_account.lamports(),
+        settlement_quote_escrow.lamports(),
+    ];
+    let candidate_rent = rent.minimum_balance(
+        CandidateStateV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?,
+    );
+    let candidate_before = candidate_account.lamports();
+    let actor_before = actor.lamports();
+    let rent_credit_before = rent_credit.lamports();
+    let begin = SettlementCursorV1::begin(
+        &mut candidate,
+        &mut batch,
+        root,
+        config,
+        CandidateCapitalizationV1 {
+            account_lamports: candidate_before,
+            exact_state_rent_lamports: candidate_rent,
+        },
+        SettlementRentObservationV1 {
+            exact_rent_lamports: exact_rents,
+            precreation_lamports: precreation,
+        },
+        authenticate_clock(clock_sysvar)?.slot,
+    )
+    .map_err(|_| AdapterError::MarketTransition)?;
+    let top_ups = begin.temporary_top_up_lamports();
+    let actor_reimbursement = top_ups
+        .iter()
+        .try_fold(begin.reward_lamports(), |total, amount| total.checked_add(*amount))
+        .ok_or(AdapterError::Arithmetic)?;
+    let settlement_position = PositionV1::<N>::empty(
+        market_account.key.to_bytes(),
+        cursor_account.key.to_bytes(),
+        config.generation(),
+    )
+    .map_err(|_| AdapterError::PositionAuthentication)?;
+    preflight_mutable(&[
+        actor,
+        batch_account,
+        candidate_account,
+        cursor_account,
+        settlement_position_account,
+        settlement_quote_escrow,
+        rent_credit,
+    ])?;
+    transfer_owned_lamports(candidate_account, actor, actor_reimbursement)?;
+    transfer_owned_lamports(
+        candidate_account,
+        rent_credit,
+        begin.candidate_refund_lamports(),
+    )?;
+    create_general_pda_account(
+        actor,
+        cursor_account,
+        rent_credit,
+        system,
+        program_id,
+        exact_rents[0],
+        cursor_bytes,
+        &cursor_seeds.seed_components(),
+        cursor_bump,
+        false,
+    )?;
+    create_general_pda_account(
+        actor,
+        settlement_position_account,
+        rent_credit,
+        system,
+        program_id,
+        exact_rents[1],
+        position_bytes,
+        &position_components,
+        position_bump,
+        false,
+    )?;
+    create_general_pda_account(
+        actor,
+        settlement_quote_escrow,
+        rent_credit,
+        system,
+        token_program.key,
+        exact_rents[2],
+        ACCOUNT_BYTES,
+        &escrow_seeds.seed_components(),
+        escrow_bump,
+        false,
+    )?;
+    let initialize = token_initialize_instruction(
+        realm.release,
+        *settlement_quote_escrow.key,
+        *mint.key,
+        *cursor_account.key,
+    )?;
+    invoke(
+        &initialize,
+        &[
+            settlement_quote_escrow.clone(),
+            mint.clone(),
+            token_program.clone(),
+        ],
+    )
+    .map_err(|_| AdapterError::VaultInitializeCpi)?;
+    write_batch(batch_account, batch)?;
+    write_candidate(candidate_account, candidate)?;
+    write_settlement_cursor(cursor_account, begin.cursor())?;
+    write_position(settlement_position_account, settlement_position)?;
+
+    let surplus = begin
+        .temporary_surplus_refund_lamports()
+        .iter()
+        .try_fold(begin.candidate_refund_lamports(), |total, amount| {
+            total.checked_add(*amount)
+        })
+        .ok_or(AdapterError::Arithmetic)?;
+    if actor.lamports()
+        != actor_before
+            .checked_add(begin.reward_lamports())
+            .ok_or(AdapterError::Arithmetic)?
+        || rent_credit.lamports()
+            != rent_credit_before
+                .checked_add(surplus)
+                .ok_or(AdapterError::Arithmetic)?
+        || cursor_account.lamports() != exact_rents[0]
+        || settlement_position_account.lamports() != exact_rents[1]
+        || settlement_quote_escrow.lamports() != exact_rents[2]
+    {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    candidate
+        .validate_capitalization(CandidateCapitalizationV1 {
+            account_lamports: candidate_account.lamports(),
+            exact_state_rent_lamports: candidate_rent,
+        })
+        .map_err(|_| AdapterError::PositionPostcondition)?;
+    authenticate_settlement_quote_escrow(
+        program_id,
+        settlement_quote_escrow,
+        mint,
+        token_program,
+        realm,
+        cursor_account.key,
+    )
+    .and_then(|state| {
+        if state.amount == 0 {
+            Ok(())
+        } else {
+            Err(AdapterError::PositionPostcondition.into())
+        }
+    })?;
     require_unchanged_rent_credit(program_id, rent_credit, rent_credit_state)
 }
 
@@ -3034,6 +3306,82 @@ fn write_candidate_page<const N: usize>(
         return Err(AdapterError::PositionPostcondition.into());
     }
     Ok(())
+}
+
+fn write_settlement_cursor<const N: usize>(
+    account: &AccountInfo<'_>,
+    cursor: SettlementCursorV1<N>,
+) -> Result<(), ProgramError> {
+    let mut data = account
+        .try_borrow_mut_data()
+        .map_err(|_| AdapterError::PositionPostcondition)?;
+    cursor
+        .encode(&mut data)
+        .map_err(|_| AdapterError::PositionPostcondition)?;
+    if SettlementCursorV1::<N>::decode(&data) != Ok(cursor) {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    Ok(())
+}
+
+fn authenticate_settlement_cursor<const N: usize>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    candidate: &AccountInfo<'_>,
+) -> Result<SettlementCursorV1<N>, ProgramError> {
+    if account.owner != program_id || account.executable {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let seeds = GeneralSettlementCursorPdaSeedsV1::new(candidate.key.to_bytes())
+        .map_err(|_| AdapterError::AccountData)?;
+    let (expected, _) = Pubkey::find_program_address(&seeds.seed_components(), program_id);
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::AccountData)?;
+    let cursor = SettlementCursorV1::<N>::decode(&data).map_err(|_| AdapterError::AccountData)?;
+    let mut canonical = Vec::new();
+    canonical
+        .try_reserve_exact(
+            SettlementCursorV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?,
+        )
+        .map_err(|_| AdapterError::Arithmetic)?;
+    canonical.resize(data.len(), 0);
+    cursor
+        .encode(&mut canonical)
+        .map_err(|_| AdapterError::AccountData)?;
+    if account.key != &expected || canonical.as_slice() != &data[..] {
+        return Err(AdapterError::ContentIdentity.into());
+    }
+    Ok(cursor)
+}
+
+fn authenticate_settlement_quote_escrow(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    mint: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+    realm: RealmFacts,
+    cursor: &Pubkey,
+) -> Result<TokenAccount, ProgramError> {
+    let seeds = GeneralSettlementEscrowPdaSeedsV1::new(cursor.to_bytes())
+        .map_err(|_| AdapterError::AccountData)?;
+    let (expected, _) = Pubkey::find_program_address(&seeds.seed_components(), program_id);
+    if account.key != &expected || account.owner != token_program.key || account.executable {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::PositionAuthentication)?;
+    realm
+        .release
+        .profile()
+        .check_custody_account(
+            token_program.key.to_bytes(),
+            &data,
+            mint.key.to_bytes(),
+            cursor.to_bytes(),
+        )
+        .map_err(|_| AdapterError::PositionAuthentication.into())
 }
 
 fn write_order_state(account: &AccountInfo<'_>, state: OrderStateV1) -> Result<(), ProgramError> {
