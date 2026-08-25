@@ -8,11 +8,11 @@
 use alloc::vec::Vec;
 
 use dclutch_bearer_contract::{
-    frame::{AccountMetaV1, validate_account_frame},
-    instruction::InstructionV1,
+    frame::{AccountMetaV1, validate_account_frame_v1},
+    instruction::{ActionV1, InstructionV1},
     state::{
-        BEARER_MINT_BYTES, BEARER_TOKEN_ACCOUNT_BYTES, BearerCapabilityV1, MintObservationV1,
-        TokenAccountObservationV1, TokenAccountStateV1,
+        BEARER_MINT_BYTES, BEARER_TOKEN_ACCOUNT_BYTES, BearerCapabilityV1, BearerCapabilityViewV1,
+        MintObservationV1, TokenAccountObservationV1, TokenAccountStateV1,
     },
 };
 use dclutch_capability_contract::{
@@ -66,22 +66,88 @@ pub(crate) fn dispatch<'a>(
     let instruction =
         InstructionV1::decode(instruction_data).map_err(|_| AdapterError::InvalidInstruction)?;
     let frame = account_frame(accounts)?;
-    match instruction.outcome_count() {
-        2 => process::<2>(program_id, accounts, frame.as_slice(), instruction),
-        3 => process::<3>(program_id, accounts, frame.as_slice(), instruction),
-        4 => process::<4>(program_id, accounts, frame.as_slice(), instruction),
-        5 => process::<5>(program_id, accounts, frame.as_slice(), instruction),
-        6 => process::<6>(program_id, accounts, frame.as_slice(), instruction),
-        7 => process::<7>(program_id, accounts, frame.as_slice(), instruction),
-        8 => process::<8>(program_id, accounts, frame.as_slice(), instruction),
-        9 => process::<9>(program_id, accounts, frame.as_slice(), instruction),
-        10 => process::<10>(program_id, accounts, frame.as_slice(), instruction),
-        11 => process::<11>(program_id, accounts, frame.as_slice(), instruction),
-        12 => process::<12>(program_id, accounts, frame.as_slice(), instruction),
-        13 => process::<13>(program_id, accounts, frame.as_slice(), instruction),
-        14 => process::<14>(program_id, accounts, frame.as_slice(), instruction),
-        15 => process::<15>(program_id, accounts, frame.as_slice(), instruction),
-        16 => process::<16>(program_id, accounts, frame.as_slice(), instruction),
+    let outcome_count = instruction.outcome_count();
+    validate_account_frame_v1(instruction.action(), outcome_count, frame.as_slice())
+        .map_err(|_| AdapterError::BearerAuthentication)?;
+    match instruction {
+        InstructionV1::Activate {
+            generation,
+            expected_prior_child_count,
+            ..
+        } => activate_v1(
+            program_id,
+            accounts,
+            outcome_count,
+            generation,
+            expected_prior_child_count,
+        ),
+        InstructionV1::Audit { generation, .. } => {
+            audit_v1(program_id, accounts, outcome_count, generation)
+        }
+        InstructionV1::Set {
+            action: ActionV1::SplitBearer,
+            generation,
+            quantity,
+            ..
+        } => bearer_complete_set_v1(
+            program_id,
+            accounts,
+            outcome_count,
+            generation,
+            quantity,
+            true,
+        ),
+        InstructionV1::Set {
+            action: ActionV1::MergeBearer,
+            generation,
+            quantity,
+            ..
+        } => bearer_complete_set_v1(
+            program_id,
+            accounts,
+            outcome_count,
+            generation,
+            quantity,
+            false,
+        ),
+        InstructionV1::Retire {
+            generation,
+            expected_prior_child_count,
+            ..
+        } => retire_v1(
+            program_id,
+            accounts,
+            outcome_count,
+            generation,
+            expected_prior_child_count,
+        ),
+        instruction => dispatch_remaining(program_id, accounts, outcome_count, instruction),
+    }
+}
+
+#[inline(never)]
+fn dispatch_remaining<'a>(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'a>],
+    outcome_count: u8,
+    instruction: InstructionV1,
+) -> Result<(), ProgramError> {
+    match outcome_count {
+        2 => process_remaining::<2>(program_id, accounts, instruction),
+        3 => process_remaining::<3>(program_id, accounts, instruction),
+        4 => process_remaining::<4>(program_id, accounts, instruction),
+        5 => process_remaining::<5>(program_id, accounts, instruction),
+        6 => process_remaining::<6>(program_id, accounts, instruction),
+        7 => process_remaining::<7>(program_id, accounts, instruction),
+        8 => process_remaining::<8>(program_id, accounts, instruction),
+        9 => process_remaining::<9>(program_id, accounts, instruction),
+        10 => process_remaining::<10>(program_id, accounts, instruction),
+        11 => process_remaining::<11>(program_id, accounts, instruction),
+        12 => process_remaining::<12>(program_id, accounts, instruction),
+        13 => process_remaining::<13>(program_id, accounts, instruction),
+        14 => process_remaining::<14>(program_id, accounts, instruction),
+        15 => process_remaining::<15>(program_id, accounts, instruction),
+        16 => process_remaining::<16>(program_id, accounts, instruction),
         _ => Err(AdapterError::BearerAuthentication.into()),
     }
 }
@@ -102,21 +168,13 @@ fn account_frame(accounts: &[AccountInfo<'_>]) -> Result<Vec<AccountMetaV1>, Pro
     Ok(frame)
 }
 
-fn process<'a, const N: usize>(
+#[inline(never)]
+fn process_remaining<'a, const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'a>],
-    frame: &[AccountMetaV1],
     instruction: InstructionV1,
 ) -> Result<(), ProgramError> {
-    validate_account_frame::<N>(instruction.action(), frame)
-        .map_err(|_| AdapterError::BearerAuthentication)?;
     match instruction {
-        InstructionV1::Activate {
-            generation,
-            expected_prior_child_count,
-            ..
-        } => activate::<N>(program_id, accounts, generation, expected_prior_child_count),
-        InstructionV1::Audit { generation, .. } => audit::<N>(program_id, accounts, generation),
         InstructionV1::Set {
             action: dclutch_bearer_contract::instruction::ActionV1::SplitNative,
             generation,
@@ -168,18 +226,6 @@ fn process<'a, const N: usize>(
             usize::from(outcome),
             quantity,
         ),
-        InstructionV1::Set {
-            action: dclutch_bearer_contract::instruction::ActionV1::SplitBearer,
-            generation,
-            quantity,
-            ..
-        } => split_bearer::<N>(program_id, accounts, generation, quantity),
-        InstructionV1::Set {
-            action: dclutch_bearer_contract::instruction::ActionV1::MergeBearer,
-            generation,
-            quantity,
-            ..
-        } => merge_bearer::<N>(program_id, accounts, generation, quantity),
         InstructionV1::Outcome {
             action: dclutch_bearer_contract::instruction::ActionV1::RedeemNative,
             generation,
@@ -206,23 +252,156 @@ fn process<'a, const N: usize>(
             usize::from(outcome),
             quantity,
         ),
-        InstructionV1::Retire {
-            generation,
-            expected_prior_child_count,
-            ..
-        } => retire::<N>(program_id, accounts, generation, expected_prior_child_count),
         // No fallback or compatibility decoder exists: an action reaches this
         // arm only when its exact fixed-layout route has been selected.
         _ => Err(AdapterError::BearerTransition.into()),
     }
 }
 
-fn activate<'a, const N: usize>(
+struct ActivationMarketStage {
+    phase: dclutch_core_contract::Phase,
+    generation: u64,
+    manifest_id: ContentId,
+    child_count_before: u64,
+    child_count_after: u64,
+    bytes: Vec<u8>,
+}
+
+#[inline(never)]
+fn stage_activation_market(
+    program_id: &Pubkey,
+    market: &AccountInfo<'_>,
+    outcome_count: u8,
+    generation: u64,
+    expected_prior_child_count: u64,
+) -> Result<ActivationMarketStage, ProgramError> {
+    match outcome_count {
+        2 => stage_activation_market_width::<2>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        3 => stage_activation_market_width::<3>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        4 => stage_activation_market_width::<4>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        5 => stage_activation_market_width::<5>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        6 => stage_activation_market_width::<6>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        7 => stage_activation_market_width::<7>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        8 => stage_activation_market_width::<8>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        9 => stage_activation_market_width::<9>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        10 => stage_activation_market_width::<10>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        11 => stage_activation_market_width::<11>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        12 => stage_activation_market_width::<12>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        13 => stage_activation_market_width::<13>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        14 => stage_activation_market_width::<14>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        15 => stage_activation_market_width::<15>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        16 => stage_activation_market_width::<16>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        _ => Err(AdapterError::BearerAuthentication.into()),
+    }
+}
+
+#[inline(never)]
+fn stage_activation_market_width<const N: usize>(
+    program_id: &Pubkey,
+    market_account: &AccountInfo<'_>,
+    generation: u64,
+    expected_prior_child_count: u64,
+) -> Result<ActivationMarketStage, ProgramError> {
+    let mut market = decode_market::<N>(program_id, market_account, generation)?;
+    let root_before = market.root();
+    market
+        .register_child(generation, expected_prior_child_count)
+        .map_err(|_| AdapterError::BearerTransition)?;
+    let root_after = market.root();
+    Ok(ActivationMarketStage {
+        phase: root_before.phase(),
+        generation: root_before.identity().generation(),
+        manifest_id: root_before.identity().capability_manifest_id(),
+        child_count_before: root_before.outstanding_children(),
+        child_count_after: root_after.outstanding_children(),
+        bytes: encode_market_bytes(market)?,
+    })
+}
+
+#[inline(never)]
+fn activate_v1<'a>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'a>],
+    outcome_count: u8,
     generation: u64,
     expected_prior_child_count: u64,
 ) -> Result<(), ProgramError> {
+    let outcomes = usize::from(outcome_count);
     let market_account = account(accounts, 0)?;
     let state_account = account(accounts, 1)?;
     let manifest_account = account(accounts, 2)?;
@@ -238,13 +417,19 @@ fn activate<'a, const N: usize>(
         return Err(AdapterError::BearerAuthentication.into());
     }
     require_vacant(state_account)?;
-    for index in 0..N {
+    for index in 0..outcomes {
         require_vacant(account(accounts, 10 + index)?)?;
     }
     if token_program.key.to_bytes() != dclutch_token_svm::TOKEN_2022_PROGRAM_ID {
         return Err(AdapterError::BearerAuthentication.into());
     }
-    let mut market = decode_market::<N>(program_id, market_account, generation)?;
+    let market = stage_activation_market(
+        program_id,
+        market_account,
+        outcome_count,
+        generation,
+        expected_prior_child_count,
+    )?;
     let manifest_data = manifest_account
         .try_borrow_data()
         .map_err(|_| AdapterError::BearerAuthentication)?;
@@ -272,28 +457,36 @@ fn activate<'a, const N: usize>(
     let custody =
         FundingCustodyObservationV1::native_only(funding_account.lamports(), funding_rent)
             .map_err(|_| AdapterError::BearerAuthentication)?;
-    let state_rent = rent.minimum_balance(
-        BearerCapabilityV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?,
-    );
+    let state_len =
+        BearerCapabilityViewV1::encoded_len(outcome_count).map_err(|_| AdapterError::Arithmetic)?;
+    let state_rent = rent.minimum_balance(state_len);
     let mint_rent = rent.minimum_balance(BEARER_MINT_BYTES);
     let mint_total = mint_rent
-        .checked_mul(u64::try_from(N).map_err(|_| AdapterError::Arithmetic)?)
+        .checked_mul(u64::from(outcome_count))
         .ok_or(AdapterError::Arithmetic)?;
     let controller = state_account.key.to_bytes();
-    let mut mint_keys = [[0u8; 32]; N];
-    for index in 0..N {
-        mint_keys[index] = canonical_mint(program_id, market_account.key, generation, index)?;
-        if account(accounts, 10 + index)?.key.to_bytes() != mint_keys[index] {
+    let mut mint_keys = Vec::new();
+    mint_keys
+        .try_reserve_exact(outcomes)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    for index in 0..outcomes {
+        let mint = canonical_mint(program_id, market_account.key, generation, index)?;
+        if account(accounts, 10 + index)?.key.to_bytes() != mint {
             return Err(AdapterError::BearerAuthentication.into());
         }
+        mint_keys.push(mint);
     }
     let now = Clock::get()
         .map_err(|_| AdapterError::BearerAuthentication)?
         .slot;
     let mut funding_after = funding;
-    let (state, _plan) = dclutch_bearer_contract::transition::activate(
+    let plan = dclutch_bearer_contract::transition::activate_v1(
         market_account.key.to_bytes(),
-        &mut market,
+        market.phase,
+        market.generation,
+        market.manifest_id,
+        market.child_count_before,
+        market.child_count_after,
         manifest_id,
         manifest,
         config_id,
@@ -305,7 +498,28 @@ fn activate<'a, const N: usize>(
         mint_total,
         expected_prior_child_count,
         controller,
-        mint_keys,
+        mint_keys.as_slice(),
+    )
+    .map_err(|_| AdapterError::BearerTransition)?;
+    if plan.controller != controller
+        || plan.outcome_count != outcome_count
+        || plan.rent_lamports != state_rent
+        || plan.creation_lamports != mint_total
+        || plan.rent_refund != refund_account.key.to_bytes()
+    {
+        return Err(AdapterError::BearerPostcondition.into());
+    }
+    let mut state_bytes = Vec::new();
+    state_bytes
+        .try_reserve_exact(state_len)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    state_bytes.resize(state_len, 0);
+    BearerCapabilityViewV1::encode_activated_into(
+        &mut state_bytes,
+        outcome_count,
+        market_account.key.to_bytes(),
+        generation,
+        funding.entry_index(),
     )
     .map_err(|_| AdapterError::BearerTransition)?;
     let total_debit = state_rent
@@ -328,6 +542,9 @@ fn activate<'a, const N: usize>(
         market_account.key.as_ref(),
         generation_bytes.as_slice(),
     ];
+    if plan.capability_derivation.seeds() != state_seeds {
+        return Err(AdapterError::BearerPostcondition.into());
+    }
     let (_, state_bump) = Pubkey::find_program_address(&state_seeds, program_id);
     if state_account.key
         != &Pubkey::create_program_address(
@@ -343,7 +560,6 @@ fn activate<'a, const N: usize>(
     {
         return Err(AdapterError::BearerAuthentication.into());
     }
-    let state_len = BearerCapabilityV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?;
     create_pda_account(
         program_id,
         payer,
@@ -355,7 +571,7 @@ fn activate<'a, const N: usize>(
         &state_seeds,
         state_bump,
     )?;
-    for index in 0..N {
+    for index in 0..outcomes {
         let mint = account(accounts, 10 + index)?;
         let outcome = [u8::try_from(index).map_err(|_| AdapterError::Arithmetic)?];
         let mint_seeds = [
@@ -364,6 +580,14 @@ fn activate<'a, const N: usize>(
             generation_bytes.as_slice(),
             outcome.as_slice(),
         ];
+        if plan
+            .mint_derivation(index)
+            .map_err(|_| AdapterError::BearerPostcondition)?
+            .seeds()
+            != mint_seeds
+        {
+            return Err(AdapterError::BearerPostcondition.into());
+        }
         let (_, bump) = Pubkey::find_program_address(&mint_seeds, program_id);
         create_pda_account(
             program_id,
@@ -378,7 +602,12 @@ fn activate<'a, const N: usize>(
         )?;
         initialize_bearer_mint(mint, state_account, token_program)?;
         if parse_mint(mint, token_program)?
-            .validate_profile(mint_keys[index], controller)
+            .validate_profile(
+                *mint_keys
+                    .get(index)
+                    .ok_or(AdapterError::BearerPostcondition)?,
+                controller,
+            )
             .is_err()
         {
             return Err(AdapterError::BearerPostcondition.into());
@@ -387,9 +616,9 @@ fn activate<'a, const N: usize>(
     // All fallible account, plan, and CPI checks are complete before the three
     // persistent writes.  The payer is reimbursed from segregated funding only.
     move_lamports_exact(funding_account, payer, total_debit)?;
-    persist_market(market_account, market)?;
+    persist_exact_bytes(market_account, market.bytes.as_slice())?;
     persist_funding(funding_account, funding_after)?;
-    persist_state(state_account, state)?;
+    persist_bearer_bytes(state_account, state_bytes.as_slice())?;
     require_unchanged_rent_credit(program_id, refund_account, refund)?;
     if payer.lamports() != payer_before || funding_account.lamports() != funding_after_lamports {
         return Err(AdapterError::BearerPostcondition.into());
@@ -397,12 +626,152 @@ fn activate<'a, const N: usize>(
     Ok(())
 }
 
-fn retire<const N: usize>(
+struct RetirementMarketStage {
+    phase: dclutch_core_contract::Phase,
+    generation: u64,
+    manifest_id: ContentId,
+    child_count_before: u64,
+    child_count_after: u64,
+    supply: Vec<u64>,
+    bytes: Vec<u8>,
+}
+
+#[inline(never)]
+fn stage_retirement_market(
+    program_id: &Pubkey,
+    market: &AccountInfo<'_>,
+    outcome_count: u8,
+    generation: u64,
+    expected_prior_child_count: u64,
+) -> Result<RetirementMarketStage, ProgramError> {
+    match outcome_count {
+        2 => stage_retirement_market_width::<2>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        3 => stage_retirement_market_width::<3>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        4 => stage_retirement_market_width::<4>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        5 => stage_retirement_market_width::<5>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        6 => stage_retirement_market_width::<6>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        7 => stage_retirement_market_width::<7>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        8 => stage_retirement_market_width::<8>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        9 => stage_retirement_market_width::<9>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        10 => stage_retirement_market_width::<10>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        11 => stage_retirement_market_width::<11>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        12 => stage_retirement_market_width::<12>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        13 => stage_retirement_market_width::<13>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        14 => stage_retirement_market_width::<14>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        15 => stage_retirement_market_width::<15>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        16 => stage_retirement_market_width::<16>(
+            program_id,
+            market,
+            generation,
+            expected_prior_child_count,
+        ),
+        _ => Err(AdapterError::BearerAuthentication.into()),
+    }
+}
+
+#[inline(never)]
+fn stage_retirement_market_width<const N: usize>(
+    program_id: &Pubkey,
+    market_account: &AccountInfo<'_>,
+    generation: u64,
+    expected_prior_child_count: u64,
+) -> Result<RetirementMarketStage, ProgramError> {
+    let mut market = decode_market::<N>(program_id, market_account, generation)?;
+    let root_before = market.root();
+    let supply = copy_supply(market.supply())?;
+    market
+        .retire_child(generation, expected_prior_child_count)
+        .map_err(|_| AdapterError::BearerTransition)?;
+    Ok(RetirementMarketStage {
+        phase: root_before.phase(),
+        generation: root_before.identity().generation(),
+        manifest_id: root_before.identity().capability_manifest_id(),
+        child_count_before: root_before.outstanding_children(),
+        child_count_after: market.root().outstanding_children(),
+        supply,
+        bytes: encode_market_bytes(market)?,
+    })
+}
+
+#[inline(never)]
+fn retire_v1(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
+    outcome_count: u8,
     generation: u64,
     expected_prior_child_count: u64,
 ) -> Result<(), ProgramError> {
+    let outcomes = usize::from(outcome_count);
     let market_account = account(accounts, 0)?;
     let state_account = account(accounts, 1)?;
     let manifest_account = account(accounts, 2)?;
@@ -415,8 +784,20 @@ fn retire<const N: usize>(
         return Err(AdapterError::BearerAuthentication.into());
     }
     authenticate_system_and_rent(system, rent)?;
-    let mut market = decode_market::<N>(program_id, market_account, generation)?;
-    let state = decode_state::<N>(program_id, state_account, market_account, generation)?;
+    let market = stage_retirement_market(
+        program_id,
+        market_account,
+        outcome_count,
+        generation,
+        expected_prior_child_count,
+    )?;
+    let state = decode_bearer_bytes_v1(
+        program_id,
+        state_account,
+        market_account,
+        outcome_count,
+        generation,
+    )?;
     if manifest_account.owner != program_id || config_account.owner != program_id {
         return Err(AdapterError::BearerAuthentication.into());
     }
@@ -439,33 +820,49 @@ fn retire<const N: usize>(
         refund,
         &Pubkey::new_from_array(config.rent_refund()),
     )?;
-    let mut expected_mints = [[0u8; 32]; N];
-    let mut observations = [empty_mint(); N];
+    let mut expected_mints = Vec::new();
+    let mut observations = Vec::new();
+    expected_mints
+        .try_reserve_exact(outcomes)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    observations
+        .try_reserve_exact(outcomes)
+        .map_err(|_| AdapterError::Arithmetic)?;
     let refund_before = refund.lamports();
     let mut mint_lamports = 0u64;
-    for index in 0..N {
+    for index in 0..outcomes {
         let mint = account(accounts, 8 + index)?;
-        expected_mints[index] = canonical_mint(program_id, market_account.key, generation, index)?;
-        observations[index] = parse_mint(mint, token_program)?;
+        expected_mints.push(canonical_mint(
+            program_id,
+            market_account.key,
+            generation,
+            index,
+        )?);
+        observations.push(parse_mint(mint, token_program)?);
         mint_lamports = mint_lamports
             .checked_add(mint.lamports())
             .ok_or(AdapterError::Arithmetic)?;
     }
-    let plan = dclutch_bearer_contract::transition::retire(
+    let plan = dclutch_bearer_contract::transition::retire_v1(
+        state.as_slice(),
         market_account.key.to_bytes(),
-        &mut market,
-        state,
+        market.phase,
+        market.generation,
+        market.manifest_id,
+        market.supply.as_slice(),
+        market.child_count_before,
+        market.child_count_after,
         manifest_id,
         manifest,
         config_id,
         config,
         expected_prior_child_count,
         state_account.key.to_bytes(),
-        expected_mints,
-        observations,
+        expected_mints.as_slice(),
+        observations.as_slice(),
     )
     .map_err(|_| AdapterError::BearerTransition)?;
-    if plan.rent_refund != refund.key.to_bytes() {
+    if plan.outcome_count != outcome_count || plan.rent_refund != refund.key.to_bytes() {
         return Err(AdapterError::BearerAuthentication.into());
     }
     let generation_bytes = generation.to_le_bytes();
@@ -477,7 +874,7 @@ fn retire<const N: usize>(
         ],
         program_id,
     );
-    for index in 0..N {
+    for index in 0..outcomes {
         let mint = account(accounts, 8 + index)?;
         let close = spl_token_2022_interface::instruction::close_account(
             token_program.key,
@@ -515,7 +912,7 @@ fn retire<const N: usize>(
         .map_err(|_| AdapterError::Arithmetic)?;
     // Every fallible close/authentication operation precedes these final
     // writes, so a refusal leaves Market/state/rent balances unchanged.
-    persist_market(market_account, market)?;
+    persist_exact_bytes(market_account, market.bytes.as_slice())?;
     move_lamports_exact(state_account, refund, state_lamports)?;
     state_account
         .resize(0)
@@ -536,6 +933,7 @@ fn retire<const N: usize>(
     Ok(())
 }
 
+#[inline(never)]
 fn split_native<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -551,6 +949,7 @@ fn split_native<const N: usize>(
     )
 }
 
+#[inline(never)]
 fn merge_native<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -566,6 +965,7 @@ fn merge_native<const N: usize>(
     )
 }
 
+#[inline(never)]
 fn redeem_native<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -589,6 +989,7 @@ enum NativeAction {
     Redeem { outcome: usize },
 }
 
+#[inline(never)]
 fn native_value<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -707,31 +1108,102 @@ fn native_value<const N: usize>(
     persist_position(position_account, position)
 }
 
-fn split_bearer<const N: usize>(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
+struct CompleteSetMarketStage {
+    root: dclutch_core_contract::MarketRoot,
+    phase: dclutch_core_contract::Phase,
     generation: u64,
-    quantity: u64,
-) -> Result<(), ProgramError> {
-    bearer_complete_set::<N>(program_id, accounts, generation, quantity, true)
+    realm_id: ContentId,
+    hoard_before: u64,
+    hoard_after: u64,
+    supply_before: Vec<u64>,
+    supply_after: Vec<u64>,
+    bytes: Vec<u8>,
 }
 
-fn merge_bearer<const N: usize>(
+#[inline(never)]
+fn stage_complete_set_market(
     program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
+    market: &AccountInfo<'_>,
+    outcome_count: u8,
     generation: u64,
     quantity: u64,
-) -> Result<(), ProgramError> {
-    bearer_complete_set::<N>(program_id, accounts, generation, quantity, false)
+    split: bool,
+) -> Result<CompleteSetMarketStage, ProgramError> {
+    match outcome_count {
+        2 => stage_complete_set_market_width::<2>(program_id, market, generation, quantity, split),
+        3 => stage_complete_set_market_width::<3>(program_id, market, generation, quantity, split),
+        4 => stage_complete_set_market_width::<4>(program_id, market, generation, quantity, split),
+        5 => stage_complete_set_market_width::<5>(program_id, market, generation, quantity, split),
+        6 => stage_complete_set_market_width::<6>(program_id, market, generation, quantity, split),
+        7 => stage_complete_set_market_width::<7>(program_id, market, generation, quantity, split),
+        8 => stage_complete_set_market_width::<8>(program_id, market, generation, quantity, split),
+        9 => stage_complete_set_market_width::<9>(program_id, market, generation, quantity, split),
+        10 => {
+            stage_complete_set_market_width::<10>(program_id, market, generation, quantity, split)
+        }
+        11 => {
+            stage_complete_set_market_width::<11>(program_id, market, generation, quantity, split)
+        }
+        12 => {
+            stage_complete_set_market_width::<12>(program_id, market, generation, quantity, split)
+        }
+        13 => {
+            stage_complete_set_market_width::<13>(program_id, market, generation, quantity, split)
+        }
+        14 => {
+            stage_complete_set_market_width::<14>(program_id, market, generation, quantity, split)
+        }
+        15 => {
+            stage_complete_set_market_width::<15>(program_id, market, generation, quantity, split)
+        }
+        16 => {
+            stage_complete_set_market_width::<16>(program_id, market, generation, quantity, split)
+        }
+        _ => Err(AdapterError::BearerAuthentication.into()),
+    }
 }
 
-fn bearer_complete_set<const N: usize>(
+#[inline(never)]
+fn stage_complete_set_market_width<const N: usize>(
+    program_id: &Pubkey,
+    market_account: &AccountInfo<'_>,
+    generation: u64,
+    quantity: u64,
+    split: bool,
+) -> Result<CompleteSetMarketStage, ProgramError> {
+    let mut market = decode_market::<N>(program_id, market_account, generation)?;
+    let root_before = market.root();
+    let hoard_before = market.hoard_atoms();
+    let supply_before = copy_supply(market.supply())?;
+    if split {
+        market.split_complete_set(quantity)
+    } else {
+        market.merge_complete_set(quantity)
+    }
+    .map_err(|_| AdapterError::BearerTransition)?;
+    Ok(CompleteSetMarketStage {
+        root: market.root(),
+        phase: root_before.phase(),
+        generation: root_before.identity().generation(),
+        realm_id: root_before.identity().realm_id(),
+        hoard_before,
+        hoard_after: market.hoard_atoms(),
+        supply_before,
+        supply_after: copy_supply(market.supply())?,
+        bytes: encode_market_bytes(market)?,
+    })
+}
+
+#[inline(never)]
+fn bearer_complete_set_v1(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
+    outcome_count: u8,
     generation: u64,
     quantity: u64,
     split: bool,
 ) -> Result<(), ProgramError> {
+    let outcomes = usize::from(outcome_count);
     let market_account = account(accounts, 0)?;
     let state_account = account(accounts, 1)?;
     let realm_account = account(accounts, 2)?;
@@ -746,14 +1218,27 @@ fn bearer_complete_set<const N: usize>(
     {
         return Err(AdapterError::BearerAuthentication.into());
     }
-    let mut market = decode_market::<N>(program_id, market_account, generation)?;
-    let mut state = decode_state::<N>(program_id, state_account, market_account, generation)?;
+    let market = stage_complete_set_market(
+        program_id,
+        market_account,
+        outcome_count,
+        generation,
+        quantity,
+        split,
+    )?;
+    let state_before = decode_bearer_bytes_v1(
+        program_id,
+        state_account,
+        market_account,
+        outcome_count,
+        generation,
+    )?;
     let realm = authenticate_realm(
         program_id,
         realm_account,
         collateral_mint,
         collateral_program,
-        market.root(),
+        market.root,
     )?;
     authenticate_custody(program_id, custody_account, market_account, generation)?;
     let vault_before = authenticate_vault(
@@ -764,43 +1249,66 @@ fn bearer_complete_set<const N: usize>(
         collateral_program,
         realm,
     )?;
-    let mut mint_keys = [[0; 32]; N];
-    let mut mints = [empty_mint(); N];
-    let mut tokens = [empty_claim(); N];
-    for index in 0..N {
+    let mut mint_keys = Vec::new();
+    let mut mints = Vec::new();
+    let mut tokens = Vec::new();
+    mint_keys
+        .try_reserve_exact(outcomes)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    mints
+        .try_reserve_exact(outcomes)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    tokens
+        .try_reserve_exact(outcomes)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    for index in 0..outcomes {
         let mint = account(accounts, 10 + 2 * index)?;
         let token = account(accounts, 11 + 2 * index)?;
-        mint_keys[index] = canonical_mint(program_id, market_account.key, generation, index)?;
-        mints[index] = parse_mint(mint, token_program)?;
-        tokens[index] = parse_claim_account(token, token_program)?;
+        mint_keys.push(canonical_mint(
+            program_id,
+            market_account.key,
+            generation,
+            index,
+        )?);
+        mints.push(parse_mint(mint, token_program)?);
+        tokens.push(parse_claim_account(token, token_program)?);
     }
-    let (collateral, plans) = if split {
-        dclutch_bearer_contract::transition::split_to_bearer(
-            market_account.key.to_bytes(),
-            &mut market,
-            &mut state,
-            holder.key.to_bytes(),
-            realm.binding()?,
-            quantity,
-            state_account.key.to_bytes(),
-            mint_keys,
-            mints,
-            tokens,
-        )
+    let mut state_after = Vec::new();
+    state_after
+        .try_reserve_exact(state_before.len())
+        .map_err(|_| AdapterError::Arithmetic)?;
+    state_after.resize(state_before.len(), 0);
+    let mut plans = Vec::new();
+    plans
+        .try_reserve_exact(outcomes)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    plans.resize(outcomes, empty_supply_plan());
+    let operation = if split {
+        dclutch_bearer_contract::transition::TokenSupplyOperationV1::Mint
     } else {
-        dclutch_bearer_contract::transition::merge_from_bearer(
-            market_account.key.to_bytes(),
-            &mut market,
-            &mut state,
-            holder.key.to_bytes(),
-            realm.binding()?,
-            quantity,
-            state_account.key.to_bytes(),
-            mint_keys,
-            mints,
-            tokens,
-        )
-    }
+        dclutch_bearer_contract::transition::TokenSupplyOperationV1::Burn
+    };
+    let collateral = dclutch_bearer_contract::transition::complete_set_into_v1(
+        state_before.as_slice(),
+        &mut state_after,
+        market_account.key.to_bytes(),
+        market.generation,
+        market.phase,
+        market.realm_id,
+        market.hoard_before,
+        market.hoard_after,
+        market.supply_before.as_slice(),
+        market.supply_after.as_slice(),
+        holder.key.to_bytes(),
+        realm.binding()?,
+        quantity,
+        state_account.key.to_bytes(),
+        mint_keys.as_slice(),
+        mints.as_slice(),
+        tokens.as_slice(),
+        operation,
+        plans.as_mut_slice(),
+    )
     .map_err(|_| AdapterError::BearerTransition)?;
     let (source, destination) = if split {
         (collateral_account, vault)
@@ -821,11 +1329,11 @@ fn bearer_complete_set<const N: usize>(
         } else {
             Some((
                 market_account,
-                market_signer(program_id, market_account, market.root())?,
+                market_signer(program_id, market_account, market.root)?,
             ))
         },
     )?;
-    for index in 0..N {
+    for index in 0..outcomes {
         let mint = account(accounts, 10 + 2 * index)?;
         let token = account(accounts, 11 + 2 * index)?;
         if split {
@@ -837,7 +1345,7 @@ fn bearer_complete_set<const N: usize>(
                 mint,
                 token,
                 token_program,
-                plans[index],
+                *plans.get(index).ok_or(AdapterError::BearerPostcondition)?,
             )?;
         } else {
             burn_plan(
@@ -849,7 +1357,7 @@ fn bearer_complete_set<const N: usize>(
                 token,
                 holder,
                 token_program,
-                plans[index],
+                *plans.get(index).ok_or(AdapterError::BearerPostcondition)?,
             )?;
         }
     }
@@ -870,10 +1378,11 @@ fn bearer_complete_set<const N: usize>(
     {
         return Err(AdapterError::BearerPostcondition.into());
     }
-    persist_market(market_account, market)?;
-    persist_state(state_account, state)
+    persist_exact_bytes(market_account, market.bytes.as_slice())?;
+    persist_bearer_bytes(state_account, state_after.as_slice())
 }
 
+#[inline(never)]
 fn redeem_bearer<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -977,6 +1486,7 @@ fn redeem_bearer<const N: usize>(
     persist_state(state_account, state)
 }
 
+#[inline(never)]
 fn transfer<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -1047,6 +1557,7 @@ fn transfer<const N: usize>(
     Ok(())
 }
 
+#[inline(never)]
 fn dematerialize<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -1135,6 +1646,7 @@ fn dematerialize<const N: usize>(
     Ok(())
 }
 
+#[inline(never)]
 fn materialize<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -1374,6 +1886,7 @@ fn market_signer(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_collateral_transfer<'a>(
     _program_id: &Pubkey,
     source: &AccountInfo<'a>,
@@ -1622,6 +2135,7 @@ fn authenticate_system_and_rent(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_pda_account<'a>(
     _program_id: &Pubkey,
     payer: &AccountInfo<'a>,
@@ -1724,6 +2238,7 @@ fn move_lamports_exact(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn mint_to_plan<'a>(
     program_id: &Pubkey,
     market: &AccountInfo<'a>,
@@ -1769,6 +2284,7 @@ fn mint_to_plan<'a>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn burn_plan<'a>(
     program_id: &Pubkey,
     market: &AccountInfo<'a>,
@@ -1850,18 +2366,26 @@ fn invoke_state_signed<'a>(
     Ok(())
 }
 
-fn empty_claim() -> TokenAccountObservationV1 {
-    TokenAccountObservationV1 {
-        key: [0; 32],
-        program_owner: [0; 32],
-        data_len: 0,
+const fn empty_supply_plan() -> dclutch_bearer_contract::transition::TokenSupplyPlanV1 {
+    dclutch_bearer_contract::transition::TokenSupplyPlanV1 {
+        operation: dclutch_bearer_contract::transition::TokenSupplyOperationV1::Mint,
         mint: [0; 32],
-        authority: [0; 32],
+        token_account: [0; 32],
         amount: 0,
-        state: TokenAccountStateV1::Uninitialized,
-        has_native_reserve: false,
-        extension_count: 0,
+        mint_supply_before: 0,
+        mint_supply_after: 0,
+        account_balance_before: 0,
+        account_balance_after: 0,
     }
+}
+
+fn copy_supply<const N: usize>(supply: &[u64; N]) -> Result<Vec<u64>, ProgramError> {
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(N)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    output.extend_from_slice(supply);
+    Ok(output)
 }
 
 fn decode_position<const N: usize>(
@@ -1896,6 +2420,82 @@ fn decode_position<const N: usize>(
         return Err(AdapterError::ReplayMismatch.into());
     }
     Ok(position)
+}
+
+fn decode_bearer_bytes_v1(
+    program_id: &Pubkey,
+    state_account: &AccountInfo<'_>,
+    market: &AccountInfo<'_>,
+    outcome_count: u8,
+    generation: u64,
+) -> Result<Vec<u8>, ProgramError> {
+    let (expected, _) = Pubkey::find_program_address(
+        &[
+            dclutch_bearer_contract::state::BEARER_CAPABILITY_PDA_DOMAIN,
+            market.key.as_ref(),
+            &generation.to_le_bytes(),
+        ],
+        program_id,
+    );
+    if state_account.key != &expected || state_account.owner != program_id {
+        return Err(AdapterError::BearerAuthentication.into());
+    }
+    let data = state_account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::BearerAuthentication)?;
+    let state =
+        BearerCapabilityViewV1::decode(&data).map_err(|_| AdapterError::BearerAuthentication)?;
+    if state.outcome_count() != outcome_count
+        || state.market() != market.key.to_bytes()
+        || state.generation() != generation
+    {
+        return Err(AdapterError::ReplayMismatch.into());
+    }
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(data.len())
+        .map_err(|_| AdapterError::Arithmetic)?;
+    bytes.extend_from_slice(&data);
+    Ok(bytes)
+}
+
+fn persist_exact_bytes(account: &AccountInfo<'_>, bytes: &[u8]) -> Result<(), ProgramError> {
+    {
+        let mut data = account
+            .try_borrow_mut_data()
+            .map_err(|_| AdapterError::BearerPostcondition)?;
+        if data.len() != bytes.len() {
+            return Err(AdapterError::BearerPostcondition.into());
+        }
+        data.copy_from_slice(bytes);
+    }
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::BearerPostcondition)?;
+    if data.as_ref() != bytes {
+        return Err(AdapterError::BearerPostcondition.into());
+    }
+    Ok(())
+}
+
+fn persist_bearer_bytes(account: &AccountInfo<'_>, bytes: &[u8]) -> Result<(), ProgramError> {
+    let expected =
+        BearerCapabilityViewV1::decode(bytes).map_err(|_| AdapterError::BearerPostcondition)?;
+    persist_exact_bytes(account, bytes)?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::BearerPostcondition)?;
+    let actual =
+        BearerCapabilityViewV1::decode(&data).map_err(|_| AdapterError::BearerPostcondition)?;
+    if actual.outcome_count() != expected.outcome_count()
+        || actual.market() != expected.market()
+        || actual.generation() != expected.generation()
+        || actual.manifest_entry_index() != expected.manifest_entry_index()
+        || actual.as_bytes() != expected.as_bytes()
+    {
+        return Err(AdapterError::BearerPostcondition.into());
+    }
+    Ok(())
 }
 
 fn persist_state<const N: usize>(
@@ -1992,11 +2592,78 @@ fn persist_market<const N: usize>(
     Ok(())
 }
 
-fn audit<const N: usize>(
+fn encode_market_bytes<const N: usize>(
+    market: CategoricalMarketV1<N>,
+) -> Result<Vec<u8>, ProgramError> {
+    let length =
+        CategoricalMarketV1::<N>::encoded_len().map_err(|_| AdapterError::BearerPostcondition)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(length)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    bytes.resize(length, 0);
+    market
+        .encode(&mut bytes)
+        .map_err(|_| AdapterError::BearerPostcondition)?;
+    if CategoricalMarketV1::<N>::decode(&bytes) != Ok(market) {
+        return Err(AdapterError::BearerPostcondition.into());
+    }
+    Ok(bytes)
+}
+
+struct AuditMarketFacts {
+    generation: u64,
+    supply: Vec<u64>,
+}
+
+#[inline(never)]
+fn authenticate_audit_market(
+    program_id: &Pubkey,
+    market: &AccountInfo<'_>,
+    outcome_count: u8,
+    generation: u64,
+) -> Result<AuditMarketFacts, ProgramError> {
+    match outcome_count {
+        2 => authenticate_audit_market_width::<2>(program_id, market, generation),
+        3 => authenticate_audit_market_width::<3>(program_id, market, generation),
+        4 => authenticate_audit_market_width::<4>(program_id, market, generation),
+        5 => authenticate_audit_market_width::<5>(program_id, market, generation),
+        6 => authenticate_audit_market_width::<6>(program_id, market, generation),
+        7 => authenticate_audit_market_width::<7>(program_id, market, generation),
+        8 => authenticate_audit_market_width::<8>(program_id, market, generation),
+        9 => authenticate_audit_market_width::<9>(program_id, market, generation),
+        10 => authenticate_audit_market_width::<10>(program_id, market, generation),
+        11 => authenticate_audit_market_width::<11>(program_id, market, generation),
+        12 => authenticate_audit_market_width::<12>(program_id, market, generation),
+        13 => authenticate_audit_market_width::<13>(program_id, market, generation),
+        14 => authenticate_audit_market_width::<14>(program_id, market, generation),
+        15 => authenticate_audit_market_width::<15>(program_id, market, generation),
+        16 => authenticate_audit_market_width::<16>(program_id, market, generation),
+        _ => Err(AdapterError::BearerAuthentication.into()),
+    }
+}
+
+#[inline(never)]
+fn authenticate_audit_market_width<const N: usize>(
+    program_id: &Pubkey,
+    market_account: &AccountInfo<'_>,
+    generation: u64,
+) -> Result<AuditMarketFacts, ProgramError> {
+    let market = decode_market::<N>(program_id, market_account, generation)?;
+    Ok(AuditMarketFacts {
+        generation: market.root().identity().generation(),
+        supply: copy_supply(market.supply())?,
+    })
+}
+
+#[inline(never)]
+fn audit_v1(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
+    outcome_count: u8,
     generation: u64,
 ) -> Result<(), ProgramError> {
+    let outcomes = usize::from(outcome_count);
     let market_account = account(accounts, 0)?;
     let state_account = account(accounts, 1)?;
     let token_program = account(accounts, 2)?;
@@ -2005,23 +2672,41 @@ fn audit<const N: usize>(
     {
         return Err(AdapterError::BearerAuthentication.into());
     }
-    let market = decode_market::<N>(program_id, market_account, generation)?;
-    let state = decode_state::<N>(program_id, state_account, market_account, generation)?;
+    let market = authenticate_audit_market(program_id, market_account, outcome_count, generation)?;
+    let state = decode_bearer_bytes_v1(
+        program_id,
+        state_account,
+        market_account,
+        outcome_count,
+        generation,
+    )?;
     let controller = state_account.key.to_bytes();
-    let mut observations = [empty_mint(); N];
-    let mut expected = [[0u8; 32]; N];
-    for index in 0..N {
+    let mut observations = Vec::new();
+    let mut expected = Vec::new();
+    observations
+        .try_reserve_exact(outcomes)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    expected
+        .try_reserve_exact(outcomes)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    for index in 0..outcomes {
         let mint = account(accounts, 3 + index)?;
-        expected[index] = canonical_mint(program_id, market_account.key, generation, index)?;
-        observations[index] = parse_mint(mint, token_program)?;
+        expected.push(canonical_mint(
+            program_id,
+            market_account.key,
+            generation,
+            index,
+        )?);
+        observations.push(parse_mint(mint, token_program)?);
     }
-    dclutch_bearer_contract::transition::audit_mints(
-        &state,
+    dclutch_bearer_contract::transition::audit_mints_v1(
+        state.as_slice(),
         market_account.key.to_bytes(),
-        &market,
+        market.generation,
+        market.supply.as_slice(),
         controller,
-        expected,
-        observations,
+        expected.as_slice(),
+        observations.as_slice(),
     )
     .map_err(|_| AdapterError::BearerTransition.into())
 }
@@ -2038,7 +2723,7 @@ fn decode_market<const N: usize>(
         .try_borrow_data()
         .map_err(|_| AdapterError::BearerAuthentication)?;
     if decode_market_outcome_count(&data).map_err(|_| AdapterError::BearerAuthentication)?
-        != N as u8
+        != u8::try_from(N).map_err(|_| AdapterError::BearerAuthentication)?
     {
         return Err(AdapterError::BearerAuthentication.into());
     }
@@ -2169,21 +2854,6 @@ fn parse_mint(
     })
 }
 
-fn empty_mint() -> MintObservationV1 {
-    MintObservationV1 {
-        key: [0; 32],
-        program_owner: [0; 32],
-        data_len: 0,
-        supply: 0,
-        decimals: 0,
-        initialized: false,
-        mint_authority: None,
-        freeze_authority: None,
-        close_authority: None,
-        permissioned_burn_authority: None,
-        extension_count: 0,
-    }
-}
 fn account<'a, 'info>(
     accounts: &'a [AccountInfo<'info>],
     index: usize,

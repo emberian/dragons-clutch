@@ -91,6 +91,8 @@ pub enum Error {
     InsufficientTokenBalance,
     /// Observed Token-2022 Mint supply differed from accounted bearer supply.
     UnaccountedMintSupply,
+    /// A typed Market stage did not contain the exact requested ledger delta.
+    MarketPlanMismatch,
     /// Account roles aliased outside the one explicit program-account exception.
     AccountAlias,
     /// An account frame had the wrong role or exact privilege set.

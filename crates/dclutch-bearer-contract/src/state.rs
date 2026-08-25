@@ -318,6 +318,176 @@ impl<const N: usize> BearerCapabilityV1<N> {
     }
 }
 
+/// Borrowed hostile-decoded bearer state with a runtime categorical width.
+///
+/// This is the adapter-facing equivalent of [`BearerCapabilityV1`].  It keeps
+/// the canonical bytes borrowed so one SVM implementation can validate every
+/// admitted width without monomorphizing the state parser and complete-set
+/// loops fifteen times.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BearerCapabilityViewV1<'a> {
+    bytes: &'a [u8],
+    outcome_count: u8,
+    market: [u8; 32],
+    generation: u64,
+    manifest_entry_index: u16,
+}
+
+impl<'a> BearerCapabilityViewV1<'a> {
+    /// Return the checked exact account width, `64 + 8N` bytes.
+    pub fn encoded_len(outcome_count: u8) -> Result<usize> {
+        let outcomes = validate_runtime_width(outcome_count)?;
+        outcomes
+            .checked_mul(8)
+            .and_then(|width| BEARER_STATE_BASE_BYTES.checked_add(width))
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Hostile-decode one exact canonical capability root.
+    pub fn decode(bytes: &'a [u8]) -> Result<Self> {
+        let outcome_count = byte(bytes, STATE_OUTCOME_COUNT_OFFSET)?;
+        if bytes.len() != Self::encoded_len(outcome_count)? {
+            return Err(Error::InvalidLength);
+        }
+        if array::<8>(bytes, 0)? != BEARER_STATE_MAGIC {
+            return Err(Error::InvalidMagic);
+        }
+        if u16::from_le_bytes(array(bytes, 8)?) != BEARER_STATE_SCHEMA_VERSION {
+            return Err(Error::UnsupportedSchema);
+        }
+        if byte(bytes, STATE_PROFILE_OFFSET)? != BEARER_PROFILE_V1 {
+            return Err(Error::InvalidOutcomeCount);
+        }
+        require_zero(bytes, STATE_RESERVED_OFFSET, STATE_RESERVED_BYTES)?;
+        require_zero(bytes, STATE_BODY_RESERVED_OFFSET, STATE_BODY_RESERVED_BYTES)?;
+        let market = array(bytes, STATE_MARKET_OFFSET)?;
+        require_nonzero(&market)?;
+        let result = Self {
+            bytes,
+            outcome_count,
+            market,
+            generation: u64::from_le_bytes(array(bytes, STATE_GENERATION_OFFSET)?),
+            manifest_entry_index: u16::from_le_bytes(array(bytes, STATE_ENTRY_INDEX_OFFSET)?),
+        };
+        let mut index = 0usize;
+        while index < result.outcomes() {
+            result.accounted_supply(index)?;
+            index = index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        }
+        Ok(result)
+    }
+
+    /// Encode a newly activated, zero-supply capability atomically.
+    pub fn encode_activated_into(
+        output: &mut [u8],
+        outcome_count: u8,
+        market: [u8; 32],
+        generation: u64,
+        manifest_entry_index: u16,
+    ) -> Result<()> {
+        if output.len() != Self::encoded_len(outcome_count)? {
+            return Err(Error::OutputLength);
+        }
+        require_nonzero(&market)?;
+        output.fill(0);
+        put(output, 0, &BEARER_STATE_MAGIC);
+        put(output, 8, &BEARER_STATE_SCHEMA_VERSION.to_le_bytes());
+        put(output, STATE_OUTCOME_COUNT_OFFSET, &[outcome_count]);
+        put(output, STATE_PROFILE_OFFSET, &[BEARER_PROFILE_V1]);
+        put(output, STATE_MARKET_OFFSET, &market);
+        put(output, STATE_GENERATION_OFFSET, &generation.to_le_bytes());
+        put(
+            output,
+            STATE_ENTRY_INDEX_OFFSET,
+            &manifest_entry_index.to_le_bytes(),
+        );
+        Ok(())
+    }
+
+    /// Return the hostile-decoded categorical width.
+    pub const fn outcome_count(self) -> u8 {
+        self.outcome_count
+    }
+
+    /// Return the exact Market key.
+    pub const fn market(self) -> [u8; 32] {
+        self.market
+    }
+
+    /// Return the immutable Market generation.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    /// Return the canonical manifest entry index.
+    pub const fn manifest_entry_index(self) -> u16 {
+        self.manifest_entry_index
+    }
+
+    /// Return one exact Token-2022-represented supply.
+    pub fn accounted_supply(self, outcome: usize) -> Result<u64> {
+        if outcome >= self.outcomes() {
+            return Err(Error::InvalidOutcome);
+        }
+        let offset = STATE_SUPPLY_OFFSET
+            .checked_add(outcome.checked_mul(8).ok_or(Error::ArithmeticOverflow)?)
+            .ok_or(Error::ArithmeticOverflow)?;
+        Ok(u64::from_le_bytes(array(self.bytes, offset)?))
+    }
+
+    /// Borrow the exact canonical state preimage.
+    pub const fn as_bytes(self) -> &'a [u8] {
+        self.bytes
+    }
+
+    /// Validate Market/generation binding and representation subset bounds.
+    pub fn validate_market(
+        self,
+        market_key: [u8; 32],
+        generation: u64,
+        aggregate_supply: &[u64],
+    ) -> Result<()> {
+        if self.market != market_key {
+            return Err(Error::MarketMismatch);
+        }
+        if self.generation != generation {
+            return Err(Error::GenerationMismatch);
+        }
+        if aggregate_supply.len() != self.outcomes() {
+            return Err(Error::InvalidOutcomeCount);
+        }
+        for (index, aggregate) in aggregate_supply.iter().enumerate() {
+            if self.accounted_supply(index)? > *aggregate {
+                return Err(Error::UnaccountedMintSupply);
+            }
+        }
+        Ok(())
+    }
+
+    /// Encode the same identity with caller-supplied supplies atomically.
+    pub fn encode_with_supplies(self, output: &mut [u8], supplies: &[u64]) -> Result<()> {
+        if output.len() != self.bytes.len() {
+            return Err(Error::OutputLength);
+        }
+        if supplies.len() != self.outcomes() {
+            return Err(Error::InvalidOutcomeCount);
+        }
+        output.copy_from_slice(self.bytes);
+        for (index, supply) in supplies.iter().enumerate() {
+            put(
+                output,
+                STATE_SUPPLY_OFFSET + index * 8,
+                &supply.to_le_bytes(),
+            );
+        }
+        Ok(())
+    }
+
+    const fn outcomes(self) -> usize {
+        self.outcome_count as usize
+    }
+}
+
 /// Exact ordered PDA seed projection for the direct capability child.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BearerCapabilityDerivationV1 {
@@ -357,8 +527,24 @@ impl BearerMintDerivationV1 {
     /// Construct canonical seeds for one checked outcome.
     pub fn new<const N: usize>(market: [u8; 32], generation: u64, outcome: usize) -> Result<Self> {
         validate_width::<N>()?;
+        Self::new_v1(
+            market,
+            generation,
+            u8::try_from(N).map_err(|_| Error::InvalidOutcomeCount)?,
+            outcome,
+        )
+    }
+
+    /// Construct canonical seeds for one hostile runtime categorical width.
+    pub fn new_v1(
+        market: [u8; 32],
+        generation: u64,
+        outcome_count: u8,
+        outcome: usize,
+    ) -> Result<Self> {
+        let outcomes = validate_runtime_width(outcome_count)?;
         require_nonzero(&market)?;
-        if outcome >= N {
+        if outcome >= outcomes {
             return Err(Error::InvalidOutcome);
         }
         Ok(Self {
@@ -529,6 +715,15 @@ pub(crate) fn validate_width<const N: usize>() -> Result<()> {
     }
 }
 
+fn validate_runtime_width(outcome_count: u8) -> Result<usize> {
+    let outcomes = usize::from(outcome_count);
+    if !(MIN_OUTCOMES..=MAX_OUTCOMES).contains(&outcomes) {
+        Err(Error::InvalidOutcomeCount)
+    } else {
+        Ok(outcomes)
+    }
+}
+
 fn byte(bytes: &[u8], offset: usize) -> Result<u8> {
     bytes.get(offset).copied().ok_or(Error::InvalidLength)
 }
@@ -559,5 +754,61 @@ fn require_zero(bytes: &[u8], offset: usize, width: usize) -> Result<()> {
 fn put(output: &mut [u8], offset: usize, input: &[u8]) {
     for (destination, source) in output.iter_mut().skip(offset).zip(input) {
         *destination = *source;
+    }
+}
+
+#[cfg(test)]
+mod runtime_view_tests {
+    use super::{BEARER_STATE_BASE_BYTES, BearerCapabilityV1, BearerCapabilityViewV1, Error};
+
+    #[test]
+    fn runtime_view_matches_typed_state_and_refuses_noncanonical_widths() {
+        let mut state = BearerCapabilityV1::<2>::activated([7; 32], 11, 3).expect("state");
+        state.credit(0, 19).expect("credit");
+        let mut bytes = [0u8; BEARER_STATE_BASE_BYTES + 16];
+        state.encode(&mut bytes).expect("encode");
+
+        let view = BearerCapabilityViewV1::decode(&bytes).expect("runtime decode");
+        assert_eq!(view.outcome_count(), 2);
+        assert_eq!(view.market(), [7; 32]);
+        assert_eq!(view.generation(), 11);
+        assert_eq!(view.manifest_entry_index(), 3);
+        assert_eq!(view.accounted_supply(0), Ok(19));
+        assert_eq!(view.accounted_supply(1), Ok(0));
+        assert_eq!(view.accounted_supply(2), Err(Error::InvalidOutcome));
+
+        let mut dirty_count = bytes;
+        dirty_count[10] = 1;
+        assert_eq!(
+            BearerCapabilityViewV1::decode(&dirty_count),
+            Err(Error::InvalidOutcomeCount)
+        );
+        assert_eq!(
+            BearerCapabilityViewV1::decode(
+                bytes.get(..bytes.len() - 1).expect("nonempty state bytes")
+            ),
+            Err(Error::InvalidLength)
+        );
+    }
+
+    #[test]
+    fn runtime_supply_encode_refusal_is_atomic() {
+        let mut bytes = [0u8; BEARER_STATE_BASE_BYTES + 16];
+        BearerCapabilityViewV1::encode_activated_into(&mut bytes, 2, [8; 32], 12, 4)
+            .expect("activate bytes");
+        let view = BearerCapabilityViewV1::decode(&bytes).expect("decode");
+        let mut output = [0xa5; BEARER_STATE_BASE_BYTES + 16];
+        let before = output;
+        assert_eq!(
+            view.encode_with_supplies(&mut output, &[1]),
+            Err(Error::InvalidOutcomeCount)
+        );
+        assert_eq!(output, before);
+
+        view.encode_with_supplies(&mut output, &[9, 10])
+            .expect("supply encode");
+        let after = BearerCapabilityViewV1::decode(&output).expect("decode after");
+        assert_eq!(after.accounted_supply(0), Ok(9));
+        assert_eq!(after.accounted_supply(1), Ok(10));
     }
 }

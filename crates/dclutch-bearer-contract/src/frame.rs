@@ -1,7 +1,7 @@
 //! Exact account-role and privilege frames for a future SBF adapter.
 
 use crate::instruction::ActionV1;
-use crate::state::validate_width;
+use crate::state::{MAX_OUTCOMES, MIN_OUTCOMES, validate_width};
 use crate::{Error, Result, require_nonzero};
 
 /// SDK-free account metadata projection.
@@ -65,23 +65,42 @@ pub enum AccountRoleV1 {
 /// Return the exact account count for one action and categorical width.
 pub fn expected_account_count<const N: usize>(action: ActionV1) -> Result<usize> {
     validate_width::<N>()?;
+    expected_account_count_v1(
+        action,
+        u8::try_from(N).map_err(|_| Error::InvalidOutcomeCount)?,
+    )
+}
+
+/// Return the exact account count for one action and hostile runtime width.
+pub fn expected_account_count_v1(action: ActionV1, outcome_count: u8) -> Result<usize> {
+    let outcomes = validate_outcome_count(outcome_count)?;
     let count = match action {
-        ActionV1::Activate => 10usize.checked_add(N),
-        ActionV1::Audit => 3usize.checked_add(N),
+        ActionV1::Activate => 10usize.checked_add(outcomes),
+        ActionV1::Audit => 3usize.checked_add(outcomes),
         ActionV1::SplitNative | ActionV1::MergeNative | ActionV1::RedeemNative => Some(9),
         ActionV1::Materialize | ActionV1::Dematerialize | ActionV1::Transfer => Some(7),
-        ActionV1::SplitBearer | ActionV1::MergeBearer => N
+        ActionV1::SplitBearer | ActionV1::MergeBearer => outcomes
             .checked_mul(2)
             .and_then(|claims| 10usize.checked_add(claims)),
         ActionV1::RedeemBearer => Some(12),
-        ActionV1::Retire => 8usize.checked_add(N),
+        ActionV1::Retire => 8usize.checked_add(outcomes),
     };
     count.ok_or(Error::ArithmeticOverflow)
 }
 
 /// Return the exact role at one canonical account index.
 pub fn account_role<const N: usize>(action: ActionV1, index: usize) -> Result<AccountRoleV1> {
-    let count = expected_account_count::<N>(action)?;
+    validate_width::<N>()?;
+    account_role_v1(
+        action,
+        u8::try_from(N).map_err(|_| Error::InvalidOutcomeCount)?,
+        index,
+    )
+}
+
+/// Return the exact role at one canonical index for a hostile runtime width.
+pub fn account_role_v1(action: ActionV1, outcome_count: u8, index: usize) -> Result<AccountRoleV1> {
+    let count = expected_account_count_v1(action, outcome_count)?;
     if index >= count {
         return Err(Error::InvalidAccountFrame);
     }
@@ -180,11 +199,29 @@ pub fn validate_account_frame<const N: usize>(
     action: ActionV1,
     accounts: &[AccountMetaV1],
 ) -> Result<()> {
-    if accounts.len() != expected_account_count::<N>(action)? {
+    validate_width::<N>()?;
+    validate_account_frame_v1(
+        action,
+        u8::try_from(N).map_err(|_| Error::InvalidOutcomeCount)?,
+        accounts,
+    )
+}
+
+/// Validate the exact frame once for a hostile runtime categorical width.
+///
+/// This is byte-for-byte equivalent to [`validate_account_frame`] without
+/// forcing an SVM adapter to monomorphize the same role and alias loops for
+/// every supported width.
+pub fn validate_account_frame_v1(
+    action: ActionV1,
+    outcome_count: u8,
+    accounts: &[AccountMetaV1],
+) -> Result<()> {
+    if accounts.len() != expected_account_count_v1(action, outcome_count)? {
         return Err(Error::InvalidAccountFrame);
     }
     for (index, account) in accounts.iter().enumerate() {
-        let role = account_role::<N>(action, index)?;
+        let role = account_role_v1(action, outcome_count, index)?;
         if role != AccountRoleV1::SystemProgram {
             require_nonzero(&account.key)?;
         }
@@ -197,7 +234,7 @@ pub fn validate_account_frame<const N: usize>(
         }
         for (prior_index, prior) in accounts.iter().take(index).enumerate() {
             if prior.key == account.key {
-                let prior_role = account_role::<N>(action, prior_index)?;
+                let prior_role = account_role_v1(action, outcome_count, prior_index)?;
                 let safe_program_alias = matches!(
                     (prior_role, role),
                     (
@@ -215,6 +252,14 @@ pub fn validate_account_frame<const N: usize>(
         }
     }
     Ok(())
+}
+
+fn validate_outcome_count(outcome_count: u8) -> Result<usize> {
+    let outcomes = usize::from(outcome_count);
+    if !(MIN_OUTCOMES..=MAX_OUTCOMES).contains(&outcomes) {
+        return Err(Error::InvalidOutcomeCount);
+    }
+    Ok(outcomes)
 }
 
 fn native_value_role(index: usize) -> AccountRoleV1 {
@@ -265,4 +310,62 @@ fn exact_privileges(action: ActionV1, role: AccountRoleV1) -> (bool, bool, bool)
         | AccountRoleV1::CollateralMint => false,
     };
     (signer, writable, executable)
+}
+
+#[cfg(test)]
+mod runtime_frame_tests {
+    use super::{account_role, account_role_v1, expected_account_count, expected_account_count_v1};
+    use crate::Error;
+    use crate::instruction::ActionV1;
+
+    const ACTIONS: [ActionV1; 12] = [
+        ActionV1::Activate,
+        ActionV1::Audit,
+        ActionV1::SplitNative,
+        ActionV1::MergeNative,
+        ActionV1::RedeemNative,
+        ActionV1::Materialize,
+        ActionV1::Dematerialize,
+        ActionV1::Transfer,
+        ActionV1::SplitBearer,
+        ActionV1::MergeBearer,
+        ActionV1::RedeemBearer,
+        ActionV1::Retire,
+    ];
+
+    #[test]
+    fn runtime_frames_match_typed_boundary_widths() {
+        for action in ACTIONS {
+            compare::<2>(action);
+            compare::<16>(action);
+        }
+    }
+
+    #[test]
+    fn runtime_frames_refuse_out_of_profile_widths() {
+        assert_eq!(
+            expected_account_count_v1(ActionV1::Activate, 1),
+            Err(Error::InvalidOutcomeCount)
+        );
+        assert_eq!(
+            expected_account_count_v1(ActionV1::Activate, 17),
+            Err(Error::InvalidOutcomeCount)
+        );
+    }
+
+    fn compare<const N: usize>(action: ActionV1) {
+        let outcome_count = u8::try_from(N).expect("test width");
+        let runtime_count =
+            expected_account_count_v1(action, outcome_count).expect("runtime count");
+        assert_eq!(
+            runtime_count,
+            expected_account_count::<N>(action).expect("typed count")
+        );
+        for index in 0..runtime_count {
+            assert_eq!(
+                account_role_v1(action, outcome_count, index),
+                account_role::<N>(action, index)
+            );
+        }
+    }
 }
