@@ -11,7 +11,12 @@ use dclutch_capability_contract::{
     CAPABILITY_ENTRY_BYTES, CapabilityManifestV1, MANIFEST_HEADER_BYTES, MAX_MANIFEST_BYTES,
 };
 use dclutch_core_contract::ContentId as CoreContentId;
-use dclutch_dealer_contract::{LiquidityConfigV1, frame::DEALER_CONFIG_SCHEMA_RELEASE_ID_V1};
+#[cfg(test)]
+use dclutch_dealer_contract::LiquidityConfigV1;
+use dclutch_dealer_contract::{
+    frame::DEALER_CONFIG_SCHEMA_RELEASE_ID_V1,
+    runtime::{LiquidityConfigViewV1, LiquidityProfileV1},
+};
 use dclutch_direct_contract::{
     VENUE_FEE_POLICY_BYTES_V3, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3, VenueFeePolicyV3,
 };
@@ -1014,48 +1019,16 @@ fn validate_dealer_config(content: &[u8]) -> bool {
     let Ok(content_id) = CoreContentId::new(hash(content).to_bytes()) else {
         return false;
     };
-    let mut canonical = [0u8; 4_176];
-    let Some(output) = canonical.get_mut(..content.len()) else {
-        return false;
-    };
-    macro_rules! admit {
-        ($n:literal, $b:literal) => {
-            if LiquidityConfigV1::<$n, $b>::encoded_len() == Ok(content.len())
-                && LiquidityConfigV1::<$n, $b>::decode(content_id, content)
-                    .and_then(|value| value.encode_into(output))
-                    .is_ok()
-                && output == content
-            {
-                return true;
-            }
-        };
+    let mut outcomes = 2usize;
+    while outcomes <= 16 {
+        if let Ok(profile) = LiquidityProfileV1::from_config_len(outcomes, content.len())
+            && (2..=8).contains(&profile.bins())
+            && LiquidityConfigViewV1::new(content_id, profile, content).is_ok()
+        {
+            return true;
+        }
+        outcomes += 1;
     }
-    macro_rules! admit_n {
-        ($n:literal) => {
-            admit!($n, 2);
-            admit!($n, 3);
-            admit!($n, 4);
-            admit!($n, 5);
-            admit!($n, 6);
-            admit!($n, 7);
-            admit!($n, 8);
-        };
-    }
-    admit_n!(2);
-    admit_n!(3);
-    admit_n!(4);
-    admit_n!(5);
-    admit_n!(6);
-    admit_n!(7);
-    admit_n!(8);
-    admit_n!(9);
-    admit_n!(10);
-    admit_n!(11);
-    admit_n!(12);
-    admit_n!(13);
-    admit_n!(14);
-    admit_n!(15);
-    admit_n!(16);
     false
 }
 
@@ -2106,6 +2079,50 @@ mod tests {
         assert!(validate_found_schema(release, &bytes));
         *bytes.get_mut(11).expect("reserved byte") = 1;
         assert!(!validate_found_schema(release, &bytes));
+    }
+
+    #[test]
+    fn dealer_record_view_preserves_the_closed_profile_set_and_checks_the_full_slice() {
+        let release = SchemaReleaseId::new(DEALER_CONFIG_SCHEMA_RELEASE_ID_V1).expect("schema");
+        let large = LiquidityConfigV1::<16, 8>::new(
+            CoreContentId::new([41; 32]).expect("content"),
+            [42; 32],
+            10_000,
+            25,
+            100,
+            10,
+            [[500, 499, 498, 497, 496, 495, 494, 493]; 16],
+            [[625, 626, 627, 628, 629, 630, 631, 632]; 16],
+            [[100; 8]; 16],
+            [[100; 8]; 16],
+        )
+        .expect("largest admitted Dealer config");
+        let mut large_bytes = vec![0; LiquidityConfigV1::<16, 8>::encoded_len().expect("width")];
+        large.encode_into(&mut large_bytes).expect("encode config");
+        assert!(validate_found_schema(release, &large_bytes));
+
+        let last = large_bytes.len() - 1;
+        *large_bytes.get_mut(last).expect("last capacity byte") = 0;
+        assert!(!validate_found_schema(release, &large_bytes));
+
+        let one_bin = LiquidityConfigV1::<2, 1>::new(
+            CoreContentId::new([43; 32]).expect("content"),
+            [44; 32],
+            10_000,
+            25,
+            100,
+            10,
+            [[4_000]; 2],
+            [[6_000]; 2],
+            [[100]; 2],
+            [[100]; 2],
+        )
+        .expect("contract-valid one-bin config");
+        let mut one_bin_bytes = vec![0; LiquidityConfigV1::<2, 1>::encoded_len().expect("width")];
+        one_bin
+            .encode_into(&mut one_bin_bytes)
+            .expect("encode config");
+        assert!(!validate_found_schema(release, &one_bin_bytes));
     }
 
     #[test]

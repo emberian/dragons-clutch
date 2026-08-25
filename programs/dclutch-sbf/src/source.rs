@@ -1,6 +1,6 @@
 //! Executable Source/recovery lifecycle and the pinned Pyth provider boundary.
 
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 
 use dclutch_capability_contract::{
     CapabilityFundingDerivationV1, CapabilityManifestV1, FundingAssetClassV1, FundingCompartment,
@@ -8,27 +8,28 @@ use dclutch_capability_contract::{
 };
 use dclutch_core_contract::{ContentId as CoreContentId, Phase};
 use dclutch_market_contract::market::{
-    decode_market_outcome_count, CategoricalMarketV1, CategoricalSettlementSummaryV1,
+    CategoricalMarketV1, CategoricalSettlementSummaryV1, decode_market_outcome_count,
 };
-use dclutch_product_contract::{terminal::ResolutionKind, ContentId as ProductContentId};
+use dclutch_product_contract::{ContentId as ProductContentId, terminal::ResolutionKind};
 use dclutch_pyth_svm::{
     FullPriceUpdateV2, PostUpdateParamsView, ProgramDataV3View, ProgramV3View, PythReleaseV1,
     ReceiverConfigV2View,
 };
-use dclutch_rent_contract::{RefundAuthority, RENT_CREDIT_BYTES_V1};
+use dclutch_rent_contract::{RENT_CREDIT_BYTES_V1, RefundAuthority};
 use dclutch_source_contract::{
-    accept_shared_provider_output_in_place_v1, create_shared_observation_state_into_v1,
-    encode_shared_evidence_set_preimage_v1, shared_evidence_set_preimage_len_v1,
-    validate_source_frame_v1, AcceptEvidenceInstructionV1, AcceptSharedObservationInstructionV1,
-    CommitFailureInstructionV1, ContentId as SourceContentId, CreateResolutionInstructionV1,
+    AcceptEvidenceInstructionV1, AcceptSharedObservationInstructionV1, CommitFailureInstructionV1,
+    ContentId as SourceContentId, CreateResolutionInstructionV1,
     CreateSharedObservationInstructionV1, GenerationInstructionV1, MarketChildDeltaKindV1,
     NormalizedProviderEvidenceV1, PythProviderAdapterObligationV1, RetireInstructionV1,
-    SharedObservationPhaseV1, SharedObservationStateV1, SharedObservationStateViewV1,
+    SHARED_OBSERVATION_PDA_DOMAIN_V1, SHARED_OBSERVATION_STATE_BYTES,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SOURCE_RESOLUTION_STATE_BYTES,
+    SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V1, SharedObservationPhaseV1, SharedObservationStateViewV1,
     SourceAccessProfile, SourceAccountPrivilegeV1, SourceFrameKindV1, SourceInstructionV1,
-    SourceMaterialV1, SourceMaterialViewV1, SourceResolutionDecisionV1, SourceResolutionPhaseV1,
-    SourceResolutionRouteV1, SourceResolutionStateV1, SHARED_OBSERVATION_PDA_DOMAIN_V1,
-    SHARED_OBSERVATION_STATE_BYTES, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
-    SOURCE_RESOLUTION_STATE_BYTES, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V1,
+    SourceMaterialViewV1, SourceResolutionDecisionV1, SourceResolutionPhaseV1,
+    SourceResolutionRouteV1, SourceResolutionStateV1, accept_shared_provider_output_in_place_v1,
+    create_shared_observation_state_into_v1, encode_shared_evidence_set_preimage_v1,
+    retire_shared_observation_in_place_v1, shared_evidence_set_preimage_len_v1,
+    validate_source_frame_v1,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -44,13 +45,13 @@ use solana_sdk_ids::{native_loader, system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign, create_account, transfer};
 
 use crate::{
-    authenticate::{selected_release, PriceFrame, ProviderFacts, MARKET_SEED, SYSTEM_PROGRAM},
+    AdapterError,
+    authenticate::{MARKET_SEED, PriceFrame, ProviderFacts, SYSTEM_PROGRAM, selected_release},
     provider,
     records::{
-        authenticate_rent_credit, derive_record_pda, with_authenticated_finalized_record_v1,
-        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, authenticate_rent_credit, derive_record_pda,
+        with_authenticated_finalized_record_v1,
     },
-    AdapterError,
 };
 
 const RECEIVER_CONFIG_SEED: &[u8] = b"config";
@@ -422,13 +423,6 @@ fn process_accept_evidence(
     let rent_sysvar = account(accounts, rent_index)?;
     let clock_account = account(accounts, clock_index)?;
     require_rent_clock(rent_sysvar, clock_account)?;
-    let material = authenticate_material(
-        program_id,
-        material_account,
-        material_staging,
-        rent_sysvar,
-        state.material_id(),
-    )?;
     let market = market_facts(
         program_id,
         market_account,
@@ -437,111 +431,147 @@ fn process_accept_evidence(
         true,
     )?;
     let now = clock(clock_account)?;
-    let (source_id, source) = active_source(state, material)?;
-    let expected_shared = source.access_profile() == SourceAccessProfile::SharedObservationChild;
-    if expected_shared != shared.is_some() {
-        return Err(AdapterError::AccountFrameLength.into());
-    }
-    let mut funding_after = None;
-    let funding_allocation = if let Some((manifest_index, funding_index)) = funding_indices {
-        let manifest_account = account(accounts, manifest_index)?;
-        let funding_account = account(accounts, funding_index)?;
-        let anticipated_fee = if extension_index.is_some() {
-            Some(provider_fee(
-                material,
-                source_id,
-                accounts,
-                extension_index.ok_or(AdapterError::AccountFrameLength)?,
-                rent_sysvar,
-                payload,
-                &now,
-            )?)
-        } else {
-            None
-        };
-        let authenticated = authenticate_recovery_funding(
-            program_id,
-            market_account,
-            manifest_account,
-            funding_account,
-            rent_sysvar,
-            market.capability_manifest_id,
-            state.material_id(),
-            anticipated_fee,
-            extension_index
-                .map(|index| account(accounts, index))
-                .transpose()?,
-        )?;
-        funding_after = authenticated.next_state;
-        Some(authenticated.allocation_id)
-    } else {
-        None
-    };
-
-    let (evidence_id, evidence, shared_state, pyth_frame) = if let Some(shared_index) = shared {
-        if !payload.is_empty() {
-            return Err(AdapterError::InvalidInstruction.into());
-        }
-        let child = decode_shared_state(program_id, account(accounts, shared_index)?)?;
-        let evidence_id = child.evidence_id().ok_or(AdapterError::ReplayMismatch)?;
-        let evidence = collect_observations(child)?;
-        (evidence_id, evidence, Some(child), None)
-    } else {
-        let extension_index = extension_index.ok_or(AdapterError::AccountFrameLength)?;
-        let pyth = authenticate_pyth(
-            material,
-            source_id,
-            accounts,
-            extension_index,
-            rent_sysvar,
-            payload,
-            &now,
-            0,
-        )?;
-        let update = provider::post_and_load(
-            &pyth.frame,
-            pyth.facts,
-            payload,
-            now.slot,
-            pyth.obligation.adapter_config().provider_feed_id(),
-        )?;
-        let evidence_id = SourceContentId::new(hash(payload).to_bytes())
-            .map_err(|_| AdapterError::ContentIdentity)?;
-        let schedule_id = material.window().schedule_id();
-        let normalized = normalize_update(pyth.obligation, evidence_id, schedule_id, 0, update)?;
-        (evidence_id, vec![normalized], None, Some(pyth.frame))
-    };
-    let decision = state
-        .accept_provider_output(
-            state.material_id(),
-            material,
-            evidence_id,
-            &evidence,
-            shared_state,
-            funding_allocation,
-            request.generation(),
-            now.unix_timestamp,
-            request.terminal_sequence(),
-        )
-        .map_err(|_| AdapterError::MarketTransition)?;
-    if decision.outcome_count() != market.outcome_count {
-        return Err(AdapterError::MarketTransition.into());
-    }
-    if let Some(frame) = pyth_frame {
-        provider::reclaim(&frame)?;
-    }
-    let market_bytes = settle_market(
+    with_authenticated_material(
         program_id,
-        market_account,
-        request.generation(),
+        material_account,
+        material_staging,
+        rent_sysvar,
         state.material_id(),
-        decision,
-    )?;
-    if let (Some((_, funding_index)), Some(next)) = (funding_indices, funding_after) {
-        persist_exact(account(accounts, funding_index)?, &next.to_bytes())?;
-    }
-    persist_exact(state_account, &state.to_bytes())?;
-    persist_bytes(market_account, &market_bytes)
+        |material| {
+            let (source_id, source) = active_source_view(state, material)?;
+            let expected_shared =
+                source.access_profile() == SourceAccessProfile::SharedObservationChild;
+            if expected_shared != shared.is_some() {
+                return Err(AdapterError::AccountFrameLength.into());
+            }
+            let mut funding_after = None;
+            let funding_allocation = if let Some((manifest_index, funding_index)) = funding_indices
+            {
+                let manifest_account = account(accounts, manifest_index)?;
+                let funding_account = account(accounts, funding_index)?;
+                let anticipated_fee = if extension_index.is_some() {
+                    Some(provider_fee_view(
+                        material,
+                        source_id,
+                        accounts,
+                        extension_index.ok_or(AdapterError::AccountFrameLength)?,
+                        rent_sysvar,
+                        payload,
+                        &now,
+                    )?)
+                } else {
+                    None
+                };
+                let authenticated = authenticate_recovery_funding(
+                    program_id,
+                    market_account,
+                    manifest_account,
+                    funding_account,
+                    rent_sysvar,
+                    market.capability_manifest_id,
+                    state.material_id(),
+                    anticipated_fee,
+                    extension_index
+                        .map(|index| account(accounts, index))
+                        .transpose()?,
+                )?;
+                funding_after = authenticated.next_state;
+                Some(authenticated.allocation_id)
+            } else {
+                None
+            };
+
+            let (decision, pyth_frame) = if let Some(shared_index) = shared {
+                if !payload.is_empty() {
+                    return Err(AdapterError::InvalidInstruction.into());
+                }
+                let child_account = account(accounts, shared_index)?;
+                let child_data = child_account
+                    .try_borrow_data()
+                    .map_err(|_| AdapterError::AccountData)?;
+                let child = decode_shared_state_view(program_id, child_account, &child_data)?;
+                let evidence_id = child
+                    .evidence_id()
+                    .map_err(|_| AdapterError::AccountData)?
+                    .ok_or(AdapterError::ReplayMismatch)?;
+                let evidence = collect_observations_view(child)?;
+                let decision = state
+                    .accept_provider_output_view(
+                        state.material_id(),
+                        material,
+                        evidence_id,
+                        &evidence,
+                        Some(child),
+                        funding_allocation,
+                        request.generation(),
+                        now.unix_timestamp,
+                        request.terminal_sequence(),
+                    )
+                    .map_err(|_| AdapterError::MarketTransition)?;
+                (decision, None)
+            } else {
+                let extension_index = extension_index.ok_or(AdapterError::AccountFrameLength)?;
+                let pyth = authenticate_pyth_view(
+                    material,
+                    source_id,
+                    accounts,
+                    extension_index,
+                    rent_sysvar,
+                    payload,
+                    &now,
+                    0,
+                )?;
+                let update = provider::post_and_load(
+                    &pyth.frame,
+                    pyth.facts,
+                    payload,
+                    now.slot,
+                    pyth.obligation.adapter_config().provider_feed_id(),
+                )?;
+                let evidence_id = SourceContentId::new(hash(payload).to_bytes())
+                    .map_err(|_| AdapterError::ContentIdentity)?;
+                let schedule_id = material
+                    .window()
+                    .map_err(|_| AdapterError::MarketTransition)?
+                    .schedule_id();
+                let normalized =
+                    normalize_update(pyth.obligation, evidence_id, schedule_id, 0, update)?;
+                let evidence = [normalized];
+                let decision = state
+                    .accept_provider_output_view(
+                        state.material_id(),
+                        material,
+                        evidence_id,
+                        &evidence,
+                        None,
+                        funding_allocation,
+                        request.generation(),
+                        now.unix_timestamp,
+                        request.terminal_sequence(),
+                    )
+                    .map_err(|_| AdapterError::MarketTransition)?;
+                (decision, Some(pyth.frame))
+            };
+            if decision.outcome_count() != market.outcome_count {
+                return Err(AdapterError::MarketTransition.into());
+            }
+            if let Some(frame) = pyth_frame {
+                provider::reclaim(&frame)?;
+            }
+            let market_bytes = settle_market(
+                program_id,
+                market_account,
+                request.generation(),
+                state.material_id(),
+                decision,
+            )?;
+            if let (Some((_, funding_index)), Some(next)) = (funding_indices, funding_after) {
+                persist_exact(account(accounts, funding_index)?, &next.to_bytes())?;
+            }
+            persist_exact(state_account, &state.to_bytes())?;
+            persist_bytes(market_account, &market_bytes)
+        },
+    )
 }
 
 fn process_fail_next(
@@ -560,13 +590,6 @@ fn process_fail_next(
     let clock_account = account(accounts, 7)?;
     require_rent_clock(rent_sysvar, clock_account)?;
     let mut state = decode_resolution_state(program_id, state_account)?;
-    let material = authenticate_material(
-        program_id,
-        material_account,
-        material_staging,
-        rent_sysvar,
-        state.material_id(),
-    )?;
     let market = market_facts(
         program_id,
         market_account,
@@ -586,15 +609,24 @@ fn process_fail_next(
         None,
     )?;
     let now = clock(clock_account)?;
-    state
-        .fail_next(
-            state.material_id(),
-            material,
-            funding.allocation_id,
-            request.generation(),
-            now.unix_timestamp,
-        )
-        .map_err(|_| AdapterError::MarketTransition)?;
+    with_authenticated_material(
+        program_id,
+        material_account,
+        material_staging,
+        rent_sysvar,
+        state.material_id(),
+        |material| {
+            state
+                .fail_next_view(
+                    state.material_id(),
+                    material,
+                    funding.allocation_id,
+                    request.generation(),
+                    now.unix_timestamp,
+                )
+                .map_err(|_| AdapterError::MarketTransition.into())
+        },
+    )?;
     persist_exact(state_account, &state.to_bytes())
 }
 
@@ -617,13 +649,6 @@ fn process_exhaust(
     let rent_sysvar = account(accounts, 4)?;
     let clock_account = account(accounts, 5)?;
     require_rent_clock(rent_sysvar, clock_account)?;
-    let material = authenticate_material(
-        program_id,
-        material_account,
-        material_staging,
-        rent_sysvar,
-        state.material_id(),
-    )?;
     market_facts(
         program_id,
         market_account,
@@ -631,14 +656,24 @@ fn process_exhaust(
         state.material_id(),
         true,
     )?;
-    state
-        .exhaust(
-            state.material_id(),
-            material,
-            request.generation(),
-            clock(clock_account)?.unix_timestamp,
-        )
-        .map_err(|_| AdapterError::MarketTransition)?;
+    let now = clock(clock_account)?;
+    with_authenticated_material(
+        program_id,
+        material_account,
+        material_staging,
+        rent_sysvar,
+        state.material_id(),
+        |material| {
+            state
+                .exhaust_view(
+                    state.material_id(),
+                    material,
+                    request.generation(),
+                    now.unix_timestamp,
+                )
+                .map_err(|_| AdapterError::MarketTransition.into())
+        },
+    )?;
     persist_exact(state_account, &state.to_bytes())
 }
 
@@ -655,13 +690,6 @@ fn process_commit_failure(
     let rent_sysvar = account(accounts, 4)?;
     require_rent(rent_sysvar)?;
     let mut state = decode_resolution_state(program_id, state_account)?;
-    let material = authenticate_material(
-        program_id,
-        material_account,
-        material_staging,
-        rent_sysvar,
-        state.material_id(),
-    )?;
     let market = market_facts(
         program_id,
         market_account,
@@ -670,15 +698,24 @@ fn process_commit_failure(
         true,
     )?;
     let now = Clock::get().map_err(|_| AdapterError::AccountData)?;
-    let decision = state
-        .commit_failure(
-            state.material_id(),
-            material,
-            request.generation(),
-            now.unix_timestamp,
-            request.terminal_sequence(),
-        )
-        .map_err(|_| AdapterError::MarketTransition)?;
+    let decision = with_authenticated_material(
+        program_id,
+        material_account,
+        material_staging,
+        rent_sysvar,
+        state.material_id(),
+        |material| {
+            state
+                .commit_failure_view(
+                    state.material_id(),
+                    material,
+                    request.generation(),
+                    now.unix_timestamp,
+                    request.terminal_sequence(),
+                )
+                .map_err(|_| AdapterError::MarketTransition.into())
+        },
+    )?;
     if decision.outcome_count() != market.outcome_count {
         return Err(AdapterError::MarketTransition.into());
     }
@@ -888,9 +925,16 @@ fn process_retire_shared(
     let rent_credit = account(accounts, 2)?;
     let clock_account = account(accounts, 3)?;
     require_clock(clock_account)?;
-    let mut child = decode_shared_state(program_id, child_account)?;
-    let seeds = child.pda_seeds();
-    let material_id = child.material_id();
+    let child_data = child_account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::AccountData)?;
+    let child = decode_shared_state_view(program_id, child_account, &child_data)?;
+    let seeds = child.pda_seeds().map_err(|_| AdapterError::AccountData)?;
+    let material_id = child.material_id().map_err(|_| AdapterError::AccountData)?;
+    let rent_beneficiary = child
+        .rent_beneficiary()
+        .map_err(|_| AdapterError::AccountData)?;
+    drop(child_data);
     let market = market_facts(
         program_id,
         market_account,
@@ -898,23 +942,10 @@ fn process_retire_shared(
         material_id,
         false,
     )?;
-    authenticate_existing_rent_credit_without_sysvar(
-        program_id,
-        rent_credit,
-        child.rent_beneficiary(),
-    )?;
+    authenticate_existing_rent_credit_without_sysvar(program_id, rent_credit, rent_beneficiary)?;
     if market_account.key.to_bytes() != seeds.market() {
         return Err(AdapterError::AccountIdentity.into());
     }
-    let delta = child
-        .retire(
-            request.generation(),
-            clock(clock_account)?.unix_timestamp,
-            request.expected_market_child_count(),
-            market.child_count,
-        )
-        .map_err(|_| AdapterError::MarketTransition)?;
-    require_retire_delta(delta, market.child_count)?;
     let market_bytes = retire_market_child(
         program_id,
         market_account,
@@ -922,6 +953,20 @@ fn process_retire_shared(
         material_id,
         request.expected_market_child_count(),
     )?;
+    let delta = {
+        let mut child_data = child_account
+            .try_borrow_mut_data()
+            .map_err(|_| AdapterError::AccountData)?;
+        retire_shared_observation_in_place_v1(
+            &mut child_data,
+            request.generation(),
+            clock(clock_account)?.unix_timestamp,
+            request.expected_market_child_count(),
+            market.child_count,
+        )
+        .map_err(|_| AdapterError::MarketTransition)?
+    };
+    require_retire_delta(delta, market.child_count)?;
     persist_bytes(market_account, &market_bytes)?;
     close_to_rent_credit(child_account, rent_credit)
 }
@@ -1451,8 +1496,8 @@ struct PythExecution<'a, 'info> {
     obligation: PythProviderAdapterObligationV1,
 }
 
-fn provider_fee(
-    material: SourceMaterialV1,
+fn provider_fee_view(
+    material: SourceMaterialViewV1<'_>,
     source_id: SourceContentId,
     accounts: &[AccountInfo<'_>],
     extension_index: usize,
@@ -1460,7 +1505,7 @@ fn provider_fee(
     payload: &[u8],
     clock: &Clock,
 ) -> Result<u64, ProgramError> {
-    authenticate_pyth_static(
+    authenticate_pyth_static_view(
         material,
         source_id,
         accounts,
@@ -1470,47 +1515,6 @@ fn provider_fee(
         clock,
     )
     .map(|facts| facts.0.fee)
-}
-
-fn authenticate_pyth<'a, 'info>(
-    material: SourceMaterialV1,
-    source_id: SourceContentId,
-    accounts: &'a [AccountInfo<'info>],
-    extension_index: usize,
-    rent_sysvar: &'a AccountInfo<'info>,
-    payload: &[u8],
-    clock: &Clock,
-    anticipated_credit: u64,
-) -> Result<PythExecution<'a, 'info>, ProgramError> {
-    let (facts, obligation, release) = authenticate_pyth_static(
-        material,
-        source_id,
-        accounts,
-        extension_index,
-        rent_sysvar,
-        payload,
-        clock,
-    )?;
-    let resolver = account(accounts, extension_index)?;
-    let available = resolver
-        .lamports()
-        .checked_add(anticipated_credit)
-        .ok_or(AdapterError::Arithmetic)?;
-    if available
-        < facts
-            .update_rent
-            .checked_add(facts.fee)
-            .ok_or(AdapterError::Arithmetic)?
-    {
-        return Err(AdapterError::FundUnderfunded.into());
-    }
-    let frame = pyth_price_frame(accounts, extension_index, rent_sysvar)?;
-    let _ = release;
-    Ok(PythExecution {
-        frame,
-        facts,
-        obligation,
-    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1524,10 +1528,9 @@ fn authenticate_pyth_view<'a, 'info>(
     clock: &Clock,
     anticipated_credit: u64,
 ) -> Result<PythExecution<'a, 'info>, ProgramError> {
-    let obligation = PythProviderAdapterObligationV1::from_material_view(material, source_id)
-        .map_err(|_| AdapterError::ReleaseUnavailable)?;
-    let (facts, release) = authenticate_pyth_obligation(
-        obligation,
+    let (facts, obligation, release) = authenticate_pyth_static_view(
+        material,
+        source_id,
         accounts,
         extension_index,
         rent_sysvar,
@@ -1556,8 +1559,8 @@ fn authenticate_pyth_view<'a, 'info>(
     })
 }
 
-fn authenticate_pyth_static(
-    material: SourceMaterialV1,
+fn authenticate_pyth_static_view(
+    material: SourceMaterialViewV1<'_>,
     source_id: SourceContentId,
     accounts: &[AccountInfo<'_>],
     extension_index: usize,
@@ -1572,7 +1575,7 @@ fn authenticate_pyth_static(
     ),
     ProgramError,
 > {
-    let obligation = PythProviderAdapterObligationV1::from_material(material, source_id)
+    let obligation = PythProviderAdapterObligationV1::from_material_view(material, source_id)
         .map_err(|_| AdapterError::ReleaseUnavailable)?;
     let (facts, release) = authenticate_pyth_obligation(
         obligation,
@@ -1765,14 +1768,14 @@ fn normalize_update(
         .map_err(|_| AdapterError::ProviderAuthentication.into())
 }
 
-fn active_source(
+fn active_source_view(
     state: SourceResolutionStateV1,
-    material: SourceMaterialV1,
+    material: SourceMaterialViewV1<'_>,
 ) -> Result<(SourceContentId, dclutch_source_contract::SourceSpecV1), ProgramError> {
     match state.phase() {
-        SourceResolutionPhaseV1::Primary => {
-            Ok((material.primary_source_id(), material.primary_source()))
-        }
+        SourceResolutionPhaseV1::Primary => material
+            .primary_source()
+            .map_err(|_| AdapterError::ContentIdentity.into()),
         SourceResolutionPhaseV1::Recovery => {
             let slot = material
                 .recovery_slot(
@@ -1785,26 +1788,6 @@ fn active_source(
         }
         _ => Err(AdapterError::ReplayMismatch.into()),
     }
-}
-
-fn collect_observations(
-    child: SharedObservationStateV1,
-) -> Result<Vec<NormalizedProviderEvidenceV1>, ProgramError> {
-    let count = usize::from(child.observation_count());
-    let mut observations = Vec::new();
-    observations
-        .try_reserve_exact(count)
-        .map_err(|_| AdapterError::Arithmetic)?;
-    let mut index = 0u16;
-    while index < child.observation_count() {
-        observations.push(
-            child
-                .observation(index)
-                .map_err(|_| AdapterError::AccountData)?,
-        );
-        index = index.checked_add(1).ok_or(AdapterError::Arithmetic)?;
-    }
-    Ok(observations)
 }
 
 fn collect_observations_view(
@@ -1867,27 +1850,6 @@ fn decode_shared_state_view<'a>(
     Ok(state)
 }
 
-fn authenticate_material<'info>(
-    program_id: &Pubkey,
-    raw: &AccountInfo<'info>,
-    staging: &AccountInfo<'info>,
-    rent_sysvar: &AccountInfo<'info>,
-    expected_id: SourceContentId,
-) -> Result<SourceMaterialV1, ProgramError> {
-    with_authenticated_finalized_record_v1(
-        program_id,
-        raw,
-        staging,
-        rent_sysvar,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
-        expected_id.to_bytes(),
-        |record| {
-            SourceMaterialV1::decode(record.exact_content())
-                .map_err(|_| AdapterError::AccountData.into())
-        },
-    )
-}
-
 fn with_authenticated_material<'a, T>(
     program_id: &Pubkey,
     raw: &AccountInfo<'a>,
@@ -1937,47 +1899,6 @@ fn decode_resolution_state(
             seeds.domain(),
             market.as_slice(),
             generation.as_slice(),
-            bump.as_slice(),
-        ],
-        program_id,
-    )
-    .map_err(|_| AdapterError::AccountIdentity)?;
-    if account.key != &expected {
-        return Err(AdapterError::AccountIdentity.into());
-    }
-    Ok(state)
-}
-
-fn decode_shared_state(
-    program_id: &Pubkey,
-    account: &AccountInfo<'_>,
-) -> Result<SharedObservationStateV1, ProgramError> {
-    if account.owner != program_id
-        || account.executable
-        || account.data_len() != SHARED_OBSERVATION_STATE_BYTES
-    {
-        return Err(AdapterError::AccountIdentity.into());
-    }
-    let data = account
-        .try_borrow_data()
-        .map_err(|_| AdapterError::AccountData)?;
-    let state = SharedObservationStateV1::decode(&data).map_err(|_| AdapterError::AccountData)?;
-    if state.to_bytes().as_slice() != &data[..] {
-        return Err(AdapterError::AccountData.into());
-    }
-    let seeds = state.pda_seeds();
-    let market = seeds.market();
-    let generation = seeds.generation_le();
-    let source = seeds.source_spec_id().to_bytes();
-    let window = seeds.window_spec_id().to_bytes();
-    let bump = [seeds.bump()];
-    let expected = Pubkey::create_program_address(
-        &[
-            seeds.domain(),
-            market.as_slice(),
-            generation.as_slice(),
-            source.as_slice(),
-            window.as_slice(),
             bump.as_slice(),
         ],
         program_id,
