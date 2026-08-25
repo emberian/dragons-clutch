@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/dclutch-bearer-contract",
     "crates/dclutch-capability-contract",
     "crates/dclutch-collateral-contract",
     "crates/dclutch-core-contract",
@@ -14,10 +15,12 @@ members = [
     "crates/dclutch-product-compiler",
     "crates/dclutch-product-contract",
     "crates/dclutch-record-contract",
+    "crates/dclutch-release-tool",
     "crates/dclutch-realm-contract",
     "crates/dclutch-rent-contract",
     "crates/dclutch-series-contract",
     "crates/dclutch-source-contract",
+    "crates/dclutch-structured-contract",
     "crates/dclutch-terminal-contract",
     "crates/dclutch-token-svm",
     "programs/dclutch-sbf",
