@@ -459,6 +459,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-market-core-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-release-set-contract",
+]
+
+[[package]]
 name = "dclutch-operator"
 version = "0.1.0"
 dependencies = [

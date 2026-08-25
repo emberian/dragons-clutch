@@ -9,8 +9,6 @@ description = "Generated fixed-memory interpreter for the Lean-owned dClutch Mar
 [dependencies]
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"
