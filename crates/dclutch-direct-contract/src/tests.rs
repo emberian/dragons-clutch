@@ -4,7 +4,9 @@ use dclutch_realm_contract::PositionV1;
 
 use super::*;
 use crate::adapter::{
-    admit_settlement_packet_v2, canonical_ed25519_test_instruction,
+    AdapterActionV2, ED25519_PROGRAM_ID_3_0, Ed25519ExpectationV2, Ed25519InstructionViewV2,
+    MEASURED_LOOKUP_TABLES_V2, MEASURED_TRANSACTION_SIGNATURES_V2, PacketAdmissionV2,
+    SOLANA_PACKET_DATA_SIZE_3_0, admit_settlement_packet_v2, canonical_ed25519_test_instruction,
     canonical_ed25519_test_instruction_len, decode_inline_complementary_instruction_v2,
     decode_inline_ordinary_instruction_v2, decode_ordinary_instruction_v2,
     encode_cancel_instruction_v2, encode_inline_complementary_instruction_v2,
@@ -12,9 +14,7 @@ use crate::adapter::{
     encode_register_instruction_v2, inline_complementary_instruction_bytes_v2,
     inspect_preceding_ed25519_batch_v2, inspect_preceding_ed25519_v2,
     measured_inline_complementary_reference_v2, measured_settlement_envelope_v2,
-    stateless_shared_message_ed25519_minimum_v2, AdapterActionV2, Ed25519ExpectationV2,
-    Ed25519InstructionViewV2, PacketAdmissionV2, ED25519_PROGRAM_ID_3_0, MEASURED_LOOKUP_TABLES_V2,
-    MEASURED_TRANSACTION_SIGNATURES_V2, SOLANA_PACKET_DATA_SIZE_3_0,
+    stateless_shared_message_ed25519_minimum_v2,
 };
 
 fn key(value: u8) -> [u8; 32] {
@@ -95,8 +95,8 @@ fn position_n<const N: usize>(owner: u8, balances: [u64; N]) -> Result<PositionV
     PositionV1::new(key(7), key(owner), 3, balances).map_err(position_error)
 }
 
-fn policy(bps: u16) -> Result<VenueFeePolicyV2> {
-    VenueFeePolicyV2::new(key(7), 3, key(99), bps)
+fn policy(bps: u16) -> Result<VenueFeePolicyV3> {
+    VenueFeePolicyV3::new(key(99), bps)
 }
 
 fn buy_reserve(value: DirectIntentV2) -> u64 {
@@ -271,18 +271,33 @@ fn fixed_layout_round_trips_one_semantic_intent_root_and_record() -> Result<()> 
         registration.record
     );
     let venue_policy = policy(100)?;
-    let mut policy_bytes = [0; VENUE_FEE_POLICY_BYTES_V2];
+    let mut policy_bytes = [0; VENUE_FEE_POLICY_BYTES_V3];
     venue_policy.encode(&mut policy_bytes)?;
-    assert_eq!(VenueFeePolicyV2::decode(&policy_bytes)?, venue_policy);
-    assert_eq!(VENUE_FEE_POLICY_BYTES_V2, 88);
+    assert_eq!(VenueFeePolicyV3::decode(&policy_bytes)?, venue_policy);
+    assert_eq!(VENUE_FEE_POLICY_BYTES_V3, 48);
     assert_eq!(
-        VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2[0..4],
-        [0xd0, 0xcb, 0x14, 0x80]
+        VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3[0..4],
+        [0x28, 0x1d, 0x89, 0x6e]
     );
-    validate_venue_policy_selection_v2(value, policy(100)?, key(8))?;
+    validate_venue_policy_selection_v3(value, policy(100)?, key(8))?;
     assert_eq!(
-        validate_venue_policy_selection_v2(value, policy(100)?, key(9)),
+        validate_venue_policy_selection_v3(value, policy(100)?, key(9)),
         Err(Error::VenueUnauthorized)
+    );
+    assert_eq!(
+        validate_venue_policy_selection_v3(value, policy(101)?, key(8)),
+        Err(Error::VenueUnauthorized)
+    );
+    crate::state::venue_authorized(value, policy(100)?, key(8), key(99))?;
+    assert_eq!(
+        crate::state::venue_authorized(value, policy(100)?, key(8), key(98)),
+        Err(Error::VenueUnauthorized)
+    );
+    let mut obsolete_cyclic_policy = [0_u8; 88];
+    obsolete_cyclic_policy[..8].copy_from_slice(b"DCLTFEE2");
+    assert_eq!(
+        VenueFeePolicyV3::decode(&obsolete_cyclic_policy),
+        Err(Error::InvalidLength)
     );
     assert_eq!(registration.reserved_collateral_debit, 6);
     Ok(())
@@ -1039,10 +1054,12 @@ fn complementary_paths_are_custodied_conservative_and_atomic_on_refusal() -> Res
     let merge = crate::settlement::settle_merge_v2(merge_input)?;
     assert_eq!(merge.seller_gross_collateral_credits, [5, 5]);
     assert_eq!(merge.market_vault_collateral_debit, 10);
-    assert!(merge
-        .seller_records
-        .iter()
-        .all(RecordAfterFillV2::is_closed));
+    assert!(
+        merge
+            .seller_records
+            .iter()
+            .all(RecordAfterFillV2::is_closed)
+    );
     let mut merge_roots = merge_input.seller_replay_roots;
     let mut merge_records = merge_input.seller_records;
     let mut merge_closes = [None; 2];
@@ -1316,7 +1333,9 @@ fn inline_fok_ioc_consumes_same_nonce_without_live_rent_and_cross_mode_replay_re
         seller_position: position(1, [5, 0])?,
         buyer_position: position(2, [0, 0])?,
         collateral_mint: key(6),
-        buyer_debit_authority: buy_authority(bid, 3),
+        // The maker approved the signed worst case (10 at 0.6); this IOC
+        // consumes only 5 at 0.6 and deliberately leaves residual allowance.
+        buyer_debit_authority: buy_authority(bid, 6),
         fill: 5,
         execution_price: 600_000,
         fee_policy: policy(0)?,
@@ -1329,6 +1348,75 @@ fn inline_fok_ioc_consumes_same_nonce_without_live_rent_and_cross_mode_replay_re
     assert_eq!(settled.seller_replay_root.live_intent_count(), 0);
     assert_eq!(settled.seller_replay_root.rent_payer(), &key(200));
     assert_eq!(settled.buyer_replay_root.rent_payer(), &key(200));
+
+    let improved_ask = intent_lifecycle(
+        IntentLifecycleV2::InlineFillOrKill,
+        (3, Side::Sell, 0, 0, 400_000, 10, 0),
+    )?;
+    let improved_bid = intent_lifecycle(
+        IntentLifecycleV2::InlineFillOrKill,
+        (4, Side::Buy, 0, 0, 600_000, 10, 0),
+    )?;
+    let improved_instruction =
+        encode_inline_ordinary_instruction_v2(10, 500_000, improved_ask, improved_bid)?;
+    let improved_ed =
+        canonical_ed25519_test_instruction([key(3), key(4)], [34, 266], [232, 232], 5);
+    let improved_authorizations = inspect_preceding_ed25519_batch_v2(
+        Ed25519InstructionViewV2 {
+            program_id: ED25519_PROGRAM_ID_3_0,
+            ed25519_data: improved_ed
+                .get(..canonical_ed25519_test_instruction_len(2))
+                .ok_or(Error::InvalidSignatureInstruction)?,
+            preceding_index: 4,
+            current_index: 5,
+            current_data: &improved_instruction,
+        },
+        [
+            Ed25519ExpectationV2 {
+                message_offset: 34,
+                signer: key(3),
+                message: &improved_ask.signed_preimage(),
+            },
+            Ed25519ExpectationV2 {
+                message_offset: 266,
+                signer: key(4),
+                message: &improved_bid.signed_preimage(),
+            },
+        ],
+    )?;
+    let improved_match = InlineOrdinaryMatchV2 {
+        phase: adapter::MarketPhaseV2::Open,
+        slot: 12,
+        seller_replay_root: ReplayRootStateV2::absent(3),
+        buyer_replay_root: ReplayRootStateV2::absent(4),
+        root_creation_payer: key(200),
+        seller_intent: improved_ask,
+        buyer_intent: improved_bid,
+        seller_authorization: improved_authorizations[0],
+        buyer_authorization: improved_authorizations[1],
+        seller_accounts: inline_accounts(improved_ask),
+        buyer_accounts: inline_accounts(improved_bid),
+        seller_position: position(3, [10, 0])?,
+        buyer_position: position(4, [0, 0])?,
+        collateral_mint: key(6),
+        // Worst-case signed approval is 6; the improved execution debits 5.
+        buyer_debit_authority: buy_authority(improved_bid, 6),
+        fill: 10,
+        execution_price: 500_000,
+        fee_policy: policy(0)?,
+        fee_config_digest: key(8),
+        fee_recipient_account: key(99),
+    };
+    assert_eq!(
+        settle_inline_ordinary_v2(InlineOrdinaryMatchV2 {
+            buyer_debit_authority: buy_authority(improved_bid, 4),
+            ..improved_match
+        }),
+        Err(Error::InvalidBuyDebitAuthority)
+    );
+    let improved = settle_inline_ordinary_v2(improved_match)?;
+    assert_eq!(improved.gross_collateral_transfer, 5);
+    assert_eq!(improved.buyer_replay_root.next_registration_nonce(), 1);
 
     let resting_same_nonce = intent(1, Side::Sell, 0, 0, 400_000, 5, 0)?;
     assert_eq!(
@@ -1355,7 +1443,7 @@ fn inline_fok_ioc_consumes_same_nonce_without_live_rent_and_cross_mode_replay_re
                 seller_position: position(1, [5, 0])?,
                 buyer_position: position(2, [0, 0])?,
                 collateral_mint: key(6),
-                buyer_debit_authority: buy_authority(bid, 3),
+                buyer_debit_authority: buy_authority(bid, 6),
                 fill: 5,
                 execution_price: 600_000,
                 fee_policy: policy(0)?,
@@ -1648,10 +1736,10 @@ fn hostile_action_routing_phase_and_slot_matrix_refuse() -> Result<()> {
 }
 
 #[test]
-fn token_delegate_and_live_record_escrow_authority_are_exact() -> Result<()> {
+fn registered_delegate_is_exact_inline_is_sufficient_and_escrow_authority_is_exact() -> Result<()> {
     let value = intent(1, Side::Buy, 0, 0, PRICE_SCALE, 2, 0)?;
     let authority = buy_authority(value, 2);
-    adapter::validate_buy_debit_authority_v2(
+    adapter::validate_registered_buy_debit_authority_v2(
         authority,
         value,
         accounts(value).replay_root,
@@ -1659,7 +1747,7 @@ fn token_delegate_and_live_record_escrow_authority_are_exact() -> Result<()> {
         2,
     )?;
     assert_eq!(
-        adapter::validate_buy_debit_authority_v2(
+        adapter::validate_registered_buy_debit_authority_v2(
             adapter::BuyDebitAuthorityV2 {
                 delegate: key(222),
                 ..authority
@@ -1672,9 +1760,32 @@ fn token_delegate_and_live_record_escrow_authority_are_exact() -> Result<()> {
         Err(Error::InvalidBuyDebitAuthority)
     );
     assert_eq!(
-        adapter::validate_buy_debit_authority_v2(
+        adapter::validate_registered_buy_debit_authority_v2(
             adapter::BuyDebitAuthorityV2 {
                 delegated_amount: 3,
+                ..authority
+            },
+            value,
+            accounts(value).replay_root,
+            key(6),
+            2,
+        ),
+        Err(Error::InvalidBuyDebitAuthority)
+    );
+    adapter::validate_inline_buy_debit_authority_v2(
+        adapter::BuyDebitAuthorityV2 {
+            delegated_amount: 3,
+            ..authority
+        },
+        value,
+        accounts(value).replay_root,
+        key(6),
+        2,
+    )?;
+    assert_eq!(
+        adapter::validate_inline_buy_debit_authority_v2(
+            adapter::BuyDebitAuthorityV2 {
+                delegated_amount: 1,
                 ..authority
             },
             value,

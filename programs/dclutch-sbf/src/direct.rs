@@ -9,33 +9,33 @@ use alloc::{vec, vec::Vec};
 
 use dclutch_capability_contract::{ActivationPolicy, CapabilityManifestV1};
 use dclutch_collateral_contract::{
-    CollateralCustodyV1, COLLATERAL_CUSTODY_PDA_DOMAIN, COLLATERAL_VAULT_PDA_DOMAIN,
+    COLLATERAL_CUSTODY_PDA_DOMAIN, COLLATERAL_VAULT_PDA_DOMAIN, CollateralCustodyV1,
 };
 use dclutch_core_contract::{ContentId, MarketRoot, Phase};
 use dclutch_direct_contract::{
-    adapter, cancel_intent_v2, cancel_through_v1, close_invalidated_intent_v1,
-    close_replay_registration_v2, expire_intent_v2, prepare_replay_root_close_v2,
-    register_intent_v2, settle_inline_complementary_v2, settle_inline_ordinary_v2,
-    settle_merge_in_place_v2, settle_ordinary_v2, settle_split_in_place_v2,
-    terminal_rent_credit_close_plan_v1, validate_direct_capability_selection_v2,
     CancellationInputV2, ComplementaryBuyMatchInPlaceV2, ComplementarySellMatchInPlaceV2,
-    DirectCapabilitySelectionV2, DirectIntentRecordV2, DirectIntentV2, ExpirationInputV2,
-    InlineComplementaryMatchV2, InlineOrdinaryMatchV2, InlineParticipantAccountsV2,
-    InvalidatedCloseInputV1, LiveRecordCloseV2, MakerReplayRootV2, OrdinaryMatchV2,
-    ParticipantAccountsV2, RecordAfterFillV2, RegistrationInputV2, ReplayRootStateV2, Side,
-    VenueFeePolicyV2, DIRECT_INTENT_ESCROW_PDA_DOMAIN_V2, DIRECT_INTENT_RECORD_BYTES_V2,
-    DIRECT_INTENT_RECORD_PDA_DOMAIN_V2, MAKER_REPLAY_ROOT_BYTES_V2,
-    MAKER_REPLAY_ROOT_PDA_DOMAIN_V2, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2,
+    DIRECT_INTENT_ESCROW_PDA_DOMAIN_V2, DIRECT_INTENT_RECORD_BYTES_V2,
+    DIRECT_INTENT_RECORD_PDA_DOMAIN_V2, DirectCapabilitySelectionV2, DirectIntentRecordV2,
+    DirectIntentV2, ExpirationInputV2, InlineComplementaryMatchV2, InlineOrdinaryMatchV2,
+    InlineParticipantAccountsV2, InvalidatedCloseInputV1, LiveRecordCloseV2,
+    MAKER_REPLAY_ROOT_BYTES_V2, MAKER_REPLAY_ROOT_PDA_DOMAIN_V2, MakerReplayRootV2,
+    OrdinaryMatchV2, ParticipantAccountsV2, RecordAfterFillV2, RegistrationInputV2,
+    ReplayRootStateV2, Side, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3, VenueFeePolicyV3, adapter,
+    cancel_intent_v2, cancel_through_v1, close_invalidated_intent_v1, close_replay_registration_v2,
+    expire_intent_v2, prepare_replay_root_close_v2, register_intent_v2,
+    settle_inline_complementary_v2, settle_inline_ordinary_v2, settle_merge_in_place_v2,
+    settle_ordinary_v2, settle_split_in_place_v2, terminal_rent_credit_close_plan_v1,
+    validate_direct_capability_selection_v2,
 };
-use dclutch_market_contract::market::{decode_market_outcome_count, CategoricalMarketV1};
-use dclutch_realm_contract::{PositionV1, RealmV1, POSITION_PDA_DOMAIN, REALM_PDA_DOMAIN};
+use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome_count};
+use dclutch_realm_contract::{POSITION_PDA_DOMAIN, PositionV1, REALM_PDA_DOMAIN, RealmV1};
 use dclutch_record_contract::{ContentDigest, RecordKeyV1, SchemaReleaseId};
 use dclutch_rent_contract::{
-    RefundAuthority, RentCreditV1, RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1,
+    RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1,
 };
 use dclutch_token_svm::{
-    close_account, initialize_account3, transfer_checked, AuthorityRole,
-    CollateralAdapterReleaseV1, ExactTransferInput, Mint, TokenAccount, ACCOUNT_BYTES,
+    ACCOUNT_BYTES, AuthorityRole, CollateralAdapterReleaseV1, ExactTransferInput, Mint,
+    TokenAccount, close_account, initialize_account3, transfer_checked,
 };
 use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
 use solana_program::{
@@ -53,16 +53,16 @@ use solana_sdk_ids::{native_loader, system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign, create_account, transfer};
 
 use crate::{
+    AdapterError,
     authenticate::MARKET_SEED,
     realm::{
         recognized_program_loader, require_authority_policy, require_freeze_policy,
         select_adapter_release,
     },
     records::{
-        derive_record_pda, with_authenticated_finalized_record_v1,
-        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, derive_record_pda,
+        with_authenticated_finalized_record_v1,
     },
-    AdapterError,
 };
 
 const SPLIT_BASE: usize = 12;
@@ -107,7 +107,7 @@ struct TransferFacts {
 
 #[derive(Clone, Copy)]
 struct PolicyFacts {
-    policy: VenueFeePolicyV2,
+    policy: VenueFeePolicyV3,
     digest: [u8; 32],
 }
 
@@ -835,10 +835,10 @@ fn authenticate_policy<'info>(
         policy_account,
         staging,
         rent_sysvar,
-        VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2,
+        VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3,
         digest,
         |record| {
-            VenueFeePolicyV2::decode(record.exact_content())
+            VenueFeePolicyV3::decode(record.exact_content())
                 .map_err(|_| AdapterError::DirectAuthentication.into())
         },
     )?;
@@ -936,6 +936,36 @@ fn buy_debit_authority(
         delegate,
         delegated_amount: token.delegated_amount,
     })
+}
+
+fn require_inline_buy_debit_residual(
+    account: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+    realm: RealmFacts,
+    before: adapter::BuyDebitAuthorityV2,
+    consumed: u64,
+) -> Result<(), ProgramError> {
+    let after = authenticate_token_account(account, token_program, realm)?;
+    let residual = before
+        .delegated_amount
+        .checked_sub(consumed)
+        .ok_or(AdapterError::DirectPostcondition)?;
+    // The token program clears a depleted delegate only when it executes a
+    // positive transfer. A zero-price fill performs no token CPI and leaves an
+    // existing zero-allowance delegate representation unchanged.
+    let expected_delegate = if consumed != 0 && residual == 0 {
+        dclutch_token_svm::COption::None
+    } else {
+        dclutch_token_svm::COption::Some(before.delegate)
+    };
+    if after.owner != before.owner
+        || after.mint != before.mint
+        || after.delegate != expected_delegate
+        || after.delegated_amount != residual
+    {
+        return Err(AdapterError::DirectPostcondition.into());
+    }
+    Ok(())
 }
 
 fn escrow_authority(
@@ -3396,6 +3426,13 @@ fn process_inline_ordinary<const N: usize>(
         settlement.venue_fee_transfer,
         &buyer_seeds.refs(),
     )?;
+    require_inline_buy_debit_residual(
+        buyer_collateral,
+        account(accounts, 9)?,
+        realm,
+        debit,
+        settlement.buyer_total_collateral_debit,
+    )?;
     persist_market(market_account, market_after)?;
     persist_root(seller_root_account, settlement.seller_replay_root)?;
     persist_root(buyer_root_account, settlement.buyer_replay_root)?;
@@ -3667,6 +3704,16 @@ fn process_inline_complementary(
                     realm,
                     copied(&settlement.fees, index)?,
                     &seeds.refs(),
+                )?;
+                let consumed = copied(&settlement.gross_collateral, index)?
+                    .checked_add(copied(&settlement.fees, index)?)
+                    .ok_or(AdapterError::Arithmetic)?;
+                require_inline_buy_debit_residual(
+                    account(accounts, base + 2)?,
+                    account(accounts, 11)?,
+                    realm,
+                    copied(&debits, index)?.ok_or(AdapterError::DirectPostcondition)?,
+                    consumed,
                 )?;
             }
         }

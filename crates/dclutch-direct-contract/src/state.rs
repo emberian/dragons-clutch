@@ -2,8 +2,8 @@ use dclutch_realm_contract::PositionV1;
 use dclutch_rent_contract::{RefundAuthority, RentCreditV1, SourceCloseCreditPlanV1};
 
 use crate::{
-    adapter, array, fee, nonzero, one, position_error, put, width, zeros, Error, Result,
-    FEE_BASIS_POINTS_DENOMINATOR, PRICE_SCALE,
+    Error, FEE_BASIS_POINTS_DENOMINATOR, PRICE_SCALE, Result, adapter, array, fee, nonzero, one,
+    position_error, put, width, zeros,
 };
 
 /// Canonical signed-intent preimage magic.
@@ -36,20 +36,23 @@ pub const DIRECT_CANCEL_THROUGH_MAGIC_V1: [u8; 8] = *b"DCLTCTH1";
 pub const DIRECT_CANCEL_THROUGH_SCHEMA_VERSION_V1: u16 = 1;
 /// Exact cancel-through signed-message width.
 pub const DIRECT_CANCEL_THROUGH_BYTES_V1: usize = 96;
-/// Canonical venue-fee-policy magic.
-pub const VENUE_FEE_POLICY_MAGIC_V2: [u8; 8] = *b"DCLTFEE2";
+/// Canonical market-independent venue-fee-policy magic.
+pub const VENUE_FEE_POLICY_MAGIC_V3: [u8; 8] = *b"DCLTFEE3";
 /// Venue-fee-policy schema version.
-pub const VENUE_FEE_POLICY_SCHEMA_VERSION_V2: u16 = 2;
+pub const VENUE_FEE_POLICY_SCHEMA_VERSION_V3: u16 = 3;
 /// Exact venue-fee-policy width.
-pub const VENUE_FEE_POLICY_BYTES_V2: usize = 88;
-/// Immutable-record schema/release identity for one Direct V2 venue policy.
+pub const VENUE_FEE_POLICY_BYTES_V3: usize = 48;
+/// Immutable-record schema/release identity for one Direct V3 venue policy.
 ///
-/// This is SHA-256 of `dclutch/schema/direct-venue-fee-policy-v2`. The SBF
+/// This is SHA-256 of `dclutch/schema/direct-venue-fee-policy-v3`. The SBF
 /// adapter derives the raw-record PDA from this identity and the SHA-256 digest
-/// of the exact 88 policy bytes.
-pub const VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2: [u8; 32] = [
-    0xd0, 0xcb, 0x14, 0x80, 0xe1, 0xb3, 0xf5, 0xf6, 0x56, 0x23, 0xa9, 0xb7, 0x3d, 0x0b, 0xc4, 0x83,
-    0x27, 0xca, 0x96, 0xa4, 0x10, 0xdb, 0x5f, 0x32, 0xae, 0x30, 0x8d, 0xc1, 0xbf, 0xe7, 0x3d, 0xd6,
+/// of the exact 48 policy bytes. The policy deliberately excludes the Market
+/// address: the authenticated Market manifest selects this digest, while the
+/// signed intent independently binds the Market and generation. Including the
+/// downstream Market PDA here would create an unconstructible hash cycle.
+pub const VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3: [u8; 32] = [
+    0x28, 0x1d, 0x89, 0x6e, 0xc0, 0xce, 0x69, 0xb5, 0x24, 0x43, 0x42, 0x08, 0x20, 0xbc, 0x58, 0x0e,
+    0xf1, 0x8e, 0xf2, 0x97, 0xe1, 0x39, 0x11, 0x5d, 0xf9, 0x1c, 0xea, 0x91, 0x56, 0x5c, 0x45, 0x1d,
 ];
 /// Domain preceding Market, generation, and maker in replay-root PDA seeds.
 pub const MAKER_REPLAY_ROOT_PDA_DOMAIN_V2: &[u8] = b"dclutch/direct-replay/v2";
@@ -97,9 +100,7 @@ const RECORD_RENT_PAYER_OFFSET: usize = 288;
 
 const FEE_BPS_OFFSET: usize = 10;
 const FEE_RESERVED_OFFSET: usize = 12;
-const FEE_MARKET_OFFSET: usize = 16;
-const FEE_GENERATION_OFFSET: usize = 48;
-const FEE_RECIPIENT_OFFSET: usize = 56;
+const FEE_RECIPIENT_OFFSET: usize = 16;
 
 /// Signed direction of a Direct intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1126,7 +1127,7 @@ pub struct RegistrationInputV2<const N: usize> {
     /// Canonical live-record PDA bump.
     pub record_bump: u8,
     /// Hostile-decoded immutable venue policy.
-    pub fee_policy: VenueFeePolicyV2,
+    pub fee_policy: VenueFeePolicyV3,
     /// SHA-256 digest of the exact policy bytes, authenticated through the Market manifest.
     pub fee_config_digest: [u8; 32],
     /// Current native Position.
@@ -1164,7 +1165,7 @@ pub fn register_intent_v2<const N: usize>(
         return Err(Error::IntentExpired);
     }
     accounts.validate(intent)?;
-    validate_venue_policy_selection_v2(intent, fee_policy, fee_config_digest)?;
+    validate_venue_policy_selection_v3(intent, fee_policy, fee_config_digest)?;
     nonzero(&system_payer)?;
     position_matches(position, intent)?;
     let outcome = usize::from(intent.outcome);
@@ -1177,7 +1178,7 @@ pub fn register_intent_v2<const N: usize>(
     let (claims, collateral) = match intent.side {
         Side::Buy => {
             let collateral = maximum_buy_reserve(intent)?;
-            adapter::validate_buy_debit_authority_v2(
+            adapter::validate_registered_buy_debit_authority_v2(
                 buy_debit_authority.ok_or(Error::InvalidBuyDebitAuthority)?,
                 intent,
                 accounts.replay_root,
@@ -1647,69 +1648,51 @@ pub fn close_invalidated_intent_v1<const N: usize>(
     })
 }
 
-/// Immutable Market-local fee policy read from canonical program account.
+/// Immutable market-independent fee policy read from a canonical record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct VenueFeePolicyV2 {
-    market: [u8; 32],
-    generation: u64,
+pub struct VenueFeePolicyV3 {
     recipient: [u8; 32],
     bps: u16,
 }
 
-impl VenueFeePolicyV2 {
+impl VenueFeePolicyV3 {
     /// Validate immutable policy.
-    pub fn new(
-        market: [u8; 32],
-        generation: u64,
-        recipient: [u8; 32],
-        fee_basis_points: u16,
-    ) -> Result<Self> {
-        nonzero(&market)?;
+    pub fn new(recipient: [u8; 32], fee_basis_points: u16) -> Result<Self> {
         nonzero(&recipient)?;
         if u64::from(fee_basis_points) > FEE_BASIS_POINTS_DENOMINATOR {
             return Err(Error::InvalidFeeRate);
         }
         Ok(Self {
-            market,
-            generation,
             recipient,
             bps: fee_basis_points,
         })
     }
     /// Decode canonical policy account.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != VENUE_FEE_POLICY_BYTES_V2 {
+        if bytes.len() != VENUE_FEE_POLICY_BYTES_V3 {
             return Err(Error::InvalidLength);
         }
-        if array::<8>(bytes, 0)? != VENUE_FEE_POLICY_MAGIC_V2 {
+        if array::<8>(bytes, 0)? != VENUE_FEE_POLICY_MAGIC_V3 {
             return Err(Error::InvalidMagic);
         }
-        if u16::from_le_bytes(array(bytes, 8)?) != VENUE_FEE_POLICY_SCHEMA_VERSION_V2 {
+        if u16::from_le_bytes(array(bytes, 8)?) != VENUE_FEE_POLICY_SCHEMA_VERSION_V3 {
             return Err(Error::UnsupportedSchema);
         }
         zeros(bytes, FEE_RESERVED_OFFSET, 4)?;
         Self::new(
-            array(bytes, FEE_MARKET_OFFSET)?,
-            u64::from_le_bytes(array(bytes, FEE_GENERATION_OFFSET)?),
             array(bytes, FEE_RECIPIENT_OFFSET)?,
             u16::from_le_bytes(array(bytes, FEE_BPS_OFFSET)?),
         )
     }
     /// Encode canonical policy account.
     pub fn encode(self, output: &mut [u8]) -> Result<()> {
-        if output.len() != VENUE_FEE_POLICY_BYTES_V2 {
+        if output.len() != VENUE_FEE_POLICY_BYTES_V3 {
             return Err(Error::OutputLength);
         }
         output.fill(0);
-        put(output, 0, &VENUE_FEE_POLICY_MAGIC_V2);
-        put(output, 8, &VENUE_FEE_POLICY_SCHEMA_VERSION_V2.to_le_bytes());
+        put(output, 0, &VENUE_FEE_POLICY_MAGIC_V3);
+        put(output, 8, &VENUE_FEE_POLICY_SCHEMA_VERSION_V3.to_le_bytes());
         put(output, FEE_BPS_OFFSET, &self.bps.to_le_bytes());
-        put(output, FEE_MARKET_OFFSET, &self.market);
-        put(
-            output,
-            FEE_GENERATION_OFFSET,
-            &self.generation.to_le_bytes(),
-        );
         put(output, FEE_RECIPIENT_OFFSET, &self.recipient);
         Ok(())
     }
@@ -1724,16 +1707,17 @@ impl VenueFeePolicyV2 {
 }
 
 /// Require one exact content-addressed policy selected by the signed intent.
-pub fn validate_venue_policy_selection_v2(
+///
+/// Market and generation do not belong to policy content. The SBF boundary
+/// authenticates the Market whose immutable manifest selects
+/// `fee_config_digest`; the signed intent and Position bind that Market and
+/// generation independently.
+pub fn validate_venue_policy_selection_v3(
     intent: DirectIntentV2,
-    policy: VenueFeePolicyV2,
+    policy: VenueFeePolicyV3,
     fee_config_digest: [u8; 32],
 ) -> Result<()> {
-    if policy.market != intent.market
-        || policy.generation != intent.generation
-        || fee_config_digest != intent.fee_config
-        || policy.bps != intent.fee_bps
-    {
+    if fee_config_digest != intent.fee_config || policy.bps != intent.fee_bps {
         return Err(Error::VenueUnauthorized);
     }
     Ok(())
@@ -1741,11 +1725,11 @@ pub fn validate_venue_policy_selection_v2(
 
 pub(crate) fn venue_authorized(
     intent: DirectIntentV2,
-    policy: VenueFeePolicyV2,
+    policy: VenueFeePolicyV3,
     fee_config_digest: [u8; 32],
     recipient_account: [u8; 32],
 ) -> Result<()> {
-    validate_venue_policy_selection_v2(intent, policy, fee_config_digest)?;
+    validate_venue_policy_selection_v3(intent, policy, fee_config_digest)?;
     if policy.recipient != recipient_account {
         return Err(Error::VenueUnauthorized);
     }

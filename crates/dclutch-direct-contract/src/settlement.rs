@@ -3,11 +3,11 @@
 use dclutch_realm_contract::PositionV1;
 
 use crate::state::{
-    position_matches, venue_authorized, DirectIntentRecordV2, DirectIntentV2,
-    InlineParticipantAccountsV2, MakerReplayRootV2, ParticipantAccountsV2, RecordAfterFillV2,
-    ReplayRootStateV2, Side, VenueFeePolicyV2,
+    DirectIntentRecordV2, DirectIntentV2, InlineParticipantAccountsV2, MakerReplayRootV2,
+    ParticipantAccountsV2, RecordAfterFillV2, ReplayRootStateV2, Side, VenueFeePolicyV3,
+    position_matches, venue_authorized,
 };
-use crate::{fee, quote, width, Error, Result};
+use crate::{Error, Result, fee, quote, width};
 
 /// Inputs to an immediate signed two-party FOK/IOC execution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,7 +47,7 @@ pub struct InlineOrdinaryMatchV2<const N: usize> {
     /// Exact execution price.
     pub execution_price: u64,
     /// Canonical fee policy.
-    pub fee_policy: VenueFeePolicyV2,
+    pub fee_policy: VenueFeePolicyV3,
     /// Manifest-authenticated SHA-256 digest of the exact policy bytes.
     pub fee_config_digest: [u8; 32],
     /// Actual fee recipient token account.
@@ -129,7 +129,7 @@ pub fn settle_inline_ordinary_v2<const N: usize>(
     let total = gross
         .checked_add(venue_fee)
         .ok_or(Error::ArithmeticOverflow)?;
-    crate::adapter::validate_buy_debit_authority_v2(
+    crate::adapter::validate_inline_buy_debit_authority_v2(
         input.buyer_debit_authority,
         bid,
         input.buyer_accounts.replay_root,
@@ -197,7 +197,7 @@ pub struct InlineComplementaryMatchV2<const N: usize> {
     /// Exact prices summing to one collateral atom.
     pub execution_prices: [u64; N],
     /// Canonical fee policy.
-    pub fee_policy: VenueFeePolicyV2,
+    pub fee_policy: VenueFeePolicyV3,
     /// Manifest-authenticated SHA-256 digest of the exact policy bytes.
     pub fee_config_digest: [u8; 32],
     /// Actual fee recipient account.
@@ -300,7 +300,7 @@ pub fn settle_inline_complementary_v2<const N: usize>(
             .checked_add(fees[index])
             .ok_or(Error::ArithmeticOverflow)?;
         match input.side {
-            Side::Buy => crate::adapter::validate_buy_debit_authority_v2(
+            Side::Buy => crate::adapter::validate_inline_buy_debit_authority_v2(
                 input.buy_debit_authorities[index].ok_or(Error::InvalidBuyDebitAuthority)?,
                 intent,
                 input.accounts[index].replay_root,
@@ -404,7 +404,7 @@ pub struct OrdinaryMatchV2<const N: usize> {
     /// Matcher-selected exact scaled execution price.
     pub execution_price: u64,
     /// Canonical program-owned fee policy.
-    pub fee_policy: VenueFeePolicyV2,
+    pub fee_policy: VenueFeePolicyV3,
     /// Manifest-authenticated SHA-256 digest of the exact policy bytes.
     pub fee_config_digest: [u8; 32],
     /// Actual fee-recipient token account at canonical role.
@@ -550,7 +550,7 @@ pub struct ComplementaryBuyMatchV2<const N: usize> {
     /// Exact prices summing to [`crate::PRICE_SCALE`].
     pub execution_prices: [u64; N],
     /// Canonical program-owned fee policy.
-    pub fee_policy: VenueFeePolicyV2,
+    pub fee_policy: VenueFeePolicyV3,
     /// Manifest-authenticated SHA-256 digest of the exact policy bytes.
     pub fee_config_digest: [u8; 32],
     /// Actual fee-recipient account.
@@ -699,7 +699,7 @@ pub struct ComplementarySellMatchV2<const N: usize> {
     /// Exact prices summing to [`crate::PRICE_SCALE`].
     pub execution_prices: [u64; N],
     /// Canonical program-owned fee policy.
-    pub fee_policy: VenueFeePolicyV2,
+    pub fee_policy: VenueFeePolicyV3,
     /// Manifest-authenticated SHA-256 digest of the exact policy bytes.
     pub fee_config_digest: [u8; 32],
     /// Actual fee-recipient account.
@@ -846,7 +846,7 @@ pub struct ComplementaryBuyMatchInPlaceV2<'a, const N: usize> {
     /// Exact prices summing to [`crate::PRICE_SCALE`].
     pub execution_prices: &'a [u64],
     /// Canonical program-owned fee policy.
-    pub fee_policy: VenueFeePolicyV2,
+    pub fee_policy: VenueFeePolicyV3,
     /// Manifest-authenticated SHA-256 digest of the exact policy bytes.
     pub fee_config_digest: [u8; 32],
     /// Actual fee-recipient account.
@@ -1009,7 +1009,7 @@ pub struct ComplementarySellMatchInPlaceV2<'a, const N: usize> {
     /// Exact prices summing to [`crate::PRICE_SCALE`].
     pub execution_prices: &'a [u64],
     /// Canonical program-owned fee policy.
-    pub fee_policy: VenueFeePolicyV2,
+    pub fee_policy: VenueFeePolicyV3,
     /// Manifest-authenticated SHA-256 digest of the exact policy bytes.
     pub fee_config_digest: [u8; 32],
     /// Actual fee-recipient account.

@@ -13,7 +13,7 @@ use dclutch_capability_contract::{
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_dealer_contract::{LiquidityConfigV1, frame::DEALER_CONFIG_SCHEMA_RELEASE_ID_V1};
 use dclutch_direct_contract::{
-    VENUE_FEE_POLICY_BYTES_V2, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2, VenueFeePolicyV2,
+    VENUE_FEE_POLICY_BYTES_V3, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3, VenueFeePolicyV3,
 };
 use dclutch_general_contract::{
     GENERAL_CONFIG_BYTES, GENERAL_CONFIG_SCHEMA_ID_V1, GeneralConfigV1,
@@ -22,9 +22,7 @@ use dclutch_product_contract::{
     capacity::{CAPACITY_PROFILE_BYTES, CapacityProfileV1},
     claim::{CATEGORICAL_UNIT_BYTES, CategoricalUnitV1},
     product::{INSTANCE_BYTES, InstanceV1},
-};
-use dclutch_pyth_contract::resolution_material::{
-    CategoricalPythResolutionMaterialV1, RESOLUTION_MATERIAL_BYTES,
+    result_domain::FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
 };
 use dclutch_realm_contract::{REALM_BYTES, RealmV1};
 use dclutch_record_contract::{
@@ -46,12 +44,12 @@ use dclutch_series_contract::{
     SERIES_RECIPE_BYTES_V1, SeriesRecipeV1,
 };
 use dclutch_source_contract::{
-    SOURCE_MATERIAL_BYTES, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SourceMaterialV1,
+    SOURCE_MATERIAL_BYTES, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SourceMaterialViewV1,
 };
 use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
-    hash::hash,
+    hash::{hash, hashv},
     program::{invoke, invoke_signed},
     program_error::ProgramError,
     pubkey::Pubkey,
@@ -100,10 +98,6 @@ pub(crate) const CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
     0xed, 0x25, 0x2a, 0x2a, 0xc5, 0x55, 0xf0, 0xe3, 0x4f, 0xfc, 0x23, 0xac, 0x91, 0xd8, 0x6c, 0x61,
     0xbe, 0x6d, 0xd9, 0x81, 0x24, 0x47, 0x57, 0x49, 0x94, 0x69, 0xbb, 0x99, 0xba, 0x55, 0x36, 0x50,
 ];
-pub(crate) const PYTH_RESOLUTION_MATERIAL_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
-    0x0d, 0x3e, 0xe0, 0x63, 0x05, 0x2e, 0x97, 0xfd, 0x65, 0xd0, 0x41, 0x27, 0x30, 0x5c, 0xae, 0x55,
-    0x3d, 0x72, 0x97, 0x0d, 0xa1, 0x4a, 0xbc, 0x74, 0xcf, 0x30, 0x4e, 0x2d, 0x4c, 0xc5, 0x0a, 0x1d,
-];
 pub(crate) const CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
     0x6b, 0xce, 0xf7, 0xb2, 0x83, 0x67, 0xcb, 0x8d, 0x08, 0x97, 0x10, 0xba, 0x58, 0xe6, 0x84, 0x31,
     0x2f, 0x43, 0x4c, 0x4b, 0xc4, 0x20, 0xee, 0xfd, 0x0f, 0x7a, 0x15, 0x0a, 0x90, 0x82, 0x88, 0xdf,
@@ -126,7 +120,7 @@ pub(crate) const SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
 ];
 
 #[cfg(test)]
-const RELEASE_LABELS_AND_IDS_V1: [(&[u8], [u8; 32]); 16] = [
+const RELEASE_LABELS_AND_IDS_V1: [(&[u8], [u8; 32]); 15] = [
     (
         b"dclutch/sbf-record-page-envelope/provisional-v1",
         PAGE_ENVELOPE_RELEASE_ID_V1,
@@ -149,16 +143,12 @@ const RELEASE_LABELS_AND_IDS_V1: [(&[u8], [u8; 32]); 16] = [
         CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1,
     ),
     (
-        b"dclutch/schema/categorical-pyth-resolution-material-v1",
-        PYTH_RESOLUTION_MATERIAL_SCHEMA_RELEASE_ID_V1,
-    ),
-    (
         b"dclutch/schema/capability-manifest-profile-1-v1",
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     ),
     (
-        b"dclutch/schema/direct-venue-fee-policy-v2",
-        VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2,
+        b"dclutch/schema/direct-venue-fee-policy-v3",
+        VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3,
     ),
     (
         b"dclutch/source-material-schema/v1",
@@ -972,35 +962,22 @@ fn validate_found_schema(schema_release_id: SchemaReleaseId, content: &[u8]) -> 
             .map(|value| value.to_bytes().as_slice() == content)
             .unwrap_or(false);
     }
-    if schema == PYTH_RESOLUTION_MATERIAL_SCHEMA_RELEASE_ID_V1 {
-        return CategoricalPythResolutionMaterialV1::decode(content)
-            .map(|value| {
-                value.to_bytes().as_slice() == content
-                    && hash(&value.feed_profile().to_bytes()).to_bytes()
-                        == *value.policy().feed_profile_id()
-            })
-            .unwrap_or(false);
-    }
     if schema == CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1 {
         return CapabilityManifestV1::decode(content)
             .map(|value| value.as_bytes() == content)
             .unwrap_or(false);
     }
-    if schema == VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2 {
-        return VenueFeePolicyV2::decode(content)
+    if schema == VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3 {
+        return VenueFeePolicyV3::decode(content)
             .map(|value| {
-                let mut canonical = [0; VENUE_FEE_POLICY_BYTES_V2];
+                let mut canonical = [0; VENUE_FEE_POLICY_BYTES_V3];
                 value.encode(&mut canonical).is_ok() && canonical.as_slice() == content
             })
             .unwrap_or(false);
     }
     if schema == SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1 {
-        return SourceMaterialV1::decode(content)
-            .map(|value| {
-                value.to_bytes().as_slice() == content
-                    && validate_source_material_links(content, value)
-            })
-            .unwrap_or(false);
+        return SourceMaterialViewV1::decode(content).is_ok()
+            && validate_source_material_links(content);
     }
     if schema == SERIES_RECIPE_SCHEMA_RELEASE_ID_V1 {
         return SeriesRecipeV1::decode(content)
@@ -1082,33 +1059,54 @@ fn validate_dealer_config(content: &[u8]) -> bool {
     false
 }
 
-fn validate_source_material_links(content: &[u8], material: SourceMaterialV1) -> bool {
+/// Check the adapter-owned content-addressed links in the canonical
+/// SourceMaterial V1 layout. The Product result-domain is deliberately not a
+/// plain record digest: its identity is domain separated before comparison to
+/// the embedded ResolutionPolicy.
+fn validate_source_material_links(content: &[u8]) -> bool {
     let fixed = [
         (256usize, 288usize, 112usize),
         (400, 432, 192),
         (624, 656, 112),
         (768, 800, 176),
-        (976, 1008, 144),
-        (1152, 1184, 512),
-        (1696, 1728, 176),
+        (1360, 1392, 176),
+        (544, 1568, 64),
     ];
     if fixed.iter().any(|(id_offset, value_offset, length)| {
         !content_link_matches(content, *id_offset, *value_offset, *length)
-    }) || !content_link_matches(content, 544, 1904, 64)
+    }) {
+        return false;
+    }
+    let Some(domain) = content.get(1008..1360) else {
+        return false;
+    };
+    let Some(policy_domain_id) = content.get(192..224) else {
+        return false;
+    };
+    if hashv(&[FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, &[0], domain])
+        .to_bytes()
+        .as_slice()
+        != policy_domain_id
     {
         return false;
     }
-    let active = material
-        .recovery_policy()
-        .map_or(0usize, |(_, policy)| usize::from(policy.attempt_count()));
-    if active != 0 && !content_link_matches(content, 1968, 2000, 528) {
+    let active = content.get(1664 + 10).copied().map(usize::from);
+    let Some(active) = active else {
+        return false;
+    };
+    if active == 0 {
+        return content
+            .get(1632..1664)
+            .is_some_and(|id| id.iter().all(|byte| *byte == 0));
+    }
+    if !content_link_matches(content, 1632, 1664, 528) {
         return false;
     }
     let mut index = 0usize;
     while index < active {
-        let source = 2528 + index * 224;
-        let provider = 3424 + index * 208;
-        let config = 4256 + index * 64;
+        let source = 2192 + index * 224;
+        let provider = 3088 + index * 208;
+        let config = 3920 + index * 64;
         if !content_link_matches(content, source, source + 32, 192)
             || !content_link_matches(content, provider, provider + 32, 176)
             || !content_link_matches(content, source + 144, config, 64)
@@ -1145,9 +1143,8 @@ fn is_supported_found_schema_release(schema_release_id: SchemaReleaseId) -> bool
             | PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1
             | CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1
             | CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1
-            | PYTH_RESOLUTION_MATERIAL_SCHEMA_RELEASE_ID_V1
             | CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1
-            | VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2
+            | VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3
             | SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1
             | SERIES_RECIPE_SCHEMA_RELEASE_ID_V1
             | SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1
@@ -1169,12 +1166,11 @@ fn is_admissible_found_schema_length(
         PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1 => length == INSTANCE_BYTES,
         CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1 => length == CATEGORICAL_UNIT_BYTES,
         CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1 => length == CAPACITY_PROFILE_BYTES,
-        PYTH_RESOLUTION_MATERIAL_SCHEMA_RELEASE_ID_V1 => length == RESOLUTION_MATERIAL_BYTES,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1 => {
             (MANIFEST_HEADER_BYTES..=MAX_MANIFEST_BYTES).contains(&length)
                 && length.saturating_sub(MANIFEST_HEADER_BYTES) % CAPABILITY_ENTRY_BYTES == 0
         }
-        VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2 => length == VENUE_FEE_POLICY_BYTES_V2,
+        VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3 => length == VENUE_FEE_POLICY_BYTES_V3,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1 => length == SOURCE_MATERIAL_BYTES,
         SERIES_RECIPE_SCHEMA_RELEASE_ID_V1 => length == SERIES_RECIPE_BYTES_V1,
         SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1 => length == CAPITALIZATION_AGGREGATE_BYTES_V1,
@@ -1749,12 +1745,6 @@ mod tests {
     use dclutch_general_contract::{
         ContentId as GeneralContentId, GENERAL_CAPABILITY_RELEASE_ID_V1, GeneralConfigV1Input,
     };
-    use dclutch_kernel::resolution::categorical_pyth_v1::{
-        CategoricalPythV1PolicyInput, MAX_PRICE_CELLS,
-    };
-    use dclutch_pyth_contract::{
-        feed_profile::PythFeedProfileV1, policy::CategoricalPythPolicyRecordV1,
-    };
     use dclutch_realm_contract::{FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1Input};
 
     use super::*;
@@ -1811,6 +1801,26 @@ mod tests {
     }
 
     #[test]
+    fn direct_venue_fee_v3_is_the_only_admitted_fee_record() {
+        let policy = VenueFeePolicyV3::new([9; 32], 25).expect("valid V3 policy");
+        let mut bytes = [0; VENUE_FEE_POLICY_BYTES_V3];
+        policy.encode(&mut bytes).expect("canonical V3 bytes");
+        let schema =
+            SchemaReleaseId::new(VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3).expect("V3 schema");
+        assert!(validate_found_schema(schema, &bytes));
+        assert!(is_admissible_found_schema_length(
+            schema,
+            u64::try_from(VENUE_FEE_POLICY_BYTES_V3).expect("bounded V3 length"),
+        ));
+        assert!(!is_admissible_found_schema_length(
+            schema,
+            u64::try_from(VENUE_FEE_POLICY_BYTES_V3 + 1).expect("bounded length"),
+        ));
+        bytes[12] = 1;
+        assert!(!validate_found_schema(schema, &bytes));
+    }
+
+    #[test]
     fn begin_schema_admission_is_closed_and_checks_owned_geometry() {
         for (schema_id, exact_length) in [
             (REALM_SCHEMA_RELEASE_ID_V1, REALM_BYTES),
@@ -1824,16 +1834,12 @@ mod tests {
                 CAPACITY_PROFILE_BYTES,
             ),
             (
-                PYTH_RESOLUTION_MATERIAL_SCHEMA_RELEASE_ID_V1,
-                RESOLUTION_MATERIAL_BYTES,
-            ),
-            (
                 CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
                 MANIFEST_HEADER_BYTES,
             ),
             (
-                VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2,
-                VENUE_FEE_POLICY_BYTES_V2,
+                VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3,
+                VENUE_FEE_POLICY_BYTES_V3,
             ),
             (SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SOURCE_MATERIAL_BYTES),
             (SERIES_RECIPE_SCHEMA_RELEASE_ID_V1, SERIES_RECIPE_BYTES_V1),
@@ -1972,7 +1978,7 @@ mod tests {
             PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
             CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1,
             CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1,
-            PYTH_RESOLUTION_MATERIAL_SCHEMA_RELEASE_ID_V1,
+            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
         ] {
             assert!(!validate_found_schema(
                 SchemaReleaseId::new(schema_id).expect("known schema"),
@@ -1993,6 +1999,7 @@ mod tests {
             realm_id: identity(1),
             terms_id: identity(2),
             claim_basis_id: identity(3),
+            result_domain_id: identity(4),
             capacity_profile_id: identity(4),
             compiler_release_id: IdentityV1::new(PRODUCT_COMPILER_RELEASE_ID_V1).expect("compiler"),
             occurrence_schedule_id: identity(6),
@@ -2106,7 +2113,6 @@ mod tests {
         let identity = |value: u8| GeneralContentId::new([value; 32]).expect("identity");
         let config = GeneralConfigV1::new(GeneralConfigV1Input {
             capacity_profile_id: identity(1),
-            market_identity_id: identity(2),
             claim_basis_id: identity(3),
             capability_release_id: GENERAL_CAPABILITY_RELEASE_ID_V1,
             generation: 7,
@@ -2116,6 +2122,7 @@ mod tests {
             settlement_slots: 10,
             max_orders_per_candidate: 4,
             max_pages_per_candidate: 1,
+            continuation_reward_lamports: 1,
             outcome_count: 2,
         })
         .expect("General config");
@@ -2171,44 +2178,6 @@ mod tests {
         );
         assert!(!is_finalized_staging_vacancy(&data_poison));
         assert!(!is_finalized_staging_vacancy(&owner_poison));
-    }
-
-    #[test]
-    fn pyth_material_requires_the_adapter_owned_feed_hash_link() {
-        let feed_profile = PythFeedProfileV1::new([7; 32], [8; 32], [9; 32]).expect("feed profile");
-        let linked_feed_id = hash(&feed_profile.to_bytes()).to_bytes();
-        let linked_policy = pyth_policy(linked_feed_id);
-        let linked = CategoricalPythResolutionMaterialV1::new(linked_policy, feed_profile)
-            .expect("linked material");
-        let schema = SchemaReleaseId::new(PYTH_RESOLUTION_MATERIAL_SCHEMA_RELEASE_ID_V1)
-            .expect("material schema");
-        assert!(validate_found_schema(schema, &linked.to_bytes()));
-
-        let unlinked_policy = pyth_policy([42; 32]);
-        let unlinked = CategoricalPythResolutionMaterialV1::new(unlinked_policy, feed_profile)
-            .expect("structurally valid but unlinked material");
-        assert!(!validate_found_schema(schema, &unlinked.to_bytes()));
-    }
-
-    fn pyth_policy(feed_profile_id: [u8; 32]) -> CategoricalPythPolicyRecordV1 {
-        CategoricalPythPolicyRecordV1::new(CategoricalPythV1PolicyInput {
-            pyth_release_id: [4; 32],
-            feed_profile_id,
-            target_time: 10,
-            grace: 2,
-            window: 4,
-            max_crossing_lag: 3,
-            max_age: 5,
-            max_future_skew: 1,
-            confidence_multiplier: 2,
-            max_confidence_bps: 100,
-            max_normalized_confidence_atoms: 10,
-            normalized_decimals: 6,
-            price_cell_count: 1,
-            upper_edges: [0; MAX_PRICE_CELLS],
-            failure_outcome_index: 1,
-        })
-        .expect("policy")
     }
 
     #[test]

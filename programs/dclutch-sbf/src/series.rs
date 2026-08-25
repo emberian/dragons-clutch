@@ -1506,6 +1506,7 @@ mod tests {
             realm_id: test_identity(1),
             terms_id: test_identity(2),
             claim_basis_id: test_identity(3),
+            result_domain_id: test_identity(4),
             capacity_profile_id: test_identity(4),
             compiler_release_id: IdentityV1::new(
                 dclutch_series_contract::PRODUCT_COMPILER_RELEASE_ID_V1,

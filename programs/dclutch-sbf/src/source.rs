@@ -136,7 +136,7 @@ fn process_create_resolution(
         request.material_id(),
         true,
     )?;
-    if material.mapping_artifact().outcome_count() != market.outcome_count {
+    if material.result_domain().outcome_count() != market.outcome_count {
         return Err(AdapterError::MarketTransition.into());
     }
     if market.child_count != request.expected_market_child_count() {
@@ -262,7 +262,7 @@ fn process_create_shared(
         request.material_id(),
         true,
     )?;
-    if material.mapping_artifact().outcome_count() != market.outcome_count {
+    if material.result_domain().outcome_count() != market.outcome_count {
         return Err(AdapterError::MarketTransition.into());
     }
     if market.child_count != request.expected_market_child_count() {

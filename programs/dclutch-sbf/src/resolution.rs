@@ -1,13 +1,11 @@
 //! Atomic price and permissionless failure resolution transitions.
 
-use dclutch_kernel::resolution::categorical_pyth_v1::PythV1Observation;
 use dclutch_market_contract::market::{CategoricalMarketV1, CategoricalSettlementSummaryV1};
 use dclutch_product_contract::{ContentId, terminal::ResolutionKind};
 use dclutch_pyth_contract::{
     instruction::{
         ResolveCategoricalFailureV1, ResolveCategoricalInstructionV1, ResolveCategoricalPythV1,
     },
-    policy::CategoricalPythPolicyRecordV1,
     receipt::{Clock as ReceiptClock, PriceInput, ResolutionReceiptV1},
 };
 use dclutch_pyth_svm::FullPriceUpdateV2;
@@ -66,7 +64,14 @@ fn process_price(
         market,
     )?;
     let clock = Clock::get().map_err(|_| AdapterError::AccountData)?;
-    let release = selected_release(*material.policy().release_id(), clock.unix_timestamp)?;
+    let release = selected_release(
+        material
+            .obligation
+            .provider_release()
+            .provider_deployment_release_id()
+            .to_bytes(),
+        clock.unix_timestamp,
+    )?;
     let provider_facts = authenticate_provider(&frame, release, instruction.body(), funding)?;
     let body_digest = hash(instruction.body()).to_bytes();
     let update = provider::post_and_load(
@@ -74,8 +79,38 @@ fn process_price(
         provider_facts,
         instruction.body(),
         clock.slot,
-        *material.feed_profile().provider_feed_id(),
+        material.obligation.adapter_config().provider_feed_id(),
     )?;
+    let body_id = dclutch_source_contract::ContentId::new(body_digest)
+        .map_err(|_| AdapterError::ContentIdentity)?;
+    let normalized = material
+        .obligation
+        .normalize_authenticated_update(
+            body_id,
+            material.window.schedule_id(),
+            0,
+            update.feed_id(),
+            update.price(),
+            update.confidence(),
+            update.exponent(),
+            update.publish_time(),
+        )
+        .map_err(|_| AdapterError::ProviderAuthentication)?;
+    normalized
+        .validate(
+            material.source_id,
+            material.source,
+            material.provider_release_id,
+            material.provider_release,
+            material.window,
+            0,
+            clock.unix_timestamp,
+        )
+        .map_err(|_| AdapterError::ProviderAuthentication)?;
+    let winner = material
+        .result_domain
+        .map(normalized.atoms(), 1)
+        .map_err(|_| AdapterError::MarketTransition)?;
 
     dispatch_price_width(
         market.outcome_count,
@@ -84,7 +119,7 @@ fn process_price(
         clock,
         update,
         body_digest,
-        *material.policy(),
+        winner,
     )?;
     close_fund::close_price(&frame, funding)
 }
@@ -114,12 +149,15 @@ fn process_failure(
         market,
     )?;
     let clock = Clock::get().map_err(|_| AdapterError::AccountData)?;
+    if clock.unix_timestamp <= material.window.end_unix_seconds() {
+        return Err(AdapterError::KernelResolution.into());
+    }
     dispatch_failure_width(
         market.outcome_count,
         &frame,
         instruction,
         clock,
-        *material.policy(),
+        material.result_domain.failure_selector(),
     )?;
     close_fund::close_failure(&frame, funding)
 }
@@ -132,24 +170,24 @@ fn dispatch_price_width(
     clock: Clock,
     update: FullPriceUpdateV2,
     body_digest: [u8; 32],
-    policy: CategoricalPythPolicyRecordV1,
+    winner: u8,
 ) -> Result<(), ProgramError> {
     match outcomes {
-        2 => transition_price::<2>(frame, instruction, clock, update, body_digest, policy),
-        3 => transition_price::<3>(frame, instruction, clock, update, body_digest, policy),
-        4 => transition_price::<4>(frame, instruction, clock, update, body_digest, policy),
-        5 => transition_price::<5>(frame, instruction, clock, update, body_digest, policy),
-        6 => transition_price::<6>(frame, instruction, clock, update, body_digest, policy),
-        7 => transition_price::<7>(frame, instruction, clock, update, body_digest, policy),
-        8 => transition_price::<8>(frame, instruction, clock, update, body_digest, policy),
-        9 => transition_price::<9>(frame, instruction, clock, update, body_digest, policy),
-        10 => transition_price::<10>(frame, instruction, clock, update, body_digest, policy),
-        11 => transition_price::<11>(frame, instruction, clock, update, body_digest, policy),
-        12 => transition_price::<12>(frame, instruction, clock, update, body_digest, policy),
-        13 => transition_price::<13>(frame, instruction, clock, update, body_digest, policy),
-        14 => transition_price::<14>(frame, instruction, clock, update, body_digest, policy),
-        15 => transition_price::<15>(frame, instruction, clock, update, body_digest, policy),
-        16 => transition_price::<16>(frame, instruction, clock, update, body_digest, policy),
+        2 => transition_price::<2>(frame, instruction, clock, update, body_digest, winner),
+        3 => transition_price::<3>(frame, instruction, clock, update, body_digest, winner),
+        4 => transition_price::<4>(frame, instruction, clock, update, body_digest, winner),
+        5 => transition_price::<5>(frame, instruction, clock, update, body_digest, winner),
+        6 => transition_price::<6>(frame, instruction, clock, update, body_digest, winner),
+        7 => transition_price::<7>(frame, instruction, clock, update, body_digest, winner),
+        8 => transition_price::<8>(frame, instruction, clock, update, body_digest, winner),
+        9 => transition_price::<9>(frame, instruction, clock, update, body_digest, winner),
+        10 => transition_price::<10>(frame, instruction, clock, update, body_digest, winner),
+        11 => transition_price::<11>(frame, instruction, clock, update, body_digest, winner),
+        12 => transition_price::<12>(frame, instruction, clock, update, body_digest, winner),
+        13 => transition_price::<13>(frame, instruction, clock, update, body_digest, winner),
+        14 => transition_price::<14>(frame, instruction, clock, update, body_digest, winner),
+        15 => transition_price::<15>(frame, instruction, clock, update, body_digest, winner),
+        16 => transition_price::<16>(frame, instruction, clock, update, body_digest, winner),
         _ => Err(AdapterError::AccountData.into()),
     }
 }
@@ -160,24 +198,24 @@ fn dispatch_failure_width(
     frame: &FailureFrame<'_, '_>,
     instruction: ResolveCategoricalFailureV1,
     clock: Clock,
-    policy: CategoricalPythPolicyRecordV1,
+    winner: u8,
 ) -> Result<(), ProgramError> {
     match outcomes {
-        2 => transition_failure::<2>(frame, instruction, clock, policy),
-        3 => transition_failure::<3>(frame, instruction, clock, policy),
-        4 => transition_failure::<4>(frame, instruction, clock, policy),
-        5 => transition_failure::<5>(frame, instruction, clock, policy),
-        6 => transition_failure::<6>(frame, instruction, clock, policy),
-        7 => transition_failure::<7>(frame, instruction, clock, policy),
-        8 => transition_failure::<8>(frame, instruction, clock, policy),
-        9 => transition_failure::<9>(frame, instruction, clock, policy),
-        10 => transition_failure::<10>(frame, instruction, clock, policy),
-        11 => transition_failure::<11>(frame, instruction, clock, policy),
-        12 => transition_failure::<12>(frame, instruction, clock, policy),
-        13 => transition_failure::<13>(frame, instruction, clock, policy),
-        14 => transition_failure::<14>(frame, instruction, clock, policy),
-        15 => transition_failure::<15>(frame, instruction, clock, policy),
-        16 => transition_failure::<16>(frame, instruction, clock, policy),
+        2 => transition_failure::<2>(frame, instruction, clock, winner),
+        3 => transition_failure::<3>(frame, instruction, clock, winner),
+        4 => transition_failure::<4>(frame, instruction, clock, winner),
+        5 => transition_failure::<5>(frame, instruction, clock, winner),
+        6 => transition_failure::<6>(frame, instruction, clock, winner),
+        7 => transition_failure::<7>(frame, instruction, clock, winner),
+        8 => transition_failure::<8>(frame, instruction, clock, winner),
+        9 => transition_failure::<9>(frame, instruction, clock, winner),
+        10 => transition_failure::<10>(frame, instruction, clock, winner),
+        11 => transition_failure::<11>(frame, instruction, clock, winner),
+        12 => transition_failure::<12>(frame, instruction, clock, winner),
+        13 => transition_failure::<13>(frame, instruction, clock, winner),
+        14 => transition_failure::<14>(frame, instruction, clock, winner),
+        15 => transition_failure::<15>(frame, instruction, clock, winner),
+        16 => transition_failure::<16>(frame, instruction, clock, winner),
         _ => Err(AdapterError::AccountData.into()),
     }
 }
@@ -189,25 +227,9 @@ fn transition_price<const N: usize>(
     clock: Clock,
     update: FullPriceUpdateV2,
     body_digest: [u8; 32],
-    policy_record: CategoricalPythPolicyRecordV1,
+    winner: u8,
 ) -> Result<(), ProgramError> {
     let mut state = decode_market::<N>(frame.market)?;
-    let policy = policy_record
-        .to_kernel_policy()
-        .map_err(|_| AdapterError::MarketTransition)?;
-    let resolution = policy
-        .resolve_price(
-            clock.unix_timestamp,
-            PythV1Observation {
-                prev_publish_time: update.prev_publish_time(),
-                publish_time: update.publish_time(),
-                price: update.price(),
-                confidence: update.confidence(),
-                exponent: update.exponent(),
-            },
-        )
-        .map_err(|_| AdapterError::KernelResolution)?;
-    let winner = u8::try_from(resolution.winner()).map_err(|_| AdapterError::MarketTransition)?;
     let outcome_count = u8::try_from(N).map_err(|_| AdapterError::MarketTransition)?;
     let receipt = ResolutionReceiptV1::price(
         PriceInput {
@@ -249,16 +271,9 @@ fn transition_failure<const N: usize>(
     frame: &FailureFrame<'_, '_>,
     instruction: ResolveCategoricalFailureV1,
     clock: Clock,
-    policy_record: CategoricalPythPolicyRecordV1,
+    winner: u8,
 ) -> Result<(), ProgramError> {
     let mut state = decode_market::<N>(frame.market)?;
-    let policy = policy_record
-        .to_kernel_policy()
-        .map_err(|_| AdapterError::MarketTransition)?;
-    let resolution = policy
-        .resolve_failure(clock.unix_timestamp)
-        .map_err(|_| AdapterError::KernelResolution)?;
-    let winner = u8::try_from(resolution.winner()).map_err(|_| AdapterError::MarketTransition)?;
     let outcome_count = u8::try_from(N).map_err(|_| AdapterError::MarketTransition)?;
     let receipt = ResolutionReceiptV1::failure(
         winner,

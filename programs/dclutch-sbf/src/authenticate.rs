@@ -13,7 +13,6 @@ use dclutch_pyth_contract::{
     funding::{
         FundingStateV1, required_resolution_minimum_balance, validate_required_resolution_funding,
     },
-    resolution_material::CategoricalPythResolutionMaterialV1,
 };
 use dclutch_pyth_svm::{
     PostUpdateParamsView, ProgramDataV3View, ProgramV3View, PythReleaseV1, ReceiverConfigV2View,
@@ -28,10 +27,13 @@ use solana_program::{
 
 use crate::{
     AdapterError,
-    records::{
-        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, PYTH_RESOLUTION_MATERIAL_SCHEMA_RELEASE_ID_V1,
-        with_authenticated_finalized_record_v1,
-    },
+    records::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, with_authenticated_finalized_record_v1},
+};
+use dclutch_product_contract::result_domain::FiniteResultDomainV1;
+use dclutch_source_contract::{
+    ContentId as SourceContentId, ProviderReleaseV1, PythProviderAdapterObligationV1,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SourceAccessProfile, SourceMaterialViewV1, SourceSpecV1,
+    WindowSpecV1,
 };
 
 pub(crate) const MARKET_SEED: &[u8] = b"dclutch/market-root/v1";
@@ -192,6 +194,18 @@ pub(crate) struct ProviderFacts {
     pub(crate) fee: u64,
 }
 
+/// Compact Pyth-relevant facts selected from the canonical Source authority.
+#[derive(Clone, Copy)]
+pub(crate) struct SourceMaterialFacts {
+    pub(crate) obligation: PythProviderAdapterObligationV1,
+    pub(crate) result_domain: FiniteResultDomainV1,
+    pub(crate) window: WindowSpecV1,
+    pub(crate) source_id: SourceContentId,
+    pub(crate) source: SourceSpecV1,
+    pub(crate) provider_release_id: SourceContentId,
+    pub(crate) provider_release: ProviderReleaseV1,
+}
+
 #[inline(never)]
 pub(crate) fn authenticate_market(
     program_id: &Pubkey,
@@ -270,30 +284,51 @@ pub(crate) fn authenticate_fund<'info>(
     rent_credit_account: &AccountInfo<'info>,
     rent_sysvar: &AccountInfo<'info>,
     market_facts: MarketFacts,
-) -> Result<(FundFacts, CategoricalPythResolutionMaterialV1), ProgramError> {
+) -> Result<(FundFacts, SourceMaterialFacts), ProgramError> {
     if fund_account.owner != program_id || fund_account.key == rent_credit_account.key {
         return Err(AdapterError::AccountIdentity.into());
     }
-    let material_digest = record_digest(material_account)?;
     let material = with_authenticated_finalized_record_v1(
         program_id,
         material_account,
         material_staging_cursor,
         rent_sysvar,
-        PYTH_RESOLUTION_MATERIAL_SCHEMA_RELEASE_ID_V1,
-        material_digest,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
+        market_facts.resolution_policy_id.to_bytes(),
         |record| {
-            CategoricalPythResolutionMaterialV1::decode(record.exact_content())
-                .map_err(|_| AdapterError::AccountData.into())
+            let material = SourceMaterialViewV1::decode(record.exact_content())
+                .map_err(|_| AdapterError::AccountData)?;
+            let (source_id, source) = material
+                .primary_source()
+                .map_err(|_| AdapterError::ContentIdentity)?;
+            let window = material
+                .window()
+                .map_err(|_| AdapterError::ContentIdentity)?;
+            let domain = material
+                .result_domain()
+                .map_err(|_| AdapterError::ContentIdentity)?;
+            if source.access_profile() != SourceAccessProfile::PythTerminalOneTransaction
+                || domain.outcome_count() != market_facts.outcome_count
+            {
+                return Err(AdapterError::ContentIdentity.into());
+            }
+            let obligation =
+                PythProviderAdapterObligationV1::from_material_view(material, source_id)
+                    .map_err(|_| AdapterError::ReleaseUnavailable)?;
+            let (provider_release_id, provider_release) = material
+                .primary_provider_release()
+                .map_err(|_| AdapterError::ContentIdentity)?;
+            Ok(SourceMaterialFacts {
+                obligation,
+                result_domain: domain,
+                window,
+                source_id,
+                source,
+                provider_release_id,
+                provider_release,
+            })
         },
     )?;
-    if hash(&material.policy().to_bytes()).to_bytes()
-        != market_facts.resolution_policy_id.to_bytes()
-        || hash(&material.feed_profile().to_bytes()).to_bytes()
-            != *material.policy().feed_profile_id()
-    {
-        return Err(AdapterError::ContentIdentity.into());
-    }
 
     let data = fund_account
         .try_borrow_data()
@@ -312,7 +347,13 @@ pub(crate) fn authenticate_fund<'info>(
             let selected = manifest
                 .required_founding_entry_for_config(market_facts.resolution_policy_id)
                 .map_err(|_| AdapterError::AccountData)?;
-            if selected.entry().release_id().to_bytes() != *material.policy().release_id() {
+            if selected.entry().release_id().to_bytes()
+                != material
+                    .obligation
+                    .provider_release()
+                    .adapter_release_id()
+                    .to_bytes()
+            {
                 return Err(AdapterError::ContentIdentity.into());
             }
             let derivation = CapabilityFundingDerivationV1::new(
@@ -454,13 +495,6 @@ pub(crate) fn authenticate_provider(
         update_rent,
         fee: config.fee(),
     })
-}
-
-fn record_digest(account: &AccountInfo<'_>) -> Result<[u8; 32], ProgramError> {
-    let data = account
-        .try_borrow_data()
-        .map_err(|_| AdapterError::AccountData)?;
-    Ok(hash(&data).to_bytes())
 }
 
 fn authenticate_rent_credit(

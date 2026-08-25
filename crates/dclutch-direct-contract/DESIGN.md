@@ -100,13 +100,20 @@ the adapter decodes the token account and requires:
 - token owner equals the signed maker;
 - mint equals the immutable Realm collateral mint;
 - delegate equals the canonical replay-root PDA; and
-- delegated allowance equals the one exact atomic debit.
+- registered reservation allowance equals the exact signed worst-case reserve;
+  or
+- inline allowance is at least the actual exact gross-plus-fee debit.
 
 The replay-root seeds sign the CPI. Registration consumes the exact maximum
-reserve; inline execution consumes its exact gross plus floor fee. An absent
-first-use root is created before the debit in the same atomic instruction. Sell
-registration and registered Sell matching never use this token delegate: native
-claims are reserved into the live record at registration.
+reserve and leaves no delegate allowance. Inline FOK price improvement and IOC
+partial fill may debit less than the signed worst case, so they accept a larger
+allowance while consuming only the actual exact gross plus floor fee. The
+signature, price/fill bounds, and replay nonce—not the allowance alone—authorize
+that spend. Any residual delegate allowance is inert without another valid
+signed intent, but makers who do not intend later inline orders should revoke
+it. An absent first-use root is created before the debit in the same atomic
+instruction. Sell registration and registered Sell matching never use this
+token delegate: native claims are reserved into the live record at registration.
 
 A registered Buy escrow is a token account whose authority is the exact live-
 record PDA. Every release and final token close uses the live-record seeds.
@@ -125,10 +132,12 @@ offchain bundles of native outcome claims, not a second Direct liability basis.
 
 ## Manifest-selected venue policy
 
-The signed `fee_config` is the SHA-256 digest of one exact 88-byte
-`VenueFeePolicyV2`, not an address supplied by a matcher. The policy is a
+The signed `fee_config` is the SHA-256 digest of one exact 48-byte
+`VenueFeePolicyV3`, not an address supplied by a matcher. The policy contains
+only immutable recipient and basis points and is therefore constructible before
+the Market address exists. It is a
 canonical finalized immutable raw record under schema/release ID
-`VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V2`; its address is derived from
+`VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3`; its address is derived from
 `[b"dclutch-raw-record-v1", schema_release_id, fee_config]`, while the required
 vacant staging address is derived from
 `[b"dclutch-record-stage-v1", schema_release_id, fee_config]`. Every register and
@@ -136,10 +145,15 @@ settlement frame carries that record, its canonical finalized-absent staging
 cursor, and the Market's immutable capability manifest. The adapter uses the
 record contract's consumer-authentication path, hashes and hostile-decodes both
 records, checks the manifest hash against Market identity, requires the unique
-founding entry selected by `fee_config`, and verifies policy Market, generation,
-fee rate, and recipient.
+founding entry selected by `fee_config`, and verifies the signed fee rate and
+actual recipient. The signed intent, authenticated Position, and authenticated
+Market separately bind Market and generation.
 This makes policy selection a Market-founding fact rather than a caller-shaped
-program-owned account assertion.
+program-owned account assertion, without the old cyclic dependency
+`Market -> manifest -> policy -> Market`. Canonical construction is ordered:
+encode policy, hash it into the manifest entry, hash the manifest into
+`MarketIdentity`, then derive the Market PDA. The cyclic V2 policy schema is not
+admitted as an alternative.
 The selected entry must also match the exact SHA-256 coordinates for Direct
 kind, semantic adapter release, N=2..16 capacity, child-set schema, and PDA
 derivation. It is founding-required, dependency-free, has no Realm funding
@@ -191,7 +205,7 @@ payout addresses.
 | Maker replay root | 144 | header 16 + Market 32 + generation 8 + maker 32 + next nonce 8 + live count 8 + minimum-live nonce 8 + payer 32 |
 | Live intent | 320 | header 16 + intent 232 + filled 8 + reserved claims 8 + reserved collateral 8 + fee-bearing gross 8 + cumulative fee 8 + payer 32 |
 | Cancel message | 96 | header 16 + Market 32 + generation 8 + maker 32 + nonce 8 |
-| Venue fee policy | 88 | header/fee rate 16 + Market 32 + generation 8 + recipient 32 |
+| Venue fee policy | 48 | header/fee rate 16 + recipient 32 |
 
 The common adapter header is 16 bytes. Registration is `16 + 232 = 248`;
 cancellation is `16 + 96 = 112`; expiry and replay closes are 16; registered

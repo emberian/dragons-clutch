@@ -1,10 +1,10 @@
 //! Exact SDK-free description of the Direct SBF adapter boundary.
 
 use crate::state::{
-    CancelThroughV1, DirectCancelV2, DirectIntentRecordV2, DirectIntentV2, Side,
-    DIRECT_INTENT_BYTES_V2,
+    CancelThroughV1, DIRECT_INTENT_BYTES_V2, DirectCancelV2, DirectIntentRecordV2, DirectIntentV2,
+    Side,
 };
-use crate::{array, nonzero, one, put, zeros, Error, Result};
+use crate::{Error, Result, array, nonzero, one, put, zeros};
 
 /// Native Ed25519 program bytes pinned by `solana-sdk-ids = 3.0.0`.
 pub const ED25519_PROGRAM_ID_3_0: [u8; 32] = [
@@ -1029,21 +1029,58 @@ pub struct BuyDebitAuthorityV2 {
     pub delegated_amount: u64,
 }
 
-/// Require the per-maker replay-root PDA as the exact preauthorized delegate
-/// for one signed Buy source and one exact atomic debit.
-pub fn validate_buy_debit_authority_v2(
+/// Require an exact worst-case allowance for registered Buy reservation.
+///
+/// Registration transfers the signed maximum reserve into record-owned
+/// custody. Exact equality leaves no residual delegate allowance after that
+/// one reservation and is intentionally stricter than inline execution.
+pub fn validate_registered_buy_debit_authority_v2(
     authority: BuyDebitAuthorityV2,
     intent: DirectIntentV2,
     replay_root_account: [u8; 32],
     collateral_mint: [u8; 32],
-    exact_debit: u64,
+    worst_case_reserve: u64,
+) -> Result<()> {
+    validate_buy_debit_binding_v2(authority, intent, replay_root_account, collateral_mint)?;
+    if authority.delegated_amount != worst_case_reserve {
+        return Err(Error::InvalidBuyDebitAuthority);
+    }
+    Ok(())
+}
+
+/// Require sufficient replay-root delegation for one inline exact debit.
+///
+/// FOK price improvement and IOC partial fill debit less than the maker's
+/// signed worst case. The exact signed intent, native signature, and replay
+/// nonce authorize the debit; an allowance at least as large as the actual
+/// debit is sufficient. Any residual allowance remains inert unless another
+/// exact maker-signed intent passes replay and should be revoked by a maker who
+/// does not intend to authorize later inline orders.
+pub fn validate_inline_buy_debit_authority_v2(
+    authority: BuyDebitAuthorityV2,
+    intent: DirectIntentV2,
+    replay_root_account: [u8; 32],
+    collateral_mint: [u8; 32],
+    actual_debit: u64,
+) -> Result<()> {
+    validate_buy_debit_binding_v2(authority, intent, replay_root_account, collateral_mint)?;
+    if authority.delegated_amount < actual_debit {
+        return Err(Error::InvalidBuyDebitAuthority);
+    }
+    Ok(())
+}
+
+fn validate_buy_debit_binding_v2(
+    authority: BuyDebitAuthorityV2,
+    intent: DirectIntentV2,
+    replay_root_account: [u8; 32],
+    collateral_mint: [u8; 32],
 ) -> Result<()> {
     if intent.side() != Side::Buy
         || authority.token_account != *intent.collateral_account()
         || authority.mint != collateral_mint
         || authority.owner != *intent.maker()
         || authority.delegate != replay_root_account
-        || authority.delegated_amount != exact_debit
     {
         return Err(Error::InvalidBuyDebitAuthority);
     }
