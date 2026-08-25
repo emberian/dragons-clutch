@@ -4,12 +4,15 @@
 
 //! Fixed-layout codecs for Lean-owned compiled Direct data.
 
+mod generated_layout;
+
 /// Bytes in one independently signed compact intent.
-pub const COMPACT_INTENT_BYTES: usize = 136;
+pub const COMPACT_INTENT_BYTES: usize = generated_layout::COMPACT_INTENT_BYTES_VALUE;
 /// Bytes in one controller instruction containing two compact intents.
-pub const CONTROLLER_INSTRUCTION_BYTES: usize = 304;
+pub const CONTROLLER_INSTRUCTION_BYTES: usize =
+    generated_layout::CONTROLLER_INSTRUCTION_BYTES_VALUE;
 /// Current compiled Direct ABI version.
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = generated_layout::ABI_VERSION;
 /// Semantic release selected by a Market for this compiled inline controller.
 ///
 /// SHA-256 of `dclutch/release/direct-compiled-controller-v1`. A checked
@@ -35,8 +38,8 @@ pub const COMPILED_DIRECT_DERIVATION_ID_V1: [u8; 32] = [
     0xd0, 0x5e, 0x36, 0x9a, 0xef, 0xd5, 0xd3, 0x86, 0x9a, 0x6a, 0xa6, 0xae, 0xe7, 0xc9, 0xc5, 0x8d,
 ];
 
-const INTENT_MAGIC: &[u8; 8] = b"DCLTDIR3";
-const CONTROLLER_MAGIC: &[u8; 8] = b"DCLTCTL1";
+const INTENT_MAGIC: &[u8; 8] = &generated_layout::INTENT_MAGIC_BYTES;
+const CONTROLLER_MAGIC: &[u8; 8] = &generated_layout::CONTROLLER_MAGIC_BYTES;
 
 /// Strict codec refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -88,41 +91,97 @@ impl CompactIntentV1 {
         exact_width(input, COMPACT_INTENT_BYTES)?;
         exact_magic(input, INTENT_MAGIC)?;
         exact_version(input)?;
-        reserved(input, 13, 3)?;
-        reserved(input, 98, 6)?;
+        reserved(
+            input,
+            generated_layout::INTENT_RESERVED_A_OFFSET,
+            generated_layout::INTENT_RESERVED_A_WIDTH,
+        )?;
+        reserved(
+            input,
+            generated_layout::INTENT_RESERVED_B_OFFSET,
+            generated_layout::INTENT_RESERVED_B_WIDTH,
+        )?;
         Ok(Self {
-            side: byte(input, 10)?,
-            outcome: byte(input, 11)?,
-            lifecycle: byte(input, 12)?,
-            market: array(input, 16)?,
-            generation: u64_at(input, 48)?,
-            nonce: u64_at(input, 56)?,
-            valid_from: u64_at(input, 64)?,
-            valid_through: u64_at(input, 72)?,
-            maximum_fill: u64_at(input, 80)?,
-            limit_price: u64_at(input, 88)?,
-            fee_basis_points: u16_at(input, 96)?,
-            collateral_account: array(input, 104)?,
+            side: byte(input, generated_layout::INTENT_SIDE_OFFSET)?,
+            outcome: byte(input, generated_layout::INTENT_OUTCOME_OFFSET)?,
+            lifecycle: byte(input, generated_layout::INTENT_LIFECYCLE_OFFSET)?,
+            market: array(input, generated_layout::INTENT_MARKET_OFFSET)?,
+            generation: u64_at(input, generated_layout::INTENT_GENERATION_OFFSET)?,
+            nonce: u64_at(input, generated_layout::INTENT_NONCE_OFFSET)?,
+            valid_from: u64_at(input, generated_layout::INTENT_VALID_FROM_OFFSET)?,
+            valid_through: u64_at(input, generated_layout::INTENT_VALID_THROUGH_OFFSET)?,
+            maximum_fill: u64_at(input, generated_layout::INTENT_MAXIMUM_FILL_OFFSET)?,
+            limit_price: u64_at(input, generated_layout::INTENT_LIMIT_PRICE_OFFSET)?,
+            fee_basis_points: u16_at(input, generated_layout::INTENT_FEE_BASIS_POINTS_OFFSET)?,
+            collateral_account: array(input, generated_layout::INTENT_COLLATERAL_ACCOUNT_OFFSET)?,
         })
     }
 
     /// Encode one canonical compact intent.
     pub fn encode(self) -> Result<[u8; COMPACT_INTENT_BYTES], Error> {
         let mut output = [0_u8; COMPACT_INTENT_BYTES];
-        put(&mut output, 0, INTENT_MAGIC)?;
-        put(&mut output, 8, &VERSION.to_le_bytes())?;
-        put_byte(&mut output, 10, self.side)?;
-        put_byte(&mut output, 11, self.outcome)?;
-        put_byte(&mut output, 12, self.lifecycle)?;
-        put(&mut output, 16, &self.market)?;
-        put(&mut output, 48, &self.generation.to_le_bytes())?;
-        put(&mut output, 56, &self.nonce.to_le_bytes())?;
-        put(&mut output, 64, &self.valid_from.to_le_bytes())?;
-        put(&mut output, 72, &self.valid_through.to_le_bytes())?;
-        put(&mut output, 80, &self.maximum_fill.to_le_bytes())?;
-        put(&mut output, 88, &self.limit_price.to_le_bytes())?;
-        put(&mut output, 96, &self.fee_basis_points.to_le_bytes())?;
-        put(&mut output, 104, &self.collateral_account)?;
+        put(&mut output, generated_layout::MAGIC_OFFSET, INTENT_MAGIC)?;
+        put(
+            &mut output,
+            generated_layout::VERSION_OFFSET,
+            &VERSION.to_le_bytes(),
+        )?;
+        put_byte(&mut output, generated_layout::INTENT_SIDE_OFFSET, self.side)?;
+        put_byte(
+            &mut output,
+            generated_layout::INTENT_OUTCOME_OFFSET,
+            self.outcome,
+        )?;
+        put_byte(
+            &mut output,
+            generated_layout::INTENT_LIFECYCLE_OFFSET,
+            self.lifecycle,
+        )?;
+        put(
+            &mut output,
+            generated_layout::INTENT_MARKET_OFFSET,
+            &self.market,
+        )?;
+        put(
+            &mut output,
+            generated_layout::INTENT_GENERATION_OFFSET,
+            &self.generation.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_layout::INTENT_NONCE_OFFSET,
+            &self.nonce.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_layout::INTENT_VALID_FROM_OFFSET,
+            &self.valid_from.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_layout::INTENT_VALID_THROUGH_OFFSET,
+            &self.valid_through.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_layout::INTENT_MAXIMUM_FILL_OFFSET,
+            &self.maximum_fill.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_layout::INTENT_LIMIT_PRICE_OFFSET,
+            &self.limit_price.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_layout::INTENT_FEE_BASIS_POINTS_OFFSET,
+            &self.fee_basis_points.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_layout::INTENT_COLLATERAL_ACCOUNT_OFFSET,
+            &self.collateral_account,
+        )?;
         Ok(output)
     }
 }
@@ -156,34 +215,99 @@ impl ControllerInstructionV1 {
         exact_width(input, CONTROLLER_INSTRUCTION_BYTES)?;
         exact_magic(input, CONTROLLER_MAGIC)?;
         exact_version(input)?;
-        reserved(input, 15, 1)?;
+        reserved(
+            input,
+            generated_layout::CONTROLLER_RESERVED_OFFSET,
+            generated_layout::CONTROLLER_RESERVED_WIDTH,
+        )?;
         Ok(Self {
-            controller_bump: byte(input, 10)?,
-            seller_replay_bump: byte(input, 11)?,
-            buyer_replay_bump: byte(input, 12)?,
-            seller_position_bump: byte(input, 13)?,
-            buyer_position_bump: byte(input, 14)?,
-            fill: u64_at(input, 16)?,
-            execution_price: u64_at(input, 24)?,
-            seller: CompactIntentV1::decode(slice(input, 32, COMPACT_INTENT_BYTES)?)?,
-            buyer: CompactIntentV1::decode(slice(input, 168, COMPACT_INTENT_BYTES)?)?,
+            controller_bump: byte(input, generated_layout::CONTROLLER_BUMP_OFFSET)?,
+            seller_replay_bump: byte(
+                input,
+                generated_layout::CONTROLLER_SELLER_REPLAY_BUMP_OFFSET,
+            )?,
+            buyer_replay_bump: byte(input, generated_layout::CONTROLLER_BUYER_REPLAY_BUMP_OFFSET)?,
+            seller_position_bump: byte(
+                input,
+                generated_layout::CONTROLLER_SELLER_POSITION_BUMP_OFFSET,
+            )?,
+            buyer_position_bump: byte(
+                input,
+                generated_layout::CONTROLLER_BUYER_POSITION_BUMP_OFFSET,
+            )?,
+            fill: u64_at(input, generated_layout::CONTROLLER_FILL_OFFSET)?,
+            execution_price: u64_at(input, generated_layout::CONTROLLER_EXECUTION_PRICE_OFFSET)?,
+            seller: CompactIntentV1::decode(slice(
+                input,
+                generated_layout::CONTROLLER_SELLER_OFFSET,
+                COMPACT_INTENT_BYTES,
+            )?)?,
+            buyer: CompactIntentV1::decode(slice(
+                input,
+                generated_layout::CONTROLLER_BUYER_OFFSET,
+                COMPACT_INTENT_BYTES,
+            )?)?,
         })
     }
 
     /// Encode one canonical controller instruction.
     pub fn encode(self) -> Result<[u8; CONTROLLER_INSTRUCTION_BYTES], Error> {
         let mut output = [0_u8; CONTROLLER_INSTRUCTION_BYTES];
-        put(&mut output, 0, CONTROLLER_MAGIC)?;
-        put(&mut output, 8, &VERSION.to_le_bytes())?;
-        put_byte(&mut output, 10, self.controller_bump)?;
-        put_byte(&mut output, 11, self.seller_replay_bump)?;
-        put_byte(&mut output, 12, self.buyer_replay_bump)?;
-        put_byte(&mut output, 13, self.seller_position_bump)?;
-        put_byte(&mut output, 14, self.buyer_position_bump)?;
-        put(&mut output, 16, &self.fill.to_le_bytes())?;
-        put(&mut output, 24, &self.execution_price.to_le_bytes())?;
-        put(&mut output, 32, &self.seller.encode()?)?;
-        put(&mut output, 168, &self.buyer.encode()?)?;
+        put(
+            &mut output,
+            generated_layout::MAGIC_OFFSET,
+            CONTROLLER_MAGIC,
+        )?;
+        put(
+            &mut output,
+            generated_layout::VERSION_OFFSET,
+            &VERSION.to_le_bytes(),
+        )?;
+        put_byte(
+            &mut output,
+            generated_layout::CONTROLLER_BUMP_OFFSET,
+            self.controller_bump,
+        )?;
+        put_byte(
+            &mut output,
+            generated_layout::CONTROLLER_SELLER_REPLAY_BUMP_OFFSET,
+            self.seller_replay_bump,
+        )?;
+        put_byte(
+            &mut output,
+            generated_layout::CONTROLLER_BUYER_REPLAY_BUMP_OFFSET,
+            self.buyer_replay_bump,
+        )?;
+        put_byte(
+            &mut output,
+            generated_layout::CONTROLLER_SELLER_POSITION_BUMP_OFFSET,
+            self.seller_position_bump,
+        )?;
+        put_byte(
+            &mut output,
+            generated_layout::CONTROLLER_BUYER_POSITION_BUMP_OFFSET,
+            self.buyer_position_bump,
+        )?;
+        put(
+            &mut output,
+            generated_layout::CONTROLLER_FILL_OFFSET,
+            &self.fill.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_layout::CONTROLLER_EXECUTION_PRICE_OFFSET,
+            &self.execution_price.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_layout::CONTROLLER_SELLER_OFFSET,
+            &self.seller.encode()?,
+        )?;
+        put(
+            &mut output,
+            generated_layout::CONTROLLER_BUYER_OFFSET,
+            &self.buyer.encode()?,
+        )?;
         Ok(output)
     }
 }
@@ -197,7 +321,7 @@ fn exact_width(input: &[u8], expected: usize) -> Result<(), Error> {
 }
 
 fn exact_magic(input: &[u8], expected: &[u8; 8]) -> Result<(), Error> {
-    if input.get(..8) == Some(expected.as_slice()) {
+    if slice(input, generated_layout::MAGIC_OFFSET, expected.len())? == expected {
         Ok(())
     } else {
         Err(Error::InvalidMagic)
@@ -205,7 +329,7 @@ fn exact_magic(input: &[u8], expected: &[u8; 8]) -> Result<(), Error> {
 }
 
 fn exact_version(input: &[u8]) -> Result<(), Error> {
-    if u16_at(input, 8)? == VERSION {
+    if u16_at(input, generated_layout::VERSION_OFFSET)? == VERSION {
         Ok(())
     } else {
         Err(Error::UnsupportedVersion)
@@ -354,7 +478,7 @@ mod tests {
             Err(Error::UnsupportedVersion)
         );
         encoded = fixture_intent(0).encode().expect("intent encoding");
-        encoded[13] = 1;
+        encoded[generated_layout::INTENT_RESERVED_A_OFFSET] = 1;
         assert_eq!(
             CompactIntentV1::decode(&encoded),
             Err(Error::NonzeroReserved)
