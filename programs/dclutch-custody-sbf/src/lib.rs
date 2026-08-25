@@ -594,7 +594,6 @@ fn close_vault(
         || vault.is_signer
         || vault.executable
         || !rent_refund.is_writable
-        || rent_refund.is_signer
         || rent_refund.executable
         || rent_refund.key.to_bytes() != request.rent_refund
     {
