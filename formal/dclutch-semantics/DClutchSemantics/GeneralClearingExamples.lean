@@ -106,4 +106,16 @@ example :
     ({ closed := false, best := some mintCandidate } : Selection).consider malformedCandidate =
       { closed := false, best := some mintCandidate } := by native_decide
 
+example :
+    ({ closed := false, best := none } : Selection).run (.consider mintCandidate) =
+      { closed := false, best := some mintCandidate } := by native_decide
+
+example :
+    ({ closed := false, best := none } : Selection).run .freeze =
+      { closed := false, best := none } := by native_decide
+
+example :
+    ({ closed := false, best := some mintCandidate } : Selection).run .freeze =
+      { closed := true, best := some mintCandidate } := by native_decide
+
 end DClutch.General.Examples

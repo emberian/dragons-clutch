@@ -254,6 +254,11 @@ structure Selection where
   best : Option Candidate
   deriving DecidableEq, Repr
 
+def Selection.valid (selection : Selection) : Bool :=
+  match selection.best with
+  | none => true
+  | some candidate => candidate.valid
+
 def Selection.consider (selection : Selection) (candidate : Candidate) : Selection :=
   if selection.closed || !candidate.valid then selection
   else match selection.best with
@@ -266,6 +271,43 @@ def Selection.consider (selection : Selection) (candidate : Candidate) : Selecti
 def Selection.freeze (selection : Selection) : Selection :=
   { selection with closed := true }
 
+inductive SelectionCommand where
+  | consider (candidate : Candidate)
+  | freeze
+  deriving DecidableEq, Repr
+
+inductive SelectionRefusal where
+  | invalidState
+  | selectionClosed
+  | invalidCandidate
+  | noValidSubmission
+  | postInvariantFailure
+  deriving DecidableEq, Repr
+
+/-- Total permissionless selection boundary. The persisted incumbent is
+revalidated before comparison, so corrupt or substituted candidate data cannot
+become authority merely by already occupying the `best` coordinate. -/
+def Selection.execute?
+    (selection : Selection) (command : SelectionCommand) :
+    Except SelectionRefusal Selection :=
+  if _stateValid : selection.valid = true then
+    if selection.closed then .error .selectionClosed
+    else match command with
+      | .consider candidate =>
+          if candidate.valid then
+            let post := selection.consider candidate
+            if post.valid then .ok post else .error .postInvariantFailure
+          else .error .invalidCandidate
+      | .freeze =>
+          if selection.best.isSome then .ok selection.freeze
+          else .error .noValidSubmission
+  else .error .invalidState
+
+def Selection.run (selection : Selection) (command : SelectionCommand) : Selection :=
+  match selection.execute? command with
+  | .ok post => post
+  | .error _ => selection
+
 theorem invalid_candidate_never_selected
     (selection : Selection) (candidate : Candidate)
     (invalid : candidate.valid = false) :
@@ -277,6 +319,14 @@ theorem closed_selection_is_immutable
     (closed : selection.closed = true) :
     selection.consider candidate = selection := by
   simp [Selection.consider, closed]
+
+theorem selection_refusal_rolls_back
+    (selection : Selection) (command : SelectionCommand)
+    (refusal : SelectionRefusal)
+    (failed : selection.execute? command = .error refusal) :
+    selection.run command = selection := by
+  unfold Selection.run
+  rw [failed]
 
 /-! ## Streamed physical settlement -/
 
