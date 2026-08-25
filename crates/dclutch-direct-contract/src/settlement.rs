@@ -5,9 +5,9 @@ use dclutch_realm_contract::PositionV1;
 use crate::state::{
     DirectIntentRecordV2, DirectIntentV2, InlineParticipantAccountsV2, MakerReplayRootV2,
     ParticipantAccountsV2, RecordAfterFillV2, ReplayRootStateV2, Side, VenueFeePolicyV3,
-    position_matches, venue_authorized,
+    position_matches, runtime_position_matches, venue_authorized,
 };
-use crate::{Error, Result, fee, quote, width};
+use crate::{DirectPositionV2, Error, Result, fee, quote, width};
 
 /// Inputs to an immediate signed two-party FOK/IOC execution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -157,6 +157,160 @@ pub fn settle_inline_ordinary_v2<const N: usize>(
         .credit_outcome(outcome, input.fill)
         .map_err(crate::position_error)?;
     Ok(InlineOrdinarySettlementV2 {
+        seller_replay_root,
+        buyer_replay_root,
+        seller_position,
+        buyer_position,
+        gross_collateral_transfer: gross,
+        venue_fee_transfer: venue_fee,
+        buyer_total_collateral_debit: total,
+    })
+}
+
+/// Runtime-width inputs to an immediate signed two-party FOK/IOC execution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeInlineOrdinaryMatchV2 {
+    /// Canonical Market phase authenticated from program-owned state.
+    pub phase: crate::adapter::MarketPhaseV2,
+    /// Current trusted slot.
+    pub slot: u64,
+    /// Seller replay root, or canonical first-use absence.
+    pub seller_replay_root: ReplayRootStateV2,
+    /// Buyer replay root, or canonical first-use absence.
+    pub buyer_replay_root: ReplayRootStateV2,
+    /// Separate System payer for first-use replay-root creation.
+    pub root_creation_payer: [u8; 32],
+    /// Exact signed seller intent.
+    pub seller_intent: DirectIntentV2,
+    /// Exact signed buyer intent.
+    pub buyer_intent: DirectIntentV2,
+    /// Sealed seller authorization.
+    pub seller_authorization: crate::adapter::Ed25519AuthorizationV2,
+    /// Sealed buyer authorization.
+    pub buyer_authorization: crate::adapter::Ed25519AuthorizationV2,
+    /// Exact seller accounts.
+    pub seller_accounts: InlineParticipantAccountsV2,
+    /// Exact buyer accounts.
+    pub buyer_accounts: InlineParticipantAccountsV2,
+    /// Runtime-width seller Position.
+    pub seller_position: DirectPositionV2,
+    /// Runtime-width buyer Position.
+    pub buyer_position: DirectPositionV2,
+    /// Realm collateral mint.
+    pub collateral_mint: [u8; 32],
+    /// Authenticated buyer source delegate.
+    pub buyer_debit_authority: crate::adapter::BuyDebitAuthorityV2,
+    /// Immediate positive fill.
+    pub fill: u64,
+    /// Exact execution price.
+    pub execution_price: u64,
+    /// Canonical fee policy.
+    pub fee_policy: VenueFeePolicyV3,
+    /// Manifest-authenticated policy digest.
+    pub fee_config_digest: [u8; 32],
+    /// Actual fee recipient token account.
+    pub fee_recipient_account: [u8; 32],
+}
+
+/// Runtime-width effects of immediate ordinary execution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeInlineOrdinarySettlementV2 {
+    /// Seller replay root after nonce consumption.
+    pub seller_replay_root: MakerReplayRootV2,
+    /// Buyer replay root after nonce consumption.
+    pub buyer_replay_root: MakerReplayRootV2,
+    /// Seller Position after claim debit.
+    pub seller_position: DirectPositionV2,
+    /// Buyer Position after claim credit.
+    pub buyer_position: DirectPositionV2,
+    /// Gross buyer debit and seller credit.
+    pub gross_collateral_transfer: u64,
+    /// Buyer fee debit.
+    pub venue_fee_transfer: u64,
+    /// Total buyer collateral debit.
+    pub buyer_total_collateral_debit: u64,
+}
+
+/// Check immediate ordinary execution without width specialization.
+pub fn settle_inline_ordinary_runtime_v2(
+    input: RuntimeInlineOrdinaryMatchV2,
+) -> Result<RuntimeInlineOrdinarySettlementV2> {
+    crate::adapter::require_market_phase_v2(
+        crate::adapter::AdapterActionV2::InlineOrdinary,
+        input.phase,
+    )?;
+    let ask = input.seller_intent;
+    let bid = input.buyer_intent;
+    inline_common_runtime(
+        ask,
+        input.seller_authorization,
+        input.seller_accounts,
+        input.seller_position,
+        input.slot,
+    )?;
+    inline_common_runtime(
+        bid,
+        input.buyer_authorization,
+        input.buyer_accounts,
+        input.buyer_position,
+        input.slot,
+    )?;
+    if input.seller_position.outcome_count() != input.buyer_position.outcome_count()
+        || ask.side() != Side::Sell
+        || bid.side() != Side::Buy
+        || ask.market() != bid.market()
+        || ask.generation() != bid.generation()
+        || ask.outcome() != bid.outcome()
+    {
+        return Err(Error::IncompatibleSides);
+    }
+    if ask.maker() == bid.maker() || inline_alias(input.seller_accounts, input.buyer_accounts) {
+        return Err(Error::Alias);
+    }
+    venue_authorized(
+        ask,
+        input.fee_policy,
+        input.fee_config_digest,
+        input.fee_recipient_account,
+    )?;
+    venue_authorized(
+        bid,
+        input.fee_policy,
+        input.fee_config_digest,
+        input.fee_recipient_account,
+    )?;
+    if input.execution_price < ask.limit_price() || input.execution_price > bid.limit_price() {
+        return Err(Error::PriceIncompatible);
+    }
+    let gross = quote(input.fill, input.execution_price)?;
+    let venue_fee = fee(gross, input.fee_policy.fee_basis_points())?;
+    let total = gross
+        .checked_add(venue_fee)
+        .ok_or(Error::ArithmeticOverflow)?;
+    crate::adapter::validate_inline_buy_debit_authority_v2(
+        input.buyer_debit_authority,
+        bid,
+        input.buyer_accounts.replay_root,
+        input.collateral_mint,
+        total,
+    )?;
+    let seller_replay_root = input
+        .seller_replay_root
+        .open_for_intent(ask, input.root_creation_payer)?
+        .consume_inline(ask, input.fill)?;
+    let buyer_replay_root = input
+        .buyer_replay_root
+        .open_for_intent(bid, input.root_creation_payer)?
+        .consume_inline(bid, input.fill)?;
+    let outcome = usize::from(ask.outcome());
+    if outcome >= usize::from(input.seller_position.outcome_count()) {
+        return Err(Error::InvalidOutcome);
+    }
+    let mut seller_position = input.seller_position;
+    let mut buyer_position = input.buyer_position;
+    seller_position.debit_outcome(outcome, input.fill)?;
+    buyer_position.credit_outcome(outcome, input.fill)?;
+    Ok(RuntimeInlineOrdinarySettlementV2 {
         seller_replay_root,
         buyer_replay_root,
         seller_position,
@@ -366,6 +520,26 @@ fn inline_common<const N: usize>(
     }
 }
 
+fn inline_common_runtime(
+    intent: DirectIntentV2,
+    authorization: crate::adapter::Ed25519AuthorizationV2,
+    accounts: InlineParticipantAccountsV2,
+    position: DirectPositionV2,
+    slot: u64,
+) -> Result<()> {
+    authorization.authorizes_inline(intent)?;
+    accounts.validate(intent)?;
+    runtime_position_matches(position, intent)?;
+    if slot < intent.valid_from_slot() || slot > intent.valid_through_slot() {
+        return Err(Error::IntentExpired);
+    }
+    match intent.lifecycle() {
+        crate::IntentLifecycleV2::InlineFillOrKill
+        | crate::IntentLifecycleV2::InlineImmediateOrCancel => Ok(()),
+        crate::IntentLifecycleV2::Registered => Err(Error::IntentLifecycleMismatch),
+    }
+}
+
 fn inline_alias(left: InlineParticipantAccountsV2, right: InlineParticipantAccountsV2) -> bool {
     let left_keys = [left.replay_root, left.position, left.collateral];
     let right_keys = [right.replay_root, right.position, right.collateral];
@@ -512,6 +686,157 @@ pub fn settle_ordinary_v2<const N: usize>(
         .credit_outcome(outcome, input.fill)
         .map_err(crate::position_error)?;
     Ok(OrdinarySettlementV2 {
+        seller_replay_root,
+        buyer_replay_root,
+        seller_record,
+        buyer_record,
+        seller_position: input.seller_position,
+        buyer_position,
+        outcome_quantity: input.fill,
+        seller_collateral_credit: gross,
+        venue_fee_transfer: venue_fee,
+        buyer_escrow_debit: buyer_debit,
+    })
+}
+
+/// Runtime-width inputs to one persisted-record ordinary transfer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeOrdinaryMatchV2 {
+    /// Canonical Market phase authenticated from program-owned state.
+    pub phase: crate::adapter::MarketPhaseV2,
+    /// Current trusted slot.
+    pub slot: u64,
+    /// Seller maker replay root.
+    pub seller_replay_root: MakerReplayRootV2,
+    /// Buyer maker replay root.
+    pub buyer_replay_root: MakerReplayRootV2,
+    /// Program-owned seller record.
+    pub seller_record: DirectIntentRecordV2,
+    /// Program-owned buyer record.
+    pub buyer_record: DirectIntentRecordV2,
+    /// Exact seller physical accounts.
+    pub seller_accounts: ParticipantAccountsV2,
+    /// Exact buyer physical accounts.
+    pub buyer_accounts: ParticipantAccountsV2,
+    /// Runtime-width seller Position.
+    pub seller_position: DirectPositionV2,
+    /// Runtime-width buyer Position.
+    pub buyer_position: DirectPositionV2,
+    /// Realm collateral mint.
+    pub collateral_mint: [u8; 32],
+    /// Authenticated buyer escrow authority.
+    pub buyer_escrow_authority: crate::adapter::EscrowAuthorityV2,
+    /// Matcher-selected positive fill.
+    pub fill: u64,
+    /// Matcher-selected execution price.
+    pub execution_price: u64,
+    /// Canonical fee policy.
+    pub fee_policy: VenueFeePolicyV3,
+    /// Manifest-authenticated policy digest.
+    pub fee_config_digest: [u8; 32],
+    /// Actual fee-recipient account.
+    pub fee_recipient_account: [u8; 32],
+}
+
+/// Runtime-width effects of one ordinary transfer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeOrdinarySettlementV2 {
+    /// Updated seller replay root.
+    pub seller_replay_root: MakerReplayRootV2,
+    /// Updated buyer replay root.
+    pub buyer_replay_root: MakerReplayRootV2,
+    /// Seller record replacement or close.
+    pub seller_record: RecordAfterFillV2,
+    /// Buyer record replacement or close.
+    pub buyer_record: RecordAfterFillV2,
+    /// Seller Position unchanged after registration reservation.
+    pub seller_position: DirectPositionV2,
+    /// Buyer Position after claim credit.
+    pub buyer_position: DirectPositionV2,
+    /// Selected outcome transfer.
+    pub outcome_quantity: u64,
+    /// Gross seller collateral credit.
+    pub seller_collateral_credit: u64,
+    /// Venue fee transfer.
+    pub venue_fee_transfer: u64,
+    /// Total buyer escrow debit.
+    pub buyer_escrow_debit: u64,
+}
+
+/// Check one ordinary transfer without outcome-width specialization.
+pub fn settle_ordinary_runtime_v2(
+    input: RuntimeOrdinaryMatchV2,
+) -> Result<RuntimeOrdinarySettlementV2> {
+    crate::adapter::require_market_phase_v2(
+        crate::adapter::AdapterActionV2::Ordinary,
+        input.phase,
+    )?;
+    let ask = input.seller_record.intent();
+    let bid = input.buyer_record.intent();
+    if input.seller_position.outcome_count() != input.buyer_position.outcome_count()
+        || ask.side() != Side::Sell
+        || bid.side() != Side::Buy
+        || ask.market() != bid.market()
+        || ask.generation() != bid.generation()
+        || ask.outcome() != bid.outcome()
+    {
+        return Err(Error::IncompatibleSides);
+    }
+    if ask.maker() == bid.maker() {
+        return Err(Error::Alias);
+    }
+    input.seller_accounts.validate(ask)?;
+    input.buyer_accounts.validate(bid)?;
+    crate::adapter::validate_registered_escrow_authority_v2(
+        input.buyer_escrow_authority,
+        input.buyer_record,
+        input.buyer_accounts.record,
+        input.buyer_accounts.escrow,
+        input.collateral_mint,
+    )?;
+    distinct_participants(&[input.seller_accounts, input.buyer_accounts])?;
+    runtime_position_matches(input.seller_position, ask)?;
+    runtime_position_matches(input.buyer_position, bid)?;
+    venue_authorized(
+        ask,
+        input.fee_policy,
+        input.fee_config_digest,
+        input.fee_recipient_account,
+    )?;
+    venue_authorized(
+        bid,
+        input.fee_policy,
+        input.fee_config_digest,
+        input.fee_recipient_account,
+    )?;
+    if input.execution_price < ask.limit_price() || input.execution_price > bid.limit_price() {
+        return Err(Error::PriceIncompatible);
+    }
+    let gross = quote(input.fill, input.execution_price)?;
+    let (seller_record, seller_replay_root, seller_fee) =
+        input
+            .seller_record
+            .consume(input.seller_replay_root, input.slot, input.fill, 0, 0)?;
+    if seller_fee != 0 {
+        return Err(Error::InvalidReservation);
+    }
+    let (buyer_record, buyer_replay_root, venue_fee) = input.buyer_record.consume(
+        input.buyer_replay_root,
+        input.slot,
+        input.fill,
+        gross,
+        gross,
+    )?;
+    let buyer_debit = gross
+        .checked_add(venue_fee)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let outcome = usize::from(ask.outcome());
+    if outcome >= usize::from(input.buyer_position.outcome_count()) {
+        return Err(Error::InvalidOutcome);
+    }
+    let mut buyer_position = input.buyer_position;
+    buyer_position.credit_outcome(outcome, input.fill)?;
+    Ok(RuntimeOrdinarySettlementV2 {
         seller_replay_root,
         buyer_replay_root,
         seller_record,
@@ -1137,6 +1462,341 @@ pub fn settle_merge_in_place_v2<const N: usize>(
         seller_gross_collateral_credits: gross,
         seller_fee_debits: fees,
         seller_net_collateral_credits: net,
+        market_vault_collateral_debit: input.fill,
+        venue_fee_transfer: fee_sum,
+    })
+}
+
+/// Borrowed runtime-width inputs and caller-owned outputs for one Buy split.
+pub struct RuntimeComplementaryBuyMatchInPlaceV2<'a> {
+    /// Canonical Market phase.
+    pub phase: crate::adapter::MarketPhaseV2,
+    /// Current trusted slot.
+    pub slot: u64,
+    /// Runtime outcome width.
+    pub outcome_count: u8,
+    /// Replay roots replaced on success.
+    pub buyer_replay_roots: &'a mut [MakerReplayRootV2],
+    /// Records replaced where the fill remains live.
+    pub buyer_records: &'a mut [DirectIntentRecordV2],
+    /// Participant accounts in canonical outcome order.
+    pub buyer_accounts: &'a [ParticipantAccountsV2],
+    /// Runtime-width Positions replaced on success.
+    pub buyer_positions: &'a mut [DirectPositionV2],
+    /// Realm collateral mint.
+    pub collateral_mint: [u8; 32],
+    /// Escrow authorities in canonical order.
+    pub escrow_authorities: &'a [crate::adapter::EscrowAuthorityV2],
+    /// Caller-owned close slots.
+    pub record_closes: &'a mut [Option<crate::LiveRecordCloseV2>],
+    /// Common positive fill.
+    pub fill: u64,
+    /// Exact execution prices.
+    pub execution_prices: &'a [u64],
+    /// Caller-owned gross-debit output.
+    pub gross_debits: &'a mut [u64],
+    /// Caller-owned fee-debit output.
+    pub fee_debits: &'a mut [u64],
+    /// Canonical fee policy.
+    pub fee_policy: VenueFeePolicyV3,
+    /// Manifest-authenticated policy digest.
+    pub fee_config_digest: [u8; 32],
+    /// Actual fee recipient account.
+    pub fee_recipient_account: [u8; 32],
+}
+
+/// Aggregate effects of a runtime-width Buy split.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeSplitSettlementEffectsV2 {
+    /// Exact Market-vault collateral credit.
+    pub market_vault_collateral_credit: u64,
+    /// Aggregate fee transfer.
+    pub venue_fee_transfer: u64,
+}
+
+/// Check and atomically project one Buy split without width specialization.
+#[allow(clippy::needless_range_loop)]
+pub fn settle_split_runtime_in_place_v2(
+    input: RuntimeComplementaryBuyMatchInPlaceV2<'_>,
+) -> Result<RuntimeSplitSettlementEffectsV2> {
+    let count = usize::from(input.outcome_count);
+    width(count)?;
+    crate::adapter::require_market_phase_v2(crate::adapter::AdapterActionV2::Split, input.phase)?;
+    if input.fill == 0 {
+        return Err(Error::ZeroQuantity);
+    }
+    require_complementary_lengths(
+        count,
+        &[
+            input.buyer_replay_roots.len(),
+            input.buyer_records.len(),
+            input.buyer_accounts.len(),
+            input.buyer_positions.len(),
+            input.escrow_authorities.len(),
+            input.record_closes.len(),
+            input.execution_prices.len(),
+            input.gross_debits.len(),
+            input.fee_debits.len(),
+        ],
+    )?;
+    distinct_participants(input.buyer_accounts)?;
+    let first = input
+        .buyer_records
+        .first()
+        .ok_or(Error::InvalidOutcomeWidth)?
+        .intent();
+    let mut gross = [0u64; dclutch_realm_contract::MAX_OUTCOMES];
+    let mut fees = [0u64; dclutch_realm_contract::MAX_OUTCOMES];
+    let mut price_sum = 0u64;
+    let mut gross_sum = 0u64;
+    let mut fee_sum = 0u64;
+
+    for index in 0..count {
+        let record = input.buyer_records[index];
+        let intent = record.intent();
+        let expected = u8::try_from(index).map_err(|_| Error::InvalidOutcome)?;
+        if intent.side() != Side::Buy
+            || intent.market() != first.market()
+            || intent.generation() != first.generation()
+            || intent.outcome() != expected
+        {
+            return Err(Error::NonCanonicalComplement);
+        }
+        if input.buyer_records[..index]
+            .iter()
+            .any(|prior| prior.intent().maker() == intent.maker())
+        {
+            return Err(Error::Alias);
+        }
+        input.buyer_accounts[index].validate(intent)?;
+        crate::adapter::validate_registered_escrow_authority_v2(
+            input.escrow_authorities[index],
+            record,
+            input.buyer_accounts[index].record,
+            input.buyer_accounts[index].escrow,
+            input.collateral_mint,
+        )?;
+        if input.buyer_positions[index].outcome_count() != input.outcome_count {
+            return Err(Error::InvalidOutcomeWidth);
+        }
+        runtime_position_matches(input.buyer_positions[index], intent)?;
+        venue_authorized(
+            intent,
+            input.fee_policy,
+            input.fee_config_digest,
+            input.fee_recipient_account,
+        )?;
+        let price = input.execution_prices[index];
+        if price > intent.limit_price() {
+            return Err(Error::PriceIncompatible);
+        }
+        price_sum = price_sum
+            .checked_add(price)
+            .ok_or(Error::ArithmeticOverflow)?;
+        gross[index] = quote(input.fill, price)?;
+        let transition = record.consume(
+            input.buyer_replay_roots[index],
+            input.slot,
+            input.fill,
+            gross[index],
+            gross[index],
+        )?;
+        fees[index] = transition.2;
+        let mut position = input.buyer_positions[index];
+        position.credit_outcome(index, input.fill)?;
+        gross_sum = gross_sum
+            .checked_add(gross[index])
+            .ok_or(Error::ArithmeticOverflow)?;
+        fee_sum = fee_sum
+            .checked_add(fees[index])
+            .ok_or(Error::ArithmeticOverflow)?;
+    }
+    if price_sum != crate::PRICE_SCALE || gross_sum != input.fill {
+        return Err(Error::SplitFundingMismatch);
+    }
+
+    for index in 0..count {
+        let transition = input.buyer_records[index].consume(
+            input.buyer_replay_roots[index],
+            input.slot,
+            input.fill,
+            gross[index],
+            gross[index],
+        )?;
+        input.buyer_replay_roots[index] = transition.1;
+        input.record_closes[index] = transition.0.close;
+        if let Some(record) = transition.0.live_record {
+            input.buyer_records[index] = record;
+        }
+        input.buyer_positions[index].credit_outcome(index, input.fill)?;
+    }
+    input.gross_debits.copy_from_slice(&gross[..count]);
+    input.fee_debits.copy_from_slice(&fees[..count]);
+    Ok(RuntimeSplitSettlementEffectsV2 {
+        market_vault_collateral_credit: input.fill,
+        venue_fee_transfer: fee_sum,
+    })
+}
+
+/// Borrowed runtime-width inputs and outputs for one Sell merge.
+pub struct RuntimeComplementarySellMatchInPlaceV2<'a> {
+    /// Canonical Market phase.
+    pub phase: crate::adapter::MarketPhaseV2,
+    /// Current trusted slot.
+    pub slot: u64,
+    /// Runtime outcome width.
+    pub outcome_count: u8,
+    /// Replay roots replaced on success.
+    pub seller_replay_roots: &'a mut [MakerReplayRootV2],
+    /// Records replaced where the fill remains live.
+    pub seller_records: &'a mut [DirectIntentRecordV2],
+    /// Participant accounts in canonical order.
+    pub seller_accounts: &'a [ParticipantAccountsV2],
+    /// Runtime-width Positions authenticated in canonical order.
+    pub seller_positions: &'a [DirectPositionV2],
+    /// Caller-owned close slots.
+    pub record_closes: &'a mut [Option<crate::LiveRecordCloseV2>],
+    /// Common positive fill.
+    pub fill: u64,
+    /// Exact execution prices.
+    pub execution_prices: &'a [u64],
+    /// Caller-owned gross-credit output.
+    pub gross_credits: &'a mut [u64],
+    /// Caller-owned fee-debit output.
+    pub fee_debits: &'a mut [u64],
+    /// Caller-owned net-credit output.
+    pub net_credits: &'a mut [u64],
+    /// Canonical fee policy.
+    pub fee_policy: VenueFeePolicyV3,
+    /// Manifest-authenticated policy digest.
+    pub fee_config_digest: [u8; 32],
+    /// Actual fee recipient account.
+    pub fee_recipient_account: [u8; 32],
+}
+
+/// Aggregate effects of a runtime-width Sell merge.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeMergeSettlementEffectsV2 {
+    /// Exact Market-vault collateral debit.
+    pub market_vault_collateral_debit: u64,
+    /// Aggregate fee transfer.
+    pub venue_fee_transfer: u64,
+}
+
+/// Check and atomically project one Sell merge without width specialization.
+#[allow(clippy::needless_range_loop)]
+pub fn settle_merge_runtime_in_place_v2(
+    input: RuntimeComplementarySellMatchInPlaceV2<'_>,
+) -> Result<RuntimeMergeSettlementEffectsV2> {
+    let count = usize::from(input.outcome_count);
+    width(count)?;
+    crate::adapter::require_market_phase_v2(crate::adapter::AdapterActionV2::Merge, input.phase)?;
+    if input.fill == 0 {
+        return Err(Error::ZeroQuantity);
+    }
+    require_complementary_lengths(
+        count,
+        &[
+            input.seller_replay_roots.len(),
+            input.seller_records.len(),
+            input.seller_accounts.len(),
+            input.seller_positions.len(),
+            input.record_closes.len(),
+            input.execution_prices.len(),
+            input.gross_credits.len(),
+            input.fee_debits.len(),
+            input.net_credits.len(),
+        ],
+    )?;
+    distinct_participants(input.seller_accounts)?;
+    let first = input
+        .seller_records
+        .first()
+        .ok_or(Error::InvalidOutcomeWidth)?
+        .intent();
+    let mut gross = [0u64; dclutch_realm_contract::MAX_OUTCOMES];
+    let mut fees = [0u64; dclutch_realm_contract::MAX_OUTCOMES];
+    let mut net = [0u64; dclutch_realm_contract::MAX_OUTCOMES];
+    let mut price_sum = 0u64;
+    let mut gross_sum = 0u64;
+    let mut fee_sum = 0u64;
+
+    for index in 0..count {
+        let record = input.seller_records[index];
+        let intent = record.intent();
+        let expected = u8::try_from(index).map_err(|_| Error::InvalidOutcome)?;
+        if intent.side() != Side::Sell
+            || intent.market() != first.market()
+            || intent.generation() != first.generation()
+            || intent.outcome() != expected
+        {
+            return Err(Error::NonCanonicalComplement);
+        }
+        if input.seller_records[..index]
+            .iter()
+            .any(|prior| prior.intent().maker() == intent.maker())
+        {
+            return Err(Error::Alias);
+        }
+        input.seller_accounts[index].validate(intent)?;
+        if input.seller_positions[index].outcome_count() != input.outcome_count {
+            return Err(Error::InvalidOutcomeWidth);
+        }
+        runtime_position_matches(input.seller_positions[index], intent)?;
+        venue_authorized(
+            intent,
+            input.fee_policy,
+            input.fee_config_digest,
+            input.fee_recipient_account,
+        )?;
+        let price = input.execution_prices[index];
+        if price < intent.limit_price() {
+            return Err(Error::PriceIncompatible);
+        }
+        price_sum = price_sum
+            .checked_add(price)
+            .ok_or(Error::ArithmeticOverflow)?;
+        gross[index] = quote(input.fill, price)?;
+        let transition = record.consume(
+            input.seller_replay_roots[index],
+            input.slot,
+            input.fill,
+            gross[index],
+            0,
+        )?;
+        fees[index] = transition.2;
+        net[index] = gross[index]
+            .checked_sub(fees[index])
+            .ok_or(Error::ArithmeticOverflow)?;
+        gross_sum = gross_sum
+            .checked_add(gross[index])
+            .ok_or(Error::ArithmeticOverflow)?;
+        fee_sum = fee_sum
+            .checked_add(fees[index])
+            .ok_or(Error::ArithmeticOverflow)?;
+    }
+    if price_sum != crate::PRICE_SCALE || gross_sum != input.fill {
+        return Err(Error::SplitFundingMismatch);
+    }
+
+    for index in 0..count {
+        let transition = input.seller_records[index].consume(
+            input.seller_replay_roots[index],
+            input.slot,
+            input.fill,
+            gross[index],
+            0,
+        )?;
+        input.seller_replay_roots[index] = transition.1;
+        input.record_closes[index] = transition.0.close;
+        if let Some(record) = transition.0.live_record {
+            input.seller_records[index] = record;
+        }
+    }
+    input.gross_credits.copy_from_slice(&gross[..count]);
+    input.fee_debits.copy_from_slice(&fees[..count]);
+    input.net_credits.copy_from_slice(&net[..count]);
+    Ok(RuntimeMergeSettlementEffectsV2 {
         market_vault_collateral_debit: input.fill,
         venue_fee_transfer: fee_sum,
     })

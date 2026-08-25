@@ -7,15 +7,23 @@ use crate::adapter::{
     AdapterActionV2, ED25519_PROGRAM_ID_3_0, Ed25519ExpectationV2, Ed25519InstructionViewV2,
     MEASURED_LOOKUP_TABLES_V2, MEASURED_TRANSACTION_SIGNATURES_V2, PacketAdmissionV2,
     SOLANA_PACKET_DATA_SIZE_3_0, admit_settlement_packet_v2, canonical_ed25519_test_instruction,
-    canonical_ed25519_test_instruction_len, decode_inline_complementary_instruction_v2,
+    canonical_ed25519_test_instruction_len, decode_complementary_instruction_v2,
+    decode_complementary_instruction_view_v2, decode_inline_complementary_instruction_v2,
     decode_inline_ordinary_instruction_v2, decode_ordinary_instruction_v2,
-    encode_cancel_instruction_v2, encode_inline_complementary_instruction_v2,
-    encode_inline_ordinary_instruction_v2, encode_ordinary_instruction_v2,
-    encode_register_instruction_v2, inline_complementary_instruction_bytes_v2,
-    inspect_preceding_ed25519_batch_v2, inspect_preceding_ed25519_v2,
-    measured_inline_complementary_reference_v2, measured_settlement_envelope_v2,
-    stateless_shared_message_ed25519_minimum_v2,
+    encode_cancel_instruction_v2, encode_complementary_instruction_v2,
+    encode_inline_complementary_instruction_v2, encode_inline_ordinary_instruction_v2,
+    encode_ordinary_instruction_v2, encode_register_instruction_v2,
+    inline_complementary_instruction_bytes_v2, inspect_preceding_ed25519_batch_v2,
+    inspect_preceding_ed25519_v2, measured_inline_complementary_reference_v2,
+    measured_settlement_envelope_v2, stateless_shared_message_ed25519_minimum_v2,
 };
+
+fn runtime_position<const N: usize>(value: PositionV1<N>) -> Result<DirectPositionV2> {
+    let length = PositionV1::<N>::encoded_len().map_err(position_error)?;
+    let mut bytes = [0u8; 216];
+    value.encode(&mut bytes[..length]).map_err(position_error)?;
+    DirectPositionV2::decode(&bytes[..length])
+}
 
 fn key(value: u8) -> [u8; 32] {
     [value; 32]
@@ -2106,5 +2114,149 @@ fn maker_cancel_through_is_o1_and_permissionless_unwind_preserves_assets() -> Re
     })?;
     assert_eq!(closed_buy.close.collateral_refund, 1);
     assert_eq!(closed_buy.close.rent_refund_payer, key(233));
+    Ok(())
+}
+
+#[test]
+fn runtime_position_is_byte_and_transition_equivalent_at_every_width() -> Result<()> {
+    macro_rules! check {
+        ($width:literal) => {{
+            let balances = core::array::from_fn(|index| u64::try_from(index + 10).unwrap_or(0));
+            let mut native =
+                PositionV1::<$width>::new(key(7), key(42), 3, balances).map_err(position_error)?;
+            let mut runtime = runtime_position(native)?;
+            assert_eq!(runtime.outcome_count(), $width);
+            for index in 0..$width {
+                assert_eq!(runtime.balance(index)?, native.balances()[index]);
+            }
+            native
+                .credit_outcome($width - 1, 9)
+                .map_err(position_error)?;
+            runtime.credit_outcome($width - 1, 9)?;
+            native.debit_outcome(0, 3).map_err(position_error)?;
+            runtime.debit_outcome(0, 3)?;
+            let length = PositionV1::<$width>::encoded_len().map_err(position_error)?;
+            let mut native_bytes = [0u8; 216];
+            native
+                .encode(&mut native_bytes[..length])
+                .map_err(position_error)?;
+            let mut runtime_bytes = [0u8; 216];
+            runtime.encode_into(&mut runtime_bytes[..length])?;
+            assert_eq!(runtime_bytes, native_bytes);
+        }};
+    }
+    check!(2);
+    check!(3);
+    check!(4);
+    check!(5);
+    check!(6);
+    check!(7);
+    check!(8);
+    check!(9);
+    check!(10);
+    check!(11);
+    check!(12);
+    check!(13);
+    check!(14);
+    check!(15);
+    check!(16);
+
+    let canonical = position_n::<2>(42, [10, 11])?;
+    let length = PositionV1::<2>::encoded_len().map_err(position_error)?;
+    let mut bytes = [0u8; 216];
+    canonical
+        .encode(&mut bytes[..length])
+        .map_err(position_error)?;
+    bytes[0] ^= 1;
+    assert_eq!(
+        DirectPositionV2::decode(&bytes[..length]),
+        Err(Error::InvalidMagic)
+    );
+    bytes[0] ^= 1;
+    bytes[11] = 1;
+    assert_eq!(
+        DirectPositionV2::decode(&bytes[..length]),
+        Err(Error::NonCanonicalReservedBytes)
+    );
+    assert_eq!(
+        DirectPositionV2::decode(&bytes[..length - 1]),
+        Err(Error::InvalidLength)
+    );
+    Ok(())
+}
+
+#[test]
+fn runtime_complementary_parser_matches_every_fixed_width_and_refuses_hostile_modes() -> Result<()>
+{
+    macro_rules! check {
+        ($width:literal) => {{
+            let prices: [u64; $width] =
+                core::array::from_fn(|index| u64::try_from(index + 1).unwrap_or(0));
+            let length = adapter::complementary_instruction_bytes_v2($width)?;
+            let mut bytes = [0u8; 168];
+            encode_complementary_instruction_v2(
+                AdapterActionV2::Split,
+                77,
+                prices,
+                &mut bytes[..length],
+            )?;
+            let fixed = decode_complementary_instruction_v2::<$width>(
+                &bytes[..length],
+                AdapterActionV2::Split,
+            )?;
+            let runtime = decode_complementary_instruction_view_v2(
+                &bytes[..length],
+                AdapterActionV2::Split,
+                $width,
+            )?;
+            assert_eq!(runtime.action(), fixed.action);
+            assert_eq!(runtime.fill(), fixed.fill);
+            assert_eq!(usize::from(runtime.outcome_count()), $width);
+            for index in 0..$width {
+                assert_eq!(
+                    runtime.execution_price(index)?,
+                    fixed.execution_prices[index]
+                );
+            }
+            assert_eq!(runtime.execution_price($width), Err(Error::InvalidOutcome));
+        }};
+    }
+    check!(2);
+    check!(3);
+    check!(4);
+    check!(5);
+    check!(6);
+    check!(7);
+    check!(8);
+    check!(9);
+    check!(10);
+    check!(11);
+    check!(12);
+    check!(13);
+    check!(14);
+    check!(15);
+    check!(16);
+
+    let length = adapter::complementary_instruction_bytes_v2(16)?;
+    let mut hostile = [0u8; 168];
+    encode_complementary_instruction_v2(
+        AdapterActionV2::Merge,
+        1,
+        [62_500; 16],
+        &mut hostile[..length],
+    )?;
+    hostile[length - 1] = 1;
+    assert_eq!(
+        decode_complementary_instruction_view_v2(&hostile[..length], AdapterActionV2::Merge, 16),
+        Err(Error::MixedAuthorizationModes)
+    );
+    assert_eq!(
+        decode_complementary_instruction_view_v2(
+            &hostile[..length - 1],
+            AdapterActionV2::Merge,
+            16
+        ),
+        Err(Error::InvalidLength)
+    );
     Ok(())
 }

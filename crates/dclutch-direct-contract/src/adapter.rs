@@ -458,6 +458,40 @@ pub struct ComplementaryAdapterInstructionV2<const N: usize> {
     pub execution_prices: [u64; N],
 }
 
+/// Borrowed complementary data for one hostile runtime width.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ComplementaryAdapterInstructionViewV2<'a> {
+    action: AdapterActionV2,
+    fill: u64,
+    outcome_count: u8,
+    bytes: &'a [u8],
+}
+
+impl ComplementaryAdapterInstructionViewV2<'_> {
+    /// Return the authenticated split or merge action.
+    pub const fn action(self) -> AdapterActionV2 {
+        self.action
+    }
+
+    /// Return the common positive fill field.
+    pub const fn fill(self) -> u64 {
+        self.fill
+    }
+
+    /// Return the exact authenticated outcome width.
+    pub const fn outcome_count(self) -> u8 {
+        self.outcome_count
+    }
+
+    /// Decode one execution price in canonical outcome order.
+    pub fn execution_price(self, index: usize) -> Result<u64> {
+        if index >= usize::from(self.outcome_count) {
+            return Err(Error::InvalidOutcome);
+        }
+        Ok(u64::from_le_bytes(array(self.bytes, price_offset(index)?)?))
+    }
+}
+
 /// Encode registration data and choose exact custody action from signed side.
 pub fn encode_register_instruction_v2(
     intent: DirectIntentV2,
@@ -799,6 +833,36 @@ pub fn decode_complementary_instruction_v2<const N: usize>(
         action: expected_action,
         fill: u64::from_le_bytes(array(bytes, BODY_OFFSET)?),
         execution_prices,
+    })
+}
+
+/// Decode complementary data at a hostile runtime width without an array copy.
+pub fn decode_complementary_instruction_view_v2(
+    bytes: &[u8],
+    expected_action: AdapterActionV2,
+    outcome_count: u8,
+) -> Result<ComplementaryAdapterInstructionViewV2<'_>> {
+    if expected_action != AdapterActionV2::Split && expected_action != AdapterActionV2::Merge {
+        return Err(Error::UnknownAdapterAction);
+    }
+    let count = usize::from(outcome_count);
+    if bytes.len() != complementary_instruction_bytes_v2(count)? {
+        return Err(Error::InvalidLength);
+    }
+    if decode_common_header(bytes, outcome_count)? != expected_action {
+        return Err(Error::UnknownAdapterAction);
+    }
+    modes(
+        bytes
+            .get(price_offset(count)?..)
+            .ok_or(Error::InvalidLength)?,
+        AuthorizationModeV2::Persisted,
+    )?;
+    Ok(ComplementaryAdapterInstructionViewV2 {
+        action: expected_action,
+        fill: u64::from_le_bytes(array(bytes, BODY_OFFSET)?),
+        outcome_count,
+        bytes,
     })
 }
 

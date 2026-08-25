@@ -2,8 +2,8 @@ use dclutch_realm_contract::PositionV1;
 use dclutch_rent_contract::{RefundAuthority, RentCreditV1, SourceCloseCreditPlanV1};
 
 use crate::{
-    Error, FEE_BASIS_POINTS_DENOMINATOR, PRICE_SCALE, Result, adapter, array, fee, nonzero, one,
-    position_error, put, width, zeros,
+    DirectPositionV2, Error, FEE_BASIS_POINTS_DENOMINATOR, PRICE_SCALE, Result, adapter, array,
+    fee, nonzero, one, position_error, put, width, zeros,
 };
 
 /// Canonical signed-intent preimage magic.
@@ -1215,6 +1215,129 @@ pub fn register_intent_v2<const N: usize>(
     })
 }
 
+/// Runtime-width registration input for the monomorphic SBF path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeRegistrationInputV2 {
+    /// Existing replay root or canonical first-use absence.
+    pub replay_root: ReplayRootStateV2,
+    /// Exact maker-signed registered intent.
+    pub intent: DirectIntentV2,
+    /// Sealed immediately preceding native authorization.
+    pub authorization: adapter::Ed25519AuthorizationV2,
+    /// Canonical Market phase projection.
+    pub phase: adapter::MarketPhaseV2,
+    /// Trusted current slot.
+    pub slot: u64,
+    /// Exact physical account bindings.
+    pub accounts: ParticipantAccountsV2,
+    /// Separate account-creation payer and rent beneficiary.
+    pub system_payer: [u8; 32],
+    /// Realm collateral mint for Buy, absent for Sell.
+    pub collateral_mint: Option<[u8; 32]>,
+    /// Authenticated Buy debit authority, absent for Sell.
+    pub buy_debit_authority: Option<adapter::BuyDebitAuthorityV2>,
+    /// Canonical live-record PDA bump.
+    pub record_bump: u8,
+    /// Canonical venue policy.
+    pub fee_policy: VenueFeePolicyV3,
+    /// Manifest-authenticated policy digest.
+    pub fee_config_digest: [u8; 32],
+    /// Runtime-width native Position.
+    pub position: DirectPositionV2,
+}
+
+/// Runtime-width registration effects.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeRegistrationV2 {
+    /// Updated replay root.
+    pub replay_root: MakerReplayRootV2,
+    /// New live intent record.
+    pub record: DirectIntentRecordV2,
+    /// Replacement Position.
+    pub position: DirectPositionV2,
+    /// Exact claims reserved from the Position.
+    pub reserved_claim_debit: u64,
+    /// Exact collateral and maximum fee reserve.
+    pub reserved_collateral_debit: u64,
+}
+
+/// Register one intent without specializing execution by outcome width.
+pub fn register_intent_runtime_v2(
+    input: RuntimeRegistrationInputV2,
+) -> Result<RuntimeRegistrationV2> {
+    let RuntimeRegistrationInputV2 {
+        replay_root,
+        intent,
+        authorization,
+        phase,
+        slot,
+        accounts,
+        system_payer,
+        collateral_mint,
+        buy_debit_authority,
+        record_bump,
+        fee_policy,
+        fee_config_digest,
+        mut position,
+    } = input;
+    let action = match intent.side() {
+        Side::Buy => adapter::AdapterActionV2::RegisterBuy,
+        Side::Sell => adapter::AdapterActionV2::RegisterSell,
+    };
+    adapter::require_market_phase_v2(action, phase)?;
+    authorization.authorizes_registration(intent)?;
+    if slot < intent.valid_from_slot() || slot > intent.valid_through_slot() {
+        return Err(Error::IntentExpired);
+    }
+    accounts.validate(intent)?;
+    validate_venue_policy_selection_v3(intent, fee_policy, fee_config_digest)?;
+    nonzero(&system_payer)?;
+    runtime_position_matches(position, intent)?;
+    let outcome = usize::from(intent.outcome());
+    if outcome >= usize::from(position.outcome_count()) {
+        return Err(Error::InvalidOutcome);
+    }
+    let next_root = replay_root
+        .open_for_intent(intent, system_payer)?
+        .register(intent)?;
+    let (claims, collateral) = match intent.side() {
+        Side::Buy => {
+            let collateral = maximum_buy_reserve(intent)?;
+            adapter::validate_registered_buy_debit_authority_v2(
+                buy_debit_authority.ok_or(Error::InvalidBuyDebitAuthority)?,
+                intent,
+                accounts.replay_root,
+                collateral_mint.ok_or(Error::InvalidBuyDebitAuthority)?,
+                collateral,
+            )?;
+            (0, collateral)
+        }
+        Side::Sell => {
+            if collateral_mint.is_some() || buy_debit_authority.is_some() {
+                return Err(Error::InvalidBuyDebitAuthority);
+            }
+            position.debit_outcome(outcome, intent.max_fill())?;
+            (intent.max_fill(), 0)
+        }
+    };
+    Ok(RuntimeRegistrationV2 {
+        replay_root: next_root,
+        record: DirectIntentRecordV2 {
+            intent,
+            filled: 0,
+            reserved_claims: claims,
+            reserved_collateral: collateral,
+            fee_basis_gross: 0,
+            cumulative_fee: 0,
+            rent_payer: system_payer,
+            bump: record_bump,
+        },
+        position,
+        reserved_claim_debit: claims,
+        reserved_collateral_debit: collateral,
+    })
+}
+
 /// Canonical cancellation authorization message.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DirectCancelV2 {
@@ -1648,6 +1771,133 @@ pub fn close_invalidated_intent_v1<const N: usize>(
     })
 }
 
+/// Runtime-width reason for unwinding one live record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeUnwindKindV2<'a> {
+    /// Maker-authorized cancellation.
+    Cancel {
+        /// Sealed authorization of the exact cancellation preimage.
+        authorization: &'a adapter::Ed25519AuthorizationV2,
+    },
+    /// Permissionless close strictly after the inclusive expiry slot.
+    Expire {
+        /// Trusted current slot.
+        slot: u64,
+    },
+    /// Permissionless close below the maker-signed live-nonce threshold.
+    Invalidated,
+}
+
+/// Runtime-width live-record unwind input.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeUnwindInputV2<'a> {
+    /// Existing maker replay root.
+    pub replay_root: MakerReplayRootV2,
+    /// Program-owned live record.
+    pub record: DirectIntentRecordV2,
+    /// Selected unwind authorization or clock condition.
+    pub kind: RuntimeUnwindKindV2<'a>,
+    /// Canonical Market phase.
+    pub phase: adapter::MarketPhaseV2,
+    /// Exact participant bindings.
+    pub accounts: ParticipantAccountsV2,
+    /// Realm collateral mint for Buy, absent for Sell.
+    pub collateral_mint: Option<[u8; 32]>,
+    /// Authenticated Buy escrow authority, absent for Sell.
+    pub escrow_authority: Option<adapter::EscrowAuthorityV2>,
+    /// Current runtime-width Position.
+    pub position: DirectPositionV2,
+}
+
+/// Runtime-width unwind effects.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeUnwindV2 {
+    /// Replay root after live-count decrement.
+    pub replay_root: MakerReplayRootV2,
+    /// Closed-record asset and rent effects.
+    pub close: LiveRecordCloseV2,
+    /// Position after any remaining sell claims are returned.
+    pub position: DirectPositionV2,
+}
+
+/// Unwind cancellation, expiry, and nonce invalidation through one runtime path.
+pub fn unwind_intent_runtime_v2(input: RuntimeUnwindInputV2<'_>) -> Result<RuntimeUnwindV2> {
+    let RuntimeUnwindInputV2 {
+        replay_root,
+        record,
+        kind,
+        phase,
+        accounts,
+        collateral_mint,
+        escrow_authority,
+        mut position,
+    } = input;
+    let intent = record.intent();
+    let action = match (kind, intent.side()) {
+        (RuntimeUnwindKindV2::Cancel { .. }, Side::Buy) => adapter::AdapterActionV2::CancelBuy,
+        (RuntimeUnwindKindV2::Cancel { .. }, Side::Sell) => adapter::AdapterActionV2::CancelSell,
+        (RuntimeUnwindKindV2::Expire { .. }, Side::Buy) => adapter::AdapterActionV2::ExpireBuy,
+        (RuntimeUnwindKindV2::Expire { .. }, Side::Sell) => adapter::AdapterActionV2::ExpireSell,
+        (RuntimeUnwindKindV2::Invalidated, Side::Buy) => {
+            adapter::AdapterActionV2::CloseInvalidatedBuy
+        }
+        (RuntimeUnwindKindV2::Invalidated, Side::Sell) => {
+            adapter::AdapterActionV2::CloseInvalidatedSell
+        }
+    };
+    adapter::require_market_phase_v2(action, phase)?;
+    match kind {
+        RuntimeUnwindKindV2::Cancel { authorization } => {
+            authorization.authorizes_cancellation(record)?;
+        }
+        RuntimeUnwindKindV2::Expire { slot } => {
+            if slot <= intent.valid_through_slot() {
+                return Err(Error::IntentNotExpired);
+            }
+        }
+        RuntimeUnwindKindV2::Invalidated => {
+            replay_root.for_intent(intent)?;
+            if intent.nonce() >= replay_root.minimum_live_nonce() {
+                return Err(Error::IntentNotInvalidated);
+            }
+        }
+    }
+    accounts.validate(intent)?;
+    match intent.side() {
+        Side::Buy => adapter::validate_registered_escrow_authority_v2(
+            escrow_authority.ok_or(Error::InvalidEscrowAuthority)?,
+            record,
+            accounts.record,
+            accounts.escrow,
+            collateral_mint.ok_or(Error::InvalidEscrowAuthority)?,
+        )?,
+        Side::Sell if collateral_mint.is_some() || escrow_authority.is_some() => {
+            return Err(Error::InvalidEscrowAuthority);
+        }
+        Side::Sell => {}
+    }
+    runtime_position_matches(position, intent)?;
+    replay_root.for_intent(intent)?;
+    let outcome = usize::from(intent.outcome());
+    if outcome >= usize::from(position.outcome_count()) {
+        return Err(Error::InvalidOutcome);
+    }
+    if record.reserved_claims() != 0 {
+        position.credit_outcome(outcome, record.reserved_claims())?;
+    }
+    let next_root = replay_root.close_live(intent)?;
+    Ok(RuntimeUnwindV2 {
+        replay_root: next_root,
+        close: LiveRecordCloseV2 {
+            closed_nonce: intent.nonce(),
+            rent_refund_payer: *record.rent_payer(),
+            collateral_refund: record.reserved_collateral(),
+            claim_refund: record.reserved_claims(),
+        },
+        position,
+    })
+}
+
 /// Immutable market-independent fee policy read from a canonical record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VenueFeePolicyV3 {
@@ -1744,6 +1994,19 @@ pub(crate) fn position_matches<const N: usize>(
         return Err(Error::PositionMarketMismatch);
     }
     if position.owner() != intent.maker() {
+        return Err(Error::PositionOwnerMismatch);
+    }
+    Ok(())
+}
+
+pub(crate) fn runtime_position_matches(
+    position: DirectPositionV2,
+    intent: DirectIntentV2,
+) -> Result<()> {
+    if position.market() != *intent.market() || position.generation() != intent.generation() {
+        return Err(Error::PositionMarketMismatch);
+    }
+    if position.owner() != *intent.maker() {
         return Err(Error::PositionOwnerMismatch);
     }
     Ok(())
