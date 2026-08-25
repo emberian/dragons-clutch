@@ -483,6 +483,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-product-admission-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-core-contract",
+ "dclutch-product-contract",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-payoff-v2-svm",
+ "dclutch-resolution-codec",
+]
+
+[[package]]
 name = "dclutch-product-compiler"
 version = "0.1.0"
 dependencies = [
@@ -493,6 +505,27 @@ dependencies = [
 [[package]]
 name = "dclutch-product-contract"
 version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-evidence-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-core-contract",
+ "dclutch-market-contract",
+ "dclutch-product-admission-contract",
+ "dclutch-product-contract",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-payoff-v2-svm",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-resolution-codec",
+ "solana-program",
+ "solana-sdk-ids",
+ "solana-system-interface",
+]
 
 [[package]]
 name = "dclutch-product-payoff-codec"
@@ -515,6 +548,14 @@ dependencies = [
 
 [[package]]
 name = "dclutch-product-payoff-svm"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-payoff-v2-codec"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-payoff-v2-svm"
 version = "0.1.0"
 
 [[package]]
