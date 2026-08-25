@@ -17,6 +17,8 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
+/// Dealer family projection behind the common data-defined Trading boundary.
+pub mod dealer;
 /// Manifest-, root-, release-, and descriptor-authenticated generic dispatch.
 pub mod dispatch;
 /// General family projection behind the common data-defined Trading boundary.

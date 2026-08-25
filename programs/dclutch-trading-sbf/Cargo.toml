@@ -19,12 +19,17 @@ custom-panic = []
 [dependencies]
 dclutch-capability-contract = { path = "../../crates/dclutch-capability-contract" }
 dclutch-capability-program-contract = { path = "../../crates/dclutch-capability-program-contract" }
+dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
+dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract" }
+dclutch-dealer-codec = { path = "../../crates/dclutch-dealer-codec" }
+dclutch-economic-slice-kernel = { path = "../../crates/dclutch-economic-slice-kernel" }
 dclutch-general-config-contract = { path = "../../crates/dclutch-general-config-contract" }
 dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
 dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
 dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
 dclutch-transition-vm = { path = "../../crates/dclutch-transition-vm" }
+dclutch-token-svm = { path = "../../crates/dclutch-token-svm" }
 solana-program = { version = "=3.0.0", default-features = false }
 
 [dev-dependencies]

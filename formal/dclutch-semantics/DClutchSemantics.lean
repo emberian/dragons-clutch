@@ -35,6 +35,7 @@ import DClutchSemantics.ClaimsRepresentationExamples
 import DClutchSemantics.DealerLiquidity
 import DClutchSemantics.DealerLiquidityExamples
 import DClutchSemantics.DealerScenarioCollateral
+import DClutchSemantics.DealerTradingProfile
 import DClutchSemantics.Series
 import DClutchSemantics.SeriesExamples
 import DClutchSemantics.MarketCore

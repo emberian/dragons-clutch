@@ -17,6 +17,14 @@ pub mod scenario;
 #[rustfmt::skip]
 mod generated_dealer_liquidity;
 
+#[rustfmt::skip]
+mod generated_dealer_trading_profile;
+
+/// Inventory-free mutable tail for the canonical composite Trading root.
+pub mod root_tail;
+/// Canonical Trading Dealer request with explicit Claims optimistic revision.
+pub mod trading_request;
+
 use generated_dealer_liquidity as generated;
 
 /// Fixed identity width used by this physical profile.
@@ -1354,7 +1362,37 @@ pub fn interpret(inputs: Inputs<'_>) -> Result<Transition> {
     let receipt = ReleaseReceipt::decode(inputs.release_receipt)?;
     let state = State::decode(inputs.state)?;
     let request = Request::decode(inputs.request)?;
-    validate_joins(policy, active, pending, receipt, state, request)?;
+    if receipt.release_set_id != policy.release_set_id {
+        return Err(Error::IdentityMismatch);
+    }
+    interpret_projected(policy, active, pending, proposed, state, request)
+}
+
+/// Execute the total Dealer machine from already authenticated projections.
+///
+/// The canonical Trading adapter uses this boundary after it authenticates
+/// the selected config, Candidate accounts, composite root tail, Claims
+/// Position, Custody vaults, and fixed Trading release context. This function
+/// owns no Registry or Solana authority and therefore accepts no parallel
+/// release receipt. The returned `State` remains transaction-local; an
+/// adapter persists only Dealer-owned coordinates from it.
+pub fn interpret_projected(
+    policy: Policy,
+    active: CandidateView<'_>,
+    pending: Option<CandidateView<'_>>,
+    proposed: Option<CandidateView<'_>>,
+    state: State,
+    request: Request,
+) -> Result<Transition> {
+    policy.validate()?;
+    active.validate_against(policy)?;
+    if let Some(candidate) = pending {
+        candidate.validate_against(policy)?;
+    }
+    if let Some(candidate) = proposed {
+        candidate.validate_against(policy)?;
+    }
+    validate_projected_joins(policy, active, pending, state, request)?;
     let transition = match request.action {
         Action::ScheduleReplacement => schedule(policy, active, pending, proposed, state, request),
         Action::ActivateReplacement => activate(policy, pending, proposed, state, request),
@@ -1366,16 +1404,14 @@ pub fn interpret(inputs: Inputs<'_>) -> Result<Transition> {
     Ok(transition)
 }
 
-fn validate_joins(
+fn validate_projected_joins(
     policy: Policy,
     active: CandidateView<'_>,
     pending: Option<CandidateView<'_>>,
-    receipt: ReleaseReceipt,
     state: State,
     request: Request,
 ) -> Result<()> {
     if state.release_set_id != policy.release_set_id
-        || receipt.release_set_id != policy.release_set_id
         || state.active_candidate_id != active.candidate_id
         || state.active_revision != active.revision
         || request.expected_candidate_id != active.candidate_id
