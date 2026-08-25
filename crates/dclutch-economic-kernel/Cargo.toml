@@ -1,0 +1,10 @@
+[package]
+name = "dclutch-economic-kernel"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Bounded safe-Rust executor for the Lean-owned shared economic microkernel"
+
+[lints]
+workspace = true

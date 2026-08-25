@@ -17,6 +17,7 @@ import DClutchSemantics.CompiledPhysical
 import DClutchSemantics.DirectControllerCodec
 import DClutchSemantics.EconomicKernel
 import DClutchSemantics.EconomicExamples
+import DClutchSemantics.EconomicCodec
 import DClutchSemantics.SourceResolution
 import DClutchSemantics.SourceResolutionAbi
 

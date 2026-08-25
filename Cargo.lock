@@ -379,6 +379,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-economic-kernel"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-effect-kernel"
 version = "0.1.0"
 

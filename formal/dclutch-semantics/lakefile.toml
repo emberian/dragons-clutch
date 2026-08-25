@@ -38,6 +38,10 @@ name = "emit-direct-codec-rust"
 root = "EmitDirectCodecRust"
 
 [[lean_exe]]
+name = "emit-economic-vectors"
+root = "EmitEconomicVectors"
+
+[[lean_exe]]
 name = "emit-direct-lifecycle-abi-rust"
 root = "EmitDirectLifecycleAbiRust"
 
