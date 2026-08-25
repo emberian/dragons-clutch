@@ -351,7 +351,7 @@ fn process_activate<const N: usize>(
     require_prefunded_vacant(root_account)?;
     require_prefunded_vacant(general_funding_account)?;
     let market =
-        authenticate_market::<N>(program_id, market_account, market_account.key.to_bytes())?;
+        authenticate_market_boxed::<N>(program_id, market_account, market_account.key.to_bytes())?;
     let identity = market.root().identity();
     let _realm = authenticate_realm(
         program_id,
@@ -375,7 +375,7 @@ fn process_activate<const N: usize>(
     {
         return Err(AdapterError::AccountIdentity.into());
     }
-    let capability_funding = decode_capability_funding(capability_funding_account)?;
+    let capability_funding = decode_capability_funding_boxed(capability_funding_account)?;
     let rent = Rent::from_account_info(rent_sysvar).map_err(|_| AdapterError::AccountData)?;
     let clock = authenticate_clock(clock_sysvar)?;
     let root_rent = rent.minimum_balance(GENERAL_ROOT_BYTES);
@@ -461,7 +461,7 @@ fn process_activate<const N: usize>(
                         market_identity_id,
                         manifest_id,
                         manifest,
-                        capability_funding,
+                        *capability_funding,
                         capability_custody,
                         GeneralActivationCapitalizationV1::new(root_rent, funding_rent),
                         clock.slot,
@@ -1666,12 +1666,11 @@ fn process_begin_settlement<const N: usize>(
             total.checked_add(*amount)
         })
         .ok_or(AdapterError::Arithmetic)?;
-    let settlement_position = PositionV1::<N>::empty(
+    let settlement_position = empty_position_boxed::<N>(
         market_account.key.to_bytes(),
         cursor_account.key.to_bytes(),
         config.generation(),
-    )
-    .map_err(|_| AdapterError::PositionAuthentication)?;
+    )?;
     preflight_mutable(&[
         actor,
         batch_account,
@@ -1741,7 +1740,7 @@ fn process_begin_settlement<const N: usize>(
     write_batch(batch_account, batch)?;
     write_candidate(candidate_account, *candidate)?;
     write_settlement_cursor(cursor_account, begin.cursor())?;
-    write_position(settlement_position_account, settlement_position)?;
+    write_position(settlement_position_account, *settlement_position)?;
 
     let surplus = begin
         .temporary_surplus_refund_lamports()
@@ -1884,63 +1883,6 @@ fn process_collect_settlement_page<const N: usize>(
         cursor_account.key,
     )?;
 
-    for (index, execution) in page
-        .executions
-        .iter()
-        .take(execution_count)
-        .flatten()
-        .enumerate()
-    {
-        authenticate_order_id(execution.order)?;
-        let base = 17 + index * 4;
-        let state_account = account(accounts, base)?;
-        let custody_account = account(accounts, base + 1)?;
-        let owner_position_account = account(accounts, base + 2)?;
-        let quote_escrow = account(accounts, base + 3)?;
-        let state_seeds =
-            GeneralOrderStatePdaSeedsV1::new(market_account.key.to_bytes(), execution.order)
-                .map_err(|_| AdapterError::PositionAuthentication)?;
-        let (expected_state, _) =
-            Pubkey::find_program_address(&state_seeds.seed_components(), program_id);
-        let state = decode_order_state(state_account)?;
-        if state_account.key != &expected_state || state != execution.order_state {
-            return Err(AdapterError::ReplayMismatch.into());
-        }
-        let custody_seeds = GeneralOrderCustodyPdaSeedsV1::new(state_account.key.to_bytes())
-            .map_err(|_| AdapterError::PositionAuthentication)?;
-        let (expected_custody, _) =
-            Pubkey::find_program_address(&custody_seeds.seed_components(), program_id);
-        let custody = decode_custody::<N>(custody_account)?;
-        custody
-            .authenticate(execution.order, root, config)
-            .map_err(|_| AdapterError::PositionAuthentication)?;
-        if custody_account.key != &expected_custody
-            || custody.quote_escrow() != quote_escrow.key.to_bytes()
-        {
-            return Err(AdapterError::AccountIdentity.into());
-        }
-        let owner = Pubkey::new_from_array(execution.order.owner().to_bytes());
-        let owner_position = authenticate_position::<N>(
-            program_id,
-            owner_position_account,
-            market_account,
-            &owner,
-            config.generation(),
-        )?;
-        let quote = authenticate_order_quote_escrow(
-            program_id,
-            quote_escrow,
-            custody_account,
-            mint,
-            token_program,
-            realm,
-        )?;
-        if quote.amount != custody.reserved_quote_atoms() {
-            return Err(AdapterError::PositionAuthentication.into());
-        }
-        let _ = (state, custody, owner_position);
-    }
-
     let rent = Rent::from_account_info(rent_sysvar).map_err(|_| AdapterError::AccountData)?;
     let candidate_rent = rent.minimum_balance(
         CandidateStateV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?,
@@ -1987,86 +1929,28 @@ fn process_collect_settlement_page<const N: usize>(
     }
     preflight_mutable(&mutable)?;
     for index in 0..execution_count {
-        let execution = page.executions[index].ok_or(AdapterError::ReplayMismatch)?;
-        let execution_plan = cursor_before
-            .execution_plan(
-                reference.page_id,
-                &page,
-                &candidate,
-                &root,
-                &config,
-                &batch,
-                index,
-            )
-            .map_err(|_| AdapterError::MarketTransition)?;
         let base = 17 + index * 4;
-        let state_account = account(accounts, base)?;
-        let custody_account = account(accounts, base + 1)?;
-        let quote_escrow = account(accounts, base + 3)?;
-        let mut state = decode_order_state(state_account)?;
-        let mut custody = decode_custody::<N>(custody_account)?;
-        let effect = custody
-            .apply_receipt(
-                &mut state,
-                execution.order,
-                execution_plan.receipt,
-                root,
-                config,
-            )
-            .map_err(|_| AdapterError::MarketTransition)?;
-        if state != execution_plan.order_state || effect != execution_plan.custody_effect {
-            return Err(AdapterError::PositionPostcondition.into());
-        }
-        for (outcome, amount) in effect.claim_debits_from_custody().iter().enumerate() {
-            if *amount != 0 {
-                settlement_position
-                    .credit_outcome(outcome, *amount)
-                    .map_err(|_| AdapterError::PositionAuthentication)?;
-            }
-        }
-        let amount = effect.quote_debit_from_escrow();
-        if amount != 0 {
-            let custody_seeds = GeneralOrderCustodyPdaSeedsV1::new(state_account.key.to_bytes())
-                .map_err(|_| AdapterError::PositionAuthentication)?;
-            let components = custody_seeds.seed_components();
-            let (_, bump) = Pubkey::find_program_address(&components, program_id);
-            let bump_seed = [bump];
-            let signer = [components[0], components[1], bump_seed.as_slice()];
-            let transfer = token_transfer_instruction(
-                realm.release,
-                *quote_escrow.key,
-                *mint.key,
-                *settlement_quote_escrow.key,
-                *custody_account.key,
-                amount,
-                realm.mint.decimals,
-            )?;
-            invoke_signed(
-                &transfer,
-                &[
-                    quote_escrow.clone(),
-                    mint.clone(),
-                    settlement_quote_escrow.clone(),
-                    custody_account.clone(),
-                    token_program.clone(),
-                ],
-                &[&signer],
-            )
-            .map_err(|_| AdapterError::CollateralTransferCpi)?;
-        }
-        write_order_state(state_account, state)?;
-        write_custody(custody_account, custody)?;
-        let quote_after = authenticate_order_quote_escrow(
+        collect_settlement_execution(
             program_id,
-            quote_escrow,
-            custody_account,
+            market_account,
             mint,
             token_program,
+            account(accounts, base)?,
+            account(accounts, base + 1)?,
+            account(accounts, base + 2)?,
+            account(accounts, base + 3)?,
+            settlement_quote_escrow,
             realm,
+            reference.page_id,
+            page.as_ref(),
+            candidate.as_ref(),
+            &root,
+            &config,
+            &batch,
+            cursor_before.as_ref(),
+            index,
+            settlement_position.as_mut(),
         )?;
-        if quote_after.amount != custody.reserved_quote_atoms() {
-            return Err(AdapterError::PositionPostcondition.into());
-        }
     }
     if settlement_position.balances() != &result.claim_inventory_after {
         return Err(AdapterError::PositionPostcondition.into());
@@ -2092,6 +1976,137 @@ fn process_collect_settlement_page<const N: usize>(
             exact_state_rent_lamports: candidate_rent,
         })
         .map_err(|_| AdapterError::PositionPostcondition.into())
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn collect_settlement_execution<'info, const N: usize>(
+    program_id: &Pubkey,
+    market_account: &AccountInfo<'info>,
+    mint: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    state_account: &AccountInfo<'info>,
+    custody_account: &AccountInfo<'info>,
+    owner_position_account: &AccountInfo<'info>,
+    quote_escrow: &AccountInfo<'info>,
+    settlement_quote_escrow: &AccountInfo<'info>,
+    realm: RealmFacts,
+    page_id: dclutch_general_contract::ContentId,
+    page: &CandidatePageV1<N>,
+    candidate: &CandidateStateV1<N>,
+    root: &GeneralRootV1,
+    config: &GeneralConfigV1,
+    batch: &BatchRootV1,
+    cursor_before: &SettlementCursorV1<N>,
+    index: usize,
+    settlement_position: &mut PositionV1<N>,
+) -> Result<(), ProgramError> {
+    let execution = page.executions[index].ok_or(AdapterError::ReplayMismatch)?;
+    authenticate_order_id(execution.order)?;
+    let state_seeds =
+        GeneralOrderStatePdaSeedsV1::new(market_account.key.to_bytes(), execution.order)
+            .map_err(|_| AdapterError::PositionAuthentication)?;
+    let (expected_state, _) =
+        Pubkey::find_program_address(&state_seeds.seed_components(), program_id);
+    let mut state = decode_order_state(state_account)?;
+    if state_account.key != &expected_state || state != execution.order_state {
+        return Err(AdapterError::ReplayMismatch.into());
+    }
+    let custody_seeds = GeneralOrderCustodyPdaSeedsV1::new(state_account.key.to_bytes())
+        .map_err(|_| AdapterError::PositionAuthentication)?;
+    let (expected_custody, bump) =
+        Pubkey::find_program_address(&custody_seeds.seed_components(), program_id);
+    let mut custody = decode_custody::<N>(custody_account)?;
+    custody
+        .authenticate(execution.order, *root, *config)
+        .map_err(|_| AdapterError::PositionAuthentication)?;
+    if custody_account.key != &expected_custody
+        || custody.quote_escrow() != quote_escrow.key.to_bytes()
+    {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let owner = Pubkey::new_from_array(execution.order.owner().to_bytes());
+    authenticate_position::<N>(
+        program_id,
+        owner_position_account,
+        market_account,
+        &owner,
+        config.generation(),
+    )?;
+    let quote_before = authenticate_order_quote_escrow(
+        program_id,
+        quote_escrow,
+        custody_account,
+        mint,
+        token_program,
+        realm,
+    )?;
+    if quote_before.amount != custody.reserved_quote_atoms() {
+        return Err(AdapterError::PositionAuthentication.into());
+    }
+    let execution_plan = cursor_before
+        .execution_plan(page_id, page, candidate, root, config, batch, index)
+        .map_err(|_| AdapterError::MarketTransition)?;
+    let effect = custody
+        .apply_receipt(
+            &mut state,
+            execution.order,
+            execution_plan.receipt,
+            *root,
+            *config,
+        )
+        .map_err(|_| AdapterError::MarketTransition)?;
+    if state != execution_plan.order_state || effect != execution_plan.custody_effect {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    for (outcome, amount) in effect.claim_debits_from_custody().iter().enumerate() {
+        if *amount != 0 {
+            settlement_position
+                .credit_outcome(outcome, *amount)
+                .map_err(|_| AdapterError::PositionAuthentication)?;
+        }
+    }
+    let amount = effect.quote_debit_from_escrow();
+    if amount != 0 {
+        let components = custody_seeds.seed_components();
+        let bump_seed = [bump];
+        let signer = [components[0], components[1], bump_seed.as_slice()];
+        let transfer = token_transfer_instruction(
+            realm.release,
+            *quote_escrow.key,
+            *mint.key,
+            *settlement_quote_escrow.key,
+            *custody_account.key,
+            amount,
+            realm.mint.decimals,
+        )?;
+        invoke_signed(
+            &transfer,
+            &[
+                quote_escrow.clone(),
+                mint.clone(),
+                settlement_quote_escrow.clone(),
+                custody_account.clone(),
+                token_program.clone(),
+            ],
+            &[&signer],
+        )
+        .map_err(|_| AdapterError::CollateralTransferCpi)?;
+    }
+    write_order_state(state_account, state)?;
+    write_custody(custody_account, custody)?;
+    let quote_after = authenticate_order_quote_escrow(
+        program_id,
+        quote_escrow,
+        custody_account,
+        mint,
+        token_program,
+        realm,
+    )?;
+    if quote_after.amount != custody.reserved_quote_atoms() {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    Ok(())
 }
 
 fn process_materialize_settlement<const N: usize>(
@@ -2448,33 +2463,6 @@ fn process_distribute_settlement_page<const N: usize>(
         &Pubkey::new_from_array(candidate.submitter().to_bytes()),
     )?;
     let rent_credit_before = rent_credit.lamports();
-    for (index, execution) in page
-        .executions
-        .iter()
-        .take(execution_count)
-        .flatten()
-        .enumerate()
-    {
-        authenticate_order_id(execution.order)?;
-        let base = 18 + index * 2;
-        let owner_position_account = account(accounts, base)?;
-        let quote_destination = account(accounts, base + 1)?;
-        let owner = Pubkey::new_from_array(execution.order.owner().to_bytes());
-        authenticate_position::<N>(
-            program_id,
-            owner_position_account,
-            market_account,
-            &owner,
-            config.generation(),
-        )?;
-        authenticate_quote_destination(
-            quote_destination,
-            mint,
-            token_program,
-            realm,
-            execution.order.owner().to_bytes(),
-        )?;
-    }
     let rent = Rent::from_account_info(rent_sysvar).map_err(|_| AdapterError::AccountData)?;
     let candidate_rent = rent.minimum_balance(
         CandidateStateV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?,
@@ -2526,99 +2514,28 @@ fn process_distribute_settlement_page<const N: usize>(
         ]);
     }
     preflight_mutable(&mutable)?;
-    let cursor_seeds = GeneralSettlementCursorPdaSeedsV1::new(candidate_account.key.to_bytes())
-        .map_err(|_| AdapterError::PositionAuthentication)?;
-    let cursor_components = cursor_seeds.seed_components();
-    let (_, cursor_bump) = Pubkey::find_program_address(&cursor_components, program_id);
-    let cursor_bump_seed = [cursor_bump];
-    let cursor_signer = [
-        cursor_components[0],
-        cursor_components[1],
-        cursor_bump_seed.as_slice(),
-    ];
     for index in 0..execution_count {
-        let execution = page.executions[index].ok_or(AdapterError::ReplayMismatch)?;
-        let execution_plan = cursor_before
-            .execution_plan(
-                reference.page_id,
-                &page,
-                &candidate,
-                &root,
-                &config,
-                &batch,
-                index,
-            )
-            .map_err(|_| AdapterError::MarketTransition)?;
-        let owner_position_account = account(accounts, 18 + index * 2)?;
-        let destination = account(accounts, 19 + index * 2)?;
-        let owner = Pubkey::new_from_array(execution.order.owner().to_bytes());
-        let mut owner_position = authenticate_position::<N>(
+        distribute_settlement_execution(
             program_id,
-            owner_position_account,
             market_account,
-            &owner,
-            config.generation(),
-        )?;
-        for (outcome, amount) in execution_plan
-            .custody_effect
-            .claim_credits_to_owner()
-            .iter()
-            .enumerate()
-        {
-            if *amount != 0 {
-                settlement_position
-                    .debit_outcome(outcome, *amount)
-                    .and_then(|()| owner_position.credit_outcome(outcome, *amount))
-                    .map_err(|_| AdapterError::PositionAuthentication)?;
-            }
-        }
-        let destination_before = authenticate_quote_destination(
-            destination,
             mint,
             token_program,
+            candidate_account,
+            cursor_account,
+            settlement_quote_escrow,
+            account(accounts, 18 + index * 2)?,
+            account(accounts, 19 + index * 2)?,
             realm,
-            execution.order.owner().to_bytes(),
+            reference.page_id,
+            page.as_ref(),
+            candidate.as_ref(),
+            &root,
+            &config,
+            &batch,
+            cursor_before.as_ref(),
+            index,
+            settlement_position.as_mut(),
         )?;
-        let amount = execution_plan.custody_effect.quote_credit_to_owner();
-        if amount != 0 {
-            let transfer = token_transfer_instruction(
-                realm.release,
-                *settlement_quote_escrow.key,
-                *mint.key,
-                *destination.key,
-                *cursor_account.key,
-                amount,
-                realm.mint.decimals,
-            )?;
-            invoke_signed(
-                &transfer,
-                &[
-                    settlement_quote_escrow.clone(),
-                    mint.clone(),
-                    destination.clone(),
-                    cursor_account.clone(),
-                    token_program.clone(),
-                ],
-                &[&cursor_signer],
-            )
-            .map_err(|_| AdapterError::CollateralTransferCpi)?;
-        }
-        write_position(owner_position_account, owner_position)?;
-        let destination_after = authenticate_quote_destination(
-            destination,
-            mint,
-            token_program,
-            realm,
-            execution.order.owner().to_bytes(),
-        )?;
-        if destination_after.amount
-            != destination_before
-                .amount
-                .checked_add(amount)
-                .ok_or(AdapterError::Arithmetic)?
-        {
-            return Err(AdapterError::PositionPostcondition.into());
-        }
     }
     if settlement_position.balances() != &result.claim_inventory_after {
         return Err(AdapterError::PositionPostcondition.into());
@@ -2657,6 +2574,115 @@ fn process_distribute_settlement_page<const N: usize>(
             exact_state_rent_lamports: candidate_rent,
         })
         .map_err(|_| AdapterError::PositionPostcondition.into())
+}
+
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn distribute_settlement_execution<'info, const N: usize>(
+    program_id: &Pubkey,
+    market_account: &AccountInfo<'info>,
+    mint: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    candidate_account: &AccountInfo<'info>,
+    cursor_account: &AccountInfo<'info>,
+    settlement_quote_escrow: &AccountInfo<'info>,
+    owner_position_account: &AccountInfo<'info>,
+    destination: &AccountInfo<'info>,
+    realm: RealmFacts,
+    page_id: dclutch_general_contract::ContentId,
+    page: &CandidatePageV1<N>,
+    candidate: &CandidateStateV1<N>,
+    root: &GeneralRootV1,
+    config: &GeneralConfigV1,
+    batch: &BatchRootV1,
+    cursor_before: &SettlementCursorV1<N>,
+    index: usize,
+    settlement_position: &mut PositionV1<N>,
+) -> Result<(), ProgramError> {
+    let execution = page.executions[index].ok_or(AdapterError::ReplayMismatch)?;
+    authenticate_order_id(execution.order)?;
+    let execution_plan = cursor_before
+        .execution_plan(page_id, page, candidate, root, config, batch, index)
+        .map_err(|_| AdapterError::MarketTransition)?;
+    let owner = Pubkey::new_from_array(execution.order.owner().to_bytes());
+    let mut owner_position = authenticate_position::<N>(
+        program_id,
+        owner_position_account,
+        market_account,
+        &owner,
+        config.generation(),
+    )?;
+    for (outcome, amount) in execution_plan
+        .custody_effect
+        .claim_credits_to_owner()
+        .iter()
+        .enumerate()
+    {
+        if *amount != 0 {
+            settlement_position
+                .debit_outcome(outcome, *amount)
+                .and_then(|()| owner_position.credit_outcome(outcome, *amount))
+                .map_err(|_| AdapterError::PositionAuthentication)?;
+        }
+    }
+    let destination_before = authenticate_quote_destination(
+        destination,
+        mint,
+        token_program,
+        realm,
+        execution.order.owner().to_bytes(),
+    )?;
+    let amount = execution_plan.custody_effect.quote_credit_to_owner();
+    if amount != 0 {
+        let cursor_seeds = GeneralSettlementCursorPdaSeedsV1::new(candidate_account.key.to_bytes())
+            .map_err(|_| AdapterError::PositionAuthentication)?;
+        let cursor_components = cursor_seeds.seed_components();
+        let (_, cursor_bump) = Pubkey::find_program_address(&cursor_components, program_id);
+        let cursor_bump_seed = [cursor_bump];
+        let cursor_signer = [
+            cursor_components[0],
+            cursor_components[1],
+            cursor_bump_seed.as_slice(),
+        ];
+        let transfer = token_transfer_instruction(
+            realm.release,
+            *settlement_quote_escrow.key,
+            *mint.key,
+            *destination.key,
+            *cursor_account.key,
+            amount,
+            realm.mint.decimals,
+        )?;
+        invoke_signed(
+            &transfer,
+            &[
+                settlement_quote_escrow.clone(),
+                mint.clone(),
+                destination.clone(),
+                cursor_account.clone(),
+                token_program.clone(),
+            ],
+            &[&cursor_signer],
+        )
+        .map_err(|_| AdapterError::CollateralTransferCpi)?;
+    }
+    write_position(owner_position_account, owner_position)?;
+    let destination_after = authenticate_quote_destination(
+        destination,
+        mint,
+        token_program,
+        realm,
+        execution.order.owner().to_bytes(),
+    )?;
+    if destination_after.amount
+        != destination_before
+            .amount
+            .checked_add(amount)
+            .ok_or(AdapterError::Arithmetic)?
+    {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    Ok(())
 }
 
 fn process_finish_settlement<const N: usize>(
@@ -3199,9 +3225,7 @@ fn authenticate_candidate_page_boxed<const N: usize>(
     candidate: &AccountInfo<'_>,
     page_id: dclutch_general_contract::ContentId,
 ) -> Result<Box<CandidatePageV1<N>>, ProgramError> {
-    Ok(Box::new(authenticate_candidate_page(
-        program_id, account, candidate, page_id,
-    )?))
+    authenticate_candidate_page(program_id, account, candidate, page_id)
 }
 
 #[inline(never)]
@@ -3226,6 +3250,38 @@ fn authenticate_position_boxed<const N: usize>(
     Ok(Box::new(authenticate_position(
         program_id, account, market, owner, generation,
     )?))
+}
+
+#[inline(never)]
+fn authenticate_market_boxed<const N: usize>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    expected_key: [u8; 32],
+) -> Result<Box<CategoricalMarketV1<N>>, ProgramError> {
+    Ok(Box::new(authenticate_market(
+        program_id,
+        account,
+        expected_key,
+    )?))
+}
+
+#[inline(never)]
+fn decode_capability_funding_boxed(
+    account: &AccountInfo<'_>,
+) -> Result<Box<FundingStateV1>, ProgramError> {
+    Ok(Box::new(decode_capability_funding(account)?))
+}
+
+#[inline(never)]
+fn empty_position_boxed<const N: usize>(
+    market: [u8; 32],
+    owner: [u8; 32],
+    generation: u64,
+) -> Result<Box<PositionV1<N>>, ProgramError> {
+    Ok(Box::new(
+        PositionV1::<N>::empty(market, owner, generation)
+            .map_err(|_| AdapterError::PositionAuthentication)?,
+    ))
 }
 
 #[inline(never)]
@@ -4182,20 +4238,21 @@ fn authenticate_candidate<const N: usize>(
     Ok(candidate)
 }
 
+#[inline(never)]
 fn authenticate_candidate_page<const N: usize>(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     candidate: &AccountInfo<'_>,
     page_id: dclutch_general_contract::ContentId,
-) -> Result<CandidatePageV1<N>, ProgramError> {
+) -> Result<Box<CandidatePageV1<N>>, ProgramError> {
     if account.owner != program_id || account.executable {
         return Err(AdapterError::AccountIdentity.into());
     }
     let data = account
         .try_borrow_data()
         .map_err(|_| AdapterError::AccountData)?;
-    let page = CandidatePageV1::decode(&data).map_err(|_| AdapterError::AccountData)?;
-    let canonical = canonical_page_bytes(&page)?;
+    let page = decode_candidate_page_boxed::<N>(&data)?;
+    let canonical = canonical_page_bytes(page.as_ref())?;
     let digest = hashv(&[GENERAL_CANDIDATE_PAGE_CONTENT_DOMAIN_V1, &canonical]).to_bytes();
     let seeds = GeneralCandidatePagePdaSeedsV1::new(candidate.key.to_bytes(), page_id)
         .map_err(|_| AdapterError::AccountData)?;
@@ -4205,6 +4262,15 @@ fn authenticate_candidate_page<const N: usize>(
         return Err(AdapterError::ContentIdentity.into());
     }
     Ok(page)
+}
+
+#[inline(never)]
+fn decode_candidate_page_boxed<const N: usize>(
+    data: &[u8],
+) -> Result<Box<CandidatePageV1<N>>, ProgramError> {
+    Ok(Box::new(
+        CandidatePageV1::decode(data).map_err(|_| AdapterError::AccountData)?,
+    ))
 }
 
 fn authenticate_root(
