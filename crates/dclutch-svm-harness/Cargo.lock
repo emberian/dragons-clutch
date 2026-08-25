@@ -1580,11 +1580,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-product-admission-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-core-contract",
+ "dclutch-product-contract",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-payoff-v2-svm",
+ "dclutch-resolution-codec",
+]
+
+[[package]]
 name = "dclutch-product-contract"
 version = "0.1.0"
 
 [[package]]
 name = "dclutch-product-payoff-svm"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-payoff-v2-codec"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-payoff-v2-svm"
 version = "0.1.0"
 
 [[package]]
@@ -1669,8 +1689,11 @@ dependencies = [
  "dclutch-economic-kernel",
  "dclutch-kernel",
  "dclutch-market-contract",
+ "dclutch-product-admission-contract",
  "dclutch-product-contract",
  "dclutch-product-payoff-svm",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-payoff-v2-svm",
  "dclutch-pyth-contract",
  "dclutch-pyth-svm",
  "dclutch-realm-contract",

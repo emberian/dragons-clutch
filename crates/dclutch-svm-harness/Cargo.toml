@@ -28,7 +28,10 @@ dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 dclutch-resolution-codec = { path = "../dclutch-resolution-codec" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
 dclutch-product-contract = { path = "../dclutch-product-contract" }
+dclutch-product-admission-contract = { path = "../dclutch-product-admission-contract" }
 dclutch-product-payoff-svm = { path = "../dclutch-product-payoff-svm" }
+dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
+dclutch-product-payoff-v2-svm = { path = "../dclutch-product-payoff-v2-svm" }
 dclutch-rent-contract = { path = "../dclutch-rent-contract" }
 dclutch-series-contract = { path = "../dclutch-series-contract" }
 dclutch-source-contract = { path = "../dclutch-source-contract" }
