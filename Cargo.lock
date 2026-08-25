@@ -380,8 +380,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-economic-adapter-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-economic-kernel",
+ "dclutch-release-set-contract",
+]
+
+[[package]]
 name = "dclutch-economic-kernel"
 version = "0.1.0"
+
+[[package]]
+name = "dclutch-economic-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-economic-adapter-contract",
+ "dclutch-economic-kernel",
+ "dclutch-release-set-contract",
+ "dclutch-token-svm",
+ "solana-program",
+]
 
 [[package]]
 name = "dclutch-effect-kernel"
@@ -479,6 +498,14 @@ version = "0.1.0"
 [[package]]
 name = "dclutch-record-contract"
 version = "0.1.0"
+
+[[package]]
+name = "dclutch-registry-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+]
 
 [[package]]
 name = "dclutch-release-set-contract"

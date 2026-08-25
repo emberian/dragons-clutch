@@ -7,6 +7,7 @@ members = [
     "crates/dclutch-dealer-contract",
     "crates/dclutch-direct-contract",
     "crates/dclutch-direct-codec",
+    "crates/dclutch-economic-adapter-contract",
     "crates/dclutch-economic-kernel",
     "crates/dclutch-effect-kernel",
     "crates/dclutch-general-contract",
@@ -18,6 +19,7 @@ members = [
     "crates/dclutch-product-compiler",
     "crates/dclutch-product-contract",
     "crates/dclutch-record-contract",
+    "crates/dclutch-registry-contract",
     "crates/dclutch-release-set-contract",
     "crates/dclutch-release-tool",
     "crates/dclutch-realm-contract",
@@ -32,6 +34,7 @@ members = [
     "programs/dclutch-controller-proof-sbf",
     "programs/dclutch-claims-proof-sbf",
     "programs/dclutch-custody-proof-sbf",
+    "programs/dclutch-economic-sbf",
     "programs/dclutch-sbf",
 ]
 resolver = "2"
