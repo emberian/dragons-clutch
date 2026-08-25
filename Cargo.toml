@@ -16,6 +16,7 @@ members = [
     "crates/dclutch-general-adapter-contract",
     "crates/dclutch-general-codec",
     "crates/dclutch-kernel",
+    "crates/dclutch-liability-basis-v2-kernel",
     "crates/dclutch-market-contract",
     "crates/dclutch-market-core-codec",
     "crates/dclutch-operator",

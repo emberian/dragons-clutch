@@ -460,6 +460,10 @@ name = "dclutch-kernel"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-liability-basis-v2-kernel"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-market-contract"
 version = "0.1.0"
 dependencies = [

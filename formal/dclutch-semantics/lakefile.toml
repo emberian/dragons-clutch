@@ -52,3 +52,7 @@ root = "EmitRegisteredControllerAbiRust"
 [[lean_exe]]
 name = "emit-general-controller-abi-rust"
 root = "EmitGeneralControllerAbiRust"
+
+[[lean_exe]]
+name = "emit-liability-basis-v2-rust"
+root = "EmitLiabilityBasisV2Rust"
