@@ -38,5 +38,23 @@ That campaign uses no native protocol processor or mock token implementation.
 It also drives the official address lookup table program through create,
 extend, next-slot activation, an actual signed v0 physical fill, deactivate,
 the full SlotHashes cooldown, and close. It proves only the named runtime
-executions and rollback observations, not a complete Direct lifecycle, an
-external validator deployment, or a Solana runtime theorem.
+executions and rollback observations, not a complete Direct lifecycle or a
+Solana runtime theorem.
+
+An ignored transport campaign takes the same 990-byte v0 fill across a separate
+`solana-test-validator` process and JSON-RPC boundary:
+
+```sh
+SBF_OUT_DIR=../../target/deploy \
+SOLANA_TEST_VALIDATOR=/path/to/solana-test-validator \
+cargo test --test physical_direct_composition \
+  compiled_direct_crosses_the_local_validator_rpc_boundary \
+  -- --ignored --nocapture
+```
+
+It loads the three first-party ELFs, uses the validator's canonical Token and
+address lookup table programs, checks physical claim and custody mutations, and
+deactivates the table. All fixture accounts are imported into a temporary local
+genesis; this is not deployment/bootstrap, devnet, or mainnet evidence. The
+temporary ledger is removed on exit. The ordinary ProgramTest campaign covers
+the table's full 512-slot cooldown and close.

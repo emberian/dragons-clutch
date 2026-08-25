@@ -111,6 +111,56 @@ CU, advances the full 512-slot SlotHashes cooldown, and closes at 2,158 CU. The
 table account is absent afterward. This is real ProgramTest/SVM evidence, not
 an external `solana-test-validator`, devnet, or mainnet execution.
 
+## External-validator transport addendum
+
+Commit `3c695725361261af62353eef1978adcb9b50cadd` takes the same
+canonical Direct transaction across a separate validator process and JSON-RPC
+transport. The ignored harness test launches `solana-test-validator 4.0.2`,
+loads the exact controller, claim, and custody ELFs as genesis SBF programs,
+and uses the validator's canonical SPL Token and address lookup table programs.
+The Rust RPC client is pinned to 4.2.1.
+
+The test derives fixture state with the same Rust constructors used by the
+ProgramTest campaign and imports those accounts at local genesis. Seller and
+buyer test signers come from fixed test-only seeds. The transaction fee payer
+is ephemeral and exists only in memory; its public account is capitalized in
+the temporary local genesis. No wallet file, public RPC, devnet account, or
+external faucet is read or used.
+
+Over RPC, the campaign:
+
+- reads the validator's actual `SlotHashes` sysvar and creates the official
+  lookup table from a valid recent coordinate;
+- extends it with the 12 canonical Market-stable keys and waits until those
+  additions are active;
+- signs and submits the exact 990-byte v0 Direct transaction;
+- observes the journal and both replay roots advance from 0 to 1;
+- observes seller and buyer claims move from 5,000/200 to 3,000/2,200;
+- observes canonical SPL-token balances move from 2,000/100/20 to
+  998/1,100/22; and
+- deactivates the lookup table through the official program.
+
+The temporary validator ledger is deleted when the child process exits. The
+external-process campaign therefore does not wait roughly 205 seconds at the
+default validator clock merely to close that disposable table. The independent
+ProgramTest campaign above executes and checks the complete 512-slot cooldown
+and close route.
+
+Run the transport campaign explicitly:
+
+```sh
+SBF_OUT_DIR=$PWD/target/deploy \
+SOLANA_TEST_VALIDATOR=/path/to/solana-test-validator \
+cargo test --manifest-path crates/dclutch-svm-harness/Cargo.toml \
+  --test physical_direct_composition \
+  compiled_direct_crosses_the_local_validator_rpc_boundary \
+  -- --ignored --nocapture
+```
+
+This is local validator transport and execution evidence. Genesis-imported
+fixture accounts are not evidence for account-creation workflows, a checked
+deployment, devnet behavior, mainnet behavior, or a complete Direct lifecycle.
+
 This addendum supersedes the execution-profile architecture and current
 controller measurements below. Earlier tables remain evidence for their named
 historical artifacts.
