@@ -40,4 +40,17 @@ describe('bounded finalized RPC client', () => {
     });
     await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher).accountInfo('11111111111111111111111111111111')).rejects.toThrow('exact safe unsigned');
   });
+
+  it('acquires a finalized recent blockhash above the selected snapshot floor', async () => {
+    const blockhash = '11111111111111111111111111111111';
+    const fetcher: typeof fetch = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as { method: string; params: unknown[] };
+      expect(request.method).toBe('getLatestBlockhash');
+      expect(request.params).toEqual([{ commitment: 'finalized', minContextSlot: 44 }]);
+      return response({ context: { slot: 45 }, value: { blockhash, lastValidBlockHeight: 72 } });
+    };
+    await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher).latestBlockhash('44')).resolves.toEqual({
+      slot: '45', blockhash, lastValidBlockHeight: '72',
+    });
+  });
 });

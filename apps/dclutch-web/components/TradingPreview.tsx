@@ -32,6 +32,7 @@ export default function TradingPreview() {
         </Link>
         <nav aria-label="Primary navigation">
           <Link className="active" href="/">Markets</Link>
+          <Link href="/direct">Direct</Link>
           <a href="#positions">Portfolio</a>
           <Link href="/liquidity">Liquidity</Link>
           <Link href="/explorer">Explorer</Link>
@@ -119,8 +120,8 @@ export default function TradingPreview() {
             <div><dt>Max loss</dt><dd>{numericAmount.toLocaleString()} USDC</dd></div>
             <div><dt>Order policy</dt><dd>Fill or kill</dd></div>
           </dl>
-          <button className="connect-action" disabled type="button">Transaction wiring in progress</button>
-          <p className="ticket-note">The preview calculates locally. It does not construct, sign, or submit an order.</p>
+          <Link className="connect-action" href="/direct">Open real Direct workspace</Link>
+          <p className="ticket-note">This illustrative ticket does not transact. The Direct workspace discovers real Markets and constructs exact signing and unsigned transaction bytes.</p>
         </aside>
       </section>
 

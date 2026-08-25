@@ -14,6 +14,8 @@ type MarketSemantics = Readonly<{
   kind: 'Market';
   realmId: string;
   generation: string;
+  outcomeCount: number;
+  phase: 'Founding' | 'Open' | 'Resolved' | 'Retiring' | 'Retired';
   identityBytes: Uint8Array;
 }>;
 
@@ -224,7 +226,7 @@ function decodeMarket(observation: FullAccountObservation): DecodedProjection {
       detail('Capability manifest ID', hex(capabilityManifestId)), detail('Rent refund authority', pubkey(rentRefund, 'Market rent-refund authority')),
       ...resolutionDetails,
     ]),
-    semantics: Object.freeze({ kind: 'Market', realmId: hex(realmId), generation: generation.toString(), identityBytes: slice(bytes, 32, 168) }),
+    semantics: Object.freeze({ kind: 'Market', realmId: hex(realmId), generation: generation.toString(), outcomeCount, phase, identityBytes: slice(bytes, 32, 168) }),
   });
 }
 

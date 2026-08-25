@@ -15,7 +15,7 @@ const MAX_PROGRAM_ACCOUNTS = 256;
 const MAX_REACQUIRED_ACCOUNTS = 128;
 const RPC_TIMEOUT_MS = 15_000;
 
-type RpcAccount = Readonly<{
+export type RpcAccount = Readonly<{
   data: Uint8Array;
   executable: boolean;
   lamports: string;
@@ -38,6 +38,12 @@ export type ConnectionFacts = Readonly<{
   genesisHash: string;
   solanaCore: string;
   featureSet: string | null;
+}>;
+
+export type LatestBlockhashObservation = Readonly<{
+  slot: string;
+  blockhash: string;
+  lastValidBlockHeight: string;
 }>;
 
 export type ProgramSnapshot = Readonly<{
@@ -191,6 +197,20 @@ export class SolanaRpcClient {
 
   async finalizedSlot(): Promise<string> {
     return String(exactUnsigned(await this.request('getSlot', [{ commitment: 'finalized' }]), 'finalized slot'));
+  }
+
+  async latestBlockhash(minimumContextSlot?: string): Promise<LatestBlockhashObservation> {
+    const configuration: Record<string, unknown> = { commitment: 'finalized' };
+    if (minimumContextSlot !== undefined) configuration.minContextSlot = exactUnsigned(Number(minimumContextSlot), 'minimum context slot');
+    const raw = await this.request('getLatestBlockhash', [configuration]);
+    if (!plain(raw) || !plain(raw.context) || !plain(raw.value)) throw new Error('getLatestBlockhash did not return a finalized context and value');
+    const blockhash = exactText(raw.value.blockhash, 'recent blockhash', 64);
+    new PublicKey(blockhash);
+    return Object.freeze({
+      slot: String(exactUnsigned(raw.context.slot, 'blockhash context slot')),
+      blockhash,
+      lastValidBlockHeight: String(exactUnsigned(raw.value.lastValidBlockHeight, 'last valid block height')),
+    });
   }
 }
 
