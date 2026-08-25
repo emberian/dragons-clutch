@@ -1,4 +1,5 @@
 import DClutchSemantics.AbiSchema
+import DClutchSemantics.DirectControllerCodec
 import DClutchSemantics.RegisteredPhysical
 
 /-!
@@ -12,7 +13,7 @@ maker identity, remaining quantity, and local replay sequence.
 
 namespace DClutch.Direct.RegisteredControllerAbi
 
-open DClutch DClutch.AbiSchema
+open DClutch DClutch.AbiSchema DClutch.DirectControllerCodec
 
 def magic : List UInt8 :=
   [0x44, 0x43, 0x4c, 0x54, 0x52, 0x47, 0x46, 0x31] -- `DCLTRGF1`
@@ -159,6 +160,131 @@ theorem hostile_examples_refuse :
     decode (List.set (encode exampleInstruction) (Field.offset .version) 2) = none ∧
     decode (List.set (encode exampleInstruction) (Field.offset .reserved) 1) = none := by
   native_decide
+
+namespace Registration
+
+def magic : List UInt8 :=
+  [0x44, 0x43, 0x4c, 0x54, 0x52, 0x47, 0x52, 0x31] -- `DCLTRGR1`
+
+def version : Nat := 1
+
+inductive Field where
+  | magic | version | controllerBump | replayBump | registrationBump
+  | reserved | intent
+  deriving DecidableEq, Repr
+
+def schema : List (FieldSpec Field) := [
+  ⟨.magic, .bytes 8⟩,
+  ⟨.version, .u16⟩,
+  ⟨.controllerBump, .u8⟩,
+  ⟨.replayBump, .u8⟩,
+  ⟨.registrationBump, .u8⟩,
+  ⟨.reserved, .reserved 3⟩,
+  ⟨.intent, .nested compactIntentBytes⟩
+]
+
+def layout : List (PlacedField Field) := specialize schema
+def bytes : Nat := schemaWidth schema
+
+namespace Field
+
+def all : List Field := [
+  .magic, .version, .controllerBump, .replayBump, .registrationBump,
+  .reserved, .intent
+]
+
+def coordinate (field : Field) : Nat × Nat :=
+  (coordinate? field layout).getD (0, 0)
+
+def offset (field : Field) : Nat := (coordinate field).1
+def width (field : Field) : Nat := (coordinate field).2
+
+def rustName : Field → String
+  | .magic => "REGISTERED_CREATE_MAGIC_OFFSET"
+  | .version => "REGISTERED_CREATE_VERSION_OFFSET"
+  | .controllerBump => "REGISTERED_CREATE_CONTROLLER_BUMP_OFFSET"
+  | .replayBump => "REGISTERED_CREATE_REPLAY_BUMP_OFFSET"
+  | .registrationBump => "REGISTERED_CREATE_REGISTRATION_BUMP_OFFSET"
+  | .reserved => "REGISTERED_CREATE_RESERVED_OFFSET"
+  | .intent => "REGISTERED_CREATE_INTENT_OFFSET"
+
+end Field
+
+theorem schema_width : bytes = 152 := by native_decide
+
+theorem schema_well_formed : WellFormed schema := by
+  constructor
+  · native_decide
+  · intro field member
+    simp [schema] at member
+    rcases member with rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> decide
+
+theorem coordinates_are_canonical : coordinates layout = [
+    (.magic, 0, 8), (.version, 8, 2), (.controllerBump, 10, 1),
+    (.replayBump, 11, 1), (.registrationBump, 12, 1),
+    (.reserved, 13, 3), (.intent, 16, 136)
+  ] := by
+  native_decide
+
+structure InstructionV1 where
+  controllerBump : UInt8
+  replayBump : UInt8
+  registrationBump : UInt8
+  intent : CompactIntentV1
+
+def Encodable (instruction : InstructionV1) : Prop :=
+  IntentEncodable instruction.intent
+
+def encode (instruction : InstructionV1) : List UInt8 :=
+  magic ++ Codec.encodeLE 2 version ++
+  [instruction.controllerBump, instruction.replayBump,
+    instruction.registrationBump, 0, 0, 0] ++
+  encodeCompactIntentV1 instruction.intent
+
+def decode (input : List UInt8) : Option InstructionV1 := do
+  if input.length != bytes then none else
+  if input.take (Field.offset .version) != magic then none else
+  if Codec.decodeLE ((input.drop (Field.offset .version)).take 2) != version then none else
+  if (input.drop (Field.offset .reserved)).take (Field.width .reserved) != [0, 0, 0]
+    then none else
+  some {
+    controllerBump := <- input[(Field.offset .controllerBump)]?
+    replayBump := <- input[(Field.offset .replayBump)]?
+    registrationBump := <- input[(Field.offset .registrationBump)]?
+    intent := <- decodeCompactIntentV1
+      ((input.drop (Field.offset .intent)).take (Field.width .intent))
+  }
+
+def exampleInstruction : InstructionV1 := {
+  controllerBump := 1
+  replayBump := 2
+  registrationBump := 3
+  intent := Examples.sellerIntent
+}
+
+theorem encode_length (instruction : InstructionV1) :
+    (encode instruction).length = bytes := by
+  simp [encode, magic, bytes, schema, Codec.encodeLE_length,
+    encodeCompactIntentV1_length]
+  native_decide
+
+theorem example_round_trip_projection :
+    (decode (encode exampleInstruction)).map (fun instruction =>
+      (instruction.controllerBump, instruction.replayBump,
+        instruction.registrationBump, encodeCompactIntentV1 instruction.intent)) =
+      some (exampleInstruction.controllerBump, exampleInstruction.replayBump,
+        exampleInstruction.registrationBump,
+        encodeCompactIntentV1 exampleInstruction.intent) := by
+  native_decide
+
+theorem hostile_examples_refuse :
+    (decode []).isNone = true ∧
+    (decode (List.set (encode exampleInstruction) (Field.offset .magic) 0)).isNone = true ∧
+    (decode (List.set (encode exampleInstruction) (Field.offset .version) 2)).isNone = true ∧
+    (decode (List.set (encode exampleInstruction) (Field.offset .reserved) 1)).isNone = true := by
+  native_decide
+
+end Registration
 
 namespace Terminal
 

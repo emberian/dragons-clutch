@@ -17,8 +17,10 @@ use dclutch_direct_codec::{
     COMPILED_DIRECT_DERIVATION_ID_V1, COMPILED_DIRECT_RELEASE_ID_V1, CONTROLLER_INSTRUCTION_BYTES,
     CompactIntentV1, ControllerInstructionV1, REGISTERED_CLAIM_FILL_BYTES,
     REGISTERED_CLAIM_TERMINAL_BYTES, REGISTERED_CONTROLLER_INSTRUCTION_BYTES,
-    REGISTERED_TERMINAL_INSTRUCTION_BYTES, RegisteredFillInstructionV1, RegisteredIntentStateV1,
-    RegisteredTerminalAction, RegisteredTerminalInstructionV1, registered_claim_fill_instruction,
+    REGISTERED_CREATE_INSTRUCTION_BYTES, REGISTERED_INTENT_STATE_BYTES,
+    REGISTERED_TERMINAL_INSTRUCTION_BYTES, RegisteredCreateInstructionV1,
+    RegisteredFillInstructionV1, RegisteredIntentStateV1, RegisteredTerminalAction,
+    RegisteredTerminalInstructionV1, registered_claim_fill_instruction,
     registered_claim_terminal_instruction,
 };
 use dclutch_direct_contract::{
@@ -50,12 +52,14 @@ use solana_program::{
     entrypoint::ProgramResult,
     hash::hash,
     instruction::{AccountMeta, Instruction},
-    program::invoke_signed,
+    program::{invoke, invoke_signed},
     program_error::ProgramError,
     pubkey::Pubkey,
+    rent::Rent,
     sysvar::Sysvar,
 };
-use solana_sdk_ids::{ed25519_program, sysvar};
+use solana_sdk_ids::{ed25519_program, system_program, sysvar};
+use solana_system_interface::instruction::{allocate, assign, transfer};
 
 /// PDA seed defining the controller authority namespace.
 pub const CONTROLLER_SEED: &[u8] = b"dclutch-controller-v1";
@@ -116,6 +120,8 @@ pub enum ControllerError {
     Transition = 13,
     /// Checked controller arithmetic overflowed.
     Arithmetic = 14,
+    /// Prepaid dust-tolerant claim-account creation failed.
+    AccountCreate = 15,
 }
 
 impl From<ControllerError> for ProgramError {
@@ -167,6 +173,9 @@ pub fn process_instruction(
         CONTROLLER_INSTRUCTION_BYTES => process_inline(program_id, accounts, instruction_data),
         REGISTERED_CONTROLLER_INSTRUCTION_BYTES => {
             process_registered_fill(program_id, accounts, instruction_data)
+        }
+        REGISTERED_CREATE_INSTRUCTION_BYTES => {
+            process_registered_create(program_id, accounts, instruction_data)
         }
         REGISTERED_TERMINAL_INSTRUCTION_BYTES => {
             process_registered_terminal(program_id, accounts, instruction_data)
@@ -598,6 +607,165 @@ fn process_registered_fill(
     )
 }
 
+/// Create one maker-signed registered intent and consume its global replay
+/// nonce in the canonical claim owner.
+#[inline(never)]
+fn process_registered_create(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    if accounts.len() != 15 {
+        return Err(ControllerError::AccountFrame.into());
+    }
+    let instruction = RegisteredCreateInstructionV1::decode(instruction_data)
+        .map_err(|_| ControllerError::Instruction)?;
+    let intent = instruction.intent;
+    let mut iterator = accounts.iter();
+    let controller = next(&mut iterator)?;
+    let maker = next(&mut iterator)?;
+    let payer = next(&mut iterator)?;
+    let replay = next(&mut iterator)?;
+    let registration = next(&mut iterator)?;
+    let claim_program = next(&mut iterator)?;
+    let system = next(&mut iterator)?;
+    let market = next(&mut iterator)?;
+    let realm = next(&mut iterator)?;
+    let fee_policy = next(&mut iterator)?;
+    let capability_manifest = next(&mut iterator)?;
+    let mint = next(&mut iterator)?;
+    let collateral = next(&mut iterator)?;
+    let venue = next(&mut iterator)?;
+    let token_program = next(&mut iterator)?;
+    validate_registered_create_frame(
+        program_id,
+        controller,
+        maker,
+        payer,
+        replay,
+        registration,
+        claim_program,
+        system,
+        market,
+        realm,
+        fee_policy,
+        capability_manifest,
+        mint,
+        collateral,
+        venue,
+        token_program,
+    )?;
+
+    let controller_bump_seed = [instruction.controller_bump];
+    let controller_seeds: [&[u8]; 2] = [CONTROLLER_SEED, &controller_bump_seed];
+    let expected_controller = Pubkey::create_program_address(&controller_seeds, program_id)
+        .map_err(|_| ControllerError::ControllerPda)?;
+    if controller.key != &expected_controller || maker.key == &Pubkey::default() {
+        return Err(ControllerError::ControllerPda.into());
+    }
+    let authority = authenticate_market_authority(
+        market,
+        realm,
+        fee_policy,
+        capability_manifest,
+        mint,
+        venue,
+        token_program,
+    )?;
+    let slot = Clock::get().map_err(|_| ControllerError::Instruction)?.slot;
+    if intent.market != market.key.to_bytes()
+        || intent.generation != authority.generation
+        || intent.fee_basis_points != authority.fee_basis_points
+        || intent.collateral_account != collateral.key.to_bytes()
+        || intent.side > 1
+        || intent.lifecycle > 2
+        || intent.outcome >= authority.outcome_count
+        || intent.valid_from > intent.valid_through
+        || slot > intent.valid_through
+        || intent.maximum_fill == 0
+    {
+        return Err(ControllerError::MarketAuthority.into());
+    }
+
+    let generation = intent.generation.to_le_bytes();
+    let nonce = intent.nonce.to_le_bytes();
+    let replay_bump_seed = [instruction.replay_bump];
+    let replay_seeds: [&[u8]; 5] = [
+        REPLAY_SEED,
+        market.key.as_ref(),
+        &generation,
+        maker.key.as_ref(),
+        &replay_bump_seed,
+    ];
+    let registration_bump_seed = [instruction.registration_bump];
+    let registration_seeds: [&[u8]; 6] = [
+        REGISTERED_SEED,
+        market.key.as_ref(),
+        &generation,
+        maker.key.as_ref(),
+        &nonce,
+        &registration_bump_seed,
+    ];
+    if replay.key
+        != &Pubkey::create_program_address(&replay_seeds, program_id)
+            .map_err(|_| ControllerError::ReplayPda)?
+        || registration.key
+            != &Pubkey::create_program_address(&registration_seeds, program_id)
+                .map_err(|_| ControllerError::ReplayPda)?
+    {
+        return Err(ControllerError::ReplayPda.into());
+    }
+    authenticate_registration_collateral(
+        authority,
+        intent,
+        *maker.key,
+        registration,
+        collateral,
+        token_program,
+    )?;
+
+    let rent = Rent::get().map_err(|_| ControllerError::AccountCreate)?;
+    if replay.owner == &system_program::ID {
+        create_claim_pda(
+            payer,
+            replay,
+            system,
+            rent.minimum_balance(REPLAY_STATE_BYTES),
+            REPLAY_STATE_BYTES,
+            &replay_seeds,
+        )?;
+    } else if replay.owner != &CLAIM_PROGRAM_ID || replay.data_len() != REPLAY_STATE_BYTES {
+        return Err(ControllerError::ClaimState.into());
+    }
+    create_claim_pda(
+        payer,
+        registration,
+        system,
+        rent.minimum_balance(REGISTERED_INTENT_STATE_BYTES),
+        REGISTERED_INTENT_STATE_BYTES,
+        &registration_seeds,
+    )?;
+
+    let state = RegisteredIntentStateV1 {
+        phase: 0,
+        controller: controller.key.to_bytes(),
+        maker: maker.key.to_bytes(),
+        intent,
+        remaining: intent.maximum_fill,
+        sequence: 0,
+    }
+    .encode()
+    .map_err(|_| ControllerError::Instruction)?;
+    invoke_registered_create(
+        controller,
+        replay,
+        registration,
+        claim_program,
+        &controller_seeds,
+        state,
+    )
+}
+
 #[inline(never)]
 fn process_registered_terminal(
     program_id: &Pubkey,
@@ -885,6 +1053,94 @@ fn validate_registered_account_frame(
         if keys.iter().skip(index + 1).any(|right| left == right) {
             return Err(ControllerError::AccountAuthority);
         }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn validate_registered_create_frame(
+    program_id: &Pubkey,
+    controller: &AccountInfo<'_>,
+    maker: &AccountInfo<'_>,
+    payer: &AccountInfo<'_>,
+    replay: &AccountInfo<'_>,
+    registration: &AccountInfo<'_>,
+    claim_program: &AccountInfo<'_>,
+    system: &AccountInfo<'_>,
+    market: &AccountInfo<'_>,
+    realm: &AccountInfo<'_>,
+    fee_policy: &AccountInfo<'_>,
+    capability_manifest: &AccountInfo<'_>,
+    mint: &AccountInfo<'_>,
+    collateral: &AccountInfo<'_>,
+    venue: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+) -> Result<(), ControllerError> {
+    if controller.is_signer
+        || controller.is_writable
+        || controller.executable
+        || !maker.is_signer
+        || maker.executable
+        || !payer.is_signer
+        || !payer.is_writable
+        || payer.executable
+        || replay.is_signer
+        || !replay.is_writable
+        || replay.executable
+        || registration.is_signer
+        || !registration.is_writable
+        || registration.executable
+        || !readonly_executable(claim_program)
+        || !readonly_executable(system)
+        || !readonly_data(market)
+        || !readonly_data(realm)
+        || !readonly_data(fee_policy)
+        || !readonly_data(capability_manifest)
+        || !readonly_data(mint)
+        || collateral.is_signer
+        || collateral.executable
+        || !readonly_data(venue)
+        || !readonly_executable(token_program)
+    {
+        return Err(ControllerError::AccountAuthority);
+    }
+    let replay_shape = (replay.owner == &system_program::ID && replay.data_len() == 0)
+        || (replay.owner == &CLAIM_PROGRAM_ID && replay.data_len() == REPLAY_STATE_BYTES);
+    if !replay_shape
+        || registration.owner != &system_program::ID
+        || registration.data_len() != 0
+        || claim_program.key != &CLAIM_PROGRAM_ID
+        || system.key != &system_program::ID
+        || registration.owner == program_id
+    {
+        return Err(ControllerError::AccountAuthority);
+    }
+    let fixed = [
+        controller.key,
+        replay.key,
+        registration.key,
+        claim_program.key,
+        system.key,
+        market.key,
+        realm.key,
+        fee_policy.key,
+        capability_manifest.key,
+        mint.key,
+        collateral.key,
+        venue.key,
+        token_program.key,
+    ];
+    for (index, left) in fixed.iter().enumerate() {
+        if fixed.iter().skip(index + 1).any(|right| left == right) {
+            return Err(ControllerError::AccountAuthority);
+        }
+    }
+    if fixed
+        .iter()
+        .any(|key| *key == maker.key || *key == payer.key)
+    {
+        return Err(ControllerError::AccountAuthority);
     }
     Ok(())
 }
@@ -1314,6 +1570,41 @@ fn authenticate_token_state(
     Ok([source.amount, seller_amount, venue_amount])
 }
 
+#[inline(never)]
+fn authenticate_registration_collateral(
+    authority: MarketAuthority,
+    intent: CompactIntentV1,
+    maker: Pubkey,
+    registration: &AccountInfo<'_>,
+    collateral: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+) -> Result<(), ControllerError> {
+    if token_program.key.to_bytes() != LEGACY_TOKEN_PROGRAM_ID
+        || collateral.owner != token_program.key
+    {
+        return Err(ControllerError::TokenState);
+    }
+    let account = ExactTransferProfileV1::LegacyExactTransferV1
+        .check_transfer_account(
+            LEGACY_TOKEN_PROGRAM_ID,
+            &collateral
+                .try_borrow_data()
+                .map_err(|_| ControllerError::TokenState)?,
+        )
+        .map_err(|_| ControllerError::TokenState)?;
+    if account.mint != authority.collateral_mint {
+        return Err(ControllerError::TokenState);
+    }
+    if intent.side == 1
+        && (account.owner != maker.to_bytes()
+            || account.delegate != COption::Some(registration.key.to_bytes())
+            || account.delegated_amount == 0)
+    {
+        return Err(ControllerError::TokenState);
+    }
+    Ok(())
+}
+
 fn legacy_destination_projection(
     account: &AccountInfo<'_>,
 ) -> Result<([u8; 32], u64), ControllerError> {
@@ -1459,6 +1750,52 @@ fn patch_bytes<const WIDTH: usize>(
     Ok(())
 }
 
+fn create_claim_pda<'info>(
+    payer: &AccountInfo<'info>,
+    created: &AccountInfo<'info>,
+    system: &AccountInfo<'info>,
+    rent_lamports: u64,
+    space: usize,
+    signer_seeds: &[&[u8]],
+) -> ProgramResult {
+    if created.owner != &system_program::ID
+        || created.executable
+        || created.data_len() != 0
+        || system.key != &system_program::ID
+    {
+        return Err(ControllerError::AccountCreate.into());
+    }
+    let top_up = rent_lamports.saturating_sub(created.lamports());
+    if top_up != 0 {
+        invoke(
+            &transfer(payer.key, created.key, top_up),
+            &[payer.clone(), created.clone(), system.clone()],
+        )
+        .map_err(|_| ControllerError::AccountCreate)?;
+    }
+    let space_u64 = u64::try_from(space).map_err(|_| ControllerError::Arithmetic)?;
+    invoke_signed(
+        &allocate(created.key, space_u64),
+        &[created.clone(), system.clone()],
+        &[signer_seeds],
+    )
+    .map_err(|_| ControllerError::AccountCreate)?;
+    invoke_signed(
+        &assign(created.key, &CLAIM_PROGRAM_ID),
+        &[created.clone(), system.clone()],
+        &[signer_seeds],
+    )
+    .map_err(|_| ControllerError::AccountCreate)?;
+    if created.owner != &CLAIM_PROGRAM_ID
+        || created.executable
+        || created.data_len() != space
+        || created.lamports() < rent_lamports
+    {
+        return Err(ControllerError::AccountCreate.into());
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn invoke_claim<'info>(
     controller: &AccountInfo<'info>,
@@ -1523,6 +1860,34 @@ fn invoke_registered_claim<'info>(
             buyer_registration.clone(),
             seller_position.clone(),
             buyer_position.clone(),
+            claim_program.clone(),
+        ],
+        &[controller_seeds],
+    )
+}
+
+fn invoke_registered_create<'info>(
+    controller: &AccountInfo<'info>,
+    replay: &AccountInfo<'info>,
+    registration: &AccountInfo<'info>,
+    claim_program: &AccountInfo<'info>,
+    controller_seeds: &[&[u8]],
+    state: [u8; REGISTERED_INTENT_STATE_BYTES],
+) -> ProgramResult {
+    invoke_signed(
+        &Instruction {
+            program_id: CLAIM_PROGRAM_ID,
+            accounts: std::vec![
+                AccountMeta::new_readonly(*controller.key, true),
+                AccountMeta::new(*replay.key, false),
+                AccountMeta::new(*registration.key, false),
+            ],
+            data: state.to_vec(),
+        },
+        &[
+            controller.clone(),
+            replay.clone(),
+            registration.clone(),
             claim_program.clone(),
         ],
         &[controller_seeds],

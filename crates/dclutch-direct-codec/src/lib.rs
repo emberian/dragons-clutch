@@ -28,6 +28,9 @@ pub const REGISTERED_CONTROLLER_INSTRUCTION_BYTES: usize =
 /// Bytes in the claim-owner request derived from a registered controller fill.
 pub const REGISTERED_CLAIM_FILL_BYTES: usize =
     generated_registered_controller::REGISTERED_CLAIM_FILL_BYTES_VALUE;
+/// Bytes in one signed, prepaid registered-intent creation request.
+pub const REGISTERED_CREATE_INSTRUCTION_BYTES: usize =
+    generated_registered_controller::REGISTERED_CREATE_BYTES_VALUE;
 /// Bytes in one controller cancellation or permissionless expiry request.
 pub const REGISTERED_TERMINAL_INSTRUCTION_BYTES: usize =
     generated_registered_controller::REGISTERED_TERMINAL_BYTES_VALUE;
@@ -228,6 +231,19 @@ pub struct RegisteredFillInstructionV1 {
     pub execution_price: u64,
 }
 
+/// One maker-signed request to create a reusable registered intent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegisteredCreateInstructionV1 {
+    /// Global controller PDA bump.
+    pub controller_bump: u8,
+    /// Maker/Market/generation replay-root PDA bump.
+    pub replay_bump: u8,
+    /// Exact registered-intent PDA bump.
+    pub registration_bump: u8,
+    /// Canonical terms authorized by the maker's transaction signature.
+    pub intent: CompactIntentV1,
+}
+
 /// Terminal mutation selected for one registered intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RegisteredTerminalAction {
@@ -405,6 +421,92 @@ impl RegisteredFillInstructionV1 {
             &mut output,
             generated_registered_controller::REGISTERED_CONTROLLER_EXECUTION_PRICE_OFFSET,
             &self.execution_price.to_le_bytes(),
+        )?;
+        Ok(output)
+    }
+}
+
+impl RegisteredCreateInstructionV1 {
+    /// Strictly decode one canonical registration-creation request.
+    pub fn decode(input: &[u8]) -> Result<Self, Error> {
+        exact_width(input, REGISTERED_CREATE_INSTRUCTION_BYTES)?;
+        exact_magic(
+            input,
+            &generated_registered_controller::REGISTERED_CREATE_MAGIC_BYTES,
+        )?;
+        if u16_at(
+            input,
+            generated_registered_controller::REGISTERED_CREATE_VERSION_OFFSET,
+        )? != generated_registered_controller::REGISTERED_CREATE_ABI_VERSION
+        {
+            return Err(Error::UnsupportedVersion);
+        }
+        reserved(
+            input,
+            generated_registered_controller::REGISTERED_CREATE_RESERVED_OFFSET,
+            generated_registered_controller::REGISTERED_CREATE_INTENT_OFFSET
+                .checked_sub(generated_registered_controller::REGISTERED_CREATE_RESERVED_OFFSET)
+                .ok_or(Error::InvalidLength)?,
+        )?;
+        let intent_end = generated_registered_controller::REGISTERED_CREATE_INTENT_OFFSET
+            .checked_add(COMPACT_INTENT_BYTES)
+            .ok_or(Error::InvalidLength)?;
+        Ok(Self {
+            controller_bump: byte(
+                input,
+                generated_registered_controller::REGISTERED_CREATE_CONTROLLER_BUMP_OFFSET,
+            )?,
+            replay_bump: byte(
+                input,
+                generated_registered_controller::REGISTERED_CREATE_REPLAY_BUMP_OFFSET,
+            )?,
+            registration_bump: byte(
+                input,
+                generated_registered_controller::REGISTERED_CREATE_REGISTRATION_BUMP_OFFSET,
+            )?,
+            intent: CompactIntentV1::decode(
+                input
+                    .get(
+                        generated_registered_controller::REGISTERED_CREATE_INTENT_OFFSET
+                            ..intent_end,
+                    )
+                    .ok_or(Error::InvalidLength)?,
+            )?,
+        })
+    }
+
+    /// Encode one canonical registration-creation request.
+    pub fn encode(self) -> Result<[u8; REGISTERED_CREATE_INSTRUCTION_BYTES], Error> {
+        let mut output = [0_u8; REGISTERED_CREATE_INSTRUCTION_BYTES];
+        put(
+            &mut output,
+            generated_registered_controller::REGISTERED_CREATE_MAGIC_OFFSET,
+            &generated_registered_controller::REGISTERED_CREATE_MAGIC_BYTES,
+        )?;
+        put(
+            &mut output,
+            generated_registered_controller::REGISTERED_CREATE_VERSION_OFFSET,
+            &generated_registered_controller::REGISTERED_CREATE_ABI_VERSION.to_le_bytes(),
+        )?;
+        put_byte(
+            &mut output,
+            generated_registered_controller::REGISTERED_CREATE_CONTROLLER_BUMP_OFFSET,
+            self.controller_bump,
+        )?;
+        put_byte(
+            &mut output,
+            generated_registered_controller::REGISTERED_CREATE_REPLAY_BUMP_OFFSET,
+            self.replay_bump,
+        )?;
+        put_byte(
+            &mut output,
+            generated_registered_controller::REGISTERED_CREATE_REGISTRATION_BUMP_OFFSET,
+            self.registration_bump,
+        )?;
+        put(
+            &mut output,
+            generated_registered_controller::REGISTERED_CREATE_INTENT_OFFSET,
+            &self.intent.encode()?,
         )?;
         Ok(output)
     }
@@ -811,6 +913,36 @@ mod tests {
             Ok([
                 b'D', b'C', b'R', b'F', 1, 0, 0, 0, 0xd0, 0x07, 0, 0, 0, 0, 0, 0,
             ])
+        );
+    }
+
+    #[test]
+    fn registered_creation_matches_lean_and_round_trips() {
+        let instruction = RegisteredCreateInstructionV1 {
+            controller_bump: 1,
+            replay_bump: 2,
+            registration_bump: 3,
+            intent: fixture_registered_state(0).intent,
+        };
+        let bytes = instruction.encode().expect("registration encoding");
+        assert_eq!(
+            bytes,
+            generated_registered_controller::REGISTERED_CREATE_EXAMPLE
+        );
+        assert_eq!(
+            RegisteredCreateInstructionV1::decode(&bytes),
+            Ok(instruction)
+        );
+
+        let mut hostile = bytes;
+        hostile[generated_registered_controller::REGISTERED_CREATE_RESERVED_OFFSET] = 1;
+        assert_eq!(
+            RegisteredCreateInstructionV1::decode(&hostile),
+            Err(Error::NonzeroReserved)
+        );
+        assert_eq!(
+            RegisteredCreateInstructionV1::decode(&bytes[..bytes.len() - 1]),
+            Err(Error::InvalidLength)
         );
     }
 

@@ -151,6 +151,31 @@ theorem exact_frames :
 
 end Registered
 
+namespace RegisteredCreate
+
+def replayOffset : Nat := authorityOffset + accountSpan authorityRole
+def registrationOffset : Nat := replayOffset + accountSpan replayRole
+def replayDataOffset : Nat := replayOffset + accountHeaderBytes
+def registrationDataOffset : Nat := registrationOffset + accountHeaderBytes
+def instructionLengthOffset : Nat :=
+  registrationOffset + accountSpan Registered.registrationRole
+def instructionOffset : Nat := instructionLengthOffset + 8
+def instructionBytes : Nat := DClutch.DirectLifecycleAbi.stateBytes
+def programIdOffset : Nat := instructionOffset + instructionBytes
+
+theorem exact_profile :
+    replayOffset = 10344 ∧
+    registrationOffset = 20728 ∧
+    replayDataOffset = 10432 ∧
+    registrationDataOffset = 20816 ∧
+    instructionLengthOffset = 31296 ∧
+    instructionOffset = 31304 ∧
+    instructionBytes = 232 ∧
+    programIdOffset = 31536 := by
+  native_decide
+
+end RegisteredCreate
+
 namespace RegisteredTerminal
 
 def registrationRole : AccountRole := Registered.registrationRole

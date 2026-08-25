@@ -28,6 +28,16 @@ def main : IO Unit := do
   emitRustBytes "pub(crate)" "REGISTERED_CONTROLLER_EXAMPLE"
     (encode exampleInstruction)
   IO.println ""
+  IO.println s!"pub(crate) const REGISTERED_CREATE_BYTES_VALUE: usize = {Registration.bytes};"
+  IO.println s!"pub(crate) const REGISTERED_CREATE_ABI_VERSION: u16 = {Registration.version};"
+  emitRustBytes "pub(crate)" "REGISTERED_CREATE_MAGIC_BYTES" Registration.magic
+  for field in Registration.Field.all do
+    IO.println s!"pub(crate) const {Registration.Field.rustName field}: usize = {Registration.Field.offset field};"
+  IO.println ""
+  IO.println "#[cfg(test)]"
+  emitRustBytes "pub(crate)" "REGISTERED_CREATE_EXAMPLE"
+    (Registration.encode Registration.exampleInstruction)
+  IO.println ""
   IO.println s!"pub(crate) const REGISTERED_TERMINAL_BYTES_VALUE: usize = {Terminal.bytes};"
   IO.println s!"pub(crate) const REGISTERED_TERMINAL_ABI_VERSION: u16 = {Terminal.version};"
   emitRustBytes "pub(crate)" "REGISTERED_TERMINAL_MAGIC_BYTES" Terminal.magic

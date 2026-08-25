@@ -66,7 +66,7 @@ safe Rust codec consumes both generated artifacts and refuses unknown phases,
 malformed nested intents, nonzero reserved bytes, truncation, and alternate
 magic/version values. `RegisteredPhysical` executes that generated program for
 both authenticated registrations, joins the results to the sole Position
-balances, and proves exact claim conservation. The 20,568-byte claim-owner ELF
+balances, and proves exact claim conservation. The 24,680-byte claim-owner ELF
 now dispatches this 16-byte request profile alongside inline execution; its
 real-ELF campaign covers reusable and terminal fills plus hostile rollback.
 The 32-byte controller request now drives that child route and real SPL custody
@@ -76,7 +76,12 @@ the claim owner admits only an open registration and advances its phase and
 local sequence atomically. The real-ELF campaign covers stale sequence, maker
 impersonation, premature expiry, and terminal replay with byte-for-byte refusal
 state. Registration account creation and its prepaid funding/replay boundary
-remain the next physical gate.
+are now physically connected by a 152-byte maker-signed request: the controller
+authenticates the live Market/Realm/manifest/fee/token context, tops up and
+allocates dusted replay and registration PDAs, assigns both to the claim owner,
+and atomically asks that owner to consume the global maker nonce and install the
+canonical state. Account retirement and immutable execution-release-set wiring
+remain open.
 
 `CompiledPhysical.compilePhysicalPlan` then constructs the claim and custody
 plans from successful program outputs instead of caller-supplied gross, fee, or

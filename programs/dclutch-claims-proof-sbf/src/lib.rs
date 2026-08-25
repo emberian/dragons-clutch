@@ -5,11 +5,10 @@
 include!("generated_profile.rs");
 
 use dclutch_direct_codec::{
-    REGISTERED_FILL_PROGRAM, REGISTERED_PHASE_OUTPUT_REGISTER,
+    RegisteredIntentStateV1, REGISTERED_FILL_PROGRAM, REGISTERED_PHASE_OUTPUT_REGISTER,
     REGISTERED_REMAINING_OUTPUT_REGISTER, REGISTERED_SEQUENCE_OUTPUT_REGISTER,
-    RegisteredIntentStateV1,
 };
-use dclutch_transition_vm::{Registers, execute};
+use dclutch_transition_vm::{execute, Registers};
 
 const ERROR: u64 = 5_u64 << 32;
 
@@ -24,6 +23,12 @@ unsafe fn read_u64(input: *mut u8, offset: usize) -> u64 {
     // SAFETY: every caller relies on the entrypoint's named loader-extent and
     // alignment boundary and supplies a Lean-generated in-bounds offset.
     unsafe { core::ptr::read(input.add(offset).cast::<u64>()) }
+}
+
+#[inline(always)]
+unsafe fn read_u8(input: *mut u8, offset: usize) -> u8 {
+    // SAFETY: every caller supplies a generated in-bounds offset.
+    unsafe { core::ptr::read(input.add(offset).cast_const()) }
 }
 
 #[inline(always)]
@@ -52,9 +57,25 @@ unsafe fn equal_32(input: *mut u8, left: usize, right: usize) -> bool {
 }
 
 #[inline(always)]
+unsafe fn read_32(input: *mut u8, offset: usize) -> [u8; 32] {
+    let mut output = [0_u8; 32];
+    let mut index = 0;
+    while index < output.len() {
+        // SAFETY: the caller supplies a validated 32-byte extent.
+        output[index] = unsafe { read_u8(input, offset + index) };
+        index += 1;
+    }
+    output
+}
+
+#[inline(always)]
 fn add_checked(left: u64, right: u64) -> Option<u64> {
     let result = left.wrapping_add(right);
-    if result < left { None } else { Some(result) }
+    if result < left {
+        None
+    } else {
+        Some(result)
+    }
 }
 
 #[inline(always)]
@@ -79,7 +100,7 @@ unsafe fn exact_state_frame(
 }
 
 #[inline(always)]
-unsafe fn accounts_are_distinct_at(input: *mut u8, offsets: [usize; 5]) -> bool {
+unsafe fn accounts_are_distinct_at<const N: usize>(input: *mut u8, offsets: [usize; N]) -> bool {
     let mut left = 0;
     while left < offsets.len() {
         let mut right = left + 1;
@@ -127,6 +148,23 @@ fn registered_successor(state: RegisteredIntentStateV1, fill: u64) -> Option<Reg
     })
 }
 
+#[inline(always)]
+fn registration_successor(state: RegisteredIntentStateV1, replay_nonce: u64) -> Option<u64> {
+    if state.phase != 0
+        || state.maker == [0; 32]
+        || state.intent.side > 1
+        || state.intent.lifecycle > 2
+        || state.intent.valid_from > state.intent.valid_through
+        || state.intent.maximum_fill == 0
+        || state.remaining != state.intent.maximum_fill
+        || state.sequence != 0
+        || state.intent.nonce != replay_nonce
+    {
+        return None;
+    }
+    add_checked(replay_nonce, 1)
+}
+
 /// Dispatch one exact controller-authorized inline or registered claim route.
 ///
 /// Inline replay roots and registered local sequences share this canonical
@@ -156,9 +194,112 @@ pub unsafe extern "C" fn entrypoint(input: *mut u8) -> u64 {
                 REGISTERED_DATA_BYTES => execute_registered(input),
                 _ => ERROR,
             },
+            3 => execute_registered_create(input),
             2 => execute_registered_terminal(input),
             _ => ERROR,
         }
+    }
+}
+
+#[inline(always)]
+unsafe fn zero_span(input: *mut u8, offset: usize, bytes: usize) -> bool {
+    let mut index = 0;
+    while index < bytes {
+        // SAFETY: the caller validated the exact account or instruction extent.
+        if unsafe { read_u8(input, offset + index) } != 0 {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+#[inline(always)]
+unsafe fn copy_span(input: *mut u8, source: usize, destination: usize, bytes: usize) {
+    let mut index = 0;
+    while index < bytes {
+        // SAFETY: the caller validated both exact extents before copying.
+        let value = unsafe { read_u8(input, source + index) };
+        unsafe { write_u8(input, destination + index, value) };
+        index += 1;
+    }
+}
+
+#[inline(never)]
+unsafe fn execute_registered_create(input: *mut u8) -> u64 {
+    // SAFETY: the generated three-account profile establishes every read and
+    // write extent. Both state writes occur only after canonical state, replay,
+    // authority, ownership, alias, and arithmetic admission succeeds.
+    unsafe {
+        if read_u64(input, AUTHORITY_OFFSET) != AUTHORITY_FRAME_WORD
+            || read_u64(input, AUTHORITY_OFFSET + 80) != 0
+            || read_u64(input, CREATE_REPLAY_OFFSET) != REPLAY_FRAME_WORD
+            || read_u64(input, CREATE_REPLAY_OFFSET + 80) != REPLAY_DATA_BYTES
+            || !equal_32(input, CREATE_REPLAY_OFFSET + 40, CREATE_PROGRAM_ID_OFFSET)
+            || read_u64(input, CREATE_REGISTRATION_OFFSET) != REGISTERED_FRAME_WORD
+            || read_u64(input, CREATE_REGISTRATION_OFFSET + 80) != REGISTERED_DATA_BYTES
+            || !equal_32(
+                input,
+                CREATE_REGISTRATION_OFFSET + 40,
+                CREATE_PROGRAM_ID_OFFSET,
+            )
+            || !accounts_are_distinct_at(
+                input,
+                [
+                    AUTHORITY_OFFSET,
+                    CREATE_REPLAY_OFFSET,
+                    CREATE_REGISTRATION_OFFSET,
+                ],
+            )
+            || read_u64(input, CREATE_INSTRUCTION_LENGTH_OFFSET) != CREATE_INSTRUCTION_BYTES
+            || !zero_span(
+                input,
+                CREATE_REGISTRATION_DATA_OFFSET,
+                REGISTERED_DATA_BYTES as usize,
+            )
+        {
+            return ERROR;
+        }
+        let state = match decode_registered(input, CREATE_INSTRUCTION_OFFSET) {
+            Some(state) => state,
+            None => return ERROR,
+        };
+        if state.controller != read_32(input, AUTHORITY_OFFSET + 8) {
+            return ERROR;
+        }
+        let replay_is_vacant =
+            zero_span(input, CREATE_REPLAY_DATA_OFFSET, REPLAY_DATA_BYTES as usize);
+        let replay_nonce = if replay_is_vacant {
+            0
+        } else {
+            if read_u64(input, CREATE_REPLAY_DATA_OFFSET) != REPLAY_MAGIC_WORD
+                || !equal_32(input, AUTHORITY_OFFSET + 8, CREATE_REPLAY_DATA_OFFSET + 8)
+            {
+                return ERROR;
+            }
+            read_u64(input, CREATE_REPLAY_DATA_OFFSET + 40)
+        };
+        let next_nonce = match registration_successor(state, replay_nonce) {
+            Some(nonce) => nonce,
+            None => return ERROR,
+        };
+        if replay_is_vacant {
+            write_u64(input, CREATE_REPLAY_DATA_OFFSET, REPLAY_MAGIC_WORD);
+            copy_span(
+                input,
+                AUTHORITY_OFFSET + 8,
+                CREATE_REPLAY_DATA_OFFSET + 8,
+                32,
+            );
+        }
+        write_u64(input, CREATE_REPLAY_DATA_OFFSET + 40, next_nonce);
+        copy_span(
+            input,
+            CREATE_INSTRUCTION_OFFSET,
+            CREATE_REGISTRATION_DATA_OFFSET,
+            REGISTERED_DATA_BYTES as usize,
+        );
+        0
     }
 }
 
@@ -576,6 +717,26 @@ mod tests {
         let mut overflow = state(0, 2);
         overflow.sequence = u64::MAX;
         assert!(registered_successor(overflow, 500).is_none());
+    }
+
+    #[test]
+    fn registration_consumes_global_nonce_once() {
+        let mut pending = state(0, 2);
+        pending.intent.nonce = 0;
+        pending.sequence = 0;
+        assert_eq!(registration_successor(pending, 0), Some(1));
+        assert_eq!(registration_successor(pending, 1), None);
+
+        let mut empty = pending;
+        empty.intent.maximum_fill = 0;
+        empty.remaining = 0;
+        assert_eq!(registration_successor(empty, 0), None);
+        let mut noncanonical = pending;
+        noncanonical.remaining -= 1;
+        assert_eq!(registration_successor(noncanonical, 0), None);
+        let mut overflow = pending;
+        overflow.intent.nonce = u64::MAX;
+        assert_eq!(registration_successor(overflow, u64::MAX), None);
     }
 
     #[test]

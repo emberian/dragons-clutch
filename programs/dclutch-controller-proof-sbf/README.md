@@ -33,18 +33,30 @@ The real-SVM campaign checks these runtime properties for the pinned artifacts:
 The registered campaign additionally checks a wrong registration coordinate,
 two successive GTC residual fills, terminal closure, real SPL delegation by the
 buyer registration PDA, and transaction-wide rollback after a late frozen-venue
-failure. Measured registered fills consume 59,134--59,143 CU end to end; their
-legacy transaction is 762 bytes and the all-address v0 form is 271 bytes. The
-current verifier-clean artifacts are 120,024 bytes for the controller and
-21,288 bytes for the multi-profile claim owner.
+failure. The current locally rebuilt verifier-clean artifacts are 182,880 bytes
+for the controller and 24,680 bytes for the multi-profile claim owner. Against
+those artifacts the two successful residual fills consumed 63,649 and 63,640
+CU; the legacy transaction is 762 bytes and the all-address v0 form 271 bytes.
 
 The terminal campaign executes separate 24-byte controller requests through
 the same exact claim owner. Cancellation requires the persisted maker's native
 transaction signature; expiry is permissionless only after `valid_through`.
 Both requests pin the registration-local sequence. Successful cancellation and
-expiry consumed 6,256 and 6,237 CU respectively. Stale sequence, maker
+expiry consumed 6,259 and 6,240 CU respectively. Stale sequence, maker
 impersonation, premature expiry, and repeated terminal requests all refused
 without changing the registration.
+
+Registration now enters through a separate 152-byte maker-signed request. A
+sponsor may pay the exact missing rent; pre-existing lamport dust is preserved
+and only the rent shortfall is transferred. The controller authenticates the
+live Market, Realm, capability manifest, fee policy, mint, collateral account,
+and buyer delegation before it allocates the replay and registration PDAs and
+assigns them to the claim owner. That owner independently consumes the exact
+global maker nonce and writes the canonical 232-byte state. The real-ELF
+campaign covers an unapproved buyer, first creation from two dusted PDAs, reuse
+of the global replay root for the next registration, and a skipped-nonce late
+failure that rolls back account allocation, funding, approval, and replay.
+Successful first and subsequent registrations consumed 50,155 and 44,088 CU.
 
 This remains an experiment, not a release. The Market execution profile is
 controller-owned but does not yet have immutable release-artifact admission.
@@ -55,4 +67,6 @@ selection and release authorization are authenticated for the inline route.
 The registered successor now has a Lean-owned 232-byte state ABI and 168-byte
 residual program consumed by the safe Rust codec. Registered fill dispatch is
 now physically complete, as are maker cancellation and permissionless expiry.
-Prepaid account creation plus signed registration remain the successor gate.
+Prepaid signed account creation is also physically complete. Registration and
+global replay retirement, execution-release-set admission, and current-artifact
+machine-code refinement remain successor gates.

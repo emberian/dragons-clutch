@@ -22,8 +22,8 @@ use dclutch_core_contract::{ContentId, MarketIdentity, MarketRoot, Phase};
 use dclutch_direct_codec::{
     COMPACT_INTENT_BYTES, COMPILED_DIRECT_CAPACITY_ID_V1, COMPILED_DIRECT_CHILD_SCHEMA_ID_V1,
     COMPILED_DIRECT_DERIVATION_ID_V1, COMPILED_DIRECT_RELEASE_ID_V1, CompactIntentV1,
-    ControllerInstructionV1, RegisteredFillInstructionV1, RegisteredIntentStateV1,
-    RegisteredTerminalAction, RegisteredTerminalInstructionV1,
+    ControllerInstructionV1, RegisteredCreateInstructionV1, RegisteredFillInstructionV1,
+    RegisteredIntentStateV1, RegisteredTerminalAction, RegisteredTerminalInstructionV1,
 };
 use dclutch_direct_contract::{
     DIRECT_CAPABILITY_KIND_ID_V2, VENUE_FEE_POLICY_BYTES_V3, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3,
@@ -362,6 +362,23 @@ fn registered_controller_data(controller_bump: u8, fixture: MarketFixture, fill:
     .to_vec()
 }
 
+fn registered_create_data(
+    controller_bump: u8,
+    replay_bump: u8,
+    registration_bump: u8,
+    intent: CompactIntentV1,
+) -> Vec<u8> {
+    RegisteredCreateInstructionV1 {
+        controller_bump,
+        replay_bump,
+        registration_bump,
+        intent,
+    }
+    .encode()
+    .expect("registered creation instruction")
+    .to_vec()
+}
+
 fn registered_terminal_data(
     action: RegisteredTerminalAction,
     controller_bump: u8,
@@ -486,6 +503,56 @@ fn registered_controller_instruction(
             AccountMeta::new(fixture.tokens.seller, false),
             AccountMeta::new(fixture.tokens.venue, false),
             AccountMeta::new_readonly(token_program_id(), false),
+        ],
+        data,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn registered_create_instruction(
+    controller: Pubkey,
+    maker: Pubkey,
+    payer: Pubkey,
+    replay: Pubkey,
+    registration: Pubkey,
+    authority: MarketFixtureAuthority,
+    mint: Pubkey,
+    collateral: Pubkey,
+    venue: Pubkey,
+    data: Vec<u8>,
+) -> Instruction {
+    Instruction {
+        program_id: CONTROLLER_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new_readonly(controller, false),
+            AccountMeta::new_readonly(maker, true),
+            AccountMeta::new(payer, true),
+            AccountMeta::new(replay, false),
+            AccountMeta::new(registration, false),
+            AccountMeta::new_readonly(CLAIM_PROGRAM_ID, false),
+            AccountMeta::new_readonly(system_program::ID, false),
+            AccountMeta::new_readonly(authority.market, false),
+            AccountMeta::new_readonly(authority.realm, false),
+            AccountMeta::new_readonly(authority.fee_policy, false),
+            AccountMeta::new_readonly(authority.capability_manifest, false),
+            AccountMeta::new_readonly(mint, false),
+            AccountMeta::new_readonly(collateral, false),
+            AccountMeta::new_readonly(venue, false),
+            AccountMeta::new_readonly(token_program_id(), false),
+        ],
+        data,
+    }
+}
+
+fn token_approve(source: Pubkey, delegate: Pubkey, owner: Pubkey, amount: u64) -> Instruction {
+    let mut data = vec![4_u8];
+    data.extend_from_slice(&amount.to_le_bytes());
+    Instruction {
+        program_id: token_program_id(),
+        accounts: vec![
+            AccountMeta::new(source, false),
+            AccountMeta::new_readonly(delegate, false),
+            AccountMeta::new_readonly(owner, true),
         ],
         data,
     }
@@ -637,6 +704,36 @@ async fn submit_terminal(
         processed
             .metadata
             .expect("terminal transaction metadata")
+            .compute_units_consumed,
+    )
+}
+
+async fn submit_registered_create(
+    context: &mut ProgramTestContext,
+    instructions: &[Instruction],
+    maker: &Keypair,
+) -> (bool, u64) {
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let transaction = Transaction::new_signed_with_payer(
+        instructions,
+        Some(&context.payer.pubkey()),
+        &[&context.payer, maker],
+        blockhash,
+    );
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("registration transaction processing");
+    (
+        processed.result.is_ok(),
+        processed
+            .metadata
+            .expect("registration transaction metadata")
             .compute_units_consumed,
     )
 }
@@ -2116,6 +2213,238 @@ async fn registered_residuals_reuse_authenticated_state_and_real_custody_atomica
         late_refusal.compute_units,
         first.wire_bytes,
         first.v0_wire_bytes,
+    );
+}
+
+#[tokio::test]
+async fn registered_creation_funds_dust_and_hands_replay_to_local_state_atomically() {
+    require_sbf();
+    let maker = Keypair::new();
+    let (controller, controller_bump) =
+        Pubkey::find_program_address(&[CONTROLLER_SEED], &CONTROLLER_PROGRAM_ID);
+    let mint_key = Pubkey::new_unique();
+    let source = Pubkey::new_unique();
+    let venue = Pubkey::new_unique();
+    let (authority, market_bytes, realm_bytes, policy_bytes, manifest_bytes) =
+        authority_records(mint_key, venue);
+    let generation = GENERATION.to_le_bytes();
+    let (replay, replay_bump) = Pubkey::find_program_address(
+        &[
+            REPLAY_SEED,
+            authority.market.as_ref(),
+            &generation,
+            maker.pubkey().as_ref(),
+        ],
+        &CONTROLLER_PROGRAM_ID,
+    );
+    let registration_address = |nonce: u64| {
+        Pubkey::find_program_address(
+            &[
+                REGISTERED_SEED,
+                authority.market.as_ref(),
+                &generation,
+                maker.pubkey().as_ref(),
+                &nonce.to_le_bytes(),
+            ],
+            &CONTROLLER_PROGRAM_ID,
+        )
+    };
+    let (first_registration, first_bump) = registration_address(0);
+    let (second_registration, second_bump) = registration_address(1);
+    let (wrong_nonce_registration, wrong_nonce_bump) = registration_address(3);
+
+    let mut test = ProgramTest::new("dclutch_controller_proof_sbf", CONTROLLER_PROGRAM_ID, None);
+    test.prefer_bpf(true);
+    test.add_program("dclutch_claims_proof_sbf", CLAIM_PROGRAM_ID, None);
+    test.add_program("spl_token", token_program_id(), None);
+    add_program_account(&mut test, controller);
+    add_program_account(&mut test, maker.pubkey());
+    for (address, lamports) in [
+        (replay, 11_u64),
+        (first_registration, 13),
+        (second_registration, 17),
+        (wrong_nonce_registration, 19),
+    ] {
+        test.add_account(
+            address,
+            Account {
+                lamports,
+                data: vec![],
+                owner: system_program::ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        );
+    }
+    for (address, data) in [
+        (authority.market, market_bytes),
+        (authority.realm, realm_bytes),
+        (authority.fee_policy, policy_bytes),
+        (authority.capability_manifest, manifest_bytes),
+    ] {
+        add_protocol_account(&mut test, address, data);
+    }
+    test.add_account(
+        mint_key,
+        Account {
+            lamports: Rent::default().minimum_balance(MINT_BYTES),
+            data: mint(40_000, 6),
+            owner: token_program_id(),
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+    add_token_account(
+        &mut test,
+        source,
+        token_account(mint_key, maker.pubkey(), 10_000, None, false),
+    );
+    add_token_account(
+        &mut test,
+        venue,
+        token_account(mint_key, Pubkey::new_unique(), 0, None, false),
+    );
+    let mut context = test.start_with_context().await;
+    let payer = context.payer.pubkey();
+
+    let first_intent = compact_intent(authority.market, source, 1, 0);
+    let replay_before = account(&mut context, replay).await;
+    let first_before = account(&mut context, first_registration).await;
+    let unapproved = submit_registered_create(
+        &mut context,
+        &[registered_create_instruction(
+            controller,
+            maker.pubkey(),
+            payer,
+            replay,
+            first_registration,
+            authority,
+            mint_key,
+            source,
+            venue,
+            registered_create_data(controller_bump, replay_bump, first_bump, first_intent),
+        )],
+        &maker,
+    )
+    .await;
+    assert!(
+        !unapproved.0,
+        "buyer registration without delegation must refuse"
+    );
+    assert_eq!(account(&mut context, replay).await, replay_before);
+    assert_eq!(
+        account(&mut context, first_registration).await,
+        first_before
+    );
+
+    let first = submit_registered_create(
+        &mut context,
+        &[
+            token_approve(source, first_registration, maker.pubkey(), FILL),
+            registered_create_instruction(
+                controller,
+                maker.pubkey(),
+                payer,
+                replay,
+                first_registration,
+                authority,
+                mint_key,
+                source,
+                venue,
+                registered_create_data(controller_bump, replay_bump, first_bump, first_intent),
+            ),
+        ],
+        &maker,
+    )
+    .await;
+    assert!(first.0, "dust-tolerant first registration must commit");
+    let replay_after_first = account(&mut context, replay).await;
+    assert_eq!(replay_after_first.owner, CLAIM_PROGRAM_ID);
+    assert_eq!(replay_after_first.data.len(), REPLAY_STATE_BYTES);
+    assert_eq!(read_u64(&replay_after_first.data, 40), 1);
+    let first_account = account(&mut context, first_registration).await;
+    assert_eq!(first_account.owner, CLAIM_PROGRAM_ID);
+    assert!(first_account.lamports >= Rent::default().minimum_balance(first_account.data.len()));
+    let first_state =
+        RegisteredIntentStateV1::decode(&first_account.data).expect("first registration state");
+    assert_eq!(first_state.intent, first_intent);
+    assert_eq!(first_state.maker, maker.pubkey().to_bytes());
+    assert_eq!((first_state.remaining, first_state.sequence), (FILL, 0));
+
+    let second_intent = compact_intent(authority.market, source, 1, 1);
+    let second = submit_registered_create(
+        &mut context,
+        &[
+            token_approve(source, second_registration, maker.pubkey(), FILL),
+            registered_create_instruction(
+                controller,
+                maker.pubkey(),
+                payer,
+                replay,
+                second_registration,
+                authority,
+                mint_key,
+                source,
+                venue,
+                registered_create_data(controller_bump, replay_bump, second_bump, second_intent),
+            ),
+        ],
+        &maker,
+    )
+    .await;
+    assert!(
+        second.0,
+        "existing replay root must admit its exact next nonce"
+    );
+    let replay_after_second = account(&mut context, replay).await;
+    assert_eq!(read_u64(&replay_after_second.data, 40), 2);
+    let second_account = account(&mut context, second_registration).await;
+    let second_state =
+        RegisteredIntentStateV1::decode(&second_account.data).expect("second registration state");
+    assert_eq!(second_state.intent, second_intent);
+
+    let wrong_nonce_before = account(&mut context, wrong_nonce_registration).await;
+    let source_before = account(&mut context, source).await;
+    let wrong_nonce_intent = compact_intent(authority.market, source, 1, 3);
+    let wrong_nonce = submit_registered_create(
+        &mut context,
+        &[
+            token_approve(source, wrong_nonce_registration, maker.pubkey(), FILL),
+            registered_create_instruction(
+                controller,
+                maker.pubkey(),
+                payer,
+                replay,
+                wrong_nonce_registration,
+                authority,
+                mint_key,
+                source,
+                venue,
+                registered_create_data(
+                    controller_bump,
+                    replay_bump,
+                    wrong_nonce_bump,
+                    wrong_nonce_intent,
+                ),
+            ),
+        ],
+        &maker,
+    )
+    .await;
+    assert!(
+        !wrong_nonce.0,
+        "registration must not skip the global maker replay nonce"
+    );
+    assert_eq!(account(&mut context, replay).await, replay_after_second);
+    assert_eq!(
+        account(&mut context, wrong_nonce_registration).await,
+        wrong_nonce_before
+    );
+    assert_eq!(account(&mut context, source).await, source_before);
+
+    eprintln!(
+        "registered creation Direct CU: unapproved={}, first={}, reused replay={}, wrong nonce rollback={}",
+        unapproved.1, first.1, second.1, wrong_nonce.1
     );
 }
 
