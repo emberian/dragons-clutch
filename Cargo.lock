@@ -330,6 +330,14 @@ name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-custody-proof-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-token-svm",
+ "solana-program",
+]
+
+[[package]]
 name = "dclutch-dealer-contract"
 version = "0.1.0"
 dependencies = [

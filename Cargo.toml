@@ -27,6 +27,7 @@ members = [
     "programs/dclutch-effect-sbf",
     "programs/dclutch-controller-proof-sbf",
     "programs/dclutch-claims-proof-sbf",
+    "programs/dclutch-custody-proof-sbf",
     "programs/dclutch-sbf",
 ]
 resolver = "2"
