@@ -35,6 +35,12 @@ def all : List ScalarSlot := [
   .goodTillCancelled, .remainingOutput, .sequenceOutput, .phaseOutput
 ]
 
+def inputs : List ScalarSlot := [.lifecycle, .remaining, .fill, .sequence]
+
+def runtimeRegisters : List ScalarSlot := inputs ++ [
+  .remainingOutput, .sequenceOutput, .phaseOutput
+]
+
 @[simp] def index : ScalarSlot → Nat
   | .lifecycle => 0
   | .remaining => 1
@@ -59,11 +65,29 @@ def rustName : ScalarSlot → String
   | .sequenceOutput => "REGISTERED_SEQUENCE_OUTPUT"
   | .phaseOutput => "REGISTERED_PHASE_OUTPUT"
 
+def rustFieldName : ScalarSlot → String
+  | .lifecycle => "lifecycle"
+  | .remaining => "remaining"
+  | .fill => "fill"
+  | .sequence => "sequence"
+  | .zero => "zero"
+  | .one => "one"
+  | .goodTillCancelled => "good_till_cancelled"
+  | .remainingOutput => "remaining_output"
+  | .sequenceOutput => "sequence_output"
+  | .phaseOutput => "phase_output"
+
 theorem indices_are_canonical :
     all.map index = List.range all.length := by
   native_decide
 
 theorem rust_names_are_unique : (all.map rustName).Nodup := by
+  native_decide
+
+theorem inputs_are_canonical_prefix : all.take inputs.length = inputs := by
+  native_decide
+
+theorem runtime_registers_are_unique : runtimeRegisters.Nodup := by
   native_decide
 
 end ScalarSlot

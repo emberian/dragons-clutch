@@ -2,6 +2,7 @@ import DClutchSemantics.IR
 import DClutchSemantics.Direct
 import DClutchSemantics.DirectLifecycle
 import DClutchSemantics.DirectLifecycleProgram
+import DClutchSemantics.DirectLifecycleAbi
 import DClutchSemantics.DirectProofs
 import DClutchSemantics.Codec
 import DClutchSemantics.Examples

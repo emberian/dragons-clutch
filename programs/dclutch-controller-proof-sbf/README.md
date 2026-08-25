@@ -32,5 +32,7 @@ controller-owned but does not yet have immutable release-artifact admission.
 The controller codec has a Lean semantic owner, exact length theorems, and four
 Lean-emitted vectors matched byte-for-byte by the shared safe Rust and frontend
 TypeScript codecs. Refinement theorems for both parsers remain open. Realm
-selection, release authorization, account-creation funding, and the remaining
-Direct lifecycle routes also remain successor gates.
+selection and release authorization are authenticated for the inline route.
+The registered successor now has a Lean-owned 232-byte state ABI and 168-byte
+residual program consumed by the safe Rust codec, but account-creation funding
+and SBF registration/fill/cancel/expire dispatch remain successor gates.

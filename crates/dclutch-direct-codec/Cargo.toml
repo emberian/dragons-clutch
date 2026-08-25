@@ -8,5 +8,8 @@ description = "Fixed-layout codecs for Lean-owned compiled Direct data"
 
 [dependencies]
 
+[dev-dependencies]
+dclutch-transition-vm = { path = "../dclutch-transition-vm" }
+
 [lints]
 workspace = true

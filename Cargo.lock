@@ -361,6 +361,9 @@ dependencies = [
 [[package]]
 name = "dclutch-direct-codec"
 version = "0.1.0"
+dependencies = [
+ "dclutch-transition-vm",
+]
 
 [[package]]
 name = "dclutch-direct-contract"

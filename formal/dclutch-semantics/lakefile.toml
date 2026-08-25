@@ -36,3 +36,7 @@ root = "EmitDirectControllerVectors"
 [[lean_exe]]
 name = "emit-direct-codec-rust"
 root = "EmitDirectCodecRust"
+
+[[lean_exe]]
+name = "emit-direct-lifecycle-abi-rust"
+root = "EmitDirectLifecycleAbiRust"

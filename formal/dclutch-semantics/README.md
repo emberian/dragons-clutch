@@ -53,6 +53,20 @@ and zero-fill fixtures remain regression checks. Reverse acceptance/refusal
 completeness, physical-register decoding, and Rust-interpreter refinement
 remain open.
 
+Registered Direct intents now have the same semantic-to-byte path. Registration
+consumes the maker nonce once; one persistent state owns the exact signed intent,
+controller authority, maker, phase, remaining quantity, and registration-local
+sequence. Lean proves GTC residual reuse, IOC residual cancellation, FOK
+exact-fill behavior, maker cancellation, permissionless expiry, terminal
+non-reuse, cumulative-fill bounds, and conservation. Its 232-byte state layout
+is cursor-specialized from field data, pairwise disjoint, and has a general
+hostile-decoder round-trip theorem. Lean also emits the exact 168-byte generic
+VM program that derives successor remaining, sequence, and phase values. The
+safe Rust codec consumes both generated artifacts and refuses unknown phases,
+malformed nested intents, nonzero reserved bytes, truncation, and alternate
+magic/version values. SBF account creation and lifecycle dispatch remain the
+next physical boundary.
+
 `CompiledPhysical.compilePhysicalPlan` then constructs the claim and custody
 plans from successful program outputs instead of caller-supplied gross, fee, or
 successor nonces. `admitted_compilation_refines_physical_transition` proves

@@ -5,12 +5,39 @@
 //! Fixed-layout codecs for Lean-owned compiled Direct data.
 
 mod generated_layout;
+#[rustfmt::skip]
+mod generated_lifecycle;
 
 /// Bytes in one independently signed compact intent.
 pub const COMPACT_INTENT_BYTES: usize = generated_layout::COMPACT_INTENT_BYTES_VALUE;
 /// Bytes in one controller instruction containing two compact intents.
 pub const CONTROLLER_INSTRUCTION_BYTES: usize =
     generated_layout::CONTROLLER_INSTRUCTION_BYTES_VALUE;
+/// Bytes in one canonical registered-intent state account.
+pub const REGISTERED_INTENT_STATE_BYTES: usize = generated_lifecycle::REGISTERED_STATE_BYTES_VALUE;
+/// Bytes in the Lean-owned registered residual-fill program.
+pub const REGISTERED_FILL_PROGRAM_BYTES: usize = generated_lifecycle::REGISTERED_FILL_PROGRAM.len();
+/// Lean-owned bytecode deriving remaining quantity, replay sequence, and phase.
+pub const REGISTERED_FILL_PROGRAM: [u8; REGISTERED_FILL_PROGRAM_BYTES] =
+    generated_lifecycle::REGISTERED_FILL_PROGRAM;
+/// Scalar inputs consumed by the Lean-owned registered residual-fill program.
+pub const REGISTERED_FILL_INPUT_COUNT: usize = generated_lifecycle::REGISTERED_INPUT_COUNT;
+/// Registered lifecycle input register containing the signed lifecycle tag.
+pub const REGISTERED_LIFECYCLE_REGISTER: usize = generated_lifecycle::REGISTERED_LIFECYCLE;
+/// Registered lifecycle input register containing the sole remaining quantity.
+pub const REGISTERED_REMAINING_REGISTER: usize = generated_lifecycle::REGISTERED_REMAINING;
+/// Registered lifecycle input register containing the proposed fill.
+pub const REGISTERED_FILL_REGISTER: usize = generated_lifecycle::REGISTERED_FILL;
+/// Registered lifecycle input register containing the local replay sequence.
+pub const REGISTERED_SEQUENCE_REGISTER: usize = generated_lifecycle::REGISTERED_SEQUENCE;
+/// Registered lifecycle output register containing the successor remaining quantity.
+pub const REGISTERED_REMAINING_OUTPUT_REGISTER: usize =
+    generated_lifecycle::REGISTERED_REMAINING_OUTPUT;
+/// Registered lifecycle output register containing the successor replay sequence.
+pub const REGISTERED_SEQUENCE_OUTPUT_REGISTER: usize =
+    generated_lifecycle::REGISTERED_SEQUENCE_OUTPUT;
+/// Registered lifecycle output register containing the successor phase tag.
+pub const REGISTERED_PHASE_OUTPUT_REGISTER: usize = generated_lifecycle::REGISTERED_PHASE_OUTPUT;
 /// Current compiled Direct ABI version.
 pub const VERSION: u16 = generated_layout::ABI_VERSION;
 /// Semantic release selected by a Market for this compiled inline controller.
@@ -40,6 +67,7 @@ pub const COMPILED_DIRECT_DERIVATION_ID_V1: [u8; 32] = [
 
 const INTENT_MAGIC: &[u8; 8] = &generated_layout::INTENT_MAGIC_BYTES;
 const CONTROLLER_MAGIC: &[u8; 8] = &generated_layout::CONTROLLER_MAGIC_BYTES;
+const REGISTERED_STATE_MAGIC: &[u8; 8] = &generated_lifecycle::REGISTERED_STATE_MAGIC_BYTES;
 
 /// Strict codec refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -52,6 +80,8 @@ pub enum Error {
     UnsupportedVersion,
     /// A reserved byte was nonzero.
     NonzeroReserved,
+    /// A persisted registered-intent phase was not open, filled, cancelled, or expired.
+    InvalidPhase,
     /// A fixed output field could not be written.
     Output,
 }
@@ -139,6 +169,84 @@ pub struct ControllerInstructionV1 {
     pub seller: CompactIntentV1,
     /// Buyer's independently signed intent.
     pub buyer: CompactIntentV1,
+}
+
+/// Canonical persisted authority for one registered Direct intent.
+///
+/// The claims/replay program owns the physical account. `controller` names the
+/// only controller PDA allowed to advance it; `intent` is the exact signed
+/// message admitted at registration. Only `phase`, `remaining`, and `sequence`
+/// evolve after creation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegisteredIntentStateV1 {
+    /// Open `0`, filled `1`, cancelled `2`, or expired `3`.
+    pub phase: u8,
+    /// Exact controller PDA authorized by the selected semantic release.
+    pub controller: [u8; 32],
+    /// Native Ed25519 maker authenticated during registration.
+    pub maker: [u8; 32],
+    /// Exact signed compact intent; no selected term is copied beside it.
+    pub intent: CompactIntentV1,
+    /// Sole residual-fill authority.
+    pub remaining: u64,
+    /// Registration-local replay sequence.
+    pub sequence: u64,
+}
+
+impl RegisteredIntentStateV1 {
+    /// Project the persisted semantic authority into the generated VM input prefix.
+    #[must_use]
+    pub fn fill_input_scalars(self, fill: u64) -> [u64; REGISTERED_FILL_INPUT_COUNT] {
+        generated_lifecycle::registered_fill_inputs! {
+            lifecycle: self.intent.lifecycle as u64,
+            remaining: self.remaining,
+            fill: fill,
+            sequence: self.sequence,
+        }
+    }
+
+    /// Strictly decode one canonical registered-intent state.
+    pub fn decode(input: &[u8]) -> Result<Self, Error> {
+        exact_width(input, REGISTERED_INTENT_STATE_BYTES)?;
+        exact_magic(input, REGISTERED_STATE_MAGIC)?;
+        if u16_at(input, generated_lifecycle::REGISTERED_STATE_VERSION_OFFSET)?
+            != generated_lifecycle::REGISTERED_STATE_ABI_VERSION
+        {
+            return Err(Error::UnsupportedVersion);
+        }
+        reserved(
+            input,
+            generated_lifecycle::REGISTERED_STATE_RESERVED_OFFSET,
+            generated_lifecycle::REGISTERED_STATE_CONTROLLER_OFFSET
+                .checked_sub(generated_lifecycle::REGISTERED_STATE_RESERVED_OFFSET)
+                .ok_or(Error::InvalidLength)?,
+        )?;
+        let state = generated_lifecycle::decode_registered_state_fields!(input);
+        if state.phase > 3 {
+            return Err(Error::InvalidPhase);
+        }
+        Ok(state)
+    }
+
+    /// Encode one canonical registered-intent state.
+    pub fn encode(self) -> Result<[u8; REGISTERED_INTENT_STATE_BYTES], Error> {
+        if self.phase > 3 {
+            return Err(Error::InvalidPhase);
+        }
+        let mut output = [0_u8; REGISTERED_INTENT_STATE_BYTES];
+        put(
+            &mut output,
+            generated_lifecycle::REGISTERED_STATE_MAGIC_OFFSET,
+            REGISTERED_STATE_MAGIC,
+        )?;
+        put(
+            &mut output,
+            generated_lifecycle::REGISTERED_STATE_VERSION_OFFSET,
+            &generated_lifecycle::REGISTERED_STATE_ABI_VERSION.to_le_bytes(),
+        )?;
+        generated_lifecycle::encode_registered_state_fields!(output, self);
+        Ok(output)
+    }
 }
 
 impl ControllerInstructionV1 {
@@ -249,6 +357,7 @@ mod tests {
     extern crate std;
 
     use super::*;
+    use dclutch_transition_vm::{Registers, execute};
     use std::{string::String, vec::Vec};
 
     const LEAN_VECTORS: &str =
@@ -269,6 +378,36 @@ mod tests {
             fee_basis_points: 25,
             collateral_account: [if side == 0 { 5 } else { 6 }; 32],
         }
+    }
+
+    fn fixture_registered_state(lifecycle: u8) -> RegisteredIntentStateV1 {
+        let mut intent = fixture_intent(0);
+        intent.lifecycle = lifecycle;
+        RegisteredIntentStateV1 {
+            phase: 0,
+            controller: [7; 32],
+            maker: [8; 32],
+            intent,
+            remaining: 2_000,
+            sequence: 0,
+        }
+    }
+
+    fn registered_transition(
+        state: RegisteredIntentStateV1,
+        fill: u64,
+    ) -> Result<(u64, u64, u64), dclutch_transition_vm::Error> {
+        let inputs = state.fill_input_scalars(fill);
+        let mut registers = Registers::zeroed();
+        for (index, value) in inputs.into_iter().enumerate() {
+            registers.set_scalar(index, value)?;
+        }
+        execute(&REGISTERED_FILL_PROGRAM, &mut registers)?;
+        Ok((
+            registers.scalar(REGISTERED_REMAINING_OUTPUT_REGISTER)?,
+            registers.scalar(REGISTERED_SEQUENCE_OUTPUT_REGISTER)?,
+            registers.scalar(REGISTERED_PHASE_OUTPUT_REGISTER)?,
+        ))
     }
 
     fn hex(bytes: &[u8]) -> String {
@@ -344,5 +483,70 @@ mod tests {
             CompactIntentV1::decode(&encoded),
             Err(Error::NonzeroReserved)
         );
+    }
+
+    #[test]
+    fn registered_state_matches_lean_and_round_trips() {
+        let state = fixture_registered_state(0);
+        let encoded = state.encode().expect("registered state encoding");
+        assert_eq!(encoded, generated_lifecycle::REGISTERED_STATE_EXAMPLE);
+        assert_eq!(RegisteredIntentStateV1::decode(&encoded), Ok(state));
+    }
+
+    #[test]
+    fn hostile_registered_state_refuses() {
+        let state = fixture_registered_state(2);
+        let mut encoded = state.encode().expect("registered state encoding");
+        assert_eq!(
+            RegisteredIntentStateV1::decode(&encoded[..encoded.len() - 1]),
+            Err(Error::InvalidLength)
+        );
+        encoded[0] ^= 1;
+        assert_eq!(
+            RegisteredIntentStateV1::decode(&encoded),
+            Err(Error::InvalidMagic)
+        );
+        encoded = state.encode().expect("registered state encoding");
+        encoded[generated_lifecycle::REGISTERED_STATE_VERSION_OFFSET] = 2;
+        assert_eq!(
+            RegisteredIntentStateV1::decode(&encoded),
+            Err(Error::UnsupportedVersion)
+        );
+        encoded = state.encode().expect("registered state encoding");
+        encoded[generated_lifecycle::REGISTERED_STATE_RESERVED_OFFSET] = 1;
+        assert_eq!(
+            RegisteredIntentStateV1::decode(&encoded),
+            Err(Error::NonzeroReserved)
+        );
+        encoded = state.encode().expect("registered state encoding");
+        encoded[generated_lifecycle::REGISTERED_STATE_PHASE_OFFSET] = 4;
+        assert_eq!(
+            RegisteredIntentStateV1::decode(&encoded),
+            Err(Error::InvalidPhase)
+        );
+        encoded = state.encode().expect("registered state encoding");
+        encoded[generated_lifecycle::REGISTERED_STATE_INTENT_OFFSET] ^= 1;
+        assert_eq!(
+            RegisteredIntentStateV1::decode(&encoded),
+            Err(Error::InvalidMagic)
+        );
+    }
+
+    #[test]
+    fn generated_registered_program_derives_residual_state() {
+        let gtc = fixture_registered_state(2);
+        assert_eq!(registered_transition(gtc, 500), Ok((1_500, 1, 0)));
+        assert_eq!(registered_transition(gtc, 2_000), Ok((0, 1, 1)));
+
+        let ioc = fixture_registered_state(1);
+        assert_eq!(registered_transition(ioc, 500), Ok((1_500, 1, 2)));
+
+        let mut registers = Registers::zeroed();
+        for (index, value) in [2, 2_000, 0, 0].into_iter().enumerate() {
+            registers.set_scalar(index, value).expect("input register");
+        }
+        let before = registers;
+        assert!(execute(&REGISTERED_FILL_PROGRAM, &mut registers).is_err());
+        assert_eq!(registers, before, "refusal must preserve the full frame");
     }
 }

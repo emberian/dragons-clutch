@@ -42,6 +42,13 @@ selected by any admitted frame whose outcome coordinate fits the physical V1
 `u32` field.
 Lean owns the compact intent and controller-instruction data structures and
 proves their encodings are exactly 136 and 304 bytes.
+For registered Direct intents, Lean checks registration, GTC/IOC/FOK residual
+semantics, cancellation, expiry, terminal non-reuse, replay advancement, and
+claim/collateral conservation. The persisted state schema is data-derived,
+pairwise disjoint, and exactly 232 bytes; its hostile decoder has a general
+encode/decode round-trip theorem. Lean checks that the 168-byte, ten-operation
+residual program derives the exact successor remaining quantity, local replay
+sequence, and phase for every semantically admitted fill.
 
 For the Source successor model, Lean checks that the Product-owned ordered
 rational domain exhausts the ordinary line, assigns each result one selector,
@@ -98,7 +105,8 @@ cannot change a resting order's final cumulative fee in the semantic model.
   (claim, signed experimental controller, custody, and official SPL Token are
   measured together; Realm selection and release-authentication costs remain
   absent);
-- all Direct routes other than inline ordinary execution; and
+- an SBF registration account-creation route and physical registered fill,
+  cancellation, and expiry dispatch consuming the new canonical state; and
 - all other protocol families.
 
 The package uses Lean 4.30.0. No theorem contains `sorry`, an axiom, an
