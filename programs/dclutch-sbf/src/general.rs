@@ -13,14 +13,16 @@ use dclutch_capability_contract::{
     CapabilityManifestV1, FUNDING_STATE_BYTES, FundingCustodyObservationV1, FundingStateV1,
 };
 use dclutch_general_contract::{
-    ActivateGeneralV1, BATCH_ROOT_BYTES, BatchPhase, BatchRootV1, GENERAL_CONFIG_SCHEMA_ID_V1,
-    GENERAL_FUNDING_BYTES, GENERAL_ROOT_BYTES, GeneralAccountFrameV1, GeneralAccountMetaV1,
+    ActivateGeneralV1, BATCH_ROOT_BYTES, BatchCapitalizationV1, BatchPhase, BatchRentObservationV1,
+    BatchRootV1, CandidateCapitalizationV1, CandidatePageV1, CandidateStateV1,
+    GENERAL_CANDIDATE_PAGE_CONTENT_DOMAIN_V1, GENERAL_CONFIG_SCHEMA_ID_V1, GENERAL_FUNDING_BYTES,
+    GENERAL_ROOT_BYTES, GeneralAccountFrameV1, GeneralAccountMetaV1,
     GeneralActivationCapitalizationV1, GeneralBatchPdaSeedsV1, GeneralBatchReplayV1,
-    GeneralConfigV1, GeneralFundingCustodyObservationV1, GeneralFundingPdaSeedsV1,
-    GeneralFundingV1, GeneralInstructionTagV1, GeneralInstructionV1, GeneralOrderCustodyPdaSeedsV1,
-    GeneralOrderCustodyV1, GeneralOrderStatePdaSeedsV1, GeneralQuoteEscrowPdaSeedsV1,
-    GeneralRootPdaSeedsV1, GeneralRootV1, ORDER_STATE_BYTES, OrderStateV1, PortfolioOrderV1,
-    activate_general_v1, open_general_batch_v1,
+    GeneralCandidatePagePdaSeedsV1, GeneralCandidatePdaSeedsV1, GeneralConfigV1,
+    GeneralFundingPdaSeedsV1, GeneralFundingV1, GeneralInstructionTagV1, GeneralInstructionV1,
+    GeneralOrderCustodyPdaSeedsV1, GeneralOrderCustodyV1, GeneralOrderStatePdaSeedsV1,
+    GeneralQuoteEscrowPdaSeedsV1, GeneralRootPdaSeedsV1, GeneralRootV1, ORDER_STATE_BYTES,
+    OrderStateV1, PortfolioOrderV1, activate_general_v1, open_general_batch_v1,
 };
 use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome_count};
 use dclutch_product_contract::claim::CategoricalUnitV1;
@@ -36,7 +38,7 @@ use dclutch_token_svm::{
 use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
-    hash::hash,
+    hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     program::{invoke, invoke_signed},
     program_error::ProgramError,
@@ -105,6 +107,17 @@ fn dispatch_width<const N: usize>(
             | GeneralInstructionTagV1::AdmitOrder
             | GeneralInstructionTagV1::CancelOrder
             | GeneralInstructionTagV1::CloseOrder
+            | GeneralInstructionTagV1::SubmitCandidate
+            | GeneralInstructionTagV1::CreateCandidatePage
+            | GeneralInstructionTagV1::VerifyCandidatePage
+            | GeneralInstructionTagV1::FinishCandidate
+            | GeneralInstructionTagV1::ConsiderCandidate
+            | GeneralInstructionTagV1::LockSelection
+            | GeneralInstructionTagV1::CloseCandidatePage
+            | GeneralInstructionTagV1::RejectCandidate
+            | GeneralInstructionTagV1::ExpireSettlement
+            | GeneralInstructionTagV1::CloseCandidate
+            | GeneralInstructionTagV1::CloseBatch
     ) {
         return Err(AdapterError::InvalidInstruction.into());
     }
@@ -132,6 +145,39 @@ fn dispatch_width<const N: usize>(
         GeneralInstructionV1::CloseOrder(order) => {
             process_release_order(program_id, accounts, order, false)
         }
+        GeneralInstructionV1::SubmitCandidate(instruction) => {
+            process_submit_candidate(program_id, accounts, instruction)
+        }
+        GeneralInstructionV1::CreateCandidatePage(instruction) => {
+            process_create_candidate_page(program_id, accounts, instruction)
+        }
+        GeneralInstructionV1::VerifyCandidatePage(reference) => {
+            process_verify_candidate_page::<N>(program_id, accounts, reference)
+        }
+        GeneralInstructionV1::FinishCandidate(candidate_id) => {
+            process_finish_candidate::<N>(program_id, accounts, candidate_id)
+        }
+        GeneralInstructionV1::ConsiderCandidate(candidate_id) => {
+            process_consider_candidate::<N>(program_id, accounts, candidate_id)
+        }
+        GeneralInstructionV1::LockSelection(replay) => {
+            process_lock_selection(program_id, accounts, replay)
+        }
+        GeneralInstructionV1::CloseCandidatePage(reference) => {
+            process_close_candidate_page::<N>(program_id, accounts, reference)
+        }
+        GeneralInstructionV1::RejectCandidate(candidate_id) => {
+            process_reject_candidate::<N>(program_id, accounts, candidate_id)
+        }
+        GeneralInstructionV1::ExpireSettlement(candidate_id) => {
+            process_expire_settlement::<N>(program_id, accounts, candidate_id)
+        }
+        GeneralInstructionV1::CloseCandidate(candidate_id) => {
+            process_close_candidate::<N>(program_id, accounts, candidate_id)
+        }
+        GeneralInstructionV1::CloseBatch(replay) => {
+            process_close_batch(program_id, accounts, replay)
+        }
         // Candidate settlement and terminal routes land as separately bounded
         // executable slices; an unsupported tag never reports success.
         _ => Err(AdapterError::InvalidInstruction.into()),
@@ -154,7 +200,27 @@ fn validate_contract_frame(
             is_executable: account.executable,
         });
     }
-    GeneralAccountFrameV1::new(tag, 0, &metas).map_err(map_general_frame_error)?;
+    let execution_count = match tag {
+        GeneralInstructionTagV1::VerifyCandidatePage => accounts
+            .len()
+            .checked_sub(9)
+            .and_then(|count| u8::try_from(count).ok())
+            .ok_or(AdapterError::AccountFrameLength)?,
+        GeneralInstructionTagV1::CollectSettlementPage => accounts
+            .len()
+            .checked_sub(18)
+            .filter(|count| count % 4 == 0)
+            .and_then(|count| u8::try_from(count / 4).ok())
+            .ok_or(AdapterError::AccountFrameLength)?,
+        GeneralInstructionTagV1::DistributeSettlementPage => accounts
+            .len()
+            .checked_sub(19)
+            .filter(|count| count % 2 == 0)
+            .and_then(|count| u8::try_from(count / 2).ok())
+            .ok_or(AdapterError::AccountFrameLength)?,
+        _ => 0,
+    };
+    GeneralAccountFrameV1::new(tag, execution_count, &metas).map_err(map_general_frame_error)?;
     Ok(())
 }
 
@@ -279,6 +345,9 @@ fn process_activate<const N: usize>(
     let manifest_id =
         dclutch_general_contract::ContentId::new(identity.capability_manifest_id().to_bytes())
             .map_err(|_| AdapterError::ContentIdentity)?;
+    let market_identity_id =
+        dclutch_general_contract::ContentId::new(hash(&identity.to_bytes()).to_bytes())
+            .map_err(|_| AdapterError::ContentIdentity)?;
     let plan = with_authenticated_finalized_record_v1(
         program_id,
         manifest_account,
@@ -328,6 +397,7 @@ fn process_activate<const N: usize>(
                         market.root(),
                         config_id,
                         config,
+                        market_identity_id,
                         manifest_id,
                         manifest,
                         capability_funding,
@@ -509,17 +579,16 @@ fn execute_activation<'info, const N: usize>(
 #[derive(Clone, Copy)]
 struct OpenBatchPlan {
     root: GeneralRootV1,
-    funding: GeneralFundingV1,
     batch: BatchRootV1,
     batch_seeds: GeneralBatchPdaSeedsV1,
     batch_bump: u8,
-    batch_rent: u64,
-    funding_lamports_after: u64,
+    batch_lamports: u64,
+    actor_top_up: u64,
+    rent_credit_surplus: u64,
     actor_before: u64,
     market_lamports: u64,
     config_lamports: u64,
     root_lamports: u64,
-    batch_before: u64,
     rent_credit: RentCreditV1,
     rent_credit_lamports: u64,
 }
@@ -533,14 +602,13 @@ fn process_open_batch<const N: usize>(
     let actor = account(accounts, 0)?;
     let market_account = account(accounts, 1)?;
     let config_account = account(accounts, 2)?;
-    let root_account = account(accounts, 3)?;
-    let funding_account = account(accounts, 4)?;
+    let config_cursor = account(accounts, 3)?;
+    let root_account = account(accounts, 4)?;
     let batch_account = account(accounts, 5)?;
     let rent_credit_account = account(accounts, 6)?;
-    let config_cursor = account(accounts, 7)?;
-    let system = account(accounts, 8)?;
-    let rent_sysvar = account(accounts, 9)?;
-    let clock_sysvar = account(accounts, 10)?;
+    let system = account(accounts, 7)?;
+    let rent_sysvar = account(accounts, 8)?;
+    let clock_sysvar = account(accounts, 9)?;
 
     authenticate_system_rent_clock(system, rent_sysvar, clock_sysvar)?;
     require_system_wallet(actor)?;
@@ -557,17 +625,10 @@ fn process_open_batch<const N: usize>(
     )?;
     let market = authenticate_market::<N>(program_id, market_account, root.market())?;
     authenticate_market_config(market, config, root, config_id)?;
-    let funding =
-        authenticate_general_funding(program_id, funding_account, root, config_id, config)?;
     let rent_credit =
         authenticate_rent_credit_key(program_id, rent_credit_account, root.rent_beneficiary())?;
     let rent = Rent::from_account_info(rent_sysvar).map_err(|_| AdapterError::AccountData)?;
     let clock = authenticate_clock(clock_sysvar)?;
-    let funding_custody = GeneralFundingCustodyObservationV1::new(
-        funding_account.lamports(),
-        rent.minimum_balance(GENERAL_FUNDING_BYTES),
-    )
-    .map_err(|_| AdapterError::FundUnderfunded)?;
     let batch_rent = rent.minimum_balance(BATCH_ROOT_BYTES);
     let batch_seeds = GeneralBatchPdaSeedsV1::new(root_account.key.to_bytes(), sequence)
         .map_err(|_| AdapterError::PositionAuthentication)?;
@@ -599,9 +660,10 @@ fn process_open_batch<const N: usize>(
         config_id,
         config,
         root,
-        funding,
-        funding_custody,
-        batch_rent,
+        BatchRentObservationV1 {
+            exact_batch_rent_lamports: batch_rent,
+            precreation_lamports: batch_account.lamports(),
+        },
         clock.slot,
     )
     .map_err(|_| AdapterError::MarketTransition)?;
@@ -610,62 +672,54 @@ fn process_open_batch<const N: usize>(
     }
     let plan = OpenBatchPlan {
         root: contract_plan.root_after(),
-        funding: contract_plan.funding_after(),
         batch: contract_plan.batch(),
         batch_seeds,
         batch_bump,
-        batch_rent,
-        funding_lamports_after: contract_plan.funding_account_lamports_after(),
+        batch_lamports: contract_plan.batch_account_lamports(),
+        actor_top_up: contract_plan.payer_top_up_lamports(),
+        rent_credit_surplus: contract_plan.rent_credit_surplus_lamports(),
         actor_before: actor.lamports(),
         market_lamports: market_account.lamports(),
         config_lamports: config_account.lamports(),
         root_lamports: root_account.lamports(),
-        batch_before: batch_account.lamports(),
         rent_credit,
         rent_credit_lamports: rent_credit_account.lamports(),
     };
-    preflight_mutable(&[
-        actor,
-        root_account,
-        funding_account,
-        batch_account,
-        rent_credit_account,
-    ])?;
-    transfer_owned_lamports(funding_account, actor, plan.batch_rent)?;
+    preflight_mutable(&[actor, root_account, batch_account, rent_credit_account])?;
     create_general_pda_account(
         actor,
         batch_account,
         rent_credit_account,
         system,
         program_id,
-        plan.batch_rent,
+        plan.batch_lamports,
         BATCH_ROOT_BYTES,
         &plan.batch_seeds.seed_components(),
         plan.batch_bump,
-        true,
+        false,
     )?;
     write_root(root_account, plan.root)?;
-    write_general_funding(funding_account, plan.funding)?;
     write_batch(batch_account, plan.batch)?;
-    if actor.lamports() != plan.actor_before
+    if actor.lamports()
+        != plan
+            .actor_before
+            .checked_sub(plan.actor_top_up)
+            .ok_or(AdapterError::Arithmetic)?
         || market_account.lamports() != plan.market_lamports
         || config_account.lamports() != plan.config_lamports
         || root_account.lamports() != plan.root_lamports
-        || funding_account.lamports() != plan.funding_lamports_after
         || batch_account.owner != program_id
-        || batch_account.lamports() != plan.batch_rent
+        || batch_account.lamports() != plan.batch_lamports
         || rent_credit_account.lamports()
             != plan
                 .rent_credit_lamports
-                .checked_add(plan.batch_before)
+                .checked_add(plan.rent_credit_surplus)
                 .ok_or(AdapterError::Arithmetic)?
     {
         return Err(AdapterError::PositionPostcondition.into());
     }
     require_unchanged_rent_credit(program_id, rent_credit_account, plan.rent_credit)?;
     if authenticate_root(program_id, root_account)? != plan.root
-        || authenticate_general_funding(program_id, funding_account, plan.root, config_id, config)?
-            != plan.funding
         || authenticate_batch(program_id, batch_account, root_account, sequence, config_id)?
             != plan.batch
     {
@@ -680,12 +734,13 @@ fn process_lock_batch(
     generation: u64,
     sequence: u64,
 ) -> Result<(), ProgramError> {
-    let config_account = account(accounts, 0)?;
-    let root_account = account(accounts, 1)?;
-    let batch_account = account(accounts, 2)?;
-    let config_cursor = account(accounts, 3)?;
-    let rent_sysvar = account(accounts, 4)?;
-    let clock_sysvar = account(accounts, 5)?;
+    let actor = account(accounts, 0)?;
+    let config_account = account(accounts, 1)?;
+    let config_cursor = account(accounts, 2)?;
+    let root_account = account(accounts, 3)?;
+    let batch_account = account(accounts, 4)?;
+    let rent_sysvar = account(accounts, 5)?;
+    let clock_sysvar = account(accounts, 6)?;
     let root = authenticate_root(program_id, root_account)?;
     let config_id = root.config_id();
     let config = authenticate_finalized_config(
@@ -705,10 +760,781 @@ fn process_lock_batch(
         return Err(AdapterError::ReplayMismatch.into());
     }
     let clock = authenticate_clock(clock_sysvar)?;
-    batch
-        .open_selection(clock.slot)
+    let rent = Rent::from_account_info(rent_sysvar).map_err(|_| AdapterError::AccountData)?;
+    let reward = batch
+        .open_selection(
+            config,
+            BatchCapitalizationV1 {
+                account_lamports: batch_account.lamports(),
+                exact_state_rent_lamports: rent.minimum_balance(BATCH_ROOT_BYTES),
+            },
+            clock.slot,
+        )
         .map_err(|_| AdapterError::MarketTransition)?;
+    preflight_mutable(&[actor, batch_account])?;
+    transfer_owned_lamports(batch_account, actor, reward)?;
+    write_batch(batch_account, batch)?;
+    if decode_batch(batch_account)? != batch {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    Ok(())
+}
+
+fn process_submit_candidate<const N: usize>(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction: dclutch_general_contract::SubmitGeneralCandidateV1<N>,
+) -> Result<(), ProgramError> {
+    let submitter = account(accounts, 0)?;
+    let config_account = account(accounts, 1)?;
+    let config_cursor = account(accounts, 2)?;
+    let root_account = account(accounts, 3)?;
+    let batch_account = account(accounts, 4)?;
+    let candidate_account = account(accounts, 5)?;
+    let rent_credit = account(accounts, 6)?;
+    let system = account(accounts, 7)?;
+    let rent_sysvar = account(accounts, 8)?;
+    let clock_sysvar = account(accounts, 9)?;
+    authenticate_system_rent_clock(system, rent_sysvar, clock_sysvar)?;
+    require_system_wallet(submitter)?;
+    require_prefunded_vacant(candidate_account)?;
+    if instruction.submission.submitter.to_bytes() != submitter.key.to_bytes() {
+        return Err(AdapterError::ReplayMismatch.into());
+    }
+    let root = authenticate_root(program_id, root_account)?;
+    let config_id = root.config_id();
+    let config = authenticate_finalized_config(
+        program_id,
+        config_account,
+        config_cursor,
+        rent_sysvar,
+        config_id.to_bytes(),
+        |config, _| Ok(config),
+    )?;
+    let mut batch = authenticate_batch(
+        program_id,
+        batch_account,
+        root_account,
+        instruction.submission.batch_sequence,
+        config_id,
+    )?;
+    batch
+        .validate_against(config)
+        .map_err(|_| AdapterError::FundUnderfunded)?;
+    let mut submission_bytes = Vec::new();
+    submission_bytes
+        .try_reserve_exact(
+            dclutch_general_contract::CandidateSubmissionV1::<N>::encoded_len()
+                .map_err(|_| AdapterError::Arithmetic)?,
+        )
+        .map_err(|_| AdapterError::Arithmetic)?;
+    submission_bytes.resize(
+        dclutch_general_contract::CandidateSubmissionV1::<N>::encoded_len()
+            .map_err(|_| AdapterError::Arithmetic)?,
+        0,
+    );
+    instruction
+        .submission
+        .encode(&mut submission_bytes)
+        .map_err(|_| AdapterError::InvalidInstruction)?;
+    if hash(&submission_bytes).to_bytes() != instruction.candidate_id.to_bytes() {
+        return Err(AdapterError::ContentIdentity.into());
+    }
+    let seeds =
+        GeneralCandidatePdaSeedsV1::new(batch_account.key.to_bytes(), instruction.candidate_id)
+            .map_err(|_| AdapterError::PositionAuthentication)?;
+    let (expected_candidate, bump) =
+        Pubkey::find_program_address(&seeds.seed_components(), program_id);
+    if candidate_account.key != &expected_candidate {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let rent_credit_state = authenticate_rent_credit(program_id, rent_credit, submitter.key)?;
+    let clock = authenticate_clock(clock_sysvar)?;
+    let candidate = CandidateStateV1::submit(
+        instruction.candidate_id,
+        instruction.submission,
+        root,
+        config,
+        &mut batch,
+        clock.slot,
+    )
+    .map_err(|_| AdapterError::MarketTransition)?;
+    let state_bytes = CandidateStateV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?;
+    let rent = Rent::from_account_info(rent_sysvar).map_err(|_| AdapterError::AccountData)?;
+    let exact_rent = rent.minimum_balance(state_bytes);
+    let account_lamports = exact_rent
+        .checked_add(instruction.submission.page_rent_reserve_lamports)
+        .and_then(|value| {
+            value.checked_add(instruction.submission.settlement_rent_reserve_lamports)
+        })
+        .and_then(|value| value.checked_add(candidate.verification_work_remaining()))
+        .and_then(|value| value.checked_add(candidate.settlement_work_remaining()))
+        .and_then(|value| value.checked_add(candidate.cleanup_work_remaining()))
+        .ok_or(AdapterError::Arithmetic)?;
+    candidate
+        .validate_capitalization(CandidateCapitalizationV1 {
+            account_lamports,
+            exact_state_rent_lamports: exact_rent,
+        })
+        .map_err(|_| AdapterError::FundUnderfunded)?;
+    preflight_mutable(&[submitter, batch_account, candidate_account, rent_credit])?;
+    create_general_pda_account(
+        submitter,
+        candidate_account,
+        rent_credit,
+        system,
+        program_id,
+        account_lamports,
+        state_bytes,
+        &seeds.seed_components(),
+        bump,
+        false,
+    )?;
+    write_batch(batch_account, batch)?;
+    write_candidate(candidate_account, candidate)?;
+    require_unchanged_rent_credit(program_id, rent_credit, rent_credit_state)?;
+    authenticate_candidate::<N>(
+        program_id,
+        candidate_account,
+        batch_account,
+        instruction.candidate_id,
+    )?
+    .validate_capitalization(CandidateCapitalizationV1 {
+        account_lamports: candidate_account.lamports(),
+        exact_state_rent_lamports: exact_rent,
+    })
+    .map_err(|_| AdapterError::PositionPostcondition.into())
+}
+
+fn process_create_candidate_page<const N: usize>(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction: dclutch_general_contract::CreateGeneralCandidatePageV1<N>,
+) -> Result<(), ProgramError> {
+    let actor = account(accounts, 0)?;
+    let config_account = account(accounts, 1)?;
+    let config_cursor = account(accounts, 2)?;
+    let root_account = account(accounts, 3)?;
+    let batch_account = account(accounts, 4)?;
+    let candidate_account = account(accounts, 5)?;
+    let page_account = account(accounts, 6)?;
+    let rent_credit = account(accounts, 7)?;
+    let system = account(accounts, 8)?;
+    let rent_sysvar = account(accounts, 9)?;
+    if system.key != &system_program::ID || system.owner != &native_loader::ID || !system.executable
+    {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    require_system_wallet(actor)?;
+    require_prefunded_vacant(page_account)?;
+    let root = authenticate_root(program_id, root_account)?;
+    let config_id = root.config_id();
+    let config = authenticate_finalized_config(
+        program_id,
+        config_account,
+        config_cursor,
+        rent_sysvar,
+        config_id.to_bytes(),
+        |config, _| Ok(config),
+    )?;
+    let batch = authenticate_batch(
+        program_id,
+        batch_account,
+        root_account,
+        decode_candidate::<N>(candidate_account)?.batch_sequence(),
+        config_id,
+    )?;
+    let mut candidate = authenticate_candidate(
+        program_id,
+        candidate_account,
+        batch_account,
+        instruction.candidate_id,
+    )?;
+    if batch.sequence() != candidate.batch_sequence() {
+        return Err(AdapterError::ReplayMismatch.into());
+    }
+    let page_bytes = canonical_page_bytes(instruction.page)?;
+    if hashv(&[GENERAL_CANDIDATE_PAGE_CONTENT_DOMAIN_V1, &page_bytes]).to_bytes()
+        != instruction.page_id.to_bytes()
+    {
+        return Err(AdapterError::ContentIdentity.into());
+    }
+    let page_seeds =
+        GeneralCandidatePagePdaSeedsV1::new(candidate_account.key.to_bytes(), instruction.page_id)
+            .map_err(|_| AdapterError::PositionAuthentication)?;
+    let (expected_page, page_bump) =
+        Pubkey::find_program_address(&page_seeds.seed_components(), program_id);
+    if page_account.key != &expected_page {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let rent = Rent::from_account_info(rent_sysvar).map_err(|_| AdapterError::AccountData)?;
+    let candidate_rent = rent.minimum_balance(
+        CandidateStateV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?,
+    );
+    let page_rent = rent.minimum_balance(page_bytes.len());
+    let candidate_before = candidate_account.lamports();
+    let actor_before = actor.lamports();
+    let rent_credit_state = authenticate_rent_credit(
+        program_id,
+        rent_credit,
+        &Pubkey::new_from_array(candidate.submitter().to_bytes()),
+    )?;
+    let plan = candidate
+        .create_page(
+            instruction.page,
+            config,
+            page_rent,
+            page_account.lamports(),
+            CandidateCapitalizationV1 {
+                account_lamports: candidate_before,
+                exact_state_rent_lamports: candidate_rent,
+            },
+        )
+        .map_err(|_| AdapterError::MarketTransition)?;
+    preflight_mutable(&[actor, candidate_account, page_account, rent_credit])?;
+    transfer_owned_lamports(candidate_account, actor, plan.page_top_up_lamports())?;
+    transfer_owned_lamports(
+        candidate_account,
+        rent_credit,
+        plan.candidate_refund_lamports(),
+    )?;
+    create_general_pda_account(
+        actor,
+        page_account,
+        rent_credit,
+        system,
+        program_id,
+        page_rent,
+        page_bytes.len(),
+        &page_seeds.seed_components(),
+        page_bump,
+        false,
+    )?;
+    write_candidate(candidate_account, candidate)?;
+    write_candidate_page(page_account, instruction.page)?;
+    if actor.lamports() != actor_before
+        || candidate_account.lamports()
+            != candidate_before
+                .checked_sub(page_rent)
+                .ok_or(AdapterError::Arithmetic)?
+    {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    require_unchanged_rent_credit(program_id, rent_credit, rent_credit_state)?;
+    authenticate_candidate_page::<N>(
+        program_id,
+        page_account,
+        candidate_account,
+        instruction.page_id,
+    )?;
+    Ok(())
+}
+
+fn process_verify_candidate_page<const N: usize>(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    reference: dclutch_general_contract::GeneralCandidatePageV1,
+) -> Result<(), ProgramError> {
+    let actor = account(accounts, 0)?;
+    let root_account = account(accounts, 1)?;
+    let batch_account = account(accounts, 2)?;
+    let config_account = account(accounts, 3)?;
+    let config_cursor = account(accounts, 4)?;
+    let candidate_account = account(accounts, 5)?;
+    let page_account = account(accounts, 6)?;
+    let root = authenticate_root(program_id, root_account)?;
+    let config_id = root.config_id();
+    let page = authenticate_candidate_page::<N>(
+        program_id,
+        page_account,
+        candidate_account,
+        reference.page_id,
+    )?;
+    if usize::from(page.execution_count)
+        != accounts
+            .len()
+            .checked_sub(9)
+            .ok_or(AdapterError::AccountFrameLength)?
+    {
+        return Err(AdapterError::AccountFrameLength.into());
+    }
+    let rent_sysvar = account(accounts, 7 + usize::from(page.execution_count))?;
+    let clock_sysvar = account(accounts, 8 + usize::from(page.execution_count))?;
+    let config = authenticate_finalized_config(
+        program_id,
+        config_account,
+        config_cursor,
+        rent_sysvar,
+        config_id.to_bytes(),
+        |config, _| Ok(config),
+    )?;
+    let batch = authenticate_batch(
+        program_id,
+        batch_account,
+        root_account,
+        decode_candidate::<N>(candidate_account)?.batch_sequence(),
+        config_id,
+    )?;
+    let mut candidate = authenticate_candidate(
+        program_id,
+        candidate_account,
+        batch_account,
+        reference.candidate_id,
+    )?;
+    for (index, execution) in page
+        .executions
+        .iter()
+        .take(usize::from(page.execution_count))
+        .flatten()
+        .enumerate()
+    {
+        authenticate_order_id(execution.order)?;
+        let state_account = account(accounts, 7 + index)?;
+        let state_seeds = GeneralOrderStatePdaSeedsV1::new(root.market(), execution.order)
+            .map_err(|_| AdapterError::PositionAuthentication)?;
+        let (expected_state, _) =
+            Pubkey::find_program_address(&state_seeds.seed_components(), program_id);
+        if state_account.key != &expected_state
+            || decode_order_state(state_account)? != execution.order_state
+        {
+            return Err(AdapterError::ReplayMismatch.into());
+        }
+    }
+    let rent = Rent::from_account_info(rent_sysvar).map_err(|_| AdapterError::AccountData)?;
+    let before = candidate_account.lamports();
+    let reward = candidate
+        .verify_page(
+            reference.page_id,
+            page,
+            root,
+            config,
+            batch,
+            authenticate_clock(clock_sysvar)?.slot,
+            CandidateCapitalizationV1 {
+                account_lamports: before,
+                exact_state_rent_lamports: rent.minimum_balance(
+                    CandidateStateV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?,
+                ),
+            },
+        )
+        .map_err(|_| AdapterError::MarketTransition)?;
+    preflight_mutable(&[actor, candidate_account])?;
+    transfer_owned_lamports(candidate_account, actor, reward)?;
+    write_candidate(candidate_account, candidate)
+}
+
+fn process_finish_candidate<const N: usize>(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    candidate_id: dclutch_general_contract::ContentId,
+) -> Result<(), ProgramError> {
+    let actor = account(accounts, 0)?;
+    let root_account = account(accounts, 1)?;
+    let batch_account = account(accounts, 2)?;
+    let config_account = account(accounts, 3)?;
+    let config_cursor = account(accounts, 4)?;
+    let candidate_account = account(accounts, 5)?;
+    let rent_sysvar = account(accounts, 6)?;
+    let clock_sysvar = account(accounts, 7)?;
+    let (root, config, batch, mut candidate, cap) = authenticate_candidate_transition::<N>(
+        program_id,
+        root_account,
+        batch_account,
+        config_account,
+        config_cursor,
+        candidate_account,
+        rent_sysvar,
+        candidate_id,
+    )?;
+    let reward = candidate
+        .finish_verification(config, batch, cap, authenticate_clock(clock_sysvar)?.slot)
+        .map_err(|_| AdapterError::MarketTransition)?;
+    let _ = root;
+    pay_candidate_reward(actor, candidate_account, candidate, reward)
+}
+
+fn process_consider_candidate<const N: usize>(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    candidate_id: dclutch_general_contract::ContentId,
+) -> Result<(), ProgramError> {
+    let actor = account(accounts, 0)?;
+    let root_account = account(accounts, 1)?;
+    let config_account = account(accounts, 2)?;
+    let config_cursor = account(accounts, 3)?;
+    let batch_account = account(accounts, 4)?;
+    let candidate_account = account(accounts, 5)?;
+    let rent_sysvar = account(accounts, 6)?;
+    let clock_sysvar = account(accounts, 7)?;
+    let (_, config, mut batch, mut candidate, cap) = authenticate_candidate_transition::<N>(
+        program_id,
+        root_account,
+        batch_account,
+        config_account,
+        config_cursor,
+        candidate_account,
+        rent_sysvar,
+        candidate_id,
+    )?;
+    let reward = batch
+        .consider_candidate(
+            &mut candidate,
+            config,
+            cap,
+            authenticate_clock(clock_sysvar)?.slot,
+        )
+        .map_err(|_| AdapterError::MarketTransition)?;
+    preflight_mutable(&[actor, batch_account, candidate_account])?;
+    transfer_owned_lamports(candidate_account, actor, reward)?;
+    write_batch(batch_account, batch)?;
+    write_candidate(candidate_account, candidate)
+}
+
+fn process_lock_selection(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    replay: GeneralBatchReplayV1,
+) -> Result<(), ProgramError> {
+    let actor = account(accounts, 0)?;
+    let config_account = account(accounts, 1)?;
+    let config_cursor = account(accounts, 2)?;
+    let root_account = account(accounts, 3)?;
+    let batch_account = account(accounts, 4)?;
+    let rent_sysvar = account(accounts, 5)?;
+    let clock_sysvar = account(accounts, 6)?;
+    let root = authenticate_root(program_id, root_account)?;
+    let config = authenticate_finalized_config(
+        program_id,
+        config_account,
+        config_cursor,
+        rent_sysvar,
+        root.config_id().to_bytes(),
+        |config, _| Ok(config),
+    )?;
+    if replay.generation != root.generation() || replay.generation != config.generation() {
+        return Err(AdapterError::ReplayMismatch.into());
+    }
+    let mut batch = authenticate_batch(
+        program_id,
+        batch_account,
+        root_account,
+        replay.batch_sequence,
+        root.config_id(),
+    )?;
+    let rent = Rent::from_account_info(rent_sysvar).map_err(|_| AdapterError::AccountData)?;
+    let reward = batch
+        .close_selection(
+            config,
+            BatchCapitalizationV1 {
+                account_lamports: batch_account.lamports(),
+                exact_state_rent_lamports: rent.minimum_balance(BATCH_ROOT_BYTES),
+            },
+            authenticate_clock(clock_sysvar)?.slot,
+        )
+        .map_err(|_| AdapterError::MarketTransition)?
+        .1;
+    preflight_mutable(&[actor, batch_account])?;
+    transfer_owned_lamports(batch_account, actor, reward)?;
     write_batch(batch_account, batch)
+}
+
+fn process_reject_candidate<const N: usize>(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    candidate_id: dclutch_general_contract::ContentId,
+) -> Result<(), ProgramError> {
+    let actor = account(accounts, 0)?;
+    let root_account = account(accounts, 1)?;
+    let batch_account = account(accounts, 2)?;
+    let config_account = account(accounts, 3)?;
+    let config_cursor = account(accounts, 4)?;
+    let candidate_account = account(accounts, 5)?;
+    let rent_sysvar = account(accounts, 6)?;
+    let clock_sysvar = account(accounts, 7)?;
+    let (_, config, _, mut candidate, cap) = authenticate_candidate_transition::<N>(
+        program_id,
+        root_account,
+        batch_account,
+        config_account,
+        config_cursor,
+        candidate_account,
+        rent_sysvar,
+        candidate_id,
+    )?;
+    let reward = candidate
+        .reject(config, cap, authenticate_clock(clock_sysvar)?.slot)
+        .map_err(|_| AdapterError::MarketTransition)?;
+    pay_candidate_reward(actor, candidate_account, candidate, reward)
+}
+
+fn process_expire_settlement<const N: usize>(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    candidate_id: dclutch_general_contract::ContentId,
+) -> Result<(), ProgramError> {
+    let actor = account(accounts, 0)?;
+    let root_account = account(accounts, 1)?;
+    let batch_account = account(accounts, 2)?;
+    let config_account = account(accounts, 3)?;
+    let config_cursor = account(accounts, 4)?;
+    let candidate_account = account(accounts, 5)?;
+    let rent_sysvar = account(accounts, 6)?;
+    let clock_sysvar = account(accounts, 7)?;
+    let (_, config, mut batch, mut candidate, cap) = authenticate_candidate_transition::<N>(
+        program_id,
+        root_account,
+        batch_account,
+        config_account,
+        config_cursor,
+        candidate_account,
+        rent_sysvar,
+        candidate_id,
+    )?;
+    let reward = batch
+        .expire_unsettled(
+            &mut candidate,
+            config,
+            cap,
+            authenticate_clock(clock_sysvar)?.slot,
+        )
+        .map_err(|_| AdapterError::MarketTransition)?;
+    preflight_mutable(&[actor, batch_account, candidate_account])?;
+    transfer_owned_lamports(candidate_account, actor, reward)?;
+    write_batch(batch_account, batch)?;
+    write_candidate(candidate_account, candidate)
+}
+
+fn process_close_candidate_page<const N: usize>(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    reference: dclutch_general_contract::GeneralCandidatePageV1,
+) -> Result<(), ProgramError> {
+    let actor = account(accounts, 0)?;
+    let config_account = account(accounts, 1)?;
+    let config_cursor = account(accounts, 2)?;
+    let root_account = account(accounts, 3)?;
+    let batch_account = account(accounts, 4)?;
+    let candidate_account = account(accounts, 5)?;
+    let page_account = account(accounts, 6)?;
+    let rent_credit = account(accounts, 7)?;
+    let rent_sysvar = account(accounts, 8)?;
+    let (_, config, batch, mut candidate, cap) = authenticate_candidate_transition::<N>(
+        program_id,
+        root_account,
+        batch_account,
+        config_account,
+        config_cursor,
+        candidate_account,
+        rent_sysvar,
+        reference.candidate_id,
+    )?;
+    authenticate_candidate_page::<N>(
+        program_id,
+        page_account,
+        candidate_account,
+        reference.page_id,
+    )?;
+    let rent_credit_state = authenticate_rent_credit(
+        program_id,
+        rent_credit,
+        &Pubkey::new_from_array(candidate.submitter().to_bytes()),
+    )?;
+    let close = candidate
+        .close_page(batch, config, cap, page_account.lamports())
+        .map_err(|_| AdapterError::MarketTransition)?;
+    if close.rent_credit_lamports != page_account.lamports()
+        || close.rent_beneficiary.to_bytes() != candidate.submitter().to_bytes()
+    {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    preflight_mutable(&[actor, candidate_account, page_account, rent_credit])?;
+    transfer_owned_lamports(candidate_account, actor, close.cleanup_reward_lamports)?;
+    write_candidate(candidate_account, candidate)?;
+    close_program_account(page_account, rent_credit)?;
+    require_unchanged_rent_credit(program_id, rent_credit, rent_credit_state)
+}
+
+fn process_close_candidate<const N: usize>(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    candidate_id: dclutch_general_contract::ContentId,
+) -> Result<(), ProgramError> {
+    let actor = account(accounts, 0)?;
+    let root_account = account(accounts, 1)?;
+    let batch_account = account(accounts, 2)?;
+    let config_account = account(accounts, 3)?;
+    let config_cursor = account(accounts, 4)?;
+    let candidate_account = account(accounts, 5)?;
+    let rent_credit = account(accounts, 6)?;
+    let rent_sysvar = account(accounts, 7)?;
+    let (_, config, mut batch, candidate, cap) = authenticate_candidate_transition::<N>(
+        program_id,
+        root_account,
+        batch_account,
+        config_account,
+        config_cursor,
+        candidate_account,
+        rent_sysvar,
+        candidate_id,
+    )?;
+    let rent_credit_state = authenticate_rent_credit(
+        program_id,
+        rent_credit,
+        &Pubkey::new_from_array(candidate.submitter().to_bytes()),
+    )?;
+    let close = batch
+        .close_candidate_child(candidate, config, cap)
+        .map_err(|_| AdapterError::MarketTransition)?;
+    if close.rent_credit_lamports
+        != candidate_account
+            .lamports()
+            .checked_sub(close.cleanup_reward_lamports)
+            .ok_or(AdapterError::Arithmetic)?
+    {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    preflight_mutable(&[actor, batch_account, candidate_account, rent_credit])?;
+    transfer_owned_lamports(candidate_account, actor, close.cleanup_reward_lamports)?;
+    write_batch(batch_account, batch)?;
+    close_program_account(candidate_account, rent_credit)?;
+    require_unchanged_rent_credit(program_id, rent_credit, rent_credit_state)
+}
+
+fn process_close_batch(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    replay: GeneralBatchReplayV1,
+) -> Result<(), ProgramError> {
+    let actor = account(accounts, 0)?;
+    let config_account = account(accounts, 1)?;
+    let config_cursor = account(accounts, 2)?;
+    let root_account = account(accounts, 3)?;
+    let batch_account = account(accounts, 4)?;
+    let rent_credit = account(accounts, 5)?;
+    let rent_sysvar = account(accounts, 6)?;
+    let mut root = authenticate_root(program_id, root_account)?;
+    let config = authenticate_finalized_config(
+        program_id,
+        config_account,
+        config_cursor,
+        rent_sysvar,
+        root.config_id().to_bytes(),
+        |config, _| Ok(config),
+    )?;
+    if replay.generation != root.generation() || replay.generation != config.generation() {
+        return Err(AdapterError::ReplayMismatch.into());
+    }
+    let mut batch = authenticate_batch(
+        program_id,
+        batch_account,
+        root_account,
+        replay.batch_sequence,
+        root.config_id(),
+    )?;
+    let rent_credit_state =
+        authenticate_rent_credit_key(program_id, rent_credit, root.rent_beneficiary())?;
+    let rent = Rent::from_account_info(rent_sysvar).map_err(|_| AdapterError::AccountData)?;
+    let close = batch
+        .retire(
+            &mut root,
+            config,
+            BatchCapitalizationV1 {
+                account_lamports: batch_account.lamports(),
+                exact_state_rent_lamports: rent.minimum_balance(BATCH_ROOT_BYTES),
+            },
+        )
+        .map_err(|_| AdapterError::MarketTransition)?;
+    if close.rent_beneficiary != rent_credit.key.to_bytes()
+        || close.rent_credit_lamports
+            != batch_account
+                .lamports()
+                .checked_sub(close.continuation_reward_lamports)
+                .ok_or(AdapterError::Arithmetic)?
+    {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    preflight_mutable(&[actor, root_account, batch_account, rent_credit])?;
+    transfer_owned_lamports(batch_account, actor, close.continuation_reward_lamports)?;
+    write_root(root_account, root)?;
+    close_program_account(batch_account, rent_credit)?;
+    require_unchanged_rent_credit(program_id, rent_credit, rent_credit_state)
+}
+
+fn authenticate_candidate_transition<'info, const N: usize>(
+    program_id: &Pubkey,
+    root_account: &AccountInfo<'info>,
+    batch_account: &AccountInfo<'info>,
+    config_account: &AccountInfo<'info>,
+    config_cursor: &AccountInfo<'info>,
+    candidate_account: &AccountInfo<'info>,
+    rent_sysvar: &AccountInfo<'info>,
+    candidate_id: dclutch_general_contract::ContentId,
+) -> Result<
+    (
+        GeneralRootV1,
+        GeneralConfigV1,
+        BatchRootV1,
+        CandidateStateV1<N>,
+        CandidateCapitalizationV1,
+    ),
+    ProgramError,
+> {
+    let root = authenticate_root(program_id, root_account)?;
+    let config = authenticate_finalized_config(
+        program_id,
+        config_account,
+        config_cursor,
+        rent_sysvar,
+        root.config_id().to_bytes(),
+        |config, _| Ok(config),
+    )?;
+    let candidate =
+        authenticate_candidate(program_id, candidate_account, batch_account, candidate_id)?;
+    let batch = authenticate_batch(
+        program_id,
+        batch_account,
+        root_account,
+        candidate.batch_sequence(),
+        root.config_id(),
+    )?;
+    batch
+        .validate_against(config)
+        .map_err(|_| AdapterError::FundUnderfunded)?;
+    let rent = Rent::from_account_info(rent_sysvar).map_err(|_| AdapterError::AccountData)?;
+    let cap = CandidateCapitalizationV1 {
+        account_lamports: candidate_account.lamports(),
+        exact_state_rent_lamports: rent.minimum_balance(
+            CandidateStateV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?,
+        ),
+    };
+    candidate
+        .validate_capitalization(cap)
+        .map_err(|_| AdapterError::FundUnderfunded)?;
+    Ok((root, config, batch, candidate, cap))
+}
+
+fn pay_candidate_reward<'info, const N: usize>(
+    actor: &AccountInfo<'info>,
+    candidate_account: &AccountInfo<'info>,
+    candidate: CandidateStateV1<N>,
+    reward: u64,
+) -> Result<(), ProgramError> {
+    preflight_mutable(&[actor, candidate_account])?;
+    transfer_owned_lamports(candidate_account, actor, reward)?;
+    write_candidate(candidate_account, candidate)
+}
+
+fn canonical_page_bytes<const N: usize>(page: CandidatePageV1<N>) -> Result<Vec<u8>, ProgramError> {
+    let length = CandidatePageV1::<N>::encoded_len(page.execution_count)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(length)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    bytes.resize(length, 0);
+    page.encode(&mut bytes)
+        .map_err(|_| AdapterError::InvalidInstruction)?;
+    Ok(bytes)
 }
 
 #[derive(Clone, Copy)]
@@ -746,22 +1572,24 @@ fn process_admit_order<const N: usize>(
     let owner = account(accounts, 0)?;
     let market_account = account(accounts, 1)?;
     let realm_account = account(accounts, 2)?;
-    let config_account = account(accounts, 3)?;
-    let realm_cursor = account(accounts, 4)?;
-    let config_cursor = account(accounts, 5)?;
-    let mint = account(accounts, 6)?;
-    let token_program = account(accounts, 7)?;
-    let root_account = account(accounts, 8)?;
-    let batch_account = account(accounts, 9)?;
-    let state_account = account(accounts, 10)?;
-    let custody_account = account(accounts, 11)?;
-    let position_account = account(accounts, 12)?;
-    let quote_source = account(accounts, 13)?;
-    let quote_escrow = account(accounts, 14)?;
-    let rent_credit = account(accounts, 15)?;
-    let system = account(accounts, 16)?;
-    let rent_sysvar = account(accounts, 17)?;
-    let clock_sysvar = account(accounts, 18)?;
+    let claim_account = account(accounts, 3)?;
+    let config_account = account(accounts, 4)?;
+    let realm_cursor = account(accounts, 5)?;
+    let claim_cursor = account(accounts, 6)?;
+    let config_cursor = account(accounts, 7)?;
+    let mint = account(accounts, 8)?;
+    let token_program = account(accounts, 9)?;
+    let root_account = account(accounts, 10)?;
+    let batch_account = account(accounts, 11)?;
+    let state_account = account(accounts, 12)?;
+    let custody_account = account(accounts, 13)?;
+    let position_account = account(accounts, 14)?;
+    let quote_source = account(accounts, 15)?;
+    let quote_escrow = account(accounts, 16)?;
+    let rent_credit = account(accounts, 17)?;
+    let system = account(accounts, 18)?;
+    let rent_sysvar = account(accounts, 19)?;
+    let clock_sysvar = account(accounts, 20)?;
 
     authenticate_system_rent_clock(system, rent_sysvar, clock_sysvar)?;
     require_system_wallet(owner)?;
@@ -787,6 +1615,14 @@ fn process_admit_order<const N: usize>(
     )?;
     let market = authenticate_market::<N>(program_id, market_account, root.market())?;
     authenticate_market_config(market, config, root, config_id)?;
+    let claim = authenticate_claim_basis(
+        program_id,
+        claim_account,
+        claim_cursor,
+        rent_sysvar,
+        config.claim_basis_id().to_bytes(),
+    )?;
+    authenticate_claim_basis_config::<N>(claim, config)?;
     let realm = authenticate_realm(
         program_id,
         realm_account,
@@ -838,6 +1674,7 @@ fn process_admit_order<const N: usize>(
 
     let admission = GeneralOrderCustodyV1::admit(
         order,
+        root,
         config,
         rent_credit.key.to_bytes(),
         quote_escrow.key.to_bytes(),
@@ -1122,26 +1959,29 @@ fn process_release_order<const N: usize>(
     let offset = usize::from(cancellation);
     let market_account = account(accounts, offset)?;
     let realm_account = account(accounts, offset + 1)?;
-    let config_account = account(accounts, offset + 2)?;
-    let realm_cursor = account(accounts, offset + 3)?;
-    let config_cursor = account(accounts, offset + 4)?;
-    let batch_account = account(accounts, offset + 5)?;
-    let state_account = account(accounts, offset + 6)?;
-    let custody_account = account(accounts, offset + 7)?;
-    let position_account = account(accounts, offset + 8)?;
-    let quote_escrow = account(accounts, offset + 9)?;
-    let quote_destination = account(accounts, offset + 10)?;
-    let mint = account(accounts, offset + 11)?;
-    let token_program = account(accounts, offset + 12)?;
-    let rent_credit = account(accounts, offset + 13)?;
-    let rent_sysvar = account(accounts, offset + 14)?;
+    let claim_account = account(accounts, offset + 2)?;
+    let config_account = account(accounts, offset + 3)?;
+    let realm_cursor = account(accounts, offset + 4)?;
+    let claim_cursor = account(accounts, offset + 5)?;
+    let config_cursor = account(accounts, offset + 6)?;
+    let root_account = account(accounts, offset + 7)?;
+    let batch_account = account(accounts, offset + 8)?;
+    let state_account = account(accounts, offset + 9)?;
+    let custody_account = account(accounts, offset + 10)?;
+    let position_account = account(accounts, offset + 11)?;
+    let quote_escrow = account(accounts, offset + 12)?;
+    let quote_destination = account(accounts, offset + 13)?;
+    let mint = account(accounts, offset + 14)?;
+    let token_program = account(accounts, offset + 15)?;
+    let rent_credit = account(accounts, offset + 16)?;
+    let rent_sysvar = account(accounts, offset + 17)?;
     let clock_sysvar = if cancellation {
-        Some(account(accounts, 15)?)
+        Some(account(accounts, offset + 18)?)
     } else {
         None
     };
-    let decoded_batch = decode_batch(batch_account)?;
-    let config_id = decoded_batch.config_id();
+    let root = authenticate_root(program_id, root_account)?;
+    let config_id = root.config_id();
     let config = authenticate_finalized_config(
         program_id,
         config_account,
@@ -1151,16 +1991,16 @@ fn process_release_order<const N: usize>(
         |config, _| Ok(config),
     )?;
     authenticate_order_id(order)?;
-    let market =
-        authenticate_market::<N>(program_id, market_account, market_account.key.to_bytes())?;
-    if hash(&market.root().identity().to_bytes()).to_bytes()
-        != config.market_identity_id().to_bytes()
-        || market.root().identity().claim_basis_id().to_bytes()
-            != config.claim_basis_id().to_bytes()
-        || market.root().identity().generation() != config.generation()
-    {
-        return Err(AdapterError::ContentIdentity.into());
-    }
+    let market = authenticate_market::<N>(program_id, market_account, root.market())?;
+    authenticate_market_config(market, config, root, config_id)?;
+    let claim = authenticate_claim_basis(
+        program_id,
+        claim_account,
+        claim_cursor,
+        rent_sysvar,
+        config.claim_basis_id().to_bytes(),
+    )?;
+    authenticate_claim_basis_config::<N>(claim, config)?;
     let realm = authenticate_realm(
         program_id,
         realm_account,
@@ -1170,23 +2010,13 @@ fn process_release_order<const N: usize>(
         token_program,
         market.root().identity().realm_id().to_bytes(),
     )?;
-    let root_seeds = GeneralRootPdaSeedsV1::new(
-        market_account.key.to_bytes(),
-        config.generation(),
-        config_id,
-    )
-    .map_err(|_| AdapterError::PositionAuthentication)?;
-    let (root_key, _) = Pubkey::find_program_address(&root_seeds.seed_components(), program_id);
-    let batch = authenticate_batch_by_root_key(
+    let batch = authenticate_batch(
         program_id,
         batch_account,
-        root_key,
+        root_account,
         order.batch_sequence(),
         config_id,
     )?;
-    if batch != decoded_batch {
-        return Err(AdapterError::ContentIdentity.into());
-    }
     let state_seeds = GeneralOrderStatePdaSeedsV1::new(market_account.key.to_bytes(), order)
         .map_err(|_| AdapterError::PositionAuthentication)?;
     let (expected_state, _) =
@@ -1235,12 +2065,13 @@ fn process_release_order<const N: usize>(
                 order.owner(),
                 slot,
                 batch.collection_close(),
+                root,
                 config,
             )
             .map_err(|_| AdapterError::MarketTransition)?
     } else {
         custody
-            .close_after_batch(&mut state, order, batch, config)
+            .close_after_batch(&mut state, order, batch, root, config)
             .map_err(|_| AdapterError::MarketTransition)?
     };
     for (index, amount) in release.claim_atoms.iter().enumerate() {
@@ -1491,6 +2322,7 @@ fn decode_general_funding(account: &AccountInfo<'_>) -> Result<GeneralFundingV1,
     Ok(funding)
 }
 
+#[allow(dead_code)]
 fn authenticate_general_funding(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
@@ -1567,6 +2399,75 @@ fn decode_batch(account: &AccountInfo<'_>) -> Result<BatchRootV1, ProgramError> 
         return Err(AdapterError::ContentIdentity.into());
     }
     Ok(batch)
+}
+
+fn decode_candidate<const N: usize>(
+    account: &AccountInfo<'_>,
+) -> Result<CandidateStateV1<N>, ProgramError> {
+    let length = CandidateStateV1::<N>::encoded_len().map_err(|_| AdapterError::Arithmetic)?;
+    if account.executable || account.data_len() != length {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::AccountData)?;
+    let candidate = CandidateStateV1::decode(&data).map_err(|_| AdapterError::AccountData)?;
+    let mut canonical = Vec::new();
+    canonical
+        .try_reserve_exact(length)
+        .map_err(|_| AdapterError::Arithmetic)?;
+    canonical.resize(length, 0);
+    candidate
+        .encode(&mut canonical)
+        .map_err(|_| AdapterError::AccountData)?;
+    if canonical.as_slice() != &data[..] {
+        return Err(AdapterError::ContentIdentity.into());
+    }
+    Ok(candidate)
+}
+
+fn authenticate_candidate<const N: usize>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    batch: &AccountInfo<'_>,
+    candidate_id: dclutch_general_contract::ContentId,
+) -> Result<CandidateStateV1<N>, ProgramError> {
+    if account.owner != program_id {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let seeds = GeneralCandidatePdaSeedsV1::new(batch.key.to_bytes(), candidate_id)
+        .map_err(|_| AdapterError::AccountData)?;
+    let (expected, _) = Pubkey::find_program_address(&seeds.seed_components(), program_id);
+    let candidate = decode_candidate(account)?;
+    if account.key != &expected || candidate.candidate_id() != candidate_id {
+        return Err(AdapterError::ContentIdentity.into());
+    }
+    Ok(candidate)
+}
+
+fn authenticate_candidate_page<const N: usize>(
+    program_id: &Pubkey,
+    account: &AccountInfo<'_>,
+    candidate: &AccountInfo<'_>,
+    page_id: dclutch_general_contract::ContentId,
+) -> Result<CandidatePageV1<N>, ProgramError> {
+    if account.owner != program_id || account.executable {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::AccountData)?;
+    let page = CandidatePageV1::decode(&data).map_err(|_| AdapterError::AccountData)?;
+    let canonical = canonical_page_bytes(page)?;
+    let digest = hashv(&[GENERAL_CANDIDATE_PAGE_CONTENT_DOMAIN_V1, &canonical]).to_bytes();
+    let seeds = GeneralCandidatePagePdaSeedsV1::new(candidate.key.to_bytes(), page_id)
+        .map_err(|_| AdapterError::AccountData)?;
+    let (expected, _) = Pubkey::find_program_address(&seeds.seed_components(), program_id);
+    if account.key != &expected || digest != page_id.to_bytes() || canonical.as_slice() != &data[..]
+    {
+        return Err(AdapterError::ContentIdentity.into());
+    }
+    Ok(page)
 }
 
 fn authenticate_root(
@@ -1670,11 +2571,11 @@ fn authenticate_market_config<const N: usize>(
     config_id: dclutch_general_contract::ContentId,
 ) -> Result<(), ProgramError> {
     let identity = market.root().identity();
-    if hash(&identity.to_bytes()).to_bytes() != config.market_identity_id().to_bytes()
-        || identity.claim_basis_id().to_bytes() != config.claim_basis_id().to_bytes()
+    if identity.claim_basis_id().to_bytes() != config.claim_basis_id().to_bytes()
         || identity.generation() != config.generation()
         || root.config_id() != config_id
         || root.generation() != config.generation()
+        || root.market() == [0; 32]
     {
         return Err(AdapterError::ContentIdentity.into());
     }
@@ -2104,6 +3005,37 @@ fn write_batch(account: &AccountInfo<'_>, batch: BatchRootV1) -> Result<(), Prog
     Ok(())
 }
 
+fn write_candidate<const N: usize>(
+    account: &AccountInfo<'_>,
+    candidate: CandidateStateV1<N>,
+) -> Result<(), ProgramError> {
+    let mut data = account
+        .try_borrow_mut_data()
+        .map_err(|_| AdapterError::PositionPostcondition)?;
+    candidate
+        .encode(&mut data)
+        .map_err(|_| AdapterError::PositionPostcondition)?;
+    if CandidateStateV1::<N>::decode(&data) != Ok(candidate) {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    Ok(())
+}
+
+fn write_candidate_page<const N: usize>(
+    account: &AccountInfo<'_>,
+    page: CandidatePageV1<N>,
+) -> Result<(), ProgramError> {
+    let mut data = account
+        .try_borrow_mut_data()
+        .map_err(|_| AdapterError::PositionPostcondition)?;
+    page.encode(&mut data)
+        .map_err(|_| AdapterError::PositionPostcondition)?;
+    if CandidatePageV1::<N>::decode(&data) != Ok(page) {
+        return Err(AdapterError::PositionPostcondition.into());
+    }
+    Ok(())
+}
+
 fn write_order_state(account: &AccountInfo<'_>, state: OrderStateV1) -> Result<(), ProgramError> {
     let mut data = account
         .try_borrow_mut_data()
@@ -2435,7 +3367,7 @@ mod tests {
 
     fn exact_order() -> PortfolioOrderV1<2> {
         let provisional = PortfolioOrderV1::new(PortfolioOrderV1Input {
-            market_identity_id: id(2),
+            market: [2; 32],
             claim_basis_id: id(3),
             owner: dclutch_general_contract::OwnerKeyV1::new([4; 32]).expect("owner"),
             order_id: id(5),
@@ -2457,7 +3389,7 @@ mod tests {
             order_id: dclutch_general_contract::ContentId::new(hash(&bytes).to_bytes())
                 .expect("digest"),
             ..PortfolioOrderV1Input {
-                market_identity_id: id(2),
+                market: [2; 32],
                 claim_basis_id: id(3),
                 owner: dclutch_general_contract::OwnerKeyV1::new([4; 32]).expect("owner"),
                 order_id: id(5),
@@ -2481,7 +3413,7 @@ mod tests {
         let substituted = PortfolioOrderV1::new(PortfolioOrderV1Input {
             order_id: id(99),
             ..PortfolioOrderV1Input {
-                market_identity_id: id(2),
+                market: [2; 32],
                 claim_basis_id: id(3),
                 owner: dclutch_general_contract::OwnerKeyV1::new([4; 32]).expect("owner"),
                 order_id: id(5),
