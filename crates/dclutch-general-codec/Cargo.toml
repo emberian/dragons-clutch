@@ -1,0 +1,13 @@
+[package]
+name = "dclutch-general-codec"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lean-generated fixed-layout codec for the successor General controller"
+
+[lib]
+path = "src/lib.rs"
+
+[lints]
+workspace = true

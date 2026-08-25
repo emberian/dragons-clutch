@@ -48,3 +48,7 @@ root = "EmitDirectLifecycleAbiRust"
 [[lean_exe]]
 name = "emit-registered-controller-abi-rust"
 root = "EmitRegisteredControllerAbiRust"
+
+[[lean_exe]]
+name = "emit-general-controller-abi-rust"
+root = "EmitGeneralControllerAbiRust"

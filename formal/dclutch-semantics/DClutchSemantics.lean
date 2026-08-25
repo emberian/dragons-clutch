@@ -22,6 +22,7 @@ import DClutchSemantics.SourceResolution
 import DClutchSemantics.SourceResolutionAbi
 import DClutchSemantics.GeneralClearing
 import DClutchSemantics.GeneralClearingExamples
+import DClutchSemantics.GeneralControllerAbi
 
 /-!
 Fresh Lean-owned semantics for dClutch's compact protocol specializer.
