@@ -19,8 +19,15 @@ pub const FUNDED_TRANSITION_REQUEST_BYTES: usize =
 /// Bytes in one canonical Source Resolution certificate.
 pub const RESOLUTION_CERTIFICATE_BYTES: usize =
     generated_source_resolution::CERTIFICATE_BYTES_VALUE;
+/// Bytes in the sole canonical Resolution role request carried by a Core effect.
+pub const RESOLUTION_CORE_ROLE_REQUEST_BYTES: usize =
+    generated_source_resolution::CORE_REQUEST_BYTES_VALUE;
+/// Bytes in one canonical persisted Source closure receipt.
+pub const SOURCE_CLOSURE_RECEIPT_BYTES: usize = generated_source_resolution::CLOSURE_BYTES_VALUE;
 /// PDA domain for a deterministic, typed, ordered certificate paired with a Source state.
 pub const RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3: &[u8] = b"dclutch/resolution-cert/v3";
+/// PDA domain for a deterministic closure receipt paired with a Source state and sequence.
+pub const SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V1: &[u8] = b"dclutch/source-close/v1";
 /// State-derived immediate successor sequence for the one primary success certificate.
 pub const PRIMARY_CERTIFICATE_SEQUENCE_V3: u64 =
     generated_source_resolution::PRIMARY_CERTIFICATE_SEQUENCE_VALUE;
@@ -34,11 +41,22 @@ pub const RESOLUTION_CONTROLLER_RELEASE_ID_V3: [u8; 32] = [
     0x9a, 0x62, 0xc2, 0xe4, 0x6d, 0xa3, 0xb4, 0xfa, 0x80, 0xd1, 0xc7, 0x5a, 0xcd, 0xfc, 0xcb, 0x44,
     0x8c, 0x19, 0x21, 0x1a, 0x63, 0x1a, 0xbc, 0xb1, 0x29, 0xb8, 0x26, 0xb5, 0x5a, 0xa8, 0x25, 0x3b,
 ];
+/// Closed semantic release preimage for the Core-effect and Source-closure controller profile.
+pub const RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V4: &[u8] =
+    b"dclutch/release/source-resolution-controller-core-effects-source-closure-v4";
+/// SHA-256 of [`RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V4`].
+pub const RESOLUTION_CONTROLLER_RELEASE_ID_V4: [u8; 32] = [
+    0x03, 0x6f, 0xdf, 0xcd, 0x80, 0x81, 0xbc, 0x8d, 0x21, 0x9c, 0x7f, 0xd8, 0xa6, 0xf5, 0xd7, 0x7b,
+    0x56, 0xbe, 0x2d, 0x51, 0x43, 0x01, 0x06, 0xa7, 0x5c, 0x26, 0x8c, 0xde, 0xd7, 0xf0, 0x73, 0xde,
+];
 /// Schema identity used only to finalize a canonical Pyth-release record.
 pub const PYTH_RELEASE_RECORD_SCHEMA_ID_V1: [u8; 32] = [
     0xb3, 0xa9, 0x8b, 0x34, 0x26, 0x68, 0xb4, 0x63, 0x3a, 0xb2, 0xa8, 0x42, 0x73, 0x16, 0xcd, 0xe1,
     0xb8, 0xac, 0xeb, 0x01, 0xee, 0xda, 0xcc, 0x3c, 0x3e, 0x29, 0x81, 0xec, 0x3f, 0x91, 0xdb, 0xf9,
 ];
+
+const _: () = assert!(RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3.len() <= 32);
+const _: () = assert!(SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V1.len() <= 32);
 
 /// Stable refusal from a hostile fixed-layout decoder or encoder.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,6 +75,12 @@ pub enum Error {
     ZeroCoordinate,
     /// A result selector did not fit the physical Product profile.
     InvalidSelector,
+    /// Canonical identities or manifest-entry indices that must differ were duplicated.
+    DuplicateCoordinate,
+    /// The action, receipt kind, receipt account, beneficiary, and sequence did not partition.
+    InvalidReceiptShape,
+    /// The closure receipt did not attest exactly the three canonical funding compartments.
+    InvalidFundingCount,
 }
 
 /// Result alias for Resolution codecs.
@@ -314,6 +338,592 @@ impl FundedTransitionRequestV3 {
             || is_zero(&self.expected_funding_allocation_id)
         {
             return Err(Error::ZeroCoordinate);
+        }
+        Ok(())
+    }
+}
+
+/// Canonical Core effect action delegated to the Resolution role.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResolutionCoreActionV1 {
+    /// Create the Source and its exact three funding compartments.
+    CreateFund,
+    /// Activate and authenticate the exact three funded compartments.
+    VerifyFundReady,
+    /// Project an authenticated terminal Resolution certificate to Core.
+    AdmitTerminal,
+    /// Discharge Source funding and persist its canonical closure receipt.
+    CloseFund,
+}
+
+impl ResolutionCoreActionV1 {
+    fn decode(value: u8) -> Result<Self> {
+        match value {
+            generated_source_resolution::CORE_REQUEST_CREATE_FUND_ACTION => Ok(Self::CreateFund),
+            generated_source_resolution::CORE_REQUEST_VERIFY_FUND_READY_ACTION => {
+                Ok(Self::VerifyFundReady)
+            }
+            generated_source_resolution::CORE_REQUEST_ADMIT_TERMINAL_ACTION => {
+                Ok(Self::AdmitTerminal)
+            }
+            generated_source_resolution::CORE_REQUEST_CLOSE_FUND_ACTION => Ok(Self::CloseFund),
+            _ => Err(Error::UnknownAction),
+        }
+    }
+
+    const fn byte(self) -> u8 {
+        match self {
+            Self::CreateFund => generated_source_resolution::CORE_REQUEST_CREATE_FUND_ACTION,
+            Self::VerifyFundReady => {
+                generated_source_resolution::CORE_REQUEST_VERIFY_FUND_READY_ACTION
+            }
+            Self::AdmitTerminal => generated_source_resolution::CORE_REQUEST_ADMIT_TERMINAL_ACTION,
+            Self::CloseFund => generated_source_resolution::CORE_REQUEST_CLOSE_FUND_ACTION,
+        }
+    }
+}
+
+/// Action-partitioned receipt coordinate carried by a Resolution Core request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResolutionCoreReceiptKindV1 {
+    /// Create and readiness effects have no receipt account.
+    None,
+    /// Terminal admission names an ordinary Resolution success certificate.
+    TerminalSuccess,
+    /// Terminal admission names Product's explicit failure certificate.
+    TerminalFailure,
+    /// Close names the canonical persisted Source closure receipt.
+    Closure,
+}
+
+impl ResolutionCoreReceiptKindV1 {
+    fn decode(value: u8) -> Result<Self> {
+        match value {
+            0 => Ok(Self::None),
+            generated_source_resolution::CORE_REQUEST_TERMINAL_SUCCESS_KIND => {
+                Ok(Self::TerminalSuccess)
+            }
+            generated_source_resolution::CORE_REQUEST_TERMINAL_FAILURE_KIND => {
+                Ok(Self::TerminalFailure)
+            }
+            generated_source_resolution::CORE_REQUEST_CLOSURE_KIND => Ok(Self::Closure),
+            _ => Err(Error::InvalidReceiptShape),
+        }
+    }
+
+    const fn byte(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::TerminalSuccess => {
+                generated_source_resolution::CORE_REQUEST_TERMINAL_SUCCESS_KIND
+            }
+            Self::TerminalFailure => {
+                generated_source_resolution::CORE_REQUEST_TERMINAL_FAILURE_KIND
+            }
+            Self::Closure => generated_source_resolution::CORE_REQUEST_CLOSURE_KIND,
+        }
+    }
+}
+
+/// Sole fixed Resolution role request authenticated inside a canonical Core effect envelope.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolutionRoleRequestV1 {
+    /// Exact Core action tag; no private Resolution envelope exists.
+    pub action: ResolutionCoreActionV1,
+    /// Action-partitioned terminal or closure receipt kind.
+    pub receipt_kind: ResolutionCoreReceiptKindV1,
+    /// Canonical Source state account.
+    pub source_state: [u8; 32],
+    /// Finalized Source-material content identity.
+    pub source_material: [u8; 32],
+    /// Finalized capability-manifest content identity.
+    pub capability_manifest: [u8; 32],
+    /// Canonical recovery funding compartment.
+    pub recovery_funding: [u8; 32],
+    /// Canonical exhaustion funding compartment.
+    pub exhaustion_funding: [u8; 32],
+    /// Canonical explicit-failure funding compartment.
+    pub failure_funding: [u8; 32],
+    /// Terminal certificate, closure receipt, or zero according to `action`.
+    pub receipt: [u8; 32],
+    /// Funding beneficiary, or zero for terminal admission.
+    pub beneficiary: [u8; 32],
+    /// Capability-manifest entry selecting recovery funding.
+    pub recovery_entry_index: u16,
+    /// Capability-manifest entry selecting exhaustion funding.
+    pub exhaustion_entry_index: u16,
+    /// Capability-manifest entry selecting explicit-failure funding.
+    pub failure_entry_index: u16,
+    /// Exact terminal or closure sequence, or zero before terminal admission.
+    pub receipt_sequence: u64,
+}
+
+impl ResolutionRoleRequestV1 {
+    /// Decode one exact canonical Resolution role request.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        exact_width(input, RESOLUTION_CORE_ROLE_REQUEST_BYTES)?;
+        exact(
+            input,
+            generated_source_resolution::CORE_REQUEST_MAGIC_OFFSET,
+            &generated_source_resolution::CORE_REQUEST_MAGIC_BYTES,
+            Error::InvalidMagic,
+        )?;
+        if u16_at(
+            input,
+            generated_source_resolution::CORE_REQUEST_VERSION_OFFSET,
+        )? != generated_source_resolution::CORE_REQUEST_ABI_VERSION
+        {
+            return Err(Error::UnsupportedVersion);
+        }
+        require_zero(
+            input,
+            generated_source_resolution::CORE_REQUEST_RESERVED_HEADER_OFFSET,
+            4,
+        )?;
+        require_zero(
+            input,
+            generated_source_resolution::CORE_REQUEST_RESERVED_BODY_OFFSET,
+            2,
+        )?;
+        let value = Self {
+            action: ResolutionCoreActionV1::decode(byte_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_ACTION_OFFSET,
+            )?)?,
+            receipt_kind: ResolutionCoreReceiptKindV1::decode(byte_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_RECEIPT_KIND_OFFSET,
+            )?)?,
+            source_state: array_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_SOURCE_STATE_OFFSET,
+            )?,
+            source_material: array_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_SOURCE_MATERIAL_OFFSET,
+            )?,
+            capability_manifest: array_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_CAPABILITY_MANIFEST_OFFSET,
+            )?,
+            recovery_funding: array_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_RECOVERY_FUNDING_OFFSET,
+            )?,
+            exhaustion_funding: array_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_EXHAUSTION_FUNDING_OFFSET,
+            )?,
+            failure_funding: array_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_FAILURE_FUNDING_OFFSET,
+            )?,
+            receipt: array_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_RECEIPT_OFFSET,
+            )?,
+            beneficiary: array_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_BENEFICIARY_OFFSET,
+            )?,
+            recovery_entry_index: u16_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_RECOVERY_ENTRY_INDEX_OFFSET,
+            )?,
+            exhaustion_entry_index: u16_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_EXHAUSTION_ENTRY_INDEX_OFFSET,
+            )?,
+            failure_entry_index: u16_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_FAILURE_ENTRY_INDEX_OFFSET,
+            )?,
+            receipt_sequence: u64_at(
+                input,
+                generated_source_resolution::CORE_REQUEST_RECEIPT_SEQUENCE_OFFSET,
+            )?,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Encode one exact canonical Resolution role request.
+    pub fn to_bytes(self) -> Result<[u8; RESOLUTION_CORE_ROLE_REQUEST_BYTES]> {
+        self.validate()?;
+        let mut output = [0_u8; RESOLUTION_CORE_ROLE_REQUEST_BYTES];
+        put(
+            &mut output,
+            generated_source_resolution::CORE_REQUEST_MAGIC_OFFSET,
+            &generated_source_resolution::CORE_REQUEST_MAGIC_BYTES,
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::CORE_REQUEST_VERSION_OFFSET,
+            &generated_source_resolution::CORE_REQUEST_ABI_VERSION.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::CORE_REQUEST_ACTION_OFFSET,
+            &[self.action.byte()],
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::CORE_REQUEST_RECEIPT_KIND_OFFSET,
+            &[self.receipt_kind.byte()],
+        )?;
+        for (offset, value) in [
+            (
+                generated_source_resolution::CORE_REQUEST_SOURCE_STATE_OFFSET,
+                &self.source_state,
+            ),
+            (
+                generated_source_resolution::CORE_REQUEST_SOURCE_MATERIAL_OFFSET,
+                &self.source_material,
+            ),
+            (
+                generated_source_resolution::CORE_REQUEST_CAPABILITY_MANIFEST_OFFSET,
+                &self.capability_manifest,
+            ),
+            (
+                generated_source_resolution::CORE_REQUEST_RECOVERY_FUNDING_OFFSET,
+                &self.recovery_funding,
+            ),
+            (
+                generated_source_resolution::CORE_REQUEST_EXHAUSTION_FUNDING_OFFSET,
+                &self.exhaustion_funding,
+            ),
+            (
+                generated_source_resolution::CORE_REQUEST_FAILURE_FUNDING_OFFSET,
+                &self.failure_funding,
+            ),
+            (
+                generated_source_resolution::CORE_REQUEST_RECEIPT_OFFSET,
+                &self.receipt,
+            ),
+            (
+                generated_source_resolution::CORE_REQUEST_BENEFICIARY_OFFSET,
+                &self.beneficiary,
+            ),
+        ] {
+            put(&mut output, offset, value)?;
+        }
+        put(
+            &mut output,
+            generated_source_resolution::CORE_REQUEST_RECOVERY_ENTRY_INDEX_OFFSET,
+            &self.recovery_entry_index.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::CORE_REQUEST_EXHAUSTION_ENTRY_INDEX_OFFSET,
+            &self.exhaustion_entry_index.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::CORE_REQUEST_FAILURE_ENTRY_INDEX_OFFSET,
+            &self.failure_entry_index.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::CORE_REQUEST_RECEIPT_SEQUENCE_OFFSET,
+            &self.receipt_sequence.to_le_bytes(),
+        )?;
+        Ok(output)
+    }
+
+    fn validate(self) -> Result<()> {
+        if is_zero(&self.source_state)
+            || is_zero(&self.source_material)
+            || is_zero(&self.capability_manifest)
+            || is_zero(&self.recovery_funding)
+            || is_zero(&self.exhaustion_funding)
+            || is_zero(&self.failure_funding)
+        {
+            return Err(Error::ZeroCoordinate);
+        }
+        if self.recovery_funding == self.exhaustion_funding
+            || self.recovery_funding == self.failure_funding
+            || self.exhaustion_funding == self.failure_funding
+            || self.recovery_entry_index == self.exhaustion_entry_index
+            || self.recovery_entry_index == self.failure_entry_index
+            || self.exhaustion_entry_index == self.failure_entry_index
+        {
+            return Err(Error::DuplicateCoordinate);
+        }
+        let shape_is_valid = match self.action {
+            ResolutionCoreActionV1::CreateFund | ResolutionCoreActionV1::VerifyFundReady => {
+                self.receipt_kind == ResolutionCoreReceiptKindV1::None
+                    && is_zero(&self.receipt)
+                    && !is_zero(&self.beneficiary)
+                    && self.receipt_sequence == 0
+            }
+            ResolutionCoreActionV1::AdmitTerminal => {
+                matches!(
+                    self.receipt_kind,
+                    ResolutionCoreReceiptKindV1::TerminalSuccess
+                        | ResolutionCoreReceiptKindV1::TerminalFailure
+                ) && !is_zero(&self.receipt)
+                    && is_zero(&self.beneficiary)
+                    && self.receipt_sequence != 0
+            }
+            ResolutionCoreActionV1::CloseFund => {
+                self.receipt_kind == ResolutionCoreReceiptKindV1::Closure
+                    && !is_zero(&self.receipt)
+                    && !is_zero(&self.beneficiary)
+                    && self.receipt_sequence != 0
+            }
+        };
+        if !shape_is_valid {
+            return Err(Error::InvalidReceiptShape);
+        }
+        Ok(())
+    }
+}
+
+/// Persisted receipt proving terminal Source state and all funding accounts were discharged.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceClosureReceiptV1 {
+    /// Canonical Market identity.
+    pub market: [u8; 32],
+    /// Canonical Source state account that was closed.
+    pub source_state: [u8; 32],
+    /// Finalized Source-material content identity.
+    pub source_material: [u8; 32],
+    /// Finalized capability-manifest content identity.
+    pub capability_manifest: [u8; 32],
+    /// Authenticated terminal Resolution certificate.
+    pub terminal_certificate: [u8; 32],
+    /// This deterministic closure receipt account.
+    pub receipt_account: [u8; 32],
+    /// Exact beneficiary receiving the discharged lamports.
+    pub beneficiary: [u8; 32],
+    /// Digest of the authenticated terminal Source pre-state.
+    pub source_state_digest: [u8; 32],
+    /// Digest of the authenticated terminal certificate bytes.
+    pub terminal_certificate_digest: [u8; 32],
+    /// Digest of the exact ordered three-compartment funding pre-state.
+    pub funding_set_digest: [u8; 32],
+    /// Immutable Market generation.
+    pub generation: u64,
+    /// Exact terminal certificate sequence.
+    pub terminal_sequence: u64,
+    /// Product-owned terminal result selector.
+    pub selector: u32,
+    /// Exact source and funding lamports discharged to `beneficiary`.
+    pub refund_lamports: u64,
+    /// Clock timestamp at which the atomic discharge committed.
+    pub closed_at: u64,
+}
+
+impl SourceClosureReceiptV1 {
+    /// Decode one exact canonical Source closure receipt.
+    pub fn decode(input: &[u8]) -> Result<Self> {
+        exact_width(input, SOURCE_CLOSURE_RECEIPT_BYTES)?;
+        exact(
+            input,
+            generated_source_resolution::CLOSURE_MAGIC_OFFSET,
+            &generated_source_resolution::CLOSURE_MAGIC_BYTES,
+            Error::InvalidMagic,
+        )?;
+        if u16_at(input, generated_source_resolution::CLOSURE_VERSION_OFFSET)?
+            != generated_source_resolution::CLOSURE_ABI_VERSION
+        {
+            return Err(Error::UnsupportedVersion);
+        }
+        if byte_at(input, generated_source_resolution::CLOSURE_KIND_OFFSET)?
+            != generated_source_resolution::CLOSURE_KIND_VALUE
+        {
+            return Err(Error::InvalidReceiptShape);
+        }
+        require_zero(
+            input,
+            generated_source_resolution::CLOSURE_RESERVED_HEADER_OFFSET,
+            5,
+        )?;
+        if u32_at(
+            input,
+            generated_source_resolution::CLOSURE_FUNDING_COUNT_OFFSET,
+        )? != generated_source_resolution::CLOSURE_FUNDING_COUNT_VALUE
+        {
+            return Err(Error::InvalidFundingCount);
+        }
+        require_zero(
+            input,
+            generated_source_resolution::CLOSURE_RESERVED_BODY_OFFSET,
+            8,
+        )?;
+        let value = Self {
+            market: array_at(input, generated_source_resolution::CLOSURE_MARKET_OFFSET)?,
+            source_state: array_at(
+                input,
+                generated_source_resolution::CLOSURE_SOURCE_STATE_OFFSET,
+            )?,
+            source_material: array_at(
+                input,
+                generated_source_resolution::CLOSURE_SOURCE_MATERIAL_OFFSET,
+            )?,
+            capability_manifest: array_at(
+                input,
+                generated_source_resolution::CLOSURE_CAPABILITY_MANIFEST_OFFSET,
+            )?,
+            terminal_certificate: array_at(
+                input,
+                generated_source_resolution::CLOSURE_TERMINAL_CERTIFICATE_OFFSET,
+            )?,
+            receipt_account: array_at(
+                input,
+                generated_source_resolution::CLOSURE_RECEIPT_ACCOUNT_OFFSET,
+            )?,
+            beneficiary: array_at(
+                input,
+                generated_source_resolution::CLOSURE_BENEFICIARY_OFFSET,
+            )?,
+            source_state_digest: array_at(
+                input,
+                generated_source_resolution::CLOSURE_SOURCE_STATE_DIGEST_OFFSET,
+            )?,
+            terminal_certificate_digest: array_at(
+                input,
+                generated_source_resolution::CLOSURE_TERMINAL_CERTIFICATE_DIGEST_OFFSET,
+            )?,
+            funding_set_digest: array_at(
+                input,
+                generated_source_resolution::CLOSURE_FUNDING_SET_DIGEST_OFFSET,
+            )?,
+            generation: u64_at(
+                input,
+                generated_source_resolution::CLOSURE_GENERATION_OFFSET,
+            )?,
+            terminal_sequence: u64_at(
+                input,
+                generated_source_resolution::CLOSURE_TERMINAL_SEQUENCE_OFFSET,
+            )?,
+            selector: u32_at(input, generated_source_resolution::CLOSURE_SELECTOR_OFFSET)?,
+            refund_lamports: u64_at(
+                input,
+                generated_source_resolution::CLOSURE_REFUND_LAMPORTS_OFFSET,
+            )?,
+            closed_at: u64_at(input, generated_source_resolution::CLOSURE_CLOSED_AT_OFFSET)?,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Encode one exact canonical Source closure receipt.
+    pub fn to_bytes(self) -> Result<[u8; SOURCE_CLOSURE_RECEIPT_BYTES]> {
+        self.validate()?;
+        let mut output = [0_u8; SOURCE_CLOSURE_RECEIPT_BYTES];
+        put(
+            &mut output,
+            generated_source_resolution::CLOSURE_MAGIC_OFFSET,
+            &generated_source_resolution::CLOSURE_MAGIC_BYTES,
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::CLOSURE_VERSION_OFFSET,
+            &generated_source_resolution::CLOSURE_ABI_VERSION.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::CLOSURE_KIND_OFFSET,
+            &[generated_source_resolution::CLOSURE_KIND_VALUE],
+        )?;
+        for (offset, value) in [
+            (
+                generated_source_resolution::CLOSURE_MARKET_OFFSET,
+                &self.market,
+            ),
+            (
+                generated_source_resolution::CLOSURE_SOURCE_STATE_OFFSET,
+                &self.source_state,
+            ),
+            (
+                generated_source_resolution::CLOSURE_SOURCE_MATERIAL_OFFSET,
+                &self.source_material,
+            ),
+            (
+                generated_source_resolution::CLOSURE_CAPABILITY_MANIFEST_OFFSET,
+                &self.capability_manifest,
+            ),
+            (
+                generated_source_resolution::CLOSURE_TERMINAL_CERTIFICATE_OFFSET,
+                &self.terminal_certificate,
+            ),
+            (
+                generated_source_resolution::CLOSURE_RECEIPT_ACCOUNT_OFFSET,
+                &self.receipt_account,
+            ),
+            (
+                generated_source_resolution::CLOSURE_BENEFICIARY_OFFSET,
+                &self.beneficiary,
+            ),
+            (
+                generated_source_resolution::CLOSURE_SOURCE_STATE_DIGEST_OFFSET,
+                &self.source_state_digest,
+            ),
+            (
+                generated_source_resolution::CLOSURE_TERMINAL_CERTIFICATE_DIGEST_OFFSET,
+                &self.terminal_certificate_digest,
+            ),
+            (
+                generated_source_resolution::CLOSURE_FUNDING_SET_DIGEST_OFFSET,
+                &self.funding_set_digest,
+            ),
+        ] {
+            put(&mut output, offset, value)?;
+        }
+        put(
+            &mut output,
+            generated_source_resolution::CLOSURE_GENERATION_OFFSET,
+            &self.generation.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::CLOSURE_TERMINAL_SEQUENCE_OFFSET,
+            &self.terminal_sequence.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::CLOSURE_FUNDING_COUNT_OFFSET,
+            &generated_source_resolution::CLOSURE_FUNDING_COUNT_VALUE.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::CLOSURE_SELECTOR_OFFSET,
+            &self.selector.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::CLOSURE_REFUND_LAMPORTS_OFFSET,
+            &self.refund_lamports.to_le_bytes(),
+        )?;
+        put(
+            &mut output,
+            generated_source_resolution::CLOSURE_CLOSED_AT_OFFSET,
+            &self.closed_at.to_le_bytes(),
+        )?;
+        Ok(output)
+    }
+
+    fn validate(self) -> Result<()> {
+        if is_zero(&self.market)
+            || is_zero(&self.source_state)
+            || is_zero(&self.source_material)
+            || is_zero(&self.capability_manifest)
+            || is_zero(&self.terminal_certificate)
+            || is_zero(&self.receipt_account)
+            || is_zero(&self.beneficiary)
+            || is_zero(&self.source_state_digest)
+            || is_zero(&self.terminal_certificate_digest)
+            || is_zero(&self.funding_set_digest)
+            || self.generation == 0
+            || self.terminal_sequence == 0
+            || self.refund_lamports == 0
+            || self.closed_at == 0
+        {
+            return Err(Error::ZeroCoordinate);
+        }
+        if self.selector > u32::from(u8::MAX) {
+            return Err(Error::InvalidSelector);
         }
         Ok(())
     }
@@ -825,6 +1435,51 @@ mod tests {
         }
     }
 
+    fn core_request() -> ResolutionRoleRequestV1 {
+        ResolutionRoleRequestV1 {
+            action: ResolutionCoreActionV1::CloseFund,
+            receipt_kind: ResolutionCoreReceiptKindV1::Closure,
+            source_state: id(1),
+            source_material: id(2),
+            capability_manifest: id(3),
+            recovery_funding: id(4),
+            exhaustion_funding: id(5),
+            failure_funding: id(6),
+            receipt: id(7),
+            beneficiary: id(8),
+            recovery_entry_index: 0,
+            exhaustion_entry_index: 1,
+            failure_entry_index: 2,
+            receipt_sequence: 4,
+        }
+    }
+
+    fn closure() -> SourceClosureReceiptV1 {
+        SourceClosureReceiptV1 {
+            market: id(1),
+            source_state: id(2),
+            source_material: id(3),
+            capability_manifest: id(4),
+            terminal_certificate: id(5),
+            receipt_account: id(6),
+            beneficiary: id(7),
+            source_state_digest: id(8),
+            terminal_certificate_digest: id(9),
+            funding_set_digest: id(10),
+            generation: 11,
+            terminal_sequence: 12,
+            selector: 2,
+            refund_lamports: 13,
+            closed_at: 14,
+        }
+    }
+
+    fn id(first_byte: u8) -> [u8; 32] {
+        let mut value = [0_u8; 32];
+        value[0] = first_byte;
+        value
+    }
+
     #[test]
     fn generated_request_vector_and_round_trip_match() -> Result<()> {
         let encoded = request().to_bytes()?;
@@ -920,6 +1575,143 @@ mod tests {
                 Ok(request)
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn generated_core_request_partition_and_hostile_coordinates_match() -> Result<()> {
+        let value = core_request();
+        let encoded = value.to_bytes()?;
+        assert_eq!(encoded, generated_source_resolution::CORE_REQUEST_EXAMPLE);
+        assert_eq!(ResolutionRoleRequestV1::decode(&encoded), Ok(value));
+
+        for length in 0..RESOLUTION_CORE_ROLE_REQUEST_BYTES {
+            assert_eq!(
+                ResolutionRoleRequestV1::decode(encoded.get(..length).ok_or(Error::InvalidLength)?,),
+                Err(Error::InvalidLength)
+            );
+        }
+
+        for (action, receipt_kind, receipt, beneficiary, receipt_sequence) in [
+            (
+                ResolutionCoreActionV1::CreateFund,
+                ResolutionCoreReceiptKindV1::None,
+                [0; 32],
+                id(8),
+                0,
+            ),
+            (
+                ResolutionCoreActionV1::VerifyFundReady,
+                ResolutionCoreReceiptKindV1::None,
+                [0; 32],
+                id(8),
+                0,
+            ),
+            (
+                ResolutionCoreActionV1::AdmitTerminal,
+                ResolutionCoreReceiptKindV1::TerminalSuccess,
+                id(7),
+                [0; 32],
+                4,
+            ),
+            (
+                ResolutionCoreActionV1::AdmitTerminal,
+                ResolutionCoreReceiptKindV1::TerminalFailure,
+                id(7),
+                [0; 32],
+                4,
+            ),
+            (
+                ResolutionCoreActionV1::CloseFund,
+                ResolutionCoreReceiptKindV1::Closure,
+                id(7),
+                id(8),
+                4,
+            ),
+        ] {
+            let request = ResolutionRoleRequestV1 {
+                action,
+                receipt_kind,
+                receipt,
+                beneficiary,
+                receipt_sequence,
+                ..value
+            };
+            assert_eq!(
+                ResolutionRoleRequestV1::decode(&request.to_bytes()?),
+                Ok(request)
+            );
+        }
+
+        let mut duplicate = value;
+        duplicate.failure_funding = duplicate.recovery_funding;
+        assert_eq!(duplicate.to_bytes(), Err(Error::DuplicateCoordinate));
+        let mut duplicate = value;
+        duplicate.failure_entry_index = duplicate.recovery_entry_index;
+        assert_eq!(duplicate.to_bytes(), Err(Error::DuplicateCoordinate));
+        let mut wrong_shape = value;
+        wrong_shape.receipt_kind = ResolutionCoreReceiptKindV1::TerminalFailure;
+        assert_eq!(wrong_shape.to_bytes(), Err(Error::InvalidReceiptShape));
+
+        for (offset, expected) in [
+            (
+                generated_source_resolution::CORE_REQUEST_ACTION_OFFSET,
+                Error::UnknownAction,
+            ),
+            (
+                generated_source_resolution::CORE_REQUEST_RESERVED_HEADER_OFFSET,
+                Error::NonCanonicalReserved,
+            ),
+            (
+                generated_source_resolution::CORE_REQUEST_RESERVED_BODY_OFFSET,
+                Error::NonCanonicalReserved,
+            ),
+        ] {
+            let mut hostile = encoded;
+            *hostile.get_mut(offset).ok_or(Error::InvalidLength)? = 0xff;
+            assert_eq!(ResolutionRoleRequestV1::decode(&hostile), Err(expected));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn generated_closure_round_trip_and_hostile_discharge_facts_match() -> Result<()> {
+        let value = closure();
+        let encoded = value.to_bytes()?;
+        assert_eq!(encoded, generated_source_resolution::CLOSURE_EXAMPLE);
+        assert_eq!(SourceClosureReceiptV1::decode(&encoded), Ok(value));
+
+        for length in 0..SOURCE_CLOSURE_RECEIPT_BYTES {
+            assert_eq!(
+                SourceClosureReceiptV1::decode(encoded.get(..length).ok_or(Error::InvalidLength)?,),
+                Err(Error::InvalidLength)
+            );
+        }
+
+        let mut hostile = encoded;
+        hostile[generated_source_resolution::CLOSURE_FUNDING_COUNT_OFFSET] = 2;
+        assert_eq!(
+            SourceClosureReceiptV1::decode(&hostile),
+            Err(Error::InvalidFundingCount)
+        );
+        let mut hostile = encoded;
+        hostile[generated_source_resolution::CLOSURE_RESERVED_BODY_OFFSET] = 1;
+        assert_eq!(
+            SourceClosureReceiptV1::decode(&hostile),
+            Err(Error::NonCanonicalReserved)
+        );
+        let mut hostile = encoded;
+        hostile[generated_source_resolution::CLOSURE_KIND_OFFSET] = 0xff;
+        assert_eq!(
+            SourceClosureReceiptV1::decode(&hostile),
+            Err(Error::InvalidReceiptShape)
+        );
+        let mut hostile_value = value;
+        hostile_value.refund_lamports = 0;
+        assert_eq!(hostile_value.to_bytes(), Err(Error::ZeroCoordinate));
+        let mut hostile_value = value;
+        hostile_value.selector = 256;
+        assert_eq!(hostile_value.to_bytes(), Err(Error::InvalidSelector));
         Ok(())
     }
 

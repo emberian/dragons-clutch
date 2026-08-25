@@ -15,9 +15,7 @@ use dclutch_product_contract::result_domain::{
     FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, FINITE_RESULT_DOMAIN_RELEASE_ID_V1,
     FiniteResultDomainV1,
 };
-use dclutch_pyth_svm::{
-    FullPriceUpdateV2, ProgramDataV3View, ProgramV3View, PythReleaseV1, ReceiverConfigV2View,
-};
+use dclutch_pyth_svm::{FullPriceUpdateV2, PythReleaseV1, ReceiverConfigV2View};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
@@ -25,12 +23,13 @@ use dclutch_registry_contract::{
     EXECUTION_AUTHORITY_MANIFEST_SCHEMA_ID_V1, ExecutionAuthorityManifestV1,
     authenticate_market_execution_view_v1,
 };
+use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_resolution_codec::{
     AcceptPythRequestV1, FUNDED_TRANSITION_REQUEST_BYTES, PRIMARY_CERTIFICATE_SEQUENCE_V3,
     PYTH_EVIDENCE_CONTENT_DOMAIN_V1, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
     RESOLUTION_CERTIFICATE_BYTES, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V3, ResolutionCertificateKindV1, ResolutionCertificateV1,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V4, ResolutionCertificateKindV1, ResolutionCertificateV1,
 };
 use dclutch_source_contract::{
     PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
@@ -54,6 +53,7 @@ use solana_system_interface::instruction::{allocate, assign};
 /// Exact number of accounts in the primary-Pyth successor frame.
 pub const ACCEPT_PYTH_ACCOUNT_COUNT: usize = 23;
 
+mod core_effect;
 mod funded;
 
 /// Stable Resolution controller refusal.
@@ -125,6 +125,9 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if core_effect::is_core_effect(instruction_data) {
+        return core_effect::process_core_effect(program_id, accounts, instruction_data);
+    }
     if instruction_data.len() == FUNDED_TRANSITION_REQUEST_BYTES {
         return funded::process_funded_transition(program_id, accounts, instruction_data);
     }
@@ -632,7 +635,7 @@ fn authenticate_resolution_release(
         .map_err(|_| ResolutionError::ResolutionRelease)?;
     let release = role.release();
     if release.program().to_bytes() != program_id.to_bytes()
-        || release.semantic_release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V3
+        || release.semantic_release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V4
         || release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
     {
         return Err(ResolutionError::ResolutionRelease.into());

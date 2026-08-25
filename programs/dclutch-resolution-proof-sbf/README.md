@@ -33,6 +33,39 @@ the occurrence Source-material ID as its manifest config/allocation identity.
 Funding ledger, custody lamports, worker lamports, Source state, and the typed
 312-byte certificate commit together.
 
+The V4 controller also consumes the sole canonical Market-Core effect wire.
+Each instruction is exactly a 280-byte `CoreEffectEnvelopeV1` followed by 304
+role-owned bytes: a compact 16-byte funding-count header and the Lean-owned
+288-byte `ResolutionRoleRequestV1`. The Core action fixes the Resolution role,
+so this route has no Trading capability selector. The three real FundingState
+accounts carry their canonical entry indices; the request independently binds
+their exact PDAs and recovery/exhaustion/failure order. No inline key list
+duplicates those account facts. The envelope's request length, request digest,
+caller-authority PDA, and full effect digest bind the complete 304-byte role
+wire, not merely the Resolution tail.
+
+The common Core-effect account prefix is fixed at sixteen accounts: caller
+authority, Core Market, Registry activation, Registry program, Core Program and
+ProgramData, Resolution Program and ProgramData, finalized Source material and
+staging vacancy, finalized capability manifest and staging vacancy, Source
+state, and the recovery/exhaustion/failure funding states. Action tails are:
+
+- CreateFund: Rent, System;
+- VerifyFundReady: immutable RentCredit beneficiary, Clock, Rent;
+- AdmitTerminal: terminal certificate, Rent; and
+- CloseFund: terminal certificate, closure receipt, immutable RentCredit
+  beneficiary, Clock, Rent, System.
+
+CreateFund allocates the deterministic Source and three funding PDAs from exact
+prepaid system accounts. VerifyFundReady consumes only each entry's immutable
+Rent+Creation compartments and credits the persisted RentCredit. AdmitTerminal
+authenticates the terminal Source, all three active funding states, and the
+state-derived certificate PDA. CloseFund creates a deterministic 384-byte
+closure receipt, classifies every remaining native lamport and donation through
+the funding contract, and atomically discharges Source plus all three funding
+accounts to the same persisted RentCredit. Resolution returns only the canonical
+240-byte `CoreEffectAckV1`; it does not define a private effect receipt.
+
 Certificates use Lean's exact success/recovery/exhaustion/failure tags and a
 typed ordered V3 PDA namespace. Primary success is the state-derived first
 sequence, so a client can construct its one exact PDA before execution.
@@ -41,13 +74,13 @@ rent, tolerates surplus dust, and allocates/assigns it only at the final output
 gate. A refusal or replay therefore rolls back certificate creation together
 with Source, funding, and worker mutation under SVM transaction semantics.
 
-This slice does **not** yet execute the Product-resolution effect against the
-Core/claims owner, perform recovery-provider CPI, physically certify the
-provider observation, create Source/FundingState accounts, or retire them. It
-does physically certify exhaustion and creates only its certificate PDA. The
-certificate is the compact handoff to the shared executor. Registry/Core
-account mutation, Loader/System behavior, Pyth program correctness, Clock
-correctness, SHA-256 syscall correctness, and SVM rollback are not Lean proofs.
+This slice does **not** perform recovery-provider CPI or make the external
+provider runtime a semantic authority. Primary Pyth remains an authenticated,
+read-only adapter observation. Core owns its sparse lifecycle transition and
+immediate acknowledgment check; Resolution owns Source, the three action-specific
+funding ledgers, certificates, and closure receipt. Registry/Core account
+mutation, Loader/System behavior, Pyth program correctness, Clock correctness,
+SHA-256 syscall correctness, and SVM rollback are not Lean proofs.
 
 ## Optimized SBF checkpoint
 
@@ -60,9 +93,10 @@ cargo build-sbf \
   --sbf-out-dir target/resolution-funded-deploy
 ```
 
-`cargo-build-sbf 4.0.0`, platform-tools v1.53, and SBF rustc 1.89.0 produced
-a verifier-clean 210,528-byte V3 ELF. SHA-256 was
-`bdc08d836ce243143ed017173cb8b151b29d31e90f8b6bbd40ceeaec1e914f16`.
+An exact `git archive b0e515f` build with `cargo-build-sbf 4.0.0`,
+platform-tools v1.53, and SBF rustc 1.89.0 produced a verifier-clean
+210,528-byte V3 ELF. SHA-256 was
+`f684b845a60a25e661dee334e2866895d830956aedba74c8e1bf705d5abee2e7`.
 The section audit was `.text` 196,688, `.rodata` 5,240, `.data.rel.ro` 1,424,
 `.dynamic` 176, `.dynsym` 312, `.dynstr` 177, and `.rel.dyn` 5,568 bytes. The
 prior V2 artifact is not valid for this ABI.

@@ -39,22 +39,25 @@ SBF_OUT_DIR=../../target/deploy \
   cargo test --test resolution_successor -- --nocapture
 ```
 
-The optimized Resolution V3 ELF was 210,528 bytes with SHA-256
-`bdc08d836ce243143ed017173cb8b151b29d31e90f8b6bbd40ceeaec1e914f16`.
-The unchanged Registry ELF was 89,584 bytes with SHA-256
-`399c7ca711f38a3cc173142a8eec268552dfcf18b15307b617f8069dd53bf5a8`.
+An exact `git archive b0e515f` build produced a 210,528-byte optimized
+Resolution V3 ELF with SHA-256
+`f684b845a60a25e661dee334e2866895d830956aedba74c8e1bf705d5abee2e7`
+and an 89,760-byte Registry ELF with SHA-256
+`b7d6634a23de84cb1b1f0a3368493b9008d88278c460f90e26b522af5e9a6e39`.
 The clean ProgramTest campaign observed these instruction costs:
 
 | Transition | Compute units |
 | --- | ---: |
-| Registry Resolution-role reauthentication | 124,293 |
-| Primary Pyth success plus certificate creation | 253,046 |
+| Registry Resolution-role reauthentication | 128,793 |
+| Primary Pyth success plus certificate creation | 242,546 |
 | Primary replay refusal | 7,916 |
-| Under-rent certificate refusal at final gate | 247,335 |
-| Funded recovery plus certificate creation | 303,002 |
-| Funded exhaustion plus certificate creation | 304,213 |
-| Explicit Product failure plus certificate creation | 300,672 |
-| Occupied failure certificate late refusal | 297,977 |
+| Under-rent certificate refusal at final gate | 239,835 |
+| Funded recovery plus certificate creation | 294,002 |
+| Funded exhaustion plus certificate creation | 292,213 |
+| Explicit Product failure plus certificate creation | 290,172 |
+| Rollback lineage recovery plus certificate creation | 295,502 |
+| Rollback lineage exhaustion plus certificate creation | 293,713 |
+| Occupied failure certificate late refusal | 287,477 |
 
 This is local real-SVM evidence. The captured update is synthetic-local, and
 the campaign is not provider availability, devnet, deployment, or mainnet

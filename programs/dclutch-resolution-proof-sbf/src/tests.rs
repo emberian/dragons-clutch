@@ -26,6 +26,7 @@ use dclutch_registry_contract::{
     ExecutionAuthorityManifestV1, ExecutionReleaseActivationInputsV1,
     activate_execution_release_set_v1,
 };
+use dclutch_registry_svm::LOADER_V3_PROGRAMDATA_METADATA_BYTES;
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ProgramIdentityV1,
 };
@@ -33,7 +34,7 @@ use dclutch_resolution_codec::{
     ACCEPT_PYTH_REQUEST_BYTES, AcceptPythRequestV1, FUNDED_TRANSITION_REQUEST_BYTES,
     FundedTransitionActionV3, FundedTransitionRequestV3, PRIMARY_CERTIFICATE_SEQUENCE_V3,
     PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CERTIFICATE_BYTES,
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V3,
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V4,
     ResolutionCertificateKindV1, ResolutionCertificateV1,
 };
 use dclutch_source_contract::{
@@ -124,7 +125,7 @@ fn loader_program_bytes(programdata: Pubkey) -> Vec<u8> {
 }
 
 fn immutable_programdata_bytes(slot: u64, elf: &[u8]) -> Vec<u8> {
-    let mut bytes = vec![0; 13 + elf.len()];
+    let mut bytes = vec![0; LOADER_V3_PROGRAMDATA_METADATA_BYTES + elf.len()];
     bytes
         .get_mut(..4)
         .expect("variant")
@@ -133,7 +134,10 @@ fn immutable_programdata_bytes(slot: u64, elf: &[u8]) -> Vec<u8> {
         .get_mut(4..12)
         .expect("slot")
         .copy_from_slice(&slot.to_le_bytes());
-    bytes.get_mut(13..).expect("ELF").copy_from_slice(elf);
+    bytes
+        .get_mut(LOADER_V3_PROGRAMDATA_METADATA_BYTES..)
+        .expect("ELF")
+        .copy_from_slice(elf);
     bytes
 }
 
@@ -293,7 +297,7 @@ fn fixture() -> Fixture {
     let resolution_release = artifact(
         program_id,
         resolution_programdata,
-        RESOLUTION_CONTROLLER_RELEASE_ID_V3,
+        RESOLUTION_CONTROLLER_RELEASE_ID_V4,
         resolution_elf,
         73,
     );
@@ -516,7 +520,7 @@ fn fixture() -> Fixture {
     let capability_entries = [
         CapabilityEntryV1::new(
             core_id([0xd3; 32]),
-            core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V3),
+            core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V4),
             core_id(recovery_allocation_id),
             core_id([0xd5; 32]),
             core_id([0xd6; 32]),
@@ -530,7 +534,7 @@ fn fixture() -> Fixture {
         .expect("recovery funding entry"),
         CapabilityEntryV1::new(
             core_id([0xd4; 32]),
-            core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V3),
+            core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V4),
             core_id(recovery_policy_id.to_bytes()),
             core_id([0xd5; 32]),
             core_id([0xd6; 32]),
@@ -544,7 +548,7 @@ fn fixture() -> Fixture {
         .expect("exhaustion funding entry"),
         CapabilityEntryV1::new(
             core_id([0xd8; 32]),
-            core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V3),
+            core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V4),
             core_id(material_id),
             core_id([0xd5; 32]),
             core_id([0xd6; 32]),

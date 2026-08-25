@@ -33,6 +33,27 @@ def main : IO Unit := do
   IO.println s!"pub(crate) const FUNDED_REQUEST_EXHAUST_ACTION: u8 = {FundedAction.exhaust.tag.toNat};"
   IO.println s!"pub(crate) const FUNDED_REQUEST_COMMIT_FAILURE_ACTION: u8 = {FundedAction.commitFailure.tag.toNat};"
   IO.println ""
+  IO.println s!"pub(crate) const CORE_REQUEST_BYTES_VALUE: usize = {coreRequestBytes};"
+  IO.println s!"pub(crate) const CORE_REQUEST_ABI_VERSION: u16 = {coreRequestVersion};"
+  emitRustBytes "pub(crate)" "CORE_REQUEST_MAGIC_BYTES" coreRequestMagic
+  for field in CoreRequestField.all do
+    IO.println s!"pub(crate) const {CoreRequestField.rustName field}: usize = {CoreRequestField.offset field};"
+  IO.println s!"pub(crate) const CORE_REQUEST_CREATE_FUND_ACTION: u8 = {CoreAction.createFund.tag.toNat};"
+  IO.println s!"pub(crate) const CORE_REQUEST_VERIFY_FUND_READY_ACTION: u8 = {CoreAction.verifyFundReady.tag.toNat};"
+  IO.println s!"pub(crate) const CORE_REQUEST_ADMIT_TERMINAL_ACTION: u8 = {CoreAction.admitTerminal.tag.toNat};"
+  IO.println s!"pub(crate) const CORE_REQUEST_CLOSE_FUND_ACTION: u8 = {CoreAction.closeFund.tag.toNat};"
+  IO.println s!"pub(crate) const CORE_REQUEST_TERMINAL_SUCCESS_KIND: u8 = {coreTerminalSuccessKind};"
+  IO.println s!"pub(crate) const CORE_REQUEST_TERMINAL_FAILURE_KIND: u8 = {coreTerminalFailureKind};"
+  IO.println s!"pub(crate) const CORE_REQUEST_CLOSURE_KIND: u8 = {coreClosureKind};"
+  IO.println ""
+  IO.println s!"pub(crate) const CLOSURE_BYTES_VALUE: usize = {closureBytes};"
+  IO.println s!"pub(crate) const CLOSURE_ABI_VERSION: u16 = {closureVersion};"
+  emitRustBytes "pub(crate)" "CLOSURE_MAGIC_BYTES" closureMagic
+  for field in ClosureField.all do
+    IO.println s!"pub(crate) const {ClosureField.rustName field}: usize = {ClosureField.offset field};"
+  IO.println "pub(crate) const CLOSURE_KIND_VALUE: u8 = 1;"
+  IO.println "pub(crate) const CLOSURE_FUNDING_COUNT_VALUE: u32 = 3;"
+  IO.println ""
   IO.println s!"pub(crate) const CERTIFICATE_BYTES_VALUE: usize = {certificateBytes};"
   IO.println "pub(crate) const CERTIFICATE_ABI_VERSION: u16 = 1;"
   emitRustBytes "pub(crate)" "CERTIFICATE_MAGIC_BYTES" certificateMagic
@@ -47,3 +68,7 @@ def main : IO Unit := do
   emitRustBytes "pub(crate)" "REQUEST_EXAMPLE" (encodeRequest exampleRequest)
   IO.println "#[cfg(test)]"
   emitRustBytes "pub(crate)" "FUNDED_REQUEST_EXAMPLE" (encodeFundedRequest exampleFundedRequest)
+  IO.println "#[cfg(test)]"
+  emitRustBytes "pub(crate)" "CORE_REQUEST_EXAMPLE" (encodeCoreRequest exampleCoreRequest)
+  IO.println "#[cfg(test)]"
+  emitRustBytes "pub(crate)" "CLOSURE_EXAMPLE" (encodeClosure exampleClosure)

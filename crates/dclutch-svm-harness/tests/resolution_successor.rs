@@ -40,7 +40,7 @@ use dclutch_resolution_codec::{
     AcceptPythRequestV1, FundedTransitionActionV3, FundedTransitionRequestV3,
     PRIMARY_CERTIFICATE_SEQUENCE_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
     RESOLUTION_CERTIFICATE_BYTES, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V3, ResolutionCertificateKindV1, ResolutionCertificateV1,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V4, ResolutionCertificateKindV1, ResolutionCertificateV1,
 };
 use dclutch_source_contract::{
     CapacityEnvelope, ContentId as SourceContentId, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
@@ -566,7 +566,7 @@ impl Fixture {
         let core_release = artifact(REGISTRY_PROGRAM_ID, [0x71; 32], &registry_elf);
         let resolution_release = artifact(
             RESOLUTION_PROGRAM_ID,
-            RESOLUTION_CONTROLLER_RELEASE_ID_V3,
+            RESOLUTION_CONTROLLER_RELEASE_ID_V4,
             &resolution_elf,
         );
         let release_set = ExecutionReleaseSetV1::new(
@@ -806,7 +806,7 @@ impl Fixture {
         let entries = [
             CapabilityEntryV1::new(
                 core_id([0xd3; 32]),
-                core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V3),
+                core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V4),
                 core_id(recovery_allocation_id),
                 core_id([0xd5; 32]),
                 core_id([0xd6; 32]),
@@ -820,7 +820,7 @@ impl Fixture {
             .expect("recovery funding entry"),
             CapabilityEntryV1::new(
                 core_id([0xd4; 32]),
-                core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V3),
+                core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V4),
                 core_id(exhaust_allocation_id),
                 core_id([0xd5; 32]),
                 core_id([0xd6; 32]),
@@ -834,7 +834,7 @@ impl Fixture {
             .expect("exhaustion funding entry"),
             CapabilityEntryV1::new(
                 core_id([0xd8; 32]),
-                core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V3),
+                core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V4),
                 core_id(material_id),
                 core_id([0xd5; 32]),
                 core_id([0xd6; 32]),

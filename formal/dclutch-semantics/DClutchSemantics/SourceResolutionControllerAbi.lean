@@ -461,6 +461,495 @@ theorem funded_failure_requires_exhaustion_and_product_selector
     plan.sourcePost.phase = .failureCommitted := by
   exact ⟨failure_commit_requires_exhaustion h, failure_commit_uses_product_selector h⟩
 
+/-! ## Canonical Market-Core effect request and Source closure receipt -/
+
+def coreRequestMagic : List UInt8 :=
+  [0x44, 0x43, 0x53, 0x52, 0x43, 0x52, 0x30, 0x31] -- `DCSRCR01`
+
+def coreRequestVersion : Nat := 1
+def coreTerminalSuccessKind : Nat := 1
+def coreTerminalFailureKind : Nat := 4
+def coreClosureKind : Nat := 5
+
+inductive CoreAction where
+  | createFund | verifyFundReady | admitTerminal | closeFund
+  deriving DecidableEq, Repr
+
+/-- Tags intentionally equal the canonical Core envelope action tags. -/
+def CoreAction.tag : CoreAction → UInt8
+  | .createFund => 0
+  | .verifyFundReady => 1
+  | .admitTerminal => 5
+  | .closeFund => 8
+
+def decodeCoreAction : UInt8 → Option CoreAction
+  | 0 => some .createFund
+  | 1 => some .verifyFundReady
+  | 5 => some .admitTerminal
+  | 8 => some .closeFund
+  | _ => none
+
+inductive CoreRequestField where
+  | magic | version | action | receiptKind | reservedHeader
+  | sourceState | sourceMaterial | capabilityManifest
+  | recoveryFunding | exhaustionFunding | failureFunding
+  | receipt | beneficiary
+  | recoveryEntryIndex | exhaustionEntryIndex | failureEntryIndex
+  | reservedBody | receiptSequence
+  deriving DecidableEq, Repr
+
+def coreRequestSchema : List (FieldSpec CoreRequestField) := [
+  ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.action, .u8⟩,
+  ⟨.receiptKind, .u8⟩, ⟨.reservedHeader, .reserved 4⟩,
+  ⟨.sourceState, .bytes 32⟩, ⟨.sourceMaterial, .bytes 32⟩,
+  ⟨.capabilityManifest, .bytes 32⟩,
+  ⟨.recoveryFunding, .bytes 32⟩, ⟨.exhaustionFunding, .bytes 32⟩,
+  ⟨.failureFunding, .bytes 32⟩, ⟨.receipt, .bytes 32⟩,
+  ⟨.beneficiary, .bytes 32⟩,
+  ⟨.recoveryEntryIndex, .u16⟩, ⟨.exhaustionEntryIndex, .u16⟩,
+  ⟨.failureEntryIndex, .u16⟩, ⟨.reservedBody, .reserved 2⟩,
+  ⟨.receiptSequence, .u64⟩
+]
+
+def coreRequestLayout : List (PlacedField CoreRequestField) :=
+  DClutch.AbiSchema.specialize coreRequestSchema
+def coreRequestBytes : Nat := schemaWidth coreRequestSchema
+
+namespace CoreRequestField
+
+def all : List CoreRequestField := [
+  .magic, .version, .action, .receiptKind, .reservedHeader,
+  .sourceState, .sourceMaterial, .capabilityManifest,
+  .recoveryFunding, .exhaustionFunding, .failureFunding, .receipt, .beneficiary,
+  .recoveryEntryIndex, .exhaustionEntryIndex, .failureEntryIndex,
+  .reservedBody, .receiptSequence
+]
+
+def coordinate (field : CoreRequestField) : Nat × Nat :=
+  (coordinate? field coreRequestLayout).getD (0, 0)
+
+def offset (field : CoreRequestField) : Nat := (coordinate field).1
+def width (field : CoreRequestField) : Nat := (coordinate field).2
+
+def rustName : CoreRequestField → String
+  | .magic => "CORE_REQUEST_MAGIC_OFFSET"
+  | .version => "CORE_REQUEST_VERSION_OFFSET"
+  | .action => "CORE_REQUEST_ACTION_OFFSET"
+  | .receiptKind => "CORE_REQUEST_RECEIPT_KIND_OFFSET"
+  | .reservedHeader => "CORE_REQUEST_RESERVED_HEADER_OFFSET"
+  | .sourceState => "CORE_REQUEST_SOURCE_STATE_OFFSET"
+  | .sourceMaterial => "CORE_REQUEST_SOURCE_MATERIAL_OFFSET"
+  | .capabilityManifest => "CORE_REQUEST_CAPABILITY_MANIFEST_OFFSET"
+  | .recoveryFunding => "CORE_REQUEST_RECOVERY_FUNDING_OFFSET"
+  | .exhaustionFunding => "CORE_REQUEST_EXHAUSTION_FUNDING_OFFSET"
+  | .failureFunding => "CORE_REQUEST_FAILURE_FUNDING_OFFSET"
+  | .receipt => "CORE_REQUEST_RECEIPT_OFFSET"
+  | .beneficiary => "CORE_REQUEST_BENEFICIARY_OFFSET"
+  | .recoveryEntryIndex => "CORE_REQUEST_RECOVERY_ENTRY_INDEX_OFFSET"
+  | .exhaustionEntryIndex => "CORE_REQUEST_EXHAUSTION_ENTRY_INDEX_OFFSET"
+  | .failureEntryIndex => "CORE_REQUEST_FAILURE_ENTRY_INDEX_OFFSET"
+  | .reservedBody => "CORE_REQUEST_RESERVED_BODY_OFFSET"
+  | .receiptSequence => "CORE_REQUEST_RECEIPT_SEQUENCE_OFFSET"
+
+theorem all_fields_are_schema_order :
+    coreRequestSchema.map (fun field => field.name) = all := by native_decide
+
+theorem rust_names_are_unique : (all.map rustName).Nodup := by native_decide
+
+end CoreRequestField
+
+theorem core_request_width : coreRequestBytes = 288 := by native_decide
+
+theorem core_request_well_formed : WellFormed coreRequestSchema := by
+  constructor
+  · native_decide
+  · intro field member
+    simp [coreRequestSchema] at member
+    rcases member with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+      rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> decide
+
+theorem core_request_fields_disjoint : coreRequestLayout.Pairwise Before := by
+  exact specializeFrom_pairwise 0 coreRequestSchema
+
+theorem core_request_coordinates_are_canonical :
+    coordinates coreRequestLayout = [
+      (.magic, 0, 8), (.version, 8, 2), (.action, 10, 1),
+      (.receiptKind, 11, 1), (.reservedHeader, 12, 4),
+      (.sourceState, 16, 32), (.sourceMaterial, 48, 32),
+      (.capabilityManifest, 80, 32), (.recoveryFunding, 112, 32),
+      (.exhaustionFunding, 144, 32), (.failureFunding, 176, 32),
+      (.receipt, 208, 32), (.beneficiary, 240, 32),
+      (.recoveryEntryIndex, 272, 2), (.exhaustionEntryIndex, 274, 2),
+      (.failureEntryIndex, 276, 2), (.reservedBody, 278, 2),
+      (.receiptSequence, 280, 8)
+    ] := by native_decide
+
+structure ResolutionRoleRequestV1 where
+  action : CoreAction
+  receiptKind : Nat
+  sourceState : Nat
+  sourceMaterial : Nat
+  capabilityManifest : Nat
+  recoveryFunding : Nat
+  exhaustionFunding : Nat
+  failureFunding : Nat
+  receipt : Nat
+  beneficiary : Nat
+  recoveryEntryIndex : Nat
+  exhaustionEntryIndex : Nat
+  failureEntryIndex : Nat
+  receiptSequence : Nat
+  deriving DecidableEq, Repr
+
+def ResolutionRoleRequestV1.commonValid (request : ResolutionRoleRequestV1) : Bool :=
+  request.sourceState != 0 && request.sourceMaterial != 0 &&
+  request.capabilityManifest != 0 && request.recoveryFunding != 0 &&
+  request.exhaustionFunding != 0 && request.failureFunding != 0 &&
+  request.recoveryFunding != request.exhaustionFunding &&
+  request.recoveryFunding != request.failureFunding &&
+  request.exhaustionFunding != request.failureFunding &&
+  request.recoveryEntryIndex != request.exhaustionEntryIndex &&
+  request.recoveryEntryIndex != request.failureEntryIndex &&
+  request.exhaustionEntryIndex != request.failureEntryIndex
+
+def ResolutionRoleRequestV1.shapeValid (request : ResolutionRoleRequestV1) : Bool :=
+  request.commonValid && match request.action with
+  | .createFund | .verifyFundReady =>
+      request.receipt = 0 && request.receiptKind = 0 &&
+      request.receiptSequence = 0 && request.beneficiary != 0
+  | .admitTerminal =>
+      request.receipt != 0 && request.beneficiary = 0 &&
+      (request.receiptKind = coreTerminalSuccessKind ||
+        request.receiptKind = coreTerminalFailureKind) &&
+      request.receiptSequence != 0
+  | .closeFund =>
+      request.receipt != 0 && request.beneficiary != 0 &&
+      request.receiptKind = coreClosureKind && request.receiptSequence != 0
+
+def encodeCoreRequest (request : ResolutionRoleRequestV1) : List UInt8 :=
+  coreRequestMagic ++ Codec.encodeLE 2 coreRequestVersion ++
+  [request.action.tag, UInt8.ofNat request.receiptKind] ++ List.replicate 4 0 ++
+  Codec.encodeLE 32 request.sourceState ++ Codec.encodeLE 32 request.sourceMaterial ++
+  Codec.encodeLE 32 request.capabilityManifest ++
+  Codec.encodeLE 32 request.recoveryFunding ++
+  Codec.encodeLE 32 request.exhaustionFunding ++
+  Codec.encodeLE 32 request.failureFunding ++ Codec.encodeLE 32 request.receipt ++
+  Codec.encodeLE 32 request.beneficiary ++
+  Codec.encodeLE 2 request.recoveryEntryIndex ++
+  Codec.encodeLE 2 request.exhaustionEntryIndex ++
+  Codec.encodeLE 2 request.failureEntryIndex ++ List.replicate 2 0 ++
+  Codec.encodeLE 8 request.receiptSequence
+
+def decodeCoreRequest (input : List UInt8) : Option ResolutionRoleRequestV1 := do
+  if input.length != coreRequestBytes then none else
+  if input.take (CoreRequestField.offset .version) != coreRequestMagic then none else
+  if Codec.decodeLE ((input.drop (CoreRequestField.offset .version)).take 2) !=
+      coreRequestVersion then none else
+  let action ← decodeCoreAction ((input[CoreRequestField.offset .action]?).getD 0)
+  if (input.drop (CoreRequestField.offset .reservedHeader)).take 4 !=
+      List.replicate 4 0 then none else
+  if (input.drop (CoreRequestField.offset .reservedBody)).take 2 !=
+      List.replicate 2 0 then none else
+  let request : ResolutionRoleRequestV1 := {
+    action
+    receiptKind := (input[CoreRequestField.offset .receiptKind]?).getD 0 |>.toNat
+    sourceState := Codec.decodeLE ((input.drop (CoreRequestField.offset .sourceState)).take 32)
+    sourceMaterial := Codec.decodeLE
+      ((input.drop (CoreRequestField.offset .sourceMaterial)).take 32)
+    capabilityManifest := Codec.decodeLE
+      ((input.drop (CoreRequestField.offset .capabilityManifest)).take 32)
+    recoveryFunding := Codec.decodeLE
+      ((input.drop (CoreRequestField.offset .recoveryFunding)).take 32)
+    exhaustionFunding := Codec.decodeLE
+      ((input.drop (CoreRequestField.offset .exhaustionFunding)).take 32)
+    failureFunding := Codec.decodeLE
+      ((input.drop (CoreRequestField.offset .failureFunding)).take 32)
+    receipt := Codec.decodeLE ((input.drop (CoreRequestField.offset .receipt)).take 32)
+    beneficiary := Codec.decodeLE
+      ((input.drop (CoreRequestField.offset .beneficiary)).take 32)
+    recoveryEntryIndex := Codec.decodeLE
+      ((input.drop (CoreRequestField.offset .recoveryEntryIndex)).take 2)
+    exhaustionEntryIndex := Codec.decodeLE
+      ((input.drop (CoreRequestField.offset .exhaustionEntryIndex)).take 2)
+    failureEntryIndex := Codec.decodeLE
+      ((input.drop (CoreRequestField.offset .failureEntryIndex)).take 2)
+    receiptSequence := Codec.decodeLE
+      ((input.drop (CoreRequestField.offset .receiptSequence)).take 8)
+  }
+  if request.shapeValid then some request else none
+
+def exampleCoreRequest : ResolutionRoleRequestV1 := {
+  action := .closeFund
+  receiptKind := coreClosureKind
+  sourceState := 1
+  sourceMaterial := 2
+  capabilityManifest := 3
+  recoveryFunding := 4
+  exhaustionFunding := 5
+  failureFunding := 6
+  receipt := 7
+  beneficiary := 8
+  recoveryEntryIndex := 0
+  exhaustionEntryIndex := 1
+  failureEntryIndex := 2
+  receiptSequence := 4
+}
+
+theorem encode_core_request_length (request : ResolutionRoleRequestV1) :
+    (encodeCoreRequest request).length = coreRequestBytes := by
+  simp [encodeCoreRequest, coreRequestMagic, coreRequestBytes, coreRequestSchema,
+    Codec.encodeLE_length]
+  native_decide
+
+theorem example_core_request_round_trip :
+    decodeCoreRequest (encodeCoreRequest exampleCoreRequest) = some exampleCoreRequest := by
+  native_decide
+
+theorem hostile_core_request_examples_refuse :
+    decodeCoreRequest [] = none ∧
+    decodeCoreRequest (encodeCoreRequest exampleCoreRequest |>.drop 1) = none ∧
+    decodeCoreRequest (List.set (encodeCoreRequest exampleCoreRequest)
+      (CoreRequestField.offset .action) 0xff) = none ∧
+    decodeCoreRequest (List.set (encodeCoreRequest exampleCoreRequest)
+      (CoreRequestField.offset .reservedBody) 1) = none ∧
+    decodeCoreRequest (encodeCoreRequest ({ exampleCoreRequest with
+      receiptSequence := 0 })) = none := by
+  native_decide
+
+theorem core_actions_partition :
+    CoreAction.createFund ≠ CoreAction.verifyFundReady ∧
+    CoreAction.createFund ≠ CoreAction.admitTerminal ∧
+    CoreAction.createFund ≠ CoreAction.closeFund ∧
+    CoreAction.verifyFundReady ≠ CoreAction.admitTerminal ∧
+    CoreAction.verifyFundReady ≠ CoreAction.closeFund ∧
+    CoreAction.admitTerminal ≠ CoreAction.closeFund := by decide
+
+/-! A closure receipt persists the exact terminal and funding-set digests after
+the Source and three funding accounts are discharged. Core consumes only the
+authenticated receipt coordinate and Resolution acknowledgement; it never
+recomputes action-specific allocation or refund arithmetic. -/
+
+def closureMagic : List UInt8 :=
+  [0x44, 0x43, 0x53, 0x52, 0x43, 0x4c, 0x53, 0x31] -- `DCSRCLS1`
+def closureVersion : Nat := 1
+
+inductive ClosureField where
+  | magic | version | kind | reservedHeader
+  | market | sourceState | sourceMaterial | capabilityManifest
+  | terminalCertificate | receiptAccount | beneficiary
+  | sourceStateDigest | terminalCertificateDigest | fundingSetDigest
+  | generation | terminalSequence | fundingCount | selector
+  | refundLamports | closedAt | reservedBody
+  deriving DecidableEq, Repr
+
+def closureSchema : List (FieldSpec ClosureField) := [
+  ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.kind, .u8⟩,
+  ⟨.reservedHeader, .reserved 5⟩,
+  ⟨.market, .bytes 32⟩, ⟨.sourceState, .bytes 32⟩,
+  ⟨.sourceMaterial, .bytes 32⟩, ⟨.capabilityManifest, .bytes 32⟩,
+  ⟨.terminalCertificate, .bytes 32⟩, ⟨.receiptAccount, .bytes 32⟩,
+  ⟨.beneficiary, .bytes 32⟩, ⟨.sourceStateDigest, .bytes 32⟩,
+  ⟨.terminalCertificateDigest, .bytes 32⟩, ⟨.fundingSetDigest, .bytes 32⟩,
+  ⟨.generation, .u64⟩, ⟨.terminalSequence, .u64⟩,
+  ⟨.fundingCount, .u32⟩, ⟨.selector, .u32⟩,
+  ⟨.refundLamports, .u64⟩, ⟨.closedAt, .u64⟩,
+  ⟨.reservedBody, .reserved 8⟩
+]
+
+def closureLayout : List (PlacedField ClosureField) :=
+  DClutch.AbiSchema.specialize closureSchema
+def closureBytes : Nat := schemaWidth closureSchema
+
+namespace ClosureField
+
+def all : List ClosureField := [
+  .magic, .version, .kind, .reservedHeader, .market, .sourceState,
+  .sourceMaterial, .capabilityManifest, .terminalCertificate, .receiptAccount,
+  .beneficiary, .sourceStateDigest, .terminalCertificateDigest,
+  .fundingSetDigest, .generation, .terminalSequence, .fundingCount, .selector,
+  .refundLamports, .closedAt, .reservedBody
+]
+
+def coordinate (field : ClosureField) : Nat × Nat :=
+  (coordinate? field closureLayout).getD (0, 0)
+def offset (field : ClosureField) : Nat := (coordinate field).1
+
+def rustName : ClosureField → String
+  | .magic => "CLOSURE_MAGIC_OFFSET" | .version => "CLOSURE_VERSION_OFFSET"
+  | .kind => "CLOSURE_KIND_OFFSET" | .reservedHeader => "CLOSURE_RESERVED_HEADER_OFFSET"
+  | .market => "CLOSURE_MARKET_OFFSET" | .sourceState => "CLOSURE_SOURCE_STATE_OFFSET"
+  | .sourceMaterial => "CLOSURE_SOURCE_MATERIAL_OFFSET"
+  | .capabilityManifest => "CLOSURE_CAPABILITY_MANIFEST_OFFSET"
+  | .terminalCertificate => "CLOSURE_TERMINAL_CERTIFICATE_OFFSET"
+  | .receiptAccount => "CLOSURE_RECEIPT_ACCOUNT_OFFSET"
+  | .beneficiary => "CLOSURE_BENEFICIARY_OFFSET"
+  | .sourceStateDigest => "CLOSURE_SOURCE_STATE_DIGEST_OFFSET"
+  | .terminalCertificateDigest => "CLOSURE_TERMINAL_CERTIFICATE_DIGEST_OFFSET"
+  | .fundingSetDigest => "CLOSURE_FUNDING_SET_DIGEST_OFFSET"
+  | .generation => "CLOSURE_GENERATION_OFFSET"
+  | .terminalSequence => "CLOSURE_TERMINAL_SEQUENCE_OFFSET"
+  | .fundingCount => "CLOSURE_FUNDING_COUNT_OFFSET"
+  | .selector => "CLOSURE_SELECTOR_OFFSET"
+  | .refundLamports => "CLOSURE_REFUND_LAMPORTS_OFFSET"
+  | .closedAt => "CLOSURE_CLOSED_AT_OFFSET"
+  | .reservedBody => "CLOSURE_RESERVED_BODY_OFFSET"
+
+theorem all_fields_are_schema_order :
+    closureSchema.map (fun field => field.name) = all := by native_decide
+theorem rust_names_are_unique : (all.map rustName).Nodup := by native_decide
+
+end ClosureField
+
+theorem closure_width : closureBytes = 384 := by native_decide
+theorem closure_fields_disjoint : closureLayout.Pairwise Before := by
+  exact specializeFrom_pairwise 0 closureSchema
+
+structure SourceClosureReceiptV1 where
+  market : Nat
+  sourceState : Nat
+  sourceMaterial : Nat
+  capabilityManifest : Nat
+  terminalCertificate : Nat
+  receiptAccount : Nat
+  beneficiary : Nat
+  sourceStateDigest : Nat
+  terminalCertificateDigest : Nat
+  fundingSetDigest : Nat
+  generation : Nat
+  terminalSequence : Nat
+  selector : Nat
+  refundLamports : Nat
+  closedAt : Nat
+  deriving DecidableEq, Repr
+
+def SourceClosureReceiptV1.shapeValid (receipt : SourceClosureReceiptV1) : Bool :=
+  receipt.market != 0 && receipt.sourceState != 0 && receipt.sourceMaterial != 0 &&
+  receipt.capabilityManifest != 0 && receipt.terminalCertificate != 0 &&
+  receipt.receiptAccount != 0 && receipt.beneficiary != 0 &&
+  receipt.sourceStateDigest != 0 && receipt.terminalCertificateDigest != 0 &&
+  receipt.fundingSetDigest != 0 && receipt.generation != 0 &&
+  receipt.terminalSequence != 0 && receipt.selector < 256 &&
+  receipt.refundLamports != 0 && receipt.closedAt != 0
+
+def encodeClosure (receipt : SourceClosureReceiptV1) : List UInt8 :=
+  closureMagic ++ Codec.encodeLE 2 closureVersion ++ [1] ++ List.replicate 5 0 ++
+  Codec.encodeLE 32 receipt.market ++ Codec.encodeLE 32 receipt.sourceState ++
+  Codec.encodeLE 32 receipt.sourceMaterial ++
+  Codec.encodeLE 32 receipt.capabilityManifest ++
+  Codec.encodeLE 32 receipt.terminalCertificate ++
+  Codec.encodeLE 32 receipt.receiptAccount ++ Codec.encodeLE 32 receipt.beneficiary ++
+  Codec.encodeLE 32 receipt.sourceStateDigest ++
+  Codec.encodeLE 32 receipt.terminalCertificateDigest ++
+  Codec.encodeLE 32 receipt.fundingSetDigest ++ Codec.encodeLE 8 receipt.generation ++
+  Codec.encodeLE 8 receipt.terminalSequence ++ Codec.encodeLE 4 3 ++
+  Codec.encodeLE 4 receipt.selector ++ Codec.encodeLE 8 receipt.refundLamports ++
+  Codec.encodeLE 8 receipt.closedAt ++ List.replicate 8 0
+
+def decodeClosure (input : List UInt8) : Option SourceClosureReceiptV1 := do
+  if input.length != closureBytes then none else
+  if input.take (ClosureField.offset .version) != closureMagic then none else
+  if Codec.decodeLE ((input.drop (ClosureField.offset .version)).take 2) !=
+      closureVersion then none else
+  if input[ClosureField.offset .kind]? != some 1 then none else
+  if (input.drop (ClosureField.offset .reservedHeader)).take 5 !=
+      List.replicate 5 0 then none else
+  if (input.drop (ClosureField.offset .reservedBody)).take 8 !=
+      List.replicate 8 0 then none else
+  if Codec.decodeLE ((input.drop (ClosureField.offset .fundingCount)).take 4) != 3 then none else
+  let receipt : SourceClosureReceiptV1 := {
+    market := Codec.decodeLE ((input.drop (ClosureField.offset .market)).take 32)
+    sourceState := Codec.decodeLE ((input.drop (ClosureField.offset .sourceState)).take 32)
+    sourceMaterial := Codec.decodeLE
+      ((input.drop (ClosureField.offset .sourceMaterial)).take 32)
+    capabilityManifest := Codec.decodeLE
+      ((input.drop (ClosureField.offset .capabilityManifest)).take 32)
+    terminalCertificate := Codec.decodeLE
+      ((input.drop (ClosureField.offset .terminalCertificate)).take 32)
+    receiptAccount := Codec.decodeLE
+      ((input.drop (ClosureField.offset .receiptAccount)).take 32)
+    beneficiary := Codec.decodeLE ((input.drop (ClosureField.offset .beneficiary)).take 32)
+    sourceStateDigest := Codec.decodeLE
+      ((input.drop (ClosureField.offset .sourceStateDigest)).take 32)
+    terminalCertificateDigest := Codec.decodeLE
+      ((input.drop (ClosureField.offset .terminalCertificateDigest)).take 32)
+    fundingSetDigest := Codec.decodeLE
+      ((input.drop (ClosureField.offset .fundingSetDigest)).take 32)
+    generation := Codec.decodeLE ((input.drop (ClosureField.offset .generation)).take 8)
+    terminalSequence := Codec.decodeLE
+      ((input.drop (ClosureField.offset .terminalSequence)).take 8)
+    selector := Codec.decodeLE ((input.drop (ClosureField.offset .selector)).take 4)
+    refundLamports := Codec.decodeLE
+      ((input.drop (ClosureField.offset .refundLamports)).take 8)
+    closedAt := Codec.decodeLE ((input.drop (ClosureField.offset .closedAt)).take 8)
+  }
+  if receipt.shapeValid then some receipt else none
+
+def exampleClosure : SourceClosureReceiptV1 := {
+  market := 1
+  sourceState := 2
+  sourceMaterial := 3
+  capabilityManifest := 4
+  terminalCertificate := 5
+  receiptAccount := 6
+  beneficiary := 7
+  sourceStateDigest := 8
+  terminalCertificateDigest := 9
+  fundingSetDigest := 10
+  generation := 11
+  terminalSequence := 12
+  selector := 2
+  refundLamports := 13
+  closedAt := 14
+}
+
+theorem encode_closure_length (receipt : SourceClosureReceiptV1) :
+    (encodeClosure receipt).length = closureBytes := by
+  simp [encodeClosure, closureMagic, closureBytes, closureSchema, Codec.encodeLE_length]
+  native_decide
+
+theorem example_closure_round_trip :
+    decodeClosure (encodeClosure exampleClosure) = some exampleClosure := by native_decide
+
+theorem hostile_closure_examples_refuse :
+    decodeClosure [] = none ∧
+    decodeClosure (encodeClosure exampleClosure |>.drop 1) = none ∧
+    decodeClosure (List.set (encodeClosure exampleClosure)
+      (ClosureField.offset .fundingCount) 2) = none ∧
+    decodeClosure (List.set (encodeClosure exampleClosure)
+      (ClosureField.offset .reservedBody) 1) = none ∧
+    decodeClosure (encodeClosure ({ exampleClosure with selector := 256 })) = none ∧
+    decodeClosure (encodeClosure ({ exampleClosure with refundLamports := 0 })) = none := by
+  native_decide
+
+structure NativeDischarge where
+  accountRent : Nat
+  semanticRemaining : Nat
+  donation : Nat
+  deriving DecidableEq, Repr
+
+def NativeDischarge.refund (resource : NativeDischarge) : Nat :=
+  resource.accountRent + resource.semanticRemaining + resource.donation
+
+def closureRefund (source recovery exhaustion failure : NativeDischarge) : Nat :=
+  source.refund + recovery.refund + exhaustion.refund + failure.refund
+
+def discharged : NativeDischarge := ⟨0, 0, 0⟩
+
+theorem closure_refund_is_exact_partition
+    (source recovery exhaustion failure : NativeDischarge) :
+    closureRefund source recovery exhaustion failure =
+      source.accountRent + source.semanticRemaining + source.donation +
+      (recovery.accountRent + recovery.semanticRemaining + recovery.donation) +
+      (exhaustion.accountRent + exhaustion.semanticRemaining + exhaustion.donation) +
+      (failure.accountRent + failure.semanticRemaining + failure.donation) := by
+  simp [closureRefund, NativeDischarge.refund, Nat.add_assoc]
+
+theorem closure_post_resources_are_discharged :
+    [discharged, discharged, discharged, discharged].all
+      (fun resource => resource.accountRent = 0 &&
+        resource.semanticRemaining = 0 && resource.donation = 0) = true := by
+  native_decide
+
 def certificateFields : List CertificateField := [
   .magic, .version, .kind, .reservedHeader, .market, .route,
   .sourceMaterial, .product, .providerEvidence, .fundingAllocation,
