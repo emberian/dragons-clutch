@@ -35,7 +35,7 @@ const EXECUTION_RELEASE_SET_SCHEMA = Uint8Array.from([
   0x8b, 0xa3, 0xbc, 0x19, 0x7f, 0xea, 0xa1, 0x87, 0xa0, 0xa3, 0x92, 0x7b, 0x16, 0xb2, 0x5d, 0x83,
   0x79, 0x2c, 0x5f, 0x33, 0x5a, 0xf2, 0x43, 0x39, 0xa5, 0x4c, 0x38, 0xcc, 0x07, 0x23, 0x03, 0x58,
 ]);
-const ARTIFACT_RELEASE_SCHEMA = Uint8Array.from([
+export const ARTIFACT_RELEASE_SCHEMA_ID_V1 = Uint8Array.from([
   0xae, 0x19, 0xa6, 0x0d, 0xb5, 0x50, 0xb1, 0xa8, 0xa5, 0x1d, 0x46, 0x18, 0xc7, 0x7d, 0xea, 0x54,
   0x21, 0x17, 0x4a, 0x2a, 0x85, 0x5e, 0xe6, 0x77, 0x89, 0x4f, 0xa9, 0x1b, 0x3c, 0xfd, 0x3b, 0x6c,
 ]);
@@ -272,6 +272,11 @@ function recordPdas(registry: PublicKey, schema: Uint8Array, digest: Uint8Array)
   });
 }
 
+export function deriveFinalizedRecordAddressesV1(registryProgram: string, schema: Uint8Array, digest: Uint8Array): Readonly<{ record: string; staging: string }> {
+  if (schema.length !== 32 || digest.length !== 32 || isZero(schema) || isZero(digest)) throw new Error('finalized record schema and digest must be nonzero 32-byte identities');
+  return recordPdas(key(registryProgram, 'Registry program'), schema, digest);
+}
+
 function expectedCacheBytes(evidence: CheckedMultiprogramV1): Uint8Array {
   const output = new Uint8Array(ACTIVATION_CACHE_BYTES); output.set(new TextEncoder().encode('DCLTACT1'));
   const view = new DataView(output.buffer); view.setUint16(8, 1, true); view.setUint16(10, 1, true);
@@ -317,6 +322,11 @@ async function authenticateDeployment(program: RpcAccount, programAddress: strin
     if (hex(await sha256(program.data)) !== checked.programDigest || hex(await sha256(programData.data)) !== checked.programDataDigest) throw new Error(`${programAddress} current Loader account digest differs from its complete checked release`);
   }
   return elf.length;
+}
+
+export async function authenticateArtifactDeploymentV1(program: RpcAccount, programAddress: string, programData: RpcAccount, programDataAddress: string, artifact: ArtifactReleaseV1): Promise<Readonly<{ elfBytes: number; elfDigest: string }>> {
+  const elfBytes = await authenticateDeployment(program, programAddress, programData, programDataAddress, artifact);
+  return Object.freeze({ elfBytes, elfDigest: artifact.elfDigest });
 }
 
 function accountMap(observations: Awaited<ReturnType<RegistryRpc['multipleAccounts']>>): ReadonlyMap<string, RpcAccount | null> {
@@ -378,7 +388,7 @@ export async function prepareRegistryActivation(client: RegistryRpc, input: Read
   if (evidence.releaseSet.roles.core.program !== input.registryProgram) throw new Error('release set Core program is not the selected Registry program');
   const releaseDigest = await sha256(evidence.releaseSet.bytes); const releasePdas = recordPdas(registry, EXECUTION_RELEASE_SET_SCHEMA, releaseDigest);
   const roleAddresses = await Promise.all(REGISTRY_ROLES.map(async (role): Promise<RegistryRoleAddressesV1> => {
-    const artifact = evidence.artifacts[role]; const digest = await sha256(artifact.bytes); const pdas = recordPdas(registry, ARTIFACT_RELEASE_SCHEMA, digest);
+    const artifact = evidence.artifacts[role]; const digest = await sha256(artifact.bytes); const pdas = recordPdas(registry, ARTIFACT_RELEASE_SCHEMA_ID_V1, digest);
     return Object.freeze({ ...pdas, program: artifact.program, programData: artifact.programData });
   }));
   const roles = Object.freeze(roleRecord(roleAddresses)); const cache = PublicKey.findProgramAddressSync([ACTIVATION_SEED, releaseDigest], registry)[0].toBase58();

@@ -35,6 +35,7 @@ export default function TradingPreview() {
           <Link href="/direct">Direct</Link>
           <a href="#positions">Portfolio</a>
           <Link href="/liquidity">Liquidity</Link>
+          <Link href="/product-v2">Product V2</Link>
           <Link href="/release">Release</Link>
           <Link href="/explorer">Explorer</Link>
         </nav>
