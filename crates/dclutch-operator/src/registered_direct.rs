@@ -4,34 +4,48 @@
 //! codec-owned registered state, rederive every controller-owned address, and
 //! emit unsigned instructions. They never read RPC, sign, or submit.
 
-use crate::{Finality, Observation, ObservedAccount};
+use crate::{Finality, Observation, ObservedAccount, versioned::PACKET_DATA_BYTES};
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1,
 };
 use dclutch_core_contract::{MARKET_ROOT_BYTES, MarketRoot, Phase};
 use dclutch_direct_codec::{
+    CompactIntentV1, REGISTERED_INTENT_STATE_BYTES, RegisteredCreateInstructionV1,
     RegisteredFillInstructionV1, RegisteredIntentStateV1, RegisteredTerminalAction,
     RegisteredTerminalInstructionV1,
 };
 use dclutch_direct_contract::{
-    DIRECT_CAPABILITY_KIND_ID_V2, VENUE_FEE_POLICY_BYTES_V3, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3,
-    VenueFeePolicyV3,
+    DIRECT_CAPABILITY_KIND_ID_V2, FEE_BASIS_POINTS_DENOMINATOR, PRICE_SCALE,
+    VENUE_FEE_POLICY_BYTES_V3, VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3, VenueFeePolicyV3,
 };
 use dclutch_market_contract::market::{MARKET_ROOT_OFFSET, decode_market_outcome_count};
-use dclutch_realm_contract::{REALM_PDA_DOMAIN, RealmV1};
+use dclutch_realm_contract::{
+    FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_PDA_DOMAIN, RealmV1,
+};
 use dclutch_record_contract::RAW_RECORD_PDA_SEED_V1;
+use dclutch_token_svm::{
+    COption, ExactTransferProfileV1, LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES,
+};
+use solana_hash::Hash;
+use solana_message::{VersionedMessage, v0};
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
+use solana_sdk_ids::system_program;
+use spl_token_2022_interface::instruction::approve;
 
 use crate::compiled_direct::{
-    CLAIM_PROGRAM_ID, CONTROLLER_SEED, CUSTODY_PROGRAM_ID, MARKET_SEED, POSITION_SEED,
+    CLAIM_PROGRAM_ID, CONTROLLER_SEED, CUSTODY_PROGRAM_ID, MARKET_SEED, POSITION_SEED, REPLAY_SEED,
 };
 
 /// Registered-intent PDA domain committed by the controller release.
 pub const REGISTERED_SEED: &[u8] = b"dclutch/direct-registered/v1";
+/// Exact account count for one signed registered-intent creation.
+pub const REGISTERED_CREATE_ACCOUNT_COUNT: usize = 15;
+/// Exact instruction count for one prepaid buyer registration transaction.
+pub const REGISTERED_CREATE_INSTRUCTION_COUNT: usize = 2;
 /// Exact account count for a registered residual fill.
 pub const REGISTERED_FILL_ACCOUNT_COUNT: usize = 17;
 /// Exact account count for a maker-authorized registered cancellation.
@@ -39,11 +53,25 @@ pub const REGISTERED_CANCEL_ACCOUNT_COUNT: usize = 4;
 /// Exact account count for a permissionless registered expiry.
 pub const REGISTERED_EXPIRY_ACCOUNT_COUNT: usize = 3;
 
+const REPLAY_STATE_BYTES: usize = 48;
+const REPLAY_STATE_MAGIC: &[u8; 8] = b"DCRP\x01\0\0\0";
+
 #[derive(Clone, Copy)]
 struct AuthorityFacts {
     generation: u64,
     outcome_count: u8,
     fee_basis_points: u16,
+}
+
+#[derive(Clone, Copy)]
+struct AuthorityAccounts<'a> {
+    market: &'a ObservedAccount,
+    realm: &'a ObservedAccount,
+    fee_policy: &'a ObservedAccount,
+    capability_manifest: &'a ObservedAccount,
+    mint: &'a ObservedAccount,
+    fee_destination: &'a ObservedAccount,
+    token_program: &'a ObservedAccount,
 }
 
 /// Same-finalized chain state required for one registered residual fill.
@@ -96,6 +124,45 @@ pub struct RegisteredDirectTerminalState {
     pub claim_program: ObservedAccount,
 }
 
+/// Same-finalized chain state required to create one prepaid buyer intent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegisteredDirectCreationState {
+    /// Executable controller program selected for this experimental route.
+    pub controller_program: ObservedAccount,
+    /// Global controller PDA observation.
+    pub controller: ObservedAccount,
+    /// Maker account which must sign both the approval and registration.
+    pub maker: ObservedAccount,
+    /// System-owned sponsor paying the exact missing PDA rent.
+    pub payer: ObservedAccount,
+    /// Maker/Market/generation global replay-root observation.
+    pub replay: ObservedAccount,
+    /// Vacant exact maker/Market/generation/nonce registration PDA.
+    pub registration: ObservedAccount,
+    /// Pinned executable claim child.
+    pub claim_program: ObservedAccount,
+    /// Pinned executable System Program.
+    pub system_program: ObservedAccount,
+    /// Canonical active Market selected by the intent.
+    pub market: ObservedAccount,
+    /// Immutable Realm selected by the Market identity.
+    pub realm: ObservedAccount,
+    /// Finalized venue fee policy selected by Direct.
+    pub fee_policy: ObservedAccount,
+    /// Finalized capability manifest selected by the Market identity.
+    pub capability_manifest: ObservedAccount,
+    /// Realm-selected collateral mint.
+    pub mint: ObservedAccount,
+    /// Maker-owned buyer collateral source approved atomically.
+    pub collateral: ObservedAccount,
+    /// Policy-selected fee destination.
+    pub fee_destination: ObservedAccount,
+    /// Realm-selected executable legacy SPL Token program.
+    pub token_program: ObservedAccount,
+    /// Canonical finalized Rent sysvar used for exact PDA top-up sizing.
+    pub rent_sysvar: ObservedAccount,
+}
+
 /// Chain-derived registered residual-fill instruction.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RegisteredDirectFillReport {
@@ -126,6 +193,38 @@ pub struct RegisteredDirectTerminalReport {
     pub expected_sequence: u64,
 }
 
+/// Chain-derived atomic approval and registered-intent creation route.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegisteredDirectCreationReport {
+    /// Exact legacy SPL Token approval followed by the controller instruction.
+    pub instructions: [Instruction; REGISTERED_CREATE_INSTRUCTION_COUNT],
+    /// Shared finalized observation selecting every hostile input account.
+    pub observation: Observation,
+    /// Derived global controller PDA.
+    pub controller: Pubkey,
+    /// Derived maker/Market/generation replay-root PDA.
+    pub replay: Pubkey,
+    /// Derived maker/Market/generation/nonce registration PDA.
+    pub registration: Pubkey,
+    /// Exact chain-derived nonce embedded in the request.
+    pub nonce: u64,
+    /// Exact allowance installed by the approval instruction.
+    pub delegated_amount: u64,
+    /// Exact missing replay-plus-registration rent paid by the sponsor.
+    pub rent_debit_lamports: u64,
+}
+
+/// Exact unsigned v0 message and its fully signed packet geometry.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegisteredDirectCreationPacket {
+    /// Unsigned v0 message containing the atomic creation pair.
+    pub message: VersionedMessage,
+    /// Exact number of transaction signature slots selected by account aliases.
+    pub required_signatures: u8,
+    /// Serialized transaction bytes after all signature slots are populated.
+    pub wire_bytes: usize,
+}
+
 /// Refusal from hostile registered Direct state or frame derivation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -149,8 +248,187 @@ pub enum Error {
     FillWindowClosed,
     /// Permissionless expiry was requested before the signed window elapsed.
     ExpiryTooEarly,
+    /// Replay-root bytes or their next nonce were invalid.
+    InvalidReplay,
+    /// The requested registration was not the exact funded buyer profile.
+    InvalidCreationIntent,
+    /// Mint, collateral, fee account, or delegation authority was invalid.
+    InvalidToken,
+    /// The exact creation transaction exceeded the Solana packet limit.
+    PacketTooLarge,
+    /// The finalized Rent sysvar was malformed.
+    InvalidRent,
+    /// The payer could not cover the exact missing account rent.
+    InsufficientPayer,
     /// A codec-owned request could not be encoded.
     Encoding,
+}
+
+/// Build, but never sign or submit, one exact prepaid buyer registration.
+///
+/// The first instruction is the official legacy SPL Token `Approve`, granting
+/// the derived registration PDA exactly the worst-case cumulative buyer debit
+/// at the signed limit and fee rate. The second is the codec-owned 15-account
+/// controller request. Both must remain in one
+/// atomic transaction: creation authenticates the delegation produced by the
+/// immediately preceding approval before installing reusable intent state.
+pub fn build_registered_direct_creation(
+    controller_program: Pubkey,
+    state: &RegisteredDirectCreationState,
+    intent: CompactIntentV1,
+) -> Result<RegisteredDirectCreationReport, Error> {
+    let observation = creation_observation(state)?;
+    validate_creation_accounts(controller_program, state)?;
+    let authority = authenticate_creation_authority(state)?;
+    let rent =
+        crate::foundation::decode_rent(&state.rent_sysvar).map_err(|_| Error::InvalidRent)?;
+    let (controller, controller_bump) =
+        Pubkey::find_program_address(&[CONTROLLER_SEED], &controller_program);
+    if state.controller.key != controller {
+        return Err(Error::PdaMismatch);
+    }
+    let nonce = replay_nonce(&state.replay, controller)?;
+    if intent.side != 1
+        || intent.lifecycle != 2
+        || intent.market != state.market.key.to_bytes()
+        || intent.generation != authority.generation
+        || intent.nonce != nonce
+        || intent.valid_from > intent.valid_through
+        || observation.slot > intent.valid_through
+        || intent.maximum_fill == 0
+        || intent.limit_price > PRICE_SCALE
+        || u64::from(intent.fee_basis_points) > FEE_BASIS_POINTS_DENOMINATOR
+        || intent.outcome >= authority.outcome_count
+        || intent.fee_basis_points != authority.fee_basis_points
+        || intent.collateral_account != state.collateral.key.to_bytes()
+    {
+        return Err(Error::InvalidCreationIntent);
+    }
+    let delegated_amount = registered_buyer_reserve(intent)?;
+    let replay_rent_debit = if state.replay.owner == system_program::ID {
+        rent.minimum_balance(REPLAY_STATE_BYTES)
+            .saturating_sub(state.replay.lamports)
+    } else {
+        0
+    };
+    let registration_rent_debit = rent
+        .minimum_balance(REGISTERED_INTENT_STATE_BYTES)
+        .saturating_sub(state.registration.lamports);
+    let rent_debit_lamports = replay_rent_debit
+        .checked_add(registration_rent_debit)
+        .ok_or(Error::InvalidRent)?;
+    if state.payer.lamports < rent_debit_lamports {
+        return Err(Error::InsufficientPayer);
+    }
+
+    let generation = authority.generation.to_le_bytes();
+    let nonce_seed = nonce.to_le_bytes();
+    let (replay, replay_bump) = Pubkey::find_program_address(
+        &[
+            REPLAY_SEED,
+            state.market.key.as_ref(),
+            &generation,
+            state.maker.key.as_ref(),
+        ],
+        &controller_program,
+    );
+    let (registration, registration_bump) = Pubkey::find_program_address(
+        &[
+            REGISTERED_SEED,
+            state.market.key.as_ref(),
+            &generation,
+            state.maker.key.as_ref(),
+            &nonce_seed,
+        ],
+        &controller_program,
+    );
+    if state.replay.key != replay || state.registration.key != registration {
+        return Err(Error::PdaMismatch);
+    }
+    validate_creation_tokens(state, delegated_amount, registration)?;
+
+    let approval = approve(
+        &state.token_program.key,
+        &state.collateral.key,
+        &registration,
+        &state.maker.key,
+        &[],
+        delegated_amount,
+    )
+    .map_err(|_| Error::Encoding)?;
+    let data = RegisteredCreateInstructionV1 {
+        controller_bump,
+        replay_bump,
+        registration_bump,
+        intent,
+    }
+    .encode()
+    .map_err(|_| Error::Encoding)?;
+    let accounts = vec![
+        AccountMeta::new_readonly(controller, false),
+        AccountMeta::new_readonly(state.maker.key, true),
+        AccountMeta::new(state.payer.key, true),
+        AccountMeta::new(replay, false),
+        AccountMeta::new(registration, false),
+        AccountMeta::new_readonly(CLAIM_PROGRAM_ID, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+        AccountMeta::new_readonly(state.market.key, false),
+        AccountMeta::new_readonly(state.realm.key, false),
+        AccountMeta::new_readonly(state.fee_policy.key, false),
+        AccountMeta::new_readonly(state.capability_manifest.key, false),
+        AccountMeta::new_readonly(state.mint.key, false),
+        AccountMeta::new_readonly(state.collateral.key, false),
+        AccountMeta::new_readonly(state.fee_destination.key, false),
+        AccountMeta::new_readonly(state.token_program.key, false),
+    ];
+    debug_assert_eq!(accounts.len(), REGISTERED_CREATE_ACCOUNT_COUNT);
+    Ok(RegisteredDirectCreationReport {
+        instructions: [
+            approval,
+            Instruction {
+                program_id: controller_program,
+                accounts,
+                data: data.to_vec(),
+            },
+        ],
+        observation,
+        controller,
+        replay,
+        registration,
+        nonce,
+        delegated_amount,
+        rent_debit_lamports,
+    })
+}
+
+/// Compile the exact creation pair into a v0 message and measure its
+/// fully signed wire size against Solana's 1,232-byte packet limit.
+pub fn compile_registered_direct_creation_packet(
+    report: &RegisteredDirectCreationReport,
+    recent_blockhash: Hash,
+) -> Result<RegisteredDirectCreationPacket, Error> {
+    let payer = report.instructions[1]
+        .accounts
+        .get(2)
+        .map(|meta| meta.pubkey)
+        .ok_or(Error::Encoding)?;
+    let message = v0::Message::try_compile(&payer, &report.instructions, &[], recent_blockhash)
+        .map_err(|_| Error::Encoding)?;
+    let required_signatures = message.header.num_required_signatures;
+    let message = VersionedMessage::V0(message);
+    let signature_count = usize::from(required_signatures);
+    let wire_bytes = short_vec_prefix_bytes(signature_count)
+        .checked_add(signature_count.checked_mul(64).ok_or(Error::Encoding)?)
+        .and_then(|value| value.checked_add(message.serialize().len()))
+        .ok_or(Error::Encoding)?;
+    if wire_bytes > PACKET_DATA_BYTES {
+        return Err(Error::PacketTooLarge);
+    }
+    Ok(RegisteredDirectCreationPacket {
+        message,
+        required_signatures,
+        wire_bytes,
+    })
 }
 
 /// Build one exact registered residual-fill controller instruction.
@@ -166,7 +444,15 @@ pub fn build_registered_direct_fill(
 ) -> Result<RegisteredDirectFillReport, Error> {
     let observation = fill_observation(state)?;
     validate_fill_accounts(controller_program, state)?;
-    let authority = authenticate_authority(state)?;
+    let authority = authenticate_authority(AuthorityAccounts {
+        market: &state.market,
+        realm: &state.realm,
+        fee_policy: &state.fee_policy,
+        capability_manifest: &state.capability_manifest,
+        mint: &state.mint,
+        fee_destination: &state.fee_destination,
+        token_program: &state.token_program,
+    })?;
     let (controller, controller_bump) =
         Pubkey::find_program_address(&[CONTROLLER_SEED], &controller_program);
     if state.controller.key != controller {
@@ -358,6 +644,221 @@ fn build_terminal(
         maker,
         expected_sequence,
     })
+}
+
+fn creation_observation(state: &RegisteredDirectCreationState) -> Result<Observation, Error> {
+    same_observation(&[
+        &state.controller,
+        &state.controller_program,
+        &state.maker,
+        &state.payer,
+        &state.replay,
+        &state.registration,
+        &state.claim_program,
+        &state.system_program,
+        &state.market,
+        &state.realm,
+        &state.fee_policy,
+        &state.capability_manifest,
+        &state.mint,
+        &state.collateral,
+        &state.fee_destination,
+        &state.token_program,
+        &state.rent_sysvar,
+    ])
+}
+
+fn validate_creation_accounts(
+    controller_program: Pubkey,
+    state: &RegisteredDirectCreationState,
+) -> Result<(), Error> {
+    require_distinct(&[
+        state.controller_program.key,
+        state.controller.key,
+        state.replay.key,
+        state.registration.key,
+        state.claim_program.key,
+        state.system_program.key,
+        state.market.key,
+        state.realm.key,
+        state.fee_policy.key,
+        state.capability_manifest.key,
+        state.mint.key,
+        state.collateral.key,
+        state.fee_destination.key,
+        state.token_program.key,
+    ])?;
+    let fixed = [
+        state.controller_program.key,
+        state.controller.key,
+        state.replay.key,
+        state.registration.key,
+        state.claim_program.key,
+        state.system_program.key,
+        state.market.key,
+        state.realm.key,
+        state.fee_policy.key,
+        state.capability_manifest.key,
+        state.mint.key,
+        state.collateral.key,
+        state.fee_destination.key,
+        state.token_program.key,
+    ];
+    if state.controller_program.key != controller_program
+        || !state.controller_program.executable
+        || state.maker.key == Pubkey::default()
+        || state.payer.key == Pubkey::default()
+        || fixed
+            .iter()
+            .any(|key| *key == state.maker.key || *key == state.payer.key)
+        || (state.maker.key == state.payer.key && state.maker != state.payer)
+        || state.controller.executable
+        || state.maker.executable
+        || state.payer.owner != system_program::ID
+        || state.payer.executable
+        || !state.payer.data.is_empty()
+        || state.replay.executable
+        || state.registration.owner != system_program::ID
+        || state.registration.executable
+        || !state.registration.data.is_empty()
+        || state.claim_program.key != CLAIM_PROGRAM_ID
+        || !state.claim_program.executable
+        || state.system_program.key != system_program::ID
+        || !state.system_program.executable
+        || state.market.executable
+        || state.realm.owner != state.market.owner
+        || state.realm.executable
+        || state.fee_policy.owner != state.market.owner
+        || state.fee_policy.executable
+        || state.capability_manifest.owner != state.market.owner
+        || state.capability_manifest.executable
+        || state.token_program.key.to_bytes() != LEGACY_TOKEN_PROGRAM_ID
+        || !state.token_program.executable
+        || state.mint.owner != state.token_program.key
+        || state.mint.executable
+        || state.collateral.owner != state.token_program.key
+        || state.collateral.executable
+        || state.fee_destination.owner != state.token_program.key
+        || state.fee_destination.executable
+    {
+        return Err(Error::InvalidAccount);
+    }
+    let replay_shape = (state.replay.owner == system_program::ID && state.replay.data.is_empty())
+        || (state.replay.owner == CLAIM_PROGRAM_ID
+            && state.replay.data.len() == REPLAY_STATE_BYTES);
+    if !replay_shape {
+        return Err(Error::InvalidReplay);
+    }
+    Ok(())
+}
+
+fn authenticate_creation_authority(
+    state: &RegisteredDirectCreationState,
+) -> Result<AuthorityFacts, Error> {
+    let authority = authenticate_authority(AuthorityAccounts {
+        market: &state.market,
+        realm: &state.realm,
+        fee_policy: &state.fee_policy,
+        capability_manifest: &state.capability_manifest,
+        mint: &state.mint,
+        fee_destination: &state.fee_destination,
+        token_program: &state.token_program,
+    })?;
+    let realm = RealmV1::decode(&state.realm.data).map_err(|_| Error::InvalidAuthority)?;
+    let release = PRODUCTION_ADAPTER_RELEASES
+        .into_iter()
+        .find(|candidate| {
+            hash(&candidate.to_bytes()).to_bytes() == *realm.collateral_adapter_release_id()
+        })
+        .ok_or(Error::InvalidAuthority)?;
+    if release.token_program() != LEGACY_TOKEN_PROGRAM_ID
+        || release.profile() != ExactTransferProfileV1::LegacyExactTransferV1
+    {
+        return Err(Error::InvalidAuthority);
+    }
+    let mint = release
+        .profile()
+        .check_mint(LEGACY_TOKEN_PROGRAM_ID, &state.mint.data)
+        .map_err(|_| Error::InvalidToken)?;
+    if (realm.mint_authority_policy() == MintAuthorityPolicy::RequireAbsent
+        && mint.mint_authority != COption::None)
+        || (realm.freeze_authority_policy() == FreezeAuthorityPolicy::RequireAbsent
+            && mint.freeze_authority != COption::None)
+    {
+        return Err(Error::InvalidToken);
+    }
+    Ok(authority)
+}
+
+fn replay_nonce(replay: &ObservedAccount, controller: Pubkey) -> Result<u64, Error> {
+    if replay.owner == system_program::ID && replay.data.is_empty() {
+        return Ok(0);
+    }
+    if replay.owner != CLAIM_PROGRAM_ID
+        || replay.data.len() != REPLAY_STATE_BYTES
+        || replay.data.get(..8) != Some(REPLAY_STATE_MAGIC.as_slice())
+        || replay.data.get(8..40) != Some(controller.as_ref())
+    {
+        return Err(Error::InvalidReplay);
+    }
+    let nonce = u64::from_le_bytes(
+        replay
+            .data
+            .get(40..48)
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or(Error::InvalidReplay)?,
+    );
+    nonce.checked_add(1).ok_or(Error::InvalidReplay)?;
+    Ok(nonce)
+}
+
+fn registered_buyer_reserve(intent: CompactIntentV1) -> Result<u64, Error> {
+    let gross = u64::try_from(
+        u128::from(intent.maximum_fill)
+            .checked_mul(u128::from(intent.limit_price))
+            .ok_or(Error::InvalidCreationIntent)?
+            / u128::from(PRICE_SCALE),
+    )
+    .map_err(|_| Error::InvalidCreationIntent)?;
+    let fee = u64::try_from(
+        u128::from(gross)
+            .checked_mul(u128::from(intent.fee_basis_points))
+            .ok_or(Error::InvalidCreationIntent)?
+            / u128::from(FEE_BASIS_POINTS_DENOMINATOR),
+    )
+    .map_err(|_| Error::InvalidCreationIntent)?;
+    let reserve = gross.checked_add(fee).ok_or(Error::InvalidCreationIntent)?;
+    if reserve == 0 {
+        return Err(Error::InvalidCreationIntent);
+    }
+    Ok(reserve)
+}
+
+fn validate_creation_tokens(
+    state: &RegisteredDirectCreationState,
+    delegated_amount: u64,
+    registration: Pubkey,
+) -> Result<(), Error> {
+    let exact = ExactTransferProfileV1::LegacyExactTransferV1;
+    exact
+        .check_mint(LEGACY_TOKEN_PROGRAM_ID, &state.mint.data)
+        .map_err(|_| Error::InvalidToken)?;
+    let collateral = exact
+        .check_transfer_account(LEGACY_TOKEN_PROGRAM_ID, &state.collateral.data)
+        .map_err(|_| Error::InvalidToken)?;
+    let venue = exact
+        .check_transfer_account(LEGACY_TOKEN_PROGRAM_ID, &state.fee_destination.data)
+        .map_err(|_| Error::InvalidToken)?;
+    if collateral.mint != state.mint.key.to_bytes()
+        || venue.mint != state.mint.key.to_bytes()
+        || collateral.owner != state.maker.key.to_bytes()
+        || collateral.amount < delegated_amount
+        || (collateral.delegate == COption::None && collateral.delegated_amount != 0)
+        || registration == state.maker.key
+    {
+        return Err(Error::InvalidToken);
+    }
+    Ok(())
 }
 
 fn fill_observation(state: &RegisteredDirectFillState) -> Result<Observation, Error> {
@@ -580,7 +1081,7 @@ fn position_address(
     ))
 }
 
-fn authenticate_authority(state: &RegisteredDirectFillState) -> Result<AuthorityFacts, Error> {
+fn authenticate_authority(state: AuthorityAccounts<'_>) -> Result<AuthorityFacts, Error> {
     let protocol_program = state.market.owner;
     let outcome_count =
         decode_market_outcome_count(&state.market.data).map_err(|_| Error::InvalidAuthority)?;
@@ -708,8 +1209,19 @@ fn raw_record_address(
     .0
 }
 
+fn short_vec_prefix_bytes(mut value: usize) -> usize {
+    let mut bytes = 1_usize;
+    while value >= 0x80 {
+        value >>= 7;
+        bytes = bytes.saturating_add(1);
+    }
+    bytes
+}
+
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
+
     use super::*;
     use dclutch_capability_contract::{
         CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1, ContentId,
@@ -722,8 +1234,12 @@ mod tests {
     };
     use dclutch_market_contract::market::{CategoricalMarketV1, CategoricalSettlementSummaryV1};
     use dclutch_realm_contract::{FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1Input};
-    use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
+    use dclutch_token_svm::{
+        ACCOUNT_BYTES, LEGACY_TOKEN_PROGRAM_ID, MINT_BYTES, PRODUCTION_ADAPTER_RELEASES,
+    };
+    use solana_program::{account_info::AccountInfo, rent::Rent, sysvar::SysvarSerialize};
     use solana_sdk_ids::{native_loader, system_program};
+    use spl_token_2022_interface::instruction::TokenInstruction;
 
     const GENERATION: u64 = 3;
     const SELLER_NONCE: u64 = 4;
@@ -809,6 +1325,55 @@ mod tests {
         .encode()
         .expect("registered state")
         .to_vec()
+    }
+
+    fn mint_bytes() -> Vec<u8> {
+        let mut bytes = vec![0_u8; MINT_BYTES];
+        bytes[36..44].copy_from_slice(&10_000_u64.to_le_bytes());
+        bytes[44] = 6;
+        bytes[45] = 1;
+        bytes
+    }
+
+    fn token_account_bytes(mint: Pubkey, owner: Pubkey, amount: u64) -> Vec<u8> {
+        let mut bytes = vec![0_u8; ACCOUNT_BYTES];
+        bytes[..32].copy_from_slice(mint.as_ref());
+        bytes[32..64].copy_from_slice(owner.as_ref());
+        bytes[64..72].copy_from_slice(&amount.to_le_bytes());
+        bytes[108] = 1;
+        bytes
+    }
+
+    fn replay_bytes(controller: Pubkey, nonce: u64) -> Vec<u8> {
+        let mut bytes = vec![0_u8; REPLAY_STATE_BYTES];
+        bytes[..8].copy_from_slice(REPLAY_STATE_MAGIC);
+        bytes[8..40].copy_from_slice(controller.as_ref());
+        bytes[40..48].copy_from_slice(&nonce.to_le_bytes());
+        bytes
+    }
+
+    fn rent_account(observation: Observation) -> ObservedAccount {
+        let rent = Rent::default();
+        let mut data = vec![0_u8; Rent::size_of()];
+        let mut lamports = 1_u64;
+        let mut info = AccountInfo::new(
+            &solana_sdk_ids::sysvar::rent::ID,
+            false,
+            false,
+            &mut lamports,
+            &mut data,
+            &solana_sdk_ids::sysvar::ID,
+            false,
+        );
+        rent.to_account_info(&mut info).expect("serialize Rent");
+        drop(info);
+        observed(
+            observation,
+            solana_sdk_ids::sysvar::rent::ID,
+            solana_sdk_ids::sysvar::ID,
+            false,
+            data,
+        )
     }
 
     fn fixture() -> (Pubkey, RegisteredDirectFillState) {
@@ -1005,6 +1570,107 @@ mod tests {
         )
     }
 
+    fn creation_fixture() -> (Pubkey, RegisteredDirectCreationState, CompactIntentV1) {
+        let (controller_program, fill) = fixture();
+        let snapshot = fill.market.observation;
+        let maker = key(2);
+        let payer = key(77);
+        let generation = GENERATION.to_le_bytes();
+        let nonce = 0_u64.to_le_bytes();
+        let (replay, _) = Pubkey::find_program_address(
+            &[
+                REPLAY_SEED,
+                fill.market.key.as_ref(),
+                &generation,
+                maker.as_ref(),
+            ],
+            &controller_program,
+        );
+        let (registration, _) = Pubkey::find_program_address(
+            &[
+                REGISTERED_SEED,
+                fill.market.key.as_ref(),
+                &generation,
+                maker.as_ref(),
+                &nonce,
+            ],
+            &controller_program,
+        );
+        let mut mint = fill.mint.clone();
+        mint.data = mint_bytes();
+        let mut collateral = fill.buyer_source.clone();
+        collateral.data = token_account_bytes(mint.key, maker, 5_000);
+        let mut fee_destination = fill.fee_destination.clone();
+        fee_destination.data = token_account_bytes(mint.key, key(78), 10);
+        let intent = direct_intent(fill.market.key, collateral.key, 1, 0);
+        let mut payer_account = observed(snapshot, payer, system_program::ID, false, Vec::new());
+        payer_account.lamports = 10_000_000;
+        (
+            controller_program,
+            RegisteredDirectCreationState {
+                controller_program: observed(
+                    snapshot,
+                    controller_program,
+                    native_loader::ID,
+                    true,
+                    Vec::new(),
+                ),
+                controller: fill.controller,
+                maker: observed(snapshot, maker, system_program::ID, false, Vec::new()),
+                payer: payer_account,
+                replay: observed(snapshot, replay, system_program::ID, false, Vec::new()),
+                registration: observed(
+                    snapshot,
+                    registration,
+                    system_program::ID,
+                    false,
+                    Vec::new(),
+                ),
+                claim_program: fill.claim_program,
+                system_program: observed(
+                    snapshot,
+                    system_program::ID,
+                    native_loader::ID,
+                    true,
+                    Vec::new(),
+                ),
+                market: fill.market,
+                realm: fill.realm,
+                fee_policy: fill.fee_policy,
+                capability_manifest: fill.capability_manifest,
+                mint,
+                collateral,
+                fee_destination,
+                token_program: fill.token_program,
+                rent_sysvar: rent_account(snapshot),
+            },
+            intent,
+        )
+    }
+
+    fn set_creation_nonce(
+        controller_program: Pubkey,
+        state: &mut RegisteredDirectCreationState,
+        intent: &mut CompactIntentV1,
+        nonce: u64,
+    ) {
+        state.replay.owner = CLAIM_PROGRAM_ID;
+        state.replay.data = replay_bytes(state.controller.key, nonce);
+        let nonce_seed = nonce.to_le_bytes();
+        state.registration.key = Pubkey::find_program_address(
+            &[
+                REGISTERED_SEED,
+                state.market.key.as_ref(),
+                &GENERATION.to_le_bytes(),
+                state.maker.key.as_ref(),
+                &nonce_seed,
+            ],
+            &controller_program,
+        )
+        .0;
+        intent.nonce = nonce;
+    }
+
     fn terminal_state(fill: &RegisteredDirectFillState) -> RegisteredDirectTerminalState {
         RegisteredDirectTerminalState {
             controller: fill.controller.clone(),
@@ -1018,6 +1684,245 @@ mod tests {
         state.controller.observation = snapshot;
         state.registration.observation = snapshot;
         state.claim_program.observation = snapshot;
+    }
+
+    #[test]
+    fn registered_creation_derives_approval_frame_nonce_and_packet() {
+        let (program, state, intent) = creation_fixture();
+        let report = build_registered_direct_creation(program, &state, intent)
+            .expect("registered creation route");
+        assert_eq!(report.observation, observation(55));
+        assert_eq!(report.replay, state.replay.key);
+        assert_eq!(report.registration, state.registration.key);
+        assert_eq!((report.nonce, report.delegated_amount), (0, 1_203));
+        let expected_rent = Rent::default()
+            .minimum_balance(REPLAY_STATE_BYTES)
+            .saturating_sub(state.replay.lamports)
+            .checked_add(
+                Rent::default()
+                    .minimum_balance(REGISTERED_INTENT_STATE_BYTES)
+                    .saturating_sub(state.registration.lamports),
+            )
+            .expect("rent debit");
+        assert_eq!(report.rent_debit_lamports, expected_rent);
+
+        let [approval, controller] = &report.instructions;
+        assert_eq!(approval.program_id, state.token_program.key);
+        assert_eq!(
+            approval.accounts,
+            vec![
+                AccountMeta::new(state.collateral.key, false),
+                AccountMeta::new_readonly(state.registration.key, false),
+                AccountMeta::new_readonly(state.maker.key, true),
+            ]
+        );
+        assert_eq!(
+            TokenInstruction::unpack(&approval.data),
+            Ok(TokenInstruction::Approve { amount: 1_203 })
+        );
+        assert_eq!(controller.program_id, program);
+        assert_eq!(controller.accounts.len(), REGISTERED_CREATE_ACCOUNT_COUNT);
+        assert_eq!(
+            controller.accounts,
+            vec![
+                AccountMeta::new_readonly(state.controller.key, false),
+                AccountMeta::new_readonly(state.maker.key, true),
+                AccountMeta::new(state.payer.key, true),
+                AccountMeta::new(state.replay.key, false),
+                AccountMeta::new(state.registration.key, false),
+                AccountMeta::new_readonly(CLAIM_PROGRAM_ID, false),
+                AccountMeta::new_readonly(system_program::ID, false),
+                AccountMeta::new_readonly(state.market.key, false),
+                AccountMeta::new_readonly(state.realm.key, false),
+                AccountMeta::new_readonly(state.fee_policy.key, false),
+                AccountMeta::new_readonly(state.capability_manifest.key, false),
+                AccountMeta::new_readonly(state.mint.key, false),
+                AccountMeta::new_readonly(state.collateral.key, false),
+                AccountMeta::new_readonly(state.fee_destination.key, false),
+                AccountMeta::new_readonly(state.token_program.key, false),
+            ]
+        );
+        let request = RegisteredCreateInstructionV1::decode(&controller.data)
+            .expect("codec-owned creation request");
+        assert_eq!(request.intent, intent);
+        assert_eq!(
+            Pubkey::create_program_address(
+                &[CONTROLLER_SEED, &[request.controller_bump]],
+                &program,
+            ),
+            Ok(state.controller.key)
+        );
+
+        let packet =
+            compile_registered_direct_creation_packet(&report, Hash::new_from_array([91; 32]))
+                .expect("packet-safe creation");
+        assert_eq!(packet.required_signatures, 2);
+        assert_eq!(packet.wire_bytes, 866);
+        assert!(packet.wire_bytes <= PACKET_DATA_BYTES);
+        assert!(matches!(
+            &packet.message,
+            VersionedMessage::V0(message) if message.instructions.len() == 2
+        ));
+    }
+
+    #[test]
+    fn registered_creation_reuses_exact_claim_nonce_and_refuses_replay_substitution() {
+        let (program, mut state, mut intent) = creation_fixture();
+        set_creation_nonce(program, &mut state, &mut intent, 4);
+        let report = build_registered_direct_creation(program, &state, intent)
+            .expect("existing replay root");
+        assert_eq!(report.nonce, 4);
+        let request = RegisteredCreateInstructionV1::decode(&report.instructions[1].data)
+            .expect("creation request");
+        assert_eq!(request.intent.nonce, 4);
+
+        let mut wrong_controller = state.clone();
+        wrong_controller.replay.data[8] ^= 1;
+        assert_eq!(
+            build_registered_direct_creation(program, &wrong_controller, intent),
+            Err(Error::InvalidReplay)
+        );
+
+        let mut overflow = state.clone();
+        overflow.replay.data = replay_bytes(overflow.controller.key, u64::MAX);
+        assert_eq!(
+            build_registered_direct_creation(program, &overflow, intent),
+            Err(Error::InvalidReplay)
+        );
+
+        let mut wrong_pda = state.clone();
+        wrong_pda.registration.key = key(97);
+        assert_eq!(
+            build_registered_direct_creation(program, &wrong_pda, intent),
+            Err(Error::PdaMismatch)
+        );
+    }
+
+    #[test]
+    fn registered_creation_refuses_hostile_authority_accounts_and_terms() {
+        let (program, state, intent) = creation_fixture();
+        let mut mixed = state.clone();
+        mixed.realm.observation.slot += 1;
+        assert_eq!(
+            build_registered_direct_creation(program, &mixed, intent),
+            Err(Error::ObservationMismatch)
+        );
+
+        let mut occupied = state.clone();
+        occupied.registration.data.push(0);
+        assert_eq!(
+            build_registered_direct_creation(program, &occupied, intent),
+            Err(Error::InvalidAccount)
+        );
+
+        let mut poor = state.clone();
+        poor.payer.lamports = 0;
+        assert_eq!(
+            build_registered_direct_creation(program, &poor, intent),
+            Err(Error::InsufficientPayer)
+        );
+
+        let mut hostile_rent = state.clone();
+        hostile_rent.rent_sysvar.data.pop();
+        assert_eq!(
+            build_registered_direct_creation(program, &hostile_rent, intent),
+            Err(Error::InvalidRent)
+        );
+
+        let mut hostile_manifest = state.clone();
+        hostile_manifest.capability_manifest.data[0] ^= 1;
+        assert_eq!(
+            build_registered_direct_creation(program, &hostile_manifest, intent),
+            Err(Error::InvalidAuthority)
+        );
+
+        let mut hostile_market = state.clone();
+        hostile_market.market.data.pop();
+        assert_eq!(
+            build_registered_direct_creation(program, &hostile_market, intent),
+            Err(Error::InvalidAuthority)
+        );
+
+        let mut hostile_realm = state.clone();
+        hostile_realm.realm.data.pop();
+        assert_eq!(
+            build_registered_direct_creation(program, &hostile_realm, intent),
+            Err(Error::InvalidAuthority)
+        );
+
+        let mut hostile_policy = state.clone();
+        hostile_policy.fee_policy.data[0] ^= 1;
+        assert_eq!(
+            build_registered_direct_creation(program, &hostile_policy, intent),
+            Err(Error::InvalidAuthority)
+        );
+
+        let mut wrong_fee = state.clone();
+        wrong_fee.fee_destination.key = key(79);
+        assert_eq!(
+            build_registered_direct_creation(program, &wrong_fee, intent),
+            Err(Error::InvalidAuthority)
+        );
+
+        let mut wrong_nonce = intent;
+        wrong_nonce.nonce = 1;
+        assert_eq!(
+            build_registered_direct_creation(program, &state, wrong_nonce),
+            Err(Error::InvalidCreationIntent)
+        );
+
+        let mut seller = intent;
+        seller.side = 0;
+        assert_eq!(
+            build_registered_direct_creation(program, &state, seller),
+            Err(Error::InvalidCreationIntent)
+        );
+
+        let mut expired = intent;
+        expired.valid_through = 54;
+        assert_eq!(
+            build_registered_direct_creation(program, &state, expired),
+            Err(Error::InvalidCreationIntent)
+        );
+    }
+
+    #[test]
+    fn registered_creation_refuses_hostile_mint_collateral_and_fee_token_state() {
+        let (program, state, intent) = creation_fixture();
+        let mut malformed_mint = state.clone();
+        malformed_mint.mint.data.pop();
+        assert_eq!(
+            build_registered_direct_creation(program, &malformed_mint, intent),
+            Err(Error::InvalidToken)
+        );
+
+        let mut wrong_owner = state.clone();
+        wrong_owner.collateral.data[32..64].copy_from_slice(key(80).as_ref());
+        assert_eq!(
+            build_registered_direct_creation(program, &wrong_owner, intent),
+            Err(Error::InvalidToken)
+        );
+
+        let mut underfunded = state.clone();
+        underfunded.collateral.data[64..72].copy_from_slice(&1_202_u64.to_le_bytes());
+        assert_eq!(
+            build_registered_direct_creation(program, &underfunded, intent),
+            Err(Error::InvalidToken)
+        );
+
+        let mut frozen_fee = state.clone();
+        frozen_fee.fee_destination.data[108] = 2;
+        assert_eq!(
+            build_registered_direct_creation(program, &frozen_fee, intent),
+            Err(Error::InvalidToken)
+        );
+
+        let mut inconsistent_delegate = state.clone();
+        inconsistent_delegate.collateral.data[121..129].copy_from_slice(&1_u64.to_le_bytes());
+        assert_eq!(
+            build_registered_direct_creation(program, &inconsistent_delegate, intent),
+            Err(Error::InvalidToken)
+        );
     }
 
     #[test]
