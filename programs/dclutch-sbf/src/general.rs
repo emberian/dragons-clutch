@@ -422,96 +422,91 @@ fn process_activate<const N: usize>(
             let entry = manifest
                 .entry(capability_funding.entry_index())
                 .map_err(|_| AdapterError::FoundingAuthentication)?;
-            authenticate_finalized_config(
+            let config_id = dclutch_general_contract::ContentId::new(entry.config_id().to_bytes())
+                .map_err(|_| AdapterError::ContentIdentity)?;
+            let config = authenticate_finalized_config(
                 program_id,
                 config_account,
                 config_cursor,
                 rent_sysvar,
                 entry.config_id().to_bytes(),
-                |config, config_id| {
-                    authenticate_claim_basis_config::<N>(claim, config)?;
-                    let root_seeds = GeneralRootPdaSeedsV1::new(
-                        market_account.key.to_bytes(),
-                        config.generation(),
-                        config_id,
-                    )
-                    .map_err(|_| AdapterError::FoundingAuthentication)?;
-                    let (expected_root, root_bump) =
-                        Pubkey::find_program_address(&root_seeds.seed_components(), program_id);
-                    let funding_seeds = GeneralFundingPdaSeedsV1::new(
-                        market_account.key.to_bytes(),
-                        config.generation(),
-                        config_id,
-                        config.capability_release_id(),
-                    )
-                    .map_err(|_| AdapterError::FoundingAuthentication)?;
-                    let (expected_general_funding, funding_bump) =
-                        Pubkey::find_program_address(&funding_seeds.seed_components(), program_id);
-                    if root_account.key != &expected_root
-                        || general_funding_account.key != &expected_general_funding
-                    {
-                        return Err(AdapterError::AccountIdentity.into());
-                    }
-                    let contract_plan = activate_general_v1(
-                        frame,
-                        instruction,
-                        market.root(),
-                        config_id,
-                        config,
-                        market_identity_id,
-                        manifest_id,
-                        manifest,
-                        *capability_funding,
-                        capability_custody,
-                        GeneralActivationCapitalizationV1::new(root_rent, funding_rent),
-                        clock.slot,
-                    )
-                    .map_err(|_| AdapterError::FoundingAuthentication)?;
-                    let capability_derivation =
-                        contract_plan.funding().capability_funding_derivation();
-                    let (expected_capability_funding, _) = Pubkey::find_program_address(
-                        &capability_derivation.seed_components(),
-                        program_id,
-                    );
-                    if capability_funding_account.key != &expected_capability_funding
-                        || contract_plan.root_seeds() != root_seeds
-                        || contract_plan.funding_seeds() != funding_seeds
-                    {
-                        return Err(AdapterError::AccountIdentity.into());
-                    }
-                    let market_after = CategoricalMarketV1::new(
-                        contract_plan.market_root_after(),
-                        market.hoard_atoms(),
-                        *market.supply(),
-                        market.settlement(),
-                    )
-                    .map_err(|_| AdapterError::MarketTransition)?;
-                    Ok(ActivationPlan {
-                        market_after,
-                        capability_funding_after: contract_plan
-                            .funding()
-                            .capability_funding_after(),
-                        root: contract_plan.root(),
-                        general_funding: contract_plan.funding().general_funding(),
-                        root_seeds,
-                        funding_seeds,
-                        root_bump,
-                        funding_bump,
-                        root_rent,
-                        funding_rent,
-                        capability_state_rent,
-                        creation_lamports: contract_plan.funding().creation_lamports(),
-                        general_lamports: contract_plan.funding().general_lamports(),
-                        activator_before: activator.lamports(),
-                        market_lamports: market_account.lamports(),
-                        capability_funding_before: capability_funding_account.lamports(),
-                        root_before: root_account.lamports(),
-                        funding_before: general_funding_account.lamports(),
-                        rent_credit,
-                        rent_credit_lamports: rent_credit_account.lamports(),
-                    })
-                },
+            )?;
+            authenticate_claim_basis_config::<N>(claim, config)?;
+            let root_seeds = GeneralRootPdaSeedsV1::new(
+                market_account.key.to_bytes(),
+                config.generation(),
+                config_id,
             )
+            .map_err(|_| AdapterError::FoundingAuthentication)?;
+            let (expected_root, root_bump) =
+                Pubkey::find_program_address(&root_seeds.seed_components(), program_id);
+            let funding_seeds = GeneralFundingPdaSeedsV1::new(
+                market_account.key.to_bytes(),
+                config.generation(),
+                config_id,
+                config.capability_release_id(),
+            )
+            .map_err(|_| AdapterError::FoundingAuthentication)?;
+            let (expected_general_funding, funding_bump) =
+                Pubkey::find_program_address(&funding_seeds.seed_components(), program_id);
+            if root_account.key != &expected_root
+                || general_funding_account.key != &expected_general_funding
+            {
+                return Err(AdapterError::AccountIdentity.into());
+            }
+            let contract_plan = activate_general_v1(
+                frame,
+                instruction,
+                market.root(),
+                config_id,
+                config,
+                market_identity_id,
+                manifest_id,
+                manifest,
+                *capability_funding,
+                capability_custody,
+                GeneralActivationCapitalizationV1::new(root_rent, funding_rent),
+                clock.slot,
+            )
+            .map_err(|_| AdapterError::FoundingAuthentication)?;
+            let capability_derivation = contract_plan.funding().capability_funding_derivation();
+            let (expected_capability_funding, _) =
+                Pubkey::find_program_address(&capability_derivation.seed_components(), program_id);
+            if capability_funding_account.key != &expected_capability_funding
+                || contract_plan.root_seeds() != root_seeds
+                || contract_plan.funding_seeds() != funding_seeds
+            {
+                return Err(AdapterError::AccountIdentity.into());
+            }
+            let market_after = CategoricalMarketV1::new(
+                contract_plan.market_root_after(),
+                market.hoard_atoms(),
+                *market.supply(),
+                market.settlement(),
+            )
+            .map_err(|_| AdapterError::MarketTransition)?;
+            Ok(ActivationPlan {
+                market_after,
+                capability_funding_after: contract_plan.funding().capability_funding_after(),
+                root: contract_plan.root(),
+                general_funding: contract_plan.funding().general_funding(),
+                root_seeds,
+                funding_seeds,
+                root_bump,
+                funding_bump,
+                root_rent,
+                funding_rent,
+                capability_state_rent,
+                creation_lamports: contract_plan.funding().creation_lamports(),
+                general_lamports: contract_plan.funding().general_lamports(),
+                activator_before: activator.lamports(),
+                market_lamports: market_account.lamports(),
+                capability_funding_before: capability_funding_account.lamports(),
+                root_before: root_account.lamports(),
+                funding_before: general_funding_account.lamports(),
+                rent_credit,
+                rent_credit_lamports: rent_credit_account.lamports(),
+            })
         },
     )?);
     preflight_mutable(&[
@@ -682,7 +677,6 @@ fn process_open_batch<const N: usize>(
         config_cursor,
         rent_sysvar,
         config_id.to_bytes(),
-        |config, _| Ok(config),
     )?;
     let market = authenticate_market::<N>(program_id, market_account, root.market())?;
     authenticate_market_config(market, config, root, config_id)?;
@@ -810,7 +804,6 @@ fn process_lock_batch(
         config_cursor,
         rent_sysvar,
         config_id.to_bytes(),
-        |config, _| Ok(config),
     )?;
     let mut batch =
         authenticate_batch(program_id, batch_account, root_account, sequence, config_id)?;
@@ -870,7 +863,6 @@ fn process_submit_candidate<const N: usize>(
         config_cursor,
         rent_sysvar,
         config_id.to_bytes(),
-        |config, _| Ok(config),
     )?;
     let mut batch = authenticate_batch(
         program_id,
@@ -996,7 +988,6 @@ fn process_create_candidate_page<const N: usize>(
         config_cursor,
         rent_sysvar,
         config_id.to_bytes(),
-        |config, _| Ok(config),
     )?;
     let batch = authenticate_batch(
         program_id,
@@ -1127,7 +1118,6 @@ fn process_verify_candidate_page<const N: usize>(
         config_cursor,
         rent_sysvar,
         config_id.to_bytes(),
-        |config, _| Ok(config),
     )?;
     let mut candidate = authenticate_candidate_boxed(
         program_id,
@@ -1270,7 +1260,6 @@ fn process_lock_selection(
         config_cursor,
         rent_sysvar,
         root.config_id().to_bytes(),
-        |config, _| Ok(config),
     )?;
     if replay.generation != root.generation() || replay.generation != config.generation() {
         return Err(AdapterError::ReplayMismatch.into());
@@ -1480,7 +1469,6 @@ fn process_close_batch(
         config_cursor,
         rent_sysvar,
         root.config_id().to_bytes(),
-        |config, _| Ok(config),
     )?;
     if replay.generation != root.generation() || replay.generation != config.generation() {
         return Err(AdapterError::ReplayMismatch.into());
@@ -1559,7 +1547,6 @@ fn process_begin_settlement<const N: usize>(
         config_cursor,
         rent_sysvar,
         root.config_id().to_bytes(),
-        |config, _| Ok(config),
     )?;
     let market = authenticate_market::<N>(program_id, market_account, root.market())?;
     authenticate_market_config(market, config, root, root.config_id())?;
@@ -1830,7 +1817,6 @@ fn process_collect_settlement_page<const N: usize>(
         config_cursor,
         rent_sysvar,
         root.config_id().to_bytes(),
-        |config, _| Ok(config),
     )?;
     let market = authenticate_market::<N>(program_id, market_account, root.market())?;
     authenticate_market_config(market, config, root, root.config_id())?;
@@ -2140,7 +2126,6 @@ fn process_materialize_settlement<const N: usize>(
         config_cursor,
         rent_sysvar,
         root.config_id().to_bytes(),
-        |config, _| Ok(config),
     )?;
     let market = authenticate_market::<N>(program_id, market_account, root.market())?;
     authenticate_market_config(market, config, root, root.config_id())?;
@@ -2405,7 +2390,6 @@ fn process_distribute_settlement_page<const N: usize>(
         config_cursor,
         rent_sysvar,
         root.config_id().to_bytes(),
-        |config, _| Ok(config),
     )?;
     let market = authenticate_market::<N>(program_id, market_account, root.market())?;
     authenticate_market_config(market, config, root, root.config_id())?;
@@ -2714,7 +2698,6 @@ fn process_finish_settlement<const N: usize>(
         config_cursor,
         rent_sysvar,
         root.config_id().to_bytes(),
-        |config, _| Ok(config),
     )?;
     let market = authenticate_market::<N>(program_id, market_account, root.market())?;
     authenticate_market_config(market, config, root, root.config_id())?;
@@ -2851,7 +2834,6 @@ fn process_close_settlement<const N: usize>(
         config_cursor,
         rent_sysvar,
         root.config_id().to_bytes(),
-        |config, _| Ok(config),
     )?;
     let market = authenticate_market::<N>(program_id, market_account, root.market())?;
     authenticate_market_config(market, config, root, root.config_id())?;
@@ -3042,7 +3024,6 @@ fn process_close_general<const N: usize>(
         config_cursor,
         rent_sysvar,
         root.config_id().to_bytes(),
-        |config, _| Ok(config),
     )?;
     if generation != root.generation() || generation != config.generation() {
         return Err(AdapterError::ReplayMismatch.into());
@@ -3140,7 +3121,6 @@ fn authenticate_candidate_transition<'info, const N: usize>(
         config_cursor,
         rent_sysvar,
         root.config_id().to_bytes(),
-        |config, _| Ok(config),
     )?;
     let candidate =
         authenticate_candidate_boxed(program_id, candidate_account, batch_account, candidate_id)?;
@@ -3395,7 +3375,6 @@ fn process_admit_order<const N: usize>(
         config_cursor,
         rent_sysvar,
         config_id.to_bytes(),
-        |config, _| Ok(config),
     )?;
     let batch = authenticate_batch(
         program_id,
@@ -3781,7 +3760,6 @@ fn process_release_order<const N: usize>(
         config_cursor,
         rent_sysvar,
         config_id.to_bytes(),
-        |config, _| Ok(config),
     )?;
     authenticate_order_id(*order)?;
     let market = authenticate_market::<N>(program_id, market_account, root.market())?;
@@ -4020,17 +3998,14 @@ fn execute_release<'info, const N: usize>(
     Ok(())
 }
 
-fn authenticate_finalized_config<'info, T, F>(
+#[inline(never)]
+fn authenticate_finalized_config<'info>(
     program_id: &Pubkey,
     raw: &AccountInfo<'info>,
     cursor: &AccountInfo<'info>,
     rent: &AccountInfo<'info>,
     expected_digest: [u8; 32],
-    consume: F,
-) -> Result<T, ProgramError>
-where
-    F: FnOnce(GeneralConfigV1, dclutch_general_contract::ContentId) -> Result<T, ProgramError>,
-{
+) -> Result<GeneralConfigV1, ProgramError> {
     with_authenticated_finalized_record_v1(
         program_id,
         raw,
@@ -4044,9 +4019,7 @@ where
             if config.to_bytes().as_slice() != record.exact_content() {
                 return Err(AdapterError::ContentIdentity.into());
             }
-            let config_id = dclutch_general_contract::ContentId::new(expected_digest)
-                .map_err(|_| AdapterError::ContentIdentity)?;
-            consume(config, config_id)
+            Ok(config)
         },
     )
 }
