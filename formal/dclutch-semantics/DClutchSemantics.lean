@@ -20,6 +20,8 @@ import DClutchSemantics.EconomicExamples
 import DClutchSemantics.EconomicCodec
 import DClutchSemantics.SourceResolution
 import DClutchSemantics.SourceResolutionAbi
+import DClutchSemantics.GeneralClearing
+import DClutchSemantics.GeneralClearingExamples
 
 /-!
 Fresh Lean-owned semantics for dClutch's compact protocol specializer.
