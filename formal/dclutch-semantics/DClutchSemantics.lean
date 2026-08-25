@@ -12,6 +12,8 @@ import DClutchSemantics.TransitionVM
 import DClutchSemantics.DirectProgram
 import DClutchSemantics.CompiledPhysical
 import DClutchSemantics.DirectControllerCodec
+import DClutchSemantics.EconomicKernel
+import DClutchSemantics.EconomicExamples
 
 /-!
 Fresh Lean-owned semantics for dClutch's compact protocol specializer.
