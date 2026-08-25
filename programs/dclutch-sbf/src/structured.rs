@@ -6,7 +6,9 @@
 //! Token-2022 CPI, reloaded, and checked before native Position candidates are
 //! persisted.
 //!
-//! Exact account frames (all roles are distinct) are:
+//! Exact account frames keep all data/authority roles distinct; RedeemTerminal
+//! alone permits its receipt and collateral program roles to name the same
+//! authenticated Token-2022 executable:
 //!
 //! * Activate: Market, Descriptor, Manifest, Manifest cursor, Config, Config
 //!   cursor, Product Instance, Instance cursor, PortfolioTemplate, Template
@@ -14,6 +16,9 @@
 //!   capability Funding, payer, custody Position, System Program.
 //! * Wrap/Unwrap: the common first fourteen roles above, then holder, holder
 //!   Position, custody Position, and holder receipt Account.
+//! * RedeemTerminal: the common first fourteen roles above, then holder,
+//!   custody Position, holder receipt Account, Realm, collateral vault, holder
+//!   collateral Account, collateral Mint, and collateral token program.
 //! * Retire: the common first fourteen roles above, then custody Position and
 //!   immutable RentCredit.
 //!
@@ -33,14 +38,16 @@ use dclutch_capability_contract::{
     CapabilityFundingDerivationV1, CapabilityManifestV1, FUNDING_STATE_BYTES,
     FundingCustodyObservationV1, FundingStateV1,
 };
+use dclutch_collateral_contract::COLLATERAL_VAULT_PDA_DOMAIN;
 use dclutch_core_contract::ContentId;
+use dclutch_core_contract::MarketRoot;
 use dclutch_market_contract::market::{CategoricalMarketV1, decode_market_outcome_count};
 use dclutch_product_contract::{
     ContentId as ProductContentId,
     portfolio::{PORTFOLIO_TEMPLATE_CONTENT_DOMAIN_V1, PortfolioTemplateV1},
     product::InstanceV1,
 };
-use dclutch_realm_contract::{POSITION_PDA_DOMAIN, PositionV1};
+use dclutch_realm_contract::{POSITION_PDA_DOMAIN, PositionV1, REALM_PDA_DOMAIN, RealmV1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_rent_contract::{RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1, RentCreditV1};
 use dclutch_structured_contract::{
@@ -53,14 +60,18 @@ use dclutch_structured_contract::{
     },
     instruction::{StructuredActionV1, StructuredInstructionV1},
     transition::{
-        ReceiptOperationV1, ReceiptSupplyPlanV1, activate, audit_backing, retire, unwrap, wrap,
+        ReceiptOperationV1, ReceiptSupplyPlanV1, activate, audit_backing, redeem_terminal, retire,
+        unwrap, wrap,
     },
 };
-use dclutch_token_svm::{AccountState, COption, Mint, TOKEN_2022_PROGRAM_ID, TokenAccount};
+use dclutch_token_svm::{
+    AccountState, AuthorityRole, COption, CollateralAdapterReleaseV1, ExactTransferInput, Mint,
+    TOKEN_2022_PROGRAM_ID, TokenAccount, transfer_checked,
+};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
-    instruction::Instruction,
+    instruction::{AccountMeta, Instruction},
     program::{invoke, invoke_signed},
     program_error::ProgramError,
     pubkey::Pubkey,
@@ -71,11 +82,19 @@ use solana_sdk_ids::{native_loader, system_program, sysvar};
 use solana_system_interface::instruction::create_account;
 use spl_token_2022_interface::extension::ExtensionType;
 
-use crate::{AdapterError, authenticate::MARKET_SEED, realm::recognized_program_loader};
+use crate::{
+    AdapterError,
+    authenticate::MARKET_SEED,
+    realm::{
+        recognized_program_loader, require_authority_policy, require_freeze_policy,
+        select_adapter_release,
+    },
+};
 
 const COMMON_ACCOUNTS: usize = 14;
 const ACTIVATE_ACCOUNTS: usize = 18;
 const QUANTITY_ACCOUNTS: usize = 18;
+const TERMINAL_ACCOUNTS: usize = 22;
 const RETIRE_ACCOUNTS: usize = 16;
 
 const MARKET: usize = 0;
@@ -103,6 +122,15 @@ const QUANTITY_OWNER_POSITION: usize = 15;
 const QUANTITY_CUSTODY: usize = 16;
 const QUANTITY_RECEIPT_ACCOUNT: usize = 17;
 
+const TERMINAL_HOLDER: usize = 14;
+const TERMINAL_CUSTODY: usize = 15;
+const TERMINAL_RECEIPT_ACCOUNT: usize = 16;
+const TERMINAL_REALM: usize = 17;
+const TERMINAL_COLLATERAL_VAULT: usize = 18;
+const TERMINAL_COLLATERAL_DESTINATION: usize = 19;
+const TERMINAL_COLLATERAL_MINT: usize = 20;
+const TERMINAL_COLLATERAL_PROGRAM: usize = 21;
+
 const RETIRE_CUSTODY: usize = 14;
 const RETIRE_RENT_CREDIT: usize = 15;
 
@@ -129,6 +157,22 @@ struct ExistingContext<const N: usize> {
     market: CategoricalMarketV1<N>,
     descriptor: StructuredDescriptorV1,
     context: StructuredContextV1<N>,
+}
+
+#[derive(Clone, Copy)]
+struct RealmFacts {
+    realm: RealmV1,
+    release: CollateralAdapterReleaseV1,
+    mint: Mint,
+}
+
+#[derive(Clone, Copy)]
+struct CollateralTransferFacts {
+    source: TokenAccount,
+    destination: TokenAccount,
+    source_lamports: u64,
+    destination_lamports: u64,
+    mint_lamports: u64,
 }
 
 /// Decode and route one exact Structured V1 instruction.
@@ -201,11 +245,12 @@ fn process<const N: usize>(
             instruction.value(),
             ReceiptOperationV1::Burn,
         ),
-        // Terminal redemption additionally crosses the Realm collateral-vault
-        // boundary.  It remains refused until that physical payout slice is
-        // integrated; silently persisting only the semantic Market debit would
-        // strand or counterfeit collateral.
-        StructuredActionV1::RedeemTerminal => Err(AdapterError::InvalidInstruction.into()),
+        StructuredActionV1::RedeemTerminal => terminal_redeem_receipt::<N>(
+            program_id,
+            accounts,
+            instruction.generation(),
+            instruction.value(),
+        ),
         StructuredActionV1::Retire => retire_receipt::<N>(
             program_id,
             accounts,
@@ -566,6 +611,142 @@ fn quantity_transition<const N: usize>(
     Ok(())
 }
 
+fn terminal_redeem_receipt<const N: usize>(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    generation: u64,
+    units: u64,
+) -> Result<(), ProgramError> {
+    let holder = account(accounts, TERMINAL_HOLDER)?;
+    let receipt_program = account(accounts, RECEIPT_TOKEN_PROGRAM)?;
+    let rent_sysvar = account(accounts, RENT_SYSVAR)?;
+    authenticate_fixed_programs(receipt_program, rent_sysvar, None)?;
+    let mut loaded = authenticate_existing_context::<N>(program_id, accounts, generation)?;
+    let market_account = account(accounts, MARKET)?;
+    let descriptor_account = account(accounts, DESCRIPTOR)?;
+    let custody_account = account(accounts, TERMINAL_CUSTODY)?;
+    let receipt_mint_account = account(accounts, RECEIPT_MINT)?;
+    let receipt_controller = account(accounts, RECEIPT_AUTHORITY)?;
+    let receipt_account = account(accounts, TERMINAL_RECEIPT_ACCOUNT)?;
+    let realm_account = account(accounts, TERMINAL_REALM)?;
+    let collateral_vault = account(accounts, TERMINAL_COLLATERAL_VAULT)?;
+    let collateral_destination = account(accounts, TERMINAL_COLLATERAL_DESTINATION)?;
+    let collateral_mint = account(accounts, TERMINAL_COLLATERAL_MINT)?;
+    let collateral_program = account(accounts, TERMINAL_COLLATERAL_PROGRAM)?;
+
+    let realm = authenticate_realm(
+        program_id,
+        realm_account,
+        collateral_mint,
+        collateral_program,
+        loaded.market.root(),
+    )?;
+    let mut custody = authenticate_position_for_owner::<N>(
+        program_id,
+        custody_account,
+        market_account,
+        &Pubkey::new_from_array(loaded.descriptor.custody_owner()),
+        generation,
+    )?;
+    let receipt_mint_before = parse_receipt_mint(receipt_mint_account, receipt_program)?;
+    let receipt_account_before = parse_receipt_account(receipt_account, receipt_program)?;
+    let vault_before = authenticate_collateral_vault(
+        program_id,
+        market_account,
+        collateral_vault,
+        collateral_mint,
+        collateral_program,
+        realm,
+        loaded.market.hoard_atoms(),
+    )?;
+    let destination_before = authenticate_holder_collateral_account(
+        collateral_destination,
+        collateral_program,
+        realm,
+        holder.key,
+    )?;
+    let hoard_before = loaded.market.hoard_atoms();
+    let plan = redeem_terminal(
+        loaded.context,
+        market_account.key.to_bytes(),
+        &mut loaded.market,
+        holder.key.to_bytes(),
+        custody_account.key.to_bytes(),
+        &mut custody,
+        receipt_mint_before,
+        receipt_account_before,
+        units,
+    )
+    .map_err(|_| AdapterError::BearerTransition)?;
+    validate_terminal_economic_delta(
+        plan.receipt().operation(),
+        plan.collateral_payout_atoms(),
+        hoard_before,
+        loaded.market.hoard_atoms(),
+    )?;
+    let collateral_transfer = authenticate_collateral_transfer(
+        collateral_vault,
+        collateral_destination,
+        collateral_mint,
+        collateral_program,
+        realm,
+        market_account.key,
+        plan.collateral_payout_atoms(),
+        vault_before,
+        destination_before,
+    )?;
+    preflight_terminal_mutable(&[
+        market_account,
+        custody_account,
+        receipt_mint_account,
+        receipt_account,
+        collateral_vault,
+        collateral_destination,
+    ])?;
+
+    // Both external effects precede program-account persistence. A failure in
+    // the later collateral CPI returns an error after the receipt burn; SVM
+    // transaction rollback is therefore the authority that restores the burn.
+    execute_receipt_plan(
+        program_id,
+        descriptor_account,
+        receipt_mint_account,
+        receipt_account,
+        receipt_controller,
+        holder,
+        receipt_program,
+        plan.receipt(),
+        receipt_mint_before,
+        receipt_account_before,
+    )?;
+    execute_collateral_payout(
+        program_id,
+        market_account,
+        collateral_vault,
+        collateral_destination,
+        collateral_mint,
+        collateral_program,
+        realm,
+        collateral_transfer,
+        plan.collateral_payout_atoms(),
+        loaded.market.root(),
+    )?;
+
+    let receipt_mint_after = parse_receipt_mint(receipt_mint_account, receipt_program)?;
+    audit_backing(
+        loaded.context,
+        market_account.key.to_bytes(),
+        &loaded.market,
+        custody_account.key.to_bytes(),
+        &custody,
+        receipt_mint_after,
+    )
+    .map_err(|_| AdapterError::BearerPostcondition)?;
+    persist_market(market_account, loaded.market)?;
+    persist_position(custody_account, custody)?;
+    Ok(())
+}
+
 fn retire_receipt<const N: usize>(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -843,6 +1024,381 @@ fn authenticate_market<const N: usize>(
         return Err(AdapterError::ContentIdentity.into());
     }
     Ok(market)
+}
+
+fn authenticate_realm(
+    program_id: &Pubkey,
+    realm_account: &AccountInfo<'_>,
+    mint_account: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+    root: MarketRoot,
+) -> Result<RealmFacts, ProgramError> {
+    if realm_account.owner != program_id
+        || realm_account.executable
+        || mint_account.owner != token_program.key
+        || !token_program.executable
+        || !recognized_program_loader(token_program.owner)
+    {
+        return Err(AdapterError::BearerAuthentication.into());
+    }
+    let data = realm_account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::BearerAuthentication)?;
+    let realm = RealmV1::decode(&data).map_err(|_| AdapterError::BearerAuthentication)?;
+    if realm.to_bytes().as_slice() != &data[..] {
+        return Err(AdapterError::ContentIdentity.into());
+    }
+    let realm_digest = hash(&data).to_bytes();
+    let (expected_realm, _) =
+        Pubkey::find_program_address(&[REALM_PDA_DOMAIN, realm_digest.as_slice()], program_id);
+    if root.identity().realm_id().to_bytes() != realm_digest
+        || realm_account.key != &expected_realm
+        || realm.token_program() != token_program.key.as_ref()
+        || realm.collateral_mint() != mint_account.key.as_ref()
+    {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let release = select_adapter_release(*realm.collateral_adapter_release_id())
+        .map_err(|_| AdapterError::BearerAuthentication)?;
+    if release.token_program() != token_program.key.to_bytes() {
+        return Err(AdapterError::BearerAuthentication.into());
+    }
+    let mint_data = mint_account
+        .try_borrow_data()
+        .map_err(|_| AdapterError::BearerAuthentication)?;
+    let mint = release
+        .profile()
+        .check_mint(token_program.key.to_bytes(), &mint_data)
+        .map_err(|_| AdapterError::BearerAuthentication)?;
+    require_authority_policy(realm.mint_authority_policy(), &mint.mint_authority)
+        .map_err(|_| AdapterError::BearerAuthentication)?;
+    require_freeze_policy(realm.freeze_authority_policy(), &mint.freeze_authority)
+        .map_err(|_| AdapterError::BearerAuthentication)?;
+    Ok(RealmFacts {
+        realm,
+        release,
+        mint,
+    })
+}
+
+fn authenticate_collateral_vault(
+    program_id: &Pubkey,
+    market: &AccountInfo<'_>,
+    vault: &AccountInfo<'_>,
+    mint: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+    realm: RealmFacts,
+    hoard_atoms: u64,
+) -> Result<TokenAccount, ProgramError> {
+    let (expected, _) = Pubkey::find_program_address(
+        &[COLLATERAL_VAULT_PDA_DOMAIN, market.key.as_ref()],
+        program_id,
+    );
+    if vault.key != &expected || vault.owner != token_program.key {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let data = vault
+        .try_borrow_data()
+        .map_err(|_| AdapterError::BearerAuthentication)?;
+    let account = realm
+        .release
+        .profile()
+        .check_custody_account(
+            token_program.key.to_bytes(),
+            &data,
+            mint.key.to_bytes(),
+            market.key.to_bytes(),
+        )
+        .map_err(|_| AdapterError::BearerAuthentication)?;
+    if account.amount < hoard_atoms {
+        return Err(AdapterError::BearerAuthentication.into());
+    }
+    Ok(account)
+}
+
+fn authenticate_holder_collateral_account(
+    destination: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+    realm: RealmFacts,
+    holder: &Pubkey,
+) -> Result<TokenAccount, ProgramError> {
+    if destination.owner != token_program.key {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let data = destination
+        .try_borrow_data()
+        .map_err(|_| AdapterError::BearerAuthentication)?;
+    let account = realm
+        .release
+        .profile()
+        .check_transfer_account(token_program.key.to_bytes(), &data)
+        .map_err(|_| AdapterError::BearerAuthentication)?;
+    if account.mint != *realm.realm.collateral_mint() || account.owner != holder.to_bytes() {
+        return Err(AdapterError::BearerAuthentication.into());
+    }
+    Ok(account)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_collateral_transfer(
+    source: &AccountInfo<'_>,
+    destination: &AccountInfo<'_>,
+    mint: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+    realm: RealmFacts,
+    authority: &Pubkey,
+    amount: u64,
+    expected_source: TokenAccount,
+    expected_destination: TokenAccount,
+) -> Result<CollateralTransferFacts, ProgramError> {
+    if source.owner != token_program.key
+        || destination.owner != token_program.key
+        || mint.owner != token_program.key
+    {
+        return Err(AdapterError::AccountIdentity.into());
+    }
+    let mint_data = mint
+        .try_borrow_data()
+        .map_err(|_| AdapterError::BearerAuthentication)?;
+    let source_data = source
+        .try_borrow_data()
+        .map_err(|_| AdapterError::BearerAuthentication)?;
+    let destination_data = destination
+        .try_borrow_data()
+        .map_err(|_| AdapterError::BearerAuthentication)?;
+    let transfer = realm
+        .release
+        .profile()
+        .check_transfer(ExactTransferInput {
+            program_id: token_program.key.to_bytes(),
+            mint_address: mint.key.to_bytes(),
+            mint_data: &mint_data,
+            source_data: &source_data,
+            destination_data: &destination_data,
+            authority: authority.to_bytes(),
+            amount,
+            decimals: realm.mint.decimals,
+        })
+        .map_err(|_| AdapterError::BearerAuthentication)?;
+    if transfer.mint() != realm.mint
+        || transfer.source() != expected_source
+        || transfer.destination() != expected_destination
+        || transfer.authority_role() != AuthorityRole::Owner
+    {
+        return Err(AdapterError::BearerAuthentication.into());
+    }
+    Ok(CollateralTransferFacts {
+        source: transfer.source(),
+        destination: transfer.destination(),
+        source_lamports: source
+            .try_lamports()
+            .map_err(|_| AdapterError::BearerAuthentication)?,
+        destination_lamports: destination
+            .try_lamports()
+            .map_err(|_| AdapterError::BearerAuthentication)?,
+        mint_lamports: mint
+            .try_lamports()
+            .map_err(|_| AdapterError::BearerAuthentication)?,
+    })
+}
+
+fn validate_terminal_economic_delta(
+    operation: ReceiptOperationV1,
+    payout: u64,
+    hoard_before: u64,
+    hoard_after: u64,
+) -> Result<(), ProgramError> {
+    if operation != ReceiptOperationV1::Burn
+        || hoard_before.checked_sub(hoard_after) != Some(payout)
+    {
+        return Err(AdapterError::BearerPostcondition.into());
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_collateral_payout<'a>(
+    program_id: &Pubkey,
+    market: &AccountInfo<'a>,
+    source: &AccountInfo<'a>,
+    destination: &AccountInfo<'a>,
+    mint: &AccountInfo<'a>,
+    token_program: &AccountInfo<'a>,
+    realm: RealmFacts,
+    before: CollateralTransferFacts,
+    amount: u64,
+    root: MarketRoot,
+) -> Result<(), ProgramError> {
+    if amount != 0 {
+        let instruction = checked_collateral_transfer_instruction(
+            realm.release,
+            source.key,
+            mint.key,
+            destination.key,
+            market.key,
+            amount,
+            realm.mint.decimals,
+        )?;
+        let identity_digest = hash(&root.identity().to_bytes()).to_bytes();
+        let (expected_market, bump) =
+            Pubkey::find_program_address(&[MARKET_SEED, identity_digest.as_slice()], program_id);
+        if market.key != &expected_market {
+            return Err(AdapterError::AccountIdentity.into());
+        }
+        let bump_seed = [bump];
+        invoke_signed(
+            &instruction,
+            &[
+                source.clone(),
+                mint.clone(),
+                destination.clone(),
+                market.clone(),
+                token_program.clone(),
+            ],
+            &[&[
+                MARKET_SEED,
+                identity_digest.as_slice(),
+                bump_seed.as_slice(),
+            ]],
+        )
+        .map_err(|_| AdapterError::CollateralTransferCpi)?;
+    }
+    authenticate_collateral_transfer_post(
+        source,
+        destination,
+        mint,
+        token_program,
+        realm,
+        before,
+        amount,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authenticate_collateral_transfer_post(
+    source: &AccountInfo<'_>,
+    destination: &AccountInfo<'_>,
+    mint: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+    realm: RealmFacts,
+    before: CollateralTransferFacts,
+    amount: u64,
+) -> Result<(), ProgramError> {
+    if source.owner != token_program.key
+        || destination.owner != token_program.key
+        || mint.owner != token_program.key
+        || source.lamports() != before.source_lamports
+        || destination.lamports() != before.destination_lamports
+        || mint.lamports() != before.mint_lamports
+    {
+        return Err(AdapterError::BearerPostcondition.into());
+    }
+    let mint_data = mint
+        .try_borrow_data()
+        .map_err(|_| AdapterError::BearerPostcondition)?;
+    let source_data = source
+        .try_borrow_data()
+        .map_err(|_| AdapterError::BearerPostcondition)?;
+    let destination_data = destination
+        .try_borrow_data()
+        .map_err(|_| AdapterError::BearerPostcondition)?;
+    let mint_after = realm
+        .release
+        .profile()
+        .check_mint(token_program.key.to_bytes(), &mint_data)
+        .map_err(|_| AdapterError::BearerPostcondition)?;
+    let source_after = realm
+        .release
+        .profile()
+        .check_transfer_account(token_program.key.to_bytes(), &source_data)
+        .map_err(|_| AdapterError::BearerPostcondition)?;
+    let destination_after = realm
+        .release
+        .profile()
+        .check_transfer_account(token_program.key.to_bytes(), &destination_data)
+        .map_err(|_| AdapterError::BearerPostcondition)?;
+    let mut expected_source = before.source;
+    expected_source.amount = expected_source
+        .amount
+        .checked_sub(amount)
+        .ok_or(AdapterError::BearerPostcondition)?;
+    let mut expected_destination = before.destination;
+    expected_destination.amount = expected_destination
+        .amount
+        .checked_add(amount)
+        .ok_or(AdapterError::BearerPostcondition)?;
+    if mint_after != realm.mint
+        || source_after != expected_source
+        || destination_after != expected_destination
+    {
+        return Err(AdapterError::BearerPostcondition.into());
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn checked_collateral_transfer_instruction(
+    release: CollateralAdapterReleaseV1,
+    source: &Pubkey,
+    mint: &Pubkey,
+    destination: &Pubkey,
+    authority: &Pubkey,
+    amount: u64,
+    decimals: u8,
+) -> Result<Instruction, ProgramError> {
+    let spec = transfer_checked(
+        release.token_program(),
+        source.to_bytes(),
+        mint.to_bytes(),
+        destination.to_bytes(),
+        authority.to_bytes(),
+        amount,
+        decimals,
+    )
+    .map_err(|_| AdapterError::BearerAuthentication)?;
+    if spec.program_id() != &release.token_program() {
+        return Err(AdapterError::BearerAuthentication.into());
+    }
+    let expected = [
+        (source.to_bytes(), false, true),
+        (mint.to_bytes(), false, false),
+        (destination.to_bytes(), false, true),
+        (authority.to_bytes(), true, false),
+    ];
+    for (actual, (address, signer, writable)) in spec.accounts().iter().zip(expected) {
+        if actual.address() != &address
+            || actual.is_signer() != signer
+            || actual.is_writable() != writable
+        {
+            return Err(AdapterError::BearerAuthentication.into());
+        }
+    }
+    Ok(Instruction {
+        program_id: Pubkey::new_from_array(release.token_program()),
+        accounts: Vec::from([
+            AccountMeta::new(*source, false),
+            AccountMeta::new_readonly(*mint, false),
+            AccountMeta::new(*destination, false),
+            AccountMeta::new_readonly(*authority, true),
+        ]),
+        data: Vec::from(*spec.data()),
+    })
+}
+
+fn preflight_terminal_mutable(accounts: &[&AccountInfo<'_>]) -> Result<(), ProgramError> {
+    for account in accounts {
+        drop(
+            account
+                .try_borrow_mut_lamports()
+                .map_err(|_| AdapterError::BearerAuthentication)?,
+        );
+        drop(
+            account
+                .try_borrow_mut_data()
+                .map_err(|_| AdapterError::BearerAuthentication)?,
+        );
+    }
+    Ok(())
 }
 
 fn decode_descriptor(
@@ -1226,21 +1782,13 @@ fn validate_frame(
     let expected = match action {
         StructuredActionV1::Activate => ACTIVATE_ACCOUNTS,
         StructuredActionV1::Wrap | StructuredActionV1::Unwrap => QUANTITY_ACCOUNTS,
-        StructuredActionV1::RedeemTerminal => QUANTITY_ACCOUNTS,
+        StructuredActionV1::RedeemTerminal => TERMINAL_ACCOUNTS,
         StructuredActionV1::Retire => RETIRE_ACCOUNTS,
     };
     if accounts.len() != expected || accounts.len() < COMMON_ACCOUNTS {
         return Err(AdapterError::AccountFrameLength.into());
     }
-    for (index, account) in accounts.iter().enumerate() {
-        if accounts
-            .iter()
-            .take(index)
-            .any(|prior| prior.key == account.key)
-        {
-            return Err(AdapterError::AccountIdentity.into());
-        }
-    }
+    require_frame_alias_policy(accounts, action)?;
     for index in [
         MANIFEST,
         MANIFEST_CURSOR,
@@ -1290,9 +1838,27 @@ fn validate_frame(
             }
         }
         StructuredActionV1::RedeemTerminal => {
-            // The terminal frame is intentionally not admitted until the Realm
-            // payout roles are added; this prevents a misleading partial ABI.
-            return Err(AdapterError::InvalidInstruction.into());
+            require_privilege(account(accounts, MARKET)?, false, true, false)?;
+            require_privilege(account(accounts, DESCRIPTOR)?, false, false, false)?;
+            require_privilege(account(accounts, RECEIPT_MINT)?, false, true, false)?;
+            require_privilege(account(accounts, TERMINAL_HOLDER)?, true, false, false)?;
+            for index in [
+                TERMINAL_CUSTODY,
+                TERMINAL_RECEIPT_ACCOUNT,
+                TERMINAL_COLLATERAL_VAULT,
+                TERMINAL_COLLATERAL_DESTINATION,
+            ] {
+                require_privilege(account(accounts, index)?, false, true, false)?;
+            }
+            for index in [TERMINAL_REALM, TERMINAL_COLLATERAL_MINT] {
+                require_privilege(account(accounts, index)?, false, false, false)?;
+            }
+            require_privilege(
+                account(accounts, TERMINAL_COLLATERAL_PROGRAM)?,
+                false,
+                false,
+                true,
+            )?;
         }
         StructuredActionV1::Retire => {
             for index in [
@@ -1303,6 +1869,24 @@ fn validate_frame(
                 RETIRE_RENT_CREDIT,
             ] {
                 require_privilege(account(accounts, index)?, false, true, false)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn require_frame_alias_policy(
+    accounts: &[AccountInfo<'_>],
+    action: StructuredActionV1,
+) -> Result<(), ProgramError> {
+    for (index, current) in accounts.iter().enumerate() {
+        for (prior_index, prior) in accounts.iter().take(index).enumerate() {
+            if prior.key == current.key
+                && !(action == StructuredActionV1::RedeemTerminal
+                    && prior_index == RECEIPT_TOKEN_PROGRAM
+                    && index == TERMINAL_COLLATERAL_PROGRAM)
+            {
+                return Err(AdapterError::AccountIdentity.into());
             }
         }
     }
@@ -1624,9 +2208,97 @@ fn account<'a, 'info>(
 
 #[cfg(test)]
 mod tests {
-    use std::{boxed::Box, vec::Vec};
+    use std::{boxed::Box, sync::Mutex, vec::Vec};
+
+    use dclutch_core_contract::{ContentId as CoreContentId, MarketIdentity, MarketRoot};
+    use dclutch_realm_contract::{FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1Input};
+    use solana_program::{
+        entrypoint::ProgramResult,
+        program_stubs::{SyscallStubs, set_syscall_stubs},
+    };
 
     use super::*;
+
+    static CPI_STUB_LOCK: Mutex<()> = Mutex::new(());
+
+    struct RejectCpi;
+
+    impl SyscallStubs for RejectCpi {
+        fn sol_invoke_signed(
+            &self,
+            _instruction: &Instruction,
+            _account_infos: &[AccountInfo<'_>],
+            _signers_seeds: &[&[&[u8]]],
+        ) -> ProgramResult {
+            Err(ProgramError::Custom(0x51_52_53))
+        }
+    }
+
+    struct ApplyTransferCpi;
+
+    impl SyscallStubs for ApplyTransferCpi {
+        fn sol_invoke_signed(
+            &self,
+            instruction: &Instruction,
+            account_infos: &[AccountInfo<'_>],
+            _signers_seeds: &[&[&[u8]]],
+        ) -> ProgramResult {
+            let amount = u64::from_le_bytes(
+                instruction
+                    .data
+                    .get(1..9)
+                    .ok_or(ProgramError::InvalidInstructionData)?
+                    .try_into()
+                    .map_err(|_| ProgramError::InvalidInstructionData)?,
+            );
+            let source = account_infos
+                .first()
+                .ok_or(ProgramError::NotEnoughAccountKeys)?;
+            let destination = account_infos
+                .get(2)
+                .ok_or(ProgramError::NotEnoughAccountKeys)?;
+            let mut source_data = source
+                .try_borrow_mut_data()
+                .map_err(|_| ProgramError::AccountBorrowFailed)?;
+            let source_amount = u64::from_le_bytes(
+                source_data
+                    .get(64..72)
+                    .ok_or(ProgramError::InvalidAccountData)?
+                    .try_into()
+                    .map_err(|_| ProgramError::InvalidAccountData)?,
+            );
+            source_data
+                .get_mut(64..72)
+                .ok_or(ProgramError::InvalidAccountData)?
+                .copy_from_slice(
+                    &source_amount
+                        .checked_sub(amount)
+                        .ok_or(ProgramError::InsufficientFunds)?
+                        .to_le_bytes(),
+                );
+            drop(source_data);
+            let mut destination_data = destination
+                .try_borrow_mut_data()
+                .map_err(|_| ProgramError::AccountBorrowFailed)?;
+            let destination_amount = u64::from_le_bytes(
+                destination_data
+                    .get(64..72)
+                    .ok_or(ProgramError::InvalidAccountData)?
+                    .try_into()
+                    .map_err(|_| ProgramError::InvalidAccountData)?,
+            );
+            destination_data
+                .get_mut(64..72)
+                .ok_or(ProgramError::InvalidAccountData)?
+                .copy_from_slice(
+                    &destination_amount
+                        .checked_add(amount)
+                        .ok_or(ProgramError::InvalidArgument)?
+                        .to_le_bytes(),
+                );
+            Ok(())
+        }
+    }
 
     fn test_account(key: Pubkey, data: Vec<u8>, owner: Pubkey) -> AccountInfo<'static> {
         AccountInfo::new(
@@ -1709,6 +2381,57 @@ mod tests {
         bytes
     }
 
+    fn collateral_mint_bytes(supply: u64, decimals: u8) -> Vec<u8> {
+        let mut bytes = std::vec![0u8; 82];
+        bytes
+            .get_mut(36..44)
+            .expect("collateral supply")
+            .copy_from_slice(&supply.to_le_bytes());
+        *bytes.get_mut(44).expect("collateral decimals") = decimals;
+        *bytes.get_mut(45).expect("collateral initialized") = 1;
+        bytes
+    }
+
+    fn realm_facts(mint: Pubkey, mint_bytes: &[u8]) -> RealmFacts {
+        let release = CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer();
+        let realm = RealmV1::new(RealmV1Input {
+            token_program: TOKEN_2022_PROGRAM_ID,
+            collateral_mint: mint.to_bytes(),
+            collateral_adapter_release_id: hash(&release.to_bytes()).to_bytes(),
+            mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
+            freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
+        })
+        .expect("test Realm");
+        let parsed_mint = release
+            .profile()
+            .check_mint(TOKEN_2022_PROGRAM_ID, mint_bytes)
+            .expect("test collateral Mint");
+        RealmFacts {
+            realm,
+            release,
+            mint: parsed_mint,
+        }
+    }
+
+    fn core_id(fill: u8) -> CoreContentId {
+        CoreContentId::new([fill; 32]).expect("core identity")
+    }
+
+    fn market_root() -> MarketRoot {
+        MarketRoot::founding(
+            MarketIdentity::new(
+                core_id(1),
+                core_id(2),
+                core_id(3),
+                core_id(4),
+                core_id(5),
+                7,
+            ),
+            [9; 32],
+        )
+        .expect("Market root")
+    }
+
     #[test]
     fn schema_release_constants_match_owned_preimages() {
         assert_eq!(
@@ -1778,5 +2501,409 @@ mod tests {
             let account = test_account(Pubkey::new_unique(), hostile, *token_program.key);
             assert!(parse_receipt_account(&account, &token_program).is_err());
         }
+    }
+
+    #[test]
+    fn terminal_delta_refuses_wrong_winner_payout_or_nonburn_receipt_effect() {
+        assert_eq!(
+            validate_terminal_economic_delta(ReceiptOperationV1::Burn, 3, 11, 8),
+            Ok(())
+        );
+        assert!(
+            validate_terminal_economic_delta(ReceiptOperationV1::Burn, 2, 11, 8).is_err(),
+            "a payout from any noncanonical winner coefficient must refuse"
+        );
+        assert!(
+            validate_terminal_economic_delta(ReceiptOperationV1::Mint, 3, 11, 8).is_err(),
+            "terminal settlement must burn the sole receipt supply"
+        );
+        assert!(
+            validate_terminal_economic_delta(ReceiptOperationV1::Burn, 3, 8, 11).is_err(),
+            "terminal settlement cannot increase Hoard principal"
+        );
+    }
+
+    #[test]
+    fn terminal_frame_allows_only_the_shared_token_program_alias() {
+        let mut accounts = Vec::new();
+        for _ in 0..TERMINAL_ACCOUNTS {
+            accounts.push(test_account(
+                Pubkey::new_unique(),
+                Vec::new(),
+                system_program::ID,
+            ));
+        }
+        let shared_program = token_program();
+        *accounts
+            .get_mut(RECEIPT_TOKEN_PROGRAM)
+            .expect("receipt program role") = shared_program.clone();
+        *accounts
+            .get_mut(TERMINAL_COLLATERAL_PROGRAM)
+            .expect("collateral program role") = shared_program;
+        assert_eq!(
+            require_frame_alias_policy(&accounts, StructuredActionV1::RedeemTerminal),
+            Ok(())
+        );
+
+        let market_key = *accounts.first().expect("market role").key;
+        let duplicate = test_account(market_key, Vec::new(), system_program::ID);
+        *accounts.get_mut(DESCRIPTOR).expect("descriptor role") = duplicate;
+        assert!(require_frame_alias_policy(&accounts, StructuredActionV1::RedeemTerminal).is_err());
+    }
+
+    #[test]
+    fn terminal_collateral_authentication_refuses_wrong_vault_mint_authority_and_balance() {
+        let program_id = Pubkey::new_unique();
+        let market = test_account(Pubkey::new_unique(), Vec::new(), program_id);
+        let holder = Pubkey::new_unique();
+        let collateral_mint_key = Pubkey::new_unique();
+        let collateral_mint_data = collateral_mint_bytes(100, 6);
+        let collateral_program = token_program();
+        let collateral_mint = test_account(
+            collateral_mint_key,
+            collateral_mint_data.clone(),
+            *collateral_program.key,
+        );
+        let realm = realm_facts(collateral_mint_key, &collateral_mint_data);
+        let (vault_key, _) = Pubkey::find_program_address(
+            &[COLLATERAL_VAULT_PDA_DOMAIN, market.key.as_ref()],
+            &program_id,
+        );
+        let valid_vault = test_account(
+            vault_key,
+            token_bytes(collateral_mint_key, *market.key, 12),
+            *collateral_program.key,
+        );
+        let valid_destination = test_account(
+            Pubkey::new_unique(),
+            token_bytes(collateral_mint_key, holder, 4),
+            *collateral_program.key,
+        );
+        let vault_facts = authenticate_collateral_vault(
+            &program_id,
+            &market,
+            &valid_vault,
+            &collateral_mint,
+            &collateral_program,
+            realm,
+            10,
+        )
+        .expect("canonical collateral vault");
+        let destination_facts = authenticate_holder_collateral_account(
+            &valid_destination,
+            &collateral_program,
+            realm,
+            &holder,
+        )
+        .expect("holder collateral account");
+        assert!(
+            authenticate_collateral_transfer(
+                &valid_vault,
+                &valid_destination,
+                &collateral_mint,
+                &collateral_program,
+                realm,
+                market.key,
+                3,
+                vault_facts,
+                destination_facts,
+            )
+            .is_ok()
+        );
+
+        let wrong_vault = test_account(
+            Pubkey::new_unique(),
+            token_bytes(collateral_mint_key, *market.key, 12),
+            *collateral_program.key,
+        );
+        assert!(
+            authenticate_collateral_vault(
+                &program_id,
+                &market,
+                &wrong_vault,
+                &collateral_mint,
+                &collateral_program,
+                realm,
+                10,
+            )
+            .is_err()
+        );
+
+        let foreign_mint_vault = test_account(
+            vault_key,
+            token_bytes(Pubkey::new_unique(), *market.key, 12),
+            *collateral_program.key,
+        );
+        assert!(
+            authenticate_collateral_vault(
+                &program_id,
+                &market,
+                &foreign_mint_vault,
+                &collateral_mint,
+                &collateral_program,
+                realm,
+                10,
+            )
+            .is_err()
+        );
+
+        let wrong_authority_vault = test_account(
+            vault_key,
+            token_bytes(collateral_mint_key, Pubkey::new_unique(), 12),
+            *collateral_program.key,
+        );
+        assert!(
+            authenticate_collateral_vault(
+                &program_id,
+                &market,
+                &wrong_authority_vault,
+                &collateral_mint,
+                &collateral_program,
+                realm,
+                10,
+            )
+            .is_err()
+        );
+
+        let underfunded_vault = test_account(
+            vault_key,
+            token_bytes(collateral_mint_key, *market.key, 9),
+            *collateral_program.key,
+        );
+        assert!(
+            authenticate_collateral_vault(
+                &program_id,
+                &market,
+                &underfunded_vault,
+                &collateral_mint,
+                &collateral_program,
+                realm,
+                10,
+            )
+            .is_err()
+        );
+
+        let foreign_holder_destination = test_account(
+            Pubkey::new_unique(),
+            token_bytes(collateral_mint_key, Pubkey::new_unique(), 4),
+            *collateral_program.key,
+        );
+        assert!(
+            authenticate_holder_collateral_account(
+                &foreign_holder_destination,
+                &collateral_program,
+                realm,
+                &holder,
+            )
+            .is_err()
+        );
+
+        let low_transfer_vault = test_account(
+            vault_key,
+            token_bytes(collateral_mint_key, *market.key, 2),
+            *collateral_program.key,
+        );
+        assert!(
+            authenticate_collateral_transfer(
+                &low_transfer_vault,
+                &valid_destination,
+                &collateral_mint,
+                &collateral_program,
+                realm,
+                market.key,
+                3,
+                vault_facts,
+                destination_facts,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn late_collateral_cpi_failure_returns_before_any_local_persistence() {
+        let _guard = CPI_STUB_LOCK.lock().expect("CPI stub lock");
+        let program_id = Pubkey::new_unique();
+        let root = market_root();
+        let identity_digest = hash(&root.identity().to_bytes()).to_bytes();
+        let (market_key, _) =
+            Pubkey::find_program_address(&[MARKET_SEED, identity_digest.as_slice()], &program_id);
+        let market = test_account(market_key, Vec::from([0xa5; 8]), program_id);
+        let holder = Pubkey::new_unique();
+        let mint_key = Pubkey::new_unique();
+        let mint_data = collateral_mint_bytes(100, 6);
+        let token_program = token_program();
+        let mint = test_account(mint_key, mint_data.clone(), *token_program.key);
+        let source = test_account(
+            Pubkey::new_unique(),
+            token_bytes(mint_key, market_key, 12),
+            *token_program.key,
+        );
+        let destination = test_account(
+            Pubkey::new_unique(),
+            token_bytes(mint_key, holder, 4),
+            *token_program.key,
+        );
+        let realm = realm_facts(mint_key, &mint_data);
+        let source_data_before =
+            Vec::from(source.try_borrow_data().expect("source snapshot").as_ref());
+        let destination_data_before = Vec::from(
+            destination
+                .try_borrow_data()
+                .expect("destination snapshot")
+                .as_ref(),
+        );
+        let market_data_before =
+            Vec::from(market.try_borrow_data().expect("Market snapshot").as_ref());
+        let source_facts = realm
+            .release
+            .profile()
+            .check_custody_account(
+                token_program.key.to_bytes(),
+                &source_data_before,
+                mint_key.to_bytes(),
+                market_key.to_bytes(),
+            )
+            .expect("source facts");
+        let destination_facts = realm
+            .release
+            .profile()
+            .check_transfer_account(token_program.key.to_bytes(), &destination_data_before)
+            .expect("destination facts");
+        let transfer = authenticate_collateral_transfer(
+            &source,
+            &destination,
+            &mint,
+            &token_program,
+            realm,
+            &market_key,
+            3,
+            source_facts,
+            destination_facts,
+        )
+        .expect("transfer preflight");
+
+        let previous = set_syscall_stubs(Box::new(RejectCpi));
+        let result = execute_collateral_payout(
+            &program_id,
+            &market,
+            &source,
+            &destination,
+            &mint,
+            &token_program,
+            realm,
+            transfer,
+            3,
+            root,
+        );
+        set_syscall_stubs(previous);
+
+        assert!(result.is_err());
+        assert_eq!(
+            source.try_borrow_data().expect("source after").as_ref(),
+            source_data_before
+        );
+        assert_eq!(
+            destination
+                .try_borrow_data()
+                .expect("destination after")
+                .as_ref(),
+            destination_data_before
+        );
+        assert_eq!(
+            market.try_borrow_data().expect("Market after").as_ref(),
+            market_data_before
+        );
+    }
+
+    #[test]
+    fn collateral_cpi_applies_exact_raw_atoms_and_passes_strict_postchecks() {
+        let _guard = CPI_STUB_LOCK.lock().expect("CPI stub lock");
+        let program_id = Pubkey::new_unique();
+        let root = market_root();
+        let identity_digest = hash(&root.identity().to_bytes()).to_bytes();
+        let (market_key, _) =
+            Pubkey::find_program_address(&[MARKET_SEED, identity_digest.as_slice()], &program_id);
+        let market = test_account(market_key, Vec::new(), program_id);
+        let holder = Pubkey::new_unique();
+        let mint_key = Pubkey::new_unique();
+        let mint_data = collateral_mint_bytes(100, 6);
+        let token_program = token_program();
+        let mint = test_account(mint_key, mint_data.clone(), *token_program.key);
+        let source = test_account(
+            Pubkey::new_unique(),
+            token_bytes(mint_key, market_key, 12),
+            *token_program.key,
+        );
+        let destination = test_account(
+            Pubkey::new_unique(),
+            token_bytes(mint_key, holder, 4),
+            *token_program.key,
+        );
+        let realm = realm_facts(mint_key, &mint_data);
+        let source_facts = realm
+            .release
+            .profile()
+            .check_custody_account(
+                token_program.key.to_bytes(),
+                &source.try_borrow_data().expect("source bytes"),
+                mint_key.to_bytes(),
+                market_key.to_bytes(),
+            )
+            .expect("source facts");
+        let destination_facts = realm
+            .release
+            .profile()
+            .check_transfer_account(
+                token_program.key.to_bytes(),
+                &destination.try_borrow_data().expect("destination bytes"),
+            )
+            .expect("destination facts");
+        let transfer = authenticate_collateral_transfer(
+            &source,
+            &destination,
+            &mint,
+            &token_program,
+            realm,
+            &market_key,
+            3,
+            source_facts,
+            destination_facts,
+        )
+        .expect("transfer preflight");
+
+        let previous = set_syscall_stubs(Box::new(ApplyTransferCpi));
+        let result = execute_collateral_payout(
+            &program_id,
+            &market,
+            &source,
+            &destination,
+            &mint,
+            &token_program,
+            realm,
+            transfer,
+            3,
+            root,
+        );
+        set_syscall_stubs(previous);
+
+        assert_eq!(result, Ok(()));
+        let source_after = realm
+            .release
+            .profile()
+            .check_transfer_account(
+                token_program.key.to_bytes(),
+                &source.try_borrow_data().expect("source after"),
+            )
+            .expect("source post facts");
+        let destination_after = realm
+            .release
+            .profile()
+            .check_transfer_account(
+                token_program.key.to_bytes(),
+                &destination.try_borrow_data().expect("destination after"),
+            )
+            .expect("destination post facts");
+        assert_eq!(source_after.amount, 9);
+        assert_eq!(destination_after.amount, 7);
     }
 }
