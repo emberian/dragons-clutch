@@ -30,7 +30,7 @@ inductive ConfigField where
   | capacityProfileId | claimBasisId | capabilityReleaseId
   | generation | priceScale | collectionSlots | selectionSlots | settlementSlots
   | maxOrdersPerCandidate | maxPagesPerCandidate | continuationRewardLamports
-  | quoteSurplusBeneficiary
+  | selectionPolicyId | quoteSurplusBeneficiary
   deriving DecidableEq, Repr
 
 def configSchema : List (FieldSpec ConfigField) := [
@@ -42,13 +42,14 @@ def configSchema : List (FieldSpec ConfigField) := [
   ⟨.selectionSlots, .u64⟩, ⟨.settlementSlots, .u64⟩,
   ⟨.maxOrdersPerCandidate, .u32⟩, ⟨.maxPagesPerCandidate, .u32⟩,
   ⟨.continuationRewardLamports, .u64⟩,
+  ⟨.selectionPolicyId, .bytes 32⟩,
   ⟨.quoteSurplusBeneficiary, .bytes 32⟩
 ]
 
 def configLayout := specialize configSchema
 def configBytes := schemaWidth configSchema
 
-theorem exact_config_width : configBytes = 200 := by native_decide
+theorem exact_config_width : configBytes = 232 := by native_decide
 
 theorem config_schema_well_formed : WellFormed configSchema := by
   simp [WellFormed, configSchema, FieldKind.byteWidth]
@@ -72,6 +73,7 @@ structure ConfigDataV2 where
   maxOrdersPerCandidate : Nat
   maxPagesPerCandidate : Nat
   continuationRewardLamports : Nat
+  selectionPolicyId : Nat
   quoteSurplusBeneficiary : Nat
   deriving DecidableEq, Repr
 
@@ -82,6 +84,7 @@ def ConfigDataV2.valid (value : ConfigDataV2) : Bool :=
   value.capacityProfileId != 0 && fitsUnsigned 32 value.capacityProfileId &&
   value.claimBasisId != 0 && fitsUnsigned 32 value.claimBasisId &&
   value.capabilityReleaseId = reviewedCapabilityReleaseId &&
+  value.selectionPolicyId != 0 && fitsUnsigned 32 value.selectionPolicyId &&
   value.quoteSurplusBeneficiary != 0 && fitsUnsigned 32 value.quoteSurplusBeneficiary &&
   fitsUnsigned 8 value.generation && fitsUnsigned 8 value.priceScale &&
   fitsUnsigned 8 value.collectionSlots && fitsUnsigned 8 value.selectionSlots &&
@@ -105,6 +108,7 @@ def encodeConfig (value : ConfigDataV2) : List UInt8 :=
   Codec.encodeLE 4 value.maxOrdersPerCandidate ++
   Codec.encodeLE 4 value.maxPagesPerCandidate ++
   Codec.encodeLE 8 value.continuationRewardLamports ++
+  Codec.encodeLE 32 value.selectionPolicyId ++
   Codec.encodeLE 32 value.quoteSurplusBeneficiary
 
 theorem config_encoding_length (value : ConfigDataV2) :
@@ -125,6 +129,7 @@ def exampleConfig : ConfigDataV2 := {
   maxOrdersPerCandidate := 64
   maxPagesPerCandidate := 2
   continuationRewardLamports := 5
+  selectionPolicyId := 0x33
   quoteSurplusBeneficiary := 0x44
 }
 
@@ -148,6 +153,18 @@ theorem substituted_close_beneficiary_refuses_general
     (substituted : tokenOwner ≠ config.quoteSurplusBeneficiary) :
     closeBeneficiaryAccepts config tokenOwner = false := by
   simp [closeBeneficiaryAccepts, valid, substituted]
+
+/-- A capability selects one immutable interpreted policy identity; a batch
+cannot choose another objective while initializing its cursor. -/
+def selectionPolicyAccepts (config : ConfigDataV2) (policyId : Nat) : Bool :=
+  config.valid && policyId = config.selectionPolicyId
+
+theorem substituted_selection_policy_refuses_general
+    (config : ConfigDataV2) (policyId : Nat)
+    (valid : config.valid = true)
+    (substituted : policyId ≠ config.selectionPolicyId) :
+    selectionPolicyAccepts config policyId = false := by
+  simp [selectionPolicyAccepts, valid, substituted]
 
 /-! ## Minimal activated General root -/
 

@@ -1,6 +1,6 @@
 # General capability configuration V2
 
-This narrow safe `no_std`/`no_alloc` crate owns the 200-byte immutable General
+This narrow safe `no_std`/`no_alloc` crate owns the 232-byte immutable General
 configuration consumed by successor adapters. Its layout and exact fixture are
 generated from `DClutchSemantics.GeneralConfigAbi`.
 
@@ -10,6 +10,10 @@ operational destination account receiving settlement quote surplus. It is not
 a candidate field, token-account identity, fee destination, or lamport
 RentCredit beneficiary. The Market capability manifest authenticates the hash
 of the complete config bytes.
+
+The config also commits the nonzero `selection_policy_id`. The immutable policy
+record owns the interpreted criterion list and mandatory candidate-ID tie-break;
+the config selects that record, and a batch cursor may not select its objective.
 
 The configured order bound counts distinct globally grouped order identities,
 not execution fragments. The streamed verifier persists that count across page

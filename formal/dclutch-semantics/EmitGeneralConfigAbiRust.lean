@@ -37,6 +37,7 @@ def main : IO Unit := do
       ("MAX_ORDERS_PER_CANDIDATE", .maxOrdersPerCandidate),
       ("MAX_PAGES_PER_CANDIDATE", .maxPagesPerCandidate),
       ("CONTINUATION_REWARD_LAMPORTS", .continuationRewardLamports),
+      ("SELECTION_POLICY_ID", .selectionPolicyId),
       ("QUOTE_SURPLUS_BENEFICIARY", .quoteSurplusBeneficiary)] do
     emitOffset name field
   IO.println ""

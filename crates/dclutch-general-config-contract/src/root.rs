@@ -675,6 +675,7 @@ mod tests {
             max_orders_per_candidate: 64,
             max_pages_per_candidate: 2,
             continuation_reward_lamports: 5,
+            selection_policy_id: id(0x33),
             outcome_count: 2,
             quote_surplus_beneficiary: id(0x43),
         })

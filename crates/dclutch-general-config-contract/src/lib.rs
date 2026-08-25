@@ -96,6 +96,8 @@ pub struct GeneralConfigV2Input {
     pub max_pages_per_candidate: u32,
     /// Exact prepaid native continuation reward, never collateral.
     pub continuation_reward_lamports: u64,
+    /// Content identity of the immutable interpreted selection policy.
+    pub selection_policy_id: [u8; 32],
     /// Exact finite ClaimBasis width.
     pub outcome_count: u16,
     /// Immutable authority owning any quote-surplus destination token account.
@@ -114,6 +116,7 @@ impl GeneralConfigV2 {
         if [
             input.capacity_profile_id,
             input.claim_basis_id,
+            input.selection_policy_id,
             input.quote_surplus_beneficiary,
         ]
         .iter()
@@ -195,6 +198,7 @@ impl GeneralConfigV2 {
                 bytes,
                 generated::CONFIG_CONTINUATION_REWARD_LAMPORTS_OFFSET,
             )?,
+            selection_policy_id: read_array(bytes, generated::CONFIG_SELECTION_POLICY_ID_OFFSET)?,
             quote_surplus_beneficiary: read_array(
                 bytes,
                 generated::CONFIG_QUOTE_SURPLUS_BENEFICIARY_OFFSET,
@@ -234,6 +238,10 @@ impl GeneralConfigV2 {
             (
                 generated::CONFIG_CAPABILITY_RELEASE_ID_OFFSET,
                 self.input.capability_release_id,
+            ),
+            (
+                generated::CONFIG_SELECTION_POLICY_ID_OFFSET,
+                self.input.selection_policy_id,
             ),
             (
                 generated::CONFIG_QUOTE_SURPLUS_BENEFICIARY_OFFSET,
@@ -345,6 +353,12 @@ impl GeneralConfigV2 {
         self.input.continuation_reward_lamports
     }
 
+    /// Immutable interpreted selection-policy content identity.
+    #[must_use]
+    pub const fn selection_policy_id(self) -> [u8; 32] {
+        self.input.selection_policy_id
+    }
+
     /// Exact finite ClaimBasis width.
     #[must_use]
     pub const fn outcome_count(self) -> u16 {
@@ -399,6 +413,15 @@ impl GeneralConfigV2 {
             Ok(())
         } else {
             Err(Error::BeneficiaryMismatch)
+        }
+    }
+
+    /// Require a policy account/cursor to use the capability-selected identity.
+    pub fn require_selection_policy(self, policy_id: [u8; 32]) -> Result<()> {
+        if policy_id == self.input.selection_policy_id {
+            Ok(())
+        } else {
+            Err(Error::CoordinateMismatch)
         }
     }
 }
@@ -460,6 +483,7 @@ mod tests {
             max_orders_per_candidate: 64,
             max_pages_per_candidate: 2,
             continuation_reward_lamports: 5,
+            selection_policy_id: id(0x33),
             outcome_count: 2,
             quote_surplus_beneficiary: beneficiary,
         }
@@ -527,6 +551,7 @@ mod tests {
         for offset in [
             generated::CONFIG_CAPACITY_PROFILE_ID_OFFSET,
             generated::CONFIG_CLAIM_BASIS_ID_OFFSET,
+            generated::CONFIG_SELECTION_POLICY_ID_OFFSET,
             generated::CONFIG_QUOTE_SURPLUS_BENEFICIARY_OFFSET,
         ] {
             let mut hostile = canonical;
@@ -602,6 +627,7 @@ mod tests {
             .unwrap_or_else(|error| std::panic!("fixture failed: {error:?}"));
         assert_eq!(config.require_market_coordinates(7, id(0x22)), Ok(()));
         assert_eq!(config.require_candidate_envelope(2, 2, 100, 64), Ok(()));
+        assert_eq!(config.require_selection_policy(id(0x33)), Ok(()));
         assert_eq!(
             config.require_market_coordinates(8, id(0x22)),
             Err(Error::CoordinateMismatch)
@@ -617,6 +643,10 @@ mod tests {
         assert_eq!(
             config.require_candidate_envelope(2, 3, 100, 65),
             Err(Error::CapacityExceeded)
+        );
+        assert_eq!(
+            config.require_selection_policy(id(0x34)),
+            Err(Error::CoordinateMismatch)
         );
     }
 
