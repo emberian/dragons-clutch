@@ -17,6 +17,23 @@ open DClutch
 open DClutch.Direct
 open DClutch.TransitionVM
 
+/-- Canonical claim projection selected from successful compiled outputs. -/
+def claimPlanFromOutputs
+    (sellerNextNonce buyerNextNonce outcome fill : Nat) : EffectPlan := {
+  effects := [
+    .set sellerReplayCell sellerNextNonce,
+    .set buyerReplayCell buyerNextNonce,
+    .debit (sellerClaimCell outcome) fill,
+    .credit (buyerClaimCell outcome) fill
+  ]
+}
+
+/-- Canonical custody projection selected from successful compiled outputs. -/
+def custodyPlanFromOutputs (gross fee : Nat) : List Physical.CustodyTransfer := [
+  { source := .buyer, destination := .seller, amount := gross },
+  { source := .buyer, destination := .venue, amount := fee }
+]
+
 /-- Construct the two child plans from transition-program output registers.
 The fill and selected outcome remain admission-checked input registers;
 successor nonces, gross quote, and fee come only from successful program
@@ -24,19 +41,136 @@ outputs. -/
 def planFromOutputs
     (frame : FillFrame) : Nat × Nat × Nat × Nat → Physical.PhysicalPlan
   | (sellerNextNonce, buyerNextNonce, gross, fee) => {
-      claimEffects := {
-        effects := [
-          .set sellerReplayCell sellerNextNonce,
-          .set buyerReplayCell buyerNextNonce,
-          .debit (sellerClaimCell frame.sellerIntent.outcome) frame.fill,
-          .credit (buyerClaimCell frame.sellerIntent.outcome) frame.fill
-        ]
-      }
-      custodyTransfers := [
-        { source := .buyer, destination := .seller, amount := gross },
-        { source := .buyer, destination := .venue, amount := fee }
-      ]
+      claimEffects := claimPlanFromOutputs sellerNextNonce buyerNextNonce
+        frame.sellerIntent.outcome frame.fill
+      custodyTransfers := custodyPlanFromOutputs gross fee
     }
+
+/-! ## Generated physical-plan ABI
+
+The Rust controller starts from these Lean-encoded zero templates and patches
+only the disjoint, named dynamic spans below. This removes its parallel copy of
+headers, opcodes, parties, resources, and record geometry.
+-/
+
+def claimPlanTemplate : List UInt8 :=
+  DClutch.Codec.encodePlan (claimPlanFromOutputs 0 0 0 0)
+
+inductive ClaimPatch where
+  | sellerNonce | buyerNonce | sellerOutcome | sellerFill | buyerOutcome | buyerFill
+  deriving DecidableEq, Repr
+
+namespace ClaimPatch
+
+def all : List ClaimPatch := [
+  .sellerNonce, .buyerNonce, .sellerOutcome, .sellerFill, .buyerOutcome, .buyerFill
+]
+
+def offset : ClaimPatch → Nat
+  | .sellerNonce => DClutch.Codec.headerBytes + 8
+  | .buyerNonce => DClutch.Codec.headerBytes + DClutch.Codec.effectBytes + 8
+  | .sellerOutcome => DClutch.Codec.headerBytes + 2 * DClutch.Codec.effectBytes + 4
+  | .sellerFill => DClutch.Codec.headerBytes + 2 * DClutch.Codec.effectBytes + 8
+  | .buyerOutcome => DClutch.Codec.headerBytes + 3 * DClutch.Codec.effectBytes + 4
+  | .buyerFill => DClutch.Codec.headerBytes + 3 * DClutch.Codec.effectBytes + 8
+
+def width : ClaimPatch → Nat
+  | .sellerOutcome | .buyerOutcome => 4
+  | _ => 8
+
+def rustName : ClaimPatch → String
+  | .sellerNonce => "CLAIM_SELLER_NONCE_OFFSET"
+  | .buyerNonce => "CLAIM_BUYER_NONCE_OFFSET"
+  | .sellerOutcome => "CLAIM_SELLER_OUTCOME_OFFSET"
+  | .sellerFill => "CLAIM_SELLER_FILL_OFFSET"
+  | .buyerOutcome => "CLAIM_BUYER_OUTCOME_OFFSET"
+  | .buyerFill => "CLAIM_BUYER_FILL_OFFSET"
+
+theorem spans_are_bounded :
+    ∀ patch ∈ all, offset patch + width patch ≤ claimPlanTemplate.length := by
+  native_decide
+
+theorem spans_are_disjoint :
+    (all.flatMap fun patch => List.range' (offset patch) (width patch)).Nodup := by
+  native_decide
+
+theorem rust_names_are_unique : (all.map rustName).Nodup := by
+  native_decide
+
+end ClaimPatch
+
+def custodyPlanTemplate : List UInt8 :=
+  Physical.Codec.encodeCustodyPlan (custodyPlanFromOutputs 0 0)
+
+inductive CustodyPatch where
+  | gross | fee
+  deriving DecidableEq, Repr
+
+namespace CustodyPatch
+
+def all : List CustodyPatch := [.gross, .fee]
+
+def offset : CustodyPatch → Nat
+  | .gross => Physical.Codec.custodyHeaderBytes + 8
+  | .fee => Physical.Codec.custodyHeaderBytes +
+      Physical.Codec.custodyTransferBytes + 8
+
+def width (_ : CustodyPatch) : Nat := 8
+
+def rustName : CustodyPatch → String
+  | .gross => "CUSTODY_GROSS_OFFSET"
+  | .fee => "CUSTODY_FEE_OFFSET"
+
+theorem spans_are_bounded :
+    ∀ patch ∈ all, offset patch + width patch ≤ custodyPlanTemplate.length := by
+  native_decide
+
+theorem spans_are_disjoint :
+    (all.flatMap fun patch => List.range' (offset patch) (width patch)).Nodup := by
+  native_decide
+
+theorem rust_names_are_unique : (all.map rustName).Nodup := by
+  native_decide
+
+end CustodyPatch
+
+/-- Pure model of one generated Rust little-endian template patch. -/
+def patchLE
+    (bytes : List UInt8) (offset width value : Nat) : List UInt8 :=
+  bytes.take offset ++ DClutch.Codec.encodeLE width value ++
+    bytes.drop (offset + width)
+
+/-- The exact patch sequence emitted for the claim child. -/
+def materializeClaimPlan
+    (sellerNextNonce buyerNextNonce outcome fill : Nat) : List UInt8 :=
+  let sellerNonce := patchLE claimPlanTemplate
+    (ClaimPatch.offset .sellerNonce) (ClaimPatch.width .sellerNonce)
+    sellerNextNonce
+  let buyerNonce := patchLE sellerNonce
+    (ClaimPatch.offset .buyerNonce) (ClaimPatch.width .buyerNonce)
+    buyerNextNonce
+  let sellerOutcome := patchLE buyerNonce
+    (ClaimPatch.offset .sellerOutcome) (ClaimPatch.width .sellerOutcome) outcome
+  let buyerOutcome := patchLE sellerOutcome
+    (ClaimPatch.offset .buyerOutcome) (ClaimPatch.width .buyerOutcome) outcome
+  let sellerFill := patchLE buyerOutcome
+    (ClaimPatch.offset .sellerFill) (ClaimPatch.width .sellerFill) fill
+  patchLE sellerFill
+    (ClaimPatch.offset .buyerFill) (ClaimPatch.width .buyerFill) fill
+
+/-- The exact patch sequence emitted for the custody child. -/
+def materializeCustodyPlan (gross fee : Nat) : List UInt8 :=
+  let grossBytes := patchLE custodyPlanTemplate
+    (CustodyPatch.offset .gross) (CustodyPatch.width .gross) gross
+  patchLE grossBytes
+    (CustodyPatch.offset .fee) (CustodyPatch.width .fee) fee
+
+theorem example_materialization_matches_encoding :
+    materializeClaimPlan 1 1 1 2000 =
+        DClutch.Codec.encodePlan (claimPlanFromOutputs 1 1 1 2000) ∧
+      materializeCustodyPlan 1000 2 =
+        Physical.Codec.encodeCustodyPlan (custodyPlanFromOutputs 1000 2) := by
+  native_decide
 
 /-- Run the generated program and materialize child plans only after success. -/
 def compilePhysicalPlan (frame : FillFrame) : Option Physical.PhysicalPlan :=

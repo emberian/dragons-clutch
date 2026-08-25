@@ -32,8 +32,11 @@ use dclutch_token_svm::{
 };
 use dclutch_transition_vm::Registers;
 use generated_direct_program::{
-    DIRECT_PROGRAM, IDENTITY_COUNT, SCALAR_BUYER_NONCE_OUTPUT, SCALAR_FEE_OUTPUT, SCALAR_FILL,
-    SCALAR_GROSS_OUTPUT, SCALAR_SELLER_NONCE_OUTPUT,
+    CLAIM_BUYER_FILL_OFFSET, CLAIM_BUYER_NONCE_OFFSET, CLAIM_BUYER_OUTCOME_OFFSET,
+    CLAIM_PLAN_BYTES, CLAIM_PLAN_TEMPLATE, CLAIM_SELLER_FILL_OFFSET, CLAIM_SELLER_NONCE_OFFSET,
+    CLAIM_SELLER_OUTCOME_OFFSET, CUSTODY_FEE_OFFSET, CUSTODY_GROSS_OFFSET, CUSTODY_PLAN_BYTES,
+    CUSTODY_PLAN_TEMPLATE, DIRECT_PROGRAM, IDENTITY_COUNT, SCALAR_BUYER_NONCE_OUTPUT,
+    SCALAR_FEE_OUTPUT, SCALAR_FILL, SCALAR_GROSS_OUTPUT, SCALAR_SELLER_NONCE_OUTPUT,
 };
 use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
 use solana_program::{
@@ -64,8 +67,6 @@ pub const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([75_u8; 32]);
 /// Bytes in the canonical controller journal.
 pub const JOURNAL_BYTES: usize = 16;
 const JOURNAL_MAGIC: &[u8; 4] = b"DCCJ";
-const CLAIM_PLAN_BYTES: usize = 72;
-const CUSTODY_PLAN_BYTES: usize = 40;
 const REPLAY_STATE_BYTES: usize = 48;
 const POSITION_STATE_BYTES: usize = 56;
 const ED25519_DESCRIPTOR_BYTES: usize = 14;
@@ -884,47 +885,39 @@ fn claim_plan(
     registers: &Registers,
     outcome: u8,
 ) -> Result<[u8; CLAIM_PLAN_BYTES], ControllerError> {
-    let mut plan = [0_u8; CLAIM_PLAN_BYTES];
-    plan[..8].copy_from_slice(&[b'D', b'C', b'E', b'F', 1, 4, 0, 0]);
-    write_effect(
+    let mut plan = CLAIM_PLAN_TEMPLATE;
+    patch_bytes(
         &mut plan,
-        8,
-        [0, 0, 0, 0],
-        0,
-        register_scalar(registers, SCALAR_SELLER_NONCE_OUTPUT)?,
+        CLAIM_SELLER_NONCE_OFFSET,
+        register_scalar(registers, SCALAR_SELLER_NONCE_OUTPUT)?.to_le_bytes(),
     )?;
-    write_effect(
+    patch_bytes(
         &mut plan,
-        24,
-        [0, 1, 0, 0],
-        0,
-        register_scalar(registers, SCALAR_BUYER_NONCE_OUTPUT)?,
+        CLAIM_BUYER_NONCE_OFFSET,
+        register_scalar(registers, SCALAR_BUYER_NONCE_OUTPUT)?.to_le_bytes(),
     )?;
-    write_effect(
-        &mut plan,
-        40,
-        [1, 0, 1, 0],
-        u32::from(outcome),
-        register_scalar(registers, SCALAR_FILL)?,
-    )?;
-    write_effect(
-        &mut plan,
-        56,
-        [2, 1, 1, 0],
-        u32::from(outcome),
-        register_scalar(registers, SCALAR_FILL)?,
-    )?;
+    let outcome = u32::from(outcome).to_le_bytes();
+    patch_bytes(&mut plan, CLAIM_SELLER_OUTCOME_OFFSET, outcome)?;
+    patch_bytes(&mut plan, CLAIM_BUYER_OUTCOME_OFFSET, outcome)?;
+    let fill = register_scalar(registers, SCALAR_FILL)?.to_le_bytes();
+    patch_bytes(&mut plan, CLAIM_SELLER_FILL_OFFSET, fill)?;
+    patch_bytes(&mut plan, CLAIM_BUYER_FILL_OFFSET, fill)?;
     Ok(plan)
 }
 
 #[inline(never)]
 fn custody_plan(registers: &Registers) -> Result<[u8; CUSTODY_PLAN_BYTES], ControllerError> {
-    let mut plan = [0_u8; CUSTODY_PLAN_BYTES];
-    plan[..8].copy_from_slice(&[b'D', b'C', b'C', b'P', 1, 2, 0, 0]);
-    plan[8..16].copy_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0]);
-    plan[16..24].copy_from_slice(&register_scalar(registers, SCALAR_GROSS_OUTPUT)?.to_le_bytes());
-    plan[24..32].copy_from_slice(&[1, 2, 0, 0, 0, 0, 0, 0]);
-    plan[32..40].copy_from_slice(&register_scalar(registers, SCALAR_FEE_OUTPUT)?.to_le_bytes());
+    let mut plan = CUSTODY_PLAN_TEMPLATE;
+    patch_bytes(
+        &mut plan,
+        CUSTODY_GROSS_OFFSET,
+        register_scalar(registers, SCALAR_GROSS_OUTPUT)?.to_le_bytes(),
+    )?;
+    patch_bytes(
+        &mut plan,
+        CUSTODY_FEE_OFFSET,
+        register_scalar(registers, SCALAR_FEE_OUTPUT)?.to_le_bytes(),
+    )?;
     Ok(plan)
 }
 
@@ -934,29 +927,18 @@ fn register_scalar(registers: &Registers, index: usize) -> Result<u64, Controlle
         .map_err(|_| ControllerError::Transition)
 }
 
-fn write_effect(
-    plan: &mut [u8],
+fn patch_bytes<const WIDTH: usize>(
+    bytes: &mut [u8],
     offset: usize,
-    tag: [u8; 4],
-    outcome: u32,
-    value: u64,
+    value: [u8; WIDTH],
 ) -> Result<(), ControllerError> {
-    let end = offset.checked_add(16).ok_or(ControllerError::Arithmetic)?;
-    let record = plan
-        .get_mut(offset..end)
+    let end = offset
+        .checked_add(WIDTH)
         .ok_or(ControllerError::Arithmetic)?;
-    record
-        .get_mut(..4)
+    bytes
+        .get_mut(offset..end)
         .ok_or(ControllerError::Arithmetic)?
-        .copy_from_slice(&tag);
-    record
-        .get_mut(4..8)
-        .ok_or(ControllerError::Arithmetic)?
-        .copy_from_slice(&outcome.to_le_bytes());
-    record
-        .get_mut(8..16)
-        .ok_or(ControllerError::Arithmetic)?
-        .copy_from_slice(&value.to_le_bytes());
+        .copy_from_slice(&value);
     Ok(())
 }
 

@@ -1,8 +1,15 @@
-import DClutchSemantics.DirectProgram
+import DClutchSemantics.CompiledPhysical
 
 open DClutch
 
 def rustByte (byte : UInt8) : String := s!"0x{Codec.byteHex byte}"
+
+def emitRustBytes (name : String) (bytes : List UInt8) : IO Unit := do
+  IO.println s!"pub(crate) const {name}: [u8; {bytes.length}] = ["
+  for line in List.range ((bytes.length + 15) / 16) do
+    let chunk := (bytes.drop (line * 16)).take 16
+    IO.println s!"    {String.intercalate ", " (chunk.map rustByte)},"
+  IO.println "];"
 
 def main : IO Unit := do
   let bytes := TransitionVM.Codec.encodeProgram DirectProgram.program
@@ -22,8 +29,16 @@ def main : IO Unit := do
     IO.println s!"    {DirectProgram.IdentitySlot.rustName register},"
   IO.println "];"
   IO.println ""
-  IO.println s!"pub(crate) const DIRECT_PROGRAM: [u8; {bytes.length}] = ["
-  for line in List.range ((bytes.length + 15) / 16) do
-    let chunk := (bytes.drop (line * 16)).take 16
-    IO.println s!"    {String.intercalate ", " (chunk.map rustByte)},"
-  IO.println "];"
+  emitRustBytes "DIRECT_PROGRAM" bytes
+  IO.println ""
+  let claimTemplate := Direct.CompiledPhysical.claimPlanTemplate
+  IO.println s!"pub(crate) const CLAIM_PLAN_BYTES: usize = {claimTemplate.length};"
+  emitRustBytes "CLAIM_PLAN_TEMPLATE" claimTemplate
+  for patch in Direct.CompiledPhysical.ClaimPatch.all do
+    IO.println s!"pub(crate) const {Direct.CompiledPhysical.ClaimPatch.rustName patch}: usize = {Direct.CompiledPhysical.ClaimPatch.offset patch};"
+  IO.println ""
+  let custodyTemplate := Direct.CompiledPhysical.custodyPlanTemplate
+  IO.println s!"pub(crate) const CUSTODY_PLAN_BYTES: usize = {custodyTemplate.length};"
+  emitRustBytes "CUSTODY_PLAN_TEMPLATE" custodyTemplate
+  for patch in Direct.CompiledPhysical.CustodyPatch.all do
+    IO.println s!"pub(crate) const {Direct.CompiledPhysical.CustodyPatch.rustName patch}: usize = {Direct.CompiledPhysical.CustodyPatch.offset patch};"
