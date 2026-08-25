@@ -684,20 +684,43 @@ mod tests {
     use super::*;
     use dclutch_capability_contract::{
         ActivationPolicy, CAPABILITY_TEMPLATE_ENTRY_BYTES, CapabilityConfigProjectionV1,
-        CapabilityTemplateEntryV1, CapabilityTemplateV1, CompartmentFundingV1, ContentId,
-        FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+        CapabilityFundingDerivationV1, CapabilityTemplateEntryV1, CapabilityTemplateV1,
+        CompartmentFundingV1, ContentId, FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
+        MAX_DEPENDENCIES_PER_CAPABILITY,
     };
-    use dclutch_product_contract::capacity::{CapacityEnvelope, CapacityProfileV1Input};
+    use dclutch_core_contract::MarketIdentity;
+    use dclutch_product_contract::{
+        capacity::{CapacityEnvelope, CapacityProfileId, CapacityProfileV1Input},
+        claim::{CategoricalUnitV1, CategoricalUnitV1Input},
+        product::{InstanceV1, InstanceV1Input},
+        result_domain::{FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, FiniteResultDomainV1},
+    };
+    use dclutch_pyth_contract::funding::{FUNDING_BYTES, construct_required_resolution_funding};
+    use dclutch_realm_contract::{
+        FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1, RealmV1Input,
+    };
     use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
     use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority};
     use dclutch_series_contract::{
-        CAPABILITY_DERIVATION_RELEASE_ID_V1, MARKET_DERIVATION_RELEASE_ID_V1,
+        CAPABILITY_DERIVATION_RELEASE_ID_V1, InstantiateNextV1, MARKET_DERIVATION_RELEASE_ID_V1,
         OCCURRENCE_DERIVATION_RELEASE_ID_V1, PRODUCT_COMPILER_RELEASE_ID_V1,
-        SOURCE_DERIVATION_RELEASE_ID_V1,
+        SERIES_ESCROW_BYTES_V1, SOURCE_DERIVATION_RELEASE_ID_V1, SeriesEscrowV1,
+        derive_occurrence_product_v1, derive_occurrence_v1, plan_instantiate_next_v1,
+        source_schedule_identity_v1,
     };
-    use dclutch_source_contract::PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1;
-    use solana_program::{account_info::AccountInfo, rent::Rent, sysvar::SysvarSerialize};
+    use dclutch_source_contract::{
+        CapacityEnvelope as SourceCapacityEnvelope, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
+        ProviderReleaseV1, PythAdapterConfigV1, ResolutionPolicyV1, RoundingBoundary,
+        SOURCE_MATERIAL_BYTES, SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialInputV1,
+        SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
+        encode_source_material_into_v1,
+    };
+    use solana_program::{
+        account_info::AccountInfo, hash::hashv, rent::Rent, sysvar::SysvarSerialize,
+    };
     use solana_sdk_ids::{native_loader, sysvar};
+
+    use crate::{MARKET_SEED, foundation::FOUNDATION_GENERATION};
 
     fn observed(
         observation: Observation,
@@ -774,13 +797,138 @@ mod tests {
         IdentityV1::new([byte; 32]).expect("nonzero identity")
     }
 
-    fn capability_template() -> Vec<u8> {
+    fn product_id(bytes: [u8; 32]) -> dclutch_product_contract::ContentId {
+        dclutch_product_contract::ContentId::new(bytes).expect("Product identity")
+    }
+
+    fn source_id(bytes: [u8; 32]) -> dclutch_source_contract::ContentId {
+        dclutch_source_contract::ContentId::new(bytes).expect("Source identity")
+    }
+
+    fn finite_domain() -> FiniteResultDomainV1 {
+        FiniteResultDomainV1::new(product_id([31; 32]), product_id([32; 32]), 1, &[0, 1])
+            .expect("four-outcome domain")
+    }
+
+    fn finite_domain_id(domain: FiniteResultDomainV1) -> IdentityV1 {
+        IdentityV1::new(
+            hashv(&[
+                FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
+                &[0],
+                domain.to_bytes().as_slice(),
+            ])
+            .to_bytes(),
+        )
+        .expect("domain identity")
+    }
+
+    fn source_material_for_product(instance: InstanceV1, domain: FiniteResultDomainV1) -> Vec<u8> {
+        let instance_id = source_id(hash(&instance.to_bytes()).to_bytes());
+        let capacity = SourceCapacityProfileV1::new(
+            SourceCapacityEnvelope::Measured,
+            1,
+            0,
+            source_id([37; 32]),
+            source_id([38; 32]),
+            512,
+            1,
+        )
+        .expect("Source capacity");
+        let capacity_id = source_id(hash(&capacity.to_bytes()).to_bytes());
+        let provider = ProviderReleaseV1::new(
+            source_id([41; 32]),
+            source_id(PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1),
+            source_id([42; 32]),
+            source_id([43; 32]),
+            source_id([44; 32]),
+        );
+        let provider_id = source_id(hash(&provider.to_bytes()).to_bytes());
+        let adapter = PythAdapterConfigV1::new([45; 32], -8, 10_000).expect("Pyth config");
+        let adapter_id = source_id(hash(&adapter.to_bytes()).to_bytes());
+        let source = SourceSpecV1::new(
+            source_id(domain.coordinate_domain_id().to_bytes()),
+            source_id(domain.result_unit_id().to_bytes()),
+            provider_id,
+            SourceAccessProfile::PythTerminalOneTransaction,
+            adapter_id,
+            capacity_id,
+        );
+        let primary_source_id = source_id(hash(&source.to_bytes()).to_bytes());
+        let window = WindowSpecV1::new(
+            primary_source_id,
+            WindowKind::Terminal,
+            1_800_000_000,
+            1_800_000_000,
+            20,
+            5,
+            source_id([46; 32]),
+        )
+        .expect("terminal window");
+        let window_id = source_id(hash(&window.to_bytes()).to_bytes());
+        let statistic = StatisticSpecV1::new(
+            source_id(domain.result_unit_id().to_bytes()),
+            source_id(domain.result_unit_id().to_bytes()),
+            StatisticKind::TerminalSample,
+            RoundingBoundary::ExactRational,
+            1,
+            0,
+            capacity_id,
+            source_id([47; 32]),
+            capacity,
+        )
+        .expect("terminal statistic");
+        let statistic_id = source_id(hash(&statistic.to_bytes()).to_bytes());
+        let policy = ResolutionPolicyV1::new(
+            capacity_id,
+            instance_id,
+            primary_source_id,
+            window_id,
+            statistic_id,
+            source_id(finite_domain_id(domain).to_bytes()),
+            None,
+        );
+        let mut output = vec![0; SOURCE_MATERIAL_BYTES];
+        encode_source_material_into_v1(
+            &mut output,
+            SourceMaterialInputV1 {
+                policy: &policy,
+                capacity_profile_id: capacity_id,
+                capacity_profile: &capacity,
+                primary_source_id,
+                primary_source: &source,
+                primary_provider_release_id: provider_id,
+                primary_provider_release: &provider,
+                primary_adapter_config: &adapter,
+                window_id,
+                window: &window,
+                statistic_id,
+                statistic: &statistic,
+                product_instance_id: instance_id,
+                product_instance: &instance,
+                result_domain: &domain,
+                recovery: None,
+            },
+        )
+        .expect("Source material");
+        output
+    }
+
+    fn capability_template_with_quote(fund_rent: u64, provider: u64, bounty: u64) -> Vec<u8> {
+        let native = |amount| CompartmentFundingV1::native_lamports(amount).expect("amount");
         let funding = FundingAmountsV1::new(
-            CompartmentFundingV1::native_lamports(5).expect("rent"),
+            native(fund_rent),
             CompartmentFundingV1::not_applicable(),
             CompartmentFundingV1::not_applicable(),
-            CompartmentFundingV1::not_applicable(),
-            CompartmentFundingV1::native_lamports(7).expect("bounty"),
+            if provider == 0 {
+                CompartmentFundingV1::not_applicable()
+            } else {
+                native(provider)
+            },
+            if bounty == 0 {
+                CompartmentFundingV1::not_applicable()
+            } else {
+                native(bounty)
+            },
             CompartmentFundingV1::not_applicable(),
             CompartmentFundingV1::not_applicable(),
         )
@@ -804,6 +952,10 @@ mod tests {
         CapabilityTemplateV1::encode_into(core::slice::from_ref(&entry), &mut bytes)
             .expect("template");
         bytes
+    }
+
+    fn capability_template() -> Vec<u8> {
+        capability_template_with_quote(5, 0, 7)
     }
 
     fn create_fixture() -> (Pubkey, SeriesCreateState) {
@@ -965,6 +1117,442 @@ mod tests {
         )
     }
 
+    fn consume_fixture() -> (Pubkey, SeriesConsumeAndFoundState) {
+        let program_id = Pubkey::new_from_array([90; 32]);
+        let observation = Observation {
+            slot: 61,
+            unix_timestamp: 1_800_000_000,
+            finality: crate::Finality::Finalized,
+        };
+        let rent = Rent::default();
+        let sponsor = Pubkey::new_from_array([91; 32]);
+        let mint = Pubkey::new_from_array([92; 32]);
+        let token_release = dclutch_token_svm::PRODUCTION_ADAPTER_RELEASES
+            .first()
+            .copied()
+            .expect("legacy token release");
+        let realm_value = RealmV1::new(RealmV1Input {
+            token_program: token_release.token_program(),
+            collateral_mint: mint.to_bytes(),
+            collateral_adapter_release_id: hash(&token_release.to_bytes()).to_bytes(),
+            mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
+            freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
+        })
+        .expect("Realm");
+        let realm_bytes = realm_value.to_bytes().to_vec();
+        let realm_id = IdentityV1::new(hash(&realm_bytes).to_bytes()).expect("Realm identity");
+        let product_capacity = CapacityProfileV1::new(CapacityProfileV1Input {
+            envelope: CapacityEnvelope::Measured,
+            verifier_release_id: product_id([1; 32]),
+            envelope_basis_id: product_id([2; 32]),
+            max_artifact_bytes: 256,
+            page_payload_bytes: 256,
+            max_pages: 1,
+            max_partition_cells: 16,
+        })
+        .expect("Product capacity");
+        let product_capacity_bytes = product_capacity.to_bytes().to_vec();
+        let product_capacity_id =
+            IdentityV1::new(hash(&product_capacity_bytes).to_bytes()).expect("capacity identity");
+        let claim_value = CategoricalUnitV1::new(
+            CategoricalUnitV1Input {
+                capacity_profile_id: CapacityProfileId::new(product_id(
+                    product_capacity_id.to_bytes(),
+                )),
+                outcome_count: 4,
+            },
+            product_capacity,
+        )
+        .expect("claim basis");
+        let claim_bytes = claim_value.to_bytes().to_vec();
+        let claim_id = IdentityV1::new(hash(&claim_bytes).to_bytes()).expect("claim identity");
+        let domain = finite_domain();
+        let domain_id = finite_domain_id(domain);
+        let terms_id = identity(3);
+        let template_instance = InstanceV1::new(InstanceV1Input {
+            terms_id: product_id(terms_id.to_bytes()),
+            occurrence_id: product_id([4; 32]),
+            claim_basis_id: product_id(claim_id.to_bytes()),
+            result_domain_id: product_id(domain_id.to_bytes()),
+            capacity_profile_id: CapacityProfileId::new(product_id(product_capacity_id.to_bytes())),
+            partition_cell_count: 4,
+        })
+        .expect("template Product instance");
+        let template_source = source_material_for_product(template_instance, domain);
+        let fund_rent = rent.minimum_balance(FUNDING_BYTES);
+        let template_bytes = capability_template_with_quote(fund_rent, 17, 23);
+        let template_id = IdentityV1::new(hash(&template_bytes).to_bytes()).expect("template ID");
+        let recipe_value = SeriesRecipeV1 {
+            realm_id,
+            terms_id,
+            claim_basis_id: claim_id,
+            result_domain_id: domain_id,
+            capacity_profile_id: product_capacity_id,
+            compiler_release_id: IdentityV1::new(PRODUCT_COMPILER_RELEASE_ID_V1)
+                .expect("compiler release"),
+            occurrence_schedule_id: identity(6),
+            source_schedule_id: source_schedule_identity_v1(&template_source)
+                .expect("Source schedule"),
+            capability_template_id: template_id,
+            occurrence_derivation_release_id: IdentityV1::new(OCCURRENCE_DERIVATION_RELEASE_ID_V1)
+                .expect("occurrence release"),
+            source_derivation_release_id: IdentityV1::new(SOURCE_DERIVATION_RELEASE_ID_V1)
+                .expect("Source release"),
+            capability_derivation_release_id: IdentityV1::new(CAPABILITY_DERIVATION_RELEASE_ID_V1)
+                .expect("capability release"),
+            market_derivation_release_id: IdentityV1::new(MARKET_DERIVATION_RELEASE_ID_V1)
+                .expect("Market release"),
+            capitalization_schedule_id: identity(13),
+            first_occurrence_time: 1_800_000_000,
+            cadence_seconds: 3_600,
+            occurrence_count: 1,
+            first_generation: FOUNDATION_GENERATION,
+            outcome_count: 4,
+        };
+        let recipe_bytes = recipe_value.to_bytes().to_vec();
+        let recipe_id = IdentityV1::new(hash(&recipe_bytes).to_bytes()).expect("recipe ID");
+        let occurrence_product =
+            derive_occurrence_product_v1(recipe_id, &recipe_value, 0).expect("occurrence Product");
+        let material_bytes =
+            source_material_for_product(occurrence_product.product_instance, domain);
+        let material_id = IdentityV1::new(hash(&material_bytes).to_bytes()).expect("material ID");
+        let material = authenticate_occurrence_source_material_v1(material_id, &material_bytes)
+            .expect("occurrence Source material");
+        let template = CapabilityTemplateV1::decode(&template_bytes).expect("template decode");
+        let projected = template
+            .project_for_resolution_material(
+                ContentId::new(material_id.to_bytes()).expect("material config"),
+            )
+            .expect("occurrence manifest projection");
+        let mut manifest_bytes = vec![0; MANIFEST_HEADER_BYTES + CAPABILITY_TEMPLATE_ENTRY_BYTES];
+        projected
+            .encode_into(&mut manifest_bytes)
+            .expect("occurrence manifest");
+        let manifest_id = IdentityV1::new(hash(&manifest_bytes).to_bytes()).expect("manifest ID");
+        let manifest = authenticate_occurrence_capability_manifest_v1(
+            template_id,
+            &template_bytes,
+            material_id,
+            manifest_id,
+            &manifest_bytes,
+        )
+        .expect("occurrence manifest authentication");
+        let core_id =
+            |bytes| dclutch_core_contract::ContentId::new(bytes).expect("Core content identity");
+        let market_identity = MarketIdentity::new(
+            core_id(realm_id.to_bytes()),
+            core_id(occurrence_product.product_instance_id.to_bytes()),
+            core_id(claim_id.to_bytes()),
+            core_id(material_id.to_bytes()),
+            core_id(manifest_id.to_bytes()),
+            FOUNDATION_GENERATION,
+        );
+        let market_identity_id = hash(&market_identity.to_bytes()).to_bytes();
+        let (market_key, _) = Pubkey::find_program_address(
+            &[MARKET_SEED, market_identity_id.as_slice()],
+            &program_id,
+        );
+        let capability_manifest =
+            dclutch_capability_contract::CapabilityManifestV1::decode(&manifest_bytes)
+                .expect("manifest");
+        let capability_manifest_id =
+            ContentId::new(manifest_id.to_bytes()).expect("manifest identity");
+        let selected = capability_manifest
+            .required_founding_entry_for_config(
+                ContentId::new(material_id.to_bytes()).expect("Source config"),
+            )
+            .expect("founding entry");
+        let funding = construct_required_resolution_funding(
+            capability_manifest_id,
+            capability_manifest,
+            selected,
+            fund_rent,
+            observation.slot,
+        )
+        .expect("funding");
+        let funding_derivation = CapabilityFundingDerivationV1::new(
+            market_key.to_bytes(),
+            FOUNDATION_GENERATION,
+            capability_manifest_id,
+            capability_manifest,
+            funding,
+        )
+        .expect("funding derivation");
+        let (fund_key, _) =
+            Pubkey::find_program_address(&funding_derivation.seed_components(), &program_id);
+        let authority = RefundAuthority::new(sponsor.to_bytes()).expect("refund authority");
+        let (credit_key, credit_bump) = Pubkey::find_program_address(
+            &[RENT_CREDIT_PDA_DOMAIN_V1, sponsor.as_ref()],
+            &program_id,
+        );
+        let (realm, realm_finalization) = finalized_record(
+            program_id,
+            observation,
+            hash(crate::foundation::REALM_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            realm_bytes,
+        );
+        let (product_instance, product_instance_finalization) = finalized_record(
+            program_id,
+            observation,
+            hash(crate::foundation::PRODUCT_INSTANCE_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            occurrence_product.product_instance.to_bytes().to_vec(),
+        );
+        let (claim_basis, claim_basis_finalization) = finalized_record(
+            program_id,
+            observation,
+            hash(crate::foundation::CATEGORICAL_CLAIM_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            claim_bytes,
+        );
+        let (capacity_profile, capacity_profile_finalization) = finalized_record(
+            program_id,
+            observation,
+            hash(crate::foundation::PRODUCT_CAPACITY_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            product_capacity_bytes,
+        );
+        let (resolution_material, resolution_material_finalization) = finalized_record(
+            program_id,
+            observation,
+            dclutch_source_contract::SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
+            material_bytes,
+        );
+        let (capability_manifest_record, capability_manifest_finalization) = finalized_record(
+            program_id,
+            observation,
+            hash(crate::foundation::CAPABILITY_MANIFEST_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+            manifest_bytes,
+        );
+        let rent_credit = observed(
+            observation,
+            credit_key,
+            program_id,
+            rent.minimum_balance(RENT_CREDIT_BYTES_V1) + 100,
+            false,
+            RentCreditV1::new(authority, credit_bump)
+                .to_bytes()
+                .to_vec(),
+        );
+        let mut found = FoundMarketState {
+            sponsor: observed(
+                observation,
+                sponsor,
+                system_program::ID,
+                u64::MAX,
+                false,
+                Vec::new(),
+            ),
+            market_destination: crate::foundation::ObservedVacancy {
+                key: market_key,
+                observation,
+            },
+            fund_destination: crate::foundation::ObservedVacancy {
+                key: fund_key,
+                observation,
+            },
+            rent_credit,
+            realm,
+            realm_finalization,
+            product_instance,
+            product_instance_finalization,
+            claim_basis,
+            claim_basis_finalization,
+            capacity_profile,
+            capacity_profile_finalization,
+            resolution_material,
+            resolution_material_finalization,
+            capability_manifest: capability_manifest_record,
+            capability_manifest_finalization,
+            system_program: observed(
+                observation,
+                system_program::ID,
+                native_loader::ID,
+                1,
+                true,
+                Vec::new(),
+            ),
+            rent_sysvar: rent_account(observation),
+        };
+        let preliminary = foundation::build_found_market_and_fund_v1(program_id, &found)
+            .expect("standalone Found measurement");
+        let market_principal = preliminary.debit.total_sponsor_debit;
+        let ticket_rent = rent.minimum_balance(dclutch_series_contract::OCCURRENCE_TICKET_BYTES_V1);
+        let capitalization_value = OccurrenceCapitalizationV1 {
+            recipe_id,
+            capitalization_schedule_id: recipe_value.capitalization_schedule_id,
+            occurrence_index: 0,
+            market_principal,
+            ticket_rent,
+            total_principal: market_principal
+                .checked_add(ticket_rent)
+                .expect("capitalization total"),
+            next_capitalization_id: None,
+        };
+        let capitalization_bytes = capitalization_value.to_bytes().to_vec();
+        let capitalization_id =
+            IdentityV1::new(hash(&capitalization_bytes).to_bytes()).expect("capitalization ID");
+        let derived_value = derive_occurrence_v1(
+            recipe_id,
+            &recipe_value,
+            0,
+            &capitalization_value,
+            material,
+            manifest,
+        )
+        .expect("derived occurrence");
+        assert_eq!(
+            derived_value.market_identity_id.to_bytes(),
+            market_identity_id
+        );
+        let derived_bytes = derived_value.to_bytes().to_vec();
+        let derived_id = IdentityV1::new(hash(&derived_bytes).to_bytes()).expect("derived ID");
+        let aggregate_value = CapitalizationAggregateV1 {
+            recipe_id,
+            capitalization_schedule_id: recipe_value.capitalization_schedule_id,
+            occurrence_count: 1,
+            total_principal: capitalization_value.total_principal,
+            first_capitalization_id: capitalization_id,
+        };
+        let aggregate_bytes = aggregate_value.to_bytes().to_vec();
+        let aggregate_id =
+            IdentityV1::new(hash(&aggregate_bytes).to_bytes()).expect("aggregate ID");
+        let refund_id = IdentityV1::new(sponsor.to_bytes()).expect("refund identity");
+        let recipe_id_bytes = recipe_id.to_bytes();
+        let aggregate_id_bytes = aggregate_id.to_bytes();
+        let refund_bytes = refund_id.to_bytes();
+        let (root_key, root_bump) = Pubkey::find_program_address(
+            &[
+                SERIES_ROOT_PDA_DOMAIN_V1,
+                recipe_id_bytes.as_slice(),
+                aggregate_id_bytes.as_slice(),
+                refund_bytes.as_slice(),
+            ],
+            &program_id,
+        );
+        let (_escrow_key, escrow_bump) = Pubkey::find_program_address(
+            &[SERIES_ESCROW_PDA_DOMAIN_V1, root_key.as_ref()],
+            &program_id,
+        );
+        let root_address = IdentityV1::new(root_key.to_bytes()).expect("root address");
+        let root = SeriesRootV1::new(
+            recipe_id,
+            aggregate_id,
+            &recipe_value,
+            &aggregate_value,
+            refund_id,
+            root_bump,
+        )
+        .expect("Series root");
+        let escrow = SeriesEscrowV1 {
+            series_root_address: root_address,
+            recipe_id,
+            aggregate_id,
+            refund_authority: refund_id,
+            pda_bump: escrow_bump,
+        };
+        let index = 0u64.to_le_bytes();
+        let (ticket_key, ticket_bump) = Pubkey::find_program_address(
+            &[
+                SERIES_TICKET_PDA_DOMAIN_V1,
+                root_key.as_ref(),
+                index.as_slice(),
+            ],
+            &program_id,
+        );
+        let instantiated = plan_instantiate_next_v1(
+            root,
+            root_address,
+            escrow,
+            recipe_id,
+            &recipe_value,
+            aggregate_id,
+            &aggregate_value,
+            derived_id,
+            &derived_value,
+            material,
+            manifest,
+            capitalization_id,
+            &capitalization_value,
+            InstantiateNextV1 {
+                expected_index: 0,
+                expected_time: recipe_value.first_occurrence_time,
+                ticket_bump,
+            },
+            recipe_value.first_occurrence_time,
+            rent.minimum_balance(SERIES_ESCROW_BYTES_V1),
+            ticket_rent,
+            rent.minimum_balance(SERIES_ESCROW_BYTES_V1) + aggregate_value.total_principal,
+            VacantAccountFactsV1 {
+                lamports: 0,
+                owner: system_program::ID.to_bytes(),
+                data_len: 0,
+                is_executable: false,
+            },
+        )
+        .expect("instantiate ticket");
+        found.sponsor.lamports = 0;
+        let (recipe, recipe_finalization) = finalized_record(
+            program_id,
+            observation,
+            SERIES_RECIPE_SCHEMA_RELEASE_ID_V3,
+            recipe_bytes,
+        );
+        let (aggregate, aggregate_finalization) = finalized_record(
+            program_id,
+            observation,
+            SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1,
+            aggregate_bytes,
+        );
+        let (derived, derived_finalization) = finalized_record(
+            program_id,
+            observation,
+            SERIES_DERIVED_SCHEMA_RELEASE_ID_V1,
+            derived_bytes,
+        );
+        let (capitalization, capitalization_finalization) = finalized_record(
+            program_id,
+            observation,
+            SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1,
+            capitalization_bytes,
+        );
+        let (capability_template, capability_template_finalization) = finalized_record(
+            program_id,
+            observation,
+            CAPABILITY_TEMPLATE_SCHEMA_RELEASE_ID_V1,
+            template_bytes,
+        );
+        (
+            program_id,
+            SeriesConsumeAndFoundState {
+                found,
+                root: observed(
+                    observation,
+                    root_key,
+                    program_id,
+                    rent.minimum_balance(SERIES_ROOT_BYTES_V1),
+                    false,
+                    instantiated.root_after.to_bytes().to_vec(),
+                ),
+                recipe,
+                recipe_finalization,
+                aggregate,
+                aggregate_finalization,
+                derived,
+                derived_finalization,
+                capitalization,
+                capitalization_finalization,
+                ticket: observed(
+                    observation,
+                    ticket_key,
+                    program_id,
+                    instantiated.ticket_lamports_after + 3,
+                    false,
+                    instantiated.ticket.to_bytes().to_vec(),
+                ),
+                capability_template,
+                capability_template_finalization,
+            },
+        )
+    }
+
     #[test]
     fn series_create_is_exact_dust_safe_and_hostile_to_substitution() {
         let (program_id, state) = create_fixture();
@@ -997,5 +1585,62 @@ mod tests {
             build_series_create_v1(program_id, &stale),
             Err(VerticalError::ObservationMismatch)
         );
+    }
+
+    #[test]
+    fn series_consume_authenticates_atomic_found_replay_funding_and_aliases() {
+        let (program_id, state) = consume_fixture();
+        let ticket = OccurrenceTicketV1::decode(&state.ticket.data).expect("ticket");
+        let report = build_series_consume_ticket_and_found_v1(program_id, &state)
+            .expect("atomic Consume+Found");
+        assert_eq!(report.instruction.accounts.len(), 30);
+        assert_eq!(report.occurrence_index, 0);
+        assert_eq!(report.market_principal, ticket.market_principal);
+        assert_eq!(report.ticket_refund, ticket.ticket_rent + 3);
+        assert_eq!(
+            report.found.debit.total_sponsor_debit,
+            ticket.market_principal
+        );
+
+        let mut replayed = state.clone();
+        replayed.ticket.owner = system_program::ID;
+        replayed.ticket.data.clear();
+        assert_eq!(
+            build_series_consume_ticket_and_found_v1(program_id, &replayed),
+            Err(VerticalError::InvalidOwner)
+        );
+
+        let mut underfunded = state.clone();
+        underfunded.ticket.lamports = ticket.market_principal + ticket.ticket_rent - 1;
+        assert_eq!(
+            build_series_consume_ticket_and_found_v1(program_id, &underfunded),
+            Err(VerticalError::InvalidState)
+        );
+
+        let mut substituted_manifest = state.clone();
+        *substituted_manifest
+            .found
+            .capability_manifest
+            .data
+            .last_mut()
+            .expect("manifest tail") ^= 1;
+        assert!(matches!(
+            build_series_consume_ticket_and_found_v1(program_id, &substituted_manifest),
+            Err(VerticalError::FinalizationMismatch) | Err(VerticalError::ContentMismatch)
+        ));
+
+        let mut aliased = state.clone();
+        aliased.capability_template_finalization.staging_cursor.key =
+            aliased.found.system_program.key;
+        assert!(build_series_consume_ticket_and_found_v1(program_id, &aliased).is_err());
+
+        let mut wrong_product = state;
+        *wrong_product
+            .found
+            .product_instance
+            .data
+            .last_mut()
+            .expect("Product tail") ^= 1;
+        assert!(build_series_consume_ticket_and_found_v1(program_id, &wrong_product).is_err());
     }
 }
