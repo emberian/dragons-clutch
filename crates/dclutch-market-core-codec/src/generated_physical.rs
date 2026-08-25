@@ -3,6 +3,7 @@ pub const PHYSICAL_ABI_VERSION_V1: u16 = 1;
 pub const CORE_EFFECT_ENVELOPE_BYTES_V1: usize = 280;
 pub const CORE_EFFECT_ACK_BYTES_V1: usize = 240;
 pub const SERIES_CORE_REQUEST_BYTES_V1: usize = 336;
+pub const SERIES_CORE_ACK_BYTES_V1: usize = 264;
 pub const CORE_EFFECT_MAGIC_V1: [u8; 8] = [
     0x44, 0x43, 0x4c, 0x54, 0x43, 0x45, 0x46, 0x31,
 ];
@@ -12,8 +13,14 @@ pub const CORE_EFFECT_ACK_MAGIC_V1: [u8; 8] = [
 pub const SERIES_CORE_REQUEST_MAGIC_V1: [u8; 8] = [
     0x44, 0x43, 0x4c, 0x54, 0x43, 0x53, 0x52, 0x31,
 ];
+pub const SERIES_CORE_ACK_MAGIC_V1: [u8; 8] = [
+    0x44, 0x43, 0x4c, 0x54, 0x43, 0x53, 0x41, 0x31,
+];
 pub const CORE_EFFECT_DIGEST_DOMAIN_V1: [u8; 22] = [
     0x64, 0x63, 0x6c, 0x75, 0x74, 0x63, 0x68, 0x2f, 0x63, 0x6f, 0x72, 0x65, 0x2d, 0x65, 0x66, 0x66, 0x65, 0x63, 0x74, 0x2f, 0x76, 0x31,
+];
+pub const SERIES_CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1: [u8; 29] = [
+    0x64, 0x63, 0x6c, 0x75, 0x74, 0x63, 0x68, 0x2f, 0x73, 0x65, 0x72, 0x69, 0x65, 0x73, 0x2d, 0x63, 0x6f, 0x72, 0x65, 0x2d, 0x63, 0x61, 0x6c, 0x6c, 0x65, 0x72, 0x2f, 0x76, 0x31,
 ];
 pub(crate) const EFFECT_MAGIC_OFFSET: usize = 0;
 pub(crate) const EFFECT_VERSION_OFFSET: usize = 8;
@@ -68,3 +75,17 @@ pub(crate) const SERIES_CAPABILITY_RENT_OFFSET: usize = 304;
 pub(crate) const SERIES_WORK_OFFSET: usize = 312;
 pub(crate) const SERIES_HOARD_PRINCIPAL_OFFSET: usize = 320;
 pub(crate) const SERIES_CLOSE_RENT_OFFSET: usize = 328;
+pub(crate) const SERIES_ACK_MAGIC_OFFSET: usize = 0;
+pub(crate) const SERIES_ACK_VERSION_OFFSET: usize = 8;
+pub(crate) const SERIES_ACK_ACTION_OFFSET: usize = 10;
+pub(crate) const SERIES_ACK_RESERVED_OFFSET: usize = 11;
+pub(crate) const SERIES_ACK_CORE_PROGRAM_OFFSET: usize = 16;
+pub(crate) const SERIES_ACK_RELEASE_SET_OFFSET: usize = 48;
+pub(crate) const SERIES_ACK_TEMPLATE_OFFSET: usize = 80;
+pub(crate) const SERIES_ACK_TICKET_OFFSET: usize = 112;
+pub(crate) const SERIES_ACK_MARKET_OFFSET: usize = 144;
+pub(crate) const SERIES_ACK_REQUEST_DIGEST_OFFSET: usize = 176;
+pub(crate) const SERIES_ACK_POST_RESOURCE_DIGEST_OFFSET: usize = 208;
+pub(crate) const SERIES_ACK_MARKET_GENERATION_OFFSET: usize = 240;
+pub(crate) const SERIES_ACK_EXPECTED_SERIES_REVISION_OFFSET: usize = 248;
+pub(crate) const SERIES_ACK_EXPECTED_TICKET_REVISION_OFFSET: usize = 256;

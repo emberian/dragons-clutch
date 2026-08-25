@@ -18,10 +18,14 @@ open DClutch.AbiSchema
 def effectMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x45, 0x46, 0x31]
 def ackMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x41, 0x4b, 0x31]
 def seriesMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x53, 0x52, 0x31]
+def seriesAckMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x53, 0x41, 0x31]
 def effectDigestDomain : List UInt8 := "dclutch/core-effect/v1".toUTF8.toList
+def seriesCallerAuthorityDomain : List UInt8 := "dclutch/series-core-caller/v1".toUTF8.toList
 def version : Nat := 1
 
 theorem effect_digest_domain_fits_sha_seed : effectDigestDomain.length ≤ 32 := by native_decide
+theorem series_caller_authority_domain_fits_pda_seed :
+    seriesCallerAuthorityDomain.length ≤ 32 := by native_decide
 
 inductive EffectField where
   | magic | version | action | targetRole | reservedHeader
@@ -150,5 +154,43 @@ end SeriesField
 theorem series_schema_width : seriesBytes = 336 := by native_decide
 theorem series_schema_unique : (seriesSchema.map fun field => field.name).Nodup := by native_decide
 theorem series_fields_disjoint : seriesLayout.Pairwise Before := specializeFrom_pairwise 0 seriesSchema
+
+inductive SeriesAckField where
+  | magic | version | action | reserved
+  | coreProgram | releaseSet | template | ticket | market | requestDigest | postResourceDigest
+  | marketGeneration | expectedSeriesRevision | expectedTicketRevision
+  deriving DecidableEq, Repr
+
+def seriesAckSchema : List (FieldSpec SeriesAckField) := [
+  ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.action, .u8⟩, ⟨.reserved, .reserved 5⟩,
+  ⟨.coreProgram, .bytes 32⟩, ⟨.releaseSet, .bytes 32⟩, ⟨.template, .bytes 32⟩,
+  ⟨.ticket, .bytes 32⟩, ⟨.market, .bytes 32⟩, ⟨.requestDigest, .bytes 32⟩,
+  ⟨.postResourceDigest, .bytes 32⟩, ⟨.marketGeneration, .u64⟩,
+  ⟨.expectedSeriesRevision, .u64⟩, ⟨.expectedTicketRevision, .u64⟩
+]
+
+def seriesAckLayout : List (PlacedField SeriesAckField) := specialize seriesAckSchema
+def seriesAckBytes : Nat := schemaWidth seriesAckSchema
+
+namespace SeriesAckField
+
+def rustName : SeriesAckField → String
+  | .magic => "SERIES_ACK_MAGIC_OFFSET" | .version => "SERIES_ACK_VERSION_OFFSET"
+  | .action => "SERIES_ACK_ACTION_OFFSET" | .reserved => "SERIES_ACK_RESERVED_OFFSET"
+  | .coreProgram => "SERIES_ACK_CORE_PROGRAM_OFFSET"
+  | .releaseSet => "SERIES_ACK_RELEASE_SET_OFFSET" | .template => "SERIES_ACK_TEMPLATE_OFFSET"
+  | .ticket => "SERIES_ACK_TICKET_OFFSET" | .market => "SERIES_ACK_MARKET_OFFSET"
+  | .requestDigest => "SERIES_ACK_REQUEST_DIGEST_OFFSET"
+  | .postResourceDigest => "SERIES_ACK_POST_RESOURCE_DIGEST_OFFSET"
+  | .marketGeneration => "SERIES_ACK_MARKET_GENERATION_OFFSET"
+  | .expectedSeriesRevision => "SERIES_ACK_EXPECTED_SERIES_REVISION_OFFSET"
+  | .expectedTicketRevision => "SERIES_ACK_EXPECTED_TICKET_REVISION_OFFSET"
+
+end SeriesAckField
+
+theorem series_ack_schema_width : seriesAckBytes = 264 := by native_decide
+theorem series_ack_schema_unique : (seriesAckSchema.map fun field => field.name).Nodup := by native_decide
+theorem series_ack_fields_disjoint : seriesAckLayout.Pairwise Before :=
+  specializeFrom_pairwise 0 seriesAckSchema
 
 end DClutch.MarketCorePhysicalAbi

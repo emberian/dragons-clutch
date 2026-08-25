@@ -30,6 +30,11 @@ maximum account or request shape:
   Market, Realm, Product, founder, beneficiary, revisions, rent, work, and
   positive Ticket-owned Hoard principal. Its
   Close shape is disjoint and requires every occurrence-only field to be zero.
+- `SeriesCoreAckV1` is a 264-byte Core-produced receipt for that direct boundary.
+  It binds the Registry-selected Core program, exact request digest, release
+  set, Template, Ticket, Market, occurrence-derived generation, caller replay
+  revisions, and the digest of all Core-owned post-resources. Close has a
+  disjoint zero-Ticket/zero-Market/zero-generation shape.
 
 The full-effect digest is
 `SHA256("dclutch/core-effect/v1" || u32_le(280) || envelope ||
@@ -42,7 +47,14 @@ before the envelope is encoded, while the resulting authority is still exact
 to one role request and replay context. The envelope's `target_role` is the
 child role and never substitutes for caller role Core. Series is not an
 execution-release role; its 336-byte request is a separate direct Series-to-Core
-boundary authenticated from the exact Template and Ticket.
+boundary authenticated from the exact Template and Ticket. For occurrence
+actions, `market_generation = u64::from(occurrence) + 1`; Close has no Market
+generation. The Series program signs with its PDA derived as
+`["dclutch/series-core-caller/v1", template, SHA256(exact_request_bytes)]`.
+Core must recompute that request digest, derive the PDA under the authenticated
+owner of the exact Template/Ticket, and require the PDA signer. Series accepts
+the 264-byte receipt only from the Registry-selected Core program as the
+immediate return-data producer and rechecks the exact Core post-resource digest.
 
 The interpreter validates all inputs before applying a transition. It separates
 rent, unclassified donation, Source work funding, deferred custody rent, and

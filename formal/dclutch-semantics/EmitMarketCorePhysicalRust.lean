@@ -19,13 +19,18 @@ def main : IO Unit := do
   IO.println s!"pub const CORE_EFFECT_ENVELOPE_BYTES_V1: usize = {effectBytes};"
   IO.println s!"pub const CORE_EFFECT_ACK_BYTES_V1: usize = {ackBytes};"
   IO.println s!"pub const SERIES_CORE_REQUEST_BYTES_V1: usize = {seriesBytes};"
+  IO.println s!"pub const SERIES_CORE_ACK_BYTES_V1: usize = {seriesAckBytes};"
   emitBytes "CORE_EFFECT_MAGIC_V1" effectMagic
   emitBytes "CORE_EFFECT_ACK_MAGIC_V1" ackMagic
   emitBytes "SERIES_CORE_REQUEST_MAGIC_V1" seriesMagic
+  emitBytes "SERIES_CORE_ACK_MAGIC_V1" seriesAckMagic
   emitBytes "CORE_EFFECT_DIGEST_DOMAIN_V1" effectDigestDomain
+  emitBytes "SERIES_CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1" seriesCallerAuthorityDomain
   for field in effectLayout do
     IO.println s!"pub(crate) const {EffectField.rustName field.spec.name}: usize = {field.offset};"
   for field in ackLayout do
     IO.println s!"pub(crate) const {AckField.rustName field.spec.name}: usize = {field.offset};"
   for field in seriesLayout do
     IO.println s!"pub(crate) const {SeriesField.rustName field.spec.name}: usize = {field.offset};"
+  for field in seriesAckLayout do
+    IO.println s!"pub(crate) const {SeriesAckField.rustName field.spec.name}: usize = {field.offset};"

@@ -28,14 +28,21 @@ use crate::{
         EFFECT_RESERVED_BODY_OFFSET, EFFECT_RESERVED_HEADER_OFFSET,
         EFFECT_ROLE_REQUEST_BYTES_OFFSET, EFFECT_ROLE_REQUEST_DIGEST_OFFSET,
         EFFECT_TARGET_ROLE_OFFSET, EFFECT_VERSION_OFFSET, PHYSICAL_ABI_VERSION_V1,
-        SERIES_ACTION_OFFSET, SERIES_BENEFICIARY_OFFSET, SERIES_CAPABILITY_RENT_OFFSET,
-        SERIES_CLOSE_RENT_OFFSET, SERIES_CORE_REQUEST_BYTES_V1, SERIES_CORE_REQUEST_MAGIC_V1,
-        SERIES_EXPECTED_SERIES_REVISION_OFFSET, SERIES_EXPECTED_TICKET_REVISION_OFFSET,
-        SERIES_FOUNDER_OFFSET, SERIES_HOARD_PRINCIPAL_OFFSET, SERIES_MAGIC_OFFSET,
-        SERIES_MARKET_OFFSET, SERIES_MARKET_RENT_OFFSET, SERIES_OCCURRENCE_OFFSET,
-        SERIES_PRODUCT_OFFSET, SERIES_REALM_OFFSET, SERIES_RELEASE_SET_OFFSET,
-        SERIES_RESERVED_BODY_OFFSET, SERIES_RESERVED_HEADER_OFFSET, SERIES_TEMPLATE_OFFSET,
-        SERIES_TICKET_OFFSET, SERIES_VERSION_OFFSET, SERIES_WORK_OFFSET,
+        SERIES_ACK_ACTION_OFFSET, SERIES_ACK_CORE_PROGRAM_OFFSET,
+        SERIES_ACK_EXPECTED_SERIES_REVISION_OFFSET, SERIES_ACK_EXPECTED_TICKET_REVISION_OFFSET,
+        SERIES_ACK_MAGIC_OFFSET, SERIES_ACK_MARKET_GENERATION_OFFSET, SERIES_ACK_MARKET_OFFSET,
+        SERIES_ACK_POST_RESOURCE_DIGEST_OFFSET, SERIES_ACK_RELEASE_SET_OFFSET,
+        SERIES_ACK_REQUEST_DIGEST_OFFSET, SERIES_ACK_RESERVED_OFFSET, SERIES_ACK_TEMPLATE_OFFSET,
+        SERIES_ACK_TICKET_OFFSET, SERIES_ACK_VERSION_OFFSET, SERIES_ACTION_OFFSET,
+        SERIES_BENEFICIARY_OFFSET, SERIES_CAPABILITY_RENT_OFFSET, SERIES_CLOSE_RENT_OFFSET,
+        SERIES_CORE_ACK_BYTES_V1, SERIES_CORE_ACK_MAGIC_V1, SERIES_CORE_REQUEST_BYTES_V1,
+        SERIES_CORE_REQUEST_MAGIC_V1, SERIES_EXPECTED_SERIES_REVISION_OFFSET,
+        SERIES_EXPECTED_TICKET_REVISION_OFFSET, SERIES_FOUNDER_OFFSET,
+        SERIES_HOARD_PRINCIPAL_OFFSET, SERIES_MAGIC_OFFSET, SERIES_MARKET_OFFSET,
+        SERIES_MARKET_RENT_OFFSET, SERIES_OCCURRENCE_OFFSET, SERIES_PRODUCT_OFFSET,
+        SERIES_REALM_OFFSET, SERIES_RELEASE_SET_OFFSET, SERIES_RESERVED_BODY_OFFSET,
+        SERIES_RESERVED_HEADER_OFFSET, SERIES_TEMPLATE_OFFSET, SERIES_TICKET_OFFSET,
+        SERIES_VERSION_OFFSET, SERIES_WORK_OFFSET,
     },
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -811,6 +818,18 @@ impl SeriesCoreRequestV1 {
     pub const fn occurrence_index(self) -> u32 {
         self.occurrence
     }
+    /// Derive the nonzero Market generation selected by an occurrence.
+    ///
+    /// Occurrence zero maps to generation one. Close has no Market generation.
+    #[must_use]
+    pub fn market_generation(self) -> Option<u64> {
+        match self.action {
+            SeriesCoreActionV1::Close => None,
+            SeriesCoreActionV1::Prepare
+            | SeriesCoreActionV1::Consume
+            | SeriesCoreActionV1::Expire => Some(u64::from(self.occurrence) + 1),
+        }
+    }
     /// Expected Series replay revision.
     #[must_use]
     pub const fn expected_series_revision(self) -> u64 {
@@ -845,6 +864,260 @@ impl SeriesCoreRequestV1 {
     #[must_use]
     pub const fn series_close_rent(self) -> u64 {
         self.series_close_rent
+    }
+}
+
+/// Exact Series-program caller PDA for a direct Series-to-Core request.
+///
+/// The PDA is derived under the authenticated Series program. Its exact
+/// request digest already commits action, release set, Template, Ticket,
+/// Market, and every economic field, so no optional coordinate is omitted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesCoreCallerSeedsV1 {
+    template: [u8; IDENTITY_BYTES],
+    request_digest: [u8; IDENTITY_BYTES],
+}
+
+impl SeriesCoreCallerSeedsV1 {
+    /// Project one already canonical request and its exact SHA-256 digest.
+    #[must_use]
+    pub const fn new(request: SeriesCoreRequestV1, request_digest: Identity) -> Self {
+        Self {
+            template: request.template.to_bytes(),
+            request_digest: request_digest.to_bytes(),
+        }
+    }
+
+    /// Return the sole Series-to-Core caller PDA seed order.
+    #[must_use]
+    pub fn as_slices(&self) -> [&[u8]; 3] {
+        [
+            crate::SERIES_CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1.as_slice(),
+            &self.template,
+            &self.request_digest,
+        ]
+    }
+}
+
+/// Core-produced acknowledgment of one direct Series-to-Core request.
+///
+/// Series is not an execution-release role. This receipt is therefore separate
+/// from [`CoreEffectAckV1`] and is accepted only from the Registry-selected
+/// Core program as the immediate return-data producer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesCoreAckV1 {
+    action: SeriesCoreActionV1,
+    core_program: Identity,
+    release_set: Identity,
+    template: Identity,
+    ticket: Option<Identity>,
+    market: Option<Identity>,
+    request_digest: Identity,
+    post_resource_digest: Identity,
+    market_generation: Option<u64>,
+    expected_series_revision: u64,
+    expected_ticket_revision: u64,
+}
+
+impl SeriesCoreAckV1 {
+    /// Construct the sole acknowledgment for one already canonical request.
+    #[must_use]
+    pub fn new(
+        request: SeriesCoreRequestV1,
+        core_program: Identity,
+        request_digest: Identity,
+        post_resource_digest: Identity,
+    ) -> Self {
+        Self {
+            action: request.action,
+            core_program,
+            release_set: request.release_set,
+            template: request.template,
+            ticket: request.ticket,
+            market: request.market,
+            request_digest,
+            post_resource_digest,
+            market_generation: request.market_generation(),
+            expected_series_revision: request.expected_series_revision,
+            expected_ticket_revision: request.expected_ticket_revision,
+        }
+    }
+
+    /// Hostile-decode one exact action-specific acknowledgment.
+    pub fn decode(input: &[u8]) -> Result<Self, Error> {
+        exact_len(input, SERIES_CORE_ACK_BYTES_V1)?;
+        exact_magic(input, SERIES_ACK_MAGIC_OFFSET, &SERIES_CORE_ACK_MAGIC_V1)?;
+        if read_u16(input, SERIES_ACK_VERSION_OFFSET)? != PHYSICAL_ABI_VERSION_V1 {
+            return Err(Error::UnsupportedVersion);
+        }
+        require_zero(input, SERIES_ACK_RESERVED_OFFSET, 5)?;
+        let action = SeriesCoreActionV1::decode(read_u8(input, SERIES_ACK_ACTION_OFFSET)?)?;
+        let ticket = read_optional_identity(input, SERIES_ACK_TICKET_OFFSET)?;
+        let market = read_optional_identity(input, SERIES_ACK_MARKET_OFFSET)?;
+        let generation = read_u64(input, SERIES_ACK_MARKET_GENERATION_OFFSET)?;
+        let expected_ticket_revision = read_u64(input, SERIES_ACK_EXPECTED_TICKET_REVISION_OFFSET)?;
+        let market_generation = if generation == 0 {
+            None
+        } else {
+            Some(generation)
+        };
+        let valid_shape = match action {
+            SeriesCoreActionV1::Close => {
+                ticket.is_none()
+                    && market.is_none()
+                    && market_generation.is_none()
+                    && expected_ticket_revision == 0
+            }
+            SeriesCoreActionV1::Prepare
+            | SeriesCoreActionV1::Consume
+            | SeriesCoreActionV1::Expire => {
+                ticket.is_some() && market.is_some() && market_generation.is_some()
+            }
+        };
+        if !valid_shape {
+            return Err(Error::InvalidCoordinates);
+        }
+        Ok(Self {
+            action,
+            core_program: read_identity(input, SERIES_ACK_CORE_PROGRAM_OFFSET)?,
+            release_set: read_identity(input, SERIES_ACK_RELEASE_SET_OFFSET)?,
+            template: read_identity(input, SERIES_ACK_TEMPLATE_OFFSET)?,
+            ticket,
+            market,
+            request_digest: read_identity(input, SERIES_ACK_REQUEST_DIGEST_OFFSET)?,
+            post_resource_digest: read_identity(input, SERIES_ACK_POST_RESOURCE_DIGEST_OFFSET)?,
+            market_generation,
+            expected_series_revision: read_u64(input, SERIES_ACK_EXPECTED_SERIES_REVISION_OFFSET)?,
+            expected_ticket_revision,
+        })
+    }
+
+    /// Encode the exact fixed acknowledgment.
+    pub fn encode(self) -> Result<[u8; SERIES_CORE_ACK_BYTES_V1], Error> {
+        let mut output = [0; SERIES_CORE_ACK_BYTES_V1];
+        put(
+            &mut output,
+            SERIES_ACK_MAGIC_OFFSET,
+            &SERIES_CORE_ACK_MAGIC_V1,
+        )?;
+        put_u16(
+            &mut output,
+            SERIES_ACK_VERSION_OFFSET,
+            PHYSICAL_ABI_VERSION_V1,
+        )?;
+        put_u8(&mut output, SERIES_ACK_ACTION_OFFSET, self.action as u8)?;
+        put_identity(
+            &mut output,
+            SERIES_ACK_CORE_PROGRAM_OFFSET,
+            self.core_program,
+        )?;
+        put_identity(&mut output, SERIES_ACK_RELEASE_SET_OFFSET, self.release_set)?;
+        put_identity(&mut output, SERIES_ACK_TEMPLATE_OFFSET, self.template)?;
+        put_optional_identity(&mut output, SERIES_ACK_TICKET_OFFSET, self.ticket)?;
+        put_optional_identity(&mut output, SERIES_ACK_MARKET_OFFSET, self.market)?;
+        put_identity(
+            &mut output,
+            SERIES_ACK_REQUEST_DIGEST_OFFSET,
+            self.request_digest,
+        )?;
+        put_identity(
+            &mut output,
+            SERIES_ACK_POST_RESOURCE_DIGEST_OFFSET,
+            self.post_resource_digest,
+        )?;
+        put_u64(
+            &mut output,
+            SERIES_ACK_MARKET_GENERATION_OFFSET,
+            self.market_generation.unwrap_or(0),
+        )?;
+        put_u64(
+            &mut output,
+            SERIES_ACK_EXPECTED_SERIES_REVISION_OFFSET,
+            self.expected_series_revision,
+        )?;
+        put_u64(
+            &mut output,
+            SERIES_ACK_EXPECTED_TICKET_REVISION_OFFSET,
+            self.expected_ticket_revision,
+        )?;
+        Ok(output)
+    }
+
+    /// Authenticate every request echo and the observed Core poststate digest.
+    pub fn validate_for(
+        self,
+        request: SeriesCoreRequestV1,
+        expected_core_program: Identity,
+        request_digest: Identity,
+        observed_post_resource_digest: Identity,
+    ) -> Result<(), Error> {
+        if self
+            != Self::new(
+                request,
+                expected_core_program,
+                request_digest,
+                observed_post_resource_digest,
+            )
+        {
+            return Err(Error::InvalidRelease);
+        }
+        Ok(())
+    }
+
+    /// Selected Series action.
+    #[must_use]
+    pub const fn action(self) -> SeriesCoreActionV1 {
+        self.action
+    }
+    /// Registry-selected Core program.
+    #[must_use]
+    pub const fn core_program(self) -> Identity {
+        self.core_program
+    }
+    /// Immutable release set.
+    #[must_use]
+    pub const fn release_set(self) -> Identity {
+        self.release_set
+    }
+    /// Exact Series template.
+    #[must_use]
+    pub const fn template(self) -> Identity {
+        self.template
+    }
+    /// Exact ticket, absent only for Close.
+    #[must_use]
+    pub const fn ticket(self) -> Option<Identity> {
+        self.ticket
+    }
+    /// Exact Market, absent only for Close.
+    #[must_use]
+    pub const fn market(self) -> Option<Identity> {
+        self.market
+    }
+    /// SHA-256 of the exact 336-byte request.
+    #[must_use]
+    pub const fn request_digest(self) -> Identity {
+        self.request_digest
+    }
+    /// Digest of exact Core-owned resources after the effect.
+    #[must_use]
+    pub const fn post_resource_digest(self) -> Identity {
+        self.post_resource_digest
+    }
+    /// Nonzero occurrence-derived Market generation, absent only for Close.
+    #[must_use]
+    pub const fn market_generation(self) -> Option<u64> {
+        self.market_generation
+    }
+    /// Expected Series replay revision echoed from the request.
+    #[must_use]
+    pub const fn expected_series_revision(self) -> u64 {
+        self.expected_series_revision
+    }
+    /// Expected ticket revision echoed from the request, zero only for Close.
+    #[must_use]
+    pub const fn expected_ticket_revision(self) -> u64 {
+        self.expected_ticket_revision
     }
 }
 
@@ -890,6 +1163,15 @@ fn read_u64(input: &[u8], offset: usize) -> Result<u64, Error> {
 
 fn read_identity(input: &[u8], offset: usize) -> Result<Identity, Error> {
     Identity::new(read_array(input, offset)?)
+}
+
+fn read_optional_identity(input: &[u8], offset: usize) -> Result<Option<Identity>, Error> {
+    let bytes = read_array(input, offset)?;
+    if bytes == ZERO_IDENTITY {
+        Ok(None)
+    } else {
+        Identity::new(bytes).map(Some)
+    }
 }
 
 fn read_array<const N: usize>(input: &[u8], offset: usize) -> Result<[u8; N], Error> {

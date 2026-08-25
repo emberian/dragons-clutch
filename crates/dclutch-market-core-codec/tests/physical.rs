@@ -2,8 +2,9 @@
 
 use dclutch_market_core_codec::{
     CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_ENVELOPE_BYTES_V1, CoreEffectAckV1, CoreEffectActionV1,
-    CoreEffectEnvelopeV1, Error, Identity, Role, SERIES_CORE_REQUEST_BYTES_V1, SeriesCoreActionV1,
-    SeriesCoreRequestV1,
+    CoreEffectEnvelopeV1, Error, Identity, Role, SERIES_CORE_ACK_BYTES_V1,
+    SERIES_CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1, SERIES_CORE_REQUEST_BYTES_V1, SeriesCoreAckV1,
+    SeriesCoreActionV1, SeriesCoreCallerSeedsV1, SeriesCoreRequestV1,
 };
 use dclutch_release_set_contract::{CALLER_AUTHORITY_PDA_DOMAIN_V1, ExecutionRoleV1};
 
@@ -294,6 +295,7 @@ fn series_occurrence_request_is_exact_and_round_trips() {
         assert_eq!(request.beneficiary(), id(36));
         assert_eq!(request.founder(), Some(id(37)));
         assert_eq!(request.occurrence_index(), 38);
+        assert_eq!(request.market_generation(), Some(39));
         assert_eq!(request.expected_series_revision(), 39);
         assert_eq!(request.expected_ticket_revision(), 40);
         assert_eq!(request.market_rent(), 41);
@@ -316,6 +318,7 @@ fn series_close_is_disjoint_from_occurrence_shape() {
     assert_eq!(close.realm(), None);
     assert_eq!(close.product(), None);
     assert_eq!(close.founder(), None);
+    assert_eq!(close.market_generation(), None);
     assert_eq!(close.series_close_rent(), 44);
 
     let mut hostile = bytes;
@@ -342,6 +345,158 @@ fn series_close_is_disjoint_from_occurrence_shape() {
         SeriesCoreRequestV1::decode(&hostile),
         Err(Error::NonzeroReserved)
     );
+}
+
+#[test]
+fn series_generation_and_caller_pda_are_exact_to_the_request() {
+    let request = SeriesCoreRequestV1::occurrence(
+        SeriesCoreActionV1::Prepare,
+        id(30),
+        id(31),
+        id(32),
+        id(33),
+        id(34),
+        id(35),
+        id(36),
+        id(37),
+        u32::MAX,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+    )
+    .expect("maximum occurrence remains representable");
+    assert_eq!(request.market_generation(), Some(u64::from(u32::MAX) + 1));
+
+    let template = id(31).to_bytes();
+    let request_digest = id(50).to_bytes();
+    let expected: [&[u8]; 3] = [
+        SERIES_CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1.as_slice(),
+        template.as_slice(),
+        request_digest.as_slice(),
+    ];
+    let seeds = SeriesCoreCallerSeedsV1::new(request, id(50));
+    assert_eq!(seeds.as_slices(), expected);
+    assert_ne!(
+        seeds,
+        SeriesCoreCallerSeedsV1::new(request, id(51)),
+        "a substituted request digest must select another caller PDA",
+    );
+}
+
+#[test]
+fn series_acknowledgement_binds_request_generation_and_core_poststate() {
+    let request = occurrence(SeriesCoreActionV1::Consume);
+    let ack = SeriesCoreAckV1::new(request, id(51), id(52), id(53));
+    let bytes = ack.encode().expect("Series acknowledgment encodes");
+    assert_eq!(bytes.len(), SERIES_CORE_ACK_BYTES_V1);
+    assert_eq!(SeriesCoreAckV1::decode(&bytes), Ok(ack));
+    assert_eq!(ack.action(), SeriesCoreActionV1::Consume);
+    assert_eq!(ack.core_program(), id(51));
+    assert_eq!(ack.release_set(), id(30));
+    assert_eq!(ack.template(), id(31));
+    assert_eq!(ack.ticket(), Some(id(32)));
+    assert_eq!(ack.market(), Some(id(33)));
+    assert_eq!(ack.request_digest(), id(52));
+    assert_eq!(ack.post_resource_digest(), id(53));
+    assert_eq!(ack.market_generation(), Some(39));
+    assert_eq!(ack.expected_series_revision(), 39);
+    assert_eq!(ack.expected_ticket_revision(), 40);
+    assert_eq!(ack.validate_for(request, id(51), id(52), id(53)), Ok(()));
+    assert_eq!(
+        ack.validate_for(request, id(54), id(52), id(53)),
+        Err(Error::InvalidRelease)
+    );
+    assert_eq!(
+        ack.validate_for(request, id(51), id(54), id(53)),
+        Err(Error::InvalidRelease)
+    );
+    assert_eq!(
+        ack.validate_for(request, id(51), id(52), id(54)),
+        Err(Error::InvalidRelease)
+    );
+
+    let close_request =
+        SeriesCoreRequestV1::close(id(30), id(31), id(36), 39, 0).expect("valid close");
+    let close = SeriesCoreAckV1::new(close_request, id(51), id(52), id(53));
+    assert_eq!(
+        SeriesCoreAckV1::decode(&close.encode().expect("close acknowledgment encodes")),
+        Ok(close)
+    );
+    assert_eq!(close.ticket(), None);
+    assert_eq!(close.market(), None);
+    assert_eq!(close.market_generation(), None);
+    assert_eq!(close.expected_ticket_revision(), 0);
+}
+
+#[test]
+fn series_acknowledgement_hostile_bytes_and_partial_shapes_are_refused() {
+    let request = occurrence(SeriesCoreActionV1::Prepare);
+    let bytes = SeriesCoreAckV1::new(request, id(51), id(52), id(53))
+        .encode()
+        .expect("acknowledgment encodes");
+    let short = bytes
+        .get(..bytes.len().saturating_sub(1))
+        .expect("fixture has a shorter prefix");
+    assert_eq!(SeriesCoreAckV1::decode(short), Err(Error::InvalidLength));
+    let mut long = bytes.to_vec();
+    long.push(0);
+    assert_eq!(SeriesCoreAckV1::decode(&long), Err(Error::InvalidLength));
+
+    let mut hostile = bytes;
+    hostile[0] ^= 1;
+    assert_eq!(SeriesCoreAckV1::decode(&hostile), Err(Error::InvalidMagic));
+    let mut hostile = bytes;
+    hostile[8] = 2;
+    assert_eq!(
+        SeriesCoreAckV1::decode(&hostile),
+        Err(Error::UnsupportedVersion)
+    );
+    let mut hostile = bytes;
+    hostile[10] = u8::MAX;
+    assert_eq!(SeriesCoreAckV1::decode(&hostile), Err(Error::InvalidTag));
+    let mut hostile = bytes;
+    hostile[11] = 1;
+    assert_eq!(
+        SeriesCoreAckV1::decode(&hostile),
+        Err(Error::NonzeroReserved)
+    );
+    let mut hostile = bytes;
+    hostile[16..48].fill(0);
+    assert_eq!(
+        SeriesCoreAckV1::decode(&hostile),
+        Err(Error::InvalidIdentity)
+    );
+    for range in [112..144, 144..176, 240..248] {
+        let mut hostile = bytes;
+        hostile
+            .get_mut(range)
+            .expect("hostile occurrence field is in bounds")
+            .fill(0);
+        assert_eq!(
+            SeriesCoreAckV1::decode(&hostile),
+            Err(Error::InvalidCoordinates)
+        );
+    }
+
+    let close_request =
+        SeriesCoreRequestV1::close(id(30), id(31), id(36), 39, 0).expect("valid close");
+    let close = SeriesCoreAckV1::new(close_request, id(51), id(52), id(53))
+        .encode()
+        .expect("close acknowledgment encodes");
+    for range in [112..113, 144..145, 240..241, 256..257] {
+        let mut hostile = close;
+        hostile
+            .get_mut(range)
+            .expect("hostile close field is in bounds")
+            .fill(1);
+        assert_eq!(
+            SeriesCoreAckV1::decode(&hostile),
+            Err(Error::InvalidCoordinates)
+        );
+    }
 }
 
 #[test]
