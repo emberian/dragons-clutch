@@ -67,7 +67,8 @@ theorem protected_compartments_are_distinct :
 inductive RequestField where
   | magic | version | operation | callerRole | sourceCompartment
   | destinationCompartment | transferIndex | releaseSet | market | realm
-  | context | callerProgram | candidate | actor | order | parentRequestDigest
+  | context | callerProgram | candidate | sourceOwner | destinationOwner | order
+  | parentRequestDigest
   | source | destination | sourceVaultContext | destinationVaultContext
   | mint | tokenProgram | payer | rentRefund
   | expectedRevision | resultingRevision | orderNonce | generation | amount
@@ -81,7 +82,8 @@ def requestSchema : List (FieldSpec RequestField) := [
   ⟨.releaseSet, .bytes 32⟩, ⟨.market, .bytes 32⟩,
   ⟨.realm, .bytes 32⟩, ⟨.context, .bytes 32⟩,
   ⟨.callerProgram, .bytes 32⟩, ⟨.candidate, .bytes 32⟩,
-  ⟨.actor, .bytes 32⟩, ⟨.order, .bytes 32⟩,
+  ⟨.sourceOwner, .bytes 32⟩, ⟨.destinationOwner, .bytes 32⟩,
+  ⟨.order, .bytes 32⟩,
   ⟨.parentRequestDigest, .bytes 32⟩, ⟨.source, .bytes 32⟩,
   ⟨.destination, .bytes 32⟩, ⟨.sourceVaultContext, .bytes 32⟩,
   ⟨.destinationVaultContext, .bytes 32⟩, ⟨.mint, .bytes 32⟩,
@@ -142,7 +144,7 @@ def replayBytes := schemaWidth replaySchema
 def receiptBytes := schemaWidth receiptSchema
 
 theorem exact_physical_widths :
-    requestBytes = 640 ∧ replayBytes = 288 ∧ receiptBytes = 384 := by
+    requestBytes = 672 ∧ replayBytes = 288 ∧ receiptBytes = 384 := by
   native_decide
 
 theorem schemas_well_formed :
@@ -161,14 +163,15 @@ theorem request_coordinates_are_canonical : coordinates requestLayout = [
     (.destinationCompartment, 13, 1), (.transferIndex, 14, 2),
     (.releaseSet, 16, 32), (.market, 48, 32), (.realm, 80, 32),
     (.context, 112, 32), (.callerProgram, 144, 32),
-    (.candidate, 176, 32), (.actor, 208, 32), (.order, 240, 32),
-    (.parentRequestDigest, 272, 32), (.source, 304, 32),
-    (.destination, 336, 32), (.sourceVaultContext, 368, 32),
-    (.destinationVaultContext, 400, 32), (.mint, 432, 32),
-    (.tokenProgram, 464, 32), (.payer, 496, 32), (.rentRefund, 528, 32),
-    (.expectedRevision, 560, 8), (.resultingRevision, 568, 8),
-    (.orderNonce, 576, 8), (.generation, 584, 8), (.amount, 592, 8),
-    (.rentLamports, 600, 8), (.pageIndex, 608, 4),
-    (.executionIndex, 612, 4), (.reserved, 616, 24)] := by native_decide
+    (.candidate, 176, 32), (.sourceOwner, 208, 32),
+    (.destinationOwner, 240, 32), (.order, 272, 32),
+    (.parentRequestDigest, 304, 32), (.source, 336, 32),
+    (.destination, 368, 32), (.sourceVaultContext, 400, 32),
+    (.destinationVaultContext, 432, 32), (.mint, 464, 32),
+    (.tokenProgram, 496, 32), (.payer, 528, 32), (.rentRefund, 560, 32),
+    (.expectedRevision, 592, 8), (.resultingRevision, 600, 8),
+    (.orderNonce, 608, 8), (.generation, 616, 8), (.amount, 624, 8),
+    (.rentLamports, 632, 8), (.pageIndex, 640, 4),
+    (.executionIndex, 644, 4), (.reserved, 648, 24)] := by native_decide
 
 end DClutch.CustodyAbi

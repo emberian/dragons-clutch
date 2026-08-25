@@ -66,8 +66,8 @@ pub enum Error {
     ZeroIdentity,
     /// Exact source and destination accounts aliased.
     AliasedTransferAccounts,
-    /// An external token side lacked one exact nonzero semantic owner.
-    ExternalActorRequired,
+    /// An external token side lacked its exact nonzero semantic owner.
+    ExternalOwnerMismatch,
     /// Optimistic replay arithmetic overflowed or skipped a revision.
     RevisionOverflow,
     /// Request fields did not form the selected operation's exact shape.
@@ -277,8 +277,10 @@ impl CustodyVaultSeedsV1 {
 pub struct ContextV1 {
     /// Optional best-valid-submitted candidate identity.
     pub candidate: [u8; 32],
-    /// Optional actor, holder, founder, or beneficiary identity.
-    pub actor: [u8; 32],
+    /// Exact external source-token owner, zero for a Custody-owned source.
+    pub source_owner: [u8; 32],
+    /// Exact external destination-token owner, zero for a Custody-owned destination.
+    pub destination_owner: [u8; 32],
     /// Optional order or Ticket identity.
     pub order: [u8; 32],
     /// SHA-256 of the caller's complete canonical parent packet.
@@ -372,7 +374,8 @@ impl CustodyRequestV1 {
             caller_program: read_array(input, REQUEST_CALLER_PROGRAM_OFFSET)?,
             semantic: ContextV1 {
                 candidate: read_array(input, REQUEST_CANDIDATE_OFFSET)?,
-                actor: read_array(input, REQUEST_ACTOR_OFFSET)?,
+                source_owner: read_array(input, REQUEST_SOURCE_OWNER_OFFSET)?,
+                destination_owner: read_array(input, REQUEST_DESTINATION_OWNER_OFFSET)?,
                 order: read_array(input, REQUEST_ORDER_OFFSET)?,
                 parent_request_digest: read_array(input, REQUEST_PARENT_REQUEST_DIGEST_OFFSET)?,
                 order_nonce: read_u64(input, REQUEST_ORDER_NONCE_OFFSET)?,
@@ -432,7 +435,11 @@ impl CustodyRequestV1 {
             (REQUEST_CONTEXT_OFFSET, self.context),
             (REQUEST_CALLER_PROGRAM_OFFSET, self.caller_program),
             (REQUEST_CANDIDATE_OFFSET, self.semantic.candidate),
-            (REQUEST_ACTOR_OFFSET, self.semantic.actor),
+            (REQUEST_SOURCE_OWNER_OFFSET, self.semantic.source_owner),
+            (
+                REQUEST_DESTINATION_OWNER_OFFSET,
+                self.semantic.destination_owner,
+            ),
             (REQUEST_ORDER_OFFSET, self.semantic.order),
             (
                 REQUEST_PARENT_REQUEST_DIGEST_OFFSET,
@@ -496,6 +503,11 @@ impl CustodyRequestV1 {
         if self.expected_revision.checked_add(1) != Some(self.resulting_revision) {
             return Err(Error::RevisionOverflow);
         }
+        if self.operation != OperationV1::Transfer
+            && (!is_zero(&self.semantic.source_owner) || !is_zero(&self.semantic.destination_owner))
+        {
+            return Err(Error::InvalidOperationShape);
+        }
         match self.operation {
             OperationV1::InitializeReplay => {
                 if self.expected_revision != 0
@@ -556,11 +568,12 @@ impl CustodyRequestV1 {
                 {
                     return Err(Error::InvalidOperationShape);
                 }
-                if (self.source_compartment == CompartmentV1::External
-                    || self.destination_compartment == CompartmentV1::External)
-                    && is_zero(&self.semantic.actor)
+                if (self.source_compartment == CompartmentV1::External)
+                    != !is_zero(&self.semantic.source_owner)
+                    || (self.destination_compartment == CompartmentV1::External)
+                        != !is_zero(&self.semantic.destination_owner)
                 {
-                    return Err(Error::ExternalActorRequired);
+                    return Err(Error::ExternalOwnerMismatch);
                 }
                 if self.source == self.destination {
                     return Err(Error::AliasedTransferAccounts);
@@ -1117,7 +1130,8 @@ mod tests {
     fn semantic() -> ContextV1 {
         ContextV1 {
             candidate: id(6),
-            actor: id(7),
+            source_owner: [0; 32],
+            destination_owner: [0; 32],
             order: id(8),
             parent_request_digest: id(9),
             order_nonce: 11,
@@ -1222,8 +1236,11 @@ mod tests {
         let mut hostile = transfer();
         hostile.source_compartment = CompartmentV1::External;
         hostile.source_vault_context = [0; 32];
-        hostile.semantic.actor = [0; 32];
-        assert_eq!(hostile.validate(), Err(Error::ExternalActorRequired));
+        assert_eq!(hostile.validate(), Err(Error::ExternalOwnerMismatch));
+        hostile.semantic.source_owner = id(7);
+        assert_eq!(hostile.validate(), Ok(()));
+        hostile.semantic.destination_owner = id(8);
+        assert_eq!(hostile.validate(), Err(Error::ExternalOwnerMismatch));
     }
 
     #[test]

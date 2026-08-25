@@ -44,6 +44,7 @@ const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc3; 32]);
 const MARKET: [u8; 32] = [0x41; 32];
 const CONTEXT: [u8; 32] = MARKET;
 const ACTOR: [u8; 32] = [0x42; 32];
+const RECIPIENT: [u8; 32] = [0x43; 32];
 const GENERATION: u64 = 7;
 const DEPOSIT: u64 = 100;
 
@@ -385,7 +386,7 @@ fn fixture(profile: Profile) -> (ProgramTest, Fixture) {
         &mut test,
         external_destination,
         token_program,
-        token_account_data(mint, Pubkey::new_from_array(ACTOR), 5, None, 0),
+        token_account_data(mint, Pubkey::new_from_array(RECIPIENT), 5, None, 0),
     );
     (
         test,
@@ -409,7 +410,8 @@ fn fixture(profile: Profile) -> (ProgramTest, Fixture) {
 fn semantic(tag: u8) -> ContextV1 {
     ContextV1 {
         candidate: [0x61; 32],
-        actor: ACTOR,
+        source_owner: [0; 32],
+        destination_owner: [0; 32],
         order: [tag; 32],
         parent_request_digest: [tag.wrapping_add(1); 32],
         order_nonce: u64::from(tag),
@@ -505,6 +507,18 @@ fn deposit_request(fixture: &Fixture, expected_revision: u64, amount: u64) -> Cu
     request.resulting_revision = expected_revision + 1;
     request.amount = amount;
     request.semantic = semantic(3);
+    request.semantic.source_owner = ACTOR;
+    request
+}
+
+fn external_transfer_request(fixture: &Fixture, expected_revision: u64) -> CustodyRequestV1 {
+    let mut request = deposit_request(fixture, expected_revision, 5);
+    request.destination_compartment = CompartmentV1::External;
+    request.destination = fixture.external_destination.to_bytes();
+    request.destination_vault_context = [0; 32];
+    request.semantic = semantic(3);
+    request.semantic.source_owner = ACTOR;
+    request.semantic.destination_owner = RECIPIENT;
     request
 }
 
@@ -517,6 +531,7 @@ fn withdraw_request(fixture: &Fixture, expected_revision: u64) -> CustodyRequest
     request.source_vault_context = CONTEXT;
     request.destination_vault_context = [0; 32];
     request.semantic = semantic(4);
+    request.semantic.destination_owner = RECIPIENT;
     request
 }
 
@@ -532,8 +547,8 @@ fn close_request(fixture: &Fixture, payer: Pubkey) -> CustodyRequestV1 {
     request.source = fixture.vault.to_bytes();
     request.source_vault_context = CONTEXT;
     request.rent_refund = payer.to_bytes();
-    request.expected_revision = 4;
-    request.resulting_revision = 5;
+    request.expected_revision = 5;
+    request.resulting_revision = 6;
     request.rent_lamports = Rent::default().minimum_balance(dclutch_token_svm::ACCOUNT_BYTES);
     request.semantic = semantic(5);
     request
@@ -681,11 +696,45 @@ async fn campaign(profile: Profile) {
     .expect("open transaction");
     assert!(accepted, "open vault");
 
+    let (accepted, external_cu) = submit(
+        &mut context,
+        wrapper_instruction(
+            &fixture,
+            external_transfer_request(&fixture, 2),
+            payer,
+            false,
+        ),
+    )
+    .await
+    .expect("distinct-owner external transfer");
+    assert!(accepted, "distinct-owner external transfer");
+    let after_external = snapshot(&mut context, &fixture).await;
+    assert_eq!(token_amount(&after_external.source), 995);
+    assert_eq!(token_amount(&after_external.destination), 10);
+
+    let mut wrong_delegate = external_transfer_request(&fixture, 3);
+    wrong_delegate.source = fixture.external_destination.to_bytes();
+    wrong_delegate.destination = fixture.external_source.to_bytes();
+    wrong_delegate.semantic.source_owner = RECIPIENT;
+    wrong_delegate.semantic.destination_owner = ACTOR;
+    wrong_delegate.amount = 1;
+    let (accepted, delegate_cu) = submit(
+        &mut context,
+        wrapper_instruction(&fixture, wrong_delegate, payer, false),
+    )
+    .await
+    .expect("delegate-substitution transaction");
+    assert!(
+        !accepted,
+        "external source without exact delegate must refuse"
+    );
+    assert_eq!(snapshot(&mut context, &fixture).await, after_external);
+
     let (accepted, deposit_cu) = submit(
         &mut context,
         wrapper_instruction(
             &fixture,
-            deposit_request(&fixture, 2, DEPOSIT),
+            deposit_request(&fixture, 3, DEPOSIT),
             payer,
             false,
         ),
@@ -694,19 +743,19 @@ async fn campaign(profile: Profile) {
     .expect("deposit transaction");
     assert!(accepted, "deposit");
     let after_deposit = snapshot(&mut context, &fixture).await;
-    assert_eq!(token_amount(&after_deposit.source), 900);
+    assert_eq!(token_amount(&after_deposit.source), 895);
     assert_eq!(token_amount(&after_deposit.vault), DEPOSIT);
     assert_eq!(
         CustodyReplayV1::decode(&after_deposit.replay.data)
             .expect("replay")
             .next_revision,
-        3
+        4
     );
 
     let before_late_failure = after_deposit.clone();
     let (accepted, late_failure_cu) = submit(
         &mut context,
-        wrapper_instruction(&fixture, deposit_request(&fixture, 3, 7), payer, true),
+        wrapper_instruction(&fixture, deposit_request(&fixture, 4, 7), payer, true),
     )
     .await
     .expect("late-failure transaction");
@@ -717,7 +766,7 @@ async fn campaign(profile: Profile) {
         "token CPI and replay commit must roll back together"
     );
 
-    let stale = deposit_request(&fixture, 2, 1);
+    let stale = deposit_request(&fixture, 3, 1);
     let (accepted, stale_cu) = submit(
         &mut context,
         wrapper_instruction(&fixture, stale, payer, false),
@@ -727,28 +776,42 @@ async fn campaign(profile: Profile) {
     assert!(!accepted, "stale replay must refuse");
     assert_eq!(snapshot(&mut context, &fixture).await, before_late_failure);
 
-    let mut substituted_actor = deposit_request(&fixture, 3, 1);
-    substituted_actor.semantic.actor = [0x99; 32];
-    let (accepted, actor_cu) = submit(
+    let mut substituted_source_owner = deposit_request(&fixture, 4, 1);
+    substituted_source_owner.semantic.source_owner = [0x99; 32];
+    let (accepted, source_owner_cu) = submit(
         &mut context,
-        wrapper_instruction(&fixture, substituted_actor, payer, false),
+        wrapper_instruction(&fixture, substituted_source_owner, payer, false),
     )
     .await
-    .expect("actor-substitution transaction");
-    assert!(!accepted, "external owner substitution must refuse");
+    .expect("source-owner-substitution transaction");
+    assert!(!accepted, "external source-owner substitution must refuse");
+    assert_eq!(snapshot(&mut context, &fixture).await, before_late_failure);
+
+    let mut substituted_destination_owner = external_transfer_request(&fixture, 4);
+    substituted_destination_owner.semantic.destination_owner = [0x99; 32];
+    let (accepted, destination_owner_cu) = submit(
+        &mut context,
+        wrapper_instruction(&fixture, substituted_destination_owner, payer, false),
+    )
+    .await
+    .expect("destination-owner-substitution transaction");
+    assert!(
+        !accepted,
+        "external destination-owner substitution must refuse"
+    );
     assert_eq!(snapshot(&mut context, &fixture).await, before_late_failure);
 
     let (accepted, withdraw_cu) = submit(
         &mut context,
-        wrapper_instruction(&fixture, withdraw_request(&fixture, 3), payer, false),
+        wrapper_instruction(&fixture, withdraw_request(&fixture, 4), payer, false),
     )
     .await
     .expect("withdraw transaction");
     assert!(accepted, "withdraw");
     let after_withdraw = snapshot(&mut context, &fixture).await;
-    assert_eq!(token_amount(&after_withdraw.source), 900);
+    assert_eq!(token_amount(&after_withdraw.source), 895);
     assert_eq!(token_amount(&after_withdraw.vault), 0);
-    assert_eq!(token_amount(&after_withdraw.destination), 105);
+    assert_eq!(token_amount(&after_withdraw.destination), 110);
 
     let (accepted, close_cu) = submit(
         &mut context,
@@ -768,16 +831,16 @@ async fn campaign(profile: Profile) {
     );
 
     eprintln!(
-        "Custody {profile:?} CU: initialize={initialize_cu}, open={open_cu}, deposit={deposit_cu}, late-rollback={late_failure_cu}, stale={stale_cu}, actor={actor_cu}, withdraw={withdraw_cu}, close={close_cu}"
+        "Custody {profile:?} CU: initialize={initialize_cu}, open={open_cu}, external={external_cu}, delegate-refusal={delegate_cu}, deposit={deposit_cu}, late-rollback={late_failure_cu}, stale={stale_cu}, source-owner={source_owner_cu}, destination-owner={destination_owner_cu}, withdraw={withdraw_cu}, close={close_cu}"
     );
 }
 
 #[tokio::test]
-async fn real_elf_legacy_custody_is_atomic_replay_safe_and_actor_bound() {
+async fn real_elf_legacy_custody_is_atomic_replay_safe_and_owner_bound() {
     campaign(Profile::Legacy).await;
 }
 
 #[tokio::test]
-async fn real_elf_token_2022_custody_is_atomic_replay_safe_and_actor_bound() {
+async fn real_elf_token_2022_custody_is_atomic_replay_safe_and_owner_bound() {
     campaign(Profile::Token2022).await;
 }

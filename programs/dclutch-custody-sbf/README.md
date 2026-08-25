@@ -46,7 +46,9 @@ Suffixes are exact:
   refund may also be a transaction signer; signer status cannot change the
   persisted beneficiary or close semantics.
 
-External sources must have delegated the exact amount to the Custody authority.
+Each External side is independently bound to its exact semantic token-account
+owner. External sources must also have delegated the exact amount to the sole
+release/Market-pinned Custody authority; the caller cannot select an authority.
 Every non-external side must be the canonical compartment/context Vault, owned
 by the Custody authority, with no delegate, native reserve, or close authority.
 Return data is the exact 384-byte `CustodyReceiptV1`; its producer must be the
@@ -58,7 +60,8 @@ commitment before committing its own semantic state.
 test-caller ELFs against ProgramTest's bundled canonical legacy Token and
 Token-2022 programs. The campaign measures every lifecycle route and proves
 byte-for-byte rollback after a caller deliberately refuses after successful
-Custody and token CPI. It also refuses stale replay and external-owner
+Custody and token CPI. It also executes a transfer between distinct External
+owners and refuses stale replay, wrong delegate, and either side's owner
 substitution without changing replay or token state.
 
 Replay account rent and token-vault rent are explicit `rent_lamports` and never

@@ -338,7 +338,8 @@ fn require_canonical_terminal_request(
         || request.semantic
             != (ContextV1 {
                 candidate: [0; 32],
-                actor: action.claimant,
+                source_owner: [0; 32],
+                destination_owner: action.claimant,
                 order: [0; 32],
                 parent_request_digest: hash(action_bytes).to_bytes(),
                 order_nonce: action.expected_next_nonce,
@@ -391,7 +392,8 @@ fn canonical_terminal_request(
         caller_program: program_id.to_bytes(),
         semantic: ContextV1 {
             candidate: [0; 32],
-            actor: action.claimant,
+            source_owner: [0; 32],
+            destination_owner: action.claimant,
             order: [0; 32],
             parent_request_digest: hash(action_bytes).to_bytes(),
             order_nonce: action.expected_next_nonce,

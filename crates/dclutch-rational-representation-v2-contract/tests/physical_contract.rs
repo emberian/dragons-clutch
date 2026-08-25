@@ -596,7 +596,8 @@ fn terminal_winner_burn_claims_and_custody_join_is_exact() {
         caller_program: id(31),
         semantic: ContextV1 {
             candidate: [0; 32],
-            actor: id(7),
+            source_owner: [0; 32],
+            destination_owner: id(7),
             order: [0; 32],
             parent_request_digest: id(30),
             order_nonce: 0,

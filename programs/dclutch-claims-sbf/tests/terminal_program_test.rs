@@ -8,14 +8,14 @@
 use std::{env, fs, path::PathBuf, vec::Vec};
 
 use dclutch_claims_representation_codec::{
-    ActionV1, ClaimsReleaseAdmission, DescriptorV1, EconomicPhase as RepresentationEconomicPhase,
-    StateV1, prepare,
+    ACTION_WIRE_BYTES_V1, ActionV1, ClaimsReleaseAdmission, DescriptorV1,
+    EconomicPhase as RepresentationEconomicPhase, StateV1, prepare,
 };
 use dclutch_claims_svm::{ClaimsAggregateSeedsV1, ClaimsPositionSeedsV1};
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
-    CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
-    CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
+    CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1,
+    CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
 };
 use dclutch_economic_slice_kernel::{
     BasketAction, BasketFrame, MARKET_HEADER_BYTES, POSITION_HEADER_BYTES, Phase as EconomicPhase,
@@ -68,6 +68,7 @@ const TEST_CALLER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xd5; 32]);
 const GENERATION: u64 = 19;
 const OUTCOME_COUNT: u32 = 2;
 const WINNER: u32 = 1;
+const TERMINAL_DATA_BYTES: usize = ACTION_WIRE_BYTES_V1 + CUSTODY_REQUEST_BYTES_V1;
 const CLAIM_ATOMS: [u64; 2] = [3, 3];
 const TERMINAL_PAYOUT: u64 = 3;
 const RECEIPT_UNITS_PER_LOT: u64 = 10;
@@ -526,7 +527,8 @@ fn terminal_request(
         caller_program: CLAIMS_PROGRAM_ID.to_bytes(),
         semantic: ContextV1 {
             candidate: [0; 32],
-            actor: action.claimant,
+            source_owner: [0; 32],
+            destination_owner: action.claimant,
             order: [0; 32],
             parent_request_digest: hash(&action_bytes).to_bytes(),
             order_nonce: action.expected_next_nonce,
@@ -902,7 +904,7 @@ fn terminal_data(fixture: &Fixture) -> Vec<u8> {
             .to_bytes()
             .expect("Custody request bytes"),
     );
-    assert_eq!(data.len(), 776);
+    assert_eq!(data.len(), TERMINAL_DATA_BYTES);
     data
 }
 
@@ -1181,7 +1183,8 @@ async fn direct_terminal_representation_is_real_atomic_and_alt_bounded() {
     );
     assert!(direct_live_v0_bytes <= PACKET_LIMIT, "positive v0 overflow");
     eprintln!(
-        "Claims terminal packet preflight: data=776, metas={}, unique={}, legacy={}, v0-no-ALT={}, v0-live-ALT={}, ALT-create/extend-CU={lookup_cu:?}",
+        "Claims terminal packet preflight: data={}, metas={}, unique={}, legacy={}, v0-no-ALT={}, v0-live-ALT={}, ALT-create/extend-CU={lookup_cu:?}",
+        TERMINAL_DATA_BYTES,
         TERMINAL_ACCOUNT_METAS,
         direct_unique_accounts,
         legacy_bytes,
@@ -1258,7 +1261,8 @@ async fn direct_terminal_representation_is_real_atomic_and_alt_bounded() {
     );
 
     eprintln!(
-        "Claims terminal: data=776, metas={}, unique={}, legacy={}, v0-no-ALT={}, v0-live-ALT={}, CU={}, late-v0={}, late-CU={}, ALT-create/extend-CU={lookup_cu:?}",
+        "Claims terminal: data={}, metas={}, unique={}, legacy={}, v0-no-ALT={}, v0-live-ALT={}, CU={}, late-v0={}, late-CU={}, ALT-create/extend-CU={lookup_cu:?}",
+        TERMINAL_DATA_BYTES,
         TERMINAL_ACCOUNT_METAS,
         direct_unique_accounts,
         legacy_bytes,

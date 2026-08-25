@@ -612,7 +612,8 @@ fn validate_custody(
         || request.realm != header.realm
         || request.context != header.parent_context
         || request.caller_program != evidence.claims_program
-        || request.semantic.actor != header.actor
+        || request.semantic.source_owner != [0; 32]
+        || request.semantic.destination_owner != header.actor
         || request.semantic.parent_request_digest != evidence.request_digest
         || request.semantic.generation != header.generation
         || request.destination != header.collateral_recipient
