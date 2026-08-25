@@ -31,7 +31,7 @@ const STANDARD_GENERAL_CHILD_TAIL_ACCOUNTS: usize = 3;
 const GENERIC_FIXED_ACCOUNTS: usize = 14;
 // Exact current General V2 activation request width used by this physical
 // profile measurement. General remains the semantic owner of those bytes.
-const MEASURED_GENERAL_ACTIVATION_REQUEST_BYTES_V2: usize = 256;
+const MEASURED_GENERAL_V2_REQUEST_BYTES: usize = 256;
 
 fn identity(byte: u8) -> Identity {
     Identity::new([byte; 32]).expect("nonzero identity")
@@ -140,8 +140,7 @@ fn maximum_profile_general_activation_fits_one_lookup_v0_packet() {
         .iter()
         .map(|key| AccountMeta::new_readonly(*key, false))
         .collect::<Vec<_>>();
-    let role_bytes =
-        CAPABILITY_ROLE_PREFIX_BYTES_V1 + MEASURED_GENERAL_ACTIVATION_REQUEST_BYTES_V2;
+    let role_bytes = CAPABILITY_ROLE_PREFIX_BYTES_V1 + MEASURED_GENERAL_V2_REQUEST_BYTES;
     assert_eq!(role_bytes, 416);
     let instruction_bytes = REQUEST_BYTES + CORE_EFFECT_ENVELOPE_BYTES_V1 + role_bytes;
     assert_eq!(instruction_bytes, 768);
