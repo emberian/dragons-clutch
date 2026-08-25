@@ -218,6 +218,45 @@ atomic envelope. The new Lean parsers close its canonical typed-plan byte
 round-trip, but do not prove refinement of the separate safe Rust or SBF
 parsers, account ownership, CPI, or runtime rollback.
 
+## Generated register and physical-plan ABI addendum
+
+Commit `1d6d5741c599eb7264d7c4873754558517f8f06c` replaces Direct's
+parallel numeric register vocabulary with typed Lean `ScalarSlot` and
+`IdentitySlot` schemas. Lean proves that their explicit wire indices equal
+constructor order, that their complete index lists are canonical ranges, and
+that their generated Rust names are unique. The Rust generator now emits all
+41 scalar and four identity indices alongside the transition program. The
+controller consumes named output registers and ties its 34-value input prefix
+length to the first Lean-owned output slot, so a changed input/output partition
+cannot compile silently.
+
+Commit `d07b0d732ba2f0686dc0cb9f60b7e68344500e2a` moves the physical
+child-wire constants into the same generated artifact. Lean encodes the
+complete 72-byte claim and 40-byte custody zero templates. Typed `ClaimPatch`
+and `CustodyPatch` schemas name the dynamic spans; Lean proves that every span
+is in bounds, that all spans are pairwise disjoint, and that their Rust names
+are unique. The controller now patches only successor nonces, outcome, fill,
+gross, and fee. It no longer owns duplicate plan magic, version, count, opcode,
+party, resource, reserved-byte, or record-layout literals.
+
+`example_materialization_matches_encoding` checks that applying the complete
+patch sequence to the canonical example equals the ordinary typed Lean
+encoders. This is not yet a general patch-materialization theorem, and the
+Rust patch function and the order of values in the input-register prefix
+remain adapter boundaries.
+
+The generated transition program remains exactly 568 bytes with SHA-256
+`72cc0faa6a9768b766a3003c8ff6f38889f564f49005ce68b2187c98349bff5c`.
+The first register-only change reproduced the prior 79,680-byte controller ELF
+byte-for-byte. The generated-plan change remains 79,680 bytes and produces
+SHA-256
+`56e1f1bbdc1335a6bc328edc0b0cb9d08231ab4fef44db5ca285f966f78720b5`.
+Its ProgramTest measurements are unchanged: 59,067 CU for success and 58,106
+CU for late rollback, with every named hostile refusal still passing. The same
+990-byte v0 transaction also committed across a separate
+`solana-test-validator` 4.0.2 JSON-RPC process. The result removes semantic
+duplication; it does not claim a size or execution-cost reduction.
+
 This addendum supersedes the execution-profile architecture and current
 controller measurements below. Earlier tables remain evidence for their named
 historical artifacts.

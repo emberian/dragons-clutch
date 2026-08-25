@@ -45,6 +45,15 @@ its successful outputs to the canonical claim/custody plans and their one
 abstract atomic post-state. These are semantic and abstract-machine theorems,
 not Rust, ELF, CPI, or Solana-runtime refinement claims.
 
+The first metaprogramming layer has also landed. Typed Lean schemas now own
+Direct's 41 scalar and four identity registers and generate their Rust names
+and indices with canonical-order proofs. Lean also generates complete physical
+claim/custody wire templates plus bounded, pairwise-disjoint dynamic patch
+spans. The controller consequently owns neither output-register numbers nor
+child-plan wire geometry. This change deliberately preserves the 568-byte
+program, 79,680-byte controller footprint, and measured CU; its value is one
+semantic ABI owner and a smaller adapter boundary, not benchmark theater.
+
 ## Proposed narrow waist
 
 ```text
@@ -216,8 +225,10 @@ No current Rust route is deleted until one complete vertical slice has:
     ProgramData identities, and theorem digests.
 
 The canonical Direct slice now passes gates 1, 4, 5, 8, and 9 for its named
-route. Gates 2 and 3 remain partial because codec generation and differential
-property-space coverage are incomplete. Gates 6 and 7 remain partial because
+route. Gate 2 has advanced through generated register metadata, transition
+bytecode, and physical-plan templates, but Product, Frame, account, and client
+codecs remain incomplete. Gate 3 remains partial because differential
+property-space coverage is incomplete. Gates 6 and 7 remain partial because
 only a superseded claim executor's successful path reaches qedsvm, not the
 canonical controller/custody path family. Gate 10 remains open. The controller
 does derive its plans from authenticated inputs, and their abstract theorem
