@@ -11,6 +11,9 @@
 //! authenticate accounts, Registry ownership, signatures, CPI, persistence,
 //! and atomic rollback.
 
+/// Runtime-width finite-scenario collateral planning for the V2 successor.
+pub mod scenario;
+
 #[rustfmt::skip]
 mod generated_dealer_liquidity;
 
