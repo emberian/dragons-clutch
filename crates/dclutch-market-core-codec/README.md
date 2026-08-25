@@ -6,12 +6,40 @@ or an SBF adapter yet.
 
 `DClutchSemantics.MarketCoreAbi` owns the canonical field order, widths, and
 offsets. `EmitMarketCoreRust.lean` emits both those constants and the safe Rust
-interpreter. The fixed Market header is 1,416 bytes and the request is 72 bytes.
+interpreter. `MarketCorePhysicalAbi` and `EmitMarketCorePhysicalRust` own the
+cross-program wire boundary. The fixed Market header is 1,416 bytes and the
+request is 72 bytes.
 Claim vectors are one exact borrowed account-data tail of `7 * N * 8` bytes,
 with canonical little-endian `u64` values and `N` equal to the Product's runtime
 `outcome_count`; the ABI imposes no width-specialized Market semantics or
 provisional maximum N. This representation requires neither alignment casts nor
 an adapter heap.
+
+The physical boundary is deliberately factored rather than padded into one
+maximum account or request shape:
+
+- `CoreEffectEnvelopeV1` is a 280-byte routing/replay prefix. It binds a single
+  role-owned request by exact byte length and SHA-256 digest. Claims, Custody,
+  and Resolution remain the sole owners of their token, position, funding, and
+  certificate facts.
+- `CoreEffectAckV1` is a 240-byte normalized acknowledgement. It binds the full
+  effect digest, current role program, release set, Market, context, exact
+  pre-revisions, monotonic post-revisions, and the role-owned poststate digest.
+- `SeriesCoreRequestV1` is a 336-byte Core-owned child request. Its
+  Prepare/Consume/Expire shape binds the exact release set, template, ticket,
+  Market, Realm, Product, founder, beneficiary, revisions, rent, work, and
+  positive Ticket-owned Hoard principal. Its
+  Close shape is disjoint and requires every occurrence-only field to be zero.
+
+The full-effect digest is
+`SHA256("dclutch/core-effect/v1" || u32_le(280) || envelope ||
+u32_le(role_request_bytes) || role_request)`. The release-pinned caller PDA is
+derived under `caller_program` from
+`["dclutch/core-caller/v1", release_set, market, action_u8, role_u8,
+context, role_request_digest]`. `CoreCallerAuthoritySeedsV1::as_slices` is the
+canonical seed projection. This avoids both caller-authored attestations and a
+digest fixed point: all PDA inputs exist before the envelope is encoded, while
+the resulting authority is still exact to one role request and replay context.
 
 The interpreter validates all inputs before applying a transition. It separates
 rent, unclassified donation, Source work funding, deferred custody rent, and

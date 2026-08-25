@@ -14,4 +14,17 @@ mod generated {
     include!("generated.rs");
 }
 
+#[allow(missing_docs)]
+mod generated_physical {
+    include!("generated_physical.rs");
+}
+
+mod physical;
+
 pub use generated::*;
+pub use generated_physical::{
+    CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1, CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_ACK_MAGIC_V1,
+    CORE_EFFECT_DIGEST_DOMAIN_V1, CORE_EFFECT_ENVELOPE_BYTES_V1, CORE_EFFECT_MAGIC_V1,
+    PHYSICAL_ABI_VERSION_V1, SERIES_CORE_REQUEST_BYTES_V1, SERIES_CORE_REQUEST_MAGIC_V1,
+};
+pub use physical::*;
