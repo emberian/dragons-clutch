@@ -22,6 +22,7 @@ members = [
     "crates/dclutch-registry-contract",
     "crates/dclutch-release-set-contract",
     "crates/dclutch-release-tool",
+    "crates/dclutch-resolution-codec",
     "crates/dclutch-realm-contract",
     "crates/dclutch-rent-contract",
     "crates/dclutch-series-contract",
@@ -35,6 +36,7 @@ members = [
     "programs/dclutch-claims-proof-sbf",
     "programs/dclutch-custody-proof-sbf",
     "programs/dclutch-economic-sbf",
+    "programs/dclutch-resolution-proof-sbf",
     "programs/dclutch-sbf",
 ]
 resolver = "2"

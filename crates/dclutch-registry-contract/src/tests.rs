@@ -8,6 +8,7 @@ use dclutch_release_set_contract::{
 
 use crate::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1,
+    ACTIVATED_EXECUTION_RELEASE_SET_PROFILE_V1, ACTIVATED_EXECUTION_RELEASE_SET_SCHEMA_VERSION_V1,
     ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_MAGIC_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, EXECUTION_AUTHORITY_MANIFEST_BYTES_V1,
@@ -54,6 +55,16 @@ fn zero_range<const N: usize>(bytes: &mut [u8; N], offset: usize, width: usize) 
         .get_mut(offset..end)
         .expect("hostile range is in bounds")
         .fill(0);
+}
+
+fn copy_range<const N: usize>(output: &mut [u8; N], offset: usize, source: &[u8]) {
+    let end = offset
+        .checked_add(source.len())
+        .expect("fixture range is bounded");
+    output
+        .get_mut(offset..end)
+        .expect("fixture range is in bounds")
+        .copy_from_slice(source);
 }
 
 fn immutable_release(
@@ -167,8 +178,8 @@ impl Fixture {
         activate_execution_release_set_v1(
             self.core_program,
             self.release_set_id,
-            self.release_set,
-            self.inputs(),
+            &self.release_set,
+            &self.inputs(),
         )
         .expect("valid activation")
     }
@@ -504,6 +515,34 @@ fn activation_closes_every_role_and_roundtrips_its_projection() {
     let encoded = activated.to_bytes();
     assert_eq!(encoded.len(), ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1);
     assert_eq!(&encoded[..8], &ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1);
+
+    let mut expected = [0_u8; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
+    copy_range(&mut expected, 0, &ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1);
+    copy_range(
+        &mut expected,
+        8,
+        &ACTIVATED_EXECUTION_RELEASE_SET_SCHEMA_VERSION_V1.to_le_bytes(),
+    );
+    copy_range(
+        &mut expected,
+        10,
+        &ACTIVATED_EXECUTION_RELEASE_SET_PROFILE_V1.to_le_bytes(),
+    );
+    copy_range(&mut expected, 16, fixture.release_set_id.as_bytes());
+    for index in 0..5 {
+        let role_offset = ROLE_CACHE_HEADER_BYTES + index * ROLE_CACHE_BYTES;
+        copy_range(
+            &mut expected,
+            role_offset,
+            copied(&fixture.artifact_ids, index).as_bytes(),
+        );
+        copy_range(
+            &mut expected,
+            role_offset + 32,
+            &copied(&fixture.releases, index).to_bytes(),
+        );
+    }
+    assert_eq!(encoded, expected);
     assert_eq!(
         ActivatedExecutionReleaseSetV1::decode(&encoded),
         Ok(activated)
@@ -517,8 +556,8 @@ fn activation_refuses_core_role_program_and_artifact_substitutions() {
         activate_execution_release_set_v1(
             program(99),
             fixture.release_set_id,
-            fixture.release_set,
-            fixture.inputs(),
+            &fixture.release_set,
+            &fixture.inputs(),
         ),
         Err(Error::CoreProgramMismatch)
     );
@@ -529,8 +568,8 @@ fn activation_refuses_core_role_program_and_artifact_substitutions() {
         activate_execution_release_set_v1(
             fixture.core_program,
             fixture.release_set_id,
-            fixture.release_set,
-            activation_inputs(substituted_ids, fixture.releases),
+            &fixture.release_set,
+            &activation_inputs(substituted_ids, fixture.releases),
         ),
         Err(Error::RoleArtifactReleaseMismatch)
     );
@@ -541,8 +580,8 @@ fn activation_refuses_core_role_program_and_artifact_substitutions() {
         activate_execution_release_set_v1(
             fixture.core_program,
             fixture.release_set_id,
-            fixture.release_set,
-            activation_inputs(fixture.artifact_ids, substituted_releases),
+            &fixture.release_set,
+            &activation_inputs(fixture.artifact_ids, substituted_releases),
         ),
         Err(Error::RoleProgramMismatch)
     );
@@ -569,8 +608,8 @@ fn activation_refuses_stale_slot_and_reauthentication_catches_later_upgrade() {
         activate_execution_release_set_v1(
             fixture.core_program,
             fixture.release_set_id,
-            fixture.release_set,
-            inputs,
+            &fixture.release_set,
+            &inputs,
         ),
         Err(Error::DeploymentSlotMismatch)
     );
@@ -596,8 +635,8 @@ fn aliased_roles_must_share_one_complete_activation() {
     let activated = activate_execution_release_set_v1(
         fixture.core_program,
         fixture.release_set_id,
-        aliased_set,
-        aliased_inputs,
+        &aliased_set,
+        &aliased_inputs,
     )
     .expect("identical alias activates");
     assert_eq!(
@@ -623,8 +662,8 @@ fn aliased_roles_must_share_one_complete_activation() {
         activate_execution_release_set_v1(
             fixture.core_program,
             fixture.release_set_id,
-            aliased_set,
-            hostile_inputs,
+            &aliased_set,
+            &hostile_inputs,
         ),
         Err(Error::AliasedRoleActivationMismatch)
     );
@@ -729,8 +768,8 @@ fn market_authority_envelope_has_one_path_to_the_activated_release_set() {
     let stale_activation = activate_execution_release_set_v1(
         fixture.core_program,
         content(95),
-        fixture.release_set,
-        fixture.inputs(),
+        &fixture.release_set,
+        &fixture.inputs(),
     )
     .expect("alternate finalized identity is structurally valid at adapter boundary");
     assert_eq!(

@@ -101,13 +101,13 @@ impl ExecutionReleaseActivationInputsV1 {
         }
     }
 
-    const fn input(self, role: ExecutionRoleV1) -> ArtifactActivationInputV1 {
+    const fn input(&self, role: ExecutionRoleV1) -> &ArtifactActivationInputV1 {
         match role {
-            ExecutionRoleV1::Core => self.core,
-            ExecutionRoleV1::Claims => self.claims,
-            ExecutionRoleV1::Trading => self.trading,
-            ExecutionRoleV1::Resolution => self.resolution,
-            ExecutionRoleV1::Custody => self.custody,
+            ExecutionRoleV1::Core => &self.core,
+            ExecutionRoleV1::Claims => &self.claims,
+            ExecutionRoleV1::Trading => &self.trading,
+            ExecutionRoleV1::Resolution => &self.resolution,
+            ExecutionRoleV1::Custody => &self.custody,
         }
     }
 }
@@ -273,8 +273,8 @@ impl ActivatedExecutionReleaseSetV1 {
 pub fn activate_execution_release_set_v1(
     current_core_program: ProgramIdentityV1,
     finalized_release_set_id: ContentId,
-    release_set: ExecutionReleaseSetV1,
-    inputs: ExecutionReleaseActivationInputsV1,
+    release_set: &ExecutionReleaseSetV1,
+    inputs: &ExecutionReleaseActivationInputsV1,
 ) -> Result<ActivatedExecutionReleaseSetV1> {
     if release_set.binding(ExecutionRoleV1::Core).program() != current_core_program {
         return Err(Error::CoreProgramMismatch);
@@ -291,11 +291,11 @@ pub fn activate_execution_release_set_v1(
     }
     let value = ActivatedExecutionReleaseSetV1 {
         execution_release_set_id: finalized_release_set_id,
-        core: activated(inputs.core),
-        claims: activated(inputs.claims),
-        trading: activated(inputs.trading),
-        resolution: activated(inputs.resolution),
-        custody: activated(inputs.custody),
+        core: activated(&inputs.core),
+        claims: activated(&inputs.claims),
+        trading: activated(&inputs.trading),
+        resolution: activated(&inputs.resolution),
+        custody: activated(&inputs.custody),
     };
     value.validate_projection()?;
     Ok(value)
@@ -303,7 +303,7 @@ pub fn activate_execution_release_set_v1(
 
 fn authenticate_role(
     expected: ExecutionRoleBindingV1,
-    input: ArtifactActivationInputV1,
+    input: &ArtifactActivationInputV1,
 ) -> Result<()> {
     if input.finalized_artifact_release_id != expected.artifact_release() {
         return Err(Error::RoleArtifactReleaseMismatch);
@@ -314,7 +314,7 @@ fn authenticate_role(
     input.release.authenticate_deployment(input.deployment)
 }
 
-const fn activated(input: ArtifactActivationInputV1) -> ActivatedRoleV1 {
+const fn activated(input: &ArtifactActivationInputV1) -> ActivatedRoleV1 {
     ActivatedRoleV1 {
         artifact_release_id: input.finalized_artifact_release_id,
         release: input.release,

@@ -528,6 +528,28 @@ name = "dclutch-rent-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-resolution-codec"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-resolution-proof-sbf"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "dclutch-core-contract",
+ "dclutch-market-contract",
+ "dclutch-product-contract",
+ "dclutch-pyth-svm",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-release-set-contract",
+ "dclutch-resolution-codec",
+ "dclutch-source-contract",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
 name = "dclutch-sbf"
 version = "0.1.0"
 dependencies = [
