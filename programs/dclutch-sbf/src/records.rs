@@ -7,9 +7,12 @@
 //! System allocation, SHA-256, the closed Found-record schema set, atomic page
 //! writes, and exact close/refund execution.
 
-pub(crate) use dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
 use dclutch_capability_contract::{
-    CAPABILITY_ENTRY_BYTES, CapabilityManifestV1, MANIFEST_HEADER_BYTES, MAX_MANIFEST_BYTES,
+    CAPABILITY_ENTRY_BYTES, CAPABILITY_TEMPLATE_ENTRY_BYTES, CapabilityManifestV1,
+    CapabilityTemplateV1, MANIFEST_HEADER_BYTES, MAX_CAPABILITY_TEMPLATE_BYTES, MAX_MANIFEST_BYTES,
+};
+pub(crate) use dclutch_capability_contract::{
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CAPABILITY_TEMPLATE_SCHEMA_RELEASE_ID_V1,
 };
 use dclutch_core_contract::ContentId as CoreContentId;
 #[cfg(test)]
@@ -104,9 +107,9 @@ pub(crate) const CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
     0xed, 0x25, 0x2a, 0x2a, 0xc5, 0x55, 0xf0, 0xe3, 0x4f, 0xfc, 0x23, 0xac, 0x91, 0xd8, 0x6c, 0x61,
     0xbe, 0x6d, 0xd9, 0x81, 0x24, 0x47, 0x57, 0x49, 0x94, 0x69, 0xbb, 0x99, 0xba, 0x55, 0x36, 0x50,
 ];
-pub(crate) const SERIES_RECIPE_SCHEMA_RELEASE_ID_V2: [u8; 32] = [
-    0xff, 0xb3, 0x98, 0x35, 0xbf, 0x80, 0xbd, 0x3c, 0x21, 0x6f, 0xd9, 0x07, 0xa8, 0x0b, 0xc5, 0x88,
-    0xab, 0x57, 0x82, 0x48, 0xe8, 0xea, 0x67, 0x46, 0x7d, 0x75, 0xce, 0x1a, 0xe7, 0xdc, 0x4c, 0x3c,
+pub(crate) const SERIES_RECIPE_SCHEMA_RELEASE_ID_V3: [u8; 32] = [
+    0xbe, 0x66, 0x5a, 0xb8, 0xa6, 0xb9, 0x79, 0xca, 0x75, 0x31, 0x7a, 0xe3, 0x8f, 0x62, 0x60, 0xe1,
+    0x69, 0x7a, 0x84, 0xe0, 0xdf, 0xb2, 0xd0, 0xe2, 0xd3, 0x8b, 0x4c, 0x55, 0xe5, 0x1f, 0x2d, 0xf7,
 ];
 pub(crate) const SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
     0x36, 0xdc, 0xc9, 0xd8, 0x3c, 0x7a, 0x89, 0xeb, 0xb2, 0x4f, 0xd2, 0x44, 0x79, 0x23, 0xca, 0x68,
@@ -122,7 +125,7 @@ pub(crate) const SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
 ];
 
 #[cfg(test)]
-const RELEASE_LABELS_AND_IDS_V1: [(&[u8], [u8; 32]); 15] = [
+const RELEASE_LABELS_AND_IDS_V1: [(&[u8], [u8; 32]); 16] = [
     (
         b"dclutch/sbf-record-page-envelope/provisional-v1",
         PAGE_ENVELOPE_RELEASE_ID_V1,
@@ -149,6 +152,10 @@ const RELEASE_LABELS_AND_IDS_V1: [(&[u8], [u8; 32]); 15] = [
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     ),
     (
+        b"dclutch/schema/capability-template-v1",
+        CAPABILITY_TEMPLATE_SCHEMA_RELEASE_ID_V1,
+    ),
+    (
         b"dclutch/schema/direct-venue-fee-policy-v3",
         VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3,
     ),
@@ -157,8 +164,8 @@ const RELEASE_LABELS_AND_IDS_V1: [(&[u8], [u8; 32]); 15] = [
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
     ),
     (
-        b"dclutch/schema/series-recipe-v2",
-        SERIES_RECIPE_SCHEMA_RELEASE_ID_V2,
+        b"dclutch/schema/series-recipe-v3",
+        SERIES_RECIPE_SCHEMA_RELEASE_ID_V3,
     ),
     (
         b"dclutch/schema/series-capitalization-aggregate-v1",
@@ -969,6 +976,11 @@ fn validate_found_schema(schema_release_id: SchemaReleaseId, content: &[u8]) -> 
             .map(|value| value.as_bytes() == content)
             .unwrap_or(false);
     }
+    if schema == CAPABILITY_TEMPLATE_SCHEMA_RELEASE_ID_V1 {
+        return CapabilityTemplateV1::decode(content)
+            .map(|value| value.as_bytes() == content)
+            .unwrap_or(false);
+    }
     if schema == VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3 {
         return VenueFeePolicyV3::decode(content)
             .map(|value| {
@@ -981,7 +993,7 @@ fn validate_found_schema(schema_release_id: SchemaReleaseId, content: &[u8]) -> 
         return SourceMaterialViewV1::decode(content).is_ok()
             && validate_source_material_links(content);
     }
-    if schema == SERIES_RECIPE_SCHEMA_RELEASE_ID_V2 {
+    if schema == SERIES_RECIPE_SCHEMA_RELEASE_ID_V3 {
         return SeriesRecipeV1::decode(content)
             .map(|value| value.to_bytes().as_slice() == content)
             .unwrap_or(false);
@@ -1114,9 +1126,10 @@ fn is_supported_found_schema_release(schema_release_id: SchemaReleaseId) -> bool
             | CATEGORICAL_CLAIM_SCHEMA_RELEASE_ID_V1
             | CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1
             | CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1
+            | CAPABILITY_TEMPLATE_SCHEMA_RELEASE_ID_V1
             | VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3
             | SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1
-            | SERIES_RECIPE_SCHEMA_RELEASE_ID_V2
+            | SERIES_RECIPE_SCHEMA_RELEASE_ID_V3
             | SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1
             | SERIES_DERIVED_SCHEMA_RELEASE_ID_V1
             | SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1
@@ -1140,9 +1153,14 @@ fn is_admissible_found_schema_length(
             (MANIFEST_HEADER_BYTES..=MAX_MANIFEST_BYTES).contains(&length)
                 && length.saturating_sub(MANIFEST_HEADER_BYTES) % CAPABILITY_ENTRY_BYTES == 0
         }
+        CAPABILITY_TEMPLATE_SCHEMA_RELEASE_ID_V1 => {
+            (MANIFEST_HEADER_BYTES..=MAX_CAPABILITY_TEMPLATE_BYTES).contains(&length)
+                && length.saturating_sub(MANIFEST_HEADER_BYTES) % CAPABILITY_TEMPLATE_ENTRY_BYTES
+                    == 0
+        }
         VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3 => length == VENUE_FEE_POLICY_BYTES_V3,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1 => length == SOURCE_MATERIAL_BYTES,
-        SERIES_RECIPE_SCHEMA_RELEASE_ID_V2 => length == SERIES_RECIPE_BYTES_V1,
+        SERIES_RECIPE_SCHEMA_RELEASE_ID_V3 => length == SERIES_RECIPE_BYTES_V1,
         SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1 => length == CAPITALIZATION_AGGREGATE_BYTES_V1,
         SERIES_DERIVED_SCHEMA_RELEASE_ID_V1 => length == DERIVED_OCCURRENCE_BYTES_V1,
         SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1 => length == OCCURRENCE_CAPITALIZATION_BYTES_V1,
@@ -1808,11 +1826,15 @@ mod tests {
                 MANIFEST_HEADER_BYTES,
             ),
             (
+                CAPABILITY_TEMPLATE_SCHEMA_RELEASE_ID_V1,
+                MANIFEST_HEADER_BYTES,
+            ),
+            (
                 VENUE_FEE_POLICY_SCHEMA_RELEASE_ID_V3,
                 VENUE_FEE_POLICY_BYTES_V3,
             ),
             (SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SOURCE_MATERIAL_BYTES),
-            (SERIES_RECIPE_SCHEMA_RELEASE_ID_V2, SERIES_RECIPE_BYTES_V1),
+            (SERIES_RECIPE_SCHEMA_RELEASE_ID_V3, SERIES_RECIPE_BYTES_V1),
             (
                 SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1,
                 CAPITALIZATION_AGGREGATE_BYTES_V1,
@@ -1943,6 +1965,14 @@ mod tests {
         let manifest_schema =
             SchemaReleaseId::new(CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1).expect("schema");
         assert!(validate_found_schema(manifest_schema, manifest.as_bytes()));
+        let mut template_bytes = [0; MANIFEST_HEADER_BYTES];
+        let template = CapabilityTemplateV1::encode_into(&[], &mut template_bytes)
+            .expect("empty canonical template");
+        let template_schema =
+            SchemaReleaseId::new(CAPABILITY_TEMPLATE_SCHEMA_RELEASE_ID_V1).expect("schema");
+        assert!(validate_found_schema(template_schema, template.as_bytes()));
+        assert!(!validate_found_schema(template_schema, manifest.as_bytes()));
+        assert!(!validate_found_schema(manifest_schema, template.as_bytes()));
 
         let mut poison = realm.to_bytes();
         *poison.get_mut(0).expect("magic byte") = 0;
@@ -2030,9 +2060,16 @@ mod tests {
             total_principal: 30,
             next_capitalization_id: None,
         };
+        let legacy_recipe_schema =
+            release_id(b"dclutch/schema/series-recipe-v2").expect("legacy schema digest");
+        assert!(!is_supported_found_schema_release(legacy_recipe_schema));
+        assert!(!validate_found_schema(
+            legacy_recipe_schema,
+            &recipe.to_bytes()
+        ));
         for (schema, bytes) in [
             (
-                SERIES_RECIPE_SCHEMA_RELEASE_ID_V2,
+                SERIES_RECIPE_SCHEMA_RELEASE_ID_V3,
                 recipe.to_bytes().to_vec(),
             ),
             (
