@@ -84,6 +84,82 @@ const _: [usize; SCALAR_COUNT] = [
     SCALAR_SELLER_NONCE_OUTPUT,
     SCALAR_BUYER_NONCE_OUTPUT,
 ];
+macro_rules! direct_input_scalars {
+    (
+        phase: $phase:expr,
+        slot: $slot:expr,
+        seller_from: $seller_from:expr,
+        seller_through: $seller_through:expr,
+        buyer_from: $buyer_from:expr,
+        buyer_through: $buyer_through:expr,
+        seller_side: $seller_side:expr,
+        buyer_side: $buyer_side:expr,
+        seller_generation: $seller_generation:expr,
+        buyer_generation: $buyer_generation:expr,
+        seller_outcome: $seller_outcome:expr,
+        buyer_outcome: $buyer_outcome:expr,
+        outcome_count: $outcome_count:expr,
+        seller_lifecycle: $seller_lifecycle:expr,
+        seller_maximum: $seller_maximum:expr,
+        buyer_lifecycle: $buyer_lifecycle:expr,
+        buyer_maximum: $buyer_maximum:expr,
+        seller_nonce: $seller_nonce:expr,
+        buyer_nonce: $buyer_nonce:expr,
+        seller_next_nonce: $seller_next_nonce:expr,
+        buyer_next_nonce: $buyer_next_nonce:expr,
+        seller_limit: $seller_limit:expr,
+        execution_price: $execution_price:expr,
+        buyer_limit: $buyer_limit:expr,
+        price_scale: $price_scale:expr,
+        seller_fee_bps: $seller_fee_bps:expr,
+        buyer_fee_bps: $buyer_fee_bps:expr,
+        policy_fee_bps: $policy_fee_bps:expr,
+        fill: $fill:expr,
+        seller_claims: $seller_claims:expr,
+        buyer_claims: $buyer_claims:expr,
+        buyer_collateral: $buyer_collateral:expr,
+        seller_collateral: $seller_collateral:expr,
+        venue_collateral: $venue_collateral:expr,
+    ) => {
+        [
+            $phase,
+            $slot,
+            $seller_from,
+            $seller_through,
+            $buyer_from,
+            $buyer_through,
+            $seller_side,
+            $buyer_side,
+            $seller_generation,
+            $buyer_generation,
+            $seller_outcome,
+            $buyer_outcome,
+            $outcome_count,
+            $seller_lifecycle,
+            $seller_maximum,
+            $buyer_lifecycle,
+            $buyer_maximum,
+            $seller_nonce,
+            $buyer_nonce,
+            $seller_next_nonce,
+            $buyer_next_nonce,
+            $seller_limit,
+            $execution_price,
+            $buyer_limit,
+            $price_scale,
+            $seller_fee_bps,
+            $buyer_fee_bps,
+            $policy_fee_bps,
+            $fill,
+            $seller_claims,
+            $buyer_claims,
+            $buyer_collateral,
+            $seller_collateral,
+            $venue_collateral,
+        ]
+    };
+}
+pub(crate) use direct_input_scalars;
 pub(crate) const IDENTITY_SELLER_MARKET: usize = 0;
 pub(crate) const IDENTITY_BUYER_MARKET: usize = 1;
 pub(crate) const IDENTITY_SELLER_MAKER: usize = 2;
@@ -95,6 +171,17 @@ const _: [usize; IDENTITY_COUNT] = [
     IDENTITY_SELLER_MAKER,
     IDENTITY_BUYER_MAKER,
 ];
+macro_rules! direct_input_identities {
+    (
+        seller_market: $seller_market:expr,
+        buyer_market: $buyer_market:expr,
+        seller_maker: $seller_maker:expr,
+        buyer_maker: $buyer_maker:expr,
+    ) => {
+        [$seller_market, $buyer_market, $seller_maker, $buyer_maker]
+    };
+}
+pub(crate) use direct_input_identities;
 
 pub(crate) const DIRECT_PROGRAM: [u8; 568] = [
     0x44, 0x43, 0x54, 0x56, 0x01, 0x23, 0x00, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,

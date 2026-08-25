@@ -21,6 +21,20 @@ def main : IO Unit := do
   for register in DirectProgram.ScalarSlot.all do
     IO.println s!"    {DirectProgram.ScalarSlot.rustName register},"
   IO.println "];"
+  IO.println "macro_rules! direct_input_scalars {"
+  IO.println "    ("
+  for register in DirectProgram.ScalarSlot.inputs do
+    let field := DirectProgram.ScalarSlot.rustFieldName register
+    IO.println s!"        {field}: ${field}:expr,"
+  IO.println "    ) => {"
+  IO.println "        ["
+  for register in DirectProgram.ScalarSlot.inputs do
+    let field := DirectProgram.ScalarSlot.rustFieldName register
+    IO.println s!"            ${field},"
+  IO.println "        ]"
+  IO.println "    };"
+  IO.println "}"
+  IO.println "pub(crate) use direct_input_scalars;"
   for register in DirectProgram.IdentitySlot.all do
     IO.println s!"pub(crate) const {DirectProgram.IdentitySlot.rustName register}: usize = {DirectProgram.IdentitySlot.index register};"
   IO.println s!"pub(crate) const IDENTITY_COUNT: usize = {DirectProgram.Identity.count};"
@@ -28,6 +42,18 @@ def main : IO Unit := do
   for register in DirectProgram.IdentitySlot.all do
     IO.println s!"    {DirectProgram.IdentitySlot.rustName register},"
   IO.println "];"
+  IO.println "macro_rules! direct_input_identities {"
+  IO.println "    ("
+  for register in DirectProgram.IdentitySlot.all do
+    let field := DirectProgram.IdentitySlot.rustFieldName register
+    IO.println s!"        {field}: ${field}:expr,"
+  IO.println "    ) => {"
+  let fields := DirectProgram.IdentitySlot.all.map fun register =>
+    s!"${DirectProgram.IdentitySlot.rustFieldName register}"
+  IO.println s!"        [{String.intercalate ", " fields}]"
+  IO.println "    };"
+  IO.println "}"
+  IO.println "pub(crate) use direct_input_identities;"
   IO.println ""
   emitRustBytes "DIRECT_PROGRAM" bytes
   IO.println ""

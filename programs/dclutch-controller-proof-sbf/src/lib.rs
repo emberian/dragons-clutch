@@ -37,6 +37,7 @@ use generated_direct_program::{
     CLAIM_SELLER_OUTCOME_OFFSET, CUSTODY_FEE_OFFSET, CUSTODY_GROSS_OFFSET, CUSTODY_PLAN_BYTES,
     CUSTODY_PLAN_TEMPLATE, DIRECT_PROGRAM, IDENTITY_COUNT, SCALAR_BUYER_NONCE_OUTPUT,
     SCALAR_FEE_OUTPUT, SCALAR_FILL, SCALAR_GROSS_OUTPUT, SCALAR_SELLER_NONCE_OUTPUT,
+    direct_input_identities, direct_input_scalars,
 };
 use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
 use solana_program::{
@@ -825,53 +826,53 @@ fn build_registers(
     let mut registers = Registers::zeroed();
     // Inputs occupy the schema prefix before the first program-owned output.
     // This type boundary fails compilation if Lean changes that partition.
-    let scalars: [u64; SCALAR_GROSS_OUTPUT] = [
-        authority.phase as u64,
-        slot,
-        seller.valid_from,
-        seller.valid_through,
-        buyer.valid_from,
-        buyer.valid_through,
-        seller.side as u64,
-        buyer.side as u64,
-        seller.generation,
-        buyer.generation,
-        seller.outcome as u64,
-        buyer.outcome as u64,
-        authority.outcome_count as u64,
-        seller.lifecycle as u64,
-        seller.maximum_fill,
-        buyer.lifecycle as u64,
-        buyer.maximum_fill,
-        seller.nonce,
-        buyer.nonce,
-        claims.seller_nonce,
-        claims.buyer_nonce,
-        seller.limit_price,
-        execution_price,
-        buyer.limit_price,
-        PRICE_SCALE,
-        seller.fee_basis_points as u64,
-        buyer.fee_basis_points as u64,
-        authority.fee_basis_points as u64,
-        fill,
-        claims.seller_claims,
-        claims.buyer_claims,
-        token[0],
-        token[1],
-        token[2],
-    ];
+    let scalars: [u64; SCALAR_GROSS_OUTPUT] = direct_input_scalars! {
+        phase: authority.phase as u64,
+        slot: slot,
+        seller_from: seller.valid_from,
+        seller_through: seller.valid_through,
+        buyer_from: buyer.valid_from,
+        buyer_through: buyer.valid_through,
+        seller_side: seller.side as u64,
+        buyer_side: buyer.side as u64,
+        seller_generation: seller.generation,
+        buyer_generation: buyer.generation,
+        seller_outcome: seller.outcome as u64,
+        buyer_outcome: buyer.outcome as u64,
+        outcome_count: authority.outcome_count as u64,
+        seller_lifecycle: seller.lifecycle as u64,
+        seller_maximum: seller.maximum_fill,
+        buyer_lifecycle: buyer.lifecycle as u64,
+        buyer_maximum: buyer.maximum_fill,
+        seller_nonce: seller.nonce,
+        buyer_nonce: buyer.nonce,
+        seller_next_nonce: claims.seller_nonce,
+        buyer_next_nonce: claims.buyer_nonce,
+        seller_limit: seller.limit_price,
+        execution_price: execution_price,
+        buyer_limit: buyer.limit_price,
+        price_scale: PRICE_SCALE,
+        seller_fee_bps: seller.fee_basis_points as u64,
+        buyer_fee_bps: buyer.fee_basis_points as u64,
+        policy_fee_bps: authority.fee_basis_points as u64,
+        fill: fill,
+        seller_claims: claims.seller_claims,
+        buyer_claims: claims.buyer_claims,
+        buyer_collateral: token[0],
+        seller_collateral: token[1],
+        venue_collateral: token[2],
+    };
     for (index, value) in scalars.into_iter().enumerate() {
         registers
             .set_scalar(index, value)
             .map_err(|_| ControllerError::Transition)?;
     }
-    let identities: [[u8; 32]; IDENTITY_COUNT] = [
-        seller.market,
-        buyer.market,
-        makers[0].to_bytes(),
-        makers[1].to_bytes(),
-    ];
+    let identities: [[u8; 32]; IDENTITY_COUNT] = direct_input_identities! {
+        seller_market: seller.market,
+        buyer_market: buyer.market,
+        seller_maker: makers[0].to_bytes(),
+        buyer_maker: makers[1].to_bytes(),
+    };
     for (index, identity) in identities.into_iter().enumerate() {
         registers
             .set_identity(index, identity)

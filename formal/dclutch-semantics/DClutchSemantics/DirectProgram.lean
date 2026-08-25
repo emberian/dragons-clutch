@@ -133,6 +133,13 @@ def rustName : ScalarSlot → String
   | .sellerNonceOutput => "SCALAR_SELLER_NONCE_OUTPUT"
   | .buyerNonceOutput => "SCALAR_BUYER_NONCE_OUTPUT"
 
+/-- Controller-populated scalar prefix. Remaining slots are program-owned
+constants, intermediates, or outputs. -/
+def inputs : List ScalarSlot := all.take (index .grossOutput)
+
+def rustFieldName (register : ScalarSlot) : String :=
+  ((rustName register).drop 7).copy.toLower
+
 theorem index_matches_constructor (register : ScalarSlot) :
     index register = register.ctorIdx := by
   cases register <;> rfl
@@ -142,6 +149,14 @@ theorem indices_are_canonical :
   native_decide
 
 theorem rust_names_are_unique : (all.map rustName).Nodup := by
+  native_decide
+
+theorem input_indices_are_canonical :
+    inputs.map index = List.range inputs.length := by
+  native_decide
+
+theorem rust_input_field_names_are_unique :
+    (inputs.map rustFieldName).Nodup := by
   native_decide
 
 end ScalarSlot
@@ -216,6 +231,9 @@ def rustName : IdentitySlot → String
   | .sellerMaker => "IDENTITY_SELLER_MAKER"
   | .buyerMaker => "IDENTITY_BUYER_MAKER"
 
+def rustFieldName (register : IdentitySlot) : String :=
+  ((rustName register).drop 9).copy.toLower
+
 theorem index_matches_constructor (register : IdentitySlot) :
     index register = register.ctorIdx := by
   cases register <;> rfl
@@ -225,6 +243,9 @@ theorem indices_are_canonical :
   native_decide
 
 theorem rust_names_are_unique : (all.map rustName).Nodup := by
+  native_decide
+
+theorem rust_field_names_are_unique : (all.map rustFieldName).Nodup := by
   native_decide
 
 end IdentitySlot
