@@ -21,8 +21,8 @@ use dclutch_dealer_contract::{
         validate_market_phase,
     },
     instruction::{
-        AddLiquidityV1, CloseLpPositionV1, CreateLpPositionV1, DealerActionV1, DealerInstructionV1,
-        RemoveLiquidityV1,
+        ActivatePoolV1, AddLiquidityV1, CloseLpPositionV1, CreateLpPositionV1, DealerActionV1,
+        DealerInstructionV1, RemoveLiquidityV1,
     },
     runtime::{
         LiquidityConfigViewV1, LiquidityProfileV1, PoolViewV1, add_liquidity, close_position,
