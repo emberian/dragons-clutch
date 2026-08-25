@@ -2101,8 +2101,10 @@ mod tests {
         large.encode_into(&mut large_bytes).expect("encode config");
         assert!(validate_found_schema(release, &large_bytes));
 
-        let last = large_bytes.len() - 1;
-        *large_bytes.get_mut(last).expect("last capacity byte") = 0;
+        let last_capacity = large_bytes.len() - core::mem::size_of::<u64>();
+        *large_bytes
+            .get_mut(last_capacity)
+            .expect("last capacity cell") = 0;
         assert!(!validate_found_schema(release, &large_bytes));
 
         let one_bin = LiquidityConfigV1::<2, 1>::new(
