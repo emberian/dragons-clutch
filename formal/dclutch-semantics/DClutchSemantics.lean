@@ -18,11 +18,23 @@ import DClutchSemantics.DirectControllerCodec
 import DClutchSemantics.EconomicKernel
 import DClutchSemantics.EconomicExamples
 import DClutchSemantics.EconomicCodec
+import DClutchSemantics.ExecutionRelease
 import DClutchSemantics.SourceResolution
 import DClutchSemantics.SourceResolutionAbi
 import DClutchSemantics.GeneralClearing
 import DClutchSemantics.GeneralClearingExamples
 import DClutchSemantics.GeneralControllerAbi
+import DClutchSemantics.ProductPayoff
+import DClutchSemantics.ProductPayoffExamples
+import DClutchSemantics.ProductPayoffAbi
+import DClutchSemantics.ClaimsRepresentation
+import DClutchSemantics.ClaimsRepresentationExamples
+import DClutchSemantics.DealerLiquidity
+import DClutchSemantics.DealerLiquidityExamples
+import DClutchSemantics.Series
+import DClutchSemantics.SeriesExamples
+import DClutchSemantics.MarketCore
+import DClutchSemantics.MarketCoreExamples
 
 /-!
 Fresh Lean-owned semantics for dClutch's compact protocol specializer.
