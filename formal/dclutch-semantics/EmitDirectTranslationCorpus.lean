@@ -137,6 +137,31 @@ def emitVmCase (name : String) (initial : State) : IO Unit := do
       IO.println <| String.intercalate "|"
         (fields ++ ["accept", natCsv final.scalars, natCsv final.identities])
 
+def emitVmProgramCase (name : String) (program : List Op) (initial : State) : IO Unit := do
+  let fields := ["vm-program", name,
+    hex (TransitionVM.Codec.encodeProgram program),
+    natCsv initial.scalars, natCsv initial.identities]
+  match run program initial with
+  | none => IO.println <| String.intercalate "|" (fields ++ ["reject"])
+  | some final =>
+      IO.println <| String.intercalate "|"
+        (fields ++ ["accept", natCsv final.scalars, natCsv final.identities])
+
+def microProgramCases : List (String × List Op × State) := [
+  ("gtc-partial", [.lifecycleAccepts 0 1 2], { scalars := #[2, 100, 35], identities := #[] }),
+  ("subtract", [.subInto 0 1 2], { scalars := #[100, 35, 999], identities := #[] }),
+  ("subtract-underflow", [.subInto 0 1 2],
+    { scalars := #[35, 100, 999], identities := #[] }),
+  ("select-equal", [.selectEq 0 1 2 3],
+    { scalars := #[7, 7, 42, 9], identities := #[] }),
+  ("select-unequal", [.selectEq 0 1 2 3],
+    { scalars := #[7, 8, 42, 9], identities := #[] }),
+  ("select-zero", [.selectZero 0 1 2],
+    { scalars := #[0, 42, 9], identities := #[] }),
+  ("select-nonzero", [.selectZero 0 1 2],
+    { scalars := #[1, 42, 9], identities := #[] })
+]
+
 def baseState : State := DClutch.DirectProgram.state DClutch.Direct.Examples.frame
 
 def coordinatedStates : List (String × State) := [
@@ -172,6 +197,8 @@ def main : IO Unit := do
     emitIntent index
   for index in List.range (boundary64.length / 2) do
     emitController index
+  for entry in microProgramCases do
+    emitVmProgramCase entry.1 entry.2.1 entry.2.2
   for entry in coordinatedStates do
     emitVmCase entry.1 entry.2
   for scalarIndex in List.range DClutch.DirectProgram.ScalarSlot.inputs.length do

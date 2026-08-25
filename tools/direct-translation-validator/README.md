@@ -9,6 +9,11 @@ Direct boundary:
   single-byte mutation in the corpus, and executes the exact emitted transition
   program with `dclutch-transition-vm`.
 
+The corpus also executes isolated Lean-encoded microprograms for GTC lifecycle
+admission, checked subtraction, equality selection, and zero selection. This
+keeps newly added VM opcodes inside the cross-language boundary even before a
+full specialized market program consumes every opcode.
+
 Run:
 
 ```sh

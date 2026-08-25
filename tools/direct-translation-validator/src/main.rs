@@ -327,19 +327,24 @@ fn validate_registers(
     Ok(())
 }
 
-fn validate_vm(fields: &[&str], statistics: &mut Statistics) -> Result<()> {
-    if fields.len() < 5 || fields.len() > 7 {
-        return Err(failure("vm case: wrong field count"));
-    }
-    let context = format!("vm {}", fields[1]);
-    let input_scalars = parse_csv(fields[2], &format!("{context} input scalars"))?;
-    let input_identities = parse_csv(fields[3], &format!("{context} input identities"))?;
+fn validate_vm_case(
+    program: &[u8],
+    name: &str,
+    input_scalars_csv: &str,
+    input_identities_csv: &str,
+    disposition: &str,
+    output: Option<(&str, &str)>,
+    statistics: &mut Statistics,
+) -> Result<()> {
+    let context = format!("vm {name}");
+    let input_scalars = parse_csv(input_scalars_csv, &format!("{context} input scalars"))?;
+    let input_identities = parse_csv(input_identities_csv, &format!("{context} input identities"))?;
     let before = registers(&input_scalars, &input_identities, &context)?;
     let mut after = before;
-    let result = execute(generated_program::bytes(), &mut after);
-    match fields[4] {
+    let result = execute(program, &mut after);
+    match disposition {
         "reject" => {
-            if fields.len() != 5 {
+            if output.is_some() {
                 return Err(failure(format!("{context}: refusal carried post-state")));
             }
             if result.is_ok() {
@@ -349,16 +354,19 @@ fn validate_vm(fields: &[&str], statistics: &mut Statistics) -> Result<()> {
             statistics.vm_refusals += 1;
         }
         "accept" => {
-            if fields.len() != 7 {
-                return Err(failure(format!("{context}: acceptance omitted post-state")));
-            }
+            let (output_scalars_csv, output_identities_csv) = output
+                .ok_or_else(|| failure(format!("{context}: acceptance omitted post-state")))?;
             result.map_err(|error| {
                 failure(format!(
                     "{context}: Rust refused Lean acceptance: {error:?}"
                 ))
             })?;
-            let output_scalars = parse_csv(fields[5], &format!("{context} output scalars"))?;
-            let output_identities = parse_csv(fields[6], &format!("{context} output identities"))?;
+            let output_scalars =
+                parse_csv(output_scalars_csv, &format!("{context} output scalars"))?;
+            let output_identities = parse_csv(
+                output_identities_csv,
+                &format!("{context} output identities"),
+            )?;
             validate_registers(&after, &output_scalars, &output_identities, &context)?;
             statistics.vm_accepts += 1;
         }
@@ -366,6 +374,37 @@ fn validate_vm(fields: &[&str], statistics: &mut Statistics) -> Result<()> {
     }
     statistics.vm_cases += 1;
     Ok(())
+}
+
+fn validate_vm(fields: &[&str], statistics: &mut Statistics) -> Result<()> {
+    if fields.len() != 5 && fields.len() != 7 {
+        return Err(failure("vm case: wrong field count"));
+    }
+    validate_vm_case(
+        generated_program::bytes(),
+        fields[1],
+        fields[2],
+        fields[3],
+        fields[4],
+        (fields.len() == 7).then(|| (fields[5], fields[6])),
+        statistics,
+    )
+}
+
+fn validate_vm_program(fields: &[&str], statistics: &mut Statistics) -> Result<()> {
+    if fields.len() != 6 && fields.len() != 8 {
+        return Err(failure("vm program case: wrong field count"));
+    }
+    let program = decode_hex(fields[2], &format!("vm program {}", fields[1]))?;
+    validate_vm_case(
+        &program,
+        fields[1],
+        fields[3],
+        fields[4],
+        fields[5],
+        (fields.len() == 8).then(|| (fields[6], fields[7])),
+        statistics,
+    )
 }
 
 fn next(seed: &mut u64) -> u64 {
@@ -488,6 +527,7 @@ fn validate(path: &Path) -> Result<Statistics> {
                 statistics.abi_mutations += 1;
             }
             Some("vm") => validate_vm(&fields, &mut statistics)?,
+            Some("vm-program") => validate_vm_program(&fields, &mut statistics)?,
             Some(kind) => {
                 return Err(failure(format!(
                     "line {}: unknown record {kind:?}",
