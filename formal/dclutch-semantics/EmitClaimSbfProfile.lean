@@ -34,5 +34,21 @@ def main : IO Unit :=
     rustConstant "EFFECT_0_TAG" "u64" (effectTag 0),
     rustConstant "EFFECT_1_TAG" "u64" (effectTag 1),
     rustConstant "EFFECT_2_TAG" "u64" (effectTag 2),
-    rustConstant "EFFECT_3_TAG" "u64" (effectTag 3)
+    rustConstant "EFFECT_3_TAG" "u64" (effectTag 3),
+    rustConstant "REGISTERED_SELLER_OFFSET" "usize" Registered.sellerRegistrationOffset,
+    rustConstant "REGISTERED_BUYER_OFFSET" "usize" Registered.buyerRegistrationOffset,
+    rustConstant "REGISTERED_SELLER_POSITION_OFFSET" "usize" Registered.sellerPositionOffset,
+    rustConstant "REGISTERED_BUYER_POSITION_OFFSET" "usize" Registered.buyerPositionOffset,
+    rustConstant "REGISTERED_SELLER_DATA_OFFSET" "usize" Registered.sellerRegistrationDataOffset,
+    rustConstant "REGISTERED_BUYER_DATA_OFFSET" "usize" Registered.buyerRegistrationDataOffset,
+    rustConstant "REGISTERED_SELLER_POSITION_DATA_OFFSET" "usize" Registered.sellerPositionDataOffset,
+    rustConstant "REGISTERED_BUYER_POSITION_DATA_OFFSET" "usize" Registered.buyerPositionDataOffset,
+    rustConstant "REGISTERED_INSTRUCTION_LENGTH_OFFSET" "usize" Registered.instructionLengthOffset,
+    rustConstant "REGISTERED_INSTRUCTION_OFFSET" "usize" Registered.instructionOffset,
+    rustConstant "REGISTERED_PROGRAM_ID_OFFSET" "usize" Registered.programIdOffset,
+    rustConstant "REGISTERED_FRAME_WORD" "u64" (accountFrameWord Registered.registrationRole),
+    rustConstant "REGISTERED_DATA_BYTES" "u64" Registered.registrationRole.dataBytes,
+    rustConstant "REGISTERED_INSTRUCTION_BYTES" "u64" Registered.instructionBytes,
+    rustConstant "REGISTERED_MAGIC_WORD" "u64" Registered.registrationMagicWord,
+    rustConstant "REGISTERED_INSTRUCTION_HEADER_WORD" "u64" Registered.instructionHeaderWord
   ]

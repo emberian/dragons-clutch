@@ -1,6 +1,8 @@
 import DClutchSemantics.SbfProfile
 import DClutchSemantics.Physical
 import DClutchSemantics.Examples
+import DClutchSemantics.RegisteredPhysical
+import DClutchSemantics.DirectLifecycleAbi
 
 /-!
 # Exact-account claim-executor Solana ABI-v1 profile
@@ -90,5 +92,63 @@ theorem exact_instruction_shape :
     effectTag 2 = 65537 ∧
     effectTag 3 = 65794 := by
   native_decide
+
+/-! ## Registered-intent fill route
+
+The first account after authority identifies the route by its exact data
+length: ordinary fills use a 48-byte replay root; registered fills use the
+232-byte canonical registration state.  Both routes retain the same account
+count and the same sole owner for Position balances.
+-/
+
+namespace Registered
+
+def registrationRole : AccountRole := {
+  signer := false
+  writable := true
+  executable := false
+  dataBytes := DClutch.DirectLifecycleAbi.stateBytes
+}
+
+def sellerRegistrationOffset : Nat := authorityOffset + accountSpan authorityRole
+def buyerRegistrationOffset : Nat := sellerRegistrationOffset + accountSpan registrationRole
+def sellerPositionOffset : Nat := buyerRegistrationOffset + accountSpan registrationRole
+def buyerPositionOffset : Nat := sellerPositionOffset + accountSpan positionRole
+def sellerRegistrationDataOffset : Nat := sellerRegistrationOffset + accountHeaderBytes
+def buyerRegistrationDataOffset : Nat := buyerRegistrationOffset + accountHeaderBytes
+def sellerPositionDataOffset : Nat := sellerPositionOffset + accountHeaderBytes
+def buyerPositionDataOffset : Nat := buyerPositionOffset + accountHeaderBytes
+def instructionLengthOffset : Nat := buyerPositionOffset + accountSpan positionRole
+def instructionOffset : Nat := instructionLengthOffset + 8
+def instructionBytes : Nat := Direct.RegisteredPhysical.instructionBytes
+def programIdOffset : Nat := instructionOffset + instructionBytes
+
+def registrationMagicWord : Nat :=
+  SbfProfile.decodeLE DClutch.DirectLifecycleAbi.stateMagic
+
+def instructionHeaderWord : Nat :=
+  SbfProfile.wordAt Direct.RegisteredPhysical.instructionMagic 0
+
+theorem exact_offsets :
+    sellerRegistrationOffset = 10344 ∧
+    buyerRegistrationOffset = 20912 ∧
+    sellerPositionOffset = 31480 ∧
+    buyerPositionOffset = 41872 ∧
+    sellerRegistrationDataOffset = 10432 ∧
+    buyerRegistrationDataOffset = 21000 ∧
+    sellerPositionDataOffset = 31568 ∧
+    buyerPositionDataOffset = 41960 ∧
+    instructionLengthOffset = 52264 ∧
+    instructionOffset = 52272 ∧
+    programIdOffset = 52288 := by
+  native_decide
+
+theorem exact_frames :
+    accountFrameWord registrationRole = 65791 ∧
+    registrationRole.dataBytes = 232 ∧
+    instructionBytes = 16 := by
+  native_decide
+
+end Registered
 
 end DClutch.ClaimSbfProfile

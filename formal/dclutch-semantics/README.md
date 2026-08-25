@@ -64,8 +64,13 @@ hostile-decoder round-trip theorem. Lean also emits the exact 168-byte generic
 VM program that derives successor remaining, sequence, and phase values. The
 safe Rust codec consumes both generated artifacts and refuses unknown phases,
 malformed nested intents, nonzero reserved bytes, truncation, and alternate
-magic/version values. SBF account creation and lifecycle dispatch remain the
-next physical boundary.
+magic/version values. `RegisteredPhysical` executes that generated program for
+both authenticated registrations, joins the results to the sole Position
+balances, and proves exact claim conservation. The 20,568-byte claim-owner ELF
+now dispatches this 16-byte request profile alongside inline execution; its
+real-ELF campaign covers reusable and terminal fills plus hostile rollback.
+Registration account creation and controller register/fill/cancel/expire
+dispatch remain the next physical boundary.
 
 `CompiledPhysical.compilePhysicalPlan` then constructs the claim and custody
 plans from successful program outputs instead of caller-supplied gross, fee, or
@@ -96,14 +101,15 @@ claims, gross collateral, and fee custody.
 
 The general SDK/no-allocation measurement adapter remains a seven-effect
 baseline: 1,238 CU from a 12,016-byte ELF. The active Lean-generated claim
-executor assigns replay and claim facts to two canonical replay roots and two
-canonical maker/outcome Positions; it no longer uses the cheaper combined
-pairwise projection. A real-SVM controller authenticates two native Ed25519
-signatures, the canonical Market and Realm, the Market's exact capability
-manifest, the manifest-selected Direct semantic release, and its finalized fee
-policy. It then runs the generated transition program, composes the claim child
-with a real custody adapter and official SPL Token 9.0.0, and checks
-transaction-wide rollback after the first Token CPI. The earlier 1,872-byte
+executor assigns inline replay facts to canonical maker replay roots,
+registered replay facts to canonical registration-local sequences, and all
+claim balances to canonical maker/outcome Positions; it no longer uses the
+cheaper combined pairwise projection. A real-SVM controller authenticates two
+native Ed25519 signatures, the canonical Market and Realm, the Market's exact
+capability manifest, the manifest-selected Direct semantic release, and its
+finalized fee policy. It then runs the generated transition program, composes
+the claim child with a real custody adapter and official SPL Token 9.0.0, and
+checks transaction-wide rollback after the first Token CPI. The earlier 1,872-byte
 claim target has one qedsvm v0.11.0 successful-path Hoare triple, but that
 theorem does not cover the canonical-owner successor artifact. This remains
 runtime evidence plus high-level Lean theorems—not whole-CFG refinement or a

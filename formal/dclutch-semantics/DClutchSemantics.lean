@@ -3,6 +3,7 @@ import DClutchSemantics.Direct
 import DClutchSemantics.DirectLifecycle
 import DClutchSemantics.DirectLifecycleProgram
 import DClutchSemantics.DirectLifecycleAbi
+import DClutchSemantics.RegisteredPhysical
 import DClutchSemantics.DirectProofs
 import DClutchSemantics.Codec
 import DClutchSemantics.Examples

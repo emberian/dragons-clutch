@@ -309,6 +309,10 @@ dependencies = [
 [[package]]
 name = "dclutch-claims-proof-sbf"
 version = "0.1.0"
+dependencies = [
+ "dclutch-direct-codec",
+ "dclutch-transition-vm",
+]
 
 [[package]]
 name = "dclutch-collateral-contract"
