@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: dclutch-atomic-generate \
+  --output PATH [--min-lines N] \
+  [--expect-first-line TEXT] [--expect-pattern ERE] \
+  [--mode OCTAL] \
+  [--validator PROGRAM [--validator-arg ARG]...] \
+  -- PRODUCER [ARG]...
+
+The producer's stdout is captured in a temporary file beside PATH. Stderr is
+inherited. The destination is replaced atomically only after every gate passes.
+At least one expected first-line or pattern gate is required. A validator, when
+present, receives the temporary path as its final argument.
+EOF
+}
+
+fail() {
+  printf 'dclutch-atomic-generate: %s\n' "$*" >&2
+  exit 1
+}
+
+output=''
+minimum_lines=1
+expected_first_line=''
+has_expected_first_line=0
+expected_pattern=''
+has_expected_pattern=0
+output_mode=0644
+validator=()
+producer=()
+
+while (($# > 0)); do
+  case "$1" in
+    --output)
+      (($# >= 2)) || fail '--output requires a path'
+      output=$2
+      shift 2
+      ;;
+    --min-lines)
+      (($# >= 2)) || fail '--min-lines requires a positive integer'
+      minimum_lines=$2
+      shift 2
+      ;;
+    --expect-first-line)
+      (($# >= 2)) || fail '--expect-first-line requires text'
+      expected_first_line=$2
+      has_expected_first_line=1
+      shift 2
+      ;;
+    --expect-pattern)
+      (($# >= 2)) || fail '--expect-pattern requires an extended regular expression'
+      expected_pattern=$2
+      has_expected_pattern=1
+      shift 2
+      ;;
+    --mode)
+      (($# >= 2)) || fail '--mode requires an octal file mode'
+      output_mode=$2
+      shift 2
+      ;;
+    --validator)
+      (($# >= 2)) || fail '--validator requires a program'
+      ((${#validator[@]} == 0)) || fail '--validator may be supplied only once'
+      validator=("$2")
+      shift 2
+      ;;
+    --validator-arg)
+      (($# >= 2)) || fail '--validator-arg requires an argument'
+      ((${#validator[@]} > 0)) || fail '--validator-arg requires --validator first'
+      validator+=("$2")
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      producer=("$@")
+      break
+      ;;
+    *)
+      usage
+      fail "unknown option: $1"
+      ;;
+  esac
+done
+
+[[ -n "$output" ]] || fail '--output is required'
+[[ "$minimum_lines" =~ ^[1-9][0-9]*$ ]] || fail '--min-lines must be a positive integer'
+[[ "$output_mode" =~ ^0?[0-7]{3}$ ]] || fail '--mode must be a three- or four-digit octal mode'
+((has_expected_first_line == 1 || has_expected_pattern == 1)) \
+  || fail 'an expected first line or pattern is required'
+((${#producer[@]} > 0)) || fail 'a producer command is required after --'
+[[ ! -d "$output" ]] || fail 'the output path names a directory'
+
+destination_dir=$(dirname -- "$output")
+destination_base=$(basename -- "$output")
+[[ -d "$destination_dir" ]] || fail "destination directory does not exist: $destination_dir"
+
+temporary=$(mktemp "$destination_dir/.${destination_base}.atomic.XXXXXX")
+cleanup() {
+  rm -f -- "$temporary"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+validate_shape() {
+  local phase=$1
+  local line_count
+  local first_line=''
+
+  if [[ ! -s "$temporary" ]]; then
+    printf 'dclutch-atomic-generate: %s output is empty\n' "$phase" >&2
+    return 1
+  fi
+  line_count=$(awk 'END { print NR + 0 }' "$temporary")
+  if ((line_count < minimum_lines)); then
+    printf 'dclutch-atomic-generate: %s output has %s lines; expected at least %s\n' \
+      "$phase" "$line_count" "$minimum_lines" >&2
+    return 1
+  fi
+  if ((has_expected_first_line == 1)); then
+    IFS= read -r first_line < "$temporary" || :
+    if [[ "$first_line" != "$expected_first_line" ]]; then
+      printf 'dclutch-atomic-generate: %s output has the wrong first line\n' "$phase" >&2
+      return 1
+    fi
+  fi
+  if ((has_expected_pattern == 1)) \
+    && ! grep -E -q -e "$expected_pattern" "$temporary"; then
+    printf 'dclutch-atomic-generate: %s output is missing the expected pattern\n' "$phase" >&2
+    return 1
+  fi
+}
+
+set +e
+"${producer[@]}" > "$temporary"
+producer_status=$?
+set -e
+if ((producer_status != 0)); then
+  printf 'dclutch-atomic-generate: producer failed with status %s\n' \
+    "$producer_status" >&2
+  exit "$producer_status"
+fi
+
+validate_shape 'producer'
+
+if ((${#validator[@]} > 0)); then
+  set +e
+  "${validator[@]}" "$temporary"
+  validator_status=$?
+  set -e
+  if ((validator_status != 0)); then
+    printf 'dclutch-atomic-generate: validator failed with status %s\n' \
+      "$validator_status" >&2
+    exit "$validator_status"
+  fi
+  validate_shape 'validated'
+fi
+
+chmod "$output_mode" "$temporary"
+mv -f -- "$temporary" "$output"
+trap - EXIT HUP INT TERM

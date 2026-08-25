@@ -141,6 +141,14 @@ Run:
 lake build
 ```
 
+When accepting generator stdout into a canonical tracked file, use
+`tools/atomic-generate/dclutch-atomic-generate` from the repository root. It
+requires an output-specific header or pattern, writes beside the destination,
+and replaces the accepted file atomically only after the producer and optional
+validator succeed. Do not redirect a generator directly over its canonical
+output. The wrapper's interface and hostile regression command are documented
+in `tools/atomic-generate/README.md`.
+
 This is not a formal-verification claim for the deployed Solana program. See
 `TRUST.md` for the exact boundary and `docs/decisions/0002-lean-semantic-specializer.md`
 at the repository root for the succession criteria.
