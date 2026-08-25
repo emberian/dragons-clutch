@@ -44,6 +44,8 @@ use solana_sdk_ids::system_program;
 pub mod compiled_direct;
 /// Chain-derived unsigned Realm and Market foundation workflows.
 pub mod foundation;
+/// Chain-derived unsigned General physical-controller workflows.
+pub mod general_physical;
 /// Chain-derived registered Direct execution and terminal workflows.
 pub mod registered_direct;
 /// Chain-derived unsigned Registry activation and reauthentication workflows.
