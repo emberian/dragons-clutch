@@ -20,6 +20,24 @@ claim child mutates exactly four canonical owners:
 This is local real-SVM evidence for exact artifacts, not mainnet evidence and
 not a claim that the Solana program is formally verified.
 
+## ABI convergence addendum
+
+Commit `fa46a7817e55f1ed4ac16917bdb4128d6d7040fb` replaces the
+controller and harness's parallel handwritten intent/profile codecs with the
+shared safe, `no_std`, `no_alloc` `dclutch-direct-codec`. Its encoders match four
+Lean-emitted vectors byte-for-byte; round-trip and hostile width, magic,
+version, and reserved-byte tests pass.
+
+Rebuilding that commit produces a 55,728-byte controller ELF with SHA-256
+`659be91dc9694e921986d4c2dbfdbcfbc931b9a582c9ed255bb08453c5c58937`.
+Equivalent Loader V3 capitalization is 0.390212400 SOL, and the three-program
+first-party total is 0.591398160 SOL. This removes 320 ELF bytes and one parallel
+ABI truth. The post-convergence real-SVM measurements are 11,320 CU for wrong
+replay, 14,487 for wrong Position, 17,031 for an out-of-limit price, 39,527 for
+success, and 34,066 for late rollback; native signature tampering still refuses
+before controller execution. All other artifact hashes in the table below are
+unchanged.
+
 ## Semantic and generated material
 
 Lean 4.30.0 owns:
