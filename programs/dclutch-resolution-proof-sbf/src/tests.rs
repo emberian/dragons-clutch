@@ -31,9 +31,10 @@ use dclutch_release_set_contract::{
 };
 use dclutch_resolution_codec::{
     ACCEPT_PYTH_REQUEST_BYTES, AcceptPythRequestV1, FUNDED_TRANSITION_REQUEST_BYTES,
-    FundedTransitionActionV2, FundedTransitionRequestV2, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
-    RESOLUTION_CERTIFICATE_BYTES, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V2,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V2, ResolutionCertificateKindV1, ResolutionCertificateV1,
+    FundedTransitionActionV3, FundedTransitionRequestV3, PRIMARY_CERTIFICATE_SEQUENCE_V3,
+    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CERTIFICATE_BYTES,
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V3,
+    ResolutionCertificateKindV1, ResolutionCertificateV1,
 };
 use dclutch_source_contract::{
     CapacityEnvelope, ContentId as SourceContentId, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
@@ -52,7 +53,7 @@ use solana_program::{
     pubkey::Pubkey,
     rent::Rent,
 };
-use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
+use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
 
 use super::{ResolutionError, process_instruction};
 
@@ -64,11 +65,12 @@ const FEED: [u8; 32] = [0x2a; 32];
 
 struct Fixture {
     program_id: Pubkey,
-    accounts: [AccountInfo<'static>; 22],
+    accounts: [AccountInfo<'static>; 23],
     request: [u8; ACCEPT_PYTH_REQUEST_BYTES],
     capability_manifest: AccountInfo<'static>,
     capability_manifest_staging: AccountInfo<'static>,
     recovery_allocation_id: [u8; 32],
+    exhaust_allocation_id: [u8; 32],
     material_id: [u8; 32],
     result_domain_id: [u8; 32],
 }
@@ -291,7 +293,7 @@ fn fixture() -> Fixture {
     let resolution_release = artifact(
         program_id,
         resolution_programdata,
-        RESOLUTION_CONTROLLER_RELEASE_ID_V2,
+        RESOLUTION_CONTROLLER_RELEASE_ID_V3,
         resolution_elf,
         73,
     );
@@ -514,7 +516,7 @@ fn fixture() -> Fixture {
     let capability_entries = [
         CapabilityEntryV1::new(
             core_id([0xd3; 32]),
-            core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V2),
+            core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V3),
             core_id(recovery_allocation_id),
             core_id([0xd5; 32]),
             core_id([0xd6; 32]),
@@ -528,7 +530,21 @@ fn fixture() -> Fixture {
         .expect("recovery funding entry"),
         CapabilityEntryV1::new(
             core_id([0xd4; 32]),
-            core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V2),
+            core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V3),
+            core_id(recovery_policy_id.to_bytes()),
+            core_id([0xd5; 32]),
+            core_id([0xd6; 32]),
+            core_id([0xd7; 32]),
+            ActivationPolicy::RequiredAtFounding,
+            0,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            funding_quote,
+        )
+        .expect("exhaustion funding entry"),
+        CapabilityEntryV1::new(
+            core_id([0xd8; 32]),
+            core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V3),
             core_id(material_id),
             core_id([0xd5; 32]),
             core_id([0xd6; 32]),
@@ -541,7 +557,7 @@ fn fixture() -> Fixture {
         )
         .expect("failure funding entry"),
     ];
-    let mut capability_manifest_bytes = vec![0; MANIFEST_HEADER_BYTES + 2 * CAPABILITY_ENTRY_BYTES];
+    let mut capability_manifest_bytes = vec![0; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
     CapabilityManifestV1::encode_into(&capability_entries, &mut capability_manifest_bytes)
         .expect("canonical capability manifest");
     let capability_manifest_id = hash(&capability_manifest_bytes).to_bytes();
@@ -589,10 +605,10 @@ fn fixture() -> Fixture {
     .expect("fresh Source state")
     .state();
     let certificate_kind = [1_u8];
-    let certificate_sequence = SLOT.to_le_bytes();
+    let certificate_sequence = PRIMARY_CERTIFICATE_SEQUENCE_V3.to_le_bytes();
     let certificate_key = Pubkey::find_program_address(
         &[
-            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V2,
+            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
             state_key.as_ref(),
             &certificate_kind,
             &certificate_sequence,
@@ -669,7 +685,7 @@ fn fixture() -> Fixture {
         account(
             certificate_key,
             true,
-            1,
+            rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES),
             vec![0; RESOLUTION_CERTIFICATE_BYTES],
             program_id,
             false,
@@ -771,6 +787,14 @@ fn fixture() -> Fixture {
             sysvar::ID,
             false,
         ),
+        account(
+            system_program::ID,
+            false,
+            1,
+            Vec::new(),
+            native_loader::ID,
+            true,
+        ),
     ];
     assert_eq!(pyth_release_bytes.len(), PYTH_RELEASE_V1_ENCODED_LEN);
     Fixture {
@@ -780,6 +804,7 @@ fn fixture() -> Fixture {
         capability_manifest,
         capability_manifest_staging,
         recovery_allocation_id,
+        exhaust_allocation_id: recovery_policy_id.to_bytes(),
         material_id,
         result_domain_id: domain_id,
     }
@@ -787,17 +812,18 @@ fn fixture() -> Fixture {
 
 struct FundedFixture {
     program_id: Pubkey,
-    accounts: [AccountInfo<'static>; 18],
+    accounts: [AccountInfo<'static>; 19],
     request: [u8; FUNDED_TRANSITION_REQUEST_BYTES],
     work_paid: u64,
 }
 
-fn funded_fixture(action: FundedTransitionActionV2, prepare_exhausted: bool) -> FundedFixture {
+fn funded_fixture(action: FundedTransitionActionV3, prepare_prior: bool) -> FundedFixture {
     let base = fixture();
     let rent = Rent::default();
     let now = match action {
-        FundedTransitionActionV2::FailNext => 111,
-        FundedTransitionActionV2::CommitFailure => 121,
+        FundedTransitionActionV3::FailNext => 111,
+        FundedTransitionActionV3::Exhaust => 121,
+        FundedTransitionActionV3::CommitFailure => 122,
     };
     let clock = Clock {
         slot: SLOT + 1,
@@ -807,7 +833,7 @@ fn funded_fixture(action: FundedTransitionActionV2, prepare_exhausted: bool) -> 
         unix_timestamp: now,
     };
 
-    if prepare_exhausted {
+    if prepare_prior {
         let material_data = base.accounts[8]
             .try_borrow_data()
             .expect("Source material data");
@@ -826,9 +852,11 @@ fn funded_fixture(action: FundedTransitionActionV2, prepare_exhausted: bool) -> 
                 111,
             )
             .expect("enter recovery fixture state");
-        state
-            .exhaust_view(source_id(base.material_id), material, GENERATION, 121)
-            .expect("exhaust recovery fixture state");
+        if action == FundedTransitionActionV3::CommitFailure {
+            state
+                .exhaust_view(source_id(base.material_id), material, GENERATION, 121)
+                .expect("exhaust recovery fixture state");
+        }
         state_data.copy_from_slice(&state.to_bytes());
     }
 
@@ -839,8 +867,9 @@ fn funded_fixture(action: FundedTransitionActionV2, prepare_exhausted: bool) -> 
     let manifest = CapabilityManifestV1::decode(&manifest_data).expect("canonical manifest");
     let manifest_id = core_id(hash(&manifest_data).to_bytes());
     let entry_index = match action {
-        FundedTransitionActionV2::FailNext => 0,
-        FundedTransitionActionV2::CommitFailure => 1,
+        FundedTransitionActionV3::FailNext => 0,
+        FundedTransitionActionV3::Exhaust => 1,
+        FundedTransitionActionV3::CommitFailure => 2,
     };
     let exact_rent = rent.minimum_balance(FUNDING_STATE_BYTES);
     let custody = FundingCustodyObservationV1::native_only(
@@ -867,21 +896,28 @@ fn funded_fixture(action: FundedTransitionActionV2, prepare_exhausted: bool) -> 
     let funding_key =
         Pubkey::find_program_address(&funding_derivation.seed_components(), &base.program_id).0;
     let expected_funding_allocation_id = match action {
-        FundedTransitionActionV2::FailNext => base.recovery_allocation_id,
-        FundedTransitionActionV2::CommitFailure => base.material_id,
+        FundedTransitionActionV3::FailNext => base.recovery_allocation_id,
+        FundedTransitionActionV3::Exhaust => base.exhaust_allocation_id,
+        FundedTransitionActionV3::CommitFailure => base.material_id,
     };
     let expected_recovery_index = match action {
-        FundedTransitionActionV2::FailNext => 0,
-        FundedTransitionActionV2::CommitFailure => 1,
+        FundedTransitionActionV3::FailNext => 0,
+        FundedTransitionActionV3::Exhaust | FundedTransitionActionV3::CommitFailure => 1,
     };
     let certificate_kind = [match action {
-        FundedTransitionActionV2::FailNext => 2,
-        FundedTransitionActionV2::CommitFailure => 4,
+        FundedTransitionActionV3::FailNext => 2,
+        FundedTransitionActionV3::Exhaust => 3,
+        FundedTransitionActionV3::CommitFailure => 4,
     }];
-    let certificate_sequence = 1_u64.to_le_bytes();
+    let certificate_sequence = match action {
+        FundedTransitionActionV3::FailNext => 1_u64,
+        FundedTransitionActionV3::Exhaust => 2_u64,
+        FundedTransitionActionV3::CommitFailure => 3_u64,
+    }
+    .to_le_bytes();
     let certificate_key = Pubkey::find_program_address(
         &[
-            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V2,
+            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
             base.accounts[0].key.as_ref(),
             &certificate_kind,
             &certificate_sequence,
@@ -889,7 +925,7 @@ fn funded_fixture(action: FundedTransitionActionV2, prepare_exhausted: bool) -> 
         &base.program_id,
     )
     .0;
-    let request = FundedTransitionRequestV2 {
+    let request = FundedTransitionRequestV3 {
         action,
         expected_generation: GENERATION,
         expected_recovery_index,
@@ -905,7 +941,7 @@ fn funded_fixture(action: FundedTransitionActionV2, prepare_exhausted: bool) -> 
         account(
             certificate_key,
             true,
-            1,
+            rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES),
             vec![0; RESOLUTION_CERTIFICATE_BYTES],
             base.program_id,
             false,
@@ -940,6 +976,7 @@ fn funded_fixture(action: FundedTransitionActionV2, prepare_exhausted: bool) -> 
             false,
         ),
         base.accounts[21].clone(),
+        base.accounts[22].clone(),
     ];
     FundedFixture {
         program_id: base.program_id,
@@ -1043,7 +1080,7 @@ fn registry_bound_full_pyth_observation_emits_one_compact_certificate() {
 
 #[test]
 fn first_recovery_consumes_exact_bounty_and_emits_ordered_certificate() {
-    let fixture = funded_fixture(FundedTransitionActionV2::FailNext, false);
+    let fixture = funded_fixture(FundedTransitionActionV3::FailNext, false);
     let funding_before = fixture.accounts[2].lamports();
     let worker_before = fixture.accounts[3].lamports();
     process_instruction(&fixture.program_id, &fixture.accounts, &fixture.request)
@@ -1087,8 +1124,52 @@ fn first_recovery_consumes_exact_bounty_and_emits_ordered_certificate() {
 }
 
 #[test]
+fn last_recovery_exhaustion_consumes_exact_bounty_and_emits_ordered_certificate() {
+    let fixture = funded_fixture(FundedTransitionActionV3::Exhaust, true);
+    let funding_before = fixture.accounts[2].lamports();
+    let worker_before = fixture.accounts[3].lamports();
+    process_instruction(&fixture.program_id, &fixture.accounts, &fixture.request)
+        .expect("funded recovery exhaustion");
+
+    let state_data = fixture.accounts[0].try_borrow_data().expect("Source state");
+    let state = SourceResolutionStateV1::decode(&state_data).expect("exhausted state");
+    assert_eq!(state.phase(), SourceResolutionPhaseV1::Exhausted);
+    assert_eq!(state.active_recovery_attempt(), None);
+
+    let funding_data = fixture.accounts[2]
+        .try_borrow_data()
+        .expect("funding state");
+    let funding = FundingStateV1::decode(&funding_data).expect("funding state");
+    assert_eq!(funding.remaining().bounty().amount(), 0);
+    assert_eq!(funding.released().bounty().amount(), fixture.work_paid);
+    assert_eq!(
+        fixture.accounts[2].lamports(),
+        funding_before - fixture.work_paid
+    );
+    assert_eq!(
+        fixture.accounts[3].lamports(),
+        worker_before + fixture.work_paid
+    );
+
+    let certificate_data = fixture.accounts[1]
+        .try_borrow_data()
+        .expect("exhaustion certificate");
+    let certificate = ResolutionCertificateV1::decode(&certificate_data)
+        .expect("canonical exhaustion certificate");
+    assert_eq!(certificate.kind, ResolutionCertificateKindV1::Exhausted);
+    assert_ne!(certificate.route, [0; 32]);
+    assert_eq!(certificate.attempt_index, 1);
+    assert_eq!(certificate.selector, 0);
+    assert_eq!(certificate.provider_evidence, [0; 32]);
+    assert_eq!(certificate.funding_allocation, fixture.request[64..96]);
+    assert_eq!(certificate.work_paid, fixture.work_paid);
+    assert_eq!(certificate.funding_remaining, 0);
+    assert_eq!(certificate.observed_at, 121);
+}
+
+#[test]
 fn explicit_failure_consumes_exact_bounty_and_uses_product_final_selector() {
-    let fixture = funded_fixture(FundedTransitionActionV2::CommitFailure, true);
+    let fixture = funded_fixture(FundedTransitionActionV3::CommitFailure, true);
     process_instruction(&fixture.program_id, &fixture.accounts, &fixture.request)
         .expect("funded explicit failure");
     let state_data = fixture.accounts[0].try_borrow_data().expect("Source state");
@@ -1115,15 +1196,15 @@ fn explicit_failure_consumes_exact_bounty_and_uses_product_final_selector() {
 
 #[test]
 fn funded_recovery_hostile_coordinates_and_late_output_refuse_atomically() {
-    let mut wrong_allocation = funded_fixture(FundedTransitionActionV2::FailNext, false);
+    let mut wrong_allocation = funded_fixture(FundedTransitionActionV3::FailNext, false);
     wrong_allocation.request[64] ^= 1;
     assert_funded_refusal_atomic(&wrong_allocation, ResolutionError::Transition);
 
-    let mut skipped_index = funded_fixture(FundedTransitionActionV2::FailNext, false);
+    let mut skipped_index = funded_fixture(FundedTransitionActionV3::FailNext, false);
     skipped_index.request[24] = 1;
     assert_funded_refusal_atomic(&skipped_index, ResolutionError::Transition);
 
-    let early = funded_fixture(FundedTransitionActionV2::FailNext, false);
+    let early = funded_fixture(FundedTransitionActionV3::FailNext, false);
     let early_clock = Clock {
         slot: SLOT + 1,
         epoch_start_timestamp: 0,
@@ -1137,7 +1218,7 @@ fn funded_recovery_hostile_coordinates_and_late_output_refuse_atomically() {
         .copy_from_slice(&bincode::serialize(&early_clock).expect("Clock bytes"));
     assert_funded_refusal_atomic(&early, ResolutionError::Transition);
 
-    let occupied = funded_fixture(FundedTransitionActionV2::FailNext, false);
+    let occupied = funded_fixture(FundedTransitionActionV3::FailNext, false);
     occupied.accounts[1]
         .try_borrow_mut_data()
         .expect("certificate")
@@ -1149,8 +1230,28 @@ fn funded_recovery_hostile_coordinates_and_late_output_refuse_atomically() {
 
 #[test]
 fn failure_before_explicit_exhaustion_refuses_all_four_outputs_atomically() {
-    let fixture = funded_fixture(FundedTransitionActionV2::CommitFailure, false);
+    let fixture = funded_fixture(FundedTransitionActionV3::CommitFailure, false);
     assert_funded_refusal_atomic(&fixture, ResolutionError::Transition);
+}
+
+#[test]
+fn exhaustion_before_recovery_or_before_deadline_refuses_all_four_outputs_atomically() {
+    let missing_recovery = funded_fixture(FundedTransitionActionV3::Exhaust, false);
+    assert_funded_refusal_atomic(&missing_recovery, ResolutionError::Transition);
+
+    let early = funded_fixture(FundedTransitionActionV3::Exhaust, true);
+    let early_clock = Clock {
+        slot: SLOT + 1,
+        epoch_start_timestamp: 0,
+        epoch: 0,
+        leader_schedule_epoch: 0,
+        unix_timestamp: 120,
+    };
+    early.accounts[16]
+        .try_borrow_mut_data()
+        .expect("Clock")
+        .copy_from_slice(&bincode::serialize(&early_clock).expect("Clock bytes"));
+    assert_funded_refusal_atomic(&early, ResolutionError::Transition);
 }
 
 #[test]

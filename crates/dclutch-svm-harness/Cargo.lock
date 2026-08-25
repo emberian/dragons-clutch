@@ -1694,6 +1694,7 @@ dependencies = [
  "solana-rpc-client",
  "solana-sdk",
  "solana-sdk-ids",
+ "solana-system-interface 2.0.0",
  "solana-transaction 4.1.6",
  "tempfile",
  "tokio",

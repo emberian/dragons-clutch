@@ -22,6 +22,7 @@ def main : IO Unit := do
   for field in RequestField.all do
     IO.println s!"pub(crate) const {RequestField.rustName field}: usize = {RequestField.offset field};"
   IO.println s!"pub(crate) const REQUEST_ACCEPT_PYTH_ACTION: u8 = {acceptPythAction.toNat};"
+  IO.println s!"pub(crate) const PRIMARY_CERTIFICATE_SEQUENCE_VALUE: u64 = {primaryCertificateSequence exampleState};"
   IO.println ""
   IO.println s!"pub(crate) const FUNDED_REQUEST_BYTES_VALUE: usize = {fundedRequestBytes};"
   IO.println s!"pub(crate) const FUNDED_REQUEST_ABI_VERSION: u16 = {fundedRequestVersion};"
@@ -29,6 +30,7 @@ def main : IO Unit := do
   for field in FundedRequestField.all do
     IO.println s!"pub(crate) const {FundedRequestField.rustName field}: usize = {FundedRequestField.offset field};"
   IO.println s!"pub(crate) const FUNDED_REQUEST_FAIL_NEXT_ACTION: u8 = {FundedAction.failNext.tag.toNat};"
+  IO.println s!"pub(crate) const FUNDED_REQUEST_EXHAUST_ACTION: u8 = {FundedAction.exhaust.tag.toNat};"
   IO.println s!"pub(crate) const FUNDED_REQUEST_COMMIT_FAILURE_ACTION: u8 = {FundedAction.commitFailure.tag.toNat};"
   IO.println ""
   IO.println s!"pub(crate) const CERTIFICATE_BYTES_VALUE: usize = {certificateBytes};"

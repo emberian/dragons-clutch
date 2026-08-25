@@ -37,17 +37,17 @@ use dclutch_release_set_contract::{
     ProgramIdentityV1,
 };
 use dclutch_resolution_codec::{
-    AcceptPythRequestV1, FundedTransitionActionV2, FundedTransitionRequestV2,
-    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CERTIFICATE_BYTES,
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V2, RESOLUTION_CONTROLLER_RELEASE_ID_V2,
-    ResolutionCertificateKindV1, ResolutionCertificateV1,
+    AcceptPythRequestV1, FundedTransitionActionV3, FundedTransitionRequestV3,
+    PRIMARY_CERTIFICATE_SEQUENCE_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
+    RESOLUTION_CERTIFICATE_BYTES, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V3, ResolutionCertificateKindV1, ResolutionCertificateV1,
 };
 use dclutch_source_contract::{
     CapacityEnvelope, ContentId as SourceContentId, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
     ProviderReleaseV1, PythAdapterConfigV1, RecoveryAttemptV1, RecoveryMaterialSlotV1,
     RecoveryPolicyV1, ResolutionPolicyV1, RoundingBoundary, SOURCE_MATERIAL_BYTES,
     SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V1,
-    SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialInputV1, SourceMaterialViewV1,
+    SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialInputV1,
     SourceRecoveryMaterialInputV1, SourceResolutionPhaseV1, SourceResolutionStateV1, SourceSpecV1,
     StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1, encode_source_material_into_v1,
 };
@@ -62,6 +62,7 @@ use solana_program::{
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::Signer;
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
+use solana_system_interface::instruction::transfer;
 use solana_transaction::{InstructionError, Transaction, TransactionError};
 
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x51; 32]);
@@ -72,6 +73,7 @@ const PUBLISH_TIME: i64 = 1_787_431_680;
 const RECOVERY_TIME: i64 = PUBLISH_TIME + 11;
 const EXHAUSTION_TIME: i64 = PUBLISH_TIME + 21;
 const BOUNTY: u64 = 7;
+const CERTIFICATE_DUST: u64 = 3;
 const FEED: [u8; 32] = [0x2a; 32];
 const PROTOCOL_UPGRADE_AUTHORITY: [u8; 32] = [0xee; 32];
 
@@ -95,8 +97,22 @@ struct CaseAccounts {
     market: Pubkey,
     state: Pubkey,
     certificate: Pubkey,
-    funding: Option<Pubkey>,
-    worker: Option<Pubkey>,
+}
+
+#[derive(Clone, Copy)]
+struct FundedStepAccounts {
+    certificate: Pubkey,
+    funding: Pubkey,
+}
+
+#[derive(Clone, Copy)]
+struct LifecycleAccounts {
+    market: Pubkey,
+    state: Pubkey,
+    worker: Pubkey,
+    recovery: FundedStepAccounts,
+    exhaustion: FundedStepAccounts,
+    failure: FundedStepAccounts,
 }
 
 struct Fixture {
@@ -111,6 +127,7 @@ struct Fixture {
     result_domain_id: [u8; 32],
     material_id: [u8; 32],
     recovery_allocation_id: [u8; 32],
+    exhaust_allocation_id: [u8; 32],
     provider_release_id: [u8; 32],
     receiver: Pubkey,
     receiver_programdata: Pubkey,
@@ -119,10 +136,11 @@ struct Fixture {
     router_programdata: Pubkey,
     price_update: Pubkey,
     primary: CaseAccounts,
-    recovery: CaseAccounts,
-    failure: CaseAccounts,
-    rollback: CaseAccounts,
+    underfunded: CaseAccounts,
+    lifecycle: LifecycleAccounts,
+    rollback: LifecycleAccounts,
     exact_funding_rent: u64,
+    exact_certificate_rent: u64,
 }
 
 fn core_id(bytes: [u8; 32]) -> CoreContentId {
@@ -328,7 +346,7 @@ fn fresh_state(market: Pubkey, material_id: [u8; 32]) -> (Pubkey, SourceResoluti
 fn certificate_key(state: Pubkey, kind: u8, sequence: u64) -> Pubkey {
     Pubkey::find_program_address(
         &[
-            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V2,
+            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
             state.as_ref(),
             &[kind],
             &sequence.to_le_bytes(),
@@ -338,114 +356,151 @@ fn certificate_key(state: Pubkey, kind: u8, sequence: u64) -> Pubkey {
     .0
 }
 
-#[allow(clippy::too_many_arguments)]
 fn add_case(
     test: &mut ProgramTest,
     authority_id: [u8; 32],
     product_instance_id: [u8; 32],
     material_id: [u8; 32],
-    material_bytes: &[u8],
-    capability_manifest_id: CoreContentId,
-    capability_manifest: CapabilityManifestV1<'_>,
     tag: u8,
     certificate_kind: u8,
     certificate_sequence: u64,
-    funding_entry: Option<u16>,
-    occupied_certificate: bool,
-    exhausted: bool,
 ) -> CaseAccounts {
-    let rent = Rent::default();
     let (market, market_bytes) =
         canonical_market(authority_id, product_instance_id, material_id, tag);
-    let (state, mut state_value) = fresh_state(market, material_id);
-    if exhausted {
-        let material = SourceMaterialViewV1::decode(material_bytes).expect("Source material view");
-        state_value
-            .fail_next_view(
-                source_id(material_id),
-                material,
-                source_id([0xd2; 32]),
-                GENERATION,
-                RECOVERY_TIME,
-            )
-            .expect("enter recovery fixture state");
-        state_value
-            .exhaust_view(
-                source_id(material_id),
-                material,
-                GENERATION,
-                EXHAUSTION_TIME,
-            )
-            .expect("exhaust fixture state");
-    }
+    let (state, state_value) = fresh_state(market, material_id);
     let certificate = certificate_key(state, certificate_kind, certificate_sequence);
-    let certificate_data = if occupied_certificate {
-        vec![0xa5; RESOLUTION_CERTIFICATE_BYTES]
-    } else {
-        vec![0; RESOLUTION_CERTIFICATE_BYTES]
-    };
     test.add_account(market, protocol_account(REGISTRY_PROGRAM_ID, market_bytes));
     test.add_account(
         state,
         protocol_account(RESOLUTION_PROGRAM_ID, state_value.to_bytes().to_vec()),
     );
-    test.add_account(
-        certificate,
-        protocol_account(RESOLUTION_PROGRAM_ID, certificate_data),
-    );
-
-    let (funding, worker) = if let Some(entry_index) = funding_entry {
-        let exact_rent = rent.minimum_balance(FUNDING_STATE_BYTES);
-        let custody = FundingCustodyObservationV1::native_only(
-            exact_rent
-                .checked_mul(2)
-                .and_then(|value| value.checked_add(BOUNTY))
-                .expect("bounded funding custody"),
-            exact_rent,
-        )
-        .expect("native funding custody");
-        let mut funding_value = FundingStateV1::new(
-            capability_manifest_id,
-            capability_manifest,
-            entry_index,
-            custody,
-        )
-        .expect("pending funding");
-        funding_value
-            .activate(capability_manifest_id, capability_manifest, custody, 1)
-            .expect("active funding");
-        let derivation = CapabilityFundingDerivationV1::new(
-            market.to_bytes(),
-            GENERATION,
-            capability_manifest_id,
-            capability_manifest,
-            funding_value,
-        )
-        .expect("funding derivation");
-        let funding =
-            Pubkey::find_program_address(&derivation.seed_components(), &RESOLUTION_PROGRAM_ID).0;
-        let worker = Pubkey::new_from_array([tag.wrapping_add(0x40); 32]);
-        test.add_account(
-            funding,
-            Account {
-                lamports: exact_rent + BOUNTY,
-                data: funding_value.to_bytes().to_vec(),
-                owner: RESOLUTION_PROGRAM_ID,
-                executable: false,
-                rent_epoch: 0,
-            },
-        );
-        test.add_account(worker, Account::new(101, 0, &system_program::ID));
-        (Some(funding), Some(worker))
-    } else {
-        (None, None)
-    };
     CaseAccounts {
         market,
         state,
         certificate,
+    }
+}
+
+fn add_funding_account(
+    test: &mut ProgramTest,
+    market: Pubkey,
+    capability_manifest_id: CoreContentId,
+    capability_manifest: CapabilityManifestV1<'_>,
+    entry_index: u16,
+) -> Pubkey {
+    let rent = Rent::default();
+    let exact_rent = rent.minimum_balance(FUNDING_STATE_BYTES);
+    let custody = FundingCustodyObservationV1::native_only(
+        exact_rent
+            .checked_mul(2)
+            .and_then(|value| value.checked_add(BOUNTY))
+            .expect("bounded funding custody"),
+        exact_rent,
+    )
+    .expect("native funding custody");
+    let mut funding_value = FundingStateV1::new(
+        capability_manifest_id,
+        capability_manifest,
+        entry_index,
+        custody,
+    )
+    .expect("pending funding");
+    funding_value
+        .activate(capability_manifest_id, capability_manifest, custody, 1)
+        .expect("active funding");
+    let derivation = CapabilityFundingDerivationV1::new(
+        market.to_bytes(),
+        GENERATION,
+        capability_manifest_id,
+        capability_manifest,
+        funding_value,
+    )
+    .expect("funding derivation");
+    let funding =
+        Pubkey::find_program_address(&derivation.seed_components(), &RESOLUTION_PROGRAM_ID).0;
+    test.add_account(
         funding,
+        Account {
+            lamports: exact_rent + BOUNTY,
+            data: funding_value.to_bytes().to_vec(),
+            owner: RESOLUTION_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+    funding
+}
+
+#[allow(clippy::too_many_arguments)]
+fn add_lifecycle_case(
+    test: &mut ProgramTest,
+    authority_id: [u8; 32],
+    product_instance_id: [u8; 32],
+    material_id: [u8; 32],
+    capability_manifest_id: CoreContentId,
+    capability_manifest: CapabilityManifestV1<'_>,
+    tag: u8,
+    occupied_failure: bool,
+) -> LifecycleAccounts {
+    let (market, market_bytes) =
+        canonical_market(authority_id, product_instance_id, material_id, tag);
+    let (state, state_value) = fresh_state(market, material_id);
+    let recovery_certificate = certificate_key(state, 2, 1);
+    let exhaustion_certificate = certificate_key(state, 3, 2);
+    let failure_certificate = certificate_key(state, 4, 3);
+    test.add_account(market, protocol_account(REGISTRY_PROGRAM_ID, market_bytes));
+    test.add_account(
+        state,
+        protocol_account(RESOLUTION_PROGRAM_ID, state_value.to_bytes().to_vec()),
+    );
+    for (certificate, occupied) in [(failure_certificate, occupied_failure)] {
+        if !occupied {
+            continue;
+        }
+        test.add_account(
+            certificate,
+            protocol_account(
+                RESOLUTION_PROGRAM_ID,
+                vec![0xa5; RESOLUTION_CERTIFICATE_BYTES],
+            ),
+        );
+    }
+    let worker = Pubkey::new_from_array([tag.wrapping_add(0x40); 32]);
+    test.add_account(worker, Account::new(101, 0, &system_program::ID));
+    LifecycleAccounts {
+        market,
+        state,
         worker,
+        recovery: FundedStepAccounts {
+            certificate: recovery_certificate,
+            funding: add_funding_account(
+                test,
+                market,
+                capability_manifest_id,
+                capability_manifest,
+                0,
+            ),
+        },
+        exhaustion: FundedStepAccounts {
+            certificate: exhaustion_certificate,
+            funding: add_funding_account(
+                test,
+                market,
+                capability_manifest_id,
+                capability_manifest,
+                1,
+            ),
+        },
+        failure: FundedStepAccounts {
+            certificate: failure_certificate,
+            funding: add_funding_account(
+                test,
+                market,
+                capability_manifest_id,
+                capability_manifest,
+                2,
+            ),
+        },
     }
 }
 
@@ -511,7 +566,7 @@ impl Fixture {
         let core_release = artifact(REGISTRY_PROGRAM_ID, [0x71; 32], &registry_elf);
         let resolution_release = artifact(
             RESOLUTION_PROGRAM_ID,
-            RESOLUTION_CONTROLLER_RELEASE_ID_V2,
+            RESOLUTION_CONTROLLER_RELEASE_ID_V3,
             &resolution_elf,
         );
         let release_set = ExecutionReleaseSetV1::new(
@@ -690,6 +745,7 @@ impl Fixture {
         )
         .expect("one ordered recovery");
         let recovery_policy_id = source_id(hash(&recovery_policy.to_bytes()).to_bytes());
+        let exhaust_allocation_id = recovery_policy_id.to_bytes();
         let recovery_slot =
             RecoveryMaterialSlotV1::new(source_spec_id, source, provider_id, provider, adapter)
                 .expect("recovery material slot");
@@ -732,6 +788,7 @@ impl Fixture {
         let material_id = hash(&material_bytes).to_bytes();
 
         let exact_funding_rent = Rent::default().minimum_balance(FUNDING_STATE_BYTES);
+        let exact_certificate_rent = Rent::default().minimum_balance(RESOLUTION_CERTIFICATE_BYTES);
         let funding_quote = FundingQuoteV1::new(
             FundingAmountsV1::new(
                 CompartmentFundingV1::native_lamports(exact_funding_rent).expect("funding rent"),
@@ -749,7 +806,7 @@ impl Fixture {
         let entries = [
             CapabilityEntryV1::new(
                 core_id([0xd3; 32]),
-                core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V2),
+                core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V3),
                 core_id(recovery_allocation_id),
                 core_id([0xd5; 32]),
                 core_id([0xd6; 32]),
@@ -763,7 +820,21 @@ impl Fixture {
             .expect("recovery funding entry"),
             CapabilityEntryV1::new(
                 core_id([0xd4; 32]),
-                core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V2),
+                core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V3),
+                core_id(exhaust_allocation_id),
+                core_id([0xd5; 32]),
+                core_id([0xd6; 32]),
+                core_id([0xd7; 32]),
+                ActivationPolicy::RequiredAtFounding,
+                0,
+                0,
+                [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+                funding_quote,
+            )
+            .expect("exhaustion funding entry"),
+            CapabilityEntryV1::new(
+                core_id([0xd8; 32]),
+                core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V3),
                 core_id(material_id),
                 core_id([0xd5; 32]),
                 core_id([0xd6; 32]),
@@ -777,7 +848,7 @@ impl Fixture {
             .expect("failure funding entry"),
         ];
         let mut capability_manifest_bytes =
-            vec![0_u8; MANIFEST_HEADER_BYTES + 2 * CAPABILITY_ENTRY_BYTES];
+            vec![0_u8; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
         CapabilityManifestV1::encode_into(&entries, &mut capability_manifest_bytes)
             .expect("capability manifest");
         let capability_manifest_id = hash(&capability_manifest_bytes).to_bytes();
@@ -826,62 +897,47 @@ impl Fixture {
             authority_id,
             product_instance_id,
             material_id,
-            &material_bytes,
-            manifest_id,
-            manifest,
             0xe1,
             1,
-            PROVIDER_SLOT,
-            None,
-            false,
-            false,
+            PRIMARY_CERTIFICATE_SEQUENCE_V3,
         );
-        let recovery = add_case(
+        let lifecycle = add_lifecycle_case(
             &mut test,
             authority_id,
             product_instance_id,
             material_id,
-            &material_bytes,
             manifest_id,
             manifest,
             0xe2,
-            2,
-            1,
-            Some(0),
-            false,
             false,
         );
-        let failure = add_case(
+        let rollback = add_lifecycle_case(
             &mut test,
             authority_id,
             product_instance_id,
             material_id,
-            &material_bytes,
             manifest_id,
             manifest,
             0xe3,
-            4,
-            1,
-            Some(1),
-            false,
             true,
         );
-        let rollback = add_case(
+        let underfunded = add_case(
             &mut test,
             authority_id,
             product_instance_id,
             material_id,
-            &material_bytes,
-            manifest_id,
-            manifest,
             0xe4,
-            2,
             1,
-            Some(0),
-            true,
-            false,
+            PRIMARY_CERTIFICATE_SEQUENCE_V3,
         );
-        assert_ne!(recovery.certificate, failure.certificate);
+        assert_ne!(
+            lifecycle.recovery.certificate,
+            lifecycle.exhaustion.certificate
+        );
+        assert_ne!(
+            lifecycle.exhaustion.certificate,
+            lifecycle.failure.certificate
+        );
 
         Self {
             test: Some(test),
@@ -895,6 +951,7 @@ impl Fixture {
             result_domain_id,
             material_id,
             recovery_allocation_id,
+            exhaust_allocation_id,
             provider_release_id,
             receiver,
             receiver_programdata,
@@ -903,15 +960,16 @@ impl Fixture {
             router_programdata,
             price_update,
             primary,
-            recovery,
-            failure,
+            underfunded,
+            lifecycle,
             rollback,
             exact_funding_rent,
+            exact_certificate_rent,
         }
     }
 }
 
-fn primary_instruction(fixture: &Fixture) -> Instruction {
+fn primary_instruction(fixture: &Fixture, case: CaseAccounts) -> Instruction {
     let request = AcceptPythRequestV1 {
         expected_generation: GENERATION,
         expected_result_domain_id: fixture.result_domain_id,
@@ -922,9 +980,9 @@ fn primary_instruction(fixture: &Fixture) -> Instruction {
     Instruction {
         program_id: RESOLUTION_PROGRAM_ID,
         accounts: vec![
-            AccountMeta::new(fixture.primary.state, false),
-            AccountMeta::new(fixture.primary.certificate, false),
-            AccountMeta::new_readonly(fixture.primary.market, false),
+            AccountMeta::new(case.state, false),
+            AccountMeta::new(case.certificate, false),
+            AccountMeta::new_readonly(case.market, false),
             AccountMeta::new_readonly(fixture.authority.raw, false),
             AccountMeta::new_readonly(fixture.authority.staging, false),
             AccountMeta::new_readonly(fixture.activation, false),
@@ -944,6 +1002,7 @@ fn primary_instruction(fixture: &Fixture) -> Instruction {
             AccountMeta::new_readonly(fixture.router_programdata, false),
             AccountMeta::new_readonly(sysvar::clock::ID, false),
             AccountMeta::new_readonly(sysvar::rent::ID, false),
+            AccountMeta::new_readonly(system_program::ID, false),
         ],
         data: request.to_vec(),
     }
@@ -951,14 +1010,16 @@ fn primary_instruction(fixture: &Fixture) -> Instruction {
 
 fn funded_instruction(
     fixture: &Fixture,
-    case: CaseAccounts,
-    action: FundedTransitionActionV2,
+    case: LifecycleAccounts,
+    step: FundedStepAccounts,
+    action: FundedTransitionActionV3,
 ) -> Instruction {
     let (recovery_index, allocation) = match action {
-        FundedTransitionActionV2::FailNext => (0, fixture.recovery_allocation_id),
-        FundedTransitionActionV2::CommitFailure => (1, fixture.material_id),
+        FundedTransitionActionV3::FailNext => (0, fixture.recovery_allocation_id),
+        FundedTransitionActionV3::Exhaust => (1, fixture.exhaust_allocation_id),
+        FundedTransitionActionV3::CommitFailure => (1, fixture.material_id),
     };
-    let request = FundedTransitionRequestV2 {
+    let request = FundedTransitionRequestV3 {
         action,
         expected_generation: GENERATION,
         expected_recovery_index: recovery_index,
@@ -971,9 +1032,9 @@ fn funded_instruction(
         program_id: RESOLUTION_PROGRAM_ID,
         accounts: vec![
             AccountMeta::new(case.state, false),
-            AccountMeta::new(case.certificate, false),
-            AccountMeta::new(case.funding.expect("funded case"), false),
-            AccountMeta::new(case.worker.expect("worker"), false),
+            AccountMeta::new(step.certificate, false),
+            AccountMeta::new(step.funding, false),
+            AccountMeta::new(case.worker, false),
             AccountMeta::new_readonly(case.market, false),
             AccountMeta::new_readonly(fixture.authority.raw, false),
             AccountMeta::new_readonly(fixture.authority.staging, false),
@@ -988,6 +1049,7 @@ fn funded_instruction(
             AccountMeta::new_readonly(fixture.capability_manifest.staging, false),
             AccountMeta::new_readonly(sysvar::clock::ID, false),
             AccountMeta::new_readonly(sysvar::rent::ID, false),
+            AccountMeta::new_readonly(system_program::ID, false),
         ],
         data: request.to_vec(),
     }
@@ -1007,6 +1069,36 @@ async fn submit(
     context.banks_client.process_transaction(transaction).await
 }
 
+async fn prepay_certificate(
+    context: &mut ProgramTestContext,
+    certificate: Pubkey,
+    exact_rent: u64,
+) {
+    prepay_certificate_amount(
+        context,
+        certificate,
+        exact_rent
+            .checked_add(CERTIFICATE_DUST)
+            .expect("bounded certificate prepayment"),
+    )
+    .await;
+}
+
+async fn prepay_certificate_amount(
+    context: &mut ProgramTestContext,
+    certificate: Pubkey,
+    amount: u64,
+) {
+    let payer = context.payer.pubkey();
+    submit(context, transfer(&payer, &certificate, amount))
+        .await
+        .expect("prepay deterministic certificate PDA");
+    let prepaid = observed(context, certificate).await;
+    assert_eq!(prepaid.owner, system_program::ID);
+    assert!(prepaid.data.is_empty());
+    assert_eq!(prepaid.lamports, amount);
+}
+
 async fn observed(context: &mut ProgramTestContext, key: Pubkey) -> Account {
     context
         .banks_client
@@ -1018,13 +1110,14 @@ async fn observed(context: &mut ProgramTestContext, key: Pubkey) -> Account {
 
 async fn snapshot_funded(
     context: &mut ProgramTestContext,
-    case: CaseAccounts,
+    case: LifecycleAccounts,
+    step: FundedStepAccounts,
 ) -> (Account, Account, Account, Account) {
     (
         observed(context, case.state).await,
-        observed(context, case.certificate).await,
-        observed(context, case.funding.expect("funding")).await,
-        observed(context, case.worker.expect("worker")).await,
+        observed(context, step.certificate).await,
+        observed(context, step.funding).await,
+        observed(context, case.worker).await,
     )
 }
 
@@ -1037,6 +1130,14 @@ fn set_clock(context: &mut ProgramTestContext, unix_timestamp: i64) {
         unix_timestamp,
     };
     context.set_sysvar(&clock);
+}
+
+fn assert_exact_bounty_compartments(account: &Account, exact_funding_rent: u64) {
+    let funding = FundingStateV1::decode(&account.data).expect("canonical FundingState post-state");
+    assert_eq!(funding.remaining().rent().amount(), 0);
+    assert_eq!(funding.released().rent().amount(), exact_funding_rent);
+    assert_eq!(funding.remaining().bounty().amount(), 0);
+    assert_eq!(funding.released().bounty().amount(), BOUNTY);
 }
 
 #[tokio::test]
@@ -1070,7 +1171,13 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
     .await
     .expect("compiled Registry reauthenticates the exact Resolution ELF");
 
-    submit(&mut context, primary_instruction(&fixture))
+    prepay_certificate(
+        &mut context,
+        fixture.primary.certificate,
+        fixture.exact_certificate_rent,
+    )
+    .await;
+    submit(&mut context, primary_instruction(&fixture, fixture.primary))
         .await
         .expect("compiled Resolution admits the captured primary Pyth update");
     let primary_state =
@@ -1098,47 +1205,103 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
         primary_certificate.receipt_account,
         fixture.primary.certificate.to_bytes()
     );
+    let primary_certificate_account = observed(&mut context, fixture.primary.certificate).await;
+    assert_eq!(primary_certificate_account.owner, RESOLUTION_PROGRAM_ID);
+    assert_eq!(
+        primary_certificate_account.lamports,
+        fixture.exact_certificate_rent + CERTIFICATE_DUST
+    );
+    let primary_replay_before = (
+        observed(&mut context, fixture.primary.state).await,
+        primary_certificate_account,
+    );
+    let primary_replay = submit(&mut context, primary_instruction(&fixture, fixture.primary)).await;
+    assert!(
+        matches!(
+            primary_replay,
+            Err(BanksClientError::TransactionError(
+                TransactionError::InstructionError(0, InstructionError::Custom(12))
+            ))
+        ),
+        "primary certificate replay refuses against terminal Source state: {primary_replay:?}"
+    );
+    assert_eq!(
+        (
+            observed(&mut context, fixture.primary.state).await,
+            observed(&mut context, fixture.primary.certificate).await,
+        ),
+        primary_replay_before
+    );
+
+    let underfunded_amount = fixture
+        .exact_certificate_rent
+        .checked_sub(1)
+        .expect("positive certificate rent");
+    prepay_certificate_amount(
+        &mut context,
+        fixture.underfunded.certificate,
+        underfunded_amount,
+    )
+    .await;
+    let underfunded_before = (
+        observed(&mut context, fixture.underfunded.state).await,
+        observed(&mut context, fixture.underfunded.certificate).await,
+    );
+    let underfunded = submit(
+        &mut context,
+        primary_instruction(&fixture, fixture.underfunded),
+    )
+    .await;
+    assert!(
+        matches!(
+            underfunded,
+            Err(BanksClientError::TransactionError(
+                TransactionError::InstructionError(0, InstructionError::Custom(2))
+            ))
+        ),
+        "under-rent deterministic certificate refuses at the final output gate: {underfunded:?}"
+    );
+    assert_eq!(
+        (
+            observed(&mut context, fixture.underfunded.state).await,
+            observed(&mut context, fixture.underfunded.certificate).await,
+        ),
+        underfunded_before,
+        "under-rent refusal preserves Source and prepaid system account"
+    );
 
     set_clock(&mut context, RECOVERY_TIME);
-    let recovery_funding_before = observed(
+    prepay_certificate(
         &mut context,
-        fixture.recovery.funding.expect("recovery funding"),
+        fixture.lifecycle.recovery.certificate,
+        fixture.exact_certificate_rent,
     )
     .await;
-    let recovery_worker_before = observed(
-        &mut context,
-        fixture.recovery.worker.expect("recovery worker"),
-    )
-    .await;
+    let recovery_funding_before = observed(&mut context, fixture.lifecycle.recovery.funding).await;
+    let recovery_worker_before = observed(&mut context, fixture.lifecycle.worker).await;
     submit(
         &mut context,
         funded_instruction(
             &fixture,
-            fixture.recovery,
-            FundedTransitionActionV2::FailNext,
+            fixture.lifecycle,
+            fixture.lifecycle.recovery,
+            FundedTransitionActionV3::FailNext,
         ),
     )
     .await
     .expect("compiled Resolution executes one funded ordered recovery");
-    let recovery_state =
-        SourceResolutionStateV1::decode(&observed(&mut context, fixture.recovery.state).await.data)
-            .expect("recovery Source state");
+    let recovery_state = SourceResolutionStateV1::decode(
+        &observed(&mut context, fixture.lifecycle.state).await.data,
+    )
+    .expect("recovery Source state");
     let recovery_certificate = ResolutionCertificateV1::decode(
-        &observed(&mut context, fixture.recovery.certificate)
+        &observed(&mut context, fixture.lifecycle.recovery.certificate)
             .await
             .data,
     )
     .expect("recovery certificate");
-    let recovery_funding_after = observed(
-        &mut context,
-        fixture.recovery.funding.expect("recovery funding"),
-    )
-    .await;
-    let recovery_worker_after = observed(
-        &mut context,
-        fixture.recovery.worker.expect("recovery worker"),
-    )
-    .await;
+    let recovery_funding_after = observed(&mut context, fixture.lifecycle.recovery.funding).await;
+    let recovery_worker_after = observed(&mut context, fixture.lifecycle.worker).await;
     assert_eq!(recovery_state.phase(), SourceResolutionPhaseV1::Recovery);
     assert_eq!(recovery_state.active_recovery_attempt(), Some(0));
     assert_eq!(
@@ -1148,7 +1311,7 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
     assert_eq!(recovery_certificate.attempt_index, 1);
     assert_eq!(
         recovery_certificate.receipt_account,
-        fixture.recovery.certificate.to_bytes()
+        fixture.lifecycle.recovery.certificate.to_bytes()
     );
     assert_eq!(recovery_certificate.work_paid, BOUNTY);
     assert_eq!(recovery_certificate.funding_remaining, 0);
@@ -1157,46 +1320,112 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
         BOUNTY
     );
     assert_eq!(recovery_funding_after.lamports, fixture.exact_funding_rent);
+    assert_exact_bounty_compartments(&recovery_funding_after, fixture.exact_funding_rent);
     assert_eq!(
         recovery_worker_after.lamports - recovery_worker_before.lamports,
         BOUNTY
     );
 
     set_clock(&mut context, EXHAUSTION_TIME);
-    let failure_worker_before = observed(
+    prepay_certificate(
         &mut context,
-        fixture.failure.worker.expect("failure worker"),
+        fixture.lifecycle.exhaustion.certificate,
+        fixture.exact_certificate_rent,
     )
     .await;
+    let exhaustion_funding_before =
+        observed(&mut context, fixture.lifecycle.exhaustion.funding).await;
+    let exhaustion_worker_before = observed(&mut context, fixture.lifecycle.worker).await;
     submit(
         &mut context,
         funded_instruction(
             &fixture,
-            fixture.failure,
-            FundedTransitionActionV2::CommitFailure,
+            fixture.lifecycle,
+            fixture.lifecycle.exhaustion,
+            FundedTransitionActionV3::Exhaust,
+        ),
+    )
+    .await
+    .expect("compiled Resolution executes exact funded exhaustion");
+    let exhausted_state = SourceResolutionStateV1::decode(
+        &observed(&mut context, fixture.lifecycle.state).await.data,
+    )
+    .expect("exhausted Source state");
+    let exhaustion_certificate = ResolutionCertificateV1::decode(
+        &observed(&mut context, fixture.lifecycle.exhaustion.certificate)
+            .await
+            .data,
+    )
+    .expect("exhaustion certificate");
+    let exhaustion_funding_after =
+        observed(&mut context, fixture.lifecycle.exhaustion.funding).await;
+    let exhaustion_worker_after = observed(&mut context, fixture.lifecycle.worker).await;
+    assert_eq!(exhausted_state.phase(), SourceResolutionPhaseV1::Exhausted);
+    assert_eq!(exhausted_state.active_recovery_attempt(), None);
+    assert_eq!(
+        exhaustion_certificate.kind,
+        ResolutionCertificateKindV1::Exhausted
+    );
+    assert_ne!(exhaustion_certificate.route, [0; 32]);
+    assert_eq!(exhaustion_certificate.attempt_index, 1);
+    assert_eq!(exhaustion_certificate.selector, 0);
+    assert_eq!(exhaustion_certificate.observed_at, EXHAUSTION_TIME as u64);
+    assert_eq!(
+        exhaustion_certificate.funding_allocation,
+        fixture.exhaust_allocation_id
+    );
+    assert_eq!(
+        exhaustion_certificate.receipt_account,
+        fixture.lifecycle.exhaustion.certificate.to_bytes()
+    );
+    assert_eq!(exhaustion_certificate.work_paid, BOUNTY);
+    assert_eq!(exhaustion_certificate.funding_remaining, 0);
+    assert_eq!(
+        exhaustion_funding_before.lamports - exhaustion_funding_after.lamports,
+        BOUNTY
+    );
+    assert_eq!(
+        exhaustion_funding_after.lamports,
+        fixture.exact_funding_rent
+    );
+    assert_exact_bounty_compartments(&exhaustion_funding_after, fixture.exact_funding_rent);
+    assert_eq!(
+        exhaustion_worker_after.lamports - exhaustion_worker_before.lamports,
+        BOUNTY
+    );
+
+    set_clock(&mut context, EXHAUSTION_TIME + 1);
+    prepay_certificate(
+        &mut context,
+        fixture.lifecycle.failure.certificate,
+        fixture.exact_certificate_rent,
+    )
+    .await;
+    let failure_funding_before = observed(&mut context, fixture.lifecycle.failure.funding).await;
+    let failure_worker_before = observed(&mut context, fixture.lifecycle.worker).await;
+    submit(
+        &mut context,
+        funded_instruction(
+            &fixture,
+            fixture.lifecycle,
+            fixture.lifecycle.failure,
+            FundedTransitionActionV3::CommitFailure,
         ),
     )
     .await
     .expect("compiled Resolution commits Product's explicit failure result");
-    let failure_state =
-        SourceResolutionStateV1::decode(&observed(&mut context, fixture.failure.state).await.data)
-            .expect("failure Source state");
+    let failure_state = SourceResolutionStateV1::decode(
+        &observed(&mut context, fixture.lifecycle.state).await.data,
+    )
+    .expect("failure Source state");
     let failure_certificate = ResolutionCertificateV1::decode(
-        &observed(&mut context, fixture.failure.certificate)
+        &observed(&mut context, fixture.lifecycle.failure.certificate)
             .await
             .data,
     )
     .expect("failure certificate");
-    let failure_funding = observed(
-        &mut context,
-        fixture.failure.funding.expect("failure funding"),
-    )
-    .await;
-    let failure_worker = observed(
-        &mut context,
-        fixture.failure.worker.expect("failure worker"),
-    )
-    .await;
+    let failure_funding = observed(&mut context, fixture.lifecycle.failure.funding).await;
+    let failure_worker = observed(&mut context, fixture.lifecycle.worker).await;
     assert_eq!(
         failure_state.phase(),
         SourceResolutionPhaseV1::FailureCommitted
@@ -1208,25 +1437,69 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
     assert_eq!(failure_certificate.attempt_index, 1);
     assert_eq!(
         failure_certificate.receipt_account,
-        fixture.failure.certificate.to_bytes()
+        fixture.lifecycle.failure.certificate.to_bytes()
     );
     assert_eq!(failure_certificate.selector, 2);
     assert_eq!(failure_certificate.route, [0; 32]);
     assert_eq!(failure_certificate.observed_at, 0);
     assert_eq!(failure_certificate.work_paid, BOUNTY);
     assert_eq!(failure_funding.lamports, fixture.exact_funding_rent);
+    assert_exact_bounty_compartments(&failure_funding, fixture.exact_funding_rent);
+    assert_eq!(
+        failure_funding_before.lamports - failure_funding.lamports,
+        BOUNTY
+    );
     assert_eq!(
         failure_worker.lamports - failure_worker_before.lamports,
         BOUNTY
     );
 
-    let rollback_before = snapshot_funded(&mut context, fixture.rollback).await;
+    set_clock(&mut context, RECOVERY_TIME);
+    prepay_certificate(
+        &mut context,
+        fixture.rollback.recovery.certificate,
+        fixture.exact_certificate_rent,
+    )
+    .await;
+    submit(
+        &mut context,
+        funded_instruction(
+            &fixture,
+            fixture.rollback,
+            fixture.rollback.recovery,
+            FundedTransitionActionV3::FailNext,
+        ),
+    )
+    .await
+    .expect("rollback lineage enters funded recovery");
+    set_clock(&mut context, EXHAUSTION_TIME);
+    prepay_certificate(
+        &mut context,
+        fixture.rollback.exhaustion.certificate,
+        fixture.exact_certificate_rent,
+    )
+    .await;
+    submit(
+        &mut context,
+        funded_instruction(
+            &fixture,
+            fixture.rollback,
+            fixture.rollback.exhaustion,
+            FundedTransitionActionV3::Exhaust,
+        ),
+    )
+    .await
+    .expect("rollback lineage reaches exhausted state");
+    set_clock(&mut context, EXHAUSTION_TIME + 1);
+    let rollback_before =
+        snapshot_funded(&mut context, fixture.rollback, fixture.rollback.failure).await;
     let refusal = submit(
         &mut context,
         funded_instruction(
             &fixture,
             fixture.rollback,
-            FundedTransitionActionV2::FailNext,
+            fixture.rollback.failure,
+            FundedTransitionActionV3::CommitFailure,
         ),
     )
     .await;
@@ -1240,7 +1513,7 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
         "occupied sequential certificate refuses at the final output gate: {refusal:?}"
     );
     assert_eq!(
-        snapshot_funded(&mut context, fixture.rollback).await,
+        snapshot_funded(&mut context, fixture.rollback, fixture.rollback.failure).await,
         rollback_before,
         "SVM rollback covers Source, certificate, funding, and worker state"
     );

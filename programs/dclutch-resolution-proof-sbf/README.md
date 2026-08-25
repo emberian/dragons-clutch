@@ -2,8 +2,8 @@
 
 This is a physical specialization of the Lean-owned Source Resolution
 relation. It handles a primary, terminal, already-posted Pyth `PriceUpdateV2`
-whose Receiver verification level is `Full`, the first exactly funded ordered
-recovery advancement, and explicit Product-owned failure after exhaustion.
+whose Receiver verification level is `Full`, exactly funded ordered recovery,
+the final funded exhaustion transition, and explicit Product-owned failure.
 
 The program does not post or reclaim provider accounts and performs no
 provider CPI. The Pyth update is read-only. Before producing any mutation it
@@ -28,23 +28,26 @@ also authenticate the Market-selected finalized capability manifest and its
 program-owned canonical `FundingStateV1` PDA. The immutable entry's complete
 positive native-lamport Bounty quote is the work charge; no instruction amount
 is accepted. The recovery allocation is the exact next Source attempt's
-funding ID, while failure uses the occurrence Source-material ID as its
-manifest config/allocation identity. Funding ledger, custody lamports, worker
-lamports, Source state, and the typed 312-byte certificate commit together.
+funding ID, exhaustion uses the immutable recovery-policy ID, and failure uses
+the occurrence Source-material ID as its manifest config/allocation identity.
+Funding ledger, custody lamports, worker lamports, Source state, and the typed
+312-byte certificate commit together.
 
 Certificates use Lean's exact success/recovery/exhaustion/failure tags and a
-typed ordered PDA namespace, so recovery receipts cannot overwrite a prior
-receipt. All writable borrows and validation complete before any copy or
-lamport assignment. A refusal therefore leaves state, certificate, funding,
-and worker balances unchanged even in direct host invocation; SVM transaction
-rollback remains an additional runtime boundary.
+typed ordered V3 PDA namespace. Primary success is the state-derived first
+sequence, so a client can construct its one exact PDA before execution.
+Resolution accepts a system-owned, zero-data PDA prepaid with at least exact
+rent, tolerates surplus dust, and allocates/assigns it only at the final output
+gate. A refusal or replay therefore rolls back certificate creation together
+with Source, funding, and worker mutation under SVM transaction semantics.
 
 This slice does **not** yet execute the Product-resolution effect against the
 Core/claims owner, perform recovery-provider CPI, physically certify the
-separate exhaustion step, create accounts, or retire them. The certificate is
-the compact handoff to the shared executor. Registry/Core account mutation,
-Loader behavior, Pyth program correctness, Clock correctness, SHA-256 syscall
-correctness, and SVM rollback are not Lean proofs.
+provider observation, create Source/FundingState accounts, or retire them. It
+does physically certify exhaustion and creates only its certificate PDA. The
+certificate is the compact handoff to the shared executor. Registry/Core
+account mutation, Loader/System behavior, Pyth program correctness, Clock
+correctness, SHA-256 syscall correctness, and SVM rollback are not Lean proofs.
 
 ## Optimized SBF checkpoint
 
@@ -58,10 +61,11 @@ cargo build-sbf \
 ```
 
 `cargo-build-sbf 4.0.0`, platform-tools v1.53, and SBF rustc 1.89.0 produced
-a verifier-clean 166,176-byte ELF. SHA-256 was
-`a8e11578d2fdd0418d1a52baa87cd3f0660a57ec40ba4951069cc38449f1b2f4`.
-The section audit was `.text` 160,880, `.rodata` 1,171, `.data.rel.ro` 464,
-`.dynamic` 176, `.dynsym` 288, `.dynstr` 154, and `.rel.dyn` 2,096 bytes.
+a verifier-clean 210,528-byte V3 ELF. SHA-256 was
+`bdc08d836ce243143ed017173cb8b151b29d31e90f8b6bbd40ceeaec1e914f16`.
+The section audit was `.text` 196,688, `.rodata` 5,240, `.data.rel.ro` 1,424,
+`.dynamic` 176, `.dynsym` 312, `.dynstr` 177, and `.rel.dyn` 5,568 bytes. The
+prior V2 artifact is not valid for this ABI.
 
 This is a local build checkpoint, not a checked release, deployed artifact,
 or mainnet claim. A clean committed rebuild must pin its own digest before use.

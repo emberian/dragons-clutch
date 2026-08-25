@@ -19,17 +19,20 @@ pub const FUNDED_TRANSITION_REQUEST_BYTES: usize =
 /// Bytes in one canonical Source Resolution certificate.
 pub const RESOLUTION_CERTIFICATE_BYTES: usize =
     generated_source_resolution::CERTIFICATE_BYTES_VALUE;
-/// PDA domain for a typed, ordered certificate paired with a Source state.
-pub const RESOLUTION_CERTIFICATE_PDA_DOMAIN_V2: &[u8] = b"dclutch/resolution-cert/v2";
+/// PDA domain for a deterministic, typed, ordered certificate paired with a Source state.
+pub const RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3: &[u8] = b"dclutch/resolution-cert/v3";
+/// State-derived immediate successor sequence for the one primary success certificate.
+pub const PRIMARY_CERTIFICATE_SEQUENCE_V3: u64 =
+    generated_source_resolution::PRIMARY_CERTIFICATE_SEQUENCE_VALUE;
 /// Domain separating the content identity of an authenticated Pyth update.
 pub const PYTH_EVIDENCE_CONTENT_DOMAIN_V1: &[u8] = b"dclutch/pyth-evidence/v1";
-/// Closed semantic release preimage for the funded controller profile.
-pub const RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V2: &[u8] =
-    b"dclutch/release/source-resolution-controller-funded-recovery-failure-v2";
-/// SHA-256 of [`RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V2`].
-pub const RESOLUTION_CONTROLLER_RELEASE_ID_V2: [u8; 32] = [
-    0x99, 0x21, 0xf1, 0x7b, 0x34, 0x1a, 0xbc, 0x4f, 0xde, 0xa0, 0xb0, 0xfc, 0xbe, 0xb6, 0x17, 0xd3,
-    0xeb, 0xf5, 0xae, 0x50, 0x69, 0xec, 0x89, 0x6b, 0x33, 0xf8, 0xc8, 0x06, 0xdc, 0xc0, 0x58, 0xa8,
+/// Closed semantic release preimage for the sequential funded controller profile.
+pub const RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V3: &[u8] =
+    b"dclutch/release/source-resolution-controller-deterministic-prepaid-cert-funded-recovery-exhaustion-failure-v3";
+/// SHA-256 of [`RESOLUTION_CONTROLLER_RELEASE_PREIMAGE_V3`].
+pub const RESOLUTION_CONTROLLER_RELEASE_ID_V3: [u8; 32] = [
+    0x9a, 0x62, 0xc2, 0xe4, 0x6d, 0xa3, 0xb4, 0xfa, 0x80, 0xd1, 0xc7, 0x5a, 0xcd, 0xfc, 0xcb, 0x44,
+    0x8c, 0x19, 0x21, 0x1a, 0x63, 0x1a, 0xbc, 0xb1, 0x29, 0xb8, 0x26, 0xb5, 0x5a, 0xa8, 0x25, 0x3b,
 ];
 /// Schema identity used only to finalize a canonical Pyth-release record.
 pub const PYTH_RELEASE_RECORD_SCHEMA_ID_V1: [u8; 32] = [
@@ -161,19 +164,22 @@ impl AcceptPythRequestV1 {
     }
 }
 
-/// Lean-owned funded liveness action tag.
+/// Lean-owned sequential funded liveness action tag.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FundedTransitionActionV2 {
+pub enum FundedTransitionActionV3 {
     /// Advance to the one immediate ordered recovery successor.
     FailNext,
+    /// Commit exhaustion after the last active recovery leg expires.
+    Exhaust,
     /// Commit Product's explicit failure selector after exhaustion.
     CommitFailure,
 }
 
-impl FundedTransitionActionV2 {
+impl FundedTransitionActionV3 {
     fn decode(value: u8) -> Result<Self> {
         match value {
             generated_source_resolution::FUNDED_REQUEST_FAIL_NEXT_ACTION => Ok(Self::FailNext),
+            generated_source_resolution::FUNDED_REQUEST_EXHAUST_ACTION => Ok(Self::Exhaust),
             generated_source_resolution::FUNDED_REQUEST_COMMIT_FAILURE_ACTION => {
                 Ok(Self::CommitFailure)
             }
@@ -184,6 +190,7 @@ impl FundedTransitionActionV2 {
     const fn byte(self) -> u8 {
         match self {
             Self::FailNext => generated_source_resolution::FUNDED_REQUEST_FAIL_NEXT_ACTION,
+            Self::Exhaust => generated_source_resolution::FUNDED_REQUEST_EXHAUST_ACTION,
             Self::CommitFailure => {
                 generated_source_resolution::FUNDED_REQUEST_COMMIT_FAILURE_ACTION
             }
@@ -193,9 +200,9 @@ impl FundedTransitionActionV2 {
 
 /// Optimistic coordinates for one canonically funded Source liveness step.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FundedTransitionRequestV2 {
-    /// Recovery advancement or explicit failure commitment.
-    pub action: FundedTransitionActionV2,
+pub struct FundedTransitionRequestV3 {
+    /// Recovery advancement, exhaustion, or explicit failure commitment.
+    pub action: FundedTransitionActionV3,
     /// Exact immutable Market generation.
     pub expected_generation: u64,
     /// Zero-based next recovery index, or recovery count for failure.
@@ -206,7 +213,7 @@ pub struct FundedTransitionRequestV2 {
     pub expected_funding_allocation_id: [u8; 32],
 }
 
-impl FundedTransitionRequestV2 {
+impl FundedTransitionRequestV3 {
     /// Decode one exact generated funded-transition request.
     pub fn decode(input: &[u8]) -> Result<Self> {
         exact_width(input, FUNDED_TRANSITION_REQUEST_BYTES)?;
@@ -234,7 +241,7 @@ impl FundedTransitionRequestV2 {
             4,
         )?;
         let value = Self {
-            action: FundedTransitionActionV2::decode(byte_at(
+            action: FundedTransitionActionV3::decode(byte_at(
                 input,
                 generated_source_resolution::FUNDED_REQUEST_ACTION_OFFSET,
             )?)?,
@@ -798,9 +805,9 @@ mod tests {
         }
     }
 
-    fn funded_request() -> FundedTransitionRequestV2 {
-        FundedTransitionRequestV2 {
-            action: FundedTransitionActionV2::FailNext,
+    fn funded_request() -> FundedTransitionRequestV3 {
+        FundedTransitionRequestV3 {
+            action: FundedTransitionActionV3::FailNext,
             expected_generation: 7,
             expected_recovery_index: 0,
             expected_result_domain_id: {
@@ -874,12 +881,12 @@ mod tests {
         let encoded = funded_request().to_bytes()?;
         assert_eq!(encoded, generated_source_resolution::FUNDED_REQUEST_EXAMPLE);
         assert_eq!(
-            FundedTransitionRequestV2::decode(&encoded),
+            FundedTransitionRequestV3::decode(&encoded),
             Ok(funded_request())
         );
         for length in 0..FUNDED_TRANSITION_REQUEST_BYTES {
             assert_eq!(
-                FundedTransitionRequestV2::decode(
+                FundedTransitionRequestV3::decode(
                     encoded.get(..length).ok_or(Error::InvalidLength)?,
                 ),
                 Err(Error::InvalidLength)
@@ -897,7 +904,21 @@ mod tests {
         ] {
             let mut hostile = encoded;
             *hostile.get_mut(offset).ok_or(Error::InvalidLength)? = 0xff;
-            assert_eq!(FundedTransitionRequestV2::decode(&hostile), Err(error));
+            assert_eq!(FundedTransitionRequestV3::decode(&hostile), Err(error));
+        }
+        for action in [
+            FundedTransitionActionV3::FailNext,
+            FundedTransitionActionV3::Exhaust,
+            FundedTransitionActionV3::CommitFailure,
+        ] {
+            let request = FundedTransitionRequestV3 {
+                action,
+                ..funded_request()
+            };
+            assert_eq!(
+                FundedTransitionRequestV3::decode(&request.to_bytes()?),
+                Ok(request)
+            );
         }
         Ok(())
     }

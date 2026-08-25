@@ -10,11 +10,12 @@ pub(crate) const REQUEST_EXPECTED_GENERATION_OFFSET: usize = 16;
 pub(crate) const REQUEST_EXPECTED_RESULT_DOMAIN_ID_OFFSET: usize = 24;
 pub(crate) const REQUEST_EXPECTED_PROVIDER_RELEASE_ID_OFFSET: usize = 56;
 pub(crate) const REQUEST_ACCEPT_PYTH_ACTION: u8 = 0;
+pub(crate) const PRIMARY_CERTIFICATE_SEQUENCE_VALUE: u64 = 1;
 
 pub(crate) const FUNDED_REQUEST_BYTES_VALUE: usize = 96;
-pub(crate) const FUNDED_REQUEST_ABI_VERSION: u16 = 2;
+pub(crate) const FUNDED_REQUEST_ABI_VERSION: u16 = 3;
 pub(crate) const FUNDED_REQUEST_MAGIC_BYTES: [u8; 8] =
-    [0x44, 0x43, 0x53, 0x52, 0x46, 0x4e, 0x44, 0x32];
+    [0x44, 0x43, 0x53, 0x52, 0x46, 0x4e, 0x44, 0x33];
 pub(crate) const FUNDED_REQUEST_MAGIC_OFFSET: usize = 0;
 pub(crate) const FUNDED_REQUEST_VERSION_OFFSET: usize = 8;
 pub(crate) const FUNDED_REQUEST_ACTION_OFFSET: usize = 10;
@@ -25,7 +26,8 @@ pub(crate) const FUNDED_REQUEST_RESERVED_BODY_OFFSET: usize = 28;
 pub(crate) const FUNDED_REQUEST_EXPECTED_RESULT_DOMAIN_ID_OFFSET: usize = 32;
 pub(crate) const FUNDED_REQUEST_EXPECTED_FUNDING_ALLOCATION_ID_OFFSET: usize = 64;
 pub(crate) const FUNDED_REQUEST_FAIL_NEXT_ACTION: u8 = 1;
-pub(crate) const FUNDED_REQUEST_COMMIT_FAILURE_ACTION: u8 = 2;
+pub(crate) const FUNDED_REQUEST_EXHAUST_ACTION: u8 = 2;
+pub(crate) const FUNDED_REQUEST_COMMIT_FAILURE_ACTION: u8 = 3;
 
 pub(crate) const CERTIFICATE_BYTES_VALUE: usize = 312;
 pub(crate) const CERTIFICATE_ABI_VERSION: u16 = 1;
@@ -68,7 +70,7 @@ pub(crate) const REQUEST_EXAMPLE: [u8; 88] = [
 ];
 #[cfg(test)]
 pub(crate) const FUNDED_REQUEST_EXAMPLE: [u8; 96] = [
-    0x44, 0x43, 0x53, 0x52, 0x46, 0x4e, 0x44, 0x32, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x44, 0x43, 0x53, 0x52, 0x46, 0x4e, 0x44, 0x33, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x22, 0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,

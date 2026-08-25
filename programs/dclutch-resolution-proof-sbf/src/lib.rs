@@ -27,10 +27,10 @@ use dclutch_registry_contract::{
 };
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_resolution_codec::{
-    AcceptPythRequestV1, FUNDED_TRANSITION_REQUEST_BYTES, PYTH_EVIDENCE_CONTENT_DOMAIN_V1,
-    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CERTIFICATE_BYTES,
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V2, RESOLUTION_CONTROLLER_RELEASE_ID_V2,
-    ResolutionCertificateKindV1, ResolutionCertificateV1,
+    AcceptPythRequestV1, FUNDED_TRANSITION_REQUEST_BYTES, PRIMARY_CERTIFICATE_SEQUENCE_V3,
+    PYTH_EVIDENCE_CONTENT_DOMAIN_V1, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
+    RESOLUTION_CERTIFICATE_BYTES, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V3, ResolutionCertificateKindV1, ResolutionCertificateV1,
 };
 use dclutch_source_contract::{
     PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
@@ -42,15 +42,17 @@ use solana_program::{
     clock::Clock,
     entrypoint::ProgramResult,
     hash::{hash, hashv},
+    program::invoke_signed,
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
     sysvar::SysvarSerialize,
 };
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
+use solana_system_interface::instruction::{allocate, assign};
 
 /// Exact number of accounts in the primary-Pyth successor frame.
-pub const ACCEPT_PYTH_ACCOUNT_COUNT: usize = 22;
+pub const ACCEPT_PYTH_ACCOUNT_COUNT: usize = 23;
 
 mod funded;
 
@@ -155,6 +157,7 @@ pub fn process_instruction(
     let router_programdata = next(&mut iterator)?;
     let clock_sysvar = next(&mut iterator)?;
     let rent_sysvar = next(&mut iterator)?;
+    let system = next(&mut iterator)?;
 
     validate_frame(accounts, program_id)?;
     let clock = authenticate_clock(clock_sysvar)?;
@@ -312,7 +315,7 @@ pub fn process_instruction(
             None,
             request.expected_generation,
             clock.unix_timestamp,
-            clock.slot,
+            PRIMARY_CERTIFICATE_SEQUENCE_V3,
         )
         .map_err(|_| ResolutionError::Transition)?;
     if decision.outcome_count() != domain_outcome_count
@@ -359,7 +362,10 @@ pub fn process_instruction(
         &next_state_bytes,
         &certificate_bytes,
         ResolutionCertificateKindV1::ResolutionSuccess,
-        clock.slot,
+        PRIMARY_CERTIFICATE_SEQUENCE_V3,
+        program_id,
+        system,
+        &rent,
     )
 }
 
@@ -369,7 +375,7 @@ fn validate_frame(accounts: &[AccountInfo<'_>], program_id: &Pubkey) -> ProgramR
             return Err(ResolutionError::AccountFrame.into());
         }
         let writable = index <= 1;
-        let executable = matches!(index, 6 | 15 | 18);
+        let executable = matches!(index, 6 | 15 | 18 | 22);
         if account.is_writable != writable || account.executable != executable {
             return Err(ResolutionError::AccountFrame.into());
         }
@@ -381,7 +387,9 @@ fn validate_frame(accounts: &[AccountInfo<'_>], program_id: &Pubkey) -> ProgramR
             return Err(ResolutionError::AccountFrame.into());
         }
     }
-    if accounts.get(6).ok_or(ResolutionError::AccountFrame)?.key != program_id {
+    if accounts.get(6).ok_or(ResolutionError::AccountFrame)?.key != program_id
+        || accounts.get(22).ok_or(ResolutionError::AccountFrame)?.key != &system_program::ID
+    {
         return Err(ResolutionError::AccountFrame.into());
     }
     Ok(())
@@ -624,7 +632,7 @@ fn authenticate_resolution_release(
         .map_err(|_| ResolutionError::ResolutionRelease)?;
     let release = role.release();
     if release.program().to_bytes() != program_id.to_bytes()
-        || release.semantic_release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V2
+        || release.semantic_release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V3
         || release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
     {
         return Err(ResolutionError::ResolutionRelease.into());
@@ -877,38 +885,20 @@ fn authenticate_provider_loader(
     Ok(())
 }
 
-fn commit_outputs(
-    state: &AccountInfo<'_>,
-    certificate: &AccountInfo<'_>,
+#[allow(clippy::too_many_arguments)]
+fn commit_outputs<'info>(
+    state: &AccountInfo<'info>,
+    certificate: &AccountInfo<'info>,
     next_state: &[u8; SOURCE_RESOLUTION_STATE_BYTES],
     next_certificate: &[u8; RESOLUTION_CERTIFICATE_BYTES],
     kind: ResolutionCertificateKindV1,
     sequence: u64,
+    program_id: &Pubkey,
+    system: &AccountInfo<'info>,
+    rent: &Rent,
 ) -> ProgramResult {
-    if certificate.owner != state.owner
-        || certificate.data_len() != RESOLUTION_CERTIFICATE_BYTES
-        || certificate.executable
-    {
-        return Err(ResolutionError::OutputState.into());
-    }
-    let kind_seed = [match kind {
-        ResolutionCertificateKindV1::ResolutionSuccess => 1,
-        ResolutionCertificateKindV1::RecoveryAdvanced => 2,
-        ResolutionCertificateKindV1::Exhausted => 3,
-        ResolutionCertificateKindV1::ResolutionFailure => 4,
-    }];
-    let sequence_seed = sequence.to_le_bytes();
-    let expected_certificate = Pubkey::find_program_address(
-        &[
-            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V2,
-            state.key.as_ref(),
-            &kind_seed,
-            &sequence_seed,
-        ],
-        state.owner,
-    )
-    .0;
-    if certificate.key != &expected_certificate {
+    initialize_certificate_output(program_id, state, certificate, system, rent, kind, sequence)?;
+    if certificate.owner != state.owner {
         return Err(ResolutionError::OutputState.into());
     }
     let mut state_output = state
@@ -925,6 +915,87 @@ fn commit_outputs(
     }
     state_output.copy_from_slice(next_state);
     certificate_output.copy_from_slice(next_certificate);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn initialize_certificate_output<'info>(
+    program_id: &Pubkey,
+    state: &AccountInfo<'info>,
+    certificate: &AccountInfo<'info>,
+    system: &AccountInfo<'info>,
+    rent: &Rent,
+    kind: ResolutionCertificateKindV1,
+    sequence: u64,
+) -> ProgramResult {
+    let kind_seed = [match kind {
+        ResolutionCertificateKindV1::ResolutionSuccess => 1,
+        ResolutionCertificateKindV1::RecoveryAdvanced => 2,
+        ResolutionCertificateKindV1::Exhausted => 3,
+        ResolutionCertificateKindV1::ResolutionFailure => 4,
+    }];
+    let sequence_seed = sequence.to_le_bytes();
+    let (expected_certificate, bump) = Pubkey::find_program_address(
+        &[
+            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+            state.key.as_ref(),
+            &kind_seed,
+            &sequence_seed,
+        ],
+        program_id,
+    );
+    if certificate.key != &expected_certificate {
+        return Err(ResolutionError::OutputState.into());
+    }
+    let minimum = rent.minimum_balance(RESOLUTION_CERTIFICATE_BYTES);
+    if certificate.owner == program_id {
+        if certificate.executable
+            || certificate.data_len() != RESOLUTION_CERTIFICATE_BYTES
+            || certificate.lamports() < minimum
+        {
+            return Err(ResolutionError::OutputState.into());
+        }
+        return Ok(());
+    }
+    if certificate.owner != &system_program::ID
+        || certificate.executable
+        || certificate.data_len() != 0
+        || certificate.lamports() < minimum
+        || system.key != &system_program::ID
+        || !system.executable
+    {
+        return Err(ResolutionError::OutputState.into());
+    }
+    let bump_seed = [bump];
+    let sequence_seed = sequence.to_le_bytes();
+    let signer: [&[u8]; 5] = [
+        RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+        state.key.as_ref(),
+        &kind_seed,
+        &sequence_seed,
+        &bump_seed,
+    ];
+    let space =
+        u64::try_from(RESOLUTION_CERTIFICATE_BYTES).map_err(|_| ResolutionError::Arithmetic)?;
+    invoke_signed(
+        &allocate(certificate.key, space),
+        &[certificate.clone(), system.clone()],
+        &[&signer],
+    )
+    .map_err(|_| ResolutionError::OutputState)?;
+    invoke_signed(
+        &assign(certificate.key, program_id),
+        &[certificate.clone(), system.clone()],
+        &[&signer],
+    )
+    .map_err(|_| ResolutionError::OutputState)?;
+    if certificate.owner != program_id
+        || certificate.executable
+        || certificate.data_len() != RESOLUTION_CERTIFICATE_BYTES
+        || certificate.lamports() < minimum
+    {
+        return Err(ResolutionError::OutputState.into());
+    }
     Ok(())
 }
 

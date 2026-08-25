@@ -20,8 +20,13 @@ provider price update.
 The successor Resolution campaign executes the compiled Registry and
 Resolution ELFs against the provenance-pinned local-validator projection of
 the captured Pyth receiver/router programs and account bodies. It covers one
-primary success, one funded recovery, exhausted Product failure, exact bounty
-credit, certificate sequencing, and a late transaction-wide refusal:
+primary success and replay refusal, then funded recovery, funded exhaustion,
+and explicit Product failure on one initially fresh Source. Each deterministic
+certificate PDA is prepaid through a real System transfer with exact rent plus
+tolerated dust and allocated/assigned by the compiled Resolution program. A
+second fresh Source reaches exhaustion before an occupied final certificate
+proves late transaction-wide rollback across Source, certificate, funding, and
+worker state:
 
 ```sh
 cargo build-sbf \
@@ -33,6 +38,23 @@ cargo build-sbf \
 SBF_OUT_DIR=../../target/deploy \
   cargo test --test resolution_successor -- --nocapture
 ```
+
+The optimized Resolution V3 ELF was 210,528 bytes with SHA-256
+`bdc08d836ce243143ed017173cb8b151b29d31e90f8b6bbd40ceeaec1e914f16`.
+The unchanged Registry ELF was 89,584 bytes with SHA-256
+`399c7ca711f38a3cc173142a8eec268552dfcf18b15307b617f8069dd53bf5a8`.
+The clean ProgramTest campaign observed these instruction costs:
+
+| Transition | Compute units |
+| --- | ---: |
+| Registry Resolution-role reauthentication | 124,293 |
+| Primary Pyth success plus certificate creation | 253,046 |
+| Primary replay refusal | 7,916 |
+| Under-rent certificate refusal at final gate | 247,335 |
+| Funded recovery plus certificate creation | 303,002 |
+| Funded exhaustion plus certificate creation | 304,213 |
+| Explicit Product failure plus certificate creation | 300,672 |
+| Occupied failure certificate late refusal | 297,977 |
 
 This is local real-SVM evidence. The captured update is synthetic-local, and
 the campaign is not provider availability, devnet, deployment, or mainnet

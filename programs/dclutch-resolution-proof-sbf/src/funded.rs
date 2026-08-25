@@ -9,9 +9,8 @@ use dclutch_capability_contract::{
 };
 use dclutch_product_contract::result_domain::FINITE_RESULT_DOMAIN_RELEASE_ID_V1;
 use dclutch_resolution_codec::{
-    FUNDED_TRANSITION_REQUEST_BYTES, FundedTransitionActionV2, FundedTransitionRequestV2,
-    RESOLUTION_CERTIFICATE_BYTES, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V2,
-    ResolutionCertificateKindV1, ResolutionCertificateV1,
+    FUNDED_TRANSITION_REQUEST_BYTES, FundedTransitionActionV3, FundedTransitionRequestV3,
+    RESOLUTION_CERTIFICATE_BYTES, ResolutionCertificateKindV1, ResolutionCertificateV1,
 };
 use dclutch_source_contract::{
     ContentId, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SOURCE_RESOLUTION_STATE_BYTES,
@@ -31,11 +30,11 @@ use crate::{
     MarketAuthority, RecordKind, ResolutionError, authenticate_clock,
     authenticate_finalized_record, authenticate_market_and_resolution_release,
     authenticate_material_components, authenticate_product_domain, authenticate_rent,
-    authenticate_state_account,
+    authenticate_state_account, initialize_certificate_output,
 };
 
 /// Exact funded-transition account count.
-pub(crate) const FUNDED_TRANSITION_ACCOUNT_COUNT: usize = 18;
+pub(crate) const FUNDED_TRANSITION_ACCOUNT_COUNT: usize = 19;
 
 struct SourceTransitionPlan {
     next_state: SourceResolutionStateV1,
@@ -45,6 +44,7 @@ struct SourceTransitionPlan {
     schedule_index: u32,
     selector: u32,
     observed_at: u64,
+    certificate_sequence: u64,
 }
 
 /// Execute one bounded funded liveness transition.
@@ -59,7 +59,7 @@ pub(crate) fn process_funded_transition(
     {
         return Err(ResolutionError::AccountFrame.into());
     }
-    let request = FundedTransitionRequestV2::decode(instruction_data)
+    let request = FundedTransitionRequestV3::decode(instruction_data)
         .map_err(|_| ResolutionError::Instruction)?;
     validate_funded_frame(accounts, program_id)?;
 
@@ -82,6 +82,7 @@ pub(crate) fn process_funded_transition(
     let capability_manifest_staging = next(&mut iterator)?;
     let clock_sysvar = next(&mut iterator)?;
     let rent_sysvar = next(&mut iterator)?;
+    let system = next(&mut iterator)?;
 
     let clock = authenticate_clock(clock_sysvar)?;
     let rent = authenticate_rent(rent_sysvar)?;
@@ -153,7 +154,7 @@ pub(crate) fn process_funded_transition(
         request,
         clock.unix_timestamp,
     )?;
-    if matches!(request.action, FundedTransitionActionV2::CommitFailure) {
+    if matches!(request.action, FundedTransitionActionV3::CommitFailure) {
         let sequence = u64::from(source_plan.attempt_index)
             .checked_add(1)
             .ok_or(ResolutionError::Arithmetic)?;
@@ -259,9 +260,11 @@ pub(crate) fn process_funded_transition(
         &certificate_bytes,
         &next_funding_bytes,
         source_plan.kind,
-        u64::from(source_plan.attempt_index),
+        source_plan.certificate_sequence,
         funding_lamports_after,
         worker_lamports_after,
+        system,
+        &rent,
     )
 }
 
@@ -269,14 +272,14 @@ fn plan_source_transition(
     prior: SourceResolutionStateV1,
     material_id: ContentId,
     material: SourceMaterialViewV1<'_>,
-    request: FundedTransitionRequestV2,
+    request: FundedTransitionRequestV3,
     now: i64,
 ) -> Result<SourceTransitionPlan, ProgramError> {
     let recovery = material
         .recovery_policy()
         .map_err(|_| ResolutionError::SourceMaterial)?;
     match request.action {
-        FundedTransitionActionV2::FailNext => {
+        FundedTransitionActionV3::FailNext => {
             let mut next = prior;
             next.fail_next_view(
                 material_id,
@@ -307,9 +310,43 @@ fn plan_source_transition(
                 schedule_index: 0,
                 selector: 0,
                 observed_at: u64::try_from(now).map_err(|_| ResolutionError::Arithmetic)?,
+                certificate_sequence: u64::from(active)
+                    .checked_add(1)
+                    .ok_or(ResolutionError::Arithmetic)?,
             })
         }
-        FundedTransitionActionV2::CommitFailure => {
+        FundedTransitionActionV3::Exhaust => {
+            let (recovery_policy_id, policy) = recovery.ok_or(ResolutionError::Transition)?;
+            let recovery_count = policy.attempt_count();
+            let active = prior
+                .active_recovery_attempt()
+                .ok_or(ResolutionError::Transition)?;
+            if active.checked_add(1) != Some(recovery_count)
+                || u32::from(recovery_count) != request.expected_recovery_index
+                || request.expected_funding_allocation_id != recovery_policy_id.to_bytes()
+            {
+                return Err(ResolutionError::Transition.into());
+            }
+            let attempt = policy
+                .attempt(active)
+                .map_err(|_| ResolutionError::Transition)?;
+            let mut next = prior;
+            next.exhaust_view(material_id, material, request.expected_generation, now)
+                .map_err(|_| ResolutionError::Transition)?;
+            Ok(SourceTransitionPlan {
+                next_state: next,
+                kind: ResolutionCertificateKindV1::Exhausted,
+                route: attempt.provider_release_id().to_bytes(),
+                attempt_index: u32::from(recovery_count),
+                schedule_index: 0,
+                selector: 0,
+                observed_at: u64::try_from(now).map_err(|_| ResolutionError::Arithmetic)?,
+                certificate_sequence: u64::from(recovery_count)
+                    .checked_add(1)
+                    .ok_or(ResolutionError::Arithmetic)?,
+            })
+        }
+        FundedTransitionActionV3::CommitFailure => {
             let recovery_count = recovery.map_or(0, |(_, policy)| policy.attempt_count());
             if u32::from(recovery_count) != request.expected_recovery_index
                 || request.expected_funding_allocation_id != material_id.to_bytes()
@@ -330,6 +367,9 @@ fn plan_source_transition(
                 schedule_index: 0,
                 selector,
                 observed_at: 0,
+                certificate_sequence: u64::from(recovery_count)
+                    .checked_add(2)
+                    .ok_or(ResolutionError::Arithmetic)?,
             })
         }
     }
@@ -345,7 +385,7 @@ fn plan_funding_release(
     rent: &Rent,
     authority: MarketAuthority,
     material_id: ContentId,
-    request: FundedTransitionRequestV2,
+    request: FundedTransitionRequestV3,
 ) -> Result<(FundingStateV1, u64, u64), ProgramError> {
     let manifest_data = manifest_account
         .try_borrow_data()
@@ -396,8 +436,10 @@ fn plan_funding_release(
         .entry(funding.entry_index())
         .map_err(|_| ResolutionError::Funding)?;
     let expected_allocation = match request.action {
-        FundedTransitionActionV2::FailNext => request.expected_funding_allocation_id,
-        FundedTransitionActionV2::CommitFailure => material_id.to_bytes(),
+        FundedTransitionActionV3::FailNext | FundedTransitionActionV3::Exhaust => {
+            request.expected_funding_allocation_id
+        }
+        FundedTransitionActionV3::CommitFailure => material_id.to_bytes(),
     };
     if entry.config_id().to_bytes() != expected_allocation
         || request.expected_funding_allocation_id != expected_allocation
@@ -433,7 +475,7 @@ fn validate_funded_frame(accounts: &[AccountInfo<'_>], program_id: &Pubkey) -> P
         if account.is_signer {
             return Err(ResolutionError::AccountFrame.into());
         }
-        if account.is_writable != (index <= 3) || account.executable != (index == 8) {
+        if account.is_writable != (index <= 3) || account.executable != matches!(index, 8 | 18) {
             return Err(ResolutionError::AccountFrame.into());
         }
         if accounts
@@ -446,6 +488,7 @@ fn validate_funded_frame(accounts: &[AccountInfo<'_>], program_id: &Pubkey) -> P
     }
     let worker = accounts.get(3).ok_or(ResolutionError::AccountFrame)?;
     if accounts.get(8).ok_or(ResolutionError::AccountFrame)?.key != program_id
+        || accounts.get(18).ok_or(ResolutionError::AccountFrame)?.key != &system_program::ID
         || worker.owner != &system_program::ID
         || worker.data_len() != 0
         || worker.executable
@@ -456,12 +499,12 @@ fn validate_funded_frame(accounts: &[AccountInfo<'_>], program_id: &Pubkey) -> P
 }
 
 #[allow(clippy::too_many_arguments)]
-fn commit_funded_outputs(
+fn commit_funded_outputs<'info>(
     program_id: &Pubkey,
-    state: &AccountInfo<'_>,
-    certificate: &AccountInfo<'_>,
-    funding: &AccountInfo<'_>,
-    worker: &AccountInfo<'_>,
+    state: &AccountInfo<'info>,
+    certificate: &AccountInfo<'info>,
+    funding: &AccountInfo<'info>,
+    worker: &AccountInfo<'info>,
     next_state: &[u8; SOURCE_RESOLUTION_STATE_BYTES],
     next_certificate: &[u8; RESOLUTION_CERTIFICATE_BYTES],
     next_funding: &[u8; FUNDING_STATE_BYTES],
@@ -469,33 +512,10 @@ fn commit_funded_outputs(
     sequence: u64,
     funding_lamports_after: u64,
     worker_lamports_after: u64,
+    system: &AccountInfo<'info>,
+    rent: &Rent,
 ) -> ProgramResult {
-    if certificate.owner != program_id
-        || certificate.data_len() != RESOLUTION_CERTIFICATE_BYTES
-        || certificate.executable
-    {
-        return Err(ResolutionError::OutputState.into());
-    }
-    let kind_seed = [match kind {
-        ResolutionCertificateKindV1::ResolutionSuccess => 1,
-        ResolutionCertificateKindV1::RecoveryAdvanced => 2,
-        ResolutionCertificateKindV1::Exhausted => 3,
-        ResolutionCertificateKindV1::ResolutionFailure => 4,
-    }];
-    let sequence_seed = sequence.to_le_bytes();
-    let expected_certificate = Pubkey::find_program_address(
-        &[
-            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V2,
-            state.key.as_ref(),
-            &kind_seed,
-            &sequence_seed,
-        ],
-        program_id,
-    )
-    .0;
-    if certificate.key != &expected_certificate {
-        return Err(ResolutionError::OutputState.into());
-    }
+    initialize_certificate_output(program_id, state, certificate, system, rent, kind, sequence)?;
 
     let mut state_output = state
         .try_borrow_mut_data()

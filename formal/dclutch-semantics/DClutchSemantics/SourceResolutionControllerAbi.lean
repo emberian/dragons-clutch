@@ -28,6 +28,19 @@ def requestMagic : List UInt8 :=
 def requestVersion : Nat := 1
 def acceptPythAction : UInt8 := 0
 
+/-- A primary Source has transition sequence zero by canonical state shape, so
+its one terminal success certificate is constructible before execution at the
+immediate successor sequence.  Clock slot remains observation evidence only. -/
+def primaryCertificateSequence (state : State) : Nat :=
+  state.transitionSequence + 1
+
+theorem primary_certificate_sequence_is_first
+    {state : State} (hsequence : state.transitionSequence = 0) :
+    primaryCertificateSequence state = 1 := by
+  simp [primaryCertificateSequence, hsequence]
+
+#guard primaryCertificateSequence exampleState == 1
+
 inductive RequestField where
   | magic | version | action | reserved | expectedGeneration
   | expectedResultDomainId | expectedProviderReleaseId
@@ -164,21 +177,23 @@ theorem hostile_request_examples_refuse :
 /-! ## Funded liveness request -/
 
 def fundedRequestMagic : List UInt8 :=
-  [0x44, 0x43, 0x53, 0x52, 0x46, 0x4e, 0x44, 0x32] -- `DCSRFND2`
+  [0x44, 0x43, 0x53, 0x52, 0x46, 0x4e, 0x44, 0x33] -- `DCSRFND3`
 
-def fundedRequestVersion : Nat := 2
+def fundedRequestVersion : Nat := 3
 
 inductive FundedAction where
-  | failNext | commitFailure
+  | failNext | exhaust | commitFailure
   deriving DecidableEq, Repr
 
 def FundedAction.tag : FundedAction → UInt8
   | .failNext => 1
-  | .commitFailure => 2
+  | .exhaust => 2
+  | .commitFailure => 3
 
 def decodeFundedAction : UInt8 → Option FundedAction
   | 1 => some .failNext
-  | 2 => some .commitFailure
+  | 2 => some .exhaust
+  | 3 => some .commitFailure
   | _ => none
 
 inductive FundedRequestField where
@@ -262,7 +277,7 @@ theorem funded_request_coordinates_are_canonical :
     ] := by
   native_decide
 
-structure FundedTransitionRequestV2 where
+structure FundedTransitionRequestV3 where
   action : FundedAction
   expectedGeneration : Nat
   expectedRecoveryIndex : Nat
@@ -270,7 +285,7 @@ structure FundedTransitionRequestV2 where
   expectedFundingAllocationId : Nat
   deriving DecidableEq, Repr
 
-def encodeFundedRequest (request : FundedTransitionRequestV2) : List UInt8 :=
+def encodeFundedRequest (request : FundedTransitionRequestV3) : List UInt8 :=
   fundedRequestMagic ++ Codec.encodeLE 2 fundedRequestVersion ++
   [request.action.tag] ++ List.replicate 5 0 ++
   Codec.encodeLE 8 request.expectedGeneration ++
@@ -278,7 +293,7 @@ def encodeFundedRequest (request : FundedTransitionRequestV2) : List UInt8 :=
   Codec.encodeLE 32 request.expectedResultDomainId ++
   Codec.encodeLE 32 request.expectedFundingAllocationId
 
-def decodeFundedRequest (input : List UInt8) : Option FundedTransitionRequestV2 := do
+def decodeFundedRequest (input : List UInt8) : Option FundedTransitionRequestV3 := do
   if input.length != fundedRequestBytes then none else
   if input.take (FundedRequestField.offset .version) != fundedRequestMagic then none else
   if Codec.decodeLE ((input.drop (FundedRequestField.offset .version)).take 2) !=
@@ -301,7 +316,7 @@ def decodeFundedRequest (input : List UInt8) : Option FundedTransitionRequestV2 
       ((input.drop (FundedRequestField.offset .expectedFundingAllocationId)).take 32)
   }
 
-def exampleFundedRequest : FundedTransitionRequestV2 := {
+def exampleFundedRequest : FundedTransitionRequestV3 := {
   action := .failNext
   expectedGeneration := 7
   expectedRecoveryIndex := 0
@@ -309,7 +324,7 @@ def exampleFundedRequest : FundedTransitionRequestV2 := {
   expectedFundingAllocationId := 0x3344
 }
 
-theorem encode_funded_request_length (request : FundedTransitionRequestV2) :
+theorem encode_funded_request_length (request : FundedTransitionRequestV3) :
     (encodeFundedRequest request).length = fundedRequestBytes := by
   simp [encodeFundedRequest, fundedRequestMagic, fundedRequestBytes,
     fundedRequestSchema, Codec.encodeLE_length]
@@ -344,18 +359,27 @@ def canonicalFundedCoordinates? (config : Config) (state : State) :
         | _ => config.recoveries.length
       let attempt ← config.recoveries[index]?
       some (index, attempt.entryFundingAllocationId)
+  | .exhaust =>
+      match state.phase with
+      | .recovery current =>
+          if current + 1 = config.recoveries.length then
+            some (config.recoveries.length, config.exhaustFundingAllocationId)
+          else none
+      | _ => none
   | .commitFailure =>
       if state.phase = .exhausted then
         some (config.recoveries.length, config.failureFundingAllocationId)
       else none
 
 def fundedCoordinatesMatch (config : Config) (state : State)
-    (request : FundedTransitionRequestV2) : Bool :=
+    (request : FundedTransitionRequestV3) : Bool :=
   request.expectedGeneration == state.generation &&
   canonicalFundedCoordinates? config state request.action ==
     some (request.expectedRecoveryIndex, request.expectedFundingAllocationId)
 
 #guard canonicalFundedCoordinates? exampleConfig exampleState .failNext == some (0, 43)
+#guard canonicalFundedCoordinates? exampleConfig
+  ({ exampleState with phase := .recovery 0 }) .exhaust == some (1, 44)
 #guard canonicalFundedCoordinates? exampleConfig exhaustedState .commitFailure == some (1, 45)
 #guard fundedCoordinatesMatch exampleConfig exampleState ({ exampleFundedRequest with
   expectedGeneration := 1
@@ -368,7 +392,9 @@ def fundedCoordinatesMatch (config : Config) (state : State)
 })
 
 theorem funded_actions_are_disjoint :
-    FundedAction.failNext ≠ FundedAction.commitFailure := by decide
+    FundedAction.failNext ≠ FundedAction.exhaust ∧
+    FundedAction.failNext ≠ FundedAction.commitFailure ∧
+    FundedAction.exhaust ≠ FundedAction.commitFailure := by decide
 
 /-! The controller does not introduce a second state machine.  These bridge
 theorems expose the determinism, exact funding conservation, refusal atomicity,
@@ -407,6 +433,23 @@ theorem funded_recovery_advances_immediate_successor
       .ok plan) :
     plan.sourcePost.phase = .recovery (index + 1) :=
   failNext_from_recovery_advances_one hphase h
+
+theorem funded_exhaustion_commits_last_recovery
+    {config : Config} {state : State} {funding : FundingState}
+    {now worker receiptAccountId : Nat} {plan : Plan}
+    (h : specialize config state funding (.exhaust now worker receiptAccountId) =
+      .ok plan) :
+    plan.sourcePost.phase = .exhausted ∧
+    plan.certificate.kind = .exhausted ∧
+    plan.certificate.attemptIndex = config.recoveries.length := by
+  unfold specialize at h
+  simp only [bind, Except.bind] at h
+  repeat' split at h
+  all_goals try contradiction
+  all_goals
+    simp only [pure, Except.pure, Except.ok.injEq] at h
+    subst plan
+    exact ⟨rfl, rfl, rfl⟩
 
 theorem funded_failure_requires_exhaustion_and_product_selector
     {config : Config} {state : State} {funding : FundingState}
