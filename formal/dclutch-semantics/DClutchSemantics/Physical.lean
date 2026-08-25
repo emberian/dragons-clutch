@@ -132,6 +132,96 @@ theorem encode_custody_plan_length (transfers : List CustodyTransfer) :
   unfold encodeCustodyPlan
   rw [List.length_append, encode_custody_header_length, flatMap_transfer_length]
 
+def maxCustodyTransfers : Nat := 2
+
+def CustodyTransferEncodable (transfer : CustodyTransfer) : Prop :=
+  transfer.amount < 256 ^ 8
+
+/-- Hostile decoder for one exact V1 custody-transfer record. -/
+def decodeCustodyTransfer (bytes : List UInt8) : Option CustodyTransfer := do
+  if bytes.length != custodyTransferBytes then none else
+  let sourceTag ← bytes[0]?
+  let destinationTag ← bytes[1]?
+  if (bytes.drop 2).take 6 != List.replicate 6 0 then none else
+  let source ← DClutch.Codec.decodeParty sourceTag
+  let destination ← DClutch.Codec.decodeParty destinationTag
+  let amount := DClutch.Codec.decodeLE (bytes.drop 8)
+  some { source, destination, amount }
+
+def decodeCustodyTransfers : Nat → List UInt8 → Option (List CustodyTransfer)
+  | 0, bytes => if bytes.isEmpty then some [] else none
+  | count + 1, bytes => do
+      let transfer ← decodeCustodyTransfer (bytes.take custodyTransferBytes)
+      let rest ← decodeCustodyTransfers count (bytes.drop custodyTransferBytes)
+      some (transfer :: rest)
+
+/-- Hostile decoder for the exact bounded V1 custody-plan profile. -/
+def decodeCustodyPlan : List UInt8 → Option (List CustodyTransfer)
+  | 0x44 :: 0x43 :: 0x43 :: 0x50 :: wireVersion :: count :: reservedA :: reservedB :: records => do
+      if wireVersion != custodyVersion || reservedA != 0 || reservedB != 0 then none else
+      let count := count.toNat
+      if count > maxCustodyTransfers ||
+          records.length != count * custodyTransferBytes then none else
+      decodeCustodyTransfers count records
+  | _ => none
+
+theorem decodeCustodyTransfer_encode
+    (transfer : CustodyTransfer)
+    (encodable : CustodyTransferEncodable transfer) :
+    decodeCustodyTransfer (encodeCustodyTransfer transfer) = some transfer := by
+  cases transfer with
+  | mk source destination amount =>
+      have amountDecoded := DClutch.Codec.decodeLE_encodeLE 8 amount encodable
+      cases source <;> cases destination <;>
+        simp [decodeCustodyTransfer, encodeCustodyTransfer,
+          custodyTransferBytes, DClutch.Codec.encodeLE_length,
+          DClutch.Codec.partyTag, DClutch.Codec.decodeParty, amountDecoded]
+
+private theorem decodeCustodyTransfers_encode
+    (transfers : List CustodyTransfer)
+    (encodable : ∀ transfer ∈ transfers, CustodyTransferEncodable transfer) :
+    decodeCustodyTransfers transfers.length
+        (transfers.flatMap encodeCustodyTransfer) = some transfers := by
+  induction transfers with
+  | nil => simp [decodeCustodyTransfers]
+  | cons transfer rest induction =>
+      have headEncodable := encodable transfer (by simp)
+      have restEncodable :
+          ∀ candidate ∈ rest, CustodyTransferEncodable candidate := by
+        intro candidate member
+        exact encodable candidate (by simp [member])
+      simp [decodeCustodyTransfers, encode_custody_transfer_length,
+        decodeCustodyTransfer_encode transfer headEncodable,
+        induction restEncodable]
+
+theorem decodeCustodyPlan_encode
+    (transfers : List CustodyTransfer)
+    (countFits : transfers.length ≤ maxCustodyTransfers)
+    (encodable : ∀ transfer ∈ transfers, CustodyTransferEncodable transfer) :
+    decodeCustodyPlan (encodeCustodyPlan transfers) = some transfers := by
+  have countLt : transfers.length < 256 :=
+    Nat.lt_of_le_of_lt countFits (by decide)
+  have countByte : (UInt8.ofNat transfers.length).toNat = transfers.length := by
+    simp [UInt8.toNat_ofNat', Nat.mod_eq_of_lt countLt]
+  have recordsLength :
+      (transfers.flatMap encodeCustodyTransfer).length =
+        transfers.length * custodyTransferBytes :=
+    flatMap_transfer_length transfers
+  simp [encodeCustodyPlan, encodeCustodyHeader, custodyMagic,
+    decodeCustodyPlan, custodyVersion, countByte, countFits, recordsLength,
+    decodeCustodyTransfers_encode transfers encodable]
+
+theorem hostile_custody_plan_decodings_refuse :
+    decodeCustodyPlan [] = none ∧
+      decodeCustodyPlan [0x44, 0x43, 0x43, 0x50, 1, 3, 0, 0] = none ∧
+      decodeCustodyPlan [0x44, 0x43, 0x43, 0x50, 1, 0, 1, 0] = none ∧
+      decodeCustodyPlan [
+        0x44, 0x43, 0x43, 0x50, 1, 1, 0, 0,
+        1, 0, 1, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0
+      ] = none := by
+  native_decide
+
 end Codec
 
 def applyClaimEffect (outcome : Nat) (state : ClaimState) (effect : Effect) : Option ClaimState :=

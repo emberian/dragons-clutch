@@ -77,4 +77,41 @@ theorem admitted_compilation_refines_physical_transition
   rw [claimRuns, custodyRuns]
   exact Physical.successful_atomic_commit frame
 
+/-- Canonical physical plan bytes are a round-tripping projection of the typed
+plans selected by compilation. The outcome-coordinate premise is the physical
+V1 `u32` profile boundary; it is not a semantic Product-width restriction. -/
+theorem admitted_physical_wire_round_trip
+    (frame : FillFrame) (admitted : Admissible frame)
+    (outcomeFits : frame.sellerIntent.outcome < 256 ^ 4) :
+    DClutch.Codec.decodePlan
+        (DClutch.Codec.encodePlan
+          (Physical.physicalPlan frame).claimEffects) =
+          some (Physical.physicalPlan frame).claimEffects ∧
+      Physical.Codec.decodeCustodyPlan
+        (Physical.Codec.encodeCustodyPlan
+          (Physical.physicalPlan frame).custodyTransfers) =
+          some (Physical.physicalPlan frame).custodyTransfers := by
+  have sellerNonceFits : frame.pre.sellerNextNonce + 1 < 256 ^ 8 := by
+    simpa [u64Limit] using admitted.sellerNonceCanAdvance
+  have buyerNonceFits : frame.pre.buyerNextNonce + 1 < 256 ^ 8 := by
+    simpa [u64Limit] using admitted.buyerNonceCanAdvance
+  have fillFits : frame.fill < 256 ^ 8 := by
+    simpa [u64Limit] using admitted.fillU64
+  have grossFits : frame.gross < 256 ^ 8 := by
+    simpa [u64Limit] using admitted.grossU64
+  have feeFits : frame.fee < 256 ^ 8 := by
+    simpa [u64Limit] using admitted.feeU64
+  constructor
+  · apply DClutch.Codec.decodePlan_encodePlan
+    · simp [Physical.physicalPlan, DClutch.Codec.maxEffects]
+    · simp [Physical.physicalPlan, DClutch.Codec.EffectEncodable,
+        DClutch.Codec.effectCell, DClutch.Codec.outcomeCoordinate,
+        DClutch.Codec.effectAmount, sellerReplayCell, buyerReplayCell,
+        sellerClaimCell, buyerClaimCell, sellerNonceFits, buyerNonceFits,
+        outcomeFits, fillFits]
+  · apply Physical.Codec.decodeCustodyPlan_encode
+    · simp [Physical.physicalPlan, Physical.Codec.maxCustodyTransfers]
+    · simp [Physical.physicalPlan, Physical.Codec.CustodyTransferEncodable,
+        grossFits, feeFits]
+
 end DClutch.Direct.CompiledPhysical
