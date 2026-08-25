@@ -589,6 +589,10 @@ impl<'a> PageViewV1<'a> {
 }
 
 /// Fixed-capacity authenticated page.
+///
+/// Host tooling uses this owned assembly type. SBF consumers use
+/// [`PageViewV1`] so the 11,840-byte page never enters a VM stack frame.
+#[cfg(not(target_os = "solana"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PageV1 {
     /// Outcome prefix shared with the candidate.
@@ -605,6 +609,7 @@ pub struct PageV1 {
     pub executions: [ExecutionV1; MAX_EXECUTIONS_PER_PAGE],
 }
 
+#[cfg(not(target_os = "solana"))]
 impl PageV1 {
     /// Decode one exact page and reject all noncanonical inactive storage.
     pub fn decode(input: &[u8]) -> Result<Self> {

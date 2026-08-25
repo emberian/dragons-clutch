@@ -251,6 +251,7 @@ impl CandidateVerifierV1 {
     }
 
     /// Consume the exact next page. Every refusal leaves this verifier unchanged.
+    #[inline(never)]
     pub fn ingest_page(&mut self, bytes: &[u8]) -> Result<()> {
         let mut staged = *self;
         staged.ingest_page_inner(bytes)?;
@@ -263,6 +264,7 @@ impl CandidateVerifierV1 {
     }
 
     /// Consume one page only at the exact optimistic-concurrency revision.
+    #[inline(never)]
     pub fn ingest_page_at(&mut self, bytes: &[u8], expected_revision: u64) -> Result<()> {
         if self.revision != expected_revision {
             return Err(Error::RevisionMismatch);
@@ -295,6 +297,7 @@ impl CandidateVerifierV1 {
     }
 
     /// Encode one exact persisted verification cursor.
+    #[inline(never)]
     pub fn to_bytes(self) -> Result<[u8; VERIFICATION_CURSOR_BYTES_V1]> {
         self.validate_cursor()?;
         let mut output = [0_u8; VERIFICATION_CURSOR_BYTES_V1];
@@ -330,6 +333,7 @@ impl CandidateVerifierV1 {
     }
 
     /// Hostile-decode one exact persisted verification cursor.
+    #[inline(never)]
     pub fn decode(input: &[u8]) -> Result<Self> {
         if input.len() != VERIFICATION_CURSOR_BYTES_V1
             || input.get(..8) != Some(VERIFICATION_CURSOR_MAGIC.as_slice())
@@ -379,6 +383,7 @@ impl CandidateVerifierV1 {
     }
 
     /// Finalize the candidate-wide per-order rounding and balance checks.
+    #[inline(never)]
     pub fn finish(mut self) -> Result<VerifiedCandidateV1> {
         if self.next_page != self.candidate.page_count {
             return Err(Error::VerificationIncomplete);

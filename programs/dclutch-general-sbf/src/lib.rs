@@ -309,42 +309,11 @@ fn process_consider(
         GeneralSbfError::Certificate,
     )?;
 
-    let mut verification_bytes = [0_u8; VERIFICATION_CURSOR_BYTES_V1];
-    {
-        let bytes = verification
-            .try_borrow_data()
-            .map_err(|_| GeneralSbfError::Borrow)?;
-        verification_bytes.copy_from_slice(&bytes);
-    }
-    let mut verifier = if verification_bytes.iter().all(|byte| *byte == 0) {
-        if request.page_index != 0 || request.expected_revision != 0 {
-            return Err(GeneralSbfError::Verification.into());
-        }
-        CandidateVerifierV1::begin(candidate)
-    } else {
-        let value = CandidateVerifierV1::decode(&verification_bytes)
-            .map_err(|_| GeneralSbfError::Verification)?;
-        if value.candidate() != candidate || value.next_page() != request.page_index {
-            return Err(GeneralSbfError::Verification.into());
-        }
-        value
-    };
-    {
-        let page = page_account
-            .try_borrow_data()
-            .map_err(|_| GeneralSbfError::Borrow)?;
-        verifier
-            .ingest_page_at(&page, request.expected_revision)
-            .map_err(|_| GeneralSbfError::Verification)?;
-    }
-    verification_bytes = verifier
-        .to_bytes()
-        .map_err(|_| GeneralSbfError::Verification)?;
+    let mut verifier = load_verifier(verification, candidate, request)?;
+    ingest_verifier(&mut verifier, page_account, request.expected_revision)?;
 
     if verifier.is_complete() {
-        let verified = verifier
-            .finish()
-            .map_err(|_| GeneralSbfError::Verification)?;
+        let verified = finish_verifier(verifier)?;
         finalize_consider(
             program_id,
             accounts,
@@ -358,10 +327,62 @@ fn process_consider(
     } else {
         require_zero_account(certificate, GeneralSbfError::Certificate)?;
     }
-    let mut destination = verification
-        .try_borrow_mut_data()
+    store_verifier(verification, verifier)
+}
+
+#[inline(never)]
+fn load_verifier(
+    verification: &AccountInfo<'_>,
+    candidate: CandidateV1,
+    request: ControllerRequestV1,
+) -> Result<CandidateVerifierV1, ProgramError> {
+    let bytes = verification
+        .try_borrow_data()
         .map_err(|_| GeneralSbfError::Borrow)?;
-    destination.copy_from_slice(&verification_bytes);
+    if bytes.iter().all(|byte| *byte == 0) {
+        if request.page_index != 0 || request.expected_revision != 0 {
+            return Err(GeneralSbfError::Verification.into());
+        }
+        return Ok(CandidateVerifierV1::begin(candidate));
+    }
+    let verifier =
+        CandidateVerifierV1::decode(&bytes).map_err(|_| GeneralSbfError::Verification)?;
+    if verifier.candidate() != candidate || verifier.next_page() != request.page_index {
+        return Err(GeneralSbfError::Verification.into());
+    }
+    Ok(verifier)
+}
+
+#[inline(never)]
+fn ingest_verifier(
+    verifier: &mut CandidateVerifierV1,
+    page_account: &AccountInfo<'_>,
+    expected_revision: u64,
+) -> ProgramResult {
+    let page = page_account
+        .try_borrow_data()
+        .map_err(|_| GeneralSbfError::Borrow)?;
+    verifier
+        .ingest_page_at(&page, expected_revision)
+        .map_err(|_| GeneralSbfError::Verification.into())
+}
+
+#[inline(never)]
+fn finish_verifier(verifier: CandidateVerifierV1) -> Result<VerifiedCandidateV1, ProgramError> {
+    verifier
+        .finish()
+        .map_err(|_| GeneralSbfError::Verification.into())
+}
+
+#[inline(never)]
+fn store_verifier(verification: &AccountInfo<'_>, verifier: CandidateVerifierV1) -> ProgramResult {
+    let bytes = verifier
+        .to_bytes()
+        .map_err(|_| GeneralSbfError::Verification)?;
+    verification
+        .try_borrow_mut_data()
+        .map_err(|_| GeneralSbfError::Borrow)?
+        .copy_from_slice(&bytes);
     Ok(())
 }
 

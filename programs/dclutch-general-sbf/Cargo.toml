@@ -7,7 +7,7 @@ rust-version = "1.89"
 description = "Verifier-oriented physical adapter for General clearing"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [features]
