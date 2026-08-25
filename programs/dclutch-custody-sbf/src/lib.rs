@@ -808,6 +808,7 @@ fn authenticate_transfer_accounts(
     if request.source_compartment == CompartmentV1::External {
         if (require_authority && authority_role != Some(AuthorityRole::Delegate))
             || source_state.owner == accounts.authority.key.to_bytes()
+            || source_state.owner != request.semantic.actor
         {
             return Err(CustodySbfError::TokenState.into());
         }
@@ -822,7 +823,9 @@ fn authenticate_transfer_accounts(
             .map_err(|_| CustodySbfError::TokenState)?;
     }
     if request.destination_compartment == CompartmentV1::External {
-        if destination_state.owner == accounts.authority.key.to_bytes() {
+        if destination_state.owner == accounts.authority.key.to_bytes()
+            || destination_state.owner != request.semantic.actor
+        {
             return Err(CustodySbfError::TokenState.into());
         }
     } else {

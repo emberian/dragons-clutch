@@ -66,6 +66,8 @@ pub enum Error {
     ZeroIdentity,
     /// Exact source and destination accounts aliased.
     AliasedTransferAccounts,
+    /// An external token side lacked one exact nonzero semantic owner.
+    ExternalActorRequired,
     /// Optimistic replay arithmetic overflowed or skipped a revision.
     RevisionOverflow,
     /// Request fields did not form the selected operation's exact shape.
@@ -538,6 +540,12 @@ impl CustodyRequestV1 {
                         != is_zero(&self.destination_vault_context)
                 {
                     return Err(Error::InvalidOperationShape);
+                }
+                if (self.source_compartment == CompartmentV1::External
+                    || self.destination_compartment == CompartmentV1::External)
+                    && is_zero(&self.semantic.actor)
+                {
+                    return Err(Error::ExternalActorRequired);
                 }
                 if self.source == self.destination {
                     return Err(Error::AliasedTransferAccounts);
@@ -1196,6 +1204,11 @@ mod tests {
         let mut hostile = transfer();
         hostile.caller_role = CallerRoleV1::Custody;
         assert_eq!(hostile.validate(), Err(Error::UnknownCallerRole));
+        let mut hostile = transfer();
+        hostile.source_compartment = CompartmentV1::External;
+        hostile.source_vault_context = [0; 32];
+        hostile.semantic.actor = [0; 32];
+        assert_eq!(hostile.validate(), Err(Error::ExternalActorRequired));
     }
 
     #[test]
