@@ -22,9 +22,7 @@ def main : IO Unit := do
   IO.println s!"pub const SERIES_CORE_REQUEST_BYTES_V1: usize = {seriesBytes};"
   IO.println s!"pub const SERIES_CORE_ACK_BYTES_V1: usize = {seriesAckBytes};"
   IO.println s!"pub const CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1: usize = {capabilityFundingHeaderBytes};"
-  IO.println s!"pub const CAPABILITY_FUNDING_DESCRIPTOR_BYTES_V1: usize = {capabilityFundingDescriptorBytes};"
   IO.println s!"pub const CAPABILITY_FUNDING_MAX_ENTRIES_V1: usize = {capabilityFundingMaxEntries};"
-  IO.println s!"pub const CAPABILITY_FUNDING_LIST_MAX_BYTES_V1: usize = {capabilityFundingBytes capabilityFundingMaxEntries};"
   emitBytes "CORE_EFFECT_MAGIC_V1" effectMagic
   emitBytes "CORE_EFFECT_ACK_MAGIC_V1" ackMagic
   emitBytes "SERIES_CORE_REQUEST_MAGIC_V1" seriesMagic
@@ -43,5 +41,3 @@ def main : IO Unit := do
     IO.println s!"pub(crate) const {SeriesAckField.rustName field.spec.name}: usize = {field.offset};"
   for field in capabilityFundingHeaderLayout do
     IO.println s!"pub(crate) const {CapabilityFundingHeaderField.rustName field.spec.name}: usize = {field.offset};"
-  for field in capabilityFundingDescriptorLayout do
-    IO.println s!"pub(crate) const {CapabilityFundingDescriptorField.rustName field.spec.name}: usize = {field.offset};"
