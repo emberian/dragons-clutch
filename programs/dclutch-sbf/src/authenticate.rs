@@ -1,5 +1,7 @@
 //! Exact account-frame, replay, funding, and provider authentication.
 
+use alloc::boxed::Box;
+
 use dclutch_capability_contract::{
     CapabilityFundingDerivationV1, CapabilityManifestV1, FundingCustodyObservationV1,
 };
@@ -284,7 +286,7 @@ pub(crate) fn authenticate_fund<'info>(
     rent_credit_account: &AccountInfo<'info>,
     rent_sysvar: &AccountInfo<'info>,
     market_facts: MarketFacts,
-) -> Result<(FundFacts, SourceMaterialFacts), ProgramError> {
+) -> Result<(FundFacts, Box<SourceMaterialFacts>), ProgramError> {
     if fund_account.owner != program_id || fund_account.key == rent_credit_account.key {
         return Err(AdapterError::AccountIdentity.into());
     }
@@ -318,7 +320,7 @@ pub(crate) fn authenticate_fund<'info>(
             let (provider_release_id, provider_release) = material
                 .primary_provider_release()
                 .map_err(|_| AdapterError::ContentIdentity)?;
-            Ok(SourceMaterialFacts {
+            Ok(Box::new(SourceMaterialFacts {
                 obligation,
                 result_domain: domain,
                 window,
@@ -326,7 +328,7 @@ pub(crate) fn authenticate_fund<'info>(
                 source,
                 provider_release_id,
                 provider_release,
-            })
+            }))
         },
     )?;
 
