@@ -4,6 +4,10 @@ pub const CORE_EFFECT_ENVELOPE_BYTES_V1: usize = 280;
 pub const CORE_EFFECT_ACK_BYTES_V1: usize = 240;
 pub const SERIES_CORE_REQUEST_BYTES_V1: usize = 336;
 pub const SERIES_CORE_ACK_BYTES_V1: usize = 264;
+pub const CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1: usize = 16;
+pub const CAPABILITY_FUNDING_DESCRIPTOR_BYTES_V1: usize = 36;
+pub const CAPABILITY_FUNDING_MAX_ENTRIES_V1: usize = 16;
+pub const CAPABILITY_FUNDING_LIST_MAX_BYTES_V1: usize = 592;
 pub const CORE_EFFECT_MAGIC_V1: [u8; 8] = [
     0x44, 0x43, 0x4c, 0x54, 0x43, 0x45, 0x46, 0x31,
 ];
@@ -15,6 +19,9 @@ pub const SERIES_CORE_REQUEST_MAGIC_V1: [u8; 8] = [
 ];
 pub const SERIES_CORE_ACK_MAGIC_V1: [u8; 8] = [
     0x44, 0x43, 0x4c, 0x54, 0x43, 0x53, 0x41, 0x31,
+];
+pub const CAPABILITY_FUNDING_LIST_MAGIC_V1: [u8; 8] = [
+    0x44, 0x43, 0x4c, 0x54, 0x43, 0x46, 0x4c, 0x31,
 ];
 pub const CORE_EFFECT_DIGEST_DOMAIN_V1: [u8; 22] = [
     0x64, 0x63, 0x6c, 0x75, 0x74, 0x63, 0x68, 0x2f, 0x63, 0x6f, 0x72, 0x65, 0x2d, 0x65, 0x66, 0x66, 0x65, 0x63, 0x74, 0x2f, 0x76, 0x31,
@@ -92,3 +99,12 @@ pub(crate) const SERIES_ACK_POST_RESOURCE_DIGEST_OFFSET: usize = 208;
 pub(crate) const SERIES_ACK_MARKET_GENERATION_OFFSET: usize = 240;
 pub(crate) const SERIES_ACK_EXPECTED_SERIES_REVISION_OFFSET: usize = 248;
 pub(crate) const SERIES_ACK_EXPECTED_TICKET_REVISION_OFFSET: usize = 256;
+pub(crate) const CAPABILITY_FUNDING_MAGIC_OFFSET: usize = 0;
+pub(crate) const CAPABILITY_FUNDING_VERSION_OFFSET: usize = 8;
+pub(crate) const CAPABILITY_FUNDING_COUNT_OFFSET: usize = 10;
+pub(crate) const CAPABILITY_FUNDING_RESERVED_HEADER_OFFSET: usize = 11;
+pub(crate) const CAPABILITY_FUNDING_SELECTED_ENTRY_INDEX_OFFSET: usize = 12;
+pub(crate) const CAPABILITY_FUNDING_RESERVED_BODY_OFFSET: usize = 14;
+pub(crate) const CAPABILITY_FUNDING_DESCRIPTOR_ENTRY_INDEX_OFFSET: usize = 0;
+pub(crate) const CAPABILITY_FUNDING_DESCRIPTOR_RESERVED_OFFSET: usize = 2;
+pub(crate) const CAPABILITY_FUNDING_DESCRIPTOR_ACCOUNT_OFFSET: usize = 4;

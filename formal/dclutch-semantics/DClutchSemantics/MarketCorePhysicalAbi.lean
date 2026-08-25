@@ -19,6 +19,7 @@ def effectMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x45, 0x46, 0x31]
 def ackMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x41, 0x4b, 0x31]
 def seriesMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x53, 0x52, 0x31]
 def seriesAckMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x53, 0x41, 0x31]
+def capabilityFundingMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x46, 0x4c, 0x31]
 def effectDigestDomain : List UInt8 := "dclutch/core-effect/v1".toUTF8.toList
 def seriesCallerAuthorityDomain : List UInt8 := "dclutch/series-core-caller/v1".toUTF8.toList
 def marketStateDomain : List UInt8 := "dclutch/market-core/state/v1".toUTF8.toList
@@ -28,6 +29,75 @@ theorem effect_digest_domain_fits_sha_seed : effectDigestDomain.length ≤ 32 :=
 theorem series_caller_authority_domain_fits_pda_seed :
     seriesCallerAuthorityDomain.length ≤ 32 := by native_decide
 theorem market_state_domain_fits_pda_seed : marketStateDomain.length ≤ 32 := by native_decide
+
+/-! The profile-1 funding list uses the same semantic maximum as the canonical
+capability-manifest profile. Lifting the bound requires a new manifest and
+physical ABI profile; decoders never truncate an oversized list. -/
+def capabilityFundingMaxEntries : Nat := 16
+
+inductive CapabilityFundingHeaderField where
+  | magic | version | count | reservedHeader | selectedEntryIndex | reservedBody
+  deriving DecidableEq, Repr
+
+def capabilityFundingHeaderSchema : List (FieldSpec CapabilityFundingHeaderField) := [
+  ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.count, .u8⟩,
+  ⟨.reservedHeader, .reserved 1⟩, ⟨.selectedEntryIndex, .u16⟩,
+  ⟨.reservedBody, .reserved 2⟩
+]
+
+def capabilityFundingHeaderLayout : List (PlacedField CapabilityFundingHeaderField) :=
+  specialize capabilityFundingHeaderSchema
+def capabilityFundingHeaderBytes : Nat := schemaWidth capabilityFundingHeaderSchema
+
+namespace CapabilityFundingHeaderField
+
+def rustName : CapabilityFundingHeaderField → String
+  | .magic => "CAPABILITY_FUNDING_MAGIC_OFFSET"
+  | .version => "CAPABILITY_FUNDING_VERSION_OFFSET"
+  | .count => "CAPABILITY_FUNDING_COUNT_OFFSET"
+  | .reservedHeader => "CAPABILITY_FUNDING_RESERVED_HEADER_OFFSET"
+  | .selectedEntryIndex => "CAPABILITY_FUNDING_SELECTED_ENTRY_INDEX_OFFSET"
+  | .reservedBody => "CAPABILITY_FUNDING_RESERVED_BODY_OFFSET"
+
+end CapabilityFundingHeaderField
+
+inductive CapabilityFundingDescriptorField where
+  | entryIndex | reserved | fundingAccount
+  deriving DecidableEq, Repr
+
+def capabilityFundingDescriptorSchema : List (FieldSpec CapabilityFundingDescriptorField) := [
+  ⟨.entryIndex, .u16⟩, ⟨.reserved, .reserved 2⟩, ⟨.fundingAccount, .bytes 32⟩
+]
+
+def capabilityFundingDescriptorLayout : List (PlacedField CapabilityFundingDescriptorField) :=
+  specialize capabilityFundingDescriptorSchema
+def capabilityFundingDescriptorBytes : Nat := schemaWidth capabilityFundingDescriptorSchema
+
+namespace CapabilityFundingDescriptorField
+
+def rustName : CapabilityFundingDescriptorField → String
+  | .entryIndex => "CAPABILITY_FUNDING_DESCRIPTOR_ENTRY_INDEX_OFFSET"
+  | .reserved => "CAPABILITY_FUNDING_DESCRIPTOR_RESERVED_OFFSET"
+  | .fundingAccount => "CAPABILITY_FUNDING_DESCRIPTOR_ACCOUNT_OFFSET"
+
+end CapabilityFundingDescriptorField
+
+def capabilityFundingBytes (count : Nat) : Nat :=
+  capabilityFundingHeaderBytes + count * capabilityFundingDescriptorBytes
+
+theorem capability_funding_header_width : capabilityFundingHeaderBytes = 16 := by native_decide
+theorem capability_funding_descriptor_width : capabilityFundingDescriptorBytes = 36 := by native_decide
+theorem capability_funding_profile_max_width :
+    capabilityFundingBytes capabilityFundingMaxEntries = 592 := by native_decide
+theorem capability_funding_header_unique :
+    (capabilityFundingHeaderSchema.map fun field => field.name).Nodup := by native_decide
+theorem capability_funding_header_disjoint :
+    capabilityFundingHeaderLayout.Pairwise Before := specializeFrom_pairwise 0 capabilityFundingHeaderSchema
+theorem capability_funding_descriptor_unique :
+    (capabilityFundingDescriptorSchema.map fun field => field.name).Nodup := by native_decide
+theorem capability_funding_descriptor_disjoint :
+    capabilityFundingDescriptorLayout.Pairwise Before :=
+  specializeFrom_pairwise 0 capabilityFundingDescriptorSchema
 
 inductive EffectField where
   | magic | version | action | targetRole | reservedHeader
