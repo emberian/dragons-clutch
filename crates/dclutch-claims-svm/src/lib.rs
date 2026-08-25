@@ -22,6 +22,10 @@ pub const CLAIMS_PLAN_MAGIC_V1: [u8; 8] = *b"DCLTCPK1";
 pub const CLAIMS_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCLTCAR1";
 /// Implemented wire version.
 pub const CLAIMS_WIRE_VERSION_V1: u16 = 1;
+/// Canonical Claims aggregate PDA seed domain.
+pub const CLAIMS_AGGREGATE_PDA_DOMAIN_V1: &[u8] = b"dclutch:claims-aggregate:v1";
+/// Canonical Claims Position PDA seed domain.
+pub const CLAIMS_POSITION_PDA_DOMAIN_V1: &[u8] = b"dclutch:claims-position:v1";
 
 const VERSION_OFFSET: usize = 8;
 const PLAN_KIND_OFFSET: usize = 10;
@@ -98,6 +102,46 @@ impl CallerRole {
             2 => Ok(Self::Trading),
             _ => Err(Error::UnknownTag),
         }
+    }
+}
+
+/// Canonical aggregate Claims identity under the current Claims program.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClaimsAggregateSeedsV1 {
+    market: [u8; 32],
+}
+
+impl ClaimsAggregateSeedsV1 {
+    /// Construct the unique aggregate coordinates for one logical Core Market.
+    pub fn new(market: [u8; 32]) -> Result<Self> {
+        require_nonzero(market)?;
+        Ok(Self { market })
+    }
+
+    /// Borrow the exact ordered PDA seed slices, excluding the bump.
+    pub fn as_slices(&self) -> [&[u8]; 2] {
+        [CLAIMS_AGGREGATE_PDA_DOMAIN_V1, &self.market]
+    }
+}
+
+/// Canonical dynamic Position identity under the current Claims program.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClaimsPositionSeedsV1 {
+    market: [u8; 32],
+    owner: [u8; 32],
+}
+
+impl ClaimsPositionSeedsV1 {
+    /// Construct the unique Position coordinates for one logical Market/owner pair.
+    pub fn new(market: [u8; 32], owner: [u8; 32]) -> Result<Self> {
+        require_nonzero(market)?;
+        require_nonzero(owner)?;
+        Ok(Self { market, owner })
+    }
+
+    /// Borrow the exact ordered PDA seed slices, excluding the bump.
+    pub fn as_slices(&self) -> [&[u8]; 3] {
+        [CLAIMS_POSITION_PDA_DOMAIN_V1, &self.market, &self.owner]
     }
 }
 
@@ -336,6 +380,11 @@ impl<'a> ClaimsPlanV1<'a> {
             .checked_mul(CLAIM_QUANTITY_BYTES)
             .ok_or(Error::InvalidOutcomeCount)?;
         u64_at(self.quantities, offset)
+    }
+
+    /// Borrow the exact little-endian `u64[outcome_count]` quantity tail.
+    pub const fn quantities_bytes(self) -> &'a [u8] {
+        self.quantities
     }
 
     fn validate(self) -> Result<()> {
@@ -898,6 +947,37 @@ mod tests {
             [8; 32],
         )?;
         assert_eq!(ClaimsReceiptV1::decode(&receipt.to_bytes()), Ok(receipt));
+        Ok(())
+    }
+
+    #[test]
+    fn dynamic_position_identity_is_unique_and_nonzero() -> Result<()> {
+        let aggregate = ClaimsAggregateSeedsV1::new([2; 32])?;
+        assert_eq!(
+            aggregate.as_slices(),
+            [CLAIMS_AGGREGATE_PDA_DOMAIN_V1, [2; 32].as_slice()]
+        );
+        assert_eq!(
+            ClaimsAggregateSeedsV1::new([0; 32]),
+            Err(Error::ZeroIdentity)
+        );
+        let seeds = ClaimsPositionSeedsV1::new([2; 32], [4; 32])?;
+        assert_eq!(
+            seeds.as_slices(),
+            [
+                CLAIMS_POSITION_PDA_DOMAIN_V1,
+                [2; 32].as_slice(),
+                [4; 32].as_slice(),
+            ]
+        );
+        assert_eq!(
+            ClaimsPositionSeedsV1::new([0; 32], [4; 32]),
+            Err(Error::ZeroIdentity)
+        );
+        assert_eq!(
+            ClaimsPositionSeedsV1::new([2; 32], [0; 32]),
+            Err(Error::ZeroIdentity)
+        );
         Ok(())
     }
 }

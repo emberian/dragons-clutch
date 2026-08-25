@@ -557,6 +557,11 @@ pub fn position_owner(bytes: &[u8], outcome_count: u32) -> Result<[u8; 32]> {
     validate_position(bytes, outcome_count).map(|value| value.owner)
 }
 
+/// Return one Position's immutable Market identity.
+pub fn position_market_id(bytes: &[u8], outcome_count: u32) -> Result<[u8; 32]> {
+    validate_position(bytes, outcome_count).map(|value| value.market_id)
+}
+
 /// Return the immutable release-set identity selected by one Market.
 pub fn market_release_set_id(bytes: &[u8]) -> Result<[u8; 32]> {
     decode_market(bytes).map(|value| value.release_set_id)
