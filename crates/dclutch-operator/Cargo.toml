@@ -14,6 +14,7 @@ non-production-real-pyth-lab = ["dclutch-pyth-svm/synthetic-local-fixture"]
 
 [dependencies]
 dclutch-capability-contract = { path = "../dclutch-capability-contract" }
+dclutch-bearer-contract = { path = "../dclutch-bearer-contract" }
 dclutch-collateral-contract = { path = "../dclutch-collateral-contract" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-dealer-contract = { path = "../dclutch-dealer-contract" }
@@ -32,6 +33,7 @@ dclutch-source-contract = { path = "../dclutch-source-contract" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
+spl-token-2022-interface = { version = "=3.1.1", default-features = false }
 
 [lints]
 workspace = true

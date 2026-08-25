@@ -17,10 +17,10 @@ use dclutch_direct_contract::{
     CancelThroughV1, MAKER_REPLAY_ROOT_PDA_DOMAIN_V2, MakerReplayRootV2,
     adapter::{
         AdapterAccountMetaV2, AdapterActionV2, MarketPhaseV2, decode_cancel_through_instruction_v1,
-        encode_cancel_through_instruction_v1, encode_close_replay_root_instruction_v2,
-        validate_account_frame_v2,
+        encode_cancel_through_instruction_v1, encode_close_replay_registration_instruction_v2,
+        encode_close_replay_root_instruction_v2, validate_account_frame_v2,
     },
-    prepare_replay_root_close_v2,
+    close_replay_registration_v2, prepare_replay_root_close_v2,
 };
 use dclutch_general_contract::{
     BATCH_ROOT_BYTES, GENERAL_CONFIG_SCHEMA_ID_V1, GENERAL_FUNDING_BYTES, GENERAL_ROOT_BYTES,
@@ -415,6 +415,88 @@ pub struct DirectCancelThroughReport {
     pub instruction: Instruction,
     /// Finalized account observation used for all persisted facts.
     pub observation: Observation,
+}
+
+/// Finalized Market and replay root required to close Direct registration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectCloseReplayRegistrationState {
+    /// Retiring canonical Market.
+    pub market: ObservedAccount,
+    /// Mutable canonical maker replay root.
+    pub replay_root: ObservedAccount,
+}
+
+/// Chain-derived Direct registration-close instruction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectCloseReplayRegistrationReport {
+    /// Exact unsigned two-account Direct V2 instruction.
+    pub instruction: Instruction,
+    /// One finalized observation selecting the Market phase and replay root.
+    pub observation: Observation,
+}
+
+mod bearer;
+pub use bearer::*;
+
+/// Construct Direct's exact permissionless registration-close frame.
+pub fn build_direct_close_replay_registration_v2(
+    program_id: Pubkey,
+    state: &DirectCloseReplayRegistrationState,
+) -> Result<DirectCloseReplayRegistrationReport, VerticalError> {
+    let observation = observation(&[&state.market, &state.replay_root])?;
+    let root = decode_owned(&state.replay_root, program_id, MakerReplayRootV2::decode)?;
+    let mut encoded = [0; dclutch_direct_contract::MAKER_REPLAY_ROOT_BYTES_V2];
+    root.encode(&mut encoded)
+        .map_err(|_| VerticalError::InvalidState)?;
+    if state.replay_root.data.as_slice() != encoded {
+        return Err(VerticalError::InvalidState);
+    }
+    let (expected, bump) = Pubkey::find_program_address(
+        &[
+            MAKER_REPLAY_ROOT_PDA_DOMAIN_V2,
+            root.market(),
+            &root.generation().to_le_bytes(),
+            root.maker(),
+        ],
+        &program_id,
+    );
+    if state.replay_root.key != expected || root.bump() != bump {
+        return Err(VerticalError::PdaMismatch);
+    }
+    let market = direct_market(program_id, &state.market)?;
+    if root.market() != state.market.key.as_ref()
+        || root.generation() != market.generation
+        || market.phase != Phase::Retiring
+    {
+        return Err(VerticalError::InvalidPhase);
+    }
+    close_replay_registration_v2(root, MarketPhaseV2::Retiring)
+        .map_err(|_| VerticalError::InvalidPhase)?;
+    let frame = [
+        AdapterAccountMetaV2 {
+            key: state.market.key.to_bytes(),
+            is_signer: false,
+            is_writable: true,
+        },
+        AdapterAccountMetaV2 {
+            key: state.replay_root.key.to_bytes(),
+            is_signer: false,
+            is_writable: true,
+        },
+    ];
+    validate_account_frame_v2(AdapterActionV2::CloseReplayRegistration, 1, &frame)
+        .map_err(|_| VerticalError::InvalidState)?;
+    Ok(DirectCloseReplayRegistrationReport {
+        instruction: Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new(state.market.key, false),
+                AccountMeta::new(state.replay_root.key, false),
+            ],
+            data: encode_close_replay_registration_instruction_v2().to_vec(),
+        },
+        observation,
+    })
 }
 
 /// Build Direct's three-account cancel-through frame from the decoded root and
@@ -1427,6 +1509,8 @@ fn decode_clock(account: &ObservedAccount) -> Result<Clock, VerticalError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_core_contract::{ContentId, MarketIdentity, MarketRoot};
+    use dclutch_market_contract::market::CategoricalSettlementSummaryV1;
 
     fn account(slot: u64, finality: Finality) -> ObservedAccount {
         ObservedAccount {
@@ -1463,6 +1547,173 @@ mod tests {
         let root =
             MakerReplayRootV2::new([1; 32], 0, [2; 32], [3; 32], 7).expect("canonical replay root");
         assert!(prepare_replay_root_close_v2(root, MarketPhaseV2::Retiring).is_err());
+    }
+
+    fn direct_registration_close_fixture(
+        phase: Phase,
+    ) -> (Pubkey, DirectCloseReplayRegistrationState) {
+        let program_id = Pubkey::new_from_array([90; 32]);
+        let observation = Observation {
+            slot: 41,
+            unix_timestamp: 1_800_000_000,
+            finality: Finality::Finalized,
+        };
+        let content = |byte| ContentId::new([byte; 32]).expect("nonzero fixture content ID");
+        let identity = MarketIdentity::new(
+            content(1),
+            content(2),
+            content(3),
+            content(4),
+            content(5),
+            7,
+        );
+        let identity_digest = hash(&identity.to_bytes()).to_bytes();
+        let market_key =
+            Pubkey::find_program_address(&[crate::MARKET_SEED, &identity_digest], &program_id).0;
+        let mut market_root = MarketRoot::founding(identity, [6; 32]).expect("founding Market");
+        if phase != Phase::Founding {
+            market_root
+                .transition_phase(7, phase)
+                .expect("fixture phase is a direct founding transition");
+        }
+        let market = CategoricalMarketV1::<2>::new(
+            market_root,
+            0,
+            [0, 0],
+            CategoricalSettlementSummaryV1::empty(),
+        )
+        .expect("canonical fixture Market");
+        let mut market_data =
+            vec![0; CategoricalMarketV1::<2>::encoded_len().expect("supported width")];
+        market
+            .encode(&mut market_data)
+            .expect("exact Market buffer");
+
+        let maker = [7; 32];
+        let generation = 7_u64;
+        let (replay_key, bump) = Pubkey::find_program_address(
+            &[
+                MAKER_REPLAY_ROOT_PDA_DOMAIN_V2,
+                market_key.as_ref(),
+                &generation.to_le_bytes(),
+                &maker,
+            ],
+            &program_id,
+        );
+        let replay =
+            MakerReplayRootV2::new(market_key.to_bytes(), generation, maker, [8; 32], bump)
+                .expect("canonical fixture replay root");
+        let mut replay_data = vec![0; dclutch_direct_contract::MAKER_REPLAY_ROOT_BYTES_V2];
+        replay
+            .encode(&mut replay_data)
+            .expect("exact replay buffer");
+        (
+            program_id,
+            DirectCloseReplayRegistrationState {
+                market: ObservedAccount {
+                    observation,
+                    key: market_key,
+                    owner: program_id,
+                    lamports: 100,
+                    executable: false,
+                    data: market_data,
+                },
+                replay_root: ObservedAccount {
+                    observation,
+                    key: replay_key,
+                    owner: program_id,
+                    lamports: 100,
+                    executable: false,
+                    data: replay_data,
+                },
+            },
+        )
+    }
+
+    #[test]
+    fn direct_registration_close_is_exact_and_chain_derived() {
+        let (program_id, state) = direct_registration_close_fixture(Phase::Retiring);
+        let report = build_direct_close_replay_registration_v2(program_id, &state)
+            .expect("retiring Market admits exact registration close");
+        assert_eq!(report.observation, state.market.observation);
+        assert_eq!(report.instruction.program_id, program_id);
+        assert_eq!(
+            report.instruction.accounts,
+            vec![
+                AccountMeta::new(state.market.key, false),
+                AccountMeta::new(state.replay_root.key, false),
+            ]
+        );
+        assert_eq!(
+            report.instruction.data,
+            encode_close_replay_registration_instruction_v2()
+        );
+    }
+
+    #[test]
+    fn direct_registration_close_refuses_hostile_observations_and_bindings() {
+        let (program_id, state) = direct_registration_close_fixture(Phase::Retiring);
+
+        let mut nonfinal = state.clone();
+        nonfinal.market.observation.finality = Finality::Confirmed;
+        nonfinal.replay_root.observation.finality = Finality::Confirmed;
+        assert_eq!(
+            build_direct_close_replay_registration_v2(program_id, &nonfinal),
+            Err(VerticalError::ObservationNotFinalized)
+        );
+
+        let mut mixed = state.clone();
+        mixed.replay_root.observation.slot += 1;
+        assert_eq!(
+            build_direct_close_replay_registration_v2(program_id, &mixed),
+            Err(VerticalError::ObservationMismatch)
+        );
+
+        let mut wrong_owner = state.clone();
+        wrong_owner.replay_root.owner = system_program::ID;
+        assert_eq!(
+            build_direct_close_replay_registration_v2(program_id, &wrong_owner),
+            Err(VerticalError::InvalidOwner)
+        );
+
+        let mut malformed = state.clone();
+        *malformed
+            .replay_root
+            .data
+            .get_mut(12)
+            .expect("fixture replay body") = 1;
+        assert_eq!(
+            build_direct_close_replay_registration_v2(program_id, &malformed),
+            Err(VerticalError::InvalidState)
+        );
+
+        let mut wrong_pda = state.clone();
+        wrong_pda.replay_root.key = Pubkey::new_from_array([55; 32]);
+        assert_eq!(
+            build_direct_close_replay_registration_v2(program_id, &wrong_pda),
+            Err(VerticalError::PdaMismatch)
+        );
+    }
+
+    #[test]
+    fn direct_registration_close_refuses_nonretiring_or_already_closed_state() {
+        let (program_id, founding) = direct_registration_close_fixture(Phase::Founding);
+        assert_eq!(
+            build_direct_close_replay_registration_v2(program_id, &founding),
+            Err(VerticalError::InvalidPhase)
+        );
+
+        let (program_id, mut closed) = direct_registration_close_fixture(Phase::Retiring);
+        let root = MakerReplayRootV2::decode(&closed.replay_root.data)
+            .expect("fixture replay root decodes");
+        let root = close_replay_registration_v2(root, MarketPhaseV2::Retiring)
+            .expect("fixture registration closes");
+        root.encode(&mut closed.replay_root.data)
+            .expect("exact replay buffer");
+        assert_eq!(
+            build_direct_close_replay_registration_v2(program_id, &closed),
+            Err(VerticalError::InvalidPhase)
+        );
     }
 
     #[test]
