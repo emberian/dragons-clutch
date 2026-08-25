@@ -7,7 +7,7 @@
 //! the exact batch PDA. Order routes admit, lock, cancel, and close Position
 //! plus quote custody without introducing adapter-owned economic state.
 
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
 use dclutch_capability_contract::{
     CapabilityManifestV1, FUNDING_STATE_BYTES, FundingCustodyObservationV1, FundingStateV1,
@@ -1806,8 +1806,12 @@ fn process_collect_settlement_page<const N: usize>(
         candidate.batch_sequence(),
         root.config_id(),
     )?;
-    let mut cursor =
-        authenticate_settlement_cursor::<N>(program_id, cursor_account, candidate_account)?;
+    let cursor_before = Box::new(authenticate_settlement_cursor::<N>(
+        program_id,
+        cursor_account,
+        candidate_account,
+    )?);
+    let mut cursor = *cursor_before;
     let mut settlement_position = authenticate_position::<N>(
         program_id,
         settlement_position_account,
@@ -1824,9 +1828,6 @@ fn process_collect_settlement_page<const N: usize>(
         cursor_account.key,
     )?;
 
-    let mut states = [None; MAX_EXECUTIONS_PER_PAGE_V1];
-    let mut custodies = [None; MAX_EXECUTIONS_PER_PAGE_V1];
-    let mut owner_positions = [None; MAX_EXECUTIONS_PER_PAGE_V1];
     for (index, execution) in page
         .executions
         .iter()
@@ -1881,9 +1882,7 @@ fn process_collect_settlement_page<const N: usize>(
         if quote.amount != custody.reserved_quote_atoms() {
             return Err(AdapterError::PositionAuthentication.into());
         }
-        states[index] = Some(state);
-        custodies[index] = Some(custody);
-        owner_positions[index] = Some(owner_position);
+        let _ = (state, custody, owner_position);
     }
 
     let rent = Rent::from_account_info(rent_sysvar).map_err(|_| AdapterError::AccountData)?;
@@ -1893,11 +1892,11 @@ fn process_collect_settlement_page<const N: usize>(
     let result = cursor
         .collect_page(
             reference.page_id,
-            page,
+            &page,
             &mut candidate,
-            root,
-            config,
-            batch,
+            &root,
+            &config,
+            &batch,
             *settlement_position.balances(),
             settlement_quote_before.amount,
             CandidateCapitalizationV1 {
@@ -1907,31 +1906,6 @@ fn process_collect_settlement_page<const N: usize>(
         )
         .map_err(|_| AdapterError::MarketTransition)?;
     if usize::from(result.execution_count) != execution_count || result.page_close.is_some() {
-        return Err(AdapterError::PositionPostcondition.into());
-    }
-    for index in 0..execution_count {
-        let execution = page.executions[index].ok_or(AdapterError::ReplayMismatch)?;
-        let receipt = result.receipts[index].ok_or(AdapterError::ReplayMismatch)?;
-        let expected_effect = result.custody_effects[index].ok_or(AdapterError::ReplayMismatch)?;
-        let mut state = states[index].ok_or(AdapterError::ReplayMismatch)?;
-        let mut custody = custodies[index].ok_or(AdapterError::ReplayMismatch)?;
-        let effect = custody
-            .apply_receipt(&mut state, execution.order, receipt, root, config)
-            .map_err(|_| AdapterError::MarketTransition)?;
-        if effect != expected_effect || Some(state) != result.order_states[index] {
-            return Err(AdapterError::PositionPostcondition.into());
-        }
-        for (outcome, amount) in effect.claim_debits_from_custody().iter().enumerate() {
-            if *amount != 0 {
-                settlement_position
-                    .credit_outcome(outcome, *amount)
-                    .map_err(|_| AdapterError::PositionAuthentication)?;
-            }
-        }
-        states[index] = Some(state);
-        custodies[index] = Some(custody);
-    }
-    if settlement_position.balances() != &result.claim_inventory_after {
         return Err(AdapterError::PositionPostcondition.into());
     }
 
@@ -1957,13 +1931,45 @@ fn process_collect_settlement_page<const N: usize>(
     }
     preflight_mutable(&mutable)?;
     for index in 0..execution_count {
-        let effect = result.custody_effects[index].ok_or(AdapterError::ReplayMismatch)?;
+        let execution = page.executions[index].ok_or(AdapterError::ReplayMismatch)?;
+        let execution_plan = cursor_before
+            .execution_plan(
+                reference.page_id,
+                &page,
+                &candidate,
+                &root,
+                &config,
+                &batch,
+                index,
+            )
+            .map_err(|_| AdapterError::MarketTransition)?;
+        let base = 17 + index * 4;
+        let state_account = account(accounts, base)?;
+        let custody_account = account(accounts, base + 1)?;
+        let quote_escrow = account(accounts, base + 3)?;
+        let mut state = decode_order_state(state_account)?;
+        let mut custody = decode_custody::<N>(custody_account)?;
+        let effect = custody
+            .apply_receipt(
+                &mut state,
+                execution.order,
+                execution_plan.receipt,
+                root,
+                config,
+            )
+            .map_err(|_| AdapterError::MarketTransition)?;
+        if state != execution_plan.order_state || effect != execution_plan.custody_effect {
+            return Err(AdapterError::PositionPostcondition.into());
+        }
+        for (outcome, amount) in effect.claim_debits_from_custody().iter().enumerate() {
+            if *amount != 0 {
+                settlement_position
+                    .credit_outcome(outcome, *amount)
+                    .map_err(|_| AdapterError::PositionAuthentication)?;
+            }
+        }
         let amount = effect.quote_debit_from_escrow();
         if amount != 0 {
-            let base = 17 + index * 4;
-            let state_account = account(accounts, base)?;
-            let custody_account = account(accounts, base + 1)?;
-            let quote_escrow = account(accounts, base + 3)?;
             let custody_seeds = GeneralOrderCustodyPdaSeedsV1::new(state_account.key.to_bytes())
                 .map_err(|_| AdapterError::PositionAuthentication)?;
             let components = custody_seeds.seed_components();
@@ -1992,54 +1998,28 @@ fn process_collect_settlement_page<const N: usize>(
             )
             .map_err(|_| AdapterError::CollateralTransferCpi)?;
         }
+        write_order_state(state_account, state)?;
+        write_custody(custody_account, custody)?;
+        let quote_after = authenticate_order_quote_escrow(
+            program_id,
+            quote_escrow,
+            custody_account,
+            mint,
+            token_program,
+            realm,
+        )?;
+        if quote_after.amount != custody.reserved_quote_atoms() {
+            return Err(AdapterError::PositionPostcondition.into());
+        }
+    }
+    if settlement_position.balances() != &result.claim_inventory_after {
+        return Err(AdapterError::PositionPostcondition.into());
     }
     transfer_owned_lamports(
         candidate_account,
         actor,
         result.settlement_reward_lamports,
     )?;
-    for index in 0..execution_count {
-        let base = 17 + index * 4;
-        write_order_state(
-            account(accounts, base)?,
-            states[index].ok_or(AdapterError::ReplayMismatch)?,
-        )?;
-        write_custody(
-            account(accounts, base + 1)?,
-            custodies[index].ok_or(AdapterError::ReplayMismatch)?,
-        )?;
-        let persisted_owner = authenticate_position::<N>(
-            program_id,
-            account(accounts, base + 2)?,
-            market_account,
-            &Pubkey::new_from_array(
-                page.executions[index]
-                    .ok_or(AdapterError::ReplayMismatch)?
-                    .order
-                    .owner()
-                    .to_bytes(),
-            ),
-            config.generation(),
-        )?;
-        if Some(persisted_owner) != owner_positions[index] {
-            return Err(AdapterError::PositionPostcondition.into());
-        }
-        let quote_after = authenticate_order_quote_escrow(
-            program_id,
-            account(accounts, base + 3)?,
-            account(accounts, base + 1)?,
-            mint,
-            token_program,
-            realm,
-        )?;
-        if quote_after.amount
-            != custodies[index]
-                .ok_or(AdapterError::ReplayMismatch)?
-                .reserved_quote_atoms()
-        {
-            return Err(AdapterError::PositionPostcondition.into());
-        }
-    }
     write_candidate(candidate_account, candidate)?;
     write_settlement_cursor(cursor_account, cursor)?;
     write_position(settlement_position_account, settlement_position)?;
@@ -2393,8 +2373,12 @@ fn process_distribute_settlement_page<const N: usize>(
         candidate.batch_sequence(),
         root.config_id(),
     )?;
-    let mut cursor =
-        authenticate_settlement_cursor::<N>(program_id, cursor_account, candidate_account)?;
+    let cursor_before = Box::new(authenticate_settlement_cursor::<N>(
+        program_id,
+        cursor_account,
+        candidate_account,
+    )?);
+    let mut cursor = *cursor_before;
     let mut settlement_position = authenticate_position::<N>(
         program_id,
         settlement_position_account,
@@ -2416,8 +2400,6 @@ fn process_distribute_settlement_page<const N: usize>(
         &Pubkey::new_from_array(candidate.submitter().to_bytes()),
     )?;
     let rent_credit_before = rent_credit.lamports();
-    let mut owner_positions = [None; MAX_EXECUTIONS_PER_PAGE_V1];
-    let mut quote_destinations = [None; MAX_EXECUTIONS_PER_PAGE_V1];
     for (index, execution) in page
         .executions
         .iter()
@@ -2430,20 +2412,20 @@ fn process_distribute_settlement_page<const N: usize>(
         let owner_position_account = account(accounts, base)?;
         let quote_destination = account(accounts, base + 1)?;
         let owner = Pubkey::new_from_array(execution.order.owner().to_bytes());
-        owner_positions[index] = Some(authenticate_position::<N>(
+        authenticate_position::<N>(
             program_id,
             owner_position_account,
             market_account,
             &owner,
             config.generation(),
-        )?);
-        quote_destinations[index] = Some(authenticate_quote_destination(
+        )?;
+        authenticate_quote_destination(
             quote_destination,
             mint,
             token_program,
             realm,
             execution.order.owner().to_bytes(),
-        )?);
+        )?;
     }
     let rent = Rent::from_account_info(rent_sysvar).map_err(|_| AdapterError::AccountData)?;
     let candidate_rent = rent.minimum_balance(
@@ -2452,11 +2434,11 @@ fn process_distribute_settlement_page<const N: usize>(
     let result = cursor
         .distribute_page(
             reference.page_id,
-            page,
+            &page,
             &mut candidate,
-            root,
-            config,
-            batch,
+            &root,
+            &config,
+            &batch,
             *settlement_position.balances(),
             settlement_quote_before.amount,
             page_account.lamports(),
@@ -2471,29 +2453,6 @@ fn process_distribute_settlement_page<const N: usize>(
         || page_close.rent_credit_lamports != page_account.lamports()
         || page_close.rent_beneficiary.to_bytes() != candidate.submitter().to_bytes()
     {
-        return Err(AdapterError::PositionPostcondition.into());
-    }
-    for index in 0..execution_count {
-        let effect = result.custody_effects[index].ok_or(AdapterError::ReplayMismatch)?;
-        let owner_position_account = account(accounts, 18 + index * 2)?;
-        let mut owner_position = owner_positions[index].ok_or(AdapterError::ReplayMismatch)?;
-        for prior in (0..index).rev() {
-            if account(accounts, 18 + prior * 2)?.key == owner_position_account.key {
-                owner_position = owner_positions[prior].ok_or(AdapterError::ReplayMismatch)?;
-                break;
-            }
-        }
-        for (outcome, amount) in effect.claim_credits_to_owner().iter().enumerate() {
-            if *amount != 0 {
-                settlement_position
-                    .debit_outcome(outcome, *amount)
-                    .and_then(|()| owner_position.credit_outcome(outcome, *amount))
-                    .map_err(|_| AdapterError::PositionAuthentication)?;
-            }
-        }
-        owner_positions[index] = Some(owner_position);
-    }
-    if settlement_position.balances() != &result.claim_inventory_after {
         return Err(AdapterError::PositionPostcondition.into());
     }
 
@@ -2528,11 +2487,50 @@ fn process_distribute_settlement_page<const N: usize>(
         cursor_bump_seed.as_slice(),
     ];
     for index in 0..execution_count {
-        let amount = result.custody_effects[index]
-            .ok_or(AdapterError::ReplayMismatch)?
-            .quote_credit_to_owner();
+        let execution = page.executions[index].ok_or(AdapterError::ReplayMismatch)?;
+        let execution_plan = cursor_before
+            .execution_plan(
+                reference.page_id,
+                &page,
+                &candidate,
+                &root,
+                &config,
+                &batch,
+                index,
+            )
+            .map_err(|_| AdapterError::MarketTransition)?;
+        let owner_position_account = account(accounts, 18 + index * 2)?;
+        let destination = account(accounts, 19 + index * 2)?;
+        let owner = Pubkey::new_from_array(execution.order.owner().to_bytes());
+        let mut owner_position = authenticate_position::<N>(
+            program_id,
+            owner_position_account,
+            market_account,
+            &owner,
+            config.generation(),
+        )?;
+        for (outcome, amount) in execution_plan
+            .custody_effect
+            .claim_credits_to_owner()
+            .iter()
+            .enumerate()
+        {
+            if *amount != 0 {
+                settlement_position
+                    .debit_outcome(outcome, *amount)
+                    .and_then(|()| owner_position.credit_outcome(outcome, *amount))
+                    .map_err(|_| AdapterError::PositionAuthentication)?;
+            }
+        }
+        let destination_before = authenticate_quote_destination(
+            destination,
+            mint,
+            token_program,
+            realm,
+            execution.order.owner().to_bytes(),
+        )?;
+        let amount = execution_plan.custody_effect.quote_credit_to_owner();
         if amount != 0 {
-            let destination = account(accounts, 19 + index * 2)?;
             let transfer = token_transfer_instruction(
                 realm.release,
                 *settlement_quote_escrow.key,
@@ -2555,18 +2553,31 @@ fn process_distribute_settlement_page<const N: usize>(
             )
             .map_err(|_| AdapterError::CollateralTransferCpi)?;
         }
+        write_position(owner_position_account, owner_position)?;
+        let destination_after = authenticate_quote_destination(
+            destination,
+            mint,
+            token_program,
+            realm,
+            execution.order.owner().to_bytes(),
+        )?;
+        if destination_after.amount
+            != destination_before
+                .amount
+                .checked_add(amount)
+                .ok_or(AdapterError::Arithmetic)?
+        {
+            return Err(AdapterError::PositionPostcondition.into());
+        }
+    }
+    if settlement_position.balances() != &result.claim_inventory_after {
+        return Err(AdapterError::PositionPostcondition.into());
     }
     let total_reward = result
         .settlement_reward_lamports
         .checked_add(page_close.cleanup_reward_lamports)
         .ok_or(AdapterError::Arithmetic)?;
     transfer_owned_lamports(candidate_account, actor, total_reward)?;
-    for index in 0..execution_count {
-        write_position(
-            account(accounts, 18 + index * 2)?,
-            owner_positions[index].ok_or(AdapterError::ReplayMismatch)?,
-        )?;
-    }
     write_candidate(candidate_account, candidate)?;
     write_settlement_cursor(cursor_account, cursor)?;
     write_position(settlement_position_account, settlement_position)?;
@@ -2589,40 +2600,6 @@ fn process_distribute_settlement_page<const N: usize>(
     )?;
     if settlement_quote_after.amount != result.quote_inventory_after {
         return Err(AdapterError::PositionPostcondition.into());
-    }
-    for index in 0..execution_count {
-        let destination_account = account(accounts, 19 + index * 2)?;
-        let destination_after = authenticate_quote_destination(
-            destination_account,
-            mint,
-            token_program,
-            realm,
-            page.executions[index]
-                .ok_or(AdapterError::ReplayMismatch)?
-                .order
-                .owner()
-                .to_bytes(),
-        )?;
-        let mut total_credit = 0u64;
-        for other in 0..execution_count {
-            if account(accounts, 19 + other * 2)?.key == destination_account.key {
-                total_credit = total_credit
-                    .checked_add(
-                        result.custody_effects[other]
-                            .ok_or(AdapterError::ReplayMismatch)?
-                            .quote_credit_to_owner(),
-                    )
-                    .ok_or(AdapterError::Arithmetic)?;
-            }
-        }
-        let expected_amount = quote_destinations[index]
-            .ok_or(AdapterError::ReplayMismatch)?
-            .amount
-            .checked_add(total_credit)
-            .ok_or(AdapterError::Arithmetic)?;
-        if destination_after.amount != expected_amount {
-            return Err(AdapterError::PositionPostcondition.into());
-        }
     }
     candidate
         .validate_capitalization(CandidateCapitalizationV1 {

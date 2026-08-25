@@ -189,6 +189,14 @@ postconditions. In collection, expected inputs derive from accumulated outputs
 minus replay net deltas; in distribution, physical custody equals remaining
 outputs; Finished is zero.
 
+Page replay has no fixed array of full receipts/effects. The whole-page method
+replays and commits the linked cursor plus one page reward atomically, returning
+only compact inventory postconditions. `execution_plan` independently replays
+the same prefix and returns one indexed receipt/custody effect at a time. The
+adapter must use the persisted page for both calls and compare the custody
+transition to that one-execution plan. This preserves exact page authority
+while keeping every no-alloc kernel and SVM frame bounded.
+
 Quote transfer uses one canonical-prefix Euclidean carry. For each strict
 order-ID execution:
 

@@ -501,15 +501,42 @@ fn split_settlement_reuses_stored_page_and_closes_on_distribution() {
     assert_eq!(begin.reward_lamports(), 1);
     let mut cursor = begin.cursor();
     round_trip_cursor(cursor);
+    let first_execution = cursor
+        .execution_plan(
+            stored_page_id,
+            &stored_page,
+            &candidate,
+            &root(),
+            &config(),
+            &batch,
+            0,
+        )
+        .unwrap();
+    assert_eq!(
+        first_execution.receipt.order_id,
+        stored_page.executions[0].unwrap().order.order_id()
+    );
+    assert_eq!(
+        cursor.execution_plan(
+            stored_page_id,
+            &stored_page,
+            &candidate,
+            &root(),
+            &config(),
+            &batch,
+            usize::from(stored_page.execution_count),
+        ),
+        Err(Error::InvalidPageCount)
+    );
     let cap = capitalization(candidate);
     let collected = cursor
         .collect_page(
             stored_page_id,
-            stored_page,
+            &stored_page,
             &mut candidate,
-            root(),
-            config(),
-            batch,
+            &root(),
+            &config(),
+            &batch,
             [0, 0],
             0,
             cap,
@@ -535,11 +562,11 @@ fn split_settlement_reuses_stored_page_and_closes_on_distribution() {
     let distributed = cursor
         .distribute_page(
             stored_page_id,
-            stored_page,
+            &stored_page,
             &mut candidate,
-            root(),
-            config(),
-            batch,
+            &root(),
+            &config(),
+            &batch,
             [1, 1],
             0,
             PAGE_RENT,
@@ -616,11 +643,11 @@ fn physical_inventory_mismatch_rolls_back() {
     assert_eq!(
         cursor.collect_page(
             stored_page_id,
-            stored_page,
+            &stored_page,
             &mut candidate,
-            root(),
-            config(),
-            batch,
+            &root(),
+            &config(),
+            &batch,
             [1, 0],
             0,
             cap,
