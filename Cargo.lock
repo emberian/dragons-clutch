@@ -315,6 +315,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-controller-proof-sbf"
+version = "0.1.0"
+dependencies = [
+ "solana-program",
+]
+
+[[package]]
 name = "dclutch-core-contract"
 version = "0.1.0"
 
