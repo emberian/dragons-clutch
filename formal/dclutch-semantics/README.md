@@ -34,14 +34,17 @@ Lean-emitted vector. It does not reimplement Direct admission. The
 current authenticated inline-ordinary reference transition and compares replay,
 claims, gross collateral, and fee custody.
 
-The general SDK/no-allocation measurement adapter executes the plan in 1,238 CU
-from a 12,016-byte ELF. A second Lean-profile-generated, exact-account proof
-target executes it in 155 CU from a 2,232-byte ELF. qedsvm v0.11.0 lifts that
-target's 164-instruction successful path into a kernel-checked Lean Hoare triple
-after a documented duplicate-wrapper-rewrite workaround. This is one path
-theorem, not whole-CFG, high-level refinement, controller, or custody evidence.
-The exact hashes and boundaries are in
-`docs/evidence/LEAN_EFFECT_PROOF_TARGET_2026_08_25.md`.
+The general SDK/no-allocation measurement adapter remains a seven-effect
+baseline: 1,238 CU from a 12,016-byte ELF. The active Lean-profile-generated
+claim executor is narrower and physical: four effects, 110 CU, and a 1,872-byte
+ELF. qedsvm v0.11.0 lifts its 119-instruction successful path into a
+kernel-checked Lean Hoare triple without proof-term rewriting. A real-SVM
+controller-PDA relay composes with that child and demonstrates runtime rollback
+across both programs after a late child refusal. This remains one path theorem
+plus runtime evidence—not whole-CFG, high-level refinement, release
+authentication, or custody evidence.
+Exact hashes and boundaries are in
+`docs/evidence/LEAN_CLAIM_EXECUTOR_2026_08_25.md`.
 
 Run:
 

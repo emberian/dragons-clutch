@@ -12,11 +12,13 @@ artifact.
 
 The general SDK/no-allocation Effect executor is 12,016 bytes, requires about
 0.086 SOL of equivalent Loader V3 capitalization, and executes its seven-effect
-fixture in 1,238 CU. The generated exact-account proof target is 2,232 bytes,
-requires about 0.018 SOL, and executes in 155 CU. Neither is a fair
-feature-for-feature controller comparison; together they show that the
-deployment unit, semantic unit, and repository crate should not be assumed to
-be the same object.
+fixture in 1,238 CU. The successor generated claim executor is 1,872 bytes,
+requires about 0.015 SOL, and executes its four-effect plan in 110 CU. An
+ordinary-SDK controller experiment composes with it in 3,810 CU; the two clean
+optimized ELFs total 16,184 bytes and about 0.117 SOL. This is still not a fair
+feature-for-feature comparison with the complete protocol because custody,
+signed admission, and registries are absent. It does show that deployment,
+semantic, and repository units need not be the same object.
 
 ## Proposed narrow waist
 
@@ -30,12 +32,11 @@ Product + signed intent + chain frame
       - sign CPI with its controller PDA
                 │ canonical Effect IR
                 ▼
-          effect microkernel
+          claim microkernel
       - authenticate controller PDA signer
       - hostile-decode fixed data
-      - apply program-owned state atomically
-      - issue typed custody effects only
-                │ typed custody plan
+      - apply replay/claim state atomically
+                │ independently derived custody plan
                 ▼
           custody micro-adapter
       - authenticate executor PDA signer
@@ -77,7 +78,6 @@ Lean owns:
 
 Rust or another SBF frontend may own only bounded byte decoding, account-memory
 adaptation, and syscalls. It must not become a second authoritative economic
-implementation. Generated ABI structures and clients should come from the same
 Lean definitions or be checked against Lean-emitted canonical vectors.
 
 ## Artifact-level proof route
@@ -103,11 +103,12 @@ dependency of this experiment.
 The first SDK/Rust exercise was informative but incomplete. qedsvm executed the
 exact 12,016-byte ELF and captured its successful path, then refused to lift its
 overlapping mixed-width and copied memory footprints under the v0.11.0 H8 alias
-model. The successor experiment generated a purpose-built exact-account,
-alias-simple target. qedsvm lifts its 164-instruction successful path, and Lean
-checks the emitted machine theorem after removing two duplicate rewrite calls
-from an optional convenience wrapper. This closes one artifact path, not the
-whole CFG or the high-level refinement chain.
+model. The first successor experiment generated a purpose-built exact-account,
+alias-simple seven-effect target. The active successor now specializes the
+physical claim projection: 80-byte state, 72-byte plan, and no collateral
+integers. qedsvm lifts its 119-instruction successful path, and Lean checks the
+whitespace-normalized emitted theorem without proof-term rewrites. This closes
+one artifact path, not the whole CFG or the high-level refinement chain.
 
 The desired theorem chain is:
 
@@ -138,9 +139,10 @@ fixture execution, or qedsvm execution mode is never described as verification.
 - One successful Direct fixture is not property-space differential evidence.
   Generate admitted and hostile frames across quantities, prices, nonces,
   balances, fees, and arithmetic boundaries, then compare both implementations.
-- The isolated projection co-locates balances that are physically distinct SPL
-  accounts today. A successor must refine those fields to real custody effects,
-  not silently replace token ownership with an internal ledger.
+- The active claim projection no longer co-locates SPL balances: Lean derives a
+  separate 40-byte two-transfer custody plan. That plan still must execute
+  against real Realm-selected token accounts and replay-root delegate authority
+  before the physical refinement is complete.
 - Multiple programs reduce per-program rent and proof surface but add CPI CU,
   more release identities, authority PDAs, and aggregate program rent. Measure
   the complete partition before succession.
@@ -164,5 +166,7 @@ No current Rust route is deleted until one complete vertical slice has:
 10. a checked release manifest binding source, toolchains, ELFs, program IDs,
     ProgramData identities, and theorem digests.
 
-The first slice has passed only portions of gates 1–3, 6, 8, and 9. It has not
-yet passed a complete succession gate set.
+The claim slice has passed portions of gates 1–4, 6, 8, and 9. The PDA authority
+membrane is real-SVM tested, but gate 4 remains open because signed-intent and
+release authentication are absent. No complete succession gate set has passed
+until custody is real and the theorem chain is composed.

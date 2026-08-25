@@ -15,10 +15,11 @@ For an `Admissible` inline ordinary Direct frame, Lean 4 checks that:
 - a refused frame exposes the unchanged pre-state.
 
 Lean also checks the general encoded length equations for V1 headers, effect
-records, and plans, plus the exact 120-byte hexadecimal encoding of the Direct
-example. It also checks the concrete account offsets, privilege words, state
-tag, instruction length, and effect tags emitted for the exact-account SBF proof
-profile. That concrete check assumes the named loader-v1 serialization formula.
+records, and plans, plus the exact 120-byte semantic-plan and 72-byte physical
+claim-plan encodings of the Direct example. It checks the concrete account
+offsets, privilege words, claim-state tag, instruction length, and four effect
+tags emitted for the exact-account claim executor. That concrete check assumes
+the named loader-v1 serialization formula.
 Lean also checks that the multiprogram physical plan's four replay/claim effects
 and two indivisible custody transfers execute to projections that join to the
 same Direct post-state, and that the custody projection conserves collateral.
@@ -32,8 +33,10 @@ cannot change a resting order's final cumulative fee in the semantic model.
 
 - generated safe-Rust and TypeScript clients;
 - Ed25519 instruction authenticity;
-- Solana account ownership, signer/writable flags, PDA derivation, CPI, sysvars,
-  Token/Token-2022 semantics, rent, and transaction rollback;
+- a proof of Solana account ownership, signer/writable flags, PDA derivation,
+  CPI, sysvars, Token/Token-2022 semantics, rent, and transaction rollback
+  (the exact claim ELF and controller-PDA relay now provide adversarial
+  real-SVM evidence for the first account/PDA/CPI/rollback slice only);
 - a machine-checked refinement from the Lean effect interpreter to the Rust
   microkernel (`dclutch-effect-kernel` currently supplies cross-language vector,
   round-trip, execution, hostile-parser, late-rollback, and one concrete
@@ -44,11 +47,11 @@ cannot change a resting order's final cumulative fee in the semantic model.
   abstract `atomicCommit` behavior (transaction rollback is still a separately
   tested runtime property);
 - whole-CFG artifact coverage (qedsvm v0.11.0 emits and Lean checks one
-  successful-path Hoare triple for the generated exact-account target; the
-  general Rust/SDK executor remains outside its alias model);
+  successful-path Hoare triple for the generated four-effect claim
+  target; the general Rust/SDK executor remains outside its alias model);
 - compute-unit, stack, ELF-size, and rent measurements for a complete
-  controller-plus-custody successor (the isolated executor measurements are
-  recorded separately and do not close that boundary);
+  controller-plus-custody successor (claim plus experimental controller are now
+  measured together; custody and release-authentication costs remain absent);
 - all Direct routes other than inline ordinary execution; and
 - all other protocol families.
 
