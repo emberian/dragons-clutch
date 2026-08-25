@@ -58,9 +58,7 @@ use solana_system_interface::instruction::{allocate, assign, transfer};
 
 use crate::{
     AdapterError,
-    found_market::{
-        FoundingPlan, execute_preflighted_found_market_and_fund, preflight_found_market_and_fund,
-    },
+    found_market::{execute_preflighted_found_market_and_fund, preflight_found_market_and_fund},
     records::{
         CAPACITY_PROFILE_SCHEMA_RELEASE_ID_V1, SERIES_AGGREGATE_SCHEMA_RELEASE_ID_V1,
         SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1, SERIES_DERIVED_SCHEMA_RELEASE_ID_V1,
@@ -595,11 +593,23 @@ fn authenticate_create(
 
 #[derive(Clone, Copy)]
 struct InstantiatePlan {
-    semantic: dclutch_series_contract::InstantiationPlanV1,
+    effects: InstantiateEffects,
+    ticket_bump: u8,
+}
+
+#[derive(Clone, Copy)]
+struct InstantiateEffects {
+    root_after: SeriesRootV1,
+    escrow_lamports_after: u64,
+    ticket: OccurrenceTicketV1,
+    ticket_lamports_after: u64,
+}
+
+#[derive(Clone, Copy)]
+struct InstantiateBefore {
     root_lamports_before: u64,
     root_data_before: [u8; SERIES_ROOT_BYTES_V1],
     escrow_data_before: [u8; SERIES_ESCROW_BYTES_V1],
-    ticket_bump: u8,
 }
 
 #[inline(never)]
@@ -610,6 +620,11 @@ fn process_instantiate(
 ) -> Result<(), ProgramError> {
     let frame = InstantiateFrame::parse(accounts)?;
     let plan = authenticate_instantiate(program_id, &frame, instruction)?;
+    let before = InstantiateBefore {
+        root_lamports_before: frame.root.lamports(),
+        root_data_before: copy_data::<SERIES_ROOT_BYTES_V1>(frame.root)?,
+        escrow_data_before: copy_data::<SERIES_ESCROW_BYTES_V1>(frame.escrow)?,
+    };
     let root_key = frame.root.key.to_bytes();
     let index = instruction.expected_index.to_le_bytes();
     let bump = [plan.ticket_bump];
@@ -635,12 +650,12 @@ fn process_instantiate(
             .ticket
             .try_borrow_mut_lamports()
             .map_err(|_| AdapterError::SeriesTransition)?;
-        **escrow_lamports = plan.semantic.escrow_lamports_after;
-        **ticket_lamports = plan.semantic.ticket_lamports_after;
+        **escrow_lamports = plan.effects.escrow_lamports_after;
+        **ticket_lamports = plan.effects.ticket_lamports_after;
     }
-    persist_exact(frame.root, &plan.semantic.root_after.to_bytes())?;
-    persist_exact(frame.ticket, &plan.semantic.ticket.to_bytes())?;
-    require_instantiate_post(program_id, &frame, plan)
+    persist_exact(frame.root, &plan.effects.root_after.to_bytes())?;
+    persist_exact(frame.ticket, &plan.effects.ticket.to_bytes())?;
+    require_instantiate_post(program_id, &frame, plan, before)
 }
 
 #[inline(never)]
@@ -734,21 +749,19 @@ fn authenticate_instantiate(
     if frame.ticket.key != &expected_ticket || instruction.ticket_bump != ticket_bump {
         return Err(AdapterError::SeriesAuthentication.into());
     }
-    let semantic = plan_instantiate_next_v1(
-        root,
-        root_address,
-        escrow,
-        root.recipe_id,
+    let effects = plan_instantiate_effects(
+        &root,
+        &root_address,
+        &escrow,
         &recipe,
-        root.aggregate_id,
         &aggregate,
-        identity(derived_digest)?,
+        &identity(derived_digest)?,
         &derived,
-        source_material,
-        capability_manifest,
-        identity(capitalization_digest)?,
+        &source_material,
+        &capability_manifest,
+        &identity(capitalization_digest)?,
         &capitalization,
-        instruction,
+        &instruction,
         Clock::get()
             .map_err(|_| AdapterError::SeriesAuthentication)?
             .unix_timestamp,
@@ -756,28 +769,85 @@ fn authenticate_instantiate(
         rent.minimum_balance(OCCURRENCE_TICKET_BYTES_V1),
         frame.escrow.lamports(),
         vacancy(frame.ticket)?,
-    )
-    .map_err(map_transition_error)?;
+    )?;
 
-    let root_data_before = copy_data::<SERIES_ROOT_BYTES_V1>(frame.root)?;
-    let escrow_data_before = copy_data::<SERIES_ESCROW_BYTES_V1>(frame.escrow)?;
     preflight_mutable(&[frame.root, frame.escrow, frame.ticket])?;
     Ok(InstantiatePlan {
-        semantic,
-        root_lamports_before: frame.root.lamports(),
-        root_data_before,
-        escrow_data_before,
+        effects,
         ticket_bump,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn plan_instantiate_effects(
+    root: &SeriesRootV1,
+    root_address: &IdentityV1,
+    escrow: &SeriesEscrowV1,
+    recipe: &SeriesRecipeV1,
+    aggregate: &CapitalizationAggregateV1,
+    derived_occurrence_id: &IdentityV1,
+    derived: &DerivedOccurrenceV1,
+    source_material: &OccurrenceSourceMaterialV1,
+    capability_manifest: &OccurrenceCapabilityManifestV1,
+    capitalization_id: &IdentityV1,
+    capitalization: &OccurrenceCapitalizationV1,
+    instruction: &InstantiateNextV1,
+    authenticated_clock_time: i64,
+    authenticated_escrow_rent_minimum: u64,
+    authenticated_ticket_rent_minimum: u64,
+    observed_escrow_lamports: u64,
+    ticket_before: VacantAccountFactsV1,
+) -> Result<InstantiateEffects, ProgramError> {
+    let semantic = plan_instantiate_next_v1(
+        *root,
+        *root_address,
+        *escrow,
+        root.recipe_id,
+        recipe,
+        root.aggregate_id,
+        aggregate,
+        *derived_occurrence_id,
+        derived,
+        *source_material,
+        *capability_manifest,
+        *capitalization_id,
+        capitalization,
+        *instruction,
+        authenticated_clock_time,
+        authenticated_escrow_rent_minimum,
+        authenticated_ticket_rent_minimum,
+        observed_escrow_lamports,
+        ticket_before,
+    )
+    .map_err(map_transition_error)?;
+    Ok(InstantiateEffects {
+        root_after: semantic.root_after,
+        escrow_lamports_after: semantic.escrow_lamports_after,
+        ticket: semantic.ticket,
+        ticket_lamports_after: semantic.ticket_lamports_after,
     })
 }
 
 #[derive(Clone, Copy)]
 struct ConsumePlan {
-    semantic: dclutch_series_contract::TicketConsumptionPlanV1,
-    found: FoundingPlan,
+    effects: ConsumeEffects,
+    found_instruction: FoundMarketAndFundV1,
+    found_authority: Pubkey,
     actor_lamports_before: u64,
     root_lamports_before: u64,
     rent_credit: RentCreditV1,
+}
+
+#[derive(Clone, Copy)]
+struct ConsumeEffects {
+    recipe_id: IdentityV1,
+    root_after: SeriesRootV1,
+    found_obligations: dclutch_series_contract::FoundCompositionObligationsV1,
+    market_principal: u64,
+    ticket_lamports_before: u64,
+    ticket_lamports_after: u64,
+    rent_credit_after: u64,
 }
 
 #[inline(never)]
@@ -788,6 +858,16 @@ fn process_consume(
 ) -> Result<(), ProgramError> {
     let frame = ConsumeFrame::parse(accounts)?;
     let plan = authenticate_consume(program_id, &frame, instruction)?;
+    let found = preflight_found_market_and_fund(
+        program_id,
+        frame.found_accounts,
+        plan.found_instruction,
+        plan.found_authority,
+        plan.effects.market_principal,
+    )?;
+    if found.required_payer_debit()? != plan.effects.market_principal {
+        return Err(AdapterError::SeriesAuthentication.into());
+    }
 
     // The actor is only a transient System payer. This exact credit is removed
     // by the authenticated Found plan in the same instruction, and the actor
@@ -795,18 +875,18 @@ fn process_consume(
     move_lamports(
         frame.ticket,
         frame.actor,
-        plan.semantic.market_principal,
+        plan.effects.market_principal,
         AdapterError::SeriesTransition,
     )?;
-    execute_preflighted_found_market_and_fund(program_id, frame.found_accounts, plan.found)?;
+    execute_preflighted_found_market_and_fund(program_id, frame.found_accounts, found)?;
     if frame.actor.lamports() != plan.actor_lamports_before {
         return Err(AdapterError::SeriesPostcondition.into());
     }
 
     let ticket_refund = plan
-        .semantic
+        .effects
         .ticket_lamports_before
-        .checked_sub(plan.semantic.market_principal)
+        .checked_sub(plan.effects.market_principal)
         .ok_or(AdapterError::Arithmetic)?;
     move_lamports(
         frame.ticket,
@@ -814,7 +894,7 @@ fn process_consume(
         ticket_refund,
         AdapterError::SeriesTransition,
     )?;
-    persist_exact(frame.root, &plan.semantic.root_after.to_bytes())?;
+    persist_exact(frame.root, &plan.effects.root_after.to_bytes())?;
     frame
         .ticket
         .resize(0)
@@ -829,6 +909,42 @@ fn authenticate_consume(
     frame: &ConsumeFrame<'_, '_>,
     instruction: ConsumeTicketV1,
 ) -> Result<ConsumePlan, ProgramError> {
+    let effects = authenticate_consume_semantics(program_id, frame, instruction)?;
+    let found_authority =
+        authenticate_consume_refund_authority(program_id, frame, &effects.found_obligations)?;
+    let found_instruction = authenticate_consume_found_instruction(
+        program_id,
+        frame,
+        effects.recipe_id,
+        &effects.found_obligations,
+    )?;
+    let rent = authenticated_rent(frame.rent_sysvar)?;
+    let minimum_credit = rent.minimum_balance(dclutch_rent_contract::RENT_CREDIT_BYTES_V1);
+    let rent_credit = authenticate_rent_credit(
+        program_id,
+        frame.rent_credit,
+        refund_authority(&found_authority)?,
+        Some(minimum_credit),
+    )?;
+
+    // No fallible mutable borrow may first appear after Found has executed.
+    preflight_mutable(&[frame.root, frame.ticket, frame.rent_credit])?;
+    Ok(ConsumePlan {
+        effects,
+        found_instruction,
+        found_authority,
+        actor_lamports_before: frame.actor.lamports(),
+        root_lamports_before: frame.root.lamports(),
+        rent_credit,
+    })
+}
+
+#[inline(never)]
+fn authenticate_consume_semantics(
+    program_id: &Pubkey,
+    frame: &ConsumeFrame<'_, '_>,
+    instruction: ConsumeTicketV1,
+) -> Result<ConsumeEffects, ProgramError> {
     let rent = authenticated_rent(frame.rent_sysvar)?;
     let root = decode_program_record::<SERIES_ROOT_BYTES_V1, SeriesRootV1>(
         program_id,
@@ -904,58 +1020,107 @@ fn authenticate_consume(
     )?;
     authenticate_ticket_pda(program_id, frame.ticket, frame.root.key, ticket)?;
 
-    let authority = Pubkey::new_from_array(root.refund_authority.to_bytes());
-    let minimum_credit = rent.minimum_balance(dclutch_rent_contract::RENT_CREDIT_BYTES_V1);
-    let rent_credit = authenticate_rent_credit(
-        program_id,
-        frame.rent_credit,
-        refund_authority(&authority)?,
-        Some(minimum_credit),
-    )?;
-    let semantic = plan_consume_ticket_v1(
-        root,
-        identity(frame.root.key.to_bytes())?,
-        root.recipe_id,
+    let effects = plan_consume_effects(
+        &root,
+        &identity(frame.root.key.to_bytes())?,
         &recipe,
-        root.aggregate_id,
         &aggregate,
-        identity(derived_digest)?,
+        &identity(derived_digest)?,
         &derived,
-        source_material,
-        capability_manifest,
-        identity(capitalization_digest)?,
+        &source_material,
+        &capability_manifest,
+        &identity(capitalization_digest)?,
         &capitalization,
-        ticket,
-        instruction,
+        &ticket,
+        &instruction,
         frame.ticket.lamports(),
         frame.rent_credit.lamports(),
+    )?;
+    Ok(effects)
+}
+
+#[inline(never)]
+fn authenticate_consume_refund_authority(
+    program_id: &Pubkey,
+    frame: &ConsumeFrame<'_, '_>,
+    obligations: &dclutch_series_contract::FoundCompositionObligationsV1,
+) -> Result<Pubkey, ProgramError> {
+    let root = decode_program_record::<SERIES_ROOT_BYTES_V1, SeriesRootV1>(
+        program_id,
+        frame.root,
+        SeriesRootV1::decode,
+    )?;
+    authenticate_root_pda(program_id, frame.root, root)?;
+    let expected = Pubkey::new_from_array(root.refund_authority.to_bytes());
+    let found = Pubkey::new_from_array(obligations.refund_authority.to_bytes());
+    if found != expected {
+        return Err(AdapterError::SeriesAuthentication.into());
+    }
+    Ok(found)
+}
+
+#[inline(never)]
+fn authenticate_consume_found_instruction(
+    program_id: &Pubkey,
+    frame: &ConsumeFrame<'_, '_>,
+    expected_recipe_id: IdentityV1,
+    obligations: &dclutch_series_contract::FoundCompositionObligationsV1,
+) -> Result<FoundMarketAndFundV1, ProgramError> {
+    let recipe = authenticate_recipe(
+        program_id,
+        frame.recipe,
+        frame.recipe_cursor,
+        frame.rent_sysvar,
+        expected_recipe_id.to_bytes(),
+    )?;
+    synthesize_found_instruction(obligations, &recipe)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn plan_consume_effects(
+    root: &SeriesRootV1,
+    root_address: &IdentityV1,
+    recipe: &SeriesRecipeV1,
+    aggregate: &CapitalizationAggregateV1,
+    derived_occurrence_id: &IdentityV1,
+    derived: &DerivedOccurrenceV1,
+    source_material: &OccurrenceSourceMaterialV1,
+    capability_manifest: &OccurrenceCapabilityManifestV1,
+    capitalization_id: &IdentityV1,
+    capitalization: &OccurrenceCapitalizationV1,
+    ticket: &OccurrenceTicketV1,
+    instruction: &ConsumeTicketV1,
+    observed_ticket_lamports: u64,
+    rent_credit_before: u64,
+) -> Result<ConsumeEffects, ProgramError> {
+    let semantic = plan_consume_ticket_v1(
+        *root,
+        *root_address,
+        root.recipe_id,
+        recipe,
+        root.aggregate_id,
+        aggregate,
+        *derived_occurrence_id,
+        derived,
+        *source_material,
+        *capability_manifest,
+        *capitalization_id,
+        capitalization,
+        *ticket,
+        *instruction,
+        observed_ticket_lamports,
+        rent_credit_before,
     )
     .map_err(map_transition_error)?;
-    let found_authority =
-        Pubkey::new_from_array(semantic.found_obligations.refund_authority.to_bytes());
-    if found_authority != authority {
-        return Err(AdapterError::SeriesAuthentication.into());
-    }
-    let found_instruction = synthesize_found_instruction(&semantic.found_obligations, &recipe)?;
-    let found = preflight_found_market_and_fund(
-        program_id,
-        frame.found_accounts,
-        found_instruction,
-        found_authority,
-        semantic.market_principal,
-    )?;
-    if found.required_payer_debit()? != semantic.market_principal {
-        return Err(AdapterError::SeriesAuthentication.into());
-    }
-
-    // No fallible mutable borrow may first appear after Found has executed.
-    preflight_mutable(&[frame.root, frame.ticket, frame.rent_credit])?;
-    Ok(ConsumePlan {
-        semantic,
-        found,
-        actor_lamports_before: frame.actor.lamports(),
-        root_lamports_before: frame.root.lamports(),
-        rent_credit,
+    Ok(ConsumeEffects {
+        recipe_id: root.recipe_id,
+        root_after: semantic.root_after,
+        found_obligations: semantic.found_obligations,
+        market_principal: semantic.market_principal,
+        ticket_lamports_before: semantic.ticket_lamports_before,
+        ticket_lamports_after: semantic.ticket_lamports_after,
+        rent_credit_after: semantic.rent_credit_after,
     })
 }
 
@@ -1020,15 +1185,15 @@ fn require_consume_post(
 ) -> Result<(), ProgramError> {
     if frame.actor.lamports() != plan.actor_lamports_before
         || frame.root.lamports() != plan.root_lamports_before
-        || frame.ticket.lamports() != plan.semantic.ticket_lamports_after
+        || frame.ticket.lamports() != plan.effects.ticket_lamports_after
         || frame.ticket.owner != &system_program::ID
         || !frame.ticket.data_is_empty()
-        || frame.rent_credit.lamports() != plan.semantic.rent_credit_after
+        || frame.rent_credit.lamports() != plan.effects.rent_credit_after
         || decode_program_record::<SERIES_ROOT_BYTES_V1, SeriesRootV1>(
             program_id,
             frame.root,
             SeriesRootV1::decode,
-        )? != plan.semantic.root_after
+        )? != plan.effects.root_after
     {
         return Err(AdapterError::SeriesPostcondition.into());
     }
@@ -1454,16 +1619,17 @@ fn require_instantiate_post(
     program_id: &Pubkey,
     frame: &InstantiateFrame<'_, '_>,
     plan: InstantiatePlan,
+    before: InstantiateBefore,
 ) -> Result<(), ProgramError> {
-    if frame.root.lamports() != plan.root_lamports_before
-        || frame.escrow.lamports() != plan.semantic.escrow_lamports_after
-        || frame.ticket.lamports() != plan.semantic.ticket_lamports_after
+    if frame.root.lamports() != before.root_lamports_before
+        || frame.escrow.lamports() != plan.effects.escrow_lamports_after
+        || frame.ticket.lamports() != plan.effects.ticket_lamports_after
         || frame.ticket.owner != program_id
         || decode_program_record::<SERIES_ROOT_BYTES_V1, SeriesRootV1>(
             program_id,
             frame.root,
             SeriesRootV1::decode,
-        )? != plan.semantic.root_after
+        )? != plan.effects.root_after
         || decode_program_record::<
             OCCURRENCE_TICKET_BYTES_V1,
             dclutch_series_contract::OccurrenceTicketV1,
@@ -1471,9 +1637,9 @@ fn require_instantiate_post(
             program_id,
             frame.ticket,
             dclutch_series_contract::OccurrenceTicketV1::decode,
-        )? != plan.semantic.ticket
-        || copy_data::<SERIES_ESCROW_BYTES_V1>(frame.escrow)? != plan.escrow_data_before
-        || plan.root_data_before == plan.semantic.root_after.to_bytes()
+        )? != plan.effects.ticket
+        || copy_data::<SERIES_ESCROW_BYTES_V1>(frame.escrow)? != before.escrow_data_before
+        || before.root_data_before == plan.effects.root_after.to_bytes()
     {
         return Err(AdapterError::SeriesPostcondition.into());
     }
