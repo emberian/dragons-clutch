@@ -217,13 +217,7 @@ fn activation_cache(
     let release_set_id = hash(&release_set.to_bytes()).to_bytes();
     let content = ContentId::new(release_set_id).expect("release-set ID");
     let mut bytes = vec![0; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
-    initialize_activation_cache_v1(
-        &mut bytes,
-        identity(REGISTRY_PROGRAM_ID),
-        content,
-        &release_set,
-    )
-    .expect("initialize cache");
+    initialize_activation_cache_v1(&mut bytes, content).expect("initialize cache");
     for (role, release) in [
         (ExecutionRoleV1::Core, registry),
         (ExecutionRoleV1::Claims, caller),
@@ -233,7 +227,6 @@ fn activation_cache(
     ] {
         activate_execution_role_into_v1(
             &mut bytes,
-            identity(REGISTRY_PROGRAM_ID),
             content,
             &release_set,
             role,

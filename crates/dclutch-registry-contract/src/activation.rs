@@ -3,7 +3,6 @@
 use dclutch_core_contract::ContentId;
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
-    ProgramIdentityV1,
 };
 
 use crate::{
@@ -15,7 +14,7 @@ use crate::{
 pub const ACTIVATED_ROLE_BYTES_V1: usize = IDENTITY_BYTES + ARTIFACT_RELEASE_BYTES_V1;
 /// First PDA seed for the sole Registry-owned activation cache.
 ///
-/// The adapter must derive the cache under the selected Registry/Core program
+/// The adapter must derive the cache under the Registry program
 /// with exactly `[ACTIVATION_PDA_DOMAIN_V1, execution_release_set_id]`, in that
 /// order, and no caller-selected seed.
 pub const ACTIVATION_PDA_DOMAIN_V1: &[u8; 29] = b"dclutch:release-activation:v1";
@@ -313,21 +312,18 @@ impl ActivatedExecutionReleaseSetV1 {
 /// [`activate_execution_role_into_v1`] once for every role, in canonical role
 /// order, and finish with [`ActivatedExecutionReleaseSetViewV1::decode`]. A
 /// composing SBF adapter may write directly into a newly created PDA because a
-/// later refusal rolls the entire transaction back.
+/// later refusal rolls the entire transaction back. Registry identity is an
+/// account-ownership boundary, not a Core-selection input; the finalized
+/// release set binds Core when that role is activated.
 pub fn initialize_activation_cache_v1(
     output: &mut [u8],
-    current_core_program: ProgramIdentityV1,
     finalized_release_set_id: ContentId,
-    release_set: &ExecutionReleaseSetV1,
 ) -> Result<()> {
     if output.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1 {
         return Err(Error::InvalidLength);
     }
     if output.iter().any(|byte| *byte != 0) {
         return Err(Error::NonCanonicalReservedBytes);
-    }
-    if release_set.binding(ExecutionRoleV1::Core).program() != current_core_program {
-        return Err(Error::CoreProgramMismatch);
     }
     copy_infallible(output, 0, &ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1);
     put_u16(
@@ -354,7 +350,6 @@ pub fn initialize_activation_cache_v1(
 /// Conflicting rewrites and conflicting bytes for any aliased role refuse.
 pub fn activate_execution_role_into_v1(
     output: &mut [u8],
-    current_core_program: ProgramIdentityV1,
     finalized_release_set_id: ContentId,
     release_set: &ExecutionReleaseSetV1,
     role: ExecutionRoleV1,
@@ -365,9 +360,6 @@ pub fn activate_execution_role_into_v1(
         != finalized_release_set_id.to_bytes()
     {
         return Err(Error::ReleaseSetSelectionMismatch);
-    }
-    if release_set.binding(ExecutionRoleV1::Core).program() != current_core_program {
-        return Err(Error::CoreProgramMismatch);
     }
     let expected = release_set.binding(role);
     authenticate_role(expected, input)?;
@@ -406,16 +398,14 @@ pub fn activate_execution_role_into_v1(
 /// the sole Registry-owned activation cache.
 ///
 /// `finalized_release_set_id` must be the digest of the exact finalized
-/// `release_set` bytes, established by the composing record adapter.
+/// `release_set` bytes, established by the composing record adapter. The Core
+/// binding is authenticated exactly like every other role and need not name
+/// the Registry program that owns the resulting cache.
 pub fn activate_execution_release_set_v1(
-    current_core_program: ProgramIdentityV1,
     finalized_release_set_id: ContentId,
     release_set: &ExecutionReleaseSetV1,
     inputs: &ExecutionReleaseActivationInputsV1,
 ) -> Result<ActivatedExecutionReleaseSetV1> {
-    if release_set.binding(ExecutionRoleV1::Core).program() != current_core_program {
-        return Err(Error::CoreProgramMismatch);
-    }
     for (left_index, left) in ALL_ROLES.into_iter().enumerate() {
         let expected = release_set.binding(left);
         let input = inputs.input(left);

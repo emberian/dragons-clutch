@@ -585,13 +585,9 @@ impl Fixture {
             activation_input(resolution_release),
             activation_input(resolution_release),
         );
-        let activated = activate_execution_release_set_v1(
-            program_identity(REGISTRY_PROGRAM_ID),
-            release_set_id,
-            &release_set,
-            &activation_inputs,
-        )
-        .expect("canonical activation cache");
+        let activated =
+            activate_execution_release_set_v1(release_set_id, &release_set, &activation_inputs)
+                .expect("canonical activation cache");
         let activation = Pubkey::find_program_address(
             &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_bytes()],
             &REGISTRY_PROGRAM_ID,

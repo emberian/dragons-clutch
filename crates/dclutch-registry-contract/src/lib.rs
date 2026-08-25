@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-//! SDK-free successor Registry/Core admission semantics.
+//! SDK-free successor Registry admission semantics.
 //!
 //! The authority chain is singular:
 //! `Market.capability_manifest_id` selects one execution-authority manifest;
@@ -23,7 +23,7 @@ pub use authority::*;
 /// Bytes in every identity and digest coordinate.
 pub const IDENTITY_BYTES: usize = 32;
 
-/// Stable refusal from Registry/Core semantic admission.
+/// Stable refusal from Registry semantic admission.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
     /// A byte input did not have its one exact canonical width.
@@ -46,8 +46,6 @@ pub enum Error {
     MarketAuthorityManifestMismatch,
     /// The authority manifest selected a different release-set identity.
     ReleaseSetSelectionMismatch,
-    /// The executing Registry/Core program was not the selected Core program.
-    CoreProgramMismatch,
     /// A role supplied a program other than its release-set selection.
     RoleProgramMismatch,
     /// A role supplied a different artifact-release content identity.
@@ -80,7 +78,7 @@ impl From<dclutch_release_set_contract::Error> for Error {
     }
 }
 
-/// Result alias for Registry/Core admission.
+/// Result alias for Registry admission.
 pub type Result<T> = core::result::Result<T, Error>;
 
 pub(crate) fn require_nonzero(value: &[u8; IDENTITY_BYTES]) -> Result<()> {

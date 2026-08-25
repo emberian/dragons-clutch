@@ -244,13 +244,8 @@ impl Fixture {
             core.activation,
             core.activation,
         );
-        let activation = activate_execution_release_set_v1(
-            ProgramIdentityV1::new(registry.to_bytes()).expect("Core program"),
-            release_set_id,
-            &release_set,
-            &inputs,
-        )
-        .expect("activation");
+        let activation = activate_execution_release_set_v1(release_set_id, &release_set, &inputs)
+            .expect("activation");
         let cache_key = Pubkey::find_program_address(
             &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_bytes()],
             &registry,

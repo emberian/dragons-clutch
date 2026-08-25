@@ -28,7 +28,7 @@ use dclutch_registry_svm::{
 };
 use dclutch_release_set_contract::{
     EXECUTION_RELEASE_SET_BYTES_V1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
-    ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
+    ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
 };
 use solana_program::{
     account_info::{AccountInfo, next_account_info},
@@ -139,8 +139,6 @@ fn process_activate(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> Progra
     )?;
     let created =
         ensure_activation_cache_account(program_id, payer, cache, system, &rent, release_set_id)?;
-    let core_program =
-        ProgramIdentityV1::new(program_id.to_bytes()).map_err(|_| RegistryError::Release)?;
     let frames = [core, claims, trading, resolution, custody];
     if !created {
         let existing = cache.try_borrow_data().map_err(|_| RegistryError::Borrow)?;
@@ -151,13 +149,12 @@ fn process_activate(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> Progra
         .try_borrow_mut_data()
         .map_err(|_| RegistryError::Borrow)?;
     if created {
-        initialize_activation_cache_v1(&mut output, core_program, release_set_id, &release_set)
+        initialize_activation_cache_v1(&mut output, release_set_id)
             .map_err(|_| RegistryError::ActivationCache)?;
     }
     activate_and_write_role(
         program_id,
         &mut output,
-        core_program,
         release_set_id,
         &release_set,
         &rent,
@@ -167,7 +164,6 @@ fn process_activate(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> Progra
     activate_and_write_role(
         program_id,
         &mut output,
-        core_program,
         release_set_id,
         &release_set,
         &rent,
@@ -177,7 +173,6 @@ fn process_activate(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> Progra
     activate_and_write_role(
         program_id,
         &mut output,
-        core_program,
         release_set_id,
         &release_set,
         &rent,
@@ -187,7 +182,6 @@ fn process_activate(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> Progra
     activate_and_write_role(
         program_id,
         &mut output,
-        core_program,
         release_set_id,
         &release_set,
         &rent,
@@ -197,7 +191,6 @@ fn process_activate(program_id: &Pubkey, accounts: &[AccountInfo<'_>]) -> Progra
     activate_and_write_role(
         program_id,
         &mut output,
-        core_program,
         release_set_id,
         &release_set,
         &rent,
@@ -419,7 +412,6 @@ fn authenticate_finalized_record(
 fn activate_and_write_role(
     program_id: &Pubkey,
     output: &mut [u8],
-    core_program: ProgramIdentityV1,
     release_set_id: ContentId,
     release_set: &ExecutionReleaseSetV1,
     rent: &Rent,
@@ -427,15 +419,8 @@ fn activate_and_write_role(
     frame: RoleFrame<'_, '_>,
 ) -> ProgramResult {
     let input = authenticate_artifact_role(program_id, release_set.binding(role), rent, frame)?;
-    activate_execution_role_into_v1(
-        output,
-        core_program,
-        release_set_id,
-        release_set,
-        role,
-        &input,
-    )
-    .map_err(|_| RegistryError::Release.into())
+    activate_execution_role_into_v1(output, release_set_id, release_set, role, &input)
+        .map_err(|_| RegistryError::Release.into())
 }
 
 fn authenticate_cache_identity(
@@ -457,10 +442,7 @@ fn authenticate_cache_identity(
         program_id,
     )
     .0;
-    let core = activated
-        .role(ExecutionRoleV1::Core)
-        .map_err(|_| RegistryError::ActivationCache)?;
-    if cache.key != &expected || core.release().program().to_bytes() != program_id.to_bytes() {
+    if cache.key != &expected {
         return Err(RegistryError::ActivationCache.into());
     }
     Ok(())

@@ -10,13 +10,13 @@ use crate::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1,
     ACTIVATED_EXECUTION_RELEASE_SET_PROFILE_V1, ACTIVATED_EXECUTION_RELEASE_SET_SCHEMA_VERSION_V1,
     ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_MAGIC_V1,
-    ActivatedExecutionReleaseSetV1, ActivatedExecutionReleaseSetViewV1,
-    ArtifactActivationInputV1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
-    DeploymentObservationV1, EXECUTION_AUTHORITY_MANIFEST_BYTES_V1,
-    EXECUTION_AUTHORITY_MANIFEST_MAGIC_V1, Error, ExecutionAuthorityManifestV1,
-    ExecutionReleaseActivationInputsV1, activate_execution_release_set_v1,
-    activate_execution_role_into_v1, authenticate_market_execution_v1,
-    authenticate_market_execution_view_v1, initialize_activation_cache_v1,
+    ActivatedExecutionReleaseSetV1, ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1,
+    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
+    EXECUTION_AUTHORITY_MANIFEST_BYTES_V1, EXECUTION_AUTHORITY_MANIFEST_MAGIC_V1, Error,
+    ExecutionAuthorityManifestV1, ExecutionReleaseActivationInputsV1,
+    activate_execution_release_set_v1, activate_execution_role_into_v1,
+    authenticate_market_execution_v1, authenticate_market_execution_view_v1,
+    initialize_activation_cache_v1,
 };
 
 const ROLE_CACHE_HEADER_BYTES: usize = 48;
@@ -139,7 +139,6 @@ impl ObservationParts {
 
 #[derive(Clone, Copy)]
 struct Fixture {
-    core_program: ProgramIdentityV1,
     release_set_id: ContentId,
     release_set: ExecutionReleaseSetV1,
     artifact_ids: [ArtifactReleaseIdV1; 5],
@@ -164,7 +163,6 @@ impl Fixture {
         ];
         let release_set = release_set(artifact_ids, releases);
         Self {
-            core_program: releases[0].program(),
             release_set_id: content(91),
             release_set,
             artifact_ids,
@@ -177,13 +175,8 @@ impl Fixture {
     }
 
     fn activate(self) -> ActivatedExecutionReleaseSetV1 {
-        activate_execution_release_set_v1(
-            self.core_program,
-            self.release_set_id,
-            &self.release_set,
-            &self.inputs(),
-        )
-        .expect("valid activation")
+        activate_execution_release_set_v1(self.release_set_id, &self.release_set, &self.inputs())
+            .expect("valid activation")
     }
 }
 
@@ -556,13 +549,8 @@ fn streaming_activation_is_byte_identical_to_the_owned_host_api() {
     let fixture = Fixture::distinct();
     let expected = fixture.activate().to_bytes();
     let mut streamed = [0_u8; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
-    initialize_activation_cache_v1(
-        &mut streamed,
-        fixture.core_program,
-        fixture.release_set_id,
-        &fixture.release_set,
-    )
-    .expect("initialize exact cache");
+    initialize_activation_cache_v1(&mut streamed, fixture.release_set_id)
+        .expect("initialize exact cache");
     for (role, index) in [
         (ExecutionRoleV1::Core, 0),
         (ExecutionRoleV1::Claims, 1),
@@ -576,7 +564,6 @@ fn streaming_activation_is_byte_identical_to_the_owned_host_api() {
         );
         activate_execution_role_into_v1(
             &mut streamed,
-            fixture.core_program,
             fixture.release_set_id,
             &fixture.release_set,
             role,
@@ -592,23 +579,23 @@ fn streaming_activation_is_byte_identical_to_the_owned_host_api() {
 }
 
 #[test]
-fn activation_refuses_core_role_program_and_artifact_substitutions() {
+fn finalized_release_set_is_the_only_core_binding() {
     let fixture = Fixture::distinct();
+    let activated = activate_execution_release_set_v1(
+        fixture.release_set_id,
+        &fixture.release_set,
+        &fixture.inputs(),
+    )
+    .expect("the authenticated Core artifact needs no Registry identity input");
     assert_eq!(
-        activate_execution_release_set_v1(
-            program(99),
-            fixture.release_set_id,
-            &fixture.release_set,
-            &fixture.inputs(),
-        ),
-        Err(Error::CoreProgramMismatch)
+        activated.role(ExecutionRoleV1::Core).release().program(),
+        fixture.release_set.binding(ExecutionRoleV1::Core).program()
     );
 
     let mut substituted_ids = fixture.artifact_ids;
     substituted_ids[2] = artifact_id(99);
     assert_eq!(
         activate_execution_release_set_v1(
-            fixture.core_program,
             fixture.release_set_id,
             &fixture.release_set,
             &activation_inputs(substituted_ids, fixture.releases),
@@ -620,7 +607,6 @@ fn activation_refuses_core_role_program_and_artifact_substitutions() {
     substituted_releases[3] = immutable_release(99, 59, 69);
     assert_eq!(
         activate_execution_release_set_v1(
-            fixture.core_program,
             fixture.release_set_id,
             &fixture.release_set,
             &activation_inputs(fixture.artifact_ids, substituted_releases),
@@ -647,12 +633,7 @@ fn activation_refuses_stale_slot_and_reauthentication_catches_later_upgrade() {
         ArtifactActivationInputV1::new(fixture.artifact_ids[4], stale_release, stale),
     );
     assert_eq!(
-        activate_execution_release_set_v1(
-            fixture.core_program,
-            fixture.release_set_id,
-            &fixture.release_set,
-            &inputs,
-        ),
+        activate_execution_release_set_v1(fixture.release_set_id, &fixture.release_set, &inputs,),
         Err(Error::DeploymentSlotMismatch)
     );
 
@@ -674,13 +655,9 @@ fn aliased_roles_must_share_one_complete_activation() {
     releases[2] = releases[1];
     let aliased_set = release_set(artifact_ids, releases);
     let aliased_inputs = activation_inputs(artifact_ids, releases);
-    let activated = activate_execution_release_set_v1(
-        fixture.core_program,
-        fixture.release_set_id,
-        &aliased_set,
-        &aliased_inputs,
-    )
-    .expect("identical alias activates");
+    let activated =
+        activate_execution_release_set_v1(fixture.release_set_id, &aliased_set, &aliased_inputs)
+            .expect("identical alias activates");
     assert_eq!(
         activated.role(ExecutionRoleV1::Claims),
         activated.role(ExecutionRoleV1::Trading)
@@ -701,12 +678,7 @@ fn aliased_roles_must_share_one_complete_activation() {
         activation_input(artifact_ids[4], releases[4]),
     );
     assert_eq!(
-        activate_execution_release_set_v1(
-            fixture.core_program,
-            fixture.release_set_id,
-            &aliased_set,
-            &hostile_inputs,
-        ),
+        activate_execution_release_set_v1(fixture.release_set_id, &aliased_set, &hostile_inputs,),
         Err(Error::AliasedRoleActivationMismatch)
     );
 
@@ -814,13 +786,9 @@ fn market_authority_envelope_has_one_path_to_the_activated_release_set() {
         authenticate_market_execution_v1(market, content(94), manifest, fixture.activate()),
         Err(Error::MarketAuthorityManifestMismatch)
     );
-    let stale_activation = activate_execution_release_set_v1(
-        fixture.core_program,
-        content(95),
-        &fixture.release_set,
-        &fixture.inputs(),
-    )
-    .expect("alternate finalized identity is structurally valid at adapter boundary");
+    let stale_activation =
+        activate_execution_release_set_v1(content(95), &fixture.release_set, &fixture.inputs())
+            .expect("alternate finalized identity is structurally valid at adapter boundary");
     assert_eq!(
         authenticate_market_execution_v1(market, authority_id, manifest, stale_activation),
         Err(Error::ReleaseSetSelectionMismatch)

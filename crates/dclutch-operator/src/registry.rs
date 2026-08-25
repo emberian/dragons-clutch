@@ -17,7 +17,7 @@ use dclutch_registry_contract::{
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View, RegistryInstructionV1};
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1,
-    ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
+    ExecutionRoleBindingV1, ExecutionRoleV1,
 };
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_hash::Hash;
@@ -290,10 +290,7 @@ pub fn build_registry_activation_v1(
         release_set.binding(ExecutionRoleV1::Custody),
         &state.roles.custody,
     )?;
-    let core_program = ProgramIdentityV1::new(registry_program.to_bytes())
-        .map_err(|_| Error::InvalidReleaseSet)?;
     let expected_cache = activate_execution_release_set_v1(
-        core_program,
         release_set_id,
         &release_set,
         &ExecutionReleaseActivationInputsV1::new(

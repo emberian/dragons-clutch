@@ -318,13 +318,9 @@ fn fixture() -> Fixture {
         activation_input(resolution_release),
         activation_input(custody_release),
     );
-    let activated = activate_execution_release_set_v1(
-        program_identity(core_program),
-        release_set_id,
-        &release_set,
-        &activation_inputs,
-    )
-    .expect("activated release set");
+    let activated =
+        activate_execution_release_set_v1(release_set_id, &release_set, &activation_inputs)
+            .expect("activated release set");
     let receiver_program = key(0x56);
     let receiver_programdata =
         Pubkey::find_program_address(&[receiver_program.as_ref()], &bpf_loader_upgradeable::ID).0;

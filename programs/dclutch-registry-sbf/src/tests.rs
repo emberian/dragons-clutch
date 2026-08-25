@@ -131,6 +131,7 @@ fn finalized_record(
 
 struct Fixture {
     registry: Pubkey,
+    core: Pubkey,
     rent: Rent,
     release: ArtifactReleaseV1,
     artifact_id: ArtifactReleaseIdV1,
@@ -147,13 +148,14 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let registry = Pubkey::new_from_array(bytes(7));
+        let core = Pubkey::new_from_array(bytes(8));
         let rent = Rent::default();
         let programdata_key =
-            Pubkey::find_program_address(&[registry.as_ref()], &bpf_loader_upgradeable::ID).0;
+            Pubkey::find_program_address(&[core.as_ref()], &bpf_loader_upgradeable::ID).0;
         let elf = [0xa5_u8; 96];
         let slot = 77;
         let release = ArtifactReleaseV1::new(
-            ProgramIdentityV1::new(registry.to_bytes()).expect("program"),
+            ProgramIdentityV1::new(core.to_bytes()).expect("program"),
             ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader"),
             programdata_key.to_bytes(),
             content(9),
@@ -181,6 +183,7 @@ impl Fixture {
         );
         Self {
             registry,
+            core,
             rent,
             release,
             artifact_id,
@@ -189,7 +192,7 @@ impl Fixture {
             artifact_raw,
             artifact_staging,
             program: account(
-                registry,
+                core,
                 false,
                 false,
                 1,
@@ -223,14 +226,7 @@ impl Fixture {
     fn activated(&self) -> dclutch_registry_contract::ActivatedExecutionReleaseSetV1 {
         let frame = self.role_frame();
         let mut output = [0_u8; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
-        let core_program = ProgramIdentityV1::new(self.registry.to_bytes()).expect("core program");
-        initialize_activation_cache_v1(
-            &mut output,
-            core_program,
-            self.release_set_id,
-            &self.release_set,
-        )
-        .expect("initialize cache");
+        initialize_activation_cache_v1(&mut output, self.release_set_id).expect("initialize cache");
         for role in [
             ExecutionRoleV1::Core,
             ExecutionRoleV1::Claims,
@@ -241,7 +237,6 @@ impl Fixture {
             activate_and_write_role(
                 &self.registry,
                 &mut output,
-                core_program,
                 self.release_set_id,
                 &self.release_set,
                 &self.rent,
@@ -330,8 +325,9 @@ impl Fixture {
 }
 
 #[test]
-fn finalized_release_set_and_five_role_activation_close_the_physical_joins() {
+fn distinct_core_and_registry_activate_all_exact_aliased_roles() {
     let fixture = Fixture::new();
+    assert_ne!(fixture.registry, fixture.core);
     let (release_set_id, decoded) = authenticate_release_set_record(
         &fixture.registry,
         &fixture.release_set_raw,
@@ -352,6 +348,15 @@ fn finalized_release_set_and_five_role_activation_close_the_physical_joins() {
         activated.role(ExecutionRoleV1::Resolution).release(),
         fixture.release
     );
+    for role in [
+        ExecutionRoleV1::Core,
+        ExecutionRoleV1::Claims,
+        ExecutionRoleV1::Trading,
+        ExecutionRoleV1::Resolution,
+        ExecutionRoleV1::Custody,
+    ] {
+        assert_eq!(activated.role(role), activated.role(ExecutionRoleV1::Core));
+    }
 }
 
 #[test]
@@ -382,9 +387,17 @@ fn current_loader_observation_binds_fixed_elf_tail_and_slot() {
 }
 
 #[test]
-fn reauthentication_accepts_exact_registry_provenance_and_receipt_fields() {
+fn reauthentication_accepts_distinct_core_with_exact_registry_cache_provenance() {
     let fixture = Fixture::new();
     let cache = fixture.cache_account();
+    let expected_cache = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, fixture.release_set_id.as_bytes()],
+        &fixture.registry,
+    )
+    .0;
+    assert_eq!(cache.key, &expected_cache);
+    assert_eq!(cache.owner, &fixture.registry);
+    assert_ne!(cache.owner, &fixture.core);
     let accounts = [cache, fixture.program.clone(), fixture.programdata.clone()];
     process_instruction(
         &fixture.registry,
@@ -461,6 +474,88 @@ fn reauthentication_refuses_substituted_cache_and_stale_programdata() {
             &RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Claims).to_bytes(),
         ),
         Err(RegistryError::Deployment.into())
+    );
+}
+
+#[test]
+fn reauthentication_refuses_substituted_core_program_and_programdata() {
+    let fixture = Fixture::new();
+    let substituted_core = account(
+        Pubkey::new_from_array(bytes(99)),
+        false,
+        false,
+        1,
+        loader_program_bytes(*fixture.programdata.key),
+        bpf_loader_upgradeable::ID,
+        true,
+    );
+    assert_eq!(
+        process_instruction(
+            &fixture.registry,
+            &[
+                fixture.cache_account(),
+                substituted_core,
+                fixture.programdata.clone(),
+            ],
+            &RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Core).to_bytes(),
+        ),
+        Err(RegistryError::Deployment.into())
+    );
+
+    let substituted_programdata_key =
+        Pubkey::find_program_address(&[fixture.core.as_ref(), b"substituted"], &fixture.core).0;
+    let substituted_programdata = account(
+        substituted_programdata_key,
+        false,
+        false,
+        1,
+        immutable_programdata_bytes(fixture.release.deployment_slot(), &[0xa5; 96]),
+        bpf_loader_upgradeable::ID,
+        false,
+    );
+    assert_eq!(
+        process_instruction(
+            &fixture.registry,
+            &[
+                fixture.cache_account(),
+                fixture.program.clone(),
+                substituted_programdata,
+            ],
+            &RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Core).to_bytes(),
+        ),
+        Err(RegistryError::Deployment.into())
+    );
+}
+
+#[test]
+fn cache_pda_and_owner_are_registry_derived_even_with_an_isolated_core() {
+    let fixture = Fixture::new();
+    let valid_cache = fixture.cache_account();
+    let core_derived_key = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, fixture.release_set_id.as_bytes()],
+        &fixture.core,
+    )
+    .0;
+    let core_owned_cache = account(
+        core_derived_key,
+        false,
+        false,
+        valid_cache.lamports(),
+        valid_cache.try_borrow_data().expect("cache data").to_vec(),
+        fixture.core,
+        false,
+    );
+    assert_eq!(
+        process_instruction(
+            &fixture.registry,
+            &[
+                core_owned_cache,
+                fixture.program.clone(),
+                fixture.programdata.clone(),
+            ],
+            &RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Core).to_bytes(),
+        ),
+        Err(RegistryError::ActivationCache.into())
     );
 }
 
