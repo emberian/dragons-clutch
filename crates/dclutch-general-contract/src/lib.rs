@@ -42,7 +42,7 @@ pub const GENERAL_ROOT_BYTES: usize = 136;
 /// Exact canonical byte width of [`GeneralFundingV1`].
 pub const GENERAL_FUNDING_BYTES: usize = 144;
 /// Exact canonical byte width of [`BatchRootV1`].
-pub const BATCH_ROOT_BYTES: usize = 136;
+pub const BATCH_ROOT_BYTES: usize = 144;
 /// Exact canonical byte width of [`OrderStateV1`].
 pub const ORDER_STATE_BYTES: usize = 96;
 /// Fixed byte prefix of [`GeneralOrderCustodyV1`] before its exact `N` claim reserves.
@@ -53,14 +53,14 @@ pub const PORTFOLIO_ORDER_BASE_BYTES: usize = 200;
 pub const PORTFOLIO_ORDER_SIGNING_BASE_BYTES: usize = 168;
 /// Fixed byte prefix of a [`SettlementReceiptV1`] before its exact `N` deltas.
 pub const SETTLEMENT_RECEIPT_BASE_BYTES: usize = 176;
-/// Fixed byte prefix of [`CandidateSubmissionV1`] before its exact `N` prices.
-pub const CANDIDATE_SUBMISSION_BASE_BYTES: usize = 192;
+/// Fixed byte prefix of [`CandidateSubmissionV1`] before its exact-`N` price and claim vectors.
+pub const CANDIDATE_SUBMISSION_BASE_BYTES: usize = 224;
 /// Fixed byte prefix of [`CandidateStateV1`] before its exact-N price and cursor vectors.
-pub const CANDIDATE_STATE_BASE_BYTES: usize = 376;
-/// Fixed byte prefix of [`SettlementCursorV1`] before its exact `N` net coefficients.
-pub const SETTLEMENT_CURSOR_BASE_BYTES: usize = 168;
-/// Fixed byte prefix of [`VerificationPageV1`] before its exact leading executions.
-pub const VERIFICATION_PAGE_BASE_BYTES: usize = 88;
+pub const CANDIDATE_STATE_BASE_BYTES: usize = 440;
+/// Fixed byte prefix of [`SettlementCursorV1`] before its four exact-`N` vectors.
+pub const SETTLEMENT_CURSOR_BASE_BYTES: usize = 304;
+/// Fixed byte prefix of [`CandidatePageV1`] before its exact leading executions.
+pub const CANDIDATE_PAGE_BASE_BYTES: usize = 56;
 
 const CONFIG_MAGIC: [u8; 8] = *b"DCLTGEN1";
 const GENERAL_ROOT_MAGIC: [u8; 8] = *b"DCLTGRR1";
@@ -74,8 +74,8 @@ const RECEIPT_MAGIC: [u8; 8] = *b"DCLTGSR1";
 const CANDIDATE_SUBMISSION_MAGIC: [u8; 8] = *b"DCLTGCS1";
 const CANDIDATE_STATE_MAGIC: [u8; 8] = *b"DCLTGCA1";
 const SETTLEMENT_CURSOR_MAGIC: [u8; 8] = *b"DCLTGSC1";
-const VERIFICATION_PAGE_MAGIC: [u8; 8] = *b"DCLTGVP1";
-const SETTLEMENT_CURSOR_NET_OFFSET: usize = 136;
+const CANDIDATE_PAGE_MAGIC: [u8; 8] = *b"DCLTGVP1";
+const SETTLEMENT_CURSOR_VECTOR_OFFSET: usize = SETTLEMENT_CURSOR_BASE_BYTES;
 const SCHEMA_V1: u16 = 1;
 const ARTIFACT_PROFILE_V1: u16 = 1;
 
@@ -105,8 +105,15 @@ pub const GENERAL_ORDER_CUSTODY_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-order-c
 pub const GENERAL_QUOTE_ESCROW_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-quote-escrow/v1";
 /// PDA seed domain for one submitted candidate and verification cursor.
 pub const GENERAL_CANDIDATE_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-candidate/v1";
+/// PDA seed domain for one candidate-exclusive immutable page record.
+pub const GENERAL_CANDIDATE_PAGE_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-candidate-page/v1";
 /// PDA seed domain for one selected-candidate settlement cursor.
 pub const GENERAL_SETTLEMENT_CURSOR_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-settle/v1";
+/// PDA seed domain for the selected settlement's collateral-token escrow.
+pub const GENERAL_SETTLEMENT_ESCROW_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-settle-escrow/v1";
+/// Domain-separated initial transcript commitment for one candidate identity.
+pub const GENERAL_CANDIDATE_PAGE_CONTENT_DOMAIN_V1: &[u8] =
+    b"dclutch/general-candidate-page-content/v1";
 
 /// Refusal returned by the General venue contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -510,6 +517,33 @@ impl GeneralCandidatePdaSeedsV1 {
     }
 }
 
+/// Exact PDA seed projection for one immutable candidate page copy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralCandidatePagePdaSeedsV1 {
+    candidate: [u8; 32],
+    page_id: [u8; 32],
+}
+
+impl GeneralCandidatePagePdaSeedsV1 {
+    /// Construct from the candidate account and authenticated page content ID.
+    pub fn new(candidate: [u8; 32], page_id: ContentId) -> Result<Self> {
+        require_nonzero_key(&candidate)?;
+        Ok(Self {
+            candidate,
+            page_id: page_id.to_bytes(),
+        })
+    }
+
+    /// Return `[domain, candidate, page_id]` in canonical order.
+    pub fn seed_components(&self) -> [&[u8]; 3] {
+        [
+            GENERAL_CANDIDATE_PAGE_PDA_DOMAIN_V1,
+            self.candidate.as_slice(),
+            self.page_id.as_slice(),
+        ]
+    }
+}
+
 /// Exact PDA seed projection for one selected-candidate settlement cursor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralSettlementCursorPdaSeedsV1 {
@@ -528,6 +562,51 @@ impl GeneralSettlementCursorPdaSeedsV1 {
         [
             GENERAL_SETTLEMENT_CURSOR_PDA_DOMAIN_V1,
             self.candidate.as_slice(),
+        ]
+    }
+}
+
+/// Exact PDA seed projection for the cursor-owned settlement collateral escrow.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralSettlementEscrowPdaSeedsV1 {
+    settlement_cursor: [u8; 32],
+}
+
+impl GeneralSettlementEscrowPdaSeedsV1 {
+    /// Construct from the already-derived settlement cursor key.
+    pub fn new(settlement_cursor: [u8; 32]) -> Result<Self> {
+        require_nonzero_key(&settlement_cursor)?;
+        Ok(Self { settlement_cursor })
+    }
+
+    /// Return `[domain, settlement_cursor]` in canonical order.
+    pub fn seed_components(&self) -> [&[u8]; 2] {
+        [
+            GENERAL_SETTLEMENT_ESCROW_PDA_DOMAIN_V1,
+            self.settlement_cursor.as_slice(),
+        ]
+    }
+}
+
+/// Domain-separated content preimage projection for one canonical page record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralCandidatePageContentPreimageV1<'a> {
+    canonical_page_bytes: &'a [u8],
+}
+
+impl<'a> GeneralCandidatePageContentPreimageV1<'a> {
+    /// Bind exact canonical page bytes for adapter hashing.
+    pub const fn new(canonical_page_bytes: &'a [u8]) -> Self {
+        Self {
+            canonical_page_bytes,
+        }
+    }
+
+    /// Return `[domain, canonical_page_bytes]` in canonical hash order.
+    pub fn components(&self) -> [&[u8]; 2] {
+        [
+            GENERAL_CANDIDATE_PAGE_CONTENT_DOMAIN_V1,
+            self.canonical_page_bytes,
         ]
     }
 }
@@ -567,8 +646,8 @@ pub enum GeneralInstructionTagV1 {
     LockSelection = 11,
     /// Capitalize and begin the selected candidate's non-expiring settlement.
     BeginSettlement = 12,
-    /// Apply one canonical selected-candidate settlement page.
-    SettlePage = 13,
+    /// Collect one canonical page's negative settlement inputs.
+    CollectSettlementPage = 13,
     /// Finish settlement after exact cursor convergence.
     FinishSettlement = 14,
     /// Retire one quiescent batch and its direct child count.
@@ -581,6 +660,18 @@ pub enum GeneralInstructionTagV1 {
     CloseCandidate = 18,
     /// Close one finished settlement cursor into its submitter's RentCredit.
     CloseSettlement = 19,
+    /// Perform the sole complete-set split/merge after all inputs converge.
+    MaterializeSettlement = 20,
+    /// Distribute one canonical page's positive settlement outputs.
+    DistributeSettlementPage = 21,
+    /// Create one immutable candidate-exclusive page record.
+    CreateCandidatePage = 22,
+    /// Close one immutable page after it can no longer be consumed.
+    CloseCandidatePage = 23,
+    /// Reject one abandoned candidate after its immutable deadline.
+    RejectCandidate = 24,
+    /// Expire a selected candidate before settlement begins.
+    ExpireSettlement = 25,
 }
 
 impl GeneralInstructionTagV1 {
@@ -598,13 +689,19 @@ impl GeneralInstructionTagV1 {
             10 => Ok(Self::ConsiderCandidate),
             11 => Ok(Self::LockSelection),
             12 => Ok(Self::BeginSettlement),
-            13 => Ok(Self::SettlePage),
+            13 => Ok(Self::CollectSettlementPage),
             14 => Ok(Self::FinishSettlement),
             15 => Ok(Self::CloseBatch),
             16 => Ok(Self::Quiesce),
             17 => Ok(Self::CloseGeneral),
             18 => Ok(Self::CloseCandidate),
             19 => Ok(Self::CloseSettlement),
+            20 => Ok(Self::MaterializeSettlement),
+            21 => Ok(Self::DistributeSettlementPage),
+            22 => Ok(Self::CreateCandidatePage),
+            23 => Ok(Self::CloseCandidatePage),
+            24 => Ok(Self::RejectCandidate),
+            25 => Ok(Self::ExpireSettlement),
             _ => Err(Error::UnknownAction),
         }
     }
@@ -635,13 +732,24 @@ pub struct SubmitGeneralCandidateV1<const N: usize> {
     pub submission: CandidateSubmissionV1<N>,
 }
 
-/// Candidate identity plus one canonical exact leading-execution page.
+/// Candidate identity plus one immutable page content identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GeneralCandidatePageV1<const N: usize> {
+pub struct GeneralCandidatePageV1 {
     /// Persisted candidate content identity.
     pub candidate_id: ContentId,
-    /// Exact verification or settlement page.
-    pub page: VerificationPageV1<N>,
+    /// Authenticated immutable page content identity.
+    pub page_id: ContentId,
+}
+
+/// Candidate-exclusive page creation payload.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CreateGeneralCandidatePageV1<const N: usize> {
+    /// Persisted candidate content identity.
+    pub candidate_id: ContentId,
+    /// Domain-separated identity of the exact canonical page bytes.
+    pub page_id: ContentId,
+    /// Exact immutable page record.
+    pub page: CandidatePageV1<N>,
 }
 
 /// One hostile-decoded General instruction at exact ClaimBasis width `N`.
@@ -661,8 +769,10 @@ pub enum GeneralInstructionV1<const N: usize> {
     CloseOrder(PortfolioOrderV1<N>),
     /// Submit one candidate.
     SubmitCandidate(SubmitGeneralCandidateV1<N>),
+    /// Create one immutable candidate page.
+    CreateCandidatePage(CreateGeneralCandidatePageV1<N>),
     /// Verify one candidate page.
-    VerifyCandidatePage(GeneralCandidatePageV1<N>),
+    VerifyCandidatePage(GeneralCandidatePageV1),
     /// Finish candidate verification.
     FinishCandidate(ContentId),
     /// Consider one valid candidate.
@@ -671,8 +781,12 @@ pub enum GeneralInstructionV1<const N: usize> {
     LockSelection(GeneralBatchReplayV1),
     /// Begin selected-candidate settlement.
     BeginSettlement(ContentId),
-    /// Apply one settlement page.
-    SettlePage(GeneralCandidatePageV1<N>),
+    /// Collect one page's negative settlement inputs.
+    CollectSettlementPage(GeneralCandidatePageV1),
+    /// Perform the sole complete-set materialization boundary.
+    MaterializeSettlement(ContentId),
+    /// Distribute one page's positive settlement outputs.
+    DistributeSettlementPage(GeneralCandidatePageV1),
     /// Finish selected-candidate settlement.
     FinishSettlement(ContentId),
     /// Close one quiescent batch.
@@ -685,6 +799,12 @@ pub enum GeneralInstructionV1<const N: usize> {
     CloseCandidate(ContentId),
     /// Close one finished settlement cursor.
     CloseSettlement(ContentId),
+    /// Close one candidate page and pay its cleanup bounty.
+    CloseCandidatePage(GeneralCandidatePageV1),
+    /// Reject one abandoned candidate after its deadline.
+    RejectCandidate(ContentId),
+    /// Expire one selected candidate before physical collection begins.
+    ExpireSettlement(ContentId),
 }
 
 impl<const N: usize> GeneralInstructionV1<N> {
@@ -748,29 +868,50 @@ impl<const N: usize> GeneralInstructionV1<N> {
                     )?)?,
                 }))
             }
-            GeneralInstructionTagV1::VerifyCandidatePage | GeneralInstructionTagV1::SettlePage => {
-                let prefix = GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES;
-                if bytes.len() < prefix + VERIFICATION_PAGE_BASE_BYTES {
+            GeneralInstructionTagV1::CreateCandidatePage => {
+                let prefix = GENERAL_INSTRUCTION_HEADER_BYTES + 2 * CONTENT_ID_BYTES;
+                if bytes.len() < prefix + CANDIDATE_PAGE_BASE_BYTES {
                     return Err(Error::InvalidLength);
                 }
-                let page =
-                    VerificationPageV1::decode(bytes.get(prefix..).ok_or(Error::InvalidLength)?)?;
+                Ok(Self::CreateCandidatePage(CreateGeneralCandidatePageV1 {
+                    candidate_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?,
+                    page_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES)?,
+                    page: CandidatePageV1::decode(
+                        bytes.get(prefix..).ok_or(Error::InvalidLength)?,
+                    )?,
+                }))
+            }
+            GeneralInstructionTagV1::VerifyCandidatePage
+            | GeneralInstructionTagV1::CollectSettlementPage
+            | GeneralInstructionTagV1::DistributeSettlementPage => {
+                exact_len(
+                    bytes,
+                    GENERAL_INSTRUCTION_HEADER_BYTES + 2 * CONTENT_ID_BYTES,
+                )?;
                 let page = GeneralCandidatePageV1 {
                     candidate_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?,
-                    page,
+                    page_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES)?,
                 };
                 Ok(match tag {
                     GeneralInstructionTagV1::VerifyCandidatePage => Self::VerifyCandidatePage(page),
-                    GeneralInstructionTagV1::SettlePage => Self::SettlePage(page),
+                    GeneralInstructionTagV1::CollectSettlementPage => {
+                        Self::CollectSettlementPage(page)
+                    }
+                    GeneralInstructionTagV1::DistributeSettlementPage => {
+                        Self::DistributeSettlementPage(page)
+                    }
                     _ => return Err(Error::UnknownAction),
                 })
             }
             GeneralInstructionTagV1::FinishCandidate
             | GeneralInstructionTagV1::ConsiderCandidate
             | GeneralInstructionTagV1::BeginSettlement
+            | GeneralInstructionTagV1::MaterializeSettlement
             | GeneralInstructionTagV1::FinishSettlement
             | GeneralInstructionTagV1::CloseCandidate
-            | GeneralInstructionTagV1::CloseSettlement => {
+            | GeneralInstructionTagV1::CloseSettlement
+            | GeneralInstructionTagV1::RejectCandidate
+            | GeneralInstructionTagV1::ExpireSettlement => {
                 exact_len(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES)?;
                 let candidate_id = read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?;
                 Ok(match tag {
@@ -779,13 +920,30 @@ impl<const N: usize> GeneralInstructionV1<N> {
                         Self::ConsiderCandidate(candidate_id)
                     }
                     GeneralInstructionTagV1::BeginSettlement => Self::BeginSettlement(candidate_id),
+                    GeneralInstructionTagV1::MaterializeSettlement => {
+                        Self::MaterializeSettlement(candidate_id)
+                    }
                     GeneralInstructionTagV1::FinishSettlement => {
                         Self::FinishSettlement(candidate_id)
                     }
                     GeneralInstructionTagV1::CloseCandidate => Self::CloseCandidate(candidate_id),
                     GeneralInstructionTagV1::CloseSettlement => Self::CloseSettlement(candidate_id),
+                    GeneralInstructionTagV1::RejectCandidate => Self::RejectCandidate(candidate_id),
+                    GeneralInstructionTagV1::ExpireSettlement => {
+                        Self::ExpireSettlement(candidate_id)
+                    }
                     _ => return Err(Error::UnknownAction),
                 })
+            }
+            GeneralInstructionTagV1::CloseCandidatePage => {
+                exact_len(
+                    bytes,
+                    GENERAL_INSTRUCTION_HEADER_BYTES + 2 * CONTENT_ID_BYTES,
+                )?;
+                Ok(Self::CloseCandidatePage(GeneralCandidatePageV1 {
+                    candidate_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES)?,
+                    page_id: read_id(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES)?,
+                }))
             }
             GeneralInstructionTagV1::Quiesce | GeneralInstructionTagV1::CloseGeneral => {
                 exact_len(bytes, GENERAL_INSTRUCTION_HEADER_BYTES + 8)?;
@@ -820,22 +978,29 @@ impl<const N: usize> GeneralInstructionV1<N> {
                         .and_then(|length| value.checked_add(length))
                 })
                 .ok_or(Error::ArithmeticOverflow),
-            Self::VerifyCandidatePage(page) | Self::SettlePage(page) => {
-                GENERAL_INSTRUCTION_HEADER_BYTES
-                    .checked_add(CONTENT_ID_BYTES)
-                    .and_then(|value| {
-                        VerificationPageV1::<N>::encoded_len(page.page.execution_count)
-                            .ok()
-                            .and_then(|length| value.checked_add(length))
-                    })
-                    .ok_or(Error::ArithmeticOverflow)
+            Self::CreateCandidatePage(page) => GENERAL_INSTRUCTION_HEADER_BYTES
+                .checked_add(2 * CONTENT_ID_BYTES)
+                .and_then(|value| {
+                    CandidatePageV1::<N>::encoded_len(page.page.execution_count)
+                        .ok()
+                        .and_then(|length| value.checked_add(length))
+                })
+                .ok_or(Error::ArithmeticOverflow),
+            Self::VerifyCandidatePage(_)
+            | Self::CollectSettlementPage(_)
+            | Self::DistributeSettlementPage(_)
+            | Self::CloseCandidatePage(_) => {
+                Ok(GENERAL_INSTRUCTION_HEADER_BYTES + 2 * CONTENT_ID_BYTES)
             }
             Self::FinishCandidate(_)
             | Self::ConsiderCandidate(_)
             | Self::BeginSettlement(_)
+            | Self::MaterializeSettlement(_)
             | Self::FinishSettlement(_)
             | Self::CloseCandidate(_)
-            | Self::CloseSettlement(_) => Ok(GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES),
+            | Self::CloseSettlement(_)
+            | Self::RejectCandidate(_)
+            | Self::ExpireSettlement(_) => Ok(GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES),
             Self::Quiesce(_) | Self::CloseGeneral(_) => Ok(GENERAL_INSTRUCTION_HEADER_BYTES + 8),
         }
     }
@@ -881,23 +1046,46 @@ impl<const N: usize> GeneralInstructionV1<N> {
                         .ok_or(Error::InvalidLength)?,
                 )?;
             }
-            Self::VerifyCandidatePage(instruction) | Self::SettlePage(instruction) => {
+            Self::CreateCandidatePage(instruction) => {
                 put(
                     out,
                     GENERAL_INSTRUCTION_HEADER_BYTES,
                     instruction.candidate_id.as_bytes(),
                 );
+                put(
+                    out,
+                    GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES,
+                    instruction.page_id.as_bytes(),
+                );
                 instruction.page.encode(
-                    out.get_mut(GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES..)
+                    out.get_mut(GENERAL_INSTRUCTION_HEADER_BYTES + 2 * CONTENT_ID_BYTES..)
                         .ok_or(Error::InvalidLength)?,
                 )?;
+            }
+            Self::VerifyCandidatePage(instruction)
+            | Self::CollectSettlementPage(instruction)
+            | Self::DistributeSettlementPage(instruction)
+            | Self::CloseCandidatePage(instruction) => {
+                put(
+                    out,
+                    GENERAL_INSTRUCTION_HEADER_BYTES,
+                    instruction.candidate_id.as_bytes(),
+                );
+                put(
+                    out,
+                    GENERAL_INSTRUCTION_HEADER_BYTES + CONTENT_ID_BYTES,
+                    instruction.page_id.as_bytes(),
+                );
             }
             Self::FinishCandidate(candidate_id)
             | Self::ConsiderCandidate(candidate_id)
             | Self::BeginSettlement(candidate_id)
+            | Self::MaterializeSettlement(candidate_id)
             | Self::FinishSettlement(candidate_id)
             | Self::CloseCandidate(candidate_id)
-            | Self::CloseSettlement(candidate_id) => {
+            | Self::CloseSettlement(candidate_id)
+            | Self::RejectCandidate(candidate_id)
+            | Self::ExpireSettlement(candidate_id) => {
                 put(
                     out,
                     GENERAL_INSTRUCTION_HEADER_BYTES,
@@ -923,18 +1111,24 @@ impl<const N: usize> GeneralInstructionV1<N> {
             Self::CancelOrder(_) => GeneralInstructionTagV1::CancelOrder,
             Self::CloseOrder(_) => GeneralInstructionTagV1::CloseOrder,
             Self::SubmitCandidate(_) => GeneralInstructionTagV1::SubmitCandidate,
+            Self::CreateCandidatePage(_) => GeneralInstructionTagV1::CreateCandidatePage,
             Self::VerifyCandidatePage(_) => GeneralInstructionTagV1::VerifyCandidatePage,
             Self::FinishCandidate(_) => GeneralInstructionTagV1::FinishCandidate,
             Self::ConsiderCandidate(_) => GeneralInstructionTagV1::ConsiderCandidate,
             Self::LockSelection(_) => GeneralInstructionTagV1::LockSelection,
             Self::BeginSettlement(_) => GeneralInstructionTagV1::BeginSettlement,
-            Self::SettlePage(_) => GeneralInstructionTagV1::SettlePage,
+            Self::CollectSettlementPage(_) => GeneralInstructionTagV1::CollectSettlementPage,
+            Self::MaterializeSettlement(_) => GeneralInstructionTagV1::MaterializeSettlement,
+            Self::DistributeSettlementPage(_) => GeneralInstructionTagV1::DistributeSettlementPage,
             Self::FinishSettlement(_) => GeneralInstructionTagV1::FinishSettlement,
             Self::CloseBatch(_) => GeneralInstructionTagV1::CloseBatch,
             Self::Quiesce(_) => GeneralInstructionTagV1::Quiesce,
             Self::CloseGeneral(_) => GeneralInstructionTagV1::CloseGeneral,
             Self::CloseCandidate(_) => GeneralInstructionTagV1::CloseCandidate,
             Self::CloseSettlement(_) => GeneralInstructionTagV1::CloseSettlement,
+            Self::CloseCandidatePage(_) => GeneralInstructionTagV1::CloseCandidatePage,
+            Self::RejectCandidate(_) => GeneralInstructionTagV1::RejectCandidate,
+            Self::ExpireSettlement(_) => GeneralInstructionTagV1::ExpireSettlement,
         }
     }
 }
@@ -1032,10 +1226,18 @@ pub enum GeneralAccountRoleV1 {
     WritableCandidate,
     /// Readonly candidate state PDA.
     ReadonlyCandidate,
+    /// Vacant or writable immutable candidate-page PDA during create/close.
+    WritableCandidatePage,
+    /// Readonly immutable candidate-page PDA during verification/collection.
+    ReadonlyCandidatePage,
     /// Vacant or mutable settlement cursor PDA.
     WritableSettlementCursor,
     /// Readonly settlement cursor PDA.
     ReadonlySettlementCursor,
+    /// Cursor-owned native-claim Position inventory.
+    SettlementPosition,
+    /// Cursor-owned settlement-token collateral escrow.
+    SettlementQuoteEscrow,
     /// Provider-neutral collateral Vault/Hoard token account.
     CollateralVault,
     /// Canonical executable System Program.
@@ -1110,32 +1312,42 @@ fn general_frame_account_count(tag: GeneralInstructionTagV1, count: u8) -> Resul
     let page_count = usize::from(count);
     let fixed = match tag {
         GeneralInstructionTagV1::Activate => 19,
-        GeneralInstructionTagV1::OpenBatch => 11,
-        GeneralInstructionTagV1::LockBatch => 6,
-        GeneralInstructionTagV1::AdmitOrder => 19,
-        GeneralInstructionTagV1::CancelOrder => 17,
-        GeneralInstructionTagV1::CloseOrder => 15,
+        GeneralInstructionTagV1::OpenBatch => 10,
+        GeneralInstructionTagV1::LockBatch => 7,
+        GeneralInstructionTagV1::AdmitOrder => 21,
+        GeneralInstructionTagV1::CancelOrder => 20,
+        GeneralInstructionTagV1::CloseOrder => 18,
         GeneralInstructionTagV1::SubmitCandidate => 10,
-        GeneralInstructionTagV1::FinishCandidate => 4,
-        GeneralInstructionTagV1::ConsiderCandidate => 6,
-        GeneralInstructionTagV1::LockSelection => 2,
-        GeneralInstructionTagV1::BeginSettlement => 16,
-        GeneralInstructionTagV1::FinishSettlement => 7,
-        GeneralInstructionTagV1::CloseBatch => 3,
+        GeneralInstructionTagV1::FinishCandidate => 8,
+        GeneralInstructionTagV1::ConsiderCandidate => 8,
+        GeneralInstructionTagV1::LockSelection => 7,
+        GeneralInstructionTagV1::BeginSettlement => 20,
+        GeneralInstructionTagV1::MaterializeSettlement => 18,
+        GeneralInstructionTagV1::FinishSettlement => 17,
+        GeneralInstructionTagV1::CloseBatch => 7,
         GeneralInstructionTagV1::Quiesce => 1,
         GeneralInstructionTagV1::CloseGeneral => 7,
-        GeneralInstructionTagV1::CloseCandidate => 3,
-        GeneralInstructionTagV1::CloseSettlement => 4,
+        GeneralInstructionTagV1::CloseCandidate => 8,
+        GeneralInstructionTagV1::CloseSettlement => 18,
+        GeneralInstructionTagV1::CreateCandidatePage => 10,
+        GeneralInstructionTagV1::CloseCandidatePage => 9,
+        GeneralInstructionTagV1::RejectCandidate | GeneralInstructionTagV1::ExpireSettlement => 8,
         GeneralInstructionTagV1::VerifyCandidatePage => {
             require_page_count(count)?;
-            return 6usize
+            return 9usize
                 .checked_add(page_count)
                 .ok_or(Error::ArithmeticOverflow);
         }
-        GeneralInstructionTagV1::SettlePage => {
+        GeneralInstructionTagV1::CollectSettlementPage => {
             require_page_count(count)?;
-            return 10usize
-                .checked_add(page_count.checked_mul(5).ok_or(Error::ArithmeticOverflow)?)
+            return 18usize
+                .checked_add(page_count.checked_mul(4).ok_or(Error::ArithmeticOverflow)?)
+                .ok_or(Error::ArithmeticOverflow);
+        }
+        GeneralInstructionTagV1::DistributeSettlementPage => {
+            require_page_count(count)?;
+            return 19usize
+                .checked_add(page_count.checked_mul(2).ok_or(Error::ArithmeticOverflow)?)
                 .ok_or(Error::ArithmeticOverflow);
         }
     };
@@ -1179,11 +1391,10 @@ fn general_frame_role(
             Role::WorkActor,
             Role::ReadonlyMarket,
             Role::GeneralConfig,
+            Role::StagingCursorVacancy,
             Role::WritableRoot,
-            Role::WritableGeneralFunding,
             Role::WritableBatch,
             Role::WritableRentCredit,
-            Role::StagingCursorVacancy,
             Role::SystemProgram,
             Role::RentSysvar,
             Role::ClockSysvar,
@@ -1191,10 +1402,11 @@ fn general_frame_role(
         .get(index)
         .ok_or(Error::InvalidLength)?,
         GeneralInstructionTagV1::LockBatch => *[
+            Role::WorkActor,
             Role::GeneralConfig,
+            Role::StagingCursorVacancy,
             Role::ReadonlyRoot,
             Role::WritableBatch,
-            Role::StagingCursorVacancy,
             Role::RentSysvar,
             Role::ClockSysvar,
         ]
@@ -1204,7 +1416,9 @@ fn general_frame_role(
             Role::OrderOwnerPayer,
             Role::ReadonlyMarket,
             Role::Realm,
+            Role::ClaimBasis,
             Role::GeneralConfig,
+            Role::StagingCursorVacancy,
             Role::StagingCursorVacancy,
             Role::StagingCursorVacancy,
             Role::Mint,
@@ -1227,9 +1441,12 @@ fn general_frame_role(
             Role::OrderOwner,
             Role::ReadonlyMarket,
             Role::Realm,
+            Role::ClaimBasis,
             Role::GeneralConfig,
             Role::StagingCursorVacancy,
             Role::StagingCursorVacancy,
+            Role::StagingCursorVacancy,
+            Role::ReadonlyRoot,
             Role::ReadonlyBatch,
             Role::WritableOrderState,
             Role::WritableOrderCustody,
@@ -1247,9 +1464,12 @@ fn general_frame_role(
         GeneralInstructionTagV1::CloseOrder => *[
             Role::ReadonlyMarket,
             Role::Realm,
+            Role::ClaimBasis,
             Role::GeneralConfig,
             Role::StagingCursorVacancy,
             Role::StagingCursorVacancy,
+            Role::StagingCursorVacancy,
+            Role::ReadonlyRoot,
             Role::ReadonlyBatch,
             Role::WritableOrderState,
             Role::WritableOrderCustody,
@@ -1266,11 +1486,11 @@ fn general_frame_role(
         GeneralInstructionTagV1::SubmitCandidate => *[
             Role::CandidateSubmitter,
             Role::GeneralConfig,
-            Role::ReadonlyRoot,
-            Role::ReadonlyBatch,
-            Role::WritableCandidate,
-            Role::ReadonlyRentCredit,
             Role::StagingCursorVacancy,
+            Role::ReadonlyRoot,
+            Role::WritableBatch,
+            Role::WritableCandidate,
+            Role::WritableRentCredit,
             Role::SystemProgram,
             Role::RentSysvar,
             Role::ClockSysvar,
@@ -1279,89 +1499,116 @@ fn general_frame_role(
         .ok_or(Error::InvalidLength)?,
         GeneralInstructionTagV1::VerifyCandidatePage => {
             require_page_count(count)?;
-            let execution_end = 3usize
+            let execution_end = 7usize
                 .checked_add(usize::from(count))
                 .ok_or(Error::ArithmeticOverflow)?;
-            if index < 3 {
+            if index < 7 {
                 *[
-                    Role::GeneralConfig,
+                    Role::WorkActor,
+                    Role::ReadonlyRoot,
                     Role::ReadonlyBatch,
+                    Role::GeneralConfig,
+                    Role::StagingCursorVacancy,
                     Role::WritableCandidate,
+                    Role::ReadonlyCandidatePage,
                 ]
                 .get(index)
                 .ok_or(Error::InvalidLength)?
             } else if index < execution_end {
                 Role::ReadonlyOrderState
             } else {
-                *[
-                    Role::StagingCursorVacancy,
-                    Role::RentSysvar,
-                    Role::ClockSysvar,
-                ]
-                .get(index - execution_end)
-                .ok_or(Error::InvalidLength)?
+                *[Role::RentSysvar, Role::ClockSysvar]
+                    .get(index - execution_end)
+                    .ok_or(Error::InvalidLength)?
             }
         }
         GeneralInstructionTagV1::FinishCandidate => *[
+            Role::WorkActor,
+            Role::ReadonlyRoot,
+            Role::ReadonlyBatch,
             Role::GeneralConfig,
-            Role::WritableCandidate,
             Role::StagingCursorVacancy,
-            Role::RentSysvar,
-        ]
-        .get(index)
-        .ok_or(Error::InvalidLength)?,
-        GeneralInstructionTagV1::ConsiderCandidate => *[
-            Role::GeneralConfig,
-            Role::WritableBatch,
             Role::WritableCandidate,
-            Role::StagingCursorVacancy,
             Role::RentSysvar,
             Role::ClockSysvar,
         ]
         .get(index)
         .ok_or(Error::InvalidLength)?,
-        GeneralInstructionTagV1::LockSelection => *[Role::WritableBatch, Role::ClockSysvar]
-            .get(index)
-            .ok_or(Error::InvalidLength)?,
-        GeneralInstructionTagV1::BeginSettlement => *[
-            Role::WritableMarket,
-            Role::Realm,
+        GeneralInstructionTagV1::ConsiderCandidate => *[
+            Role::WorkActor,
+            Role::ReadonlyRoot,
             Role::GeneralConfig,
+            Role::StagingCursorVacancy,
+            Role::WritableBatch,
+            Role::WritableCandidate,
+            Role::RentSysvar,
+            Role::ClockSysvar,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::LockSelection => *[
+            Role::WorkActor,
+            Role::GeneralConfig,
+            Role::StagingCursorVacancy,
+            Role::ReadonlyRoot,
+            Role::WritableBatch,
+            Role::RentSysvar,
+            Role::ClockSysvar,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::BeginSettlement => *[
+            Role::WorkActor,
+            Role::ReadonlyMarket,
+            Role::Realm,
+            Role::ClaimBasis,
+            Role::GeneralConfig,
+            Role::StagingCursorVacancy,
             Role::StagingCursorVacancy,
             Role::StagingCursorVacancy,
             Role::Mint,
             Role::TokenProgram,
-            Role::CollateralVault,
+            Role::ReadonlyRoot,
             Role::WritableBatch,
-            Role::ReadonlyCandidate,
+            Role::WritableCandidate,
             Role::WritableSettlementCursor,
-            Role::WritableGeneralFunding,
-            Role::ReadonlyRentCredit,
+            Role::SettlementPosition,
+            Role::SettlementQuoteEscrow,
+            Role::WritableRentCredit,
             Role::SystemProgram,
             Role::RentSysvar,
             Role::ClockSysvar,
         ]
         .get(index)
         .ok_or(Error::InvalidLength)?,
-        GeneralInstructionTagV1::SettlePage => {
+        GeneralInstructionTagV1::CollectSettlementPage => {
             require_page_count(count)?;
-            let execution_end = 8usize
+            let execution_end = 17usize
                 .checked_add(
                     usize::from(count)
-                        .checked_mul(5)
+                        .checked_mul(4)
                         .ok_or(Error::ArithmeticOverflow)?,
                 )
                 .ok_or(Error::ArithmeticOverflow)?;
-            if index < 8 {
+            if index < 17 {
                 *[
+                    Role::WorkActor,
                     Role::ReadonlyMarket,
+                    Role::Realm,
+                    Role::ClaimBasis,
                     Role::GeneralConfig,
-                    Role::ReadonlyBatch,
-                    Role::ReadonlyCandidate,
-                    Role::WritableSettlementCursor,
-                    Role::WritableGeneralFunding,
+                    Role::StagingCursorVacancy,
+                    Role::StagingCursorVacancy,
+                    Role::StagingCursorVacancy,
                     Role::Mint,
                     Role::TokenProgram,
+                    Role::ReadonlyRoot,
+                    Role::ReadonlyBatch,
+                    Role::WritableCandidate,
+                    Role::WritableSettlementCursor,
+                    Role::SettlementPosition,
+                    Role::SettlementQuoteEscrow,
+                    Role::ReadonlyCandidatePage,
                 ]
                 .get(index)
                 .ok_or(Error::InvalidLength)?
@@ -1371,31 +1618,108 @@ fn general_frame_role(
                     Role::WritableOrderCustody,
                     Role::OwnerPosition,
                     Role::QuoteEscrow,
-                    Role::QuoteDestination,
                 ]
-                .get((index - 8) % 5)
+                .get((index - 17) % 4)
                 .ok_or(Error::InvalidLength)?
             } else {
-                *[Role::StagingCursorVacancy, Role::RentSysvar]
+                *[Role::RentSysvar]
+                    .get(index - execution_end)
+                    .ok_or(Error::InvalidLength)?
+            }
+        }
+        GeneralInstructionTagV1::MaterializeSettlement => *[
+            Role::WorkActor,
+            Role::WritableMarket,
+            Role::Realm,
+            Role::ClaimBasis,
+            Role::GeneralConfig,
+            Role::StagingCursorVacancy,
+            Role::StagingCursorVacancy,
+            Role::StagingCursorVacancy,
+            Role::Mint,
+            Role::TokenProgram,
+            Role::CollateralVault,
+            Role::ReadonlyRoot,
+            Role::ReadonlyBatch,
+            Role::WritableCandidate,
+            Role::WritableSettlementCursor,
+            Role::SettlementPosition,
+            Role::SettlementQuoteEscrow,
+            Role::RentSysvar,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::DistributeSettlementPage => {
+            require_page_count(count)?;
+            let execution_end = 18usize
+                .checked_add(
+                    usize::from(count)
+                        .checked_mul(2)
+                        .ok_or(Error::ArithmeticOverflow)?,
+                )
+                .ok_or(Error::ArithmeticOverflow)?;
+            if index < 18 {
+                *[
+                    Role::WorkActor,
+                    Role::ReadonlyMarket,
+                    Role::Realm,
+                    Role::ClaimBasis,
+                    Role::GeneralConfig,
+                    Role::StagingCursorVacancy,
+                    Role::StagingCursorVacancy,
+                    Role::StagingCursorVacancy,
+                    Role::Mint,
+                    Role::TokenProgram,
+                    Role::ReadonlyRoot,
+                    Role::ReadonlyBatch,
+                    Role::WritableCandidate,
+                    Role::WritableSettlementCursor,
+                    Role::SettlementPosition,
+                    Role::SettlementQuoteEscrow,
+                    Role::WritableCandidatePage,
+                    Role::WritableRentCredit,
+                ]
+                .get(index)
+                .ok_or(Error::InvalidLength)?
+            } else if index < execution_end {
+                *[Role::OwnerPosition, Role::QuoteDestination]
+                    .get((index - 18) % 2)
+                    .ok_or(Error::InvalidLength)?
+            } else {
+                *[Role::RentSysvar]
                     .get(index - execution_end)
                     .ok_or(Error::InvalidLength)?
             }
         }
         GeneralInstructionTagV1::FinishSettlement => *[
+            Role::WorkActor,
+            Role::ReadonlyMarket,
+            Role::Realm,
+            Role::ClaimBasis,
             Role::GeneralConfig,
-            Role::WritableBatch,
-            Role::ReadonlyCandidate,
-            Role::ReadonlySettlementCursor,
-            Role::WritableGeneralFunding,
             Role::StagingCursorVacancy,
+            Role::StagingCursorVacancy,
+            Role::StagingCursorVacancy,
+            Role::Mint,
+            Role::TokenProgram,
+            Role::ReadonlyRoot,
+            Role::WritableBatch,
+            Role::WritableCandidate,
+            Role::WritableSettlementCursor,
+            Role::SettlementPosition,
+            Role::SettlementQuoteEscrow,
             Role::RentSysvar,
         ]
         .get(index)
         .ok_or(Error::InvalidLength)?,
         GeneralInstructionTagV1::CloseBatch => *[
+            Role::WorkActor,
+            Role::GeneralConfig,
+            Role::StagingCursorVacancy,
             Role::WritableRoot,
             Role::WritableBatch,
             Role::WritableRentCredit,
+            Role::RentSysvar,
         ]
         .get(index)
         .ok_or(Error::InvalidLength)?,
@@ -1405,26 +1729,96 @@ fn general_frame_role(
         GeneralInstructionTagV1::CloseGeneral => *[
             Role::WritableMarket,
             Role::GeneralConfig,
+            Role::StagingCursorVacancy,
             Role::WritableRoot,
             Role::WritableGeneralFunding,
             Role::WritableRentCredit,
-            Role::StagingCursorVacancy,
             Role::RentSysvar,
         ]
         .get(index)
         .ok_or(Error::InvalidLength)?,
         GeneralInstructionTagV1::CloseCandidate => *[
-            Role::ReadonlyBatch,
+            Role::WorkActor,
+            Role::ReadonlyRoot,
+            Role::WritableBatch,
+            Role::GeneralConfig,
+            Role::StagingCursorVacancy,
             Role::WritableCandidate,
             Role::WritableRentCredit,
+            Role::RentSysvar,
         ]
         .get(index)
         .ok_or(Error::InvalidLength)?,
         GeneralInstructionTagV1::CloseSettlement => *[
-            Role::ReadonlyBatch,
-            Role::ReadonlyCandidate,
+            Role::WorkActor,
+            Role::ReadonlyMarket,
+            Role::Realm,
+            Role::ClaimBasis,
+            Role::GeneralConfig,
+            Role::StagingCursorVacancy,
+            Role::StagingCursorVacancy,
+            Role::StagingCursorVacancy,
+            Role::Mint,
+            Role::TokenProgram,
+            Role::ReadonlyRoot,
+            Role::WritableBatch,
+            Role::WritableCandidate,
             Role::WritableSettlementCursor,
+            Role::SettlementPosition,
+            Role::SettlementQuoteEscrow,
             Role::WritableRentCredit,
+            Role::RentSysvar,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::CreateCandidatePage => *[
+            Role::WorkActor,
+            Role::GeneralConfig,
+            Role::StagingCursorVacancy,
+            Role::ReadonlyRoot,
+            Role::ReadonlyBatch,
+            Role::WritableCandidate,
+            Role::WritableCandidatePage,
+            Role::WritableRentCredit,
+            Role::SystemProgram,
+            Role::RentSysvar,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::CloseCandidatePage => *[
+            Role::WorkActor,
+            Role::GeneralConfig,
+            Role::StagingCursorVacancy,
+            Role::ReadonlyRoot,
+            Role::ReadonlyBatch,
+            Role::WritableCandidate,
+            Role::WritableCandidatePage,
+            Role::WritableRentCredit,
+            Role::RentSysvar,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::RejectCandidate => *[
+            Role::WorkActor,
+            Role::ReadonlyRoot,
+            Role::ReadonlyBatch,
+            Role::GeneralConfig,
+            Role::StagingCursorVacancy,
+            Role::WritableCandidate,
+            Role::RentSysvar,
+            Role::ClockSysvar,
+        ]
+        .get(index)
+        .ok_or(Error::InvalidLength)?,
+        GeneralInstructionTagV1::ExpireSettlement => *[
+            Role::WorkActor,
+            Role::ReadonlyRoot,
+            Role::WritableBatch,
+            Role::GeneralConfig,
+            Role::StagingCursorVacancy,
+            Role::WritableCandidate,
+            Role::RentSysvar,
+            Role::ClockSysvar,
         ]
         .get(index)
         .ok_or(Error::InvalidLength)?,
@@ -1456,7 +1850,10 @@ fn validate_general_account_role(
         | Role::QuoteDestination
         | Role::WritableRentCredit
         | Role::WritableCandidate
+        | Role::WritableCandidatePage
         | Role::WritableSettlementCursor
+        | Role::SettlementPosition
+        | Role::SettlementQuoteEscrow
         | Role::CollateralVault => (false, true, false),
         _ => (false, false, false),
     };
@@ -1652,6 +2049,7 @@ pub fn activate_general_v1<'a>(
     mut market_root: MarketRoot,
     config_id: ContentId,
     config: GeneralConfigV1,
+    market_identity_id: ContentId,
     manifest_id: ContentId,
     manifest: CapabilityManifestV1<'a>,
     capability_funding: FundingStateV1,
@@ -1711,7 +2109,7 @@ pub fn activate_general_v1<'a>(
         commitments: GeneralActivationCommitmentsV1 {
             config_id,
             config,
-            market_identity_id: config.market_identity_id,
+            market_identity_id,
             market_identity: identity,
             manifest_id,
             manifest,
@@ -1750,26 +2148,51 @@ impl GeneralFundingCustodyObservationV1 {
     }
 }
 
-/// Complete pure plan for one permissionless, prepaid General batch opening.
+/// Trusted current Rent and safe precreation balance for a new batch account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BatchRentObservationV1 {
+    /// Current Rent minimum for the exact batch-state width.
+    pub exact_batch_rent_lamports: u64,
+    /// Balance of a System-owned, nonexecutable, data-empty precreation address.
+    pub precreation_lamports: u64,
+}
+
+/// Adapter-observed capitalization of one live batch account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BatchCapitalizationV1 {
+    /// Current physical lamports on the batch account.
+    pub account_lamports: u64,
+    /// Current Rent minimum for the exact batch-state width.
+    pub exact_state_rent_lamports: u64,
+}
+
+/// Atomic permissionless batch-retirement payout plan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BatchCloseV1 {
+    /// Final prepaid reward paid to the permissionless closer.
+    pub continuation_reward_lamports: u64,
+    /// Batch-account Rent returned to permanent RentCredit.
+    pub rent_credit_lamports: u64,
+    /// Root-owned permanent RentCredit beneficiary.
+    pub rent_beneficiary: [u8; 32],
+}
+
+/// Complete pure plan for one caller-capitalized General batch opening.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralOpenBatchPlanV1 {
     root_after: GeneralRootV1,
-    funding_after: GeneralFundingV1,
     batch: BatchRootV1,
     batch_seeds: GeneralBatchPdaSeedsV1,
-    batch_rent_lamports: u64,
-    funding_account_lamports_after: u64,
+    batch_account_lamports: u64,
+    payer_top_up_lamports: u64,
+    rent_credit_surplus_lamports: u64,
+    rent_beneficiary: [u8; 32],
 }
 
 impl GeneralOpenBatchPlanV1 {
     /// Return the root after reserving exactly one sequence and direct child.
     pub const fn root_after(self) -> GeneralRootV1 {
         self.root_after
-    }
-
-    /// Return funding after consuming exact batch Rent from liveness.
-    pub const fn funding_after(self) -> GeneralFundingV1 {
-        self.funding_after
     }
 
     /// Return the newly opened canonical collecting batch.
@@ -1782,21 +2205,33 @@ impl GeneralOpenBatchPlanV1 {
         self.batch_seeds
     }
 
-    /// Return exact current Rent transferred into the batch account.
-    pub const fn batch_rent_lamports(self) -> u64 {
-        self.batch_rent_lamports
+    /// Return exact Rent plus all batch-owned continuation work.
+    pub const fn batch_account_lamports(self) -> u64 {
+        self.batch_account_lamports
     }
 
-    /// Return exact required General-funding lamports after batch creation.
-    pub const fn funding_account_lamports_after(self) -> u64 {
-        self.funding_account_lamports_after
+    /// Return the caller transfer after crediting safe precreation dust.
+    pub const fn payer_top_up_lamports(self) -> u64 {
+        self.payer_top_up_lamports
+    }
+
+    /// Return safe precreation surplus routed to permanent RentCredit.
+    pub const fn rent_credit_surplus_lamports(self) -> u64 {
+        self.rent_credit_surplus_lamports
+    }
+
+    /// Return the root-owned permanent RentCredit beneficiary.
+    pub const fn rent_beneficiary(self) -> [u8; 32] {
+        self.rent_beneficiary
     }
 }
 
-/// Reserve and capitalize one batch from segregated native liveness funding.
+/// Reserve and capitalize one batch from the opening caller's present lamports.
 ///
-/// `batch_rent_lamports` is the adapter's current Rent calculation for the
-/// exact [`BATCH_ROOT_BYTES`] width, not a caller-selected fee or reward.
+/// The batch account itself owns current Rent and exactly three continuation
+/// rewards: collection close, selection close, and terminal retirement. General
+/// activation funding therefore remains finite and cannot be mistaken for an
+/// unbounded stream of future batch capital.
 #[allow(clippy::too_many_arguments)]
 pub fn open_general_batch_v1(
     frame: GeneralAccountFrameV1<'_>,
@@ -1804,9 +2239,7 @@ pub fn open_general_batch_v1(
     config_id: ContentId,
     config: GeneralConfigV1,
     mut root: GeneralRootV1,
-    mut funding: GeneralFundingV1,
-    custody: GeneralFundingCustodyObservationV1,
-    batch_rent_lamports: u64,
+    rent: BatchRentObservationV1,
     current_slot: u64,
 ) -> Result<GeneralOpenBatchPlanV1> {
     if frame.tag != GeneralInstructionTagV1::OpenBatch || frame.execution_count != 0 {
@@ -1819,43 +2252,32 @@ pub fn open_general_batch_v1(
         || root.config_id != config_id
         || root.market != accounts.get(1).ok_or(Error::InvalidLength)?.key
         || root.rent_beneficiary != accounts.get(6).ok_or(Error::InvalidLength)?.key
-        || funding.capability_release_id != config.capability_release_id
     {
         return Err(Error::AuthorityMismatch);
-    }
-    let expected_lamports = custody
-        .exact_account_rent_lamports
-        .checked_add(funding.remaining_lamports()?)
-        .ok_or(Error::ArithmeticOverflow)?;
-    if custody.account_lamports != expected_lamports {
-        return Err(Error::GeneralFundingCustodyMismatch);
     }
     let sequence = root.open_batch()?;
     if sequence != instruction.batch_sequence {
         return Err(Error::CursorMismatch);
     }
-    funding.consume(FundingCompartment::Liveness, batch_rent_lamports)?;
     let batch = BatchRootV1::open(config_id, sequence, current_slot, config)?;
     let batch_seeds =
-        GeneralBatchPdaSeedsV1::new(accounts.get(3).ok_or(Error::InvalidLength)?.key, sequence)?;
-    let funding_account_lamports_after = custody
-        .account_lamports
-        .checked_sub(batch_rent_lamports)
-        .ok_or(Error::GeneralFundingCustodyMismatch)?;
-    let canonical_after = custody
-        .exact_account_rent_lamports
-        .checked_add(funding.remaining_lamports()?)
+        GeneralBatchPdaSeedsV1::new(accounts.get(4).ok_or(Error::InvalidLength)?.key, sequence)?;
+    let batch_account_lamports = rent
+        .exact_batch_rent_lamports
+        .checked_add(batch.work_remaining_lamports)
         .ok_or(Error::ArithmeticOverflow)?;
-    if funding_account_lamports_after != canonical_after {
-        return Err(Error::GeneralFundingCustodyMismatch);
-    }
+    let payer_top_up_lamports = batch_account_lamports.saturating_sub(rent.precreation_lamports);
+    let rent_credit_surplus_lamports = rent
+        .precreation_lamports
+        .saturating_sub(batch_account_lamports);
     Ok(GeneralOpenBatchPlanV1 {
         root_after: root,
-        funding_after: funding,
         batch,
         batch_seeds,
-        batch_rent_lamports,
-        funding_account_lamports_after,
+        batch_account_lamports,
+        payer_top_up_lamports,
+        rent_credit_surplus_lamports,
+        rent_beneficiary: root.rent_beneficiary,
     })
 }
 
@@ -1863,7 +2285,6 @@ pub fn open_general_batch_v1(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralConfigV1 {
     capacity_profile_id: ContentId,
-    market_identity_id: ContentId,
     claim_basis_id: ContentId,
     capability_release_id: ContentId,
     generation: u64,
@@ -1873,6 +2294,7 @@ pub struct GeneralConfigV1 {
     settlement_slots: u64,
     max_orders_per_candidate: u32,
     max_pages_per_candidate: u32,
+    continuation_reward_lamports: u64,
     outcome_count: u16,
 }
 
@@ -1881,8 +2303,6 @@ pub struct GeneralConfigV1 {
 pub struct GeneralConfigV1Input {
     /// Identity of the liftable capacity profile.
     pub capacity_profile_id: ContentId,
-    /// Exact content identity of the immutable Market identity preimage.
-    pub market_identity_id: ContentId,
     /// Exact ClaimBasis content identity from that Market identity.
     pub claim_basis_id: ContentId,
     /// Reviewed General capability release selected by the manifest.
@@ -1901,6 +2321,8 @@ pub struct GeneralConfigV1Input {
     pub max_orders_per_candidate: u32,
     /// Profile bound on verification/settlement pages.
     pub max_pages_per_candidate: u32,
+    /// Exact prepaid native reward for each permissionless candidate continuation.
+    pub continuation_reward_lamports: u64,
     /// Exact finite ClaimBasis width.
     pub outcome_count: u16,
 }
@@ -1923,6 +2345,7 @@ impl GeneralConfigV1 {
             || input.settlement_slots == 0
             || input.max_orders_per_candidate == 0
             || input.max_pages_per_candidate == 0
+            || input.continuation_reward_lamports == 0
         {
             return Err(Error::ZeroCapacity);
         }
@@ -1937,7 +2360,6 @@ impl GeneralConfigV1 {
         }
         Ok(Self {
             capacity_profile_id: input.capacity_profile_id,
-            market_identity_id: input.market_identity_id,
             claim_basis_id: input.claim_basis_id,
             capability_release_id: input.capability_release_id,
             generation: input.generation,
@@ -1947,6 +2369,7 @@ impl GeneralConfigV1 {
             settlement_slots: input.settlement_slots,
             max_orders_per_candidate: input.max_orders_per_candidate,
             max_pages_per_candidate: input.max_pages_per_candidate,
+            continuation_reward_lamports: input.continuation_reward_lamports,
             outcome_count: input.outcome_count,
         })
     }
@@ -1961,20 +2384,20 @@ impl GeneralConfigV1 {
             return Err(Error::UnsupportedSchema);
         }
         require_zero(bytes, 14, 2)?;
-        require_zero(bytes, 192, 8)?;
+        require_zero(bytes, 168, 32)?;
         Self::new(GeneralConfigV1Input {
             outcome_count: read_u16(bytes, 12)?,
             capacity_profile_id: read_id(bytes, 16)?,
-            market_identity_id: read_id(bytes, 48)?,
-            claim_basis_id: read_id(bytes, 80)?,
-            capability_release_id: read_id(bytes, 112)?,
-            generation: read_u64(bytes, 144)?,
-            price_scale: read_u64(bytes, 152)?,
-            collection_slots: read_u64(bytes, 160)?,
-            selection_slots: read_u64(bytes, 168)?,
-            settlement_slots: read_u64(bytes, 176)?,
-            max_orders_per_candidate: read_u32(bytes, 184)?,
-            max_pages_per_candidate: read_u32(bytes, 188)?,
+            claim_basis_id: read_id(bytes, 48)?,
+            capability_release_id: read_id(bytes, 80)?,
+            generation: read_u64(bytes, 112)?,
+            price_scale: read_u64(bytes, 120)?,
+            collection_slots: read_u64(bytes, 128)?,
+            selection_slots: read_u64(bytes, 136)?,
+            settlement_slots: read_u64(bytes, 144)?,
+            max_orders_per_candidate: read_u32(bytes, 152)?,
+            max_pages_per_candidate: read_u32(bytes, 156)?,
+            continuation_reward_lamports: read_u64(bytes, 160)?,
         })
     }
 
@@ -1986,22 +2409,21 @@ impl GeneralConfigV1 {
         put(&mut out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
         put(&mut out, 12, &self.outcome_count.to_le_bytes());
         put(&mut out, 16, self.capacity_profile_id.as_bytes());
-        put(&mut out, 48, self.market_identity_id.as_bytes());
-        put(&mut out, 80, self.claim_basis_id.as_bytes());
-        put(&mut out, 112, self.capability_release_id.as_bytes());
-        put(&mut out, 144, &self.generation.to_le_bytes());
-        put(&mut out, 152, &self.price_scale.to_le_bytes());
-        put(&mut out, 160, &self.collection_slots.to_le_bytes());
-        put(&mut out, 168, &self.selection_slots.to_le_bytes());
-        put(&mut out, 176, &self.settlement_slots.to_le_bytes());
-        put(&mut out, 184, &self.max_orders_per_candidate.to_le_bytes());
-        put(&mut out, 188, &self.max_pages_per_candidate.to_le_bytes());
+        put(&mut out, 48, self.claim_basis_id.as_bytes());
+        put(&mut out, 80, self.capability_release_id.as_bytes());
+        put(&mut out, 112, &self.generation.to_le_bytes());
+        put(&mut out, 120, &self.price_scale.to_le_bytes());
+        put(&mut out, 128, &self.collection_slots.to_le_bytes());
+        put(&mut out, 136, &self.selection_slots.to_le_bytes());
+        put(&mut out, 144, &self.settlement_slots.to_le_bytes());
+        put(&mut out, 152, &self.max_orders_per_candidate.to_le_bytes());
+        put(&mut out, 156, &self.max_pages_per_candidate.to_le_bytes());
+        put(
+            &mut out,
+            160,
+            &self.continuation_reward_lamports.to_le_bytes(),
+        );
         out
-    }
-
-    /// Return the Market identity commitment.
-    pub const fn market_identity_id(self) -> ContentId {
-        self.market_identity_id
     }
 
     /// Return the selected liftable capacity-profile identity.
@@ -2042,6 +2464,11 @@ impl GeneralConfigV1 {
     /// Return the immutable candidate page bound.
     pub const fn max_pages_per_candidate(self) -> u32 {
         self.max_pages_per_candidate
+    }
+
+    /// Return the immutable candidate-owned permissionless continuation reward.
+    pub const fn continuation_reward_lamports(self) -> u64 {
+        self.continuation_reward_lamports
     }
 }
 
@@ -2144,6 +2571,24 @@ impl GeneralRootV1 {
         })
     }
 
+    /// Validate one signed artifact against the activated root and reusable config.
+    pub fn validate_authority(
+        self,
+        market: [u8; 32],
+        claim_basis_id: ContentId,
+        generation: u64,
+        config: GeneralConfigV1,
+    ) -> Result<()> {
+        if market != self.market
+            || claim_basis_id != config.claim_basis_id
+            || generation != self.generation
+            || generation != config.generation
+        {
+            return Err(Error::AuthorityMismatch);
+        }
+        Ok(())
+    }
+
     /// Reserve the next unique batch sequence.
     pub fn open_batch(&mut self) -> Result<u64> {
         if self.phase != GeneralPhase::Active {
@@ -2188,9 +2633,9 @@ impl GeneralRootV1 {
         Ok(())
     }
 
-    /// Retire after an adapter proves segregated funding has been discharged.
-    pub fn retire(&mut self, funding_discharged: bool) -> Result<()> {
-        if self.phase != GeneralPhase::Terminal || !funding_discharged {
+    /// Retire only after the canonical segregated funding owner is discharged.
+    pub fn retire(&mut self, funding: GeneralFundingV1) -> Result<()> {
+        if self.phase != GeneralPhase::Terminal || !funding.is_discharged() {
             return Err(Error::NotQuiescent);
         }
         self.phase = GeneralPhase::Retired;
@@ -2236,7 +2681,7 @@ impl GeneralRootV1 {
 /// Exact signed coefficient portfolio and immutable execution authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PortfolioOrderV1<const N: usize> {
-    market_identity_id: ContentId,
+    market: [u8; 32],
     claim_basis_id: ContentId,
     owner: OwnerKeyV1,
     order_id: ContentId,
@@ -2253,8 +2698,8 @@ pub struct PortfolioOrderV1<const N: usize> {
 /// Inputs for one atomic coefficient portfolio order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PortfolioOrderV1Input<const N: usize> {
-    /// Market identity commitment.
-    pub market_identity_id: ContentId,
+    /// Activated provider-neutral Market account key.
+    pub market: [u8; 32],
     /// Exact ClaimBasis identity.
     pub claim_basis_id: ContentId,
     /// Exact Ed25519/SVM public key whose signature authorizes this order.
@@ -2287,7 +2732,7 @@ impl<const N: usize> PortfolioOrderV1<N> {
             return Err(Error::InvalidFill);
         }
         Ok(Self {
-            market_identity_id: input.market_identity_id,
+            market: input.market,
             claim_basis_id: input.claim_basis_id,
             owner: input.owner,
             order_id: input.order_id,
@@ -2341,7 +2786,7 @@ impl<const N: usize> PortfolioOrderV1<N> {
         }
         Self::new(PortfolioOrderV1Input {
             outcome_count: read_u16(bytes, 12)?,
-            market_identity_id: read_id(bytes, 16)?,
+            market: array::<32>(bytes, 16)?,
             claim_basis_id: read_id(bytes, 48)?,
             owner: read_owner_key(bytes, 80)?,
             order_id: read_id(bytes, 112)?,
@@ -2364,7 +2809,7 @@ impl<const N: usize> PortfolioOrderV1<N> {
         put(&mut out, 8, &SCHEMA_V1.to_le_bytes());
         put(&mut out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
         put(&mut out, 12, &self.outcome_count.to_le_bytes());
-        put(&mut out, 16, self.market_identity_id.as_bytes());
+        put(&mut out, 16, &self.market);
         put(&mut out, 48, self.claim_basis_id.as_bytes());
         put(&mut out, 80, self.owner.as_bytes());
         put(&mut out, 112, self.order_id.as_bytes());
@@ -2403,7 +2848,7 @@ impl<const N: usize> PortfolioOrderV1<N> {
         put(&mut out, 8, &SCHEMA_V1.to_le_bytes());
         put(&mut out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
         put(&mut out, 12, &self.outcome_count.to_le_bytes());
-        put(&mut out, 16, self.market_identity_id.as_bytes());
+        put(&mut out, 16, &self.market);
         put(&mut out, 48, self.claim_basis_id.as_bytes());
         put(&mut out, 80, self.owner.as_bytes());
         put(&mut out, 112, &self.generation.to_le_bytes());
@@ -2441,9 +2886,9 @@ impl<const N: usize> PortfolioOrderV1<N> {
         self.nonce
     }
 
-    /// Return the Market identity commitment.
-    pub const fn market_identity_id(self) -> ContentId {
-        self.market_identity_id
+    /// Return the activated Market account key.
+    pub const fn market(self) -> [u8; 32] {
+        self.market
     }
 
     /// Return the exact ClaimBasis commitment.
@@ -2483,13 +2928,12 @@ impl<const N: usize> PortfolioOrderV1<N> {
 
     /// Compute the exact worst-case quote and native-claim custody required
     /// before this signed order may become live.
-    pub fn worst_case_reserve(self, config: GeneralConfigV1) -> Result<GeneralOrderReserveV1<N>> {
-        validate_authority(
-            self.market_identity_id,
-            self.claim_basis_id,
-            self.generation,
-            config,
-        )?;
+    pub fn worst_case_reserve(
+        self,
+        root: GeneralRootV1,
+        config: GeneralConfigV1,
+    ) -> Result<GeneralOrderReserveV1<N>> {
+        root.validate_authority(self.market, self.claim_basis_id, self.generation, config)?;
         Ok(GeneralOrderReserveV1 {
             quote_atoms: quote_reserve(
                 self.max_quote_debit_per_lot_numerator,
@@ -2713,7 +3157,7 @@ impl OrderStateV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralOrderCustodyV1<const N: usize> {
     order_id: ContentId,
-    market_identity_id: ContentId,
+    market: [u8; 32],
     owner: OwnerKeyV1,
     rent_beneficiary: [u8; 32],
     quote_escrow: [u8; 32],
@@ -2792,16 +3236,17 @@ impl<const N: usize> GeneralOrderCustodyV1<N> {
     /// Atomically plan replay reservation and worst-case custody admission.
     pub fn admit(
         order: PortfolioOrderV1<N>,
+        root: GeneralRootV1,
         config: GeneralConfigV1,
         rent_beneficiary: [u8; 32],
         quote_escrow: [u8; 32],
     ) -> Result<GeneralOrderAdmissionV1<N>> {
         require_nonzero_key(&rent_beneficiary)?;
         require_nonzero_key(&quote_escrow)?;
-        let reserve = order.worst_case_reserve(config)?;
+        let reserve = order.worst_case_reserve(root, config)?;
         let custody = Self {
             order_id: order.order_id,
-            market_identity_id: order.market_identity_id,
+            market: order.market,
             owner: order.owner,
             rent_beneficiary,
             quote_escrow,
@@ -2843,7 +3288,7 @@ impl<const N: usize> GeneralOrderCustodyV1<N> {
         }
         Ok(Self {
             order_id: read_id(bytes, 16)?,
-            market_identity_id: read_id(bytes, 48)?,
+            market: array::<32>(bytes, 48)?,
             owner: read_owner_key(bytes, 80)?,
             rent_beneficiary,
             quote_escrow,
@@ -2864,7 +3309,7 @@ impl<const N: usize> GeneralOrderCustodyV1<N> {
         put(out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
         put(out, 12, &self.outcome_count.to_le_bytes());
         put(out, 16, self.order_id.as_bytes());
-        put(out, 48, self.market_identity_id.as_bytes());
+        put(out, 48, &self.market);
         put(out, 80, self.owner.as_bytes());
         put(out, 112, &self.rent_beneficiary);
         put(out, 144, &self.quote_escrow);
@@ -2882,17 +3327,22 @@ impl<const N: usize> GeneralOrderCustodyV1<N> {
 
     /// Authenticate immutable bindings and prove reserves never exceed the
     /// signed order's admission ceiling.
-    pub fn authenticate(&self, order: PortfolioOrderV1<N>, config: GeneralConfigV1) -> Result<()> {
+    pub fn authenticate(
+        &self,
+        order: PortfolioOrderV1<N>,
+        root: GeneralRootV1,
+        config: GeneralConfigV1,
+    ) -> Result<()> {
         self.validate_shape()?;
         if self.order_id != order.order_id
-            || self.market_identity_id != order.market_identity_id
+            || self.market != order.market
             || self.owner != order.owner
             || self.generation != order.generation
             || self.outcome_count != order.outcome_count
         {
             return Err(Error::CustodyMismatch);
         }
-        let ceiling = order.worst_case_reserve(config)?;
+        let ceiling = order.worst_case_reserve(root, config)?;
         if self.reserved_quote_atoms > ceiling.quote_atoms
             || self
                 .reserved_claim_atoms
@@ -2912,9 +3362,10 @@ impl<const N: usize> GeneralOrderCustodyV1<N> {
         state: &mut OrderStateV1,
         order: PortfolioOrderV1<N>,
         receipt: SettlementReceiptV1<N>,
+        root: GeneralRootV1,
         config: GeneralConfigV1,
     ) -> Result<GeneralCustodyConsumptionV1<N>> {
-        self.authenticate(order, config)?;
+        self.authenticate(order, root, config)?;
         state.authenticate(order)?;
         if receipt.order_id != order.order_id
             || receipt.owner != order.owner
@@ -2984,6 +3435,7 @@ impl<const N: usize> GeneralOrderCustodyV1<N> {
 
     /// Cancel before collection lock and emit the complete residual release in
     /// the same semantic transition.
+    #[allow(clippy::too_many_arguments)]
     pub fn cancel_and_release(
         self,
         state: &mut OrderStateV1,
@@ -2991,9 +3443,10 @@ impl<const N: usize> GeneralOrderCustodyV1<N> {
         owner: OwnerKeyV1,
         now_slot: u64,
         collection_close: u64,
+        root: GeneralRootV1,
         config: GeneralConfigV1,
     ) -> Result<GeneralCustodyReleaseV1<N>> {
-        self.authenticate(order, config)?;
+        self.authenticate(order, root, config)?;
         let mut next_state = *state;
         next_state.authenticate(order)?;
         next_state.cancel(owner, now_slot, collection_close)?;
@@ -3009,9 +3462,10 @@ impl<const N: usize> GeneralOrderCustodyV1<N> {
         state: &mut OrderStateV1,
         order: PortfolioOrderV1<N>,
         batch: BatchRootV1,
+        root: GeneralRootV1,
         config: GeneralConfigV1,
     ) -> Result<GeneralCustodyReleaseV1<N>> {
-        self.authenticate(order, config)?;
+        self.authenticate(order, root, config)?;
         if batch.phase != BatchPhase::Quiescent || batch.sequence != order.batch_sequence {
             return Err(Error::InvalidPhase);
         }
@@ -3089,14 +3543,12 @@ pub struct ExecutionV1<const N: usize> {
 /// Permissionless candidate submission preimage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CandidateSubmissionV1<const N: usize> {
-    /// Exact Market identity commitment.
-    pub market_identity_id: ContentId,
+    /// Activated provider-neutral Market account key.
+    pub market: [u8; 32],
     /// Exact ClaimBasis identity.
     pub claim_basis_id: ContentId,
     /// Exact signer and permanent rent beneficiary creating this candidate.
     pub submitter: OwnerKeyV1,
-    /// First adapter-authenticated transcript commitment.
-    pub initial_transcript_id: ContentId,
     /// Immutable Market generation.
     pub generation: u64,
     /// Exact batch sequence.
@@ -3105,10 +3557,22 @@ pub struct CandidateSubmissionV1<const N: usize> {
     pub valid_until_slot: u64,
     /// Claimed execution count recomputed by the verifier.
     pub claimed_execution_count: u32,
+    /// Claimed immutable page count recomputed by linked traversal.
+    pub claimed_page_count: u32,
     /// Claimed preference-surplus score recomputed by the verifier.
     pub claimed_score: u128,
+    /// First immutable page content ID in the reverse-built linked artifact.
+    pub first_page_id: ContentId,
+    /// Exact aggregate Rent required to create every candidate-exclusive page copy.
+    pub page_rent_reserve_lamports: u64,
+    /// Exact Rent for cursor Position and quote-escrow temporary settlement accounts.
+    pub settlement_rent_reserve_lamports: u64,
+    /// Claimed exact aggregate quote debit numerator.
+    pub claimed_total_quote_debit_numerator: i128,
     /// Exact scaled-integer simplex coordinates.
     pub prices: [u64; N],
+    /// Claimed exact outcome deltas in canonical ClaimBasis order.
+    pub claimed_net_coefficients: [i128; N],
     /// Exact ClaimBasis width, which must equal the selected const width.
     pub outcome_count: u16,
 }
@@ -3118,7 +3582,7 @@ impl<const N: usize> CandidateSubmissionV1<N> {
     pub fn encoded_len() -> Result<usize> {
         validate_width(N)?;
         CANDIDATE_SUBMISSION_BASE_BYTES
-            .checked_add(N.checked_mul(8).ok_or(Error::ArithmeticOverflow)?)
+            .checked_add(N.checked_mul(24).ok_or(Error::ArithmeticOverflow)?)
             .ok_or(Error::ArithmeticOverflow)
     }
 
@@ -3130,27 +3594,38 @@ impl<const N: usize> CandidateSubmissionV1<N> {
         }
         validate_record_header(bytes)?;
         require_zero(bytes, 14, 2)?;
-        require_zero(bytes, 172, 4)?;
         let outcome_count = read_u16(bytes, 12)?;
         if usize::from(outcome_count) != N {
             return Err(Error::InvalidOutcomeCount);
         }
         let mut prices = [0u64; N];
-        for (index, target) in prices.iter_mut().enumerate() {
+        let mut claimed_net_coefficients = [0i128; N];
+        let claimed_net_offset = vector_offset(CANDIDATE_SUBMISSION_BASE_BYTES, N, 8)?;
+        for (index, (price, net)) in prices
+            .iter_mut()
+            .zip(claimed_net_coefficients.iter_mut())
+            .enumerate()
+        {
             let offset = vector_offset(CANDIDATE_SUBMISSION_BASE_BYTES, index, 8)?;
-            *target = read_u64(bytes, offset)?;
+            *price = read_u64(bytes, offset)?;
+            *net = read_i128(bytes, vector_offset(claimed_net_offset, index, 16)?)?;
         }
         Ok(Self {
-            market_identity_id: read_id(bytes, 16)?,
+            market: array::<32>(bytes, 16)?,
             claim_basis_id: read_id(bytes, 48)?,
             submitter: read_owner_key(bytes, 80)?,
-            initial_transcript_id: read_id(bytes, 112)?,
-            generation: read_u64(bytes, 144)?,
-            batch_sequence: read_u64(bytes, 152)?,
-            valid_until_slot: read_u64(bytes, 160)?,
-            claimed_execution_count: read_u32(bytes, 168)?,
-            claimed_score: read_u128(bytes, 176)?,
+            generation: read_u64(bytes, 112)?,
+            batch_sequence: read_u64(bytes, 120)?,
+            valid_until_slot: read_u64(bytes, 128)?,
+            claimed_execution_count: read_u32(bytes, 136)?,
+            claimed_page_count: read_u32(bytes, 140)?,
+            claimed_score: read_u128(bytes, 144)?,
+            page_rent_reserve_lamports: read_u64(bytes, 160)?,
+            first_page_id: read_id(bytes, 168)?,
+            claimed_total_quote_debit_numerator: read_i128(bytes, 200)?,
+            settlement_rent_reserve_lamports: read_u64(bytes, 216)?,
             prices,
+            claimed_net_coefficients,
             outcome_count,
         })
     }
@@ -3158,7 +3633,12 @@ impl<const N: usize> CandidateSubmissionV1<N> {
     /// Encode one canonical candidate-submission preimage.
     pub fn encode(&self, out: &mut [u8]) -> Result<()> {
         exact_len(out, Self::encoded_len()?)?;
-        if usize::from(self.outcome_count) != N || self.claimed_execution_count == 0 {
+        if usize::from(self.outcome_count) != N
+            || self.claimed_execution_count == 0
+            || self.claimed_page_count == 0
+            || self.page_rent_reserve_lamports == 0
+            || self.settlement_rent_reserve_lamports == 0
+        {
             return Err(Error::CandidateClaimMismatch);
         }
         out.fill(0);
@@ -3166,20 +3646,43 @@ impl<const N: usize> CandidateSubmissionV1<N> {
         put(out, 8, &SCHEMA_V1.to_le_bytes());
         put(out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
         put(out, 12, &self.outcome_count.to_le_bytes());
-        put(out, 16, self.market_identity_id.as_bytes());
+        put(out, 16, &self.market);
         put(out, 48, self.claim_basis_id.as_bytes());
         put(out, 80, self.submitter.as_bytes());
-        put(out, 112, self.initial_transcript_id.as_bytes());
-        put(out, 144, &self.generation.to_le_bytes());
-        put(out, 152, &self.batch_sequence.to_le_bytes());
-        put(out, 160, &self.valid_until_slot.to_le_bytes());
-        put(out, 168, &self.claimed_execution_count.to_le_bytes());
-        put(out, 176, &self.claimed_score.to_le_bytes());
-        for (index, price) in self.prices.iter().enumerate() {
+        put(out, 112, &self.generation.to_le_bytes());
+        put(out, 120, &self.batch_sequence.to_le_bytes());
+        put(out, 128, &self.valid_until_slot.to_le_bytes());
+        put(out, 136, &self.claimed_execution_count.to_le_bytes());
+        put(out, 140, &self.claimed_page_count.to_le_bytes());
+        put(out, 144, &self.claimed_score.to_le_bytes());
+        put(out, 160, &self.page_rent_reserve_lamports.to_le_bytes());
+        put(out, 168, self.first_page_id.as_bytes());
+        put(
+            out,
+            200,
+            &self.claimed_total_quote_debit_numerator.to_le_bytes(),
+        );
+        put(
+            out,
+            216,
+            &self.settlement_rent_reserve_lamports.to_le_bytes(),
+        );
+        let claimed_net_offset = vector_offset(CANDIDATE_SUBMISSION_BASE_BYTES, N, 8)?;
+        for (index, (price, net)) in self
+            .prices
+            .iter()
+            .zip(self.claimed_net_coefficients.iter())
+            .enumerate()
+        {
             put(
                 out,
                 vector_offset(CANDIDATE_SUBMISSION_BASE_BYTES, index, 8)?,
                 &price.to_le_bytes(),
+            );
+            put(
+                out,
+                vector_offset(claimed_net_offset, index, 16)?,
+                &net.to_le_bytes(),
             );
         }
         Ok(())
@@ -3211,29 +3714,123 @@ pub struct CandidateStateV1<const N: usize> {
     verified_pages: u32,
     verified_executions: u32,
     last_order_id: Option<ContentId>,
-    transcript_id: ContentId,
+    next_page_id: Option<ContentId>,
+    open_page_children: u32,
+    page_rent_reserve_remaining: u64,
+    settlement_rent_reserve_remaining: u64,
+    verification_work_remaining: u64,
+    settlement_work_remaining: u64,
+    cleanup_work_remaining: u64,
     net_coefficients: [i128; N],
     total_quote_debit_numerator: i128,
     score: u128,
-    complete_set_delta: i128,
 }
 
-/// One bounded verification page.
+/// Adapter-observed capitalization of one candidate state account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct VerificationPageV1<const N: usize> {
-    /// Zero-based page index committed in the candidate cursor.
+pub struct CandidateCapitalizationV1 {
+    /// Current physical lamports on the candidate state account.
+    pub account_lamports: u64,
+    /// Current Rent minimum for the exact candidate state width.
+    pub exact_state_rent_lamports: u64,
+}
+
+/// Atomic creation plan for one immutable candidate-exclusive page record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidatePageCreationV1 {
+    page_rent_lamports: u64,
+    page_top_up_lamports: u64,
+    candidate_refund_lamports: u64,
+    page_surplus_refund_lamports: u64,
+}
+
+/// Permissionless close plan for one immutable candidate page.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidatePageCloseV1 {
+    /// Exact cleanup reward paid from the candidate state account.
+    pub cleanup_reward_lamports: u64,
+    /// Exact page-account lamports returned to the immutable RentCredit.
+    pub rent_credit_lamports: u64,
+    /// Immutable RentCredit beneficiary.
+    pub rent_beneficiary: OwnerKeyV1,
+}
+
+/// Permissionless terminal close plan for one candidate state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateCloseV1 {
+    /// Exact final cleanup reward paid to the closer.
+    pub cleanup_reward_lamports: u64,
+    /// Candidate-account Rent and unused work returned to RentCredit.
+    pub rent_credit_lamports: u64,
+    /// Immutable RentCredit beneficiary.
+    pub rent_beneficiary: OwnerKeyV1,
+}
+
+/// Trusted Rent minima and safe precreation balances for settlement temporaries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SettlementRentObservationV1 {
+    /// Exact Rent for `[cursor, Position, quote escrow]`.
+    pub exact_rent_lamports: [u64; 3],
+    /// System-owned, nonexecutable, data-empty precreation balances in the same order.
+    pub precreation_lamports: [u64; 3],
+}
+
+/// Physical lamports observed on finished settlement temporary accounts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SettlementCloseObservationV1 {
+    /// Current balances for `[cursor, Position, quote escrow]`.
+    pub account_lamports: [u64; 3],
+    /// Current Rent minima for those exact accounts.
+    pub exact_rent_lamports: [u64; 3],
+}
+
+/// Atomic close plan for the empty settlement temporary cluster.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SettlementCloseV1 {
+    /// Final selected-settlement reward paid to the permissionless closer.
+    pub continuation_reward_lamports: u64,
+    /// All temporary-account lamports returned to immutable RentCredit.
+    pub rent_credit_lamports: u64,
+    /// Immutable candidate RentCredit beneficiary.
+    pub rent_beneficiary: OwnerKeyV1,
+}
+
+impl CandidatePageCreationV1 {
+    /// Return the exact Rent minimum consumed from candidate rent principal.
+    pub const fn page_rent_lamports(self) -> u64 {
+        self.page_rent_lamports
+    }
+
+    /// Return the exact candidate-PDA transfer into the page account.
+    pub const fn page_top_up_lamports(self) -> u64 {
+        self.page_top_up_lamports
+    }
+
+    /// Return unused candidate reserve displaced by safe precreation dust.
+    pub const fn candidate_refund_lamports(self) -> u64 {
+        self.candidate_refund_lamports
+    }
+
+    /// Return precreation surplus removed from the allocated page account.
+    pub const fn page_surplus_refund_lamports(self) -> u64 {
+        self.page_surplus_refund_lamports
+    }
+}
+
+/// One immutable bounded candidate page.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidatePageV1<const N: usize> {
+    /// Zero-based page index committed by linked traversal.
     pub page_index: u32,
-    /// Current transcript commitment.
-    pub prior_transcript_id: ContentId,
-    /// Adapter-derived commitment to this predecessor and canonical page.
-    pub next_transcript_id: ContentId,
+    /// Content ID of the next page, or the canonical terminal sentinel.
+    pub next_page_id: Option<ContentId>,
     /// Number of leading executions used in the fixed envelope.
     pub execution_count: u8,
     /// Fixed V1 execution envelope.
     pub executions: [Option<ExecutionV1<N>>; MAX_EXECUTIONS_PER_PAGE_V1],
 }
 
-impl<const N: usize> VerificationPageV1<N> {
+impl<const N: usize> CandidatePageV1<N> {
     /// Return the exact wire width for this page's leading execution count.
     pub fn encoded_len(execution_count: u8) -> Result<usize> {
         validate_width(N)?;
@@ -3245,7 +3842,7 @@ impl<const N: usize> VerificationPageV1<N> {
             .checked_add(ORDER_STATE_BYTES)
             .and_then(|value| value.checked_add(8))
             .ok_or(Error::ArithmeticOverflow)?;
-        VERIFICATION_PAGE_BASE_BYTES
+        CANDIDATE_PAGE_BASE_BYTES
             .checked_add(
                 count
                     .checked_mul(execution_bytes)
@@ -3256,17 +3853,16 @@ impl<const N: usize> VerificationPageV1<N> {
 
     /// Decode one exact leading-execution page with no unused wire padding.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() < VERIFICATION_PAGE_BASE_BYTES {
+        if bytes.len() < CANDIDATE_PAGE_BASE_BYTES {
             return Err(Error::InvalidLength);
         }
-        if array::<8>(bytes, 0)? != VERIFICATION_PAGE_MAGIC {
+        if array::<8>(bytes, 0)? != CANDIDATE_PAGE_MAGIC {
             return Err(Error::InvalidMagic);
         }
         validate_record_header(bytes)?;
         if usize::from(read_u16(bytes, 12)?) != N {
             return Err(Error::InvalidOutcomeCount);
         }
-        require_zero(bytes, 15, 1)?;
         require_zero(bytes, 20, 4)?;
         let execution_count = read_u8(bytes, 14)?;
         exact_len(bytes, Self::encoded_len(execution_count)?)?;
@@ -3277,7 +3873,7 @@ impl<const N: usize> VerificationPageV1<N> {
             .and_then(|value| value.checked_add(8))
             .ok_or(Error::ArithmeticOverflow)?;
         for index in 0..usize::from(execution_count) {
-            let offset = vector_offset(VERIFICATION_PAGE_BASE_BYTES, index, execution_bytes)?;
+            let offset = vector_offset(CANDIDATE_PAGE_BASE_BYTES, index, execution_bytes)?;
             let order_end = offset
                 .checked_add(order_bytes)
                 .ok_or(Error::ArithmeticOverflow)?;
@@ -3293,8 +3889,7 @@ impl<const N: usize> VerificationPageV1<N> {
         }
         Ok(Self {
             page_index: read_u32(bytes, 16)?,
-            prior_transcript_id: read_id(bytes, 24)?,
-            next_transcript_id: read_id(bytes, 56)?,
+            next_page_id: decode_optional_id(bytes, 15, 24)?,
             execution_count,
             executions,
         })
@@ -3310,7 +3905,7 @@ impl<const N: usize> VerificationPageV1<N> {
             return Err(Error::NonCanonicalReservedBytes);
         }
         out.fill(0);
-        put(out, 0, &VERIFICATION_PAGE_MAGIC);
+        put(out, 0, &CANDIDATE_PAGE_MAGIC);
         put(out, 8, &SCHEMA_V1.to_le_bytes());
         put(out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
         put(
@@ -3322,15 +3917,17 @@ impl<const N: usize> VerificationPageV1<N> {
         );
         put(out, 14, &[self.execution_count]);
         put(out, 16, &self.page_index.to_le_bytes());
-        put(out, 24, self.prior_transcript_id.as_bytes());
-        put(out, 56, self.next_transcript_id.as_bytes());
+        if let Some(next_page_id) = self.next_page_id {
+            put(out, 15, &[1]);
+            put(out, 24, next_page_id.as_bytes());
+        }
         let order_bytes = PortfolioOrderV1::<N>::encoded_len()?;
         let execution_bytes = order_bytes
             .checked_add(ORDER_STATE_BYTES)
             .and_then(|value| value.checked_add(8))
             .ok_or(Error::ArithmeticOverflow)?;
         for (index, execution) in self.executions.iter().take(count).flatten().enumerate() {
-            let offset = vector_offset(VERIFICATION_PAGE_BASE_BYTES, index, execution_bytes)?;
+            let offset = vector_offset(CANDIDATE_PAGE_BASE_BYTES, index, execution_bytes)?;
             let order_end = offset
                 .checked_add(order_bytes)
                 .ok_or(Error::ArithmeticOverflow)?;
@@ -3354,7 +3951,7 @@ impl<const N: usize> CandidateStateV1<N> {
     pub fn encoded_len() -> Result<usize> {
         validate_width(N)?;
         CANDIDATE_STATE_BASE_BYTES
-            .checked_add(N.checked_mul(24).ok_or(Error::ArithmeticOverflow)?)
+            .checked_add(N.checked_mul(40).ok_or(Error::ArithmeticOverflow)?)
             .ok_or(Error::ArithmeticOverflow)
     }
 
@@ -3371,7 +3968,7 @@ impl<const N: usize> CandidateStateV1<N> {
         let cursor = 48usize
             .checked_add(submission_bytes)
             .ok_or(Error::ArithmeticOverflow)?;
-        require_zero(bytes, cursor + 1, 7)?;
+        require_zero(bytes, cursor + 2, 6)?;
         require_zero(bytes, cursor + 17, 7)?;
         let last_bytes = array::<32>(bytes, cursor + 24)?;
         let last_order_id = match read_u8(bytes, cursor + 16)? {
@@ -3384,14 +3981,13 @@ impl<const N: usize> CandidateStateV1<N> {
             1 => Some(ContentId::new(last_bytes)?),
             _ => return Err(Error::NonCanonicalState),
         };
-        let net_offset = cursor.checked_add(88).ok_or(Error::ArithmeticOverflow)?;
+        let next_page_id = decode_optional_id(bytes, cursor + 1, cursor + 56)?;
+        require_zero(bytes, cursor + 92, 4)?;
+        let net_offset = cursor.checked_add(168).ok_or(Error::ArithmeticOverflow)?;
         let mut net_coefficients = [0i128; N];
         for (index, target) in net_coefficients.iter_mut().enumerate() {
             *target = read_i128(bytes, vector_offset(net_offset, index, 16)?)?;
         }
-        let totals = net_offset
-            .checked_add(N.checked_mul(16).ok_or(Error::ArithmeticOverflow)?)
-            .ok_or(Error::ArithmeticOverflow)?;
         let state = Self {
             candidate_id: read_id(bytes, 16)?,
             submission,
@@ -3399,11 +3995,16 @@ impl<const N: usize> CandidateStateV1<N> {
             verified_pages: read_u32(bytes, cursor + 8)?,
             verified_executions: read_u32(bytes, cursor + 12)?,
             last_order_id,
-            transcript_id: read_id(bytes, cursor + 56)?,
+            next_page_id,
+            open_page_children: read_u32(bytes, cursor + 88)?,
+            page_rent_reserve_remaining: read_u64(bytes, cursor + 96)?,
+            settlement_rent_reserve_remaining: read_u64(bytes, cursor + 104)?,
+            verification_work_remaining: read_u64(bytes, cursor + 112)?,
+            settlement_work_remaining: read_u64(bytes, cursor + 120)?,
+            cleanup_work_remaining: read_u64(bytes, cursor + 128)?,
             net_coefficients,
-            total_quote_debit_numerator: read_i128(bytes, totals)?,
-            score: read_u128(bytes, totals + 16)?,
-            complete_set_delta: read_i128(bytes, totals + 32)?,
+            total_quote_debit_numerator: read_i128(bytes, cursor + 136)?,
+            score: read_u128(bytes, cursor + 152)?,
         };
         state.validate_persisted_shape()?;
         Ok(state)
@@ -3427,12 +4028,47 @@ impl<const N: usize> CandidateStateV1<N> {
         put(out, cursor, &[candidate_phase_tag(self.phase)]);
         put(out, cursor + 8, &self.verified_pages.to_le_bytes());
         put(out, cursor + 12, &self.verified_executions.to_le_bytes());
+        if let Some(next_page_id) = self.next_page_id {
+            put(out, cursor + 1, &[1]);
+            put(out, cursor + 56, next_page_id.as_bytes());
+        }
         if let Some(last_order_id) = self.last_order_id {
             put(out, cursor + 16, &[1]);
             put(out, cursor + 24, last_order_id.as_bytes());
         }
-        put(out, cursor + 56, self.transcript_id.as_bytes());
-        let net_offset = cursor.checked_add(88).ok_or(Error::ArithmeticOverflow)?;
+        put(out, cursor + 88, &self.open_page_children.to_le_bytes());
+        put(
+            out,
+            cursor + 96,
+            &self.page_rent_reserve_remaining.to_le_bytes(),
+        );
+        put(
+            out,
+            cursor + 104,
+            &self.settlement_rent_reserve_remaining.to_le_bytes(),
+        );
+        put(
+            out,
+            cursor + 112,
+            &self.verification_work_remaining.to_le_bytes(),
+        );
+        put(
+            out,
+            cursor + 120,
+            &self.settlement_work_remaining.to_le_bytes(),
+        );
+        put(
+            out,
+            cursor + 128,
+            &self.cleanup_work_remaining.to_le_bytes(),
+        );
+        put(
+            out,
+            cursor + 136,
+            &self.total_quote_debit_numerator.to_le_bytes(),
+        );
+        put(out, cursor + 152, &self.score.to_le_bytes());
+        let net_offset = cursor.checked_add(168).ok_or(Error::ArithmeticOverflow)?;
         for (index, coefficient) in self.net_coefficients.iter().enumerate() {
             put(
                 out,
@@ -3440,50 +4076,49 @@ impl<const N: usize> CandidateStateV1<N> {
                 &coefficient.to_le_bytes(),
             );
         }
-        let totals = net_offset
-            .checked_add(N.checked_mul(16).ok_or(Error::ArithmeticOverflow)?)
-            .ok_or(Error::ArithmeticOverflow)?;
-        put(out, totals, &self.total_quote_debit_numerator.to_le_bytes());
-        put(out, totals + 16, &self.score.to_le_bytes());
-        put(out, totals + 32, &self.complete_set_delta.to_le_bytes());
         Ok(())
     }
 
     fn validate_persisted_shape(&self) -> Result<()> {
         if usize::from(self.submission.outcome_count) != N
             || self.submission.claimed_execution_count == 0
+            || self.submission.claimed_page_count == 0
+            || self.open_page_children > self.submission.claimed_page_count
+            || self.verified_pages > self.submission.claimed_page_count
         {
             return Err(Error::NonCanonicalState);
         }
         let pristine = self.verified_pages == 0
             && self.verified_executions == 0
             && self.last_order_id.is_none()
-            && self.transcript_id == self.submission.initial_transcript_id
+            && self.next_page_id == Some(self.submission.first_page_id)
             && self.net_coefficients.iter().all(|value| *value == 0)
             && self.total_quote_debit_numerator == 0
-            && self.score == 0
-            && self.complete_set_delta == 0;
+            && self.score == 0;
         match self.phase {
             CandidatePhase::Submitted if !pristine => Err(Error::NonCanonicalState),
             CandidatePhase::Verifying
                 if self.verified_pages == 0
                     || self.verified_executions == 0
-                    || self.last_order_id.is_none()
-                    || self.complete_set_delta != 0 =>
+                    || self.last_order_id.is_none() =>
             {
                 Err(Error::NonCanonicalState)
             }
             CandidatePhase::Valid | CandidatePhase::Considered
-                if self.verified_pages == 0
+                if self.verified_pages != self.submission.claimed_page_count
                     || self.verified_executions != self.submission.claimed_execution_count
                     || self.last_order_id.is_none()
-                    || self.score != self.submission.claimed_score =>
+                    || self.next_page_id.is_some()
+                    || self.page_rent_reserve_remaining != 0
+                    || self.score != self.submission.claimed_score
+                    || self.net_coefficients != self.submission.claimed_net_coefficients
+                    || self.total_quote_debit_numerator
+                        != self.submission.claimed_total_quote_debit_numerator =>
             {
                 Err(Error::NonCanonicalState)
             }
             CandidatePhase::Rejected
-                if self.complete_set_delta != 0
-                    || self.verified_pages == 0 && !pristine
+                if self.verified_pages == 0 && !pristine
                     || self.verified_pages > 0
                         && (self.verified_executions == 0 || self.last_order_id.is_none()) =>
             {
@@ -3499,12 +4134,13 @@ impl<const N: usize> CandidateStateV1<N> {
     pub fn submit(
         candidate_id: ContentId,
         submission: CandidateSubmissionV1<N>,
+        root: GeneralRootV1,
         config: GeneralConfigV1,
-        batch: BatchRootV1,
+        batch: &mut BatchRootV1,
         now_slot: u64,
     ) -> Result<Self> {
-        validate_authority(
-            submission.market_identity_id,
+        root.validate_authority(
+            submission.market,
             submission.claim_basis_id,
             submission.generation,
             config,
@@ -3518,6 +4154,8 @@ impl<const N: usize> CandidateStateV1<N> {
         if submission.valid_until_slot < batch.selection_close
             || submission.claimed_execution_count == 0
             || submission.claimed_execution_count > config.max_orders_per_candidate
+            || submission.claimed_page_count == 0
+            || submission.claimed_page_count > config.max_pages_per_candidate
             || submission.outcome_count != config.outcome_count
         {
             return Err(Error::CandidateClaimMismatch);
@@ -3527,30 +4165,51 @@ impl<const N: usize> CandidateStateV1<N> {
             submission.outcome_count,
             config.price_scale,
         )?;
-        Ok(Self {
+        let (verification_work_remaining, settlement_work_remaining, cleanup_work_remaining) =
+            candidate_initial_work_reserves(
+                submission.claimed_page_count,
+                config.continuation_reward_lamports,
+            )?;
+        let next_open_candidates = batch
+            .open_candidate_children
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let candidate = Self {
             candidate_id,
-            transcript_id: submission.initial_transcript_id,
+            next_page_id: Some(submission.first_page_id),
             submission,
             phase: CandidatePhase::Submitted,
             verified_pages: 0,
             verified_executions: 0,
             last_order_id: None,
+            open_page_children: 0,
+            page_rent_reserve_remaining: submission.page_rent_reserve_lamports,
+            settlement_rent_reserve_remaining: submission.settlement_rent_reserve_lamports,
+            verification_work_remaining,
+            settlement_work_remaining,
+            cleanup_work_remaining,
             net_coefficients: [0; N],
             total_quote_debit_numerator: 0,
             score: 0,
-            complete_set_delta: 0,
-        })
+        };
+        batch.open_candidate_children = next_open_candidates;
+        Ok(candidate)
     }
 
     /// Check and commit one bounded page. Invalid inputs leave `self`
     /// unchanged because work is performed on a copied cursor first.
+    #[allow(clippy::too_many_arguments)]
     pub fn verify_page(
         &mut self,
-        page: VerificationPageV1<N>,
+        page_id: ContentId,
+        page: CandidatePageV1<N>,
+        root: GeneralRootV1,
         config: GeneralConfigV1,
         batch: BatchRootV1,
         now_slot: u64,
-    ) -> Result<()> {
+        capitalization: CandidateCapitalizationV1,
+    ) -> Result<u64> {
+        self.validate_capitalization(capitalization)?;
         if self.phase != CandidatePhase::Submitted && self.phase != CandidatePhase::Verifying {
             return Err(Error::InvalidPhase);
         }
@@ -3561,12 +4220,8 @@ impl<const N: usize> CandidateStateV1<N> {
         {
             return Err(Error::OutsideWindow);
         }
-        if page.page_index != self.verified_pages || page.prior_transcript_id != self.transcript_id
-        {
+        if page.page_index != self.verified_pages || self.next_page_id != Some(page_id) {
             return Err(Error::CursorMismatch);
-        }
-        if page.next_transcript_id == page.prior_transcript_id {
-            return Err(Error::InvalidTranscriptStep);
         }
         let count = usize::from(page.execution_count);
         if count == 0 || count > MAX_EXECUTIONS_PER_PAGE_V1 {
@@ -3586,22 +4241,24 @@ impl<const N: usize> CandidateStateV1<N> {
         }
         let mut next = *self;
         for execution in page.executions.iter().take(count).flatten() {
-            next.verify_execution(*execution, config, batch)?;
+            next.verify_execution(*execution, root, config, batch)?;
         }
         next.verified_pages = next_page_count;
-        next.transcript_id = page.next_transcript_id;
+        next.next_page_id = page.next_page_id;
         next.phase = CandidatePhase::Verifying;
+        let reward = next.consume_verification(config)?;
         *self = next;
-        Ok(())
+        Ok(reward)
     }
 
     fn verify_execution(
         &mut self,
         execution: ExecutionV1<N>,
+        root: GeneralRootV1,
         config: GeneralConfigV1,
         batch: BatchRootV1,
     ) -> Result<()> {
-        validate_execution_binding(execution, config, batch)?;
+        validate_execution_binding(execution, root, config, batch)?;
         if self
             .last_order_id
             .is_some_and(|last| execution.order.order_id <= last)
@@ -3665,12 +4322,33 @@ impl<const N: usize> CandidateStateV1<N> {
 
     /// Finish verification and prove the execution set has one exact virtual
     /// complete-set inventory delta and matching quote capitalization.
-    pub fn finish_verification(&mut self, config: GeneralConfigV1) -> Result<()> {
+    pub fn finish_verification(
+        &mut self,
+        config: GeneralConfigV1,
+        batch: BatchRootV1,
+        capitalization: CandidateCapitalizationV1,
+        now_slot: u64,
+    ) -> Result<u64> {
+        self.validate_capitalization(capitalization)?;
         if self.phase != CandidatePhase::Verifying {
             return Err(Error::InvalidPhase);
         }
-        if self.verified_executions != self.submission.claimed_execution_count
+        if batch.phase != BatchPhase::Selecting
+            || batch.sequence != self.submission.batch_sequence
+            || now_slot >= batch.selection_close
+            || now_slot > self.submission.valid_until_slot
+        {
+            return Err(Error::OutsideWindow);
+        }
+        if self.next_page_id.is_some()
+            || self.verified_pages != self.submission.claimed_page_count
+            || self.verified_executions != self.submission.claimed_execution_count
+            || self.open_page_children != self.submission.claimed_page_count
+            || self.page_rent_reserve_remaining != 0
             || self.score != self.submission.claimed_score
+            || self.net_coefficients != self.submission.claimed_net_coefficients
+            || self.total_quote_debit_numerator
+                != self.submission.claimed_total_quote_debit_numerator
         {
             return Err(Error::CandidateClaimMismatch);
         }
@@ -3693,21 +4371,35 @@ impl<const N: usize> CandidateStateV1<N> {
         if self.total_quote_debit_numerator != expected_debit {
             return Err(Error::QuoteConservationMismatch);
         }
-        self.complete_set_delta = complete_set_delta;
-        self.phase = CandidatePhase::Valid;
-        Ok(())
+        let mut next = *self;
+        next.phase = CandidatePhase::Valid;
+        let reward = next.consume_verification(config)?;
+        *self = next;
+        Ok(reward)
     }
 
     /// Permanently reject a timed-out or invalid candidate account.
-    pub fn reject(&mut self) -> Result<()> {
+    pub fn reject(
+        &mut self,
+        config: GeneralConfigV1,
+        capitalization: CandidateCapitalizationV1,
+        now_slot: u64,
+    ) -> Result<u64> {
+        self.validate_capitalization(capitalization)?;
         if self.phase == CandidatePhase::Valid
             || self.phase == CandidatePhase::Considered
             || self.phase == CandidatePhase::Rejected
         {
             return Err(Error::InvalidPhase);
         }
-        self.phase = CandidatePhase::Rejected;
-        Ok(())
+        if now_slot <= self.submission.valid_until_slot {
+            return Err(Error::OutsideWindow);
+        }
+        let mut next = *self;
+        next.phase = CandidatePhase::Rejected;
+        let reward = next.consume_verification(config)?;
+        *self = next;
+        Ok(reward)
     }
 
     /// Return the candidate identity.
@@ -3725,9 +4417,9 @@ impl<const N: usize> CandidateStateV1<N> {
         self.phase
     }
 
-    /// Return the final verified transcript commitment.
-    pub const fn transcript_id(self) -> ContentId {
-        self.transcript_id
+    /// Return the next immutable page required by verification.
+    pub const fn next_page_id(self) -> Option<ContentId> {
+        self.next_page_id
     }
 
     /// Return the permissionless candidate submitter and rent beneficiary key.
@@ -3745,10 +4437,217 @@ impl<const N: usize> CandidateStateV1<N> {
         self.verified_executions
     }
 
+    /// Return the exact verified page count.
+    pub const fn verified_pages(self) -> u32 {
+        self.verified_pages
+    }
+
     /// Return the verified virtual complete-set delta.
     pub const fn complete_set_delta(self) -> i128 {
-        self.complete_set_delta
+        self.net_coefficients[0]
     }
+
+    /// Return the immutable first page for both settlement passes.
+    pub const fn first_page_id(self) -> ContentId {
+        self.submission.first_page_id
+    }
+
+    /// Return the exact live immutable page-child count.
+    pub const fn open_page_children(self) -> u32 {
+        self.open_page_children
+    }
+
+    /// Return remaining candidate-owned verification principal.
+    pub const fn verification_work_remaining(self) -> u64 {
+        self.verification_work_remaining
+    }
+
+    /// Return remaining selected-settlement principal.
+    pub const fn settlement_work_remaining(self) -> u64 {
+        self.settlement_work_remaining
+    }
+
+    /// Return remaining unspendable child-cleanup principal.
+    pub const fn cleanup_work_remaining(self) -> u64 {
+        self.cleanup_work_remaining
+    }
+
+    /// Validate exact physical candidate capitalization.
+    pub fn validate_capitalization(self, observation: CandidateCapitalizationV1) -> Result<()> {
+        let expected = observation
+            .exact_state_rent_lamports
+            .checked_add(self.page_rent_reserve_remaining)
+            .and_then(|amount| amount.checked_add(self.settlement_rent_reserve_remaining))
+            .and_then(|amount| amount.checked_add(self.verification_work_remaining))
+            .and_then(|amount| amount.checked_add(self.settlement_work_remaining))
+            .and_then(|amount| amount.checked_add(self.cleanup_work_remaining))
+            .ok_or(Error::ArithmeticOverflow)?;
+        if observation.account_lamports != expected {
+            return Err(Error::GeneralFundingCustodyMismatch);
+        }
+        Ok(())
+    }
+
+    /// Attach one immutable candidate-exclusive page using exact reserved Rent.
+    pub fn create_page(
+        &mut self,
+        page: CandidatePageV1<N>,
+        config: GeneralConfigV1,
+        page_rent_lamports: u64,
+        precreation_lamports: u64,
+        capitalization: CandidateCapitalizationV1,
+    ) -> Result<CandidatePageCreationV1> {
+        self.validate_capitalization(capitalization)?;
+        if !matches!(
+            self.phase,
+            CandidatePhase::Submitted | CandidatePhase::Verifying
+        ) || page.page_index >= self.submission.claimed_page_count
+            || page.execution_count == 0
+            || usize::from(page.execution_count) > MAX_EXECUTIONS_PER_PAGE_V1
+        {
+            return Err(Error::InvalidPhase);
+        }
+        let terminal = page.page_index + 1 == self.submission.claimed_page_count;
+        if terminal != page.next_page_id.is_none() {
+            return Err(Error::InvalidTranscriptStep);
+        }
+        let mut next = *self;
+        next.open_page_children = next
+            .open_page_children
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if next.open_page_children > next.submission.claimed_page_count {
+            return Err(Error::CapacityExceeded);
+        }
+        next.page_rent_reserve_remaining = next
+            .page_rent_reserve_remaining
+            .checked_sub(page_rent_lamports)
+            .ok_or(Error::InsufficientFunding)?;
+        let page_top_up_lamports = page_rent_lamports.saturating_sub(precreation_lamports);
+        let candidate_refund_lamports = core::cmp::min(precreation_lamports, page_rent_lamports);
+        let page_surplus_refund_lamports = precreation_lamports.saturating_sub(page_rent_lamports);
+        let plan = CandidatePageCreationV1 {
+            page_rent_lamports,
+            page_top_up_lamports,
+            candidate_refund_lamports,
+            page_surplus_refund_lamports,
+        };
+        let accounted = plan
+            .page_top_up_lamports
+            .checked_add(plan.candidate_refund_lamports)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if accounted != page_rent_lamports {
+            return Err(Error::FundingConservationMismatch);
+        }
+        let _ = config;
+        *self = next;
+        Ok(plan)
+    }
+
+    /// Close one stored page after rejection or after it can no longer win.
+    pub fn close_page(
+        &mut self,
+        batch: BatchRootV1,
+        config: GeneralConfigV1,
+        capitalization: CandidateCapitalizationV1,
+        page_account_lamports: u64,
+    ) -> Result<CandidatePageCloseV1> {
+        self.validate_capitalization(capitalization)?;
+        if self.open_page_children == 0 {
+            return Err(Error::NotQuiescent);
+        }
+        let selected = batch.best_candidate_id == Some(self.candidate_id);
+        let closable = self.phase == CandidatePhase::Rejected
+            || matches!(
+                batch.phase,
+                BatchPhase::Settling | BatchPhase::Applying | BatchPhase::Quiescent
+            ) && !selected
+            || batch.phase == BatchPhase::Quiescent
+                && selected
+                && batch.open_settlement_children == 0;
+        if !closable {
+            return Err(Error::NotQuiescent);
+        }
+        let mut next = *self;
+        next.open_page_children = next
+            .open_page_children
+            .checked_sub(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let cleanup_reward_lamports = next.consume_cleanup(config)?;
+        *self = next;
+        Ok(CandidatePageCloseV1 {
+            cleanup_reward_lamports,
+            rent_credit_lamports: page_account_lamports,
+            rent_beneficiary: self.submitter(),
+        })
+    }
+
+    fn consume_verification(&mut self, config: GeneralConfigV1) -> Result<u64> {
+        let reward = config.continuation_reward_lamports;
+        self.verification_work_remaining = self
+            .verification_work_remaining
+            .checked_sub(reward)
+            .ok_or(Error::InsufficientFunding)?;
+        Ok(reward)
+    }
+
+    fn consume_settlement(&mut self, config: GeneralConfigV1) -> Result<u64> {
+        let reward = config.continuation_reward_lamports;
+        self.settlement_work_remaining = self
+            .settlement_work_remaining
+            .checked_sub(reward)
+            .ok_or(Error::InsufficientFunding)?;
+        Ok(reward)
+    }
+
+    fn consume_cleanup(&mut self, config: GeneralConfigV1) -> Result<u64> {
+        let reward = config.continuation_reward_lamports;
+        self.cleanup_work_remaining = self
+            .cleanup_work_remaining
+            .checked_sub(reward)
+            .ok_or(Error::InsufficientFunding)?;
+        Ok(reward)
+    }
+}
+
+fn candidate_initial_work_reserves(
+    page_count: u32,
+    reward_lamports: u64,
+) -> Result<(u64, u64, u64)> {
+    let pages = u64::from(page_count);
+    let verification = pages
+        .checked_add(2)
+        .and_then(|steps| steps.checked_mul(reward_lamports))
+        .ok_or(Error::ArithmeticOverflow)?;
+    let settlement = pages
+        .checked_mul(2)
+        .and_then(|steps| steps.checked_add(4))
+        .and_then(|steps| steps.checked_mul(reward_lamports))
+        .ok_or(Error::ArithmeticOverflow)?;
+    let cleanup = pages
+        .checked_add(1)
+        .and_then(|steps| steps.checked_mul(reward_lamports))
+        .ok_or(Error::ArithmeticOverflow)?;
+    Ok((verification, settlement, cleanup))
+}
+
+fn initial_batch_work(config: GeneralConfigV1) -> Result<u64> {
+    config
+        .continuation_reward_lamports
+        .checked_mul(3)
+        .ok_or(Error::ArithmeticOverflow)
+}
+
+fn expected_batch_work(phase: BatchPhase, reward_lamports: u64) -> Result<u64> {
+    let steps = match phase {
+        BatchPhase::Collecting => 3,
+        BatchPhase::Selecting => 2,
+        BatchPhase::Settling | BatchPhase::Applying | BatchPhase::Quiescent => 1,
+        BatchPhase::Retired => 0,
+    };
+    reward_lamports
+        .checked_mul(steps)
+        .ok_or(Error::ArithmeticOverflow)
 }
 
 /// Lifecycle of one frequent batch.
@@ -3777,9 +4676,12 @@ pub struct BatchRootV1 {
     collection_close: u64,
     selection_close: u64,
     settlement_close: u64,
-    candidate_count: u32,
+    considered_candidate_count: u32,
+    open_candidate_children: u32,
+    open_settlement_children: u8,
     best_candidate_id: Option<ContentId>,
     best_score: u128,
+    work_remaining_lamports: u64,
     phase: BatchPhase,
 }
 
@@ -3791,8 +4693,7 @@ impl BatchRootV1 {
             return Err(Error::InvalidMagic);
         }
         validate_record_header(bytes)?;
-        require_zero(bytes, 14, 2)?;
-        require_zero(bytes, 84, 4)?;
+        require_zero(bytes, 15, 1)?;
         let best_candidate_bytes = array::<CONTENT_ID_BYTES>(bytes, 88)?;
         let best_candidate_id = match read_u8(bytes, 13)? {
             0 => {
@@ -3811,9 +4712,12 @@ impl BatchRootV1 {
             collection_close: read_u64(bytes, 56)?,
             selection_close: read_u64(bytes, 64)?,
             settlement_close: read_u64(bytes, 72)?,
-            candidate_count: read_u32(bytes, 80)?,
+            considered_candidate_count: read_u32(bytes, 80)?,
+            open_candidate_children: read_u32(bytes, 84)?,
+            open_settlement_children: read_u8(bytes, 14)?,
             best_candidate_id,
             best_score: read_u128(bytes, 120)?,
+            work_remaining_lamports: read_u64(bytes, 136)?,
         };
         batch.validate()?;
         Ok(batch)
@@ -3828,17 +4732,20 @@ impl BatchRootV1 {
         put(out, 8, &SCHEMA_V1.to_le_bytes());
         put(out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
         put(out, 12, &[batch_phase_tag(self.phase)]);
+        put(out, 14, &[self.open_settlement_children]);
         put(out, 16, self.config_id.as_bytes());
         put(out, 48, &self.sequence.to_le_bytes());
         put(out, 56, &self.collection_close.to_le_bytes());
         put(out, 64, &self.selection_close.to_le_bytes());
         put(out, 72, &self.settlement_close.to_le_bytes());
-        put(out, 80, &self.candidate_count.to_le_bytes());
+        put(out, 80, &self.considered_candidate_count.to_le_bytes());
+        put(out, 84, &self.open_candidate_children.to_le_bytes());
         if let Some(candidate_id) = self.best_candidate_id {
             put(out, 13, &[1]);
             put(out, 88, candidate_id.as_bytes());
         }
         put(out, 120, &self.best_score.to_le_bytes());
+        put(out, 136, &self.work_remaining_lamports.to_le_bytes());
         Ok(())
     }
 
@@ -3849,17 +4756,33 @@ impl BatchRootV1 {
         {
             return Err(Error::NonCanonicalState);
         }
-        match (self.candidate_count, self.best_candidate_id) {
+        match (self.considered_candidate_count, self.best_candidate_id) {
             (0, None) if self.best_score == 0 => {}
             (0, _) | (_, None) => return Err(Error::NonCanonicalState),
             (_, Some(_)) => {}
         }
-        if self.phase == BatchPhase::Collecting && self.candidate_count != 0 {
+        if self.open_settlement_children > 1
+            || self.phase == BatchPhase::Collecting
+                && (self.considered_candidate_count != 0
+                    || self.open_candidate_children != 0
+                    || self.open_settlement_children != 0)
+        {
             return Err(Error::NonCanonicalState);
         }
         if matches!(self.phase, BatchPhase::Settling | BatchPhase::Applying)
             && self.best_candidate_id.is_none()
         {
+            return Err(Error::NonCanonicalState);
+        }
+        if self.phase == BatchPhase::Applying && self.open_settlement_children != 1 {
+            return Err(Error::NonCanonicalState);
+        }
+        if self.phase == BatchPhase::Retired
+            && (self.open_candidate_children != 0 || self.open_settlement_children != 0)
+        {
+            return Err(Error::NonCanonicalState);
+        }
+        if (self.phase == BatchPhase::Retired) != (self.work_remaining_lamports == 0) {
             return Err(Error::NonCanonicalState);
         }
         Ok(())
@@ -3887,20 +4810,33 @@ impl BatchRootV1 {
             collection_close,
             selection_close,
             settlement_close,
-            candidate_count: 0,
+            considered_candidate_count: 0,
+            open_candidate_children: 0,
+            open_settlement_children: 0,
             best_candidate_id: None,
             best_score: 0,
+            work_remaining_lamports: initial_batch_work(config)?,
             phase: BatchPhase::Collecting,
         })
     }
 
     /// Close collection at or after its immutable boundary.
-    pub fn open_selection(&mut self, now_slot: u64) -> Result<()> {
+    pub fn open_selection(
+        &mut self,
+        config: GeneralConfigV1,
+        capitalization: BatchCapitalizationV1,
+        now_slot: u64,
+    ) -> Result<u64> {
+        self.validate_capitalization(config, capitalization)?;
         if self.phase != BatchPhase::Collecting || now_slot < self.collection_close {
             return Err(Error::OutsideWindow);
         }
-        self.phase = BatchPhase::Selecting;
-        Ok(())
+        let mut next = *self;
+        next.phase = BatchPhase::Selecting;
+        let reward = next.consume_work(config)?;
+        next.validate_against(config)?;
+        *self = next;
+        Ok(reward)
     }
 
     /// Consider one fully verified candidate. Higher exact score wins; equal
@@ -3909,8 +4845,11 @@ impl BatchRootV1 {
     pub fn consider_candidate<const N: usize>(
         &mut self,
         candidate: &mut CandidateStateV1<N>,
+        config: GeneralConfigV1,
+        capitalization: CandidateCapitalizationV1,
         now_slot: u64,
-    ) -> Result<()> {
+    ) -> Result<u64> {
+        candidate.validate_capitalization(capitalization)?;
         if self.phase != BatchPhase::Selecting || now_slot >= self.selection_close {
             return Err(Error::OutsideWindow);
         }
@@ -3919,11 +4858,13 @@ impl BatchRootV1 {
         {
             return Err(Error::CandidateClaimMismatch);
         }
-        self.candidate_count = self
-            .candidate_count
+        let mut next_batch = *self;
+        let mut next_candidate = *candidate;
+        next_batch.considered_candidate_count = next_batch
+            .considered_candidate_count
             .checked_add(1)
             .ok_or(Error::ArithmeticOverflow)?;
-        let replace = match self.best_candidate_id {
+        let replace = match next_batch.best_candidate_id {
             None => true,
             Some(best_id) => {
                 candidate.score > self.best_score
@@ -3931,48 +4872,106 @@ impl BatchRootV1 {
             }
         };
         if replace {
-            self.best_candidate_id = Some(candidate.candidate_id);
-            self.best_score = candidate.score;
+            next_batch.best_candidate_id = Some(candidate.candidate_id);
+            next_batch.best_score = candidate.score;
         }
-        candidate.phase = CandidatePhase::Considered;
-        Ok(())
+        next_candidate.phase = CandidatePhase::Considered;
+        let reward = next_candidate.consume_verification(config)?;
+        *self = next_batch;
+        *candidate = next_candidate;
+        Ok(reward)
     }
 
     /// Freeze deterministic selection. An empty batch becomes quiescent.
-    pub fn close_selection(&mut self, now_slot: u64) -> Result<Option<ContentId>> {
+    pub fn close_selection(
+        &mut self,
+        config: GeneralConfigV1,
+        capitalization: BatchCapitalizationV1,
+        now_slot: u64,
+    ) -> Result<(Option<ContentId>, u64)> {
+        self.validate_capitalization(config, capitalization)?;
         if self.phase != BatchPhase::Selecting || now_slot < self.selection_close {
             return Err(Error::OutsideWindow);
         }
-        match self.best_candidate_id {
+        let mut next = *self;
+        let selected = match next.best_candidate_id {
             Some(id) => {
-                self.phase = BatchPhase::Settling;
-                Ok(Some(id))
+                next.phase = BatchPhase::Settling;
+                Some(id)
             }
             None => {
-                self.phase = BatchPhase::Quiescent;
-                Ok(None)
+                next.phase = BatchPhase::Quiescent;
+                None
             }
-        }
+        };
+        let reward = next.consume_work(config)?;
+        next.validate_against(config)?;
+        *self = next;
+        Ok((selected, reward))
     }
 
     /// Expire a winner only before Hoard conversion and receipt application
     /// begin. An applying settlement cannot time out; segregated liveness
     /// funding drives it to its committed conclusion.
-    pub fn expire_unsettled(&mut self, now_slot: u64) -> Result<()> {
+    pub fn expire_unsettled<const N: usize>(
+        &mut self,
+        candidate: &mut CandidateStateV1<N>,
+        config: GeneralConfigV1,
+        capitalization: CandidateCapitalizationV1,
+        now_slot: u64,
+    ) -> Result<u64> {
+        candidate.validate_capitalization(capitalization)?;
         if self.phase != BatchPhase::Settling || now_slot <= self.settlement_close {
             return Err(Error::OutsideWindow);
         }
-        self.phase = BatchPhase::Quiescent;
-        Ok(())
+        if self.best_candidate_id != Some(candidate.candidate_id)
+            || candidate.phase != CandidatePhase::Considered
+        {
+            return Err(Error::CandidateNotSelected);
+        }
+        let mut next_batch = *self;
+        let mut next_candidate = *candidate;
+        next_batch.phase = BatchPhase::Quiescent;
+        let reward = next_candidate.consume_settlement(config)?;
+        *self = next_batch;
+        *candidate = next_candidate;
+        Ok(reward)
     }
 
-    /// Retire after the adapter discharges every candidate and receipt child.
-    pub fn retire(&mut self, children_discharged: bool) -> Result<()> {
-        if self.phase != BatchPhase::Quiescent || !children_discharged {
+    /// Retire and close only after every persisted candidate and settlement child closes.
+    pub fn retire(
+        &mut self,
+        root: &mut GeneralRootV1,
+        config: GeneralConfigV1,
+        capitalization: BatchCapitalizationV1,
+    ) -> Result<BatchCloseV1> {
+        self.validate_capitalization(config, capitalization)?;
+        if self.config_id != root.config_id {
+            return Err(Error::AuthorityMismatch);
+        }
+        if self.phase != BatchPhase::Quiescent
+            || self.open_candidate_children != 0
+            || self.open_settlement_children != 0
+        {
             return Err(Error::NotQuiescent);
         }
-        self.phase = BatchPhase::Retired;
-        Ok(())
+        let mut next_batch = *self;
+        let mut next_root = *root;
+        next_batch.phase = BatchPhase::Retired;
+        let continuation_reward_lamports = next_batch.consume_work(config)?;
+        next_batch.validate_against(config)?;
+        next_root.close_batch()?;
+        let rent_credit_lamports = capitalization
+            .account_lamports
+            .checked_sub(continuation_reward_lamports)
+            .ok_or(Error::ArithmeticOverflow)?;
+        *self = next_batch;
+        *root = next_root;
+        Ok(BatchCloseV1 {
+            continuation_reward_lamports,
+            rent_credit_lamports,
+            rent_beneficiary: root.rent_beneficiary,
+        })
     }
 
     /// Return the batch phase.
@@ -4009,78 +5008,97 @@ impl BatchRootV1 {
     pub const fn best_candidate_id(self) -> Option<ContentId> {
         self.best_candidate_id
     }
-}
 
-/// Conserved collateral and equal per-outcome complete-set liability.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct HoardLedgerV1 {
-    market_identity_id: ContentId,
-    principal_atoms: u64,
-    liability_units_per_outcome: u64,
-}
-
-impl HoardLedgerV1 {
-    /// Construct a ledger only when principal exactly backs liabilities.
-    pub fn new(
-        market_identity_id: ContentId,
-        principal_atoms: u64,
-        liability_units_per_outcome: u64,
-    ) -> Result<Self> {
-        if principal_atoms != liability_units_per_outcome {
-            return Err(Error::HoardInvariantViolation);
-        }
-        Ok(Self {
-            market_identity_id,
-            principal_atoms,
-            liability_units_per_outcome,
-        })
+    /// Return the exact number of live candidate child accounts.
+    pub const fn open_candidate_children(self) -> u32 {
+        self.open_candidate_children
     }
 
-    fn apply_complete_set_delta(&mut self, delta: i128) -> Result<()> {
-        if self.principal_atoms != self.liability_units_per_outcome {
-            return Err(Error::HoardInvariantViolation);
-        }
-        if delta >= 0 {
-            let amount = u64::try_from(delta).map_err(|_| Error::TokenAmountOutOfRange)?;
-            self.principal_atoms = self
-                .principal_atoms
-                .checked_add(amount)
-                .ok_or(Error::ArithmeticOverflow)?;
-            self.liability_units_per_outcome = self
-                .liability_units_per_outcome
-                .checked_add(amount)
-                .ok_or(Error::ArithmeticOverflow)?;
-        } else {
-            let amount_i128 = delta.checked_neg().ok_or(Error::ArithmeticOverflow)?;
-            let amount = u64::try_from(amount_i128).map_err(|_| Error::TokenAmountOutOfRange)?;
-            self.principal_atoms = self
-                .principal_atoms
-                .checked_sub(amount)
-                .ok_or(Error::InsufficientHoardPrincipal)?;
-            self.liability_units_per_outcome = self
-                .liability_units_per_outcome
-                .checked_sub(amount)
-                .ok_or(Error::InsufficientHoardPrincipal)?;
-        }
-        if self.principal_atoms != self.liability_units_per_outcome {
-            return Err(Error::HoardInvariantViolation);
+    /// Return the exact number of live settlement child clusters.
+    pub const fn open_settlement_children(self) -> u8 {
+        self.open_settlement_children
+    }
+
+    /// Return prepaid permissionless work still owned by this batch.
+    pub const fn work_remaining_lamports(self) -> u64 {
+        self.work_remaining_lamports
+    }
+
+    /// Validate the exact phase-derived batch work compartment.
+    pub fn validate_against(self, config: GeneralConfigV1) -> Result<()> {
+        let expected = expected_batch_work(self.phase, config.continuation_reward_lamports)?;
+        if self.work_remaining_lamports != expected {
+            return Err(Error::InsufficientFunding);
         }
         Ok(())
     }
 
-    /// Return collateral principal; this value is never venue funding.
-    pub const fn principal_atoms(self) -> u64 {
-        self.principal_atoms
+    /// Validate physical capitalization against Rent and the one persisted work owner.
+    pub fn validate_capitalization(
+        self,
+        config: GeneralConfigV1,
+        observation: BatchCapitalizationV1,
+    ) -> Result<()> {
+        self.validate_against(config)?;
+        let expected = observation
+            .exact_state_rent_lamports
+            .checked_add(self.work_remaining_lamports)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if observation.account_lamports != expected {
+            return Err(Error::InsufficientFunding);
+        }
+        Ok(())
     }
 
-    /// Return equal liabilities outstanding for every partition cell.
-    pub const fn liability_units_per_outcome(self) -> u64 {
-        self.liability_units_per_outcome
+    fn consume_work(&mut self, config: GeneralConfigV1) -> Result<u64> {
+        let reward = config.continuation_reward_lamports;
+        self.work_remaining_lamports = self
+            .work_remaining_lamports
+            .checked_sub(reward)
+            .ok_or(Error::InsufficientFunding)?;
+        Ok(reward)
     }
 
-    /// Return the Market identity whose Hoard this ledger projects.
-    pub const fn market_identity_id(self) -> ContentId {
-        self.market_identity_id
+    /// Close one candidate child only when it can no longer affect selection or settlement.
+    pub fn close_candidate_child<const N: usize>(
+        &mut self,
+        mut candidate: CandidateStateV1<N>,
+        config: GeneralConfigV1,
+        capitalization: CandidateCapitalizationV1,
+    ) -> Result<CandidateCloseV1> {
+        candidate.validate_capitalization(capitalization)?;
+        if candidate.batch_sequence() != self.sequence || self.open_candidate_children == 0 {
+            return Err(Error::AuthorityMismatch);
+        }
+        if candidate.open_page_children != 0 {
+            return Err(Error::NotQuiescent);
+        }
+        let selected = self.best_candidate_id == Some(candidate.candidate_id());
+        let closable = candidate.phase() == CandidatePhase::Rejected
+            || matches!(
+                self.phase,
+                BatchPhase::Settling | BatchPhase::Applying | BatchPhase::Quiescent
+            ) && !selected
+            || self.phase == BatchPhase::Quiescent
+                && selected
+                && self.open_settlement_children == 0;
+        if !closable {
+            return Err(Error::NotQuiescent);
+        }
+        let cleanup_reward_lamports = candidate.consume_cleanup(config)?;
+        let rent_credit_lamports = capitalization
+            .account_lamports
+            .checked_sub(cleanup_reward_lamports)
+            .ok_or(Error::ArithmeticOverflow)?;
+        self.open_candidate_children = self
+            .open_candidate_children
+            .checked_sub(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        Ok(CandidateCloseV1 {
+            cleanup_reward_lamports,
+            rent_credit_lamports,
+            rent_beneficiary: candidate.submitter(),
+        })
     }
 }
 
@@ -4194,13 +5212,23 @@ impl<const N: usize> SettlementReceiptV1<N> {
     }
 }
 
-/// Committed settlement replay cursor for the selected candidate.
+/// Physical phase of one globally balanced, two-pass settlement.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SettlementCursorV1<const N: usize> {
-    candidate_id: ContentId,
-    transcript_id: ContentId,
-    settled_pages: u32,
-    settled_executions: u32,
+#[repr(u8)]
+pub enum SettlementPhaseV1 {
+    /// Negative quote and claim deltas are being collected without outputs.
+    CollectingInputs = 0,
+    /// The sole complete-set mutation has occurred and outputs are being paid.
+    DistributingOutputs = 1,
+    /// Both exact replays converged and all temporary custody is empty.
+    Finished = 2,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SettlementReplayV1<const N: usize> {
+    next_page_id: Option<ContentId>,
+    pages: u32,
+    executions: u32,
     last_order_id: Option<ContentId>,
     rounding_carry: u64,
     net_coefficients: [i128; N],
@@ -4208,15 +5236,163 @@ pub struct SettlementCursorV1<const N: usize> {
     score: u128,
 }
 
-/// Fixed result envelope from one settlement page.
+impl<const N: usize> SettlementReplayV1<N> {
+    const fn pristine(first_page_id: ContentId) -> Self {
+        Self {
+            next_page_id: Some(first_page_id),
+            pages: 0,
+            executions: 0,
+            last_order_id: None,
+            rounding_carry: 0,
+            net_coefficients: [0; N],
+            total_quote_debit_numerator: 0,
+            score: 0,
+        }
+    }
+
+    fn validate(self) -> Result<()> {
+        if self.pages == 0 {
+            if self.executions != 0
+                || self.last_order_id.is_some()
+                || self.rounding_carry != 0
+                || self.net_coefficients.iter().any(|value| *value != 0)
+                || self.total_quote_debit_numerator != 0
+                || self.score != 0
+            {
+                return Err(Error::NonCanonicalState);
+            }
+        } else if self.executions == 0 || self.last_order_id.is_none() {
+            return Err(Error::NonCanonicalState);
+        }
+        Ok(())
+    }
+
+    fn matches_candidate(self, candidate: CandidateStateV1<N>) -> Result<()> {
+        if self.next_page_id.is_some()
+            || self.pages != candidate.verified_pages
+            || self.executions != candidate.verified_executions
+            || self.net_coefficients != candidate.net_coefficients
+            || self.total_quote_debit_numerator != candidate.total_quote_debit_numerator
+            || self.score != candidate.score
+        {
+            return Err(Error::CandidateClaimMismatch);
+        }
+        if self.rounding_carry != 0 {
+            return Err(Error::RoundingCarryOutstanding);
+        }
+        Ok(())
+    }
+}
+
+/// Committed settlement cursor and sole owner of temporary output obligations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SettlementCursorV1<const N: usize> {
+    candidate_id: ContentId,
+    phase: SettlementPhaseV1,
+    collection: SettlementReplayV1<N>,
+    distribution: SettlementReplayV1<N>,
+    claim_outputs_remaining: [u64; N],
+    quote_outputs_remaining: u64,
+}
+
+/// Atomic capitalization and state plan for beginning selected settlement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SettlementBeginV1<const N: usize> {
+    cursor: SettlementCursorV1<N>,
+    reward_lamports: u64,
+    temporary_top_up_lamports: [u64; 3],
+    candidate_refund_lamports: u64,
+    temporary_surplus_refund_lamports: [u64; 3],
+}
+
+impl<const N: usize> SettlementBeginV1<N> {
+    /// Return the newly initialized minimal settlement cursor.
+    pub const fn cursor(self) -> SettlementCursorV1<N> {
+        self.cursor
+    }
+
+    /// Return the exact begin reward paid to the permissionless actor.
+    pub const fn reward_lamports(self) -> u64 {
+        self.reward_lamports
+    }
+
+    /// Return candidate-funded top-ups for cursor, Position, and quote escrow.
+    pub const fn temporary_top_up_lamports(self) -> [u64; 3] {
+        self.temporary_top_up_lamports
+    }
+
+    /// Return candidate reserve displaced by safe precreation dust.
+    pub const fn candidate_refund_lamports(self) -> u64 {
+        self.candidate_refund_lamports
+    }
+
+    /// Return surplus removed from the three temporary accounts after allocation.
+    pub const fn temporary_surplus_refund_lamports(self) -> [u64; 3] {
+        self.temporary_surplus_refund_lamports
+    }
+}
+
+/// Fixed result envelope from one collection or distribution page.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SettlementPageResultV1<const N: usize> {
-    /// Number of leading results in both fixed arrays.
+    /// Number of leading results in all fixed arrays.
     pub execution_count: u8,
-    /// Mutated replay states which the adapter must persist atomically.
+    /// Exact post-collection replay states.
     pub order_states: [Option<OrderStateV1>; MAX_EXECUTIONS_PER_PAGE_V1],
-    /// Exact token-transfer receipts which the adapter must consume atomically.
+    /// Exact receipts recomputed from the verified candidate.
     pub receipts: [Option<SettlementReceiptV1<N>>; MAX_EXECUTIONS_PER_PAGE_V1],
+    /// Exact negative-input and positive-output split for physical application.
+    pub custody_effects: [Option<GeneralCustodyConsumptionV1<N>>; MAX_EXECUTIONS_PER_PAGE_V1],
+    /// Required physical settlement-token escrow balance after this page.
+    pub quote_inventory_after: u64,
+    /// Required ordered settlement Position balances after this page.
+    pub claim_inventory_after: [u64; N],
+    /// Exact selected-settlement reward released to the permissionless actor.
+    pub settlement_reward_lamports: u64,
+    /// Distribution-only atomic immutable-page close and cleanup plan.
+    pub page_close: Option<CandidatePageCloseV1>,
+}
+
+/// The sole complete-set mutation authorized after all inputs are collected.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SettlementMaterializationActionV1 {
+    /// No complete-set supply or Hoard collateral changes.
+    None,
+    /// Deposit exact collateral and split this many complete sets.
+    Split(u64),
+    /// Merge this many complete sets and withdraw exact collateral.
+    Merge(u64),
+}
+
+/// Exact adapter plan for the atomic Market/Hoard materialization boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SettlementMaterializationV1<const N: usize> {
+    action: SettlementMaterializationActionV1,
+    quote_inventory_after: u64,
+    claim_inventory_after: [u64; N],
+    reward_lamports: u64,
+}
+
+impl<const N: usize> SettlementMaterializationV1<N> {
+    /// Return the only permitted Market supply transition.
+    pub const fn action(self) -> SettlementMaterializationActionV1 {
+        self.action
+    }
+
+    /// Return the exact settlement-token escrow balance after materialization.
+    pub const fn quote_inventory_after(self) -> u64 {
+        self.quote_inventory_after
+    }
+
+    /// Return the exact Position balances after the sole supply mutation.
+    pub const fn claim_inventory_after(self) -> [u64; N] {
+        self.claim_inventory_after
+    }
+
+    /// Return the exact selected-settlement reward released to the actor.
+    pub const fn reward_lamports(self) -> u64 {
+        self.reward_lamports
+    }
 }
 
 impl<const N: usize> SettlementCursorV1<N> {
@@ -4224,7 +5400,7 @@ impl<const N: usize> SettlementCursorV1<N> {
     pub fn encoded_len() -> Result<usize> {
         validate_width(N)?;
         SETTLEMENT_CURSOR_BASE_BYTES
-            .checked_add(N.checked_mul(16).ok_or(Error::ArithmeticOverflow)?)
+            .checked_add(N.checked_mul(40).ok_or(Error::ArithmeticOverflow)?)
             .ok_or(Error::ArithmeticOverflow)
     }
 
@@ -4235,39 +5411,54 @@ impl<const N: usize> SettlementCursorV1<N> {
             return Err(Error::InvalidMagic);
         }
         validate_record_header(bytes)?;
-        require_zero(bytes, 12, 4)?;
-        require_zero(bytes, 89, 7)?;
-        let last_bytes = array::<32>(bytes, 96)?;
-        let last_order_id = match read_u8(bytes, 88)? {
-            0 => {
-                if last_bytes.iter().any(|byte| *byte != 0) {
-                    return Err(Error::NonCanonicalReservedBytes);
-                }
-                None
-            }
-            1 => Some(ContentId::new(last_bytes)?),
-            _ => return Err(Error::NonCanonicalState),
-        };
-        let mut net_coefficients = [0i128; N];
-        for (index, target) in net_coefficients.iter_mut().enumerate() {
-            *target = read_i128(
-                bytes,
-                vector_offset(SETTLEMENT_CURSOR_NET_OFFSET, index, 16)?,
-            )?;
+        if usize::from(read_u16(bytes, 12)?) != N {
+            return Err(Error::InvalidOutcomeCount);
         }
-        let totals = SETTLEMENT_CURSOR_NET_OFFSET
-            .checked_add(N.checked_mul(16).ok_or(Error::ArithmeticOverflow)?)
-            .ok_or(Error::ArithmeticOverflow)?;
+        require_zero(bytes, 15, 1)?;
+        require_zero(bytes, 89, 7)?;
+        require_zero(bytes, 209, 7)?;
+        require_zero(bytes, 296, 8)?;
+        let collection_net = SETTLEMENT_CURSOR_VECTOR_OFFSET;
+        let claim_outputs_offset = vector_offset(collection_net, N, 16)?;
+        let distribution_net = vector_offset(claim_outputs_offset, N, 8)?;
+        let mut collection_coefficients = [0i128; N];
+        let mut distribution_coefficients = [0i128; N];
+        let mut claim_outputs_remaining = [0u64; N];
+        for (index, ((collection, outputs), distribution)) in collection_coefficients
+            .iter_mut()
+            .zip(claim_outputs_remaining.iter_mut())
+            .zip(distribution_coefficients.iter_mut())
+            .enumerate()
+        {
+            *collection = read_i128(bytes, vector_offset(collection_net, index, 16)?)?;
+            *outputs = read_u64(bytes, vector_offset(claim_outputs_offset, index, 8)?)?;
+            *distribution = read_i128(bytes, vector_offset(distribution_net, index, 16)?)?;
+        }
         let cursor = Self {
             candidate_id: read_id(bytes, 16)?,
-            transcript_id: read_id(bytes, 48)?,
-            settled_pages: read_u32(bytes, 80)?,
-            settled_executions: read_u32(bytes, 84)?,
-            last_order_id,
-            rounding_carry: read_u64(bytes, 128)?,
-            net_coefficients,
-            total_quote_debit_numerator: read_i128(bytes, totals)?,
-            score: read_u128(bytes, totals + 16)?,
+            phase: decode_settlement_phase(read_u8(bytes, 14)?)?,
+            collection: SettlementReplayV1 {
+                next_page_id: read_zeroable_id(bytes, 48)?,
+                pages: read_u32(bytes, 80)?,
+                executions: read_u32(bytes, 84)?,
+                last_order_id: decode_optional_id(bytes, 88, 96)?,
+                rounding_carry: read_u64(bytes, 128)?,
+                net_coefficients: collection_coefficients,
+                total_quote_debit_numerator: read_i128(bytes, 136)?,
+                score: read_u128(bytes, 152)?,
+            },
+            distribution: SettlementReplayV1 {
+                next_page_id: read_zeroable_id(bytes, 168)?,
+                pages: read_u32(bytes, 200)?,
+                executions: read_u32(bytes, 204)?,
+                last_order_id: decode_optional_id(bytes, 208, 216)?,
+                rounding_carry: read_u64(bytes, 248)?,
+                net_coefficients: distribution_coefficients,
+                total_quote_debit_numerator: read_i128(bytes, 256)?,
+                score: read_u128(bytes, 272)?,
+            },
+            claim_outputs_remaining,
+            quote_outputs_remaining: read_u64(bytes, 288)?,
         };
         cursor.validate_persisted_shape()?;
         Ok(cursor)
@@ -4281,265 +5472,727 @@ impl<const N: usize> SettlementCursorV1<N> {
         put(out, 0, &SETTLEMENT_CURSOR_MAGIC);
         put(out, 8, &SCHEMA_V1.to_le_bytes());
         put(out, 10, &ARTIFACT_PROFILE_V1.to_le_bytes());
+        put(
+            out,
+            12,
+            &u16::try_from(N)
+                .map_err(|_| Error::InvalidOutcomeCount)?
+                .to_le_bytes(),
+        );
+        put(out, 14, &[settlement_phase_tag(self.phase)]);
         put(out, 16, self.candidate_id.as_bytes());
-        put(out, 48, self.transcript_id.as_bytes());
-        put(out, 80, &self.settled_pages.to_le_bytes());
-        put(out, 84, &self.settled_executions.to_le_bytes());
-        if let Some(last_order_id) = self.last_order_id {
-            put(out, 88, &[1]);
-            put(out, 96, last_order_id.as_bytes());
-        }
-        put(out, 128, &self.rounding_carry.to_le_bytes());
-        for (index, coefficient) in self.net_coefficients.iter().enumerate() {
+        encode_replay_base(out, self.collection, 48, 80, 84, 88, 96, 128, 136, 152);
+        encode_replay_base(
+            out,
+            self.distribution,
+            168,
+            200,
+            204,
+            208,
+            216,
+            248,
+            256,
+            272,
+        );
+        put(out, 288, &self.quote_outputs_remaining.to_le_bytes());
+        let collection_net = SETTLEMENT_CURSOR_VECTOR_OFFSET;
+        let claim_outputs_offset = vector_offset(collection_net, N, 16)?;
+        let distribution_net = vector_offset(claim_outputs_offset, N, 8)?;
+        for (index, ((collection, outputs), distribution)) in self
+            .collection
+            .net_coefficients
+            .iter()
+            .zip(self.claim_outputs_remaining.iter())
+            .zip(self.distribution.net_coefficients.iter())
+            .enumerate()
+        {
             put(
                 out,
-                vector_offset(SETTLEMENT_CURSOR_NET_OFFSET, index, 16)?,
-                &coefficient.to_le_bytes(),
+                vector_offset(collection_net, index, 16)?,
+                &collection.to_le_bytes(),
+            );
+            put(
+                out,
+                vector_offset(claim_outputs_offset, index, 8)?,
+                &outputs.to_le_bytes(),
+            );
+            put(
+                out,
+                vector_offset(distribution_net, index, 16)?,
+                &distribution.to_le_bytes(),
             );
         }
-        let totals = SETTLEMENT_CURSOR_NET_OFFSET
-            .checked_add(N.checked_mul(16).ok_or(Error::ArithmeticOverflow)?)
-            .ok_or(Error::ArithmeticOverflow)?;
-        put(out, totals, &self.total_quote_debit_numerator.to_le_bytes());
-        put(out, totals + 16, &self.score.to_le_bytes());
         Ok(())
     }
 
     fn validate_persisted_shape(&self) -> Result<()> {
-        if self.settled_pages == 0 {
-            if self.settled_executions != 0
-                || self.last_order_id.is_some()
-                || self.rounding_carry != 0
-                || self.net_coefficients.iter().any(|value| *value != 0)
-                || self.total_quote_debit_numerator != 0
-                || self.score != 0
-            {
-                return Err(Error::NonCanonicalState);
+        self.collection.validate()?;
+        self.distribution.validate()?;
+        match self.phase {
+            SettlementPhaseV1::CollectingInputs => {
+                if self.distribution.pages != 0 {
+                    return Err(Error::NonCanonicalState);
+                }
             }
-        } else if self.settled_executions == 0 || self.last_order_id.is_none() {
-            return Err(Error::NonCanonicalState);
+            SettlementPhaseV1::DistributingOutputs => {}
+            SettlementPhaseV1::Finished => {
+                if self
+                    .claim_outputs_remaining
+                    .iter()
+                    .any(|amount| *amount != 0)
+                    || self.quote_outputs_remaining != 0
+                {
+                    return Err(Error::NonCanonicalState);
+                }
+            }
         }
         Ok(())
     }
 
-    /// Begin replay of exactly the selected verified candidate.
-    ///
-    /// The adapter proves referenced order custody remains locked, then moves
-    /// the exact complete-set collateral between that custody and Hoard in the
-    /// same atomic call. Once applying begins, settlement cannot expire or
-    /// select another result.
+    /// Begin collection without moving collateral or mutating Market supply.
     pub fn begin(
-        candidate: CandidateStateV1<N>,
+        candidate: &mut CandidateStateV1<N>,
         batch: &mut BatchRootV1,
-        hoard: &mut HoardLedgerV1,
+        root: GeneralRootV1,
         config: GeneralConfigV1,
+        capitalization: CandidateCapitalizationV1,
+        rent: SettlementRentObservationV1,
         now_slot: u64,
-    ) -> Result<Self> {
+    ) -> Result<SettlementBeginV1<N>> {
+        candidate.validate_capitalization(capitalization)?;
+        root.validate_authority(
+            candidate.submission.market,
+            candidate.submission.claim_basis_id,
+            candidate.submission.generation,
+            config,
+        )?;
         if candidate.phase != CandidatePhase::Considered
             || batch.phase != BatchPhase::Settling
             || batch.best_candidate_id != Some(candidate.candidate_id)
+            || batch.open_settlement_children != 0
         {
             return Err(Error::CandidateNotSelected);
         }
         if now_slot > batch.settlement_close {
             return Err(Error::OutsideWindow);
         }
-        if hoard.market_identity_id != config.market_identity_id {
-            return Err(Error::AuthorityMismatch);
+        let pages = u64::from(candidate.submission.claimed_page_count);
+        let expected_settlement = pages
+            .checked_mul(2)
+            .and_then(|steps| steps.checked_add(4))
+            .and_then(|steps| steps.checked_mul(config.continuation_reward_lamports))
+            .ok_or(Error::ArithmeticOverflow)?;
+        let expected_cleanup = pages
+            .checked_add(1)
+            .and_then(|steps| steps.checked_mul(config.continuation_reward_lamports))
+            .ok_or(Error::ArithmeticOverflow)?;
+        if candidate.verification_work_remaining != 0
+            || candidate.settlement_work_remaining != expected_settlement
+            || candidate.cleanup_work_remaining != expected_cleanup
+            || candidate.open_page_children != candidate.submission.claimed_page_count
+        {
+            return Err(Error::InsufficientFunding);
         }
-        let mut next_hoard = *hoard;
-        next_hoard.apply_complete_set_delta(candidate.complete_set_delta)?;
+        let exact_settlement_rent = rent
+            .exact_rent_lamports
+            .iter()
+            .try_fold(0u64, |total, amount| total.checked_add(*amount))
+            .ok_or(Error::ArithmeticOverflow)?;
+        if candidate.settlement_rent_reserve_remaining != exact_settlement_rent {
+            return Err(Error::InsufficientFunding);
+        }
+        let mut temporary_top_up_lamports = [0u64; 3];
+        let mut temporary_surplus_refund_lamports = [0u64; 3];
+        let mut candidate_refund_lamports = 0u64;
+        for (((exact, precreation), top_up), surplus) in rent
+            .exact_rent_lamports
+            .iter()
+            .zip(rent.precreation_lamports.iter())
+            .zip(temporary_top_up_lamports.iter_mut())
+            .zip(temporary_surplus_refund_lamports.iter_mut())
+        {
+            *top_up = exact.saturating_sub(*precreation);
+            *surplus = precreation.saturating_sub(*exact);
+            candidate_refund_lamports = candidate_refund_lamports
+                .checked_add(core::cmp::min(*exact, *precreation))
+                .ok_or(Error::ArithmeticOverflow)?;
+        }
         let mut next_batch = *batch;
+        let mut next_candidate = *candidate;
+        next_candidate.settlement_rent_reserve_remaining = 0;
         next_batch.phase = BatchPhase::Applying;
+        next_batch.open_settlement_children = 1;
+        let pristine = SettlementReplayV1::pristine(candidate.first_page_id());
         let cursor = Self {
             candidate_id: candidate.candidate_id,
-            transcript_id: candidate.submission.initial_transcript_id,
-            settled_pages: 0,
-            settled_executions: 0,
-            last_order_id: None,
-            rounding_carry: 0,
-            net_coefficients: [0; N],
-            total_quote_debit_numerator: 0,
-            score: 0,
+            phase: SettlementPhaseV1::CollectingInputs,
+            collection: pristine,
+            distribution: pristine,
+            claim_outputs_remaining: [0; N],
+            quote_outputs_remaining: 0,
         };
-        *hoard = next_hoard;
+        let reward = next_candidate.consume_settlement(config)?;
         *batch = next_batch;
-        Ok(cursor)
-    }
-
-    /// Replay one exact verified page and return adapter-consumable states and
-    /// receipts. The adapter must authenticate the transcript hash and commit
-    /// all returned mutations atomically with this cursor.
-    pub fn settle_page(
-        &mut self,
-        page: VerificationPageV1<N>,
-        candidate: CandidateStateV1<N>,
-        config: GeneralConfigV1,
-        batch: BatchRootV1,
-    ) -> Result<SettlementPageResultV1<N>> {
-        if candidate.candidate_id != self.candidate_id || batch.phase != BatchPhase::Applying {
-            return Err(Error::CandidateNotSelected);
-        }
-        if page.page_index != self.settled_pages || page.prior_transcript_id != self.transcript_id {
-            return Err(Error::CursorMismatch);
-        }
-        if page.next_transcript_id == page.prior_transcript_id {
-            return Err(Error::InvalidTranscriptStep);
-        }
-        let count = usize::from(page.execution_count);
-        if count == 0 || count > MAX_EXECUTIONS_PER_PAGE_V1 {
-            return Err(Error::InvalidPageCount);
-        }
-        if page.executions.iter().take(count).any(Option::is_none)
-            || page.executions.iter().skip(count).any(Option::is_some)
-        {
-            return Err(Error::NonCanonicalReservedBytes);
-        }
-        let mut next = *self;
-        let mut states = [None; MAX_EXECUTIONS_PER_PAGE_V1];
-        let mut receipts = [None; MAX_EXECUTIONS_PER_PAGE_V1];
-        for (index, execution) in page.executions.iter().take(count).flatten().enumerate() {
-            let (state, receipt) = next.settle_execution(*execution, candidate, config, batch)?;
-            let state_target = states.get_mut(index).ok_or(Error::InvalidLength)?;
-            *state_target = Some(state);
-            let receipt_target = receipts.get_mut(index).ok_or(Error::InvalidLength)?;
-            *receipt_target = Some(receipt);
-        }
-        next.settled_pages = next
-            .settled_pages
-            .checked_add(1)
-            .ok_or(Error::ArithmeticOverflow)?;
-        next.transcript_id = page.next_transcript_id;
-        *self = next;
-        Ok(SettlementPageResultV1 {
-            execution_count: page.execution_count,
-            order_states: states,
-            receipts,
+        *candidate = next_candidate;
+        Ok(SettlementBeginV1 {
+            cursor,
+            reward_lamports: reward,
+            temporary_top_up_lamports,
+            candidate_refund_lamports,
+            temporary_surplus_refund_lamports,
         })
     }
 
-    fn settle_execution(
+    /// Collect one page's negative deltas into cursor custody and emit no output.
+    #[allow(clippy::too_many_arguments)]
+    pub fn collect_page(
         &mut self,
-        execution: ExecutionV1<N>,
-        candidate: CandidateStateV1<N>,
+        page_id: ContentId,
+        page: CandidatePageV1<N>,
+        candidate: &mut CandidateStateV1<N>,
+        root: GeneralRootV1,
         config: GeneralConfigV1,
         batch: BatchRootV1,
-    ) -> Result<(OrderStateV1, SettlementReceiptV1<N>)> {
-        validate_execution_binding(execution, config, batch)?;
-        if self
-            .last_order_id
-            .is_some_and(|last| execution.order.order_id <= last)
-        {
-            return Err(Error::NonCanonicalOrder);
-        }
-        let debit_per_lot = portfolio_dot(
-            &execution.order.coefficients,
-            &candidate.submission.prices,
-            config.outcome_count,
+        claim_inventory_before: [u64; N],
+        quote_inventory_before: u64,
+        capitalization: CandidateCapitalizationV1,
+    ) -> Result<SettlementPageResultV1<N>> {
+        candidate.validate_capitalization(capitalization)?;
+        self.require_active(*candidate, batch, SettlementPhaseV1::CollectingInputs)?;
+        self.authenticate_inventory(claim_inventory_before, quote_inventory_before, config)?;
+        let mut next = *self;
+        let result = replay_page(
+            &mut next.collection,
+            page_id,
+            page,
+            *candidate,
+            root,
+            config,
+            batch,
         )?;
-        if debit_per_lot > execution.order.max_quote_debit_per_lot_numerator {
-            return Err(Error::LimitViolated);
-        }
-        let fill = i128::from(execution.fill_lots);
-        let debit = debit_per_lot
-            .checked_mul(fill)
-            .ok_or(Error::ArithmeticOverflow)?;
-        let quote_delta_numerator = debit.checked_neg().ok_or(Error::ArithmeticOverflow)?;
-        let carry_before = self.rounding_carry;
-        let combined = quote_delta_numerator
-            .checked_add(i128::from(carry_before))
-            .ok_or(Error::ArithmeticOverflow)?;
-        let scale = i128::from(config.price_scale);
-        let quote_delta_i128 = combined.div_euclid(scale);
-        let carry_after_i128 = combined.rem_euclid(scale);
-        let quote_delta_atoms =
-            i64::try_from(quote_delta_i128).map_err(|_| Error::TokenAmountOutOfRange)?;
-        let carry_after = u64::try_from(carry_after_i128).map_err(|_| Error::ArithmeticOverflow)?;
-        let mut outcome_deltas = [0i64; N];
-        let width = usize::from(config.outcome_count);
-        for ((receipt_delta, net), coefficient) in outcome_deltas
-            .iter_mut()
-            .zip(self.net_coefficients.iter_mut())
-            .zip(execution.order.coefficients.iter())
-            .take(width)
-        {
-            let delta_i128 = i128::from(*coefficient)
-                .checked_mul(fill)
+        for effect in result.custody_effects.iter().flatten() {
+            next.quote_outputs_remaining = next
+                .quote_outputs_remaining
+                .checked_add(effect.quote_credit_to_owner())
                 .ok_or(Error::ArithmeticOverflow)?;
-            *receipt_delta = i64::try_from(delta_i128).map_err(|_| Error::TokenAmountOutOfRange)?;
-            *net = net
-                .checked_add(delta_i128)
-                .ok_or(Error::ArithmeticOverflow)?;
+            for (credit, outputs) in effect
+                .claim_credits_to_owner()
+                .iter()
+                .zip(next.claim_outputs_remaining.iter_mut())
+            {
+                *outputs = outputs
+                    .checked_add(*credit)
+                    .ok_or(Error::ArithmeticOverflow)?;
+            }
         }
-        let preference = execution
-            .order
-            .max_quote_debit_per_lot_numerator
-            .checked_sub(debit_per_lot)
-            .and_then(|per_lot| per_lot.checked_mul(fill))
-            .ok_or(Error::ArithmeticOverflow)?;
-        self.score = self
-            .score
-            .checked_add(u128::try_from(preference).map_err(|_| Error::ArithmeticOverflow)?)
-            .ok_or(Error::ArithmeticOverflow)?;
-        self.total_quote_debit_numerator = self
-            .total_quote_debit_numerator
-            .checked_add(debit)
-            .ok_or(Error::ArithmeticOverflow)?;
-        let mut state = execution.order_state;
-        state.consume(execution.order, execution.fill_lots)?;
-        self.rounding_carry = carry_after;
-        self.settled_executions = self
-            .settled_executions
-            .checked_add(1)
-            .ok_or(Error::ArithmeticOverflow)?;
-        self.last_order_id = Some(execution.order.order_id);
-        Ok((
-            state,
-            SettlementReceiptV1 {
-                candidate_id: candidate.candidate_id,
-                order_id: execution.order.order_id,
-                owner: execution.order.owner,
-                generation: config.generation,
-                batch_sequence: batch.sequence,
-                nonce: execution.order.nonce,
-                fill_lots: execution.fill_lots,
-                remaining_lots: state.remaining_lots,
-                quote_delta_atoms,
-                carry_before,
-                carry_after,
-                outcome_deltas,
-                outcome_count: config.outcome_count,
-            },
-        ))
+        let mut result = result;
+        let (claims_after, quote_after) = next.expected_inventory(config)?;
+        result.claim_inventory_after = claims_after;
+        result.quote_inventory_after = quote_after;
+        let mut next_candidate = *candidate;
+        result.settlement_reward_lamports = next_candidate.consume_settlement(config)?;
+        *self = next;
+        *candidate = next_candidate;
+        Ok(result)
     }
 
-    /// Finish exact replay and make the already-capitalized batch quiescent.
-    /// Each page is atomic with its cursor, replay states, and custody transfer;
-    /// prepaid liveness drives a started application to completion.
-    pub fn finish(&self, candidate: CandidateStateV1<N>, batch: &mut BatchRootV1) -> Result<()> {
-        if batch.phase != BatchPhase::Applying
-            || batch.best_candidate_id != Some(self.candidate_id)
+    /// Perform the one atomic complete-set split/merge after all inputs converge.
+    #[allow(clippy::too_many_arguments)]
+    pub fn materialize(
+        &mut self,
+        candidate: &mut CandidateStateV1<N>,
+        batch: BatchRootV1,
+        root: GeneralRootV1,
+        config: GeneralConfigV1,
+        claim_inventory_before: [u64; N],
+        quote_inventory_before: u64,
+        capitalization: CandidateCapitalizationV1,
+    ) -> Result<SettlementMaterializationV1<N>> {
+        candidate.validate_capitalization(capitalization)?;
+        root.validate_authority(
+            candidate.submission.market,
+            candidate.submission.claim_basis_id,
+            candidate.submission.generation,
+            config,
+        )?;
+        self.require_active(*candidate, batch, SettlementPhaseV1::CollectingInputs)?;
+        self.collection.matches_candidate(*candidate)?;
+        self.authenticate_inventory(claim_inventory_before, quote_inventory_before, config)?;
+        let mut next = *self;
+        let action = if candidate.complete_set_delta() > 0 {
+            let quantity = u64::try_from(candidate.complete_set_delta())
+                .map_err(|_| Error::TokenAmountOutOfRange)?;
+            SettlementMaterializationActionV1::Split(quantity)
+        } else if candidate.complete_set_delta() < 0 {
+            let quantity = u64::try_from(
+                candidate
+                    .complete_set_delta()
+                    .checked_neg()
+                    .ok_or(Error::ArithmeticOverflow)?,
+            )
+            .map_err(|_| Error::TokenAmountOutOfRange)?;
+            SettlementMaterializationActionV1::Merge(quantity)
+        } else {
+            SettlementMaterializationActionV1::None
+        };
+        validate_materialization_conservation(
+            claim_inventory_before,
+            quote_inventory_before,
+            next.claim_outputs_remaining,
+            next.quote_outputs_remaining,
+            action,
+        )?;
+        next.phase = SettlementPhaseV1::DistributingOutputs;
+        let mut next_candidate = *candidate;
+        let reward_lamports = next_candidate.consume_settlement(config)?;
+        *self = next;
+        *candidate = next_candidate;
+        Ok(SettlementMaterializationV1 {
+            action,
+            quote_inventory_after: next.quote_outputs_remaining,
+            claim_inventory_after: next.claim_outputs_remaining,
+            reward_lamports,
+        })
+    }
+
+    /// Replay one page again and distribute only its positive deltas.
+    #[allow(clippy::too_many_arguments)]
+    pub fn distribute_page(
+        &mut self,
+        page_id: ContentId,
+        page: CandidatePageV1<N>,
+        candidate: &mut CandidateStateV1<N>,
+        root: GeneralRootV1,
+        config: GeneralConfigV1,
+        batch: BatchRootV1,
+        claim_inventory_before: [u64; N],
+        quote_inventory_before: u64,
+        page_account_lamports: u64,
+        capitalization: CandidateCapitalizationV1,
+    ) -> Result<SettlementPageResultV1<N>> {
+        candidate.validate_capitalization(capitalization)?;
+        self.require_active(*candidate, batch, SettlementPhaseV1::DistributingOutputs)?;
+        self.authenticate_inventory(claim_inventory_before, quote_inventory_before, config)?;
+        let mut next = *self;
+        let result = replay_page(
+            &mut next.distribution,
+            page_id,
+            page,
+            *candidate,
+            root,
+            config,
+            batch,
+        )?;
+        for effect in result.custody_effects.iter().flatten() {
+            next.quote_outputs_remaining = next
+                .quote_outputs_remaining
+                .checked_sub(effect.quote_credit_to_owner())
+                .ok_or(Error::InsufficientCustody)?;
+            for (credit, outputs) in effect
+                .claim_credits_to_owner()
+                .iter()
+                .zip(next.claim_outputs_remaining.iter_mut())
+            {
+                *outputs = outputs
+                    .checked_sub(*credit)
+                    .ok_or(Error::InsufficientCustody)?;
+            }
+        }
+        let mut result = result;
+        result.quote_inventory_after = next.quote_outputs_remaining;
+        result.claim_inventory_after = next.claim_outputs_remaining;
+        let mut next_candidate = *candidate;
+        result.settlement_reward_lamports = next_candidate.consume_settlement(config)?;
+        result.page_close = Some(CandidatePageCloseV1 {
+            cleanup_reward_lamports: next_candidate.consume_cleanup(config)?,
+            rent_credit_lamports: page_account_lamports,
+            rent_beneficiary: next_candidate.submitter(),
+        });
+        next_candidate.open_page_children = next_candidate
+            .open_page_children
+            .checked_sub(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        *self = next;
+        *candidate = next_candidate;
+        Ok(result)
+    }
+
+    /// Finish only after the second replay and all physical custody are empty.
+    #[allow(clippy::too_many_arguments)]
+    pub fn finish(
+        &mut self,
+        candidate: &mut CandidateStateV1<N>,
+        batch: &mut BatchRootV1,
+        root: GeneralRootV1,
+        config: GeneralConfigV1,
+        claim_inventory: [u64; N],
+        quote_inventory: u64,
+        capitalization: CandidateCapitalizationV1,
+    ) -> Result<u64> {
+        candidate.validate_capitalization(capitalization)?;
+        root.validate_authority(
+            candidate.submission.market,
+            candidate.submission.claim_basis_id,
+            candidate.submission.generation,
+            config,
+        )?;
+        self.require_active(*candidate, *batch, SettlementPhaseV1::DistributingOutputs)?;
+        self.distribution.matches_candidate(*candidate)?;
+        self.authenticate_inventory(claim_inventory, quote_inventory, config)?;
+        if claim_inventory.iter().any(|amount| *amount != 0)
+            || quote_inventory != 0
+            || self
+                .claim_outputs_remaining
+                .iter()
+                .any(|amount| *amount != 0)
+            || self.quote_outputs_remaining != 0
+            || candidate.open_page_children != 0
+        {
+            return Err(Error::InsufficientCustody);
+        }
+        let mut next = *self;
+        let mut next_batch = *batch;
+        let mut next_candidate = *candidate;
+        next.phase = SettlementPhaseV1::Finished;
+        next_batch.phase = BatchPhase::Quiescent;
+        let reward = next_candidate.consume_settlement(config)?;
+        *self = next;
+        *batch = next_batch;
+        *candidate = next_candidate;
+        Ok(reward)
+    }
+
+    /// Close the empty temporary cluster and discharge the exact batch child.
+    #[allow(clippy::too_many_arguments)]
+    pub fn close(
+        self,
+        candidate: &mut CandidateStateV1<N>,
+        batch: &mut BatchRootV1,
+        root: GeneralRootV1,
+        config: GeneralConfigV1,
+        claim_inventory: [u64; N],
+        quote_inventory: u64,
+        temporary_accounts: SettlementCloseObservationV1,
+        capitalization: CandidateCapitalizationV1,
+    ) -> Result<SettlementCloseV1> {
+        candidate.validate_capitalization(capitalization)?;
+        root.validate_authority(
+            candidate.submission.market,
+            candidate.submission.claim_basis_id,
+            candidate.submission.generation,
+            config,
+        )?;
+        if self.phase != SettlementPhaseV1::Finished
             || candidate.candidate_id != self.candidate_id
+            || batch.phase != BatchPhase::Quiescent
+            || batch.best_candidate_id != Some(self.candidate_id)
+            || batch.open_settlement_children != 1
+        {
+            return Err(Error::NotQuiescent);
+        }
+        self.authenticate_inventory(claim_inventory, quote_inventory, config)?;
+        let mut rent_credit_lamports = 0u64;
+        for (account_lamports, exact_rent_lamports) in temporary_accounts
+            .account_lamports
+            .iter()
+            .zip(temporary_accounts.exact_rent_lamports.iter())
+        {
+            if account_lamports < exact_rent_lamports {
+                return Err(Error::InsufficientFunding);
+            }
+            rent_credit_lamports = rent_credit_lamports
+                .checked_add(*account_lamports)
+                .ok_or(Error::ArithmeticOverflow)?;
+        }
+        let mut next_candidate = *candidate;
+        let reward = next_candidate.consume_settlement(config)?;
+        if next_candidate.settlement_work_remaining != 0 {
+            return Err(Error::FundingConservationMismatch);
+        }
+        batch.open_settlement_children = 0;
+        *candidate = next_candidate;
+        Ok(SettlementCloseV1 {
+            continuation_reward_lamports: reward,
+            rent_credit_lamports,
+            rent_beneficiary: candidate.submitter(),
+        })
+    }
+
+    /// Return the physical phase.
+    pub const fn phase(self) -> SettlementPhaseV1 {
+        self.phase
+    }
+
+    fn require_active(
+        &self,
+        candidate: CandidateStateV1<N>,
+        batch: BatchRootV1,
+        phase: SettlementPhaseV1,
+    ) -> Result<()> {
+        if self.phase != phase
+            || candidate.phase != CandidatePhase::Considered
+            || candidate.candidate_id != self.candidate_id
+            || batch.phase != BatchPhase::Applying
+            || batch.best_candidate_id != Some(self.candidate_id)
+            || batch.open_settlement_children != 1
         {
             return Err(Error::CandidateNotSelected);
         }
-        if self.settled_pages != candidate.verified_pages
-            || self.settled_executions != candidate.verified_executions
-            || self.transcript_id != candidate.transcript_id
-            || self.net_coefficients != candidate.net_coefficients
-            || self.total_quote_debit_numerator != candidate.total_quote_debit_numerator
-            || self.score != candidate.score
-        {
-            return Err(Error::CandidateClaimMismatch);
-        }
-        if self.rounding_carry != 0 {
-            return Err(Error::RoundingCarryOutstanding);
-        }
-        let mut next_batch = *batch;
-        next_batch.phase = BatchPhase::Quiescent;
-        *batch = next_batch;
         Ok(())
     }
+
+    fn authenticate_inventory(
+        &self,
+        claim_inventory: [u64; N],
+        quote_inventory: u64,
+        config: GeneralConfigV1,
+    ) -> Result<()> {
+        let (expected_claims, expected_quote) = self.expected_inventory(config)?;
+        if claim_inventory != expected_claims || quote_inventory != expected_quote {
+            return Err(Error::CustodyMismatch);
+        }
+        Ok(())
+    }
+
+    fn expected_inventory(&self, config: GeneralConfigV1) -> Result<([u64; N], u64)> {
+        match self.phase {
+            SettlementPhaseV1::CollectingInputs => {
+                let mut claims = [0u64; N];
+                for ((output, net), inventory) in self
+                    .claim_outputs_remaining
+                    .iter()
+                    .zip(self.collection.net_coefficients.iter())
+                    .zip(claims.iter_mut())
+                {
+                    let amount = i128::from(*output)
+                        .checked_sub(*net)
+                        .ok_or(Error::ArithmeticOverflow)?;
+                    *inventory = u64::try_from(amount).map_err(|_| Error::CustodyMismatch)?;
+                }
+                let signed_quote_numerator = self
+                    .collection
+                    .total_quote_debit_numerator
+                    .checked_neg()
+                    .and_then(|value| value.checked_sub(i128::from(self.collection.rounding_carry)))
+                    .ok_or(Error::ArithmeticOverflow)?;
+                let scale = i128::from(config.price_scale);
+                if signed_quote_numerator.rem_euclid(scale) != 0 {
+                    return Err(Error::NonCanonicalState);
+                }
+                let net_quote = signed_quote_numerator.div_euclid(scale);
+                let quote = i128::from(self.quote_outputs_remaining)
+                    .checked_sub(net_quote)
+                    .ok_or(Error::ArithmeticOverflow)?;
+                Ok((
+                    claims,
+                    u64::try_from(quote).map_err(|_| Error::CustodyMismatch)?,
+                ))
+            }
+            SettlementPhaseV1::DistributingOutputs => {
+                Ok((self.claim_outputs_remaining, self.quote_outputs_remaining))
+            }
+            SettlementPhaseV1::Finished => Ok(([0; N], 0)),
+        }
+    }
+}
+
+fn validate_materialization_conservation<const N: usize>(
+    claims_before: [u64; N],
+    quote_before: u64,
+    claims_after: [u64; N],
+    quote_after: u64,
+    action: SettlementMaterializationActionV1,
+) -> Result<()> {
+    let quantity = match action {
+        SettlementMaterializationActionV1::None => 0,
+        SettlementMaterializationActionV1::Split(quantity)
+        | SettlementMaterializationActionV1::Merge(quantity) => quantity,
+    };
+    for (before, after) in claims_before.iter().zip(claims_after.iter()) {
+        let expected = match action {
+            SettlementMaterializationActionV1::None => *before,
+            SettlementMaterializationActionV1::Split(_) => before
+                .checked_add(quantity)
+                .ok_or(Error::ArithmeticOverflow)?,
+            SettlementMaterializationActionV1::Merge(_) => before
+                .checked_sub(quantity)
+                .ok_or(Error::InsufficientCustody)?,
+        };
+        if expected != *after {
+            return Err(Error::QuoteConservationMismatch);
+        }
+    }
+    let expected_quote = match action {
+        SettlementMaterializationActionV1::None => quote_before,
+        SettlementMaterializationActionV1::Split(_) => quote_before
+            .checked_sub(quantity)
+            .ok_or(Error::InsufficientCustody)?,
+        SettlementMaterializationActionV1::Merge(_) => quote_before
+            .checked_add(quantity)
+            .ok_or(Error::ArithmeticOverflow)?,
+    };
+    if expected_quote != quote_after {
+        return Err(Error::QuoteConservationMismatch);
+    }
+    Ok(())
+}
+
+fn replay_page<const N: usize>(
+    replay: &mut SettlementReplayV1<N>,
+    page_id: ContentId,
+    page: CandidatePageV1<N>,
+    candidate: CandidateStateV1<N>,
+    root: GeneralRootV1,
+    config: GeneralConfigV1,
+    batch: BatchRootV1,
+) -> Result<SettlementPageResultV1<N>> {
+    if page.page_index != replay.pages || replay.next_page_id != Some(page_id) {
+        return Err(Error::CursorMismatch);
+    }
+    let count = usize::from(page.execution_count);
+    if count == 0 || count > MAX_EXECUTIONS_PER_PAGE_V1 {
+        return Err(Error::InvalidPageCount);
+    }
+    if page.executions.iter().take(count).any(Option::is_none)
+        || page.executions.iter().skip(count).any(Option::is_some)
+    {
+        return Err(Error::NonCanonicalReservedBytes);
+    }
+    let mut next = *replay;
+    let mut states = [None; MAX_EXECUTIONS_PER_PAGE_V1];
+    let mut receipts = [None; MAX_EXECUTIONS_PER_PAGE_V1];
+    let mut effects = [None; MAX_EXECUTIONS_PER_PAGE_V1];
+    for (index, execution) in page.executions.iter().take(count).flatten().enumerate() {
+        let (state, receipt) =
+            replay_execution(&mut next, *execution, candidate, root, config, batch)?;
+        *states.get_mut(index).ok_or(Error::InvalidLength)? = Some(state);
+        *receipts.get_mut(index).ok_or(Error::InvalidLength)? = Some(receipt);
+        let (quote_debit_from_escrow, quote_credit_to_owner) =
+            split_signed_amount(receipt.quote_delta_atoms)?;
+        let mut claim_debits_from_custody = [0; N];
+        let mut claim_credits_to_owner = [0; N];
+        for ((delta, debit), credit) in receipt
+            .outcome_deltas
+            .iter()
+            .zip(claim_debits_from_custody.iter_mut())
+            .zip(claim_credits_to_owner.iter_mut())
+        {
+            let (next_debit, next_credit) = split_signed_amount(*delta)?;
+            *debit = next_debit;
+            *credit = next_credit;
+        }
+        *effects.get_mut(index).ok_or(Error::InvalidLength)? = Some(GeneralCustodyConsumptionV1 {
+            quote_debit_from_escrow,
+            quote_credit_to_owner,
+            claim_debits_from_custody,
+            claim_credits_to_owner,
+        });
+    }
+    next.pages = next.pages.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+    next.next_page_id = page.next_page_id;
+    *replay = next;
+    Ok(SettlementPageResultV1 {
+        execution_count: page.execution_count,
+        order_states: states,
+        receipts,
+        custody_effects: effects,
+        quote_inventory_after: 0,
+        claim_inventory_after: [0; N],
+        settlement_reward_lamports: 0,
+        page_close: None,
+    })
+}
+
+fn replay_execution<const N: usize>(
+    replay: &mut SettlementReplayV1<N>,
+    execution: ExecutionV1<N>,
+    candidate: CandidateStateV1<N>,
+    root: GeneralRootV1,
+    config: GeneralConfigV1,
+    batch: BatchRootV1,
+) -> Result<(OrderStateV1, SettlementReceiptV1<N>)> {
+    validate_execution_binding(execution, root, config, batch)?;
+    if replay
+        .last_order_id
+        .is_some_and(|last| execution.order.order_id <= last)
+    {
+        return Err(Error::NonCanonicalOrder);
+    }
+    let debit_per_lot = portfolio_dot(
+        &execution.order.coefficients,
+        &candidate.submission.prices,
+        config.outcome_count,
+    )?;
+    if debit_per_lot > execution.order.max_quote_debit_per_lot_numerator {
+        return Err(Error::LimitViolated);
+    }
+    let fill = i128::from(execution.fill_lots);
+    let debit = debit_per_lot
+        .checked_mul(fill)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let combined = debit
+        .checked_neg()
+        .and_then(|value| value.checked_add(i128::from(replay.rounding_carry)))
+        .ok_or(Error::ArithmeticOverflow)?;
+    let scale = i128::from(config.price_scale);
+    let quote_delta_atoms =
+        i64::try_from(combined.div_euclid(scale)).map_err(|_| Error::TokenAmountOutOfRange)?;
+    let carry_before = replay.rounding_carry;
+    let carry_after =
+        u64::try_from(combined.rem_euclid(scale)).map_err(|_| Error::ArithmeticOverflow)?;
+    let mut outcome_deltas = [0i64; N];
+    for ((receipt_delta, net), coefficient) in outcome_deltas
+        .iter_mut()
+        .zip(replay.net_coefficients.iter_mut())
+        .zip(execution.order.coefficients.iter())
+        .take(usize::from(config.outcome_count))
+    {
+        let delta = i128::from(*coefficient)
+            .checked_mul(fill)
+            .ok_or(Error::ArithmeticOverflow)?;
+        *receipt_delta = i64::try_from(delta).map_err(|_| Error::TokenAmountOutOfRange)?;
+        *net = net.checked_add(delta).ok_or(Error::ArithmeticOverflow)?;
+    }
+    let preference = execution
+        .order
+        .max_quote_debit_per_lot_numerator
+        .checked_sub(debit_per_lot)
+        .and_then(|value| value.checked_mul(fill))
+        .ok_or(Error::ArithmeticOverflow)?;
+    replay.score = replay
+        .score
+        .checked_add(u128::try_from(preference).map_err(|_| Error::ArithmeticOverflow)?)
+        .ok_or(Error::ArithmeticOverflow)?;
+    replay.total_quote_debit_numerator = replay
+        .total_quote_debit_numerator
+        .checked_add(debit)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let mut state = execution.order_state;
+    state.consume(execution.order, execution.fill_lots)?;
+    replay.rounding_carry = carry_after;
+    replay.executions = replay
+        .executions
+        .checked_add(1)
+        .ok_or(Error::ArithmeticOverflow)?;
+    replay.last_order_id = Some(execution.order.order_id);
+    Ok((
+        state,
+        SettlementReceiptV1 {
+            candidate_id: candidate.candidate_id,
+            order_id: execution.order.order_id,
+            owner: execution.order.owner,
+            generation: config.generation,
+            batch_sequence: batch.sequence,
+            nonce: execution.order.nonce,
+            fill_lots: execution.fill_lots,
+            remaining_lots: state.remaining_lots,
+            quote_delta_atoms,
+            carry_before,
+            carry_after,
+            outcome_deltas,
+            outcome_count: config.outcome_count,
+        },
+    ))
 }
 
 /// Segregated prepaid General work compartments.
@@ -4932,11 +6585,12 @@ impl GeneralFundingV1 {
 
 fn validate_execution_binding<const N: usize>(
     execution: ExecutionV1<N>,
+    root: GeneralRootV1,
     config: GeneralConfigV1,
     batch: BatchRootV1,
 ) -> Result<()> {
-    validate_authority(
-        execution.order.market_identity_id,
+    root.validate_authority(
+        execution.order.market,
         execution.order.claim_basis_id,
         execution.order.generation,
         config,
@@ -4950,21 +6604,6 @@ fn validate_execution_binding<const N: usize>(
     execution
         .order_state
         .validate_snapshot(execution.order, execution.fill_lots)
-}
-
-fn validate_authority(
-    market_identity_id: ContentId,
-    claim_basis_id: ContentId,
-    generation: u64,
-    config: GeneralConfigV1,
-) -> Result<()> {
-    if market_identity_id != config.market_identity_id
-        || claim_basis_id != config.claim_basis_id
-        || generation != config.generation
-    {
-        return Err(Error::AuthorityMismatch);
-    }
-    Ok(())
 }
 
 fn validate_prices<const N: usize>(
@@ -5222,6 +6861,72 @@ fn decode_batch_phase(tag: u8) -> Result<BatchPhase> {
     }
 }
 
+const fn settlement_phase_tag(phase: SettlementPhaseV1) -> u8 {
+    match phase {
+        SettlementPhaseV1::CollectingInputs => 0,
+        SettlementPhaseV1::DistributingOutputs => 1,
+        SettlementPhaseV1::Finished => 2,
+    }
+}
+
+fn decode_settlement_phase(tag: u8) -> Result<SettlementPhaseV1> {
+    match tag {
+        0 => Ok(SettlementPhaseV1::CollectingInputs),
+        1 => Ok(SettlementPhaseV1::DistributingOutputs),
+        2 => Ok(SettlementPhaseV1::Finished),
+        _ => Err(Error::InvalidPhase),
+    }
+}
+
+fn decode_optional_id(
+    bytes: &[u8],
+    flag_offset: usize,
+    id_offset: usize,
+) -> Result<Option<ContentId>> {
+    let identifier = array::<CONTENT_ID_BYTES>(bytes, id_offset)?;
+    match read_u8(bytes, flag_offset)? {
+        0 => {
+            if identifier.iter().any(|byte| *byte != 0) {
+                return Err(Error::NonCanonicalReservedBytes);
+            }
+            Ok(None)
+        }
+        1 => Ok(Some(ContentId::new(identifier)?)),
+        _ => Err(Error::NonCanonicalState),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_replay_base<const N: usize>(
+    out: &mut [u8],
+    replay: SettlementReplayV1<N>,
+    transcript_offset: usize,
+    pages_offset: usize,
+    executions_offset: usize,
+    last_flag_offset: usize,
+    last_id_offset: usize,
+    carry_offset: usize,
+    debit_offset: usize,
+    score_offset: usize,
+) {
+    if let Some(next_page_id) = replay.next_page_id {
+        put(out, transcript_offset, next_page_id.as_bytes());
+    }
+    put(out, pages_offset, &replay.pages.to_le_bytes());
+    put(out, executions_offset, &replay.executions.to_le_bytes());
+    if let Some(last_order_id) = replay.last_order_id {
+        put(out, last_flag_offset, &[1]);
+        put(out, last_id_offset, last_order_id.as_bytes());
+    }
+    put(out, carry_offset, &replay.rounding_carry.to_le_bytes());
+    put(
+        out,
+        debit_offset,
+        &replay.total_quote_debit_numerator.to_le_bytes(),
+    );
+    put(out, score_offset, &replay.score.to_le_bytes());
+}
+
 const fn funding_index(compartment: FundingCompartment) -> usize {
     match compartment {
         FundingCompartment::Liveness => 0,
@@ -5295,6 +7000,15 @@ fn vector_offset(base: usize, index: usize, element_bytes: usize) -> Result<usiz
 
 fn read_id(bytes: &[u8], offset: usize) -> Result<ContentId> {
     ContentId::new(array(bytes, offset)?)
+}
+
+fn read_zeroable_id(bytes: &[u8], offset: usize) -> Result<Option<ContentId>> {
+    let identifier = array::<CONTENT_ID_BYTES>(bytes, offset)?;
+    if identifier.iter().all(|byte| *byte == 0) {
+        Ok(None)
+    } else {
+        Ok(Some(ContentId::new(identifier)?))
+    }
 }
 
 fn read_owner_key(bytes: &[u8], offset: usize) -> Result<OwnerKeyV1> {

@@ -1,378 +1,310 @@
 # General frequent-batch contract
 
 `dclutch-general-contract` is the pure semantic owner of the optional General
-venue. It is not the Market core, a Solana adapter, an orderbook index, or a
-claim mint. The crate is `no_std`, `no_alloc`, safe Rust, fixed-capacity, and
-uses checked integer arithmetic throughout.
+venue. It is `no_std`, `no_alloc`, safe Rust, fixed-capacity, and uses checked
+integer arithmetic. Solana accounts, hashing, signatures, token movement, and
+transaction construction remain in the adapter boundary.
 
-## Authority
+## Acyclic authority
 
-One `GeneralConfigV1` binds all venue activity to:
+`GeneralConfigV1` is a reusable, pre-Market, permanent generic finalized
+record. Its schema label is `dclutch/schema/general-config-v1` and its exact
+width remains 200 bytes. It contains the capacity profile, ClaimBasis, reviewed
+General release, independently fixed generation, simplex scale, three slot
+windows, order/page bounds, exact permissionless-continuation reward, and
+outcome count. It deliberately contains no Market key, MarketIdentity digest,
+manifest ID, or settlement mint.
 
-- one exact Market identity commitment and occurrence generation;
-- the Market's exact ClaimBasis content identity and finite width;
-- one immutable General capability release selected by the capability
-  manifest;
-- one liftable capacity-profile identity.
+Construction is acyclic and one pass:
 
-The adapter must authenticate those content identities against the Market and
-capability manifest. The General config deliberately does not repeat a
-settlement-asset identity: Market -> Realm -> Mint/token release is the sole
-authority for that fact. There is no second feature bitmap, admin switch, or
-static client authority.
+1. hash canonical General config;
+2. put that config digest in the capability manifest entry and hash the
+   manifest;
+3. put that manifest digest in MarketIdentity and derive/create Market;
+4. activate General after authenticating Market -> manifest -> config.
 
-`GeneralConfigV1` is a permanent generic finalized record under the
-domain-separated schema label `dclutch/schema/general-config-v1`. Its exported
-schema identity is SHA-256 of that exact label. General neither creates nor
-closes a local config PDA. Every consumer authenticates the 200-byte canonical
-raw config, its matching vacant staging cursor, and current Rent through the
-shared finalized-record boundary.
+The activated 136-byte `GeneralRootV1` is the sole later owner of the actual
+Market account binding. It persists `{config_id, market, RentCredit,
+generation, next_batch_sequence, open_batches, phase}`. Signed orders and
+candidate submissions carry that Market key, and pure transitions compare it
+to `root.market` plus config ClaimBasis/generation. The adapter verifies the
+MarketIdentity digest only during activation; persisting both Market address
+and digest in General state would create a redundant mismatch state.
 
-The recognized V1 release is closed by four domain-separated SHA-256 preimages
-and their exported content identities:
+The config never repeats settlement-asset identity. Market -> Realm -> Mint and
+token release remains its sole authority. Finalized config consumers always
+provide the exact raw record, matching vacant staging cursor, and shared trusted
+Rent proof. General never creates or closes a config account.
+
+The closed reviewed identities are hashes of:
 
 - `dclutch/general/capability-kind/v1`;
 - `dclutch/general/frequent-batch-release/v1`;
-- `dclutch/general/child-schema/v1`; and
-- `dclutch/general/child-derivation/v1`.
+- `dclutch/general/child-schema/v1`;
+- `dclutch/general/child-derivation/v1`; and
+- `dclutch/schema/general-config-v1`.
 
-`validate_general_capability_entry_v1` requires those exact kind, release,
-schema, and derivation identities plus the exact config and capacity-profile
-identities. Every General address now has a contract-owned ordered seed tuple:
+## Derivation authority
 
-- General root: `[general-root-domain, Market, generation-le, config-id]`;
-- General funding: `[general-funding-domain, Market, generation-le, config-id,
+Canonical ordered seed tuples are:
+
+- root: `[general-root-domain, Market, generation-le, config-id]`;
+- funding: `[general-funding-domain, Market, generation-le, config-id,
   release-id]`;
-- batch: `[general-batch-domain, General-root, sequence-le]`;
+- batch: `[general-batch-domain, root, sequence-le]`;
 - order replay: `[general-order-state-domain, Market, generation-le, owner,
   nonce-le, order-id]`;
-- order custody: `[general-order-custody-domain, order-replay-account]`;
-- quote escrow: `[general-quote-escrow-domain, order-custody-account]`;
-- candidate: `[general-candidate-domain, batch-account, candidate-id]`; and
-- settlement cursor: `[general-settle-domain, candidate-account]`.
+- order custody: `[general-order-custody-domain, order-replay]`;
+- order quote escrow: `[general-quote-escrow-domain, order-custody]`;
+- candidate: `[general-candidate-domain, batch, candidate-id]`;
+- immutable candidate page copy:
+  `[general-candidate-page-domain, candidate, page-id]`;
+- settlement cursor: `[general-settle-domain, candidate]`; and
+- settlement quote escrow: `[general-settle-escrow-domain, cursor]`.
 
-All domains are distinct and at most 32 bytes. Generic capability funding is
-not redefined here. Activation returns the capability contract's reusable
-`CapabilityFundingDerivationV1`, whose tuple is `[capability-funding-domain,
-Market, generation-le, entry-index-le, config-id, release-id]`. The adapter
-must first authenticate the Market's manifest content hash, then derive the
-source account from that exact tuple. Derivation tests cover order, domain, and
-identity substitution.
+The capability contract remains owner of generic funding derivation. General
+uses its exact Market/generation/manifest-entry/config/release tuple only after
+the adapter authenticates the manifest digest.
 
-## Exact instruction and account authority
+## Stored candidate pages and data availability
 
-`GeneralInstructionV1<N>` owns the hostile wire grammar. Every instruction has
-one magic, schema, closed action tag, exact `N`, and zero reserved bytes.
-Variable payloads embed the existing canonical signed order, candidate
-submission, or verification-page codec directly; they are not parallel DTOs.
-Activation carries only the Market child-count replay guard. Config identity
-and bytes come solely from the manifest-selected finalized raw record, so the
-wire has no caller-authored config copy or config-ID assertion.
-The remaining payload fields are only generation, child-count, batch-sequence,
-candidate-ID, or transcript replay guards. There are no caller allocation,
-status, winner, liveness, or custody assertions. Decoders reject short,
-trailing, unknown-action, reserved, and width-substituted bytes.
+A candidate cannot depend on a solver or index resupplying page bodies after
+selection. `CandidatePageV1<N>` is an immutable, exact-width, content-addressed
+record containing:
 
-`GeneralAccountFrameV1` owns exact ordered SVM role geometry and privilege
-bits for every action from activation through close. All V1 roles are distinct;
-there is no implicit alias exception. System, Rent, and Clock roles bind their
-canonical keys. Every raw Realm, ClaimBasis, manifest, or General-config consumer
-also supplies its canonical readonly staging-cursor vacancy; one shared Rent
-sysvar proves the raw record is currently rent-exempt and the exact cursor is a
-system-owned, nonexecuting, empty-data vacancy. Precreation lamport dust is
-deliberately non-semantic and cannot revive a finalized cursor. The activation
-frame orders its four raw records first and then their four matching vacancies,
-so no record or Rent fact is duplicated. Signed-order raw records are absent: the canonical signed
-message is already embedded in the instruction or page and replay binds its
-derived identity. Verification frames contain exactly `6 + M` accounts and
-settlement frames exactly `10 + 5M` accounts for the instruction's leading
-execution count `M = 1..4`, so unused execution accounts are not padded into a
-transaction. The maximum V1 settlement frame is therefore 30 accounts.
-The finalized-content-sensitive fixed frames are activation 19, admission 19,
-cancellation 17, and post-batch order close 15 accounts. Every one shares a
-single Rent role across its raw records and cursor vacancies. Terminal General
-close reads the finalized config but has no config-close authority.
+- zero-based page index;
+- optional next page content ID, with all-zero terminal sentinel;
+- exact leading execution count `1..=4`; and
+- the exact signed order, authenticated order-state snapshot, and scalar fill
+  for every execution.
 
-## Canonical mutable-state records
+Pages are built last-to-first. `page_id` is the domain-separated hash of the
+canonical page bytes, which exclude their own ID. The candidate-exclusive PDA
+also contains candidate ID, so identical content used by two candidates never
+shares close authority.
 
-The contract is the sole codec and invariant owner for its persisted records.
-The immutable generic-record `GeneralConfigV1` is exactly 200 bytes;
-`GeneralRootV1` is exactly 136 bytes,
-`GeneralFundingV1` is exactly 144 bytes, `BatchRootV1` is exactly 136 bytes, and
-`OrderStateV1` is exactly 96 bytes. Exact-N `GeneralOrderCustodyV1<N>` is
-`192 + 8N` bytes, `CandidateStateV1<N>` is `376 + 24N` bytes, and
-`SettlementCursorV1<N>` is `168 + 16N` bytes. Each state record has a distinct
-eight-byte type magic plus the V1 schema and artifact-profile tags, and
-decoders reject short, trailing, reserved, unknown-tag, zero-identity,
-arithmetically invalid, and unreachable state encodings.
+`CandidateSubmissionV1<N>` binds the first page ID, exact claimed page and
+execution counts, final score, final quote-debit numerator, exact-N final net
+coefficient vector, simplex prices, page-Rent reserve, Market, ClaimBasis,
+generation, batch, deadline, and submitter/RentCredit. `candidate_id` is the
+hash of this noncircular canonical submission.
 
-The records encode every field read or changed by a transition. Optional
-candidate identities use one canonical discriminator and require an all-zero
-payload when absent. Batch deadlines are strictly increasing, batch winner
-shape agrees with candidate count and phase, root child counts cannot exceed
-reserved sequences or survive terminalization, and order replay phase agrees
-with remaining lots. The root persists the nonzero permanent RentCredit
-beneficiary for root/funding and batch rent plus the exact Market key
-needed to reconstruct its own PDA from persisted truth; neither is supplied by
-a later caller. Candidate submission uses an exact signing key which is also that
-candidate's permanent rent beneficiary. Replay authentication additionally
-binds the persisted order identity, exact nonzero signing key, nonce, and
-remaining lots to the immutable signed order and its original lot ceiling.
-Custody binds that order,
-Market, generation, signing key, rent beneficiary, and quote escrow, and owns
-only remaining quote and native-claim principal; replay availability remains
-solely in `OrderStateV1`. Funding persists committed, remaining, spent, and
-refunded amounts independently for all three compartments; checked conservation
-and the one atomic terminal-refund shape are revalidated on every decode and
-encode. An SVM adapter must use these codecs directly rather than define a
-parallel account DTO.
+Candidate page accounts are created from candidate-owned reserved Rent. Page
+creation increments the exact live page-child count. System-owned,
+nonexecutable, data-empty precreation dust cannot block creation: dust reduces
+the top-up, displaced candidate reserve goes to the immutable RentCredit, and
+page surplus also goes there. Allocated/live/wrong-owner targets remain
+refused by the adapter.
 
-## Frequent-batch lifecycle
+Verification starts at `submission.first_page_id`, reads the authenticated
+onchain page account, and advances only to that record's `next_page_id`.
+Finishing requires the terminal sentinel, exact claimed page/execution counts,
+all claimed page children present, zero page-Rent reserve, and exact equality
+with every claimed aggregate before enforcing complete-set and quote
+conservation. Caller-supplied successor IDs or page bodies are not instruction
+authority.
 
-The capability root is `Active -> Quiescing -> Terminal -> Retired`. Quiescing
-immediately stops new batches but lets owned batches converge. Terminal requires
-zero open batches. Retirement additionally requires the adapter to discharge
-all segregated funding and rent ownership.
+Collection and distribution each restart at the same stored first page and
+walk the same immutable links. Distribution atomically closes the page after
+using it a second time. Rejected, expired, and losing candidates expose a
+permissionless page-close transition. Candidate close refuses any live page
+child and is the only transition that decrements the batch's exact open
+candidate-child count.
 
-Each batch is:
+## Candidate-owned liveness capital
 
-1. `Collecting`: adapter-authenticated signed orders can be opened or cancelled.
-2. `Selecting`: collection is locked; anyone can submit and page-verify a
-   candidate.
-3. `Settling`: the selection deadline freezes the deterministic best valid
-   submitted candidate, but no economic mutation has begun.
-4. `Applying`: exact complete-set collateral conversion has committed and
-   receipt pages must converge. This phase cannot expire.
-5. `Quiescent -> Retired`: no economic mutation remains, then child/rent state
-   is discharged.
+Attacker-created candidates never consume founding General liveness and do not
+impose unfunded cleanup. Candidate admission escrows five exact native
+components on the candidate state account:
 
-An unstarted `Settling` batch may expire without consuming orders. An `Applying`
-batch cannot be abandoned after partial work. Prepaid liveness capital funds
-permissionless completion. This distinction is deliberate: paginated SVM work
-cannot honestly claim whole-batch transaction atomicity.
+- current candidate-state Rent;
+- exact aggregate page Rent committed by the submission;
+- exact current Rent for the settlement cursor, Position, and quote escrow;
+- verification work `(P + 2) * reward` for `P` page verifications, finish, and
+  consideration;
+- selected-settlement work `(2P + 4) * reward` for begin, `P` collection
+  pages, materialize, `P` distribution pages, finish, and settlement close;
+- unspendable cleanup work `(P + 1) * reward` for every possible page close
+  plus candidate close.
 
-## Orders and replay
+These compartments are persisted separately and are not interchangeable even
+when total lamports match. Every transition authenticates physical candidate
+lamports as current Rent plus all exact remaining compartments. A selected
+candidate cannot enter `Applying` unless verification is exhausted and the
+entire selected-settlement and cleanup reserves are intact.
 
-An order is one signed coefficient vector in the canonical ClaimBasis order.
-One scalar `fill_lots` applies to every coefficient, so a solver cannot cherry
-pick legs of a portfolio. The order binds Market, ClaimBasis, generation, batch,
-the exact nonzero Ed25519/SVM `OwnerKeyV1`, nonce, expiry, lot cap, and one exact
-upper quote-debit limit. `OwnerKeyV1` has the same physical width as a content
-identity but is not one: the adapter compares its bytes directly with the
-authenticated signer key.
+On the selected path each distribution pays one settlement reward and one page
+cleanup reward while closing that page and routing its observed lamports to
+RentCredit. Settlement close verifies zero Position/token inventory, exhausts
+only the selected-settlement compartment, and routes all three temporary
+account balances to RentCredit; candidate close consumes the final cleanup
+reward. On rejected/expired/losing or partial chains, each actually created
+page close consumes one cleanup reward. Candidate close consumes one more and
+refunds unused page Rent and unused verification/settlement/overprovisioned
+cleanup capital only to the immutable RentCredit. Thus unbounded submissions
+remain funded by their submitters rather than a global candidate-count cap,
+Hoard, or future fees.
 
-`order_id` is SHA-256 of the exact `168 + 8N` byte `DCLTGOM1` signing preimage.
-That preimage contains every immutable order fact except `order_id` itself, so
-the identity is noncircular. The full `DCLTGOR1` instruction/persistence record
-retains the derived ID for replay and PDA binding. The adapter must hash the
-contract-encoded signing preimage and require the digest to equal the retained
-ID before it treats the owner signer as order authorization.
+Batch account Rent/work is separately prepaid when the batch opens. It owns
+current Rent plus exactly three rewards for collection close, selection close,
+and terminal retirement. Safe precreation dust reduces the opener top-up and
+any surplus routes to the root's permanent RentCredit. General activation
+covers only finite activation/root/funding obligations; it does not pretend to
+capitalize future unbounded batches or candidates.
 
-Admission atomically creates a unique `(owner, nonce, order_id)` replay record
-and exact-N custody. Worst-case quote reserve is
-`ceil(max(0, max_quote_debit_per_lot_numerator) * max_lots / price_scale)`;
-native reserve for outcome `i` is
-`max(0, -coefficient[i]) * max_lots`. Both use checked exact arithmetic and
-there is no maximum-width padding. The adapter must couple the returned quote
-escrow and Position debits to persistence in the same transaction.
+## Two-pass physical settlement
 
-`OrderStateV1` tracks remaining lots and admits only `Open -> Cancelled` before
-collection close, `Open -> Open/Consumed` through winning receipts, or
-`Open -> Released` after its batch is quiescent. Receipt consumption binds the
-order, owner, nonce, Market generation, batch, exact width, remaining lots, and
-per-outcome coefficient products before it atomically advances replay and
-custody. Cancellation returns every reserve only with the cancellation state
-change. Batch closure returns all residual quote/claims for either a fully
-consumed order or an unfilled remainder, making that remainder permanently
-unavailable. Orders must remain valid through the entire pre-application
-settlement window. Once collection closes, cancellation is refused.
+The best valid submitted candidate is selected by highest checked preference
+score, with lexicographically smaller candidate ID breaking ties. No optimality
+claim is made without a checked certificate.
 
-Candidates are checked against immutable order-state snapshots without
-consuming them. Only the selected candidate's applying pages consume replay
-state. Pages and the settlement cursor require strictly increasing order IDs,
-which refuses duplicate execution inside a candidate.
-
-## Exact prices, objective, and conservation
-
-Prices are nonnegative `u64` simplex coordinates whose checked sum equals the
-configured positive scale exactly. Unused coordinates are canonical zeroes.
-There are no floats.
-
-For portfolio coefficients `q[i]`, prices `p[i]`, and scalar lots `L`, the exact
-quote-debit numerator is:
+Every valid candidate is globally balanced:
 
 ```
-L * sum(q[i] * p[i])
+net_claims = [k, k, ..., k]
+total_quote_debit_numerator = k * price_scale
 ```
 
-The candidate score is the checked sum of each executed order's exact preference
-surplus:
+Pages need not be locally balanced. Settlement therefore has three physical
+phases:
+
+1. Collection pages consume only negative quote/claim deltas from authenticated
+   order custody into cursor-owned quote escrow and Position inventory. They
+   emit no owner output.
+2. One materialization action proves the complete first replay and performs
+   the sole Market/Realm/collateral-vault complete-set split (`k>0`), merge (`k<0`), or no
+   supply mutation (`k=0`).
+3. Distribution pages replay the same stored records, emit only positive
+   outputs, and close each page. Finish requires the complete second replay,
+   zero remaining output obligations, zero observed physical quote/claim
+   custody, and zero page children.
+
+`SettlementCursorV1<N>` is deliberately minimal. It persists candidate ID,
+phase, two linked-page replay cursors, and remaining positive output
+obligations. It does not persist Market, generation, owner, escrow,
+RentCredit, complete-set delta, quote inventory, or claim inventory. Those are
+owned by candidate/root/account derivations or physical token/Position state.
+Every transition accepts observed physical balances and returns exact required
+postconditions. In collection, expected inputs derive from accumulated outputs
+minus replay net deltas; in distribution, physical custody equals remaining
+outputs; Finished is zero.
+
+Quote transfer uses one canonical-prefix Euclidean carry. For each strict
+order-ID execution:
 
 ```
-L * (order.max_quote_debit_per_lot_numerator - sum(q[i] * p[i]))
-```
-
-Higher verified score wins. An equal score selects the lexicographically smaller
-candidate content identity. The contract intentionally calls this the **best
-valid submitted candidate**. It makes no optimality claim. A future release can
-add a checked optimality certificate without changing V1's vocabulary.
-
-The adapter's order-admission/custody policy must price account and computation
-use so costless wash-order flooding cannot consume the finite batch profile.
-Those charges are not General liveness capitalization and are not sourced from
-Hoard. V1 candidate ranking does not pretend to be Sybil-proof without that
-economic admission boundary.
-
-At verification completion, aggregate outcome inventory must be exactly
-`[k, k, ..., k]`. This is the only inventory the venue may create or destroy:
-`k > 0` is a virtual complete-set split and `k < 0` is a complete-set merge.
-Because simplex prices sum to the scale, aggregate trader quote debit must equal
-`k * scale`. The contract checks both laws independently.
-
-At `Applying` entry, the adapter reauthenticates locked order custody and moves
-exactly `k` collateral atoms between General settlement custody and Hoard while
-the kernel changes Hoard principal and equal per-outcome liabilities by the same
-amount. Hoard principal must equal those liabilities before and after. Hoard is
-never work funding, fees, bounty, rent, reserve, or treasury capital.
-
-### The one rounding boundary
-
-Individual token transfers must be integral even when an individual portfolio's
-quote numerator is not divisible by the price scale. V1 has exactly one named
-rounding boundary: **canonical-prefix carry at settlement receipt emission**.
-
-Starting with carry zero, for each execution in strict order-ID order:
-
-```
-combined = prior_carry + exact_signed_quote_delta_numerator
-receipt.quote_delta_atoms = floor_euclid(combined / price_scale)
+combined = -exact_quote_debit_numerator + prior_carry
+quote_delta_atoms = floor_euclid(combined / price_scale)
 next_carry = rem_euclid(combined, price_scale)
 ```
 
-The final carry must be zero. Aggregate quote flow is therefore exact; rounding
-only assigns indivisible atoms deterministically among ordered receipts. There
-is no dust account or hidden protocol remainder.
+Both replays must finish with carry zero and exact candidate aggregates. There
+is no dust account or second rounding boundary.
 
-## Permissionless paginated verification
+## Orders, funding, and terminal absence
 
-Anyone may create a candidate and advance its bounded cursor. Each page commits:
+Orders bind actual Market key, ClaimBasis, generation, batch, Ed25519/SVM
+`OwnerKeyV1`, nonce, expiry, lot cap, exact coefficient vector, and debit limit.
+`order_id` hashes the canonical signing preimage excluding `order_id` itself.
+Worst-case quote reserve is
+`ceil(max(0, max_debit_per_lot_numerator) * max_lots / price_scale)`; claim
+reserve for outcome `i` is `max(0, -coefficient[i]) * max_lots`. Admission
+atomically creates replay, native Position custody, and quote escrow. Cancel,
+receipt consumption, and close each couple replay to exact physical release.
 
-- its zero-based page index;
-- the exact predecessor transcript identity;
-- a nonzero successor transcript identity; and
-- one canonical leading run of executions, with unused envelope entries absent.
+`GeneralFundingV1` owns only the activation-derived native liveness/work/bounty
+compartments. Capability service maps to liveness, work to work, and bounty to
+bounty. Provider/liquidity and all Realm-collateral funding are refused. Rent
+and creation are native. Remaining/spent/refunded conservation is checked per
+compartment; no compartment borrows from another. Hoard principal and future
+fee revenue are never funding.
 
-The kernel copies the cursor, validates the whole page, and commits only after
-every execution succeeds. A bad later execution cannot leave partial verifier
-progress. The cursor commits page/execution counts, last order, transcript,
-aggregate coefficients, quote debit, and score.
+Batch/root retirement uses exact persisted child counters. No caller boolean,
+index, or absence attestation can close a live batch, candidate, page,
+settlement, or root. Permanent RentCredit receives all closed-account Rent.
 
-The kernel deliberately implements no hash. The SVM adapter must hash the
-canonical candidate/page preimages under a pinned transcript release and prove
-the supplied successor. This is a named runtime trust boundary, not a second
-authority.
+## Exact widths and wire actions
 
-## Funding
+- config 200; root 136; General funding 144; batch 144; order replay 96;
+- order `200 + 8N`; order custody `192 + 8N`; receipt `176 + 8N`;
+- candidate submission `224 + 24N` (272 at N=2, 608 at N=16);
+- candidate state `440 + 40N` (520 at N=2, 1,080 at N=16);
+- candidate page `56 + M * (304 + 8N)` for exact `M=1..4`
+  (696/920 for M=2 at N=2/N=16);
+- minimal settlement cursor `304 + 40N` (384 at N=2, 944 at N=16).
 
-`GeneralFundingV1` contains three immutable, prepaid, independently conserved
-compartments: liveness, work, and bounty. Its only capability activation
-constructor authenticates the exact manifest funding state, native-only
-physical custody observation, and closed General release; invokes the
-capability ledger's typed activation transition; and maps the immutable quote
-exactly: native service -> General liveness, native work -> work, and native
-bounty -> bounty. Rent and creation are also required native lamports. Provider
-and liquidity are exactly NotApplicable, and any Realm-collateral binding,
-amount, or vault is refused. No caller supplies compartment amounts, and
-the returned plan releases all quote principal from the generic ledger so one
-principal cannot remain owned twice. The same plan exposes the capability-owned
-source PDA derivation. The exact activation plan registers the direct child in
-the open Market root, takes the Market's immutable `rent_refund` key as the
-General root's permanent RentCredit beneficiary, and fixes the frame's activator
-only as the physical-creation recipient. Current Rent minima and actual account
-balances remain adapter-observed facts, never wire amounts. Root plus
-General-funding Rent must equal the immutable activation-rent quote; finalized
-config Rent is owned permanently by the generic-record lifecycle. Activation,
-batch opening, and order admission make the immutable RentCredit writable:
-their adapters fund only missing Rent into precreated PDAs and route every
-preexisting lamport to that credit, so dust neither DoSes creation nor becomes
-an actor reward or untracked capitalization.
+The ordered account frames are closed as well. `C` means GeneralConfig raw,
+`V` its staging vacancy; `R/Q/M` mean Realm/ClaimBasis/Manifest raw and
+`Vr/Vq/Vm` their matching vacancies. Repeated parenthesized roles occur once
+per exact page execution `E`:
 
-Permissionless batch opening consumes exactly the current batch-account Rent
-from General liveness, reimburses the work actor that creates the PDA, and
-rejects any General-funding balance other than current account Rent plus the
-exact remaining compartments.
+- Activate: `[Activator, Market(w), R, Q, M, C, Vr, Vq, Vm, V, Mint, Token,
+  CapabilityFunding(w), Root(w), GeneralFunding(w), RentCredit(w), System,
+  Rent, Clock]`;
+- OpenBatch: `[WorkActor, Market, C, V, Root(w), Batch(w), RentCredit(w),
+  System, Rent, Clock]`;
+- LockBatch/LockSelection: `[WorkActor, C, V, Root, Batch(w), Rent, Clock]`;
+- AdmitOrder: `[OwnerPayer, Market, R, Q, C, Vr, Vq, V, Mint, Token, Root,
+  Batch, OrderState(w), OrderCustody(w), OwnerPosition(w), QuoteSource(w),
+  QuoteEscrow(w), RentCredit(w), System, Rent, Clock]`;
+- CancelOrder: `[OwnerSigner, Market, R, Q, C, Vr, Vq, V, Root, Batch,
+  OrderState(w), OrderCustody(w), OwnerPosition(w), QuoteEscrow(w),
+  QuoteDestination(w), Mint, Token, RentCredit(w), Rent, Clock]`;
+- CloseOrder is CancelOrder without owner signer/Clock and with Market first;
+- SubmitCandidate: `[Submitter, C, V, Root, Batch(w), Candidate(w),
+  RentCredit(w), System, Rent, Clock]`;
+- CreatePage: `[WorkActor, C, V, Root, Batch, Candidate(w), Page(w),
+  RentCredit(w), System, Rent]`;
+- VerifyPage: `[WorkActor, Root, Batch, C, V, Candidate(w), Page,
+  (OrderState)E, Rent, Clock]`;
+- FinishCandidate: `[WorkActor, Root, Batch, C, V, Candidate(w), Rent,
+  Clock]`;
+- ConsiderCandidate: `[WorkActor, Root, C, V, Batch(w), Candidate(w), Rent,
+  Clock]`;
+- BeginSettlement: `[WorkActor, Market, R, Q, C, Vr, Vq, V, Mint, Token,
+  Root, Batch(w), Candidate(w), Cursor(w), SettlementPosition(w),
+  SettlementQuoteEscrow(w), RentCredit(w), System, Rent, Clock]`;
+- CollectPage: `[WorkActor, Market, R, Q, C, Vr, Vq, V, Mint, Token, Root,
+  Batch, Candidate(w), Cursor(w), SettlementPosition(w),
+  SettlementQuoteEscrow(w), Page, (OrderState(w), OrderCustody(w),
+  OwnerPosition(w), QuoteEscrow(w))E, Rent]`;
+- Materialize: `[WorkActor, Market(w), R, Q, C, Vr, Vq, V, Mint, Token,
+  CollateralVault(w), Root, Batch, Candidate(w), Cursor(w),
+  SettlementPosition(w), SettlementQuoteEscrow(w), Rent]`;
+- DistributePage: `[WorkActor, Market, R, Q, C, Vr, Vq, V, Mint, Token,
+  Root, Batch, Candidate(w), Cursor(w), SettlementPosition(w),
+  SettlementQuoteEscrow(w), Page(w), RentCredit(w),
+  (OwnerPosition(w), QuoteDestination(w))E, Rent]`;
+- FinishSettlement: `[WorkActor, Market, R, Q, C, Vr, Vq, V, Mint, Token,
+  Root, Batch(w), Candidate(w), Cursor(w), SettlementPosition(w),
+  SettlementQuoteEscrow(w), Rent]`;
+- CloseSettlement is FinishSettlement plus writable RentCredit and no distinct
+  physical-output roles;
+- ClosePage: `[WorkActor, C, V, Root, Batch, Candidate(w), Page(w),
+  RentCredit(w), Rent]`;
+- RejectCandidate: `[WorkActor, Root, Batch, C, V, Candidate(w), Rent, Clock]`;
+- ExpireSettlement changes only Batch to writable in the preceding frame;
+- CloseCandidate: `[WorkActor, Root, Batch(w), C, V, Candidate(w),
+  RentCredit(w), Rent]`;
+- CloseBatch: `[WorkActor, C, V, Root(w), Batch(w), RentCredit(w), Rent]`;
+- Quiesce: `[Root(w)]`; and
+- CloseGeneral: `[Market(w), C, V, Root(w), GeneralFunding(w),
+  RentCredit(w), Rent]`.
 
-A General debit consumes present principal from exactly one compartment.
-Remaining plus spent plus refunded must always equal the founding quote for
-that same compartment. Terminal refund cannot borrow across compartments.
+Signer/writable/executable bits are exact. All accounts in one frame are
+pairwise distinct; there is one shared readonly Rent sysvar, and each generic
+raw record has its own readonly system-vacant staging cursor. No alias-based
+deduplication or caller-authored status account is accepted.
 
-No API accepts Hoard principal or prospective fee revenue as funding.
+Page-consuming instructions carry only `{candidate_id, page_id}` after the
+16-byte family header: 80 bytes exact. `CreateCandidatePage` alone carries the
+canonical page bytes so the adapter can hash and persist them. The closed
+action set additionally includes `CloseCandidatePage`, `RejectCandidate`, and
+`ExpireSettlement`. All decoders reject short, trailing, reserved,
+width-substituted, unknown-tag, zero-ID, and noncanonical optional fields.
 
-## Bounds and lifting
-
-- `MAX_OUTCOMES_V1 = 16` is a **provisional program-profile bound**. It is not a
-  mathematical claim-family limit. Lift it with a new capability release and
-  capacity-profile identity, preserving existing Market and receipt meanings.
-- `MAX_EXECUTIONS_PER_PAGE_V1 = 4` is a **provisional program-profile bound**.
-  It is intended to be measured against adapter account frames and compute
-  units. Lift it in a new release without changing transcript order or the
-  objective.
-- `max_orders_per_candidate` and `max_pages_per_candidate` are **immutable
-  Market profile bounds**. Construction proves orders fit the page envelope.
-- `u64` raw token quantities and `i64` signed receipt deltas are **adapter word
-  bounds**. Larger domains require a new token/capability release, not unchecked
-  casts.
-- The simplex sum and complete-set vector laws are **mathematical bounds**, not
-  liftable capacity restrictions.
-
-## Runtime seams still owned by integration
-
-This crate does not claim an end-to-end venue until a small SVM adapter and
-operator implement and test all of the following:
-
-1. Authenticate config, Market identity, ClaimBasis, capability release, and
-   transcript hashes from canonical bytes.
-2. Verify `OwnerKeyV1` signatures, finalized config identity, and every returned
-   exact generic capability-funding or General funding/root/batch/replay/
-   custody/escrow/candidate/settlement PDA derivation.
-3. Atomically execute the contract-returned admission reserve against the
-   owner's Position and quote escrow, then couple every receipt or release to
-   the corresponding token/Position movement.
-4. Atomically couple `Applying` entry to exact complete-set custody/Hoard token
-   movements, then atomically couple each page to its returned replay states,
-   receipts, token movements, cursor, and funded work debit.
-5. Make applying pages permissionless and non-expiring, with liveness payments
-   drawn only from the segregated compartment.
-6. Use `GeneralInstructionV1<N>` and `GeneralAccountFrameV1` directly; do not
-   add router-local tags, client status booleans, padded page DTOs, or alias
-   conventions.
-7. Measure account rent, transaction account counts, SBF stack, and compute units
-   before replacing any provisional bound.
-
-The static operator or index may discover and construct these calls, but it is
-an untrusted projection of the onchain records above.
-
-## Exact physical vector geometry
-
-Every persisted outcome-bearing semantic record is const-generic over its
-selected ClaimBasis width `N`: `PortfolioOrderV1<N>`,
-`GeneralOrderCustodyV1<N>`, candidate submission/state, settlement cursor,
-`SettlementReceiptV1<N>`, and the page result that carries receipts. Their
-constructors require the recorded outcome count to equal `N`. Orders, custody,
-candidate submission/state, settlement cursor, pages, and receipts expose
-checked exact lengths. Consequently an N=2 order is 216 bytes rather than the
-former 328-byte max-width record (112 bytes saved); an N=2 receipt is 192 bytes
-rather than 312 bytes (120 bytes saved); and N=2 custody is 208 bytes. At N=16,
-orders are 328 bytes, receipts are 304 bytes, and custody is 320 bytes. Candidate
-submission is `192 + 8N` bytes (208/320), candidate state is `376 + 24N` bytes
-(424/760), and settlement cursor is `168 + 16N` bytes (200/424). The receipt
-geometry also removes the former unused eight-byte tail.
-
-The canonical verification-page wire is `88 + M * (304 + 8N)` bytes for exactly
-`M = 1..4` leading executions. Thus a full page is 1,368 bytes at N=2 and 1,816
-bytes at N=16. The corresponding page instruction adds its 16-byte family
-header and 32-byte candidate ID, for 1,416/1,864 bytes. There is no unused
-execution padding on the wire or in the account frame. In-memory
-`VerificationPageV1<N>` and `SettlementPageResultV1<N>` retain only the separate
-four-execution stack envelope; that provisional bound must still be measured
-under SBF before release.
+The adapter must dispatch exact `N=2..16`, authenticate every content hash and
+PDA, use the contract's ordered frames/codecs directly, verify owner signatures,
+execute returned Position/token/Market/Hoard movements atomically, and pay each
+returned work/cleanup debit to the frame's permissionless actor. Static clients
+and indexes remain untrusted projections.
