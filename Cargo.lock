@@ -583,6 +583,9 @@ dependencies = [
 [[package]]
 name = "dclutch-pyth-svm"
 version = "0.1.0"
+dependencies = [
+ "dclutch-registry-svm",
+]
 
 [[package]]
 name = "dclutch-realm-contract"
@@ -620,6 +623,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
  "dclutch-release-set-contract",
+ "sha2",
 ]
 
 [[package]]

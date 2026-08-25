@@ -2,6 +2,7 @@ extern crate std;
 
 use dclutch_core_contract::ContentId;
 use dclutch_release_set_contract::{ArtifactReleaseIdV1, ExecutionRoleV1, ProgramIdentityV1};
+use sha2::{Digest, Sha256};
 
 use crate::{
     AUTHENTICATED_ROLE_RECEIPT_BYTES_V1, AuthenticatedRoleReceiptV1, Error,
@@ -135,12 +136,20 @@ fn loader_programdata_uses_fixed_offset_and_canonical_immutable_padding() {
     assert_eq!(view.deployment_slot(), 77);
     assert_eq!(view.upgrade_authority(), None);
     assert_eq!(view.elf(), elf);
+    assert_eq!(Sha256::digest(view.elf()), Sha256::digest(elf));
+    assert_ne!(Sha256::digest(&immutable[13..]), Sha256::digest(view.elf()));
 
     let mut upgradeable = immutable;
     upgradeable[12] = 1;
     put(&mut upgradeable, 13, &bytes(9));
     let view = ProgramDataV3View::parse(&upgradeable).expect("valid authority");
     assert_eq!(view.upgrade_authority(), Some(bytes(9)));
+    assert_eq!(view.elf(), elf);
+
+    let mut default_authority = immutable;
+    default_authority[12] = 1;
+    let view = ProgramDataV3View::parse(&default_authority).expect("default authority shape");
+    assert_eq!(view.upgrade_authority(), Some([0; 32]));
     assert_eq!(view.elf(), elf);
 
     let mut bad_padding = immutable;
@@ -160,8 +169,13 @@ fn loader_programdata_uses_fixed_offset_and_canonical_immutable_padding() {
         ProgramDataV3View::parse(&immutable),
         Err(Error::InvalidLoaderVariant)
     );
-    assert_eq!(
-        ProgramDataV3View::parse(&[0_u8; LOADER_V3_PROGRAMDATA_METADATA_BYTES]),
-        Err(Error::EmptyElf)
-    );
+    let short = [0_u8; LOADER_V3_PROGRAMDATA_METADATA_BYTES];
+    for length in 0..=LOADER_V3_PROGRAMDATA_METADATA_BYTES {
+        let prefix = short.get(..length).expect("bounded short prefix");
+        assert_eq!(
+            ProgramDataV3View::parse(prefix),
+            Err(Error::EmptyElf),
+            "short ProgramData length {length}"
+        );
+    }
 }

@@ -13,5 +13,8 @@ path = "src/lib.rs"
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 
+[dev-dependencies]
+sha2 = "=0.10.9"
+
 [lints]
 workspace = true

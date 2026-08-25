@@ -300,9 +300,7 @@ fn loader_link_exact_elf_and_zero_padding_are_all_required() -> Result<()> {
     put(&mut wrong_variant.programdata, 0, &2_u32.to_le_bytes())?;
     assert!(matches!(
         build_checked_release(wrong_variant.evidence()),
-        Err(Error::LoaderV3(LoaderV3Error::InvalidProgramDataVariant {
-            variant: 2
-        }))
+        Err(Error::LoaderV3(LoaderV3Error::InvalidLoaderVariant))
     ));
 
     let mut none = Fixture::new("capability", fixture.semantic.clone(), None)?;
@@ -311,7 +309,9 @@ fn loader_link_exact_elf_and_zero_padding_are_all_required() -> Result<()> {
     *none.programdata.get_mut(13).ok_or(Error::InvalidLength)? = 1;
     assert_eq!(
         build_checked_release(none.evidence()),
-        Err(Error::NonCanonicalUpgradeAuthority)
+        Err(Error::LoaderV3(
+            LoaderV3Error::NonCanonicalProgramDataPadding
+        ))
     );
     Ok(())
 }
@@ -319,8 +319,14 @@ fn loader_link_exact_elf_and_zero_padding_are_all_required() -> Result<()> {
 #[test]
 fn sbf_header_and_pyth_semantic_owner_are_not_bypassed() -> Result<()> {
     assert_eq!(validate_sbf_elf(&[]), Err(Error::InvalidSbfElf));
-    assert_eq!(validate_sbf_elf(&sbf_elf_for_machine(ELF_MACHINE_BPF)?), Ok(()));
-    assert_eq!(validate_sbf_elf(&sbf_elf_for_machine(ELF_MACHINE_SBF)?), Ok(()));
+    assert_eq!(
+        validate_sbf_elf(&sbf_elf_for_machine(ELF_MACHINE_BPF)?),
+        Ok(())
+    );
+    assert_eq!(
+        validate_sbf_elf(&sbf_elf_for_machine(ELF_MACHINE_SBF)?),
+        Ok(())
+    );
     assert_eq!(
         validate_sbf_elf(&sbf_elf_for_machine(ELF_MACHINE_SBF - 1)?),
         Err(Error::InvalidSbfElf)

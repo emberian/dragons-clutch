@@ -257,6 +257,14 @@ impl ProgramV3View {
     pub const fn programdata(self) -> [u8; 32] {
         self.programdata
     }
+
+    /// Return the exact linked ProgramData identity.
+    ///
+    /// This spelling is retained for consumers that previously used the
+    /// parallel Pyth-owned Loader view.
+    pub const fn programdata_key(self) -> [u8; 32] {
+        self.programdata
+    }
 }
 
 /// Exact Loader V3 ProgramData metadata and complete deployed ELF-tail view.
