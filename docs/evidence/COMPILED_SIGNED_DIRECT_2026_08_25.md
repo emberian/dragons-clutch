@@ -80,7 +80,7 @@ The successor real-SVM measurements are:
 | Case | Result | CU |
 |---|---|---:|
 | direct controller-PDA impersonation | refused | 7 |
-| valid signatures, wrong replay bump | refused without mutation | 30,806 |
+| valid signatures, wrong replay bump | refused without mutation | 30,807 |
 | valid signatures, wrong Position bump | refused without mutation | 33,979 |
 | same-shaped manifest from another Market | refused without mutation | 22,191 |
 | matcher price below signed seller limit | refused without mutation | 36,545 |
@@ -89,11 +89,21 @@ The successor real-SVM measurements are:
 | frozen fee destination after first Token CPI | full rollback | 58,106 |
 
 The two-instruction signed fill serializes to 1,326 bytes as a legacy
-transaction, above Solana's 1,232-byte packet limit. Compiling the same message
-as a versioned transaction against one address lookup table produces 804 bytes.
-That is exact host serialization evidence, not execution through an activated
-onchain lookup table: creation, extension, activation, rotation, and closure of
-the production table remain operator and local-validator work.
+transaction, above Solana's 1,232-byte packet limit. A table containing every
+eligible account compresses the message to 804 bytes. The reusable production
+shape stores only 12 Market-stable keys—controller, journal, child programs,
+Market, Realm, policy, manifest, mint, fee destination, token program, and
+instruction sysvar—and produces a 990-byte transaction. Maker replay roots,
+Positions, and collateral accounts remain explicit in each message.
+
+The operator now canonically orders table contents, derives official create and
+bounded extend instructions, proves each extension packet fits, decodes exact
+finalized table bytes, refuses same-slot additions and deactivating or duplicate
+tables, compiles an exact packet-safe v0 message, and plans authority-checked
+deactivation, conservative cooldown, and close. Tables remain semantically
+inert routing projections: the controller reauthenticates every loaded account.
+These are exact host construction and serialization results, not execution
+through a live activated table; that local-validator lifecycle remains open.
 
 This addendum supersedes the execution-profile architecture and current
 controller measurements below. Earlier tables remain evidence for their named

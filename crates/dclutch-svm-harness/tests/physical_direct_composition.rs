@@ -61,6 +61,7 @@ struct TransactionResult {
     compute_units: u64,
     wire_bytes: usize,
     v0_wire_bytes: usize,
+    market_v0_wire_bytes: usize,
     logs: Vec<String>,
 }
 
@@ -429,18 +430,37 @@ async fn submit(
             }
         }
     }
-    let lookup = AddressLookupTableAccount {
-        key: Pubkey::new_from_array([91; 32]),
-        addresses: lookup_addresses,
-    };
-    let v0_message =
-        v0::Message::try_compile(&context.payer.pubkey(), instructions, &[lookup], blockhash)
-            .expect("one-table v0 message");
-    let v0_wire_bytes = 1_usize
-        .checked_add(64)
-        .and_then(|prefix| prefix.checked_add(VersionedMessage::V0(v0_message).serialize().len()))
-        .expect("v0 transaction wire size");
+    let market_lookup_addresses = instructions
+        .iter()
+        .find(|instruction| {
+            instruction.program_id == CONTROLLER_PROGRAM_ID && instruction.accounts.len() == 18
+        })
+        .map(|instruction| {
+            [0_usize, 3, 6, 7, 8, 9, 10, 11, 12, 15, 16, 17]
+                .into_iter()
+                .map(|index| instruction.accounts[index].pubkey)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| lookup_addresses.clone());
+    let v0_wire_bytes = versioned_wire_bytes(
+        context.payer.pubkey(),
+        instructions,
+        blockhash,
+        lookup_addresses,
+        91,
+    );
+    let market_v0_wire_bytes = versioned_wire_bytes(
+        context.payer.pubkey(),
+        instructions,
+        blockhash,
+        market_lookup_addresses,
+        92,
+    );
     assert!(v0_wire_bytes <= 1_232, "v0 transaction packet overflow");
+    assert!(
+        market_v0_wire_bytes <= 1_232,
+        "reusable Market-table v0 transaction packet overflow"
+    );
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
@@ -452,8 +472,28 @@ async fn submit(
         compute_units: metadata.compute_units_consumed,
         wire_bytes,
         v0_wire_bytes,
+        market_v0_wire_bytes,
         logs: metadata.log_messages,
     }
+}
+
+fn versioned_wire_bytes(
+    payer: Pubkey,
+    instructions: &[Instruction],
+    blockhash: solana_program::hash::Hash,
+    lookup_addresses: Vec<Pubkey>,
+    table_key_byte: u8,
+) -> usize {
+    let lookup = AddressLookupTableAccount {
+        key: Pubkey::new_from_array([table_key_byte; 32]),
+        addresses: lookup_addresses,
+    };
+    let v0_message = v0::Message::try_compile(&payer, instructions, &[lookup], blockhash)
+        .expect("one-table v0 message");
+    1_usize
+        .checked_add(64)
+        .and_then(|prefix| prefix.checked_add(VersionedMessage::V0(v0_message).serialize().len()))
+        .expect("v0 transaction wire size")
 }
 
 async fn account(context: &mut ProgramTestContext, address: Pubkey) -> Account {
@@ -969,7 +1009,7 @@ async fn signed_intents_compile_to_claims_and_real_token_transfers_atomically() 
     );
 
     eprintln!(
-        "compiled signed Direct CU: impersonation={}, wrong replay={}, wrong position={}, wrong authority={}, bad price={}, tamper={}, success={}, late rollback={}; success wire: legacy={} bytes, one-ALT v0={} bytes",
+        "compiled signed Direct CU: impersonation={}, wrong replay={}, wrong position={}, wrong authority={}, bad price={}, tamper={}, success={}, late rollback={}; success wire: legacy={} bytes, all-address v0={} bytes, reusable-Market v0={} bytes",
         direct.compute_units,
         wrong_bump.compute_units,
         wrong_position.compute_units,
@@ -980,5 +1020,6 @@ async fn signed_intents_compile_to_claims_and_real_token_transfers_atomically() 
         late_refusal.compute_units,
         success_result.wire_bytes,
         success_result.v0_wire_bytes,
+        success_result.market_v0_wire_bytes,
     );
 }

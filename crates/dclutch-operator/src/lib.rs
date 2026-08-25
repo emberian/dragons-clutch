@@ -44,6 +44,8 @@ use solana_sdk_ids::system_program;
 pub mod compiled_direct;
 /// Chain-derived unsigned Realm and Market foundation workflows.
 pub mod foundation;
+/// Chain-derived address-table lifecycle and versioned-message construction.
+pub mod versioned;
 /// Chain-derived unsigned Series and Dealer workflows.
 pub mod verticals;
 

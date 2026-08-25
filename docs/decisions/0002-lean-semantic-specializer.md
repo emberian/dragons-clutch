@@ -65,8 +65,10 @@ authenticates the Market/Realm/manifest/finalized-policy graph and rejects
 same-shaped authority substitution before executing generated transition
 bytecode. A width-generic Market-root view also avoids 15 Rust
 monomorphizations: the measured controller shrinks from an experimental 120,552
-bytes to 79,680 bytes. The exact signed fill is 804 bytes as a one-table v0
-message and 1,326 bytes as an inadmissible legacy message.
+bytes to 79,680 bytes. The exact signed fill is 990 bytes with one reusable
+12-address Market table, 804 bytes with an exhaustive per-fill table, and 1,326
+bytes as an inadmissible legacy message. The operator constructs and validates
+the reusable table lifecycle without making it semantic authority.
 
 This evidence strongly favors continuing the experiment, but does not accept a
 successor. The controller now derives its child plans from authenticated signed

@@ -1,6 +1,9 @@
 //! Chain-derived construction for the compiled Direct two-instruction batch.
 
-use crate::{Finality, Observation, ObservedAccount};
+use crate::{
+    Finality, Observation, ObservedAccount,
+    versioned::{VersionedMessagePlanV0, compile_v0_message},
+};
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1,
 };
@@ -16,6 +19,7 @@ use dclutch_direct_contract::{
 use dclutch_market_contract::market::{MARKET_ROOT_OFFSET, decode_market_outcome_count};
 use dclutch_realm_contract::{REALM_PDA_DOMAIN, RealmV1};
 use dclutch_record_contract::RAW_RECORD_PDA_SEED_V1;
+use solana_hash::Hash;
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
@@ -123,6 +127,11 @@ pub struct CompiledDirectReport {
     pub seller_position: Pubkey,
     /// Derived buyer Position.
     pub buyer_position: Pubkey,
+    /// Reusable Market-scoped routing addresses suitable for one lookup table.
+    ///
+    /// These keys compress transaction packets but never become protocol
+    /// authority; the controller still authenticates every loaded account.
+    pub market_lookup_addresses: [Pubkey; 12],
 }
 
 /// Refusal from stale, inconsistent, or noncanonical chain state.
@@ -279,7 +288,41 @@ pub fn build_compiled_direct(
         buyer_replay,
         seller_position,
         buyer_position,
+        market_lookup_addresses: [
+            controller,
+            state.journal.key,
+            CLAIM_PROGRAM_ID,
+            CUSTODY_PROGRAM_ID,
+            state.market.key,
+            state.realm.key,
+            state.fee_policy.key,
+            state.capability_manifest.key,
+            state.mint.key,
+            state.fee_destination.key,
+            state.token_program.key,
+            sysvar::instructions::ID,
+        ],
     })
+}
+
+/// Compile the exact Direct instruction pair into a packet-safe unsigned v0
+/// message using finalized, already-active lookup-table observations.
+///
+/// This function does not sign or submit. Lookup tables are only a routing
+/// projection: the controller remains responsible for all semantic authority.
+pub fn compile_compiled_direct_v0(
+    report: &CompiledDirectReport,
+    payer: Pubkey,
+    recent_blockhash: Hash,
+    lookup_tables: &[ObservedAccount],
+) -> Result<VersionedMessagePlanV0, crate::versioned::Error> {
+    compile_v0_message(
+        payer,
+        &report.instructions,
+        recent_blockhash,
+        report.observation,
+        lookup_tables,
+    )
 }
 
 fn same_finalized_observation(state: &CompiledDirectState) -> Result<Observation, Error> {
@@ -537,7 +580,12 @@ mod tests {
     use dclutch_market_contract::market::{CategoricalMarketV1, CategoricalSettlementSummaryV1};
     use dclutch_realm_contract::{FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1Input};
     use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
+    use solana_address_lookup_table_interface::{
+        program as lookup_table_program,
+        state::{AddressLookupTable, LookupTableMeta},
+    };
     use solana_sdk_ids::system_program;
+    use std::borrow::Cow;
 
     fn key(byte: u8) -> Pubkey {
         Pubkey::new_from_array([byte; 32])
@@ -807,6 +855,38 @@ mod tests {
         assert_eq!(decoded.buyer, buyer.intent);
         assert_eq!(decoded.fill, 2_000);
         assert_eq!(report.instructions[0].data.len(), 222);
+        assert_eq!(report.market_lookup_addresses.len(), 12);
+
+        let table_key = key(91);
+        let table = AddressLookupTable {
+            meta: LookupTableMeta {
+                authority: Some(key(92)),
+                last_extended_slot: report.observation.slot - 1,
+                ..LookupTableMeta::default()
+            },
+            addresses: Cow::Owned(report.market_lookup_addresses.to_vec()),
+        };
+        let table_account = observed(
+            report.observation,
+            table_key,
+            lookup_table_program::id(),
+            false,
+            table.serialize_for_tests().expect("lookup table bytes"),
+        );
+        let versioned = compile_compiled_direct_v0(
+            &report,
+            key(93),
+            Hash::new_from_array([94; 32]),
+            &[table_account],
+        )
+        .expect("Market-scoped v0 message");
+        assert_eq!(versioned.required_signatures, 1);
+        assert_eq!(versioned.loaded_addresses, 12);
+        assert_eq!(versioned.wire_bytes, 990);
+        eprintln!(
+            "compiled Direct reusable Market-table v0 wire bytes: {}",
+            versioned.wire_bytes
+        );
     }
 
     #[test]

@@ -428,6 +428,9 @@ dependencies = [
  "dclutch-series-contract",
  "dclutch-source-contract",
  "dclutch-token-svm",
+ "solana-address-lookup-table-interface",
+ "solana-hash 4.6.0",
+ "solana-message",
  "solana-program",
  "solana-sdk-ids",
  "spl-token-2022-interface",
@@ -1189,7 +1192,13 @@ version = "3.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8dedafa11d25554279235dd0539d378adc144183eca65072a302c9592cc6a591"
 dependencies = [
+ "bincode",
+ "bytemuck",
+ "serde",
+ "serde_derive",
  "solana-clock",
+ "solana-instruction",
+ "solana-instruction-error",
  "solana-pubkey 4.3.0",
  "solana-sdk-ids",
  "solana-slot-hashes",
@@ -1474,6 +1483,7 @@ version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0448b1fd891c5f46491e5dc7d9986385ba3c852c340db2911dd29faa01d2b08d"
 dependencies = [
+ "bincode",
  "lazy_static",
  "serde",
  "serde_derive",
